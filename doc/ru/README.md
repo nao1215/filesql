@@ -51,6 +51,7 @@ go get github.com/nao1215/filesql
 package main
 
 import (
+    "context"
     "fmt"
     "log"
     
@@ -66,7 +67,7 @@ func main() {
     defer db.Close()
     
     // Выполняем SQL-запрос (имя таблицы происходит от имени файла без расширения)
-    rows, err := db.Query("SELECT * FROM data WHERE age > 25 ORDER BY name")
+    rows, err := db.QueryContext(context.Background(), "SELECT * FROM data WHERE age > 25 ORDER BY name")
     if err != nil {
         log.Fatal(err)
     }
@@ -95,7 +96,7 @@ if err != nil {
 defer db.Close()
 
 // Объединяем данные из разных форматов файлов!
-rows, err := db.Query(`
+rows, err := db.QueryContext(context.Background(), `
     SELECT u.name, o.order_date, p.product_name
     FROM users u
     JOIN orders o ON u.id = o.user_id
@@ -115,7 +116,7 @@ if err != nil {
 defer db.Close()
 
 // Запрашиваем все загруженные таблицы
-rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='table'")
+rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table'")
 ```
 
 ### Поддержка сжатых файлов
@@ -129,7 +130,7 @@ if err != nil {
 defer db.Close()
 
 // Выполняем запросы к сжатым данным без проблем
-rows, err := db.Query("SELECT COUNT(*) FROM large_dataset")
+rows, err := db.QueryContext(context.Background(), "SELECT COUNT(*) FROM large_dataset")
 ```
 
 ### Правила именования таблиц
@@ -151,7 +152,7 @@ if err != nil {
 }
 
 // Используем определённые имена таблиц в запросах
-rows, err := db.Query(`
+rows, err := db.QueryContext(context.Background(), `
     SELECT * FROM employees 
     JOIN departments ON employees.dept_id = departments.id
 `)
@@ -204,7 +205,7 @@ query := `
     WHERE e.salary > ds.avg_salary * 0.8
 `
 
-rows, err := db.Query(query)
+rows, err := db.QueryContext(context.Background(), query)
 ```
 
 ### Экспорт изменённых данных
@@ -219,7 +220,7 @@ if err != nil {
 defer db.Close()
 
 // Вносим изменения
-_, err = db.Exec("UPDATE data SET status = 'processed' WHERE status = 'pending'")
+_, err = db.ExecContext(context.Background(), "UPDATE data SET status = 'processed' WHERE status = 'pending'")
 if err != nil {
     log.Fatal(err)
 }

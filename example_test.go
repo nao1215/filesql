@@ -1,6 +1,7 @@
 package filesql_test
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -59,7 +60,7 @@ func ExampleOpen() {
 		LIMIT 10
 	`
 
-	rows, err := db.Query(query)
+	rows, err := db.QueryContext(context.Background(), query)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -147,7 +148,7 @@ func ExampleOpen_multipleFiles() {
 	defer db.Close()
 
 	// Query to show all available tables
-	rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+	rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -181,21 +182,21 @@ func ExampleOpen_constraints() {
 
 	// Show original data count
 	var originalCount int
-	err = db.QueryRow("SELECT COUNT(*) FROM employees").Scan(&originalCount)
+	err = db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM employees").Scan(&originalCount)
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("Original employee count: %d\n", originalCount)
 
 	// Insert new data (only affects in-memory database)
-	_, err = db.Exec("INSERT INTO employees (id, name, department_id, salary, hire_date) VALUES (99, 'Test User', 1, 50000, '2023-01-01')")
+	_, err = db.ExecContext(context.Background(), "INSERT INTO employees (id, name, department_id, salary, hire_date) VALUES (99, 'Test User', 1, 50000, '2023-01-01')")
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	// Show in-memory count
 	var memoryCount int
-	err = db.QueryRow("SELECT COUNT(*) FROM employees").Scan(&memoryCount)
+	err = db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM employees").Scan(&memoryCount)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -209,7 +210,7 @@ func ExampleOpen_constraints() {
 	defer db2.Close()
 
 	var fileCount int
-	err = db2.QueryRow("SELECT COUNT(*) FROM employees").Scan(&fileCount)
+	err = db2.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM employees").Scan(&fileCount)
 	if err != nil {
 		log.Fatal(err)
 	}

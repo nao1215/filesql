@@ -51,6 +51,7 @@ go get github.com/nao1215/filesql
 package main
 
 import (
+    "context"
     "fmt"
     "log"
     
@@ -66,7 +67,7 @@ func main() {
     defer db.Close()
     
     // SQLクエリを実行します（テーブル名は拡張子なしのファイル名から派生します）
-    rows, err := db.Query("SELECT * FROM data WHERE age > 25 ORDER BY name")
+    rows, err := db.QueryContext(context.Background(), "SELECT * FROM data WHERE age > 25 ORDER BY name")
     if err != nil {
         log.Fatal(err)
     }
@@ -95,7 +96,7 @@ if err != nil {
 defer db.Close()
 
 // 異なるファイル形式間でデータを結合します！
-rows, err := db.Query(`
+rows, err := db.QueryContext(context.Background(), `
     SELECT u.name, o.order_date, p.product_name
     FROM users u
     JOIN orders o ON u.id = o.user_id
@@ -115,7 +116,7 @@ if err != nil {
 defer db.Close()
 
 // 読み込まれたすべてのテーブルをクエリします
-rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='table'")
+rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table'")
 ```
 
 ### 圧縮ファイルのサポート
@@ -129,7 +130,7 @@ if err != nil {
 defer db.Close()
 
 // 圧縮データをシームレスにクエリします
-rows, err := db.Query("SELECT COUNT(*) FROM large_dataset")
+rows, err := db.QueryContext(context.Background(), "SELECT COUNT(*) FROM large_dataset")
 ```
 
 ### テーブル命名規則
@@ -151,7 +152,7 @@ if err != nil {
 }
 
 // クエリで導出されたテーブル名を使用します
-rows, err := db.Query(`
+rows, err := db.QueryContext(context.Background(), `
     SELECT * FROM employees 
     JOIN departments ON employees.dept_id = departments.id
 `)
@@ -204,7 +205,7 @@ query := `
     WHERE e.salary > ds.avg_salary * 0.8
 `
 
-rows, err := db.Query(query)
+rows, err := db.QueryContext(context.Background(), query)
 ```
 
 ### 変更されたデータのエクスポート
@@ -219,7 +220,7 @@ if err != nil {
 defer db.Close()
 
 // 変更を加えます
-_, err = db.Exec("UPDATE data SET status = 'processed' WHERE status = 'pending'")
+_, err = db.ExecContext(context.Background(), "UPDATE data SET status = 'processed' WHERE status = 'pending'")
 if err != nil {
     log.Fatal(err)
 }

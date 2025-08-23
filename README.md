@@ -53,6 +53,7 @@ go get github.com/nao1215/filesql
 package main
 
 import (
+    "context"
     "fmt"
     "log"
     
@@ -68,7 +69,7 @@ func main() {
     defer db.Close()
     
     // Execute SQL query (table name is derived from filename without extension)
-    rows, err := db.Query("SELECT * FROM data WHERE age > 25 ORDER BY name")
+    rows, err := db.QueryContext(context.Background(), "SELECT * FROM data WHERE age > 25 ORDER BY name")
     if err != nil {
         log.Fatal(err)
     }
@@ -97,7 +98,7 @@ if err != nil {
 defer db.Close()
 
 // Join data across different file formats!
-rows, err := db.Query(`
+rows, err := db.QueryContext(context.Background(), `
     SELECT u.name, o.order_date, p.product_name
     FROM users u
     JOIN orders o ON u.id = o.user_id
@@ -117,7 +118,7 @@ if err != nil {
 defer db.Close()
 
 // Query all loaded tables
-rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='table'")
+rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table'")
 ```
 
 ### Compressed Files Support
@@ -131,7 +132,7 @@ if err != nil {
 defer db.Close()
 
 // Query compressed data seamlessly
-rows, err := db.Query("SELECT COUNT(*) FROM large_dataset")
+rows, err := db.QueryContext(context.Background(), "SELECT COUNT(*) FROM large_dataset")
 ```
 
 ### Table Naming Rules
@@ -153,7 +154,7 @@ if err != nil {
 }
 
 // Use the derived table names in queries
-rows, err := db.Query(`
+rows, err := db.QueryContext(context.Background(), `
     SELECT * FROM employees 
     JOIN departments ON employees.dept_id = departments.id
 `)
@@ -206,7 +207,7 @@ query := `
     WHERE e.salary > ds.avg_salary * 0.8
 `
 
-rows, err := db.Query(query)
+rows, err := db.QueryContext(context.Background(), query)
 ```
 
 ### Exporting Modified Data
@@ -221,7 +222,7 @@ if err != nil {
 defer db.Close()
 
 // Make modifications
-_, err = db.Exec("UPDATE data SET status = 'processed' WHERE status = 'pending'")
+_, err = db.ExecContext(context.Background(), "UPDATE data SET status = 'processed' WHERE status = 'pending'")
 if err != nil {
     log.Fatal(err)
 }
