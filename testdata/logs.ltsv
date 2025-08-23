@@ -1,0 +1,3 @@
+time:2024-01-01T10:00:00Z	level:INFO	message:Application started
+time:2024-01-01T10:01:00Z	level:ERROR	message:Database connection failed
+time:2024-01-01T10:02:00Z	level:INFO	message:Application recovered
