@@ -1,0 +1,527 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>model: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/nao1215/filesql/domain/model/common.go (100.0%)</option>
+				
+				<option value="file1">github.com/nao1215/filesql/domain/model/file.go (76.4%)</option>
+				
+				<option value="file2">github.com/nao1215/filesql/domain/model/table.go (100.0%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">// Package model provides domain model for filesql
+package model
+
+// Header is file header.
+type Header []string
+
+// NewHeader create new Header.
+func NewHeader(h []string) Header <span class="cov8" title="1">{
+        return Header(h)
+}</span>
+
+// Equal compare Header.
+func (h Header) Equal(h2 Header) bool <span class="cov8" title="1">{
+        if len(h) != len(h2) </span><span class="cov8" title="1">{
+                return false
+        }</span>
+        <span class="cov8" title="1">for i, v := range h </span><span class="cov8" title="1">{
+                if v != h2[i] </span><span class="cov8" title="1">{
+                        return false
+                }</span>
+        }
+        <span class="cov8" title="1">return true</span>
+}
+
+// Record is file records.
+type Record []string
+
+// NewRecord create new Record.
+func NewRecord(r []string) Record <span class="cov8" title="1">{
+        return Record(r)
+}</span>
+
+// Equal compare Record.
+func (r Record) Equal(r2 Record) bool <span class="cov8" title="1">{
+        if len(r) != len(r2) </span><span class="cov8" title="1">{
+                return false
+        }</span>
+        <span class="cov8" title="1">for i, v := range r </span><span class="cov8" title="1">{
+                if v != r2[i] </span><span class="cov8" title="1">{
+                        return false
+                }</span>
+        }
+        <span class="cov8" title="1">return true</span>
+}</pre>
+		
+		<pre class="file" id="file1" style="display: none">package model
+
+import (
+        "compress/bzip2"
+        "compress/gzip"
+        "encoding/csv"
+        "fmt"
+        "io"
+        "os"
+        "path/filepath"
+        "strings"
+
+        "github.com/klauspost/compress/zstd"
+        "github.com/ulikunitz/xz"
+)
+
+// FileType represents supported file types
+type FileType int
+
+const (
+        FileTypeCSV FileType = iota
+        FileTypeTSV
+        FileTypeLTSV
+        FileTypeUnsupported
+)
+
+// File represents a file that can be converted to Table
+type File struct {
+        path     string
+        fileType FileType
+}
+
+// NewFile creates a new File
+func NewFile(path string) *File <span class="cov8" title="1">{
+        return &amp;File{
+                path:     path,
+                fileType: detectFileType(path),
+        }
+}</span>
+
+// Path returns file path
+func (f *File) Path() string <span class="cov8" title="1">{
+        return f.path
+}</span>
+
+// Type returns file type
+func (f *File) Type() FileType <span class="cov8" title="1">{
+        return f.fileType
+}</span>
+
+// IsCSV returns true if the file is CSV format
+func (f *File) IsCSV() bool <span class="cov0" title="0">{
+        return f.fileType == FileTypeCSV
+}</span>
+
+// IsTSV returns true if the file is TSV format
+func (f *File) IsTSV() bool <span class="cov0" title="0">{
+        return f.fileType == FileTypeTSV
+}</span>
+
+// IsLTSV returns true if the file is LTSV format
+func (f *File) IsLTSV() bool <span class="cov0" title="0">{
+        return f.fileType == FileTypeLTSV
+}</span>
+
+// IsCompressed returns true if file is compressed
+func (f *File) IsCompressed() bool <span class="cov8" title="1">{
+        return f.IsGZ() || f.IsBZ2() || f.IsXZ() || f.IsZSTD()
+}</span>
+
+// IsGZ returns true if file is gzip compressed
+func (f *File) IsGZ() bool <span class="cov8" title="1">{
+        return strings.HasSuffix(f.path, ".gz")
+}</span>
+
+// IsBZ2 returns true if file is bzip2 compressed
+func (f *File) IsBZ2() bool <span class="cov8" title="1">{
+        return strings.HasSuffix(f.path, ".bz2")
+}</span>
+
+// IsXZ returns true if file is xz compressed
+func (f *File) IsXZ() bool <span class="cov8" title="1">{
+        return strings.HasSuffix(f.path, ".xz")
+}</span>
+
+// IsZSTD returns true if file is zstd compressed
+func (f *File) IsZSTD() bool <span class="cov8" title="1">{
+        return strings.HasSuffix(f.path, ".zst")
+}</span>
+
+// ToTable converts file to Table structure
+func (f *File) ToTable() (*Table, error) <span class="cov8" title="1">{
+        switch f.fileType </span>{
+        case FileTypeCSV:<span class="cov8" title="1">
+                return f.parseCSV()</span>
+        case FileTypeTSV:<span class="cov8" title="1">
+                return f.parseTSV()</span>
+        case FileTypeLTSV:<span class="cov8" title="1">
+                return f.parseLTSV()</span>
+        default:<span class="cov8" title="1">
+                return nil, fmt.Errorf("unsupported file type: %s", f.path)</span>
+        }
+}
+
+// detectFileType detects file type from extension, considering compressed files
+func detectFileType(path string) FileType <span class="cov8" title="1">{
+        basePath := path
+        
+        // Remove compression extensions
+        if strings.HasSuffix(path, ".gz") </span><span class="cov8" title="1">{
+                basePath = strings.TrimSuffix(path, ".gz")
+        }</span> else<span class="cov8" title="1"> if strings.HasSuffix(path, ".bz2") </span><span class="cov8" title="1">{
+                basePath = strings.TrimSuffix(path, ".bz2")
+        }</span> else<span class="cov8" title="1"> if strings.HasSuffix(path, ".xz") </span><span class="cov8" title="1">{
+                basePath = strings.TrimSuffix(path, ".xz")
+        }</span> else<span class="cov8" title="1"> if strings.HasSuffix(path, ".zst") </span><span class="cov8" title="1">{
+                basePath = strings.TrimSuffix(path, ".zst")
+        }</span>
+        
+        <span class="cov8" title="1">ext := strings.ToLower(filepath.Ext(basePath))
+        switch ext </span>{
+        case ".csv":<span class="cov8" title="1">
+                return FileTypeCSV</span>
+        case ".tsv":<span class="cov8" title="1">
+                return FileTypeTSV</span>
+        case ".ltsv":<span class="cov8" title="1">
+                return FileTypeLTSV</span>
+        default:<span class="cov8" title="1">
+                return FileTypeUnsupported</span>
+        }
+}
+
+// openReader opens file and returns a reader that handles compression
+func (f *File) openReader() (io.Reader, func() error, error) <span class="cov8" title="1">{
+        file, err := os.Open(f.path)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, nil, err
+        }</span>
+
+        <span class="cov8" title="1">var reader io.Reader = file
+        closer := file.Close
+
+        if f.IsGZ() </span><span class="cov8" title="1">{
+                gzReader, err := gzip.NewReader(file)
+                if err != nil </span><span class="cov0" title="0">{
+                        file.Close()
+                        return nil, nil, err
+                }</span>
+                <span class="cov8" title="1">reader = gzReader
+                closer = func() error </span><span class="cov8" title="1">{
+                        gzReader.Close()
+                        return file.Close()
+                }</span>
+        } else<span class="cov8" title="1"> if f.IsBZ2() </span><span class="cov0" title="0">{
+                reader = bzip2.NewReader(file)
+                closer = file.Close
+        }</span> else<span class="cov8" title="1"> if f.IsXZ() </span><span class="cov0" title="0">{
+                xzReader, err := xz.NewReader(file)
+                if err != nil </span><span class="cov0" title="0">{
+                        file.Close()
+                        return nil, nil, err
+                }</span>
+                <span class="cov0" title="0">reader = xzReader
+                closer = file.Close</span>
+        } else<span class="cov8" title="1"> if f.IsZSTD() </span><span class="cov0" title="0">{
+                decoder, err := zstd.NewReader(file)
+                if err != nil </span><span class="cov0" title="0">{
+                        file.Close()
+                        return nil, nil, err
+                }</span>
+                <span class="cov0" title="0">reader = decoder
+                closer = func() error </span><span class="cov0" title="0">{
+                        decoder.Close()
+                        return file.Close()
+                }</span>
+        }
+
+        <span class="cov8" title="1">return reader, closer, nil</span>
+}
+
+// parseCSV parses CSV file with compression support
+func (f *File) parseCSV() (*Table, error) <span class="cov8" title="1">{
+        reader, closer, err := f.openReader()
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov8" title="1">defer closer()
+
+        csvReader := csv.NewReader(reader)
+        records, err := csvReader.ReadAll()
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov8" title="1">if len(records) == 0 </span><span class="cov8" title="1">{
+                return nil, fmt.Errorf("empty file: %s", f.path)
+        }</span>
+
+        <span class="cov8" title="1">header := NewHeader(records[0])
+        var tableRecords []Record
+        for i := 1; i &lt; len(records); i++ </span><span class="cov8" title="1">{
+                tableRecords = append(tableRecords, NewRecord(records[i]))
+        }</span>
+
+        <span class="cov8" title="1">tableName := TableFromFilePath(f.path)
+        return NewTable(tableName, header, tableRecords), nil</span>
+}
+
+// parseTSV parses TSV file with compression support
+func (f *File) parseTSV() (*Table, error) <span class="cov8" title="1">{
+        reader, closer, err := f.openReader()
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov8" title="1">defer closer()
+
+        csvReader := csv.NewReader(reader)
+        csvReader.Comma = '\t'
+        records, err := csvReader.ReadAll()
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov8" title="1">if len(records) == 0 </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("empty file: %s", f.path)
+        }</span>
+
+        <span class="cov8" title="1">header := NewHeader(records[0])
+        var tableRecords []Record
+        for i := 1; i &lt; len(records); i++ </span><span class="cov8" title="1">{
+                tableRecords = append(tableRecords, NewRecord(records[i]))
+        }</span>
+
+        <span class="cov8" title="1">tableName := TableFromFilePath(f.path)
+        return NewTable(tableName, header, tableRecords), nil</span>
+}
+
+// parseLTSV parses LTSV file with compression support
+func (f *File) parseLTSV() (*Table, error) <span class="cov8" title="1">{
+        reader, closer, err := f.openReader()
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+        <span class="cov8" title="1">defer closer()
+
+        content, err := io.ReadAll(reader)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov8" title="1">lines := strings.Split(string(content), "\n")
+        if len(lines) == 0 </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("empty file: %s", f.path)
+        }</span>
+
+        <span class="cov8" title="1">headerMap := make(map[string]bool)
+        var records []map[string]string
+
+        for _, line := range lines </span><span class="cov8" title="1">{
+                line = strings.TrimSpace(line)
+                if line == "" </span><span class="cov0" title="0">{
+                        continue</span>
+                }
+
+                <span class="cov8" title="1">record := make(map[string]string)
+                pairs := strings.Split(line, "\t")
+                for _, pair := range pairs </span><span class="cov8" title="1">{
+                        kv := strings.SplitN(pair, ":", 2)
+                        if len(kv) == 2 </span><span class="cov8" title="1">{
+                                key := strings.TrimSpace(kv[0])
+                                value := strings.TrimSpace(kv[1])
+                                record[key] = value
+                                headerMap[key] = true
+                        }</span>
+                }
+                <span class="cov8" title="1">if len(record) &gt; 0 </span><span class="cov8" title="1">{
+                        records = append(records, record)
+                }</span>
+        }
+
+        <span class="cov8" title="1">if len(records) == 0 </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("no valid records found: %s", f.path)
+        }</span>
+
+        <span class="cov8" title="1">var header Header
+        for key := range headerMap </span><span class="cov8" title="1">{
+                header = append(header, key)
+        }</span>
+
+        <span class="cov8" title="1">var tableRecords []Record
+        for _, record := range records </span><span class="cov8" title="1">{
+                var row Record
+                for _, key := range header </span><span class="cov8" title="1">{
+                        if val, exists := record[key]; exists </span><span class="cov8" title="1">{
+                                row = append(row, val)
+                        }</span> else<span class="cov0" title="0"> {
+                                row = append(row, "")
+                        }</span>
+                }
+                <span class="cov8" title="1">tableRecords = append(tableRecords, row)</span>
+        }
+
+        <span class="cov8" title="1">tableName := TableFromFilePath(f.path)
+        return NewTable(tableName, header, tableRecords), nil</span>
+}</pre>
+		
+		<pre class="file" id="file2" style="display: none">package model
+
+import (
+        "path/filepath"
+        "strings"
+)
+
+// Table represents file contents as database table structure.
+type Table struct {
+        // Name is table name derived from file path.
+        name string
+        // Header is table header.
+        header Header
+        // Records is table records.
+        records []Record
+}
+
+// NewTable create new Table.
+func NewTable(
+        name string,
+        header Header,
+        records []Record,
+) *Table <span class="cov8" title="1">{
+        return &amp;Table{
+                name:    name,
+                header:  header,
+                records: records,
+        }
+}</span>
+
+// Name return table name.
+func (t *Table) Name() string <span class="cov8" title="1">{
+        return t.name
+}</span>
+
+// Header return table header.
+func (t *Table) Header() Header <span class="cov8" title="1">{
+        return t.header
+}</span>
+
+// Records return table records.
+func (t *Table) Records() []Record <span class="cov8" title="1">{
+        return t.records
+}</span>
+
+// Equal compare Table.
+func (t *Table) Equal(t2 *Table) bool <span class="cov8" title="1">{
+        if t.Name() != t2.Name() </span><span class="cov8" title="1">{
+                return false
+        }</span>
+        <span class="cov8" title="1">if !t.header.Equal(t2.header) </span><span class="cov8" title="1">{
+                return false
+        }</span>
+        <span class="cov8" title="1">if len(t.Records()) != len(t2.Records()) </span><span class="cov8" title="1">{
+                return false
+        }</span>
+        <span class="cov8" title="1">for i, record := range t.Records() </span><span class="cov8" title="1">{
+                if !record.Equal(t2.Records()[i]) </span><span class="cov8" title="1">{
+                        return false
+                }</span>
+        }
+        <span class="cov8" title="1">return true</span>
+}
+
+// TableFromFilePath creates table name from file path
+func TableFromFilePath(filePath string) string <span class="cov8" title="1">{
+        fileName := filepath.Base(filePath)
+        return strings.TrimSuffix(fileName, filepath.Ext(fileName))
+}</span>
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>
