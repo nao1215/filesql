@@ -5,7 +5,7 @@
 [![MultiPlatformUnitTest](https://github.com/nao1215/filesql/actions/workflows/unit_test.yml/badge.svg)](https://github.com/nao1215/filesql/actions/workflows/unit_test.yml)
 ![Coverage](https://raw.githubusercontent.com/nao1215/octocovs-central-repo/main/badges/nao1215/filesql/coverage.svg)
 
-[日本語](./doc/ja/README.md) | [Русский](./doc/ru/README.md)
+[日本語](./doc/ja/README.md) | [Русский](./doc/ru/README.md) | [中文](./doc/zh-cn/README.md) | [한국어](./doc/ko/README.md) | [Español](./doc/es/README.md) | [Français](./doc/fr/README.md)
 
 **filesql** is a Go SQL driver that enables you to query CSV, TSV, and LTSV files using SQLite3 SQL syntax. Query your data files directly without any imports or transformations!
 
