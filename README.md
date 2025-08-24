@@ -62,15 +62,18 @@ import (
 )
 
 func main() {
-    // Open a CSV file as a database
-    db, err := filesql.Open("data.csv")
+    // Open a CSV file as a database with context
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+    
+    db, err := filesql.OpenContext(ctx, "data.csv")
     if err != nil {
         log.Fatal(err)
     }
     defer db.Close()
     
     // Execute SQL query (table name is derived from filename without extension)
-    rows, err := db.QueryContext(context.Background(), "SELECT * FROM data WHERE age > 25 ORDER BY name")
+    rows, err := db.QueryContext(ctx, "SELECT * FROM data WHERE age > 25 ORDER BY name")
     if err != nil {
         log.Fatal(err)
     }
@@ -109,14 +112,17 @@ rows, err := db.QueryContext(ctx, "SELECT * FROM large_dataset WHERE status = 'a
 
 ```go
 // Open multiple files in a single database
-db, err := filesql.Open("users.csv", "orders.tsv", "products.ltsv")
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+db, err := filesql.OpenContext(ctx, "users.csv", "orders.tsv", "products.ltsv")
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
 // Join data across different file formats!
-rows, err := db.QueryContext(context.Background(), `
+rows, err := db.QueryContext(ctx, `
     SELECT u.name, o.order_date, p.product_name
     FROM users u
     JOIN orders o ON u.id = o.user_id
@@ -129,28 +135,34 @@ rows, err := db.QueryContext(context.Background(), `
 
 ```go
 // Open all supported files in a directory (recursive)
-db, err := filesql.Open("/path/to/data/directory")
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+db, err := filesql.OpenContext(ctx, "/path/to/data/directory")
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
 // Query all loaded tables
-rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table'")
+rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
 ```
 
 ### Compressed Files Support
 
 ```go
 // Automatically handles compressed files
-db, err := filesql.Open("large_dataset.csv.gz", "archive.tsv.bz2")
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+db, err := filesql.OpenContext(ctx, "large_dataset.csv.gz", "archive.tsv.bz2")
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
 // Query compressed data seamlessly
-rows, err := db.QueryContext(context.Background(), "SELECT COUNT(*) FROM large_dataset")
+rows, err := db.QueryContext(ctx, "SELECT COUNT(*) FROM large_dataset")
 ```
 
 ### Table Naming Rules
@@ -166,13 +178,16 @@ filesql automatically derives table names from file paths:
 // "backup.tsv.bz2"      -> table name: "backup"
 // "/path/to/sales.csv"  -> table name: "sales"
 
-db, err := filesql.Open("employees.csv", "departments.tsv.gz")
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+db, err := filesql.OpenContext(ctx, "employees.csv", "departments.tsv.gz")
 if err != nil {
     log.Fatal(err)
 }
 
 // Use the derived table names in queries
-rows, err := db.QueryContext(context.Background(), `
+rows, err := db.QueryContext(ctx, `
     SELECT * FROM employees 
     JOIN departments ON employees.dept_id = departments.id
 `)
@@ -197,7 +212,10 @@ Since filesql uses SQLite3 as its underlying engine, all SQL syntax follows [SQL
 Since filesql uses SQLite3, you can leverage its full power:
 
 ```go
-db, err := filesql.Open("employees.csv", "departments.csv")
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+db, err := filesql.OpenContext(ctx, "employees.csv", "departments.csv")
 if err != nil {
     log.Fatal(err)
 }
@@ -225,7 +243,7 @@ query := `
     WHERE e.salary > ds.avg_salary * 0.8
 `
 
-rows, err := db.QueryContext(context.Background(), query)
+rows, err := db.QueryContext(ctx, query)
 ```
 
 ### Exporting Modified Data
@@ -233,14 +251,17 @@ rows, err := db.QueryContext(context.Background(), query)
 If you need to persist changes made to the in-memory database:
 
 ```go
-db, err := filesql.Open("data.csv")
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+db, err := filesql.OpenContext(ctx, "data.csv")
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
 // Make modifications
-_, err = db.ExecContext(context.Background(), "UPDATE data SET status = 'processed' WHERE status = 'pending'")
+_, err = db.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE status = 'pending'")
 if err != nil {
     log.Fatal(err)
 }

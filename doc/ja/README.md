@@ -60,15 +60,18 @@ import (
 )
 
 func main() {
-    // CSVファイルをデータベースとして開きます
-    db, err := filesql.Open("data.csv")
+    // CSVファイルをコンテキスト付きでデータベースとして開きます
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+    
+    db, err := filesql.OpenContext(ctx, "data.csv")
     if err != nil {
         log.Fatal(err)
     }
     defer db.Close()
     
     // SQLクエリを実行します（テーブル名は拡張子なしのファイル名から派生します）
-    rows, err := db.QueryContext(context.Background(), "SELECT * FROM data WHERE age > 25 ORDER BY name")
+    rows, err := db.QueryContext(ctx, "SELECT * FROM data WHERE age > 25 ORDER BY name")
     if err != nil {
         log.Fatal(err)
     }
@@ -107,14 +110,17 @@ rows, err := db.QueryContext(ctx, "SELECT * FROM large_dataset WHERE status = 'a
 
 ```go
 // 複数のファイルを単一のデータベースで開きます
-db, err := filesql.Open("users.csv", "orders.tsv", "products.ltsv")
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+db, err := filesql.OpenContext(ctx, "users.csv", "orders.tsv", "products.ltsv")
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
 // 異なるファイル形式間でデータを結合します！
-rows, err := db.QueryContext(context.Background(), `
+rows, err := db.QueryContext(ctx, `
     SELECT u.name, o.order_date, p.product_name
     FROM users u
     JOIN orders o ON u.id = o.user_id
@@ -127,28 +133,34 @@ rows, err := db.QueryContext(context.Background(), `
 
 ```go
 // ディレクトリ内のすべてのサポートされたファイルを開きます（再帰的）
-db, err := filesql.Open("/path/to/data/directory")
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+db, err := filesql.OpenContext(ctx, "/path/to/data/directory")
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
 // 読み込まれたすべてのテーブルをクエリします
-rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table'")
+rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
 ```
 
 ### 圧縮ファイルのサポート
 
 ```go
 // 圧縮ファイルを自動的に処理します
-db, err := filesql.Open("large_dataset.csv.gz", "archive.tsv.bz2")
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+db, err := filesql.OpenContext(ctx, "large_dataset.csv.gz", "archive.tsv.bz2")
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
 // 圧縮データをシームレスにクエリします
-rows, err := db.QueryContext(context.Background(), "SELECT COUNT(*) FROM large_dataset")
+rows, err := db.QueryContext(ctx, "SELECT COUNT(*) FROM large_dataset")
 ```
 
 ### テーブル命名規則
@@ -164,13 +176,16 @@ filesqlはファイルパスから自動的にテーブル名を導出します�
 // "backup.tsv.bz2"      -> テーブル名: "backup"
 // "/path/to/sales.csv"  -> テーブル名: "sales"
 
-db, err := filesql.Open("employees.csv", "departments.tsv.gz")
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+db, err := filesql.OpenContext(ctx, "employees.csv", "departments.tsv.gz")
 if err != nil {
     log.Fatal(err)
 }
 
 // クエリで導出されたテーブル名を使用します
-rows, err := db.QueryContext(context.Background(), `
+rows, err := db.QueryContext(ctx, `
     SELECT * FROM employees 
     JOIN departments ON employees.dept_id = departments.id
 `)
@@ -195,7 +210,10 @@ filesqlは基盤となるエンジンとしてSQLite3を使用しているため
 filesqlはSQLite3を使用しているため、その全機能を活用できます：
 
 ```go
-db, err := filesql.Open("employees.csv", "departments.csv")
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+db, err := filesql.OpenContext(ctx, "employees.csv", "departments.csv")
 if err != nil {
     log.Fatal(err)
 }
@@ -223,7 +241,7 @@ query := `
     WHERE e.salary > ds.avg_salary * 0.8
 `
 
-rows, err := db.QueryContext(context.Background(), query)
+rows, err := db.QueryContext(ctx, query)
 ```
 
 ### 変更されたデータのエクスポート
@@ -231,14 +249,17 @@ rows, err := db.QueryContext(context.Background(), query)
 インメモリデータベースに加えた変更を永続化する必要がある場合：
 
 ```go
-db, err := filesql.Open("data.csv")
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+db, err := filesql.OpenContext(ctx, "data.csv")
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
 // 変更を加えます
-_, err = db.ExecContext(context.Background(), "UPDATE data SET status = 'processed' WHERE status = 'pending'")
+_, err = db.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE status = 'pending'")
 if err != nil {
     log.Fatal(err)
 }
