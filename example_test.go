@@ -1383,3 +1383,261 @@ func createFinancialTestData() string {
 
 	return tmpDir
 }
+
+func ExampleDumpDatabase_withOptions() {
+	// Create a temporary directory for output
+	tempDir := filepath.Join(os.TempDir(), "filesql_dump_example")
+	if err := os.MkdirAll(tempDir, 0750); err != nil {
+		log.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Open CSV file
+	db, err := filesql.Open("testdata/sample.csv")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Example 1: Default CSV output (no options)
+	fmt.Println("Example 1: Default CSV output")
+	csvDir := filepath.Join(tempDir, "csv_output")
+	if err := filesql.DumpDatabase(db, csvDir); err != nil {
+		log.Fatal(err)
+	}
+
+	// List output files
+	files1, err := filepath.Glob(filepath.Join(csvDir, "*"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, file := range files1 {
+		fmt.Printf("Created: %s\n", filepath.Base(file))
+	}
+
+	// Example 2: TSV output with gzip compression
+	fmt.Println("\nExample 2: TSV output with gzip compression")
+	tsvDir := filepath.Join(tempDir, "tsv_output")
+	options := filesql.NewDumpOptions().
+		WithFormat(filesql.OutputFormatTSV).
+		WithCompression(filesql.CompressionGZ)
+	if err := filesql.DumpDatabase(db, tsvDir, options); err != nil {
+		log.Fatal(err)
+	}
+
+	files2, err := filepath.Glob(filepath.Join(tsvDir, "*"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, file := range files2 {
+		fmt.Printf("Created: %s\n", filepath.Base(file))
+	}
+
+	// Example 3: LTSV output with zstd compression
+	fmt.Println("\nExample 3: LTSV output with zstd compression")
+	ltsvDir := filepath.Join(tempDir, "ltsv_output")
+	options3 := filesql.NewDumpOptions().
+		WithFormat(filesql.OutputFormatLTSV).
+		WithCompression(filesql.CompressionZSTD)
+	if err := filesql.DumpDatabase(db, ltsvDir, options3); err != nil {
+		log.Fatal(err)
+	}
+
+	files3, err := filepath.Glob(filepath.Join(ltsvDir, "*"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, file := range files3 {
+		fmt.Printf("Created: %s\n", filepath.Base(file))
+	}
+
+	// Output:
+	// Example 1: Default CSV output
+	// Created: sample.csv
+	//
+	// Example 2: TSV output with gzip compression
+	// Created: sample.tsv.gz
+	//
+	// Example 3: LTSV output with zstd compression
+	// Created: sample.ltsv.zst
+}
+
+func ExampleDumpDatabase_multipleFormats() {
+	tempDir := filepath.Join(os.TempDir(), "filesql_formats_example")
+	if err := os.MkdirAll(tempDir, 0750); err != nil {
+		log.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Open CSV file and modify data
+	db, err := filesql.Open("testdata/sample.csv")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Add some data to demonstrate functionality
+	_, err = db.Exec("INSERT INTO sample (id, name, age, email) VALUES (4, 'Alice Brown', 28, 'alice@example.com')")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Demonstrate different compression options
+	compressionTypes := []struct {
+		name        string
+		compression filesql.CompressionType
+		extension   string
+	}{
+		{"No compression", filesql.CompressionNone, ""},
+		{"Gzip compression", filesql.CompressionGZ, ".gz"},
+		{"XZ compression", filesql.CompressionXZ, ".xz"},
+		{"Zstd compression", filesql.CompressionZSTD, ".zst"},
+	}
+
+	for _, ct := range compressionTypes {
+		fmt.Printf("%s:\n", ct.name)
+
+		options := filesql.NewDumpOptions().
+			WithFormat(filesql.OutputFormatCSV).
+			WithCompression(ct.compression)
+
+		outputDir := filepath.Join(tempDir, "compression_"+ct.compression.String())
+		if err := filesql.DumpDatabase(db, outputDir, options); err != nil {
+			log.Fatal(err)
+		}
+
+		files, err := filepath.Glob(filepath.Join(outputDir, "*"))
+		if err != nil {
+			log.Fatal(err)
+		}
+		for _, file := range files {
+			fmt.Printf("  %s\n", filepath.Base(file))
+		}
+	}
+
+	// Output:
+	// No compression:
+	//   sample.csv
+	// Gzip compression:
+	//   sample.csv.gz
+	// XZ compression:
+	//   sample.csv.xz
+	// Zstd compression:
+	//   sample.csv.zst
+}
+
+func ExampleDumpOptions_fileExtensions() {
+	// Show how file extensions are built
+	examples := []struct {
+		format      filesql.OutputFormat
+		compression filesql.CompressionType
+	}{
+		{filesql.OutputFormatCSV, filesql.CompressionNone},
+		{filesql.OutputFormatTSV, filesql.CompressionGZ},
+		{filesql.OutputFormatLTSV, filesql.CompressionBZ2},
+		{filesql.OutputFormatCSV, filesql.CompressionXZ},
+		{filesql.OutputFormatTSV, filesql.CompressionZSTD},
+	}
+
+	for _, ex := range examples {
+		options := filesql.DumpOptions{
+			Format:      ex.format,
+			Compression: ex.compression,
+		}
+		fmt.Printf("Format: %-4s, Compression: %-4s -> Extension: %s\n",
+			ex.format.String(),
+			ex.compression.String(),
+			options.FileExtension())
+	}
+
+	// Output:
+	// Format: csv , Compression: none -> Extension: .csv
+	// Format: tsv , Compression: gz   -> Extension: .tsv.gz
+	// Format: ltsv, Compression: bz2  -> Extension: .ltsv.bz2
+	// Format: csv , Compression: xz   -> Extension: .csv.xz
+	// Format: tsv , Compression: zstd -> Extension: .tsv.zst
+}
+
+func ExampleDumpDatabase_dataProcessing() {
+	tempDir := filepath.Join(os.TempDir(), "filesql_processing_example")
+	if err := os.MkdirAll(tempDir, 0750); err != nil {
+		log.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Open CSV file
+	db, err := filesql.Open("testdata/sample.csv")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Process data with SQL
+	_, err = db.Exec(`
+		UPDATE sample 
+		SET age = age + 1 
+		WHERE name LIKE '%John%'
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Add aggregated data
+	_, err = db.Exec(`
+		INSERT INTO sample (id, name, age, email) 
+		SELECT 999, 'Summary: ' || COUNT(*), AVG(age), 'summary@example.com'
+		FROM sample 
+		WHERE id < 999
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Export processed data in different formats for different use cases
+
+	// 1. TSV for spreadsheet import
+	options := filesql.NewDumpOptions().WithFormat(filesql.OutputFormatTSV)
+	spreadsheetDir := filepath.Join(tempDir, "for_spreadsheet")
+	if err := filesql.DumpDatabase(db, spreadsheetDir, options); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("Exported TSV for spreadsheet import")
+
+	// 2. Compressed CSV for archival
+	options = filesql.NewDumpOptions().
+		WithFormat(filesql.OutputFormatCSV).
+		WithCompression(filesql.CompressionGZ)
+	archiveDir := filepath.Join(tempDir, "for_archive")
+	if err := filesql.DumpDatabase(db, archiveDir, options); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("Exported compressed CSV for archival")
+
+	// 3. LTSV for log analysis
+	options = filesql.NewDumpOptions().WithFormat(filesql.OutputFormatLTSV)
+	logDir := filepath.Join(tempDir, "for_logs")
+	if err := filesql.DumpDatabase(db, logDir, options); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("Exported LTSV for log analysis")
+
+	// Show what was created
+	dirs := []string{"for_spreadsheet", "for_archive", "for_logs"}
+	for _, dir := range dirs {
+		files, err := filepath.Glob(filepath.Join(tempDir, dir, "*"))
+		if err != nil {
+			log.Fatal(err)
+		}
+		for _, file := range files {
+			fmt.Printf("%s: %s\n", dir, filepath.Base(file))
+		}
+	}
+
+	// Output:
+	// Exported TSV for spreadsheet import
+	// Exported compressed CSV for archival
+	// Exported LTSV for log analysis
+	// for_spreadsheet: sample.tsv
+	// for_archive: sample.csv.gz
+	// for_logs: sample.ltsv
+}

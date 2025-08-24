@@ -18,8 +18,10 @@
 package driver
 
 import (
+	"compress/gzip"
 	"context"
 	"database/sql/driver"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
@@ -27,7 +29,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/nao1215/filesql/domain/model"
+	"github.com/ulikunitz/xz"
 	"modernc.org/sqlite"
 )
 
@@ -599,6 +603,12 @@ func (conn *Connection) PrepareContext(ctx context.Context, query string) (drive
 
 // Dump exports all tables from SQLite3 database to specified directory in CSV format
 func (conn *Connection) Dump(outputDir string) error {
+	options := model.NewDumpOptions()
+	return conn.DumpWithOptions(outputDir, options)
+}
+
+// DumpWithOptions exports all tables from SQLite3 database to specified directory with given options
+func (conn *Connection) DumpWithOptions(outputDir string, options model.DumpOptions) error {
 	// Create output directory if it doesn't exist
 	if err := os.MkdirAll(outputDir, 0750); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
@@ -610,10 +620,10 @@ func (conn *Connection) Dump(outputDir string) error {
 		return fmt.Errorf("failed to get table names: %w", err)
 	}
 
-	// Export each table to CSV
+	// Export each table with the specified format and compression
 	for _, tableName := range tableNames {
-		outputPath := filepath.Join(outputDir, tableName+".csv")
-		if err := conn.exportTableToCSV(tableName, outputPath); err != nil {
+		outputPath := filepath.Join(outputDir, tableName+options.FileExtension())
+		if err := conn.exportTableWithOptions(tableName, outputPath, options); err != nil {
 			return fmt.Errorf("failed to export table %s: %w", tableName, err)
 		}
 	}
@@ -635,6 +645,12 @@ func (conn *Connection) getTableNames() ([]string, error) {
 
 // exportTableToCSV exports a single table to CSV file
 func (conn *Connection) exportTableToCSV(tableName, outputPath string) error {
+	options := model.NewDumpOptions()
+	return conn.exportTableWithOptions(tableName, outputPath, options)
+}
+
+// exportTableWithOptions exports a single table to file with specified options
+func (conn *Connection) exportTableWithOptions(tableName, outputPath string, options model.DumpOptions) error {
 	columns, err := conn.getTableColumns(tableName)
 	if err != nil {
 		return fmt.Errorf("failed to get columns for table %s: %w", tableName, err)
@@ -647,7 +663,7 @@ func (conn *Connection) exportTableToCSV(tableName, outputPath string) error {
 	}
 	defer rows.Close()
 
-	return conn.writeCSVFile(outputPath, columns, rows)
+	return conn.writeFileWithOptions(outputPath, columns, rows, options)
 }
 
 // getTableColumns retrieves column names for a specific table
@@ -727,26 +743,126 @@ func (conn *Connection) scanStringValues(rows driver.Rows, columnCount int) ([]s
 	return results, nil
 }
 
-// writeCSVFile creates and writes data to a CSV file
-func (conn *Connection) writeCSVFile(outputPath string, columns []string, rows driver.Rows) error {
-	file, err := os.Create(outputPath) //nolint:gosec // Safe: outputPath is constructed from validated inputs
+// writeFileWithOptions creates and writes data to a file with specified format and compression
+func (conn *Connection) writeFileWithOptions(outputPath string, columns []string, rows driver.Rows, options model.DumpOptions) error {
+	// Create the base file
+	file, err := os.Create(outputPath) //nolint:gosec // outputPath is constructed from validated inputs
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create file %s: %w", outputPath, err)
 	}
 	defer file.Close()
 
+	// Create writer with compression if needed
+	writer, closeWriter, err := conn.createWriter(file, options.Compression)
+	if err != nil {
+		return fmt.Errorf("failed to create writer: %w", err)
+	}
+	defer closeWriter()
+
+	// Write data based on format
+	switch options.Format {
+	case model.OutputFormatCSV:
+		return conn.writeCSVData(writer, columns, rows)
+	case model.OutputFormatTSV:
+		return conn.writeTSVData(writer, columns, rows)
+	case model.OutputFormatLTSV:
+		return conn.writeLTSVData(writer, columns, rows)
+	default:
+		return fmt.Errorf("unsupported output format: %v", options.Format)
+	}
+}
+
+// createWriter creates an appropriate writer based on compression type
+func (conn *Connection) createWriter(file *os.File, compression model.CompressionType) (io.Writer, func() error, error) {
+	switch compression {
+	case model.CompressionNone:
+		return file, func() error { return nil }, nil
+	case model.CompressionGZ:
+		gzWriter := gzip.NewWriter(file)
+		return gzWriter, gzWriter.Close, nil
+	case model.CompressionBZ2:
+		// bzip2 doesn't have a writer in the standard library
+		return nil, nil, errors.New("bzip2 compression is not supported for writing")
+	case model.CompressionXZ:
+		xzWriter, err := xz.NewWriter(file)
+		if err != nil {
+			return nil, nil, err
+		}
+		return xzWriter, xzWriter.Close, nil
+	case model.CompressionZSTD:
+		zstdWriter, err := zstd.NewWriter(file)
+		if err != nil {
+			return nil, nil, err
+		}
+		return zstdWriter, zstdWriter.Close, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported compression type: %v", compression)
+	}
+}
+
+// writeCSVData writes data in CSV format
+func (conn *Connection) writeCSVData(writer io.Writer, columns []string, rows driver.Rows) error {
+	csvWriter := csv.NewWriter(writer)
+	defer csvWriter.Flush()
+
 	// Write header
-	header := strings.Join(columns, ",") + "\n"
-	if _, err := file.WriteString(header); err != nil {
+	if err := csvWriter.Write(columns); err != nil {
 		return err
 	}
 
 	// Write data rows
-	return conn.writeDataRows(file, rows, len(columns))
+	return conn.writeRowsToCSV(csvWriter, rows, len(columns))
 }
 
-// writeDataRows writes all data rows to the CSV file
-func (conn *Connection) writeDataRows(file *os.File, rows driver.Rows, columnCount int) error {
+// writeTSVData writes data in TSV format
+func (conn *Connection) writeTSVData(writer io.Writer, columns []string, rows driver.Rows) error {
+	csvWriter := csv.NewWriter(writer)
+	csvWriter.Comma = '\t'
+	defer csvWriter.Flush()
+
+	// Write header
+	if err := csvWriter.Write(columns); err != nil {
+		return err
+	}
+
+	// Write data rows
+	return conn.writeRowsToCSV(csvWriter, rows, len(columns))
+}
+
+// writeLTSVData writes data in LTSV format
+func (conn *Connection) writeLTSVData(writer io.Writer, columns []string, rows driver.Rows) error {
+	dest := make([]driver.Value, len(columns))
+
+	for {
+		err := rows.Next(dest)
+		if err != nil {
+			if errors.Is(err, driver.ErrBadConn) || errors.Is(err, io.EOF) {
+				break
+			}
+			return err
+		}
+
+		// Build LTSV record
+		var parts []string
+		for i, col := range columns {
+			value := ""
+			if dest[i] != nil {
+				value = fmt.Sprintf("%v", dest[i])
+			}
+			parts = append(parts, fmt.Sprintf("%s:%s", col, value))
+		}
+
+		line := strings.Join(parts, "\t") + "\n"
+		if _, err := writer.Write([]byte(line)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// writeRowsToCSV writes all data rows to CSV writer
+func (conn *Connection) writeRowsToCSV(csvWriter *csv.Writer, rows driver.Rows, columnCount int) error {
 	dest := make([]driver.Value, columnCount)
 
 	for {
@@ -758,9 +874,8 @@ func (conn *Connection) writeDataRows(file *os.File, rows driver.Rows, columnCou
 			return err
 		}
 
-		record := conn.convertRowToCSVRecord(dest)
-		line := strings.Join(record, ",") + "\n"
-		if _, err := file.WriteString(line); err != nil {
+		record := conn.convertRowToStringRecord(dest)
+		if err := csvWriter.Write(record); err != nil {
 			return err
 		}
 	}
@@ -768,14 +883,14 @@ func (conn *Connection) writeDataRows(file *os.File, rows driver.Rows, columnCou
 	return nil
 }
 
-// convertRowToCSVRecord converts a database row to CSV record with proper escaping
-func (conn *Connection) convertRowToCSVRecord(dest []driver.Value) []string {
+// convertRowToStringRecord converts a database row to string record
+func (conn *Connection) convertRowToStringRecord(dest []driver.Value) []string {
 	record := make([]string, len(dest))
 	for i, val := range dest {
 		if val == nil {
 			record[i] = ""
 		} else {
-			record[i] = conn.escapeCSVValue(fmt.Sprintf("%v", val))
+			record[i] = fmt.Sprintf("%v", val)
 		}
 	}
 	return record
