@@ -237,6 +237,15 @@ func (f *File) parseCSV() (*Table, error) {
 	}
 
 	header := NewHeader(records[0])
+	// Check for duplicate column names
+	columnsSeen := make(map[string]bool)
+	for _, col := range records[0] {
+		if columnsSeen[col] {
+			return nil, fmt.Errorf("%w: %s", ErrDuplicateColumnName, col)
+		}
+		columnsSeen[col] = true
+	}
+
 	tableRecords := make([]Record, 0, len(records)-1)
 	for i := 1; i < len(records); i++ {
 		tableRecords = append(tableRecords, NewRecord(records[i]))
@@ -266,6 +275,15 @@ func (f *File) parseTSV() (*Table, error) {
 	}
 
 	header := NewHeader(records[0])
+	// Check for duplicate column names
+	columnsSeen := make(map[string]bool)
+	for _, col := range records[0] {
+		if columnsSeen[col] {
+			return nil, fmt.Errorf("%w: %s", ErrDuplicateColumnName, col)
+		}
+		columnsSeen[col] = true
+	}
+
 	tableRecords := make([]Record, 0, len(records)-1)
 	for i := 1; i < len(records); i++ {
 		tableRecords = append(tableRecords, NewRecord(records[i]))

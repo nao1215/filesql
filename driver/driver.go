@@ -108,6 +108,9 @@ func (c *Connector) loadSingleFile(conn driver.Conn, filePath string) error {
 	// Convert file to table
 	table, err := file.ToTable()
 	if err != nil {
+		if errors.Is(err, model.ErrDuplicateColumnName) {
+			return fmt.Errorf("%w", ErrDuplicateColumnName)
+		}
 		return fmt.Errorf("failed to parse file: %w", err)
 	}
 
@@ -126,70 +129,17 @@ func (c *Connector) loadSingleFile(conn driver.Conn, filePath string) error {
 
 // loadDirectory loads all supported files from a directory into SQLite3 database
 func (c *Connector) loadDirectory(conn driver.Conn, dirPath string) error {
-	// Read directory contents
-	entries, err := os.ReadDir(dirPath)
-	if err != nil {
-		return fmt.Errorf("failed to read directory: %w", err)
-	}
-
-	// Track table names to avoid duplicates
 	tableNames := make(map[string]string)
-	var filesToLoad []string
-
-	// First pass: collect files and check for duplicate table names
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue // Skip subdirectories
-		}
-
-		fileName := entry.Name()
-		filePath := filepath.Join(dirPath, fileName)
-
-		// Check if file is supported (CSV, TSV, LTSV, or their compressed versions)
-		if model.IsSupportedFile(fileName) {
-			tableName := model.TableFromFilePath(filePath)
-			if existingFile, exists := tableNames[tableName]; exists {
-				// Table name already exists, prefer the file without compression extension
-				// or the one that appears first if both are compressed/uncompressed
-				existingFile = filepath.Base(existingFile)
-
-				// Count compression extensions to determine priority
-				existingCompressionCount := 0
-				currentCompressionCount := 0
-
-				for _, ext := range []string{model.ExtGZ, model.ExtBZ2, model.ExtXZ, model.ExtZSTD} {
-					if strings.HasSuffix(existingFile, ext) {
-						existingCompressionCount++
-					}
-					if strings.HasSuffix(fileName, ext) {
-						currentCompressionCount++
-					}
-				}
-
-				// Prefer uncompressed files over compressed ones
-				if currentCompressionCount < existingCompressionCount {
-					// Replace existing file with current (less compressed) file
-					for i, f := range filesToLoad {
-						if f == tableNames[tableName] {
-							filesToLoad[i] = filePath
-							break
-						}
-					}
-					tableNames[tableName] = filePath
-				}
-				// Otherwise keep the existing file (skip current file)
-			} else {
-				tableNames[tableName] = filePath
-				filesToLoad = append(filesToLoad, filePath)
-			}
-		}
+	filesToLoad, err := c.collectDirectoryFiles(dirPath, tableNames)
+	if err != nil {
+		return err
 	}
 
-	// Second pass: load the selected files
+	// Load the selected files
 	loadedFiles := 0
 	for _, filePath := range filesToLoad {
 		if err := c.loadSingleFile(conn, filePath); err != nil {
-			// Log error but continue with other files
+			// Log error but continue with other files (only for directory loading)
 			fmt.Printf("Warning: failed to load file %s: %v\n", filepath.Base(filePath), err)
 			continue
 		}
@@ -203,13 +153,119 @@ func (c *Connector) loadDirectory(conn driver.Conn, dirPath string) error {
 	return nil
 }
 
+// collectDirectoryFiles collects files from directory and validates for duplicate table names
+func (c *Connector) collectDirectoryFiles(dirPath string, tableNames map[string]string) ([]string, error) {
+	// Read directory contents
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read directory: %w", err)
+	}
+
+	var filesToLoad []string
+
+	// Collect files and check for duplicate table names
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue // Skip subdirectories
+		}
+
+		fileName := entry.Name()
+		filePath := filepath.Join(dirPath, fileName)
+
+		// Check if file is supported (CSV, TSV, LTSV, or their compressed versions)
+		if model.IsSupportedFile(fileName) {
+			// Test if the file can be loaded (has valid structure)
+			file := model.NewFile(filePath)
+			table, err := file.ToTable()
+			if err != nil {
+				// Skip files with errors (e.g., duplicate columns) in directory loading
+				fmt.Printf("Warning: skipping file %s: %v\n", fileName, err)
+				continue
+			}
+
+			tableName := model.TableFromFilePath(filePath)
+			if existingFile, exists := tableNames[tableName]; exists {
+				// Check if existing file is from a different directory
+				// If so, it's a duplicate table name error
+				if filepath.Dir(existingFile) != dirPath {
+					return nil, fmt.Errorf("%w: table '%s' from files '%s' and '%s'",
+						ErrDuplicateTableName, tableName, existingFile, filePath)
+				}
+
+				// Within same directory, check if files have same actual file type vs compression difference
+				existingBaseName := filepath.Base(existingFile)
+
+				// Remove compression extensions to get base file type
+				existingFileType := removeCompressionExtensions(existingBaseName)
+				currentFileType := removeCompressionExtensions(fileName)
+
+				// If the base file types are different (e.g., .csv vs .tsv), it's still a duplicate table name error
+				if filepath.Ext(existingFileType) != filepath.Ext(currentFileType) {
+					return nil, fmt.Errorf("%w: table '%s' from files '%s' and '%s' (different file types with same table name)",
+						ErrDuplicateTableName, tableName, existingFile, filePath)
+				}
+
+				// Same file type, different compression - prefer less compressed
+				existingCompressionCount := countCompressionExtensions(existingBaseName)
+				currentCompressionCount := countCompressionExtensions(fileName)
+
+				// Prefer uncompressed files over compressed ones
+				if currentCompressionCount < existingCompressionCount {
+					// Replace existing file with current (less compressed) file
+					for i, f := range filesToLoad {
+						if f == existingFile {
+							filesToLoad[i] = filePath
+							break
+						}
+					}
+					tableNames[tableName] = filePath
+				}
+				// Otherwise keep the existing file (skip current file)
+			} else {
+				tableNames[tableName] = filePath
+				filesToLoad = append(filesToLoad, filePath)
+			}
+
+			// Don't actually use the table here, just the filename for validation
+			_ = table
+		}
+	}
+
+	return filesToLoad, nil
+}
+
+// removeCompressionExtensions removes compression extensions from filename
+func removeCompressionExtensions(fileName string) string {
+	for _, ext := range []string{model.ExtGZ, model.ExtBZ2, model.ExtXZ, model.ExtZSTD} {
+		if strings.HasSuffix(fileName, ext) {
+			return strings.TrimSuffix(fileName, ext)
+		}
+	}
+	return fileName
+}
+
+// countCompressionExtensions counts how many compression extensions a file has
+func countCompressionExtensions(fileName string) int {
+	count := 0
+	for _, ext := range []string{model.ExtGZ, model.ExtBZ2, model.ExtXZ, model.ExtZSTD} {
+		if strings.HasSuffix(fileName, ext) {
+			count++
+		}
+	}
+	return count
+}
+
 // loadMultiplePaths loads multiple specified files and/or directories into SQLite3 database
 func (c *Connector) loadMultiplePaths(conn driver.Conn, paths []string) error {
 	if len(paths) == 0 {
 		return ErrNoPathsProvided
 	}
 
-	loadedFiles := 0
+	// Track table names to detect duplicates across all paths
+	tableNames := make(map[string]string) // table name -> file path
+	var filesToLoad []string
+
+	// First pass: collect all files and detect duplicate table names
 	for _, path := range paths {
 		// Trim whitespace from path
 		path = strings.TrimSpace(path)
@@ -226,20 +282,34 @@ func (c *Connector) loadMultiplePaths(conn driver.Conn, paths []string) error {
 			return fmt.Errorf("failed to stat path %s: %w", path, err)
 		}
 
-		// Handle based on path type
 		if info.IsDir() {
-			// Load directory
-			if err := c.loadDirectory(conn, path); err != nil {
-				return fmt.Errorf("failed to load directory %s: %w", path, err)
+			// For directories, collect all files
+			dirFiles, err := c.collectDirectoryFiles(path, tableNames)
+			if err != nil {
+				return fmt.Errorf("failed to collect files from directory %s: %w", path, err)
 			}
-			loadedFiles++
+			filesToLoad = append(filesToLoad, dirFiles...)
 		} else {
-			// Load single file
-			if err := c.loadSingleFile(conn, path); err != nil {
-				return fmt.Errorf("failed to load file %s: %w", path, err)
+			// For single files, check for supported format and table name conflicts
+			if model.IsSupportedFile(filepath.Base(path)) {
+				tableName := model.TableFromFilePath(path)
+				if existingFile, exists := tableNames[tableName]; exists {
+					return fmt.Errorf("%w: table '%s' from files '%s' and '%s'",
+						ErrDuplicateTableName, tableName, existingFile, path)
+				}
+				tableNames[tableName] = path
+				filesToLoad = append(filesToLoad, path)
 			}
-			loadedFiles++
 		}
+	}
+
+	// Second pass: load all files
+	loadedFiles := 0
+	for _, filePath := range filesToLoad {
+		if err := c.loadSingleFile(conn, filePath); err != nil {
+			return fmt.Errorf("failed to load file %s: %w", filePath, err)
+		}
+		loadedFiles++
 	}
 
 	if loadedFiles == 0 {
@@ -257,7 +327,7 @@ func (c *Connector) createTableDirectly(conn driver.Conn, table *model.Table) er
 	}
 
 	query := fmt.Sprintf(
-		`CREATE TABLE [%s] (%s)`,
+		`CREATE TABLE IF NOT EXISTS [%s] (%s)`,
 		table.Name(),
 		strings.Join(columns, ", "),
 	)

@@ -2,8 +2,10 @@ package model
 
 import (
 	"compress/gzip"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -637,4 +639,125 @@ func Test_OpenReaderEdgeCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFile_ToTable_DuplicateColumns(t *testing.T) {
+	t.Parallel()
+
+	t.Run("CSV with duplicate column names", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		csvFile := filepath.Join(tmpDir, "duplicate_columns.csv")
+
+		csvContent := `id,name,id,email
+1,John,10,john@example.com
+2,Jane,20,jane@example.com`
+
+		err := os.WriteFile(csvFile, []byte(csvContent), 0644)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		file := NewFile(csvFile)
+		_, err = file.ToTable()
+		if err == nil {
+			t.Error("expected error for CSV with duplicate column names")
+			return
+		}
+
+		if !errors.Is(err, ErrDuplicateColumnName) {
+			t.Errorf("expected ErrDuplicateColumnName, got: %v", err)
+		}
+
+		// Verify error message contains the duplicate column name
+		if !strings.Contains(err.Error(), "id") {
+			t.Errorf("error message should contain duplicate column name 'id', got: %s", err.Error())
+		}
+	})
+
+	t.Run("TSV with duplicate column names", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		tsvFile := filepath.Join(tmpDir, "duplicate_columns.tsv")
+
+		tsvContent := `id	name	id	email
+1	John	10	john@example.com
+2	Jane	20	jane@example.com`
+
+		err := os.WriteFile(tsvFile, []byte(tsvContent), 0644)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		file := NewFile(tsvFile)
+		_, err = file.ToTable()
+		if err == nil {
+			t.Error("expected error for TSV with duplicate column names")
+			return
+		}
+
+		if !errors.Is(err, ErrDuplicateColumnName) {
+			t.Errorf("expected ErrDuplicateColumnName, got: %v", err)
+		}
+
+		// Verify error message contains the duplicate column name
+		if !strings.Contains(err.Error(), "id") {
+			t.Errorf("error message should contain duplicate column name 'id', got: %s", err.Error())
+		}
+	})
+
+	t.Run("CSV with multiple duplicate column names", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		csvFile := filepath.Join(tmpDir, "multiple_duplicates.csv")
+
+		csvContent := `name,age,name,email,age
+John,25,Doe,john@example.com,26`
+
+		err := os.WriteFile(csvFile, []byte(csvContent), 0644)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		file := NewFile(csvFile)
+		_, err = file.ToTable()
+		if err == nil {
+			t.Error("expected error for CSV with multiple duplicate column names")
+			return
+		}
+
+		if !errors.Is(err, ErrDuplicateColumnName) {
+			t.Errorf("expected ErrDuplicateColumnName, got: %v", err)
+		}
+	})
+
+	t.Run("CSV without duplicate column names", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		csvFile := filepath.Join(tmpDir, "valid.csv")
+
+		csvContent := `id,name,age,email
+1,John,25,john@example.com
+2,Jane,30,jane@example.com`
+
+		err := os.WriteFile(csvFile, []byte(csvContent), 0644)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		file := NewFile(csvFile)
+		table, err := file.ToTable()
+		if err != nil {
+			t.Errorf("expected no error for valid CSV, got: %v", err)
+			return
+		}
+
+		if table == nil {
+			t.Error("expected valid table, got nil")
+		}
+	})
 }

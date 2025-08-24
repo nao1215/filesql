@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"modernc.org/sqlite"
 )
 
 func TestNewDriver(t *testing.T) {
@@ -635,4 +637,656 @@ func TestDumpToNonExistentDirectory(t *testing.T) {
 	if _, err := os.Stat(expectedFile); err != nil {
 		t.Errorf("expected file %s was not created: %v", expectedFile, err)
 	}
+}
+
+func TestDuplicateColumnNameValidation(t *testing.T) {
+	t.Parallel()
+
+	d := NewDriver()
+
+	t.Run("Single file with duplicate column names", func(t *testing.T) {
+		t.Parallel()
+
+		connector, err := d.OpenConnector("../testdata/duplicate_columns.csv")
+		if err != nil {
+			t.Fatalf("OpenConnector() error = %v", err)
+		}
+
+		_, err = connector.Connect(t.Context())
+		if err == nil {
+			t.Error("expected error when loading file with duplicate column names")
+			return
+		}
+
+		if !errors.Is(err, ErrDuplicateColumnName) {
+			t.Errorf("expected ErrDuplicateColumnName, got: %v", err)
+		}
+	})
+
+	t.Run("Multiple files, one with duplicate column names", func(t *testing.T) {
+		t.Parallel()
+
+		connector, err := d.OpenConnector("../testdata/sample.csv;../testdata/duplicate_columns.csv")
+		if err != nil {
+			t.Fatalf("OpenConnector() error = %v", err)
+		}
+
+		_, err = connector.Connect(t.Context())
+		if err == nil {
+			t.Error("expected error when loading files where one has duplicate column names")
+			return
+		}
+
+		if !errors.Is(err, ErrDuplicateColumnName) {
+			t.Errorf("expected ErrDuplicateColumnName, got: %v", err)
+		}
+	})
+}
+
+func TestDuplicateTableNameValidation(t *testing.T) {
+	t.Parallel()
+
+	d := NewDriver()
+
+	t.Run("Multiple files with same table name", func(t *testing.T) {
+		t.Parallel()
+
+		// Both sample.csv and subdir/sample.csv would create 'sample' table
+		connector, err := d.OpenConnector("../testdata/sample.csv;../testdata/subdir/sample.csv")
+		if err != nil {
+			t.Fatalf("OpenConnector() error = %v", err)
+		}
+
+		_, err = connector.Connect(t.Context())
+		if err == nil {
+			t.Error("expected error when loading files that would create duplicate table names")
+			return
+		}
+
+		if !errors.Is(err, ErrDuplicateTableName) {
+			t.Errorf("expected ErrDuplicateTableName, got: %v", err)
+		}
+
+		// Verify error message contains table name and file paths
+		errorMessage := err.Error()
+		if !strings.Contains(errorMessage, "sample") {
+			t.Errorf("error message should contain table name 'sample', got: %s", errorMessage)
+		}
+	})
+
+	t.Run("Multiple files with different table names", func(t *testing.T) {
+		t.Parallel()
+
+		connector, err := d.OpenConnector("../testdata/sample.csv;../testdata/users.csv")
+		if err != nil {
+			t.Fatalf("OpenConnector() error = %v", err)
+		}
+
+		conn, err := connector.Connect(t.Context())
+		if err != nil {
+			t.Errorf("expected no error when loading files with different table names, got: %v", err)
+			return
+		}
+
+		if conn != nil {
+			conn.Close()
+		}
+	})
+
+	t.Run("Directory with files having same base name but different extensions should error", func(t *testing.T) {
+		// This test checks that files with different extensions create duplicate table names within same directory
+		t.Parallel()
+
+		// Create temp directory with files having same base name
+		tempDir := t.TempDir()
+
+		// Create sample.csv
+		csvContent := "id,name\n1,John\n2,Jane\n"
+		if err := os.WriteFile(filepath.Join(tempDir, "sample.csv"), []byte(csvContent), 0644); err != nil {
+			t.Fatalf("failed to create sample.csv: %v", err)
+		}
+
+		// Create sample.tsv (same base name "sample" -> duplicate table)
+		tsvContent := "id\tname\n1\tJohn\n2\tJane\n"
+		if err := os.WriteFile(filepath.Join(tempDir, "sample.tsv"), []byte(tsvContent), 0644); err != nil {
+			t.Fatalf("failed to create sample.tsv: %v", err)
+		}
+
+		connector, err := d.OpenConnector(tempDir)
+		if err != nil {
+			t.Fatalf("OpenConnector() error = %v", err)
+		}
+
+		_, err = connector.Connect(t.Context())
+		if err == nil {
+			t.Error("expected error when directory contains files with same base name but different extensions")
+			return
+		}
+
+		if !errors.Is(err, ErrDuplicateTableName) {
+			t.Errorf("expected ErrDuplicateTableName, got: %v", err)
+		}
+	})
+
+	t.Run("Directory with compressed and uncompressed versions prefers uncompressed", func(t *testing.T) {
+		t.Parallel()
+
+		// Test directory contains sample.csv and sample.csv.gz
+		// Should prefer uncompressed version and not throw duplicate error within same directory
+		connector, err := d.OpenConnector("../testdata")
+		if err != nil {
+			t.Fatalf("OpenConnector() error = %v", err)
+		}
+
+		conn, err := connector.Connect(t.Context())
+		if err != nil {
+			t.Errorf("expected no error when directory has compressed and uncompressed versions, got: %v", err)
+			return
+		}
+
+		if conn != nil {
+			conn.Close()
+		}
+	})
+}
+
+func TestConnectionTransactions(t *testing.T) {
+	t.Parallel()
+
+	d := NewDriver()
+	connector, err := d.OpenConnector("../testdata/sample.csv")
+	if err != nil {
+		t.Fatalf("OpenConnector() error = %v", err)
+	}
+
+	conn, err := connector.Connect(t.Context())
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer conn.Close()
+
+	filesqlConn, ok := conn.(*Connection)
+	if !ok {
+		t.Fatal("connection is not a filesql connection")
+	}
+
+	t.Run("BeginTx with context", func(t *testing.T) {
+		tx, err := filesqlConn.BeginTx(t.Context(), driver.TxOptions{})
+		if err != nil {
+			t.Errorf("BeginTx() error = %v", err)
+			return
+		}
+		if tx == nil {
+			t.Error("BeginTx() returned nil transaction")
+			return
+		}
+
+		// Test commit
+		if err := tx.Commit(); err != nil {
+			t.Errorf("Commit() error = %v", err)
+		}
+	})
+
+	t.Run("BeginTx with rollback", func(t *testing.T) {
+		tx, err := filesqlConn.BeginTx(t.Context(), driver.TxOptions{})
+		if err != nil {
+			t.Errorf("BeginTx() error = %v", err)
+			return
+		}
+		if tx == nil {
+			t.Error("BeginTx() returned nil transaction")
+			return
+		}
+
+		// Test rollback
+		if err := tx.Rollback(); err != nil {
+			t.Errorf("Rollback() error = %v", err)
+		}
+	})
+
+	t.Run("Deprecated Begin method", func(t *testing.T) {
+		tx, err := filesqlConn.Begin()
+		if err != nil {
+			t.Errorf("Begin() error = %v", err)
+			return
+		}
+		if tx == nil {
+			t.Error("Begin() returned nil transaction")
+			return
+		}
+
+		// Clean up
+		if err := tx.Rollback(); err != nil {
+			t.Errorf("Rollback() error = %v", err)
+		}
+	})
+}
+
+func TestConnectionPrepareContext(t *testing.T) {
+	t.Parallel()
+
+	d := NewDriver()
+	connector, err := d.OpenConnector("../testdata/sample.csv")
+	if err != nil {
+		t.Fatalf("OpenConnector() error = %v", err)
+	}
+
+	conn, err := connector.Connect(t.Context())
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer conn.Close()
+
+	filesqlConn, ok := conn.(*Connection)
+	if !ok {
+		t.Fatal("connection is not a filesql connection")
+	}
+
+	t.Run("PrepareContext with valid query", func(t *testing.T) {
+		stmt, err := filesqlConn.PrepareContext(t.Context(), "SELECT COUNT(*) FROM sample")
+		if err != nil {
+			t.Errorf("PrepareContext() error = %v", err)
+			return
+		}
+		if stmt == nil {
+			t.Error("PrepareContext() returned nil statement")
+			return
+		}
+		defer stmt.Close()
+	})
+
+	t.Run("Deprecated Prepare method", func(t *testing.T) {
+		stmt, err := filesqlConn.Prepare("SELECT COUNT(*) FROM sample")
+		if err != nil {
+			t.Errorf("Prepare() error = %v", err)
+			return
+		}
+		if stmt == nil {
+			t.Error("Prepare() returned nil statement")
+			return
+		}
+		defer stmt.Close()
+	})
+}
+
+func TestConnectionClose(t *testing.T) {
+	t.Parallel()
+
+	d := NewDriver()
+	connector, err := d.OpenConnector("../testdata/sample.csv")
+	if err != nil {
+		t.Fatalf("OpenConnector() error = %v", err)
+	}
+
+	conn, err := connector.Connect(t.Context())
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+
+	t.Run("Close connection", func(t *testing.T) {
+		err := conn.Close()
+		if err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+
+	t.Run("Close nil connection", func(t *testing.T) {
+		nilConn := &Connection{conn: nil}
+		err := nilConn.Close()
+		if err != nil {
+			t.Errorf("Close() with nil connection error = %v", err)
+		}
+	})
+}
+
+func TestErrorHandling(t *testing.T) {
+	t.Parallel()
+
+	d := NewDriver()
+
+	t.Run("loadSingleFile with invalid file", func(t *testing.T) {
+		connector, err := d.OpenConnector("../testdata/sample.csv")
+		if err != nil {
+			t.Fatalf("OpenConnector() error = %v", err)
+		}
+
+		// Create a mock connection
+		sqliteDriver := &sqlite.Driver{}
+		sqliteConn, err := sqliteDriver.Open(":memory:")
+		if err != nil {
+			t.Fatalf("Failed to create SQLite connection: %v", err)
+		}
+		defer sqliteConn.Close()
+
+		// Test with non-existent file
+		filesqlConnector, ok := connector.(*Connector)
+		if !ok {
+			t.Fatal("connector is not a filesql Connector")
+		}
+		loadErr := filesqlConnector.loadSingleFile(sqliteConn, "non_existent_file.csv")
+		if loadErr == nil {
+			t.Error("Expected error when loading non-existent file")
+		}
+	})
+
+	t.Run("loadDirectory with non-existent directory", func(t *testing.T) {
+		connector, err := d.OpenConnector("../testdata/sample.csv")
+		if err != nil {
+			t.Fatalf("OpenConnector() error = %v", err)
+		}
+
+		// Create a mock connection
+		sqliteDriver := &sqlite.Driver{}
+		sqliteConn, err := sqliteDriver.Open(":memory:")
+		if err != nil {
+			t.Fatalf("Failed to create SQLite connection: %v", err)
+		}
+		defer sqliteConn.Close()
+
+		// Test with non-existent directory
+		filesqlConnector, ok := connector.(*Connector)
+		if !ok {
+			t.Fatal("connector is not a filesql Connector")
+		}
+		loadErr := filesqlConnector.loadDirectory(sqliteConn, "non_existent_directory")
+		if loadErr == nil {
+			t.Error("Expected error when loading non-existent directory")
+		}
+	})
+
+	t.Run("loadMultiplePaths with empty paths", func(t *testing.T) {
+		connector, err := d.OpenConnector("../testdata/sample.csv")
+		if err != nil {
+			t.Fatalf("OpenConnector() error = %v", err)
+		}
+
+		// Create a mock connection
+		sqliteDriver := &sqlite.Driver{}
+		sqliteConn, err := sqliteDriver.Open(":memory:")
+		if err != nil {
+			t.Fatalf("Failed to create SQLite connection: %v", err)
+		}
+		defer sqliteConn.Close()
+
+		// Test with empty paths
+		filesqlConnector, ok := connector.(*Connector)
+		if !ok {
+			t.Fatal("connector is not a filesql Connector")
+		}
+		loadErr := filesqlConnector.loadMultiplePaths(sqliteConn, []string{})
+		if loadErr == nil {
+			t.Error("Expected error when loading empty paths")
+		}
+		if !errors.Is(loadErr, ErrNoPathsProvided) {
+			t.Errorf("Expected ErrNoPathsProvided, got: %v", loadErr)
+		}
+	})
+
+	t.Run("loadMultiplePaths with whitespace-only paths", func(t *testing.T) {
+		connector, err := d.OpenConnector("../testdata/sample.csv")
+		if err != nil {
+			t.Fatalf("OpenConnector() error = %v", err)
+		}
+
+		// Create a mock connection
+		sqliteDriver := &sqlite.Driver{}
+		sqliteConn, err := sqliteDriver.Open(":memory:")
+		if err != nil {
+			t.Fatalf("Failed to create SQLite connection: %v", err)
+		}
+		defer sqliteConn.Close()
+
+		// Test with whitespace-only paths
+		filesqlConnector, ok := connector.(*Connector)
+		if !ok {
+			t.Fatal("connector is not a filesql Connector")
+		}
+		loadErr := filesqlConnector.loadMultiplePaths(sqliteConn, []string{"   ", "\t", "\n"})
+		if loadErr == nil {
+			t.Error("Expected error when loading whitespace-only paths")
+		}
+		if !errors.Is(loadErr, ErrNoFilesLoaded) {
+			t.Errorf("Expected ErrNoFilesLoaded, got: %v", loadErr)
+		}
+	})
+}
+
+func TestHelperFunctions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("removeCompressionExtensions", func(t *testing.T) {
+		tests := []struct {
+			input    string
+			expected string
+		}{
+			{"file.csv.gz", "file.csv"},
+			{"file.tsv.bz2", "file.tsv"},
+			{"file.ltsv.xz", "file.ltsv"},
+			{"file.csv.zst", "file.csv"},
+			{"file.csv", "file.csv"}, // no compression
+		}
+
+		for _, tt := range tests {
+			result := removeCompressionExtensions(tt.input)
+			if result != tt.expected {
+				t.Errorf("removeCompressionExtensions(%q) = %q, expected %q", tt.input, result, tt.expected)
+			}
+		}
+	})
+
+	t.Run("countCompressionExtensions", func(t *testing.T) {
+		tests := []struct {
+			input    string
+			expected int
+		}{
+			{"file.csv.gz", 1},
+			{"file.tsv.bz2", 1},
+			{"file.ltsv.xz", 1},
+			{"file.csv.zst", 1},
+			{"file.csv", 0}, // no compression
+		}
+
+		for _, tt := range tests {
+			result := countCompressionExtensions(tt.input)
+			if result != tt.expected {
+				t.Errorf("countCompressionExtensions(%q) = %d, expected %d", tt.input, result, tt.expected)
+			}
+		}
+	})
+}
+
+func TestExportFunctionality(t *testing.T) {
+	t.Parallel()
+
+	d := NewDriver()
+	connector, err := d.OpenConnector("../testdata/sample.csv")
+	if err != nil {
+		t.Fatalf("OpenConnector() error = %v", err)
+	}
+
+	conn, err := connector.Connect(t.Context())
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer conn.Close()
+
+	filesqlConn, ok := conn.(*Connection)
+	if !ok {
+		t.Fatal("connection is not a filesql connection")
+	}
+
+	t.Run("exportTableToCSV with valid table", func(t *testing.T) {
+		tempDir := t.TempDir()
+		outputPath := filepath.Join(tempDir, "exported_sample.csv")
+
+		err := filesqlConn.exportTableToCSV("sample", outputPath)
+		if err != nil {
+			t.Errorf("exportTableToCSV() error = %v", err)
+			return
+		}
+
+		// Verify file was created
+		if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+			t.Error("Expected exported file to exist")
+		}
+	})
+
+	t.Run("exportTableToCSV with non-existent table", func(t *testing.T) {
+		tempDir := t.TempDir()
+		outputPath := filepath.Join(tempDir, "non_existent.csv")
+
+		err := filesqlConn.exportTableToCSV("non_existent_table", outputPath)
+		if err == nil {
+			t.Error("Expected error when exporting non-existent table")
+		}
+	})
+
+	t.Run("getTableColumns with valid table", func(t *testing.T) {
+		columns, err := filesqlConn.getTableColumns("sample")
+		if err != nil {
+			t.Errorf("getTableColumns() error = %v", err)
+			return
+		}
+
+		if len(columns) == 0 {
+			t.Error("Expected at least one column")
+		}
+	})
+
+	t.Run("getTableColumns with non-existent table", func(t *testing.T) {
+		columns, err := filesqlConn.getTableColumns("non_existent_table")
+		if err != nil {
+			t.Errorf("getTableColumns() for non-existent table error = %v", err)
+		}
+		if len(columns) != 0 {
+			t.Errorf("Expected empty columns for non-existent table, got %v", columns)
+		}
+	})
+}
+
+func TestDiverseFileFormats(t *testing.T) {
+	t.Parallel()
+
+	d := NewDriver()
+
+	t.Run("Load LTSV file", func(t *testing.T) {
+		connector, err := d.OpenConnector("../testdata/logs.ltsv")
+		if err != nil {
+			t.Fatalf("OpenConnector() error = %v", err)
+		}
+
+		conn, err := connector.Connect(t.Context())
+		if err != nil {
+			t.Fatalf("Connect() error = %v", err)
+		}
+		defer conn.Close()
+
+		// Verify table exists
+		filesqlConn, ok := conn.(*Connection)
+		if !ok {
+			t.Fatal("connection is not a filesql connection")
+		}
+
+		tableNames, err := filesqlConn.getTableNames()
+		if err != nil {
+			t.Errorf("getTableNames() error = %v", err)
+		}
+
+		found := false
+		for _, name := range tableNames {
+			if name == "logs" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("Expected to find 'logs' table")
+		}
+	})
+
+	t.Run("Load compressed file", func(t *testing.T) {
+		connector, err := d.OpenConnector("../testdata/sample.csv.gz")
+		if err != nil {
+			t.Fatalf("OpenConnector() error = %v", err)
+		}
+
+		conn, err := connector.Connect(t.Context())
+		if err != nil {
+			t.Fatalf("Connect() error = %v", err)
+		}
+		defer conn.Close()
+
+		// Verify table exists
+		filesqlConn, ok := conn.(*Connection)
+		if !ok {
+			t.Fatal("connection is not a filesql connection")
+		}
+
+		tableNames, err := filesqlConn.getTableNames()
+		if err != nil {
+			t.Errorf("getTableNames() error = %v", err)
+		}
+
+		found := false
+		for _, name := range tableNames {
+			if name == "sample" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("Expected to find 'sample' table")
+		}
+	})
+}
+
+func TestEdgeCases(t *testing.T) {
+	t.Parallel()
+
+	d := NewDriver()
+
+	t.Run("Empty file path in loadFileDirectly", func(t *testing.T) {
+		connector, err := d.OpenConnector("../testdata/sample.csv")
+		if err != nil {
+			t.Fatalf("OpenConnector() error = %v", err)
+		}
+
+		sqliteDriver := &sqlite.Driver{}
+		sqliteConn, err := sqliteDriver.Open(":memory:")
+		if err != nil {
+			t.Fatalf("Failed to create SQLite connection: %v", err)
+		}
+		defer sqliteConn.Close()
+
+		filesqlConnector, ok := connector.(*Connector)
+		if !ok {
+			t.Fatal("connector is not a filesql Connector")
+		}
+		loadErr := filesqlConnector.loadFileDirectly(sqliteConn, "")
+		if loadErr == nil {
+			t.Error("Expected error when loading empty file path")
+		}
+	})
+
+	t.Run("escapeCSVValue with various inputs", func(t *testing.T) {
+		filesqlConn := &Connection{}
+
+		tests := []struct {
+			input    string
+			expected string
+		}{
+			{"normal", "normal"},
+			{"with,comma", "\"with,comma\""},
+			{"with\nnewline", "\"with\nnewline\""},
+			{"with\"quote", "\"with\"\"quote\""},
+			{"", ""},
+		}
+
+		for _, tt := range tests {
+			result := filesqlConn.escapeCSVValue(tt.input)
+			if result != tt.expected {
+				t.Errorf("escapeCSVValue(%q) = %q, expected %q", tt.input, result, tt.expected)
+			}
+		}
+	})
 }

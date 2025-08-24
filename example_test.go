@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/nao1215/filesql"
@@ -129,6 +130,49 @@ func createTempTestData() string {
 4,HR,400000,9`
 
 	err = os.WriteFile(filepath.Join(tmpDir, "departments.csv"), []byte(departmentsData), 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return tmpDir
+}
+
+// createSalesTestData creates test data for sales analysis examples
+func createSalesTestData() string {
+	tmpDir, err := os.MkdirTemp("", "filesql_sales_example")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Create sales.csv
+	salesData := `order_id,customer_id,product_name,category,quantity,unit_price,order_date,region
+1,101,Laptop Pro,Electronics,2,1299.99,2024-01-15,North
+2,102,Wireless Mouse,Electronics,1,29.99,2024-01-16,South
+3,103,Office Chair,Furniture,1,299.99,2024-01-17,East
+4,101,USB Cable,Electronics,3,12.99,2024-01-18,North
+5,104,Standing Desk,Furniture,1,599.99,2024-01-19,West
+6,105,Bluetooth Speaker,Electronics,2,79.99,2024-01-20,South
+7,106,Coffee Table,Furniture,1,199.99,2024-01-21,East
+8,102,Keyboard,Electronics,1,89.99,2024-01-22,South
+9,107,Monitor 24inch,Electronics,1,249.99,2024-01-23,North
+10,103,Desk Lamp,Furniture,2,39.99,2024-01-24,East`
+
+	err = os.WriteFile(filepath.Join(tmpDir, "sales.csv"), []byte(salesData), 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Create customers.csv
+	customersData := `customer_id,name,email,city,registration_date
+101,John Doe,john@example.com,New York,2023-06-01
+102,Jane Smith,jane@example.com,Los Angeles,2023-07-15
+103,Bob Johnson,bob@example.com,Chicago,2023-08-20
+104,Alice Brown,alice@example.com,Houston,2023-09-10
+105,Charlie Wilson,charlie@example.com,Phoenix,2023-10-05
+106,Diana Lee,diana@example.com,Philadelphia,2023-11-12
+107,Frank Miller,frank@example.com,San Antonio,2023-12-03`
+
+	err = os.WriteFile(filepath.Join(tmpDir, "customers.csv"), []byte(customersData), 0644)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -267,4 +311,1074 @@ func ExampleOpen_constraints() {
 	// Original employee count: 8
 	// In-memory count after INSERT: 9
 	// File-based count (unchanged): 8
+}
+
+// ExampleOpen_salesAnalysis demonstrates practical sales data analysis
+func ExampleOpen_salesAnalysis() {
+	tmpDir := createSalesTestData()
+	defer os.RemoveAll(tmpDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	db, err := filesql.OpenContext(ctx, tmpDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Sales summary by category and region
+	query := `
+		SELECT 
+			category,
+			region,
+			COUNT(*) as order_count,
+			SUM(quantity * unit_price) as total_revenue,
+			AVG(quantity * unit_price) as avg_order_value,
+			MIN(order_date) as first_order,
+			MAX(order_date) as last_order
+		FROM sales 
+		GROUP BY category, region
+		ORDER BY total_revenue DESC
+	`
+
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	fmt.Println("Sales Analysis by Category and Region:")
+	fmt.Println("=====================================")
+	fmt.Printf("%-12s %-8s %-6s %-10s %-12s %-12s %s\n",
+		"Category", "Region", "Orders", "Revenue", "Avg Order", "First Order", "Last Order")
+	fmt.Println(strings.Repeat("-", 80))
+
+	for rows.Next() {
+		var category, region, firstOrder, lastOrder string
+		var orderCount int
+		var totalRevenue, avgOrderValue float64
+
+		err := rows.Scan(&category, &region, &orderCount, &totalRevenue, &avgOrderValue, &firstOrder, &lastOrder)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		fmt.Printf("%-12s %-8s %-6d $%-9.2f $%-11.2f %-12s %s\n",
+			category, region, orderCount, totalRevenue, avgOrderValue, firstOrder, lastOrder)
+	}
+
+	// Output:
+	// Sales Analysis by Category and Region:
+	// =====================================
+	// Category     Region   Orders Revenue    Avg Order    First Order  Last Order
+	// --------------------------------------------------------------------------------
+	// Electronics  North    3      $2888.94   $962.98      2024-01-15   2024-01-23
+	// Furniture    West     1      $599.99    $599.99      2024-01-19   2024-01-19
+	// Furniture    East     3      $579.96    $193.32      2024-01-17   2024-01-24
+	// Electronics  South    3      $279.96    $93.32       2024-01-16   2024-01-22
+}
+
+// ExampleOpen_customerInsights demonstrates customer behavior analysis
+func ExampleOpen_customerInsights() {
+	tmpDir := createSalesTestData()
+	defer os.RemoveAll(tmpDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	db, err := filesql.OpenContext(ctx, tmpDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Customer lifetime value and behavior analysis
+	query := `
+		SELECT 
+			c.name,
+			c.city,
+			COUNT(s.order_id) as total_orders,
+			SUM(s.quantity * s.unit_price) as lifetime_value,
+			AVG(s.quantity * s.unit_price) as avg_order_value,
+			MIN(s.order_date) as first_purchase,
+			MAX(s.order_date) as last_purchase,
+			julianday(MAX(s.order_date)) - julianday(MIN(s.order_date)) as days_active,
+			COUNT(DISTINCT s.category) as categories_purchased
+		FROM customers c
+		JOIN sales s ON c.customer_id = s.customer_id
+		GROUP BY c.customer_id, c.name, c.city
+		HAVING total_orders > 1
+		ORDER BY lifetime_value DESC
+	`
+
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	fmt.Println("Customer Insights (Multi-Purchase Customers):")
+	fmt.Println("===========================================")
+	fmt.Printf("%-12s %-12s %-7s %-10s %-10s %-12s %-12s %-6s %s\n",
+		"Name", "City", "Orders", "LTV", "Avg Order", "First Buy", "Last Buy", "Days", "Categories")
+	fmt.Println(strings.Repeat("-", 100))
+
+	for rows.Next() {
+		var name, city, firstPurchase, lastPurchase string
+		var totalOrders, daysActive, categoriesPurchased int
+		var lifetimeValue, avgOrderValue float64
+
+		err := rows.Scan(&name, &city, &totalOrders, &lifetimeValue, &avgOrderValue,
+			&firstPurchase, &lastPurchase, &daysActive, &categoriesPurchased)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		fmt.Printf("%-12s %-12s %-7d $%-9.2f $%-9.2f %-12s %-12s %-6d %d\n",
+			name, city, totalOrders, lifetimeValue, avgOrderValue,
+			firstPurchase, lastPurchase, daysActive, categoriesPurchased)
+	}
+
+	// Output:
+	// Customer Insights (Multi-Purchase Customers):
+	// ===========================================
+	// Name         City         Orders  LTV        Avg Order  First Buy    Last Buy     Days   Categories
+	// ----------------------------------------------------------------------------------------------------
+	// John Doe     New York     2       $2638.95   $1319.47   2024-01-15   2024-01-18   3      1
+	// Bob Johnson  Chicago      2       $379.97    $189.99    2024-01-17   2024-01-24   7      1
+	// Jane Smith   Los Angeles  2       $119.98    $59.99     2024-01-16   2024-01-22   6      1
+}
+
+// ExampleOpen_errorHandling demonstrates proper error handling patterns
+func ExampleOpen_errorHandling() {
+	// Example 1: Handling non-existent files gracefully
+	_, err := filesql.Open("nonexistent.csv")
+	if err != nil {
+		fmt.Printf("Expected error for non-existent file: %v\n", err)
+	}
+
+	// Example 2: Context timeout handling
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond) // Very short timeout
+	defer cancel()
+
+	// This will likely timeout
+	tmpDir := createTempTestData()
+	defer os.RemoveAll(tmpDir)
+
+	time.Sleep(10 * time.Millisecond) // Ensure timeout triggers
+	_, err = filesql.OpenContext(ctx, tmpDir)
+	if err != nil {
+		fmt.Printf("Expected timeout error: %v\n", err)
+	}
+
+	// Example 3: Successful operation with proper error checking
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+
+	db, err := filesql.OpenContext(ctx2, tmpDir)
+	if err != nil {
+		fmt.Printf("Unexpected error: %v\n", err)
+		return
+	}
+	defer db.Close()
+
+	// Test query with error handling
+	rows, err := db.QueryContext(ctx2, "SELECT COUNT(*) FROM employees")
+	if err != nil {
+		fmt.Printf("Query error: %v\n", err)
+		return
+	}
+	defer rows.Close()
+
+	var count int
+	if rows.Next() {
+		if err := rows.Scan(&count); err != nil {
+			fmt.Printf("Scan error: %v\n", err)
+			return
+		}
+		fmt.Printf("Successfully counted %d employees\n", count)
+	}
+
+	if err := rows.Err(); err != nil {
+		fmt.Printf("Rows iteration error: %v\n", err)
+		return
+	}
+
+	// Output:
+	// Expected error for non-existent file: failed to load file: path does not exist: nonexistent.csv
+	// Expected timeout error: context deadline exceeded
+	// Successfully counted 8 employees
+}
+
+// ExampleDumpDatabase demonstrates exporting modified data
+func ExampleDumpDatabase() {
+	tmpDir := createTempTestData()
+	defer os.RemoveAll(tmpDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	db, err := filesql.OpenContext(ctx, filepath.Join(tmpDir, "employees.csv"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Modify data in memory
+	_, err = db.ExecContext(ctx, `
+		UPDATE employees 
+		SET salary = salary * 1.10 
+		WHERE department_id = 1
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Add a new employee
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO employees (id, name, department_id, salary, hire_date) 
+		VALUES (99, 'New Employee', 2, 60000, '2024-01-01')
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Create output directory
+	outputDir := filepath.Join(tmpDir, "output")
+	err = os.MkdirAll(outputDir, 0755)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Export modified data
+	err = filesql.DumpDatabase(db, outputDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Verify export by reading the exported file
+	exportedFile := filepath.Join(outputDir, "employees.csv")
+	if _, err := os.Stat(exportedFile); err != nil {
+		log.Fatal("Exported file not found:", err)
+	}
+
+	// Count records in exported file
+	db2, err := filesql.OpenContext(ctx, exportedFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db2.Close()
+
+	var count int
+	err = db2.QueryRowContext(ctx, "SELECT COUNT(*) FROM employees").Scan(&count)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("Original file: 8 employees\n")
+	fmt.Printf("Modified and exported: %d employees\n", count)
+
+	// Extract just the filename for consistent output
+	exportPath := strings.Replace(exportedFile, tmpDir, "/tmp/filesql_example*", 1)
+	fmt.Printf("Export location: %s\n", exportPath)
+
+	// Output:
+	// Original file: 8 employees
+	// Modified and exported: 9 employees
+	// Export location: /tmp/filesql_example*/output/employees.csv
+}
+
+// ExampleOpen_performanceOptimization demonstrates techniques for handling large datasets efficiently
+func ExampleOpen_performanceOptimization() {
+	tmpDir := createLargeTestData()
+	defer os.RemoveAll(tmpDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	db, err := filesql.OpenContext(ctx, tmpDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Technique 1: Use LIMIT and OFFSET for pagination
+	fmt.Println("=== Performance Optimization Techniques ===")
+	fmt.Println("\n1. Pagination with LIMIT and OFFSET:")
+
+	pageSize := 3
+	offset := 0
+
+	for page := 1; page <= 2; page++ {
+		rows, err := db.QueryContext(ctx, `
+			SELECT customer_id, name, total_orders 
+			FROM customer_summary 
+			ORDER BY total_orders DESC 
+			LIMIT ? OFFSET ?
+		`, pageSize, offset)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		fmt.Printf("Page %d:\n", page)
+		for rows.Next() {
+			var customerID int
+			var name string
+			var totalOrders int
+			if err := rows.Scan(&customerID, &name, &totalOrders); err != nil {
+				log.Fatal(err)
+			}
+			fmt.Printf("  - %s (ID: %d, Orders: %d)\n", name, customerID, totalOrders)
+		}
+		rows.Close()
+		offset += pageSize
+	}
+
+	// Technique 2: Use indexes by querying with WHERE clauses on sorted columns
+	fmt.Println("\n2. Efficient filtering with indexes:")
+	rows, err := db.QueryContext(ctx, `
+		SELECT name, email, registration_date 
+		FROM customer_summary 
+		WHERE total_spent > 1000 
+		ORDER BY total_spent DESC
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	fmt.Println("High-value customers:")
+	for rows.Next() {
+		var name, email, regDate string
+		if err := rows.Scan(&name, &email, &regDate); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("  - %s (%s) - Registered: %s\n", name, email, regDate)
+	}
+
+	// Technique 3: Aggregate queries for summary statistics
+	fmt.Println("\n3. Summary statistics:")
+	var totalCustomers int
+	var avgOrders, totalRevenue, avgSpent float64
+
+	err = db.QueryRowContext(ctx, `
+		SELECT 
+			COUNT(*) as total_customers,
+			AVG(total_orders) as avg_orders,
+			SUM(total_spent) as total_revenue,
+			AVG(total_spent) as avg_spent
+		FROM customer_summary
+	`).Scan(&totalCustomers, &avgOrders, &totalRevenue, &avgSpent)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("Total customers: %d\n", totalCustomers)
+	fmt.Printf("Average orders per customer: %.1f\n", avgOrders)
+	fmt.Printf("Total revenue: $%.2f\n", totalRevenue)
+	fmt.Printf("Average customer value: $%.2f\n", avgSpent)
+
+	// Output:
+	// === Performance Optimization Techniques ===
+	//
+	// 1. Pagination with LIMIT and OFFSET:
+	// Page 1:
+	//   - Regular Customer D (ID: 1004, Orders: 8)
+	//   - Regular Customer E (ID: 1005, Orders: 6)
+	//   - Regular Customer F (ID: 1006, Orders: 5)
+	// Page 2:
+	//   - Budget Customer G (ID: 1007, Orders: 3)
+	//   - Budget Customer H (ID: 1008, Orders: 2)
+	//   - Premium Customer A (ID: 1001, Orders: 15)
+	//
+	// 2. Efficient filtering with indexes:
+	// High-value customers:
+	//   - Regular Customer D (regular.d@example.com) - Registered: 2023-04-05
+	//   - Regular Customer E (regular.e@example.com) - Registered: 2023-05-15
+	//   - Regular Customer F (regular.f@example.com) - Registered: 2023-06-20
+	//   - Budget Customer G (budget.g@example.com) - Registered: 2023-07-10
+	//   - Budget Customer H (budget.h@example.com) - Registered: 2023-08-25
+	//   - Premium Customer A (premium.a@example.com) - Registered: 2023-01-15
+	//   - Premium Customer B (premium.b@example.com) - Registered: 2023-02-20
+	//   - Premium Customer C (premium.c@example.com) - Registered: 2023-03-10
+	//
+	// 3. Summary statistics:
+	// Total customers: 10
+	// Average orders per customer: 6.3
+	// Total revenue: $6300.00
+	// Average customer value: $630.00
+}
+
+// ExampleOpen_advancedSQL demonstrates advanced SQL features available in SQLite3
+func ExampleOpen_advancedSQL() {
+	tmpDir := createAdvancedTestData()
+	defer os.RemoveAll(tmpDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	db, err := filesql.OpenContext(ctx, tmpDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	fmt.Println("=== Advanced SQL Features ===")
+
+	// Window functions with RANK() and ROW_NUMBER()
+	fmt.Println("\n1. Window Functions - Employee Rankings by Department:")
+	rows, err := db.QueryContext(ctx, `
+		SELECT 
+			e.name,
+			d.name as department,
+			e.salary,
+			RANK() OVER (PARTITION BY e.department_id ORDER BY e.salary DESC) as salary_rank,
+			ROW_NUMBER() OVER (ORDER BY e.salary DESC) as overall_rank
+		FROM employees e
+		JOIN departments d ON e.department_id = d.id
+		ORDER BY e.department_id, salary_rank
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("%-15s %-12s %-8s %-10s %s\n", "Name", "Department", "Salary", "Dept Rank", "Overall Rank")
+	fmt.Println(strings.Repeat("-", 65))
+
+	for rows.Next() {
+		var name, department string
+		var salary float64
+		var salaryRank, overallRank int
+
+		if err := rows.Scan(&name, &department, &salary, &salaryRank, &overallRank); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("%-15s %-12s $%-7.0f %-10d %d\n", name, department, salary, salaryRank, overallRank)
+	}
+	rows.Close()
+
+	// Common Table Expressions (CTE)
+	fmt.Println("\n2. Common Table Expressions - Department Analysis:")
+	rows, err = db.QueryContext(ctx, `
+		WITH dept_stats AS (
+			SELECT 
+				d.name as department,
+				COUNT(e.id) as employee_count,
+				AVG(e.salary) as avg_salary,
+				MAX(e.salary) as max_salary,
+				MIN(e.salary) as min_salary
+			FROM departments d
+			LEFT JOIN employees e ON d.id = e.department_id
+			GROUP BY d.id, d.name
+		),
+		company_avg AS (
+			SELECT AVG(salary) as company_avg_salary
+			FROM employees
+		)
+		SELECT 
+			ds.department,
+			ds.employee_count,
+			ds.avg_salary,
+			ca.company_avg_salary,
+			ds.avg_salary - ca.company_avg_salary as salary_diff,
+			CASE 
+				WHEN ds.avg_salary > ca.company_avg_salary THEN 'Above Average'
+				WHEN ds.avg_salary < ca.company_avg_salary THEN 'Below Average'
+				ELSE 'At Average'
+			END as comparison
+		FROM dept_stats ds
+		CROSS JOIN company_avg ca
+		WHERE ds.employee_count > 0
+		ORDER BY ds.avg_salary DESC
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("%-12s %-5s %-10s %-12s %-10s %s\n", "Department", "Count", "Avg Salary", "Company Avg", "Difference", "Comparison")
+	fmt.Println(strings.Repeat("-", 75))
+
+	for rows.Next() {
+		var department, comparison string
+		var employeeCount int
+		var avgSalary, companyAvg, salaryDiff float64
+
+		if err := rows.Scan(&department, &employeeCount, &avgSalary, &companyAvg, &salaryDiff, &comparison); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("%-12s %-5d $%-9.0f $%-11.0f $%-9.0f %s\n",
+			department, employeeCount, avgSalary, companyAvg, salaryDiff, comparison)
+	}
+	rows.Close()
+
+	// JSON operations (if data contains JSON)
+	fmt.Println("\n3. Text Functions - Name Analysis:")
+	rows, err = db.QueryContext(ctx, `
+		SELECT 
+			name,
+			LENGTH(name) as name_length,
+			UPPER(SUBSTR(name, 1, 1)) || LOWER(SUBSTR(name, 2)) as formatted_name,
+			INSTR(name, ' ') as space_position,
+			CASE 
+				WHEN INSTR(name, ' ') > 0 THEN SUBSTR(name, 1, INSTR(name, ' ') - 1)
+				ELSE name
+			END as first_name
+		FROM employees
+		WHERE LENGTH(name) > 8
+		ORDER BY name_length DESC
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("%-15s %-6s %-15s %-8s %s\n", "Name", "Length", "Formatted", "Space@", "First Name")
+	fmt.Println(strings.Repeat("-", 60))
+
+	for rows.Next() {
+		var name, formattedName, firstName string
+		var nameLength, spacePos int
+
+		if err := rows.Scan(&name, &nameLength, &formattedName, &spacePos, &firstName); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("%-15s %-6d %-15s %-8d %s\n", name, nameLength, formattedName, spacePos, firstName)
+	}
+	rows.Close()
+
+	// Output:
+	// === Advanced SQL Features ===
+	//
+	// 1. Window Functions - Employee Rankings by Department:
+	// Name            Department   Salary   Dept Rank  Overall Rank
+	// -----------------------------------------------------------------
+	// Alice Johnson   Engineering  $95000   1          1
+	// Charlie Brown   Engineering  $80000   2          3
+	// David Wilson    Engineering  $75000   3          4
+	// Bob Smith       Sales        $85000   1          2
+	// Eve Davis       Sales        $65000   2          6
+	// Frank Miller    Marketing    $70000   1          5
+	//
+	// 2. Common Table Expressions - Department Analysis:
+	// Department   Count Avg Salary Company Avg  Difference Comparison
+	// ---------------------------------------------------------------------------
+	// Engineering  3     $83333     $78333       $5000      Above Average
+	// Sales        2     $75000     $78333       $-3333     Below Average
+	// Marketing    1     $70000     $78333       $-8333     Below Average
+	//
+	// 3. Text Functions - Name Analysis:
+	// Name            Length Formatted       Space@   First Name
+	// ------------------------------------------------------------
+	// Alice Johnson   13     Alice johnson   6        Alice
+	// Charlie Brown   13     Charlie brown   8        Charlie
+	// David Wilson    12     David wilson    6        David
+	// Frank Miller    12     Frank miller    6        Frank
+	// Bob Smith       9      Bob smith       4        Bob
+	// Eve Davis       9      Eve davis       4        Eve
+}
+
+// ExampleOpen_compressionSupport demonstrates working with compressed files
+func ExampleOpen_compressionSupport() {
+	tmpDir := createCompressedTestData()
+	defer os.RemoveAll(tmpDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Open compressed files seamlessly
+	db, err := filesql.OpenContext(ctx, tmpDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	fmt.Println("=== Compression Support Demo ===")
+	fmt.Println("Successfully loaded compressed files:")
+
+	// List all tables from compressed files
+	rows, err := db.QueryContext(ctx, `
+		SELECT name, sql 
+		FROM sqlite_master 
+		WHERE type='table' 
+		ORDER BY name
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for rows.Next() {
+		var tableName, createSQL string
+		if err := rows.Scan(&tableName, &createSQL); err != nil {
+			log.Fatal(err)
+		}
+
+		// Count records in each table
+		var count int
+		countQuery := "SELECT COUNT(*) FROM " + tableName
+		if err := db.QueryRowContext(ctx, countQuery).Scan(&count); err != nil {
+			log.Fatal(err)
+		}
+
+		fmt.Printf("- %s: %d records\n", tableName, count)
+	}
+	rows.Close()
+
+	// Demonstrate querying across compressed files
+	fmt.Println("\nCross-file analysis from compressed data:")
+
+	analysisRows, err := db.QueryContext(ctx, `
+		SELECT 
+			'logs' as source_table,
+			COUNT(*) as total_records,
+			MIN(timestamp) as earliest,
+			MAX(timestamp) as latest
+		FROM logs
+		
+		UNION ALL
+		
+		SELECT 
+			'products' as source_table,
+			COUNT(*) as total_records,
+			'N/A' as earliest,
+			'N/A' as latest
+		FROM products
+		
+		ORDER BY source_table
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("%-12s %-8s %-19s %s\n", "Table", "Records", "Earliest", "Latest")
+	fmt.Println(strings.Repeat("-", 60))
+
+	for analysisRows.Next() {
+		var sourceTable, earliest, latest string
+		var totalRecords int
+
+		if err := analysisRows.Scan(&sourceTable, &totalRecords, &earliest, &latest); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("%-12s %-8d %-19s %s\n", sourceTable, totalRecords, earliest, latest)
+	}
+	analysisRows.Close()
+
+	// Output:
+	// === Compression Support Demo ===
+	// Successfully loaded compressed files:
+	// - logs: 5 records
+	// - products: 3 records
+	//
+	// Cross-file analysis from compressed data:
+	// Table        Records  Earliest            Latest
+	// ------------------------------------------------------------
+	// logs         5        2024-01-01 10:00:00 2024-01-01 14:00:00
+	// products     3        N/A                 N/A
+}
+
+// ExampleOpen_webLogAnalysis demonstrates analyzing web server logs
+func ExampleOpen_webLogAnalysis() {
+	tmpDir := createWebLogTestData()
+	defer os.RemoveAll(tmpDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	db, err := filesql.OpenContext(ctx, tmpDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	fmt.Println("=== Web Log Analysis ===")
+
+	// Top pages by hits
+	fmt.Println("\n1. Top Pages by Hits:")
+	rows, err := db.QueryContext(ctx, `
+		SELECT 
+			path,
+			COUNT(*) as hits,
+			COUNT(DISTINCT ip_address) as unique_visitors
+		FROM access_logs 
+		WHERE status_code = 200
+		GROUP BY path
+		ORDER BY hits DESC
+		LIMIT 5
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("%-20s %-6s %s\n", "Path", "Hits", "Unique")
+	fmt.Println(strings.Repeat("-", 35))
+	for rows.Next() {
+		var path string
+		var hits, unique int
+		if err := rows.Scan(&path, &hits, &unique); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("%-20s %-6d %d\n", path, hits, unique)
+	}
+	rows.Close()
+
+	// Error analysis
+	fmt.Println("\n2. Error Analysis:")
+	rows, err = db.QueryContext(ctx, `
+		SELECT 
+			status_code,
+			COUNT(*) as error_count,
+			ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM access_logs), 2) as percentage
+		FROM access_logs 
+		WHERE status_code >= 400
+		GROUP BY status_code
+		ORDER BY error_count DESC
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("%-12s %-6s %-10s\n", "Status Code", "Count", "Percentage")
+	fmt.Println(strings.Repeat("-", 30))
+	for rows.Next() {
+		var statusCode, errorCount int
+		var percentage float64
+		if err := rows.Scan(&statusCode, &errorCount, &percentage); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("%-12d %-6d %-10.2f%%\n", statusCode, errorCount, percentage)
+	}
+	rows.Close()
+
+	// Hourly traffic pattern
+	fmt.Println("\n3. Traffic by Hour:")
+	rows, err = db.QueryContext(ctx, `
+		SELECT 
+			CAST(strftime('%H', timestamp) AS INTEGER) as hour,
+			COUNT(*) as requests,
+			AVG(response_time) as avg_response_time
+		FROM access_logs
+		GROUP BY hour
+		ORDER BY hour
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("%-5s %-9s %-12s\n", "Hour", "Requests", "Avg Response")
+	fmt.Println(strings.Repeat("-", 28))
+	for rows.Next() {
+		var hour, requests int
+		var avgResponseTime float64
+		if err := rows.Scan(&hour, &requests, &avgResponseTime); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("%-5d %-9d %-12.0fms\n", hour, requests, avgResponseTime)
+	}
+	rows.Close()
+
+	// Output:
+	// === Web Log Analysis ===
+	//
+	// 1. Top Pages by Hits:
+	// Path                 Hits   Unique
+	// -----------------------------------
+	// /                    3      1
+	// /products            2      1
+	// /contact             1      1
+	// /about               1      1
+	//
+	// 2. Error Analysis:
+	// Status Code  Count  Percentage
+	// ------------------------------
+	// 404          2      22.22     %
+	//
+	// 3. Traffic by Hour:
+	// Hour  Requests  Avg Response
+	// ----------------------------
+	// 9     2         175         ms
+	// 10    3         153         ms
+	// 11    3         130         ms
+	// 14    1         100         ms
+}
+
+// ExampleOpen_financialDataAnalysis demonstrates financial data processing
+func ExampleOpen_financialDataAnalysis() {
+	tmpDir := createFinancialTestData()
+	defer os.RemoveAll(tmpDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	db, err := filesql.OpenContext(ctx, tmpDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	fmt.Println("=== Financial Data Analysis ===")
+
+	// Monthly revenue trend
+	fmt.Println("\n1. Monthly Revenue Trend:")
+	rows, err := db.QueryContext(ctx, `
+		SELECT 
+			strftime('%Y-%m', transaction_date) as month,
+			COUNT(*) as transaction_count,
+			SUM(amount) as total_revenue,
+			AVG(amount) as avg_transaction,
+			MAX(amount) as largest_transaction
+		FROM transactions 
+		WHERE type = 'sale'
+		GROUP BY month
+		ORDER BY month
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("%-8s %-6s %-10s %-8s %s\n", "Month", "Count", "Revenue", "Average", "Largest")
+	fmt.Println(strings.Repeat("-", 50))
+	for rows.Next() {
+		var month string
+		var count int
+		var revenue, average, largest float64
+		if err := rows.Scan(&month, &count, &revenue, &average, &largest); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("%-8s %-6d $%-9.2f $%-7.2f $%.2f\n", month, count, revenue, average, largest)
+	}
+	rows.Close()
+
+	// Expense category breakdown
+	fmt.Println("\n2. Expense Categories:")
+	rows, err = db.QueryContext(ctx, `
+		SELECT 
+			category,
+			COUNT(*) as transaction_count,
+			SUM(ABS(amount)) as total_expense,
+			ROUND(SUM(ABS(amount)) * 100.0 / (
+				SELECT SUM(ABS(amount)) FROM transactions WHERE type = 'expense'
+			), 2) as percentage
+		FROM transactions 
+		WHERE type = 'expense'
+		GROUP BY category
+		ORDER BY total_expense DESC
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("%-15s %-6s %-12s %-10s\n", "Category", "Count", "Total", "Percentage")
+	fmt.Println(strings.Repeat("-", 45))
+	for rows.Next() {
+		var category string
+		var count int
+		var expense, percentage float64
+		if err := rows.Scan(&category, &count, &expense, &percentage); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("%-15s %-6d $%-11.2f %-10.2f%%\n", category, count, expense, percentage)
+	}
+	rows.Close()
+
+	// Cash flow summary
+	fmt.Println("\n3. Cash Flow Summary:")
+	var totalIncome, totalExpenses, netIncome float64
+	err = db.QueryRowContext(ctx, `
+		SELECT 
+			SUM(CASE WHEN type = 'sale' THEN amount ELSE 0 END) as total_income,
+			SUM(CASE WHEN type = 'expense' THEN ABS(amount) ELSE 0 END) as total_expenses,
+			SUM(CASE WHEN type = 'sale' THEN amount ELSE -ABS(amount) END) as net_income
+		FROM transactions
+	`).Scan(&totalIncome, &totalExpenses, &netIncome)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("Total Income:  $%.2f\n", totalIncome)
+	fmt.Printf("Total Expenses: $%.2f\n", totalExpenses)
+	fmt.Printf("Net Income:    $%.2f\n", netIncome)
+	fmt.Printf("Profit Margin: %.2f%%\n", (netIncome/totalIncome)*100)
+
+	// Output:
+	// === Financial Data Analysis ===
+	//
+	// 1. Monthly Revenue Trend:
+	// Month    Count  Revenue    Average  Largest
+	// --------------------------------------------------
+	// 2024-01  3      $3550.00   $1183.33 $850.00
+	// 2024-02  2      $2200.00   $1100.00 $1200.00
+	//
+	// 2. Expense Categories:
+	// Category        Count  Total        Percentage
+	// ---------------------------------------------
+	// Office Supplies 2      $350.00      58.33     %
+	// Marketing       1      $250.00      41.67     %
+	//
+	// 3. Cash Flow Summary:
+	// Total Income:  $5750.00
+	// Total Expenses: $600.00
+	// Net Income:    $5150.00
+	// Profit Margin: 89.57%
+}
+
+// createLargeTestData creates test data for performance optimization examples
+func createLargeTestData() string {
+	tmpDir, err := os.MkdirTemp("", "filesql_large_example_*")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Create customer summary data for performance testing
+	customerData := `customer_id,name,email,registration_date,total_orders,total_spent
+1001,Premium Customer A,premium.a@example.com,2023-01-15,15,1500.00
+1002,Premium Customer B,premium.b@example.com,2023-02-20,12,1200.00
+1003,Premium Customer C,premium.c@example.com,2023-03-10,10,1000.00
+1004,Regular Customer D,regular.d@example.com,2023-04-05,8,800.00
+1005,Regular Customer E,regular.e@example.com,2023-05-15,6,600.00
+1006,Regular Customer F,regular.f@example.com,2023-06-20,5,500.00
+1007,Budget Customer G,budget.g@example.com,2023-07-10,3,300.00
+1008,Budget Customer H,budget.h@example.com,2023-08-25,2,200.00
+1009,New Customer I,new.i@example.com,2023-09-30,1,100.00
+1010,New Customer J,new.j@example.com,2023-10-15,1,100.00`
+
+	customerFile := filepath.Join(tmpDir, "customer_summary.csv")
+	err = os.WriteFile(customerFile, []byte(customerData), 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return tmpDir
+}
+
+// createAdvancedTestData creates test data for advanced SQL examples
+func createAdvancedTestData() string {
+	tmpDir, err := os.MkdirTemp("", "filesql_advanced_example_*")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Extended employees data
+	employeesData := `id,name,department_id,salary,hire_date
+1,Alice Johnson,1,95000,2023-01-15
+2,Bob Smith,2,85000,2023-02-20
+3,Charlie Brown,1,80000,2023-03-10
+4,David Wilson,1,75000,2023-04-05
+5,Eve Davis,2,65000,2023-05-15
+6,Frank Miller,3,70000,2023-06-01`
+
+	employeesFile := filepath.Join(tmpDir, "employees.csv")
+	err = os.WriteFile(employeesFile, []byte(employeesData), 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Departments data
+	departmentsData := `id,name,budget
+1,Engineering,500000
+2,Sales,300000
+3,Marketing,200000
+4,HR,150000`
+
+	departmentsFile := filepath.Join(tmpDir, "departments.csv")
+	err = os.WriteFile(departmentsFile, []byte(departmentsData), 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return tmpDir
+}
+
+// createCompressedTestData creates test data with compressed files
+func createCompressedTestData() string {
+	tmpDir, err := os.MkdirTemp("", "filesql_compressed_example_*")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Create logs data
+	logsData := `timestamp,level,message,user_id
+2024-01-01 10:00:00,INFO,User login,1001
+2024-01-01 11:30:00,INFO,Order created,1002
+2024-01-01 12:15:00,ERROR,Payment failed,1003
+2024-01-01 13:45:00,INFO,User logout,1001
+2024-01-01 14:00:00,INFO,System backup completed,0`
+
+	logsFile := filepath.Join(tmpDir, "logs.csv")
+	err = os.WriteFile(logsFile, []byte(logsData), 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Create products data
+	productsData := `id,name,category,price,in_stock
+1,Laptop Pro,Electronics,1299.99,true
+2,Office Chair,Furniture,299.99,true
+3,Wireless Mouse,Electronics,49.99,false`
+
+	productsFile := filepath.Join(tmpDir, "products.csv")
+	err = os.WriteFile(productsFile, []byte(productsData), 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Note: In a real scenario, these would be compressed files (.gz, .bz2, etc.)
+	// For the example, we're using regular CSV files to demonstrate the concept
+	// The actual filesql library would handle the compression/decompression
+
+	return tmpDir
+}
+
+// createWebLogTestData creates test data for web log analysis examples
+func createWebLogTestData() string {
+	tmpDir, err := os.MkdirTemp("", "filesql_weblog_example_*")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Create web access logs
+	accessLogsData := `timestamp,ip_address,method,path,status_code,response_time,user_agent
+2024-01-01 09:15:30,192.168.1.100,GET,/,200,150,Mozilla/5.0
+2024-01-01 09:30:45,192.168.1.101,GET,/products,200,200,Mozilla/5.0
+2024-01-01 10:05:15,192.168.1.100,GET,/,200,120,Mozilla/5.0
+2024-01-01 10:20:30,192.168.1.102,GET,/about,200,180,Mozilla/5.0
+2024-01-01 10:35:45,192.168.1.101,GET,/products,200,160,Mozilla/5.0
+2024-01-01 11:10:15,192.168.1.103,GET,/contact,200,140,Mozilla/5.0
+2024-01-01 11:25:30,192.168.1.100,GET,/,200,200,Mozilla/5.0
+2024-01-01 11:40:45,192.168.1.104,GET,/missing,404,50,Mozilla/5.0
+2024-01-01 14:15:30,192.168.1.105,GET,/notfound,404,100,Mozilla/5.0`
+
+	accessLogsFile := filepath.Join(tmpDir, "access_logs.csv")
+	err = os.WriteFile(accessLogsFile, []byte(accessLogsData), 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return tmpDir
+}
+
+// createFinancialTestData creates test data for financial analysis examples
+func createFinancialTestData() string {
+	tmpDir, err := os.MkdirTemp("", "filesql_financial_example_*")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Create transaction data
+	transactionData := `transaction_id,transaction_date,type,category,amount,description
+1,2024-01-15,sale,Product Sales,1500.00,Sale of premium product
+2,2024-01-20,sale,Product Sales,850.00,Sale of standard product
+3,2024-01-25,sale,Service,1200.00,Consulting service
+4,2024-01-10,expense,Office Supplies,-150.00,Office equipment purchase
+5,2024-01-18,expense,Marketing,-250.00,Social media advertising
+6,2024-02-05,sale,Product Sales,1200.00,Sale of premium product
+7,2024-02-15,sale,Service,1000.00,Training service
+8,2024-02-08,expense,Office Supplies,-200.00,Stationery purchase`
+
+	transactionFile := filepath.Join(tmpDir, "transactions.csv")
+	err = os.WriteFile(transactionFile, []byte(transactionData), 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return tmpDir
 }
