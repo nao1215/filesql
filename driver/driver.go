@@ -1,4 +1,20 @@
-// Package driver provides file SQL driver implementation for database/sql
+// Package driver provides file SQL driver implementation for database/sql.
+//
+// This package implements a database/sql driver that allows querying CSV, TSV, and LTSV files
+// (including compressed versions) as if they were SQL tables. Files are loaded into an
+// in-memory SQLite database for query execution.
+//
+// Key features:
+//   - Support for CSV, TSV, and LTSV file formats
+//   - Support for compressed files (gzip, bzip2, xz, zstd)
+//   - Duplicate table name validation across multiple files
+//   - Directory scanning with automatic file discovery
+//   - Table export functionality
+//
+// Usage:
+//
+//	import _ "github.com/nao1215/filesql/driver"
+//	db, err := sql.Open("filesql", "data.csv")
 package driver
 
 import (
@@ -15,23 +31,28 @@ import (
 	"modernc.org/sqlite"
 )
 
-// Driver implements database/sql/driver.Driver interface for file-based SQL
+// Driver implements database/sql/driver.Driver interface for file-based SQL.
+// It serves as the entry point for creating connections to file-based databases.
 type Driver struct{}
 
-// Connector implements database/sql/driver.Connector interface
+// Connector implements database/sql/driver.Connector interface.
+// It holds connection parameters and manages the creation of database connections.
+// The dsn field contains file paths separated by semicolons for multiple files.
 type Connector struct {
 	driver *Driver
-	dsn    string
+	dsn    string // Data source name - file paths separated by semicolons
 }
 
-// Connection implements database/sql/driver.Conn interface
+// Connection implements database/sql/driver.Conn interface.
+// It wraps an underlying SQLite connection that contains loaded file data.
 type Connection struct {
-	conn driver.Conn
+	conn driver.Conn // Underlying SQLite connection with loaded file data
 }
 
-// Transaction implements database/sql/driver.Tx interface
+// Transaction implements database/sql/driver.Tx interface.
+// It wraps an underlying SQLite transaction for atomic operations.
 type Transaction struct {
-	tx driver.Tx
+	tx driver.Tx // Underlying SQLite transaction
 }
 
 // NewDriver creates a new file SQL driver
@@ -86,13 +107,14 @@ func (c *Connector) loadFileDirectly(conn driver.Conn, path string) error {
 		return c.loadMultiplePaths(conn, strings.Split(path, ";"))
 	}
 
-	// Check if path is a directory or file
-	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return fmt.Errorf("path does not exist: %s", path)
-	}
+	return c.loadSinglePath(conn, path)
+}
+
+// loadSinglePath loads a single path (file or directory) into the database
+func (c *Connector) loadSinglePath(conn driver.Conn, path string) error {
+	info, err := c.validatePath(path)
 	if err != nil {
-		return fmt.Errorf("failed to stat path: %w", err)
+		return err
 	}
 
 	if info.IsDir() {
@@ -101,19 +123,45 @@ func (c *Connector) loadFileDirectly(conn driver.Conn, path string) error {
 	return c.loadSingleFile(conn, path)
 }
 
+// validatePath validates that a path exists and returns its FileInfo
+func (c *Connector) validatePath(path string) (os.FileInfo, error) {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("path does not exist: %s", path)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat path: %w", err)
+	}
+	return info, nil
+}
+
 // loadSingleFile loads a single file into SQLite3 database
 func (c *Connector) loadSingleFile(conn driver.Conn, filePath string) error {
+	table, err := c.parseFileToTable(filePath)
+	if err != nil {
+		return err
+	}
+
+	return c.loadTableIntoDatabase(conn, table)
+}
+
+// parseFileToTable converts a file to a table with proper error handling
+func (c *Connector) parseFileToTable(filePath string) (*model.Table, error) {
 	file := model.NewFile(filePath)
 
-	// Convert file to table
 	table, err := file.ToTable()
 	if err != nil {
 		if errors.Is(err, model.ErrDuplicateColumnName) {
-			return fmt.Errorf("%w", ErrDuplicateColumnName)
+			return nil, fmt.Errorf("%w", ErrDuplicateColumnName)
 		}
-		return fmt.Errorf("failed to parse file: %w", err)
+		return nil, fmt.Errorf("failed to parse file: %w", err)
 	}
 
+	return table, nil
+}
+
+// loadTableIntoDatabase creates table and inserts data into the database
+func (c *Connector) loadTableIntoDatabase(conn driver.Conn, table *model.Table) error {
 	// Create table in SQLite3
 	if err := c.createTableDirectly(conn, table); err != nil {
 		return fmt.Errorf("failed to create table: %w", err)
@@ -135,7 +183,11 @@ func (c *Connector) loadDirectory(conn driver.Conn, dirPath string) error {
 		return err
 	}
 
-	// Load the selected files
+	return c.loadFilesWithErrorHandling(conn, filesToLoad, dirPath)
+}
+
+// loadFilesWithErrorHandling loads multiple files with appropriate error handling
+func (c *Connector) loadFilesWithErrorHandling(conn driver.Conn, filesToLoad []string, context string) error {
 	loadedFiles := 0
 	for _, filePath := range filesToLoad {
 		if err := c.loadSingleFile(conn, filePath); err != nil {
@@ -147,7 +199,7 @@ func (c *Connector) loadDirectory(conn driver.Conn, dirPath string) error {
 	}
 
 	if loadedFiles == 0 {
-		return fmt.Errorf("no supported files found in directory: %s", dirPath)
+		return fmt.Errorf("no supported files found in directory: %s", context)
 	}
 
 	return nil
@@ -155,10 +207,9 @@ func (c *Connector) loadDirectory(conn driver.Conn, dirPath string) error {
 
 // collectDirectoryFiles collects files from directory and validates for duplicate table names
 func (c *Connector) collectDirectoryFiles(dirPath string, tableNames map[string]string) ([]string, error) {
-	// Read directory contents
-	entries, err := os.ReadDir(dirPath)
+	entries, err := c.readDirectoryEntries(dirPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read directory: %w", err)
+		return nil, err
 	}
 
 	var filesToLoad []string
@@ -172,66 +223,98 @@ func (c *Connector) collectDirectoryFiles(dirPath string, tableNames map[string]
 		fileName := entry.Name()
 		filePath := filepath.Join(dirPath, fileName)
 
-		// Check if file is supported (CSV, TSV, LTSV, or their compressed versions)
 		if model.IsSupportedFile(fileName) {
-			// Test if the file can be loaded (has valid structure)
-			file := model.NewFile(filePath)
-			table, err := file.ToTable()
-			if err != nil {
-				// Skip files with errors (e.g., duplicate columns) in directory loading
-				fmt.Printf("Warning: skipping file %s: %v\n", fileName, err)
+			if c.shouldSkipFile(filePath, fileName) {
 				continue
 			}
 
 			tableName := model.TableFromFilePath(filePath)
-			if existingFile, exists := tableNames[tableName]; exists {
-				// Check if existing file is from a different directory
-				// If so, it's a duplicate table name error
-				if filepath.Dir(existingFile) != dirPath {
-					return nil, fmt.Errorf("%w: table '%s' from files '%s' and '%s'",
-						ErrDuplicateTableName, tableName, existingFile, filePath)
-				}
-
-				// Within same directory, check if files have same actual file type vs compression difference
-				existingBaseName := filepath.Base(existingFile)
-
-				// Remove compression extensions to get base file type
-				existingFileType := removeCompressionExtensions(existingBaseName)
-				currentFileType := removeCompressionExtensions(fileName)
-
-				// If the base file types are different (e.g., .csv vs .tsv), it's still a duplicate table name error
-				if filepath.Ext(existingFileType) != filepath.Ext(currentFileType) {
-					return nil, fmt.Errorf("%w: table '%s' from files '%s' and '%s' (different file types with same table name)",
-						ErrDuplicateTableName, tableName, existingFile, filePath)
-				}
-
-				// Same file type, different compression - prefer less compressed
-				existingCompressionCount := countCompressionExtensions(existingBaseName)
-				currentCompressionCount := countCompressionExtensions(fileName)
-
-				// Prefer uncompressed files over compressed ones
-				if currentCompressionCount < existingCompressionCount {
-					// Replace existing file with current (less compressed) file
-					for i, f := range filesToLoad {
-						if f == existingFile {
-							filesToLoad[i] = filePath
-							break
-						}
-					}
-					tableNames[tableName] = filePath
-				}
-				// Otherwise keep the existing file (skip current file)
-			} else {
-				tableNames[tableName] = filePath
-				filesToLoad = append(filesToLoad, filePath)
+			if err := c.handleTableNameConflict(tableName, filePath, &filesToLoad, tableNames, dirPath); err != nil {
+				return nil, err
 			}
-
-			// Don't actually use the table here, just the filename for validation
-			_ = table
 		}
 	}
 
 	return filesToLoad, nil
+}
+
+// readDirectoryEntries reads and returns directory entries
+func (c *Connector) readDirectoryEntries(dirPath string) ([]os.DirEntry, error) {
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read directory: %w", err)
+	}
+	return entries, nil
+}
+
+// shouldSkipFile determines if a file should be skipped based on validation
+func (c *Connector) shouldSkipFile(filePath, fileName string) bool {
+	file := model.NewFile(filePath)
+	_, err := file.ToTable()
+	if err != nil {
+		// Skip files with errors (e.g., duplicate columns) in directory loading
+		fmt.Printf("Warning: skipping file %s: %v\n", fileName, err)
+		return true
+	}
+	return false
+}
+
+// handleTableNameConflict handles table name conflicts and file selection logic
+func (c *Connector) handleTableNameConflict(tableName, filePath string, filesToLoad *[]string, tableNames map[string]string, dirPath string) error {
+	if existingFile, exists := tableNames[tableName]; exists {
+		return c.resolveTableNameConflict(tableName, filePath, existingFile, filesToLoad, tableNames, dirPath)
+	}
+
+	// No conflict - add the file
+	tableNames[tableName] = filePath
+	*filesToLoad = append(*filesToLoad, filePath)
+	return nil
+}
+
+// resolveTableNameConflict resolves conflicts when multiple files would create the same table name
+func (c *Connector) resolveTableNameConflict(tableName, filePath, existingFile string, filesToLoad *[]string, tableNames map[string]string, dirPath string) error {
+	// Check if existing file is from a different directory
+	if filepath.Dir(existingFile) != dirPath {
+		return fmt.Errorf("%w: table '%s' from files '%s' and '%s'",
+			ErrDuplicateTableName, tableName, existingFile, filePath)
+	}
+
+	// Within same directory, check file types and compression
+	existingBaseName := filepath.Base(existingFile)
+	currentBaseName := filepath.Base(filePath)
+
+	// Remove compression extensions to get base file type
+	existingFileType := removeCompressionExtensions(existingBaseName)
+	currentFileType := removeCompressionExtensions(currentBaseName)
+
+	// If the base file types are different (e.g., .csv vs .tsv), it's a duplicate error
+	if filepath.Ext(existingFileType) != filepath.Ext(currentFileType) {
+		return fmt.Errorf("%w: table '%s' from files '%s' and '%s' (different file types with same table name)",
+			ErrDuplicateTableName, tableName, existingFile, filePath)
+	}
+
+	// Same file type, different compression - prefer less compressed
+	c.selectBetterFile(existingBaseName, currentBaseName, existingFile, filePath, filesToLoad, tableNames, tableName)
+	return nil
+}
+
+// selectBetterFile selects the better file based on compression level
+func (c *Connector) selectBetterFile(existingBaseName, currentBaseName, existingFile, filePath string, filesToLoad *[]string, tableNames map[string]string, tableName string) {
+	existingCompressionCount := countCompressionExtensions(existingBaseName)
+	currentCompressionCount := countCompressionExtensions(currentBaseName)
+
+	// Prefer uncompressed files over compressed ones
+	if currentCompressionCount < existingCompressionCount {
+		// Replace existing file with current (less compressed) file
+		for i, f := range *filesToLoad {
+			if f == existingFile {
+				(*filesToLoad)[i] = filePath
+				break
+			}
+		}
+		tableNames[tableName] = filePath
+	}
+	// Otherwise keep the existing file (skip current file)
 }
 
 // removeCompressionExtensions removes compression extensions from filename
@@ -261,49 +344,67 @@ func (c *Connector) loadMultiplePaths(conn driver.Conn, paths []string) error {
 		return ErrNoPathsProvided
 	}
 
-	// Track table names to detect duplicates across all paths
+	filesToLoad, err := c.collectAllFiles(paths)
+	if err != nil {
+		return err
+	}
+
+	return c.loadCollectedFiles(conn, filesToLoad)
+}
+
+// collectAllFiles collects all files from multiple paths with duplicate detection
+func (c *Connector) collectAllFiles(paths []string) ([]string, error) {
 	tableNames := make(map[string]string) // table name -> file path
 	var filesToLoad []string
 
-	// First pass: collect all files and detect duplicate table names
 	for _, path := range paths {
-		// Trim whitespace from path
 		path = strings.TrimSpace(path)
 		if path == "" {
 			continue
 		}
 
-		// Check if path exists
-		info, err := os.Stat(path)
-		if os.IsNotExist(err) {
-			return fmt.Errorf("path does not exist: %s", path)
-		}
+		pathFiles, err := c.collectFilesFromPath(path, tableNames)
 		if err != nil {
-			return fmt.Errorf("failed to stat path %s: %w", path, err)
+			return nil, err
 		}
-
-		if info.IsDir() {
-			// For directories, collect all files
-			dirFiles, err := c.collectDirectoryFiles(path, tableNames)
-			if err != nil {
-				return fmt.Errorf("failed to collect files from directory %s: %w", path, err)
-			}
-			filesToLoad = append(filesToLoad, dirFiles...)
-		} else {
-			// For single files, check for supported format and table name conflicts
-			if model.IsSupportedFile(filepath.Base(path)) {
-				tableName := model.TableFromFilePath(path)
-				if existingFile, exists := tableNames[tableName]; exists {
-					return fmt.Errorf("%w: table '%s' from files '%s' and '%s'",
-						ErrDuplicateTableName, tableName, existingFile, path)
-				}
-				tableNames[tableName] = path
-				filesToLoad = append(filesToLoad, path)
-			}
-		}
+		filesToLoad = append(filesToLoad, pathFiles...)
 	}
 
-	// Second pass: load all files
+	return filesToLoad, nil
+}
+
+// collectFilesFromPath collects files from a single path (file or directory)
+func (c *Connector) collectFilesFromPath(path string, tableNames map[string]string) ([]string, error) {
+	info, err := c.validatePath(path)
+	if err != nil {
+		return nil, err
+	}
+
+	if info.IsDir() {
+		return c.collectDirectoryFiles(path, tableNames)
+	}
+
+	return c.collectSingleFile(path, tableNames)
+}
+
+// collectSingleFile collects a single file and checks for table name conflicts
+func (c *Connector) collectSingleFile(path string, tableNames map[string]string) ([]string, error) {
+	if !model.IsSupportedFile(filepath.Base(path)) {
+		return nil, nil // Skip unsupported files
+	}
+
+	tableName := model.TableFromFilePath(path)
+	if existingFile, exists := tableNames[tableName]; exists {
+		return nil, fmt.Errorf("%w: table '%s' from files '%s' and '%s'",
+			ErrDuplicateTableName, tableName, existingFile, path)
+	}
+
+	tableNames[tableName] = path
+	return []string{path}, nil
+}
+
+// loadCollectedFiles loads all collected files with proper error handling
+func (c *Connector) loadCollectedFiles(conn driver.Conn, filesToLoad []string) error {
 	loadedFiles := 0
 	for _, filePath := range filesToLoad {
 		if err := c.loadSingleFile(conn, filePath); err != nil {
@@ -321,31 +422,22 @@ func (c *Connector) loadMultiplePaths(conn driver.Conn, paths []string) error {
 
 // createTableDirectly creates table schema using driver.Conn
 func (c *Connector) createTableDirectly(conn driver.Conn, table *model.Table) error {
+	query := c.buildCreateTableQuery(table)
+	return c.executeStatement(conn, query, nil)
+}
+
+// buildCreateTableQuery constructs a CREATE TABLE query for the given table
+func (c *Connector) buildCreateTableQuery(table *model.Table) string {
 	columns := make([]string, 0, len(table.Header()))
 	for _, col := range table.Header() {
 		columns = append(columns, fmt.Sprintf(`[%s] TEXT`, col))
 	}
 
-	query := fmt.Sprintf(
+	return fmt.Sprintf(
 		`CREATE TABLE IF NOT EXISTS [%s] (%s)`,
 		table.Name(),
 		strings.Join(columns, ", "),
 	)
-
-	stmt, err := conn.Prepare(query)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	var result driver.Result
-	if stmtExecCtx, ok := stmt.(driver.StmtExecContext); ok {
-		result, err = stmtExecCtx.ExecContext(context.Background(), []driver.NamedValue{})
-	} else {
-		return ErrStmtExecContextNotSupported
-	}
-	_ = result // result is not used
-	return err
 }
 
 // insertRecordsDirectly inserts records using driver.Conn
@@ -354,51 +446,103 @@ func (c *Connector) insertRecordsDirectly(conn driver.Conn, table *model.Table) 
 		return nil
 	}
 
-	// Prepare placeholders for INSERT statement
-	placeholders := "?"
-	for i := 1; i < len(table.Header()); i++ {
-		placeholders += ", ?"
-	}
-
-	query := fmt.Sprintf(
-		`INSERT INTO [%s] VALUES (%s)`,
-		table.Name(),
-		placeholders,
-	)
-
+	query := c.buildInsertQuery(table)
 	stmt, err := conn.Prepare(query)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 
-	// Insert each record
-	for _, record := range table.Records() {
-		args := make([]driver.Value, len(record))
-		for i, val := range record {
-			args[i] = val
-		}
+	return c.insertRecords(stmt, c.convertRecordsToStringSlices(table.Records()))
+}
 
-		var result driver.Result
-		if stmtExecCtx, ok := stmt.(driver.StmtExecContext); ok {
-			namedArgs := make([]driver.NamedValue, len(args))
-			for i, arg := range args {
-				namedArgs[i] = driver.NamedValue{
-					Ordinal: i + 1,
-					Value:   arg,
-				}
-			}
-			result, err = stmtExecCtx.ExecContext(context.Background(), namedArgs)
-		} else {
-			return ErrStmtExecContextNotSupported
-		}
-		_ = result // result is not used
-		if err != nil {
+// buildInsertQuery constructs an INSERT query for the given table
+func (c *Connector) buildInsertQuery(table *model.Table) string {
+	placeholders := c.buildPlaceholders(len(table.Header()))
+	return fmt.Sprintf(
+		`INSERT INTO [%s] VALUES (%s)`,
+		table.Name(),
+		placeholders,
+	)
+}
+
+// buildPlaceholders creates placeholder string for prepared statements
+func (c *Connector) buildPlaceholders(count int) string {
+	if count == 0 {
+		return ""
+	}
+	placeholders := "?"
+	for i := 1; i < count; i++ {
+		placeholders += ", ?"
+	}
+	return placeholders
+}
+
+// insertRecords inserts all records using the prepared statement
+func (c *Connector) insertRecords(stmt driver.Stmt, records [][]string) error {
+	for _, record := range records {
+		args := c.convertRecordToDriverValues(record)
+		if err := c.executeStatement(stmt, "", args); err != nil {
 			return err
 		}
 	}
-
 	return nil
+}
+
+// convertRecordsToStringSlices converts model.Record slice to [][]string
+func (c *Connector) convertRecordsToStringSlices(records []model.Record) [][]string {
+	result := make([][]string, len(records))
+	for i, record := range records {
+		result[i] = []string(record) // model.Record is type alias for []string
+	}
+	return result
+}
+
+// convertRecordToDriverValues converts string record to driver.Value slice
+func (c *Connector) convertRecordToDriverValues(record []string) []driver.Value {
+	args := make([]driver.Value, len(record))
+	for i, val := range record {
+		args[i] = val
+	}
+	return args
+}
+
+// executeStatement executes a statement with proper context support
+func (c *Connector) executeStatement(conn interface{}, query string, args []driver.Value) error {
+	switch stmt := conn.(type) {
+	case driver.Conn:
+		// For CREATE TABLE queries
+		preparedStmt, err := stmt.Prepare(query)
+		if err != nil {
+			return err
+		}
+		defer preparedStmt.Close()
+		return c.executeStatement(preparedStmt, "", args)
+
+	case driver.Stmt:
+		// For INSERT queries with prepared statement
+		if stmtExecCtx, ok := stmt.(driver.StmtExecContext); ok {
+			namedArgs := c.convertToNamedValues(args)
+			_, err := stmtExecCtx.ExecContext(context.Background(), namedArgs)
+			return err
+		}
+		return ErrStmtExecContextNotSupported
+
+	default:
+		return errors.New("unsupported statement type")
+	}
+}
+
+// convertToNamedValues converts driver.Value slice to driver.NamedValue slice
+func (c *Connector) convertToNamedValues(args []driver.Value) []driver.NamedValue {
+	namedArgs := make([]driver.NamedValue, len(args))
+	for i, arg := range args {
+		namedArgs[i] = driver.NamedValue{
+			Ordinal: i + 1,
+			Value:   arg,
+		}
+	}
+	return namedArgs
 }
 
 // Close implements driver.Conn interface
@@ -478,25 +622,78 @@ func (conn *Connection) Dump(outputDir string) error {
 // getTableNames retrieves all user-defined table names from SQLite3 database
 func (conn *Connection) getTableNames() ([]string, error) {
 	query := "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+	rows, err := conn.executeQuery(query, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return conn.scanStringValues(rows, 1)
+}
+
+// exportTableToCSV exports a single table to CSV file
+func (conn *Connection) exportTableToCSV(tableName, outputPath string) error {
+	columns, err := conn.getTableColumns(tableName)
+	if err != nil {
+		return fmt.Errorf("failed to get columns for table %s: %w", tableName, err)
+	}
+
+	query := fmt.Sprintf("SELECT * FROM [%s]", tableName)
+	rows, err := conn.executeQuery(query, nil)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	return conn.writeCSVFile(outputPath, columns, rows)
+}
+
+// getTableColumns retrieves column names for a specific table
+func (conn *Connection) getTableColumns(tableName string) ([]string, error) {
+	query := fmt.Sprintf("PRAGMA table_info([%s])", tableName)
+	rows, err := conn.executeQuery(query, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return conn.scanStringValues(rows, 6) // PRAGMA table_info returns 6 columns, name is at index 1
+}
+
+// executeQuery executes a query and returns rows with proper context support
+func (conn *Connection) executeQuery(query string, args []driver.Value) (driver.Rows, error) {
 	stmt, err := conn.PrepareContext(context.Background(), query)
 	if err != nil {
 		return nil, err
 	}
 	defer stmt.Close()
 
-	var rows driver.Rows
-	if stmtQueryCtx, ok := stmt.(driver.StmtQueryContext); ok {
-		rows, err = stmtQueryCtx.QueryContext(context.Background(), []driver.NamedValue{})
-	} else {
-		rows, err = stmt.Query([]driver.Value{})
+	var namedArgs []driver.NamedValue
+	if args != nil {
+		namedArgs = make([]driver.NamedValue, len(args))
+		for i, arg := range args {
+			namedArgs[i] = driver.NamedValue{
+				Ordinal: i + 1,
+				Value:   arg,
+			}
+		}
 	}
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 
-	var tableNames []string
-	dest := make([]driver.Value, 1)
+	if stmtQueryCtx, ok := stmt.(driver.StmtQueryContext); ok {
+		return stmtQueryCtx.QueryContext(context.Background(), namedArgs)
+	}
+
+	// Fallback for older drivers
+	driverArgs := make([]driver.Value, len(args))
+	copy(driverArgs, args)
+	return stmt.Query(driverArgs)
+}
+
+// scanStringValues scans string values from rows, extracting the column at the specified index
+func (conn *Connection) scanStringValues(rows driver.Rows, columnCount int) ([]string, error) {
+	var results []string
+	dest := make([]driver.Value, columnCount)
+
 	for {
 		err := rows.Next(dest)
 		if err != nil {
@@ -505,42 +702,31 @@ func (conn *Connection) getTableNames() ([]string, error) {
 			}
 			return nil, err
 		}
-		if name, ok := dest[0].(string); ok {
-			tableNames = append(tableNames, name)
+
+		// For table names, extract from index 0; for column names, extract from index 1
+		var value string
+		if columnCount == 1 {
+			// Table names query
+			if name, ok := dest[0].(string); ok {
+				value = name
+			}
+		} else if columnCount == 6 {
+			// Column names query (PRAGMA table_info)
+			if name, ok := dest[1].(string); ok { // Column name is at index 1
+				value = name
+			}
+		}
+
+		if value != "" {
+			results = append(results, value)
 		}
 	}
 
-	return tableNames, nil
+	return results, nil
 }
 
-// exportTableToCSV exports a single table to CSV file
-func (conn *Connection) exportTableToCSV(tableName, outputPath string) error {
-	// Get column names
-	columns, err := conn.getTableColumns(tableName)
-	if err != nil {
-		return fmt.Errorf("failed to get columns for table %s: %w", tableName, err)
-	}
-
-	// Query all data from table
-	query := fmt.Sprintf("SELECT * FROM [%s]", tableName)
-	stmt, err := conn.PrepareContext(context.Background(), query)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	var rows driver.Rows
-	if stmtQueryCtx, ok := stmt.(driver.StmtQueryContext); ok {
-		rows, err = stmtQueryCtx.QueryContext(context.Background(), []driver.NamedValue{})
-	} else {
-		rows, err = stmt.Query([]driver.Value{})
-	}
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	// Create CSV file
+// writeCSVFile creates and writes data to a CSV file
+func (conn *Connection) writeCSVFile(outputPath string, columns []string, rows driver.Rows) error {
 	file, err := os.Create(outputPath) //nolint:gosec // Safe: outputPath is constructed from validated inputs
 	if err != nil {
 		return err
@@ -554,7 +740,13 @@ func (conn *Connection) exportTableToCSV(tableName, outputPath string) error {
 	}
 
 	// Write data rows
-	dest := make([]driver.Value, len(columns))
+	return conn.writeDataRows(file, rows, len(columns))
+}
+
+// writeDataRows writes all data rows to the CSV file
+func (conn *Connection) writeDataRows(file *os.File, rows driver.Rows, columnCount int) error {
+	dest := make([]driver.Value, columnCount)
+
 	for {
 		err := rows.Next(dest)
 		if err != nil {
@@ -564,15 +756,7 @@ func (conn *Connection) exportTableToCSV(tableName, outputPath string) error {
 			return err
 		}
 
-		record := make([]string, len(dest))
-		for i, val := range dest {
-			if val == nil {
-				record[i] = ""
-			} else {
-				record[i] = conn.escapeCSVValue(fmt.Sprintf("%v", val))
-			}
-		}
-
+		record := conn.convertRowToCSVRecord(dest)
 		line := strings.Join(record, ",") + "\n"
 		if _, err := file.WriteString(line); err != nil {
 			return err
@@ -582,43 +766,17 @@ func (conn *Connection) exportTableToCSV(tableName, outputPath string) error {
 	return nil
 }
 
-// getTableColumns retrieves column names for a specific table
-func (conn *Connection) getTableColumns(tableName string) ([]string, error) {
-	query := fmt.Sprintf("PRAGMA table_info([%s])", tableName)
-	stmt, err := conn.PrepareContext(context.Background(), query)
-	if err != nil {
-		return nil, err
-	}
-	defer stmt.Close()
-
-	var rows driver.Rows
-	if stmtQueryCtx, ok := stmt.(driver.StmtQueryContext); ok {
-		rows, err = stmtQueryCtx.QueryContext(context.Background(), []driver.NamedValue{})
-	} else {
-		rows, err = stmt.Query([]driver.Value{})
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var columns []string
-	dest := make([]driver.Value, 6) // PRAGMA table_info returns 6 columns
-	for {
-		err := rows.Next(dest)
-		if err != nil {
-			if errors.Is(err, driver.ErrBadConn) || errors.Is(err, io.EOF) {
-				break
-			}
-			return nil, err
-		}
-
-		if name, ok := dest[1].(string); ok { // Column name is at index 1
-			columns = append(columns, name)
+// convertRowToCSVRecord converts a database row to CSV record with proper escaping
+func (conn *Connection) convertRowToCSVRecord(dest []driver.Value) []string {
+	record := make([]string, len(dest))
+	for i, val := range dest {
+		if val == nil {
+			record[i] = ""
+		} else {
+			record[i] = conn.escapeCSVValue(fmt.Sprintf("%v", val))
 		}
 	}
-
-	return columns, nil
+	return record
 }
 
 // escapeCSVValue escapes a value for CSV format
