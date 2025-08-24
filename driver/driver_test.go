@@ -1290,3 +1290,153 @@ func TestEdgeCases(t *testing.T) {
 		}
 	})
 }
+
+func TestSanitizeTableName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "normal table name",
+			input:    "users",
+			expected: "users",
+		},
+		{
+			name:     "table with spaces",
+			input:    "user data",
+			expected: "user data",
+		},
+		{
+			name:     "path traversal attack",
+			input:    "../etc/passwd",
+			expected: "___etc_passwd",
+		},
+		{
+			name:     "windows path separators",
+			input:    "..\\..\\windows\\system32",
+			expected: "______windows_system32",
+		},
+		{
+			name:     "dangerous characters",
+			input:    "table<>:\"/\\|?*name",
+			expected: "table_________name",
+		},
+		{
+			name:     "control characters",
+			input:    "table\x00\x1fname",
+			expected: "table__name",
+		},
+		{
+			name:     "starts with dot",
+			input:    ".hidden",
+			expected: "_hidden",
+		},
+		{
+			name:     "multiple dots",
+			input:    "...table",
+			expected: "__.table",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "table",
+		},
+		{
+			name:     "only underscore",
+			input:    "_",
+			expected: "table",
+		},
+		{
+			name:     "only dangerous chars",
+			input:    "<>:\"/\\|?*",
+			expected: "table",
+		},
+		{
+			name:     "very long table name",
+			input:    strings.Repeat("a", 300),
+			expected: strings.Repeat("a", 200),
+		},
+		{
+			name:     "unicode characters",
+			input:    "テーブル名",
+			expected: "テーブル名",
+		},
+		{
+			name:     "mixed dangerous and safe",
+			input:    "good_table../bad",
+			expected: "good_table___bad",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := sanitizeTableName(tt.input)
+			if result != tt.expected {
+				t.Errorf("sanitizeTableName(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+
+			// Additional security checks
+			if strings.Contains(result, "..") {
+				t.Errorf("sanitizeTableName(%q) contains '..': %q", tt.input, result)
+			}
+			if strings.ContainsAny(result, "<>:\"/\\|?*\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f") {
+				t.Errorf("sanitizeTableName(%q) contains dangerous characters: %q", tt.input, result)
+			}
+			if len(result) > 200 {
+				t.Errorf("sanitizeTableName(%q) is too long (%d chars): %q", tt.input, len(result), result)
+			}
+			if result == "" {
+				t.Errorf("sanitizeTableName(%q) returned empty string", tt.input)
+			}
+		})
+	}
+}
+
+func TestSanitizeTableName_EdgeCases(t *testing.T) {
+	t.Parallel()
+
+	// Test that normal SQL table names work fine
+	normalNames := []string{
+		"users",
+		"user_data",
+		"UserData",
+		"users123",
+		"table_with_underscores",
+		"CamelCaseTable",
+	}
+
+	for _, name := range normalNames {
+		result := sanitizeTableName(name)
+		if result != name {
+			t.Errorf("Normal table name %q was changed to %q", name, result)
+		}
+	}
+}
+
+func BenchmarkSanitizeTableName(b *testing.B) {
+	testCases := []string{
+		"normal_table",
+		"../../../etc/passwd",
+		"table<>:\"/\\|?*with_dangerous_chars",
+		strings.Repeat("long_table_name_", 50),
+	}
+
+	for _, tc := range testCases {
+		b.Run(tc[:minInt(len(tc), 20)], func(b *testing.B) {
+			for range b.N {
+				_ = sanitizeTableName(tc)
+			}
+		})
+	}
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
