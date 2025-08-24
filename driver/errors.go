@@ -27,4 +27,10 @@ var (
 
 	// ErrDuplicateTableName is returned when multiple files would create the same table name
 	ErrDuplicateTableName = errors.New("filesql driver: duplicate table name")
+
+	// ErrResourceExhaustion is returned when resource limits are exceeded
+	ErrResourceExhaustion = errors.New("filesql driver: resource exhaustion detected")
+
+	// ErrSecurityViolation is returned when a security policy is violated
+	ErrSecurityViolation = errors.New("filesql driver: security policy violation")
 )

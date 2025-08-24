@@ -506,7 +506,7 @@ func ExampleOpen_errorHandling() {
 	}
 
 	// Output:
-	// Expected error for non-existent file: failed to load file: path does not exist: nonexistent.csv
+	// Expected error for non-existent file: failed to load file: path does not exist
 	// Expected timeout error: context deadline exceeded
 	// Successfully counted 8 employees
 }

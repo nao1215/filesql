@@ -93,7 +93,10 @@ func (c *Connector) Connect(_ context.Context) (driver.Conn, error) {
 
 	// Load file data into database
 	if err := c.loadFileDirectly(conn, c.dsn); err != nil {
-		_ = conn.Close() // Ignore close error since we're already returning an error
+		if closeErr := conn.Close(); closeErr != nil {
+			// Log close error but prioritize the original error
+			fmt.Printf("Warning: failed to close connection after load error: %v\n", closeErr)
+		}
 		return nil, fmt.Errorf("failed to load file: %w", err)
 	}
 
@@ -128,15 +131,32 @@ func (c *Connector) loadSinglePath(conn driver.Conn, path string) error {
 	return c.loadSingleFile(conn, path)
 }
 
-// validatePath validates that a path exists and returns its FileInfo
+// validatePath validates that a path exists and returns its FileInfo with security checks
 func (c *Connector) validatePath(path string) (os.FileInfo, error) {
-	info, err := os.Stat(path)
+	// Use centralized validation
+	if err := ValidatePath(path); err != nil {
+		return nil, err
+	}
+
+	cleanPath := filepath.Clean(path)
+	info, err := os.Stat(cleanPath)
 	if os.IsNotExist(err) {
-		return nil, fmt.Errorf("path does not exist: %s", path)
+		return nil, errors.New("path does not exist")
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to stat path: %w", err)
+		return nil, fmt.Errorf("failed to access path: %w", err)
 	}
+
+	// Security check: prevent following symlinks to potentially dangerous locations
+	if info.Mode()&os.ModeSymlink != 0 {
+		realPath, err := filepath.EvalSymlinks(cleanPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve symlink: %w", err)
+		}
+		// Recursively validate the real path
+		return c.validatePath(realPath)
+	}
+
 	return info, nil
 }
 
@@ -192,19 +212,26 @@ func (c *Connector) loadDirectory(conn driver.Conn, dirPath string) error {
 }
 
 // loadFilesWithErrorHandling loads multiple files with appropriate error handling
-func (c *Connector) loadFilesWithErrorHandling(conn driver.Conn, filesToLoad []string, context string) error {
+func (c *Connector) loadFilesWithErrorHandling(conn driver.Conn, filesToLoad []string, _ string) error {
 	loadedFiles := 0
+	var lastError error
 	for _, filePath := range filesToLoad {
 		if err := c.loadSingleFile(conn, filePath); err != nil {
-			// Log error but continue with other files (only for directory loading)
-			fmt.Printf("Warning: failed to load file %s: %v\n", filepath.Base(filePath), err)
+			// Store the last error for debugging but don't expose sensitive path information
+			lastError = err
+			// Only log basic error information, not full paths
+			baseName := filepath.Base(filePath)
+			fmt.Printf("Warning: failed to load file %s\n", SanitizeForLog(baseName))
 			continue
 		}
 		loadedFiles++
 	}
 
 	if loadedFiles == 0 {
-		return fmt.Errorf("no supported files found in directory: %s", context)
+		if lastError != nil {
+			return fmt.Errorf("no supported files found, last error: %w", lastError)
+		}
+		return errors.New("no supported files found in directory")
 	}
 
 	return nil
@@ -218,6 +245,7 @@ func (c *Connector) collectDirectoryFiles(dirPath string, tableNames map[string]
 	}
 
 	var filesToLoad []string
+	processedFiles := 0
 
 	// Collect files and check for duplicate table names
 	for _, entry := range entries {
@@ -225,7 +253,19 @@ func (c *Connector) collectDirectoryFiles(dirPath string, tableNames map[string]
 			continue // Skip subdirectories
 		}
 
+		// Security: Limit number of files processed per directory
+		processedFiles++
+		if err := ValidateFileCount(processedFiles); err != nil {
+			return nil, fmt.Errorf("too many files in directory (limit: %d)", MaxFilesPerDirectory)
+		}
+
 		fileName := entry.Name()
+
+		// Security: Skip files with invalid names
+		if !IsValidFileName(fileName) {
+			continue
+		}
+
 		filePath := filepath.Join(dirPath, fileName)
 
 		if model.IsSupportedFile(fileName) {
@@ -254,11 +294,31 @@ func (c *Connector) readDirectoryEntries(dirPath string) ([]os.DirEntry, error) 
 
 // shouldSkipFile determines if a file should be skipped based on validation
 func (c *Connector) shouldSkipFile(filePath, fileName string) bool {
+	// Validate filename first
+	if !IsValidFileName(fileName) {
+		fmt.Printf("Warning: skipping file %s: invalid filename\n", SanitizeForLog(fileName))
+		return true
+	}
+
+	// Additional security check for file size to prevent memory exhaustion
+	info, err := os.Stat(filePath)
+	if err != nil {
+		fmt.Printf("Warning: skipping file %s: cannot access file\n", SanitizeForLog(fileName))
+		return true
+	}
+
+	// Security: Skip extremely large files to prevent memory exhaustion
+	if info.Size() > MaxFileSize {
+		fmt.Printf("Warning: skipping file %s: file too large\n", SanitizeForLog(fileName))
+		return true
+	}
+
 	file := model.NewFile(filePath)
-	_, err := file.ToTable()
+	_, err = file.ToTable()
 	if err != nil {
 		// Skip files with errors (e.g., duplicate columns) in directory loading
-		fmt.Printf("Warning: skipping file %s: %v\n", fileName, err)
+		// Don't expose detailed error information
+		fmt.Printf("Warning: skipping file %s: validation failed\n", SanitizeForLog(fileName))
 		return true
 	}
 	return false
@@ -437,12 +497,16 @@ func (c *Connector) createTableDirectly(conn driver.Conn, table *model.Table) er
 func (c *Connector) buildCreateTableQuery(table *model.Table) string {
 	columns := make([]string, 0, len(table.Header()))
 	for _, col := range table.Header() {
-		columns = append(columns, fmt.Sprintf(`[%s] TEXT`, col))
+		// Security: Sanitize column names to prevent SQL injection
+		sanitizedCol := c.sanitizeColumnName(col)
+		columns = append(columns, fmt.Sprintf(`[%s] TEXT`, sanitizedCol))
 	}
 
+	// Security: Sanitize table name to prevent SQL injection
+	sanitizedTableName := c.sanitizeTableName(table.Name())
 	return fmt.Sprintf(
 		`CREATE TABLE IF NOT EXISTS [%s] (%s)`,
-		table.Name(),
+		sanitizedTableName,
 		strings.Join(columns, ", "),
 	)
 }
@@ -458,7 +522,11 @@ func (c *Connector) insertRecordsDirectly(conn driver.Conn, table *model.Table) 
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			fmt.Printf("Warning: failed to close statement in insertRecordsDirectly: %v\n", closeErr)
+		}
+	}()
 
 	return c.insertRecords(stmt, c.convertRecordsToStringSlices(table.Records()))
 }
@@ -466,9 +534,11 @@ func (c *Connector) insertRecordsDirectly(conn driver.Conn, table *model.Table) 
 // buildInsertQuery constructs an INSERT query for the given table
 func (c *Connector) buildInsertQuery(table *model.Table) string {
 	placeholders := c.buildPlaceholders(len(table.Header()))
+	// Security: Sanitize table name to prevent SQL injection
+	sanitizedTableName := c.sanitizeTableName(table.Name())
 	return fmt.Sprintf(
 		`INSERT INTO [%s] VALUES (%s)`,
-		table.Name(),
+		sanitizedTableName,
 		placeholders,
 	)
 }
@@ -505,10 +575,12 @@ func (c *Connector) convertRecordsToStringSlices(records []model.Record) [][]str
 	return result
 }
 
-// convertRecordToDriverValues converts string record to driver.Value slice
+// convertRecordToDriverValues converts string record to driver.Value slice with validation
 func (c *Connector) convertRecordToDriverValues(record []string) []driver.Value {
 	args := make([]driver.Value, len(record))
 	for i, val := range record {
+		// Use centralized field validation
+		val = ValidateFieldValue(val)
 		args[i] = val
 	}
 	return args
@@ -523,7 +595,11 @@ func (c *Connector) executeStatement(conn interface{}, query string, args []driv
 		if err != nil {
 			return err
 		}
-		defer preparedStmt.Close()
+		defer func() {
+			if closeErr := preparedStmt.Close(); closeErr != nil {
+				fmt.Printf("Warning: failed to close prepared statement: %v\n", closeErr)
+			}
+		}()
 		return c.executeStatement(preparedStmt, "", args)
 
 	case driver.Stmt:
@@ -635,12 +711,18 @@ func (conn *Connection) DumpWithOptions(outputDir string, options model.DumpOpti
 
 // getTableNames retrieves all user-defined table names from SQLite3 database
 func (conn *Connection) getTableNames() ([]string, error) {
-	query := "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-	rows, err := conn.executeQuery(query, nil)
+	// Use parameterized query to prevent SQL injection
+	query := "SELECT name FROM sqlite_master WHERE type=? AND name NOT LIKE ?"
+	args := []driver.Value{"table", "sqlite_%"}
+	rows, err := conn.executeQuery(query, args)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			fmt.Printf("Warning: failed to close rows in getTableNames: %v\n", closeErr)
+		}
+	}()
 
 	return conn.scanStringValues(rows, 1)
 }
@@ -655,27 +737,50 @@ func (conn *Connection) exportTableToCSV(tableName, outputPath string) error {
 func (conn *Connection) exportTableWithOptions(tableName, outputPath string, options model.DumpOptions) error {
 	columns, err := conn.getTableColumns(tableName)
 	if err != nil {
-		return fmt.Errorf("failed to get columns for table %s: %w", tableName, err)
+		return fmt.Errorf("failed to get columns for table: %w", err)
 	}
 
-	query := fmt.Sprintf("SELECT * FROM [%s]", tableName)
+	// Security: Sanitize table name and validate it's safe
+	sanitizedTableName := sanitizeTableName(tableName)
+	if !isValidSQLIdentifier(sanitizedTableName) {
+		return errors.New("invalid table name")
+	}
+
+	query := fmt.Sprintf("SELECT * FROM [%s]", sanitizedTableName)
 	rows, err := conn.executeQuery(query, nil)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			fmt.Printf("Warning: failed to close rows in exportTableWithOptions: %v\n", closeErr)
+		}
+	}()
 
 	return conn.writeFileWithOptions(outputPath, columns, rows, options)
 }
 
 // getTableColumns retrieves column names for a specific table
 func (conn *Connection) getTableColumns(tableName string) ([]string, error) {
-	query := fmt.Sprintf("PRAGMA table_info([%s])", tableName)
+	// Security: Sanitize table name before using in query
+	// Note: PRAGMA statements don't support parameters, so we must sanitize carefully
+	sanitizedTableName := sanitizeTableName(tableName)
+
+	// Additional validation: ensure it's a safe table name pattern
+	if !isValidSQLIdentifier(sanitizedTableName) {
+		return nil, errors.New("invalid table name")
+	}
+
+	query := fmt.Sprintf("PRAGMA table_info([%s])", sanitizedTableName)
 	rows, err := conn.executeQuery(query, nil)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			fmt.Printf("Warning: failed to close rows in getTableColumns: %v\n", closeErr)
+		}
+	}()
 
 	return conn.scanStringValues(rows, 6) // PRAGMA table_info returns 6 columns, name is at index 1
 }
@@ -993,4 +1098,100 @@ func sanitizeTableName(tableName string) string {
 	}
 
 	return sanitized
+}
+
+// sanitizeColumnName sanitizes column names to prevent SQL injection
+func (c *Connector) sanitizeColumnName(columnName string) string {
+	// Remove or replace potentially dangerous characters
+	sanitized := strings.ReplaceAll(columnName, "'", "_")
+	sanitized = strings.ReplaceAll(sanitized, "\"", "_")
+	sanitized = strings.ReplaceAll(sanitized, ";", "_")
+	sanitized = strings.ReplaceAll(sanitized, "--", "_")
+	sanitized = strings.ReplaceAll(sanitized, "/*", "_")
+	sanitized = strings.ReplaceAll(sanitized, "*/", "_")
+
+	// Replace dangerous SQL fragments with safe alternatives
+	sanitized = strings.ReplaceAll(sanitized, "DROP", "drop_")
+	sanitized = strings.ReplaceAll(sanitized, "DELETE", "delete_")
+	sanitized = strings.ReplaceAll(sanitized, "INSERT", "insert_")
+	sanitized = strings.ReplaceAll(sanitized, "UPDATE", "update_")
+	sanitized = strings.ReplaceAll(sanitized, "ALTER", "alter_")
+	sanitized = strings.ReplaceAll(sanitized, "CREATE", "create_")
+	sanitized = strings.ReplaceAll(sanitized, "EXEC", "exec_")
+	sanitized = strings.ReplaceAll(sanitized, "EXECUTE", "execute_")
+
+	// Also handle lowercase versions
+	sanitized = strings.ReplaceAll(sanitized, "drop", "drop_")
+	sanitized = strings.ReplaceAll(sanitized, "delete", "delete_")
+	sanitized = strings.ReplaceAll(sanitized, "insert", "insert_")
+	sanitized = strings.ReplaceAll(sanitized, "update", "update_")
+	sanitized = strings.ReplaceAll(sanitized, "alter", "alter_")
+	sanitized = strings.ReplaceAll(sanitized, "create", "create_")
+	sanitized = strings.ReplaceAll(sanitized, "exec", "exec_")
+	sanitized = strings.ReplaceAll(sanitized, "execute", "execute_")
+
+	// Ensure column name is not empty after sanitization
+	if strings.TrimSpace(sanitized) == "" {
+		return "column"
+	}
+
+	// Limit length to prevent excessive memory usage
+	const maxColumnNameLength = 100
+	if len(sanitized) > maxColumnNameLength {
+		sanitized = sanitized[:maxColumnNameLength]
+	}
+
+	return sanitized
+}
+
+// sanitizeTableNameForSQL sanitizes table names specifically for SQL queries
+func (c *Connector) sanitizeTableName(tableName string) string {
+	// Use the existing sanitizeTableName function and add SQL-specific sanitization
+	sanitized := sanitizeTableName(tableName)
+
+	// Additional SQL injection protection
+	sanitized = strings.ReplaceAll(sanitized, "'", "")
+	sanitized = strings.ReplaceAll(sanitized, "\"", "")
+	sanitized = strings.ReplaceAll(sanitized, ";", "")
+	sanitized = strings.ReplaceAll(sanitized, "--", "")
+	sanitized = strings.ReplaceAll(sanitized, "/*", "")
+	sanitized = strings.ReplaceAll(sanitized, "*/", "")
+
+	// For table names, we want to keep SQL reserved words as-is since they'll be quoted in SQL
+	// This allows tests that expect specific table names to work correctly
+
+	// Ensure table name is not empty after sanitization
+	if strings.TrimSpace(sanitized) == "" {
+		return "table"
+	}
+
+	return sanitized
+}
+
+// isValidSQLIdentifier checks if a string is a valid SQL identifier
+func isValidSQLIdentifier(identifier string) bool {
+	if identifier == "" {
+		return false
+	}
+
+	// SQL identifier must start with letter or underscore
+	firstChar := identifier[0]
+	if !((firstChar >= 'a' && firstChar <= 'z') ||
+		(firstChar >= 'A' && firstChar <= 'Z') ||
+		firstChar == '_') {
+		return false
+	}
+
+	// Rest of characters must be alphanumeric or underscore
+	for i := 1; i < len(identifier); i++ {
+		char := identifier[i]
+		if !((char >= 'a' && char <= 'z') ||
+			(char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') ||
+			char == '_') {
+			return false
+		}
+	}
+
+	return true
 }
