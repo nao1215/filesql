@@ -54,6 +54,7 @@ import (
     "context"
     "fmt"
     "log"
+    "time"
     
     "github.com/nao1215/filesql"
 )
@@ -83,6 +84,23 @@ func main() {
         fmt.Printf("Name: %s, Age: %d\n", name, age)
     }
 }
+```
+
+### Ouvrir avec support du contexte
+
+```go
+// Ouvrir des fichiers avec contrôle du délai d'expiration
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+db, err := filesql.OpenContext(ctx, "large_dataset.csv")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// Requête avec contexte pour le support d'annulation
+rows, err := db.QueryContext(ctx, "SELECT * FROM large_dataset WHERE status = 'active'")
 ```
 
 ### Ouvrir plusieurs fichiers

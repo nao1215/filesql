@@ -56,6 +56,7 @@ import (
     "context"
     "fmt"
     "log"
+    "time"
     
     "github.com/nao1215/filesql"
 )
@@ -85,6 +86,23 @@ func main() {
         fmt.Printf("Name: %s, Age: %d\n", name, age)
     }
 }
+```
+
+### Opening with Context Support
+
+```go
+// Open files with timeout control
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+db, err := filesql.OpenContext(ctx, "large_dataset.csv")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// Query with context for cancellation support
+rows, err := db.QueryContext(ctx, "SELECT * FROM large_dataset WHERE status = 'active'")
 ```
 
 ### Opening Multiple Files

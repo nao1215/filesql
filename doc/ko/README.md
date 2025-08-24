@@ -54,6 +54,7 @@ import (
     "context"
     "fmt"
     "log"
+    "time"
     
     "github.com/nao1215/filesql"
 )
@@ -83,6 +84,23 @@ func main() {
         fmt.Printf("Name: %s, Age: %d\n", name, age)
     }
 }
+```
+
+### Context 지원으로 열기
+
+```go
+// 타임아웃 제어로 파일 열기
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+db, err := filesql.OpenContext(ctx, "large_dataset.csv")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// 취소 지원을 위한 컨텍스트로 쿼리
+rows, err := db.QueryContext(ctx, "SELECT * FROM large_dataset WHERE status = 'active'")
 ```
 
 ### 여러 파일 열기

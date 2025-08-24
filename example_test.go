@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/nao1215/filesql"
 )
@@ -167,6 +168,52 @@ func ExampleOpen_multipleFiles() {
 	// Available tables:
 	// - departments
 	// - employees
+}
+
+// ExampleOpenContext demonstrates opening files with context support for timeout and cancellation
+func ExampleOpenContext() {
+	tmpDir := createTempTestData()
+	defer os.RemoveAll(tmpDir)
+
+	// Create a context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Open database with context
+	db, err := filesql.OpenContext(ctx, filepath.Join(tmpDir, "employees.csv"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Query with context support
+	rows, err := db.QueryContext(ctx, `
+		SELECT name, salary 
+		FROM employees 
+		WHERE salary > 70000 
+		ORDER BY salary DESC
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	fmt.Println("High earners (>$70,000):")
+	for rows.Next() {
+		var name string
+		var salary float64
+		if err := rows.Scan(&name, &salary); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("- %s: $%.0f\n", name, salary)
+	}
+
+	// Output:
+	// High earners (>$70,000):
+	// - Alice Johnson: $95000
+	// - Bob Smith: $85000
+	// - Charlie Brown: $80000
+	// - David Wilson: $75000
 }
 
 // ExampleOpen_constraints demonstrates the constraint that modifications don't affect original files

@@ -682,6 +682,143 @@ func TestOpenErrorCases(t *testing.T) {
 	}
 }
 
+// TestOpenContext tests the OpenContext function with various scenarios
+func TestOpenContext(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		setupCtx    func() (context.Context, context.CancelFunc)
+		paths       []string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "Successful open with context",
+			setupCtx: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(t.Context(), 5*time.Second)
+			},
+			paths:   []string{"testdata/sample.csv"},
+			wantErr: false,
+		},
+		{
+			name: "Multiple files with context",
+			setupCtx: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(t.Context(), 5*time.Second)
+			},
+			paths:   []string{"testdata/sample.csv", "testdata/users.csv"},
+			wantErr: false,
+		},
+		{
+			name: "Context already cancelled",
+			setupCtx: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(t.Context())
+				cancel() // Cancel immediately
+				return ctx, func() {}
+			},
+			paths:       []string{"testdata/sample.csv"},
+			wantErr:     true,
+			errContains: "context canceled",
+		},
+		{
+			name: "Empty paths with context",
+			setupCtx: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(t.Context(), 5*time.Second)
+			},
+			paths:       []string{},
+			wantErr:     true,
+			errContains: "at least one path must be provided",
+		},
+		{
+			name: "Timeout during operation",
+			setupCtx: func() (context.Context, context.CancelFunc) {
+				// Very short timeout to trigger during ping
+				return context.WithTimeout(t.Context(), 1*time.Nanosecond)
+			},
+			paths:       []string{"testdata/sample.csv"},
+			wantErr:     true,
+			errContains: "deadline exceeded",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := tt.setupCtx()
+			defer cancel()
+
+			// For timeout test, add a small delay to ensure timeout triggers
+			if tt.name == "Timeout during operation" {
+				time.Sleep(10 * time.Millisecond)
+			}
+
+			db, err := OpenContext(ctx, tt.paths...)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("OpenContext() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.wantErr && err != nil && tt.errContains != "" {
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("OpenContext() error = %v, expected to contain %q", err, tt.errContains)
+				}
+			}
+
+			if !tt.wantErr && db != nil {
+				defer db.Close()
+
+				// Verify the database is functional
+				if err := db.PingContext(t.Context()); err != nil {
+					t.Errorf("Failed to ping database after OpenContext: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TestOpenContextConcurrent tests concurrent OpenContext calls
+func TestOpenContextConcurrent(t *testing.T) {
+	t.Parallel()
+
+	const numGoroutines = 10
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	errors := make(chan error, numGoroutines)
+
+	for i := range numGoroutines {
+		go func(id int) {
+			defer wg.Done()
+
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+
+			db, err := OpenContext(ctx, "testdata/sample.csv")
+			if err != nil {
+				errors <- fmt.Errorf("goroutine %d: %w", id, err)
+				return
+			}
+			defer db.Close()
+
+			// Perform a simple query to verify the connection
+			var count int
+			err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sample").Scan(&count)
+			if err != nil {
+				errors <- fmt.Errorf("goroutine %d: query failed: %w", id, err)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	// Check for any errors
+	for err := range errors {
+		t.Errorf("Concurrent OpenContext error: %v", err)
+	}
+}
+
 func Test_FileFormatDetection(t *testing.T) {
 	t.Parallel()
 
