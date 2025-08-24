@@ -273,8 +273,10 @@ func (c *Connector) handleTableNameConflict(tableName, filePath string, filesToL
 
 // resolveTableNameConflict resolves conflicts when multiple files would create the same table name
 func (c *Connector) resolveTableNameConflict(tableName, filePath, existingFile string, filesToLoad *[]string, tableNames map[string]string, dirPath string) error {
-	// Check if existing file is from a different directory
-	if filepath.Dir(existingFile) != dirPath {
+	// Check if existing file is from a different directory (normalize paths for cross-platform compatibility)
+	existingDir := filepath.Clean(filepath.Dir(existingFile))
+	currentDir := filepath.Clean(dirPath)
+	if existingDir != currentDir {
 		return fmt.Errorf("%w: table '%s' from files '%s' and '%s'",
 			ErrDuplicateTableName, tableName, existingFile, filePath)
 	}

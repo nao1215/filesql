@@ -579,8 +579,9 @@ func ExampleDumpDatabase() {
 	fmt.Printf("Original file: 8 employees\n")
 	fmt.Printf("Modified and exported: %d employees\n", count)
 
-	// Extract just the filename for consistent output
+	// Extract just the filename for consistent output (normalize path separators for cross-platform compatibility)
 	exportPath := strings.Replace(exportedFile, tmpDir, "/tmp/filesql_example*", 1)
+	exportPath = strings.ReplaceAll(exportPath, "\\", "/") // Convert Windows backslashes to forward slashes
 	fmt.Printf("Export location: %s\n", exportPath)
 
 	// Output:
