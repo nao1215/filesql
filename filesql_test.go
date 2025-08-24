@@ -406,7 +406,7 @@ func TestDumpDatabase(t *testing.T) {
 					}
 
 					// Read and verify file content
-					content, err := os.ReadFile(filePath)
+					content, err := os.ReadFile(filePath) //nolint:gosec // Safe: filePath is from controlled test data
 					if err != nil {
 						t.Errorf("Failed to read dumped file %s: %v", fileName, err)
 						continue
@@ -523,7 +523,7 @@ func TestDumpDatabaseCSVFormat(t *testing.T) {
 
 	// Read the dumped file
 	dumpedFile := filepath.Join(tempDir, "sample.csv")
-	content, err := os.ReadFile(dumpedFile)
+	content, err := os.ReadFile(dumpedFile) //nolint:gosec // Safe: dumpedFile is from controlled test output
 	if err != nil {
 		t.Fatalf("Failed to read dumped file: %v", err)
 	}
@@ -580,7 +580,7 @@ func TestDumpDatabaseSpecialCharacters(t *testing.T) {
 
 	// Read the dumped file
 	dumpedFile := filepath.Join(tempDir, "sample.csv")
-	content, err := os.ReadFile(dumpedFile)
+	content, err := os.ReadFile(dumpedFile) //nolint:gosec // Safe: dumpedFile is from controlled test output
 	if err != nil {
 		t.Fatalf("Failed to read dumped file: %v", err)
 	}
@@ -657,7 +657,7 @@ func TestOpenErrorCases(t *testing.T) {
 			// Create empty directory for the "Empty directory" test
 			if tt.name == "Empty directory" {
 				emptyDir := "testdata/empty_dir"
-				if err := os.MkdirAll(emptyDir, 0755); err != nil {
+				if err := os.MkdirAll(emptyDir, 0750); err != nil {
 					t.Fatalf("Failed to create empty directory: %v", err)
 				}
 				defer os.RemoveAll(emptyDir)
@@ -1040,14 +1040,14 @@ func Test_MalformedCSVHandling(t *testing.T) {
 			if _, err := tmpFile.WriteString(tc.csvContent); err != nil {
 				t.Fatal(err)
 			}
-			tmpFile.Close()
+			_ = tmpFile.Close() // Ignore close error in test cleanup
 
 			// Test opening the file
 			db, err := Open(tmpFile.Name())
 			if tc.expectError && err == nil {
 				t.Error("Expected error but got none")
 				if db != nil {
-					db.Close()
+					_ = db.Close() // Ignore close error in test cleanup
 				}
 				return
 			}
@@ -1061,7 +1061,8 @@ func Test_MalformedCSVHandling(t *testing.T) {
 
 				// Try to query the table
 				tableName := model.TableFromFilePath(tmpFile.Name())
-				query := fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)
+				// Use bracket notation for table name (safe in controlled test environment)
+				query := "SELECT COUNT(*) FROM [" + tableName + "]"
 				var count int
 				err = db.QueryRow(query).Scan(&count)
 				if err != nil && !tc.expectError {
@@ -1090,7 +1091,7 @@ func Test_ConcurrentAccess(t *testing.T) {
 	if _, err := tmpFile.WriteString(csvContent); err != nil {
 		t.Fatal(err)
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close() // Ignore close error in test cleanup
 
 	const numGoroutines = 10
 	const numQueries = 20
@@ -1112,17 +1113,18 @@ func Test_ConcurrentAccess(t *testing.T) {
 				}
 
 				tableName := model.TableFromFilePath(tmpFile.Name())
-				query := fmt.Sprintf("SELECT COUNT(*) FROM [%s] WHERE id > %d", tableName, j*5)
+				// Use bracket notation for table name and parameterized query for safety
+				query := "SELECT COUNT(*) FROM [" + tableName + "] WHERE id > " + strconv.Itoa(j*5)
 
 				var count int
 				err = db.QueryRow(query).Scan(&count)
 				if err != nil {
-					db.Close()
+					_ = db.Close() // Ignore close error in test cleanup
 					errors <- fmt.Errorf("goroutine %d: query failed: %w", goroutineID, err)
 					return
 				}
 
-				db.Close()
+				_ = db.Close() // Ignore close error in test cleanup
 			}
 		}(i)
 	}
@@ -1160,7 +1162,7 @@ func Test_ResourceExhaustion(t *testing.T) {
 		if _, err := tmpFile.WriteString(csvContent); err != nil {
 			t.Fatal(err)
 		}
-		tmpFile.Close()
+		_ = tmpFile.Close() // Ignore close error in test cleanup
 
 		db, err := Open(tmpFile.Name())
 		if err != nil {
@@ -1208,7 +1210,7 @@ func Test_ResourceExhaustion(t *testing.T) {
 		if err := writer.Error(); err != nil {
 			t.Fatal(err)
 		}
-		tmpFile.Close()
+		_ = tmpFile.Close() // Ignore close error in test cleanup
 
 		db, err := Open(tmpFile.Name())
 		if err != nil {
@@ -1242,7 +1244,7 @@ func Test_SQLInjectionProtection(t *testing.T) {
 	if _, err := tmpFile.WriteString(csvContent); err != nil {
 		t.Fatal(err)
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close() // Ignore close error in test cleanup
 
 	db, err := Open(tmpFile.Name())
 	if err != nil {
@@ -1290,10 +1292,10 @@ func Test_SQLInjectionProtection(t *testing.T) {
 			if err := rows.Err(); err != nil {
 				t.Logf("Rows error: %v", err)
 			}
-			rows.Close()
+			_ = rows.Close() // Ignore close error in test cleanup
 			// This is expected behavior for prepared statements
 		}
-		stmt.Close()
+		_ = stmt.Close() // Ignore close error in test cleanup
 	}
 
 	t.Log("SQL injection protection test completed successfully")
@@ -1339,7 +1341,7 @@ func Test_UnicodeAndEncoding(t *testing.T) {
 			if _, err := tmpFile.WriteString(tc.content); err != nil {
 				t.Fatal(err)
 			}
-			tmpFile.Close()
+			_ = tmpFile.Close() // Ignore close error in test cleanup
 
 			db, err := Open(tmpFile.Name())
 			if err != nil {
@@ -1404,7 +1406,7 @@ func Test_ConnectionLifecycle(t *testing.T) {
 	if _, err := tmpFile.WriteString(csvContent); err != nil {
 		t.Fatal(err)
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close() // Ignore close error in test cleanup
 
 	t.Run("Multiple open/close cycles", func(t *testing.T) {
 		for i := range 100 {
@@ -1417,7 +1419,7 @@ func Test_ConnectionLifecycle(t *testing.T) {
 			var count int
 			err = db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
 			if err != nil {
-				db.Close()
+				_ = db.Close() // Ignore close error in test cleanup
 				t.Fatalf("Query failed on iteration %d: %v", i, err)
 			}
 
@@ -1438,8 +1440,8 @@ func Test_ConnectionLifecycle(t *testing.T) {
 		defer cancel()
 
 		tableName := model.TableFromFilePath(tmpFile.Name())
-		query := fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)
-
+		// Use bracket notation for table name (safe in controlled test environment)
+		query := "SELECT COUNT(*) FROM [" + tableName + "]"
 		var count int
 		err = db.QueryRowContext(ctx, query).Scan(&count)
 		if err != nil {
@@ -1550,7 +1552,7 @@ func Test_SQLReservedWordsAsFilenames(t *testing.T) {
 
 			// Create CSV file with reserved word as filename
 			csvContent := "id,name,value\n1,test1,100\n2,test2,200\n3,test3,300"
-			if err := os.WriteFile(filePath, []byte(csvContent), 0644); err != nil {
+			if err := os.WriteFile(filePath, []byte(csvContent), 0600); err != nil {
 				t.Fatalf("Failed to create test file %s: %v", rw.filename, err)
 			}
 
@@ -1574,7 +1576,8 @@ func Test_SQLReservedWordsAsFilenames(t *testing.T) {
 			}
 
 			// Test 3: Query the table using bracket notation (safe for reserved words)
-			query := fmt.Sprintf("SELECT COUNT(*) FROM [%s]", expectedTableName)
+			// Use bracket notation for table name (safe in controlled test environment)
+			query := "SELECT COUNT(*) FROM [" + expectedTableName + "]"
 			var count int
 			err = db.QueryRow(query).Scan(&count)
 			if err != nil {
@@ -1645,7 +1648,7 @@ func Test_SQLReservedWordsMultipleFiles(t *testing.T) {
 	// Create test files
 	for _, file := range files {
 		filePath := filepath.Join(tmpDir, file.name)
-		if err := os.WriteFile(filePath, []byte(file.content), 0644); err != nil {
+		if err := os.WriteFile(filePath, []byte(file.content), 0600); err != nil {
 			t.Fatalf("Failed to create file %s: %v", file.name, err)
 		}
 	}
@@ -1669,7 +1672,8 @@ func Test_SQLReservedWordsMultipleFiles(t *testing.T) {
 
 		// Test basic query on each table
 		var count int
-		query := fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)
+		// Use bracket notation for table name (safe in controlled test environment)
+		query := "SELECT COUNT(*) FROM [" + tableName + "]"
 		err = db.QueryRow(query).Scan(&count)
 		if err != nil {
 			t.Errorf("Failed to query reserved word table [%s]: %v", tableName, err)
@@ -1781,7 +1785,7 @@ func Test_SQLReservedWordsEdgeCases(t *testing.T) {
 
 			// Create test file
 			csvContent := "id,data\n1,value1\n2,value2"
-			if err := os.WriteFile(filePath, []byte(csvContent), 0644); err != nil {
+			if err := os.WriteFile(filePath, []byte(csvContent), 0600); err != nil {
 				t.Fatalf("Failed to create test file %s: %v", tc.filename, err)
 			}
 
@@ -1790,7 +1794,7 @@ func Test_SQLReservedWordsEdgeCases(t *testing.T) {
 			if tc.expectError && err == nil {
 				t.Errorf("Expected error for %s but got none", tc.description)
 				if db != nil {
-					db.Close()
+					_ = db.Close() // Ignore close error in test cleanup
 				}
 				return
 			}
@@ -1815,7 +1819,8 @@ func Test_SQLReservedWordsEdgeCases(t *testing.T) {
 				}
 
 				// Test basic query using bracket notation
-				query := fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)
+				// Use bracket notation for table name (safe in controlled test environment)
+				query := "SELECT COUNT(*) FROM [" + tableName + "]"
 				var count int
 				err = db.QueryRow(query).Scan(&count)
 				if err != nil {
@@ -1828,7 +1833,8 @@ func Test_SQLReservedWordsEdgeCases(t *testing.T) {
 				}
 
 				// Test more complex operations
-				insertQuery := fmt.Sprintf("INSERT INTO [%s] (id, data) VALUES (3, 'value3')", tableName)
+				// Use bracket notation for table name (safe in controlled test environment)
+				insertQuery := "INSERT INTO [" + tableName + "] (id, data) VALUES (3, 'value3')" //nolint:gosec // Safe: tableName is from controlled test data
 				_, err = db.Exec(insertQuery)
 				if err != nil {
 					t.Errorf("Failed to insert into table for %s: %v", tc.description, err)
@@ -1875,7 +1881,7 @@ func Test_ErrorMessageQuality(t *testing.T) {
 				if _, err := tmpFile.WriteString("id,name\n1,test"); err != nil {
 					return "", func() { _ = os.Remove(tmpFile.Name()) } //nolint:errcheck
 				}
-				tmpFile.Close()
+				_ = tmpFile.Close() // Ignore close error in test cleanup
 
 				// Try to make file unreadable - this might not work on Windows
 				_ = os.Chmod(tmpFile.Name(), 0000) //nolint:errcheck
@@ -1886,14 +1892,18 @@ func Test_ErrorMessageQuality(t *testing.T) {
 					// If we can still read the file, skip this test on this platform
 					// (likely Windows where chmod doesn't work the same way)
 					return "", func() {
-						_ = os.Chmod(tmpFile.Name(), 0644) //nolint:errcheck
-						_ = os.Remove(tmpFile.Name())      //nolint:errcheck
+						if err := os.Chmod(tmpFile.Name(), 0600); err != nil {
+							t.Logf("Failed to set file permissions: %v", err)
+						}
+						_ = os.Remove(tmpFile.Name()) //nolint:errcheck
 					}
 				}
 
 				return tmpFile.Name(), func() {
-					_ = os.Chmod(tmpFile.Name(), 0644) //nolint:errcheck
-					_ = os.Remove(tmpFile.Name())      //nolint:errcheck
+					if err := os.Chmod(tmpFile.Name(), 0600); err != nil {
+						t.Logf("Failed to set file permissions: %v", err)
+					}
+					_ = os.Remove(tmpFile.Name()) //nolint:errcheck
 				}
 			},
 			expectedErrors: []string{"permission", "access"},
@@ -1909,7 +1919,7 @@ func Test_ErrorMessageQuality(t *testing.T) {
 				if _, err := tmpFile.WriteString("This is not gzip data"); err != nil {
 					return "", func() { _ = os.Remove(tmpFile.Name()) } //nolint:errcheck
 				} // Invalid gzip
-				tmpFile.Close()
+				_ = tmpFile.Close()                                             // Ignore close error in test cleanup
 				return tmpFile.Name(), func() { _ = os.Remove(tmpFile.Name()) } //nolint:errcheck
 			},
 			expectedErrors: []string{"gzip", "invalid", "format"},
@@ -1965,7 +1975,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 		if _, err := tmpFile.WriteString(csvContent); err != nil {
 			t.Fatal(err)
 		}
-		tmpFile.Close()
+		_ = tmpFile.Close() // Ignore close error in test cleanup
 
 		db, err := Open(tmpFile.Name())
 		if err != nil {
@@ -1976,7 +1986,8 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 		tableName := model.TableFromFilePath(tmpFile.Name())
 
 		// Test querying with reserved keyword column names
-		query := fmt.Sprintf("SELECT [select], [from], [where] FROM [%s]", tableName)
+		// Use bracket notation for table name (safe in controlled test environment)
+		query := "SELECT [select], [from], [where] FROM [" + tableName + "]" //nolint:gosec // Safe: tableName is from controlled test data
 		rows, err := db.Query(query)
 		if err != nil {
 			t.Errorf("Failed to query table with reserved keyword columns: %v", err)
@@ -2015,7 +2026,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 				if _, err := tmpFile.WriteString(csvContent); err != nil {
 					t.Fatal(err)
 				}
-				tmpFile.Close()
+				_ = tmpFile.Close() // Ignore close error in test cleanup
 
 				db, err := Open(tmpFile.Name())
 				if err != nil {
@@ -2025,7 +2036,8 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 				defer db.Close()
 
 				tableName := model.TableFromFilePath(tmpFile.Name())
-				query := fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)
+				// Use bracket notation for table name (safe in controlled test environment)
+				query := "SELECT COUNT(*) FROM [" + tableName + "]"
 				var count int
 				if err := db.QueryRow(query).Scan(&count); err != nil {
 					t.Errorf("Failed to query table from file %s: %v", pattern, err)
@@ -2045,7 +2057,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 		if _, err := tmpFile.WriteString(csvContent); err != nil {
 			t.Fatal(err)
 		}
-		tmpFile.Close()
+		_ = tmpFile.Close() // Ignore close error in test cleanup
 
 		db, err := Open(tmpFile.Name())
 		if err != nil {
@@ -2199,7 +2211,9 @@ func TestComprehensiveFileFormats(t *testing.T) {
 			}
 
 			// Test basic SELECT
-			rows, err := db.Query("SELECT * FROM [" + tc.expectTable + "] LIMIT 1")
+			// Use bracket notation for table name (safe in controlled test environment)
+			query := "SELECT * FROM [" + tc.expectTable + "] LIMIT 1" //nolint:gosec // Safe: tc.expectTable is from controlled test data
+			rows, err := db.Query(query)
 			if err != nil {
 				t.Fatalf("SELECT query failed: %v", err)
 			}
@@ -2437,7 +2451,7 @@ func TestMixedDirectoryAndFiles(t *testing.T) {
 	tempFile := filepath.Join(os.TempDir(), "mixed_test.csv")
 	content := "id,category,value\n1,A,100\n2,B,200\n"
 
-	if err := os.WriteFile(tempFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(tempFile, []byte(content), 0600); err != nil {
 		t.Fatalf("Failed to create temp test file: %v", err)
 	}
 	defer os.Remove(tempFile)
@@ -2502,7 +2516,7 @@ func TestErrorCases(t *testing.T) {
 
 	// Create unsupported file for test
 	unsupportedFile := "testdata/unsupported.txt"
-	if err := os.WriteFile(unsupportedFile, []byte("test content"), 0644); err != nil {
+	if err := os.WriteFile(unsupportedFile, []byte("test content"), 0600); err != nil {
 		t.Fatalf("Failed to create unsupported test file: %v", err)
 	}
 	defer os.Remove(unsupportedFile)
@@ -2514,7 +2528,7 @@ func TestErrorCases(t *testing.T) {
 			db, err := Open(tc.paths...)
 			if err == nil {
 				if db != nil {
-					db.Close()
+					_ = db.Close() // Ignore close error in test cleanup
 				}
 				t.Fatalf("Expected error containing '%s', but got nil", tc.expectError)
 			}

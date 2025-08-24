@@ -206,7 +206,7 @@ John,25,Tokyo
 Alice,30,Osaka
 Bob,35,Kyoto`
 
-	err := os.WriteFile(csvFile, []byte(csvContent), 0644)
+	err := os.WriteFile(csvFile, []byte(csvContent), 0600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ John	25	Tokyo
 Alice	30	Osaka
 Bob	35	Kyoto`
 
-	err := os.WriteFile(tsvFile, []byte(tsvContent), 0644)
+	err := os.WriteFile(tsvFile, []byte(tsvContent), 0600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestFile_ToTable_LTSV(t *testing.T) {
 name:Alice	age:30	city:Osaka
 name:Bob	age:35	city:Kyoto`
 
-	err := os.WriteFile(ltsvFile, []byte(ltsvContent), 0644)
+	err := os.WriteFile(ltsvFile, []byte(ltsvContent), 0600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ John,25,Tokyo
 Alice,30,Osaka`
 
 	// Create gzip compressed file
-	f, err := os.Create(csvFile)
+	f, err := os.Create(csvFile) //nolint:gosec // Safe: csvFile is from controlled test temp dir
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,8 +334,8 @@ Alice,30,Osaka`
 	if err != nil {
 		t.Fatal(err)
 	}
-	gw.Close()
-	f.Close()
+	_ = gw.Close() // Ignore close error in test cleanup
+	_ = f.Close()  // Ignore close error in test cleanup
 
 	file := NewFile(csvFile)
 	table, err := file.ToTable()
@@ -359,7 +359,7 @@ func TestFile_ToTable_UnsupportedFormat(t *testing.T) {
 	tmpDir := t.TempDir()
 	txtFile := filepath.Join(tmpDir, "test.txt")
 
-	err := os.WriteFile(txtFile, []byte("some content"), 0644)
+	err := os.WriteFile(txtFile, []byte("some content"), 0600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func TestFile_ToTable_EmptyFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	csvFile := filepath.Join(tmpDir, "empty.csv")
 
-	err := os.WriteFile(csvFile, []byte(""), 0644)
+	err := os.WriteFile(csvFile, []byte(""), 0600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -595,7 +595,7 @@ func Test_OpenReaderEdgeCases(t *testing.T) {
 		if _, err := tmpFile.WriteString("This is not gzip content"); err != nil {
 			t.Fatal(err)
 		}
-		tmpFile.Close()
+		_ = tmpFile.Close() // Ignore close error in test cleanup
 
 		file := NewFile(tmpFile.Name())
 		_, closer, err := file.openReader()
@@ -624,7 +624,7 @@ func Test_OpenReaderEdgeCases(t *testing.T) {
 			if _, err := tmpFile.Write(ct.content); err != nil {
 				t.Fatal(err)
 			}
-			tmpFile.Close()
+			_ = tmpFile.Close() // Ignore close error in test cleanup
 
 			file := NewFile(tmpFile.Name())
 			reader, closer, err := file.openReader()
@@ -654,7 +654,7 @@ func TestFile_ToTable_DuplicateColumns(t *testing.T) {
 1,John,10,john@example.com
 2,Jane,20,jane@example.com`
 
-		err := os.WriteFile(csvFile, []byte(csvContent), 0644)
+		err := os.WriteFile(csvFile, []byte(csvContent), 0600)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -686,7 +686,7 @@ func TestFile_ToTable_DuplicateColumns(t *testing.T) {
 1	John	10	john@example.com
 2	Jane	20	jane@example.com`
 
-		err := os.WriteFile(tsvFile, []byte(tsvContent), 0644)
+		err := os.WriteFile(tsvFile, []byte(tsvContent), 0600)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -717,7 +717,7 @@ func TestFile_ToTable_DuplicateColumns(t *testing.T) {
 		csvContent := `name,age,name,email,age
 John,25,Doe,john@example.com,26`
 
-		err := os.WriteFile(csvFile, []byte(csvContent), 0644)
+		err := os.WriteFile(csvFile, []byte(csvContent), 0600)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -744,7 +744,7 @@ John,25,Doe,john@example.com,26`
 1,John,25,john@example.com
 2,Jane,30,jane@example.com`
 
-		err := os.WriteFile(csvFile, []byte(csvContent), 0644)
+		err := os.WriteFile(csvFile, []byte(csvContent), 0600)
 		if err != nil {
 			t.Fatal(err)
 		}

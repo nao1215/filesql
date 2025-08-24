@@ -179,7 +179,7 @@ func OpenContext(ctx context.Context, paths ...string) (*sql.DB, error) {
 
 	// Validate connection by pinging the database with context
 	if err := db.PingContext(ctx); err != nil {
-		db.Close()
+		_ = db.Close() // Ignore close error since we're already returning a connection error
 		return nil, err
 	}
 

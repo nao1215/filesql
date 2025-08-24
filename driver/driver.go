@@ -67,7 +67,7 @@ func (c *Connector) Connect(_ context.Context) (driver.Conn, error) {
 
 	// Load file data into database
 	if err := c.loadFileDirectly(conn, c.dsn); err != nil {
-		conn.Close()
+		_ = conn.Close() // Ignore close error since we're already returning an error
 		return nil, fmt.Errorf("failed to load file: %w", err)
 	}
 
@@ -454,7 +454,7 @@ func (conn *Connection) PrepareContext(ctx context.Context, query string) (drive
 // Dump exports all tables from SQLite3 database to specified directory in CSV format
 func (conn *Connection) Dump(outputDir string) error {
 	// Create output directory if it doesn't exist
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
+	if err := os.MkdirAll(outputDir, 0750); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
@@ -541,7 +541,7 @@ func (conn *Connection) exportTableToCSV(tableName, outputPath string) error {
 	defer rows.Close()
 
 	// Create CSV file
-	file, err := os.Create(outputPath)
+	file, err := os.Create(outputPath) //nolint:gosec // Safe: outputPath is constructed from validated inputs
 	if err != nil {
 		return err
 	}

@@ -290,7 +290,7 @@ func TestConnectionDump(t *testing.T) {
 	}
 
 	// Read the dumped file and verify content
-	content, err := os.ReadFile(expectedFile)
+	content, err := os.ReadFile(expectedFile) //nolint:gosec // Safe: expectedFile is from controlled test data
 	if err != nil {
 		t.Errorf("failed to read dumped file: %v", err)
 		return
@@ -349,7 +349,7 @@ func TestConnectionDumpMultipleTables(t *testing.T) {
 		}
 
 		// Verify file has content
-		content, err := os.ReadFile(fullPath)
+		content, err := os.ReadFile(fullPath) //nolint:gosec // Safe: fullPath is from controlled test data
 		if err != nil {
 			t.Errorf("failed to read file %s: %v", fullPath, err)
 			continue
@@ -403,7 +403,7 @@ func TestDumpDatabase(t *testing.T) {
 	}
 
 	// Read the dumped file and verify basic structure
-	content, err := os.ReadFile(expectedFile)
+	content, err := os.ReadFile(expectedFile) //nolint:gosec // Safe: expectedFile is from controlled test data
 	if err != nil {
 		t.Errorf("failed to read dumped file: %v", err)
 		return
@@ -729,7 +729,7 @@ func TestDuplicateTableNameValidation(t *testing.T) {
 		}
 
 		if conn != nil {
-			conn.Close()
+			_ = conn.Close() // Ignore close error in test cleanup
 		}
 	})
 
@@ -742,13 +742,13 @@ func TestDuplicateTableNameValidation(t *testing.T) {
 
 		// Create sample.csv
 		csvContent := "id,name\n1,John\n2,Jane\n"
-		if err := os.WriteFile(filepath.Join(tempDir, "sample.csv"), []byte(csvContent), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(tempDir, "sample.csv"), []byte(csvContent), 0600); err != nil {
 			t.Fatalf("failed to create sample.csv: %v", err)
 		}
 
 		// Create sample.tsv (same base name "sample" -> duplicate table)
 		tsvContent := "id\tname\n1\tJohn\n2\tJane\n"
-		if err := os.WriteFile(filepath.Join(tempDir, "sample.tsv"), []byte(tsvContent), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(tempDir, "sample.tsv"), []byte(tsvContent), 0600); err != nil {
 			t.Fatalf("failed to create sample.tsv: %v", err)
 		}
 
@@ -785,7 +785,7 @@ func TestDuplicateTableNameValidation(t *testing.T) {
 		}
 
 		if conn != nil {
-			conn.Close()
+			_ = conn.Close() // Ignore close error in test cleanup
 		}
 	})
 }

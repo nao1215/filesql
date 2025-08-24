@@ -183,12 +183,12 @@ func (f *File) openReader() (io.Reader, func() error, error) {
 	if f.IsGZ() {
 		gzReader, err := gzip.NewReader(file)
 		if err != nil {
-			file.Close()
+			_ = file.Close() // Ignore close error during error handling
 			return nil, nil, err
 		}
 		reader = gzReader
 		closer = func() error {
-			gzReader.Close()
+			_ = gzReader.Close() // Ignore close error in cleanup
 			return file.Close()
 		}
 	} else if f.IsBZ2() {
@@ -197,7 +197,7 @@ func (f *File) openReader() (io.Reader, func() error, error) {
 	} else if f.IsXZ() {
 		xzReader, err := xz.NewReader(file)
 		if err != nil {
-			file.Close()
+			_ = file.Close() // Ignore close error during error handling
 			return nil, nil, err
 		}
 		reader = xzReader
@@ -205,7 +205,7 @@ func (f *File) openReader() (io.Reader, func() error, error) {
 	} else if f.IsZSTD() {
 		decoder, err := zstd.NewReader(file)
 		if err != nil {
-			file.Close()
+			_ = file.Close() // Ignore close error during error handling
 			return nil, nil, err
 		}
 		reader = decoder

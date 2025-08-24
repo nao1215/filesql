@@ -117,7 +117,7 @@ func createTempTestData() string {
 7,Grace Lee,3,60000,2019-12-05
 8,Henry Taylor,3,55000,2022-04-18`
 
-	err = os.WriteFile(filepath.Join(tmpDir, "employees.csv"), []byte(employeesData), 0644)
+	err = os.WriteFile(filepath.Join(tmpDir, "employees.csv"), []byte(employeesData), 0600)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func createTempTestData() string {
 3,Sales,600000,7
 4,HR,400000,9`
 
-	err = os.WriteFile(filepath.Join(tmpDir, "departments.csv"), []byte(departmentsData), 0644)
+	err = os.WriteFile(filepath.Join(tmpDir, "departments.csv"), []byte(departmentsData), 0600)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func createSalesTestData() string {
 9,107,Monitor 24inch,Electronics,1,249.99,2024-01-23,North
 10,103,Desk Lamp,Furniture,2,39.99,2024-01-24,East`
 
-	err = os.WriteFile(filepath.Join(tmpDir, "sales.csv"), []byte(salesData), 0644)
+	err = os.WriteFile(filepath.Join(tmpDir, "sales.csv"), []byte(salesData), 0600)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func createSalesTestData() string {
 106,Diana Lee,diana@example.com,Philadelphia,2023-11-12
 107,Frank Miller,frank@example.com,San Antonio,2023-12-03`
 
-	err = os.WriteFile(filepath.Join(tmpDir, "customers.csv"), []byte(customersData), 0644)
+	err = os.WriteFile(filepath.Join(tmpDir, "customers.csv"), []byte(customersData), 0600)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -546,7 +546,7 @@ func ExampleDumpDatabase() {
 
 	// Create output directory
 	outputDir := filepath.Join(tmpDir, "output")
-	err = os.MkdirAll(outputDir, 0755)
+	err = os.MkdirAll(outputDir, 0750)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -631,7 +631,7 @@ func ExampleOpen_performanceOptimization() {
 			}
 			fmt.Printf("  - %s (ID: %d, Orders: %d)\n", name, customerID, totalOrders)
 		}
-		rows.Close()
+		_ = rows.Close() // Ignore close error in test cleanup
 		offset += pageSize
 	}
 
@@ -756,7 +756,7 @@ func ExampleOpen_advancedSQL() {
 		}
 		fmt.Printf("%-15s %-12s $%-7.0f %-10d %d\n", name, department, salary, salaryRank, overallRank)
 	}
-	rows.Close()
+	_ = rows.Close() // Ignore close error in test cleanup
 
 	// Common Table Expressions (CTE)
 	fmt.Println("\n2. Common Table Expressions - Department Analysis:")
@@ -810,7 +810,7 @@ func ExampleOpen_advancedSQL() {
 		fmt.Printf("%-12s %-5d $%-9.0f $%-11.0f $%-9.0f %s\n",
 			department, employeeCount, avgSalary, companyAvg, salaryDiff, comparison)
 	}
-	rows.Close()
+	_ = rows.Close() // Ignore close error in test cleanup
 
 	// JSON operations (if data contains JSON)
 	fmt.Println("\n3. Text Functions - Name Analysis:")
@@ -844,7 +844,7 @@ func ExampleOpen_advancedSQL() {
 		}
 		fmt.Printf("%-15s %-6d %-15s %-8d %s\n", name, nameLength, formattedName, spacePos, firstName)
 	}
-	rows.Close()
+	_ = rows.Close() // Ignore close error in test cleanup
 
 	// Output:
 	// === Advanced SQL Features ===
@@ -921,7 +921,7 @@ func ExampleOpen_compressionSupport() {
 
 		fmt.Printf("- %s: %d records\n", tableName, count)
 	}
-	rows.Close()
+	_ = rows.Close() // Ignore close error in test cleanup
 
 	// Demonstrate querying across compressed files
 	fmt.Println("\nCross-file analysis from compressed data:")
@@ -961,7 +961,7 @@ func ExampleOpen_compressionSupport() {
 		}
 		fmt.Printf("%-12s %-8d %-19s %s\n", sourceTable, totalRecords, earliest, latest)
 	}
-	analysisRows.Close()
+	_ = analysisRows.Close() // Ignore close error in test cleanup
 
 	// Output:
 	// === Compression Support Demo ===
@@ -1019,7 +1019,7 @@ func ExampleOpen_webLogAnalysis() {
 		}
 		fmt.Printf("%-20s %-6d %d\n", path, hits, unique)
 	}
-	rows.Close()
+	_ = rows.Close() // Ignore close error in test cleanup
 
 	// Error analysis
 	fmt.Println("\n2. Error Analysis:")
@@ -1047,7 +1047,7 @@ func ExampleOpen_webLogAnalysis() {
 		}
 		fmt.Printf("%-12d %-6d %-10.2f%%\n", statusCode, errorCount, percentage)
 	}
-	rows.Close()
+	_ = rows.Close() // Ignore close error in test cleanup
 
 	// Hourly traffic pattern
 	fmt.Println("\n3. Traffic by Hour:")
@@ -1074,7 +1074,7 @@ func ExampleOpen_webLogAnalysis() {
 		}
 		fmt.Printf("%-5d %-9d %-12.0fms\n", hour, requests, avgResponseTime)
 	}
-	rows.Close()
+	_ = rows.Close() // Ignore close error in test cleanup
 
 	// Output:
 	// === Web Log Analysis ===
@@ -1146,7 +1146,7 @@ func ExampleOpen_financialDataAnalysis() {
 		}
 		fmt.Printf("%-8s %-6d $%-9.2f $%-7.2f $%.2f\n", month, count, revenue, average, largest)
 	}
-	rows.Close()
+	_ = rows.Close() // Ignore close error in test cleanup
 
 	// Expense category breakdown
 	fmt.Println("\n2. Expense Categories:")
@@ -1178,7 +1178,7 @@ func ExampleOpen_financialDataAnalysis() {
 		}
 		fmt.Printf("%-15s %-6d $%-11.2f %-10.2f%%\n", category, count, expense, percentage)
 	}
-	rows.Close()
+	_ = rows.Close() // Ignore close error in test cleanup
 
 	// Cash flow summary
 	fmt.Println("\n3. Cash Flow Summary:")
@@ -1242,7 +1242,7 @@ func createLargeTestData() string {
 1010,New Customer J,new.j@example.com,2023-10-15,1,100.00`
 
 	customerFile := filepath.Join(tmpDir, "customer_summary.csv")
-	err = os.WriteFile(customerFile, []byte(customerData), 0644)
+	err = os.WriteFile(customerFile, []byte(customerData), 0600)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1267,7 +1267,7 @@ func createAdvancedTestData() string {
 6,Frank Miller,3,70000,2023-06-01`
 
 	employeesFile := filepath.Join(tmpDir, "employees.csv")
-	err = os.WriteFile(employeesFile, []byte(employeesData), 0644)
+	err = os.WriteFile(employeesFile, []byte(employeesData), 0600)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1280,7 +1280,7 @@ func createAdvancedTestData() string {
 4,HR,150000`
 
 	departmentsFile := filepath.Join(tmpDir, "departments.csv")
-	err = os.WriteFile(departmentsFile, []byte(departmentsData), 0644)
+	err = os.WriteFile(departmentsFile, []byte(departmentsData), 0600)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1304,7 +1304,7 @@ func createCompressedTestData() string {
 2024-01-01 14:00:00,INFO,System backup completed,0`
 
 	logsFile := filepath.Join(tmpDir, "logs.csv")
-	err = os.WriteFile(logsFile, []byte(logsData), 0644)
+	err = os.WriteFile(logsFile, []byte(logsData), 0600)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1316,7 +1316,7 @@ func createCompressedTestData() string {
 3,Wireless Mouse,Electronics,49.99,false`
 
 	productsFile := filepath.Join(tmpDir, "products.csv")
-	err = os.WriteFile(productsFile, []byte(productsData), 0644)
+	err = os.WriteFile(productsFile, []byte(productsData), 0600)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1348,7 +1348,7 @@ func createWebLogTestData() string {
 2024-01-01 14:15:30,192.168.1.105,GET,/notfound,404,100,Mozilla/5.0`
 
 	accessLogsFile := filepath.Join(tmpDir, "access_logs.csv")
-	err = os.WriteFile(accessLogsFile, []byte(accessLogsData), 0644)
+	err = os.WriteFile(accessLogsFile, []byte(accessLogsData), 0600)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1375,7 +1375,7 @@ func createFinancialTestData() string {
 8,2024-02-08,expense,Office Supplies,-200.00,Stationery purchase`
 
 	transactionFile := filepath.Join(tmpDir, "transactions.csv")
-	err = os.WriteFile(transactionFile, []byte(transactionData), 0644)
+	err = os.WriteFile(transactionFile, []byte(transactionData), 0600)
 	if err != nil {
 		log.Fatal(err)
 	}
