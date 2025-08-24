@@ -27,6 +27,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
@@ -622,7 +623,8 @@ func (conn *Connection) DumpWithOptions(outputDir string, options model.DumpOpti
 
 	// Export each table with the specified format and compression
 	for _, tableName := range tableNames {
-		outputPath := filepath.Join(outputDir, tableName+options.FileExtension())
+		safeFileName := sanitizeTableName(tableName) + options.FileExtension()
+		outputPath := filepath.Join(outputDir, safeFileName)
 		if err := conn.exportTableWithOptions(tableName, outputPath, options); err != nil {
 			return fmt.Errorf("failed to export table %s: %w", tableName, err)
 		}
@@ -744,32 +746,64 @@ func (conn *Connection) scanStringValues(rows driver.Rows, columnCount int) ([]s
 }
 
 // writeFileWithOptions creates and writes data to a file with specified format and compression
-func (conn *Connection) writeFileWithOptions(outputPath string, columns []string, rows driver.Rows, options model.DumpOptions) error {
+func (conn *Connection) writeFileWithOptions(outputPath string, columns []string, rows driver.Rows, options model.DumpOptions) (err error) {
 	// Create the base file
 	file, err := os.Create(outputPath) //nolint:gosec // outputPath is constructed from validated inputs
 	if err != nil {
 		return fmt.Errorf("failed to create file %s: %w", outputPath, err)
 	}
-	defer file.Close()
+
+	// Track whether we completed successfully to decide on cleanup
+	var writeComplete bool
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			// If there was no previous error, propagate the close error
+			err = fmt.Errorf("failed to close file %s: %w", outputPath, closeErr)
+		}
+		// If write was not completed successfully, remove the partial file
+		if !writeComplete {
+			if removeErr := os.Remove(outputPath); removeErr != nil && err == nil {
+				// If there was no previous error, propagate the removal error
+				err = fmt.Errorf("failed to remove partial file %s: %w", outputPath, removeErr)
+			}
+		}
+	}()
 
 	// Create writer with compression if needed
 	writer, closeWriter, err := conn.createWriter(file, options.Compression)
 	if err != nil {
 		return fmt.Errorf("failed to create writer: %w", err)
 	}
-	defer closeWriter()
 
 	// Write data based on format
+	var writeErr error
 	switch options.Format {
 	case model.OutputFormatCSV:
-		return conn.writeCSVData(writer, columns, rows)
+		writeErr = conn.writeCSVData(writer, columns, rows)
 	case model.OutputFormatTSV:
-		return conn.writeTSVData(writer, columns, rows)
+		writeErr = conn.writeTSVData(writer, columns, rows)
 	case model.OutputFormatLTSV:
-		return conn.writeLTSVData(writer, columns, rows)
+		writeErr = conn.writeLTSVData(writer, columns, rows)
 	default:
-		return fmt.Errorf("unsupported output format: %v", options.Format)
+		writeErr = fmt.Errorf("unsupported output format: %v", options.Format)
 	}
+
+	// Close the compressor writer and propagate any close errors
+	if closeErr := closeWriter(); closeErr != nil {
+		if writeErr == nil {
+			writeErr = fmt.Errorf("failed to close writer: %w", closeErr)
+		}
+		// If we had both write and close errors, prioritize the write error
+		// but we still want to clean up the file
+		return writeErr
+	}
+
+	// If write was successful and close was successful, mark as complete
+	if writeErr == nil {
+		writeComplete = true
+	}
+
+	return writeErr
 }
 
 // createWriter creates an appropriate writer based on compression type
@@ -803,7 +837,6 @@ func (conn *Connection) createWriter(file *os.File, compression model.Compressio
 // writeCSVData writes data in CSV format
 func (conn *Connection) writeCSVData(writer io.Writer, columns []string, rows driver.Rows) error {
 	csvWriter := csv.NewWriter(writer)
-	defer csvWriter.Flush()
 
 	// Write header
 	if err := csvWriter.Write(columns); err != nil {
@@ -811,14 +844,23 @@ func (conn *Connection) writeCSVData(writer io.Writer, columns []string, rows dr
 	}
 
 	// Write data rows
-	return conn.writeRowsToCSV(csvWriter, rows, len(columns))
+	if err := conn.writeRowsToCSV(csvWriter, rows, len(columns)); err != nil {
+		return err
+	}
+
+	// Flush and check for any buffered errors
+	csvWriter.Flush()
+	if err := csvWriter.Error(); err != nil {
+		return fmt.Errorf("failed to flush CSV data: %w", err)
+	}
+
+	return nil
 }
 
 // writeTSVData writes data in TSV format
 func (conn *Connection) writeTSVData(writer io.Writer, columns []string, rows driver.Rows) error {
 	csvWriter := csv.NewWriter(writer)
 	csvWriter.Comma = '\t'
-	defer csvWriter.Flush()
 
 	// Write header
 	if err := csvWriter.Write(columns); err != nil {
@@ -826,7 +868,17 @@ func (conn *Connection) writeTSVData(writer io.Writer, columns []string, rows dr
 	}
 
 	// Write data rows
-	return conn.writeRowsToCSV(csvWriter, rows, len(columns))
+	if err := conn.writeRowsToCSV(csvWriter, rows, len(columns)); err != nil {
+		return err
+	}
+
+	// Flush and check for any buffered errors
+	csvWriter.Flush()
+	if err := csvWriter.Error(); err != nil {
+		return fmt.Errorf("failed to flush TSV data: %w", err)
+	}
+
+	return nil
 }
 
 // writeLTSVData writes data in LTSV format
@@ -911,4 +963,34 @@ func (conn *Connection) escapeCSVValue(value string) string {
 	}
 
 	return value
+}
+
+// sanitizeTableName sanitizes table names to prevent path traversal attacks
+// and ensure valid filenames across different operating systems
+func sanitizeTableName(tableName string) string {
+	// First handle .. specifically (path traversal)
+	sanitized := strings.ReplaceAll(tableName, "..", "__")
+
+	// Remove any path separators and potentially dangerous characters
+	// Replace with underscore to maintain readability
+	re := regexp.MustCompile(`[<>:"/\\|?*\x00-\x1f]`)
+	sanitized = re.ReplaceAllString(sanitized, "_")
+
+	// Ensure the filename doesn't start with a dot (hidden file on Unix)
+	if strings.HasPrefix(sanitized, ".") {
+		sanitized = "_" + sanitized[1:]
+	}
+
+	// Limit length to avoid filesystem issues (most filesystems support 255 chars)
+	const maxLength = 200 // Leave room for extensions
+	if len(sanitized) > maxLength {
+		sanitized = sanitized[:maxLength]
+	}
+
+	// Ensure it's not empty after sanitization or contains only underscores
+	if sanitized == "" || strings.Trim(sanitized, "_") == "" {
+		sanitized = "table"
+	}
+
+	return sanitized
 }
