@@ -271,6 +271,10 @@ if err != nil {
 }
 ```
 
+## 🤝 Contribuer
+
+Les contributions sont les bienvenues ! Veuillez consulter le [Guide de Contribution](CONTRIBUTING.md) pour plus de détails.
+
 ## 💖 Soutien
 
 Si vous trouvez ce projet utile, veuillez considérer :

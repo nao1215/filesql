@@ -1,37 +1,8 @@
+version: "2"
 run:
-  timeout: "10m"
   go: "1.24"
-
-issues:
-  exclude:
-    - fmt.Fprintf
-    - fmt.Fprintln
-    - fmt.Fprint
-    - fmt.Printf
-    - fmt.Sscanf
-    - buf.WriteByte
-    - buf.WriteRune
-    - Close
-  exclude-use-default: false
-  exclude-rules:
-    - path: ".*_test\\.go"
-      linters:
-        - goconst
-    - linters:
-      - errcheck
-      source: "defer"
-    - path: "filesql\\.go"
-      linters:
-        - gochecknoinits
-      source: "func init\\(\\)"
-    - path: "driver/.*\\.go"
-      linters:
-        - staticcheck
-      text: "SA1019.*deprecated.*Go 1.8"
-  max-same-issues: 0
-
 linters:
-  enable: # Alphabetic order
+  enable:
     - asciicheck
     - bidichk
     - bodyclose
@@ -41,28 +12,21 @@ linters:
     - decorder
     - dogsled
     - durationcheck
-    - errcheck
     - errchkjson
     - errname
     - errorlint
-    #- exhaustive
     - fatcontext
     - forcetypeassert
     - gocheckcompilerdirectives
     - gochecknoinits
     - goconst
-    #- gocritic
-    - gofmt
-    - goimports
     - gomoddirectives
-    - gosimple
-    - govet
-    - ineffassign
+    - gosec
     - interfacebloat
     - intrange
     - makezero
-    - misspell
     - mirror
+    - misspell
     - nakedret
     - nilerr
     - noctx
@@ -77,26 +41,70 @@ linters:
     - sloglint
     - sqlclosecheck
     - staticcheck
-    - stylecheck
     - tagliatelle
-    - usetesting
     - thelper
-    - typecheck
     - unconvert
     - unparam
-    - unused
     - usestdlibvars
+    - usetesting
     - wastedassign
     - whitespace
-    - gosec
-
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-    check-blank: true
-    disable-default-exclusions: false
-  tagliatelle:
-    case:
-      use-field-name: true
-      rules:
-        json: snake
+  settings:
+    errcheck:
+      disable-default-exclusions: false
+      check-type-assertions: true
+      check-blank: true
+    tagliatelle:
+      case:
+        rules:
+          json: snake
+        use-field-name: true
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - goconst
+        path: .*_test\.go
+      - linters:
+          - errcheck
+        source: defer
+      - linters:
+          - gochecknoinits
+        path: filesql\.go
+        source: func init\(\)
+      - linters:
+          - staticcheck
+        path: driver/.*\.go
+        text: SA1019.*deprecated.*Go 1.8
+      - path: (.+)\.go$
+        text: fmt.Fprintf
+      - path: (.+)\.go$
+        text: fmt.Fprintln
+      - path: (.+)\.go$
+        text: fmt.Fprint
+      - path: (.+)\.go$
+        text: fmt.Printf
+      - path: (.+)\.go$
+        text: fmt.Sscanf
+      - path: (.+)\.go$
+        text: buf.WriteByte
+      - path: (.+)\.go$
+        text: buf.WriteRune
+      - path: (.+)\.go$
+        text: Close
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
