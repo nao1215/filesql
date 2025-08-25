@@ -273,6 +273,10 @@ if err != nil {
 }
 ```
 
+## 🤝 Contributing
+
+Contributions are welcome! Please see the [Contributing Guide](./CONTRIBUTING.md) for more details.
+
 ## 💖 Support
 
 If you find this project useful, please consider:

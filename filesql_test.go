@@ -73,7 +73,7 @@ func TestOpen(t *testing.T) {
 				if len(tt.paths) > 0 {
 					// For the sample file test
 					if strings.Contains(tt.paths[0], "sample.csv") || strings.Contains(tt.paths[0], "testdata") {
-						rows, err := db.Query("SELECT COUNT(*) FROM sample")
+						rows, err := db.QueryContext(context.Background(), "SELECT COUNT(*) FROM sample")
 						if err != nil {
 							t.Errorf("Query() error = %v", err)
 							return
@@ -136,7 +136,7 @@ func TestSQLQueries(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rows, err := db.Query(tt.query)
+			rows, err := db.QueryContext(context.Background(), tt.query)
 			if err != nil {
 				t.Errorf("Query() error = %v", err)
 				return
@@ -190,8 +190,8 @@ func TestRegisterDriver(t *testing.T) {
 	defer db.Close()
 
 	// Test basic connectivity
-	if err := db.Ping(); err != nil {
-		t.Errorf("db.Ping() failed: %v", err)
+	if err := db.PingContext(context.Background()); err != nil {
+		t.Errorf("db.PingContext(context.Background()) failed: %v", err)
 	}
 }
 
@@ -234,7 +234,7 @@ func TestMultipleFiles(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rows, err := db.Query(tt.query)
+			rows, err := db.QueryContext(context.Background(), tt.query)
 			if err != nil {
 				t.Errorf("Query() error = %v", err)
 				return
@@ -280,7 +280,7 @@ func TestJoinMultipleTables(t *testing.T) {
 		GROUP BY u.name
 	`
 
-	rows, err := db.Query(query)
+	rows, err := db.QueryContext(context.Background(), query)
 	if err != nil {
 		t.Errorf("JOIN Query() error = %v", err)
 		return
@@ -365,7 +365,7 @@ func TestDumpDatabase(t *testing.T) {
 				}
 
 				// Modify data to test persistence
-				_, err = db.Exec("INSERT INTO sample (id, name, age, email) VALUES (4, 'Test User', 40, 'test@example.com')")
+				_, err = db.ExecContext(context.Background(), "INSERT INTO sample (id, name, age, email) VALUES (4, 'Test User', 40, 'test@example.com')")
 				if err != nil {
 					t.Fatalf("Failed to insert test data: %v", err)
 				}
@@ -562,7 +562,7 @@ func TestDumpDatabaseSpecialCharacters(t *testing.T) {
 	defer db.Close()
 
 	// Insert data with special characters that need CSV escaping
-	_, err = db.Exec(`INSERT INTO sample (id, name, age, email) VALUES 
+	_, err = db.ExecContext(context.Background(), `INSERT INTO sample (id, name, age, email) VALUES 
 		(10, 'Name, with comma', 25, 'test@example.com'),
 		(11, 'Name "with quotes"', 26, 'test2@example.com'),
 		(12, 'Name' || char(10) || 'with newline', 27, 'test3@example.com')`)
@@ -1064,7 +1064,7 @@ func Test_MalformedCSVHandling(t *testing.T) {
 				// Use bracket notation for table name (safe in controlled test environment)
 				query := "SELECT COUNT(*) FROM [" + tableName + "]"
 				var count int
-				err = db.QueryRow(query).Scan(&count)
+				err = db.QueryRowContext(context.Background(), query).Scan(&count)
 				if err != nil && !tc.expectError {
 					t.Errorf("Query failed: %v", err)
 				}
@@ -1117,7 +1117,7 @@ func Test_ConcurrentAccess(t *testing.T) {
 				query := "SELECT COUNT(*) FROM [" + tableName + "] WHERE id > " + strconv.Itoa(j*5)
 
 				var count int
-				err = db.QueryRow(query).Scan(&count)
+				err = db.QueryRowContext(context.Background(), query).Scan(&count)
 				if err != nil {
 					_ = db.Close() // Ignore close error in test cleanup
 					errors <- fmt.Errorf("goroutine %d: query failed: %w", goroutineID, err)
@@ -1172,7 +1172,7 @@ func Test_ResourceExhaustion(t *testing.T) {
 
 		tableName := model.TableFromFilePath(tmpFile.Name())
 		var count int
-		err = db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
+		err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
 		if err != nil {
 			t.Errorf("Failed to query table with many columns: %v", err)
 		}
@@ -1220,7 +1220,7 @@ func Test_ResourceExhaustion(t *testing.T) {
 
 		tableName := model.TableFromFilePath(tmpFile.Name())
 		var count int
-		err = db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
+		err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
 		if err != nil {
 			t.Errorf("Failed to query table with many rows: %v", err)
 		}
@@ -1254,7 +1254,7 @@ func Test_SQLInjectionProtection(t *testing.T) {
 
 	// Get the actual table name from the database
 	var tableName string
-	err = db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1").Scan(&tableName)
+	err = db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1").Scan(&tableName)
 	if err != nil {
 		t.Skip("Cannot determine table name, skipping SQL injection test")
 		return
@@ -1262,7 +1262,7 @@ func Test_SQLInjectionProtection(t *testing.T) {
 
 	// Test basic query to ensure table exists
 	var count int
-	err = db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
+	err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
 	if err != nil {
 		t.Skip("Table not accessible, skipping SQL injection test")
 		return
@@ -1277,12 +1277,12 @@ func Test_SQLInjectionProtection(t *testing.T) {
 
 	for _, input := range maliciousInputs {
 		// Use prepared statement (which is safer)
-		stmt, err := db.Prepare(fmt.Sprintf("SELECT * FROM [%s] WHERE name = ?", tableName))
+		stmt, err := db.PrepareContext(context.Background(), fmt.Sprintf("SELECT * FROM [%s] WHERE name = ?", tableName))
 		if err != nil {
 			continue // Skip if prepare fails
 		}
 
-		rows, err := stmt.Query(input)
+		rows, err := stmt.QueryContext(context.Background(), input)
 		if err == nil {
 			// Count results
 			var resultCount int
@@ -1353,13 +1353,13 @@ func Test_UnicodeAndEncoding(t *testing.T) {
 
 			// Test basic query
 			var count int
-			err = db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
+			err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
 			if err != nil {
 				t.Errorf("Failed to query Unicode table: %v", err)
 			}
 
 			// Test data retrieval
-			rows, err := db.Query(fmt.Sprintf("SELECT * FROM [%s] LIMIT 1", tableName))
+			rows, err := db.QueryContext(context.Background(), fmt.Sprintf("SELECT * FROM [%s] LIMIT 1", tableName))
 			if err != nil {
 				t.Errorf("Failed to select from Unicode table: %v", err)
 				return
@@ -1417,7 +1417,7 @@ func Test_ConnectionLifecycle(t *testing.T) {
 
 			tableName := model.TableFromFilePath(tmpFile.Name())
 			var count int
-			err = db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
+			err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
 			if err != nil {
 				_ = db.Close() // Ignore close error in test cleanup
 				t.Fatalf("Query failed on iteration %d: %v", i, err)
@@ -1566,7 +1566,7 @@ func Test_SQLReservedWordsAsFilenames(t *testing.T) {
 			// Test 2: Verify table exists with proper name
 			expectedTableName := model.TableFromFilePath(filePath)
 			var actualTableName string
-			err = db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name = ?", expectedTableName).Scan(&actualTableName)
+			err = db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", expectedTableName).Scan(&actualTableName)
 			if err != nil {
 				t.Fatalf("Table for reserved word filename %s not found: %v", rw.filename, err)
 			}
@@ -1579,7 +1579,7 @@ func Test_SQLReservedWordsAsFilenames(t *testing.T) {
 			// Use bracket notation for table name (safe in controlled test environment)
 			query := "SELECT COUNT(*) FROM [" + expectedTableName + "]"
 			var count int
-			err = db.QueryRow(query).Scan(&count)
+			err = db.QueryRowContext(context.Background(), query).Scan(&count)
 			if err != nil {
 				t.Errorf("Failed to query table with reserved word name [%s]: %v", expectedTableName, err)
 			}
@@ -1591,7 +1591,7 @@ func Test_SQLReservedWordsAsFilenames(t *testing.T) {
 			// Test 4: Verify we can select specific data
 			query = fmt.Sprintf("SELECT name FROM [%s] WHERE id = 1", expectedTableName)
 			var name string
-			err = db.QueryRow(query).Scan(&name)
+			err = db.QueryRowContext(context.Background(), query).Scan(&name)
 			if err != nil {
 				t.Errorf("Failed to select specific data from table [%s]: %v", expectedTableName, err)
 			}
@@ -1603,7 +1603,7 @@ func Test_SQLReservedWordsAsFilenames(t *testing.T) {
 			// Test 5: Verify we can perform complex queries
 			query = fmt.Sprintf("SELECT AVG(CAST(value AS REAL)) FROM [%s] WHERE id > 1", expectedTableName)
 			var avgValue float64
-			err = db.QueryRow(query).Scan(&avgValue)
+			err = db.QueryRowContext(context.Background(), query).Scan(&avgValue)
 			if err != nil {
 				t.Errorf("Failed to perform aggregate query on table [%s]: %v", expectedTableName, err)
 			}
@@ -1664,7 +1664,7 @@ func Test_SQLReservedWordsMultipleFiles(t *testing.T) {
 	for _, file := range files {
 		tableName := model.TableFromFilePath(file.name)
 		var name string
-		err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name = ?", tableName).Scan(&name)
+		err := db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", tableName).Scan(&name)
 		if err != nil {
 			t.Errorf("Table for reserved word file %s not found: %v", file.name, err)
 			continue
@@ -1674,7 +1674,7 @@ func Test_SQLReservedWordsMultipleFiles(t *testing.T) {
 		var count int
 		// Use bracket notation for table name (safe in controlled test environment)
 		query := "SELECT COUNT(*) FROM [" + tableName + "]"
-		err = db.QueryRow(query).Scan(&count)
+		err = db.QueryRowContext(context.Background(), query).Scan(&count)
 		if err != nil {
 			t.Errorf("Failed to query reserved word table [%s]: %v", tableName, err)
 		}
@@ -1695,7 +1695,7 @@ func Test_SQLReservedWordsMultipleFiles(t *testing.T) {
 	`
 
 	var queryType, tableName, condition, joinType string
-	err = db.QueryRow(query).Scan(&queryType, &tableName, &condition, &joinType)
+	err = db.QueryRowContext(context.Background(), query).Scan(&queryType, &tableName, &condition, &joinType)
 	if err != nil {
 		t.Errorf("Failed to perform cross-table query with reserved word tables: %v", err)
 	}
@@ -1812,7 +1812,7 @@ func Test_SQLReservedWordsEdgeCases(t *testing.T) {
 
 				// Test table exists
 				var name string
-				err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name = ?", tableName).Scan(&name)
+				err := db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", tableName).Scan(&name)
 				if err != nil {
 					t.Errorf("Table not found for %s: %v", tc.description, err)
 					return
@@ -1822,7 +1822,7 @@ func Test_SQLReservedWordsEdgeCases(t *testing.T) {
 				// Use bracket notation for table name (safe in controlled test environment)
 				query := "SELECT COUNT(*) FROM [" + tableName + "]"
 				var count int
-				err = db.QueryRow(query).Scan(&count)
+				err = db.QueryRowContext(context.Background(), query).Scan(&count)
 				if err != nil {
 					t.Errorf("Failed to query table for %s: %v", tc.description, err)
 					return
@@ -1835,13 +1835,13 @@ func Test_SQLReservedWordsEdgeCases(t *testing.T) {
 				// Test more complex operations
 				// Use bracket notation for table name (safe in controlled test environment)
 				insertQuery := "INSERT INTO [" + tableName + "] (id, data) VALUES (3, 'value3')" //nolint:gosec // Safe: tableName is from controlled test data
-				_, err = db.Exec(insertQuery)
+				_, err = db.ExecContext(context.Background(), insertQuery)
 				if err != nil {
 					t.Errorf("Failed to insert into table for %s: %v", tc.description, err)
 				}
 
 				// Verify insert worked
-				err = db.QueryRow(query).Scan(&count)
+				err = db.QueryRowContext(context.Background(), query).Scan(&count)
 				if err != nil {
 					t.Errorf("Failed to verify insert for %s: %v", tc.description, err)
 				}
@@ -1988,7 +1988,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 		// Test querying with reserved keyword column names
 		// Use bracket notation for table name (safe in controlled test environment)
 		query := "SELECT [select], [from], [where] FROM [" + tableName + "]" //nolint:gosec // Safe: tableName is from controlled test data
-		rows, err := db.Query(query)
+		rows, err := db.QueryContext(context.Background(), query)
 		if err != nil {
 			t.Errorf("Failed to query table with reserved keyword columns: %v", err)
 			return
@@ -2039,7 +2039,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 				// Use bracket notation for table name (safe in controlled test environment)
 				query := "SELECT COUNT(*) FROM [" + tableName + "]"
 				var count int
-				if err := db.QueryRow(query).Scan(&count); err != nil {
+				if err := db.QueryRowContext(context.Background(), query).Scan(&count); err != nil {
 					t.Errorf("Failed to query table from file %s: %v", pattern, err)
 				}
 			})
@@ -2068,13 +2068,13 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 		tableName := model.TableFromFilePath(tmpFile.Name())
 
 		// Test transaction rollback
-		tx, err := db.Begin()
+		tx, err := db.BeginTx(context.Background(), nil)
 		if err != nil {
 			t.Fatalf("Failed to begin transaction: %v", err)
 		}
 
 		// Insert data in transaction
-		_, err = tx.Exec(fmt.Sprintf("INSERT INTO [%s] (id, name) VALUES (2, 'transaction')", tableName))
+		_, err = tx.ExecContext(context.Background(), fmt.Sprintf("INSERT INTO [%s] (id, name) VALUES (2, 'transaction')", tableName))
 		if err != nil {
 			t.Errorf("Failed to insert in transaction: %v", err)
 		}
@@ -2086,7 +2086,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 
 		// Verify data was rolled back
 		var count int
-		err = db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
+		err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
 		if err != nil {
 			t.Errorf("Failed to count after rollback: %v", err)
 		}
@@ -2095,12 +2095,12 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 		}
 
 		// Test transaction commit
-		tx, err = db.Begin()
+		tx, err = db.BeginTx(context.Background(), nil)
 		if err != nil {
 			t.Fatalf("Failed to begin second transaction: %v", err)
 		}
 
-		_, err = tx.Exec(fmt.Sprintf("INSERT INTO [%s] (id, name) VALUES (2, 'committed')", tableName))
+		_, err = tx.ExecContext(context.Background(), fmt.Sprintf("INSERT INTO [%s] (id, name) VALUES (2, 'committed')", tableName))
 		if err != nil {
 			t.Errorf("Failed to insert in second transaction: %v", err)
 		}
@@ -2110,7 +2110,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 		}
 
 		// Verify data was committed
-		err = db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
+		err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
 		if err != nil {
 			t.Errorf("Failed to count after commit: %v", err)
 		}
@@ -2194,14 +2194,14 @@ func TestComprehensiveFileFormats(t *testing.T) {
 
 			// Verify table exists
 			var tableName string
-			err = db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name = ?", tc.expectTable).Scan(&tableName)
+			err = db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", tc.expectTable).Scan(&tableName)
 			if err != nil {
 				t.Fatalf("Table %s not found: %v", tc.expectTable, err)
 			}
 
 			// Count rows
 			var count int
-			err = db.QueryRow("SELECT COUNT(*) FROM [" + tc.expectTable + "]").Scan(&count)
+			err = db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM ["+tc.expectTable+"]").Scan(&count)
 			if err != nil {
 				t.Fatalf("Failed to count rows in %s: %v", tc.expectTable, err)
 			}
@@ -2213,7 +2213,7 @@ func TestComprehensiveFileFormats(t *testing.T) {
 			// Test basic SELECT
 			// Use bracket notation for table name (safe in controlled test environment)
 			query := "SELECT * FROM [" + tc.expectTable + "] LIMIT 1" //nolint:gosec // Safe: tc.expectTable is from controlled test data
-			rows, err := db.Query(query)
+			rows, err := db.QueryContext(context.Background(), query)
 			if err != nil {
 				t.Fatalf("SELECT query failed: %v", err)
 			}
@@ -2242,7 +2242,7 @@ func TestDirectoryLoading(t *testing.T) {
 	defer db.Close()
 
 	// Get all table names
-	rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+	rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
 	if err != nil {
 		t.Fatalf("Failed to get table names: %v", err)
 	}
@@ -2278,7 +2278,7 @@ func TestDirectoryLoading(t *testing.T) {
 
 	// Test cross-table query
 	var count int
-	err = db.QueryRow("SELECT COUNT(*) FROM sample s JOIN products p ON s.id = p.id").Scan(&count)
+	err = db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM sample s JOIN products p ON s.id = p.id").Scan(&count)
 	if err != nil {
 		t.Fatalf("Cross-table JOIN query failed: %v", err)
 	}
@@ -2303,7 +2303,7 @@ func TestMultipleFilePaths(t *testing.T) {
 	expectedTables := []string{"sample", "products", "logs"}
 	for _, tableName := range expectedTables {
 		var name string
-		err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name = ?", tableName).Scan(&name)
+		err := db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", tableName).Scan(&name)
 		if err != nil {
 			t.Errorf("Table %s not found: %v", tableName, err)
 		}
@@ -2318,7 +2318,7 @@ func TestMultipleFilePaths(t *testing.T) {
 		LIMIT 5
 	`
 
-	rows, err := db.Query(query)
+	rows, err := db.QueryContext(context.Background(), query)
 	if err != nil {
 		t.Fatalf("Multi-table query failed: %v", err)
 	}
@@ -2407,7 +2407,7 @@ func TestCTEQueries(t *testing.T) {
 			// Don't run in parallel to avoid database closing issues
 			// t.Parallel()
 
-			rows, err := db.Query(tc.query)
+			rows, err := db.QueryContext(context.Background(), tc.query)
 			if err != nil {
 				t.Fatalf("CTE query failed: %v\nQuery: %s", err, tc.query)
 			}
@@ -2465,20 +2465,20 @@ func TestMixedDirectoryAndFiles(t *testing.T) {
 
 	// Verify the temp file table exists
 	var tableName string
-	err = db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name = ?", "mixed_test").Scan(&tableName)
+	err = db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", "mixed_test").Scan(&tableName)
 	if err != nil {
 		t.Fatalf("Table mixed_test not found: %v", err)
 	}
 
 	// Verify original directory tables also exist
-	err = db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name = ?", "sample").Scan(&tableName)
+	err = db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", "sample").Scan(&tableName)
 	if err != nil {
 		t.Fatalf("Table sample from directory not found: %v", err)
 	}
 
 	// Test query across mixed sources
 	var count int
-	err = db.QueryRow("SELECT COUNT(*) FROM mixed_test").Scan(&count)
+	err = db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM mixed_test").Scan(&count)
 	if err != nil {
 		t.Fatalf("Query on mixed_test table failed: %v", err)
 	}

@@ -725,12 +725,13 @@ func (conn *Connection) scanStringValues(rows driver.Rows, columnCount int) ([]s
 
 		// For table names, extract from index 0; for column names, extract from index 1
 		var value string
-		if columnCount == 1 {
+		switch columnCount {
+		case 1:
 			// Table names query
 			if name, ok := dest[0].(string); ok {
 				value = name
 			}
-		} else if columnCount == 6 {
+		case 6:
 			// Column names query (PRAGMA table_info)
 			if name, ok := dest[1].(string); ok { // Column name is at index 1
 				value = name
