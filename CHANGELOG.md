@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2025-08-26
+
+### Added
+- **🎉 Initial major feature release (v0.1.0)**: Library with comprehensive Builder pattern and auto-save functionality
+- **Builder pattern architecture**: Complete implementation of extensible Builder pattern for flexible configuration
+  - `NewBuilder()` provides fluent API for database construction
+  - `AddPath()` method for adding individual files and directories
+  - `AddFS()` method for embedded filesystem support (go:embed compatibility)
+  - `EnableAutoSave()` and `EnableAutoSaveOnCommit()` for automatic data persistence
+  - `Build()` method with comprehensive validation and error checking
+  - Chainable method design for clean, readable configuration code
+- **go:embed and fs.FS support**: Full integration with Go's embedded filesystem capabilities
+  - Works seamlessly with `//go:embed` directive for embedded data files
+  - Custom `fs.FS` implementation support for advanced use cases
+  - Automatic temporary file management for embedded content
+  - Cross-platform embedded file handling
+- **Advanced auto-save functionality**: Comprehensive automatic data persistence system
+  - **Two timing modes**: Save on database close (`OnClose`) or transaction commit (`OnCommit`)
+  - **Overwrite mode**: Automatically saves back to original file locations when output directory is empty
+  - **Directory mode**: Saves to specified backup directory with original file names
+  - **Format preservation**: Maintains original file formats (CSV, TSV, LTSV) and compression
+  - **Configurable compression**: Support for gzip, bzip2, xz, and zstd compression options
+  - **Transaction integration**: Seamless integration with database transaction lifecycle
+
+### Changed
+- **Breaking change**: Enhanced driver interface with auto-save configuration support
+  - Extended `Connection` struct with auto-save capabilities and original path tracking
+  - Updated `Connector` interface to support Builder-generated configurations
+  - DSN format extended to include JSON-encoded auto-save configuration via base64 encoding
+- **Enhanced export system**: Improved table export with comprehensive format support
+  - Extended `DumpOptions` with detailed format and compression configuration
+  - Enhanced compression detection and writer creation pipeline
+  - Improved error handling with proper resource cleanup and partial file removal
+  - Better cross-platform file path handling and sanitization
+
+### Fixed
+- **Auto-save overwrite mode**: Fixed critical issue where overwrite mode incorrectly used current working directory
+  - Now properly uses original input file locations for file overwrites
+  - Maintains correct directory structure and file naming conventions
+  - Preserves original file formats and compression settings automatically
+- **Builder validation**: Enhanced configuration validation with detailed error reporting
+- **Memory management**: Improved cleanup of temporary files created from embedded filesystems
+
+### Technical Details
+- **Feature completeness**: v0.1.0 introduces major Builder pattern and auto-save functionality
+- **Comprehensive testing**: Extensive test coverage including Builder pattern, auto-save functionality, and embedded filesystem support
+- **Documentation updates**: All 7 language README files updated with auto-save examples and Builder pattern usage
+- **Code quality**: All linting issues resolved, comprehensive error handling with `errors.Join()` (Go 1.20+)
+- **Cross-platform compatibility**: Verified functionality across Linux, macOS, and Windows with embedded filesystems
+
 ## [0.0.4] - 2025-08-24
 
 ### Added
@@ -133,7 +183,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/nao1215/filesql/compare/v0.0.4...v0.1.0
 [0.0.4]: https://github.com/nao1215/filesql/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/nao1215/filesql/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/nao1215/filesql/compare/v0.0.1...v0.0.2
