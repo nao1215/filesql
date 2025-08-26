@@ -50,6 +50,7 @@ type Connector struct {
 type Connection struct {
 	conn           driver.Conn     // Underlying SQLite connection with loaded file data
 	autoSaveConfig *AutoSaveConfig // Auto-save configuration if enabled
+	originalPaths  []string        // Original input file paths for overwrite mode
 }
 
 // AutoSaveConfig holds configuration for automatic saving
@@ -114,6 +115,7 @@ func (c *Connector) Connect(_ context.Context) (driver.Conn, error) {
 	return &Connection{
 		conn:           conn,
 		autoSaveConfig: autoSaveConfig,
+		originalPaths:  strings.Split(filePaths, ";"),
 	}, nil
 }
 
@@ -663,10 +665,8 @@ func (conn *Connection) performAutoSave() error {
 
 	outputDir := conn.autoSaveConfig.OutputDir
 	if outputDir == "" {
-		// If no output directory specified, this means overwrite mode
-		// We need to determine the original input directory
-		// For now, use current directory as fallback
-		outputDir = "."
+		// Overwrite mode - save to original file locations
+		return conn.overwriteOriginalFiles()
 	}
 
 	// Use the configured DumpOptions directly
@@ -674,6 +674,92 @@ func (conn *Connection) performAutoSave() error {
 
 	// Use the existing DumpWithOptions method
 	return conn.DumpWithOptions(outputDir, dumpOptions)
+}
+
+// overwriteOriginalFiles saves each table back to its original file location
+func (conn *Connection) overwriteOriginalFiles() error {
+	if len(conn.originalPaths) == 0 {
+		return errors.New("no original file paths available for overwrite mode")
+	}
+
+	// Get all table names from the database
+	tableNames, err := conn.getTableNames()
+	if err != nil {
+		return fmt.Errorf("failed to get table names: %w", err)
+	}
+
+	// Create a map of table names to original file paths
+	tableToPath := make(map[string]string)
+	for _, filePath := range conn.originalPaths {
+		// Skip directories and unsupported files
+		if !model.IsSupportedFile(filepath.Base(filePath)) {
+			continue
+		}
+		tableName := model.TableFromFilePath(filePath)
+		tableToPath[tableName] = filePath
+	}
+
+	// Export each table to its original file path
+	var errs []error
+	for _, tableName := range tableNames {
+		originalPath, exists := tableToPath[tableName]
+		if !exists {
+			// Skip tables that don't have a corresponding original file
+			continue
+		}
+
+		// Determine the output format from the original file extension
+		options := conn.determineOptionsFromPath(originalPath)
+
+		// Export the table to its original location
+		if err := conn.exportTableWithOptions(tableName, originalPath, options); err != nil {
+			errs = append(errs, fmt.Errorf("failed to overwrite %s: %w", originalPath, err))
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+// determineOptionsFromPath determines DumpOptions based on the file path extension
+func (conn *Connection) determineOptionsFromPath(filePath string) model.DumpOptions {
+	options := conn.autoSaveConfig.Options
+
+	// If format is not explicitly set, determine from file extension
+	if options.Format == model.OutputFormatCSV { // Default format, might need to be overridden
+		// Remove compression extensions to get the base file type
+		basePath := filePath
+		for _, compExt := range []string{model.ExtGZ, model.ExtBZ2, model.ExtXZ, model.ExtZSTD} {
+			if strings.HasSuffix(strings.ToLower(basePath), compExt) {
+				basePath = strings.TrimSuffix(basePath, compExt)
+				break
+			}
+		}
+
+		baseExt := strings.ToLower(filepath.Ext(basePath))
+		switch baseExt {
+		case model.ExtTSV:
+			options.Format = model.OutputFormatTSV
+		case model.ExtLTSV:
+			options.Format = model.OutputFormatLTSV
+		default:
+			options.Format = model.OutputFormatCSV
+		}
+	}
+
+	// If compression is not explicitly set, determine from file extension
+	if options.Compression == model.CompressionNone { // Default compression, might need to be overridden
+		if strings.HasSuffix(strings.ToLower(filePath), model.ExtGZ) {
+			options.Compression = model.CompressionGZ
+		} else if strings.HasSuffix(strings.ToLower(filePath), model.ExtBZ2) {
+			options.Compression = model.CompressionBZ2
+		} else if strings.HasSuffix(strings.ToLower(filePath), model.ExtXZ) {
+			options.Compression = model.CompressionXZ
+		} else if strings.HasSuffix(strings.ToLower(filePath), model.ExtZSTD) {
+			options.Compression = model.CompressionZSTD
+		}
+	}
+
+	return options
 }
 
 // Rollback implements driver.Tx interface
