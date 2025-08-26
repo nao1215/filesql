@@ -1440,3 +1440,320 @@ func minInt(a, b int) int {
 	}
 	return b
 }
+
+// Additional tests for low coverage functions
+func TestDriverOpenConnector_SuccessCases(t *testing.T) {
+	t.Parallel()
+
+	d := NewDriver()
+
+	t.Run("valid CSV file", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		csvFile := filepath.Join(tmpDir, "test.csv")
+		if err := os.WriteFile(csvFile, []byte("name,age\nAlice,25\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		connector, err := d.OpenConnector(csvFile)
+		if err != nil {
+			t.Errorf("OpenConnector with valid CSV should not error: %v", err)
+		}
+		if connector == nil {
+			t.Error("OpenConnector should return valid connector")
+		}
+	})
+
+	t.Run("multiple valid files", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		csvFile1 := filepath.Join(tmpDir, "test1.csv")
+		csvFile2 := filepath.Join(tmpDir, "test2.csv")
+
+		if err := os.WriteFile(csvFile1, []byte("name\nAlice\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(csvFile2, []byte("age\n25\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		dsn := csvFile1 + ";" + csvFile2
+		connector, err := d.OpenConnector(dsn)
+		if err != nil {
+			t.Errorf("OpenConnector with multiple files should not error: %v", err)
+		}
+		if connector == nil {
+			t.Error("OpenConnector should return valid connector")
+		}
+	})
+}
+
+func TestDSNParsing_SuccessCases(t *testing.T) {
+	t.Parallel()
+
+	d := NewDriver()
+
+	t.Run("single path", func(t *testing.T) {
+		t.Parallel()
+		_, err := d.OpenConnector("../testdata/sample.csv")
+		if err != nil {
+			t.Errorf("OpenConnector with single path should work: %v", err)
+		}
+	})
+
+	t.Run("multiple paths", func(t *testing.T) {
+		t.Parallel()
+		_, err := d.OpenConnector("../testdata/sample.csv;../testdata/users.csv")
+		if err != nil {
+			t.Errorf("OpenConnector with multiple paths should work: %v", err)
+		}
+	})
+
+	t.Run("trailing semicolon", func(t *testing.T) {
+		t.Parallel()
+		_, err := d.OpenConnector("../testdata/sample.csv;")
+		if err != nil {
+			t.Errorf("OpenConnector with trailing semicolon should work: %v", err)
+		}
+	})
+}
+
+func TestConnection_Transaction_ErrorCases(t *testing.T) {
+	t.Parallel()
+
+	// Create a temporary CSV file
+	tmpDir := t.TempDir()
+	csvFile := filepath.Join(tmpDir, "test.csv")
+	csvContent := "name,age\nAlice,25\nBob,30\n"
+	if err := os.WriteFile(csvFile, []byte(csvContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create connection
+	d := NewDriver()
+	connector, err := d.OpenConnector(csvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := connector.Connect(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	t.Run("begin transaction twice", func(t *testing.T) {
+		filesqlConn, ok := conn.(*Connection)
+		if !ok {
+			t.Fatal("connection is not a filesql connection")
+		}
+
+		// Begin first transaction
+		tx1, err := filesqlConn.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Try to begin second transaction (should fail)
+		tx2, err := filesqlConn.Begin()
+		if err == nil {
+			if tx2 != nil {
+				if rollbackErr := tx2.Rollback(); rollbackErr != nil {
+					t.Logf("Failed to rollback tx2: %v", rollbackErr)
+				}
+			}
+			t.Error("Beginning second transaction should fail")
+		}
+
+		// Clean up first transaction
+		if rollbackErr := tx1.Rollback(); rollbackErr != nil {
+			t.Logf("Failed to rollback tx1: %v", rollbackErr)
+		}
+	})
+
+	t.Run("begin transaction when one already exists", func(t *testing.T) {
+		filesqlConn, ok := conn.(*Connection)
+		if !ok {
+			t.Fatal("connection is not a filesql connection")
+		}
+
+		// Begin first transaction
+		tx1, err := filesqlConn.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if rollbackErr := tx1.Rollback(); rollbackErr != nil {
+				t.Logf("Failed to rollback tx1: %v", rollbackErr)
+			}
+		}()
+
+		// Try to begin second transaction while first is active
+		tx2, err := filesqlConn.Begin()
+		if err == nil {
+			if tx2 != nil {
+				if rollbackErr := tx2.Rollback(); rollbackErr != nil {
+					t.Logf("Failed to rollback tx2: %v", rollbackErr)
+				}
+			}
+			t.Error("Beginning second transaction while first is active should fail")
+		}
+	})
+
+	t.Run("rollback after commit", func(t *testing.T) {
+		filesqlConn, ok := conn.(*Connection)
+		if !ok {
+			t.Fatal("connection is not a filesql connection")
+		}
+
+		tx, err := filesqlConn.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Commit the transaction
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+
+		// Try to rollback after commit (should fail)
+		err = tx.Rollback()
+		if err == nil {
+			t.Error("Rollback after commit should fail")
+		}
+	})
+}
+
+func TestConnection_PrepareContext_Success(t *testing.T) {
+	t.Parallel()
+
+	// Create a temporary CSV file
+	tmpDir := t.TempDir()
+	csvFile := filepath.Join(tmpDir, "test.csv")
+	csvContent := "name,age\nAlice,25\n"
+	if err := os.WriteFile(csvFile, []byte(csvContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create connection
+	d := NewDriver()
+	connector, err := d.OpenConnector(csvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := connector.Connect(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	filesqlConn, ok := conn.(*Connection)
+	if !ok {
+		t.Fatal("connection is not a filesql connection")
+	}
+
+	t.Run("prepare valid SQL", func(t *testing.T) {
+		stmt, err := filesqlConn.PrepareContext(t.Context(), "SELECT * FROM test")
+		if err != nil {
+			t.Errorf("PrepareContext with valid SQL should work: %v", err)
+		}
+		if stmt != nil {
+			if closeErr := stmt.Close(); closeErr != nil {
+				t.Logf("Failed to close statement: %v", closeErr)
+			}
+		}
+	})
+
+	t.Run("legacy prepare valid SQL", func(t *testing.T) {
+		stmt, err := filesqlConn.Prepare("SELECT name FROM test")
+		if err != nil {
+			t.Errorf("Prepare with valid SQL should work: %v", err)
+		}
+		if stmt != nil {
+			if closeErr := stmt.Close(); closeErr != nil {
+				t.Logf("Failed to close statement: %v", closeErr)
+			}
+		}
+	})
+}
+
+func TestConnection_DumpSuccess(t *testing.T) {
+	t.Parallel()
+
+	// Create a temporary CSV file
+	tmpDir := t.TempDir()
+	csvFile := filepath.Join(tmpDir, "test.csv")
+	csvContent := "name,age\nAlice,25\n"
+	if err := os.WriteFile(csvFile, []byte(csvContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create connection
+	d := NewDriver()
+	connector, err := d.OpenConnector(csvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := connector.Connect(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	filesqlConn, ok := conn.(*Connection)
+	if !ok {
+		t.Fatal("connection is not a filesql connection")
+	}
+
+	t.Run("dump to valid directory", func(t *testing.T) {
+		outputDir := filepath.Join(tmpDir, "output")
+		if err := os.MkdirAll(outputDir, 0750); err != nil {
+			t.Fatal(err)
+		}
+
+		err := filesqlConn.Dump(outputDir)
+		if err != nil {
+			t.Errorf("Dump to valid directory should work: %v", err)
+		}
+	})
+}
+
+func TestPathValidation_SuccessCases(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	d := NewDriver()
+
+	t.Run("valid CSV file", func(t *testing.T) {
+		csvPath := filepath.Join(tmpDir, "valid.csv")
+		if err := os.WriteFile(csvPath, []byte("col1\nval1\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := d.OpenConnector(csvPath)
+		if err != nil {
+			t.Errorf("Valid CSV file should work: %v", err)
+		}
+	})
+
+	t.Run("directory with supported files", func(t *testing.T) {
+		dirPath := filepath.Join(tmpDir, "testdir")
+		if err := os.MkdirAll(dirPath, 0750); err != nil {
+			t.Fatal(err)
+		}
+
+		csvPath := filepath.Join(dirPath, "test.csv")
+		if err := os.WriteFile(csvPath, []byte("col1\nval1\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := d.OpenConnector(dirPath)
+		if err != nil {
+			t.Errorf("Directory with supported files should work: %v", err)
+		}
+	})
+}

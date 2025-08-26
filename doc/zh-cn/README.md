@@ -254,9 +254,10 @@ rows, err := db.QueryContext(ctx, `
 - 还有更多！
 
 ### 数据修改
-- `INSERT`、`UPDATE` 和 `DELETE` 操作只影响内存数据库
-- **原文件保持不变** - filesql 永远不会修改您的源文件
-- 这使得安全地实验数据转换成为可能
+- `INSERT`、`UPDATE` 和 `DELETE` 操作影响内存数据库
+- **原文件默认保持不变** - filesql 不会修改您的源文件，除非您使用自动保存功能
+- 您可以使用**自动保存**功能在关闭时或提交时自动将更改持久化到文件
+- 这使得在提供可选持久化功能的同时安全地实验数据转换成为可能
 
 ### 高级 SQL 功能
 
@@ -297,9 +298,86 @@ query := `
 rows, err := db.QueryContext(ctx, query)
 ```
 
-### 导出修改的数据
+### 自动保存功能
 
-如果您需要持久化对内存数据库所做的更改：
+filesql 提供自动保存功能，可以自动将数据库更改持久化到文件。您可以选择两种时机选项：
+
+#### 数据库关闭时自动保存
+
+当数据库连接关闭时自动保存更改（推荐用于大多数用例）：
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// 启用关闭时自动保存
+builder := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSave("./backup") // 保存到备份目录
+
+validatedBuilder, err := builder.Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer validatedBuilder.Cleanup()
+
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close() // 这里触发自动保存
+
+// 进行修改 - 将在关闭时自动保存
+_, err = db.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE status = 'pending'")
+_, err = db.ExecContext(ctx, "INSERT INTO data (name, status) VALUES ('New Record', 'active')")
+```
+
+#### 事务提交时自动保存
+
+在每次事务提交后自动保存更改（用于频繁持久化）：
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// 启用提交时自动保存 - 空字符串表示覆盖原文件
+builder := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSaveOnCommit("") // 覆盖原文件
+
+validatedBuilder, err := builder.Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer validatedBuilder.Cleanup()
+
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// 每次提交都会自动保存到文件
+tx, err := db.BeginTx(ctx, nil)
+if err != nil {
+    log.Fatal(err)
+}
+
+_, err = tx.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE id = 1")
+if err != nil {
+    tx.Rollback()
+    log.Fatal(err)
+}
+
+err = tx.Commit() // 这里触发自动保存
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### 手动数据导出（自动保存的替代方案）
+
+如果您喜欢手动控制何时将更改保存到文件而不使用自动保存：
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

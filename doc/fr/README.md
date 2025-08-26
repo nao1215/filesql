@@ -254,9 +254,10 @@ rows, err := db.QueryContext(ctx, `
 - Et bien plus encore !
 
 ### Modifications de données
-- Les opérations `INSERT`, `UPDATE` et `DELETE` n'affectent que la base de données en mémoire
-- **Les fichiers originaux restent inchangés** - filesql ne modifie jamais vos fichiers sources
-- Cela rend l'expérimentation avec les transformations de données sûre
+- Les opérations `INSERT`, `UPDATE` et `DELETE` affectent la base de données en mémoire
+- **Les fichiers originaux restent inchangés par défaut** - filesql ne modifie pas vos fichiers sources sauf si vous utilisez la sauvegarde automatique
+- Vous pouvez utiliser la **sauvegarde automatique** pour persister automatiquement les modifications dans les fichiers lors de la fermeture ou du commit
+- Cela rend l'expérimentation avec les transformations de données sûre tout en fournissant une persistance optionnelle
 
 ### Fonctionnalités SQL avancées
 
@@ -297,9 +298,86 @@ query := `
 rows, err := db.QueryContext(ctx, query)
 ```
 
-### Exporter des données modifiées
+### Fonctionnalité de Sauvegarde Automatique
 
-Si vous devez persister les modifications apportées à la base de données en mémoire :
+filesql fournit une fonctionnalité de sauvegarde automatique pour persister automatiquement les modifications de la base de données dans les fichiers. Vous pouvez choisir entre deux options de temporisation :
+
+#### Sauvegarde Automatique à la Fermeture de la Base de Données
+
+Sauvegarde automatiquement les modifications lors de la fermeture de la connexion de base de données (recommandé pour la plupart des cas d'usage) :
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// Activer la sauvegarde automatique à la fermeture
+builder := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSave("./backup") // Sauvegarder dans le répertoire de sauvegarde
+
+validatedBuilder, err := builder.Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer validatedBuilder.Cleanup()
+
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close() // Sauvegarde automatique déclenchée ici
+
+// Effectuer des modifications - sera sauvegardé automatiquement à la fermeture
+_, err = db.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE status = 'pending'")
+_, err = db.ExecContext(ctx, "INSERT INTO data (name, status) VALUES ('New Record', 'active')")
+```
+
+#### Sauvegarde Automatique au Commit de Transaction
+
+Sauvegarde automatiquement les modifications après chaque commit de transaction (pour une persistance fréquente) :
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// Activer la sauvegarde automatique au commit - chaîne vide signifie écraser les fichiers originaux
+builder := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSaveOnCommit("") // Écraser les fichiers originaux
+
+validatedBuilder, err := builder.Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer validatedBuilder.Cleanup()
+
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// Chaque commit sauvegardera automatiquement dans les fichiers
+tx, err := db.BeginTx(ctx, nil)
+if err != nil {
+    log.Fatal(err)
+}
+
+_, err = tx.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE id = 1")
+if err != nil {
+    tx.Rollback()
+    log.Fatal(err)
+}
+
+err = tx.Commit() // Sauvegarde automatique déclenchée ici
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Exportation Manuelle de Données (Alternative à la Sauvegarde Automatique)
+
+Si vous préférez un contrôle manuel sur le moment de sauvegarder les modifications dans les fichiers plutôt que d'utiliser la sauvegarde automatique :
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

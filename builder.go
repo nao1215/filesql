@@ -4,6 +4,8 @@ package filesql
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -38,6 +40,30 @@ type DBBuilder struct {
 	collectedPaths []string
 	// tempFiles tracks temporary files created for cleanup
 	tempFiles []string
+	// autoSaveConfig contains auto-save settings
+	autoSaveConfig *AutoSaveConfig
+}
+
+// AutoSaveTiming specifies when automatic saving should occur
+type AutoSaveTiming int
+
+const (
+	// AutoSaveOnClose saves data when db.Close() is called (default)
+	AutoSaveOnClose AutoSaveTiming = iota
+	// AutoSaveOnCommit saves data when transaction is committed
+	AutoSaveOnCommit
+)
+
+// AutoSaveConfig holds configuration for automatic saving
+type AutoSaveConfig struct {
+	// Enabled indicates whether auto-save is enabled
+	Enabled bool
+	// Timing specifies when to save (on close or on commit)
+	Timing AutoSaveTiming
+	// OutputDir is the directory where files will be saved (overwrites original files)
+	OutputDir string
+	// Options contains dump options for formatting
+	Options DumpOptions
 }
 
 // NewBuilder creates a new database builder for configuring file inputs.
@@ -65,6 +91,7 @@ func NewBuilder() *DBBuilder {
 		filesystems:    make([]fs.FS, 0),
 		collectedPaths: make([]string, 0),
 		tempFiles:      make([]string, 0),
+		autoSaveConfig: nil, // Default: no auto-save
 	}
 }
 
@@ -113,6 +140,71 @@ func (b *DBBuilder) AddPaths(paths ...string) *DBBuilder {
 // Returns the builder for method chaining.
 func (b *DBBuilder) AddFS(filesystem fs.FS) *DBBuilder {
 	b.filesystems = append(b.filesystems, filesystem)
+	return b
+}
+
+// EnableAutoSave enables automatic saving when the database connection is closed.
+// Files will be overwritten in their original locations with the current database content.
+// This uses the same functionality as DumpDatabase() internally.
+//
+// The outputDir parameter specifies where to save the files. If empty, files will be
+// saved to their original locations (overwrite mode).
+//
+// Example:
+//
+//	builder := filesql.NewBuilder().
+//		AddPath("data.csv").
+//		EnableAutoSave("./backup", NewDumpOptions()) // Save to backup directory on close
+//
+// Returns the builder for method chaining.
+func (b *DBBuilder) EnableAutoSave(outputDir string, options ...DumpOptions) *DBBuilder {
+	opts := NewDumpOptions()
+	if len(options) > 0 {
+		opts = options[0]
+	}
+
+	b.autoSaveConfig = &AutoSaveConfig{
+		Enabled:   true,
+		Timing:    AutoSaveOnClose, // Default to close-time saving
+		OutputDir: outputDir,
+		Options:   opts,
+	}
+	return b
+}
+
+// EnableAutoSaveOnCommit enables automatic saving when transactions are committed.
+// Files will be overwritten in their original locations with the current database content.
+// This provides more frequent saves but may impact performance for frequent commits.
+//
+// The outputDir parameter specifies where to save the files. If empty, files will be
+// saved to their original locations (overwrite mode).
+//
+// Example:
+//
+//	builder := filesql.NewBuilder().
+//		AddPath("data.csv").
+//		EnableAutoSaveOnCommit("", NewDumpOptions()) // Overwrite original on each commit
+//
+// Returns the builder for method chaining.
+func (b *DBBuilder) EnableAutoSaveOnCommit(outputDir string, options ...DumpOptions) *DBBuilder {
+	opts := NewDumpOptions()
+	if len(options) > 0 {
+		opts = options[0]
+	}
+
+	b.autoSaveConfig = &AutoSaveConfig{
+		Enabled:   true,
+		Timing:    AutoSaveOnCommit,
+		OutputDir: outputDir,
+		Options:   opts,
+	}
+	return b
+}
+
+// DisableAutoSave disables automatic saving (default behavior).
+// Returns the builder for method chaining.
+func (b *DBBuilder) DisableAutoSave() *DBBuilder {
+	b.autoSaveConfig = nil
 	return b
 }
 
@@ -198,8 +290,18 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 		return nil, errors.New("no valid input files found, did you call Build()?")
 	}
 
-	// Create DSN with all collected paths
+	// Create DSN with all collected paths and auto-save config
 	dsn := strings.Join(b.collectedPaths, ";")
+
+	// Append auto-save configuration to DSN if enabled
+	if b.autoSaveConfig != nil && b.autoSaveConfig.Enabled {
+		configJSON, err := json.Marshal(b.autoSaveConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize auto-save config: %w", err)
+		}
+		configEncoded := base64.StdEncoding.EncodeToString(configJSON)
+		dsn += "?autosave=" + configEncoded
+	}
 
 	// Open database connection
 	db, err := sql.Open(DriverName, dsn)

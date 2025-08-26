@@ -254,9 +254,10 @@ rows, err := db.QueryContext(ctx, `
 - И многое другое!
 
 ### Модификация данных
-- Операции `INSERT`, `UPDATE` и `DELETE` влияют только на базу данных в памяти
-- **Исходные файлы остаются неизменными** — filesql никогда не изменяет ваши исходные файлы
-- Это делает безопасным эксперименты с преобразованием данных
+- Операции `INSERT`, `UPDATE` и `DELETE` влияют на базу данных в памяти
+- **Исходные файлы остаются неизменными по умолчанию** — filesql не изменяет ваши исходные файлы, если только вы не используете автосохранение
+- Вы можете использовать **автосохранение** для автоматического сохранения изменений в файлы при закрытии или коммите
+- Это делает безопасными эксперименты с преобразованием данных, предоставляя при этом опциональную персистентность
 
 ### Расширенные возможности SQL
 
@@ -297,9 +298,86 @@ query := `
 rows, err := db.QueryContext(ctx, query)
 ```
 
-### Экспорт изменённых данных
+### Функция автосохранения
 
-Если вам нужно сохранить изменения, сделанные в базе данных в памяти:
+filesql предоставляет функцию автосохранения для автоматического сохранения изменений базы данных в файлы. Вы можете выбрать из двух вариантов времени сохранения:
+
+#### Автосохранение при закрытии базы данных
+
+Автоматически сохраняет изменения при закрытии соединения с базой данных (рекомендуется для большинства случаев использования):
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// Включить автосохранение при закрытии
+builder := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSave("./backup") // Сохранить в директорию резервных копий
+
+validatedBuilder, err := builder.Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer validatedBuilder.Cleanup()
+
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close() // Автосохранение запускается здесь
+
+// Вносим изменения — они будут автоматически сохранены при закрытии
+_, err = db.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE status = 'pending'")
+_, err = db.ExecContext(ctx, "INSERT INTO data (name, status) VALUES ('New Record', 'active')")
+```
+
+#### Автосохранение при коммите транзакции
+
+Автоматически сохраняет изменения после каждого коммита транзакции (для частого сохранения):
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// Включить автосохранение при коммите — пустая строка означает перезапись исходных файлов
+builder := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSaveOnCommit("") // Перезаписать исходные файлы
+
+validatedBuilder, err := builder.Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer validatedBuilder.Cleanup()
+
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// Каждый коммит будет автоматически сохраняться в файлы
+tx, err := db.BeginTx(ctx, nil)
+if err != nil {
+    log.Fatal(err)
+}
+
+_, err = tx.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE id = 1")
+if err != nil {
+    tx.Rollback()
+    log.Fatal(err)
+}
+
+err = tx.Commit() // Автосохранение запускается здесь
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Ручной экспорт данных (альтернатива автосохранению)
+
+Если вы предпочитаете ручное управление тем, когда сохранять изменения в файлы, вместо использования автосохранения:
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

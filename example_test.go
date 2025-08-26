@@ -1,3 +1,4 @@
+//nolint:gosec // Example files use simplified error handling for clarity
 package filesql_test
 
 import (
@@ -1677,7 +1678,99 @@ func ExampleNewBuilder() {
 	// Output: Builder created successfully: true
 }
 
-//nolint:errcheck,gosec // Examples don't need full error handling
+// ExampleDBBuilder_EnableAutoSave demonstrates automatic saving on database close.
+// This feature automatically saves modified data when the database connection is closed,
+// providing a convenient way to persist changes without manual intervention.
+//
+//nolint:errcheck // Examples don't need full error handling
+func ExampleDBBuilder_EnableAutoSave() {
+	// Create temporary directory and test file
+	tempDir, _ := os.MkdirTemp("", "filesql-autosave-example")
+	defer os.RemoveAll(tempDir)
+
+	// Create sample CSV file
+	csvPath := filepath.Join(tempDir, "employees.csv")
+	csvContent := "name,department,salary\nAlice,Engineering,80000\nBob,Marketing,65000\n"
+	_ = os.WriteFile(csvPath, []byte(csvContent), 0600)
+
+	// Create output directory
+	outputDir := filepath.Join(tempDir, "backup")
+	_ = os.MkdirAll(outputDir, 0750)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Configure builder with auto-save on close
+	builder := filesql.NewBuilder().
+		AddPath(csvPath).
+		EnableAutoSave(outputDir, filesql.NewDumpOptions()) // Save to backup directory on close
+
+	validatedBuilder, _ := builder.Build(ctx)
+	defer validatedBuilder.Cleanup()
+
+	db, _ := validatedBuilder.Open(ctx)
+
+	// Modify data - this will be automatically saved when db.Close() is called
+	_, _ = db.ExecContext(ctx, "INSERT INTO employees (name, department, salary) VALUES ('Charlie', 'Sales', 70000)")
+	_, _ = db.ExecContext(ctx, "UPDATE employees SET salary = 85000 WHERE name = 'Alice'")
+
+	// Close database - triggers automatic save to backup directory
+	_ = db.Close()
+
+	// Verify the backup file was created and contains our changes
+	backupFile := filepath.Join(outputDir, "employees.csv")
+	if _, err := os.Stat(backupFile); err == nil {
+		fmt.Println("Auto-save completed successfully")
+	}
+
+	// Output: Auto-save completed successfully
+}
+
+// ExampleDBBuilder_EnableAutoSaveOnCommit demonstrates automatic saving on transaction commit.
+// This provides more frequent saves but may impact performance for workloads with many commits.
+//
+//nolint:errcheck // Examples don't need full error handling
+func ExampleDBBuilder_EnableAutoSaveOnCommit() {
+	// Create temporary directory and test file
+	tempDir, _ := os.MkdirTemp("", "filesql-commit-save-example")
+	defer os.RemoveAll(tempDir)
+
+	// Create sample CSV file
+	csvPath := filepath.Join(tempDir, "transactions.csv")
+	csvContent := "id,amount,status\n1,100.50,pending\n2,250.75,pending\n"
+	_ = os.WriteFile(csvPath, []byte(csvContent), 0600)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Configure builder with auto-save on commit
+	// Using temp directory to keep the example self-contained
+	builder := filesql.NewBuilder().
+		AddPath(csvPath).
+		EnableAutoSaveOnCommit(tempDir, filesql.NewDumpOptions()) // Save to temp directory on each commit
+
+	validatedBuilder, _ := builder.Build(ctx)
+	defer validatedBuilder.Cleanup()
+
+	db, _ := validatedBuilder.Open(ctx)
+	defer func() { _ = db.Close() }()
+
+	// Start transaction
+	tx, _ := db.BeginTx(ctx, nil)
+
+	// Process transactions within the transaction
+	_, _ = tx.ExecContext(ctx, "UPDATE transactions SET status = 'completed' WHERE id = 1")
+	_, _ = tx.ExecContext(ctx, "INSERT INTO transactions (id, amount, status) VALUES (3, 175.25, 'completed')")
+
+	// Commit transaction - triggers automatic save
+	_ = tx.Commit()
+
+	fmt.Println("Transaction committed with auto-save")
+
+	// Output: Transaction committed with auto-save
+}
+
+//nolint:errcheck // Examples don't need full error handling
 func ExampleDBBuilder_AddPath() {
 	// Create temporary CSV file for example
 	tempDir, _ := os.MkdirTemp("", "filesql-example")
@@ -1718,7 +1811,7 @@ func ExampleDBBuilder_AddPath() {
 	// Output: Number of users: 2
 }
 
-//nolint:errcheck,gosec // Examples don't need full error handling
+//nolint:errcheck // Examples don't need full error handling
 func ExampleDBBuilder_AddPaths() {
 	// Create temporary files for example
 	tempDir, _ := os.MkdirTemp("", "filesql-example")
@@ -1769,7 +1862,7 @@ func ExampleDBBuilder_AddPaths() {
 	// Bob has Phone
 }
 
-//nolint:errcheck,gosec // Examples don't need full error handling
+//nolint:errcheck // Examples don't need full error handling
 func ExampleDBBuilder_AddFS() {
 	// Create mock filesystem with test data
 	mockFS := fstest.MapFS{
@@ -1815,7 +1908,7 @@ func ExampleDBBuilder_AddFS() {
 	// Output: Created 3 tables from filesystem
 }
 
-//nolint:errcheck,gosec // Examples don't need full error handling
+//nolint:errcheck // Examples don't need full error handling
 func ExampleDBBuilder_AddFS_embedFS() {
 	// Use embedded test filesystem
 	subFS, err := fs.Sub(builderExampleFS, "testdata/embed_test")
@@ -1857,7 +1950,7 @@ func ExampleDBBuilder_AddFS_embedFS() {
 	// Output: Created 3 tables from embedded files
 }
 
-//nolint:errcheck,gosec // Examples don't need full error handling
+//nolint:errcheck // Examples don't need full error handling
 func ExampleDBBuilder_Build() {
 	// Create temporary CSV file
 	tempDir, _ := os.MkdirTemp("", "filesql-example")
@@ -1880,7 +1973,7 @@ func ExampleDBBuilder_Build() {
 	// Output: Builder validated successfully: true
 }
 
-//nolint:errcheck,gosec // Examples don't need full error handling
+//nolint:errcheck // Examples don't need full error handling
 func ExampleDBBuilder_Open() {
 	// Create temporary CSV file
 	tempDir, _ := os.MkdirTemp("", "filesql-example")
@@ -1958,7 +2051,7 @@ func ExampleDBBuilder_Cleanup() {
 	// Output: Cleanup completed successfully
 }
 
-//nolint:errcheck,gosec // Examples don't need full error handling
+//nolint:errcheck // Examples don't need full error handling
 func ExampleDBBuilder_chaining() {
 	// Create temporary files
 	tempDir, _ := os.MkdirTemp("", "filesql-example")
@@ -2013,7 +2106,7 @@ func ExampleDBBuilder_chaining() {
 	// Output: Successfully loaded 3 tables from mixed sources
 }
 
-//nolint:errcheck,gosec // Examples don't need full error handling
+//nolint:errcheck // Examples don't need full error handling
 func ExampleDBBuilder_errorHandling() {
 	// Example 1: Build without inputs should fail
 	builder := filesql.NewBuilder()

@@ -254,9 +254,10 @@ Dado que filesql usa SQLite3 como su motor subyacente, toda la sintaxis SQL sigu
 - ¡Y mucho más!
 
 ### Modificaciones de datos
-- Las operaciones `INSERT`, `UPDATE` y `DELETE` solo afectan la base de datos en memoria
-- **Los archivos originales permanecen inalterados** - filesql nunca modifica tus archivos fuente
-- Esto hace que sea seguro experimentar con transformaciones de datos
+- Las operaciones `INSERT`, `UPDATE` y `DELETE` afectan la base de datos en memoria
+- **Los archivos originales permanecen inalterados por defecto** - filesql no modifica tus archivos fuente a menos que uses el auto-guardado
+- Puedes usar **auto-guardado** para persistir automáticamente los cambios en archivos al cerrar o al hacer commit
+- Esto hace que sea seguro experimentar con transformaciones de datos mientras proporciona persistencia opcional
 
 ### Características SQL avanzadas
 
@@ -297,9 +298,86 @@ query := `
 rows, err := db.QueryContext(ctx, query)
 ```
 
-### Exportar datos modificados
+### Funcionalidad de Auto-guardado
 
-Si necesitas persistir cambios hechos a la base de datos en memoria:
+filesql proporciona funcionalidad de auto-guardado para persistir automáticamente los cambios de la base de datos en archivos. Puedes elegir entre dos opciones de temporización:
+
+#### Auto-guardado al Cerrar la Base de Datos
+
+Guarda automáticamente los cambios cuando se cierra la conexión de la base de datos (recomendado para la mayoría de casos de uso):
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// Habilitar auto-guardado al cerrar
+builder := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSave("./backup") // Guardar en directorio de respaldo
+
+validatedBuilder, err := builder.Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer validatedBuilder.Cleanup()
+
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close() // Auto-guardado activado aquí
+
+// Hacer modificaciones - se guardará automáticamente al cerrar
+_, err = db.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE status = 'pending'")
+_, err = db.ExecContext(ctx, "INSERT INTO data (name, status) VALUES ('New Record', 'active')")
+```
+
+#### Auto-guardado en Commit de Transacción
+
+Guarda automáticamente los cambios después de cada commit de transacción (para persistencia frecuente):
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// Habilitar auto-guardado en commit - cadena vacía significa sobrescribir archivos originales
+builder := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSaveOnCommit("") // Sobrescribir archivos originales
+
+validatedBuilder, err := builder.Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer validatedBuilder.Cleanup()
+
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// Cada commit guardará automáticamente en archivos
+tx, err := db.BeginTx(ctx, nil)
+if err != nil {
+    log.Fatal(err)
+}
+
+_, err = tx.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE id = 1")
+if err != nil {
+    tx.Rollback()
+    log.Fatal(err)
+}
+
+err = tx.Commit() // Auto-guardado activado aquí
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Exportación Manual de Datos (Alternativa al Auto-guardado)
+
+Si prefieres control manual sobre cuándo guardar cambios en archivos en lugar de usar auto-guardado:
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

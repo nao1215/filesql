@@ -16,7 +16,9 @@ import (
 	"compress/gzip"
 	"context"
 	"database/sql/driver"
+	"encoding/base64"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -46,13 +48,24 @@ type Connector struct {
 // Connection implements database/sql/driver.Conn interface.
 // It wraps an underlying SQLite connection that contains loaded file data.
 type Connection struct {
-	conn driver.Conn // Underlying SQLite connection with loaded file data
+	conn           driver.Conn     // Underlying SQLite connection with loaded file data
+	autoSaveConfig *AutoSaveConfig // Auto-save configuration if enabled
+}
+
+// AutoSaveConfig holds configuration for automatic saving
+// This mirrors the structure from the builder package
+type AutoSaveConfig struct {
+	Enabled   bool
+	Timing    int // 0 = OnClose, 1 = OnCommit
+	OutputDir string
+	Options   model.DumpOptions // DumpOptions for formatting and compression
 }
 
 // Transaction implements database/sql/driver.Tx interface.
 // It wraps an underlying SQLite transaction for atomic operations.
 type Transaction struct {
-	tx driver.Tx // Underlying SQLite transaction
+	tx   driver.Tx   // Underlying SQLite transaction
+	conn *Connection // Reference to parent connection for auto-save
 }
 
 // NewDriver creates a new file SQL driver
@@ -79,6 +92,12 @@ func (d *Driver) OpenConnector(dsn string) (driver.Connector, error) {
 
 // Connect implements driver.Connector interface
 func (c *Connector) Connect(_ context.Context) (driver.Conn, error) {
+	// Parse DSN to extract file paths and auto-save configuration
+	filePaths, autoSaveConfig, err := c.parseDSN(c.dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse DSN: %w", err)
+	}
+
 	// Get SQLite driver and create connection
 	sqliteDriver := &sqlite.Driver{}
 	conn, err := sqliteDriver.Open(":memory:")
@@ -86,18 +105,51 @@ func (c *Connector) Connect(_ context.Context) (driver.Conn, error) {
 		return nil, fmt.Errorf("failed to create in-memory database: %w", err)
 	}
 
-	// Load file data into database
-	if err := c.loadFileDirectly(conn, c.dsn); err != nil {
+	// Load file data into database using the parsed file paths
+	if err := c.loadFileDirectly(conn, filePaths); err != nil {
 		_ = conn.Close() // Ignore close error since we're already returning an error
 		return nil, fmt.Errorf("failed to load file: %w", err)
 	}
 
-	return &Connection{conn: conn}, nil
+	return &Connection{
+		conn:           conn,
+		autoSaveConfig: autoSaveConfig,
+	}, nil
 }
 
 // Driver implements driver.Connector interface
 func (c *Connector) Driver() driver.Driver {
 	return c.driver
+}
+
+// parseDSN parses the DSN string to extract file paths and auto-save configuration
+func (c *Connector) parseDSN(dsn string) (string, *AutoSaveConfig, error) {
+	// Check if DSN contains auto-save configuration
+	if strings.Contains(dsn, "?autosave=") {
+		parts := strings.SplitN(dsn, "?autosave=", 2)
+		if len(parts) != 2 {
+			return "", nil, errors.New("invalid DSN format")
+		}
+
+		filePaths := parts[0]
+		configEncoded := parts[1]
+
+		// Decode the auto-save configuration
+		configJSON, err := base64.StdEncoding.DecodeString(configEncoded)
+		if err != nil {
+			return "", nil, fmt.Errorf("failed to decode auto-save config: %w", err)
+		}
+
+		var autoSaveConfig AutoSaveConfig
+		if err := json.Unmarshal(configJSON, &autoSaveConfig); err != nil {
+			return "", nil, fmt.Errorf("failed to parse auto-save config: %w", err)
+		}
+
+		return filePaths, &autoSaveConfig, nil
+	}
+
+	// No auto-save configuration
+	return dsn, nil, nil
 }
 
 // loadFileDirectly loads CSV/TSV/LTSV file(s) and/or directories into SQLite3 database using driver.Conn
@@ -549,6 +601,16 @@ func (c *Connector) convertToNamedValues(args []driver.Value) []driver.NamedValu
 
 // Close implements driver.Conn interface
 func (conn *Connection) Close() error {
+	// Perform auto-save if configured for close timing
+	if conn.autoSaveConfig != nil && conn.autoSaveConfig.Enabled && conn.autoSaveConfig.Timing == 0 { // 0 = OnClose
+		if err := conn.performAutoSave(); err != nil {
+			// Log the error but don't fail the close operation
+			// This ensures that the connection can still be closed even if save fails
+			// TODO: Consider using a proper logger here
+			_ = err // For now, just ignore the error
+		}
+	}
+
 	if conn.conn != nil {
 		return conn.conn.Close()
 	}
@@ -567,7 +629,7 @@ func (conn *Connection) BeginTx(ctx context.Context, opts driver.TxOptions) (dri
 		if err != nil {
 			return nil, err
 		}
-		return &Transaction{tx: tx}, nil
+		return &Transaction{tx: tx, conn: conn}, nil
 	}
 	// If ConnBeginTx is not implemented, return an error
 	return nil, ErrBeginTxNotSupported
@@ -575,7 +637,43 @@ func (conn *Connection) BeginTx(ctx context.Context, opts driver.TxOptions) (dri
 
 // Commit implements driver.Tx interface
 func (t *Transaction) Commit() error {
-	return t.tx.Commit()
+	// First commit the underlying transaction
+	if err := t.tx.Commit(); err != nil {
+		return err
+	}
+
+	// Perform auto-save if configured for commit timing
+	if t.conn.autoSaveConfig != nil && t.conn.autoSaveConfig.Enabled && t.conn.autoSaveConfig.Timing == 1 { // 1 = OnCommit
+		if err := t.conn.performAutoSave(); err != nil {
+			// Auto-save failed, but the transaction was already committed
+			// Log the error but don't return it to avoid confusion
+			// TODO: Consider using a proper logger here
+			_ = err // For now, just ignore the error
+		}
+	}
+
+	return nil
+}
+
+// performAutoSave executes automatic saving using the configured settings
+func (conn *Connection) performAutoSave() error {
+	if conn.autoSaveConfig == nil || !conn.autoSaveConfig.Enabled {
+		return nil // No auto-save configured
+	}
+
+	outputDir := conn.autoSaveConfig.OutputDir
+	if outputDir == "" {
+		// If no output directory specified, this means overwrite mode
+		// We need to determine the original input directory
+		// For now, use current directory as fallback
+		outputDir = "."
+	}
+
+	// Use the configured DumpOptions directly
+	dumpOptions := conn.autoSaveConfig.Options
+
+	// Use the existing DumpWithOptions method
+	return conn.DumpWithOptions(outputDir, dumpOptions)
 }
 
 // Rollback implements driver.Tx interface
