@@ -254,9 +254,10 @@ filesql은 SQLite3를 기본 엔진으로 사용하므로 모든 SQL 구문은 [
 - 그리고 더 많은 것들!
 
 ### 데이터 수정
-- `INSERT`, `UPDATE`, `DELETE` 작업은 메모리 내 데이터베이스에만 영향을 미칩니다
-- **원본 파일은 변경되지 않습니다** - filesql은 소스 파일을 절대 수정하지 않습니다
-- 이로 인해 데이터 변환을 안전하게 실험할 수 있습니다
+- `INSERT`, `UPDATE`, `DELETE` 작업은 메모리 내 데이터베이스에 영향을 미칩니다
+- **원본 파일은 기본적으로 변경되지 않습니다** - filesql은 자동 저장을 사용하지 않는 한 소스 파일을 수정하지 않습니다
+- **자동 저장**을 사용하여 종료 시 또는 커밋 시 변경사항을 파일에 자동으로 유지할 수 있습니다
+- 이로 인해 선택적 유지 기능을 제공하면서 데이터 변환을 안전하게 실험할 수 있습니다
 
 ### 고급 SQL 기능
 
@@ -297,9 +298,86 @@ query := `
 rows, err := db.QueryContext(ctx, query)
 ```
 
-### 수정된 데이터 내보내기
+### 자동 저장 기능
 
-메모리 내 데이터베이스에 가한 변경사항을 유지해야 하는 경우:
+filesql은 데이터베이스 변경사항을 파일에 자동으로 유지하는 자동 저장 기능을 제공합니다. 두 가지 타이밍 옵션 중에서 선택할 수 있습니다:
+
+#### 데이터베이스 종료 시 자동 저장
+
+데이터베이스 연결이 종료될 때 자동으로 변경사항을 저장합니다 (대부분의 사용 사례에 권장):
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// 종료 시 자동 저장 활성화
+builder := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSave("./backup") // 백업 디렉토리에 저장
+
+validatedBuilder, err := builder.Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer validatedBuilder.Cleanup()
+
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close() // 여기서 자동 저장 트리거됨
+
+// 수정 - 종료 시 자동 저장됩니다
+_, err = db.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE status = 'pending'")
+_, err = db.ExecContext(ctx, "INSERT INTO data (name, status) VALUES ('New Record', 'active')")
+```
+
+#### 트랜잭션 커밋 시 자동 저장
+
+각 트랜잭션 커밋 후 자동으로 변경사항을 저장합니다 (빈번한 유지가 필요한 경우):
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// 커밋 시 자동 저장 활성화 - 빈 문자열은 원본 파일 덮어쓰기를 의미합니다
+builder := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSaveOnCommit("") // 원본 파일 덮어쓰기
+
+validatedBuilder, err := builder.Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer validatedBuilder.Cleanup()
+
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// 각 커밋마다 자동으로 파일에 저장됩니다
+tx, err := db.BeginTx(ctx, nil)
+if err != nil {
+    log.Fatal(err)
+}
+
+_, err = tx.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE id = 1")
+if err != nil {
+    tx.Rollback()
+    log.Fatal(err)
+}
+
+err = tx.Commit() // 여기서 자동 저장 트리거됨
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### 수동 데이터 내보내기 (자동 저장의 대안)
+
+자동 저장 대신 변경사항을 파일에 저장하는 시점을 수동으로 제어하려는 경우:
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

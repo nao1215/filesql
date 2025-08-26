@@ -256,9 +256,10 @@ Since filesql uses SQLite3 as its underlying engine, all SQL syntax follows [SQL
 - And much more!
 
 ### Data Modifications
-- `INSERT`, `UPDATE`, and `DELETE` operations only affect the in-memory database
-- **Original files remain unchanged** - filesql never modifies your source files
-- This makes it safe to experiment with data transformations
+- `INSERT`, `UPDATE`, and `DELETE` operations affect the in-memory database
+- **Original files remain unchanged by default** - filesql doesn't modify your source files unless you use auto-save
+- You can use **auto-save** to automatically persist changes to files on close or commit
+- This makes it safe to experiment with data transformations while providing optional persistence
 
 ### Advanced SQL Features
 
@@ -299,9 +300,86 @@ query := `
 rows, err := db.QueryContext(ctx, query)
 ```
 
-### Exporting Modified Data
+### Auto-Save Feature
 
-If you need to persist changes made to the in-memory database:
+filesql provides auto-save functionality to automatically persist database changes to files. You can choose between two timing options:
+
+#### Auto-Save on Database Close
+
+Automatically save changes when the database connection is closed (recommended for most use cases):
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// Enable auto-save on close
+builder := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSave("./backup") // Save to backup directory
+
+validatedBuilder, err := builder.Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer validatedBuilder.Cleanup()
+
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close() // Auto-save triggered here
+
+// Make modifications - they will be automatically saved on close
+_, err = db.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE status = 'pending'")
+_, err = db.ExecContext(ctx, "INSERT INTO data (name, status) VALUES ('New Record', 'active')")
+```
+
+#### Auto-Save on Transaction Commit
+
+Automatically save changes after each transaction commit (for frequent persistence):
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// Enable auto-save on commit - empty string means overwrite original files
+builder := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSaveOnCommit("") // Overwrite original files
+
+validatedBuilder, err := builder.Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer validatedBuilder.Cleanup()
+
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// Each commit will automatically save to files
+tx, err := db.BeginTx(ctx, nil)
+if err != nil {
+    log.Fatal(err)
+}
+
+_, err = tx.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE id = 1")
+if err != nil {
+    tx.Rollback()
+    log.Fatal(err)
+}
+
+err = tx.Commit() // Auto-save triggered here
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Manual Data Export (Alternative to Auto-Save)
+
+If you prefer manual control over when to save changes to files instead of using auto-save:
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

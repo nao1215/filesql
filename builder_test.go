@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 )
 
 //go:embed testdata/embed_test/*.csv testdata/embed_test/*.tsv
@@ -481,4 +482,506 @@ func TestIntegrationWithEmbedFS(t *testing.T) {
 			t.Errorf("Cleanup() error = %v", err)
 		}
 	}
+}
+
+func TestAutoSave_OnClose(t *testing.T) {
+	// Create temporary directory
+	tmpDir := t.TempDir()
+
+	// Create test CSV file
+	csvPath := filepath.Join(tmpDir, "test.csv")
+	csvContent := "name,age\nAlice,25\nBob,30\n"
+	if err := os.WriteFile(csvPath, []byte(csvContent), 0600); err != nil {
+		t.Fatalf("Failed to write test CSV: %v", err)
+	}
+
+	// Create output directory
+	outputDir := filepath.Join(tmpDir, "output")
+	if err := os.MkdirAll(outputDir, 0750); err != nil {
+		t.Fatalf("Failed to create output dir: %v", err)
+	}
+
+	// Build database with auto-save on close
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	builder := NewBuilder().
+		AddPath(csvPath).
+		EnableAutoSave(outputDir)
+
+	validatedBuilder, err := builder.Build(ctx)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	defer validatedBuilder.Cleanup()
+
+	db, err := validatedBuilder.Open(ctx)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	// Modify data
+	_, err = db.ExecContext(ctx, "INSERT INTO test (name, age) VALUES ('Charlie', 35)")
+	if err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	// Close database (should trigger auto-save)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Check if file was saved
+	outputFile := filepath.Join(outputDir, "test.csv")
+	if _, err := os.Stat(outputFile); os.IsNotExist(err) {
+		t.Fatalf("Auto-save file not created: %s", outputFile)
+	}
+
+	// Verify content includes the new record
+	content, err := os.ReadFile(outputFile) //nolint:gosec // Test file path is safe
+	if err != nil {
+		t.Fatalf("Failed to read output file: %v", err)
+	}
+
+	if !strings.Contains(string(content), "Charlie") {
+		t.Errorf("Auto-saved file should contain inserted data. Got: %s", string(content))
+	}
+}
+
+func TestAutoSave_OnCommit(t *testing.T) {
+	// Create temporary directory
+	tmpDir := t.TempDir()
+
+	// Create test CSV file
+	csvPath := filepath.Join(tmpDir, "test.csv")
+	csvContent := "name,age\nAlice,25\n"
+	if err := os.WriteFile(csvPath, []byte(csvContent), 0600); err != nil {
+		t.Fatalf("Failed to write test CSV: %v", err)
+	}
+
+	// Create output directory
+	outputDir := filepath.Join(tmpDir, "output")
+	if err := os.MkdirAll(outputDir, 0750); err != nil {
+		t.Fatalf("Failed to create output dir: %v", err)
+	}
+
+	// Build database with auto-save on commit
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	builder := NewBuilder().
+		AddPath(csvPath).
+		EnableAutoSaveOnCommit(outputDir)
+
+	validatedBuilder, err := builder.Build(ctx)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	defer validatedBuilder.Cleanup()
+
+	db, err := validatedBuilder.Open(ctx)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	// Start transaction
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("Begin transaction failed: %v", err)
+	}
+
+	// Modify data within transaction
+	_, err = tx.ExecContext(ctx, "INSERT INTO test (name, age) VALUES ('David', 40)")
+	if err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	// Commit transaction (should trigger auto-save)
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	// Check if file was saved
+	outputFile := filepath.Join(outputDir, "test.csv")
+	if _, err := os.Stat(outputFile); os.IsNotExist(err) {
+		t.Fatalf("Auto-save file not created: %s", outputFile)
+	}
+
+	// Verify content includes the new record
+	content, err := os.ReadFile(outputFile) //nolint:gosec // Test file path is safe
+	if err != nil {
+		t.Fatalf("Failed to read output file: %v", err)
+	}
+
+	if !strings.Contains(string(content), "David") {
+		t.Errorf("Auto-saved file should contain committed data. Got: %s", string(content))
+	}
+}
+
+func TestAutoSave_DisableAutoSave(t *testing.T) {
+	// Create temporary directory
+	tmpDir := t.TempDir()
+
+	// Create test CSV file
+	csvPath := filepath.Join(tmpDir, "test.csv")
+	csvContent := "name,age\nAlice,25\n"
+	if err := os.WriteFile(csvPath, []byte(csvContent), 0600); err != nil {
+		t.Fatalf("Failed to write test CSV: %v", err)
+	}
+
+	// Create output directory
+	outputDir := filepath.Join(tmpDir, "output")
+	if err := os.MkdirAll(outputDir, 0750); err != nil {
+		t.Fatalf("Failed to create output dir: %v", err)
+	}
+
+	// Build database without auto-save (default behavior)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	builder := NewBuilder().
+		AddPath(csvPath)
+	// Note: No EnableAutoSave() call
+
+	validatedBuilder, err := builder.Build(ctx)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	defer validatedBuilder.Cleanup()
+
+	db, err := validatedBuilder.Open(ctx)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	// Modify data
+	_, err = db.ExecContext(ctx, "INSERT INTO test (name, age) VALUES ('Echo', 45)")
+	if err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	// Close database (should NOT trigger auto-save)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Check that no output file was created
+	outputFile := filepath.Join(outputDir, "test.csv")
+	if _, err := os.Stat(outputFile); !os.IsNotExist(err) {
+		t.Errorf("Auto-save file should not have been created when auto-save is disabled")
+	}
+}
+
+func TestAutoSave_MultipleCommitsOverwrite(t *testing.T) {
+	// This test verifies that multiple commits properly overwrite the same file
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	// Create test CSV file
+	csvPath := filepath.Join(tmpDir, "test.csv")
+	csvContent := "name,count\nInitial,1\n"
+	if err := os.WriteFile(csvPath, []byte(csvContent), 0600); err != nil {
+		t.Fatalf("Failed to write test CSV: %v", err)
+	}
+
+	// Create output directory
+	outputDir := filepath.Join(tmpDir, "output")
+	if err := os.MkdirAll(outputDir, 0750); err != nil {
+		t.Fatalf("Failed to create output dir: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Build database with auto-save on commit
+	builder := NewBuilder().
+		AddPath(csvPath).
+		EnableAutoSaveOnCommit(outputDir)
+
+	validatedBuilder, err := builder.Build(ctx)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	defer validatedBuilder.Cleanup()
+
+	db, err := validatedBuilder.Open(ctx)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	outputFile := filepath.Join(outputDir, "test.csv")
+
+	// First commit: Add first record
+	tx1, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("Begin first transaction failed: %v", err)
+	}
+
+	_, err = tx1.ExecContext(ctx, "INSERT INTO test (name, count) VALUES ('First', 100)")
+	if err != nil {
+		t.Fatalf("First insert failed: %v", err)
+	}
+
+	if err := tx1.Commit(); err != nil {
+		t.Fatalf("First commit failed: %v", err)
+	}
+
+	// Check first commit saved the file
+	if _, err := os.Stat(outputFile); os.IsNotExist(err) {
+		t.Fatalf("Auto-save file not created after first commit: %s", outputFile)
+	}
+
+	// Read content after first commit
+	content1, err := os.ReadFile(outputFile) //nolint:gosec // Test file path is safe
+	if err != nil {
+		t.Fatalf("Failed to read output file after first commit: %v", err)
+	}
+
+	if !strings.Contains(string(content1), "First") {
+		t.Errorf("File should contain first commit data. Got: %s", string(content1))
+	}
+
+	// Second commit: Add second record (should overwrite)
+	tx2, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("Begin second transaction failed: %v", err)
+	}
+
+	_, err = tx2.ExecContext(ctx, "INSERT INTO test (name, count) VALUES ('Second', 200)")
+	if err != nil {
+		t.Fatalf("Second insert failed: %v", err)
+	}
+
+	if err := tx2.Commit(); err != nil {
+		t.Fatalf("Second commit failed: %v", err)
+	}
+
+	// Read content after second commit
+	content2, err := os.ReadFile(outputFile) //nolint:gosec // Test file path is safe
+	if err != nil {
+		t.Fatalf("Failed to read output file after second commit: %v", err)
+	}
+
+	// Verify the file was overwritten and contains both records
+	if !strings.Contains(string(content2), "First") {
+		t.Errorf("File should still contain first commit data after second commit. Got: %s", string(content2))
+	}
+
+	if !strings.Contains(string(content2), "Second") {
+		t.Errorf("File should contain second commit data. Got: %s", string(content2))
+	}
+
+	// Verify the file was actually overwritten (not just appended)
+	// Count lines to make sure we have header + original + two new records
+	lines := strings.Split(string(content2), "\n")
+	nonEmptyLines := 0
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			nonEmptyLines++
+		}
+	}
+
+	// Should have: header + Initial + First + Second = 4 lines
+	if nonEmptyLines != 4 {
+		t.Errorf("Expected 4 lines in overwritten file, got %d. Content: %s", nonEmptyLines, string(content2))
+	}
+
+	// Third commit: Update existing record
+	tx3, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("Begin third transaction failed: %v", err)
+	}
+
+	_, err = tx3.ExecContext(ctx, "UPDATE test SET count = 999 WHERE name = 'Initial'")
+	if err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+
+	if err := tx3.Commit(); err != nil {
+		t.Fatalf("Third commit failed: %v", err)
+	}
+
+	// Read content after third commit
+	content3, err := os.ReadFile(outputFile) //nolint:gosec // Test file path is safe
+	if err != nil {
+		t.Fatalf("Failed to read output file after third commit: %v", err)
+	}
+
+	// Verify the update was saved
+	if !strings.Contains(string(content3), "999") {
+		t.Errorf("File should contain updated count (999). Got: %s", string(content3))
+	}
+
+	// Verify original count (1) was overwritten
+	if strings.Contains(string(content3), "Initial,1") {
+		t.Errorf("File should not contain old count (1) after update. Got: %s", string(content3))
+	}
+}
+
+func TestAutoSave_ExplicitDisable(t *testing.T) {
+	// Test the DisableAutoSave method explicitly
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	// Create test CSV file
+	csvPath := filepath.Join(tmpDir, "test.csv")
+	csvContent := "name,age\nAlice,25\n"
+	if err := os.WriteFile(csvPath, []byte(csvContent), 0600); err != nil {
+		t.Fatalf("Failed to write test CSV: %v", err)
+	}
+
+	// Create output directory
+	outputDir := filepath.Join(tmpDir, "output")
+	if err := os.MkdirAll(outputDir, 0750); err != nil {
+		t.Fatalf("Failed to create output dir: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// First enable auto-save, then explicitly disable it
+	builder := NewBuilder().
+		AddPath(csvPath).
+		EnableAutoSave(outputDir).
+		DisableAutoSave() // This should override the previous EnableAutoSave
+
+	validatedBuilder, err := builder.Build(ctx)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	defer validatedBuilder.Cleanup()
+
+	db, err := validatedBuilder.Open(ctx)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	// Modify data
+	_, err = db.ExecContext(ctx, "INSERT INTO test (name, age) VALUES ('Disabled', 99)")
+	if err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	// Close database (should NOT trigger auto-save due to DisableAutoSave)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Check that no output file was created
+	outputFile := filepath.Join(outputDir, "test.csv")
+	if _, err := os.Stat(outputFile); !os.IsNotExist(err) {
+		t.Errorf("Auto-save file should not have been created when explicitly disabled")
+	}
+}
+
+func TestBuilder_ErrorCases(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("build with no inputs", func(t *testing.T) {
+		t.Parallel()
+		builder := NewBuilder()
+		_, err := builder.Build(ctx)
+		if err == nil {
+			t.Error("Build() with no inputs should return error")
+		}
+	})
+
+	t.Run("build with empty path", func(t *testing.T) {
+		t.Parallel()
+		builder := NewBuilder().AddPath("")
+		_, err := builder.Build(ctx)
+		if err == nil {
+			t.Error("Build() with empty path should return error")
+		}
+	})
+
+	t.Run("build with non-existent path", func(t *testing.T) {
+		t.Parallel()
+		builder := NewBuilder().AddPath("/non/existent/file.csv")
+		_, err := builder.Build(ctx)
+		if err == nil {
+			t.Error("Build() with non-existent path should return error")
+		}
+	})
+
+	t.Run("auto-save with empty output directory", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		csvPath := filepath.Join(tmpDir, "test.csv")
+		if err := os.WriteFile(csvPath, []byte("col1\nval1\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		// Test with empty string for output directory - should use overwrite mode
+		builder := NewBuilder().
+			AddPath(csvPath).
+			EnableAutoSave("") // Empty string should work for overwrite mode
+
+		_, err := builder.Build(ctx)
+		if err != nil {
+			t.Errorf("Build() with empty output directory should not error, got: %v", err)
+		}
+	})
+
+	t.Run("auto-save on commit with empty output directory", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		csvPath := filepath.Join(tmpDir, "test.csv")
+		if err := os.WriteFile(csvPath, []byte("col1\nval1\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		// Test with empty string for output directory - should use overwrite mode
+		builder := NewBuilder().
+			AddPath(csvPath).
+			EnableAutoSaveOnCommit("") // Empty string should work for overwrite mode
+
+		_, err := builder.Build(ctx)
+		if err != nil {
+			t.Errorf("Build() with empty output directory for auto-save on commit should not error, got: %v", err)
+		}
+	})
+}
+
+func TestBuilder_AddPaths_ErrorCases(t *testing.T) {
+	t.Parallel()
+
+	t.Run("add multiple paths", func(t *testing.T) {
+		t.Parallel()
+		builder := NewBuilder().AddPaths("file1.csv", "file2.tsv", "file3.ltsv")
+		if len(builder.paths) != 3 {
+			t.Errorf("AddPaths should add all paths, got %d", len(builder.paths))
+		}
+		expectedPaths := []string{"file1.csv", "file2.tsv", "file3.ltsv"}
+		for i, expectedPath := range expectedPaths {
+			if builder.paths[i] != expectedPath {
+				t.Errorf("AddPaths should preserve path order, got %s at index %d, expected %s", builder.paths[i], i, expectedPath)
+			}
+		}
+	})
+
+	t.Run("add paths with empty string", func(t *testing.T) {
+		t.Parallel()
+		builder := NewBuilder().AddPaths("valid.csv", "", "another.csv")
+		if len(builder.paths) != 3 {
+			t.Errorf("AddPaths should add all paths including empty ones, got %d", len(builder.paths))
+		}
+		if builder.paths[1] != "" {
+			t.Errorf("AddPaths should preserve empty string, got %s", builder.paths[1])
+		}
+	})
+
+	t.Run("add no paths", func(t *testing.T) {
+		t.Parallel()
+		builder := NewBuilder().AddPaths()
+		if len(builder.paths) != 0 {
+			t.Errorf("AddPaths() with no arguments should not add any paths, got %d", len(builder.paths))
+		}
+	})
 }

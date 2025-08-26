@@ -254,9 +254,10 @@ filesqlは基盤となるエンジンとしてSQLite3を使用しているため
 - その他多数！
 
 ### データの変更
-- `INSERT`、`UPDATE`、`DELETE`操作はインメモリデータベースにのみ影響します
-- **元のファイルは変更されません** - filesqlはソースファイルを決して変更しません
-- これにより、データ変換を安全に実験できます
+- `INSERT`、`UPDATE`、`DELETE`操作はインメモリデータベースに影響します
+- **元のファイルはデフォルトで変更されません** - filesqlは自動保存を使用しない限りソースファイルを変更しません
+- **自動保存**を使用してクローズ時またはコミット時に変更をファイルに自動的に永続化できます
+- これにより、オプションの永続化を提供しながら、データ変換を安全に実験できます
 
 ### 高度なSQL機能
 
@@ -297,9 +298,86 @@ query := `
 rows, err := db.QueryContext(ctx, query)
 ```
 
-### 変更されたデータのエクスポート
+### 自動保存機能
 
-インメモリデータベースに加えた変更を永続化する必要がある場合：
+filesqlは、データベースの変更をファイルに自動的に永続化する自動保存機能を提供します。2つのタイミングオプションから選択できます：
+
+#### データベースクローズ時の自動保存
+
+データベース接続がクローズされた時に自動的に変更を保存します（ほとんどのユースケースで推奨）：
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// クローズ時の自動保存を有効にします
+builder := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSave("./backup") // バックアップディレクトリに保存
+
+validatedBuilder, err := builder.Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer validatedBuilder.Cleanup()
+
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close() // 自動保存がここでトリガーされます
+
+// 変更を行います - クローズ時に自動保存されます
+_, err = db.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE status = 'pending'")
+_, err = db.ExecContext(ctx, "INSERT INTO data (name, status) VALUES ('New Record', 'active')")
+```
+
+#### トランザクションコミット時の自動保存
+
+各トランザクションコミット後に自動的に変更を保存します（頻繁な永続化が必要な場合）：
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// コミット時の自動保存を有効にします - 空文字列は元ファイルの上書きを意味します
+builder := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSaveOnCommit("") // 元ファイルを上書き
+
+validatedBuilder, err := builder.Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer validatedBuilder.Cleanup()
+
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// 各コミットで自動的にファイルに保存されます
+tx, err := db.BeginTx(ctx, nil)
+if err != nil {
+    log.Fatal(err)
+}
+
+_, err = tx.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE id = 1")
+if err != nil {
+    tx.Rollback()
+    log.Fatal(err)
+}
+
+err = tx.Commit() // 自動保存がここでトリガーされます
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### 手動データエクスポート（自動保存の代替）
+
+自動保存を使用せずに、変更をファイルに保存するタイミングを手動で制御したい場合：
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

@@ -793,3 +793,192 @@ func TestGetSupportedFilePatterns(t *testing.T) {
 		}
 	}
 }
+
+func TestFile_ToTable_ErrorCases(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	t.Run("corrupted CSV file", func(t *testing.T) {
+		t.Parallel()
+
+		// Create a file with invalid CSV format
+		corruptedFile := filepath.Join(tmpDir, "corrupted.csv")
+		if err := os.WriteFile(corruptedFile, []byte("name,age\n\"unclosed quote"), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		file := NewFile(corruptedFile)
+		_, err := file.ToTable()
+		if err == nil {
+			t.Error("expected error for corrupted CSV file")
+		}
+	})
+
+	t.Run("empty CSV file", func(t *testing.T) {
+		t.Parallel()
+
+		emptyFile := filepath.Join(tmpDir, "empty.csv")
+		if err := os.WriteFile(emptyFile, []byte(""), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		file := NewFile(emptyFile)
+		_, err := file.ToTable()
+		if err == nil {
+			t.Error("expected error for empty CSV file")
+		}
+	})
+
+	t.Run("non-existent file", func(t *testing.T) {
+		t.Parallel()
+
+		nonExistentFile := filepath.Join(tmpDir, "nonexistent.csv")
+		file := NewFile(nonExistentFile)
+		_, err := file.ToTable()
+		if err == nil {
+			t.Error("expected error for non-existent file")
+		}
+	})
+
+	t.Run("unsupported file type", func(t *testing.T) {
+		t.Parallel()
+
+		textFile := filepath.Join(tmpDir, "test.txt")
+		if err := os.WriteFile(textFile, []byte("plain text"), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		file := NewFile(textFile)
+		_, err := file.ToTable()
+		if err == nil {
+			t.Error("expected error for unsupported file type")
+		}
+	})
+
+	t.Run("corrupted compressed file", func(t *testing.T) {
+		t.Parallel()
+
+		// Create a file with .gz extension but invalid gzip content
+		corruptedGzFile := filepath.Join(tmpDir, "corrupted.csv.gz")
+		if err := os.WriteFile(corruptedGzFile, []byte("not gzip content"), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		file := NewFile(corruptedGzFile)
+		_, err := file.ToTable()
+		if err == nil {
+			t.Error("expected error for corrupted gzip file")
+		}
+	})
+
+	t.Run("CSV with inconsistent columns", func(t *testing.T) {
+		t.Parallel()
+
+		inconsistentFile := filepath.Join(tmpDir, "inconsistent.csv")
+		content := "name,age\nAlice,25\nBob,30,extra\n"
+		if err := os.WriteFile(inconsistentFile, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		file := NewFile(inconsistentFile)
+		_, err := file.ToTable()
+		// CSV parser should return error for inconsistent column count
+		if err == nil {
+			t.Error("expected error for inconsistent CSV columns")
+		}
+	})
+
+	t.Run("LTSV with partially invalid format", func(t *testing.T) {
+		t.Parallel()
+
+		partiallyInvalidLTSV := filepath.Join(tmpDir, "partially_invalid.ltsv")
+		// LTSV with some valid and some invalid lines
+		content := "name:Alice\tage:25\ninvalid_line_without_colon\nname:Bob\tage:30\n"
+		if err := os.WriteFile(partiallyInvalidLTSV, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		file := NewFile(partiallyInvalidLTSV)
+		_, err := file.ToTable()
+		// This should succeed as the LTSV parser handles partially invalid data
+		if err != nil {
+			t.Errorf("LTSV parser should handle partially invalid data gracefully, got: %v", err)
+		}
+	})
+}
+
+func TestCompressionDetection_EdgeCases(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name               string
+		filePath           string
+		expectedCompressed bool
+		expectedGZ         bool
+		expectedBZ2        bool
+		expectedXZ         bool
+		expectedZSTD       bool
+	}{
+		{
+			name:               "double compression extension",
+			filePath:           "file.csv.gz.bz2",
+			expectedCompressed: true,
+			expectedGZ:         false,
+			expectedBZ2:        true,
+			expectedXZ:         false,
+			expectedZSTD:       false,
+		},
+		{
+			name:               "no compression",
+			filePath:           "file.csv",
+			expectedCompressed: false,
+			expectedGZ:         false,
+			expectedBZ2:        false,
+			expectedXZ:         false,
+			expectedZSTD:       false,
+		},
+		{
+			name:               "compression in middle of filename",
+			filePath:           "file.gz.csv",
+			expectedCompressed: false,
+			expectedGZ:         false,
+			expectedBZ2:        false,
+			expectedXZ:         false,
+			expectedZSTD:       false,
+		},
+		{
+			name:               "case sensitive compression",
+			filePath:           "file.csv.GZ",
+			expectedCompressed: false, // Should be case-sensitive
+			expectedGZ:         false,
+			expectedBZ2:        false,
+			expectedXZ:         false,
+			expectedZSTD:       false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			file := NewFile(tc.filePath)
+
+			if file.IsCompressed() != tc.expectedCompressed {
+				t.Errorf("IsCompressed() = %v, want %v", file.IsCompressed(), tc.expectedCompressed)
+			}
+			if file.IsGZ() != tc.expectedGZ {
+				t.Errorf("IsGZ() = %v, want %v", file.IsGZ(), tc.expectedGZ)
+			}
+			if file.IsBZ2() != tc.expectedBZ2 {
+				t.Errorf("IsBZ2() = %v, want %v", file.IsBZ2(), tc.expectedBZ2)
+			}
+			if file.IsXZ() != tc.expectedXZ {
+				t.Errorf("IsXZ() = %v, want %v", file.IsXZ(), tc.expectedXZ)
+			}
+			if file.IsZSTD() != tc.expectedZSTD {
+				t.Errorf("IsZSTD() = %v, want %v", file.IsZSTD(), tc.expectedZSTD)
+			}
+		})
+	}
+}
