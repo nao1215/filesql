@@ -761,3 +761,35 @@ John,25,Doe,john@example.com,26`
 		}
 	})
 }
+
+func TestGetSupportedFilePatterns(t *testing.T) {
+	t.Parallel()
+
+	patterns := SupportedFileExtPatterns()
+
+	// Should have 15 patterns: 3 base extensions × 5 compression variants (including none)
+	expectedCount := 15
+	if len(patterns) != expectedCount {
+		t.Errorf("GetSupportedFilePatterns() returned %d patterns, want %d", len(patterns), expectedCount)
+	}
+
+	// Check that all expected patterns are present
+	expectedPatterns := []string{
+		"*.csv", "*.csv.gz", "*.csv.bz2", "*.csv.xz", "*.csv.zst",
+		"*.tsv", "*.tsv.gz", "*.tsv.bz2", "*.tsv.xz", "*.tsv.zst",
+		"*.ltsv", "*.ltsv.gz", "*.ltsv.bz2", "*.ltsv.xz", "*.ltsv.zst",
+	}
+
+	for _, expected := range expectedPatterns {
+		found := false
+		for _, pattern := range patterns {
+			if pattern == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("GetSupportedFilePatterns() missing pattern: %s", expected)
+		}
+	}
+}

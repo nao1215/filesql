@@ -60,6 +60,21 @@ func NewFile(path string) *File {
 	}
 }
 
+// SupportedFileExtPatterns returns all supported file patterns for glob matching
+func SupportedFileExtPatterns() []string {
+	baseExts := []string{ExtCSV, ExtTSV, ExtLTSV}
+	compressionExts := []string{"", ExtGZ, ExtBZ2, ExtXZ, ExtZSTD}
+
+	var patterns []string
+	for _, baseExt := range baseExts {
+		for _, compressionExt := range compressionExts {
+			pattern := "*" + baseExt + compressionExt
+			patterns = append(patterns, pattern)
+		}
+	}
+	return patterns
+}
+
 // IsSupportedFile checks if the file has a supported extension
 func IsSupportedFile(fileName string) bool {
 	fileName = strings.ToLower(fileName)

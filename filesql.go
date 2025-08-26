@@ -5,9 +5,7 @@ package filesql
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/nao1215/filesql/domain/model"
 	filesqldriver "github.com/nao1215/filesql/driver"
@@ -167,24 +165,17 @@ func Open(paths ...string) (*sql.DB, error) {
 //			name, dept, salary, rank, deptSize, deptAvg)
 //	}
 func OpenContext(ctx context.Context, paths ...string) (*sql.DB, error) {
-	if len(paths) == 0 {
-		return nil, errors.New("at least one path must be provided")
-	}
+	// Use builder pattern internally for backward compatibility
+	builder := NewBuilder().AddPaths(paths...)
 
-	// Join paths with semicolon separator
-	dsn := strings.Join(paths, ";")
-	db, err := sql.Open(DriverName, dsn)
+	// Build validates the paths
+	validatedBuilder, err := builder.Build(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// Validate connection by pinging the database with context
-	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close() // Ignore close error since we're already returning a connection error
-		return nil, err
-	}
-
-	return db, nil
+	// Open creates the database connection
+	return validatedBuilder.Open(ctx)
 }
 
 // Type aliases for dump options from model package

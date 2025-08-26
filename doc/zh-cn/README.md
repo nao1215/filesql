@@ -45,7 +45,9 @@ go get github.com/nao1215/filesql
 
 [示例代码在这里](../../example_test.go)。
 
-### 基本用法
+### 简单用法（文件）
+
+对于简单的文件访问，使用方便的`Open`或`OpenContext`函数：
 
 ```go
 package main
@@ -86,6 +88,57 @@ func main() {
         }
         fmt.Printf("Name: %s, Age: %d\n", name, age)
     }
+}
+```
+
+### Builder 模式（fs.FS 需要）
+
+对于高级用例，如嵌入文件（`go:embed`）或自定义文件系统，使用 **Builder 模式**：
+
+```go
+package main
+
+import (
+    "context"
+    "embed"
+    "io/fs"
+    "log"
+    
+    "github.com/nao1215/filesql"
+)
+
+//go:embed data/*.csv data/*.tsv
+var dataFS embed.FS
+
+func main() {
+    ctx := context.Background()
+    
+    // 对嵌入文件系统使用 Builder 模式
+    subFS, _ := fs.Sub(dataFS, "data")
+    
+    db, err := filesql.NewBuilder().
+        AddPath("local_file.csv").  // 常规文件
+        AddFS(subFS).               // 嵌入文件系统
+        Build(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    connection, err := db.Open(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer connection.Close()
+    defer db.Cleanup() // 清理来自 FS 的临时文件
+    
+    // 跨不同来源的文件查询
+    rows, err := connection.Query("SELECT name FROM sqlite_master WHERE type='table'")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer rows.Close()
+    
+    // 处理结果...
 }
 ```
 

@@ -2,15 +2,21 @@ package filesql_test
 
 import (
 	"context"
+	"embed"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"testing/fstest"
 	"time"
 
 	"github.com/nao1215/filesql"
 )
+
+//go:embed testdata/embed_test/*.csv testdata/embed_test/*.tsv
+var builderExampleFS embed.FS
 
 // ExampleOpen demonstrates how to use filesql.Open() with complex SQL queries.
 // This example shows advanced SQL features including JOINs, window functions,
@@ -1640,4 +1646,421 @@ func ExampleDumpDatabase_dataProcessing() {
 	// for_spreadsheet: sample.tsv
 	// for_archive: sample.csv.gz
 	// for_logs: sample.ltsv
+}
+
+// ================================
+// Builder Pattern Examples
+// ================================
+
+// ExampleNewBuilder demonstrates the basic usage of the Builder pattern.
+// This is the recommended approach for most use cases, especially when working
+// with embedded filesystems or when you need more control over the database creation process.
+func ExampleNewBuilder() {
+	// Create a new builder - this is the starting point for all Builder pattern usage
+	builder := filesql.NewBuilder()
+
+	// The builder supports method chaining for a fluent API
+	// You can add individual paths or multiple paths at once
+	builder.AddPath("users.csv").AddPaths("orders.tsv", "products.ltsv")
+
+	fmt.Printf("Builder created successfully: %t\n", builder != nil)
+
+	// In real usage, you would continue with:
+	// ctx := context.Background()
+	// validatedBuilder, err := builder.Build(ctx)
+	// if err != nil { return err }
+	// db, err := validatedBuilder.Open(ctx)
+	// if err != nil { return err }
+	// defer db.Close()
+	// defer validatedBuilder.Cleanup()
+
+	// Output: Builder created successfully: true
+}
+
+//nolint:errcheck,gosec // Examples don't need full error handling
+func ExampleDBBuilder_AddPath() {
+	// Create temporary CSV file for example
+	tempDir, _ := os.MkdirTemp("", "filesql-example")
+	defer os.RemoveAll(tempDir)
+
+	csvFile := filepath.Join(tempDir, "users.csv")
+	content := "id,name,age\n1,Alice,30\n2,Bob,25\n"
+	os.WriteFile(csvFile, []byte(content), 0644)
+
+	// Use builder to add a single file path
+	builder := filesql.NewBuilder().AddPath(csvFile)
+
+	// Build and open database
+	ctx := context.Background()
+	validatedBuilder, err := builder.Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	db, err := validatedBuilder.Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Query the data
+	rows, err := db.Query("SELECT COUNT(*) FROM users")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	var count int
+	if rows.Next() {
+		rows.Scan(&count)
+	}
+	fmt.Printf("Number of users: %d\n", count)
+	// Output: Number of users: 2
+}
+
+//nolint:errcheck,gosec // Examples don't need full error handling
+func ExampleDBBuilder_AddPaths() {
+	// Create temporary files for example
+	tempDir, _ := os.MkdirTemp("", "filesql-example")
+	defer os.RemoveAll(tempDir)
+
+	// Create users.csv
+	usersFile := filepath.Join(tempDir, "users.csv")
+	usersContent := "id,name\n1,Alice\n2,Bob\n"
+	os.WriteFile(usersFile, []byte(usersContent), 0644)
+
+	// Create products.csv
+	productsFile := filepath.Join(tempDir, "products.csv")
+	productsContent := "id,product_name\n1,Laptop\n2,Phone\n"
+	os.WriteFile(productsFile, []byte(productsContent), 0644)
+
+	// Use builder to add multiple file paths
+	builder := filesql.NewBuilder().AddPaths(usersFile, productsFile)
+
+	ctx := context.Background()
+	validatedBuilder, err := builder.Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	db, err := validatedBuilder.Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Query data from both tables
+	rows, err := db.Query(`
+		SELECT u.name, p.product_name 
+		FROM users u 
+		JOIN products p ON u.id = p.id
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var name, product string
+		rows.Scan(&name, &product)
+		fmt.Printf("%s has %s\n", name, product)
+	}
+	// Output: Alice has Laptop
+	// Bob has Phone
+}
+
+//nolint:errcheck,gosec // Examples don't need full error handling
+func ExampleDBBuilder_AddFS() {
+	// Create mock filesystem with test data
+	mockFS := fstest.MapFS{
+		"users.csv":    &fstest.MapFile{Data: []byte("id,name,department\n1,Alice,Engineering\n2,Bob,Sales\n")},
+		"products.tsv": &fstest.MapFile{Data: []byte("id\tname\tprice\n1\tLaptop\t1000\n2\tPhone\t500\n")},
+		"logs.ltsv":    &fstest.MapFile{Data: []byte("time:2024-01-01T00:00:00Z\tlevel:info\tmsg:started\n")},
+		"readme.txt":   &fstest.MapFile{Data: []byte("This file will be ignored\n")}, // unsupported format
+	}
+
+	// Use builder with filesystem
+	builder := filesql.NewBuilder().AddFS(mockFS)
+
+	ctx := context.Background()
+	validatedBuilder, err := builder.Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	db, err := validatedBuilder.Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Clean up temporary files
+	defer validatedBuilder.Cleanup()
+
+	// List all tables that were created from the filesystem
+	rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	var tableCount int
+	for rows.Next() {
+		var tableName string
+		rows.Scan(&tableName)
+		tableCount++
+	}
+
+	fmt.Printf("Created %d tables from filesystem\n", tableCount)
+	// Output: Created 3 tables from filesystem
+}
+
+//nolint:errcheck,gosec // Examples don't need full error handling
+func ExampleDBBuilder_AddFS_embedFS() {
+	// Use embedded test filesystem
+	subFS, err := fs.Sub(builderExampleFS, "testdata/embed_test")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Use builder with embedded filesystem
+	builder := filesql.NewBuilder().AddFS(subFS)
+
+	ctx := context.Background()
+	validatedBuilder, err := builder.Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	db, err := validatedBuilder.Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Clean up temporary files
+	defer validatedBuilder.Cleanup()
+
+	// Count the number of tables created from embedded files
+	rows, err := db.Query("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	var tableCount int
+	if rows.Next() {
+		rows.Scan(&tableCount)
+	}
+
+	fmt.Printf("Created %d tables from embedded files\n", tableCount)
+	// Output: Created 3 tables from embedded files
+}
+
+//nolint:errcheck,gosec // Examples don't need full error handling
+func ExampleDBBuilder_Build() {
+	// Create temporary CSV file
+	tempDir, _ := os.MkdirTemp("", "filesql-example")
+	defer os.RemoveAll(tempDir)
+
+	csvFile := filepath.Join(tempDir, "data.csv")
+	content := "name,value\ntest,123\n"
+	os.WriteFile(csvFile, []byte(content), 0644)
+
+	// Build validates inputs and prepares for opening
+	builder := filesql.NewBuilder().AddPath(csvFile)
+
+	ctx := context.Background()
+	validatedBuilder, err := builder.Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("Builder validated successfully: %t\n", validatedBuilder != nil)
+	// Output: Builder validated successfully: true
+}
+
+//nolint:errcheck,gosec // Examples don't need full error handling
+func ExampleDBBuilder_Open() {
+	// Create temporary CSV file
+	tempDir, _ := os.MkdirTemp("", "filesql-example")
+	defer os.RemoveAll(tempDir)
+
+	csvFile := filepath.Join(tempDir, "employees.csv")
+	content := "id,name,salary\n1,Alice,50000\n2,Bob,60000\n3,Charlie,55000\n"
+	os.WriteFile(csvFile, []byte(content), 0644)
+
+	// Complete builder workflow: AddPath -> Build -> Open
+	builder := filesql.NewBuilder().AddPath(csvFile)
+
+	ctx := context.Background()
+	validatedBuilder, err := builder.Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	db, err := validatedBuilder.Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Perform complex SQL query
+	rows, err := db.Query(`
+		SELECT name, salary,
+		       salary - (SELECT AVG(salary) FROM employees) as salary_diff
+		FROM employees 
+		WHERE salary > (SELECT AVG(salary) FROM employees)
+		ORDER BY salary DESC
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var name string
+		var salary, diff float64
+		rows.Scan(&name, &salary, &diff)
+		fmt.Printf("%s: $%.0f (+$%.0f above average)\n", name, salary, diff)
+	}
+	// Output: Bob: $60000 (+$5000 above average)
+}
+
+func ExampleDBBuilder_Cleanup() {
+	// Create mock filesystem with test data
+	mockFS := fstest.MapFS{
+		"temp_data.csv": &fstest.MapFile{Data: []byte("id,value\n1,test\n")},
+	}
+
+	// Use filesystem input (creates temporary files)
+	builder := filesql.NewBuilder().AddFS(mockFS)
+
+	ctx := context.Background()
+	validatedBuilder, err := builder.Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	db, err := validatedBuilder.Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	_ = db.Close() // Example doesn't need error handling
+
+	// Clean up temporary files created by AddFS
+	err = validatedBuilder.Cleanup()
+	if err != nil {
+		log.Printf("Cleanup error: %v", err)
+	} else {
+		fmt.Println("Cleanup completed successfully")
+	}
+	// Output: Cleanup completed successfully
+}
+
+//nolint:errcheck,gosec // Examples don't need full error handling
+func ExampleDBBuilder_chaining() {
+	// Create temporary files
+	tempDir, _ := os.MkdirTemp("", "filesql-example")
+	defer os.RemoveAll(tempDir)
+
+	csvFile := filepath.Join(tempDir, "data1.csv")
+	content1 := "id,name\n1,Alice\n2,Bob\n"
+	os.WriteFile(csvFile, []byte(content1), 0644)
+
+	tsvFile := filepath.Join(tempDir, "data2.tsv")
+	content2 := "id\tproduct\n1\tLaptop\n2\tPhone\n"
+	os.WriteFile(tsvFile, []byte(content2), 0644)
+
+	// Create mock filesystem
+	mockFS := fstest.MapFS{
+		"logs.ltsv": &fstest.MapFile{Data: []byte("time:2024-01-01T00:00:00Z\tlevel:info\n")},
+	}
+
+	// Demonstrate method chaining
+	ctx := context.Background()
+	db, err := filesql.NewBuilder().
+		AddPath(csvFile).
+		AddPaths(tsvFile).
+		AddFS(mockFS).
+		Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	connection, err := db.Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer connection.Close()
+	defer db.Cleanup()
+
+	// Count tables from different sources
+	rows, err := connection.Query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	var tableCount int
+	for rows.Next() {
+		var tableName string
+		rows.Scan(&tableName)
+		tableCount++
+	}
+
+	fmt.Printf("Successfully loaded %d tables from mixed sources\n", tableCount)
+	// Output: Successfully loaded 3 tables from mixed sources
+}
+
+//nolint:errcheck,gosec // Examples don't need full error handling
+func ExampleDBBuilder_errorHandling() {
+	// Example 1: Build without inputs should fail
+	builder := filesql.NewBuilder()
+	ctx := context.Background()
+
+	_, err := builder.Build(ctx)
+	if err != nil {
+		fmt.Printf("Expected error for no inputs: %v\n", err)
+	}
+
+	// Example 2: Open without Build should fail
+	builder2 := filesql.NewBuilder().AddPath("nonexistent.csv")
+	_, err = builder2.Open(ctx)
+	if err != nil {
+		fmt.Println("Expected error for Open without Build")
+	}
+
+	// Example 3: Non-existent file should fail during Build
+	builder3 := filesql.NewBuilder().AddPath("/nonexistent/file.csv")
+	_, err = builder3.Build(ctx)
+	if err != nil {
+		fmt.Println("Expected error for non-existent file")
+	}
+
+	// Example 4: Success case
+	tempDir, _ := os.MkdirTemp("", "filesql-example")
+	defer os.RemoveAll(tempDir)
+
+	csvFile := filepath.Join(tempDir, "valid.csv")
+	os.WriteFile(csvFile, []byte("id,name\n1,test\n"), 0644)
+
+	builder4 := filesql.NewBuilder().AddPath(csvFile)
+	validatedBuilder, err := builder4.Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	db, err := validatedBuilder.Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	fmt.Println("Success: Valid file loaded correctly")
+
+	// Output: Expected error for no inputs: at least one path must be provided
+	// Expected error for Open without Build
+	// Expected error for non-existent file
+	// Success: Valid file loaded correctly
 }

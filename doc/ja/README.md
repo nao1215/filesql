@@ -45,7 +45,9 @@ go get github.com/nao1215/filesql
 
 [サンプルコードはこちら](../../example_test.go)です。
 
-### 基本的な使い方
+### シンプルな使い方（ファイル）
+
+シンプルなファイルアクセスには、便利な`Open`または`OpenContext`関数を使用してください：
 
 ```go
 package main
@@ -86,6 +88,57 @@ func main() {
         }
         fmt.Printf("Name: %s, Age: %d\n", name, age)
     }
+}
+```
+
+### Builder パターン（fs.FSに必要）
+
+埋め込みファイル（`go:embed`）やカスタムファイルシステムなどの高度な用途には、**Builderパターン**を使用してください：
+
+```go
+package main
+
+import (
+    "context"
+    "embed"
+    "io/fs"
+    "log"
+    
+    "github.com/nao1215/filesql"
+)
+
+//go:embed data/*.csv data/*.tsv
+var dataFS embed.FS
+
+func main() {
+    ctx := context.Background()
+    
+    // 埋め込みファイルシステムにBuilderパターンを使用
+    subFS, _ := fs.Sub(dataFS, "data")
+    
+    db, err := filesql.NewBuilder().
+        AddPath("local_file.csv").  // 通常のファイル
+        AddFS(subFS).               // 埋め込みファイルシステム
+        Build(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    connection, err := db.Open(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer connection.Close()
+    defer db.Cleanup() // FSからの一時ファイルをクリーンアップ
+    
+    // 異なるソースのファイル間でクエリを実行
+    rows, err := connection.Query("SELECT name FROM sqlite_master WHERE type='table'")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer rows.Close()
+    
+    // 結果を処理...
 }
 ```
 
