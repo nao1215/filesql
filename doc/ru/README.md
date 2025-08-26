@@ -45,7 +45,9 @@ go get github.com/nao1215/filesql
 
 [Примеры кода находятся здесь](../../example_test.go).
 
-### Базовое использование
+### Простое использование (Файлы)
+
+Для простого доступа к файлам используйте удобные функции `Open` или `OpenContext`:
 
 ```go
 package main
@@ -86,6 +88,57 @@ func main() {
         }
         fmt.Printf("Name: %s, Age: %d\n", name, age)
     }
+}
+```
+
+### Паттерн Builder (Требуется для fs.FS)
+
+Для продвинутых случаев использования, таких как встроенные файлы (`go:embed`) или пользовательские файловые системы, используйте **паттерн Builder**:
+
+```go
+package main
+
+import (
+    "context"
+    "embed"
+    "io/fs"
+    "log"
+    
+    "github.com/nao1215/filesql"
+)
+
+//go:embed data/*.csv data/*.tsv
+var dataFS embed.FS
+
+func main() {
+    ctx := context.Background()
+    
+    // Используем паттерн Builder для встроенной файловой системы
+    subFS, _ := fs.Sub(dataFS, "data")
+    
+    db, err := filesql.NewBuilder().
+        AddPath("local_file.csv").  // Обычный файл
+        AddFS(subFS).               // Встроенная файловая система
+        Build(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    connection, err := db.Open(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer connection.Close()
+    defer db.Cleanup() // Очистка временных файлов из FS
+    
+    // Запросы к файлам из разных источников
+    rows, err := connection.Query("SELECT name FROM sqlite_master WHERE type='table'")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer rows.Close()
+    
+    // Обрабатываем результаты...
 }
 ```
 

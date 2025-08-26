@@ -45,7 +45,9 @@ go get github.com/nao1215/filesql
 
 [Le code d'exemple est ici](../../example_test.go).
 
-### Usage de base
+### Usage simple (Fichiers)
+
+Pour un accès simple aux fichiers, utilisez les fonctions pratiques `Open` ou `OpenContext` :
 
 ```go
 package main
@@ -86,6 +88,57 @@ func main() {
         }
         fmt.Printf("Name: %s, Age: %d\n", name, age)
     }
+}
+```
+
+### Patron Builder (Requis pour fs.FS)
+
+Pour les cas d'usage avancés comme les fichiers intégrés (`go:embed`) ou les systèmes de fichiers personnalisés, utilisez le **patron Builder** :
+
+```go
+package main
+
+import (
+    "context"
+    "embed"
+    "io/fs"
+    "log"
+    
+    "github.com/nao1215/filesql"
+)
+
+//go:embed data/*.csv data/*.tsv
+var dataFS embed.FS
+
+func main() {
+    ctx := context.Background()
+    
+    // Utiliser le patron Builder pour le système de fichiers intégré
+    subFS, _ := fs.Sub(dataFS, "data")
+    
+    db, err := filesql.NewBuilder().
+        AddPath("local_file.csv").  // Fichier régulier
+        AddFS(subFS).               // Système de fichiers intégré
+        Build(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    connection, err := db.Open(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer connection.Close()
+    defer db.Cleanup() // Nettoyer les fichiers temporaires du FS
+    
+    // Requête à travers des fichiers de sources différentes
+    rows, err := connection.Query("SELECT name FROM sqlite_master WHERE type='table'")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer rows.Close()
+    
+    // Traiter les résultats...
 }
 ```
 

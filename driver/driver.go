@@ -10,11 +10,6 @@
 //   - Duplicate table name validation across multiple files
 //   - Directory scanning with automatic file discovery
 //   - Table export functionality
-//
-// Usage:
-//
-//	import _ "github.com/nao1215/filesql/driver"
-//	db, err := sql.Open("filesql", "data.csv")
 package driver
 
 import (

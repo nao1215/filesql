@@ -45,7 +45,9 @@ go get github.com/nao1215/filesql
 
 [예제 코드는 여기에 있습니다](../../example_test.go).
 
-### 기본 사용법
+### 간단한 사용법 (파일)
+
+간단한 파일 접근에는 편리한 `Open` 또는 `OpenContext` 함수를 사용하세요:
 
 ```go
 package main
@@ -86,6 +88,57 @@ func main() {
         }
         fmt.Printf("Name: %s, Age: %d\n", name, age)
     }
+}
+```
+
+### Builder 패턴 (fs.FS에 필요)
+
+임베디드 파일(`go:embed`)이나 커스텀 파일시스템과 같은 고급 사용 사례에는 **Builder 패턴**을 사용하세요:
+
+```go
+package main
+
+import (
+    "context"
+    "embed"
+    "io/fs"
+    "log"
+    
+    "github.com/nao1215/filesql"
+)
+
+//go:embed data/*.csv data/*.tsv
+var dataFS embed.FS
+
+func main() {
+    ctx := context.Background()
+    
+    // 임베디드 파일시스템에 Builder 패턴 사용
+    subFS, _ := fs.Sub(dataFS, "data")
+    
+    db, err := filesql.NewBuilder().
+        AddPath("local_file.csv").  // 일반 파일
+        AddFS(subFS).               // 임베디드 파일시스템
+        Build(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    connection, err := db.Open(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer connection.Close()
+    defer db.Cleanup() // FS의 임시 파일 정리
+    
+    // 다른 소스의 파일들 간 쿼리
+    rows, err := connection.Query("SELECT name FROM sqlite_master WHERE type='table'")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer rows.Close()
+    
+    // 결과 처리...
 }
 ```
 
