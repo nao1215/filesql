@@ -482,7 +482,13 @@ func ExampleOpen_errorHandling() {
 	time.Sleep(10 * time.Millisecond) // Ensure timeout triggers
 	_, err = filesql.OpenContext(ctx, tmpDir)
 	if err != nil {
-		fmt.Printf("Expected timeout error: %v\n", err)
+		// Extract the core error message (context deadline exceeded)
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "context deadline exceeded") {
+			fmt.Printf("Expected timeout error: %s\n", "context deadline exceeded")
+		} else {
+			fmt.Printf("Expected timeout error: %v\n", err)
+		}
 	}
 
 	// Example 3: Successful operation with proper error checking

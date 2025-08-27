@@ -20,6 +20,8 @@ Rather than maintaining duplicate code across both projects, we extracted the co
 - 🔍 **SQLite3 SQL Interface** - Use SQLite3's powerful SQL dialect to query your files
 - 📁 **Multiple File Formats** - Support for CSV, TSV, and LTSV files
 - 🗜️ **Compression Support** - Automatically handles .gz, .bz2, .xz, and .zst compressed files
+- 🌊 **Stream Processing** - Efficiently handles large files through streaming with configurable chunk sizes
+- 📖 **Flexible Input Sources** - Support for file paths, directories, io.Reader, and embed.FS
 - 🚀 **Zero Setup** - No database server required, everything runs in-memory
 - 🌍 **Cross-Platform** - Works seamlessly on Linux, macOS, and Windows
 - 💾 **SQLite3 Powered** - Built on the robust SQLite3 engine for reliable SQL processing
@@ -373,6 +375,39 @@ if err != nil {
     log.Fatal(err)
 }
 ```
+
+#### Auto-Save Input Type Restrictions
+
+**Important**: Auto-save behavior depends on your input data source:
+
+- **File Paths** (`AddPath`, `AddPaths`): Supports both overwrite mode (empty string) and output directory
+  ```go
+  // ✅ Overwrite original files
+  builder.AddPath("data.csv").EnableAutoSave("")
+  
+  // ✅ Save to output directory  
+  builder.AddPath("data.csv").EnableAutoSave("./backup")
+  ```
+
+- **io.Reader** (`AddReader`): **Only supports output directory mode**
+  ```go
+  // ❌ Build error - overwrite mode not supported
+  builder.AddReader(reader, "table", model.FileTypeCSV).EnableAutoSave("")
+  
+  // ✅ Must specify output directory
+  builder.AddReader(reader, "table", model.FileTypeCSV).EnableAutoSave("./output")
+  ```
+
+- **Filesystems** (`AddFS`): **Only supports output directory mode**
+  ```go
+  // ❌ Build error - overwrite mode not supported  
+  builder.AddFS(filesystem).EnableAutoSave("")
+  
+  // ✅ Must specify output directory
+  builder.AddFS(filesystem).EnableAutoSave("./output")
+  ```
+
+This restriction exists because io.Reader and filesystem inputs don't have original file paths that can be overwritten. The builder will return an error at build time if you try to use overwrite mode with these input types.
 
 ### Manual Data Export (Alternative to Auto-Save)
 

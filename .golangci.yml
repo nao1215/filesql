@@ -72,10 +72,6 @@ linters:
           - gochecknoinits
         path: filesql\.go
         source: func init\(\)
-      - linters:
-          - staticcheck
-        path: driver/.*\.go
-        text: SA1019.*deprecated.*Go 1.8
       - path: (.+)\.go$
         text: fmt.Fprintf
       - path: (.+)\.go$

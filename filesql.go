@@ -16,24 +16,8 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/nao1215/filesql/domain/model"
-	filesqldriver "github.com/nao1215/filesql/driver"
 	"github.com/ulikunitz/xz"
 )
-
-const (
-	// DriverName is the name for the filesql driver
-	DriverName = "filesql"
-)
-
-// Register registers the filesql driver with database/sql
-func Register() {
-	sql.Register(DriverName, filesqldriver.NewDriver())
-}
-
-func init() {
-	// Auto-register the driver on import
-	Register()
-}
 
 // Open opens a database connection using the filesql driver.
 //
@@ -254,15 +238,8 @@ func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
 	}
 	defer conn.Close()
 
-	// Use Raw to get the underlying driver connection
-	return conn.Raw(func(driverConn interface{}) error {
-		if filesqlConn, ok := driverConn.(*filesqldriver.Connection); ok {
-			// Use filesql driver's dump functionality
-			return filesqlConn.DumpWithOptions(outputDir, options)
-		}
-		// For direct SQLite connections, implement generic dump functionality
-		return dumpSQLiteDatabase(db, outputDir, options)
-	})
+	// Use generic dump functionality for all connections
+	return dumpSQLiteDatabase(db, outputDir, options)
 }
 
 // dumpSQLiteDatabase implements generic dump functionality for SQLite databases
