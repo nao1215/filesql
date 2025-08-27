@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/csv"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,7 +14,6 @@ import (
 	"time"
 
 	"github.com/nao1215/filesql/domain/model"
-	filesqldriver "github.com/nao1215/filesql/driver"
 )
 
 func TestOpen(t *testing.T) {
@@ -451,14 +449,16 @@ func TestDumpDatabaseErrors(t *testing.T) {
 
 		tempDir := t.TempDir()
 
-		// This should return an error since it's not a filesql connection
+		// This should return an error since there are no tables in empty database
 		err = DumpDatabase(db, tempDir)
 		if err == nil {
-			t.Error("expected error when calling DumpDatabase on non-filesql connection")
+			t.Error("expected error when calling DumpDatabase on empty database")
 		}
 
-		if !errors.Is(err, filesqldriver.ErrNotFilesqlConnection) {
-			t.Errorf("expected ErrNotFilesqlConnection, got: %v", err)
+		// Should get "no tables found" error since it's an empty database
+		expectedErrorMsg := "no tables found in database"
+		if err.Error() != expectedErrorMsg {
+			t.Errorf("expected error message '%s', got: %v", expectedErrorMsg, err)
 		}
 	})
 
@@ -2538,4 +2538,225 @@ func TestErrorCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSQLiteDumpFunctions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("getSQLiteTableNames", func(t *testing.T) {
+		t.Parallel()
+
+		// Create a direct SQLite connection
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("Failed to create SQLite connection: %v", err)
+		}
+		defer db.Close()
+
+		// Create test tables
+		_, err = db.ExecContext(context.Background(), "CREATE TABLE test1 (id INTEGER, name TEXT)")
+		if err != nil {
+			t.Fatalf("Failed to create test table 1: %v", err)
+		}
+
+		_, err = db.ExecContext(context.Background(), "CREATE TABLE test2 (id INTEGER, value TEXT)")
+		if err != nil {
+			t.Fatalf("Failed to create test table 2: %v", err)
+		}
+
+		// Test getSQLiteTableNames
+		tableNames, err := getSQLiteTableNames(db)
+		if err != nil {
+			t.Fatalf("getSQLiteTableNames failed: %v", err)
+		}
+
+		expectedTables := []string{"test1", "test2"}
+		if len(tableNames) != len(expectedTables) {
+			t.Errorf("Expected %d tables, got %d: %v", len(expectedTables), len(tableNames), tableNames)
+		}
+
+		// Verify table names
+		for _, expected := range expectedTables {
+			found := false
+			for _, actual := range tableNames {
+				if actual == expected {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("Expected table %s not found in %v", expected, tableNames)
+			}
+		}
+	})
+
+	t.Run("getSQLiteTableColumns", func(t *testing.T) {
+		t.Parallel()
+
+		// Create a direct SQLite connection
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("Failed to create SQLite connection: %v", err)
+		}
+		defer db.Close()
+
+		// Create test table with known columns
+		_, err = db.ExecContext(context.Background(), "CREATE TABLE test_table (id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER, salary REAL)")
+		if err != nil {
+			t.Fatalf("Failed to create test table: %v", err)
+		}
+
+		// Test getSQLiteTableColumns
+		columns, err := getSQLiteTableColumns(db, "test_table")
+		if err != nil {
+			t.Fatalf("getSQLiteTableColumns failed: %v", err)
+		}
+
+		expectedColumns := []string{"id", "name", "age", "salary"}
+		if len(columns) != len(expectedColumns) {
+			t.Errorf("Expected %d columns, got %d: %v", len(expectedColumns), len(columns), columns)
+		}
+
+		// Verify column names
+		for i, expected := range expectedColumns {
+			if i >= len(columns) || columns[i] != expected {
+				t.Errorf("Expected column %s at index %d, got %s", expected, i, columns[i])
+			}
+		}
+	})
+
+	t.Run("dumpSQLiteDatabase with data", func(t *testing.T) {
+		t.Parallel()
+
+		// Create a direct SQLite connection
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("Failed to create SQLite connection: %v", err)
+		}
+		defer db.Close()
+
+		// Create test table and insert data
+		_, err = db.ExecContext(context.Background(), "CREATE TABLE employees (id INTEGER, name TEXT, department TEXT)")
+		if err != nil {
+			t.Fatalf("Failed to create test table: %v", err)
+		}
+
+		_, err = db.ExecContext(context.Background(), "INSERT INTO employees VALUES (1, 'Alice', 'Engineering'), (2, 'Bob', 'Marketing'), (3, 'Charlie', 'Sales')")
+		if err != nil {
+			t.Fatalf("Failed to insert test data: %v", err)
+		}
+
+		// Test dump to directory
+		tempDir := t.TempDir()
+		options := NewDumpOptions()
+
+		err = dumpSQLiteDatabase(db, tempDir, options)
+		if err != nil {
+			t.Fatalf("dumpSQLiteDatabase failed: %v", err)
+		}
+
+		// Verify file was created
+		dumpedFile := filepath.Join(tempDir, "employees.csv")
+		content, err := os.ReadFile(dumpedFile) //nolint:gosec // dumpedFile is created in test with controlled path
+		if err != nil {
+			t.Fatalf("Failed to read dumped file: %v", err)
+		}
+
+		contentStr := string(content)
+		lines := strings.Split(strings.TrimSpace(contentStr), "\n")
+
+		// Should have header + 3 data rows
+		if len(lines) != 4 {
+			t.Errorf("Expected 4 lines (header + 3 data), got %d", len(lines))
+		}
+
+		// Check header
+		if lines[0] != "id,name,department" {
+			t.Errorf("Expected header 'id,name,department', got '%s'", lines[0])
+		}
+
+		// Check data rows contain expected values
+		expectedDataPatterns := []string{"1,Alice,Engineering", "2,Bob,Marketing", "3,Charlie,Sales"}
+		for i, expected := range expectedDataPatterns {
+			if lines[i+1] != expected {
+				t.Errorf("Expected line %d to be '%s', got '%s'", i+1, expected, lines[i+1])
+			}
+		}
+	})
+
+	t.Run("createCompressedWriter formats", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+
+		t.Run("no compression", func(t *testing.T) {
+			file, err := os.Create(filepath.Join(tempDir, "test.txt")) //nolint:gosec // tempDir is created in test
+			if err != nil {
+				t.Fatalf("Failed to create test file: %v", err)
+			}
+			defer file.Close()
+
+			writer, closeWriter, err := createCompressedWriter(file, CompressionNone)
+			if err != nil {
+				t.Fatalf("createCompressedWriter failed: %v", err)
+			}
+
+			if writer != file {
+				t.Error("Expected writer to be the same as file for no compression")
+			}
+
+			if err := closeWriter(); err != nil {
+				t.Errorf("closeWriter failed: %v", err)
+			}
+		})
+
+		t.Run("gzip compression", func(t *testing.T) {
+			file, err := os.Create(filepath.Join(tempDir, "test.gz")) //nolint:gosec // tempDir is created in test
+			if err != nil {
+				t.Fatalf("Failed to create test file: %v", err)
+			}
+			defer file.Close()
+
+			writer, closeWriter, err := createCompressedWriter(file, CompressionGZ)
+			if err != nil {
+				t.Fatalf("createCompressedWriter failed for gzip: %v", err)
+			}
+
+			if writer == file {
+				t.Error("Expected writer to be different from file for gzip compression")
+			}
+
+			// Write some test data
+			testData := "test,data\n1,hello\n2,world\n"
+			n, err := writer.Write([]byte(testData))
+			if err != nil {
+				t.Fatalf("Failed to write to compressed writer: %v", err)
+			}
+			if n != len(testData) {
+				t.Errorf("Expected to write %d bytes, wrote %d", len(testData), n)
+			}
+
+			if err := closeWriter(); err != nil {
+				t.Errorf("closeWriter failed: %v", err)
+			}
+		})
+
+		t.Run("bzip2 compression should error", func(t *testing.T) {
+			file, err := os.Create(filepath.Join(tempDir, "test.bz2")) //nolint:gosec // tempDir is created in test
+			if err != nil {
+				t.Fatalf("Failed to create test file: %v", err)
+			}
+			defer file.Close()
+
+			_, _, err = createCompressedWriter(file, CompressionBZ2)
+			if err == nil {
+				t.Error("Expected error for bzip2 compression")
+			}
+
+			expectedError := "bzip2 compression is not supported for writing"
+			if err.Error() != expectedError {
+				t.Errorf("Expected error '%s', got '%s'", expectedError, err.Error())
+			}
+		})
+	})
 }

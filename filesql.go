@@ -3,12 +3,21 @@
 package filesql
 
 import (
+	"compress/gzip"
 	"context"
 	"database/sql"
+	"encoding/csv"
+	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/nao1215/filesql/domain/model"
 	filesqldriver "github.com/nao1215/filesql/driver"
+	"github.com/ulikunitz/xz"
 )
 
 const (
@@ -248,8 +257,288 @@ func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
 	// Use Raw to get the underlying driver connection
 	return conn.Raw(func(driverConn interface{}) error {
 		if filesqlConn, ok := driverConn.(*filesqldriver.Connection); ok {
+			// Use filesql driver's dump functionality
 			return filesqlConn.DumpWithOptions(outputDir, options)
 		}
-		return filesqldriver.ErrNotFilesqlConnection
+		// For direct SQLite connections, implement generic dump functionality
+		return dumpSQLiteDatabase(db, outputDir, options)
 	})
+}
+
+// dumpSQLiteDatabase implements generic dump functionality for SQLite databases
+func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error {
+	// Create output directory if it doesn't exist
+	if err := os.MkdirAll(outputDir, 0750); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	// Get all table names
+	tableNames, err := getSQLiteTableNames(db)
+	if err != nil {
+		return fmt.Errorf("failed to get table names: %w", err)
+	}
+
+	if len(tableNames) == 0 {
+		return errors.New("no tables found in database")
+	}
+
+	// Export each table
+	for _, tableName := range tableNames {
+		if err := dumpSQLiteTable(db, tableName, outputDir, options); err != nil {
+			return fmt.Errorf("failed to export table %s: %w", tableName, err)
+		}
+	}
+
+	return nil
+}
+
+// getSQLiteTableNames retrieves all user-defined table names from SQLite database
+func getSQLiteTableNames(db *sql.DB) ([]string, error) {
+	ctx := context.Background()
+	query := "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tableNames []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		tableNames = append(tableNames, name)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return tableNames, nil
+}
+
+// dumpSQLiteTable exports a single table from SQLite database
+func dumpSQLiteTable(db *sql.DB, tableName, outputDir string, options DumpOptions) error {
+	// Get table columns
+	columns, err := getSQLiteTableColumns(db, tableName)
+	if err != nil {
+		return fmt.Errorf("failed to get columns for table %s: %w", tableName, err)
+	}
+
+	// Query all data from table
+	ctx := context.Background()
+	query := fmt.Sprintf("SELECT * FROM `%s`", tableName) //nolint:gosec // Table name is validated and comes from database metadata
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	// Create output file
+	fileName := tableName + options.FileExtension()
+	outputPath := filepath.Join(outputDir, fileName)
+
+	return writeSQLiteTableData(outputPath, columns, rows, options)
+}
+
+// getSQLiteTableColumns retrieves column names for a specific table
+func getSQLiteTableColumns(db *sql.DB, tableName string) ([]string, error) {
+	ctx := context.Background()
+	query := fmt.Sprintf("PRAGMA table_info(`%s`)", tableName)
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var columns []string
+	for rows.Next() {
+		var cid int
+		var name, dataType string
+		var notNull, dfltValue, pk interface{}
+
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &dfltValue, &pk); err != nil {
+			return nil, err
+		}
+		columns = append(columns, name)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return columns, nil
+}
+
+// writeSQLiteTableData writes table data to file with specified format
+func writeSQLiteTableData(outputPath string, columns []string, rows *sql.Rows, options DumpOptions) error {
+	// Create the file
+	file, err := os.Create(outputPath) //nolint:gosec // Output path is constructed from validated directory and table name
+	if err != nil {
+		return fmt.Errorf("failed to create file %s: %w", outputPath, err)
+	}
+	defer file.Close()
+
+	// Create writer with compression if needed
+	writer, closeWriter, err := createCompressedWriter(file, options.Compression)
+	if err != nil {
+		return fmt.Errorf("failed to create writer: %w", err)
+	}
+	defer closeWriter()
+
+	// Write data based on format
+	switch options.Format {
+	case OutputFormatCSV:
+		return writeCSVData(writer, columns, rows)
+	case OutputFormatTSV:
+		return writeTSVData(writer, columns, rows)
+	case OutputFormatLTSV:
+		return writeLTSVData(writer, columns, rows)
+	default:
+		return fmt.Errorf("unsupported output format: %v", options.Format)
+	}
+}
+
+// createCompressedWriter creates an appropriate writer based on compression type
+func createCompressedWriter(file *os.File, compression CompressionType) (io.Writer, func() error, error) {
+	switch compression {
+	case CompressionNone:
+		return file, func() error { return nil }, nil
+	case CompressionGZ:
+		gzWriter := gzip.NewWriter(file)
+		return gzWriter, gzWriter.Close, nil
+	case CompressionBZ2:
+		// bzip2 doesn't have a writer in the standard library
+		return nil, nil, errors.New("bzip2 compression is not supported for writing")
+	case CompressionXZ:
+		xzWriter, err := xz.NewWriter(file)
+		if err != nil {
+			return nil, nil, err
+		}
+		return xzWriter, xzWriter.Close, nil
+	case CompressionZSTD:
+		zstdWriter, err := zstd.NewWriter(file)
+		if err != nil {
+			return nil, nil, err
+		}
+		return zstdWriter, zstdWriter.Close, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported compression type: %v", compression)
+	}
+}
+
+// writeCSVData writes data in CSV format
+func writeCSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
+	csvWriter := csv.NewWriter(writer)
+	defer csvWriter.Flush()
+
+	// Write header
+	if err := csvWriter.Write(columns); err != nil {
+		return err
+	}
+
+	// Prepare for scanning
+	values := make([]interface{}, len(columns))
+	scanArgs := make([]interface{}, len(columns))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	// Write data rows
+	for rows.Next() {
+		if err := rows.Scan(scanArgs...); err != nil {
+			return err
+		}
+
+		record := make([]string, len(columns))
+		for i, value := range values {
+			if value == nil {
+				record[i] = ""
+			} else {
+				record[i] = fmt.Sprintf("%v", value)
+			}
+		}
+
+		if err := csvWriter.Write(record); err != nil {
+			return err
+		}
+	}
+
+	return rows.Err()
+}
+
+// writeTSVData writes data in TSV format
+func writeTSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
+	csvWriter := csv.NewWriter(writer)
+	csvWriter.Comma = '\t'
+	defer csvWriter.Flush()
+
+	// Write header
+	if err := csvWriter.Write(columns); err != nil {
+		return err
+	}
+
+	// Prepare for scanning
+	values := make([]interface{}, len(columns))
+	scanArgs := make([]interface{}, len(columns))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	// Write data rows
+	for rows.Next() {
+		if err := rows.Scan(scanArgs...); err != nil {
+			return err
+		}
+
+		record := make([]string, len(columns))
+		for i, value := range values {
+			if value == nil {
+				record[i] = ""
+			} else {
+				record[i] = fmt.Sprintf("%v", value)
+			}
+		}
+
+		if err := csvWriter.Write(record); err != nil {
+			return err
+		}
+	}
+
+	return rows.Err()
+}
+
+// writeLTSVData writes data in LTSV format
+func writeLTSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
+	// Prepare for scanning
+	values := make([]interface{}, len(columns))
+	scanArgs := make([]interface{}, len(columns))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	// Write data rows
+	for rows.Next() {
+		if err := rows.Scan(scanArgs...); err != nil {
+			return err
+		}
+
+		// Build LTSV record
+		var parts []string
+		for i, col := range columns {
+			value := ""
+			if values[i] != nil {
+				value = fmt.Sprintf("%v", values[i])
+			}
+			parts = append(parts, fmt.Sprintf("%s:%s", col, value))
+		}
+
+		line := strings.Join(parts, "\t") + "\n"
+		if _, err := writer.Write([]byte(line)); err != nil {
+			return err
+		}
+	}
+
+	return rows.Err()
 }
