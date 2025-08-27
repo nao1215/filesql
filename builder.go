@@ -17,7 +17,6 @@ import (
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
-	"github.com/nao1215/filesql/domain/model"
 	"github.com/ulikunitz/xz"
 	"modernc.org/sqlite" // Direct SQLite driver usage
 )
@@ -41,47 +40,47 @@ type DBBuilder struct {
 	// filesystems contains fs.FS instances
 	filesystems []fs.FS
 	// readers contains reader configurations
-	readers []ReaderInput
+	readers []readerInput
 	// collectedPaths contains all paths after Build validation
 	collectedPaths []string
 	// parsedTables contains tables parsed from streaming readers
-	parsedTables []*model.Table
+	parsedTables []*table
 	// autoSaveConfig contains auto-save settings
-	autoSaveConfig *AutoSaveConfig
+	autoSaveConfig *autoSaveConfig
 	// defaultChunkSize is the default chunk size for reading large files (10MB)
 	defaultChunkSize int
 }
 
-// AutoSaveTiming specifies when automatic saving should occur
-type AutoSaveTiming int
+// autoSaveTiming specifies when automatic saving should occur
+type autoSaveTiming int
 
 const (
-	// AutoSaveOnClose saves data when db.Close() is called (default)
-	AutoSaveOnClose AutoSaveTiming = iota
-	// AutoSaveOnCommit saves data when transaction is committed
-	AutoSaveOnCommit
+	// autoSaveOnClose saves data when db.Close() is called (default)
+	autoSaveOnClose autoSaveTiming = iota
+	// autoSaveOnCommit saves data when transaction is committed
+	autoSaveOnCommit
 )
 
-// AutoSaveConfig holds configuration for automatic saving
-type AutoSaveConfig struct {
-	// Enabled indicates whether auto-save is enabled
-	Enabled bool
-	// Timing specifies when to save (on close or on commit)
-	Timing AutoSaveTiming
-	// OutputDir is the directory where files will be saved (overwrites original files)
-	OutputDir string
-	// Options contains dump options for formatting
-	Options DumpOptions
+// autoSaveConfig holds configuration for automatic saving
+type autoSaveConfig struct {
+	// enabled indicates whether auto-save is enabled
+	enabled bool
+	// timing specifies when to save (on close or on commit)
+	timing autoSaveTiming
+	// outputDir is the directory where files will be saved (overwrites original files)
+	outputDir string
+	// options contains dump options for formatting
+	options DumpOptions
 }
 
-// ReaderInput represents configuration for reading from io.Reader
-type ReaderInput struct {
-	// Reader is the data source
-	Reader io.Reader
-	// TableName is the name of the table to create
-	TableName string
-	// FileType specifies the file format using domain/model types
-	FileType model.FileType
+// readerInput represents configuration for reading from io.Reader
+type readerInput struct {
+	// reader is the data source
+	reader io.Reader
+	// tableName is the name of the table to create
+	tableName string
+	// fileType specifies the file format using domain/model types
+	fileType FileType
 }
 
 // NewBuilder creates a new database builder for configuring file inputs.
@@ -106,9 +105,9 @@ func NewBuilder() *DBBuilder {
 	return &DBBuilder{
 		paths:            make([]string, 0),
 		filesystems:      make([]fs.FS, 0),
-		readers:          make([]ReaderInput, 0),
+		readers:          make([]readerInput, 0),
 		collectedPaths:   make([]string, 0),
-		parsedTables:     make([]*model.Table, 0),
+		parsedTables:     make([]*table, 0),
 		autoSaveConfig:   nil,              // Default: no auto-save
 		defaultChunkSize: 10 * 1024 * 1024, // 10MB default chunk size
 	}
@@ -143,10 +142,10 @@ func (b *DBBuilder) AddPaths(paths ...string) *DBBuilder {
 // You must specify the table name and file type explicitly for security.
 //
 // The fileType parameter should use the FileType constants from domain/model:
-// - model.FileTypeCSV for CSV data
-// - model.FileTypeTSV for TSV data
-// - model.FileTypeLTSV for LTSV data
-// - model.FileTypeCSVGZ for gzip-compressed CSV data
+// - FileTypeCSV for CSV data
+// - FileTypeTSV for TSV data
+// - FileTypeLTSV for LTSV data
+// - FileTypeCSVGZ for gzip-compressed CSV data
 // - etc.
 //
 // Example:
@@ -157,14 +156,14 @@ func (b *DBBuilder) AddPaths(paths ...string) *DBBuilder {
 //	}
 //	defer file.Close()
 //
-//	builder := filesql.NewBuilder().AddReader(file, "users", model.FileTypeCSV)
+//	builder := filesql.NewBuilder().AddReader(file, "users", FileTypeCSV)
 //
 // Returns the builder for method chaining.
-func (b *DBBuilder) AddReader(reader io.Reader, tableName string, fileType model.FileType) *DBBuilder {
-	b.readers = append(b.readers, ReaderInput{
-		Reader:    reader,
-		TableName: tableName,
-		FileType:  fileType,
+func (b *DBBuilder) AddReader(reader io.Reader, tableName string, fileType FileType) *DBBuilder {
+	b.readers = append(b.readers, readerInput{
+		reader:    reader,
+		tableName: tableName,
+		fileType:  fileType,
 	})
 	return b
 }
@@ -224,11 +223,11 @@ func (b *DBBuilder) EnableAutoSave(outputDir string, options ...DumpOptions) *DB
 		opts = options[0]
 	}
 
-	b.autoSaveConfig = &AutoSaveConfig{
-		Enabled:   true,
-		Timing:    AutoSaveOnClose, // Default to close-time saving
-		OutputDir: outputDir,
-		Options:   opts,
+	b.autoSaveConfig = &autoSaveConfig{
+		enabled:   true,
+		timing:    autoSaveOnClose, // Default to close-time saving
+		outputDir: outputDir,
+		options:   opts,
 	}
 	return b
 }
@@ -253,11 +252,11 @@ func (b *DBBuilder) EnableAutoSaveOnCommit(outputDir string, options ...DumpOpti
 		opts = options[0]
 	}
 
-	b.autoSaveConfig = &AutoSaveConfig{
-		Enabled:   true,
-		Timing:    AutoSaveOnCommit,
-		OutputDir: outputDir,
-		Options:   opts,
+	b.autoSaveConfig = &autoSaveConfig{
+		enabled:   true,
+		timing:    autoSaveOnCommit,
+		outputDir: outputDir,
+		options:   opts,
 	}
 	return b
 }
@@ -315,7 +314,7 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 				}
 
 				// Skip directories and non-supported files
-				if d.IsDir() || !model.IsSupportedFile(filePath) {
+				if d.IsDir() || !isSupportedFile(filePath) {
 					return nil
 				}
 
@@ -342,7 +341,7 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 			}
 		} else {
 			// It's a file, check if it has a supported extension
-			if !model.IsSupportedFile(path) {
+			if !isSupportedFile(path) {
 				return nil, fmt.Errorf("unsupported file type: %s", path)
 			}
 
@@ -377,13 +376,13 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 	// Validate Reader inputs for streaming processing
 	for i := range b.readers {
 		readerInput := &b.readers[i]
-		if readerInput.Reader == nil {
+		if readerInput.reader == nil {
 			return nil, errors.New("reader cannot be nil")
 		}
-		if readerInput.TableName == "" {
+		if readerInput.tableName == "" {
 			return nil, errors.New("table name must be specified for reader input")
 		}
-		if readerInput.FileType == model.FileTypeUnsupported {
+		if readerInput.fileType == FileTypeUnsupported {
 			return nil, errors.New("file type must be specified for reader input")
 		}
 		// Reader inputs will be processed directly in Open() method using streaming
@@ -453,7 +452,7 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 	for _, readerInput := range b.readers {
 		if err := b.streamReaderToSQLite(ctx, db, readerInput); err != nil {
 			_ = db.Close() // Ignore close error during error handling
-			return nil, fmt.Errorf("failed to stream reader input for table '%s': %w", readerInput.TableName, err)
+			return nil, fmt.Errorf("failed to stream reader input for table '%s': %w", readerInput.tableName, err)
 		}
 	}
 
@@ -472,7 +471,7 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 	}
 
 	// For auto-save functionality, create a custom connector that wraps the SQLite connection
-	if b.autoSaveConfig != nil && b.autoSaveConfig.Enabled {
+	if b.autoSaveConfig != nil && b.autoSaveConfig.enabled {
 		// Close the current DB and create a fresh one using our auto-save connector
 		if err := db.Close(); err != nil {
 			return nil, fmt.Errorf("failed to close intermediate database: %w", err)
@@ -504,7 +503,7 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 		for _, readerInput := range b.readers {
 			if err := b.streamReaderToSQLite(ctx, db, readerInput); err != nil {
 				_ = db.Close() // Ignore close error during error handling
-				return nil, fmt.Errorf("failed to stream reader input for table '%s': %w", readerInput.TableName, err)
+				return nil, fmt.Errorf("failed to stream reader input for table '%s': %w", readerInput.tableName, err)
 			}
 		}
 	}
@@ -513,11 +512,11 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 }
 
 // processFSToReaders processes all supported files from an fs.FS and creates ReaderInput
-func (b *DBBuilder) processFSToReaders(_ context.Context, filesystem fs.FS) ([]ReaderInput, error) {
-	readers := make([]ReaderInput, 0)
+func (b *DBBuilder) processFSToReaders(_ context.Context, filesystem fs.FS) ([]readerInput, error) {
+	readers := make([]readerInput, 0)
 
 	// Search for all supported file patterns
-	supportedPatterns := model.SupportedFileExtPatterns()
+	supportedPatterns := supportedFileExtPatterns()
 
 	// Collect all matching files
 	allMatches := make([]string, 0)
@@ -537,7 +536,7 @@ func (b *DBBuilder) processFSToReaders(_ context.Context, filesystem fs.FS) ([]R
 		if d.IsDir() {
 			return nil
 		}
-		if model.IsSupportedFile(path) {
+		if isSupportedFile(path) {
 			// Check if already found by glob patterns
 			// Use path.Clean to normalize paths for comparison (fs.FS uses forward slashes)
 			normalizedPath := filepath.ToSlash(path)
@@ -574,18 +573,18 @@ func (b *DBBuilder) processFSToReaders(_ context.Context, filesystem fs.FS) ([]R
 			return nil, fmt.Errorf("failed to open FS file %s: %w", match, err)
 		}
 
-		// Determine file type from extension using model.NewFile
-		fileInfo := model.NewFile(match)
-		fileType := fileInfo.Type()
+		// Determine file type from extension using NewFile
+		fileInfo := newFile(match)
+		fileType := fileInfo.getFileType()
 
 		// Generate table name from file path (remove extension and clean up)
-		tableName := model.TableFromFilePath(match)
+		tableName := tableFromFilePath(match)
 
 		// Create ReaderInput
-		readerInput := ReaderInput{
-			Reader:    file,
-			TableName: tableName,
-			FileType:  fileType,
+		readerInput := readerInput{
+			reader:    file,
+			tableName: tableName,
+			fileType:  fileType,
 		}
 
 		readers = append(readers, readerInput)
@@ -597,7 +596,7 @@ func (b *DBBuilder) processFSToReaders(_ context.Context, filesystem fs.FS) ([]R
 func (b *DBBuilder) streamFileToSQLite(ctx context.Context, db *sql.DB, filePath string) error {
 	// At this point, filePath should only be files since directories are expanded in Build()
 	// Check if file is supported (double-check for safety)
-	if !model.IsSupportedFile(filePath) {
+	if !isSupportedFile(filePath) {
 		return fmt.Errorf("unsupported file type: %s", filePath)
 	}
 
@@ -622,14 +621,14 @@ func (b *DBBuilder) streamFileToSQLite(ctx context.Context, db *sql.DB, filePath
 	}
 
 	// Create file model to determine type and table name
-	fileModel := model.NewFile(filePath)
-	tableName := model.TableFromFilePath(filePath)
+	fileModel := newFile(filePath)
+	tableName := tableFromFilePath(filePath)
 
 	// Create reader input for streaming
-	readerInput := ReaderInput{
-		Reader:    reader,
-		TableName: tableName,
-		FileType:  fileModel.Type(),
+	readerInput := readerInput{
+		reader:    reader,
+		tableName: tableName,
+		fileType:  fileModel.getFileType(),
 	}
 
 	// Use existing streaming logic
@@ -638,16 +637,16 @@ func (b *DBBuilder) streamFileToSQLite(ctx context.Context, db *sql.DB, filePath
 
 // streamReaderToSQLite streams data from io.Reader directly to SQLite database
 // This is the ideal approach that provides true streaming with chunk-based processing
-func (b *DBBuilder) streamReaderToSQLite(ctx context.Context, db *sql.DB, input ReaderInput) error {
+func (b *DBBuilder) streamReaderToSQLite(ctx context.Context, db *sql.DB, input readerInput) error {
 	// Wrap reader with buffered reader for better performance
-	bufferedReader := bufio.NewReader(input.Reader)
-	input.Reader = bufferedReader
+	bufferedReader := bufio.NewReader(input.reader)
+	input.reader = bufferedReader
 
 	// Check if table already exists to avoid duplicates
 	var tableExists int
 	err := db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`,
-		input.TableName,
+		input.tableName,
 	).Scan(&tableExists)
 	if err != nil {
 		return fmt.Errorf("failed to check table existence: %w", err)
@@ -655,18 +654,18 @@ func (b *DBBuilder) streamReaderToSQLite(ctx context.Context, db *sql.DB, input 
 
 	if tableExists > 0 {
 		// Table already exists - this is an error condition
-		return fmt.Errorf("table '%s' already exists from another file, duplicate table names are not allowed", input.TableName)
+		return fmt.Errorf("table '%s' already exists from another file, duplicate table names are not allowed", input.tableName)
 	}
 
 	// Create streaming parser for chunked processing
-	parser := model.NewStreamingParser(input.FileType, input.TableName, b.defaultChunkSize)
+	parser := newStreamingParser(input.fileType, input.tableName, b.defaultChunkSize)
 
 	// Initialize the table schema (we need to peek at the first chunk to get headers)
 	var tableCreated bool
 	var insertStmt *sql.Stmt
 
 	// Process data in chunks
-	err = parser.ProcessInChunks(input.Reader, func(chunk *model.TableChunk) error {
+	err = parser.ProcessInChunks(input.reader, func(chunk *tableChunk) error {
 		// Create table on first chunk
 		if !tableCreated {
 			if err := b.createTableFromChunk(ctx, db, chunk); err != nil {
@@ -721,17 +720,17 @@ func (b *DBBuilder) streamReaderToSQLite(ctx context.Context, db *sql.DB, input 
 	return nil
 }
 
-// createTableFromChunk creates a SQLite table from a TableChunk
-func (b *DBBuilder) createTableFromChunk(ctx context.Context, db *sql.DB, chunk *model.TableChunk) error {
-	columnInfo := chunk.ColumnInfo()
+// createTableFromChunk creates a SQLite table from a tableChunk
+func (b *DBBuilder) createTableFromChunk(ctx context.Context, db *sql.DB, chunk *tableChunk) error {
+	columnInfo := chunk.getColumnInfo()
 	columns := make([]string, 0, len(columnInfo))
 	for _, col := range columnInfo {
-		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.String()))
+		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.string()))
 	}
 
 	query := fmt.Sprintf(
 		`CREATE TABLE IF NOT EXISTS "%s" (%s)`,
-		chunk.TableName(),
+		chunk.getTableName(),
 		strings.Join(columns, ", "),
 	)
 
@@ -740,8 +739,8 @@ func (b *DBBuilder) createTableFromChunk(ctx context.Context, db *sql.DB, chunk 
 }
 
 // prepareInsertStatement prepares an insert statement for the table
-func (b *DBBuilder) prepareInsertStatement(ctx context.Context, db *sql.DB, chunk *model.TableChunk) (*sql.Stmt, error) {
-	headers := chunk.Headers()
+func (b *DBBuilder) prepareInsertStatement(ctx context.Context, db *sql.DB, chunk *tableChunk) (*sql.Stmt, error) {
+	headers := chunk.getHeaders()
 	placeholders := make([]string, len(headers))
 	for i := range placeholders {
 		placeholders[i] = "?"
@@ -749,7 +748,7 @@ func (b *DBBuilder) prepareInsertStatement(ctx context.Context, db *sql.DB, chun
 
 	query := fmt.Sprintf(
 		`INSERT INTO "%s" VALUES (%s)`,
-		chunk.TableName(),
+		chunk.getTableName(),
 		strings.Join(placeholders, ", "),
 	)
 
@@ -757,8 +756,8 @@ func (b *DBBuilder) prepareInsertStatement(ctx context.Context, db *sql.DB, chun
 }
 
 // insertChunkData inserts a chunk's worth of data using a prepared statement
-func (b *DBBuilder) insertChunkData(ctx context.Context, stmt *sql.Stmt, chunk *model.TableChunk) error {
-	for _, record := range chunk.Records() {
+func (b *DBBuilder) insertChunkData(ctx context.Context, stmt *sql.Stmt, chunk *tableChunk) error {
+	for _, record := range chunk.getRecords() {
 		values := make([]any, len(record))
 		for i, value := range record {
 			values[i] = value
@@ -775,7 +774,7 @@ func (b *DBBuilder) insertChunkData(ctx context.Context, stmt *sql.Stmt, chunk *
 // createDecompressedReader creates a decompressed reader based on file extension
 func (b *DBBuilder) createDecompressedReader(file *os.File, filePath string) (io.Reader, error) {
 	// Check file extension to determine compression type
-	if strings.HasSuffix(strings.ToLower(filePath), model.ExtGZ) {
+	if strings.HasSuffix(strings.ToLower(filePath), extGZ) {
 		gzReader, err := gzip.NewReader(file)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
@@ -783,11 +782,11 @@ func (b *DBBuilder) createDecompressedReader(file *os.File, filePath string) (io
 		return gzReader, nil
 	}
 
-	if strings.HasSuffix(strings.ToLower(filePath), model.ExtBZ2) {
+	if strings.HasSuffix(strings.ToLower(filePath), extBZ2) {
 		return bzip2.NewReader(file), nil
 	}
 
-	if strings.HasSuffix(strings.ToLower(filePath), model.ExtXZ) {
+	if strings.HasSuffix(strings.ToLower(filePath), extXZ) {
 		xzReader, err := xz.NewReader(file)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create xz reader: %w", err)
@@ -795,7 +794,7 @@ func (b *DBBuilder) createDecompressedReader(file *os.File, filePath string) (io
 		return xzReader, nil
 	}
 
-	if strings.HasSuffix(strings.ToLower(filePath), model.ExtZSTD) {
+	if strings.HasSuffix(strings.ToLower(filePath), extZSTD) {
 		zstdReader, err := zstd.NewReader(file)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create zstd reader: %w", err)
@@ -821,10 +820,10 @@ func (dc *directConnector) Driver() driver.Driver {
 }
 
 // createEmptyTable creates an empty table for header-only files
-func (b *DBBuilder) createEmptyTable(ctx context.Context, db *sql.DB, input ReaderInput) error {
+func (b *DBBuilder) createEmptyTable(ctx context.Context, db *sql.DB, input readerInput) error {
 	// Parse just the header to get column information
-	tempParser := model.NewStreamingParser(input.FileType, input.TableName, 1)
-	tempTable, err := tempParser.ParseFromReader(input.Reader)
+	tempParser := newStreamingParser(input.fileType, input.tableName, 1)
+	tempTable, err := tempParser.parseFromReader(input.reader)
 	if err != nil {
 		// Check if this is a parsing error we should preserve (like duplicate columns)
 		if strings.Contains(err.Error(), "duplicate column name") {
@@ -836,29 +835,29 @@ func (b *DBBuilder) createEmptyTable(ctx context.Context, db *sql.DB, input Read
 	}
 
 	// Create table using the parsed headers
-	headers := tempTable.Header()
+	headers := tempTable.getHeader()
 	if len(headers) == 0 {
-		return fmt.Errorf("no headers found in file for table %s", input.TableName)
+		return fmt.Errorf("no headers found in file for table %s", input.tableName)
 	}
 
 	// Infer column types from headers (all as TEXT for header-only files)
-	columnInfo := make([]model.ColumnInfo, len(headers))
+	columnInfoList := make([]columnInfo, len(headers))
 	for i, colName := range headers {
-		columnInfo[i] = model.ColumnInfo{
+		columnInfoList[i] = columnInfo{
 			Name: colName,
-			Type: model.ColumnTypeText, // Default to TEXT for header-only
+			Type: columnTypeText, // Default to TEXT for header-only
 		}
 	}
 
 	// Create the table
-	columns := make([]string, 0, len(columnInfo))
-	for _, col := range columnInfo {
-		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.String()))
+	columns := make([]string, 0, len(columnInfoList))
+	for _, col := range columnInfoList {
+		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.string()))
 	}
 
 	query := fmt.Sprintf(
 		`CREATE TABLE IF NOT EXISTS "%s" (%s)`,
-		input.TableName,
+		input.tableName,
 		strings.Join(columns, ", "),
 	)
 
@@ -871,7 +870,7 @@ func (b *DBBuilder) createEmptyTable(ctx context.Context, db *sql.DB, input Read
 }
 
 // createTableFromHeaders creates table from header information only
-func (b *DBBuilder) createTableFromHeaders(ctx context.Context, db *sql.DB, input ReaderInput) error {
+func (b *DBBuilder) createTableFromHeaders(ctx context.Context, db *sql.DB, input readerInput) error {
 	// This is a fallback method for when ParseFromReader fails
 	// Since the reader may have been consumed by the parser, we can't reliably detect
 	// empty files here. Instead, we'll create a fallback table and assume the
@@ -880,7 +879,7 @@ func (b *DBBuilder) createTableFromHeaders(ctx context.Context, db *sql.DB, inpu
 	// For simplicity, create a generic table structure
 	query := fmt.Sprintf(
 		`CREATE TABLE IF NOT EXISTS "%s" (column1 TEXT)`,
-		input.TableName,
+		input.tableName,
 	)
 
 	_, err := db.ExecContext(ctx, query)
@@ -894,7 +893,7 @@ func (b *DBBuilder) createTableFromHeaders(ctx context.Context, db *sql.DB, inpu
 // autoSaveConnector implements driver.Connector interface with auto-save functionality
 type autoSaveConnector struct {
 	sqliteConn     driver.Conn
-	autoSaveConfig *AutoSaveConfig
+	autoSaveConfig *autoSaveConfig
 	originalPaths  []string
 }
 
@@ -915,14 +914,14 @@ func (c *autoSaveConnector) Driver() driver.Driver {
 // autoSaveConnection wraps driver.Conn with auto-save functionality
 type autoSaveConnection struct {
 	conn           driver.Conn
-	autoSaveConfig *AutoSaveConfig
+	autoSaveConfig *autoSaveConfig
 	originalPaths  []string
 }
 
 // Close implements driver.Conn interface with auto-save on close
 func (c *autoSaveConnection) Close() error {
 	// Perform auto-save if configured for close timing
-	if c.autoSaveConfig != nil && c.autoSaveConfig.Enabled && c.autoSaveConfig.Timing == AutoSaveOnClose {
+	if c.autoSaveConfig != nil && c.autoSaveConfig.enabled && c.autoSaveConfig.timing == autoSaveOnClose {
 		if err := c.performAutoSave(); err != nil {
 			// Close the underlying connection first to avoid resource leaks
 			closeErr := c.conn.Close()
@@ -1001,7 +1000,7 @@ func (t *autoSaveTransaction) Commit() error {
 	}
 
 	// Perform auto-save if configured for commit timing
-	if t.conn.autoSaveConfig != nil && t.conn.autoSaveConfig.Enabled && t.conn.autoSaveConfig.Timing == AutoSaveOnCommit {
+	if t.conn.autoSaveConfig != nil && t.conn.autoSaveConfig.enabled && t.conn.autoSaveConfig.timing == autoSaveOnCommit {
 		if err := t.conn.performAutoSave(); err != nil {
 			// Auto-save failed, but the transaction was already committed
 			// Log the error but don't return it to avoid confusion
@@ -1019,21 +1018,21 @@ func (t *autoSaveTransaction) Rollback() error {
 
 // performAutoSave executes automatic saving using the configured settings
 func (c *autoSaveConnection) performAutoSave() error {
-	if c.autoSaveConfig == nil || !c.autoSaveConfig.Enabled {
+	if c.autoSaveConfig == nil || !c.autoSaveConfig.enabled {
 		return nil // No auto-save configured
 	}
 
 	// Create a temporary SQL DB to use DumpDatabase function
 	tempDB := sql.OpenDB(&directConnector{conn: c.conn})
 
-	outputDir := c.autoSaveConfig.OutputDir
+	outputDir := c.autoSaveConfig.outputDir
 	if outputDir == "" {
 		// Overwrite mode - save to original file locations
 		return c.overwriteOriginalFiles(tempDB)
 	}
 
 	// Use the configured DumpOptions directly
-	dumpOptions := c.autoSaveConfig.Options
+	dumpOptions := c.autoSaveConfig.options
 
 	// Use the existing DumpDatabase method
 	return DumpDatabase(tempDB, outputDir, dumpOptions)
@@ -1049,7 +1048,7 @@ func (c *autoSaveConnection) overwriteOriginalFiles(db *sql.DB) error {
 	// This is a simplified implementation
 	if len(c.originalPaths) > 0 {
 		outputDir := filepath.Dir(c.originalPaths[0])
-		return DumpDatabase(db, outputDir, c.autoSaveConfig.Options)
+		return DumpDatabase(db, outputDir, c.autoSaveConfig.options)
 	}
 
 	return nil
@@ -1070,7 +1069,7 @@ func (b *DBBuilder) deduplicateCompressedFiles(files []string) []string {
 
 	// First pass: collect all uncompressed files
 	for _, file := range files {
-		tableName := model.TableFromFilePath(file)
+		tableName := tableFromFilePath(file)
 		if !b.isCompressedFile(file) {
 			tableToFile[tableName] = file
 		}
@@ -1078,7 +1077,7 @@ func (b *DBBuilder) deduplicateCompressedFiles(files []string) []string {
 
 	// Second pass: add compressed files only if uncompressed version doesn't exist
 	for _, file := range files {
-		tableName := model.TableFromFilePath(file)
+		tableName := tableFromFilePath(file)
 		if b.isCompressedFile(file) {
 			if _, exists := tableToFile[tableName]; !exists {
 				tableToFile[tableName] = file
@@ -1106,12 +1105,12 @@ func (b *DBBuilder) isCompressedFile(filePath string) bool {
 // validateAutoSaveConfig validates that the auto-save configuration is compatible with the input sources
 func (b *DBBuilder) validateAutoSaveConfig() error {
 	// If auto-save is not enabled, no validation needed
-	if b.autoSaveConfig == nil || !b.autoSaveConfig.Enabled {
+	if b.autoSaveConfig == nil || !b.autoSaveConfig.enabled {
 		return nil
 	}
 
 	// Check if overwrite mode (empty OutputDir) is being used with non-file inputs
-	isOverwriteMode := b.autoSaveConfig.OutputDir == ""
+	isOverwriteMode := b.autoSaveConfig.outputDir == ""
 	hasNonFileInputs := len(b.readers) > 0 || len(b.filesystems) > 0
 
 	if isOverwriteMode && hasNonFileInputs {

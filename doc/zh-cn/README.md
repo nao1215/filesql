@@ -118,7 +118,7 @@ func main() {
     // 对嵌入文件系统使用 Builder 模式
     subFS, _ := fs.Sub(dataFS, "data")
     
-    db, err := filesql.NewBuilder().
+    validatedBuilder, err := filesql.NewBuilder().
         AddPath("local_file.csv").  // 常规文件
         AddFS(subFS).               // 嵌入文件系统
         Build(ctx)
@@ -126,7 +126,7 @@ func main() {
         log.Fatal(err)
     }
     
-    connection, err := db.Open(ctx)
+    connection, err := validatedBuilder.Open(ctx)
     if err != nil {
         log.Fatal(err)
     }
@@ -398,7 +398,11 @@ if err != nil {
 }
 
 // 将修改的数据导出到新目录
-err = filesql.DumpDatabase(db, "/path/to/output/directory")
+// 可以选择性指定输出格式和压缩
+options := filesql.NewDumpOptions().
+    WithFormat(filesql.OutputFormatTSV).
+    WithCompression(filesql.CompressionGZ)
+err = filesql.DumpDatabase(db, "/path/to/output/directory", options)
 if err != nil {
     log.Fatal(err)
 }

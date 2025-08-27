@@ -12,8 +12,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/nao1215/filesql/domain/model"
 )
 
 func TestOpen(t *testing.T) {
@@ -313,9 +311,9 @@ id:3	product:Keyboard	price:75`
 
 		// Use NewBuilder with readers
 		builder := NewBuilder().
-			AddReader(strings.NewReader(csvData), "employees", model.FileTypeCSV).
-			AddReader(strings.NewReader(tsvData), "departments", model.FileTypeTSV).
-			AddReader(strings.NewReader(ltsvData), "products", model.FileTypeLTSV)
+			AddReader(strings.NewReader(csvData), "employees", FileTypeCSV).
+			AddReader(strings.NewReader(tsvData), "departments", FileTypeTSV).
+			AddReader(strings.NewReader(ltsvData), "products", FileTypeLTSV)
 
 		validatedBuilder, err := builder.Build(context.Background())
 		if err != nil {
@@ -677,10 +675,10 @@ id:3	product:Keyboard	price:75`
 		testFS := os.DirFS(filepath.Join("testdata", "embed_test"))
 
 		builder := NewBuilder().
-			AddPath(filepath.Join("testdata", "sample.csv")).                          // File path
-			AddReader(strings.NewReader(csvData), "custom_orders", model.FileTypeCSV). // io.Reader with unique name
-			AddFS(testFS).                                                             // embed.FS
-			AddPath(filepath.Join("testdata", "sample2.csv"))                          // Different file to avoid table name conflict
+			AddPath(filepath.Join("testdata", "sample.csv")).                    // File path
+			AddReader(strings.NewReader(csvData), "custom_orders", FileTypeCSV). // io.Reader with unique name
+			AddFS(testFS).                                                       // embed.FS
+			AddPath(filepath.Join("testdata", "sample2.csv"))                    // Different file to avoid table name conflict
 
 		validatedBuilder, err := builder.Build(context.Background())
 		if err != nil {
@@ -1389,92 +1387,92 @@ func Test_FileFormatDetection(t *testing.T) {
 	testCases := []struct {
 		name         string
 		fileName     string
-		expectedType model.FileType
+		expectedType FileType
 		isSupported  bool
 	}{
 		{
 			name:         "CSV file",
 			fileName:     "test.csv",
-			expectedType: model.FileTypeCSV,
+			expectedType: FileTypeCSV,
 			isSupported:  true,
 		},
 		{
 			name:         "TSV file",
 			fileName:     "test.tsv",
-			expectedType: model.FileTypeTSV,
+			expectedType: FileTypeTSV,
 			isSupported:  true,
 		},
 		{
 			name:         "LTSV file",
 			fileName:     "test.ltsv",
-			expectedType: model.FileTypeLTSV,
+			expectedType: FileTypeLTSV,
 			isSupported:  true,
 		},
 		{
 			name:         "Compressed CSV",
 			fileName:     "test.csv.gz",
-			expectedType: model.FileTypeCSV,
+			expectedType: FileTypeCSV,
 			isSupported:  true,
 		},
 		{
 			name:         "Double compressed (should handle gracefully)",
 			fileName:     "test.csv.gz.bz2",
-			expectedType: model.FileTypeUnsupported,
+			expectedType: FileTypeUnsupported,
 			isSupported:  false,
 		},
 		{
 			name:         "Unsupported format",
 			fileName:     "test.txt",
-			expectedType: model.FileTypeUnsupported,
+			expectedType: FileTypeUnsupported,
 			isSupported:  false,
 		},
 		{
 			name:         "Empty extension",
 			fileName:     "test",
-			expectedType: model.FileTypeUnsupported,
+			expectedType: FileTypeUnsupported,
 			isSupported:  false,
 		},
 		{
 			name:         "Multiple dots in filename",
 			fileName:     "test.backup.final.csv",
-			expectedType: model.FileTypeCSV,
+			expectedType: FileTypeCSV,
 			isSupported:  true,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			file := model.NewFile(tc.fileName)
+			file := newFile(tc.fileName)
 
-			if file.Type() != tc.expectedType {
-				t.Errorf("Expected file type %v, got %v", tc.expectedType, file.Type())
+			if file.getFileType() != tc.expectedType {
+				t.Errorf("Expected file type %v, got %v", tc.expectedType, file.getFileType())
 			}
 
-			if model.IsSupportedFile(tc.fileName) != tc.isSupported {
-				t.Errorf("Expected supported=%v, got %v", tc.isSupported, model.IsSupportedFile(tc.fileName))
+			if isSupportedFile(tc.fileName) != tc.isSupported {
+				t.Errorf("Expected supported=%v, got %v", tc.isSupported, isSupportedFile(tc.fileName))
 			}
 
 			// Test type-specific methods
 			switch tc.expectedType {
-			case model.FileTypeCSV:
-				if !file.IsCSV() {
-					t.Errorf("IsCSV() should return true for CSV file")
+			case FileTypeCSV:
+				if !file.isCSV() {
+					t.Errorf("isCSV() should return true for CSV file")
 				}
-				if file.IsTSV() || file.IsLTSV() {
+				if file.isTSV() || file.isLTSV() {
 					t.Errorf("Type methods should be exclusive")
 				}
-			case model.FileTypeTSV:
-				if !file.IsTSV() {
-					t.Errorf("IsTSV() should return true for TSV file")
+			case FileTypeTSV:
+				if !file.isTSV() {
+					t.Errorf("isTSV() should return true for TSV file")
 				}
-				if file.IsCSV() || file.IsLTSV() {
+				if file.isCSV() || file.isLTSV() {
 					t.Errorf("Type methods should be exclusive")
 				}
-			case model.FileTypeLTSV:
-				if !file.IsLTSV() {
-					t.Errorf("IsLTSV() should return true for LTSV file")
+			case FileTypeLTSV:
+				if !file.isLTSV() {
+					t.Errorf("isLTSV() should return true for LTSV file")
 				}
-				if file.IsCSV() || file.IsTSV() {
+				if file.isCSV() || file.isTSV() {
 					t.Errorf("Type methods should be exclusive")
 				}
 			}
@@ -1537,7 +1535,7 @@ func Test_TableNameSecurity(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			tableName := model.TableFromFilePath(tc.filePath)
+			tableName := tableFromFilePath(tc.filePath)
 			if tableName != tc.expectedName {
 				t.Errorf("Expected table name %q, got %q", tc.expectedName, tableName)
 			}
@@ -1624,7 +1622,7 @@ func Test_MalformedCSVHandling(t *testing.T) {
 				defer db.Close()
 
 				// Try to query the table
-				tableName := model.TableFromFilePath(tmpFile.Name())
+				tableName := tableFromFilePath(tmpFile.Name())
 				// Use bracket notation for table name (safe in controlled test environment)
 				query := "SELECT COUNT(*) FROM [" + tableName + "]"
 				var count int
@@ -1676,7 +1674,7 @@ func Test_ConcurrentAccess(t *testing.T) {
 					return
 				}
 
-				tableName := model.TableFromFilePath(tmpFile.Name())
+				tableName := tableFromFilePath(tmpFile.Name())
 				// Use bracket notation for table name and parameterized query for safety
 				query := "SELECT COUNT(*) FROM [" + tableName + "] WHERE id > " + strconv.Itoa(j*5)
 
@@ -1734,7 +1732,7 @@ func Test_ResourceExhaustion(t *testing.T) {
 		}
 		defer db.Close()
 
-		tableName := model.TableFromFilePath(tmpFile.Name())
+		tableName := tableFromFilePath(tmpFile.Name())
 		var count int
 		err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
 		if err != nil {
@@ -1782,7 +1780,7 @@ func Test_ResourceExhaustion(t *testing.T) {
 		}
 		defer db.Close()
 
-		tableName := model.TableFromFilePath(tmpFile.Name())
+		tableName := tableFromFilePath(tmpFile.Name())
 		var count int
 		err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
 		if err != nil {
@@ -1913,7 +1911,7 @@ func Test_UnicodeAndEncoding(t *testing.T) {
 			}
 			defer db.Close()
 
-			tableName := model.TableFromFilePath(tmpFile.Name())
+			tableName := tableFromFilePath(tmpFile.Name())
 
 			// Test basic query
 			var count int
@@ -1979,7 +1977,7 @@ func Test_ConnectionLifecycle(t *testing.T) {
 				t.Fatalf("Failed to open database on iteration %d: %v", i, err)
 			}
 
-			tableName := model.TableFromFilePath(tmpFile.Name())
+			tableName := tableFromFilePath(tmpFile.Name())
 			var count int
 			err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
 			if err != nil {
@@ -2003,7 +2001,7 @@ func Test_ConnectionLifecycle(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 		defer cancel()
 
-		tableName := model.TableFromFilePath(tmpFile.Name())
+		tableName := tableFromFilePath(tmpFile.Name())
 		// Use bracket notation for table name (safe in controlled test environment)
 		query := "SELECT COUNT(*) FROM [" + tableName + "]"
 		var count int
@@ -2128,7 +2126,7 @@ func Test_SQLReservedWordsAsFilenames(t *testing.T) {
 			defer db.Close()
 
 			// Test 2: Verify table exists with proper name
-			expectedTableName := model.TableFromFilePath(filePath)
+			expectedTableName := tableFromFilePath(filePath)
 			var actualTableName string
 			err = db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", expectedTableName).Scan(&actualTableName)
 			if err != nil {
@@ -2226,7 +2224,7 @@ func Test_SQLReservedWordsMultipleFiles(t *testing.T) {
 
 	// Test 2: Verify all tables exist
 	for _, file := range files {
-		tableName := model.TableFromFilePath(file.name)
+		tableName := tableFromFilePath(file.name)
 		var name string
 		err := db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", tableName).Scan(&name)
 		if err != nil {
@@ -2372,7 +2370,7 @@ func Test_SQLReservedWordsEdgeCases(t *testing.T) {
 				defer db.Close()
 
 				// Verify table creation and basic functionality
-				tableName := model.TableFromFilePath(filePath)
+				tableName := tableFromFilePath(filePath)
 
 				// Test table exists
 				var name string
@@ -2547,7 +2545,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 		}
 		defer db.Close()
 
-		tableName := model.TableFromFilePath(tmpFile.Name())
+		tableName := tableFromFilePath(tmpFile.Name())
 
 		// Test querying with reserved keyword column names
 		// Use bracket notation for table name (safe in controlled test environment)
@@ -2599,7 +2597,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 				}
 				defer db.Close()
 
-				tableName := model.TableFromFilePath(tmpFile.Name())
+				tableName := tableFromFilePath(tmpFile.Name())
 				// Use bracket notation for table name (safe in controlled test environment)
 				query := "SELECT COUNT(*) FROM [" + tableName + "]"
 				var count int
@@ -2629,7 +2627,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 		}
 		defer db.Close()
 
-		tableName := model.TableFromFilePath(tmpFile.Name())
+		tableName := tableFromFilePath(tmpFile.Name())
 
 		// Test transaction rollback
 		tx, err := db.BeginTx(context.Background(), nil)

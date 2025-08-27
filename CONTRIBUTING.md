@@ -63,30 +63,6 @@ make test
 make lint
 ```
 
-## Project Structure
-
-```
-filesql/
-├── domain/          # Domain model layer
-│   ├── model/      # Domain model definitions
-│   └── repository/ # Repository interfaces
-├── testdata/       # Test data files
-├── doc/            # Documentation
-│   ├── ja/        # Japanese documentation
-│   ├── zh-cn/     # Chinese documentation
-│   ├── es/        # Spanish documentation
-│   └── ...        # Other languages
-├── filesql.go      # Library main entry point
-├── filesql_test.go # Library tests
-└── example_test.go # Usage examples
-```
-
-### Directory Roles
-
-- **domain/**: Layer containing business logic and domain models. Pure Go implementation without external dependencies
-- **testdata/**: Sample files such as CSV, TSV, LTSV used in tests
-- **doc/**: Multi-language documentation with subdirectories for each language
-
 ## Development Workflow
 
 ### Branch Strategy

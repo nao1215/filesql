@@ -392,10 +392,10 @@ if err != nil {
 - **io.Reader** (`AddReader`): **Only supports output directory mode**
   ```go
   // ❌ Build error - overwrite mode not supported
-  builder.AddReader(reader, "table", model.FileTypeCSV).EnableAutoSave("")
+  builder.AddReader(reader, "table", filesql.FileTypeCSV).EnableAutoSave("")
   
   // ✅ Must specify output directory
-  builder.AddReader(reader, "table", model.FileTypeCSV).EnableAutoSave("./output")
+  builder.AddReader(reader, "table", filesql.FileTypeCSV).EnableAutoSave("./output")
   ```
 
 - **Filesystems** (`AddFS`): **Only supports output directory mode**

@@ -118,7 +118,7 @@ func main() {
     // 임베디드 파일시스템에 Builder 패턴 사용
     subFS, _ := fs.Sub(dataFS, "data")
     
-    db, err := filesql.NewBuilder().
+    validatedBuilder, err := filesql.NewBuilder().
         AddPath("local_file.csv").  // 일반 파일
         AddFS(subFS).               // 임베디드 파일시스템
         Build(ctx)
@@ -126,7 +126,7 @@ func main() {
         log.Fatal(err)
     }
     
-    connection, err := db.Open(ctx)
+    connection, err := validatedBuilder.Open(ctx)
     if err != nil {
         log.Fatal(err)
     }
@@ -398,7 +398,11 @@ if err != nil {
 }
 
 // 수정된 데이터를 새 디렉토리로 내보내기
-err = filesql.DumpDatabase(db, "/path/to/output/directory")
+// 옵션으로 출력 형식과 압축을 지정할 수 있습니다
+options := filesql.NewDumpOptions().
+    WithFormat(filesql.OutputFormatTSV).
+    WithCompression(filesql.CompressionGZ)
+err = filesql.DumpDatabase(db, "/path/to/output/directory", options)
 if err != nil {
     log.Fatal(err)
 }

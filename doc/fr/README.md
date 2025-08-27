@@ -118,7 +118,7 @@ func main() {
     // Utiliser le patron Builder pour le système de fichiers intégré
     subFS, _ := fs.Sub(dataFS, "data")
     
-    db, err := filesql.NewBuilder().
+    validatedBuilder, err := filesql.NewBuilder().
         AddPath("local_file.csv").  // Fichier régulier
         AddFS(subFS).               // Système de fichiers intégré
         Build(ctx)
@@ -126,7 +126,7 @@ func main() {
         log.Fatal(err)
     }
     
-    connection, err := db.Open(ctx)
+    connection, err := validatedBuilder.Open(ctx)
     if err != nil {
         log.Fatal(err)
     }
@@ -398,7 +398,11 @@ if err != nil {
 }
 
 // Exporter les données modifiées vers un nouveau répertoire
-err = filesql.DumpDatabase(db, "/path/to/output/directory")
+// Optionnellement spécifier le format de sortie et la compression
+options := filesql.NewDumpOptions().
+    WithFormat(filesql.OutputFormatTSV).
+    WithCompression(filesql.CompressionGZ)
+err = filesql.DumpDatabase(db, "/path/to/output/directory", options)
 if err != nil {
     log.Fatal(err)
 }

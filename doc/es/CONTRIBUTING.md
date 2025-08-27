@@ -63,30 +63,6 @@ make test
 make lint
 ```
 
-## Estructura del Proyecto
-
-```
-filesql/
-├── domain/          # Capa del modelo de dominio
-│   ├── model/      # Definiciones del modelo de dominio
-│   └── repository/ # Interfaces del repositorio
-├── testdata/       # Archivos de datos de prueba
-├── doc/            # Documentación
-│   ├── ja/        # Documentación en japonés
-│   ├── zh-cn/     # Documentación en chino
-│   ├── es/        # Documentación en español
-│   └── ...        # Otros idiomas
-├── filesql.go      # Punto de entrada principal de la biblioteca
-├── filesql_test.go # Pruebas de la biblioteca
-└── example_test.go # Ejemplos de uso
-```
-
-### Roles de los Directorios
-
-- **domain/**: Capa que contiene la lógica de negocio y modelos de dominio. Implementación pura de Go sin dependencias externas
-- **testdata/**: Archivos de muestra como CSV, TSV, LTSV utilizados en las pruebas
-- **doc/**: Documentación multiidioma con subdirectorios para cada idioma
-
 ## Flujo de Trabajo de Desarrollo
 
 ### Estrategia de Ramas

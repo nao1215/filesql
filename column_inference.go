@@ -1,5 +1,5 @@
-// Package model provides domain model for filesql
-package model
+// Package filesql provides domain model for filesql
+package filesql
 
 import (
 	"regexp"
@@ -83,10 +83,10 @@ func isDatetime(value string) bool {
 	return false
 }
 
-// InferColumnType infers the SQL column type from a slice of string values
-func InferColumnType(values []string) ColumnType {
+// inferColumnType infers the SQL column type from a slice of string values
+func inferColumnType(values []string) columnType {
 	if len(values) == 0 {
-		return ColumnTypeText
+		return columnTypeText
 	}
 
 	hasDatetime := false
@@ -127,36 +127,36 @@ func InferColumnType(values []string) ColumnType {
 	// Determine the most appropriate type
 	// Priority: TEXT > DATETIME > REAL > INTEGER
 	if hasText {
-		return ColumnTypeText
+		return columnTypeText
 	}
 	if hasDatetime {
-		return ColumnTypeDatetime
+		return columnTypeDatetime
 	}
 	if hasReal {
-		return ColumnTypeReal
+		return columnTypeReal
 	}
 	if hasInteger {
-		return ColumnTypeInteger
+		return columnTypeInteger
 	}
 
 	// Default to TEXT if no values were found
-	return ColumnTypeText
+	return columnTypeText
 }
 
-// InferColumnsInfo infers column information from header and data records
-func InferColumnsInfo(header Header, records []Record) []ColumnInfo {
+// inferColumnsInfo infers column information from header and data records
+func inferColumnsInfo(header header, records []record) []columnInfo {
 	columnCount := len(header)
 	if columnCount == 0 {
 		return nil
 	}
 
-	columns := make([]ColumnInfo, columnCount)
+	columns := make([]columnInfo, columnCount)
 
 	// Initialize column info with headers
 	for i, name := range header {
-		columns[i] = ColumnInfo{
+		columns[i] = columnInfo{
 			Name: name,
-			Type: ColumnTypeText, // Default to TEXT
+			Type: columnTypeText, // Default to TEXT
 		}
 	}
 
@@ -175,7 +175,7 @@ func InferColumnsInfo(header Header, records []Record) []ColumnInfo {
 		}
 
 		// Infer type from values
-		columns[i].Type = InferColumnType(values)
+		columns[i].Type = inferColumnType(values)
 	}
 
 	return columns

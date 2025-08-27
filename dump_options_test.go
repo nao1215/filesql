@@ -1,4 +1,4 @@
-package model
+package filesql
 
 import (
 	"testing"

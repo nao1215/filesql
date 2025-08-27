@@ -1,4 +1,4 @@
-package model
+package filesql
 
 import (
 	"testing"
@@ -10,28 +10,28 @@ func TestNewTable(t *testing.T) {
 	t.Run("Create table with header and records", func(t *testing.T) {
 		t.Parallel()
 
-		header := NewHeader([]string{"col1", "col2"})
-		records := []Record{
-			NewRecord([]string{"val1", "val2"}),
-			NewRecord([]string{"val3", "val4"}),
+		header := newHeader([]string{"col1", "col2"})
+		records := []record{
+			newRecord([]string{"val1", "val2"}),
+			newRecord([]string{"val3", "val4"}),
 		}
 
-		table := NewTable("test", header, records)
+		table := newTable("test", header, records)
 
-		if table.Name() != "test" {
-			t.Errorf("expected name 'test', got %s", table.Name())
+		if table.getName() != "test" {
+			t.Errorf("expected name 'test', got %s", table.getName())
 		}
 
-		if !table.Header().Equal(header) {
-			t.Errorf("expected header %v, got %v", header, table.Header())
+		if !table.getHeader().equal(header) {
+			t.Errorf("expected header %v, got %v", header, table.getHeader())
 		}
 
-		if len(table.Records()) != 2 {
-			t.Errorf("expected 2 records, got %d", len(table.Records()))
+		if len(table.getRecords()) != 2 {
+			t.Errorf("expected 2 records, got %d", len(table.getRecords()))
 		}
 
-		if !table.Records()[0].Equal(records[0]) {
-			t.Errorf("expected first record %v, got %v", records[0], table.Records()[0])
+		if !table.getRecords()[0].equal(records[0]) {
+			t.Errorf("expected first record %v, got %v", records[0], table.getRecords()[0])
 		}
 	})
 }
@@ -39,20 +39,20 @@ func TestNewTable(t *testing.T) {
 func TestTable_Equal(t *testing.T) {
 	t.Parallel()
 
-	header := NewHeader([]string{"col1", "col2"})
-	records := []Record{
-		NewRecord([]string{"val1", "val2"}),
-		NewRecord([]string{"val3", "val4"}),
+	header := newHeader([]string{"col1", "col2"})
+	records := []record{
+		newRecord([]string{"val1", "val2"}),
+		newRecord([]string{"val3", "val4"}),
 	}
 
-	table1 := NewTable("test", header, records)
-	table2 := NewTable("test", header, records)
-	table3 := NewTable("different", header, records)
+	table1 := newTable("test", header, records)
+	table2 := newTable("test", header, records)
+	table3 := newTable("different", header, records)
 
 	t.Run("Equal tables", func(t *testing.T) {
 		t.Parallel()
 
-		if !table1.Equal(table2) {
+		if !table1.equal(table2) {
 			t.Error("expected tables to be equal")
 		}
 	})
@@ -60,7 +60,7 @@ func TestTable_Equal(t *testing.T) {
 	t.Run("Different names", func(t *testing.T) {
 		t.Parallel()
 
-		if table1.Equal(table3) {
+		if table1.equal(table3) {
 			t.Error("expected tables with different names to be not equal")
 		}
 	})
@@ -68,9 +68,9 @@ func TestTable_Equal(t *testing.T) {
 	t.Run("Different header", func(t *testing.T) {
 		t.Parallel()
 
-		differentHeader := NewHeader([]string{"col1", "col3"})
-		table4 := NewTable("test", differentHeader, records)
-		if table1.Equal(table4) {
+		differentHeader := newHeader([]string{"col1", "col3"})
+		table4 := newTable("test", differentHeader, records)
+		if table1.equal(table4) {
 			t.Error("expected tables with different headers to be not equal")
 		}
 	})
@@ -78,11 +78,11 @@ func TestTable_Equal(t *testing.T) {
 	t.Run("Different record count", func(t *testing.T) {
 		t.Parallel()
 
-		differentRecords := []Record{
-			NewRecord([]string{"val1", "val2"}),
+		differentRecords := []record{
+			newRecord([]string{"val1", "val2"}),
 		}
-		table5 := NewTable("test", header, differentRecords)
-		if table1.Equal(table5) {
+		table5 := newTable("test", header, differentRecords)
+		if table1.equal(table5) {
 			t.Error("expected tables with different record count to be not equal")
 		}
 	})
@@ -90,12 +90,12 @@ func TestTable_Equal(t *testing.T) {
 	t.Run("Different record values", func(t *testing.T) {
 		t.Parallel()
 
-		differentValueRecords := []Record{
-			NewRecord([]string{"val1", "val2"}),
-			NewRecord([]string{"val3", "different"}),
+		differentValueRecords := []record{
+			newRecord([]string{"val1", "val2"}),
+			newRecord([]string{"val3", "different"}),
 		}
-		table6 := NewTable("test", header, differentValueRecords)
-		if table1.Equal(table6) {
+		table6 := newTable("test", header, differentValueRecords)
+		if table1.equal(table6) {
 			t.Error("expected tables with different record values to be not equal")
 		}
 	})
@@ -155,7 +155,7 @@ func TestTableFromFilePath_Additional(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := TableFromFilePath(tt.filePath)
+			result := tableFromFilePath(tt.filePath)
 			if result != tt.expected {
 				t.Errorf("expected %s, got %s", tt.expected, result)
 			}

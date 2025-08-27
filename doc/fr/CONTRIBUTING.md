@@ -63,30 +63,6 @@ make test
 make lint
 ```
 
-## Structure du Projet
-
-```
-filesql/
-├── domain/          # Couche du modèle de domaine
-│   ├── model/      # Définitions du modèle de domaine
-│   └── repository/ # Interfaces du dépôt
-├── testdata/       # Fichiers de données de test
-├── doc/            # Documentation
-│   ├── ja/        # Documentation japonaise
-│   ├── zh-cn/     # Documentation chinoise
-│   ├── es/        # Documentation espagnole
-│   └── ...        # Autres langues
-├── filesql.go      # Point d'entrée principal de la bibliothèque
-├── filesql_test.go # Tests de la bibliothèque
-└── example_test.go # Exemples d'utilisation
-```
-
-### Rôles des Répertoires
-
-- **domain/** : Couche contenant la logique métier et les modèles de domaine. Implémentation Go pure sans dépendances externes
-- **testdata/** : Fichiers exemples tels que CSV, TSV, LTSV utilisés dans les tests
-- **doc/** : Documentation multilingue avec des sous-répertoires pour chaque langue
-
 ## Flux de Travail de Développement
 
 ### Stratégie de Branches

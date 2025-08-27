@@ -1,5 +1,5 @@
-// Package model provides domain model for filesql
-package model
+// Package filesql provides domain model for filesql
+package filesql
 
 // OutputFormat represents the output file format
 type OutputFormat int

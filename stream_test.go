@@ -1,4 +1,4 @@
-package model
+package filesql
 
 import (
 	"bytes"
@@ -14,22 +14,22 @@ func TestStreamingParser_ParseFromReader_CSV(t *testing.T) {
 		data := "name,age,city\nAlice,30,Tokyo\nBob,25,Osaka\n"
 		reader := strings.NewReader(data)
 
-		parser := NewStreamingParser(FileTypeCSV, "users", 1024)
-		table, err := parser.ParseFromReader(reader)
+		parser := newStreamingParser(FileTypeCSV, "users", 1024)
+		table, err := parser.parseFromReader(reader)
 		if err != nil {
 			t.Fatalf("ParseFromReader() failed: %v", err)
 		}
 
-		if table.Name() != "users" {
-			t.Errorf("Table name = %s, want users", table.Name())
+		if table.getName() != "users" {
+			t.Errorf("Table name = %s, want users", table.getName())
 		}
 
-		header := table.Header()
+		header := table.getHeader()
 		if len(header) != 3 {
 			t.Errorf("Header length = %d, want 3", len(header))
 		}
 
-		records := table.Records()
+		records := table.getRecords()
 		if len(records) != 2 {
 			t.Errorf("Records length = %d, want 2", len(records))
 		}
@@ -43,8 +43,8 @@ func TestStreamingParser_ParseFromReader_CSV(t *testing.T) {
 		t.Parallel()
 		reader := strings.NewReader("")
 
-		parser := NewStreamingParser(FileTypeCSV, "empty", 1024)
-		_, err := parser.ParseFromReader(reader)
+		parser := newStreamingParser(FileTypeCSV, "empty", 1024)
+		_, err := parser.parseFromReader(reader)
 		if err == nil {
 			t.Error("ParseFromReader() should fail for empty data")
 		}
@@ -59,17 +59,17 @@ func TestStreamingParser_ParseFromReader_TSV(t *testing.T) {
 		data := "name\tage\tcity\nAlice\t30\tTokyo\nBob\t25\tOsaka\n"
 		reader := strings.NewReader(data)
 
-		parser := NewStreamingParser(FileTypeTSV, "users", 1024)
-		table, err := parser.ParseFromReader(reader)
+		parser := newStreamingParser(FileTypeTSV, "users", 1024)
+		table, err := parser.parseFromReader(reader)
 		if err != nil {
 			t.Fatalf("ParseFromReader() failed: %v", err)
 		}
 
-		if table.Name() != "users" {
-			t.Errorf("Table name = %s, want users", table.Name())
+		if table.getName() != "users" {
+			t.Errorf("Table name = %s, want users", table.getName())
 		}
 
-		records := table.Records()
+		records := table.getRecords()
 		if len(records) != 2 {
 			t.Errorf("Records length = %d, want 2", len(records))
 		}
@@ -84,17 +84,17 @@ func TestStreamingParser_ParseFromReader_LTSV(t *testing.T) {
 		data := "name:Alice\tage:30\tcity:Tokyo\nname:Bob\tage:25\tcity:Osaka\n"
 		reader := strings.NewReader(data)
 
-		parser := NewStreamingParser(FileTypeLTSV, "users", 1024)
-		table, err := parser.ParseFromReader(reader)
+		parser := newStreamingParser(FileTypeLTSV, "users", 1024)
+		table, err := parser.parseFromReader(reader)
 		if err != nil {
 			t.Fatalf("ParseFromReader() failed: %v", err)
 		}
 
-		if table.Name() != "users" {
-			t.Errorf("Table name = %s, want users", table.Name())
+		if table.getName() != "users" {
+			t.Errorf("Table name = %s, want users", table.getName())
 		}
 
-		records := table.Records()
+		records := table.getRecords()
 		if len(records) != 2 {
 			t.Errorf("Records length = %d, want 2", len(records))
 		}
@@ -116,13 +116,13 @@ func TestStreamingParser_ParseFromReader_Compressed(t *testing.T) {
 
 		// Note: This will fail because the data is not actually gzip compressed
 		// but the test demonstrates the compression handling logic
-		parser := NewStreamingParser(FileTypeCSV, "users", 1024) // Use uncompressed for now
-		table, err := parser.ParseFromReader(reader)
+		parser := newStreamingParser(FileTypeCSV, "users", 1024) // Use uncompressed for now
+		table, err := parser.parseFromReader(reader)
 		if err != nil {
 			t.Fatalf("ParseFromReader() failed: %v", err)
 		}
 
-		records := table.Records()
+		records := table.getRecords()
 		if len(records) != 2 {
 			t.Errorf("Records length = %d, want 2", len(records))
 		}
@@ -150,8 +150,8 @@ func TestFileType_Extension(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
-			if got := tt.fileType.Extension(); got != tt.want {
-				t.Errorf("FileType.Extension() = %v, want %v", got, tt.want)
+			if got := tt.fileType.extension(); got != tt.want {
+				t.Errorf("FileType.extension() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -175,8 +175,8 @@ func TestFileType_BaseType(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.fileType.Extension(), func(t *testing.T) {
-			if got := tt.fileType.BaseType(); got != tt.want {
+		t.Run(tt.fileType.extension(), func(t *testing.T) {
+			if got := tt.fileType.baseType(); got != tt.want {
 				t.Errorf("FileType.BaseType() = %v, want %v", got, tt.want)
 			}
 		})

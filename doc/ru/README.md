@@ -118,7 +118,7 @@ func main() {
     // Используем паттерн Builder для встроенной файловой системы
     subFS, _ := fs.Sub(dataFS, "data")
     
-    db, err := filesql.NewBuilder().
+    validatedBuilder, err := filesql.NewBuilder().
         AddPath("local_file.csv").  // Обычный файл
         AddFS(subFS).               // Встроенная файловая система
         Build(ctx)
@@ -126,7 +126,7 @@ func main() {
         log.Fatal(err)
     }
     
-    connection, err := db.Open(ctx)
+    connection, err := validatedBuilder.Open(ctx)
     if err != nil {
         log.Fatal(err)
     }
@@ -398,7 +398,11 @@ if err != nil {
 }
 
 // Экспортируем изменённые данные в новую директорию
-err = filesql.DumpDatabase(db, "/path/to/output/directory")
+// Можно дополнительно указать формат вывода и сжатие
+options := filesql.NewDumpOptions().
+    WithFormat(filesql.OutputFormatTSV).
+    WithCompression(filesql.CompressionGZ)
+err = filesql.DumpDatabase(db, "/path/to/output/directory", options)
 if err != nil {
     log.Fatal(err)
 }

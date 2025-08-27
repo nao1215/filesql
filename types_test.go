@@ -1,4 +1,4 @@
-package model
+package filesql
 
 import (
 	"testing"
@@ -11,7 +11,7 @@ func TestNewHeader(t *testing.T) {
 		t.Parallel()
 
 		headerSlice := []string{"col1", "col2", "col3"}
-		header := NewHeader(headerSlice)
+		header := newHeader(headerSlice)
 
 		if len(header) != 3 {
 			t.Errorf("expected length 3, got %d", len(header))
@@ -30,38 +30,38 @@ func TestHeader_Equal(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		header1  Header
-		header2  Header
+		header1  header
+		header2  header
 		expected bool
 	}{
 		{
 			name:     "Equal headers",
-			header1:  NewHeader([]string{"col1", "col2"}),
-			header2:  NewHeader([]string{"col1", "col2"}),
+			header1:  newHeader([]string{"col1", "col2"}),
+			header2:  newHeader([]string{"col1", "col2"}),
 			expected: true,
 		},
 		{
 			name:     "Different length headers",
-			header1:  NewHeader([]string{"col1", "col2"}),
-			header2:  NewHeader([]string{"col1"}),
+			header1:  newHeader([]string{"col1", "col2"}),
+			header2:  newHeader([]string{"col1"}),
 			expected: false,
 		},
 		{
 			name:     "Different content headers",
-			header1:  NewHeader([]string{"col1", "col2"}),
-			header2:  NewHeader([]string{"col1", "col3"}),
+			header1:  newHeader([]string{"col1", "col2"}),
+			header2:  newHeader([]string{"col1", "col3"}),
 			expected: false,
 		},
 		{
 			name:     "Empty headers",
-			header1:  NewHeader([]string{}),
-			header2:  NewHeader([]string{}),
+			header1:  newHeader([]string{}),
+			header2:  newHeader([]string{}),
 			expected: true,
 		},
 		{
 			name:     "One empty one not",
-			header1:  NewHeader([]string{}),
-			header2:  NewHeader([]string{"col1"}),
+			header1:  newHeader([]string{}),
+			header2:  newHeader([]string{"col1"}),
 			expected: false,
 		},
 	}
@@ -70,7 +70,7 @@ func TestHeader_Equal(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := tt.header1.Equal(tt.header2)
+			result := tt.header1.equal(tt.header2)
 			if result != tt.expected {
 				t.Errorf("expected %v, got %v", tt.expected, result)
 			}
@@ -85,7 +85,7 @@ func TestNewRecord(t *testing.T) {
 		t.Parallel()
 
 		recordSlice := []string{"val1", "val2", "val3"}
-		record := NewRecord(recordSlice)
+		record := newRecord(recordSlice)
 
 		if len(record) != 3 {
 			t.Errorf("expected length 3, got %d", len(record))
@@ -104,38 +104,38 @@ func TestRecord_Equal(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		record1  Record
-		record2  Record
+		record1  record
+		record2  record
 		expected bool
 	}{
 		{
 			name:     "Equal records",
-			record1:  NewRecord([]string{"val1", "val2"}),
-			record2:  NewRecord([]string{"val1", "val2"}),
+			record1:  newRecord([]string{"val1", "val2"}),
+			record2:  newRecord([]string{"val1", "val2"}),
 			expected: true,
 		},
 		{
 			name:     "Different length records",
-			record1:  NewRecord([]string{"val1", "val2"}),
-			record2:  NewRecord([]string{"val1"}),
+			record1:  newRecord([]string{"val1", "val2"}),
+			record2:  newRecord([]string{"val1"}),
 			expected: false,
 		},
 		{
 			name:     "Different content records",
-			record1:  NewRecord([]string{"val1", "val2"}),
-			record2:  NewRecord([]string{"val1", "val3"}),
+			record1:  newRecord([]string{"val1", "val2"}),
+			record2:  newRecord([]string{"val1", "val3"}),
 			expected: false,
 		},
 		{
 			name:     "Empty records",
-			record1:  NewRecord([]string{}),
-			record2:  NewRecord([]string{}),
+			record1:  newRecord([]string{}),
+			record2:  newRecord([]string{}),
 			expected: true,
 		},
 		{
 			name:     "One empty one not",
-			record1:  NewRecord([]string{}),
-			record2:  NewRecord([]string{"val1"}),
+			record1:  newRecord([]string{}),
+			record2:  newRecord([]string{"val1"}),
 			expected: false,
 		},
 	}
@@ -144,7 +144,7 @@ func TestRecord_Equal(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := tt.record1.Equal(tt.record2)
+			result := tt.record1.equal(tt.record2)
 			if result != tt.expected {
 				t.Errorf("expected %v, got %v", tt.expected, result)
 			}
@@ -156,20 +156,20 @@ func TestColumnType_String(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		columnType ColumnType
+		columnType columnType
 		expected   string
 	}{
-		{ColumnTypeText, "TEXT"},
-		{ColumnTypeInteger, "INTEGER"},
-		{ColumnTypeReal, "REAL"},
-		{ColumnTypeDatetime, "TEXT"},
+		{columnTypeText, "TEXT"},
+		{columnTypeInteger, "INTEGER"},
+		{columnTypeReal, "REAL"},
+		{columnTypeDatetime, "TEXT"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.expected, func(t *testing.T) {
-			result := tt.columnType.String()
+			result := tt.columnType.string()
 			if result != tt.expected {
-				t.Errorf("ColumnType.String() = %s, want %s", result, tt.expected)
+				t.Errorf("columnType.string() = %s, want %s", result, tt.expected)
 			}
 		})
 	}

@@ -1,4 +1,4 @@
-package model
+package filesql
 
 import (
 	"compress/bzip2"
@@ -54,78 +54,78 @@ const (
 
 // File extensions
 const (
-	// ExtCSV is the CSV file extension
-	ExtCSV = ".csv"
-	// ExtTSV is the TSV file extension
-	ExtTSV = ".tsv"
-	// ExtLTSV is the LTSV file extension
-	ExtLTSV = ".ltsv"
-	// ExtGZ is the gzip compression extension
-	ExtGZ = ".gz"
-	// ExtBZ2 is the bzip2 compression extension
-	ExtBZ2 = ".bz2"
-	// ExtXZ is the xz compression extension
-	ExtXZ = ".xz"
-	// ExtZSTD is the zstd compression extension
-	ExtZSTD = ".zst"
+	// extCSV is the CSV file extension
+	extCSV = ".csv"
+	// extTSV is the TSV file extension
+	extTSV = ".tsv"
+	// extLTSV is the LTSV file extension
+	extLTSV = ".ltsv"
+	// extGZ is the gzip compression extension
+	extGZ = ".gz"
+	// extBZ2 is the bzip2 compression extension
+	extBZ2 = ".bz2"
+	// extXZ is the xz compression extension
+	extXZ = ".xz"
+	// extZSTD is the zstd compression extension
+	extZSTD = ".zst"
 )
 
-// File represents a file that can be converted to Table
-type File struct {
+// file represents a file that can be converted to table
+type file struct {
 	path     string
 	fileType FileType
 }
 
-// TableChunk represents a chunk of table data for streaming processing
-type TableChunk struct {
+// tableChunk represents a chunk of table data for streaming processing
+type tableChunk struct {
 	tableName  string
-	headers    Header
-	records    []Record
-	columnInfo []ColumnInfo
+	headers    header
+	records    []record
+	columnInfo []columnInfo
 }
 
-// TableName returns the name of the table
-func (tc *TableChunk) TableName() string {
+// getTableName returns the name of the table
+func (tc *tableChunk) getTableName() string {
 	return tc.tableName
 }
 
-// Headers returns the table headers
-func (tc *TableChunk) Headers() Header {
+// getHeaders returns the table headers
+func (tc *tableChunk) getHeaders() header {
 	return tc.headers
 }
 
-// Records returns the records in this chunk
-func (tc *TableChunk) Records() []Record {
+// getRecords returns the records in this chunk
+func (tc *tableChunk) getRecords() []record {
 	return tc.records
 }
 
-// ColumnInfo returns the column information with inferred types
-func (tc *TableChunk) ColumnInfo() []ColumnInfo {
+// getColumnInfo returns the column information with inferred types
+func (tc *tableChunk) getColumnInfo() []columnInfo {
 	return tc.columnInfo
 }
 
-// ChunkProcessor is a function type for processing table chunks
-type ChunkProcessor func(chunk *TableChunk) error
+// chunkProcessor is a function type for processing table chunks
+type chunkProcessor func(chunk *tableChunk) error
 
-// StreamingParser represents a parser that can read from io.Reader directly
-type StreamingParser struct {
+// streamingParser represents a parser that can read from io.Reader directly
+type streamingParser struct {
 	fileType  FileType
 	tableName string
 	chunkSize int
 }
 
-// NewFile creates a new File
-func NewFile(path string) *File {
-	return &File{
+// newFile creates a new file
+func newFile(path string) *file {
+	return &file{
 		path:     path,
 		fileType: detectFileType(path),
 	}
 }
 
-// SupportedFileExtPatterns returns all supported file patterns for glob matching
-func SupportedFileExtPatterns() []string {
-	baseExts := []string{ExtCSV, ExtTSV, ExtLTSV}
-	compressionExts := []string{"", ExtGZ, ExtBZ2, ExtXZ, ExtZSTD}
+// supportedFileExtPatterns returns all supported file patterns for glob matching
+func supportedFileExtPatterns() []string {
+	baseExts := []string{extCSV, extTSV, extLTSV}
+	compressionExts := []string{"", extGZ, extBZ2, extXZ, extZSTD}
 
 	var patterns []string
 	for _, baseExt := range baseExts {
@@ -137,12 +137,12 @@ func SupportedFileExtPatterns() []string {
 	return patterns
 }
 
-// IsSupportedFile checks if the file has a supported extension
-func IsSupportedFile(fileName string) bool {
+// isSupportedFile checks if the file has a supported extension
+func isSupportedFile(fileName string) bool {
 	fileName = strings.ToLower(fileName)
 
 	// Remove compression extensions
-	for _, ext := range []string{ExtGZ, ExtBZ2, ExtXZ, ExtZSTD} {
+	for _, ext := range []string{extGZ, extBZ2, extXZ, extZSTD} {
 		if strings.HasSuffix(fileName, ext) {
 			fileName = strings.TrimSuffix(fileName, ext)
 			break
@@ -150,60 +150,60 @@ func IsSupportedFile(fileName string) bool {
 	}
 
 	// Check for supported file extensions
-	return strings.HasSuffix(fileName, ExtCSV) ||
-		strings.HasSuffix(fileName, ExtTSV) ||
-		strings.HasSuffix(fileName, ExtLTSV)
+	return strings.HasSuffix(fileName, extCSV) ||
+		strings.HasSuffix(fileName, extTSV) ||
+		strings.HasSuffix(fileName, extLTSV)
 }
 
-// IsSupportedExtension checks if the given extension is supported
+// isSupportedExtension checks if the given extension is supported
 // The extension should start with a dot (e.g., ".csv", ".tsv.gz")
-func IsSupportedExtension(ext string) bool {
+func isSupportedExtension(ext string) bool {
 	ext = strings.ToLower(ext)
 
 	// Check if it's a simple extension or has compression
-	return IsSupportedFile("file" + ext)
+	return isSupportedFile("file" + ext)
 }
 
-// Extension returns the file extension for the FileType
-func (ft FileType) Extension() string {
+// extension returns the file extension for the FileType
+func (ft FileType) extension() string {
 	switch ft {
 	case FileTypeCSV:
-		return ExtCSV
+		return extCSV
 	case FileTypeTSV:
-		return ExtTSV
+		return extTSV
 	case FileTypeLTSV:
-		return ExtLTSV
+		return extLTSV
 	case FileTypeCSVGZ:
-		return ExtCSV + ExtGZ
+		return extCSV + extGZ
 	case FileTypeTSVGZ:
-		return ExtTSV + ExtGZ
+		return extTSV + extGZ
 	case FileTypeLTSVGZ:
-		return ExtLTSV + ExtGZ
+		return extLTSV + extGZ
 	case FileTypeCSVBZ2:
-		return ExtCSV + ExtBZ2
+		return extCSV + extBZ2
 	case FileTypeTSVBZ2:
-		return ExtTSV + ExtBZ2
+		return extTSV + extBZ2
 	case FileTypeLTSVBZ2:
-		return ExtLTSV + ExtBZ2
+		return extLTSV + extBZ2
 	case FileTypeCSVXZ:
-		return ExtCSV + ExtXZ
+		return extCSV + extXZ
 	case FileTypeTSVXZ:
-		return ExtTSV + ExtXZ
+		return extTSV + extXZ
 	case FileTypeLTSVXZ:
-		return ExtLTSV + ExtXZ
+		return extLTSV + extXZ
 	case FileTypeCSVZSTD:
-		return ExtCSV + ExtZSTD
+		return extCSV + extZSTD
 	case FileTypeTSVZSTD:
-		return ExtTSV + ExtZSTD
+		return extTSV + extZSTD
 	case FileTypeLTSVZSTD:
-		return ExtLTSV + ExtZSTD
+		return extLTSV + extZSTD
 	default:
 		return ""
 	}
 }
 
-// BaseType returns the base file type without compression
-func (ft FileType) BaseType() FileType {
+// baseType returns the base file type without compression
+func (ft FileType) baseType() FileType {
 	switch ft {
 	case FileTypeCSV, FileTypeCSVGZ, FileTypeCSVBZ2, FileTypeCSVXZ, FileTypeCSVZSTD:
 		return FileTypeCSV
@@ -216,71 +216,71 @@ func (ft FileType) BaseType() FileType {
 	}
 }
 
-// GetFileExtension returns the file extension for a given FileType
-// Deprecated: Use FileType.Extension() method instead
-func GetFileExtension(fileType FileType) string {
-	return fileType.Extension()
+// getFileExtension returns the file extension for a given FileType
+// Deprecated: Use FileType.extension() method instead
+func getFileExtension(fileType FileType) string {
+	return fileType.extension()
 }
 
-// GetBaseFileType returns the base file type without compression
-// Deprecated: Use FileType.BaseType() method instead
-func GetBaseFileType(fileType FileType) FileType {
-	return fileType.BaseType()
+// getBaseFileType returns the base file type without compression
+// Deprecated: Use FileType.baseType() method instead
+func getBaseFileType(fileType FileType) FileType {
+	return fileType.baseType()
 }
 
-// Path returns file path
-func (f *File) Path() string {
+// getPath returns file path
+func (f *file) getPath() string {
 	return f.path
 }
 
-// Type returns file type
-func (f *File) Type() FileType {
+// getFileType returns file type
+func (f *file) getFileType() FileType {
 	return f.fileType
 }
 
-// IsCSV returns true if the file is CSV format
-func (f *File) IsCSV() bool {
-	return f.fileType == FileTypeCSV
+// isCSV returns true if the file is CSV format
+func (f *file) isCSV() bool {
+	return f.getFileType() == FileTypeCSV
 }
 
-// IsTSV returns true if the file is TSV format
-func (f *File) IsTSV() bool {
-	return f.fileType == FileTypeTSV
+// isTSV returns true if the file is TSV format
+func (f *file) isTSV() bool {
+	return f.getFileType() == FileTypeTSV
 }
 
-// IsLTSV returns true if the file is LTSV format
-func (f *File) IsLTSV() bool {
-	return f.fileType == FileTypeLTSV
+// isLTSV returns true if the file is LTSV format
+func (f *file) isLTSV() bool {
+	return f.getFileType() == FileTypeLTSV
 }
 
-// IsCompressed returns true if file is compressed
-func (f *File) IsCompressed() bool {
-	return f.IsGZ() || f.IsBZ2() || f.IsXZ() || f.IsZSTD()
+// isCompressed returns true if file is compressed
+func (f *file) isCompressed() bool {
+	return f.isGZ() || f.isBZ2() || f.isXZ() || f.isZSTD()
 }
 
-// IsGZ returns true if file is gzip compressed
-func (f *File) IsGZ() bool {
-	return strings.HasSuffix(f.path, ExtGZ)
+// isGZ returns true if file is gzip compressed
+func (f *file) isGZ() bool {
+	return strings.HasSuffix(f.path, extGZ)
 }
 
-// IsBZ2 returns true if file is bzip2 compressed
-func (f *File) IsBZ2() bool {
-	return strings.HasSuffix(f.path, ExtBZ2)
+// isBZ2 returns true if file is bzip2 compressed
+func (f *file) isBZ2() bool {
+	return strings.HasSuffix(f.path, extBZ2)
 }
 
-// IsXZ returns true if file is xz compressed
-func (f *File) IsXZ() bool {
-	return strings.HasSuffix(f.path, ExtXZ)
+// isXZ returns true if file is xz compressed
+func (f *file) isXZ() bool {
+	return strings.HasSuffix(f.path, extXZ)
 }
 
-// IsZSTD returns true if file is zstd compressed
-func (f *File) IsZSTD() bool {
-	return strings.HasSuffix(f.path, ExtZSTD)
+// isZSTD returns true if file is zstd compressed
+func (f *file) isZSTD() bool {
+	return strings.HasSuffix(f.path, extZSTD)
 }
 
-// ToTable converts file to Table structure
-func (f *File) ToTable() (*Table, error) {
-	switch f.fileType {
+// toTable converts file to table structure
+func (f *file) toTable() (*table, error) {
+	switch f.getFileType() {
 	case FileTypeCSV:
 		return f.parseCSV()
 	case FileTypeTSV:
@@ -288,7 +288,7 @@ func (f *File) ToTable() (*Table, error) {
 	case FileTypeLTSV:
 		return f.parseLTSV()
 	default:
-		return nil, fmt.Errorf("unsupported file type: %s", f.path)
+		return nil, fmt.Errorf("unsupported file type: %s", f.getPath())
 	}
 }
 
@@ -297,23 +297,23 @@ func detectFileType(path string) FileType {
 	basePath := path
 
 	// Remove compression extensions
-	if strings.HasSuffix(path, ExtGZ) {
-		basePath = strings.TrimSuffix(path, ExtGZ)
-	} else if strings.HasSuffix(path, ExtBZ2) {
-		basePath = strings.TrimSuffix(path, ExtBZ2)
-	} else if strings.HasSuffix(path, ExtXZ) {
-		basePath = strings.TrimSuffix(path, ExtXZ)
-	} else if strings.HasSuffix(path, ExtZSTD) {
-		basePath = strings.TrimSuffix(path, ExtZSTD)
+	if strings.HasSuffix(path, extGZ) {
+		basePath = strings.TrimSuffix(path, extGZ)
+	} else if strings.HasSuffix(path, extBZ2) {
+		basePath = strings.TrimSuffix(path, extBZ2)
+	} else if strings.HasSuffix(path, extXZ) {
+		basePath = strings.TrimSuffix(path, extXZ)
+	} else if strings.HasSuffix(path, extZSTD) {
+		basePath = strings.TrimSuffix(path, extZSTD)
 	}
 
 	ext := strings.ToLower(filepath.Ext(basePath))
 	switch ext {
-	case ExtCSV:
+	case extCSV:
 		return FileTypeCSV
-	case ExtTSV:
+	case extTSV:
 		return FileTypeTSV
-	case ExtLTSV:
+	case extLTSV:
 		return FileTypeLTSV
 	default:
 		return FileTypeUnsupported
@@ -321,7 +321,7 @@ func detectFileType(path string) FileType {
 }
 
 // openReader opens file and returns a reader that handles compression
-func (f *File) openReader() (io.Reader, func() error, error) {
+func (f *file) openReader() (io.Reader, func() error, error) {
 	file, err := os.Open(f.path)
 	if err != nil {
 		return nil, nil, err
@@ -330,7 +330,7 @@ func (f *File) openReader() (io.Reader, func() error, error) {
 	var reader io.Reader = file
 	closer := file.Close
 
-	if f.IsGZ() {
+	if f.isGZ() {
 		gzReader, err := gzip.NewReader(file)
 		if err != nil {
 			_ = file.Close() // Ignore close error during error handling
@@ -341,10 +341,10 @@ func (f *File) openReader() (io.Reader, func() error, error) {
 			_ = gzReader.Close() // Ignore close error in cleanup
 			return file.Close()
 		}
-	} else if f.IsBZ2() {
+	} else if f.isBZ2() {
 		reader = bzip2.NewReader(file)
 		closer = file.Close
-	} else if f.IsXZ() {
+	} else if f.isXZ() {
 		xzReader, err := xz.NewReader(file)
 		if err != nil {
 			_ = file.Close() // Ignore close error during error handling
@@ -352,7 +352,7 @@ func (f *File) openReader() (io.Reader, func() error, error) {
 		}
 		reader = xzReader
 		closer = file.Close
-	} else if f.IsZSTD() {
+	} else if f.isZSTD() {
 		decoder, err := zstd.NewReader(file)
 		if err != nil {
 			_ = file.Close() // Ignore close error during error handling
@@ -369,7 +369,7 @@ func (f *File) openReader() (io.Reader, func() error, error) {
 }
 
 // parseCSV parses CSV file with compression support
-func (f *File) parseCSV() (*Table, error) {
+func (f *file) parseCSV() (*table, error) {
 	reader, closer, err := f.openReader()
 	if err != nil {
 		return nil, err
@@ -386,27 +386,27 @@ func (f *File) parseCSV() (*Table, error) {
 		return nil, fmt.Errorf("empty file: %s", f.path)
 	}
 
-	header := NewHeader(records[0])
+	header := newHeader(records[0])
 	// Check for duplicate column names
 	columnsSeen := make(map[string]bool)
 	for _, col := range records[0] {
 		if columnsSeen[col] {
-			return nil, fmt.Errorf("%w: %s", ErrDuplicateColumnName, col)
+			return nil, fmt.Errorf("%w: %s", errDuplicateColumnName, col)
 		}
 		columnsSeen[col] = true
 	}
 
-	tableRecords := make([]Record, 0, len(records)-1)
+	tableRecords := make([]record, 0, len(records)-1)
 	for i := 1; i < len(records); i++ {
-		tableRecords = append(tableRecords, NewRecord(records[i]))
+		tableRecords = append(tableRecords, newRecord(records[i]))
 	}
 
-	tableName := TableFromFilePath(f.path)
-	return NewTable(tableName, header, tableRecords), nil
+	tableName := tableFromFilePath(f.path)
+	return newTable(tableName, header, tableRecords), nil
 }
 
 // parseTSV parses TSV file with compression support
-func (f *File) parseTSV() (*Table, error) {
+func (f *file) parseTSV() (*table, error) {
 	reader, closer, err := f.openReader()
 	if err != nil {
 		return nil, err
@@ -424,27 +424,27 @@ func (f *File) parseTSV() (*Table, error) {
 		return nil, fmt.Errorf("empty file: %s", f.path)
 	}
 
-	header := NewHeader(records[0])
+	header := newHeader(records[0])
 	// Check for duplicate column names
 	columnsSeen := make(map[string]bool)
 	for _, col := range records[0] {
 		if columnsSeen[col] {
-			return nil, fmt.Errorf("%w: %s", ErrDuplicateColumnName, col)
+			return nil, fmt.Errorf("%w: %s", errDuplicateColumnName, col)
 		}
 		columnsSeen[col] = true
 	}
 
-	tableRecords := make([]Record, 0, len(records)-1)
+	tableRecords := make([]record, 0, len(records)-1)
 	for i := 1; i < len(records); i++ {
-		tableRecords = append(tableRecords, NewRecord(records[i]))
+		tableRecords = append(tableRecords, newRecord(records[i]))
 	}
 
-	tableName := TableFromFilePath(f.path)
-	return NewTable(tableName, header, tableRecords), nil
+	tableName := tableFromFilePath(f.path)
+	return newTable(tableName, header, tableRecords), nil
 }
 
 // parseLTSV parses LTSV file with compression support
-func (f *File) parseLTSV() (*Table, error) {
+func (f *file) parseLTSV() (*table, error) {
 	reader, closer, err := f.openReader()
 	if err != nil {
 		return nil, err
@@ -490,16 +490,16 @@ func (f *File) parseLTSV() (*Table, error) {
 		return nil, fmt.Errorf("no valid records found: %s", f.path)
 	}
 
-	var header Header
+	var header header
 	for key := range headerMap {
 		header = append(header, key)
 	}
 
-	tableRecords := make([]Record, 0, len(records))
-	for _, record := range records {
-		var row Record
+	tableRecords := make([]record, 0, len(records))
+	for _, recordMap := range records {
+		var row record
 		for _, key := range header {
-			if val, exists := record[key]; exists {
+			if val, exists := recordMap[key]; exists {
 				row = append(row, val)
 			} else {
 				row = append(row, "")
@@ -508,6 +508,6 @@ func (f *File) parseLTSV() (*Table, error) {
 		tableRecords = append(tableRecords, row)
 	}
 
-	tableName := TableFromFilePath(f.path)
-	return NewTable(tableName, header, tableRecords), nil
+	tableName := tableFromFilePath(f.path)
+	return newTable(tableName, header, tableRecords), nil
 }

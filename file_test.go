@@ -1,4 +1,4 @@
-package model
+package filesql
 
 import (
 	"compress/gzip"
@@ -63,12 +63,12 @@ func TestNewFile(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			file := NewFile(tt.path)
-			if file.Type() != tt.expected {
-				t.Errorf("expected %v, got %v", tt.expected, file.Type())
+			file := newFile(tt.path)
+			if file.getFileType() != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, file.getFileType())
 			}
-			if file.Path() != tt.path {
-				t.Errorf("expected %s, got %s", tt.path, file.Path())
+			if file.getPath() != tt.path {
+				t.Errorf("expected %s, got %s", tt.path, file.getPath())
 			}
 		})
 	}
@@ -113,9 +113,9 @@ func TestFile_IsCompressed(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			file := NewFile(tt.path)
-			if file.IsCompressed() != tt.expected {
-				t.Errorf("expected %v, got %v", tt.expected, file.IsCompressed())
+			file := newFile(tt.path)
+			if file.isCompressed() != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, file.isCompressed())
 			}
 		})
 	}
@@ -178,18 +178,18 @@ func TestFile_CompressionTypes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			file := NewFile(tt.path)
-			if file.IsGZ() != tt.isGZ {
-				t.Errorf("IsGZ() expected %v, got %v", tt.isGZ, file.IsGZ())
+			file := newFile(tt.path)
+			if file.isGZ() != tt.isGZ {
+				t.Errorf("IsGZ() expected %v, got %v", tt.isGZ, file.isGZ())
 			}
-			if file.IsBZ2() != tt.isBZ2 {
-				t.Errorf("IsBZ2() expected %v, got %v", tt.isBZ2, file.IsBZ2())
+			if file.isBZ2() != tt.isBZ2 {
+				t.Errorf("IsBZ2() expected %v, got %v", tt.isBZ2, file.isBZ2())
 			}
-			if file.IsXZ() != tt.isXZ {
-				t.Errorf("IsXZ() expected %v, got %v", tt.isXZ, file.IsXZ())
+			if file.isXZ() != tt.isXZ {
+				t.Errorf("IsXZ() expected %v, got %v", tt.isXZ, file.isXZ())
 			}
-			if file.IsZSTD() != tt.isZSTD {
-				t.Errorf("IsZSTD() expected %v, got %v", tt.isZSTD, file.IsZSTD())
+			if file.isZSTD() != tt.isZSTD {
+				t.Errorf("IsZSTD() expected %v, got %v", tt.isZSTD, file.isZSTD())
 			}
 		})
 	}
@@ -211,24 +211,24 @@ Bob,35,Kyoto`
 		t.Fatal(err)
 	}
 
-	file := NewFile(csvFile)
-	table, err := file.ToTable()
+	file := newFile(csvFile)
+	table, err := file.toTable()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	expectedHeader := Header{"name", "age", "city"}
-	if !table.Header().Equal(expectedHeader) {
-		t.Errorf("expected header %v, got %v", expectedHeader, table.Header())
+	expectedHeader := header{"name", "age", "city"}
+	if !table.getHeader().equal(expectedHeader) {
+		t.Errorf("expected header %v, got %v", expectedHeader, table.getHeader())
 	}
 
-	if len(table.Records()) != 3 {
-		t.Errorf("expected 3 records, got %d", len(table.Records()))
+	if len(table.getRecords()) != 3 {
+		t.Errorf("expected 3 records, got %d", len(table.getRecords()))
 	}
 
-	expectedFirstRecord := Record{"John", "25", "Tokyo"}
-	if !table.Records()[0].Equal(expectedFirstRecord) {
-		t.Errorf("expected first record %v, got %v", expectedFirstRecord, table.Records()[0])
+	expectedFirstRecord := record{"John", "25", "Tokyo"}
+	if !table.getRecords()[0].equal(expectedFirstRecord) {
+		t.Errorf("expected first record %v, got %v", expectedFirstRecord, table.getRecords()[0])
 	}
 }
 
@@ -248,24 +248,24 @@ Bob	35	Kyoto`
 		t.Fatal(err)
 	}
 
-	file := NewFile(tsvFile)
-	table, err := file.ToTable()
+	file := newFile(tsvFile)
+	table, err := file.toTable()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	expectedHeader := Header{"name", "age", "city"}
-	if !table.Header().Equal(expectedHeader) {
-		t.Errorf("expected header %v, got %v", expectedHeader, table.Header())
+	expectedHeader := header{"name", "age", "city"}
+	if !table.getHeader().equal(expectedHeader) {
+		t.Errorf("expected header %v, got %v", expectedHeader, table.getHeader())
 	}
 
-	if len(table.Records()) != 3 {
-		t.Errorf("expected 3 records, got %d", len(table.Records()))
+	if len(table.getRecords()) != 3 {
+		t.Errorf("expected 3 records, got %d", len(table.getRecords()))
 	}
 
-	expectedFirstRecord := Record{"John", "25", "Tokyo"}
-	if !table.Records()[0].Equal(expectedFirstRecord) {
-		t.Errorf("expected first record %v, got %v", expectedFirstRecord, table.Records()[0])
+	expectedFirstRecord := record{"John", "25", "Tokyo"}
+	if !table.getRecords()[0].equal(expectedFirstRecord) {
+		t.Errorf("expected first record %v, got %v", expectedFirstRecord, table.getRecords()[0])
 	}
 }
 
@@ -284,18 +284,18 @@ name:Bob	age:35	city:Kyoto`
 		t.Fatal(err)
 	}
 
-	file := NewFile(ltsvFile)
-	table, err := file.ToTable()
+	file := newFile(ltsvFile)
+	table, err := file.toTable()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(table.Records()) != 3 {
-		t.Errorf("expected 3 records, got %d", len(table.Records()))
+	if len(table.getRecords()) != 3 {
+		t.Errorf("expected 3 records, got %d", len(table.getRecords()))
 	}
 
 	// LTSV header order may vary due to map iteration
-	header := table.Header()
+	header := table.getHeader()
 	if len(header) != 3 {
 		t.Errorf("expected 3 columns, got %d", len(header))
 	}
@@ -337,19 +337,19 @@ Alice,30,Osaka`
 	_ = gw.Close() // Ignore close error in test cleanup
 	_ = f.Close()  // Ignore close error in test cleanup
 
-	file := NewFile(csvFile)
-	table, err := file.ToTable()
+	file := newFile(csvFile)
+	table, err := file.toTable()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	expectedHeader := Header{"name", "age", "city"}
-	if !table.Header().Equal(expectedHeader) {
-		t.Errorf("expected header %v, got %v", expectedHeader, table.Header())
+	expectedHeader := header{"name", "age", "city"}
+	if !table.getHeader().equal(expectedHeader) {
+		t.Errorf("expected header %v, got %v", expectedHeader, table.getHeader())
 	}
 
-	if len(table.Records()) != 2 {
-		t.Errorf("expected 2 records, got %d", len(table.Records()))
+	if len(table.getRecords()) != 2 {
+		t.Errorf("expected 2 records, got %d", len(table.getRecords()))
 	}
 }
 
@@ -364,8 +364,8 @@ func TestFile_ToTable_UnsupportedFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	file := NewFile(txtFile)
-	_, err = file.ToTable()
+	file := newFile(txtFile)
+	_, err = file.toTable()
 	if err == nil {
 		t.Error("expected error for unsupported file format")
 	}
@@ -382,8 +382,8 @@ func TestFile_ToTable_EmptyFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	file := NewFile(csvFile)
-	_, err = file.ToTable()
+	file := newFile(csvFile)
+	_, err = file.toTable()
 	if err == nil {
 		t.Error("expected error for empty file")
 	}
@@ -423,7 +423,7 @@ func TestTableFromFilePath(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := TableFromFilePath(tt.filePath)
+			result := tableFromFilePath(tt.filePath)
 			if result != tt.expected {
 				t.Errorf("expected %s, got %s", tt.expected, result)
 			}
@@ -494,24 +494,24 @@ func Test_FileTypeDetectionMethods(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			file := NewFile(tc.filePath)
+			file := newFile(tc.filePath)
 
-			if file.IsCSV() != tc.expectedCSV {
-				t.Errorf("IsCSV() = %v, expected %v for %s", file.IsCSV(), tc.expectedCSV, tc.filePath)
+			if file.isCSV() != tc.expectedCSV {
+				t.Errorf("IsCSV() = %v, expected %v for %s", file.isCSV(), tc.expectedCSV, tc.filePath)
 			}
 
-			if file.IsTSV() != tc.expectedTSV {
-				t.Errorf("IsTSV() = %v, expected %v for %s", file.IsTSV(), tc.expectedTSV, tc.filePath)
+			if file.isTSV() != tc.expectedTSV {
+				t.Errorf("IsTSV() = %v, expected %v for %s", file.isTSV(), tc.expectedTSV, tc.filePath)
 			}
 
-			if file.IsLTSV() != tc.expectedLTSV {
-				t.Errorf("IsLTSV() = %v, expected %v for %s", file.IsLTSV(), tc.expectedLTSV, tc.filePath)
+			if file.isLTSV() != tc.expectedLTSV {
+				t.Errorf("IsLTSV() = %v, expected %v for %s", file.isLTSV(), tc.expectedLTSV, tc.filePath)
 			}
 		})
 	}
 }
 
-func Test_IsSupportedFile(t *testing.T) {
+func Test_isSupportedFile(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
@@ -561,9 +561,9 @@ func Test_IsSupportedFile(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.fileName, func(t *testing.T) {
-			result := IsSupportedFile(tc.fileName)
+			result := isSupportedFile(tc.fileName)
 			if result != tc.isSupported {
-				t.Errorf("IsSupportedFile(%q) = %v, expected %v", tc.fileName, result, tc.isSupported)
+				t.Errorf("isSupportedFile(%q) = %v, expected %v", tc.fileName, result, tc.isSupported)
 			}
 		})
 	}
@@ -574,7 +574,7 @@ func Test_OpenReaderEdgeCases(t *testing.T) {
 
 	// Test with non-existent file
 	t.Run("Non-existent file", func(t *testing.T) {
-		file := NewFile("non_existent_file.csv")
+		file := newFile("non_existent_file.csv")
 		_, closer, err := file.openReader()
 		if err == nil {
 			_ = closer() //nolint:errcheck
@@ -597,7 +597,7 @@ func Test_OpenReaderEdgeCases(t *testing.T) {
 		}
 		_ = tmpFile.Close() // Ignore close error in test cleanup
 
-		file := NewFile(tmpFile.Name())
+		file := newFile(tmpFile.Name())
 		_, closer, err := file.openReader()
 		if err == nil {
 			_ = closer() //nolint:errcheck
@@ -626,7 +626,7 @@ func Test_OpenReaderEdgeCases(t *testing.T) {
 			}
 			_ = tmpFile.Close() // Ignore close error in test cleanup
 
-			file := NewFile(tmpFile.Name())
+			file := newFile(tmpFile.Name())
 			reader, closer, err := file.openReader()
 			if err != nil {
 				t.Errorf("Unexpected error for valid %s file: %v", ct.ext, err)
@@ -659,15 +659,15 @@ func TestFile_ToTable_DuplicateColumns(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		file := NewFile(csvFile)
-		_, err = file.ToTable()
+		file := newFile(csvFile)
+		_, err = file.toTable()
 		if err == nil {
 			t.Error("expected error for CSV with duplicate column names")
 			return
 		}
 
-		if !errors.Is(err, ErrDuplicateColumnName) {
-			t.Errorf("expected ErrDuplicateColumnName, got: %v", err)
+		if !errors.Is(err, errDuplicateColumnName) {
+			t.Errorf("expected errDuplicateColumnName, got: %v", err)
 		}
 
 		// Verify error message contains the duplicate column name
@@ -691,15 +691,15 @@ func TestFile_ToTable_DuplicateColumns(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		file := NewFile(tsvFile)
-		_, err = file.ToTable()
+		file := newFile(tsvFile)
+		_, err = file.toTable()
 		if err == nil {
 			t.Error("expected error for TSV with duplicate column names")
 			return
 		}
 
-		if !errors.Is(err, ErrDuplicateColumnName) {
-			t.Errorf("expected ErrDuplicateColumnName, got: %v", err)
+		if !errors.Is(err, errDuplicateColumnName) {
+			t.Errorf("expected errDuplicateColumnName, got: %v", err)
 		}
 
 		// Verify error message contains the duplicate column name
@@ -722,15 +722,15 @@ John,25,Doe,john@example.com,26`
 			t.Fatal(err)
 		}
 
-		file := NewFile(csvFile)
-		_, err = file.ToTable()
+		file := newFile(csvFile)
+		_, err = file.toTable()
 		if err == nil {
 			t.Error("expected error for CSV with multiple duplicate column names")
 			return
 		}
 
-		if !errors.Is(err, ErrDuplicateColumnName) {
-			t.Errorf("expected ErrDuplicateColumnName, got: %v", err)
+		if !errors.Is(err, errDuplicateColumnName) {
+			t.Errorf("expected errDuplicateColumnName, got: %v", err)
 		}
 	})
 
@@ -749,8 +749,8 @@ John,25,Doe,john@example.com,26`
 			t.Fatal(err)
 		}
 
-		file := NewFile(csvFile)
-		table, err := file.ToTable()
+		file := newFile(csvFile)
+		table, err := file.toTable()
 		if err != nil {
 			t.Errorf("expected no error for valid CSV, got: %v", err)
 			return
@@ -765,7 +765,7 @@ John,25,Doe,john@example.com,26`
 func TestGetSupportedFilePatterns(t *testing.T) {
 	t.Parallel()
 
-	patterns := SupportedFileExtPatterns()
+	patterns := supportedFileExtPatterns()
 
 	// Should have 15 patterns: 3 base extensions × 5 compression variants (including none)
 	expectedCount := 15
@@ -808,8 +808,8 @@ func TestFile_ToTable_ErrorCases(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		file := NewFile(corruptedFile)
-		_, err := file.ToTable()
+		file := newFile(corruptedFile)
+		_, err := file.toTable()
 		if err == nil {
 			t.Error("expected error for corrupted CSV file")
 		}
@@ -823,8 +823,8 @@ func TestFile_ToTable_ErrorCases(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		file := NewFile(emptyFile)
-		_, err := file.ToTable()
+		file := newFile(emptyFile)
+		_, err := file.toTable()
 		if err == nil {
 			t.Error("expected error for empty CSV file")
 		}
@@ -834,8 +834,8 @@ func TestFile_ToTable_ErrorCases(t *testing.T) {
 		t.Parallel()
 
 		nonExistentFile := filepath.Join(tmpDir, "nonexistent.csv")
-		file := NewFile(nonExistentFile)
-		_, err := file.ToTable()
+		file := newFile(nonExistentFile)
+		_, err := file.toTable()
 		if err == nil {
 			t.Error("expected error for non-existent file")
 		}
@@ -849,8 +849,8 @@ func TestFile_ToTable_ErrorCases(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		file := NewFile(textFile)
-		_, err := file.ToTable()
+		file := newFile(textFile)
+		_, err := file.toTable()
 		if err == nil {
 			t.Error("expected error for unsupported file type")
 		}
@@ -865,8 +865,8 @@ func TestFile_ToTable_ErrorCases(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		file := NewFile(corruptedGzFile)
-		_, err := file.ToTable()
+		file := newFile(corruptedGzFile)
+		_, err := file.toTable()
 		if err == nil {
 			t.Error("expected error for corrupted gzip file")
 		}
@@ -881,8 +881,8 @@ func TestFile_ToTable_ErrorCases(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		file := NewFile(inconsistentFile)
-		_, err := file.ToTable()
+		file := newFile(inconsistentFile)
+		_, err := file.toTable()
 		// CSV parser should return error for inconsistent column count
 		if err == nil {
 			t.Error("expected error for inconsistent CSV columns")
@@ -899,8 +899,8 @@ func TestFile_ToTable_ErrorCases(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		file := NewFile(partiallyInvalidLTSV)
-		_, err := file.ToTable()
+		file := newFile(partiallyInvalidLTSV)
+		_, err := file.toTable()
 		// This should succeed as the LTSV parser handles partially invalid data
 		if err != nil {
 			t.Errorf("LTSV parser should handle partially invalid data gracefully, got: %v", err)
@@ -962,22 +962,22 @@ func TestCompressionDetection_EdgeCases(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			file := NewFile(tc.filePath)
+			file := newFile(tc.filePath)
 
-			if file.IsCompressed() != tc.expectedCompressed {
-				t.Errorf("IsCompressed() = %v, want %v", file.IsCompressed(), tc.expectedCompressed)
+			if file.isCompressed() != tc.expectedCompressed {
+				t.Errorf("IsCompressed() = %v, want %v", file.isCompressed(), tc.expectedCompressed)
 			}
-			if file.IsGZ() != tc.expectedGZ {
-				t.Errorf("IsGZ() = %v, want %v", file.IsGZ(), tc.expectedGZ)
+			if file.isGZ() != tc.expectedGZ {
+				t.Errorf("IsGZ() = %v, want %v", file.isGZ(), tc.expectedGZ)
 			}
-			if file.IsBZ2() != tc.expectedBZ2 {
-				t.Errorf("IsBZ2() = %v, want %v", file.IsBZ2(), tc.expectedBZ2)
+			if file.isBZ2() != tc.expectedBZ2 {
+				t.Errorf("IsBZ2() = %v, want %v", file.isBZ2(), tc.expectedBZ2)
 			}
-			if file.IsXZ() != tc.expectedXZ {
-				t.Errorf("IsXZ() = %v, want %v", file.IsXZ(), tc.expectedXZ)
+			if file.isXZ() != tc.expectedXZ {
+				t.Errorf("IsXZ() = %v, want %v", file.isXZ(), tc.expectedXZ)
 			}
-			if file.IsZSTD() != tc.expectedZSTD {
-				t.Errorf("IsZSTD() = %v, want %v", file.IsZSTD(), tc.expectedZSTD)
+			if file.isZSTD() != tc.expectedZSTD {
+				t.Errorf("IsZSTD() = %v, want %v", file.isZSTD(), tc.expectedZSTD)
 			}
 		})
 	}
@@ -1006,9 +1006,9 @@ func TestIsSupportedExtension(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.ext, func(t *testing.T) {
-			result := IsSupportedExtension(tt.ext)
+			result := isSupportedExtension(tt.ext)
 			if result != tt.expected {
-				t.Errorf("IsSupportedExtension(%q) = %v, want %v", tt.ext, result, tt.expected)
+				t.Errorf("isSupportedExtension(%q) = %v, want %v", tt.ext, result, tt.expected)
 			}
 		})
 	}
@@ -1031,9 +1031,9 @@ func TestGetFileExtension(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.expected, func(t *testing.T) {
-			result := GetFileExtension(tt.fileType)
+			result := getFileExtension(tt.fileType)
 			if result != tt.expected {
-				t.Errorf("GetFileExtension(%v) = %s, want %s", tt.fileType, result, tt.expected)
+				t.Errorf("getFileExtension(%v) = %s, want %s", tt.fileType, result, tt.expected)
 			}
 		})
 	}
@@ -1058,10 +1058,10 @@ func TestGetBaseFileType(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.fileType.Extension(), func(t *testing.T) {
-			result := GetBaseFileType(tt.fileType)
+		t.Run(tt.fileType.extension(), func(t *testing.T) {
+			result := getBaseFileType(tt.fileType)
 			if result != tt.expected {
-				t.Errorf("GetBaseFileType(%v) = %v, want %v", tt.fileType, result, tt.expected)
+				t.Errorf("getBaseFileType(%v) = %v, want %v", tt.fileType, result, tt.expected)
 			}
 		})
 	}
@@ -1074,7 +1074,7 @@ func TestCreateDecompressedReader(t *testing.T) {
 	t.Run("unsupported compression", func(t *testing.T) {
 		t.Parallel()
 
-		parser := NewStreamingParser(FileTypeCSV, "test", 1024)
+		parser := newStreamingParser(FileTypeCSV, "test", 1024)
 		reader := strings.NewReader("test data")
 
 		// Test with unsupported compression (should return original reader)
@@ -1106,7 +1106,7 @@ func TestCreateDecompressedReader(t *testing.T) {
 			t.Fatalf("Failed to close gzip writer: %v", err)
 		}
 
-		parser := NewStreamingParser(FileTypeCSVGZ, "test", 1024)
+		parser := newStreamingParser(FileTypeCSVGZ, "test", 1024)
 		reader := strings.NewReader(buf.String())
 
 		result, closeFunc, err := parser.createDecompressedReader(reader)
@@ -1133,7 +1133,7 @@ func TestCreateDecompressedReader(t *testing.T) {
 	t.Run("invalid gzip data", func(t *testing.T) {
 		t.Parallel()
 
-		parser := NewStreamingParser(FileTypeCSVGZ, "test", 1024)
+		parser := newStreamingParser(FileTypeCSVGZ, "test", 1024)
 		reader := strings.NewReader("invalid gzip data")
 
 		_, _, err := parser.createDecompressedReader(reader)
