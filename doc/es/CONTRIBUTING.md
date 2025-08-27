@@ -70,7 +70,6 @@ filesql/
 ├── domain/          # Capa del modelo de dominio
 │   ├── model/      # Definiciones del modelo de dominio
 │   └── repository/ # Interfaces del repositorio
-├── driver/         # Implementación del controlador SQLite
 ├── testdata/       # Archivos de datos de prueba
 ├── doc/            # Documentación
 │   ├── ja/        # Documentación en japonés
@@ -85,7 +84,6 @@ filesql/
 ### Roles de los Directorios
 
 - **domain/**: Capa que contiene la lógica de negocio y modelos de dominio. Implementación pura de Go sin dependencias externas
-- **driver/**: Interfaz e implementación del controlador SQLite. Proporciona un controlador compatible con database/sql
 - **testdata/**: Archivos de muestra como CSV, TSV, LTSV utilizados en las pruebas
 - **doc/**: Documentación multiidioma con subdirectorios para cada idioma
 

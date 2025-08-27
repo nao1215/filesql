@@ -70,7 +70,6 @@ filesql/
 ├── domain/          # Domain model layer
 │   ├── model/      # Domain model definitions
 │   └── repository/ # Repository interfaces
-├── driver/         # SQLite driver implementation
 ├── testdata/       # Test data files
 ├── doc/            # Documentation
 │   ├── ja/        # Japanese documentation
@@ -85,7 +84,6 @@ filesql/
 ### Directory Roles
 
 - **domain/**: Layer containing business logic and domain models. Pure Go implementation without external dependencies
-- **driver/**: SQLite driver interface and implementation. Provides database/sql compatible driver
 - **testdata/**: Sample files such as CSV, TSV, LTSV used in tests
 - **doc/**: Multi-language documentation with subdirectories for each language
 

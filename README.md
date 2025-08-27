@@ -20,6 +20,8 @@ Rather than maintaining duplicate code across both projects, we extracted the co
 - 🔍 **SQLite3 SQL Interface** - Use SQLite3's powerful SQL dialect to query your files
 - 📁 **Multiple File Formats** - Support for CSV, TSV, and LTSV files
 - 🗜️ **Compression Support** - Automatically handles .gz, .bz2, .xz, and .zst compressed files
+- 🌊 **Stream Processing** - Efficiently handles large files through streaming with configurable chunk sizes
+- 📖 **Flexible Input Sources** - Support for file paths, directories, io.Reader, and embed.FS
 - 🚀 **Zero Setup** - No database server required, everything runs in-memory
 - 🌍 **Cross-Platform** - Works seamlessly on Linux, macOS, and Windows
 - 💾 **SQLite3 Powered** - Built on the robust SQLite3 engine for reliable SQL processing

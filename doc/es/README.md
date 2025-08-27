@@ -18,6 +18,8 @@ En lugar de mantener código duplicado en ambos proyectos, extrajimos la funcion
 - 🔍 **Interfaz SQL SQLite3** - Usa el poderoso dialecto SQL de SQLite3 para consultar tus archivos
 - 📁 **Múltiples formatos de archivo** - Soporte para archivos CSV, TSV y LTSV
 - 🗜️ **Soporte de compresión** - Maneja automáticamente archivos comprimidos .gz, .bz2, .xz y .zst
+- 🌊 **Procesamiento de flujos** - Maneja eficientemente archivos grandes a través de streaming con tamaños de chunk configurables
+- 📖 **Fuentes de entrada flexibles** - Soporte para rutas de archivos, directorios, io.Reader y embed.FS
 - 🚀 **Configuración cero** - No se requiere servidor de base de datos, todo funciona en memoria
 - 🌍 **Multiplataforma** - Funciona perfectamente en Linux, macOS y Windows
 - 💾 **Impulsado por SQLite3** - Construido sobre el robusto motor SQLite3 para procesamiento SQL confiable

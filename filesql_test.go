@@ -176,23 +176,6 @@ func TestSQLQueries(t *testing.T) {
 	}
 }
 
-func TestRegisterDriver(t *testing.T) {
-	t.Parallel()
-
-	// Test that the driver is registered
-	db, err := sql.Open("filesql", "testdata/sample.csv")
-	if err != nil {
-		t.Errorf("sql.Open() with filesql driver failed: %v", err)
-		return
-	}
-	defer db.Close()
-
-	// Test basic connectivity
-	if err := db.PingContext(context.Background()); err != nil {
-		t.Errorf("db.PingContext(context.Background()) failed: %v", err)
-	}
-}
-
 func TestMultipleFiles(t *testing.T) {
 	t.Parallel()
 

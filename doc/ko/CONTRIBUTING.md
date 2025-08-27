@@ -70,7 +70,6 @@ filesql/
 ├── domain/          # 도메인 모델 레이어
 │   ├── model/      # 도메인 모델 정의
 │   └── repository/ # 저장소 인터페이스
-├── driver/         # SQLite 드라이버 구현
 ├── testdata/       # 테스트 데이터 파일
 ├── doc/            # 문서
 │   ├── ja/        # 일본어 문서
@@ -85,7 +84,6 @@ filesql/
 ### 디렉토리 역할
 
 - **domain/**: 비즈니스 로직과 도메인 모델을 포함하는 레이어. 외부 의존성이 없는 순수 Go 구현
-- **driver/**: SQLite 드라이버 인터페이스 및 구현. database/sql 호환 드라이버 제공
 - **testdata/**: 테스트에 사용되는 CSV, TSV, LTSV 등의 샘플 파일
 - **doc/**: 각 언어별 하위 디렉토리가 있는 다국어 문서
 

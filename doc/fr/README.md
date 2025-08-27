@@ -18,6 +18,8 @@ Plutôt que de maintenir du code dupliqué dans les deux projets, nous avons ext
 - 🔍 **Interface SQL SQLite3** - Utilisez le puissant dialecte SQL de SQLite3 pour interroger vos fichiers
 - 📁 **Formats de fichiers multiples** - Prise en charge des fichiers CSV, TSV et LTSV
 - 🗜️ **Support de compression** - Gère automatiquement les fichiers compressés .gz, .bz2, .xz et .zst
+- 🌊 **Traitement en flux** - Gère efficacement les gros fichiers grâce au streaming avec des tailles de chunk configurables
+- 📖 **Sources d'entrée flexibles** - Support pour les chemins de fichiers, répertoires, io.Reader et embed.FS
 - 🚀 **Configuration zéro** - Aucun serveur de base de données requis, tout fonctionne en mémoire
 - 🌍 **Multi-plateforme** - Fonctionne parfaitement sur Linux, macOS et Windows
 - 💾 **Alimenté par SQLite3** - Construit sur le moteur SQLite3 robuste pour un traitement SQL fiable

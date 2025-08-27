@@ -70,7 +70,6 @@ filesql/
 ├── domain/          # Couche du modèle de domaine
 │   ├── model/      # Définitions du modèle de domaine
 │   └── repository/ # Interfaces du dépôt
-├── driver/         # Implémentation du pilote SQLite
 ├── testdata/       # Fichiers de données de test
 ├── doc/            # Documentation
 │   ├── ja/        # Documentation japonaise
@@ -85,7 +84,6 @@ filesql/
 ### Rôles des Répertoires
 
 - **domain/** : Couche contenant la logique métier et les modèles de domaine. Implémentation Go pure sans dépendances externes
-- **driver/** : Interface et implémentation du pilote SQLite. Fournit un pilote compatible avec database/sql
 - **testdata/** : Fichiers exemples tels que CSV, TSV, LTSV utilisés dans les tests
 - **doc/** : Documentation multilingue avec des sous-répertoires pour chaque langue
 
