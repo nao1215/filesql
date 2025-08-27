@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/csv"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,7 +14,6 @@ import (
 	"time"
 
 	"github.com/nao1215/filesql/domain/model"
-	filesqldriver "github.com/nao1215/filesql/driver"
 )
 
 func TestOpen(t *testing.T) {
@@ -451,14 +449,16 @@ func TestDumpDatabaseErrors(t *testing.T) {
 
 		tempDir := t.TempDir()
 
-		// This should return an error since it's not a filesql connection
+		// This should return an error since there are no tables in empty database
 		err = DumpDatabase(db, tempDir)
 		if err == nil {
-			t.Error("expected error when calling DumpDatabase on non-filesql connection")
+			t.Error("expected error when calling DumpDatabase on empty database")
 		}
 
-		if !errors.Is(err, filesqldriver.ErrNotFilesqlConnection) {
-			t.Errorf("expected ErrNotFilesqlConnection, got: %v", err)
+		// Should get "no tables found" error since it's an empty database
+		expectedErrorMsg := "no tables found in database"
+		if err.Error() != expectedErrorMsg {
+			t.Errorf("expected error message '%s', got: %v", expectedErrorMsg, err)
 		}
 	})
 

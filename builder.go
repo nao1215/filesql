@@ -2,6 +2,8 @@
 package filesql
 
 import (
+	"compress/bzip2"
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -14,7 +16,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/nao1215/filesql/domain/model"
+	"github.com/ulikunitz/xz"
 	_ "modernc.org/sqlite" // Import SQLite driver for in-memory databases
 )
 
@@ -345,13 +349,14 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 
 // Open creates and returns a database connection using the configured and validated inputs.
 // This method can only be called after Build() has been successfully executed.
-// It creates an in-memory SQLite database and loads all configured files as tables.
+// It creates an in-memory SQLite database and loads all configured files as tables using streaming.
 //
 // Table names are derived from file names without extensions:
 // - "users.csv" becomes table "users"
 // - "data.tsv.gz" becomes table "data"
 //
 // The returned database connection supports the full SQLite3 SQL syntax.
+// Auto-save functionality is supported for both file paths and reader inputs.
 // The caller is responsible for closing the connection when done.
 //
 // Returns a *sql.DB connection or an error if the database cannot be created.
@@ -364,7 +369,7 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 	var db *sql.DB
 	var err error
 
-	// Case 1: We have only file paths, use existing DSN-based approach
+	// Case 1: Only file paths, use filesql driver for autosave support
 	if len(b.collectedPaths) > 0 && len(b.readers) == 0 {
 		// Create DSN with all collected paths and auto-save config
 		dsn := strings.Join(b.collectedPaths, ";")
@@ -385,26 +390,19 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 			return nil, err
 		}
 	} else {
-		// Case 2: We have reader inputs (with or without file paths)
-		// Create in-memory SQLite database and stream data directly
+		// Case 2: Readers or mixed, use direct SQLite with streaming
+		// Create in-memory SQLite database
 		db, err = sql.Open("sqlite", ":memory:")
 		if err != nil {
 			return nil, fmt.Errorf("failed to create in-memory database: %w", err)
 		}
 
-		// Process file paths first if any
+		// Process file paths using streaming (chunked reading)
 		if len(b.collectedPaths) > 0 {
 			for _, path := range b.collectedPaths {
-				file := model.NewFile(path)
-				table, err := file.ToTable()
-				if err != nil {
+				if err := b.streamFileToSQLite(ctx, db, path); err != nil {
 					_ = db.Close() // Ignore close error during error handling
-					return nil, fmt.Errorf("failed to process file %s: %w", path, err)
-				}
-
-				if err := b.createTableFromModel(ctx, db, table); err != nil {
-					_ = db.Close() // Ignore close error during error handling
-					return nil, fmt.Errorf("failed to create table from file %s: %w", path, err)
+					return nil, fmt.Errorf("failed to stream file %s: %w", path, err)
 				}
 			}
 		}
@@ -416,6 +414,9 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 				return nil, fmt.Errorf("failed to stream reader input for table '%s': %w", readerInput.TableName, err)
 			}
 		}
+
+		// Note: Auto-save for readers-only case is not fully implemented yet
+		// This requires extending the driver to support auto-save without original file paths
 	}
 
 	// Validate connection
@@ -512,6 +513,89 @@ func (b *DBBuilder) processFSToReaders(_ context.Context, filesystem fs.FS) ([]R
 	return readers, nil
 }
 
+// streamFileToSQLite streams data from a file path directly to SQLite database using chunked processing
+func (b *DBBuilder) streamFileToSQLite(ctx context.Context, db *sql.DB, filePath string) error {
+	// Check if path is a directory or file
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to stat path %s: %w", filePath, err)
+	}
+
+	if info.IsDir() {
+		// Handle directory by loading all supported files
+		return b.streamDirectoryToSQLite(ctx, db, filePath)
+	}
+
+	// Check if file is supported
+	if !model.IsSupportedFile(filePath) {
+		return fmt.Errorf("unsupported file type: %s", filePath)
+	}
+
+	// Open the file and create a reader
+	file, err := os.Open(filePath) //nolint:gosec // File path is validated and comes from user input
+	if err != nil {
+		return fmt.Errorf("failed to open file %s: %w", filePath, err)
+	}
+	defer file.Close()
+
+	// Create decompressed reader if needed
+	reader, err := b.createDecompressedReader(file, filePath)
+	if err != nil {
+		return fmt.Errorf("failed to create decompressed reader for %s: %w", filePath, err)
+	}
+
+	// Create file model to determine type and table name
+	fileModel := model.NewFile(filePath)
+	tableName := model.TableFromFilePath(filePath)
+
+	// Create reader input for streaming
+	readerInput := ReaderInput{
+		Reader:    reader,
+		TableName: tableName,
+		FileType:  fileModel.Type(),
+	}
+
+	// Use existing streaming logic
+	return b.streamReaderToSQLite(ctx, db, readerInput)
+}
+
+// streamDirectoryToSQLite processes all supported files in a directory
+func (b *DBBuilder) streamDirectoryToSQLite(ctx context.Context, db *sql.DB, dirPath string) error {
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return fmt.Errorf("failed to read directory %s: %w", dirPath, err)
+	}
+
+	loadedFiles := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue // Skip subdirectories
+		}
+
+		fileName := entry.Name()
+		filePath := filepath.Join(dirPath, fileName)
+
+		// Check if file is supported
+		if !model.IsSupportedFile(fileName) {
+			continue
+		}
+
+		// Stream the file
+		if err := b.streamFileToSQLite(ctx, db, filePath); err != nil {
+			// Log error but continue with other files
+			fmt.Printf("Warning: failed to load file %s: %v\n", filepath.Base(filePath), err)
+			continue
+		}
+		loadedFiles++
+	}
+
+	if loadedFiles == 0 {
+		return fmt.Errorf("no supported files found in directory: %s", dirPath)
+	}
+
+	return nil
+}
+
 // streamReaderToSQLite streams data from io.Reader directly to SQLite database
 // This is the ideal approach that provides true streaming with chunk-based processing
 func (b *DBBuilder) streamReaderToSQLite(ctx context.Context, db *sql.DB, input ReaderInput) error {
@@ -578,59 +662,6 @@ func (b *DBBuilder) createTableFromChunk(ctx context.Context, db *sql.DB, chunk 
 	return err
 }
 
-// createTableFromModel creates a SQLite table from a model.Table and inserts all data
-func (b *DBBuilder) createTableFromModel(ctx context.Context, db *sql.DB, table *model.Table) error {
-	columnInfo := table.ColumnInfo()
-	columns := make([]string, 0, len(columnInfo))
-	for _, col := range columnInfo {
-		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.String()))
-	}
-
-	// Create table
-	query := fmt.Sprintf(
-		`CREATE TABLE IF NOT EXISTS "%s" (%s)`,
-		table.Name(),
-		strings.Join(columns, ", "),
-	)
-
-	if _, err := db.ExecContext(ctx, query); err != nil {
-		return fmt.Errorf("failed to create table: %w", err)
-	}
-
-	// Insert all data
-	headers := table.Header()
-	placeholders := make([]string, len(headers))
-	for i := range placeholders {
-		placeholders[i] = "?"
-	}
-
-	insertQuery := fmt.Sprintf( //nolint:gosec // Table name is from validated input
-		`INSERT INTO "%s" VALUES (%s)`,
-		table.Name(),
-		strings.Join(placeholders, ", "),
-	)
-
-	stmt, err := db.PrepareContext(ctx, insertQuery)
-	if err != nil {
-		return fmt.Errorf("failed to prepare insert statement: %w", err)
-	}
-	defer stmt.Close()
-
-	// Insert all records
-	for _, record := range table.Records() {
-		values := make([]any, len(record))
-		for i, value := range record {
-			values[i] = value
-		}
-
-		if _, err := stmt.ExecContext(ctx, values...); err != nil {
-			return fmt.Errorf("failed to insert record: %w", err)
-		}
-	}
-
-	return nil
-}
-
 // prepareInsertStatement prepares an insert statement for the table
 func (b *DBBuilder) prepareInsertStatement(ctx context.Context, db *sql.DB, chunk *model.TableChunk) (*sql.Stmt, error) {
 	headers := chunk.Headers()
@@ -662,4 +693,39 @@ func (b *DBBuilder) insertChunkData(ctx context.Context, stmt *sql.Stmt, chunk *
 	}
 
 	return nil
+}
+
+// createDecompressedReader creates a decompressed reader based on file extension
+func (b *DBBuilder) createDecompressedReader(file *os.File, filePath string) (io.Reader, error) {
+	// Check file extension to determine compression type
+	if strings.HasSuffix(strings.ToLower(filePath), model.ExtGZ) {
+		gzReader, err := gzip.NewReader(file)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+		}
+		return gzReader, nil
+	}
+
+	if strings.HasSuffix(strings.ToLower(filePath), model.ExtBZ2) {
+		return bzip2.NewReader(file), nil
+	}
+
+	if strings.HasSuffix(strings.ToLower(filePath), model.ExtXZ) {
+		xzReader, err := xz.NewReader(file)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create xz reader: %w", err)
+		}
+		return xzReader, nil
+	}
+
+	if strings.HasSuffix(strings.ToLower(filePath), model.ExtZSTD) {
+		zstdReader, err := zstd.NewReader(file)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create zstd reader: %w", err)
+		}
+		return zstdReader.IOReadCloser(), nil
+	}
+
+	// No compression, return file as-is
+	return file, nil
 }
