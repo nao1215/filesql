@@ -374,6 +374,39 @@ if err != nil {
 }
 ```
 
+#### Auto-Save Input Type Restrictions
+
+**Important**: Auto-save behavior depends on your input data source:
+
+- **File Paths** (`AddPath`, `AddPaths`): Supports both overwrite mode (empty string) and output directory
+  ```go
+  // ✅ Overwrite original files
+  builder.AddPath("data.csv").EnableAutoSave("")
+  
+  // ✅ Save to output directory  
+  builder.AddPath("data.csv").EnableAutoSave("./backup")
+  ```
+
+- **io.Reader** (`AddReader`): **Only supports output directory mode**
+  ```go
+  // ❌ Build error - overwrite mode not supported
+  builder.AddReader(reader, "table", model.FileTypeCSV).EnableAutoSave("")
+  
+  // ✅ Must specify output directory
+  builder.AddReader(reader, "table", model.FileTypeCSV).EnableAutoSave("./output")
+  ```
+
+- **Filesystems** (`AddFS`): **Only supports output directory mode**
+  ```go
+  // ❌ Build error - overwrite mode not supported  
+  builder.AddFS(filesystem).EnableAutoSave("")
+  
+  // ✅ Must specify output directory
+  builder.AddFS(filesystem).EnableAutoSave("./output")
+  ```
+
+This restriction exists because io.Reader and filesystem inputs don't have original file paths that can be overwritten. The builder will return an error at build time if you try to use overwrite mode with these input types.
+
 ### Manual Data Export (Alternative to Auto-Save)
 
 If you prefer manual control over when to save changes to files instead of using auto-save:

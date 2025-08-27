@@ -287,6 +287,11 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 		return nil, errors.New("at least one path must be provided")
 	}
 
+	// Validate auto-save configuration
+	if err := b.validateAutoSaveConfig(); err != nil {
+		return nil, err
+	}
+
 	// Reset collected paths and create deduplication set
 	b.collectedPaths = make([]string, 0)
 	processedFiles := make(map[string]bool) // Track processed file paths to avoid duplicates
@@ -634,22 +639,13 @@ func (b *DBBuilder) streamFileToSQLite(ctx context.Context, db *sql.DB, filePath
 // streamReaderToSQLite streams data from io.Reader directly to SQLite database
 // This is the ideal approach that provides true streaming with chunk-based processing
 func (b *DBBuilder) streamReaderToSQLite(ctx context.Context, db *sql.DB, input ReaderInput) error {
-	// Check if the reader is empty by using a buffer to peek at content
+	// Wrap reader with buffered reader for better performance
 	bufferedReader := bufio.NewReader(input.Reader)
-	_, err := bufferedReader.Peek(1)
-	if errors.Is(err, io.EOF) {
-		return errors.New("file is empty")
-	}
-	if err != nil {
-		return fmt.Errorf("failed to read from input: %w", err)
-	}
-
-	// Replace the original reader with the buffered one that includes the peeked content
 	input.Reader = bufferedReader
 
 	// Check if table already exists to avoid duplicates
 	var tableExists int
-	err = db.QueryRowContext(ctx,
+	err := db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`,
 		input.TableName,
 	).Scan(&tableExists)
@@ -697,9 +693,13 @@ func (b *DBBuilder) streamReaderToSQLite(ctx context.Context, db *sql.DB, input 
 
 	// Handle header-only files: if no data chunks were processed, create empty table
 	if !tableCreated {
-		// Check if the original streaming error should be preserved (like duplicate columns)
-		if err != nil && strings.Contains(err.Error(), "duplicate column name") {
-			return err // Preserve meaningful parsing errors
+		// Check if the original streaming error should be preserved
+		if err != nil {
+			// Preserve certain parsing errors that should not be converted to empty tables
+			if strings.Contains(err.Error(), "duplicate column name") ||
+				strings.Contains(err.Error(), "empty CSV data") {
+				return err // Preserve meaningful parsing errors
+			}
 		}
 
 		// For header-only files or empty files, create an empty table by parsing headers
@@ -924,8 +924,13 @@ func (c *autoSaveConnection) Close() error {
 	// Perform auto-save if configured for close timing
 	if c.autoSaveConfig != nil && c.autoSaveConfig.Enabled && c.autoSaveConfig.Timing == AutoSaveOnClose {
 		if err := c.performAutoSave(); err != nil {
-			// Log the error but don't fail the close operation
-			_ = err // For now, just ignore the error
+			// Close the underlying connection first to avoid resource leaks
+			closeErr := c.conn.Close()
+			// Return the auto-save error as it's more important for the user
+			if closeErr != nil {
+				return fmt.Errorf("auto-save failed: %w; additionally, connection close failed: %w", err, closeErr)
+			}
+			return fmt.Errorf("auto-save failed: %w", err)
 		}
 	}
 
@@ -1096,4 +1101,35 @@ func (b *DBBuilder) isCompressedFile(filePath string) bool {
 		strings.HasSuffix(filePath, ".bz2") ||
 		strings.HasSuffix(filePath, ".xz") ||
 		strings.HasSuffix(filePath, ".zst")
+}
+
+// validateAutoSaveConfig validates that the auto-save configuration is compatible with the input sources
+func (b *DBBuilder) validateAutoSaveConfig() error {
+	// If auto-save is not enabled, no validation needed
+	if b.autoSaveConfig == nil || !b.autoSaveConfig.Enabled {
+		return nil
+	}
+
+	// Check if overwrite mode (empty OutputDir) is being used with non-file inputs
+	isOverwriteMode := b.autoSaveConfig.OutputDir == ""
+	hasNonFileInputs := len(b.readers) > 0 || len(b.filesystems) > 0
+
+	if isOverwriteMode && hasNonFileInputs {
+		var inputTypes []string
+
+		if len(b.readers) > 0 {
+			inputTypes = append(inputTypes, fmt.Sprintf("%d io.Reader(s)", len(b.readers)))
+		}
+		if len(b.filesystems) > 0 {
+			inputTypes = append(inputTypes, fmt.Sprintf("%d filesystem(s)", len(b.filesystems)))
+		}
+
+		return fmt.Errorf(
+			"auto-save overwrite mode (empty output directory) is not supported with %s. "+
+				"Please specify an output directory using EnableAutoSave(\"/path/to/output\") "+
+				"or use file paths instead of readers/filesystems",
+			strings.Join(inputTypes, " and "))
+	}
+
+	return nil
 }
