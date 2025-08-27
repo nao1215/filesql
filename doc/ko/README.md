@@ -129,7 +129,7 @@ func main() {
         log.Fatal(err)
     }
     defer connection.Close()
-    defer db.Cleanup() // FS의 임시 파일 정리
+    
     
     // 다른 소스의 파일들 간 쿼리
     rows, err := connection.Query("SELECT name FROM sqlite_master WHERE type='table'")
@@ -319,7 +319,7 @@ validatedBuilder, err := builder.Build(ctx)
 if err != nil {
     log.Fatal(err)
 }
-defer validatedBuilder.Cleanup()
+
 
 db, err := validatedBuilder.Open(ctx)
 if err != nil {
@@ -349,7 +349,7 @@ validatedBuilder, err := builder.Build(ctx)
 if err != nil {
     log.Fatal(err)
 }
-defer validatedBuilder.Cleanup()
+
 
 db, err := validatedBuilder.Open(ctx)
 if err != nil {

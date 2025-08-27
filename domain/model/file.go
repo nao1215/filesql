@@ -14,7 +14,7 @@ import (
 	"github.com/ulikunitz/xz"
 )
 
-// FileType represents supported file types
+// FileType represents supported file types including compression variants
 type FileType int
 
 const (
@@ -24,6 +24,30 @@ const (
 	FileTypeTSV
 	// FileTypeLTSV represents LTSV file type
 	FileTypeLTSV
+	// FileTypeCSVGZ represents gzip-compressed CSV file type
+	FileTypeCSVGZ
+	// FileTypeTSVGZ represents gzip-compressed TSV file type
+	FileTypeTSVGZ
+	// FileTypeLTSVGZ represents gzip-compressed LTSV file type
+	FileTypeLTSVGZ
+	// FileTypeCSVBZ2 represents bzip2-compressed CSV file type
+	FileTypeCSVBZ2
+	// FileTypeTSVBZ2 represents bzip2-compressed TSV file type
+	FileTypeTSVBZ2
+	// FileTypeLTSVBZ2 represents bzip2-compressed LTSV file type
+	FileTypeLTSVBZ2
+	// FileTypeCSVXZ represents xz-compressed CSV file type
+	FileTypeCSVXZ
+	// FileTypeTSVXZ represents xz-compressed TSV file type
+	FileTypeTSVXZ
+	// FileTypeLTSVXZ represents xz-compressed LTSV file type
+	FileTypeLTSVXZ
+	// FileTypeCSVZSTD represents zstd-compressed CSV file type
+	FileTypeCSVZSTD
+	// FileTypeTSVZSTD represents zstd-compressed TSV file type
+	FileTypeTSVZSTD
+	// FileTypeLTSVZSTD represents zstd-compressed LTSV file type
+	FileTypeLTSVZSTD
 	// FileTypeUnsupported represents unsupported file type
 	FileTypeUnsupported
 )
@@ -50,6 +74,44 @@ const (
 type File struct {
 	path     string
 	fileType FileType
+}
+
+// TableChunk represents a chunk of table data for streaming processing
+type TableChunk struct {
+	tableName  string
+	headers    Header
+	records    []Record
+	columnInfo []ColumnInfo
+}
+
+// TableName returns the name of the table
+func (tc *TableChunk) TableName() string {
+	return tc.tableName
+}
+
+// Headers returns the table headers
+func (tc *TableChunk) Headers() Header {
+	return tc.headers
+}
+
+// Records returns the records in this chunk
+func (tc *TableChunk) Records() []Record {
+	return tc.records
+}
+
+// ColumnInfo returns the column information with inferred types
+func (tc *TableChunk) ColumnInfo() []ColumnInfo {
+	return tc.columnInfo
+}
+
+// ChunkProcessor is a function type for processing table chunks
+type ChunkProcessor func(chunk *TableChunk) error
+
+// StreamingParser represents a parser that can read from io.Reader directly
+type StreamingParser struct {
+	fileType  FileType
+	tableName string
+	chunkSize int
 }
 
 // NewFile creates a new File
@@ -91,6 +153,79 @@ func IsSupportedFile(fileName string) bool {
 	return strings.HasSuffix(fileName, ExtCSV) ||
 		strings.HasSuffix(fileName, ExtTSV) ||
 		strings.HasSuffix(fileName, ExtLTSV)
+}
+
+// IsSupportedExtension checks if the given extension is supported
+// The extension should start with a dot (e.g., ".csv", ".tsv.gz")
+func IsSupportedExtension(ext string) bool {
+	ext = strings.ToLower(ext)
+
+	// Check if it's a simple extension or has compression
+	return IsSupportedFile("file" + ext)
+}
+
+// Extension returns the file extension for the FileType
+func (ft FileType) Extension() string {
+	switch ft {
+	case FileTypeCSV:
+		return ExtCSV
+	case FileTypeTSV:
+		return ExtTSV
+	case FileTypeLTSV:
+		return ExtLTSV
+	case FileTypeCSVGZ:
+		return ExtCSV + ExtGZ
+	case FileTypeTSVGZ:
+		return ExtTSV + ExtGZ
+	case FileTypeLTSVGZ:
+		return ExtLTSV + ExtGZ
+	case FileTypeCSVBZ2:
+		return ExtCSV + ExtBZ2
+	case FileTypeTSVBZ2:
+		return ExtTSV + ExtBZ2
+	case FileTypeLTSVBZ2:
+		return ExtLTSV + ExtBZ2
+	case FileTypeCSVXZ:
+		return ExtCSV + ExtXZ
+	case FileTypeTSVXZ:
+		return ExtTSV + ExtXZ
+	case FileTypeLTSVXZ:
+		return ExtLTSV + ExtXZ
+	case FileTypeCSVZSTD:
+		return ExtCSV + ExtZSTD
+	case FileTypeTSVZSTD:
+		return ExtTSV + ExtZSTD
+	case FileTypeLTSVZSTD:
+		return ExtLTSV + ExtZSTD
+	default:
+		return ""
+	}
+}
+
+// BaseType returns the base file type without compression
+func (ft FileType) BaseType() FileType {
+	switch ft {
+	case FileTypeCSV, FileTypeCSVGZ, FileTypeCSVBZ2, FileTypeCSVXZ, FileTypeCSVZSTD:
+		return FileTypeCSV
+	case FileTypeTSV, FileTypeTSVGZ, FileTypeTSVBZ2, FileTypeTSVXZ, FileTypeTSVZSTD:
+		return FileTypeTSV
+	case FileTypeLTSV, FileTypeLTSVGZ, FileTypeLTSVBZ2, FileTypeLTSVXZ, FileTypeLTSVZSTD:
+		return FileTypeLTSV
+	default:
+		return FileTypeUnsupported
+	}
+}
+
+// GetFileExtension returns the file extension for a given FileType
+// Deprecated: Use FileType.Extension() method instead
+func GetFileExtension(fileType FileType) string {
+	return fileType.Extension()
+}
+
+// GetBaseFileType returns the base file type without compression
+// Deprecated: Use FileType.BaseType() method instead
+func GetBaseFileType(fileType FileType) FileType {
+	return fileType.BaseType()
 }
 
 // Path returns file path

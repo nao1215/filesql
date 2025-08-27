@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/nao1215/filesql/domain/model"
+	_ "modernc.org/sqlite" // Import SQLite driver for in-memory databases
 )
 
 // DBBuilder is a builder for creating database connections from files and embedded filesystems.
@@ -30,18 +31,21 @@ import (
 //	}
 //	db, err := validatedBuilder.Open(ctx)
 //	defer db.Close()
-//	defer validatedBuilder.Cleanup() // Clean up temporary files
 type DBBuilder struct {
 	// paths contains regular file paths
 	paths []string
 	// filesystems contains fs.FS instances
 	filesystems []fs.FS
+	// readers contains reader configurations
+	readers []ReaderInput
 	// collectedPaths contains all paths after Build validation
 	collectedPaths []string
-	// tempFiles tracks temporary files created for cleanup
-	tempFiles []string
+	// parsedTables contains tables parsed from streaming readers
+	parsedTables []*model.Table
 	// autoSaveConfig contains auto-save settings
 	autoSaveConfig *AutoSaveConfig
+	// defaultChunkSize is the default chunk size for reading large files (10MB)
+	defaultChunkSize int
 }
 
 // AutoSaveTiming specifies when automatic saving should occur
@@ -66,6 +70,16 @@ type AutoSaveConfig struct {
 	Options DumpOptions
 }
 
+// ReaderInput represents configuration for reading from io.Reader
+type ReaderInput struct {
+	// Reader is the data source
+	Reader io.Reader
+	// TableName is the name of the table to create
+	TableName string
+	// FileType specifies the file format using domain/model types
+	FileType model.FileType
+}
+
 // NewBuilder creates a new database builder for configuring file inputs.
 // The returned builder can be used to add file paths and embedded filesystems
 // before building and opening a database connection.
@@ -84,14 +98,15 @@ type AutoSaveConfig struct {
 //		return err
 //	}
 //	defer db.Close()
-//	defer validatedBuilder.Cleanup()
 func NewBuilder() *DBBuilder {
 	return &DBBuilder{
-		paths:          make([]string, 0),
-		filesystems:    make([]fs.FS, 0),
-		collectedPaths: make([]string, 0),
-		tempFiles:      make([]string, 0),
-		autoSaveConfig: nil, // Default: no auto-save
+		paths:            make([]string, 0),
+		filesystems:      make([]fs.FS, 0),
+		readers:          make([]ReaderInput, 0),
+		collectedPaths:   make([]string, 0),
+		parsedTables:     make([]*model.Table, 0),
+		autoSaveConfig:   nil,              // Default: no auto-save
+		defaultChunkSize: 10 * 1024 * 1024, // 10MB default chunk size
 	}
 }
 
@@ -119,6 +134,49 @@ func (b *DBBuilder) AddPaths(paths ...string) *DBBuilder {
 	return b
 }
 
+// AddReader adds an io.Reader as a data source to the builder.
+// The reader's content will be streamed directly to the database during Open().
+// You must specify the table name and file type explicitly for security.
+//
+// The fileType parameter should use the FileType constants from domain/model:
+// - model.FileTypeCSV for CSV data
+// - model.FileTypeTSV for TSV data
+// - model.FileTypeLTSV for LTSV data
+// - model.FileTypeCSVGZ for gzip-compressed CSV data
+// - etc.
+//
+// Example:
+//
+//	file, err := os.Open("data.csv")
+//	if err != nil {
+//		return err
+//	}
+//	defer file.Close()
+//
+//	builder := filesql.NewBuilder().AddReader(file, "users", model.FileTypeCSV)
+//
+// Returns the builder for method chaining.
+func (b *DBBuilder) AddReader(reader io.Reader, tableName string, fileType model.FileType) *DBBuilder {
+	b.readers = append(b.readers, ReaderInput{
+		Reader:    reader,
+		TableName: tableName,
+		FileType:  fileType,
+	})
+	return b
+}
+
+// SetDefaultChunkSize sets the default chunk size for reading large files.
+// This affects both Reader inputs and file path inputs.
+// The chunk size determines how much data is read into memory at once.
+//
+// Returns the builder for method chaining.
+func (b *DBBuilder) SetDefaultChunkSize(size int) *DBBuilder {
+	if size > 0 {
+		b.defaultChunkSize = size
+	}
+	return b
+}
+
 // AddFS adds all supported files from an fs.FS filesystem to the builder.
 // This method is particularly useful for embedded filesystems using go:embed.
 // It automatically searches for all supported file types recursively:
@@ -126,8 +184,7 @@ func (b *DBBuilder) AddPaths(paths ...string) *DBBuilder {
 // - Compressed variants: .gz, .bz2, .xz, .zst
 //
 // The filesystem will be processed during Build(), where matching files will be
-// copied to temporary files for database access. Use Cleanup() to remove these
-// temporary files when done.
+// converted to streaming readers for direct database access.
 //
 // Example with embedded filesystem:
 //
@@ -213,7 +270,7 @@ func (b *DBBuilder) DisableAutoSave() *DBBuilder {
 //
 // 1. Validates that at least one input source is configured
 // 2. Checks existence and format of all file paths
-// 3. Processes embedded filesystems by copying files to temporary locations
+// 3. Processes embedded filesystems by converting files to streaming readers
 // 4. Validates that all files have supported extensions
 //
 // After successful validation, the builder is ready to create database connections
@@ -222,7 +279,7 @@ func (b *DBBuilder) DisableAutoSave() *DBBuilder {
 // Returns the same builder instance for method chaining, or an error if validation fails.
 func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 	// Validate that we have at least one input
-	if len(b.paths) == 0 && len(b.filesystems) == 0 {
+	if len(b.paths) == 0 && len(b.filesystems) == 0 && len(b.readers) == 0 {
 		return nil, errors.New("at least one path must be provided")
 	}
 
@@ -250,21 +307,36 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 		b.collectedPaths = append(b.collectedPaths, path)
 	}
 
-	// Process and validate FS inputs, converting to temporary files
+	// Process and validate FS inputs, converting to streaming readers
 	for _, filesystem := range b.filesystems {
 		if filesystem == nil {
 			return nil, errors.New("FS cannot be nil")
 		}
 
-		// Process FS and get temporary file paths
-		paths, err := b.processFSInput(ctx, filesystem)
+		// Process FS and create reader inputs
+		fsReaders, err := b.processFSToReaders(ctx, filesystem)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process FS input: %w", err)
 		}
-		b.collectedPaths = append(b.collectedPaths, paths...)
+		b.readers = append(b.readers, fsReaders...)
 	}
 
-	if len(b.collectedPaths) == 0 {
+	// Validate Reader inputs for streaming processing
+	for i := range b.readers {
+		readerInput := &b.readers[i]
+		if readerInput.Reader == nil {
+			return nil, errors.New("reader cannot be nil")
+		}
+		if readerInput.TableName == "" {
+			return nil, errors.New("table name must be specified for reader input")
+		}
+		if readerInput.FileType == model.FileTypeUnsupported {
+			return nil, errors.New("file type must be specified for reader input")
+		}
+		// Reader inputs will be processed directly in Open() method using streaming
+	}
+
+	if len(b.collectedPaths) == 0 && len(b.readers) == 0 {
 		return nil, errors.New("no valid input files found")
 	}
 
@@ -280,44 +352,75 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 // - "data.tsv.gz" becomes table "data"
 //
 // The returned database connection supports the full SQLite3 SQL syntax.
-// The caller is responsible for closing the connection and calling Cleanup()
-// to remove any temporary files created from embedded filesystems.
+// The caller is responsible for closing the connection when done.
 //
 // Returns a *sql.DB connection or an error if the database cannot be created.
 func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
-	// Use collected paths from Build
-	if len(b.collectedPaths) == 0 {
+	// Check that we have inputs available
+	if len(b.collectedPaths) == 0 && len(b.readers) == 0 {
 		return nil, errors.New("no valid input files found, did you call Build()?")
 	}
 
-	// Create DSN with all collected paths and auto-save config
-	dsn := strings.Join(b.collectedPaths, ";")
+	var db *sql.DB
+	var err error
 
-	// Append auto-save configuration to DSN if enabled
-	if b.autoSaveConfig != nil && b.autoSaveConfig.Enabled {
-		configJSON, err := json.Marshal(b.autoSaveConfig)
+	// Case 1: We have only file paths, use existing DSN-based approach
+	if len(b.collectedPaths) > 0 && len(b.readers) == 0 {
+		// Create DSN with all collected paths and auto-save config
+		dsn := strings.Join(b.collectedPaths, ";")
+
+		// Append auto-save configuration to DSN if enabled
+		if b.autoSaveConfig != nil && b.autoSaveConfig.Enabled {
+			configJSON, err := json.Marshal(b.autoSaveConfig)
+			if err != nil {
+				return nil, fmt.Errorf("failed to serialize auto-save config: %w", err)
+			}
+			configEncoded := base64.StdEncoding.EncodeToString(configJSON)
+			dsn += "?autosave=" + configEncoded
+		}
+
+		// Open database connection using driver
+		db, err = sql.Open(DriverName, dsn)
 		if err != nil {
-			return nil, fmt.Errorf("failed to serialize auto-save config: %w", err)
+			return nil, err
 		}
-		configEncoded := base64.StdEncoding.EncodeToString(configJSON)
-		dsn += "?autosave=" + configEncoded
-	}
+	} else {
+		// Case 2: We have reader inputs (with or without file paths)
+		// Create in-memory SQLite database and stream data directly
+		db, err = sql.Open("sqlite", ":memory:")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create in-memory database: %w", err)
+		}
 
-	// Open database connection
-	db, err := sql.Open(DriverName, dsn)
-	if err != nil {
-		cleanupErr := b.cleanup()
-		if cleanupErr != nil {
-			// Join the original error with cleanup error
-			return nil, errors.Join(err, fmt.Errorf("cleanup failed: %w", cleanupErr))
+		// Process file paths first if any
+		if len(b.collectedPaths) > 0 {
+			for _, path := range b.collectedPaths {
+				file := model.NewFile(path)
+				table, err := file.ToTable()
+				if err != nil {
+					_ = db.Close() // Ignore close error during error handling
+					return nil, fmt.Errorf("failed to process file %s: %w", path, err)
+				}
+
+				if err := b.createTableFromModel(ctx, db, table); err != nil {
+					_ = db.Close() // Ignore close error during error handling
+					return nil, fmt.Errorf("failed to create table from file %s: %w", path, err)
+				}
+			}
 		}
-		return nil, err
+
+		// Process reader inputs using streaming
+		for _, readerInput := range b.readers {
+			if err := b.streamReaderToSQLite(ctx, db, readerInput); err != nil {
+				_ = db.Close() // Ignore close error during error handling
+				return nil, fmt.Errorf("failed to stream reader input for table '%s': %w", readerInput.TableName, err)
+			}
+		}
 	}
 
 	// Validate connection
 	if err := db.PingContext(ctx); err != nil {
 		closeErr := db.Close()
-		cleanupErr := b.cleanup()
 
 		// Collect all errors that occurred during error handling
 		var allErrors []error
@@ -325,18 +428,15 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 		if closeErr != nil {
 			allErrors = append(allErrors, fmt.Errorf("failed to close database: %w", closeErr))
 		}
-		if cleanupErr != nil {
-			allErrors = append(allErrors, fmt.Errorf("cleanup failed: %w", cleanupErr))
-		}
 
 		return nil, errors.Join(allErrors...)
 	}
 	return db, nil
 }
 
-// processFSInput processes all supported files from an fs.FS
-func (b *DBBuilder) processFSInput(ctx context.Context, filesystem fs.FS) ([]string, error) {
-	paths := make([]string, 0)
+// processFSToReaders processes all supported files from an fs.FS and creates ReaderInput
+func (b *DBBuilder) processFSToReaders(_ context.Context, filesystem fs.FS) ([]ReaderInput, error) {
+	readers := make([]ReaderInput, 0)
 
 	// Search for all supported file patterns
 	supportedPatterns := model.SupportedFileExtPatterns()
@@ -385,91 +485,181 @@ func (b *DBBuilder) processFSInput(ctx context.Context, filesystem fs.FS) ([]str
 		return nil, errors.New("no supported files found in filesystem")
 	}
 
-	// Copy all matched files to temporary files
+	// Create ReaderInput for each matched file
 	for _, match := range allMatches {
-		tempPath, err := b.copyFSToTemp(ctx, filesystem, match)
+		// Open the file from FS
+		file, err := filesystem.Open(match)
 		if err != nil {
-			return nil, fmt.Errorf("failed to copy file %s: %w", match, err)
+			return nil, fmt.Errorf("failed to open FS file %s: %w", match, err)
 		}
-		paths = append(paths, tempPath)
-	}
 
-	return paths, nil
+		// Determine file type from extension using model.NewFile
+		fileInfo := model.NewFile(match)
+		fileType := fileInfo.Type()
+
+		// Generate table name from file path (remove extension and clean up)
+		tableName := model.TableFromFilePath(match)
+
+		// Create ReaderInput
+		readerInput := ReaderInput{
+			Reader:    file,
+			TableName: tableName,
+			FileType:  fileType,
+		}
+
+		readers = append(readers, readerInput)
+	}
+	return readers, nil
 }
 
-// copyFSToTemp copies a file from fs.FS to a temporary file
-func (b *DBBuilder) copyFSToTemp(_ context.Context, filesystem fs.FS, path string) (string, error) {
-	// Open the file from FS
-	file, err := filesystem.Open(path)
+// streamReaderToSQLite streams data from io.Reader directly to SQLite database
+// This is the ideal approach that provides true streaming with chunk-based processing
+func (b *DBBuilder) streamReaderToSQLite(ctx context.Context, db *sql.DB, input ReaderInput) error {
+	// Create streaming parser for chunked processing
+	parser := model.NewStreamingParser(input.FileType, input.TableName, b.defaultChunkSize)
+
+	// Initialize the table schema (we need to peek at the first chunk to get headers)
+	var tableCreated bool
+	var insertStmt *sql.Stmt
+
+	// Process data in chunks
+	err := parser.ProcessInChunks(input.Reader, func(chunk *model.TableChunk) error {
+		// Create table on first chunk
+		if !tableCreated {
+			if err := b.createTableFromChunk(ctx, db, chunk); err != nil {
+				return fmt.Errorf("failed to create table: %w", err)
+			}
+
+			// Prepare insert statement
+			var err error
+			insertStmt, err = b.prepareInsertStatement(ctx, db, chunk) //nolint:sqlclosecheck // Statement is closed after processing
+			if err != nil {
+				return fmt.Errorf("failed to prepare insert statement: %w", err)
+			}
+
+			tableCreated = true
+		}
+
+		// Insert chunk data
+		if err := b.insertChunkData(ctx, insertStmt, chunk); err != nil {
+			return fmt.Errorf("failed to insert chunk data: %w", err)
+		}
+
+		return nil
+	})
+
+	// Clean up the prepared statement
+	if insertStmt != nil {
+		_ = insertStmt.Close() // Ignore close error during statement cleanup
+	}
+
 	if err != nil {
-		return "", fmt.Errorf("failed to open FS file: %w", err)
+		return fmt.Errorf("streaming processing failed: %w", err)
 	}
-	defer file.Close()
 
-	// Get file extension for proper temp file naming
-	ext := filepath.Ext(path)
+	return nil
+}
 
-	// Create temporary file
-	tempFile, err := os.CreateTemp("", "filesql-*"+ext)
+// createTableFromChunk creates a SQLite table from a TableChunk
+func (b *DBBuilder) createTableFromChunk(ctx context.Context, db *sql.DB, chunk *model.TableChunk) error {
+	columnInfo := chunk.ColumnInfo()
+	columns := make([]string, 0, len(columnInfo))
+	for _, col := range columnInfo {
+		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.String()))
+	}
+
+	query := fmt.Sprintf(
+		`CREATE TABLE IF NOT EXISTS "%s" (%s)`,
+		chunk.TableName(),
+		strings.Join(columns, ", "),
+	)
+
+	_, err := db.ExecContext(ctx, query)
+	return err
+}
+
+// createTableFromModel creates a SQLite table from a model.Table and inserts all data
+func (b *DBBuilder) createTableFromModel(ctx context.Context, db *sql.DB, table *model.Table) error {
+	columnInfo := table.ColumnInfo()
+	columns := make([]string, 0, len(columnInfo))
+	for _, col := range columnInfo {
+		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.String()))
+	}
+
+	// Create table
+	query := fmt.Sprintf(
+		`CREATE TABLE IF NOT EXISTS "%s" (%s)`,
+		table.Name(),
+		strings.Join(columns, ", "),
+	)
+
+	if _, err := db.ExecContext(ctx, query); err != nil {
+		return fmt.Errorf("failed to create table: %w", err)
+	}
+
+	// Insert all data
+	headers := table.Header()
+	placeholders := make([]string, len(headers))
+	for i := range placeholders {
+		placeholders[i] = "?"
+	}
+
+	insertQuery := fmt.Sprintf( //nolint:gosec // Table name is from validated input
+		`INSERT INTO "%s" VALUES (%s)`,
+		table.Name(),
+		strings.Join(placeholders, ", "),
+	)
+
+	stmt, err := db.PrepareContext(ctx, insertQuery)
 	if err != nil {
-		return "", fmt.Errorf("failed to create temp file: %w", err)
+		return fmt.Errorf("failed to prepare insert statement: %w", err)
 	}
-	defer tempFile.Close()
+	defer stmt.Close()
 
-	// Copy content
-	if _, err := io.Copy(tempFile, file); err != nil {
-		removeErr := os.Remove(tempFile.Name())
-		if removeErr != nil {
-			// Join copy error with cleanup error
-			return "", errors.Join(
-				fmt.Errorf("failed to copy content: %w", err),
-				fmt.Errorf("failed to cleanup temp file: %w", removeErr),
-			)
+	// Insert all records
+	for _, record := range table.Records() {
+		values := make([]any, len(record))
+		for i, value := range record {
+			values[i] = value
 		}
-		return "", fmt.Errorf("failed to copy content: %w", err)
-	}
 
-	// Track temp file for cleanup
-	b.tempFiles = append(b.tempFiles, tempFile.Name())
-
-	return tempFile.Name(), nil
-}
-
-// cleanup removes temporary files and returns any errors
-func (b *DBBuilder) cleanup() error {
-	var errs []error
-	for _, path := range b.tempFiles {
-		if err := os.Remove(path); err != nil {
-			errs = append(errs, fmt.Errorf("failed to remove temp file %s: %w", path, err))
+		if _, err := stmt.ExecContext(ctx, values...); err != nil {
+			return fmt.Errorf("failed to insert record: %w", err)
 		}
 	}
-	b.tempFiles = nil
 
-	// Join all errors if any occurred
-	return errors.Join(errs...)
+	return nil
 }
 
-// Cleanup removes all temporary files created during filesystem processing.
-// This method should be called when you're done with the database to clean up
-// any temporary files that were created from embedded filesystems (fs.FS).
-//
-// It's safe to call this multiple times - subsequent calls will have no effect.
-// The method returns an error if any temporary files could not be removed.
-// Multiple removal errors are joined together using errors.Join.
-//
-// Example usage:
-//
-//	builder, err := filesql.NewBuilder().AddFS(embeddedFS).Build(ctx)
-//	if err != nil {
-//		return err
-//	}
-//	defer builder.Cleanup()
-//
-//	db, err := builder.Open(ctx)
-//	if err != nil {
-//		return err
-//	}
-//	defer db.Close()
-func (b *DBBuilder) Cleanup() error {
-	return b.cleanup()
+// prepareInsertStatement prepares an insert statement for the table
+func (b *DBBuilder) prepareInsertStatement(ctx context.Context, db *sql.DB, chunk *model.TableChunk) (*sql.Stmt, error) {
+	headers := chunk.Headers()
+	placeholders := make([]string, len(headers))
+	for i := range placeholders {
+		placeholders[i] = "?"
+	}
+
+	query := fmt.Sprintf(
+		`INSERT INTO "%s" VALUES (%s)`,
+		chunk.TableName(),
+		strings.Join(placeholders, ", "),
+	)
+
+	return db.PrepareContext(ctx, query)
+}
+
+// insertChunkData inserts a chunk's worth of data using a prepared statement
+func (b *DBBuilder) insertChunkData(ctx context.Context, stmt *sql.Stmt, chunk *model.TableChunk) error {
+	for _, record := range chunk.Records() {
+		values := make([]any, len(record))
+		for i, value := range record {
+			values[i] = value
+		}
+
+		if _, err := stmt.ExecContext(ctx, values...); err != nil {
+			return fmt.Errorf("failed to insert record: %w", err)
+		}
+	}
+
+	return nil
 }

@@ -982,3 +982,163 @@ func TestCompressionDetection_EdgeCases(t *testing.T) {
 		})
 	}
 }
+
+// TestIsSupportedExtension tests the IsSupportedExtension function
+func TestIsSupportedExtension(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		ext      string
+		expected bool
+	}{
+		{".csv", true},
+		{".tsv", true},
+		{".ltsv", true},
+		{".csv.gz", true},
+		{".tsv.bz2", true},
+		{".ltsv.xz", true},
+		{".txt", false},
+		{".json", false},
+		{".CSV", true},    // Should work with uppercase
+		{".TSV.GZ", true}, // Should work with uppercase
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.ext, func(t *testing.T) {
+			result := IsSupportedExtension(tt.ext)
+			if result != tt.expected {
+				t.Errorf("IsSupportedExtension(%q) = %v, want %v", tt.ext, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestGetFileExtension tests the deprecated GetFileExtension function
+func TestGetFileExtension(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		fileType FileType
+		expected string
+	}{
+		{FileTypeCSV, ".csv"},
+		{FileTypeTSV, ".tsv"},
+		{FileTypeLTSV, ".ltsv"},
+		{FileTypeCSVGZ, ".csv.gz"},
+		{FileTypeUnsupported, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			result := GetFileExtension(tt.fileType)
+			if result != tt.expected {
+				t.Errorf("GetFileExtension(%v) = %s, want %s", tt.fileType, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestGetBaseFileType tests the deprecated GetBaseFileType function
+func TestGetBaseFileType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		fileType FileType
+		expected FileType
+	}{
+		{FileTypeCSV, FileTypeCSV},
+		{FileTypeCSVGZ, FileTypeCSV},
+		{FileTypeCSVBZ2, FileTypeCSV},
+		{FileTypeTSV, FileTypeTSV},
+		{FileTypeTSVGZ, FileTypeTSV},
+		{FileTypeLTSV, FileTypeLTSV},
+		{FileTypeLTSVXZ, FileTypeLTSV},
+		{FileTypeUnsupported, FileTypeUnsupported},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.fileType.Extension(), func(t *testing.T) {
+			result := GetBaseFileType(tt.fileType)
+			if result != tt.expected {
+				t.Errorf("GetBaseFileType(%v) = %v, want %v", tt.fileType, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestCreateDecompressedReader tests the createDecompressedReader function
+func TestCreateDecompressedReader(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unsupported compression", func(t *testing.T) {
+		t.Parallel()
+
+		parser := NewStreamingParser(FileTypeCSV, "test", 1024)
+		reader := strings.NewReader("test data")
+
+		// Test with unsupported compression (should return original reader)
+		result, closeFunc, err := parser.createDecompressedReader(reader)
+		if err != nil {
+			t.Errorf("createDecompressedReader should not error for uncompressed data: %v", err)
+		}
+
+		if result != reader {
+			t.Error("createDecompressedReader should return original reader for uncompressed data")
+		}
+
+		if closeFunc != nil {
+			t.Error("createDecompressedReader should not return close function for uncompressed data")
+		}
+	})
+
+	t.Run("gzip compression", func(t *testing.T) {
+		t.Parallel()
+
+		// Create gzip compressed data
+		originalData := "name,age\nAlice,30\nBob,25\n"
+		var buf strings.Builder
+		gz := gzip.NewWriter(&buf)
+		if _, err := gz.Write([]byte(originalData)); err != nil {
+			t.Fatalf("Failed to write to gzip: %v", err)
+		}
+		if err := gz.Close(); err != nil {
+			t.Fatalf("Failed to close gzip writer: %v", err)
+		}
+
+		parser := NewStreamingParser(FileTypeCSVGZ, "test", 1024)
+		reader := strings.NewReader(buf.String())
+
+		result, closeFunc, err := parser.createDecompressedReader(reader)
+		if err != nil {
+			t.Fatalf("createDecompressedReader failed for gzip: %v", err)
+		}
+
+		if result == reader {
+			t.Error("createDecompressedReader should return different reader for compressed data")
+		}
+
+		if closeFunc == nil {
+			t.Error("createDecompressedReader should return close function for compressed data")
+		}
+
+		// Clean up
+		if closeFunc != nil {
+			if err := closeFunc(); err != nil {
+				t.Errorf("Failed to close decompressor: %v", err)
+			}
+		}
+	})
+
+	t.Run("invalid gzip data", func(t *testing.T) {
+		t.Parallel()
+
+		parser := NewStreamingParser(FileTypeCSVGZ, "test", 1024)
+		reader := strings.NewReader("invalid gzip data")
+
+		_, _, err := parser.createDecompressedReader(reader)
+		if err == nil {
+			t.Error("createDecompressedReader should error for invalid gzip data")
+		}
+	})
+}
