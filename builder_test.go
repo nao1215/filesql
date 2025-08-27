@@ -14,8 +14,6 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
-
-	"github.com/nao1215/filesql/domain/model"
 )
 
 //go:embed testdata/embed_test/*.csv testdata/embed_test/*.tsv
@@ -109,15 +107,15 @@ func TestDBBuilder_AddReader(t *testing.T) {
 		data := "name,age\nAlice,30\nBob,25\n"
 		reader := bytes.NewReader([]byte(data))
 
-		builder := NewBuilder().AddReader(reader, "users", model.FileTypeCSV)
+		builder := NewBuilder().AddReader(reader, "users", FileTypeCSV)
 		if len(builder.readers) != 1 {
 			t.Errorf("readers = %d, want 1", len(builder.readers))
 		}
-		if builder.readers[0].TableName != "users" {
-			t.Errorf("TableName = %s, want users", builder.readers[0].TableName)
+		if builder.readers[0].tableName != "users" {
+			t.Errorf("TableName = %s, want users", builder.readers[0].tableName)
 		}
-		if builder.readers[0].FileType != model.FileTypeCSV {
-			t.Errorf("FileType = %v, want FileTypeCSV", builder.readers[0].FileType)
+		if builder.readers[0].fileType != FileTypeCSV {
+			t.Errorf("FileType = %v, want FileTypeCSV", builder.readers[0].fileType)
 		}
 		// No compression fields to check since FileTypeCSV is uncompressed
 	})
@@ -127,12 +125,12 @@ func TestDBBuilder_AddReader(t *testing.T) {
 		data := "col1\tcol2\nval1\tval2\n"
 		reader := bytes.NewReader([]byte(data))
 
-		builder := NewBuilder().AddReader(reader, "data", model.FileTypeTSV)
+		builder := NewBuilder().AddReader(reader, "data", FileTypeTSV)
 		if len(builder.readers) != 1 {
 			t.Errorf("readers = %d, want 1", len(builder.readers))
 		}
-		if builder.readers[0].FileType != model.FileTypeTSV {
-			t.Errorf("FileType = %v, want FileTypeTSV", builder.readers[0].FileType)
+		if builder.readers[0].fileType != FileTypeTSV {
+			t.Errorf("FileType = %v, want FileTypeTSV", builder.readers[0].fileType)
 		}
 	})
 
@@ -141,12 +139,12 @@ func TestDBBuilder_AddReader(t *testing.T) {
 		data := []byte{} // Empty data for test
 		reader := bytes.NewReader(data)
 
-		builder := NewBuilder().AddReader(reader, "logs", model.FileTypeCSVGZ)
+		builder := NewBuilder().AddReader(reader, "logs", FileTypeCSVGZ)
 		if len(builder.readers) != 1 {
 			t.Errorf("readers = %d, want 1", len(builder.readers))
 		}
-		if builder.readers[0].FileType != model.FileTypeCSVGZ {
-			t.Errorf("FileType = %v, want FileTypeCSVGZ", builder.readers[0].FileType)
+		if builder.readers[0].fileType != FileTypeCSVGZ {
+			t.Errorf("FileType = %v, want FileTypeCSVGZ", builder.readers[0].fileType)
 		}
 		// Regular CSV type for testing
 	})
@@ -157,8 +155,8 @@ func TestDBBuilder_AddReader(t *testing.T) {
 		reader2 := bytes.NewReader([]byte("col3\tcol4\nval3\tval4\n"))
 
 		builder := NewBuilder().
-			AddReader(reader1, "table1", model.FileTypeCSV).
-			AddReader(reader2, "table2", model.FileTypeTSV)
+			AddReader(reader1, "table1", FileTypeCSV).
+			AddReader(reader2, "table2", FileTypeTSV)
 
 		if len(builder.readers) != 2 {
 			t.Errorf("readers = %d, want 2", len(builder.readers))
@@ -215,10 +213,10 @@ func TestDBBuilder_Build(t *testing.T) {
 	t.Run("reader with nil reader error", func(t *testing.T) {
 		t.Parallel()
 		builder := NewBuilder()
-		builder.readers = append(builder.readers, ReaderInput{
-			Reader:    nil,
-			TableName: "test",
-			FileType:  model.FileTypeCSV,
+		builder.readers = append(builder.readers, readerInput{
+			reader:    nil,
+			tableName: "test",
+			fileType:  FileTypeCSV,
 		})
 
 		_, err := builder.Build(ctx)
@@ -234,10 +232,10 @@ func TestDBBuilder_Build(t *testing.T) {
 		t.Parallel()
 		reader := bytes.NewReader([]byte("test"))
 		builder := NewBuilder()
-		builder.readers = append(builder.readers, ReaderInput{
-			Reader:    reader,
-			TableName: "",
-			FileType:  model.FileTypeCSV,
+		builder.readers = append(builder.readers, readerInput{
+			reader:    reader,
+			tableName: "",
+			fileType:  FileTypeCSV,
 		})
 
 		_, err := builder.Build(ctx)
@@ -253,10 +251,10 @@ func TestDBBuilder_Build(t *testing.T) {
 		t.Parallel()
 		reader := bytes.NewReader([]byte("test"))
 		builder := NewBuilder()
-		builder.readers = append(builder.readers, ReaderInput{
-			Reader:    reader,
-			TableName: "test",
-			FileType:  model.FileTypeUnsupported,
+		builder.readers = append(builder.readers, readerInput{
+			reader:    reader,
+			tableName: "test",
+			fileType:  FileTypeUnsupported,
 		})
 
 		_, err := builder.Build(ctx)
@@ -272,7 +270,7 @@ func TestDBBuilder_Build(t *testing.T) {
 		t.Parallel()
 		data := "name,age\nAlice,30\nBob,25\n"
 		reader := bytes.NewReader([]byte(data))
-		builder := NewBuilder().AddReader(reader, "users", model.FileTypeCSV)
+		builder := NewBuilder().AddReader(reader, "users", FileTypeCSV)
 
 		validatedBuilder, err := builder.Build(ctx)
 		if err != nil {
@@ -295,7 +293,7 @@ func TestDBBuilder_Build(t *testing.T) {
 		// Note: Use regular CSV data since we're testing the type system, not actual compression
 		data := []byte("col1,col2\nval1,val2\n")
 		reader := bytes.NewReader(data)
-		builder := NewBuilder().AddReader(reader, "logs", model.FileTypeCSV)
+		builder := NewBuilder().AddReader(reader, "logs", FileTypeCSV)
 
 		validatedBuilder, err := builder.Build(ctx)
 		if err != nil {
@@ -314,8 +312,8 @@ func TestDBBuilder_Build(t *testing.T) {
 		reader2 := bytes.NewReader([]byte("col3\tcol4\nval3\tval4\n"))
 
 		builder := NewBuilder().
-			AddReader(reader1, "table1", model.FileTypeCSV).
-			AddReader(reader2, "table2", model.FileTypeTSV)
+			AddReader(reader1, "table1", FileTypeCSV).
+			AddReader(reader2, "table2", FileTypeTSV)
 
 		validatedBuilder, err := builder.Build(ctx)
 		if err != nil {
@@ -465,7 +463,7 @@ func TestDBBuilder_ChunkedReading(t *testing.T) {
 		chunkSize := 1024 // Small chunk for testing
 		builder := NewBuilder().
 			SetDefaultChunkSize(chunkSize).
-			AddReader(reader, "large_table", model.FileTypeCSV)
+			AddReader(reader, "large_table", FileTypeCSV)
 
 		ctx := context.Background()
 		validatedBuilder, err := builder.Build(ctx)
@@ -502,7 +500,7 @@ func TestDBBuilder_Open_WithReader(t *testing.T) {
 	t.Run("successful open with reader", func(t *testing.T) {
 		data := "name,age\nAlice,30\nBob,25\n"
 		reader := bytes.NewReader([]byte(data))
-		builder := NewBuilder().AddReader(reader, "users", model.FileTypeCSV)
+		builder := NewBuilder().AddReader(reader, "users", FileTypeCSV)
 
 		validatedBuilder, err := builder.Build(ctx)
 		if err != nil {
@@ -547,7 +545,7 @@ func TestDBBuilder_Open_WithReader(t *testing.T) {
 
 		builder := NewBuilder().
 			AddPath(csvFile).
-			AddReader(reader, "products", model.FileTypeCSV)
+			AddReader(reader, "products", FileTypeCSV)
 
 		validatedBuilder, err := builder.Build(ctx)
 		if err != nil {
@@ -699,7 +697,7 @@ func TestDBBuilder_processFSInput(t *testing.T) {
 
 		// Close all readers
 		for _, reader := range readers {
-			if closer, ok := reader.Reader.(io.Closer); ok {
+			if closer, ok := reader.reader.(io.Closer); ok {
 				_ = closer.Close()
 			}
 		}
@@ -724,7 +722,7 @@ func TestDBBuilder_processFSInput(t *testing.T) {
 
 		// Close all readers
 		for _, reader := range readers {
-			if closer, ok := reader.Reader.(io.Closer); ok {
+			if closer, ok := reader.reader.(io.Closer); ok {
 				_ = closer.Close()
 			}
 		}
@@ -1237,7 +1235,7 @@ func TestBuilder_ErrorCases(t *testing.T) {
 		invalidCSV := "name,age\n\"unclosed quote,30\nvalid,25\n"
 		reader := strings.NewReader(invalidCSV)
 
-		builder := NewBuilder().AddReader(reader, "invalid", model.FileTypeCSV)
+		builder := NewBuilder().AddReader(reader, "invalid", FileTypeCSV)
 		_, err := builder.Build(ctx)
 
 		// Should handle malformed CSV gracefully or return meaningful error
@@ -1250,7 +1248,7 @@ func TestBuilder_ErrorCases(t *testing.T) {
 		t.Parallel()
 
 		reader := strings.NewReader("")
-		builder := NewBuilder().AddReader(reader, "empty", model.FileTypeCSV)
+		builder := NewBuilder().AddReader(reader, "empty", FileTypeCSV)
 		validatedBuilder, err := builder.Build(ctx)
 
 		// Build should succeed (validation happens during Open)
@@ -1276,7 +1274,7 @@ func TestBuilder_ErrorCases(t *testing.T) {
 		reader := strings.NewReader("name,age\nAlice,30\n")
 		// Test with very small chunk size
 		builder := NewBuilder().
-			AddReader(reader, "test", model.FileTypeCSV).
+			AddReader(reader, "test", FileTypeCSV).
 			SetDefaultChunkSize(1) // Very small chunk size
 
 		_, err := builder.Build(ctx)

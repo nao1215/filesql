@@ -63,30 +63,6 @@ make test
 make lint
 ```
 
-## 项目结构
-
-```
-filesql/
-├── domain/          # 领域模型层
-│   ├── model/      # 领域模型定义
-│   └── repository/ # 仓库接口
-├── testdata/       # 测试数据文件
-├── doc/            # 文档
-│   ├── ja/        # 日语文档
-│   ├── zh-cn/     # 中文文档
-│   ├── es/        # 西班牙语文档
-│   └── ...        # 其他语言
-├── filesql.go      # 库主入口点
-├── filesql_test.go # 库测试
-└── example_test.go # 使用示例
-```
-
-### 目录作用
-
-- **domain/**：包含业务逻辑和领域模型的层。没有外部依赖的纯 Go 实现
-- **testdata/**：测试中使用的 CSV、TSV、LTSV 等示例文件
-- **doc/**：多语言文档，每种语言都有子目录
-
 ## 开发工作流程
 
 ### 分支策略

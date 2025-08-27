@@ -118,7 +118,7 @@ func main() {
     // 埋め込みファイルシステムにBuilderパターンを使用
     subFS, _ := fs.Sub(dataFS, "data")
     
-    db, err := filesql.NewBuilder().
+    validatedBuilder, err := filesql.NewBuilder().
         AddPath("local_file.csv").  // 通常のファイル
         AddFS(subFS).               // 埋め込みファイルシステム
         Build(ctx)
@@ -126,7 +126,7 @@ func main() {
         log.Fatal(err)
     }
     
-    connection, err := db.Open(ctx)
+    connection, err := validatedBuilder.Open(ctx)
     if err != nil {
         log.Fatal(err)
     }
@@ -395,7 +395,11 @@ if err != nil {
 }
 
 // 変更されたデータを新しいディレクトリにエクスポートします
-err = filesql.DumpDatabase(db, "/path/to/output/directory")
+// オプションで出力形式と圧縮を指定できます
+options := filesql.NewDumpOptions().
+    WithFormat(filesql.OutputFormatTSV).
+    WithCompression(filesql.CompressionGZ)
+err = filesql.DumpDatabase(db, "/path/to/output/directory", options)
 if err != nil {
     log.Fatal(err)
 }

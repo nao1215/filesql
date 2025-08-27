@@ -118,7 +118,7 @@ func main() {
     // Usar patrón Builder para sistema de archivos embebido
     subFS, _ := fs.Sub(dataFS, "data")
     
-    db, err := filesql.NewBuilder().
+    validatedBuilder, err := filesql.NewBuilder().
         AddPath("local_file.csv").  // Archivo regular
         AddFS(subFS).               // Sistema de archivos embebido
         Build(ctx)
@@ -126,7 +126,7 @@ func main() {
         log.Fatal(err)
     }
     
-    connection, err := db.Open(ctx)
+    connection, err := validatedBuilder.Open(ctx)
     if err != nil {
         log.Fatal(err)
     }
@@ -398,7 +398,11 @@ if err != nil {
 }
 
 // Exportar los datos modificados a un nuevo directorio
-err = filesql.DumpDatabase(db, "/path/to/output/directory")
+// Opcionalmente especificar formato de salida y compresión
+options := filesql.NewDumpOptions().
+    WithFormat(filesql.OutputFormatTSV).
+    WithCompression(filesql.CompressionGZ)
+err = filesql.DumpDatabase(db, "/path/to/output/directory", options)
 if err != nil {
     log.Fatal(err)
 }

@@ -15,7 +15,6 @@ import (
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
-	"github.com/nao1215/filesql/domain/model"
 	"github.com/ulikunitz/xz"
 )
 
@@ -170,40 +169,6 @@ func OpenContext(ctx context.Context, paths ...string) (*sql.DB, error) {
 	// Open creates the database connection
 	return validatedBuilder.Open(ctx)
 }
-
-// Type aliases for dump options from model package
-type (
-	// DumpOptions represents options for dumping database
-	DumpOptions = model.DumpOptions
-	// OutputFormat represents the output file format
-	OutputFormat = model.OutputFormat
-	// CompressionType represents the compression type
-	CompressionType = model.CompressionType
-)
-
-// Re-export constants for easier use
-const (
-	// OutputFormatCSV represents CSV output format
-	OutputFormatCSV = model.OutputFormatCSV
-	// OutputFormatTSV represents TSV output format
-	OutputFormatTSV = model.OutputFormatTSV
-	// OutputFormatLTSV represents LTSV output format
-	OutputFormatLTSV = model.OutputFormatLTSV
-
-	// CompressionNone represents no compression
-	CompressionNone = model.CompressionNone
-	// CompressionGZ represents gzip compression
-	CompressionGZ = model.CompressionGZ
-	// CompressionBZ2 represents bzip2 compression
-	CompressionBZ2 = model.CompressionBZ2
-	// CompressionXZ represents xz compression
-	CompressionXZ = model.CompressionXZ
-	// CompressionZSTD represents zstd compression
-	CompressionZSTD = model.CompressionZSTD
-)
-
-// NewDumpOptions creates new DumpOptions with default values (CSV format, no compression)
-var NewDumpOptions = model.NewDumpOptions
 
 // DumpDatabase exports all tables from the database to a directory.
 //

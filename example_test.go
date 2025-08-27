@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/nao1215/filesql"
-	"github.com/nao1215/filesql/domain/model"
 )
 
 //go:embed testdata/embed_test/*.csv testdata/embed_test/*.tsv
@@ -1539,7 +1538,7 @@ func ExampleDumpDatabase_multipleFormats() {
 	//   sample.csv.zst
 }
 
-func ExampleDumpOptions_fileExtensions() {
+func ExampleDumpOptions_FileExtension() {
 	// Show how file extensions are built
 	examples := []struct {
 		format      filesql.OutputFormat
@@ -2142,8 +2141,8 @@ func ExampleDBBuilder_AddReader() {
 	// Build database with Reader input
 	ctx := context.Background()
 	builder := filesql.NewBuilder().
-		AddReader(reader, "employees", model.FileTypeCSV). // Specify table name and type explicitly
-		SetDefaultChunkSize(1024 * 1024)                   // Set 1MB chunk size for large data
+		AddReader(reader, "employees", filesql.FileTypeCSV). // Specify table name and type explicitly
+		SetDefaultChunkSize(1024 * 1024)                     // Set 1MB chunk size for large data
 
 	// Build validates the input
 	validatedBuilder, err := builder.Build(ctx)
@@ -2196,7 +2195,7 @@ func ExampleDBBuilder_AddReader_compressed() {
 	ctx := context.Background()
 	builder := filesql.NewBuilder().
 		// Specify that this is TSV data (not actually compressed in this example)
-		AddReader(reader, "products", model.FileTypeTSV)
+		AddReader(reader, "products", filesql.FileTypeTSV)
 
 	validatedBuilder, err := builder.Build(ctx)
 	if err != nil {
@@ -2236,8 +2235,8 @@ func ExampleDBBuilder_AddReader_multiple() {
 
 	ctx := context.Background()
 	builder := filesql.NewBuilder().
-		AddReader(strings.NewReader(usersCSV), "users", model.FileTypeCSV).
-		AddReader(strings.NewReader(ordersCSV), "orders", model.FileTypeCSV).
+		AddReader(strings.NewReader(usersCSV), "users", filesql.FileTypeCSV).
+		AddReader(strings.NewReader(ordersCSV), "orders", filesql.FileTypeCSV).
 		SetDefaultChunkSize(512 * 1024) // 512KB chunks
 
 	validatedBuilder, err := builder.Build(ctx)
