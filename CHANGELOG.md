@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2025-08-27
+
+### Added
+- **🎉 Major architecture enhancement (v0.2.0)**: Stream processing support and domain model restructuring
+- **Stream processing capabilities**: Complete stream-based file loading for improved memory efficiency
+  - `AddReader()` method in Builder pattern for stream input support
+  - Chunked reading for local files to handle large datasets efficiently
+  - Memory-optimized processing for both local files and streaming data
+  - Stream-friendly auto-save functionality with proper resource management
+- **Integration testing framework**: Comprehensive BDD-style integration tests using Ginkgo/Gomega
+  - Full end-to-end behavior validation for library functionality
+  - Stream processing integration tests with various data sources
+  - Auto-save functionality testing across different scenarios
+  - Cross-platform compatibility verification
+
+### Changed
+- **Breaking change**: Domain model architecture restructuring for improved maintainability
+  - Moved all model types from `domain/model` package to main `filesql` package
+  - Simplified import structure and reduced package complexity
+  - Enhanced type organization and accessibility for library users
+  - Streamlined API with consolidated model definitions
+- **Enhanced file loading system**: Improved file processing with stream support
+  - Unified file loading approach supporting both file paths and streams
+  - Better memory management for large file processing
+  - Enhanced chunked reading implementation for local files
+  - Improved error handling and resource cleanup
+
+### Fixed
+- **Auto-save functionality**: Resolved limitations and edge cases in auto-save operations
+  - Fixed auto-save behavior with stream inputs and temporary files
+  - Improved handling of auto-save with various input sources
+  - Enhanced error recovery and cleanup during auto-save operations
+  - Better validation for auto-save configuration consistency
+- **Stream processing stability**: Enhanced reliability of stream-based operations
+  - Proper resource management for stream readers
+  - Improved error handling in chunked reading scenarios
+  - Fixed memory leaks in stream processing pipeline
+
+### Technical Details
+- **Architecture simplification**: Reduced package complexity while maintaining functionality
+- **Memory optimization**: Improved memory usage patterns for large dataset processing
+- **Test coverage enhancement**: Added comprehensive integration tests with Ginkgo/Gomega
+- **Code organization**: Better separation of concerns with unified model location
+- **Performance improvements**: Enhanced processing efficiency for both small and large files
+
 ## [0.1.0] - 2025-08-26
 
 ### Added
@@ -183,7 +228,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/nao1215/filesql/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nao1215/filesql/compare/v0.0.4...v0.1.0
 [0.0.4]: https://github.com/nao1215/filesql/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/nao1215/filesql/compare/v0.0.2...v0.0.3
