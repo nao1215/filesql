@@ -382,6 +382,13 @@ func TestDBBuilder_Build(t *testing.T) {
 		t.Parallel()
 		tempDir := t.TempDir()
 
+		// Create a valid CSV file in the temp directory
+		csvFile := filepath.Join(tempDir, "test.csv")
+		csvContent := "id,name,age\n1,John,30\n2,Jane,25\n"
+		if err := os.WriteFile(csvFile, []byte(csvContent), 0600); err != nil {
+			t.Fatalf("Failed to create test CSV file: %v", err)
+		}
+
 		builder := NewBuilder().AddPath(tempDir)
 		validatedBuilder, err := builder.Build(ctx)
 		if err != nil {
