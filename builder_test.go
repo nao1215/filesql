@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -1311,6 +1312,241 @@ func TestBuilder_AddPaths_ErrorCases(t *testing.T) {
 		builder := NewBuilder().AddPaths()
 		if len(builder.paths) != 0 {
 			t.Errorf("AddPaths() with no arguments should not add any paths, got %d", len(builder.paths))
+		}
+	})
+}
+
+func TestDBBuilder_StreamDirectoryToSQLite(t *testing.T) {
+	t.Parallel()
+
+	t.Run("directory with supported files", func(t *testing.T) {
+		t.Parallel()
+
+		// Create temporary directory with test files
+		tempDir := t.TempDir()
+		csvContent := "id,name,age\n1,Alice,30\n2,Bob,25\n"
+		tsvContent := "id\tname\tage\n3\tCharlie\t35\n4\tDiana\t28\n"
+
+		csvFile := filepath.Join(tempDir, "test1.csv")
+		tsvFile := filepath.Join(tempDir, "test2.tsv")
+
+		err := os.WriteFile(csvFile, []byte(csvContent), 0600)
+		if err != nil {
+			t.Fatalf("Failed to create test CSV file: %v", err)
+		}
+
+		err = os.WriteFile(tsvFile, []byte(tsvContent), 0600)
+		if err != nil {
+			t.Fatalf("Failed to create test TSV file: %v", err)
+		}
+
+		// Test the streaming directory function
+		db, err := Open(tempDir)
+		if err != nil {
+			t.Fatalf("Failed to open directory: %v", err)
+		}
+		defer db.Close()
+
+		// Verify tables were created
+		ctx := context.Background()
+		rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
+		if err != nil {
+			t.Fatalf("Failed to query tables: %v", err)
+		}
+		defer rows.Close()
+
+		var tableNames []string
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				t.Fatalf("Failed to scan table name: %v", err)
+			}
+			tableNames = append(tableNames, name)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("Error during rows iteration: %v", err)
+		}
+
+		expectedTables := []string{"test1", "test2"}
+		if len(tableNames) != len(expectedTables) {
+			t.Errorf("Expected %d tables, got %d: %v", len(expectedTables), len(tableNames), tableNames)
+		}
+	})
+
+	t.Run("directory with unsupported files only", func(t *testing.T) {
+		t.Parallel()
+
+		// Create temporary directory with unsupported files
+		tempDir := t.TempDir()
+		txtFile := filepath.Join(tempDir, "test.txt")
+
+		err := os.WriteFile(txtFile, []byte("some text content"), 0600)
+		if err != nil {
+			t.Fatalf("Failed to create test txt file: %v", err)
+		}
+
+		// Test should return error for no supported files
+		_, err = Open(tempDir)
+		if err == nil {
+			t.Error("Expected error for directory with no supported files")
+		}
+
+		expectedError := "no supported files found in directory"
+		if !strings.Contains(err.Error(), expectedError) {
+			t.Errorf("Expected error to contain '%s', got: %v", expectedError, err)
+		}
+	})
+
+	t.Run("empty directory", func(t *testing.T) {
+		t.Parallel()
+
+		tempDir := t.TempDir()
+
+		// Test should return error for empty directory
+		_, err := Open(tempDir)
+		if err == nil {
+			t.Error("Expected error for empty directory")
+		}
+
+		expectedError := "no supported files found in directory"
+		if !strings.Contains(err.Error(), expectedError) {
+			t.Errorf("Expected error to contain '%s', got: %v", expectedError, err)
+		}
+	})
+}
+
+func TestDBBuilder_CreateDecompressedReader(t *testing.T) {
+	t.Parallel()
+
+	t.Run("uncompressed file", func(t *testing.T) {
+		t.Parallel()
+
+		// Create a temporary file
+		tempFile := filepath.Join(t.TempDir(), "test.csv")
+		content := "id,name\n1,Alice\n2,Bob\n"
+		err := os.WriteFile(tempFile, []byte(content), 0600)
+		if err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+
+		file, err := os.Open(tempFile) //nolint:gosec // tempFile is created in test with controlled path
+		if err != nil {
+			t.Fatalf("Failed to open test file: %v", err)
+		}
+		defer file.Close()
+
+		builder := NewBuilder()
+		reader, err := builder.createDecompressedReader(file, tempFile)
+		if err != nil {
+			t.Fatalf("createDecompressedReader failed: %v", err)
+		}
+
+		// Should return the file itself for uncompressed files
+		if reader != file {
+			t.Error("Expected reader to be the same as input file for uncompressed files")
+		}
+	})
+
+	t.Run("gzip compressed file", func(t *testing.T) {
+		t.Parallel()
+
+		// Use an existing gzip test file
+		gzipFile := "testdata/sample.csv.gz"
+
+		file, err := os.Open(gzipFile)
+		if err != nil {
+			t.Skip("Gzip test file not available, skipping test")
+		}
+		defer file.Close()
+
+		builder := NewBuilder()
+		reader, err := builder.createDecompressedReader(file, gzipFile)
+		if err != nil {
+			t.Fatalf("createDecompressedReader failed for gzip: %v", err)
+		}
+
+		// Should return a different reader (gzip reader)
+		if reader == file {
+			t.Error("Expected reader to be different from input file for gzip files")
+		}
+
+		// Try to read some content
+		buffer := make([]byte, 100)
+		n, err := reader.Read(buffer)
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatalf("Failed to read from decompressed reader: %v", err)
+		}
+		if n == 0 {
+			t.Error("Expected to read some content from decompressed reader")
+		}
+	})
+
+	t.Run("bzip2 compressed file", func(t *testing.T) {
+		t.Parallel()
+
+		bzip2File := "testdata/products.tsv.bz2"
+
+		file, err := os.Open(bzip2File)
+		if err != nil {
+			t.Skip("Bzip2 test file not available, skipping test")
+		}
+		defer file.Close()
+
+		builder := NewBuilder()
+		reader, err := builder.createDecompressedReader(file, bzip2File)
+		if err != nil {
+			t.Fatalf("createDecompressedReader failed for bzip2: %v", err)
+		}
+
+		// Should return a different reader (bzip2 reader)
+		if reader == file {
+			t.Error("Expected reader to be different from input file for bzip2 files")
+		}
+	})
+
+	t.Run("xz compressed file", func(t *testing.T) {
+		t.Parallel()
+
+		xzFile := "testdata/logs.ltsv.xz"
+
+		file, err := os.Open(xzFile)
+		if err != nil {
+			t.Skip("XZ test file not available, skipping test")
+		}
+		defer file.Close()
+
+		builder := NewBuilder()
+		reader, err := builder.createDecompressedReader(file, xzFile)
+		if err != nil {
+			t.Fatalf("createDecompressedReader failed for xz: %v", err)
+		}
+
+		// Should return a different reader (xz reader)
+		if reader == file {
+			t.Error("Expected reader to be different from input file for xz files")
+		}
+	})
+
+	t.Run("zstd compressed file", func(t *testing.T) {
+		t.Parallel()
+
+		zstdFile := "testdata/users.csv.zst"
+
+		file, err := os.Open(zstdFile)
+		if err != nil {
+			t.Skip("ZSTD test file not available, skipping test")
+		}
+		defer file.Close()
+
+		builder := NewBuilder()
+		reader, err := builder.createDecompressedReader(file, zstdFile)
+		if err != nil {
+			t.Fatalf("createDecompressedReader failed for zstd: %v", err)
+		}
+
+		// Should return a different reader (zstd reader)
+		if reader == file {
+			t.Error("Expected reader to be different from input file for zstd files")
 		}
 	})
 }
