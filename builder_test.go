@@ -1,8 +1,11 @@
 package filesql
 
 import (
+	"bytes"
 	"context"
 	"embed"
+	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -10,6 +13,8 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/nao1215/filesql/domain/model"
 )
 
 //go:embed testdata/embed_test/*.csv testdata/embed_test/*.tsv
@@ -95,6 +100,103 @@ func TestDBBuilder_AddFS(t *testing.T) {
 	})
 }
 
+func TestDBBuilder_AddReader(t *testing.T) {
+	t.Parallel()
+
+	t.Run("add CSV reader", func(t *testing.T) {
+		t.Parallel()
+		data := "name,age\nAlice,30\nBob,25\n"
+		reader := bytes.NewReader([]byte(data))
+
+		builder := NewBuilder().AddReader(reader, "users", model.FileTypeCSV)
+		if len(builder.readers) != 1 {
+			t.Errorf("readers = %d, want 1", len(builder.readers))
+		}
+		if builder.readers[0].TableName != "users" {
+			t.Errorf("TableName = %s, want users", builder.readers[0].TableName)
+		}
+		if builder.readers[0].FileType != model.FileTypeCSV {
+			t.Errorf("FileType = %v, want FileTypeCSV", builder.readers[0].FileType)
+		}
+		// No compression fields to check since FileTypeCSV is uncompressed
+	})
+
+	t.Run("add TSV reader", func(t *testing.T) {
+		t.Parallel()
+		data := "col1\tcol2\nval1\tval2\n"
+		reader := bytes.NewReader([]byte(data))
+
+		builder := NewBuilder().AddReader(reader, "data", model.FileTypeTSV)
+		if len(builder.readers) != 1 {
+			t.Errorf("readers = %d, want 1", len(builder.readers))
+		}
+		if builder.readers[0].FileType != model.FileTypeTSV {
+			t.Errorf("FileType = %v, want FileTypeTSV", builder.readers[0].FileType)
+		}
+	})
+
+	t.Run("add compressed CSV reader", func(t *testing.T) {
+		t.Parallel()
+		data := []byte{} // Empty data for test
+		reader := bytes.NewReader(data)
+
+		builder := NewBuilder().AddReader(reader, "logs", model.FileTypeCSVGZ)
+		if len(builder.readers) != 1 {
+			t.Errorf("readers = %d, want 1", len(builder.readers))
+		}
+		if builder.readers[0].FileType != model.FileTypeCSVGZ {
+			t.Errorf("FileType = %v, want FileTypeCSVGZ", builder.readers[0].FileType)
+		}
+		// Regular CSV type for testing
+	})
+
+	t.Run("add multiple readers", func(t *testing.T) {
+		t.Parallel()
+		reader1 := bytes.NewReader([]byte("col1,col2\nval1,val2\n"))
+		reader2 := bytes.NewReader([]byte("col3\tcol4\nval3\tval4\n"))
+
+		builder := NewBuilder().
+			AddReader(reader1, "table1", model.FileTypeCSV).
+			AddReader(reader2, "table2", model.FileTypeTSV)
+
+		if len(builder.readers) != 2 {
+			t.Errorf("readers = %d, want 2", len(builder.readers))
+		}
+	})
+}
+
+func TestDBBuilder_SetDefaultChunkSize(t *testing.T) {
+	t.Parallel()
+
+	t.Run("set custom chunk size", func(t *testing.T) {
+		t.Parallel()
+		customSize := 20 * 1024 * 1024 // 20MB
+		builder := NewBuilder().SetDefaultChunkSize(customSize)
+
+		if builder.defaultChunkSize != customSize {
+			t.Errorf("defaultChunkSize = %d, want %d", builder.defaultChunkSize, customSize)
+		}
+	})
+
+	t.Run("zero or negative size ignored", func(t *testing.T) {
+		t.Parallel()
+		defaultSize := 10 * 1024 * 1024
+		builder := NewBuilder()
+
+		// Zero should be ignored
+		builder.SetDefaultChunkSize(0)
+		if builder.defaultChunkSize != defaultSize {
+			t.Errorf("defaultChunkSize = %d, want %d (should not change)", builder.defaultChunkSize, defaultSize)
+		}
+
+		// Negative should be ignored
+		builder.SetDefaultChunkSize(-1)
+		if builder.defaultChunkSize != defaultSize {
+			t.Errorf("defaultChunkSize = %d, want %d (should not change)", builder.defaultChunkSize, defaultSize)
+		}
+	})
+}
+
 func TestDBBuilder_Build(t *testing.T) {
 	t.Parallel()
 
@@ -107,6 +209,127 @@ func TestDBBuilder_Build(t *testing.T) {
 		if err == nil {
 			t.Error("Build() should return error for no inputs")
 		}
+	})
+
+	t.Run("reader with nil reader error", func(t *testing.T) {
+		t.Parallel()
+		builder := NewBuilder()
+		builder.readers = append(builder.readers, ReaderInput{
+			Reader:    nil,
+			TableName: "test",
+			FileType:  model.FileTypeCSV,
+		})
+
+		_, err := builder.Build(ctx)
+		if err == nil {
+			t.Error("Build() should return error for nil reader")
+		}
+		if !strings.Contains(err.Error(), "reader cannot be nil") {
+			t.Errorf("Expected 'reader cannot be nil' error, got: %v", err)
+		}
+	})
+
+	t.Run("reader with empty table name error", func(t *testing.T) {
+		t.Parallel()
+		reader := bytes.NewReader([]byte("test"))
+		builder := NewBuilder()
+		builder.readers = append(builder.readers, ReaderInput{
+			Reader:    reader,
+			TableName: "",
+			FileType:  model.FileTypeCSV,
+		})
+
+		_, err := builder.Build(ctx)
+		if err == nil {
+			t.Error("Build() should return error for empty table name")
+		}
+		if !strings.Contains(err.Error(), "table name must be specified") {
+			t.Errorf("Expected 'table name must be specified' error, got: %v", err)
+		}
+	})
+
+	t.Run("reader with unsupported file type error", func(t *testing.T) {
+		t.Parallel()
+		reader := bytes.NewReader([]byte("test"))
+		builder := NewBuilder()
+		builder.readers = append(builder.readers, ReaderInput{
+			Reader:    reader,
+			TableName: "test",
+			FileType:  model.FileTypeUnsupported,
+		})
+
+		_, err := builder.Build(ctx)
+		if err == nil {
+			t.Error("Build() should return error for unsupported file type")
+		}
+		if !strings.Contains(err.Error(), "file type must be specified") {
+			t.Errorf("Expected 'file type must be specified' error, got: %v", err)
+		}
+	})
+
+	t.Run("reader with valid CSV data", func(t *testing.T) {
+		t.Parallel()
+		data := "name,age\nAlice,30\nBob,25\n"
+		reader := bytes.NewReader([]byte(data))
+		builder := NewBuilder().AddReader(reader, "users", model.FileTypeCSV)
+
+		validatedBuilder, err := builder.Build(ctx)
+		if err != nil {
+			t.Errorf("Build() error = %v", err)
+		}
+		if validatedBuilder == nil {
+			t.Error("Build() returned nil builder")
+			return
+		}
+		// Readers don't create temp files anymore - they use direct streaming
+		if len(validatedBuilder.readers) != 1 {
+			t.Errorf("Build() should have 1 reader input, got %d", len(validatedBuilder.readers))
+		}
+
+		// Clean up temp files
+	})
+
+	t.Run("reader with compressed type specification", func(t *testing.T) {
+		t.Parallel()
+		// Note: Use regular CSV data since we're testing the type system, not actual compression
+		data := []byte("col1,col2\nval1,val2\n")
+		reader := bytes.NewReader(data)
+		builder := NewBuilder().AddReader(reader, "logs", model.FileTypeCSV)
+
+		validatedBuilder, err := builder.Build(ctx)
+		if err != nil {
+			t.Errorf("Build() error = %v", err)
+		}
+		if validatedBuilder == nil {
+			t.Error("Build() returned nil builder")
+		}
+
+		// Clean up temp files
+	})
+
+	t.Run("multiple readers", func(t *testing.T) {
+		t.Parallel()
+		reader1 := bytes.NewReader([]byte("col1,col2\nval1,val2\n"))
+		reader2 := bytes.NewReader([]byte("col3\tcol4\nval3\tval4\n"))
+
+		builder := NewBuilder().
+			AddReader(reader1, "table1", model.FileTypeCSV).
+			AddReader(reader2, "table2", model.FileTypeTSV)
+
+		validatedBuilder, err := builder.Build(ctx)
+		if err != nil {
+			t.Errorf("Build() error = %v", err)
+		}
+		if validatedBuilder == nil {
+			t.Error("Build() returned nil builder")
+			return
+		}
+		// Readers don't create temp files anymore - they use direct streaming
+		if len(validatedBuilder.readers) != 2 {
+			t.Errorf("Build() should have 2 reader inputs, got %d", len(validatedBuilder.readers))
+		}
+
+		// Clean up temp files
 	})
 
 	t.Run("invalid path error", func(t *testing.T) {
@@ -186,8 +409,9 @@ func TestDBBuilder_Build(t *testing.T) {
 			t.Error("Build() returned nil builder")
 		}
 		// Should have found 3 files (csv, tsv, ltsv) and ignored txt
-		if validatedBuilder != nil && len(validatedBuilder.collectedPaths) != 3 {
-			t.Errorf("Build() collected %d paths, want 3", len(validatedBuilder.collectedPaths))
+		// fs.FS files are now stored as readers instead of collectedPaths
+		if validatedBuilder != nil && len(validatedBuilder.readers) != 3 {
+			t.Errorf("Build() should have 3 readers from fs.FS, got %d", len(validatedBuilder.readers))
 		}
 	})
 
@@ -214,6 +438,137 @@ func TestDBBuilder_Build(t *testing.T) {
 		if err == nil {
 			t.Error("Build() should return error for FS with no supported files")
 		}
+	})
+}
+
+func TestDBBuilder_ChunkedReading(t *testing.T) {
+	t.Parallel()
+
+	t.Run("large data chunked reading", func(t *testing.T) {
+		t.Parallel()
+		// Create a large dataset that would benefit from chunked reading
+		var data bytes.Buffer
+		data.WriteString("id,name,value\n")
+		for i := range 10000 {
+			fmt.Fprintf(&data, "%d,name_%d,%d\n", i, i, i*10)
+		}
+
+		reader := bytes.NewReader(data.Bytes())
+		chunkSize := 1024 // Small chunk for testing
+		builder := NewBuilder().
+			SetDefaultChunkSize(chunkSize).
+			AddReader(reader, "large_table", model.FileTypeCSV)
+
+		ctx := context.Background()
+		validatedBuilder, err := builder.Build(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		db, err := validatedBuilder.Open(ctx)
+		if err != nil {
+			t.Errorf("Open() error = %v", err)
+		}
+		if db == nil {
+			t.Error("Open() returned nil database")
+		} else {
+			// Verify the data was loaded correctly
+			var count int
+			err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM large_table").Scan(&count)
+			if err != nil {
+				t.Errorf("Count query failed: %v", err)
+			}
+			if count != 10000 {
+				t.Errorf("Expected 10000 rows, got %d", count)
+			}
+			_ = db.Close()
+		}
+
+		// Clean up temp files
+	})
+}
+
+func TestDBBuilder_Open_WithReader(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("successful open with reader", func(t *testing.T) {
+		data := "name,age\nAlice,30\nBob,25\n"
+		reader := bytes.NewReader([]byte(data))
+		builder := NewBuilder().AddReader(reader, "users", model.FileTypeCSV)
+
+		validatedBuilder, err := builder.Build(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		db, err := validatedBuilder.Open(ctx)
+		if err != nil {
+			t.Errorf("Open() error = %v", err)
+		}
+		if db == nil {
+			t.Error("Open() returned nil database")
+		} else {
+			// Verify we can query the data
+			rows, err := db.QueryContext(ctx, "SELECT * FROM users")
+			if err != nil {
+				t.Errorf("Query failed: %v", err)
+			} else {
+				defer rows.Close()
+				if err := rows.Err(); err != nil {
+					t.Errorf("Rows error: %v", err)
+				}
+			}
+			_ = db.Close()
+		}
+
+		// Clean up temp files
+	})
+
+	t.Run("mixed inputs - reader and file", func(t *testing.T) {
+		// Create a temporary CSV file
+		tempDir := t.TempDir()
+		csvFile := filepath.Join(tempDir, "orders.csv")
+		fileContent := "order_id,amount\n1,100\n2,200\n"
+		if err := os.WriteFile(csvFile, []byte(fileContent), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		// Create a reader with different data
+		readerData := "product_id,name\n1,Laptop\n2,Mouse\n"
+		reader := bytes.NewReader([]byte(readerData))
+
+		builder := NewBuilder().
+			AddPath(csvFile).
+			AddReader(reader, "products", model.FileTypeCSV)
+
+		validatedBuilder, err := builder.Build(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		db, err := validatedBuilder.Open(ctx)
+		if err != nil {
+			t.Errorf("Open() error = %v", err)
+		}
+		if db == nil {
+			t.Error("Open() returned nil database")
+		} else {
+			// Verify both tables exist
+			for _, table := range []string{"orders", "products"} {
+				rows, err := db.QueryContext(ctx, "SELECT * FROM "+table) // #nosec G202 -- table name is safe
+				if err != nil {
+					t.Errorf("Query %s failed: %v", table, err)
+				} else {
+					if err := rows.Err(); err != nil {
+						t.Errorf("Rows error for %s: %v", table, err)
+					}
+					_ = rows.Close() // Close immediately in the loop
+				}
+			}
+			_ = db.Close()
+		}
+
+		// Clean up temp files
 	})
 }
 
@@ -282,9 +637,6 @@ func TestDBBuilder_Open(t *testing.T) {
 		} else {
 			_ = db.Close()
 			// Clean up temp files
-			if err := validatedBuilder.Cleanup(); err != nil {
-				t.Errorf("Cleanup() error = %v", err)
-			}
 		}
 	})
 
@@ -309,9 +661,6 @@ func TestDBBuilder_Open(t *testing.T) {
 		} else {
 			_ = db.Close()
 			// Clean up temp files
-			if err := validatedBuilder.Cleanup(); err != nil {
-				t.Errorf("Cleanup() error = %v", err)
-			}
 		}
 	})
 }
@@ -332,17 +681,19 @@ func TestDBBuilder_processFSInput(t *testing.T) {
 
 		builder := NewBuilder()
 
-		paths, err := builder.processFSInput(ctx, mockFS)
+		readers, err := builder.processFSToReaders(ctx, mockFS)
 		if err != nil {
-			t.Errorf("processFSInput() error = %v", err)
+			t.Errorf("processFSToReaders() error = %v", err)
 		}
-		if len(paths) != 3 {
-			t.Errorf("processFSInput() returned %d paths, want 3", len(paths))
+		if len(readers) != 3 {
+			t.Errorf("processFSToReaders() returned %d readers, want 3", len(readers))
 		}
 
-		// Clean up temp files
-		if err := builder.Cleanup(); err != nil {
-			t.Errorf("Cleanup() error = %v", err)
+		// Close all readers
+		for _, reader := range readers {
+			if closer, ok := reader.Reader.(io.Closer); ok {
+				_ = closer.Close()
+			}
 		}
 	})
 
@@ -355,88 +706,19 @@ func TestDBBuilder_processFSInput(t *testing.T) {
 
 		builder := NewBuilder()
 
-		paths, err := builder.processFSInput(ctx, mockFS)
+		readers, err := builder.processFSToReaders(ctx, mockFS)
 		if err != nil {
-			t.Errorf("processFSInput() error = %v", err)
+			t.Errorf("processFSToReaders() error = %v", err)
 		}
-		if len(paths) != 2 {
-			t.Errorf("processFSInput() returned %d paths, want 2", len(paths))
-		}
-
-		// Clean up temp files
-		if err := builder.Cleanup(); err != nil {
-			t.Errorf("Cleanup() error = %v", err)
-		}
-	})
-}
-
-func TestDBBuilder_Cleanup(t *testing.T) {
-	t.Parallel()
-
-	t.Run("successful cleanup", func(t *testing.T) {
-		t.Parallel()
-		ctx := context.Background()
-		mockFS := fstest.MapFS{
-			"data.csv": &fstest.MapFile{Data: []byte("col1,col2\nval1,val2\n")},
+		if len(readers) != 2 {
+			t.Errorf("processFSToReaders() returned %d readers, want 2", len(readers))
 		}
 
-		builder := NewBuilder()
-
-		paths, err := builder.processFSInput(ctx, mockFS)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// Verify temp file exists
-		for _, path := range paths {
-			if _, err := os.Stat(path); os.IsNotExist(err) {
-				t.Errorf("Temp file %s should exist before cleanup", path)
+		// Close all readers
+		for _, reader := range readers {
+			if closer, ok := reader.Reader.(io.Closer); ok {
+				_ = closer.Close()
 			}
-		}
-
-		// Clean up
-		if err := builder.Cleanup(); err != nil {
-			t.Errorf("Cleanup() error = %v", err)
-		}
-
-		// Verify temp file is removed
-		for _, path := range paths {
-			if _, err := os.Stat(path); !os.IsNotExist(err) {
-				t.Errorf("Temp file %s should be removed after cleanup", path)
-			}
-		}
-	})
-
-	t.Run("cleanup with no temp files", func(t *testing.T) {
-		t.Parallel()
-		builder := NewBuilder()
-
-		// Clean up empty builder should not error
-		if err := builder.Cleanup(); err != nil {
-			t.Errorf("Cleanup() with no temp files should not error, got: %v", err)
-		}
-	})
-
-	t.Run("cleanup with multiple failed removals", func(t *testing.T) {
-		t.Parallel()
-		builder := NewBuilder()
-
-		// Add some non-existent temp files to simulate removal failures
-		builder.tempFiles = []string{
-			"/non/existent/path1.csv",
-			"/non/existent/path2.csv",
-			"/non/existent/path3.csv",
-		}
-
-		err := builder.Cleanup()
-		if err == nil {
-			t.Error("Cleanup() should return error for failed removals")
-		}
-
-		// Check that errors.Join was used - should contain multiple errors
-		errStr := err.Error()
-		if !strings.Contains(errStr, "path1.csv") || !strings.Contains(errStr, "path2.csv") {
-			t.Errorf("Error should contain multiple file paths, got: %s", errStr)
 		}
 	})
 }
@@ -478,9 +760,6 @@ func TestIntegrationWithEmbedFS(t *testing.T) {
 
 		_ = db.Close()
 		// Clean up temp files
-		if err := validatedBuilder.Cleanup(); err != nil {
-			t.Errorf("Cleanup() error = %v", err)
-		}
 	}
 }
 
@@ -513,7 +792,6 @@ func TestAutoSave_OnClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	defer validatedBuilder.Cleanup()
 
 	db, err := validatedBuilder.Open(ctx)
 	if err != nil {
@@ -577,7 +855,6 @@ func TestAutoSave_OnCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	defer validatedBuilder.Cleanup()
 
 	db, err := validatedBuilder.Open(ctx)
 	if err != nil {
@@ -648,7 +925,6 @@ func TestAutoSave_DisableAutoSave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	defer validatedBuilder.Cleanup()
 
 	db, err := validatedBuilder.Open(ctx)
 	if err != nil {
@@ -704,7 +980,6 @@ func TestAutoSave_MultipleCommitsOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	defer validatedBuilder.Cleanup()
 
 	db, err := validatedBuilder.Open(ctx)
 	if err != nil {
@@ -853,7 +1128,6 @@ func TestAutoSave_ExplicitDisable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	defer validatedBuilder.Cleanup()
 
 	db, err := validatedBuilder.Open(ctx)
 	if err != nil {
@@ -945,6 +1219,61 @@ func TestBuilder_ErrorCases(t *testing.T) {
 		_, err := builder.Build(ctx)
 		if err != nil {
 			t.Errorf("Build() with empty output directory for auto-save on commit should not error, got: %v", err)
+		}
+	})
+
+	t.Run("invalid reader data", func(t *testing.T) {
+		t.Parallel()
+
+		// Test with malformed CSV data that might cause parsing issues
+		invalidCSV := "name,age\n\"unclosed quote,30\nvalid,25\n"
+		reader := strings.NewReader(invalidCSV)
+
+		builder := NewBuilder().AddReader(reader, "invalid", model.FileTypeCSV)
+		_, err := builder.Build(ctx)
+
+		// Should handle malformed CSV gracefully or return meaningful error
+		if err == nil {
+			t.Log("Build succeeded with malformed CSV - parser handled it gracefully")
+		}
+	})
+
+	t.Run("empty reader", func(t *testing.T) {
+		t.Parallel()
+
+		reader := strings.NewReader("")
+		builder := NewBuilder().AddReader(reader, "empty", model.FileTypeCSV)
+		validatedBuilder, err := builder.Build(ctx)
+
+		// Build should succeed (validation happens during Open)
+		if err != nil {
+			t.Errorf("Build should succeed with empty reader, got error: %v", err)
+		}
+
+		if validatedBuilder != nil {
+			// Open should fail with empty CSV data
+			db, openErr := validatedBuilder.Open(ctx)
+			if openErr == nil {
+				if db != nil {
+					_ = db.Close() // Ignore close error in test cleanup
+				}
+				t.Error("Open should fail with empty CSV data")
+			}
+		}
+	})
+
+	t.Run("extremely small chunk size", func(t *testing.T) {
+		t.Parallel()
+
+		reader := strings.NewReader("name,age\nAlice,30\n")
+		// Test with very small chunk size
+		builder := NewBuilder().
+			AddReader(reader, "test", model.FileTypeCSV).
+			SetDefaultChunkSize(1) // Very small chunk size
+
+		_, err := builder.Build(ctx)
+		if err != nil {
+			t.Errorf("Build should handle small chunk size, got error: %v", err)
 		}
 	})
 }

@@ -129,7 +129,7 @@ func main() {
         log.Fatal(err)
     }
     defer connection.Close()
-    defer db.Cleanup() // Nettoyer les fichiers temporaires du FS
+    
     
     // Requête à travers des fichiers de sources différentes
     rows, err := connection.Query("SELECT name FROM sqlite_master WHERE type='table'")
@@ -319,7 +319,7 @@ validatedBuilder, err := builder.Build(ctx)
 if err != nil {
     log.Fatal(err)
 }
-defer validatedBuilder.Cleanup()
+
 
 db, err := validatedBuilder.Open(ctx)
 if err != nil {
@@ -349,7 +349,7 @@ validatedBuilder, err := builder.Build(ctx)
 if err != nil {
     log.Fatal(err)
 }
-defer validatedBuilder.Cleanup()
+
 
 db, err := validatedBuilder.Open(ctx)
 if err != nil {

@@ -484,9 +484,11 @@ func (c *Connector) createTableDirectly(conn driver.Conn, table *model.Table) er
 
 // buildCreateTableQuery constructs a CREATE TABLE query for the given table
 func (c *Connector) buildCreateTableQuery(table *model.Table) string {
-	columns := make([]string, 0, len(table.Header()))
-	for _, col := range table.Header() {
-		columns = append(columns, fmt.Sprintf(`[%s] TEXT`, col))
+	columnInfo := table.ColumnInfo()
+	columns := make([]string, 0, len(columnInfo))
+
+	for _, col := range columnInfo {
+		columns = append(columns, fmt.Sprintf(`[%s] %s`, col.Name, col.Type.String()))
 	}
 
 	return fmt.Sprintf(

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nao1215/filesql/domain/model"
 	"modernc.org/sqlite"
 )
 
@@ -1756,4 +1757,117 @@ func TestPathValidation_SuccessCases(t *testing.T) {
 			t.Errorf("Directory with supported files should work: %v", err)
 		}
 	})
+}
+
+// TestDetermineOptionsFromPath tests the determineOptionsFromPath function
+func TestDetermineOptionsFromPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		filePath       string
+		baseOptions    model.DumpOptions
+		expectedFormat model.OutputFormat
+	}{
+		{
+			name:           "CSV file",
+			filePath:       "/path/to/file.csv",
+			baseOptions:    model.NewDumpOptions(),
+			expectedFormat: model.OutputFormatCSV,
+		},
+		{
+			name:           "TSV file",
+			filePath:       "/path/to/file.tsv",
+			baseOptions:    model.NewDumpOptions(),
+			expectedFormat: model.OutputFormatTSV,
+		},
+		{
+			name:           "LTSV file",
+			filePath:       "/path/to/file.ltsv",
+			baseOptions:    model.NewDumpOptions(),
+			expectedFormat: model.OutputFormatLTSV,
+		},
+		{
+			name:           "TSV with gz compression",
+			filePath:       "/path/to/file.tsv.gz",
+			baseOptions:    model.NewDumpOptions(),
+			expectedFormat: model.OutputFormatTSV,
+		},
+		{
+			name:           "LTSV with bz2 compression",
+			filePath:       "/path/to/file.ltsv.bz2",
+			baseOptions:    model.NewDumpOptions(),
+			expectedFormat: model.OutputFormatLTSV,
+		},
+		{
+			name:           "unknown extension",
+			filePath:       "/path/to/file.txt",
+			baseOptions:    model.NewDumpOptions(),
+			expectedFormat: model.OutputFormatCSV, // Should default to CSV
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Create a Connection with autoSaveConfig
+			conn := &Connection{
+				autoSaveConfig: &AutoSaveConfig{
+					Options: tt.baseOptions,
+				},
+			}
+
+			result := conn.determineOptionsFromPath(tt.filePath)
+			if result.Format != tt.expectedFormat {
+				t.Errorf("determineOptionsFromPath(%q).Format = %v, want %v", tt.filePath, result.Format, tt.expectedFormat)
+			}
+		})
+	}
+}
+
+// TestOverwriteOriginalFiles tests the overwriteOriginalFiles function
+// This test focuses on the error case since the full functionality requires a database connection
+func TestOverwriteOriginalFiles(t *testing.T) {
+	t.Parallel()
+
+	// Test the error case - no original paths
+	conn := &Connection{
+		autoSaveConfig: &AutoSaveConfig{
+			OutputDir: "/tmp",
+			Enabled:   true,
+		},
+		originalPaths: []string{}, // empty paths should trigger error
+	}
+
+	err := conn.overwriteOriginalFiles()
+	if err == nil {
+		t.Fatal("Expected error for empty original paths, got nil")
+	}
+
+	expectedMsg := "no original file paths available for overwrite mode"
+	if err.Error() != expectedMsg {
+		t.Errorf("Expected error message %q, got %q", expectedMsg, err.Error())
+	}
+}
+
+// TestOverwriteOriginalFiles_Error tests error cases for overwriteOriginalFiles
+func TestOverwriteOriginalFiles_Error(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	// Create a connection with non-existent output directory
+	conn := &Connection{
+		autoSaveConfig: &AutoSaveConfig{
+			OutputDir: filepath.Join(tmpDir, "nonexistent"),
+			Enabled:   true,
+		},
+		originalPaths: []string{filepath.Join(tmpDir, "test.csv")},
+	}
+
+	err := conn.overwriteOriginalFiles()
+	if err == nil {
+		t.Error("overwriteOriginalFiles should error when output files don't exist")
+	}
 }

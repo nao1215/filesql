@@ -2,6 +2,7 @@
 package filesql_test
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nao1215/filesql"
+	"github.com/nao1215/filesql/domain/model"
 )
 
 //go:embed testdata/embed_test/*.csv testdata/embed_test/*.tsv
@@ -100,6 +102,10 @@ func ExampleOpen() {
 	// Output:
 	// Employee Analysis Report:
 	// ========================
+	// Alice Johnson   | Engineering  | $  95000 | Rank: 1/4 | Average
+	// Bob Smith       | Engineering  | $  85000 | Rank: 2/4 | Average
+	// Charlie Brown   | Engineering  | $  80000 | Rank: 3/4 | Average
+	// David Wilson    | Engineering  | $  75000 | Rank: 4/4 | Average
 	// Eve Davis       | Marketing    | $  70000 | Rank: 1/2 | Average
 	// Frank Miller    | Marketing    | $  65000 | Rank: 2/2 | Average
 	// Grace Lee       | Sales        | $  60000 | Rank: 1/2 | Average
@@ -692,24 +698,18 @@ func ExampleOpen_performanceOptimization() {
 	//
 	// 1. Pagination with LIMIT and OFFSET:
 	// Page 1:
+	//   - Premium Customer A (ID: 1001, Orders: 15)
+	//   - Premium Customer B (ID: 1002, Orders: 12)
+	//   - Premium Customer C (ID: 1003, Orders: 10)
+	// Page 2:
 	//   - Regular Customer D (ID: 1004, Orders: 8)
 	//   - Regular Customer E (ID: 1005, Orders: 6)
 	//   - Regular Customer F (ID: 1006, Orders: 5)
-	// Page 2:
-	//   - Budget Customer G (ID: 1007, Orders: 3)
-	//   - Budget Customer H (ID: 1008, Orders: 2)
-	//   - Premium Customer A (ID: 1001, Orders: 15)
 	//
 	// 2. Efficient filtering with indexes:
 	// High-value customers:
-	//   - Regular Customer D (regular.d@example.com) - Registered: 2023-04-05
-	//   - Regular Customer E (regular.e@example.com) - Registered: 2023-05-15
-	//   - Regular Customer F (regular.f@example.com) - Registered: 2023-06-20
-	//   - Budget Customer G (budget.g@example.com) - Registered: 2023-07-10
-	//   - Budget Customer H (budget.h@example.com) - Registered: 2023-08-25
 	//   - Premium Customer A (premium.a@example.com) - Registered: 2023-01-15
 	//   - Premium Customer B (premium.b@example.com) - Registered: 2023-02-20
-	//   - Premium Customer C (premium.c@example.com) - Registered: 2023-03-10
 	//
 	// 3. Summary statistics:
 	// Total customers: 10
@@ -1213,7 +1213,7 @@ func ExampleOpen_financialDataAnalysis() {
 	// 1. Monthly Revenue Trend:
 	// Month    Count  Revenue    Average  Largest
 	// --------------------------------------------------
-	// 2024-01  3      $3550.00   $1183.33 $850.00
+	// 2024-01  3      $3550.00   $1183.33 $1500.00
 	// 2024-02  2      $2200.00   $1100.00 $1200.00
 	//
 	// 2. Expense Categories:
@@ -1673,7 +1673,6 @@ func ExampleNewBuilder() {
 	// db, err := validatedBuilder.Open(ctx)
 	// if err != nil { return err }
 	// defer db.Close()
-	// defer validatedBuilder.Cleanup()
 
 	// Output: Builder created successfully: true
 }
@@ -1706,7 +1705,6 @@ func ExampleDBBuilder_EnableAutoSave() {
 		EnableAutoSave(outputDir, filesql.NewDumpOptions()) // Save to backup directory on close
 
 	validatedBuilder, _ := builder.Build(ctx)
-	defer validatedBuilder.Cleanup()
 
 	db, _ := validatedBuilder.Open(ctx)
 
@@ -1750,7 +1748,6 @@ func ExampleDBBuilder_EnableAutoSaveOnCommit() {
 		EnableAutoSaveOnCommit(tempDir, filesql.NewDumpOptions()) // Save to temp directory on each commit
 
 	validatedBuilder, _ := builder.Build(ctx)
-	defer validatedBuilder.Cleanup()
 
 	db, _ := validatedBuilder.Open(ctx)
 	defer func() { _ = db.Close() }()
@@ -1888,7 +1885,6 @@ func ExampleDBBuilder_AddFS() {
 	defer db.Close()
 
 	// Clean up temporary files
-	defer validatedBuilder.Cleanup()
 
 	// List all tables that were created from the filesystem
 	rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
@@ -1932,7 +1928,6 @@ func ExampleDBBuilder_AddFS_embedFS() {
 	defer db.Close()
 
 	// Clean up temporary files
-	defer validatedBuilder.Cleanup()
 
 	// Count the number of tables created from embedded files
 	rows, err := db.Query("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
@@ -2020,37 +2015,6 @@ func ExampleDBBuilder_Open() {
 	// Output: Bob: $60000 (+$5000 above average)
 }
 
-func ExampleDBBuilder_Cleanup() {
-	// Create mock filesystem with test data
-	mockFS := fstest.MapFS{
-		"temp_data.csv": &fstest.MapFile{Data: []byte("id,value\n1,test\n")},
-	}
-
-	// Use filesystem input (creates temporary files)
-	builder := filesql.NewBuilder().AddFS(mockFS)
-
-	ctx := context.Background()
-	validatedBuilder, err := builder.Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	db, err := validatedBuilder.Open(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-	_ = db.Close() // Example doesn't need error handling
-
-	// Clean up temporary files created by AddFS
-	err = validatedBuilder.Cleanup()
-	if err != nil {
-		log.Printf("Cleanup error: %v", err)
-	} else {
-		fmt.Println("Cleanup completed successfully")
-	}
-	// Output: Cleanup completed successfully
-}
-
 //nolint:errcheck // Examples don't need full error handling
 func ExampleDBBuilder_chaining() {
 	// Create temporary files
@@ -2086,7 +2050,6 @@ func ExampleDBBuilder_chaining() {
 		log.Fatal(err)
 	}
 	defer connection.Close()
-	defer db.Cleanup()
 
 	// Count tables from different sources
 	rows, err := connection.Query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
@@ -2156,4 +2119,156 @@ func ExampleDBBuilder_errorHandling() {
 	// Expected error for Open without Build
 	// Expected error for non-existent file
 	// Success: Valid file loaded correctly
+}
+
+// ExampleDBBuilder_AddReader demonstrates using io.Reader as a data source
+func ExampleDBBuilder_AddReader() {
+	// CSV data from an io.Reader (could be from network, API response, etc.)
+	csvData := `id,name,department,salary
+1,Alice,Engineering,95000
+2,Bob,Sales,78000
+3,Charlie,Engineering,102000
+4,Diana,Marketing,85000`
+
+	// Create a reader from the CSV data
+	reader := strings.NewReader(csvData)
+
+	// Build database with Reader input
+	ctx := context.Background()
+	builder := filesql.NewBuilder().
+		AddReader(reader, "employees", model.FileTypeCSV). // Specify table name and type explicitly
+		SetDefaultChunkSize(1024 * 1024)                   // Set 1MB chunk size for large data
+
+	// Build validates the input
+	validatedBuilder, err := builder.Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Open creates the database connection
+	db, err := validatedBuilder.Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Query the data
+	rows, err := db.Query(`
+		SELECT name, department, salary 
+		FROM employees 
+		WHERE salary > 80000 
+		ORDER BY salary DESC
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	// Process results
+	fmt.Println("High earners (salary > 80,000):")
+	for rows.Next() {
+		var name, dept string
+		var salary int
+		if err := rows.Scan(&name, &dept, &salary); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("- %s (%s): $%d\n", name, dept, salary)
+	}
+	// Output:
+	// High earners (salary > 80,000):
+	// - Charlie (Engineering): $102000
+	// - Alice (Engineering): $95000
+	// - Diana (Marketing): $85000
+}
+
+// ExampleDBBuilder_AddReader_compressed demonstrates using compressed data from io.Reader
+func ExampleDBBuilder_AddReader_compressed() {
+	// Simulate compressed TSV data (in practice, this would be actual compressed data)
+	tsvData := "product_id\tproduct_name\tprice\n1\tLaptop\t999\n2\tMouse\t25\n3\tKeyboard\t75"
+	reader := bytes.NewReader([]byte(tsvData))
+
+	ctx := context.Background()
+	builder := filesql.NewBuilder().
+		// Specify that this is TSV data (not actually compressed in this example)
+		AddReader(reader, "products", model.FileTypeTSV)
+
+	validatedBuilder, err := builder.Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	db, err := validatedBuilder.Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Query the products
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM products WHERE price < 100").Scan(&count)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("Products under $100: %d\n", count)
+	// Output:
+	// Products under $100: 2
+}
+
+// ExampleDBBuilder_AddReader_multiple demonstrates combining multiple readers with files
+func ExampleDBBuilder_AddReader_multiple() {
+	// First reader: Users data
+	usersCSV := `user_id,name,email
+1,Alice,alice@example.com
+2,Bob,bob@example.com`
+
+	// Second reader: Orders data
+	ordersCSV := `order_id,user_id,amount
+101,1,250
+102,2,180
+103,1,320`
+
+	ctx := context.Background()
+	builder := filesql.NewBuilder().
+		AddReader(strings.NewReader(usersCSV), "users", model.FileTypeCSV).
+		AddReader(strings.NewReader(ordersCSV), "orders", model.FileTypeCSV).
+		SetDefaultChunkSize(512 * 1024) // 512KB chunks
+
+	validatedBuilder, err := builder.Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	db, err := validatedBuilder.Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// Join query across both tables
+	rows, err := db.Query(`
+		SELECT u.name, SUM(o.amount) as total_spent
+		FROM users u
+		JOIN orders o ON u.user_id = o.user_id
+		GROUP BY u.user_id, u.name
+		ORDER BY total_spent DESC
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	fmt.Println("Customer spending:")
+	for rows.Next() {
+		var name string
+		var total float64
+		if err := rows.Scan(&name, &total); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("- %s: $%.0f\n", name, total)
+	}
+	// Output:
+	// Customer spending:
+	// - Alice: $570
+	// - Bob: $180
 }
