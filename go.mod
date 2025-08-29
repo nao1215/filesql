@@ -4,7 +4,7 @@ go 1.24
 
 require (
 	github.com/klauspost/compress v1.18.0
-	github.com/ulikunitz/xz v0.5.14
+	github.com/ulikunitz/xz v0.5.15
 	modernc.org/sqlite v1.38.2
 )
 
