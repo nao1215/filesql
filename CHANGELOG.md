@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2025-08-30
+
+### Added
+- **🎉 Parquet file format support (v0.3.0)**: Complete Apache Parquet integration with streaming capabilities
+  - **Full Parquet read/write functionality**: Complete implementation using Apache Arrow Go library (v18)
+    - `writeParquetData()` function with schema inference and data conversion
+    - `parseParquet()` and `parseCompressedParquet()` for reading Parquet files
+    - Support for both uncompressed and externally compressed Parquet files (.parquet.gz, .parquet.bz2, .parquet.xz, .parquet.zst)
+  - **Parquet streaming support**: Memory-efficient processing for large Parquet files
+    - `parseParquetStream()` method for streaming Parquet data from io.Reader
+    - `processParquetInChunks()` for chunked processing with configurable batch sizes
+    - `bytesReaderAt` helper for random access requirements
+  - **Export functionality**: Parquet output format in database dump operations
+    - `OutputFormatParquet` enum value for export configuration
+    - Integration with existing `DumpDatabase()` function and `DumpOptions`
+    - Maintains schema and data type information during export
+- **Comprehensive Parquet testing**: Extensive test coverage for all Parquet functionality
+  - Integration tests for Parquet read/write operations with real data
+  - Streaming functionality tests with chunked processing
+  - Compressed Parquet file handling tests
+  - Cross-format compatibility tests (CSV → Parquet → SQLite)
+
+### Changed
+- **Unified streaming architecture**: All file formats now use consistent streaming approach
+  - Consolidated file processing pipeline through `streamReaderToSQLite()`
+  - Removed format-specific processing functions in favor of unified stream handling
+  - Enhanced memory efficiency across all supported formats (CSV, TSV, LTSV, Parquet)
+- **Enhanced test coverage**: Improved from 73.5% to 80.7% coverage (exceeding 80% target)
+  - Added comprehensive tests for dump options functionality
+  - Enhanced column inference testing with mixed data types
+  - Added LTSV chunk processing tests for better coverage
+  - Expanded Parquet-specific test scenarios
+
+### Fixed
+- **Code quality improvements**: Resolved all linting issues (13 total issues fixed)
+  - **errcheck**: Fixed unchecked error returns with proper error handling
+  - **gofmt**: Applied consistent code formatting across all files
+  - **gosec**: Addressed security issues with appropriate nolint annotations for test files
+  - **noctx**: Updated database operations to use context-aware methods (`BeginTx`, `ExecContext`)
+- **Concurrent access simplification**: Removed complex goroutine usage in favor of simpler, more reliable patterns
+  - Simplified database connection management per user feedback
+  - Enhanced test reliability and reduced race condition potential
+- **Memory management**: Improved resource cleanup in Parquet processing
+  - Proper memory allocator usage with Apache Arrow
+  - Better error handling for Parquet file operations
+  - Enhanced cleanup of temporary resources during streaming
+
+### Technical Details
+- **Apache Arrow integration**: Leverages Apache Arrow Go library for efficient Parquet processing
+- **Schema preservation**: Maintains data types and column information across format conversions
+- **Cross-platform compatibility**: Verified Parquet functionality on Linux, macOS, and Windows
+- **Performance optimization**: Streaming approach reduces memory footprint for large files
+- **Documentation updates**: All 7 language README files updated with Parquet support examples
+- **Lint compliance**: Achieved zero linting issues with proper error handling and context usage
+
 ## [0.2.0] - 2025-08-27
 
 ### Added
@@ -228,7 +283,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/nao1215/filesql/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nao1215/filesql/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nao1215/filesql/compare/v0.0.4...v0.1.0
 [0.0.4]: https://github.com/nao1215/filesql/compare/v0.0.3...v0.0.4
