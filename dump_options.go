@@ -1,4 +1,3 @@
-// Package filesql provides domain model for filesql
 package filesql
 
 // OutputFormat represents the output file format
@@ -93,7 +92,15 @@ func (c CompressionType) Extension() string {
 	}
 }
 
-// DumpOptions represents options for dumping database
+// DumpOptions configures how database tables are exported to files.
+//
+// Example:
+//
+//	options := NewDumpOptions().
+//		WithFormat(OutputFormatTSV).
+//		WithCompression(CompressionGZ)
+//
+//	err := DumpDatabase(db, "./output", options)
 type DumpOptions struct {
 	// Format specifies the output file format
 	Format OutputFormat
@@ -101,7 +108,11 @@ type DumpOptions struct {
 	Compression CompressionType
 }
 
-// NewDumpOptions creates new DumpOptions with default values (CSV format, no compression)
+// NewDumpOptions creates default export options (CSV, no compression).
+//
+// Modify with:
+//   - WithFormat(): Change file format (CSV, TSV, LTSV)
+//   - WithCompression(): Add compression (GZ, BZ2, XZ, ZSTD)
 func NewDumpOptions() DumpOptions {
 	return DumpOptions{
 		Format:      OutputFormatCSV,
@@ -109,13 +120,25 @@ func NewDumpOptions() DumpOptions {
 	}
 }
 
-// WithFormat sets the output format
+// WithFormat sets the output file format.
+//
+// Options:
+//   - OutputFormatCSV: Comma-separated values
+//   - OutputFormatTSV: Tab-separated values
+//   - OutputFormatLTSV: Labeled tab-separated values
 func (o DumpOptions) WithFormat(format OutputFormat) DumpOptions {
 	o.Format = format
 	return o
 }
 
-// WithCompression sets the compression type
+// WithCompression adds compression to output files.
+//
+// Options:
+//   - CompressionNone: No compression (default)
+//   - CompressionGZ: Gzip compression (.gz)
+//   - CompressionBZ2: Bzip2 compression (.bz2)
+//   - CompressionXZ: XZ compression (.xz)
+//   - CompressionZSTD: Zstandard compression (.zst)
 func (o DumpOptions) WithCompression(compression CompressionType) DumpOptions {
 	o.Compression = compression
 	return o

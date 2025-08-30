@@ -5,11 +5,13 @@
 [![MultiPlatformUnitTest](https://github.com/nao1215/filesql/actions/workflows/unit_test.yml/badge.svg)](https://github.com/nao1215/filesql/actions/workflows/unit_test.yml)
 ![Coverage](https://raw.githubusercontent.com/nao1215/octocovs-central-repo/main/badges/nao1215/filesql/coverage.svg)
 
+[English](../../README.md) | [Русский](../ru/README.md) | [中文](../zh-cn/README.md) | [한국어](../ko/README.md) | [日本語](../ja/README.md) | [Français](../fr/README.md)
+
 **filesql** es un controlador SQL para Go que te permite consultar archivos CSV, TSV y LTSV usando la sintaxis SQL de SQLite3. ¡Consulta tus archivos de datos directamente sin importaciones o transformaciones!
 
 ## 🎯 ¿Por qué filesql?
 
-Esta librería nació de la experiencia de mantener dos herramientas CLI separadas - [sqly](https://github.com/nao1215/sqly) y [sqluv](https://github.com/nao1215/sqluv). Ambas herramientas compartían una característica común: ejecutar consultas SQL contra archivos CSV, TSV y otros formatos de archivo.
+Esta librería nació de la experiencia de mantener dos herramientas CLI separadas - [sqly](https://github.com/nao1215/sqly) y [sqluv](https://github.com/nao1215/sqluv). Ambas herramientas compartían una característica común: ejecutar consultas SQL contra archivos CSV, TSV y otros formatos.
 
 En lugar de mantener código duplicado en ambos proyectos, extrajimos la funcionalidad principal en este controlador SQL reutilizable. ¡Ahora, cualquier desarrollador de Go puede aprovechar esta capacidad en sus propias aplicaciones!
 
@@ -21,8 +23,9 @@ En lugar de mantener código duplicado en ambos proyectos, extrajimos la funcion
 - 🌊 **Procesamiento de flujos** - Maneja eficientemente archivos grandes a través de streaming con tamaños de chunk configurables
 - 📖 **Fuentes de entrada flexibles** - Soporte para rutas de archivos, directorios, io.Reader y embed.FS
 - 🚀 **Configuración cero** - No se requiere servidor de base de datos, todo funciona en memoria
+- 💾 **Auto-guardado** - Persiste automáticamente los cambios en archivos
 - 🌍 **Multiplataforma** - Funciona perfectamente en Linux, macOS y Windows
-- 💾 **Impulsado por SQLite3** - Construido sobre el robusto motor SQLite3 para procesamiento SQL confiable
+- ⚡ **Impulsado por SQLite3** - Construido sobre el robusto motor SQLite3 para procesamiento SQL confiable
 
 ## 📋 Formatos de archivo soportados
 
@@ -36,7 +39,6 @@ En lugar de mantener código duplicado en ambos proyectos, extrajimos la funcion
 | `.csv.xz`, `.tsv.xz`, `.ltsv.xz` | Compresión XZ | Archivos comprimidos con XZ |
 | `.csv.zst`, `.tsv.zst`, `.ltsv.zst` | Compresión Zstandard | Archivos comprimidos con Zstandard |
 
-
 ## 📦 Instalación
 
 ```bash
@@ -45,11 +47,9 @@ go get github.com/nao1215/filesql
 
 ## 🚀 Inicio rápido
 
-[El código de ejemplo está aquí](../../example_test.go).
+### Uso simple
 
-### Uso simple (Archivos)
-
-Para acceso simple a archivos, usa las funciones convenientes `Open` u `OpenContext`:
+La forma recomendada de empezar es con `OpenContext` para un manejo adecuado de timeouts:
 
 ```go
 package main
@@ -64,18 +64,19 @@ import (
 )
 
 func main() {
-    // Abrir un archivo CSV como una base de datos con contexto
+    // Crear contexto con timeout para operaciones con archivos grandes
     ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
     defer cancel()
     
+    // Abrir un archivo CSV como una base de datos
     db, err := filesql.OpenContext(ctx, "data.csv")
     if err != nil {
         log.Fatal(err)
     }
     defer db.Close()
     
-    // Ejecutar consulta SQL (el nombre de la tabla se deriva del nombre del archivo sin extensión)
-    rows, err := db.QueryContext(ctx, "SELECT * FROM data WHERE age > 25 ORDER BY name")
+    // Consultar los datos (nombre de tabla = nombre de archivo sin extensión)
+    rows, err := db.QueryContext(ctx, "SELECT * FROM data WHERE age > 25")
     if err != nil {
         log.Fatal(err)
     }
@@ -88,98 +89,30 @@ func main() {
         if err := rows.Scan(&name, &age); err != nil {
             log.Fatal(err)
         }
-        fmt.Printf("Name: %s, Age: %d\n", name, age)
+        fmt.Printf("Nombre: %s, Edad: %d\n", name, age)
     }
 }
 ```
 
-### Patrón Builder (Requerido para fs.FS)
-
-Para casos de uso avanzados como archivos embebidos (`go:embed`) o sistemas de archivos personalizados, usa el **patrón Builder**:
+### Múltiples archivos y formatos
 
 ```go
-package main
-
-import (
-    "context"
-    "embed"
-    "io/fs"
-    "log"
-    
-    "github.com/nao1215/filesql"
-)
-
-//go:embed data/*.csv data/*.tsv
-var dataFS embed.FS
-
-func main() {
-    ctx := context.Background()
-    
-    // Usar patrón Builder para sistema de archivos embebido
-    subFS, _ := fs.Sub(dataFS, "data")
-    
-    validatedBuilder, err := filesql.NewBuilder().
-        AddPath("local_file.csv").  // Archivo regular
-        AddFS(subFS).               // Sistema de archivos embebido
-        Build(ctx)
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    connection, err := validatedBuilder.Open(ctx)
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer connection.Close()
-    
-    
-    // Consultar a través de archivos de diferentes fuentes
-    rows, err := connection.Query("SELECT name FROM sqlite_master WHERE type='table'")
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer rows.Close()
-    
-    // Procesar resultados...
-}
-```
-
-### Abrir con soporte de contexto
-
-```go
-// Abrir archivos con control de tiempo de espera
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 defer cancel()
 
-db, err := filesql.OpenContext(ctx, "large_dataset.csv")
+// Abrir múltiples archivos a la vez
+db, err := filesql.OpenContext(ctx, "users.csv", "orders.tsv", "logs.ltsv.gz")
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
-// Consulta con contexto para soporte de cancelación
-rows, err := db.QueryContext(ctx, "SELECT * FROM large_dataset WHERE status = 'active'")
-```
-
-### Abrir múltiples archivos
-
-```go
-// Abrir múltiples archivos en una sola base de datos
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
-
-db, err := filesql.OpenContext(ctx, "users.csv", "orders.tsv", "products.ltsv")
-if err != nil {
-    log.Fatal(err)
-}
-defer db.Close()
-
-// ¡Unir datos de diferentes formatos de archivo!
+// Unir datos de diferentes formatos de archivo
 rows, err := db.QueryContext(ctx, `
-    SELECT u.name, o.order_date, p.product_name
+    SELECT u.name, o.order_date, l.event
     FROM users u
     JOIN orders o ON u.id = o.user_id
-    JOIN products p ON o.product_id = p.id
+    JOIN logs l ON u.id = l.user_id
     WHERE o.order_date > '2024-01-01'
 `)
 ```
@@ -187,64 +120,187 @@ rows, err := db.QueryContext(ctx, `
 ### Trabajar con directorios
 
 ```go
-// Abrir todos los archivos soportados en un directorio (recursivamente)
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 defer cancel()
 
+// Cargar todos los archivos soportados de un directorio (recursivo)
 db, err := filesql.OpenContext(ctx, "/path/to/data/directory")
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
-// Consultar todas las tablas cargadas
+// Ver qué tablas están disponibles
 rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
 ```
 
-### Soporte de archivos comprimidos
+## 🔧 Uso avanzado
+
+### Patrón Builder
+
+Para escenarios avanzados, usa el patrón builder:
 
 ```go
-// Maneja automáticamente archivos comprimidos
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
+package main
 
-db, err := filesql.OpenContext(ctx, "large_dataset.csv.gz", "archive.tsv.bz2")
+import (
+    "context"
+    "embed"
+    "log"
+    
+    "github.com/nao1215/filesql"
+)
+
+//go:embed data/*.csv
+var embeddedFiles embed.FS
+
+func main() {
+    ctx := context.Background()
+    
+    // Configurar fuentes de datos con builder
+    validatedBuilder, err := filesql.NewBuilder().
+        AddPath("local_file.csv").      // Archivo local
+        AddFS(embeddedFiles).           // Archivos embebidos
+        SetDefaultChunkSize(50*1024*1024). // Chunks de 50MB
+        Build(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    db, err := validatedBuilder.Open(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+    
+    // Consultar todas las fuentes de datos
+    rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer rows.Close()
+}
+```
+
+### Funciones de Auto-guardado
+
+#### Auto-guardado al cerrar la base de datos
+
+```go
+// Auto-guardar cambios cuando se cierra la base de datos
+validatedBuilder, err := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSave("./backup"). // Guardar en directorio de backup
+    Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close() // Los cambios se guardan automáticamente aquí
+
+// Hacer cambios
+db.Exec("UPDATE data SET status = 'processed' WHERE id = 1")
+db.Exec("INSERT INTO data (name, age) VALUES ('Juan', 30)")
+```
+
+#### Auto-guardado en commit de transacción
+
+```go
+// Auto-guardar después de cada transacción
+validatedBuilder, err := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSaveOnCommit(""). // Vacío = sobrescribir archivos originales
+    Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+
+db, err := validatedBuilder.Open(ctx)
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
-// Consultar datos comprimidos sin problemas
-rows, err := db.QueryContext(ctx, "SELECT COUNT(*) FROM large_dataset")
+// Los cambios se guardan después de cada commit
+tx, _ := db.Begin()
+tx.Exec("UPDATE data SET status = 'processed' WHERE id = 1")
+tx.Commit() // El auto-guardado ocurre aquí
 ```
 
-### Reglas de nomenclatura de tablas
-
-filesql deriva automáticamente los nombres de las tablas de las rutas de archivo:
+### Trabajar con io.Reader y datos de red
 
 ```go
-// Ejemplos de nomenclatura de tablas:
-// "users.csv"           -> nombre de tabla: "users"
-// "data.tsv"            -> nombre de tabla: "data"
-// "logs.ltsv"           -> nombre de tabla: "logs"
-// "archive.csv.gz"      -> nombre de tabla: "archive"
-// "backup.tsv.bz2"      -> nombre de tabla: "backup"
-// "/path/to/sales.csv"  -> nombre de tabla: "sales"
+import (
+    "net/http"
+    "github.com/nao1215/filesql"
+)
 
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
+// Cargar datos desde respuesta HTTP
+resp, err := http.Get("https://example.com/data.csv")
+if err != nil {
+    log.Fatal(err)
+}
+defer resp.Body.Close()
 
-db, err := filesql.OpenContext(ctx, "employees.csv", "departments.tsv.gz")
+validatedBuilder, err := filesql.NewBuilder().
+    AddReader(resp.Body, "remote_data", filesql.FileTypeCSV).
+    Build(ctx)
 if err != nil {
     log.Fatal(err)
 }
 
-// Usar los nombres de tabla derivados en consultas
-rows, err := db.QueryContext(ctx, `
-    SELECT * FROM employees 
-    JOIN departments ON employees.dept_id = departments.id
-`)
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// Consultar datos remotos
+rows, err := db.QueryContext(ctx, "SELECT * FROM remote_data LIMIT 10")
 ```
+
+### Exportación manual de datos
+
+Si prefieres control manual sobre el guardado:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+db, err := filesql.OpenContext(ctx, "data.csv")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// Hacer modificaciones
+db.Exec("UPDATE data SET status = 'processed'")
+
+// Exportar cambios manualmente
+err = filesql.DumpDatabase(db, "./output")
+if err != nil {
+    log.Fatal(err)
+}
+
+// O con formato y compresión personalizados
+options := filesql.NewDumpOptions().
+    WithFormat(filesql.OutputFormatTSV).
+    WithCompression(filesql.CompressionGZ)
+err = filesql.DumpDatabase(db, "./output", options)
+```
+
+## 📝 Reglas de nomenclatura de tablas
+
+filesql deriva automáticamente los nombres de las tablas de las rutas de archivo:
+
+- `users.csv` → tabla `users`
+- `data.tsv.gz` → tabla `data`
+- `/path/to/sales.csv` → tabla `sales`
+- `products.ltsv.bz2` → tabla `products`
 
 ## ⚠️ Notas importantes
 
@@ -253,17 +309,23 @@ Dado que filesql usa SQLite3 como su motor subyacente, toda la sintaxis SQL sigu
 - Funciones (ej., `date()`, `substr()`, `json_extract()`)
 - Funciones de ventana
 - Expresiones de tabla común (CTE)
-- ¡Y mucho más!
+- Triggers y views
 
 ### Modificaciones de datos
 - Las operaciones `INSERT`, `UPDATE` y `DELETE` afectan la base de datos en memoria
-- **Los archivos originales permanecen inalterados por defecto** - filesql no modifica tus archivos fuente a menos que uses el auto-guardado
-- Puedes usar **auto-guardado** para persistir automáticamente los cambios en archivos al cerrar o al hacer commit
-- Esto hace que sea seguro experimentar con transformaciones de datos mientras proporciona persistencia opcional
+- **Los archivos originales permanecen inalterados por defecto**
+- Usa funciones de auto-guardado o `DumpDatabase()` para persistir cambios
+- Esto hace que sea seguro experimentar con transformaciones de datos
 
-### Características SQL avanzadas
+### Consejos de rendimiento
+- Usa `OpenContext()` con timeouts para archivos grandes
+- Configura tamaños de chunk con `SetDefaultChunkSize()` para optimización de memoria
+- Una sola conexión SQLite funciona mejor para la mayoría de escenarios
+- Usa streaming para archivos más grandes que la memoria disponible
 
-Dado que filesql usa SQLite3, puedes aprovechar todo su poder:
+## 🎨 Ejemplos avanzados
+
+### Consultas SQL complejas
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -275,7 +337,7 @@ if err != nil {
 }
 defer db.Close()
 
-// Usar funciones de ventana, CTE y consultas complejas
+// Usar características avanzadas de SQLite
 query := `
     WITH dept_stats AS (
         SELECT 
@@ -290,127 +352,42 @@ query := `
         e.salary,
         d.name as department,
         ds.avg_salary as dept_avg,
-        RANK() OVER (PARTITION BY e.department_id ORDER BY e.salary DESC) as rank
+        RANK() OVER (PARTITION BY e.department_id ORDER BY e.salary DESC) as salary_rank
     FROM employees e
     JOIN departments d ON e.department_id = d.id
     JOIN dept_stats ds ON e.department_id = ds.department_id
     WHERE e.salary > ds.avg_salary * 0.8
+    ORDER BY d.name, salary_rank
 `
 
 rows, err := db.QueryContext(ctx, query)
 ```
 
-### Funcionalidad de Auto-guardado
-
-filesql proporciona funcionalidad de auto-guardado para persistir automáticamente los cambios de la base de datos en archivos. Puedes elegir entre dos opciones de temporización:
-
-#### Auto-guardado al Cerrar la Base de Datos
-
-Guarda automáticamente los cambios cuando se cierra la conexión de la base de datos (recomendado para la mayoría de casos de uso):
+### Contexto y cancelación
 
 ```go
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+import (
+    "context"
+    "time"
+)
+
+// Establecer timeout para operaciones con archivos grandes
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 defer cancel()
 
-// Habilitar auto-guardado al cerrar
-builder := filesql.NewBuilder().
-    AddPath("data.csv").
-    EnableAutoSave("./backup") // Guardar en directorio de respaldo
-
-validatedBuilder, err := builder.Build(ctx)
-if err != nil {
-    log.Fatal(err)
-}
-
-
-db, err := validatedBuilder.Open(ctx)
-if err != nil {
-    log.Fatal(err)
-}
-defer db.Close() // Auto-guardado activado aquí
-
-// Hacer modificaciones - se guardará automáticamente al cerrar
-_, err = db.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE status = 'pending'")
-_, err = db.ExecContext(ctx, "INSERT INTO data (name, status) VALUES ('New Record', 'active')")
-```
-
-#### Auto-guardado en Commit de Transacción
-
-Guarda automáticamente los cambios después de cada commit de transacción (para persistencia frecuente):
-
-```go
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
-
-// Habilitar auto-guardado en commit - cadena vacía significa sobrescribir archivos originales
-builder := filesql.NewBuilder().
-    AddPath("data.csv").
-    EnableAutoSaveOnCommit("") // Sobrescribir archivos originales
-
-validatedBuilder, err := builder.Build(ctx)
-if err != nil {
-    log.Fatal(err)
-}
-
-
-db, err := validatedBuilder.Open(ctx)
+db, err := filesql.OpenContext(ctx, "huge_dataset.csv.gz")
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
-// Cada commit guardará automáticamente en archivos
-tx, err := db.BeginTx(ctx, nil)
-if err != nil {
-    log.Fatal(err)
-}
-
-_, err = tx.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE id = 1")
-if err != nil {
-    tx.Rollback()
-    log.Fatal(err)
-}
-
-err = tx.Commit() // Auto-guardado activado aquí
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-### Exportación Manual de Datos (Alternativa al Auto-guardado)
-
-Si prefieres control manual sobre cuándo guardar cambios en archivos en lugar de usar auto-guardado:
-
-```go
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
-
-db, err := filesql.OpenContext(ctx, "data.csv")
-if err != nil {
-    log.Fatal(err)
-}
-defer db.Close()
-
-// Hacer modificaciones
-_, err = db.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE status = 'pending'")
-if err != nil {
-    log.Fatal(err)
-}
-
-// Exportar los datos modificados a un nuevo directorio
-// Opcionalmente especificar formato de salida y compresión
-options := filesql.NewDumpOptions().
-    WithFormat(filesql.OutputFormatTSV).
-    WithCompression(filesql.CompressionGZ)
-err = filesql.DumpDatabase(db, "/path/to/output/directory", options)
-if err != nil {
-    log.Fatal(err)
-}
+// Consulta con contexto para soporte de cancelación
+rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'active'")
 ```
 
 ## 🤝 Contribuir
 
-¡Las contribuciones son bienvenidas! Por favor, consulta la [Guía de Contribución](CONTRIBUTING.md) para más detalles.
+¡Las contribuciones son bienvenidas! Por favor, consulta la [Guía de Contribución](../../CONTRIBUTING.md) para más detalles.
 
 ## 💖 Soporte
 

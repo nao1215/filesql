@@ -5,37 +5,39 @@
 [![MultiPlatformUnitTest](https://github.com/nao1215/filesql/actions/workflows/unit_test.yml/badge.svg)](https://github.com/nao1215/filesql/actions/workflows/unit_test.yml)
 ![Coverage](https://raw.githubusercontent.com/nao1215/octocovs-central-repo/main/badges/nao1215/filesql/coverage.svg)
 
+[English](../../README.md) | [Русский](../ru/README.md) | [中文](../zh-cn/README.md) | [Español](../es/README.md) | [Français](../fr/README.md) | [日本語](../ja/README.md)
+
 **filesql**은 SQLite3 SQL 구문을 사용하여 CSV, TSV, LTSV 파일을 쿼리할 수 있게 해주는 Go SQL 드라이버입니다. 가져오기나 변환 없이 데이터 파일을 직접 쿼리하세요!
 
 ## 🎯 왜 filesql인가요?
 
-이 라이브러리는 두 개의 별도 CLI 도구 - [sqly](https://github.com/nao1215/sqly)와 [sqluv](https://github.com/nao1215/sqluv)를 유지보수한 경험에서 탄생했습니다. 두 도구 모두 CSV, TSV 및 기타 파일 형식에 대해 SQL 쿼리를 실행하는 공통 기능을 가지고 있었습니다.
+이 라이브러리는 두 개의 별도 CLI 도구인 [sqly](https://github.com/nao1215/sqly)와 [sqluv](https://github.com/nao1215/sqluv)를 유지 관리한 경험에서 탄생했습니다. 두 도구 모두 공통 기능을 공유했습니다: CSV, TSV 및 기타 파일 형식에 대한 SQL 쿼리 실행.
 
-두 프로젝트에서 중복 코드를 유지보수하는 대신, 핵심 기능을 이 재사용 가능한 SQL 드라이버로 추출했습니다. 이제 모든 Go 개발자가 자신의 애플리케이션에서 이 기능을 활용할 수 있습니다!
+두 프로젝트에서 중복 코드를 유지하는 대신, 핵심 기능을 재사용 가능한 SQL 드라이버로 추출했습니다. 이제 모든 Go 개발자가 자신의 애플리케이션에서 이 기능을 활용할 수 있습니다!
 
 ## ✨ 기능
 
-- 🔍 **SQLite3 SQL 인터페이스** - SQLite3의 강력한 SQL 방언을 사용하여 파일을 쿼리
+- 🔍 **SQLite3 SQL 인터페이스** - SQLite3의 강력한 SQL 방언을 사용하여 파일 쿼리
 - 📁 **다중 파일 형식** - CSV, TSV, LTSV 파일 지원
 - 🗜️ **압축 지원** - .gz, .bz2, .xz, .zst 압축 파일 자동 처리
-- 🌊 **스트림 처리** - 구성 가능한 청크 크기로 스트리밍을 통해 대용량 파일을 효율적으로 처리합니다
-- 📖 **유연한 입력 소스** - 파일 경로, 디렉터리, io.Reader, embed.FS를 지원합니다
+- 🌊 **스트림 처리** - 설정 가능한 청크 크기로 스트리밍을 통해 대용량 파일 효율적 처리
+- 📖 **유연한 입력 소스** - 파일 경로, 디렉터리, io.Reader, embed.FS 지원
 - 🚀 **제로 설정** - 데이터베이스 서버 불필요, 모든 것이 메모리에서 실행
+- 💾 **자동 저장** - 변경사항을 파일에 자동으로 저장
 - 🌍 **크로스 플랫폼** - Linux, macOS, Windows에서 원활하게 작동
-- 💾 **SQLite3 기반** - 안정적인 SQL 처리를 위해 견고한 SQLite3 엔진 위에 구축
+- ⚡ **SQLite3 기반** - 안정적인 SQL 처리를 위한 견고한 SQLite3 엔진 기반
 
 ## 📋 지원되는 파일 형식
 
 | 확장자 | 형식 | 설명 |
-|-----------|--------|-------------|
+|--------|------|------|
 | `.csv` | CSV | 쉼표로 구분된 값 |
 | `.tsv` | TSV | 탭으로 구분된 값 |
-| `.ltsv` | LTSV | 레이블 탭 구분 값 |
+| `.ltsv` | LTSV | 레이블이 있는 탭으로 구분된 값 |
 | `.csv.gz`, `.tsv.gz`, `.ltsv.gz` | Gzip 압축 | Gzip 압축 파일 |
 | `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2` | Bzip2 압축 | Bzip2 압축 파일 |
 | `.csv.xz`, `.tsv.xz`, `.ltsv.xz` | XZ 압축 | XZ 압축 파일 |
 | `.csv.zst`, `.tsv.zst`, `.ltsv.zst` | Zstandard 압축 | Zstandard 압축 파일 |
-
 
 ## 📦 설치
 
@@ -45,11 +47,9 @@ go get github.com/nao1215/filesql
 
 ## 🚀 빠른 시작
 
-[예제 코드는 여기에 있습니다](../../example_test.go).
+### 간단한 사용법
 
-### 간단한 사용법 (파일)
-
-간단한 파일 접근에는 편리한 `Open` 또는 `OpenContext` 함수를 사용하세요:
+권장되는 시작 방법은 적절한 타임아웃 처리를 위해 `OpenContext`를 사용하는 것입니다:
 
 ```go
 package main
@@ -64,18 +64,19 @@ import (
 )
 
 func main() {
-    // 컨텍스트와 함께 CSV 파일을 데이터베이스로 열기
+    // 대용량 파일 작업을 위한 타임아웃이 있는 컨텍스트 생성
     ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
     defer cancel()
     
+    // CSV 파일을 데이터베이스로 열기
     db, err := filesql.OpenContext(ctx, "data.csv")
     if err != nil {
         log.Fatal(err)
     }
     defer db.Close()
     
-    // SQL 쿼리 실행 (테이블 이름은 확장자 없는 파일명에서 파생됨)
-    rows, err := db.QueryContext(ctx, "SELECT * FROM data WHERE age > 25 ORDER BY name")
+    // 데이터 쿼리 (테이블 이름 = 확장자가 없는 파일 이름)
+    rows, err := db.QueryContext(ctx, "SELECT * FROM data WHERE age > 25")
     if err != nil {
         log.Fatal(err)
     }
@@ -88,14 +89,56 @@ func main() {
         if err := rows.Scan(&name, &age); err != nil {
             log.Fatal(err)
         }
-        fmt.Printf("Name: %s, Age: %d\n", name, age)
+        fmt.Printf("이름: %s, 나이: %d\n", name, age)
     }
 }
 ```
 
-### Builder 패턴 (fs.FS에 필요)
+### 다중 파일과 형식
 
-임베디드 파일(`go:embed`)이나 커스텀 파일시스템과 같은 고급 사용 사례에는 **Builder 패턴**을 사용하세요:
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// 여러 파일을 한 번에 열기
+db, err := filesql.OpenContext(ctx, "users.csv", "orders.tsv", "logs.ltsv.gz")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// 다양한 파일 형식에서 데이터 조인
+rows, err := db.QueryContext(ctx, `
+    SELECT u.name, o.order_date, l.event
+    FROM users u
+    JOIN orders o ON u.id = o.user_id
+    JOIN logs l ON u.id = l.user_id
+    WHERE o.order_date > '2024-01-01'
+`)
+```
+
+### 디렉터리 작업
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// 디렉터리에서 지원되는 모든 파일 로드 (재귀적)
+db, err := filesql.OpenContext(ctx, "/path/to/data/directory")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// 사용 가능한 테이블 확인
+rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
+```
+
+## 🔧 고급 사용법
+
+### 빌더 패턴
+
+고급 시나리오에서는 빌더 패턴을 사용하세요:
 
 ```go
 package main
@@ -103,167 +146,186 @@ package main
 import (
     "context"
     "embed"
-    "io/fs"
     "log"
     
     "github.com/nao1215/filesql"
 )
 
-//go:embed data/*.csv data/*.tsv
-var dataFS embed.FS
+//go:embed data/*.csv
+var embeddedFiles embed.FS
 
 func main() {
     ctx := context.Background()
     
-    // 임베디드 파일시스템에 Builder 패턴 사용
-    subFS, _ := fs.Sub(dataFS, "data")
-    
+    // 빌더로 데이터 소스 구성
     validatedBuilder, err := filesql.NewBuilder().
-        AddPath("local_file.csv").  // 일반 파일
-        AddFS(subFS).               // 임베디드 파일시스템
+        AddPath("local_file.csv").      // 로컬 파일
+        AddFS(embeddedFiles).           // 임베디드 파일
+        SetDefaultChunkSize(50*1024*1024). // 50MB 청크
         Build(ctx)
     if err != nil {
         log.Fatal(err)
     }
     
-    connection, err := validatedBuilder.Open(ctx)
+    db, err := validatedBuilder.Open(ctx)
     if err != nil {
         log.Fatal(err)
     }
-    defer connection.Close()
+    defer db.Close()
     
-    
-    // 다른 소스의 파일들 간 쿼리
-    rows, err := connection.Query("SELECT name FROM sqlite_master WHERE type='table'")
+    // 모든 데이터 소스 쿼리
+    rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
     if err != nil {
         log.Fatal(err)
     }
     defer rows.Close()
-    
-    // 결과 처리...
 }
 ```
 
-### Context 지원으로 열기
+### 자동 저장 기능
+
+#### 데이터베이스 닫기 시 자동 저장
 
 ```go
-// 타임아웃 제어로 파일 열기
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
+// 데이터베이스가 닫힐 때 변경사항 자동 저장
+validatedBuilder, err := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSave("./backup"). // 백업 디렉터리에 저장
+    Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
 
-db, err := filesql.OpenContext(ctx, "large_dataset.csv")
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close() // 여기서 변경사항이 자동으로 저장됨
+
+// 변경 수행
+db.Exec("UPDATE data SET status = 'processed' WHERE id = 1")
+db.Exec("INSERT INTO data (name, age) VALUES ('김철수', 30)")
+```
+
+#### 트랜잭션 커밋 시 자동 저장
+
+```go
+// 각 트랜잭션 후 자동 저장
+validatedBuilder, err := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSaveOnCommit(""). // 빈 문자열 = 원본 파일 덮어쓰기
+    Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+
+db, err := validatedBuilder.Open(ctx)
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
-// 취소 지원을 위한 컨텍스트로 쿼리
-rows, err := db.QueryContext(ctx, "SELECT * FROM large_dataset WHERE status = 'active'")
+// 각 커밋 후 변경사항 저장
+tx, _ := db.Begin()
+tx.Exec("UPDATE data SET status = 'processed' WHERE id = 1")
+tx.Commit() // 여기서 자동 저장 발생
 ```
 
-### 여러 파일 열기
+### io.Reader와 네트워크 데이터 작업
 
 ```go
-// 단일 데이터베이스에서 여러 파일 열기
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
+import (
+    "net/http"
+    "github.com/nao1215/filesql"
+)
 
-db, err := filesql.OpenContext(ctx, "users.csv", "orders.tsv", "products.ltsv")
+// HTTP 응답에서 데이터 로드
+resp, err := http.Get("https://example.com/data.csv")
+if err != nil {
+    log.Fatal(err)
+}
+defer resp.Body.Close()
+
+validatedBuilder, err := filesql.NewBuilder().
+    AddReader(resp.Body, "remote_data", filesql.FileTypeCSV).
+    Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+
+db, err := validatedBuilder.Open(ctx)
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
-// 다른 파일 형식 간 데이터 조인!
-rows, err := db.QueryContext(ctx, `
-    SELECT u.name, o.order_date, p.product_name
-    FROM users u
-    JOIN orders o ON u.id = o.user_id
-    JOIN products p ON o.product_id = p.id
-    WHERE o.order_date > '2024-01-01'
-`)
+// 원격 데이터 쿼리
+rows, err := db.QueryContext(ctx, "SELECT * FROM remote_data LIMIT 10")
 ```
 
-### 디렉토리 작업
+### 수동 데이터 내보내기
+
+저장을 수동으로 제어하려면:
 
 ```go
-// 디렉토리의 모든 지원 파일 열기 (재귀적)
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 defer cancel()
 
-db, err := filesql.OpenContext(ctx, "/path/to/data/directory")
+db, err := filesql.OpenContext(ctx, "data.csv")
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
-// 로드된 모든 테이블 쿼리
-rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
-```
+// 수정 수행
+db.Exec("UPDATE data SET status = 'processed'")
 
-### 압축 파일 지원
-
-```go
-// 압축 파일 자동 처리
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
-
-db, err := filesql.OpenContext(ctx, "large_dataset.csv.gz", "archive.tsv.bz2")
+// 변경사항 수동 내보내기
+err = filesql.DumpDatabase(db, "./output")
 if err != nil {
     log.Fatal(err)
 }
-defer db.Close()
 
-// 압축된 데이터를 원활하게 쿼리
-rows, err := db.QueryContext(ctx, "SELECT COUNT(*) FROM large_dataset")
+// 또는 사용자 정의 형식과 압축으로
+options := filesql.NewDumpOptions().
+    WithFormat(filesql.OutputFormatTSV).
+    WithCompression(filesql.CompressionGZ)
+err = filesql.DumpDatabase(db, "./output", options)
 ```
 
-### 테이블 명명 규칙
+## 📝 테이블 명명 규칙
 
 filesql은 파일 경로에서 자동으로 테이블 이름을 도출합니다:
 
-```go
-// 테이블 명명 예제:
-// "users.csv"           -> 테이블 이름: "users"
-// "data.tsv"            -> 테이블 이름: "data"
-// "logs.ltsv"           -> 테이블 이름: "logs"
-// "archive.csv.gz"      -> 테이블 이름: "archive"
-// "backup.tsv.bz2"      -> 테이블 이름: "backup"
-// "/path/to/sales.csv"  -> 테이블 이름: "sales"
+- `users.csv` → 테이블 `users`
+- `data.tsv.gz` → 테이블 `data`
+- `/path/to/sales.csv` → 테이블 `sales`
+- `products.ltsv.bz2` → 테이블 `products`
 
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
-
-db, err := filesql.OpenContext(ctx, "employees.csv", "departments.tsv.gz")
-if err != nil {
-    log.Fatal(err)
-}
-
-// 쿼리에서 도출된 테이블 이름 사용
-rows, err := db.QueryContext(ctx, `
-    SELECT * FROM employees 
-    JOIN departments ON employees.dept_id = departments.id
-`)
-```
-
-## ⚠️ 중요한 참고사항
+## ⚠️ 중요한 주의사항
 
 ### SQL 구문
 filesql은 SQLite3를 기본 엔진으로 사용하므로 모든 SQL 구문은 [SQLite3의 SQL 방언](https://www.sqlite.org/lang.html)을 따릅니다. 여기에는 다음이 포함됩니다:
 - 함수 (예: `date()`, `substr()`, `json_extract()`)
 - 윈도우 함수
-- 공통 테이블 표현식(CTE)
-- 그리고 더 많은 것들!
+- 공통 테이블 표현식 (CTE)
+- 트리거와 뷰
 
 ### 데이터 수정
-- `INSERT`, `UPDATE`, `DELETE` 작업은 메모리 내 데이터베이스에 영향을 미칩니다
-- **원본 파일은 기본적으로 변경되지 않습니다** - filesql은 자동 저장을 사용하지 않는 한 소스 파일을 수정하지 않습니다
-- **자동 저장**을 사용하여 종료 시 또는 커밋 시 변경사항을 파일에 자동으로 유지할 수 있습니다
-- 이로 인해 선택적 유지 기능을 제공하면서 데이터 변환을 안전하게 실험할 수 있습니다
+- `INSERT`, `UPDATE`, `DELETE` 작업은 메모리 내 데이터베이스에 영향을 줍니다
+- **기본적으로 원본 파일은 변경되지 않습니다**
+- 변경사항을 지속하려면 자동 저장 기능이나 `DumpDatabase()`를 사용하세요
+- 이는 데이터 변환을 안전하게 실험할 수 있게 합니다
 
-### 고급 SQL 기능
+### 성능 팁
+- 대용량 파일에는 타임아웃이 있는 `OpenContext()` 사용
+- 메모리 최적화를 위해 `SetDefaultChunkSize()`로 청크 크기 설정
+- 대부분의 시나리오에서 단일 SQLite 연결이 가장 잘 작동
+- 사용 가능한 메모리보다 큰 파일에는 스트리밍 사용
 
-filesql은 SQLite3를 사용하므로 그 전체 기능을 활용할 수 있습니다:
+## 🎨 고급 예제
+
+### 복잡한 SQL 쿼리
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -275,7 +337,7 @@ if err != nil {
 }
 defer db.Close()
 
-// 윈도우 함수, CTE, 복잡한 쿼리 사용
+// SQLite의 고급 기능 사용
 query := `
     WITH dept_stats AS (
         SELECT 
@@ -290,137 +352,52 @@ query := `
         e.salary,
         d.name as department,
         ds.avg_salary as dept_avg,
-        RANK() OVER (PARTITION BY e.department_id ORDER BY e.salary DESC) as rank
+        RANK() OVER (PARTITION BY e.department_id ORDER BY e.salary DESC) as salary_rank
     FROM employees e
     JOIN departments d ON e.department_id = d.id
     JOIN dept_stats ds ON e.department_id = ds.department_id
     WHERE e.salary > ds.avg_salary * 0.8
+    ORDER BY d.name, salary_rank
 `
 
 rows, err := db.QueryContext(ctx, query)
 ```
 
-### 자동 저장 기능
-
-filesql은 데이터베이스 변경사항을 파일에 자동으로 유지하는 자동 저장 기능을 제공합니다. 두 가지 타이밍 옵션 중에서 선택할 수 있습니다:
-
-#### 데이터베이스 종료 시 자동 저장
-
-데이터베이스 연결이 종료될 때 자동으로 변경사항을 저장합니다 (대부분의 사용 사례에 권장):
+### 컨텍스트와 취소
 
 ```go
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+import (
+    "context"
+    "time"
+)
+
+// 대용량 파일 작업을 위한 타임아웃 설정
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 defer cancel()
 
-// 종료 시 자동 저장 활성화
-builder := filesql.NewBuilder().
-    AddPath("data.csv").
-    EnableAutoSave("./backup") // 백업 디렉토리에 저장
-
-validatedBuilder, err := builder.Build(ctx)
-if err != nil {
-    log.Fatal(err)
-}
-
-
-db, err := validatedBuilder.Open(ctx)
-if err != nil {
-    log.Fatal(err)
-}
-defer db.Close() // 여기서 자동 저장 트리거됨
-
-// 수정 - 종료 시 자동 저장됩니다
-_, err = db.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE status = 'pending'")
-_, err = db.ExecContext(ctx, "INSERT INTO data (name, status) VALUES ('New Record', 'active')")
-```
-
-#### 트랜잭션 커밋 시 자동 저장
-
-각 트랜잭션 커밋 후 자동으로 변경사항을 저장합니다 (빈번한 유지가 필요한 경우):
-
-```go
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
-
-// 커밋 시 자동 저장 활성화 - 빈 문자열은 원본 파일 덮어쓰기를 의미합니다
-builder := filesql.NewBuilder().
-    AddPath("data.csv").
-    EnableAutoSaveOnCommit("") // 원본 파일 덮어쓰기
-
-validatedBuilder, err := builder.Build(ctx)
-if err != nil {
-    log.Fatal(err)
-}
-
-
-db, err := validatedBuilder.Open(ctx)
+db, err := filesql.OpenContext(ctx, "huge_dataset.csv.gz")
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
-// 각 커밋마다 자동으로 파일에 저장됩니다
-tx, err := db.BeginTx(ctx, nil)
-if err != nil {
-    log.Fatal(err)
-}
-
-_, err = tx.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE id = 1")
-if err != nil {
-    tx.Rollback()
-    log.Fatal(err)
-}
-
-err = tx.Commit() // 여기서 자동 저장 트리거됨
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-### 수동 데이터 내보내기 (자동 저장의 대안)
-
-자동 저장 대신 변경사항을 파일에 저장하는 시점을 수동으로 제어하려는 경우:
-
-```go
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
-
-db, err := filesql.OpenContext(ctx, "data.csv")
-if err != nil {
-    log.Fatal(err)
-}
-defer db.Close()
-
-// 수정하기
-_, err = db.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE status = 'pending'")
-if err != nil {
-    log.Fatal(err)
-}
-
-// 수정된 데이터를 새 디렉토리로 내보내기
-// 옵션으로 출력 형식과 압축을 지정할 수 있습니다
-options := filesql.NewDumpOptions().
-    WithFormat(filesql.OutputFormatTSV).
-    WithCompression(filesql.CompressionGZ)
-err = filesql.DumpDatabase(db, "/path/to/output/directory", options)
-if err != nil {
-    log.Fatal(err)
-}
+// 취소 지원을 위한 컨텍스트와 함께 쿼리
+rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'active'")
 ```
 
 ## 🤝 기여
 
-기여를 환영합니다! 자세한 내용은 [기여 가이드](CONTRIBUTING.md)를 참조하세요.
+기여를 환영합니다! 자세한 내용은 [기여 가이드](../../CONTRIBUTING.md)를 참조하세요.
 
 ## 💖 지원
 
-이 프로젝트가 유용하다고 생각하시면 다음을 고려해 주세요:
+이 프로젝트가 유용하다고 생각하신다면 다음을 고려해 주세요:
 
-- ⭐ GitHub에서 스타 주기 - 다른 사람들이 프로젝트를 발견하는 데 도움이 됩니다
-- 💝 [후원자 되기](https://github.com/sponsors/nao1215) - 여러분의 지원이 프로젝트를 유지하고 지속적인 개발에 동기를 부여합니다
+- ⭐ GitHub에서 스타를 눌러주세요 - 다른 사람들이 프로젝트를 발견하는 데 도움이 됩니다
+- 💝 [스폰서가 되어주세요](https://github.com/sponsors/nao1215) - 여러분의 지원이 프로젝트를 유지하고 지속적인 개발에 동기를 부여합니다
 
-스타, 후원, 기여 등 여러분의 지원이 이 프로젝트를 앞으로 나아가게 하는 원동력입니다. 감사합니다!
+스타, 스폰서십, 기여를 통한 여러분의 지원이 이 프로젝트를 앞으로 나아가게 하는 원동력입니다. 감사합니다!
 
-## 📄 라이선스
+## 📄 라이센스
 
-이 프로젝트는 MIT 라이선스 하에 라이선스가 부여됩니다 - 자세한 내용은 [LICENSE](../../LICENSE) 파일을 참조하세요.
+이 프로젝트는 MIT 라이센스 하에 라이센스가 부여됩니다. 자세한 내용은 [LICENSE](../../LICENSE) 파일을 참조하세요.

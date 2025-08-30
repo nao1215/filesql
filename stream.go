@@ -13,6 +13,16 @@ import (
 	"github.com/ulikunitz/xz"
 )
 
+// handleCloseError is a helper function to handle close errors consistently
+func handleCloseError(closeFunc func() error) func() {
+	return func() {
+		if closeErr := closeFunc(); closeErr != nil {
+			// In the future, this could be enhanced with proper logging
+			_ = closeErr
+		}
+	}
+}
+
 // newStreamingParser creates a new streaming parser
 func newStreamingParser(fileType FileType, tableName string, chunkSize int) *streamingParser {
 	return &streamingParser{
@@ -34,12 +44,7 @@ func (p *streamingParser) parseFromReader(reader io.Reader) (*table, error) {
 		return nil, fmt.Errorf("failed to create decompressed reader: %w", err)
 	}
 	if closeFunc != nil {
-		defer func() {
-			if closeErr := closeFunc(); closeErr != nil {
-				// TODO: Add proper logging for close errors
-				_ = closeErr
-			}
-		}()
+		defer handleCloseError(closeFunc)
 	}
 
 	// Parse based on base file type
@@ -123,7 +128,7 @@ func (p *streamingParser) parseCSVStream(reader io.Reader) (*table, error) {
 // parseTSVStream parses TSV data from reader using streaming approach
 func (p *streamingParser) parseTSVStream(reader io.Reader) (*table, error) {
 	csvReader := csv.NewReader(reader)
-	csvReader.Comma = '\t'
+	csvReader.Comma = TSVDelimiter
 	records, err := csvReader.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read TSV: %w", err)
@@ -173,8 +178,7 @@ func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 		}
 
 		recordMap := make(map[string]string)
-		pairs := strings.Split(line, "\t")
-		for _, pair := range pairs {
+		for pair := range strings.SplitSeq(line, "\t") {
 			kv := strings.SplitN(pair, ":", 2)
 			if len(kv) == 2 {
 				key := strings.TrimSpace(kv[0])
@@ -226,12 +230,7 @@ func (p *streamingParser) ProcessInChunks(reader io.Reader, processor chunkProce
 		return fmt.Errorf("failed to create decompressed reader: %w", err)
 	}
 	if closeFunc != nil {
-		defer func() {
-			if closeErr := closeFunc(); closeErr != nil {
-				// TODO: Add proper logging for close errors
-				_ = closeErr
-			}
-		}()
+		defer handleCloseError(closeFunc)
 	}
 
 	// Parse based on base file type
@@ -248,17 +247,20 @@ func (p *streamingParser) ProcessInChunks(reader io.Reader, processor chunkProce
 	}
 }
 
-// processCSVInChunks processes CSV data in chunks
-func (p *streamingParser) processCSVInChunks(reader io.Reader, processor chunkProcessor) error {
+// processDelimitedInChunks processes CSV or TSV data in chunks based on delimiter
+func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor chunkProcessor, delimiter rune, fileTypeName string) error {
 	csvReader := csv.NewReader(reader)
+	if delimiter != CSVDelimiter {
+		csvReader.Comma = delimiter
+	}
 
 	// Read header first
 	headerrecord, err := csvReader.Read()
 	if err != nil {
 		if err == io.EOF {
-			return errors.New("empty CSV data")
+			return fmt.Errorf("empty %s data", fileTypeName)
 		}
-		return fmt.Errorf("failed to read CSV header: %w", err)
+		return fmt.Errorf("failed to read %s header: %w", fileTypeName, err)
 	}
 
 	// Validate header for duplicates
@@ -287,7 +289,7 @@ func (p *streamingParser) processCSVInChunks(reader io.Reader, processor chunkPr
 			if err == io.EOF {
 				break
 			}
-			return fmt.Errorf("failed to read CSV record: %w", err)
+			return fmt.Errorf("failed to read %s record: %w", fileTypeName, err)
 		}
 
 		chunkrecords = append(chunkrecords, newRecord(record))
@@ -350,107 +352,14 @@ func (p *streamingParser) processCSVInChunks(reader io.Reader, processor chunkPr
 	return nil
 }
 
+// processCSVInChunks processes CSV data in chunks
+func (p *streamingParser) processCSVInChunks(reader io.Reader, processor chunkProcessor) error {
+	return p.processDelimitedInChunks(reader, processor, CSVDelimiter, "CSV")
+}
+
 // processTSVInChunks processes TSV data in chunks
 func (p *streamingParser) processTSVInChunks(reader io.Reader, processor chunkProcessor) error {
-	csvReader := csv.NewReader(reader)
-	csvReader.Comma = '\t'
-
-	// Read header first
-	headerrecord, err := csvReader.Read()
-	if err != nil {
-		if err == io.EOF {
-			return errors.New("empty TSV data")
-		}
-		return fmt.Errorf("failed to read TSV header: %w", err)
-	}
-
-	// Validate header for duplicates
-	columnsSeen := make(map[string]bool)
-	for _, col := range headerrecord {
-		if columnsSeen[col] {
-			return fmt.Errorf("%w: %s", errDuplicateColumnName, col)
-		}
-		columnsSeen[col] = true
-	}
-
-	header := newHeader(headerrecord)
-	var columnInfo []columnInfo
-	var columnValues [][]string
-
-	// Read records in chunks
-	var chunkrecords []record
-	chunkSize := p.chunkSize
-	if chunkSize <= 0 {
-		chunkSize = 1000
-	}
-
-	for {
-		record, err := csvReader.Read()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return fmt.Errorf("failed to read TSV record: %w", err)
-		}
-
-		chunkrecords = append(chunkrecords, newRecord(record))
-
-		// Collect values for type inference (only on first chunk)
-		if len(columnInfo) == 0 {
-			if len(columnValues) == 0 {
-				columnValues = make([][]string, len(header))
-			}
-			for i, val := range record {
-				if i < len(columnValues) {
-					columnValues[i] = append(columnValues[i], val)
-				}
-			}
-		}
-
-		// Process chunk when it reaches the target size
-		if len(chunkrecords) >= chunkSize {
-			// Infer column types on first chunk
-			if len(columnInfo) == 0 {
-				columnInfo = p.infercolumnInfoFromValues(header, columnValues)
-			}
-
-			chunk := &tableChunk{
-				tableName:  p.tableName,
-				headers:    header,
-				records:    chunkrecords,
-				columnInfo: columnInfo,
-			}
-
-			if err := processor(chunk); err != nil {
-				return fmt.Errorf("chunk processor error: %w", err)
-			}
-
-			// Reset for next chunk
-			chunkrecords = nil
-			columnValues = nil
-		}
-	}
-
-	// Process remaining records
-	if len(chunkrecords) > 0 {
-		// Infer column types if we haven't yet
-		if len(columnInfo) == 0 {
-			columnInfo = p.infercolumnInfoFromValues(header, columnValues)
-		}
-
-		chunk := &tableChunk{
-			tableName:  p.tableName,
-			headers:    header,
-			records:    chunkrecords,
-			columnInfo: columnInfo,
-		}
-
-		if err := processor(chunk); err != nil {
-			return fmt.Errorf("chunk processor error: %w", err)
-		}
-	}
-
-	return nil
+	return p.processDelimitedInChunks(reader, processor, TSVDelimiter, "TSV")
 }
 
 // processLTSVInChunks processes LTSV data in chunks
@@ -475,8 +384,7 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 			continue
 		}
 
-		pairs := strings.Split(line, "\t")
-		for _, pair := range pairs {
+		for pair := range strings.SplitSeq(line, "\t") {
 			kv := strings.SplitN(pair, ":", 2)
 			if len(kv) == 2 {
 				key := strings.TrimSpace(kv[0])
@@ -511,8 +419,7 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 		}
 
 		recordMap := make(map[string]string)
-		pairs := strings.Split(line, "\t")
-		for _, pair := range pairs {
+		for pair := range strings.SplitSeq(line, "\t") {
 			kv := strings.SplitN(pair, ":", 2)
 			if len(kv) == 2 {
 				key := strings.TrimSpace(kv[0])
