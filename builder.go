@@ -1,4 +1,3 @@
-// Package filesql provides file-based SQL driver implementation.
 package filesql
 
 import (

@@ -1,5 +1,3 @@
-// Package filesql provides file-based SQL driver implementation.
-// It enables reading CSV, TSV, and LTSV files as SQL databases.
 package filesql
 
 import (

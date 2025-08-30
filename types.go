@@ -1,4 +1,3 @@
-// Package filesql provides domain model for filesql
 package filesql
 
 // header is file header.
