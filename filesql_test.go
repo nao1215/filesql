@@ -1,18 +1,28 @@
 package filesql
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"database/sql"
 	"encoding/csv"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/xuri/excelize/v2"
+
+	"github.com/apache/arrow/go/v18/arrow"
+	"github.com/apache/arrow/go/v18/arrow/array"
+	"github.com/apache/arrow/go/v18/arrow/memory"
 )
 
 func TestOpen(t *testing.T) {
@@ -3609,8 +3619,6 @@ func TestParquetDirectParsing(t *testing.T) {
 	tempDir := t.TempDir()
 
 	t.Run("parseParquet function coverage", func(t *testing.T) {
-		t.Parallel()
-
 		// Create test CSV first
 		csvFile := filepath.Join(tempDir, "test.csv")
 		csvContent := "id,name,value\n1,Alice,100.5\n2,Bob,200.3\n3,Charlie,300.7\n"
@@ -3732,6 +3740,735 @@ func TestParquetDirectParsing(t *testing.T) {
 			} else if !tf.shouldWork && err == nil {
 				t.Errorf("File %s should not be supported but no error occurred", tf.filename)
 			}
+		}
+	})
+}
+
+func TestWriteXLSXTableData(t *testing.T) {
+	t.Parallel()
+
+	t.Run("writeXLSXTableData with no compression", func(t *testing.T) {
+		// Create test data
+		db, err := Open(filepath.Join("testdata", "excel", "sample.xlsx"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+
+		// Query data from first sheet
+		rows, err := db.QueryContext(context.Background(), "SELECT * FROM sample_Sheet1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+
+		columns, err := rows.Columns()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Create temp output file
+		tempDir := t.TempDir()
+		outputPath := filepath.Join(tempDir, "output.xlsx")
+
+		// Test writeXLSXTableData
+		err = writeXLSXTableData(outputPath, columns, rows, CompressionNone)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify file was created
+		if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+			t.Error("Output file was not created")
+		}
+
+		// Verify file can be read back
+		xlsxFile, err := excelize.OpenFile(outputPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer xlsxFile.Close()
+
+		// Check sheet exists
+		sheets := xlsxFile.GetSheetList()
+		if len(sheets) != 1 {
+			t.Errorf("Expected 1 sheet, got %d", len(sheets))
+		}
+		if sheets[0] != "output" {
+			t.Errorf("Expected sheet 'output', got '%s'", sheets[0])
+		}
+
+		// Check data
+		sheetRows, err := xlsxFile.GetRows(sheets[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Should have header + 3 data rows = 4 total rows
+		if len(sheetRows) != 4 {
+			t.Errorf("Expected 4 rows (1 header + 3 data), got %d", len(sheetRows))
+		}
+
+		// Check header
+		expectedHeaders := []string{"id", "name"}
+		if !reflect.DeepEqual(sheetRows[0], expectedHeaders) {
+			t.Errorf("Expected headers %v, got %v", expectedHeaders, sheetRows[0])
+		}
+
+		// Check first data row
+		if len(sheetRows) > 1 {
+			if sheetRows[1][0] != "1" || sheetRows[1][1] != "Gina" {
+				t.Errorf("Expected first row [1, Gina], got %v", sheetRows[1])
+			}
+		}
+	})
+
+	t.Run("writeXLSXTableData with gzip compression", func(t *testing.T) {
+		// Create test data
+		db, err := Open(filepath.Join("testdata", "excel", "sample.xlsx"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+
+		// Query data from second sheet
+		rows, err := db.QueryContext(context.Background(), "SELECT * FROM sample_Sheet2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+
+		columns, err := rows.Columns()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Create temp output file
+		tempDir := t.TempDir()
+		outputPath := filepath.Join(tempDir, "output.xlsx.gz")
+
+		// Test writeXLSXTableData with compression
+		err = writeXLSXTableData(outputPath, columns, rows, CompressionGZ)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify compressed file was created
+		if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+			t.Error("Compressed output file was not created")
+		}
+
+		// Verify file can be decompressed and read
+		file, err := os.Open(outputPath) //nolint:gosec // Test file path is safe
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+
+		gzipReader, err := gzip.NewReader(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer gzipReader.Close()
+
+		// Read decompressed data into buffer
+		var buf bytes.Buffer
+		if _, err := io.Copy(&buf, gzipReader); err != nil { //nolint:gosec // Test data is safe
+			t.Fatal(err)
+		}
+
+		// Create Excel reader from buffer
+		xlsxFile, err := excelize.OpenReader(&buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer xlsxFile.Close()
+
+		// Check data
+		sheets := xlsxFile.GetSheetList()
+		if len(sheets) != 1 {
+			t.Errorf("Expected 1 sheet, got %d", len(sheets))
+		}
+
+		sheetRows, err := xlsxFile.GetRows(sheets[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Should have header + 3 data rows = 4 total rows
+		if len(sheetRows) != 4 {
+			t.Errorf("Expected 4 rows (1 header + 3 data), got %d", len(sheetRows))
+		}
+
+		// Check header
+		expectedHeaders := []string{"id", "mail"}
+		if !reflect.DeepEqual(sheetRows[0], expectedHeaders) {
+			t.Errorf("Expected headers %v, got %v", expectedHeaders, sheetRows[0])
+		}
+	})
+
+	t.Run("writeXLSXTableData with no columns error", func(t *testing.T) {
+		tempDir := t.TempDir()
+		outputPath := filepath.Join(tempDir, "empty.xlsx")
+
+		// Test with no columns
+		err := writeXLSXTableData(outputPath, []string{}, nil, CompressionNone)
+		if err == nil {
+			t.Error("Expected error for no columns")
+		}
+		if !strings.Contains(err.Error(), "no columns defined") {
+			t.Errorf("Expected 'no columns defined' error, got: %v", err)
+		}
+	})
+
+	t.Run("writeXLSXTableData with unsupported bz2 compression", func(t *testing.T) {
+		// Create test data
+		db, err := Open(filepath.Join("testdata", "excel", "sample.xlsx"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+
+		// Query data from first sheet
+		rows, err := db.QueryContext(context.Background(), "SELECT * FROM sample_Sheet1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+
+		columns, err := rows.Columns()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Create temp output file
+		tempDir := t.TempDir()
+		outputPath := filepath.Join(tempDir, "output.xlsx.bz2")
+
+		// Test writeXLSXTableData with bz2 compression (should fail)
+		err = writeXLSXTableData(outputPath, columns, rows, CompressionBZ2)
+		if err == nil {
+			t.Error("Expected error for unsupported bz2 compression")
+		}
+		if !strings.Contains(err.Error(), "bzip2 compression is not supported") {
+			t.Errorf("Expected 'bzip2 compression is not supported' error, got: %v", err)
+		}
+	})
+
+	t.Run("writeXLSXTableData with xz compression", func(t *testing.T) {
+		// Create test data
+		db, err := Open(filepath.Join("testdata", "excel", "sample.xlsx"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+
+		// Query data from first sheet
+		rows, err := db.QueryContext(context.Background(), "SELECT * FROM sample_Sheet1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+
+		columns, err := rows.Columns()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Create temp output file
+		tempDir := t.TempDir()
+		outputPath := filepath.Join(tempDir, "output.xlsx.xz")
+
+		// Test writeXLSXTableData with xz compression
+		err = writeXLSXTableData(outputPath, columns, rows, CompressionXZ)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify compressed file was created
+		if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+			t.Error("Compressed output file was not created")
+		}
+
+		// Verify file size is reasonable (compressed, but not empty)
+		fileInfo, err := os.Stat(outputPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fileInfo.Size() == 0 {
+			t.Error("Compressed output file is empty")
+		}
+		if fileInfo.Size() < 100 {
+			t.Errorf("Compressed file seems too small: %d bytes", fileInfo.Size())
+		}
+	})
+}
+
+func TestBytesReaderAt(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Size method", func(t *testing.T) {
+		testData := []byte("Hello, World!")
+		reader := &bytesReaderAt{data: testData}
+
+		size := reader.Size()
+		expectedSize := int64(len(testData))
+
+		if size != expectedSize {
+			t.Errorf("Expected size %d, got %d", expectedSize, size)
+		}
+	})
+
+	t.Run("Size method with empty data", func(t *testing.T) {
+		reader := &bytesReaderAt{data: []byte{}}
+
+		size := reader.Size()
+		expectedSize := int64(0)
+
+		if size != expectedSize {
+			t.Errorf("Expected size %d, got %d", expectedSize, size)
+		}
+	})
+
+	t.Run("Read method", func(t *testing.T) {
+		testData := []byte("Hello, World!")
+		reader := &bytesReaderAt{data: testData}
+
+		// Test reading with a buffer larger than data
+		buffer := make([]byte, 20)
+		n, err := reader.Read(buffer)
+
+		if !errors.Is(err, io.EOF) {
+			t.Errorf("Expected io.EOF, got %v", err)
+		}
+		if n != len(testData) {
+			t.Errorf("Expected to read %d bytes, got %d", len(testData), n)
+		}
+
+		// Check that data was read correctly
+		if !bytes.Equal(buffer[:n], testData) {
+			t.Errorf("Expected data %q, got %q", testData, buffer[:n])
+		}
+	})
+
+	t.Run("Read method with smaller buffer", func(t *testing.T) {
+		testData := []byte("Hello, World!")
+		reader := &bytesReaderAt{data: testData}
+
+		// Test reading with a buffer smaller than data
+		buffer := make([]byte, 5)
+		n, err := reader.Read(buffer)
+
+		if err != nil {
+			t.Errorf("Expected no error, got %v", err)
+		}
+		if n != 5 {
+			t.Errorf("Expected to read 5 bytes, got %d", n)
+		}
+
+		// Check that data was read correctly (first 5 bytes)
+		expected := testData[:5]
+		if !bytes.Equal(buffer, expected) {
+			t.Errorf("Expected data %q, got %q", expected, buffer)
+		}
+	})
+
+	t.Run("Read method with empty data", func(t *testing.T) {
+		reader := &bytesReaderAt{data: []byte{}}
+
+		buffer := make([]byte, 10)
+		n, err := reader.Read(buffer)
+
+		if !errors.Is(err, io.EOF) {
+			t.Errorf("Expected io.EOF, got %v", err)
+		}
+		if n != 0 {
+			t.Errorf("Expected to read 0 bytes, got %d", n)
+		}
+	})
+
+	t.Run("ReadAt method coverage", func(t *testing.T) {
+		testData := []byte("Hello, World!")
+		reader := &bytesReaderAt{data: testData}
+
+		// Test reading from the middle
+		buffer := make([]byte, 5)
+		n, err := reader.ReadAt(buffer, 7) // Start at "W"
+
+		if err != nil {
+			t.Errorf("Expected no error, got %v", err)
+		}
+		if n != 5 {
+			t.Errorf("Expected to read 5 bytes, got %d", n)
+		}
+
+		expected := []byte("World")
+		if !bytes.Equal(buffer, expected) {
+			t.Errorf("Expected data %q, got %q", expected, buffer)
+		}
+	})
+
+	t.Run("ReadAt method with offset beyond data", func(t *testing.T) {
+		testData := []byte("Hello")
+		reader := &bytesReaderAt{data: testData}
+
+		buffer := make([]byte, 5)
+		n, err := reader.ReadAt(buffer, 10) // Offset beyond data
+
+		if !errors.Is(err, io.EOF) {
+			t.Errorf("Expected io.EOF, got %v", err)
+		}
+		if n != 0 {
+			t.Errorf("Expected to read 0 bytes, got %d", n)
+		}
+	})
+
+	t.Run("ReadAt method with negative offset", func(t *testing.T) {
+		testData := []byte("Hello")
+		reader := &bytesReaderAt{data: testData}
+
+		buffer := make([]byte, 5)
+		n, err := reader.ReadAt(buffer, -1) // Negative offset
+
+		if !errors.Is(err, io.EOF) {
+			t.Errorf("Expected io.EOF, got %v", err)
+		}
+		if n != 0 {
+			t.Errorf("Expected to read 0 bytes, got %d", n)
+		}
+	})
+
+	t.Run("Seek method coverage", func(t *testing.T) {
+		testData := []byte("Hello, World!")
+		reader := &bytesReaderAt{data: testData}
+
+		// Test SeekStart
+		pos, err := reader.Seek(5, io.SeekStart)
+		if err != nil {
+			t.Errorf("Expected no error for SeekStart, got %v", err)
+		}
+		if pos != 5 {
+			t.Errorf("Expected position 5, got %d", pos)
+		}
+
+		// Test SeekCurrent
+		pos, err = reader.Seek(3, io.SeekCurrent)
+		if err != nil {
+			t.Errorf("Expected no error for SeekCurrent, got %v", err)
+		}
+		if pos != 0 {
+			t.Errorf("Expected position 0 (no tracking), got %d", pos)
+		}
+
+		// Test SeekEnd
+		pos, err = reader.Seek(-2, io.SeekEnd)
+		if err != nil {
+			t.Errorf("Expected no error for SeekEnd, got %v", err)
+		}
+		expected := int64(len(testData)) - 2
+		if pos != expected {
+			t.Errorf("Expected position %d, got %d", expected, pos)
+		}
+
+		// Test invalid whence
+		_, err = reader.Seek(0, 99)
+		if err == nil {
+			t.Error("Expected error for invalid whence")
+		}
+		if !strings.Contains(err.Error(), "invalid whence value") {
+			t.Errorf("Expected 'invalid whence value' error, got: %v", err)
+		}
+	})
+}
+
+func TestExtractValueFromArrowArray(t *testing.T) {
+	t.Parallel()
+	pool := memory.NewGoAllocator()
+
+	t.Run("Boolean array", func(t *testing.T) {
+		builder := array.NewBooleanBuilder(pool)
+		defer builder.Release()
+
+		// Add test values: true, false, null
+		builder.Append(true)
+		builder.Append(false)
+		builder.AppendNull()
+
+		arr := builder.NewBooleanArray()
+		defer arr.Release()
+
+		// Test true value
+		result := extractValueFromArrowArray(arr, 0)
+		if result != "1" {
+			t.Errorf("Expected '1' for true, got '%s'", result)
+		}
+
+		// Test false value
+		result = extractValueFromArrowArray(arr, 1)
+		if result != "0" {
+			t.Errorf("Expected '0' for false, got '%s'", result)
+		}
+
+		// Test null value
+		result = extractValueFromArrowArray(arr, 2)
+		if result != "" {
+			t.Errorf("Expected empty string for null, got '%s'", result)
+		}
+	})
+
+	t.Run("Integer arrays", func(t *testing.T) {
+		// Test Int8
+		int8Builder := array.NewInt8Builder(pool)
+		defer int8Builder.Release()
+		int8Builder.Append(42)
+		int8Builder.AppendNull()
+		int8Arr := int8Builder.NewInt8Array()
+		defer int8Arr.Release()
+
+		result := extractValueFromArrowArray(int8Arr, 0)
+		if result != "42" {
+			t.Errorf("Expected '42' for int8, got '%s'", result)
+		}
+		result = extractValueFromArrowArray(int8Arr, 1)
+		if result != "" {
+			t.Errorf("Expected empty string for null int8, got '%s'", result)
+		}
+
+		// Test Int16
+		int16Builder := array.NewInt16Builder(pool)
+		defer int16Builder.Release()
+		int16Builder.Append(1000)
+		int16Arr := int16Builder.NewInt16Array()
+		defer int16Arr.Release()
+
+		result = extractValueFromArrowArray(int16Arr, 0)
+		if result != "1000" {
+			t.Errorf("Expected '1000' for int16, got '%s'", result)
+		}
+
+		// Test Int32
+		int32Builder := array.NewInt32Builder(pool)
+		defer int32Builder.Release()
+		int32Builder.Append(100000)
+		int32Arr := int32Builder.NewInt32Array()
+		defer int32Arr.Release()
+
+		result = extractValueFromArrowArray(int32Arr, 0)
+		if result != "100000" {
+			t.Errorf("Expected '100000' for int32, got '%s'", result)
+		}
+
+		// Test Int64
+		int64Builder := array.NewInt64Builder(pool)
+		defer int64Builder.Release()
+		int64Builder.Append(9223372036854775807) // Max int64
+		int64Arr := int64Builder.NewInt64Array()
+		defer int64Arr.Release()
+
+		result = extractValueFromArrowArray(int64Arr, 0)
+		if result != "9223372036854775807" {
+			t.Errorf("Expected '9223372036854775807' for int64, got '%s'", result)
+		}
+	})
+
+	t.Run("Unsigned integer arrays", func(t *testing.T) {
+		// Test Uint8
+		uint8Builder := array.NewUint8Builder(pool)
+		defer uint8Builder.Release()
+		uint8Builder.Append(255)
+		uint8Arr := uint8Builder.NewUint8Array()
+		defer uint8Arr.Release()
+
+		result := extractValueFromArrowArray(uint8Arr, 0)
+		if result != "255" {
+			t.Errorf("Expected '255' for uint8, got '%s'", result)
+		}
+
+		// Test Uint16
+		uint16Builder := array.NewUint16Builder(pool)
+		defer uint16Builder.Release()
+		uint16Builder.Append(65535)
+		uint16Arr := uint16Builder.NewUint16Array()
+		defer uint16Arr.Release()
+
+		result = extractValueFromArrowArray(uint16Arr, 0)
+		if result != "65535" {
+			t.Errorf("Expected '65535' for uint16, got '%s'", result)
+		}
+
+		// Test Uint32
+		uint32Builder := array.NewUint32Builder(pool)
+		defer uint32Builder.Release()
+		uint32Builder.Append(4294967295)
+		uint32Arr := uint32Builder.NewUint32Array()
+		defer uint32Arr.Release()
+
+		result = extractValueFromArrowArray(uint32Arr, 0)
+		if result != "4294967295" {
+			t.Errorf("Expected '4294967295' for uint32, got '%s'", result)
+		}
+
+		// Test Uint64
+		uint64Builder := array.NewUint64Builder(pool)
+		defer uint64Builder.Release()
+		uint64Builder.Append(18446744073709551615) // Max uint64
+		uint64Arr := uint64Builder.NewUint64Array()
+		defer uint64Arr.Release()
+
+		result = extractValueFromArrowArray(uint64Arr, 0)
+		if result != "18446744073709551615" {
+			t.Errorf("Expected '18446744073709551615' for uint64, got '%s'", result)
+		}
+	})
+
+	t.Run("Float arrays", func(t *testing.T) {
+		// Test Float32
+		float32Builder := array.NewFloat32Builder(pool)
+		defer float32Builder.Release()
+		float32Builder.Append(3.14159)
+		float32Builder.AppendNull()
+		float32Arr := float32Builder.NewFloat32Array()
+		defer float32Arr.Release()
+
+		result := extractValueFromArrowArray(float32Arr, 0)
+		if result != "3.14159" {
+			t.Errorf("Expected '3.14159' for float32, got '%s'", result)
+		}
+		result = extractValueFromArrowArray(float32Arr, 1)
+		if result != "" {
+			t.Errorf("Expected empty string for null float32, got '%s'", result)
+		}
+
+		// Test Float64
+		float64Builder := array.NewFloat64Builder(pool)
+		defer float64Builder.Release()
+		float64Builder.Append(2.718281828459045)
+		float64Arr := float64Builder.NewFloat64Array()
+		defer float64Arr.Release()
+
+		result = extractValueFromArrowArray(float64Arr, 0)
+		if result != "2.718281828459045" {
+			t.Errorf("Expected '2.718281828459045' for float64, got '%s'", result)
+		}
+	})
+
+	t.Run("String array", func(t *testing.T) {
+		stringBuilder := array.NewStringBuilder(pool)
+		defer stringBuilder.Release()
+
+		stringBuilder.Append("Hello, World!")
+		stringBuilder.Append("")
+		stringBuilder.AppendNull()
+
+		stringArr := stringBuilder.NewStringArray()
+		defer stringArr.Release()
+
+		// Test normal string
+		result := extractValueFromArrowArray(stringArr, 0)
+		if result != "Hello, World!" {
+			t.Errorf("Expected 'Hello, World!', got '%s'", result)
+		}
+
+		// Test empty string
+		result = extractValueFromArrowArray(stringArr, 1)
+		if result != "" {
+			t.Errorf("Expected empty string, got '%s'", result)
+		}
+
+		// Test null string
+		result = extractValueFromArrowArray(stringArr, 2)
+		if result != "" {
+			t.Errorf("Expected empty string for null, got '%s'", result)
+		}
+	})
+
+	t.Run("Binary array", func(t *testing.T) {
+		binaryBuilder := array.NewBinaryBuilder(pool, arrow.BinaryTypes.Binary)
+		defer binaryBuilder.Release()
+
+		testData := []byte("binary data")
+		binaryBuilder.Append(testData)
+		binaryBuilder.AppendNull()
+
+		binaryArr := binaryBuilder.NewBinaryArray()
+		defer binaryArr.Release()
+
+		// Test binary data
+		result := extractValueFromArrowArray(binaryArr, 0)
+		if result != "binary data" {
+			t.Errorf("Expected 'binary data', got '%s'", result)
+		}
+
+		// Test null binary
+		result = extractValueFromArrowArray(binaryArr, 1)
+		if result != "" {
+			t.Errorf("Expected empty string for null binary, got '%s'", result)
+		}
+	})
+
+	t.Run("Date arrays", func(t *testing.T) {
+		// Test Date32
+		date32Builder := array.NewDate32Builder(pool)
+		defer date32Builder.Release()
+		date32Builder.Append(arrow.Date32(18628)) // Some arbitrary date
+		date32Arr := date32Builder.NewDate32Array()
+		defer date32Arr.Release()
+
+		result := extractValueFromArrowArray(date32Arr, 0)
+		if result != "18628" {
+			t.Errorf("Expected '18628' for date32, got '%s'", result)
+		}
+
+		// Test Date64
+		date64Builder := array.NewDate64Builder(pool)
+		defer date64Builder.Release()
+		date64Builder.Append(arrow.Date64(1609459200000)) // 2021-01-01 in milliseconds
+		date64Arr := date64Builder.NewDate64Array()
+		defer date64Arr.Release()
+
+		result = extractValueFromArrowArray(date64Arr, 0)
+		if result != "1609459200000" {
+			t.Errorf("Expected '1609459200000' for date64, got '%s'", result)
+		}
+	})
+
+	t.Run("Timestamp array", func(t *testing.T) {
+		timestampBuilder := array.NewTimestampBuilder(pool, &arrow.TimestampType{Unit: arrow.Millisecond})
+		defer timestampBuilder.Release()
+		timestampBuilder.Append(arrow.Timestamp(1609459200000)) // 2021-01-01 in milliseconds
+		timestampArr := timestampBuilder.NewTimestampArray()
+		defer timestampArr.Release()
+
+		result := extractValueFromArrowArray(timestampArr, 0)
+		if result != "1609459200000" {
+			t.Errorf("Expected '1609459200000' for timestamp, got '%s'", result)
+		}
+	})
+
+	t.Run("Default case with unsupported type", func(t *testing.T) {
+		// Create a list array (unsupported type)
+		listBuilder := array.NewListBuilder(pool, arrow.PrimitiveTypes.Int32)
+		defer listBuilder.Release()
+
+		valueBuilder, ok := listBuilder.ValueBuilder().(*array.Int32Builder)
+		if !ok {
+			t.Fatal("Failed to cast value builder to Int32Builder")
+		}
+		listBuilder.Append(true)
+		valueBuilder.Append(1)
+		valueBuilder.Append(2)
+		valueBuilder.Append(3)
+
+		listArr := listBuilder.NewListArray()
+		defer listArr.Release()
+
+		// This should hit the default case
+		result := extractValueFromArrowArray(listArr, 0)
+
+		// The result should be some string representation - we don't check exact format
+		// since it uses GetOneForMarshal which may vary
+		if result == "" {
+			t.Error("Expected some string representation for unsupported type, got empty string")
 		}
 	})
 }

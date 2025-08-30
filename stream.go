@@ -15,6 +15,7 @@ import (
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
+	"github.com/xuri/excelize/v2"
 )
 
 // handleCloseError is a helper function to handle close errors consistently
@@ -62,6 +63,8 @@ func (p *streamingParser) parseFromReader(reader io.Reader) (*table, error) {
 		return p.parseLTSVStream(decompressedReader)
 	case FileTypeParquet:
 		return p.parseParquetStream(decompressedReader)
+	case FileTypeXLSX:
+		return p.parseXLSXStream(decompressedReader)
 	default:
 		return nil, errors.New("unsupported file type")
 	}
@@ -70,25 +73,25 @@ func (p *streamingParser) parseFromReader(reader io.Reader) (*table, error) {
 // createDecompressedReader creates appropriate reader based on compression type
 func (p *streamingParser) createDecompressedReader(reader io.Reader) (io.Reader, func() error, error) {
 	switch p.fileType {
-	case FileTypeCSVGZ, FileTypeTSVGZ, FileTypeLTSVGZ:
+	case FileTypeCSVGZ, FileTypeTSVGZ, FileTypeLTSVGZ, FileTypeXLSXGZ:
 		gzReader, err := gzip.NewReader(reader)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create gzip reader: %w", err)
 		}
 		return gzReader, gzReader.Close, nil
 
-	case FileTypeCSVBZ2, FileTypeTSVBZ2, FileTypeLTSVBZ2:
+	case FileTypeCSVBZ2, FileTypeTSVBZ2, FileTypeLTSVBZ2, FileTypeXLSXBZ2:
 		bz2Reader := bzip2.NewReader(reader)
 		return bz2Reader, nil, nil
 
-	case FileTypeCSVXZ, FileTypeTSVXZ, FileTypeLTSVXZ:
+	case FileTypeCSVXZ, FileTypeTSVXZ, FileTypeLTSVXZ, FileTypeXLSXXZ:
 		xzReader, err := xz.NewReader(reader)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create xz reader: %w", err)
 		}
 		return xzReader, nil, nil
 
-	case FileTypeCSVZSTD, FileTypeTSVZSTD, FileTypeLTSVZSTD:
+	case FileTypeCSVZSTD, FileTypeTSVZSTD, FileTypeLTSVZSTD, FileTypeXLSXZSTD:
 		decoder, err := zstd.NewReader(reader)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create zstd reader: %w", err)
@@ -710,4 +713,70 @@ func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chu
 	}
 
 	return nil
+}
+
+// parseXLSXStream parses XLSX data from reader using streaming approach
+// Note: XLSX requires loading entire file into memory due to ZIP format limitations
+// For multiple sheets, only the first sheet is processed (streaming parser limitation)
+// Use Open/OpenContext for full multi-sheet support with 1-sheet-1-table structure
+func (p *streamingParser) parseXLSXStream(reader io.Reader) (*table, error) {
+	// Open XLSX directly from the reader (excelize will buffer as needed)
+	xlsxFile, err := excelize.OpenReader(reader)
+	if err != nil {
+		// excelize returns an error on empty/invalid input; bubble it up
+		return nil, fmt.Errorf("failed to open XLSX file: %w", err)
+	}
+	defer func() {
+		_ = xlsxFile.Close() // Ignore close error
+	}()
+
+	// Get all sheet names
+	sheetNames := xlsxFile.GetSheetList()
+	if len(sheetNames) == 0 {
+		return nil, errors.New("no sheets found in XLSX file")
+	}
+
+	// With the streaming parser, we only process the first sheet
+	sheetName := sheetNames[0]
+	iter, err := xlsxFile.Rows(sheetName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open rows iterator for sheet %s: %w", sheetName, err)
+	}
+	defer iter.Close()
+
+	var (
+		headers header
+		records []record
+		first   = true
+	)
+	for iter.Next() {
+		row, err := iter.Columns()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read row in sheet %s: %w", sheetName, err)
+		}
+		// Skip leading empty rows
+		if first && len(row) == 0 {
+			continue
+		}
+		if first {
+			// Duplicate header check (parity with CSV/TSV)
+			seen := make(map[string]bool, len(row))
+			for _, col := range row {
+				if seen[col] {
+					return nil, fmt.Errorf("%w: %s", errDuplicateColumnName, col)
+				}
+				seen[col] = true
+			}
+			headers = newHeader(row)
+			first = false
+			continue
+		}
+		records = append(records, newRecord(row))
+	}
+
+	if len(headers) == 0 {
+		return nil, fmt.Errorf("sheet %s is empty in XLSX file", sheetName)
+	}
+
+	return newTable(p.tableName, headers, records), nil
 }

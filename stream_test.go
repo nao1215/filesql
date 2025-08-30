@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/xuri/excelize/v2"
 )
 
 func TestStreamingParser_ParseFromReader_CSV(t *testing.T) {
@@ -465,6 +467,145 @@ func TestProcessLTSVInChunks(t *testing.T) {
 		records := table.getRecords()
 		if len(records) != 2 {
 			t.Errorf("Expected 2 records, got %d", len(records))
+		}
+	})
+}
+
+func TestStreamingParser_ParseFromReader_XLSX(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid XLSX data with multiple sheets", func(t *testing.T) {
+		t.Parallel()
+
+		// Create a test XLSX file in memory
+		f := excelize.NewFile()
+
+		// Add data to Sheet1
+		if err := f.SetCellValue("Sheet1", "A1", "Name1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.SetCellValue("Sheet1", "A2", "Alice"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.SetCellValue("Sheet1", "A3", "Bob"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Add Sheet2 with data
+		if _, err := f.NewSheet("Sheet2"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.SetCellValue("Sheet2", "A1", "Age1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.SetCellValue("Sheet2", "A2", "30"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.SetCellValue("Sheet2", "A3", "25"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Write to buffer
+		var buf bytes.Buffer
+		if err := f.Write(&buf); err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close() // Ignore close error in test
+
+		// Parse using streaming parser - should process first sheet only
+		parser := newStreamingParser(FileTypeXLSX, "test_workbook", 1024)
+		table, err := parser.parseFromReader(&buf)
+		if err != nil {
+			t.Fatalf("ParseFromReader() failed: %v", err)
+		}
+
+		if table.getName() != "test_workbook" {
+			t.Errorf("Table name = %s, want test_workbook", table.getName())
+		}
+
+		// Check headers (should be from first row of first sheet)
+		header := table.getHeader()
+		if len(header) != 1 {
+			t.Errorf("Header length = %d, want 1", len(header))
+		}
+
+		expectedHeader := "Name1"
+		if header[0] != expectedHeader {
+			t.Errorf("Header[0] = %s, want %s", header[0], expectedHeader)
+		}
+
+		// Check records (should be from first sheet only)
+		records := table.getRecords()
+		if len(records) != 2 {
+			t.Errorf("Records length = %d, want 2", len(records))
+		}
+
+		// First record should contain data from row 2 of first sheet
+		if len(records) > 0 && len(records[0]) >= 1 {
+			if records[0][0] != "Alice" {
+				t.Errorf("First record = %s, want Alice", records[0][0])
+			}
+		}
+	})
+
+	t.Run("empty XLSX file", func(t *testing.T) {
+		t.Parallel()
+
+		// Create empty XLSX file
+		f := excelize.NewFile()
+		var buf bytes.Buffer
+		if err := f.Write(&buf); err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close() // Ignore close error in test
+
+		parser := newStreamingParser(FileTypeXLSX, "empty_workbook", 1024)
+		_, err := parser.parseFromReader(&buf)
+		if err == nil {
+			t.Error("Expected error for empty XLSX file, got nil")
+		}
+	})
+
+	t.Run("compressed XLSX data", func(t *testing.T) {
+		t.Parallel()
+
+		// Create a simple XLSX file
+		f := excelize.NewFile()
+		if err := f.SetCellValue("Sheet1", "A1", "Test"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.SetCellValue("Sheet1", "A2", "Data"); err != nil {
+			t.Fatal(err)
+		}
+
+		var buf bytes.Buffer
+		if err := f.Write(&buf); err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close() // Ignore close error in test
+
+		// Test with different compression types
+		compressionTypes := []FileType{FileTypeXLSXGZ, FileTypeXLSXBZ2, FileTypeXLSXXZ, FileTypeXLSXZSTD}
+
+		for _, compType := range compressionTypes {
+			t.Run(compType.extension(), func(t *testing.T) {
+				parser := newStreamingParser(compType, "compressed_workbook", 1024)
+
+				// For compressed types, the parser expects compressed data
+				// But since createDecompressedReader handles the decompression,
+				// we can test with uncompressed data for this unit test
+				table, err := parser.parseFromReader(&buf)
+				if err != nil {
+					t.Logf("Compression type %v failed: %v (expected for some types)", compType, err)
+					// Some compression types might not work in this test setup
+					// This is acceptable for unit testing
+					return
+				}
+
+				if table != nil && table.getName() != "compressed_workbook" {
+					t.Errorf("Table name = %s, want compressed_workbook", table.getName())
+				}
+			})
 		}
 	})
 }

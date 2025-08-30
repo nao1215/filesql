@@ -1405,7 +1405,7 @@ func ExampleDumpDatabase_withOptions() {
 	defer os.RemoveAll(tempDir)
 
 	// Open CSV file
-	db, err := filesql.Open("testdata/sample.csv")
+	db, err := filesql.Open(filepath.Join("testdata", "sample.csv"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1482,7 +1482,7 @@ func ExampleDumpDatabase_multipleFormats() {
 	defer os.RemoveAll(tempDir)
 
 	// Open CSV file and modify data
-	db, err := filesql.Open("testdata/sample.csv")
+	db, err := filesql.Open(filepath.Join("testdata", "sample.csv"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1578,7 +1578,7 @@ func ExampleDumpDatabase_dataProcessing() {
 	defer os.RemoveAll(tempDir)
 
 	// Open CSV file
-	db, err := filesql.Open("testdata/sample.csv")
+	db, err := filesql.Open(filepath.Join("testdata", "sample.csv"))
 	if err != nil {
 		log.Fatal(err)
 	}

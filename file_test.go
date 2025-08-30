@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/xuri/excelize/v2"
 )
 
 func TestNewFile(t *testing.T) {
@@ -51,6 +53,31 @@ func TestNewFile(t *testing.T) {
 			name:     "Zstd compressed CSV file",
 			path:     "test.csv.zst",
 			expected: FileTypeCSVZSTD,
+		},
+		{
+			name:     "XLSX file",
+			path:     "test.xlsx",
+			expected: FileTypeXLSX,
+		},
+		{
+			name:     "Compressed XLSX file with gzip",
+			path:     "test.xlsx.gz",
+			expected: FileTypeXLSXGZ,
+		},
+		{
+			name:     "Compressed XLSX file with bzip2",
+			path:     "test.xlsx.bz2",
+			expected: FileTypeXLSXBZ2,
+		},
+		{
+			name:     "Compressed XLSX file with xz",
+			path:     "test.xlsx.xz",
+			expected: FileTypeXLSXXZ,
+		},
+		{
+			name:     "Compressed XLSX file with zstd",
+			path:     "test.xlsx.zst",
+			expected: FileTypeXLSXZSTD,
 		},
 		{
 			name:     "Unsupported file",
@@ -547,7 +574,7 @@ func Test_isSupportedFile(t *testing.T) {
 		{"test.txt", false},
 		{"test.json", false},
 		{"test.xml", false},
-		{"test.xlsx", false},
+		{"test.xlsx", true},
 		{"test", false},
 		{"", false},
 
@@ -779,6 +806,11 @@ func TestFileTypeExtension(t *testing.T) {
 		{"TSV BZ2", FileTypeTSVBZ2, ".tsv.bz2"},
 		{"LTSV XZ", FileTypeLTSVXZ, ".ltsv.xz"},
 		{"CSV ZSTD", FileTypeCSVZSTD, ".csv.zst"},
+		{"XLSX", FileTypeXLSX, ".xlsx"},
+		{"XLSX GZ", FileTypeXLSXGZ, ".xlsx.gz"},
+		{"XLSX BZ2", FileTypeXLSXBZ2, ".xlsx.bz2"},
+		{"XLSX XZ", FileTypeXLSXXZ, ".xlsx.xz"},
+		{"XLSX ZSTD", FileTypeXLSXZSTD, ".xlsx.zst"},
 		{"Parquet GZ", FileTypeParquetGZ, ".parquet.gz"},
 		{"Parquet BZ2", FileTypeParquetBZ2, ".parquet.bz2"},
 		{"Parquet XZ", FileTypeParquetXZ, ".parquet.xz"},
@@ -841,8 +873,8 @@ func TestGetSupportedFilePatterns(t *testing.T) {
 
 	patterns := supportedFileExtPatterns()
 
-	// Should have 20 patterns: 4 base extensions × 5 compression variants (including none)
-	expectedCount := 20
+	// Should have 25 patterns: 5 base extensions × 5 compression variants (including none)
+	expectedCount := 25
 	if len(patterns) != expectedCount {
 		t.Errorf("GetSupportedFilePatterns() returned %d patterns, want %d", len(patterns), expectedCount)
 	}
@@ -853,6 +885,7 @@ func TestGetSupportedFilePatterns(t *testing.T) {
 		"*.tsv", "*.tsv.gz", "*.tsv.bz2", "*.tsv.xz", "*.tsv.zst",
 		"*.ltsv", "*.ltsv.gz", "*.ltsv.bz2", "*.ltsv.xz", "*.ltsv.zst",
 		"*.parquet", "*.parquet.gz", "*.parquet.bz2", "*.parquet.xz", "*.parquet.zst",
+		"*.xlsx", "*.xlsx.gz", "*.xlsx.bz2", "*.xlsx.xz", "*.xlsx.zst",
 	}
 
 	for _, expected := range expectedPatterns {
@@ -1072,10 +1105,13 @@ func TestIsSupportedExtension(t *testing.T) {
 		{".csv.gz", true},
 		{".tsv.bz2", true},
 		{".ltsv.xz", true},
+		{".xlsx", true},
+		{".xlsx.gz", true},
 		{".txt", false},
 		{".json", false},
 		{".CSV", true},    // Should work with uppercase
 		{".TSV.GZ", true}, // Should work with uppercase
+		{".XLSX", true},   // Should work with uppercase
 		{"", false},
 	}
 
@@ -1214,6 +1250,320 @@ func TestCreateDecompressedReader(t *testing.T) {
 		_, _, err := parser.createDecompressedReader(reader)
 		if err == nil {
 			t.Error("createDecompressedReader should error for invalid gzip data")
+		}
+	})
+}
+
+// TestFile_ParseXLSX tests XLSX parsing functionality
+func TestFile_ParseXLSX(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Simple XLSX file with multiple sheets", func(t *testing.T) {
+		t.Parallel()
+
+		// Create a temporary XLSX file for testing
+		tmpDir := t.TempDir()
+		xlsxFile := filepath.Join(tmpDir, "test.xlsx")
+
+		// Create XLSX file with test data
+		f := excelize.NewFile()
+
+		// Create Sheet1 with some data
+		if err := f.SetCellValue("Sheet1", "A1", "Alice"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.SetCellValue("Sheet1", "A2", "Bob"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.SetCellValue("Sheet1", "A3", "Charlie"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Create Sheet2 with some data
+		if _, err := f.NewSheet("Sheet2"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.SetCellValue("Sheet2", "A1", "Data1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.SetCellValue("Sheet2", "A2", "Data2"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Create Sheet3 with some data
+		if _, err := f.NewSheet("Sheet3"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.SetCellValue("Sheet3", "A1", "Value1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.SetCellValue("Sheet3", "A2", "Value2"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.SetCellValue("Sheet3", "A3", "Value3"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Save the file
+		if err := f.SaveAs(xlsxFile); err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close() // Ignore close error in test
+
+		// Parse the file - should process first sheet only
+		file := newFile(xlsxFile)
+		table, err := file.toTable()
+		if err != nil {
+			t.Fatalf("Failed to parse XLSX file: %v", err)
+		}
+
+		if table == nil {
+			t.Fatal("Table should not be nil")
+		}
+
+		// Check headers (should be from first row of first sheet)
+		headers := table.getHeader()
+		expectedHeaders := []string{"Alice"} // First row of Sheet1
+		if len(headers) != len(expectedHeaders) {
+			t.Errorf("Expected %d headers, got %d", len(expectedHeaders), len(headers))
+		}
+
+		for i, expected := range expectedHeaders {
+			if i < len(headers) && headers[i] != expected {
+				t.Errorf("Expected header[%d] to be %s, got %s", i, expected, headers[i])
+			}
+		}
+
+		// Check records (should be from remaining rows of first sheet only)
+		records := table.getRecords()
+		if len(records) != 2 { // "Bob", "Charlie"
+			t.Errorf("Expected 2 records, got %d", len(records))
+		}
+	})
+
+	t.Run("Empty XLSX file", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		xlsxFile := filepath.Join(tmpDir, "empty.xlsx")
+
+		// Create empty XLSX file
+		f := excelize.NewFile()
+		if err := f.SaveAs(xlsxFile); err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close() // Ignore close error in test
+
+		file := newFile(xlsxFile)
+		_, err := file.toTable()
+		if err == nil {
+			t.Error("Expected error for empty XLSX file")
+		}
+	})
+
+	t.Run("XLSX file with single sheet", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		xlsxFile := filepath.Join(tmpDir, "single_sheet.xlsx")
+
+		// Create XLSX file with single sheet
+		f := excelize.NewFile()
+		if err := f.SetCellValue("Sheet1", "A1", "Header1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.SetCellValue("Sheet1", "A2", "Row1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.SetCellValue("Sheet1", "A3", "Row2"); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := f.SaveAs(xlsxFile); err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close() // Ignore close error in test
+
+		file := newFile(xlsxFile)
+		table, err := file.toTable()
+		if err != nil {
+			t.Fatalf("Failed to parse single sheet XLSX file: %v", err)
+		}
+
+		headers := table.getHeader()
+		if len(headers) != 1 || headers[0] != "Header1" {
+			t.Errorf("Expected single header 'Header1', got %v", headers)
+		}
+
+		records := table.getRecords()
+		if len(records) != 2 {
+			t.Errorf("Expected 2 records, got %d", len(records))
+		}
+
+		// Check that records contain the data rows (Row1, Row2)
+		expectedRecords := [][]string{{"Row1"}, {"Row2"}}
+		for i, expectedRecord := range expectedRecords {
+			if i < len(records) {
+				for j, expectedValue := range expectedRecord {
+					if j < len(records[i]) && records[i][j] != expectedValue {
+						t.Errorf("Record[%d][%d]: expected %s, got %s", i, j, expectedValue, records[i][j])
+					}
+				}
+			}
+		}
+	})
+}
+
+// TestFile_IsXLSX tests the isXLSX method
+func TestFile_IsXLSX(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name     string
+		filePath string
+		expected bool
+	}{
+		{
+			name:     "XLSX file",
+			filePath: "test.xlsx",
+			expected: true,
+		},
+		{
+			name:     "Compressed XLSX file",
+			filePath: "test.xlsx.gz",
+			expected: true,
+		},
+		{
+			name:     "CSV file",
+			filePath: "test.csv",
+			expected: false,
+		},
+		{
+			name:     "TSV file",
+			filePath: "test.tsv",
+			expected: false,
+		},
+		{
+			name:     "Unsupported file",
+			filePath: "test.txt",
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			file := newFile(tc.filePath)
+			result := file.isXLSX()
+			if result != tc.expected {
+				t.Errorf("IsXLSX() = %v, expected %v for %s", result, tc.expected, tc.filePath)
+			}
+		})
+	}
+}
+
+// TestConvertXLSXRowsToTable tests the convertXLSXRowsToTable function
+func TestConvertXLSXRowsToTable(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Normal conversion", func(t *testing.T) {
+		t.Parallel()
+
+		rows := [][]string{
+			{"Name", "Age", "City"},
+			{"Alice", "25", "Tokyo"},
+			{"Bob", "30", "Osaka"},
+		}
+
+		headers, records := convertXLSXRowsToTable(rows)
+
+		// Check headers
+		expectedHeaders := []string{"Name", "Age", "City"}
+		if len(headers) != len(expectedHeaders) {
+			t.Errorf("Expected %d headers, got %d", len(expectedHeaders), len(headers))
+		}
+		for i, expected := range expectedHeaders {
+			if headers[i] != expected {
+				t.Errorf("Header[%d] = %s, expected %s", i, headers[i], expected)
+			}
+		}
+
+		// Check records
+		expectedRecords := [][]string{
+			{"Alice", "25", "Tokyo"},
+			{"Bob", "30", "Osaka"},
+		}
+		if len(records) != len(expectedRecords) {
+			t.Errorf("Expected %d records, got %d", len(expectedRecords), len(records))
+		}
+		for i, expectedRecord := range expectedRecords {
+			if len(records[i]) != len(expectedRecord) {
+				t.Errorf("Record[%d] length = %d, expected %d", i, len(records[i]), len(expectedRecord))
+			}
+			for j, expected := range expectedRecord {
+				if records[i][j] != expected {
+					t.Errorf("Record[%d][%d] = %s, expected %s", i, j, records[i][j], expected)
+				}
+			}
+		}
+	})
+
+	t.Run("Empty rows", func(t *testing.T) {
+		t.Parallel()
+
+		var rows [][]string
+		headers, records := convertXLSXRowsToTable(rows)
+
+		if len(headers) != 0 {
+			t.Errorf("Expected empty headers, got %d", len(headers))
+		}
+		if len(records) != 0 {
+			t.Errorf("Expected empty records, got %d", len(records))
+		}
+	})
+
+	t.Run("Only headers", func(t *testing.T) {
+		t.Parallel()
+
+		rows := [][]string{
+			{"Name", "Age"},
+		}
+
+		headers, records := convertXLSXRowsToTable(rows)
+
+		expectedHeaders := []string{"Name", "Age"}
+		if len(headers) != len(expectedHeaders) {
+			t.Errorf("Expected %d headers, got %d", len(expectedHeaders), len(headers))
+		}
+		if len(records) != 0 {
+			t.Errorf("Expected no records, got %d", len(records))
+		}
+	})
+
+	t.Run("Uneven rows (padding)", func(t *testing.T) {
+		t.Parallel()
+
+		rows := [][]string{
+			{"Name", "Age", "City"},
+			{"Alice", "25"},                 // Missing city
+			{"Bob", "30", "Osaka", "Extra"}, // Extra field (ignored)
+		}
+
+		headers, records := convertXLSXRowsToTable(rows)
+
+		// Check headers length
+		if len(headers) != 3 {
+			t.Errorf("Expected 3 headers, got %d", len(headers))
+		}
+
+		// Check that missing fields are padded
+		if records[0][2] != "" {
+			t.Errorf("Expected empty padding for missing field, got %s", records[0][2])
+		}
+		// Check that extra fields don't cause issues
+		if len(records[1]) != 3 {
+			t.Errorf("Expected record length 3, got %d", len(records[1]))
 		}
 	})
 }

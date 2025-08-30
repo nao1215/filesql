@@ -12,6 +12,8 @@ const (
 	OutputFormatLTSV
 	// OutputFormatParquet represents Parquet output format
 	OutputFormatParquet
+	// OutputFormatXLSX represents Excel XLSX output format
+	OutputFormatXLSX
 )
 
 // String returns the string representation of OutputFormat
@@ -25,6 +27,8 @@ func (f OutputFormat) String() string {
 		return "ltsv"
 	case OutputFormatParquet:
 		return "parquet"
+	case OutputFormatXLSX:
+		return "xlsx"
 	default:
 		return "csv"
 	}
@@ -41,6 +45,8 @@ func (f OutputFormat) Extension() string {
 		return ".ltsv"
 	case OutputFormatParquet:
 		return ".parquet"
+	case OutputFormatXLSX:
+		return ".xlsx"
 	default:
 		return ".csv"
 	}

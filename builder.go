@@ -2,6 +2,7 @@ package filesql
 
 import (
 	"bufio"
+	"bytes"
 	"compress/bzip2"
 	"compress/gzip"
 	"context"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
+	"github.com/xuri/excelize/v2"
 	"modernc.org/sqlite" // Direct SQLite driver usage
 )
 
@@ -516,34 +518,39 @@ func (b *DBBuilder) processFSToReaders(_ context.Context, filesystem fs.FS) ([]r
 	}
 
 	// Also search recursively in subdirectories
-	err := fs.WalkDir(filesystem, ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if isSupportedFile(path) {
-			// Check if already found by glob patterns
-			// Use path.Clean to normalize paths for comparison (fs.FS uses forward slashes)
-			normalizedPath := filepath.ToSlash(path)
-			found := false
-			for _, existing := range allMatches {
-				normalizedExisting := filepath.ToSlash(existing)
-				if normalizedExisting == normalizedPath {
-					found = true
-					break
+	// Check if "." exists in the filesystem before walking
+	if _, err := fs.Stat(filesystem, "."); err == nil {
+		// "." exists, we can safely walk the filesystem
+		walkErr := fs.WalkDir(filesystem, ".", func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			if isSupportedFile(path) {
+				// Check if already found by glob patterns
+				// Use path.Clean to normalize paths for comparison (fs.FS uses forward slashes)
+				normalizedPath := filepath.ToSlash(path)
+				found := false
+				for _, existing := range allMatches {
+					normalizedExisting := filepath.ToSlash(existing)
+					if normalizedExisting == normalizedPath {
+						found = true
+						break
+					}
+				}
+				if !found {
+					allMatches = append(allMatches, path)
 				}
 			}
-			if !found {
-				allMatches = append(allMatches, path)
-			}
+			return nil
+		})
+		if walkErr != nil {
+			return nil, fmt.Errorf("failed to walk filesystem: %w", walkErr)
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to walk filesystem: %w", err)
 	}
+	// If "." doesn't exist, we'll just use what we found with glob patterns
 
 	if len(allMatches) == 0 {
 		return nil, errors.New("no supported files found in filesystem")
@@ -609,18 +616,230 @@ func (b *DBBuilder) streamFileToSQLite(ctx context.Context, db *sql.DB, filePath
 
 	// Create file model to determine type and table name
 	fileModel := newFile(filePath)
-	tableName := tableFromFilePath(filePath)
+	baseFileType := fileModel.getFileType().baseType()
+
+	// Handle XLSX files specially - each sheet becomes a separate table
+	if baseFileType == FileTypeXLSX {
+		return b.streamXLSXFileToSQLite(ctx, db, reader, filePath)
+	}
 
 	// Create reader input for streaming
 	// Note: Since we've already decompressed the reader, use the base file type
 	readerInput := readerInput{
 		reader:    reader,
-		tableName: tableName,
-		fileType:  fileModel.getFileType().baseType(),
+		tableName: tableFromFilePath(filePath),
+		fileType:  baseFileType,
+	}
+	return b.streamReaderToSQLite(ctx, db, readerInput)
+}
+
+// streamXLSXFileToSQLite handles XLSX files by creating separate tables for each sheet
+func (b *DBBuilder) streamXLSXFileToSQLite(ctx context.Context, db *sql.DB, reader io.Reader, filePath string) error {
+	// Read all data into memory (XLSX requires random access)
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read XLSX data: %w", err)
 	}
 
-	// Use existing streaming logic
-	return b.streamReaderToSQLite(ctx, db, readerInput)
+	if len(data) == 0 {
+		return errors.New("empty XLSX file")
+	}
+
+	// Open XLSX file from bytes
+	xlsxFile, err := excelize.OpenReader(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("failed to open XLSX file: %w", err)
+	}
+	defer func() {
+		_ = xlsxFile.Close() // Ignore close error
+	}()
+
+	// Get all sheet names
+	sheetNames := xlsxFile.GetSheetList()
+	if len(sheetNames) == 0 {
+		return errors.New("no sheets found in XLSX file")
+	}
+
+	// Base table name from file path (sanitize to ensure a valid identifier)
+	baseTableName := sanitizeTableName(tableFromFilePath(filePath))
+
+	// Process each sheet as a separate table
+	for _, sheetName := range sheetNames {
+		rows, err := xlsxFile.GetRows(sheetName)
+		if err != nil {
+			return fmt.Errorf("failed to read sheet %s: %w", sheetName, err)
+		}
+
+		// Skip empty sheets
+		if len(rows) == 0 {
+			continue
+		}
+
+		// Create table name: filename_sheetname
+		tableName := fmt.Sprintf("%s_%s", baseTableName, sanitizeTableName(sheetName))
+
+		// Check if table already exists
+		var tableExists int
+		err = db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`,
+			tableName,
+		).Scan(&tableExists)
+		if err != nil {
+			return fmt.Errorf("failed to check table existence: %w", err)
+		}
+
+		if tableExists > 0 {
+			return fmt.Errorf("table '%s' already exists, duplicate table names are not allowed", tableName)
+		}
+
+		// Process sheet data
+		if err := b.createTableFromXLSXSheet(ctx, db, tableName, rows); err != nil {
+			return fmt.Errorf("failed to create table from sheet %s: %w", sheetName, err)
+		}
+	}
+
+	return nil
+}
+
+// sanitizeTableName removes invalid characters from table names
+func sanitizeTableName(name string) string {
+	// Replace spaces and invalid characters with underscores
+	result := strings.ReplaceAll(name, " ", "_")
+	result = strings.ReplaceAll(result, "-", "_")
+	result = strings.ReplaceAll(result, ".", "_")
+
+	// Remove any non-alphanumeric characters except underscore
+	var sanitized strings.Builder
+	for _, r := range result {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			sanitized.WriteRune(r)
+		}
+	}
+
+	finalResult := sanitized.String()
+
+	// Ensure it doesn't start with a number
+	if len(finalResult) > 0 && finalResult[0] >= '0' && finalResult[0] <= '9' {
+		finalResult = "sheet_" + finalResult
+	}
+
+	// Ensure it's not empty
+	if finalResult == "" {
+		finalResult = "sheet"
+	}
+
+	return finalResult
+}
+
+// createTableFromXLSXSheet creates a SQLite table from XLSX sheet data
+func (b *DBBuilder) createTableFromXLSXSheet(ctx context.Context, db *sql.DB, tableName string, rows [][]string) error {
+	if len(rows) == 0 {
+		return errors.New("no rows in sheet")
+	}
+
+	// First row is header
+	headers := rows[0]
+	if len(headers) == 0 {
+		return errors.New("no columns in sheet header")
+	}
+
+	// Check for duplicate column names
+	columnsSeen := make(map[string]bool)
+	for _, col := range headers {
+		if columnsSeen[col] {
+			return fmt.Errorf("%w: %s", errDuplicateColumnName, col)
+		}
+		columnsSeen[col] = true
+	}
+
+	// Collect data rows for type inference
+	dataRows := make([][]string, 0, len(rows)-1)
+	for i := 1; i < len(rows); i++ {
+		dataRows = append(dataRows, rows[i])
+	}
+
+	// Create records for type inference
+	records := make([]record, len(dataRows))
+	for i, row := range dataRows {
+		// Pad row with empty strings if necessary
+		paddedRow := make(record, len(headers))
+		for j := range headers {
+			if j < len(row) {
+				paddedRow[j] = row[j]
+			} else {
+				paddedRow[j] = ""
+			}
+		}
+		records[i] = paddedRow
+	}
+
+	// Infer column types
+	headerObj := header(headers)
+	columnInfo := inferColumnsInfo(headerObj, records)
+
+	// Create table
+	if err := b.createSQLiteTable(ctx, db, tableName, columnInfo); err != nil {
+		return fmt.Errorf("failed to create SQLite table: %w", err)
+	}
+
+	// Insert data
+	if len(records) > 0 {
+		if err := b.insertDataIntoTable(ctx, db, tableName, headers, records); err != nil {
+			return fmt.Errorf("failed to insert data: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// createSQLiteTable creates a SQLite table with the given columns
+func (b *DBBuilder) createSQLiteTable(ctx context.Context, db *sql.DB, tableName string, columnInfo []columnInfo) error {
+	columns := make([]string, 0, len(columnInfo))
+	for _, col := range columnInfo {
+		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.string()))
+	}
+
+	query := fmt.Sprintf(
+		`CREATE TABLE IF NOT EXISTS "%s" (%s)`,
+		tableName,
+		strings.Join(columns, ", "),
+	)
+
+	_, err := db.ExecContext(ctx, query)
+	return err
+}
+
+// insertDataIntoTable inserts records into the specified table
+func (b *DBBuilder) insertDataIntoTable(ctx context.Context, db *sql.DB, tableName string, headers []string, records []record) error {
+	placeholders := make([]string, len(headers))
+	for i := range placeholders {
+		placeholders[i] = "?"
+	}
+
+	query := fmt.Sprintf( //nolint:gosec // SQL table name is validated, placeholders are safe
+		`INSERT INTO "%s" VALUES (%s)`,
+		tableName,
+		strings.Join(placeholders, ", "),
+	)
+
+	stmt, err := db.PrepareContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to prepare insert statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, record := range records {
+		values := make([]any, len(record))
+		for i, value := range record {
+			values[i] = value
+		}
+
+		if _, err := stmt.ExecContext(ctx, values...); err != nil {
+			return fmt.Errorf("failed to insert record: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // streamReaderToSQLite streams data from io.Reader directly to SQLite database
@@ -1100,10 +1319,11 @@ func (b *DBBuilder) deduplicateCompressedFiles(files []string) []string {
 
 // isCompressedFile checks if a file path represents a compressed file
 func (b *DBBuilder) isCompressedFile(filePath string) bool {
-	return strings.HasSuffix(filePath, ".gz") ||
-		strings.HasSuffix(filePath, ".bz2") ||
-		strings.HasSuffix(filePath, ".xz") ||
-		strings.HasSuffix(filePath, ".zst")
+	p := strings.ToLower(filePath)
+	return strings.HasSuffix(p, extGZ) ||
+		strings.HasSuffix(p, extBZ2) ||
+		strings.HasSuffix(p, extXZ) ||
+		strings.HasSuffix(p, extZSTD)
 }
 
 // validateAutoSaveConfig validates that the auto-save configuration is compatible with the input sources
