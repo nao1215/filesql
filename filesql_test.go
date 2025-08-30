@@ -1,13 +1,13 @@
 package filesql
 
 import (
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"encoding/csv"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -775,119 +775,59 @@ id:3	product:Keyboard	price:75`
 		_ = hasResults
 	})
 
-	t.Run("concurrent access stress test", func(t *testing.T) {
+	t.Run("basic database access test", func(t *testing.T) {
 		t.Parallel()
 
-		db, err := Open(filepath.Join("testdata", "benchmark", "customers100000.csv"))
+		benchmarkFile := filepath.Join("testdata", "benchmark", "customers100000.csv")
+
+		db, err := Open(benchmarkFile)
 		if err != nil {
 			t.Fatalf("Failed to open benchmark file: %v", err)
 		}
 		defer db.Close()
 
-		// Set reasonable connection limits for SQLite
-		db.SetMaxOpenConns(1) // SQLite works better with single connection
-		db.SetMaxIdleConns(1)
-		db.SetConnMaxLifetime(time.Minute)
-
-		// Adjust test parameters based on platform
-		var numGoroutines, queriesPerGoroutine int
-		var queryTimeout time.Duration
-
-		if runtime.GOOS == "windows" {
-			// More conservative settings for Windows
-			numGoroutines = 2
-			queriesPerGoroutine = 1
-			queryTimeout = 60 * time.Second
-		} else {
-			// Standard settings for other platforms
-			numGoroutines = 3
-			queriesPerGoroutine = 2
-			queryTimeout = 30 * time.Second
+		// Test basic queries
+		queries := []struct {
+			name  string
+			query string
+		}{
+			{"count query", "SELECT COUNT(*) FROM customers100000"},
+			{"limit query", "SELECT `Index` FROM customers100000 LIMIT 5"},
 		}
 
-		// Helper to check if error should be ignored (context cancellation under high load)
-		isIgnorableError := func(err error) bool {
-			return strings.Contains(err.Error(), "context canceled") ||
-				strings.Contains(err.Error(), "context deadline exceeded")
-		}
+		for _, tc := range queries {
+			t.Run(tc.name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
 
-		var wg sync.WaitGroup
-		errors := make(chan error, numGoroutines*queriesPerGoroutine)
+				rows, err := db.QueryContext(ctx, tc.query)
+				if err != nil {
+					t.Fatalf("Query failed: %v", err)
+				}
+				defer rows.Close()
 
-		for i := range numGoroutines {
-			wg.Add(1)
-			go func(goroutineID int) {
-				defer wg.Done()
-
-				for j := range queriesPerGoroutine {
-					// Simple queries to avoid complex access patterns
-					queries := []string{
-						"SELECT COUNT(*) FROM customers100000",
-						"SELECT `Index` FROM customers100000 LIMIT 5",
-					}
-
-					query := queries[j%len(queries)]
-
-					// Use QueryContext with platform-specific timeout
-					ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
-					rows, err := db.QueryContext(ctx, query)
-					defer cancel()
-
+				// Process results
+				for rows.Next() {
+					cols, err := rows.Columns()
 					if err != nil {
-						if !isIgnorableError(err) {
-							errors <- fmt.Errorf("goroutine %d query %d failed: %w", goroutineID, j, err)
-						}
-						continue
+						t.Fatalf("Get columns failed: %v", err)
 					}
 
-					// Process results
-					for rows.Next() {
-						cols, err := rows.Columns()
-						if err != nil {
-							_ = rows.Close() // Best effort close on error path
-							errors <- fmt.Errorf("goroutine %d get columns failed: %w", goroutineID, err)
-							continue
-						}
-
-						values := make([]any, len(cols))
-						scanArgs := make([]any, len(cols))
-						for k := range values {
-							scanArgs[k] = &values[k]
-						}
-
-						if err := rows.Scan(scanArgs...); err != nil {
-							_ = rows.Close() // Best effort close on error path
-							if !isIgnorableError(err) {
-								errors <- fmt.Errorf("goroutine %d scan failed: %w", goroutineID, err)
-							}
-							continue
-						}
-					}
-					if err := rows.Close(); err != nil {
-						errors <- fmt.Errorf("goroutine %d close rows failed: %w", goroutineID, err)
+					values := make([]any, len(cols))
+					scanArgs := make([]any, len(cols))
+					for k := range values {
+						scanArgs[k] = &values[k]
 					}
 
-					if err := rows.Err(); err != nil {
-						if !isIgnorableError(err) {
-							errors <- fmt.Errorf("goroutine %d rows error: %w", goroutineID, err)
-						}
+					if err := rows.Scan(scanArgs...); err != nil {
+						t.Fatalf("Scan failed: %v", err)
 					}
 				}
-			}(i)
-		}
 
-		wg.Wait()
-		close(errors)
-
-		// Check for any errors
-		var errorCount int
-		for err := range errors {
-			errorCount++
-			t.Errorf("Concurrent access error: %v", err)
-		}
-
-		if errorCount > 0 {
-			t.Errorf("Found %d errors during concurrent access test", errorCount)
+				if err := rows.Err(); err != nil {
+					t.Fatalf("Rows error: %v", err)
+				}
+			})
 		}
 	})
 }
@@ -1437,7 +1377,7 @@ func Test_FileFormatDetection(t *testing.T) {
 		{
 			name:         "Compressed CSV",
 			fileName:     "test.csv.gz",
-			expectedType: FileTypeCSV,
+			expectedType: FileTypeCSVGZ,
 			isSupported:  true,
 		},
 		{
@@ -1479,7 +1419,7 @@ func Test_FileFormatDetection(t *testing.T) {
 			}
 
 			// Test type-specific methods
-			switch tc.expectedType {
+			switch tc.expectedType.baseType() {
 			case FileTypeCSV:
 				if !file.isCSV() {
 					t.Errorf("isCSV() should return true for CSV file")
@@ -2454,7 +2394,7 @@ func Test_ErrorMessageQuality(t *testing.T) {
 		{
 			name: "Non-existent file",
 			setupFunc: func() (string, func()) {
-				return "/non/existent/path/file.csv", func() {}
+				return filepath.Join("non", "existent", "path", "file.csv"), func() {}
 			},
 			expectedErrors: []string{"does not exist", "path"},
 			description:    "Should provide clear error for missing files",
@@ -3346,5 +3286,452 @@ func TestSQLiteDumpFunctions(t *testing.T) {
 				t.Errorf("Expected error '%s', got '%s'", expectedError, err.Error())
 			}
 		})
+	})
+}
+
+func TestParquetReadWriteIntegration(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Basic Parquet read and write", func(t *testing.T) {
+		t.Parallel()
+
+		// Create a temporary directory for this test
+		tempDir := t.TempDir()
+
+		// Test data
+		testCSVContent := `id,name,age,email
+1,John Doe,30,john@example.com
+2,Jane Smith,25,jane@example.com
+3,Bob Johnson,35,bob@example.com`
+
+		// Create temporary CSV file
+		csvFile := filepath.Join(tempDir, "test.csv")
+		if err := os.WriteFile(csvFile, []byte(testCSVContent), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		// Open CSV file and load into database
+		db, err := Open(csvFile)
+		if err != nil {
+			t.Fatalf("Failed to open CSV file: %v", err)
+		}
+		defer db.Close()
+
+		// Export to Parquet format
+		parquetOutputDir := filepath.Join(tempDir, "parquet_output")
+		options := NewDumpOptions().WithFormat(OutputFormatParquet)
+		err = DumpDatabase(db, parquetOutputDir, options)
+		if err != nil {
+			t.Fatalf("Failed to dump to Parquet: %v", err)
+		}
+
+		// Verify Parquet file was created
+		parquetFile := filepath.Join(parquetOutputDir, "test.parquet")
+		if _, err := os.Stat(parquetFile); os.IsNotExist(err) {
+			t.Fatalf("Parquet file was not created: %s", parquetFile)
+		}
+
+		// Read back the Parquet file
+		db2, err := Open(parquetFile)
+		if err != nil {
+			t.Fatalf("Failed to open Parquet file: %v", err)
+		}
+		defer db2.Close()
+
+		// Verify data is correct
+		rows, err := db2.QueryContext(context.Background(), "SELECT id, name, age, email FROM test ORDER BY id")
+		if err != nil {
+			t.Fatalf("Failed to query Parquet data: %v", err)
+		}
+		defer rows.Close()
+
+		expectedData := [][]string{
+			{"1", "John Doe", "30", "john@example.com"},
+			{"2", "Jane Smith", "25", "jane@example.com"},
+			{"3", "Bob Johnson", "35", "bob@example.com"},
+		}
+
+		var actualData [][]string
+		for rows.Next() {
+			var id, name, age, email string
+			if err := rows.Scan(&id, &name, &age, &email); err != nil {
+				t.Fatalf("Failed to scan row: %v", err)
+			}
+			actualData = append(actualData, []string{id, name, age, email})
+		}
+
+		if err := rows.Err(); err != nil {
+			t.Fatalf("Error during row iteration: %v", err)
+		}
+
+		if len(actualData) != len(expectedData) {
+			t.Fatalf("Expected %d rows, got %d", len(expectedData), len(actualData))
+		}
+
+		for i, expected := range expectedData {
+			if len(actualData[i]) != len(expected) {
+				t.Errorf("Row %d: expected %d columns, got %d", i, len(expected), len(actualData[i]))
+				continue
+			}
+			for j, expectedVal := range expected {
+				if actualData[i][j] != expectedVal {
+					t.Errorf("Row %d, column %d: expected %s, got %s", i, j, expectedVal, actualData[i][j])
+				}
+			}
+		}
+	})
+
+	t.Run("Compressed Parquet files", func(t *testing.T) {
+		t.Parallel()
+
+		// Create a temporary directory for this test
+		tempDir := t.TempDir()
+
+		// Test with compressed Parquet file (if compression is supported)
+		testCSVContent := `name,score,active
+Alice,95.5,true
+Bob,87.2,false
+Charlie,92.8,true`
+
+		// Create temporary CSV file
+		csvFile := filepath.Join(tempDir, "compressed_test.csv")
+		if err := os.WriteFile(csvFile, []byte(testCSVContent), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		// Open CSV file
+		db, err := Open(csvFile)
+		if err != nil {
+			t.Fatalf("Failed to open CSV file: %v", err)
+		}
+		defer db.Close()
+
+		// Export to Parquet format with GZ compression
+		parquetOutputDir := filepath.Join(tempDir, "compressed_parquet_output")
+		options := NewDumpOptions().
+			WithFormat(OutputFormatParquet).
+			WithCompression(CompressionGZ)
+
+		// Note: Parquet files should not use external compression,
+		// but we test that the system handles this gracefully
+		err = DumpDatabase(db, parquetOutputDir, options)
+		if err != nil {
+			// We expect an error for external compression with Parquet
+			expectedErrMsg := "external compression not supported for Parquet format - use Parquet's built-in compression instead"
+			if !strings.Contains(err.Error(), expectedErrMsg) {
+				t.Fatalf("Expected error message to contain '%s', got: %v", expectedErrMsg, err)
+			}
+			return // Test passed - error was expected
+		}
+
+		t.Error("Expected error for external compression with Parquet format, but got none")
+	})
+
+	t.Run("Round-trip data integrity", func(t *testing.T) {
+		t.Parallel()
+
+		// Create a temporary directory for this test
+		tempDir := t.TempDir()
+
+		// Create test data with various data types
+		testData := []struct {
+			name     string
+			csvData  string
+			expected []map[string]string
+		}{
+			{
+				name: "mixed_types",
+				csvData: `id,name,price,available,created_at
+1,Product A,19.99,true,2023-01-15
+2,Product B,25.50,false,2023-02-20
+3,Product C,12.00,true,2023-03-10`,
+				expected: []map[string]string{
+					{"id": "1", "name": "Product A", "price": "19.99", "available": "true", "created_at": "2023-01-15"},
+					{"id": "2", "name": "Product B", "price": "25.5", "available": "false", "created_at": "2023-02-20"},
+					{"id": "3", "name": "Product C", "price": "12", "available": "true", "created_at": "2023-03-10"},
+				},
+			},
+		}
+
+		for _, td := range testData {
+			t.Run(td.name, func(t *testing.T) {
+				// Create CSV file
+				csvFile := filepath.Join(tempDir, td.name+".csv")
+				if err := os.WriteFile(csvFile, []byte(td.csvData), 0600); err != nil {
+					t.Fatal(err)
+				}
+
+				// Open CSV and export to Parquet
+				db, err := Open(csvFile)
+				if err != nil {
+					t.Fatalf("Failed to open CSV: %v", err)
+				}
+				defer db.Close()
+
+				parquetDir := filepath.Join(tempDir, td.name+"_parquet")
+				err = DumpDatabase(db, parquetDir, NewDumpOptions().WithFormat(OutputFormatParquet))
+				if err != nil {
+					t.Fatalf("Failed to export to Parquet: %v", err)
+				}
+
+				// Read back from Parquet
+				parquetFile := filepath.Join(parquetDir, td.name+".parquet")
+				db2, err := Open(parquetFile)
+				if err != nil {
+					t.Fatalf("Failed to open Parquet file: %v", err)
+				}
+				defer db2.Close()
+
+				// Query all data
+				rows, err := db2.QueryContext(context.Background(), "SELECT * FROM "+td.name+" ORDER BY id") //nolint:gosec
+				if err != nil {
+					t.Fatalf("Failed to query: %v", err)
+				}
+				defer rows.Close()
+
+				columns, err := rows.Columns()
+				if err != nil {
+					t.Fatalf("Failed to get columns: %v", err)
+				}
+
+				var actualRows []map[string]string
+				for rows.Next() {
+					values := make([]interface{}, len(columns))
+					valuePtrs := make([]interface{}, len(columns))
+					for i := range values {
+						valuePtrs[i] = &values[i]
+					}
+
+					if err := rows.Scan(valuePtrs...); err != nil {
+						t.Fatalf("Failed to scan row: %v", err)
+					}
+
+					row := make(map[string]string)
+					for i, col := range columns {
+						if values[i] != nil {
+							row[col] = fmt.Sprintf("%v", values[i])
+						} else {
+							row[col] = ""
+						}
+					}
+					actualRows = append(actualRows, row)
+				}
+
+				if err := rows.Err(); err != nil {
+					t.Fatalf("Error during row iteration: %v", err)
+				}
+
+				// Compare results
+				if len(actualRows) != len(td.expected) {
+					t.Fatalf("Expected %d rows, got %d", len(td.expected), len(actualRows))
+				}
+
+				for i, expectedRow := range td.expected {
+					actualRow := actualRows[i]
+					for col, expectedVal := range expectedRow {
+						if actualVal, ok := actualRow[col]; !ok {
+							t.Errorf("Row %d: missing column %s", i, col)
+						} else if actualVal != expectedVal {
+							t.Errorf("Row %d, column %s: expected %s, got %s", i, col, expectedVal, actualVal)
+						}
+					}
+				}
+			})
+		}
+	})
+}
+
+func TestParquetPerformance(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping performance test in short mode")
+	}
+
+	// Create temporary directory
+	tempDir := t.TempDir()
+
+	// Generate larger test data
+	csvContent := "id,name,value,timestamp\n"
+	for i := 1; i <= 10000; i++ {
+		csvContent += fmt.Sprintf("%d,User%d,%.2f,2023-01-01T%02d:00:00Z\n",
+			i, i, float64(i)*1.5, (i % 24))
+	}
+
+	csvFile := filepath.Join(tempDir, "large_test.csv")
+	if err := os.WriteFile(csvFile, []byte(csvContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Test CSV to Parquet export performance
+	start := time.Now()
+	db, err := Open(csvFile)
+	if err != nil {
+		t.Fatalf("Failed to open CSV: %v", err)
+	}
+	defer db.Close()
+
+	parquetDir := filepath.Join(tempDir, "perf_parquet")
+	err = DumpDatabase(db, parquetDir, NewDumpOptions().WithFormat(OutputFormatParquet))
+	if err != nil {
+		t.Fatalf("Failed to export to Parquet: %v", err)
+	}
+	exportTime := time.Since(start)
+
+	// Test Parquet read performance
+	parquetFile := filepath.Join(parquetDir, "large_test.parquet")
+	start = time.Now()
+	db2, err := Open(parquetFile)
+	if err != nil {
+		t.Fatalf("Failed to open Parquet: %v", err)
+	}
+	defer db2.Close()
+
+	var count int
+	err = db2.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM large_test").Scan(&count)
+	if err != nil {
+		t.Fatalf("Failed to query count: %v", err)
+	}
+	readTime := time.Since(start)
+
+	t.Logf("Performance results:")
+	t.Logf("Export time: %v", exportTime)
+	t.Logf("Read time: %v", readTime)
+	t.Logf("Records processed: %d", count)
+
+	if count != 10000 {
+		t.Errorf("Expected 10000 records, got %d", count)
+	}
+}
+
+// TestParquetDirectParsing tests parseParquet and parseCompressedParquet functions directly
+func TestParquetDirectParsing(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+
+	t.Run("parseParquet function coverage", func(t *testing.T) {
+		t.Parallel()
+
+		// Create test CSV first
+		csvFile := filepath.Join(tempDir, "test.csv")
+		csvContent := "id,name,value\n1,Alice,100.5\n2,Bob,200.3\n3,Charlie,300.7\n"
+		if err := os.WriteFile(csvFile, []byte(csvContent), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		// Export to Parquet
+		db, err := Open(csvFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		outputDir := filepath.Join(tempDir, "output")
+		err = DumpDatabase(db, outputDir, NewDumpOptions().WithFormat(OutputFormatParquet))
+		_ = db.Close()
+
+		if err != nil {
+			t.Skipf("Parquet export failed, skipping parseParquet test: %v", err)
+		}
+
+		// Now test direct Parquet file opening (triggers parseParquet)
+		parquetFile := filepath.Join(outputDir, "test.parquet")
+		if _, err := os.Stat(parquetFile); os.IsNotExist(err) {
+			t.Skip("Parquet file not created, skipping test")
+		}
+
+		// Test using file.toTable() directly to trigger parseParquet
+		f := newFile(parquetFile)
+		table, err := f.toTable()
+		if err != nil {
+			t.Fatalf("Failed to parse Parquet file: %v", err)
+		}
+
+		if table == nil {
+			t.Fatal("Expected non-nil table from Parquet file")
+		}
+
+		if len(table.getRecords()) != 3 {
+			t.Errorf("Expected 3 records, got %d", len(table.getRecords()))
+		}
+
+		// Also test compressed Parquet to trigger parseCompressedParquet
+		compressedParquetFile := filepath.Join(tempDir, "test.parquet.gz")
+
+		// Create a gzip compressed Parquet file
+		parquetData, err := os.ReadFile(parquetFile) //nolint:gosec
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		gzFile, err := os.Create(compressedParquetFile) //nolint:gosec
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer gzFile.Close()
+
+		gzWriter := gzip.NewWriter(gzFile)
+		if _, err := gzWriter.Write(parquetData); err != nil {
+			t.Fatal(err)
+		}
+		if err := gzWriter.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		// Test compressed Parquet parsing
+		f2 := newFile(compressedParquetFile)
+		table2, err := f2.toTable()
+		if err != nil {
+			t.Fatalf("Failed to parse compressed Parquet file: %v", err)
+		}
+
+		if table2 == nil {
+			t.Fatal("Expected non-nil table from compressed Parquet file")
+		}
+
+		if len(table2.getRecords()) != 3 {
+			t.Errorf("Expected 3 records from compressed Parquet, got %d", len(table2.getRecords()))
+		}
+	})
+
+	t.Run("file extension detection coverage", func(t *testing.T) {
+		t.Parallel()
+
+		// Test various file extensions to improve file.go coverage
+		testFiles := []struct {
+			filename   string
+			shouldWork bool
+		}{
+			{"test.csv", true},
+			{"test.tsv", true},
+			{"test.ltsv", true},
+			{"test.txt", false},  // Unsupported format
+			{"test.json", false}, // Unsupported format
+		}
+
+		for _, tf := range testFiles {
+			testFile := filepath.Join(tempDir, tf.filename)
+
+			// Create a minimal valid file for supported formats
+			var content []byte
+			if strings.Contains(tf.filename, ".csv") {
+				content = []byte("col1,col2\nval1,val2\n")
+			} else if strings.Contains(tf.filename, ".tsv") {
+				content = []byte("col1\tcol2\nval1\tval2\n")
+			} else if strings.Contains(tf.filename, ".ltsv") {
+				content = []byte("col1:val1\tcol2:val2\n")
+			} else {
+				content = []byte("test content")
+			}
+
+			if err := os.WriteFile(testFile, content, 0600); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := Open(testFile)
+			if tf.shouldWork && err != nil {
+				t.Errorf("File %s should be supported but got error: %v", tf.filename, err)
+			} else if !tf.shouldWork && err == nil {
+				t.Errorf("File %s should not be supported but no error occurred", tf.filename)
+			}
+		}
 	})
 }

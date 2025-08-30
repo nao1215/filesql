@@ -9,7 +9,7 @@
 
 ![logo](./doc/image/filesql-logo.png)
 
-**filesql** is a Go SQL driver that enables you to query CSV, TSV, and LTSV files using SQLite3 SQL syntax. Query your data files directly without any imports or transformations!
+**filesql** is a Go SQL driver that enables you to query CSV, TSV, LTSV, and Parquet files using SQLite3 SQL syntax. Query your data files directly without any imports or transformations!
 
 ## 🎯 Why filesql?
 
@@ -20,7 +20,7 @@ Rather than maintaining duplicate code across both projects, we extracted the co
 ## ✨ Features
 
 - 🔍 **SQLite3 SQL Interface** - Use SQLite3's powerful SQL dialect to query your files
-- 📁 **Multiple File Formats** - Support for CSV, TSV, and LTSV files
+- 📁 **Multiple File Formats** - Support for CSV, TSV, LTSV, and Parquet files
 - 🗜️ **Compression Support** - Automatically handles .gz, .bz2, .xz, and .zst compressed files
 - 🌊 **Stream Processing** - Efficiently handles large files through streaming with configurable chunk sizes
 - 📖 **Flexible Input Sources** - Support for file paths, directories, io.Reader, and embed.FS
@@ -36,10 +36,11 @@ Rather than maintaining duplicate code across both projects, we extracted the co
 | `.csv` | CSV | Comma-separated values |
 | `.tsv` | TSV | Tab-separated values |
 | `.ltsv` | LTSV | Labeled Tab-separated Values |
-| `.csv.gz`, `.tsv.gz`, `.ltsv.gz` | Gzip compressed | Gzip compressed files |
-| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2` | Bzip2 compressed | Bzip2 compressed files |
-| `.csv.xz`, `.tsv.xz`, `.ltsv.xz` | XZ compressed | XZ compressed files |
-| `.csv.zst`, `.tsv.zst`, `.ltsv.zst` | Zstandard compressed | Zstandard compressed files |
+| `.parquet` | Parquet | Apache Parquet columnar format |
+| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz` | Gzip compressed | Gzip compressed files |
+| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2` | Bzip2 compressed | Bzip2 compressed files |
+| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz` | XZ compressed | XZ compressed files |
+| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst` | Zstandard compressed | Zstandard compressed files |
 
 ## 📦 Installation
 
@@ -102,8 +103,8 @@ func main() {
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 defer cancel()
 
-// Open multiple files at once
-db, err := filesql.OpenContext(ctx, "users.csv", "orders.tsv", "logs.ltsv.gz")
+// Open multiple files at once (including Parquet)
+db, err := filesql.OpenContext(ctx, "users.csv", "orders.tsv", "logs.ltsv.gz", "analytics.parquet")
 if err != nil {
     log.Fatal(err)
 }
@@ -111,10 +112,11 @@ defer db.Close()
 
 // Join data across different file formats
 rows, err := db.QueryContext(ctx, `
-    SELECT u.name, o.order_date, l.event
+    SELECT u.name, o.order_date, l.event, a.metrics
     FROM users u
     JOIN orders o ON u.id = o.user_id
     JOIN logs l ON u.id = l.user_id
+    JOIN analytics a ON u.id = a.user_id
     WHERE o.order_date > '2024-01-01'
 `)
 ```
@@ -293,6 +295,11 @@ options := filesql.NewDumpOptions().
     WithFormat(filesql.OutputFormatTSV).
     WithCompression(filesql.CompressionGZ)
 err = filesql.DumpDatabase(db, "./output", options)
+
+// Export to Parquet format (when available)
+parquetOptions := filesql.NewDumpOptions().
+    WithFormat(filesql.OutputFormatParquet)
+// Note: Parquet export is planned but not yet fully implemented
 ```
 
 ## 📝 Table Naming Rules
@@ -303,6 +310,7 @@ filesql automatically derives table names from file paths:
 - `data.tsv.gz` → table `data`
 - `/path/to/sales.csv` → table `sales`
 - `products.ltsv.bz2` → table `products`
+- `analytics.parquet` → table `analytics`
 
 ## ⚠️ Important Notes
 
@@ -324,6 +332,13 @@ Since filesql uses SQLite3 as its underlying engine, all SQL syntax follows [SQL
 - Configure chunk sizes with `SetDefaultChunkSize()` for memory optimization  
 - Single SQLite connection works best for most scenarios
 - Use streaming for files larger than available memory
+
+### Parquet Support
+- **Reading**: Full support for Apache Parquet files with complex data types
+- **Writing**: Export functionality is planned but not yet implemented
+- **Type Mapping**: Parquet types are mapped to SQLite types (see [PARQUET_TYPE_MAPPING.md](PARQUET_TYPE_MAPPING.md))
+- **Compression**: Parquet's built-in compression is used instead of external compression
+- **Large Data**: Parquet files are efficiently processed with Arrow's columnar format
 
 ## 🎨 Advanced Examples
 

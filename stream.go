@@ -3,12 +3,16 @@ package filesql
 import (
 	"compress/bzip2"
 	"compress/gzip"
+	"context"
 	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
 
+	"github.com/apache/arrow/go/v18/arrow/array"
+	pqfile "github.com/apache/arrow/go/v18/parquet/file"
+	"github.com/apache/arrow/go/v18/parquet/pqarrow"
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
 )
@@ -56,6 +60,8 @@ func (p *streamingParser) parseFromReader(reader io.Reader) (*table, error) {
 		return p.parseTSVStream(decompressedReader)
 	case FileTypeLTSV:
 		return p.parseLTSVStream(decompressedReader)
+	case FileTypeParquet:
+		return p.parseParquetStream(decompressedReader)
 	default:
 		return nil, errors.New("unsupported file type")
 	}
@@ -242,6 +248,8 @@ func (p *streamingParser) ProcessInChunks(reader io.Reader, processor chunkProce
 		return p.processTSVInChunks(decompressedReader, processor)
 	case FileTypeLTSV:
 		return p.processLTSVInChunks(decompressedReader, processor)
+	case FileTypeParquet:
+		return p.processParquetInChunks(decompressedReader, processor)
 	default:
 		return errors.New("unsupported file type for chunked processing")
 	}
@@ -526,4 +534,180 @@ func (p *streamingParser) infercolumnInfoFromValues(header header, columnValues 
 		}
 	}
 	return columnInfoList
+}
+
+// parseParquetStream parses Parquet data from reader using streaming approach
+func (p *streamingParser) parseParquetStream(reader io.Reader) (*table, error) {
+	// Read all data into memory (Parquet requires random access)
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read parquet data: %w", err)
+	}
+
+	if len(data) == 0 {
+		return nil, errors.New("empty parquet file")
+	}
+
+	// Create a bytes reader for the parquet data
+	bytesReader := &bytesReaderAt{data: data}
+
+	// Create parquet file reader from bytes
+	pqReader, err := pqfile.NewParquetReader(bytesReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create parquet reader from bytes: %w", err)
+	}
+	defer pqReader.Close()
+
+	// Create arrow file reader
+	arrowReader, err := pqarrow.NewFileReader(pqReader, pqarrow.ArrowReadProperties{}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create arrow reader: %w", err)
+	}
+
+	// Read all record batches using the table reader approach
+	ctx := context.Background()
+	table, err := arrowReader.ReadTable(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read table: %w", err)
+	}
+	defer table.Release()
+
+	if table.NumRows() == 0 {
+		return nil, errors.New("no records found in parquet stream")
+	}
+
+	// Initialize header from table schema
+	schema := table.Schema()
+	headerSlice := make(header, schema.NumFields())
+	for i, field := range schema.Fields() {
+		headerSlice[i] = field.Name
+	}
+
+	// Read data by converting table to record batches
+	tableReader := array.NewTableReader(table, 0)
+	defer tableReader.Release()
+
+	var allRecords []record
+	for tableReader.Next() {
+		batch := tableReader.Record()
+
+		// Convert each row in the batch
+		numRows := batch.NumRows()
+		for i := range numRows {
+			row := make(record, batch.NumCols())
+			for j, col := range batch.Columns() {
+				value := extractValueFromArrowArray(col, i)
+				row[j] = value
+			}
+			allRecords = append(allRecords, row)
+		}
+	}
+
+	if err := tableReader.Err(); err != nil {
+		return nil, fmt.Errorf("error reading table records: %w", err)
+	}
+
+	return newTable(p.tableName, headerSlice, allRecords), nil
+}
+
+// processParquetInChunks processes Parquet data in chunks
+func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chunkProcessor) error {
+	// Read all data into memory (Parquet requires random access)
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read parquet data: %w", err)
+	}
+
+	if len(data) == 0 {
+		return errors.New("empty parquet file")
+	}
+
+	// Create a bytes reader for the parquet data
+	bytesReader := &bytesReaderAt{data: data}
+
+	// Create parquet file reader from bytes
+	pqReader, err := pqfile.NewParquetReader(bytesReader)
+	if err != nil {
+		return fmt.Errorf("failed to create parquet reader from bytes: %w", err)
+	}
+	defer pqReader.Close()
+
+	// Create arrow file reader
+	arrowReader, err := pqarrow.NewFileReader(pqReader, pqarrow.ArrowReadProperties{}, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create arrow reader: %w", err)
+	}
+
+	// Read table to get schema and prepare for chunked reading
+	ctx := context.Background()
+	table, err := arrowReader.ReadTable(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to read table: %w", err)
+	}
+	defer table.Release()
+
+	if table.NumRows() == 0 {
+		return errors.New("no records found in parquet stream")
+	}
+
+	// Initialize header from table schema
+	schema := table.Schema()
+	headerSlice := make(header, schema.NumFields())
+	for i, field := range schema.Fields() {
+		headerSlice[i] = field.Name
+	}
+
+	// Infer column types from first batch
+	columnInfoList := make([]columnInfo, len(headerSlice))
+	for i, name := range headerSlice {
+		// For Parquet files, we'll default to TEXT for simplicity in streaming
+		// Real type inference could be done from Arrow schema
+		columnInfoList[i] = columnInfo{
+			Name: name,
+			Type: columnTypeText,
+		}
+	}
+
+	// Process data in chunks using batch reader
+	chunkSize := p.chunkSize
+	if chunkSize <= 0 {
+		chunkSize = 1000
+	}
+
+	tableReader := array.NewTableReader(table, int64(chunkSize))
+	defer tableReader.Release()
+
+	for tableReader.Next() {
+		batch := tableReader.Record()
+
+		var chunkRecords []record
+		numRows := batch.NumRows()
+		for i := range numRows {
+			row := make(record, batch.NumCols())
+			for j, col := range batch.Columns() {
+				value := extractValueFromArrowArray(col, i)
+				row[j] = value
+			}
+			chunkRecords = append(chunkRecords, row)
+		}
+
+		if len(chunkRecords) > 0 {
+			chunk := &tableChunk{
+				tableName:  p.tableName,
+				headers:    headerSlice,
+				records:    chunkRecords,
+				columnInfo: columnInfoList,
+			}
+
+			if err := processor(chunk); err != nil {
+				return fmt.Errorf("chunk processor error: %w", err)
+			}
+		}
+	}
+
+	if err := tableReader.Err(); err != nil {
+		return fmt.Errorf("error reading table records: %w", err)
+	}
+
+	return nil
 }

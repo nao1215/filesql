@@ -2093,7 +2093,7 @@ func ExampleDBBuilder_errorHandling() {
 	}
 
 	// Example 3: Non-existent file should fail during Build
-	builder3 := filesql.NewBuilder().AddPath("/nonexistent/file.csv")
+	builder3 := filesql.NewBuilder().AddPath(filepath.Join("nonexistent", "file.csv"))
 	_, err = builder3.Build(ctx)
 	if err != nil {
 		fmt.Println("Expected error for non-existent file")

@@ -9,7 +9,7 @@
 
 ![logo](../image/filesql-logo.png)
 
-**filesql** は、SQLite3のSQL構文を使用してCSV、TSV、LTSVファイルを直接クエリできるGo SQLドライバーです。インポートや変換なしでデータファイルを直接クエリできます！
+**filesql** は、SQLite3のSQL構文を使用してCSV、TSV、LTSV、Parquetファイルを直接クエリできるGo SQLドライバーです。インポートや変換なしでデータファイルを直接クエリできます！
 
 ## 🎯 なぜfilesqlなのか？
 
@@ -20,7 +20,7 @@
 ## ✨ 機能
 
 - 🔍 **SQLite3 SQLインターフェース** - SQLite3の強力なSQL方言を使用してファイルをクエリ
-- 📁 **複数のファイル形式** - CSV、TSV、LTSVファイルをサポート
+- 📁 **複数のファイル形式** - CSV、TSV、LTSV、Parquetファイルをサポート
 - 🗜️ **圧縮サポート** - .gz、.bz2、.xz、.zst圧縮ファイルを自動処理
 - 🌊 **ストリーム処理** - 設定可能なチャンクサイズでストリーミングにより大容量ファイルを効率的に処理
 - 📖 **柔軟な入力ソース** - ファイルパス、ディレクトリ、io.Reader、embed.FSをサポート
@@ -36,10 +36,11 @@
 | `.csv` | CSV | カンマ区切り値 |
 | `.tsv` | TSV | タブ区切り値 |
 | `.ltsv` | LTSV | ラベル付きタブ区切り値 |
-| `.csv.gz`, `.tsv.gz`, `.ltsv.gz` | Gzip圧縮 | Gzip圧縮ファイル |
-| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2` | Bzip2圧縮 | Bzip2圧縮ファイル |
-| `.csv.xz`, `.tsv.xz`, `.ltsv.xz` | XZ圧縮 | XZ圧縮ファイル |
-| `.csv.zst`, `.tsv.zst`, `.ltsv.zst` | Zstandard圧縮 | Zstandard圧縮ファイル |
+| `.parquet` | Parquet | Apache Parquet 列指向形式 |
+| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz` | Gzip圧縮 | Gzip圧縮ファイル |
+| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2` | Bzip2圧縮 | Bzip2圧縮ファイル |
+| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz` | XZ圧縮 | XZ圧縮ファイル |
+| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst` | Zstandard圧縮 | Zstandard圧縮ファイル |
 
 ## 📦 インストール
 

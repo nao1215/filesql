@@ -10,8 +10,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/apache/arrow/go/v18/arrow"
+	"github.com/apache/arrow/go/v18/arrow/array"
+	"github.com/apache/arrow/go/v18/arrow/memory"
+	pqfile "github.com/apache/arrow/go/v18/parquet/file"
+	"github.com/apache/arrow/go/v18/parquet/pqarrow"
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
 )
@@ -319,6 +325,8 @@ func writeSQLiteTableData(outputPath string, columns []string, rows *sql.Rows, o
 		return writeTSVData(writer, columns, rows)
 	case OutputFormatLTSV:
 		return writeLTSVData(writer, columns, rows)
+	case OutputFormatParquet:
+		return writeParquetTableData(outputPath, columns, rows, options.Compression)
 	default:
 		return fmt.Errorf("unsupported output format: %v", options.Format)
 	}
@@ -437,4 +445,398 @@ func writeLTSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
 	}
 
 	return rows.Err()
+}
+
+// parseParquet parses Parquet file with compression support
+func (f *file) parseParquet() (*table, error) {
+	// For Parquet files, we need direct file access
+	// Compressed Parquet files are not common, but if needed, we'd decompress first
+	if f.isCompressed() {
+		// For compressed Parquet files, decompress to temp file first
+		return f.parseCompressedParquet()
+	}
+
+	// Open the file directly
+	pqFile, err := os.Open(f.path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open parquet file: %w", err)
+	}
+	defer pqFile.Close()
+
+	// Get file size (not needed for current implementation but kept for completeness)
+	_, err = pqFile.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file size: %w", err)
+	}
+
+	// Create parquet file reader
+	pqReader, err := pqfile.NewParquetReader(pqFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create parquet reader: %w", err)
+	}
+	defer pqReader.Close()
+
+	// Create arrow file reader
+	arrowReader, err := pqarrow.NewFileReader(pqReader, pqarrow.ArrowReadProperties{}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create arrow reader: %w", err)
+	}
+
+	// Read all record batches using the table reader approach
+	ctx := context.Background()
+	table, err := arrowReader.ReadTable(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read table: %w", err)
+	}
+	defer table.Release()
+
+	var allRecords []record
+	var headerSlice header
+
+	if table.NumRows() == 0 {
+		return nil, fmt.Errorf("no records found in parquet file: %s", f.path)
+	}
+
+	// Initialize header from table schema
+	schema := table.Schema()
+	headerSlice = make(header, schema.NumFields())
+	for i, field := range schema.Fields() {
+		headerSlice[i] = field.Name
+	}
+
+	// Read data by converting table to record batches
+	tableReader := array.NewTableReader(table, 0) // Read all rows at once
+	defer tableReader.Release()
+
+	for tableReader.Next() {
+		batch := tableReader.Record()
+
+		// Convert each row in the batch
+		numRows := batch.NumRows()
+		for i := range numRows {
+			row := make(record, batch.NumCols())
+			for j, col := range batch.Columns() {
+				value := extractValueFromArrowArray(col, i)
+				row[j] = value
+			}
+			allRecords = append(allRecords, row)
+		}
+	}
+
+	if err := tableReader.Err(); err != nil {
+		return nil, fmt.Errorf("error reading table records: %w", err)
+	}
+
+	if len(allRecords) == 0 {
+		return nil, fmt.Errorf("no records found in parquet file: %s", f.path)
+	}
+
+	tableName := tableFromFilePath(f.path)
+	return newTable(tableName, headerSlice, allRecords), nil
+}
+
+// parseCompressedParquet handles compressed Parquet files
+func (f *file) parseCompressedParquet() (*table, error) {
+	reader, closer, err := f.openReader()
+	if err != nil {
+		return nil, fmt.Errorf("failed to open compressed file: %w", err)
+	}
+	defer closer()
+
+	// Read all data into memory for compressed files
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read compressed parquet data: %w", err)
+	}
+
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty parquet file: %s", f.path)
+	}
+
+	// Create a bytes reader for the parquet data
+	bytesReader := &bytesReaderAt{data: data}
+
+	// Create parquet file reader from bytes
+	pqReader, err := pqfile.NewParquetReader(bytesReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create parquet reader from bytes: %w", err)
+	}
+	defer pqReader.Close()
+
+	// Create arrow file reader
+	arrowReader, err := pqarrow.NewFileReader(pqReader, pqarrow.ArrowReadProperties{}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create arrow reader: %w", err)
+	}
+
+	// Read all record batches using the table reader approach
+	ctx := context.Background()
+	table, err := arrowReader.ReadTable(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read table: %w", err)
+	}
+	defer table.Release()
+
+	var allRecords []record
+	var headerSlice header
+
+	if table.NumRows() == 0 {
+		return nil, fmt.Errorf("no records found in compressed parquet file: %s", f.path)
+	}
+
+	// Initialize header from table schema
+	schema := table.Schema()
+	headerSlice = make(header, schema.NumFields())
+	for i, field := range schema.Fields() {
+		headerSlice[i] = field.Name
+	}
+
+	// Read data by converting table to record batches
+	tableReader := array.NewTableReader(table, 0) // Read all rows at once
+	defer tableReader.Release()
+
+	for tableReader.Next() {
+		batch := tableReader.Record()
+
+		// Convert each row in the batch
+		numRows := batch.NumRows()
+		for i := range numRows {
+			row := make(record, batch.NumCols())
+			for j, col := range batch.Columns() {
+				value := extractValueFromArrowArray(col, i)
+				row[j] = value
+			}
+			allRecords = append(allRecords, row)
+		}
+	}
+
+	if err := tableReader.Err(); err != nil {
+		return nil, fmt.Errorf("error reading table records: %w", err)
+	}
+
+	if len(allRecords) == 0 {
+		return nil, fmt.Errorf("no records found in parquet file: %s", f.path)
+	}
+
+	tableName := tableFromFilePath(f.path)
+	return newTable(tableName, headerSlice, allRecords), nil
+}
+
+// bytesReaderAt implements io.ReaderAt for byte slices
+type bytesReaderAt struct {
+	data []byte
+}
+
+func (b *bytesReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	if off < 0 || off >= int64(len(b.data)) {
+		return 0, io.EOF
+	}
+
+	n := copy(p, b.data[off:])
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+// Size returns the size of the data
+func (b *bytesReaderAt) Size() int64 {
+	return int64(len(b.data))
+}
+
+// Seek implements io.Seeker interface (required for ReaderAtSeeker)
+func (b *bytesReaderAt) Seek(offset int64, whence int) (int64, error) {
+	// bytesReaderAt doesn't maintain position state, so Seek is not meaningful
+	// However, we implement it to satisfy the ReaderAtSeeker interface
+	switch whence {
+	case io.SeekStart:
+		return offset, nil
+	case io.SeekCurrent:
+		return 0, nil // We don't track current position
+	case io.SeekEnd:
+		return int64(len(b.data)) + offset, nil
+	default:
+		return 0, errors.New("invalid whence value")
+	}
+}
+
+// Read implements io.Reader interface (required for ReaderAtSeeker)
+func (b *bytesReaderAt) Read(p []byte) (int, error) {
+	// For ReaderAtSeeker, we implement a basic Read that starts from beginning
+	return b.ReadAt(p, 0)
+}
+
+// extractValueFromArrowArray extracts a value from an Arrow array at the given index
+func extractValueFromArrowArray(arr arrow.Array, index int64) string {
+	if arr.IsNull(int(index)) {
+		return ""
+	}
+
+	switch a := arr.(type) {
+	case *array.Boolean:
+		if a.Value(int(index)) {
+			return "1"
+		}
+		return "0"
+
+	case *array.Int8:
+		return strconv.Itoa(int(a.Value(int(index))))
+	case *array.Int16:
+		return strconv.Itoa(int(a.Value(int(index))))
+	case *array.Int32:
+		return strconv.Itoa(int(a.Value(int(index))))
+	case *array.Int64:
+		return strconv.FormatInt(a.Value(int(index)), 10)
+
+	case *array.Uint8:
+		return strconv.FormatUint(uint64(a.Value(int(index))), 10)
+	case *array.Uint16:
+		return strconv.FormatUint(uint64(a.Value(int(index))), 10)
+	case *array.Uint32:
+		return strconv.FormatUint(uint64(a.Value(int(index))), 10)
+	case *array.Uint64:
+		return strconv.FormatUint(a.Value(int(index)), 10)
+
+	case *array.Float32:
+		return fmt.Sprintf("%g", a.Value(int(index)))
+	case *array.Float64:
+		return fmt.Sprintf("%g", a.Value(int(index)))
+
+	case *array.String:
+		return a.Value(int(index))
+	case *array.Binary:
+		return string(a.Value(int(index)))
+
+	case *array.Date32:
+		// Convert days since epoch to string representation
+		days := a.Value(int(index))
+		return fmt.Sprintf("%d", days)
+	case *array.Date64:
+		// Convert milliseconds since epoch to string representation
+		millis := a.Value(int(index))
+		return fmt.Sprintf("%d", millis)
+
+	case *array.Timestamp:
+		// Convert timestamp to string
+		ts := a.Value(int(index))
+		return fmt.Sprintf("%d", ts)
+
+	default:
+		// For unsupported types, try to convert to string representation
+		return fmt.Sprintf("%v", arr.GetOneForMarshal(int(index)))
+	}
+}
+
+// writeParquetTableData writes SQLite table data to Parquet format
+func writeParquetTableData(outputPath string, columns []string, rows *sql.Rows, compression CompressionType) error {
+	if len(columns) == 0 {
+		return errors.New("no columns defined")
+	}
+
+	// For Parquet format, compression is handled at the file level, not stream level
+	// We ignore the compression parameter for now as Parquet has its own compression
+	if compression != CompressionNone {
+		return errors.New("external compression not supported for Parquet format - use Parquet's built-in compression instead")
+	}
+
+	// Read all rows into memory first
+	var allRows [][]string
+
+	// Prepare for scanning
+	values := make([]any, len(columns))
+	scanArgs := make([]any, len(columns))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	for rows.Next() {
+		if err := rows.Scan(scanArgs...); err != nil {
+			return fmt.Errorf("failed to scan row: %w", err)
+		}
+
+		row := make([]string, len(columns))
+		for i, value := range values {
+			if value == nil {
+				row[i] = ""
+			} else {
+				row[i] = fmt.Sprintf("%v", value)
+			}
+		}
+		allRows = append(allRows, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating rows: %w", err)
+	}
+
+	return writeParquetData(outputPath, columns, allRows)
+}
+
+// writeParquetData writes data to Parquet format
+func writeParquetData(outputPath string, columns []string, rows [][]string) error {
+	if len(rows) == 0 {
+		return errors.New("no data to write")
+	}
+	if len(columns) == 0 {
+		return errors.New("no columns defined")
+	}
+
+	// Create output file
+	file, err := os.Create(outputPath) //nolint:gosec
+	if err != nil {
+		return fmt.Errorf("failed to create parquet file: %w", err)
+	}
+	defer file.Close()
+
+	// Create Arrow schema - for simplicity, treat all columns as strings
+	fields := make([]arrow.Field, len(columns))
+	for i, col := range columns {
+		fields[i] = arrow.Field{
+			Name: col,
+			Type: arrow.BinaryTypes.String,
+		}
+	}
+	schema := arrow.NewSchema(fields, nil)
+
+	// Create Arrow record batch builder
+	pool := memory.NewGoAllocator()
+	builder := array.NewRecordBuilder(pool, schema)
+	defer builder.Release()
+
+	// Add data to builders
+	for _, row := range rows {
+		for i, value := range row {
+			if i < len(columns) {
+				strBuilder, ok := builder.Field(i).(*array.StringBuilder)
+				if !ok {
+					return fmt.Errorf("failed to cast field %d to StringBuilder", i)
+				}
+				strBuilder.Append(value)
+			}
+		}
+	}
+
+	// Build record
+	record := builder.NewRecord()
+	defer record.Release()
+
+	// Create Parquet writer
+	arrowProps := pqarrow.NewArrowWriterProperties(pqarrow.WithStoreSchema())
+	writer, err := pqarrow.NewFileWriter(schema, file, nil, arrowProps)
+	if err != nil {
+		return fmt.Errorf("failed to create parquet writer: %w", err)
+	}
+	defer writer.Close()
+
+	// Write record to Parquet file
+	if err := writer.Write(record); err != nil {
+		return fmt.Errorf("failed to write record to parquet: %w", err)
+	}
+
+	// Flush and close writer explicitly
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("failed to close parquet writer: %w", err)
+	}
+
+	return nil
 }

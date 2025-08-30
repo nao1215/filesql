@@ -612,10 +612,11 @@ func (b *DBBuilder) streamFileToSQLite(ctx context.Context, db *sql.DB, filePath
 	tableName := tableFromFilePath(filePath)
 
 	// Create reader input for streaming
+	// Note: Since we've already decompressed the reader, use the base file type
 	readerInput := readerInput{
 		reader:    reader,
 		tableName: tableName,
-		fileType:  fileModel.getFileType(),
+		fileType:  fileModel.getFileType().baseType(),
 	}
 
 	// Use existing streaming logic

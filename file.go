@@ -24,30 +24,40 @@ const (
 	FileTypeTSV
 	// FileTypeLTSV represents LTSV file type
 	FileTypeLTSV
+	// FileTypeParquet represents Parquet file type
+	FileTypeParquet
 	// FileTypeCSVGZ represents gzip-compressed CSV file type
 	FileTypeCSVGZ
 	// FileTypeTSVGZ represents gzip-compressed TSV file type
 	FileTypeTSVGZ
 	// FileTypeLTSVGZ represents gzip-compressed LTSV file type
 	FileTypeLTSVGZ
+	// FileTypeParquetGZ represents gzip-compressed Parquet file type
+	FileTypeParquetGZ
 	// FileTypeCSVBZ2 represents bzip2-compressed CSV file type
 	FileTypeCSVBZ2
 	// FileTypeTSVBZ2 represents bzip2-compressed TSV file type
 	FileTypeTSVBZ2
 	// FileTypeLTSVBZ2 represents bzip2-compressed LTSV file type
 	FileTypeLTSVBZ2
+	// FileTypeParquetBZ2 represents bzip2-compressed Parquet file type
+	FileTypeParquetBZ2
 	// FileTypeCSVXZ represents xz-compressed CSV file type
 	FileTypeCSVXZ
 	// FileTypeTSVXZ represents xz-compressed TSV file type
 	FileTypeTSVXZ
 	// FileTypeLTSVXZ represents xz-compressed LTSV file type
 	FileTypeLTSVXZ
+	// FileTypeParquetXZ represents xz-compressed Parquet file type
+	FileTypeParquetXZ
 	// FileTypeCSVZSTD represents zstd-compressed CSV file type
 	FileTypeCSVZSTD
 	// FileTypeTSVZSTD represents zstd-compressed TSV file type
 	FileTypeTSVZSTD
 	// FileTypeLTSVZSTD represents zstd-compressed LTSV file type
 	FileTypeLTSVZSTD
+	// FileTypeParquetZSTD represents zstd-compressed Parquet file type
+	FileTypeParquetZSTD
 	// FileTypeUnsupported represents unsupported file type
 	FileTypeUnsupported
 )
@@ -60,6 +70,8 @@ const (
 	extTSV = ".tsv"
 	// extLTSV is the LTSV file extension
 	extLTSV = ".ltsv"
+	// extParquet is the Parquet file extension
+	extParquet = ".parquet"
 	// extGZ is the gzip compression extension
 	extGZ = ".gz"
 	// extBZ2 is the bzip2 compression extension
@@ -124,7 +136,7 @@ func newFile(path string) *file {
 
 // supportedFileExtPatterns returns all supported file patterns for glob matching
 func supportedFileExtPatterns() []string {
-	baseExts := []string{extCSV, extTSV, extLTSV}
+	baseExts := []string{extCSV, extTSV, extLTSV, extParquet}
 	compressionExts := []string{"", extGZ, extBZ2, extXZ, extZSTD}
 
 	var patterns []string
@@ -152,7 +164,8 @@ func isSupportedFile(fileName string) bool {
 	// Check for supported file extensions
 	return strings.HasSuffix(fileName, extCSV) ||
 		strings.HasSuffix(fileName, extTSV) ||
-		strings.HasSuffix(fileName, extLTSV)
+		strings.HasSuffix(fileName, extLTSV) ||
+		strings.HasSuffix(fileName, extParquet)
 }
 
 // isSupportedExtension checks if the given extension is supported
@@ -173,30 +186,40 @@ func (ft FileType) extension() string {
 		return extTSV
 	case FileTypeLTSV:
 		return extLTSV
+	case FileTypeParquet:
+		return extParquet
 	case FileTypeCSVGZ:
 		return extCSV + extGZ
 	case FileTypeTSVGZ:
 		return extTSV + extGZ
 	case FileTypeLTSVGZ:
 		return extLTSV + extGZ
+	case FileTypeParquetGZ:
+		return extParquet + extGZ
 	case FileTypeCSVBZ2:
 		return extCSV + extBZ2
 	case FileTypeTSVBZ2:
 		return extTSV + extBZ2
 	case FileTypeLTSVBZ2:
 		return extLTSV + extBZ2
+	case FileTypeParquetBZ2:
+		return extParquet + extBZ2
 	case FileTypeCSVXZ:
 		return extCSV + extXZ
 	case FileTypeTSVXZ:
 		return extTSV + extXZ
 	case FileTypeLTSVXZ:
 		return extLTSV + extXZ
+	case FileTypeParquetXZ:
+		return extParquet + extXZ
 	case FileTypeCSVZSTD:
 		return extCSV + extZSTD
 	case FileTypeTSVZSTD:
 		return extTSV + extZSTD
 	case FileTypeLTSVZSTD:
 		return extLTSV + extZSTD
+	case FileTypeParquetZSTD:
+		return extParquet + extZSTD
 	default:
 		return ""
 	}
@@ -211,6 +234,8 @@ func (ft FileType) baseType() FileType {
 		return FileTypeTSV
 	case FileTypeLTSV, FileTypeLTSVGZ, FileTypeLTSVBZ2, FileTypeLTSVXZ, FileTypeLTSVZSTD:
 		return FileTypeLTSV
+	case FileTypeParquet, FileTypeParquetGZ, FileTypeParquetBZ2, FileTypeParquetXZ, FileTypeParquetZSTD:
+		return FileTypeParquet
 	default:
 		return FileTypeUnsupported
 	}
@@ -240,17 +265,17 @@ func (f *file) getFileType() FileType {
 
 // isCSV returns true if the file is CSV format
 func (f *file) isCSV() bool {
-	return f.getFileType() == FileTypeCSV
+	return f.getFileType().baseType() == FileTypeCSV
 }
 
 // isTSV returns true if the file is TSV format
 func (f *file) isTSV() bool {
-	return f.getFileType() == FileTypeTSV
+	return f.getFileType().baseType() == FileTypeTSV
 }
 
 // isLTSV returns true if the file is LTSV format
 func (f *file) isLTSV() bool {
-	return f.getFileType() == FileTypeLTSV
+	return f.getFileType().baseType() == FileTypeLTSV
 }
 
 // isCompressed returns true if file is compressed
@@ -280,13 +305,15 @@ func (f *file) isZSTD() bool {
 
 // toTable converts file to table structure
 func (f *file) toTable() (*table, error) {
-	switch f.getFileType() {
+	switch f.getFileType().baseType() {
 	case FileTypeCSV:
 		return f.parseCSV()
 	case FileTypeTSV:
 		return f.parseTSV()
 	case FileTypeLTSV:
 		return f.parseLTSV()
+	case FileTypeParquet:
+		return f.parseParquet()
 	default:
 		return nil, fmt.Errorf("unsupported file type: %s", f.getPath())
 	}
@@ -295,26 +322,77 @@ func (f *file) toTable() (*table, error) {
 // detectFileType detects file type from extension, considering compressed files
 func detectFileType(path string) FileType {
 	basePath := path
+	var compressionType string
 
 	// Remove compression extensions
 	if strings.HasSuffix(path, extGZ) {
 		basePath = strings.TrimSuffix(path, extGZ)
+		compressionType = compressionGZStr
 	} else if strings.HasSuffix(path, extBZ2) {
 		basePath = strings.TrimSuffix(path, extBZ2)
+		compressionType = compressionBZ2Str
 	} else if strings.HasSuffix(path, extXZ) {
 		basePath = strings.TrimSuffix(path, extXZ)
+		compressionType = compressionXZStr
 	} else if strings.HasSuffix(path, extZSTD) {
 		basePath = strings.TrimSuffix(path, extZSTD)
+		compressionType = compressionZSTDStr
 	}
 
 	ext := strings.ToLower(filepath.Ext(basePath))
 	switch ext {
 	case extCSV:
-		return FileTypeCSV
+		switch compressionType {
+		case compressionGZStr:
+			return FileTypeCSVGZ
+		case compressionBZ2Str:
+			return FileTypeCSVBZ2
+		case compressionXZStr:
+			return FileTypeCSVXZ
+		case compressionZSTDStr:
+			return FileTypeCSVZSTD
+		default:
+			return FileTypeCSV
+		}
 	case extTSV:
-		return FileTypeTSV
+		switch compressionType {
+		case compressionGZStr:
+			return FileTypeTSVGZ
+		case compressionBZ2Str:
+			return FileTypeTSVBZ2
+		case compressionXZStr:
+			return FileTypeTSVXZ
+		case compressionZSTDStr:
+			return FileTypeTSVZSTD
+		default:
+			return FileTypeTSV
+		}
 	case extLTSV:
-		return FileTypeLTSV
+		switch compressionType {
+		case compressionGZStr:
+			return FileTypeLTSVGZ
+		case compressionBZ2Str:
+			return FileTypeLTSVBZ2
+		case compressionXZStr:
+			return FileTypeLTSVXZ
+		case compressionZSTDStr:
+			return FileTypeLTSVZSTD
+		default:
+			return FileTypeLTSV
+		}
+	case extParquet:
+		switch compressionType {
+		case compressionGZStr:
+			return FileTypeParquetGZ
+		case compressionBZ2Str:
+			return FileTypeParquetBZ2
+		case compressionXZStr:
+			return FileTypeParquetXZ
+		case compressionZSTDStr:
+			return FileTypeParquetZSTD
+		default:
+			return FileTypeParquet
+		}
 	default:
 		return FileTypeUnsupported
 	}
