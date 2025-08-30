@@ -1,6 +1,7 @@
 package filesql
 
 import (
+	"bytes"
 	"compress/bzip2"
 	"compress/gzip"
 	"encoding/csv"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
+	"github.com/xuri/excelize/v2"
 )
 
 // FileType represents supported file types including compression variants
@@ -26,6 +28,8 @@ const (
 	FileTypeLTSV
 	// FileTypeParquet represents Parquet file type
 	FileTypeParquet
+	// FileTypeXLSX represents Excel XLSX file type
+	FileTypeXLSX
 	// FileTypeCSVGZ represents gzip-compressed CSV file type
 	FileTypeCSVGZ
 	// FileTypeTSVGZ represents gzip-compressed TSV file type
@@ -58,6 +62,14 @@ const (
 	FileTypeLTSVZSTD
 	// FileTypeParquetZSTD represents zstd-compressed Parquet file type
 	FileTypeParquetZSTD
+	// FileTypeXLSXGZ represents gzip-compressed Excel XLSX file type
+	FileTypeXLSXGZ
+	// FileTypeXLSXBZ2 represents bzip2-compressed Excel XLSX file type
+	FileTypeXLSXBZ2
+	// FileTypeXLSXXZ represents xz-compressed Excel XLSX file type
+	FileTypeXLSXXZ
+	// FileTypeXLSXZSTD represents zstd-compressed Excel XLSX file type
+	FileTypeXLSXZSTD
 	// FileTypeUnsupported represents unsupported file type
 	FileTypeUnsupported
 )
@@ -72,6 +84,8 @@ const (
 	extLTSV = ".ltsv"
 	// extParquet is the Parquet file extension
 	extParquet = ".parquet"
+	// extXLSX is the Excel XLSX file extension
+	extXLSX = ".xlsx"
 	// extGZ is the gzip compression extension
 	extGZ = ".gz"
 	// extBZ2 is the bzip2 compression extension
@@ -136,7 +150,7 @@ func newFile(path string) *file {
 
 // supportedFileExtPatterns returns all supported file patterns for glob matching
 func supportedFileExtPatterns() []string {
-	baseExts := []string{extCSV, extTSV, extLTSV, extParquet}
+	baseExts := []string{extCSV, extTSV, extLTSV, extParquet, extXLSX}
 	compressionExts := []string{"", extGZ, extBZ2, extXZ, extZSTD}
 
 	var patterns []string
@@ -165,7 +179,8 @@ func isSupportedFile(fileName string) bool {
 	return strings.HasSuffix(fileName, extCSV) ||
 		strings.HasSuffix(fileName, extTSV) ||
 		strings.HasSuffix(fileName, extLTSV) ||
-		strings.HasSuffix(fileName, extParquet)
+		strings.HasSuffix(fileName, extParquet) ||
+		strings.HasSuffix(fileName, extXLSX)
 }
 
 // isSupportedExtension checks if the given extension is supported
@@ -188,6 +203,8 @@ func (ft FileType) extension() string {
 		return extLTSV
 	case FileTypeParquet:
 		return extParquet
+	case FileTypeXLSX:
+		return extXLSX
 	case FileTypeCSVGZ:
 		return extCSV + extGZ
 	case FileTypeTSVGZ:
@@ -220,6 +237,14 @@ func (ft FileType) extension() string {
 		return extLTSV + extZSTD
 	case FileTypeParquetZSTD:
 		return extParquet + extZSTD
+	case FileTypeXLSXGZ:
+		return extXLSX + extGZ
+	case FileTypeXLSXBZ2:
+		return extXLSX + extBZ2
+	case FileTypeXLSXXZ:
+		return extXLSX + extXZ
+	case FileTypeXLSXZSTD:
+		return extXLSX + extZSTD
 	default:
 		return ""
 	}
@@ -236,6 +261,8 @@ func (ft FileType) baseType() FileType {
 		return FileTypeLTSV
 	case FileTypeParquet, FileTypeParquetGZ, FileTypeParquetBZ2, FileTypeParquetXZ, FileTypeParquetZSTD:
 		return FileTypeParquet
+	case FileTypeXLSX, FileTypeXLSXGZ, FileTypeXLSXBZ2, FileTypeXLSXXZ, FileTypeXLSXZSTD:
+		return FileTypeXLSX
 	default:
 		return FileTypeUnsupported
 	}
@@ -278,6 +305,11 @@ func (f *file) isLTSV() bool {
 	return f.getFileType().baseType() == FileTypeLTSV
 }
 
+// isXLSX returns true if the file is XLSX format
+func (f *file) isXLSX() bool {
+	return f.getFileType().baseType() == FileTypeXLSX
+}
+
 // isCompressed returns true if file is compressed
 func (f *file) isCompressed() bool {
 	return f.isGZ() || f.isBZ2() || f.isXZ() || f.isZSTD()
@@ -314,6 +346,8 @@ func (f *file) toTable() (*table, error) {
 		return f.parseLTSV()
 	case FileTypeParquet:
 		return f.parseParquet()
+	case FileTypeXLSX:
+		return f.parseXLSX()
 	default:
 		return nil, fmt.Errorf("unsupported file type: %s", f.getPath())
 	}
@@ -392,6 +426,19 @@ func detectFileType(path string) FileType {
 			return FileTypeParquetZSTD
 		default:
 			return FileTypeParquet
+		}
+	case extXLSX:
+		switch compressionType {
+		case compressionGZStr:
+			return FileTypeXLSXGZ
+		case compressionBZ2Str:
+			return FileTypeXLSXBZ2
+		case compressionXZStr:
+			return FileTypeXLSXXZ
+		case compressionZSTDStr:
+			return FileTypeXLSXZSTD
+		default:
+			return FileTypeXLSX
 		}
 	default:
 		return FileTypeUnsupported
@@ -588,4 +635,98 @@ func (f *file) parseLTSV() (*table, error) {
 
 	tableName := tableFromFilePath(f.path)
 	return newTable(tableName, header, tableRecords), nil
+}
+
+// parseXLSX parses XLSX file with compression support
+// Only supports single-sheet files for single table parsing.
+// For multiple sheets, use filesql.Open() or filesql.OpenContext() for 1-sheet-1-table approach.
+func (f *file) parseXLSX() (*table, error) {
+	reader, closer, err := f.openReader()
+	if err != nil {
+		return nil, err
+	}
+	defer closer()
+
+	// For XLSX files, we need to handle them specially since excelize needs a file path or bytes
+	// If it's compressed, we need to read all data into memory first
+	var xlsxFile *excelize.File
+
+	if f.isCompressed() {
+		// Read all data into memory for compressed files
+		data, err := io.ReadAll(reader)
+		if err != nil {
+			return nil, err
+		}
+		xlsxFile, err = excelize.OpenReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// For uncompressed files, open directly
+		xlsxFile, err = excelize.OpenFile(f.path)
+		if err != nil {
+			return nil, err
+		}
+	}
+	defer func() {
+		_ = xlsxFile.Close() // Ignore close error
+	}()
+
+	// Get all sheet names
+	sheetNames := xlsxFile.GetSheetList()
+	if len(sheetNames) == 0 {
+		return nil, fmt.Errorf("no sheets found in Excel file: %s", f.path)
+	}
+
+	// With the new 1-sheet-1-table approach, we only parse the first sheet for single table parsing
+	// For multiple sheets, we process only the first sheet (single table parsing limitation)
+	// Users should use Open/OpenContext for full multi-sheet support with separate tables
+
+	// Process the first sheet
+	sheetName := sheetNames[0]
+	rows, err := xlsxFile.GetRows(sheetName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read sheet %s: %w", sheetName, err)
+	}
+
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("sheet %s is empty in Excel file: %s", sheetName, f.path)
+	}
+
+	// Convert to standard table format
+	headers, records := convertXLSXRowsToTable(rows)
+
+	tableName := tableFromFilePath(f.path)
+	return newTable(tableName, headers, records), nil
+}
+
+// convertXLSXRowsToTable converts XLSX rows to table headers and records
+// First row becomes headers, remaining rows become records with padding
+func convertXLSXRowsToTable(rows [][]string) (header, []record) {
+	var headers header
+	var records []record
+
+	// First row as headers
+	if len(rows) > 0 {
+		headers = make(header, len(rows[0]))
+		copy(headers, rows[0])
+	}
+
+	// Remaining rows as records
+	if len(rows) > 1 {
+		records = make([]record, len(rows)-1)
+		for i, row := range rows[1:] {
+			record := make(record, len(headers))
+			for j := range headers {
+				if j < len(row) {
+					record[j] = row[j]
+				} else {
+					record[j] = "" // Pad with empty string if row is shorter
+				}
+			}
+			records[i] = record
+		}
+	}
+
+	return headers, records
 }

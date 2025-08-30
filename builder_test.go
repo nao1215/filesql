@@ -3,6 +3,7 @@ package filesql
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
@@ -10,10 +11,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"modernc.org/sqlite"
 )
 
 //go:embed testdata/embed_test/*.csv testdata/embed_test/*.tsv
@@ -1456,9 +1460,9 @@ func TestDBBuilder_CreateDecompressedReader(t *testing.T) {
 		t.Parallel()
 
 		// Use an existing gzip test file
-		gzipFile := "testdata/sample.csv.gz"
+		gzipFile := filepath.Join("testdata", "sample.csv.gz")
 
-		file, err := os.Open(gzipFile)
+		file, err := os.Open(gzipFile) //nolint:gosec // Test file path is safe
 		if err != nil {
 			t.Skip("Gzip test file not available, skipping test")
 		}
@@ -1489,9 +1493,9 @@ func TestDBBuilder_CreateDecompressedReader(t *testing.T) {
 	t.Run("bzip2 compressed file", func(t *testing.T) {
 		t.Parallel()
 
-		bzip2File := "testdata/products.tsv.bz2"
+		bzip2File := filepath.Join("testdata", "products.tsv.bz2")
 
-		file, err := os.Open(bzip2File)
+		file, err := os.Open(bzip2File) //nolint:gosec // Test file path is safe
 		if err != nil {
 			t.Skip("Bzip2 test file not available, skipping test")
 		}
@@ -1512,9 +1516,9 @@ func TestDBBuilder_CreateDecompressedReader(t *testing.T) {
 	t.Run("xz compressed file", func(t *testing.T) {
 		t.Parallel()
 
-		xzFile := "testdata/logs.ltsv.xz"
+		xzFile := filepath.Join("testdata", "logs.ltsv.xz")
 
-		file, err := os.Open(xzFile)
+		file, err := os.Open(xzFile) //nolint:gosec // Test file path is safe
 		if err != nil {
 			t.Skip("XZ test file not available, skipping test")
 		}
@@ -1535,9 +1539,9 @@ func TestDBBuilder_CreateDecompressedReader(t *testing.T) {
 	t.Run("zstd compressed file", func(t *testing.T) {
 		t.Parallel()
 
-		zstdFile := "testdata/users.csv.zst"
+		zstdFile := filepath.Join("testdata", "users.csv.zst")
 
-		file, err := os.Open(zstdFile)
+		file, err := os.Open(zstdFile) //nolint:gosec // Test file path is safe
 		if err != nil {
 			t.Skip("ZSTD test file not available, skipping test")
 		}
@@ -1743,6 +1747,335 @@ func TestAutoSavePaths(t *testing.T) {
 		_, err = validatedBuilder.Open(context.Background())
 		if err == nil {
 			t.Error("Expected error when opening empty CSV data")
+		}
+	})
+
+	t.Run("createEmptyTable successful parse", func(t *testing.T) {
+		t.Parallel()
+
+		// Test with minimal CSV that would parse successfully but have no data
+		// This should trigger the createEmptyTable happy path
+		validCSV := "id,name,email\n1,test,test@example.com\n"
+		reader := strings.NewReader(validCSV)
+
+		// Create a custom reader input that forces empty table creation
+		// We'll simulate this by creating a very small chunk size that reads only headers
+		validatedBuilder, err := NewBuilder().
+			AddReader(reader, "parsed_empty", FileTypeCSV).
+			SetDefaultChunkSize(1). // Very small chunk to simulate header-only parsing
+			Build(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		db, err := validatedBuilder.Open(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+
+		// Check table was created
+		rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name='parsed_empty'")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+
+		hasTable := false
+		for rows.Next() {
+			hasTable = true
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+
+		if !hasTable {
+			t.Error("Expected table to be created")
+		}
+	})
+
+	t.Run("createEmptyTable with duplicate columns", func(t *testing.T) {
+		t.Parallel()
+
+		// Test with duplicate column names
+		duplicateCSV := "id,name,id\n"
+		validatedBuilder, err := NewBuilder().
+			AddReader(strings.NewReader(duplicateCSV), "duplicate_cols", FileTypeCSV).
+			Build(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = validatedBuilder.Open(context.Background())
+		if err == nil {
+			t.Error("Expected error for duplicate column names")
+		}
+		if !strings.Contains(err.Error(), "duplicate column") {
+			t.Errorf("Expected 'duplicate column' error, got: %v", err)
+		}
+	})
+
+	t.Run("createEmptyTable fallback to createTableFromHeaders", func(t *testing.T) {
+		t.Parallel()
+
+		// Test the fallback path when parseFromReader fails
+		// Use a reader that would cause parsing to fail but still have readable content
+		brokenCSV := "id,name,email\n" // Header only, no data, should trigger fallback
+		validatedBuilder, err := NewBuilder().
+			AddReader(strings.NewReader(brokenCSV), "fallback_test", FileTypeCSV).
+			Build(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// This should not fail but use the createTableFromHeaders fallback
+		db, err := validatedBuilder.Open(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+
+		// Check table exists
+		rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name='fallback_test'")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+
+		hasTable := false
+		for rows.Next() {
+			hasTable = true
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+
+		if !hasTable {
+			t.Error("Expected table to be created via fallback")
+		}
+	})
+}
+
+func TestStreamXLSXFileToSQLite(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid XLSX file with multiple sheets", func(t *testing.T) {
+		ctx := context.Background()
+
+		// Create in-memory database
+		sqliteDriver := &sqlite.Driver{}
+		conn, err := sqliteDriver.Open(":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		db := sql.OpenDB(&directConnector{conn: conn})
+		defer db.Close()
+
+		// Read sample XLSX file
+		xlsxPath := filepath.Join("testdata", "excel", "sample.xlsx")
+		file, err := os.Open(xlsxPath) //nolint:gosec // Test file path is safe
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+
+		// Create builder and test streamXLSXFileToSQLite
+		builder := &DBBuilder{}
+		err = builder.streamXLSXFileToSQLite(ctx, db, file, xlsxPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify tables were created
+		rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+
+		var tables []string
+		for rows.Next() {
+			var tableName string
+			if err := rows.Scan(&tableName); err != nil {
+				t.Fatal(err)
+			}
+			tables = append(tables, tableName)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+
+		expectedTables := []string{"sample_Sheet1", "sample_Sheet2"}
+		if !reflect.DeepEqual(tables, expectedTables) {
+			t.Errorf("Expected tables %v, got %v", expectedTables, tables)
+		}
+
+		// Verify data in first sheet
+		rows, err = db.QueryContext(context.Background(), "SELECT * FROM sample_Sheet1 ORDER BY id")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+
+		var count int
+		for rows.Next() {
+			var id, name string
+			if err := rows.Scan(&id, &name); err != nil {
+				t.Fatal(err)
+			}
+			count++
+
+			switch count {
+			case 1:
+				if id != "1" || name != "Gina" {
+					t.Errorf("Expected (1, Gina), got (%s, %s)", id, name)
+				}
+			case 2:
+				if id != "2" || name != "Yulia" {
+					t.Errorf("Expected (2, Yulia), got (%s, %s)", id, name)
+				}
+			case 3:
+				if id != "3" || name != "Vika" {
+					t.Errorf("Expected (3, Vika), got (%s, %s)", id, name)
+				}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+
+		if count != 3 {
+			t.Errorf("Expected 3 records in Sheet1, got %d", count)
+		}
+
+		// Verify data in second sheet
+		rows, err = db.QueryContext(context.Background(), "SELECT * FROM sample_Sheet2 ORDER BY id")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+
+		count = 0
+		for rows.Next() {
+			var id, mail string
+			if err := rows.Scan(&id, &mail); err != nil {
+				t.Fatal(err)
+			}
+			count++
+
+			switch count {
+			case 1:
+				if id != "1" || mail != "gina@example.com" {
+					t.Errorf("Expected (1, gina@example.com), got (%s, %s)", id, mail)
+				}
+			case 2:
+				if id != "2" || mail != "yulia@example.com" {
+					t.Errorf("Expected (2, yulia@example.com), got (%s, %s)", id, mail)
+				}
+			case 3:
+				if id != "3" || mail != "vika@eample.com" {
+					t.Errorf("Expected (3, vika@eample.com), got (%s, %s)", id, mail)
+				}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+
+		if count != 3 {
+			t.Errorf("Expected 3 records in Sheet2, got %d", count)
+		}
+	})
+
+	t.Run("empty XLSX file", func(t *testing.T) {
+		ctx := context.Background()
+
+		// Create in-memory database
+		sqliteDriver := &sqlite.Driver{}
+		conn, err := sqliteDriver.Open(":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		db := sql.OpenDB(&directConnector{conn: conn})
+		defer db.Close()
+
+		// Create empty reader
+		emptyReader := strings.NewReader("")
+
+		// Create builder and test streamXLSXFileToSQLite
+		builder := &DBBuilder{}
+		err = builder.streamXLSXFileToSQLite(ctx, db, emptyReader, "empty.xlsx")
+
+		if err == nil {
+			t.Error("Expected error for empty XLSX file")
+		}
+		if !strings.Contains(err.Error(), "empty XLSX file") {
+			t.Errorf("Expected 'empty XLSX file' error, got: %v", err)
+		}
+	})
+
+	t.Run("invalid XLSX data", func(t *testing.T) {
+		ctx := context.Background()
+
+		// Create in-memory database
+		sqliteDriver := &sqlite.Driver{}
+		conn, err := sqliteDriver.Open(":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		db := sql.OpenDB(&directConnector{conn: conn})
+		defer db.Close()
+
+		// Create invalid XLSX data
+		invalidReader := strings.NewReader("invalid xlsx data")
+
+		// Create builder and test streamXLSXFileToSQLite
+		builder := &DBBuilder{}
+		err = builder.streamXLSXFileToSQLite(ctx, db, invalidReader, "invalid.xlsx")
+
+		if err == nil {
+			t.Error("Expected error for invalid XLSX data")
+		}
+		if !strings.Contains(err.Error(), "failed to open XLSX file") {
+			t.Errorf("Expected 'failed to open XLSX file' error, got: %v", err)
+		}
+	})
+
+	t.Run("duplicate table name", func(t *testing.T) {
+		ctx := context.Background()
+
+		// Create in-memory database
+		sqliteDriver := &sqlite.Driver{}
+		conn, err := sqliteDriver.Open(":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		db := sql.OpenDB(&directConnector{conn: conn})
+		defer db.Close()
+
+		// Create a table first
+		_, err = db.ExecContext(context.Background(), `CREATE TABLE "sample_Sheet1" (id TEXT, name TEXT)`)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Read sample XLSX file
+		xlsxPath := filepath.Join("testdata", "excel", "sample.xlsx")
+		file, err := os.Open(xlsxPath) //nolint:gosec // Test file path is safe
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+
+		// Create builder and test streamXLSXFileToSQLite
+		builder := &DBBuilder{}
+		err = builder.streamXLSXFileToSQLite(ctx, db, file, xlsxPath)
+
+		if err == nil {
+			t.Error("Expected error for duplicate table name")
+		}
+		if !strings.Contains(err.Error(), "already exists") {
+			t.Errorf("Expected 'already exists' error, got: %v", err)
 		}
 	})
 }

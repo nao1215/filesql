@@ -1,5 +1,5 @@
 // Package filesql provides a file-based SQL driver implementation that enables
-// querying CSV, TSV, and LTSV files using SQLite3 SQL syntax.
+// querying CSV, TSV, LTSV, Parquet, and Excel (XLSX) files using SQLite3 SQL syntax.
 //
 // filesql allows you to treat structured text files as SQL databases without
 // any data import or transformation steps. It uses SQLite3 as an in-memory
@@ -8,7 +8,7 @@
 //
 // # Features
 //
-//   - Query CSV, TSV, and LTSV files using standard SQL
+//   - Query CSV, TSV, LTSV, Parquet, and Excel (XLSX) files using standard SQL
 //   - Automatic handling of compressed files (gzip, bzip2, xz, zstandard)
 //   - Support for multiple input sources (files, directories, io.Reader, embed.FS)
 //   - Efficient streaming for large files with configurable chunk sizes
@@ -57,6 +57,7 @@
 //   - "users.csv" becomes table "users"
 //   - "data.tsv.gz" becomes table "data"
 //   - "/path/to/logs.ltsv" becomes table "logs"
+//   - "sales.xlsx" with multiple sheets becomes tables "sales_Sheet1", "sales_Sheet2", etc.
 //
 // # Data Modifications
 //

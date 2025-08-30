@@ -1,6 +1,7 @@
 package filesql
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"database/sql"
@@ -20,6 +21,7 @@ import (
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
+	"github.com/xuri/excelize/v2"
 )
 
 // Open creates an SQL database from CSV, TSV, or LTSV files.
@@ -327,6 +329,8 @@ func writeSQLiteTableData(outputPath string, columns []string, rows *sql.Rows, o
 		return writeLTSVData(writer, columns, rows)
 	case OutputFormatParquet:
 		return writeParquetTableData(outputPath, columns, rows, options.Compression)
+	case OutputFormatXLSX:
+		return writeXLSXTableData(outputPath, columns, rows, options.Compression)
 	default:
 		return fmt.Errorf("unsupported output format: %v", options.Format)
 	}
@@ -836,6 +840,147 @@ func writeParquetData(outputPath string, columns []string, rows [][]string) erro
 	// Flush and close writer explicitly
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("failed to close parquet writer: %w", err)
+	}
+
+	return nil
+}
+
+// writeXLSXTableData writes SQLite table data to Excel XLSX format
+func writeXLSXTableData(outputPath string, columns []string, rows *sql.Rows, compression CompressionType) error {
+	if len(columns) == 0 {
+		return errors.New("no columns defined")
+	}
+
+	// Create new Excel file
+	f := excelize.NewFile()
+	defer func() {
+		_ = f.Close() // Ignore close error
+	}()
+
+	// For Excel, we use the table name as sheet name
+	// Extract table name from output path (remove directory and extension)
+	fileName := filepath.Base(outputPath)
+
+	// First remove compression extension if present (case-insensitive)
+	compressionExts := []string{".gz", ".bz2", ".xz", ".zst"}
+	for _, ext := range compressionExts {
+		if strings.HasSuffix(strings.ToLower(fileName), ext) {
+			fileName = strings.TrimSuffix(fileName, ext)
+			break
+		}
+	}
+
+	// Then remove the file extension (e.g., .xlsx)
+	tableName := strings.TrimSuffix(fileName, filepath.Ext(fileName))
+
+	// Create a sheet with the table name, or use default if invalid
+	sheetName := tableName
+	if sheetName == "" {
+		sheetName = "Sheet1"
+	}
+
+	// Create new sheet (replace default Sheet1)
+	if sheetName != "Sheet1" {
+		_, err := f.NewSheet(sheetName)
+		if err != nil {
+			return fmt.Errorf("failed to create sheet %s: %w", sheetName, err)
+		}
+		// Delete default sheet
+		if err := f.DeleteSheet("Sheet1"); err != nil {
+			return fmt.Errorf("failed to delete default sheet: %w", err)
+		}
+	}
+
+	// Set headers
+	for i, col := range columns {
+		cell, err := excelize.CoordinatesToCellName(i+1, 1)
+		if err != nil {
+			return fmt.Errorf("failed to generate cell name for column %d: %w", i+1, err)
+		}
+		if err := f.SetCellValue(sheetName, cell, col); err != nil {
+			return fmt.Errorf("failed to set header %s: %w", col, err)
+		}
+	}
+
+	// Prepare for scanning rows
+	values := make([]interface{}, len(columns))
+	scanArgs := make([]interface{}, len(columns))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	// Write data rows
+	rowIndex := 2 // Start from row 2 (after header)
+	for rows.Next() {
+		if err := rows.Scan(scanArgs...); err != nil {
+			return fmt.Errorf("failed to scan row: %w", err)
+		}
+
+		for i, val := range values {
+			cell, err := excelize.CoordinatesToCellName(i+1, rowIndex)
+			if err != nil {
+				return fmt.Errorf("failed to generate cell name for column %d, row %d: %w", i+1, rowIndex, err)
+			}
+			var cellValue interface{}
+
+			// Convert SQL values to appropriate Excel types
+			if val == nil {
+				cellValue = ""
+			} else {
+				switch v := val.(type) {
+				case []byte:
+					cellValue = string(v)
+				case string:
+					cellValue = v
+				default:
+					cellValue = fmt.Sprintf("%v", v)
+				}
+			}
+
+			if err := f.SetCellValue(sheetName, cell, cellValue); err != nil {
+				return fmt.Errorf("failed to set cell value at %s: %w", cell, err)
+			}
+		}
+		rowIndex++
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error reading rows: %w", err)
+	}
+
+	// Handle compression by saving to buffer first if needed
+	if compression != CompressionNone {
+		// For compressed output, we need to save to a buffer first
+		var buf bytes.Buffer
+		if err := f.Write(&buf); err != nil {
+			return fmt.Errorf("failed to write Excel file to buffer: %w", err)
+		}
+
+		// Create compressed output file
+		file, err := os.Create(outputPath) //nolint:gosec // Output path is constructed from validated directory and table name
+		if err != nil {
+			return fmt.Errorf("failed to create output file: %w", err)
+		}
+		defer file.Close()
+
+		// Create compressed writer
+		compressedWriter, closeWriter, err := createCompressedWriter(file, compression)
+		if err != nil {
+			return fmt.Errorf("failed to create compressed writer: %w", err)
+		}
+		defer closeWriter()
+
+		// Write compressed data
+		if _, err := compressedWriter.Write(buf.Bytes()); err != nil {
+			return fmt.Errorf("failed to write compressed data: %w", err)
+		}
+
+		return nil
+	}
+
+	// Save directly to file for uncompressed output
+	if err := f.SaveAs(outputPath); err != nil {
+		return fmt.Errorf("failed to save Excel file: %w", err)
 	}
 
 	return nil

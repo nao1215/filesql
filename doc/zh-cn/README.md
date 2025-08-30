@@ -9,7 +9,7 @@
 
 ![logo](../image/filesql-logo.png)
 
-**filesql** 是一个 Go SQL 驱动，让您可以使用 SQLite3 SQL 语法直接查询 CSV、TSV 和 LTSV 文件。无需导入或转换即可直接查询数据文件！
+**filesql** 是一个 Go SQL 驱动，让您可以使用 SQLite3 SQL 语法直接查询 CSV、TSV、LTSV、Parquet 和 Excel (XLSX) 文件。无需导入或转换即可直接查询数据文件！
 
 ## 🎯 为什么选择 filesql？
 
@@ -20,7 +20,7 @@
 ## ✨ 功能特性
 
 - 🔍 **SQLite3 SQL 接口** - 使用 SQLite3 强大的 SQL 方言查询文件
-- 📁 **多种文件格式** - 支持 CSV、TSV 和 LTSV 文件
+- 📁 **多种文件格式** - 支持 CSV、TSV、LTSV、Parquet 和 Excel (XLSX) 文件
 - 🗜️ **压缩支持** - 自动处理 .gz、.bz2、.xz 和 .zst 压缩文件
 - 🌊 **流式处理** - 通过可配置的块大小高效处理大文件
 - 📖 **灵活的输入源** - 支持文件路径、目录、io.Reader 和 embed.FS
@@ -37,10 +37,11 @@
 | `.tsv` | TSV | 制表符分隔值 |
 | `.ltsv` | LTSV | 标签制表符分隔值 |
 | `.parquet` | Parquet | Apache Parquet 列式格式 |
-| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz` | Gzip 压缩 | Gzip 压缩文件 |
-| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2` | Bzip2 压缩 | Bzip2 压缩文件 |
-| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz` | XZ 压缩 | XZ 压缩文件 |
-| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst` | Zstandard 压缩 | Zstandard 压缩文件 |
+| `.xlsx` | Excel XLSX | Microsoft Excel 工作簿格式 |
+| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz`, `.xlsx.gz` | Gzip 压缩 | Gzip 压缩文件 |
+| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2` | Bzip2 压缩 | Bzip2 压缩文件 |
+| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz` | XZ 压缩 | XZ 压缩文件 |
+| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst` | Zstandard 压缩 | Zstandard 压缩文件 |
 
 ## 📦 安装
 
@@ -103,8 +104,8 @@ func main() {
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 defer cancel()
 
-// 一次打开多个文件
-db, err := filesql.OpenContext(ctx, "users.csv", "orders.tsv", "logs.ltsv.gz")
+// 一次打开多个文件（包括 Parquet 和 XLSX）
+db, err := filesql.OpenContext(ctx, "users.csv", "orders.tsv", "logs.ltsv.gz", "analytics.parquet", "sales.xlsx")
 if err != nil {
     log.Fatal(err)
 }
@@ -112,10 +113,12 @@ defer db.Close()
 
 // 跨不同文件格式连接数据
 rows, err := db.QueryContext(ctx, `
-    SELECT u.name, o.order_date, l.event
+    SELECT u.name, o.order_date, l.event, a.metrics, s.total_amount
     FROM users u
     JOIN orders o ON u.id = o.user_id
     JOIN logs l ON u.id = l.user_id
+    JOIN analytics a ON u.id = a.user_id
+    JOIN sales_Sheet1 s ON u.id = s.user_id
     WHERE o.order_date > '2024-01-01'
 `)
 ```
@@ -294,6 +297,11 @@ options := filesql.NewDumpOptions().
     WithFormat(filesql.OutputFormatTSV).
     WithCompression(filesql.CompressionGZ)
 err = filesql.DumpDatabase(db, "./output", options)
+
+// 导出到 Parquet 格式（计划中）
+parquetOptions := filesql.NewDumpOptions().
+    WithFormat(filesql.OutputFormatParquet)
+// 注意：Parquet 导出功能已实现（不支持外部压缩，请使用 Parquet 的内置压缩）
 ```
 
 ## 📝 表命名规则
@@ -304,6 +312,8 @@ filesql 自动从文件路径推导表名：
 - `data.tsv.gz` → 表 `data`
 - `/path/to/sales.csv` → 表 `sales`
 - `products.ltsv.bz2` → 表 `products`
+- `analytics.parquet` → 表 `analytics`
+- `sales.xlsx`（包含工作表 "Q1"、"Q2"）→ 表 `sales_Q1`、`sales_Q2`
 
 ## ⚠️ 重要说明
 
@@ -386,6 +396,50 @@ defer db.Close()
 
 // 使用上下文支持取消的查询
 rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'active'")
+```
+
+### Parquet 支持
+- **读取**：完全支持 Apache Parquet 文件和复杂数据类型
+- **写入**：导出功能已实现（不支持外部压缩，请使用 Parquet 的内置压缩）
+- **类型映射**：Parquet 类型映射到 SQLite 类型
+- **压缩**：使用 Parquet 的内置压缩而不是外部压缩
+- **大数据**：使用 Arrow 列式格式高效处理 Parquet 文件
+
+### Excel (XLSX) 支持
+- **一张工作表一张表结构**：Excel 工作簿中的每张工作表都会成为单独的 SQL 表
+- **表命名规则**：SQL 表名遵循 `{文件名}_{工作表名}` 格式（例如："sales_Q1"、"sales_Q2"）
+- **标题行处理**：每张工作表的第一行成为该表的列标题
+- **标准 SQL 操作**：可以独立查询每张工作表，或使用 JOIN 合并不同工作表的数据
+- **内存要求**：由于基于 ZIP 的格式结构，XLSX 文件即使在流式操作期间也需要完全加载到内存中
+- **完全内存加载**：XLSX 文件由于其 ZIP 结构需要完全加载到内存中，并处理所有工作表（不仅仅是第一张工作表）。CSV/TSV 流式解析器不适用于 XLSX 文件
+- **导出功能**：导出到 XLSX 格式时，表名会自动成为工作表名
+- **压缩支持**：完全支持压缩的 XLSX 文件（.xlsx.gz、.xlsx.bz2、.xlsx.xz、.xlsx.zst）
+
+#### Excel 文件结构示例
+```
+Excel 文件包含多张工作表：
+
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│ 员工信息    │    │ 产品列表    │    │ 销售区域    │
+│ 姓名   年龄  │    │ 产品名称    │    │ 区域名称    │
+│ 小明    25  │    │ 笔记本电脑  │    │ 华北地区    │
+│ 小红    30  │    │ 鼠标       │    │ 华南地区    │
+└─────────────┘    └─────────────┘    └─────────────┘
+
+生成 3 个独立的 SQL 表：
+
+sales_员工信息:         sales_产品列表:         sales_销售区域:
+┌──────┬─────┐          ┌────────────┐        ┌────────────┐
+│ 姓名 │ 年龄│          │ 产品名称   │        │ 区域名称   │
+├──────┼─────┤          ├────────────┤        ├────────────┤
+│ 小明 │  25 │          │ 笔记本电脑 │        │ 华北地区   │
+│ 小红 │  30 │          │ 鼠标       │        │ 华南地区   │
+└──────┴─────┘          └────────────┘        └────────────┘
+
+SQL 示例：
+SELECT * FROM sales_员工信息 WHERE 年龄 > 27;
+SELECT e.姓名, p.产品名称 FROM sales_员工信息 e 
+  JOIN sales_产品列表 p ON e.rowid = p.rowid;
 ```
 
 ## 🤝 贡献

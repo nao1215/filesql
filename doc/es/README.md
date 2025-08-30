@@ -9,7 +9,7 @@
 
 ![logo](../image/filesql-logo.png)
 
-**filesql** es un controlador SQL para Go que te permite consultar archivos CSV, TSV y LTSV usando la sintaxis SQL de SQLite3. ¡Consulta tus archivos de datos directamente sin importaciones o transformaciones!
+**filesql** es un controlador SQL para Go que te permite consultar archivos CSV, TSV, LTSV, Parquet y Excel (XLSX) usando la sintaxis SQL de SQLite3. ¡Consulta tus archivos de datos directamente sin importaciones o transformaciones!
 
 ## 🎯 ¿Por qué filesql?
 
@@ -20,7 +20,7 @@ En lugar de mantener código duplicado en ambos proyectos, extrajimos la funcion
 ## ✨ Características
 
 - 🔍 **Interfaz SQL SQLite3** - Usa el poderoso dialecto SQL de SQLite3 para consultar tus archivos
-- 📁 **Múltiples formatos de archivo** - Soporte para archivos CSV, TSV y LTSV
+- 📁 **Múltiples formatos de archivo** - Soporte para archivos CSV, TSV, LTSV, Parquet y Excel (XLSX)
 - 🗜️ **Soporte de compresión** - Maneja automáticamente archivos comprimidos .gz, .bz2, .xz y .zst
 - 🌊 **Procesamiento de flujos** - Maneja eficientemente archivos grandes a través de streaming con tamaños de chunk configurables
 - 📖 **Fuentes de entrada flexibles** - Soporte para rutas de archivos, directorios, io.Reader y embed.FS
@@ -37,10 +37,11 @@ En lugar de mantener código duplicado en ambos proyectos, extrajimos la funcion
 | `.tsv` | TSV | Valores separados por tabulaciones |
 | `.ltsv` | LTSV | Valores con etiquetas separados por tabulaciones |
 | `.parquet` | Parquet | Formato columnar Apache Parquet |
-| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz` | Compresión Gzip | Archivos comprimidos con Gzip |
-| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2` | Compresión Bzip2 | Archivos comprimidos con Bzip2 |
-| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz` | Compresión XZ | Archivos comprimidos con XZ |
-| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst` | Compresión Zstandard | Archivos comprimidos con Zstandard |
+| `.xlsx` | Excel XLSX | Formato de libro de Excel de Microsoft |
+| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz`, `.xlsx.gz` | Compresión Gzip | Archivos comprimidos con Gzip |
+| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2` | Compresión Bzip2 | Archivos comprimidos con Bzip2 |
+| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz` | Compresión XZ | Archivos comprimidos con XZ |
+| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst` | Compresión Zstandard | Archivos comprimidos con Zstandard |
 
 ## 📦 Instalación
 
@@ -103,8 +104,8 @@ func main() {
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 defer cancel()
 
-// Abrir múltiples archivos a la vez
-db, err := filesql.OpenContext(ctx, "users.csv", "orders.tsv", "logs.ltsv.gz")
+// Abrir múltiples archivos a la vez (incluyendo Parquet)
+db, err := filesql.OpenContext(ctx, "users.csv", "orders.tsv", "logs.ltsv.gz", "analytics.parquet")
 if err != nil {
     log.Fatal(err)
 }
@@ -112,10 +113,11 @@ defer db.Close()
 
 // Unir datos de diferentes formatos de archivo
 rows, err := db.QueryContext(ctx, `
-    SELECT u.name, o.order_date, l.event
+    SELECT u.name, o.order_date, l.event, a.metrics
     FROM users u
     JOIN orders o ON u.id = o.user_id
     JOIN logs l ON u.id = l.user_id
+    JOIN analytics a ON u.id = a.user_id
     WHERE o.order_date > '2024-01-01'
 `)
 ```
@@ -294,6 +296,11 @@ options := filesql.NewDumpOptions().
     WithFormat(filesql.OutputFormatTSV).
     WithCompression(filesql.CompressionGZ)
 err = filesql.DumpDatabase(db, "./output", options)
+
+// Exportar a formato Parquet (cuando esté disponible)
+parquetOptions := filesql.NewDumpOptions().
+    WithFormat(filesql.OutputFormatParquet)
+// Nota: La funcionalidad de exportación está implementada (compresión externa no soportada, use la compresión integrada de Parquet)
 ```
 
 ## 📝 Reglas de nomenclatura de tablas
@@ -304,6 +311,8 @@ filesql deriva automáticamente los nombres de las tablas de las rutas de archiv
 - `data.tsv.gz` → tabla `data`
 - `/path/to/sales.csv` → tabla `sales`
 - `products.ltsv.bz2` → tabla `products`
+- `analytics.parquet` → tabla `analytics`
+- `sales.xlsx` (con hojas 'Q1', 'Q2') → tablas `sales_Q1`, `sales_Q2`
 
 ## ⚠️ Notas importantes
 
@@ -325,6 +334,50 @@ Dado que filesql usa SQLite3 como su motor subyacente, toda la sintaxis SQL sigu
 - Configura tamaños de chunk con `SetDefaultChunkSize()` para optimización de memoria
 - Una sola conexión SQLite funciona mejor para la mayoría de escenarios
 - Usa streaming para archivos más grandes que la memoria disponible
+
+### Soporte de Excel (XLSX)
+- **Estructura 1-Hoja-1-Tabla**: Cada hoja en un libro de Excel se convierte en una tabla SQL separada
+- **Nomenclatura de tablas**: Los nombres de las tablas SQL siguen el formato `{nombre_archivo}_{nombre_hoja}` (ej., "ventas_T1", "ventas_T2")
+- **Procesamiento de fila de encabezado**: La primera fila de cada hoja se convierte en los encabezados de columna para esa tabla
+- **Operaciones SQL estándar**: Consulta cada hoja independientemente o usa JOINs para combinar datos entre hojas
+- **Requisitos de memoria**: Los archivos XLSX requieren carga completa en memoria debido a la estructura de formato basado en ZIP, incluso durante operaciones de streaming
+- **Carga completa en memoria**: Los archivos XLSX se cargan completamente en memoria debido a su estructura ZIP, y se procesan todas las hojas (no solo la primera). Los analizadores de streaming de CSV/TSV no son aplicables a archivos XLSX
+- **Funcionalidad de exportación**: Al exportar a formato XLSX, los nombres de tabla se convierten automáticamente en nombres de hoja
+- **Soporte de compresión**: Soporte completo para archivos XLSX comprimidos (.xlsx.gz, .xlsx.bz2, .xlsx.xz, .xlsx.zst)
+
+#### Ejemplo de estructura de archivo Excel
+```
+Archivo Excel con múltiples hojas:
+
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│ Hoja1       │    │ Hoja2       │    │ Hoja3       │
+│ Nombre Edad │    │ Producto    │    │ Region      │
+│ Ana     25  │    │ Laptop      │    │ Norte       │
+│ Luis    30  │    │ Mouse       │    │ Sur         │
+└─────────────┘    └─────────────┘    └─────────────┘
+
+Resulta en 3 tablas SQL separadas:
+
+ventas_Hoja1:           ventas_Hoja2:           ventas_Hoja3:
+┌────────┬──────┐       ┌──────────┐            ┌────────┐
+│ Nombre │ Edad │       │ Producto │            │ Region │
+├────────┼──────┤       ├──────────┤            ├────────┤
+│ Ana    │   25 │       │ Laptop   │            │ Norte  │
+│ Luis   │   30 │       │ Mouse    │            │ Sur    │
+└────────┴──────┘       └──────────┘            └────────┘
+
+Ejemplos SQL:
+SELECT * FROM ventas_Hoja1 WHERE Edad > 27;
+SELECT h1.Nombre, h2.Producto FROM ventas_Hoja1 h1 
+  JOIN ventas_Hoja2 h2 ON h1.rowid = h2.rowid;
+```
+
+### Soporte de Parquet
+- **Lectura**: Soporte completo para archivos Apache Parquet con tipos de datos complejos
+- **Escritura**: La funcionalidad de exportación está implementada (compresión externa no soportada, use la compresión integrada de Parquet)
+- **Mapeo de tipos**: Los tipos Parquet se mapean a tipos SQLite (consulta [PARQUET_TYPE_MAPPING.md](../../PARQUET_TYPE_MAPPING.md))
+- **Compresión**: Se utiliza la compresión integrada de Parquet en lugar de compresión externa
+- **Datos grandes**: Los archivos Parquet se procesan eficientemente con el formato columnar de Arrow
 
 ## 🎨 Ejemplos avanzados
 

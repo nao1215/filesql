@@ -9,7 +9,7 @@
 
 ![logo](./doc/image/filesql-logo.png)
 
-**filesql** is a Go SQL driver that enables you to query CSV, TSV, LTSV, and Parquet files using SQLite3 SQL syntax. Query your data files directly without any imports or transformations!
+**filesql** is a Go SQL driver that enables you to query CSV, TSV, LTSV, Parquet, and Excel (XLSX) files using SQLite3 SQL syntax. Query your data files directly without any imports or transformations!
 
 ## 🎯 Why filesql?
 
@@ -20,7 +20,7 @@ Rather than maintaining duplicate code across both projects, we extracted the co
 ## ✨ Features
 
 - 🔍 **SQLite3 SQL Interface** - Use SQLite3's powerful SQL dialect to query your files
-- 📁 **Multiple File Formats** - Support for CSV, TSV, LTSV, and Parquet files
+- 📁 **Multiple File Formats** - Support for CSV, TSV, LTSV, Parquet, and Excel (XLSX) files
 - 🗜️ **Compression Support** - Automatically handles .gz, .bz2, .xz, and .zst compressed files
 - 🌊 **Stream Processing** - Efficiently handles large files through streaming with configurable chunk sizes
 - 📖 **Flexible Input Sources** - Support for file paths, directories, io.Reader, and embed.FS
@@ -37,10 +37,11 @@ Rather than maintaining duplicate code across both projects, we extracted the co
 | `.tsv` | TSV | Tab-separated values |
 | `.ltsv` | LTSV | Labeled Tab-separated Values |
 | `.parquet` | Parquet | Apache Parquet columnar format |
-| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz` | Gzip compressed | Gzip compressed files |
-| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2` | Bzip2 compressed | Bzip2 compressed files |
-| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz` | XZ compressed | XZ compressed files |
-| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst` | Zstandard compressed | Zstandard compressed files |
+| `.xlsx` | Excel XLSX | Microsoft Excel workbook format |
+| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz`, `.xlsx.gz` | Gzip compressed | Gzip compressed files |
+| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2` | Bzip2 compressed | Bzip2 compressed files |
+| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz` | XZ compressed | XZ compressed files |
+| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst` | Zstandard compressed | Zstandard compressed files |
 
 ## 📦 Installation
 
@@ -296,10 +297,10 @@ options := filesql.NewDumpOptions().
     WithCompression(filesql.CompressionGZ)
 err = filesql.DumpDatabase(db, "./output", options)
 
-// Export to Parquet format (when available)
+// Export to Parquet format
 parquetOptions := filesql.NewDumpOptions().
     WithFormat(filesql.OutputFormatParquet)
-// Note: Parquet export is planned but not yet fully implemented
+// Note: Parquet export is implemented, but external compression is not supported (use Parquet's built-in compression)
 ```
 
 ## 📝 Table Naming Rules
@@ -335,10 +336,47 @@ Since filesql uses SQLite3 as its underlying engine, all SQL syntax follows [SQL
 
 ### Parquet Support
 - **Reading**: Full support for Apache Parquet files with complex data types
-- **Writing**: Export functionality is planned but not yet implemented
+- **Writing**: Export functionality is implemented (external compression not supported, use Parquet's built-in compression)
 - **Type Mapping**: Parquet types are mapped to SQLite types (see [PARQUET_TYPE_MAPPING.md](PARQUET_TYPE_MAPPING.md))
 - **Compression**: Parquet's built-in compression is used instead of external compression
 - **Large Data**: Parquet files are efficiently processed with Arrow's columnar format
+
+### Excel (XLSX) Support
+- **1-Sheet-1-Table Structure**: Each sheet in an Excel workbook becomes a separate SQL table
+- **Table Naming**: SQL table names follow the format `{filename}_{sheetname}` (e.g., "sales_Q1", "sales_Q2")
+- **Header Row Processing**: First row of each sheet becomes the column headers for that table
+- **Standard SQL Operations**: Query each sheet independently or use JOINs to combine data across sheets
+- **Memory Requirements**: XLSX files require full loading into memory due to the ZIP-based format structure, even during streaming operations
+- **Implementation Note**: XLSX files are fully loaded into memory due to ZIP structure and all sheets are processed (CSV/TSV streaming parsers are not applicable)
+- **Export Functionality**: When exporting to XLSX format, table names become sheet names automatically
+- **Compression Support**: Full support for compressed XLSX files (.xlsx.gz, .xlsx.bz2, .xlsx.xz, .xlsx.zst)
+
+#### Excel File Structure Example
+```
+Excel File with Multiple Sheets:
+
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│ Sheet1      │    │ Sheet2      │    │ Sheet3      │
+│ Name   Age  │    │ Product     │    │ Region      │
+│ Alice   25  │    │ Laptop      │    │ North       │
+│ Bob     30  │    │ Mouse       │    │ South       │
+└─────────────┘    └─────────────┘    └─────────────┘
+
+Results in 3 separate SQL tables:
+
+sales_Sheet1:           sales_Sheet2:           sales_Sheet3:
+┌──────┬─────┐          ┌─────────┐             ┌────────┐
+│ Name │ Age │          │ Product │             │ Region │
+├──────┼─────┤          ├─────────┤             ├────────┤
+│ Alice│  25 │          │ Laptop  │             │ North  │
+│ Bob  │  30 │          │ Mouse   │             │ South  │
+└──────┴─────┘          └─────────┘             └────────┘
+
+SQL Examples:
+SELECT * FROM sales_Sheet1 WHERE Age > 27;
+SELECT s1.Name, s2.Product FROM sales_Sheet1 s1 
+  JOIN sales_Sheet2 s2 ON s1.rowid = s2.rowid;
+```
 
 ## 🎨 Advanced Examples
 
