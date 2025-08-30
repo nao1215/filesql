@@ -334,6 +334,32 @@ Since filesql uses SQLite3 as its underlying engine, all SQL syntax follows [SQL
 - Single SQLite connection works best for most scenarios
 - Use streaming for files larger than available memory
 
+### Concurrency Limitations
+⚠️ **IMPORTANT**: This library is **NOT thread-safe** and has **concurrency limitations**:
+- **Do NOT** share database connections across goroutines
+- **Do NOT** perform concurrent operations on the same database instance
+- **Do NOT** call `db.Close()` while queries are active in other goroutines
+- Use separate database instances for concurrent operations if needed
+- Race conditions may cause segmentation faults or data corruption
+
+**Recommended pattern for concurrent access**:
+```go
+// ✅ GOOD: Separate database instances per goroutine
+func processFileConcurrently(filename string) error {
+    db, err := filesql.Open(filename)  // Each goroutine gets its own instance
+    if err != nil {
+        return err
+    }
+    defer db.Close()
+    
+    // Safe to use within this goroutine
+    return processData(db)
+}
+
+// ❌ BAD: Sharing database instance across goroutines
+var sharedDB *sql.DB  // This will cause race conditions
+```
+
 ### Parquet Support
 - **Reading**: Full support for Apache Parquet files with complex data types
 - **Writing**: Export functionality is implemented (external compression not supported, use Parquet's built-in compression)

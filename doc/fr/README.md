@@ -334,6 +334,32 @@ Puisque filesql utilise SQLite3 comme moteur sous-jacent, toute la syntaxe SQL s
 - Une seule connexion SQLite fonctionne mieux pour la plupart des scénarios
 - Utilisez le streaming pour les fichiers plus grands que la mémoire disponible
 
+### Limitations de concurrence
+⚠️ **IMPORTANT** : Cette bibliothèque **N'EST PAS thread-safe** et a des **limitations de concurrence** :
+- **NE** partagez **PAS** les connexions de base de données entre les goroutines
+- **NE** effectuez **PAS** d'opérations concurrentes sur la même instance de base de données
+- **NE** appelez **PAS** `db.Close()` pendant que des requêtes sont actives dans d'autres goroutines
+- Utilisez des instances de base de données séparées pour les opérations concurrentes si nécessaire
+- Les conditions de course peuvent causer des fautes de segmentation ou une corruption de données
+
+**Modèle recommandé pour l'accès concurrent** :
+```go
+// ✅ BON : Instances de base de données séparées par goroutine
+func processFileConcurrently(filename string) error {
+    db, err := filesql.Open(filename)  // Chaque goroutine obtient sa propre instance
+    if err != nil {
+        return err
+    }
+    defer db.Close()
+    
+    // Sûr à utiliser dans cette goroutine
+    return processData(db)
+}
+
+// ❌ MAUVAIS : Partager une instance de base de données entre les goroutines
+var sharedDB *sql.DB  // Cela causera des conditions de course
+```
+
 ### Support Parquet
 - **Lecture** : Support complet pour les fichiers Apache Parquet avec des types de données complexes
 - **Écriture** : La fonctionnalité d'exportation est implémentée (compression externe non supportée, utilisez la compression intégrée de Parquet)

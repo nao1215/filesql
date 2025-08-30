@@ -1253,22 +1253,13 @@ func TestBuilder_ErrorCases(t *testing.T) {
 
 		reader := strings.NewReader("")
 		builder := NewBuilder().AddReader(reader, "empty", FileTypeCSV)
-		validatedBuilder, err := builder.Build(ctx)
+		_, err := builder.Build(ctx)
 
-		// Build should succeed (validation happens during Open)
-		if err != nil {
-			t.Errorf("Build should succeed with empty reader, got error: %v", err)
-		}
-
-		if validatedBuilder != nil {
-			// Open should fail with empty CSV data
-			db, openErr := validatedBuilder.Open(ctx)
-			if openErr == nil {
-				if db != nil {
-					_ = db.Close() // Ignore close error in test cleanup
-				}
-				t.Error("Open should fail with empty CSV data")
-			}
+		// Build should fail with empty CSV data
+		if err == nil {
+			t.Error("Build should fail with empty reader")
+		} else if !strings.Contains(err.Error(), "empty CSV data") {
+			t.Errorf("Expected 'empty CSV data' error, got: %v", err)
 		}
 	})
 
@@ -1736,17 +1727,28 @@ func TestAutoSavePaths(t *testing.T) {
 	t.Run("createEmptyTable coverage", func(t *testing.T) {
 		t.Parallel()
 
-		// Test with empty reader to trigger createEmptyTable path
+		// Test with header-only reader to trigger createEmptyTable path
 		validatedBuilder, err := NewBuilder().
-			AddReader(strings.NewReader(""), "empty_test", FileTypeCSV).
+			AddReader(strings.NewReader("col1,col2\n"), "empty_test", FileTypeCSV).
 			Build(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		_, err = validatedBuilder.Open(context.Background())
-		if err == nil {
-			t.Error("Expected error when opening empty CSV data")
+		db, err := validatedBuilder.Open(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+
+		// Verify the empty table was created correctly
+		var count int
+		err = db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM empty_test").Scan(&count)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Errorf("Expected empty table, got %d rows", count)
 		}
 	})
 
