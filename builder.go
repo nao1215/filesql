@@ -969,18 +969,34 @@ func (c *autoSaveConnection) Prepare(query string) (driver.Stmt, error) {
 	return c.conn.Prepare(query)
 }
 
-// Exec implements driver.Execer interface if supported
-func (c *autoSaveConnection) Exec(query string, args []driver.Value) (driver.Result, error) {
+// ExecContext implements driver.ExecerContext interface
+func (c *autoSaveConnection) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	if execer, ok := c.conn.(driver.ExecerContext); ok {
+		return execer.ExecContext(ctx, query, args)
+	}
+	// Fallback to deprecated Execer for backward compatibility
 	if execer, ok := c.conn.(driver.Execer); ok { //nolint:staticcheck // Need backward compatibility
-		return execer.Exec(query, args)
+		dArgs := make([]driver.Value, len(args))
+		for i, arg := range args {
+			dArgs[i] = arg.Value
+		}
+		return execer.Exec(query, dArgs)
 	}
 	return nil, driver.ErrSkip
 }
 
-// Query implements driver.Queryer interface if supported
-func (c *autoSaveConnection) Query(query string, args []driver.Value) (driver.Rows, error) {
+// QueryContext implements driver.QueryerContext interface
+func (c *autoSaveConnection) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if queryer, ok := c.conn.(driver.QueryerContext); ok {
+		return queryer.QueryContext(ctx, query, args)
+	}
+	// Fallback to deprecated Queryer for backward compatibility
 	if queryer, ok := c.conn.(driver.Queryer); ok { //nolint:staticcheck // Need backward compatibility
-		return queryer.Query(query, args)
+		dArgs := make([]driver.Value, len(args))
+		for i, arg := range args {
+			dArgs[i] = arg.Value
+		}
+		return queryer.Query(query, dArgs)
 	}
 	return nil, driver.ErrSkip
 }

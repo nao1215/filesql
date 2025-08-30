@@ -296,7 +296,7 @@ func getSQLiteTableColumns(db *sql.DB, tableName string) ([]string, error) {
 	for rows.Next() {
 		var cid int
 		var name, dataType string
-		var notNull, dfltValue, pk interface{}
+		var notNull, dfltValue, pk any
 
 		if err := rows.Scan(&cid, &name, &dataType, &notNull, &dfltValue, &pk); err != nil {
 			return nil, err
@@ -368,9 +368,12 @@ func createCompressedWriter(file *os.File, compression CompressionType) (io.Writ
 	}
 }
 
-// writeCSVData writes data in CSV format
-func writeCSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
+// writeDelimitedData writes data in CSV or TSV format based on delimiter
+func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, delimiter rune) error {
 	csvWriter := csv.NewWriter(writer)
+	if delimiter != CSVDelimiter {
+		csvWriter.Comma = delimiter
+	}
 	defer csvWriter.Flush()
 
 	// Write header
@@ -379,8 +382,8 @@ func writeCSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
 	}
 
 	// Prepare for scanning
-	values := make([]interface{}, len(columns))
-	scanArgs := make([]interface{}, len(columns))
+	values := make([]any, len(columns))
+	scanArgs := make([]any, len(columns))
 	for i := range values {
 		scanArgs[i] = &values[i]
 	}
@@ -408,52 +411,21 @@ func writeCSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
 	return rows.Err()
 }
 
+// writeCSVData writes data in CSV format
+func writeCSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
+	return writeDelimitedData(writer, columns, rows, CSVDelimiter)
+}
+
 // writeTSVData writes data in TSV format
 func writeTSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
-	csvWriter := csv.NewWriter(writer)
-	csvWriter.Comma = '\t'
-	defer csvWriter.Flush()
-
-	// Write header
-	if err := csvWriter.Write(columns); err != nil {
-		return err
-	}
-
-	// Prepare for scanning
-	values := make([]interface{}, len(columns))
-	scanArgs := make([]interface{}, len(columns))
-	for i := range values {
-		scanArgs[i] = &values[i]
-	}
-
-	// Write data rows
-	for rows.Next() {
-		if err := rows.Scan(scanArgs...); err != nil {
-			return err
-		}
-
-		record := make([]string, len(columns))
-		for i, value := range values {
-			if value == nil {
-				record[i] = ""
-			} else {
-				record[i] = fmt.Sprintf("%v", value)
-			}
-		}
-
-		if err := csvWriter.Write(record); err != nil {
-			return err
-		}
-	}
-
-	return rows.Err()
+	return writeDelimitedData(writer, columns, rows, TSVDelimiter)
 }
 
 // writeLTSVData writes data in LTSV format
 func writeLTSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
 	// Prepare for scanning
-	values := make([]interface{}, len(columns))
-	scanArgs := make([]interface{}, len(columns))
+	values := make([]any, len(columns))
+	scanArgs := make([]any, len(columns))
 	for i := range values {
 		scanArgs[i] = &values[i]
 	}

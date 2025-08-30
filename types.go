@@ -1,5 +1,13 @@
 package filesql
 
+// File format delimiters
+const (
+	// CSVDelimiter is the delimiter for CSV files
+	CSVDelimiter = ','
+	// TSVDelimiter is the delimiter for TSV files
+	TSVDelimiter = '\t'
+)
+
 // header is file header.
 type header []string
 

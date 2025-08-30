@@ -414,7 +414,7 @@ func (f *file) parseTSV() (*table, error) {
 	defer closer()
 
 	csvReader := csv.NewReader(reader)
-	csvReader.Comma = '\t'
+	csvReader.Comma = TSVDelimiter
 	records, err := csvReader.ReadAll()
 	if err != nil {
 		return nil, err
