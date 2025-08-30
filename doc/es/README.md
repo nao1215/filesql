@@ -335,6 +335,32 @@ Dado que filesql usa SQLite3 como su motor subyacente, toda la sintaxis SQL sigu
 - Una sola conexión SQLite funciona mejor para la mayoría de escenarios
 - Usa streaming para archivos más grandes que la memoria disponible
 
+### Limitaciones de concurrencia
+⚠️ **IMPORTANTE**: Esta biblioteca **NO es thread-safe** y tiene **limitaciones de concurrencia**:
+- **NO** compartas conexiones de base de datos entre goroutines
+- **NO** realices operaciones concurrentes en la misma instancia de base de datos
+- **NO** llames `db.Close()` mientras hay consultas activas en otras goroutines
+- Usa instancias de base de datos separadas para operaciones concurrentes si es necesario
+- Las condiciones de carrera pueden causar fallos de segmentación o corrupción de datos
+
+**Patrón recomendado para acceso concurrente**:
+```go
+// ✅ BUENO: Instancias de base de datos separadas por goroutine
+func processFileConcurrently(filename string) error {
+    db, err := filesql.Open(filename)  // Cada goroutine obtiene su propia instancia
+    if err != nil {
+        return err
+    }
+    defer db.Close()
+    
+    // Seguro de usar dentro de esta goroutine
+    return processData(db)
+}
+
+// ❌ MALO: Compartir instancia de base de datos entre goroutines
+var sharedDB *sql.DB  // Esto causará condiciones de carrera
+```
+
 ### Soporte de Excel (XLSX)
 - **Estructura 1-Hoja-1-Tabla**: Cada hoja en un libro de Excel se convierte en una tabla SQL separada
 - **Nomenclatura de tablas**: Los nombres de las tablas SQL siguen el formato `{nombre_archivo}_{nombre_hoja}` (ej., "ventas_T1", "ventas_T2")

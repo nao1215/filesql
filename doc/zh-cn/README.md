@@ -336,6 +336,32 @@ filesql 自动从文件路径推导表名：
 - 单个 SQLite 连接对大多数场景效果最佳
 - 对于大于可用内存的文件使用流式处理
 
+### 并发限制
+⚠️ **重要**: 此库**不是线程安全的**，并且有**并发限制**：
+- **不要**在 goroutine 之间共享数据库连接
+- **不要**在同一数据库实例上执行并发操作
+- **不要**在其他 goroutine 中有活动查询时调用 `db.Close()`
+- 如需并发操作，请为每个 goroutine 使用单独的数据库实例
+- 竞态条件可能导致段错误或数据损坏
+
+**并发访问的推荐模式**：
+```go
+// ✅ 好的做法：每个 goroutine 使用单独的数据库实例
+func processFileConcurrently(filename string) error {
+    db, err := filesql.Open(filename)  // 每个 goroutine 获取自己的实例
+    if err != nil {
+        return err
+    }
+    defer db.Close()
+    
+    // 在此 goroutine 内安全使用
+    return processData(db)
+}
+
+// ❌ 不好的做法：在 goroutine 间共享数据库实例
+var sharedDB *sql.DB  // 这会导致竞态条件
+```
+
 ## 🎨 高级示例
 
 ### 复杂的 SQL 查询

@@ -374,6 +374,16 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 		if readerInput.fileType == FileTypeUnsupported {
 			return nil, errors.New("file type must be specified for reader input")
 		}
+
+		// Check if reader has any content at all
+		bufferedReader := bufio.NewReader(readerInput.reader)
+		_, err := bufferedReader.Peek(1)
+		if err == io.EOF {
+			return nil, errors.New("empty CSV data")
+		}
+		// Replace the original reader with the buffered one since we peeked
+		readerInput.reader = bufferedReader
+
 		// Reader inputs will be processed directly in Open() method using streaming
 	}
 
@@ -845,9 +855,10 @@ func (b *DBBuilder) insertDataIntoTable(ctx context.Context, db *sql.DB, tableNa
 // streamReaderToSQLite streams data from io.Reader directly to SQLite database
 // This is the ideal approach that provides true streaming with chunk-based processing
 func (b *DBBuilder) streamReaderToSQLite(ctx context.Context, db *sql.DB, input readerInput) error {
-	// Wrap reader with buffered reader for better performance
-	bufferedReader := bufio.NewReader(input.reader)
-	input.reader = bufferedReader
+	// Reader should already be buffered from Build validation, but ensure it's buffered
+	if _, ok := input.reader.(*bufio.Reader); !ok {
+		input.reader = bufio.NewReader(input.reader)
+	}
 
 	// Check if table already exists to avoid duplicates
 	var tableExists int
@@ -903,7 +914,8 @@ func (b *DBBuilder) streamReaderToSQLite(ctx context.Context, db *sql.DB, input 
 		if err != nil {
 			// Preserve certain parsing errors that should not be converted to empty tables
 			if strings.Contains(err.Error(), "duplicate column name") ||
-				strings.Contains(err.Error(), "empty CSV data") {
+				strings.Contains(err.Error(), "empty CSV data") ||
+				strings.Contains(err.Error(), "parse error") {
 				return err // Preserve meaningful parsing errors
 			}
 		}

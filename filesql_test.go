@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -4469,6 +4470,655 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 		// since it uses GetOneForMarshal which may vary
 		if result == "" {
 			t.Error("Expected some string representation for unsupported type, got empty string")
+		}
+	})
+}
+
+func TestEdgeCasesEmptyAndMalformedData(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		fileContent string
+		fileName    string
+		expectedErr bool
+		description string
+	}{
+		{
+			name:        "Completely empty file",
+			fileContent: "",
+			fileName:    "empty.csv",
+			expectedErr: true,
+			description: "Should fail gracefully on completely empty files",
+		},
+		{
+			name:        "Header only file",
+			fileContent: "col1,col2,col3\n",
+			fileName:    "header_only.csv",
+			expectedErr: false,
+			description: "Should handle files with header but no data rows",
+		},
+		{
+			name:        "Only newlines",
+			fileContent: "\n\n\n",
+			fileName:    "only_newlines.csv",
+			expectedErr: true,
+			description: "Should handle files with only newlines",
+		},
+		{
+			name:        "Unmatched quotes in CSV",
+			fileContent: "col1,col2\n\"unclosed quote,value2",
+			fileName:    "unmatched_quotes.csv",
+			expectedErr: true,
+			description: "Should handle malformed CSV with unmatched quotes",
+		},
+		{
+			name:        "BOM in UTF-8 file",
+			fileContent: "\uFEFFcol1,col2\nvalue1,value2",
+			fileName:    "bom_file.csv",
+			expectedErr: false,
+			description: "Should handle BOM correctly",
+		},
+		{
+			name:        "Mixed line endings",
+			fileContent: "col1,col2\r\nvalue1,value2\nvalue3,value4\r",
+			fileName:    "mixed_endings.csv",
+			expectedErr: false,
+			description: "Should handle mixed line endings",
+		},
+		{
+			name:        "Very long column name",
+			fileContent: strings.Repeat("a", 1000) + ",col2\nvalue1,value2",
+			fileName:    "long_column.csv",
+			expectedErr: false,
+			description: "Should handle very long column names",
+		},
+		{
+			name:        "Non-ASCII column names",
+			fileContent: "名前,年齢,メール\n田中,30,tanaka@example.com",
+			fileName:    "non_ascii.csv",
+			expectedErr: false,
+			description: "Should handle non-ASCII column names",
+		},
+		{
+			name:        "Empty column name",
+			fileContent: "col1,,col3\nvalue1,value2,value3",
+			fileName:    "empty_column_name.csv",
+			expectedErr: false,
+			description: "Should handle empty column names",
+		},
+		{
+			name:        "Inconsistent row lengths",
+			fileContent: "col1,col2,col3\nvalue1,value2\nvalue3,value4,value5,value6",
+			fileName:    "inconsistent_rows.csv",
+			expectedErr: false,
+			description: "Should handle rows with different numbers of columns",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Create temporary test file with proper extension
+			ext := filepath.Ext(tt.fileName)
+			prefix := strings.TrimSuffix(tt.fileName, ext)
+			tmpFile, err := os.CreateTemp(t.TempDir(), prefix+"*"+ext)
+			if err != nil {
+				t.Fatalf("Failed to create temp file: %v", err)
+			}
+			defer tmpFile.Close()
+
+			// Write test content
+			if _, err := tmpFile.WriteString(tt.fileContent); err != nil {
+				t.Fatalf("Failed to write test content: %v", err)
+			}
+
+			// Test with timeout context
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			// Attempt to open the file
+			db, err := OpenContext(ctx, tmpFile.Name())
+
+			if tt.expectedErr {
+				if err == nil {
+					if db != nil {
+						_ = db.Close() // Ignore error in test cleanup
+					}
+					t.Errorf("Expected error for %s, but got none", tt.description)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("Unexpected error for %s: %v", tt.description, err)
+				return
+			}
+
+			if db == nil {
+				t.Errorf("Expected valid db for %s, but got nil", tt.description)
+				return
+			}
+			defer db.Close()
+
+			// Try a basic query to ensure the database is functional
+			actualFileName := filepath.Base(tmpFile.Name())
+			tableName := strings.TrimSuffix(actualFileName, filepath.Ext(actualFileName))
+			query := fmt.Sprintf("SELECT COUNT(*) FROM \"%s\"", tableName) //nolint:gosec // Table name is from test data //nolint:gosec // Table name is from test data
+			rows, err := db.QueryContext(ctx, query)
+			if err != nil {
+				t.Errorf("Query failed for %s: %v", tt.description, err)
+				return
+			}
+			defer rows.Close()
+			if err := rows.Err(); err != nil {
+				t.Errorf("Rows error for %s: %v", tt.description, err)
+				return
+			}
+
+			var count int
+			if rows.Next() {
+				if err := rows.Scan(&count); err != nil {
+					t.Errorf("Scan failed for %s: %v", tt.description, err)
+				}
+			}
+		})
+	}
+}
+
+func TestEdgeCasesReaderInput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		content     string
+		fileType    FileType
+		expectedErr bool
+	}{
+		{
+			name:        "Empty reader",
+			content:     "",
+			fileType:    FileTypeCSV,
+			expectedErr: true,
+		},
+		{
+			name:        "Null bytes in content",
+			content:     "col1,col2\nvalue1\x00,value2",
+			fileType:    FileTypeCSV,
+			expectedErr: false,
+		},
+		{
+			name:        "Very large single cell",
+			content:     "col1,col2\n" + strings.Repeat("x", 100000) + ",value2",
+			fileType:    FileTypeCSV,
+			expectedErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			reader := strings.NewReader(tt.content)
+
+			builder := NewBuilder().AddReader(reader, "test_table", tt.fileType)
+
+			ctx := context.Background()
+			validatedBuilder, err := builder.Build(ctx)
+
+			if tt.expectedErr {
+				if err == nil {
+					t.Errorf("Expected error for %s, but got none", tt.name)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("Unexpected error for %s: %v", tt.name, err)
+				return
+			}
+
+			db, err := validatedBuilder.Open(ctx)
+			if err != nil {
+				t.Errorf("Failed to open database for %s: %v", tt.name, err)
+				return
+			}
+			defer db.Close()
+		})
+	}
+}
+
+func TestEdgeCasesCompression(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		content     []byte
+		expectedErr bool
+		description string
+	}{
+		{
+			name:        "Corrupted gzip header",
+			content:     []byte{0x1f, 0x8b, 0x08, 0x00}, // Incomplete gzip header
+			expectedErr: true,
+			description: "Should handle corrupted gzip files gracefully",
+		},
+		{
+			name:        "Non-gzip data with .gz extension",
+			content:     []byte("col1,col2\nvalue1,value2"),
+			expectedErr: true,
+			description: "Should detect when .gz file is not actually gzipped",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpFile, err := os.CreateTemp(t.TempDir(), "test_*.csv.gz")
+			if err != nil {
+				t.Fatalf("Failed to create temp file: %v", err)
+			}
+			defer tmpFile.Close()
+
+			if _, err := tmpFile.Write(tt.content); err != nil {
+				t.Fatalf("Failed to write test content: %v", err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			db, err := OpenContext(ctx, tmpFile.Name())
+
+			if tt.expectedErr {
+				if err == nil {
+					if db != nil {
+						_ = db.Close() // Ignore error in test cleanup
+					}
+					t.Errorf("Expected error for %s, but got none", tt.description)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("Unexpected error for %s: %v", tt.description, err)
+				return
+			}
+
+			if db != nil {
+				_ = db.Close() // Ignore error in test cleanup
+			}
+		})
+	}
+}
+
+func TestEdgeCasesMemoryLimits(t *testing.T) {
+	t.Parallel()
+
+	// Test extremely wide file (many columns)
+	t.Run("Many columns file", func(t *testing.T) {
+		t.Parallel()
+
+		const numCols = 1000
+		var header strings.Builder
+		var dataRow strings.Builder
+
+		for i := range numCols {
+			if i > 0 {
+				header.WriteString(",")
+				dataRow.WriteString(",")
+			}
+			header.WriteString("col")
+			header.WriteString(strconv.Itoa(i))
+			dataRow.WriteString("value")
+			dataRow.WriteString(strconv.Itoa(i))
+		}
+
+		content := header.String() + "\n" + dataRow.String()
+
+		tmpFile, err := os.CreateTemp(t.TempDir(), "wide_file_*.csv")
+		if err != nil {
+			t.Fatalf("Failed to create temp file: %v", err)
+		}
+		defer tmpFile.Close()
+
+		if _, err := tmpFile.WriteString(content); err != nil {
+			t.Fatalf("Failed to write test content: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		db, err := OpenContext(ctx, tmpFile.Name())
+		if err != nil {
+			t.Errorf("Failed to handle wide file: %v", err)
+			return
+		}
+		defer db.Close()
+
+		// Verify we can query the wide table
+		tableName := filepath.Base(tmpFile.Name())
+		tableName = strings.TrimSuffix(tableName, filepath.Ext(tableName))
+		tableName = strings.TrimSuffix(tableName, filepath.Ext(tableName)) // Remove .csv
+
+		query := fmt.Sprintf("SELECT COUNT(*) FROM \"%s\"", tableName) //nolint:gosec // Table name is from test data
+		rows, err := db.QueryContext(ctx, query)
+		if err != nil {
+			t.Errorf("Query failed on wide file: %v", err)
+			return
+		}
+		defer rows.Close()
+		if err := rows.Err(); err != nil {
+			t.Errorf("Rows error on wide file: %v", err)
+			return
+		}
+	})
+}
+
+func TestMemoryLimitsAndLargeFiles(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Large single cell content", func(t *testing.T) {
+		t.Parallel()
+
+		// Create a CSV with one very large cell (10MB)
+		const cellSize = 10 * 1024 * 1024 // 10MB
+		largeCellContent := strings.Repeat("x", cellSize)
+
+		content := fmt.Sprintf("col1,col2\n%s,value2\n", largeCellContent)
+
+		tmpFile, err := os.CreateTemp(t.TempDir(), "large_cell_*.csv")
+		if err != nil {
+			t.Fatalf("Failed to create temp file: %v", err)
+		}
+		defer tmpFile.Close()
+
+		if _, err := tmpFile.WriteString(content); err != nil {
+			t.Fatalf("Failed to write test content: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		db, err := OpenContext(ctx, tmpFile.Name())
+		if err != nil {
+			t.Errorf("Failed to handle large cell content: %v", err)
+			return
+		}
+		defer db.Close()
+
+		// Verify we can query the data
+		tableName := strings.TrimSuffix(filepath.Base(tmpFile.Name()), ".csv")
+		tableName = strings.TrimSuffix(tableName, ".csv") // Handle double extensions
+
+		rows, err := db.QueryContext(ctx, fmt.Sprintf("SELECT LENGTH(col1) FROM \"%s\"", tableName))
+		if err != nil {
+			t.Errorf("Query failed on large cell: %v", err)
+			return
+		}
+		defer rows.Close()
+		if err := rows.Err(); err != nil {
+			t.Errorf("Rows error on large cell: %v", err)
+			return
+		}
+
+		var length int
+		if rows.Next() {
+			if err := rows.Scan(&length); err != nil {
+				t.Errorf("Scan failed: %v", err)
+			} else if length != cellSize {
+				t.Errorf("Expected cell length %d, got %d", cellSize, length)
+			}
+		}
+	})
+
+	t.Run("Many rows stress test", func(t *testing.T) {
+		t.Parallel()
+
+		const numRows = 100000
+
+		tmpFile, err := os.CreateTemp(t.TempDir(), "many_rows_*.csv")
+		if err != nil {
+			t.Fatalf("Failed to create temp file: %v", err)
+		}
+		defer tmpFile.Close()
+
+		// Write header
+		if _, err := tmpFile.WriteString("id,name,value\n"); err != nil {
+			t.Fatalf("Failed to write header: %v", err)
+		}
+
+		// Write many rows
+		for i := range numRows {
+			line := fmt.Sprintf("%d,name_%d,value_%d\n", i, i, i)
+			if _, err := tmpFile.WriteString(line); err != nil {
+				t.Fatalf("Failed to write row %d: %v", i, err)
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		db, err := OpenContext(ctx, tmpFile.Name())
+		if err != nil {
+			t.Errorf("Failed to handle many rows: %v", err)
+			return
+		}
+		defer db.Close()
+
+		// Test aggregation query
+		tableName := strings.TrimSuffix(filepath.Base(tmpFile.Name()), ".csv")
+		tableName = strings.TrimSuffix(tableName, ".csv")
+
+		rows, err := db.QueryContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM \"%s\"", tableName))
+		if err != nil {
+			t.Errorf("Count query failed: %v", err)
+			return
+		}
+		defer rows.Close()
+		if err := rows.Err(); err != nil {
+			t.Errorf("Rows error on count query: %v", err)
+			return
+		}
+
+		var count int
+		if rows.Next() {
+			if err := rows.Scan(&count); err != nil {
+				t.Errorf("Count scan failed: %v", err)
+			} else if count != numRows {
+				t.Errorf("Expected %d rows, got %d", numRows, count)
+			}
+		}
+	})
+
+	t.Run("Memory usage monitoring", func(t *testing.T) {
+		t.Parallel()
+
+		// Record initial memory usage
+		var m1, m2 runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&m1)
+
+		// Create multiple databases and close them
+		for i := range 10 {
+			content := fmt.Sprintf("col1,col2,col3\nvalue1_%d,value2_%d,value3_%d\n", i, i, i)
+
+			tmpFile, err := os.CreateTemp(t.TempDir(), fmt.Sprintf("memory_test_%d_*.csv", i))
+			if err != nil {
+				t.Fatalf("Failed to create temp file: %v", err)
+			}
+
+			if _, err := tmpFile.WriteString(content); err != nil {
+				_ = tmpFile.Close() // Ignore error in test cleanup
+				t.Fatalf("Failed to write content: %v", err)
+			}
+			_ = tmpFile.Close() // Ignore error in test cleanup
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+
+			db, err := OpenContext(ctx, tmpFile.Name())
+			if err != nil {
+				cancel()
+				t.Errorf("Failed to open database %d: %v", i, err)
+				continue
+			}
+
+			// Perform some operations
+			tableName := strings.TrimSuffix(filepath.Base(tmpFile.Name()), ".csv")
+			tableName = strings.TrimSuffix(tableName, ".csv")
+
+			rows, err := db.QueryContext(ctx, fmt.Sprintf("SELECT * FROM \"%s\"", tableName))
+			if err != nil {
+				_ = db.Close() // Ignore error in test cleanup
+				cancel()
+				t.Errorf("Query failed for database %d: %v", i, err)
+				continue
+			}
+			if err := rows.Err(); err != nil {
+				_ = rows.Close() // Ignore error in test cleanup
+				_ = db.Close()   // Ignore error in test cleanup
+				cancel()
+				t.Errorf("Rows error for database %d: %v", i, err)
+				continue
+			}
+
+			for rows.Next() {
+				var col1, col2, col3 string
+				if err := rows.Scan(&col1, &col2, &col3); err != nil {
+					// Log error but continue test
+					t.Logf("Scan error: %v", err)
+				}
+			}
+			_ = rows.Close() // Ignore error in test cleanup
+			_ = db.Close()   // Ignore error in test cleanup
+			cancel()
+		}
+
+		// Check memory usage after cleanup
+		runtime.GC()
+		runtime.ReadMemStats(&m2)
+
+		memoryIncrease := int64(m2.Alloc) - int64(m1.Alloc) //nolint:gosec // Memory monitoring in test
+		if memoryIncrease > 50*1024*1024 {                  // 50MB threshold
+			t.Errorf("Memory usage increased by %d bytes (%.2f MB), may indicate memory leak",
+				memoryIncrease, float64(memoryIncrease)/(1024*1024))
+		}
+	})
+
+	t.Run("Context cancellation during large file processing", func(t *testing.T) {
+		t.Parallel()
+
+		// Create a moderately large file
+		const numRows = 10000
+
+		tmpFile, err := os.CreateTemp(t.TempDir(), "cancellation_test_*.csv")
+		if err != nil {
+			t.Fatalf("Failed to create temp file: %v", err)
+		}
+		defer tmpFile.Close()
+
+		// Write header and many rows
+		if _, err := tmpFile.WriteString("id,data\n"); err != nil {
+			t.Fatalf("Failed to write header: %v", err)
+		}
+
+		for i := range numRows {
+			line := fmt.Sprintf("%d,%s\n", i, strings.Repeat("data", 100))
+			if _, err := tmpFile.WriteString(line); err != nil {
+				t.Fatalf("Failed to write row %d: %v", i, err)
+			}
+		}
+
+		// Create context with very short timeout to trigger cancellation
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+		defer cancel()
+
+		// This should either succeed quickly or fail due to timeout
+		db, err := OpenContext(ctx, tmpFile.Name())
+
+		if err != nil {
+			// Timeout error is acceptable
+			if ctx.Err() == context.DeadlineExceeded {
+				return // Expected behavior
+			}
+			// Other errors might indicate problems with context handling
+			t.Logf("Context cancellation test completed with error (may be expected): %v", err)
+		}
+
+		if db != nil {
+			_ = db.Close() // Ignore error in test cleanup
+		}
+	})
+
+	t.Run("Chunk size configuration test", func(t *testing.T) {
+		t.Parallel()
+
+		// Create a file that's larger than default chunk size
+		const numRows = 1000
+		content := "col1,col2,col3\n"
+		for i := range numRows {
+			content += fmt.Sprintf("value_%d,%s,data_%d\n", i, strings.Repeat("x", 1000), i)
+		}
+
+		tmpFile, err := os.CreateTemp(t.TempDir(), "chunk_test_*.csv")
+		if err != nil {
+			t.Fatalf("Failed to create temp file: %v", err)
+		}
+		defer tmpFile.Close()
+
+		if _, err := tmpFile.WriteString(content); err != nil {
+			t.Fatalf("Failed to write content: %v", err)
+		}
+
+		ctx := context.Background()
+
+		// Test with different chunk sizes
+		chunkSizes := []int{1024, 10240, 102400} // 1KB, 10KB, 100KB
+
+		for _, chunkSize := range chunkSizes {
+			t.Run(fmt.Sprintf("ChunkSize_%d", chunkSize), func(t *testing.T) {
+				builder := NewBuilder().
+					AddPath(tmpFile.Name()).
+					SetDefaultChunkSize(chunkSize)
+
+				validatedBuilder, err := builder.Build(ctx)
+				if err != nil {
+					t.Errorf("Build failed with chunk size %d: %v", chunkSize, err)
+					return
+				}
+
+				db, err := validatedBuilder.Open(ctx)
+				if err != nil {
+					t.Errorf("Open failed with chunk size %d: %v", chunkSize, err)
+					return
+				}
+				defer db.Close()
+
+				// Verify data integrity regardless of chunk size
+				tableName := strings.TrimSuffix(filepath.Base(tmpFile.Name()), ".csv")
+				tableName = strings.TrimSuffix(tableName, ".csv")
+
+				rows, err := db.QueryContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM \"%s\"", tableName))
+				if err != nil {
+					t.Errorf("Count query failed with chunk size %d: %v", chunkSize, err)
+					return
+				}
+				defer rows.Close()
+				if err := rows.Err(); err != nil {
+					t.Errorf("Rows error with chunk size %d: %v", chunkSize, err)
+					return
+				}
+
+				var count int
+				if rows.Next() {
+					if err := rows.Scan(&count); err != nil {
+						t.Errorf("Count scan failed with chunk size %d: %v", chunkSize, err)
+					} else if count != numRows {
+						t.Errorf("Expected %d rows with chunk size %d, got %d", numRows, chunkSize, count)
+					}
+				}
+			})
 		}
 	})
 }

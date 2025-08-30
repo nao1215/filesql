@@ -117,13 +117,14 @@ func (p *streamingParser) parseCSVStream(reader io.Reader) (*table, error) {
 	}
 
 	header := newHeader(records[0])
-	// Check for duplicate column names
+	// Check for duplicate column names (case-insensitive and trimmed)
 	columnsSeen := make(map[string]bool)
 	for _, col := range records[0] {
-		if columnsSeen[col] {
+		normalizedCol := strings.ToLower(strings.TrimSpace(col))
+		if columnsSeen[normalizedCol] {
 			return nil, fmt.Errorf("%w: %s", errDuplicateColumnName, col)
 		}
-		columnsSeen[col] = true
+		columnsSeen[normalizedCol] = true
 	}
 
 	tablerecords := make([]record, 0, len(records)-1)
@@ -148,13 +149,14 @@ func (p *streamingParser) parseTSVStream(reader io.Reader) (*table, error) {
 	}
 
 	header := newHeader(records[0])
-	// Check for duplicate column names
+	// Check for duplicate column names (case-insensitive and trimmed)
 	columnsSeen := make(map[string]bool)
 	for _, col := range records[0] {
-		if columnsSeen[col] {
+		normalizedCol := strings.ToLower(strings.TrimSpace(col))
+		if columnsSeen[normalizedCol] {
 			return nil, fmt.Errorf("%w: %s", errDuplicateColumnName, col)
 		}
-		columnsSeen[col] = true
+		columnsSeen[normalizedCol] = true
 	}
 
 	tablerecords := make([]record, 0, len(records)-1)
