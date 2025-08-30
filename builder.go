@@ -20,19 +20,27 @@ import (
 	"modernc.org/sqlite" // Direct SQLite driver usage
 )
 
-// DBBuilder is a builder for creating database connections from files and embedded filesystems.
-// It provides a flexible way to configure input sources before creating a database connection.
-// Use NewBuilder to create a new instance, then chain method calls to configure it.
+// DBBuilder configures and creates database connections from various data sources.
 //
-// The typical usage pattern is:
+// Basic usage:
 //
-//	builder := filesql.NewBuilder().AddPath("data.csv").AddFS(embeddedFS)
+//	builder := filesql.NewBuilder().
+//		AddPath("data.csv").
+//		AddPath("users.tsv")
+//
 //	validatedBuilder, err := builder.Build(ctx)
 //	if err != nil {
 //		return err
 //	}
+//
 //	db, err := validatedBuilder.Open(ctx)
 //	defer db.Close()
+//
+// Supports:
+//   - File paths (AddPath)
+//   - Embedded filesystems (AddFS)
+//   - io.Reader streams (AddReader)
+//   - Auto-save functionality (EnableAutoSave)
 type DBBuilder struct {
 	// paths contains regular file paths
 	paths []string
@@ -82,24 +90,19 @@ type readerInput struct {
 	fileType FileType
 }
 
-// NewBuilder creates a new database builder for configuring file inputs.
-// The returned builder can be used to add file paths and embedded filesystems
-// before building and opening a database connection.
+// NewBuilder creates a new database builder.
+//
+// Start here when you need:
+//   - Multiple data sources (files, streams, embedded FS)
+//   - Auto-save functionality
+//   - Custom chunk sizes for large files
+//   - More control than the simple Open() function
 //
 // Example:
 //
-//	builder := filesql.NewBuilder()
-//	builder.AddPath("users.csv")
-//	builder.AddPath("orders.tsv")
-//	validatedBuilder, err := builder.Build(ctx)
-//	if err != nil {
-//		return err
-//	}
-//	db, err := validatedBuilder.Open(ctx)
-//	if err != nil {
-//		return err
-//	}
-//	defer db.Close()
+//	builder := filesql.NewBuilder().
+//		AddPath("data.csv").
+//		EnableAutoSave("./backup")
 func NewBuilder() *DBBuilder {
 	return &DBBuilder{
 		paths:            make([]string, 0),
@@ -112,52 +115,44 @@ func NewBuilder() *DBBuilder {
 	}
 }
 
-// AddPath adds a regular file or directory path to the builder.
-// The path can be:
-// - A single file with supported extensions (.csv, .tsv, .ltsv, and their compressed variants)
-// - A directory path (all supported files will be loaded recursively)
+// AddPath adds a file or directory to load.
 //
-// Supported file extensions: .csv, .tsv, .ltsv
-// Supported compression: .gz, .bz2, .xz, .zst
+// Examples:
+//   - Single file: AddPath("users.csv")
+//   - Compressed: AddPath("data.tsv.gz")
+//   - Directory: AddPath("/data/") // loads all CSV/TSV/LTSV files
 //
-// Returns the builder for method chaining.
+// Returns self for chaining.
 func (b *DBBuilder) AddPath(path string) *DBBuilder {
 	b.paths = append(b.paths, path)
 	return b
 }
 
-// AddPaths adds multiple regular file or directory paths to the builder.
-// This is a convenience method for adding multiple paths at once.
-// Each path can be a file or directory, following the same rules as AddPath.
+// AddPaths adds multiple files or directories at once.
 //
-// Returns the builder for method chaining.
+// Example:
+//
+//	builder.AddPaths("users.csv", "products.tsv", "/data/logs/")
+//
+// Returns self for chaining.
 func (b *DBBuilder) AddPaths(paths ...string) *DBBuilder {
 	b.paths = append(b.paths, paths...)
 	return b
 }
 
-// AddReader adds an io.Reader as a data source to the builder.
-// The reader's content will be streamed directly to the database during Open().
-// You must specify the table name and file type explicitly for security.
+// AddReader adds data from an io.Reader (file, network stream, etc.).
 //
-// The fileType parameter should use the FileType constants from domain/model:
-// - FileTypeCSV for CSV data
-// - FileTypeTSV for TSV data
-// - FileTypeLTSV for LTSV data
-// - FileTypeCSVGZ for gzip-compressed CSV data
-// - etc.
+// Parameters:
+//   - reader: Any io.Reader (file, bytes.Buffer, http.Response.Body, etc.)
+//   - tableName: Name for the SQL table (e.g., "users")
+//   - fileType: Data format (FileTypeCSV, FileTypeTSV, FileTypeLTSV, etc.)
 //
 // Example:
 //
-//	file, err := os.Open("data.csv")
-//	if err != nil {
-//		return err
-//	}
-//	defer file.Close()
+//	resp, _ := http.Get("https://example.com/data.csv")
+//	builder.AddReader(resp.Body, "remote_data", FileTypeCSV)
 //
-//	builder := filesql.NewBuilder().AddReader(file, "users", FileTypeCSV)
-//
-// Returns the builder for method chaining.
+// Returns self for chaining.
 func (b *DBBuilder) AddReader(reader io.Reader, tableName string, fileType FileType) *DBBuilder {
 	b.readers = append(b.readers, readerInput{
 		reader:    reader,
@@ -167,11 +162,15 @@ func (b *DBBuilder) AddReader(reader io.Reader, tableName string, fileType FileT
 	return b
 }
 
-// SetDefaultChunkSize sets the default chunk size for reading large files.
-// This affects both Reader inputs and file path inputs.
-// The chunk size determines how much data is read into memory at once.
+// SetDefaultChunkSize sets memory chunk size for large file processing.
 //
-// Returns the builder for method chaining.
+// Default: 10MB. Adjust based on available memory.
+//
+// Example:
+//
+//	builder.SetDefaultChunkSize(50 * 1024 * 1024) // 50MB chunks
+//
+// Returns self for chaining.
 func (b *DBBuilder) SetDefaultChunkSize(size int) *DBBuilder {
 	if size > 0 {
 		b.defaultChunkSize = size
@@ -179,43 +178,36 @@ func (b *DBBuilder) SetDefaultChunkSize(size int) *DBBuilder {
 	return b
 }
 
-// AddFS adds all supported files from an fs.FS filesystem to the builder.
-// This method is particularly useful for embedded filesystems using go:embed.
-// It automatically searches for all supported file types recursively:
-// - Base formats: .csv, .tsv, .ltsv
-// - Compressed variants: .gz, .bz2, .xz, .zst
+// AddFS adds files from an embedded filesystem (go:embed).
 //
-// The filesystem will be processed during Build(), where matching files will be
-// converted to streaming readers for direct database access.
+// Automatically finds all CSV, TSV, and LTSV files in the filesystem.
 //
-// Example with embedded filesystem:
+// Example:
 //
 //	//go:embed data/*.csv data/*.tsv
 //	var dataFS embed.FS
 //
-//	subFS, _ := fs.Sub(dataFS, "data")
-//	builder := filesql.NewBuilder().AddFS(subFS)
+//	builder.AddFS(dataFS)
 //
-// Returns the builder for method chaining.
+// Returns self for chaining.
 func (b *DBBuilder) AddFS(filesystem fs.FS) *DBBuilder {
 	b.filesystems = append(b.filesystems, filesystem)
 	return b
 }
 
-// EnableAutoSave enables automatic saving when the database connection is closed.
-// Files will be overwritten in their original locations with the current database content.
-// This uses the same functionality as DumpDatabase() internally.
+// EnableAutoSave automatically saves changes when the database is closed.
 //
-// The outputDir parameter specifies where to save the files. If empty, files will be
-// saved to their original locations (overwrite mode).
+// Parameters:
+//   - outputDir: Where to save files
+//   - "" (empty): Overwrite original files
+//   - "./backup": Save to backup directory
 //
 // Example:
 //
-//	builder := filesql.NewBuilder().
-//		AddPath("data.csv").
-//		EnableAutoSave("./backup", NewDumpOptions()) // Save to backup directory on close
+//	builder.AddPath("data.csv").
+//		EnableAutoSave("") // Auto-save to original file on db.Close()
 //
-// Returns the builder for method chaining.
+// Returns self for chaining.
 func (b *DBBuilder) EnableAutoSave(outputDir string, options ...DumpOptions) *DBBuilder {
 	opts := NewDumpOptions()
 	if len(options) > 0 {
@@ -231,20 +223,16 @@ func (b *DBBuilder) EnableAutoSave(outputDir string, options ...DumpOptions) *DB
 	return b
 }
 
-// EnableAutoSaveOnCommit enables automatic saving when transactions are committed.
-// Files will be overwritten in their original locations with the current database content.
-// This provides more frequent saves but may impact performance for frequent commits.
+// EnableAutoSaveOnCommit automatically saves changes after each transaction commit.
 //
-// The outputDir parameter specifies where to save the files. If empty, files will be
-// saved to their original locations (overwrite mode).
+// Use this for real-time persistence. Note: May impact performance.
 //
 // Example:
 //
-//	builder := filesql.NewBuilder().
-//		AddPath("data.csv").
-//		EnableAutoSaveOnCommit("", NewDumpOptions()) // Overwrite original on each commit
+//	builder.AddPath("data.csv").
+//		EnableAutoSaveOnCommit("./output") // Save after each commit
 //
-// Returns the builder for method chaining.
+// Returns self for chaining.
 func (b *DBBuilder) EnableAutoSaveOnCommit(outputDir string, options ...DumpOptions) *DBBuilder {
 	opts := NewDumpOptions()
 	if len(options) > 0 {

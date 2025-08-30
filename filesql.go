@@ -16,31 +16,33 @@ import (
 	"github.com/ulikunitz/xz"
 )
 
-// Open opens a database connection using the filesql driver.
+// Open creates an SQL database from CSV, TSV, or LTSV files.
 //
-// The filesql driver uses SQLite3 as an in-memory database engine to provide SQL capabilities
-// for structured text files. This allows you to query CSV, TSV, LTSV files and their compressed
-// variants using standard SQL syntax.
+// Quick start:
 //
-// Supported file formats:
-//   - CSV files (.csv)
-//   - TSV files (.tsv)
-//   - LTSV files (.ltsv)
-//   - Compressed versions of above (.gz, .bz2, .xz, .zst)
+//	db, err := filesql.Open("data.csv")
+//	if err != nil {
+//		return err
+//	}
+//	defer db.Close()
 //
-// The paths parameter can be a mix of:
-//   - Individual files (CSV, TSV, LTSV, or their compressed versions)
-//   - Directories (all supported files within will be loaded recursively)
+//	rows, err := db.Query("SELECT * FROM data WHERE age > 25")
 //
-// Each file will be loaded as a separate table in the database with the table name
-// derived from the filename (without extension).
+// Parameters:
+//   - paths: One or more file paths or directories
+//   - Files: "users.csv", "products.tsv", "logs.ltsv"
+//   - Compressed: "data.csv.gz", "archive.tsv.bz2"
+//   - Directories: "/data/" (loads all CSV/TSV/LTSV files recursively)
 //
-// Important constraints:
-//   - INSERT, UPDATE, and DELETE operations are applied only to the in-memory database
-//   - Original input files are never modified by these operations
-//   - To persist changes, use the DumpDatabase function to export modified data
+// Table names:
+//   - "users.csv" → table "users"
+//   - "data.tsv.gz" → table "data"
+//   - "/path/to/sales.csv" → table "sales"
 //
-// Example usage:
+// Note: Original files are never modified. Changes exist only in memory.
+// To save changes, use DumpDatabase() function.
+//
+// Example with multiple files:
 //
 //	// Open a single CSV file
 //	db, err := filesql.Open("data/users.csv")
@@ -86,31 +88,14 @@ func Open(paths ...string) (*sql.DB, error) {
 	return OpenContext(context.Background(), paths...)
 }
 
-// OpenContext opens a database connection using the filesql driver with context support.
+// OpenContext is like Open but accepts a context for cancellation and timeout control.
 //
-// The filesql driver uses SQLite3 as an in-memory database engine to provide SQL capabilities
-// for structured text files. This allows you to query CSV, TSV, LTSV files and their compressed
-// variants using standard SQL syntax.
+// Use this when you need to:
+//   - Set timeouts for loading large files
+//   - Support cancellation in server applications
+//   - Integrate with context-aware code
 //
-// Supported file formats:
-//   - CSV files (.csv)
-//   - TSV files (.tsv)
-//   - LTSV files (.ltsv)
-//   - Compressed versions of above (.gz, .bz2, .xz, .zst)
-//
-// The paths parameter can be a mix of:
-//   - Individual files (CSV, TSV, LTSV, or their compressed versions)
-//   - Directories (all supported files within will be loaded recursively)
-//
-// Each file will be loaded as a separate table in the database with the table name
-// derived from the filename (without extension).
-//
-// Important constraints:
-//   - INSERT, UPDATE, and DELETE operations are applied only to the in-memory database
-//   - Original input files are never modified by these operations
-//   - To persist changes, use the DumpDatabase function to export modified data
-//
-// Example usage:
+// Example with timeout:
 //
 //	// Open a single CSV file with timeout
 //	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -168,16 +153,15 @@ func OpenContext(ctx context.Context, paths ...string) (*sql.DB, error) {
 	return validatedBuilder.Open(ctx)
 }
 
-// DumpDatabase exports all tables from the database to a directory.
+// DumpDatabase saves all database tables to files in the specified directory.
 //
-// By default, exports as CSV files without compression. You can optionally provide
-// DumpOptions to customize the output format and compression.
+// Basic usage:
 //
-// Note: filesql uses SQLite3 internally as an in-memory database. Any modifications
-// made through UPDATE, DELETE, or INSERT operations are not persisted to the original
-// files. If you need to persist changes, use DumpDatabase to export the modified data.
+//	err := filesql.DumpDatabase(db, "./output")
 //
-// Example usage:
+// This will save all tables as CSV files in the output directory.
+//
+// Advanced usage with options:
 //
 //	// Default: Export as CSV files
 //	err := DumpDatabase(db, "./output")
