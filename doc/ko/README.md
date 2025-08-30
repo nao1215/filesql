@@ -7,6 +7,8 @@
 
 [English](../../README.md) | [Русский](../ru/README.md) | [中文](../zh-cn/README.md) | [Español](../es/README.md) | [Français](../fr/README.md) | [日本語](../ja/README.md)
 
+![logo](../image/filesql-logo.png)
+
 **filesql**은 SQLite3 SQL 구문을 사용하여 CSV, TSV, LTSV 파일을 쿼리할 수 있게 해주는 Go SQL 드라이버입니다. 가져오기나 변환 없이 데이터 파일을 직접 쿼리하세요!
 
 ## 🎯 왜 filesql인가요?

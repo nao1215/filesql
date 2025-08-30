@@ -7,6 +7,8 @@
 
 [English](../../README.md) | [Русский](../ru/README.md) | [中文](../zh-cn/README.md) | [한국어](../ko/README.md) | [Español](../es/README.md) | [日本語](../ja/README.md)
 
+![logo](../image/filesql-logo.png)
+
 **filesql** est un pilote SQL Go qui vous permet d'interroger les fichiers CSV, TSV et LTSV en utilisant la syntaxe SQL de SQLite3. Interrogez directement vos fichiers de données sans importation ou transformation !
 
 ## 🎯 Pourquoi filesql ?

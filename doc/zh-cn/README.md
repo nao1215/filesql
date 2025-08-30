@@ -7,6 +7,8 @@
 
 [English](../../README.md) | [Русский](../ru/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Español](../es/README.md) | [Français](../fr/README.md)
 
+![logo](../image/filesql-logo.png)
+
 **filesql** 是一个 Go SQL 驱动，让您可以使用 SQLite3 SQL 语法直接查询 CSV、TSV 和 LTSV 文件。无需导入或转换即可直接查询数据文件！
 
 ## 🎯 为什么选择 filesql？
