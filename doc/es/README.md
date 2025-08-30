@@ -7,6 +7,8 @@
 
 [English](../../README.md) | [Русский](../ru/README.md) | [中文](../zh-cn/README.md) | [한국어](../ko/README.md) | [日本語](../ja/README.md) | [Français](../fr/README.md)
 
+![logo](../image/filesql-logo.png)
+
 **filesql** es un controlador SQL para Go que te permite consultar archivos CSV, TSV y LTSV usando la sintaxis SQL de SQLite3. ¡Consulta tus archivos de datos directamente sin importaciones o transformaciones!
 
 ## 🎯 ¿Por qué filesql?

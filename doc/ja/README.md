@@ -7,6 +7,8 @@
 
 [English](../../README.md) | [Русский](../ru/README.md) | [中文](../zh-cn/README.md) | [한국어](../ko/README.md) | [Español](../es/README.md) | [Français](../fr/README.md)
 
+![logo](../image/filesql-logo.png)
+
 **filesql** は、SQLite3のSQL構文を使用してCSV、TSV、LTSVファイルを直接クエリできるGo SQLドライバーです。インポートや変換なしでデータファイルを直接クエリできます！
 
 ## 🎯 なぜfilesqlなのか？
