@@ -1,6 +1,7 @@
 package filesql
 
 import (
+	"path/filepath"
 	"testing"
 )
 
@@ -116,7 +117,7 @@ func TestTableFromFilePath_Additional(t *testing.T) {
 		},
 		{
 			name:     "File with path",
-			filePath: "/home/user/documents/data.csv",
+			filePath: filepath.Join("home", "user", "documents", "data.csv"),
 			expected: "data",
 		},
 		{
@@ -131,7 +132,7 @@ func TestTableFromFilePath_Additional(t *testing.T) {
 		},
 		{
 			name:     "File with path and no extension",
-			filePath: "/home/user/data",
+			filePath: filepath.Join("home", "user", "data"),
 			expected: "data",
 		},
 		{

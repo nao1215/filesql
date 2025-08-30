@@ -297,6 +297,32 @@ func TestDumpOptions_FileExtension(t *testing.T) {
 	}
 }
 
+// TestOutputFormatStringEdgeCases tests edge cases for OutputFormat.String()
+func TestOutputFormatStringEdgeCases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		format OutputFormat
+		want   string
+	}{
+		{
+			name:   "Unknown format should default",
+			format: OutputFormat(999), // Invalid format
+			want:   "csv",             // Should default to CSV
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.format.String(); got != tt.want {
+				t.Errorf("OutputFormat.String() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDumpOptions_ChainedMethods(t *testing.T) {
 	t.Parallel()
 

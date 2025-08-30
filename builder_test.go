@@ -333,7 +333,7 @@ func TestDBBuilder_Build(t *testing.T) {
 
 	t.Run("invalid path error", func(t *testing.T) {
 		t.Parallel()
-		builder := NewBuilder().AddPath("/nonexistent/file.csv")
+		builder := NewBuilder().AddPath(filepath.Join("nonexistent", "file.csv"))
 		_, err := builder.Build(ctx)
 		if err == nil {
 			t.Error("Build() should return error for nonexistent path")
@@ -1183,7 +1183,7 @@ func TestBuilder_ErrorCases(t *testing.T) {
 
 	t.Run("build with non-existent path", func(t *testing.T) {
 		t.Parallel()
-		builder := NewBuilder().AddPath("/non/existent/file.csv")
+		builder := NewBuilder().AddPath(filepath.Join("non", "existent", "file.csv"))
 		_, err := builder.Build(ctx)
 		if err == nil {
 			t.Error("Build() with non-existent path should return error")
@@ -1552,6 +1552,197 @@ func TestDBBuilder_CreateDecompressedReader(t *testing.T) {
 		// Should return a different reader (zstd reader)
 		if reader == file {
 			t.Error("Expected reader to be different from input file for zstd files")
+		}
+	})
+}
+
+// TestDriverMethods tests driver interface methods for coverage
+func TestDriverMethods(t *testing.T) {
+	t.Parallel()
+
+	t.Run("directConnector Driver method", func(t *testing.T) {
+		t.Parallel()
+
+		connector := &directConnector{}
+		driver := connector.Driver()
+		if driver == nil {
+			t.Error("Expected non-nil driver")
+		}
+	})
+
+	t.Run("autoSaveConnector Driver method", func(t *testing.T) {
+		t.Parallel()
+
+		connector := &autoSaveConnector{}
+		driver := connector.Driver()
+		if driver == nil {
+			t.Error("Expected non-nil driver")
+		}
+	})
+}
+
+// TestTransactionMethods tests transaction operations for coverage
+func TestTransactionMethods(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	csvFile := filepath.Join(tempDir, "test.csv")
+	csvContent := "id,name\n1,Alice\n2,Bob\n"
+	if err := os.WriteFile(csvFile, []byte(csvContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("Begin and Rollback transaction", func(t *testing.T) {
+		t.Parallel()
+
+		validatedBuilder, err := NewBuilder().
+			AddPath(csvFile).
+			EnableAutoSaveOnCommit(tempDir).
+			Build(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		db, err := validatedBuilder.Open(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+
+		ctx := context.Background()
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = tx.ExecContext(ctx, "UPDATE test SET name = 'Charlie' WHERE id = 1")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = tx.Rollback()
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("autoSaveConnection Begin method", func(t *testing.T) {
+		t.Parallel()
+
+		validatedBuilder, err := NewBuilder().
+			AddPath(csvFile).
+			EnableAutoSaveOnCommit(tempDir).
+			Build(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		db, err := validatedBuilder.Open(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+
+		// Test the Begin method (0% coverage)
+		ctx := context.Background()
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+	})
+
+	t.Run("overwriteOriginalFiles path", func(t *testing.T) {
+		t.Parallel()
+
+		validatedBuilder, err := NewBuilder().
+			AddPath(csvFile).
+			EnableAutoSaveOnCommit(""). // Empty string triggers overwrite
+			Build(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		db, err := validatedBuilder.Open(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+
+		ctx := context.Background()
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = tx.ExecContext(ctx, "UPDATE test SET name = 'Diana' WHERE id = 1")
+		if err != nil {
+			_ = tx.Rollback() //nolint:errcheck
+			t.Fatal(err)
+		}
+
+		// This should trigger overwriteOriginalFiles
+		err = tx.Commit()
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// TestAutoSavePaths tests auto-save functionality for coverage
+func TestAutoSavePaths(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	csvFile := filepath.Join(tempDir, "test.csv")
+	csvContent := "id,name\n1,Alice\n2,Bob\n"
+	if err := os.WriteFile(csvFile, []byte(csvContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("Close connection with auto-save", func(t *testing.T) {
+		t.Parallel()
+
+		validatedBuilder, err := NewBuilder().
+			AddPath(csvFile).
+			EnableAutoSave(tempDir).
+			Build(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		db, err := validatedBuilder.Open(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ctx := context.Background()
+		_, err = db.ExecContext(ctx, "UPDATE test SET name = 'Eve' WHERE id = 1")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Close should trigger auto-save
+		err = db.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("createEmptyTable coverage", func(t *testing.T) {
+		t.Parallel()
+
+		// Test with empty reader to trigger createEmptyTable path
+		validatedBuilder, err := NewBuilder().
+			AddReader(strings.NewReader(""), "empty_test", FileTypeCSV).
+			Build(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = validatedBuilder.Open(context.Background())
+		if err == nil {
+			t.Error("Expected error when opening empty CSV data")
 		}
 	})
 }

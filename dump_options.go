@@ -10,6 +10,8 @@ const (
 	OutputFormatTSV
 	// OutputFormatLTSV represents LTSV output format
 	OutputFormatLTSV
+	// OutputFormatParquet represents Parquet output format
+	OutputFormatParquet
 )
 
 // String returns the string representation of OutputFormat
@@ -21,6 +23,8 @@ func (f OutputFormat) String() string {
 		return "tsv"
 	case OutputFormatLTSV:
 		return "ltsv"
+	case OutputFormatParquet:
+		return "parquet"
 	default:
 		return "csv"
 	}
@@ -35,6 +39,8 @@ func (f OutputFormat) Extension() string {
 		return ".tsv"
 	case OutputFormatLTSV:
 		return ".ltsv"
+	case OutputFormatParquet:
+		return ".parquet"
 	default:
 		return ".csv"
 	}
@@ -56,19 +62,27 @@ const (
 	CompressionZSTD
 )
 
+// String constants for compression types
+const (
+	compressionGZStr   = "gz"
+	compressionBZ2Str  = "bz2"
+	compressionXZStr   = "xz"
+	compressionZSTDStr = "zstd"
+)
+
 // String returns the string representation of CompressionType
 func (c CompressionType) String() string {
 	switch c {
 	case CompressionNone:
 		return "none"
 	case CompressionGZ:
-		return "gz"
+		return compressionGZStr
 	case CompressionBZ2:
-		return "bz2"
+		return compressionBZ2Str
 	case CompressionXZ:
-		return "xz"
+		return compressionXZStr
 	case CompressionZSTD:
-		return "zstd"
+		return compressionZSTDStr
 	default:
 		return "none"
 	}
@@ -126,6 +140,7 @@ func NewDumpOptions() DumpOptions {
 //   - OutputFormatCSV: Comma-separated values
 //   - OutputFormatTSV: Tab-separated values
 //   - OutputFormatLTSV: Labeled tab-separated values
+//   - OutputFormatParquet: Apache Parquet columnar format
 func (o DumpOptions) WithFormat(format OutputFormat) DumpOptions {
 	o.Format = format
 	return o

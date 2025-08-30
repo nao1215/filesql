@@ -36,10 +36,11 @@ Plutôt que de maintenir du code dupliqué dans les deux projets, nous avons ext
 | `.csv` | CSV | Valeurs séparées par des virgules |
 | `.tsv` | TSV | Valeurs séparées par des tabulations |
 | `.ltsv` | LTSV | Valeurs étiquetées séparées par des tabulations |
-| `.csv.gz`, `.tsv.gz`, `.ltsv.gz` | Compression Gzip | Fichiers compressés Gzip |
-| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2` | Compression Bzip2 | Fichiers compressés Bzip2 |
-| `.csv.xz`, `.tsv.xz`, `.ltsv.xz` | Compression XZ | Fichiers compressés XZ |
-| `.csv.zst`, `.tsv.zst`, `.ltsv.zst` | Compression Zstandard | Fichiers compressés Zstandard |
+| `.parquet` | Parquet | Format columnaire Apache Parquet |
+| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz` | Compression Gzip | Fichiers compressés Gzip |
+| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2` | Compression Bzip2 | Fichiers compressés Bzip2 |
+| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz` | Compression XZ | Fichiers compressés XZ |
+| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst` | Compression Zstandard | Fichiers compressés Zstandard |
 
 ## 📦 Installation
 

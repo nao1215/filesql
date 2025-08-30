@@ -36,10 +36,11 @@
 | `.csv` | CSV | 逗号分隔值 |
 | `.tsv` | TSV | 制表符分隔值 |
 | `.ltsv` | LTSV | 标签制表符分隔值 |
-| `.csv.gz`, `.tsv.gz`, `.ltsv.gz` | Gzip 压缩 | Gzip 压缩文件 |
-| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2` | Bzip2 压缩 | Bzip2 压缩文件 |
-| `.csv.xz`, `.tsv.xz`, `.ltsv.xz` | XZ 压缩 | XZ 压缩文件 |
-| `.csv.zst`, `.tsv.zst`, `.ltsv.zst` | Zstandard 压缩 | Zstandard 压缩文件 |
+| `.parquet` | Parquet | Apache Parquet 列式格式 |
+| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz` | Gzip 压缩 | Gzip 压缩文件 |
+| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2` | Bzip2 压缩 | Bzip2 压缩文件 |
+| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz` | XZ 压缩 | XZ 压缩文件 |
+| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst` | Zstandard 压缩 | Zstandard 压缩文件 |
 
 ## 📦 安装
 

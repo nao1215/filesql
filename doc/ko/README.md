@@ -36,10 +36,11 @@
 | `.csv` | CSV | 쉼표로 구분된 값 |
 | `.tsv` | TSV | 탭으로 구분된 값 |
 | `.ltsv` | LTSV | 레이블이 있는 탭으로 구분된 값 |
-| `.csv.gz`, `.tsv.gz`, `.ltsv.gz` | Gzip 압축 | Gzip 압축 파일 |
-| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2` | Bzip2 압축 | Bzip2 압축 파일 |
-| `.csv.xz`, `.tsv.xz`, `.ltsv.xz` | XZ 압축 | XZ 압축 파일 |
-| `.csv.zst`, `.tsv.zst`, `.ltsv.zst` | Zstandard 압축 | Zstandard 압축 파일 |
+| `.parquet` | Parquet | Apache Parquet 칼럼형 형식 |
+| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz` | Gzip 압축 | Gzip 압축 파일 |
+| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2` | Bzip2 압축 | Bzip2 압축 파일 |
+| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz` | XZ 압축 | XZ 압축 파일 |
+| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst` | Zstandard 압축 | Zstandard 압축 파일 |
 
 ## 📦 설치
 

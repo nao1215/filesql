@@ -35,22 +35,22 @@ func TestNewFile(t *testing.T) {
 		{
 			name:     "Compressed CSV file",
 			path:     "test.csv.gz",
-			expected: FileTypeCSV,
+			expected: FileTypeCSVGZ,
 		},
 		{
 			name:     "Compressed TSV file",
 			path:     "test.tsv.bz2",
-			expected: FileTypeTSV,
+			expected: FileTypeTSVBZ2,
 		},
 		{
 			name:     "Compressed LTSV file",
 			path:     "test.ltsv.xz",
-			expected: FileTypeLTSV,
+			expected: FileTypeLTSVXZ,
 		},
 		{
 			name:     "Zstd compressed CSV file",
 			path:     "test.csv.zst",
-			expected: FileTypeCSV,
+			expected: FileTypeCSVZSTD,
 		},
 		{
 			name:     "Unsupported file",
@@ -409,7 +409,7 @@ func TestTableFromFilePath(t *testing.T) {
 		},
 		{
 			name:     "Path with directory",
-			filePath: "/home/user/data.csv",
+			filePath: filepath.Join("home", "user", "data.csv"),
 			expected: "data",
 		},
 		{
@@ -762,13 +762,87 @@ John,25,Doe,john@example.com,26`
 	})
 }
 
+// TestFileTypeExtension tests the extension() method for various FileTypes
+func TestFileTypeExtension(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		fileType FileType
+		expected string
+	}{
+		{"CSV", FileTypeCSV, ".csv"},
+		{"TSV", FileTypeTSV, ".tsv"},
+		{"LTSV", FileTypeLTSV, ".ltsv"},
+		{"Parquet", FileTypeParquet, ".parquet"},
+		{"CSV GZ", FileTypeCSVGZ, ".csv.gz"},
+		{"TSV BZ2", FileTypeTSVBZ2, ".tsv.bz2"},
+		{"LTSV XZ", FileTypeLTSVXZ, ".ltsv.xz"},
+		{"CSV ZSTD", FileTypeCSVZSTD, ".csv.zst"},
+		{"Parquet GZ", FileTypeParquetGZ, ".parquet.gz"},
+		{"Parquet BZ2", FileTypeParquetBZ2, ".parquet.bz2"},
+		{"Parquet XZ", FileTypeParquetXZ, ".parquet.xz"},
+		{"Parquet ZSTD", FileTypeParquetZSTD, ".parquet.zst"},
+		{"Unsupported", FileTypeUnsupported, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.fileType.extension(); got != tt.expected {
+				t.Errorf("FileType.extension() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestOpenReaderEdgeCases tests edge cases in openReader function
+func TestOpenReaderEdgeCases(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	t.Run("openReader with non-existent file", func(t *testing.T) {
+		t.Parallel()
+
+		file := newFile(filepath.Join(tmpDir, "nonexistent.csv"))
+		_, closer, err := file.openReader()
+		if err == nil {
+			_ = closer() //nolint:errcheck
+			t.Error("expected error for non-existent file")
+		}
+	})
+
+	t.Run("openReader with unsupported compressed file", func(t *testing.T) {
+		t.Parallel()
+
+		// Create a fake compressed file with invalid content
+		fakeBz2 := filepath.Join(tmpDir, "fake.csv.bz2")
+		if err := os.WriteFile(fakeBz2, []byte("not bz2 data"), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		file := newFile(fakeBz2)
+		reader, closer, err := file.openReader()
+		if err == nil {
+			defer closer()
+			// Try to read from it - should fail
+			buf := make([]byte, 10)
+			_, readErr := reader.Read(buf)
+			if readErr == nil {
+				t.Error("expected error when reading invalid bz2 data")
+			}
+		}
+	})
+}
+
 func TestGetSupportedFilePatterns(t *testing.T) {
 	t.Parallel()
 
 	patterns := supportedFileExtPatterns()
 
-	// Should have 15 patterns: 3 base extensions × 5 compression variants (including none)
-	expectedCount := 15
+	// Should have 20 patterns: 4 base extensions × 5 compression variants (including none)
+	expectedCount := 20
 	if len(patterns) != expectedCount {
 		t.Errorf("GetSupportedFilePatterns() returned %d patterns, want %d", len(patterns), expectedCount)
 	}
@@ -778,6 +852,7 @@ func TestGetSupportedFilePatterns(t *testing.T) {
 		"*.csv", "*.csv.gz", "*.csv.bz2", "*.csv.xz", "*.csv.zst",
 		"*.tsv", "*.tsv.gz", "*.tsv.bz2", "*.tsv.xz", "*.tsv.zst",
 		"*.ltsv", "*.ltsv.gz", "*.ltsv.bz2", "*.ltsv.xz", "*.ltsv.zst",
+		"*.parquet", "*.parquet.gz", "*.parquet.bz2", "*.parquet.xz", "*.parquet.zst",
 	}
 
 	for _, expected := range expectedPatterns {
