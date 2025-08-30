@@ -23,8 +23,9 @@ Rather than maintaining duplicate code across both projects, we extracted the co
 - 🌊 **Stream Processing** - Efficiently handles large files through streaming with configurable chunk sizes
 - 📖 **Flexible Input Sources** - Support for file paths, directories, io.Reader, and embed.FS
 - 🚀 **Zero Setup** - No database server required, everything runs in-memory
+- 💾 **Auto-Save** - Automatically persist changes back to files
 - 🌍 **Cross-Platform** - Works seamlessly on Linux, macOS, and Windows
-- 💾 **SQLite3 Powered** - Built on the robust SQLite3 engine for reliable SQL processing
+- ⚡ **SQLite3 Powered** - Built on the robust SQLite3 engine for reliable SQL processing
 
 ## 📋 Supported File Formats
 
@@ -38,7 +39,6 @@ Rather than maintaining duplicate code across both projects, we extracted the co
 | `.csv.xz`, `.tsv.xz`, `.ltsv.xz` | XZ compressed | XZ compressed files |
 | `.csv.zst`, `.tsv.zst`, `.ltsv.zst` | Zstandard compressed | Zstandard compressed files |
 
-
 ## 📦 Installation
 
 ```bash
@@ -47,11 +47,9 @@ go get github.com/nao1215/filesql
 
 ## 🚀 Quick Start
 
-[Example codes is here](./example_test.go).
+### Simple Usage
 
-### Simple Usage (Files)
-
-For simple file access, use the convenient `Open` or `OpenContext` functions:
+The recommended way to get started is with `OpenContext` for proper timeout handling:
 
 ```go
 package main
@@ -66,18 +64,19 @@ import (
 )
 
 func main() {
-    // Open a CSV file as a database with context
+    // Create context with timeout for large file operations
     ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
     defer cancel()
     
+    // Open a CSV file as a database
     db, err := filesql.OpenContext(ctx, "data.csv")
     if err != nil {
         log.Fatal(err)
     }
     defer db.Close()
     
-    // Execute SQL query (table name is derived from filename without extension)
-    rows, err := db.QueryContext(ctx, "SELECT * FROM data WHERE age > 25 ORDER BY name")
+    // Query the data (table name = filename without extension)
+    rows, err := db.QueryContext(ctx, "SELECT * FROM data WHERE age > 25")
     if err != nil {
         log.Fatal(err)
     }
@@ -95,92 +94,25 @@ func main() {
 }
 ```
 
-### Builder Pattern (Required for fs.FS)
-
-For advanced use cases like embedded files (`go:embed`) or custom filesystems, use the **Builder pattern**:
+### Multiple Files and Formats
 
 ```go
-package main
-
-import (
-    "context"
-    "embed"
-    "io/fs"
-    "log"
-    
-    "github.com/nao1215/filesql"
-)
-
-//go:embed data/*.csv data/*.tsv
-var dataFS embed.FS
-
-func main() {
-    ctx := context.Background()
-    
-    // Use Builder pattern for embedded filesystem
-    subFS, _ := fs.Sub(dataFS, "data")
-    
-    db, err := filesql.NewBuilder().
-        AddPath("local_file.csv").  // Regular file
-        AddFS(subFS).               // Embedded filesystem
-        Build(ctx)
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    connection, err := db.Open(ctx)
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer connection.Close()
-    
-    // Query across files from different sources
-    rows, err := connection.Query("SELECT name FROM sqlite_master WHERE type='table'")
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer rows.Close()
-    
-    // Process results...
-}
-```
-
-### Opening with Context Support
-
-```go
-// Open files with timeout control
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 defer cancel()
 
-db, err := filesql.OpenContext(ctx, "large_dataset.csv")
+// Open multiple files at once
+db, err := filesql.OpenContext(ctx, "users.csv", "orders.tsv", "logs.ltsv.gz")
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
-// Query with context for cancellation support
-rows, err := db.QueryContext(ctx, "SELECT * FROM large_dataset WHERE status = 'active'")
-```
-
-### Opening Multiple Files
-
-```go
-// Open multiple files in a single database
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
-
-db, err := filesql.OpenContext(ctx, "users.csv", "orders.tsv", "products.ltsv")
-if err != nil {
-    log.Fatal(err)
-}
-defer db.Close()
-
-// Join data across different file formats!
+// Join data across different file formats
 rows, err := db.QueryContext(ctx, `
-    SELECT u.name, o.order_date, p.product_name
+    SELECT u.name, o.order_date, l.event
     FROM users u
     JOIN orders o ON u.id = o.user_id
-    JOIN products p ON o.product_id = p.id
+    JOIN logs l ON u.id = l.user_id
     WHERE o.order_date > '2024-01-01'
 `)
 ```
@@ -188,64 +120,187 @@ rows, err := db.QueryContext(ctx, `
 ### Working with Directories
 
 ```go
-// Open all supported files in a directory (recursive)
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 defer cancel()
 
+// Load all supported files from a directory (recursive)
 db, err := filesql.OpenContext(ctx, "/path/to/data/directory")
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
-// Query all loaded tables
+// See what tables are available
 rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
 ```
 
-### Compressed Files Support
+## 🔧 Advanced Usage
+
+### Builder Pattern
+
+For advanced scenarios, use the builder pattern:
 
 ```go
-// Automatically handles compressed files
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
+package main
 
-db, err := filesql.OpenContext(ctx, "large_dataset.csv.gz", "archive.tsv.bz2")
+import (
+    "context"
+    "embed"
+    "log"
+    
+    "github.com/nao1215/filesql"
+)
+
+//go:embed data/*.csv
+var embeddedFiles embed.FS
+
+func main() {
+    ctx := context.Background()
+    
+    // Configure data sources with builder
+    validatedBuilder, err := filesql.NewBuilder().
+        AddPath("local_file.csv").      // Local file
+        AddFS(embeddedFiles).           // Embedded files
+        SetDefaultChunkSize(50*1024*1024). // 50MB chunks
+        Build(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    db, err := validatedBuilder.Open(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+    
+    // Query across all data sources
+    rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='table'")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer rows.Close()
+}
+```
+
+### Auto-Save Features
+
+#### Auto-Save on Database Close
+
+```go
+// Auto-save changes when database is closed
+validatedBuilder, err := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSave("./backup"). // Save to backup directory
+    Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close() // Changes are automatically saved here
+
+// Make changes
+db.Exec("UPDATE data SET status = 'processed' WHERE id = 1")
+db.Exec("INSERT INTO data (name, age) VALUES ('John', 30)")
+```
+
+#### Auto-Save on Transaction Commit
+
+```go
+// Auto-save after each transaction
+validatedBuilder, err := filesql.NewBuilder().
+    AddPath("data.csv").
+    EnableAutoSaveOnCommit(""). // Empty = overwrite original files
+    Build(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+
+db, err := validatedBuilder.Open(ctx)
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
-// Query compressed data seamlessly
-rows, err := db.QueryContext(ctx, "SELECT COUNT(*) FROM large_dataset")
+// Changes are saved after each commit
+tx, _ := db.Begin()
+tx.Exec("UPDATE data SET status = 'processed' WHERE id = 1")
+tx.Commit() // Auto-save happens here
 ```
 
-### Table Naming Rules
-
-filesql automatically derives table names from file paths:
+### Working with io.Reader and Network Data
 
 ```go
-// Table naming examples:
-// "users.csv"           -> table name: "users"
-// "data.tsv"            -> table name: "data"
-// "logs.ltsv"           -> table name: "logs"
-// "archive.csv.gz"      -> table name: "archive"
-// "backup.tsv.bz2"      -> table name: "backup"
-// "/path/to/sales.csv"  -> table name: "sales"
+import (
+    "net/http"
+    "github.com/nao1215/filesql"
+)
 
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
+// Load data from HTTP response
+resp, err := http.Get("https://example.com/data.csv")
+if err != nil {
+    log.Fatal(err)
+}
+defer resp.Body.Close()
 
-db, err := filesql.OpenContext(ctx, "employees.csv", "departments.tsv.gz")
+validatedBuilder, err := filesql.NewBuilder().
+    AddReader(resp.Body, "remote_data", filesql.FileTypeCSV).
+    Build(ctx)
 if err != nil {
     log.Fatal(err)
 }
 
-// Use the derived table names in queries
-rows, err := db.QueryContext(ctx, `
-    SELECT * FROM employees 
-    JOIN departments ON employees.dept_id = departments.id
-`)
+db, err := validatedBuilder.Open(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// Query remote data
+rows, err := db.QueryContext(ctx, "SELECT * FROM remote_data LIMIT 10")
 ```
+
+### Manual Data Export
+
+If you prefer manual control over saving:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+db, err := filesql.OpenContext(ctx, "data.csv")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// Make modifications
+db.Exec("UPDATE data SET status = 'processed'")
+
+// Manually export changes
+err = filesql.DumpDatabase(db, "./output")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Or with custom format and compression
+options := filesql.NewDumpOptions().
+    WithFormat(filesql.OutputFormatTSV).
+    WithCompression(filesql.CompressionGZ)
+err = filesql.DumpDatabase(db, "./output", options)
+```
+
+## 📝 Table Naming Rules
+
+filesql automatically derives table names from file paths:
+
+- `users.csv` → table `users`
+- `data.tsv.gz` → table `data`
+- `/path/to/sales.csv` → table `sales`
+- `products.ltsv.bz2` → table `products`
 
 ## ⚠️ Important Notes
 
@@ -254,17 +309,23 @@ Since filesql uses SQLite3 as its underlying engine, all SQL syntax follows [SQL
 - Functions (e.g., `date()`, `substr()`, `json_extract()`)
 - Window functions
 - Common Table Expressions (CTEs)
-- And much more!
+- Triggers and views
 
 ### Data Modifications
 - `INSERT`, `UPDATE`, and `DELETE` operations affect the in-memory database
-- **Original files remain unchanged by default** - filesql doesn't modify your source files unless you use auto-save
-- You can use **auto-save** to automatically persist changes to files on close or commit
-- This makes it safe to experiment with data transformations while providing optional persistence
+- **Original files remain unchanged by default**
+- Use auto-save features or `DumpDatabase()` to persist changes
+- This makes it safe to experiment with data transformations
 
-### Advanced SQL Features
+### Performance Tips
+- Use `OpenContext()` with timeouts for large files
+- Configure chunk sizes with `SetDefaultChunkSize()` for memory optimization  
+- Single SQLite connection works best for most scenarios
+- Use streaming for files larger than available memory
 
-Since filesql uses SQLite3, you can leverage its full power:
+## 🎨 Advanced Examples
+
+### Complex SQL Queries
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -276,7 +337,7 @@ if err != nil {
 }
 defer db.Close()
 
-// Use window functions, CTEs, and complex queries
+// Use advanced SQLite features
 query := `
     WITH dept_stats AS (
         SELECT 
@@ -291,149 +352,37 @@ query := `
         e.salary,
         d.name as department,
         ds.avg_salary as dept_avg,
-        RANK() OVER (PARTITION BY e.department_id ORDER BY e.salary DESC) as rank
+        RANK() OVER (PARTITION BY e.department_id ORDER BY e.salary DESC) as salary_rank
     FROM employees e
     JOIN departments d ON e.department_id = d.id
     JOIN dept_stats ds ON e.department_id = ds.department_id
     WHERE e.salary > ds.avg_salary * 0.8
+    ORDER BY d.name, salary_rank
 `
 
 rows, err := db.QueryContext(ctx, query)
 ```
 
-### Auto-Save Feature
-
-filesql provides auto-save functionality to automatically persist database changes to files. You can choose between two timing options:
-
-#### Auto-Save on Database Close
-
-Automatically save changes when the database connection is closed (recommended for most use cases):
+### Context and Cancellation
 
 ```go
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+import (
+    "context"
+    "time"
+)
+
+// Set timeout for large file operations
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 defer cancel()
 
-// Enable auto-save on close
-builder := filesql.NewBuilder().
-    AddPath("data.csv").
-    EnableAutoSave("./backup") // Save to backup directory
-
-validatedBuilder, err := builder.Build(ctx)
-if err != nil {
-    log.Fatal(err)
-}
-
-db, err := validatedBuilder.Open(ctx)
-if err != nil {
-    log.Fatal(err)
-}
-defer db.Close() // Auto-save triggered here
-
-// Make modifications - they will be automatically saved on close
-_, err = db.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE status = 'pending'")
-_, err = db.ExecContext(ctx, "INSERT INTO data (name, status) VALUES ('New Record', 'active')")
-```
-
-#### Auto-Save on Transaction Commit
-
-Automatically save changes after each transaction commit (for frequent persistence):
-
-```go
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
-
-// Enable auto-save on commit - empty string means overwrite original files
-builder := filesql.NewBuilder().
-    AddPath("data.csv").
-    EnableAutoSaveOnCommit("") // Overwrite original files
-
-validatedBuilder, err := builder.Build(ctx)
-if err != nil {
-    log.Fatal(err)
-}
-
-db, err := validatedBuilder.Open(ctx)
+db, err := filesql.OpenContext(ctx, "huge_dataset.csv.gz")
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
-// Each commit will automatically save to files
-tx, err := db.BeginTx(ctx, nil)
-if err != nil {
-    log.Fatal(err)
-}
-
-_, err = tx.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE id = 1")
-if err != nil {
-    tx.Rollback()
-    log.Fatal(err)
-}
-
-err = tx.Commit() // Auto-save triggered here
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-#### Auto-Save Input Type Restrictions
-
-**Important**: Auto-save behavior depends on your input data source:
-
-- **File Paths** (`AddPath`, `AddPaths`): Supports both overwrite mode (empty string) and output directory
-  ```go
-  // ✅ Overwrite original files
-  builder.AddPath("data.csv").EnableAutoSave("")
-  
-  // ✅ Save to output directory  
-  builder.AddPath("data.csv").EnableAutoSave("./backup")
-  ```
-
-- **io.Reader** (`AddReader`): **Only supports output directory mode**
-  ```go
-  // ❌ Build error - overwrite mode not supported
-  builder.AddReader(reader, "table", filesql.FileTypeCSV).EnableAutoSave("")
-  
-  // ✅ Must specify output directory
-  builder.AddReader(reader, "table", filesql.FileTypeCSV).EnableAutoSave("./output")
-  ```
-
-- **Filesystems** (`AddFS`): **Only supports output directory mode**
-  ```go
-  // ❌ Build error - overwrite mode not supported  
-  builder.AddFS(filesystem).EnableAutoSave("")
-  
-  // ✅ Must specify output directory
-  builder.AddFS(filesystem).EnableAutoSave("./output")
-  ```
-
-This restriction exists because io.Reader and filesystem inputs don't have original file paths that can be overwritten. The builder will return an error at build time if you try to use overwrite mode with these input types.
-
-### Manual Data Export (Alternative to Auto-Save)
-
-If you prefer manual control over when to save changes to files instead of using auto-save:
-
-```go
-ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-defer cancel()
-
-db, err := filesql.OpenContext(ctx, "data.csv")
-if err != nil {
-    log.Fatal(err)
-}
-defer db.Close()
-
-// Make modifications
-_, err = db.ExecContext(ctx, "UPDATE data SET status = 'processed' WHERE status = 'pending'")
-if err != nil {
-    log.Fatal(err)
-}
-
-// Export the modified data to a new directory
-err = filesql.DumpDatabase(db, "/path/to/output/directory")
-if err != nil {
-    log.Fatal(err)
-}
+// Query with context for cancellation support
+rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'active'")
 ```
 
 ## 🤝 Contributing
