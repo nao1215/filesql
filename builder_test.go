@@ -1376,19 +1376,20 @@ func TestDriverMethods(t *testing.T) {
 func TestTransactionMethods(t *testing.T) {
 	t.Parallel()
 
-	tempDir := t.TempDir()
-	csvFile := filepath.Join(tempDir, "test.csv")
-	csvContent := "id,name\n1,Alice\n2,Bob\n"
-	if err := os.WriteFile(csvFile, []byte(csvContent), 0600); err != nil {
-		require.NoError(t, err, "operation should succeed")
-	}
-
 	t.Run("Begin and Rollback transaction", func(t *testing.T) {
 		t.Parallel()
 
+		// Create a separate temp directory and CSV file for this test
+		testTempDir := t.TempDir()
+		testCsvFile := filepath.Join(testTempDir, "test.csv")
+		csvContent := "id,name\n1,Alice\n2,Bob\n"
+		if err := os.WriteFile(testCsvFile, []byte(csvContent), 0600); err != nil {
+			require.NoError(t, err, "operation should succeed")
+		}
+
 		validatedBuilder, err := NewBuilder().
-			AddPath(csvFile).
-			EnableAutoSaveOnCommit(tempDir).
+			AddPath(testCsvFile).
+			EnableAutoSaveOnCommit(testTempDir).
 			Build(context.Background())
 		if err != nil {
 			require.NoError(t, err, "operation should succeed")
@@ -1420,9 +1421,17 @@ func TestTransactionMethods(t *testing.T) {
 	t.Run("autoSaveConnection Begin method", func(t *testing.T) {
 		t.Parallel()
 
+		// Create a separate temp directory and CSV file for this test
+		testTempDir := t.TempDir()
+		testCsvFile := filepath.Join(testTempDir, "test.csv")
+		csvContent := "id,name\n1,Alice\n2,Bob\n"
+		if err := os.WriteFile(testCsvFile, []byte(csvContent), 0600); err != nil {
+			require.NoError(t, err, "operation should succeed")
+		}
+
 		validatedBuilder, err := NewBuilder().
-			AddPath(csvFile).
-			EnableAutoSaveOnCommit(tempDir).
+			AddPath(testCsvFile).
+			EnableAutoSaveOnCommit(testTempDir).
 			Build(context.Background())
 		if err != nil {
 			require.NoError(t, err, "operation should succeed")
@@ -1446,8 +1455,16 @@ func TestTransactionMethods(t *testing.T) {
 	t.Run("overwriteOriginalFiles path", func(t *testing.T) {
 		t.Parallel()
 
+		// Create a separate temp directory and CSV file for this test
+		testTempDir := t.TempDir()
+		testCsvFile := filepath.Join(testTempDir, "test.csv")
+		csvContent := "id,name\n1,Alice\n2,Bob\n"
+		if err := os.WriteFile(testCsvFile, []byte(csvContent), 0600); err != nil {
+			require.NoError(t, err, "operation should succeed")
+		}
+
 		validatedBuilder, err := NewBuilder().
-			AddPath(csvFile).
+			AddPath(testCsvFile).
 			EnableAutoSaveOnCommit(""). // Empty string triggers overwrite
 			Build(context.Background())
 		if err != nil {
@@ -1484,19 +1501,20 @@ func TestTransactionMethods(t *testing.T) {
 func TestAutoSavePaths(t *testing.T) {
 	t.Parallel()
 
-	tempDir := t.TempDir()
-	csvFile := filepath.Join(tempDir, "test.csv")
-	csvContent := "id,name\n1,Alice\n2,Bob\n"
-	if err := os.WriteFile(csvFile, []byte(csvContent), 0600); err != nil {
-		require.NoError(t, err, "operation should succeed")
-	}
-
 	t.Run("Close connection with auto-save", func(t *testing.T) {
 		t.Parallel()
 
+		// Create a separate temp directory and CSV file for this test
+		testTempDir := t.TempDir()
+		testCsvFile := filepath.Join(testTempDir, "test.csv")
+		csvContent := "id,name\n1,Alice\n2,Bob\n"
+		if err := os.WriteFile(testCsvFile, []byte(csvContent), 0600); err != nil {
+			require.NoError(t, err, "operation should succeed")
+		}
+
 		validatedBuilder, err := NewBuilder().
-			AddPath(csvFile).
-			EnableAutoSave(tempDir).
+			AddPath(testCsvFile).
+			EnableAutoSave(testTempDir).
 			Build(context.Background())
 		if err != nil {
 			require.NoError(t, err, "operation should succeed")
