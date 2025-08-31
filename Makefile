@@ -16,8 +16,6 @@ GOOS        = ""
 GOARCH      = ""
 GO_PKGROOT  = ./...
 GO_PACKAGES = $(shell $(GO_LIST) $(GO_PKGROOT))
-GO_LDFLAGS  = -ldflags '-X github.com/nao1215/sqluv/config.Version=${VERSION}'
-
 
 clean: ## Clean project
 	-rm -rf $(APP) cover.*
@@ -25,9 +23,6 @@ clean: ## Clean project
 test: ## Start test
 	env GOOS=$(GOOS) $(GO_TEST) -cover $(GO_PKGROOT) -coverpkg=./... -coverprofile=cover.out
 	$(GO_TOOL) cover -html=cover.out -o cover.html
-
-gen: ## Generate code from templates
-	$(GO) generate ./...
 
 tools: ## Install dependency tools 
 	$(GO_INSTALL) github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest

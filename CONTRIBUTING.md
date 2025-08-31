@@ -109,6 +109,25 @@ func TestFile_Parse(t *testing.T) {
 }
 ```
 
+## Using AI Assistants (LLMs)
+
+We actively encourage the use of AI coding assistants to improve productivity and code quality. Tools like Claude Code, GitHub Copilot, and Cursor are welcome for:
+
+- Writing boilerplate code
+- Generating comprehensive test cases
+- Improving documentation
+- Refactoring existing code
+- Finding potential bugs
+- Suggesting performance optimizations
+- Translating documentation
+
+### Guidelines for AI-Assisted Development
+
+1. **Review all generated code**: Always review and understand AI-generated code before committing
+2. **Maintain consistency**: Ensure AI-generated code follows our coding standards in CLAUDE.md
+3. **Test thoroughly**: AI-generated code must pass all tests and linting (`make test` and `make lint`)
+4. **Use project configuration**: We provide `CLAUDE.md`, `.cursorrules` and `.github/copilot-instructions.md` to help AI assistants understand our project standards
+
 ## Creating Pull Requests
 
 ### Preparation
@@ -120,6 +139,7 @@ func TestFile_Parse(t *testing.T) {
 2. **Write Tests**
    - Always add tests for new features
    - For bug fixes, create tests that reproduce the bug
+   - AI tools can help generate comprehensive test cases
 
 3. **Quality Check**
    ```bash

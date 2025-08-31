@@ -109,6 +109,25 @@ func TestFile_Parse(t *testing.T) {
 }
 ```
 
+## 使用 AI 助手（LLM）
+
+我们积极鼓励使用 AI 编码助手来提高生产力和代码质量。Claude Code、GitHub Copilot 和 Cursor 等工具可用于：
+
+- 编写样板代码
+- 生成全面的测试用例
+- 改进文档
+- 重构现有代码
+- 发现潜在的错误
+- 建议性能优化
+- 翻译文档
+
+### AI 辅助开发指南
+
+1. **审查所有生成的代码**：始终审查并理解 AI 生成的代码后再提交
+2. **保持一致性**：确保 AI 生成的代码遵循 CLAUDE.md 中的编码标准
+3. **彻底测试**：AI 生成的代码必须通过所有测试和代码检查（`make test` 和 `make lint`）
+4. **使用项目配置**：我们提供 `CLAUDE.md`, `.cursorrules` 和 `.github/copilot-instructions.md` 来帮助 AI 助手理解我们的项目标准
+
 ## 创建拉取请求
 
 ### 准备工作
@@ -120,6 +139,7 @@ func TestFile_Parse(t *testing.T) {
 2. **编写测试**
    - 始终为新功能添加测试
    - 对于错误修复，创建重现错误的测试
+   - AI 工具可以帮助生成全面的测试用例
 
 3. **质量检查**
    ```bash
