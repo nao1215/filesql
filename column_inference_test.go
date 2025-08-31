@@ -2,6 +2,9 @@ package filesql
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestInferColumnType(t *testing.T) {
@@ -107,9 +110,7 @@ func TestInferColumnType(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := inferColumnType(tt.values)
-			if result != tt.expected {
-				t.Errorf("inferColumnType(%v) = %v, want %v", tt.values, result, tt.expected)
-			}
+			assert.Equal(t, tt.expected, result, "inferColumnType failed for values: %v", tt.values)
 		})
 	}
 }
@@ -135,17 +136,11 @@ func TestInferColumnsInfo(t *testing.T) {
 			{Name: "hire_date", Type: columnTypeDatetime},
 		}
 
-		if len(result) != len(expected) {
-			t.Fatalf("Expected %d columns, got %d", len(expected), len(result))
-		}
+		require.Len(t, result, len(expected), "Column count mismatch")
 
 		for i, exp := range expected {
-			if result[i].Name != exp.Name {
-				t.Errorf("Column %d: expected name %s, got %s", i, exp.Name, result[i].Name)
-			}
-			if result[i].Type != exp.Type {
-				t.Errorf("Column %d: expected type %s, got %s", i, exp.Type, result[i].Type)
-			}
+			assert.Equal(t, exp.Name, result[i].Name, "Column %d name mismatch", i)
+			assert.Equal(t, exp.Type, result[i].Type, "Column %d type mismatch", i)
 		}
 	})
 
@@ -155,14 +150,10 @@ func TestInferColumnsInfo(t *testing.T) {
 
 		result := inferColumnsInfo(header, records)
 
-		if len(result) != 2 {
-			t.Fatalf("Expected 2 columns, got %d", len(result))
-		}
+		require.Len(t, result, 2, "Expected 2 columns for empty records")
 
 		for i, col := range result {
-			if col.Type != columnTypeText {
-				t.Errorf("Column %d: expected TEXT type for empty records, got %s", i, col.Type)
-			}
+			assert.Equal(t, columnTypeText, col.Type, "Column %d should be TEXT type for empty records", i)
 		}
 	})
 
@@ -182,17 +173,11 @@ func TestInferColumnsInfo(t *testing.T) {
 			{Name: "timestamp", Type: columnTypeDatetime},
 		}
 
-		if len(result) != len(expected) {
-			t.Fatalf("Expected %d columns, got %d", len(expected), len(result))
-		}
+		require.Len(t, result, len(expected), "Datetime column count mismatch")
 
 		for i, exp := range expected {
-			if result[i].Name != exp.Name {
-				t.Errorf("Column %d: expected name %s, got %s", i, exp.Name, result[i].Name)
-			}
-			if result[i].Type != exp.Type {
-				t.Errorf("Column %d: expected type %s, got %s", i, exp.Type, result[i].Type)
-			}
+			assert.Equal(t, exp.Name, result[i].Name, "Column %d name mismatch", i)
+			assert.Equal(t, exp.Type, result[i].Type, "Column %d type mismatch", i)
 		}
 	})
 }
@@ -239,9 +224,7 @@ func TestIsDatetime(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := isDatetime(tt.value)
-			if result != tt.expected {
-				t.Errorf("isDatetime(%q) = %v, want %v", tt.value, result, tt.expected)
-			}
+			assert.Equal(t, tt.expected, result, "isDatetime failed for value: %q", tt.value)
 		})
 	}
 }

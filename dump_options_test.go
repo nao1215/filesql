@@ -2,6 +2,8 @@ package filesql
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestOutputFormat_String(t *testing.T) {
@@ -37,9 +39,8 @@ func TestOutputFormat_String(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := tt.format.String(); got != tt.want {
-				t.Errorf("OutputFormat.String() = %v, want %v", got, tt.want)
-			}
+			got := tt.format.String()
+			assert.Equal(t, tt.want, got, "OutputFormat.String() returned unexpected value")
 		})
 	}
 }
@@ -77,9 +78,8 @@ func TestOutputFormat_Extension(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := tt.format.Extension(); got != tt.want {
-				t.Errorf("OutputFormat.Extension() = %v, want %v", got, tt.want)
-			}
+			got := tt.format.Extension()
+			assert.Equal(t, tt.want, got, "OutputFormat.Extension() returned unexpected value")
 		})
 	}
 }
@@ -127,9 +127,8 @@ func TestCompressionType_String(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := tt.compression.String(); got != tt.want {
-				t.Errorf("CompressionType.String() = %v, want %v", got, tt.want)
-			}
+			got := tt.compression.String()
+			assert.Equal(t, tt.want, got, "CompressionType.String() returned unexpected value")
 		})
 	}
 }
@@ -177,9 +176,8 @@ func TestCompressionType_Extension(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := tt.compression.Extension(); got != tt.want {
-				t.Errorf("CompressionType.Extension() = %v, want %v", got, tt.want)
-			}
+			got := tt.compression.Extension()
+			assert.Equal(t, tt.want, got, "CompressionType.Extension() returned unexpected value")
 		})
 	}
 }
@@ -189,13 +187,8 @@ func TestNewDumpOptions(t *testing.T) {
 
 	options := NewDumpOptions()
 
-	if options.Format != OutputFormatCSV {
-		t.Errorf("NewDumpOptions().Format = %v, want %v", options.Format, OutputFormatCSV)
-	}
-
-	if options.Compression != CompressionNone {
-		t.Errorf("NewDumpOptions().Compression = %v, want %v", options.Compression, CompressionNone)
-	}
+	assert.Equal(t, OutputFormatCSV, options.Format, "NewDumpOptions().Format should default to CSV")
+	assert.Equal(t, CompressionNone, options.Compression, "NewDumpOptions().Compression should default to None")
 }
 
 func TestDumpOptions_WithFormat(t *testing.T) {
@@ -205,19 +198,13 @@ func TestDumpOptions_WithFormat(t *testing.T) {
 	newOptions := options.WithFormat(OutputFormatTSV)
 
 	// Original options should not be modified
-	if options.Format != OutputFormatCSV {
-		t.Errorf("Original options modified: Format = %v, want %v", options.Format, OutputFormatCSV)
-	}
+	assert.Equal(t, OutputFormatCSV, options.Format, "Original options should not be modified")
 
 	// New options should have the updated format
-	if newOptions.Format != OutputFormatTSV {
-		t.Errorf("WithFormat().Format = %v, want %v", newOptions.Format, OutputFormatTSV)
-	}
+	assert.Equal(t, OutputFormatTSV, newOptions.Format, "WithFormat() should update format")
 
 	// Other fields should remain unchanged
-	if newOptions.Compression != CompressionNone {
-		t.Errorf("WithFormat().Compression = %v, want %v", newOptions.Compression, CompressionNone)
-	}
+	assert.Equal(t, CompressionNone, newOptions.Compression, "WithFormat() should not change compression")
 }
 
 func TestDumpOptions_WithCompression(t *testing.T) {
@@ -227,19 +214,13 @@ func TestDumpOptions_WithCompression(t *testing.T) {
 	newOptions := options.WithCompression(CompressionGZ)
 
 	// Original options should not be modified
-	if options.Compression != CompressionNone {
-		t.Errorf("Original options modified: Compression = %v, want %v", options.Compression, CompressionNone)
-	}
+	assert.Equal(t, CompressionNone, options.Compression, "Original options should not be modified")
 
 	// New options should have the updated compression
-	if newOptions.Compression != CompressionGZ {
-		t.Errorf("WithCompression().Compression = %v, want %v", newOptions.Compression, CompressionGZ)
-	}
+	assert.Equal(t, CompressionGZ, newOptions.Compression, "WithCompression() should update compression")
 
 	// Other fields should remain unchanged
-	if newOptions.Format != OutputFormatCSV {
-		t.Errorf("WithCompression().Format = %v, want %v", newOptions.Format, OutputFormatCSV)
-	}
+	assert.Equal(t, OutputFormatCSV, newOptions.Format, "WithCompression() should not change format")
 }
 
 func TestDumpOptions_FileExtension(t *testing.T) {
@@ -290,9 +271,8 @@ func TestDumpOptions_FileExtension(t *testing.T) {
 				Format:      tt.format,
 				Compression: tt.compression,
 			}
-			if got := options.FileExtension(); got != tt.want {
-				t.Errorf("DumpOptions.FileExtension() = %v, want %v", got, tt.want)
-			}
+			got := options.FileExtension()
+			assert.Equal(t, tt.want, got, "DumpOptions.FileExtension() returned unexpected value")
 		})
 	}
 }
@@ -316,9 +296,8 @@ func TestOutputFormatStringEdgeCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := tt.format.String(); got != tt.want {
-				t.Errorf("OutputFormat.String() = %v, want %v", got, tt.want)
-			}
+			got := tt.format.String()
+			assert.Equal(t, tt.want, got, "OutputFormat.String() returned unexpected value")
 		})
 	}
 }
@@ -330,16 +309,10 @@ func TestDumpOptions_ChainedMethods(t *testing.T) {
 		WithFormat(OutputFormatLTSV).
 		WithCompression(CompressionZSTD)
 
-	if options.Format != OutputFormatLTSV {
-		t.Errorf("Chained WithFormat().Format = %v, want %v", options.Format, OutputFormatLTSV)
-	}
-
-	if options.Compression != CompressionZSTD {
-		t.Errorf("Chained WithCompression().Compression = %v, want %v", options.Compression, CompressionZSTD)
-	}
+	assert.Equal(t, OutputFormatLTSV, options.Format, "Chained WithFormat() should work")
+	assert.Equal(t, CompressionZSTD, options.Compression, "Chained WithCompression() should work")
 
 	expectedExt := ".ltsv.zst"
-	if got := options.FileExtension(); got != expectedExt {
-		t.Errorf("Chained options FileExtension() = %v, want %v", got, expectedExt)
-	}
+	got := options.FileExtension()
+	assert.Equal(t, expectedExt, got, "Chained options FileExtension() should work")
 }
