@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2025-08-31
+
+### Added
+- **🔧 CI/CD Automation**: Enhanced development workflow with automated processes
+  - **GitHub Actions integration**: Added Claude-powered PR assistant and code review workflows
+  - **Automated release process**: Auto-release workflow triggered by tag creation
+  - **Comprehensive development tooling**: Streamlined development experience with AI assistance
+- **📚 LLM Development Support**: Comprehensive AI assistant integration for development
+  - **Multi-platform LLM support**: Added configuration files for Claude Code, Cursor, and GitHub Copilot
+  - **Development guidelines**: Created detailed contributing guides in 7 languages (EN, JA, ES, FR, RU, KO, ZH-CN)
+  - **Coding standards documentation**: Comprehensive guidelines for AI-assisted development
+  - **International contributor support**: Multi-language documentation for global development team
+- **🔍 Enhanced Edge Case Testing**: Expanded test coverage for robustness
+  - **Error handling validation**: Additional tests for edge cases and error conditions
+  - **Stream processing edge cases**: Enhanced testing for unusual input scenarios
+  - **Builder pattern validation**: More comprehensive validation of configuration edge cases
+
+### Changed
+- **🧪 Testing Framework Modernization**: Migrated to testify for improved test maintainability
+  - **Reduced test code complexity**: Replaced verbose manual assertions with concise testify assertions
+  - **Improved test readability**: Cleaner test structure using `assert` and `require` functions
+  - **Enhanced test reliability**: Better error messages and assertion failures with testify
+  - **Code reduction**: Significantly reduced test code lines (over 600 lines removed) while maintaining coverage
+- **🎯 Test Stability Improvements**: Enhanced test reliability and performance
+  - **Fixed flaky tests**: Resolved intermittent test failures in concurrent scenarios
+  - **Local development optimization**: Added conditions to skip heavy tests in local environments
+  - **Better test isolation**: Improved test independence and parallel execution safety
+
+### Technical Improvements
+- **Test framework migration**: Complete transition from manual assertions to testify
+- **CI/CD pipeline enhancement**: Automated release and review processes
+- **Development documentation**: Comprehensive guides for contributors
+- **Code quality**: Maintained high test coverage while reducing code complexity
+- **International support**: Multi-language documentation for global development
+
+### Dependencies
+- **Added**: `github.com/stretchr/testify v1.11.1` for enhanced testing capabilities
+
 ## [0.4.0] - 2025-08-30
 
 ### Added
@@ -351,7 +389,9 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/nao1215/filesql/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/nao1215/filesql/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nao1215/filesql/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nao1215/filesql/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nao1215/filesql/compare/v0.0.4...v0.1.0
