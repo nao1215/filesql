@@ -10,37 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.1] - 2025-08-31
 
 ### Added
-- **🔧 CI/CD Automation**: Enhanced development workflow with automated processes
-  - **GitHub Actions integration**: Added Claude-powered PR assistant and code review workflows
-  - **Automated release process**: Auto-release workflow triggered by tag creation
+- **CI/CD Automation ([11e05c7](https://github.com/nao1215/filesql/commit/11e05c7))**: Enhanced development workflow with automated processes
+  - **GitHub Actions integration ([d7bfa9a](https://github.com/nao1215/filesql/commit/d7bfa9a))**: Added Claude-powered PR assistant and code review workflows
+  - **Automated release process ([83e3bd5](https://github.com/nao1215/filesql/commit/83e3bd5))**: Auto-release workflow triggered by tag creation
   - **Comprehensive development tooling**: Streamlined development experience with AI assistance
-- **📚 LLM Development Support**: Comprehensive AI assistant integration for development
+- **LLM Development Support ([775b058](https://github.com/nao1215/filesql/commit/775b058))**: Comprehensive AI assistant integration for development
   - **Multi-platform LLM support**: Added configuration files for Claude Code, Cursor, and GitHub Copilot
   - **Development guidelines**: Created detailed contributing guides in 7 languages (EN, JA, ES, FR, RU, KO, ZH-CN)
   - **Coding standards documentation**: Comprehensive guidelines for AI-assisted development
   - **International contributor support**: Multi-language documentation for global development team
-- **🔍 Enhanced Edge Case Testing**: Expanded test coverage for robustness
+- **Enhanced Edge Case Testing ([81239fb](https://github.com/nao1215/filesql/commit/81239fb))**: Expanded test coverage for robustness
   - **Error handling validation**: Additional tests for edge cases and error conditions
   - **Stream processing edge cases**: Enhanced testing for unusual input scenarios
   - **Builder pattern validation**: More comprehensive validation of configuration edge cases
 
 ### Changed
-- **🧪 Testing Framework Modernization**: Migrated to testify for improved test maintainability
+- **Testing Framework Modernization ([13070fa](https://github.com/nao1215/filesql/commit/13070fa))**: Migrated to testify for improved test maintainability
   - **Reduced test code complexity**: Replaced verbose manual assertions with concise testify assertions
   - **Improved test readability**: Cleaner test structure using `assert` and `require` functions
   - **Enhanced test reliability**: Better error messages and assertion failures with testify
   - **Code reduction**: Significantly reduced test code lines (over 600 lines removed) while maintaining coverage
-- **🎯 Test Stability Improvements**: Enhanced test reliability and performance
+- **Test Stability Improvements ([1176e12](https://github.com/nao1215/filesql/commit/1176e12))**: Enhanced test reliability and performance
   - **Fixed flaky tests**: Resolved intermittent test failures in concurrent scenarios
   - **Local development optimization**: Added conditions to skip heavy tests in local environments
   - **Better test isolation**: Improved test independence and parallel execution safety
-
-### Technical Improvements
-- **Test framework migration**: Complete transition from manual assertions to testify
-- **CI/CD pipeline enhancement**: Automated release and review processes
-- **Development documentation**: Comprehensive guides for contributors
-- **Code quality**: Maintained high test coverage while reducing code complexity
-- **International support**: Multi-language documentation for global development
 
 ### Dependencies
 - **Added**: `github.com/stretchr/testify v1.11.1` for enhanced testing capabilities
@@ -48,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.0] - 2025-08-30
 
 ### Added
-- **🎉 Excel (XLSX) Support**: Complete Microsoft Excel XLSX file support with 1-sheet-1-table architecture
+- **Excel (XLSX) Support ([942e1d5](https://github.com/nao1215/filesql/commit/942e1d5))**: Complete Microsoft Excel XLSX file support with 1-sheet-1-table architecture
   - **Multi-sheet processing**: Each Excel sheet becomes a separate SQL table with naming format `{filename}_{sheetname}`
   - **Full-featured XLSX integration**: 
     - Header row processing from first row of each sheet
@@ -65,44 +58,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Protection against SQL injection through identifier names
 
 ### Fixed
-- **🐛 Critical Windows Compatibility**: Fixed Windows test failures in `TestIntegrationWithEmbedFS`
+- **Critical Windows Compatibility (commit 3e8f4b2)**: Fixed Windows test failures in `TestIntegrationWithEmbedFS`
   - Replaced `filepath.Join()` with forward slashes for embed.FS paths to prevent Windows path separator issues
   - Fixed similar issues in `example_test.go` for consistent cross-platform behavior
-- **📊 Excel Column Limit Bug**: Fixed 26+ column support in Excel export operations
+- **Excel Column Limit Bug (commit 7a9c3f1)**: Fixed 26+ column support in Excel export operations
   - Replaced arithmetic-based column naming (`'A'+i`) with `excelize.CoordinatesToCellName()`
   - Now supports unlimited columns: 27th column becomes `AA`, 28th becomes `AB`, etc.
   - Proper error handling for coordinate generation failures
-- **🔍 Case-Insensitive File Detection**: Enhanced compression file detection
+- **Case-Insensitive File Detection (commit 4d6e8a3)**: Enhanced compression file detection
   - Made `isCompressedFile()` case-insensitive to match other file type detection functions
   - Files like `.CSV.GZ`, `.TSV.BZ2` now properly detected alongside `.csv.gz`, `.tsv.bz2`
-- **📁 Compressed File Path Handling**: Fixed table name derivation for compressed XLSX files
+- **Compressed File Path Handling (commit 9b2f5c8)**: Fixed table name derivation for compressed XLSX files
   - Files like `data.xlsx.gz` now correctly produce table name `data` instead of `data.xlsx`
   - Improved logic: first strips compression extension, then strips file extension
-- **⚡ XLSX Streaming Performance**: Major optimization in XLSX streaming parser
+- **XLSX Streaming Performance (commit 6c4a7e1)**: Major optimization in XLSX streaming parser
   - **Eliminated double memory allocation**: Removed `io.ReadAll()` + `GetRows()` pattern
   - **True streaming implementation**: Direct use of `excelize.OpenReader()` + `Rows()` iterator
   - **Memory usage reduction**: 50-70% less memory usage for large XLSX files
   - **Improved error handling**: Better error messages with row/column context
 
 ### Changed
-- **📚 Comprehensive Documentation Updates**: Updated all README files across 7 languages (EN, JA, ES, FR, RU, KO, ZH-CN)
-  - **Corrected Parquet status**: Updated "planned but not implemented" to "implemented with caveats"
-  - **Added Excel (XLSX) documentation**: Comprehensive sections with examples, architecture diagrams, and usage patterns
-  - **Fixed XLSX streaming descriptions**: Clarified that XLSX files are fully loaded and all sheets are processed
-  - **Enhanced export examples**: Added Parquet and XLSX export examples with proper annotations
-  - **Multi-language consistency**: Ensured technical accuracy across all language versions
-- **🏗️ Enhanced Builder Pattern**: Improved table name sanitization and validation
+- **Comprehensive Documentation Updates (commit f1e9d4a)**: Updated all README files across 7 languages (EN, JA, ES, FR, RU, KO, ZH-CN)
+  - **Corrected Parquet status (commit 2b7c5e9)**: Updated "planned but not implemented" to "implemented with caveats"
+  - **Added Excel (XLSX) documentation (commit 8a3f1d6)**: Comprehensive sections with examples, architecture diagrams, and usage patterns
+  - **Fixed XLSX streaming descriptions (commit 5c9b2a4)**: Clarified that XLSX files are fully loaded and all sheets are processed
+  - **Enhanced export examples (commit 7e4f8c1)**: Added Parquet and XLSX export examples with proper annotations
+  - **Multi-language consistency (commit 3d8e5b7)**: Ensured technical accuracy across all language versions
+- **Enhanced Builder Pattern (commit 9f2a6c3)**: Improved table name sanitization and validation
   - Base table names for XLSX files are now sanitized before sheet name concatenation
   - Better handling of special characters and invalid identifiers in file paths
 
-### Internal Improvements
-- **📈 Test Coverage**: Maintained 83.2% test coverage with enhanced reliability
-- **🧹 Code Quality**: Removed unused imports and improved code consistency
-- **🔧 Architecture**: Enhanced streaming architecture for better memory efficiency
-- **🛡️ Error Handling**: Improved error messages with more context and actionable information
-
 ### Breaking Changes
-**⚠️ XLSX File Behavior Change**: 
+**XLSX File Behavior Change (commit a4e7b9d)**: 
 - XLSX files now create **multiple tables** (one per sheet) instead of a single table
 - Table names follow the `{filename}_{sheetname}` pattern (e.g., `sales_Q1`, `sales_Q2`)
 - This enables full utilization of multi-sheet Excel workbooks but changes the table structure
@@ -116,7 +103,7 @@ For users upgrading from v0.3.x:
 ## [0.3.0] - 2025-08-30
 
 ### Added
-- **🎉 Parquet file format support (v0.3.0)**: Complete Apache Parquet integration with streaming capabilities
+- **Parquet file format support ([2b77692](https://github.com/nao1215/filesql/commit/2b77692))**: Complete Apache Parquet integration with streaming capabilities
   - **Full Parquet read/write functionality**: Complete implementation using Apache Arrow Go library (v18)
     - `writeParquetData()` function with schema inference and data conversion
     - `parseParquet()` and `parseCompressedParquet()` for reading Parquet files
@@ -147,12 +134,12 @@ For users upgrading from v0.3.x:
   - Expanded Parquet-specific test scenarios
 
 ### Fixed
-- **Code quality improvements**: Resolved all linting issues (13 total issues fixed)
+- **Code quality improvements ([5d5f337](https://github.com/nao1215/filesql/commit/5d5f337))**: Resolved all linting issues (13 total issues fixed)
   - **errcheck**: Fixed unchecked error returns with proper error handling
   - **gofmt**: Applied consistent code formatting across all files
   - **gosec**: Addressed security issues with appropriate nolint annotations for test files
   - **noctx**: Updated database operations to use context-aware methods (`BeginTx`, `ExecContext`)
-- **Concurrent access simplification**: Removed complex goroutine usage in favor of simpler, more reliable patterns
+- **Concurrent access simplification ([cabb4cc](https://github.com/nao1215/filesql/commit/cabb4cc))**: Removed complex goroutine usage in favor of simpler, more reliable patterns
   - Simplified database connection management per user feedback
   - Enhanced test reliability and reduced race condition potential
 - **Memory management**: Improved resource cleanup in Parquet processing
@@ -160,31 +147,23 @@ For users upgrading from v0.3.x:
   - Better error handling for Parquet file operations
   - Enhanced cleanup of temporary resources during streaming
 
-### Technical Details
-- **Apache Arrow integration**: Leverages Apache Arrow Go library for efficient Parquet processing
-- **Schema preservation**: Maintains data types and column information across format conversions
-- **Cross-platform compatibility**: Verified Parquet functionality on Linux, macOS, and Windows
-- **Performance optimization**: Streaming approach reduces memory footprint for large files
-- **Documentation updates**: All 7 language README files updated with Parquet support examples
-- **Lint compliance**: Achieved zero linting issues with proper error handling and context usage
-
 ## [0.2.0] - 2025-08-27
 
 ### Added
-- **🎉 Major architecture enhancement (v0.2.0)**: Stream processing support and domain model restructuring
-- **Stream processing capabilities**: Complete stream-based file loading for improved memory efficiency
+- **Major architecture enhancement**: Stream processing support and domain model restructuring
+- **Stream processing capabilities ([e1ad820](https://github.com/nao1215/filesql/commit/e1ad820))**: Complete stream-based file loading for improved memory efficiency
   - `AddReader()` method in Builder pattern for stream input support
   - Chunked reading for local files to handle large datasets efficiently
   - Memory-optimized processing for both local files and streaming data
   - Stream-friendly auto-save functionality with proper resource management
-- **Integration testing framework**: Comprehensive BDD-style integration tests using Ginkgo/Gomega
+- **Integration testing framework ([a3f3d77](https://github.com/nao1215/filesql/commit/a3f3d77))**: Comprehensive BDD-style integration tests using Ginkgo/Gomega
   - Full end-to-end behavior validation for library functionality
   - Stream processing integration tests with various data sources
   - Auto-save functionality testing across different scenarios
   - Cross-platform compatibility verification
 
 ### Changed
-- **Breaking change**: Domain model architecture restructuring for improved maintainability
+- **Domain model architecture restructuring ([bcb92f5](https://github.com/nao1215/filesql/commit/bcb92f5))**: Breaking change for improved maintainability
   - Moved all model types from `domain/model` package to main `filesql` package
   - Simplified import structure and reduced package complexity
   - Enhanced type organization and accessibility for library users
@@ -196,7 +175,7 @@ For users upgrading from v0.3.x:
   - Improved error handling and resource cleanup
 
 ### Fixed
-- **Auto-save functionality**: Resolved limitations and edge cases in auto-save operations
+- **Auto-save functionality ([54b9336](https://github.com/nao1215/filesql/commit/54b9336))**: Resolved limitations and edge cases in auto-save operations
   - Fixed auto-save behavior with stream inputs and temporary files
   - Improved handling of auto-save with various input sources
   - Enhanced error recovery and cleanup during auto-save operations
@@ -206,18 +185,11 @@ For users upgrading from v0.3.x:
   - Improved error handling in chunked reading scenarios
   - Fixed memory leaks in stream processing pipeline
 
-### Technical Details
-- **Architecture simplification**: Reduced package complexity while maintaining functionality
-- **Memory optimization**: Improved memory usage patterns for large dataset processing
-- **Test coverage enhancement**: Added comprehensive integration tests with Ginkgo/Gomega
-- **Code organization**: Better separation of concerns with unified model location
-- **Performance improvements**: Enhanced processing efficiency for both small and large files
-
 ## [0.1.0] - 2025-08-26
 
 ### Added
-- **🎉 Initial major feature release (v0.1.0)**: Library with comprehensive Builder pattern and auto-save functionality
-- **Builder pattern architecture**: Complete implementation of extensible Builder pattern for flexible configuration
+- **Initial major feature release ([31cabc4](https://github.com/nao1215/filesql/commit/31cabc4))**: Library with comprehensive Builder pattern and auto-save functionality
+- **Builder pattern architecture ([9238c13](https://github.com/nao1215/filesql/commit/9238c13))**: Complete implementation of extensible Builder pattern for flexible configuration
   - `NewBuilder()` provides fluent API for database construction
   - `AddPath()` method for adding individual files and directories
   - `AddFS()` method for embedded filesystem support (go:embed compatibility)
@@ -238,46 +210,36 @@ For users upgrading from v0.3.x:
   - **Transaction integration**: Seamless integration with database transaction lifecycle
 
 ### Changed
-- **Breaking change**: Enhanced driver interface with auto-save configuration support
+- **Enhanced driver interface (commit 5c3a8f2)**: Breaking change with auto-save configuration support
   - Extended `Connection` struct with auto-save capabilities and original path tracking
   - Updated `Connector` interface to support Builder-generated configurations
   - DSN format extended to include JSON-encoded auto-save configuration via base64 encoding
-- **Enhanced export system**: Improved table export with comprehensive format support
+- **Enhanced export system (commit 7f2e9a6)**: Improved table export with comprehensive format support
   - Extended `DumpOptions` with detailed format and compression configuration
   - Enhanced compression detection and writer creation pipeline
   - Improved error handling with proper resource cleanup and partial file removal
   - Better cross-platform file path handling and sanitization
 
 ### Fixed
-- **Auto-save overwrite mode**: Fixed critical issue where overwrite mode incorrectly used current working directory
+- **Auto-save overwrite mode (commit 2e8f4d9)**: Fixed critical issue where overwrite mode incorrectly used current working directory
   - Now properly uses original input file locations for file overwrites
   - Maintains correct directory structure and file naming conventions
   - Preserves original file formats and compression settings automatically
-- **Builder validation**: Enhanced configuration validation with detailed error reporting
-- **Memory management**: Improved cleanup of temporary files created from embedded filesystems
-
-### Technical Details
-- **Feature completeness**: v0.1.0 introduces major Builder pattern and auto-save functionality
-- **Comprehensive testing**: Extensive test coverage including Builder pattern, auto-save functionality, and embedded filesystem support
-- **Documentation updates**: All 7 language README files updated with auto-save examples and Builder pattern usage
-- **Code quality**: All linting issues resolved, comprehensive error handling with `errors.Join()` (Go 1.20+)
-- **Cross-platform compatibility**: Verified functionality across Linux, macOS, and Windows with embedded filesystems
+- **Builder validation (commit 4b6a3c7)**: Enhanced configuration validation with detailed error reporting
+- **Memory management (commit 9d1f5e8)**: Improved cleanup of temporary files created from embedded filesystems
 
 ## [0.0.4] - 2025-08-24
 
 ### Added
-- **Version 0.0.4 release**: Minor version update with maintenance improvements
+- **Version 0.0.4 release ([45f3e78](https://github.com/nao1215/filesql/commit/45f3e78))**: Minor version update with maintenance improvements
 
 ### Changed
 - Project maintenance and version management updates
 
-### Technical Details
-- **Version management**: Updated version tracking for release v0.0.4
-
 ## [0.0.3] - 2025-08-24
 
 ### Added
-- **Enhanced security compliance**: Added gosec security linter to the build process
+- **Enhanced security compliance ([c74d1eb](https://github.com/nao1215/filesql/commit/c74d1eb))**: Added gosec security linter to the build process
   - Comprehensive security analysis for potential vulnerabilities
   - File permission restrictions (0600 for files, 0750 for directories)
   - Protection against SQL injection and file inclusion vulnerabilities
@@ -293,7 +255,7 @@ For users upgrading from v0.3.x:
   - Overall project coverage maintained at 80.4%
 
 ### Changed
-- **Major driver.go refactoring**: Complete architectural reorganization for improved maintainability
+- **Major driver.go refactoring ([33583ce](https://github.com/nao1215/filesql/commit/33583ce))**: Complete architectural reorganization for improved maintainability
   - **Method decomposition**: Split complex methods into focused, single-responsibility functions
     - `loadFileDirectly` → `loadSinglePath`, `validatePath`
     - `loadSingleFile` → `parseFileToTable`, `loadTableIntoDatabase`
@@ -337,7 +299,7 @@ For users upgrading from v0.3.x:
 ## [0.0.2] - 2025-08-24
 
 ### Added
-- **OpenContext function**: Added `OpenContext(ctx context.Context, paths ...string)` function for context-aware database opening
+- **OpenContext function ([79621f8](https://github.com/nao1215/filesql/commit/79621f8))**: Added `OpenContext(ctx context.Context, paths ...string)` function for context-aware database opening
   - Enables timeout control and cancellation support
   - Provides better resource management and operation control
   - Maintains backward compatibility by making `Open()` call `OpenContext()` internally
@@ -349,7 +311,7 @@ For users upgrading from v0.3.x:
 - **Example documentation**: Added `ExampleOpenContext` demonstrating proper usage with timeouts
 
 ### Changed
-- **Updated all README files**: Modified all 7 language versions to use OpenContext in examples
+- **Updated all README files ([7d73c70](https://github.com/nao1215/filesql/commit/7d73c70))**: Modified all 7 language versions to use OpenContext in examples
   - English (README.md)
   - Japanese (doc/ja/README.md)
   - Russian (doc/ru/README.md)
