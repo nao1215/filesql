@@ -2,6 +2,8 @@ package filesql
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNewHeader(t *testing.T) {
@@ -13,14 +15,10 @@ func TestNewHeader(t *testing.T) {
 		headerSlice := []string{"col1", "col2", "col3"}
 		header := newHeader(headerSlice)
 
-		if len(header) != 3 {
-			t.Errorf("expected length 3, got %d", len(header))
-		}
+		assert.Len(t, header, 3, "Header length mismatch")
 
 		for i, expected := range headerSlice {
-			if header[i] != expected {
-				t.Errorf("expected %s at index %d, got %s", expected, i, header[i])
-			}
+			assert.Equal(t, expected, header[i], "Header element mismatch at index %d", i)
 		}
 	})
 }
@@ -71,9 +69,7 @@ func TestHeader_Equal(t *testing.T) {
 			t.Parallel()
 
 			result := tt.header1.equal(tt.header2)
-			if result != tt.expected {
-				t.Errorf("expected %v, got %v", tt.expected, result)
-			}
+			assert.Equal(t, tt.expected, result, "Header equality check failed")
 		})
 	}
 }
@@ -87,14 +83,10 @@ func TestNewRecord(t *testing.T) {
 		recordSlice := []string{"val1", "val2", "val3"}
 		record := newRecord(recordSlice)
 
-		if len(record) != 3 {
-			t.Errorf("expected length 3, got %d", len(record))
-		}
+		assert.Len(t, record, 3, "Record length mismatch")
 
 		for i, expected := range recordSlice {
-			if record[i] != expected {
-				t.Errorf("expected %s at index %d, got %s", expected, i, record[i])
-			}
+			assert.Equal(t, expected, record[i], "Record element mismatch at index %d", i)
 		}
 	})
 }
@@ -145,9 +137,7 @@ func TestRecord_Equal(t *testing.T) {
 			t.Parallel()
 
 			result := tt.record1.equal(tt.record2)
-			if result != tt.expected {
-				t.Errorf("expected %v, got %v", tt.expected, result)
-			}
+			assert.Equal(t, tt.expected, result, "Record equality check failed")
 		})
 	}
 }
@@ -168,9 +158,7 @@ func TestColumnType_String(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.expected, func(t *testing.T) {
 			result := tt.columnType.string()
-			if result != tt.expected {
-				t.Errorf("columnType.string() = %s, want %s", result, tt.expected)
-			}
+			assert.Equal(t, tt.expected, result, "columnType.string() returned unexpected value")
 		})
 	}
 }

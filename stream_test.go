@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -20,23 +22,15 @@ func TestStreamingParser_ParseFromReader_CSV(t *testing.T) {
 
 		parser := newStreamingParser(FileTypeCSV, "users", 1024)
 		table, err := parser.parseFromReader(reader)
-		if err != nil {
-			t.Fatalf("ParseFromReader() failed: %v", err)
-		}
+		require.NoError(t, err, "ParseFromReader() failed")
 
-		if table.getName() != "users" {
-			t.Errorf("Table name = %s, want users", table.getName())
-		}
+		assert.Equal(t, "users", table.getName(), "Table name mismatch")
 
 		header := table.getHeader()
-		if len(header) != 3 {
-			t.Errorf("Header length = %d, want 3", len(header))
-		}
+		assert.Len(t, header, 3, "Header length mismatch")
 
 		records := table.getRecords()
-		if len(records) != 2 {
-			t.Errorf("Records length = %d, want 2", len(records))
-		}
+		assert.Len(t, records, 2, "Records length mismatch")
 
 		if records[0][0] != "Alice" {
 			t.Errorf("First record first field = %s, want Alice", records[0][0])
@@ -65,18 +59,12 @@ func TestStreamingParser_ParseFromReader_TSV(t *testing.T) {
 
 		parser := newStreamingParser(FileTypeTSV, "users", 1024)
 		table, err := parser.parseFromReader(reader)
-		if err != nil {
-			t.Fatalf("ParseFromReader() failed: %v", err)
-		}
+		require.NoError(t, err, "ParseFromReader() failed")
 
-		if table.getName() != "users" {
-			t.Errorf("Table name = %s, want users", table.getName())
-		}
+		assert.Equal(t, "users", table.getName(), "Table name mismatch")
 
 		records := table.getRecords()
-		if len(records) != 2 {
-			t.Errorf("Records length = %d, want 2", len(records))
-		}
+		assert.Len(t, records, 2, "Records length mismatch")
 	})
 }
 
@@ -90,18 +78,12 @@ func TestStreamingParser_ParseFromReader_LTSV(t *testing.T) {
 
 		parser := newStreamingParser(FileTypeLTSV, "users", 1024)
 		table, err := parser.parseFromReader(reader)
-		if err != nil {
-			t.Fatalf("ParseFromReader() failed: %v", err)
-		}
+		require.NoError(t, err, "ParseFromReader() failed")
 
-		if table.getName() != "users" {
-			t.Errorf("Table name = %s, want users", table.getName())
-		}
+		assert.Equal(t, "users", table.getName(), "Table name mismatch")
 
 		records := table.getRecords()
-		if len(records) != 2 {
-			t.Errorf("Records length = %d, want 2", len(records))
-		}
+		assert.Len(t, records, 2, "Records length mismatch")
 	})
 }
 
@@ -122,14 +104,10 @@ func TestStreamingParser_ParseFromReader_Compressed(t *testing.T) {
 		// but the test demonstrates the compression handling logic
 		parser := newStreamingParser(FileTypeCSV, "users", 1024) // Use uncompressed for now
 		table, err := parser.parseFromReader(reader)
-		if err != nil {
-			t.Fatalf("ParseFromReader() failed: %v", err)
-		}
+		require.NoError(t, err, "ParseFromReader() failed")
 
 		records := table.getRecords()
-		if len(records) != 2 {
-			t.Errorf("Records length = %d, want 2", len(records))
-		}
+		assert.Len(t, records, 2, "Records length mismatch")
 
 		_ = buf // Prevent unused variable warning
 	})
@@ -515,9 +493,7 @@ func TestStreamingParser_ParseFromReader_XLSX(t *testing.T) {
 		// Parse using streaming parser - should process first sheet only
 		parser := newStreamingParser(FileTypeXLSX, "test_workbook", 1024)
 		table, err := parser.parseFromReader(&buf)
-		if err != nil {
-			t.Fatalf("ParseFromReader() failed: %v", err)
-		}
+		require.NoError(t, err, "ParseFromReader() failed")
 
 		if table.getName() != "test_workbook" {
 			t.Errorf("Table name = %s, want test_workbook", table.getName())
@@ -536,9 +512,7 @@ func TestStreamingParser_ParseFromReader_XLSX(t *testing.T) {
 
 		// Check records (should be from first sheet only)
 		records := table.getRecords()
-		if len(records) != 2 {
-			t.Errorf("Records length = %d, want 2", len(records))
-		}
+		assert.Len(t, records, 2, "Records length mismatch")
 
 		// First record should contain data from row 2 of first sheet
 		if len(records) > 0 && len(records[0]) >= 1 {

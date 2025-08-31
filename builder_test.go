@@ -17,6 +17,8 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"modernc.org/sqlite"
 )
 
@@ -27,15 +29,9 @@ func TestNewBuilder(t *testing.T) {
 	t.Parallel()
 
 	builder := NewBuilder()
-	if builder == nil {
-		t.Fatal("NewBuilder() returned nil")
-	}
-	if len(builder.paths) != 0 {
-		t.Errorf("NewBuilder() paths = %d, want 0", len(builder.paths))
-	}
-	if len(builder.filesystems) != 0 {
-		t.Errorf("NewBuilder() filesystems = %d, want 0", len(builder.filesystems))
-	}
+	require.NotNil(t, builder, "NewBuilder() should not return nil")
+	assert.Len(t, builder.paths, 0, "NewBuilder() should have empty paths slice")
+	assert.Len(t, builder.filesystems, 0, "NewBuilder() should have empty filesystems slice")
 }
 
 func TestDBBuilder_AddPath(t *testing.T) {
@@ -44,12 +40,8 @@ func TestDBBuilder_AddPath(t *testing.T) {
 	t.Run("single path", func(t *testing.T) {
 		t.Parallel()
 		builder := NewBuilder().AddPath("test.csv")
-		if len(builder.paths) != 1 {
-			t.Errorf("paths = %d, want 1", len(builder.paths))
-		}
-		if builder.paths[0] != "test.csv" {
-			t.Errorf("paths[0] = %s, want test.csv", builder.paths[0])
-		}
+		assert.Len(t, builder.paths, 1, "should have 1 path")
+		assert.Equal(t, "test.csv", builder.paths[0], "first path should be test.csv")
 	})
 
 	t.Run("chain multiple paths", func(t *testing.T) {
@@ -57,9 +49,7 @@ func TestDBBuilder_AddPath(t *testing.T) {
 		builder := NewBuilder().
 			AddPath("test1.csv").
 			AddPath("test2.tsv")
-		if len(builder.paths) != 2 {
-			t.Errorf("paths = %d, want 2", len(builder.paths))
-		}
+		assert.Len(t, builder.paths, 2, "should have 2 paths after chaining")
 	})
 }
 
@@ -67,9 +57,7 @@ func TestDBBuilder_AddPaths(t *testing.T) {
 	t.Parallel()
 
 	builder := NewBuilder().AddPaths("test1.csv", "test2.tsv", "test3.ltsv")
-	if len(builder.paths) != 3 {
-		t.Errorf("paths = %d, want 3", len(builder.paths))
-	}
+	assert.Len(t, builder.paths, 3, "should have 3 paths after AddPaths")
 }
 
 func TestDBBuilder_AddFS(t *testing.T) {
@@ -82,9 +70,7 @@ func TestDBBuilder_AddFS(t *testing.T) {
 		}
 
 		builder := NewBuilder().AddFS(mockFS)
-		if len(builder.filesystems) != 1 {
-			t.Errorf("filesystems = %d, want 1", len(builder.filesystems))
-		}
+		assert.Len(t, builder.filesystems, 1, "should have 1 filesystem")
 	})
 
 	t.Run("add multiple filesystems", func(t *testing.T) {
@@ -97,9 +83,7 @@ func TestDBBuilder_AddFS(t *testing.T) {
 		}
 
 		builder := NewBuilder().AddFS(mockFS1).AddFS(mockFS2)
-		if len(builder.filesystems) != 2 {
-			t.Errorf("filesystems = %d, want 2", len(builder.filesystems))
-		}
+		assert.Len(t, builder.filesystems, 2, "should have 2 filesystems")
 	})
 }
 
@@ -112,15 +96,9 @@ func TestDBBuilder_AddReader(t *testing.T) {
 		reader := bytes.NewReader([]byte(data))
 
 		builder := NewBuilder().AddReader(reader, "users", FileTypeCSV)
-		if len(builder.readers) != 1 {
-			t.Errorf("readers = %d, want 1", len(builder.readers))
-		}
-		if builder.readers[0].tableName != "users" {
-			t.Errorf("TableName = %s, want users", builder.readers[0].tableName)
-		}
-		if builder.readers[0].fileType != FileTypeCSV {
-			t.Errorf("FileType = %v, want FileTypeCSV", builder.readers[0].fileType)
-		}
+		assert.Len(t, builder.readers, 1, "should have 1 reader")
+		assert.Equal(t, "users", builder.readers[0].tableName, "table name should be users")
+		assert.Equal(t, FileTypeCSV, builder.readers[0].fileType, "file type should be CSV")
 		// No compression fields to check since FileTypeCSV is uncompressed
 	})
 
@@ -130,12 +108,8 @@ func TestDBBuilder_AddReader(t *testing.T) {
 		reader := bytes.NewReader([]byte(data))
 
 		builder := NewBuilder().AddReader(reader, "data", FileTypeTSV)
-		if len(builder.readers) != 1 {
-			t.Errorf("readers = %d, want 1", len(builder.readers))
-		}
-		if builder.readers[0].fileType != FileTypeTSV {
-			t.Errorf("FileType = %v, want FileTypeTSV", builder.readers[0].fileType)
-		}
+		assert.Len(t, builder.readers, 1, "should have 1 reader")
+		assert.Equal(t, FileTypeTSV, builder.readers[0].fileType, "file type should be TSV")
 	})
 
 	t.Run("add compressed CSV reader", func(t *testing.T) {
@@ -144,12 +118,8 @@ func TestDBBuilder_AddReader(t *testing.T) {
 		reader := bytes.NewReader(data)
 
 		builder := NewBuilder().AddReader(reader, "logs", FileTypeCSVGZ)
-		if len(builder.readers) != 1 {
-			t.Errorf("readers = %d, want 1", len(builder.readers))
-		}
-		if builder.readers[0].fileType != FileTypeCSVGZ {
-			t.Errorf("FileType = %v, want FileTypeCSVGZ", builder.readers[0].fileType)
-		}
+		assert.Len(t, builder.readers, 1, "should have 1 reader")
+		assert.Equal(t, FileTypeCSVGZ, builder.readers[0].fileType, "file type should be CSV.GZ")
 		// Regular CSV type for testing
 	})
 
@@ -162,9 +132,7 @@ func TestDBBuilder_AddReader(t *testing.T) {
 			AddReader(reader1, "table1", FileTypeCSV).
 			AddReader(reader2, "table2", FileTypeTSV)
 
-		if len(builder.readers) != 2 {
-			t.Errorf("readers = %d, want 2", len(builder.readers))
-		}
+		assert.Len(t, builder.readers, 2, "should have 2 readers")
 	})
 }
 
@@ -176,9 +144,7 @@ func TestDBBuilder_SetDefaultChunkSize(t *testing.T) {
 		customSize := 20 * 1024 * 1024 // 20MB
 		builder := NewBuilder().SetDefaultChunkSize(customSize)
 
-		if builder.defaultChunkSize != customSize {
-			t.Errorf("defaultChunkSize = %d, want %d", builder.defaultChunkSize, customSize)
-		}
+		assert.Equal(t, customSize, builder.defaultChunkSize, "default chunk size should be set to custom size")
 	})
 
 	t.Run("zero or negative size ignored", func(t *testing.T) {
@@ -188,15 +154,11 @@ func TestDBBuilder_SetDefaultChunkSize(t *testing.T) {
 
 		// Zero should be ignored
 		builder.SetDefaultChunkSize(0)
-		if builder.defaultChunkSize != defaultSize {
-			t.Errorf("defaultChunkSize = %d, want %d (should not change)", builder.defaultChunkSize, defaultSize)
-		}
+		assert.Equal(t, defaultSize, builder.defaultChunkSize, "chunk size should not change when set to zero")
 
 		// Negative should be ignored
 		builder.SetDefaultChunkSize(-1)
-		if builder.defaultChunkSize != defaultSize {
-			t.Errorf("defaultChunkSize = %d, want %d (should not change)", builder.defaultChunkSize, defaultSize)
-		}
+		assert.Equal(t, defaultSize, builder.defaultChunkSize, "chunk size should not change when set to negative")
 	})
 }
 
@@ -209,9 +171,7 @@ func TestDBBuilder_Build(t *testing.T) {
 		t.Parallel()
 		builder := NewBuilder()
 		_, err := builder.Build(ctx)
-		if err == nil {
-			t.Error("Build() should return error for no inputs")
-		}
+		assert.Error(t, err, "Build() should return error for no inputs")
 	})
 
 	t.Run("reader with nil reader error", func(t *testing.T) {
@@ -224,12 +184,8 @@ func TestDBBuilder_Build(t *testing.T) {
 		})
 
 		_, err := builder.Build(ctx)
-		if err == nil {
-			t.Error("Build() should return error for nil reader")
-		}
-		if !strings.Contains(err.Error(), "reader cannot be nil") {
-			t.Errorf("Expected 'reader cannot be nil' error, got: %v", err)
-		}
+		assert.Error(t, err, "Build() should return error for nil reader")
+		assert.Contains(t, err.Error(), "reader cannot be nil", "error message should mention nil reader")
 	})
 
 	t.Run("reader with empty table name error", func(t *testing.T) {
@@ -243,12 +199,8 @@ func TestDBBuilder_Build(t *testing.T) {
 		})
 
 		_, err := builder.Build(ctx)
-		if err == nil {
-			t.Error("Build() should return error for empty table name")
-		}
-		if !strings.Contains(err.Error(), "table name must be specified") {
-			t.Errorf("Expected 'table name must be specified' error, got: %v", err)
-		}
+		assert.Error(t, err, "Build() should return error for empty table name")
+		assert.Contains(t, err.Error(), "table name must be specified", "error message should mention table name requirement")
 	})
 
 	t.Run("reader with unsupported file type error", func(t *testing.T) {
@@ -262,12 +214,8 @@ func TestDBBuilder_Build(t *testing.T) {
 		})
 
 		_, err := builder.Build(ctx)
-		if err == nil {
-			t.Error("Build() should return error for unsupported file type")
-		}
-		if !strings.Contains(err.Error(), "file type must be specified") {
-			t.Errorf("Expected 'file type must be specified' error, got: %v", err)
-		}
+		assert.Error(t, err, "Build() should return error for unsupported file type")
+		assert.Contains(t, err.Error(), "file type must be specified", "error message should mention file type requirement")
 	})
 
 	t.Run("reader with valid CSV data", func(t *testing.T) {
@@ -277,17 +225,10 @@ func TestDBBuilder_Build(t *testing.T) {
 		builder := NewBuilder().AddReader(reader, "users", FileTypeCSV)
 
 		validatedBuilder, err := builder.Build(ctx)
-		if err != nil {
-			t.Errorf("Build() error = %v", err)
-		}
-		if validatedBuilder == nil {
-			t.Error("Build() returned nil builder")
-			return
-		}
+		assert.NoError(t, err, "Build() should succeed with valid CSV data")
+		require.NotNil(t, validatedBuilder, "Build() should not return nil builder")
 		// Readers don't create temp files anymore - they use direct streaming
-		if len(validatedBuilder.readers) != 1 {
-			t.Errorf("Build() should have 1 reader input, got %d", len(validatedBuilder.readers))
-		}
+		assert.Len(t, validatedBuilder.readers, 1, "Build() should have 1 reader input")
 
 		// Clean up temp files
 	})
@@ -300,12 +241,8 @@ func TestDBBuilder_Build(t *testing.T) {
 		builder := NewBuilder().AddReader(reader, "logs", FileTypeCSV)
 
 		validatedBuilder, err := builder.Build(ctx)
-		if err != nil {
-			t.Errorf("Build() error = %v", err)
-		}
-		if validatedBuilder == nil {
-			t.Error("Build() returned nil builder")
-		}
+		assert.NoError(t, err, "Build() should succeed with compressed type")
+		assert.NotNil(t, validatedBuilder, "Build() should not return nil builder")
 
 		// Clean up temp files
 	})
@@ -320,17 +257,10 @@ func TestDBBuilder_Build(t *testing.T) {
 			AddReader(reader2, "table2", FileTypeTSV)
 
 		validatedBuilder, err := builder.Build(ctx)
-		if err != nil {
-			t.Errorf("Build() error = %v", err)
-		}
-		if validatedBuilder == nil {
-			t.Error("Build() returned nil builder")
-			return
-		}
+		assert.NoError(t, err, "Build() should succeed with multiple readers")
+		require.NotNil(t, validatedBuilder, "Build() should not return nil builder")
 		// Readers don't create temp files anymore - they use direct streaming
-		if len(validatedBuilder.readers) != 2 {
-			t.Errorf("Build() should have 2 reader inputs, got %d", len(validatedBuilder.readers))
-		}
+		assert.Len(t, validatedBuilder.readers, 2, "Build() should have 2 reader inputs")
 
 		// Clean up temp files
 	})
@@ -339,9 +269,7 @@ func TestDBBuilder_Build(t *testing.T) {
 		t.Parallel()
 		builder := NewBuilder().AddPath(filepath.Join("nonexistent", "file.csv"))
 		_, err := builder.Build(ctx)
-		if err == nil {
-			t.Error("Build() should return error for nonexistent path")
-		}
+		assert.Error(t, err, "Build() should return error for nonexistent path")
 	})
 
 	t.Run("unsupported file type error", func(t *testing.T) {
@@ -349,15 +277,12 @@ func TestDBBuilder_Build(t *testing.T) {
 		// Create a temporary unsupported file
 		tempDir := t.TempDir()
 		unsupportedFile := filepath.Join(tempDir, "test.txt")
-		if err := os.WriteFile(unsupportedFile, []byte("test"), 0600); err != nil {
-			t.Fatal(err)
-		}
+		err := os.WriteFile(unsupportedFile, []byte("test"), 0600)
+		require.NoError(t, err, "should create test file")
 
 		builder := NewBuilder().AddPath(unsupportedFile)
-		_, err := builder.Build(ctx)
-		if err == nil {
-			t.Error("Build() should return error for unsupported file type")
-		}
+		_, err = builder.Build(ctx)
+		assert.Error(t, err, "Build() should return error for unsupported file type")
 	})
 
 	t.Run("valid CSV file", func(t *testing.T) {
@@ -366,18 +291,13 @@ func TestDBBuilder_Build(t *testing.T) {
 		tempDir := t.TempDir()
 		csvFile := filepath.Join(tempDir, "test.csv")
 		content := "col1,col2\nval1,val2\n"
-		if err := os.WriteFile(csvFile, []byte(content), 0600); err != nil {
-			t.Fatal(err)
-		}
+		err := os.WriteFile(csvFile, []byte(content), 0600)
+		require.NoError(t, err, "should create CSV file")
 
 		builder := NewBuilder().AddPath(csvFile)
 		validatedBuilder, err := builder.Build(ctx)
-		if err != nil {
-			t.Errorf("Build() error = %v", err)
-		}
-		if validatedBuilder == nil {
-			t.Error("Build() returned nil builder")
-		}
+		assert.NoError(t, err, "Build() should succeed with valid CSV file")
+		assert.NotNil(t, validatedBuilder, "Build() should not return nil builder")
 	})
 
 	t.Run("valid directory", func(t *testing.T) {
@@ -387,18 +307,13 @@ func TestDBBuilder_Build(t *testing.T) {
 		// Create a valid CSV file in the temp directory
 		csvFile := filepath.Join(tempDir, "test.csv")
 		csvContent := "id,name,age\n1,John,30\n2,Jane,25\n"
-		if err := os.WriteFile(csvFile, []byte(csvContent), 0600); err != nil {
-			t.Fatalf("Failed to create test CSV file: %v", err)
-		}
+		err := os.WriteFile(csvFile, []byte(csvContent), 0600)
+		require.NoError(t, err, "Failed to create test CSV file")
 
 		builder := NewBuilder().AddPath(tempDir)
 		validatedBuilder, err := builder.Build(ctx)
-		if err != nil {
-			t.Errorf("Build() error = %v", err)
-		}
-		if validatedBuilder == nil {
-			t.Error("Build() returned nil builder")
-		}
+		assert.NoError(t, err, "Build() should succeed with valid directory")
+		assert.NotNil(t, validatedBuilder, "Build() should not return nil builder")
 	})
 
 	t.Run("FS with valid files", func(t *testing.T) {
@@ -412,17 +327,11 @@ func TestDBBuilder_Build(t *testing.T) {
 
 		builder := NewBuilder().AddFS(mockFS)
 		validatedBuilder, err := builder.Build(ctx)
-		if err != nil {
-			t.Errorf("Build() error = %v", err)
-		}
-		if validatedBuilder == nil {
-			t.Error("Build() returned nil builder")
-		}
+		assert.NoError(t, err, "Build() should succeed with FS containing valid files")
+		require.NotNil(t, validatedBuilder, "Build() should not return nil builder")
 		// Should have found 3 files (csv, tsv, ltsv) and ignored txt
 		// fs.FS files are now stored as readers instead of collectedPaths
-		if validatedBuilder != nil && len(validatedBuilder.readers) != 3 {
-			t.Errorf("Build() should have 3 readers from fs.FS, got %d", len(validatedBuilder.readers))
-		}
+		assert.Len(t, validatedBuilder.readers, 3, "Build() should have 3 readers from fs.FS")
 	})
 
 	t.Run("FS with nil filesystem error", func(t *testing.T) {
@@ -431,9 +340,7 @@ func TestDBBuilder_Build(t *testing.T) {
 		builder.filesystems = append(builder.filesystems, nil)
 
 		_, err := builder.Build(ctx)
-		if err == nil {
-			t.Error("Build() should return error for nil FS")
-		}
+		assert.Error(t, err, "Build() should return error for nil FS")
 	})
 
 	t.Run("FS with no supported files error", func(t *testing.T) {
@@ -445,9 +352,7 @@ func TestDBBuilder_Build(t *testing.T) {
 
 		builder := NewBuilder().AddFS(mockFS)
 		_, err := builder.Build(ctx)
-		if err == nil {
-			t.Error("Build() should return error for FS with no supported files")
-		}
+		assert.Error(t, err, "Build() should return error for FS with no supported files")
 	})
 }
 
@@ -477,28 +382,17 @@ func TestDBBuilder_ChunkedReading(t *testing.T) {
 
 		ctx := context.Background()
 		validatedBuilder, err := builder.Build(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err, "Build() should succeed")
 
 		db, err := validatedBuilder.Open(ctx)
-		if err != nil {
-			t.Errorf("Open() error = %v", err)
-		}
-		if db == nil {
-			t.Error("Open() returned nil database")
-		} else {
-			// Verify the data was loaded correctly
-			var count int
-			err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM large_table").Scan(&count)
-			if err != nil {
-				t.Errorf("Count query failed: %v", err)
-			}
-			if count != 10000 {
-				t.Errorf("Expected 10000 rows, got %d", count)
-			}
-			_ = db.Close()
-		}
+		assert.NoError(t, err, "Open() should succeed")
+		require.NotNil(t, db, "Open() should not return nil database")
+		// Verify the data was loaded correctly
+		var count int
+		err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM large_table").Scan(&count)
+		assert.NoError(t, err, "Count query should succeed")
+		assert.Equal(t, 10000, count, "Should have 10000 rows")
+		_ = db.Close()
 
 		// Clean up temp files
 	})
@@ -513,29 +407,17 @@ func TestDBBuilder_Open_WithReader(t *testing.T) {
 		builder := NewBuilder().AddReader(reader, "users", FileTypeCSV)
 
 		validatedBuilder, err := builder.Build(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err, "Build() should succeed")
 
 		db, err := validatedBuilder.Open(ctx)
-		if err != nil {
-			t.Errorf("Open() error = %v", err)
-		}
-		if db == nil {
-			t.Error("Open() returned nil database")
-		} else {
-			// Verify we can query the data
-			rows, err := db.QueryContext(ctx, "SELECT * FROM users")
-			if err != nil {
-				t.Errorf("Query failed: %v", err)
-			} else {
-				defer rows.Close()
-				if err := rows.Err(); err != nil {
-					t.Errorf("Rows error: %v", err)
-				}
-			}
-			_ = db.Close()
-		}
+		assert.NoError(t, err, "Open() should succeed")
+		require.NotNil(t, db, "Open() should not return nil database")
+		// Verify we can query the data
+		rows, err := db.QueryContext(ctx, "SELECT * FROM users")
+		assert.NoError(t, err, "Query should succeed")
+		defer rows.Close()
+		assert.NoError(t, rows.Err(), "Rows should not have errors")
+		_ = db.Close()
 
 		// Clean up temp files
 	})
@@ -545,9 +427,8 @@ func TestDBBuilder_Open_WithReader(t *testing.T) {
 		tempDir := t.TempDir()
 		csvFile := filepath.Join(tempDir, "orders.csv")
 		fileContent := "order_id,amount\n1,100\n2,200\n"
-		if err := os.WriteFile(csvFile, []byte(fileContent), 0600); err != nil {
-			t.Fatal(err)
-		}
+		err := os.WriteFile(csvFile, []byte(fileContent), 0600)
+		require.NoError(t, err, "should create orders CSV file")
 
 		// Create a reader with different data
 		readerData := "product_id,name\n1,Laptop\n2,Mouse\n"
@@ -558,31 +439,19 @@ func TestDBBuilder_Open_WithReader(t *testing.T) {
 			AddReader(reader, "products", FileTypeCSV)
 
 		validatedBuilder, err := builder.Build(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err, "Build() should succeed with mixed inputs")
 
 		db, err := validatedBuilder.Open(ctx)
-		if err != nil {
-			t.Errorf("Open() error = %v", err)
+		assert.NoError(t, err, "Open() should succeed")
+		require.NotNil(t, db, "Open() should not return nil database")
+		// Verify both tables exist
+		for _, table := range []string{"orders", "products"} {
+			rows, err := db.QueryContext(ctx, "SELECT * FROM "+table) // #nosec G202 -- table name is safe
+			assert.NoError(t, err, "Query %s should succeed", table)
+			assert.NoError(t, rows.Err(), "Rows should not have errors for %s", table)
+			_ = rows.Close() // Close immediately in the loop
 		}
-		if db == nil {
-			t.Error("Open() returned nil database")
-		} else {
-			// Verify both tables exist
-			for _, table := range []string{"orders", "products"} {
-				rows, err := db.QueryContext(ctx, "SELECT * FROM "+table) // #nosec G202 -- table name is safe
-				if err != nil {
-					t.Errorf("Query %s failed: %v", table, err)
-				} else {
-					if err := rows.Err(); err != nil {
-						t.Errorf("Rows error for %s: %v", table, err)
-					}
-					_ = rows.Close() // Close immediately in the loop
-				}
-			}
-			_ = db.Close()
-		}
+		_ = db.Close()
 
 		// Clean up temp files
 	})
@@ -595,16 +464,12 @@ func TestDBBuilder_Open(t *testing.T) {
 		builder := NewBuilder().AddPath("test.csv")
 		// Call Open without calling Build first
 		db, err := builder.Open(ctx)
-		if err == nil {
-			if db != nil {
-				_ = db.Close()
-			}
-			t.Error("Open() without Build() should return error")
+		if db != nil {
+			_ = db.Close()
 		}
+		assert.Error(t, err, "Open() without Build() should return error")
 		expectedErrMsg := "no valid input files found, did you call Build()?"
-		if !strings.Contains(err.Error(), expectedErrMsg) {
-			t.Errorf("Expected error message containing '%s', got: %s", expectedErrMsg, err.Error())
-		}
+		assert.Contains(t, err.Error(), expectedErrMsg, "error message should mention Build() requirement")
 	})
 
 	t.Run("successful open with CSV file", func(t *testing.T) {
@@ -612,23 +477,17 @@ func TestDBBuilder_Open(t *testing.T) {
 		tempDir := t.TempDir()
 		csvFile := filepath.Join(tempDir, "test.csv")
 		content := "col1,col2\nval1,val2\n"
-		if err := os.WriteFile(csvFile, []byte(content), 0600); err != nil {
-			t.Fatal(err)
-		}
+		err := os.WriteFile(csvFile, []byte(content), 0600)
+		require.NoError(t, err, "should create CSV file")
 
 		builder := NewBuilder().AddPath(csvFile)
 		validatedBuilder, err := builder.Build(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err, "Build() should succeed")
 
 		db, err := validatedBuilder.Open(ctx)
-		if err != nil {
-			t.Errorf("Open() error = %v", err)
-		}
-		if db == nil {
-			t.Error("Open() returned nil database")
-		} else {
+		assert.NoError(t, err, "Open() should succeed")
+		assert.NotNil(t, db, "Open() should not return nil database")
+		if db != nil {
 			_ = db.Close()
 		}
 	})
@@ -640,17 +499,12 @@ func TestDBBuilder_Open(t *testing.T) {
 
 		builder := NewBuilder().AddFS(mockFS)
 		validatedBuilder, err := builder.Build(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err, "Build() should succeed")
 
 		db, err := validatedBuilder.Open(ctx)
-		if err != nil {
-			t.Errorf("Open() error = %v", err)
-		}
-		if db == nil {
-			t.Error("Open() returned nil database")
-		} else {
+		assert.NoError(t, err, "Open() should succeed")
+		assert.NotNil(t, db, "Open() should not return nil database")
+		if db != nil {
 			_ = db.Close()
 			// Clean up temp files
 		}
@@ -664,17 +518,12 @@ func TestDBBuilder_Open(t *testing.T) {
 
 		builder := NewBuilder().AddFS(mockFS)
 		validatedBuilder, err := builder.Build(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err, "Build() should succeed")
 
 		db, err := validatedBuilder.Open(ctx)
-		if err != nil {
-			t.Errorf("Open() error = %v", err)
-		}
-		if db == nil {
-			t.Error("Open() returned nil database")
-		} else {
+		assert.NoError(t, err, "Open() should succeed")
+		assert.NotNil(t, db, "Open() should not return nil database")
+		if db != nil {
 			_ = db.Close()
 			// Clean up temp files
 		}
@@ -698,12 +547,8 @@ func TestDBBuilder_processFSInput(t *testing.T) {
 		builder := NewBuilder()
 
 		readers, err := builder.processFSToReaders(ctx, mockFS)
-		if err != nil {
-			t.Errorf("processFSToReaders() error = %v", err)
-		}
-		if len(readers) != 3 {
-			t.Errorf("processFSToReaders() returned %d readers, want 3", len(readers))
-		}
+		assert.NoError(t, err, "processFSToReaders() should succeed")
+		assert.Len(t, readers, 3, "should return 3 readers")
 
 		// Close all readers
 		for _, reader := range readers {
@@ -723,12 +568,8 @@ func TestDBBuilder_processFSInput(t *testing.T) {
 		builder := NewBuilder()
 
 		readers, err := builder.processFSToReaders(ctx, mockFS)
-		if err != nil {
-			t.Errorf("processFSToReaders() error = %v", err)
-		}
-		if len(readers) != 2 {
-			t.Errorf("processFSToReaders() returned %d readers, want 2", len(readers))
-		}
+		assert.NoError(t, err, "processFSToReaders() should succeed with compressed files")
+		assert.Len(t, readers, 2, "should return 2 readers for compressed files")
 
 		// Close all readers
 		for _, reader := range readers {
@@ -744,39 +585,25 @@ func TestIntegrationWithEmbedFS(t *testing.T) {
 
 	// Use embedded test data from embed_test subdirectory
 	subFS, err := fs.Sub(testFS, "testdata/embed_test")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err, "should create sub filesystem")
 
 	// Test loading all supported files from embedded FS
 	builder := NewBuilder().AddFS(subFS)
 
 	validatedBuilder, err := builder.Build(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err, "Build() should succeed with embedded FS")
 
 	db, err := validatedBuilder.Open(ctx)
-	if err != nil {
-		t.Errorf("Open() with embed.FS error = %v", err)
-	}
-	if db == nil {
-		t.Error("Open() with embed.FS returned nil database")
-	} else {
-		// Verify we can query the database
-		rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
-		if err != nil {
-			t.Errorf("Failed to query database: %v", err)
-		} else {
-			defer rows.Close()
-			if err := rows.Err(); err != nil {
-				t.Errorf("Rows error: %v", err)
-			}
-		}
+	assert.NoError(t, err, "Open() with embed.FS should succeed")
+	require.NotNil(t, db, "Open() with embed.FS should not return nil database")
+	// Verify we can query the database
+	rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
+	assert.NoError(t, err, "should be able to query database")
+	defer rows.Close()
+	assert.NoError(t, rows.Err(), "rows should not have errors")
 
-		_ = db.Close()
-		// Clean up temp files
-	}
+	_ = db.Close()
+	// Clean up temp files
 }
 
 func TestAutoSave_OnClose(t *testing.T) {
@@ -786,15 +613,13 @@ func TestAutoSave_OnClose(t *testing.T) {
 	// Create test CSV file
 	csvPath := filepath.Join(tmpDir, "test.csv")
 	csvContent := "name,age\nAlice,25\nBob,30\n"
-	if err := os.WriteFile(csvPath, []byte(csvContent), 0600); err != nil {
-		t.Fatalf("Failed to write test CSV: %v", err)
-	}
+	err := os.WriteFile(csvPath, []byte(csvContent), 0600)
+	require.NoError(t, err, "Failed to write test CSV")
 
 	// Create output directory
 	outputDir := filepath.Join(tmpDir, "output")
-	if err := os.MkdirAll(outputDir, 0750); err != nil {
-		t.Fatalf("Failed to create output dir: %v", err)
-	}
+	err = os.MkdirAll(outputDir, 0750)
+	require.NoError(t, err, "Failed to create output dir")
 
 	// Build database with auto-save on close
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -805,41 +630,29 @@ func TestAutoSave_OnClose(t *testing.T) {
 		EnableAutoSave(outputDir)
 
 	validatedBuilder, err := builder.Build(ctx)
-	if err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
+	require.NoError(t, err, "Build should succeed")
 
 	db, err := validatedBuilder.Open(ctx)
-	if err != nil {
-		t.Fatalf("Open failed: %v", err)
-	}
+	require.NoError(t, err, "Open should succeed")
 
 	// Modify data
 	_, err = db.ExecContext(ctx, "INSERT INTO test (name, age) VALUES ('Charlie', 35)")
-	if err != nil {
-		t.Fatalf("Insert failed: %v", err)
-	}
+	require.NoError(t, err, "Insert should succeed")
 
 	// Close database (should trigger auto-save)
-	if err := db.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
-	}
+	err = db.Close()
+	require.NoError(t, err, "Close should succeed")
 
 	// Check if file was saved
 	outputFile := filepath.Join(outputDir, "test.csv")
-	if _, err := os.Stat(outputFile); os.IsNotExist(err) {
-		t.Fatalf("Auto-save file not created: %s", outputFile)
-	}
+	_, err = os.Stat(outputFile)
+	assert.False(t, os.IsNotExist(err), "Auto-save file should be created: %s", outputFile)
 
 	// Verify content includes the new record
 	content, err := os.ReadFile(outputFile) //nolint:gosec // Test file path is safe
-	if err != nil {
-		t.Fatalf("Failed to read output file: %v", err)
-	}
+	require.NoError(t, err, "should be able to read output file")
 
-	if !strings.Contains(string(content), "Charlie") {
-		t.Errorf("Auto-saved file should contain inserted data. Got: %s", string(content))
-	}
+	assert.Contains(t, string(content), "Charlie", "Auto-saved file should contain inserted data")
 }
 
 func TestAutoSave_OnCommit(t *testing.T) {
@@ -849,15 +662,13 @@ func TestAutoSave_OnCommit(t *testing.T) {
 	// Create test CSV file
 	csvPath := filepath.Join(tmpDir, "test.csv")
 	csvContent := "name,age\nAlice,25\n"
-	if err := os.WriteFile(csvPath, []byte(csvContent), 0600); err != nil {
-		t.Fatalf("Failed to write test CSV: %v", err)
-	}
+	err := os.WriteFile(csvPath, []byte(csvContent), 0600)
+	require.NoError(t, err, "Failed to write test CSV")
 
 	// Create output directory
 	outputDir := filepath.Join(tmpDir, "output")
-	if err := os.MkdirAll(outputDir, 0750); err != nil {
-		t.Fatalf("Failed to create output dir: %v", err)
-	}
+	err = os.MkdirAll(outputDir, 0750)
+	require.NoError(t, err, "Failed to create output dir")
 
 	// Build database with auto-save on commit
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -869,47 +680,44 @@ func TestAutoSave_OnCommit(t *testing.T) {
 
 	validatedBuilder, err := builder.Build(ctx)
 	if err != nil {
-		t.Fatalf("Build failed: %v", err)
+		require.NoError(t, err, "Build should succeed")
 	}
 
 	db, err := validatedBuilder.Open(ctx)
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		require.NoError(t, err, "Open should succeed")
 	}
 	defer db.Close()
 
 	// Start transaction
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		t.Fatalf("Begin transaction failed: %v", err)
+		require.NoError(t, err, "Begin transaction should succeed")
 	}
 
 	// Modify data within transaction
 	_, err = tx.ExecContext(ctx, "INSERT INTO test (name, age) VALUES ('David', 40)")
 	if err != nil {
-		t.Fatalf("Insert failed: %v", err)
+		require.NoError(t, err, "Insert should succeed")
 	}
 
 	// Commit transaction (should trigger auto-save)
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("Commit failed: %v", err)
-	}
+	err = tx.Commit()
+	require.NoError(t, err, "Commit should succeed")
 
 	// Check if file was saved
 	outputFile := filepath.Join(outputDir, "test.csv")
 	if _, err := os.Stat(outputFile); os.IsNotExist(err) {
-		t.Fatalf("Auto-save file not created: %s", outputFile)
+		assert.FileExists(t, outputFile, "Auto-save file should be created")
 	}
 
 	// Verify content includes the new record
 	content, err := os.ReadFile(outputFile) //nolint:gosec // Test file path is safe
 	if err != nil {
-		t.Fatalf("Failed to read output file: %v", err)
+		require.NoError(t, err, "should be able to read output file")
 	}
 
-	if !strings.Contains(string(content), "David") {
-		t.Errorf("Auto-saved file should contain committed data. Got: %s", string(content))
-	}
+	assert.Contains(t, string(content), "David", "Auto-saved file should contain committed data")
 }
 
 func TestAutoSave_DisableAutoSave(t *testing.T) {
@@ -919,15 +727,13 @@ func TestAutoSave_DisableAutoSave(t *testing.T) {
 	// Create test CSV file
 	csvPath := filepath.Join(tmpDir, "test.csv")
 	csvContent := "name,age\nAlice,25\n"
-	if err := os.WriteFile(csvPath, []byte(csvContent), 0600); err != nil {
-		t.Fatalf("Failed to write test CSV: %v", err)
-	}
+	err := os.WriteFile(csvPath, []byte(csvContent), 0600)
+	require.NoError(t, err, "Failed to write test CSV")
 
 	// Create output directory
 	outputDir := filepath.Join(tmpDir, "output")
-	if err := os.MkdirAll(outputDir, 0750); err != nil {
-		t.Fatalf("Failed to create output dir: %v", err)
-	}
+	err = os.MkdirAll(outputDir, 0750)
+	require.NoError(t, err, "Failed to create output dir")
 
 	// Build database without auto-save (default behavior)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -939,29 +745,29 @@ func TestAutoSave_DisableAutoSave(t *testing.T) {
 
 	validatedBuilder, err := builder.Build(ctx)
 	if err != nil {
-		t.Fatalf("Build failed: %v", err)
+		require.NoError(t, err, "Build should succeed")
 	}
 
 	db, err := validatedBuilder.Open(ctx)
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		require.NoError(t, err, "Open should succeed")
 	}
 
 	// Modify data
 	_, err = db.ExecContext(ctx, "INSERT INTO test (name, age) VALUES ('Echo', 45)")
 	if err != nil {
-		t.Fatalf("Insert failed: %v", err)
+		require.NoError(t, err, "Insert should succeed")
 	}
 
 	// Close database (should NOT trigger auto-save)
 	if err := db.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
+		require.NoError(t, err, "Close should succeed")
 	}
 
 	// Check that no output file was created
 	outputFile := filepath.Join(outputDir, "test.csv")
 	if _, err := os.Stat(outputFile); !os.IsNotExist(err) {
-		t.Errorf("Auto-save file should not have been created when auto-save is disabled")
+		assert.NoFileExists(t, outputFile, "Auto-save file should not have been created when auto-save is disabled")
 	}
 }
 
@@ -974,15 +780,13 @@ func TestAutoSave_MultipleCommitsOverwrite(t *testing.T) {
 	// Create test CSV file
 	csvPath := filepath.Join(tmpDir, "test.csv")
 	csvContent := "name,count\nInitial,1\n"
-	if err := os.WriteFile(csvPath, []byte(csvContent), 0600); err != nil {
-		t.Fatalf("Failed to write test CSV: %v", err)
-	}
+	err := os.WriteFile(csvPath, []byte(csvContent), 0600)
+	require.NoError(t, err, "Failed to write test CSV")
 
 	// Create output directory
 	outputDir := filepath.Join(tmpDir, "output")
-	if err := os.MkdirAll(outputDir, 0750); err != nil {
-		t.Fatalf("Failed to create output dir: %v", err)
-	}
+	err = os.MkdirAll(outputDir, 0750)
+	require.NoError(t, err, "Failed to create output dir")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -994,12 +798,12 @@ func TestAutoSave_MultipleCommitsOverwrite(t *testing.T) {
 
 	validatedBuilder, err := builder.Build(ctx)
 	if err != nil {
-		t.Fatalf("Build failed: %v", err)
+		require.NoError(t, err, "Build should succeed")
 	}
 
 	db, err := validatedBuilder.Open(ctx)
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		require.NoError(t, err, "Open should succeed")
 	}
 	defer db.Close()
 
@@ -1008,62 +812,56 @@ func TestAutoSave_MultipleCommitsOverwrite(t *testing.T) {
 	// First commit: Add first record
 	tx1, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		t.Fatalf("Begin first transaction failed: %v", err)
+		require.NoError(t, err, "Begin first transaction should succeed")
 	}
 
 	_, err = tx1.ExecContext(ctx, "INSERT INTO test (name, count) VALUES ('First', 100)")
 	if err != nil {
-		t.Fatalf("First insert failed: %v", err)
+		require.NoError(t, err, "First insert should succeed")
 	}
 
 	if err := tx1.Commit(); err != nil {
-		t.Fatalf("First commit failed: %v", err)
+		require.NoError(t, err, "First commit should succeed")
 	}
 
 	// Check first commit saved the file
 	if _, err := os.Stat(outputFile); os.IsNotExist(err) {
-		t.Fatalf("Auto-save file not created after first commit: %s", outputFile)
+		assert.FileExists(t, outputFile, "Auto-save file should be created after first commit")
 	}
 
 	// Read content after first commit
 	content1, err := os.ReadFile(outputFile) //nolint:gosec // Test file path is safe
 	if err != nil {
-		t.Fatalf("Failed to read output file after first commit: %v", err)
+		require.NoError(t, err, "should be able to read output file after first commit")
 	}
 
-	if !strings.Contains(string(content1), "First") {
-		t.Errorf("File should contain first commit data. Got: %s", string(content1))
-	}
+	assert.Contains(t, string(content1), "First", "File should contain first commit data")
 
 	// Second commit: Add second record (should overwrite)
 	tx2, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		t.Fatalf("Begin second transaction failed: %v", err)
+		require.NoError(t, err, "Begin second transaction should succeed")
 	}
 
 	_, err = tx2.ExecContext(ctx, "INSERT INTO test (name, count) VALUES ('Second', 200)")
 	if err != nil {
-		t.Fatalf("Second insert failed: %v", err)
+		require.NoError(t, err, "Second insert should succeed")
 	}
 
 	if err := tx2.Commit(); err != nil {
-		t.Fatalf("Second commit failed: %v", err)
+		require.NoError(t, err, "Second commit should succeed")
 	}
 
 	// Read content after second commit
 	content2, err := os.ReadFile(outputFile) //nolint:gosec // Test file path is safe
 	if err != nil {
-		t.Fatalf("Failed to read output file after second commit: %v", err)
+		require.NoError(t, err, "should be able to read output file after second commit")
 	}
 
 	// Verify the file was overwritten and contains both records
-	if !strings.Contains(string(content2), "First") {
-		t.Errorf("File should still contain first commit data after second commit. Got: %s", string(content2))
-	}
+	assert.Contains(t, string(content2), "First", "File should still contain first commit data after second commit")
 
-	if !strings.Contains(string(content2), "Second") {
-		t.Errorf("File should contain second commit data. Got: %s", string(content2))
-	}
+	assert.Contains(t, string(content2), "Second", "File should contain second commit data")
 
 	// Verify the file was actually overwritten (not just appended)
 	// Count lines to make sure we have header + original + two new records
@@ -1076,40 +874,34 @@ func TestAutoSave_MultipleCommitsOverwrite(t *testing.T) {
 	}
 
 	// Should have: header + Initial + First + Second = 4 lines
-	if nonEmptyLines != 4 {
-		t.Errorf("Expected 4 lines in overwritten file, got %d. Content: %s", nonEmptyLines, string(content2))
-	}
+	assert.Equal(t, 4, nonEmptyLines, "Expected 4 lines in overwritten file, got %d. Content: %s", nonEmptyLines, string(content2))
 
 	// Third commit: Update existing record
 	tx3, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		t.Fatalf("Begin third transaction failed: %v", err)
+		require.NoError(t, err, "Begin third transaction should succeed")
 	}
 
 	_, err = tx3.ExecContext(ctx, "UPDATE test SET count = 999 WHERE name = 'Initial'")
 	if err != nil {
-		t.Fatalf("Update failed: %v", err)
+		require.NoError(t, err, "Update should succeed")
 	}
 
 	if err := tx3.Commit(); err != nil {
-		t.Fatalf("Third commit failed: %v", err)
+		require.NoError(t, err, "Third commit should succeed")
 	}
 
 	// Read content after third commit
 	content3, err := os.ReadFile(outputFile) //nolint:gosec // Test file path is safe
 	if err != nil {
-		t.Fatalf("Failed to read output file after third commit: %v", err)
+		require.NoError(t, err, "should be able to read output file after third commit")
 	}
 
 	// Verify the update was saved
-	if !strings.Contains(string(content3), "999") {
-		t.Errorf("File should contain updated count (999). Got: %s", string(content3))
-	}
+	assert.Contains(t, string(content3), "999", "File should contain updated count (999)")
 
 	// Verify original count (1) was overwritten
-	if strings.Contains(string(content3), "Initial,1") {
-		t.Errorf("File should not contain old count (1) after update. Got: %s", string(content3))
-	}
+	assert.NotContains(t, string(content3), "Initial,1", "File should not contain old count (1) after update")
 }
 
 func TestAutoSave_ExplicitDisable(t *testing.T) {
@@ -1121,15 +913,13 @@ func TestAutoSave_ExplicitDisable(t *testing.T) {
 	// Create test CSV file
 	csvPath := filepath.Join(tmpDir, "test.csv")
 	csvContent := "name,age\nAlice,25\n"
-	if err := os.WriteFile(csvPath, []byte(csvContent), 0600); err != nil {
-		t.Fatalf("Failed to write test CSV: %v", err)
-	}
+	err := os.WriteFile(csvPath, []byte(csvContent), 0600)
+	require.NoError(t, err, "Failed to write test CSV")
 
 	// Create output directory
 	outputDir := filepath.Join(tmpDir, "output")
-	if err := os.MkdirAll(outputDir, 0750); err != nil {
-		t.Fatalf("Failed to create output dir: %v", err)
-	}
+	err = os.MkdirAll(outputDir, 0750)
+	require.NoError(t, err, "Failed to create output dir")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1142,29 +932,29 @@ func TestAutoSave_ExplicitDisable(t *testing.T) {
 
 	validatedBuilder, err := builder.Build(ctx)
 	if err != nil {
-		t.Fatalf("Build failed: %v", err)
+		require.NoError(t, err, "Build should succeed")
 	}
 
 	db, err := validatedBuilder.Open(ctx)
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		require.NoError(t, err, "Open should succeed")
 	}
 
 	// Modify data
 	_, err = db.ExecContext(ctx, "INSERT INTO test (name, age) VALUES ('Disabled', 99)")
 	if err != nil {
-		t.Fatalf("Insert failed: %v", err)
+		require.NoError(t, err, "Insert should succeed")
 	}
 
 	// Close database (should NOT trigger auto-save due to DisableAutoSave)
 	if err := db.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
+		require.NoError(t, err, "Close should succeed")
 	}
 
 	// Check that no output file was created
 	outputFile := filepath.Join(outputDir, "test.csv")
 	if _, err := os.Stat(outputFile); !os.IsNotExist(err) {
-		t.Errorf("Auto-save file should not have been created when explicitly disabled")
+		assert.NoFileExists(t, outputFile, "Auto-save file should not have been created when explicitly disabled")
 	}
 }
 
@@ -1178,7 +968,7 @@ func TestBuilder_ErrorCases(t *testing.T) {
 		builder := NewBuilder()
 		_, err := builder.Build(ctx)
 		if err == nil {
-			t.Error("Build() with no inputs should return error")
+			assert.Error(t, err, "Build() with no inputs should return error")
 		}
 	})
 
@@ -1187,7 +977,7 @@ func TestBuilder_ErrorCases(t *testing.T) {
 		builder := NewBuilder().AddPath("")
 		_, err := builder.Build(ctx)
 		if err == nil {
-			t.Error("Build() with empty path should return error")
+			assert.Error(t, err, "Build() with empty path should return error")
 		}
 	})
 
@@ -1196,7 +986,7 @@ func TestBuilder_ErrorCases(t *testing.T) {
 		builder := NewBuilder().AddPath(filepath.Join("non", "existent", "file.csv"))
 		_, err := builder.Build(ctx)
 		if err == nil {
-			t.Error("Build() with non-existent path should return error")
+			assert.Error(t, err, "Build() with non-existent path should return error")
 		}
 	})
 
@@ -1205,7 +995,7 @@ func TestBuilder_ErrorCases(t *testing.T) {
 		tmpDir := t.TempDir()
 		csvPath := filepath.Join(tmpDir, "test.csv")
 		if err := os.WriteFile(csvPath, []byte("col1\nval1\n"), 0600); err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		// Test with empty string for output directory - should use overwrite mode
@@ -1224,7 +1014,7 @@ func TestBuilder_ErrorCases(t *testing.T) {
 		tmpDir := t.TempDir()
 		csvPath := filepath.Join(tmpDir, "test.csv")
 		if err := os.WriteFile(csvPath, []byte("col1\nval1\n"), 0600); err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		// Test with empty string for output directory - should use overwrite mode
@@ -1263,9 +1053,9 @@ func TestBuilder_ErrorCases(t *testing.T) {
 
 		// Build should fail with empty CSV data
 		if err == nil {
-			t.Error("Build should fail with empty reader")
+			assert.Error(t, err, "Build should fail with empty reader")
 		} else if !strings.Contains(err.Error(), "empty CSV data") {
-			t.Errorf("Expected 'empty CSV data' error, got: %v", err)
+			assert.Contains(t, err.Error(), "empty CSV data", "Expected 'empty CSV data' error")
 		}
 	})
 
@@ -1280,7 +1070,7 @@ func TestBuilder_ErrorCases(t *testing.T) {
 
 		_, err := builder.Build(ctx)
 		if err != nil {
-			t.Errorf("Build should handle small chunk size, got error: %v", err)
+			assert.NoError(t, err, "Build should handle small chunk size")
 		}
 	})
 }
@@ -1292,7 +1082,7 @@ func TestBuilder_AddPaths_ErrorCases(t *testing.T) {
 		t.Parallel()
 		builder := NewBuilder().AddPaths("file1.csv", "file2.tsv", "file3.ltsv")
 		if len(builder.paths) != 3 {
-			t.Errorf("AddPaths should add all paths, got %d", len(builder.paths))
+			assert.Len(t, builder.paths, 3, "AddPaths should add all paths")
 		}
 		expectedPaths := []string{"file1.csv", "file2.tsv", "file3.ltsv"}
 		for i, expectedPath := range expectedPaths {
@@ -1306,7 +1096,7 @@ func TestBuilder_AddPaths_ErrorCases(t *testing.T) {
 		t.Parallel()
 		builder := NewBuilder().AddPaths("valid.csv", "", "another.csv")
 		if len(builder.paths) != 3 {
-			t.Errorf("AddPaths should add all paths including empty ones, got %d", len(builder.paths))
+			assert.Len(t, builder.paths, 3, "AddPaths should add all paths including empty ones")
 		}
 		if builder.paths[1] != "" {
 			t.Errorf("AddPaths should preserve empty string, got %s", builder.paths[1])
@@ -1317,7 +1107,7 @@ func TestBuilder_AddPaths_ErrorCases(t *testing.T) {
 		t.Parallel()
 		builder := NewBuilder().AddPaths()
 		if len(builder.paths) != 0 {
-			t.Errorf("AddPaths() with no arguments should not add any paths, got %d", len(builder.paths))
+			assert.Len(t, builder.paths, 0, "AddPaths() with no arguments should not add any paths")
 		}
 	})
 }
@@ -1567,7 +1357,7 @@ func TestDriverMethods(t *testing.T) {
 		connector := &directConnector{}
 		driver := connector.Driver()
 		if driver == nil {
-			t.Error("Expected non-nil driver")
+			assert.NotNil(t, driver, "Expected non-nil driver")
 		}
 	})
 
@@ -1577,7 +1367,7 @@ func TestDriverMethods(t *testing.T) {
 		connector := &autoSaveConnector{}
 		driver := connector.Driver()
 		if driver == nil {
-			t.Error("Expected non-nil driver")
+			assert.NotNil(t, driver, "Expected non-nil driver")
 		}
 	})
 }
@@ -1590,7 +1380,7 @@ func TestTransactionMethods(t *testing.T) {
 	csvFile := filepath.Join(tempDir, "test.csv")
 	csvContent := "id,name\n1,Alice\n2,Bob\n"
 	if err := os.WriteFile(csvFile, []byte(csvContent), 0600); err != nil {
-		t.Fatal(err)
+		require.NoError(t, err, "operation should succeed")
 	}
 
 	t.Run("Begin and Rollback transaction", func(t *testing.T) {
@@ -1601,29 +1391,29 @@ func TestTransactionMethods(t *testing.T) {
 			EnableAutoSaveOnCommit(tempDir).
 			Build(context.Background())
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		db, err := validatedBuilder.Open(context.Background())
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		defer db.Close()
 
 		ctx := context.Background()
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		_, err = tx.ExecContext(ctx, "UPDATE test SET name = 'Charlie' WHERE id = 1")
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		err = tx.Rollback()
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 	})
 
@@ -1635,12 +1425,12 @@ func TestTransactionMethods(t *testing.T) {
 			EnableAutoSaveOnCommit(tempDir).
 			Build(context.Background())
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		db, err := validatedBuilder.Open(context.Background())
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		defer db.Close()
 
@@ -1648,7 +1438,7 @@ func TestTransactionMethods(t *testing.T) {
 		ctx := context.Background()
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		defer tx.Rollback()
 	})
@@ -1661,31 +1451,31 @@ func TestTransactionMethods(t *testing.T) {
 			EnableAutoSaveOnCommit(""). // Empty string triggers overwrite
 			Build(context.Background())
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		db, err := validatedBuilder.Open(context.Background())
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		defer db.Close()
 
 		ctx := context.Background()
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		_, err = tx.ExecContext(ctx, "UPDATE test SET name = 'Diana' WHERE id = 1")
 		if err != nil {
 			_ = tx.Rollback() //nolint:errcheck
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		// This should trigger overwriteOriginalFiles
 		err = tx.Commit()
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 	})
 }
@@ -1698,7 +1488,7 @@ func TestAutoSavePaths(t *testing.T) {
 	csvFile := filepath.Join(tempDir, "test.csv")
 	csvContent := "id,name\n1,Alice\n2,Bob\n"
 	if err := os.WriteFile(csvFile, []byte(csvContent), 0600); err != nil {
-		t.Fatal(err)
+		require.NoError(t, err, "operation should succeed")
 	}
 
 	t.Run("Close connection with auto-save", func(t *testing.T) {
@@ -1709,24 +1499,24 @@ func TestAutoSavePaths(t *testing.T) {
 			EnableAutoSave(tempDir).
 			Build(context.Background())
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		db, err := validatedBuilder.Open(context.Background())
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		ctx := context.Background()
 		_, err = db.ExecContext(ctx, "UPDATE test SET name = 'Eve' WHERE id = 1")
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		// Close should trigger auto-save
 		err = db.Close()
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 	})
 
@@ -1738,12 +1528,12 @@ func TestAutoSavePaths(t *testing.T) {
 			AddReader(strings.NewReader("col1,col2\n"), "empty_test", FileTypeCSV).
 			Build(context.Background())
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		db, err := validatedBuilder.Open(context.Background())
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		defer db.Close()
 
@@ -1751,7 +1541,7 @@ func TestAutoSavePaths(t *testing.T) {
 		var count int
 		err = db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM empty_test").Scan(&count)
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		if count != 0 {
 			t.Errorf("Expected empty table, got %d rows", count)
@@ -1773,19 +1563,19 @@ func TestAutoSavePaths(t *testing.T) {
 			SetDefaultChunkSize(1). // Very small chunk to simulate header-only parsing
 			Build(context.Background())
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		db, err := validatedBuilder.Open(context.Background())
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		defer db.Close()
 
 		// Check table was created
 		rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name='parsed_empty'")
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		defer rows.Close()
 
@@ -1794,7 +1584,7 @@ func TestAutoSavePaths(t *testing.T) {
 			hasTable = true
 		}
 		if err := rows.Err(); err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		if !hasTable {
@@ -1811,7 +1601,7 @@ func TestAutoSavePaths(t *testing.T) {
 			AddReader(strings.NewReader(duplicateCSV), "duplicate_cols", FileTypeCSV).
 			Build(context.Background())
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		_, err = validatedBuilder.Open(context.Background())
@@ -1833,20 +1623,20 @@ func TestAutoSavePaths(t *testing.T) {
 			AddReader(strings.NewReader(brokenCSV), "fallback_test", FileTypeCSV).
 			Build(context.Background())
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		// This should not fail but use the createTableFromHeaders fallback
 		db, err := validatedBuilder.Open(context.Background())
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		defer db.Close()
 
 		// Check table exists
 		rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name='fallback_test'")
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		defer rows.Close()
 
@@ -1855,7 +1645,7 @@ func TestAutoSavePaths(t *testing.T) {
 			hasTable = true
 		}
 		if err := rows.Err(); err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		if !hasTable {
@@ -1874,7 +1664,7 @@ func TestStreamXLSXFileToSQLite(t *testing.T) {
 		sqliteDriver := &sqlite.Driver{}
 		conn, err := sqliteDriver.Open(":memory:")
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		db := sql.OpenDB(&directConnector{conn: conn})
 		defer db.Close()
@@ -1883,7 +1673,7 @@ func TestStreamXLSXFileToSQLite(t *testing.T) {
 		xlsxPath := filepath.Join("testdata", "excel", "sample.xlsx")
 		file, err := os.Open(xlsxPath) //nolint:gosec // Test file path is safe
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		defer file.Close()
 
@@ -1891,13 +1681,13 @@ func TestStreamXLSXFileToSQLite(t *testing.T) {
 		builder := &DBBuilder{}
 		err = builder.streamXLSXFileToSQLite(ctx, db, file, xlsxPath)
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		// Verify tables were created
 		rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		defer rows.Close()
 
@@ -1905,12 +1695,12 @@ func TestStreamXLSXFileToSQLite(t *testing.T) {
 		for rows.Next() {
 			var tableName string
 			if err := rows.Scan(&tableName); err != nil {
-				t.Fatal(err)
+				require.NoError(t, err, "operation should succeed")
 			}
 			tables = append(tables, tableName)
 		}
 		if err := rows.Err(); err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		expectedTables := []string{"sample_Sheet1", "sample_Sheet2"}
@@ -1921,7 +1711,7 @@ func TestStreamXLSXFileToSQLite(t *testing.T) {
 		// Verify data in first sheet
 		rows, err = db.QueryContext(context.Background(), "SELECT * FROM sample_Sheet1 ORDER BY id")
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		defer rows.Close()
 
@@ -1929,7 +1719,7 @@ func TestStreamXLSXFileToSQLite(t *testing.T) {
 		for rows.Next() {
 			var id, name string
 			if err := rows.Scan(&id, &name); err != nil {
-				t.Fatal(err)
+				require.NoError(t, err, "operation should succeed")
 			}
 			count++
 
@@ -1949,7 +1739,7 @@ func TestStreamXLSXFileToSQLite(t *testing.T) {
 			}
 		}
 		if err := rows.Err(); err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		if count != 3 {
@@ -1959,7 +1749,7 @@ func TestStreamXLSXFileToSQLite(t *testing.T) {
 		// Verify data in second sheet
 		rows, err = db.QueryContext(context.Background(), "SELECT * FROM sample_Sheet2 ORDER BY id")
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		defer rows.Close()
 
@@ -1967,7 +1757,7 @@ func TestStreamXLSXFileToSQLite(t *testing.T) {
 		for rows.Next() {
 			var id, mail string
 			if err := rows.Scan(&id, &mail); err != nil {
-				t.Fatal(err)
+				require.NoError(t, err, "operation should succeed")
 			}
 			count++
 
@@ -1987,7 +1777,7 @@ func TestStreamXLSXFileToSQLite(t *testing.T) {
 			}
 		}
 		if err := rows.Err(); err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		if count != 3 {
@@ -2002,7 +1792,7 @@ func TestStreamXLSXFileToSQLite(t *testing.T) {
 		sqliteDriver := &sqlite.Driver{}
 		conn, err := sqliteDriver.Open(":memory:")
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		db := sql.OpenDB(&directConnector{conn: conn})
 		defer db.Close()
@@ -2029,7 +1819,7 @@ func TestStreamXLSXFileToSQLite(t *testing.T) {
 		sqliteDriver := &sqlite.Driver{}
 		conn, err := sqliteDriver.Open(":memory:")
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		db := sql.OpenDB(&directConnector{conn: conn})
 		defer db.Close()
@@ -2056,7 +1846,7 @@ func TestStreamXLSXFileToSQLite(t *testing.T) {
 		sqliteDriver := &sqlite.Driver{}
 		conn, err := sqliteDriver.Open(":memory:")
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		db := sql.OpenDB(&directConnector{conn: conn})
 		defer db.Close()
@@ -2064,14 +1854,14 @@ func TestStreamXLSXFileToSQLite(t *testing.T) {
 		// Create a table first
 		_, err = db.ExecContext(context.Background(), `CREATE TABLE "sample_Sheet1" (id TEXT, name TEXT)`)
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 
 		// Read sample XLSX file
 		xlsxPath := filepath.Join("testdata", "excel", "sample.xlsx")
 		file, err := os.Open(xlsxPath) //nolint:gosec // Test file path is safe
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err, "operation should succeed")
 		}
 		defer file.Close()
 
