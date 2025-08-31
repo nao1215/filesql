@@ -109,6 +109,25 @@ func TestFile_Parse(t *testing.T) {
 }
 ```
 
+## Utilisation des Assistants IA (LLMs)
+
+Nous encourageons activement l'utilisation d'assistants de codage IA pour améliorer la productivité et la qualité du code. Des outils comme Claude Code, GitHub Copilot et Cursor sont les bienvenus pour :
+
+- Écrire du code répétitif
+- Générer des cas de test complets
+- Améliorer la documentation
+- Refactoriser le code existant
+- Trouver des bogues potentiels
+- Suggérer des optimisations de performance
+- Traduire la documentation
+
+### Directives pour le Développement Assisté par IA
+
+1. **Réviser tout le code généré** : Toujours réviser et comprendre le code généré par l'IA avant de faire un commit
+2. **Maintenir la cohérence** : S'assurer que le code généré par l'IA suit nos standards de codage dans CLAUDE.md
+3. **Tester minutieusement** : Le code généré par l'IA doit passer tous les tests et le linting (`make test` et `make lint`)
+4. **Utiliser la configuration du projet** : Nous fournissons `CLAUDE.md`, `.cursorrules` et `.github/copilot-instructions.md` pour aider les assistants IA à comprendre nos standards de projet
+
 ## Créer des Pull Requests
 
 ### Préparation
@@ -120,6 +139,7 @@ func TestFile_Parse(t *testing.T) {
 2. **Écrire des Tests**
    - Toujours ajouter des tests pour les nouvelles fonctionnalités
    - Pour les corrections de bogues, créez des tests qui reproduisent le bogue
+   - Les outils IA peuvent aider à générer des cas de test complets
 
 3. **Contrôle de Qualité**
    ```bash
