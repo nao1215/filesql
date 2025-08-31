@@ -456,10 +456,16 @@ func TestDBBuilder_ChunkedReading(t *testing.T) {
 
 	t.Run("large data chunked reading", func(t *testing.T) {
 		t.Parallel()
-		// Create a large dataset that would benefit from chunked reading
+
+		// Skip this test in local development, only run on GitHub Actions
+		if os.Getenv("GITHUB_ACTIONS") == "" {
+			t.Skip("Skipping large data chunked reading test in local development")
+		}
+
+		// Create a dataset that would benefit from chunked reading
 		var data bytes.Buffer
 		data.WriteString("id,name,value\n")
-		for i := range 10000 {
+		for i := range 10000 { // Full test on GitHub Actions
 			fmt.Fprintf(&data, "%d,name_%d,%d\n", i, i, i*10)
 		}
 
