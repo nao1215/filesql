@@ -423,7 +423,7 @@ id:3	product:Keyboard	price:75`
 
 		builder := NewBuilder().
 			AddPath(filepath.Join("testdata", "benchmark", "customers100000.csv")).
-			SetDefaultChunkSize(1024 * 50) // 50KB chunks for testing
+			SetDefaultChunkSize(500) // 500 rows per chunk for testing
 
 		validatedBuilder, err := builder.Build(context.Background())
 		require.NoError(t, err, "Build with large file failed")

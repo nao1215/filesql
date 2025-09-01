@@ -90,7 +90,7 @@ func NewBuilder() *DBBuilder {
 		collectedPaths:   make([]string, 0),
 		parsedTables:     make([]*table, 0),
 		autoSaveConfig:   nil,              // Default: no auto-save
-		defaultChunkSize: 10 * 1024 * 1024, // 10MB default chunk size
+		defaultChunkSize: DefaultChunkSize, // Default rows per chunk
 	}
 }
 
@@ -141,13 +141,13 @@ func (b *DBBuilder) AddReader(reader io.Reader, tableName string, fileType FileT
 	return b
 }
 
-// SetDefaultChunkSize sets memory chunk size for large file processing.
+// SetDefaultChunkSize sets chunk size (number of rows) for large file processing.
 //
-// Default: 10MB. Adjust based on available memory.
+// Default: 1000 rows. Adjust based on available memory and processing needs.
 //
 // Example:
 //
-//	builder.SetDefaultChunkSize(50 * 1024 * 1024) // 50MB chunks
+//	builder.SetDefaultChunkSize(5000) // 5000 rows per chunk
 //
 // Returns self for chaining.
 func (b *DBBuilder) SetDefaultChunkSize(size int) *DBBuilder {

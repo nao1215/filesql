@@ -2142,7 +2142,7 @@ func ExampleDBBuilder_AddReader() {
 	ctx := context.Background()
 	builder := filesql.NewBuilder().
 		AddReader(reader, "employees", filesql.FileTypeCSV). // Specify table name and type explicitly
-		SetDefaultChunkSize(1024 * 1024)                     // Set 1MB chunk size for large data
+		SetDefaultChunkSize(5000)                            // Set 5000 rows per chunk for large data
 
 	// Build validates the input
 	validatedBuilder, err := builder.Build(ctx)
@@ -2237,7 +2237,7 @@ func ExampleDBBuilder_AddReader_multiple() {
 	builder := filesql.NewBuilder().
 		AddReader(strings.NewReader(usersCSV), "users", filesql.FileTypeCSV).
 		AddReader(strings.NewReader(ordersCSV), "orders", filesql.FileTypeCSV).
-		SetDefaultChunkSize(512 * 1024) // 512KB chunks
+		SetDefaultChunkSize(2500) // 2500 rows per chunk
 
 	validatedBuilder, err := builder.Build(ctx)
 	if err != nil {
