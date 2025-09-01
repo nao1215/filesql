@@ -319,12 +319,15 @@ func newColumnInfoListFromValues(header header, columnValues [][]string) columnI
 	return columnInfos
 }
 
-// Common datetime patterns to detect
-var datetimePatterns = []struct {
+// datetimePattern represents a cached datetime pattern with compiled regex
+type datetimePattern struct {
 	pattern *regexp.Regexp
 	formats []string // Multiple formats for the same pattern
-}{
-	// ISO8601 formats with timezone
+}
+
+// Cached datetime patterns for better performance
+var cachedDatetimePatterns = []datetimePattern{
+	// ISO8601 formats with timezone (most common first for early termination)
 	{
 		regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$`),
 		[]string{time.RFC3339, time.RFC3339Nano},
@@ -373,14 +376,56 @@ var datetimePatterns = []struct {
 	},
 }
 
-// isDatetime checks if a string value represents a datetime
+// Type inference constants
+const (
+	// MaxSampleSize limits how many values to sample for type inference
+	MaxSampleSize = 1000
+	// MinConfidenceThreshold is the minimum percentage of values that must match a type
+	MinConfidenceThreshold = 0.8
+	// EarlyTerminationThreshold is the percentage of text values that triggers early termination
+	EarlyTerminationThreshold = 0.5
+	// MinDatetimeLength is the minimum reasonable length for datetime values
+	MinDatetimeLength = 4
+	// MaxDatetimeLength is the maximum reasonable length for datetime values
+	MaxDatetimeLength = 35
+	// SamplingStratificationFactor determines when to use stratified vs simple sampling
+	SamplingStratificationFactor = 3
+	// MinRealThreshold is the minimum percentage of real values needed to classify as REAL
+	MinRealThreshold = 0.1
+)
+
+// isDatetime checks if a string value represents a datetime with optimized pattern matching
 func isDatetime(value string) bool {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return false
 	}
 
-	for _, dp := range datetimePatterns {
+	// Quick length-based filtering to avoid regex on obviously non-datetime values
+	valueLen := len(value)
+	if valueLen < MinDatetimeLength || valueLen > MaxDatetimeLength {
+		return false
+	}
+
+	// Quick character check - datetime must contain at least one digit and separator
+	hasDigit := false
+	hasSeparator := false
+	for _, r := range value {
+		if r >= '0' && r <= '9' {
+			hasDigit = true
+		} else if r == '-' || r == '/' || r == '.' || r == ':' || r == 'T' || r == ' ' {
+			hasSeparator = true
+		}
+		if hasDigit && hasSeparator {
+			break
+		}
+	}
+	if !hasDigit || !hasSeparator {
+		return false
+	}
+
+	// Test patterns with early termination
+	for _, dp := range cachedDatetimePatterns {
 		if dp.pattern.MatchString(value) {
 			// Try each format for this pattern
 			for _, format := range dp.formats {
@@ -394,63 +439,230 @@ func isDatetime(value string) bool {
 	return false
 }
 
-// inferColumnType infers the SQL column type from a slice of string values
+// inferColumnType infers the SQL column type from a slice of string values with optimized sampling
 func inferColumnType(values []string) columnType {
 	if len(values) == 0 {
 		return columnTypeText
 	}
 
-	hasDatetime := false
-	hasReal := false
-	hasInteger := false
-	hasText := false
+	// Use sampling for large datasets to improve performance
+	sampleValues := getSampleValues(values)
 
-	for _, value := range values {
+	// Track type counts for confidence-based inference
+	typeCounts := map[columnType]int{
+		columnTypeText:     0,
+		columnTypeDatetime: 0,
+		columnTypeReal:     0,
+		columnTypeInteger:  0,
+	}
+
+	nonEmptyCount := 0
+
+	for _, value := range sampleValues {
 		// Skip empty values for type inference
 		value = strings.TrimSpace(value)
 		if value == "" {
 			continue
 		}
+		nonEmptyCount++
 
-		// Check if it's a datetime first (before checking numbers)
-		if isDatetime(value) {
-			hasDatetime = true
-			continue
+		// Determine the type of this value
+		valueType := classifyValue(value)
+		typeCounts[valueType]++
+
+		// Early termination: if too many text values, it's definitely text
+		if typeCounts[columnTypeText] > 0 && float64(typeCounts[columnTypeText])/float64(nonEmptyCount) > EarlyTerminationThreshold {
+			return columnTypeText
 		}
-
-		// Try to parse as integer
-		if _, err := strconv.ParseInt(value, 10, 64); err == nil {
-			hasInteger = true
-			continue
-		}
-
-		// Try to parse as float
-		if _, err := strconv.ParseFloat(value, 64); err == nil {
-			hasReal = true
-			continue
-		}
-
-		// If it's not a number or datetime, it's text
-		hasText = true
-		break // If any value is text, the whole column is text
 	}
 
-	// Determine the most appropriate type
-	// Priority: TEXT > DATETIME > REAL > INTEGER
-	if hasText {
+	if nonEmptyCount == 0 {
 		return columnTypeText
 	}
-	if hasDatetime {
+
+	// Determine the most appropriate type based on confidence thresholds
+	return selectColumnType(typeCounts, nonEmptyCount)
+}
+
+// getSampleValues returns a sample of values for type inference to improve performance
+// Uses stratified sampling to ensure better representation across the dataset
+func getSampleValues(values []string) []string {
+	if len(values) <= MaxSampleSize {
+		return values
+	}
+
+	sampleSize := MaxSampleSize
+	samples := make([]string, 0, sampleSize)
+
+	// For very small datasets relative to sample size, fall back to simple sampling
+	if len(values) < sampleSize*SamplingStratificationFactor {
+		step := max(1, len(values)/sampleSize)
+		for i := 0; i < len(values) && len(samples) < sampleSize; i += step {
+			samples = append(samples, values[i])
+		}
+		return samples
+	}
+
+	// Stratified sampling: divide into 3 sections for better representation
+	sectionSize := len(values) / SamplingStratificationFactor
+	if sectionSize == 0 {
+		// If section size is 0, fall back to simple sampling
+		step := max(1, len(values)/sampleSize)
+		for i := 0; i < len(values) && len(samples) < sampleSize; i += step {
+			samples = append(samples, values[i])
+		}
+		return samples
+	}
+
+	samplesPerSection := sampleSize / SamplingStratificationFactor
+	remainder := sampleSize % SamplingStratificationFactor
+
+	// Ensure each section gets at least one sample if possible
+	if samplesPerSection == 0 {
+		samplesPerSection = 1
+		remainder = max(0, sampleSize-SamplingStratificationFactor)
+	}
+
+	// Sample from beginning section with bounds checking
+	beginSamples := samplesPerSection
+	if remainder > 0 {
+		beginSamples++
+		remainder--
+	}
+	if beginSamples > 0 {
+		step := max(1, sectionSize/beginSamples)
+		for i := 0; i < sectionSize && len(samples) < beginSamples && i < len(values); i += step {
+			samples = append(samples, values[i])
+		}
+	}
+
+	// Sample from middle section with bounds checking
+	middleSamples := samplesPerSection
+	if remainder > 0 {
+		middleSamples++
+	}
+	if middleSamples > 0 {
+		startMiddle := sectionSize
+		step := max(1, sectionSize/middleSamples)
+		targetSamples := len(samples) + middleSamples
+		for i := 0; i < sectionSize && len(samples) < targetSamples; i += step {
+			idx := startMiddle + i
+			if idx < len(values) {
+				samples = append(samples, values[idx])
+			}
+		}
+	}
+
+	// Sample from end section with bounds checking
+	endSamples := sampleSize - len(samples)
+	if endSamples > 0 {
+		startEnd := 2 * sectionSize
+		if startEnd < len(values) {
+			endSectionSize := len(values) - startEnd
+			step := max(1, endSectionSize/endSamples)
+			for i := 0; i < endSectionSize && len(samples) < sampleSize; i += step {
+				idx := startEnd + i
+				if idx < len(values) {
+					samples = append(samples, values[idx])
+				}
+			}
+		}
+	}
+
+	return samples
+}
+
+// classifyValue determines the type of a single value
+func classifyValue(value string) columnType {
+	// Check if it's a datetime first (before checking numbers)
+	if isDatetime(value) {
 		return columnTypeDatetime
 	}
-	if hasReal {
-		return columnTypeReal
-	}
-	if hasInteger {
+
+	// Check for integer first to avoid redundant parsing
+	if isInteger(value) {
 		return columnTypeInteger
 	}
 
-	// Default to TEXT if no values were found
+	// Then check for float (covers non-integer numbers)
+	if isFloat(value) {
+		return columnTypeReal
+	}
+
+	return columnTypeText
+}
+
+// isInteger checks if a value is an integer with optimized parsing
+func isInteger(value string) bool {
+	// Quick pre-check: must start with digit or sign
+	if len(value) == 0 {
+		return false
+	}
+	first := value[0]
+	if first != '+' && first != '-' && (first < '0' || first > '9') {
+		return false
+	}
+
+	_, err := strconv.ParseInt(value, 10, 64)
+	return err == nil
+}
+
+// isFloat checks if a value is a float with optimized parsing
+func isFloat(value string) bool {
+	// Quick pre-check: must contain digits
+	hasDigit := false
+	for _, r := range value {
+		if r >= '0' && r <= '9' {
+			hasDigit = true
+			break
+		}
+	}
+	if !hasDigit {
+		return false
+	}
+
+	_, err := strconv.ParseFloat(value, 64)
+	return err == nil
+}
+
+// selectColumnType selects the best column type based on confidence analysis
+func selectColumnType(typeCounts map[columnType]int, totalCount int) columnType {
+	// If any text values exist with reasonable confidence, choose text
+	if typeCounts[columnTypeText] > 0 {
+		return columnTypeText
+	}
+
+	// Calculate confidence for each type
+	datetimeConfidence := float64(typeCounts[columnTypeDatetime]) / float64(totalCount)
+	realConfidence := float64(typeCounts[columnTypeReal]) / float64(totalCount)
+	integerConfidence := float64(typeCounts[columnTypeInteger]) / float64(totalCount)
+
+	// Choose type with highest confidence above threshold
+	if datetimeConfidence >= MinConfidenceThreshold {
+		return columnTypeDatetime
+	}
+	// For mixed numeric types, prefer REAL if there are significant real values
+	// Only classify as REAL if real values make up a reasonable portion
+	if realConfidence >= MinRealThreshold && (realConfidence+integerConfidence) >= MinConfidenceThreshold {
+		return columnTypeReal
+	}
+
+	if integerConfidence >= MinConfidenceThreshold {
+		return columnTypeInteger
+	}
+
+	// If no type has sufficient confidence, choose the most appropriate numeric type
+	if realConfidence > 0 {
+		return columnTypeReal
+	}
+	if integerConfidence > 0 {
+		return columnTypeInteger
+	}
+	if datetimeConfidence > 0 {
+		return columnTypeDatetime
+	}
+
+	// Default to text if nothing else matches
 	return columnTypeText
 }
 
