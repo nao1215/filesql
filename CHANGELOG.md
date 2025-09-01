@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2025-09-01
+
+### Changed
+- **Type Detection Optimization (PR #39, [4480577](https://github.com/nao1215/filesql/commit/4480577))**: Improved column type inference performance
+  - Optimized type detection algorithms for faster processing
+  - Enhanced performance when analyzing large datasets
+  - Reduced overhead in column type classification
+- **Code Refactoring (PR #37, [f78146e](https://github.com/nao1215/filesql/commit/f78146e))**: Cleaned up codebase and improved maintainability
+  - Removed unused code and dead functions
+  - Simplified internal logic for better readability
+  - Refactored complex functions into smaller, more focused units
+- **Development Guidelines ([1774b7d](https://github.com/nao1215/filesql/commit/1774b7d))**: Updated CHANGELOG maintenance rules
+  - Enhanced documentation for commit reference formatting
+  - Improved traceability with GitHub links to commits and PRs
+
+### Fixed
+- **Chunk Size Configuration (PR #38, [9cda8b6](https://github.com/nao1215/filesql/commit/9cda8b6))**: Fixed incorrect chunk size settings
+  - Resolved issues with chunk size configuration in streaming operations
+  - Improved memory efficiency with proper chunk size handling
+- **Test Stability (PR #36, [9fa5dbc](https://github.com/nao1215/filesql/commit/9fa5dbc))**: Fixed broken and flaky tests
+  - Resolved intermittent test failures
+  - Improved test reliability across different environments
+  - Enhanced test isolation for parallel execution
+
+### Technical Improvements
+- Updated benchmark code to use Go 1.22+ range syntax for cleaner iteration patterns
+- Improved overall code quality through refactoring and optimization
+- Enhanced development workflow with better documentation standards
+
 ## [0.4.1] - 2025-08-31
 
 ### Added
@@ -351,7 +380,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/nao1215/filesql/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/nao1215/filesql/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/nao1215/filesql/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nao1215/filesql/compare/v0.2.0...v0.3.0

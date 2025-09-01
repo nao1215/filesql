@@ -766,7 +766,7 @@ func BenchmarkInferColumnType(b *testing.B) {
 			}
 
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				_ = inferColumnType(values)
 			}
 		})
@@ -787,7 +787,7 @@ func BenchmarkInferColumnType(b *testing.B) {
 			}
 
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				_ = inferColumnType(values)
 			}
 		})
@@ -812,7 +812,7 @@ func BenchmarkIsDatetime(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		for _, value := range testValues {
 			_ = isDatetime(value)
 		}
@@ -835,7 +835,7 @@ func BenchmarkGetSampleValues(b *testing.B) {
 
 		b.Run(fmt.Sprintf("size_%d", size), func(b *testing.B) {
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				_ = getSampleValues(values)
 			}
 		})
@@ -862,7 +862,7 @@ func BenchmarkClassifyValue(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		for _, value := range testValues {
 			_ = classifyValue(value)
 		}
