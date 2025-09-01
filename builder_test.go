@@ -141,7 +141,7 @@ func TestDBBuilder_SetDefaultChunkSize(t *testing.T) {
 
 	t.Run("set custom chunk size", func(t *testing.T) {
 		t.Parallel()
-		customSize := 20 * 1024 * 1024 // 20MB
+		customSize := 2000 // 2000 rows
 		builder := NewBuilder().SetDefaultChunkSize(customSize)
 
 		assert.Equal(t, customSize, builder.defaultChunkSize, "default chunk size should be set to custom size")
@@ -149,7 +149,7 @@ func TestDBBuilder_SetDefaultChunkSize(t *testing.T) {
 
 	t.Run("zero or negative size ignored", func(t *testing.T) {
 		t.Parallel()
-		defaultSize := 10 * 1024 * 1024
+		defaultSize := DefaultChunkSize
 		builder := NewBuilder()
 
 		// Zero should be ignored

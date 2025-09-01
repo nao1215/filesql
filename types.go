@@ -8,14 +8,14 @@ import (
 	"time"
 )
 
-// Processing constants
+// Processing constants (rows-based)
 const (
-	// DefaultChunkSize is the default chunk size for streaming processing (10MB)
-	DefaultChunkSize = 10 * 1024 * 1024
 	// DefaultRowsPerChunk is the default number of rows per chunk
 	DefaultRowsPerChunk = 1000
-	// MinChunkSize is the minimum allowed chunk size
-	MinChunkSize = 1024 // 1KB
+	// DefaultChunkSize is the default chunk size (rows); alias for clarity
+	DefaultChunkSize = DefaultRowsPerChunk
+	// MinChunkSize is the minimum allowed rows per chunk
+	MinChunkSize = 1
 	// ValidationPeekSize is the size used for validation peek operations
 	ValidationPeekSize = 1
 )
@@ -214,7 +214,7 @@ type ChunkSize int
 // NewChunkSize creates a new ChunkSize with validation
 func NewChunkSize(size int) ChunkSize {
 	if size < MinChunkSize {
-		return ChunkSize(DefaultChunkSize)
+		return ChunkSize(DefaultRowsPerChunk)
 	}
 	return ChunkSize(size)
 }
