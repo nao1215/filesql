@@ -137,7 +137,7 @@ type chunkProcessor func(chunk *tableChunk) error
 type streamingParser struct {
 	fileType  FileType
 	tableName string
-	chunkSize int
+	chunkSize ChunkSize
 }
 
 // newFile creates a new file
@@ -493,8 +493,8 @@ func (f *file) openReader() (io.Reader, func() error, error) {
 	return reader, closer, nil
 }
 
-// parseCSV parses CSV file with compression support
-func (f *file) parseCSV() (*table, error) {
+// parseDelimitedFile parses CSV or TSV files with specified delimiter
+func (f *file) parseDelimitedFile(delimiter rune) (*table, error) {
 	reader, closer, err := f.openReader()
 	if err != nil {
 		return nil, err
@@ -502,6 +502,7 @@ func (f *file) parseCSV() (*table, error) {
 	defer closer()
 
 	csvReader := csv.NewReader(reader)
+	csvReader.Comma = delimiter
 	records, err := csvReader.ReadAll()
 	if err != nil {
 		return nil, err
@@ -513,12 +514,8 @@ func (f *file) parseCSV() (*table, error) {
 
 	header := newHeader(records[0])
 	// Check for duplicate column names
-	columnsSeen := make(map[string]bool)
-	for _, col := range records[0] {
-		if columnsSeen[col] {
-			return nil, fmt.Errorf("%w: %s", errDuplicateColumnName, col)
-		}
-		columnsSeen[col] = true
+	if err := validateColumnNames(records[0]); err != nil {
+		return nil, err
 	}
 
 	tableRecords := make([]record, 0, len(records)-1)
@@ -530,42 +527,14 @@ func (f *file) parseCSV() (*table, error) {
 	return newTable(tableName, header, tableRecords), nil
 }
 
+// parseCSV parses CSV file with compression support
+func (f *file) parseCSV() (*table, error) {
+	return f.parseDelimitedFile(csvDelimiter)
+}
+
 // parseTSV parses TSV file with compression support
 func (f *file) parseTSV() (*table, error) {
-	reader, closer, err := f.openReader()
-	if err != nil {
-		return nil, err
-	}
-	defer closer()
-
-	csvReader := csv.NewReader(reader)
-	csvReader.Comma = TSVDelimiter
-	records, err := csvReader.ReadAll()
-	if err != nil {
-		return nil, err
-	}
-
-	if len(records) == 0 {
-		return nil, fmt.Errorf("empty file: %s", f.path)
-	}
-
-	header := newHeader(records[0])
-	// Check for duplicate column names
-	columnsSeen := make(map[string]bool)
-	for _, col := range records[0] {
-		if columnsSeen[col] {
-			return nil, fmt.Errorf("%w: %s", errDuplicateColumnName, col)
-		}
-		columnsSeen[col] = true
-	}
-
-	tableRecords := make([]record, 0, len(records)-1)
-	for i := 1; i < len(records); i++ {
-		tableRecords = append(tableRecords, newRecord(records[i]))
-	}
-
-	tableName := tableFromFilePath(f.path)
-	return newTable(tableName, header, tableRecords), nil
+	return f.parseDelimitedFile(tsvDelimiter)
 }
 
 // parseLTSV parses LTSV file with compression support

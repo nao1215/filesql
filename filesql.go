@@ -367,7 +367,7 @@ func createCompressedWriter(file *os.File, compression CompressionType) (io.Writ
 // writeDelimitedData writes data in CSV or TSV format based on delimiter
 func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, delimiter rune) error {
 	csvWriter := csv.NewWriter(writer)
-	if delimiter != CSVDelimiter {
+	if delimiter != csvDelimiter {
 		csvWriter.Comma = delimiter
 	}
 	defer csvWriter.Flush()
@@ -409,12 +409,12 @@ func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, deli
 
 // writeCSVData writes data in CSV format
 func writeCSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
-	return writeDelimitedData(writer, columns, rows, CSVDelimiter)
+	return writeDelimitedData(writer, columns, rows, csvDelimiter)
 }
 
 // writeTSVData writes data in TSV format
 func writeTSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
-	return writeDelimitedData(writer, columns, rows, TSVDelimiter)
+	return writeDelimitedData(writer, columns, rows, tsvDelimiter)
 }
 
 // writeLTSVData writes data in LTSV format

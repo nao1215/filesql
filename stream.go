@@ -33,7 +33,7 @@ func newStreamingParser(fileType FileType, tableName string, chunkSize int) *str
 	return &streamingParser{
 		fileType:  fileType,
 		tableName: tableName,
-		chunkSize: chunkSize,
+		chunkSize: NewChunkSize(chunkSize),
 	}
 }
 
@@ -104,27 +104,23 @@ func (p *streamingParser) createDecompressedReader(reader io.Reader) (io.Reader,
 	}
 }
 
-// parseCSVStream parses CSV data from reader using streaming approach
-func (p *streamingParser) parseCSVStream(reader io.Reader) (*table, error) {
+// parseDelimitedStream parses CSV or TSV data from reader using streaming approach
+func (p *streamingParser) parseDelimitedStream(reader io.Reader, delimiter rune, fileTypeName string) (*table, error) {
 	csvReader := csv.NewReader(reader)
+	csvReader.Comma = delimiter
 	records, err := csvReader.ReadAll()
 	if err != nil {
-		return nil, fmt.Errorf("failed to read CSV: %w", err)
+		return nil, fmt.Errorf("failed to read %s: %w", fileTypeName, err)
 	}
 
 	if len(records) == 0 {
-		return nil, errors.New("empty CSV data")
+		return nil, fmt.Errorf("empty %s data", fileTypeName)
 	}
 
 	header := newHeader(records[0])
-	// Check for duplicate column names (case-insensitive and trimmed)
-	columnsSeen := make(map[string]bool)
-	for _, col := range records[0] {
-		normalizedCol := strings.ToLower(strings.TrimSpace(col))
-		if columnsSeen[normalizedCol] {
-			return nil, fmt.Errorf("%w: %s", errDuplicateColumnName, col)
-		}
-		columnsSeen[normalizedCol] = true
+	// Check for duplicate column names
+	if err := validateColumnNames(records[0]); err != nil {
+		return nil, err
 	}
 
 	tablerecords := make([]record, 0, len(records)-1)
@@ -135,36 +131,14 @@ func (p *streamingParser) parseCSVStream(reader io.Reader) (*table, error) {
 	return newTable(p.tableName, header, tablerecords), nil
 }
 
+// parseCSVStream parses CSV data from reader using streaming approach
+func (p *streamingParser) parseCSVStream(reader io.Reader) (*table, error) {
+	return p.parseDelimitedStream(reader, csvDelimiter, "CSV")
+}
+
 // parseTSVStream parses TSV data from reader using streaming approach
 func (p *streamingParser) parseTSVStream(reader io.Reader) (*table, error) {
-	csvReader := csv.NewReader(reader)
-	csvReader.Comma = TSVDelimiter
-	records, err := csvReader.ReadAll()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read TSV: %w", err)
-	}
-
-	if len(records) == 0 {
-		return nil, errors.New("empty TSV data")
-	}
-
-	header := newHeader(records[0])
-	// Check for duplicate column names (case-insensitive and trimmed)
-	columnsSeen := make(map[string]bool)
-	for _, col := range records[0] {
-		normalizedCol := strings.ToLower(strings.TrimSpace(col))
-		if columnsSeen[normalizedCol] {
-			return nil, fmt.Errorf("%w: %s", errDuplicateColumnName, col)
-		}
-		columnsSeen[normalizedCol] = true
-	}
-
-	tablerecords := make([]record, 0, len(records)-1)
-	for i := 1; i < len(records); i++ {
-		tablerecords = append(tablerecords, newRecord(records[i]))
-	}
-
-	return newTable(p.tableName, header, tablerecords), nil
+	return p.parseDelimitedStream(reader, tsvDelimiter, "TSV")
 }
 
 // parseLTSVStream parses LTSV data from reader using streaming approach
@@ -263,7 +237,7 @@ func (p *streamingParser) ProcessInChunks(reader io.Reader, processor chunkProce
 // processDelimitedInChunks processes CSV or TSV data in chunks based on delimiter
 func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor chunkProcessor, delimiter rune, fileTypeName string) error {
 	csvReader := csv.NewReader(reader)
-	if delimiter != CSVDelimiter {
+	if delimiter != csvDelimiter {
 		csvReader.Comma = delimiter
 	}
 
@@ -277,23 +251,19 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 	}
 
 	// Validate header for duplicates
-	columnsSeen := make(map[string]bool)
-	for _, col := range headerrecord {
-		if columnsSeen[col] {
-			return fmt.Errorf("%w: %s", errDuplicateColumnName, col)
-		}
-		columnsSeen[col] = true
+	if err := validateColumnNames(headerrecord); err != nil {
+		return err
 	}
 
 	header := newHeader(headerrecord)
-	var columnInfo []columnInfo
+	var columnInfo columnInfoList
 	var columnValues [][]string
 
 	// Read records in chunks
 	var chunkrecords []record
-	chunkSize := p.chunkSize
+	chunkSize := p.chunkSize.Int()
 	if chunkSize <= 0 {
-		chunkSize = 1000 // Default chunk size
+		chunkSize = DefaultRowsPerChunk
 	}
 
 	for {
@@ -323,7 +293,7 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 		if len(chunkrecords) >= chunkSize {
 			// Infer column types on first chunk
 			if len(columnInfo) == 0 {
-				columnInfo = p.infercolumnInfoFromValues(header, columnValues)
+				columnInfo = newColumnInfoListFromValues(header, columnValues)
 			}
 
 			chunk := &tableChunk{
@@ -347,7 +317,7 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 	if len(chunkrecords) > 0 {
 		// Infer column types if we haven't yet (small dataset)
 		if len(columnInfo) == 0 {
-			columnInfo = p.infercolumnInfoFromValues(header, columnValues)
+			columnInfo = newColumnInfoListFromValues(header, columnValues)
 		}
 
 		chunk := &tableChunk{
@@ -367,12 +337,12 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 
 // processCSVInChunks processes CSV data in chunks
 func (p *streamingParser) processCSVInChunks(reader io.Reader, processor chunkProcessor) error {
-	return p.processDelimitedInChunks(reader, processor, CSVDelimiter, "CSV")
+	return p.processDelimitedInChunks(reader, processor, csvDelimiter, "CSV")
 }
 
 // processTSVInChunks processes TSV data in chunks
 func (p *streamingParser) processTSVInChunks(reader io.Reader, processor chunkProcessor) error {
-	return p.processDelimitedInChunks(reader, processor, TSVDelimiter, "TSV")
+	return p.processDelimitedInChunks(reader, processor, tsvDelimiter, "TSV")
 }
 
 // processLTSVInChunks processes LTSV data in chunks
@@ -418,11 +388,11 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 	// Second pass: process records in chunks
 	chunkrecords := make([]record, 0) // Pre-allocate slice
 	var columnValues [][]string
-	var columnInfo []columnInfo
+	var columnInfo columnInfoList
 
-	chunkSize := p.chunkSize
+	chunkSize := p.chunkSize.Int()
 	if chunkSize <= 0 {
-		chunkSize = 1000
+		chunkSize = DefaultRowsPerChunk
 	}
 
 	for _, line := range lines {
@@ -471,7 +441,7 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 		if len(chunkrecords) >= chunkSize {
 			// Infer column types on first chunk
 			if len(columnInfo) == 0 {
-				columnInfo = p.infercolumnInfoFromValues(header, columnValues)
+				columnInfo = newColumnInfoListFromValues(header, columnValues)
 			}
 
 			chunk := &tableChunk{
@@ -495,7 +465,7 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 	if len(chunkrecords) > 0 {
 		// Infer column types if we haven't yet
 		if len(columnInfo) == 0 {
-			columnInfo = p.infercolumnInfoFromValues(header, columnValues)
+			columnInfo = newColumnInfoListFromValues(header, columnValues)
 		}
 
 		chunk := &tableChunk{
@@ -511,34 +481,6 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 	}
 
 	return nil
-}
-
-// infercolumnInfoFromValues creates column info from collected values
-func (p *streamingParser) infercolumnInfoFromValues(header header, columnValues [][]string) []columnInfo {
-	if len(columnValues) == 0 {
-		// No data to infer from, use default TEXT type
-		columnInfoList := make([]columnInfo, len(header))
-		for i, name := range header {
-			columnInfoList[i] = columnInfo{
-				Name: name,
-				Type: columnTypeText,
-			}
-		}
-		return columnInfoList
-	}
-
-	columnInfoList := make([]columnInfo, len(header))
-	for i, name := range header {
-		var values []string
-		if i < len(columnValues) {
-			values = columnValues[i]
-		}
-		columnInfoList[i] = columnInfo{
-			Name: name,
-			Type: inferColumnType(values),
-		}
-	}
-	return columnInfoList
 }
 
 // parseParquetStream parses Parquet data from reader using streaming approach
@@ -663,20 +605,17 @@ func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chu
 	}
 
 	// Infer column types from first batch
-	columnInfoList := make([]columnInfo, len(headerSlice))
+	columnInfoList := make(columnInfoList, len(headerSlice))
 	for i, name := range headerSlice {
 		// For Parquet files, we'll default to TEXT for simplicity in streaming
 		// Real type inference could be done from Arrow schema
-		columnInfoList[i] = columnInfo{
-			Name: name,
-			Type: columnTypeText,
-		}
+		columnInfoList[i] = newColumnInfoWithType(name, columnTypeText)
 	}
 
 	// Process data in chunks using batch reader
-	chunkSize := p.chunkSize
+	chunkSize := p.chunkSize.Int()
 	if chunkSize <= 0 {
-		chunkSize = 1000
+		chunkSize = DefaultRowsPerChunk
 	}
 
 	tableReader := array.NewTableReader(table, int64(chunkSize))
@@ -762,12 +701,8 @@ func (p *streamingParser) parseXLSXStream(reader io.Reader) (*table, error) {
 		}
 		if first {
 			// Duplicate header check (parity with CSV/TSV)
-			seen := make(map[string]bool, len(row))
-			for _, col := range row {
-				if seen[col] {
-					return nil, fmt.Errorf("%w: %s", errDuplicateColumnName, col)
-				}
-				seen[col] = true
+			if err := validateColumnNames(row); err != nil {
+				return nil, err
 			}
 			headers = newHeader(row)
 			first = false

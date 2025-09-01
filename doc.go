@@ -75,5 +75,12 @@
 //   - Date and time functions
 //   - And all other SQLite3 features
 //
+// # Column Name Handling
+//
+// Column names are handled with case-sensitive comparison for duplicate detection,
+// maintaining backward compatibility. Headers with identical names after trimming
+// whitespace (regardless of case differences) are considered duplicates and will
+// result in an error.
+//
 // For complete SQL syntax documentation, see: https://www.sqlite.org/lang.html
 package filesql

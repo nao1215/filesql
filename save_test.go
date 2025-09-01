@@ -30,6 +30,16 @@ func TestOutputFormat_String(t *testing.T) {
 			want:   "ltsv",
 		},
 		{
+			name:   "Parquet format",
+			format: OutputFormatParquet,
+			want:   "parquet",
+		},
+		{
+			name:   "XLSX format",
+			format: OutputFormatXLSX,
+			want:   "xlsx",
+		},
+		{
 			name:   "Unknown format defaults to csv",
 			format: OutputFormat(999),
 			want:   "csv",
@@ -67,6 +77,16 @@ func TestOutputFormat_Extension(t *testing.T) {
 			name:   "LTSV extension",
 			format: OutputFormatLTSV,
 			want:   ".ltsv",
+		},
+		{
+			name:   "Parquet extension",
+			format: OutputFormatParquet,
+			want:   ".parquet",
+		},
+		{
+			name:   "XLSX extension",
+			format: OutputFormatXLSX,
+			want:   ".xlsx",
 		},
 		{
 			name:   "Unknown format defaults to csv",
@@ -261,6 +281,18 @@ func TestDumpOptions_FileExtension(t *testing.T) {
 			format:      OutputFormatTSV,
 			compression: CompressionZSTD,
 			want:        ".tsv.zst",
+		},
+		{
+			name:        "Parquet with no compression",
+			format:      OutputFormatParquet,
+			compression: CompressionNone,
+			want:        ".parquet",
+		},
+		{
+			name:        "XLSX with gzip compression",
+			format:      OutputFormatXLSX,
+			compression: CompressionGZ,
+			want:        ".xlsx.gz",
 		},
 	}
 
