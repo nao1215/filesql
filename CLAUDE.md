@@ -34,6 +34,8 @@ filesql reads the contents of specified input files and returns [sql.DB](https:/
 - Package comments are mandatory: Describe the package overview in `doc.go` for each package. Clarify the purpose and usage of the package.
 - Comments for public functions, variables, and struct fields are mandatory: When visibility is public, always write comments following go doc rules.
 - Remove duplicate code: After completing your work, check if you have created duplicate code and remove unnecessary code.
+- Error handling: Use `errors.Is` and `errors.As` for error interface equality checks. Never omit error handling.
+- Documentation comments: Write documentation comments to help users understand how to use the code. In-code comments should explain why or why not something is done.
 - Update README: When adding new features, update the README at the following paths:
   - README.md
   - doc/es/README.md
@@ -46,6 +48,7 @@ filesql reads the contents of specified input files and returns [sql.DB](https:/
 ## Testing
 - [Readable Test Code](https://logmi.jp/main/technology/327449): Avoid excessive optimization (DRY) and aim for a state where it's easy to understand what tests exist.
 - Clear input/output: Create tests with `t.Run()` and clarify test case input/output. Test cases clarify test intent by explicitly showing input and expected output.
+- Test descriptions: The first argument of `t.Run()` should clearly describe the relationship between input and expected output.
 - Test granularity: Aim for 80% or higher coverage with unit tests.
 - Parallel test execution: Use `t.Parallel()` to run tests in parallel whenever possible.
 - Using `octocov`: Run `octocov` after `make test` to confirm test coverage exceeds 80%.
