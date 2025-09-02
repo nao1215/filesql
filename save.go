@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"modernc.org/sqlite"
 )
@@ -394,37 +393,6 @@ func (c *autoSaveConnection) overwriteOriginalFiles(db *sql.DB) error {
 	if len(c.originalPaths) > 0 {
 		outputDir := filepath.Dir(c.originalPaths[0])
 		return DumpDatabase(db, outputDir, c.autoSaveConfig.options)
-	}
-
-	return nil
-}
-
-// validateAutoSaveConfig validates that the auto-save configuration is compatible with the input sources
-func (b *DBBuilder) validateAutoSaveConfig() error {
-	// If auto-save is not enabled, no validation needed
-	if b.autoSaveConfig == nil || !b.autoSaveConfig.enabled {
-		return nil
-	}
-
-	// Check if overwrite mode (empty OutputDir) is being used with non-file inputs
-	isOverwriteMode := b.autoSaveConfig.outputDir == ""
-	hasNonFileInputs := len(b.readers) > 0 || len(b.filesystems) > 0
-
-	if isOverwriteMode && hasNonFileInputs {
-		var inputTypes []string
-
-		if len(b.readers) > 0 {
-			inputTypes = append(inputTypes, fmt.Sprintf("%d io.Reader(s)", len(b.readers)))
-		}
-		if len(b.filesystems) > 0 {
-			inputTypes = append(inputTypes, fmt.Sprintf("%d filesystem(s)", len(b.filesystems)))
-		}
-
-		return fmt.Errorf(
-			"auto-save overwrite mode (empty output directory) is not supported with %s. "+
-				"Please specify an output directory using EnableAutoSave(\"/path/to/output\") "+
-				"or use file paths instead of readers/filesystems",
-			strings.Join(inputTypes, " and "))
 	}
 
 	return nil
