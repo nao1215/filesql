@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2025-09-02
+
+### Fixed
+- **DBBuilder Refactoring (PR #45, [6379425](https://github.com/nao1215/filesql/commit/6379425))**: Major architectural improvements for better maintainability
+  - Refactored DBBuilder implementation for cleaner code structure
+  - Improved error handling and validation in builder pattern
+  - Enhanced code organization and readability
+
+### Technical Improvements
+- **LLM Settings Enhancement (PR #44, [2575759](https://github.com/nao1215/filesql/commit/2575759))**: Updated LLM configuration for unit testing
+  - Improved development workflow with better AI assistance configuration
+  - Enhanced test environment setup for LLM-powered development tools
+- **Integration Testing Expansion (PR #43, [48eadbe](https://github.com/nao1215/filesql/commit/48eadbe))**: Added comprehensive integration test coverage
+  - Enhanced test coverage with real-world usage scenarios
+  - Improved reliability and robustness validation
+- **Sample Data Addition (PR #41, [0adba40](https://github.com/nao1215/filesql/commit/0adba40))**: Added sample CSV files for testing and demonstration
+  - Enhanced testing capabilities with realistic sample data
+  - Improved documentation with practical examples
+
 ## [0.4.2] - 2025-09-01
 
 ### Changed
@@ -380,7 +399,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/nao1215/filesql/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/nao1215/filesql/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/nao1215/filesql/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/nao1215/filesql/compare/v0.3.0...v0.4.0
