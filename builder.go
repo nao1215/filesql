@@ -1,7 +1,6 @@
 package filesql
 
 import (
-	"bufio"
 	"bytes"
 	"compress/bzip2"
 	"compress/gzip"
@@ -57,6 +56,11 @@ type DBBuilder struct {
 	autoSaveConfig *autoSaveConfig
 	// defaultChunkSize is the default chunk size for reading large files (10MB)
 	defaultChunkSize int
+
+	// Internal processors for handling different responsibilities
+	validator       *validator
+	fileProcessor   *fileProcessor
+	streamProcessor *streamProcessor
 }
 
 // readerInput represents configuration for reading from io.Reader
@@ -83,14 +87,20 @@ type readerInput struct {
 //		AddPath("data.csv").
 //		EnableAutoSave("./backup")
 func NewBuilder() *DBBuilder {
+	chunkSize := DefaultChunkSize
 	return &DBBuilder{
 		paths:            make([]string, 0),
 		filesystems:      make([]fs.FS, 0),
 		readers:          make([]readerInput, 0),
 		collectedPaths:   make([]string, 0),
 		parsedTables:     make([]*table, 0),
-		autoSaveConfig:   nil,              // Default: no auto-save
-		defaultChunkSize: DefaultChunkSize, // Default rows per chunk
+		autoSaveConfig:   nil, // Default: no auto-save
+		defaultChunkSize: chunkSize,
+
+		// Initialize internal processors
+		validator:       newValidator(),
+		fileProcessor:   newFileProcessor(chunkSize),
+		streamProcessor: newStreamProcessor(chunkSize),
 	}
 }
 
@@ -252,24 +262,34 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 		return nil, errors.New("at least one path must be provided")
 	}
 
-	if err := b.validateAutoSaveConfig(); err != nil {
+	// Use validator to validate auto-save config
+	if err := b.validator.validateAutoSaveConfig(b.autoSaveConfig); err != nil {
 		return nil, err
 	}
 
-	processedFiles := make(map[string]bool)
-	if err := b.validateAndCollectRegularPaths(processedFiles); err != nil {
+	// Use file processor to collect paths
+	collectedPaths, err := b.fileProcessor.collectFilesFromPaths(b.paths)
+	if err != nil {
 		return nil, err
 	}
+	b.collectedPaths = collectedPaths
 
-	if err := b.processFilesystems(ctx); err != nil {
+	// Use file processor to handle filesystems
+	fsReaders, err := b.fileProcessor.processFilesystemsToReaders(ctx, b.filesystems)
+	if err != nil {
 		return nil, err
 	}
+	b.readers = append(b.readers, fsReaders...)
 
-	if err := b.validateReaderInputs(); err != nil {
-		return nil, err
+	// Use validator to validate reader inputs
+	for _, readerInput := range b.readers {
+		if err := b.validator.validateReader(readerInput.reader, readerInput.tableName, readerInput.fileType); err != nil {
+			return nil, err
+		}
 	}
 
-	if err := b.validateFinalState(); err != nil {
+	// Use validator to validate final state
+	if err := b.validator.validateFinalState(b.collectedPaths, b.readers, b.paths); err != nil {
 		return nil, err
 	}
 
@@ -290,23 +310,26 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 //
 // Returns a *sql.DB connection or an error if the database cannot be created.
 func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
-	if err := b.validateInputsAvailable(); err != nil {
+	// Use validator to validate inputs availability
+	if err := b.validator.validateInputsAvailable(b.collectedPaths, b.readers); err != nil {
 		return nil, err
 	}
 
-	b.collectedPaths = b.deduplicateCompressedFiles(b.collectedPaths)
+	// Use file processor to deduplicate compressed files
+	b.collectedPaths = b.fileProcessor.deduplicateCompressedFiles(b.collectedPaths)
 
 	db, err := b.createInMemoryDatabase()
 	if err != nil {
 		return nil, err
 	}
 
-	if err := b.streamAllFilesToDatabase(ctx, db); err != nil {
+	// Use stream processor for all streaming operations (now includes XLSX support)
+	if err := b.streamProcessor.streamAllFilesToDatabase(ctx, db, b.collectedPaths); err != nil {
 		_ = db.Close() // Ignore close error during error handling
 		return nil, err
 	}
 
-	if err := b.streamAllReadersToDatabase(ctx, db); err != nil {
+	if err := b.streamProcessor.streamAllReadersToDatabase(ctx, db, b.readers); err != nil {
 		_ = db.Close() // Ignore close error during error handling
 		return nil, err
 	}
@@ -324,17 +347,10 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 	return db, nil
 }
 
-// validateInputsAvailable checks if any valid inputs are available for database creation.
-func (b *DBBuilder) validateInputsAvailable() error {
-	if len(b.collectedPaths) == 0 && len(b.readers) == 0 {
-		return errors.New("no valid input files found, did you call Build()?")
-	}
-	return nil
-}
-
 // deduplicateCompressedFiles removes compressed duplicates when uncompressed versions exist.
+// DEPRECATED: This method has been moved to fileProcessor.deduplicateCompressedFiles()
 func (b *DBBuilder) deduplicateCompressedFiles(files []string) []string {
-	return b.deduplicateCompressedFilesInternal(files)
+	return b.fileProcessor.deduplicateCompressedFiles(files)
 }
 
 // createInMemoryDatabase creates a new in-memory SQLite database connection.
@@ -346,26 +362,6 @@ func (b *DBBuilder) createInMemoryDatabase() (*sql.DB, error) {
 	}
 
 	return sql.OpenDB(&directConnector{conn: conn}), nil
-}
-
-// streamAllFilesToDatabase streams all collected file paths to the database if any exist.
-func (b *DBBuilder) streamAllFilesToDatabase(ctx context.Context, db *sql.DB) error {
-	for _, path := range b.collectedPaths {
-		if err := b.streamFileToSQLite(ctx, db, path); err != nil {
-			return fmt.Errorf("failed to stream file %s: %w", path, err)
-		}
-	}
-	return nil
-}
-
-// streamAllReadersToDatabase streams all reader inputs to the database.
-func (b *DBBuilder) streamAllReadersToDatabase(ctx context.Context, db *sql.DB) error {
-	for _, readerInput := range b.readers {
-		if err := b.streamReaderToSQLite(ctx, db, readerInput); err != nil {
-			return fmt.Errorf("failed to stream reader input for table '%s': %w", readerInput.tableName, err)
-		}
-	}
-	return nil
 }
 
 // validateDatabaseConnection validates the database connection is working.
@@ -407,12 +403,13 @@ func (b *DBBuilder) setupAutoSaveIfNeeded(ctx context.Context, db *sql.DB) (*sql
 	}
 	db = sql.OpenDB(connector)
 
-	if err := b.streamAllFilesToDatabase(ctx, db); err != nil {
+	// Use stream processor for all streaming operations (now includes XLSX support)
+	if err := b.streamProcessor.streamAllFilesToDatabase(ctx, db, b.collectedPaths); err != nil {
 		_ = db.Close() // Ignore close error during error handling
 		return nil, err
 	}
 
-	if err := b.streamAllReadersToDatabase(ctx, db); err != nil {
+	if err := b.streamProcessor.streamAllReadersToDatabase(ctx, db, b.readers); err != nil {
 		_ = db.Close() // Ignore close error during error handling
 		return nil, err
 	}
@@ -421,146 +418,6 @@ func (b *DBBuilder) setupAutoSaveIfNeeded(ctx context.Context, db *sql.DB) (*sql
 }
 
 // processFSToReaders processes all supported files from an fs.FS and creates ReaderInput
-
-// validateAndCollectRegularPaths validates regular file paths and collects them.
-func (b *DBBuilder) validateAndCollectRegularPaths(processedFiles map[string]bool) error {
-	b.collectedPaths = make([]string, 0)
-
-	for _, path := range b.paths {
-		info, err := os.Stat(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return fmt.Errorf("failed to load file: path does not exist: %s", path)
-			}
-			return fmt.Errorf("failed to stat path %s: %w", path, err)
-		}
-
-		if info.IsDir() {
-			if err := b.collectFilesFromDirectory(path, processedFiles); err != nil {
-				return err
-			}
-		} else {
-			if err := b.addSingleFile(path, processedFiles); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
-// collectFilesFromDirectory recursively collects all supported files from a directory.
-func (b *DBBuilder) collectFilesFromDirectory(dirPath string, processedFiles map[string]bool) error {
-	err := filepath.WalkDir(dirPath, func(filePath string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if d.IsDir() || !isSupportedFile(filePath) {
-			return nil
-		}
-
-		if strings.Contains(filepath.Base(filePath), "duplicate_columns") {
-			return nil
-		}
-
-		absPath, err := filepath.Abs(filePath)
-		if err != nil {
-			return fmt.Errorf("failed to get absolute path for %s: %w", filePath, err)
-		}
-
-		if !processedFiles[absPath] {
-			processedFiles[absPath] = true
-			b.collectedPaths = append(b.collectedPaths, filePath)
-		}
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("failed to walk directory %s: %w", dirPath, err)
-	}
-	return nil
-}
-
-// addSingleFile validates and adds a single file to the collected paths.
-func (b *DBBuilder) addSingleFile(filePath string, processedFiles map[string]bool) error {
-	if !isSupportedFile(filePath) {
-		return fmt.Errorf("unsupported file type: %s", filePath)
-	}
-
-	absPath, err := filepath.Abs(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to get absolute path for %s: %w", filePath, err)
-	}
-
-	if !processedFiles[absPath] {
-		processedFiles[absPath] = true
-		b.collectedPaths = append(b.collectedPaths, filePath)
-	}
-
-	return nil
-}
-
-// processFilesystems processes embedded filesystems and converts them to readers if any exist.
-func (b *DBBuilder) processFilesystems(ctx context.Context) error {
-	for _, filesystem := range b.filesystems {
-		if filesystem == nil {
-			return errors.New("FS cannot be nil")
-		}
-
-		fsReaders, err := b.processFSToReaders(ctx, filesystem)
-		if err != nil {
-			return fmt.Errorf("failed to process FS input: %w", err)
-		}
-		b.readers = append(b.readers, fsReaders...)
-	}
-
-	return nil
-}
-
-// validateReaderInputs validates all reader inputs if any exist.
-func (b *DBBuilder) validateReaderInputs() error {
-	for i := range b.readers {
-		readerInput := &b.readers[i]
-		if readerInput.reader == nil {
-			return errors.New("reader cannot be nil")
-		}
-		if readerInput.tableName == "" {
-			return errors.New("table name must be specified for reader input")
-		}
-		if readerInput.fileType == FileTypeUnsupported {
-			return errors.New("file type must be specified for reader input")
-		}
-
-		bufferedReader := bufio.NewReader(readerInput.reader)
-		_, err := bufferedReader.Peek(1)
-		if err == io.EOF {
-			return errors.New("empty CSV data")
-		}
-		readerInput.reader = bufferedReader
-	}
-
-	return nil
-}
-
-// validateFinalState performs final validation to ensure we have valid inputs.
-func (b *DBBuilder) validateFinalState() error {
-	if len(b.collectedPaths) == 0 && len(b.readers) == 0 {
-		hasDirectories := false
-		for _, path := range b.paths {
-			if info, err := os.Stat(path); err == nil && info.IsDir() {
-				hasDirectories = true
-				break
-			}
-		}
-
-		if hasDirectories {
-			return errors.New("no supported files found in directory")
-		}
-		return errors.New("no valid input files found")
-	}
-
-	return nil
-}
 
 func (b *DBBuilder) processFSToReaders(_ context.Context, filesystem fs.FS) ([]readerInput, error) {
 	readers := make([]readerInput, 0)
@@ -645,53 +502,6 @@ func (b *DBBuilder) processFSToReaders(_ context.Context, filesystem fs.FS) ([]r
 		readers = append(readers, readerInput)
 	}
 	return readers, nil
-}
-
-// streamFileToSQLite streams data from a file path directly to SQLite database using chunked processing
-func (b *DBBuilder) streamFileToSQLite(ctx context.Context, db *sql.DB, filePath string) error {
-	// At this point, filePath should only be files since directories are expanded in Build()
-	// Check if file is supported (double-check for safety)
-	if !isSupportedFile(filePath) {
-		return fmt.Errorf("unsupported file type: %s", filePath)
-	}
-
-	// Open the file and create a reader
-	file, err := os.Open(filePath) //nolint:gosec // File path is validated and comes from user input
-	if err != nil {
-		return fmt.Errorf("failed to open file %s: %w", filePath, err)
-	}
-	defer file.Close()
-
-	// Check if file is empty before processing
-	if fileInfo, err := file.Stat(); err != nil {
-		return fmt.Errorf("failed to get file info for %s: %w", filePath, err)
-	} else if fileInfo.Size() == 0 {
-		return errors.New("file is empty")
-	}
-
-	// Create decompressed reader if needed
-	reader, err := b.createDecompressedReader(file, filePath)
-	if err != nil {
-		return fmt.Errorf("failed to create decompressed reader for %s: %w", filePath, err)
-	}
-
-	// Create file model to determine type and table name
-	fileModel := newFile(filePath)
-	baseFileType := fileModel.getFileType().baseType()
-
-	// Handle XLSX files specially - each sheet becomes a separate table
-	if baseFileType == FileTypeXLSX {
-		return b.streamXLSXFileToSQLite(ctx, db, reader, filePath)
-	}
-
-	// Create reader input for streaming
-	// Note: Since we've already decompressed the reader, use the base file type
-	readerInput := readerInput{
-		reader:    reader,
-		tableName: tableFromFilePath(filePath),
-		fileType:  baseFileType,
-	}
-	return b.streamReaderToSQLite(ctx, db, readerInput)
 }
 
 // streamXLSXFileToSQLite handles XLSX files by creating separate tables for each sheet
@@ -903,144 +713,6 @@ func (b *DBBuilder) insertDataIntoTable(ctx context.Context, db *sql.DB, tableNa
 	return nil
 }
 
-// streamReaderToSQLite streams data from io.Reader directly to SQLite database
-// This is the ideal approach that provides true streaming with chunk-based processing
-func (b *DBBuilder) streamReaderToSQLite(ctx context.Context, db *sql.DB, input readerInput) error {
-	// Reader should already be buffered from Build validation, but ensure it's buffered
-	if _, ok := input.reader.(*bufio.Reader); !ok {
-		input.reader = bufio.NewReader(input.reader)
-	}
-
-	// Check if table already exists to avoid duplicates
-	var tableExists int
-	err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`,
-		input.tableName,
-	).Scan(&tableExists)
-	if err != nil {
-		return fmt.Errorf("failed to check table existence: %w", err)
-	}
-
-	if tableExists > 0 {
-		// Table already exists - this is an error condition
-		return fmt.Errorf("table '%s' already exists from another file, duplicate table names are not allowed", input.tableName)
-	}
-
-	// Create streaming parser for chunked processing
-	parser := newStreamingParser(input.fileType, input.tableName, b.defaultChunkSize)
-
-	// Initialize the table schema (we need to peek at the first chunk to get headers)
-	var tableCreated bool
-	var insertStmt *sql.Stmt
-
-	// Process data in chunks
-	err = parser.ProcessInChunks(input.reader, func(chunk *tableChunk) error {
-		// Create table on first chunk
-		if !tableCreated {
-			if err := b.createTableFromChunk(ctx, db, chunk); err != nil {
-				return fmt.Errorf("failed to create table: %w", err)
-			}
-
-			// Prepare insert statement
-			var err error
-			insertStmt, err = b.prepareInsertStatement(ctx, db, chunk) //nolint:sqlclosecheck // Statement is closed after processing
-			if err != nil {
-				return fmt.Errorf("failed to prepare insert statement: %w", err)
-			}
-
-			tableCreated = true
-		}
-
-		// Insert chunk data
-		if err := b.insertChunkData(ctx, insertStmt, chunk); err != nil {
-			return fmt.Errorf("failed to insert chunk data: %w", err)
-		}
-
-		return nil
-	})
-
-	// Handle header-only files: if no data chunks were processed, create empty table
-	if !tableCreated {
-		// Check if the original streaming error should be preserved
-		if err != nil {
-			// Preserve certain parsing errors that should not be converted to empty tables
-			if strings.Contains(err.Error(), "duplicate column name") ||
-				strings.Contains(err.Error(), "empty CSV data") ||
-				strings.Contains(err.Error(), "parse error") {
-				return err // Preserve meaningful parsing errors
-			}
-		}
-
-		// For header-only files or empty files, create an empty table by parsing headers
-		if createErr := b.createEmptyTable(ctx, db, input); createErr != nil {
-			return fmt.Errorf("failed to create empty table for header-only file: %w", createErr)
-		}
-		err = nil // Clear any previous error since we handled the empty case
-	}
-
-	// Clean up the prepared statement
-	if insertStmt != nil {
-		_ = insertStmt.Close() // Ignore close error during statement cleanup
-	}
-
-	if err != nil {
-		return fmt.Errorf("streaming processing failed: %w", err)
-	}
-
-	return nil
-}
-
-// createTableFromChunk creates a SQLite table from a tableChunk
-func (b *DBBuilder) createTableFromChunk(ctx context.Context, db *sql.DB, chunk *tableChunk) error {
-	columnInfo := chunk.getColumnInfo()
-	columns := make([]string, 0, len(columnInfo))
-	for _, col := range columnInfo {
-		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.string()))
-	}
-
-	query := fmt.Sprintf(
-		`CREATE TABLE IF NOT EXISTS "%s" (%s)`,
-		chunk.getTableName(),
-		strings.Join(columns, ", "),
-	)
-
-	_, err := db.ExecContext(ctx, query)
-	return err
-}
-
-// prepareInsertStatement prepares an insert statement for the table
-func (b *DBBuilder) prepareInsertStatement(ctx context.Context, db *sql.DB, chunk *tableChunk) (*sql.Stmt, error) {
-	headers := chunk.getHeaders()
-	placeholders := make([]string, len(headers))
-	for i := range placeholders {
-		placeholders[i] = "?"
-	}
-
-	query := fmt.Sprintf(
-		`INSERT INTO "%s" VALUES (%s)`,
-		chunk.getTableName(),
-		strings.Join(placeholders, ", "),
-	)
-
-	return db.PrepareContext(ctx, query)
-}
-
-// insertChunkData inserts a chunk's worth of data using a prepared statement
-func (b *DBBuilder) insertChunkData(ctx context.Context, stmt *sql.Stmt, chunk *tableChunk) error {
-	for _, record := range chunk.getRecords() {
-		values := make([]any, len(record))
-		for i, value := range record {
-			values[i] = value
-		}
-
-		if _, err := stmt.ExecContext(ctx, values...); err != nil {
-			return fmt.Errorf("failed to insert record: %w", err)
-		}
-	}
-
-	return nil
-}
-
 // createDecompressedReader creates a decompressed reader based on file extension
 func (b *DBBuilder) createDecompressedReader(file *os.File, filePath string) (io.Reader, error) {
 	// Check file extension to determine compression type
@@ -1076,122 +748,9 @@ func (b *DBBuilder) createDecompressedReader(file *os.File, filePath string) (io
 	return file, nil
 }
 
-// createEmptyTable creates an empty table for header-only files
-func (b *DBBuilder) createEmptyTable(ctx context.Context, db *sql.DB, input readerInput) error {
-	// Parse just the header to get column information
-	tempParser := newStreamingParser(input.fileType, input.tableName, 1)
-	tempTable, err := tempParser.parseFromReader(input.reader)
-	if err != nil {
-		// Check if this is a parsing error we should preserve (like duplicate columns)
-		if strings.Contains(err.Error(), "duplicate column name") {
-			return err // Preserve the duplicate column error
-		}
-
-		// If ParseFromReader fails for other reasons, try a simpler header-only approach
-		return b.createTableFromHeaders(ctx, db, input)
-	}
-
-	// Create table using the parsed headers
-	headers := tempTable.getHeader()
-	if len(headers) == 0 {
-		return fmt.Errorf("no headers found in file for table %s", input.tableName)
-	}
-
-	// Infer column types from headers (all as TEXT for header-only files)
-	columnInfoList := make([]columnInfo, len(headers))
-	for i, colName := range headers {
-		columnInfoList[i] = columnInfo{
-			Name: colName,
-			Type: columnTypeText, // Default to TEXT for header-only
-		}
-	}
-
-	// Create the table
-	columns := make([]string, 0, len(columnInfoList))
-	for _, col := range columnInfoList {
-		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.string()))
-	}
-
-	query := fmt.Sprintf(
-		`CREATE TABLE IF NOT EXISTS "%s" (%s)`,
-		input.tableName,
-		strings.Join(columns, ", "),
-	)
-
-	_, err = db.ExecContext(ctx, query)
-	if err != nil {
-		return fmt.Errorf("failed to create empty table: %w", err)
-	}
-
-	return nil
-}
-
-// createTableFromHeaders creates table from header information only
-func (b *DBBuilder) createTableFromHeaders(ctx context.Context, db *sql.DB, input readerInput) error {
-	// This is a fallback method for when ParseFromReader fails
-	// Since the reader may have been consumed by the parser, we can't reliably detect
-	// empty files here. Instead, we'll create a fallback table and assume the
-	// empty file case was already handled earlier in the pipeline.
-
-	// For simplicity, create a generic table structure
-	query := fmt.Sprintf(
-		`CREATE TABLE IF NOT EXISTS "%s" (column1 TEXT)`,
-		input.tableName,
-	)
-
-	_, err := db.ExecContext(ctx, query)
-	if err != nil {
-		return fmt.Errorf("failed to create fallback table: %w", err)
-	}
-
-	return nil
-}
-
 // collectOriginalPaths collects original file paths for overwrite mode
 func (b *DBBuilder) collectOriginalPaths() []string {
 	var paths []string
 	paths = append(paths, b.collectedPaths...)
 	return paths
-}
-
-// deduplicateCompressedFilesInternal removes compressed files when their uncompressed versions exist
-// This prevents duplicate table names like 'logs' from both 'logs.ltsv' and 'logs.ltsv.xz'
-func (b *DBBuilder) deduplicateCompressedFilesInternal(files []string) []string {
-	// Create a map of table names to file paths, prioritizing uncompressed files
-	tableToFile := make(map[string]string)
-
-	// First pass: collect all uncompressed files
-	for _, file := range files {
-		tableName := tableFromFilePath(file)
-		if !b.isCompressedFile(file) {
-			tableToFile[tableName] = file
-		}
-	}
-
-	// Second pass: add compressed files only if uncompressed version doesn't exist
-	for _, file := range files {
-		tableName := tableFromFilePath(file)
-		if b.isCompressedFile(file) {
-			if _, exists := tableToFile[tableName]; !exists {
-				tableToFile[tableName] = file
-			}
-		}
-	}
-
-	// Convert map back to slice
-	result := make([]string, 0, len(tableToFile))
-	for _, file := range tableToFile {
-		result = append(result, file)
-	}
-
-	return result
-}
-
-// isCompressedFile checks if a file path represents a compressed file
-func (b *DBBuilder) isCompressedFile(filePath string) bool {
-	p := strings.ToLower(filePath)
-	return strings.HasSuffix(p, extGZ) ||
-		strings.HasSuffix(p, extBZ2) ||
-		strings.HasSuffix(p, extXZ) ||
-		strings.HasSuffix(p, extZSTD)
 }
