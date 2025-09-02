@@ -49,6 +49,14 @@
 go get github.com/nao1215/filesql
 ```
 
+## 🔧 要件
+
+- **Goバージョン**: 1.24以降
+- **対応OS**:
+  - Linux
+  - macOS  
+  - Windows
+
 ## 🚀 クイックスタート
 
 ### シンプルな使用方法
@@ -166,7 +174,7 @@ func main() {
     validatedBuilder, err := filesql.NewBuilder().
         AddPath("local_file.csv").      // ローカルファイル
         AddFS(embeddedFiles).           // 埋め込みファイル
-        SetDefaultChunkSize(50*1024*1024). // 50MBチャンク
+        SetDefaultChunkSize(5000). // 5000行チャンク
         Build(ctx)
     if err != nil {
         log.Fatal(err)
@@ -330,7 +338,7 @@ filesqlはSQLite3を基盤エンジンとして使用するため、すべての
 
 ### パフォーマンスのヒント
 - 大容量ファイルには`OpenContext()`とタイムアウトを使用
-- メモリ最適化のため`SetDefaultChunkSize()`でチャンクサイズを設定
+- メモリ最適化のため`SetDefaultChunkSize()`でチャンクサイズ（行数）を設定
 - ほとんどのシナリオでは単一のSQLite接続が最適
 - 利用可能メモリより大きなファイルにはストリーミングを使用
 

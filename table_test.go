@@ -3,6 +3,8 @@ package filesql
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNewTable(t *testing.T) {
@@ -19,21 +21,13 @@ func TestNewTable(t *testing.T) {
 
 		table := newTable("test", header, records)
 
-		if table.getName() != "test" {
-			t.Errorf("expected name 'test', got %s", table.getName())
-		}
+		assert.Equal(t, "test", table.getName(), "Table name mismatch")
 
-		if !table.getHeader().equal(header) {
-			t.Errorf("expected header %v, got %v", header, table.getHeader())
-		}
+		assert.True(t, table.getHeader().equal(header), "Header mismatch")
 
-		if len(table.getRecords()) != 2 {
-			t.Errorf("expected 2 records, got %d", len(table.getRecords()))
-		}
+		assert.Len(t, table.getRecords(), 2, "Record count mismatch")
 
-		if !table.getRecords()[0].equal(records[0]) {
-			t.Errorf("expected first record %v, got %v", records[0], table.getRecords()[0])
-		}
+		assert.True(t, table.getRecords()[0].equal(records[0]), "First record mismatch")
 	})
 }
 
@@ -53,17 +47,13 @@ func TestTable_Equal(t *testing.T) {
 	t.Run("Equal tables", func(t *testing.T) {
 		t.Parallel()
 
-		if !table1.equal(table2) {
-			t.Error("expected tables to be equal")
-		}
+		assert.True(t, table1.equal(table2), "Tables should be equal")
 	})
 
 	t.Run("Different names", func(t *testing.T) {
 		t.Parallel()
 
-		if table1.equal(table3) {
-			t.Error("expected tables with different names to be not equal")
-		}
+		assert.False(t, table1.equal(table3), "Tables with different names should not be equal")
 	})
 
 	t.Run("Different header", func(t *testing.T) {
@@ -71,9 +61,7 @@ func TestTable_Equal(t *testing.T) {
 
 		differentHeader := newHeader([]string{"col1", "col3"})
 		table4 := newTable("test", differentHeader, records)
-		if table1.equal(table4) {
-			t.Error("expected tables with different headers to be not equal")
-		}
+		assert.False(t, table1.equal(table4), "Tables with different headers should not be equal")
 	})
 
 	t.Run("Different record count", func(t *testing.T) {
@@ -83,9 +71,7 @@ func TestTable_Equal(t *testing.T) {
 			newRecord([]string{"val1", "val2"}),
 		}
 		table5 := newTable("test", header, differentRecords)
-		if table1.equal(table5) {
-			t.Error("expected tables with different record count to be not equal")
-		}
+		assert.False(t, table1.equal(table5), "Tables with different record count should not be equal")
 	})
 
 	t.Run("Different record values", func(t *testing.T) {
@@ -96,9 +82,7 @@ func TestTable_Equal(t *testing.T) {
 			newRecord([]string{"val3", "different"}),
 		}
 		table6 := newTable("test", header, differentValueRecords)
-		if table1.equal(table6) {
-			t.Error("expected tables with different record values to be not equal")
-		}
+		assert.False(t, table1.equal(table6), "Tables with different record values should not be equal")
 	})
 }
 
@@ -157,9 +141,7 @@ func TestTableFromFilePath_Additional(t *testing.T) {
 			t.Parallel()
 
 			result := tableFromFilePath(tt.filePath)
-			if result != tt.expected {
-				t.Errorf("expected %s, got %s", tt.expected, result)
-			}
+			assert.Equal(t, tt.expected, result, "tableFromFilePath failed for %s", tt.filePath)
 		})
 	}
 }

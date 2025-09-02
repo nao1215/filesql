@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -91,12 +93,8 @@ func TestNewFile(t *testing.T) {
 			t.Parallel()
 
 			file := newFile(tt.path)
-			if file.getFileType() != tt.expected {
-				t.Errorf("expected %v, got %v", tt.expected, file.getFileType())
-			}
-			if file.getPath() != tt.path {
-				t.Errorf("expected %s, got %s", tt.path, file.getPath())
-			}
+			assert.Equal(t, tt.expected, file.getFileType(), "File type mismatch")
+			assert.Equal(t, tt.path, file.getPath(), "File path mismatch")
 		})
 	}
 }
@@ -141,9 +139,7 @@ func TestFile_IsCompressed(t *testing.T) {
 			t.Parallel()
 
 			file := newFile(tt.path)
-			if file.isCompressed() != tt.expected {
-				t.Errorf("expected %v, got %v", tt.expected, file.isCompressed())
-			}
+			assert.Equal(t, tt.expected, file.isCompressed(), "Compression check failed")
 		})
 	}
 }
@@ -206,18 +202,10 @@ func TestFile_CompressionTypes(t *testing.T) {
 			t.Parallel()
 
 			file := newFile(tt.path)
-			if file.isGZ() != tt.isGZ {
-				t.Errorf("IsGZ() expected %v, got %v", tt.isGZ, file.isGZ())
-			}
-			if file.isBZ2() != tt.isBZ2 {
-				t.Errorf("IsBZ2() expected %v, got %v", tt.isBZ2, file.isBZ2())
-			}
-			if file.isXZ() != tt.isXZ {
-				t.Errorf("IsXZ() expected %v, got %v", tt.isXZ, file.isXZ())
-			}
-			if file.isZSTD() != tt.isZSTD {
-				t.Errorf("IsZSTD() expected %v, got %v", tt.isZSTD, file.isZSTD())
-			}
+			assert.Equal(t, tt.isGZ, file.isGZ(), "IsGZ() check failed")
+			assert.Equal(t, tt.isBZ2, file.isBZ2(), "IsBZ2() check failed")
+			assert.Equal(t, tt.isXZ, file.isXZ(), "IsXZ() check failed")
+			assert.Equal(t, tt.isZSTD, file.isZSTD(), "IsZSTD() check failed")
 		})
 	}
 }
@@ -234,29 +222,19 @@ Alice,30,Osaka
 Bob,35,Kyoto`
 
 	err := os.WriteFile(csvFile, []byte(csvContent), 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err, "Failed to write CSV file")
 
 	file := newFile(csvFile)
 	table, err := file.toTable()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err, "Failed to convert file to table")
 
 	expectedHeader := header{"name", "age", "city"}
-	if !table.getHeader().equal(expectedHeader) {
-		t.Errorf("expected header %v, got %v", expectedHeader, table.getHeader())
-	}
+	assert.True(t, table.getHeader().equal(expectedHeader), "Header mismatch")
 
-	if len(table.getRecords()) != 3 {
-		t.Errorf("expected 3 records, got %d", len(table.getRecords()))
-	}
+	assert.Len(t, table.getRecords(), 3, "Record count mismatch")
 
 	expectedFirstRecord := record{"John", "25", "Tokyo"}
-	if !table.getRecords()[0].equal(expectedFirstRecord) {
-		t.Errorf("expected first record %v, got %v", expectedFirstRecord, table.getRecords()[0])
-	}
+	assert.True(t, table.getRecords()[0].equal(expectedFirstRecord), "First record mismatch")
 }
 
 func TestFile_ToTable_TSV(t *testing.T) {
@@ -271,29 +249,19 @@ Alice	30	Osaka
 Bob	35	Kyoto`
 
 	err := os.WriteFile(tsvFile, []byte(tsvContent), 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err, "Failed to write TSV file")
 
 	file := newFile(tsvFile)
 	table, err := file.toTable()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err, "Failed to convert file to table")
 
 	expectedHeader := header{"name", "age", "city"}
-	if !table.getHeader().equal(expectedHeader) {
-		t.Errorf("expected header %v, got %v", expectedHeader, table.getHeader())
-	}
+	assert.True(t, table.getHeader().equal(expectedHeader), "Header mismatch")
 
-	if len(table.getRecords()) != 3 {
-		t.Errorf("expected 3 records, got %d", len(table.getRecords()))
-	}
+	assert.Len(t, table.getRecords(), 3, "Record count mismatch")
 
 	expectedFirstRecord := record{"John", "25", "Tokyo"}
-	if !table.getRecords()[0].equal(expectedFirstRecord) {
-		t.Errorf("expected first record %v, got %v", expectedFirstRecord, table.getRecords()[0])
-	}
+	assert.True(t, table.getRecords()[0].equal(expectedFirstRecord), "First record mismatch")
 }
 
 func TestFile_ToTable_LTSV(t *testing.T) {
@@ -307,19 +275,13 @@ name:Alice	age:30	city:Osaka
 name:Bob	age:35	city:Kyoto`
 
 	err := os.WriteFile(ltsvFile, []byte(ltsvContent), 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err, "Failed to write LTSV file")
 
 	file := newFile(ltsvFile)
 	table, err := file.toTable()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err, "Failed to convert file to table")
 
-	if len(table.getRecords()) != 3 {
-		t.Errorf("expected 3 records, got %d", len(table.getRecords()))
-	}
+	assert.Len(t, table.getRecords(), 3, "Record count mismatch")
 
 	// LTSV header order may vary due to map iteration
 	header := table.getHeader()
@@ -366,18 +328,12 @@ Alice,30,Osaka`
 
 	file := newFile(csvFile)
 	table, err := file.toTable()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err, "Failed to convert file to table")
 
 	expectedHeader := header{"name", "age", "city"}
-	if !table.getHeader().equal(expectedHeader) {
-		t.Errorf("expected header %v, got %v", expectedHeader, table.getHeader())
-	}
+	assert.True(t, table.getHeader().equal(expectedHeader), "Header mismatch")
 
-	if len(table.getRecords()) != 2 {
-		t.Errorf("expected 2 records, got %d", len(table.getRecords()))
-	}
+	assert.Len(t, table.getRecords(), 2, "Expected 2 records")
 }
 
 func TestFile_ToTable_UnsupportedFormat(t *testing.T) {
@@ -393,9 +349,7 @@ func TestFile_ToTable_UnsupportedFormat(t *testing.T) {
 
 	file := newFile(txtFile)
 	_, err = file.toTable()
-	if err == nil {
-		t.Error("expected error for unsupported file format")
-	}
+	assert.Error(t, err, "Expected error for unsupported file format")
 }
 
 func TestFile_ToTable_EmptyFile(t *testing.T) {
@@ -411,9 +365,7 @@ func TestFile_ToTable_EmptyFile(t *testing.T) {
 
 	file := newFile(csvFile)
 	_, err = file.toTable()
-	if err == nil {
-		t.Error("expected error for empty file")
-	}
+	assert.Error(t, err, "Expected error for empty file")
 }
 
 func TestTableFromFilePath(t *testing.T) {
@@ -451,9 +403,7 @@ func TestTableFromFilePath(t *testing.T) {
 			t.Parallel()
 
 			result := tableFromFilePath(tt.filePath)
-			if result != tt.expected {
-				t.Errorf("expected %s, got %s", tt.expected, result)
-			}
+			assert.Equal(t, tt.expected, result, "tableFromFilePath failed")
 		})
 	}
 }
@@ -523,17 +473,9 @@ func Test_FileTypeDetectionMethods(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			file := newFile(tc.filePath)
 
-			if file.isCSV() != tc.expectedCSV {
-				t.Errorf("IsCSV() = %v, expected %v for %s", file.isCSV(), tc.expectedCSV, tc.filePath)
-			}
-
-			if file.isTSV() != tc.expectedTSV {
-				t.Errorf("IsTSV() = %v, expected %v for %s", file.isTSV(), tc.expectedTSV, tc.filePath)
-			}
-
-			if file.isLTSV() != tc.expectedLTSV {
-				t.Errorf("IsLTSV() = %v, expected %v for %s", file.isLTSV(), tc.expectedLTSV, tc.filePath)
-			}
+			assert.Equal(t, tc.expectedCSV, file.isCSV(), "IsCSV() check failed for %s", tc.filePath)
+			assert.Equal(t, tc.expectedTSV, file.isTSV(), "IsTSV() check failed for %s", tc.filePath)
+			assert.Equal(t, tc.expectedLTSV, file.isLTSV(), "IsLTSV() check failed for %s", tc.filePath)
 		})
 	}
 }
@@ -613,9 +555,7 @@ func Test_OpenReaderEdgeCases(t *testing.T) {
 	t.Run("Invalid gzip file", func(t *testing.T) {
 		// Create a file with .gz extension but invalid gzip content
 		tmpFile, err := os.CreateTemp(t.TempDir(), "invalid_*.csv.gz")
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err, "Failed to create file or perform operation")
 		defer os.Remove(tmpFile.Name())
 
 		// Write non-gzip content
@@ -682,9 +622,7 @@ func TestFile_ToTable_DuplicateColumns(t *testing.T) {
 2,Jane,20,jane@example.com`
 
 		err := os.WriteFile(csvFile, []byte(csvContent), 0600)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err, "Failed to create file or perform operation")
 
 		file := newFile(csvFile)
 		_, err = file.toTable()
@@ -714,9 +652,7 @@ func TestFile_ToTable_DuplicateColumns(t *testing.T) {
 2	Jane	20	jane@example.com`
 
 		err := os.WriteFile(tsvFile, []byte(tsvContent), 0600)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err, "Failed to create file or perform operation")
 
 		file := newFile(tsvFile)
 		_, err = file.toTable()
@@ -745,9 +681,7 @@ func TestFile_ToTable_DuplicateColumns(t *testing.T) {
 John,25,Doe,john@example.com,26`
 
 		err := os.WriteFile(csvFile, []byte(csvContent), 0600)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err, "Failed to create file or perform operation")
 
 		file := newFile(csvFile)
 		_, err = file.toTable()
@@ -772,9 +706,7 @@ John,25,Doe,john@example.com,26`
 2,Jane,30,jane@example.com`
 
 		err := os.WriteFile(csvFile, []byte(csvContent), 0600)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err, "Failed to create file or perform operation")
 
 		file := newFile(csvFile)
 		table, err := file.toTable()

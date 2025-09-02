@@ -3,6 +3,7 @@ package filesql
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Standard error messages and error creation functions for consistency
@@ -35,27 +36,54 @@ var (
 	ErrContextCancelled = errors.New("filesql: context cancelled")
 )
 
-// Error creation functions for consistent error formatting
-
-// NewFileError creates a file-related error with consistent formatting
-func NewFileError(operation, filename string, err error) error {
-	return fmt.Errorf("filesql: failed to %s file '%s': %w", operation, filename, err)
+// ErrorContext provides context for where an error occurred
+type ErrorContext struct {
+	Operation string
+	FilePath  string
+	TableName string
+	Details   string
 }
 
-// NewDatabaseError creates a database-related error
-func NewDatabaseError(operation string, err error) error {
-	return fmt.Errorf("filesql: database %s failed: %w", operation, err)
-}
-
-// NewParsingError creates a parsing-related error
-func NewParsingError(format, details string, err error) error {
-	if err != nil {
-		return fmt.Errorf("filesql: failed to parse %s (%s): %w", format, details, err)
+// NewErrorContext creates a new error context
+func NewErrorContext(operation, filePath string) *ErrorContext {
+	return &ErrorContext{
+		Operation: operation,
+		FilePath:  filePath,
 	}
-	return fmt.Errorf("filesql: failed to parse %s (%s)", format, details)
 }
 
-// IsDataError checks if error is data-related
-func IsDataError(err error) bool {
-	return errors.Is(err, ErrEmptyData) || errors.Is(err, ErrInvalidData) || errors.Is(err, errDuplicateColumnName)
+// WithTable adds table context to the error
+func (ec *ErrorContext) WithTable(tableName string) *ErrorContext {
+	ec.TableName = tableName
+	return ec
+}
+
+// WithDetails adds details to the error context
+func (ec *ErrorContext) WithDetails(details string) *ErrorContext {
+	ec.Details = details
+	return ec
+}
+
+// Error creates a formatted error with context
+func (ec *ErrorContext) Error(baseErr error) error {
+	var parts []string
+	parts = append(parts, fmt.Sprintf("filesql: %s failed", ec.Operation))
+
+	if ec.FilePath != "" {
+		parts = append(parts, "file: "+ec.FilePath)
+	}
+
+	if ec.TableName != "" {
+		parts = append(parts, "table: "+ec.TableName)
+	}
+
+	if ec.Details != "" {
+		parts = append(parts, "details: "+ec.Details)
+	}
+
+	context := strings.Join(parts, ", ")
+	if baseErr != nil {
+		return fmt.Errorf("%s: %w", context, baseErr)
+	}
+	return fmt.Errorf("%s", context)
 }

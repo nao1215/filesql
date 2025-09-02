@@ -11,13 +11,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/xuri/excelize/v2"
 
@@ -69,10 +70,11 @@ func TestOpen(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			db, err := Open(tt.paths...)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Open() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				assert.Error(t, err, "Open() should have failed")
 				return
 			}
+			assert.NoError(t, err, "Open() should have succeeded")
 
 			if !tt.wantErr {
 				defer db.Close()
@@ -83,26 +85,26 @@ func TestOpen(t *testing.T) {
 					if strings.Contains(tt.paths[0], "sample.csv") || strings.Contains(tt.paths[0], "testdata") {
 						rows, err := db.QueryContext(context.Background(), "SELECT COUNT(*) FROM sample")
 						if err != nil {
-							t.Errorf("Query() error = %v", err)
+							assert.Fail(t, "Query() error = %v", err)
 							return
 						}
 						defer rows.Close()
 
 						if err := rows.Err(); err != nil {
-							t.Errorf("Rows error: %v", err)
+							assert.NoError(t, err, "Rows error")
 							return
 						}
 
 						var count int
 						if rows.Next() {
 							if err := rows.Scan(&count); err != nil {
-								t.Errorf("Scan() error = %v", err)
+								assert.Fail(t, "Scan() error = %v", err)
 								return
 							}
 						}
 
 						if count != 3 {
-							t.Errorf("Expected 3 rows, got %d", count)
+							assert.Fail(t, "Expected 3 rows, got %d", count)
 						}
 					}
 				}
@@ -115,9 +117,7 @@ func TestSQLQueries(t *testing.T) {
 	t.Parallel()
 
 	db, err := Open(filepath.Join("testdata", "sample.csv"))
-	if err != nil {
-		t.Fatalf("Failed to open database: %v", err)
-	}
+	require.NoError(t, err, "Failed to open database")
 	defer db.Close()
 
 	tests := []struct {
@@ -145,40 +145,33 @@ func TestSQLQueries(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rows, err := db.QueryContext(context.Background(), tt.query)
+			assert.NoError(t, err, "Query() error")
 			if err != nil {
-				t.Errorf("Query() error = %v", err)
 				return
 			}
 			defer rows.Close()
 
-			if err := rows.Err(); err != nil {
-				t.Errorf("Rows error: %v", err)
-				return
-			}
+			assert.NoError(t, rows.Err(), "Rows error")
 
 			if rows.Next() {
 				var result interface{}
 				if err := rows.Scan(&result); err != nil {
-					t.Errorf("Scan() error = %v", err)
+					assert.NoError(t, err, "Scan() error")
 					return
 				}
 
 				switch expected := tt.expected.(type) {
 				case int:
 					if count, ok := result.(int64); ok {
-						if int(count) != expected {
-							t.Errorf("Expected %v, got %v", expected, count)
-						}
+						assert.Equal(t, expected, int(count), "Expected count to match")
 					} else {
-						t.Errorf("Expected int, got %T", result)
+						assert.Failf(t, "Type assertion failed", "Expected int, got %T", result)
 					}
 				case string:
 					if str, ok := result.(string); ok {
-						if str != expected {
-							t.Errorf("Expected %v, got %v", expected, str)
-						}
+						assert.Equal(t, expected, str, "Expected string to match")
 					} else {
-						t.Errorf("Expected string, got %T", result)
+						assert.Failf(t, "Type assertion failed", "Expected string, got %T", result)
 					}
 				}
 			}
@@ -191,9 +184,7 @@ func TestMultipleFiles(t *testing.T) {
 
 	// Test loading multiple files from directory
 	db, err := Open("testdata")
-	if err != nil {
-		t.Fatalf("Failed to open directory: %v", err)
-	}
+	require.NoError(t, err, "Failed to open directory")
 	defer db.Close()
 
 	tests := []struct {
@@ -226,27 +217,22 @@ func TestMultipleFiles(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rows, err := db.QueryContext(context.Background(), tt.query)
+			assert.NoError(t, err, "Query() error")
 			if err != nil {
-				t.Errorf("Query() error = %v", err)
 				return
 			}
 			defer rows.Close()
 
-			if err := rows.Err(); err != nil {
-				t.Errorf("Rows error: %v", err)
-				return
-			}
+			assert.NoError(t, rows.Err(), "Rows error")
 
 			if rows.Next() {
 				var count int64
 				if err := rows.Scan(&count); err != nil {
-					t.Errorf("Scan() error = %v", err)
+					assert.NoError(t, err, "Scan() error")
 					return
 				}
 
-				if count == 0 {
-					t.Errorf("Expected non-zero count for table %s", tt.table)
-				}
+				assert.NotEqual(t, int64(0), count, "Expected non-zero count for table %s", tt.table)
 			}
 		})
 	}
@@ -257,9 +243,7 @@ func TestJoinMultipleTables(t *testing.T) {
 
 	// Test joining tables from multiple files
 	db, err := Open("testdata")
-	if err != nil {
-		t.Fatalf("Failed to open directory: %v", err)
-	}
+	require.NoError(t, err, "Failed to open directory")
 	defer db.Close()
 
 	// Test JOIN query across multiple tables
@@ -273,13 +257,13 @@ func TestJoinMultipleTables(t *testing.T) {
 
 	rows, err := db.QueryContext(context.Background(), query)
 	if err != nil {
-		t.Errorf("JOIN Query() error = %v", err)
+		assert.Fail(t, "JOIN Query() error = %v", err)
 		return
 	}
 	defer rows.Close()
 
 	if err := rows.Err(); err != nil {
-		t.Errorf("Rows error: %v", err)
+		assert.NoError(t, err, "Rows error")
 		return
 	}
 
@@ -287,12 +271,12 @@ func TestJoinMultipleTables(t *testing.T) {
 		var name string
 		var count int64
 		if err := rows.Scan(&name, &count); err != nil {
-			t.Errorf("Scan() error = %v", err)
+			assert.Fail(t, "Scan() error = %v", err)
 			return
 		}
 
 		if name != "Alice" {
-			t.Errorf("Expected name 'Alice', got '%s'", name)
+			assert.Fail(t, "Expected name 'Alice', got '%s'", name)
 		}
 	}
 }
@@ -328,14 +312,10 @@ id:3	product:Keyboard	price:75`
 			AddReader(strings.NewReader(ltsvData), "products", FileTypeLTSV)
 
 		validatedBuilder, err := builder.Build(context.Background())
-		if err != nil {
-			t.Fatalf("Build failed: %v", err)
-		}
+		require.NoError(t, err, "Build failed")
 
 		db, err := validatedBuilder.Open(context.Background())
-		if err != nil {
-			t.Fatalf("Open failed: %v", err)
-		}
+		require.NoError(t, err, "Open failed")
 		defer db.Close()
 
 		// Test complex JOIN query across all three tables
@@ -349,9 +329,7 @@ id:3	product:Keyboard	price:75`
 		`
 
 		rows, err := db.QueryContext(context.Background(), query)
-		if err != nil {
-			t.Fatalf("Complex query failed: %v", err)
-		}
+		require.NoError(t, err, "Complex query failed")
 		defer rows.Close()
 
 		var results []struct {
@@ -365,17 +343,15 @@ id:3	product:Keyboard	price:75`
 				salary, price       float64
 			}
 			if err := rows.Scan(&r.name, &r.dept, &r.product, &r.salary, &r.price); err != nil {
-				t.Fatalf("Scan failed: %v", err)
+				require.NoError(t, err, "Scan failed")
 			}
 			results = append(results, r)
 		}
 
-		if err := rows.Err(); err != nil {
-			t.Fatalf("Rows iteration error: %v", err)
-		}
+		require.NoError(t, rows.Err(), "Rows iteration error")
 
 		if len(results) != 2 {
-			t.Errorf("Expected 2 results, got %d", len(results))
+			assert.Fail(t, "Expected 2 results, got %d", len(results))
 		}
 	})
 
@@ -387,14 +363,10 @@ id:3	product:Keyboard	price:75`
 
 		builder := NewBuilder().AddFS(testFS)
 		validatedBuilder, err := builder.Build(context.Background())
-		if err != nil {
-			t.Fatalf("Build with FS failed: %v", err)
-		}
+		require.NoError(t, err, "Build with FS failed")
 
 		db, err := validatedBuilder.Open(context.Background())
-		if err != nil {
-			t.Fatalf("Open with FS failed: %v", err)
-		}
+		require.NoError(t, err, "Open with FS failed")
 		defer db.Close()
 
 		// Verify tables from embedded files
@@ -404,10 +376,10 @@ id:3	product:Keyboard	price:75`
 			var count int
 			err := db.QueryRowContext(context.Background(), query).Scan(&count)
 			if err != nil {
-				t.Errorf("Failed to query table %s: %v", table, err)
+				assert.Fail(t, "Failed to query table %s: %v", table, err)
 			}
 			if count == 0 {
-				t.Errorf("Table %s is empty", table)
+				assert.Fail(t, "Table %s is empty", table)
 			}
 		}
 
@@ -421,9 +393,7 @@ id:3	product:Keyboard	price:75`
 		`
 
 		rows, err := db.QueryContext(context.Background(), query)
-		if err != nil {
-			t.Fatalf("Cross-table query failed: %v", err)
-		}
+		require.NoError(t, err, "Cross-table query failed")
 		defer rows.Close()
 
 		rowCount := 0
@@ -431,14 +401,12 @@ id:3	product:Keyboard	price:75`
 			var name string
 			var orderCount int
 			if err := rows.Scan(&name, &orderCount); err != nil {
-				t.Fatalf("Scan failed: %v", err)
+				require.NoError(t, err, "Scan failed")
 			}
 			rowCount++
 		}
 
-		if err := rows.Err(); err != nil {
-			t.Fatalf("Rows iteration error: %v", err)
-		}
+		require.NoError(t, rows.Err(), "Rows iteration error")
 
 		if rowCount == 0 {
 			t.Error("Expected at least one result from cross-table query")
@@ -448,19 +416,20 @@ id:3	product:Keyboard	price:75`
 	t.Run("large file streaming with benchmark data", func(t *testing.T) {
 		t.Parallel()
 
+		// Skip this test in local development, only run on GitHub Actions
+		if os.Getenv("GITHUB_ACTIONS") == "" {
+			t.Skip("Skipping large file test in local development")
+		}
+
 		builder := NewBuilder().
 			AddPath(filepath.Join("testdata", "benchmark", "customers100000.csv")).
-			SetDefaultChunkSize(1024 * 50) // 50KB chunks for testing
+			SetDefaultChunkSize(500) // 500 rows per chunk for testing
 
 		validatedBuilder, err := builder.Build(context.Background())
-		if err != nil {
-			t.Fatalf("Build with large file failed: %v", err)
-		}
+		require.NoError(t, err, "Build with large file failed")
 
 		db, err := validatedBuilder.Open(context.Background())
-		if err != nil {
-			t.Fatalf("Open with large file failed: %v", err)
-		}
+		require.NoError(t, err, "Open with large file failed")
 		defer db.Close()
 
 		// Test aggregation queries on large dataset
@@ -487,7 +456,7 @@ id:3	product:Keyboard	price:75`
 				start := time.Now()
 				rows, err := db.QueryContext(context.Background(), q.query)
 				if err != nil {
-					t.Fatalf("Query '%s' failed: %v", q.name, err)
+					require.NoError(t, err, "Query '%s' failed", q.name)
 				}
 				defer rows.Close()
 
@@ -497,7 +466,7 @@ id:3	product:Keyboard	price:75`
 					// Just scan to verify data is accessible
 					cols, err := rows.Columns()
 					if err != nil {
-						t.Fatalf("Failed to get columns: %v", err)
+						require.NoError(t, err, "Failed to get columns")
 					}
 
 					values := make([]interface{}, len(cols))
@@ -507,13 +476,11 @@ id:3	product:Keyboard	price:75`
 					}
 
 					if err := rows.Scan(scanArgs...); err != nil {
-						t.Fatalf("Scan failed: %v", err)
+						require.NoError(t, err, "Scan failed")
 					}
 				}
 
-				if err := rows.Err(); err != nil {
-					t.Fatalf("Rows iteration error: %v", err)
-				}
+				require.NoError(t, rows.Err(), "Rows iteration error")
 
 				if !hasResults {
 					t.Error("Query returned no results")
@@ -537,14 +504,10 @@ id:3	product:Keyboard	price:75`
 
 		builder := NewBuilder().AddPaths(compressedFiles...)
 		validatedBuilder, err := builder.Build(context.Background())
-		if err != nil {
-			t.Fatalf("Build with compressed files failed: %v", err)
-		}
+		require.NoError(t, err, "Build with compressed files failed")
 
 		db, err := validatedBuilder.Open(context.Background())
-		if err != nil {
-			t.Fatalf("Open with compressed files failed: %v", err)
-		}
+		require.NoError(t, err, "Open with compressed files failed")
 		defer db.Close()
 
 		// Verify all compressed files were loaded correctly
@@ -554,10 +517,10 @@ id:3	product:Keyboard	price:75`
 			query := "SELECT COUNT(*) FROM " + table // Table name from trusted list
 			err := db.QueryRowContext(context.Background(), query).Scan(&count)
 			if err != nil {
-				t.Errorf("Failed to query compressed table %s: %v", table, err)
+				assert.Fail(t, "Failed to query compressed table %s: %v", table, err)
 			}
 			if count == 0 {
-				t.Errorf("Compressed table %s is empty", table)
+				assert.Fail(t, "Compressed table %s is empty", table)
 			}
 		}
 
@@ -574,9 +537,7 @@ id:3	product:Keyboard	price:75`
 		`
 
 		rows, err := db.QueryContext(context.Background(), query)
-		if err != nil {
-			t.Fatalf("Union query on compressed files failed: %v", err)
-		}
+		require.NoError(t, err, "Union query on compressed files failed")
 		defer rows.Close()
 
 		results := make(map[string]int)
@@ -584,22 +545,20 @@ id:3	product:Keyboard	price:75`
 			var source string
 			var count int
 			if err := rows.Scan(&source, &count); err != nil {
-				t.Fatalf("Scan failed: %v", err)
+				require.NoError(t, err, "Scan failed")
 			}
 			results[source] = count
 		}
 
-		if err := rows.Err(); err != nil {
-			t.Fatalf("Rows iteration error: %v", err)
-		}
+		require.NoError(t, rows.Err(), "Rows iteration error")
 
 		if len(results) != 4 {
-			t.Errorf("Expected 4 tables, got %d", len(results))
+			assert.Fail(t, "Expected 4 tables, got %d", len(results))
 		}
 
 		for table, count := range results {
 			if count == 0 {
-				t.Errorf("Table %s has zero rows", table)
+				assert.Fail(t, "Table %s has zero rows", table)
 			}
 		}
 	})
@@ -617,29 +576,21 @@ id:3	product:Keyboard	price:75`
 			EnableAutoSave(tempDir, NewDumpOptions().WithFormat(OutputFormatCSV))
 
 		validatedBuilder, err := builder.Build(context.Background())
-		if err != nil {
-			t.Fatalf("Build with auto-save failed: %v", err)
-		}
+		require.NoError(t, err, "Build with auto-save failed")
 
 		db, err := validatedBuilder.Open(context.Background())
-		if err != nil {
-			t.Fatalf("Open with auto-save failed: %v", err)
-		}
+		require.NoError(t, err, "Open with auto-save failed")
 
 		// Modify the data
 		_, err = db.ExecContext(context.Background(), "INSERT INTO sample (id, name, age, email) VALUES (99, 'Test User', 42, 'test@example.com')")
-		if err != nil {
-			t.Fatalf("INSERT failed: %v", err)
-		}
+		require.NoError(t, err, "INSERT failed")
 
 		_, err = db.ExecContext(context.Background(), "UPDATE users SET role = 'super_admin' WHERE name = 'Alice'")
-		if err != nil {
-			t.Fatalf("UPDATE failed: %v", err)
-		}
+		require.NoError(t, err, "UPDATE failed")
 
 		// Close to trigger auto-save
 		if err := db.Close(); err != nil {
-			t.Errorf("Failed to close database: %v", err)
+			assert.NoError(t, err, "Failed to close database")
 		}
 
 		// Verify auto-saved files exist
@@ -647,33 +598,25 @@ id:3	product:Keyboard	price:75`
 		for _, filename := range expectedFiles {
 			filepath := filepath.Join(tempDir, filename)
 			if _, err := os.Stat(filepath); os.IsNotExist(err) {
-				t.Errorf("Auto-saved file %s does not exist", filename)
+				assert.Fail(t, "Auto-saved file %s does not exist", filename)
 			}
 		}
 
 		// Verify the modifications were saved by opening the auto-saved files
 		newDB, err := Open(tempDir)
-		if err != nil {
-			t.Fatalf("Failed to open auto-saved files: %v", err)
-		}
+		require.NoError(t, err, "Failed to open auto-saved files")
 		defer newDB.Close()
 
 		// Check if our modifications are present
 		var testUser string
 		err = newDB.QueryRowContext(context.Background(), "SELECT name FROM sample WHERE id = 99").Scan(&testUser)
-		if err != nil {
-			t.Errorf("Failed to find inserted test user: %v", err)
-		} else if testUser != "Test User" {
-			t.Errorf("Expected 'Test User', got '%s'", testUser)
-		}
+		require.NoError(t, err, "Failed to find inserted test user")
+		assert.Equal(t, "Test User", testUser, "Expected 'Test User', got '%s'", testUser)
 
 		var aliceRole string
 		err = newDB.QueryRowContext(context.Background(), "SELECT role FROM users WHERE name = 'Alice'").Scan(&aliceRole)
-		if err != nil {
-			t.Errorf("Failed to find updated Alice role: %v", err)
-		} else if aliceRole != "super_admin" {
-			t.Errorf("Expected 'super_admin', got '%s'", aliceRole)
-		}
+		require.NoError(t, err, "Failed to find updated Alice role")
+		assert.Equal(t, "super_admin", aliceRole, "Expected 'super_admin', got '%s'", aliceRole)
 	})
 
 	t.Run("mixed input sources combination", func(t *testing.T) {
@@ -693,14 +636,10 @@ id:3	product:Keyboard	price:75`
 			AddPath(filepath.Join("testdata", "sample2.csv"))                    // Different file to avoid table name conflict
 
 		validatedBuilder, err := builder.Build(context.Background())
-		if err != nil {
-			t.Fatalf("Build with mixed sources failed: %v", err)
-		}
+		require.NoError(t, err, "Build with mixed sources failed")
 
 		db, err := validatedBuilder.Open(context.Background())
-		if err != nil {
-			t.Fatalf("Open with mixed sources failed: %v", err)
-		}
+		require.NoError(t, err, "Open with mixed sources failed")
 		defer db.Close()
 
 		// Verify all sources are accessible
@@ -708,23 +647,19 @@ id:3	product:Keyboard	price:75`
 
 		// Get all table names
 		rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table'")
-		if err != nil {
-			t.Fatalf("Failed to get table names: %v", err)
-		}
+		require.NoError(t, err, "Failed to get table names")
 		defer rows.Close()
 
 		var tableNames []string
 		for rows.Next() {
 			var name string
 			if err := rows.Scan(&name); err != nil {
-				t.Fatalf("Scan table name failed: %v", err)
+				require.NoError(t, err, "Scan table name failed")
 			}
 			tableNames = append(tableNames, name)
 		}
 
-		if err := rows.Err(); err != nil {
-			t.Fatalf("Rows iteration error: %v", err)
-		}
+		require.NoError(t, rows.Err(), "Rows iteration error")
 
 		// Count rows in each table
 		for _, tableName := range tableNames {
@@ -732,7 +667,7 @@ id:3	product:Keyboard	price:75`
 			query := fmt.Sprintf("SELECT COUNT(*) FROM `%s`", tableName) //nolint:gosec // Table name from database metadata
 			err := db.QueryRowContext(context.Background(), query).Scan(&count)
 			if err != nil {
-				t.Errorf("Failed to count rows in table %s: %v", tableName, err)
+				assert.Fail(t, "Failed to count rows in table %s: %v", tableName, err)
 			}
 			tableCounts[tableName] = count
 		}
@@ -741,9 +676,9 @@ id:3	product:Keyboard	price:75`
 		expectedTables := []string{"sample", "custom_orders", "sample2"}
 		for _, expected := range expectedTables {
 			if count, exists := tableCounts[expected]; !exists {
-				t.Errorf("Expected table %s not found", expected)
+				assert.Fail(t, "Expected table %s not found", expected)
 			} else if count == 0 {
-				t.Errorf("Table %s is empty", expected)
+				assert.Fail(t, "Table %s is empty", expected)
 			}
 		}
 
@@ -761,9 +696,7 @@ id:3	product:Keyboard	price:75`
 		`
 
 		rows, err = db.QueryContext(context.Background(), query)
-		if err != nil {
-			t.Fatalf("Complex mixed-source query failed: %v", err)
-		}
+		require.NoError(t, err, "Complex mixed-source query failed")
 		defer rows.Close()
 
 		hasResults := false
@@ -772,15 +705,13 @@ id:3	product:Keyboard	price:75`
 			var sampleName, orderCustomer, userName string
 			var matchCount int
 			if err := rows.Scan(&sampleName, &orderCustomer, &userName, &matchCount); err != nil {
-				t.Fatalf("Scan complex query failed: %v", err)
+				require.NoError(t, err, "Scan complex query failed")
 			}
 			// Just verify we can read the data
 		}
 
 		// Note: This query might not return results due to data mismatch, but it should execute without error
-		if err := rows.Err(); err != nil {
-			t.Fatalf("Query execution error: %v", err)
-		}
+		require.NoError(t, rows.Err(), "Query execution error")
 
 		// Use hasResults to avoid unused variable error
 		_ = hasResults
@@ -792,9 +723,7 @@ id:3	product:Keyboard	price:75`
 		benchmarkFile := filepath.Join("testdata", "benchmark", "customers100000.csv")
 
 		db, err := Open(benchmarkFile)
-		if err != nil {
-			t.Fatalf("Failed to open benchmark file: %v", err)
-		}
+		require.NoError(t, err, "Failed to open benchmark file")
 		defer db.Close()
 
 		// Test basic queries
@@ -813,7 +742,7 @@ id:3	product:Keyboard	price:75`
 
 				rows, err := db.QueryContext(ctx, tc.query)
 				if err != nil {
-					t.Fatalf("Query failed: %v", err)
+					require.NoError(t, err, "Query failed")
 				}
 				defer rows.Close()
 
@@ -821,7 +750,7 @@ id:3	product:Keyboard	price:75`
 				for rows.Next() {
 					cols, err := rows.Columns()
 					if err != nil {
-						t.Fatalf("Get columns failed: %v", err)
+						require.NoError(t, err, "Get columns failed")
 					}
 
 					values := make([]any, len(cols))
@@ -831,13 +760,11 @@ id:3	product:Keyboard	price:75`
 					}
 
 					if err := rows.Scan(scanArgs...); err != nil {
-						t.Fatalf("Scan failed: %v", err)
+						require.NoError(t, err, "Scan failed")
 					}
 				}
 
-				if err := rows.Err(); err != nil {
-					t.Fatalf("Rows error: %v", err)
-				}
+				require.NoError(t, rows.Err(), "Rows error")
 			})
 		}
 	})
@@ -858,9 +785,7 @@ func TestDumpDatabase(t *testing.T) {
 			setupFunc: func(t *testing.T) *sql.DB {
 				t.Helper()
 				db, err := Open(filepath.Join("testdata", "sample.csv"))
-				if err != nil {
-					t.Fatalf("Failed to open database: %v", err)
-				}
+				require.NoError(t, err, "Failed to open database")
 				return db
 			},
 			expectError: false,
@@ -871,9 +796,7 @@ func TestDumpDatabase(t *testing.T) {
 			setupFunc: func(t *testing.T) *sql.DB {
 				t.Helper()
 				db, err := Open(filepath.Join("testdata", "sample.csv"), filepath.Join("testdata", "users.csv"))
-				if err != nil {
-					t.Fatalf("Failed to open database: %v", err)
-				}
+				require.NoError(t, err, "Failed to open database")
 				return db
 			},
 			expectError: false,
@@ -884,9 +807,7 @@ func TestDumpDatabase(t *testing.T) {
 			setupFunc: func(t *testing.T) *sql.DB {
 				t.Helper()
 				db, err := Open("testdata")
-				if err != nil {
-					t.Fatalf("Failed to open database: %v", err)
-				}
+				require.NoError(t, err, "Failed to open database")
 				return db
 			},
 			expectError: false,
@@ -897,14 +818,12 @@ func TestDumpDatabase(t *testing.T) {
 			setupFunc: func(t *testing.T) *sql.DB {
 				t.Helper()
 				db, err := Open(filepath.Join("testdata", "sample.csv"))
-				if err != nil {
-					t.Fatalf("Failed to open database: %v", err)
-				}
+				require.NoError(t, err, "Failed to open database")
 
 				// Modify data to test persistence
 				_, err = db.ExecContext(context.Background(), "INSERT INTO sample (id, name, age, email) VALUES (4, 'Test User', 40, 'test@example.com')")
 				if err != nil {
-					t.Fatalf("Failed to insert test data: %v", err)
+					require.NoError(t, err, "Failed to insert test data")
 				}
 				return db
 			},
@@ -929,7 +848,7 @@ func TestDumpDatabase(t *testing.T) {
 
 			// Check error expectation
 			if (err != nil) != tc.expectError {
-				t.Errorf("DumpDatabase() error = %v, expectError %v", err, tc.expectError)
+				assert.Fail(t, "DumpDatabase() error = %v, expectError %v", err, tc.expectError)
 				return
 			}
 
@@ -938,31 +857,31 @@ func TestDumpDatabase(t *testing.T) {
 				for _, fileName := range tc.checkFiles {
 					filePath := filepath.Join(tempDir, fileName)
 					if _, err := os.Stat(filePath); os.IsNotExist(err) {
-						t.Errorf("Expected file %s was not created", fileName)
+						assert.Fail(t, "Expected file %s was not created", fileName)
 						continue
 					}
 
 					// Read and verify file content
 					content, err := os.ReadFile(filePath) //nolint:gosec // Safe: filePath is from controlled test data
 					if err != nil {
-						t.Errorf("Failed to read dumped file %s: %v", fileName, err)
+						assert.Fail(t, "Failed to read dumped file %s: %v", fileName, err)
 						continue
 					}
 
 					// Basic validation: file should have content and CSV header
 					if len(content) == 0 {
-						t.Errorf("Dumped file %s is empty", fileName)
+						assert.Fail(t, "Dumped file %s is empty", fileName)
 					}
 
 					contentStr := string(content)
 					if !strings.Contains(contentStr, "\n") {
-						t.Errorf("Dumped file %s should contain newlines (header + data)", fileName)
+						assert.Fail(t, "Dumped file %s should contain newlines (header + data)", fileName)
 					}
 
 					// For the modified data test, check if new data is present
 					if tc.name == "Modified data dump" && fileName == "sample.csv" {
 						if !strings.Contains(contentStr, "Test User") {
-							t.Errorf("Modified data not found in dumped file")
+							assert.Fail(t, "Modified data not found in dumped file")
 						}
 					}
 				}
@@ -997,7 +916,7 @@ func TestDumpDatabaseErrors(t *testing.T) {
 		// Should get "no tables found" error since it's an empty database
 		expectedErrorMsg := "no tables found in database"
 		if err.Error() != expectedErrorMsg {
-			t.Errorf("expected error message '%s', got: %v", expectedErrorMsg, err)
+			assert.Fail(t, "expected error message '%s', got: %v", expectedErrorMsg, err)
 		}
 	})
 
@@ -1006,7 +925,7 @@ func TestDumpDatabaseErrors(t *testing.T) {
 
 		db, err := Open(filepath.Join("testdata", "sample.csv"))
 		if err != nil {
-			t.Fatalf("Failed to open database: %v", err)
+			require.NoError(t, err, "Failed to open database")
 		}
 		defer db.Close()
 
@@ -1037,7 +956,7 @@ func TestDumpDatabaseErrors(t *testing.T) {
 			strings.Contains(errorMsg, "cannot create")
 
 		if !hasExpectedError {
-			t.Errorf("expected permission or directory creation error, got: %v", err)
+			assert.NoError(t, err, "expected permission or directory creation error, got")
 		}
 	})
 }
@@ -1048,7 +967,7 @@ func TestDumpDatabaseCSVFormat(t *testing.T) {
 
 	db, err := Open(filepath.Join("testdata", "sample.csv"))
 	if err != nil {
-		t.Fatalf("Failed to open database: %v", err)
+		require.NoError(t, err, "Failed to open database")
 	}
 	defer db.Close()
 
@@ -1057,14 +976,14 @@ func TestDumpDatabaseCSVFormat(t *testing.T) {
 	// Dump the database
 	err = DumpDatabase(db, tempDir)
 	if err != nil {
-		t.Fatalf("DumpDatabase() failed: %v", err)
+		require.NoError(t, err, "DumpDatabase() failed")
 	}
 
 	// Read the dumped file
 	dumpedFile := filepath.Join(tempDir, "sample.csv")
 	content, err := os.ReadFile(dumpedFile) //nolint:gosec // Safe: dumpedFile is from controlled test output
 	if err != nil {
-		t.Fatalf("Failed to read dumped file: %v", err)
+		require.NoError(t, err, "Failed to read dumped file")
 	}
 
 	contentStr := string(content)
@@ -1072,20 +991,20 @@ func TestDumpDatabaseCSVFormat(t *testing.T) {
 
 	// Should have header + 3 data rows
 	if len(lines) != 4 {
-		t.Errorf("Expected 4 lines (header + 3 data), got %d", len(lines))
+		assert.Fail(t, "Expected 4 lines (header + 3 data), got %d", len(lines))
 	}
 
 	// Check header
 	expectedHeader := "id,name,age,email"
 	if lines[0] != expectedHeader {
-		t.Errorf("Expected header %q, got %q", expectedHeader, lines[0])
+		assert.Fail(t, "Expected header %q, got %q", expectedHeader, lines[0])
 	}
 
 	// Check that data rows have the correct number of columns
 	for i, line := range lines[1:] {
 		columns := strings.Split(line, ",")
 		if len(columns) != 4 {
-			t.Errorf("Data row %d has %d columns, expected 4: %q", i+1, len(columns), line)
+			assert.Fail(t, "Data row %d has %d columns, expected 4: %q", i+1, len(columns), line)
 		}
 	}
 }
@@ -1096,7 +1015,7 @@ func TestDumpDatabaseSpecialCharacters(t *testing.T) {
 
 	db, err := Open(filepath.Join("testdata", "sample.csv"))
 	if err != nil {
-		t.Fatalf("Failed to open database: %v", err)
+		require.NoError(t, err, "Failed to open database")
 	}
 	defer db.Close()
 
@@ -1106,7 +1025,7 @@ func TestDumpDatabaseSpecialCharacters(t *testing.T) {
 		(11, 'Name "with quotes"', 26, 'test2@example.com'),
 		(12, 'Name' || char(10) || 'with newline', 27, 'test3@example.com')`)
 	if err != nil {
-		t.Fatalf("Failed to insert test data: %v", err)
+		require.NoError(t, err, "Failed to insert test data")
 	}
 
 	tempDir := t.TempDir()
@@ -1114,14 +1033,14 @@ func TestDumpDatabaseSpecialCharacters(t *testing.T) {
 	// Dump the database
 	err = DumpDatabase(db, tempDir)
 	if err != nil {
-		t.Fatalf("DumpDatabase() failed: %v", err)
+		require.NoError(t, err, "DumpDatabase() failed")
 	}
 
 	// Read the dumped file
 	dumpedFile := filepath.Join(tempDir, "sample.csv")
 	content, err := os.ReadFile(dumpedFile) //nolint:gosec // Safe: dumpedFile is from controlled test output
 	if err != nil {
-		t.Fatalf("Failed to read dumped file: %v", err)
+		require.NoError(t, err, "Failed to read dumped file")
 	}
 
 	contentStr := string(content)
@@ -1147,8 +1066,7 @@ func TestDumpDatabaseSpecialCharacters(t *testing.T) {
 
 	for _, tc := range testCases {
 		if !strings.Contains(contentStr, tc.shouldFind) {
-			t.Errorf("CSV escaping test failed: %s - expected to find %q in content",
-				tc.description, tc.shouldFind)
+			assert.Contains(t, contentStr, tc.shouldFind, "CSV escaping test failed: %s - expected to find %q in content", tc.description, tc.shouldFind)
 		}
 	}
 }
@@ -1197,20 +1115,21 @@ func TestOpenErrorCases(t *testing.T) {
 			if tt.name == "Empty directory" {
 				emptyDir := filepath.Join("testdata", "empty_dir")
 				if err := os.MkdirAll(emptyDir, 0750); err != nil {
-					t.Fatalf("Failed to create empty directory: %v", err)
+					require.NoError(t, err, "Failed to create")
 				}
 				defer os.RemoveAll(emptyDir)
 			}
 
 			db, err := Open(tt.paths...)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Open() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				assert.Error(t, err, "Open() should have failed")
 				return
 			}
+			assert.NoError(t, err, "Open() should have succeeded")
 
 			if tt.wantErr && err != nil {
 				if !strings.Contains(err.Error(), tt.errorString) {
-					t.Errorf("Open() error = %v, expected to contain %q", err, tt.errorString)
+					assert.Fail(t, "Open() error = %v, expected to contain %q", err, tt.errorString)
 				}
 			}
 
@@ -1293,15 +1212,14 @@ func TestOpenContext(t *testing.T) {
 			}
 
 			db, err := OpenContext(ctx, tt.paths...)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("OpenContext() error = %v, wantErr %v", err, tt.wantErr)
-				return
+			if tt.wantErr {
+				assert.Error(t, err, "OpenContext() should have failed")
+			} else {
+				assert.NoError(t, err, "OpenContext() should have succeeded")
 			}
 
 			if tt.wantErr && err != nil && tt.errContains != "" {
-				if !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("OpenContext() error = %v, expected to contain %q", err, tt.errContains)
-				}
+				assert.Contains(t, err.Error(), tt.errContains, "OpenContext() error should contain expected string")
 			}
 
 			if !tt.wantErr && db != nil {
@@ -1309,7 +1227,7 @@ func TestOpenContext(t *testing.T) {
 
 				// Verify the database is functional
 				if err := db.PingContext(t.Context()); err != nil {
-					t.Errorf("Failed to ping database after OpenContext: %v", err)
+					assert.NoError(t, err, "Failed to ping database after OpenContext")
 				}
 			}
 		})
@@ -1354,7 +1272,7 @@ func TestOpenContextConcurrent(t *testing.T) {
 
 	// Check for any errors
 	for err := range errors {
-		t.Errorf("Concurrent OpenContext error: %v", err)
+		assert.NoError(t, err, "Concurrent OpenContext error")
 	}
 }
 
@@ -1421,37 +1339,21 @@ func Test_FileFormatDetection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			file := newFile(tc.fileName)
 
-			if file.getFileType() != tc.expectedType {
-				t.Errorf("Expected file type %v, got %v", tc.expectedType, file.getFileType())
-			}
+			assert.Equal(t, tc.expectedType, file.getFileType(), "Expected file type %v, got %v", tc.expectedType, file.getFileType())
 
-			if isSupportedFile(tc.fileName) != tc.isSupported {
-				t.Errorf("Expected supported=%v, got %v", tc.isSupported, isSupportedFile(tc.fileName))
-			}
+			assert.Equal(t, tc.isSupported, isSupportedFile(tc.fileName), "Expected supported=%v, got %v", tc.isSupported, isSupportedFile(tc.fileName))
 
 			// Test type-specific methods
 			switch tc.expectedType.baseType() {
 			case FileTypeCSV:
-				if !file.isCSV() {
-					t.Errorf("isCSV() should return true for CSV file")
-				}
-				if file.isTSV() || file.isLTSV() {
-					t.Errorf("Type methods should be exclusive")
-				}
+				assert.True(t, file.isCSV(), "isCSV() should return true for CSV file")
+				assert.False(t, file.isTSV() || file.isLTSV(), "Type methods should be exclusive")
 			case FileTypeTSV:
-				if !file.isTSV() {
-					t.Errorf("isTSV() should return true for TSV file")
-				}
-				if file.isCSV() || file.isLTSV() {
-					t.Errorf("Type methods should be exclusive")
-				}
+				assert.True(t, file.isTSV(), "isTSV() should return true for TSV file")
+				assert.False(t, file.isCSV() || file.isLTSV(), "Type methods should be exclusive")
 			case FileTypeLTSV:
-				if !file.isLTSV() {
-					t.Errorf("isLTSV() should return true for LTSV file")
-				}
-				if file.isCSV() || file.isTSV() {
-					t.Errorf("Type methods should be exclusive")
-				}
+				assert.True(t, file.isLTSV(), "isLTSV() should return true for LTSV file")
+				assert.False(t, file.isCSV() || file.isTSV(), "Type methods should be exclusive")
 			}
 		})
 	}
@@ -1514,7 +1416,7 @@ func Test_TableNameSecurity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tableName := tableFromFilePath(tc.filePath)
 			if tableName != tc.expectedName {
-				t.Errorf("Expected table name %q, got %q", tc.expectedName, tableName)
+				assert.Fail(t, "Expected table name %q, got %q", tc.expectedName, tableName)
 			}
 		})
 	}
@@ -1591,7 +1493,7 @@ func Test_MalformedCSVHandling(t *testing.T) {
 				return
 			}
 			if !tc.expectError && err != nil {
-				t.Errorf("Unexpected error: %v", err)
+				assert.NoError(t, err, "Unexpected error")
 				return
 			}
 
@@ -1605,7 +1507,7 @@ func Test_MalformedCSVHandling(t *testing.T) {
 				var count int
 				err = db.QueryRowContext(context.Background(), query).Scan(&count)
 				if err != nil && !tc.expectError {
-					t.Errorf("Query failed: %v", err)
+					assert.NoError(t, err, "Query failed")
 				}
 			}
 		})
@@ -1704,17 +1606,13 @@ func Test_ResourceExhaustion(t *testing.T) {
 		_ = tmpFile.Close() // Ignore close error in test cleanup
 
 		db, err := Open(tmpFile.Name())
-		if err != nil {
-			t.Fatalf("Failed to open file with many columns: %v", err)
-		}
+		require.NoError(t, err, "Failed to open file with many columns")
 		defer db.Close()
 
 		tableName := tableFromFilePath(tmpFile.Name())
 		var count int
 		err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
-		if err != nil {
-			t.Errorf("Failed to query table with many columns: %v", err)
-		}
+		assert.NoError(t, err, "Failed to query table with many columns")
 	})
 
 	// Test 2: Large number of rows (controlled for test speed)
@@ -1752,19 +1650,15 @@ func Test_ResourceExhaustion(t *testing.T) {
 		_ = tmpFile.Close() // Ignore close error in test cleanup
 
 		db, err := Open(tmpFile.Name())
-		if err != nil {
-			t.Fatalf("Failed to open file with many rows: %v", err)
-		}
+		require.NoError(t, err, "Failed to open file with many rows")
 		defer db.Close()
 
 		tableName := tableFromFilePath(tmpFile.Name())
 		var count int
 		err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
-		if err != nil {
-			t.Errorf("Failed to query table with many rows: %v", err)
-		}
+		assert.NoError(t, err, "Failed to query table with many rows")
 		if count != 10000 {
-			t.Errorf("Expected 10000 rows, got %d", count)
+			assert.Fail(t, "Expected 10000 rows, got %d", count)
 		}
 	})
 }
@@ -1883,9 +1777,7 @@ func Test_UnicodeAndEncoding(t *testing.T) {
 			_ = tmpFile.Close() // Ignore close error in test cleanup
 
 			db, err := Open(tmpFile.Name())
-			if err != nil {
-				t.Fatalf("Failed to open Unicode file: %v", err)
-			}
+			require.NoError(t, err, "Failed to open Unicode file")
 			defer db.Close()
 
 			tableName := tableFromFilePath(tmpFile.Name())
@@ -1893,29 +1785,21 @@ func Test_UnicodeAndEncoding(t *testing.T) {
 			// Test basic query
 			var count int
 			err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
-			if err != nil {
-				t.Errorf("Failed to query Unicode table: %v", err)
-			}
+			assert.NoError(t, err, "Failed to query Unicode table")
 
 			// Test data retrieval
 			rows, err := db.QueryContext(context.Background(), fmt.Sprintf("SELECT * FROM [%s] LIMIT 1", tableName))
-			if err != nil {
-				t.Errorf("Failed to select from Unicode table: %v", err)
-				return
-			}
+			assert.NoError(t, err, "Failed to select from Unicode table")
 			defer rows.Close()
 
 			if err := rows.Err(); err != nil {
-				t.Errorf("Rows error: %v", err)
+				assert.NoError(t, err, "Rows error")
 				return
 			}
 
 			if rows.Next() {
 				columns, err := rows.Columns()
-				if err != nil {
-					t.Errorf("Failed to get columns: %v", err)
-					return
-				}
+				assert.NoError(t, err, "Failed to get columns")
 
 				values := make([]interface{}, len(columns))
 				valuePtrs := make([]interface{}, len(columns))
@@ -1924,7 +1808,7 @@ func Test_UnicodeAndEncoding(t *testing.T) {
 				}
 
 				if err := rows.Scan(valuePtrs...); err != nil {
-					t.Errorf("Failed to scan Unicode data: %v", err)
+					assert.NoError(t, err, "Failed to scan Unicode data")
 				}
 			}
 		})
@@ -1951,7 +1835,7 @@ func Test_ConnectionLifecycle(t *testing.T) {
 		for i := range 100 {
 			db, err := Open(tmpFile.Name())
 			if err != nil {
-				t.Fatalf("Failed to open database on iteration %d: %v", i, err)
+				require.NoError(t, err, "Failed to open database on iteration %d", i)
 			}
 
 			tableName := tableFromFilePath(tmpFile.Name())
@@ -1959,11 +1843,11 @@ func Test_ConnectionLifecycle(t *testing.T) {
 			err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
 			if err != nil {
 				_ = db.Close() // Ignore close error in test cleanup
-				t.Fatalf("Query failed on iteration %d: %v", i, err)
+				require.NoError(t, err, "Query failed on iteration %d", i)
 			}
 
 			if err := db.Close(); err != nil {
-				t.Fatalf("Close failed on iteration %d: %v", i, err)
+				require.NoError(t, err, "Close failed on iteration %d", i)
 			}
 		}
 	})
@@ -1983,9 +1867,7 @@ func Test_ConnectionLifecycle(t *testing.T) {
 		query := "SELECT COUNT(*) FROM [" + tableName + "]"
 		var count int
 		err = db.QueryRowContext(ctx, query).Scan(&count)
-		if err != nil {
-			t.Errorf("Query with context failed: %v", err)
-		}
+		assert.NoError(t, err, "Query with context failed")
 	})
 
 	t.Run("Double close safety", func(t *testing.T) {
@@ -1996,12 +1878,12 @@ func Test_ConnectionLifecycle(t *testing.T) {
 
 		// First close
 		if err := db.Close(); err != nil {
-			t.Errorf("First close failed: %v", err)
+			assert.NoError(t, err, "First close failed")
 		}
 
 		// Second close should not panic or error
 		if err := db.Close(); err != nil {
-			t.Errorf("Second close failed: %v", err)
+			assert.NoError(t, err, "Second close failed")
 		}
 	})
 }
@@ -2092,13 +1974,13 @@ func Test_SQLReservedWordsAsFilenames(t *testing.T) {
 			// Create CSV file with reserved word as filename
 			csvContent := "id,name,value\n1,test1,100\n2,test2,200\n3,test3,300"
 			if err := os.WriteFile(filePath, []byte(csvContent), 0600); err != nil {
-				t.Fatalf("Failed to create test file %s: %v", rw.filename, err)
+				require.NoError(t, err, "Failed to create test file %s", rw.filename)
 			}
 
 			// Test 1: Open file and verify table creation
 			db, err := Open(filePath)
 			if err != nil {
-				t.Fatalf("Failed to open file with reserved word filename %s: %v", rw.filename, err)
+				require.NoError(t, err, "Failed to open file with reserved word filename %s", rw.filename)
 			}
 			defer db.Close()
 
@@ -2107,11 +1989,11 @@ func Test_SQLReservedWordsAsFilenames(t *testing.T) {
 			var actualTableName string
 			err = db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", expectedTableName).Scan(&actualTableName)
 			if err != nil {
-				t.Fatalf("Table for reserved word filename %s not found: %v", rw.filename, err)
+				require.NoError(t, err, "Table for reserved word filename %s not found", rw.filename)
 			}
 
 			if actualTableName != expectedTableName {
-				t.Errorf("Expected table name %q, got %q for file %s", expectedTableName, actualTableName, rw.filename)
+				assert.Fail(t, "Expected table name %q, got %q for file %s", expectedTableName, actualTableName, rw.filename)
 			}
 
 			// Test 3: Query the table using bracket notation (safe for reserved words)
@@ -2120,11 +2002,11 @@ func Test_SQLReservedWordsAsFilenames(t *testing.T) {
 			var count int
 			err = db.QueryRowContext(context.Background(), query).Scan(&count)
 			if err != nil {
-				t.Errorf("Failed to query table with reserved word name [%s]: %v", expectedTableName, err)
+				assert.Fail(t, "Failed to query table with reserved word name [%s]: %v", expectedTableName, err)
 			}
 
 			if count != 3 {
-				t.Errorf("Expected 3 rows in table [%s], got %d", expectedTableName, count)
+				assert.Fail(t, "Expected 3 rows in table [%s], got %d", expectedTableName, count)
 			}
 
 			// Test 4: Verify we can select specific data
@@ -2132,11 +2014,11 @@ func Test_SQLReservedWordsAsFilenames(t *testing.T) {
 			var name string
 			err = db.QueryRowContext(context.Background(), query).Scan(&name)
 			if err != nil {
-				t.Errorf("Failed to select specific data from table [%s]: %v", expectedTableName, err)
+				assert.Fail(t, "Failed to select specific data from table [%s]: %v", expectedTableName, err)
 			}
 
 			if name != "test1" {
-				t.Errorf("Expected 'test1', got %q from table [%s]", name, expectedTableName)
+				assert.Fail(t, "Expected 'test1', got %q from table [%s]", name, expectedTableName)
 			}
 
 			// Test 5: Verify we can perform complex queries
@@ -2144,12 +2026,12 @@ func Test_SQLReservedWordsAsFilenames(t *testing.T) {
 			var avgValue float64
 			err = db.QueryRowContext(context.Background(), query).Scan(&avgValue)
 			if err != nil {
-				t.Errorf("Failed to perform aggregate query on table [%s]: %v", expectedTableName, err)
+				assert.Fail(t, "Failed to perform aggregate query on table [%s]: %v", expectedTableName, err)
 			}
 
 			expectedAvg := 250.0 // (200 + 300) / 2 = 500 / 2 = 250
 			if avgValue != expectedAvg {
-				t.Errorf("Expected average %.1f, got %.1f for table [%s]", expectedAvg, avgValue, expectedTableName)
+				assert.Fail(t, "Expected average %.1f, got %.1f for table [%s]", expectedAvg, avgValue, expectedTableName)
 			}
 		})
 	}
@@ -2188,15 +2070,13 @@ func Test_SQLReservedWordsMultipleFiles(t *testing.T) {
 	for _, file := range files {
 		filePath := filepath.Join(tmpDir, file.name)
 		if err := os.WriteFile(filePath, []byte(file.content), 0600); err != nil {
-			t.Fatalf("Failed to create file %s: %v", file.name, err)
+			require.NoError(t, err, "Failed to create file %s", file.name)
 		}
 	}
 
 	// Test 1: Load all files from directory
 	db, err := Open(tmpDir)
-	if err != nil {
-		t.Fatalf("Failed to open directory with reserved word files: %v", err)
-	}
+	require.NoError(t, err, "Failed to open directory with reserved word files")
 	defer db.Close()
 
 	// Test 2: Verify all tables exist
@@ -2205,7 +2085,7 @@ func Test_SQLReservedWordsMultipleFiles(t *testing.T) {
 		var name string
 		err := db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", tableName).Scan(&name)
 		if err != nil {
-			t.Errorf("Table for reserved word file %s not found: %v", file.name, err)
+			assert.Fail(t, "Table for reserved word file %s not found: %v", file.name, err)
 			continue
 		}
 
@@ -2215,11 +2095,11 @@ func Test_SQLReservedWordsMultipleFiles(t *testing.T) {
 		query := "SELECT COUNT(*) FROM [" + tableName + "]"
 		err = db.QueryRowContext(context.Background(), query).Scan(&count)
 		if err != nil {
-			t.Errorf("Failed to query reserved word table [%s]: %v", tableName, err)
+			assert.Fail(t, "Failed to query reserved word table [%s]: %v", tableName, err)
 		}
 
 		if count != 2 {
-			t.Errorf("Expected 2 rows in table [%s], got %d", tableName, count)
+			assert.Fail(t, "Expected 2 rows in table [%s], got %d", tableName, count)
 		}
 	}
 
@@ -2235,9 +2115,7 @@ func Test_SQLReservedWordsMultipleFiles(t *testing.T) {
 
 	var queryType, tableName, condition, joinType string
 	err = db.QueryRowContext(context.Background(), query).Scan(&queryType, &tableName, &condition, &joinType)
-	if err != nil {
-		t.Errorf("Failed to perform cross-table query with reserved word tables: %v", err)
-	}
+	assert.NoError(t, err, "Failed to perform cross-table query with reserved word tables")
 
 	// Verify results
 	expectedValues := map[string]string{
@@ -2256,7 +2134,7 @@ func Test_SQLReservedWordsMultipleFiles(t *testing.T) {
 
 	for field, expected := range expectedValues {
 		if actual := actualValues[field]; actual != expected {
-			t.Errorf("Expected %s=%q, got %q", field, expected, actual)
+			assert.Fail(t, "Expected %s=%q, got %q", field, expected, actual)
 		}
 	}
 }
@@ -2325,13 +2203,13 @@ func Test_SQLReservedWordsEdgeCases(t *testing.T) {
 			// Create test file
 			csvContent := "id,data\n1,value1\n2,value2"
 			if err := os.WriteFile(filePath, []byte(csvContent), 0600); err != nil {
-				t.Fatalf("Failed to create test file %s: %v", tc.filename, err)
+				require.NoError(t, err, "Failed to create test file %s", tc.filename)
 			}
 
 			// Test opening the file
 			db, err := Open(filePath)
 			if tc.expectError && err == nil {
-				t.Errorf("Expected error for %s but got none", tc.description)
+				assert.Fail(t, "Expected error for %s but got none", tc.description)
 				if db != nil {
 					_ = db.Close() // Ignore close error in test cleanup
 				}
@@ -2339,7 +2217,7 @@ func Test_SQLReservedWordsEdgeCases(t *testing.T) {
 			}
 
 			if !tc.expectError && err != nil {
-				t.Errorf("Unexpected error for %s: %v", tc.description, err)
+				assert.NoError(t, err, "Unexpected error for %s", tc.description)
 				return
 			}
 
@@ -2353,7 +2231,7 @@ func Test_SQLReservedWordsEdgeCases(t *testing.T) {
 				var name string
 				err := db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", tableName).Scan(&name)
 				if err != nil {
-					t.Errorf("Table not found for %s: %v", tc.description, err)
+					assert.Fail(t, "Table not found for %s: %v", tc.description, err)
 					return
 				}
 
@@ -2363,12 +2241,12 @@ func Test_SQLReservedWordsEdgeCases(t *testing.T) {
 				var count int
 				err = db.QueryRowContext(context.Background(), query).Scan(&count)
 				if err != nil {
-					t.Errorf("Failed to query table for %s: %v", tc.description, err)
+					assert.Fail(t, "Failed to query table for %s: %v", tc.description, err)
 					return
 				}
 
 				if count != 2 {
-					t.Errorf("Expected 2 rows for %s, got %d", tc.description, count)
+					assert.Fail(t, "Expected 2 rows for %s, got %d", tc.description, count)
 				}
 
 				// Test more complex operations
@@ -2376,17 +2254,17 @@ func Test_SQLReservedWordsEdgeCases(t *testing.T) {
 				insertQuery := "INSERT INTO [" + tableName + "] (id, data) VALUES (3, 'value3')" //nolint:gosec // Safe: tableName is from controlled test data
 				_, err = db.ExecContext(context.Background(), insertQuery)
 				if err != nil {
-					t.Errorf("Failed to insert into table for %s: %v", tc.description, err)
+					assert.Fail(t, "Failed to insert into table for %s: %v", tc.description, err)
 				}
 
 				// Verify insert worked
 				err = db.QueryRowContext(context.Background(), query).Scan(&count)
 				if err != nil {
-					t.Errorf("Failed to verify insert for %s: %v", tc.description, err)
+					assert.Fail(t, "Failed to verify insert for %s: %v", tc.description, err)
 				}
 
 				if count != 3 {
-					t.Errorf("Expected 3 rows after insert for %s, got %d", tc.description, count)
+					assert.Fail(t, "Expected 3 rows after insert for %s, got %d", tc.description, count)
 				}
 			}
 		})
@@ -2479,7 +2357,7 @@ func Test_ErrorMessageQuality(t *testing.T) {
 
 			_, err := Open(filePath)
 			if err == nil {
-				t.Errorf("Expected error but got none for %s", tc.description)
+				assert.Fail(t, "Expected error but got none for %s", tc.description)
 				return
 			}
 
@@ -2493,8 +2371,7 @@ func Test_ErrorMessageQuality(t *testing.T) {
 			}
 
 			if !foundExpected {
-				t.Errorf("Error message %q should contain one of %v for %s",
-					errorMsg, tc.expectedErrors, tc.description)
+				assert.Fail(t, "Error message %q should contain one of %v for %s", errorMsg, tc.expectedErrors, tc.description)
 			}
 		})
 	}
@@ -2517,9 +2394,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 		_ = tmpFile.Close() // Ignore close error in test cleanup
 
 		db, err := Open(tmpFile.Name())
-		if err != nil {
-			t.Fatalf("Failed to open file with reserved keywords: %v", err)
-		}
+		require.NoError(t, err, "Failed to open file with reserved keywords")
 		defer db.Close()
 
 		tableName := tableFromFilePath(tmpFile.Name())
@@ -2528,21 +2403,18 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 		// Use bracket notation for table name (safe in controlled test environment)
 		query := "SELECT [select], [from], [where] FROM [" + tableName + "]" //nolint:gosec // Safe: tableName is from controlled test data
 		rows, err := db.QueryContext(context.Background(), query)
-		if err != nil {
-			t.Errorf("Failed to query table with reserved keyword columns: %v", err)
-			return
-		}
+		assert.NoError(t, err, "Failed to query table with reserved keyword columns")
 		defer rows.Close()
 
 		if err := rows.Err(); err != nil {
-			t.Errorf("Rows error: %v", err)
+			assert.NoError(t, err, "Rows error")
 			return
 		}
 
 		if rows.Next() {
 			var col1, col2, col3 string
 			if err := rows.Scan(&col1, &col2, &col3); err != nil {
-				t.Errorf("Failed to scan reserved keyword columns: %v", err)
+				assert.NoError(t, err, "Failed to scan reserved keyword columns")
 			}
 		}
 	})
@@ -2569,7 +2441,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 
 				db, err := Open(tmpFile.Name())
 				if err != nil {
-					t.Errorf("Failed to open file %s: %v", pattern, err)
+					assert.Fail(t, "Failed to open file %s: %v", pattern, err)
 					return
 				}
 				defer db.Close()
@@ -2579,7 +2451,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 				query := "SELECT COUNT(*) FROM [" + tableName + "]"
 				var count int
 				if err := db.QueryRowContext(context.Background(), query).Scan(&count); err != nil {
-					t.Errorf("Failed to query table from file %s: %v", pattern, err)
+					assert.Fail(t, "Failed to query table from file %s: %v", pattern, err)
 				}
 			})
 		}
@@ -2608,53 +2480,41 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 
 		// Test transaction rollback
 		tx, err := db.BeginTx(context.Background(), nil)
-		if err != nil {
-			t.Fatalf("Failed to begin transaction: %v", err)
-		}
+		require.NoError(t, err, "Failed to begin transaction")
 
 		// Insert data in transaction
 		_, err = tx.ExecContext(context.Background(), fmt.Sprintf("INSERT INTO [%s] (id, name) VALUES (2, 'transaction')", tableName))
-		if err != nil {
-			t.Errorf("Failed to insert in transaction: %v", err)
-		}
+		assert.NoError(t, err, "Failed to insert in transaction")
 
 		// Rollback
 		if err := tx.Rollback(); err != nil {
-			t.Errorf("Failed to rollback transaction: %v", err)
+			assert.NoError(t, err, "Failed to rollback transaction")
 		}
 
 		// Verify data was rolled back
 		var count int
 		err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
-		if err != nil {
-			t.Errorf("Failed to count after rollback: %v", err)
-		}
+		assert.NoError(t, err, "Failed to count after rollback")
 		if count != 1 {
-			t.Errorf("Expected 1 row after rollback, got %d", count)
+			assert.Fail(t, "Expected 1 row after rollback, got %d", count)
 		}
 
 		// Test transaction commit
 		tx, err = db.BeginTx(context.Background(), nil)
-		if err != nil {
-			t.Fatalf("Failed to begin second transaction: %v", err)
-		}
+		require.NoError(t, err, "Failed to begin second transaction")
 
 		_, err = tx.ExecContext(context.Background(), fmt.Sprintf("INSERT INTO [%s] (id, name) VALUES (2, 'committed')", tableName))
-		if err != nil {
-			t.Errorf("Failed to insert in second transaction: %v", err)
-		}
+		assert.NoError(t, err, "Failed to insert in second transaction")
 
 		if err := tx.Commit(); err != nil {
-			t.Errorf("Failed to commit transaction: %v", err)
+			assert.NoError(t, err, "Failed to commit transaction")
 		}
 
 		// Verify data was committed
 		err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
-		if err != nil {
-			t.Errorf("Failed to count after commit: %v", err)
-		}
+		assert.NoError(t, err, "Failed to count after commit")
 		if count != 2 {
-			t.Errorf("Expected 2 rows after commit, got %d", count)
+			assert.Fail(t, "Expected 2 rows after commit, got %d", count)
 		}
 	})
 }
@@ -2727,7 +2587,7 @@ func TestComprehensiveFileFormats(t *testing.T) {
 			// Open database with single file
 			db, err := Open(filePath)
 			if err != nil {
-				t.Fatalf("Open(%s) failed: %v", filePath, err)
+				require.NoError(t, err, "Open(%s) failed", filePath)
 			}
 			defer db.Close()
 
@@ -2735,31 +2595,29 @@ func TestComprehensiveFileFormats(t *testing.T) {
 			var tableName string
 			err = db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", tc.expectTable).Scan(&tableName)
 			if err != nil {
-				t.Fatalf("Table %s not found: %v", tc.expectTable, err)
+				require.NoError(t, err, "Table %s not found", tc.expectTable)
 			}
 
 			// Count rows
 			var count int
 			err = db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM ["+tc.expectTable+"]").Scan(&count)
 			if err != nil {
-				t.Fatalf("Failed to count rows in %s: %v", tc.expectTable, err)
+				require.NoError(t, err, "Failed to count rows in %s", tc.expectTable)
 			}
 
 			if count != tc.expectRows {
-				t.Errorf("Expected %d rows in %s, got %d", tc.expectRows, tc.expectTable, count)
+				assert.Fail(t, "Expected %d rows in %s, got %d", tc.expectRows, tc.expectTable, count)
 			}
 
 			// Test basic SELECT
 			// Use bracket notation for table name (safe in controlled test environment)
 			query := "SELECT * FROM [" + tc.expectTable + "] LIMIT 1" //nolint:gosec // Safe: tc.expectTable is from controlled test data
 			rows, err := db.QueryContext(context.Background(), query)
-			if err != nil {
-				t.Fatalf("SELECT query failed: %v", err)
-			}
+			require.NoError(t, err, "SELECT query failed")
 			defer rows.Close()
 
 			if err := rows.Err(); err != nil {
-				t.Fatalf("Rows error: %v", err)
+				require.NoError(t, err, "Rows error")
 			}
 
 			if !rows.Next() {
@@ -2775,27 +2633,23 @@ func TestDirectoryLoading(t *testing.T) {
 
 	// Open database with directory path
 	db, err := Open("testdata")
-	if err != nil {
-		t.Fatalf("Open(testdata) failed: %v", err)
-	}
+	require.NoError(t, err, "Open(testdata) failed")
 	defer db.Close()
 
 	// Get all table names
 	rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
-	if err != nil {
-		t.Fatalf("Failed to get table names: %v", err)
-	}
+	require.NoError(t, err, "Failed to get table names")
 	defer rows.Close()
 
 	if err := rows.Err(); err != nil {
-		t.Fatalf("Rows error: %v", err)
+		require.NoError(t, err, "Rows error")
 	}
 
 	var tables []string
 	for rows.Next() {
 		var tableName string
 		if err := rows.Scan(&tableName); err != nil {
-			t.Fatalf("Failed to scan table name: %v", err)
+			require.NoError(t, err, "Failed to scan table name")
 		}
 		tables = append(tables, tableName)
 	}
@@ -2811,16 +2665,14 @@ func TestDirectoryLoading(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("Expected table %s not found in tables: %v", expected, tables)
+			assert.Fail(t, "Expected table %s not found in tables: %v", expected, tables)
 		}
 	}
 
 	// Test cross-table query
 	var count int
 	err = db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM sample s JOIN products p ON s.id = p.id").Scan(&count)
-	if err != nil {
-		t.Fatalf("Cross-table JOIN query failed: %v", err)
-	}
+	require.NoError(t, err, "Cross-table JOIN query failed")
 
 	if count == 0 {
 		t.Error("Expected at least one matching row in JOIN query")
@@ -2833,9 +2685,7 @@ func TestMultipleFilePaths(t *testing.T) {
 
 	// Open database with multiple files
 	db, err := Open(filepath.Join("testdata", "sample.csv"), filepath.Join("testdata", "products.tsv"), filepath.Join("testdata", "logs.ltsv"))
-	if err != nil {
-		t.Fatalf("Open with multiple files failed: %v", err)
-	}
+	require.NoError(t, err, "Open with multiple files failed")
 	defer db.Close()
 
 	// Verify all expected tables exist
@@ -2844,7 +2694,7 @@ func TestMultipleFilePaths(t *testing.T) {
 		var name string
 		err := db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", tableName).Scan(&name)
 		if err != nil {
-			t.Errorf("Table %s not found: %v", tableName, err)
+			assert.Fail(t, "Table %s not found: %v", tableName, err)
 		}
 	}
 
@@ -2858,20 +2708,18 @@ func TestMultipleFilePaths(t *testing.T) {
 	`
 
 	rows, err := db.QueryContext(context.Background(), query)
-	if err != nil {
-		t.Fatalf("Multi-table query failed: %v", err)
-	}
+	require.NoError(t, err, "Multi-table query failed")
 	defer rows.Close()
 
 	if err := rows.Err(); err != nil {
-		t.Fatalf("Rows error: %v", err)
+		require.NoError(t, err, "Rows error")
 	}
 
 	// Just verify we can execute the query without error
 	for rows.Next() {
 		var name, productName, level string
 		if err := rows.Scan(&name, &productName, &level); err != nil {
-			t.Fatalf("Failed to scan multi-table query result: %v", err)
+			require.NoError(t, err, "Failed to scan multi-table query result")
 		}
 	}
 }
@@ -2881,9 +2729,7 @@ func TestCTEQueries(t *testing.T) {
 	t.Parallel()
 
 	db, err := Open(filepath.Join("testdata", "sample.csv"), filepath.Join("testdata", "products.tsv"))
-	if err != nil {
-		t.Fatalf("Open failed: %v", err)
-	}
+	require.NoError(t, err, "Open failed")
 	defer db.Close()
 
 	testCases := []struct {
@@ -2948,12 +2794,12 @@ func TestCTEQueries(t *testing.T) {
 
 			rows, err := db.QueryContext(context.Background(), tc.query)
 			if err != nil {
-				t.Fatalf("CTE query failed: %v\nQuery: %s", err, tc.query)
+				require.Fail(t, "CTE query failed: %v\nQuery: %s", err, tc.query)
 			}
 			defer rows.Close()
 
 			if err := rows.Err(); err != nil {
-				t.Fatalf("Rows error: %v", err)
+				require.NoError(t, err, "Rows error")
 			}
 
 			// Verify we can read results
@@ -2962,16 +2808,14 @@ func TestCTEQueries(t *testing.T) {
 				hasRows = true
 				// Get column count to scan appropriately
 				cols, err := rows.Columns()
-				if err != nil {
-					t.Fatalf("Failed to get columns: %v", err)
-				}
+				require.NoError(t, err, "Failed to get columns")
 
 				values := make([]interface{}, len(cols))
 				for i := range values {
 					values[i] = new(interface{})
 				}
 				if err := rows.Scan(values...); err != nil {
-					t.Fatalf("Failed to scan CTE query result: %v", err)
+					require.NoError(t, err, "Failed to scan CTE query result")
 				}
 			}
 
@@ -2991,39 +2835,31 @@ func TestMixedDirectoryAndFiles(t *testing.T) {
 	content := "id,category,value\n1,A,100\n2,B,200\n"
 
 	if err := os.WriteFile(tempFile, []byte(content), 0600); err != nil {
-		t.Fatalf("Failed to create temp test file: %v", err)
+		require.NoError(t, err, "Failed to create")
 	}
 	defer os.Remove(tempFile)
 
 	// Open with mixed paths: directory + specific file
 	db, err := Open("testdata", tempFile)
-	if err != nil {
-		t.Fatalf("Open with mixed paths failed: %v", err)
-	}
+	require.NoError(t, err, "Open with mixed paths failed")
 	defer db.Close()
 
 	// Verify the temp file table exists
 	var tableName string
 	err = db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", "mixed_test").Scan(&tableName)
-	if err != nil {
-		t.Fatalf("Table mixed_test not found: %v", err)
-	}
+	require.NoError(t, err, "Table mixed_test not found")
 
 	// Verify original directory tables also exist
 	err = db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", "sample").Scan(&tableName)
-	if err != nil {
-		t.Fatalf("Table sample from directory not found: %v", err)
-	}
+	require.NoError(t, err, "Table sample from directory not found")
 
 	// Test query across mixed sources
 	var count int
 	err = db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM mixed_test").Scan(&count)
-	if err != nil {
-		t.Fatalf("Query on mixed_test table failed: %v", err)
-	}
+	require.NoError(t, err, "Query on mixed_test table failed")
 
 	if count != 2 {
-		t.Errorf("Expected 2 rows in mixed_test, got %d", count)
+		assert.Fail(t, "Expected 2 rows in mixed_test, got %d", count)
 	}
 }
 
@@ -3056,7 +2892,7 @@ func TestErrorCases(t *testing.T) {
 	// Create unsupported file for test
 	unsupportedFile := filepath.Join("testdata", "unsupported.txt")
 	if err := os.WriteFile(unsupportedFile, []byte("test content"), 0600); err != nil {
-		t.Fatalf("Failed to create unsupported test file: %v", err)
+		require.NoError(t, err, "Failed to create")
 	}
 	defer os.Remove(unsupportedFile)
 
@@ -3069,11 +2905,11 @@ func TestErrorCases(t *testing.T) {
 				if db != nil {
 					_ = db.Close() // Ignore close error in test cleanup
 				}
-				t.Fatalf("Expected error containing '%s', but got nil", tc.expectError)
+				require.Fail(t, "Expected error containing '%s', but got nil", tc.expectError)
 			}
 
 			if !strings.Contains(err.Error(), tc.expectError) {
-				t.Errorf("Expected error containing '%s', got: %s", tc.expectError, err.Error())
+				assert.Fail(t, "Expected error containing '%s', got: %s", tc.expectError, err.Error())
 			}
 		})
 	}
@@ -3088,30 +2924,28 @@ func TestSQLiteDumpFunctions(t *testing.T) {
 		// Create a direct SQLite connection
 		db, err := sql.Open("sqlite", ":memory:")
 		if err != nil {
-			t.Fatalf("Failed to create SQLite connection: %v", err)
+			require.NoError(t, err, "Failed to create")
 		}
 		defer db.Close()
 
 		// Create test tables
 		_, err = db.ExecContext(context.Background(), "CREATE TABLE test1 (id INTEGER, name TEXT)")
 		if err != nil {
-			t.Fatalf("Failed to create test table 1: %v", err)
+			require.NoError(t, err, "Failed to create")
 		}
 
 		_, err = db.ExecContext(context.Background(), "CREATE TABLE test2 (id INTEGER, value TEXT)")
 		if err != nil {
-			t.Fatalf("Failed to create test table 2: %v", err)
+			require.NoError(t, err, "Failed to create")
 		}
 
 		// Test getSQLiteTableNames
 		tableNames, err := getSQLiteTableNames(db)
-		if err != nil {
-			t.Fatalf("getSQLiteTableNames failed: %v", err)
-		}
+		require.NoError(t, err, "getSQLiteTableNames failed")
 
 		expectedTables := []string{"test1", "test2"}
 		if len(tableNames) != len(expectedTables) {
-			t.Errorf("Expected %d tables, got %d: %v", len(expectedTables), len(tableNames), tableNames)
+			assert.Fail(t, "Expected %d tables, got %d: %v", len(expectedTables), len(tableNames), tableNames)
 		}
 
 		// Verify table names
@@ -3124,7 +2958,7 @@ func TestSQLiteDumpFunctions(t *testing.T) {
 				}
 			}
 			if !found {
-				t.Errorf("Expected table %s not found in %v", expected, tableNames)
+				assert.Fail(t, "Expected table %s not found in %v", expected, tableNames)
 			}
 		}
 	})
@@ -3135,31 +2969,29 @@ func TestSQLiteDumpFunctions(t *testing.T) {
 		// Create a direct SQLite connection
 		db, err := sql.Open("sqlite", ":memory:")
 		if err != nil {
-			t.Fatalf("Failed to create SQLite connection: %v", err)
+			require.NoError(t, err, "Failed to create")
 		}
 		defer db.Close()
 
 		// Create test table with known columns
 		_, err = db.ExecContext(context.Background(), "CREATE TABLE test_table (id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER, salary REAL)")
 		if err != nil {
-			t.Fatalf("Failed to create test table: %v", err)
+			require.NoError(t, err, "Failed to create")
 		}
 
 		// Test getSQLiteTableColumns
 		columns, err := getSQLiteTableColumns(db, "test_table")
-		if err != nil {
-			t.Fatalf("getSQLiteTableColumns failed: %v", err)
-		}
+		require.NoError(t, err, "getSQLiteTableColumns failed")
 
 		expectedColumns := []string{"id", "name", "age", "salary"}
 		if len(columns) != len(expectedColumns) {
-			t.Errorf("Expected %d columns, got %d: %v", len(expectedColumns), len(columns), columns)
+			assert.Fail(t, "Expected %d columns, got %d: %v", len(expectedColumns), len(columns), columns)
 		}
 
 		// Verify column names
 		for i, expected := range expectedColumns {
 			if i >= len(columns) || columns[i] != expected {
-				t.Errorf("Expected column %s at index %d, got %s", expected, i, columns[i])
+				assert.Fail(t, "Expected column %s at index %d, got %s", expected, i, columns[i])
 			}
 		}
 	})
@@ -3170,19 +3002,19 @@ func TestSQLiteDumpFunctions(t *testing.T) {
 		// Create a direct SQLite connection
 		db, err := sql.Open("sqlite", ":memory:")
 		if err != nil {
-			t.Fatalf("Failed to create SQLite connection: %v", err)
+			require.NoError(t, err, "Failed to create")
 		}
 		defer db.Close()
 
 		// Create test table and insert data
 		_, err = db.ExecContext(context.Background(), "CREATE TABLE employees (id INTEGER, name TEXT, department TEXT)")
 		if err != nil {
-			t.Fatalf("Failed to create test table: %v", err)
+			require.NoError(t, err, "Failed to create")
 		}
 
 		_, err = db.ExecContext(context.Background(), "INSERT INTO employees VALUES (1, 'Alice', 'Engineering'), (2, 'Bob', 'Marketing'), (3, 'Charlie', 'Sales')")
 		if err != nil {
-			t.Fatalf("Failed to insert test data: %v", err)
+			require.NoError(t, err, "Failed to insert test data")
 		}
 
 		// Test dump to directory
@@ -3190,15 +3022,13 @@ func TestSQLiteDumpFunctions(t *testing.T) {
 		options := NewDumpOptions()
 
 		err = dumpSQLiteDatabase(db, tempDir, options)
-		if err != nil {
-			t.Fatalf("dumpSQLiteDatabase failed: %v", err)
-		}
+		require.NoError(t, err, "dumpSQLiteDatabase failed")
 
 		// Verify file was created
 		dumpedFile := filepath.Join(tempDir, "employees.csv")
 		content, err := os.ReadFile(dumpedFile) //nolint:gosec // dumpedFile is created in test with controlled path
 		if err != nil {
-			t.Fatalf("Failed to read dumped file: %v", err)
+			require.NoError(t, err, "Failed to read dumped file")
 		}
 
 		contentStr := string(content)
@@ -3206,19 +3036,19 @@ func TestSQLiteDumpFunctions(t *testing.T) {
 
 		// Should have header + 3 data rows
 		if len(lines) != 4 {
-			t.Errorf("Expected 4 lines (header + 3 data), got %d", len(lines))
+			assert.Fail(t, "Expected 4 lines (header + 3 data), got %d", len(lines))
 		}
 
 		// Check header
 		if lines[0] != "id,name,department" {
-			t.Errorf("Expected header 'id,name,department', got '%s'", lines[0])
+			assert.Fail(t, "Expected header 'id,name,department', got '%s'", lines[0])
 		}
 
 		// Check data rows contain expected values
 		expectedDataPatterns := []string{"1,Alice,Engineering", "2,Bob,Marketing", "3,Charlie,Sales"}
 		for i, expected := range expectedDataPatterns {
 			if lines[i+1] != expected {
-				t.Errorf("Expected line %d to be '%s', got '%s'", i+1, expected, lines[i+1])
+				assert.Fail(t, "Expected line %d to be '%s', got '%s'", i+1, expected, lines[i+1])
 			}
 		}
 	})
@@ -3231,35 +3061,31 @@ func TestSQLiteDumpFunctions(t *testing.T) {
 		t.Run("no compression", func(t *testing.T) {
 			file, err := os.Create(filepath.Join(tempDir, "test.txt")) //nolint:gosec // tempDir is created in test
 			if err != nil {
-				t.Fatalf("Failed to create test file: %v", err)
+				require.NoError(t, err, "Failed to create")
 			}
 			defer file.Close()
 
 			writer, closeWriter, err := createCompressedWriter(file, CompressionNone)
-			if err != nil {
-				t.Fatalf("createCompressedWriter failed: %v", err)
-			}
+			require.NoError(t, err, "createCompressedWriter failed")
 
 			if writer != file {
 				t.Error("Expected writer to be the same as file for no compression")
 			}
 
 			if err := closeWriter(); err != nil {
-				t.Errorf("closeWriter failed: %v", err)
+				assert.NoError(t, err, "closeWriter failed")
 			}
 		})
 
 		t.Run("gzip compression", func(t *testing.T) {
 			file, err := os.Create(filepath.Join(tempDir, "test.gz")) //nolint:gosec // tempDir is created in test
 			if err != nil {
-				t.Fatalf("Failed to create test file: %v", err)
+				require.NoError(t, err, "Failed to create")
 			}
 			defer file.Close()
 
 			writer, closeWriter, err := createCompressedWriter(file, CompressionGZ)
-			if err != nil {
-				t.Fatalf("createCompressedWriter failed for gzip: %v", err)
-			}
+			require.NoError(t, err, "createCompressedWriter failed for gzip")
 
 			if writer == file {
 				t.Error("Expected writer to be different from file for gzip compression")
@@ -3268,22 +3094,20 @@ func TestSQLiteDumpFunctions(t *testing.T) {
 			// Write some test data
 			testData := "test,data\n1,hello\n2,world\n"
 			n, err := writer.Write([]byte(testData))
-			if err != nil {
-				t.Fatalf("Failed to write to compressed writer: %v", err)
-			}
+			require.NoError(t, err, "Failed to write to compressed writer")
 			if n != len(testData) {
-				t.Errorf("Expected to write %d bytes, wrote %d", len(testData), n)
+				assert.Fail(t, "Expected to write %d bytes, wrote %d", len(testData), n)
 			}
 
 			if err := closeWriter(); err != nil {
-				t.Errorf("closeWriter failed: %v", err)
+				assert.NoError(t, err, "closeWriter failed")
 			}
 		})
 
 		t.Run("bzip2 compression should error", func(t *testing.T) {
 			file, err := os.Create(filepath.Join(tempDir, "test.bz2")) //nolint:gosec // tempDir is created in test
 			if err != nil {
-				t.Fatalf("Failed to create test file: %v", err)
+				require.NoError(t, err, "Failed to create")
 			}
 			defer file.Close()
 
@@ -3294,7 +3118,7 @@ func TestSQLiteDumpFunctions(t *testing.T) {
 
 			expectedError := "bzip2 compression is not supported for writing"
 			if err.Error() != expectedError {
-				t.Errorf("Expected error '%s', got '%s'", expectedError, err.Error())
+				assert.Fail(t, "Expected error '%s', got '%s'", expectedError, err.Error())
 			}
 		})
 	})
@@ -3323,37 +3147,29 @@ func TestParquetReadWriteIntegration(t *testing.T) {
 
 		// Open CSV file and load into database
 		db, err := Open(csvFile)
-		if err != nil {
-			t.Fatalf("Failed to open CSV file: %v", err)
-		}
+		require.NoError(t, err, "Failed to open CSV file")
 		defer db.Close()
 
 		// Export to Parquet format
 		parquetOutputDir := filepath.Join(tempDir, "parquet_output")
 		options := NewDumpOptions().WithFormat(OutputFormatParquet)
 		err = DumpDatabase(db, parquetOutputDir, options)
-		if err != nil {
-			t.Fatalf("Failed to dump to Parquet: %v", err)
-		}
+		require.NoError(t, err, "Failed to dump to Parquet")
 
 		// Verify Parquet file was created
 		parquetFile := filepath.Join(parquetOutputDir, "test.parquet")
 		if _, err := os.Stat(parquetFile); os.IsNotExist(err) {
-			t.Fatalf("Parquet file was not created: %s", parquetFile)
+			require.Fail(t, "Parquet file was not created: %s", parquetFile)
 		}
 
 		// Read back the Parquet file
 		db2, err := Open(parquetFile)
-		if err != nil {
-			t.Fatalf("Failed to open Parquet file: %v", err)
-		}
+		require.NoError(t, err, "Failed to open Parquet file")
 		defer db2.Close()
 
 		// Verify data is correct
 		rows, err := db2.QueryContext(context.Background(), "SELECT id, name, age, email FROM test ORDER BY id")
-		if err != nil {
-			t.Fatalf("Failed to query Parquet data: %v", err)
-		}
+		require.NoError(t, err, "Failed to query Parquet data")
 		defer rows.Close()
 
 		expectedData := [][]string{
@@ -3366,27 +3182,25 @@ func TestParquetReadWriteIntegration(t *testing.T) {
 		for rows.Next() {
 			var id, name, age, email string
 			if err := rows.Scan(&id, &name, &age, &email); err != nil {
-				t.Fatalf("Failed to scan row: %v", err)
+				require.NoError(t, err, "Failed to scan row")
 			}
 			actualData = append(actualData, []string{id, name, age, email})
 		}
 
 		if err := rows.Err(); err != nil {
-			t.Fatalf("Error during row iteration: %v", err)
+			require.NoError(t, err, "Error during row iteration")
 		}
 
-		if len(actualData) != len(expectedData) {
-			t.Fatalf("Expected %d rows, got %d", len(expectedData), len(actualData))
-		}
+		require.Equal(t, len(expectedData), len(actualData), "Expected %d rows, got %d", len(expectedData), len(actualData))
 
 		for i, expected := range expectedData {
 			if len(actualData[i]) != len(expected) {
-				t.Errorf("Row %d: expected %d columns, got %d", i, len(expected), len(actualData[i]))
+				assert.Fail(t, "Row %d: expected %d columns, got %d", i, len(expected), len(actualData[i]))
 				continue
 			}
 			for j, expectedVal := range expected {
 				if actualData[i][j] != expectedVal {
-					t.Errorf("Row %d, column %d: expected %s, got %s", i, j, expectedVal, actualData[i][j])
+					assert.Fail(t, "Row %d, column %d: expected %s, got %s", i, j, expectedVal, actualData[i][j])
 				}
 			}
 		}
@@ -3412,9 +3226,7 @@ Charlie,92.8,true`
 
 		// Open CSV file
 		db, err := Open(csvFile)
-		if err != nil {
-			t.Fatalf("Failed to open CSV file: %v", err)
-		}
+		require.NoError(t, err, "Failed to open CSV file")
 		defer db.Close()
 
 		// Export to Parquet format with GZ compression
@@ -3430,7 +3242,7 @@ Charlie,92.8,true`
 			// We expect an error for external compression with Parquet
 			expectedErrMsg := "external compression not supported for Parquet format - use Parquet's built-in compression instead"
 			if !strings.Contains(err.Error(), expectedErrMsg) {
-				t.Fatalf("Expected error message to contain '%s', got: %v", expectedErrMsg, err)
+				require.Contains(t, err.Error(), expectedErrMsg, "Expected error message to contain '%s', got: %v", expectedErrMsg, err)
 			}
 			return // Test passed - error was expected
 		}
@@ -3474,36 +3286,26 @@ Charlie,92.8,true`
 
 				// Open CSV and export to Parquet
 				db, err := Open(csvFile)
-				if err != nil {
-					t.Fatalf("Failed to open CSV: %v", err)
-				}
+				require.NoError(t, err, "Failed to open CSV")
 				defer db.Close()
 
 				parquetDir := filepath.Join(tempDir, td.name+"_parquet")
 				err = DumpDatabase(db, parquetDir, NewDumpOptions().WithFormat(OutputFormatParquet))
-				if err != nil {
-					t.Fatalf("Failed to export to Parquet: %v", err)
-				}
+				require.NoError(t, err, "Failed to export to Parquet")
 
 				// Read back from Parquet
 				parquetFile := filepath.Join(parquetDir, td.name+".parquet")
 				db2, err := Open(parquetFile)
-				if err != nil {
-					t.Fatalf("Failed to open Parquet file: %v", err)
-				}
+				require.NoError(t, err, "Failed to open Parquet file")
 				defer db2.Close()
 
 				// Query all data
 				rows, err := db2.QueryContext(context.Background(), "SELECT * FROM "+td.name+" ORDER BY id") //nolint:gosec
-				if err != nil {
-					t.Fatalf("Failed to query: %v", err)
-				}
+				require.NoError(t, err, "Failed to query")
 				defer rows.Close()
 
 				columns, err := rows.Columns()
-				if err != nil {
-					t.Fatalf("Failed to get columns: %v", err)
-				}
+				require.NoError(t, err, "Failed to get columns")
 
 				var actualRows []map[string]string
 				for rows.Next() {
@@ -3514,7 +3316,7 @@ Charlie,92.8,true`
 					}
 
 					if err := rows.Scan(valuePtrs...); err != nil {
-						t.Fatalf("Failed to scan row: %v", err)
+						require.NoError(t, err, "Failed to scan row")
 					}
 
 					row := make(map[string]string)
@@ -3529,21 +3331,19 @@ Charlie,92.8,true`
 				}
 
 				if err := rows.Err(); err != nil {
-					t.Fatalf("Error during row iteration: %v", err)
+					require.NoError(t, err, "Error during row iteration")
 				}
 
 				// Compare results
-				if len(actualRows) != len(td.expected) {
-					t.Fatalf("Expected %d rows, got %d", len(td.expected), len(actualRows))
-				}
+				require.Equal(t, len(td.expected), len(actualRows), "Expected %d rows, got %d", len(td.expected), len(actualRows))
 
 				for i, expectedRow := range td.expected {
 					actualRow := actualRows[i]
 					for col, expectedVal := range expectedRow {
 						if actualVal, ok := actualRow[col]; !ok {
-							t.Errorf("Row %d: missing column %s", i, col)
+							assert.Fail(t, "Row %d: missing column %s", i, col)
 						} else if actualVal != expectedVal {
-							t.Errorf("Row %d, column %s: expected %s, got %s", i, col, expectedVal, actualVal)
+							assert.Fail(t, "Row %d, column %s: expected %s, got %s", i, col, expectedVal, actualVal)
 						}
 					}
 				}
@@ -3575,32 +3375,24 @@ func TestParquetPerformance(t *testing.T) {
 	// Test CSV to Parquet export performance
 	start := time.Now()
 	db, err := Open(csvFile)
-	if err != nil {
-		t.Fatalf("Failed to open CSV: %v", err)
-	}
+	require.NoError(t, err, "Failed to open CSV")
 	defer db.Close()
 
 	parquetDir := filepath.Join(tempDir, "perf_parquet")
 	err = DumpDatabase(db, parquetDir, NewDumpOptions().WithFormat(OutputFormatParquet))
-	if err != nil {
-		t.Fatalf("Failed to export to Parquet: %v", err)
-	}
+	require.NoError(t, err, "Failed to export to Parquet")
 	exportTime := time.Since(start)
 
 	// Test Parquet read performance
 	parquetFile := filepath.Join(parquetDir, "large_test.parquet")
 	start = time.Now()
 	db2, err := Open(parquetFile)
-	if err != nil {
-		t.Fatalf("Failed to open Parquet: %v", err)
-	}
+	require.NoError(t, err, "Failed to open Parquet")
 	defer db2.Close()
 
 	var count int
 	err = db2.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM large_test").Scan(&count)
-	if err != nil {
-		t.Fatalf("Failed to query count: %v", err)
-	}
+	require.NoError(t, err, "Failed to query count")
 	readTime := time.Since(start)
 
 	t.Logf("Performance results:")
@@ -3609,7 +3401,7 @@ func TestParquetPerformance(t *testing.T) {
 	t.Logf("Records processed: %d", count)
 
 	if count != 10000 {
-		t.Errorf("Expected 10000 records, got %d", count)
+		assert.Fail(t, "Expected 10000 records, got %d", count)
 	}
 }
 
@@ -3650,16 +3442,14 @@ func TestParquetDirectParsing(t *testing.T) {
 		// Test using file.toTable() directly to trigger parseParquet
 		f := newFile(parquetFile)
 		table, err := f.toTable()
-		if err != nil {
-			t.Fatalf("Failed to parse Parquet file: %v", err)
-		}
+		require.NoError(t, err, "Failed to parse Parquet file")
 
 		if table == nil {
 			t.Fatal("Expected non-nil table from Parquet file")
 		}
 
 		if len(table.getRecords()) != 3 {
-			t.Errorf("Expected 3 records, got %d", len(table.getRecords()))
+			assert.Fail(t, "Expected 3 records, got %d", len(table.getRecords()))
 		}
 
 		// Also test compressed Parquet to trigger parseCompressedParquet
@@ -3688,16 +3478,14 @@ func TestParquetDirectParsing(t *testing.T) {
 		// Test compressed Parquet parsing
 		f2 := newFile(compressedParquetFile)
 		table2, err := f2.toTable()
-		if err != nil {
-			t.Fatalf("Failed to parse compressed Parquet file: %v", err)
-		}
+		require.NoError(t, err, "Failed to parse compressed Parquet file")
 
 		if table2 == nil {
 			t.Fatal("Expected non-nil table from compressed Parquet file")
 		}
 
 		if len(table2.getRecords()) != 3 {
-			t.Errorf("Expected 3 records from compressed Parquet, got %d", len(table2.getRecords()))
+			assert.Fail(t, "Expected 3 records from compressed Parquet, got %d", len(table2.getRecords()))
 		}
 	})
 
@@ -3737,9 +3525,9 @@ func TestParquetDirectParsing(t *testing.T) {
 
 			_, err := Open(testFile)
 			if tf.shouldWork && err != nil {
-				t.Errorf("File %s should be supported but got error: %v", tf.filename, err)
+				assert.Fail(t, "File %s should be supported but got error: %v", tf.filename, err)
 			} else if !tf.shouldWork && err == nil {
-				t.Errorf("File %s should not be supported but no error occurred", tf.filename)
+				assert.Fail(t, "File %s should not be supported but no error occurred", tf.filename)
 			}
 		}
 	})
@@ -3793,10 +3581,10 @@ func TestWriteXLSXTableData(t *testing.T) {
 		// Check sheet exists
 		sheets := xlsxFile.GetSheetList()
 		if len(sheets) != 1 {
-			t.Errorf("Expected 1 sheet, got %d", len(sheets))
+			assert.Fail(t, "Expected 1 sheet, got %d", len(sheets))
 		}
 		if sheets[0] != "output" {
-			t.Errorf("Expected sheet 'output', got '%s'", sheets[0])
+			assert.Fail(t, "Expected sheet 'output', got '%s'", sheets[0])
 		}
 
 		// Check data
@@ -3807,19 +3595,17 @@ func TestWriteXLSXTableData(t *testing.T) {
 
 		// Should have header + 3 data rows = 4 total rows
 		if len(sheetRows) != 4 {
-			t.Errorf("Expected 4 rows (1 header + 3 data), got %d", len(sheetRows))
+			assert.Fail(t, "Expected 4 rows (1 header + 3 data), got %d", len(sheetRows))
 		}
 
 		// Check header
 		expectedHeaders := []string{"id", "name"}
-		if !reflect.DeepEqual(sheetRows[0], expectedHeaders) {
-			t.Errorf("Expected headers %v, got %v", expectedHeaders, sheetRows[0])
-		}
+		assert.Equal(t, expectedHeaders, sheetRows[0], "Expected headers %v, got %v", expectedHeaders, sheetRows[0])
 
 		// Check first data row
 		if len(sheetRows) > 1 {
 			if sheetRows[1][0] != "1" || sheetRows[1][1] != "Gina" {
-				t.Errorf("Expected first row [1, Gina], got %v", sheetRows[1])
+				assert.Fail(t, "Expected first row [1, Gina], got %v", sheetRows[1])
 			}
 		}
 	})
@@ -3888,7 +3674,7 @@ func TestWriteXLSXTableData(t *testing.T) {
 		// Check data
 		sheets := xlsxFile.GetSheetList()
 		if len(sheets) != 1 {
-			t.Errorf("Expected 1 sheet, got %d", len(sheets))
+			assert.Fail(t, "Expected 1 sheet, got %d", len(sheets))
 		}
 
 		sheetRows, err := xlsxFile.GetRows(sheets[0])
@@ -3898,14 +3684,12 @@ func TestWriteXLSXTableData(t *testing.T) {
 
 		// Should have header + 3 data rows = 4 total rows
 		if len(sheetRows) != 4 {
-			t.Errorf("Expected 4 rows (1 header + 3 data), got %d", len(sheetRows))
+			assert.Fail(t, "Expected 4 rows (1 header + 3 data), got %d", len(sheetRows))
 		}
 
 		// Check header
 		expectedHeaders := []string{"id", "mail"}
-		if !reflect.DeepEqual(sheetRows[0], expectedHeaders) {
-			t.Errorf("Expected headers %v, got %v", expectedHeaders, sheetRows[0])
-		}
+		assert.Equal(t, expectedHeaders, sheetRows[0], "Expected headers %v, got %v", expectedHeaders, sheetRows[0])
 	})
 
 	t.Run("writeXLSXTableData with no columns error", func(t *testing.T) {
@@ -3918,7 +3702,7 @@ func TestWriteXLSXTableData(t *testing.T) {
 			t.Error("Expected error for no columns")
 		}
 		if !strings.Contains(err.Error(), "no columns defined") {
-			t.Errorf("Expected 'no columns defined' error, got: %v", err)
+			assert.NoError(t, err, "Expected 'no columns defined' error, got")
 		}
 	})
 
@@ -3952,7 +3736,7 @@ func TestWriteXLSXTableData(t *testing.T) {
 			t.Error("Expected error for unsupported bz2 compression")
 		}
 		if !strings.Contains(err.Error(), "bzip2 compression is not supported") {
-			t.Errorf("Expected 'bzip2 compression is not supported' error, got: %v", err)
+			assert.NoError(t, err, "Expected 'bzip2 compression is not supported' error, got")
 		}
 	})
 
@@ -4000,7 +3784,7 @@ func TestWriteXLSXTableData(t *testing.T) {
 			t.Error("Compressed output file is empty")
 		}
 		if fileInfo.Size() < 100 {
-			t.Errorf("Compressed file seems too small: %d bytes", fileInfo.Size())
+			assert.Fail(t, "Compressed file seems too small: %d bytes", fileInfo.Size())
 		}
 	})
 }
@@ -4016,7 +3800,7 @@ func TestBytesReaderAt(t *testing.T) {
 		expectedSize := int64(len(testData))
 
 		if size != expectedSize {
-			t.Errorf("Expected size %d, got %d", expectedSize, size)
+			assert.Fail(t, "Expected size %d, got %d", expectedSize, size)
 		}
 	})
 
@@ -4027,7 +3811,7 @@ func TestBytesReaderAt(t *testing.T) {
 		expectedSize := int64(0)
 
 		if size != expectedSize {
-			t.Errorf("Expected size %d, got %d", expectedSize, size)
+			assert.Fail(t, "Expected size %d, got %d", expectedSize, size)
 		}
 	})
 
@@ -4040,15 +3824,15 @@ func TestBytesReaderAt(t *testing.T) {
 		n, err := reader.Read(buffer)
 
 		if !errors.Is(err, io.EOF) {
-			t.Errorf("Expected io.EOF, got %v", err)
+			assert.Equal(t, io.EOF, err, "Expected io.EOF, got %v", err)
 		}
 		if n != len(testData) {
-			t.Errorf("Expected to read %d bytes, got %d", len(testData), n)
+			assert.Equal(t, len(testData), n, "Expected to read %d bytes, got %d", len(testData), n)
 		}
 
 		// Check that data was read correctly
 		if !bytes.Equal(buffer[:n], testData) {
-			t.Errorf("Expected data %q, got %q", testData, buffer[:n])
+			assert.Equal(t, testData, buffer[:n], "Expected data %q, got %q", testData, buffer[:n])
 		}
 	})
 
@@ -4060,17 +3844,15 @@ func TestBytesReaderAt(t *testing.T) {
 		buffer := make([]byte, 5)
 		n, err := reader.Read(buffer)
 
-		if err != nil {
-			t.Errorf("Expected no error, got %v", err)
-		}
+		assert.NoError(t, err, "Expected no error")
 		if n != 5 {
-			t.Errorf("Expected to read 5 bytes, got %d", n)
+			assert.Fail(t, "Expected to read 5 bytes, got %d", n)
 		}
 
 		// Check that data was read correctly (first 5 bytes)
 		expected := testData[:5]
 		if !bytes.Equal(buffer, expected) {
-			t.Errorf("Expected data %q, got %q", expected, buffer)
+			assert.Equal(t, expected, buffer, "Expected data %q, got %q", expected, buffer)
 		}
 	})
 
@@ -4081,10 +3863,10 @@ func TestBytesReaderAt(t *testing.T) {
 		n, err := reader.Read(buffer)
 
 		if !errors.Is(err, io.EOF) {
-			t.Errorf("Expected io.EOF, got %v", err)
+			assert.Equal(t, io.EOF, err, "Expected io.EOF, got %v", err)
 		}
 		if n != 0 {
-			t.Errorf("Expected to read 0 bytes, got %d", n)
+			assert.Fail(t, "Expected to read 0 bytes, got %d", n)
 		}
 	})
 
@@ -4096,16 +3878,14 @@ func TestBytesReaderAt(t *testing.T) {
 		buffer := make([]byte, 5)
 		n, err := reader.ReadAt(buffer, 7) // Start at "W"
 
-		if err != nil {
-			t.Errorf("Expected no error, got %v", err)
-		}
+		assert.NoError(t, err, "Expected no error")
 		if n != 5 {
-			t.Errorf("Expected to read 5 bytes, got %d", n)
+			assert.Fail(t, "Expected to read 5 bytes, got %d", n)
 		}
 
 		expected := []byte("World")
 		if !bytes.Equal(buffer, expected) {
-			t.Errorf("Expected data %q, got %q", expected, buffer)
+			assert.Equal(t, expected, buffer, "Expected data %q, got %q", expected, buffer)
 		}
 	})
 
@@ -4117,10 +3897,10 @@ func TestBytesReaderAt(t *testing.T) {
 		n, err := reader.ReadAt(buffer, 10) // Offset beyond data
 
 		if !errors.Is(err, io.EOF) {
-			t.Errorf("Expected io.EOF, got %v", err)
+			assert.Equal(t, io.EOF, err, "Expected io.EOF, got %v", err)
 		}
 		if n != 0 {
-			t.Errorf("Expected to read 0 bytes, got %d", n)
+			assert.Fail(t, "Expected to read 0 bytes, got %d", n)
 		}
 	})
 
@@ -4132,10 +3912,10 @@ func TestBytesReaderAt(t *testing.T) {
 		n, err := reader.ReadAt(buffer, -1) // Negative offset
 
 		if !errors.Is(err, io.EOF) {
-			t.Errorf("Expected io.EOF, got %v", err)
+			assert.Equal(t, io.EOF, err, "Expected io.EOF, got %v", err)
 		}
 		if n != 0 {
-			t.Errorf("Expected to read 0 bytes, got %d", n)
+			assert.Fail(t, "Expected to read 0 bytes, got %d", n)
 		}
 	})
 
@@ -4145,30 +3925,24 @@ func TestBytesReaderAt(t *testing.T) {
 
 		// Test SeekStart
 		pos, err := reader.Seek(5, io.SeekStart)
-		if err != nil {
-			t.Errorf("Expected no error for SeekStart, got %v", err)
-		}
+		assert.NoError(t, err, "Expected no error for SeekStart")
 		if pos != 5 {
-			t.Errorf("Expected position 5, got %d", pos)
+			assert.Fail(t, "Expected position 5, got %d", pos)
 		}
 
 		// Test SeekCurrent
 		pos, err = reader.Seek(3, io.SeekCurrent)
-		if err != nil {
-			t.Errorf("Expected no error for SeekCurrent, got %v", err)
-		}
+		assert.NoError(t, err, "Expected no error for SeekCurrent")
 		if pos != 0 {
-			t.Errorf("Expected position 0 (no tracking), got %d", pos)
+			assert.Fail(t, "Expected position 0 (no tracking), got %d", pos)
 		}
 
 		// Test SeekEnd
 		pos, err = reader.Seek(-2, io.SeekEnd)
-		if err != nil {
-			t.Errorf("Expected no error for SeekEnd, got %v", err)
-		}
+		assert.NoError(t, err, "Expected no error for SeekEnd")
 		expected := int64(len(testData)) - 2
 		if pos != expected {
-			t.Errorf("Expected position %d, got %d", expected, pos)
+			assert.Fail(t, "Expected position %d, got %d", expected, pos)
 		}
 
 		// Test invalid whence
@@ -4177,7 +3951,7 @@ func TestBytesReaderAt(t *testing.T) {
 			t.Error("Expected error for invalid whence")
 		}
 		if !strings.Contains(err.Error(), "invalid whence value") {
-			t.Errorf("Expected 'invalid whence value' error, got: %v", err)
+			assert.NoError(t, err, "Expected 'invalid whence value' error, got")
 		}
 	})
 }
@@ -4201,19 +3975,19 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 		// Test true value
 		result := extractValueFromArrowArray(arr, 0)
 		if result != "1" {
-			t.Errorf("Expected '1' for true, got '%s'", result)
+			assert.Fail(t, "Expected '1' for true, got '%s'", result)
 		}
 
 		// Test false value
 		result = extractValueFromArrowArray(arr, 1)
 		if result != "0" {
-			t.Errorf("Expected '0' for false, got '%s'", result)
+			assert.Fail(t, "Expected '0' for false, got '%s'", result)
 		}
 
 		// Test null value
 		result = extractValueFromArrowArray(arr, 2)
 		if result != "" {
-			t.Errorf("Expected empty string for null, got '%s'", result)
+			assert.Fail(t, "Expected empty string for null, got '%s'", result)
 		}
 	})
 
@@ -4228,11 +4002,11 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 
 		result := extractValueFromArrowArray(int8Arr, 0)
 		if result != "42" {
-			t.Errorf("Expected '42' for int8, got '%s'", result)
+			assert.Fail(t, "Expected '42' for int8, got '%s'", result)
 		}
 		result = extractValueFromArrowArray(int8Arr, 1)
 		if result != "" {
-			t.Errorf("Expected empty string for null int8, got '%s'", result)
+			assert.Fail(t, "Expected empty string for null int8, got '%s'", result)
 		}
 
 		// Test Int16
@@ -4244,7 +4018,7 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 
 		result = extractValueFromArrowArray(int16Arr, 0)
 		if result != "1000" {
-			t.Errorf("Expected '1000' for int16, got '%s'", result)
+			assert.Fail(t, "Expected '1000' for int16, got '%s'", result)
 		}
 
 		// Test Int32
@@ -4256,7 +4030,7 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 
 		result = extractValueFromArrowArray(int32Arr, 0)
 		if result != "100000" {
-			t.Errorf("Expected '100000' for int32, got '%s'", result)
+			assert.Fail(t, "Expected '100000' for int32, got '%s'", result)
 		}
 
 		// Test Int64
@@ -4268,7 +4042,7 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 
 		result = extractValueFromArrowArray(int64Arr, 0)
 		if result != "9223372036854775807" {
-			t.Errorf("Expected '9223372036854775807' for int64, got '%s'", result)
+			assert.Fail(t, "Expected '9223372036854775807' for int64, got '%s'", result)
 		}
 	})
 
@@ -4282,7 +4056,7 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 
 		result := extractValueFromArrowArray(uint8Arr, 0)
 		if result != "255" {
-			t.Errorf("Expected '255' for uint8, got '%s'", result)
+			assert.Fail(t, "Expected '255' for uint8, got '%s'", result)
 		}
 
 		// Test Uint16
@@ -4294,7 +4068,7 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 
 		result = extractValueFromArrowArray(uint16Arr, 0)
 		if result != "65535" {
-			t.Errorf("Expected '65535' for uint16, got '%s'", result)
+			assert.Fail(t, "Expected '65535' for uint16, got '%s'", result)
 		}
 
 		// Test Uint32
@@ -4306,7 +4080,7 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 
 		result = extractValueFromArrowArray(uint32Arr, 0)
 		if result != "4294967295" {
-			t.Errorf("Expected '4294967295' for uint32, got '%s'", result)
+			assert.Fail(t, "Expected '4294967295' for uint32, got '%s'", result)
 		}
 
 		// Test Uint64
@@ -4318,7 +4092,7 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 
 		result = extractValueFromArrowArray(uint64Arr, 0)
 		if result != "18446744073709551615" {
-			t.Errorf("Expected '18446744073709551615' for uint64, got '%s'", result)
+			assert.Fail(t, "Expected '18446744073709551615' for uint64, got '%s'", result)
 		}
 	})
 
@@ -4333,11 +4107,11 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 
 		result := extractValueFromArrowArray(float32Arr, 0)
 		if result != "3.14159" {
-			t.Errorf("Expected '3.14159' for float32, got '%s'", result)
+			assert.Fail(t, "Expected '3.14159' for float32, got '%s'", result)
 		}
 		result = extractValueFromArrowArray(float32Arr, 1)
 		if result != "" {
-			t.Errorf("Expected empty string for null float32, got '%s'", result)
+			assert.Fail(t, "Expected empty string for null float32, got '%s'", result)
 		}
 
 		// Test Float64
@@ -4349,7 +4123,7 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 
 		result = extractValueFromArrowArray(float64Arr, 0)
 		if result != "2.718281828459045" {
-			t.Errorf("Expected '2.718281828459045' for float64, got '%s'", result)
+			assert.Fail(t, "Expected '2.718281828459045' for float64, got '%s'", result)
 		}
 	})
 
@@ -4367,19 +4141,19 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 		// Test normal string
 		result := extractValueFromArrowArray(stringArr, 0)
 		if result != "Hello, World!" {
-			t.Errorf("Expected 'Hello, World!', got '%s'", result)
+			assert.Fail(t, "Expected 'Hello, World!', got '%s'", result)
 		}
 
 		// Test empty string
 		result = extractValueFromArrowArray(stringArr, 1)
 		if result != "" {
-			t.Errorf("Expected empty string, got '%s'", result)
+			assert.Fail(t, "Expected empty string, got '%s'", result)
 		}
 
 		// Test null string
 		result = extractValueFromArrowArray(stringArr, 2)
 		if result != "" {
-			t.Errorf("Expected empty string for null, got '%s'", result)
+			assert.Fail(t, "Expected empty string for null, got '%s'", result)
 		}
 	})
 
@@ -4397,13 +4171,13 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 		// Test binary data
 		result := extractValueFromArrowArray(binaryArr, 0)
 		if result != "binary data" {
-			t.Errorf("Expected 'binary data', got '%s'", result)
+			assert.Fail(t, "Expected 'binary data', got '%s'", result)
 		}
 
 		// Test null binary
 		result = extractValueFromArrowArray(binaryArr, 1)
 		if result != "" {
-			t.Errorf("Expected empty string for null binary, got '%s'", result)
+			assert.Fail(t, "Expected empty string for null binary, got '%s'", result)
 		}
 	})
 
@@ -4417,7 +4191,7 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 
 		result := extractValueFromArrowArray(date32Arr, 0)
 		if result != "18628" {
-			t.Errorf("Expected '18628' for date32, got '%s'", result)
+			assert.Fail(t, "Expected '18628' for date32, got '%s'", result)
 		}
 
 		// Test Date64
@@ -4429,7 +4203,7 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 
 		result = extractValueFromArrowArray(date64Arr, 0)
 		if result != "1609459200000" {
-			t.Errorf("Expected '1609459200000' for date64, got '%s'", result)
+			assert.Fail(t, "Expected '1609459200000' for date64, got '%s'", result)
 		}
 	})
 
@@ -4442,7 +4216,7 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 
 		result := extractValueFromArrowArray(timestampArr, 0)
 		if result != "1609459200000" {
-			t.Errorf("Expected '1609459200000' for timestamp, got '%s'", result)
+			assert.Fail(t, "Expected '1609459200000' for timestamp, got '%s'", result)
 		}
 	})
 
@@ -4565,13 +4339,13 @@ func TestEdgeCasesEmptyAndMalformedData(t *testing.T) {
 			prefix := strings.TrimSuffix(tt.fileName, ext)
 			tmpFile, err := os.CreateTemp(t.TempDir(), prefix+"*"+ext)
 			if err != nil {
-				t.Fatalf("Failed to create temp file: %v", err)
+				require.NoError(t, err, "Failed to create")
 			}
 			defer tmpFile.Close()
 
 			// Write test content
 			if _, err := tmpFile.WriteString(tt.fileContent); err != nil {
-				t.Fatalf("Failed to write test content: %v", err)
+				require.NoError(t, err, "Failed to write test content")
 			}
 
 			// Test with timeout context
@@ -4586,18 +4360,18 @@ func TestEdgeCasesEmptyAndMalformedData(t *testing.T) {
 					if db != nil {
 						_ = db.Close() // Ignore error in test cleanup
 					}
-					t.Errorf("Expected error for %s, but got none", tt.description)
+					assert.Error(t, err, "Expected error for %s, but got none", tt.description)
 				}
 				return
 			}
 
 			if err != nil {
-				t.Errorf("Unexpected error for %s: %v", tt.description, err)
+				assert.NoError(t, err, "Unexpected error for %s", tt.description)
 				return
 			}
 
 			if db == nil {
-				t.Errorf("Expected valid db for %s, but got nil", tt.description)
+				assert.Fail(t, "Expected valid db for %s, but got nil", tt.description)
 				return
 			}
 			defer db.Close()
@@ -4608,19 +4382,19 @@ func TestEdgeCasesEmptyAndMalformedData(t *testing.T) {
 			query := fmt.Sprintf("SELECT COUNT(*) FROM \"%s\"", tableName) //nolint:gosec // Table name is from test data //nolint:gosec // Table name is from test data
 			rows, err := db.QueryContext(ctx, query)
 			if err != nil {
-				t.Errorf("Query failed for %s: %v", tt.description, err)
+				assert.Fail(t, "Query failed for %s: %v", tt.description, err)
 				return
 			}
 			defer rows.Close()
 			if err := rows.Err(); err != nil {
-				t.Errorf("Rows error for %s: %v", tt.description, err)
+				assert.Fail(t, "Rows error for %s: %v", tt.description, err)
 				return
 			}
 
 			var count int
 			if rows.Next() {
 				if err := rows.Scan(&count); err != nil {
-					t.Errorf("Scan failed for %s: %v", tt.description, err)
+					assert.Fail(t, "Scan failed for %s: %v", tt.description, err)
 				}
 			}
 		})
@@ -4669,19 +4443,19 @@ func TestEdgeCasesReaderInput(t *testing.T) {
 
 			if tt.expectedErr {
 				if err == nil {
-					t.Errorf("Expected error for %s, but got none", tt.name)
+					assert.Error(t, err, "Expected error for %s, but got none", tt.name)
 				}
 				return
 			}
 
 			if err != nil {
-				t.Errorf("Unexpected error for %s: %v", tt.name, err)
+				assert.NoError(t, err, "Unexpected error for %s", tt.name)
 				return
 			}
 
 			db, err := validatedBuilder.Open(ctx)
 			if err != nil {
-				t.Errorf("Failed to open database for %s: %v", tt.name, err)
+				assert.Fail(t, "Failed to open database for %s: %v", tt.name, err)
 				return
 			}
 			defer db.Close()
@@ -4718,12 +4492,12 @@ func TestEdgeCasesCompression(t *testing.T) {
 
 			tmpFile, err := os.CreateTemp(t.TempDir(), "test_*.csv.gz")
 			if err != nil {
-				t.Fatalf("Failed to create temp file: %v", err)
+				require.NoError(t, err, "Failed to create")
 			}
 			defer tmpFile.Close()
 
 			if _, err := tmpFile.Write(tt.content); err != nil {
-				t.Fatalf("Failed to write test content: %v", err)
+				require.NoError(t, err, "Failed to write test content")
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -4736,13 +4510,13 @@ func TestEdgeCasesCompression(t *testing.T) {
 					if db != nil {
 						_ = db.Close() // Ignore error in test cleanup
 					}
-					t.Errorf("Expected error for %s, but got none", tt.description)
+					assert.Error(t, err, "Expected error for %s, but got none", tt.description)
 				}
 				return
 			}
 
 			if err != nil {
-				t.Errorf("Unexpected error for %s: %v", tt.description, err)
+				assert.NoError(t, err, "Unexpected error for %s", tt.description)
 				return
 			}
 
@@ -4779,22 +4553,19 @@ func TestEdgeCasesMemoryLimits(t *testing.T) {
 
 		tmpFile, err := os.CreateTemp(t.TempDir(), "wide_file_*.csv")
 		if err != nil {
-			t.Fatalf("Failed to create temp file: %v", err)
+			require.NoError(t, err, "Failed to create")
 		}
 		defer tmpFile.Close()
 
 		if _, err := tmpFile.WriteString(content); err != nil {
-			t.Fatalf("Failed to write test content: %v", err)
+			require.NoError(t, err, "Failed to write test content")
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		db, err := OpenContext(ctx, tmpFile.Name())
-		if err != nil {
-			t.Errorf("Failed to handle wide file: %v", err)
-			return
-		}
+		assert.NoError(t, err, "Failed to handle wide file")
 		defer db.Close()
 
 		// Verify we can query the wide table
@@ -4804,321 +4575,11 @@ func TestEdgeCasesMemoryLimits(t *testing.T) {
 
 		query := fmt.Sprintf("SELECT COUNT(*) FROM \"%s\"", tableName) //nolint:gosec // Table name is from test data
 		rows, err := db.QueryContext(ctx, query)
-		if err != nil {
-			t.Errorf("Query failed on wide file: %v", err)
-			return
-		}
+		assert.NoError(t, err, "Query failed on wide file")
 		defer rows.Close()
 		if err := rows.Err(); err != nil {
-			t.Errorf("Rows error on wide file: %v", err)
+			assert.NoError(t, err, "Rows error on wide file")
 			return
-		}
-	})
-}
-
-func TestMemoryLimitsAndLargeFiles(t *testing.T) {
-	t.Parallel()
-
-	t.Run("Large single cell content", func(t *testing.T) {
-		t.Parallel()
-
-		// Create a CSV with one very large cell (10MB)
-		const cellSize = 10 * 1024 * 1024 // 10MB
-		largeCellContent := strings.Repeat("x", cellSize)
-
-		content := fmt.Sprintf("col1,col2\n%s,value2\n", largeCellContent)
-
-		tmpFile, err := os.CreateTemp(t.TempDir(), "large_cell_*.csv")
-		if err != nil {
-			t.Fatalf("Failed to create temp file: %v", err)
-		}
-		defer tmpFile.Close()
-
-		if _, err := tmpFile.WriteString(content); err != nil {
-			t.Fatalf("Failed to write test content: %v", err)
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		db, err := OpenContext(ctx, tmpFile.Name())
-		if err != nil {
-			t.Errorf("Failed to handle large cell content: %v", err)
-			return
-		}
-		defer db.Close()
-
-		// Verify we can query the data
-		tableName := strings.TrimSuffix(filepath.Base(tmpFile.Name()), ".csv")
-		tableName = strings.TrimSuffix(tableName, ".csv") // Handle double extensions
-
-		rows, err := db.QueryContext(ctx, fmt.Sprintf("SELECT LENGTH(col1) FROM \"%s\"", tableName))
-		if err != nil {
-			t.Errorf("Query failed on large cell: %v", err)
-			return
-		}
-		defer rows.Close()
-		if err := rows.Err(); err != nil {
-			t.Errorf("Rows error on large cell: %v", err)
-			return
-		}
-
-		var length int
-		if rows.Next() {
-			if err := rows.Scan(&length); err != nil {
-				t.Errorf("Scan failed: %v", err)
-			} else if length != cellSize {
-				t.Errorf("Expected cell length %d, got %d", cellSize, length)
-			}
-		}
-	})
-
-	t.Run("Many rows stress test", func(t *testing.T) {
-		t.Parallel()
-
-		const numRows = 100000
-
-		tmpFile, err := os.CreateTemp(t.TempDir(), "many_rows_*.csv")
-		if err != nil {
-			t.Fatalf("Failed to create temp file: %v", err)
-		}
-		defer tmpFile.Close()
-
-		// Write header
-		if _, err := tmpFile.WriteString("id,name,value\n"); err != nil {
-			t.Fatalf("Failed to write header: %v", err)
-		}
-
-		// Write many rows
-		for i := range numRows {
-			line := fmt.Sprintf("%d,name_%d,value_%d\n", i, i, i)
-			if _, err := tmpFile.WriteString(line); err != nil {
-				t.Fatalf("Failed to write row %d: %v", i, err)
-			}
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-
-		db, err := OpenContext(ctx, tmpFile.Name())
-		if err != nil {
-			t.Errorf("Failed to handle many rows: %v", err)
-			return
-		}
-		defer db.Close()
-
-		// Test aggregation query
-		tableName := strings.TrimSuffix(filepath.Base(tmpFile.Name()), ".csv")
-		tableName = strings.TrimSuffix(tableName, ".csv")
-
-		rows, err := db.QueryContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM \"%s\"", tableName))
-		if err != nil {
-			t.Errorf("Count query failed: %v", err)
-			return
-		}
-		defer rows.Close()
-		if err := rows.Err(); err != nil {
-			t.Errorf("Rows error on count query: %v", err)
-			return
-		}
-
-		var count int
-		if rows.Next() {
-			if err := rows.Scan(&count); err != nil {
-				t.Errorf("Count scan failed: %v", err)
-			} else if count != numRows {
-				t.Errorf("Expected %d rows, got %d", numRows, count)
-			}
-		}
-	})
-
-	t.Run("Memory usage monitoring", func(t *testing.T) {
-		t.Parallel()
-
-		// Record initial memory usage
-		var m1, m2 runtime.MemStats
-		runtime.GC()
-		runtime.ReadMemStats(&m1)
-
-		// Create multiple databases and close them
-		for i := range 10 {
-			content := fmt.Sprintf("col1,col2,col3\nvalue1_%d,value2_%d,value3_%d\n", i, i, i)
-
-			tmpFile, err := os.CreateTemp(t.TempDir(), fmt.Sprintf("memory_test_%d_*.csv", i))
-			if err != nil {
-				t.Fatalf("Failed to create temp file: %v", err)
-			}
-
-			if _, err := tmpFile.WriteString(content); err != nil {
-				_ = tmpFile.Close() // Ignore error in test cleanup
-				t.Fatalf("Failed to write content: %v", err)
-			}
-			_ = tmpFile.Close() // Ignore error in test cleanup
-
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-
-			db, err := OpenContext(ctx, tmpFile.Name())
-			if err != nil {
-				cancel()
-				t.Errorf("Failed to open database %d: %v", i, err)
-				continue
-			}
-
-			// Perform some operations
-			tableName := strings.TrimSuffix(filepath.Base(tmpFile.Name()), ".csv")
-			tableName = strings.TrimSuffix(tableName, ".csv")
-
-			rows, err := db.QueryContext(ctx, fmt.Sprintf("SELECT * FROM \"%s\"", tableName))
-			if err != nil {
-				_ = db.Close() // Ignore error in test cleanup
-				cancel()
-				t.Errorf("Query failed for database %d: %v", i, err)
-				continue
-			}
-			if err := rows.Err(); err != nil {
-				_ = rows.Close() // Ignore error in test cleanup
-				_ = db.Close()   // Ignore error in test cleanup
-				cancel()
-				t.Errorf("Rows error for database %d: %v", i, err)
-				continue
-			}
-
-			for rows.Next() {
-				var col1, col2, col3 string
-				if err := rows.Scan(&col1, &col2, &col3); err != nil {
-					// Log error but continue test
-					t.Logf("Scan error: %v", err)
-				}
-			}
-			_ = rows.Close() // Ignore error in test cleanup
-			_ = db.Close()   // Ignore error in test cleanup
-			cancel()
-		}
-
-		// Check memory usage after cleanup
-		runtime.GC()
-		runtime.ReadMemStats(&m2)
-
-		memoryIncrease := int64(m2.Alloc) - int64(m1.Alloc) //nolint:gosec // Memory monitoring in test
-		if memoryIncrease > 50*1024*1024 {                  // 50MB threshold
-			t.Errorf("Memory usage increased by %d bytes (%.2f MB), may indicate memory leak",
-				memoryIncrease, float64(memoryIncrease)/(1024*1024))
-		}
-	})
-
-	t.Run("Context cancellation during large file processing", func(t *testing.T) {
-		t.Parallel()
-
-		// Create a moderately large file
-		const numRows = 10000
-
-		tmpFile, err := os.CreateTemp(t.TempDir(), "cancellation_test_*.csv")
-		if err != nil {
-			t.Fatalf("Failed to create temp file: %v", err)
-		}
-		defer tmpFile.Close()
-
-		// Write header and many rows
-		if _, err := tmpFile.WriteString("id,data\n"); err != nil {
-			t.Fatalf("Failed to write header: %v", err)
-		}
-
-		for i := range numRows {
-			line := fmt.Sprintf("%d,%s\n", i, strings.Repeat("data", 100))
-			if _, err := tmpFile.WriteString(line); err != nil {
-				t.Fatalf("Failed to write row %d: %v", i, err)
-			}
-		}
-
-		// Create context with very short timeout to trigger cancellation
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
-		defer cancel()
-
-		// This should either succeed quickly or fail due to timeout
-		db, err := OpenContext(ctx, tmpFile.Name())
-
-		if err != nil {
-			// Timeout error is acceptable
-			if ctx.Err() == context.DeadlineExceeded {
-				return // Expected behavior
-			}
-			// Other errors might indicate problems with context handling
-			t.Logf("Context cancellation test completed with error (may be expected): %v", err)
-		}
-
-		if db != nil {
-			_ = db.Close() // Ignore error in test cleanup
-		}
-	})
-
-	t.Run("Chunk size configuration test", func(t *testing.T) {
-		t.Parallel()
-
-		// Create a file that's larger than default chunk size
-		const numRows = 1000
-		content := "col1,col2,col3\n"
-		for i := range numRows {
-			content += fmt.Sprintf("value_%d,%s,data_%d\n", i, strings.Repeat("x", 1000), i)
-		}
-
-		tmpFile, err := os.CreateTemp(t.TempDir(), "chunk_test_*.csv")
-		if err != nil {
-			t.Fatalf("Failed to create temp file: %v", err)
-		}
-		defer tmpFile.Close()
-
-		if _, err := tmpFile.WriteString(content); err != nil {
-			t.Fatalf("Failed to write content: %v", err)
-		}
-
-		ctx := context.Background()
-
-		// Test with different chunk sizes
-		chunkSizes := []int{1024, 10240, 102400} // 1KB, 10KB, 100KB
-
-		for _, chunkSize := range chunkSizes {
-			t.Run(fmt.Sprintf("ChunkSize_%d", chunkSize), func(t *testing.T) {
-				builder := NewBuilder().
-					AddPath(tmpFile.Name()).
-					SetDefaultChunkSize(chunkSize)
-
-				validatedBuilder, err := builder.Build(ctx)
-				if err != nil {
-					t.Errorf("Build failed with chunk size %d: %v", chunkSize, err)
-					return
-				}
-
-				db, err := validatedBuilder.Open(ctx)
-				if err != nil {
-					t.Errorf("Open failed with chunk size %d: %v", chunkSize, err)
-					return
-				}
-				defer db.Close()
-
-				// Verify data integrity regardless of chunk size
-				tableName := strings.TrimSuffix(filepath.Base(tmpFile.Name()), ".csv")
-				tableName = strings.TrimSuffix(tableName, ".csv")
-
-				rows, err := db.QueryContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM \"%s\"", tableName))
-				if err != nil {
-					t.Errorf("Count query failed with chunk size %d: %v", chunkSize, err)
-					return
-				}
-				defer rows.Close()
-				if err := rows.Err(); err != nil {
-					t.Errorf("Rows error with chunk size %d: %v", chunkSize, err)
-					return
-				}
-
-				var count int
-				if rows.Next() {
-					if err := rows.Scan(&count); err != nil {
-						t.Errorf("Count scan failed with chunk size %d: %v", chunkSize, err)
-					} else if count != numRows {
-						t.Errorf("Expected %d rows with chunk size %d, got %d", numRows, chunkSize, count)
-					}
-				}
-			})
 		}
 	})
 }

@@ -44,6 +44,13 @@ filesql reads the contents of specified input files and returns [sql.DB](https:/
   - doc/ko/README.md
   - doc/ru/README.md
   - doc/zh-cn/README.md
+- CHANGELOG.md maintenance: When updating CHANGELOG.md, always include references to the relevant PR numbers and commit hashes with clickable GitHub links. This helps developers trace which specific changes were made in which PR/commit and allows them to browse the actual code changes. Format examples:
+  - **Feature description ([abc1234](https://github.com/nao1215/filesql/commit/abc1234))**: Detailed explanation of the change
+  - **Feature description (PR #123, [abc1234](https://github.com/nao1215/filesql/commit/abc1234))**: When both PR and commit are relevant
+  - Use `git log --oneline` and GitHub PR numbers to identify the specific changes
+  - Always format commit hashes as clickable links: `[hash](https://github.com/nao1215/filesql/commit/hash)`
+  - This improves traceability and allows developers to browse code changes directly in their browser
+  - Users want to see the actual implementation, so always provide GitHub links for commits
 
 ## Testing
 - [Readable Test Code](https://logmi.jp/main/technology/327449): Avoid excessive optimization (DRY) and aim for a state where it's easy to understand what tests exist.
@@ -62,3 +69,4 @@ When generating code suggestions, GitHub Copilot should:
 3. Include proper godoc comments for all public APIs
 4. Suggest parallel test execution with `t.Parallel()` where appropriate
 5. Use `filepath.Join()` for path operations to ensure cross-platform compatibility
+6. When updating CHANGELOG.md, include PR numbers and commit hashes with clickable GitHub links for traceability and code browsing

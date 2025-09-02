@@ -49,6 +49,14 @@ Plutôt que de maintenir du code dupliqué dans les deux projets, nous avons ext
 go get github.com/nao1215/filesql
 ```
 
+## 🔧 Configuration requise
+
+- **Version Go**: 1.24 ou ultérieure
+- **Systèmes d'exploitation supportés**:
+  - Linux
+  - macOS  
+  - Windows
+
 ## 🚀 Démarrage rapide
 
 ### Usage simple
@@ -166,7 +174,7 @@ func main() {
     validatedBuilder, err := filesql.NewBuilder().
         AddPath("local_file.csv").      // Fichier local
         AddFS(embeddedFiles).           // Fichiers intégrés
-        SetDefaultChunkSize(50*1024*1024). // Chunks de 50MB
+        SetDefaultChunkSize(5000). // 5000 lignes par chunk
         Build(ctx)
     if err != nil {
         log.Fatal(err)
@@ -330,7 +338,7 @@ Puisque filesql utilise SQLite3 comme moteur sous-jacent, toute la syntaxe SQL s
 
 ### Conseils de performance
 - Utilisez `OpenContext()` avec des timeouts pour les gros fichiers
-- Configurez les tailles de chunk avec `SetDefaultChunkSize()` pour l'optimisation mémoire
+- Configurez les tailles de chunk (lignes par chunk) avec `SetDefaultChunkSize()` pour l'optimisation mémoire
 - Une seule connexion SQLite fonctionne mieux pour la plupart des scénarios
 - Utilisez le streaming pour les fichiers plus grands que la mémoire disponible
 

@@ -8,7 +8,7 @@ import (
 // table represents file contents as database table structure.
 type table struct {
 	// Name is table name derived from file path.
-	name string
+	name TableName
 	// header is table header.
 	header header
 	// records is table records.
@@ -24,10 +24,10 @@ func newTable(
 	records []record,
 ) *table {
 	// Infer column types from data
-	columnInfo := inferColumnsInfo(header, records)
+	columnInfo := newColumnInfoList(header, records)
 
 	return &table{
-		name:       name,
+		name:       NewTableName(name),
 		header:     header,
 		records:    records,
 		columnInfo: columnInfo,
@@ -36,7 +36,7 @@ func newTable(
 
 // getName return table name.
 func (t *table) getName() string {
-	return t.name
+	return t.name.String()
 }
 
 // getHeader return table header.

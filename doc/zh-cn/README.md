@@ -49,6 +49,14 @@
 go get github.com/nao1215/filesql
 ```
 
+## 🔧 系统要求
+
+- **Go 版本**: 1.24 或更高版本
+- **支持操作系统**:
+  - Linux
+  - macOS  
+  - Windows
+
 ## 🚀 快速开始
 
 ### 简单用法
@@ -167,7 +175,7 @@ func main() {
     validatedBuilder, err := filesql.NewBuilder().
         AddPath("local_file.csv").      // 本地文件
         AddFS(embeddedFiles).           // 嵌入文件
-        SetDefaultChunkSize(50*1024*1024). // 50MB 块
+        SetDefaultChunkSize(5000). // 5000行块
         Build(ctx)
     if err != nil {
         log.Fatal(err)
@@ -332,7 +340,7 @@ filesql 自动从文件路径推导表名：
 
 ### 性能提示
 - 对大文件使用带超时的 `OpenContext()`
-- 使用 `SetDefaultChunkSize()` 配置块大小以优化内存
+- 使用 `SetDefaultChunkSize()` 配置块大小（行数）以优化内存
 - 单个 SQLite 连接对大多数场景效果最佳
 - 对于大于可用内存的文件使用流式处理
 
