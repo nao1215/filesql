@@ -2,8 +2,6 @@ package filesql
 
 import (
 	"bytes"
-	"compress/bzip2"
-	"compress/gzip"
 	"context"
 	"database/sql"
 	"errors"
@@ -14,8 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/klauspost/compress/zstd"
-	"github.com/ulikunitz/xz"
 	"github.com/xuri/excelize/v2"
 	"modernc.org/sqlite" // Direct SQLite driver usage
 )
@@ -715,37 +711,15 @@ func (b *DBBuilder) insertDataIntoTable(ctx context.Context, db *sql.DB, tableNa
 
 // createDecompressedReader creates a decompressed reader based on file extension
 func (b *DBBuilder) createDecompressedReader(file *os.File, filePath string) (io.Reader, error) {
-	// Check file extension to determine compression type
-	if strings.HasSuffix(strings.ToLower(filePath), extGZ) {
-		gzReader, err := gzip.NewReader(file)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
-		}
-		return gzReader, nil
+	factory := NewCompressionFactory()
+	handler := factory.CreateHandlerForFile(filePath)
+
+	reader, _, err := handler.CreateReader(file)
+	if err != nil {
+		return nil, err
 	}
 
-	if strings.HasSuffix(strings.ToLower(filePath), extBZ2) {
-		return bzip2.NewReader(file), nil
-	}
-
-	if strings.HasSuffix(strings.ToLower(filePath), extXZ) {
-		xzReader, err := xz.NewReader(file)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create xz reader: %w", err)
-		}
-		return xzReader, nil
-	}
-
-	if strings.HasSuffix(strings.ToLower(filePath), extZSTD) {
-		zstdReader, err := zstd.NewReader(file)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create zstd reader: %w", err)
-		}
-		return zstdReader.IOReadCloser(), nil
-	}
-
-	// No compression, return file as-is
-	return file, nil
+	return reader, nil
 }
 
 // collectOriginalPaths collects original file paths for overwrite mode

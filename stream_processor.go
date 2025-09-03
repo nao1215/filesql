@@ -3,8 +3,6 @@ package filesql
 import (
 	"bufio"
 	"bytes"
-	"compress/bzip2"
-	"compress/gzip"
 	"context"
 	"database/sql"
 	"errors"
@@ -13,8 +11,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/klauspost/compress/zstd"
-	"github.com/ulikunitz/xz"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -315,45 +311,16 @@ func (sp *streamProcessor) createTableFromHeaders(ctx context.Context, db *sql.D
 
 // createDecompressedReader creates a reader that handles compression
 func (sp *streamProcessor) createDecompressedReader(file *os.File, filePath string) (io.Reader, func() error, error) {
-	var reader io.Reader = file
-	closer := func() error { return nil } // Default no-op closer
+	factory := NewCompressionFactory()
+	handler := factory.CreateHandlerForFile(filePath)
 
-	// Check file type to determine compression
-	fileModel := newFile(filePath)
-
-	if fileModel.isGZ() {
-		gzReader, err := gzip.NewReader(file)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create gzip reader: %w", err)
-		}
-		reader = gzReader
-		closer = func() error {
-			_ = gzReader.Close() // Ignore close error in cleanup
-			return nil
-		}
-	} else if fileModel.isBZ2() {
-		reader = bzip2.NewReader(file)
-		closer = func() error { return nil }
-	} else if fileModel.isXZ() {
-		xzReader, err := xz.NewReader(file)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create xz reader: %w", err)
-		}
-		reader = xzReader
-		closer = func() error { return nil }
-	} else if fileModel.isZSTD() {
-		decoder, err := zstd.NewReader(file)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create zstd reader: %w", err)
-		}
-		reader = decoder
-		closer = func() error {
-			decoder.Close()
-			return nil
-		}
+	reader, cleanup, err := handler.CreateReader(file)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	return reader, closer, nil
+	// Return reader with cleanup that doesn't close the file (caller handles that)
+	return reader, cleanup, nil
 }
 
 // streamXLSXFileToDatabase handles XLSX files by creating separate tables for each sheet

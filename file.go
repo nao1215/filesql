@@ -2,17 +2,12 @@ package filesql
 
 import (
 	"bytes"
-	"compress/bzip2"
-	"compress/gzip"
 	"encoding/csv"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/klauspost/compress/zstd"
-	"github.com/ulikunitz/xz"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -447,50 +442,8 @@ func detectFileType(path string) FileType {
 
 // openReader opens file and returns a reader that handles compression
 func (f *file) openReader() (io.Reader, func() error, error) {
-	file, err := os.Open(f.path)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var reader io.Reader = file
-	closer := file.Close
-
-	if f.isGZ() {
-		gzReader, err := gzip.NewReader(file)
-		if err != nil {
-			_ = file.Close() // Ignore close error during error handling
-			return nil, nil, err
-		}
-		reader = gzReader
-		closer = func() error {
-			_ = gzReader.Close() // Ignore close error in cleanup
-			return file.Close()
-		}
-	} else if f.isBZ2() {
-		reader = bzip2.NewReader(file)
-		closer = file.Close
-	} else if f.isXZ() {
-		xzReader, err := xz.NewReader(file)
-		if err != nil {
-			_ = file.Close() // Ignore close error during error handling
-			return nil, nil, err
-		}
-		reader = xzReader
-		closer = file.Close
-	} else if f.isZSTD() {
-		decoder, err := zstd.NewReader(file)
-		if err != nil {
-			_ = file.Close() // Ignore close error during error handling
-			return nil, nil, err
-		}
-		reader = decoder
-		closer = func() error {
-			decoder.Close()
-			return file.Close()
-		}
-	}
-
-	return reader, closer, nil
+	factory := NewCompressionFactory()
+	return factory.CreateReaderForFile(f.path)
 }
 
 // parseDelimitedFile parses CSV or TSV files with specified delimiter

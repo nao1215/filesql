@@ -2,7 +2,6 @@ package filesql
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"database/sql"
 	"encoding/csv"
@@ -19,8 +18,6 @@ import (
 	"github.com/apache/arrow/go/v18/arrow/memory"
 	pqfile "github.com/apache/arrow/go/v18/parquet/file"
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
-	"github.com/klauspost/compress/zstd"
-	"github.com/ulikunitz/xz"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -338,30 +335,8 @@ func writeSQLiteTableData(outputPath string, columns []string, rows *sql.Rows, o
 
 // createCompressedWriter creates an appropriate writer based on compression type
 func createCompressedWriter(file *os.File, compression CompressionType) (io.Writer, func() error, error) {
-	switch compression {
-	case CompressionNone:
-		return file, func() error { return nil }, nil
-	case CompressionGZ:
-		gzWriter := gzip.NewWriter(file)
-		return gzWriter, gzWriter.Close, nil
-	case CompressionBZ2:
-		// bzip2 doesn't have a writer in the standard library
-		return nil, nil, errors.New("bzip2 compression is not supported for writing")
-	case CompressionXZ:
-		xzWriter, err := xz.NewWriter(file)
-		if err != nil {
-			return nil, nil, err
-		}
-		return xzWriter, xzWriter.Close, nil
-	case CompressionZSTD:
-		zstdWriter, err := zstd.NewWriter(file)
-		if err != nil {
-			return nil, nil, err
-		}
-		return zstdWriter, zstdWriter.Close, nil
-	default:
-		return nil, nil, fmt.Errorf("unsupported compression type: %v", compression)
-	}
+	handler := NewCompressionHandler(compression)
+	return handler.CreateWriter(file)
 }
 
 // writeDelimitedData writes data in CSV or TSV format based on delimiter
