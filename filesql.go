@@ -469,7 +469,7 @@ func (f *file) parseParquet() (*table, error) {
 	}
 	defer table.Release()
 
-	var allRecords []record
+	var allRecords []Record
 	var headerSlice header
 
 	if table.NumRows() == 0 {
@@ -493,7 +493,7 @@ func (f *file) parseParquet() (*table, error) {
 		// Convert each row in the batch
 		numRows := batch.NumRows()
 		for i := range numRows {
-			row := make(record, batch.NumCols())
+			row := make(Record, batch.NumCols())
 			for j, col := range batch.Columns() {
 				value := extractValueFromArrowArray(col, i)
 				row[j] = value
@@ -556,7 +556,7 @@ func (f *file) parseCompressedParquet() (*table, error) {
 	}
 	defer table.Release()
 
-	var allRecords []record
+	var allRecords []Record
 	var headerSlice header
 
 	if table.NumRows() == 0 {
@@ -580,7 +580,7 @@ func (f *file) parseCompressedParquet() (*table, error) {
 		// Convert each row in the batch
 		numRows := batch.NumRows()
 		for i := range numRows {
-			row := make(record, batch.NumCols())
+			row := make(Record, batch.NumCols())
 			for j, col := range batch.Columns() {
 				value := extractValueFromArrowArray(col, i)
 				row[j] = value

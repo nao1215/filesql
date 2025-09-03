@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"strings"
 
 	"github.com/apache/arrow/go/v18/arrow/array"
@@ -31,9 +32,11 @@ func handleCloseError(closeFunc func() error) func() {
 // newStreamingParser creates a new streaming parser
 func newStreamingParser(fileType FileType, tableName string, chunkSize int) *streamingParser {
 	return &streamingParser{
-		fileType:  fileType,
-		tableName: tableName,
-		chunkSize: NewChunkSize(chunkSize),
+		fileType:    fileType,
+		tableName:   tableName,
+		chunkSize:   NewChunkSize(chunkSize),
+		memoryPool:  NewMemoryPool(1024 * 1024), // 1MB default max buffer size
+		memoryLimit: NewMemoryLimit(512),        // 512MB default memory limit
 	}
 }
 
@@ -123,7 +126,7 @@ func (p *streamingParser) parseDelimitedStream(reader io.Reader, delimiter rune,
 		return nil, err
 	}
 
-	tablerecords := make([]record, 0, len(records)-1)
+	tablerecords := make([]Record, 0, len(records)-1)
 	for i := 1; i < len(records); i++ {
 		tablerecords = append(tablerecords, newRecord(records[i]))
 	}
@@ -186,9 +189,9 @@ func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 		header = append(header, key)
 	}
 
-	tablerecords := make([]record, 0, len(records))
+	tablerecords := make([]Record, 0, len(records))
 	for _, recordMap := range records {
-		var row record
+		var row Record
 		for _, key := range header {
 			if val, exists := recordMap[key]; exists {
 				row = append(row, val)
@@ -229,6 +232,8 @@ func (p *streamingParser) ProcessInChunks(reader io.Reader, processor chunkProce
 		return p.processLTSVInChunks(decompressedReader, processor)
 	case FileTypeParquet:
 		return p.processParquetInChunks(decompressedReader, processor)
+	case FileTypeXLSX:
+		return p.processXLSXInChunks(decompressedReader, processor)
 	default:
 		return errors.New("unsupported file type for chunked processing")
 	}
@@ -260,7 +265,7 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 	var columnValues [][]string
 
 	// Read records in chunks
-	var chunkrecords []record
+	var chunkrecords []Record
 	chunkSize := p.chunkSize.Int()
 	if chunkSize <= 0 {
 		chunkSize = DefaultRowsPerChunk
@@ -386,7 +391,7 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 	}
 
 	// Second pass: process records in chunks
-	chunkrecords := make([]record, 0) // Pre-allocate slice
+	chunkrecords := make([]Record, 0) // Pre-allocate slice
 	var columnValues [][]string
 	var columnInfo columnInfoList
 
@@ -415,7 +420,7 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 			continue
 		}
 
-		var row record
+		var row Record
 		for _, key := range header {
 			if val, exists := recordMap[key]; exists {
 				row = append(row, val)
@@ -534,14 +539,14 @@ func (p *streamingParser) parseParquetStream(reader io.Reader) (*table, error) {
 	tableReader := array.NewTableReader(table, 0)
 	defer tableReader.Release()
 
-	var allRecords []record
+	var allRecords []Record
 	for tableReader.Next() {
 		batch := tableReader.Record()
 
 		// Convert each row in the batch
 		numRows := batch.NumRows()
 		for i := range numRows {
-			row := make(record, batch.NumCols())
+			row := make(Record, batch.NumCols())
 			for j, col := range batch.Columns() {
 				value := extractValueFromArrowArray(col, i)
 				row[j] = value
@@ -624,10 +629,10 @@ func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chu
 	for tableReader.Next() {
 		batch := tableReader.Record()
 
-		var chunkRecords []record
+		var chunkRecords []Record
 		numRows := batch.NumRows()
 		for i := range numRows {
-			row := make(record, batch.NumCols())
+			row := make(Record, batch.NumCols())
 			for j, col := range batch.Columns() {
 				value := extractValueFromArrowArray(col, i)
 				row[j] = value
@@ -656,15 +661,19 @@ func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chu
 	return nil
 }
 
-// parseXLSXStream parses XLSX data from reader using streaming approach
+// parseXLSXStream parses XLSX data from reader using memory-optimized streaming approach
 // Note: XLSX requires loading entire file into memory due to ZIP format limitations
 // For multiple sheets, only the first sheet is processed (streaming parser limitation)
 // Use Open/OpenContext for full multi-sheet support with 1-sheet-1-table structure
 func (p *streamingParser) parseXLSXStream(reader io.Reader) (*table, error) {
+	// Check memory limits before processing
+	if p.memoryLimit != nil && p.memoryLimit.CheckMemoryUsage() == MemoryStatusExceeded {
+		return nil, p.memoryLimit.CreateMemoryError("XLSX parsing")
+	}
+
 	// Open XLSX directly from the reader (excelize will buffer as needed)
 	xlsxFile, err := excelize.OpenReader(reader)
 	if err != nil {
-		// excelize returns an error on empty/invalid input; bubble it up
 		return nil, fmt.Errorf("failed to open XLSX file: %w", err)
 	}
 	defer func() {
@@ -687,14 +696,34 @@ func (p *streamingParser) parseXLSXStream(reader io.Reader) (*table, error) {
 
 	var (
 		headers header
-		records []record
 		first   = true
 	)
+
+	// Use memory pool for record slice to reduce allocations
+	records := p.memoryPool.GetRecordSlice()
+	originalRecords := records // Track original slice for proper pool return
+	defer func() {
+		// Always return the original slice to the pool, even if records grew
+		p.memoryPool.PutRecordSlice(originalRecords)
+	}()
+
 	for iter.Next() {
+		// Check memory usage periodically (every 1000 records to reduce ReadMemStats overhead)
+		// runtime.ReadMemStats can pause for milliseconds, so we check less frequently
+		if p.memoryLimit != nil && len(records)%1000 == 0 {
+			if status := p.memoryLimit.CheckMemoryUsage(); status == MemoryStatusExceeded {
+				return nil, p.memoryLimit.CreateMemoryError("XLSX row processing")
+			} else if status == MemoryStatusWarning {
+				// Force GC at warning threshold
+				p.memoryPool.ForceGC()
+			}
+		}
+
 		row, err := iter.Columns()
 		if err != nil {
 			return nil, fmt.Errorf("failed to read row in sheet %s: %w", sheetName, err)
 		}
+
 		// Skip leading empty rows
 		if first && len(row) == 0 {
 			continue
@@ -716,4 +745,169 @@ func (p *streamingParser) parseXLSXStream(reader io.Reader) (*table, error) {
 	}
 
 	return newTable(p.tableName, headers, records), nil
+}
+
+// processXLSXInChunks processes XLSX data in chunks with memory optimization
+func (p *streamingParser) processXLSXInChunks(reader io.Reader, processor chunkProcessor) error {
+	// Check memory limits before processing
+	if p.memoryLimit != nil && p.memoryLimit.CheckMemoryUsage() == MemoryStatusExceeded {
+		return p.memoryLimit.CreateMemoryError("XLSX chunk processing")
+	}
+
+	// Open XLSX file from reader
+	xlsxFile, err := excelize.OpenReader(reader)
+	if err != nil {
+		return fmt.Errorf("failed to open XLSX file: %w", err)
+	}
+	defer func() {
+		_ = xlsxFile.Close() // Ignore close error
+	}()
+
+	// Get all sheet names
+	sheetNames := xlsxFile.GetSheetList()
+	if len(sheetNames) == 0 {
+		return errors.New("no sheets found in XLSX file")
+	}
+
+	// Process only the first sheet (streaming parser limitation)
+	sheetName := sheetNames[0]
+	iter, err := xlsxFile.Rows(sheetName)
+	if err != nil {
+		return fmt.Errorf("failed to open rows iterator for sheet %s: %w", sheetName, err)
+	}
+	defer iter.Close()
+
+	var (
+		headers       header
+		columnInfo    columnInfoList
+		columnValues  [][]string
+		first         = true
+		chunkRecords  []Record
+		processedRows int
+	)
+
+	// Get base chunk size and adjust for memory limits
+	chunkSize := p.chunkSize.Int()
+	if chunkSize <= 0 {
+		chunkSize = DefaultRowsPerChunk
+	}
+
+	// Adjust chunk size based on memory usage
+	if p.memoryLimit != nil {
+		if shouldReduce, newSize := p.memoryLimit.ShouldReduceChunkSize(chunkSize); shouldReduce {
+			chunkSize = newSize
+			if chunkSize < 1 {
+				chunkSize = 1
+			}
+		}
+	}
+
+	// Use memory pool for chunk records
+	chunkRecords = p.memoryPool.GetRecordSlice()
+	originalChunkRecords := chunkRecords // Track original slice for proper pool return
+	defer func() {
+		// Always return the original slice to the pool, even if chunkRecords grew
+		p.memoryPool.PutRecordSlice(originalChunkRecords)
+	}()
+
+	for iter.Next() {
+		// Check memory usage periodically (every 1000 rows to reduce ReadMemStats overhead)
+		// runtime.ReadMemStats can pause for milliseconds, so we check less frequently
+		if p.memoryLimit != nil && processedRows%1000 == 0 {
+			if status := p.memoryLimit.CheckMemoryUsage(); status == MemoryStatusExceeded {
+				return p.memoryLimit.CreateMemoryError("XLSX row processing")
+			} else if status == MemoryStatusWarning {
+				// Force GC and reduce chunk size on memory pressure
+				p.memoryPool.ForceGC()
+				runtime.GC()
+				chunkSize = chunkSize / 2
+				if chunkSize < 1 {
+					chunkSize = 1
+				}
+			}
+		}
+
+		row, err := iter.Columns()
+		if err != nil {
+			return fmt.Errorf("failed to read row in sheet %s: %w", sheetName, err)
+		}
+
+		// Skip leading empty rows
+		if first && len(row) == 0 {
+			continue
+		}
+
+		if first {
+			// Validate headers for duplicates
+			if err := validateColumnNames(row); err != nil {
+				return err
+			}
+			headers = newHeader(row)
+			first = false
+			continue
+		}
+
+		chunkRecords = append(chunkRecords, newRecord(row))
+		processedRows++
+
+		// Collect values for type inference (only on first chunk)
+		if len(columnInfo) == 0 {
+			if len(columnValues) == 0 {
+				columnValues = make([][]string, len(headers))
+			}
+			for i, val := range row {
+				if i < len(columnValues) {
+					columnValues[i] = append(columnValues[i], val)
+				}
+			}
+		}
+
+		// Process chunk when it reaches the target size
+		if len(chunkRecords) >= chunkSize {
+			// Infer column types on first chunk
+			if len(columnInfo) == 0 {
+				columnInfo = newColumnInfoListFromValues(headers, columnValues)
+			}
+
+			// Copy to decouple from the reused backing array
+			chunkData := append([]Record(nil), chunkRecords...)
+			chunk := &tableChunk{
+				tableName:  p.tableName,
+				headers:    headers,
+				records:    chunkData,
+				columnInfo: columnInfo,
+			}
+
+			if err := processor(chunk); err != nil {
+				return fmt.Errorf("chunk processor error: %w", err)
+			}
+
+			// Reset for next chunk, reuse memory pool slice
+			chunkRecords = chunkRecords[:0] // Reset length but keep capacity
+			columnValues = nil              // Don't collect values after first chunk
+		}
+	}
+
+	// Process remaining records
+	if len(chunkRecords) > 0 {
+		// Infer column types if we haven't yet (small dataset)
+		if len(columnInfo) == 0 {
+			columnInfo = newColumnInfoListFromValues(headers, columnValues)
+		}
+
+		// Copy to decouple from the reused backing array
+		chunkData := append([]Record(nil), chunkRecords...)
+		chunk := &tableChunk{
+			tableName:  p.tableName,
+			headers:    headers,
+			records:    chunkData,
+			columnInfo: columnInfo,
+		}
+
+		if err := processor(chunk); err != nil {
+			return fmt.Errorf("chunk processor error: %w", err)
+		}
+	}
+
+	return nil
 }

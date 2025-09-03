@@ -129,16 +129,21 @@ func (h header) equal(h2 header) bool {
 	return true
 }
 
-// record is file records.
-type record []string
+// Record represents file records as a slice of string fields.
+// This type was changed from unexported 'record' to exported 'Record' in v0.5.0
+// to fix lint issues with exported methods returning unexported types.
+//
+// Breaking change: Code that previously imported and used the unexported 'record'
+// type will need to be updated to use 'Record'.
+type Record []string
 
 // newRecord create new record.
-func newRecord(r []string) record {
-	return record(r)
+func newRecord(r []string) Record {
+	return Record(r)
 }
 
 // equal compare record.
-func (r record) equal(r2 record) bool {
+func (r Record) equal(r2 Record) bool {
 	if len(r) != len(r2) {
 		return false
 	}
@@ -260,7 +265,7 @@ func newColumnInfoWithType(name string, colType columnType) columnInfo {
 type columnInfoList []columnInfo
 
 // newColumnInfoList creates column info list from header and records
-func newColumnInfoList(header header, records []record) columnInfoList {
+func newColumnInfoList(header header, records []Record) columnInfoList {
 	columnCount := len(header)
 	if columnCount == 0 {
 		return nil
@@ -667,7 +672,7 @@ func selectColumnType(typeCounts map[columnType]int, totalCount int) columnType 
 }
 
 // inferColumnsInfo infers column information from header and data records
-func inferColumnsInfo(header header, records []record) []columnInfo {
+func inferColumnsInfo(header header, records []Record) []columnInfo {
 	columnCount := len(header)
 	if columnCount == 0 {
 		return nil
