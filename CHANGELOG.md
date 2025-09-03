@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4] - 2025-09-03
+
+### Added
+- **Memory Management System (PR #49, [d128a27](https://github.com/nao1215/filesql/commit/d128a27))**: Comprehensive memory optimization for large file processing
+  - Introduced `MemoryPool` for efficient reuse of byte slices, record slices, and string slices
+  - Added `MemoryLimit` with configurable thresholds and graceful degradation
+  - Implemented automatic memory monitoring with adaptive chunk size reduction
+  - Enhanced XLSX processing with chunked streaming and memory-optimized operations
+  - Added comprehensive test coverage (800+ lines) with benchmarks and concurrent access validation
+- **Compression Handler (PR #48, [ac04ae9](https://github.com/nao1215/filesql/commit/ac04ae9))**: Factory pattern for file compression handling
+  - Unified compression/decompression interface supporting gzip, bzip2, xz, and zstd formats
+  - Clean resource management with automatic cleanup functions
+  - Comprehensive test suite with end-to-end compression validation
+  - Performance benchmarks for different compression algorithms
+
+### Changed
+- **Architecture Refactoring (PR #47, [c228ffd](https://github.com/nao1215/filesql/commit/c228ffd))**: Split DBBuilder into focused processors following Single Responsibility Principle
+  - Created dedicated `FileProcessor` for file-specific operations
+  - Introduced `StreamProcessor` for streaming data processing
+  - Added `Validator` for centralized validation logic
+  - Improved code maintainability and testability through separation of concerns
+- **API Breaking Change**: Exported `Record` type (was previously unexported `record`)
+  - Fixed lint issues with exported methods returning unexported types
+  - Added comprehensive documentation for migration guidance
+
+### Fixed
+- **Memory Pool Resource Management**: Fixed critical backing array tracking issue
+  - Resolved potential memory corruption when slice capacity exceeded original allocation
+  - Implemented proper resource cleanup with original slice tracking
+- **Performance Optimization**: Reduced `runtime.ReadMemStats` call frequency
+  - Changed from every 100 records to every 1000 records (10x performance improvement)
+  - Added detailed comments explaining the performance trade-offs
+
+### Technical Improvements
+- **Enhanced Documentation**: Added comprehensive godoc comments for all new types
+  - `MemoryPool` and `MemoryLimit` usage examples and thread safety guarantees
+  - Performance notes and best practices for memory management
+- **Code Quality**: Replaced magic numbers with named constants throughout memory management
+- **Integer Overflow Safety**: Enhanced overflow protection with detailed documentation for edge cases
+- **Test Coverage**: Maintained 81.2% test coverage with extensive memory management test suite
+
 ## [0.4.3] - 2025-09-02
 
 ### Fixed
