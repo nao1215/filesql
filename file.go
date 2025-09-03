@@ -101,7 +101,7 @@ type file struct {
 type tableChunk struct {
 	tableName  string
 	headers    header
-	records    []record
+	records    []Record
 	columnInfo []columnInfo
 }
 
@@ -116,7 +116,7 @@ func (tc *tableChunk) getHeaders() header {
 }
 
 // getRecords returns the records in this chunk
-func (tc *tableChunk) getRecords() []record {
+func (tc *tableChunk) getRecords() []Record {
 	return tc.records
 }
 
@@ -130,9 +130,11 @@ type chunkProcessor func(chunk *tableChunk) error
 
 // streamingParser represents a parser that can read from io.Reader directly
 type streamingParser struct {
-	fileType  FileType
-	tableName string
-	chunkSize ChunkSize
+	fileType    FileType
+	tableName   string
+	chunkSize   ChunkSize
+	memoryPool  *MemoryPool  // Pool for reusable memory allocations
+	memoryLimit *MemoryLimit // Configurable memory limits
 }
 
 // newFile creates a new file
@@ -471,7 +473,7 @@ func (f *file) parseDelimitedFile(delimiter rune) (*table, error) {
 		return nil, err
 	}
 
-	tableRecords := make([]record, 0, len(records)-1)
+	tableRecords := make([]Record, 0, len(records)-1)
 	for i := 1; i < len(records); i++ {
 		tableRecords = append(tableRecords, newRecord(records[i]))
 	}
@@ -542,9 +544,9 @@ func (f *file) parseLTSV() (*table, error) {
 		header = append(header, key)
 	}
 
-	tableRecords := make([]record, 0, len(records))
+	tableRecords := make([]Record, 0, len(records))
 	for _, recordMap := range records {
-		var row record
+		var row Record
 		for _, key := range header {
 			if val, exists := recordMap[key]; exists {
 				row = append(row, val)
@@ -624,9 +626,9 @@ func (f *file) parseXLSX() (*table, error) {
 
 // convertXLSXRowsToTable converts XLSX rows to table headers and records
 // First row becomes headers, remaining rows become records with padding
-func convertXLSXRowsToTable(rows [][]string) (header, []record) {
+func convertXLSXRowsToTable(rows [][]string) (header, []Record) {
 	var headers header
-	var records []record
+	var records []Record
 
 	// First row as headers
 	if len(rows) > 0 {
@@ -636,9 +638,9 @@ func convertXLSXRowsToTable(rows [][]string) (header, []record) {
 
 	// Remaining rows as records
 	if len(rows) > 1 {
-		records = make([]record, len(rows)-1)
+		records = make([]Record, len(rows)-1)
 		for i, row := range rows[1:] {
-			record := make(record, len(headers))
+			record := make(Record, len(headers))
 			for j := range headers {
 				if j < len(row) {
 					record[j] = row[j]

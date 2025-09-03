@@ -12,7 +12,7 @@ type table struct {
 	// header is table header.
 	header header
 	// records is table records.
-	records []record
+	records []Record
 	// columnInfo contains inferred type information for each column
 	columnInfo []columnInfo
 }
@@ -21,7 +21,7 @@ type table struct {
 func newTable(
 	name string,
 	header header,
-	records []record,
+	records []Record,
 ) *table {
 	// Infer column types from data
 	columnInfo := newColumnInfoList(header, records)
@@ -45,7 +45,7 @@ func (t *table) getHeader() header {
 }
 
 // getRecords return table records.
-func (t *table) getRecords() []record {
+func (t *table) getRecords() []Record {
 	return t.records
 }
 

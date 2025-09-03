@@ -14,7 +14,7 @@ func TestNewTable(t *testing.T) {
 		t.Parallel()
 
 		header := newHeader([]string{"col1", "col2"})
-		records := []record{
+		records := []Record{
 			newRecord([]string{"val1", "val2"}),
 			newRecord([]string{"val3", "val4"}),
 		}
@@ -35,7 +35,7 @@ func TestTable_Equal(t *testing.T) {
 	t.Parallel()
 
 	header := newHeader([]string{"col1", "col2"})
-	records := []record{
+	records := []Record{
 		newRecord([]string{"val1", "val2"}),
 		newRecord([]string{"val3", "val4"}),
 	}
@@ -67,7 +67,7 @@ func TestTable_Equal(t *testing.T) {
 	t.Run("Different record count", func(t *testing.T) {
 		t.Parallel()
 
-		differentRecords := []record{
+		differentRecords := []Record{
 			newRecord([]string{"val1", "val2"}),
 		}
 		table5 := newTable("test", header, differentRecords)
@@ -77,7 +77,7 @@ func TestTable_Equal(t *testing.T) {
 	t.Run("Different record values", func(t *testing.T) {
 		t.Parallel()
 
-		differentValueRecords := []record{
+		differentValueRecords := []Record{
 			newRecord([]string{"val1", "val2"}),
 			newRecord([]string{"val3", "different"}),
 		}

@@ -233,7 +233,7 @@ Bob,35,Kyoto`
 
 	assert.Len(t, table.getRecords(), 3, "Record count mismatch")
 
-	expectedFirstRecord := record{"John", "25", "Tokyo"}
+	expectedFirstRecord := Record{"John", "25", "Tokyo"}
 	assert.True(t, table.getRecords()[0].equal(expectedFirstRecord), "First record mismatch")
 }
 
@@ -260,7 +260,7 @@ Bob	35	Kyoto`
 
 	assert.Len(t, table.getRecords(), 3, "Record count mismatch")
 
-	expectedFirstRecord := record{"John", "25", "Tokyo"}
+	expectedFirstRecord := Record{"John", "25", "Tokyo"}
 	assert.True(t, table.getRecords()[0].equal(expectedFirstRecord), "First record mismatch")
 }
 

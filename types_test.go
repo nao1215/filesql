@@ -101,8 +101,8 @@ func TestRecord_Equal(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		record1  record
-		record2  record
+		record1  Record
+		record2  Record
 		expected bool
 	}{
 		{
@@ -281,7 +281,7 @@ func TestNewColumnInfoList(t *testing.T) {
 
 	t.Run("mixed column types", func(t *testing.T) {
 		header := newHeader([]string{"id", "name", "age", "salary", "hire_date"})
-		records := []record{
+		records := []Record{
 			newRecord([]string{"1", "Alice", "30", "95000", "2023-01-15"}),
 			newRecord([]string{"2", "Bob", "25", "78000", "2023-02-20"}),
 			newRecord([]string{"3", "Charlie", "35", "102000", "2023-03-10"}),
@@ -307,7 +307,7 @@ func TestNewColumnInfoList(t *testing.T) {
 
 	t.Run("empty records", func(t *testing.T) {
 		header := newHeader([]string{"col1", "col2"})
-		records := []record{}
+		records := []Record{}
 
 		result := newColumnInfoList(header, records)
 
@@ -320,7 +320,7 @@ func TestNewColumnInfoList(t *testing.T) {
 
 	t.Run("datetime column inference", func(t *testing.T) {
 		header := newHeader([]string{"event_date", "event_time", "timestamp"})
-		records := []record{
+		records := []Record{
 			newRecord([]string{"2023-01-15", "10:30:00", "2023-01-15T10:30:00Z"}),
 			newRecord([]string{"2023-02-20", "14:45:30", "2023-02-20T14:45:30Z"}),
 			newRecord([]string{"2023-03-10", "09:15:45", "2023-03-10T09:15:45Z"}),
