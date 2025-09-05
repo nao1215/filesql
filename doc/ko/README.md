@@ -11,6 +11,8 @@
 
 **filesql**은 SQLite3 SQL 구문을 사용하여 CSV, TSV, LTSV, Parquet, Excel (XLSX) 파일을 쿼리할 수 있게 해주는 Go SQL 드라이버입니다. 가져오기나 변환 없이 데이터 파일을 직접 쿼리하세요!
 
+**filesql의 기능을 체험해보고 싶으신가요?** **[sqly](https://github.com/nao1215/sqly)**를 확인해보세요 - filesql을 사용하여 셸에서 직접 CSV, TSV, LTSV, Excel 파일에 대해 SQL 쿼리를 쉽게 실행할 수 있는 명령줄 도구입니다. filesql의 성능을 실제로 경험할 수 있는 완벽한 방법입니다!
+
 ## 🎯 왜 filesql인가요?
 
 이 라이브러리는 두 개의 별도 CLI 도구인 [sqly](https://github.com/nao1215/sqly)와 [sqluv](https://github.com/nao1215/sqluv)를 유지 관리한 경험에서 탄생했습니다. 두 도구 모두 공통 기능을 공유했습니다: CSV, TSV 및 기타 파일 형식에 대한 SQL 쿼리 실행.
@@ -372,7 +374,7 @@ var sharedDB *sql.DB  // 이는 경쟁 조건을 야기합니다
 ### Parquet 지원
 - **읽기**: 복잡한 데이터 타입을 가진 Apache Parquet 파일에 대한 완전 지원
 - **쓰기**: 내보내기 기능이 구현되었습니다 (외부 압축은 지원하지 않으므로 Parquet의 내장 압축을 사용하세요)
-- **타입 매핑**: Parquet 타입은 SQLite 타입으로 매핑됨 (자세한 내용은 [PARQUET_TYPE_MAPPING.md](PARQUET_TYPE_MAPPING.md) 참조)
+- **타입 매핑**: Parquet 타입은 SQLite 타입으로 매핑됨
 - **압축**: 외부 압축 대신 Parquet의 내장 압축이 사용됨
 - **대용량 데이터**: Parquet 파일은 Arrow의 칼럼형 형식으로 효율적으로 처리됨
 
