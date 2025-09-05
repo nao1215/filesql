@@ -11,6 +11,8 @@
 
 **filesql** is a Go SQL driver that enables you to query CSV, TSV, LTSV, Parquet, and Excel (XLSX) files using SQLite3 SQL syntax. Query your data files directly without any imports or transformations!
 
+**Want to try filesql's capabilities?** Check out **[sqly](https://github.com/nao1215/sqly)** - a command-line tool that uses filesql to easily execute SQL queries against CSV, TSV, LTSV, and Excel files directly from your shell. It's the perfect way to experience the power of filesql in action!
+
 ## 🎯 Why filesql?
 
 This library was born from the experience of maintaining two separate CLI tools - [sqly](https://github.com/nao1215/sqly) and [sqluv](https://github.com/nao1215/sqluv). Both tools shared a common feature: executing SQL queries against CSV, TSV, and other file formats. 
@@ -371,7 +373,7 @@ var sharedDB *sql.DB  // This will cause race conditions
 ### Parquet Support
 - **Reading**: Full support for Apache Parquet files with complex data types
 - **Writing**: Export functionality is implemented (external compression not supported, use Parquet's built-in compression)
-- **Type Mapping**: Parquet types are mapped to SQLite types (see [PARQUET_TYPE_MAPPING.md](PARQUET_TYPE_MAPPING.md))
+- **Type Mapping**: Parquet types are mapped to SQLite types
 - **Compression**: Parquet's built-in compression is used instead of external compression
 - **Large Data**: Parquet files are efficiently processed with Arrow's columnar format
 
