@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5] - 2025-09-17
+
+### Fixed
+- **Table Name Sanitization**: Fixed SQL syntax errors caused by special characters in file names
+  - Applied `sanitizeTableName()` to all table name generation paths
+  - Hyphens, spaces, and special characters are now automatically converted to underscores
+  - Example: `"user-data.csv"` → table `"user_data"`, `"my file.csv"` → table `"my_file"`
+  - Updated test expectations to match sanitized table names
+
+### Improved
+- **API Documentation**: Enhanced documentation for public APIs to clarify table name sanitization
+  - Updated `Open()`, `OpenContext()`, and `DBBuilder.Open()` method documentation
+  - Added examples showing special character conversion in table names
+  - Improved `sanitizeTableName()` function documentation with detailed transformation rules
+- **Development Experience**: Optimized test execution time for local development
+  - Added GitHub Actions environment checks to skip slow tests locally
+  - Reduced local test execution time by 63% (from ~55s to ~20s)
+  - Maintained full test coverage in CI/CD while improving developer productivity
+
+### Technical Details
+- **Breaking Change Prevention**: Preserved existing `tableFromFilePath()` behavior for backward compatibility
+- **Test Coverage**: Maintained 80.7% test coverage with updated test expectations
+- **Performance**: No impact on runtime performance, only development-time improvements
+
 ## [0.4.4] - 2025-09-03
 
 ### Added
