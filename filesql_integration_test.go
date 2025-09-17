@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -13,6 +14,10 @@ import (
 
 func TestCompanyDataIntegration(t *testing.T) {
 	t.Parallel()
+
+	if os.Getenv("GITHUB_ACTIONS") == "" {
+		t.Skip("Skipping slow company data integration test in local development")
+	}
 
 	companyDir := filepath.Join("testdata", "company")
 	db, err := Open(companyDir)
@@ -741,6 +746,10 @@ func TestCompanyDataIntegration(t *testing.T) {
 func TestMultipleSequentialQueries(t *testing.T) {
 	t.Parallel()
 
+	if os.Getenv("GITHUB_ACTIONS") == "" {
+		t.Skip("Skipping slow multiple sequential queries test in local development")
+	}
+
 	companyDir := filepath.Join("testdata", "company")
 	db, err := Open(companyDir)
 	require.NoError(t, err)
@@ -1012,6 +1021,10 @@ func TestMultipleSequentialQueries(t *testing.T) {
 
 func TestDataIntegrityValidation(t *testing.T) {
 	t.Parallel()
+
+	if os.Getenv("GITHUB_ACTIONS") == "" {
+		t.Skip("Skipping slow data integrity validation test in local development")
+	}
 
 	companyDir := filepath.Join("testdata", "company")
 	db, err := Open(companyDir)

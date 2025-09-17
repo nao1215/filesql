@@ -198,7 +198,7 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 		fileType := fileInfo.getFileType()
 
 		// Generate table name from file path (remove extension and clean up)
-		tableName := tableFromFilePath(match)
+		tableName := sanitizeTableName(tableFromFilePath(match))
 
 		// Create ReaderInput
 		readerInput := readerInput{
@@ -220,7 +220,7 @@ func (fp *fileProcessor) deduplicateCompressedFiles(files []string) []string {
 
 	// First pass: collect all uncompressed files
 	for _, file := range files {
-		tableName := tableFromFilePath(file)
+		tableName := sanitizeTableName(tableFromFilePath(file))
 		if !fp.isCompressedFile(file) {
 			tableToFile[tableName] = file
 		}
@@ -228,7 +228,7 @@ func (fp *fileProcessor) deduplicateCompressedFiles(files []string) []string {
 
 	// Second pass: add compressed files only if uncompressed version doesn't exist
 	for _, file := range files {
-		tableName := tableFromFilePath(file)
+		tableName := sanitizeTableName(tableFromFilePath(file))
 		if fp.isCompressedFile(file) {
 			if _, exists := tableToFile[tableName]; !exists {
 				tableToFile[tableName] = file

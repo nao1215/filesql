@@ -299,6 +299,10 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 // Table names are derived from file names without extensions:
 // - "users.csv" becomes table "users"
 // - "data.tsv.gz" becomes table "data"
+// - "user-data.csv" becomes table "user_data" (hyphens become underscores)
+// - "my file.csv" becomes table "my_file" (spaces become underscores)
+//
+// Special characters in file names are automatically sanitized for SQL safety.
 //
 // The returned database connection supports the full SQLite3 SQL syntax.
 // Auto-save functionality is supported for both file paths and reader inputs.
@@ -486,7 +490,7 @@ func (b *DBBuilder) processFSToReaders(_ context.Context, filesystem fs.FS) ([]r
 		fileType := fileInfo.getFileType()
 
 		// Generate table name from file path (remove extension and clean up)
-		tableName := tableFromFilePath(match)
+		tableName := sanitizeTableName(tableFromFilePath(match))
 
 		// Create ReaderInput
 		readerInput := readerInput{
@@ -566,36 +570,6 @@ func (b *DBBuilder) streamXLSXFileToSQLite(ctx context.Context, db *sql.DB, read
 	}
 
 	return nil
-}
-
-// sanitizeTableName removes invalid characters from table names
-func sanitizeTableName(name string) string {
-	// Replace spaces and invalid characters with underscores
-	result := strings.ReplaceAll(name, " ", "_")
-	result = strings.ReplaceAll(result, "-", "_")
-	result = strings.ReplaceAll(result, ".", "_")
-
-	// Remove any non-alphanumeric characters except underscore
-	var sanitized strings.Builder
-	for _, r := range result {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
-			sanitized.WriteRune(r)
-		}
-	}
-
-	finalResult := sanitized.String()
-
-	// Ensure it doesn't start with a number
-	if len(finalResult) > 0 && finalResult[0] >= '0' && finalResult[0] <= '9' {
-		finalResult = "sheet_" + finalResult
-	}
-
-	// Ensure it's not empty
-	if finalResult == "" {
-		finalResult = "sheet"
-	}
-
-	return finalResult
 }
 
 // createTableFromXLSXSheet creates a SQLite table from XLSX sheet data

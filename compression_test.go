@@ -284,6 +284,10 @@ func TestCompressionFactory(t *testing.T) {
 func TestCompressionEndToEnd(t *testing.T) {
 	t.Parallel()
 
+	if os.Getenv("GITHUB_ACTIONS") == "" {
+		t.Skip("Skipping slow compression end-to-end test in local development")
+	}
+
 	// Create a temporary directory for test files
 	tempDir := t.TempDir()
 

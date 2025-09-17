@@ -69,6 +69,11 @@ func TestOpen(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Skip slow directory tests in local development
+			if (tt.name == "Directory path" || tt.name == "Mixed file and directory paths") && os.Getenv("GITHUB_ACTIONS") == "" {
+				t.Skip("Skipping slow directory test in local development")
+			}
+
 			db, err := Open(tt.paths...)
 			if tt.wantErr {
 				assert.Error(t, err, "Open() should have failed")
@@ -182,6 +187,10 @@ func TestSQLQueries(t *testing.T) {
 func TestMultipleFiles(t *testing.T) {
 	t.Parallel()
 
+	if os.Getenv("GITHUB_ACTIONS") == "" {
+		t.Skip("Skipping slow multiple files test in local development")
+	}
+
 	// Test loading multiple files from directory
 	db, err := Open("testdata")
 	require.NoError(t, err, "Failed to open directory")
@@ -240,6 +249,10 @@ func TestMultipleFiles(t *testing.T) {
 
 func TestJoinMultipleTables(t *testing.T) {
 	t.Parallel()
+
+	if os.Getenv("GITHUB_ACTIONS") == "" {
+		t.Skip("Skipping slow join multiple tables test in local development")
+	}
 
 	// Test joining tables from multiple files
 	db, err := Open("testdata")
@@ -1371,20 +1384,20 @@ func Test_TableNameSecurity(t *testing.T) {
 		{
 			name:         "SQL injection attempt",
 			filePath:     "'; DROP TABLE users; --.csv",
-			expectedName: "'; DROP TABLE users; --",
-			description:  "Should not sanitize SQL injection attempts",
+			expectedName: "_DROP_TABLE_users___",
+			description:  "Should sanitize SQL injection attempts",
 		},
 		{
 			name:         "Unicode characters",
 			filePath:     "データ.csv",
-			expectedName: "データ",
-			description:  "Should handle Unicode in filenames",
+			expectedName: "sheet",
+			description:  "Should sanitize Unicode characters to fallback name",
 		},
 		{
 			name:         "Special characters",
 			filePath:     "test@#$%^&()_+.csv",
-			expectedName: "test@#$%^&()_+",
-			description:  "Should preserve special characters",
+			expectedName: "test_",
+			description:  "Should sanitize special characters",
 		},
 		{
 			name:         "Very long filename",
@@ -1395,14 +1408,14 @@ func Test_TableNameSecurity(t *testing.T) {
 		{
 			name:         "Empty filename",
 			filePath:     ".csv",
-			expectedName: "",
-			description:  "Should handle empty base filename",
+			expectedName: "sheet",
+			description:  "Should handle empty base filename with fallback",
 		},
 		{
 			name:         "Hidden file",
 			filePath:     ".hidden.csv",
-			expectedName: ".hidden",
-			description:  "Should handle hidden files",
+			expectedName: "_hidden",
+			description:  "Should sanitize hidden files",
 		},
 		{
 			name:         "Windows reserved names",
@@ -1414,7 +1427,7 @@ func Test_TableNameSecurity(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			tableName := tableFromFilePath(tc.filePath)
+			tableName := sanitizeTableName(tableFromFilePath(tc.filePath))
 			if tableName != tc.expectedName {
 				assert.Fail(t, "Expected table name %q, got %q", tc.expectedName, tableName)
 			}
@@ -1501,7 +1514,7 @@ func Test_MalformedCSVHandling(t *testing.T) {
 				defer db.Close()
 
 				// Try to query the table
-				tableName := tableFromFilePath(tmpFile.Name())
+				tableName := sanitizeTableName(tableFromFilePath(tmpFile.Name()))
 				// Use bracket notation for table name (safe in controlled test environment)
 				query := "SELECT COUNT(*) FROM [" + tableName + "]"
 				var count int
@@ -1553,7 +1566,7 @@ func Test_ConcurrentAccess(t *testing.T) {
 					return
 				}
 
-				tableName := tableFromFilePath(tmpFile.Name())
+				tableName := sanitizeTableName(tableFromFilePath(tmpFile.Name()))
 				// Use bracket notation for table name and parameterized query for safety
 				query := "SELECT COUNT(*) FROM [" + tableName + "] WHERE id > " + strconv.Itoa(j*5)
 
@@ -1582,6 +1595,10 @@ func Test_ConcurrentAccess(t *testing.T) {
 func Test_ResourceExhaustion(t *testing.T) {
 	t.Parallel()
 
+	if os.Getenv("GITHUB_ACTIONS") == "" {
+		t.Skip("Skipping slow resource exhaustion test in local development")
+	}
+
 	// Test 1: Large number of columns
 	t.Run("Many columns", func(t *testing.T) {
 		tmpFile, err := os.CreateTemp(t.TempDir(), "many_columns_*.csv")
@@ -1609,7 +1626,7 @@ func Test_ResourceExhaustion(t *testing.T) {
 		require.NoError(t, err, "Failed to open file with many columns")
 		defer db.Close()
 
-		tableName := tableFromFilePath(tmpFile.Name())
+		tableName := sanitizeTableName(tableFromFilePath(tmpFile.Name()))
 		var count int
 		err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
 		assert.NoError(t, err, "Failed to query table with many columns")
@@ -1653,7 +1670,7 @@ func Test_ResourceExhaustion(t *testing.T) {
 		require.NoError(t, err, "Failed to open file with many rows")
 		defer db.Close()
 
-		tableName := tableFromFilePath(tmpFile.Name())
+		tableName := sanitizeTableName(tableFromFilePath(tmpFile.Name()))
 		var count int
 		err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
 		assert.NoError(t, err, "Failed to query table with many rows")
@@ -1780,7 +1797,7 @@ func Test_UnicodeAndEncoding(t *testing.T) {
 			require.NoError(t, err, "Failed to open Unicode file")
 			defer db.Close()
 
-			tableName := tableFromFilePath(tmpFile.Name())
+			tableName := sanitizeTableName(tableFromFilePath(tmpFile.Name()))
 
 			// Test basic query
 			var count int
@@ -1838,7 +1855,7 @@ func Test_ConnectionLifecycle(t *testing.T) {
 				require.NoError(t, err, "Failed to open database on iteration %d", i)
 			}
 
-			tableName := tableFromFilePath(tmpFile.Name())
+			tableName := sanitizeTableName(tableFromFilePath(tmpFile.Name()))
 			var count int
 			err = db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM [%s]", tableName)).Scan(&count)
 			if err != nil {
@@ -1862,7 +1879,7 @@ func Test_ConnectionLifecycle(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 		defer cancel()
 
-		tableName := tableFromFilePath(tmpFile.Name())
+		tableName := sanitizeTableName(tableFromFilePath(tmpFile.Name()))
 		// Use bracket notation for table name (safe in controlled test environment)
 		query := "SELECT COUNT(*) FROM [" + tableName + "]"
 		var count int
@@ -1985,7 +2002,7 @@ func Test_SQLReservedWordsAsFilenames(t *testing.T) {
 			defer db.Close()
 
 			// Test 2: Verify table exists with proper name
-			expectedTableName := tableFromFilePath(filePath)
+			expectedTableName := sanitizeTableName(tableFromFilePath(filePath))
 			var actualTableName string
 			err = db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", expectedTableName).Scan(&actualTableName)
 			if err != nil {
@@ -2081,7 +2098,7 @@ func Test_SQLReservedWordsMultipleFiles(t *testing.T) {
 
 	// Test 2: Verify all tables exist
 	for _, file := range files {
-		tableName := tableFromFilePath(file.name)
+		tableName := sanitizeTableName(tableFromFilePath(file.name))
 		var name string
 		err := db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", tableName).Scan(&name)
 		if err != nil {
@@ -2225,7 +2242,7 @@ func Test_SQLReservedWordsEdgeCases(t *testing.T) {
 				defer db.Close()
 
 				// Verify table creation and basic functionality
-				tableName := tableFromFilePath(filePath)
+				tableName := sanitizeTableName(tableFromFilePath(filePath))
 
 				// Test table exists
 				var name string
@@ -2397,7 +2414,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 		require.NoError(t, err, "Failed to open file with reserved keywords")
 		defer db.Close()
 
-		tableName := tableFromFilePath(tmpFile.Name())
+		tableName := sanitizeTableName(tableFromFilePath(tmpFile.Name()))
 
 		// Test querying with reserved keyword column names
 		// Use bracket notation for table name (safe in controlled test environment)
@@ -2446,7 +2463,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 				}
 				defer db.Close()
 
-				tableName := tableFromFilePath(tmpFile.Name())
+				tableName := sanitizeTableName(tableFromFilePath(tmpFile.Name()))
 				// Use bracket notation for table name (safe in controlled test environment)
 				query := "SELECT COUNT(*) FROM [" + tableName + "]"
 				var count int
@@ -2476,7 +2493,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 		}
 		defer db.Close()
 
-		tableName := tableFromFilePath(tmpFile.Name())
+		tableName := sanitizeTableName(tableFromFilePath(tmpFile.Name()))
 
 		// Test transaction rollback
 		tx, err := db.BeginTx(context.Background(), nil)
@@ -2630,6 +2647,10 @@ func TestComprehensiveFileFormats(t *testing.T) {
 // TestDirectoryLoading tests loading all files from a directory
 func TestDirectoryLoading(t *testing.T) {
 	t.Parallel()
+
+	if os.Getenv("GITHUB_ACTIONS") == "" {
+		t.Skip("Skipping slow directory loading test in local development")
+	}
 
 	// Open database with directory path
 	db, err := Open("testdata")
@@ -2829,6 +2850,10 @@ func TestCTEQueries(t *testing.T) {
 // TestMixedDirectoryAndFiles tests mixing directory and individual file paths
 func TestMixedDirectoryAndFiles(t *testing.T) {
 	t.Parallel()
+
+	if os.Getenv("GITHUB_ACTIONS") == "" {
+		t.Skip("Skipping slow mixed directory and files test in local development")
+	}
 
 	// Create a specific file outside testdata directory for this test
 	tempFile := filepath.Join(os.TempDir(), "mixed_test.csv")
@@ -3355,6 +3380,10 @@ Charlie,92.8,true`
 func TestParquetPerformance(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping performance test in short mode")
+	}
+
+	if os.Getenv("GITHUB_ACTIONS") == "" {
+		t.Skip("Skipping slow Parquet performance test in local development")
 	}
 
 	// Create temporary directory
