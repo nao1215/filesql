@@ -478,7 +478,7 @@ func (f *file) parseDelimitedFile(delimiter rune) (*table, error) {
 		tableRecords = append(tableRecords, newRecord(records[i]))
 	}
 
-	tableName := tableFromFilePath(f.path)
+	tableName := sanitizeTableName(tableFromFilePath(f.path))
 	return newTable(tableName, header, tableRecords), nil
 }
 
@@ -557,7 +557,7 @@ func (f *file) parseLTSV() (*table, error) {
 		tableRecords = append(tableRecords, row)
 	}
 
-	tableName := tableFromFilePath(f.path)
+	tableName := sanitizeTableName(tableFromFilePath(f.path))
 	return newTable(tableName, header, tableRecords), nil
 }
 
@@ -620,7 +620,7 @@ func (f *file) parseXLSX() (*table, error) {
 	// Convert to standard table format
 	headers, records := convertXLSXRowsToTable(rows)
 
-	tableName := tableFromFilePath(f.path)
+	tableName := sanitizeTableName(tableFromFilePath(f.path))
 	return newTable(tableName, headers, records), nil
 }
 

@@ -43,6 +43,10 @@ import (
 //   - "users.csv" → table "users"
 //   - "data.tsv.gz" → table "data"
 //   - "/path/to/sales.csv" → table "sales"
+//   - "user-data.csv" → table "user_data" (hyphens become underscores)
+//   - "my file.csv" → table "my_file" (spaces become underscores)
+//
+// Special characters in file names are automatically sanitized for SQL safety.
 //
 // Note: Original files are never modified. Changes exist only in memory.
 // To save changes, use DumpDatabase() function.
@@ -144,6 +148,27 @@ func Open(paths ...string) (*sql.DB, error) {
 //		fmt.Printf("%s (%s): $%.2f (Rank: %d/%d, Dept Avg: $%.2f)\n",
 //			name, dept, salary, rank, deptSize, deptAvg)
 //	}
+//
+// OpenContext creates an SQL database from CSV, TSV, or LTSV files with context support.
+//
+// This function is similar to Open() but allows cancellation and timeout control through context.
+// Table names are automatically generated from file names with special characters
+// sanitized for SQL safety (e.g., hyphens become underscores: "data-file.csv" → "data_file").
+//
+// Example:
+//
+//	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+//	defer cancel()
+//
+//	db, err := filesql.OpenContext(ctx, "large-dataset.csv")
+//	if err != nil {
+//		return err
+//	}
+//	defer db.Close()
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//   - paths: One or more file paths or directories to load
 func OpenContext(ctx context.Context, paths ...string) (*sql.DB, error) {
 	// Use builder pattern internally for backward compatibility
 	builder := NewBuilder().AddPaths(paths...)
@@ -510,7 +535,7 @@ func (f *file) parseParquet() (*table, error) {
 		return nil, fmt.Errorf("no records found in parquet file: %s", f.path)
 	}
 
-	tableName := tableFromFilePath(f.path)
+	tableName := sanitizeTableName(tableFromFilePath(f.path))
 	return newTable(tableName, headerSlice, allRecords), nil
 }
 
@@ -597,7 +622,7 @@ func (f *file) parseCompressedParquet() (*table, error) {
 		return nil, fmt.Errorf("no records found in parquet file: %s", f.path)
 	}
 
-	tableName := tableFromFilePath(f.path)
+	tableName := sanitizeTableName(tableFromFilePath(f.path))
 	return newTable(tableName, headerSlice, allRecords), nil
 }
 

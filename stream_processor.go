@@ -93,7 +93,7 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db *sql.DB,
 	// Create reader input for streaming
 	readerInput := readerInput{
 		reader:    reader, // Use decompressed reader
-		tableName: tableFromFilePath(filePath),
+		tableName: sanitizeTableName(tableFromFilePath(filePath)),
 		fileType:  baseFileType,
 	}
 	return sp.streamReaderToDatabase(ctx, db, readerInput)
