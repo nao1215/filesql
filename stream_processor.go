@@ -165,6 +165,10 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 			if strings.Contains(err.Error(), "empty") {
 				return err
 			}
+			// For LTSV with no valid key:value pairs, propagate the error
+			if strings.Contains(err.Error(), "no valid LTSV") {
+				return err
+			}
 		}
 
 		// For header-only files, try to create an empty table by parsing headers
