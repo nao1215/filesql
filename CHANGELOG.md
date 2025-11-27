@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.6] - 2025-11-27
+
+### Added
+- **Header-Only File Support (PR #67, [5de8801](https://github.com/nao1215/filesql/commit/5de8801))**: Files with headers but no data records are now supported
+  - CSV, TSV, Parquet, and XLSX formats can now be loaded with only header rows
+  - Creates empty SQLite tables with correct column names (all columns as TEXT type)
+  - Useful for schema definition files and template files
+  - Example: A CSV file containing only `id,name,age` will create a table with those columns but zero rows
+
+### Fixed
+- **LTSV Error Handling**: Improved error messages for invalid LTSV data
+  - Now correctly returns `"no valid LTSV keys found"` error instead of silently creating empty tables
+  - LTSV format requires `key:value` pairs, so header-only concept does not apply
+
+### Changed
+- **Dependencies**: Updated library dependencies
+  - `modernc.org/sqlite`: 1.40.0 → 1.40.1
+  - `github.com/klauspost/compress`: 1.18.0 → 1.18.1
+  - `github.com/xuri/excelize/v2`: 2.9.1 → 2.10.0
+  - `golang.org/x/crypto`: Security update
+  - `actions/checkout`: 4 → 6
+
 ## [0.4.5] - 2025-09-17
 
 ### Fixed
