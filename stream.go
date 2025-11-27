@@ -335,6 +335,21 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 		if err := processor(chunk); err != nil {
 			return fmt.Errorf("chunk processor error: %w", err)
 		}
+	} else if len(columnInfo) == 0 {
+		// Handle header-only files: create empty chunk with header information
+		// This ensures table is created with correct column names even when no data records exist
+		columnInfo = newColumnInfoListFromValues(header, columnValues)
+
+		chunk := &tableChunk{
+			tableName:  p.tableName,
+			headers:    header,
+			records:    nil, // Empty records for header-only file
+			columnInfo: columnInfo,
+		}
+
+		if err := processor(chunk); err != nil {
+			return fmt.Errorf("chunk processor error: %w", err)
+		}
 	}
 
 	return nil
@@ -598,10 +613,6 @@ func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chu
 	}
 	defer table.Release()
 
-	if table.NumRows() == 0 {
-		return errors.New("no records found in parquet stream")
-	}
-
 	// Initialize header from table schema
 	schema := table.Schema()
 	headerSlice := make(header, schema.NumFields())
@@ -615,6 +626,21 @@ func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chu
 		// For Parquet files, we'll default to TEXT for simplicity in streaming
 		// Real type inference could be done from Arrow schema
 		columnInfoList[i] = newColumnInfoWithType(name, columnTypeText)
+	}
+
+	// Handle header-only Parquet files (schema exists but no data rows)
+	if table.NumRows() == 0 {
+		chunk := &tableChunk{
+			tableName:  p.tableName,
+			headers:    headerSlice,
+			records:    nil, // Empty records for header-only file
+			columnInfo: columnInfoList,
+		}
+
+		if err := processor(chunk); err != nil {
+			return fmt.Errorf("chunk processor error: %w", err)
+		}
+		return nil
 	}
 
 	// Process data in chunks using batch reader
@@ -907,6 +933,24 @@ func (p *streamingParser) processXLSXInChunks(reader io.Reader, processor chunkP
 		if err := processor(chunk); err != nil {
 			return fmt.Errorf("chunk processor error: %w", err)
 		}
+	} else if len(columnInfo) == 0 && len(headers) > 0 {
+		// Handle header-only XLSX files: create empty chunk with header information
+		// This ensures table is created with correct column names even when no data records exist
+		columnInfo = newColumnInfoListFromValues(headers, columnValues)
+
+		chunk := &tableChunk{
+			tableName:  p.tableName,
+			headers:    headers,
+			records:    nil, // Empty records for header-only file
+			columnInfo: columnInfo,
+		}
+
+		if err := processor(chunk); err != nil {
+			return fmt.Errorf("chunk processor error: %w", err)
+		}
+	} else if len(headers) == 0 {
+		// Completely empty XLSX - no headers, no data
+		return fmt.Errorf("sheet %s is empty in XLSX file", sheetName)
 	}
 
 	return nil

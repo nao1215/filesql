@@ -629,14 +629,21 @@ func TestStreamingParser_ProcessXLSXInChunks_MemoryOptimized(t *testing.T) {
 		parser := newStreamingParser(FileTypeXLSX, "test_table", 5)
 
 		var processedChunks int
+		var lastChunk *tableChunk
 
-		err := parser.ProcessInChunks(buf, func(_ *tableChunk) error {
+		err := parser.ProcessInChunks(buf, func(chunk *tableChunk) error {
 			processedChunks++
+			lastChunk = chunk
 			return nil
 		})
 
 		require.NoError(t, err)
-		assert.Equal(t, 0, processedChunks, "should not process any chunks for header-only file")
+		// Header-only files should process exactly one chunk with headers but no records
+		assert.Equal(t, 1, processedChunks, "should process one chunk for header-only file")
+		if lastChunk != nil {
+			assert.Equal(t, 3, len(lastChunk.getHeaders()), "should have correct number of headers")
+			assert.Equal(t, 0, len(lastChunk.getRecords()), "should have no records")
+		}
 	})
 
 	t.Run("error in chunk processor", func(t *testing.T) {
