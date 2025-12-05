@@ -229,10 +229,19 @@ func (sp *streamProcessor) prepareInsertStatement(ctx context.Context, db *sql.D
 	return db.PrepareContext(ctx, query)
 }
 
-// insertChunkData inserts a chunk's worth of data using a prepared statement
+// insertChunkData inserts a chunk's worth of data using a prepared statement.
+// Performance is optimized by reusing a single values slice to reduce allocations.
 func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, chunk *tableChunk) error {
-	for _, record := range chunk.getRecords() {
-		values := make([]any, len(record))
+	records := chunk.getRecords()
+	if len(records) == 0 {
+		return nil
+	}
+
+	// Pre-allocate values slice once and reuse to reduce allocations
+	values := make([]any, len(records[0]))
+
+	for _, record := range records {
+		// Reuse values slice - copy values to avoid allocations
 		for i, value := range record {
 			values[i] = value
 		}

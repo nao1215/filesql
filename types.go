@@ -286,17 +286,24 @@ func newColumnInfoList(header header, records []Record) columnInfoList {
 		return columns
 	}
 
-	// Collect values for each column
-	for i := range columnCount {
-		var values []string
-		for _, record := range records {
+	// Pre-allocate column values slices to avoid repeated allocations
+	columnValues := make([][]string, columnCount)
+	for i := range columnValues {
+		columnValues[i] = make([]string, 0, len(records))
+	}
+
+	// Collect values for all columns in a single pass through records
+	for _, record := range records {
+		for i := range columnCount {
 			if i < len(record) {
-				values = append(values, record[i])
+				columnValues[i] = append(columnValues[i], record[i])
 			}
 		}
+	}
 
-		// Infer type from values
-		columns[i] = newColumnInfo(header[i], values)
+	// Infer type for each column
+	for i := range columnCount {
+		columns[i] = newColumnInfo(header[i], columnValues[i])
 	}
 
 	return columns
@@ -693,17 +700,25 @@ func inferColumnsInfo(header header, records []Record) []columnInfo {
 		return columns
 	}
 
-	// Collect values for each column
-	for i := range columnCount {
-		var values []string
-		for _, record := range records {
+	// Pre-allocate column values slices to avoid repeated allocations
+	// This reduces memory allocations significantly for large datasets
+	columnValues := make([][]string, columnCount)
+	for i := range columnValues {
+		columnValues[i] = make([]string, 0, len(records))
+	}
+
+	// Collect values for all columns in a single pass through records
+	for _, record := range records {
+		for i := range columnCount {
 			if i < len(record) {
-				values = append(values, record[i])
+				columnValues[i] = append(columnValues[i], record[i])
 			}
 		}
+	}
 
-		// Infer type from values
-		columns[i].Type = inferColumnType(values)
+	// Infer type for each column
+	for i := range columnCount {
+		columns[i].Type = inferColumnType(columnValues[i])
 	}
 
 	return columns
