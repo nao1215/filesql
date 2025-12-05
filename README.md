@@ -340,9 +340,23 @@ Since filesql uses SQLite3 as its underlying engine, all SQL syntax follows [SQL
 
 ### Performance Tips
 - Use `OpenContext()` with timeouts for large files
-- Configure chunk sizes (rows per chunk) with `SetDefaultChunkSize()` for memory optimization  
+- Configure chunk sizes (rows per chunk) with `SetDefaultChunkSize()` for memory optimization
 - Single SQLite connection works best for most scenarios
 - Use streaming for files larger than available memory
+
+## 📊 Benchmark
+
+Performance with a **100,000-row CSV file**:
+
+| Metric | Value |
+|--------|-------|
+| Execution Time | ~430 ms |
+| Memory Usage | ~141 MB |
+
+Run benchmarks yourself:
+```bash
+make benchmark
+```
 
 ### Concurrency Limitations
 ⚠️ **IMPORTANT**: This library is **NOT thread-safe** and has **concurrency limitations**:
