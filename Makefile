@@ -1,4 +1,4 @@
-.PHONY: test clean vet fmt chkfmt
+.PHONY: test clean vet fmt chkfmt benchmark
 
 APP         = filesql
 VERSION     = $(shell git describe --tags --abbrev=0)
@@ -30,6 +30,9 @@ tools: ## Install dependency tools
 
 lint: ## Lint code
 	golangci-lint run --config .golangci.yml
+
+benchmark: ## Run benchmark tests
+	$(GO_TEST) -tags=benchmark -bench=. -benchmem $(GO_PKGROOT) -run=^$$
 
 .DEFAULT_GOAL := help
 help:  

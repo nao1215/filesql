@@ -344,6 +344,20 @@ Puisque filesql utilise SQLite3 comme moteur sous-jacent, toute la syntaxe SQL s
 - Une seule connexion SQLite fonctionne mieux pour la plupart des scénarios
 - Utilisez le streaming pour les fichiers plus grands que la mémoire disponible
 
+## 📊 Benchmark
+
+Performance avec un **fichier CSV de 100 000 lignes** :
+
+| Métrique | Valeur |
+|----------|--------|
+| Temps d'exécution | ~430 ms |
+| Utilisation mémoire | ~141 MB |
+
+Exécutez les benchmarks vous-même :
+```bash
+make benchmark
+```
+
 ### Limitations de concurrence
 ⚠️ **IMPORTANT** : Cette bibliothèque **N'EST PAS thread-safe** et a des **limitations de concurrence** :
 - **NE** partagez **PAS** les connexions de base de données entre les goroutines
