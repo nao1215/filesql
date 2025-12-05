@@ -1537,10 +1537,12 @@ func Test_ConcurrentAccess(t *testing.T) {
 	}
 	defer os.Remove(tmpFile.Name())
 
-	csvContent := "id,name,value\n"
+	var sb strings.Builder
+	sb.WriteString("id,name,value\n")
 	for i := 1; i <= 100; i++ {
-		csvContent += fmt.Sprintf("%d,user%d,%d\n", i, i, i*10)
+		fmt.Fprintf(&sb, "%d,user%d,%d\n", i, i, i*10)
 	}
+	csvContent := sb.String()
 
 	if _, err := tmpFile.WriteString(csvContent); err != nil {
 		t.Fatal(err)
@@ -3390,11 +3392,13 @@ func TestParquetPerformance(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// Generate larger test data
-	csvContent := "id,name,value,timestamp\n"
+	var sb strings.Builder
+	sb.WriteString("id,name,value,timestamp\n")
 	for i := 1; i <= 10000; i++ {
-		csvContent += fmt.Sprintf("%d,User%d,%.2f,2023-01-01T%02d:00:00Z\n",
+		fmt.Fprintf(&sb, "%d,User%d,%.2f,2023-01-01T%02d:00:00Z\n",
 			i, i, float64(i)*1.5, (i % 24))
 	}
+	csvContent := sb.String()
 
 	csvFile := filepath.Join(tempDir, "large_test.csv")
 	if err := os.WriteFile(csvFile, []byte(csvContent), 0600); err != nil {
