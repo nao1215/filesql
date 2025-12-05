@@ -126,8 +126,9 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 	// Initialize the table schema (we need to peek at the first chunk to get headers)
 	var tableCreated bool
 	var insertStmt *sql.Stmt
+	var tx *sql.Tx
 
-	// Process data in chunks
+	// Process data in chunks with transaction batching for performance
 	err = parser.ProcessInChunks(input.reader, func(chunk *tableChunk) error {
 		// Create table on first chunk
 		if !tableCreated {
@@ -135,10 +136,18 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 				return fmt.Errorf("failed to create table: %w", err)
 			}
 
-			// Prepare insert statement
+			// Start transaction for bulk inserts - significantly improves performance
+			// by reducing disk sync operations
 			var err error
-			insertStmt, err = sp.prepareInsertStatement(ctx, db, chunk) //nolint:sqlclosecheck // Statement is closed after processing
+			tx, err = db.BeginTx(ctx, nil)
 			if err != nil {
+				return fmt.Errorf("failed to begin transaction: %w", err)
+			}
+
+			// Prepare insert statement within transaction
+			insertStmt, err = sp.prepareInsertStatementTx(ctx, tx, chunk) //nolint:sqlclosecheck // Statement is closed after processing
+			if err != nil {
+				_ = tx.Rollback() //nolint:errcheck // Ignore rollback error during error handling
 				return fmt.Errorf("failed to prepare insert statement: %w", err)
 			}
 
@@ -152,6 +161,17 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 
 		return nil
 	})
+
+	// Handle transaction commit/rollback
+	if tx != nil {
+		if err != nil {
+			_ = tx.Rollback() //nolint:errcheck // Ignore rollback error during error handling
+		} else {
+			if commitErr := tx.Commit(); commitErr != nil {
+				return fmt.Errorf("failed to commit transaction: %w", commitErr)
+			}
+		}
+	}
 
 	// Handle header-only files: if no data chunks were processed, create empty table
 	if !tableCreated {
@@ -214,19 +234,29 @@ func (sp *streamProcessor) createTableFromChunk(ctx context.Context, db *sql.DB,
 
 // prepareInsertStatement prepares an insert statement for the table
 func (sp *streamProcessor) prepareInsertStatement(ctx context.Context, db *sql.DB, chunk *tableChunk) (*sql.Stmt, error) {
+	query := sp.buildInsertQuery(chunk)
+	return db.PrepareContext(ctx, query)
+}
+
+// prepareInsertStatementTx prepares an insert statement within a transaction
+func (sp *streamProcessor) prepareInsertStatementTx(ctx context.Context, tx *sql.Tx, chunk *tableChunk) (*sql.Stmt, error) {
+	query := sp.buildInsertQuery(chunk)
+	return tx.PrepareContext(ctx, query)
+}
+
+// buildInsertQuery builds the INSERT query string for a chunk
+func (sp *streamProcessor) buildInsertQuery(chunk *tableChunk) string {
 	headers := chunk.getHeaders()
 	placeholders := make([]string, len(headers))
 	for i := range placeholders {
 		placeholders[i] = "?"
 	}
 
-	query := fmt.Sprintf(
+	return fmt.Sprintf(
 		`INSERT INTO "%s" VALUES (%s)`,
 		chunk.getTableName(),
 		strings.Join(placeholders, ", "),
 	)
-
-	return db.PrepareContext(ctx, query)
 }
 
 // insertChunkData inserts a chunk's worth of data using a prepared statement.
