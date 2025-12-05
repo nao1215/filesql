@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2025-12-06
+
+### Added
+- **Benchmark Tests ([2852ea2](https://github.com/nao1215/filesql/commit/2852ea2))**: Added benchmark infrastructure for performance testing
+  - New `make benchmark` target in Makefile for running benchmark tests
+  - Benchmark tests isolated with `//go:build benchmark` tag to prevent execution during regular tests
+  - `BenchmarkOpenContext` and `BenchmarkOpenContextParallel` for measuring CSV loading performance
+
+### Improved
+- **Major Performance Optimization ([d20b3c8](https://github.com/nao1215/filesql/commit/d20b3c8), [e95a5bf](https://github.com/nao1215/filesql/commit/e95a5bf))**: Significantly improved file loading performance
+  - **55% faster execution**: Reduced 100,000-row CSV loading time from ~960ms to ~430ms
+  - **12% less memory**: Reduced memory usage from ~161MB to ~141MB
+  - **Transaction batching**: Wrapped all INSERT operations in a single transaction to reduce SQLite disk sync operations
+  - **Slice reuse**: Pre-allocate and reuse value slices in `insertChunkData()` to reduce allocations
+  - **Pre-allocation in type inference**: Optimized `newColumnInfoList()` and `inferColumnsInfo()` with pre-allocated column value slices
+
+### Fixed
+- **Data Integrity in Chunk Insertion ([b191d93](https://github.com/nao1215/filesql/commit/b191d93))**: Fixed potential data corruption issues in `insertChunkData()`
+  - **Stale value prevention**: Fixed issue where records with fewer columns than headers could retain stale values from previous rows
+  - **Extra column detection**: Added validation to fail fast when records have more columns than headers, preventing silent data truncation
+
+### Changed
+- **Documentation Updates ([17a42fa](https://github.com/nao1215/filesql/commit/17a42fa))**: Added benchmark results to all README files (7 languages)
+  - Performance metrics: ~430ms execution time, ~141MB memory for 100,000-row CSV
+
+### Dependencies
+- `github.com/klauspost/compress`: 1.18.1 → 1.18.2
+
 ## [0.4.6] - 2025-11-27
 
 ### Added
@@ -486,7 +514,11 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/nao1215/filesql/compare/v0.4.6...v0.5.0
+[0.4.6]: https://github.com/nao1215/filesql/compare/v0.4.5...v0.4.6
+[0.4.5]: https://github.com/nao1215/filesql/compare/v0.4.4...v0.4.5
+[0.4.4]: https://github.com/nao1215/filesql/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/nao1215/filesql/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/nao1215/filesql/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/nao1215/filesql/compare/v0.4.0...v0.4.1
