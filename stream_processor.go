@@ -267,13 +267,24 @@ func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, 
 		return nil
 	}
 
-	// Pre-allocate values slice once and reuse to reduce allocations
-	values := make([]any, len(records[0]))
+	// Use header count as the authoritative column count to ensure consistency
+	colCount := len(chunk.getHeaders())
+	values := make([]any, colCount)
 
 	for _, record := range records {
-		// Reuse values slice - copy values to avoid allocations
-		for i, value := range record {
-			values[i] = value
+		// Fail fast if record has more columns than headers to prevent silent data truncation
+		if len(record) > colCount {
+			return fmt.Errorf("record has more columns (%d) than headers (%d)", len(record), colCount)
+		}
+
+		// Fill values slice based on header count, handling records with fewer columns
+		// by setting missing columns to nil (NULL in SQLite)
+		for i := range colCount {
+			if i < len(record) {
+				values[i] = record[i]
+			} else {
+				values[i] = nil
+			}
 		}
 
 		if _, err := stmt.ExecContext(ctx, values...); err != nil {
