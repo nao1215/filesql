@@ -492,6 +492,38 @@ SELECT e.姓名, p.产品名称 FROM sales_员工信息 e
   JOIN sales_产品列表 p ON e.rowid = p.rowid;
 ```
 
+## 📚 示例
+
+[examples](../../examples) 目录包含展示 filesql 各种功能的示例代码：
+
+| 示例 | 描述 |
+|------|------|
+| [basic](../../examples/basic) | 基本 CSV 查询操作 |
+| [multi-format](../../examples/multi-format) | 处理多种文件格式（CSV、TSV、LTSV、Parquet） |
+| [sqlc](../../examples/sqlc) | 与 [sqlc](https://sqlc.dev/) 集成 - 类型安全的 SQL 代码生成器 |
+| [gorm](../../examples/gorm) | 与 [GORM](https://gorm.io/) 集成 - 功能完整的 ORM |
+| [sqlx](../../examples/sqlx) | 与 [sqlx](https://github.com/jmoiron/sqlx) 集成 - database/sql 扩展 |
+| [bun](../../examples/bun) | 与 [Bun](https://bun.uptrace.dev/) 集成 - SQL-first ORM |
+| [squirrel](../../examples/squirrel) | 与 [Squirrel](https://github.com/Masterminds/squirrel) 集成 - SQL 查询构建器 |
+| [ent](../../examples/ent) | 与 [Ent](https://entgo.io/) 集成 - Facebook 的实体框架 |
+
+## 🔗 相关项目
+
+在您的项目中使用 filesql 吗？我们很想知道！请[提交 issue](https://github.com/nao1215/filesql/issues) 告诉我们，我们会将您的项目添加到下面的列表中。
+
+### 基于 filesql 构建的库
+
+| 项目 | 描述 |
+|------|------|
+| [nao1215/csv](https://github.com/nao1215/csv) | 带有结构体标签验证的 CSV 解析库 |
+
+### 使用 filesql 的 CLI 工具
+
+| 项目 | 描述 |
+|------|------|
+| [nao1215/sqly](https://github.com/nao1215/sqly) | 对 CSV、TSV、LTSV、JSON 和 Excel 文件执行 SQL 查询的交互式 shell |
+| [kanmu/gocon2025-ctf](https://github.com/kanmu/gocon2025-ctf) | Go Conference 2025 CTF 仓库（日语） |
+
 ## 🤝 贡献
 
 欢迎贡献！更多详情请参见[贡献指南](../../CONTRIBUTING.md)。
@@ -504,6 +536,10 @@ SELECT e.姓名, p.产品名称 FROM sales_员工信息 e
 - 💝 [成为赞助者](https://github.com/sponsors/nao1215) - 您的支持让项目保持活力并激励持续开发
 
 您的支持，无论是通过星标、赞助还是贡献，都是推动这个项目前进的动力。谢谢！
+
+### ⭐ 星标历史
+
+[![Star History Chart](https://api.star-history.com/svg?repos=nao1215/filesql&type=date&legend=top-left)](https://www.star-history.com/#nao1215/filesql&Date)
 
 ## 📄 许可证
 

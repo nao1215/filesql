@@ -491,6 +491,38 @@ defer db.Close()
 rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'active'")
 ```
 
+## 📚 예제
+
+[examples](../../examples) 디렉토리에는 filesql의 다양한 기능을 보여주는 샘플 코드가 포함되어 있습니다:
+
+| 예제 | 설명 |
+|------|------|
+| [basic](../../examples/basic) | 기본 CSV 쿼리 작업 |
+| [multi-format](../../examples/multi-format) | 여러 파일 형식 작업 (CSV, TSV, LTSV, Parquet) |
+| [sqlc](../../examples/sqlc) | [sqlc](https://sqlc.dev/)와의 통합 - 타입 안전 SQL 코드 생성기 |
+| [gorm](../../examples/gorm) | [GORM](https://gorm.io/)과의 통합 - 완전한 기능의 ORM |
+| [sqlx](../../examples/sqlx) | [sqlx](https://github.com/jmoiron/sqlx)와의 통합 - database/sql 확장 |
+| [bun](../../examples/bun) | [Bun](https://bun.uptrace.dev/)과의 통합 - SQL-first ORM |
+| [squirrel](../../examples/squirrel) | [Squirrel](https://github.com/Masterminds/squirrel)과의 통합 - SQL 쿼리 빌더 |
+| [ent](../../examples/ent) | [Ent](https://entgo.io/)와의 통합 - Facebook의 엔티티 프레임워크 |
+
+## 🔗 관련 프로젝트
+
+filesql을 프로젝트에서 사용하고 계신가요? 알려주세요! [이슈를 열어](https://github.com/nao1215/filesql/issues) 알려주시면 아래 목록에 프로젝트를 추가하겠습니다.
+
+### filesql 기반 라이브러리
+
+| 프로젝트 | 설명 |
+|---------|------|
+| [nao1215/csv](https://github.com/nao1215/csv) | struct 태그 유효성 검사가 있는 CSV 파싱 라이브러리 |
+
+### filesql을 사용하는 CLI 도구
+
+| 프로젝트 | 설명 |
+|---------|------|
+| [nao1215/sqly](https://github.com/nao1215/sqly) | CSV, TSV, LTSV, JSON, Excel 파일에 SQL 쿼리를 실행하는 대화형 셸 |
+| [kanmu/gocon2025-ctf](https://github.com/kanmu/gocon2025-ctf) | Go Conference 2025 CTF 저장소 (일본어) |
+
 ## 🤝 기여
 
 기여를 환영합니다! 자세한 내용은 [기여 가이드](../../CONTRIBUTING.md)를 참조하세요.
@@ -503,6 +535,10 @@ rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'ac
 - 💝 [스폰서가 되어주세요](https://github.com/sponsors/nao1215) - 여러분의 지원이 프로젝트를 유지하고 지속적인 개발에 동기를 부여합니다
 
 스타, 스폰서십, 기여를 통한 여러분의 지원이 이 프로젝트를 앞으로 나아가게 하는 원동력입니다. 감사합니다!
+
+### ⭐ 스타 히스토리
+
+[![Star History Chart](https://api.star-history.com/svg?repos=nao1215/filesql&type=date&legend=top-left)](https://www.star-history.com/#nao1215/filesql&Date)
 
 ## 📄 라이센스
 

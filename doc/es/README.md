@@ -491,6 +491,38 @@ defer db.Close()
 rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'active'")
 ```
 
+## 📚 Ejemplos
+
+El directorio [examples](../../examples) contiene código de ejemplo que demuestra varias características de filesql:
+
+| Ejemplo | Descripción |
+|---------|-------------|
+| [basic](../../examples/basic) | Operaciones básicas de consulta CSV |
+| [multi-format](../../examples/multi-format) | Trabajo con múltiples formatos de archivo (CSV, TSV, LTSV, Parquet) |
+| [sqlc](../../examples/sqlc) | Integración con [sqlc](https://sqlc.dev/) - generador de código SQL con tipos seguros |
+| [gorm](../../examples/gorm) | Integración con [GORM](https://gorm.io/) - ORM completo |
+| [sqlx](../../examples/sqlx) | Integración con [sqlx](https://github.com/jmoiron/sqlx) - extensiones de database/sql |
+| [bun](../../examples/bun) | Integración con [Bun](https://bun.uptrace.dev/) - ORM SQL-first |
+| [squirrel](../../examples/squirrel) | Integración con [Squirrel](https://github.com/Masterminds/squirrel) - constructor de consultas SQL |
+| [ent](../../examples/ent) | Integración con [Ent](https://entgo.io/) - framework de entidades de Facebook |
+
+## 🔗 Proyectos Relacionados
+
+¿Usas filesql en tu proyecto? ¡Nos encantaría saberlo! Por favor [abre un issue](https://github.com/nao1215/filesql/issues) para informarnos, y añadiremos tu proyecto a la lista a continuación.
+
+### Bibliotecas construidas sobre filesql
+
+| Proyecto | Descripción |
+|----------|-------------|
+| [nao1215/csv](https://github.com/nao1215/csv) | Biblioteca de análisis CSV con validación mediante etiquetas de struct |
+
+### Herramientas CLI que usan filesql
+
+| Proyecto | Descripción |
+|----------|-------------|
+| [nao1215/sqly](https://github.com/nao1215/sqly) | Shell interactivo para ejecutar consultas SQL contra archivos CSV, TSV, LTSV, JSON y Excel |
+| [kanmu/gocon2025-ctf](https://github.com/kanmu/gocon2025-ctf) | Repositorio CTF de Go Conference 2025 (en japonés) |
+
 ## 🤝 Contribuir
 
 ¡Las contribuciones son bienvenidas! Por favor, consulta la [Guía de Contribución](../../CONTRIBUTING.md) para más detalles.
@@ -503,6 +535,10 @@ Si encuentras útil este proyecto, por favor considera:
 - 💝 [Convertirte en patrocinador](https://github.com/sponsors/nao1215) - tu apoyo mantiene el proyecto vivo y motiva el desarrollo continuo
 
 Tu apoyo, ya sea a través de estrellas, patrocinios o contribuciones, es lo que impulsa este proyecto hacia adelante. ¡Gracias!
+
+### ⭐ Historial de Estrellas
+
+[![Star History Chart](https://api.star-history.com/svg?repos=nao1215/filesql&type=date&legend=top-left)](https://www.star-history.com/#nao1215/filesql&Date)
 
 ## 📄 Licencia
 

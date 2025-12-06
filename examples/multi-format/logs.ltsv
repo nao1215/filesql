@@ -1,0 +1,5 @@
+time:2024-01-15T10:00:00Z	level:INFO	message:User logged in	user_id:101
+time:2024-01-15T10:05:00Z	level:INFO	message:Order placed	user_id:101
+time:2024-01-15T10:10:00Z	level:WARN	message:Payment retry	user_id:102
+time:2024-01-15T10:15:00Z	level:ERROR	message:Payment failed	user_id:102
+time:2024-01-15T10:20:00Z	level:INFO	message:Order completed	user_id:101

@@ -490,6 +490,38 @@ defer db.Close()
 rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'active'")
 ```
 
+## 📚 サンプル
+
+[examples](../../examples)ディレクトリには、filesqlの様々な機能を示すサンプルコードが含まれています：
+
+| サンプル | 説明 |
+|---------|------|
+| [basic](../../examples/basic) | 基本的なCSVクエリ操作 |
+| [multi-format](../../examples/multi-format) | 複数ファイル形式（CSV、TSV、LTSV、Parquet）の操作 |
+| [sqlc](../../examples/sqlc) | [sqlc](https://sqlc.dev/)との連携 - 型安全なSQLコードジェネレーター |
+| [gorm](../../examples/gorm) | [GORM](https://gorm.io/)との連携 - フル機能ORM |
+| [sqlx](../../examples/sqlx) | [sqlx](https://github.com/jmoiron/sqlx)との連携 - database/sqlの拡張 |
+| [bun](../../examples/bun) | [Bun](https://bun.uptrace.dev/)との連携 - SQL-first ORM |
+| [squirrel](../../examples/squirrel) | [Squirrel](https://github.com/Masterminds/squirrel)との連携 - SQLクエリビルダー |
+| [ent](../../examples/ent) | [Ent](https://entgo.io/)との連携 - Facebook製エンティティフレームワーク |
+
+## 🔗 関連プロジェクト
+
+filesqlをあなたのプロジェクトで使用していますか？ぜひお知らせください！[Issueを作成](https://github.com/nao1215/filesql/issues)していただければ、以下のリストに追加します。
+
+### filesqlを使用したライブラリ
+
+| プロジェクト | 説明 |
+|-------------|------|
+| [nao1215/csv](https://github.com/nao1215/csv) | 構造体タグによるバリデーション機能を持つCSVパースライブラリ |
+
+### filesqlを使用したCLIツール
+
+| プロジェクト | 説明 |
+|-------------|------|
+| [nao1215/sqly](https://github.com/nao1215/sqly) | CSV、TSV、LTSV、JSON、ExcelファイルにSQLクエリを実行するインタラクティブシェル |
+| [kanmu/gocon2025-ctf](https://github.com/kanmu/gocon2025-ctf) | Go Conference 2025 CTFリポジトリ（日本語） |
+
 ## 🤝 貢献
 
 貢献を歓迎します！詳細は[貢献ガイド](../../CONTRIBUTING.md)をご覧ください。
@@ -502,6 +534,10 @@ rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'ac
 - 💝 [スポンサーになる](https://github.com/sponsors/nao1215) - あなたのサポートがプロジェクトを維持し、継続的な開発の動機となります
 
 スター、スポンサーシップ、貢献を通じたあなたのサポートが、このプロジェクトを前進させる力となります。ありがとうございます！
+
+### ⭐ スター履歴
+
+[![Star History Chart](https://api.star-history.com/svg?repos=nao1215/filesql&type=date&legend=top-left)](https://www.star-history.com/#nao1215/filesql&Date)
 
 ## 📄 ライセンス
 
