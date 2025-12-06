@@ -521,8 +521,7 @@ Using filesql in your project? We'd love to hear about it! Please [open an issue
 | Project | Description |
 |---------|-------------|
 | [nao1215/sqly](https://github.com/nao1215/sqly) | Interactive shell for executing SQL queries against CSV, TSV, LTSV, JSON, and Excel files. Perfect for ad-hoc data analysis from the command line. |
-| [kanmu/gocon2025-ctf
-](https://github.com/kanmu/gocon2025-ctf) | Go Conference 2025 CTF repository (in japanese) |
+| [kanmu/gocon2025-ctf](https://github.com/kanmu/gocon2025-ctf) | Go Conference 2025 CTF repository (in japanese) |
 
 ## 🤝 Contributing
 
