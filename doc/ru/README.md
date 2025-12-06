@@ -490,6 +490,38 @@ defer db.Close()
 rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'active'")
 ```
 
+## 📚 Примеры
+
+Директория [examples](../../examples) содержит примеры кода, демонстрирующие различные возможности filesql:
+
+| Пример | Описание |
+|--------|----------|
+| [basic](../../examples/basic) | Базовые операции запросов CSV |
+| [multi-format](../../examples/multi-format) | Работа с несколькими форматами файлов (CSV, TSV, LTSV, Parquet) |
+| [sqlc](../../examples/sqlc) | Интеграция с [sqlc](https://sqlc.dev/) - типобезопасный генератор SQL кода |
+| [gorm](../../examples/gorm) | Интеграция с [GORM](https://gorm.io/) - полнофункциональный ORM |
+| [sqlx](../../examples/sqlx) | Интеграция с [sqlx](https://github.com/jmoiron/sqlx) - расширения database/sql |
+| [bun](../../examples/bun) | Интеграция с [Bun](https://bun.uptrace.dev/) - SQL-first ORM |
+| [squirrel](../../examples/squirrel) | Интеграция с [Squirrel](https://github.com/Masterminds/squirrel) - построитель SQL запросов |
+| [ent](../../examples/ent) | Интеграция с [Ent](https://entgo.io/) - entity framework от Facebook |
+
+## 🔗 Связанные проекты
+
+Используете filesql в своём проекте? Мы хотим об этом узнать! Пожалуйста, [откройте issue](https://github.com/nao1215/filesql/issues), чтобы сообщить нам, и мы добавим ваш проект в список ниже.
+
+### Библиотеки на основе filesql
+
+| Проект | Описание |
+|--------|----------|
+| [nao1215/csv](https://github.com/nao1215/csv) | Библиотека парсинга CSV с валидацией через struct теги |
+
+### CLI инструменты использующие filesql
+
+| Проект | Описание |
+|--------|----------|
+| [nao1215/sqly](https://github.com/nao1215/sqly) | Интерактивная оболочка для выполнения SQL запросов к CSV, TSV, LTSV, JSON и Excel файлам |
+| [kanmu/gocon2025-ctf](https://github.com/kanmu/gocon2025-ctf) | Репозиторий CTF Go Conference 2025 (на японском) |
+
 ## 🤝 Вклад
 
 Вклады приветствуются! Пожалуйста, ознакомьтесь с [Руководством по участию](../../CONTRIBUTING.md) для получения более подробной информации.
@@ -502,6 +534,10 @@ rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'ac
 - 💝 [Стать спонсором](https://github.com/sponsors/nao1215) - ваша поддержка поддерживает проект живым и мотивирует непрерывную разработку
 
 Ваша поддержка, будь то через звёзды, спонсорство или вклады, — это то, что движет этот проект вперёд. Спасибо!
+
+### ⭐ История звёзд
+
+[![Star History Chart](https://api.star-history.com/svg?repos=nao1215/filesql&type=date&legend=top-left)](https://www.star-history.com/#nao1215/filesql&Date)
 
 ## 📄 Лицензия
 

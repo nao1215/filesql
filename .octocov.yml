@@ -2,6 +2,8 @@
 coverage:
   if: true
   acceptable: 80%
+  exclude:
+    - "github.com/nao1215/filesql/examples/**/*.go"
 diff:
   datastores:
     - artifact://${GITHUB_REPOSITORY}
