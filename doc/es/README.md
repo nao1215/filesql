@@ -516,22 +516,59 @@ fileprep es una biblioteca complementaria que proporciona:
 - **Integración perfecta con filesql**: Devuelve `io.Reader` para uso directo con el patrón Builder de filesql
 
 ```go
-// Preprocesar y validar datos antes de consultas SQL
-processor := fileprep.NewProcessor(fileprep.FileTypeCSV)
-var records []MyRecord
-
-reader, result, err := processor.Process(file, &records)
-if err != nil {
-    return err
+// Definir struct con etiquetas de preprocesamiento y validación
+type User struct {
+    // Name: eliminar espacios, requerir no vacío
+    Name  string `prep:"trim" validate:"required"`
+    // Email: eliminar espacios, convertir a minúsculas, validar formato de email
+    Email string `prep:"trim,lowercase" validate:"required,email"`
+    // Age: establecer valor por defecto si está vacío, validar rango 0-150
+    Age   string `prep:"default=0" validate:"numeric,gte=0,lte=150"`
+    // Role: eliminar espacios, mayúsculas, debe ser uno de los valores permitidos
+    Role  string `prep:"trim,uppercase" validate:"oneof=ADMIN USER GUEST"`
 }
 
-// Pasar datos preprocesados a filesql
-validatedBuilder, err := filesql.NewBuilder().
-    AddReader(reader, "clean_data", filesql.FileTypeCSV).
-    Build(ctx)
+func main() {
+    // Datos CSV con entrada desordenada
+    csvData := `name,email,age,role
+  John Doe  ,JOHN@EXAMPLE.COM,25,admin
+Alice,alice@example.com,,user`
+
+    // Crear procesador y procesar el CSV
+    processor := fileprep.NewProcessor(fileprep.FileTypeCSV)
+    var users []User
+
+    reader, result, err := processor.Process(strings.NewReader(csvData), &users)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Verificar resultados de validación
+    fmt.Printf("Procesados: %d filas, Válidos: %d filas\n", result.RowCount, result.ValidRowCount)
+    if result.HasErrors() {
+        for _, e := range result.ValidationErrors() {
+            log.Printf("Fila %d, Columna %s: %s", e.Row, e.Column, e.Message)
+        }
+    }
+
+    // Pasar datos preprocesados a filesql
+    // Los datos ahora están limpios: espacios eliminados, emails en minúsculas, valores por defecto aplicados
+    ctx := context.Background()
+    db, err := filesql.NewBuilder().
+        AddReader(reader, "users", filesql.FileTypeCSV).
+        Build(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+
+    // Consultar los datos limpios
+    rows, _ := db.QueryContext(ctx, "SELECT * FROM users WHERE role = 'ADMIN'")
+    // ...
+}
 ```
 
-Esta separación de responsabilidades mantiene a filesql enfocado en consultas SQL mientras fileprep maneja la calidad de los datos.
+Para la lista completa de opciones de preprocesamiento y validación, consulte la [documentación de fileprep](https://github.com/nao1215/fileprep).
 
 ## 🔗 Proyectos Relacionados
 

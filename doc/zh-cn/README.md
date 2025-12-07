@@ -517,22 +517,59 @@ fileprep 是一个配套库，提供以下功能：
 - **与 filesql 无缝集成**：返回 `io.Reader` 可直接用于 filesql 的 Builder 模式
 
 ```go
-// 在 SQL 查询前预处理和验证数据
-processor := fileprep.NewProcessor(fileprep.FileTypeCSV)
-var records []MyRecord
-
-reader, result, err := processor.Process(file, &records)
-if err != nil {
-    return err
+// 定义带有预处理和验证标签的结构体
+type User struct {
+    // Name：去除空白，要求非空
+    Name  string `prep:"trim" validate:"required"`
+    // Email：去除空白，转换为小写，验证邮箱格式
+    Email string `prep:"trim,lowercase" validate:"required,email"`
+    // Age：如果为空则设置默认值，验证范围 0-150
+    Age   string `prep:"default=0" validate:"numeric,gte=0,lte=150"`
+    // Role：去除空白，大写，必须是允许值之一
+    Role  string `prep:"trim,uppercase" validate:"oneof=ADMIN USER GUEST"`
 }
 
-// 将预处理后的数据传递给 filesql
-validatedBuilder, err := filesql.NewBuilder().
-    AddReader(reader, "clean_data", filesql.FileTypeCSV).
-    Build(ctx)
+func main() {
+    // 包含杂乱输入的 CSV 数据
+    csvData := `name,email,age,role
+  John Doe  ,JOHN@EXAMPLE.COM,25,admin
+Alice,alice@example.com,,user`
+
+    // 创建处理器并处理 CSV
+    processor := fileprep.NewProcessor(fileprep.FileTypeCSV)
+    var users []User
+
+    reader, result, err := processor.Process(strings.NewReader(csvData), &users)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // 检查验证结果
+    fmt.Printf("已处理：%d 行，有效：%d 行\n", result.RowCount, result.ValidRowCount)
+    if result.HasErrors() {
+        for _, e := range result.ValidationErrors() {
+            log.Printf("第 %d 行，列 %s：%s", e.Row, e.Column, e.Message)
+        }
+    }
+
+    // 将预处理后的数据传递给 filesql
+    // 数据现已清理：去除空白、邮箱小写化、应用默认值
+    ctx := context.Background()
+    db, err := filesql.NewBuilder().
+        AddReader(reader, "users", filesql.FileTypeCSV).
+        Build(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+
+    // 查询清理后的数据
+    rows, _ := db.QueryContext(ctx, "SELECT * FROM users WHERE role = 'ADMIN'")
+    // ...
+}
 ```
 
-这种关注点分离使 filesql 专注于 SQL 查询，而 fileprep 负责数据质量。
+有关预处理和验证选项的完整列表，请参阅 [fileprep 文档](https://github.com/nao1215/fileprep)。
 
 ## 🔗 相关项目
 

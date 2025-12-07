@@ -516,22 +516,59 @@ fileprep is a companion library that provides:
 - **Seamless filesql integration**: Returns `io.Reader` for direct use with filesql's Builder pattern
 
 ```go
-// Preprocess and validate data before SQL queries
-processor := fileprep.NewProcessor(fileprep.FileTypeCSV)
-var records []MyRecord
-
-reader, result, err := processor.Process(file, &records)
-if err != nil {
-    return err
+// Define struct with preprocessing and validation tags
+type User struct {
+    // Name: trim whitespace, require non-empty
+    Name  string `prep:"trim" validate:"required"`
+    // Email: trim, convert to lowercase, validate email format
+    Email string `prep:"trim,lowercase" validate:"required,email"`
+    // Age: set default if empty, validate range 0-150
+    Age   string `prep:"default=0" validate:"numeric,gte=0,lte=150"`
+    // Role: trim, uppercase, must be one of the allowed values
+    Role  string `prep:"trim,uppercase" validate:"oneof=ADMIN USER GUEST"`
 }
 
-// Pass preprocessed data to filesql
-validatedBuilder, err := filesql.NewBuilder().
-    AddReader(reader, "clean_data", filesql.FileTypeCSV).
-    Build(ctx)
+func main() {
+    // CSV data with messy input
+    csvData := `name,email,age,role
+  John Doe  ,JOHN@EXAMPLE.COM,25,admin
+Alice,alice@example.com,,user`
+
+    // Create processor and process the CSV
+    processor := fileprep.NewProcessor(fileprep.FileTypeCSV)
+    var users []User
+
+    reader, result, err := processor.Process(strings.NewReader(csvData), &users)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Check validation results
+    fmt.Printf("Processed: %d rows, Valid: %d rows\n", result.RowCount, result.ValidRowCount)
+    if result.HasErrors() {
+        for _, e := range result.ValidationErrors() {
+            log.Printf("Row %d, Column %s: %s", e.Row, e.Column, e.Message)
+        }
+    }
+
+    // Pass preprocessed data to filesql
+    // The data is now cleaned: trimmed, lowercased emails, defaults applied
+    ctx := context.Background()
+    db, err := filesql.NewBuilder().
+        AddReader(reader, "users", filesql.FileTypeCSV).
+        Build(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+
+    // Query the clean data
+    rows, _ := db.QueryContext(ctx, "SELECT * FROM users WHERE role = 'ADMIN'")
+    // ...
+}
 ```
 
-This separation of concerns keeps filesql focused on SQL querying while fileprep handles data quality.
+For the complete list of preprocessing and validation options, see the [fileprep documentation](https://github.com/nao1215/fileprep).
 
 ## 🔗 Related Projects
 
