@@ -506,6 +506,33 @@ rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'ac
 | [squirrel](../../examples/squirrel) | [Squirrel](https://github.com/Masterminds/squirrel)과의 통합 - SQL 쿼리 빌더 |
 | [ent](../../examples/ent) | [Ent](https://entgo.io/)와의 통합 - Facebook의 엔티티 프레임워크 |
 
+## 🧹 fileprep을 통한 데이터 전처리
+
+filesql로 쿼리하기 전 데이터 검증 및 전처리에는 **[nao1215/fileprep](https://github.com/nao1215/fileprep)**을 사용하는 것을 권장합니다.
+
+fileprep은 다음 기능을 제공하는 컴패니언 라이브러리입니다:
+- **struct 태그 기반 전처리** (`prep` 태그): 트림, 소문자화, 대문자화, 기본값 등
+- **struct 태그 기반 검증** (`validate` 태그): 필수 필드, 형식 검증, 필드 간 검증
+- **filesql과의 원활한 통합**: filesql의 Builder 패턴에서 직접 사용할 수 있는 `io.Reader` 반환
+
+```go
+// SQL 쿼리 전 데이터 전처리 및 검증
+processor := fileprep.NewProcessor(fileprep.FileTypeCSV)
+var records []MyRecord
+
+reader, result, err := processor.Process(file, &records)
+if err != nil {
+    return err
+}
+
+// 전처리된 데이터를 filesql에 전달
+validatedBuilder, err := filesql.NewBuilder().
+    AddReader(reader, "clean_data", filesql.FileTypeCSV).
+    Build(ctx)
+```
+
+이러한 관심사의 분리를 통해 filesql은 SQL 쿼리에 집중하고 fileprep이 데이터 품질을 담당합니다.
+
 ## 🔗 관련 프로젝트
 
 filesql을 프로젝트에서 사용하고 계신가요? 알려주세요! [이슈를 열어](https://github.com/nao1215/filesql/issues) 알려주시면 아래 목록에 프로젝트를 추가하겠습니다.
