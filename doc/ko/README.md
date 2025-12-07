@@ -516,22 +516,59 @@ fileprep은 다음 기능을 제공하는 컴패니언 라이브러리입니다:
 - **filesql과의 원활한 통합**: filesql의 Builder 패턴에서 직접 사용할 수 있는 `io.Reader` 반환
 
 ```go
-// SQL 쿼리 전 데이터 전처리 및 검증
-processor := fileprep.NewProcessor(fileprep.FileTypeCSV)
-var records []MyRecord
-
-reader, result, err := processor.Process(file, &records)
-if err != nil {
-    return err
+// 전처리 및 검증 태그가 있는 struct 정의
+type User struct {
+    // Name: 공백 제거, 비어있지 않아야 함
+    Name  string `prep:"trim" validate:"required"`
+    // Email: 공백 제거, 소문자로 변환, 이메일 형식 검증
+    Email string `prep:"trim,lowercase" validate:"required,email"`
+    // Age: 비어있으면 기본값 설정, 0-150 범위 검증
+    Age   string `prep:"default=0" validate:"numeric,gte=0,lte=150"`
+    // Role: 공백 제거, 대문자화, 허용된 값 중 하나여야 함
+    Role  string `prep:"trim,uppercase" validate:"oneof=ADMIN USER GUEST"`
 }
 
-// 전처리된 데이터를 filesql에 전달
-validatedBuilder, err := filesql.NewBuilder().
-    AddReader(reader, "clean_data", filesql.FileTypeCSV).
-    Build(ctx)
+func main() {
+    // 지저분한 입력이 있는 CSV 데이터
+    csvData := `name,email,age,role
+  John Doe  ,JOHN@EXAMPLE.COM,25,admin
+Alice,alice@example.com,,user`
+
+    // 프로세서 생성 및 CSV 처리
+    processor := fileprep.NewProcessor(fileprep.FileTypeCSV)
+    var users []User
+
+    reader, result, err := processor.Process(strings.NewReader(csvData), &users)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // 검증 결과 확인
+    fmt.Printf("처리됨: %d 행, 유효함: %d 행\n", result.RowCount, result.ValidRowCount)
+    if result.HasErrors() {
+        for _, e := range result.ValidationErrors() {
+            log.Printf("행 %d, 열 %s: %s", e.Row, e.Column, e.Message)
+        }
+    }
+
+    // 전처리된 데이터를 filesql에 전달
+    // 데이터가 정리됨: 공백 제거, 이메일 소문자화, 기본값 적용
+    ctx := context.Background()
+    db, err := filesql.NewBuilder().
+        AddReader(reader, "users", filesql.FileTypeCSV).
+        Build(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+
+    // 정리된 데이터 쿼리
+    rows, _ := db.QueryContext(ctx, "SELECT * FROM users WHERE role = 'ADMIN'")
+    // ...
+}
 ```
 
-이러한 관심사의 분리를 통해 filesql은 SQL 쿼리에 집중하고 fileprep이 데이터 품질을 담당합니다.
+전처리 및 검증 옵션의 전체 목록은 [fileprep 문서](https://github.com/nao1215/fileprep)를 참조하세요.
 
 ## 🔗 관련 프로젝트
 

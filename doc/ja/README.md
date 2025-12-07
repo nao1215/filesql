@@ -515,22 +515,59 @@ fileprepは以下の機能を提供するコンパニオンライブラリです
 - **filesqlとのシームレスな統合**: filesqlのBuilderパターンで直接使用できる`io.Reader`を返却
 
 ```go
-// SQLクエリ前にデータを前処理・検証
-processor := fileprep.NewProcessor(fileprep.FileTypeCSV)
-var records []MyRecord
-
-reader, result, err := processor.Process(file, &records)
-if err != nil {
-    return err
+// 前処理とバリデーション用のタグを持つ構造体を定義
+type User struct {
+    // Name: 空白をトリム、空でないことを要求
+    Name  string `prep:"trim" validate:"required"`
+    // Email: トリム、小文字に変換、メール形式を検証
+    Email string `prep:"trim,lowercase" validate:"required,email"`
+    // Age: 空の場合デフォルト値を設定、0-150の範囲を検証
+    Age   string `prep:"default=0" validate:"numeric,gte=0,lte=150"`
+    // Role: トリム、大文字化、許可された値のいずれかであること
+    Role  string `prep:"trim,uppercase" validate:"oneof=ADMIN USER GUEST"`
 }
 
-// 前処理済みデータをfilesqlに渡す
-validatedBuilder, err := filesql.NewBuilder().
-    AddReader(reader, "clean_data", filesql.FileTypeCSV).
-    Build(ctx)
+func main() {
+    // 乱雑な入力を含むCSVデータ
+    csvData := `name,email,age,role
+  John Doe  ,JOHN@EXAMPLE.COM,25,admin
+Alice,alice@example.com,,user`
+
+    // プロセッサを作成してCSVを処理
+    processor := fileprep.NewProcessor(fileprep.FileTypeCSV)
+    var users []User
+
+    reader, result, err := processor.Process(strings.NewReader(csvData), &users)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // バリデーション結果を確認
+    fmt.Printf("処理完了: %d 行, 有効: %d 行\n", result.RowCount, result.ValidRowCount)
+    if result.HasErrors() {
+        for _, e := range result.ValidationErrors() {
+            log.Printf("行 %d, 列 %s: %s", e.Row, e.Column, e.Message)
+        }
+    }
+
+    // 前処理済みデータをfilesqlに渡す
+    // データはクリーン済み: トリム、メールの小文字化、デフォルト値適用
+    ctx := context.Background()
+    db, err := filesql.NewBuilder().
+        AddReader(reader, "users", filesql.FileTypeCSV).
+        Build(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+
+    // クリーンなデータに対してクエリを実行
+    rows, _ := db.QueryContext(ctx, "SELECT * FROM users WHERE role = 'ADMIN'")
+    // ...
+}
 ```
 
-この責務の分離により、filesqlはSQLクエリに集中し、fileprepがデータ品質を担当します。
+前処理とバリデーションオプションの完全なリストは、[fileprepドキュメント](https://github.com/nao1215/fileprep)を参照してください。
 
 ## 🔗 関連プロジェクト
 
