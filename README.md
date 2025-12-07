@@ -506,6 +506,33 @@ The [examples](./examples) directory contains sample code demonstrating various 
 | [ent](./examples/ent) | Integration with [Ent](https://entgo.io/) - entity framework by Facebook |
 
 
+## 🧹 Data Preprocessing with fileprep
+
+For data validation and preprocessing before querying with filesql, we recommend using **[nao1215/fileprep](https://github.com/nao1215/fileprep)**.
+
+fileprep is a companion library that provides:
+- **Struct tag-based preprocessing** (`prep` tag): trim, lowercase, uppercase, default values, and more
+- **Struct tag-based validation** (`validate` tag): required fields, format validation, cross-field validation
+- **Seamless filesql integration**: Returns `io.Reader` for direct use with filesql's Builder pattern
+
+```go
+// Preprocess and validate data before SQL queries
+processor := fileprep.NewProcessor(fileprep.FileTypeCSV)
+var records []MyRecord
+
+reader, result, err := processor.Process(file, &records)
+if err != nil {
+    return err
+}
+
+// Pass preprocessed data to filesql
+validatedBuilder, err := filesql.NewBuilder().
+    AddReader(reader, "clean_data", filesql.FileTypeCSV).
+    Build(ctx)
+```
+
+This separation of concerns keeps filesql focused on SQL querying while fileprep handles data quality.
+
 ## 🔗 Related Projects
 
 Using filesql in your project? We'd love to hear about it! Please [open an issue](https://github.com/nao1215/filesql/issues) to let us know, and we'll add your project to the list below.

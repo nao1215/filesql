@@ -505,6 +505,33 @@ rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'ac
 | [squirrel](../../examples/squirrel) | Интеграция с [Squirrel](https://github.com/Masterminds/squirrel) - построитель SQL запросов |
 | [ent](../../examples/ent) | Интеграция с [Ent](https://entgo.io/) - entity framework от Facebook |
 
+## 🧹 Предобработка данных с fileprep
+
+Для валидации и предобработки данных перед запросами с filesql, мы рекомендуем использовать **[nao1215/fileprep](https://github.com/nao1215/fileprep)**.
+
+fileprep — это библиотека-компаньон, которая предоставляет:
+- **Предобработку на основе struct-тегов** (тег `prep`): обрезка, нижний регистр, верхний регистр, значения по умолчанию и многое другое
+- **Валидацию на основе struct-тегов** (тег `validate`): обязательные поля, валидация формата, кросс-валидация полей
+- **Бесшовную интеграцию с filesql**: Возвращает `io.Reader` для прямого использования с паттерном Builder filesql
+
+```go
+// Предобработка и валидация данных перед SQL-запросами
+processor := fileprep.NewProcessor(fileprep.FileTypeCSV)
+var records []MyRecord
+
+reader, result, err := processor.Process(file, &records)
+if err != nil {
+    return err
+}
+
+// Передать предобработанные данные в filesql
+validatedBuilder, err := filesql.NewBuilder().
+    AddReader(reader, "clean_data", filesql.FileTypeCSV).
+    Build(ctx)
+```
+
+Это разделение ответственности позволяет filesql сосредоточиться на SQL-запросах, в то время как fileprep занимается качеством данных.
+
 ## 🔗 Связанные проекты
 
 Используете filesql в своём проекте? Мы хотим об этом узнать! Пожалуйста, [откройте issue](https://github.com/nao1215/filesql/issues), чтобы сообщить нам, и мы добавим ваш проект в список ниже.

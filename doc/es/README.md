@@ -506,6 +506,33 @@ El directorio [examples](../../examples) contiene código de ejemplo que demuest
 | [squirrel](../../examples/squirrel) | Integración con [Squirrel](https://github.com/Masterminds/squirrel) - constructor de consultas SQL |
 | [ent](../../examples/ent) | Integración con [Ent](https://entgo.io/) - framework de entidades de Facebook |
 
+## 🧹 Preprocesamiento de datos con fileprep
+
+Para la validación y preprocesamiento de datos antes de consultar con filesql, recomendamos usar **[nao1215/fileprep](https://github.com/nao1215/fileprep)**.
+
+fileprep es una biblioteca complementaria que proporciona:
+- **Preprocesamiento basado en etiquetas de struct** (etiqueta `prep`): trim, minúsculas, mayúsculas, valores por defecto, y más
+- **Validación basada en etiquetas de struct** (etiqueta `validate`): campos requeridos, validación de formato, validación entre campos
+- **Integración perfecta con filesql**: Devuelve `io.Reader` para uso directo con el patrón Builder de filesql
+
+```go
+// Preprocesar y validar datos antes de consultas SQL
+processor := fileprep.NewProcessor(fileprep.FileTypeCSV)
+var records []MyRecord
+
+reader, result, err := processor.Process(file, &records)
+if err != nil {
+    return err
+}
+
+// Pasar datos preprocesados a filesql
+validatedBuilder, err := filesql.NewBuilder().
+    AddReader(reader, "clean_data", filesql.FileTypeCSV).
+    Build(ctx)
+```
+
+Esta separación de responsabilidades mantiene a filesql enfocado en consultas SQL mientras fileprep maneja la calidad de los datos.
+
 ## 🔗 Proyectos Relacionados
 
 ¿Usas filesql en tu proyecto? ¡Nos encantaría saberlo! Por favor [abre un issue](https://github.com/nao1215/filesql/issues) para informarnos, y añadiremos tu proyecto a la lista a continuación.

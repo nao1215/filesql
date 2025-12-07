@@ -505,6 +505,33 @@ rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'ac
 | [squirrel](../../examples/squirrel) | [Squirrel](https://github.com/Masterminds/squirrel)との連携 - SQLクエリビルダー |
 | [ent](../../examples/ent) | [Ent](https://entgo.io/)との連携 - Facebook製エンティティフレームワーク |
 
+## 🧹 fileprepによるデータ前処理
+
+filesqlでクエリを実行する前のデータ検証と前処理には、**[nao1215/fileprep](https://github.com/nao1215/fileprep)**の使用をお勧めします。
+
+fileprepは以下の機能を提供するコンパニオンライブラリです：
+- **構造体タグによる前処理**（`prep`タグ）: トリム、小文字化、大文字化、デフォルト値など
+- **構造体タグによるバリデーション**（`validate`タグ）: 必須フィールド、フォーマット検証、クロスフィールド検証
+- **filesqlとのシームレスな統合**: filesqlのBuilderパターンで直接使用できる`io.Reader`を返却
+
+```go
+// SQLクエリ前にデータを前処理・検証
+processor := fileprep.NewProcessor(fileprep.FileTypeCSV)
+var records []MyRecord
+
+reader, result, err := processor.Process(file, &records)
+if err != nil {
+    return err
+}
+
+// 前処理済みデータをfilesqlに渡す
+validatedBuilder, err := filesql.NewBuilder().
+    AddReader(reader, "clean_data", filesql.FileTypeCSV).
+    Build(ctx)
+```
+
+この責務の分離により、filesqlはSQLクエリに集中し、fileprepがデータ品質を担当します。
+
 ## 🔗 関連プロジェクト
 
 filesqlをあなたのプロジェクトで使用していますか？ぜひお知らせください！[Issueを作成](https://github.com/nao1215/filesql/issues)していただければ、以下のリストに追加します。

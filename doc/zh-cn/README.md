@@ -507,6 +507,33 @@ SELECT e.姓名, p.产品名称 FROM sales_员工信息 e
 | [squirrel](../../examples/squirrel) | 与 [Squirrel](https://github.com/Masterminds/squirrel) 集成 - SQL 查询构建器 |
 | [ent](../../examples/ent) | 与 [Ent](https://entgo.io/) 集成 - Facebook 的实体框架 |
 
+## 🧹 使用 fileprep 进行数据预处理
+
+在使用 filesql 查询之前进行数据验证和预处理，我们建议使用 **[nao1215/fileprep](https://github.com/nao1215/fileprep)**。
+
+fileprep 是一个配套库，提供以下功能：
+- **基于结构体标签的预处理**（`prep` 标签）：去除空白、小写、大写、默认值等
+- **基于结构体标签的验证**（`validate` 标签）：必填字段、格式验证、跨字段验证
+- **与 filesql 无缝集成**：返回 `io.Reader` 可直接用于 filesql 的 Builder 模式
+
+```go
+// 在 SQL 查询前预处理和验证数据
+processor := fileprep.NewProcessor(fileprep.FileTypeCSV)
+var records []MyRecord
+
+reader, result, err := processor.Process(file, &records)
+if err != nil {
+    return err
+}
+
+// 将预处理后的数据传递给 filesql
+validatedBuilder, err := filesql.NewBuilder().
+    AddReader(reader, "clean_data", filesql.FileTypeCSV).
+    Build(ctx)
+```
+
+这种关注点分离使 filesql 专注于 SQL 查询，而 fileprep 负责数据质量。
+
 ## 🔗 相关项目
 
 在您的项目中使用 filesql 吗？我们很想知道！请[提交 issue](https://github.com/nao1215/filesql/issues) 告诉我们，我们会将您的项目添加到下面的列表中。
