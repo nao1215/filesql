@@ -13,25 +13,25 @@
 
 **filesqlの機能を試してみたいですか？** **[sqly](https://github.com/nao1215/sqly)** をチェックしてください - filesqlを使用してシェルから直接CSV、TSV、LTSV、ExcelファイルにSQLクエリを簡単に実行できるコマンドラインツールです。filesqlの力を実際に体験する最適な方法です！
 
-## 🎯 なぜfilesqlなのか？
+## なぜfilesqlなのか？
 
 このライブラリは、2つの独立したCLIツール - [sqly](https://github.com/nao1215/sqly) と [sqluv](https://github.com/nao1215/sqluv) のメンテナンス経験から生まれました。どちらのツールも共通の機能を持っていました：CSV、TSV、その他のファイル形式に対するSQLクエリの実行です。
 
 両プロジェクトで重複するコードを維持するのではなく、核となる機能を再利用可能なSQLドライバーとして抽出しました。これで、どのGo開発者でも自分のアプリケーションでこの機能を活用できます！
 
-## ✨ 機能
+## 機能
 
-- 🔍 **SQLite3 SQLインターフェース** - SQLite3の強力なSQL方言を使用してファイルをクエリ
-- 📁 **複数のファイル形式** - CSV、TSV、LTSV、Parquet、Excel (XLSX)ファイルをサポート
-- 🗜️ **圧縮サポート** - .gz、.bz2、.xz、.zst圧縮ファイルを自動処理
-- 🌊 **ストリーム処理** - 設定可能なチャンクサイズでストリーミングにより大容量ファイルを効率的に処理
-- 📖 **柔軟な入力ソース** - ファイルパス、ディレクトリ、io.Reader、embed.FSをサポート
-- 🚀 **ゼロセットアップ** - データベースサーバー不要、すべてインメモリで動作
-- 💾 **自動保存** - ファイルへの変更を自動的に永続化
-- 🌍 **クロスプラットフォーム** - Linux、macOS、Windowsでシームレスに動作
-- ⚡ **SQLite3駆動** - 信頼性の高いSQL処理のための堅牢なSQLite3エンジンを基盤
+- SQLite3 SQLインターフェース - SQLite3の強力なSQL方言を使用してファイルをクエリ
+- 複数のファイル形式 - CSV、TSV、LTSV、Parquet、Excel (XLSX)ファイルをサポート
+- 圧縮サポート - .gz、.bz2、.xz、.zst圧縮ファイルを自動処理
+- ストリーム処理 - 設定可能なチャンクサイズでストリーミングにより大容量ファイルを効率的に処理
+- 柔軟な入力ソース - ファイルパス、ディレクトリ、io.Reader、embed.FSをサポート
+- ゼロセットアップ - データベースサーバー不要、すべてインメモリで動作
+- 自動保存 - ファイルへの変更を自動的に永続化
+- クロスプラットフォーム - Linux、macOS、Windowsでシームレスに動作
+- SQLite3駆動 - 信頼性の高いSQL処理のための堅牢なSQLite3エンジンを基盤
 
-## 📋 サポートされているファイル形式
+## サポートされているファイル形式
 
 | 拡張子 | 形式 | 説明 |
 |--------|------|------|
@@ -45,13 +45,13 @@
 | `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz` | XZ圧縮 | XZ圧縮ファイル |
 | `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst` | Zstandard圧縮 | Zstandard圧縮ファイル |
 
-## 📦 インストール
+## インストール
 
 ```bash
 go get github.com/nao1215/filesql
 ```
 
-## 🔧 要件
+## 要件
 
 - **Goバージョン**: 1.24以降
 - **対応OS**:
@@ -59,7 +59,7 @@ go get github.com/nao1215/filesql
   - macOS  
   - Windows
 
-## 🚀 クイックスタート
+## クイックスタート
 
 ### シンプルな使用方法
 
@@ -149,7 +149,7 @@ defer db.Close()
 rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
 ```
 
-## 🔧 高度な使用方法
+## 高度な使用方法
 
 ### ビルダーパターン
 
@@ -313,7 +313,7 @@ parquetOptions := filesql.NewDumpOptions().
 // 注意: Parquetエクスポートは実装済みですが、外部圧縮は非対応です（Parquetの内蔵圧縮を使用してください）
 ```
 
-## 📝 テーブル命名規則
+## テーブル命名規則
 
 filesqlはファイルパスから自動的にテーブル名を導出します：
 
@@ -323,7 +323,7 @@ filesqlはファイルパスから自動的にテーブル名を導出します�
 - `products.ltsv.bz2` → テーブル `products`
 - `analytics.parquet` → テーブル `analytics`
 
-## ⚠️ 重要な注意事項
+## 重要な注意事項
 
 ### SQL構文
 filesqlはSQLite3を基盤エンジンとして使用するため、すべてのSQL構文は[SQLite3のSQL方言](https://www.sqlite.org/lang.html)に従います。これには以下が含まれます：
@@ -344,7 +344,7 @@ filesqlはSQLite3を基盤エンジンとして使用するため、すべての
 - ほとんどのシナリオでは単一のSQLite接続が最適
 - 利用可能メモリより大きなファイルにはストリーミングを使用
 
-## 📊 ベンチマーク
+## ベンチマーク
 
 **10万行のCSVファイル**でのパフォーマンス:
 
@@ -428,7 +428,7 @@ SELECT s1.Name, s2.Product FROM sales_Sheet1 s1
   JOIN sales_Sheet2 s2 ON s1.rowid = s2.rowid;
 ```
 
-## 🎨 高度な例
+## 高度な例
 
 ### 複雑なSQLクエリ
 
@@ -490,7 +490,7 @@ defer db.Close()
 rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'active'")
 ```
 
-## 📚 サンプル
+## サンプル
 
 [examples](../../examples)ディレクトリには、filesqlの様々な機能を示すサンプルコードが含まれています：
 
@@ -505,7 +505,7 @@ rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'ac
 | [squirrel](../../examples/squirrel) | [Squirrel](https://github.com/Masterminds/squirrel)との連携 - SQLクエリビルダー |
 | [ent](../../examples/ent) | [Ent](https://entgo.io/)との連携 - Facebook製エンティティフレームワーク |
 
-## 🧹 fileprepによるデータ前処理
+## fileprepによるデータ前処理
 
 filesqlでクエリを実行する前のデータ検証と前処理には、**[nao1215/fileprep](https://github.com/nao1215/fileprep)**の使用をお勧めします。
 
@@ -569,15 +569,15 @@ Alice,alice@example.com,,user`
 
 前処理とバリデーションオプションの完全なリストは、[fileprepドキュメント](https://github.com/nao1215/fileprep)を参照してください。
 
-## 🔗 関連プロジェクト
+## 関連プロジェクト
 
 filesqlをあなたのプロジェクトで使用していますか？ぜひお知らせください！[Issueを作成](https://github.com/nao1215/filesql/issues)していただければ、以下のリストに追加します。
 
-### filesqlを使用したライブラリ
+### 関連ライブラリ
 
 | プロジェクト | 説明 |
 |-------------|------|
-| [nao1215/csv](https://github.com/nao1215/csv) | 構造体タグによるバリデーション機能を持つCSVパースライブラリ |
+| [nao1215/fileprep](https://github.com/nao1215/fileprep) | 構造体タグによるバリデーション機能を持つデータ前処理ライブラリ |
 
 ### filesqlを使用したCLIツール
 
@@ -586,23 +586,23 @@ filesqlをあなたのプロジェクトで使用していますか？ぜひお�
 | [nao1215/sqly](https://github.com/nao1215/sqly) | CSV、TSV、LTSV、JSON、ExcelファイルにSQLクエリを実行するインタラクティブシェル |
 | [kanmu/gocon2025-ctf](https://github.com/kanmu/gocon2025-ctf) | Go Conference 2025 CTFリポジトリ（日本語） |
 
-## 🤝 貢献
+## 貢献
 
 貢献を歓迎します！詳細は[貢献ガイド](../../CONTRIBUTING.md)をご覧ください。
 
-## 💖 サポート
+## サポート
 
 このプロジェクトが有用だと感じましたら、以下をご検討ください：
 
-- ⭐ GitHubでスターを付ける - プロジェクトの発見に役立ちます
-- 💝 [スポンサーになる](https://github.com/sponsors/nao1215) - あなたのサポートがプロジェクトを維持し、継続的な開発の動機となります
+- GitHubでスターを付ける - プロジェクトの発見に役立ちます
+- [スポンサーになる](https://github.com/sponsors/nao1215) - あなたのサポートがプロジェクトを維持し、継続的な開発の動機となります
 
 スター、スポンサーシップ、貢献を通じたあなたのサポートが、このプロジェクトを前進させる力となります。ありがとうございます！
 
-### ⭐ スター履歴
+### スター履歴
 
 [![Star History Chart](https://api.star-history.com/svg?repos=nao1215/filesql&type=date&legend=top-left)](https://www.star-history.com/#nao1215/filesql&Date)
 
-## 📄 ライセンス
+## ライセンス
 
 このプロジェクトはMITライセンスの下でライセンスされています - 詳細は[LICENSE](../../LICENSE)ファイルをご覧ください。

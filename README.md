@@ -13,25 +13,25 @@
 
 **Want to try filesql's capabilities?** Check out **[sqly](https://github.com/nao1215/sqly)** - a command-line tool that uses filesql to easily execute SQL queries against CSV, TSV, LTSV, and Excel files directly from your shell. It's the perfect way to experience the power of filesql in action!
 
-## 🎯 Why filesql?
+## Why filesql?
 
 This library was born from the experience of maintaining two separate CLI tools - [sqly](https://github.com/nao1215/sqly) and [sqluv](https://github.com/nao1215/sqluv). Both tools shared a common feature: executing SQL queries against CSV, TSV, and other file formats. 
 
 Rather than maintaining duplicate code across both projects, we extracted the core functionality into this reusable SQL driver. Now, any Go developer can leverage this capability in their own applications!
 
-## ✨ Features
+## Features
 
-- 🔍 **SQLite3 SQL Interface** - Use SQLite3's powerful SQL dialect to query your files
-- 📁 **Multiple File Formats** - Support for CSV, TSV, LTSV, Parquet, and Excel (XLSX) files
-- 🗜️ **Compression Support** - Automatically handles .gz, .bz2, .xz, and .zst compressed files
-- 🌊 **Stream Processing** - Efficiently handles large files through streaming with configurable chunk sizes
-- 📖 **Flexible Input Sources** - Support for file paths, directories, io.Reader, and embed.FS
-- 🚀 **Zero Setup** - No database server required, everything runs in-memory
-- 💾 **Auto-Save** - Automatically persist changes back to files
-- 🌍 **Cross-Platform** - Works seamlessly on Linux, macOS, and Windows
-- ⚡ **SQLite3 Powered** - Built on the robust SQLite3 engine for reliable SQL processing
+- SQLite3 SQL Interface - Use SQLite3's powerful SQL dialect to query your files
+- Multiple File Formats - Support for CSV, TSV, LTSV, Parquet, and Excel (XLSX) files
+- Compression Support - Automatically handles .gz, .bz2, .xz, and .zst compressed files
+- Stream Processing - Efficiently handles large files through streaming with configurable chunk sizes
+- Flexible Input Sources - Support for file paths, directories, io.Reader, and embed.FS
+- Zero Setup - No database server required, everything runs in-memory
+- Auto-Save - Automatically persist changes back to files
+- Cross-Platform - Works seamlessly on Linux, macOS, and Windows
+- SQLite3 Powered - Built on the robust SQLite3 engine for reliable SQL processing
 
-## 📋 Supported File Formats
+## Supported File Formats
 
 | Extension | Format | Description |
 |-----------|--------|-------------|
@@ -45,13 +45,13 @@ Rather than maintaining duplicate code across both projects, we extracted the co
 | `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz` | XZ compressed | XZ compressed files |
 | `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst` | Zstandard compressed | Zstandard compressed files |
 
-## 📦 Installation
+## Installation
 
 ```bash
 go get github.com/nao1215/filesql
 ```
 
-## 🔧 Requirements
+## Requirements
 
 - **Go Version**: 1.24 or later
 - **Operating Systems**:
@@ -59,7 +59,7 @@ go get github.com/nao1215/filesql
   - macOS  
   - Windows
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Simple Usage
 
@@ -149,7 +149,7 @@ defer db.Close()
 rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
 ```
 
-## 🔧 Advanced Usage
+## Advanced Usage
 
 ### Builder Pattern
 
@@ -313,7 +313,7 @@ parquetOptions := filesql.NewDumpOptions().
 // Note: Parquet export is implemented, but external compression is not supported (use Parquet's built-in compression)
 ```
 
-## 📝 Table Naming Rules
+## Table Naming Rules
 
 filesql automatically derives table names from file paths:
 
@@ -323,7 +323,7 @@ filesql automatically derives table names from file paths:
 - `products.ltsv.bz2` → table `products`
 - `analytics.parquet` → table `analytics`
 
-## ⚠️ Important Notes
+## Important Notes
 
 ### SQL Syntax
 Since filesql uses SQLite3 as its underlying engine, all SQL syntax follows [SQLite3's SQL dialect](https://www.sqlite.org/lang.html). This includes:
@@ -344,7 +344,7 @@ Since filesql uses SQLite3 as its underlying engine, all SQL syntax follows [SQL
 - Single SQLite connection works best for most scenarios
 - Use streaming for files larger than available memory
 
-## 📊 Benchmark
+## Benchmark
 
 Performance with a **100,000-row CSV file**:
 
@@ -428,7 +428,7 @@ SELECT s1.Name, s2.Product FROM sales_Sheet1 s1
   JOIN sales_Sheet2 s2 ON s1.rowid = s2.rowid;
 ```
 
-## 🎨 Advanced Examples
+## Advanced Examples
 
 ### Complex SQL Queries
 
@@ -490,7 +490,7 @@ defer db.Close()
 rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'active'")
 ```
 
-## 📚 Examples
+## Examples
 
 The [examples](./examples) directory contains sample code demonstrating various filesql features:
 
@@ -506,7 +506,7 @@ The [examples](./examples) directory contains sample code demonstrating various 
 | [ent](./examples/ent) | Integration with [Ent](https://entgo.io/) - entity framework by Facebook |
 
 
-## 🧹 Data Preprocessing with fileprep
+## Data Preprocessing with fileprep
 
 For data validation and preprocessing before querying with filesql, we recommend using **[nao1215/fileprep](https://github.com/nao1215/fileprep)**.
 
@@ -570,15 +570,15 @@ Alice,alice@example.com,,user`
 
 For the complete list of preprocessing and validation options, see the [fileprep documentation](https://github.com/nao1215/fileprep).
 
-## 🔗 Related Projects
+## Related Projects
 
 Using filesql in your project? We'd love to hear about it! Please [open an issue](https://github.com/nao1215/filesql/issues) to let us know, and we'll add your project to the list below.
 
-### Libraries Built on filesql
+### Related Libraries
 
 | Project | Description |
 |---------|-------------|
-| [nao1215/csv](https://github.com/nao1215/csv) | CSV parsing library with struct tag validation. Validate CSV data using Go struct tags for type-safe data loading. |
+| [nao1215/fileprep](https://github.com/nao1215/fileprep) | Data preprocessing library with struct tag validation. Clean and validate CSV/TSV data using Go struct tags before querying. |
 
 ### CLI Tools Using filesql
 
@@ -587,23 +587,23 @@ Using filesql in your project? We'd love to hear about it! Please [open an issue
 | [nao1215/sqly](https://github.com/nao1215/sqly) | Interactive shell for executing SQL queries against CSV, TSV, LTSV, JSON, and Excel files. Perfect for ad-hoc data analysis from the command line. |
 | [kanmu/gocon2025-ctf](https://github.com/kanmu/gocon2025-ctf) | Go Conference 2025 CTF repository (in japanese) |
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please see the [Contributing Guide](./CONTRIBUTING.md) for more details.
 
-## 💖 Support
+## Support
 
 If you find this project useful, please consider:
 
-- ⭐ Giving it a star on GitHub - it helps others discover the project
-- 💝 [Becoming a sponsor](https://github.com/sponsors/nao1215) - your support keeps the project alive and motivates continued development
+- Giving it a star on GitHub - it helps others discover the project
+- [Becoming a sponsor](https://github.com/sponsors/nao1215) - your support keeps the project alive and motivates continued development
 
 Your support, whether through stars, sponsorships, or contributions, is what drives this project forward. Thank you!
 
-### ⭐ Star History
+### Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=nao1215/filesql&type=date&legend=top-left)](https://www.star-history.com/#nao1215/filesql&Date)
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
