@@ -13,25 +13,25 @@
 
 **想要体验 filesql 的功能？** 试试 **[sqly](https://github.com/nao1215/sqly)** - 一个使用 filesql 直接从 shell 轻松对 CSV、TSV、LTSV 和 Excel 文件执行 SQL 查询的命令行工具！这是体验 filesql 强大功能的完美方式！
 
-## 🎯 为什么选择 filesql？
+## 为什么选择 filesql？
 
 这个库诞生于维护两个独立 CLI 工具 - [sqly](https://github.com/nao1215/sqly) 和 [sqluv](https://github.com/nao1215/sqluv) 的经验。两个工具都有一个共同特性：对 CSV、TSV 和其他文件格式执行 SQL 查询。
 
 我们将核心功能提取为可重用的 SQL 驱动，而不是在两个项目中维护重复代码。现在，任何 Go 开发者都可以在自己的应用中使用这项功能！
 
-## ✨ 功能特性
+## 功能特性
 
-- 🔍 **SQLite3 SQL 接口** - 使用 SQLite3 强大的 SQL 方言查询文件
-- 📁 **多种文件格式** - 支持 CSV、TSV、LTSV、Parquet 和 Excel (XLSX) 文件
-- 🗜️ **压缩支持** - 自动处理 .gz、.bz2、.xz 和 .zst 压缩文件
-- 🌊 **流式处理** - 通过可配置的块大小高效处理大文件
-- 📖 **灵活的输入源** - 支持文件路径、目录、io.Reader 和 embed.FS
-- 🚀 **零配置** - 无需数据库服务器，全部在内存中运行
-- 💾 **自动保存** - 自动将更改持久化到文件
-- 🌍 **跨平台** - 在 Linux、macOS 和 Windows 上无缝运行
-- ⚡ **SQLite3 驱动** - 基于强大的 SQLite3 引擎，确保可靠的 SQL 处理
+- SQLite3 SQL 接口 - 使用 SQLite3 强大的 SQL 方言查询文件
+- 多种文件格式 - 支持 CSV、TSV、LTSV、Parquet 和 Excel (XLSX) 文件
+- 压缩支持 - 自动处理 .gz、.bz2、.xz 和 .zst 压缩文件
+- 流式处理 - 通过可配置的块大小高效处理大文件
+- 灵活的输入源 - 支持文件路径、目录、io.Reader 和 embed.FS
+- 零配置 - 无需数据库服务器，全部在内存中运行
+- 自动保存 - 自动将更改持久化到文件
+- 跨平台 - 在 Linux、macOS 和 Windows 上无缝运行
+- SQLite3 驱动 - 基于强大的 SQLite3 引擎，确保可靠的 SQL 处理
 
-## 📋 支持的文件格式
+## 支持的文件格式
 
 | 扩展名 | 格式 | 描述 |
 |--------|------|------|
@@ -45,13 +45,13 @@
 | `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz` | XZ 压缩 | XZ 压缩文件 |
 | `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst` | Zstandard 压缩 | Zstandard 压缩文件 |
 
-## 📦 安装
+## 安装
 
 ```bash
 go get github.com/nao1215/filesql
 ```
 
-## 🔧 系统要求
+## 系统要求
 
 - **Go 版本**: 1.24 或更高版本
 - **支持操作系统**:
@@ -59,7 +59,7 @@ go get github.com/nao1215/filesql
   - macOS  
   - Windows
 
-## 🚀 快速开始
+## 快速开始
 
 ### 简单用法
 
@@ -150,7 +150,7 @@ defer db.Close()
 rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
 ```
 
-## 🔧 高级用法
+## 高级用法
 
 ### 构建器模式
 
@@ -314,7 +314,7 @@ parquetOptions := filesql.NewDumpOptions().
 // 注意：Parquet 导出功能已实现（不支持外部压缩，请使用 Parquet 的内置压缩）
 ```
 
-## 📝 表命名规则
+## 表命名规则
 
 filesql 自动从文件路径推导表名：
 
@@ -325,7 +325,7 @@ filesql 自动从文件路径推导表名：
 - `analytics.parquet` → 表 `analytics`
 - `sales.xlsx`（包含工作表 "Q1"、"Q2"）→ 表 `sales_Q1`、`sales_Q2`
 
-## ⚠️ 重要说明
+## 重要说明
 
 ### SQL 语法
 由于 filesql 使用 SQLite3 作为底层引擎，所有 SQL 语法都遵循 [SQLite3 的 SQL 方言](https://www.sqlite.org/lang.html)。包括：
@@ -346,7 +346,7 @@ filesql 自动从文件路径推导表名：
 - 单个 SQLite 连接对大多数场景效果最佳
 - 对于大于可用内存的文件使用流式处理
 
-## 📊 基准测试
+## 基准测试
 
 **100,000 行 CSV 文件**的性能：
 
@@ -386,7 +386,7 @@ func processFileConcurrently(filename string) error {
 var sharedDB *sql.DB  // 这会导致竞态条件
 ```
 
-## 🎨 高级示例
+## 高级示例
 
 ### 复杂的 SQL 查询
 
@@ -492,7 +492,7 @@ SELECT e.姓名, p.产品名称 FROM sales_员工信息 e
   JOIN sales_产品列表 p ON e.rowid = p.rowid;
 ```
 
-## 📚 示例
+## 示例
 
 [examples](../../examples) 目录包含展示 filesql 各种功能的示例代码：
 
@@ -507,7 +507,7 @@ SELECT e.姓名, p.产品名称 FROM sales_员工信息 e
 | [squirrel](../../examples/squirrel) | 与 [Squirrel](https://github.com/Masterminds/squirrel) 集成 - SQL 查询构建器 |
 | [ent](../../examples/ent) | 与 [Ent](https://entgo.io/) 集成 - Facebook 的实体框架 |
 
-## 🧹 使用 fileprep 进行数据预处理
+## 使用 fileprep 进行数据预处理
 
 在使用 filesql 查询之前进行数据验证和预处理，我们建议使用 **[nao1215/fileprep](https://github.com/nao1215/fileprep)**。
 
@@ -571,15 +571,15 @@ Alice,alice@example.com,,user`
 
 有关预处理和验证选项的完整列表，请参阅 [fileprep 文档](https://github.com/nao1215/fileprep)。
 
-## 🔗 相关项目
+## 相关项目
 
 在您的项目中使用 filesql 吗？我们很想知道！请[提交 issue](https://github.com/nao1215/filesql/issues) 告诉我们，我们会将您的项目添加到下面的列表中。
 
-### 基于 filesql 构建的库
+### 相关库
 
 | 项目 | 描述 |
 |------|------|
-| [nao1215/csv](https://github.com/nao1215/csv) | 带有结构体标签验证的 CSV 解析库 |
+| [nao1215/fileprep](https://github.com/nao1215/fileprep) | 带有结构体标签验证的数据预处理库 |
 
 ### 使用 filesql 的 CLI 工具
 
@@ -588,23 +588,23 @@ Alice,alice@example.com,,user`
 | [nao1215/sqly](https://github.com/nao1215/sqly) | 对 CSV、TSV、LTSV、JSON 和 Excel 文件执行 SQL 查询的交互式 shell |
 | [kanmu/gocon2025-ctf](https://github.com/kanmu/gocon2025-ctf) | Go Conference 2025 CTF 仓库（日语） |
 
-## 🤝 贡献
+## 贡献
 
 欢迎贡献！更多详情请参见[贡献指南](../../CONTRIBUTING.md)。
 
-## 💖 支持
+## 支持
 
 如果您觉得这个项目有用，请考虑：
 
-- ⭐ 在 GitHub 上给它一个星标 - 这有助于其他人发现这个项目
-- 💝 [成为赞助者](https://github.com/sponsors/nao1215) - 您的支持让项目保持活力并激励持续开发
+- 在 GitHub 上给它一个星标 - 这有助于其他人发现这个项目
+- [成为赞助者](https://github.com/sponsors/nao1215) - 您的支持让项目保持活力并激励持续开发
 
 您的支持，无论是通过星标、赞助还是贡献，都是推动这个项目前进的动力。谢谢！
 
-### ⭐ 星标历史
+### 星标历史
 
 [![Star History Chart](https://api.star-history.com/svg?repos=nao1215/filesql&type=date&legend=top-left)](https://www.star-history.com/#nao1215/filesql&Date)
 
-## 📄 许可证
+## 许可证
 
 本项目基于 MIT 许可证授权 - 详情请参见 [LICENSE](../../LICENSE) 文件。

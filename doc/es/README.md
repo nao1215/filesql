@@ -13,25 +13,25 @@
 
 **¿Quieres probar las capacidades de filesql?** ¡Prueba **[sqly](https://github.com/nao1215/sqly)** - una herramienta de línea de comandos que utiliza filesql para ejecutar fácilmente consultas SQL contra archivos CSV, TSV, LTSV y Excel directamente desde tu shell! ¡Es la forma perfecta de experimentar el poder de filesql en acción!
 
-## 🎯 ¿Por qué filesql?
+## ¿Por qué filesql?
 
 Esta librería nació de la experiencia de mantener dos herramientas CLI separadas - [sqly](https://github.com/nao1215/sqly) y [sqluv](https://github.com/nao1215/sqluv). Ambas herramientas compartían una característica común: ejecutar consultas SQL contra archivos CSV, TSV y otros formatos.
 
 En lugar de mantener código duplicado en ambos proyectos, extrajimos la funcionalidad principal en este controlador SQL reutilizable. ¡Ahora, cualquier desarrollador de Go puede aprovechar esta capacidad en sus propias aplicaciones!
 
-## ✨ Características
+## Características
 
-- 🔍 **Interfaz SQL SQLite3** - Usa el poderoso dialecto SQL de SQLite3 para consultar tus archivos
-- 📁 **Múltiples formatos de archivo** - Soporte para archivos CSV, TSV, LTSV, Parquet y Excel (XLSX)
-- 🗜️ **Soporte de compresión** - Maneja automáticamente archivos comprimidos .gz, .bz2, .xz y .zst
-- 🌊 **Procesamiento de flujos** - Maneja eficientemente archivos grandes a través de streaming con tamaños de chunk configurables
-- 📖 **Fuentes de entrada flexibles** - Soporte para rutas de archivos, directorios, io.Reader y embed.FS
-- 🚀 **Configuración cero** - No se requiere servidor de base de datos, todo funciona en memoria
-- 💾 **Auto-guardado** - Persiste automáticamente los cambios en archivos
-- 🌍 **Multiplataforma** - Funciona perfectamente en Linux, macOS y Windows
-- ⚡ **Impulsado por SQLite3** - Construido sobre el robusto motor SQLite3 para procesamiento SQL confiable
+- Interfaz SQL SQLite3 - Usa el poderoso dialecto SQL de SQLite3 para consultar tus archivos
+- Múltiples formatos de archivo - Soporte para archivos CSV, TSV, LTSV, Parquet y Excel (XLSX)
+- Soporte de compresión - Maneja automáticamente archivos comprimidos .gz, .bz2, .xz y .zst
+- Procesamiento de flujos - Maneja eficientemente archivos grandes a través de streaming con tamaños de chunk configurables
+- Fuentes de entrada flexibles - Soporte para rutas de archivos, directorios, io.Reader y embed.FS
+- Configuración cero - No se requiere servidor de base de datos, todo funciona en memoria
+- Auto-guardado - Persiste automáticamente los cambios en archivos
+- Multiplataforma - Funciona perfectamente en Linux, macOS y Windows
+- Impulsado por SQLite3 - Construido sobre el robusto motor SQLite3 para procesamiento SQL confiable
 
-## 📋 Formatos de archivo soportados
+## Formatos de archivo soportados
 
 | Extensión | Formato | Descripción |
 |-----------|--------|-------------|
@@ -45,13 +45,13 @@ En lugar de mantener código duplicado en ambos proyectos, extrajimos la funcion
 | `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz` | Compresión XZ | Archivos comprimidos con XZ |
 | `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst` | Compresión Zstandard | Archivos comprimidos con Zstandard |
 
-## 📦 Instalación
+## Instalación
 
 ```bash
 go get github.com/nao1215/filesql
 ```
 
-## 🔧 Requisitos
+## Requisitos
 
 - **Versión de Go**: 1.24 o posterior
 - **Sistemas Operativos Soportados**:
@@ -59,7 +59,7 @@ go get github.com/nao1215/filesql
   - macOS  
   - Windows
 
-## 🚀 Inicio rápido
+## Inicio rápido
 
 ### Uso simple
 
@@ -149,7 +149,7 @@ defer db.Close()
 rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
 ```
 
-## 🔧 Uso avanzado
+## Uso avanzado
 
 ### Patrón Builder
 
@@ -313,7 +313,7 @@ parquetOptions := filesql.NewDumpOptions().
 // Nota: La funcionalidad de exportación está implementada (compresión externa no soportada, use la compresión integrada de Parquet)
 ```
 
-## 📝 Reglas de nomenclatura de tablas
+## Reglas de nomenclatura de tablas
 
 filesql deriva automáticamente los nombres de las tablas de las rutas de archivo:
 
@@ -324,7 +324,7 @@ filesql deriva automáticamente los nombres de las tablas de las rutas de archiv
 - `analytics.parquet` → tabla `analytics`
 - `sales.xlsx` (con hojas 'Q1', 'Q2') → tablas `sales_Q1`, `sales_Q2`
 
-## ⚠️ Notas importantes
+## Notas importantes
 
 ### Sintaxis SQL
 Dado que filesql usa SQLite3 como su motor subyacente, toda la sintaxis SQL sigue el [dialecto SQL de SQLite3](https://www.sqlite.org/lang.html). Esto incluye:
@@ -345,7 +345,7 @@ Dado que filesql usa SQLite3 como su motor subyacente, toda la sintaxis SQL sigu
 - Una sola conexión SQLite funciona mejor para la mayoría de escenarios
 - Usa streaming para archivos más grandes que la memoria disponible
 
-## 📊 Benchmark
+## Benchmark
 
 Rendimiento con un **archivo CSV de 100,000 filas**:
 
@@ -429,7 +429,7 @@ SELECT h1.Nombre, h2.Producto FROM ventas_Hoja1 h1
 - **Compresión**: Se utiliza la compresión integrada de Parquet en lugar de compresión externa
 - **Datos grandes**: Los archivos Parquet se procesan eficientemente con el formato columnar de Arrow
 
-## 🎨 Ejemplos avanzados
+## Ejemplos avanzados
 
 ### Consultas SQL complejas
 
@@ -491,7 +491,7 @@ defer db.Close()
 rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'active'")
 ```
 
-## 📚 Ejemplos
+## Ejemplos
 
 El directorio [examples](../../examples) contiene código de ejemplo que demuestra varias características de filesql:
 
@@ -506,7 +506,7 @@ El directorio [examples](../../examples) contiene código de ejemplo que demuest
 | [squirrel](../../examples/squirrel) | Integración con [Squirrel](https://github.com/Masterminds/squirrel) - constructor de consultas SQL |
 | [ent](../../examples/ent) | Integración con [Ent](https://entgo.io/) - framework de entidades de Facebook |
 
-## 🧹 Preprocesamiento de datos con fileprep
+## Preprocesamiento de datos con fileprep
 
 Para la validación y preprocesamiento de datos antes de consultar con filesql, recomendamos usar **[nao1215/fileprep](https://github.com/nao1215/fileprep)**.
 
@@ -570,15 +570,15 @@ Alice,alice@example.com,,user`
 
 Para la lista completa de opciones de preprocesamiento y validación, consulte la [documentación de fileprep](https://github.com/nao1215/fileprep).
 
-## 🔗 Proyectos Relacionados
+## Proyectos Relacionados
 
 ¿Usas filesql en tu proyecto? ¡Nos encantaría saberlo! Por favor [abre un issue](https://github.com/nao1215/filesql/issues) para informarnos, y añadiremos tu proyecto a la lista a continuación.
 
-### Bibliotecas construidas sobre filesql
+### Bibliotecas relacionadas
 
 | Proyecto | Descripción |
 |----------|-------------|
-| [nao1215/csv](https://github.com/nao1215/csv) | Biblioteca de análisis CSV con validación mediante etiquetas de struct |
+| [nao1215/fileprep](https://github.com/nao1215/fileprep) | Biblioteca de preprocesamiento de datos con validación mediante etiquetas de struct |
 
 ### Herramientas CLI que usan filesql
 
@@ -587,23 +587,23 @@ Para la lista completa de opciones de preprocesamiento y validación, consulte l
 | [nao1215/sqly](https://github.com/nao1215/sqly) | Shell interactivo para ejecutar consultas SQL contra archivos CSV, TSV, LTSV, JSON y Excel |
 | [kanmu/gocon2025-ctf](https://github.com/kanmu/gocon2025-ctf) | Repositorio CTF de Go Conference 2025 (en japonés) |
 
-## 🤝 Contribuir
+## Contribuir
 
 ¡Las contribuciones son bienvenidas! Por favor, consulta la [Guía de Contribución](../../CONTRIBUTING.md) para más detalles.
 
-## 💖 Soporte
+## Soporte
 
 Si encuentras útil este proyecto, por favor considera:
 
-- ⭐ Darle una estrella en GitHub - ayuda a otros a descubrir el proyecto
-- 💝 [Convertirte en patrocinador](https://github.com/sponsors/nao1215) - tu apoyo mantiene el proyecto vivo y motiva el desarrollo continuo
+- Darle una estrella en GitHub - ayuda a otros a descubrir el proyecto
+- [Convertirte en patrocinador](https://github.com/sponsors/nao1215) - tu apoyo mantiene el proyecto vivo y motiva el desarrollo continuo
 
 Tu apoyo, ya sea a través de estrellas, patrocinios o contribuciones, es lo que impulsa este proyecto hacia adelante. ¡Gracias!
 
-### ⭐ Historial de Estrellas
+### Historial de Estrellas
 
 [![Star History Chart](https://api.star-history.com/svg?repos=nao1215/filesql&type=date&legend=top-left)](https://www.star-history.com/#nao1215/filesql&Date)
 
-## 📄 Licencia
+## Licencia
 
 Este proyecto está licenciado bajo la Licencia MIT - consulta el archivo [LICENSE](../../LICENSE) para más detalles.
