@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.0] - 2025-12-09
 
 ### Added
-- **Public Parser Package ([c8f7f04](https://github.com/nao1215/filesql/commit/c8f7f04))**: Exposed the internal parser as a public API for use in external projects
+- **Public Parser Package ([6271e5ef](https://github.com/nao1215/filesql/commit/6271e5ef))**: Exposed the internal parser as a public API for use in external projects
   - **New `parser` package**: Standalone file parsing without SQLite dependency
     - `parser.Parse()`: Parse CSV, TSV, LTSV, XLSX, and Parquet files from `io.Reader`
     - `parser.DetectFileType()`: Automatic file type detection from file path
