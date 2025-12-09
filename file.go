@@ -1,18 +1,75 @@
 package filesql
 
 import (
-	"bytes"
-	"encoding/csv"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/xuri/excelize/v2"
+	"github.com/nao1215/filesql/parser"
 )
 
 // FileType represents supported file types including compression variants
 type FileType int
+
+// String returns a human-readable string representation of the FileType.
+func (ft FileType) String() string {
+	switch ft {
+	case FileTypeCSV:
+		return "CSV"
+	case FileTypeTSV:
+		return "TSV"
+	case FileTypeLTSV:
+		return "LTSV"
+	case FileTypeParquet:
+		return "Parquet"
+	case FileTypeXLSX:
+		return "XLSX"
+	case FileTypeCSVGZ:
+		return "CSV (gzip)"
+	case FileTypeCSVBZ2:
+		return "CSV (bzip2)"
+	case FileTypeCSVXZ:
+		return "CSV (xz)"
+	case FileTypeCSVZSTD:
+		return "CSV (zstd)"
+	case FileTypeTSVGZ:
+		return "TSV (gzip)"
+	case FileTypeTSVBZ2:
+		return "TSV (bzip2)"
+	case FileTypeTSVXZ:
+		return "TSV (xz)"
+	case FileTypeTSVZSTD:
+		return "TSV (zstd)"
+	case FileTypeLTSVGZ:
+		return "LTSV (gzip)"
+	case FileTypeLTSVBZ2:
+		return "LTSV (bzip2)"
+	case FileTypeLTSVXZ:
+		return "LTSV (xz)"
+	case FileTypeLTSVZSTD:
+		return "LTSV (zstd)"
+	case FileTypeParquetGZ:
+		return "Parquet (gzip)"
+	case FileTypeParquetBZ2:
+		return "Parquet (bzip2)"
+	case FileTypeParquetXZ:
+		return "Parquet (xz)"
+	case FileTypeParquetZSTD:
+		return "Parquet (zstd)"
+	case FileTypeXLSXGZ:
+		return "XLSX (gzip)"
+	case FileTypeXLSXBZ2:
+		return "XLSX (bzip2)"
+	case FileTypeXLSXXZ:
+		return "XLSX (xz)"
+	case FileTypeXLSXZSTD:
+		return "XLSX (zstd)"
+	default:
+		return "Unsupported"
+	}
+}
 
 const (
 	// FileTypeCSV represents CSV file type
@@ -69,26 +126,17 @@ const (
 	FileTypeUnsupported
 )
 
-// File extensions
+// File extension aliases from parser package
 const (
-	// extCSV is the CSV file extension
-	extCSV = ".csv"
-	// extTSV is the TSV file extension
-	extTSV = ".tsv"
-	// extLTSV is the LTSV file extension
-	extLTSV = ".ltsv"
-	// extParquet is the Parquet file extension
-	extParquet = ".parquet"
-	// extXLSX is the Excel XLSX file extension
-	extXLSX = ".xlsx"
-	// extGZ is the gzip compression extension
-	extGZ = ".gz"
-	// extBZ2 is the bzip2 compression extension
-	extBZ2 = ".bz2"
-	// extXZ is the xz compression extension
-	extXZ = ".xz"
-	// extZSTD is the zstd compression extension
-	extZSTD = ".zst"
+	extCSV     = parser.ExtCSV
+	extTSV     = parser.ExtTSV
+	extLTSV    = parser.ExtLTSV
+	extParquet = parser.ExtParquet
+	extXLSX    = parser.ExtXLSX
+	extGZ      = parser.ExtGZ
+	extBZ2     = parser.ExtBZ2
+	extXZ      = parser.ExtXZ
+	extZSTD    = parser.ExtZSTD
 )
 
 // file represents a file that can be converted to table
@@ -334,20 +382,15 @@ func (f *file) isZSTD() bool {
 
 // toTable converts file to table structure
 func (f *file) toTable() (*table, error) {
-	switch f.getFileType().baseType() {
-	case FileTypeCSV:
-		return f.parseCSV()
-	case FileTypeTSV:
-		return f.parseTSV()
-	case FileTypeLTSV:
-		return f.parseLTSV()
-	case FileTypeParquet:
-		return f.parseParquet()
-	case FileTypeXLSX:
-		return f.parseXLSX()
-	default:
-		return nil, fmt.Errorf("unsupported file type: %s", f.getPath())
+	// Open file for reading
+	file, err := os.Open(f.path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file %s: %w", f.path, err)
 	}
+	defer file.Close()
+
+	tableName := sanitizeTableName(tableFromFilePath(f.path))
+	return parseWithParser(file, f.fileType, tableName)
 }
 
 // detectFileType detects file type from extension, considering compressed files
@@ -446,182 +489,6 @@ func detectFileType(path string) FileType {
 func (f *file) openReader() (io.Reader, func() error, error) {
 	factory := NewCompressionFactory()
 	return factory.CreateReaderForFile(f.path)
-}
-
-// parseDelimitedFile parses CSV or TSV files with specified delimiter
-func (f *file) parseDelimitedFile(delimiter rune) (*table, error) {
-	reader, closer, err := f.openReader()
-	if err != nil {
-		return nil, err
-	}
-	defer closer()
-
-	csvReader := csv.NewReader(reader)
-	csvReader.Comma = delimiter
-	records, err := csvReader.ReadAll()
-	if err != nil {
-		return nil, err
-	}
-
-	if len(records) == 0 {
-		return nil, fmt.Errorf("empty file: %s", f.path)
-	}
-
-	header := newHeader(records[0])
-	// Check for duplicate column names
-	if err := validateColumnNames(records[0]); err != nil {
-		return nil, err
-	}
-
-	tableRecords := make([]Record, 0, len(records)-1)
-	for i := 1; i < len(records); i++ {
-		tableRecords = append(tableRecords, newRecord(records[i]))
-	}
-
-	tableName := sanitizeTableName(tableFromFilePath(f.path))
-	return newTable(tableName, header, tableRecords), nil
-}
-
-// parseCSV parses CSV file with compression support
-func (f *file) parseCSV() (*table, error) {
-	return f.parseDelimitedFile(csvDelimiter)
-}
-
-// parseTSV parses TSV file with compression support
-func (f *file) parseTSV() (*table, error) {
-	return f.parseDelimitedFile(tsvDelimiter)
-}
-
-// parseLTSV parses LTSV file with compression support
-func (f *file) parseLTSV() (*table, error) {
-	reader, closer, err := f.openReader()
-	if err != nil {
-		return nil, err
-	}
-	defer closer()
-
-	content, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, err
-	}
-
-	lines := strings.Split(string(content), "\n")
-	if len(lines) == 0 {
-		return nil, fmt.Errorf("empty file: %s", f.path)
-	}
-
-	headerMap := make(map[string]bool)
-	var records []map[string]string
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		record := make(map[string]string)
-		pairs := strings.Split(line, "\t")
-		for _, pair := range pairs {
-			kv := strings.SplitN(pair, ":", 2)
-			if len(kv) == 2 {
-				key := strings.TrimSpace(kv[0])
-				value := strings.TrimSpace(kv[1])
-				record[key] = value
-				headerMap[key] = true
-			}
-		}
-		if len(record) > 0 {
-			records = append(records, record)
-		}
-	}
-
-	if len(records) == 0 {
-		return nil, fmt.Errorf("no valid records found: %s", f.path)
-	}
-
-	var header header
-	for key := range headerMap {
-		header = append(header, key)
-	}
-
-	tableRecords := make([]Record, 0, len(records))
-	for _, recordMap := range records {
-		var row Record
-		for _, key := range header {
-			if val, exists := recordMap[key]; exists {
-				row = append(row, val)
-			} else {
-				row = append(row, "")
-			}
-		}
-		tableRecords = append(tableRecords, row)
-	}
-
-	tableName := sanitizeTableName(tableFromFilePath(f.path))
-	return newTable(tableName, header, tableRecords), nil
-}
-
-// parseXLSX parses XLSX file with compression support
-// Only supports single-sheet files for single table parsing.
-// For multiple sheets, use filesql.Open() or filesql.OpenContext() for 1-sheet-1-table approach.
-func (f *file) parseXLSX() (*table, error) {
-	reader, closer, err := f.openReader()
-	if err != nil {
-		return nil, err
-	}
-	defer closer()
-
-	// For XLSX files, we need to handle them specially since excelize needs a file path or bytes
-	// If it's compressed, we need to read all data into memory first
-	var xlsxFile *excelize.File
-
-	if f.isCompressed() {
-		// Read all data into memory for compressed files
-		data, err := io.ReadAll(reader)
-		if err != nil {
-			return nil, err
-		}
-		xlsxFile, err = excelize.OpenReader(bytes.NewReader(data))
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		// For uncompressed files, open directly
-		xlsxFile, err = excelize.OpenFile(f.path)
-		if err != nil {
-			return nil, err
-		}
-	}
-	defer func() {
-		_ = xlsxFile.Close() // Ignore close error
-	}()
-
-	// Get all sheet names
-	sheetNames := xlsxFile.GetSheetList()
-	if len(sheetNames) == 0 {
-		return nil, fmt.Errorf("no sheets found in Excel file: %s", f.path)
-	}
-
-	// With the new 1-sheet-1-table approach, we only parse the first sheet for single table parsing
-	// For multiple sheets, we process only the first sheet (single table parsing limitation)
-	// Users should use Open/OpenContext for full multi-sheet support with separate tables
-
-	// Process the first sheet
-	sheetName := sheetNames[0]
-	rows, err := xlsxFile.GetRows(sheetName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read sheet %s: %w", sheetName, err)
-	}
-
-	if len(rows) == 0 {
-		return nil, fmt.Errorf("sheet %s is empty in Excel file: %s", sheetName, f.path)
-	}
-
-	// Convert to standard table format
-	headers, records := convertXLSXRowsToTable(rows)
-
-	tableName := sanitizeTableName(tableFromFilePath(f.path))
-	return newTable(tableName, headers, records), nil
 }
 
 // convertXLSXRowsToTable converts XLSX rows to table headers and records

@@ -219,10 +219,10 @@ func TestMemoryLimit_EnableDisable(t *testing.T) {
 
 func TestMemoryLimit_SetWarningThreshold(t *testing.T) {
 	t.Parallel()
-	limit := NewMemoryLimit(512)
 
 	t.Run("valid thresholds", func(t *testing.T) {
 		t.Parallel()
+		limit := NewMemoryLimit(512)
 		// Test valid threshold values
 		validThresholds := []float64{0.1, 0.5, 0.7, 0.9, 1.0}
 
@@ -235,6 +235,7 @@ func TestMemoryLimit_SetWarningThreshold(t *testing.T) {
 
 	t.Run("invalid thresholds", func(t *testing.T) {
 		t.Parallel()
+		limit := NewMemoryLimit(512)
 		originalThreshold := limit.warningThreshold
 		invalidThresholds := []float64{-0.1, 0.0, 1.1, 2.0}
 
