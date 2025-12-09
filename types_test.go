@@ -11,6 +11,113 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestNewTableName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"normal name", "users", "users"},
+		{"with spaces trimmed", "  users  ", "users"},
+		{"empty string", "", "table"},
+		{"whitespace only", "   ", "table"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tn := NewTableName(tt.input)
+			assert.Equal(t, tt.expected, tn.String())
+		})
+	}
+}
+
+func TestTableName_String(t *testing.T) {
+	t.Parallel()
+
+	tn := NewTableName("test_table")
+	assert.Equal(t, "test_table", tn.String())
+}
+
+func TestTableName_Equal(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		tn1      TableName
+		tn2      TableName
+		expected bool
+	}{
+		{
+			name:     "equal table names",
+			tn1:      NewTableName("users"),
+			tn2:      NewTableName("users"),
+			expected: true,
+		},
+		{
+			name:     "different table names",
+			tn1:      NewTableName("users"),
+			tn2:      NewTableName("orders"),
+			expected: false,
+		},
+		{
+			name:     "empty both",
+			tn1:      NewTableName(""),
+			tn2:      NewTableName(""),
+			expected: true,
+		},
+		{
+			name:     "case sensitive",
+			tn1:      NewTableName("Users"),
+			tn2:      NewTableName("users"),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := tt.tn1.Equal(tt.tn2)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestTableName_Sanitize(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"normal name", "users", "users"},
+		{"with hyphen", "user-data", "user_data"},
+		{"with spaces", "user data", "user_data"},
+		{"with dots", "data.backup", "data_backup"},
+		{"with special chars", "user@#$data", "userdata"}, // special chars are removed, not replaced
+		{"starts with number", "123table", "table_123table"},
+		{"only special chars", "@#$%", "table"},
+		{"empty after sanitize", "", "table"},
+		{"mixed invalid chars", "test-data.v2@new", "test_data_v2new"}, // only -, space, . are replaced with _
+		{"uppercase preserved", "UserData", "UserData"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tn := NewTableName(tt.input)
+			sanitized := tn.Sanitize()
+			assert.Equal(t, tt.expected, sanitized.String())
+		})
+	}
+}
+
 func TestNewHeader(t *testing.T) {
 	t.Parallel()
 

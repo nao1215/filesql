@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2025-12-09
+
+### Added
+- **Public Parser Package ([6271e5ef](https://github.com/nao1215/filesql/commit/6271e5ef))**: Exposed the internal parser as a public API for use in external projects
+  - **New `parser` package**: Standalone file parsing without SQLite dependency
+    - `parser.Parse()`: Parse CSV, TSV, LTSV, XLSX, and Parquet files from `io.Reader`
+    - `parser.DetectFileType()`: Automatic file type detection from file path
+    - `parser.BaseFileType()`: Get base file type from potentially compressed file types
+  - **Type exports**: `TableData`, `ColumnType`, `FileType` types for working with parsed data
+  - **Parquet support**: Full Parquet parsing with `parser/parquet.go`
+  - **XLSX support**: Excel file parsing with `parser/xlsx.go`
+  - **Comprehensive test coverage**: 90%+ coverage for the parser package
+- **ORM Integration Examples ([281ede2](https://github.com/nao1215/filesql/commit/281ede2))**: Added example code for popular Go ORMs and query builders
+  - **GORM**: Full GORM integration example with model definitions
+  - **Bun**: Bun ORM example with struct scanning
+  - **Ent**: Facebook's Ent framework example with generated code
+  - **sqlx**: sqlx example with struct tags
+  - **sqlc**: sqlc example with generated type-safe queries
+  - **Squirrel**: Squirrel query builder example
+  - **Basic**: Standard library database/sql example
+  - **Multi-format**: Example combining CSV, TSV, and LTSV files
+- **FileType.String() Method**: Added `fmt.Stringer` implementation for `FileType` enum
+  - Human-readable format names for logging and debugging
+  - Returns names like "CSV", "TSV", "LTSV", "XLSX", "Parquet", etc.
+
+### Changed
+- **Documentation Updates**: Enhanced README files across all 7 languages
+  - Added fileprep project reference ([e3705a7](https://github.com/nao1215/filesql/commit/e3705a7))
+  - Fixed project link formatting ([dea615e](https://github.com/nao1215/filesql/commit/dea615e))
+  - Updated fileprep section ([d7905b0](https://github.com/nao1215/filesql/commit/d7905b0))
+
+### Technical Details
+- **Architecture**: Parser package enables lightweight file parsing without database overhead
+- **Compatibility**: Parser package can be used independently of the main filesql package
+- **Testing**: Added comprehensive test suites for parser, types, and error handling
+
 ## [0.5.0] - 2025-12-06
 
 ### Added
@@ -514,7 +550,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/nao1215/filesql/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/nao1215/filesql/compare/v0.4.6...v0.5.0
 [0.4.6]: https://github.com/nao1215/filesql/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/nao1215/filesql/compare/v0.4.4...v0.4.5
