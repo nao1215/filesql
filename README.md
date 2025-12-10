@@ -579,6 +579,8 @@ Using filesql in your project? We'd love to hear about it! Please [open an issue
 | Project | Description |
 |---------|-------------|
 | [nao1215/fileprep](https://github.com/nao1215/fileprep) | Data preprocessing library with struct tag validation. Clean and validate CSV/TSV data using Go struct tags before querying. |
+| [nao1215/fileframe](https://github.com/nao1215/fileframe)        | DataFrame API for CSV/TSV/LTSV, Parquet, Excel.  |
+
 
 ### CLI Tools Using filesql
 
