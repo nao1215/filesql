@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2025-12-11
+
+### Changed
+- Migrated from internal `github.com/nao1215/filesql/parser` to external `github.com/nao1215/fileparser` for file parsing
+- Updated all internal references from `parser.` to `fileparser.`
+
+### Removed
+- Internal `parser` package (now using `github.com/nao1215/fileparser v0.1.0` as external dependency)
+
 ## [0.6.0] - 2025-12-09
 
 ### Added
@@ -550,7 +559,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/nao1215/filesql/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/nao1215/filesql/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/nao1215/filesql/compare/v0.4.6...v0.5.0
 [0.4.6]: https://github.com/nao1215/filesql/compare/v0.4.5...v0.4.6

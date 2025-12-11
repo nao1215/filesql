@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/nao1215/filesql/parser"
+	"github.com/nao1215/fileparser"
 )
 
 // FileType represents supported file types including compression variants
@@ -126,17 +126,17 @@ const (
 	FileTypeUnsupported
 )
 
-// File extension aliases from parser package
+// File extension aliases from fileparser package
 const (
-	extCSV     = parser.ExtCSV
-	extTSV     = parser.ExtTSV
-	extLTSV    = parser.ExtLTSV
-	extParquet = parser.ExtParquet
-	extXLSX    = parser.ExtXLSX
-	extGZ      = parser.ExtGZ
-	extBZ2     = parser.ExtBZ2
-	extXZ      = parser.ExtXZ
-	extZSTD    = parser.ExtZSTD
+	extCSV     = fileparser.ExtCSV
+	extTSV     = fileparser.ExtTSV
+	extLTSV    = fileparser.ExtLTSV
+	extParquet = fileparser.ExtParquet
+	extXLSX    = fileparser.ExtXLSX
+	extGZ      = fileparser.ExtGZ
+	extBZ2     = fileparser.ExtBZ2
+	extXZ      = fileparser.ExtXZ
+	extZSTD    = fileparser.ExtZSTD
 )
 
 // file represents a file that can be converted to table
