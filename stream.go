@@ -3,6 +3,7 @@ package filesql
 import (
 	"compress/bzip2"
 	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"encoding/csv"
 	"errors"
@@ -14,7 +15,10 @@ import (
 	"github.com/apache/arrow/go/v18/arrow/array"
 	pqfile "github.com/apache/arrow/go/v18/parquet/file"
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
+	"github.com/klauspost/compress/s2"
+	"github.com/klauspost/compress/snappy"
 	"github.com/klauspost/compress/zstd"
+	"github.com/pierrec/lz4/v4"
 	"github.com/ulikunitz/xz"
 	"github.com/xuri/excelize/v2"
 )
@@ -76,30 +80,49 @@ func (p *streamingParser) parseFromReader(reader io.Reader) (*table, error) {
 // createDecompressedReader creates appropriate reader based on compression type
 func (p *streamingParser) createDecompressedReader(reader io.Reader) (io.Reader, func() error, error) {
 	switch p.fileType {
-	case FileTypeCSVGZ, FileTypeTSVGZ, FileTypeLTSVGZ, FileTypeXLSXGZ:
+	case FileTypeCSVGZ, FileTypeTSVGZ, FileTypeLTSVGZ, FileTypeXLSXGZ, FileTypeParquetGZ:
 		gzReader, err := gzip.NewReader(reader)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create gzip reader: %w", err)
 		}
 		return gzReader, gzReader.Close, nil
 
-	case FileTypeCSVBZ2, FileTypeTSVBZ2, FileTypeLTSVBZ2, FileTypeXLSXBZ2:
+	case FileTypeCSVBZ2, FileTypeTSVBZ2, FileTypeLTSVBZ2, FileTypeXLSXBZ2, FileTypeParquetBZ2:
 		bz2Reader := bzip2.NewReader(reader)
 		return bz2Reader, nil, nil
 
-	case FileTypeCSVXZ, FileTypeTSVXZ, FileTypeLTSVXZ, FileTypeXLSXXZ:
+	case FileTypeCSVXZ, FileTypeTSVXZ, FileTypeLTSVXZ, FileTypeXLSXXZ, FileTypeParquetXZ:
 		xzReader, err := xz.NewReader(reader)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create xz reader: %w", err)
 		}
 		return xzReader, nil, nil
 
-	case FileTypeCSVZSTD, FileTypeTSVZSTD, FileTypeLTSVZSTD, FileTypeXLSXZSTD:
+	case FileTypeCSVZSTD, FileTypeTSVZSTD, FileTypeLTSVZSTD, FileTypeXLSXZSTD, FileTypeParquetZSTD:
 		decoder, err := zstd.NewReader(reader)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create zstd reader: %w", err)
 		}
 		return decoder, func() error { decoder.Close(); return nil }, nil
+
+	case FileTypeCSVZLIB, FileTypeTSVZLIB, FileTypeLTSVZLIB, FileTypeXLSXZLIB, FileTypeParquetZLIB:
+		zlibReader, err := zlib.NewReader(reader)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create zlib reader: %w", err)
+		}
+		return zlibReader, zlibReader.Close, nil
+
+	case FileTypeCSVSNAPPY, FileTypeTSVSNAPPY, FileTypeLTSVSNAPPY, FileTypeXLSXSNAPPY, FileTypeParquetSNAPPY:
+		snappyReader := snappy.NewReader(reader)
+		return snappyReader, nil, nil
+
+	case FileTypeCSVS2, FileTypeTSVS2, FileTypeLTSVS2, FileTypeXLSXS2, FileTypeParquetS2:
+		s2Reader := s2.NewReader(reader)
+		return s2Reader, nil, nil
+
+	case FileTypeCSVLZ4, FileTypeTSVLZ4, FileTypeLTSVLZ4, FileTypeXLSXLZ4, FileTypeParquetLZ4:
+		lz4Reader := lz4.NewReader(reader)
+		return lz4Reader, nil, nil
 
 	default:
 		// No compression

@@ -23,7 +23,7 @@ Plutôt que de maintenir du code dupliqué dans les deux projets, nous avons ext
 
 - Interface SQL SQLite3 - Utilisez le puissant dialecte SQL de SQLite3 pour interroger vos fichiers
 - Formats de fichiers multiples - Support pour les fichiers CSV, TSV, LTSV, Parquet et Excel (XLSX)
-- Support de compression - Gère automatiquement les fichiers compressés .gz, .bz2, .xz et .zst
+- Support de compression - Gère automatiquement les fichiers compressés .gz, .bz2, .xz, .zst, .z, .snappy, .s2 et .lz4
 - Traitement en flux - Gère efficacement les gros fichiers grâce au streaming avec des tailles de chunk configurables
 - Sources d'entrée flexibles - Support pour les chemins de fichiers, répertoires, io.Reader et embed.FS
 - Configuration zéro - Aucun serveur de base de données requis, tout fonctionne en mémoire
@@ -44,6 +44,10 @@ Plutôt que de maintenir du code dupliqué dans les deux projets, nous avons ext
 | `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2` | Compression Bzip2 | Fichiers compressés Bzip2 |
 | `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz` | Compression XZ | Fichiers compressés XZ |
 | `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst` | Compression Zstandard | Fichiers compressés Zstandard |
+| `.csv.z`, `.tsv.z`, `.ltsv.z`, `.parquet.z`, `.xlsx.z` | Compression Zlib | Fichiers compressés Zlib |
+| `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy` | Compression Snappy | Fichiers compressés Snappy |
+| `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2` | Compression S2 | Fichiers compressés S2 (compatible Snappy) |
+| `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4` | Compression LZ4 | Fichiers compressés LZ4 |
 
 ## Installation
 
@@ -399,7 +403,7 @@ var sharedDB *sql.DB  // Cela causera des conditions de course
 - **Exigences mémoire** : Les fichiers XLSX nécessitent un chargement complet en mémoire en raison de la structure du format basé sur ZIP, même lors des opérations de streaming
 - **Chargement complet en mémoire** : Les fichiers XLSX sont entièrement chargés en mémoire en raison de leur structure ZIP, et toutes les feuilles sont traitées (pas seulement la première). Les analyseurs en streaming CSV/TSV ne s'appliquent pas aux fichiers XLSX
 - **Fonctionnalité d'exportation** : Lors de l'exportation au format XLSX, les noms de tables deviennent automatiquement des noms de feuilles
-- **Support de compression** : Support complet pour les fichiers XLSX compressés (.xlsx.gz, .xlsx.bz2, .xlsx.xz, .xlsx.zst)
+- **Support de compression** : Support complet pour les fichiers XLSX compressés (.xlsx.gz, .xlsx.bz2, .xlsx.xz, .xlsx.zst, .xlsx.z, .xlsx.snappy, .xlsx.s2, .xlsx.lz4)
 
 #### Exemple de structure de fichier Excel
 ```

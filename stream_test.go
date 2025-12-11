@@ -2,13 +2,20 @@ package filesql
 
 import (
 	"bytes"
+	"compress/gzip"
+	"compress/zlib"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/klauspost/compress/s2"
+	"github.com/klauspost/compress/snappy"
+	"github.com/klauspost/compress/zstd"
+	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/ulikunitz/xz"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -583,4 +590,384 @@ func TestStreamingParser_ParseFromReader_XLSX(t *testing.T) {
 			})
 		}
 	})
+}
+
+// TestCreateDecompressedReader_AllCompressionTypes tests the createDecompressedReader function
+// with all supported compression types including zlib, snappy, s2, and lz4.
+func TestCreateDecompressedReader_AllCompressionTypes(t *testing.T) {
+	t.Parallel()
+
+	originalData := "name,age,city\nAlice,30,Tokyo\nBob,25,Osaka\n"
+
+	tests := []struct {
+		name      string
+		fileType  FileType
+		compress  func([]byte) ([]byte, error)
+		expectErr bool
+	}{
+		{
+			name:     "gzip compressed CSV",
+			fileType: FileTypeCSVGZ,
+			compress: func(data []byte) ([]byte, error) {
+				var buf bytes.Buffer
+				w := gzip.NewWriter(&buf)
+				if _, err := w.Write(data); err != nil {
+					return nil, err
+				}
+				if err := w.Close(); err != nil {
+					return nil, err
+				}
+				return buf.Bytes(), nil
+			},
+		},
+		{
+			name:     "zstd compressed CSV",
+			fileType: FileTypeCSVZSTD,
+			compress: func(data []byte) ([]byte, error) {
+				var buf bytes.Buffer
+				w, err := zstd.NewWriter(&buf)
+				if err != nil {
+					return nil, err
+				}
+				if _, err := w.Write(data); err != nil {
+					return nil, err
+				}
+				if err := w.Close(); err != nil {
+					return nil, err
+				}
+				return buf.Bytes(), nil
+			},
+		},
+		{
+			name:     "xz compressed CSV",
+			fileType: FileTypeCSVXZ,
+			compress: func(data []byte) ([]byte, error) {
+				var buf bytes.Buffer
+				w, err := xz.NewWriter(&buf)
+				if err != nil {
+					return nil, err
+				}
+				if _, err := w.Write(data); err != nil {
+					return nil, err
+				}
+				if err := w.Close(); err != nil {
+					return nil, err
+				}
+				return buf.Bytes(), nil
+			},
+		},
+		{
+			name:     "zlib compressed CSV",
+			fileType: FileTypeCSVZLIB,
+			compress: func(data []byte) ([]byte, error) {
+				var buf bytes.Buffer
+				w := zlib.NewWriter(&buf)
+				if _, err := w.Write(data); err != nil {
+					return nil, err
+				}
+				if err := w.Close(); err != nil {
+					return nil, err
+				}
+				return buf.Bytes(), nil
+			},
+		},
+		{
+			name:     "snappy compressed CSV",
+			fileType: FileTypeCSVSNAPPY,
+			compress: func(data []byte) ([]byte, error) {
+				var buf bytes.Buffer
+				w := snappy.NewBufferedWriter(&buf)
+				if _, err := w.Write(data); err != nil {
+					return nil, err
+				}
+				if err := w.Close(); err != nil {
+					return nil, err
+				}
+				return buf.Bytes(), nil
+			},
+		},
+		{
+			name:     "s2 compressed CSV",
+			fileType: FileTypeCSVS2,
+			compress: func(data []byte) ([]byte, error) {
+				var buf bytes.Buffer
+				w := s2.NewWriter(&buf)
+				if _, err := w.Write(data); err != nil {
+					return nil, err
+				}
+				if err := w.Close(); err != nil {
+					return nil, err
+				}
+				return buf.Bytes(), nil
+			},
+		},
+		{
+			name:     "lz4 compressed CSV",
+			fileType: FileTypeCSVLZ4,
+			compress: func(data []byte) ([]byte, error) {
+				var buf bytes.Buffer
+				w := lz4.NewWriter(&buf)
+				if _, err := w.Write(data); err != nil {
+					return nil, err
+				}
+				if err := w.Close(); err != nil {
+					return nil, err
+				}
+				return buf.Bytes(), nil
+			},
+		},
+		{
+			name:     "uncompressed CSV",
+			fileType: FileTypeCSV,
+			compress: func(data []byte) ([]byte, error) {
+				return data, nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			compressedData, err := tt.compress([]byte(originalData))
+			require.NoError(t, err, "Failed to compress data")
+
+			parser := newStreamingParser(tt.fileType, "test", 1024)
+			reader := bytes.NewReader(compressedData)
+
+			table, err := parser.parseFromReader(reader)
+			if tt.expectErr {
+				assert.Error(t, err, "Expected error")
+				return
+			}
+
+			require.NoError(t, err, "parseFromReader() failed")
+			assert.Equal(t, "test", table.getName(), "Table name mismatch")
+
+			records := table.getRecords()
+			assert.Len(t, records, 2, "Records length mismatch")
+
+			// Verify first record
+			if len(records) > 0 && len(records[0]) > 0 {
+				assert.Equal(t, "Alice", records[0][0], "First record name mismatch")
+			}
+		})
+	}
+}
+
+// TestCreateDecompressedReader_TSVCompressionTypes tests TSV with various compression types
+func TestCreateDecompressedReader_TSVCompressionTypes(t *testing.T) {
+	t.Parallel()
+
+	originalData := "name\tage\tcity\nAlice\t30\tTokyo\n"
+
+	tests := []struct {
+		name     string
+		fileType FileType
+		compress func([]byte) ([]byte, error)
+	}{
+		{
+			name:     "zlib compressed TSV",
+			fileType: FileTypeTSVZLIB,
+			compress: func(data []byte) ([]byte, error) {
+				var buf bytes.Buffer
+				w := zlib.NewWriter(&buf)
+				if _, err := w.Write(data); err != nil {
+					return nil, err
+				}
+				if err := w.Close(); err != nil {
+					return nil, err
+				}
+				return buf.Bytes(), nil
+			},
+		},
+		{
+			name:     "snappy compressed TSV",
+			fileType: FileTypeTSVSNAPPY,
+			compress: func(data []byte) ([]byte, error) {
+				var buf bytes.Buffer
+				w := snappy.NewBufferedWriter(&buf)
+				if _, err := w.Write(data); err != nil {
+					return nil, err
+				}
+				if err := w.Close(); err != nil {
+					return nil, err
+				}
+				return buf.Bytes(), nil
+			},
+		},
+		{
+			name:     "s2 compressed TSV",
+			fileType: FileTypeTSVS2,
+			compress: func(data []byte) ([]byte, error) {
+				var buf bytes.Buffer
+				w := s2.NewWriter(&buf)
+				if _, err := w.Write(data); err != nil {
+					return nil, err
+				}
+				if err := w.Close(); err != nil {
+					return nil, err
+				}
+				return buf.Bytes(), nil
+			},
+		},
+		{
+			name:     "lz4 compressed TSV",
+			fileType: FileTypeTSVLZ4,
+			compress: func(data []byte) ([]byte, error) {
+				var buf bytes.Buffer
+				w := lz4.NewWriter(&buf)
+				if _, err := w.Write(data); err != nil {
+					return nil, err
+				}
+				if err := w.Close(); err != nil {
+					return nil, err
+				}
+				return buf.Bytes(), nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			compressedData, err := tt.compress([]byte(originalData))
+			require.NoError(t, err, "Failed to compress data")
+
+			parser := newStreamingParser(tt.fileType, "test_tsv", 1024)
+			reader := bytes.NewReader(compressedData)
+
+			table, err := parser.parseFromReader(reader)
+			require.NoError(t, err, "parseFromReader() failed")
+
+			assert.Equal(t, "test_tsv", table.getName(), "Table name mismatch")
+
+			records := table.getRecords()
+			assert.Len(t, records, 1, "Records length mismatch")
+		})
+	}
+}
+
+// TestCreateDecompressedReader_LTSVCompressionTypes tests LTSV with various compression types
+func TestCreateDecompressedReader_LTSVCompressionTypes(t *testing.T) {
+	t.Parallel()
+
+	originalData := "name:Alice\tage:30\tcity:Tokyo\nname:Bob\tage:25\tcity:Osaka\n"
+
+	tests := []struct {
+		name     string
+		fileType FileType
+		compress func([]byte) ([]byte, error)
+	}{
+		{
+			name:     "zlib compressed LTSV",
+			fileType: FileTypeLTSVZLIB,
+			compress: func(data []byte) ([]byte, error) {
+				var buf bytes.Buffer
+				w := zlib.NewWriter(&buf)
+				if _, err := w.Write(data); err != nil {
+					return nil, err
+				}
+				if err := w.Close(); err != nil {
+					return nil, err
+				}
+				return buf.Bytes(), nil
+			},
+		},
+		{
+			name:     "snappy compressed LTSV",
+			fileType: FileTypeLTSVSNAPPY,
+			compress: func(data []byte) ([]byte, error) {
+				var buf bytes.Buffer
+				w := snappy.NewBufferedWriter(&buf)
+				if _, err := w.Write(data); err != nil {
+					return nil, err
+				}
+				if err := w.Close(); err != nil {
+					return nil, err
+				}
+				return buf.Bytes(), nil
+			},
+		},
+		{
+			name:     "s2 compressed LTSV",
+			fileType: FileTypeLTSVS2,
+			compress: func(data []byte) ([]byte, error) {
+				var buf bytes.Buffer
+				w := s2.NewWriter(&buf)
+				if _, err := w.Write(data); err != nil {
+					return nil, err
+				}
+				if err := w.Close(); err != nil {
+					return nil, err
+				}
+				return buf.Bytes(), nil
+			},
+		},
+		{
+			name:     "lz4 compressed LTSV",
+			fileType: FileTypeLTSVLZ4,
+			compress: func(data []byte) ([]byte, error) {
+				var buf bytes.Buffer
+				w := lz4.NewWriter(&buf)
+				if _, err := w.Write(data); err != nil {
+					return nil, err
+				}
+				if err := w.Close(); err != nil {
+					return nil, err
+				}
+				return buf.Bytes(), nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			compressedData, err := tt.compress([]byte(originalData))
+			require.NoError(t, err, "Failed to compress data")
+
+			parser := newStreamingParser(tt.fileType, "test_ltsv", 1024)
+			reader := bytes.NewReader(compressedData)
+
+			table, err := parser.parseFromReader(reader)
+			require.NoError(t, err, "parseFromReader() failed")
+
+			assert.Equal(t, "test_ltsv", table.getName(), "Table name mismatch")
+
+			records := table.getRecords()
+			assert.Len(t, records, 2, "Records length mismatch")
+		})
+	}
+}
+
+// TestCreateDecompressedReader_InvalidData tests error handling with invalid compressed data
+func TestCreateDecompressedReader_InvalidData(t *testing.T) {
+	t.Parallel()
+
+	invalidData := []byte("this is not valid compressed data")
+
+	tests := []struct {
+		name     string
+		fileType FileType
+	}{
+		{"invalid gzip", FileTypeCSVGZ},
+		{"invalid zstd", FileTypeCSVZSTD},
+		{"invalid xz", FileTypeCSVXZ},
+		{"invalid zlib", FileTypeCSVZLIB},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			parser := newStreamingParser(tt.fileType, "test", 1024)
+			reader := bytes.NewReader(invalidData)
+
+			_, err := parser.parseFromReader(reader)
+			assert.Error(t, err, "Expected error for invalid compressed data")
+		})
+	}
 }

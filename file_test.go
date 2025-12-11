@@ -82,6 +82,26 @@ func TestNewFile(t *testing.T) {
 			expected: FileTypeXLSXZSTD,
 		},
 		{
+			name:     "Zlib compressed CSV file",
+			path:     "test.csv.z",
+			expected: FileTypeCSVZLIB,
+		},
+		{
+			name:     "Snappy compressed CSV file",
+			path:     "test.csv.snappy",
+			expected: FileTypeCSVSNAPPY,
+		},
+		{
+			name:     "S2 compressed CSV file",
+			path:     "test.csv.s2",
+			expected: FileTypeCSVS2,
+		},
+		{
+			name:     "LZ4 compressed CSV file",
+			path:     "test.csv.lz4",
+			expected: FileTypeCSVLZ4,
+		},
+		{
 			name:     "Unsupported file",
 			path:     "test.txt",
 			expected: FileTypeUnsupported,
@@ -130,6 +150,26 @@ func TestFile_IsCompressed(t *testing.T) {
 		{
 			name:     "Zstd compressed file",
 			path:     "test.csv.zst",
+			expected: true,
+		},
+		{
+			name:     "Zlib compressed file",
+			path:     "test.csv.z",
+			expected: true,
+		},
+		{
+			name:     "Snappy compressed file",
+			path:     "test.csv.snappy",
+			expected: true,
+		},
+		{
+			name:     "S2 compressed file",
+			path:     "test.csv.s2",
+			expected: true,
+		},
+		{
+			name:     "LZ4 compressed file",
+			path:     "test.csv.lz4",
 			expected: true,
 		},
 	}
@@ -497,14 +537,26 @@ func Test_isSupportedFile(t *testing.T) {
 		{"test.csv.bz2", true},
 		{"test.csv.xz", true},
 		{"test.csv.zst", true},
+		{"test.csv.z", true},
+		{"test.csv.snappy", true},
+		{"test.csv.s2", true},
+		{"test.csv.lz4", true},
 		{"test.tsv.gz", true},
 		{"test.tsv.bz2", true},
 		{"test.tsv.xz", true},
 		{"test.tsv.zst", true},
+		{"test.tsv.z", true},
+		{"test.tsv.snappy", true},
+		{"test.tsv.s2", true},
+		{"test.tsv.lz4", true},
 		{"test.ltsv.gz", true},
 		{"test.ltsv.bz2", true},
 		{"test.ltsv.xz", true},
 		{"test.ltsv.zst", true},
+		{"test.ltsv.z", true},
+		{"test.ltsv.snappy", true},
+		{"test.ltsv.s2", true},
+		{"test.ltsv.lz4", true},
 
 		// Case insensitive
 		{"test.CSV", true},
@@ -747,6 +799,26 @@ func TestFileTypeExtension(t *testing.T) {
 		{"Parquet BZ2", FileTypeParquetBZ2, ".parquet.bz2"},
 		{"Parquet XZ", FileTypeParquetXZ, ".parquet.xz"},
 		{"Parquet ZSTD", FileTypeParquetZSTD, ".parquet.zst"},
+		{"CSV ZLIB", FileTypeCSVZLIB, ".csv.z"},
+		{"CSV SNAPPY", FileTypeCSVSNAPPY, ".csv.snappy"},
+		{"CSV S2", FileTypeCSVS2, ".csv.s2"},
+		{"CSV LZ4", FileTypeCSVLZ4, ".csv.lz4"},
+		{"TSV ZLIB", FileTypeTSVZLIB, ".tsv.z"},
+		{"TSV SNAPPY", FileTypeTSVSNAPPY, ".tsv.snappy"},
+		{"TSV S2", FileTypeTSVS2, ".tsv.s2"},
+		{"TSV LZ4", FileTypeTSVLZ4, ".tsv.lz4"},
+		{"LTSV ZLIB", FileTypeLTSVZLIB, ".ltsv.z"},
+		{"LTSV SNAPPY", FileTypeLTSVSNAPPY, ".ltsv.snappy"},
+		{"LTSV S2", FileTypeLTSVS2, ".ltsv.s2"},
+		{"LTSV LZ4", FileTypeLTSVLZ4, ".ltsv.lz4"},
+		{"Parquet ZLIB", FileTypeParquetZLIB, ".parquet.z"},
+		{"Parquet SNAPPY", FileTypeParquetSNAPPY, ".parquet.snappy"},
+		{"Parquet S2", FileTypeParquetS2, ".parquet.s2"},
+		{"Parquet LZ4", FileTypeParquetLZ4, ".parquet.lz4"},
+		{"XLSX ZLIB", FileTypeXLSXZLIB, ".xlsx.z"},
+		{"XLSX SNAPPY", FileTypeXLSXSNAPPY, ".xlsx.snappy"},
+		{"XLSX S2", FileTypeXLSXS2, ".xlsx.s2"},
+		{"XLSX LZ4", FileTypeXLSXLZ4, ".xlsx.lz4"},
 		{"Unsupported", FileTypeUnsupported, ""},
 	}
 
@@ -805,8 +877,9 @@ func TestGetSupportedFilePatterns(t *testing.T) {
 
 	patterns := supportedFileExtPatterns()
 
-	// Should have 25 patterns: 5 base extensions × 5 compression variants (including none)
-	expectedCount := 25
+	// Should have 45 patterns: 5 base extensions × 9 compression variants (including none)
+	// Compression variants: none, gz, bz2, xz, zst, z, snappy, s2, lz4
+	expectedCount := 45
 	if len(patterns) != expectedCount {
 		t.Errorf("GetSupportedFilePatterns() returned %d patterns, want %d", len(patterns), expectedCount)
 	}
@@ -814,10 +887,15 @@ func TestGetSupportedFilePatterns(t *testing.T) {
 	// Check that all expected patterns are present
 	expectedPatterns := []string{
 		"*.csv", "*.csv.gz", "*.csv.bz2", "*.csv.xz", "*.csv.zst",
+		"*.csv.z", "*.csv.snappy", "*.csv.s2", "*.csv.lz4",
 		"*.tsv", "*.tsv.gz", "*.tsv.bz2", "*.tsv.xz", "*.tsv.zst",
+		"*.tsv.z", "*.tsv.snappy", "*.tsv.s2", "*.tsv.lz4",
 		"*.ltsv", "*.ltsv.gz", "*.ltsv.bz2", "*.ltsv.xz", "*.ltsv.zst",
+		"*.ltsv.z", "*.ltsv.snappy", "*.ltsv.s2", "*.ltsv.lz4",
 		"*.parquet", "*.parquet.gz", "*.parquet.bz2", "*.parquet.xz", "*.parquet.zst",
+		"*.parquet.z", "*.parquet.snappy", "*.parquet.s2", "*.parquet.lz4",
 		"*.xlsx", "*.xlsx.gz", "*.xlsx.bz2", "*.xlsx.xz", "*.xlsx.zst",
+		"*.xlsx.z", "*.xlsx.snappy", "*.xlsx.s2", "*.xlsx.lz4",
 	}
 
 	for _, expected := range expectedPatterns {
@@ -1093,10 +1171,20 @@ func TestGetBaseFileType(t *testing.T) {
 		{FileTypeCSV, FileTypeCSV},
 		{FileTypeCSVGZ, FileTypeCSV},
 		{FileTypeCSVBZ2, FileTypeCSV},
+		{FileTypeCSVZLIB, FileTypeCSV},
+		{FileTypeCSVSNAPPY, FileTypeCSV},
+		{FileTypeCSVS2, FileTypeCSV},
+		{FileTypeCSVLZ4, FileTypeCSV},
 		{FileTypeTSV, FileTypeTSV},
 		{FileTypeTSVGZ, FileTypeTSV},
+		{FileTypeTSVZLIB, FileTypeTSV},
 		{FileTypeLTSV, FileTypeLTSV},
 		{FileTypeLTSVXZ, FileTypeLTSV},
+		{FileTypeLTSVSNAPPY, FileTypeLTSV},
+		{FileTypeParquet, FileTypeParquet},
+		{FileTypeParquetLZ4, FileTypeParquet},
+		{FileTypeXLSX, FileTypeXLSX},
+		{FileTypeXLSXS2, FileTypeXLSX},
 		{FileTypeUnsupported, FileTypeUnsupported},
 	}
 
@@ -1498,4 +1586,188 @@ func TestConvertXLSXRowsToTable(t *testing.T) {
 			t.Errorf("Expected record length 3, got %d", len(records[1]))
 		}
 	})
+}
+
+// TestDetectFileType tests the detectFileType function with all file type and compression combinations
+func TestDetectFileType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		path     string
+		expected FileType
+	}{
+		// Base types (uncompressed)
+		{"data.csv", FileTypeCSV},
+		{"data.tsv", FileTypeTSV},
+		{"data.ltsv", FileTypeLTSV},
+		{"data.parquet", FileTypeParquet},
+		{"data.xlsx", FileTypeXLSX},
+
+		// CSV with all compression types
+		{"data.csv.gz", FileTypeCSVGZ},
+		{"data.csv.bz2", FileTypeCSVBZ2},
+		{"data.csv.xz", FileTypeCSVXZ},
+		{"data.csv.zst", FileTypeCSVZSTD},
+		{"data.csv.z", FileTypeCSVZLIB},
+		{"data.csv.snappy", FileTypeCSVSNAPPY},
+		{"data.csv.s2", FileTypeCSVS2},
+		{"data.csv.lz4", FileTypeCSVLZ4},
+
+		// TSV with all compression types
+		{"data.tsv.gz", FileTypeTSVGZ},
+		{"data.tsv.bz2", FileTypeTSVBZ2},
+		{"data.tsv.xz", FileTypeTSVXZ},
+		{"data.tsv.zst", FileTypeTSVZSTD},
+		{"data.tsv.z", FileTypeTSVZLIB},
+		{"data.tsv.snappy", FileTypeTSVSNAPPY},
+		{"data.tsv.s2", FileTypeTSVS2},
+		{"data.tsv.lz4", FileTypeTSVLZ4},
+
+		// LTSV with all compression types
+		{"data.ltsv.gz", FileTypeLTSVGZ},
+		{"data.ltsv.bz2", FileTypeLTSVBZ2},
+		{"data.ltsv.xz", FileTypeLTSVXZ},
+		{"data.ltsv.zst", FileTypeLTSVZSTD},
+		{"data.ltsv.z", FileTypeLTSVZLIB},
+		{"data.ltsv.snappy", FileTypeLTSVSNAPPY},
+		{"data.ltsv.s2", FileTypeLTSVS2},
+		{"data.ltsv.lz4", FileTypeLTSVLZ4},
+
+		// Parquet with all compression types
+		{"data.parquet.gz", FileTypeParquetGZ},
+		{"data.parquet.bz2", FileTypeParquetBZ2},
+		{"data.parquet.xz", FileTypeParquetXZ},
+		{"data.parquet.zst", FileTypeParquetZSTD},
+		{"data.parquet.z", FileTypeParquetZLIB},
+		{"data.parquet.snappy", FileTypeParquetSNAPPY},
+		{"data.parquet.s2", FileTypeParquetS2},
+		{"data.parquet.lz4", FileTypeParquetLZ4},
+
+		// XLSX with all compression types
+		{"data.xlsx.gz", FileTypeXLSXGZ},
+		{"data.xlsx.bz2", FileTypeXLSXBZ2},
+		{"data.xlsx.xz", FileTypeXLSXXZ},
+		{"data.xlsx.zst", FileTypeXLSXZSTD},
+		{"data.xlsx.z", FileTypeXLSXZLIB},
+		{"data.xlsx.snappy", FileTypeXLSXSNAPPY},
+		{"data.xlsx.s2", FileTypeXLSXS2},
+		{"data.xlsx.lz4", FileTypeXLSXLZ4},
+
+		// Unsupported types
+		{"data.txt", FileTypeUnsupported},
+		{"data.json", FileTypeUnsupported},
+		{"data.xml", FileTypeUnsupported},
+		{"data", FileTypeUnsupported},
+		{"", FileTypeUnsupported},
+
+		// Paths with directories
+		{"/path/to/data.csv", FileTypeCSV},
+		{"/path/to/data.csv.gz", FileTypeCSVGZ},
+		{"./relative/path/data.tsv.bz2", FileTypeTSVBZ2},
+
+		// Files with multiple dots in name
+		{"my.data.file.csv", FileTypeCSV},
+		{"my.data.file.csv.gz", FileTypeCSVGZ},
+
+		// Edge cases
+		{".csv", FileTypeCSV},            // Hidden file with just extension
+		{".csv.gz", FileTypeCSVGZ},       // Hidden compressed file
+		{"file.gz", FileTypeUnsupported}, // Compression only, no base format
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			t.Parallel()
+
+			result := detectFileType(tt.path)
+			if result != tt.expected {
+				t.Errorf("detectFileType(%q) = %v (%s), want %v (%s)",
+					tt.path, result, result.String(), tt.expected, tt.expected.String())
+			}
+		})
+	}
+}
+
+// TestFileTypeString tests the String() method for all FileType values
+func TestFileTypeString(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		fileType FileType
+		expected string
+	}{
+		// Base types
+		{FileTypeCSV, "CSV"},
+		{FileTypeTSV, "TSV"},
+		{FileTypeLTSV, "LTSV"},
+		{FileTypeParquet, "Parquet"},
+		{FileTypeXLSX, "XLSX"},
+
+		// CSV compressed types
+		{FileTypeCSVGZ, "CSV (gzip)"},
+		{FileTypeCSVBZ2, "CSV (bzip2)"},
+		{FileTypeCSVXZ, "CSV (xz)"},
+		{FileTypeCSVZSTD, "CSV (zstd)"},
+		{FileTypeCSVZLIB, "CSV (zlib)"},
+		{FileTypeCSVSNAPPY, "CSV (snappy)"},
+		{FileTypeCSVS2, "CSV (s2)"},
+		{FileTypeCSVLZ4, "CSV (lz4)"},
+
+		// TSV compressed types
+		{FileTypeTSVGZ, "TSV (gzip)"},
+		{FileTypeTSVBZ2, "TSV (bzip2)"},
+		{FileTypeTSVXZ, "TSV (xz)"},
+		{FileTypeTSVZSTD, "TSV (zstd)"},
+		{FileTypeTSVZLIB, "TSV (zlib)"},
+		{FileTypeTSVSNAPPY, "TSV (snappy)"},
+		{FileTypeTSVS2, "TSV (s2)"},
+		{FileTypeTSVLZ4, "TSV (lz4)"},
+
+		// LTSV compressed types
+		{FileTypeLTSVGZ, "LTSV (gzip)"},
+		{FileTypeLTSVBZ2, "LTSV (bzip2)"},
+		{FileTypeLTSVXZ, "LTSV (xz)"},
+		{FileTypeLTSVZSTD, "LTSV (zstd)"},
+		{FileTypeLTSVZLIB, "LTSV (zlib)"},
+		{FileTypeLTSVSNAPPY, "LTSV (snappy)"},
+		{FileTypeLTSVS2, "LTSV (s2)"},
+		{FileTypeLTSVLZ4, "LTSV (lz4)"},
+
+		// Parquet compressed types
+		{FileTypeParquetGZ, "Parquet (gzip)"},
+		{FileTypeParquetBZ2, "Parquet (bzip2)"},
+		{FileTypeParquetXZ, "Parquet (xz)"},
+		{FileTypeParquetZSTD, "Parquet (zstd)"},
+		{FileTypeParquetZLIB, "Parquet (zlib)"},
+		{FileTypeParquetSNAPPY, "Parquet (snappy)"},
+		{FileTypeParquetS2, "Parquet (s2)"},
+		{FileTypeParquetLZ4, "Parquet (lz4)"},
+
+		// XLSX compressed types
+		{FileTypeXLSXGZ, "XLSX (gzip)"},
+		{FileTypeXLSXBZ2, "XLSX (bzip2)"},
+		{FileTypeXLSXXZ, "XLSX (xz)"},
+		{FileTypeXLSXZSTD, "XLSX (zstd)"},
+		{FileTypeXLSXZLIB, "XLSX (zlib)"},
+		{FileTypeXLSXSNAPPY, "XLSX (snappy)"},
+		{FileTypeXLSXS2, "XLSX (s2)"},
+		{FileTypeXLSXLZ4, "XLSX (lz4)"},
+
+		// Unsupported type
+		{FileTypeUnsupported, "Unsupported"},
+
+		// Unknown type (should return "Unsupported")
+		{FileType(999), "Unsupported"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			t.Parallel()
+
+			result := tt.fileType.String()
+			if result != tt.expected {
+				t.Errorf("FileType(%d).String() = %q, want %q", tt.fileType, result, tt.expected)
+			}
+		})
+	}
 }

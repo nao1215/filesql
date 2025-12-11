@@ -23,7 +23,7 @@
 
 - SQLite3 SQL 接口 - 使用 SQLite3 强大的 SQL 方言查询文件
 - 多种文件格式 - 支持 CSV、TSV、LTSV、Parquet 和 Excel (XLSX) 文件
-- 压缩支持 - 自动处理 .gz、.bz2、.xz 和 .zst 压缩文件
+- 压缩支持 - 自动处理 .gz、.bz2、.xz、.zst、.z、.snappy、.s2 和 .lz4 压缩文件
 - 流式处理 - 通过可配置的块大小高效处理大文件
 - 灵活的输入源 - 支持文件路径、目录、io.Reader 和 embed.FS
 - 零配置 - 无需数据库服务器，全部在内存中运行
@@ -44,6 +44,10 @@
 | `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2` | Bzip2 压缩 | Bzip2 压缩文件 |
 | `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz` | XZ 压缩 | XZ 压缩文件 |
 | `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst` | Zstandard 压缩 | Zstandard 压缩文件 |
+| `.csv.z`, `.tsv.z`, `.ltsv.z`, `.parquet.z`, `.xlsx.z` | Zlib 压缩 | Zlib 压缩文件 |
+| `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy` | Snappy 压缩 | Snappy 压缩文件 |
+| `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2` | S2 压缩 | S2 压缩文件（Snappy 兼容） |
+| `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4` | LZ4 压缩 | LZ4 压缩文件 |
 
 ## 安装
 
@@ -463,7 +467,7 @@ rows, err := db.QueryContext(ctx, "SELECT * FROM huge_dataset WHERE status = 'ac
 - **内存要求**：由于基于 ZIP 的格式结构，XLSX 文件即使在流式操作期间也需要完全加载到内存中
 - **完全内存加载**：XLSX 文件由于其 ZIP 结构需要完全加载到内存中，并处理所有工作表（不仅仅是第一张工作表）。CSV/TSV 流式解析器不适用于 XLSX 文件
 - **导出功能**：导出到 XLSX 格式时，表名会自动成为工作表名
-- **压缩支持**：完全支持压缩的 XLSX 文件（.xlsx.gz、.xlsx.bz2、.xlsx.xz、.xlsx.zst）
+- **压缩支持**：完全支持压缩的 XLSX 文件（.xlsx.gz、.xlsx.bz2、.xlsx.xz、.xlsx.zst、.xlsx.z、.xlsx.snappy、.xlsx.s2、.xlsx.lz4）
 
 #### Excel 文件结构示例
 ```

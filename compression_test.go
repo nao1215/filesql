@@ -4,13 +4,17 @@ package filesql
 import (
 	"bytes"
 	"compress/gzip"
+	"compress/zlib"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/klauspost/compress/s2"
+	"github.com/klauspost/compress/snappy"
 	"github.com/klauspost/compress/zstd"
+	"github.com/pierrec/lz4/v4"
 	"github.com/ulikunitz/xz"
 )
 
@@ -52,6 +56,30 @@ func TestCompressionHandlerInterface(t *testing.T) {
 			name:            "ZSTD compression",
 			compressionType: CompressionZSTD,
 			extension:       ".zst",
+			canWrite:        true,
+		},
+		{
+			name:            "ZLIB compression",
+			compressionType: CompressionZLIB,
+			extension:       ".z",
+			canWrite:        true,
+		},
+		{
+			name:            "Snappy compression",
+			compressionType: CompressionSNAPPY,
+			extension:       ".snappy",
+			canWrite:        true,
+		},
+		{
+			name:            "S2 compression",
+			compressionType: CompressionS2,
+			extension:       ".s2",
+			canWrite:        true,
+		},
+		{
+			name:            "LZ4 compression",
+			compressionType: CompressionLZ4,
+			extension:       ".lz4",
 			canWrite:        true,
 		},
 	}
@@ -97,6 +125,22 @@ func TestCompressionHandlerInterface(t *testing.T) {
 				}
 				_, _ = zstdWriter.Write(testData)
 				_ = zstdWriter.Close()
+			case CompressionZLIB:
+				zlibWriter := zlib.NewWriter(&compressedData)
+				_, _ = zlibWriter.Write(testData)
+				_ = zlibWriter.Close()
+			case CompressionSNAPPY:
+				snappyWriter := snappy.NewBufferedWriter(&compressedData)
+				_, _ = snappyWriter.Write(testData)
+				_ = snappyWriter.Close()
+			case CompressionS2:
+				s2Writer := s2.NewWriter(&compressedData)
+				_, _ = s2Writer.Write(testData)
+				_ = s2Writer.Close()
+			case CompressionLZ4:
+				lz4Writer := lz4.NewWriter(&compressedData)
+				_, _ = lz4Writer.Write(testData)
+				_ = lz4Writer.Close()
 			}
 
 			reader, cleanup, err := handler.CreateReader(&compressedData)
@@ -179,6 +223,10 @@ func TestCompressionFactory(t *testing.T) {
 			{"data.tsv.bz2", CompressionBZ2},
 			{"data.ltsv.xz", CompressionXZ},
 			{"data.parquet.zst", CompressionZSTD},
+			{"data.csv.z", CompressionZLIB},
+			{"data.csv.snappy", CompressionSNAPPY},
+			{"data.csv.s2", CompressionS2},
+			{"data.csv.lz4", CompressionLZ4},
 			{"path/to/file.csv", CompressionNone},
 			{"path/to/file.csv.gz", CompressionGZ},
 		}
@@ -208,6 +256,10 @@ func TestCompressionFactory(t *testing.T) {
 			{"data.tsv.bz2", "data.tsv"},
 			{"data.ltsv.xz", "data.ltsv"},
 			{"data.parquet.zst", "data.parquet"},
+			{"data.csv.z", "data.csv"},
+			{"data.csv.snappy", "data.csv"},
+			{"data.csv.s2", "data.csv"},
+			{"data.csv.lz4", "data.csv"},
 			{"path/to/file.csv", "path/to/file.csv"},
 			{"path/to/file.csv.gz", "path/to/file.csv"},
 		}
@@ -410,6 +462,10 @@ func TestCompressionTypeConstants(t *testing.T) {
 		{CompressionBZ2, "bz2", ".bz2"},
 		{CompressionXZ, "xz", ".xz"},
 		{CompressionZSTD, "zstd", ".zst"},
+		{CompressionZLIB, "zlib", ".z"},
+		{CompressionSNAPPY, "snappy", ".snappy"},
+		{CompressionS2, "s2", ".s2"},
+		{CompressionLZ4, "lz4", ".lz4"},
 	}
 
 	for _, tt := range tests {
@@ -586,6 +642,10 @@ func TestCreateReaderForFileIntegration(t *testing.T) {
 		{"gzip", CompressionGZ, ".gz"},
 		{"xz", CompressionXZ, ".xz"},
 		{"zstd", CompressionZSTD, ".zst"},
+		{"zlib", CompressionZLIB, ".z"},
+		{"snappy", CompressionSNAPPY, ".snappy"},
+		{"s2", CompressionS2, ".s2"},
+		{"lz4", CompressionLZ4, ".lz4"},
 	}
 
 	for _, ct := range compressionTypes {

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2025-12-11
+
+### Added
+- **New Compression Formats**: Added support for 4 new compression formats via fileparser v0.2.0
+  - zlib (.z) - Standard DEFLATE compression
+  - snappy (.snappy) - Google's high-speed compression
+  - s2 (.s2) - Improved Snappy extension, faster
+  - lz4 (.lz4) - Extremely fast compression
+
+
 ## [0.7.0] - 2025-12-11
 
 ### Changed
