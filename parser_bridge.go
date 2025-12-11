@@ -5,85 +5,85 @@ import (
 	"io"
 	"strings"
 
-	"github.com/nao1215/filesql/parser"
+	"github.com/nao1215/fileparser"
 )
 
-// parserFileType converts filesql.FileType to parser.FileType
-func parserFileType(ft FileType) parser.FileType {
+// parserFileType converts filesql.FileType to fileparser.FileType
+func parserFileType(ft FileType) fileparser.FileType {
 	switch ft {
 	case FileTypeCSV:
-		return parser.CSV
+		return fileparser.CSV
 	case FileTypeTSV:
-		return parser.TSV
+		return fileparser.TSV
 	case FileTypeLTSV:
-		return parser.LTSV
+		return fileparser.LTSV
 	case FileTypeParquet:
-		return parser.Parquet
+		return fileparser.Parquet
 	case FileTypeXLSX:
-		return parser.XLSX
+		return fileparser.XLSX
 	case FileTypeCSVGZ:
-		return parser.CSVGZ
+		return fileparser.CSVGZ
 	case FileTypeTSVGZ:
-		return parser.TSVGZ
+		return fileparser.TSVGZ
 	case FileTypeLTSVGZ:
-		return parser.LTSVGZ
+		return fileparser.LTSVGZ
 	case FileTypeParquetGZ:
-		return parser.ParquetGZ
+		return fileparser.ParquetGZ
 	case FileTypeCSVBZ2:
-		return parser.CSVBZ2
+		return fileparser.CSVBZ2
 	case FileTypeTSVBZ2:
-		return parser.TSVBZ2
+		return fileparser.TSVBZ2
 	case FileTypeLTSVBZ2:
-		return parser.LTSVBZ2
+		return fileparser.LTSVBZ2
 	case FileTypeParquetBZ2:
-		return parser.ParquetBZ2
+		return fileparser.ParquetBZ2
 	case FileTypeCSVXZ:
-		return parser.CSVXZ
+		return fileparser.CSVXZ
 	case FileTypeTSVXZ:
-		return parser.TSVXZ
+		return fileparser.TSVXZ
 	case FileTypeLTSVXZ:
-		return parser.LTSVXZ
+		return fileparser.LTSVXZ
 	case FileTypeParquetXZ:
-		return parser.ParquetXZ
+		return fileparser.ParquetXZ
 	case FileTypeCSVZSTD:
-		return parser.CSVZSTD
+		return fileparser.CSVZSTD
 	case FileTypeTSVZSTD:
-		return parser.TSVZSTD
+		return fileparser.TSVZSTD
 	case FileTypeLTSVZSTD:
-		return parser.LTSVZSTD
+		return fileparser.LTSVZSTD
 	case FileTypeParquetZSTD:
-		return parser.ParquetZSTD
+		return fileparser.ParquetZSTD
 	case FileTypeXLSXGZ:
-		return parser.XLSXGZ
+		return fileparser.XLSXGZ
 	case FileTypeXLSXBZ2:
-		return parser.XLSXBZ2
+		return fileparser.XLSXBZ2
 	case FileTypeXLSXXZ:
-		return parser.XLSXXZ
+		return fileparser.XLSXXZ
 	case FileTypeXLSXZSTD:
-		return parser.XLSXZSTD
+		return fileparser.XLSXZSTD
 	default:
-		return parser.Unsupported
+		return fileparser.Unsupported
 	}
 }
 
-// parserColumnType converts parser.ColumnType to filesql.columnType
-func parserColumnType(ct parser.ColumnType) columnType {
+// parserColumnType converts fileparser.ColumnType to filesql.columnType
+func parserColumnType(ct fileparser.ColumnType) columnType {
 	switch ct {
-	case parser.TypeInteger:
+	case fileparser.TypeInteger:
 		return columnTypeInteger
-	case parser.TypeReal:
+	case fileparser.TypeReal:
 		return columnTypeReal
-	case parser.TypeDatetime:
+	case fileparser.TypeDatetime:
 		return columnTypeDatetime
 	default:
 		return columnTypeText
 	}
 }
 
-// parseWithParser uses the parser package to parse data and returns a filesql table.
-// This function bridges the parser package with filesql's internal table structure.
+// parseWithParser uses the fileparser package to parse data and returns a filesql table.
+// This function bridges the fileparser package with filesql's internal table structure.
 func parseWithParser(reader io.Reader, fileType FileType, tableName string) (*table, error) {
-	result, err := parser.Parse(reader, parserFileType(fileType))
+	result, err := fileparser.Parse(reader, parserFileType(fileType))
 	if err != nil {
 		// Convert parser errors to filesql errors for compatibility
 		return nil, convertParserError(err)
