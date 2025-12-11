@@ -90,14 +90,26 @@ const (
 	CompressionXZ
 	// CompressionZSTD represents zstd compression
 	CompressionZSTD
+	// CompressionZLIB represents zlib compression
+	CompressionZLIB
+	// CompressionSNAPPY represents snappy compression
+	CompressionSNAPPY
+	// CompressionS2 represents s2 compression
+	CompressionS2
+	// CompressionLZ4 represents lz4 compression
+	CompressionLZ4
 )
 
 // string constants for compression types
 const (
-	compressionGZStr   = "gz"
-	compressionBZ2Str  = "bz2"
-	compressionXZStr   = "xz"
-	compressionZSTDStr = "zstd"
+	compressionGZStr     = "gz"
+	compressionBZ2Str    = "bz2"
+	compressionXZStr     = "xz"
+	compressionZSTDStr   = "zstd"
+	compressionZLIBStr   = "zlib"
+	compressionSNAPPYStr = "snappy"
+	compressionS2Str     = "s2"
+	compressionLZ4Str    = "lz4"
 )
 
 // String returns the string representation of CompressionType
@@ -113,6 +125,14 @@ func (c CompressionType) String() string {
 		return compressionXZStr
 	case CompressionZSTD:
 		return compressionZSTDStr
+	case CompressionZLIB:
+		return compressionZLIBStr
+	case CompressionSNAPPY:
+		return compressionSNAPPYStr
+	case CompressionS2:
+		return compressionS2Str
+	case CompressionLZ4:
+		return compressionLZ4Str
 	default:
 		return "none"
 	}
@@ -131,6 +151,14 @@ func (c CompressionType) Extension() string {
 		return ".xz"
 	case CompressionZSTD:
 		return ".zst"
+	case CompressionZLIB:
+		return ".z"
+	case CompressionSNAPPY:
+		return ".snappy"
+	case CompressionS2:
+		return ".s2"
+	case CompressionLZ4:
+		return ".lz4"
 	default:
 		return ""
 	}
@@ -181,9 +209,13 @@ func (o DumpOptions) WithFormat(format OutputFormat) DumpOptions {
 // Options:
 //   - CompressionNone: No compression (default)
 //   - CompressionGZ: Gzip compression (.gz)
-//   - CompressionBZ2: Bzip2 compression (.bz2)
+//   - CompressionBZ2: Bzip2 compression (.bz2) - read only, writing not supported
 //   - CompressionXZ: XZ compression (.xz)
 //   - CompressionZSTD: Zstandard compression (.zst)
+//   - CompressionZLIB: Zlib compression (.z)
+//   - CompressionSNAPPY: Snappy compression (.snappy)
+//   - CompressionS2: S2 compression (.s2) - Snappy compatible
+//   - CompressionLZ4: LZ4 compression (.lz4)
 func (o DumpOptions) WithCompression(compression CompressionType) DumpOptions {
 	o.Compression = compression
 	return o

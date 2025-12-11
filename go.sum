@@ -36,6 +36,8 @@ github.com/minio/c2goasm v0.0.0-20190812172519-36a3d3bbc4f3 h1:+n/aFZefKZp7spd8D
 github.com/minio/c2goasm v0.0.0-20190812172519-36a3d3bbc4f3/go.mod h1:RagcQ7I8IeTMnF8JTXieKnO4Z6JCsikNEzj0DwauVzE=
 github.com/nao1215/fileparser v0.1.0 h1:roGk+MAo5vKUrq6imk53nWx8Ol0TaNzYg0QWz8EDzs0=
 github.com/nao1215/fileparser v0.1.0/go.mod h1:KnIHCQwyrqvt9w3cQpf6EpPvHMFpokSqpYuEzgUY9Mg=
+github.com/nao1215/fileparser v0.2.0 h1:nyjhm9pWQNYQCMmzRqCwiouYz93lImzxIqmsqQrVM7Q=
+github.com/nao1215/fileparser v0.2.0/go.mod h1:P5dz9WKzM43nxnSGAFfftQINzpOLjKkFac8tLyNFWjQ=
 github.com/ncruces/go-strftime v0.1.9 h1:bY0MQC28UADQmHmaF5dgpLmImcShSi2kHU9XLdhx/f4=
 github.com/ncruces/go-strftime v0.1.9/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/pierrec/lz4/v4 v4.1.21 h1:yOVMLb6qSIDP67pl/5F7RepeKYu/VmTyEXvuMI5d9mQ=

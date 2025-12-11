@@ -251,5 +251,9 @@ func (fp *fileProcessor) isCompressedFile(filePath string) bool {
 	return strings.HasSuffix(p, extGZ) ||
 		strings.HasSuffix(p, extBZ2) ||
 		strings.HasSuffix(p, extXZ) ||
-		strings.HasSuffix(p, extZSTD)
+		strings.HasSuffix(p, extZSTD) ||
+		strings.HasSuffix(p, extZLIB) ||
+		strings.HasSuffix(p, extSNAPPY) ||
+		strings.HasSuffix(p, extS2) ||
+		strings.HasSuffix(p, extLZ4)
 }

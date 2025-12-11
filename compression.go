@@ -3,6 +3,7 @@ package filesql
 import (
 	"compress/bzip2"
 	"compress/gzip"
+	"compress/zlib"
 	"errors"
 	"fmt"
 	"io"
@@ -10,7 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/klauspost/compress/s2"
+	"github.com/klauspost/compress/snappy"
 	"github.com/klauspost/compress/zstd"
+	"github.com/pierrec/lz4/v4"
 	"github.com/ulikunitz/xz"
 )
 
@@ -64,6 +68,25 @@ func (h *compressionHandlerImpl) CreateReader(reader io.Reader) (io.Reader, func
 			return nil
 		}, nil
 
+	case CompressionZLIB:
+		zlibReader, err := zlib.NewReader(reader)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create zlib reader: %w", err)
+		}
+		return zlibReader, zlibReader.Close, nil
+
+	case CompressionSNAPPY:
+		snappyReader := snappy.NewReader(reader)
+		return snappyReader, func() error { return nil }, nil
+
+	case CompressionS2:
+		s2Reader := s2.NewReader(reader)
+		return s2Reader, func() error { return nil }, nil
+
+	case CompressionLZ4:
+		lz4Reader := lz4.NewReader(reader)
+		return lz4Reader, func() error { return nil }, nil
+
 	default:
 		return nil, nil, fmt.Errorf("unsupported compression type for reading: %v", h.compressionType)
 	}
@@ -96,6 +119,22 @@ func (h *compressionHandlerImpl) CreateWriter(writer io.Writer) (io.Writer, func
 			return nil, nil, fmt.Errorf("failed to create zstd writer: %w", err)
 		}
 		return zstdWriter, zstdWriter.Close, nil
+
+	case CompressionZLIB:
+		zlibWriter := zlib.NewWriter(writer)
+		return zlibWriter, zlibWriter.Close, nil
+
+	case CompressionSNAPPY:
+		snappyWriter := snappy.NewBufferedWriter(writer)
+		return snappyWriter, snappyWriter.Close, nil
+
+	case CompressionS2:
+		s2Writer := s2.NewWriter(writer)
+		return s2Writer, s2Writer.Close, nil
+
+	case CompressionLZ4:
+		lz4Writer := lz4.NewWriter(writer)
+		return lz4Writer, lz4Writer.Close, nil
 
 	default:
 		return nil, nil, fmt.Errorf("unsupported compression type for writing: %v", h.compressionType)
@@ -135,6 +174,14 @@ func (f *CompressionFactory) DetectCompressionType(path string) CompressionType 
 		return CompressionXZ
 	case strings.HasSuffix(path, extZSTD):
 		return CompressionZSTD
+	case strings.HasSuffix(path, extZLIB):
+		return CompressionZLIB
+	case strings.HasSuffix(path, extSNAPPY):
+		return CompressionSNAPPY
+	case strings.HasSuffix(path, extS2):
+		return CompressionS2
+	case strings.HasSuffix(path, extLZ4):
+		return CompressionLZ4
 	default:
 		return CompressionNone
 	}
@@ -209,7 +256,7 @@ func (f *CompressionFactory) CreateWriterForFile(path string, compressionType Co
 
 // RemoveCompressionExtension removes the compression extension from a file path if present
 func (f *CompressionFactory) RemoveCompressionExtension(path string) string {
-	for _, ext := range []string{extGZ, extBZ2, extXZ, extZSTD} {
+	for _, ext := range []string{extGZ, extBZ2, extXZ, extZSTD, extZLIB, extSNAPPY, extS2, extLZ4} {
 		if strings.HasSuffix(strings.ToLower(path), ext) {
 			return path[:len(path)-len(ext)]
 		}

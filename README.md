@@ -23,7 +23,7 @@ Rather than maintaining duplicate code across both projects, we extracted the co
 
 - SQLite3 SQL Interface - Use SQLite3's powerful SQL dialect to query your files
 - Multiple File Formats - Support for CSV, TSV, LTSV, Parquet, and Excel (XLSX) files
-- Compression Support - Automatically handles .gz, .bz2, .xz, and .zst compressed files
+- Compression Support - Automatically handles .gz, .bz2, .xz, .zst, .z, .snappy, .s2, and .lz4 compressed files
 - Stream Processing - Efficiently handles large files through streaming with configurable chunk sizes
 - Flexible Input Sources - Support for file paths, directories, io.Reader, and embed.FS
 - Zero Setup - No database server required, everything runs in-memory
@@ -44,6 +44,10 @@ Rather than maintaining duplicate code across both projects, we extracted the co
 | `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2` | Bzip2 compressed | Bzip2 compressed files |
 | `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz` | XZ compressed | XZ compressed files |
 | `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst` | Zstandard compressed | Zstandard compressed files |
+| `.csv.z`, `.tsv.z`, `.ltsv.z`, `.parquet.z`, `.xlsx.z` | Zlib compressed | Zlib compressed files |
+| `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy` | Snappy compressed | Snappy compressed files |
+| `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2` | S2 compressed | S2 compressed files (Snappy compatible) |
+| `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4` | LZ4 compressed | LZ4 compressed files |
 
 ## Installation
 
@@ -399,7 +403,7 @@ var sharedDB *sql.DB  // This will cause race conditions
 - **Memory Requirements**: XLSX files require full loading into memory due to the ZIP-based format structure, even during streaming operations
 - **Implementation Note**: XLSX files are fully loaded into memory due to ZIP structure and all sheets are processed (CSV/TSV streaming parsers are not applicable)
 - **Export Functionality**: When exporting to XLSX format, table names become sheet names automatically
-- **Compression Support**: Full support for compressed XLSX files (.xlsx.gz, .xlsx.bz2, .xlsx.xz, .xlsx.zst)
+- **Compression Support**: Full support for compressed XLSX files (.xlsx.gz, .xlsx.bz2, .xlsx.xz, .xlsx.zst, .xlsx.z, .xlsx.snappy, .xlsx.s2, .xlsx.lz4)
 
 #### Excel File Structure Example
 ```

@@ -71,10 +71,11 @@ func (t *table) equal(t2 *table) bool {
 // tableFromFilePath creates table name from file path
 func tableFromFilePath(filePath string) string {
 	fileName := filepath.Base(filePath)
-	// Remove compression extensions first
-	for _, ext := range []string{extGZ, extBZ2, extXZ, extZSTD} {
-		if strings.HasSuffix(fileName, ext) {
-			fileName = strings.TrimSuffix(fileName, ext)
+	lowerFileName := strings.ToLower(fileName)
+	// Remove compression extensions first (case-insensitive)
+	for _, ext := range []string{extGZ, extBZ2, extXZ, extZSTD, extZLIB, extSNAPPY, extS2, extLZ4} {
+		if strings.HasSuffix(lowerFileName, ext) {
+			fileName = fileName[:len(fileName)-len(ext)]
 			break
 		}
 	}

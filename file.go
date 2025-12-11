@@ -66,6 +66,46 @@ func (ft FileType) String() string {
 		return "XLSX (xz)"
 	case FileTypeXLSXZSTD:
 		return "XLSX (zstd)"
+	case FileTypeCSVZLIB:
+		return "CSV (zlib)"
+	case FileTypeTSVZLIB:
+		return "TSV (zlib)"
+	case FileTypeLTSVZLIB:
+		return "LTSV (zlib)"
+	case FileTypeParquetZLIB:
+		return "Parquet (zlib)"
+	case FileTypeXLSXZLIB:
+		return "XLSX (zlib)"
+	case FileTypeCSVSNAPPY:
+		return "CSV (snappy)"
+	case FileTypeTSVSNAPPY:
+		return "TSV (snappy)"
+	case FileTypeLTSVSNAPPY:
+		return "LTSV (snappy)"
+	case FileTypeParquetSNAPPY:
+		return "Parquet (snappy)"
+	case FileTypeXLSXSNAPPY:
+		return "XLSX (snappy)"
+	case FileTypeCSVS2:
+		return "CSV (s2)"
+	case FileTypeTSVS2:
+		return "TSV (s2)"
+	case FileTypeLTSVS2:
+		return "LTSV (s2)"
+	case FileTypeParquetS2:
+		return "Parquet (s2)"
+	case FileTypeXLSXS2:
+		return "XLSX (s2)"
+	case FileTypeCSVLZ4:
+		return "CSV (lz4)"
+	case FileTypeTSVLZ4:
+		return "TSV (lz4)"
+	case FileTypeLTSVLZ4:
+		return "LTSV (lz4)"
+	case FileTypeParquetLZ4:
+		return "Parquet (lz4)"
+	case FileTypeXLSXLZ4:
+		return "XLSX (lz4)"
 	default:
 		return "Unsupported"
 	}
@@ -122,6 +162,51 @@ const (
 	FileTypeXLSXXZ
 	// FileTypeXLSXZSTD represents zstd-compressed Excel XLSX file type
 	FileTypeXLSXZSTD
+
+	// FileTypeCSVZLIB represents zlib-compressed CSV file type
+	FileTypeCSVZLIB
+	// FileTypeTSVZLIB represents zlib-compressed TSV file type
+	FileTypeTSVZLIB
+	// FileTypeLTSVZLIB represents zlib-compressed LTSV file type
+	FileTypeLTSVZLIB
+	// FileTypeParquetZLIB represents zlib-compressed Parquet file type
+	FileTypeParquetZLIB
+	// FileTypeXLSXZLIB represents zlib-compressed XLSX file type
+	FileTypeXLSXZLIB
+
+	// FileTypeCSVSNAPPY represents snappy-compressed CSV file type
+	FileTypeCSVSNAPPY
+	// FileTypeTSVSNAPPY represents snappy-compressed TSV file type
+	FileTypeTSVSNAPPY
+	// FileTypeLTSVSNAPPY represents snappy-compressed LTSV file type
+	FileTypeLTSVSNAPPY
+	// FileTypeParquetSNAPPY represents snappy-compressed Parquet file type
+	FileTypeParquetSNAPPY
+	// FileTypeXLSXSNAPPY represents snappy-compressed XLSX file type
+	FileTypeXLSXSNAPPY
+
+	// FileTypeCSVS2 represents s2-compressed CSV file type
+	FileTypeCSVS2
+	// FileTypeTSVS2 represents s2-compressed TSV file type
+	FileTypeTSVS2
+	// FileTypeLTSVS2 represents s2-compressed LTSV file type
+	FileTypeLTSVS2
+	// FileTypeParquetS2 represents s2-compressed Parquet file type
+	FileTypeParquetS2
+	// FileTypeXLSXS2 represents s2-compressed XLSX file type
+	FileTypeXLSXS2
+
+	// FileTypeCSVLZ4 represents lz4-compressed CSV file type
+	FileTypeCSVLZ4
+	// FileTypeTSVLZ4 represents lz4-compressed TSV file type
+	FileTypeTSVLZ4
+	// FileTypeLTSVLZ4 represents lz4-compressed LTSV file type
+	FileTypeLTSVLZ4
+	// FileTypeParquetLZ4 represents lz4-compressed Parquet file type
+	FileTypeParquetLZ4
+	// FileTypeXLSXLZ4 represents lz4-compressed XLSX file type
+	FileTypeXLSXLZ4
+
 	// FileTypeUnsupported represents unsupported file type
 	FileTypeUnsupported
 )
@@ -137,6 +222,10 @@ const (
 	extBZ2     = fileparser.ExtBZ2
 	extXZ      = fileparser.ExtXZ
 	extZSTD    = fileparser.ExtZSTD
+	extZLIB    = fileparser.ExtZLIB
+	extSNAPPY  = fileparser.ExtSNAPPY
+	extS2      = fileparser.ExtS2
+	extLZ4     = fileparser.ExtLZ4
 )
 
 // file represents a file that can be converted to table
@@ -196,7 +285,7 @@ func newFile(path string) *file {
 // supportedFileExtPatterns returns all supported file patterns for glob matching
 func supportedFileExtPatterns() []string {
 	baseExts := []string{extCSV, extTSV, extLTSV, extParquet, extXLSX}
-	compressionExts := []string{"", extGZ, extBZ2, extXZ, extZSTD}
+	compressionExts := []string{"", extGZ, extBZ2, extXZ, extZSTD, extZLIB, extSNAPPY, extS2, extLZ4}
 
 	var patterns []string
 	for _, baseExt := range baseExts {
@@ -213,7 +302,7 @@ func isSupportedFile(fileName string) bool {
 	fileName = strings.ToLower(fileName)
 
 	// Remove compression extensions
-	for _, ext := range []string{extGZ, extBZ2, extXZ, extZSTD} {
+	for _, ext := range []string{extGZ, extBZ2, extXZ, extZSTD, extZLIB, extSNAPPY, extS2, extLZ4} {
 		if strings.HasSuffix(fileName, ext) {
 			fileName = strings.TrimSuffix(fileName, ext)
 			break
@@ -290,6 +379,46 @@ func (ft FileType) extension() string {
 		return extXLSX + extXZ
 	case FileTypeXLSXZSTD:
 		return extXLSX + extZSTD
+	case FileTypeCSVZLIB:
+		return extCSV + extZLIB
+	case FileTypeTSVZLIB:
+		return extTSV + extZLIB
+	case FileTypeLTSVZLIB:
+		return extLTSV + extZLIB
+	case FileTypeParquetZLIB:
+		return extParquet + extZLIB
+	case FileTypeXLSXZLIB:
+		return extXLSX + extZLIB
+	case FileTypeCSVSNAPPY:
+		return extCSV + extSNAPPY
+	case FileTypeTSVSNAPPY:
+		return extTSV + extSNAPPY
+	case FileTypeLTSVSNAPPY:
+		return extLTSV + extSNAPPY
+	case FileTypeParquetSNAPPY:
+		return extParquet + extSNAPPY
+	case FileTypeXLSXSNAPPY:
+		return extXLSX + extSNAPPY
+	case FileTypeCSVS2:
+		return extCSV + extS2
+	case FileTypeTSVS2:
+		return extTSV + extS2
+	case FileTypeLTSVS2:
+		return extLTSV + extS2
+	case FileTypeParquetS2:
+		return extParquet + extS2
+	case FileTypeXLSXS2:
+		return extXLSX + extS2
+	case FileTypeCSVLZ4:
+		return extCSV + extLZ4
+	case FileTypeTSVLZ4:
+		return extTSV + extLZ4
+	case FileTypeLTSVLZ4:
+		return extLTSV + extLZ4
+	case FileTypeParquetLZ4:
+		return extParquet + extLZ4
+	case FileTypeXLSXLZ4:
+		return extXLSX + extLZ4
 	default:
 		return ""
 	}
@@ -298,15 +427,20 @@ func (ft FileType) extension() string {
 // baseType returns the base file type without compression
 func (ft FileType) baseType() FileType {
 	switch ft {
-	case FileTypeCSV, FileTypeCSVGZ, FileTypeCSVBZ2, FileTypeCSVXZ, FileTypeCSVZSTD:
+	case FileTypeCSV, FileTypeCSVGZ, FileTypeCSVBZ2, FileTypeCSVXZ, FileTypeCSVZSTD,
+		FileTypeCSVZLIB, FileTypeCSVSNAPPY, FileTypeCSVS2, FileTypeCSVLZ4:
 		return FileTypeCSV
-	case FileTypeTSV, FileTypeTSVGZ, FileTypeTSVBZ2, FileTypeTSVXZ, FileTypeTSVZSTD:
+	case FileTypeTSV, FileTypeTSVGZ, FileTypeTSVBZ2, FileTypeTSVXZ, FileTypeTSVZSTD,
+		FileTypeTSVZLIB, FileTypeTSVSNAPPY, FileTypeTSVS2, FileTypeTSVLZ4:
 		return FileTypeTSV
-	case FileTypeLTSV, FileTypeLTSVGZ, FileTypeLTSVBZ2, FileTypeLTSVXZ, FileTypeLTSVZSTD:
+	case FileTypeLTSV, FileTypeLTSVGZ, FileTypeLTSVBZ2, FileTypeLTSVXZ, FileTypeLTSVZSTD,
+		FileTypeLTSVZLIB, FileTypeLTSVSNAPPY, FileTypeLTSVS2, FileTypeLTSVLZ4:
 		return FileTypeLTSV
-	case FileTypeParquet, FileTypeParquetGZ, FileTypeParquetBZ2, FileTypeParquetXZ, FileTypeParquetZSTD:
+	case FileTypeParquet, FileTypeParquetGZ, FileTypeParquetBZ2, FileTypeParquetXZ, FileTypeParquetZSTD,
+		FileTypeParquetZLIB, FileTypeParquetSNAPPY, FileTypeParquetS2, FileTypeParquetLZ4:
 		return FileTypeParquet
-	case FileTypeXLSX, FileTypeXLSXGZ, FileTypeXLSXBZ2, FileTypeXLSXXZ, FileTypeXLSXZSTD:
+	case FileTypeXLSX, FileTypeXLSXGZ, FileTypeXLSXBZ2, FileTypeXLSXXZ, FileTypeXLSXZSTD,
+		FileTypeXLSXZLIB, FileTypeXLSXSNAPPY, FileTypeXLSXS2, FileTypeXLSXLZ4:
 		return FileTypeXLSX
 	default:
 		return FileTypeUnsupported
@@ -357,7 +491,7 @@ func (f *file) isXLSX() bool {
 
 // isCompressed returns true if file is compressed
 func (f *file) isCompressed() bool {
-	return f.isGZ() || f.isBZ2() || f.isXZ() || f.isZSTD()
+	return f.isGZ() || f.isBZ2() || f.isXZ() || f.isZSTD() || f.isZLIB() || f.isSNAPPY() || f.isS2() || f.isLZ4()
 }
 
 // isGZ returns true if file is gzip compressed
@@ -378,6 +512,26 @@ func (f *file) isXZ() bool {
 // isZSTD returns true if file is zstd compressed
 func (f *file) isZSTD() bool {
 	return strings.HasSuffix(f.path, extZSTD)
+}
+
+// isZLIB returns true if file is zlib compressed
+func (f *file) isZLIB() bool {
+	return strings.HasSuffix(f.path, extZLIB)
+}
+
+// isSNAPPY returns true if file is snappy compressed
+func (f *file) isSNAPPY() bool {
+	return strings.HasSuffix(f.path, extSNAPPY)
+}
+
+// isS2 returns true if file is s2 compressed
+func (f *file) isS2() bool {
+	return strings.HasSuffix(f.path, extS2)
+}
+
+// isLZ4 returns true if file is lz4 compressed
+func (f *file) isLZ4() bool {
+	return strings.HasSuffix(f.path, extLZ4)
 }
 
 // toTable converts file to table structure
@@ -411,6 +565,18 @@ func detectFileType(path string) FileType {
 	} else if strings.HasSuffix(path, extZSTD) {
 		basePath = strings.TrimSuffix(path, extZSTD)
 		compressionType = compressionZSTDStr
+	} else if strings.HasSuffix(path, extZLIB) {
+		basePath = strings.TrimSuffix(path, extZLIB)
+		compressionType = compressionZLIBStr
+	} else if strings.HasSuffix(path, extSNAPPY) {
+		basePath = strings.TrimSuffix(path, extSNAPPY)
+		compressionType = compressionSNAPPYStr
+	} else if strings.HasSuffix(path, extS2) {
+		basePath = strings.TrimSuffix(path, extS2)
+		compressionType = compressionS2Str
+	} else if strings.HasSuffix(path, extLZ4) {
+		basePath = strings.TrimSuffix(path, extLZ4)
+		compressionType = compressionLZ4Str
 	}
 
 	ext := strings.ToLower(filepath.Ext(basePath))
@@ -425,6 +591,14 @@ func detectFileType(path string) FileType {
 			return FileTypeCSVXZ
 		case compressionZSTDStr:
 			return FileTypeCSVZSTD
+		case compressionZLIBStr:
+			return FileTypeCSVZLIB
+		case compressionSNAPPYStr:
+			return FileTypeCSVSNAPPY
+		case compressionS2Str:
+			return FileTypeCSVS2
+		case compressionLZ4Str:
+			return FileTypeCSVLZ4
 		default:
 			return FileTypeCSV
 		}
@@ -438,6 +612,14 @@ func detectFileType(path string) FileType {
 			return FileTypeTSVXZ
 		case compressionZSTDStr:
 			return FileTypeTSVZSTD
+		case compressionZLIBStr:
+			return FileTypeTSVZLIB
+		case compressionSNAPPYStr:
+			return FileTypeTSVSNAPPY
+		case compressionS2Str:
+			return FileTypeTSVS2
+		case compressionLZ4Str:
+			return FileTypeTSVLZ4
 		default:
 			return FileTypeTSV
 		}
@@ -451,6 +633,14 @@ func detectFileType(path string) FileType {
 			return FileTypeLTSVXZ
 		case compressionZSTDStr:
 			return FileTypeLTSVZSTD
+		case compressionZLIBStr:
+			return FileTypeLTSVZLIB
+		case compressionSNAPPYStr:
+			return FileTypeLTSVSNAPPY
+		case compressionS2Str:
+			return FileTypeLTSVS2
+		case compressionLZ4Str:
+			return FileTypeLTSVLZ4
 		default:
 			return FileTypeLTSV
 		}
@@ -464,6 +654,14 @@ func detectFileType(path string) FileType {
 			return FileTypeParquetXZ
 		case compressionZSTDStr:
 			return FileTypeParquetZSTD
+		case compressionZLIBStr:
+			return FileTypeParquetZLIB
+		case compressionSNAPPYStr:
+			return FileTypeParquetSNAPPY
+		case compressionS2Str:
+			return FileTypeParquetS2
+		case compressionLZ4Str:
+			return FileTypeParquetLZ4
 		default:
 			return FileTypeParquet
 		}
@@ -477,6 +675,14 @@ func detectFileType(path string) FileType {
 			return FileTypeXLSXXZ
 		case compressionZSTDStr:
 			return FileTypeXLSXZSTD
+		case compressionZLIBStr:
+			return FileTypeXLSXZLIB
+		case compressionSNAPPYStr:
+			return FileTypeXLSXSNAPPY
+		case compressionS2Str:
+			return FileTypeXLSXS2
+		case compressionLZ4Str:
+			return FileTypeXLSXLZ4
 		default:
 			return FileTypeXLSX
 		}

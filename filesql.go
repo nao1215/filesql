@@ -686,7 +686,7 @@ func writeXLSXTableData(outputPath string, columns []string, rows *sql.Rows, com
 	fileName := filepath.Base(outputPath)
 
 	// First remove compression extension if present (case-insensitive)
-	compressionExts := []string{".gz", ".bz2", ".xz", ".zst"}
+	compressionExts := []string{extGZ, extBZ2, extXZ, extZSTD, extZLIB, extSNAPPY, extS2, extLZ4}
 	for _, ext := range compressionExts {
 		if strings.HasSuffix(strings.ToLower(fileName), ext) {
 			fileName = strings.TrimSuffix(fileName, ext)

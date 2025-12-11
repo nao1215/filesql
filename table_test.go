@@ -130,8 +130,89 @@ func TestTableFromFilePath_Additional(t *testing.T) {
 			expected: "",
 		},
 		{
-			name:     "Compressed file",
+			name:     "Compressed file (gz)",
 			filePath: "data.csv.gz",
+			expected: "data",
+		},
+		{
+			name:     "Compressed file (bz2)",
+			filePath: "data.csv.bz2",
+			expected: "data",
+		},
+		{
+			name:     "Compressed file (xz)",
+			filePath: "data.csv.xz",
+			expected: "data",
+		},
+		{
+			name:     "Compressed file (zst)",
+			filePath: "data.csv.zst",
+			expected: "data",
+		},
+		{
+			name:     "Compressed file (zlib)",
+			filePath: "data.csv.z",
+			expected: "data",
+		},
+		{
+			name:     "Compressed file (snappy)",
+			filePath: "data.csv.snappy",
+			expected: "data",
+		},
+		{
+			name:     "Compressed file (s2)",
+			filePath: "data.csv.s2",
+			expected: "data",
+		},
+		{
+			name:     "Compressed file (lz4)",
+			filePath: "data.csv.lz4",
+			expected: "data",
+		},
+		// Case-insensitive tests
+		{
+			name:     "Compressed file (GZ uppercase)",
+			filePath: "data.csv.GZ",
+			expected: "data",
+		},
+		{
+			name:     "Compressed file (BZ2 uppercase)",
+			filePath: "data.csv.BZ2",
+			expected: "data",
+		},
+		{
+			name:     "Compressed file (XZ uppercase)",
+			filePath: "data.csv.XZ",
+			expected: "data",
+		},
+		{
+			name:     "Compressed file (ZST uppercase)",
+			filePath: "data.csv.ZST",
+			expected: "data",
+		},
+		{
+			name:     "Compressed file (Z uppercase - zlib)",
+			filePath: "data.csv.Z",
+			expected: "data",
+		},
+		{
+			name:     "Compressed file (SNAPPY uppercase)",
+			filePath: "data.csv.SNAPPY",
+			expected: "data",
+		},
+		{
+			name:     "Compressed file (S2 uppercase)",
+			filePath: "data.csv.S2",
+			expected: "data",
+		},
+		{
+			name:     "Compressed file (LZ4 uppercase)",
+			filePath: "data.csv.LZ4",
+			expected: "data",
+		},
+		{
+			name:     "Compressed file (mixed case Gz)",
+			filePath: "data.csv.Gz",
 			expected: "data",
 		},
 	}

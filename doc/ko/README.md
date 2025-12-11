@@ -23,7 +23,7 @@
 
 - SQLite3 SQL 인터페이스 - SQLite3의 강력한 SQL 방언을 사용하여 파일 쿼리
 - 다중 파일 형식 - CSV, TSV, LTSV, Parquet, Excel (XLSX) 파일 지원
-- 압축 지원 - .gz, .bz2, .xz, .zst 압축 파일 자동 처리
+- 압축 지원 - .gz, .bz2, .xz, .zst, .z, .snappy, .s2, .lz4 압축 파일 자동 처리
 - 스트림 처리 - 설정 가능한 청크 크기로 스트리밍을 통해 대용량 파일 효율적 처리
 - 유연한 입력 소스 - 파일 경로, 디렉터리, io.Reader, embed.FS 지원
 - 제로 설정 - 데이터베이스 서버 불필요, 모든 것이 메모리에서 실행
@@ -44,6 +44,10 @@
 | `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2` | Bzip2 압축 | Bzip2 압축 파일 |
 | `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz` | XZ 압축 | XZ 압축 파일 |
 | `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst` | Zstandard 압축 | Zstandard 압축 파일 |
+| `.csv.z`, `.tsv.z`, `.ltsv.z`, `.parquet.z`, `.xlsx.z` | Zlib 압축 | Zlib 압축 파일 |
+| `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy` | Snappy 압축 | Snappy 압축 파일 |
+| `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2` | S2 압축 | S2 압축 파일 (Snappy 호환) |
+| `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4` | LZ4 압축 | LZ4 압축 파일 |
 
 ## 설치
 
@@ -400,7 +404,7 @@ var sharedDB *sql.DB  // 이는 경쟁 조건을 야기합니다
 - **메모리 요구사항**: ZIP 기반 형식 구조로 인해 XLSX 파일은 스트리밍 작업 중에도 전체를 메모리에 로드해야 함
 - **메모리 완전 로딩**: XLSX 파일은 ZIP 구조로 인해 메모리에 완전히 로드되며, 모든 시트가 처리됩니다(첫 번째 시트만이 아닙니다). CSV/TSV 스트리밍 파서는 XLSX 파일에 적용되지 않습니다
 - **내보내기 기능**: XLSX 형식으로 내보낼 때 테이블 이름이 자동으로 시트 이름이 됨
-- **압축 지원**: 압축된 XLSX 파일에 대한 완전 지원 (.xlsx.gz, .xlsx.bz2, .xlsx.xz, .xlsx.zst)
+- **압축 지원**: 압축된 XLSX 파일에 대한 완전 지원 (.xlsx.gz, .xlsx.bz2, .xlsx.xz, .xlsx.zst, .xlsx.z, .xlsx.snappy, .xlsx.s2, .xlsx.lz4)
 
 #### Excel 파일 구조 예제
 ```
