@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2025-12-18
+
+### Added
+- **Custom Logger Support**: Flexible logging system with slog integration
+  - **`Logger` interface**: Simple logging interface with `Debug`, `Info`, `Warn`, `Error`, and `With` methods
+  - **`ContextLogger` interface**: Extended logging interface with context-aware methods (`DebugContext`, `InfoContext`, `WarnContext`, `ErrorContext`)
+  - **`NewSlogAdapter()`**: Adapter to use standard library `slog.Logger` with filesql's `Logger` interface
+  - **`NewSlogContextAdapter()`**: Adapter for context-aware logging with `slog.Logger`
+  - **`WithLogger()`**: Builder method to inject custom logger into the build and open process
+  - **`nopLogger`**: Zero-overhead no-op logger implementation used as default (benchmarked at ~0.2 ns/op)
+  - Logging throughout build, validation, and database opening operations
+  - Comprehensive test coverage and benchmarks for all logger implementations
+
+### Changed
+- **Documentation Updates**: Added Custom Logger section to all README files (7 languages: EN, ES, FR, JA, KO, RU, ZH-CN)
+  - Usage examples with slog integration
+  - Logger and ContextLogger interface definitions
+  - Performance benchmark comparison table
+
 ## [0.9.0] - 2025-12-18
 
 ### Added
@@ -602,7 +621,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/nao1215/filesql/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/nao1215/filesql/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/nao1215/filesql/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/nao1215/filesql/compare/v0.6.0...v0.7.0
