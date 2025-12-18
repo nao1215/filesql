@@ -48,6 +48,7 @@ Rather than maintaining duplicate code across both projects, we extracted the co
 | `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy` | Snappy compressed | Snappy compressed files |
 | `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2` | S2 compressed | S2 compressed files (Snappy compatible) |
 | `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4` | LZ4 compressed | LZ4 compressed files |
+| `.ach` | ACH (NACHA) | Automated Clearing House files (**Experimental**) |
 
 ## Installation
 
@@ -404,6 +405,57 @@ var sharedDB *sql.DB  // This will cause race conditions
 - **Implementation Note**: XLSX files are fully loaded into memory due to ZIP structure and all sheets are processed (CSV/TSV streaming parsers are not applicable)
 - **Export Functionality**: When exporting to XLSX format, table names become sheet names automatically
 - **Compression Support**: Full support for compressed XLSX files (.xlsx.gz, .xlsx.bz2, .xlsx.xz, .xlsx.zst, .xlsx.z, .xlsx.snappy, .xlsx.s2, .xlsx.lz4)
+
+### ACH (NACHA) Support - Experimental
+
+> **Warning**: ACH file support is **experimental**. The API may change in future versions.
+
+ACH (Automated Clearing House) files following the NACHA format can be queried using SQL. Each ACH file is converted to multiple tables:
+
+| Table Name | Description |
+|------------|-------------|
+| `{filename}_file_header` | File header information |
+| `{filename}_batches` | Batch header and control information |
+| `{filename}_entries` | Entry detail records (transactions) |
+| `{filename}_addenda` | Standard addenda records |
+| `{filename}_iat_entries` | IAT entry details |
+| `{filename}_iat_addenda` | IAT addenda records |
+
+#### Limitations
+
+**Read-only fields**: The following fields are exported for viewing but changes are not written back:
+- IAT Addenda sequence numbers (`entry_detail_sequence_number`, `sequence_number`)
+
+**Addenda05 index behavior**: When an entry has multiple addenda types (e.g., Addenda02 + Addenda05), the `addenda_index` represents the position within all addenda for that entry, not the index within Addenda05 array. For updates targeting specific Addenda05 records, use `addenda_type = '05'` to filter correctly.
+
+**Validation**: Modifying ACH data via SQL may create invalid ACH files. Users should ensure data consistency (e.g., `AddendaRecordIndicator` matches actual addenda presence).
+
+**Compression**: ACH files do not support compression wrappers (`.ach.gz`, etc.).
+
+#### Example
+
+```go
+ctx := context.Background()
+db, err := filesql.OpenContext(ctx, "payments.ach")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// Query entry details
+rows, err := db.QueryContext(ctx, `
+    SELECT individual_name, amount, trace_number
+    FROM payments_entries
+    WHERE transaction_code IN (22, 32)
+`)
+
+// Query with batch information
+rows, err := db.QueryContext(ctx, `
+    SELECT e.individual_name, e.amount, b.company_name
+    FROM payments_entries e
+    JOIN payments_batches b ON e.batch_index = b.batch_index
+`)
+```
 
 #### Excel File Structure Example
 ```

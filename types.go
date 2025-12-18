@@ -509,8 +509,8 @@ func getSampleValues(values []string) []string {
 	// For very small datasets relative to sample size, fall back to simple sampling
 	if len(values) < sampleSize*SamplingStratificationFactor {
 		step := max(1, len(values)/sampleSize)
-		for i := 0; i < len(values) && len(samples) < sampleSize; i += step {
-			samples = append(samples, values[i])
+		for i := 0; i < sampleSize && i*step < len(values); i++ {
+			samples = append(samples, values[i*step])
 		}
 		return samples
 	}
@@ -520,8 +520,8 @@ func getSampleValues(values []string) []string {
 	if sectionSize == 0 {
 		// If section size is 0, fall back to simple sampling
 		step := max(1, len(values)/sampleSize)
-		for i := 0; i < len(values) && len(samples) < sampleSize; i += step {
-			samples = append(samples, values[i])
+		for i := 0; i < sampleSize && i*step < len(values); i++ {
+			samples = append(samples, values[i*step])
 		}
 		return samples
 	}
@@ -543,8 +543,12 @@ func getSampleValues(values []string) []string {
 	}
 	if beginSamples > 0 {
 		step := max(1, sectionSize/beginSamples)
-		for i := 0; i < sectionSize && len(samples) < beginSamples && i < len(values); i += step {
-			samples = append(samples, values[i])
+		for j := range beginSamples {
+			idx := j * step
+			if idx >= sectionSize || idx >= len(values) {
+				break
+			}
+			samples = append(samples, values[idx])
 		}
 	}
 

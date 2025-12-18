@@ -235,8 +235,34 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 		return errors.New("no tables found in database")
 	}
 
-	// Export each table
+	// Detect ACH tables and group them by base name
+	achBaseNames := make(map[string]bool)
+	achTableSet := make(map[string]bool)
 	for _, tableName := range tableNames {
+		if baseName, isACH := IsACHBaseTableName(tableName); isACH {
+			achBaseNames[baseName] = true
+			achTableSet[tableName] = true
+		}
+	}
+
+	// Export ACH files first (if ACH format requested or if we have ACH tables with registered TableSets)
+	ctx := context.Background()
+	for baseName := range achBaseNames {
+		// Only export as ACH if we have a registered TableSet
+		if getACHTableSet(baseName) != nil {
+			outputPath := filepath.Join(outputDir, baseName+".ach")
+			if err := DumpACH(ctx, db, baseName, outputPath); err != nil {
+				return fmt.Errorf("failed to export ACH file %s: %w", baseName, err)
+			}
+		}
+	}
+
+	// Export non-ACH tables in the requested format
+	for _, tableName := range tableNames {
+		// Skip ACH-related tables (they were exported as combined ACH files)
+		if achTableSet[tableName] {
+			continue
+		}
 		if err := dumpSQLiteTable(db, tableName, outputDir, options); err != nil {
 			return fmt.Errorf("failed to export table %s: %w", tableName, err)
 		}

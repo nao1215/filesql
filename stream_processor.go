@@ -48,6 +48,11 @@ func (sp *streamProcessor) streamAllReadersToDatabase(ctx context.Context, db *s
 
 // streamFileToDatabase streams data from a file path directly to SQLite database using chunked processing
 func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db *sql.DB, filePath string) error {
+	// Check if file is ACH format
+	if isACHFile(filePath) {
+		return sp.streamACHFileToDatabase(ctx, db, filePath)
+	}
+
 	// Check if file is supported
 	if !isSupportedFile(filePath) {
 		return fmt.Errorf("unsupported file type: %s", filePath)
@@ -97,6 +102,25 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db *sql.DB,
 		fileType:  baseFileType,
 	}
 	return sp.streamReaderToDatabase(ctx, db, readerInput)
+}
+
+// streamACHFileToDatabase handles ACH files by creating multiple tables
+func (sp *streamProcessor) streamACHFileToDatabase(ctx context.Context, db *sql.DB, filePath string) error {
+	// Open the file
+	file, err := os.Open(filePath) //nolint:gosec // File path is validated and comes from user input
+	if err != nil {
+		return fmt.Errorf("failed to open ACH file %s: %w", filePath, err)
+	}
+	defer file.Close()
+
+	// Check if file is empty
+	if fileInfo, err := file.Stat(); err != nil {
+		return fmt.Errorf("failed to get file info for %s: %w", filePath, err)
+	} else if fileInfo.Size() == 0 {
+		return errors.New("ACH file is empty")
+	}
+
+	return streamACHFileToDatabase(ctx, db, file, filePath)
 }
 
 // streamReaderToDatabase streams data from io.Reader directly to SQLite database

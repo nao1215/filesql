@@ -299,6 +299,11 @@ func supportedFileExtPatterns() []string {
 
 // isSupportedFile checks if the file has a supported extension
 func isSupportedFile(fileName string) bool {
+	// Check for ACH files first (case-sensitive)
+	if isACHFile(fileName) {
+		return true
+	}
+
 	fileName = strings.ToLower(fileName)
 
 	// Remove compression extensions

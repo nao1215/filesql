@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"modernc.org/sqlite"
@@ -38,6 +39,8 @@ const (
 	OutputFormatParquet
 	// OutputFormatXLSX represents Excel XLSX output format
 	OutputFormatXLSX
+	// OutputFormatACH represents ACH (NACHA) output format
+	OutputFormatACH
 )
 
 // String returns the string representation of OutputFormat
@@ -53,6 +56,8 @@ func (f OutputFormat) String() string {
 		return "parquet"
 	case OutputFormatXLSX:
 		return "xlsx"
+	case OutputFormatACH:
+		return "ach"
 	default:
 		return "csv"
 	}
@@ -71,6 +76,8 @@ func (f OutputFormat) Extension() string {
 		return ".parquet"
 	case OutputFormatXLSX:
 		return ".xlsx"
+	case OutputFormatACH:
+		return ".ach"
 	default:
 		return ".csv"
 	}
@@ -285,6 +292,8 @@ func (c *autoSaveConnection) Close() error {
 		if err := c.performAutoSave(); err != nil {
 			// Close the underlying connection first to avoid resource leaks
 			closeErr := c.conn.Close()
+			// Clean up ACH registry entries for this connection
+			c.cleanupACHRegistry()
 			// Return the auto-save error as it's more important for the user
 			if closeErr != nil {
 				return fmt.Errorf("auto-save failed: %w (also failed to close connection: %w)", err, closeErr)
@@ -293,7 +302,20 @@ func (c *autoSaveConnection) Close() error {
 		}
 	}
 
+	// Clean up ACH registry entries for this connection
+	c.cleanupACHRegistry()
+
 	return c.conn.Close()
+}
+
+// cleanupACHRegistry removes ACH TableSet entries for files loaded by this connection
+func (c *autoSaveConnection) cleanupACHRegistry() {
+	for _, path := range c.originalPaths {
+		if isACHFile(path) {
+			baseTableName := sanitizeTableName(tableFromFilePath(path))
+			UnregisterACHTableSet(baseTableName)
+		}
+	}
 }
 
 // Begin implements driver.Conn interface (deprecated, use BeginTx instead)
@@ -410,8 +432,39 @@ func (c *autoSaveConnection) performAutoSave() error {
 	// Use the configured DumpOptions directly
 	dumpOptions := c.autoSaveConfig.options
 
-	// Use the existing DumpDatabase method
+	// Handle ACH format specially - need to export ACH files separately
+	if dumpOptions.Format == OutputFormatACH {
+		return c.performACHAutoSave(tempDB, outputDir)
+	}
+
+	// Use the existing DumpDatabase method for other formats
 	return DumpDatabase(tempDB, outputDir, dumpOptions)
+}
+
+// performACHAutoSave saves all ACH tables back to ACH files
+func (c *autoSaveConnection) performACHAutoSave(db *sql.DB, outputDir string) error {
+	ctx := context.Background()
+
+	// Get all registered ACH base table names
+	achBaseNames := getACHBaseTableNames()
+	if len(achBaseNames) == 0 {
+		return errors.New("no ACH tables found to save")
+	}
+
+	// Create output directory if it doesn't exist
+	if err := os.MkdirAll(outputDir, 0750); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	// Export each ACH file
+	for _, baseName := range achBaseNames {
+		outputPath := filepath.Join(outputDir, baseName+".ach")
+		if err := DumpACH(ctx, db, baseName, outputPath); err != nil {
+			return fmt.Errorf("failed to export ACH file %s: %w", baseName, err)
+		}
+	}
+
+	return nil
 }
 
 // overwriteOriginalFiles saves each table back to its original file location
@@ -420,10 +473,30 @@ func (c *autoSaveConnection) overwriteOriginalFiles(db *sql.DB) error {
 		return errors.New("no original paths available for overwrite")
 	}
 
-	// For now, use the first original path's directory as output
-	// This is a simplified implementation
-	if len(c.originalPaths) > 0 {
-		outputDir := filepath.Dir(c.originalPaths[0])
+	ctx := context.Background()
+
+	// Check if any original paths are ACH files
+	for _, path := range c.originalPaths {
+		if isACHFile(path) {
+			// Extract base table name from file path
+			baseTableName := sanitizeTableName(tableFromFilePath(path))
+			if err := DumpACH(ctx, db, baseTableName, path); err != nil {
+				return fmt.Errorf("failed to overwrite ACH file %s: %w", path, err)
+			}
+		}
+	}
+
+	// For non-ACH files, use the directory-based approach
+	// Filter out ACH paths for DumpDatabase
+	nonACHPaths := make([]string, 0)
+	for _, path := range c.originalPaths {
+		if !isACHFile(path) {
+			nonACHPaths = append(nonACHPaths, path)
+		}
+	}
+
+	if len(nonACHPaths) > 0 {
+		outputDir := filepath.Dir(nonACHPaths[0])
 		return DumpDatabase(db, outputDir, c.autoSaveConfig.options)
 	}
 
