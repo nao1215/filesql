@@ -377,7 +377,7 @@ func TestAutoSaveConnection_PerformACHAutoSave(t *testing.T) {
 	defer db.Close()
 
 	// Check that ACH tables are registered
-	baseNames := GetACHBaseTableNames()
+	baseNames := getACHBaseTableNames()
 	require.NotEmpty(t, baseNames, "ACH tables should be registered")
 
 	// Create temp output directory
@@ -512,7 +512,7 @@ func TestAutoSaveConnection_CleanupACHRegistry(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify tables are registered
-	baseNames := GetACHBaseTableNames()
+	baseNames := getACHBaseTableNames()
 	require.NotEmpty(t, baseNames, "ACH tables should be registered after opening")
 
 	// Create connection with ACH path

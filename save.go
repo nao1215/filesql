@@ -446,7 +446,7 @@ func (c *autoSaveConnection) performACHAutoSave(db *sql.DB, outputDir string) er
 	ctx := context.Background()
 
 	// Get all registered ACH base table names
-	achBaseNames := GetACHBaseTableNames()
+	achBaseNames := getACHBaseTableNames()
 	if len(achBaseNames) == 0 {
 		return errors.New("no ACH tables found to save")
 	}

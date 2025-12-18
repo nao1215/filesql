@@ -330,3 +330,88 @@ func findACHTestFile(t *testing.T, filename string) string {
 
 	return ""
 }
+
+func TestACHTableInfo_TableNames(t *testing.T) {
+	t.Parallel()
+
+	info := ACHTableInfo{BaseName: "payment"}
+
+	t.Run("FileHeaderTable", func(t *testing.T) {
+		assert.Equal(t, "payment_file_header", info.FileHeaderTable())
+	})
+
+	t.Run("BatchesTable", func(t *testing.T) {
+		assert.Equal(t, "payment_batches", info.BatchesTable())
+	})
+
+	t.Run("EntriesTable", func(t *testing.T) {
+		assert.Equal(t, "payment_entries", info.EntriesTable())
+	})
+
+	t.Run("AddendaTable", func(t *testing.T) {
+		assert.Equal(t, "payment_addenda", info.AddendaTable())
+	})
+
+	t.Run("IATBatchesTable", func(t *testing.T) {
+		assert.Equal(t, "payment_iat_batches", info.IATBatchesTable())
+	})
+
+	t.Run("IATEntriesTable", func(t *testing.T) {
+		assert.Equal(t, "payment_iat_entries", info.IATEntriesTable())
+	})
+
+	t.Run("IATAddendaTable", func(t *testing.T) {
+		assert.Equal(t, "payment_iat_addenda", info.IATAddendaTable())
+	})
+
+	t.Run("AllTableNames", func(t *testing.T) {
+		expected := []string{
+			"payment_file_header",
+			"payment_batches",
+			"payment_entries",
+			"payment_addenda",
+			"payment_iat_batches",
+			"payment_iat_entries",
+			"payment_iat_addenda",
+		}
+		assert.Equal(t, expected, info.AllTableNames())
+	})
+}
+
+func TestGetACHTableInfos(t *testing.T) {
+	testFile := findTestACHFile(t)
+	if testFile == "" {
+		t.Skip("No test ACH file found")
+	}
+
+	ctx := context.Background()
+
+	// Clear registry before test
+	ClearACHTableSetRegistry()
+
+	// Open ACH file to register table set
+	db, err := OpenContext(ctx, testFile)
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Get ACH table infos
+	infos := GetACHTableInfos()
+	require.NotEmpty(t, infos, "should have registered ACH table infos")
+
+	// Verify we can use the table info
+	for _, info := range infos {
+		assert.NotEmpty(t, info.BaseName, "BaseName should not be empty")
+		assert.Contains(t, info.EntriesTable(), "_entries")
+		assert.Contains(t, info.BatchesTable(), "_batches")
+	}
+}
+
+func TestGetACHTableInfos_Empty(t *testing.T) {
+	// Clear registry
+	ClearACHTableSetRegistry()
+
+	// Should return empty slice, not nil
+	infos := GetACHTableInfos()
+	assert.NotNil(t, infos)
+	assert.Empty(t, infos)
+}

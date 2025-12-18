@@ -262,9 +262,9 @@ func getACHTableSet(baseTableName string) *achconv.TableSet {
 	return achTableSetRegistry[baseTableName]
 }
 
-// GetACHBaseTableNames returns all base table names that have registered TableSets.
+// getACHBaseTableNames returns all base table names that have registered TableSets.
 // This is useful for auto-save functionality to know which ACH files need to be saved.
-func GetACHBaseTableNames() []string {
+func getACHBaseTableNames() []string {
 	achRegistryMu.RLock()
 	defer achRegistryMu.RUnlock()
 	names := make([]string, 0, len(achTableSetRegistry))
@@ -272,6 +272,90 @@ func GetACHBaseTableNames() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// ACHTableInfo represents information about ACH tables created from an ACH file.
+// It provides methods to get the complete table names for each ACH table type.
+type ACHTableInfo struct {
+	// BaseName is the base table name derived from the ACH filename.
+	// For example, if the file is "payment.ach", BaseName is "payment".
+	BaseName string
+}
+
+// FileHeaderTable returns the complete table name for the file header table.
+// Example: "payment" -> "payment_file_header"
+func (a ACHTableInfo) FileHeaderTable() string {
+	return a.BaseName + "_file_header"
+}
+
+// BatchesTable returns the complete table name for the batches table.
+// Example: "payment" -> "payment_batches"
+func (a ACHTableInfo) BatchesTable() string {
+	return a.BaseName + "_batches"
+}
+
+// EntriesTable returns the complete table name for the entries table.
+// Example: "payment" -> "payment_entries"
+func (a ACHTableInfo) EntriesTable() string {
+	return a.BaseName + "_entries"
+}
+
+// AddendaTable returns the complete table name for the addenda table.
+// Example: "payment" -> "payment_addenda"
+func (a ACHTableInfo) AddendaTable() string {
+	return a.BaseName + "_addenda"
+}
+
+// IATBatchesTable returns the complete table name for the IAT batches table.
+// Example: "payment" -> "payment_iat_batches"
+func (a ACHTableInfo) IATBatchesTable() string {
+	return a.BaseName + "_iat_batches"
+}
+
+// IATEntriesTable returns the complete table name for the IAT entries table.
+// Example: "payment" -> "payment_iat_entries"
+func (a ACHTableInfo) IATEntriesTable() string {
+	return a.BaseName + "_iat_entries"
+}
+
+// IATAddendaTable returns the complete table name for the IAT addenda table.
+// Example: "payment" -> "payment_iat_addenda"
+func (a ACHTableInfo) IATAddendaTable() string {
+	return a.BaseName + "_iat_addenda"
+}
+
+// AllTableNames returns all possible ACH table names for this base name.
+// This includes both standard and IAT tables.
+func (a ACHTableInfo) AllTableNames() []string {
+	return []string{
+		a.FileHeaderTable(),
+		a.BatchesTable(),
+		a.EntriesTable(),
+		a.AddendaTable(),
+		a.IATBatchesTable(),
+		a.IATEntriesTable(),
+		a.IATAddendaTable(),
+	}
+}
+
+// GetACHTableInfos returns ACHTableInfo for all registered ACH files.
+// Each ACHTableInfo provides methods to get complete table names.
+//
+// Example:
+//
+//	db, _ := filesql.Open("payment.ach", "refund.ach")
+//	infos := filesql.GetACHTableInfos()
+//	for _, info := range infos {
+//	    fmt.Println(info.EntriesTable()) // "payment_entries", "refund_entries"
+//	}
+func GetACHTableInfos() []ACHTableInfo {
+	achRegistryMu.RLock()
+	defer achRegistryMu.RUnlock()
+	infos := make([]ACHTableInfo, 0, len(achTableSetRegistry))
+	for name := range achTableSetRegistry {
+		infos = append(infos, ACHTableInfo{BaseName: name})
+	}
+	return infos
 }
 
 // UnregisterACHTableSet removes an ACH TableSet from the registry.
