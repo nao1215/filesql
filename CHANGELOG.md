@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2025-12-18
+
+### Added
+- **Read-Only Database Mode**: New `ReadOnlyDB` wrapper for safe read-only access to databases
+  - `NewReadOnlyDB(db)`: Wraps existing `*sql.DB` to prevent write operations
+  - `ReadOnlyDB.Query()`, `QueryContext()`, `QueryRow()`, `QueryRowContext()`: Read operations work normally
+  - `ReadOnlyDB.Exec()`, `ExecContext()`: Returns `ErrReadOnly` for write operations (INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, REPLACE, UPSERT)
+  - `ReadOnlyDB.Prepare()`, `PrepareContext()`: Rejects preparation of write statements
+  - `ReadOnlyDB.Begin()`, `BeginTx()`: Returns `ReadOnlyTx` for read-only transactions
+  - `ReadOnlyDB.Ping()`, `PingContext()`, `Close()`, `DB()`: Standard database operations
+  - `ReadOnlyStmt`: Read-only prepared statement wrapper
+  - `ReadOnlyTx`: Read-only transaction wrapper with same protections
+  - `DBBuilder.OpenReadOnly(ctx)`: Convenience method to open database in read-only mode
+  - `ErrReadOnly`: Sentinel error for rejected write operations
+  - Useful for audit scenarios where data viewing without modification risk is required
+
+- **ACHTableInfo Struct**: New struct for managing ACH table name information
+  - `ACHTableInfo.BaseName`: The base table name derived from ACH filename
+  - `ACHTableInfo.FileHeaderTable()`: Returns `{baseName}_file_header`
+  - `ACHTableInfo.BatchesTable()`: Returns `{baseName}_batches`
+  - `ACHTableInfo.EntriesTable()`: Returns `{baseName}_entries`
+  - `ACHTableInfo.AddendaTable()`: Returns `{baseName}_addenda`
+  - `ACHTableInfo.IATBatchesTable()`: Returns `{baseName}_iat_batches`
+  - `ACHTableInfo.IATEntriesTable()`: Returns `{baseName}_iat_entries`
+  - `ACHTableInfo.IATAddendaTable()`: Returns `{baseName}_iat_addenda`
+  - `ACHTableInfo.AllTableNames()`: Returns all possible table names for the base name
+  - `GetACHTableInfos()`: Returns `[]ACHTableInfo` for all registered ACH files
+
+### Changed
+- **Internal ACH Function**: Made `GetACHBaseTableNames` private (`getACHBaseTableNames`) as it was only used internally
+  - Use `GetACHTableInfos()` for public access to ACH table information
+
+
 ## [0.8.0] - 2025-12-11
 
 ### Added
@@ -569,7 +602,9 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/nao1215/filesql/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/nao1215/filesql/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/nao1215/filesql/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/nao1215/filesql/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/nao1215/filesql/compare/v0.4.6...v0.5.0
