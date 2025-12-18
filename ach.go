@@ -120,7 +120,6 @@ package filesql
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -158,10 +157,10 @@ func parseACHFile(reader io.Reader, baseTableName string) ([]*table, *achconv.Ta
 	// Read ACH file using fileparser/ach (which encapsulates moov-io/ach)
 	tableSet, err := achconv.ParseReader(reader)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse ACH file: %w", err)
+		return nil, nil, fmt.Errorf("%w: failed to parse ACH file: %s", ErrACH, err.Error())
 	}
 	if tableSet == nil {
-		return nil, nil, errors.New("failed to convert ACH file to tables")
+		return nil, nil, fmt.Errorf("%w: failed to convert ACH file to tables", ErrACH)
 	}
 
 	var tables []*table
@@ -209,7 +208,7 @@ func parseACHFile(reader io.Reader, baseTableName string) ([]*table, *achconv.Ta
 	}
 
 	if len(tables) == 0 {
-		return nil, nil, errors.New("ACH file contains no data")
+		return nil, nil, fmt.Errorf("%w: ACH file contains no data", ErrEmptyData)
 	}
 
 	return tables, tableSet, nil
@@ -422,22 +421,22 @@ func streamACHFileToDatabase(ctx context.Context, db *sql.DB, reader io.Reader, 
 			t.getName(),
 		).Scan(&tableExists)
 		if err != nil {
-			return fmt.Errorf("failed to check table existence: %w", err)
+			return fmt.Errorf("%w: failed to check table existence: %s", ErrDatabaseOperation, err.Error())
 		}
 
 		if tableExists > 0 {
-			return fmt.Errorf("table '%s' already exists, duplicate table names are not allowed", t.getName())
+			return fmt.Errorf("%w: table '%s' already exists", ErrDuplicateTable, t.getName())
 		}
 
 		// Create table
 		if err := createTableFromColumnInfo(ctx, db, t.getName(), t.columnInfo); err != nil {
-			return fmt.Errorf("failed to create table %s: %w", t.getName(), err)
+			return fmt.Errorf("%w: failed to create table %s: %s", ErrDatabaseOperation, t.getName(), err.Error())
 		}
 
 		// Insert records
 		if len(t.records) > 0 {
 			if err := insertRecordsIntoTable(ctx, db, t.getName(), t.header, t.records); err != nil {
-				return fmt.Errorf("failed to insert records into %s: %w", t.getName(), err)
+				return fmt.Errorf("%w: failed to insert records into %s: %s", ErrDatabaseOperation, t.getName(), err.Error())
 			}
 		}
 	}
@@ -477,7 +476,7 @@ func insertRecordsIntoTable(ctx context.Context, db *sql.DB, tableName string, h
 
 	stmt, err := db.PrepareContext(ctx, query)
 	if err != nil {
-		return fmt.Errorf("failed to prepare insert statement: %w", err)
+		return fmt.Errorf("%w: failed to prepare insert statement: %s", ErrDatabaseOperation, err.Error())
 	}
 	defer stmt.Close()
 
@@ -488,7 +487,7 @@ func insertRecordsIntoTable(ctx context.Context, db *sql.DB, tableName string, h
 		}
 
 		if _, err := stmt.ExecContext(ctx, values...); err != nil {
-			return fmt.Errorf("failed to insert record: %w", err)
+			return fmt.Errorf("%w: failed to insert record: %s", ErrDatabaseOperation, err.Error())
 		}
 	}
 
@@ -513,7 +512,7 @@ func insertRecordsIntoTable(ctx context.Context, db *sql.DB, tableName string, h
 func DumpACH(ctx context.Context, db *sql.DB, baseTableName, outputPath string) error {
 	tableSet := getACHTableSet(baseTableName)
 	if tableSet == nil {
-		return fmt.Errorf("no ACH TableSet found for base table name '%s'; ensure the ACH file was loaded via Open() or Builder", baseTableName)
+		return fmt.Errorf("%w: no ACH TableSet found for base table name '%s'; ensure the ACH file was loaded via Open() or Builder", ErrTableNotFound, baseTableName)
 	}
 	return DumpACHWithTableSet(ctx, db, baseTableName, outputPath, tableSet)
 }
@@ -534,27 +533,27 @@ func DumpACH(ctx context.Context, db *sql.DB, baseTableName, outputPath string) 
 // Returns an error if the export fails.
 func DumpACHWithTableSet(ctx context.Context, db *sql.DB, baseTableName, outputPath string, tableSet *achconv.TableSet) error {
 	if tableSet == nil {
-		return errors.New("tableSet must be a non-nil *achconv.TableSet")
+		return fmt.Errorf("%w: tableSet must be a non-nil *achconv.TableSet", ErrNilInput)
 	}
 
 	// Read updated data from database tables and update the TableSet
 	if err := updateTableSetFromDB(ctx, db, baseTableName, tableSet); err != nil {
-		return fmt.Errorf("failed to read updated data from database: %w", err)
+		return fmt.Errorf("%w: failed to read updated data from database: %s", ErrACH, err.Error())
 	}
 
 	// Write the ACH file using WriteToWriter (encapsulates moov-io/ach)
 	file, err := os.Create(outputPath) //nolint:gosec // Output path is user-specified
 	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+		return fmt.Errorf("%w: failed to create output file: %s", ErrIOOperation, err.Error())
 	}
 
 	if err := tableSet.WriteToWriter(file); err != nil {
 		_ = file.Close() // Ignore close error as we're already returning an error
-		return fmt.Errorf("failed to write ACH file: %w", err)
+		return fmt.Errorf("%w: failed to write ACH file: %s", ErrACH, err.Error())
 	}
 
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("failed to close output file: %w", err)
+		return fmt.Errorf("%w: failed to close output file: %s", ErrIOOperation, err.Error())
 	}
 
 	return nil
@@ -626,7 +625,7 @@ func readTableToTableData(ctx context.Context, db *sql.DB, tableName string) (*f
 		tableName,
 	).Scan(&exists)
 	if err != nil || exists == 0 {
-		return nil, fmt.Errorf("table %s does not exist", tableName)
+		return nil, fmt.Errorf("%w: table %s does not exist", ErrTableNotFound, tableName)
 	}
 
 	// Get columns

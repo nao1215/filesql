@@ -975,3 +975,71 @@ func BenchmarkClassifyValue(b *testing.B) {
 		}
 	}
 }
+
+func TestColumnTypeString(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		ct       columnType
+		expected string
+	}{
+		{"text type", columnTypeText, sqlTypeText},
+		{"integer type", columnTypeInteger, sqlTypeInteger},
+		{"real type", columnTypeReal, sqlTypeReal},
+		{"datetime type", columnTypeDatetime, sqlTypeText},
+		{"unknown type", columnType(99), sqlTypeText},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, tt.ct.String())
+		})
+	}
+}
+
+func TestChunkSizeString(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		cs       ChunkSize
+		expected string
+	}{
+		{"default chunk size", ChunkSize(DefaultRowsPerChunk), strconv.Itoa(DefaultRowsPerChunk)},
+		{"custom chunk size", ChunkSize(5000), "5000"},
+		{"min chunk size", ChunkSize(MinChunkSize), strconv.Itoa(MinChunkSize)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, tt.cs.String())
+		})
+	}
+}
+
+func TestChunkSizeIsValid(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		cs       ChunkSize
+		expected bool
+	}{
+		{"valid default size", ChunkSize(DefaultRowsPerChunk), true},
+		{"valid min size", ChunkSize(MinChunkSize), true},
+		{"valid custom size", ChunkSize(5000), true},
+		{"invalid zero", ChunkSize(0), false},
+		{"invalid negative", ChunkSize(-1), false},
+		{"invalid below min", ChunkSize(MinChunkSize - 1), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, tt.cs.IsValid())
+		})
+	}
+}

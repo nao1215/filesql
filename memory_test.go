@@ -814,3 +814,60 @@ func BenchmarkStreamingParser_XLSXProcessing(b *testing.B) {
 		}
 	})
 }
+
+func TestMemoryPool_GetByteBuffer_Fallback(t *testing.T) {
+	t.Parallel()
+
+	pool := NewMemoryPool(1024)
+
+	// Get a buffer - should work normally
+	buf := pool.GetByteBuffer()
+	assert.NotNil(t, buf)
+	assert.Equal(t, 0, len(buf))
+
+	// Test Put and Get cycle
+	buf = append(buf, []byte("test data")...)
+	pool.PutByteBuffer(buf)
+
+	buf2 := pool.GetByteBuffer()
+	assert.NotNil(t, buf2)
+	assert.Equal(t, 0, len(buf2)) // Should be reset
+}
+
+func TestMemoryPool_GetRecordSlice_Fallback(t *testing.T) {
+	t.Parallel()
+
+	pool := NewMemoryPool(1024)
+
+	// Get a slice - should work normally
+	slice := pool.GetRecordSlice()
+	assert.NotNil(t, slice)
+	assert.Equal(t, 0, len(slice))
+
+	// Test Put and Get cycle
+	slice = append(slice, Record{"test"})
+	pool.PutRecordSlice(slice)
+
+	slice2 := pool.GetRecordSlice()
+	assert.NotNil(t, slice2)
+	assert.Equal(t, 0, len(slice2)) // Should be reset
+}
+
+func TestMemoryPool_GetStringSlice_Fallback(t *testing.T) {
+	t.Parallel()
+
+	pool := NewMemoryPool(1024)
+
+	// Get a slice - should work normally
+	slice := pool.GetStringSlice()
+	assert.NotNil(t, slice)
+	assert.Equal(t, 0, len(slice))
+
+	// Test Put and Get cycle
+	slice = append(slice, "test")
+	pool.PutStringSlice(slice)
+
+	slice2 := pool.GetStringSlice()
+	assert.NotNil(t, slice2)
+	assert.Equal(t, 0, len(slice2)) // Should be reset
+}

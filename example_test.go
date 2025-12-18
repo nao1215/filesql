@@ -524,7 +524,7 @@ func ExampleOpen_errorHandling() {
 	}
 
 	// Output:
-	// Expected error for non-existent file: failed to load file: path does not exist: nonexistent.csv
+	// Expected error for non-existent file: filesql: file not found: nonexistent.csv
 	// Expected timeout error: context deadline exceeded
 	// Successfully counted 8 employees
 }
@@ -2120,7 +2120,7 @@ func ExampleDBBuilder_errorHandling() {
 
 	fmt.Println("Success: Valid file loaded correctly")
 
-	// Output: Expected error for no inputs: at least one path must be provided
+	// Output: Expected error for no inputs: filesql: no supported files found: at least one path must be provided
 	// Expected error for Open without Build
 	// Expected error for non-existent file
 	// Success: Valid file loaded correctly

@@ -971,3 +971,64 @@ func TestCreateDecompressedReader_InvalidData(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleCloseError(t *testing.T) {
+	t.Parallel()
+
+	t.Run("successful close", func(t *testing.T) {
+		t.Parallel()
+
+		called := false
+		closeFunc := func() error {
+			called = true
+			return nil
+		}
+
+		handler := handleCloseError(closeFunc)
+		handler() // Should not panic
+
+		assert.True(t, called, "Close function should have been called")
+	})
+
+	t.Run("error close is handled gracefully", func(t *testing.T) {
+		t.Parallel()
+
+		called := false
+		closeFunc := func() error {
+			called = true
+			return assert.AnError
+		}
+
+		handler := handleCloseError(closeFunc)
+		// Should not panic even with error
+		assert.NotPanics(t, func() {
+			handler()
+		})
+
+		assert.True(t, called, "Close function should have been called")
+	})
+}
+
+func TestStreamingParser_ParseFromReader_UnsupportedFormat(t *testing.T) {
+	t.Parallel()
+
+	parser := newStreamingParser(FileTypeUnsupported, "test", 1024)
+	reader := strings.NewReader("test data")
+
+	_, err := parser.parseFromReader(reader)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnsupportedFormat)
+}
+
+func TestStreamingParser_ProcessInChunks_UnsupportedFormat(t *testing.T) {
+	t.Parallel()
+
+	parser := newStreamingParser(FileTypeUnsupported, "test", 1024)
+	reader := strings.NewReader("test data")
+
+	err := parser.ProcessInChunks(reader, func(_ *tableChunk) error {
+		return nil
+	})
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnsupportedFormat)
+}

@@ -53,7 +53,7 @@ func (p *streamingParser) parseFromReader(reader io.Reader) (*table, error) {
 	// Handle compression
 	decompressedReader, closeFunc, err = p.createDecompressedReader(reader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create decompressed reader: %w", err)
+		return nil, fmt.Errorf("%w: failed to create decompressed reader: %s", ErrCompression, err.Error())
 	}
 	if closeFunc != nil {
 		defer handleCloseError(closeFunc)
@@ -73,7 +73,7 @@ func (p *streamingParser) parseFromReader(reader io.Reader) (*table, error) {
 	case FileTypeXLSX:
 		return p.parseXLSXStream(decompressedReader)
 	default:
-		return nil, errors.New("unsupported file type")
+		return nil, ErrUnsupportedFormat
 	}
 }
 
@@ -83,7 +83,7 @@ func (p *streamingParser) createDecompressedReader(reader io.Reader) (io.Reader,
 	case FileTypeCSVGZ, FileTypeTSVGZ, FileTypeLTSVGZ, FileTypeXLSXGZ, FileTypeParquetGZ:
 		gzReader, err := gzip.NewReader(reader)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create gzip reader: %w", err)
+			return nil, nil, fmt.Errorf("%w: failed to create gzip reader: %s", ErrCompression, err.Error())
 		}
 		return gzReader, gzReader.Close, nil
 
@@ -94,21 +94,21 @@ func (p *streamingParser) createDecompressedReader(reader io.Reader) (io.Reader,
 	case FileTypeCSVXZ, FileTypeTSVXZ, FileTypeLTSVXZ, FileTypeXLSXXZ, FileTypeParquetXZ:
 		xzReader, err := xz.NewReader(reader)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create xz reader: %w", err)
+			return nil, nil, fmt.Errorf("%w: failed to create xz reader: %s", ErrCompression, err.Error())
 		}
 		return xzReader, nil, nil
 
 	case FileTypeCSVZSTD, FileTypeTSVZSTD, FileTypeLTSVZSTD, FileTypeXLSXZSTD, FileTypeParquetZSTD:
 		decoder, err := zstd.NewReader(reader)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create zstd reader: %w", err)
+			return nil, nil, fmt.Errorf("%w: failed to create zstd reader: %s", ErrCompression, err.Error())
 		}
 		return decoder, func() error { decoder.Close(); return nil }, nil
 
 	case FileTypeCSVZLIB, FileTypeTSVZLIB, FileTypeLTSVZLIB, FileTypeXLSXZLIB, FileTypeParquetZLIB:
 		zlibReader, err := zlib.NewReader(reader)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create zlib reader: %w", err)
+			return nil, nil, fmt.Errorf("%w: failed to create zlib reader: %s", ErrCompression, err.Error())
 		}
 		return zlibReader, zlibReader.Close, nil
 
@@ -136,11 +136,11 @@ func (p *streamingParser) parseDelimitedStream(reader io.Reader, delimiter rune,
 	csvReader.Comma = delimiter
 	records, err := csvReader.ReadAll()
 	if err != nil {
-		return nil, fmt.Errorf("failed to read %s: %w", fileTypeName, err)
+		return nil, fmt.Errorf("%w: failed to read %s: %s", ErrParsing, fileTypeName, err.Error())
 	}
 
 	if len(records) == 0 {
-		return nil, fmt.Errorf("empty %s data", fileTypeName)
+		return nil, fmt.Errorf("%w: empty %s data", ErrEmptyData, fileTypeName)
 	}
 
 	header := newHeader(records[0])
@@ -171,12 +171,12 @@ func (p *streamingParser) parseTSVStream(reader io.Reader) (*table, error) {
 func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 	content, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read LTSV: %w", err)
+		return nil, fmt.Errorf("%w: failed to read LTSV: %s", ErrParsing, err.Error())
 	}
 
 	lines := strings.Split(string(content), "\n")
 	if len(lines) == 0 {
-		return nil, errors.New("empty LTSV data")
+		return nil, fmt.Errorf("%w: empty LTSV data", ErrEmptyData)
 	}
 
 	headerMap := make(map[string]bool)
@@ -204,7 +204,7 @@ func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 	}
 
 	if len(records) == 0 {
-		return nil, errors.New("no valid LTSV records found")
+		return nil, fmt.Errorf("%w: no valid LTSV records found", ErrEmptyData)
 	}
 
 	var header header
@@ -238,7 +238,7 @@ func (p *streamingParser) ProcessInChunks(reader io.Reader, processor chunkProce
 	// Handle compression
 	decompressedReader, closeFunc, err = p.createDecompressedReader(reader)
 	if err != nil {
-		return fmt.Errorf("failed to create decompressed reader: %w", err)
+		return fmt.Errorf("%w: failed to create decompressed reader: %s", ErrCompression, err.Error())
 	}
 	if closeFunc != nil {
 		defer handleCloseError(closeFunc)
@@ -258,7 +258,7 @@ func (p *streamingParser) ProcessInChunks(reader io.Reader, processor chunkProce
 	case FileTypeXLSX:
 		return p.processXLSXInChunks(decompressedReader, processor)
 	default:
-		return errors.New("unsupported file type for chunked processing")
+		return fmt.Errorf("%w: unsupported file type for chunked processing", ErrUnsupportedFormat)
 	}
 }
 
@@ -272,10 +272,10 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 	// Read header first
 	headerrecord, err := csvReader.Read()
 	if err != nil {
-		if err == io.EOF {
-			return fmt.Errorf("empty %s data", fileTypeName)
+		if errors.Is(err, io.EOF) {
+			return fmt.Errorf("%w: empty %s data", ErrEmptyData, fileTypeName)
 		}
-		return fmt.Errorf("failed to read %s header: %w", fileTypeName, err)
+		return fmt.Errorf("%w: failed to read %s header: %s", ErrParsing, fileTypeName, err.Error())
 	}
 
 	// Validate header for duplicates
@@ -297,10 +297,10 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 	for {
 		record, err := csvReader.Read()
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
-			return fmt.Errorf("failed to read %s record: %w", fileTypeName, err)
+			return fmt.Errorf("%w: failed to read %s record: %s", ErrParsing, fileTypeName, err.Error())
 		}
 
 		chunkrecords = append(chunkrecords, newRecord(record))
@@ -393,12 +393,12 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 	// For LTSV, we need to read line by line
 	content, err := io.ReadAll(reader)
 	if err != nil {
-		return fmt.Errorf("failed to read LTSV: %w", err)
+		return fmt.Errorf("%w: failed to read LTSV: %s", ErrParsing, err.Error())
 	}
 
 	lines := strings.Split(string(content), "\n")
 	if len(lines) == 0 {
-		return errors.New("empty LTSV data")
+		return fmt.Errorf("%w: empty LTSV data", ErrEmptyData)
 	}
 
 	headerMap := make(map[string]bool)
@@ -420,7 +420,7 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 	}
 
 	if len(headerMap) == 0 {
-		return errors.New("no valid LTSV keys found")
+		return fmt.Errorf("%w: no valid LTSV keys found", ErrEmptyData)
 	}
 
 	var header header
@@ -535,7 +535,7 @@ func (p *streamingParser) parseParquetStream(reader io.Reader) (*table, error) {
 	}
 
 	if len(data) == 0 {
-		return nil, errors.New("empty parquet file")
+		return nil, fmt.Errorf("%w: empty parquet file", ErrEmptyData)
 	}
 
 	// Create a bytes reader for the parquet data
@@ -563,7 +563,7 @@ func (p *streamingParser) parseParquetStream(reader io.Reader) (*table, error) {
 	defer table.Release()
 
 	if table.NumRows() == 0 {
-		return nil, errors.New("no records found in parquet stream")
+		return nil, fmt.Errorf("%w: no records found in parquet stream", ErrEmptyData)
 	}
 
 	// Initialize header from table schema
@@ -609,7 +609,7 @@ func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chu
 	}
 
 	if len(data) == 0 {
-		return errors.New("empty parquet file")
+		return fmt.Errorf("%w: empty parquet file", ErrEmptyData)
 	}
 
 	// Create a bytes reader for the parquet data
@@ -732,7 +732,7 @@ func (p *streamingParser) parseXLSXStream(reader io.Reader) (*table, error) {
 	// Get all sheet names
 	sheetNames := xlsxFile.GetSheetList()
 	if len(sheetNames) == 0 {
-		return nil, errors.New("no sheets found in XLSX file")
+		return nil, fmt.Errorf("%w: no sheets found in XLSX file", ErrEmptyData)
 	}
 
 	// With the streaming parser, we only process the first sheet
@@ -815,7 +815,7 @@ func (p *streamingParser) processXLSXInChunks(reader io.Reader, processor chunkP
 	// Get all sheet names
 	sheetNames := xlsxFile.GetSheetList()
 	if len(sheetNames) == 0 {
-		return errors.New("no sheets found in XLSX file")
+		return fmt.Errorf("%w: no sheets found in XLSX file", ErrEmptyData)
 	}
 
 	// Process only the first sheet (streaming parser limitation)

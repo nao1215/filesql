@@ -2,7 +2,6 @@ package filesql
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -36,7 +35,7 @@ func (fp *fileProcessor) collectFilesFromPaths(paths []string) ([]string, error)
 
 		info, err := os.Stat(path)
 		if err != nil {
-			return nil, fmt.Errorf("failed to stat path %s: %w", path, err)
+			return nil, fmt.Errorf("%w: failed to stat path %s: %s", ErrIOOperation, path, err.Error())
 		}
 
 		if info.IsDir() {
@@ -75,7 +74,7 @@ func (fp *fileProcessor) collectFilesFromDirectory(dirPath string, processedFile
 
 		absPath, err := filepath.Abs(filePath)
 		if err != nil {
-			return fmt.Errorf("failed to get absolute path for %s: %w", filePath, err)
+			return fmt.Errorf("%w: failed to get absolute path for %s: %s", ErrIOOperation, filePath, err.Error())
 		}
 
 		if !processedFiles[absPath] {
@@ -86,7 +85,7 @@ func (fp *fileProcessor) collectFilesFromDirectory(dirPath string, processedFile
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to walk directory %s: %w", dirPath, err)
+		return nil, fmt.Errorf("%w: failed to walk directory %s: %s", ErrIOOperation, dirPath, err.Error())
 	}
 
 	return collectedPaths, nil
@@ -95,12 +94,12 @@ func (fp *fileProcessor) collectFilesFromDirectory(dirPath string, processedFile
 // addSingleFile validates and adds a single file to the collected paths
 func (fp *fileProcessor) addSingleFile(filePath string, processedFiles map[string]bool, collectedPaths *[]string) error {
 	if !isSupportedFile(filePath) {
-		return fmt.Errorf("unsupported file type: %s", filePath)
+		return fmt.Errorf("%w: %s", ErrUnsupportedFormat, filePath)
 	}
 
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
-		return fmt.Errorf("failed to get absolute path for %s: %w", filePath, err)
+		return fmt.Errorf("%w: failed to get absolute path for %s: %s", ErrIOOperation, filePath, err.Error())
 	}
 
 	if !processedFiles[absPath] {
@@ -117,7 +116,7 @@ func (fp *fileProcessor) processFilesystemsToReaders(ctx context.Context, filesy
 
 	for _, filesystem := range filesystems {
 		if filesystem == nil {
-			return nil, errors.New("FS cannot be nil")
+			return nil, fmt.Errorf("%w: filesystem cannot be nil", ErrNilInput)
 		}
 
 		fsReaders, err := fp.processFSToReaders(ctx, filesystem)
@@ -142,7 +141,7 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 	for _, pattern := range supportedPatterns {
 		matches, err := fs.Glob(filesystem, pattern)
 		if err != nil {
-			return nil, fmt.Errorf("failed to search pattern %s: %w", pattern, err)
+			return nil, fmt.Errorf("%w: failed to search pattern %s: %s", ErrIOOperation, pattern, err.Error())
 		}
 		allMatches = append(allMatches, matches...)
 	}
@@ -174,12 +173,12 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 			return nil
 		})
 		if walkErr != nil {
-			return nil, fmt.Errorf("failed to walk filesystem: %w", walkErr)
+			return nil, fmt.Errorf("%w: failed to walk filesystem: %s", ErrIOOperation, walkErr.Error())
 		}
 	}
 
 	if len(allMatches) == 0 {
-		return nil, errors.New("no supported files found in filesystem")
+		return nil, fmt.Errorf("%w: no supported files found in filesystem", ErrNoFiles)
 	}
 
 	// Remove compressed duplicates when uncompressed versions exist
@@ -190,7 +189,7 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 		// Open the file from FS
 		file, err := filesystem.Open(match)
 		if err != nil {
-			return nil, fmt.Errorf("failed to open FS file %s: %w", match, err)
+			return nil, fmt.Errorf("%w: failed to open FS file %s: %s", ErrIOOperation, match, err.Error())
 		}
 
 		// Determine file type from extension using NewFile
