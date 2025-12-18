@@ -1,7 +1,6 @@
 package filesql
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -20,21 +19,21 @@ func newValidator() *validator {
 // validatePath validates a single file or directory path
 func (v *validator) validatePath(path string) error {
 	if strings.TrimSpace(path) == "" {
-		return errors.New("path cannot be empty")
+		return ErrEmptyPath
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("failed to load file: path does not exist: %s", path)
+			return fmt.Errorf("%w: %s", ErrFileNotFound, path)
 		}
-		return fmt.Errorf("failed to stat path %s: %w", path, err)
+		return fmt.Errorf("%w: failed to stat path %s: %s", ErrIOOperation, path, err.Error())
 	}
 
 	// For files, check if they are supported
 	if !info.IsDir() {
 		if !isSupportedFile(path) {
-			return fmt.Errorf("unsupported file type: %s", path)
+			return fmt.Errorf("%w: %s", ErrUnsupportedFormat, path)
 		}
 	}
 
@@ -44,13 +43,13 @@ func (v *validator) validatePath(path string) error {
 // validateReader validates a reader input
 func (v *validator) validateReader(reader any, tableName string, fileType FileType) error {
 	if reader == nil {
-		return errors.New("reader cannot be nil")
+		return fmt.Errorf("%w: reader cannot be nil", ErrNilInput)
 	}
 	if tableName == "" {
-		return errors.New("table name must be specified for reader input")
+		return fmt.Errorf("%w: table name must be specified for reader input", ErrInvalidData)
 	}
 	if fileType == FileTypeUnsupported {
-		return errors.New("file type must be specified for reader input")
+		return fmt.Errorf("%w: file type must be specified for reader input", ErrUnsupportedFormat)
 	}
 
 	// For specific readers where we can safely peek without consuming, validate empty content
@@ -58,13 +57,13 @@ func (v *validator) validateReader(reader any, tableName string, fileType FileTy
 	if stringReader, ok := reader.(*strings.Reader); ok && stringReader.Len() == 0 {
 		switch fileType.baseType() {
 		case FileTypeCSV:
-			return errors.New("empty CSV data")
+			return fmt.Errorf("%w: empty CSV data", ErrEmptyData)
 		case FileTypeTSV:
-			return errors.New("empty TSV data")
+			return fmt.Errorf("%w: empty TSV data", ErrEmptyData)
 		case FileTypeLTSV:
-			return errors.New("empty LTSV data")
+			return fmt.Errorf("%w: empty LTSV data", ErrEmptyData)
 		default:
-			return errors.New("reader contains no data")
+			return fmt.Errorf("%w: reader contains no data", ErrEmptyData)
 		}
 	}
 
@@ -129,9 +128,9 @@ func (v *validator) validateFinalState(collectedPaths []string, readers []reader
 		}
 
 		if hasDirectories {
-			return errors.New("no supported files found in directory")
+			return fmt.Errorf("%w: no supported files found in directory", ErrNoFiles)
 		}
-		return errors.New("no valid input files found")
+		return fmt.Errorf("%w: no valid input files found", ErrNoFiles)
 	}
 
 	return nil
@@ -140,7 +139,7 @@ func (v *validator) validateFinalState(collectedPaths []string, readers []reader
 // validateInputsAvailable checks if any valid inputs are available for database creation
 func (v *validator) validateInputsAvailable(collectedPaths []string, readers []readerInput) error {
 	if len(collectedPaths) == 0 && len(readers) == 0 {
-		return errors.New("no valid input files found, did you call Build()?")
+		return fmt.Errorf("%w: no valid input files found, did you call Build()?", ErrNoFiles)
 	}
 	return nil
 }

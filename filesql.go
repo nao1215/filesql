@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/csv"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -210,7 +209,7 @@ func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
 	// Get the underlying connection
 	conn, err := db.Conn(context.Background())
 	if err != nil {
-		return fmt.Errorf("failed to get connection: %w", err)
+		return fmt.Errorf("%w: failed to get connection: %s", ErrDatabaseOperation, err.Error())
 	}
 	defer conn.Close()
 
@@ -222,17 +221,17 @@ func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
 func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error {
 	// Create output directory if it doesn't exist
 	if err := os.MkdirAll(outputDir, 0750); err != nil {
-		return fmt.Errorf("failed to create output directory: %w", err)
+		return fmt.Errorf("%w: failed to create output directory: %s", ErrIOOperation, err.Error())
 	}
 
 	// Get all table names
 	tableNames, err := getSQLiteTableNames(db)
 	if err != nil {
-		return fmt.Errorf("failed to get table names: %w", err)
+		return fmt.Errorf("%w: failed to get table names: %s", ErrDatabaseOperation, err.Error())
 	}
 
 	if len(tableNames) == 0 {
-		return errors.New("no tables found in database")
+		return ErrNoTables
 	}
 
 	// Detect ACH tables and group them by base name
@@ -252,7 +251,7 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 		if getACHTableSet(baseName) != nil {
 			outputPath := filepath.Join(outputDir, baseName+".ach")
 			if err := DumpACH(ctx, db, baseName, outputPath); err != nil {
-				return fmt.Errorf("failed to export ACH file %s: %w", baseName, err)
+				return fmt.Errorf("%w: failed to export ACH file %s: %s", ErrACH, baseName, err.Error())
 			}
 		}
 	}
@@ -264,7 +263,7 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 			continue
 		}
 		if err := dumpSQLiteTable(db, tableName, outputDir, options); err != nil {
-			return fmt.Errorf("failed to export table %s: %w", tableName, err)
+			return fmt.Errorf("%w: failed to export table %s: %s", ErrIOOperation, tableName, err.Error())
 		}
 	}
 
@@ -302,7 +301,7 @@ func dumpSQLiteTable(db *sql.DB, tableName, outputDir string, options DumpOption
 	// Get table columns
 	columns, err := getSQLiteTableColumns(db, tableName)
 	if err != nil {
-		return fmt.Errorf("failed to get columns for table %s: %w", tableName, err)
+		return fmt.Errorf("%w: failed to get columns for table %s: %s", ErrDatabaseOperation, tableName, err.Error())
 	}
 
 	// Query all data from table
@@ -355,14 +354,14 @@ func writeSQLiteTableData(outputPath string, columns []string, rows *sql.Rows, o
 	// Create the file
 	file, err := os.Create(outputPath) //nolint:gosec // Output path is constructed from validated directory and table name
 	if err != nil {
-		return fmt.Errorf("failed to create file %s: %w", outputPath, err)
+		return fmt.Errorf("%w: failed to create file %s: %s", ErrIOOperation, outputPath, err.Error())
 	}
 	defer file.Close()
 
 	// Create writer with compression if needed
 	writer, closeWriter, err := createCompressedWriter(file, options.Compression)
 	if err != nil {
-		return fmt.Errorf("failed to create writer: %w", err)
+		return fmt.Errorf("%w: failed to create writer: %s", ErrCompression, err.Error())
 	}
 	defer closeWriter()
 
@@ -379,7 +378,7 @@ func writeSQLiteTableData(outputPath string, columns []string, rows *sql.Rows, o
 	case OutputFormatXLSX:
 		return writeXLSXTableData(outputPath, columns, rows, options.Compression)
 	default:
-		return fmt.Errorf("unsupported output format: %v", options.Format)
+		return fmt.Errorf("%w: unsupported output format: %v", ErrUnsupportedFormat, options.Format)
 	}
 }
 
@@ -510,7 +509,7 @@ func (b *bytesReaderAt) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekEnd:
 		return int64(len(b.data)) + offset, nil
 	default:
-		return 0, errors.New("invalid whence value")
+		return 0, fmt.Errorf("%w: invalid whence value", ErrInvalidData)
 	}
 }
 
@@ -584,13 +583,13 @@ func extractValueFromArrowArray(arr arrow.Array, index int64) string {
 // writeParquetTableData writes SQLite table data to Parquet format
 func writeParquetTableData(outputPath string, columns []string, rows *sql.Rows, compression CompressionType) error {
 	if len(columns) == 0 {
-		return errors.New("no columns defined")
+		return fmt.Errorf("%w: no columns defined", ErrEmptyData)
 	}
 
 	// For Parquet format, compression is handled at the file level, not stream level
 	// We ignore the compression parameter for now as Parquet has its own compression
 	if compression != CompressionNone {
-		return errors.New("external compression not supported for Parquet format - use Parquet's built-in compression instead")
+		return fmt.Errorf("%w: external compression not supported for Parquet format - use Parquet's built-in compression instead", ErrUnsupportedFormat)
 	}
 
 	// Read all rows into memory first
@@ -605,7 +604,7 @@ func writeParquetTableData(outputPath string, columns []string, rows *sql.Rows, 
 
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
-			return fmt.Errorf("failed to scan row: %w", err)
+			return fmt.Errorf("%w: failed to scan row: %s", ErrDatabaseOperation, err.Error())
 		}
 
 		row := make([]string, len(columns))
@@ -620,7 +619,7 @@ func writeParquetTableData(outputPath string, columns []string, rows *sql.Rows, 
 	}
 
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("error iterating rows: %w", err)
+		return fmt.Errorf("%w: error iterating rows: %s", ErrDatabaseOperation, err.Error())
 	}
 
 	return writeParquetData(outputPath, columns, allRows)
@@ -629,16 +628,16 @@ func writeParquetTableData(outputPath string, columns []string, rows *sql.Rows, 
 // writeParquetData writes data to Parquet format
 func writeParquetData(outputPath string, columns []string, rows [][]string) error {
 	if len(rows) == 0 {
-		return errors.New("no data to write")
+		return fmt.Errorf("%w: no data to write", ErrEmptyData)
 	}
 	if len(columns) == 0 {
-		return errors.New("no columns defined")
+		return fmt.Errorf("%w: no columns defined", ErrEmptyData)
 	}
 
 	// Create output file
 	file, err := os.Create(outputPath) //nolint:gosec
 	if err != nil {
-		return fmt.Errorf("failed to create parquet file: %w", err)
+		return fmt.Errorf("%w: failed to create parquet file: %s", ErrIOOperation, err.Error())
 	}
 	defer file.Close()
 
@@ -663,7 +662,7 @@ func writeParquetData(outputPath string, columns []string, rows [][]string) erro
 			if i < len(columns) {
 				strBuilder, ok := builder.Field(i).(*array.StringBuilder)
 				if !ok {
-					return fmt.Errorf("failed to cast field %d to StringBuilder", i)
+					return fmt.Errorf("%w: failed to cast field %d to StringBuilder", ErrInvalidData, i)
 				}
 				strBuilder.Append(value)
 			}
@@ -678,18 +677,18 @@ func writeParquetData(outputPath string, columns []string, rows [][]string) erro
 	arrowProps := pqarrow.NewArrowWriterProperties(pqarrow.WithStoreSchema())
 	writer, err := pqarrow.NewFileWriter(schema, file, nil, arrowProps)
 	if err != nil {
-		return fmt.Errorf("failed to create parquet writer: %w", err)
+		return fmt.Errorf("%w: failed to create parquet writer: %s", ErrIOOperation, err.Error())
 	}
 	defer writer.Close()
 
 	// Write record to Parquet file
 	if err := writer.Write(record); err != nil {
-		return fmt.Errorf("failed to write record to parquet: %w", err)
+		return fmt.Errorf("%w: failed to write record to parquet: %s", ErrIOOperation, err.Error())
 	}
 
 	// Flush and close writer explicitly
 	if err := writer.Close(); err != nil {
-		return fmt.Errorf("failed to close parquet writer: %w", err)
+		return fmt.Errorf("%w: failed to close parquet writer: %s", ErrIOOperation, err.Error())
 	}
 
 	return nil
@@ -698,7 +697,7 @@ func writeParquetData(outputPath string, columns []string, rows [][]string) erro
 // writeXLSXTableData writes SQLite table data to Excel XLSX format
 func writeXLSXTableData(outputPath string, columns []string, rows *sql.Rows, compression CompressionType) error {
 	if len(columns) == 0 {
-		return errors.New("no columns defined")
+		return fmt.Errorf("%w: no columns defined", ErrEmptyData)
 	}
 
 	// Create new Excel file

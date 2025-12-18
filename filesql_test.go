@@ -927,10 +927,7 @@ func TestDumpDatabaseErrors(t *testing.T) {
 		}
 
 		// Should get "no tables found" error since it's an empty database
-		expectedErrorMsg := "no tables found in database"
-		if err.Error() != expectedErrorMsg {
-			assert.Fail(t, "expected error message '%s', got: %v", expectedErrorMsg, err)
-		}
+		assert.True(t, errors.Is(err, ErrNoTables), "expected ErrNoTables, got: %v", err)
 	})
 
 	t.Run("Permission denied output directory", func(t *testing.T) {
@@ -2907,12 +2904,12 @@ func TestErrorCases(t *testing.T) {
 		{
 			name:        "Non-existent file",
 			paths:       []string{"nonexistent.csv"},
-			expectError: "path does not exist",
+			expectError: "file not found",
 		},
 		{
 			name:        "Unsupported file format",
 			paths:       []string{filepath.Join("testdata", "unsupported.txt")}, // We'll create this
-			expectError: "path does not exist",
+			expectError: "file not found",
 		},
 	}
 
@@ -3143,10 +3140,8 @@ func TestSQLiteDumpFunctions(t *testing.T) {
 				t.Error("Expected error for bzip2 compression")
 			}
 
-			expectedError := "bzip2 compression is not supported for writing"
-			if err.Error() != expectedError {
-				assert.Fail(t, "Expected error '%s', got '%s'", expectedError, err.Error())
-			}
+			assert.True(t, errors.Is(err, ErrUnsupportedFormat), "expected ErrUnsupportedFormat, got: %v", err)
+			assert.Contains(t, err.Error(), "bzip2 compression is not supported for writing")
 		})
 	})
 }

@@ -256,7 +256,7 @@ func (b *DBBuilder) DisableAutoSave() *DBBuilder {
 func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 	// Validate that we have at least one input
 	if len(b.paths) == 0 && len(b.filesystems) == 0 && len(b.readers) == 0 {
-		return nil, errors.New("at least one path must be provided")
+		return nil, fmt.Errorf("%w: at least one path must be provided", ErrNoFiles)
 	}
 
 	// Use validator to validate auto-save config
@@ -395,7 +395,7 @@ func (b *DBBuilder) createInMemoryDatabase() (*sql.DB, error) {
 	sqliteDriver := &sqlite.Driver{}
 	conn, err := sqliteDriver.Open(":memory:")
 	if err != nil {
-		return nil, fmt.Errorf("failed to create in-memory database: %w", err)
+		return nil, fmt.Errorf("%w: failed to create in-memory database: %s", ErrDatabaseOperation, err.Error())
 	}
 
 	return sql.OpenDB(&directConnector{conn: conn}), nil
@@ -424,13 +424,13 @@ func (b *DBBuilder) setupAutoSaveIfNeeded(ctx context.Context, db *sql.DB) (*sql
 	}
 
 	if err := db.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close intermediate database: %w", err)
+		return nil, fmt.Errorf("%w: failed to close intermediate database: %s", ErrDatabaseOperation, err.Error())
 	}
 
 	sqliteDriver := &sqlite.Driver{}
 	freshConn, err := sqliteDriver.Open(":memory:")
 	if err != nil {
-		return nil, fmt.Errorf("failed to create fresh SQLite connection for auto-save: %w", err)
+		return nil, fmt.Errorf("%w: failed to create fresh SQLite connection for auto-save: %s", ErrDatabaseOperation, err.Error())
 	}
 
 	connector := &autoSaveConnector{
@@ -467,7 +467,7 @@ func (b *DBBuilder) processFSToReaders(_ context.Context, filesystem fs.FS) ([]r
 	for _, pattern := range supportedPatterns {
 		matches, err := fs.Glob(filesystem, pattern)
 		if err != nil {
-			return nil, fmt.Errorf("failed to search pattern %s: %w", pattern, err)
+			return nil, fmt.Errorf("%w: failed to search pattern %s: %s", ErrIOOperation, pattern, err.Error())
 		}
 		allMatches = append(allMatches, matches...)
 	}
@@ -502,13 +502,13 @@ func (b *DBBuilder) processFSToReaders(_ context.Context, filesystem fs.FS) ([]r
 			return nil
 		})
 		if walkErr != nil {
-			return nil, fmt.Errorf("failed to walk filesystem: %w", walkErr)
+			return nil, fmt.Errorf("%w: failed to walk filesystem: %s", ErrIOOperation, walkErr.Error())
 		}
 	}
 	// If "." doesn't exist, we'll just use what we found with glob patterns
 
 	if len(allMatches) == 0 {
-		return nil, errors.New("no supported files found in filesystem")
+		return nil, fmt.Errorf("%w: no supported files found in filesystem", ErrNoFiles)
 	}
 
 	// Remove compressed duplicates when uncompressed versions exist
@@ -519,7 +519,7 @@ func (b *DBBuilder) processFSToReaders(_ context.Context, filesystem fs.FS) ([]r
 		// Open the file from FS
 		file, err := filesystem.Open(match)
 		if err != nil {
-			return nil, fmt.Errorf("failed to open FS file %s: %w", match, err)
+			return nil, fmt.Errorf("%w: failed to open FS file %s: %s", ErrIOOperation, match, err.Error())
 		}
 
 		// Determine file type from extension using NewFile
@@ -546,17 +546,17 @@ func (b *DBBuilder) streamXLSXFileToSQLite(ctx context.Context, db *sql.DB, read
 	// Read all data into memory (XLSX requires random access)
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return fmt.Errorf("failed to read XLSX data: %w", err)
+		return fmt.Errorf("%w: failed to read XLSX data: %s", ErrIOOperation, err.Error())
 	}
 
 	if len(data) == 0 {
-		return errors.New("empty XLSX file")
+		return fmt.Errorf("%w: empty XLSX file", ErrEmptyData)
 	}
 
 	// Open XLSX file from bytes
 	xlsxFile, err := excelize.OpenReader(bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("failed to open XLSX file: %w", err)
+		return fmt.Errorf("%w: failed to open XLSX file: %s", ErrParsing, err.Error())
 	}
 	defer func() {
 		_ = xlsxFile.Close() // Ignore close error
@@ -565,7 +565,7 @@ func (b *DBBuilder) streamXLSXFileToSQLite(ctx context.Context, db *sql.DB, read
 	// Get all sheet names
 	sheetNames := xlsxFile.GetSheetList()
 	if len(sheetNames) == 0 {
-		return errors.New("no sheets found in XLSX file")
+		return fmt.Errorf("%w: no sheets found in XLSX file", ErrEmptyData)
 	}
 
 	// Base table name from file path (sanitize to ensure a valid identifier)
@@ -575,7 +575,7 @@ func (b *DBBuilder) streamXLSXFileToSQLite(ctx context.Context, db *sql.DB, read
 	for _, sheetName := range sheetNames {
 		rows, err := xlsxFile.GetRows(sheetName)
 		if err != nil {
-			return fmt.Errorf("failed to read sheet %s: %w", sheetName, err)
+			return fmt.Errorf("%w: failed to read sheet %s: %s", ErrParsing, sheetName, err.Error())
 		}
 
 		// Skip empty sheets
@@ -593,16 +593,16 @@ func (b *DBBuilder) streamXLSXFileToSQLite(ctx context.Context, db *sql.DB, read
 			tableName,
 		).Scan(&tableExists)
 		if err != nil {
-			return fmt.Errorf("failed to check table existence: %w", err)
+			return fmt.Errorf("%w: failed to check table existence: %s", ErrDatabaseOperation, err.Error())
 		}
 
 		if tableExists > 0 {
-			return fmt.Errorf("table '%s' already exists, duplicate table names are not allowed", tableName)
+			return fmt.Errorf("%w: table '%s' already exists", ErrDuplicateTable, tableName)
 		}
 
 		// Process sheet data
 		if err := b.createTableFromXLSXSheet(ctx, db, tableName, rows); err != nil {
-			return fmt.Errorf("failed to create table from sheet %s: %w", sheetName, err)
+			return fmt.Errorf("%w: failed to create table from sheet %s: %s", ErrDatabaseOperation, sheetName, err.Error())
 		}
 	}
 
@@ -612,13 +612,13 @@ func (b *DBBuilder) streamXLSXFileToSQLite(ctx context.Context, db *sql.DB, read
 // createTableFromXLSXSheet creates a SQLite table from XLSX sheet data
 func (b *DBBuilder) createTableFromXLSXSheet(ctx context.Context, db *sql.DB, tableName string, rows [][]string) error {
 	if len(rows) == 0 {
-		return errors.New("no rows in sheet")
+		return fmt.Errorf("%w: no rows in sheet", ErrEmptyData)
 	}
 
 	// First row is header
 	headers := rows[0]
 	if len(headers) == 0 {
-		return errors.New("no columns in sheet header")
+		return fmt.Errorf("%w: no columns in sheet header", ErrEmptyData)
 	}
 
 	// Check for duplicate column names
@@ -657,13 +657,13 @@ func (b *DBBuilder) createTableFromXLSXSheet(ctx context.Context, db *sql.DB, ta
 
 	// Create table
 	if err := b.createSQLiteTable(ctx, db, tableName, columnInfo); err != nil {
-		return fmt.Errorf("failed to create SQLite table: %w", err)
+		return fmt.Errorf("%w: failed to create SQLite table: %s", ErrDatabaseOperation, err.Error())
 	}
 
 	// Insert data
 	if len(records) > 0 {
 		if err := b.insertDataIntoTable(ctx, db, tableName, headers, records); err != nil {
-			return fmt.Errorf("failed to insert data: %w", err)
+			return fmt.Errorf("%w: failed to insert data: %s", ErrDatabaseOperation, err.Error())
 		}
 	}
 
@@ -702,7 +702,7 @@ func (b *DBBuilder) insertDataIntoTable(ctx context.Context, db *sql.DB, tableNa
 
 	stmt, err := db.PrepareContext(ctx, query)
 	if err != nil {
-		return fmt.Errorf("failed to prepare insert statement: %w", err)
+		return fmt.Errorf("%w: failed to prepare insert statement: %s", ErrDatabaseOperation, err.Error())
 	}
 	defer stmt.Close()
 
@@ -713,7 +713,7 @@ func (b *DBBuilder) insertDataIntoTable(ctx context.Context, db *sql.DB, tableNa
 		}
 
 		if _, err := stmt.ExecContext(ctx, values...); err != nil {
-			return fmt.Errorf("failed to insert record: %w", err)
+			return fmt.Errorf("%w: failed to insert record: %s", ErrDatabaseOperation, err.Error())
 		}
 	}
 

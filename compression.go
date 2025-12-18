@@ -4,7 +4,6 @@ import (
 	"compress/bzip2"
 	"compress/gzip"
 	"compress/zlib"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -42,7 +41,7 @@ func (h *compressionHandlerImpl) CreateReader(reader io.Reader) (io.Reader, func
 	case CompressionGZ:
 		gzReader, err := gzip.NewReader(reader)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create gzip reader: %w", err)
+			return nil, nil, fmt.Errorf("%w: failed to create gzip reader: %s", ErrCompression, err.Error())
 		}
 		return gzReader, gzReader.Close, nil
 
@@ -53,7 +52,7 @@ func (h *compressionHandlerImpl) CreateReader(reader io.Reader) (io.Reader, func
 	case CompressionXZ:
 		xzReader, err := xz.NewReader(reader)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create xz reader: %w", err)
+			return nil, nil, fmt.Errorf("%w: failed to create xz reader: %s", ErrCompression, err.Error())
 		}
 		// xz.Reader doesn't have a Close method
 		return xzReader, func() error { return nil }, nil
@@ -61,7 +60,7 @@ func (h *compressionHandlerImpl) CreateReader(reader io.Reader) (io.Reader, func
 	case CompressionZSTD:
 		decoder, err := zstd.NewReader(reader)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create zstd reader: %w", err)
+			return nil, nil, fmt.Errorf("%w: failed to create zstd reader: %s", ErrCompression, err.Error())
 		}
 		return decoder, func() error {
 			decoder.Close()
@@ -71,7 +70,7 @@ func (h *compressionHandlerImpl) CreateReader(reader io.Reader) (io.Reader, func
 	case CompressionZLIB:
 		zlibReader, err := zlib.NewReader(reader)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create zlib reader: %w", err)
+			return nil, nil, fmt.Errorf("%w: failed to create zlib reader: %s", ErrCompression, err.Error())
 		}
 		return zlibReader, zlibReader.Close, nil
 
@@ -88,7 +87,7 @@ func (h *compressionHandlerImpl) CreateReader(reader io.Reader) (io.Reader, func
 		return lz4Reader, func() error { return nil }, nil
 
 	default:
-		return nil, nil, fmt.Errorf("unsupported compression type for reading: %v", h.compressionType)
+		return nil, nil, fmt.Errorf("%w: unsupported compression type for reading: %v", ErrCompression, h.compressionType)
 	}
 }
 
@@ -104,19 +103,19 @@ func (h *compressionHandlerImpl) CreateWriter(writer io.Writer) (io.Writer, func
 
 	case CompressionBZ2:
 		// bzip2 doesn't have a writer in the standard library
-		return nil, nil, errors.New("bzip2 compression is not supported for writing")
+		return nil, nil, fmt.Errorf("%w: bzip2 compression is not supported for writing", ErrUnsupportedFormat)
 
 	case CompressionXZ:
 		xzWriter, err := xz.NewWriter(writer)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create xz writer: %w", err)
+			return nil, nil, fmt.Errorf("%w: failed to create xz writer: %s", ErrCompression, err.Error())
 		}
 		return xzWriter, xzWriter.Close, nil
 
 	case CompressionZSTD:
 		zstdWriter, err := zstd.NewWriter(writer)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create zstd writer: %w", err)
+			return nil, nil, fmt.Errorf("%w: failed to create zstd writer: %s", ErrCompression, err.Error())
 		}
 		return zstdWriter, zstdWriter.Close, nil
 
@@ -137,7 +136,7 @@ func (h *compressionHandlerImpl) CreateWriter(writer io.Writer) (io.Writer, func
 		return lz4Writer, lz4Writer.Close, nil
 
 	default:
-		return nil, nil, fmt.Errorf("unsupported compression type for writing: %v", h.compressionType)
+		return nil, nil, fmt.Errorf("%w: unsupported compression type for writing: %v", ErrCompression, h.compressionType)
 	}
 }
 
@@ -197,7 +196,7 @@ func (f *CompressionFactory) CreateHandlerForFile(path string) CompressionHandle
 func (f *CompressionFactory) CreateReaderForFile(path string) (io.Reader, func() error, error) {
 	file, err := os.Open(path) //nolint:gosec // User-provided path is necessary for file operations
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to open file: %w", err)
+		return nil, nil, fmt.Errorf("%w: failed to open file: %s", ErrIOOperation, err.Error())
 	}
 
 	handler := f.CreateHandlerForFile(path)
@@ -226,7 +225,7 @@ func (f *CompressionFactory) CreateReaderForFile(path string) (io.Reader, func()
 func (f *CompressionFactory) CreateWriterForFile(path string, compressionType CompressionType) (io.Writer, func() error, error) {
 	file, err := os.Create(path) //nolint:gosec // User-provided path is necessary for file operations
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create file: %w", err)
+		return nil, nil, fmt.Errorf("%w: failed to create file: %s", ErrIOOperation, err.Error())
 	}
 
 	handler := NewCompressionHandler(compressionType)

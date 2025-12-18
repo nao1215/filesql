@@ -663,3 +663,86 @@ func TestAutoSaveConnection_PerformAutoSave_Disabled(t *testing.T) {
 	err = conn2.performAutoSave()
 	assert.NoError(t, err)
 }
+
+func TestAutoSaveConnection_ExecContext(t *testing.T) {
+	t.Parallel()
+
+	// Create a test database connection
+	tempDir := t.TempDir()
+	csvFile := filepath.Join(tempDir, "test.csv")
+	require.NoError(t, os.WriteFile(csvFile, []byte("id,name\n1,Alice\n2,Bob"), 0600))
+
+	db, err := Open(csvFile)
+	require.NoError(t, err)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Test ExecContext
+	result, err := db.ExecContext(ctx, "UPDATE test SET name = 'Updated' WHERE id = 1")
+	require.NoError(t, err)
+
+	rowsAffected, err := result.RowsAffected()
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1), rowsAffected)
+}
+
+func TestAutoSaveConnection_QueryContext(t *testing.T) {
+	t.Parallel()
+
+	// Create a test database connection
+	tempDir := t.TempDir()
+	csvFile := filepath.Join(tempDir, "test.csv")
+	require.NoError(t, os.WriteFile(csvFile, []byte("id,name\n1,Alice\n2,Bob"), 0600))
+
+	db, err := Open(csvFile)
+	require.NoError(t, err)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Test QueryContext
+	rows, err := db.QueryContext(ctx, "SELECT * FROM test WHERE id = ?", 1)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var id int
+	var name string
+	require.True(t, rows.Next())
+	require.NoError(t, rows.Scan(&id, &name))
+	assert.Equal(t, 1, id)
+	assert.Equal(t, "Alice", name)
+	require.NoError(t, rows.Err())
+}
+
+func TestAutoSaveTransaction_Rollback(t *testing.T) {
+	t.Parallel()
+
+	// Create a test database connection
+	tempDir := t.TempDir()
+	csvFile := filepath.Join(tempDir, "test.csv")
+	require.NoError(t, os.WriteFile(csvFile, []byte("id,name\n1,Alice\n2,Bob"), 0600))
+
+	db, err := Open(csvFile)
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Begin transaction using BeginTx with context
+	ctx := context.Background()
+	tx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	// Execute a modification
+	_, err = tx.ExecContext(ctx, "UPDATE test SET name = 'Modified' WHERE id = 1")
+	require.NoError(t, err)
+
+	// Rollback
+	err = tx.Rollback()
+	assert.NoError(t, err)
+
+	// Verify data was not changed
+	var name string
+	err = db.QueryRowContext(ctx, "SELECT name FROM test WHERE id = 1").Scan(&name)
+	require.NoError(t, err)
+	assert.Equal(t, "Alice", name, "Rollback should have preserved original data")
+}

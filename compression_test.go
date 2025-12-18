@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,6 +16,8 @@ import (
 	"github.com/klauspost/compress/snappy"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pierrec/lz4/v4"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/ulikunitz/xz"
 )
 
@@ -697,4 +700,108 @@ func TestCreateReaderForFileIntegration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCompressionFactory_CreateWriterForFile(t *testing.T) {
+	t.Parallel()
+
+	factory := NewCompressionFactory()
+	testData := []byte("Hello, World! This is test data for compression.")
+
+	t.Run("create gzip writer", func(t *testing.T) {
+		t.Parallel()
+		tempDir := t.TempDir()
+		filePath := filepath.Join(tempDir, "test.csv.gz")
+
+		writer, cleanup, err := factory.CreateWriterForFile(filePath, CompressionGZ)
+		require.NoError(t, err)
+		require.NotNil(t, writer)
+		require.NotNil(t, cleanup)
+
+		_, err = writer.Write(testData)
+		require.NoError(t, err)
+
+		err = cleanup()
+		require.NoError(t, err)
+
+		// Verify file was created
+		_, err = os.Stat(filePath)
+		require.NoError(t, err)
+	})
+
+	t.Run("create zstd writer", func(t *testing.T) {
+		t.Parallel()
+		tempDir := t.TempDir()
+		filePath := filepath.Join(tempDir, "test.csv.zst")
+
+		writer, cleanup, err := factory.CreateWriterForFile(filePath, CompressionZSTD)
+		require.NoError(t, err)
+		require.NotNil(t, writer)
+		require.NotNil(t, cleanup)
+
+		_, err = writer.Write(testData)
+		require.NoError(t, err)
+
+		err = cleanup()
+		require.NoError(t, err)
+
+		// Verify file was created
+		_, err = os.Stat(filePath)
+		require.NoError(t, err)
+	})
+
+	t.Run("create no compression writer", func(t *testing.T) {
+		t.Parallel()
+		tempDir := t.TempDir()
+		filePath := filepath.Join(tempDir, "test.csv")
+
+		writer, cleanup, err := factory.CreateWriterForFile(filePath, CompressionNone)
+		require.NoError(t, err)
+		require.NotNil(t, writer)
+		require.NotNil(t, cleanup)
+
+		_, err = writer.Write(testData)
+		require.NoError(t, err)
+
+		err = cleanup()
+		require.NoError(t, err)
+
+		// Verify file was created and content is correct
+		content, err := os.ReadFile(filepath.Clean(filePath))
+		require.NoError(t, err)
+		assert.Equal(t, testData, content)
+	})
+
+	t.Run("error on invalid path", func(t *testing.T) {
+		t.Parallel()
+		// Try to create file in non-existent directory
+		filePath := "/nonexistent/directory/test.csv.gz"
+
+		_, _, err := factory.CreateWriterForFile(filePath, CompressionGZ)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrIOOperation))
+	})
+
+	t.Run("write and read roundtrip", func(t *testing.T) {
+		t.Parallel()
+		tempDir := t.TempDir()
+		filePath := filepath.Join(tempDir, "roundtrip.csv.gz")
+
+		// Write
+		writer, cleanup, err := factory.CreateWriterForFile(filePath, CompressionGZ)
+		require.NoError(t, err)
+		_, err = writer.Write(testData)
+		require.NoError(t, err)
+		err = cleanup()
+		require.NoError(t, err)
+
+		// Read back
+		reader, readerCleanup, err := factory.CreateReaderForFile(filePath)
+		require.NoError(t, err)
+		defer readerCleanup()
+
+		readData, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		assert.Equal(t, testData, readData)
+	})
 }

@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +12,11 @@ import (
 
 	"github.com/xuri/excelize/v2"
 )
+
+// streamError wraps stream processing errors with sentinel errors for errors.Is() compatibility.
+func streamError(sentinel error, format string, args ...any) error {
+	return fmt.Errorf("%w: "+format, append([]any{sentinel}, args...)...)
+}
 
 // streamProcessor handles streaming operations for database loading
 type streamProcessor struct {
@@ -30,7 +34,7 @@ func newStreamProcessor(chunkSize int) *streamProcessor {
 func (sp *streamProcessor) streamAllFilesToDatabase(ctx context.Context, db *sql.DB, collectedPaths []string) error {
 	for _, path := range collectedPaths {
 		if err := sp.streamFileToDatabase(ctx, db, path); err != nil {
-			return fmt.Errorf("failed to stream file %s: %w", path, err)
+			return streamError(ErrParsing, "failed to stream file %s: %v", path, err)
 		}
 	}
 	return nil
@@ -40,7 +44,7 @@ func (sp *streamProcessor) streamAllFilesToDatabase(ctx context.Context, db *sql
 func (sp *streamProcessor) streamAllReadersToDatabase(ctx context.Context, db *sql.DB, readers []readerInput) error {
 	for _, readerInput := range readers {
 		if err := sp.streamReaderToDatabase(ctx, db, readerInput); err != nil {
-			return fmt.Errorf("failed to stream reader input for table '%s': %w", readerInput.tableName, err)
+			return streamError(ErrParsing, "failed to stream reader input for table '%s': %v", readerInput.tableName, err)
 		}
 	}
 	return nil
@@ -55,21 +59,21 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db *sql.DB,
 
 	// Check if file is supported
 	if !isSupportedFile(filePath) {
-		return fmt.Errorf("unsupported file type: %s", filePath)
+		return fmt.Errorf("%w: %s", ErrUnsupportedFormat, filePath)
 	}
 
 	// Open the file and create a reader
 	file, err := os.Open(filePath) //nolint:gosec // File path is validated and comes from user input
 	if err != nil {
-		return fmt.Errorf("failed to open file %s: %w", filePath, err)
+		return fmt.Errorf("%w: failed to open file %s: %s", ErrIOOperation, filePath, err.Error())
 	}
 	defer file.Close()
 
 	// Check if file is empty before processing
 	if fileInfo, err := file.Stat(); err != nil {
-		return fmt.Errorf("failed to get file info for %s: %w", filePath, err)
+		return fmt.Errorf("%w: failed to get file info for %s: %s", ErrIOOperation, filePath, err.Error())
 	} else if fileInfo.Size() == 0 {
-		return errors.New("file is empty")
+		return fmt.Errorf("%w: file is empty", ErrEmptyData)
 	}
 
 	// Create file model to determine type and table name
@@ -79,7 +83,7 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db *sql.DB,
 	// Create decompressed reader if needed
 	reader, closer, err := sp.createDecompressedReader(file, filePath)
 	if err != nil {
-		return fmt.Errorf("failed to create decompressed reader for %s: %w", filePath, err)
+		return fmt.Errorf("%w: failed to create decompressed reader for %s: %s", ErrCompression, filePath, err.Error())
 	}
 	defer func() {
 		if closer != nil {
@@ -109,15 +113,15 @@ func (sp *streamProcessor) streamACHFileToDatabase(ctx context.Context, db *sql.
 	// Open the file
 	file, err := os.Open(filePath) //nolint:gosec // File path is validated and comes from user input
 	if err != nil {
-		return fmt.Errorf("failed to open ACH file %s: %w", filePath, err)
+		return fmt.Errorf("%w: failed to open ACH file %s: %s", ErrIOOperation, filePath, err.Error())
 	}
 	defer file.Close()
 
 	// Check if file is empty
 	if fileInfo, err := file.Stat(); err != nil {
-		return fmt.Errorf("failed to get file info for %s: %w", filePath, err)
+		return fmt.Errorf("%w: failed to get file info for %s: %s", ErrIOOperation, filePath, err.Error())
 	} else if fileInfo.Size() == 0 {
-		return errors.New("ACH file is empty")
+		return fmt.Errorf("%w: ACH file is empty", ErrEmptyData)
 	}
 
 	return streamACHFileToDatabase(ctx, db, file, filePath)
@@ -137,11 +141,11 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 		input.tableName,
 	).Scan(&tableExists)
 	if err != nil {
-		return fmt.Errorf("failed to check table existence: %w", err)
+		return fmt.Errorf("%w: failed to check table existence: %s", ErrDatabaseOperation, err.Error())
 	}
 
 	if tableExists > 0 {
-		return fmt.Errorf("table '%s' already exists from another file, duplicate table names are not allowed", input.tableName)
+		return fmt.Errorf("%w: table '%s' already exists from another file", ErrDuplicateTable, input.tableName)
 	}
 
 	// Create streaming parser for chunked processing
@@ -157,7 +161,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 		// Create table on first chunk
 		if !tableCreated {
 			if err := sp.createTableFromChunk(ctx, db, chunk); err != nil {
-				return fmt.Errorf("failed to create table: %w", err)
+				return fmt.Errorf("%w: failed to create table: %s", ErrDatabaseOperation, err.Error())
 			}
 
 			// Start transaction for bulk inserts - significantly improves performance
@@ -165,14 +169,14 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 			var err error
 			tx, err = db.BeginTx(ctx, nil)
 			if err != nil {
-				return fmt.Errorf("failed to begin transaction: %w", err)
+				return fmt.Errorf("%w: failed to begin transaction: %s", ErrDatabaseOperation, err.Error())
 			}
 
 			// Prepare insert statement within transaction
 			insertStmt, err = sp.prepareInsertStatementTx(ctx, tx, chunk) //nolint:sqlclosecheck // Statement is closed after processing
 			if err != nil {
 				_ = tx.Rollback() //nolint:errcheck // Ignore rollback error during error handling
-				return fmt.Errorf("failed to prepare insert statement: %w", err)
+				return fmt.Errorf("%w: failed to prepare insert statement: %s", ErrDatabaseOperation, err.Error())
 			}
 
 			tableCreated = true
@@ -180,7 +184,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 
 		// Insert chunk data
 		if err := sp.insertChunkData(ctx, insertStmt, chunk); err != nil {
-			return fmt.Errorf("failed to insert chunk data: %w", err)
+			return fmt.Errorf("%w: failed to insert chunk data: %s", ErrDatabaseOperation, err.Error())
 		}
 
 		return nil
@@ -192,7 +196,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 			_ = tx.Rollback() //nolint:errcheck // Ignore rollback error during error handling
 		} else {
 			if commitErr := tx.Commit(); commitErr != nil {
-				return fmt.Errorf("failed to commit transaction: %w", commitErr)
+				return fmt.Errorf("%w: failed to commit transaction: %s", ErrDatabaseOperation, commitErr.Error())
 			}
 		}
 	}
@@ -221,7 +225,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 			if err != nil {
 				return err // Return the original processing error
 			}
-			return fmt.Errorf("failed to create empty table for header-only file: %w", createErr)
+			return fmt.Errorf("%w: failed to create empty table for header-only file: %s", ErrDatabaseOperation, createErr.Error())
 		}
 		err = nil // Clear any previous error since we handled the header-only case
 	}
@@ -232,7 +236,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 	}
 
 	if err != nil {
-		return fmt.Errorf("streaming processing failed: %w", err)
+		return fmt.Errorf("%w: streaming processing failed: %s", ErrParsing, err.Error())
 	}
 
 	return nil
@@ -298,7 +302,7 @@ func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, 
 	for _, record := range records {
 		// Fail fast if record has more columns than headers to prevent silent data truncation
 		if len(record) > colCount {
-			return fmt.Errorf("record has more columns (%d) than headers (%d)", len(record), colCount)
+			return fmt.Errorf("%w: record has more columns (%d) than headers (%d)", ErrColumnMismatch, len(record), colCount)
 		}
 
 		// Fill values slice based on header count, handling records with fewer columns
@@ -312,7 +316,7 @@ func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, 
 		}
 
 		if _, err := stmt.ExecContext(ctx, values...); err != nil {
-			return fmt.Errorf("failed to insert record: %w", err)
+			return fmt.Errorf("%w: failed to insert record: %s", ErrDatabaseOperation, err.Error())
 		}
 	}
 
@@ -339,7 +343,7 @@ func (sp *streamProcessor) createEmptyTable(ctx context.Context, db *sql.DB, inp
 	// Create table using the parsed headers
 	headers := tempTable.getHeader()
 	if len(headers) == 0 {
-		return fmt.Errorf("no headers found in file for table %s", input.tableName)
+		return fmt.Errorf("%w: no headers found in file for table %s", ErrEmptyData, input.tableName)
 	}
 
 	// Infer column types from headers (all as TEXT for header-only files)
@@ -365,7 +369,7 @@ func (sp *streamProcessor) createEmptyTable(ctx context.Context, db *sql.DB, inp
 
 	_, err = db.ExecContext(ctx, query)
 	if err != nil {
-		return fmt.Errorf("failed to create empty table: %w", err)
+		return fmt.Errorf("%w: failed to create empty table: %s", ErrDatabaseOperation, err.Error())
 	}
 
 	return nil
@@ -381,7 +385,7 @@ func (sp *streamProcessor) createTableFromHeaders(ctx context.Context, db *sql.D
 
 	_, err := db.ExecContext(ctx, query)
 	if err != nil {
-		return fmt.Errorf("failed to create fallback table: %w", err)
+		return fmt.Errorf("%w: failed to create fallback table: %s", ErrDatabaseOperation, err.Error())
 	}
 
 	return nil
@@ -406,17 +410,17 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db *sql
 	// Read all data into memory (XLSX requires random access)
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return fmt.Errorf("failed to read XLSX data: %w", err)
+		return fmt.Errorf("%w: failed to read XLSX data: %s", ErrIOOperation, err.Error())
 	}
 
 	if len(data) == 0 {
-		return errors.New("empty XLSX file")
+		return fmt.Errorf("%w: empty XLSX file", ErrEmptyData)
 	}
 
 	// Open XLSX file from bytes
 	xlsxFile, err := excelize.OpenReader(bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("failed to open XLSX file: %w", err)
+		return fmt.Errorf("%w: failed to open XLSX file: %s", ErrParsing, err.Error())
 	}
 	defer func() {
 		_ = xlsxFile.Close() // Ignore close error
@@ -425,7 +429,7 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db *sql
 	// Get all sheet names
 	sheetNames := xlsxFile.GetSheetList()
 	if len(sheetNames) == 0 {
-		return errors.New("no sheets found in XLSX file")
+		return fmt.Errorf("%w: no sheets found in XLSX file", ErrEmptyData)
 	}
 
 	// Base table name from file path (sanitize to ensure a valid identifier)
@@ -435,7 +439,7 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db *sql
 	for _, sheetName := range sheetNames {
 		rows, err := xlsxFile.GetRows(sheetName)
 		if err != nil {
-			return fmt.Errorf("failed to read sheet %s: %w", sheetName, err)
+			return fmt.Errorf("%w: failed to read sheet %s: %s", ErrParsing, sheetName, err.Error())
 		}
 
 		// Skip empty sheets
@@ -453,11 +457,11 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db *sql
 			tableName,
 		).Scan(&tableExists)
 		if err != nil {
-			return fmt.Errorf("failed to check table existence: %w", err)
+			return fmt.Errorf("%w: failed to check table existence: %s", ErrDatabaseOperation, err.Error())
 		}
 
 		if tableExists > 0 {
-			return fmt.Errorf("table '%s' already exists from another file, duplicate table names are not allowed", tableName)
+			return fmt.Errorf("%w: table '%s' already exists from another file", ErrDuplicateTable, tableName)
 		}
 
 		// Convert XLSX rows to table headers and records
@@ -474,20 +478,20 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db *sql
 
 		// Create table and insert data
 		if err := sp.createTableFromChunk(ctx, db, chunk); err != nil {
-			return fmt.Errorf("failed to create table for sheet %s: %w", sheetName, err)
+			return fmt.Errorf("%w: failed to create table for sheet %s: %s", ErrDatabaseOperation, sheetName, err.Error())
 		}
 
 		// Prepare and execute insert statement
 		insertStmt, err := sp.prepareInsertStatement(ctx, db, chunk)
 		if err != nil {
-			return fmt.Errorf("failed to prepare insert statement for sheet %s: %w", sheetName, err)
+			return fmt.Errorf("%w: failed to prepare insert statement for sheet %s: %s", ErrDatabaseOperation, sheetName, err.Error())
 		}
 		defer func() {
 			_ = insertStmt.Close() // Ignore close error
 		}()
 
 		if err := sp.insertChunkData(ctx, insertStmt, chunk); err != nil {
-			return fmt.Errorf("failed to insert data for sheet %s: %w", sheetName, err)
+			return fmt.Errorf("%w: failed to insert data for sheet %s: %s", ErrDatabaseOperation, sheetName, err.Error())
 		}
 	}
 
