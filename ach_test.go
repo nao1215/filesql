@@ -284,7 +284,7 @@ func TestWriteACHFile_InvalidTableSet(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a database without ACH tables
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -297,7 +297,7 @@ func TestDumpACH_NilTableSet(t *testing.T) {
 	ctx := context.Background()
 
 	// Open a CSV file (not ACH)
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -312,20 +312,13 @@ func findTestACHFile(t *testing.T) string {
 	return findACHTestFile(t, "ppd-debit.ach")
 }
 
-// findACHTestFile looks for a specific test ACH file.
+// findACHTestFile looks for a specific test ACH file in testdata directory.
 func findACHTestFile(t *testing.T, filename string) string {
 	t.Helper()
 
-	locations := []string{
-		filepath.Join("testdata", filename),
-		filepath.Join("../fileparser/ach/testdata", filename),
-		filepath.Join(os.Getenv("HOME"), "go/pkg/mod/github.com/moov-io/ach@v1.53.4/test/testdata", filename),
-	}
-
-	for _, loc := range locations {
-		if _, err := os.Stat(loc); err == nil {
-			return loc
-		}
+	path := filepath.Join("testdata", filename)
+	if _, err := os.Stat(path); err == nil {
+		return path
 	}
 
 	return ""

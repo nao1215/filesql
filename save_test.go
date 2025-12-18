@@ -413,7 +413,7 @@ func TestAutoSaveConnection_PerformACHAutoSave_NoTables(t *testing.T) {
 	ctx := context.Background()
 
 	// Open a CSV file (not ACH) to ensure no ACH tables are registered
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -482,7 +482,7 @@ func TestAutoSaveConnection_OverwriteOriginalFiles_ACH(t *testing.T) {
 func TestAutoSaveConnection_OverwriteOriginalFiles_NoOriginalPaths(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -537,7 +537,7 @@ func TestAutoSaveConnection_Begin(t *testing.T) {
 	ctx := context.Background()
 
 	// Use Builder to create a database with auto-save config
-	builder := NewBuilder().AddPath("testdata/test.csv")
+	builder := NewBuilder().AddPath(filepath.Join("testdata", "test.csv"))
 	validatedBuilder, err := builder.Build(ctx)
 	require.NoError(t, err)
 
@@ -604,7 +604,7 @@ func TestAutoSaveConnection_PerformACHAutoSave_DumpError(t *testing.T) {
 	ctx := context.Background()
 
 	// Open a CSV file to get a valid db connection
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 

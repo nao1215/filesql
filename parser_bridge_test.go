@@ -9,6 +9,8 @@ import (
 )
 
 func TestParserFileType(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		input    FileType
@@ -63,6 +65,8 @@ func TestParserFileType(t *testing.T) {
 }
 
 func TestParserColumnType(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		input    fileparser.ColumnType
@@ -84,6 +88,8 @@ func TestParserColumnType(t *testing.T) {
 }
 
 func TestConvertParserError(t *testing.T) {
+	t.Parallel()
+
 	t.Run("nil error returns nil", func(t *testing.T) {
 		result := convertParserError(nil)
 		assert.NoError(t, result)

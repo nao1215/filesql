@@ -3,6 +3,7 @@ package filesql
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,7 +14,7 @@ func TestReadOnlyDB_Query(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a normal database
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -36,7 +37,7 @@ func TestReadOnlyDB_Query(t *testing.T) {
 func TestReadOnlyDB_QueryContext(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -55,7 +56,7 @@ func TestReadOnlyDB_QueryContext(t *testing.T) {
 func TestReadOnlyDB_QueryRow(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -70,7 +71,7 @@ func TestReadOnlyDB_QueryRow(t *testing.T) {
 func TestReadOnlyDB_QueryRowContext(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -85,7 +86,7 @@ func TestReadOnlyDB_QueryRowContext(t *testing.T) {
 func TestReadOnlyDB_ExecRejectsWrite(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -115,7 +116,7 @@ func TestReadOnlyDB_ExecRejectsWrite(t *testing.T) {
 func TestReadOnlyDB_ExecContextRejectsWrite(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -129,7 +130,7 @@ func TestReadOnlyDB_ExecContextRejectsWrite(t *testing.T) {
 func TestReadOnlyDB_ExecAllowsNonWrite(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -146,7 +147,7 @@ func TestReadOnlyDB_ExecAllowsNonWrite(t *testing.T) {
 func TestReadOnlyDB_PrepareRejectsWrite(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -165,7 +166,7 @@ func TestReadOnlyDB_PrepareRejectsWrite(t *testing.T) {
 func TestReadOnlyDB_PrepareContextRejectsWrite(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -184,7 +185,7 @@ func TestReadOnlyDB_PrepareContextRejectsWrite(t *testing.T) {
 func TestReadOnlyDB_Transaction(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -212,7 +213,7 @@ func TestReadOnlyDB_Transaction(t *testing.T) {
 func TestReadOnlyDB_BeginTx(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -231,7 +232,7 @@ func TestReadOnlyDB_BeginTx(t *testing.T) {
 func TestReadOnlyDB_Ping(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -247,7 +248,7 @@ func TestReadOnlyDB_Ping(t *testing.T) {
 func TestReadOnlyDB_UnderlyingDB(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -262,7 +263,7 @@ func TestBuilderOpenReadOnly(t *testing.T) {
 	ctx := context.Background()
 
 	builder := NewBuilder().
-		AddPath("testdata/test.csv")
+		AddPath(filepath.Join("testdata", "test.csv"))
 
 	validatedBuilder, err := builder.Build(ctx)
 	require.NoError(t, err)
@@ -322,7 +323,7 @@ func TestIsWriteStatement(t *testing.T) {
 func TestReadOnlyStmt_Query(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -346,7 +347,7 @@ func TestReadOnlyStmt_Query(t *testing.T) {
 func TestReadOnlyStmt_QueryContext(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -370,7 +371,7 @@ func TestReadOnlyStmt_QueryContext(t *testing.T) {
 func TestReadOnlyStmt_QueryRow(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -388,7 +389,7 @@ func TestReadOnlyStmt_QueryRow(t *testing.T) {
 func TestReadOnlyStmt_QueryRowContext(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -406,7 +407,7 @@ func TestReadOnlyStmt_QueryRowContext(t *testing.T) {
 func TestReadOnlyStmt_ExecNonWrite(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -430,7 +431,7 @@ func TestReadOnlyStmt_ExecNonWrite(t *testing.T) {
 func TestReadOnlyTx_QueryContext(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -454,7 +455,7 @@ func TestReadOnlyTx_QueryContext(t *testing.T) {
 func TestReadOnlyTx_QueryRowContext(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -473,7 +474,7 @@ func TestReadOnlyTx_QueryRowContext(t *testing.T) {
 func TestReadOnlyTx_ExecContextRejectsWrite(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -491,7 +492,7 @@ func TestReadOnlyTx_ExecContextRejectsWrite(t *testing.T) {
 func TestReadOnlyTx_ExecContextAllowsNonWrite(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -509,7 +510,7 @@ func TestReadOnlyTx_ExecContextAllowsNonWrite(t *testing.T) {
 func TestReadOnlyTx_Commit(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -531,7 +532,7 @@ func TestReadOnlyTx_Commit(t *testing.T) {
 func TestReadOnlyTx_Prepare(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -554,7 +555,7 @@ func TestReadOnlyTx_Prepare(t *testing.T) {
 func TestReadOnlyTx_PrepareContext(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -579,7 +580,7 @@ func TestReadOnlyActuallyPreventsWrites(t *testing.T) {
 	ctx := context.Background()
 
 	// Open the database normally to get initial state
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 
 	var initialCount int
@@ -588,7 +589,7 @@ func TestReadOnlyActuallyPreventsWrites(t *testing.T) {
 	require.NoError(t, db.Close())
 
 	// Now open as read-only and try to modify
-	db2, err := OpenContext(ctx, "testdata/test.csv")
+	db2, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db2.Close()
 
@@ -623,7 +624,7 @@ func TestReadOnlyActuallyPreventsWrites(t *testing.T) {
 func TestReadOnlyTxActuallyPreventsWrites(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -657,7 +658,7 @@ func TestReadOnlyTxActuallyPreventsWrites(t *testing.T) {
 func TestReadOnlyStmtExecBlocked(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -681,7 +682,7 @@ func TestReadOnlyStmtExecBlocked(t *testing.T) {
 func TestReadOnlyTx_ExecAllowsNonWriteExec(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -700,7 +701,7 @@ func TestReadOnlyTx_ExecAllowsNonWriteExec(t *testing.T) {
 func TestReadOnlyClose(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 
 	rodb := NewReadOnlyDB(db)
@@ -725,7 +726,7 @@ func TestReadOnlyClose(t *testing.T) {
 func TestReadOnlyDB_PrepareContextError(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 
 	rodb := NewReadOnlyDB(db)
@@ -741,7 +742,7 @@ func TestReadOnlyDB_PrepareContextError(t *testing.T) {
 func TestReadOnlyDB_BeginTxError(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 
 	rodb := NewReadOnlyDB(db)
@@ -757,7 +758,7 @@ func TestReadOnlyDB_BeginTxError(t *testing.T) {
 func TestReadOnlyTx_PrepareContextError(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, "testdata/test.csv")
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 
 	rodb := NewReadOnlyDB(db)

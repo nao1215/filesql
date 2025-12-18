@@ -224,11 +224,16 @@ func fileParserTableDataToTable(td *fileparser.TableData, tableName string) *tab
 	}
 
 	// Convert column types using parser_bridge
+	// Use bounds check to handle potential mismatch between headers and column types
 	columnInfos := make([]columnInfo, len(td.Headers))
 	for i, name := range td.Headers {
+		colType := columnTypeText // Default to text if column type is not available
+		if i < len(td.ColumnTypes) {
+			colType = parserColumnType(td.ColumnTypes[i])
+		}
 		columnInfos[i] = columnInfo{
 			Name: name,
-			Type: parserColumnType(td.ColumnTypes[i]),
+			Type: colType,
 		}
 	}
 
