@@ -318,6 +318,69 @@ parquetOptions := filesql.NewDumpOptions().
 // 注意：Parquet 导出功能已实现（不支持外部压缩，请使用 Parquet 的内置压缩）
 ```
 
+### 自定义日志器
+
+filesql 通过 `Logger` 接口支持可插拔日志记录。默认使用零性能开销的 no-op 日志器。您可以注入自己的日志器（例如 `slog`）用于调试和监控。
+
+```go
+import (
+    "log/slog"
+    "os"
+    "github.com/nao1215/filesql"
+)
+
+// 创建 slog 日志器
+slogLogger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+    Level: slog.LevelDebug,
+}))
+
+// 使用 SlogAdapter 包装并传递给构建器
+logger := filesql.NewSlogAdapter(slogLogger)
+
+validatedBuilder, err := filesql.NewBuilder().
+    WithLogger(logger).
+    AddPath("data.csv").
+    Build(ctx)
+```
+
+#### Logger 接口
+
+```go
+type Logger interface {
+    Debug(msg string, args ...any)
+    Info(msg string, args ...any)
+    Warn(msg string, args ...any)
+    Error(msg string, args ...any)
+    With(args ...any) Logger
+}
+```
+
+#### 上下文感知日志器
+
+对于上下文感知日志记录，使用 `ContextLogger`：
+
+```go
+type ContextLogger interface {
+    Logger
+    DebugContext(ctx context.Context, msg string, args ...any)
+    InfoContext(ctx context.Context, msg string, args ...any)
+    WarnContext(ctx context.Context, msg string, args ...any)
+    ErrorContext(ctx context.Context, msg string, args ...any)
+}
+
+// 使用 SlogContextAdapter 进行上下文感知日志记录
+logger := filesql.NewSlogContextAdapter(slogLogger)
+```
+
+#### 性能
+
+| 日志器类型 | 性能 | 内存 |
+|-----------|------|------|
+| nopLogger（默认） | ~0.2 ns/op | 0 B/op |
+| SlogAdapter | ~1000 ns/op | ~630 B/op |
+
+默认的 no-op 日志器几乎没有开销，因此在生产代码中保留日志调用是安全的。
+
 ## 表命名规则
 
 filesql 自动从文件路径推导表名：

@@ -317,6 +317,69 @@ parquetOptions := filesql.NewDumpOptions().
 // Примечание: Экспорт Parquet реализован (внешнее сжатие не поддерживается, используйте встроенное сжатие Parquet)
 ```
 
+### Пользовательский логгер
+
+filesql поддерживает подключаемое логирование через интерфейс `Logger`. По умолчанию используется no-op логгер с нулевыми накладными расходами на производительность. Вы можете внедрить свой собственный логгер (например, `slog`) для отладки и мониторинга.
+
+```go
+import (
+    "log/slog"
+    "os"
+    "github.com/nao1215/filesql"
+)
+
+// Создать slog логгер
+slogLogger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+    Level: slog.LevelDebug,
+}))
+
+// Обернуть его в SlogAdapter и передать в builder
+logger := filesql.NewSlogAdapter(slogLogger)
+
+validatedBuilder, err := filesql.NewBuilder().
+    WithLogger(logger).
+    AddPath("data.csv").
+    Build(ctx)
+```
+
+#### Интерфейс Logger
+
+```go
+type Logger interface {
+    Debug(msg string, args ...any)
+    Info(msg string, args ...any)
+    Warn(msg string, args ...any)
+    Error(msg string, args ...any)
+    With(args ...any) Logger
+}
+```
+
+#### Логгер с контекстом
+
+Для логирования с контекстом используйте `ContextLogger`:
+
+```go
+type ContextLogger interface {
+    Logger
+    DebugContext(ctx context.Context, msg string, args ...any)
+    InfoContext(ctx context.Context, msg string, args ...any)
+    WarnContext(ctx context.Context, msg string, args ...any)
+    ErrorContext(ctx context.Context, msg string, args ...any)
+}
+
+// Используйте SlogContextAdapter для логирования с контекстом
+logger := filesql.NewSlogContextAdapter(slogLogger)
+```
+
+#### Производительность
+
+| Тип логгера | Производительность | Память |
+|-------------|-------------------|--------|
+| nopLogger (по умолчанию) | ~0.2 нс/оп | 0 Б/оп |
+| SlogAdapter | ~1000 нс/оп | ~630 Б/оп |
+
+Логгер no-op по умолчанию имеет практически нулевые накладные расходы, что делает безопасным оставление вызовов логирования в продакшен-коде.
+
 ## Правила именования таблиц
 
 filesql автоматически выводит имена таблиц из путей к файлам:

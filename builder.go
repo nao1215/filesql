@@ -53,6 +53,8 @@ type DBBuilder struct {
 	autoSaveConfig *autoSaveConfig
 	// defaultChunkSize is the default chunk size for reading large files (10MB)
 	defaultChunkSize int
+	// logger is the logger instance for internal logging
+	logger Logger
 
 	// Internal processors for handling different responsibilities
 	validator       *validator
@@ -93,6 +95,7 @@ func NewBuilder() *DBBuilder {
 		parsedTables:     make([]*table, 0),
 		autoSaveConfig:   nil, // Default: no auto-save
 		defaultChunkSize: chunkSize,
+		logger:           newNopLogger(), // Default: no-op logger
 
 		// Initialize internal processors
 		validator:       newValidator(),
@@ -160,6 +163,28 @@ func (b *DBBuilder) AddReader(reader io.Reader, tableName string, fileType FileT
 func (b *DBBuilder) SetDefaultChunkSize(size int) *DBBuilder {
 	if size > 0 {
 		b.defaultChunkSize = size
+	}
+	return b
+}
+
+// WithLogger sets a custom logger for internal operations.
+//
+// The logger interface is compatible with slog.Logger. You can use the provided
+// SlogAdapter to wrap an existing slog.Logger, or implement your own Logger.
+//
+// Examples:
+//
+//	// Using slog
+//	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+//	builder.WithLogger(filesql.NewSlogAdapter(logger))
+//
+//	// Using a custom logger
+//	builder.WithLogger(myCustomLogger)
+//
+// Returns self for chaining.
+func (b *DBBuilder) WithLogger(logger Logger) *DBBuilder {
+	if logger != nil {
+		b.logger = logger
 	}
 	return b
 }
@@ -254,6 +279,8 @@ func (b *DBBuilder) DisableAutoSave() *DBBuilder {
 //
 // Returns the same builder instance for method chaining, or an error if validation fails.
 func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
+	b.logger.Debug("starting build", "paths", len(b.paths), "filesystems", len(b.filesystems), "readers", len(b.readers))
+
 	// Validate that we have at least one input
 	if len(b.paths) == 0 && len(b.filesystems) == 0 && len(b.readers) == 0 {
 		return nil, fmt.Errorf("%w: at least one path must be provided", ErrNoFiles)
@@ -290,6 +317,11 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 		return nil, err
 	}
 
+	// Pass logger to internal processors
+	b.streamProcessor.setLogger(b.logger)
+	b.fileProcessor.setLogger(b.logger)
+
+	b.logger.Info("build completed", "collected_paths", len(b.collectedPaths), "readers", len(b.readers))
 	return b, nil
 }
 
@@ -311,6 +343,8 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 //
 // Returns a *sql.DB connection or an error if the database cannot be created.
 func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
+	b.logger.Debug("opening database")
+
 	// Use validator to validate inputs availability
 	if err := b.validator.validateInputsAvailable(b.collectedPaths, b.readers); err != nil {
 		return nil, err
@@ -319,18 +353,22 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 	// Use file processor to deduplicate compressed files
 	b.collectedPaths = b.fileProcessor.deduplicateCompressedFiles(b.collectedPaths)
 
+	b.logger.Debug("creating in-memory database")
 	db, err := b.createInMemoryDatabase()
 	if err != nil {
+		b.logger.Error("failed to create database", "error", err)
 		return nil, err
 	}
 
 	// Use stream processor for all streaming operations (now includes XLSX support)
 	if err := b.streamProcessor.streamAllFilesToDatabase(ctx, db, b.collectedPaths); err != nil {
+		b.logger.Error("failed to stream files", "error", err)
 		_ = db.Close() // Ignore close error during error handling
 		return nil, err
 	}
 
 	if err := b.streamProcessor.streamAllReadersToDatabase(ctx, db, b.readers); err != nil {
+		b.logger.Error("failed to stream readers", "error", err)
 		_ = db.Close() // Ignore close error during error handling
 		return nil, err
 	}
@@ -345,6 +383,7 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 		return nil, err
 	}
 
+	b.logger.Info("database opened successfully")
 	return db, nil
 }
 

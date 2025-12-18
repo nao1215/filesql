@@ -317,6 +317,69 @@ parquetOptions := filesql.NewDumpOptions().
 // Nota: La funcionalidad de exportación está implementada (compresión externa no soportada, use la compresión integrada de Parquet)
 ```
 
+### Logger Personalizado
+
+filesql soporta logging conectable a través de la interfaz `Logger`. Por defecto, se usa un logger no-op con cero sobrecarga de rendimiento. Puedes inyectar tu propio logger (por ejemplo, `slog`) para depuración y monitoreo.
+
+```go
+import (
+    "log/slog"
+    "os"
+    "github.com/nao1215/filesql"
+)
+
+// Crear un logger slog
+slogLogger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+    Level: slog.LevelDebug,
+}))
+
+// Envolverlo con SlogAdapter y pasarlo al builder
+logger := filesql.NewSlogAdapter(slogLogger)
+
+validatedBuilder, err := filesql.NewBuilder().
+    WithLogger(logger).
+    AddPath("data.csv").
+    Build(ctx)
+```
+
+#### Interfaz Logger
+
+```go
+type Logger interface {
+    Debug(msg string, args ...any)
+    Info(msg string, args ...any)
+    Warn(msg string, args ...any)
+    Error(msg string, args ...any)
+    With(args ...any) Logger
+}
+```
+
+#### Logger con Contexto
+
+Para logging con contexto, usa `ContextLogger`:
+
+```go
+type ContextLogger interface {
+    Logger
+    DebugContext(ctx context.Context, msg string, args ...any)
+    InfoContext(ctx context.Context, msg string, args ...any)
+    WarnContext(ctx context.Context, msg string, args ...any)
+    ErrorContext(ctx context.Context, msg string, args ...any)
+}
+
+// Usa SlogContextAdapter para logging con contexto
+logger := filesql.NewSlogContextAdapter(slogLogger)
+```
+
+#### Rendimiento
+
+| Tipo de Logger | Rendimiento | Memoria |
+|----------------|-------------|---------|
+| nopLogger (por defecto) | ~0.2 ns/op | 0 B/op |
+| SlogAdapter | ~1000 ns/op | ~630 B/op |
+
+El logger no-op por defecto tiene prácticamente cero sobrecarga, haciendo seguro dejar llamadas de logging en código de producción.
+
 ## Reglas de nomenclatura de tablas
 
 filesql deriva automáticamente los nombres de las tablas de las rutas de archivo:

@@ -21,32 +21,52 @@ func streamError(sentinel error, format string, args ...any) error {
 // streamProcessor handles streaming operations for database loading
 type streamProcessor struct {
 	chunkSize int
+	logger    Logger
 }
 
 // newStreamProcessor creates a new stream processor instance
 func newStreamProcessor(chunkSize int) *streamProcessor {
 	return &streamProcessor{
 		chunkSize: chunkSize,
+		logger:    newNopLogger(),
+	}
+}
+
+// setLogger sets the logger for the stream processor
+func (sp *streamProcessor) setLogger(logger Logger) {
+	if logger != nil {
+		sp.logger = logger
 	}
 }
 
 // streamAllFilesToDatabase streams all collected file paths to the database
 func (sp *streamProcessor) streamAllFilesToDatabase(ctx context.Context, db *sql.DB, collectedPaths []string) error {
-	for _, path := range collectedPaths {
+	sp.logger.Info("starting file streaming", "file_count", len(collectedPaths))
+	for i, path := range collectedPaths {
+		sp.logger.Debug("streaming file", "path", path, "index", i+1, "total", len(collectedPaths))
 		if err := sp.streamFileToDatabase(ctx, db, path); err != nil {
+			sp.logger.Error("failed to stream file", "path", path, "error", err)
 			return streamError(ErrParsing, "failed to stream file %s: %v", path, err)
 		}
 	}
+	sp.logger.Info("completed file streaming", "file_count", len(collectedPaths))
 	return nil
 }
 
 // streamAllReadersToDatabase streams all reader inputs to the database
 func (sp *streamProcessor) streamAllReadersToDatabase(ctx context.Context, db *sql.DB, readers []readerInput) error {
-	for _, readerInput := range readers {
+	if len(readers) == 0 {
+		return nil
+	}
+	sp.logger.Info("starting reader streaming", "reader_count", len(readers))
+	for i, readerInput := range readers {
+		sp.logger.Debug("streaming reader", "table", readerInput.tableName, "file_type", readerInput.fileType.String(), "index", i+1, "total", len(readers))
 		if err := sp.streamReaderToDatabase(ctx, db, readerInput); err != nil {
+			sp.logger.Error("failed to stream reader", "table", readerInput.tableName, "error", err)
 			return streamError(ErrParsing, "failed to stream reader input for table '%s': %v", readerInput.tableName, err)
 		}
 	}
+	sp.logger.Info("completed reader streaming", "reader_count", len(readers))
 	return nil
 }
 
@@ -54,55 +74,70 @@ func (sp *streamProcessor) streamAllReadersToDatabase(ctx context.Context, db *s
 func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db *sql.DB, filePath string) error {
 	// Check if file is ACH format
 	if isACHFile(filePath) {
+		sp.logger.Debug("detected ACH file format", "path", filePath)
 		return sp.streamACHFileToDatabase(ctx, db, filePath)
 	}
 
 	// Check if file is supported
 	if !isSupportedFile(filePath) {
+		sp.logger.Warn("unsupported file format", "path", filePath)
 		return fmt.Errorf("%w: %s", ErrUnsupportedFormat, filePath)
 	}
 
 	// Open the file and create a reader
 	file, err := os.Open(filePath) //nolint:gosec // File path is validated and comes from user input
 	if err != nil {
+		sp.logger.Error("failed to open file", "path", filePath, "error", err)
 		return fmt.Errorf("%w: failed to open file %s: %s", ErrIOOperation, filePath, err.Error())
 	}
 	defer file.Close()
 
 	// Check if file is empty before processing
-	if fileInfo, err := file.Stat(); err != nil {
+	fileInfo, err := file.Stat()
+	if err != nil {
+		sp.logger.Error("failed to get file info", "path", filePath, "error", err)
 		return fmt.Errorf("%w: failed to get file info for %s: %s", ErrIOOperation, filePath, err.Error())
-	} else if fileInfo.Size() == 0 {
+	}
+	if fileInfo.Size() == 0 {
+		sp.logger.Warn("empty file detected", "path", filePath)
 		return fmt.Errorf("%w: file is empty", ErrEmptyData)
 	}
+	sp.logger.Debug("file opened", "path", filePath, "size", fileInfo.Size())
 
 	// Create file model to determine type and table name
 	fileModel := newFile(filePath)
 	baseFileType := fileModel.getFileType().baseType()
+	sp.logger.Debug("detected file type", "path", filePath, "type", baseFileType.String())
 
 	// Create decompressed reader if needed
 	reader, closer, err := sp.createDecompressedReader(file, filePath)
 	if err != nil {
+		sp.logger.Error("failed to create decompressed reader", "path", filePath, "error", err)
 		return fmt.Errorf("%w: failed to create decompressed reader for %s: %s", ErrCompression, filePath, err.Error())
+	}
+	if closer != nil {
+		sp.logger.Debug("compression detected, created decompressed reader", "path", filePath)
 	}
 	defer func() {
 		if closer != nil {
-			if closeErr := closer(); closeErr != nil { //nolint:revive,staticcheck
-				// Log or handle close error if needed in the future
-				// For now, we intentionally ignore close errors during cleanup
+			if closeErr := closer(); closeErr != nil {
+				sp.logger.Debug("error closing decompressed reader", "path", filePath, "error", closeErr)
 			}
 		}
 	}()
 
 	// Handle XLSX files specially - each sheet becomes a separate table
 	if baseFileType == FileTypeXLSX {
+		sp.logger.Debug("processing XLSX file with multiple sheets", "path", filePath)
 		return sp.streamXLSXFileToDatabase(ctx, db, reader, filePath)
 	}
 
 	// Create reader input for streaming
+	tableName := sanitizeTableName(tableFromFilePath(filePath))
+	sp.logger.Debug("streaming file to table", "path", filePath, "table", tableName, "type", baseFileType.String())
 	readerInput := readerInput{
 		reader:    reader, // Use decompressed reader
-		tableName: sanitizeTableName(tableFromFilePath(filePath)),
+		tableName: tableName,
 		fileType:  baseFileType,
 	}
 	return sp.streamReaderToDatabase(ctx, db, readerInput)
@@ -110,20 +145,28 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db *sql.DB,
 
 // streamACHFileToDatabase handles ACH files by creating multiple tables
 func (sp *streamProcessor) streamACHFileToDatabase(ctx context.Context, db *sql.DB, filePath string) error {
+	sp.logger.Debug("processing ACH file", "path", filePath)
+
 	// Open the file
 	file, err := os.Open(filePath) //nolint:gosec // File path is validated and comes from user input
 	if err != nil {
+		sp.logger.Error("failed to open ACH file", "path", filePath, "error", err)
 		return fmt.Errorf("%w: failed to open ACH file %s: %s", ErrIOOperation, filePath, err.Error())
 	}
 	defer file.Close()
 
 	// Check if file is empty
-	if fileInfo, err := file.Stat(); err != nil {
+	fileInfo, err := file.Stat()
+	if err != nil {
+		sp.logger.Error("failed to get ACH file info", "path", filePath, "error", err)
 		return fmt.Errorf("%w: failed to get file info for %s: %s", ErrIOOperation, filePath, err.Error())
-	} else if fileInfo.Size() == 0 {
+	}
+	if fileInfo.Size() == 0 {
+		sp.logger.Warn("empty ACH file detected", "path", filePath)
 		return fmt.Errorf("%w: ACH file is empty", ErrEmptyData)
 	}
 
+	sp.logger.Debug("streaming ACH file to database", "path", filePath, "size", fileInfo.Size())
 	return streamACHFileToDatabase(ctx, db, file, filePath)
 }
 
@@ -145,6 +188,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 	}
 
 	if tableExists > 0 {
+		sp.logger.Warn("table already exists", "table", input.tableName)
 		return fmt.Errorf("%w: table '%s' already exists from another file", ErrDuplicateTable, input.tableName)
 	}
 
@@ -157,9 +201,13 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 	var tx *sql.Tx
 
 	// Process data in chunks with transaction batching for performance
+	var chunkCount int
+	var totalRows int
 	err = parser.ProcessInChunks(input.reader, func(chunk *tableChunk) error {
+		chunkCount++
 		// Create table on first chunk
 		if !tableCreated {
+			sp.logger.Debug("creating table", "table", input.tableName, "columns", len(chunk.getHeaders()))
 			if err := sp.createTableFromChunk(ctx, db, chunk); err != nil {
 				return fmt.Errorf("%w: failed to create table: %s", ErrDatabaseOperation, err.Error())
 			}
@@ -180,9 +228,13 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 			}
 
 			tableCreated = true
+			sp.logger.Info("table created", "table", input.tableName)
 		}
 
 		// Insert chunk data
+		rowsInChunk := len(chunk.getRecords())
+		totalRows += rowsInChunk
+		sp.logger.Debug("inserting chunk", "table", input.tableName, "chunk", chunkCount, "rows", rowsInChunk)
 		if err := sp.insertChunkData(ctx, insertStmt, chunk); err != nil {
 			return fmt.Errorf("%w: failed to insert chunk data: %s", ErrDatabaseOperation, err.Error())
 		}
@@ -193,11 +245,13 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 	// Handle transaction commit/rollback
 	if tx != nil {
 		if err != nil {
+			sp.logger.Debug("rolling back transaction", "table", input.tableName, "error", err)
 			_ = tx.Rollback() //nolint:errcheck // Ignore rollback error during error handling
 		} else {
 			if commitErr := tx.Commit(); commitErr != nil {
 				return fmt.Errorf("%w: failed to commit transaction: %s", ErrDatabaseOperation, commitErr.Error())
 			}
+			sp.logger.Debug("committed transaction", "table", input.tableName, "chunks", chunkCount, "total_rows", totalRows)
 		}
 	}
 
@@ -407,19 +461,25 @@ func (sp *streamProcessor) createDecompressedReader(file *os.File, filePath stri
 
 // streamXLSXFileToDatabase handles XLSX files by creating separate tables for each sheet
 func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db *sql.DB, reader io.Reader, filePath string) error {
+	sp.logger.Debug("reading XLSX data into memory", "path", filePath)
+
 	// Read all data into memory (XLSX requires random access)
 	data, err := io.ReadAll(reader)
 	if err != nil {
+		sp.logger.Error("failed to read XLSX data", "path", filePath, "error", err)
 		return fmt.Errorf("%w: failed to read XLSX data: %s", ErrIOOperation, err.Error())
 	}
 
 	if len(data) == 0 {
+		sp.logger.Warn("empty XLSX file", "path", filePath)
 		return fmt.Errorf("%w: empty XLSX file", ErrEmptyData)
 	}
+	sp.logger.Debug("XLSX data loaded", "path", filePath, "size", len(data))
 
 	// Open XLSX file from bytes
 	xlsxFile, err := excelize.OpenReader(bytes.NewReader(data))
 	if err != nil {
+		sp.logger.Error("failed to open XLSX file", "path", filePath, "error", err)
 		return fmt.Errorf("%w: failed to open XLSX file: %s", ErrParsing, err.Error())
 	}
 	defer func() {
@@ -429,26 +489,32 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db *sql
 	// Get all sheet names
 	sheetNames := xlsxFile.GetSheetList()
 	if len(sheetNames) == 0 {
+		sp.logger.Warn("no sheets found in XLSX file", "path", filePath)
 		return fmt.Errorf("%w: no sheets found in XLSX file", ErrEmptyData)
 	}
+	sp.logger.Info("processing XLSX file", "path", filePath, "sheet_count", len(sheetNames))
 
 	// Base table name from file path (sanitize to ensure a valid identifier)
 	baseTableName := sanitizeTableName(tableFromFilePath(filePath))
 
 	// Process each sheet as a separate table
-	for _, sheetName := range sheetNames {
+	for i, sheetName := range sheetNames {
+		sp.logger.Debug("processing sheet", "path", filePath, "sheet", sheetName, "index", i+1, "total", len(sheetNames))
 		rows, err := xlsxFile.GetRows(sheetName)
 		if err != nil {
+			sp.logger.Error("failed to read sheet", "path", filePath, "sheet", sheetName, "error", err)
 			return fmt.Errorf("%w: failed to read sheet %s: %s", ErrParsing, sheetName, err.Error())
 		}
 
 		// Skip empty sheets
 		if len(rows) == 0 {
+			sp.logger.Debug("skipping empty sheet", "path", filePath, "sheet", sheetName)
 			continue
 		}
 
 		// Create table name: filename_sheetname
 		tableName := fmt.Sprintf("%s_%s", baseTableName, sanitizeTableName(sheetName))
+		sp.logger.Debug("creating table from sheet", "path", filePath, "sheet", sheetName, "table", tableName, "rows", len(rows))
 
 		// Check if table already exists
 		var tableExists int

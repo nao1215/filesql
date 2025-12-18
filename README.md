@@ -318,6 +318,69 @@ parquetOptions := filesql.NewDumpOptions().
 // Note: Parquet export is implemented, but external compression is not supported (use Parquet's built-in compression)
 ```
 
+### Custom Logger
+
+filesql supports pluggable logging via the `Logger` interface. By default, a no-op logger is used with zero performance overhead. You can inject your own logger (e.g., `slog`) for debugging and monitoring.
+
+```go
+import (
+    "log/slog"
+    "os"
+    "github.com/nao1215/filesql"
+)
+
+// Create a slog logger
+slogLogger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+    Level: slog.LevelDebug,
+}))
+
+// Wrap it with SlogAdapter and pass to the builder
+logger := filesql.NewSlogAdapter(slogLogger)
+
+validatedBuilder, err := filesql.NewBuilder().
+    WithLogger(logger).
+    AddPath("data.csv").
+    Build(ctx)
+```
+
+#### Logger Interface
+
+```go
+type Logger interface {
+    Debug(msg string, args ...any)
+    Info(msg string, args ...any)
+    Warn(msg string, args ...any)
+    Error(msg string, args ...any)
+    With(args ...any) Logger
+}
+```
+
+#### Context-Aware Logger
+
+For context-aware logging, use `ContextLogger`:
+
+```go
+type ContextLogger interface {
+    Logger
+    DebugContext(ctx context.Context, msg string, args ...any)
+    InfoContext(ctx context.Context, msg string, args ...any)
+    WarnContext(ctx context.Context, msg string, args ...any)
+    ErrorContext(ctx context.Context, msg string, args ...any)
+}
+
+// Use SlogContextAdapter for context-aware logging
+logger := filesql.NewSlogContextAdapter(slogLogger)
+```
+
+#### Performance
+
+| Logger Type | Performance | Memory |
+|-------------|-------------|--------|
+| nopLogger (default) | ~0.2 ns/op | 0 B/op |
+| SlogAdapter | ~1000 ns/op | ~630 B/op |
+
+The default no-op logger has virtually zero overhead, making it safe to leave logging calls in production code.
+
 ## Table Naming Rules
 
 filesql automatically derives table names from file paths:
