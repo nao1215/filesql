@@ -37,6 +37,7 @@ import (
 //   - Embedded filesystems (AddFS)
 //   - io.Reader streams (AddReader)
 //   - Auto-save functionality (EnableAutoSave)
+//   - Read-only mode (OpenReadOnly)
 type DBBuilder struct {
 	// paths contains regular file paths
 	paths []string
@@ -345,6 +346,42 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 	}
 
 	return db, nil
+}
+
+// OpenReadOnly creates a read-only database connection.
+// This is a convenience method that calls Open() and wraps the result in a ReadOnlyDB.
+// All SELECT queries work normally, but write operations return ErrReadOnly.
+//
+// This is useful for audit scenarios where you want to query data without
+// risk of accidental modification.
+//
+// Example:
+//
+//	builder := filesql.NewBuilder().
+//		AddPath("payment.ach")
+//
+//	validatedBuilder, err := builder.Build(ctx)
+//	if err != nil {
+//		return err
+//	}
+//
+//	rodb, err := validatedBuilder.OpenReadOnly(ctx)
+//	if err != nil {
+//		return err
+//	}
+//	defer rodb.Close()
+//
+//	// SELECT works
+//	rows, _ := rodb.Query("SELECT * FROM payment_entries")
+//
+//	// Write operations are rejected
+//	_, err = rodb.Exec("DELETE FROM payment_entries") // returns ErrReadOnly
+func (b *DBBuilder) OpenReadOnly(ctx context.Context) (*ReadOnlyDB, error) {
+	db, err := b.Open(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return NewReadOnlyDB(db), nil
 }
 
 // deduplicateCompressedFiles removes compressed duplicates when uncompressed versions exist.

@@ -1,0 +1,287 @@
+package filesql
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"strings"
+)
+
+// ErrReadOnly is returned when a write operation is attempted on a read-only database.
+var ErrReadOnly = errors.New("database is read-only: write operations are not allowed")
+
+// ReadOnlyDB wraps a *sql.DB to prevent write operations.
+// All SELECT queries work normally, but INSERT, UPDATE, DELETE, DROP, ALTER, and CREATE
+// statements are rejected with ErrReadOnly.
+//
+// This is useful for audit scenarios where you want to view data without risk of modification.
+//
+// Example:
+//
+//	db, err := filesql.Open("payment.ach")
+//	if err != nil {
+//		return err
+//	}
+//	defer db.Close()
+//
+//	rodb := filesql.NewReadOnlyDB(db)
+//
+//	// SELECT works fine
+//	rows, err := rodb.Query("SELECT * FROM payment_entries")
+//
+//	// UPDATE/DELETE/INSERT are rejected
+//	_, err = rodb.Exec("DELETE FROM payment_entries") // returns ErrReadOnly
+type ReadOnlyDB struct {
+	db *sql.DB
+}
+
+// NewReadOnlyDB creates a read-only wrapper around an existing database connection.
+// The underlying database is not modified; write operations are simply rejected at the API level.
+func NewReadOnlyDB(db *sql.DB) *ReadOnlyDB {
+	return &ReadOnlyDB{db: db}
+}
+
+// isWriteStatement checks if the SQL statement is a write operation.
+func isWriteStatement(query string) bool {
+	// Normalize: trim whitespace and convert to uppercase for comparison
+	normalized := strings.ToUpper(strings.TrimSpace(query))
+
+	// Check for write operation keywords at the start of the statement
+	writeKeywords := []string{
+		"INSERT",
+		"UPDATE",
+		"DELETE",
+		"DROP",
+		"ALTER",
+		"CREATE",
+		"TRUNCATE",
+		"REPLACE",
+		"UPSERT",
+	}
+
+	for _, keyword := range writeKeywords {
+		if strings.HasPrefix(normalized, keyword) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// QueryContext executes a query that returns rows with context.
+func (r *ReadOnlyDB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return r.db.QueryContext(ctx, query, args...)
+}
+
+// Query executes a query that returns rows (SELECT statements).
+// Deprecated: Use QueryContext instead.
+func (r *ReadOnlyDB) Query(query string, args ...any) (*sql.Rows, error) {
+	return r.db.QueryContext(context.Background(), query, args...)
+}
+
+// QueryRowContext executes a query that returns at most one row with context.
+func (r *ReadOnlyDB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return r.db.QueryRowContext(ctx, query, args...)
+}
+
+// QueryRow executes a query that returns at most one row.
+// Deprecated: Use QueryRowContext instead.
+func (r *ReadOnlyDB) QueryRow(query string, args ...any) *sql.Row {
+	return r.db.QueryRowContext(context.Background(), query, args...)
+}
+
+// ExecContext rejects write operations and returns ErrReadOnly.
+// For read-only databases, use Query methods instead.
+func (r *ReadOnlyDB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if isWriteStatement(query) {
+		return nil, ErrReadOnly
+	}
+	return r.db.ExecContext(ctx, query, args...)
+}
+
+// Exec rejects write operations and returns ErrReadOnly.
+// For read-only databases, use Query methods instead.
+// Deprecated: Use ExecContext instead.
+func (r *ReadOnlyDB) Exec(query string, args ...any) (sql.Result, error) {
+	if isWriteStatement(query) {
+		return nil, ErrReadOnly
+	}
+	return r.db.ExecContext(context.Background(), query, args...)
+}
+
+// PrepareContext creates a prepared statement with context.
+func (r *ReadOnlyDB) PrepareContext(ctx context.Context, query string) (*ReadOnlyStmt, error) {
+	if isWriteStatement(query) {
+		return nil, ErrReadOnly
+	}
+	stmt, err := r.db.PrepareContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return &ReadOnlyStmt{stmt: stmt, isWrite: isWriteStatement(query)}, nil
+}
+
+// Prepare creates a prepared statement.
+// Deprecated: Use PrepareContext instead.
+func (r *ReadOnlyDB) Prepare(query string) (*ReadOnlyStmt, error) {
+	return r.PrepareContext(context.Background(), query)
+}
+
+// BeginTx starts a read-only transaction with context and options.
+func (r *ReadOnlyDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*ReadOnlyTx, error) {
+	tx, err := r.db.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return &ReadOnlyTx{tx: tx}, nil
+}
+
+// Begin starts a read-only transaction.
+// Deprecated: Use BeginTx instead.
+func (r *ReadOnlyDB) Begin() (*ReadOnlyTx, error) {
+	return r.BeginTx(context.Background(), nil)
+}
+
+// Close closes the underlying database connection.
+func (r *ReadOnlyDB) Close() error {
+	return r.db.Close()
+}
+
+// PingContext verifies the connection to the database with context.
+func (r *ReadOnlyDB) PingContext(ctx context.Context) error {
+	return r.db.PingContext(ctx)
+}
+
+// Ping verifies the connection to the database.
+// Deprecated: Use PingContext instead.
+func (r *ReadOnlyDB) Ping() error {
+	return r.db.PingContext(context.Background())
+}
+
+// DB returns the underlying *sql.DB.
+// Use with caution as this bypasses read-only protection.
+func (r *ReadOnlyDB) DB() *sql.DB {
+	return r.db
+}
+
+// ReadOnlyStmt wraps a *sql.Stmt to enforce read-only operations.
+type ReadOnlyStmt struct {
+	stmt    *sql.Stmt
+	isWrite bool
+}
+
+// Query executes a prepared query statement.
+// Deprecated: Use QueryContext instead.
+func (s *ReadOnlyStmt) Query(args ...any) (*sql.Rows, error) {
+	return s.stmt.QueryContext(context.Background(), args...)
+}
+
+// QueryContext executes a prepared query statement with context.
+func (s *ReadOnlyStmt) QueryContext(ctx context.Context, args ...any) (*sql.Rows, error) {
+	return s.stmt.QueryContext(ctx, args...)
+}
+
+// QueryRow executes a prepared query statement that returns at most one row.
+// Deprecated: Use QueryRowContext instead.
+func (s *ReadOnlyStmt) QueryRow(args ...any) *sql.Row {
+	return s.stmt.QueryRowContext(context.Background(), args...)
+}
+
+// QueryRowContext executes a prepared query statement that returns at most one row with context.
+func (s *ReadOnlyStmt) QueryRowContext(ctx context.Context, args ...any) *sql.Row {
+	return s.stmt.QueryRowContext(ctx, args...)
+}
+
+// Exec is not allowed for read-only statements.
+// Deprecated: Use ExecContext instead.
+func (s *ReadOnlyStmt) Exec(args ...any) (sql.Result, error) {
+	if s.isWrite {
+		return nil, ErrReadOnly
+	}
+	return s.stmt.ExecContext(context.Background(), args...)
+}
+
+// ExecContext is not allowed for read-only statements.
+func (s *ReadOnlyStmt) ExecContext(ctx context.Context, args ...any) (sql.Result, error) {
+	if s.isWrite {
+		return nil, ErrReadOnly
+	}
+	return s.stmt.ExecContext(ctx, args...)
+}
+
+// Close closes the statement.
+func (s *ReadOnlyStmt) Close() error {
+	return s.stmt.Close()
+}
+
+// ReadOnlyTx wraps a *sql.Tx to enforce read-only operations.
+type ReadOnlyTx struct {
+	tx *sql.Tx
+}
+
+// Query executes a query that returns rows.
+// Deprecated: Use QueryContext instead.
+func (t *ReadOnlyTx) Query(query string, args ...any) (*sql.Rows, error) {
+	return t.tx.QueryContext(context.Background(), query, args...)
+}
+
+// QueryContext executes a query that returns rows with context.
+func (t *ReadOnlyTx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return t.tx.QueryContext(ctx, query, args...)
+}
+
+// QueryRow executes a query that returns at most one row.
+// Deprecated: Use QueryRowContext instead.
+func (t *ReadOnlyTx) QueryRow(query string, args ...any) *sql.Row {
+	return t.tx.QueryRowContext(context.Background(), query, args...)
+}
+
+// QueryRowContext executes a query that returns at most one row with context.
+func (t *ReadOnlyTx) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return t.tx.QueryRowContext(ctx, query, args...)
+}
+
+// Exec rejects write operations.
+// Deprecated: Use ExecContext instead.
+func (t *ReadOnlyTx) Exec(query string, args ...any) (sql.Result, error) {
+	if isWriteStatement(query) {
+		return nil, ErrReadOnly
+	}
+	return t.tx.ExecContext(context.Background(), query, args...)
+}
+
+// ExecContext rejects write operations.
+func (t *ReadOnlyTx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if isWriteStatement(query) {
+		return nil, ErrReadOnly
+	}
+	return t.tx.ExecContext(ctx, query, args...)
+}
+
+// Commit commits the transaction.
+func (t *ReadOnlyTx) Commit() error {
+	return t.tx.Commit()
+}
+
+// Rollback aborts the transaction.
+func (t *ReadOnlyTx) Rollback() error {
+	return t.tx.Rollback()
+}
+
+// Prepare creates a prepared statement within the transaction.
+// Deprecated: Use PrepareContext instead.
+func (t *ReadOnlyTx) Prepare(query string) (*ReadOnlyStmt, error) {
+	return t.PrepareContext(context.Background(), query)
+}
+
+// PrepareContext creates a prepared statement within the transaction with context.
+func (t *ReadOnlyTx) PrepareContext(ctx context.Context, query string) (*ReadOnlyStmt, error) {
+	if isWriteStatement(query) {
+		return nil, ErrReadOnly
+	}
+	stmt, err := t.tx.PrepareContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return &ReadOnlyStmt{stmt: stmt, isWrite: isWriteStatement(query)}, nil
+}
