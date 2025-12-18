@@ -317,6 +317,69 @@ parquetOptions := filesql.NewDumpOptions().
 // 참고: Parquet 내보내기 기능이 구현되었습니다 (외부 압축은 지원하지 않으므로 Parquet의 내장 압축을 사용하세요)
 ```
 
+### 커스텀 로거
+
+filesql은 `Logger` 인터페이스를 통해 플러그형 로깅을 지원합니다. 기본적으로 성능 오버헤드가 없는 no-op 로거가 사용됩니다. 디버깅 및 모니터링을 위해 자체 로거(예: `slog`)를 주입할 수 있습니다.
+
+```go
+import (
+    "log/slog"
+    "os"
+    "github.com/nao1215/filesql"
+)
+
+// slog 로거 생성
+slogLogger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+    Level: slog.LevelDebug,
+}))
+
+// SlogAdapter로 래핑하고 빌더에 전달
+logger := filesql.NewSlogAdapter(slogLogger)
+
+validatedBuilder, err := filesql.NewBuilder().
+    WithLogger(logger).
+    AddPath("data.csv").
+    Build(ctx)
+```
+
+#### Logger 인터페이스
+
+```go
+type Logger interface {
+    Debug(msg string, args ...any)
+    Info(msg string, args ...any)
+    Warn(msg string, args ...any)
+    Error(msg string, args ...any)
+    With(args ...any) Logger
+}
+```
+
+#### 컨텍스트 인식 로거
+
+컨텍스트 인식 로깅에는 `ContextLogger`를 사용합니다:
+
+```go
+type ContextLogger interface {
+    Logger
+    DebugContext(ctx context.Context, msg string, args ...any)
+    InfoContext(ctx context.Context, msg string, args ...any)
+    WarnContext(ctx context.Context, msg string, args ...any)
+    ErrorContext(ctx context.Context, msg string, args ...any)
+}
+
+// 컨텍스트 인식 로깅에는 SlogContextAdapter 사용
+logger := filesql.NewSlogContextAdapter(slogLogger)
+```
+
+#### 성능
+
+| 로거 타입 | 성능 | 메모리 |
+|----------|------|--------|
+| nopLogger (기본값) | ~0.2 ns/op | 0 B/op |
+| SlogAdapter | ~1000 ns/op | ~630 B/op |
+
+기본 no-op 로거는 실질적으로 제로 오버헤드를 가지므로, 프로덕션 코드에 로깅 호출을 남겨두어도 안전합니다.
+
 ## 테이블 명명 규칙
 
 filesql은 파일 경로에서 자동으로 테이블 이름을 도출합니다:

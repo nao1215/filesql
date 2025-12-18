@@ -317,6 +317,69 @@ parquetOptions := filesql.NewDumpOptions().
 // Note: L'exportation Parquet est implémentée (compression externe non supportée, utilisez la compression intégrée de Parquet)
 ```
 
+### Logger Personnalisé
+
+filesql supporte le logging modulaire via l'interface `Logger`. Par défaut, un logger no-op est utilisé avec zéro surcharge de performance. Vous pouvez injecter votre propre logger (par exemple, `slog`) pour le débogage et la surveillance.
+
+```go
+import (
+    "log/slog"
+    "os"
+    "github.com/nao1215/filesql"
+)
+
+// Créer un logger slog
+slogLogger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+    Level: slog.LevelDebug,
+}))
+
+// L'envelopper avec SlogAdapter et le passer au builder
+logger := filesql.NewSlogAdapter(slogLogger)
+
+validatedBuilder, err := filesql.NewBuilder().
+    WithLogger(logger).
+    AddPath("data.csv").
+    Build(ctx)
+```
+
+#### Interface Logger
+
+```go
+type Logger interface {
+    Debug(msg string, args ...any)
+    Info(msg string, args ...any)
+    Warn(msg string, args ...any)
+    Error(msg string, args ...any)
+    With(args ...any) Logger
+}
+```
+
+#### Logger avec Contexte
+
+Pour le logging avec contexte, utilisez `ContextLogger` :
+
+```go
+type ContextLogger interface {
+    Logger
+    DebugContext(ctx context.Context, msg string, args ...any)
+    InfoContext(ctx context.Context, msg string, args ...any)
+    WarnContext(ctx context.Context, msg string, args ...any)
+    ErrorContext(ctx context.Context, msg string, args ...any)
+}
+
+// Utilisez SlogContextAdapter pour le logging avec contexte
+logger := filesql.NewSlogContextAdapter(slogLogger)
+```
+
+#### Performance
+
+| Type de Logger | Performance | Mémoire |
+|----------------|-------------|---------|
+| nopLogger (par défaut) | ~0.2 ns/op | 0 B/op |
+| SlogAdapter | ~1000 ns/op | ~630 B/op |
+
+Le logger no-op par défaut a pratiquement zéro surcharge, rendant sûr de laisser les appels de logging dans le code de production.
+
 ## Règles de nommage des tables
 
 filesql dérive automatiquement les noms de tables des chemins de fichiers :
