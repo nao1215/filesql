@@ -457,10 +457,14 @@ func DumpACHWithTableSet(ctx context.Context, db *sql.DB, baseTableName, outputP
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
-	defer file.Close()
 
 	if err := tableSet.WriteToWriter(file); err != nil {
+		_ = file.Close() // Ignore close error as we're already returning an error
 		return fmt.Errorf("failed to write ACH file: %w", err)
+	}
+
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("failed to close output file: %w", err)
 	}
 
 	return nil
