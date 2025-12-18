@@ -134,10 +134,11 @@ import (
 // ACH file extension
 const extACH = ".ach"
 
-// isACHFile checks if the file path has ACH extension.
+// isACHFile checks if the file path has ACH extension (case-insensitive).
 // Returns false for paths that are only the extension (e.g., ".ach").
+// Supports both ".ach" and ".ACH" extensions.
 func isACHFile(path string) bool {
-	return len(path) > len(extACH) && strings.HasSuffix(path, extACH)
+	return len(path) > len(extACH) && strings.EqualFold(path[len(path)-len(extACH):], extACH)
 }
 
 // parseACHFile parses an ACH file and returns multiple tables along with the TableSet.

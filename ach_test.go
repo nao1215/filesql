@@ -144,10 +144,12 @@ func TestIsACHFile(t *testing.T) {
 		expected bool
 	}{
 		{"payment.ach", true},
-		{"payment.ACH", false}, // case sensitive
+		{"payment.ACH", true}, // case insensitive
+		{"payment.Ach", true}, // mixed case
 		{"data.csv", false},
 		{"data.ach.gz", false}, // compression not supported yet
 		{".ach", false},        // too short
+		{".ACH", false},        // too short (uppercase)
 	}
 
 	for _, tt := range tests {
