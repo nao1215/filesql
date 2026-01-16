@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/apache/arrow/go/v18 v18.0.0-20241007013041-ab95a4d25142
-	github.com/klauspost/compress v1.18.2
+	github.com/klauspost/compress v1.18.3
 	github.com/nao1215/fileparser v0.3.1
 	github.com/pierrec/lz4/v4 v4.1.23
 	github.com/stretchr/testify v1.11.1
