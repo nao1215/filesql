@@ -40,14 +40,16 @@
 | `.ltsv` | LTSV | ラベル付きタブ区切り値 |
 | `.parquet` | Parquet | Apache Parquet 列指向形式 |
 | `.xlsx` | Excel XLSX | Microsoft Excel ワークブック形式 |
-| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz`, `.xlsx.gz` | Gzip圧縮 | Gzip圧縮ファイル |
-| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2` | Bzip2圧縮 | Bzip2圧縮ファイル |
-| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz` | XZ圧縮 | XZ圧縮ファイル |
-| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst` | Zstandard圧縮 | Zstandard圧縮ファイル |
-| `.csv.z`, `.tsv.z`, `.ltsv.z`, `.parquet.z`, `.xlsx.z` | Zlib圧縮 | Zlib圧縮ファイル |
-| `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy` | Snappy圧縮 | Snappy圧縮ファイル |
-| `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2` | S2圧縮 | S2圧縮ファイル（Snappy互換） |
-| `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4` | LZ4圧縮 | LZ4圧縮ファイル |
+| `.json` | JSON | JSON形式（フィールドアクセスには `json_extract()` を使用） |
+| `.jsonl` | JSONL | JSON Lines形式（1行に1つのJSONオブジェクト） |
+| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz`, `.xlsx.gz`, `.json.gz`, `.jsonl.gz` | Gzip圧縮 | Gzip圧縮ファイル |
+| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2`, `.json.bz2`, `.jsonl.bz2` | Bzip2圧縮 | Bzip2圧縮ファイル |
+| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz`, `.json.xz`, `.jsonl.xz` | XZ圧縮 | XZ圧縮ファイル |
+| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst`, `.json.zst`, `.jsonl.zst` | Zstandard圧縮 | Zstandard圧縮ファイル |
+| `.csv.z`, `.tsv.z`, `.ltsv.z`, `.parquet.z`, `.xlsx.z`, `.json.z`, `.jsonl.z` | Zlib圧縮 | Zlib圧縮ファイル |
+| `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy`, `.json.snappy`, `.jsonl.snappy` | Snappy圧縮 | Snappy圧縮ファイル |
+| `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2`, `.json.s2`, `.jsonl.s2` | S2圧縮 | S2圧縮ファイル（Snappy互換） |
+| `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4`, `.json.lz4`, `.jsonl.lz4` | LZ4圧縮 | LZ4圧縮ファイル |
 
 ## インストール
 
@@ -151,6 +153,34 @@ defer db.Close()
 
 // 利用可能なテーブルを確認
 rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
+```
+
+### JSON / JSONL サポート
+
+JSON・JSONLファイルは `data` TEXT カラムに生JSONとして格納されます。SQLite の `json_extract()` 関数でフィールドにアクセスできます:
+
+```go
+// JSONファイルを開く
+db, err := filesql.OpenContext(ctx, "users.json")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// json_extract() を使ったクエリ
+rows, err := db.QueryContext(ctx, `
+    SELECT json_extract(data, '$.name') AS name,
+           json_extract(data, '$.age') AS age
+    FROM users
+    WHERE json_extract(data, '$.age') > 25
+`)
+
+// ネストされたフィールドも対応
+rows, err = db.QueryContext(ctx, `
+    SELECT json_extract(data, '$.address.city') AS city
+    FROM users
+    WHERE json_extract(data, '$.address.country') = 'Japan'
+`)
 ```
 
 ## 高度な使用方法

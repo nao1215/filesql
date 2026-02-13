@@ -40,14 +40,16 @@ Rather than maintaining duplicate code across both projects, we extracted the co
 | `.ltsv` | LTSV | Labeled Tab-separated Values |
 | `.parquet` | Parquet | Apache Parquet columnar format |
 | `.xlsx` | Excel XLSX | Microsoft Excel workbook format |
-| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz`, `.xlsx.gz` | Gzip compressed | Gzip compressed files |
-| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2` | Bzip2 compressed | Bzip2 compressed files |
-| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz` | XZ compressed | XZ compressed files |
-| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst` | Zstandard compressed | Zstandard compressed files |
-| `.csv.z`, `.tsv.z`, `.ltsv.z`, `.parquet.z`, `.xlsx.z` | Zlib compressed | Zlib compressed files |
-| `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy` | Snappy compressed | Snappy compressed files |
-| `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2` | S2 compressed | S2 compressed files (Snappy compatible) |
-| `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4` | LZ4 compressed | LZ4 compressed files |
+| `.json` | JSON | JSON format (use `json_extract()` for field access) |
+| `.jsonl` | JSONL | JSON Lines format (one JSON object per line) |
+| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz`, `.xlsx.gz`, `.json.gz`, `.jsonl.gz` | Gzip compressed | Gzip compressed files |
+| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2`, `.json.bz2`, `.jsonl.bz2` | Bzip2 compressed | Bzip2 compressed files |
+| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz`, `.json.xz`, `.jsonl.xz` | XZ compressed | XZ compressed files |
+| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst`, `.json.zst`, `.jsonl.zst` | Zstandard compressed | Zstandard compressed files |
+| `.csv.z`, `.tsv.z`, `.ltsv.z`, `.parquet.z`, `.xlsx.z`, `.json.z`, `.jsonl.z` | Zlib compressed | Zlib compressed files |
+| `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy`, `.json.snappy`, `.jsonl.snappy` | Snappy compressed | Snappy compressed files |
+| `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2`, `.json.s2`, `.jsonl.s2` | S2 compressed | S2 compressed files (Snappy compatible) |
+| `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4`, `.json.lz4`, `.jsonl.lz4` | LZ4 compressed | LZ4 compressed files |
 | `.ach` | ACH (NACHA) | Automated Clearing House files (**Experimental**) |
 
 ## Installation
@@ -152,6 +154,34 @@ defer db.Close()
 
 // See what tables are available
 rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
+```
+
+### JSON / JSONL Support
+
+JSON and JSONL files are stored as raw JSON in a single `data` TEXT column. Use SQLite's `json_extract()` function to query fields:
+
+```go
+// Open a JSON file
+db, err := filesql.OpenContext(ctx, "users.json")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// Query using json_extract()
+rows, err := db.QueryContext(ctx, `
+    SELECT json_extract(data, '$.name') AS name,
+           json_extract(data, '$.age') AS age
+    FROM users
+    WHERE json_extract(data, '$.age') > 25
+`)
+
+// Nested fields work too
+rows, err = db.QueryContext(ctx, `
+    SELECT json_extract(data, '$.address.city') AS city
+    FROM users
+    WHERE json_extract(data, '$.address.country') = 'Japan'
+`)
 ```
 
 ## Advanced Usage

@@ -774,7 +774,7 @@ func (b *DBBuilder) createDecompressedReader(file *os.File, filePath string) (io
 
 // collectOriginalPaths collects original file paths for overwrite mode
 func (b *DBBuilder) collectOriginalPaths() []string {
-	var paths []string
+	paths := make([]string, 0, len(b.collectedPaths))
 	paths = append(paths, b.collectedPaths...)
 	return paths
 }

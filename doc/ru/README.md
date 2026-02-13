@@ -40,14 +40,16 @@
 | `.ltsv` | LTSV | Помеченные значения, разделённые табуляцией |
 | `.parquet` | Parquet | Колонночный формат Apache Parquet |
 | `.xlsx` | Excel XLSX | Формат рабочей книги Microsoft Excel |
-| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz`, `.xlsx.gz` | Сжатие Gzip | Файлы, сжатые Gzip |
-| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2` | Сжатие Bzip2 | Файлы, сжатые Bzip2 |
-| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz` | Сжатие XZ | Файлы, сжатые XZ |
-| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst` | Сжатие Zstandard | Файлы, сжатые Zstandard |
-| `.csv.z`, `.tsv.z`, `.ltsv.z`, `.parquet.z`, `.xlsx.z` | Сжатие Zlib | Файлы, сжатые Zlib |
-| `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy` | Сжатие Snappy | Файлы, сжатые Snappy |
-| `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2` | Сжатие S2 | Файлы, сжатые S2 (совместимо со Snappy) |
-| `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4` | Сжатие LZ4 | Файлы, сжатые LZ4 |
+| `.json` | JSON | Формат JSON (используйте `json_extract()` для доступа к полям) |
+| `.jsonl` | JSONL | Формат JSON Lines (один объект JSON на строку) |
+| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz`, `.xlsx.gz`, `.json.gz`, `.jsonl.gz` | Сжатие Gzip | Файлы, сжатые Gzip |
+| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2`, `.json.bz2`, `.jsonl.bz2` | Сжатие Bzip2 | Файлы, сжатые Bzip2 |
+| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz`, `.json.xz`, `.jsonl.xz` | Сжатие XZ | Файлы, сжатые XZ |
+| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst`, `.json.zst`, `.jsonl.zst` | Сжатие Zstandard | Файлы, сжатые Zstandard |
+| `.csv.z`, `.tsv.z`, `.ltsv.z`, `.parquet.z`, `.xlsx.z`, `.json.z`, `.jsonl.z` | Сжатие Zlib | Файлы, сжатые Zlib |
+| `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy`, `.json.snappy`, `.jsonl.snappy` | Сжатие Snappy | Файлы, сжатые Snappy |
+| `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2`, `.json.s2`, `.jsonl.s2` | Сжатие S2 | Файлы, сжатые S2 (совместимо со Snappy) |
+| `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4`, `.json.lz4`, `.jsonl.lz4` | Сжатие LZ4 | Файлы, сжатые LZ4 |
 
 ## Установка
 
@@ -151,6 +153,25 @@ defer db.Close()
 
 // Посмотреть, какие таблицы доступны
 rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
+```
+
+### Поддержка JSON / JSONL
+
+Файлы JSON и JSONL хранятся как необработанный JSON в одном столбце `data` типа TEXT. Используйте функцию `json_extract()` SQLite для доступа к полям:
+
+```go
+db, err := filesql.OpenContext(ctx, "users.json")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+rows, err := db.QueryContext(ctx, `
+    SELECT json_extract(data, '$.name') AS name,
+           json_extract(data, '$.age') AS age
+    FROM users
+    WHERE json_extract(data, '$.age') > 25
+`)
 ```
 
 ## Расширенное использование

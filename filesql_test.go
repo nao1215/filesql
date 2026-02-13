@@ -3528,8 +3528,9 @@ func TestParquetDirectParsing(t *testing.T) {
 			{"test.csv", true},
 			{"test.tsv", true},
 			{"test.ltsv", true},
-			{"test.txt", false},  // Unsupported format
-			{"test.json", false}, // Unsupported format
+			{"test.json", true},
+			{"test.jsonl", true},
+			{"test.txt", false}, // Unsupported format
 		}
 
 		for _, tf := range testFiles {
@@ -3543,6 +3544,10 @@ func TestParquetDirectParsing(t *testing.T) {
 				content = []byte("col1\tcol2\nval1\tval2\n")
 			} else if strings.Contains(tf.filename, ".ltsv") {
 				content = []byte("col1:val1\tcol2:val2\n")
+			} else if strings.HasSuffix(tf.filename, ".jsonl") {
+				content = []byte("{\"name\":\"Alice\"}\n")
+			} else if strings.HasSuffix(tf.filename, ".json") {
+				content = []byte("[{\"name\":\"Alice\"}]\n")
 			} else {
 				content = []byte("test content")
 			}
@@ -4609,5 +4614,185 @@ func TestEdgeCasesMemoryLimits(t *testing.T) {
 			assert.NoError(t, err, "Rows error on wide file")
 			return
 		}
+	})
+}
+
+func TestOpenJSON(t *testing.T) {
+	t.Parallel()
+
+	t.Run("opens JSON file and queries with json_extract", func(t *testing.T) {
+		t.Parallel()
+
+		db, err := Open(filepath.Join("testdata", "sample.json"))
+		require.NoError(t, err)
+		defer db.Close()
+
+		// Query using json_extract to access fields
+		rows, err := db.QueryContext(context.Background(),
+			"SELECT json_extract(data, '$.name') AS name FROM sample ORDER BY json_extract(data, '$.id')")
+		require.NoError(t, err)
+		defer rows.Close()
+
+		var names []string
+		for rows.Next() {
+			var name string
+			require.NoError(t, rows.Scan(&name))
+			names = append(names, name)
+		}
+		require.NoError(t, rows.Err())
+
+		assert.Equal(t, []string{"Alice", "Bob", "Charlie"}, names)
+	})
+
+	t.Run("opens JSON file and queries numeric field", func(t *testing.T) {
+		t.Parallel()
+
+		db, err := Open(filepath.Join("testdata", "sample.json"))
+		require.NoError(t, err)
+		defer db.Close()
+
+		var count int
+		err = db.QueryRowContext(context.Background(),
+			"SELECT COUNT(*) FROM sample WHERE json_extract(data, '$.age') > 28").Scan(&count)
+		require.NoError(t, err)
+
+		assert.Equal(t, 2, count) // Alice(30) and Charlie(35)
+	})
+
+	t.Run("opens nested JSON file and queries nested fields", func(t *testing.T) {
+		t.Parallel()
+
+		db, err := Open(filepath.Join("testdata", "nested.json"))
+		require.NoError(t, err)
+		defer db.Close()
+
+		var city string
+		err = db.QueryRowContext(context.Background(),
+			"SELECT json_extract(data, '$.address.city') FROM nested WHERE json_extract(data, '$.name') = 'Alice'").Scan(&city)
+		require.NoError(t, err)
+
+		assert.Equal(t, "Tokyo", city)
+	})
+
+	t.Run("opens JSON file and counts records", func(t *testing.T) {
+		t.Parallel()
+
+		db, err := Open(filepath.Join("testdata", "sample.json"))
+		require.NoError(t, err)
+		defer db.Close()
+
+		var count int
+		err = db.QueryRowContext(context.Background(),
+			"SELECT COUNT(*) FROM sample").Scan(&count)
+		require.NoError(t, err)
+
+		assert.Equal(t, 3, count)
+	})
+}
+
+func TestOpenJSONL(t *testing.T) {
+	t.Parallel()
+
+	t.Run("opens JSONL file and queries with json_extract", func(t *testing.T) {
+		t.Parallel()
+
+		db, err := Open(filepath.Join("testdata", "sample.jsonl"))
+		require.NoError(t, err)
+		defer db.Close()
+
+		rows, err := db.QueryContext(context.Background(),
+			"SELECT json_extract(data, '$.name') AS name FROM sample ORDER BY json_extract(data, '$.id')")
+		require.NoError(t, err)
+		defer rows.Close()
+
+		var names []string
+		for rows.Next() {
+			var name string
+			require.NoError(t, rows.Scan(&name))
+			names = append(names, name)
+		}
+		require.NoError(t, rows.Err())
+
+		assert.Equal(t, []string{"Alice", "Bob", "Charlie"}, names)
+	})
+
+	t.Run("opens JSONL file and queries with WHERE clause", func(t *testing.T) {
+		t.Parallel()
+
+		db, err := Open(filepath.Join("testdata", "sample.jsonl"))
+		require.NoError(t, err)
+		defer db.Close()
+
+		var email string
+		err = db.QueryRowContext(context.Background(),
+			"SELECT json_extract(data, '$.email') FROM sample WHERE json_extract(data, '$.name') = 'Bob'").Scan(&email)
+		require.NoError(t, err)
+
+		assert.Equal(t, "bob@example.com", email)
+	})
+}
+
+func TestOpenCompressedJSON(t *testing.T) {
+	t.Parallel()
+
+	jsonContent := `[{"id":1,"name":"Alice"},{"id":2,"name":"Bob"},{"id":3,"name":"Charlie"}]`
+	jsonlContent := "{\"id\":1,\"name\":\"Alice\"}\n{\"id\":2,\"name\":\"Bob\"}\n{\"id\":3,\"name\":\"Charlie\"}\n"
+
+	t.Run("opens gzip compressed JSON and queries with json_extract", func(t *testing.T) {
+		t.Parallel()
+
+		fp := filepath.Join(t.TempDir(), "people.json.gz")
+		f, err := os.Create(filepath.Clean(fp))
+		require.NoError(t, err)
+
+		gw := gzip.NewWriter(f)
+		_, err = gw.Write([]byte(jsonContent))
+		require.NoError(t, err)
+		require.NoError(t, gw.Close())
+		require.NoError(t, f.Close())
+
+		db, err := Open(fp)
+		require.NoError(t, err)
+		defer db.Close()
+
+		var count int
+		err = db.QueryRowContext(context.Background(),
+			"SELECT COUNT(*) FROM people").Scan(&count)
+		require.NoError(t, err)
+
+		assert.Equal(t, 3, count)
+	})
+
+	t.Run("opens gzip compressed JSONL and queries with json_extract", func(t *testing.T) {
+		t.Parallel()
+
+		fp := filepath.Join(t.TempDir(), "people.jsonl.gz")
+		f, err := os.Create(filepath.Clean(fp))
+		require.NoError(t, err)
+
+		gw := gzip.NewWriter(f)
+		_, err = gw.Write([]byte(jsonlContent))
+		require.NoError(t, err)
+		require.NoError(t, gw.Close())
+		require.NoError(t, f.Close())
+
+		db, err := Open(fp)
+		require.NoError(t, err)
+		defer db.Close()
+
+		rows, err := db.QueryContext(context.Background(),
+			"SELECT json_extract(data, '$.name') AS name FROM people ORDER BY json_extract(data, '$.id')")
+		require.NoError(t, err)
+		defer rows.Close()
+
+		var names []string
+		for rows.Next() {
+			var name string
+			require.NoError(t, rows.Scan(&name))
+			names = append(names, name)
+		}
+		require.NoError(t, rows.Err())
+
+		assert.Equal(t, []string{"Alice", "Bob", "Charlie"}, names)
 	})
 }

@@ -347,7 +347,7 @@ func TestDBBuilder_Build(t *testing.T) {
 		t.Parallel()
 		mockFS := fstest.MapFS{
 			"readme.txt": &fstest.MapFile{Data: []byte("Not supported\n")},
-			"data.json":  &fstest.MapFile{Data: []byte("{}\n")},
+			"data.xml":   &fstest.MapFile{Data: []byte("<data/>\n")},
 		}
 
 		builder := NewBuilder().AddFS(mockFS)
