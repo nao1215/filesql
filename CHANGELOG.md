@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-02-13
+
+### Added
+- **JSON / JSONL File Support ([e45329d](https://github.com/nao1215/filesql/commit/e45329d))**: Complete JSON and JSON Lines file format support with SQLite `json_extract()` integration
+  - **JSON format**: Array root → one row per element, Object root → single row. Raw JSON stored in `data TEXT` column
+  - **JSONL format**: One row per line with `bufio.Reader` (no line size limit). Empty lines silently skipped, invalid lines rejected with line number
+  - **Query with `json_extract()`**: Access nested fields via SQLite's built-in JSON functions
+    - Example: `SELECT json_extract(data, '$.name') FROM my_table`
+    - Example: `SELECT json_extract(data, '$.address.city') FROM my_table`
+  - **Compression support**: All 8 compression formats supported for both JSON and JSONL (`.json.gz`, `.json.bz2`, `.json.xz`, `.json.zst`, `.json.z`, `.json.snappy`, `.json.s2`, `.json.lz4`, and corresponding `.jsonl.*` variants)
+  - **Streaming chunk processing**: `processJSONInChunks` uses `json.Decoder` to stream array elements one at a time without loading the entire array into memory, preventing OOM for large JSON files. `processJSONLInChunks` provides true line-by-line streaming
+  - **Trailing data validation**: Rejects malformed JSON with trailing garbage after array (e.g., `[{"a":1}] garbage`)
+  - **18 new `FileType` constants**: `FileTypeJSON`, `FileTypeJSONL`, plus 16 compressed variants
+  - **Test coverage**: Unit tests, integration tests with `json_extract()` queries, compressed format tests (gzip, zstd, snappy, s2, lz4, zlib), 85.0% overall coverage
+
+### Fixed
+- **Missing `parserFileType` mappings ([e45329d](https://github.com/nao1215/filesql/commit/e45329d))**: Added missing zlib, snappy, s2, lz4 mappings for CSV, TSV, LTSV, Parquet, XLSX in `parser_bridge.go`. Previously these compressed variants would fall through to `Unsupported`
+- **Pre-existing lint issues**: Fixed `prealloc` warnings in `builder.go` and `file.go`, removed unused `colType` parameter from `newColumnInfoWithType`
+
+### Changed
+- **Documentation Updates**: Added JSON/JSONL sections to all README files (7 languages: EN, ES, FR, JA, KO, RU, ZH-CN)
+  - Supported formats table updated with `.json` and `.jsonl` base formats and all compression variants
+  - Usage examples with `json_extract()` queries for flat and nested JSON structures
+- **Test coverage for `parserFileType`**: Added 38 test cases covering ZLIB, SNAPPY, S2, LZ4 for all existing formats plus all 18 JSON/JSONL mappings
+
+### Dependencies
+- `github.com/nao1215/fileparser`: v0.3.1 → v0.4.0 (adds JSON/JSONL parsing support)
+- `modernc.org/sqlite`: 1.40.1 → 1.45.0
+- `github.com/klauspost/compress`: 1.18.2 → 1.18.4
+- `github.com/pierrec/lz4/v4`: 4.1.22 → 4.1.25
+
 ## [0.10.0] - 2025-12-18
 
 ### Added
@@ -621,7 +652,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/nao1215/filesql/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/nao1215/filesql/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/nao1215/filesql/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/nao1215/filesql/compare/v0.7.0...v0.8.0
