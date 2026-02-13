@@ -40,14 +40,16 @@
 | `.ltsv` | LTSV | 标签制表符分隔值 |
 | `.parquet` | Parquet | Apache Parquet 列式格式 |
 | `.xlsx` | Excel XLSX | Microsoft Excel 工作簿格式 |
-| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz`, `.xlsx.gz` | Gzip 压缩 | Gzip 压缩文件 |
-| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2` | Bzip2 压缩 | Bzip2 压缩文件 |
-| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz` | XZ 压缩 | XZ 压缩文件 |
-| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst` | Zstandard 压缩 | Zstandard 压缩文件 |
-| `.csv.z`, `.tsv.z`, `.ltsv.z`, `.parquet.z`, `.xlsx.z` | Zlib 压缩 | Zlib 压缩文件 |
-| `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy` | Snappy 压缩 | Snappy 压缩文件 |
-| `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2` | S2 压缩 | S2 压缩文件（Snappy 兼容） |
-| `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4` | LZ4 压缩 | LZ4 压缩文件 |
+| `.json` | JSON | JSON 格式（使用 `json_extract()` 访问字段） |
+| `.jsonl` | JSONL | JSON Lines 格式（每行一个 JSON 对象） |
+| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz`, `.xlsx.gz`, `.json.gz`, `.jsonl.gz` | Gzip 压缩 | Gzip 压缩文件 |
+| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2`, `.json.bz2`, `.jsonl.bz2` | Bzip2 压缩 | Bzip2 压缩文件 |
+| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz`, `.json.xz`, `.jsonl.xz` | XZ 压缩 | XZ 压缩文件 |
+| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst`, `.json.zst`, `.jsonl.zst` | Zstandard 压缩 | Zstandard 压缩文件 |
+| `.csv.z`, `.tsv.z`, `.ltsv.z`, `.parquet.z`, `.xlsx.z`, `.json.z`, `.jsonl.z` | Zlib 压缩 | Zlib 压缩文件 |
+| `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy`, `.json.snappy`, `.jsonl.snappy` | Snappy 压缩 | Snappy 压缩文件 |
+| `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2`, `.json.s2`, `.jsonl.s2` | S2 压缩 | S2 压缩文件（Snappy 兼容） |
+| `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4`, `.json.lz4`, `.jsonl.lz4` | LZ4 压缩 | LZ4 压缩文件 |
 
 ## 安装
 
@@ -152,6 +154,25 @@ defer db.Close()
 
 // 查看可用的表
 rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
+```
+
+### JSON / JSONL 支持
+
+JSON 和 JSONL 文件以原始 JSON 存储在单个 `data` TEXT 列中。使用 SQLite 的 `json_extract()` 函数查询字段：
+
+```go
+db, err := filesql.OpenContext(ctx, "users.json")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+rows, err := db.QueryContext(ctx, `
+    SELECT json_extract(data, '$.name') AS name,
+           json_extract(data, '$.age') AS age
+    FROM users
+    WHERE json_extract(data, '$.age') > 25
+`)
 ```
 
 ## 高级用法

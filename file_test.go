@@ -564,9 +564,14 @@ func Test_isSupportedFile(t *testing.T) {
 		{"test.LTSV", true},
 		{"test.CSV.GZ", true},
 
+		// Supported JSON/JSONL formats
+		{"test.json", true},
+		{"test.jsonl", true},
+		{"test.json.gz", true},
+		{"test.jsonl.bz2", true},
+
 		// Unsupported formats
 		{"test.txt", false},
-		{"test.json", false},
 		{"test.xml", false},
 		{"test.xlsx", true},
 		{"test", false},
@@ -877,9 +882,10 @@ func TestGetSupportedFilePatterns(t *testing.T) {
 
 	patterns := supportedFileExtPatterns()
 
-	// Should have 45 patterns: 5 base extensions × 9 compression variants (including none)
+	// Should have 63 patterns: 7 base extensions × 9 compression variants (including none)
+	// Base extensions: csv, tsv, ltsv, parquet, xlsx, json, jsonl
 	// Compression variants: none, gz, bz2, xz, zst, z, snappy, s2, lz4
-	expectedCount := 45
+	expectedCount := 63
 	if len(patterns) != expectedCount {
 		t.Errorf("GetSupportedFilePatterns() returned %d patterns, want %d", len(patterns), expectedCount)
 	}
@@ -896,6 +902,10 @@ func TestGetSupportedFilePatterns(t *testing.T) {
 		"*.parquet.z", "*.parquet.snappy", "*.parquet.s2", "*.parquet.lz4",
 		"*.xlsx", "*.xlsx.gz", "*.xlsx.bz2", "*.xlsx.xz", "*.xlsx.zst",
 		"*.xlsx.z", "*.xlsx.snappy", "*.xlsx.s2", "*.xlsx.lz4",
+		"*.json", "*.json.gz", "*.json.bz2", "*.json.xz", "*.json.zst",
+		"*.json.z", "*.json.snappy", "*.json.s2", "*.json.lz4",
+		"*.jsonl", "*.jsonl.gz", "*.jsonl.bz2", "*.jsonl.xz", "*.jsonl.zst",
+		"*.jsonl.z", "*.jsonl.snappy", "*.jsonl.s2", "*.jsonl.lz4",
 	}
 
 	for _, expected := range expectedPatterns {
@@ -1118,7 +1128,10 @@ func TestIsSupportedExtension(t *testing.T) {
 		{".xlsx", true},
 		{".xlsx.gz", true},
 		{".txt", false},
-		{".json", false},
+		{".json", true},
+		{".jsonl", true},
+		{".json.gz", true},
+		{".jsonl.zst", true},
 		{".CSV", true},    // Should work with uppercase
 		{".TSV.GZ", true}, // Should work with uppercase
 		{".XLSX", true},   // Should work with uppercase
@@ -1653,9 +1666,28 @@ func TestDetectFileType(t *testing.T) {
 		{"data.xlsx.s2", FileTypeXLSXS2},
 		{"data.xlsx.lz4", FileTypeXLSXLZ4},
 
+		// JSON/JSONL types
+		{"data.json", FileTypeJSON},
+		{"data.jsonl", FileTypeJSONL},
+		{"data.json.gz", FileTypeJSONGZ},
+		{"data.json.bz2", FileTypeJSONBZ2},
+		{"data.json.xz", FileTypeJSONXZ},
+		{"data.json.zst", FileTypeJSONZSTD},
+		{"data.json.z", FileTypeJSONZLIB},
+		{"data.json.snappy", FileTypeJSONSNAPPY},
+		{"data.json.s2", FileTypeJSONS2},
+		{"data.json.lz4", FileTypeJSONLZ4},
+		{"data.jsonl.gz", FileTypeJSONLGZ},
+		{"data.jsonl.bz2", FileTypeJSONLBZ2},
+		{"data.jsonl.xz", FileTypeJSONLXZ},
+		{"data.jsonl.zst", FileTypeJSONLZSTD},
+		{"data.jsonl.z", FileTypeJSONLZLIB},
+		{"data.jsonl.snappy", FileTypeJSONLSNAPPY},
+		{"data.jsonl.s2", FileTypeJSONLS2},
+		{"data.jsonl.lz4", FileTypeJSONLLZ4},
+
 		// Unsupported types
 		{"data.txt", FileTypeUnsupported},
-		{"data.json", FileTypeUnsupported},
 		{"data.xml", FileTypeUnsupported},
 		{"data", FileTypeUnsupported},
 		{"", FileTypeUnsupported},

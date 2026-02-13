@@ -40,14 +40,16 @@
 | `.ltsv` | LTSV | 레이블이 있는 탭으로 구분된 값 |
 | `.parquet` | Parquet | Apache Parquet 칼럼형 형식 |
 | `.xlsx` | Excel XLSX | Microsoft Excel 워크북 형식 |
-| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz`, `.xlsx.gz` | Gzip 압축 | Gzip 압축 파일 |
-| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2` | Bzip2 압축 | Bzip2 압축 파일 |
-| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz` | XZ 압축 | XZ 압축 파일 |
-| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst` | Zstandard 압축 | Zstandard 압축 파일 |
-| `.csv.z`, `.tsv.z`, `.ltsv.z`, `.parquet.z`, `.xlsx.z` | Zlib 압축 | Zlib 압축 파일 |
-| `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy` | Snappy 압축 | Snappy 압축 파일 |
-| `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2` | S2 압축 | S2 압축 파일 (Snappy 호환) |
-| `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4` | LZ4 압축 | LZ4 압축 파일 |
+| `.json` | JSON | JSON 형식 (필드 접근에 `json_extract()` 사용) |
+| `.jsonl` | JSONL | JSON Lines 형식 (한 줄에 하나의 JSON 객체) |
+| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz`, `.xlsx.gz`, `.json.gz`, `.jsonl.gz` | Gzip 압축 | Gzip 압축 파일 |
+| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2`, `.json.bz2`, `.jsonl.bz2` | Bzip2 압축 | Bzip2 압축 파일 |
+| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz`, `.json.xz`, `.jsonl.xz` | XZ 압축 | XZ 압축 파일 |
+| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst`, `.json.zst`, `.jsonl.zst` | Zstandard 압축 | Zstandard 압축 파일 |
+| `.csv.z`, `.tsv.z`, `.ltsv.z`, `.parquet.z`, `.xlsx.z`, `.json.z`, `.jsonl.z` | Zlib 압축 | Zlib 압축 파일 |
+| `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy`, `.json.snappy`, `.jsonl.snappy` | Snappy 압축 | Snappy 압축 파일 |
+| `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2`, `.json.s2`, `.jsonl.s2` | S2 압축 | S2 압축 파일 (Snappy 호환) |
+| `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4`, `.json.lz4`, `.jsonl.lz4` | LZ4 압축 | LZ4 압축 파일 |
 
 ## 설치
 
@@ -151,6 +153,25 @@ defer db.Close()
 
 // 사용 가능한 테이블 확인
 rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
+```
+
+### JSON / JSONL 지원
+
+JSON 및 JSONL 파일은 `data` TEXT 열에 원시 JSON으로 저장됩니다. SQLite의 `json_extract()` 함수를 사용하여 필드를 쿼리할 수 있습니다:
+
+```go
+db, err := filesql.OpenContext(ctx, "users.json")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+rows, err := db.QueryContext(ctx, `
+    SELECT json_extract(data, '$.name') AS name,
+           json_extract(data, '$.age') AS age
+    FROM users
+    WHERE json_extract(data, '$.age') > 25
+`)
 ```
 
 ## 고급 사용법

@@ -106,6 +106,42 @@ func (ft FileType) String() string {
 		return "Parquet (lz4)"
 	case FileTypeXLSXLZ4:
 		return "XLSX (lz4)"
+	case FileTypeJSON:
+		return "JSON"
+	case FileTypeJSONL:
+		return "JSONL"
+	case FileTypeJSONGZ:
+		return "JSON (gzip)"
+	case FileTypeJSONBZ2:
+		return "JSON (bzip2)"
+	case FileTypeJSONXZ:
+		return "JSON (xz)"
+	case FileTypeJSONZSTD:
+		return "JSON (zstd)"
+	case FileTypeJSONZLIB:
+		return "JSON (zlib)"
+	case FileTypeJSONSNAPPY:
+		return "JSON (snappy)"
+	case FileTypeJSONS2:
+		return "JSON (s2)"
+	case FileTypeJSONLZ4:
+		return "JSON (lz4)"
+	case FileTypeJSONLGZ:
+		return "JSONL (gzip)"
+	case FileTypeJSONLBZ2:
+		return "JSONL (bzip2)"
+	case FileTypeJSONLXZ:
+		return "JSONL (xz)"
+	case FileTypeJSONLZSTD:
+		return "JSONL (zstd)"
+	case FileTypeJSONLZLIB:
+		return "JSONL (zlib)"
+	case FileTypeJSONLSNAPPY:
+		return "JSONL (snappy)"
+	case FileTypeJSONLS2:
+		return "JSONL (s2)"
+	case FileTypeJSONLLZ4:
+		return "JSONL (lz4)"
 	default:
 		return "Unsupported"
 	}
@@ -207,6 +243,45 @@ const (
 	// FileTypeXLSXLZ4 represents lz4-compressed XLSX file type
 	FileTypeXLSXLZ4
 
+	// FileTypeJSON represents JSON file type
+	FileTypeJSON
+	// FileTypeJSONL represents JSON Lines file type
+	FileTypeJSONL
+
+	// FileTypeJSONGZ represents gzip-compressed JSON file type
+	FileTypeJSONGZ
+	// FileTypeJSONBZ2 represents bzip2-compressed JSON file type
+	FileTypeJSONBZ2
+	// FileTypeJSONXZ represents xz-compressed JSON file type
+	FileTypeJSONXZ
+	// FileTypeJSONZSTD represents zstd-compressed JSON file type
+	FileTypeJSONZSTD
+	// FileTypeJSONZLIB represents zlib-compressed JSON file type
+	FileTypeJSONZLIB
+	// FileTypeJSONSNAPPY represents snappy-compressed JSON file type
+	FileTypeJSONSNAPPY
+	// FileTypeJSONS2 represents s2-compressed JSON file type
+	FileTypeJSONS2
+	// FileTypeJSONLZ4 represents lz4-compressed JSON file type
+	FileTypeJSONLZ4
+
+	// FileTypeJSONLGZ represents gzip-compressed JSONL file type
+	FileTypeJSONLGZ
+	// FileTypeJSONLBZ2 represents bzip2-compressed JSONL file type
+	FileTypeJSONLBZ2
+	// FileTypeJSONLXZ represents xz-compressed JSONL file type
+	FileTypeJSONLXZ
+	// FileTypeJSONLZSTD represents zstd-compressed JSONL file type
+	FileTypeJSONLZSTD
+	// FileTypeJSONLZLIB represents zlib-compressed JSONL file type
+	FileTypeJSONLZLIB
+	// FileTypeJSONLSNAPPY represents snappy-compressed JSONL file type
+	FileTypeJSONLSNAPPY
+	// FileTypeJSONLS2 represents s2-compressed JSONL file type
+	FileTypeJSONLS2
+	// FileTypeJSONLLZ4 represents lz4-compressed JSONL file type
+	FileTypeJSONLLZ4
+
 	// FileTypeUnsupported represents unsupported file type
 	FileTypeUnsupported
 )
@@ -226,6 +301,8 @@ const (
 	extSNAPPY  = fileparser.ExtSNAPPY
 	extS2      = fileparser.ExtS2
 	extLZ4     = fileparser.ExtLZ4
+	extJSON    = fileparser.ExtJSON
+	extJSONL   = fileparser.ExtJSONL
 )
 
 // file represents a file that can be converted to table
@@ -284,10 +361,10 @@ func newFile(path string) *file {
 
 // supportedFileExtPatterns returns all supported file patterns for glob matching
 func supportedFileExtPatterns() []string {
-	baseExts := []string{extCSV, extTSV, extLTSV, extParquet, extXLSX}
+	baseExts := []string{extCSV, extTSV, extLTSV, extParquet, extXLSX, extJSON, extJSONL}
 	compressionExts := []string{"", extGZ, extBZ2, extXZ, extZSTD, extZLIB, extSNAPPY, extS2, extLZ4}
 
-	var patterns []string
+	patterns := make([]string, 0, len(compressionExts)*len(baseExts))
 	for _, baseExt := range baseExts {
 		for _, compressionExt := range compressionExts {
 			pattern := "*" + baseExt + compressionExt
@@ -319,7 +396,9 @@ func isSupportedFile(fileName string) bool {
 		strings.HasSuffix(fileName, extTSV) ||
 		strings.HasSuffix(fileName, extLTSV) ||
 		strings.HasSuffix(fileName, extParquet) ||
-		strings.HasSuffix(fileName, extXLSX)
+		strings.HasSuffix(fileName, extXLSX) ||
+		strings.HasSuffix(fileName, extJSON) ||
+		strings.HasSuffix(fileName, extJSONL)
 }
 
 // isSupportedExtension checks if the given extension is supported
@@ -424,6 +503,42 @@ func (ft FileType) extension() string {
 		return extParquet + extLZ4
 	case FileTypeXLSXLZ4:
 		return extXLSX + extLZ4
+	case FileTypeJSON:
+		return extJSON
+	case FileTypeJSONL:
+		return extJSONL
+	case FileTypeJSONGZ:
+		return extJSON + extGZ
+	case FileTypeJSONBZ2:
+		return extJSON + extBZ2
+	case FileTypeJSONXZ:
+		return extJSON + extXZ
+	case FileTypeJSONZSTD:
+		return extJSON + extZSTD
+	case FileTypeJSONZLIB:
+		return extJSON + extZLIB
+	case FileTypeJSONSNAPPY:
+		return extJSON + extSNAPPY
+	case FileTypeJSONS2:
+		return extJSON + extS2
+	case FileTypeJSONLZ4:
+		return extJSON + extLZ4
+	case FileTypeJSONLGZ:
+		return extJSONL + extGZ
+	case FileTypeJSONLBZ2:
+		return extJSONL + extBZ2
+	case FileTypeJSONLXZ:
+		return extJSONL + extXZ
+	case FileTypeJSONLZSTD:
+		return extJSONL + extZSTD
+	case FileTypeJSONLZLIB:
+		return extJSONL + extZLIB
+	case FileTypeJSONLSNAPPY:
+		return extJSONL + extSNAPPY
+	case FileTypeJSONLS2:
+		return extJSONL + extS2
+	case FileTypeJSONLLZ4:
+		return extJSONL + extLZ4
 	default:
 		return ""
 	}
@@ -447,6 +562,12 @@ func (ft FileType) baseType() FileType {
 	case FileTypeXLSX, FileTypeXLSXGZ, FileTypeXLSXBZ2, FileTypeXLSXXZ, FileTypeXLSXZSTD,
 		FileTypeXLSXZLIB, FileTypeXLSXSNAPPY, FileTypeXLSXS2, FileTypeXLSXLZ4:
 		return FileTypeXLSX
+	case FileTypeJSON, FileTypeJSONGZ, FileTypeJSONBZ2, FileTypeJSONXZ, FileTypeJSONZSTD,
+		FileTypeJSONZLIB, FileTypeJSONSNAPPY, FileTypeJSONS2, FileTypeJSONLZ4:
+		return FileTypeJSON
+	case FileTypeJSONL, FileTypeJSONLGZ, FileTypeJSONLBZ2, FileTypeJSONLXZ, FileTypeJSONLZSTD,
+		FileTypeJSONLZLIB, FileTypeJSONLSNAPPY, FileTypeJSONLS2, FileTypeJSONLLZ4:
+		return FileTypeJSONL
 	default:
 		return FileTypeUnsupported
 	}
@@ -690,6 +811,48 @@ func detectFileType(path string) FileType {
 			return FileTypeXLSXLZ4
 		default:
 			return FileTypeXLSX
+		}
+	case extJSON:
+		switch compressionType {
+		case compressionGZStr:
+			return FileTypeJSONGZ
+		case compressionBZ2Str:
+			return FileTypeJSONBZ2
+		case compressionXZStr:
+			return FileTypeJSONXZ
+		case compressionZSTDStr:
+			return FileTypeJSONZSTD
+		case compressionZLIBStr:
+			return FileTypeJSONZLIB
+		case compressionSNAPPYStr:
+			return FileTypeJSONSNAPPY
+		case compressionS2Str:
+			return FileTypeJSONS2
+		case compressionLZ4Str:
+			return FileTypeJSONLZ4
+		default:
+			return FileTypeJSON
+		}
+	case extJSONL:
+		switch compressionType {
+		case compressionGZStr:
+			return FileTypeJSONLGZ
+		case compressionBZ2Str:
+			return FileTypeJSONLBZ2
+		case compressionXZStr:
+			return FileTypeJSONLXZ
+		case compressionZSTDStr:
+			return FileTypeJSONLZSTD
+		case compressionZLIBStr:
+			return FileTypeJSONLZLIB
+		case compressionSNAPPYStr:
+			return FileTypeJSONLSNAPPY
+		case compressionS2Str:
+			return FileTypeJSONLS2
+		case compressionLZ4Str:
+			return FileTypeJSONLLZ4
+		default:
+			return FileTypeJSONL
 		}
 	default:
 		return FileTypeUnsupported

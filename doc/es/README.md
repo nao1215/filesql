@@ -40,14 +40,16 @@ En lugar de mantener código duplicado en ambos proyectos, extrajimos la funcion
 | `.ltsv` | LTSV | Valores con etiquetas separados por tabulaciones |
 | `.parquet` | Parquet | Formato columnar Apache Parquet |
 | `.xlsx` | Excel XLSX | Formato de libro de Excel de Microsoft |
-| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz`, `.xlsx.gz` | Compresión Gzip | Archivos comprimidos con Gzip |
-| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2` | Compresión Bzip2 | Archivos comprimidos con Bzip2 |
-| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz` | Compresión XZ | Archivos comprimidos con XZ |
-| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst` | Compresión Zstandard | Archivos comprimidos con Zstandard |
-| `.csv.z`, `.tsv.z`, `.ltsv.z`, `.parquet.z`, `.xlsx.z` | Compresión Zlib | Archivos comprimidos con Zlib |
-| `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy` | Compresión Snappy | Archivos comprimidos con Snappy |
-| `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2` | Compresión S2 | Archivos comprimidos con S2 (compatible con Snappy) |
-| `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4` | Compresión LZ4 | Archivos comprimidos con LZ4 |
+| `.json` | JSON | Formato JSON (use `json_extract()` para acceder a campos) |
+| `.jsonl` | JSONL | Formato JSON Lines (un objeto JSON por línea) |
+| `.csv.gz`, `.tsv.gz`, `.ltsv.gz`, `.parquet.gz`, `.xlsx.gz`, `.json.gz`, `.jsonl.gz` | Compresión Gzip | Archivos comprimidos con Gzip |
+| `.csv.bz2`, `.tsv.bz2`, `.ltsv.bz2`, `.parquet.bz2`, `.xlsx.bz2`, `.json.bz2`, `.jsonl.bz2` | Compresión Bzip2 | Archivos comprimidos con Bzip2 |
+| `.csv.xz`, `.tsv.xz`, `.ltsv.xz`, `.parquet.xz`, `.xlsx.xz`, `.json.xz`, `.jsonl.xz` | Compresión XZ | Archivos comprimidos con XZ |
+| `.csv.zst`, `.tsv.zst`, `.ltsv.zst`, `.parquet.zst`, `.xlsx.zst`, `.json.zst`, `.jsonl.zst` | Compresión Zstandard | Archivos comprimidos con Zstandard |
+| `.csv.z`, `.tsv.z`, `.ltsv.z`, `.parquet.z`, `.xlsx.z`, `.json.z`, `.jsonl.z` | Compresión Zlib | Archivos comprimidos con Zlib |
+| `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy`, `.json.snappy`, `.jsonl.snappy` | Compresión Snappy | Archivos comprimidos con Snappy |
+| `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2`, `.json.s2`, `.jsonl.s2` | Compresión S2 | Archivos comprimidos con S2 (compatible con Snappy) |
+| `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4`, `.json.lz4`, `.jsonl.lz4` | Compresión LZ4 | Archivos comprimidos con LZ4 |
 
 ## Instalación
 
@@ -151,6 +153,25 @@ defer db.Close()
 
 // Ver qué tablas están disponibles
 rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
+```
+
+### Soporte JSON / JSONL
+
+Los archivos JSON y JSONL se almacenan como JSON sin procesar en una columna `data` de tipo TEXT. Use la función `json_extract()` de SQLite para consultar campos:
+
+```go
+db, err := filesql.OpenContext(ctx, "users.json")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+rows, err := db.QueryContext(ctx, `
+    SELECT json_extract(data, '$.name') AS name,
+           json_extract(data, '$.age') AS age
+    FROM users
+    WHERE json_extract(data, '$.age') > 25
+`)
 ```
 
 ## Uso avanzado

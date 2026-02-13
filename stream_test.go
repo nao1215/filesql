@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1031,4 +1032,592 @@ func TestStreamingParser_ProcessInChunks_UnsupportedFormat(t *testing.T) {
 	})
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrUnsupportedFormat)
+}
+
+func TestParseJSONStream(t *testing.T) {
+	t.Parallel()
+
+	t.Run("parses JSON array with objects", func(t *testing.T) {
+		t.Parallel()
+
+		input := `[{"name":"Alice","age":30},{"name":"Bob","age":25}]`
+		reader := strings.NewReader(input)
+		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+
+		result, err := parser.parseJSONStream(reader)
+
+		require.NoError(t, err)
+		assert.Equal(t, header{"data"}, result.header)
+		assert.Equal(t, 2, len(result.records))
+		assert.True(t, json.Valid([]byte(result.records[0][0])))
+		assert.True(t, json.Valid([]byte(result.records[1][0])))
+	})
+
+	t.Run("parses JSON single object", func(t *testing.T) {
+		t.Parallel()
+
+		input := `{"name":"Alice","age":30}`
+		reader := strings.NewReader(input)
+		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+
+		result, err := parser.parseJSONStream(reader)
+
+		require.NoError(t, err)
+		assert.Equal(t, header{"data"}, result.header)
+		assert.Equal(t, 1, len(result.records))
+		assert.True(t, json.Valid([]byte(result.records[0][0])))
+	})
+
+	t.Run("preserves nested JSON structure", func(t *testing.T) {
+		t.Parallel()
+
+		input := `[{"id":1,"address":{"city":"Tokyo","country":"Japan"},"tags":["dev","go"]}]`
+		reader := strings.NewReader(input)
+		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+
+		result, err := parser.parseJSONStream(reader)
+
+		require.NoError(t, err)
+		assert.Equal(t, 1, len(result.records))
+
+		var parsed map[string]any
+		err = json.Unmarshal([]byte(result.records[0][0]), &parsed)
+		require.NoError(t, err)
+
+		address, ok := parsed["address"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "Tokyo", address["city"])
+	})
+
+	t.Run("column type is TEXT", func(t *testing.T) {
+		t.Parallel()
+
+		input := `[{"name":"Alice"}]`
+		reader := strings.NewReader(input)
+		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+
+		result, err := parser.parseJSONStream(reader)
+
+		require.NoError(t, err)
+		assert.Equal(t, columnTypeText, result.columnInfo[0].Type)
+	})
+
+	t.Run("returns error for empty input", func(t *testing.T) {
+		t.Parallel()
+
+		reader := strings.NewReader("")
+		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+
+		_, err := parser.parseJSONStream(reader)
+
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrEmptyData)
+	})
+
+	t.Run("returns error for empty array", func(t *testing.T) {
+		t.Parallel()
+
+		reader := strings.NewReader("[]")
+		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+
+		_, err := parser.parseJSONStream(reader)
+
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrEmptyData)
+	})
+
+	t.Run("returns error for invalid JSON", func(t *testing.T) {
+		t.Parallel()
+
+		reader := strings.NewReader("{invalid json}")
+		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+
+		_, err := parser.parseJSONStream(reader)
+
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidData)
+	})
+}
+
+func TestParseJSONLStream(t *testing.T) {
+	t.Parallel()
+
+	t.Run("parses JSONL with multiple lines", func(t *testing.T) {
+		t.Parallel()
+
+		input := "{\"name\":\"Alice\",\"age\":30}\n{\"name\":\"Bob\",\"age\":25}\n{\"name\":\"Charlie\",\"age\":35}"
+		reader := strings.NewReader(input)
+		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+
+		result, err := parser.parseJSONLStream(reader)
+
+		require.NoError(t, err)
+		assert.Equal(t, header{"data"}, result.header)
+		assert.Equal(t, 3, len(result.records))
+		for _, rec := range result.records {
+			assert.True(t, json.Valid([]byte(rec[0])))
+		}
+	})
+
+	t.Run("skips empty lines", func(t *testing.T) {
+		t.Parallel()
+
+		input := "{\"name\":\"Alice\"}\n\n{\"name\":\"Bob\"}\n\n"
+		reader := strings.NewReader(input)
+		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+
+		result, err := parser.parseJSONLStream(reader)
+
+		require.NoError(t, err)
+		assert.Equal(t, 2, len(result.records))
+	})
+
+	t.Run("preserves nested structure", func(t *testing.T) {
+		t.Parallel()
+
+		input := `{"id":1,"address":{"city":"Tokyo"},"tags":["dev","go"]}`
+		reader := strings.NewReader(input)
+		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+
+		result, err := parser.parseJSONLStream(reader)
+
+		require.NoError(t, err)
+		assert.Equal(t, 1, len(result.records))
+
+		var parsed map[string]any
+		err = json.Unmarshal([]byte(result.records[0][0]), &parsed)
+		require.NoError(t, err)
+		assert.Equal(t, float64(1), parsed["id"])
+	})
+
+	t.Run("column type is TEXT", func(t *testing.T) {
+		t.Parallel()
+
+		input := `{"name":"Alice"}`
+		reader := strings.NewReader(input)
+		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+
+		result, err := parser.parseJSONLStream(reader)
+
+		require.NoError(t, err)
+		assert.Equal(t, columnTypeText, result.columnInfo[0].Type)
+	})
+
+	t.Run("returns error for empty input", func(t *testing.T) {
+		t.Parallel()
+
+		reader := strings.NewReader("")
+		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+
+		_, err := parser.parseJSONLStream(reader)
+
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrEmptyData)
+	})
+
+	t.Run("returns error for invalid JSON line", func(t *testing.T) {
+		t.Parallel()
+
+		input := "{\"name\":\"Alice\"}\nnot valid json\n{\"name\":\"Bob\"}"
+		reader := strings.NewReader(input)
+		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+
+		_, err := parser.parseJSONLStream(reader)
+
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidData)
+	})
+
+	t.Run("handles line larger than 1MB", func(t *testing.T) {
+		t.Parallel()
+
+		bigValue := strings.Repeat("x", 2*1024*1024) // 2 MB
+		line := `{"big":"` + bigValue + `"}`
+		input := line + "\n" + `{"small":"ok"}`
+		reader := strings.NewReader(input)
+		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+
+		result, err := parser.parseJSONLStream(reader)
+
+		require.NoError(t, err)
+		assert.Equal(t, 2, len(result.records))
+		assert.True(t, json.Valid([]byte(result.records[0][0])))
+		assert.True(t, json.Valid([]byte(result.records[1][0])))
+	})
+}
+
+func TestProcessJSONInChunks(t *testing.T) {
+	t.Parallel()
+
+	t.Run("processes JSON array in single chunk", func(t *testing.T) {
+		t.Parallel()
+
+		input := `[{"name":"Alice"},{"name":"Bob"},{"name":"Charlie"}]`
+		reader := strings.NewReader(input)
+		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+
+		var chunks []*tableChunk
+		err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
+			chunks = append(chunks, chunk)
+			return nil
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, 1, len(chunks))
+		assert.Equal(t, 3, len(chunks[0].records))
+	})
+
+	t.Run("splits large JSON array into multiple chunks", func(t *testing.T) {
+		t.Parallel()
+
+		input := `[{"i":1},{"i":2},{"i":3},{"i":4},{"i":5}]`
+		reader := strings.NewReader(input)
+		parser := newStreamingParser(FileTypeJSON, "test_json", 2) // chunk size = 2
+
+		var chunks []*tableChunk
+		err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
+			// Copy records to avoid slice reuse issues
+			c := &tableChunk{
+				tableName:  chunk.tableName,
+				headers:    chunk.headers,
+				records:    append([]Record(nil), chunk.records...),
+				columnInfo: chunk.columnInfo,
+			}
+			chunks = append(chunks, c)
+			return nil
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, 3, len(chunks))
+		assert.Equal(t, 2, len(chunks[0].records))
+		assert.Equal(t, 2, len(chunks[1].records))
+		assert.Equal(t, 1, len(chunks[2].records))
+	})
+
+	t.Run("processes single JSON object", func(t *testing.T) {
+		t.Parallel()
+
+		input := `{"name":"Alice"}`
+		reader := strings.NewReader(input)
+		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+
+		var chunks []*tableChunk
+		err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
+			chunks = append(chunks, chunk)
+			return nil
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, 1, len(chunks))
+		assert.Equal(t, 1, len(chunks[0].records))
+	})
+
+	t.Run("returns error for empty input", func(t *testing.T) {
+		t.Parallel()
+
+		reader := strings.NewReader("")
+		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+
+		err := parser.processJSONInChunks(reader, func(_ *tableChunk) error {
+			return nil
+		})
+
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrEmptyData)
+	})
+
+	t.Run("returns error for trailing garbage after JSON array", func(t *testing.T) {
+		t.Parallel()
+
+		input := `[{"a":1}] garbage`
+		reader := strings.NewReader(input)
+		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+
+		err := parser.processJSONInChunks(reader, func(_ *tableChunk) error {
+			return nil
+		})
+
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidData)
+	})
+}
+
+func TestProcessJSONLInChunks(t *testing.T) {
+	t.Parallel()
+
+	t.Run("processes JSONL in single chunk", func(t *testing.T) {
+		t.Parallel()
+
+		input := "{\"name\":\"Alice\"}\n{\"name\":\"Bob\"}\n{\"name\":\"Charlie\"}"
+		reader := strings.NewReader(input)
+		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+
+		var chunks []*tableChunk
+		err := parser.processJSONLInChunks(reader, func(chunk *tableChunk) error {
+			chunks = append(chunks, chunk)
+			return nil
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, 1, len(chunks))
+		assert.Equal(t, 3, len(chunks[0].records))
+	})
+
+	t.Run("splits JSONL into multiple chunks", func(t *testing.T) {
+		t.Parallel()
+
+		input := "{\"i\":1}\n{\"i\":2}\n{\"i\":3}\n{\"i\":4}\n{\"i\":5}"
+		reader := strings.NewReader(input)
+		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", 2) // chunk size = 2
+
+		var chunks []*tableChunk
+		err := parser.processJSONLInChunks(reader, func(chunk *tableChunk) error {
+			c := &tableChunk{
+				tableName:  chunk.tableName,
+				headers:    chunk.headers,
+				records:    append([]Record(nil), chunk.records...),
+				columnInfo: chunk.columnInfo,
+			}
+			chunks = append(chunks, c)
+			return nil
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, 3, len(chunks))
+		assert.Equal(t, 2, len(chunks[0].records))
+		assert.Equal(t, 2, len(chunks[1].records))
+		assert.Equal(t, 1, len(chunks[2].records))
+	})
+
+	t.Run("returns error for empty input", func(t *testing.T) {
+		t.Parallel()
+
+		reader := strings.NewReader("")
+		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+
+		err := parser.processJSONLInChunks(reader, func(_ *tableChunk) error {
+			return nil
+		})
+
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrEmptyData)
+	})
+
+	t.Run("returns error for invalid JSON line", func(t *testing.T) {
+		t.Parallel()
+
+		input := "{\"name\":\"Alice\"}\nnot valid json\n{\"name\":\"Bob\"}"
+		reader := strings.NewReader(input)
+		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+
+		err := parser.processJSONLInChunks(reader, func(_ *tableChunk) error {
+			return nil
+		})
+
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidData)
+	})
+}
+
+func TestTruncateLineForError(t *testing.T) {
+	t.Parallel()
+
+	t.Run("short string unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		result := truncateLineForError("hello", 10)
+
+		assert.Equal(t, "hello", result)
+	})
+
+	t.Run("long string truncated with ellipsis", func(t *testing.T) {
+		t.Parallel()
+
+		result := truncateLineForError("this is a very long string", 10)
+
+		assert.Equal(t, "this is a ...", result)
+	})
+
+	t.Run("exact length unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		result := truncateLineForError("12345", 5)
+
+		assert.Equal(t, "12345", result)
+	})
+}
+
+func TestStreamingParser_ParseFromReader_CompressedJSON(t *testing.T) {
+	t.Parallel()
+
+	jsonData := `[{"id":1,"name":"Alice"},{"id":2,"name":"Bob"}]`
+	jsonlData := "{\"id\":1,\"name\":\"Alice\"}\n{\"id\":2,\"name\":\"Bob\"}\n"
+
+	t.Run("gzip compressed JSON", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		gw := gzip.NewWriter(&buf)
+		_, err := gw.Write([]byte(jsonData))
+		require.NoError(t, err)
+		require.NoError(t, gw.Close())
+
+		parser := newStreamingParser(FileTypeJSONGZ, "test_json", DefaultRowsPerChunk)
+		result, err := parser.parseFromReader(&buf)
+
+		require.NoError(t, err)
+		assert.Equal(t, 2, len(result.records))
+		assert.True(t, json.Valid([]byte(result.records[0][0])))
+	})
+
+	t.Run("gzip compressed JSONL", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		gw := gzip.NewWriter(&buf)
+		_, err := gw.Write([]byte(jsonlData))
+		require.NoError(t, err)
+		require.NoError(t, gw.Close())
+
+		parser := newStreamingParser(FileTypeJSONLGZ, "test_jsonl", DefaultRowsPerChunk)
+		result, err := parser.parseFromReader(&buf)
+
+		require.NoError(t, err)
+		assert.Equal(t, 2, len(result.records))
+		assert.True(t, json.Valid([]byte(result.records[0][0])))
+	})
+
+	t.Run("zstd compressed JSON", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		enc, err := zstd.NewWriter(&buf)
+		require.NoError(t, err)
+		_, err = enc.Write([]byte(jsonData))
+		require.NoError(t, err)
+		require.NoError(t, enc.Close())
+
+		parser := newStreamingParser(FileTypeJSONZSTD, "test_json", DefaultRowsPerChunk)
+		result, err := parser.parseFromReader(&buf)
+
+		require.NoError(t, err)
+		assert.Equal(t, 2, len(result.records))
+	})
+
+	t.Run("zstd compressed JSONL", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		enc, err := zstd.NewWriter(&buf)
+		require.NoError(t, err)
+		_, err = enc.Write([]byte(jsonlData))
+		require.NoError(t, err)
+		require.NoError(t, enc.Close())
+
+		parser := newStreamingParser(FileTypeJSONLZSTD, "test_jsonl", DefaultRowsPerChunk)
+		result, err := parser.parseFromReader(&buf)
+
+		require.NoError(t, err)
+		assert.Equal(t, 2, len(result.records))
+	})
+
+	t.Run("snappy compressed JSON", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		sw := snappy.NewBufferedWriter(&buf)
+		_, err := sw.Write([]byte(jsonData))
+		require.NoError(t, err)
+		require.NoError(t, sw.Close())
+
+		parser := newStreamingParser(FileTypeJSONSNAPPY, "test_json", DefaultRowsPerChunk)
+		result, err := parser.parseFromReader(&buf)
+
+		require.NoError(t, err)
+		assert.Equal(t, 2, len(result.records))
+	})
+
+	t.Run("s2 compressed JSONL", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		sw := s2.NewWriter(&buf)
+		_, err := sw.Write([]byte(jsonlData))
+		require.NoError(t, err)
+		require.NoError(t, sw.Close())
+
+		parser := newStreamingParser(FileTypeJSONLS2, "test_jsonl", DefaultRowsPerChunk)
+		result, err := parser.parseFromReader(&buf)
+
+		require.NoError(t, err)
+		assert.Equal(t, 2, len(result.records))
+	})
+
+	t.Run("lz4 compressed JSON", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		lw := lz4.NewWriter(&buf)
+		_, err := lw.Write([]byte(jsonData))
+		require.NoError(t, err)
+		require.NoError(t, lw.Close())
+
+		parser := newStreamingParser(FileTypeJSONLZ4, "test_json", DefaultRowsPerChunk)
+		result, err := parser.parseFromReader(&buf)
+
+		require.NoError(t, err)
+		assert.Equal(t, 2, len(result.records))
+	})
+
+	t.Run("zlib compressed JSONL", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		zw := zlib.NewWriter(&buf)
+		_, err := zw.Write([]byte(jsonlData))
+		require.NoError(t, err)
+		require.NoError(t, zw.Close())
+
+		parser := newStreamingParser(FileTypeJSONLZLIB, "test_jsonl", DefaultRowsPerChunk)
+		result, err := parser.parseFromReader(&buf)
+
+		require.NoError(t, err)
+		assert.Equal(t, 2, len(result.records))
+	})
+}
+
+func TestStreamingParser_ProcessInChunks_CompressedJSON(t *testing.T) {
+	t.Parallel()
+
+	jsonData := `[{"i":1},{"i":2},{"i":3},{"i":4},{"i":5}]`
+
+	t.Run("gzip compressed JSON chunks", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		gw := gzip.NewWriter(&buf)
+		_, err := gw.Write([]byte(jsonData))
+		require.NoError(t, err)
+		require.NoError(t, gw.Close())
+
+		parser := newStreamingParser(FileTypeJSONGZ, "test_json", 2)
+
+		var chunks []*tableChunk
+		err = parser.ProcessInChunks(&buf, func(chunk *tableChunk) error {
+			c := &tableChunk{
+				tableName:  chunk.tableName,
+				headers:    chunk.headers,
+				records:    append([]Record(nil), chunk.records...),
+				columnInfo: chunk.columnInfo,
+			}
+			chunks = append(chunks, c)
+			return nil
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, 3, len(chunks))
+		assert.Equal(t, 2, len(chunks[0].records))
+		assert.Equal(t, 2, len(chunks[1].records))
+		assert.Equal(t, 1, len(chunks[2].records))
+	})
 }

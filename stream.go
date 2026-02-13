@@ -1,11 +1,13 @@
 package filesql
 
 import (
+	"bufio"
 	"compress/bzip2"
 	"compress/gzip"
 	"compress/zlib"
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -72,6 +74,10 @@ func (p *streamingParser) parseFromReader(reader io.Reader) (*table, error) {
 		return p.parseParquetStream(decompressedReader)
 	case FileTypeXLSX:
 		return p.parseXLSXStream(decompressedReader)
+	case FileTypeJSON:
+		return p.parseJSONStream(decompressedReader)
+	case FileTypeJSONL:
+		return p.parseJSONLStream(decompressedReader)
 	default:
 		return nil, ErrUnsupportedFormat
 	}
@@ -80,47 +86,55 @@ func (p *streamingParser) parseFromReader(reader io.Reader) (*table, error) {
 // createDecompressedReader creates appropriate reader based on compression type
 func (p *streamingParser) createDecompressedReader(reader io.Reader) (io.Reader, func() error, error) {
 	switch p.fileType {
-	case FileTypeCSVGZ, FileTypeTSVGZ, FileTypeLTSVGZ, FileTypeXLSXGZ, FileTypeParquetGZ:
+	case FileTypeCSVGZ, FileTypeTSVGZ, FileTypeLTSVGZ, FileTypeXLSXGZ, FileTypeParquetGZ,
+		FileTypeJSONGZ, FileTypeJSONLGZ:
 		gzReader, err := gzip.NewReader(reader)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: failed to create gzip reader: %s", ErrCompression, err.Error())
 		}
 		return gzReader, gzReader.Close, nil
 
-	case FileTypeCSVBZ2, FileTypeTSVBZ2, FileTypeLTSVBZ2, FileTypeXLSXBZ2, FileTypeParquetBZ2:
+	case FileTypeCSVBZ2, FileTypeTSVBZ2, FileTypeLTSVBZ2, FileTypeXLSXBZ2, FileTypeParquetBZ2,
+		FileTypeJSONBZ2, FileTypeJSONLBZ2:
 		bz2Reader := bzip2.NewReader(reader)
 		return bz2Reader, nil, nil
 
-	case FileTypeCSVXZ, FileTypeTSVXZ, FileTypeLTSVXZ, FileTypeXLSXXZ, FileTypeParquetXZ:
+	case FileTypeCSVXZ, FileTypeTSVXZ, FileTypeLTSVXZ, FileTypeXLSXXZ, FileTypeParquetXZ,
+		FileTypeJSONXZ, FileTypeJSONLXZ:
 		xzReader, err := xz.NewReader(reader)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: failed to create xz reader: %s", ErrCompression, err.Error())
 		}
 		return xzReader, nil, nil
 
-	case FileTypeCSVZSTD, FileTypeTSVZSTD, FileTypeLTSVZSTD, FileTypeXLSXZSTD, FileTypeParquetZSTD:
+	case FileTypeCSVZSTD, FileTypeTSVZSTD, FileTypeLTSVZSTD, FileTypeXLSXZSTD, FileTypeParquetZSTD,
+		FileTypeJSONZSTD, FileTypeJSONLZSTD:
 		decoder, err := zstd.NewReader(reader)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: failed to create zstd reader: %s", ErrCompression, err.Error())
 		}
 		return decoder, func() error { decoder.Close(); return nil }, nil
 
-	case FileTypeCSVZLIB, FileTypeTSVZLIB, FileTypeLTSVZLIB, FileTypeXLSXZLIB, FileTypeParquetZLIB:
+	case FileTypeCSVZLIB, FileTypeTSVZLIB, FileTypeLTSVZLIB, FileTypeXLSXZLIB, FileTypeParquetZLIB,
+		FileTypeJSONZLIB, FileTypeJSONLZLIB:
 		zlibReader, err := zlib.NewReader(reader)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: failed to create zlib reader: %s", ErrCompression, err.Error())
 		}
 		return zlibReader, zlibReader.Close, nil
 
-	case FileTypeCSVSNAPPY, FileTypeTSVSNAPPY, FileTypeLTSVSNAPPY, FileTypeXLSXSNAPPY, FileTypeParquetSNAPPY:
+	case FileTypeCSVSNAPPY, FileTypeTSVSNAPPY, FileTypeLTSVSNAPPY, FileTypeXLSXSNAPPY, FileTypeParquetSNAPPY,
+		FileTypeJSONSNAPPY, FileTypeJSONLSNAPPY:
 		snappyReader := snappy.NewReader(reader)
 		return snappyReader, nil, nil
 
-	case FileTypeCSVS2, FileTypeTSVS2, FileTypeLTSVS2, FileTypeXLSXS2, FileTypeParquetS2:
+	case FileTypeCSVS2, FileTypeTSVS2, FileTypeLTSVS2, FileTypeXLSXS2, FileTypeParquetS2,
+		FileTypeJSONS2, FileTypeJSONLS2:
 		s2Reader := s2.NewReader(reader)
 		return s2Reader, nil, nil
 
-	case FileTypeCSVLZ4, FileTypeTSVLZ4, FileTypeLTSVLZ4, FileTypeXLSXLZ4, FileTypeParquetLZ4:
+	case FileTypeCSVLZ4, FileTypeTSVLZ4, FileTypeLTSVLZ4, FileTypeXLSXLZ4, FileTypeParquetLZ4,
+		FileTypeJSONLZ4, FileTypeJSONLLZ4:
 		lz4Reader := lz4.NewReader(reader)
 		return lz4Reader, nil, nil
 
@@ -257,6 +271,10 @@ func (p *streamingParser) ProcessInChunks(reader io.Reader, processor chunkProce
 		return p.processParquetInChunks(decompressedReader, processor)
 	case FileTypeXLSX:
 		return p.processXLSXInChunks(decompressedReader, processor)
+	case FileTypeJSON:
+		return p.processJSONInChunks(decompressedReader, processor)
+	case FileTypeJSONL:
+		return p.processJSONLInChunks(decompressedReader, processor)
 	default:
 		return fmt.Errorf("%w: unsupported file type for chunked processing", ErrUnsupportedFormat)
 	}
@@ -648,7 +666,7 @@ func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chu
 	for i, name := range headerSlice {
 		// For Parquet files, we'll default to TEXT for simplicity in streaming
 		// Real type inference could be done from Arrow schema
-		columnInfoList[i] = newColumnInfoWithType(name, columnTypeText)
+		columnInfoList[i] = newColumnInfoWithType(name)
 	}
 
 	// Handle header-only Parquet files (schema exists but no data rows)
@@ -977,4 +995,330 @@ func (p *streamingParser) processXLSXInChunks(reader io.Reader, processor chunkP
 	}
 
 	return nil
+}
+
+// jsonDataHeader is the column name for JSON data storage.
+// JSON data is stored as raw JSON strings in a single TEXT column.
+// Users can query fields using SQLite's json_extract() function.
+//
+// Example SQL:
+//
+//	SELECT json_extract(data, '$.name') AS name FROM my_json_table;
+const jsonDataHeader = "data"
+
+// parseJSONStream parses JSON data from reader and returns a table.
+// Array root: each element becomes a row with raw JSON in the "data" column.
+// Object root: single row with the entire object as raw JSON.
+//
+// This approach stores raw JSON and relies on SQLite's json_extract() for field access,
+// making it robust against arbitrarily nested or complex JSON structures.
+//
+// Example usage with SQLite:
+//
+//	SELECT json_extract(data, '$.name') FROM my_json_table;
+//	SELECT json_extract(data, '$.address.city') FROM my_json_table;
+func (p *streamingParser) parseJSONStream(reader io.Reader) (*table, error) {
+	content, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read JSON: %s", ErrParsing, err.Error())
+	}
+
+	trimmed := strings.TrimSpace(string(content))
+	if trimmed == "" {
+		return nil, fmt.Errorf("%w: empty JSON data", ErrEmptyData)
+	}
+
+	h := newHeader([]string{jsonDataHeader})
+	colInfo := []columnInfo{newColumnInfoWithType(jsonDataHeader)}
+
+	// Try to parse as array first
+	var arr []json.RawMessage
+	if err := json.Unmarshal([]byte(trimmed), &arr); err == nil {
+		if len(arr) == 0 {
+			return nil, fmt.Errorf("%w: empty JSON array", ErrEmptyData)
+		}
+		records := make([]Record, 0, len(arr))
+		for _, elem := range arr {
+			records = append(records, newRecord([]string{string(elem)}))
+		}
+		t := newTable(p.tableName, h, records)
+		t.columnInfo = colInfo
+		return t, nil
+	}
+
+	// Try as single value (object, string, number, boolean, null)
+	var obj json.RawMessage
+	if err := json.Unmarshal([]byte(trimmed), &obj); err != nil {
+		return nil, fmt.Errorf("%w: failed to parse JSON: %s", ErrInvalidData, err.Error())
+	}
+
+	t := newTable(p.tableName, h, []Record{newRecord([]string{string(obj)})})
+	t.columnInfo = colInfo
+	return t, nil
+}
+
+// parseJSONLStream parses JSON Lines data from reader and returns a table.
+// Each non-empty line must be valid JSON and becomes a row with raw JSON in "data" column.
+// Empty lines are silently skipped. There is no line size limit.
+//
+// JSONL (JSON Lines) format stores one JSON value per line, making it ideal for
+// streaming and append-only log files. Each line is independently valid JSON.
+//
+// Example usage with SQLite:
+//
+//	SELECT json_extract(data, '$.status') FROM my_jsonl_table
+//	WHERE json_extract(data, '$.code') = 200;
+func (p *streamingParser) parseJSONLStream(reader io.Reader) (*table, error) {
+	br := bufio.NewReader(reader)
+
+	h := newHeader([]string{jsonDataHeader})
+	colInfo := []columnInfo{newColumnInfoWithType(jsonDataHeader)}
+	var records []Record
+	lineNum := 0
+
+	for {
+		rawLine, err := br.ReadBytes('\n')
+		// Process whatever we got before checking the error.
+		// ReadBytes returns data even when err == io.EOF.
+		lineNum++
+		line := strings.TrimSpace(string(rawLine))
+		if line != "" {
+			if !json.Valid([]byte(line)) {
+				return nil, fmt.Errorf("%w: invalid JSON on line %d: %s",
+					ErrInvalidData, lineNum, truncateLineForError(line, 100))
+			}
+			records = append(records, newRecord([]string{line}))
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, fmt.Errorf("%w: failed to read JSONL: %s", ErrParsing, err.Error())
+		}
+	}
+
+	if len(records) == 0 {
+		return nil, fmt.Errorf("%w: empty JSONL data", ErrEmptyData)
+	}
+
+	t := newTable(p.tableName, h, records)
+	t.columnInfo = colInfo
+	return t, nil
+}
+
+// processJSONInChunks processes JSON data in chunks using a streaming decoder.
+// For JSON arrays, elements are decoded one at a time from the stream without loading
+// the entire array into memory, making it safe for large files.
+// Single objects (non-array) are read fully and processed as a single chunk.
+func (p *streamingParser) processJSONInChunks(reader io.Reader, processor chunkProcessor) error {
+	// Use bufio.Reader to peek at the first non-whitespace byte and decide the strategy.
+	br := bufio.NewReader(reader)
+	isArray, err := peekJSONIsArray(br)
+	if err != nil {
+		return err
+	}
+
+	h := newHeader([]string{jsonDataHeader})
+	colInfo := []columnInfo{newColumnInfoWithType(jsonDataHeader)}
+
+	if isArray {
+		// Stream array elements one by one via json.Decoder.
+		dec := json.NewDecoder(br)
+		// Consume the opening '['
+		if _, err := dec.Token(); err != nil {
+			return fmt.Errorf("%w: failed to parse JSON array: %s", ErrInvalidData, err.Error())
+		}
+		return p.processJSONArrayChunks(dec, h, colInfo, processor)
+	}
+
+	// Non-array: read the whole value and process as a single-row chunk.
+	content, err := io.ReadAll(br)
+	if err != nil {
+		return fmt.Errorf("%w: failed to read JSON: %s", ErrParsing, err.Error())
+	}
+
+	trimmed := strings.TrimSpace(string(content))
+	if trimmed == "" {
+		return fmt.Errorf("%w: empty JSON data", ErrEmptyData)
+	}
+
+	var obj json.RawMessage
+	if unmarshalErr := json.Unmarshal([]byte(trimmed), &obj); unmarshalErr != nil {
+		return fmt.Errorf("%w: failed to parse JSON: %s", ErrInvalidData, unmarshalErr.Error())
+	}
+
+	chunk := &tableChunk{
+		tableName:  p.tableName,
+		headers:    h,
+		records:    []Record{newRecord([]string{string(obj)})},
+		columnInfo: colInfo,
+	}
+	return processor(chunk)
+}
+
+// peekJSONIsArray peeks at the reader to determine if the JSON value starts with '['.
+// Leading whitespace is skipped. Returns an error if the reader is empty.
+func peekJSONIsArray(br *bufio.Reader) (bool, error) {
+	for {
+		b, err := br.ReadByte()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return false, fmt.Errorf("%w: empty JSON data", ErrEmptyData)
+			}
+			return false, fmt.Errorf("%w: failed to read JSON: %s", ErrParsing, err.Error())
+		}
+		// Skip whitespace
+		if b == ' ' || b == '\t' || b == '\n' || b == '\r' {
+			continue
+		}
+		// Put the byte back so the decoder / ReadAll can consume it
+		if unreadErr := br.UnreadByte(); unreadErr != nil {
+			return false, fmt.Errorf("%w: failed to read JSON: %s", ErrParsing, unreadErr.Error())
+		}
+		return b == '[', nil
+	}
+}
+
+// processJSONArrayChunks streams elements from an already-opened JSON array via decoder.
+// The opening '[' must have already been consumed before calling this function.
+func (p *streamingParser) processJSONArrayChunks(
+	dec *json.Decoder, h header, colInfo []columnInfo, processor chunkProcessor,
+) error {
+	chunkSize := p.chunkSize.Int()
+	if chunkSize <= 0 {
+		chunkSize = DefaultRowsPerChunk
+	}
+
+	var chunkRecords []Record
+	totalRecords := 0
+
+	for dec.More() {
+		var elem json.RawMessage
+		if err := dec.Decode(&elem); err != nil {
+			return fmt.Errorf("%w: failed to decode JSON array element: %s", ErrParsing, err.Error())
+		}
+		chunkRecords = append(chunkRecords, newRecord([]string{string(elem)}))
+		totalRecords++
+
+		if len(chunkRecords) >= chunkSize {
+			chunk := &tableChunk{
+				tableName:  p.tableName,
+				headers:    h,
+				records:    chunkRecords,
+				columnInfo: colInfo,
+			}
+			if err := processor(chunk); err != nil {
+				return fmt.Errorf("chunk processor error: %w", err)
+			}
+			chunkRecords = nil
+		}
+	}
+
+	// Consume the closing ']'
+	if _, err := dec.Token(); err != nil {
+		return fmt.Errorf("%w: failed to read JSON array end: %s", ErrParsing, err.Error())
+	}
+
+	// Reject trailing data after the array (e.g. "[1] garbage")
+	if dec.More() {
+		return fmt.Errorf("%w: unexpected data after JSON array", ErrInvalidData)
+	}
+
+	if totalRecords == 0 {
+		return fmt.Errorf("%w: empty JSON array", ErrEmptyData)
+	}
+
+	// Process remaining records
+	if len(chunkRecords) > 0 {
+		chunk := &tableChunk{
+			tableName:  p.tableName,
+			headers:    h,
+			records:    chunkRecords,
+			columnInfo: colInfo,
+		}
+		if err := processor(chunk); err != nil {
+			return fmt.Errorf("chunk processor error: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// processJSONLInChunks processes JSONL data in chunks with true streaming.
+// Lines are read one by one and accumulated into chunks, calling the processor
+// callback each time the chunk reaches the configured size.
+func (p *streamingParser) processJSONLInChunks(reader io.Reader, processor chunkProcessor) error {
+	br := bufio.NewReader(reader)
+
+	h := newHeader([]string{jsonDataHeader})
+	colInfo := []columnInfo{newColumnInfoWithType(jsonDataHeader)}
+
+	chunkSize := p.chunkSize.Int()
+	if chunkSize <= 0 {
+		chunkSize = DefaultRowsPerChunk
+	}
+
+	var chunkRecords []Record
+	lineNum := 0
+	totalRecords := 0
+
+	for {
+		rawLine, err := br.ReadBytes('\n')
+		lineNum++
+		line := strings.TrimSpace(string(rawLine))
+		if line != "" {
+			if !json.Valid([]byte(line)) {
+				return fmt.Errorf("%w: invalid JSON on line %d: %s",
+					ErrInvalidData, lineNum, truncateLineForError(line, 100))
+			}
+			chunkRecords = append(chunkRecords, newRecord([]string{line}))
+			totalRecords++
+
+			if len(chunkRecords) >= chunkSize {
+				chunk := &tableChunk{
+					tableName:  p.tableName,
+					headers:    h,
+					records:    chunkRecords,
+					columnInfo: colInfo,
+				}
+				if err := processor(chunk); err != nil {
+					return fmt.Errorf("chunk processor error: %w", err)
+				}
+				chunkRecords = nil
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return fmt.Errorf("%w: failed to read JSONL: %s", ErrParsing, err.Error())
+		}
+	}
+
+	// Process remaining records
+	if len(chunkRecords) > 0 {
+		chunk := &tableChunk{
+			tableName:  p.tableName,
+			headers:    h,
+			records:    chunkRecords,
+			columnInfo: colInfo,
+		}
+		if err := processor(chunk); err != nil {
+			return fmt.Errorf("chunk processor error: %w", err)
+		}
+	}
+
+	if totalRecords == 0 {
+		return fmt.Errorf("%w: empty JSONL data", ErrEmptyData)
+	}
+
+	return nil
+}
+
+// truncateLineForError truncates a string to maxLen characters for error messages.
+func truncateLineForError(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

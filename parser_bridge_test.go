@@ -51,6 +51,58 @@ func TestParserFileType(t *testing.T) {
 		{"Parquet ZSTD", FileTypeParquetZSTD, fileparser.ParquetZSTD},
 		{"XLSX ZSTD", FileTypeXLSXZSTD, fileparser.XLSXZSTD},
 
+		// ZLIB compressed
+		{"CSV ZLIB", FileTypeCSVZLIB, fileparser.CSVZLIB},
+		{"TSV ZLIB", FileTypeTSVZLIB, fileparser.TSVZLIB},
+		{"LTSV ZLIB", FileTypeLTSVZLIB, fileparser.LTSVZLIB},
+		{"Parquet ZLIB", FileTypeParquetZLIB, fileparser.ParquetZLIB},
+		{"XLSX ZLIB", FileTypeXLSXZLIB, fileparser.XLSXZLIB},
+
+		// SNAPPY compressed
+		{"CSV SNAPPY", FileTypeCSVSNAPPY, fileparser.CSVSNAPPY},
+		{"TSV SNAPPY", FileTypeTSVSNAPPY, fileparser.TSVSNAPPY},
+		{"LTSV SNAPPY", FileTypeLTSVSNAPPY, fileparser.LTSVSNAPPY},
+		{"Parquet SNAPPY", FileTypeParquetSNAPPY, fileparser.ParquetSNAPPY},
+		{"XLSX SNAPPY", FileTypeXLSXSNAPPY, fileparser.XLSXSNAPPY},
+
+		// S2 compressed
+		{"CSV S2", FileTypeCSVS2, fileparser.CSVS2},
+		{"TSV S2", FileTypeTSVS2, fileparser.TSVS2},
+		{"LTSV S2", FileTypeLTSVS2, fileparser.LTSVS2},
+		{"Parquet S2", FileTypeParquetS2, fileparser.ParquetS2},
+		{"XLSX S2", FileTypeXLSXS2, fileparser.XLSXS2},
+
+		// LZ4 compressed
+		{"CSV LZ4", FileTypeCSVLZ4, fileparser.CSVLZ4},
+		{"TSV LZ4", FileTypeTSVLZ4, fileparser.TSVLZ4},
+		{"LTSV LZ4", FileTypeLTSVLZ4, fileparser.LTSVLZ4},
+		{"Parquet LZ4", FileTypeParquetLZ4, fileparser.ParquetLZ4},
+		{"XLSX LZ4", FileTypeXLSXLZ4, fileparser.XLSXLZ4},
+
+		// JSON base types
+		{"JSON", FileTypeJSON, fileparser.JSON},
+		{"JSONL", FileTypeJSONL, fileparser.JSONL},
+
+		// JSON compressed
+		{"JSON GZ", FileTypeJSONGZ, fileparser.JSONGZ},
+		{"JSON BZ2", FileTypeJSONBZ2, fileparser.JSONBZ2},
+		{"JSON XZ", FileTypeJSONXZ, fileparser.JSONXZ},
+		{"JSON ZSTD", FileTypeJSONZSTD, fileparser.JSONZSTD},
+		{"JSON ZLIB", FileTypeJSONZLIB, fileparser.JSONZLIB},
+		{"JSON SNAPPY", FileTypeJSONSNAPPY, fileparser.JSONSNAPPY},
+		{"JSON S2", FileTypeJSONS2, fileparser.JSONS2},
+		{"JSON LZ4", FileTypeJSONLZ4, fileparser.JSONLZ4},
+
+		// JSONL compressed
+		{"JSONL GZ", FileTypeJSONLGZ, fileparser.JSONLGZ},
+		{"JSONL BZ2", FileTypeJSONLBZ2, fileparser.JSONLBZ2},
+		{"JSONL XZ", FileTypeJSONLXZ, fileparser.JSONLXZ},
+		{"JSONL ZSTD", FileTypeJSONLZSTD, fileparser.JSONLZSTD},
+		{"JSONL ZLIB", FileTypeJSONLZLIB, fileparser.JSONLZLIB},
+		{"JSONL SNAPPY", FileTypeJSONLSNAPPY, fileparser.JSONLSNAPPY},
+		{"JSONL S2", FileTypeJSONLS2, fileparser.JSONLS2},
+		{"JSONL LZ4", FileTypeJSONLLZ4, fileparser.JSONLLZ4},
+
 		// Unsupported / default case
 		{"Unsupported", FileTypeUnsupported, fileparser.Unsupported},
 		{"Unknown type", FileType(9999), fileparser.Unsupported},

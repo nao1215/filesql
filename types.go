@@ -253,11 +253,13 @@ func newColumnInfo(name string, values []string) columnInfo {
 	}
 }
 
-// newColumnInfoWithType creates a new columnInfo with explicit type
-func newColumnInfoWithType(name string, colType columnType) columnInfo {
+// newColumnInfoWithType creates a new columnInfo with TEXT type.
+// This is used when the column type is known to be TEXT (e.g., JSON data columns,
+// Parquet schema columns in streaming mode).
+func newColumnInfoWithType(name string) columnInfo {
 	return columnInfo{
 		Name: name,
-		Type: colType,
+		Type: columnTypeText,
 	}
 }
 
@@ -315,7 +317,7 @@ func newColumnInfoListFromValues(header header, columnValues [][]string) columnI
 		// No data to infer from, use default TEXT type
 		columnInfos := make(columnInfoList, len(header))
 		for i, name := range header {
-			columnInfos[i] = newColumnInfoWithType(name, columnTypeText)
+			columnInfos[i] = newColumnInfoWithType(name)
 		}
 		return columnInfos
 	}

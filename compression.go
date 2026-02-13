@@ -279,6 +279,10 @@ func (f *CompressionFactory) GetBaseFileType(path string) FileType {
 		return FileTypeParquet
 	case extXLSX:
 		return FileTypeXLSX
+	case extJSON:
+		return FileTypeJSON
+	case extJSONL:
+		return FileTypeJSONL
 	default:
 		return FileTypeUnsupported
 	}
