@@ -9,7 +9,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/xuri/excelize/v2"
@@ -70,6 +69,9 @@ type readerInput struct {
 	tableName string
 	// fileType specifies the file format using domain/model types
 	fileType FileType
+	// closer is an optional closer for the reader (set when the reader was opened internally, e.g. from AddFS).
+	// User-provided readers (from AddReader) do not set this field.
+	closer io.Closer
 }
 
 // NewBuilder creates a new database builder.
@@ -425,10 +427,6 @@ func (b *DBBuilder) OpenReadOnly(ctx context.Context) (*ReadOnlyDB, error) {
 
 // deduplicateCompressedFiles removes compressed duplicates when uncompressed versions exist.
 // DEPRECATED: This method has been moved to fileProcessor.deduplicateCompressedFiles()
-func (b *DBBuilder) deduplicateCompressedFiles(files []string) []string {
-	return b.fileProcessor.deduplicateCompressedFiles(files)
-}
-
 // createInMemoryDatabase creates a new in-memory SQLite database connection.
 func (b *DBBuilder) createInMemoryDatabase() (*sql.DB, error) {
 	sqliteDriver := &sqlite.Driver{}
@@ -491,93 +489,6 @@ func (b *DBBuilder) setupAutoSaveIfNeeded(ctx context.Context, db *sql.DB) (*sql
 	}
 
 	return db, nil
-}
-
-// processFSToReaders processes all supported files from an fs.FS and creates ReaderInput
-
-func (b *DBBuilder) processFSToReaders(_ context.Context, filesystem fs.FS) ([]readerInput, error) {
-	readers := make([]readerInput, 0)
-
-	// Search for all supported file patterns
-	supportedPatterns := supportedFileExtPatterns()
-
-	// Collect all matching files
-	allMatches := make([]string, 0)
-	for _, pattern := range supportedPatterns {
-		matches, err := fs.Glob(filesystem, pattern)
-		if err != nil {
-			return nil, fmt.Errorf("%w: failed to search pattern %s: %s", ErrIOOperation, pattern, err.Error())
-		}
-		allMatches = append(allMatches, matches...)
-	}
-
-	// Also search recursively in subdirectories
-	// Check if "." exists in the filesystem before walking
-	if _, err := fs.Stat(filesystem, "."); err == nil {
-		// "." exists, we can safely walk the filesystem
-		walkErr := fs.WalkDir(filesystem, ".", func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				return nil
-			}
-			if isSupportedFile(path) {
-				// Check if already found by glob patterns
-				// Use path.Clean to normalize paths for comparison (fs.FS uses forward slashes)
-				normalizedPath := filepath.ToSlash(path)
-				found := false
-				for _, existing := range allMatches {
-					normalizedExisting := filepath.ToSlash(existing)
-					if normalizedExisting == normalizedPath {
-						found = true
-						break
-					}
-				}
-				if !found {
-					allMatches = append(allMatches, path)
-				}
-			}
-			return nil
-		})
-		if walkErr != nil {
-			return nil, fmt.Errorf("%w: failed to walk filesystem: %s", ErrIOOperation, walkErr.Error())
-		}
-	}
-	// If "." doesn't exist, we'll just use what we found with glob patterns
-
-	if len(allMatches) == 0 {
-		return nil, fmt.Errorf("%w: no supported files found in filesystem", ErrNoFiles)
-	}
-
-	// Remove compressed duplicates when uncompressed versions exist
-	allMatches = b.deduplicateCompressedFiles(allMatches)
-
-	// Create ReaderInput for each matched file
-	for _, match := range allMatches {
-		// Open the file from FS
-		file, err := filesystem.Open(match)
-		if err != nil {
-			return nil, fmt.Errorf("%w: failed to open FS file %s: %s", ErrIOOperation, match, err.Error())
-		}
-
-		// Determine file type from extension using NewFile
-		fileInfo := newFile(match)
-		fileType := fileInfo.getFileType()
-
-		// Generate table name from file path (remove extension and clean up)
-		tableName := sanitizeTableName(tableFromFilePath(match))
-
-		// Create ReaderInput
-		readerInput := readerInput{
-			reader:    file,
-			tableName: tableName,
-			fileType:  fileType,
-		}
-
-		readers = append(readers, readerInput)
-	}
-	return readers, nil
 }
 
 // streamXLSXFileToSQLite handles XLSX files by creating separate tables for each sheet

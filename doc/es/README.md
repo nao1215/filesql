@@ -50,6 +50,7 @@ En lugar de mantener código duplicado en ambos proyectos, extrajimos la funcion
 | `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy`, `.json.snappy`, `.jsonl.snappy` | Compresión Snappy | Archivos comprimidos con Snappy |
 | `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2`, `.json.s2`, `.jsonl.s2` | Compresión S2 | Archivos comprimidos con S2 (compatible con Snappy) |
 | `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4`, `.json.lz4`, `.jsonl.lz4` | Compresión LZ4 | Archivos comprimidos con LZ4 |
+| `.fed` | Fedwire | Archivos de mensajes Fedwire heredados (**Experimental**) |
 
 ## Instalación
 
@@ -516,6 +517,49 @@ SELECT h1.Nombre, h2.Producto FROM ventas_Hoja1 h1
 - **Mapeo de tipos**: Los tipos Parquet se mapean a tipos SQLite
 - **Compresión**: Se utiliza la compresión integrada de Parquet en lugar de compresión externa
 - **Datos grandes**: Los archivos Parquet se procesan eficientemente con el formato columnar de Arrow
+
+### Soporte Fedwire - Experimental
+
+> **Advertencia**: El soporte de archivos Fedwire es **experimental**. La API puede cambiar en futuras versiones.
+
+Los archivos de mensajes Fedwire heredados (`.fed`) pueden cargarse, consultarse, modificarse y exportarse de vuelta al formato Fedwire. Cada archivo Fedwire contiene un único FEDWireMessage y se convierte en una única tabla plana con aproximadamente 326 columnas.
+
+| Nombre de tabla | Descripción |
+|----------------|-------------|
+| `{nombre_archivo}_message` | Tabla plana con todos los campos de FEDWireMessage (~326 columnas, 1 fila) |
+
+Todas las columnas son de tipo TEXT ya que el formato wire almacena todos los valores como cadenas de ancho fijo.
+
+#### Limitaciones
+
+**Solo UPDATE**: Solo se admiten operaciones UPDATE en filas existentes para la edición de ida y vuelta. Las operaciones INSERT/DELETE en SQL no se reflejan en el archivo wire de salida.
+
+**Sin nuevas secciones**: Las secciones de mensaje opcionales que no estaban presentes en el archivo original no pueden añadirse mediante modificaciones SQL.
+
+**Compresión**: Los archivos Fedwire no soportan envoltorios de compresión (`.fed.gz`, etc.).
+
+**Seguridad**: Los datos Fedwire contienen información bancaria sensible, incluyendo números de enrutamiento, números de cuenta, nombres y montos de transacciones. No registre ni exporte los datos de tablas wire de forma literal en entornos de producción.
+
+#### Ejemplo
+
+```go
+ctx := context.Background()
+db, err := filesql.OpenContext(ctx, "payment.fed")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// Consultar información del remitente y receptor
+rows, err := db.QueryContext(ctx, `
+    SELECT sender_di_routing_number, receiver_di_routing_number, amount
+    FROM payment_message
+`)
+
+// Modificar y exportar de vuelta al formato Fedwire
+db.ExecContext(ctx, "UPDATE payment_message SET amount = '000005000000'")
+filesql.DumpFedWire(ctx, db, "payment", "modified.fed")
+```
 
 ## Ejemplos avanzados
 

@@ -214,11 +214,12 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 		// Generate table name from file path (remove extension and clean up)
 		tableName := sanitizeTableName(tableFromFilePath(match))
 
-		// Create ReaderInput
+		// Create ReaderInput with closer so the file is released after streaming
 		readerInput := readerInput{
 			reader:    file,
 			tableName: tableName,
 			fileType:  fileType,
+			closer:    file,
 		}
 
 		readers = append(readers, readerInput)

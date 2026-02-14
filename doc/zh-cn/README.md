@@ -50,6 +50,7 @@
 | `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy`, `.json.snappy`, `.jsonl.snappy` | Snappy 压缩 | Snappy 压缩文件 |
 | `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2`, `.json.s2`, `.jsonl.s2` | S2 压缩 | S2 压缩文件（Snappy 兼容） |
 | `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4`, `.json.lz4`, `.jsonl.lz4` | LZ4 压缩 | LZ4 压缩文件 |
+| `.fed` | Fedwire | 旧版 Fedwire 消息文件（**实验性**） |
 
 ## 安装
 
@@ -578,6 +579,49 @@ SQL 示例：
 SELECT * FROM sales_员工信息 WHERE 年龄 > 27;
 SELECT e.姓名, p.产品名称 FROM sales_员工信息 e 
   JOIN sales_产品列表 p ON e.rowid = p.rowid;
+```
+
+### Fedwire 支持 - 实验性
+
+> **警告**：Fedwire 文件支持是**实验性**的。API 可能会在未来版本中更改。
+
+旧版 Fedwire 消息文件（`.fed`）可以加载、查询、修改并导出回 Fedwire 格式。每个 Fedwire 文件包含一个 FEDWireMessage，并转换为一个包含约 326 列的单一扁平表。
+
+| 表名 | 描述 |
+|------|------|
+| `{文件名}_message` | 包含所有 FEDWireMessage 字段的扁平表（约 326 列，1 行） |
+
+所有列均为 TEXT 类型，因为 Wire 格式将所有值存储为固定宽度字符串。
+
+#### 限制
+
+**仅支持 UPDATE**：往返编辑仅支持对现有行的 UPDATE 操作。SQL 中的 INSERT/DELETE 操作不会反映到输出的 Wire 文件中。
+
+**无法新增节**：无法通过 SQL 修改添加原始文件中不存在的可选消息节。
+
+**压缩**：Fedwire 文件不支持压缩包装（`.fed.gz` 等）。
+
+**安全性**：Fedwire 数据包含敏感的银行信息，包括路由号码、账户号码、姓名和交易金额。在生产环境中，请勿直接记录或导出 Wire 表数据。
+
+#### 示例
+
+```go
+ctx := context.Background()
+db, err := filesql.OpenContext(ctx, "payment.fed")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// 查询发送方和接收方信息
+rows, err := db.QueryContext(ctx, `
+    SELECT sender_di_routing_number, receiver_di_routing_number, amount
+    FROM payment_message
+`)
+
+// 修改并导出回 Fedwire 格式
+db.ExecContext(ctx, "UPDATE payment_message SET amount = '000005000000'")
+filesql.DumpFedWire(ctx, db, "payment", "modified.fed")
 ```
 
 ## 示例

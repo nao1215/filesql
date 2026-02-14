@@ -49,6 +49,11 @@ func TestOutputFormat_String(t *testing.T) {
 			want:   "ach",
 		},
 		{
+			name:   "FedWire format",
+			format: OutputFormatFedWire,
+			want:   "fed",
+		},
+		{
 			name:   "Unknown format defaults to csv",
 			format: OutputFormat(999),
 			want:   "csv",
@@ -101,6 +106,11 @@ func TestOutputFormat_Extension(t *testing.T) {
 			name:   "ACH extension",
 			format: OutputFormatACH,
 			want:   ".ach",
+		},
+		{
+			name:   "FedWire extension",
+			format: OutputFormatFedWire,
+			want:   ".fed",
 		},
 		{
 			name:   "Unknown format defaults to csv",
@@ -521,7 +531,7 @@ func TestAutoSaveConnection_CleanupACHRegistry(t *testing.T) {
 	}
 
 	// Clean up registry
-	conn.cleanupACHRegistry()
+	conn.cleanupTableSetRegistries()
 
 	// Close the db
 	require.NoError(t, db.Close())
@@ -632,14 +642,14 @@ func TestAutoSaveConnection_PerformACHAutoSave_DumpError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to export ACH file")
 }
 
-func TestAutoSaveConnection_CleanupACHRegistry_NonACHPath(t *testing.T) {
-	// Test that cleanupACHRegistry handles non-ACH paths correctly (no-op)
+func TestAutoSaveConnection_CleanupTableSetRegistries_TabularPath(t *testing.T) {
+	// Test that cleanupTableSetRegistries handles tabular-only paths correctly (no-op)
 	conn := &autoSaveConnection{
 		originalPaths: []string{"test.csv", "data.tsv"},
 	}
 
-	// Should not panic or error - just silently skip non-ACH files
-	conn.cleanupACHRegistry()
+	// Should not panic or error - just silently skip tabular files
+	conn.cleanupTableSetRegistries()
 
 	// Verify connection state is valid after cleanup
 	assert.NotNil(t, conn.originalPaths)

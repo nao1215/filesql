@@ -68,6 +68,9 @@ var (
 
 	// ErrACH indicates an ACH file operation failed.
 	ErrACH = errors.New("filesql: ACH operation failed")
+
+	// ErrWire indicates a Fedwire file operation failed.
+	ErrWire = errors.New("filesql: Fedwire operation failed")
 )
 
 // errDuplicateColumnName is an internal alias for backward compatibility.

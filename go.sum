@@ -54,8 +54,10 @@ github.com/moov-io/iso3166 v0.4.0 h1:WtXIptANC16DrHpbSAt4+itFciCCnA+C6eAi9k7HEsA
 github.com/moov-io/iso3166 v0.4.0/go.mod h1:13ubAoOZNfWzs2fN3x467zg8q982U867Ee+ulqrArlM=
 github.com/moov-io/iso4217 v0.3.2 h1:/PNKwvt0LCaDx3r5cQEjIdX6a7PEELWJ8D5thi2jiHU=
 github.com/moov-io/iso4217 v0.3.2/go.mod h1:IoD1XWQwCZBhFk9YlfQwvRW3TGlk7IoZX9OEe2PG19M=
-github.com/nao1215/fileparser v0.4.0 h1:p1xoxpF0+/HnQG4HH0D7UcG+kPSnTe9CvYqyWrslios=
-github.com/nao1215/fileparser v0.4.0/go.mod h1:eVgJFskQP8H6vAfX65QyD9mWwkp8hKQ8upV4Ft76lzM=
+github.com/moov-io/wire v0.15.7 h1:QZ7UumWum7ZP7dBuApQp/CwXnUdUR24yqk+exeOirrc=
+github.com/moov-io/wire v0.15.7/go.mod h1:sXV53vZ8cekKkreiD317nO1G3cIRmzJNxUj5KNWei9c=
+github.com/nao1215/fileparser v0.5.1 h1:cbig0/kfl0HoPsrdK7VGvfj15iMnwknKWv3u/4i0npU=
+github.com/nao1215/fileparser v0.5.1/go.mod h1:u/OKOYKZ2VJ+PHyQ9lNP3FuCTelJjP3YRlQEoKsFBJ4=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/pierrec/lz4/v4 v4.1.25 h1:kocOqRffaIbU5djlIBr7Wh+cx82C0vtFb0fOurZHqD0=

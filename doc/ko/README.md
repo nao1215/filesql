@@ -50,6 +50,7 @@
 | `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy`, `.json.snappy`, `.jsonl.snappy` | Snappy 압축 | Snappy 압축 파일 |
 | `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2`, `.json.s2`, `.jsonl.s2` | S2 압축 | S2 압축 파일 (Snappy 호환) |
 | `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4`, `.json.lz4`, `.jsonl.lz4` | LZ4 압축 | LZ4 압축 파일 |
+| `.fed` | Fedwire | 레거시 Fedwire 메시지 파일 (**실험적**) |
 
 ## 설치
 
@@ -515,6 +516,49 @@ SQL 예제:
 SELECT * FROM sales_Sheet1 WHERE 나이 > 27;
 SELECT s1.이름, s2.상품 FROM sales_Sheet1 s1 
   JOIN sales_Sheet2 s2 ON s1.rowid = s2.rowid;
+```
+
+### Fedwire 지원 - 실험적
+
+> **경고**: Fedwire 파일 지원은 **실험적**입니다. API는 향후 버전에서 변경될 수 있습니다.
+
+레거시 Fedwire 메시지 파일(`.fed`)을 로드, 쿼리, 수정하고 Fedwire 형식으로 다시 내보낼 수 있습니다. 각 Fedwire 파일은 단일 FEDWireMessage를 포함하며 약 326개의 열을 가진 단일 플랫 테이블로 변환됩니다.
+
+| 테이블 이름 | 설명 |
+|-----------|------|
+| `{파일명}_message` | 모든 FEDWireMessage 필드를 가진 플랫 테이블 (~326열, 1행) |
+
+Wire 형식은 모든 값을 고정 너비 문자열로 저장하므로 모든 열은 TEXT 타입입니다.
+
+#### 제한사항
+
+**UPDATE만 지원**: 왕복 편집에는 기존 행에 대한 UPDATE 작업만 지원됩니다. SQL에서의 INSERT/DELETE 작업은 출력 Wire 파일에 반영되지 않습니다.
+
+**새 섹션 불가**: 원본 파일에 없었던 선택적 메시지 섹션은 SQL 수정을 통해 추가할 수 없습니다.
+
+**압축**: Fedwire 파일은 압축 래퍼(`.fed.gz` 등)를 지원하지 않습니다.
+
+**보안**: Fedwire 데이터에는 라우팅 번호, 계좌 번호, 이름, 거래 금액을 포함한 민감한 은행 정보가 포함되어 있습니다. 프로덕션 환경에서 Wire 테이블 데이터를 그대로 로깅하거나 내보내지 마세요.
+
+#### 예제
+
+```go
+ctx := context.Background()
+db, err := filesql.OpenContext(ctx, "payment.fed")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// 발신자와 수신자 정보 쿼리
+rows, err := db.QueryContext(ctx, `
+    SELECT sender_di_routing_number, receiver_di_routing_number, amount
+    FROM payment_message
+`)
+
+// 수정하고 Fedwire 형식으로 다시 내보내기
+db.ExecContext(ctx, "UPDATE payment_message SET amount = '000005000000'")
+filesql.DumpFedWire(ctx, db, "payment", "modified.fed")
 ```
 
 ## 고급 예제
