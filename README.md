@@ -51,6 +51,7 @@ Rather than maintaining duplicate code across both projects, we extracted the co
 | `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2`, `.json.s2`, `.jsonl.s2` | S2 compressed | S2 compressed files (Snappy compatible) |
 | `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4`, `.json.lz4`, `.jsonl.lz4` | LZ4 compressed | LZ4 compressed files |
 | `.ach` | ACH (NACHA) | Automated Clearing House files (**Experimental**) |
+| `.fed` | Fedwire | Legacy Fedwire message files (**Experimental**) |
 
 ## Installation
 
@@ -548,6 +549,49 @@ rows, err := db.QueryContext(ctx, `
     FROM payments_entries e
     JOIN payments_batches b ON e.batch_index = b.batch_index
 `)
+```
+
+### Fedwire Support - Experimental
+
+> **Warning**: Fedwire file support is **experimental**. The API may change in future versions.
+
+Legacy Fedwire message files (`.fed`) can be loaded, queried, modified, and exported back to Fedwire format. Each Fedwire file contains a single FEDWireMessage and is converted to a single flat table with approximately 326 columns.
+
+| Table Name | Description |
+|------------|-------------|
+| `{filename}_message` | Flat table with all FEDWireMessage fields (~326 columns, 1 row) |
+
+All columns are TEXT type since the wire format stores all values as fixed-width strings.
+
+#### Limitations
+
+**UPDATE only**: Only UPDATE operations on existing rows are supported for round-trip editing. INSERT/DELETE operations in SQL are not reflected in the output wire file.
+
+**No new sections**: Optional message sections that were not present in the original file cannot be added via SQL modifications.
+
+**Compression**: Fedwire files do not support compression wrappers (`.fed.gz`, etc.).
+
+**Security**: Fedwire data contains sensitive banking information including routing numbers, account numbers, names, and transaction amounts. Do not log or export wire table data verbatim in production environments.
+
+#### Example
+
+```go
+ctx := context.Background()
+db, err := filesql.OpenContext(ctx, "payment.fed")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// Query sender and receiver information
+rows, err := db.QueryContext(ctx, `
+    SELECT sender_di_routing_number, receiver_di_routing_number, amount
+    FROM payment_message
+`)
+
+// Modify and export back to Fedwire format
+db.ExecContext(ctx, "UPDATE payment_message SET amount = '000005000000'")
+filesql.DumpFedWire(ctx, db, "payment", "modified.fed")
 ```
 
 #### Excel File Structure Example

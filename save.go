@@ -41,6 +41,8 @@ const (
 	OutputFormatXLSX
 	// OutputFormatACH represents ACH (NACHA) output format
 	OutputFormatACH
+	// OutputFormatFedWire represents Fedwire output format
+	OutputFormatFedWire
 )
 
 // String returns the string representation of OutputFormat
@@ -58,6 +60,8 @@ func (f OutputFormat) String() string {
 		return "xlsx"
 	case OutputFormatACH:
 		return "ach"
+	case OutputFormatFedWire:
+		return "fed"
 	default:
 		return "csv"
 	}
@@ -78,6 +82,8 @@ func (f OutputFormat) Extension() string {
 		return ".xlsx"
 	case OutputFormatACH:
 		return ".ach"
+	case OutputFormatFedWire:
+		return ".fed"
 	default:
 		return ".csv"
 	}
@@ -292,8 +298,8 @@ func (c *autoSaveConnection) Close() error {
 		if err := c.performAutoSave(); err != nil {
 			// Close the underlying connection first to avoid resource leaks
 			closeErr := c.conn.Close()
-			// Clean up ACH registry entries for this connection
-			c.cleanupACHRegistry()
+			// Clean up ACH and Fedwire TableSet registry entries for this connection
+			c.cleanupTableSetRegistries()
 			// Return the auto-save error as it's more important for the user
 			if closeErr != nil {
 				return fmt.Errorf("auto-save failed: %w (also failed to close connection: %w)", err, closeErr)
@@ -302,18 +308,22 @@ func (c *autoSaveConnection) Close() error {
 		}
 	}
 
-	// Clean up ACH registry entries for this connection
-	c.cleanupACHRegistry()
+	// Clean up ACH and Fedwire TableSet registry entries for this connection
+	c.cleanupTableSetRegistries()
 
 	return c.conn.Close()
 }
 
-// cleanupACHRegistry removes ACH TableSet entries for files loaded by this connection
-func (c *autoSaveConnection) cleanupACHRegistry() {
+// cleanupTableSetRegistries removes ACH and Fedwire TableSet entries for files loaded by this connection.
+func (c *autoSaveConnection) cleanupTableSetRegistries() {
 	for _, path := range c.originalPaths {
 		if isACHFile(path) {
 			baseTableName := sanitizeTableName(tableFromFilePath(path))
 			UnregisterACHTableSet(baseTableName)
+		}
+		if isFedWireFile(path) {
+			baseTableName := sanitizeTableName(tableFromFilePath(path))
+			UnregisterWireTableSet(baseTableName)
 		}
 	}
 }
@@ -437,6 +447,11 @@ func (c *autoSaveConnection) performAutoSave() error {
 		return c.performACHAutoSave(tempDB, outputDir)
 	}
 
+	// Handle Fedwire format specially - need to export Fedwire files separately
+	if dumpOptions.Format == OutputFormatFedWire {
+		return c.performFedWireAutoSave(tempDB, outputDir)
+	}
+
 	// Use the existing DumpDatabase method for other formats
 	return DumpDatabase(tempDB, outputDir, dumpOptions)
 }
@@ -467,6 +482,29 @@ func (c *autoSaveConnection) performACHAutoSave(db *sql.DB, outputDir string) er
 	return nil
 }
 
+// performFedWireAutoSave saves all Fedwire tables back to Fedwire files
+func (c *autoSaveConnection) performFedWireAutoSave(db *sql.DB, outputDir string) error {
+	ctx := context.Background()
+
+	wireBaseNames := getWireBaseTableNames()
+	if len(wireBaseNames) == 0 {
+		return errors.New("no Fedwire tables found to save")
+	}
+
+	if err := os.MkdirAll(outputDir, 0750); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	for _, baseName := range wireBaseNames {
+		outputPath := filepath.Join(outputDir, baseName+".fed")
+		if err := DumpFedWire(ctx, db, baseName, outputPath); err != nil {
+			return fmt.Errorf("failed to export Fedwire file %s: %w", baseName, err)
+		}
+	}
+
+	return nil
+}
+
 // overwriteOriginalFiles saves each table back to its original file location
 func (c *autoSaveConnection) overwriteOriginalFiles(db *sql.DB) error {
 	if len(c.originalPaths) == 0 {
@@ -475,28 +513,33 @@ func (c *autoSaveConnection) overwriteOriginalFiles(db *sql.DB) error {
 
 	ctx := context.Background()
 
-	// Check if any original paths are ACH files
+	// Check if any original paths are ACH or Fedwire files
 	for _, path := range c.originalPaths {
 		if isACHFile(path) {
-			// Extract base table name from file path
 			baseTableName := sanitizeTableName(tableFromFilePath(path))
 			if err := DumpACH(ctx, db, baseTableName, path); err != nil {
 				return fmt.Errorf("failed to overwrite ACH file %s: %w", path, err)
 			}
 		}
-	}
-
-	// For non-ACH files, use the directory-based approach
-	// Filter out ACH paths for DumpDatabase
-	nonACHPaths := make([]string, 0)
-	for _, path := range c.originalPaths {
-		if !isACHFile(path) {
-			nonACHPaths = append(nonACHPaths, path)
+		if isFedWireFile(path) {
+			baseTableName := sanitizeTableName(tableFromFilePath(path))
+			if err := DumpFedWire(ctx, db, baseTableName, path); err != nil {
+				return fmt.Errorf("failed to overwrite Fedwire file %s: %w", path, err)
+			}
 		}
 	}
 
-	if len(nonACHPaths) > 0 {
-		outputDir := filepath.Dir(nonACHPaths[0])
+	// For tabular files (CSV, TSV, etc.), use the directory-based approach
+	// Filter out ACH and Fedwire paths which are already handled above
+	tabularPaths := make([]string, 0)
+	for _, path := range c.originalPaths {
+		if !isACHFile(path) && !isFedWireFile(path) {
+			tabularPaths = append(tabularPaths, path)
+		}
+	}
+
+	if len(tabularPaths) > 0 {
+		outputDir := filepath.Dir(tabularPaths[0])
 		return DumpDatabase(db, outputDir, c.autoSaveConfig.options)
 	}
 

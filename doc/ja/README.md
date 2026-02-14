@@ -50,6 +50,7 @@
 | `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy`, `.json.snappy`, `.jsonl.snappy` | Snappy圧縮 | Snappy圧縮ファイル |
 | `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2`, `.json.s2`, `.jsonl.s2` | S2圧縮 | S2圧縮ファイル（Snappy互換） |
 | `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4`, `.json.lz4`, `.jsonl.lz4` | LZ4圧縮 | LZ4圧縮ファイル |
+| `.fed` | Fedwire | レガシーFedwireメッセージファイル（**実験的**） |
 
 ## インストール
 
@@ -523,6 +524,49 @@ SQL例:
 SELECT * FROM sales_Sheet1 WHERE Age > 27;
 SELECT s1.Name, s2.Product FROM sales_Sheet1 s1 
   JOIN sales_Sheet2 s2 ON s1.rowid = s2.rowid;
+```
+
+### Fedwireサポート - 実験的
+
+> **警告**: Fedwireファイルサポートは**実験的**です。APIは将来のバージョンで変更される可能性があります。
+
+レガシーFedwireメッセージファイル（`.fed`）を読み込み、クエリ、変更、およびFedwire形式でエクスポートできます。各Fedwireファイルは単一のFEDWireMessageを含み、約326列のフラットテーブルに変換されます。
+
+| テーブル名 | 説明 |
+|-----------|------|
+| `{ファイル名}_message` | FEDWireMessageの全フィールドを持つフラットテーブル（約326列、1行） |
+
+Wire形式はすべての値を固定長文字列として格納するため、すべてのカラムはTEXT型です。
+
+#### 制限事項
+
+**UPDATEのみ**: ラウンドトリップ編集では、既存行へのUPDATE操作のみサポートされます。SQLでのINSERT/DELETE操作は出力Wireファイルに反映されません。
+
+**新規セクション不可**: 元のファイルに存在しなかったオプションのメッセージセクションは、SQL変更で追加できません。
+
+**圧縮**: Fedwireファイルは圧縮ラッパー（`.fed.gz`等）をサポートしません。
+
+**セキュリティ**: Fedwireデータにはルーティング番号、口座番号、名前、取引金額を含む機密銀行情報が含まれています。本番環境ではWireテーブルデータをそのままログ出力やエクスポートしないでください。
+
+#### 例
+
+```go
+ctx := context.Background()
+db, err := filesql.OpenContext(ctx, "payment.fed")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+// 送信者と受信者の情報をクエリ
+rows, err := db.QueryContext(ctx, `
+    SELECT sender_di_routing_number, receiver_di_routing_number, amount
+    FROM payment_message
+`)
+
+// 変更してFedwire形式にエクスポート
+db.ExecContext(ctx, "UPDATE payment_message SET amount = '000005000000'")
+filesql.DumpFedWire(ctx, db, "payment", "modified.fed")
 ```
 
 ## 高度な例

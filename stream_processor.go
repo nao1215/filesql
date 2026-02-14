@@ -59,15 +59,26 @@ func (sp *streamProcessor) streamAllReadersToDatabase(ctx context.Context, db *s
 		return nil
 	}
 	sp.logger.Info("starting reader streaming", "reader_count", len(readers))
-	for i, readerInput := range readers {
-		sp.logger.Debug("streaming reader", "table", readerInput.tableName, "file_type", readerInput.fileType.String(), "index", i+1, "total", len(readers))
-		if err := sp.streamReaderToDatabase(ctx, db, readerInput); err != nil {
-			sp.logger.Error("failed to stream reader", "table", readerInput.tableName, "error", err)
-			return streamError(ErrParsing, "failed to stream reader input for table '%s': %v", readerInput.tableName, err)
+	for i, ri := range readers {
+		sp.logger.Debug("streaming reader", "table", ri.tableName, "file_type", ri.fileType.String(), "index", i+1, "total", len(readers))
+		if err := sp.streamReaderToDatabase(ctx, db, ri); err != nil {
+			sp.closeReaderInput(ri)
+			sp.logger.Error("failed to stream reader", "table", ri.tableName, "error", err)
+			return streamError(ErrParsing, "failed to stream reader input for table '%s': %v", ri.tableName, err)
 		}
+		sp.closeReaderInput(ri)
 	}
 	sp.logger.Info("completed reader streaming", "reader_count", len(readers))
 	return nil
+}
+
+// closeReaderInput closes the underlying resource of a reader input if it was opened internally (e.g. from AddFS).
+func (sp *streamProcessor) closeReaderInput(ri readerInput) {
+	if ri.closer != nil {
+		if err := ri.closer.Close(); err != nil {
+			sp.logger.Debug("error closing reader input", "table", ri.tableName, "error", err)
+		}
+	}
 }
 
 // streamFileToDatabase streams data from a file path directly to SQLite database using chunked processing
@@ -76,6 +87,12 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db *sql.DB,
 	if isACHFile(filePath) {
 		sp.logger.Debug("detected ACH file format", "path", filePath)
 		return sp.streamACHFileToDatabase(ctx, db, filePath)
+	}
+
+	// Check if file is Fedwire format
+	if isFedWireFile(filePath) {
+		sp.logger.Debug("detected Fedwire file format", "path", filePath)
+		return sp.streamFedWireFileToDatabase(ctx, db, filePath)
 	}
 
 	// Check if file is supported
@@ -170,8 +187,43 @@ func (sp *streamProcessor) streamACHFileToDatabase(ctx context.Context, db *sql.
 	return streamACHFileToDatabase(ctx, db, file, filePath)
 }
 
+// streamFedWireFileToDatabase handles Fedwire files by creating a single message table
+func (sp *streamProcessor) streamFedWireFileToDatabase(ctx context.Context, db *sql.DB, filePath string) error {
+	sp.logger.Debug("processing Fedwire file", "path", filePath)
+
+	// Open the file
+	file, err := os.Open(filePath) //nolint:gosec // File path is validated and comes from user input
+	if err != nil {
+		sp.logger.Error("failed to open Fedwire file", "path", filePath, "error", err)
+		return fmt.Errorf("%w: failed to open Fedwire file %s: %s", ErrIOOperation, filePath, err.Error())
+	}
+	defer file.Close()
+
+	// Check if file is empty
+	fileInfo, err := file.Stat()
+	if err != nil {
+		sp.logger.Error("failed to get Fedwire file info", "path", filePath, "error", err)
+		return fmt.Errorf("%w: failed to get file info for %s: %s", ErrIOOperation, filePath, err.Error())
+	}
+	if fileInfo.Size() == 0 {
+		sp.logger.Warn("empty Fedwire file detected", "path", filePath)
+		return fmt.Errorf("%w: Fedwire file is empty", ErrEmptyData)
+	}
+
+	sp.logger.Debug("streaming Fedwire file to database", "path", filePath, "size", fileInfo.Size())
+	return streamWireFileToDatabase(ctx, db, file, filePath)
+}
+
 // streamReaderToDatabase streams data from io.Reader directly to SQLite database
 func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.DB, input readerInput) error {
+	// Route ACH/Fedwire readers to dedicated handlers
+	if input.fileType == FileTypeACH {
+		return streamACHFileToDatabase(ctx, db, input.reader, input.tableName+extACH)
+	}
+	if input.fileType == FileTypeFedWire {
+		return streamWireFileToDatabase(ctx, db, input.reader, input.tableName+extFED)
+	}
+
 	// Reader should already be validated at Build time, but ensure it's buffered
 	if _, ok := input.reader.(*bufio.Reader); !ok {
 		input.reader = bufio.NewReader(input.reader)

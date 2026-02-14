@@ -142,6 +142,10 @@ func (ft FileType) String() string {
 		return "JSONL (s2)"
 	case FileTypeJSONLLZ4:
 		return "JSONL (lz4)"
+	case FileTypeACH:
+		return "ACH"
+	case FileTypeFedWire:
+		return "FedWire"
 	default:
 		return "Unsupported"
 	}
@@ -282,6 +286,11 @@ const (
 	// FileTypeJSONLLZ4 represents lz4-compressed JSONL file type
 	FileTypeJSONLLZ4
 
+	// FileTypeACH represents ACH (NACHA) file type
+	FileTypeACH
+	// FileTypeFedWire represents Fedwire file type
+	FileTypeFedWire
+
 	// FileTypeUnsupported represents unsupported file type
 	FileTypeUnsupported
 )
@@ -364,13 +373,17 @@ func supportedFileExtPatterns() []string {
 	baseExts := []string{extCSV, extTSV, extLTSV, extParquet, extXLSX, extJSON, extJSONL}
 	compressionExts := []string{"", extGZ, extBZ2, extXZ, extZSTD, extZLIB, extSNAPPY, extS2, extLZ4}
 
-	patterns := make([]string, 0, len(compressionExts)*len(baseExts))
+	patterns := make([]string, 0, len(compressionExts)*len(baseExts)+2)
 	for _, baseExt := range baseExts {
 		for _, compressionExt := range compressionExts {
 			pattern := "*" + baseExt + compressionExt
 			patterns = append(patterns, pattern)
 		}
 	}
+
+	// ACH and Fedwire have no compression variants
+	patterns = append(patterns, "*"+extACH, "*"+extFED)
+
 	return patterns
 }
 
@@ -378,6 +391,11 @@ func supportedFileExtPatterns() []string {
 func isSupportedFile(fileName string) bool {
 	// Check for ACH files first (case-sensitive)
 	if isACHFile(fileName) {
+		return true
+	}
+
+	// Check for Fedwire files
+	if isFedWireFile(fileName) {
 		return true
 	}
 
@@ -539,6 +557,10 @@ func (ft FileType) extension() string {
 		return extJSONL + extS2
 	case FileTypeJSONLLZ4:
 		return extJSONL + extLZ4
+	case FileTypeACH:
+		return extACH
+	case FileTypeFedWire:
+		return extFED
 	default:
 		return ""
 	}
@@ -568,6 +590,10 @@ func (ft FileType) baseType() FileType {
 	case FileTypeJSONL, FileTypeJSONLGZ, FileTypeJSONLBZ2, FileTypeJSONLXZ, FileTypeJSONLZSTD,
 		FileTypeJSONLZLIB, FileTypeJSONLSNAPPY, FileTypeJSONLS2, FileTypeJSONLLZ4:
 		return FileTypeJSONL
+	case FileTypeACH:
+		return FileTypeACH
+	case FileTypeFedWire:
+		return FileTypeFedWire
 	default:
 		return FileTypeUnsupported
 	}
@@ -675,6 +701,14 @@ func (f *file) toTable() (*table, error) {
 
 // detectFileType detects file type from extension, considering compressed files
 func detectFileType(path string) FileType {
+	// Check for ACH/Fedwire first (no compression support)
+	if isACHFile(path) {
+		return FileTypeACH
+	}
+	if isFedWireFile(path) {
+		return FileTypeFedWire
+	}
+
 	basePath := path
 	var compressionType string
 

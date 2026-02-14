@@ -882,10 +882,11 @@ func TestGetSupportedFilePatterns(t *testing.T) {
 
 	patterns := supportedFileExtPatterns()
 
-	// Should have 63 patterns: 7 base extensions × 9 compression variants (including none)
+	// Should have 65 patterns: 7 base extensions × 9 compression variants (including none) + 2 (ach, fed)
 	// Base extensions: csv, tsv, ltsv, parquet, xlsx, json, jsonl
 	// Compression variants: none, gz, bz2, xz, zst, z, snappy, s2, lz4
-	expectedCount := 63
+	// Plus: *.ach, *.fed (no compression variants)
+	expectedCount := 65
 	if len(patterns) != expectedCount {
 		t.Errorf("GetSupportedFilePatterns() returned %d patterns, want %d", len(patterns), expectedCount)
 	}
@@ -906,6 +907,7 @@ func TestGetSupportedFilePatterns(t *testing.T) {
 		"*.json.z", "*.json.snappy", "*.json.s2", "*.json.lz4",
 		"*.jsonl", "*.jsonl.gz", "*.jsonl.bz2", "*.jsonl.xz", "*.jsonl.zst",
 		"*.jsonl.z", "*.jsonl.snappy", "*.jsonl.s2", "*.jsonl.lz4",
+		"*.ach", "*.fed",
 	}
 
 	for _, expected := range expectedPatterns {
@@ -1685,6 +1687,14 @@ func TestDetectFileType(t *testing.T) {
 		{"data.jsonl.snappy", FileTypeJSONLSNAPPY},
 		{"data.jsonl.s2", FileTypeJSONLS2},
 		{"data.jsonl.lz4", FileTypeJSONLLZ4},
+
+		// ACH and Fedwire types
+		{"payment.ach", FileTypeACH},
+		{"payment.ACH", FileTypeACH},
+		{"payment.fed", FileTypeFedWire},
+		{"payment.FED", FileTypeFedWire},
+		{".ach", FileTypeUnsupported}, // extension only
+		{".fed", FileTypeUnsupported}, // extension only
 
 		// Unsupported types
 		{"data.txt", FileTypeUnsupported},

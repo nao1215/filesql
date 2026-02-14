@@ -546,7 +546,7 @@ func TestDBBuilder_processFSInput(t *testing.T) {
 
 		builder := NewBuilder()
 
-		readers, err := builder.processFSToReaders(ctx, mockFS)
+		readers, err := builder.fileProcessor.processFSToReaders(ctx, mockFS)
 		assert.NoError(t, err, "processFSToReaders() should succeed")
 		assert.Len(t, readers, 3, "should return 3 readers")
 
@@ -567,7 +567,7 @@ func TestDBBuilder_processFSInput(t *testing.T) {
 
 		builder := NewBuilder()
 
-		readers, err := builder.processFSToReaders(ctx, mockFS)
+		readers, err := builder.fileProcessor.processFSToReaders(ctx, mockFS)
 		assert.NoError(t, err, "processFSToReaders() should succeed with compressed files")
 		assert.Len(t, readers, 2, "should return 2 readers for compressed files")
 
