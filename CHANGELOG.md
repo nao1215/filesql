@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-02-14
+
+### Added
+- **Fedwire (Legacy Wire) File Support ([e7e2189](https://github.com/nao1215/filesql/commit/e7e2189))**: Complete legacy Fedwire message file support (**Experimental**)
+  - **File format**: Tag-value text format (`.fed`) used by the Federal Reserve's large-value real-time gross settlement system
+  - **Flat table structure**: All FEDWireMessage fields (~326 columns) flattened into a single `{filename}_message` table with 1 row per file
+  - **All fields as TEXT**: Wire format stores amounts as fixed-width strings; all columns use `TEXT` type to preserve formatting
+  - **Full round-trip support**: Parse → query/modify via SQL → export back to valid `.fed` format
+  - **Registry-backed TableSet**: `registerWireTableSet` / `getWireTableSet` / `UnregisterWireTableSet` / `ClearWireTableSetRegistry` for managing original Wire structures needed for round-trip export
+  - **`WireTableInfo` struct**: Provides `MessageTable()` and `AllTableNames()` methods for programmatic table name discovery
+  - **`GetWireTableInfos()`**: Returns `[]WireTableInfo` for all registered Fedwire files
+  - **`IsWireBaseTableName()`**: Checks if a table name matches the Fedwire `_message` suffix convention
+  - **`DumpFedWire()` / `DumpFedWireWithTableSet()`**: Export Fedwire tables from database back to `.fed` files
+  - **`OutputFormatFedWire`**: New output format enum for auto-save and dump operations
+  - **`ErrWire`**: Sentinel error for Fedwire operation failures
+  - **`FileTypeFedWire`**: New file type constant with `String()`, `extension()`, `baseType()` support
+  - **Streaming support**: `streamFedWireFileToDatabase()` for file-path input, `streamWireFileToDatabase()` for `io.Reader` input
+  - **AddFS support**: Fedwire files in `fs.FS` (including `embed.FS`) are properly detected and loaded
+  - **Auto-save integration**: `performFedWireAutoSave()` and `overwriteOriginalFiles()` handle `.fed` files alongside ACH and tabular formats
+  - **Test coverage**: Unit tests for file detection, parsing, registry, SQL queries, round-trip, and export
+
+### Fixed
+- **Windows file lock in AddFS ([e7e2189](https://github.com/nao1215/filesql/commit/e7e2189))**: Added `closer: file` to `readerInput` in `file_processor.go` so that FS-opened files are properly closed after streaming. Previously, `TempDir RemoveAll` cleanup failed on Windows because files remained open
+- **Dead code removal in builder.go ([e7e2189](https://github.com/nao1215/filesql/commit/e7e2189))**: Removed unused `processFSToReaders` method (~85 lines) and `deduplicateCompressedFiles` wrapper from `DBBuilder`. The actual code path uses `fileProcessor.processFSToReaders()`. Updated `builder_test.go` accordingly
+
+### Changed
+- **Documentation Updates**: Added Fedwire Support sections to all README files (7 languages: EN, ES, FR, JA, KO, RU, ZH-CN)
+  - Supported formats table updated with `.fed` extension
+  - Experimental status warning, table structure explanation, TEXT column rationale, limitations, security considerations, and code examples
+- **Auto-save cleanup refactoring**: Renamed `cleanupACHRegistry()` to `cleanupTableSetRegistries()` to handle both ACH and Fedwire registry cleanup on connection close
+- **ACH table detection improvement**: `dumpSQLiteDatabase()` now verifies registry presence before treating `_message` suffix tables as ACH, preventing false positives with Fedwire's `_message` tables
+
+### Dependencies
+- `github.com/nao1215/fileparser`: v0.4.0 → v0.5.1 (adds Wire subpackage for Fedwire parsing)
+- `github.com/moov-io/wire`: v0.15.7 (new indirect dependency via fileparser)
+
 ## [0.11.0] - 2026-02-13
 
 ### Added
@@ -652,7 +688,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/nao1215/filesql/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/nao1215/filesql/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/nao1215/filesql/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/nao1215/filesql/compare/v0.8.0...v0.9.0
