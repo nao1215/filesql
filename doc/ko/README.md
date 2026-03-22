@@ -60,7 +60,7 @@ go get github.com/nao1215/filesql
 
 ## 요구사항
 
-- **Go 버전**: 1.24 이상
+- **Go 버전**: 1.25 이상
 - **지원 OS**:
   - Linux
   - macOS  

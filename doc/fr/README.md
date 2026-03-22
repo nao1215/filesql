@@ -60,7 +60,7 @@ go get github.com/nao1215/filesql
 
 ## Configuration requise
 
-- **Version Go**: 1.24 ou ultérieure
+- **Version Go**: 1.25 ou ultérieure
 - **Systèmes d'exploitation supportés**:
   - Linux
   - macOS  

@@ -299,7 +299,7 @@ func TestAddFS_FedWireFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	data, err := os.ReadFile(testFile) //nolint:gosec // Test file path
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "customer-transfer.fed"), data, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "customer-transfer.fed"), data, 0o600)) //nolint:gosec // Test file path is constructed from t.TempDir()
 
 	fsys := os.DirFS(tmpDir)
 	builder := NewBuilder().AddFS(fsys)
