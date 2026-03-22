@@ -10,7 +10,7 @@
 
 #### 安装 Go
 
-filesql 开发需要 Go 1.24 或更高版本。
+filesql 开发需要 Go 1.25 或更高版本。
 
 **macOS（使用 Homebrew）**
 ```bash
@@ -23,8 +23,8 @@ brew install go
 sudo snap install go --classic
 
 # 或从官方网站下载
-wget https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
+wget https://go.dev/dl/go1.25.0.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.25.0.linux-amd64.tar.gz
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.profile
 source ~/.profile
 ```

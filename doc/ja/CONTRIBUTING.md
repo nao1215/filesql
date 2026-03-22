@@ -10,7 +10,7 @@ filesqlプロジェクトへの貢献を検討していただき、ありがと�
 
 #### Go言語のインストール
 
-filesqlの開発にはGo 1.24以降が必要です。
+filesqlの開発にはGo 1.25以降が必要です。
 
 **macOS (Homebrew使用)**
 ```bash
@@ -23,8 +23,8 @@ brew install go
 sudo snap install go --classic
 
 # または公式サイトからダウンロード
-wget https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
+wget https://go.dev/dl/go1.25.0.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.25.0.linux-amd64.tar.gz
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.profile
 source ~/.profile
 ```

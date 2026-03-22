@@ -460,7 +460,7 @@ func TestAutoSaveConnection_OverwriteOriginalFiles_ACH(t *testing.T) {
 
 	content, err := os.ReadFile(testFile) //nolint:gosec // Test file path is from test helper
 	require.NoError(t, err)
-	err = os.WriteFile(tmpFile, content, 0600)
+	err = os.WriteFile(tmpFile, content, 0600) //nolint:gosec // Test file path is constructed from t.TempDir()
 	require.NoError(t, err)
 
 	// Open the temp ACH file

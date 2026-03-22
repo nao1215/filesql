@@ -60,7 +60,7 @@ go get github.com/nao1215/filesql
 
 ## 要件
 
-- **Goバージョン**: 1.24以降
+- **Goバージョン**: 1.25以降
 - **対応OS**:
   - Linux
   - macOS  
