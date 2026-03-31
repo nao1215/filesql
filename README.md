@@ -56,7 +56,7 @@ Rather than maintaining duplicate code across both projects, we extracted the co
 ## Installation
 
 ```bash
-go get github.com/nao1215/filesql
+go install github.com/nao1215/filesql@latest
 ```
 
 ## Requirements
