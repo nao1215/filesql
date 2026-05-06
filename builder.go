@@ -288,6 +288,10 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 		return nil, fmt.Errorf("%w: at least one path must be provided", ErrNoFiles)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	// Use validator to validate auto-save config
 	if err := b.validator.validateAutoSaveConfig(b.autoSaveConfig); err != nil {
 		return nil, err
@@ -349,6 +353,10 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 
 	// Use validator to validate inputs availability
 	if err := b.validator.validateInputsAvailable(b.collectedPaths, b.readers); err != nil {
+		return nil, err
+	}
+
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
