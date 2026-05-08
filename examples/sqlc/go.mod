@@ -1,6 +1,6 @@
 module github.com/nao1215/filesql/examples/sqlc
 
-go 1.24.0
+go 1.25
 
 require github.com/nao1215/filesql v0.12.0
 
@@ -8,7 +8,7 @@ require (
 	github.com/JohnCGriffin/overflow v0.0.0-20211019200055-46fa312c352c // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect
 	github.com/apache/arrow/go/v18 v18.0.0-20241007013041-ab95a4d25142 // indirect
-	github.com/apache/thrift v0.20.0 // indirect
+	github.com/apache/thrift v0.23.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
