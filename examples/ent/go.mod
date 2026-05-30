@@ -1,6 +1,6 @@
 module github.com/nao1215/filesql/examples/ent
 
-go 1.24.0
+go 1.25
 
 require (
 	entgo.io/ent v0.14.4
@@ -13,7 +13,7 @@ require (
 	github.com/agext/levenshtein v1.2.1 // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect
 	github.com/apache/arrow/go/v18 v18.0.0-20241007013041-ab95a4d25142 // indirect
-	github.com/apache/thrift v0.20.0 // indirect
+	github.com/apache/thrift v0.23.0 // indirect
 	github.com/apparentlymart/go-textseg/v13 v13.0.0 // indirect
 	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
 	github.com/bmatcuk/doublestar v1.3.4 // indirect
