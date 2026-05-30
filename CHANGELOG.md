@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-05-30
+
+### Dependencies
+- `modernc.org/sqlite`: 1.50.0 → 1.51.0 (PR #125, [3380ff1](https://github.com/nao1215/filesql/commit/3380ff1))
+- `github.com/klauspost/compress`: 1.18.5 → 1.18.6 (PR #121, [e7e1f8a](https://github.com/nao1215/filesql/commit/e7e1f8a))
+- `github.com/apache/thrift`: 0.20.0 → 0.23.0 (indirect) (PR #122, [e190ff7](https://github.com/nao1215/filesql/commit/e190ff7))
+
+### Changed
+- **Bumped pinned `github.com/nao1215/filesql` version in the `examples/` modules (PR #123, [ff22bc9](https://github.com/nao1215/filesql/commit/ff22bc9))**: Dependabot updated the filesql version pinned by the example modules across 8 directories
+- **Consolidated AI-agent documentation into a single `AGENTS.md`**: `AGENTS.md` is now the single source of truth for agent/contributor guidance, trimmed to the essentials. `CLAUDE.md`, `.github/CLAUDE.md`, and `.github/copilot-instructions.md` are now short pointers to it, removing the previous duplication
+
 ## [0.12.0] - 2026-02-14
 
 ### Added
@@ -688,7 +699,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/nao1215/filesql/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/nao1215/filesql/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/nao1215/filesql/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/nao1215/filesql/compare/v0.9.0...v0.10.0
