@@ -1,0 +1,89 @@
+package filesql
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+// TestIsFloatRejectsInt64Overflow guards the core of nao1215/sqly#218: an
+// integer literal whose magnitude exceeds int64 must not be classified as a
+// float, because converting it to float64 loses precision and renders it in
+// scientific notation. Such values fall through to TEXT instead.
+func TestIsFloatRejectsInt64Overflow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"in-range integer is float-parseable", "123", true},
+		{"max int64 is float-parseable", "9223372036854775807", true},
+		{"overflow integer is not treated as float", "11040320260000000000", false},
+		{"huge integer is not treated as float", "99999999999999999999999999", false},
+		{"negative overflow integer is not treated as float", "-11040320260000000000", false},
+		{"decimal stays float", "3.14", true},
+		{"scientific notation literal stays float", "1.104032026e+19", true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, isFloat(tt.value))
+		})
+	}
+}
+
+// TestClassifyValueInt64Overflow verifies that int64-overflowing integers are
+// classified as TEXT, while in-range integers and genuine floats keep their
+// numeric types.
+func TestClassifyValueInt64Overflow(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, columnTypeText, classifyValue("11040320260000000000"))
+	require.Equal(t, columnTypeText, classifyValue("-11040320260000000000"))
+	require.Equal(t, columnTypeInteger, classifyValue("9223372036854775807"))
+	require.Equal(t, columnTypeReal, classifyValue("1.104032026e+19"))
+}
+
+// TestInferColumnTypeInt64Overflow verifies that a column entirely made of
+// int64-overflowing integers is inferred as TEXT.
+func TestInferColumnTypeInt64Overflow(t *testing.T) {
+	t.Parallel()
+
+	got := inferColumnType([]string{
+		"11040320260000000000",
+		"11040320260000000001",
+		"11040320260000000002",
+	})
+	require.Equal(t, columnTypeText, got)
+}
+
+// TestOpenContextPreservesLargeIntegerExactly is the end-to-end regression test
+// for nao1215/sqly#218. A CSV value larger than math.MaxInt64 must round-trip
+// through the loaded database as its exact textual value, not a lossy
+// scientific-notation float.
+func TestOpenContextPreservesLargeIntegerExactly(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "bigint.csv")
+	content := "ctsn,pocode\n" +
+		"11040320260000000000,100031464478\n" +
+		"11040320260000000001,100031464478\n"
+	require.NoError(t, os.WriteFile(csvPath, []byte(content), 0600))
+
+	ctx := context.Background()
+	db, err := OpenContext(ctx, csvPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var got string
+	err = db.QueryRowContext(ctx, `SELECT ctsn FROM bigint ORDER BY ctsn LIMIT 1`).Scan(&got)
+	require.NoError(t, err)
+	require.Equal(t, "11040320260000000000", got)
+}

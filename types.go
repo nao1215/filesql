@@ -639,8 +639,46 @@ func isFloat(value string) bool {
 		return false
 	}
 
+	// An integer-looking string (all digits with an optional sign) that does
+	// not fit in int64 must NOT be treated as a float. strconv.ParseFloat would
+	// succeed for such a value but silently lose precision and render it in
+	// scientific notation (e.g. "11040320260000000000" -> 1.104032026e+19).
+	// SQLite's INTEGER type also cannot hold values beyond int64, so the only
+	// lossless representation is TEXT. Returning false here lets classifyValue
+	// fall through to columnTypeText and preserve the exact digits.
+	if isIntegerLiteralOverflowingInt64(value) {
+		return false
+	}
+
 	_, err := strconv.ParseFloat(value, 64)
 	return err == nil
+}
+
+// isIntegerLiteralOverflowingInt64 reports whether value is an integer literal
+// (optional leading '+'/'-' followed solely by ASCII digits) whose magnitude
+// exceeds the range representable by int64. Such values can only be stored
+// losslessly as TEXT, since both SQLite INTEGER (int64) and float64 would lose
+// information.
+func isIntegerLiteralOverflowingInt64(value string) bool {
+	digits := value
+	if len(digits) > 0 && (digits[0] == '+' || digits[0] == '-') {
+		digits = digits[1:]
+	}
+	if len(digits) == 0 {
+		return false
+	}
+	for i := 0; i < len(digits); i++ {
+		if digits[i] < '0' || digits[i] > '9' {
+			// Contains a non-digit (decimal point, exponent, etc.), so it is
+			// not a plain integer literal and should be handled by ParseFloat.
+			return false
+		}
+	}
+
+	// It is a pure integer literal. If it fits in int64 it was already handled
+	// as an integer upstream; if ParseInt fails it overflows int64.
+	_, err := strconv.ParseInt(value, 10, 64)
+	return err != nil
 }
 
 // selectColumnType selects the best column type based on confidence analysis
