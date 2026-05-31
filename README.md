@@ -233,6 +233,46 @@ func main() {
 }
 ```
 
+### Loading into an Existing Database
+
+`Open`/`OpenContext` create a new in-memory database. When you already manage a database, use `LoadInto` to load files into it instead of copying through a second database. Use it for a long-lived session that imports files over time, or to join file data with tables you created yourself.
+
+```go
+package main
+
+import (
+    "context"
+    "database/sql"
+    "log"
+
+    "github.com/nao1215/filesql"
+    _ "modernc.org/sqlite"
+)
+
+func main() {
+    db, err := sql.Open("sqlite", ":memory:")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+    // ":memory:" is private per connection; pin the pool so the loaded tables
+    // are visible to later queries on the same database.
+    db.SetMaxOpenConns(1)
+
+    // Load files into the database you own. LoadInto does not close db.
+    if err := filesql.LoadInto(context.Background(), db, "users.csv", "orders.parquet"); err != nil {
+        log.Fatal(err)
+    }
+
+    // Load more files later into the same database (last-wins on same names).
+    if err := filesql.LoadInto(context.Background(), db, "more_users.csv"); err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+A table whose name matches a loaded file is replaced, so reloading a file is idempotent; tables you created yourself are left untouched. For readers or filesystems, configure a builder and call its `LoadInto` method. Auto-save is not supported here because the caller owns the database lifecycle.
+
 ### Auto-Save Features
 
 #### Auto-Save on Database Close

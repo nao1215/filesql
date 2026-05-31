@@ -433,6 +433,68 @@ func (b *DBBuilder) OpenReadOnly(ctx context.Context) (*ReadOnlyDB, error) {
 	return NewReadOnlyDB(db), nil
 }
 
+// LoadInto loads the builder's configured inputs into an existing database
+// instead of creating a new in-memory one as Open does. Use it to combine
+// file-derived tables with a caller-managed database, such as a long-lived
+// session or a database that already holds other tables, without copying the
+// data through a second database.
+//
+// Semantics:
+//   - A table whose name matches a loaded file or sheet is replaced (dropped and
+//     recreated), so reloading a file is idempotent and same-named inputs are
+//     last-wins. Other tables in db are left untouched.
+//   - The caller keeps ownership of db. LoadInto never closes it, even on error.
+//   - For an in-memory database, pin the pool to one connection
+//     (db.SetMaxOpenConns(1)). SQLite ":memory:" is private per connection, so a
+//     multi-connection pool would not share the loaded tables.
+//
+// Auto-save is not supported because the caller owns the database lifecycle;
+// configuring it returns an error.
+//
+// Example:
+//
+//	db, _ := sql.Open("sqlite", ":memory:")
+//	db.SetMaxOpenConns(1)
+//	builder, err := filesql.NewBuilder().AddPath("users.csv").Build(ctx)
+//	if err != nil {
+//		return err
+//	}
+//	if err := builder.LoadInto(ctx, db); err != nil {
+//		return err
+//	}
+//	// db now has a "users" table alongside any tables it already had.
+func (b *DBBuilder) LoadInto(ctx context.Context, db *sql.DB) error {
+	if db == nil {
+		return fmt.Errorf("%w: target database is nil", ErrDatabaseOperation)
+	}
+	if b.autoSaveConfig != nil && b.autoSaveConfig.enabled {
+		return fmt.Errorf("%w: auto-save is not supported by LoadInto; the caller owns the database lifecycle", ErrDatabaseOperation)
+	}
+
+	if err := b.validator.validateInputsAvailable(b.collectedPaths, b.readers); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	b.collectedPaths = b.fileProcessor.deduplicateCompressedFiles(b.collectedPaths)
+
+	// Replace same-named tables so loading into an existing database is last-wins
+	// rather than erroring on or appending to a pre-existing table. Reset
+	// afterward so reusing the builder (e.g. a later Open) is not affected.
+	b.streamProcessor.replaceExisting = true
+	defer func() { b.streamProcessor.replaceExisting = false }()
+
+	if err := b.streamProcessor.streamAllFilesToDatabase(ctx, db, b.collectedPaths); err != nil {
+		return err
+	}
+	if err := b.streamProcessor.streamAllReadersToDatabase(ctx, db, b.readers); err != nil {
+		return err
+	}
+	return nil
+}
+
 // deduplicateCompressedFiles removes compressed duplicates when uncompressed versions exist.
 // DEPRECATED: This method has been moved to fileProcessor.deduplicateCompressedFiles()
 // createInMemoryDatabase creates a new in-memory SQLite database connection.
