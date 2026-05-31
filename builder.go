@@ -481,8 +481,10 @@ func (b *DBBuilder) LoadInto(ctx context.Context, db *sql.DB) error {
 	b.collectedPaths = b.fileProcessor.deduplicateCompressedFiles(b.collectedPaths)
 
 	// Replace same-named tables so loading into an existing database is last-wins
-	// rather than erroring on or appending to a pre-existing table.
+	// rather than erroring on or appending to a pre-existing table. Reset
+	// afterward so reusing the builder (e.g. a later Open) is not affected.
 	b.streamProcessor.replaceExisting = true
+	defer func() { b.streamProcessor.replaceExisting = false }()
 
 	if err := b.streamProcessor.streamAllFilesToDatabase(ctx, db, b.collectedPaths); err != nil {
 		return err

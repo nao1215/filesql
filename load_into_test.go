@@ -23,7 +23,7 @@ func newCallerDB(t *testing.T) *sql.DB {
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(func() { assert.NoError(t, db.Close()) })
 	return db
 }
 
@@ -31,7 +31,7 @@ func listTables(t *testing.T, db *sql.DB) []string {
 	t.Helper()
 	rows, err := db.QueryContext(context.Background(), `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
 	require.NoError(t, err)
-	defer func() { _ = rows.Close() }()
+	defer func() { assert.NoError(t, rows.Close()) }()
 	var names []string
 	for rows.Next() {
 		var n string
@@ -203,7 +203,7 @@ func TestLoadInto_PreservesTypeInference(t *testing.T) {
 	types := map[string]string{}
 	rows, err := db.QueryContext(context.Background(), `PRAGMA table_info("typed")`)
 	require.NoError(t, err)
-	defer func() { _ = rows.Close() }()
+	defer func() { assert.NoError(t, rows.Close()) }()
 	for rows.Next() {
 		var cid int
 		var name, typ string
@@ -249,7 +249,7 @@ func TestLoadInto_Errors(t *testing.T) {
 		require.Error(t, err)
 	})
 
-	t.Run("cancelled context", func(t *testing.T) {
+	t.Run("canceled context", func(t *testing.T) {
 		db := newCallerDB(t)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -267,6 +267,20 @@ func TestLoadInto_Errors(t *testing.T) {
 		err = builder.LoadInto(context.Background(), db)
 		require.Error(t, err)
 	})
+}
+
+func TestLoadInto_DoesNotLeakReplaceModeToBuilder(t *testing.T) {
+	db := newCallerDB(t)
+	builder, err := NewBuilder().
+		AddPath(filepath.Join("testdata", "sample.csv")).
+		Build(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, builder.LoadInto(context.Background(), db))
+
+	// Replace mode must not persist on the builder; a later Open must see the
+	// default (non-replace) behavior.
+	assert.False(t, builder.streamProcessor.replaceExisting,
+		"LoadInto must reset replaceExisting so reusing the builder is unaffected")
 }
 
 func TestLoadInto_DoesNotCloseCallerDB(t *testing.T) {
