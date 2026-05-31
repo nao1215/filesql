@@ -22,6 +22,24 @@ func streamError(sentinel error, format string, args ...any) error {
 type streamProcessor struct {
 	chunkSize int
 	logger    Logger
+	// replaceExisting makes table creation drop a same-named table first instead
+	// of erroring or appending. It is enabled for LoadInto (loading into a
+	// caller-owned database, where last-wins replacement is the useful default)
+	// and left false for Open (fresh in-memory database, no collisions).
+	replaceExisting bool
+}
+
+// dropIfReplacing drops a same-named table when replaceExisting is set, so the
+// following CREATE installs the file's schema and rows in place of any prior
+// table. It is a no-op in Open mode.
+func (sp *streamProcessor) dropIfReplacing(ctx context.Context, db *sql.DB, tableName string) error {
+	if !sp.replaceExisting {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS "`+tableName+`"`); err != nil {
+		return fmt.Errorf("%w: failed to drop existing table %q: %s", ErrDatabaseOperation, tableName, err.Error())
+	}
+	return nil
 }
 
 // newStreamProcessor creates a new stream processor instance
@@ -184,7 +202,7 @@ func (sp *streamProcessor) streamACHFileToDatabase(ctx context.Context, db *sql.
 	}
 
 	sp.logger.Debug("streaming ACH file to database", "path", filePath, "size", fileInfo.Size())
-	return streamACHFileToDatabase(ctx, db, file, filePath)
+	return streamACHFileToDatabase(ctx, db, file, filePath, sp.replaceExisting)
 }
 
 // streamFedWireFileToDatabase handles Fedwire files by creating a single message table
@@ -211,17 +229,17 @@ func (sp *streamProcessor) streamFedWireFileToDatabase(ctx context.Context, db *
 	}
 
 	sp.logger.Debug("streaming Fedwire file to database", "path", filePath, "size", fileInfo.Size())
-	return streamWireFileToDatabase(ctx, db, file, filePath)
+	return streamWireFileToDatabase(ctx, db, file, filePath, sp.replaceExisting)
 }
 
 // streamReaderToDatabase streams data from io.Reader directly to SQLite database
 func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.DB, input readerInput) error {
 	// Route ACH/Fedwire readers to dedicated handlers
 	if input.fileType == FileTypeACH {
-		return streamACHFileToDatabase(ctx, db, input.reader, input.tableName+extACH)
+		return streamACHFileToDatabase(ctx, db, input.reader, input.tableName+extACH, sp.replaceExisting)
 	}
 	if input.fileType == FileTypeFedWire {
-		return streamWireFileToDatabase(ctx, db, input.reader, input.tableName+extFED)
+		return streamWireFileToDatabase(ctx, db, input.reader, input.tableName+extFED, sp.replaceExisting)
 	}
 
 	// Reader should already be validated at Build time, but ensure it's buffered
@@ -239,10 +257,11 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 		return fmt.Errorf("%w: failed to check table existence: %s", ErrDatabaseOperation, err.Error())
 	}
 
-	if tableExists > 0 {
+	if tableExists > 0 && !sp.replaceExisting {
 		sp.logger.Warn("table already exists", "table", input.tableName)
 		return fmt.Errorf("%w: table '%s' already exists from another file", ErrDuplicateTable, input.tableName)
 	}
+	// When replacing, createTableFromChunk drops the old table before recreating it.
 
 	// Create streaming parser for chunked processing
 	parser := newStreamingParser(input.fileType, input.tableName, sp.chunkSize)
@@ -354,6 +373,10 @@ func (sp *streamProcessor) createTableFromChunk(ctx context.Context, db *sql.DB,
 	columns := make([]string, 0, len(columnInfo))
 	for _, col := range columnInfo {
 		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.string()))
+	}
+
+	if err := sp.dropIfReplacing(ctx, db, chunk.getTableName()); err != nil {
+		return err
 	}
 
 	query := fmt.Sprintf(
@@ -578,9 +601,10 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db *sql
 			return fmt.Errorf("%w: failed to check table existence: %s", ErrDatabaseOperation, err.Error())
 		}
 
-		if tableExists > 0 {
+		if tableExists > 0 && !sp.replaceExisting {
 			return fmt.Errorf("%w: table '%s' already exists from another file", ErrDuplicateTable, tableName)
 		}
+		// When replacing, createTableFromChunk drops the old table before recreating it.
 
 		// Convert XLSX rows to table headers and records
 		headers, records := convertXLSXRowsToTable(rows)

@@ -181,6 +181,36 @@ func OpenContext(ctx context.Context, paths ...string) (*sql.DB, error) {
 	return validatedBuilder.Open(ctx)
 }
 
+// LoadInto loads the given file or directory paths into an existing database
+// instead of creating a new one, and returns without closing it. This lets a
+// caller combine file-derived tables with a database it already manages (for
+// example a long-lived session that imports files repeatedly).
+//
+// A table whose name matches a loaded file is replaced, so reloading is
+// idempotent (last-wins for same-named inputs); other tables in db are left
+// untouched. For an in-memory database, pin the pool to a single connection
+// (db.SetMaxOpenConns(1)) because SQLite ":memory:" is private per connection.
+// See (*DBBuilder).LoadInto for the full semantics and for loading readers or
+// filesystems.
+//
+// Example:
+//
+//	db, _ := sql.Open("sqlite", ":memory:")
+//	db.SetMaxOpenConns(1)
+//	if err := filesql.LoadInto(ctx, db, "users.csv", "orders.csv"); err != nil {
+//		return err
+//	}
+func LoadInto(ctx context.Context, db *sql.DB, paths ...string) error {
+	builder := NewBuilder().AddPaths(paths...)
+
+	validatedBuilder, err := builder.Build(ctx)
+	if err != nil {
+		return err
+	}
+
+	return validatedBuilder.LoadInto(ctx, db)
+}
+
 // DumpDatabase saves all database tables to files in the specified directory.
 //
 // Basic usage:

@@ -402,7 +402,7 @@ func IsACHBaseTableName(tableName string) (baseName string, isACH bool) {
 }
 
 // streamACHFileToDatabase streams an ACH file to the database as multiple tables
-func streamACHFileToDatabase(ctx context.Context, db *sql.DB, reader io.Reader, filePath string) error {
+func streamACHFileToDatabase(ctx context.Context, db *sql.DB, reader io.Reader, filePath string, replaceExisting bool) error {
 	baseTableName := sanitizeTableName(tableFromFilePath(filePath))
 
 	tables, tableSet, err := parseACHFile(reader, baseTableName)
@@ -425,7 +425,13 @@ func streamACHFileToDatabase(ctx context.Context, db *sql.DB, reader io.Reader, 
 		}
 
 		if tableExists > 0 {
-			return fmt.Errorf("%w: table '%s' already exists", ErrDuplicateTable, t.getName())
+			if !replaceExisting {
+				return fmt.Errorf("%w: table '%s' already exists", ErrDuplicateTable, t.getName())
+			}
+			// Replace mode: drop the old table so the reloaded file's tables win.
+			if _, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS "`+t.getName()+`"`); err != nil {
+				return fmt.Errorf("%w: failed to drop existing table %s: %s", ErrDatabaseOperation, t.getName(), err.Error())
+			}
 		}
 
 		// Create table
