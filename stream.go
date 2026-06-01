@@ -208,6 +208,12 @@ func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 			if len(kv) == 2 {
 				key := strings.TrimSpace(kv[0])
 				value := strings.TrimSpace(kv[1])
+				// A label repeated within the same record cannot be two distinct
+				// columns; keeping the last value would silently drop the earlier
+				// one, so reject it. Ref nao1215/sqly#467.
+				if _, dup := recordMap[key]; dup {
+					return nil, fmt.Errorf("%w: duplicate column name %q in LTSV record", ErrParsing, key)
+				}
 				recordMap[key] = value
 				headerMap[key] = true
 			}
@@ -468,6 +474,12 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 			if len(kv) == 2 {
 				key := strings.TrimSpace(kv[0])
 				value := strings.TrimSpace(kv[1])
+				// A label repeated within the same record cannot be two distinct
+				// columns; keeping the last value would silently drop the earlier
+				// one, so reject it. Ref nao1215/sqly#467.
+				if _, dup := recordMap[key]; dup {
+					return fmt.Errorf("%w: duplicate column name %q in LTSV record", ErrParsing, key)
+				}
 				recordMap[key] = value
 			}
 		}

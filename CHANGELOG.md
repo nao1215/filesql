@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- LTSV imports now reject a label repeated within a single record (for example `x:1\tx:2`) instead of silently keeping only the last value and dropping the earlier one. Both the streaming parser and the chunked parser fail with a `duplicate column name` error, matching the CSV/TSV parsers, so LTSV imports stay lossless. A label repeated across separate records (the normal column-per-row case) still parses. (Ref [nao1215/sqly#467](https://github.com/nao1215/sqly/issues/467))
+
+### Dependencies
+- `github.com/nao1215/fileparser`: 0.5.1 → 0.5.2, which rejects duplicate labels within an LTSV record on the shared parser path.
+
 ### Added
 - `LoadInto(ctx, db, paths...)` and `(*DBBuilder).LoadInto(ctx, db)` load files into an existing `*sql.DB` instead of creating a new in-memory database. This lets callers combine file-derived tables with a database they already manage (for example a long-lived session that imports files repeatedly) without copying the data through a second database. A table whose name matches a loaded file is replaced (last-wins); other tables are left untouched, and the caller's database is never closed. `Open`/`OpenContext` behavior is unchanged. (PR [#129](https://github.com/nao1215/filesql/pull/129), [5afc764](https://github.com/nao1215/filesql/commit/5afc764))
 

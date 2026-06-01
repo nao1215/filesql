@@ -93,6 +93,28 @@ func TestStreamingParser_ParseFromReader_LTSV(t *testing.T) {
 		records := table.getRecords()
 		assert.Len(t, records, 2, "Records length mismatch")
 	})
+
+	t.Run("duplicate label within a record is rejected", func(t *testing.T) {
+		t.Parallel()
+		// "x" repeats in the same record; keeping only the last value would silently
+		// drop the first, so the parser rejects it. Ref nao1215/sqly#467.
+		reader := strings.NewReader("x:1\tx:2\n")
+
+		parser := newStreamingParser(FileTypeLTSV, "dup", 1024)
+		_, err := parser.parseFromReader(reader)
+		require.Error(t, err, "duplicate LTSV label should be rejected")
+		assert.Contains(t, err.Error(), "duplicate column name")
+	})
+
+	t.Run("same label across separate records still parses", func(t *testing.T) {
+		t.Parallel()
+		reader := strings.NewReader("x:1\ty:a\nx:2\ty:b\n")
+
+		parser := newStreamingParser(FileTypeLTSV, "ok", 1024)
+		table, err := parser.parseFromReader(reader)
+		require.NoError(t, err)
+		assert.Len(t, table.getRecords(), 2)
+	})
 }
 
 func TestStreamingParser_ParseFromReader_Compressed(t *testing.T) {
@@ -455,6 +477,18 @@ func TestProcessLTSVInChunks(t *testing.T) {
 		if len(records) != 2 {
 			t.Errorf("Expected 2 records, got %d", len(records))
 		}
+	})
+
+	t.Run("duplicate label within a record is rejected", func(t *testing.T) {
+		t.Parallel()
+		// The chunked path also rejects a label repeated within one record, so a
+		// large LTSV file cannot silently drop values. Ref nao1215/sqly#467.
+		reader := strings.NewReader("x:1\tx:2\n")
+
+		parser := newStreamingParser(FileTypeLTSV, "dup_chunk", 2)
+		err := parser.ProcessInChunks(reader, func(*tableChunk) error { return nil })
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate column name")
 	})
 }
 
