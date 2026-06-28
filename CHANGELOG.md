@@ -7,11 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-06-28
+
+### Dependencies
+- `modernc.org/sqlite`: 1.51.0 → 1.53.0 (PR [#134](https://github.com/nao1215/filesql/pull/134), [238acf7](https://github.com/nao1215/filesql/commit/238acf7))
+- `github.com/pierrec/lz4/v4`: 4.1.26 → 4.1.27 (PR [#131](https://github.com/nao1215/filesql/pull/131), [f5cd865](https://github.com/nao1215/filesql/commit/f5cd865))
+- `actions/checkout`: 6 → 7 (PR [#133](https://github.com/nao1215/filesql/pull/133), [ba55c2a](https://github.com/nao1215/filesql/commit/ba55c2a))
+
+## [0.14.0] - 2026-06-01
+
 ### Fixed
 - LTSV imports now reject a label repeated within a single record (for example `x:1\tx:2`) instead of silently keeping only the last value and dropping the earlier one. Both the streaming parser and the chunked parser fail with a `duplicate column name` error, matching the CSV/TSV parsers, so LTSV imports stay lossless. A label repeated across separate records (the normal column-per-row case) still parses. (Ref [nao1215/sqly#467](https://github.com/nao1215/sqly/issues/467))
 
 ### Dependencies
 - `github.com/nao1215/fileparser`: 0.5.1 → 0.5.2, which rejects duplicate labels within an LTSV record on the shared parser path.
+
+## [0.13.0] - 2026-05-31
 
 ### Added
 - `LoadInto(ctx, db, paths...)` and `(*DBBuilder).LoadInto(ctx, db)` load files into an existing `*sql.DB` instead of creating a new in-memory database. This lets callers combine file-derived tables with a database they already manage (for example a long-lived session that imports files repeatedly) without copying the data through a second database. A table whose name matches a loaded file is replaced (last-wins); other tables are left untouched, and the caller's database is never closed. `Open`/`OpenContext` behavior is unchanged. (PR [#129](https://github.com/nao1215/filesql/pull/129), [5afc764](https://github.com/nao1215/filesql/commit/5afc764))
