@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-06-29
+
+### Fixed
+- **`ReadOnlyDB` now actually enforces read-only access.** Previously `Query`/`QueryRow` passed SQL through unchecked, so a `DELETE ... RETURNING` executed via the Query path mutated data, and write detection only matched the leading keyword, so `/*comment*/ DELETE` or `WITH ... DELETE` slipped past `Exec`. Statements are now scanned for write keywords at the top level — skipping comments, string literals, quoted identifiers, and CTE bodies — and rejected on the `Query`/`QueryRow` and `Exec` paths of both `ReadOnlyDB` and `ReadOnlyTx`. SQLite-specific mutators are also blocked: an assigning `PRAGMA` (e.g. `PRAGMA foreign_keys = ON`), `ATTACH`/`DETACH`, `VACUUM`, `ANALYZE`, and `REINDEX`, while reading PRAGMAs such as `PRAGMA table_info(...)` stay allowed. (PR [#138](https://github.com/nao1215/filesql/pull/138), [ea75ee2](https://github.com/nao1215/filesql/commit/ea75ee2))
+- **The `*sql.DB` returned by `Open`/`OpenContext` is now safe to share across goroutines.** It was backed by a single in-memory SQLite connection reused for every pooled connection, so sharing it across goroutines could race and crash (the README warned about segmentation faults). It now uses a uniquely named shared-cache in-memory database, so each pooled connection opens its own connection to the same data and `database/sql` manages them; queries issued while iterating `*sql.Rows` keep working. Auto-save keeps its single-connection design, now documented on `EnableAutoSave`. (PR [#138](https://github.com/nao1215/filesql/pull/138), [ea75ee2](https://github.com/nao1215/filesql/commit/ea75ee2))
+
+### Changed
+- README and translations now describe the implementation accurately: files are loaded into an in-memory SQLite database (rather than queried "directly"), the concurrency section matches the shared-cache behavior, and a new "Memory and streaming" note states which formats stream in chunks (CSV, TSV, JSON arrays) and which are read fully into memory (LTSV, non-array JSON, Parquet, Excel). Updated across all 7 languages. (PR [#138](https://github.com/nao1215/filesql/pull/138))
+
+### Internal
+- Extracted the SQL write-detection logic into a focused `internal/sqlguard` package, brought `make lint` to green, and added a multilingual README drift-detection test (`doc_sync_test.go`) plus race tests for the concurrent and nested-query paths. (PR [#138](https://github.com/nao1215/filesql/pull/138))
+
 ## [0.15.0] - 2026-06-29
 
 ### Fixed
@@ -724,7 +736,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/nao1215/filesql/compare/v0.15.0...v0.16.0
 [0.12.1]: https://github.com/nao1215/filesql/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/nao1215/filesql/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/nao1215/filesql/compare/v0.10.0...v0.11.0
