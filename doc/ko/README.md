@@ -455,7 +455,7 @@ make benchmark
 ```
 
 ### 동시성
-`Open`/`OpenContext`가 반환하는 `*sql.DB`는 여러 고루틴에서 공유해도 안전합니다. 이는 단일 인메모리 SQLite 연결을 기반으로 하므로, filesql은 풀을 하나의 연결로 고정하고(`SetMaxOpenConns(1)`) `database/sql`이 접근을 직렬화해 줍니다:
+`Open`/`OpenContext`가 반환하는 `*sql.DB`는 여러 고루틴에서 공유해도 안전합니다. 이는 공유 캐시(shared-cache) 인메모리 SQLite 데이터베이스를 기반으로 하므로, 풀에 있는 각 연결은 동일한 데이터에 대해 자체 연결을 열고 `database/sql`이 이를 대신 관리해 줍니다. 따라서 `SetMaxOpenConns(1)`을 직접 호출할 필요가 없습니다:
 
 ```go
 // Safe: share one *sql.DB across goroutines.
@@ -475,9 +475,9 @@ for range 8 {
 wg.Wait()
 ```
 
-접근이 단일 연결을 통해 직렬화되기 때문에 쿼리가 병렬로 실행되지는 않는다는 점에 유의하세요. 동시성은 안전하지만 더 빨라지지는 않습니다. 진정한 병렬성이 필요하다면 고루틴마다 별도의 `*sql.DB`를 여세요.
+SQLite는 공유 인메모리 데이터베이스에 대한 쓰기를 직렬화하므로, 동시 쓰기가 많으면 서로를 기다리게 됩니다. 반면 읽기는 함께 진행될 수 있습니다. 완전히 독립적인 데이터베이스가 필요하다면 고루틴마다 별도의 `*sql.DB`를 여세요.
 
-> 자신의 `*sql.DB`와 함께 `LoadInto`를 사용할 때는 풀 설정에 대한 책임이 사용자에게 있습니다. 인메모리 데이터베이스의 경우 SQLite `:memory:` 데이터는 각 연결마다 별도로 존재하므로, `db.SetMaxOpenConns(1)`을 직접 호출하세요.
+> `LoadInto`는 다릅니다. 그 경우에는 사용자가 자신의 `*sql.DB`를 직접 가져오므로 풀 설정에 대한 책임도 사용자에게 있습니다. 일반 인메모리 데이터베이스(`sql.Open("sqlite", ":memory:")`)의 경우, 해당 데이터베이스는 단일 연결에 종속되므로 `db.SetMaxOpenConns(1)`을 직접 호출하세요.
 
 ### Parquet 지원
 - **읽기**: 복잡한 데이터 타입을 가진 Apache Parquet 파일에 대한 완전 지원

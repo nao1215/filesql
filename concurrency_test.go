@@ -14,7 +14,7 @@ import (
 //
 // The in-memory database is backed by a single SQLite connection that is reused
 // for every pooled connection, so the pool must be pinned to one connection
-// (SetMaxOpenConns(1)) to serialise access. Run with -race to detect regressions.
+// (SetMaxOpenConns(1)) to serialize access. Run with -race to detect regressions.
 func TestOpenConcurrentQueries(t *testing.T) {
 	ctx := context.Background()
 

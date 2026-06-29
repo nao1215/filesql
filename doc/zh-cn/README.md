@@ -456,7 +456,7 @@ make benchmark
 ```
 
 ### 并发
-由 `Open`/`OpenContext` 返回的 `*sql.DB` 可以安全地在多个 goroutine 之间共享。它底层使用单个内存中的 SQLite 连接，因此 filesql 将连接池固定为一个连接（`SetMaxOpenConns(1)`），并由 `database/sql` 为你串行化访问：
+由 `Open`/`OpenContext` 返回的 `*sql.DB` 可以安全地在多个 goroutine 之间共享。它底层使用一个采用共享缓存（shared-cache）的内存中 SQLite 数据库，因此连接池中的每个连接都会各自打开一个指向同一份数据的连接，并由 `database/sql` 为你管理它们——你无需自己调用 `SetMaxOpenConns(1)`：
 
 ```go
 // Safe: share one *sql.DB across goroutines.
@@ -476,9 +476,9 @@ for range 8 {
 wg.Wait()
 ```
 
-请注意，由于访问是通过单个连接串行化的，查询并不会并行运行；并发是安全的，但并不会更快。如果你需要真正的并行，请为每个 goroutine 打开一个单独的 `*sql.DB`。
+SQLite 会对这个共享的内存数据库的写入操作进行串行化，因此大量并发的写入者会彼此等待；而读取操作可以同时进行。如果你需要完全相互独立的数据库，请为每个 goroutine 打开一个单独的 `*sql.DB`。
 
-> 当你对自己的 `*sql.DB` 使用 `LoadInto` 时，连接池的配置由你自己负责。对于内存中的数据库，请自行调用 `db.SetMaxOpenConns(1)`，因为 SQLite `:memory:` 的数据对每个连接都是私有的。
+> `LoadInto` 则有所不同：在那种情况下，你需要自带 `*sql.DB`，因此连接池的配置由你自己负责。对于普通的内存中数据库（`sql.Open("sqlite", ":memory:")`），请自行调用 `db.SetMaxOpenConns(1)`，因为该数据库对单个连接是私有的。
 
 ## 高级示例
 

@@ -503,9 +503,9 @@ make benchmark
 
 ### Concurrency
 The `*sql.DB` returned by `Open`/`OpenContext` is safe to share across
-goroutines. It is backed by a single in-memory SQLite connection, so filesql
-pins the pool to one connection (`SetMaxOpenConns(1)`) and `database/sql`
-serialises access for you:
+goroutines. It is backed by a shared-cache in-memory SQLite database, so each
+pooled connection opens its own connection to the same data and `database/sql`
+manages them for you — you do not need to call `SetMaxOpenConns(1)` yourself:
 
 ```go
 // Safe: share one *sql.DB across goroutines.
@@ -525,13 +525,14 @@ for range 8 {
 wg.Wait()
 ```
 
-Note that because access is serialised through a single connection, queries do
-not run in parallel; concurrency is safe but not faster. If you need true
-parallelism, open a separate `*sql.DB` per goroutine.
+SQLite serializes writes to the shared in-memory database, so heavy concurrent
+writers wait on each other; reads can proceed together. For fully independent
+databases, open a separate `*sql.DB` per goroutine.
 
-> When you use `LoadInto` with your own `*sql.DB`, you are responsible for the
-> pool configuration. For an in-memory database, call `db.SetMaxOpenConns(1)`
-> yourself, because SQLite `:memory:` data is private to each connection.
+> `LoadInto` is different: there you bring your own `*sql.DB`, so you own the
+> pool configuration. For a plain in-memory database (`sql.Open("sqlite",
+> ":memory:")`), call `db.SetMaxOpenConns(1)` yourself, because that database is
+> private to a single connection.
 
 ### Parquet Support
 - Reading: Full support for Apache Parquet files with complex data types

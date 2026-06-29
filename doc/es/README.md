@@ -455,10 +455,10 @@ make benchmark
 ```
 
 ### Concurrencia
-El `*sql.DB` devuelto por `Open`/`OpenContext` se puede compartir de forma segura entre goroutines. Está respaldado por una única conexión SQLite en memoria, por lo que filesql fija el pool a una sola conexión (`SetMaxOpenConns(1)`) y `database/sql` serializa el acceso por ti:
+El `*sql.DB` devuelto por `Open`/`OpenContext` se puede compartir de forma segura entre goroutines. Está respaldado por una base de datos SQLite en memoria con caché compartida, por lo que cada conexión del pool abre su propia conexión a los mismos datos y `database/sql` las gestiona por ti: no necesitas llamar a `SetMaxOpenConns(1)` tú mismo:
 
 ```go
-// Seguro: compartir un único *sql.DB entre goroutines.
+// Safe: share one *sql.DB across goroutines.
 db, err := filesql.Open("data.csv")
 if err != nil {
     return err
@@ -469,15 +469,15 @@ var wg sync.WaitGroup
 for range 8 {
     wg.Go(func() {
         rows, err := db.Query("SELECT * FROM data")
-        // ... usar rows ...
+        // ... use rows ...
     })
 }
 wg.Wait()
 ```
 
-Ten en cuenta que, como el acceso se serializa a través de una única conexión, las consultas no se ejecutan en paralelo; la concurrencia es segura pero no más rápida. Si necesitas paralelismo real, abre un `*sql.DB` separado por goroutine.
+SQLite serializa las escrituras en la base de datos en memoria compartida, por lo que los escritores concurrentes intensivos se esperan entre sí; las lecturas pueden avanzar juntas. Para bases de datos totalmente independientes, abre un `*sql.DB` separado por goroutine.
 
-> Cuando usas `LoadInto` con tu propio `*sql.DB`, eres responsable de la configuración del pool. Para una base de datos en memoria, llama a `db.SetMaxOpenConns(1)` tú mismo, porque los datos de SQLite `:memory:` son privados para cada conexión.
+> `LoadInto` es diferente: ahí aportas tu propio `*sql.DB`, así que eres responsable de la configuración del pool. Para una base de datos en memoria simple (`sql.Open("sqlite", ":memory:")`), llama a `db.SetMaxOpenConns(1)` tú mismo, porque esa base de datos es privada para una única conexión.
 
 ### Soporte de Excel (XLSX)
 - **Estructura 1-Hoja-1-Tabla**: Cada hoja en un libro de Excel se convierte en una tabla SQL separada

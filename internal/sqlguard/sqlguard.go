@@ -26,7 +26,7 @@ var writeKeywords = map[string]struct{}{
 // appears anywhere at the top level, so writes cannot be smuggled past a
 // read-only API through SQL comments, common table expressions (WITH ...
 // DELETE) or a RETURNING clause executed via Query/QueryRow. Keywords inside
-// string literals, quoted identifiers, comments or parenthesised subqueries are
+// string literals, quoted identifiers, comments or parenthesized subqueries are
 // ignored to avoid rejecting legitimate SELECTs.
 func IsWrite(query string) bool {
 	for _, word := range topLevelWords(query) {
@@ -74,7 +74,7 @@ func topLevelWords(query string) []string {
 			i++ // position on '/'; loop's i++ moves past it
 		case c == '\'' || c == '"' || c == '`':
 			// String literal or quoted identifier: skip to the matching quote,
-			// honouring doubled-quote escapes ('' "" ``).
+			// honoring doubled-quote escapes ('' "" ``).
 			flush()
 			quote := c
 			i++

@@ -454,7 +454,7 @@ make benchmark
 ```
 
 ### Concurrence
-Le `*sql.DB` retourné par `Open`/`OpenContext` peut être partagé en toute sécurité entre les goroutines. Il s'appuie sur une unique connexion SQLite en mémoire, c'est pourquoi filesql limite le pool à une seule connexion (`SetMaxOpenConns(1)`) et `database/sql` sérialise les accès à votre place :
+Le `*sql.DB` retourné par `Open`/`OpenContext` peut être partagé en toute sécurité entre les goroutines. Il s'appuie sur une base de données SQLite en mémoire à cache partagé (shared-cache), c'est pourquoi chaque connexion du pool ouvre sa propre connexion vers les mêmes données et `database/sql` les gère à votre place — vous n'avez pas besoin d'appeler vous-même `SetMaxOpenConns(1)` :
 
 ```go
 // Safe: share one *sql.DB across goroutines.
@@ -474,9 +474,9 @@ for range 8 {
 wg.Wait()
 ```
 
-Notez que, comme les accès sont sérialisés via une unique connexion, les requêtes ne s'exécutent pas en parallèle ; la concurrence est sûre mais pas plus rapide. Si vous avez besoin d'un véritable parallélisme, ouvrez un `*sql.DB` distinct par goroutine.
+SQLite sérialise les écritures vers la base de données en mémoire partagée : ainsi, les rédacteurs (writers) concurrents intensifs s'attendent les uns les autres, tandis que les lectures peuvent se poursuivre simultanément. Pour des bases de données totalement indépendantes, ouvrez un `*sql.DB` distinct par goroutine.
 
-> Lorsque vous utilisez `LoadInto` avec votre propre `*sql.DB`, c'est à vous de gérer la configuration du pool. Pour une base de données en mémoire, appelez vous-même `db.SetMaxOpenConns(1)`, car les données SQLite `:memory:` sont privées à chaque connexion.
+> `LoadInto` est différent : vous apportez votre propre `*sql.DB`, c'est donc à vous de gérer la configuration du pool. Pour une simple base de données en mémoire (`sql.Open("sqlite", ":memory:")`), appelez vous-même `db.SetMaxOpenConns(1)`, car cette base de données est privée à une unique connexion.
 
 ### Support Parquet
 - **Lecture** : Support complet pour les fichiers Apache Parquet avec des types de données complexes

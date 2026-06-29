@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// sheetFallbackName is the table name used when a sheet name sanitises to empty.
+// sheetFallbackName is the table name used when a sheet name sanitizes to empty.
 const sheetFallbackName = "sheet"
 
 // table represents file contents as database table structure.
