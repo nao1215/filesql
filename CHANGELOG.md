@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-06-29
+
+### Fixed
+- Parquet export and reload now preserve SQL `NULL`. A null cell was written as an empty string and reloaded as an empty string, so `NULL` and `""` became indistinguishable after a round-trip. The Parquet writer now stores a real null, and the streaming reader reloads it as SQL `NULL`. Other formats are unaffected, since they carry no null concept. (PR [#136](https://github.com/nao1215/filesql/pull/136), Ref [nao1215/sqly#686](https://github.com/nao1215/sqly/issues/686))
+
 ## [0.14.1] - 2026-06-28
 
 ### Dependencies
@@ -17,7 +22,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.14.0] - 2026-06-01
 
 ### Fixed
-- Parquet export and reload now preserve SQL `NULL`. A null cell was written as an empty string and reloaded as an empty string, so `NULL` and `""` became indistinguishable after a round-trip. The Parquet writer now stores a real null, and the streaming reader reloads it as SQL `NULL`. Other formats are unaffected, since they carry no null concept. (PR [#136](https://github.com/nao1215/filesql/pull/136), Ref [nao1215/sqly#686](https://github.com/nao1215/sqly/issues/686))
 - LTSV imports now reject a label repeated within a single record (for example `x:1\tx:2`) instead of silently keeping only the last value and dropping the earlier one. Both the streaming parser and the chunked parser fail with a `duplicate column name` error, matching the CSV/TSV parsers, so LTSV imports stay lossless. A label repeated across separate records (the normal column-per-row case) still parses. (Ref [nao1215/sqly#467](https://github.com/nao1215/sqly/issues/467))
 
 ### Dependencies
