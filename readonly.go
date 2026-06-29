@@ -4,7 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strings"
+
+	"github.com/nao1215/filesql/internal/sqlguard"
 )
 
 // ErrReadOnly is returned when a write operation is attempted on a read-only database.
@@ -41,129 +42,11 @@ func NewReadOnlyDB(db *sql.DB) *ReadOnlyDB {
 	return &ReadOnlyDB{db: db}
 }
 
-// writeKeywords are the SQL verbs that mutate data or schema. A statement is
-// treated as a write if any of these appears as a bare word outside of string
-// literals and parentheses (i.e. at the top level of the statement). Scanning
-// the whole statement rather than only its first keyword is what blocks writes
-// hidden behind comments (/*x*/ DELETE ...) or a CTE (WITH ... DELETE ...).
-const (
-	kwInsert   = "INSERT"
-	kwUpdate   = "UPDATE"
-	kwDelete   = "DELETE"
-	kwDrop     = "DROP"
-	kwAlter    = "ALTER"
-	kwCreate   = "CREATE"
-	kwTruncate = "TRUNCATE"
-	kwReplace  = "REPLACE"
-	kwUpsert   = "UPSERT"
-)
-
-var writeKeywords = map[string]struct{}{
-	kwInsert:   {},
-	kwUpdate:   {},
-	kwDelete:   {},
-	kwDrop:     {},
-	kwAlter:    {},
-	kwCreate:   {},
-	kwTruncate: {},
-	kwReplace:  {},
-	kwUpsert:   {},
-}
-
-// isWriteStatement reports whether the SQL statement performs a write.
-//
-// It is intentionally conservative: a statement is rejected if a write keyword
-// appears anywhere at the top level, so writes cannot be smuggled past the
-// read-only API through SQL comments, common table expressions (WITH ...
-// DELETE) or a RETURNING clause executed via Query/QueryRow. Keywords inside
-// string literals, quoted identifiers, comments or parenthesised subqueries are
-// ignored to avoid rejecting legitimate SELECTs.
+// isWriteStatement reports whether the SQL statement performs a write. The
+// statement-inspection logic lives in the internal sqlguard package so the
+// read-only enforcement here stays focused on the database/sql wrappers.
 func isWriteStatement(query string) bool {
-	for _, word := range topLevelWords(query) {
-		if _, ok := writeKeywords[word]; ok {
-			return true
-		}
-	}
-	return false
-}
-
-// topLevelWords scans an SQL statement and returns the uppercased keywords that
-// appear at parenthesis depth zero, skipping comments, string literals and
-// quoted identifiers. CTE subqueries live inside parentheses, so the main
-// statement verb (SELECT / INSERT / UPDATE / DELETE) is always reported while
-// the inner verbs of the WITH clause are not.
-func topLevelWords(query string) []string {
-	var words []string
-	var word strings.Builder
-	depth := 0
-
-	flush := func() {
-		if word.Len() > 0 {
-			words = append(words, strings.ToUpper(word.String()))
-			word.Reset()
-		}
-	}
-
-	runes := []rune(query)
-	for i := 0; i < len(runes); i++ {
-		c := runes[i]
-		switch {
-		case c == '-' && i+1 < len(runes) && runes[i+1] == '-':
-			// Line comment: skip to end of line.
-			flush()
-			for i < len(runes) && runes[i] != '\n' {
-				i++
-			}
-		case c == '/' && i+1 < len(runes) && runes[i+1] == '*':
-			// Block comment: skip to closing */.
-			flush()
-			i += 2
-			for i+1 < len(runes) && (runes[i] != '*' || runes[i+1] != '/') {
-				i++
-			}
-			i++ // position on '/'; loop's i++ moves past it
-		case c == '\'' || c == '"' || c == '`':
-			// String literal or quoted identifier: skip to the matching quote,
-			// honouring doubled-quote escapes ('' "" ``).
-			flush()
-			quote := c
-			i++
-			for i < len(runes) {
-				if runes[i] == quote {
-					if i+1 < len(runes) && runes[i+1] == quote {
-						i++ // escaped quote, stay inside
-					} else {
-						break
-					}
-				}
-				i++
-			}
-		case c == '(':
-			flush()
-			depth++
-		case c == ')':
-			flush()
-			if depth > 0 {
-				depth--
-			}
-		case isWordChar(c):
-			if depth == 0 {
-				word.WriteRune(c)
-			}
-		default:
-			flush()
-		}
-	}
-	flush()
-	return words
-}
-
-// isWordChar reports whether c can be part of an SQL identifier/keyword.
-func isWordChar(c rune) bool {
-	return c == '_' ||
-		(c >= 'a' && c <= 'z') ||
-		(c >= 'A' && c <= 'Z') ||
-		(c >= '0' && c <= '9')
+	return sqlguard.IsWrite(query)
 }
 
 // readOnlyViolationQuery is an intentionally failing query used to surface a
