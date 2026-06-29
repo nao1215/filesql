@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -12,15 +13,16 @@ import (
 // TestOpenConcurrentQueries verifies that a database returned by Open can be
 // queried from multiple goroutines without data races or errors.
 //
-// The in-memory database is backed by a single SQLite connection that is reused
-// for every pooled connection, so the pool must be pinned to one connection
-// (SetMaxOpenConns(1)) to serialize access. Run with -race to detect regressions.
+// The in-memory database uses a uniquely named shared-cache DSN, so pooled
+// connections can access the same in-memory database without pinning the pool
+// to one connection. Run with -race to detect regressions.
 func TestOpenConcurrentQueries(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
 
 	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
 	const goroutines = 16
 	const iterations = 50
@@ -49,13 +51,16 @@ func TestOpenConcurrentQueries(t *testing.T) {
 // TestOpenConcurrentNestedQueries verifies that issuing a query while iterating
 // an open *sql.Rows works from multiple goroutines. This needs more than one
 // real connection per goroutine, so it would deadlock if the pool were pinned
-// to a single connection. Run with -race to detect data races.
+// to a single connection. A timeout context makes a deadlock regression fail
+// fast instead of hanging until the global test timeout. Run with -race to
+// detect data races.
 func TestOpenConcurrentNestedQueries(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
 
 	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
 	const goroutines = 8
 

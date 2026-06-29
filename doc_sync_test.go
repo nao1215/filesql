@@ -3,6 +3,7 @@ package filesql
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -24,14 +25,12 @@ const englishReadmePath = "README.md"
 // translatedReadmes maps a language code to its README path. It is a function
 // rather than a package-level variable to keep state out of globals.
 func translatedReadmes() map[string]string {
-	return map[string]string{
-		"ja":    "doc/ja/README.md",
-		"ru":    "doc/ru/README.md",
-		"zh-cn": "doc/zh-cn/README.md",
-		"ko":    "doc/ko/README.md",
-		"es":    "doc/es/README.md",
-		"fr":    "doc/fr/README.md",
+	langs := []string{"ja", "ru", "zh-cn", "ko", "es", "fr"}
+	paths := make(map[string]string, len(langs))
+	for _, lang := range langs {
+		paths[lang] = filepath.Join("doc", lang, "README.md")
 	}
+	return paths
 }
 
 // allReadmePaths returns the English README plus every translation.
