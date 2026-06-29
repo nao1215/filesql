@@ -9,7 +9,7 @@
 
 ![logo](./doc/image/filesql-logo.png)
 
-filesql is a Go SQL driver that queries CSV, TSV, LTSV, JSON, JSONL, Parquet, and Excel (XLSX) files using SQLite3 SQL syntax. It queries data files directly without imports or transformations.
+filesql is a Go SQL driver that queries CSV, TSV, LTSV, JSON, JSONL, Parquet, and Excel (XLSX) files using SQLite3 SQL syntax. It loads your files into an in-memory SQLite database for you, so you write SQL against your files without a manual import step, a schema definition, or a database server to run.
 
 [sqly](https://github.com/nao1215/sqly) is a command-line tool built on filesql that runs SQL queries against CSV, TSV, LTSV, and Excel files from the shell.
 
@@ -478,8 +478,14 @@ Since filesql uses SQLite3 as its underlying engine, all SQL syntax follows [SQL
 ### Performance Tips
 - Use `OpenContext()` with timeouts for large files
 - Configure chunk sizes (rows per chunk) with `SetDefaultChunkSize()` for memory optimization
-- Single SQLite connection works best for most scenarios
-- Use streaming for files larger than available memory
+- All data is loaded into an in-memory SQLite database, so plan for memory roughly proportional to the dataset size
+
+#### Memory and streaming
+filesql streams CSV, TSV, and JSON arrays in chunks while loading, so the parser itself does not hold the whole file at once. The other formats are read fully into memory during loading because their layout requires it:
+
+- LTSV, non-array JSON/JSONL values, Parquet (needs random access), and Excel (XLSX, ZIP-based) are read in full before loading.
+
+Either way the parsed rows end up in the in-memory SQLite database, so total memory use is governed by the dataset size, not just the chunk size. For data larger than available memory, pre-split the files or load a subset rather than relying on streaming alone.
 
 ## Benchmark
 
@@ -495,31 +501,38 @@ Run benchmarks yourself:
 make benchmark
 ```
 
-### Concurrency Limitations
-This library is not thread-safe and has concurrency limitations:
-- Do not share database connections across goroutines
-- Do not perform concurrent operations on the same database instance
-- Do not call `db.Close()` while queries are active in other goroutines
-- Use separate database instances for concurrent operations if needed
-- Race conditions may cause segmentation faults or data corruption
+### Concurrency
+The `*sql.DB` returned by `Open`/`OpenContext` is safe to share across
+goroutines. It is backed by a shared-cache in-memory SQLite database, so each
+pooled connection opens its own connection to the same data and `database/sql`
+manages them for you — you do not need to call `SetMaxOpenConns(1)` yourself:
 
-Recommended pattern for concurrent access:
 ```go
-// GOOD: Separate database instances per goroutine
-func processFileConcurrently(filename string) error {
-    db, err := filesql.Open(filename)  // Each goroutine gets its own instance
-    if err != nil {
-        return err
-    }
-    defer db.Close()
-    
-    // Safe to use within this goroutine
-    return processData(db)
+// Safe: share one *sql.DB across goroutines.
+db, err := filesql.Open("data.csv")
+if err != nil {
+    return err
 }
+defer db.Close()
 
-// BAD: Sharing database instance across goroutines
-var sharedDB *sql.DB  // This will cause race conditions
+var wg sync.WaitGroup
+for range 8 {
+    wg.Go(func() {
+        rows, err := db.Query("SELECT * FROM data")
+        // ... use rows ...
+    })
+}
+wg.Wait()
 ```
+
+SQLite serializes writes to the shared in-memory database, so heavy concurrent
+writers wait on each other; reads can proceed together. For fully independent
+databases, open a separate `*sql.DB` per goroutine.
+
+> `LoadInto` is different: there you bring your own `*sql.DB`, so you own the
+> pool configuration. For a plain in-memory database (`sql.Open("sqlite",
+> ":memory:")`), call `db.SetMaxOpenConns(1)` yourself, because that database is
+> private to a single connection.
 
 ### Parquet Support
 - Reading: Full support for Apache Parquet files with complex data types

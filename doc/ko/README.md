@@ -9,7 +9,7 @@
 
 ![logo](../image/filesql-logo.png)
 
-**filesql**은 SQLite3 SQL 구문을 사용하여 CSV, TSV, LTSV, Parquet, Excel (XLSX) 파일을 쿼리할 수 있게 해주는 Go SQL 드라이버입니다. 가져오기나 변환 없이 데이터 파일을 직접 쿼리하세요!
+**filesql**은 SQLite3 SQL 구문을 사용하여 CSV, TSV, LTSV, JSON, JSONL, Parquet, Excel (XLSX) 파일을 쿼리할 수 있게 해주는 Go SQL 드라이버입니다. filesql이 파일을 인메모리 SQLite 데이터베이스로 로드해주므로, 수동 가져오기 단계나 스키마 정의, 실행할 데이터베이스 서버 없이 파일에 대해 SQL을 작성할 수 있습니다.
 
 **filesql의 기능을 체험해보고 싶으신가요?** **[sqly](https://github.com/nao1215/sqly)**를 확인해보세요 - filesql을 사용하여 셸에서 직접 CSV, TSV, LTSV, Excel 파일에 대해 SQL 쿼리를 쉽게 실행할 수 있는 명령줄 도구입니다. filesql의 성능을 실제로 경험할 수 있는 완벽한 방법입니다!
 
@@ -431,8 +431,14 @@ filesql은 SQLite3를 기본 엔진으로 사용하므로 모든 SQL 구문은 [
 ### 성능 팁
 - 대용량 파일에는 타임아웃이 있는 `OpenContext()` 사용
 - 메모리 최적화를 위해 `SetDefaultChunkSize()`로 청크 크기 (행 수) 설정
-- 대부분의 시나리오에서 단일 SQLite 연결이 가장 잘 작동
-- 사용 가능한 메모리보다 큰 파일에는 스트리밍 사용
+- 모든 데이터는 인메모리 SQLite 데이터베이스로 로드되므로, 데이터셋 크기에 대략 비례하는 메모리를 계획하세요
+
+#### 메모리와 스트리밍
+filesql은 로딩 중에 CSV, TSV, JSON 배열을 청크 단위로 스트리밍하므로, 파서 자체가 전체 파일을 한 번에 보유하지 않습니다. 다른 형식은 그 구조상 로딩 중에 메모리로 완전히 읽어 들입니다:
+
+- LTSV, 배열이 아닌 JSON/JSONL 값, Parquet (랜덤 액세스가 필요함), Excel (XLSX, ZIP 기반)은 로딩 전에 전체가 읽혀집니다.
+
+어느 쪽이든 파싱된 행은 결국 인메모리 SQLite 데이터베이스에 저장되므로, 전체 메모리 사용량은 청크 크기만이 아니라 데이터셋 크기에 따라 결정됩니다. 사용 가능한 메모리보다 큰 데이터의 경우, 스트리밍에만 의존하기보다는 파일을 미리 분할하거나 일부만 로드하세요.
 
 ## 벤치마크
 
@@ -448,31 +454,30 @@ filesql은 SQLite3를 기본 엔진으로 사용하므로 모든 SQL 구문은 [
 make benchmark
 ```
 
-### 동시성 제한
-⚠️ **중요**: 이 라이브러리는 **스레드 안전하지 않으며** **동시성 제한이 있습니다**:
-- 고루틴 간에 데이터베이스 연결을 **공유하지 마세요**
-- 같은 데이터베이스 인스턴스에서 **동시 작업을 수행하지 마세요**
-- 다른 고루틴에서 쿼리가 활성화된 상태에서 **`db.Close()`를 호출하지 마세요**
-- 동시 작업이 필요한 경우 각 고루틴에 별도의 데이터베이스 인스턴스를 사용하세요
-- 경쟁 조건으로 인해 세그멘테이션 폴트나 데이터 손상이 발생할 수 있습니다
+### 동시성
+`Open`/`OpenContext`가 반환하는 `*sql.DB`는 여러 고루틴에서 공유해도 안전합니다. 이는 공유 캐시(shared-cache) 인메모리 SQLite 데이터베이스를 기반으로 하므로, 풀에 있는 각 연결은 동일한 데이터에 대해 자체 연결을 열고 `database/sql`이 이를 대신 관리해 줍니다. 따라서 `SetMaxOpenConns(1)`을 직접 호출할 필요가 없습니다:
 
-**동시 액세스를 위한 권장 패턴**:
 ```go
-// ✅ 좋은 예: 고루틴별로 별도의 데이터베이스 인스턴스
-func processFileConcurrently(filename string) error {
-    db, err := filesql.Open(filename)  // 각 고루틴이 자체 인스턴스를 가짐
-    if err != nil {
-        return err
-    }
-    defer db.Close()
-    
-    // 이 고루틴 내에서 안전하게 사용
-    return processData(db)
+// Safe: share one *sql.DB across goroutines.
+db, err := filesql.Open("data.csv")
+if err != nil {
+    return err
 }
+defer db.Close()
 
-// ❌ 나쁜 예: 고루틴 간에 데이터베이스 인스턴스 공유
-var sharedDB *sql.DB  // 이는 경쟁 조건을 야기합니다
+var wg sync.WaitGroup
+for range 8 {
+    wg.Go(func() {
+        rows, err := db.Query("SELECT * FROM data")
+        // ... use rows ...
+    })
+}
+wg.Wait()
 ```
+
+SQLite는 공유 인메모리 데이터베이스에 대한 쓰기를 직렬화하므로, 동시 쓰기가 많으면 서로를 기다리게 됩니다. 반면 읽기는 함께 진행될 수 있습니다. 완전히 독립적인 데이터베이스가 필요하다면 고루틴마다 별도의 `*sql.DB`를 여세요.
+
+> `LoadInto`는 다릅니다. 그 경우에는 사용자가 자신의 `*sql.DB`를 직접 가져오므로 풀 설정에 대한 책임도 사용자에게 있습니다. 일반 인메모리 데이터베이스(`sql.Open("sqlite", ":memory:")`)의 경우, 해당 데이터베이스는 단일 연결에 종속되므로 `db.SetMaxOpenConns(1)`을 직접 호출하세요.
 
 ### Parquet 지원
 - **읽기**: 복잡한 데이터 타입을 가진 Apache Parquet 파일에 대한 완전 지원

@@ -4,7 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strings"
+
+	"github.com/nao1215/filesql/internal/sqlguard"
 )
 
 // ErrReadOnly is returned when a write operation is attempted on a read-only database.
@@ -41,53 +42,51 @@ func NewReadOnlyDB(db *sql.DB) *ReadOnlyDB {
 	return &ReadOnlyDB{db: db}
 }
 
-// isWriteStatement checks if the SQL statement is a write operation.
+// isWriteStatement reports whether the SQL statement performs a write. The
+// statement-inspection logic lives in the internal sqlguard package so the
+// read-only enforcement here stays focused on the database/sql wrappers.
 func isWriteStatement(query string) bool {
-	// Normalize: trim whitespace and convert to uppercase for comparison
-	normalized := strings.ToUpper(strings.TrimSpace(query))
-
-	// Check for write operation keywords at the start of the statement
-	writeKeywords := []string{
-		"INSERT",
-		"UPDATE",
-		"DELETE",
-		"DROP",
-		"ALTER",
-		"CREATE",
-		"TRUNCATE",
-		"REPLACE",
-		"UPSERT",
-	}
-
-	for _, keyword := range writeKeywords {
-		if strings.HasPrefix(normalized, keyword) {
-			return true
-		}
-	}
-
-	return false
+	return sqlguard.IsWrite(query)
 }
 
+// readOnlyViolationQuery is an intentionally failing query used to surface a
+// read-only error through *sql.Row, which has no exported error constructor.
+// Selecting from a table named with the violation message makes the deferred
+// Scan error mention "read-only" without performing any write. The trailing
+// `WHERE 1 = 0` guarantees the statement yields no row (so Scan still errors)
+// even if the wrapped database happens to contain a table with that exact name.
+const readOnlyViolationQuery = `SELECT 1 FROM "filesql read-only: write operations are not allowed" WHERE 1 = 0`
+
 // QueryContext executes a query that returns rows with context.
+// Write statements (including DELETE/UPDATE ... RETURNING) are rejected with
+// ErrReadOnly because they mutate data even when invoked through Query.
 func (r *ReadOnlyDB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if isWriteStatement(query) {
+		return nil, ErrReadOnly
+	}
 	return r.db.QueryContext(ctx, query, args...)
 }
 
 // Query executes a query that returns rows (SELECT statements).
 // Deprecated: Use QueryContext instead.
 func (r *ReadOnlyDB) Query(query string, args ...any) (*sql.Rows, error) {
-	return r.db.QueryContext(context.Background(), query, args...)
+	return r.QueryContext(context.Background(), query, args...)
 }
 
 // QueryRowContext executes a query that returns at most one row with context.
+// Write statements are rejected: the returned row's Scan reports a read-only
+// error instead of executing the statement.
 func (r *ReadOnlyDB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	if isWriteStatement(query) {
+		return r.db.QueryRowContext(ctx, readOnlyViolationQuery)
+	}
 	return r.db.QueryRowContext(ctx, query, args...)
 }
 
 // QueryRow executes a query that returns at most one row.
 // Deprecated: Use QueryRowContext instead.
 func (r *ReadOnlyDB) QueryRow(query string, args ...any) *sql.Row {
-	return r.db.QueryRowContext(context.Background(), query, args...)
+	return r.QueryRowContext(context.Background(), query, args...)
 }
 
 // ExecContext rejects write operations and returns ErrReadOnly.
@@ -118,7 +117,7 @@ func (r *ReadOnlyDB) PrepareContext(ctx context.Context, query string) (*ReadOnl
 	if err != nil {
 		return nil, err
 	}
-	return &ReadOnlyStmt{stmt: stmt, isWrite: isWriteStatement(query)}, nil
+	return &ReadOnlyStmt{stmt: stmt, isWrite: isWriteStatement(query), parent: r.db}, nil
 }
 
 // Prepare creates a prepared statement.
@@ -164,31 +163,50 @@ func (r *ReadOnlyDB) DB() *sql.DB {
 	return r.db
 }
 
+// rowQuerier is satisfied by both *sql.DB and *sql.Tx. ReadOnlyStmt keeps a
+// reference to whichever created it so the QueryRow paths can surface a
+// read-only error without a *sql.Row error constructor.
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 // ReadOnlyStmt wraps a *sql.Stmt to enforce read-only operations.
 type ReadOnlyStmt struct {
 	stmt    *sql.Stmt
 	isWrite bool
+	// parent is the *sql.DB or *sql.Tx the statement was prepared on, used only
+	// to surface ErrReadOnly from the QueryRow paths.
+	parent rowQuerier
 }
 
 // Query executes a prepared query statement.
 // Deprecated: Use QueryContext instead.
 func (s *ReadOnlyStmt) Query(args ...any) (*sql.Rows, error) {
-	return s.stmt.QueryContext(context.Background(), args...)
+	return s.QueryContext(context.Background(), args...)
 }
 
 // QueryContext executes a prepared query statement with context.
+// Write statements are rejected. A ReadOnlyStmt cannot normally wrap a write
+// (PrepareContext refuses to prepare one), so this is defense in depth.
 func (s *ReadOnlyStmt) QueryContext(ctx context.Context, args ...any) (*sql.Rows, error) {
+	if s.isWrite {
+		return nil, ErrReadOnly
+	}
 	return s.stmt.QueryContext(ctx, args...)
 }
 
 // QueryRow executes a prepared query statement that returns at most one row.
 // Deprecated: Use QueryRowContext instead.
 func (s *ReadOnlyStmt) QueryRow(args ...any) *sql.Row {
-	return s.stmt.QueryRowContext(context.Background(), args...)
+	return s.QueryRowContext(context.Background(), args...)
 }
 
 // QueryRowContext executes a prepared query statement that returns at most one row with context.
+// Write statements are rejected (defense in depth; see QueryContext).
 func (s *ReadOnlyStmt) QueryRowContext(ctx context.Context, args ...any) *sql.Row {
+	if s.isWrite && s.parent != nil {
+		return s.parent.QueryRowContext(ctx, readOnlyViolationQuery)
+	}
 	return s.stmt.QueryRowContext(ctx, args...)
 }
 
@@ -222,22 +240,32 @@ type ReadOnlyTx struct {
 // Query executes a query that returns rows.
 // Deprecated: Use QueryContext instead.
 func (t *ReadOnlyTx) Query(query string, args ...any) (*sql.Rows, error) {
-	return t.tx.QueryContext(context.Background(), query, args...)
+	return t.QueryContext(context.Background(), query, args...)
 }
 
 // QueryContext executes a query that returns rows with context.
+// Write statements (including DELETE/UPDATE ... RETURNING) are rejected with
+// ErrReadOnly.
 func (t *ReadOnlyTx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if isWriteStatement(query) {
+		return nil, ErrReadOnly
+	}
 	return t.tx.QueryContext(ctx, query, args...)
 }
 
 // QueryRow executes a query that returns at most one row.
 // Deprecated: Use QueryRowContext instead.
 func (t *ReadOnlyTx) QueryRow(query string, args ...any) *sql.Row {
-	return t.tx.QueryRowContext(context.Background(), query, args...)
+	return t.QueryRowContext(context.Background(), query, args...)
 }
 
 // QueryRowContext executes a query that returns at most one row with context.
+// Write statements are rejected: the returned row's Scan reports a read-only
+// error instead of executing the statement.
 func (t *ReadOnlyTx) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	if isWriteStatement(query) {
+		return t.tx.QueryRowContext(ctx, readOnlyViolationQuery)
+	}
 	return t.tx.QueryRowContext(ctx, query, args...)
 }
 
@@ -283,5 +311,5 @@ func (t *ReadOnlyTx) PrepareContext(ctx context.Context, query string) (*ReadOnl
 	if err != nil {
 		return nil, err
 	}
-	return &ReadOnlyStmt{stmt: stmt, isWrite: isWriteStatement(query)}, nil
+	return &ReadOnlyStmt{stmt: stmt, isWrite: isWriteStatement(query), parent: t.tx}, nil
 }

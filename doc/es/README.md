@@ -9,7 +9,7 @@
 
 ![logo](../image/filesql-logo.png)
 
-**filesql** es un controlador SQL para Go que te permite consultar archivos CSV, TSV, LTSV, Parquet y Excel (XLSX) usando la sintaxis SQL de SQLite3. ¡Consulta tus archivos de datos directamente sin importaciones o transformaciones!
+**filesql** es un controlador SQL para Go que te permite consultar archivos CSV, TSV, LTSV, JSON, JSONL, Parquet y Excel (XLSX) usando la sintaxis SQL de SQLite3. Carga tus archivos en una base de datos SQLite en memoria por ti, para que escribas SQL contra tus archivos sin un paso de importación manual, una definición de esquema, ni un servidor de base de datos que ejecutar.
 
 **¿Quieres probar las capacidades de filesql?** ¡Prueba **[sqly](https://github.com/nao1215/sqly)** - una herramienta de línea de comandos que utiliza filesql para ejecutar fácilmente consultas SQL contra archivos CSV, TSV, LTSV y Excel directamente desde tu shell! ¡Es la forma perfecta de experimentar el poder de filesql en acción!
 
@@ -431,8 +431,14 @@ Dado que filesql usa SQLite3 como su motor subyacente, toda la sintaxis SQL sigu
 ### Consejos de rendimiento
 - Usa `OpenContext()` con timeouts para archivos grandes
 - Configura tamaños de chunk (filas por chunk) con `SetDefaultChunkSize()` para optimización de memoria
-- Una sola conexión SQLite funciona mejor para la mayoría de escenarios
-- Usa streaming para archivos más grandes que la memoria disponible
+- Todos los datos se cargan en una base de datos SQLite en memoria, así que planifica una memoria aproximadamente proporcional al tamaño del conjunto de datos
+
+#### Memoria y streaming
+filesql transmite arreglos CSV, TSV y JSON en chunks durante la carga, por lo que el parser en sí no retiene el archivo completo de una vez. Los demás formatos se leen completamente en memoria durante la carga porque su estructura lo requiere:
+
+- LTSV, valores JSON/JSONL que no son arreglos, Parquet (necesita acceso aleatorio) y Excel (XLSX, basado en ZIP) se leen por completo antes de la carga.
+
+De cualquier manera, las filas analizadas terminan en la base de datos SQLite en memoria, por lo que el uso total de memoria está determinado por el tamaño del conjunto de datos, no solo por el tamaño del chunk. Para datos más grandes que la memoria disponible, divide los archivos previamente o carga un subconjunto en lugar de depender únicamente del streaming.
 
 ## Benchmark
 
@@ -448,31 +454,30 @@ Ejecuta los benchmarks tú mismo:
 make benchmark
 ```
 
-### Limitaciones de concurrencia
-⚠️ **IMPORTANTE**: Esta biblioteca **NO es thread-safe** y tiene **limitaciones de concurrencia**:
-- **NO** compartas conexiones de base de datos entre goroutines
-- **NO** realices operaciones concurrentes en la misma instancia de base de datos
-- **NO** llames `db.Close()` mientras hay consultas activas en otras goroutines
-- Usa instancias de base de datos separadas para operaciones concurrentes si es necesario
-- Las condiciones de carrera pueden causar fallos de segmentación o corrupción de datos
+### Concurrencia
+El `*sql.DB` devuelto por `Open`/`OpenContext` se puede compartir de forma segura entre goroutines. Está respaldado por una base de datos SQLite en memoria con caché compartida, por lo que cada conexión del pool abre su propia conexión a los mismos datos y `database/sql` las gestiona por ti: no necesitas llamar a `SetMaxOpenConns(1)` tú mismo:
 
-**Patrón recomendado para acceso concurrente**:
 ```go
-// ✅ BUENO: Instancias de base de datos separadas por goroutine
-func processFileConcurrently(filename string) error {
-    db, err := filesql.Open(filename)  // Cada goroutine obtiene su propia instancia
-    if err != nil {
-        return err
-    }
-    defer db.Close()
-    
-    // Seguro de usar dentro de esta goroutine
-    return processData(db)
+// Safe: share one *sql.DB across goroutines.
+db, err := filesql.Open("data.csv")
+if err != nil {
+    return err
 }
+defer db.Close()
 
-// ❌ MALO: Compartir instancia de base de datos entre goroutines
-var sharedDB *sql.DB  // Esto causará condiciones de carrera
+var wg sync.WaitGroup
+for range 8 {
+    wg.Go(func() {
+        rows, err := db.Query("SELECT * FROM data")
+        // ... use rows ...
+    })
+}
+wg.Wait()
 ```
+
+SQLite serializa las escrituras en la base de datos en memoria compartida, por lo que los escritores concurrentes intensivos se esperan entre sí; las lecturas pueden avanzar juntas. Para bases de datos totalmente independientes, abre un `*sql.DB` separado por goroutine.
+
+> `LoadInto` es diferente: ahí aportas tu propio `*sql.DB`, así que eres responsable de la configuración del pool. Para una base de datos en memoria simple (`sql.Open("sqlite", ":memory:")`), llama a `db.SetMaxOpenConns(1)` tú mismo, porque esa base de datos es privada para una única conexión.
 
 ### Soporte de Excel (XLSX)
 - **Estructura 1-Hoja-1-Tabla**: Cada hoja en un libro de Excel se convierte en una tabla SQL separada

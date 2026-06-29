@@ -17,15 +17,15 @@ type FileType int
 func (ft FileType) String() string {
 	switch ft {
 	case FileTypeCSV:
-		return "CSV"
+		return fileTypeNameCSV
 	case FileTypeTSV:
-		return "TSV"
+		return fileTypeNameTSV
 	case FileTypeLTSV:
-		return "LTSV"
+		return fileTypeNameLTSV
 	case FileTypeParquet:
-		return "Parquet"
+		return fileTypeNameParquet
 	case FileTypeXLSX:
-		return "XLSX"
+		return fileTypeNameXLSX
 	case FileTypeCSVGZ:
 		return "CSV (gzip)"
 	case FileTypeCSVBZ2:
@@ -147,9 +147,19 @@ func (ft FileType) String() string {
 	case FileTypeFedWire:
 		return "FedWire"
 	default:
-		return "Unsupported"
+		return fileTypeNameUnsupported
 	}
 }
+
+// FileType human-readable display names returned by String.
+const (
+	fileTypeNameCSV         = "CSV"
+	fileTypeNameTSV         = "TSV"
+	fileTypeNameLTSV        = "LTSV"
+	fileTypeNameParquet     = "Parquet"
+	fileTypeNameXLSX        = "XLSX"
+	fileTypeNameUnsupported = "Unsupported"
+)
 
 const (
 	// FileTypeCSV represents CSV file type

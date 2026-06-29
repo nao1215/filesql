@@ -13,6 +13,12 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
+// Structured log attribute keys used across stream processing.
+const (
+	logKeyTable = "table"
+	logKeySheet = "sheet"
+)
+
 // streamError wraps stream processing errors with sentinel errors for errors.Is() compatibility.
 func streamError(sentinel error, format string, args ...any) error {
 	return fmt.Errorf("%w: "+format, append([]any{sentinel}, args...)...)
@@ -78,10 +84,10 @@ func (sp *streamProcessor) streamAllReadersToDatabase(ctx context.Context, db *s
 	}
 	sp.logger.Info("starting reader streaming", "reader_count", len(readers))
 	for i, ri := range readers {
-		sp.logger.Debug("streaming reader", "table", ri.tableName, "file_type", ri.fileType.String(), "index", i+1, "total", len(readers))
+		sp.logger.Debug("streaming reader", logKeyTable, ri.tableName, "file_type", ri.fileType.String(), "index", i+1, "total", len(readers))
 		if err := sp.streamReaderToDatabase(ctx, db, ri); err != nil {
 			sp.closeReaderInput(ri)
-			sp.logger.Error("failed to stream reader", "table", ri.tableName, "error", err)
+			sp.logger.Error("failed to stream reader", logKeyTable, ri.tableName, "error", err)
 			return streamError(ErrParsing, "failed to stream reader input for table '%s': %v", ri.tableName, err)
 		}
 		sp.closeReaderInput(ri)
@@ -94,7 +100,7 @@ func (sp *streamProcessor) streamAllReadersToDatabase(ctx context.Context, db *s
 func (sp *streamProcessor) closeReaderInput(ri readerInput) {
 	if ri.closer != nil {
 		if err := ri.closer.Close(); err != nil {
-			sp.logger.Debug("error closing reader input", "table", ri.tableName, "error", err)
+			sp.logger.Debug("error closing reader input", logKeyTable, ri.tableName, "error", err)
 		}
 	}
 }
@@ -169,7 +175,7 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db *sql.DB,
 
 	// Create reader input for streaming
 	tableName := sanitizeTableName(tableFromFilePath(filePath))
-	sp.logger.Debug("streaming file to table", "path", filePath, "table", tableName, "type", baseFileType.String())
+	sp.logger.Debug("streaming file to table", "path", filePath, logKeyTable, tableName, "type", baseFileType.String())
 	readerInput := readerInput{
 		reader:    reader, // Use decompressed reader
 		tableName: tableName,
@@ -258,7 +264,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 	}
 
 	if tableExists > 0 && !sp.replaceExisting {
-		sp.logger.Warn("table already exists", "table", input.tableName)
+		sp.logger.Warn("table already exists", logKeyTable, input.tableName)
 		return fmt.Errorf("%w: table '%s' already exists from another file", ErrDuplicateTable, input.tableName)
 	}
 	// When replacing, createTableFromChunk drops the old table before recreating it.
@@ -278,7 +284,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 		chunkCount++
 		// Create table on first chunk
 		if !tableCreated {
-			sp.logger.Debug("creating table", "table", input.tableName, "columns", len(chunk.getHeaders()))
+			sp.logger.Debug("creating table", logKeyTable, input.tableName, "columns", len(chunk.getHeaders()))
 			if err := sp.createTableFromChunk(ctx, db, chunk); err != nil {
 				return fmt.Errorf("%w: failed to create table: %s", ErrDatabaseOperation, err.Error())
 			}
@@ -299,13 +305,13 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 			}
 
 			tableCreated = true
-			sp.logger.Info("table created", "table", input.tableName)
+			sp.logger.Info("table created", logKeyTable, input.tableName)
 		}
 
 		// Insert chunk data
 		rowsInChunk := len(chunk.getRecords())
 		totalRows += rowsInChunk
-		sp.logger.Debug("inserting chunk", "table", input.tableName, "chunk", chunkCount, "rows", rowsInChunk)
+		sp.logger.Debug("inserting chunk", logKeyTable, input.tableName, "chunk", chunkCount, "rows", rowsInChunk)
 		if err := sp.insertChunkData(ctx, insertStmt, chunk); err != nil {
 			return fmt.Errorf("%w: failed to insert chunk data: %s", ErrDatabaseOperation, err.Error())
 		}
@@ -316,13 +322,13 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 	// Handle transaction commit/rollback
 	if tx != nil {
 		if err != nil {
-			sp.logger.Debug("rolling back transaction", "table", input.tableName, "error", err)
+			sp.logger.Debug("rolling back transaction", logKeyTable, input.tableName, "error", err)
 			_ = tx.Rollback() //nolint:errcheck // Ignore rollback error during error handling
 		} else {
 			if commitErr := tx.Commit(); commitErr != nil {
 				return fmt.Errorf("%w: failed to commit transaction: %s", ErrDatabaseOperation, commitErr.Error())
 			}
-			sp.logger.Debug("committed transaction", "table", input.tableName, "chunks", chunkCount, "total_rows", totalRows)
+			sp.logger.Debug("committed transaction", logKeyTable, input.tableName, "chunks", chunkCount, "total_rows", totalRows)
 		}
 	}
 
@@ -578,22 +584,22 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db *sql
 
 	// Process each sheet as a separate table
 	for i, sheetName := range sheetNames {
-		sp.logger.Debug("processing sheet", "path", filePath, "sheet", sheetName, "index", i+1, "total", len(sheetNames))
+		sp.logger.Debug("processing sheet", "path", filePath, logKeySheet, sheetName, "index", i+1, "total", len(sheetNames))
 		rows, err := xlsxFile.GetRows(sheetName)
 		if err != nil {
-			sp.logger.Error("failed to read sheet", "path", filePath, "sheet", sheetName, "error", err)
+			sp.logger.Error("failed to read sheet", "path", filePath, logKeySheet, sheetName, "error", err)
 			return fmt.Errorf("%w: failed to read sheet %s: %s", ErrParsing, sheetName, err.Error())
 		}
 
 		// Skip empty sheets
 		if len(rows) == 0 {
-			sp.logger.Debug("skipping empty sheet", "path", filePath, "sheet", sheetName)
+			sp.logger.Debug("skipping empty sheet", "path", filePath, logKeySheet, sheetName)
 			continue
 		}
 
 		// Create table name: filename_sheetname
 		tableName := fmt.Sprintf("%s_%s", baseTableName, sanitizeTableName(sheetName))
-		sp.logger.Debug("creating table from sheet", "path", filePath, "sheet", sheetName, "table", tableName, "rows", len(rows))
+		sp.logger.Debug("creating table from sheet", "path", filePath, logKeySheet, sheetName, logKeyTable, tableName, "rows", len(rows))
 
 		// Check if table already exists
 		var tableExists int

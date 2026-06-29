@@ -40,7 +40,10 @@ through the standard `database/sql` interface. It backs
   `file_processor.go` (parsing), `parser_bridge.go` (map to fileparser), and add
   `testdata/` fixtures.
 - **Feature that touches the README**: update all 7 languages — `README.md` and
-  `doc/{es,fr,ja,ko,ru,zh-cn}/README.md`.
+  `doc/{es,fr,ja,ko,ru,zh-cn}/README.md`. `doc_sync_test.go` guards against
+  drift (translations existing, sharing stable markers, matching the English
+  top-level section count, and linking every language); run `make test` after
+  README changes and update those checks when you add a top-level section.
 - **CHANGELOG.md**: add an entry referencing the PR number and commit hash as
   clickable links, e.g.
   `- Description (PR #123, [abc1234](https://github.com/nao1215/filesql/commit/abc1234))`.

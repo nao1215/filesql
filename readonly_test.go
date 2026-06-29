@@ -302,13 +302,32 @@ func TestIsWriteStatement(t *testing.T) {
 		{"REPLACE INTO users VALUES (1)", true},
 		{"UPSERT INTO users VALUES (1)", true},
 
+		// Write statements hidden behind comments
+		{"/*x*/ DELETE FROM users", true},       // leading block comment
+		{"-- comment\nDELETE FROM users", true}, // leading line comment
+		{"/* multi\nline */ UPDATE users SET a=1", true},
+		{"  /*a*/ /*b*/ INSERT INTO users VALUES (1)", true}, // multiple comments
+
+		// Write statements behind a CTE (WITH ... DELETE/UPDATE/INSERT)
+		{"WITH cte AS (SELECT 1) DELETE FROM users", true},
+		{"WITH cte AS (SELECT 1) UPDATE users SET a = 1", true},
+		{"WITH cte AS (SELECT 1) INSERT INTO users SELECT * FROM cte", true},
+		{"WITH RECURSIVE cte(x) AS (SELECT 1) DELETE FROM users", true},
+
+		// DML with RETURNING (returns rows but still mutates data)
+		{"DELETE FROM users WHERE id = 1 RETURNING id", true},
+		{"UPDATE users SET a = 1 RETURNING a", true},
+
 		// Read statements
 		{"SELECT * FROM users", false},
 		{"select * from users", false},
 		{"  SELECT * FROM users", false},
 		{"WITH cte AS (SELECT 1) SELECT * FROM cte", false},
+		{"WITH cte AS (SELECT 1), d AS (SELECT 2) SELECT * FROM cte, d", false},
 		{"EXPLAIN SELECT * FROM users", false},
 		{"PRAGMA table_info(users)", false},
+		{"-- delete is mentioned in a comment\nSELECT * FROM users", false},
+		{"SELECT note FROM users WHERE note = 'please delete this'", false}, // keyword inside a string literal
 	}
 
 	for _, tt := range tests {
@@ -772,4 +791,180 @@ func TestReadOnlyTx_PrepareContextError(t *testing.T) {
 	// Now PrepareContext should fail because tx is no longer valid
 	_, err = tx.PrepareContext(ctx, "SELECT * FROM test")
 	assert.Error(t, err)
+}
+
+// countTestRows returns the current number of rows in the "test" table using
+// the underlying *sql.DB so the count itself bypasses read-only protection.
+func countTestRows(t *testing.T, rodb *ReadOnlyDB) int {
+	t.Helper()
+	var count int
+	require.NoError(t, rodb.DB().QueryRowContext(context.Background(), "SELECT COUNT(*) FROM test").Scan(&count))
+	return count
+}
+
+// TestReadOnlyDB_QueryRejectsWrites verifies that write statements routed
+// through the Query* methods (e.g. DELETE ... RETURNING) are rejected and do
+// not mutate data.
+func TestReadOnlyDB_QueryRejectsWrites(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	rodb := NewReadOnlyDB(db)
+	before := countTestRows(t, rodb)
+
+	t.Run("Query with DELETE ... RETURNING", func(t *testing.T) {
+		_, err := rodb.Query("DELETE FROM test WHERE name = 'Alice' RETURNING name") //nolint:rowserrcheck,sqlclosecheck // write is rejected, so no rows are returned
+		assert.True(t, errors.Is(err, ErrReadOnly), "expected ErrReadOnly, got %v", err)
+	})
+
+	t.Run("QueryContext with DELETE ... RETURNING", func(t *testing.T) {
+		_, err := rodb.QueryContext(ctx, "DELETE FROM test WHERE name = 'Bob' RETURNING name") //nolint:rowserrcheck,sqlclosecheck // write is rejected, so no rows are returned
+		assert.True(t, errors.Is(err, ErrReadOnly), "expected ErrReadOnly, got %v", err)
+	})
+
+	t.Run("QueryRow with DELETE ... RETURNING", func(t *testing.T) {
+		var name string
+		err := rodb.QueryRow("DELETE FROM test WHERE name = 'Alice' RETURNING name").Scan(&name)
+		assert.Error(t, err, "QueryRow must surface an error for write statements")
+	})
+
+	// No write may have slipped through.
+	assert.Equal(t, before, countTestRows(t, rodb), "read-only DB must not mutate data")
+}
+
+// TestReadOnlyDB_ExecRejectsObfuscatedWrites verifies that writes hidden behind
+// comments or CTEs are still rejected.
+func TestReadOnlyDB_ExecRejectsObfuscatedWrites(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	rodb := NewReadOnlyDB(db)
+	before := countTestRows(t, rodb)
+
+	cases := []string{
+		`/*x*/ DELETE FROM test WHERE name = 'Alice'`,
+		"-- comment\nDELETE FROM test WHERE name = 'Alice'",
+		`WITH cte AS (SELECT 1) DELETE FROM test`,
+	}
+	for _, query := range cases {
+		t.Run(query, func(t *testing.T) {
+			_, err := rodb.Exec(query)
+			assert.True(t, errors.Is(err, ErrReadOnly), "expected ErrReadOnly, got %v", err)
+		})
+	}
+
+	assert.Equal(t, before, countTestRows(t, rodb), "read-only DB must not mutate data")
+}
+
+// TestReadOnlyTx_QueryRejectsWrites verifies the transaction Query* paths reject
+// write statements too.
+func TestReadOnlyTx_QueryRejectsWrites(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	rodb := NewReadOnlyDB(db)
+	before := countTestRows(t, rodb)
+
+	tx, err := rodb.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+
+	_, err = tx.Query("DELETE FROM test WHERE name = 'Alice' RETURNING name") //nolint:rowserrcheck,sqlclosecheck // write is rejected, so no rows are returned
+	assert.True(t, errors.Is(err, ErrReadOnly), "expected ErrReadOnly, got %v", err)
+
+	_, err = tx.QueryContext(ctx, "WITH cte AS (SELECT 1) DELETE FROM test") //nolint:rowserrcheck,sqlclosecheck // write is rejected, so no rows are returned
+	assert.True(t, errors.Is(err, ErrReadOnly), "expected ErrReadOnly, got %v", err)
+
+	require.NoError(t, tx.Rollback())
+	assert.Equal(t, before, countTestRows(t, rodb), "read-only Tx must not mutate data")
+}
+
+// TestReadOnlyDB_PrepareRejectsObfuscatedAndSQLiteWrites verifies that prepared
+// statements cannot be created for write statements, including DML with
+// RETURNING and SQLite-specific mutators, so the ReadOnlyStmt query paths can
+// never run a write.
+func TestReadOnlyDB_PrepareRejectsObfuscatedAndSQLiteWrites(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	rodb := NewReadOnlyDB(db)
+
+	cases := []string{
+		"DELETE FROM test WHERE name = 'Alice' RETURNING name",
+		"WITH cte AS (SELECT 1) DELETE FROM test",
+		"VACUUM",
+		"PRAGMA foreign_keys = ON",
+		"ATTACH DATABASE 'other.db' AS other",
+	}
+	for _, query := range cases {
+		t.Run(query, func(t *testing.T) {
+			_, err := rodb.PrepareContext(ctx, query)
+			assert.True(t, errors.Is(err, ErrReadOnly), "expected ErrReadOnly, got %v", err)
+		})
+	}
+}
+
+// TestReadOnlyDB_ExecRejectsSQLiteMutators verifies SQLite statements that
+// mutate state without a DML verb are rejected by Exec.
+func TestReadOnlyDB_ExecRejectsSQLiteMutators(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	rodb := NewReadOnlyDB(db)
+
+	for _, query := range []string{"VACUUM", "REINDEX", "ANALYZE", "PRAGMA journal_mode = WAL"} {
+		t.Run(query, func(t *testing.T) {
+			_, err := rodb.Exec(query)
+			assert.True(t, errors.Is(err, ErrReadOnly), "expected ErrReadOnly, got %v", err)
+		})
+	}
+
+	// A reading PRAGMA is still allowed.
+	_, err = rodb.Exec("PRAGMA table_info(test)")
+	require.NoError(t, err)
+}
+
+// TestReadOnlyStmt_QueryRowGuard verifies the defensive guard on the prepared
+// statement QueryRow path: a (synthetic) write statement surfaces an error
+// through Scan rather than executing.
+func TestReadOnlyStmt_QueryRowGuard(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	rodb := NewReadOnlyDB(db)
+	before := countTestRows(t, rodb)
+
+	// PrepareContext blocks writes, so build a read statement and flip the
+	// internal flag to exercise the defense-in-depth guard directly.
+	stmt, err := rodb.PrepareContext(ctx, "SELECT name FROM test")
+	require.NoError(t, err)
+	defer stmt.Close()
+	stmt.isWrite = true
+
+	var name string
+	err = stmt.QueryRowContext(ctx).Scan(&name)
+	assert.Error(t, err, "QueryRow must surface an error when the statement is a write")
+
+	_, err = stmt.QueryContext(ctx) //nolint:rowserrcheck,sqlclosecheck // rejected before any rows are produced
+	assert.True(t, errors.Is(err, ErrReadOnly), "expected ErrReadOnly, got %v", err)
+
+	assert.Equal(t, before, countTestRows(t, rodb), "guarded statement must not mutate data")
 }

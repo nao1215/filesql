@@ -3,7 +3,9 @@ package filesql
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -219,6 +221,12 @@ func (b *DBBuilder) AddFS(filesystem fs.FS) *DBBuilder {
 //
 //	builder.AddPath("data.csv").
 //		EnableAutoSave("") // Auto-save to original file on db.Close()
+//
+// Concurrency: unlike a database opened without auto-save, a database opened
+// with auto-save is backed by a single connection (the save hook runs when that
+// connection closes), so it is not safe to share across goroutines. Use it from
+// one goroutine, or open the files without auto-save and persist explicitly with
+// DumpDatabase when you need concurrent access.
 //
 // Returns self for chaining.
 func (b *DBBuilder) EnableAutoSave(outputDir string, options ...DumpOptions) *DBBuilder {
@@ -499,13 +507,40 @@ func (b *DBBuilder) LoadInto(ctx context.Context, db *sql.DB) error {
 // DEPRECATED: This method has been moved to fileProcessor.deduplicateCompressedFiles()
 // createInMemoryDatabase creates a new in-memory SQLite database connection.
 func (b *DBBuilder) createInMemoryDatabase() (*sql.DB, error) {
-	sqliteDriver := &sqlite.Driver{}
-	conn, err := sqliteDriver.Open(":memory:")
+	// Use a uniquely-named shared-cache in-memory database rather than a bare
+	// ":memory:" connection. A bare ":memory:" database is private to a single
+	// connection, which forced earlier versions to reuse one connection for the
+	// whole pool and made the returned *sql.DB unsafe to use from multiple
+	// goroutines. With "mode=memory&cache=shared" every pooled connection opens
+	// its own real connection to the same in-memory database, so database/sql
+	// can serialize access per connection: the result is safe to share across
+	// goroutines and still supports queries issued while iterating rows.
+	name, err := randomMemoryDBName()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to name in-memory database: %s", ErrDatabaseOperation, err.Error())
+	}
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", name)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to create in-memory database: %s", ErrDatabaseOperation, err.Error())
 	}
+	// A shared-cache in-memory database is discarded once its last connection
+	// closes. Disable idle timeouts so the pool keeps at least one connection
+	// (and therefore the data) alive until the caller closes the *sql.DB.
+	db.SetConnMaxIdleTime(0)
+	db.SetConnMaxLifetime(0)
+	return db, nil
+}
 
-	return sql.OpenDB(&directConnector{conn: conn}), nil
+// randomMemoryDBName returns a process-unique name for a shared-cache in-memory
+// SQLite database. A random name keeps separate filesql databases from sharing
+// the same in-memory cache within a process.
+func randomMemoryDBName() (string, error) {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	return "filesql_mem_" + hex.EncodeToString(buf[:]), nil
 }
 
 // validateDatabaseConnection validates the database connection is working.

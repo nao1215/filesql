@@ -5,6 +5,9 @@ import (
 	"strings"
 )
 
+// sheetFallbackName is the table name used when a sheet name sanitizes to empty.
+const sheetFallbackName = "sheet"
+
 // table represents file contents as database table structure.
 type table struct {
 	// Name is table name derived from file path.
@@ -121,7 +124,7 @@ func sanitizeTableName(name string) string {
 
 	// Ensure it's not empty
 	if finalResult == "" {
-		finalResult = "sheet"
+		finalResult = sheetFallbackName
 	}
 
 	return finalResult
