@@ -303,8 +303,8 @@ func TestIsWriteStatement(t *testing.T) {
 		{"UPSERT INTO users VALUES (1)", true},
 
 		// Write statements hidden behind comments
-		{"/*x*/ DELETE FROM users", true},        // leading block comment
-		{"-- comment\nDELETE FROM users", true},  // leading line comment
+		{"/*x*/ DELETE FROM users", true},       // leading block comment
+		{"-- comment\nDELETE FROM users", true}, // leading line comment
 		{"/* multi\nline */ UPDATE users SET a=1", true},
 		{"  /*a*/ /*b*/ INSERT INTO users VALUES (1)", true}, // multiple comments
 
@@ -798,7 +798,7 @@ func TestReadOnlyTx_PrepareContextError(t *testing.T) {
 func countTestRows(t *testing.T, rodb *ReadOnlyDB) int {
 	t.Helper()
 	var count int
-	require.NoError(t, rodb.DB().QueryRow("SELECT COUNT(*) FROM test").Scan(&count))
+	require.NoError(t, rodb.DB().QueryRowContext(context.Background(), "SELECT COUNT(*) FROM test").Scan(&count))
 	return count
 }
 
@@ -816,12 +816,12 @@ func TestReadOnlyDB_QueryRejectsWrites(t *testing.T) {
 	before := countTestRows(t, rodb)
 
 	t.Run("Query with DELETE ... RETURNING", func(t *testing.T) {
-		_, err := rodb.Query("DELETE FROM test WHERE name = 'Alice' RETURNING name")
+		_, err := rodb.Query("DELETE FROM test WHERE name = 'Alice' RETURNING name") //nolint:rowserrcheck,sqlclosecheck // write is rejected, so no rows are returned
 		assert.True(t, errors.Is(err, ErrReadOnly), "expected ErrReadOnly, got %v", err)
 	})
 
 	t.Run("QueryContext with DELETE ... RETURNING", func(t *testing.T) {
-		_, err := rodb.QueryContext(ctx, "DELETE FROM test WHERE name = 'Bob' RETURNING name")
+		_, err := rodb.QueryContext(ctx, "DELETE FROM test WHERE name = 'Bob' RETURNING name") //nolint:rowserrcheck,sqlclosecheck // write is rejected, so no rows are returned
 		assert.True(t, errors.Is(err, ErrReadOnly), "expected ErrReadOnly, got %v", err)
 	})
 
@@ -878,10 +878,10 @@ func TestReadOnlyTx_QueryRejectsWrites(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = tx.Query("DELETE FROM test WHERE name = 'Alice' RETURNING name")
+	_, err = tx.Query("DELETE FROM test WHERE name = 'Alice' RETURNING name") //nolint:rowserrcheck,sqlclosecheck // write is rejected, so no rows are returned
 	assert.True(t, errors.Is(err, ErrReadOnly), "expected ErrReadOnly, got %v", err)
 
-	_, err = tx.QueryContext(ctx, "WITH cte AS (SELECT 1) DELETE FROM test")
+	_, err = tx.QueryContext(ctx, "WITH cte AS (SELECT 1) DELETE FROM test") //nolint:rowserrcheck,sqlclosecheck // write is rejected, so no rows are returned
 	assert.True(t, errors.Is(err, ErrReadOnly), "expected ErrReadOnly, got %v", err)
 
 	require.NoError(t, tx.Rollback())

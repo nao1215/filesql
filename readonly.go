@@ -46,16 +46,28 @@ func NewReadOnlyDB(db *sql.DB) *ReadOnlyDB {
 // literals and parentheses (i.e. at the top level of the statement). Scanning
 // the whole statement rather than only its first keyword is what blocks writes
 // hidden behind comments (/*x*/ DELETE ...) or a CTE (WITH ... DELETE ...).
+const (
+	kwInsert   = "INSERT"
+	kwUpdate   = "UPDATE"
+	kwDelete   = "DELETE"
+	kwDrop     = "DROP"
+	kwAlter    = "ALTER"
+	kwCreate   = "CREATE"
+	kwTruncate = "TRUNCATE"
+	kwReplace  = "REPLACE"
+	kwUpsert   = "UPSERT"
+)
+
 var writeKeywords = map[string]struct{}{
-	"INSERT":   {},
-	"UPDATE":   {},
-	"DELETE":   {},
-	"DROP":     {},
-	"ALTER":    {},
-	"CREATE":   {},
-	"TRUNCATE": {},
-	"REPLACE":  {},
-	"UPSERT":   {},
+	kwInsert:   {},
+	kwUpdate:   {},
+	kwDelete:   {},
+	kwDrop:     {},
+	kwAlter:    {},
+	kwCreate:   {},
+	kwTruncate: {},
+	kwReplace:  {},
+	kwUpsert:   {},
 }
 
 // isWriteStatement reports whether the SQL statement performs a write.
@@ -106,7 +118,7 @@ func topLevelWords(query string) []string {
 			// Block comment: skip to closing */.
 			flush()
 			i += 2
-			for i+1 < len(runes) && !(runes[i] == '*' && runes[i+1] == '/') {
+			for i+1 < len(runes) && (runes[i] != '*' || runes[i+1] != '/') {
 				i++
 			}
 			i++ // position on '/'; loop's i++ moves past it

@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// defaultTableName is the table name used when a derived name is empty.
+const defaultTableName = "table"
+
 // Processing constants (rows-based)
 const (
 	// DefaultRowsPerChunk is the default number of rows per chunk
@@ -55,7 +58,7 @@ type TableName struct {
 func NewTableName(name string) TableName {
 	// Basic validation - table name cannot be empty
 	if strings.TrimSpace(name) == "" {
-		return TableName{value: "table"}
+		return TableName{value: defaultTableName}
 	}
 	return TableName{value: strings.TrimSpace(name)}
 }
@@ -102,7 +105,7 @@ func (tn TableName) sanitizeString() string {
 
 	// Ensure it's not empty
 	if finalResult == "" {
-		finalResult = "table"
+		finalResult = defaultTableName
 	}
 
 	return finalResult
@@ -667,7 +670,7 @@ func isIntegerLiteralOverflowingInt64(value string) bool {
 	if len(digits) == 0 {
 		return false
 	}
-	for i := 0; i < len(digits); i++ {
+	for i := range len(digits) {
 		if digits[i] < '0' || digits[i] > '9' {
 			// Contains a non-digit (decimal point, exponent, etc.), so it is
 			// not a plain integer literal and should be handled by ParseFloat.

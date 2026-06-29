@@ -49,21 +49,21 @@ const (
 func (f OutputFormat) String() string {
 	switch f {
 	case OutputFormatCSV:
-		return "csv"
+		return formatCSVStr
 	case OutputFormatTSV:
-		return "tsv"
+		return formatTSVStr
 	case OutputFormatLTSV:
-		return "ltsv"
+		return formatLTSVStr
 	case OutputFormatParquet:
-		return "parquet"
+		return formatParquetStr
 	case OutputFormatXLSX:
-		return "xlsx"
+		return formatXLSXStr
 	case OutputFormatACH:
-		return "ach"
+		return formatACHStr
 	case OutputFormatFedWire:
-		return "fed"
+		return formatFedWireStr
 	default:
-		return "csv"
+		return formatCSVStr
 	}
 }
 
@@ -71,21 +71,21 @@ func (f OutputFormat) String() string {
 func (f OutputFormat) Extension() string {
 	switch f {
 	case OutputFormatCSV:
-		return ".csv"
+		return extCSV
 	case OutputFormatTSV:
-		return ".tsv"
+		return extTSV
 	case OutputFormatLTSV:
-		return ".ltsv"
+		return extLTSV
 	case OutputFormatParquet:
-		return ".parquet"
+		return extParquet
 	case OutputFormatXLSX:
-		return ".xlsx"
+		return extXLSX
 	case OutputFormatACH:
-		return ".ach"
+		return extACH
 	case OutputFormatFedWire:
-		return ".fed"
+		return extFED
 	default:
-		return ".csv"
+		return extCSV
 	}
 }
 
@@ -115,6 +115,7 @@ const (
 
 // string constants for compression types
 const (
+	compressionNoneStr   = "none"
 	compressionGZStr     = "gz"
 	compressionBZ2Str    = "bz2"
 	compressionXZStr     = "xz"
@@ -125,11 +126,22 @@ const (
 	compressionLZ4Str    = "lz4"
 )
 
+// string constants for output format names
+const (
+	formatCSVStr     = "csv"
+	formatTSVStr     = "tsv"
+	formatLTSVStr    = "ltsv"
+	formatParquetStr = "parquet"
+	formatXLSXStr    = "xlsx"
+	formatACHStr     = "ach"
+	formatFedWireStr = "fed"
+)
+
 // String returns the string representation of CompressionType
 func (c CompressionType) String() string {
 	switch c {
 	case CompressionNone:
-		return "none"
+		return compressionNoneStr
 	case CompressionGZ:
 		return compressionGZStr
 	case CompressionBZ2:
@@ -147,7 +159,7 @@ func (c CompressionType) String() string {
 	case CompressionLZ4:
 		return compressionLZ4Str
 	default:
-		return "none"
+		return compressionNoneStr
 	}
 }
 
@@ -157,21 +169,21 @@ func (c CompressionType) Extension() string {
 	case CompressionNone:
 		return ""
 	case CompressionGZ:
-		return ".gz"
+		return extGZ
 	case CompressionBZ2:
-		return ".bz2"
+		return extBZ2
 	case CompressionXZ:
-		return ".xz"
+		return extXZ
 	case CompressionZSTD:
-		return ".zst"
+		return extZSTD
 	case CompressionZLIB:
-		return ".z"
+		return extZLIB
 	case CompressionSNAPPY:
-		return ".snappy"
+		return extSNAPPY
 	case CompressionS2:
-		return ".s2"
+		return extS2
 	case CompressionLZ4:
-		return ".lz4"
+		return extLZ4
 	default:
 		return ""
 	}
