@@ -48,7 +48,9 @@ func TestParquetRoundTripPreservesNull(t *testing.T) {
 	}
 	defer func() { _ = rdb.Close() }()
 
-	rows, err := rdb.QueryContext(ctx, "SELECT id FROM t")
+	// Order by name so the asserted row order is deterministic regardless of how
+	// the dump/reload path returns rows.
+	rows, err := rdb.QueryContext(ctx, "SELECT id FROM t ORDER BY name")
 	if err != nil {
 		t.Fatal(err)
 	}

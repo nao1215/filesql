@@ -9,7 +9,7 @@
 
 ![logo](./doc/image/filesql-logo.png)
 
-filesql is a Go SQL driver that queries CSV, TSV, LTSV, Parquet, and Excel (XLSX) files using SQLite3 SQL syntax. It queries data files directly without imports or transformations.
+filesql is a Go SQL driver that queries CSV, TSV, LTSV, JSON, JSONL, Parquet, and Excel (XLSX) files using SQLite3 SQL syntax. It queries data files directly without imports or transformations.
 
 [sqly](https://github.com/nao1215/sqly) is a command-line tool built on filesql that runs SQL queries against CSV, TSV, LTSV, and Excel files from the shell.
 
