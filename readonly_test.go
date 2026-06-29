@@ -887,3 +887,84 @@ func TestReadOnlyTx_QueryRejectsWrites(t *testing.T) {
 	require.NoError(t, tx.Rollback())
 	assert.Equal(t, before, countTestRows(t, rodb), "read-only Tx must not mutate data")
 }
+
+// TestReadOnlyDB_PrepareRejectsObfuscatedAndSQLiteWrites verifies that prepared
+// statements cannot be created for write statements, including DML with
+// RETURNING and SQLite-specific mutators, so the ReadOnlyStmt query paths can
+// never run a write.
+func TestReadOnlyDB_PrepareRejectsObfuscatedAndSQLiteWrites(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	rodb := NewReadOnlyDB(db)
+
+	cases := []string{
+		"DELETE FROM test WHERE name = 'Alice' RETURNING name",
+		"WITH cte AS (SELECT 1) DELETE FROM test",
+		"VACUUM",
+		"PRAGMA foreign_keys = ON",
+		"ATTACH DATABASE 'other.db' AS other",
+	}
+	for _, query := range cases {
+		t.Run(query, func(t *testing.T) {
+			_, err := rodb.PrepareContext(ctx, query)
+			assert.True(t, errors.Is(err, ErrReadOnly), "expected ErrReadOnly, got %v", err)
+		})
+	}
+}
+
+// TestReadOnlyDB_ExecRejectsSQLiteMutators verifies SQLite statements that
+// mutate state without a DML verb are rejected by Exec.
+func TestReadOnlyDB_ExecRejectsSQLiteMutators(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	rodb := NewReadOnlyDB(db)
+
+	for _, query := range []string{"VACUUM", "REINDEX", "ANALYZE", "PRAGMA journal_mode = WAL"} {
+		t.Run(query, func(t *testing.T) {
+			_, err := rodb.Exec(query)
+			assert.True(t, errors.Is(err, ErrReadOnly), "expected ErrReadOnly, got %v", err)
+		})
+	}
+
+	// A reading PRAGMA is still allowed.
+	_, err = rodb.Exec("PRAGMA table_info(test)")
+	require.NoError(t, err)
+}
+
+// TestReadOnlyStmt_QueryRowGuard verifies the defensive guard on the prepared
+// statement QueryRow path: a (synthetic) write statement surfaces an error
+// through Scan rather than executing.
+func TestReadOnlyStmt_QueryRowGuard(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	rodb := NewReadOnlyDB(db)
+	before := countTestRows(t, rodb)
+
+	// PrepareContext blocks writes, so build a read statement and flip the
+	// internal flag to exercise the defense-in-depth guard directly.
+	stmt, err := rodb.PrepareContext(ctx, "SELECT name FROM test")
+	require.NoError(t, err)
+	defer stmt.Close()
+	stmt.isWrite = true
+
+	var name string
+	err = stmt.QueryRowContext(ctx).Scan(&name)
+	assert.Error(t, err, "QueryRow must surface an error when the statement is a write")
+
+	_, err = stmt.QueryContext(ctx) //nolint:rowserrcheck,sqlclosecheck // rejected before any rows are produced
+	assert.True(t, errors.Is(err, ErrReadOnly), "expected ErrReadOnly, got %v", err)
+
+	assert.Equal(t, before, countTestRows(t, rodb), "guarded statement must not mutate data")
+}
