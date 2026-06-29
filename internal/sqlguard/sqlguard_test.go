@@ -38,6 +38,24 @@ func TestIsWrite(t *testing.T) {
 		{"DELETE FROM users WHERE id = 1 RETURNING id", true},
 		{"UPDATE users SET a = 1 RETURNING a", true},
 
+		// SQLite statements that mutate state without a DML verb.
+		{"VACUUM", true},
+		{"vacuum", true},
+		{"ANALYZE", true},
+		{"ANALYZE users", true},
+		{"REINDEX", true},
+		{"ATTACH DATABASE 'other.db' AS other", true},
+		{"DETACH DATABASE other", true},
+
+		// PRAGMA that assigns a value mutates connection/database state.
+		{"PRAGMA foreign_keys = ON", true},
+		{"PRAGMA foreign_keys=ON", true},
+		{"PRAGMA journal_mode = WAL", true},
+
+		// Reading PRAGMAs stay allowed.
+		{"PRAGMA foreign_keys", false},
+		{"PRAGMA user_version", false},
+
 		// Read statements.
 		{"SELECT * FROM users", false},
 		{"select * from users", false},

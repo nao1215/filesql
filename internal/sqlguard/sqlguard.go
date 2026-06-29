@@ -7,17 +7,19 @@ package sqlguard
 
 import "strings"
 
-// writeKeywords are the SQL verbs that mutate data or schema.
-var writeKeywords = map[string]struct{}{
-	"INSERT":   {},
-	"UPDATE":   {},
-	"DELETE":   {},
-	"DROP":     {},
-	"ALTER":    {},
-	"CREATE":   {},
-	"TRUNCATE": {},
-	"REPLACE":  {},
-	"UPSERT":   {},
+// isWriteKeyword reports whether word (uppercased) is a statement verb that
+// mutates data, schema, or database/connection state. Besides the DML/DDL verbs
+// it includes the SQLite-specific mutators ANALYZE, REINDEX, VACUUM and
+// ATTACH/DETACH, which change state without one of the usual verbs.
+func isWriteKeyword(word string) bool {
+	switch word {
+	case "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE",
+		"TRUNCATE", "REPLACE", "UPSERT",
+		"ANALYZE", "REINDEX", "VACUUM", "ATTACH", "DETACH":
+		return true
+	default:
+		return false
+	}
 }
 
 // IsWrite reports whether the SQL statement performs a write.
@@ -28,22 +30,29 @@ var writeKeywords = map[string]struct{}{
 // DELETE) or a RETURNING clause executed via Query/QueryRow. Keywords inside
 // string literals, quoted identifiers, comments or parenthesized subqueries are
 // ignored to avoid rejecting legitimate SELECTs.
+//
+// An assigning PRAGMA (e.g. "PRAGMA foreign_keys = ON") is also treated as a
+// write because it changes connection/database state, while a reading PRAGMA
+// such as "PRAGMA table_info(users)" or "PRAGMA foreign_keys" is allowed.
 func IsWrite(query string) bool {
-	for _, word := range topLevelWords(query) {
-		if _, ok := writeKeywords[word]; ok {
+	words, hasTopLevelAssign := scanTopLevel(query)
+	for i, word := range words {
+		if isWriteKeyword(word) {
+			return true
+		}
+		if i == 0 && word == "PRAGMA" && hasTopLevelAssign {
 			return true
 		}
 	}
 	return false
 }
 
-// topLevelWords scans an SQL statement and returns the uppercased keywords that
-// appear at parenthesis depth zero, skipping comments, string literals and
-// quoted identifiers. CTE subqueries live inside parentheses, so the main
-// statement verb (SELECT / INSERT / UPDATE / DELETE) is always reported while
-// the inner verbs of the WITH clause are not.
-func topLevelWords(query string) []string {
-	var words []string
+// scanTopLevel scans an SQL statement and returns the uppercased keywords that
+// appear at parenthesis depth zero (skipping comments, string literals and
+// quoted identifiers) together with whether an "=" appears at the top level.
+// CTE subqueries live inside parentheses, so the main statement verb is always
+// reported while the inner verbs of the WITH clause are not.
+func scanTopLevel(query string) (words []string, hasTopLevelAssign bool) {
 	var word strings.Builder
 	depth := 0
 
@@ -96,6 +105,11 @@ func topLevelWords(query string) []string {
 			if depth > 0 {
 				depth--
 			}
+		case c == '=':
+			flush()
+			if depth == 0 {
+				hasTopLevelAssign = true
+			}
 		case isWordChar(c):
 			if depth == 0 {
 				word.WriteRune(c)
@@ -105,7 +119,7 @@ func topLevelWords(query string) []string {
 		}
 	}
 	flush()
-	return words
+	return words, hasTopLevelAssign
 }
 
 // isWordChar reports whether c can be part of an SQL identifier/keyword.
