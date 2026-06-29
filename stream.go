@@ -709,14 +709,20 @@ func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chu
 		batch := tableReader.Record()
 
 		var chunkRecords []Record
+		var chunkNulls [][]bool
 		numRows := batch.NumRows()
 		for i := range numRows {
 			row := make(Record, batch.NumCols())
+			nullRow := make([]bool, batch.NumCols())
 			for j, col := range batch.Columns() {
-				value := extractValueFromArrowArray(col, i)
-				row[j] = value
+				if col.IsNull(int(i)) {
+					nullRow[j] = true
+					continue
+				}
+				row[j] = extractValueFromArrowArray(col, i)
 			}
 			chunkRecords = append(chunkRecords, row)
+			chunkNulls = append(chunkNulls, nullRow)
 		}
 
 		if len(chunkRecords) > 0 {
@@ -725,6 +731,7 @@ func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chu
 				headers:    headerSlice,
 				records:    chunkRecords,
 				columnInfo: columnInfoList,
+				nulls:      chunkNulls,
 			}
 
 			if err := processor(chunk); err != nil {

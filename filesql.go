@@ -642,8 +642,11 @@ func writeParquetTableData(outputPath string, columns []string, rows *sql.Rows, 
 		return fmt.Errorf("%w: external compression not supported for Parquet format - use Parquet's built-in compression instead", ErrUnsupportedFormat)
 	}
 
-	// Read all rows into memory first
+	// Read all rows into memory first. nulls runs parallel to rows and marks the
+	// cells that were SQL NULL, so the Parquet writer can store a real null rather
+	// than collapsing it into an empty string.
 	var allRows [][]string
+	var allNulls [][]bool
 
 	// Prepare for scanning
 	values := make([]any, len(columns))
@@ -658,25 +661,28 @@ func writeParquetTableData(outputPath string, columns []string, rows *sql.Rows, 
 		}
 
 		row := make([]string, len(columns))
+		nullRow := make([]bool, len(columns))
 		for i, value := range values {
 			if value == nil {
-				row[i] = ""
+				nullRow[i] = true
 			} else {
 				row[i] = fmt.Sprintf("%v", value)
 			}
 		}
 		allRows = append(allRows, row)
+		allNulls = append(allNulls, nullRow)
 	}
 
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("%w: error iterating rows: %s", ErrDatabaseOperation, err.Error())
 	}
 
-	return writeParquetData(outputPath, columns, allRows)
+	return writeParquetData(outputPath, columns, allRows, allNulls)
 }
 
-// writeParquetData writes data to Parquet format
-func writeParquetData(outputPath string, columns []string, rows [][]string) error {
+// writeParquetData writes data to Parquet format. nulls, when non-nil, marks the
+// cells to store as a Parquet null; rows[r][c] is ignored for a cell marked null.
+func writeParquetData(outputPath string, columns []string, rows [][]string, nulls [][]bool) error {
 	if len(rows) == 0 {
 		return fmt.Errorf("%w: no data to write", ErrEmptyData)
 	}
@@ -695,8 +701,9 @@ func writeParquetData(outputPath string, columns []string, rows [][]string) erro
 	fields := make([]arrow.Field, len(columns))
 	for i, col := range columns {
 		fields[i] = arrow.Field{
-			Name: col,
-			Type: arrow.BinaryTypes.String,
+			Name:     col,
+			Type:     arrow.BinaryTypes.String,
+			Nullable: true, // allow a stored null so SQL NULL survives the round-trip
 		}
 	}
 	schema := arrow.NewSchema(fields, nil)
@@ -707,14 +714,18 @@ func writeParquetData(outputPath string, columns []string, rows [][]string) erro
 	defer builder.Release()
 
 	// Add data to builders
-	for _, row := range rows {
+	for r, row := range rows {
 		for i, value := range row {
 			if i < len(columns) {
 				strBuilder, ok := builder.Field(i).(*array.StringBuilder)
 				if !ok {
 					return fmt.Errorf("%w: failed to cast field %d to StringBuilder", ErrInvalidData, i)
 				}
-				strBuilder.Append(value)
+				if nulls != nil && r < len(nulls) && i < len(nulls[r]) && nulls[r][i] {
+					strBuilder.AppendNull()
+				} else {
+					strBuilder.Append(value)
+				}
 			}
 		}
 	}

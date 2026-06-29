@@ -427,8 +427,9 @@ func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, 
 	// Use header count as the authoritative column count to ensure consistency
 	colCount := len(chunk.getHeaders())
 	values := make([]any, colCount)
+	nulls := chunk.getNulls()
 
-	for _, record := range records {
+	for rowIdx, record := range records {
 		// Fail fast if record has more columns than headers to prevent silent data truncation
 		if len(record) > colCount {
 			return fmt.Errorf("%w: record has more columns (%d) than headers (%d)", ErrColumnMismatch, len(record), colCount)
@@ -437,9 +438,12 @@ func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, 
 		// Fill values slice based on header count, handling records with fewer columns
 		// by setting missing columns to nil (NULL in SQLite)
 		for i := range colCount {
-			if i < len(record) {
+			switch {
+			case nulls != nil && rowIdx < len(nulls) && i < len(nulls[rowIdx]) && nulls[rowIdx][i]:
+				values[i] = nil // a source NULL (e.g. a Parquet null) inserts as SQL NULL
+			case i < len(record):
 				values[i] = record[i]
-			} else {
+			default:
 				values[i] = nil
 			}
 		}

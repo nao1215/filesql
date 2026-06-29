@@ -326,6 +326,11 @@ type tableChunk struct {
 	headers    header
 	records    []Record
 	columnInfo []columnInfo
+	// nulls, when non-nil, marks which cells were SQL NULL (nulls[row][col]).
+	// Formats without a null concept leave it nil, and the insert then treats
+	// every cell as a string. Parquet sets it so a stored null reloads as SQL NULL
+	// rather than an empty string.
+	nulls [][]bool
 }
 
 // getTableName returns the name of the table
@@ -346,6 +351,12 @@ func (tc *tableChunk) getRecords() []Record {
 // getColumnInfo returns the column information with inferred types
 func (tc *tableChunk) getColumnInfo() []columnInfo {
 	return tc.columnInfo
+}
+
+// getNulls returns the per-cell NULL mask, or nil when the source format has no
+// null concept.
+func (tc *tableChunk) getNulls() [][]bool {
+	return tc.nulls
 }
 
 // chunkProcessor is a function type for processing table chunks
