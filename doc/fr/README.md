@@ -9,7 +9,7 @@
 
 ![logo](../image/filesql-logo.png)
 
-**filesql** est un pilote SQL Go qui vous permet d'interroger les fichiers CSV, TSV, LTSV, Parquet et Excel (XLSX) en utilisant la syntaxe SQL de SQLite3. Interrogez directement vos fichiers de données sans importation ou transformation !
+**filesql** est un pilote SQL Go qui vous permet d'interroger les fichiers CSV, TSV, LTSV, Parquet et Excel (XLSX) en utilisant la syntaxe SQL de SQLite3. Il charge vos fichiers dans une base de données SQLite en mémoire à votre place, de sorte que vous écrivez du SQL sur vos fichiers sans étape d'importation manuelle, sans définition de schéma, ni serveur de base de données à exécuter.
 
 **Vous voulez découvrir les capacités de filesql ?** Essayez **[sqly](https://github.com/nao1215/sqly)** - un outil en ligne de commande qui utilise filesql pour exécuter facilement des requêtes SQL sur les fichiers CSV, TSV, LTSV et Excel directement depuis votre shell ! C'est le moyen parfait de découvrir la puissance de filesql en action !
 
@@ -430,8 +430,14 @@ Puisque filesql utilise SQLite3 comme moteur sous-jacent, toute la syntaxe SQL s
 ### Conseils de performance
 - Utilisez `OpenContext()` avec des timeouts pour les gros fichiers
 - Configurez les tailles de chunk (lignes par chunk) avec `SetDefaultChunkSize()` pour l'optimisation mémoire
-- Une seule connexion SQLite fonctionne mieux pour la plupart des scénarios
-- Utilisez le streaming pour les fichiers plus grands que la mémoire disponible
+- Toutes les données sont chargées dans une base de données SQLite en mémoire, prévoyez donc une mémoire à peu près proportionnelle à la taille du jeu de données
+
+#### Mémoire et streaming
+filesql traite en flux les tableaux CSV, TSV et JSON par chunks pendant le chargement, de sorte que l'analyseur lui-même ne conserve pas tout le fichier en une seule fois. Les autres formats sont lus entièrement en mémoire pendant le chargement, car leur structure l'exige :
+
+- LTSV, les valeurs JSON/JSONL non tabulaires, Parquet (nécessite un accès aléatoire) et Excel (XLSX, basé sur ZIP) sont lus dans leur intégralité avant le chargement.
+
+Dans tous les cas, les lignes analysées finissent dans la base de données SQLite en mémoire, de sorte que l'utilisation totale de la mémoire est déterminée par la taille du jeu de données, et non uniquement par la taille des chunks. Pour des données plus grandes que la mémoire disponible, pré-découpez les fichiers ou chargez un sous-ensemble plutôt que de compter uniquement sur le streaming.
 
 ## Benchmark
 

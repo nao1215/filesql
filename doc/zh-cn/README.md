@@ -9,7 +9,7 @@
 
 ![logo](../image/filesql-logo.png)
 
-**filesql** 是一个 Go SQL 驱动，让您可以使用 SQLite3 SQL 语法直接查询 CSV、TSV、LTSV、Parquet 和 Excel (XLSX) 文件。无需导入或转换即可直接查询数据文件！
+**filesql** 是一个 Go SQL 驱动，让您可以使用 SQLite3 SQL 语法直接查询 CSV、TSV、LTSV、Parquet 和 Excel (XLSX) 文件。它会为您将文件加载到内存中的 SQLite 数据库，因此您无需手动导入步骤、定义 schema 或运行数据库服务器，即可直接对文件编写 SQL。
 
 **想要体验 filesql 的功能？** 试试 **[sqly](https://github.com/nao1215/sqly)** - 一个使用 filesql 直接从 shell 轻松对 CSV、TSV、LTSV 和 Excel 文件执行 SQL 查询的命令行工具！这是体验 filesql 强大功能的完美方式！
 
@@ -431,9 +431,15 @@ filesql 自动从文件路径推导表名：
 
 ### 性能提示
 - 对大文件使用带超时的 `OpenContext()`
-- 使用 `SetDefaultChunkSize()` 配置块大小（行数）以优化内存
-- 单个 SQLite 连接对大多数场景效果最佳
-- 对于大于可用内存的文件使用流式处理
+- 使用 `SetDefaultChunkSize()` 配置块大小（每块行数）以优化内存
+- 所有数据都会被加载到内存中的 SQLite 数据库，因此请按大致与数据集大小成正比的内存来规划
+
+#### 内存与流式处理
+filesql 在加载时会以分块方式流式处理 CSV、TSV 和 JSON 数组，因此解析器本身不会一次性持有整个文件。其他格式由于其布局要求，会在加载期间被完整读入内存：
+
+- LTSV、非数组的 JSON/JSONL 值、Parquet（需要随机访问）以及 Excel（XLSX，基于 ZIP）会在加载前被完整读取。
+
+无论哪种方式，解析后的行最终都会进入内存中的 SQLite 数据库，因此总内存使用量取决于数据集大小，而不仅仅是块大小。对于大于可用内存的数据，请预先拆分文件或仅加载子集，而不要单纯依赖流式处理。
 
 ## 基准测试
 

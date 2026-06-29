@@ -9,7 +9,7 @@
 
 ![logo](../image/filesql-logo.png)
 
-**filesql** es un controlador SQL para Go que te permite consultar archivos CSV, TSV, LTSV, Parquet y Excel (XLSX) usando la sintaxis SQL de SQLite3. ¡Consulta tus archivos de datos directamente sin importaciones o transformaciones!
+**filesql** es un controlador SQL para Go que te permite consultar archivos CSV, TSV, LTSV, Parquet y Excel (XLSX) usando la sintaxis SQL de SQLite3. Carga tus archivos en una base de datos SQLite en memoria por ti, para que escribas SQL contra tus archivos sin un paso de importación manual, una definición de esquema, ni un servidor de base de datos que ejecutar.
 
 **¿Quieres probar las capacidades de filesql?** ¡Prueba **[sqly](https://github.com/nao1215/sqly)** - una herramienta de línea de comandos que utiliza filesql para ejecutar fácilmente consultas SQL contra archivos CSV, TSV, LTSV y Excel directamente desde tu shell! ¡Es la forma perfecta de experimentar el poder de filesql en acción!
 
@@ -431,8 +431,14 @@ Dado que filesql usa SQLite3 como su motor subyacente, toda la sintaxis SQL sigu
 ### Consejos de rendimiento
 - Usa `OpenContext()` con timeouts para archivos grandes
 - Configura tamaños de chunk (filas por chunk) con `SetDefaultChunkSize()` para optimización de memoria
-- Una sola conexión SQLite funciona mejor para la mayoría de escenarios
-- Usa streaming para archivos más grandes que la memoria disponible
+- Todos los datos se cargan en una base de datos SQLite en memoria, así que planifica una memoria aproximadamente proporcional al tamaño del conjunto de datos
+
+#### Memoria y streaming
+filesql transmite arreglos CSV, TSV y JSON en chunks durante la carga, por lo que el parser en sí no retiene el archivo completo de una vez. Los demás formatos se leen completamente en memoria durante la carga porque su estructura lo requiere:
+
+- LTSV, valores JSON/JSONL que no son arreglos, Parquet (necesita acceso aleatorio) y Excel (XLSX, basado en ZIP) se leen por completo antes de la carga.
+
+De cualquier manera, las filas analizadas terminan en la base de datos SQLite en memoria, por lo que el uso total de memoria está determinado por el tamaño del conjunto de datos, no solo por el tamaño del chunk. Para datos más grandes que la memoria disponible, divide los archivos previamente o carga un subconjunto en lugar de depender únicamente del streaming.
 
 ## Benchmark
 

@@ -9,7 +9,7 @@
 
 ![logo](./doc/image/filesql-logo.png)
 
-filesql is a Go SQL driver that queries CSV, TSV, LTSV, JSON, JSONL, Parquet, and Excel (XLSX) files using SQLite3 SQL syntax. It queries data files directly without imports or transformations.
+filesql is a Go SQL driver that queries CSV, TSV, LTSV, JSON, JSONL, Parquet, and Excel (XLSX) files using SQLite3 SQL syntax. It loads your files into an in-memory SQLite database for you, so you write SQL against your files without a manual import step, a schema definition, or a database server to run.
 
 [sqly](https://github.com/nao1215/sqly) is a command-line tool built on filesql that runs SQL queries against CSV, TSV, LTSV, and Excel files from the shell.
 
@@ -478,8 +478,14 @@ Since filesql uses SQLite3 as its underlying engine, all SQL syntax follows [SQL
 ### Performance Tips
 - Use `OpenContext()` with timeouts for large files
 - Configure chunk sizes (rows per chunk) with `SetDefaultChunkSize()` for memory optimization
-- Single SQLite connection works best for most scenarios
-- Use streaming for files larger than available memory
+- All data is loaded into an in-memory SQLite database, so plan for memory roughly proportional to the dataset size
+
+#### Memory and streaming
+filesql streams CSV, TSV, and JSON arrays in chunks while loading, so the parser itself does not hold the whole file at once. The other formats are read fully into memory during loading because their layout requires it:
+
+- LTSV, non-array JSON/JSONL values, Parquet (needs random access), and Excel (XLSX, ZIP-based) are read in full before loading.
+
+Either way the parsed rows end up in the in-memory SQLite database, so total memory use is governed by the dataset size, not just the chunk size. For data larger than available memory, pre-split the files or load a subset rather than relying on streaming alone.
 
 ## Benchmark
 
