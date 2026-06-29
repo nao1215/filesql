@@ -9,27 +9,25 @@
 
 ![logo](./doc/image/filesql-logo.png)
 
-**filesql** is a Go SQL driver that enables you to query CSV, TSV, LTSV, Parquet, and Excel (XLSX) files using SQLite3 SQL syntax. Query your data files directly without any imports or transformations!
+filesql is a Go SQL driver that queries CSV, TSV, LTSV, Parquet, and Excel (XLSX) files using SQLite3 SQL syntax. It queries data files directly without imports or transformations.
 
-**Want to try filesql's capabilities?** Check out **[sqly](https://github.com/nao1215/sqly)** - a command-line tool that uses filesql to easily execute SQL queries against CSV, TSV, LTSV, and Excel files directly from your shell. It's the perfect way to experience the power of filesql in action!
+[sqly](https://github.com/nao1215/sqly) is a command-line tool built on filesql that runs SQL queries against CSV, TSV, LTSV, and Excel files from the shell.
 
 ## Why filesql?
 
-This library was born from the experience of maintaining two separate CLI tools - [sqly](https://github.com/nao1215/sqly) and [sqluv](https://github.com/nao1215/sqluv). Both tools shared a common feature: executing SQL queries against CSV, TSV, and other file formats. 
-
-Rather than maintaining duplicate code across both projects, we extracted the core functionality into this reusable SQL driver. Now, any Go developer can leverage this capability in their own applications!
+filesql was extracted from the shared file-to-SQL logic in [sqly](https://github.com/nao1215/sqly) and [sqluv](https://github.com/nao1215/sqluv). Both tools executed SQL queries against CSV, TSV, and other file formats. The common functionality was moved into this SQL driver so any Go developer can reuse it.
 
 ## Features
 
-- SQLite3 SQL Interface - Use SQLite3's powerful SQL dialect to query your files
-- Multiple File Formats - Support for CSV, TSV, LTSV, Parquet, and Excel (XLSX) files
-- Compression Support - Automatically handles .gz, .bz2, .xz, .zst, .z, .snappy, .s2, and .lz4 compressed files
-- Stream Processing - Efficiently handles large files through streaming with configurable chunk sizes
-- Flexible Input Sources - Support for file paths, directories, io.Reader, and embed.FS
-- Zero Setup - No database server required, everything runs in-memory
-- Auto-Save - Automatically persist changes back to files
-- Cross-Platform - Works seamlessly on Linux, macOS, and Windows
-- SQLite3 Powered - Built on the robust SQLite3 engine for reliable SQL processing
+- SQLite3 SQL Interface - Use SQLite3's SQL dialect to query files
+- Multiple File Formats - CSV, TSV, LTSV, Parquet, and Excel (XLSX) files
+- Compression Support - Handles .gz, .bz2, .xz, .zst, .z, .snappy, .s2, and .lz4 compressed files
+- Stream Processing - Handles large files through streaming with configurable chunk sizes
+- Flexible Input Sources - File paths, directories, io.Reader, and embed.FS
+- Zero Setup - No database server required, runs in-memory
+- Auto-Save - Persist changes back to files
+- Cross-Platform - Linux, macOS, and Windows
+- SQLite3 Powered - Built on the SQLite3 engine for SQL processing
 
 ## Supported File Formats
 
@@ -50,8 +48,8 @@ Rather than maintaining duplicate code across both projects, we extracted the co
 | `.csv.snappy`, `.tsv.snappy`, `.ltsv.snappy`, `.parquet.snappy`, `.xlsx.snappy`, `.json.snappy`, `.jsonl.snappy` | Snappy compressed | Snappy compressed files |
 | `.csv.s2`, `.tsv.s2`, `.ltsv.s2`, `.parquet.s2`, `.xlsx.s2`, `.json.s2`, `.jsonl.s2` | S2 compressed | S2 compressed files (Snappy compatible) |
 | `.csv.lz4`, `.tsv.lz4`, `.ltsv.lz4`, `.parquet.lz4`, `.xlsx.lz4`, `.json.lz4`, `.jsonl.lz4` | LZ4 compressed | LZ4 compressed files |
-| `.ach` | ACH (NACHA) | Automated Clearing House files (**Experimental**) |
-| `.fed` | Fedwire | Legacy Fedwire message files (**Experimental**) |
+| `.ach` | ACH (NACHA) | Automated Clearing House files (Experimental) |
+| `.fed` | Fedwire | Legacy Fedwire message files (Experimental) |
 
 ## Installation
 
@@ -61,8 +59,8 @@ go get github.com/nao1215/filesql
 
 ## Requirements
 
-- **Go Version**: 1.25 or later
-- **Operating Systems**:
+- Go Version: 1.25 or later
+- Operating Systems:
   - Linux
   - macOS  
   - Windows
@@ -473,7 +471,7 @@ Since filesql uses SQLite3 as its underlying engine, all SQL syntax follows [SQL
 
 ### Data Modifications
 - `INSERT`, `UPDATE`, and `DELETE` operations affect the in-memory database
-- **Original files remain unchanged by default**
+- Original files remain unchanged by default
 - Use auto-save features or `DumpDatabase()` to persist changes
 - This makes it safe to experiment with data transformations
 
@@ -485,7 +483,7 @@ Since filesql uses SQLite3 as its underlying engine, all SQL syntax follows [SQL
 
 ## Benchmark
 
-Performance with a **100,000-row CSV file**:
+Performance with a 100,000-row CSV file:
 
 | Metric | Value |
 |--------|-------|
@@ -498,16 +496,16 @@ make benchmark
 ```
 
 ### Concurrency Limitations
-⚠️ **IMPORTANT**: This library is **NOT thread-safe** and has **concurrency limitations**:
-- **Do NOT** share database connections across goroutines
-- **Do NOT** perform concurrent operations on the same database instance
-- **Do NOT** call `db.Close()` while queries are active in other goroutines
+This library is not thread-safe and has concurrency limitations:
+- Do not share database connections across goroutines
+- Do not perform concurrent operations on the same database instance
+- Do not call `db.Close()` while queries are active in other goroutines
 - Use separate database instances for concurrent operations if needed
 - Race conditions may cause segmentation faults or data corruption
 
-**Recommended pattern for concurrent access**:
+Recommended pattern for concurrent access:
 ```go
-// ✅ GOOD: Separate database instances per goroutine
+// GOOD: Separate database instances per goroutine
 func processFileConcurrently(filename string) error {
     db, err := filesql.Open(filename)  // Each goroutine gets its own instance
     if err != nil {
@@ -519,30 +517,30 @@ func processFileConcurrently(filename string) error {
     return processData(db)
 }
 
-// ❌ BAD: Sharing database instance across goroutines
+// BAD: Sharing database instance across goroutines
 var sharedDB *sql.DB  // This will cause race conditions
 ```
 
 ### Parquet Support
-- **Reading**: Full support for Apache Parquet files with complex data types
-- **Writing**: Export functionality is implemented (external compression not supported, use Parquet's built-in compression)
-- **Type Mapping**: Parquet types are mapped to SQLite types
-- **Compression**: Parquet's built-in compression is used instead of external compression
-- **Large Data**: Parquet files are efficiently processed with Arrow's columnar format
+- Reading: Full support for Apache Parquet files with complex data types
+- Writing: Export functionality is implemented (external compression not supported, use Parquet's built-in compression)
+- Type Mapping: Parquet types are mapped to SQLite types
+- Compression: Parquet's built-in compression is used instead of external compression
+- Large Data: Parquet files are processed with Arrow's columnar format
 
 ### Excel (XLSX) Support
-- **1-Sheet-1-Table Structure**: Each sheet in an Excel workbook becomes a separate SQL table
-- **Table Naming**: SQL table names follow the format `{filename}_{sheetname}` (e.g., "sales_Q1", "sales_Q2")
-- **Header Row Processing**: First row of each sheet becomes the column headers for that table
-- **Standard SQL Operations**: Query each sheet independently or use JOINs to combine data across sheets
-- **Memory Requirements**: XLSX files require full loading into memory due to the ZIP-based format structure, even during streaming operations
-- **Implementation Note**: XLSX files are fully loaded into memory due to ZIP structure and all sheets are processed (CSV/TSV streaming parsers are not applicable)
-- **Export Functionality**: When exporting to XLSX format, table names become sheet names automatically
-- **Compression Support**: Full support for compressed XLSX files (.xlsx.gz, .xlsx.bz2, .xlsx.xz, .xlsx.zst, .xlsx.z, .xlsx.snappy, .xlsx.s2, .xlsx.lz4)
+- 1-Sheet-1-Table Structure: Each sheet in an Excel workbook becomes a separate SQL table
+- Table Naming: SQL table names follow the format `{filename}_{sheetname}` (e.g., "sales_Q1", "sales_Q2")
+- Header Row Processing: First row of each sheet becomes the column headers for that table
+- Standard SQL Operations: Query each sheet independently or use JOINs to combine data across sheets
+- Memory Requirements: XLSX files require full loading into memory due to the ZIP-based format structure, even during streaming operations
+- Implementation Note: XLSX files are fully loaded into memory due to ZIP structure and all sheets are processed (CSV/TSV streaming parsers are not applicable)
+- Export Functionality: When exporting to XLSX format, table names become sheet names automatically
+- Compression Support: Full support for compressed XLSX files (.xlsx.gz, .xlsx.bz2, .xlsx.xz, .xlsx.zst, .xlsx.z, .xlsx.snappy, .xlsx.s2, .xlsx.lz4)
 
 ### ACH (NACHA) Support - Experimental
 
-> **Warning**: ACH file support is **experimental**. The API may change in future versions.
+> Warning: ACH file support is experimental. The API may change in future versions.
 
 ACH (Automated Clearing House) files following the NACHA format can be queried using SQL. Each ACH file is converted to multiple tables:
 
@@ -557,14 +555,14 @@ ACH (Automated Clearing House) files following the NACHA format can be queried u
 
 #### Limitations
 
-**Read-only fields**: The following fields are exported for viewing but changes are not written back:
+Read-only fields: The following fields are exported for viewing but changes are not written back:
 - IAT Addenda sequence numbers (`entry_detail_sequence_number`, `sequence_number`)
 
-**Addenda05 index behavior**: When an entry has multiple addenda types (e.g., Addenda02 + Addenda05), the `addenda_index` represents the position within all addenda for that entry, not the index within Addenda05 array. For updates targeting specific Addenda05 records, use `addenda_type = '05'` to filter correctly.
+Addenda05 index behavior: When an entry has multiple addenda types (e.g., Addenda02 + Addenda05), the `addenda_index` represents the position within all addenda for that entry, not the index within Addenda05 array. For updates targeting specific Addenda05 records, use `addenda_type = '05'` to filter correctly.
 
-**Validation**: Modifying ACH data via SQL may create invalid ACH files. Users should ensure data consistency (e.g., `AddendaRecordIndicator` matches actual addenda presence).
+Validation: Modifying ACH data via SQL may create invalid ACH files. Users should ensure data consistency (e.g., `AddendaRecordIndicator` matches actual addenda presence).
 
-**Compression**: ACH files do not support compression wrappers (`.ach.gz`, etc.).
+Compression: ACH files do not support compression wrappers (`.ach.gz`, etc.).
 
 #### Example
 
@@ -593,7 +591,7 @@ rows, err := db.QueryContext(ctx, `
 
 ### Fedwire Support - Experimental
 
-> **Warning**: Fedwire file support is **experimental**. The API may change in future versions.
+> Warning: Fedwire file support is experimental. The API may change in future versions.
 
 Legacy Fedwire message files (`.fed`) can be loaded, queried, modified, and exported back to Fedwire format. Each Fedwire file contains a single FEDWireMessage and is converted to a single flat table with approximately 326 columns.
 
@@ -605,13 +603,13 @@ All columns are TEXT type since the wire format stores all values as fixed-width
 
 #### Limitations
 
-**UPDATE only**: Only UPDATE operations on existing rows are supported for round-trip editing. INSERT/DELETE operations in SQL are not reflected in the output wire file.
+UPDATE only: Only UPDATE operations on existing rows are supported for round-trip editing. INSERT/DELETE operations in SQL are not reflected in the output wire file.
 
-**No new sections**: Optional message sections that were not present in the original file cannot be added via SQL modifications.
+No new sections: Optional message sections that were not present in the original file cannot be added via SQL modifications.
 
-**Compression**: Fedwire files do not support compression wrappers (`.fed.gz`, etc.).
+Compression: Fedwire files do not support compression wrappers (`.fed.gz`, etc.).
 
-**Security**: Fedwire data contains sensitive banking information including routing numbers, account numbers, names, and transaction amounts. Do not log or export wire table data verbatim in production environments.
+Security: Fedwire data contains sensitive banking information including routing numbers, account numbers, names, and transaction amounts. Do not log or export wire table data verbatim in production environments.
 
 #### Example
 
@@ -741,12 +739,12 @@ The [examples](./examples) directory contains sample code demonstrating various 
 
 ## Data Preprocessing with fileprep
 
-For data validation and preprocessing before querying with filesql, we recommend using **[nao1215/fileprep](https://github.com/nao1215/fileprep)**.
+For data validation and preprocessing before querying with filesql, use [nao1215/fileprep](https://github.com/nao1215/fileprep).
 
 fileprep is a companion library that provides:
-- **Struct tag-based preprocessing** (`prep` tag): trim, lowercase, uppercase, default values, and more
-- **Struct tag-based validation** (`validate` tag): required fields, format validation, cross-field validation
-- **Seamless filesql integration**: Returns `io.Reader` for direct use with filesql's Builder pattern
+- Struct tag-based preprocessing (`prep` tag): trim, lowercase, uppercase, default values, and more
+- Struct tag-based validation (`validate` tag): required fields, format validation, cross-field validation
+- filesql integration: Returns `io.Reader` for direct use with filesql's Builder pattern
 
 ```go
 // Define struct with preprocessing and validation tags
@@ -805,7 +803,7 @@ For the complete list of preprocessing and validation options, see the [fileprep
 
 ## Related Projects
 
-Using filesql in your project? We'd love to hear about it! Please [open an issue](https://github.com/nao1215/filesql/issues) to let us know, and we'll add your project to the list below.
+If you use filesql in your project, [open an issue](https://github.com/nao1215/filesql/issues) and it will be added to the list below.
 
 ### Related Libraries
 
@@ -824,16 +822,14 @@ Using filesql in your project? We'd love to hear about it! Please [open an issue
 
 ## Contributing
 
-Contributions are welcome! Please see the [Contributing Guide](./CONTRIBUTING.md) for more details.
+Contributions are welcome. See the [Contributing Guide](./CONTRIBUTING.md) for more details.
 
 ## Support
 
-If you find this project useful, please consider:
+If you find this project useful, consider:
 
 - Giving it a star on GitHub - it helps others discover the project
-- [Becoming a sponsor](https://github.com/sponsors/nao1215) - your support keeps the project alive and motivates continued development
-
-Your support, whether through stars, sponsorships, or contributions, is what drives this project forward. Thank you!
+- [Becoming a sponsor](https://github.com/sponsors/nao1215)
 
 ### Star History
 
