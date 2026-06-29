@@ -456,31 +456,30 @@ filesqlはSQLite3を基盤エンジンとして使用するため、すべての
 make benchmark
 ```
 
-### 並行処理の制限事項
-⚠️ **重要**: このライブラリは**スレッドセーフではなく**、**並行処理に制限があります**：
-- **ゴルーチン間でデータベース接続を共有しないでください**
-- **同一データベースインスタンスで並行操作を行わないでください**
-- **他のゴルーチンでクエリがアクティブな状態で`db.Close()`を呼び出さないでください**
-- 並行操作が必要な場合は、個別のデータベースインスタンスを使用してください
-- 競合状態により、セグメンテーション違反やデータ破損が発生する可能性があります
+### 並行処理
+`Open`/`OpenContext`が返す`*sql.DB`は、複数のゴルーチン間で共有しても安全です。これは単一のインメモリSQLite接続に支えられているため、filesqlはコネクションプールを1接続に固定し（`SetMaxOpenConns(1)`）、`database/sql`がアクセスを自動的に直列化します：
 
-**並行アクセスの推奨パターン**：
 ```go
-// ✅ 良い例: ゴルーチンごとに個別のデータベースインスタンス
-func processFileConcurrently(filename string) error {
-    db, err := filesql.Open(filename)  // 各ゴルーチンが専用インスタンスを取得
-    if err != nil {
-        return err
-    }
-    defer db.Close()
-    
-    // このゴルーチン内では安全に使用可能
-    return processData(db)
+// Safe: share one *sql.DB across goroutines.
+db, err := filesql.Open("data.csv")
+if err != nil {
+    return err
 }
+defer db.Close()
 
-// ❌ 悪い例: ゴルーチン間でのデータベースインスタンス共有
-var sharedDB *sql.DB  // これは競合状態を引き起こします
+var wg sync.WaitGroup
+for range 8 {
+    wg.Go(func() {
+        rows, err := db.Query("SELECT * FROM data")
+        // ... use rows ...
+    })
+}
+wg.Wait()
 ```
+
+ただし、アクセスは単一接続を通じて直列化されるため、クエリは並列には実行されません。並行処理は安全ですが、高速化はされません。真の並列性が必要な場合は、ゴルーチンごとに個別の`*sql.DB`をオープンしてください。
+
+> 自分自身の`*sql.DB`を使って`LoadInto`を呼び出す場合は、コネクションプールの設定はあなたの責任になります。インメモリデータベースでは、SQLiteの`:memory:`のデータは接続ごとにプライベートになるため、`db.SetMaxOpenConns(1)`を自分で呼び出してください。
 
 ### Parquetサポート
 - **読み取り**: 複雑なデータ型を含むApache Parquetファイルを完全サポート

@@ -449,31 +449,30 @@ filesql 自动从文件路径推导表名：
 make benchmark
 ```
 
-### 并发限制
-⚠️ **重要**: 此库**不是线程安全的**，并且有**并发限制**：
-- **不要**在 goroutine 之间共享数据库连接
-- **不要**在同一数据库实例上执行并发操作
-- **不要**在其他 goroutine 中有活动查询时调用 `db.Close()`
-- 如需并发操作，请为每个 goroutine 使用单独的数据库实例
-- 竞态条件可能导致段错误或数据损坏
+### 并发
+由 `Open`/`OpenContext` 返回的 `*sql.DB` 可以安全地在多个 goroutine 之间共享。它底层使用单个内存中的 SQLite 连接，因此 filesql 将连接池固定为一个连接（`SetMaxOpenConns(1)`），并由 `database/sql` 为你串行化访问：
 
-**并发访问的推荐模式**：
 ```go
-// ✅ 好的做法：每个 goroutine 使用单独的数据库实例
-func processFileConcurrently(filename string) error {
-    db, err := filesql.Open(filename)  // 每个 goroutine 获取自己的实例
-    if err != nil {
-        return err
-    }
-    defer db.Close()
-    
-    // 在此 goroutine 内安全使用
-    return processData(db)
+// Safe: share one *sql.DB across goroutines.
+db, err := filesql.Open("data.csv")
+if err != nil {
+    return err
 }
+defer db.Close()
 
-// ❌ 不好的做法：在 goroutine 间共享数据库实例
-var sharedDB *sql.DB  // 这会导致竞态条件
+var wg sync.WaitGroup
+for range 8 {
+    wg.Go(func() {
+        rows, err := db.Query("SELECT * FROM data")
+        // ... use rows ...
+    })
+}
+wg.Wait()
 ```
+
+请注意，由于访问是通过单个连接串行化的，查询并不会并行运行；并发是安全的，但并不会更快。如果你需要真正的并行，请为每个 goroutine 打开一个单独的 `*sql.DB`。
+
+> 当你对自己的 `*sql.DB` 使用 `LoadInto` 时，连接池的配置由你自己负责。对于内存中的数据库，请自行调用 `db.SetMaxOpenConns(1)`，因为 SQLite `:memory:` 的数据对每个连接都是私有的。
 
 ## 高级示例
 

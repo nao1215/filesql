@@ -447,31 +447,30 @@ Exécutez les benchmarks vous-même :
 make benchmark
 ```
 
-### Limitations de concurrence
-⚠️ **IMPORTANT** : Cette bibliothèque **N'EST PAS thread-safe** et a des **limitations de concurrence** :
-- **NE** partagez **PAS** les connexions de base de données entre les goroutines
-- **NE** effectuez **PAS** d'opérations concurrentes sur la même instance de base de données
-- **NE** appelez **PAS** `db.Close()` pendant que des requêtes sont actives dans d'autres goroutines
-- Utilisez des instances de base de données séparées pour les opérations concurrentes si nécessaire
-- Les conditions de course peuvent causer des fautes de segmentation ou une corruption de données
+### Concurrence
+Le `*sql.DB` retourné par `Open`/`OpenContext` peut être partagé en toute sécurité entre les goroutines. Il s'appuie sur une unique connexion SQLite en mémoire, c'est pourquoi filesql limite le pool à une seule connexion (`SetMaxOpenConns(1)`) et `database/sql` sérialise les accès à votre place :
 
-**Modèle recommandé pour l'accès concurrent** :
 ```go
-// ✅ BON : Instances de base de données séparées par goroutine
-func processFileConcurrently(filename string) error {
-    db, err := filesql.Open(filename)  // Chaque goroutine obtient sa propre instance
-    if err != nil {
-        return err
-    }
-    defer db.Close()
-    
-    // Sûr à utiliser dans cette goroutine
-    return processData(db)
+// Safe: share one *sql.DB across goroutines.
+db, err := filesql.Open("data.csv")
+if err != nil {
+    return err
 }
+defer db.Close()
 
-// ❌ MAUVAIS : Partager une instance de base de données entre les goroutines
-var sharedDB *sql.DB  // Cela causera des conditions de course
+var wg sync.WaitGroup
+for range 8 {
+    wg.Go(func() {
+        rows, err := db.Query("SELECT * FROM data")
+        // ... use rows ...
+    })
+}
+wg.Wait()
 ```
+
+Notez que, comme les accès sont sérialisés via une unique connexion, les requêtes ne s'exécutent pas en parallèle ; la concurrence est sûre mais pas plus rapide. Si vous avez besoin d'un véritable parallélisme, ouvrez un `*sql.DB` distinct par goroutine.
+
+> Lorsque vous utilisez `LoadInto` avec votre propre `*sql.DB`, c'est à vous de gérer la configuration du pool. Pour une base de données en mémoire, appelez vous-même `db.SetMaxOpenConns(1)`, car les données SQLite `:memory:` sont privées à chaque connexion.
 
 ### Support Parquet
 - **Lecture** : Support complet pour les fichiers Apache Parquet avec des types de données complexes

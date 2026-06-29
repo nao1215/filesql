@@ -495,31 +495,37 @@ Run benchmarks yourself:
 make benchmark
 ```
 
-### Concurrency Limitations
-This library is not thread-safe and has concurrency limitations:
-- Do not share database connections across goroutines
-- Do not perform concurrent operations on the same database instance
-- Do not call `db.Close()` while queries are active in other goroutines
-- Use separate database instances for concurrent operations if needed
-- Race conditions may cause segmentation faults or data corruption
+### Concurrency
+The `*sql.DB` returned by `Open`/`OpenContext` is safe to share across
+goroutines. It is backed by a single in-memory SQLite connection, so filesql
+pins the pool to one connection (`SetMaxOpenConns(1)`) and `database/sql`
+serialises access for you:
 
-Recommended pattern for concurrent access:
 ```go
-// GOOD: Separate database instances per goroutine
-func processFileConcurrently(filename string) error {
-    db, err := filesql.Open(filename)  // Each goroutine gets its own instance
-    if err != nil {
-        return err
-    }
-    defer db.Close()
-    
-    // Safe to use within this goroutine
-    return processData(db)
+// Safe: share one *sql.DB across goroutines.
+db, err := filesql.Open("data.csv")
+if err != nil {
+    return err
 }
+defer db.Close()
 
-// BAD: Sharing database instance across goroutines
-var sharedDB *sql.DB  // This will cause race conditions
+var wg sync.WaitGroup
+for range 8 {
+    wg.Go(func() {
+        rows, err := db.Query("SELECT * FROM data")
+        // ... use rows ...
+    })
+}
+wg.Wait()
 ```
+
+Note that because access is serialised through a single connection, queries do
+not run in parallel; concurrency is safe but not faster. If you need true
+parallelism, open a separate `*sql.DB` per goroutine.
+
+> When you use `LoadInto` with your own `*sql.DB`, you are responsible for the
+> pool configuration. For an in-memory database, call `db.SetMaxOpenConns(1)`
+> yourself, because SQLite `:memory:` data is private to each connection.
 
 ### Parquet Support
 - Reading: Full support for Apache Parquet files with complex data types
