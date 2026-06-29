@@ -9,7 +9,7 @@
 
 ![logo](../image/filesql-logo.png)
 
-**filesql**은 SQLite3 SQL 구문을 사용하여 CSV, TSV, LTSV, Parquet, Excel (XLSX) 파일을 쿼리할 수 있게 해주는 Go SQL 드라이버입니다. filesql이 파일을 인메모리 SQLite 데이터베이스로 로드해주므로, 수동 가져오기 단계나 스키마 정의, 실행할 데이터베이스 서버 없이 파일에 대해 SQL을 작성할 수 있습니다.
+**filesql**은 SQLite3 SQL 구문을 사용하여 CSV, TSV, LTSV, JSON, JSONL, Parquet, Excel (XLSX) 파일을 쿼리할 수 있게 해주는 Go SQL 드라이버입니다. filesql이 파일을 인메모리 SQLite 데이터베이스로 로드해주므로, 수동 가져오기 단계나 스키마 정의, 실행할 데이터베이스 서버 없이 파일에 대해 SQL을 작성할 수 있습니다.
 
 **filesql의 기능을 체험해보고 싶으신가요?** **[sqly](https://github.com/nao1215/sqly)**를 확인해보세요 - filesql을 사용하여 셸에서 직접 CSV, TSV, LTSV, Excel 파일에 대해 SQL 쿼리를 쉽게 실행할 수 있는 명령줄 도구입니다. filesql의 성능을 실제로 경험할 수 있는 완벽한 방법입니다!
 

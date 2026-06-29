@@ -9,7 +9,7 @@
 
 ![logo](../image/filesql-logo.png)
 
-**filesql** est un pilote SQL Go qui vous permet d'interroger les fichiers CSV, TSV, LTSV, Parquet et Excel (XLSX) en utilisant la syntaxe SQL de SQLite3. Il charge vos fichiers dans une base de données SQLite en mémoire à votre place, de sorte que vous écrivez du SQL sur vos fichiers sans étape d'importation manuelle, sans définition de schéma, ni serveur de base de données à exécuter.
+**filesql** est un pilote SQL Go qui vous permet d'interroger les fichiers CSV, TSV, LTSV, JSON, JSONL, Parquet et Excel (XLSX) en utilisant la syntaxe SQL de SQLite3. Il charge vos fichiers dans une base de données SQLite en mémoire à votre place, de sorte que vous écrivez du SQL sur vos fichiers sans étape d'importation manuelle, sans définition de schéma, ni serveur de base de données à exécuter.
 
 **Vous voulez découvrir les capacités de filesql ?** Essayez **[sqly](https://github.com/nao1215/sqly)** - un outil en ligne de commande qui utilise filesql pour exécuter facilement des requêtes SQL sur les fichiers CSV, TSV, LTSV et Excel directement depuis votre shell ! C'est le moyen parfait de découvrir la puissance de filesql en action !
 

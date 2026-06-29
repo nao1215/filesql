@@ -9,7 +9,7 @@
 
 ![logo](../image/filesql-logo.png)
 
-**filesql** 是一个 Go SQL 驱动，让您可以使用 SQLite3 SQL 语法直接查询 CSV、TSV、LTSV、Parquet 和 Excel (XLSX) 文件。它会为您将文件加载到内存中的 SQLite 数据库，因此您无需手动导入步骤、定义 schema 或运行数据库服务器，即可直接对文件编写 SQL。
+**filesql** 是一个 Go SQL 驱动，让您可以使用 SQLite3 SQL 语法直接查询 CSV、TSV、LTSV、JSON、JSONL、Parquet 和 Excel (XLSX) 文件。它会为您将文件加载到内存中的 SQLite 数据库，因此您无需手动导入步骤、定义 schema 或运行数据库服务器，即可直接对文件编写 SQL。
 
 **想要体验 filesql 的功能？** 试试 **[sqly](https://github.com/nao1215/sqly)** - 一个使用 filesql 直接从 shell 轻松对 CSV、TSV、LTSV 和 Excel 文件执行 SQL 查询的命令行工具！这是体验 filesql 强大功能的完美方式！
 
