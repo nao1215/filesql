@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-07-04
+
 ### Added
 - **`WithMalformedRowPolicy` lets callers choose how a ragged CSV/TSV row is handled.** A row whose field count differs from the header can now stop the import (`MalformedRowStop`, the default), be dropped (`MalformedRowSkip`), or be reshaped to the header width by padding short rows with empty strings and truncating long rows (`MalformedRowFill`). The policy applies to delimited text only; XLSX, LTSV, Parquet, and JSON/JSONL have no per-row field-count mismatch. (PR [#145](https://github.com/nao1215/filesql/pull/145), [3a625dc](https://github.com/nao1215/filesql/commit/3a625dc), Ref [nao1215/sqly#731](https://github.com/nao1215/sqly/issues/731))
 
@@ -742,7 +744,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/nao1215/filesql/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/nao1215/filesql/compare/v0.15.0...v0.16.0
 [0.12.1]: https://github.com/nao1215/filesql/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/nao1215/filesql/compare/v0.11.0...v0.12.0
