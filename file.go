@@ -379,6 +379,9 @@ type streamingParser struct {
 	chunkSize   ChunkSize
 	memoryPool  *MemoryPool  // Pool for reusable memory allocations
 	memoryLimit *MemoryLimit // Configurable memory limits
+	// malformedRowPolicy controls how a CSV/TSV record whose field count differs
+	// from the header is handled. The zero value is MalformedRowStop.
+	malformedRowPolicy MalformedRowPolicy
 }
 
 // newFile creates a new file
