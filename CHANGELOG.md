@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`WithMalformedRowPolicy` lets callers choose how a ragged CSV/TSV row is handled.** A row whose field count differs from the header can now stop the import (`MalformedRowStop`, the default), be dropped (`MalformedRowSkip`), or be reshaped to the header width by padding short rows with empty strings and truncating long rows (`MalformedRowFill`). The policy applies to delimited text only; XLSX, LTSV, Parquet, and JSON/JSONL have no per-row field-count mismatch. (PR [#145](https://github.com/nao1215/filesql/pull/145), [3a625dc](https://github.com/nao1215/filesql/commit/3a625dc), Ref [nao1215/sqly#731](https://github.com/nao1215/sqly/issues/731))
+
+### Fixed
+- **A ragged CSV/TSV row no longer silently drops data.** A row with fewer or more fields than the header made `encoding/csv` return a field-count error, which the streaming loader masked by creating an empty single-column table, losing both the malformed row and the well-formed rows before it. The default policy now aborts the import with `ErrColumnMismatch` instead of producing an empty table. (PR [#145](https://github.com/nao1215/filesql/pull/145), [3a625dc](https://github.com/nao1215/filesql/commit/3a625dc), Ref [nao1215/sqly#731](https://github.com/nao1215/sqly/issues/731))
+
 ## [0.16.0] - 2026-06-29
 
 ### Fixed

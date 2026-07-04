@@ -171,6 +171,28 @@ func (b *DBBuilder) SetDefaultChunkSize(size int) *DBBuilder {
 	return b
 }
 
+// WithMalformedRowPolicy sets how a CSV/TSV record whose field count differs
+// from the header is handled during import.
+//
+// The default is MalformedRowStop, which aborts the import with an error so a
+// corrupt or misaligned file is not imported as partial or empty data. Use
+// MalformedRowSkip to drop ragged rows and keep the well-formed ones, or
+// MalformedRowFill to keep every row by padding short rows with empty strings
+// and truncating long rows to the header width.
+//
+// The policy only affects delimited text formats. XLSX, LTSV, Parquet, and
+// JSON/JSONL have no per-row field-count mismatch and are unaffected.
+//
+// Example:
+//
+//	builder.WithMalformedRowPolicy(filesql.MalformedRowSkip)
+//
+// Returns self for chaining.
+func (b *DBBuilder) WithMalformedRowPolicy(policy MalformedRowPolicy) *DBBuilder {
+	b.streamProcessor.malformedRowPolicy = policy
+	return b
+}
+
 // WithLogger sets a custom logger for internal operations.
 //
 // The logger interface is compatible with slog.Logger. You can use the provided

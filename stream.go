@@ -35,7 +35,9 @@ func handleCloseError(closeFunc func() error) func() {
 	}
 }
 
-// newStreamingParser creates a new streaming parser
+// newStreamingParser creates a new streaming parser. The malformed-row policy
+// defaults to MalformedRowStop (the zero value); callers that need another
+// policy set the field after construction.
 func newStreamingParser(fileType FileType, tableName string, chunkSize int) *streamingParser {
 	return &streamingParser{
 		fileType:    fileType,
@@ -148,6 +150,9 @@ func (p *streamingParser) createDecompressedReader(reader io.Reader) (io.Reader,
 func (p *streamingParser) parseDelimitedStream(reader io.Reader, delimiter rune, fileTypeName string) (*table, error) {
 	csvReader := csv.NewReader(reader)
 	csvReader.Comma = delimiter
+	// Accept a variable field count so a ragged row is handled by the configured
+	// malformed-row policy instead of aborting the whole read.
+	csvReader.FieldsPerRecord = -1
 	records, err := csvReader.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to read %s: %s", ErrParsing, fileTypeName, err.Error())
@@ -165,7 +170,14 @@ func (p *streamingParser) parseDelimitedStream(reader io.Reader, delimiter rune,
 
 	tablerecords := make([]Record, 0, len(records)-1)
 	for i := 1; i < len(records); i++ {
-		tablerecords = append(tablerecords, newRecord(records[i]))
+		record, skip, err := reconcileFieldCount(records[i], len(header), i, p.malformedRowPolicy)
+		if err != nil {
+			return nil, err
+		}
+		if skip {
+			continue
+		}
+		tablerecords = append(tablerecords, newRecord(record))
 	}
 
 	return newTable(p.tableName, header, tablerecords), nil
@@ -292,6 +304,9 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 	if delimiter != csvDelimiter {
 		csvReader.Comma = delimiter
 	}
+	// Accept a variable field count from the reader so a ragged row is handled by
+	// the configured malformed-row policy instead of aborting the whole read.
+	csvReader.FieldsPerRecord = -1
 
 	// Read header first
 	headerrecord, err := csvReader.Read()
@@ -318,6 +333,7 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 		chunkSize = DefaultRowsPerChunk
 	}
 
+	rowNum := 0
 	for {
 		record, err := csvReader.Read()
 		if err != nil {
@@ -325,6 +341,15 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 				break
 			}
 			return fmt.Errorf("%w: failed to read %s record: %s", ErrParsing, fileTypeName, err.Error())
+		}
+		rowNum++
+
+		record, skip, err := reconcileFieldCount(record, len(header), rowNum, p.malformedRowPolicy)
+		if err != nil {
+			return err
+		}
+		if skip {
+			continue
 		}
 
 		chunkrecords = append(chunkrecords, newRecord(record))

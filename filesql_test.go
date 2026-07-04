@@ -4358,8 +4358,8 @@ func TestEdgeCasesEmptyAndMalformedData(t *testing.T) {
 			name:        "Inconsistent row lengths",
 			fileContent: "col1,col2,col3\nvalue1,value2\nvalue3,value4,value5,value6",
 			fileName:    "inconsistent_rows.csv",
-			expectedErr: false,
-			description: "Should handle rows with different numbers of columns",
+			expectedErr: true,
+			description: "Should reject rows with different numbers of columns under the default stop policy",
 		},
 	}
 

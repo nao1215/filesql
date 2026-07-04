@@ -33,6 +33,9 @@ type streamProcessor struct {
 	// caller-owned database, where last-wins replacement is the useful default)
 	// and left false for Open (fresh in-memory database, no collisions).
 	replaceExisting bool
+	// malformedRowPolicy controls how a CSV/TSV record whose field count differs
+	// from the header is handled. The zero value is MalformedRowStop.
+	malformedRowPolicy MalformedRowPolicy
 }
 
 // dropIfReplacing drops a same-named table when replaceExisting is set, so the
@@ -70,7 +73,10 @@ func (sp *streamProcessor) streamAllFilesToDatabase(ctx context.Context, db *sql
 		sp.logger.Debug("streaming file", "path", path, "index", i+1, "total", len(collectedPaths))
 		if err := sp.streamFileToDatabase(ctx, db, path); err != nil {
 			sp.logger.Error("failed to stream file", "path", path, "error", err)
-			return streamError(ErrParsing, "failed to stream file %s: %v", path, err)
+			// Wrap the underlying error with %w as well so a sentinel it carries
+			// (for example ErrColumnMismatch from the malformed-row policy) stays
+			// detectable with errors.Is alongside ErrParsing.
+			return streamError(ErrParsing, "failed to stream file %s: %w", path, err)
 		}
 	}
 	sp.logger.Info("completed file streaming", "file_count", len(collectedPaths))
@@ -88,7 +94,7 @@ func (sp *streamProcessor) streamAllReadersToDatabase(ctx context.Context, db *s
 		if err := sp.streamReaderToDatabase(ctx, db, ri); err != nil {
 			sp.closeReaderInput(ri)
 			sp.logger.Error("failed to stream reader", logKeyTable, ri.tableName, "error", err)
-			return streamError(ErrParsing, "failed to stream reader input for table '%s': %v", ri.tableName, err)
+			return streamError(ErrParsing, "failed to stream reader input for table '%s': %w", ri.tableName, err)
 		}
 		sp.closeReaderInput(ri)
 	}
@@ -271,6 +277,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 
 	// Create streaming parser for chunked processing
 	parser := newStreamingParser(input.fileType, input.tableName, sp.chunkSize)
+	parser.malformedRowPolicy = sp.malformedRowPolicy
 
 	// Initialize the table schema (we need to peek at the first chunk to get headers)
 	var tableCreated bool
@@ -334,31 +341,18 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 
 	// Handle header-only files: if no data chunks were processed, create empty table
 	if !tableCreated {
+		// A processing error here is terminal: the input was not merely a
+		// header-only file, so surface the error instead of masking it with an
+		// empty table. Masking would silently drop data (for example a CSV whose
+		// rows have a different field count than the header under the stop policy).
 		if err != nil {
-			// Preserve certain parsing errors that should not be converted to empty tables
-			if strings.Contains(err.Error(), "duplicate column name") ||
-				strings.Contains(err.Error(), "parse error") {
-				return err
-			}
-			// For completely empty files (only newlines), propagate error instead of creating empty table
-			if strings.Contains(err.Error(), "empty") {
-				return err
-			}
-			// For LTSV with no valid key:value pairs, propagate the error
-			if strings.Contains(err.Error(), "no valid LTSV") {
-				return err
-			}
+			return err
 		}
 
-		// For header-only files, try to create an empty table by parsing headers
+		// No error and no data chunk means a header-only file; create the empty table.
 		if createErr := sp.createEmptyTable(ctx, db, input); createErr != nil {
-			// If createEmptyTable also fails, this indicates a truly empty file
-			if err != nil {
-				return err // Return the original processing error
-			}
 			return fmt.Errorf("%w: failed to create empty table for header-only file: %s", ErrDatabaseOperation, createErr.Error())
 		}
-		err = nil // Clear any previous error since we handled the header-only case
 	}
 
 	// Clean up the prepared statement
@@ -466,6 +460,7 @@ func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, 
 func (sp *streamProcessor) createEmptyTable(ctx context.Context, db *sql.DB, input readerInput) error {
 	// Parse just the header to get column information
 	tempParser := newStreamingParser(input.fileType, input.tableName, 1)
+	tempParser.malformedRowPolicy = sp.malformedRowPolicy
 	tempTable, err := tempParser.parseFromReader(input.reader)
 	if err != nil {
 		// Check if this is a parsing error we should preserve (like duplicate columns)
