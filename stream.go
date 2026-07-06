@@ -65,6 +65,9 @@ func (p *streamingParser) parseFromReader(reader io.Reader) (*table, error) {
 
 	// Parse based on base file type
 	baseType := p.fileType.baseType()
+	if isTextBaseType(baseType) {
+		decompressedReader = decodeTextReader(decompressedReader)
+	}
 	switch baseType {
 	case FileTypeCSV:
 		return p.parseCSVStream(decompressedReader)
@@ -278,6 +281,9 @@ func (p *streamingParser) ProcessInChunks(reader io.Reader, processor chunkProce
 
 	// Parse based on base file type
 	baseType := p.fileType.baseType()
+	if isTextBaseType(baseType) {
+		decompressedReader = decodeTextReader(decompressedReader)
+	}
 	switch baseType {
 	case FileTypeCSV:
 		return p.processCSVInChunks(decompressedReader, processor)

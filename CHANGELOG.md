@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A leading Unicode byte-order mark in a text input is now honored instead of corrupting the import.** A UTF-8 BOM (written by Excel, Notepad, and PowerShell) was kept as part of the first CSV/TSV column name and as the first LTSV label, so a query on the plain name failed with `no such column`, and on JSON/JSONL the BOM made the parse fail outright. UTF-16 input fared worse: the null bytes were read as single-byte data and surfaced as a column-count mismatch. Text readers (CSV, TSV, LTSV, JSON, JSONL) now strip a UTF-8 BOM and transcode UTF-16 (LE or BE) to UTF-8 before parsing. Input without a recognized BOM passes through unchanged, so ordinary UTF-8 is untouched and a non-Unicode legacy encoding keeps its original bytes rather than being lossily replaced. Binary formats (Parquet, XLSX) and record formats (ACH, Fedwire) are not decoded. (Ref [nao1215/sqly](https://github.com/nao1215/sqly))
+
 ## [0.17.0] - 2026-07-04
 
 ### Added
