@@ -335,7 +335,7 @@ func TestInferColumnType(t *testing.T) {
 		},
 		{
 			name:     "zero values",
-			values:   []string{"0", "0.0", "000"},
+			values:   []string{"0", "0.0", "0"},
 			expected: columnTypeReal,
 		},
 		{

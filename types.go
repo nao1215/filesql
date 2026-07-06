@@ -624,8 +624,37 @@ func isInteger(value string) bool {
 		return false
 	}
 
+	// A zero-padded literal such as "007" or "02134" is not an integer: the
+	// leading zero is significant (ZIP codes, product IDs), and SQLite INTEGER
+	// would drop it. Preserve it as TEXT instead.
+	if isZeroPaddedIntegerLiteral(value) {
+		return false
+	}
+
 	_, err := strconv.ParseInt(value, 10, 64)
 	return err == nil
+}
+
+// isZeroPaddedIntegerLiteral reports whether value is an integer literal
+// (optional leading '+'/'-' followed solely by ASCII digits) with a redundant
+// leading zero, such as "007" or "02134". A leading zero is semantically
+// significant, and both SQLite INTEGER and float64 would drop it, so the only
+// lossless representation is TEXT. A lone "0" is a normal integer and is
+// excluded.
+func isZeroPaddedIntegerLiteral(value string) bool {
+	digits := value
+	if len(digits) > 0 && (digits[0] == '+' || digits[0] == '-') {
+		digits = digits[1:]
+	}
+	if len(digits) < 2 || digits[0] != '0' {
+		return false
+	}
+	for i := range len(digits) {
+		if digits[i] < '0' || digits[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // isFloat checks if a value is a float with optimized parsing
@@ -650,6 +679,12 @@ func isFloat(value string) bool {
 	// lossless representation is TEXT. Returning false here lets classifyValue
 	// fall through to columnTypeText and preserve the exact digits.
 	if isIntegerLiteralOverflowingInt64(value) {
+		return false
+	}
+
+	// A zero-padded integer literal ("007") is not a float either: float64 would
+	// drop the leading zero just as INTEGER does. Keep it as TEXT.
+	if isZeroPaddedIntegerLiteral(value) {
 		return false
 	}
 

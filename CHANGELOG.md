@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A zero-padded numeric code no longer loses its leading zeros on import.** Type inference classified a column as INTEGER when every value looked like an integer, so a ZIP code, product ID, or bank code such as `02134` was stored as `2134` and `00501` as `501`. An integer literal with a redundant leading zero (an optional sign, then a `0` followed by more digits) is now classified as TEXT, since both SQLite INTEGER and float64 would drop the leading zero. A lone `0` stays an integer, and a column that also contains a non-numeric value was already TEXT. (PR [#149](https://github.com/nao1215/filesql/pull/149), [eeb798e](https://github.com/nao1215/filesql/commit/eeb798e), Ref [nao1215/sqly](https://github.com/nao1215/sqly))
+
 ## [0.17.1] - 2026-07-06
 
 ### Fixed
