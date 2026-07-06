@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-07-06
+
 ### Fixed
 - **A leading Unicode byte-order mark in a text input is now honored instead of corrupting the import.** A UTF-8 BOM (written by Excel, Notepad, and PowerShell) was kept as part of the first CSV/TSV column name and as the first LTSV label, so a query on the plain name failed with `no such column`, and on JSON/JSONL the BOM made the parse fail outright. UTF-16 input fared worse: the null bytes were read as single-byte data and surfaced as a column-count mismatch. Text readers (CSV, TSV, LTSV, JSON, JSONL) now strip a UTF-8 BOM and transcode UTF-16 (LE or BE) to UTF-8 before parsing. Input without a recognized BOM passes through unchanged, so ordinary UTF-8 is untouched and a non-Unicode legacy encoding keeps its original bytes rather than being lossily replaced. Binary formats (Parquet, XLSX) and record formats (ACH, Fedwire) are not decoded. (PR [#147](https://github.com/nao1215/filesql/pull/147), [fca33e4](https://github.com/nao1215/filesql/commit/fca33e4), Ref [nao1215/sqly](https://github.com/nao1215/sqly))
 
@@ -747,7 +749,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.17.1...HEAD
+[0.17.1]: https://github.com/nao1215/filesql/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/nao1215/filesql/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/nao1215/filesql/compare/v0.15.0...v0.16.0
 [0.12.1]: https://github.com/nao1215/filesql/compare/v0.12.0...v0.12.1
