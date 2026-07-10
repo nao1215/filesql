@@ -124,9 +124,9 @@ func TestFile_Parse(t *testing.T) {
 ### AI 辅助开发指南
 
 1. **审查所有生成的代码**：始终审查并理解 AI 生成的代码后再提交
-2. **保持一致性**：确保 AI 生成的代码遵循 CLAUDE.md 中的编码标准
+2. **保持一致性**：确保 AI 生成的代码遵循当前仓库既有的代码与文档约定
 3. **彻底测试**：AI 生成的代码必须通过所有测试和代码检查（`make test` 和 `make lint`）
-4. **使用项目配置**：我们提供 `CLAUDE.md`, `.cursorrules` 和 `.github/copilot-instructions.md` 来帮助 AI 助手理解我们的项目标准
+4. **使用项目配置**：在让 AI 助手修改代码之前，请先查看真正约束此仓库的配置，例如 `go.mod`、`Makefile`、`.golangci.yml` 和 GitHub Actions
 
 ## 创建拉取请求
 

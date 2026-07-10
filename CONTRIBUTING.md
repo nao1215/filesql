@@ -124,9 +124,9 @@ We actively encourage the use of AI coding assistants to improve productivity an
 ### Guidelines for AI-Assisted Development
 
 1. **Review all generated code**: Always review and understand AI-generated code before committing
-2. **Maintain consistency**: Ensure AI-generated code follows our coding standards in CLAUDE.md
+2. **Maintain consistency**: Ensure AI-generated code follows the repository's existing coding and documentation conventions
 3. **Test thoroughly**: AI-generated code must pass all tests and linting (`make test` and `make lint`)
-4. **Use project configuration**: We provide `CLAUDE.md`, `.cursorrules` and `.github/copilot-instructions.md` to help AI assistants understand our project standards
+4. **Use project configuration**: Review the files that actually govern this repository such as `go.mod`, `Makefile`, `.golangci.yml`, and the GitHub workflows before asking an AI assistant to change code
 
 ## Creating Pull Requests
 

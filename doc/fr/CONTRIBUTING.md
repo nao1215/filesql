@@ -124,9 +124,9 @@ Nous encourageons activement l'utilisation d'assistants de codage IA pour améli
 ### Directives pour le Développement Assisté par IA
 
 1. **Réviser tout le code généré** : Toujours réviser et comprendre le code généré par l'IA avant de faire un commit
-2. **Maintenir la cohérence** : S'assurer que le code généré par l'IA suit nos standards de codage dans CLAUDE.md
+2. **Maintenir la cohérence** : Vérifiez que le code généré par l'IA respecte les conventions de code et de documentation déjà en place dans ce dépôt
 3. **Tester minutieusement** : Le code généré par l'IA doit passer tous les tests et le linting (`make test` et `make lint`)
-4. **Utiliser la configuration du projet** : Nous fournissons `CLAUDE.md`, `.cursorrules` et `.github/copilot-instructions.md` pour aider les assistants IA à comprendre nos standards de projet
+4. **Utiliser la configuration du projet** : Avant de demander des changements à un assistant IA, consultez les fichiers qui gouvernent réellement ce dépôt, comme `go.mod`, `Makefile`, `.golangci.yml` et les workflows GitHub
 
 ## Créer des Pull Requests
 

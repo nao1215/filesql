@@ -1,0 +1,36 @@
+{1500}30User ReqP 
+{1510}1000
+{1520}20190508Source08000001
+{2000}000001234567
+{3100}121042882Wells Fargo NA*
+{3400}231380104Citadel*
+{3600}CTP*
+{3320}Sender Reference*
+{3500}Previous Message Ident
+{3610}COVS*
+{3620}1http://moov.io*Contact Name*5555551212*5551231212*5554561212*End To End Identification*
+{4000}D123456789*FI Name*Address One*Address Two*Address Three*
+{4100}D123456789*FI Name*Address One*Address Two*Address Three*
+{4200}31234*Name*Address One*Address Two*Address Three*
+{4320}Reference*
+{5000}11234*Name*Address One*Address Two*Address Three*
+{5010}TXID/123-45-6789*1/Name*1/1234*2/1000 Colonial Farm Rd*5/Pottstown*
+{5100}D123456789*FI Name*Address One*Address Two*Address Three*
+{5200}D123456789*FI Name*Address One*Address Two*Address Three*
+{6000}LineOne*LineTwo*LineThree*LineFour*
+{6200}Line Six*
+{6210}LTRLine One*Line Two*Line Three*Line Four*Line Five*Line Six*
+{6300}Line One*Line Two*Line Three*Line Four*Line Five*Line Six*
+{6310}TLXLine One*Line Two*Line Three*Line Four*Line Five*Line Six*
+{6400}Line One*Line Two*Line Three*Line Four*Line Five*Line Six*
+{6410}LTRLine One*Line Two*Line Three*Line Four*Line Five*Line Six*
+{6420}CHECKAdditional Information*
+{6500}Line One*Line Two*Line Three*Line Four*Line Five*Line Six*
+{7033}Swift*000000000001500,49*
+{7050}Swift*Swift Line One*Swift Line Two*Swift Line Three*Swift Line Four*Swift Line Five*
+{7052}Swift*Swift Line One*Swift Line Two*Swift Line Three*Swift Line Four*Swift Line Five*
+{7056}Swift*Swift Line One*Swift Line Two*Swift Line Three*Swift Line Four*Swift Line Five*
+{7057}Swift*Swift Line One*Swift Line Two*Swift Line Three*Swift Line Four*Swift Line Five*
+{7059}Swift*Swift Line One*Swift Line Two*Swift Line Three*Swift Line Four*Swift Line Five*
+{7070}Swift*Swift Line One*Swift Line Two*Swift Line Three*Swift Line Four*
+{7072}Swift*Swift Line One*Swift Line Two*Swift Line Three*Swift Line Four*Swift Line Five*Swift Line Six*

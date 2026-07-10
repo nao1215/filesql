@@ -1,0 +1,73 @@
+package parser
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+
+	"github.com/xuri/excelize/v2"
+)
+
+// parseXLSX parses Excel XLSX data.
+func parseXLSX(reader io.Reader) (*TableData, error) {
+	// Read all data into memory (excelize requires this)
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read XLSX data: %w", err)
+	}
+
+	f, err := excelize.OpenReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to open XLSX: %w", err)
+	}
+	defer f.Close()
+
+	// Get the first sheet
+	sheets := f.GetSheetList()
+	if len(sheets) == 0 {
+		return nil, errors.New("no sheets found in XLSX file")
+	}
+
+	sheetName := sheets[0]
+	rows, err := f.GetRows(sheetName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read sheet %s: %w", sheetName, err)
+	}
+
+	if len(rows) == 0 {
+		return nil, errors.New("empty XLSX sheet")
+	}
+
+	headers := rows[0]
+	if len(headers) == 0 {
+		return nil, errors.New("no headers found in XLSX")
+	}
+
+	if err := validateColumnNames(headers); err != nil {
+		return nil, err
+	}
+
+	// Normalize records to match header length
+	records := make([][]string, 0, len(rows)-1)
+	for i := 1; i < len(rows); i++ {
+		row := rows[i]
+		// Pad or truncate to match header length
+		normalizedRow := make([]string, len(headers))
+		for j := range headers {
+			if j < len(row) {
+				normalizedRow[j] = row[j]
+			}
+		}
+		records = append(records, normalizedRow)
+	}
+
+	// Infer column types
+	columnTypes := inferColumnTypes(headers, records)
+
+	return &TableData{
+		Headers:     headers,
+		Records:     records,
+		ColumnTypes: columnTypes,
+	}, nil
+}

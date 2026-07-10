@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	wireconv "github.com/nao1215/fileparser/wire"
+	wireconv "github.com/nao1215/filesql/parser/wire"
 )
 
 // Fedwire file extension

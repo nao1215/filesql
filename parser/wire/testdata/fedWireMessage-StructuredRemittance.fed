@@ -1,0 +1,38 @@
+{1500}30User ReqP 
+{1510}1000
+{1520}20190509Source08000001
+{2000}000001234567
+{3100}121042882Wells Fargo NA*
+{3400}231380104Citadel*
+{3600}CTP*
+{3320}Sender Reference*
+{3500}Previous Message Ident
+{3610}RMTS*
+{3620}1http://moov.io*Contact Name*5555551212*5551231212*5554561212*End To End Identification*
+{4000}D123456789*FI Name*Address One*Address Two*Address Three*
+{4100}D123456789*FI Name*Address One*Address Two*Address Three*
+{4200}31234*Name*Address One*Address Two*Address Three*
+{4320}Reference*
+{5000}11234*Name*Address One*Address Two*Address Three*
+{5010}TXID/123-45-6789*1/Name*1/1234*2/1000 Colonial Farm Rd*5/Pottstown*
+{5100}D123456789*FI Name*Address One*Address Two*Address Three*
+{5200}D123456789*FI Name*Address One*Address Two*Address Three*
+{6000}LineOne*LineTwo*LineThree*LineFour*
+{6200}Line Six*
+{6210}LTRLine One*Line Two*Line Three*Line Four*Line Five*Line Six*
+{6300}Line One*Line Two*Line Three*Line Four*Line Five*Line Six*
+{6310}TLXLine One*Line Two*Line Three*Line Four*Line Five*Line Six*
+{6400}Line One*Line Two*Line Three*Line Four*Line Five*Line Six*
+{6410}LTRLine One*Line Two*Line Three*Line Four*Line Five*Line Six*
+{6420}CHECKAdditional Information*
+{6500}Line One*Line Two*Line Three*Line Four*Line Five*Line Six*
+{8300}OICUSTName*111111*Bank**ADDR*Department*Sub-Department*Street Name*16*19405*AnyTown*PA*UA*Address Line One*Address Line Two*Address Line Three*Address Line One*Address Line Five*Address Line Six*Address Line Seven*US*Contact Name*5551231212*5551231212*5551231212*http://www.moov.io*Contact Other*
+{8350}Name*OI*CUST*111111*Bank**ADDR*Department*Sub-Department*Street Name*1619405*AnyTown*PA*UA*Address Line One*Address Line Two*Address Line Three*Address Line Four*Address Line Five*Address Line Six*Address Line Seven*US*
+{8400}AROI*111111*Issuer*
+{8450}USD1234.56*
+{8500}USD1234.56*
+{8550}USD1234.56*
+{8600}01CRDTUSD1234.56*Adjustment Additional Information*
+{8650}20190509
+{8700}SOAC*222222*Issuer 2*
+{8750}Remittance Free Text Line One*Remittance Free Text Line Two*Remittance Free Text Line Three*

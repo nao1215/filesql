@@ -124,9 +124,9 @@ func TestFile_Parse(t *testing.T) {
 ### AI 지원 개발 가이드라인
 
 1. **생성된 코드 검토**: AI가 생성한 코드는 항상 검토하고 이해한 후 커밋하세요
-2. **일관성 유지**: AI 생성 코드가 CLAUDE.md의 코딩 표준을 따르는지 확인하세요
+2. **일관성 유지**: AI 생성 코드가 이 저장소의 기존 코딩 및 문서 규약을 따르는지 확인하세요
 3. **철저한 테스트**: AI 생성 코드는 모든 테스트와 린팅(`make test`와 `make lint`)을 통과해야 합니다
-4. **프로젝트 설정 사용**: AI 어시스턴트가 프로젝트 표준을 이해할 수 있도록 `CLAUDE.md`, `.cursorrules`와 `.github/copilot-instructions.md`를 제공합니다
+4. **프로젝트 설정 사용**: AI 어시스턴트에게 변경을 맡기기 전에 `go.mod`, `Makefile`, `.golangci.yml`, GitHub Actions처럼 이 저장소를 실제로 규정하는 설정을 확인하세요
 
 ## Pull Request 생성
 

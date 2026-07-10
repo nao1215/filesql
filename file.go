@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/nao1215/fileparser"
+	"github.com/nao1215/filesql/parser"
 )
 
 // FileType represents supported file types including compression variants
@@ -307,21 +307,21 @@ const (
 
 // File extension aliases from fileparser package
 const (
-	extCSV     = fileparser.ExtCSV
-	extTSV     = fileparser.ExtTSV
-	extLTSV    = fileparser.ExtLTSV
-	extParquet = fileparser.ExtParquet
-	extXLSX    = fileparser.ExtXLSX
-	extGZ      = fileparser.ExtGZ
-	extBZ2     = fileparser.ExtBZ2
-	extXZ      = fileparser.ExtXZ
-	extZSTD    = fileparser.ExtZSTD
-	extZLIB    = fileparser.ExtZLIB
-	extSNAPPY  = fileparser.ExtSNAPPY
-	extS2      = fileparser.ExtS2
-	extLZ4     = fileparser.ExtLZ4
-	extJSON    = fileparser.ExtJSON
-	extJSONL   = fileparser.ExtJSONL
+	extCSV     = parser.ExtCSV
+	extTSV     = parser.ExtTSV
+	extLTSV    = parser.ExtLTSV
+	extParquet = parser.ExtParquet
+	extXLSX    = parser.ExtXLSX
+	extGZ      = parser.ExtGZ
+	extBZ2     = parser.ExtBZ2
+	extXZ      = parser.ExtXZ
+	extZSTD    = parser.ExtZSTD
+	extZLIB    = parser.ExtZLIB
+	extSNAPPY  = parser.ExtSNAPPY
+	extS2      = parser.ExtS2
+	extLZ4     = parser.ExtLZ4
+	extJSON    = parser.ExtJSON
+	extJSONL   = parser.ExtJSONL
 )
 
 // file represents a file that can be converted to table
