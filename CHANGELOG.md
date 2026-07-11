@@ -71,7 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Bumped pinned `github.com/nao1215/filesql` version in the `examples/` modules (PR #123, [ff22bc9](https://github.com/nao1215/filesql/commit/ff22bc9))**: Dependabot updated the filesql version pinned by the example modules across 8 directories
-- **Consolidated AI-agent documentation into a single `AGENTS.md`**: `AGENTS.md` is now the single source of truth for agent/contributor guidance, trimmed to the essentials. `CLAUDE.md`, `.github/CLAUDE.md`, and `.github/copilot-instructions.md` are now short pointers to it, removing the previous duplication
+- **Consolidated contributor guidance**: Repository guidance was reduced to a single source of truth and the duplicate helper files were turned into short pointers.
 
 ## [0.12.0] - 2026-02-14
 
@@ -371,9 +371,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Enhanced code organization and readability
 
 ### Technical Improvements
-- **LLM Settings Enhancement (PR #44, [2575759](https://github.com/nao1215/filesql/commit/2575759))**: Updated LLM configuration for unit testing
-  - Improved development workflow with better AI assistance configuration
-  - Enhanced test environment setup for LLM-powered development tools
+- **Development Tooling Refresh (PR #44, [2575759](https://github.com/nao1215/filesql/commit/2575759))**: Updated local development configuration used during unit testing
+  - Improved the test-oriented local tooling setup
+  - Enhanced the development environment used by contributors
 - **Integration Testing Expansion (PR #43, [48eadbe](https://github.com/nao1215/filesql/commit/48eadbe))**: Added comprehensive integration test coverage
   - Enhanced test coverage with real-world usage scenarios
   - Improved reliability and robustness validation
@@ -414,14 +414,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **CI/CD Automation ([11e05c7](https://github.com/nao1215/filesql/commit/11e05c7))**: Enhanced development workflow with automated processes
-  - **GitHub Actions integration ([d7bfa9a](https://github.com/nao1215/filesql/commit/d7bfa9a))**: Added Claude-powered PR assistant and code review workflows
+  - **GitHub Actions integration ([d7bfa9a](https://github.com/nao1215/filesql/commit/d7bfa9a))**: Added pull request automation and code review workflows
   - **Automated release process ([83e3bd5](https://github.com/nao1215/filesql/commit/83e3bd5))**: Auto-release workflow triggered by tag creation
-  - **Comprehensive development tooling**: Streamlined development experience with AI assistance
-- **LLM Development Support ([775b058](https://github.com/nao1215/filesql/commit/775b058))**: Comprehensive AI assistant integration for development
-  - **Multi-platform LLM support**: Added configuration files for Claude Code, Cursor, and GitHub Copilot
+  - **Comprehensive development tooling**: Streamlined the local development experience
+- **Contributor Experience Expansion ([775b058](https://github.com/nao1215/filesql/commit/775b058))**: Expanded repository setup and contributor documentation
   - **Development guidelines**: Created detailed contributing guides in 7 languages (EN, JA, ES, FR, RU, KO, ZH-CN)
-  - **Coding standards documentation**: Comprehensive guidelines for AI-assisted development
-  - **International contributor support**: Multi-language documentation for global development team
+  - **Coding standards documentation**: Added broader contributor guidance
+  - **International contributor support**: Multi-language documentation for the global development team
 - **Enhanced Edge Case Testing ([81239fb](https://github.com/nao1215/filesql/commit/81239fb))**: Expanded test coverage for robustness
   - **Error handling validation**: Additional tests for edge cases and error conditions
   - **Stream processing edge cases**: Enhanced testing for unusual input scenarios
