@@ -792,7 +792,12 @@ func TestStrictTagParsing_ValidateTag(t *testing.T) {
 		{"min with invalid value", "min=abc", true},
 		{"max with invalid value", "max=abc", true},
 		{"len with invalid value", "len=abc", true},
+		{"len with zero", "len=0", true},
+		{"len with negative value", "len=-1", true},
 		{"len with valid value", "len=5", false},
+		{"eqfield with empty value", "eqfield=", true},
+		{"required_if without expected value", "required_if=OtherField", true},
+		{"required_unless without expected value", "required_unless=OtherField", true},
 		{"required needs no value", "required", false},
 		{"email needs no value", "email", false},
 	}
@@ -867,6 +872,39 @@ func TestStrictTagParsing_NonStrictIgnoresInvalidArgs(t *testing.T) {
 		}
 		if len(preps) != 0 {
 			t.Errorf("expected 0 preprocessors (invalid arg ignored), got %d", len(preps))
+		}
+	})
+
+	t.Run("len=0 is silently ignored in non-strict mode", func(t *testing.T) {
+		t.Parallel()
+		vals, _, err := parseValidateTag("len=0", false)
+		if err != nil {
+			t.Errorf("expected no error in non-strict mode, got %v", err)
+		}
+		if len(vals) != 0 {
+			t.Errorf("expected 0 validators (invalid arg ignored), got %d", len(vals))
+		}
+	})
+
+	t.Run("eqfield= is silently ignored in non-strict mode", func(t *testing.T) {
+		t.Parallel()
+		_, crossVals, err := parseValidateTag("eqfield=", false)
+		if err != nil {
+			t.Errorf("expected no error in non-strict mode, got %v", err)
+		}
+		if len(crossVals) != 0 {
+			t.Errorf("expected 0 cross-field validators (invalid arg ignored), got %d", len(crossVals))
+		}
+	})
+
+	t.Run("required_if without expected value is silently ignored in non-strict mode", func(t *testing.T) {
+		t.Parallel()
+		_, crossVals, err := parseValidateTag("required_if=OtherField", false)
+		if err != nil {
+			t.Errorf("expected no error in non-strict mode, got %v", err)
+		}
+		if len(crossVals) != 0 {
+			t.Errorf("expected 0 cross-field validators (invalid arg ignored), got %d", len(crossVals))
 		}
 	})
 }

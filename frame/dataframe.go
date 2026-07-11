@@ -22,6 +22,27 @@ type DataFrame struct {
 	rows    []map[string]any // row data
 }
 
+func dataFrameFromParseResult(result *parser.TableData) *DataFrame {
+	columns := result.Headers
+	dfRows := make([]map[string]any, len(result.Records))
+	for i, record := range result.Records {
+		row := make(map[string]any, len(columns))
+		for j, col := range columns {
+			if j < len(record) {
+				row[col] = convertStringValue(record[j], result.ColumnTypes[j])
+			} else {
+				row[col] = nil
+			}
+		}
+		dfRows[i] = row
+	}
+
+	return &DataFrame{
+		columns: columns,
+		rows:    dfRows,
+	}
+}
+
 // copyRow creates a deep copy of a row to prevent shared references.
 // This is critical for maintaining immutability of DataFrame operations.
 func copyRow(row map[string]any) map[string]any {
@@ -51,25 +72,7 @@ func NewDataFrame(reader io.Reader, fileType FileType) (*DataFrame, error) {
 		return nil, fmt.Errorf("failed to parse: %w", err)
 	}
 
-	// Convert parser.TableData to DataFrame
-	columns := result.Headers
-	dfRows := make([]map[string]any, len(result.Records))
-	for i, record := range result.Records {
-		row := make(map[string]any, len(columns))
-		for j, col := range columns {
-			if j < len(record) {
-				row[col] = convertStringValue(record[j], result.ColumnTypes[j])
-			} else {
-				row[col] = nil
-			}
-		}
-		dfRows[i] = row
-	}
-
-	return &DataFrame{
-		columns: columns,
-		rows:    dfRows,
-	}, nil
+	return dataFrameFromParseResult(result), nil
 }
 
 // NewDataFrameFromPath creates a DataFrame from a file path.
@@ -105,25 +108,7 @@ func NewDataFrameFromPath(path string) (*DataFrame, error) {
 		return nil, fmt.Errorf("failed to parse: %w", err)
 	}
 
-	// Convert parser.TableData to DataFrame
-	columns := result.Headers
-	dfRows := make([]map[string]any, len(result.Records))
-	for i, record := range result.Records {
-		row := make(map[string]any, len(columns))
-		for j, col := range columns {
-			if j < len(record) {
-				row[col] = convertStringValue(record[j], result.ColumnTypes[j])
-			} else {
-				row[col] = nil
-			}
-		}
-		dfRows[i] = row
-	}
-
-	return &DataFrame{
-		columns: columns,
-		rows:    dfRows,
-	}, nil
+	return dataFrameFromParseResult(result), nil
 }
 
 // convertStringValue converts a string value to the appropriate Go type based on ColumnType.
@@ -865,7 +850,7 @@ func (df *DataFrame) Sort(column string, order SortOrder) (*DataFrame, error) {
 	}
 
 	// Sort using Go's slices.SortFunc
-	slices.SortFunc(sortedRows, func(a, b map[string]any) int {
+	slices.SortStableFunc(sortedRows, func(a, b map[string]any) int {
 		aVal := a[column]
 		bVal := b[column]
 
@@ -1278,8 +1263,8 @@ func (df *DataFrame) RenameColumns(renames map[string]string) (*DataFrame, error
 	}, nil
 }
 
-// DropNA returns a new DataFrame with rows containing nil values removed.
-// By default, removes rows where any column has a nil value.
+// DropNA returns a new DataFrame with rows containing missing values removed.
+// By default, removes rows where any column has a nil value or an empty string.
 //
 // Example:
 //
@@ -1289,7 +1274,8 @@ func (df *DataFrame) DropNA() *DataFrame {
 }
 
 // DropNASubset returns a new DataFrame with rows removed where any of the
-// specified columns have nil values.
+// specified columns have missing values.
+// Missing values are treated as nil or the empty string.
 //
 // Example:
 //

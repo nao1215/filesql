@@ -788,9 +788,12 @@ func TestFixSchemePreprocessor(t *testing.T) {
 	}{
 		{"add https", "https", "example.com", "https://example.com"},
 		{"upgrade http to https", "https", "http://example.com", "https://example.com"},
+		{"upgrade uppercase http to https", "https", "HTTP://example.com", "https://example.com"},
 		{"keep https", "https", "https://example.com", "https://example.com"},
+		{"keep uppercase https", "https", "HTTPS://example.com", "HTTPS://example.com"},
 		{"add http", "http", "example.com", "http://example.com"},
 		{"keep http when scheme is http", "http", "http://example.com", "http://example.com"},
+		{"preserve non-http scheme", "https", "ftp://example.com", "ftp://example.com"},
 		{"empty input", "https", "", ""},
 		{"with path", "https", "example.com/path", "https://example.com/path"},
 	}

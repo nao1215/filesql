@@ -14,6 +14,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func findHeaderIndex(t *testing.T, headers []string, name string) int {
+	t.Helper()
+
+	for i, header := range headers {
+		if header == name {
+			return i
+		}
+	}
+
+	t.Fatalf("header %q not found", name)
+	return -1
+}
+
 func TestFromFile_NilFile(t *testing.T) {
 	ts := FromFile(nil)
 	assert.Nil(t, ts)
@@ -127,6 +140,38 @@ func TestToFile_ModifyAmount(t *testing.T) {
 	entries := newFile.Batches[0].GetEntries()
 	require.Len(t, entries, 1)
 	assert.Equal(t, 50000000, entries[0].Amount)
+}
+
+func TestToFile_RejectsNegativeBatchIndexInBatches(t *testing.T) {
+	file := createTestACHFile(t)
+	ts := FromFile(file)
+	require.NotNil(t, ts)
+	require.Len(t, ts.Batches.Records, 1)
+
+	batchIdx := findHeaderIndex(t, ts.Batches.Headers, "batch_index")
+	ts.Batches.Records[0][batchIdx] = "-1"
+
+	newFile, err := ts.ToFile()
+
+	require.Error(t, err)
+	assert.Nil(t, newFile)
+	assert.Contains(t, err.Error(), "batch_index -1 out of range")
+}
+
+func TestToFile_RejectsNegativeBatchIndexInEntries(t *testing.T) {
+	file := createTestACHFile(t)
+	ts := FromFile(file)
+	require.NotNil(t, ts)
+	require.Len(t, ts.Entries.Records, 1)
+
+	batchIdx := findHeaderIndex(t, ts.Entries.Headers, "batch_index")
+	ts.Entries.Records[0][batchIdx] = "-1"
+
+	newFile, err := ts.ToFile()
+
+	require.Error(t, err)
+	assert.Nil(t, newFile)
+	assert.Contains(t, err.Error(), "batch_index -1 out of range")
 }
 
 func TestGetters(t *testing.T) {
@@ -560,6 +605,63 @@ func TestModifyAddenda05(t *testing.T) {
 	require.Len(t, entries, 1)
 	require.Len(t, entries[0].Addenda05, 1)
 	assert.Equal(t, newPaymentInfo, entries[0].Addenda05[0].PaymentRelatedInformation)
+}
+
+func TestApplyAddendaModifications_AdjustsAddenda05IndexAfterAddenda02(t *testing.T) {
+	file := ach.NewFile()
+
+	bh := ach.NewBatchHeader()
+	bh.ServiceClassCode = ach.DebitsOnly
+	bh.CompanyName = "Test Company"
+	bh.CompanyIdentification = "121042882"
+	bh.StandardEntryClassCode = ach.PPD
+	bh.CompanyEntryDescription = "PAYMENT"
+	bh.EffectiveEntryDate = "190625"
+	bh.ODFIIdentification = "12104288"
+
+	batcher, err := ach.NewBatch(bh)
+	require.NoError(t, err)
+
+	entry := ach.NewEntryDetail()
+	entry.TransactionCode = ach.CheckingDebit
+	entry.SetRDFI("231380104")
+	entry.DFIAccountNumber = "12345678"
+	entry.Amount = 100000
+	entry.IndividualName = "Test Person"
+	entry.SetTraceNumber("12104288", 1)
+	entry.AddendaRecordIndicator = 1
+
+	addenda02 := ach.NewAddenda02()
+	addenda02.TypeCode = "02"
+	addenda02.ReferenceInformationOne = "POSREF1"
+	entry.Addenda02 = addenda02
+
+	addenda05 := ach.NewAddenda05()
+	addenda05.PaymentRelatedInformation = "Original Payment Info"
+	addenda05.SequenceNumber = 1
+	addenda05.EntryDetailSequenceNumber = 1
+	entry.AddAddenda05(addenda05)
+
+	batcher.AddEntry(entry)
+	file.AddBatch(batcher)
+
+	ts := FromFile(file)
+	require.NotNil(t, ts)
+	require.Len(t, ts.Addenda.Records, 2)
+
+	paymentInfoIdx := findHeaderIndex(t, ts.Addenda.Headers, "payment_related_information")
+	require.Equal(t, "02", ts.Addenda.Records[0][3])
+	require.Equal(t, "05", ts.Addenda.Records[1][3])
+
+	ts.Addenda.Records[1][paymentInfoIdx] = "Updated Payment Info"
+
+	err = ts.applyAddendaModifications(file)
+	require.NoError(t, err)
+
+	entries := file.Batches[0].GetEntries()
+	require.Len(t, entries, 1)
+	require.Len(t, entries[0].Addenda05, 1)
+	assert.Equal(t, "Updated Payment Info", entries[0].Addenda05[0].PaymentRelatedInformation)
 }
 
 // TestColumnTypes tests that column types are correctly set

@@ -154,7 +154,7 @@ func isACHFile(path string) bool {
 //
 // The returned TableSet can be used later for DumpACH to reconstruct the ACH file.
 func parseACHFile(reader io.Reader, baseTableName string) ([]*table, *achconv.TableSet, error) {
-	// Read ACH file using fileparser/ach (which encapsulates moov-io/ach)
+	// Read ACH file using parser/ach (which encapsulates moov-io/ach)
 	tableSet, err := achconv.ParseReader(reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: failed to parse ACH file: %s", ErrACH, err.Error())

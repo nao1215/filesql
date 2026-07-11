@@ -1,64 +1,3 @@
-// Package ach provides bidirectional conversion between ACH files and TableData.
-//
-// This package bridges the moov-io/ach library with parser.TableData,
-// enabling SQL queries on ACH file data via filesql.
-//
-// # Security Note
-//
-// TableData structures expose sensitive banking information including account numbers,
-// routing numbers, names, and transaction amounts. Avoid logging or exporting
-// TableData contents verbatim in production environments.
-//
-// # Supported Addenda Types
-//
-// Standard entries (EntryDetail):
-//   - Addenda02: Point-of-Sale (POS), Machine Transfer Entry (MTE), Shared Network Entry (SHR)
-//   - Addenda05: Payment Related Information (PPD, CCD, CTX, WEB, etc.)
-//   - Addenda98: Notification of Change (NOC)
-//   - Addenda98Refused: Refused Notification of Change
-//   - Addenda99: Return entries
-//   - Addenda99Dishonored: Dishonored Returns
-//   - Addenda99Contested: Contested Dishonored Returns
-//
-// IAT entries (IATEntryDetail) - International ACH Transactions:
-//   - Addenda10: Transaction information (receiving company, foreign payment amount)
-//   - Addenda11: Originator name and address
-//   - Addenda12: Originator city, state/province, country, postal code
-//   - Addenda13: Originating DFI information
-//   - Addenda14: Receiving DFI information
-//   - Addenda15: Receiver identification number and street address
-//   - Addenda16: Receiver city, state/province, country, postal code
-//   - Addenda17: Payment related information (up to 2 per entry)
-//   - Addenda18: Foreign correspondent bank information (up to 5 per entry)
-//   - Addenda98/99: Same as standard entries
-//
-// # Limitations
-//
-// Only UPDATE operations on existing rows are supported for round-trip editing.
-// INSERT/DELETE operations in SQL are not reflected in the output ACH file.
-// This is because ACH file structure requires careful coordination between
-// related records (entry counts, hash totals, addenda indicators).
-//
-// This package uses github.com/tiendc/go-deepcopy for deep copying ACH files.
-// If moov-io/ach adds new fields (especially interfaces or unexported fields),
-// the deep copy may not capture them correctly. Monitor moov-io/ach releases.
-//
-// # Usage
-//
-//	import (
-//	    "github.com/nao1215/filesql/parser/ach"
-//	    moovach "github.com/moov-io/ach"
-//	)
-//
-//	// Read ACH file
-//	achFile, _ := moovach.ReadFile("payment.ach")
-//
-//	// Convert to TableData for SQL queries
-//	tables := ach.FromFile(achFile)
-//
-//	// After SQL modifications, convert back to ACH
-//	newFile, _ := tables.ToFile()
-//
 //nolint:goconst // Repeated ACH column names mirror the file schema and stay clearer as literals.
 package ach
 
@@ -747,55 +686,55 @@ func (ts *TableSet) applyEntryModifications(file *ach.File) error {
 			return fmt.Errorf("invalid entry_index: %w", err)
 		}
 
-		if batchIdx >= len(file.Batches) {
+		if batchIdx < 0 || batchIdx >= len(file.Batches) {
 			return fmt.Errorf("batch_index %d out of range", batchIdx)
 		}
 
 		entries := file.Batches[batchIdx].GetEntries()
-		if entryIdx >= len(entries) {
+		if entryIdx < 0 || entryIdx >= len(entries) {
 			return fmt.Errorf("entry_index %d out of range for batch %d", entryIdx, batchIdx)
 		}
 
 		entry := entries[entryIdx]
 
 		// Update modifiable fields
-		if idx, ok := headerIndex["transaction_code"]; ok {
+		if idx, ok := headerIndex["transaction_code"]; ok && idx < len(record) {
 			if v, err := strconv.Atoi(record[idx]); err == nil {
 				entry.TransactionCode = v
 			}
 		}
-		if idx, ok := headerIndex["rdfi_identification"]; ok {
+		if idx, ok := headerIndex["rdfi_identification"]; ok && idx < len(record) {
 			entry.RDFIIdentification = record[idx]
 		}
-		if idx, ok := headerIndex["check_digit"]; ok {
+		if idx, ok := headerIndex["check_digit"]; ok && idx < len(record) {
 			entry.CheckDigit = record[idx]
 		}
-		if idx, ok := headerIndex["dfi_account_number"]; ok {
+		if idx, ok := headerIndex["dfi_account_number"]; ok && idx < len(record) {
 			entry.DFIAccountNumber = record[idx]
 		}
-		if idx, ok := headerIndex["amount"]; ok {
+		if idx, ok := headerIndex["amount"]; ok && idx < len(record) {
 			if v, err := strconv.Atoi(record[idx]); err == nil {
 				entry.Amount = v
 			}
 		}
-		if idx, ok := headerIndex["identification_number"]; ok {
+		if idx, ok := headerIndex["identification_number"]; ok && idx < len(record) {
 			entry.IdentificationNumber = record[idx]
 		}
-		if idx, ok := headerIndex["individual_name"]; ok {
+		if idx, ok := headerIndex["individual_name"]; ok && idx < len(record) {
 			entry.IndividualName = record[idx]
 		}
-		if idx, ok := headerIndex["discretionary_data"]; ok {
+		if idx, ok := headerIndex["discretionary_data"]; ok && idx < len(record) {
 			entry.DiscretionaryData = record[idx]
 		}
-		if idx, ok := headerIndex["addenda_record_indicator"]; ok {
+		if idx, ok := headerIndex["addenda_record_indicator"]; ok && idx < len(record) {
 			if v, err := strconv.Atoi(record[idx]); err == nil {
 				entry.AddendaRecordIndicator = v
 			}
 		}
-		if idx, ok := headerIndex["trace_number"]; ok {
+		if idx, ok := headerIndex["trace_number"]; ok && idx < len(record) {
 			entry.TraceNumber = record[idx]
 		}
-		if idx, ok := headerIndex["category"]; ok {
+		if idx, ok := headerIndex["category"]; ok && idx < len(record) {
 			entry.Category = record[idx]
 		}
 	}
@@ -859,7 +798,7 @@ func (ts *TableSet) applyBatchModifications(file *ach.File) error {
 			return fmt.Errorf("invalid batch_index: %w", err)
 		}
 
-		if batchIdx >= len(file.Batches) {
+		if batchIdx < 0 || batchIdx >= len(file.Batches) {
 			return fmt.Errorf("batch_index %d out of range", batchIdx)
 		}
 
@@ -930,12 +869,12 @@ func (ts *TableSet) applyAddendaModifications(file *ach.File) error {
 			return fmt.Errorf("invalid addenda_index: %w", err)
 		}
 
-		if batchIdx >= len(file.Batches) {
+		if batchIdx < 0 || batchIdx >= len(file.Batches) {
 			continue // Skip if batch doesn't exist
 		}
 
 		entries := file.Batches[batchIdx].GetEntries()
-		if entryIdx >= len(entries) {
+		if entryIdx < 0 || entryIdx >= len(entries) {
 			continue // Skip if entry doesn't exist
 		}
 
@@ -951,8 +890,12 @@ func (ts *TableSet) applyAddendaModifications(file *ach.File) error {
 				ts.applyAddenda02Modifications(entry.Addenda02, record, headerIndex)
 			}
 		case "05":
-			if addendaIdx < len(entry.Addenda05) && entry.Addenda05[addendaIdx] != nil {
-				ts.applyAddenda05Modifications(entry.Addenda05[addendaIdx], record, headerIndex)
+			addenda05Idx := addendaIdx
+			if entry.Addenda02 != nil {
+				addenda05Idx--
+			}
+			if addenda05Idx >= 0 && addenda05Idx < len(entry.Addenda05) && entry.Addenda05[addenda05Idx] != nil {
+				ts.applyAddenda05Modifications(entry.Addenda05[addenda05Idx], record, headerIndex)
 			}
 		case "98":
 			if entry.Addenda98 != nil {

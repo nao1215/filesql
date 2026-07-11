@@ -17,36 +17,48 @@ import (
 const (
 	uuidRegexPattern    = `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`
 	dataURIRegexPattern = `^data:[^;]+;base64,[A-Za-z0-9+/]+={0,2}$`
-	emailRegexPattern   = `^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`
+	emailRegexPattern   = `^[A-Za-z0-9_%+\-]+(?:\.[A-Za-z0-9_%+\-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$`
 	numberRegexPattern  = `^[-+]?[0-9]+(\.[0-9]+)?$`
 	fileScheme          = "file"
 
 	// E.164 phone number pattern
-	e164RegexPattern = `^\+[1-9]?[0-9]{7,14}$`
+	e164RegexPattern = `^\+[1-9][0-9]{7,14}$`
 	// Latitude pattern: -90 to 90
 	latitudeRegexPattern = `^[-+]?([1-8]?\d(\.\d+)?|90(\.0+)?)$`
 	// Longitude pattern: -180 to 180
 	longitudeRegexPattern = `^[-+]?(180(\.0+)?|((1[0-7]\d)|([1-9]?\d))(\.\d+)?)$`
 	// UUID version 3 pattern
-	uuid3RegexPattern = `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-3[0-9a-fA-F]{3}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`
+	uuid3RegexPattern = `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-3[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`
 	// UUID version 4 pattern
 	uuid4RegexPattern = `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`
 	// UUID version 5 pattern
 	uuid5RegexPattern = `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-5[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`
 	// ULID pattern (26 characters, Crockford's base32)
-	ulidRegexPattern = `^(?i)[A-HJKMNP-TV-Z0-9]{26}$`
+	ulidRegexPattern = `(?i)^[0-7][0-9A-HJKMNP-TV-Z]{25}$`
 	// Hexadecimal pattern
 	hexadecimalRegexPattern = `^(0[xX])?[0-9a-fA-F]+$`
 	// Hex color pattern (#RGB, #RGBA, #RRGGBB, #RRGGBBAA)
 	hexColorRegexPattern = `^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`
+	// RGB component patterns
+	rgbComponentRegexPattern        = `(?:0|[1-9]\d?|1\d\d|2[0-4]\d|25[0-5])`
+	rgbPercentComponentRegexPattern = `(?:0|[1-9]\d?|100)%`
+	alphaComponentRegexPattern      = `(?:0(?:\.\d+)?|1(?:\.0+)?)`
+	hueComponentRegexPattern        = `(?:0|[1-9]\d?|[12]\d\d|3[0-5]\d|360)`
+	hslPercentComponentRegexPattern = `(?:0|[1-9]\d?|100)%`
 	// RGB color pattern
-	rgbRegexPattern = `^rgb\(\s*(?:(?:0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])\s*,\s*(?:0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])\s*,\s*(?:0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])|(?:0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])%\s*,\s*(?:0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])%\s*,\s*(?:0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])%)\s*\)$`
+	rgbRegexPattern = `^rgb\(\s*(?:` +
+		rgbComponentRegexPattern + `\s*,\s*` + rgbComponentRegexPattern + `\s*,\s*` + rgbComponentRegexPattern +
+		`|` + rgbPercentComponentRegexPattern + `\s*,\s*` + rgbPercentComponentRegexPattern + `\s*,\s*` + rgbPercentComponentRegexPattern +
+		`)\s*\)$`
 	// RGBA color pattern
-	rgbaRegexPattern = `^rgba\(\s*(?:(?:0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])\s*,\s*(?:0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])\s*,\s*(?:0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])|(?:0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])%\s*,\s*(?:0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])%\s*,\s*(?:0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])%)\s*,\s*(?:(?:0.[1-9]*)|[01])\s*\)$`
+	rgbaRegexPattern = `^rgba\(\s*(?:` +
+		rgbComponentRegexPattern + `\s*,\s*` + rgbComponentRegexPattern + `\s*,\s*` + rgbComponentRegexPattern +
+		`|` + rgbPercentComponentRegexPattern + `\s*,\s*` + rgbPercentComponentRegexPattern + `\s*,\s*` + rgbPercentComponentRegexPattern +
+		`)\s*,\s*` + alphaComponentRegexPattern + `\s*\)$`
 	// HSL color pattern
-	hslRegexPattern = `^hsl\(\s*(?:0|[1-9]\d?|[12]\d\d|3[0-5]\d|360)\s*,\s*(?:(?:0|[1-9]\d?|100)%)\s*,\s*(?:(?:0|[1-9]\d?|100)%)\s*\)$`
+	hslRegexPattern = `^hsl\(\s*` + hueComponentRegexPattern + `\s*,\s*` + hslPercentComponentRegexPattern + `\s*,\s*` + hslPercentComponentRegexPattern + `\s*\)$`
 	// HSLA color pattern
-	hslaRegexPattern = `^hsla\(\s*(?:0|[1-9]\d?|[12]\d\d|3[0-5]\d|360)\s*,\s*(?:(?:0|[1-9]\d?|100)%)\s*,\s*(?:(?:0|[1-9]\d?|100)%)\s*,\s*(?:(?:0.[1-9]*)|[01])\s*\)$`
+	hslaRegexPattern = `^hsla\(\s*` + hueComponentRegexPattern + `\s*,\s*` + hslPercentComponentRegexPattern + `\s*,\s*` + hslPercentComponentRegexPattern + `\s*,\s*` + alphaComponentRegexPattern + `\s*\)$`
 )
 
 // Common error messages (to avoid goconst warnings)
@@ -752,13 +764,16 @@ func (v *uriValidator) Validate(value string) string {
 		return "value must be a valid URI"
 	}
 
-	// Strip fragment before parsing
-	s := value
-	if i := strings.Index(s, "#"); i > -1 {
-		s = s[:i]
+	if strings.ContainsAny(value, " \t\r\n") {
+		return "value must be a valid URI"
 	}
 
-	if _, err := url.ParseRequestURI(s); err != nil {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" {
+		return "value must be a valid URI"
+	}
+
+	if parsed.Host == "" && parsed.Opaque == "" && parsed.Path == "" {
 		return "value must be a valid URI"
 	}
 	return ""
@@ -1208,7 +1223,7 @@ func (v *hostnamePortValidator) Validate(value string) string {
 	}
 
 	// Validate as hostname
-	if validateHostnameWithRegex(host, hostnameRFC1123LabelRegex, "") != "" {
+	if validateHostnameWithRegex(host, hostnameRFC1123LabelRegex, errMsgValidHostnamePort) != "" {
 		return errMsgValidHostnamePort
 	}
 	return ""

@@ -63,7 +63,7 @@ func inferColumnType(records [][]string, colIndex int) ColumnType {
 	total := len(values)
 
 	// Determine type based on majority
-	if float64(intCount)/float64(total) >= minConfidenceThreshold {
+	if float64(intCount)/float64(total) >= minConfidenceThreshold && floatCount == 0 {
 		return TypeInteger
 	}
 	if float64(intCount+floatCount)/float64(total) >= minConfidenceThreshold {
@@ -173,19 +173,19 @@ func isDatetime(s string) bool {
 //   - TypeText: returns string as-is
 //   - Empty values return nil
 func ParseValue(value string, colType ColumnType) any {
-	value = strings.TrimSpace(value)
-	if value == "" {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
 		return nil
 	}
 
 	switch colType {
 	case TypeInteger:
-		if i, err := strconv.ParseInt(value, 10, 64); err == nil {
+		if i, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
 			return i
 		}
 		return value
 	case TypeReal:
-		if f, err := strconv.ParseFloat(value, 64); err == nil {
+		if f, err := strconv.ParseFloat(trimmed, 64); err == nil {
 			return f
 		}
 		return value

@@ -298,6 +298,44 @@ func parseRequiredIfParams(value string) (string, string) {
 	return field, expectedVal
 }
 
+func buildCrossFieldValidator(
+	tagName string,
+	value string,
+	strict bool,
+	factory func(string) CrossFieldValidator,
+) (CrossFieldValidator, error) {
+	if strings.TrimSpace(value) == "" {
+		if strict {
+			return nil, fmt.Errorf("%w: %s requires a field name", ErrInvalidTagFormat, tagName)
+		}
+		return nil, nil //nolint:nilnil // non-strict mode silently ignores invalid args
+	}
+
+	return factory(value), nil
+}
+
+func buildConditionalCrossFieldValidator(
+	tagName string,
+	value string,
+	strict bool,
+	factory func(string, string) CrossFieldValidator,
+) (CrossFieldValidator, error) {
+	field, expectedVal := parseRequiredIfParams(value)
+	if field == "" || expectedVal == "" {
+		if strict {
+			return nil, fmt.Errorf(
+				"%w: %s requires \"FieldName value\" format, got %q",
+				ErrInvalidTagFormat,
+				tagName,
+				value,
+			)
+		}
+		return nil, nil //nolint:nilnil // non-strict mode silently ignores invalid args
+	}
+
+	return factory(field, expectedVal), nil
+}
+
 // validatorBuilder creates a Validator from a tag value parameter.
 // Returns the validator (nil if parameter is invalid in non-strict mode) and an error in strict mode.
 type validatorBuilder func(value string, strict bool) (Validator, error)
@@ -363,9 +401,9 @@ var validatorRegistry = map[string]validatorBuilder{
 	},
 	lengthTagValue: func(value string, strict bool) (Validator, error) {
 		length, err := strconv.Atoi(value)
-		if err != nil {
+		if err != nil || length <= 0 {
 			if strict {
-				return nil, fmt.Errorf("%w: len requires an integer value, got %q", ErrInvalidTagFormat, value)
+				return nil, fmt.Errorf("%w: len requires a positive integer value, got %q", ErrInvalidTagFormat, value)
 			}
 			return nil, nil //nolint:nilnil // non-strict mode silently ignores invalid args
 		}
@@ -574,8 +612,12 @@ func parseValidateTag(tag string, strict bool) (validators, crossFieldValidators
 
 		// Check cross-field validator registry
 		if builder, ok := crossFieldValidatorRegistry[key]; ok {
-			if value != "" {
-				crossVals = append(crossVals, builder(value))
+			cv, err := buildCrossFieldValidator(key, value, strict, builder)
+			if err != nil {
+				return nil, nil, err
+			}
+			if cv != nil {
+				crossVals = append(crossVals, cv)
 			}
 			continue
 		}
@@ -583,18 +625,34 @@ func parseValidateTag(tag string, strict bool) (validators, crossFieldValidators
 		// Conditional required validators need special parsing (two-parameter format)
 		switch key {
 		case requiredIfTagValue:
-			if value != "" {
-				field, expectedVal := parseRequiredIfParams(value)
-				if field != "" {
-					crossVals = append(crossVals, newRequiredIfValidator(field, expectedVal))
-				}
+			cv, err := buildConditionalCrossFieldValidator(
+				key,
+				value,
+				strict,
+				func(field string, expected string) CrossFieldValidator {
+					return newRequiredIfValidator(field, expected)
+				},
+			)
+			if err != nil {
+				return nil, nil, err
+			}
+			if cv != nil {
+				crossVals = append(crossVals, cv)
 			}
 		case requiredUnlessTagValue:
-			if value != "" {
-				field, exceptVal := parseRequiredIfParams(value)
-				if field != "" {
-					crossVals = append(crossVals, newRequiredUnlessValidator(field, exceptVal))
-				}
+			cv, err := buildConditionalCrossFieldValidator(
+				key,
+				value,
+				strict,
+				func(field string, expected string) CrossFieldValidator {
+					return newRequiredUnlessValidator(field, expected)
+				},
+			)
+			if err != nil {
+				return nil, nil, err
+			}
+			if cv != nil {
+				crossVals = append(crossVals, cv)
 			}
 		default:
 			return nil, nil, fmt.Errorf("%w: unknown validate tag %q", ErrInvalidTagFormat, part)

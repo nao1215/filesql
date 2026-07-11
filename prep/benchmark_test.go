@@ -2,6 +2,7 @@ package prep
 
 import (
 	"bytes"
+	"encoding/csv"
 	"fmt"
 	"strings"
 	"testing"
@@ -11,53 +12,54 @@ import (
 // This struct is designed to test real-world preprocessing and validation scenarios.
 type BenchmarkRecord struct {
 	// Basic text fields with common preprocessing
-	FirstName  string `name:"first_name" prep:"trim,lowercase" validate:"required,alpha,min=2,max=50"`
-	LastName   string `name:"last_name" prep:"trim,lowercase" validate:"required,alpha,min=2,max=50"`
-	MiddleName string `name:"middle_name" prep:"trim,lowercase,default=N/A" validate:"alpha"`
+	FirstName  string `name:"first_name" prep:"trim,lowercase" validate:"required,alpha,min=2,max=50"` // FirstName holds the given name.
+	LastName   string `name:"last_name" prep:"trim,lowercase" validate:"required,alpha,min=2,max=50"`  // LastName holds the family name.
+	MiddleName string `name:"middle_name" prep:"trim,lowercase,default=N/A" validate:"alpha"`          // MiddleName holds the optional middle name.
 
 	// Email with extensive preprocessing and validation
-	Email string `name:"email" prep:"trim,lowercase,collapse_space" validate:"required,email"`
+	Email string `name:"email" prep:"trim,lowercase,collapse_space" validate:"required,email"` // Email holds the contact address.
 
 	// Numeric fields with validation
-	Age    string `name:"age" prep:"trim,keep_digits" validate:"required,numeric,min=0,max=150"`
-	Salary string `name:"salary" prep:"trim,keep_digits" validate:"numeric,min=0"`
-	Score  string `name:"score" prep:"trim" validate:"number,min=0,max=100"`
+	Age    string `name:"age" prep:"trim,keep_digits" validate:"required,numeric,min=0,max=150"` // Age holds the normalized age.
+	Salary string `name:"salary" prep:"trim,keep_digits" validate:"numeric,min=0"`               // Salary holds the annual salary digits.
+	Score  string `name:"score" prep:"trim" validate:"number,min=0,max=100"`                     // Score holds a decimal score.
 
 	// ID fields with formatting
-	UserID     string `name:"user_id" prep:"trim,uppercase,pad_left=10:0" validate:"required,alphanumeric"`
-	EmployeeID string `name:"employee_id" prep:"trim,pad_left=8:0" validate:"numeric"`
+	UserID     string `name:"user_id" prep:"trim,uppercase,pad_left=10:0" validate:"required,alphanumeric"` // UserID holds the external user identifier.
+	EmployeeID string `name:"employee_id" prep:"trim,pad_left=8:0" validate:"numeric"`                      // EmployeeID holds the internal employee identifier.
 
 	// URL and network fields
-	Website string `name:"website" prep:"trim,lowercase,fix_scheme=https" validate:"url"`
-	IPAddr  string `name:"ip_addr" prep:"trim" validate:"ip_addr"`
+	Website string `name:"website" prep:"trim,lowercase,fix_scheme=https" validate:"url"` // Website holds the user-facing URL.
+	IPAddr  string `name:"ip_addr" prep:"trim" validate:"ip_addr"`                        // IPAddr holds the source IP address.
 
 	// Text content with HTML handling
-	Bio         string `name:"bio" prep:"trim,strip_html,collapse_space,truncate=500" validate:"printascii"`
-	Description string `name:"description" prep:"trim,strip_newline,collapse_space" validate:"ascii"`
+	Bio         string `name:"bio" prep:"trim,strip_html,collapse_space,truncate=500" validate:"printascii"` // Bio holds the rich-text biography.
+	Description string `name:"description" prep:"trim,strip_newline,collapse_space" validate:"ascii"`        // Description holds the free-form description.
 
 	// Status and category fields
-	Status   string `name:"status" prep:"trim,uppercase" validate:"required,oneof=ACTIVE INACTIVE PENDING"`
-	Category string `name:"category" prep:"trim,lowercase" validate:"required,alpha"`
+	Status   string `name:"status" prep:"trim,uppercase" validate:"required,oneof=ACTIVE INACTIVE PENDING"` // Status holds the workflow state.
+	Category string `name:"category" prep:"trim,lowercase" validate:"required,alpha"`                       // Category holds the business category.
 
 	// Date-like fields
-	CreatedAt string `name:"created_at" prep:"trim" validate:"required"`
-	UpdatedAt string `name:"updated_at" prep:"trim"`
+	CreatedAt string `name:"created_at" prep:"trim" validate:"required"` // CreatedAt holds the creation date.
+	UpdatedAt string `name:"updated_at" prep:"trim"`                     // UpdatedAt holds the update date.
 
 	// Phone number with character filtering
-	Phone string `name:"phone" prep:"trim,keep_digits,pad_left=10:0" validate:"numeric,len=10"`
+	Phone string `name:"phone" prep:"trim,keep_digits,pad_left=10:0" validate:"numeric,len=10"` // Phone holds the normalized local phone number.
 
 	// UUID field
-	UUID string `name:"uuid" prep:"trim,lowercase" validate:"uuid"`
+	UUID string `name:"uuid" prep:"trim,lowercase" validate:"uuid"` // UUID holds the record identifier.
 
 	// Fields with cross-field validation (reference only, validated separately)
-	Password        string `name:"password" prep:"trim" validate:"required,min=8"`
-	ConfirmPassword string `name:"confirm_password" prep:"trim" validate:"required,eqfield=Password"`
+	Password        string `name:"password" prep:"trim" validate:"required,min=8"`                    // Password holds the normalized password input.
+	ConfirmPassword string `name:"confirm_password" prep:"trim" validate:"required,eqfield=Password"` // ConfirmPassword holds the confirmation input.
 }
 
 // generateBenchmarkCSV creates a CSV with the specified number of records.
 // Data is realistic and designed to exercise various preprocessors and validators.
 func generateBenchmarkCSV(numRecords int) string {
 	var buf bytes.Buffer
+	writer := csv.NewWriter(&buf)
 
 	// Header row
 	headers := []string{
@@ -66,8 +68,9 @@ func generateBenchmarkCSV(numRecords int) string {
 		"status", "category", "created_at", "updated_at", "phone", "uuid",
 		"password", "confirm_password",
 	}
-	buf.WriteString(strings.Join(headers, ","))
-	buf.WriteString("\n")
+	if err := writer.Write(headers); err != nil {
+		panic(err)
+	}
 
 	// Sample data templates (will be rotated)
 	firstNames := []string{"  John  ", " JANE ", "  bob  ", " Alice ", "  CHARLIE  "}
@@ -100,8 +103,14 @@ func generateBenchmarkCSV(numRecords int) string {
 			fmt.Sprintf("Password%d!", i),
 			fmt.Sprintf("Password%d!", i),
 		}
-		buf.WriteString(strings.Join(fields, ","))
-		buf.WriteString("\n")
+		if err := writer.Write(fields); err != nil {
+			panic(err)
+		}
+	}
+
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		panic(err)
 	}
 
 	return buf.String()

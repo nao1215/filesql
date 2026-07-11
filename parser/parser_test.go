@@ -10,6 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func closeFileOnCleanup(t *testing.T, f *os.File, name string) {
+	t.Helper()
+
+	t.Cleanup(func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("close %s: %v", name, err)
+		}
+	})
+}
+
 func TestParse_CSV(t *testing.T) {
 	t.Parallel()
 
@@ -59,7 +69,7 @@ func TestParse_CSV(t *testing.T) {
 
 		_, err := Parse(reader, CSV)
 
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "empty CSV data")
 	})
 
@@ -68,7 +78,7 @@ func TestParse_CSV(t *testing.T) {
 
 		_, err := Parse(nil, CSV)
 
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "reader cannot be nil")
 	})
 
@@ -80,7 +90,7 @@ func TestParse_CSV(t *testing.T) {
 
 		_, err := Parse(reader, CSV)
 
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "duplicate column name")
 	})
 }
@@ -157,7 +167,7 @@ func TestParse_FromTestdata(t *testing.T) {
 
 		f, err := os.Open(filepath.Join(testdataDir, "sample.csv"))
 		require.NoError(t, err)
-		defer f.Close()
+		closeFileOnCleanup(t, f, "sample.csv")
 
 		result, err := Parse(f, CSV)
 
@@ -171,7 +181,7 @@ func TestParse_FromTestdata(t *testing.T) {
 
 		f, err := os.Open(filepath.Join(testdataDir, "sample.csv.gz"))
 		require.NoError(t, err)
-		defer f.Close()
+		closeFileOnCleanup(t, f, "sample.csv.gz")
 
 		result, err := Parse(f, CSVGZ)
 
@@ -185,7 +195,7 @@ func TestParse_FromTestdata(t *testing.T) {
 
 		f, err := os.Open(filepath.Join(testdataDir, "products.tsv"))
 		require.NoError(t, err)
-		defer f.Close()
+		closeFileOnCleanup(t, f, "products.tsv")
 
 		result, err := Parse(f, TSV)
 
@@ -199,7 +209,7 @@ func TestParse_FromTestdata(t *testing.T) {
 
 		f, err := os.Open(filepath.Join(testdataDir, "logs.ltsv"))
 		require.NoError(t, err)
-		defer f.Close()
+		closeFileOnCleanup(t, f, "logs.ltsv")
 
 		result, err := Parse(f, LTSV)
 
@@ -213,7 +223,7 @@ func TestParse_FromTestdata(t *testing.T) {
 
 		f, err := os.Open(filepath.Join(testdataDir, "excel", "sample.xlsx"))
 		require.NoError(t, err)
-		defer f.Close()
+		closeFileOnCleanup(t, f, "excel/sample.xlsx")
 
 		result, err := Parse(f, XLSX)
 
@@ -582,7 +592,7 @@ func TestCreateDecompressedReader_InvalidGzip(t *testing.T) {
 
 	_, _, err := createDecompressedReader(input, CSVGZ)
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "gzip")
 }
 
@@ -593,7 +603,7 @@ func TestCreateDecompressedReader_InvalidXZ(t *testing.T) {
 
 	_, _, err := createDecompressedReader(input, CSVXZ)
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "xz")
 }
 
@@ -606,13 +616,10 @@ func TestCreateDecompressedReader_InvalidZSTD(t *testing.T) {
 	// so we just verify the reader is created
 	reader, closeFunc, err := createDecompressedReader(input, CSVZSTD)
 
-	// zstd decoder creation might succeed even with invalid data
-	// The error would occur during read
-	if err == nil {
-		assert.NotNil(t, reader)
-		if closeFunc != nil {
-			assert.NoError(t, closeFunc())
-		}
+	require.NoError(t, err)
+	assert.NotNil(t, reader)
+	if closeFunc != nil {
+		assert.NoError(t, closeFunc())
 	}
 }
 
@@ -636,7 +643,7 @@ func TestParse_UnsupportedFileType(t *testing.T) {
 
 	_, err := Parse(input, Unsupported)
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported")
 }
 
@@ -694,7 +701,7 @@ func TestParse_NewCompressionFormats(t *testing.T) {
 
 		f, err := os.Open(filepath.Join(testdataDir, "sample.csv.z"))
 		require.NoError(t, err)
-		defer f.Close()
+		closeFileOnCleanup(t, f, "sample.csv.z")
 
 		result, err := Parse(f, CSVZLIB)
 
@@ -708,7 +715,7 @@ func TestParse_NewCompressionFormats(t *testing.T) {
 
 		f, err := os.Open(filepath.Join(testdataDir, "sample.csv.snappy"))
 		require.NoError(t, err)
-		defer f.Close()
+		closeFileOnCleanup(t, f, "sample.csv.snappy")
 
 		result, err := Parse(f, CSVSNAPPY)
 
@@ -722,7 +729,7 @@ func TestParse_NewCompressionFormats(t *testing.T) {
 
 		f, err := os.Open(filepath.Join(testdataDir, "sample.csv.s2"))
 		require.NoError(t, err)
-		defer f.Close()
+		closeFileOnCleanup(t, f, "sample.csv.s2")
 
 		result, err := Parse(f, CSVS2)
 
@@ -736,7 +743,7 @@ func TestParse_NewCompressionFormats(t *testing.T) {
 
 		f, err := os.Open(filepath.Join(testdataDir, "sample.csv.lz4"))
 		require.NoError(t, err)
-		defer f.Close()
+		closeFileOnCleanup(t, f, "sample.csv.lz4")
 
 		result, err := Parse(f, CSVLZ4)
 
@@ -751,7 +758,7 @@ func TestParse_NewCompressionFormats(t *testing.T) {
 
 		f, err := os.Open(filepath.Join(testdataDir, "products.tsv.z"))
 		require.NoError(t, err)
-		defer f.Close()
+		closeFileOnCleanup(t, f, "products.tsv.z")
 
 		result, err := Parse(f, TSVZLIB)
 
@@ -765,7 +772,7 @@ func TestParse_NewCompressionFormats(t *testing.T) {
 
 		f, err := os.Open(filepath.Join(testdataDir, "products.tsv.snappy"))
 		require.NoError(t, err)
-		defer f.Close()
+		closeFileOnCleanup(t, f, "products.tsv.snappy")
 
 		result, err := Parse(f, TSVSNAPPY)
 
@@ -779,7 +786,7 @@ func TestParse_NewCompressionFormats(t *testing.T) {
 
 		f, err := os.Open(filepath.Join(testdataDir, "products.tsv.s2"))
 		require.NoError(t, err)
-		defer f.Close()
+		closeFileOnCleanup(t, f, "products.tsv.s2")
 
 		result, err := Parse(f, TSVS2)
 
@@ -793,7 +800,7 @@ func TestParse_NewCompressionFormats(t *testing.T) {
 
 		f, err := os.Open(filepath.Join(testdataDir, "products.tsv.lz4"))
 		require.NoError(t, err)
-		defer f.Close()
+		closeFileOnCleanup(t, f, "products.tsv.lz4")
 
 		result, err := Parse(f, TSVLZ4)
 
@@ -808,7 +815,7 @@ func TestParse_NewCompressionFormats(t *testing.T) {
 
 		f, err := os.Open(filepath.Join(testdataDir, "logs.ltsv.z"))
 		require.NoError(t, err)
-		defer f.Close()
+		closeFileOnCleanup(t, f, "logs.ltsv.z")
 
 		result, err := Parse(f, LTSVZLIB)
 
@@ -822,7 +829,7 @@ func TestParse_NewCompressionFormats(t *testing.T) {
 
 		f, err := os.Open(filepath.Join(testdataDir, "logs.ltsv.snappy"))
 		require.NoError(t, err)
-		defer f.Close()
+		closeFileOnCleanup(t, f, "logs.ltsv.snappy")
 
 		result, err := Parse(f, LTSVSNAPPY)
 
@@ -836,7 +843,7 @@ func TestParse_NewCompressionFormats(t *testing.T) {
 
 		f, err := os.Open(filepath.Join(testdataDir, "logs.ltsv.s2"))
 		require.NoError(t, err)
-		defer f.Close()
+		closeFileOnCleanup(t, f, "logs.ltsv.s2")
 
 		result, err := Parse(f, LTSVS2)
 
@@ -850,7 +857,7 @@ func TestParse_NewCompressionFormats(t *testing.T) {
 
 		f, err := os.Open(filepath.Join(testdataDir, "logs.ltsv.lz4"))
 		require.NoError(t, err)
-		defer f.Close()
+		closeFileOnCleanup(t, f, "logs.ltsv.lz4")
 
 		result, err := Parse(f, LTSVLZ4)
 
@@ -867,7 +874,7 @@ func TestCreateDecompressedReader_InvalidZlib(t *testing.T) {
 
 	_, _, err := createDecompressedReader(input, CSVZLIB)
 
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "zlib")
 }
 

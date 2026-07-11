@@ -139,6 +139,17 @@ func TestInferColumnTypes(t *testing.T) {
 
 		assert.Equal(t, TypeText, types[0])
 	})
+
+	t.Run("promotes mixed integer and real values to real", func(t *testing.T) {
+		t.Parallel()
+
+		headers := []string{"amount"}
+		records := [][]string{{"1"}, {"2"}, {"3"}, {"4"}, {"1.5"}}
+
+		types := inferColumnTypes(headers, records)
+
+		assert.Equal(t, TypeReal, types[0])
+	})
 }
 
 func TestParseValue(t *testing.T) {
@@ -166,6 +177,22 @@ func TestParseValue(t *testing.T) {
 		result := ParseValue("hello", TypeText)
 
 		assert.Equal(t, "hello", result)
+	})
+
+	t.Run("preserves whitespace for text type", func(t *testing.T) {
+		t.Parallel()
+
+		result := ParseValue("  hello  ", TypeText)
+
+		assert.Equal(t, "  hello  ", result)
+	})
+
+	t.Run("preserves whitespace for datetime type", func(t *testing.T) {
+		t.Parallel()
+
+		result := ParseValue(" 2024-01-15 ", TypeDatetime)
+
+		assert.Equal(t, " 2024-01-15 ", result)
 	})
 
 	t.Run("returns nil for empty value", func(t *testing.T) {

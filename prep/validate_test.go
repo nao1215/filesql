@@ -886,13 +886,12 @@ func TestEmailValidator_BoundaryConditions(t *testing.T) {
 		{"single char TLD", "user@example.a", true},
 		{"numeric TLD", "user@example.123", true},
 
-		// NOTE: Current regex allows these edge cases (documenting actual behavior)
-		// A stricter email validation might reject these
-		{"leading dot in local - allowed by current regex", ".user@example.com", false},
-		{"trailing dot in local - allowed by current regex", "user.@example.com", false},
-		{"consecutive dots in local - allowed by current regex", "user..name@example.com", false},
-		{"leading dot in domain - allowed by current regex", "user@.example.com", false},
-		{"only dots in local - allowed by current regex", "...@example.com", false},
+		// Invalid: dot placement
+		{"leading dot in local", ".user@example.com", true},
+		{"trailing dot in local", "user.@example.com", true},
+		{"consecutive dots in local", "user..name@example.com", true},
+		{"leading dot in domain", "user@.example.com", true},
+		{"only dots in local", "...@example.com", true},
 	}
 
 	v := newEmailValidator()
@@ -920,6 +919,7 @@ func TestURIValidator(t *testing.T) {
 		{"https://example.com/path", false},
 		{"ftp://example.com", false},
 		{"http://example.com#fragment", false},
+		{"http://example.com#frag ment", true},
 		{"", true},
 		{"invalid", true},
 	}
@@ -1954,6 +1954,7 @@ func TestE164Validator(t *testing.T) {
 		{"12025551234", true},
 		{"+1", true},
 		{"+123456", true},
+		{"+0123456789", true},
 		{"invalid", true},
 	}
 
@@ -2059,6 +2060,7 @@ func TestUUID3Validator(t *testing.T) {
 		{"a3bb189e-8bf9-3888-9912-ace4e6543002", false},
 		{"A3BB189E-8BF9-3888-9912-ACE4E6543002", false},
 		{"550e8400-e29b-41d4-a716-446655440000", true}, // UUID v4
+		{"a3bb189e-8bf9-3888-7912-ace4e6543002", true}, // invalid variant for UUID v3
 		{"invalid", true},
 		{"", true},
 	}
@@ -2154,6 +2156,7 @@ func TestULIDValidator(t *testing.T) {
 	}{
 		{"01ARZ3NDEKTSV4RRFFQ69G5FAV", false},
 		{"01arZ3NdEKTSV4RRFFQ69G5FAV", false},
+		{"81ARZ3NDEKTSV4RRFFQ69G5FAV", true}, // exceeds ULID max value prefix
 		{"invalid", true},
 		{"01ARZ3NDEKTSV4RRFFQ69G5FA", true}, // too short
 		{"", true},
@@ -2258,9 +2261,11 @@ func TestRGBValidator(t *testing.T) {
 		{"rgb(0, 0, 0)", false},
 		{"rgb(255, 255, 255)", false},
 		{"rgb(100, 100, 100)", false},
+		{"rgb(100%, 0%, 50%)", false},
 		{"", false}, // empty is valid
 		{"rgb(256, 0, 0)", true},
 		{"rgb(-1, 0, 0)", true},
+		{"rgb(255%, 0%, 0%)", true},
 		{"invalid", true},
 	}
 
@@ -2292,8 +2297,11 @@ func TestRGBAValidator(t *testing.T) {
 		{"rgba(0, 0, 0, 0)", false},
 		{"rgba(255, 255, 255, 1)", false},
 		{"rgba(100, 100, 100, 0.5)", false},
+		{"rgba(10%, 20%, 30%, 0.0)", false},
 		{"", false}, // empty is valid
 		{"rgba(256, 0, 0, 0)", true},
+		{"rgba(255%, 0%, 0%, 0.5)", true},
+		{"rgba(0, 0, 0, 0x5)", true},
 		{"invalid", true},
 	}
 
@@ -2358,8 +2366,10 @@ func TestHSLAValidator(t *testing.T) {
 		{"hsla(0, 0%, 0%, 0)", false},
 		{"hsla(360, 100%, 100%, 1)", false},
 		{"hsla(180, 50%, 50%, 0.5)", false},
+		{"hsla(180, 50%, 50%, 0.0)", false},
 		{"", false}, // empty is valid
 		{"hsla(361, 0%, 0%, 0)", true},
+		{"hsla(180, 50%, 50%, 0x5)", true},
 		{"invalid", true},
 	}
 

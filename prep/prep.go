@@ -630,6 +630,21 @@ func (p *fixSchemePreprocessor) Process(value string) string {
 		return value
 	}
 
+	if scheme, rest, found := strings.Cut(trimmed, "://"); found {
+		if strings.EqualFold(scheme, "http") {
+			if p.scheme == httpsSchemeType {
+				return httpsSchemeType + "://" + rest
+			}
+			return trimmed
+		}
+		if strings.EqualFold(scheme, httpsSchemeType) {
+			return trimmed
+		}
+
+		// Preserve non-HTTP schemes instead of prepending another scheme.
+		return trimmed
+	}
+
 	// Check if URL already has a scheme
 	if strings.HasPrefix(trimmed, "http://") {
 		if p.scheme == httpsSchemeType {

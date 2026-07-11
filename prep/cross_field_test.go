@@ -1062,7 +1062,7 @@ func TestCrossFieldValidation_Processor(t *testing.T) {
 	t.Run("cross-field validation with missing source column treats value as empty string", func(t *testing.T) {
 		t.Parallel()
 		// CSV has only target_field column; source value will be "" which equals ""
-		csvData := "target_field\n\n"
+		csvData := "target_field\n\"\"\n"
 		var records []MissingSrcField
 
 		processor := NewProcessor(FileTypeCSV)
@@ -1074,6 +1074,9 @@ func TestCrossFieldValidation_Processor(t *testing.T) {
 		// srcValue="" == targetValue="" so eqfield should pass
 		if len(result.Errors) != 0 {
 			t.Errorf("expected 0 errors when both fields are empty, got %d: %v", len(result.Errors), result.Errors)
+		}
+		if result.ValidRowCount != 1 {
+			t.Errorf("expected 1 valid row, got %d", result.ValidRowCount)
 		}
 	})
 }

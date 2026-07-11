@@ -10,7 +10,7 @@ import (
 )
 
 // parseXLSX parses Excel XLSX data.
-func parseXLSX(reader io.Reader) (*TableData, error) {
+func parseXLSX(reader io.Reader) (table *TableData, err error) {
 	// Read all data into memory (excelize requires this)
 	data, err := io.ReadAll(reader)
 	if err != nil {
@@ -21,7 +21,11 @@ func parseXLSX(reader io.Reader) (*TableData, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open XLSX: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close XLSX: %w", closeErr)
+		}
+	}()
 
 	// Get the first sheet
 	sheets := f.GetSheetList()

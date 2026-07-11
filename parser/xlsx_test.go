@@ -60,6 +60,7 @@ func TestParseXLSX_ErrorCases(t *testing.T) {
 	t.Parallel()
 
 	t.Run("handles xlsx with no sheets", func(t *testing.T) {
+		t.Parallel()
 		// This test verifies error handling for empty workbook
 		// Note: Creating an actual XLSX file with no sheets is complex
 		// We primarily test the error path through invalid data

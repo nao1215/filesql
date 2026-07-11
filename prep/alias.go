@@ -6,7 +6,7 @@ import "github.com/nao1215/filesql/parser"
 // FileType is an alias for parser.FileType for backward compatibility.
 type FileType = parser.FileType
 
-// File type constants re-exported from fileparser for backward compatibility.
+// File type constants re-exported from parser for backward compatibility.
 const (
 	FileTypeCSV         = parser.CSV
 	FileTypeTSV         = parser.TSV

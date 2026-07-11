@@ -14,8 +14,15 @@
 // # Basic Usage
 //
 //	// Create DataFrame from CSV
-//	f, _ := os.Open("sales.csv")
-//	defer f.Close()
+//	f, err := os.Open("sales.csv")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	defer func() {
+//	    if err := f.Close(); err != nil {
+//	        log.Fatal(err)
+//	    }
+//	}()
 //
 //	df, err := frame.NewDataFrame(f, frame.CSV)
 //	if err != nil {
@@ -36,7 +43,9 @@
 //	    Sum("amount")
 //
 //	// Output to CSV
-//	grouped.ToCSV("summary.csv")
+//	if err := grouped.ToCSV("summary.csv"); err != nil {
+//	    log.Fatal(err)
+//	}
 //
 // # Architecture
 //
