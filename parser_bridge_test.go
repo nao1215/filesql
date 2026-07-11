@@ -8,14 +8,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestParserFileType(t *testing.T) {
-	t.Parallel()
+type fileTypePair struct {
+	name    string
+	filesql FileType
+	parser  parser.FileType
+}
 
-	tests := []struct {
-		name     string
-		input    FileType
-		expected parser.FileType
-	}{
+func parserBackedFileTypePairs() []fileTypePair {
+	return []fileTypePair{
 		// Base types
 		{"CSV", FileTypeCSV, parser.CSV},
 		{"TSV", FileTypeTSV, parser.TSV},
@@ -102,18 +102,49 @@ func TestParserFileType(t *testing.T) {
 		{"JSONL SNAPPY", FileTypeJSONLSNAPPY, parser.JSONLSNAPPY},
 		{"JSONL S2", FileTypeJSONLS2, parser.JSONLS2},
 		{"JSONL LZ4", FileTypeJSONLLZ4, parser.JSONLLZ4},
-
-		// Unsupported / default case
-		{"Unsupported", FileTypeUnsupported, parser.Unsupported},
-		{"Unknown type", FileType(9999), parser.Unsupported},
 	}
+}
 
-	for _, tt := range tests {
+func TestParserFileType(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range parserBackedFileTypePairs() {
 		t.Run(tt.name, func(t *testing.T) {
-			result := parserFileType(tt.input)
-			assert.Equal(t, tt.expected, result)
+			result := parserFileType(tt.filesql)
+			assert.Equal(t, tt.parser, result)
 		})
 	}
+
+	t.Run("Unsupported", func(t *testing.T) {
+		result := parserFileType(FileTypeUnsupported)
+		assert.Equal(t, parser.Unsupported, result)
+	})
+
+	t.Run("Unknown type", func(t *testing.T) {
+		result := parserFileType(FileType(9999))
+		assert.Equal(t, parser.Unsupported, result)
+	})
+}
+
+func TestFilesqlFileType(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range parserBackedFileTypePairs() {
+		t.Run(tt.name, func(t *testing.T) {
+			result := filesqlFileType(tt.parser)
+			assert.Equal(t, tt.filesql, result)
+		})
+	}
+
+	t.Run("Unsupported", func(t *testing.T) {
+		result := filesqlFileType(parser.Unsupported)
+		assert.Equal(t, FileTypeUnsupported, result)
+	})
+
+	t.Run("Unknown type", func(t *testing.T) {
+		result := filesqlFileType(parser.FileType(9999))
+		assert.Equal(t, FileTypeUnsupported, result)
+	})
 }
 
 func TestParserColumnType(t *testing.T) {
