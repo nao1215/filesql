@@ -68,10 +68,7 @@ func compareLegacyAndCurrentParseResult(
 	if (currentErr != nil) != (legacyErr != nil) {
 		t.Fatalf("error presence mismatch: current=%v legacy=%v", currentErr, legacyErr)
 	}
-	if currentErr != nil || legacyErr != nil {
-		if currentErr == nil || legacyErr == nil {
-			t.Fatalf("unexpected nil error: current=%v legacy=%v", currentErr, legacyErr)
-		}
+	if currentErr != nil {
 		if currentErr.Error() != legacyErr.Error() {
 			t.Fatalf("error mismatch:\ncurrent: %s\nlegacy:  %s", currentErr.Error(), legacyErr.Error())
 		}
@@ -155,6 +152,7 @@ func TestLegacyCompatibility_ParseRepresentativeErrors(t *testing.T) {
 	testCases := []struct {
 		name        string
 		input       []byte
+		path        string
 		currentType parser.FileType
 		legacyType  legacyparser.FileType
 	}{
@@ -166,7 +164,7 @@ func TestLegacyCompatibility_ParseRepresentativeErrors(t *testing.T) {
 		},
 		{
 			name:        "duplicate csv columns",
-			input:       readLegacyCompatFixture(t, filepath.Join("testdata", "duplicate_columns.csv")),
+			path:        filepath.Join("testdata", "duplicate_columns.csv"),
 			currentType: parser.CSV,
 			legacyType:  legacyparser.CSV,
 		},
@@ -187,7 +185,13 @@ func TestLegacyCompatibility_ParseRepresentativeErrors(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			compareLegacyAndCurrentParseResult(t, tc.input, tc.currentType, tc.legacyType)
+
+			input := tc.input
+			if tc.path != "" {
+				input = readLegacyCompatFixture(t, tc.path)
+			}
+
+			compareLegacyAndCurrentParseResult(t, input, tc.currentType, tc.legacyType)
 		})
 	}
 }
