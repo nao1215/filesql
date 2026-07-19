@@ -9,6 +9,10 @@ import (
 	"github.com/nao1215/filesql/prep"
 )
 
+func readAllExampleOutput(reader io.Reader) ([]byte, error) {
+	return io.ReadAll(reader)
+}
+
 // User represents a user record with preprocessing and validation
 type User struct {
 	Name  string `prep:"trim" validate:"required"`
@@ -166,7 +170,10 @@ func Example_complexPrepAndValidation() {
 	}
 
 	// The reader can be used with filesql
-	_, _ = io.ReadAll(reader) //nolint:errcheck // Example code - ignoring error
+	if _, err := readAllExampleOutput(reader); err != nil {
+		fmt.Printf("Error reading output: %v\n", err)
+		return
+	}
 
 	// Output:
 	// Processing Summary:
@@ -284,7 +291,11 @@ func Example_jsonProcessing() {
 		fmt.Printf("Row %d: %s\n", i+1, r.Data)
 	}
 
-	output, _ := io.ReadAll(reader) //nolint:errcheck // Example code
+	output, err := readAllExampleOutput(reader)
+	if err != nil {
+		fmt.Printf("Error reading output: %v\n", err)
+		return
+	}
 	fmt.Printf("JSONL output:\n%s", output)
 
 	// Output:

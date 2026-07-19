@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-07-19
+
+### Added
+- **`prep` is now part of this repository and ships as a first-class companion package.** It preprocesses and validates CSV, TSV, LTSV, JSON, JSONL, Parquet, and XLSX inputs with struct tags, then hands cleaned rows back as an `io.Reader` ready for `filesql`.
+- **`frame` is now part of this repository and ships as a first-class companion package.** It provides immutable, Go-style in-memory transforms for small and medium datasets: filtering, mutation, joins, concatenation, grouping, sorting, and missing-value handling.
+- **The parser stack is now maintained in-repo again.** `filesql`, `prep`, and `frame` all share the same parser implementation, including JSON/JSONL, Parquet, XLSX, ACH, and Fedwire support.
+
+### Changed
+- **filesql now uses the in-repository parser packages instead of the external `github.com/nao1215/fileparser` module.** The public surface stays centered on `filesql.Open`, `OpenContext`, `LoadInto`, and the builder APIs, but parser-backed behavior now ships and evolves in the same release unit.
+- **Top-level project docs were rewritten to match the current shape of the repository.** `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, the bug report template, and the pull request template now describe the library, `prep`, and `frame` in the same direct tone as the related `gup`, `sqly`, and `atago` projects.
+- **README examples now cover `prep` and `frame` with runnable sample code.** The documented cleanup and in-memory transform flows are backed by tests so the examples stay valid as the APIs evolve.
+
+### Internal
+- Added README example tests, parser legacy-compatibility coverage, and smaller test cleanups that removed dead helpers and tightened example error handling.
+- Removed the stale Cursor-specific `.cursorrules` file from the repository.
+
 ## [0.17.2] - 2026-07-06
 
 ### Fixed

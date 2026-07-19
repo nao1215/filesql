@@ -1,26 +1,33 @@
 ---
 name: Bug report
-about: Create a report to help us improve
+about: Report a reproducible bug in filesql
 title: "[BUG] "
 labels: bug
-assignees: ''
-
+assignees: ""
 ---
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+## Summary
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+Describe the problem in one or two sentences.
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+## Reproduction
 
-**Desktop (please complete the following information):**
- - OS: [e.g. Ubuntu]
- - Go Version [e.g. 1.17]
- - Library Version [e.g. 1.0.1]
+Provide the smallest reproduction you can:
+
+1. input file or inline sample
+2. Go code or command
+3. actual result
+
+## Expected Result
+
+Describe the expected behavior.
+
+## Environment
+
+- OS:
+- Go version:
+- filesql version or commit:
+
+## Notes
+
+Anything else that helps reproduce or narrow the issue.

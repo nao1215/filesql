@@ -497,7 +497,7 @@ func TestParsePrepTagInvalidFormats(t *testing.T) {
 				return
 			}
 			if tt.wantErr && tt.errContain != "" {
-				if err == nil || !containsString(err.Error(), tt.errContain) {
+				if err == nil || !strings.Contains(err.Error(), tt.errContain) {
 					t.Errorf("parsePrepTag(%q) error should contain %q, got %v", tt.tag, tt.errContain, err)
 				}
 			}
@@ -506,21 +506,6 @@ func TestParsePrepTagInvalidFormats(t *testing.T) {
 			}
 		})
 	}
-}
-
-// containsString is a helper for checking error messages
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > len(substr) && findSubstring(s, substr)))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 // TestParseStructTypeWithEmbeddedStruct tests how embedded (anonymous) struct fields are handled

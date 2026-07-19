@@ -1,21 +1,35 @@
 # Security Policy
 
-## Reporting a Vulnerability
+## Reporting
 
-If you discover any security-related issues or vulnerabilities, please contact us at [n.chika156@gmail.com](mailto:n.chika156@gmail.com). We appreciate your responsible disclosure and will work with you to address the issue promptly.
+If you believe you found a vulnerability, email:
+[`n.chika156@gmail.com`](mailto:n.chika156@gmail.com)
+
+Please do not open a public GitHub issue first.
+
+Include:
+
+- affected version or commit
+- reproduction steps
+- impact
+- any workaround you already found
+
+## What To Expect
+
+- Acknowledgement after the report is received
+- Follow-up questions if reproduction details are missing
+- A fix or mitigation plan when the report is valid
+
+Response time depends on severity and reproduction quality, but valid reports are handled as priority work.
 
 ## Supported Versions
 
-We recommend using the latest release for the most up-to-date and secure experience. Security updates are provided for the latest stable version.
+Security fixes are provided for the latest published release series only.
 
-## Security Policy
+| Version | Supported | Notes |
+|---------|-----------|-------|
+| `0.17.x` | Yes | Current supported release series as of July 19, 2026 |
+| `0.16.x` and earlier | No | Upgrade to the latest `0.17.x` release |
 
-- Security issues are treated with the highest priority.
-- We follow responsible disclosure practices.
-- Fixes for security vulnerabilities will be provided in a timely manner.
-
-## Acknowledgments
-
-We would like to thank the security researchers and contributors who responsibly report security issues and work with us to make our project more secure.
-
-Thank you for your help in making our project safe and secure for everyone.
+Security fixes are not backported to unsupported release series. After `0.18.0`
+is released, support will move to `0.18.x`.
