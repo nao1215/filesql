@@ -40,7 +40,7 @@ filesql is for cases where the data is already in a file and the fastest useful 
 |-----------|--------|-------|
 | `.csv` | CSV | Header row becomes column names |
 | `.tsv` | TSV | Tab-separated text |
-| `.ltsv` | LTSV | Labelled tab-separated text |
+| `.ltsv` | LTSV | Labeled tab-separated text |
 | `.json` | JSON | Query nested data with `json_extract()` |
 | `.jsonl` | JSONL | One JSON value per line |
 | `.parquet` | Parquet | Columnar format |
