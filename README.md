@@ -308,6 +308,63 @@ ACH (`.ach`) and Fedwire (`.fed`) support are experimental. They are useful for 
 
 ## Examples
 
+### API example index
+
+The GoDoc examples are fully tested with `go test`. The tables below show the fastest path from a feature name in the README to the exact example function in the repo.
+
+#### filesql
+
+| Feature | Example function | Source |
+|---------|------------------|--------|
+| Open files and query them | `ExampleOpen`, `ExampleOpenContext` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
+| Load files into an existing `*sql.DB` | `ExampleLoadInto`, `ExampleDBBuilder_LoadInto` | [example_api_test.go](./example_api_test.go) |
+| Build from readers, paths, or embedded FS | `ExampleNewBuilder`, `ExampleDBBuilder_AddReader`, `ExampleDBBuilder_AddPath`, `ExampleDBBuilder_AddFS` | [example_test.go](./example_test.go) |
+| Tune chunked loading | `ExampleDBBuilder_SetDefaultChunkSize` | [example_api_test.go](./example_api_test.go) |
+| Handle malformed CSV/TSV rows | `ExampleDBBuilder_WithMalformedRowPolicy` | [example_api_test.go](./example_api_test.go) |
+| Attach your own logger | `ExampleDBBuilder_WithLogger`, `ExampleNewSlogAdapter` | [example_api_test.go](./example_api_test.go) |
+| Open a read-only wrapper | `ExampleDBBuilder_OpenReadOnly` | [example_api_test.go](./example_api_test.go) |
+| Save on close or commit | `ExampleDBBuilder_EnableAutoSave`, `ExampleDBBuilder_EnableAutoSaveOnCommit`, `ExampleDBBuilder_DisableAutoSave` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
+| Export tables with format/compression options | `ExampleDumpDatabase`, `ExampleNewDumpOptions`, `ExampleDumpOptions_WithFormat`, `ExampleDumpOptions_WithCompression` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
+| Work with compression helpers directly | `ExampleNewCompressionHandler`, `ExampleNewCompressionFactory`, `ExampleCompressionFactory_DetectCompressionType` | [example_api_test.go](./example_api_test.go) |
+| Strip compression suffixes and inspect file types | `ExampleCompressionFactory_RemoveCompressionExtension`, `ExampleCompressionFactory_GetBaseFileType` | [example_api_test.go](./example_api_test.go) |
+| Build contextual errors | `ExampleNewErrorContext`, `ExampleMalformedRowPolicy_String` | [example_api_test.go](./example_api_test.go) |
+
+#### prep
+
+| Feature | Example function | Source |
+|---------|------------------|--------|
+| Strict tag parsing for invalid prep/validate tags | `ExampleWithStrictTagParsing` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Keep only valid rows in the output stream | `ExampleWithValidRowsOnly` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Clean CSV data into structs and a reusable reader | `ExampleProcessor_Process` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Convert JSON arrays into JSONL output | `ExampleProcessor_Process_json` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Stream cleaned output into any writer | `ExampleProcessor_ProcessToWriter` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Inspect validation counts | `ExampleProcessResult_InvalidRowCount`, `ExampleProcessResult_HasErrors` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Read validation error details | `ExampleProcessResult_ValidationErrors` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Read preprocessing error details | `ExampleProcessResult_PrepErrors` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Detect compressed inputs | `ExampleIsCompressed`, `Example_detectFileType` | [prep/example_api_test.go](./prep/example_api_test.go), [prep/example_test.go](./prep/example_test.go) |
+| Check output and original formats | `ExampleStream_Format`, `ExampleStream_OriginalFormat` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Rewind and reread the processed stream | `Example_streamLen`, `Example_streamSeek` | [prep/example_api_test.go](./prep/example_api_test.go) |
+
+#### frame
+
+| Feature | Example function | Source |
+|---------|------------------|--------|
+| Create a DataFrame from a reader or path | `ExampleNewDataFrame`, `ExampleNewDataFrameFromPath` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Build a DataFrame directly from Go records | `ExampleNewDataFrameFromRecords` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Write transformed data back to CSV or TSV | `ExampleDataFrame_ToCSV`, `ExampleDataFrame_ToTSV` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Select, filter, and mutate rows | `ExampleDataFrame_Select`, `ExampleDataFrame_Filter`, `ExampleDataFrame_Mutate` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Join in-memory tables | `ExampleDataFrame_Join` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Append frames with matching or mixed schemas | `ExampleDataFrame_Concat`, `ExampleConcatAll` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Group rows for aggregation | `ExampleDataFrame_GroupBy`, `ExampleGroupedDataFrame_Count` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Run built-in or custom aggregations | `ExampleGroupedDataFrame_Sum`, `ExampleGroupedDataFrame_Agg` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Sort by one or multiple columns | `ExampleDataFrame_Sort`, `ExampleDataFrame_SortBy` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Remove duplicates by key columns | `ExampleDataFrame_DistinctBy` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Keep only the first rows | `ExampleDataFrame_Head` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Rename columns in bulk | `ExampleDataFrame_RenameColumns` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Fill or drop missing values | `ExampleDataFrame_FillNAByColumn`, `ExampleDataFrame_DropNASubset` | [frame/example_api_test.go](./frame/example_api_test.go) |
+
+### Integration examples
+
 The [examples](./examples) directory shows how to use filesql with regular Go database tooling:
 
 | Example | Description |
