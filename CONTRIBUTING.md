@@ -1,207 +1,99 @@
-# Contributing Guide
+# Contributing
 
-## Introduction
+Thanks for working on filesql.
 
-Thank you for considering contributing to the filesql project! This document explains how to contribute to the project. We welcome all forms of contributions, including code contributions, documentation improvements, bug reports, and feature suggestions.
+This repository is a Go library first. The bar is simple:
 
-## Setting Up Development Environment
+- keep behavior clear
+- keep docs accurate
+- keep tests readable
+- keep `main` releasable
 
-### Prerequisites
+## Before You Start
 
-#### Installing Go
+- Open an issue first for large API changes or behavior changes that could break users.
+- Small fixes, docs improvements, and test cleanups can go straight to a PR.
+- If you change public behavior, update `README.md` and the relevant package docs or examples in the same branch.
 
-filesql development requires Go 1.25 or later.
-
-**macOS (using Homebrew)**
-```bash
-brew install go
-```
-
-**Linux (for Ubuntu)**
-```bash
-# Using snap
-sudo snap install go --classic
-
-# Or download from official site
-wget https://go.dev/dl/go1.25.0.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.25.0.linux-amd64.tar.gz
-echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.profile
-source ~/.profile
-```
-
-**Windows**
-Download and run the installer from the [official Go website](https://go.dev/dl/).
-
-Verify installation:
-```bash
-go version
-```
-
-### Cloning the Project
+## Local Setup
 
 ```bash
 git clone https://github.com/nao1215/filesql.git
 cd filesql
-```
-
-### Installing Development Tools
-
-```bash
-# Install necessary development tools
 make tools
 ```
 
-### Verification
+filesql requires Go 1.25 or later.
 
-To verify that your development environment is set up correctly, run the following commands:
+## Development Rules
+
+- Follow normal Go style. [`Effective Go`](https://go.dev/doc/effective_go) is the baseline.
+- Keep public APIs documented.
+- Add or update tests with the code change.
+- Prefer direct, explicit tests over clever test abstractions.
+- If you change a README code sample, keep the sample covered by tests.
+- Do not leave stale docs, stale examples, or dead code behind.
+
+## Validation
+
+Run these before you send a PR:
 
 ```bash
-# Run tests
-make test
-
-# Run linter
+go test ./...
 make lint
 ```
 
-## Development Workflow
+If you change behavior in examples or docs, run the tests that cover those paths as well.
 
-### Branch Strategy
+## Pull Requests
 
-- `main` branch is the latest stable version
-- Create new branches from `main` for new features or bug fixes
-- Branch naming examples:
-  - `feature/add-json-support` - New feature
-  - `fix/issue-123` - Bug fix
-  - `docs/update-readme` - Documentation update
+A good PR for this repository usually does four things:
 
-### Coding Standards
+1. Explains the behavior change in a few sentences.
+2. Includes tests or explains why tests were not needed.
+3. Updates docs when the public surface changed.
+4. Updates `CHANGELOG.md` when the change matters to users.
 
-This project follows these standards:
+Use the PR template. Keep the diff focused. If a change is broad, split it into reviewable commits even when it ships in one PR.
 
-1. **Conform to [Effective Go](https://go.dev/doc/effective_go)**
-2. **Avoid using global variables** (except for config package)
-3. **Always add comments to public functions, variables, and structs**
-4. **Keep functions as small as possible**
-5. **Writing tests is encouraged**
+## Documentation
 
-### Writing Tests
+`README.md` is the source of truth for the top-level product description.
 
-Tests are important. Please follow these guidelines:
+When docs change:
 
-1. **Unit tests**: Aim for 80% or higher coverage
-2. **Test readability**: Write clear test cases
-3. **Parallel execution**: Use `t.Parallel()` whenever possible
+- update English docs first
+- keep code samples runnable
+- prefer examples that match real usage over exhaustive API tours
 
-Test example:
-```go
-func TestFile_Parse(t *testing.T) {
-    t.Parallel()
-    
-    t.Run("should parse CSV file correctly", func(t *testing.T) {
-        // Clear input and expected values for test case
-        input := "name,age\nAlice,30"
-        expected := &Table{...}
-        
-        result, err := ParseCSV(input)
-        assert.NoError(t, err)
-        assert.Equal(t, expected, result)
-    })
-}
-```
+## Release Notes
 
-## Creating Pull Requests
+User-facing changes should be added to `CHANGELOG.md`. Write the entry so someone scanning the release can tell:
 
-### Preparation
-
-1. **Check or Create Issues**
-   - Check if there are existing issues
-   - For major changes, we recommend discussing the approach in an issue first
-
-2. **Write Tests**
-   - Always add tests for new features
-   - For bug fixes, create tests that reproduce the bug
-
-3. **Quality Check**
-   ```bash
-   # Ensure all tests pass
-   make test
-   
-   # Linter check
-   make lint
-   
-   # Check coverage (80% or higher)
-   go test -cover ./...
-   ```
-
-### Submitting Pull Request
-
-1. Create a Pull Request from your forked repository to the main repository
-2. PR title should briefly describe the changes
-3. Include the following in PR description:
-   - Purpose and content of changes
-   - Related issue number (if any)
-   - Test method
-   - Reproduction steps for bug fixes
-
-### About CI/CD
-
-GitHub Actions automatically checks the following items:
-
-- **Cross-platform testing**: Test execution on Linux, macOS, and Windows
-- **Linter check**: Static analysis with golangci-lint
-- **Test coverage**: Maintain 80% or higher coverage
-- **Build verification**: Successful builds on each platform
-
-Merging is not possible unless all checks pass.
+- what changed
+- who should care
+- any limitation or migration note
 
 ## Bug Reports
 
-When you find a bug, please create an issue with the following information:
+Good bug reports include:
 
-1. **Environment Information**
-   - OS (Linux/macOS/Windows) and version
-   - Go version
-   - filesql version
+- OS and Go version
+- filesql version or commit
+- the smallest input that reproduces the issue
+- the expected result and the actual result
 
-2. **Reproduction Steps**
-   - Minimal code example to reproduce the bug
-   - Data files used (if possible)
+Use the issue template when possible.
 
-3. **Expected and Actual Behavior**
+## Security
 
-4. **Error Messages or Stack Traces** (if any)
+Please do not open a public issue for a suspected vulnerability. See [SECURITY.md](./SECURITY.md).
 
-## Contributing Outside of Coding
+## Code of Conduct
 
-The following activities are also greatly welcomed:
+Please read [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md). If you cannot be respectful in issues, PRs, and reviews, do not participate.
 
-### Activities that Boost Motivation
+## Support
 
-- **Give a GitHub Star**: Show your interest in the project
-- **Promote the Project**: Introduce it in blogs, social media, study groups, etc.
-- **Become a GitHub Sponsor**: Support available at [https://github.com/sponsors/nao1215](https://github.com/sponsors/nao1215)
-
-### Other Ways to Contribute
-
-- **Documentation Improvements**: Fix typos, improve clarity of explanations
-- **Translations**: Translate documentation to new languages
-- **Add Examples**: Provide practical sample code
-- **Feature Suggestions**: Share new feature ideas in issues
-
-## Community
-
-### Code of Conduct
-
-Please refer to [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). We expect all contributors to treat each other with respect.
-
-### Questions and Reports
-
-- **GitHub Issues**: Bug reports and feature suggestions
-
-## License
-
-Contributions to this project are considered to be released under the project's license (MIT License).
-
----
-
-Thank you again for considering contributing! We sincerely look forward to your participation.
+If filesql helps your work, a GitHub star or sponsor page visit helps the project:
+https://github.com/sponsors/nao1215
