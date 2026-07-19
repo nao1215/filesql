@@ -1,4 +1,3 @@
-//nolint:gosec // Example files use simplified temporary file handling for clarity.
 package filesql_test
 
 import (
@@ -47,14 +46,6 @@ func createFilesqlExampleDir(files map[string]string) string {
 	return dir
 }
 
-func readExampleFile(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return strings.TrimSpace(string(data))
-}
-
 func openExampleSQLiteDB() *sql.DB {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -77,22 +68,24 @@ id,name
 	db := openExampleSQLiteDB()
 	defer db.Close()
 
-	if _, err := db.Exec(`CREATE TABLE notes (body TEXT)`); err != nil {
+	ctx := context.Background()
+
+	if _, err := db.ExecContext(ctx, `CREATE TABLE notes (body TEXT)`); err != nil {
 		log.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO notes VALUES ('kept')`); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO notes VALUES ('kept')`); err != nil {
 		log.Fatal(err)
 	}
 
-	if err := filesql.LoadInto(context.Background(), db, filepath.Join(dir, "users.csv")); err != nil {
+	if err := filesql.LoadInto(ctx, db, filepath.Join(dir, "users.csv")); err != nil {
 		log.Fatal(err)
 	}
 
 	var users, notes int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&users); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&users); err != nil {
 		log.Fatal(err)
 	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM notes`).Scan(&notes); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM notes`).Scan(&notes); err != nil {
 		log.Fatal(err)
 	}
 
@@ -117,8 +110,9 @@ func ExampleDBBuilder_SetDefaultChunkSize() {
 	}
 	defer db.Close()
 
+	ctx := context.Background()
 	var rows int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&rows); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&rows); err != nil {
 		log.Fatal(err)
 	}
 
@@ -144,8 +138,9 @@ func ExampleDBBuilder_WithMalformedRowPolicy() {
 	}
 	defer db.Close()
 
+	ctx := context.Background()
 	var rows int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&rows); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&rows); err != nil {
 		log.Fatal(err)
 	}
 
@@ -201,7 +196,8 @@ id,name
 	if err != nil {
 		log.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO users VALUES (2, 'Bob')`); err != nil {
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `INSERT INTO users VALUES (2, 'Bob')`); err != nil {
 		log.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -243,10 +239,12 @@ func ExampleDBBuilder_LoadInto() {
 	db := openExampleSQLiteDB()
 	defer db.Close()
 
-	if _, err := db.Exec(`CREATE TABLE notes (body TEXT)`); err != nil {
+	ctx := context.Background()
+
+	if _, err := db.ExecContext(ctx, `CREATE TABLE notes (body TEXT)`); err != nil {
 		log.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO notes VALUES ('ready')`); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO notes VALUES ('ready')`); err != nil {
 		log.Fatal(err)
 	}
 
@@ -257,15 +255,15 @@ func ExampleDBBuilder_LoadInto() {
 		log.Fatal(err)
 	}
 
-	if err := validated.LoadInto(context.Background(), db); err != nil {
+	if err := validated.LoadInto(ctx, db); err != nil {
 		log.Fatal(err)
 	}
 
 	var users, notes int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&users); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&users); err != nil {
 		log.Fatal(err)
 	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM notes`).Scan(&notes); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM notes`).Scan(&notes); err != nil {
 		log.Fatal(err)
 	}
 

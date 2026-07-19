@@ -131,7 +131,11 @@ func ExampleDataFrame_Filter() {
 	})
 
 	filtered := df.Filter(func(row map[string]any) bool {
-		return row["qty"].(int64) >= 2
+		qty, ok := row["qty"].(int64)
+		if !ok {
+			log.Fatalf("qty has type %T, want int64", row["qty"])
+		}
+		return qty >= 2
 	})
 
 	fmt.Println(filtered.ToRecords()[0]["name"])
@@ -145,7 +149,15 @@ func ExampleDataFrame_Mutate() {
 	})
 
 	withTotal := df.Mutate("total", func(row map[string]any) any {
-		return row["qty"].(int64) * row["price"].(int64)
+		qty, ok := row["qty"].(int64)
+		if !ok {
+			log.Fatalf("qty has type %T, want int64", row["qty"])
+		}
+		price, ok := row["price"].(int64)
+		if !ok {
+			log.Fatalf("price has type %T, want int64", row["price"])
+		}
+		return qty * price
 	})
 
 	fmt.Println(withTotal.ToRecords()[0]["total"])
@@ -263,17 +275,24 @@ func ExampleGroupedDataFrame_Agg() {
 	}
 
 	spread, err := grouped.Agg("sales", func(values []any) any {
-		min, max := values[0].(int), values[0].(int)
+		low, ok := values[0].(int)
+		if !ok {
+			log.Fatalf("sales has type %T, want int", values[0])
+		}
+		high := low
 		for _, value := range values[1:] {
-			n := value.(int)
-			if n < min {
-				min = n
+			n, ok := value.(int)
+			if !ok {
+				log.Fatalf("sales has type %T, want int", value)
 			}
-			if n > max {
-				max = n
+			if n < low {
+				low = n
+			}
+			if n > high {
+				high = n
 			}
 		}
-		return max - min
+		return high - low
 	})
 	if err != nil {
 		log.Fatal(err)

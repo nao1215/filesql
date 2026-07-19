@@ -217,7 +217,10 @@ func ExampleStream_Format() {
 		log.Fatal(err)
 	}
 
-	stream := reader.(prep.Stream)
+	stream, ok := reader.(prep.Stream)
+	if !ok {
+		log.Fatalf("reader has type %T, want prep.Stream", reader)
+	}
 	fmt.Println(stream.Format())
 	// Output:
 	// CSV
@@ -236,7 +239,10 @@ func ExampleStream_OriginalFormat() {
 		log.Fatal(err)
 	}
 
-	stream := reader.(prep.Stream)
+	stream, ok := reader.(prep.Stream)
+	if !ok {
+		log.Fatalf("reader has type %T, want prep.Stream", reader)
+	}
 	fmt.Printf("output=%s original=%s\n", stream.Format(), stream.OriginalFormat())
 	// Output:
 	// output=JSONL original=JSON
@@ -255,10 +261,13 @@ func Example_streamLen() {
 		log.Fatal(err)
 	}
 
-	stream := reader.(interface {
+	stream, ok := reader.(interface {
 		prep.Stream
 		Len() int
 	})
+	if !ok {
+		log.Fatalf("reader has type %T, want prep.Stream with Len", reader)
+	}
 	fmt.Println(stream.Len() > 0)
 	// Output:
 	// true
@@ -277,10 +286,13 @@ func Example_streamSeek() {
 		log.Fatal(err)
 	}
 
-	stream := reader.(interface {
+	stream, ok := reader.(interface {
 		prep.Stream
 		io.Seeker
 	})
+	if !ok {
+		log.Fatalf("reader has type %T, want prep.Stream with io.Seeker", reader)
+	}
 	buf := make([]byte, 4)
 	if _, err := io.ReadFull(stream, buf); err != nil {
 		log.Fatal(err)
