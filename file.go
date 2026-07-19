@@ -4,10 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
-	"github.com/nao1215/fileparser"
+	"github.com/nao1215/filesql/parser"
 )
 
 // FileType represents supported file types including compression variants
@@ -16,150 +15,14 @@ type FileType int
 // String returns a human-readable string representation of the FileType.
 func (ft FileType) String() string {
 	switch ft {
-	case FileTypeCSV:
-		return fileTypeNameCSV
-	case FileTypeTSV:
-		return fileTypeNameTSV
-	case FileTypeLTSV:
-		return fileTypeNameLTSV
-	case FileTypeParquet:
-		return fileTypeNameParquet
-	case FileTypeXLSX:
-		return fileTypeNameXLSX
-	case FileTypeCSVGZ:
-		return "CSV (gzip)"
-	case FileTypeCSVBZ2:
-		return "CSV (bzip2)"
-	case FileTypeCSVXZ:
-		return "CSV (xz)"
-	case FileTypeCSVZSTD:
-		return "CSV (zstd)"
-	case FileTypeTSVGZ:
-		return "TSV (gzip)"
-	case FileTypeTSVBZ2:
-		return "TSV (bzip2)"
-	case FileTypeTSVXZ:
-		return "TSV (xz)"
-	case FileTypeTSVZSTD:
-		return "TSV (zstd)"
-	case FileTypeLTSVGZ:
-		return "LTSV (gzip)"
-	case FileTypeLTSVBZ2:
-		return "LTSV (bzip2)"
-	case FileTypeLTSVXZ:
-		return "LTSV (xz)"
-	case FileTypeLTSVZSTD:
-		return "LTSV (zstd)"
-	case FileTypeParquetGZ:
-		return "Parquet (gzip)"
-	case FileTypeParquetBZ2:
-		return "Parquet (bzip2)"
-	case FileTypeParquetXZ:
-		return "Parquet (xz)"
-	case FileTypeParquetZSTD:
-		return "Parquet (zstd)"
-	case FileTypeXLSXGZ:
-		return "XLSX (gzip)"
-	case FileTypeXLSXBZ2:
-		return "XLSX (bzip2)"
-	case FileTypeXLSXXZ:
-		return "XLSX (xz)"
-	case FileTypeXLSXZSTD:
-		return "XLSX (zstd)"
-	case FileTypeCSVZLIB:
-		return "CSV (zlib)"
-	case FileTypeTSVZLIB:
-		return "TSV (zlib)"
-	case FileTypeLTSVZLIB:
-		return "LTSV (zlib)"
-	case FileTypeParquetZLIB:
-		return "Parquet (zlib)"
-	case FileTypeXLSXZLIB:
-		return "XLSX (zlib)"
-	case FileTypeCSVSNAPPY:
-		return "CSV (snappy)"
-	case FileTypeTSVSNAPPY:
-		return "TSV (snappy)"
-	case FileTypeLTSVSNAPPY:
-		return "LTSV (snappy)"
-	case FileTypeParquetSNAPPY:
-		return "Parquet (snappy)"
-	case FileTypeXLSXSNAPPY:
-		return "XLSX (snappy)"
-	case FileTypeCSVS2:
-		return "CSV (s2)"
-	case FileTypeTSVS2:
-		return "TSV (s2)"
-	case FileTypeLTSVS2:
-		return "LTSV (s2)"
-	case FileTypeParquetS2:
-		return "Parquet (s2)"
-	case FileTypeXLSXS2:
-		return "XLSX (s2)"
-	case FileTypeCSVLZ4:
-		return "CSV (lz4)"
-	case FileTypeTSVLZ4:
-		return "TSV (lz4)"
-	case FileTypeLTSVLZ4:
-		return "LTSV (lz4)"
-	case FileTypeParquetLZ4:
-		return "Parquet (lz4)"
-	case FileTypeXLSXLZ4:
-		return "XLSX (lz4)"
-	case FileTypeJSON:
-		return "JSON"
-	case FileTypeJSONL:
-		return "JSONL"
-	case FileTypeJSONGZ:
-		return "JSON (gzip)"
-	case FileTypeJSONBZ2:
-		return "JSON (bzip2)"
-	case FileTypeJSONXZ:
-		return "JSON (xz)"
-	case FileTypeJSONZSTD:
-		return "JSON (zstd)"
-	case FileTypeJSONZLIB:
-		return "JSON (zlib)"
-	case FileTypeJSONSNAPPY:
-		return "JSON (snappy)"
-	case FileTypeJSONS2:
-		return "JSON (s2)"
-	case FileTypeJSONLZ4:
-		return "JSON (lz4)"
-	case FileTypeJSONLGZ:
-		return "JSONL (gzip)"
-	case FileTypeJSONLBZ2:
-		return "JSONL (bzip2)"
-	case FileTypeJSONLXZ:
-		return "JSONL (xz)"
-	case FileTypeJSONLZSTD:
-		return "JSONL (zstd)"
-	case FileTypeJSONLZLIB:
-		return "JSONL (zlib)"
-	case FileTypeJSONLSNAPPY:
-		return "JSONL (snappy)"
-	case FileTypeJSONLS2:
-		return "JSONL (s2)"
-	case FileTypeJSONLLZ4:
-		return "JSONL (lz4)"
 	case FileTypeACH:
 		return "ACH"
 	case FileTypeFedWire:
 		return "FedWire"
 	default:
-		return fileTypeNameUnsupported
+		return parserFileType(ft).String()
 	}
 }
-
-// FileType human-readable display names returned by String.
-const (
-	fileTypeNameCSV         = "CSV"
-	fileTypeNameTSV         = "TSV"
-	fileTypeNameLTSV        = "LTSV"
-	fileTypeNameParquet     = "Parquet"
-	fileTypeNameXLSX        = "XLSX"
-	fileTypeNameUnsupported = "Unsupported"
-)
 
 const (
 	// FileTypeCSV represents CSV file type
@@ -307,21 +170,21 @@ const (
 
 // File extension aliases from fileparser package
 const (
-	extCSV     = fileparser.ExtCSV
-	extTSV     = fileparser.ExtTSV
-	extLTSV    = fileparser.ExtLTSV
-	extParquet = fileparser.ExtParquet
-	extXLSX    = fileparser.ExtXLSX
-	extGZ      = fileparser.ExtGZ
-	extBZ2     = fileparser.ExtBZ2
-	extXZ      = fileparser.ExtXZ
-	extZSTD    = fileparser.ExtZSTD
-	extZLIB    = fileparser.ExtZLIB
-	extSNAPPY  = fileparser.ExtSNAPPY
-	extS2      = fileparser.ExtS2
-	extLZ4     = fileparser.ExtLZ4
-	extJSON    = fileparser.ExtJSON
-	extJSONL   = fileparser.ExtJSONL
+	extCSV     = parser.ExtCSV
+	extTSV     = parser.ExtTSV
+	extLTSV    = parser.ExtLTSV
+	extParquet = parser.ExtParquet
+	extXLSX    = parser.ExtXLSX
+	extGZ      = parser.ExtGZ
+	extBZ2     = parser.ExtBZ2
+	extXZ      = parser.ExtXZ
+	extZSTD    = parser.ExtZSTD
+	extZLIB    = parser.ExtZLIB
+	extSNAPPY  = parser.ExtSNAPPY
+	extS2      = parser.ExtS2
+	extLZ4     = parser.ExtLZ4
+	extJSON    = parser.ExtJSON
+	extJSONL   = parser.ExtJSONL
 )
 
 // file represents a file that can be converted to table
@@ -413,34 +276,7 @@ func supportedFileExtPatterns() []string {
 
 // isSupportedFile checks if the file has a supported extension
 func isSupportedFile(fileName string) bool {
-	// Check for ACH files first (case-sensitive)
-	if isACHFile(fileName) {
-		return true
-	}
-
-	// Check for Fedwire files
-	if isFedWireFile(fileName) {
-		return true
-	}
-
-	fileName = strings.ToLower(fileName)
-
-	// Remove compression extensions
-	for _, ext := range []string{extGZ, extBZ2, extXZ, extZSTD, extZLIB, extSNAPPY, extS2, extLZ4} {
-		if strings.HasSuffix(fileName, ext) {
-			fileName = strings.TrimSuffix(fileName, ext)
-			break
-		}
-	}
-
-	// Check for supported file extensions
-	return strings.HasSuffix(fileName, extCSV) ||
-		strings.HasSuffix(fileName, extTSV) ||
-		strings.HasSuffix(fileName, extLTSV) ||
-		strings.HasSuffix(fileName, extParquet) ||
-		strings.HasSuffix(fileName, extXLSX) ||
-		strings.HasSuffix(fileName, extJSON) ||
-		strings.HasSuffix(fileName, extJSONL)
+	return detectFileType(fileName) != FileTypeUnsupported
 }
 
 // isSupportedExtension checks if the given extension is supported
@@ -593,33 +429,12 @@ func (ft FileType) extension() string {
 // baseType returns the base file type without compression
 func (ft FileType) baseType() FileType {
 	switch ft {
-	case FileTypeCSV, FileTypeCSVGZ, FileTypeCSVBZ2, FileTypeCSVXZ, FileTypeCSVZSTD,
-		FileTypeCSVZLIB, FileTypeCSVSNAPPY, FileTypeCSVS2, FileTypeCSVLZ4:
-		return FileTypeCSV
-	case FileTypeTSV, FileTypeTSVGZ, FileTypeTSVBZ2, FileTypeTSVXZ, FileTypeTSVZSTD,
-		FileTypeTSVZLIB, FileTypeTSVSNAPPY, FileTypeTSVS2, FileTypeTSVLZ4:
-		return FileTypeTSV
-	case FileTypeLTSV, FileTypeLTSVGZ, FileTypeLTSVBZ2, FileTypeLTSVXZ, FileTypeLTSVZSTD,
-		FileTypeLTSVZLIB, FileTypeLTSVSNAPPY, FileTypeLTSVS2, FileTypeLTSVLZ4:
-		return FileTypeLTSV
-	case FileTypeParquet, FileTypeParquetGZ, FileTypeParquetBZ2, FileTypeParquetXZ, FileTypeParquetZSTD,
-		FileTypeParquetZLIB, FileTypeParquetSNAPPY, FileTypeParquetS2, FileTypeParquetLZ4:
-		return FileTypeParquet
-	case FileTypeXLSX, FileTypeXLSXGZ, FileTypeXLSXBZ2, FileTypeXLSXXZ, FileTypeXLSXZSTD,
-		FileTypeXLSXZLIB, FileTypeXLSXSNAPPY, FileTypeXLSXS2, FileTypeXLSXLZ4:
-		return FileTypeXLSX
-	case FileTypeJSON, FileTypeJSONGZ, FileTypeJSONBZ2, FileTypeJSONXZ, FileTypeJSONZSTD,
-		FileTypeJSONZLIB, FileTypeJSONSNAPPY, FileTypeJSONS2, FileTypeJSONLZ4:
-		return FileTypeJSON
-	case FileTypeJSONL, FileTypeJSONLGZ, FileTypeJSONLBZ2, FileTypeJSONLXZ, FileTypeJSONLZSTD,
-		FileTypeJSONLZLIB, FileTypeJSONLSNAPPY, FileTypeJSONLS2, FileTypeJSONLLZ4:
-		return FileTypeJSONL
 	case FileTypeACH:
 		return FileTypeACH
 	case FileTypeFedWire:
 		return FileTypeFedWire
 	default:
-		return FileTypeUnsupported
+		return filesqlFileType(parser.BaseFileType(parserFileType(ft)))
 	}
 }
 
@@ -733,188 +548,7 @@ func detectFileType(path string) FileType {
 		return FileTypeFedWire
 	}
 
-	basePath := path
-	var compressionType string
-
-	// Remove compression extensions
-	if strings.HasSuffix(path, extGZ) {
-		basePath = strings.TrimSuffix(path, extGZ)
-		compressionType = compressionGZStr
-	} else if strings.HasSuffix(path, extBZ2) {
-		basePath = strings.TrimSuffix(path, extBZ2)
-		compressionType = compressionBZ2Str
-	} else if strings.HasSuffix(path, extXZ) {
-		basePath = strings.TrimSuffix(path, extXZ)
-		compressionType = compressionXZStr
-	} else if strings.HasSuffix(path, extZSTD) {
-		basePath = strings.TrimSuffix(path, extZSTD)
-		compressionType = compressionZSTDStr
-	} else if strings.HasSuffix(path, extZLIB) {
-		basePath = strings.TrimSuffix(path, extZLIB)
-		compressionType = compressionZLIBStr
-	} else if strings.HasSuffix(path, extSNAPPY) {
-		basePath = strings.TrimSuffix(path, extSNAPPY)
-		compressionType = compressionSNAPPYStr
-	} else if strings.HasSuffix(path, extS2) {
-		basePath = strings.TrimSuffix(path, extS2)
-		compressionType = compressionS2Str
-	} else if strings.HasSuffix(path, extLZ4) {
-		basePath = strings.TrimSuffix(path, extLZ4)
-		compressionType = compressionLZ4Str
-	}
-
-	ext := strings.ToLower(filepath.Ext(basePath))
-	switch ext {
-	case extCSV:
-		switch compressionType {
-		case compressionGZStr:
-			return FileTypeCSVGZ
-		case compressionBZ2Str:
-			return FileTypeCSVBZ2
-		case compressionXZStr:
-			return FileTypeCSVXZ
-		case compressionZSTDStr:
-			return FileTypeCSVZSTD
-		case compressionZLIBStr:
-			return FileTypeCSVZLIB
-		case compressionSNAPPYStr:
-			return FileTypeCSVSNAPPY
-		case compressionS2Str:
-			return FileTypeCSVS2
-		case compressionLZ4Str:
-			return FileTypeCSVLZ4
-		default:
-			return FileTypeCSV
-		}
-	case extTSV:
-		switch compressionType {
-		case compressionGZStr:
-			return FileTypeTSVGZ
-		case compressionBZ2Str:
-			return FileTypeTSVBZ2
-		case compressionXZStr:
-			return FileTypeTSVXZ
-		case compressionZSTDStr:
-			return FileTypeTSVZSTD
-		case compressionZLIBStr:
-			return FileTypeTSVZLIB
-		case compressionSNAPPYStr:
-			return FileTypeTSVSNAPPY
-		case compressionS2Str:
-			return FileTypeTSVS2
-		case compressionLZ4Str:
-			return FileTypeTSVLZ4
-		default:
-			return FileTypeTSV
-		}
-	case extLTSV:
-		switch compressionType {
-		case compressionGZStr:
-			return FileTypeLTSVGZ
-		case compressionBZ2Str:
-			return FileTypeLTSVBZ2
-		case compressionXZStr:
-			return FileTypeLTSVXZ
-		case compressionZSTDStr:
-			return FileTypeLTSVZSTD
-		case compressionZLIBStr:
-			return FileTypeLTSVZLIB
-		case compressionSNAPPYStr:
-			return FileTypeLTSVSNAPPY
-		case compressionS2Str:
-			return FileTypeLTSVS2
-		case compressionLZ4Str:
-			return FileTypeLTSVLZ4
-		default:
-			return FileTypeLTSV
-		}
-	case extParquet:
-		switch compressionType {
-		case compressionGZStr:
-			return FileTypeParquetGZ
-		case compressionBZ2Str:
-			return FileTypeParquetBZ2
-		case compressionXZStr:
-			return FileTypeParquetXZ
-		case compressionZSTDStr:
-			return FileTypeParquetZSTD
-		case compressionZLIBStr:
-			return FileTypeParquetZLIB
-		case compressionSNAPPYStr:
-			return FileTypeParquetSNAPPY
-		case compressionS2Str:
-			return FileTypeParquetS2
-		case compressionLZ4Str:
-			return FileTypeParquetLZ4
-		default:
-			return FileTypeParquet
-		}
-	case extXLSX:
-		switch compressionType {
-		case compressionGZStr:
-			return FileTypeXLSXGZ
-		case compressionBZ2Str:
-			return FileTypeXLSXBZ2
-		case compressionXZStr:
-			return FileTypeXLSXXZ
-		case compressionZSTDStr:
-			return FileTypeXLSXZSTD
-		case compressionZLIBStr:
-			return FileTypeXLSXZLIB
-		case compressionSNAPPYStr:
-			return FileTypeXLSXSNAPPY
-		case compressionS2Str:
-			return FileTypeXLSXS2
-		case compressionLZ4Str:
-			return FileTypeXLSXLZ4
-		default:
-			return FileTypeXLSX
-		}
-	case extJSON:
-		switch compressionType {
-		case compressionGZStr:
-			return FileTypeJSONGZ
-		case compressionBZ2Str:
-			return FileTypeJSONBZ2
-		case compressionXZStr:
-			return FileTypeJSONXZ
-		case compressionZSTDStr:
-			return FileTypeJSONZSTD
-		case compressionZLIBStr:
-			return FileTypeJSONZLIB
-		case compressionSNAPPYStr:
-			return FileTypeJSONSNAPPY
-		case compressionS2Str:
-			return FileTypeJSONS2
-		case compressionLZ4Str:
-			return FileTypeJSONLZ4
-		default:
-			return FileTypeJSON
-		}
-	case extJSONL:
-		switch compressionType {
-		case compressionGZStr:
-			return FileTypeJSONLGZ
-		case compressionBZ2Str:
-			return FileTypeJSONLBZ2
-		case compressionXZStr:
-			return FileTypeJSONLXZ
-		case compressionZSTDStr:
-			return FileTypeJSONLZSTD
-		case compressionZLIBStr:
-			return FileTypeJSONLZLIB
-		case compressionSNAPPYStr:
-			return FileTypeJSONLSNAPPY
-		case compressionS2Str:
-			return FileTypeJSONLS2
-		case compressionLZ4Str:
-			return FileTypeJSONLLZ4
-		default:
-			return FileTypeJSONL
-		}
-	default:
-		return FileTypeUnsupported
-	}
+	return filesqlFileType(parser.DetectFileType(path))
 }
 
 // openReader opens file and returns a reader that handles compression

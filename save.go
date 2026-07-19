@@ -359,7 +359,8 @@ func (c *autoSaveConnection) BeginTx(ctx context.Context, opts driver.TxOptions)
 	}
 
 	// Fallback for connections that don't support BeginTx
-	tx, err := c.conn.Begin() //nolint:staticcheck // Need backward compatibility with older drivers
+	//nolint:staticcheck // Backward compatibility with drivers that only implement the legacy interface.
+	tx, err := c.conn.Begin()
 	if err != nil {
 		return nil, err
 	}
@@ -380,7 +381,8 @@ func (c *autoSaveConnection) ExecContext(ctx context.Context, query string, args
 		return execer.ExecContext(ctx, query, args)
 	}
 	// Fallback to deprecated Execer for backward compatibility
-	if execer, ok := c.conn.(driver.Execer); ok { //nolint:staticcheck // Need backward compatibility
+	//nolint:staticcheck // Backward compatibility with drivers that only implement the legacy interface.
+	if execer, ok := c.conn.(driver.Execer); ok {
 		dArgs := make([]driver.Value, len(args))
 		for i, arg := range args {
 			dArgs[i] = arg.Value
@@ -396,7 +398,8 @@ func (c *autoSaveConnection) QueryContext(ctx context.Context, query string, arg
 		return queryer.QueryContext(ctx, query, args)
 	}
 	// Fallback to deprecated Queryer for backward compatibility
-	if queryer, ok := c.conn.(driver.Queryer); ok { //nolint:staticcheck // Need backward compatibility
+	//nolint:staticcheck // Backward compatibility with drivers that only implement the legacy interface.
+	if queryer, ok := c.conn.(driver.Queryer); ok {
 		dArgs := make([]driver.Value, len(args))
 		for i, arg := range args {
 			dArgs[i] = arg.Value

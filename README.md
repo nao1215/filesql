@@ -1,33 +1,31 @@
 # filesql
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/nao1215/filesql.svg)](https://pkg.go.dev/github.com/nao1215/filesql)
-[![Go Report Card](https://goreportcard.com/badge/github.com/nao1215/filesql)](https://goreportcard.com/report/github.com/nao1215/filesql)
 [![MultiPlatformUnitTest](https://github.com/nao1215/filesql/actions/workflows/unit_test.yml/badge.svg)](https://github.com/nao1215/filesql/actions/workflows/unit_test.yml)
 ![Coverage](https://raw.githubusercontent.com/nao1215/octocovs-central-repo/main/badges/nao1215/filesql/coverage.svg)
 
-[日本語](./doc/ja/README.md) | [Русский](./doc/ru/README.md) | [中文](./doc/zh-cn/README.md) | [한국어](./doc/ko/README.md) | [Español](./doc/es/README.md) | [Français](./doc/fr/README.md)
-
 ![logo](./doc/image/filesql-logo.png)
 
-filesql is a Go SQL driver that queries CSV, TSV, LTSV, JSON, JSONL, Parquet, and Excel (XLSX) files using SQLite3 SQL syntax. It loads your files into an in-memory SQLite database for you, so you write SQL against your files without a manual import step, a schema definition, or a database server to run.
+filesql runs SQLite against files. Pass CSV, TSV, LTSV, JSON, JSONL, Parquet, Excel, ACH, or Fedwire inputs and it loads them into an in-memory SQLite database, so joins, CTEs, aggregates, and `json_extract()` work immediately. Compressed files (`.gz`, `.bz2`, `.xz`, `.zst`, `.z`, `.snappy`, `.s2`, `.lz4`) are opened transparently.
 
-[sqly](https://github.com/nao1215/sqly) is a command-line tool built on filesql that runs SQL queries against CSV, TSV, LTSV, and Excel files from the shell.
+The module also ships three companion packages under the same repository: [`parser`](https://pkg.go.dev/github.com/nao1215/filesql/parser) for low-level parsing, [`prep`](https://pkg.go.dev/github.com/nao1215/filesql/prep) for struct-tag preprocessing and validation, and [`frame`](https://pkg.go.dev/github.com/nao1215/filesql/frame) for small in-memory dataframe-style transforms.
+
+[sqly](https://github.com/nao1215/sqly) is the CLI built on top of filesql when you want the same model from the shell.
 
 ## Why filesql?
 
-filesql was extracted from the shared file-to-SQL logic in [sqly](https://github.com/nao1215/sqly) and [sqluv](https://github.com/nao1215/sqluv). Both tools executed SQL queries against CSV, TSV, and other file formats. The common functionality was moved into this SQL driver so any Go developer can reuse it.
+Most file tooling eventually wants one of two things: SQL or cleanup. filesql keeps the SQL path direct. Open files, get SQLite tables, query them. When you need parsing or preprocessing without SQL, stay in the same module and use `parser`, `prep`, or `frame` instead of stitching multiple repositories together.
 
 ## Features
 
-- SQLite3 SQL Interface - Use SQLite3's SQL dialect to query files
-- Multiple File Formats - CSV, TSV, LTSV, Parquet, and Excel (XLSX) files
-- Compression Support - Handles .gz, .bz2, .xz, .zst, .z, .snappy, .s2, and .lz4 compressed files
-- Stream Processing - Handles large files through streaming with configurable chunk sizes
-- Flexible Input Sources - File paths, directories, io.Reader, and embed.FS
-- Zero Setup - No database server required, runs in-memory
-- Auto-Save - Persist changes back to files
-- Cross-Platform - Linux, macOS, and Windows
-- SQLite3 Powered - Built on the SQLite3 engine for SQL processing
+- SQLite3 on top of files: query file inputs with normal SQLite syntax.
+- Broad format coverage: CSV, TSV, LTSV, JSON, JSONL, Parquet, Excel, ACH, and Fedwire.
+- Compression built in: `.gz`, `.bz2`, `.xz`, `.zst`, `.z`, `.snappy`, `.s2`, `.lz4`.
+- Multiple input styles: paths, directories, `io.Reader`, and `embed.FS`.
+- Streaming where it matters: configurable chunked loading for large text inputs.
+- No server, no schema bootstrap: everything runs in-memory.
+- Round-trip workflows: dump data back out or enable auto-save.
+- One module, three companion packages: `parser`, `prep`, and `frame`.
 
 ## Supported File Formats
 
@@ -750,14 +748,15 @@ The [examples](./examples) directory contains sample code demonstrating various 
 | [ent](./examples/ent) | Integration with [Ent](https://entgo.io/) - entity framework by Facebook |
 
 
-## Data Preprocessing with fileprep
+## Data Preprocessing with prep
 
-For data validation and preprocessing before querying with filesql, use [nao1215/fileprep](https://github.com/nao1215/fileprep).
+When SQL is the second step, use [filesql/prep](https://pkg.go.dev/github.com/nao1215/filesql/prep) for the first one.
 
-fileprep is a companion library that provides:
-- Struct tag-based preprocessing (`prep` tag): trim, lowercase, uppercase, default values, and more
-- Struct tag-based validation (`validate` tag): required fields, format validation, cross-field validation
-- filesql integration: Returns `io.Reader` for direct use with filesql's Builder pattern
+`prep` stays inside the same module and gives you:
+- Struct tag-based preprocessing with the `prep` tag.
+- Struct tag-based validation with the `validate` tag.
+- Direct handoff to filesql as an `io.Reader`.
+- A clean split of responsibilities: `parser` reads, `prep` cleans, `filesql` queries, `frame` transforms in memory.
 
 ```go
 // Define struct with preprocessing and validation tags
@@ -779,7 +778,7 @@ func main() {
 Alice,alice@example.com,,user`
 
     // Create processor and process the CSV
-    processor := fileprep.NewProcessor(fileprep.FileTypeCSV)
+    processor := prep.NewProcessor(prep.FileTypeCSV)
     var users []User
 
     reader, result, err := processor.Process(strings.NewReader(csvData), &users)
@@ -812,7 +811,7 @@ Alice,alice@example.com,,user`
 }
 ```
 
-For the complete list of preprocessing and validation options, see the [fileprep documentation](https://github.com/nao1215/fileprep).
+For the full preprocessing and validation surface, see the [prep package documentation](https://pkg.go.dev/github.com/nao1215/filesql/prep).
 
 ## Related Projects
 
@@ -822,8 +821,9 @@ If you use filesql in your project, [open an issue](https://github.com/nao1215/f
 
 | Project | Description |
 |---------|-------------|
-| [nao1215/fileprep](https://github.com/nao1215/fileprep) | Data preprocessing library with struct tag validation. Clean and validate CSV/TSV data using Go struct tags before querying. |
-| [nao1215/fileframe](https://github.com/nao1215/fileframe)        | DataFrame API for CSV/TSV/LTSV, Parquet, Excel.  |
+| [filesql/parser](https://pkg.go.dev/github.com/nao1215/filesql/parser) | Low-level parser for tabular and semi-structured file formats, used by filesql, prep, and frame. |
+| [filesql/prep](https://pkg.go.dev/github.com/nao1215/filesql/prep) | Preprocess and validate rows with struct tags before they become SQL tables. |
+| [filesql/frame](https://pkg.go.dev/github.com/nao1215/filesql/frame) | Lightweight dataframe-style transforms for small and medium in-memory datasets. |
 
 
 ### CLI Tools Using filesql
@@ -843,10 +843,6 @@ If you find this project useful, consider:
 
 - Giving it a star on GitHub - it helps others discover the project
 - [Becoming a sponsor](https://github.com/sponsors/nao1215)
-
-### Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=nao1215/filesql&type=date&legend=top-left)](https://www.star-history.com/#nao1215/filesql&Date)
 
 ## License
 

@@ -1,0 +1,4 @@
+{"name":"  John Doe  ","email":"john@example.com","age":30}
+{"name":"Jane Smith","email":"jane@example.com","age":25}
+{"name":"","email":"invalid","age":0}
+{"name":"Bob Wilson","email":"bob@example.com","age":35}

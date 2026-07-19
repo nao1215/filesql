@@ -126,8 +126,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nao1215/fileparser"
-	achconv "github.com/nao1215/fileparser/ach"
+	"github.com/nao1215/filesql/parser"
+	achconv "github.com/nao1215/filesql/parser/ach"
 )
 
 // ACH file extension
@@ -154,7 +154,7 @@ func isACHFile(path string) bool {
 //
 // The returned TableSet can be used later for DumpACH to reconstruct the ACH file.
 func parseACHFile(reader io.Reader, baseTableName string) ([]*table, *achconv.TableSet, error) {
-	// Read ACH file using fileparser/ach (which encapsulates moov-io/ach)
+	// Read ACH file using parser/ach (which encapsulates moov-io/ach)
 	tableSet, err := achconv.ParseReader(reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: failed to parse ACH file: %s", ErrACH, err.Error())
@@ -214,8 +214,8 @@ func parseACHFile(reader io.Reader, baseTableName string) ([]*table, *achconv.Ta
 	return tables, tableSet, nil
 }
 
-// fileParserTableDataToTable converts fileparser.TableData to filesql table
-func fileParserTableDataToTable(td *fileparser.TableData, tableName string) *table {
+// fileParserTableDataToTable converts parser.TableData to filesql table
+func fileParserTableDataToTable(td *parser.TableData, tableName string) *table {
 	headers := newHeader(td.Headers)
 	records := make([]Record, len(td.Records))
 	for i, rec := range td.Records {
@@ -623,7 +623,7 @@ func updateTableSetFromDB(ctx context.Context, db *sql.DB, baseTableName string,
 }
 
 // readTableToTableData reads a database table into a TableData structure
-func readTableToTableData(ctx context.Context, db *sql.DB, tableName string) (*fileparser.TableData, error) {
+func readTableToTableData(ctx context.Context, db *sql.DB, tableName string) (*parser.TableData, error) {
 	// Check if table exists
 	var exists int
 	err := db.QueryRowContext(ctx,
@@ -690,12 +690,12 @@ func readTableToTableData(ctx context.Context, db *sql.DB, tableName string) (*f
 	}
 
 	// Infer column types (simplified - all TEXT for now)
-	columnTypes := make([]fileparser.ColumnType, len(headers))
+	columnTypes := make([]parser.ColumnType, len(headers))
 	for i := range columnTypes {
-		columnTypes[i] = fileparser.TypeText
+		columnTypes[i] = parser.TypeText
 	}
 
-	return &fileparser.TableData{
+	return &parser.TableData{
 		Headers:     headers,
 		Records:     records,
 		ColumnTypes: columnTypes,

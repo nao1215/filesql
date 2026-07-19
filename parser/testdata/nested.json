@@ -1,0 +1,4 @@
+[
+  {"id": 1, "name": "Alice", "address": {"city": "Tokyo", "country": "Japan"}, "tags": ["dev", "go"]},
+  {"id": 2, "name": "Bob", "address": {"city": "Osaka", "country": "Japan"}, "tags": ["ops"]}
+]

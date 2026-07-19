@@ -5,151 +5,111 @@ import (
 	"io"
 	"strings"
 
-	"github.com/nao1215/fileparser"
+	"github.com/nao1215/filesql/parser"
 )
 
-// parserFileType converts filesql.FileType to fileparser.FileType
-func parserFileType(ft FileType) fileparser.FileType {
-	switch ft {
-	case FileTypeCSV:
-		return fileparser.CSV
-	case FileTypeTSV:
-		return fileparser.TSV
-	case FileTypeLTSV:
-		return fileparser.LTSV
-	case FileTypeParquet:
-		return fileparser.Parquet
-	case FileTypeXLSX:
-		return fileparser.XLSX
-	case FileTypeCSVGZ:
-		return fileparser.CSVGZ
-	case FileTypeTSVGZ:
-		return fileparser.TSVGZ
-	case FileTypeLTSVGZ:
-		return fileparser.LTSVGZ
-	case FileTypeParquetGZ:
-		return fileparser.ParquetGZ
-	case FileTypeCSVBZ2:
-		return fileparser.CSVBZ2
-	case FileTypeTSVBZ2:
-		return fileparser.TSVBZ2
-	case FileTypeLTSVBZ2:
-		return fileparser.LTSVBZ2
-	case FileTypeParquetBZ2:
-		return fileparser.ParquetBZ2
-	case FileTypeCSVXZ:
-		return fileparser.CSVXZ
-	case FileTypeTSVXZ:
-		return fileparser.TSVXZ
-	case FileTypeLTSVXZ:
-		return fileparser.LTSVXZ
-	case FileTypeParquetXZ:
-		return fileparser.ParquetXZ
-	case FileTypeCSVZSTD:
-		return fileparser.CSVZSTD
-	case FileTypeTSVZSTD:
-		return fileparser.TSVZSTD
-	case FileTypeLTSVZSTD:
-		return fileparser.LTSVZSTD
-	case FileTypeParquetZSTD:
-		return fileparser.ParquetZSTD
-	case FileTypeXLSXGZ:
-		return fileparser.XLSXGZ
-	case FileTypeXLSXBZ2:
-		return fileparser.XLSXBZ2
-	case FileTypeXLSXXZ:
-		return fileparser.XLSXXZ
-	case FileTypeXLSXZSTD:
-		return fileparser.XLSXZSTD
-	case FileTypeXLSXZLIB:
-		return fileparser.XLSXZLIB
-	case FileTypeXLSXSNAPPY:
-		return fileparser.XLSXSNAPPY
-	case FileTypeXLSXS2:
-		return fileparser.XLSXS2
-	case FileTypeXLSXLZ4:
-		return fileparser.XLSXLZ4
-	case FileTypeCSVZLIB:
-		return fileparser.CSVZLIB
-	case FileTypeTSVZLIB:
-		return fileparser.TSVZLIB
-	case FileTypeLTSVZLIB:
-		return fileparser.LTSVZLIB
-	case FileTypeParquetZLIB:
-		return fileparser.ParquetZLIB
-	case FileTypeCSVSNAPPY:
-		return fileparser.CSVSNAPPY
-	case FileTypeTSVSNAPPY:
-		return fileparser.TSVSNAPPY
-	case FileTypeLTSVSNAPPY:
-		return fileparser.LTSVSNAPPY
-	case FileTypeParquetSNAPPY:
-		return fileparser.ParquetSNAPPY
-	case FileTypeCSVS2:
-		return fileparser.CSVS2
-	case FileTypeTSVS2:
-		return fileparser.TSVS2
-	case FileTypeLTSVS2:
-		return fileparser.LTSVS2
-	case FileTypeParquetS2:
-		return fileparser.ParquetS2
-	case FileTypeCSVLZ4:
-		return fileparser.CSVLZ4
-	case FileTypeTSVLZ4:
-		return fileparser.TSVLZ4
-	case FileTypeLTSVLZ4:
-		return fileparser.LTSVLZ4
-	case FileTypeParquetLZ4:
-		return fileparser.ParquetLZ4
-	case FileTypeJSON:
-		return fileparser.JSON
-	case FileTypeJSONL:
-		return fileparser.JSONL
-	case FileTypeJSONGZ:
-		return fileparser.JSONGZ
-	case FileTypeJSONBZ2:
-		return fileparser.JSONBZ2
-	case FileTypeJSONXZ:
-		return fileparser.JSONXZ
-	case FileTypeJSONZSTD:
-		return fileparser.JSONZSTD
-	case FileTypeJSONZLIB:
-		return fileparser.JSONZLIB
-	case FileTypeJSONSNAPPY:
-		return fileparser.JSONSNAPPY
-	case FileTypeJSONS2:
-		return fileparser.JSONS2
-	case FileTypeJSONLZ4:
-		return fileparser.JSONLZ4
-	case FileTypeJSONLGZ:
-		return fileparser.JSONLGZ
-	case FileTypeJSONLBZ2:
-		return fileparser.JSONLBZ2
-	case FileTypeJSONLXZ:
-		return fileparser.JSONLXZ
-	case FileTypeJSONLZSTD:
-		return fileparser.JSONLZSTD
-	case FileTypeJSONLZLIB:
-		return fileparser.JSONLZLIB
-	case FileTypeJSONLSNAPPY:
-		return fileparser.JSONLSNAPPY
-	case FileTypeJSONLS2:
-		return fileparser.JSONLS2
-	case FileTypeJSONLLZ4:
-		return fileparser.JSONLLZ4
-	default:
-		return fileparser.Unsupported
-	}
+var filesqlToParserFileTypes = map[FileType]parser.FileType{
+	FileTypeCSV:           parser.CSV,
+	FileTypeTSV:           parser.TSV,
+	FileTypeLTSV:          parser.LTSV,
+	FileTypeParquet:       parser.Parquet,
+	FileTypeXLSX:          parser.XLSX,
+	FileTypeCSVGZ:         parser.CSVGZ,
+	FileTypeTSVGZ:         parser.TSVGZ,
+	FileTypeLTSVGZ:        parser.LTSVGZ,
+	FileTypeParquetGZ:     parser.ParquetGZ,
+	FileTypeCSVBZ2:        parser.CSVBZ2,
+	FileTypeTSVBZ2:        parser.TSVBZ2,
+	FileTypeLTSVBZ2:       parser.LTSVBZ2,
+	FileTypeParquetBZ2:    parser.ParquetBZ2,
+	FileTypeCSVXZ:         parser.CSVXZ,
+	FileTypeTSVXZ:         parser.TSVXZ,
+	FileTypeLTSVXZ:        parser.LTSVXZ,
+	FileTypeParquetXZ:     parser.ParquetXZ,
+	FileTypeCSVZSTD:       parser.CSVZSTD,
+	FileTypeTSVZSTD:       parser.TSVZSTD,
+	FileTypeLTSVZSTD:      parser.LTSVZSTD,
+	FileTypeParquetZSTD:   parser.ParquetZSTD,
+	FileTypeXLSXGZ:        parser.XLSXGZ,
+	FileTypeXLSXBZ2:       parser.XLSXBZ2,
+	FileTypeXLSXXZ:        parser.XLSXXZ,
+	FileTypeXLSXZSTD:      parser.XLSXZSTD,
+	FileTypeCSVZLIB:       parser.CSVZLIB,
+	FileTypeTSVZLIB:       parser.TSVZLIB,
+	FileTypeLTSVZLIB:      parser.LTSVZLIB,
+	FileTypeParquetZLIB:   parser.ParquetZLIB,
+	FileTypeXLSXZLIB:      parser.XLSXZLIB,
+	FileTypeCSVSNAPPY:     parser.CSVSNAPPY,
+	FileTypeTSVSNAPPY:     parser.TSVSNAPPY,
+	FileTypeLTSVSNAPPY:    parser.LTSVSNAPPY,
+	FileTypeParquetSNAPPY: parser.ParquetSNAPPY,
+	FileTypeXLSXSNAPPY:    parser.XLSXSNAPPY,
+	FileTypeCSVS2:         parser.CSVS2,
+	FileTypeTSVS2:         parser.TSVS2,
+	FileTypeLTSVS2:        parser.LTSVS2,
+	FileTypeParquetS2:     parser.ParquetS2,
+	FileTypeXLSXS2:        parser.XLSXS2,
+	FileTypeCSVLZ4:        parser.CSVLZ4,
+	FileTypeTSVLZ4:        parser.TSVLZ4,
+	FileTypeLTSVLZ4:       parser.LTSVLZ4,
+	FileTypeParquetLZ4:    parser.ParquetLZ4,
+	FileTypeXLSXLZ4:       parser.XLSXLZ4,
+	FileTypeJSON:          parser.JSON,
+	FileTypeJSONL:         parser.JSONL,
+	FileTypeJSONGZ:        parser.JSONGZ,
+	FileTypeJSONBZ2:       parser.JSONBZ2,
+	FileTypeJSONXZ:        parser.JSONXZ,
+	FileTypeJSONZSTD:      parser.JSONZSTD,
+	FileTypeJSONZLIB:      parser.JSONZLIB,
+	FileTypeJSONSNAPPY:    parser.JSONSNAPPY,
+	FileTypeJSONS2:        parser.JSONS2,
+	FileTypeJSONLZ4:       parser.JSONLZ4,
+	FileTypeJSONLGZ:       parser.JSONLGZ,
+	FileTypeJSONLBZ2:      parser.JSONLBZ2,
+	FileTypeJSONLXZ:       parser.JSONLXZ,
+	FileTypeJSONLZSTD:     parser.JSONLZSTD,
+	FileTypeJSONLZLIB:     parser.JSONLZLIB,
+	FileTypeJSONLSNAPPY:   parser.JSONLSNAPPY,
+	FileTypeJSONLS2:       parser.JSONLS2,
+	FileTypeJSONLLZ4:      parser.JSONLLZ4,
 }
 
-// parserColumnType converts fileparser.ColumnType to filesql.columnType
-func parserColumnType(ct fileparser.ColumnType) columnType {
+var parserToFilesqlFileTypes = reverseParserFileTypes(filesqlToParserFileTypes)
+
+func reverseParserFileTypes(source map[FileType]parser.FileType) map[parser.FileType]FileType {
+	reversed := make(map[parser.FileType]FileType, len(source))
+	for filesqlType, parserType := range source {
+		reversed[parserType] = filesqlType
+	}
+	return reversed
+}
+
+// parserFileType converts filesql.FileType to parser.FileType
+func parserFileType(ft FileType) parser.FileType {
+	if parserType, ok := filesqlToParserFileTypes[ft]; ok {
+		return parserType
+	}
+
+	return parser.Unsupported
+}
+
+// filesqlFileType converts parser.FileType to filesql.FileType.
+func filesqlFileType(ft parser.FileType) FileType {
+	if filesqlType, ok := parserToFilesqlFileTypes[ft]; ok {
+		return filesqlType
+	}
+
+	return FileTypeUnsupported
+}
+
+// parserColumnType converts parser.ColumnType to filesql.columnType
+func parserColumnType(ct parser.ColumnType) columnType {
 	switch ct {
-	case fileparser.TypeInteger:
+	case parser.TypeInteger:
 		return columnTypeInteger
-	case fileparser.TypeReal:
+	case parser.TypeReal:
 		return columnTypeReal
-	case fileparser.TypeDatetime:
+	case parser.TypeDatetime:
 		return columnTypeDatetime
 	default:
 		return columnTypeText
@@ -164,7 +124,7 @@ func parseWithParser(reader io.Reader, fileType FileType, tableName string) (*ta
 	if isTextBaseType(fileType.baseType()) {
 		reader = decodeTextReader(reader)
 	}
-	result, err := fileparser.Parse(reader, parserFileType(fileType))
+	result, err := parser.Parse(reader, parserFileType(fileType))
 	if err != nil {
 		// Convert parser errors to filesql errors for compatibility
 		return nil, convertParserError(err)

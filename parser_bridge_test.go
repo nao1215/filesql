@@ -4,116 +4,147 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/nao1215/fileparser"
+	"github.com/nao1215/filesql/parser"
 	"github.com/stretchr/testify/assert"
 )
+
+type fileTypePair struct {
+	name    string
+	filesql FileType
+	parser  parser.FileType
+}
+
+func parserBackedFileTypePairs() []fileTypePair {
+	return []fileTypePair{
+		// Base types
+		{"CSV", FileTypeCSV, parser.CSV},
+		{"TSV", FileTypeTSV, parser.TSV},
+		{"LTSV", FileTypeLTSV, parser.LTSV},
+		{"Parquet", FileTypeParquet, parser.Parquet},
+		{"XLSX", FileTypeXLSX, parser.XLSX},
+
+		// GZ compressed
+		{"CSV GZ", FileTypeCSVGZ, parser.CSVGZ},
+		{"TSV GZ", FileTypeTSVGZ, parser.TSVGZ},
+		{"LTSV GZ", FileTypeLTSVGZ, parser.LTSVGZ},
+		{"Parquet GZ", FileTypeParquetGZ, parser.ParquetGZ},
+		{"XLSX GZ", FileTypeXLSXGZ, parser.XLSXGZ},
+
+		// BZ2 compressed
+		{"CSV BZ2", FileTypeCSVBZ2, parser.CSVBZ2},
+		{"TSV BZ2", FileTypeTSVBZ2, parser.TSVBZ2},
+		{"LTSV BZ2", FileTypeLTSVBZ2, parser.LTSVBZ2},
+		{"Parquet BZ2", FileTypeParquetBZ2, parser.ParquetBZ2},
+		{"XLSX BZ2", FileTypeXLSXBZ2, parser.XLSXBZ2},
+
+		// XZ compressed
+		{"CSV XZ", FileTypeCSVXZ, parser.CSVXZ},
+		{"TSV XZ", FileTypeTSVXZ, parser.TSVXZ},
+		{"LTSV XZ", FileTypeLTSVXZ, parser.LTSVXZ},
+		{"Parquet XZ", FileTypeParquetXZ, parser.ParquetXZ},
+		{"XLSX XZ", FileTypeXLSXXZ, parser.XLSXXZ},
+
+		// ZSTD compressed
+		{"CSV ZSTD", FileTypeCSVZSTD, parser.CSVZSTD},
+		{"TSV ZSTD", FileTypeTSVZSTD, parser.TSVZSTD},
+		{"LTSV ZSTD", FileTypeLTSVZSTD, parser.LTSVZSTD},
+		{"Parquet ZSTD", FileTypeParquetZSTD, parser.ParquetZSTD},
+		{"XLSX ZSTD", FileTypeXLSXZSTD, parser.XLSXZSTD},
+
+		// ZLIB compressed
+		{"CSV ZLIB", FileTypeCSVZLIB, parser.CSVZLIB},
+		{"TSV ZLIB", FileTypeTSVZLIB, parser.TSVZLIB},
+		{"LTSV ZLIB", FileTypeLTSVZLIB, parser.LTSVZLIB},
+		{"Parquet ZLIB", FileTypeParquetZLIB, parser.ParquetZLIB},
+		{"XLSX ZLIB", FileTypeXLSXZLIB, parser.XLSXZLIB},
+
+		// SNAPPY compressed
+		{"CSV SNAPPY", FileTypeCSVSNAPPY, parser.CSVSNAPPY},
+		{"TSV SNAPPY", FileTypeTSVSNAPPY, parser.TSVSNAPPY},
+		{"LTSV SNAPPY", FileTypeLTSVSNAPPY, parser.LTSVSNAPPY},
+		{"Parquet SNAPPY", FileTypeParquetSNAPPY, parser.ParquetSNAPPY},
+		{"XLSX SNAPPY", FileTypeXLSXSNAPPY, parser.XLSXSNAPPY},
+
+		// S2 compressed
+		{"CSV S2", FileTypeCSVS2, parser.CSVS2},
+		{"TSV S2", FileTypeTSVS2, parser.TSVS2},
+		{"LTSV S2", FileTypeLTSVS2, parser.LTSVS2},
+		{"Parquet S2", FileTypeParquetS2, parser.ParquetS2},
+		{"XLSX S2", FileTypeXLSXS2, parser.XLSXS2},
+
+		// LZ4 compressed
+		{"CSV LZ4", FileTypeCSVLZ4, parser.CSVLZ4},
+		{"TSV LZ4", FileTypeTSVLZ4, parser.TSVLZ4},
+		{"LTSV LZ4", FileTypeLTSVLZ4, parser.LTSVLZ4},
+		{"Parquet LZ4", FileTypeParquetLZ4, parser.ParquetLZ4},
+		{"XLSX LZ4", FileTypeXLSXLZ4, parser.XLSXLZ4},
+
+		// JSON base types
+		{"JSON", FileTypeJSON, parser.JSON},
+		{"JSONL", FileTypeJSONL, parser.JSONL},
+
+		// JSON compressed
+		{"JSON GZ", FileTypeJSONGZ, parser.JSONGZ},
+		{"JSON BZ2", FileTypeJSONBZ2, parser.JSONBZ2},
+		{"JSON XZ", FileTypeJSONXZ, parser.JSONXZ},
+		{"JSON ZSTD", FileTypeJSONZSTD, parser.JSONZSTD},
+		{"JSON ZLIB", FileTypeJSONZLIB, parser.JSONZLIB},
+		{"JSON SNAPPY", FileTypeJSONSNAPPY, parser.JSONSNAPPY},
+		{"JSON S2", FileTypeJSONS2, parser.JSONS2},
+		{"JSON LZ4", FileTypeJSONLZ4, parser.JSONLZ4},
+
+		// JSONL compressed
+		{"JSONL GZ", FileTypeJSONLGZ, parser.JSONLGZ},
+		{"JSONL BZ2", FileTypeJSONLBZ2, parser.JSONLBZ2},
+		{"JSONL XZ", FileTypeJSONLXZ, parser.JSONLXZ},
+		{"JSONL ZSTD", FileTypeJSONLZSTD, parser.JSONLZSTD},
+		{"JSONL ZLIB", FileTypeJSONLZLIB, parser.JSONLZLIB},
+		{"JSONL SNAPPY", FileTypeJSONLSNAPPY, parser.JSONLSNAPPY},
+		{"JSONL S2", FileTypeJSONLS2, parser.JSONLS2},
+		{"JSONL LZ4", FileTypeJSONLLZ4, parser.JSONLLZ4},
+	}
+}
 
 func TestParserFileType(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name     string
-		input    FileType
-		expected fileparser.FileType
-	}{
-		// Base types
-		{"CSV", FileTypeCSV, fileparser.CSV},
-		{"TSV", FileTypeTSV, fileparser.TSV},
-		{"LTSV", FileTypeLTSV, fileparser.LTSV},
-		{"Parquet", FileTypeParquet, fileparser.Parquet},
-		{"XLSX", FileTypeXLSX, fileparser.XLSX},
-
-		// GZ compressed
-		{"CSV GZ", FileTypeCSVGZ, fileparser.CSVGZ},
-		{"TSV GZ", FileTypeTSVGZ, fileparser.TSVGZ},
-		{"LTSV GZ", FileTypeLTSVGZ, fileparser.LTSVGZ},
-		{"Parquet GZ", FileTypeParquetGZ, fileparser.ParquetGZ},
-		{"XLSX GZ", FileTypeXLSXGZ, fileparser.XLSXGZ},
-
-		// BZ2 compressed
-		{"CSV BZ2", FileTypeCSVBZ2, fileparser.CSVBZ2},
-		{"TSV BZ2", FileTypeTSVBZ2, fileparser.TSVBZ2},
-		{"LTSV BZ2", FileTypeLTSVBZ2, fileparser.LTSVBZ2},
-		{"Parquet BZ2", FileTypeParquetBZ2, fileparser.ParquetBZ2},
-		{"XLSX BZ2", FileTypeXLSXBZ2, fileparser.XLSXBZ2},
-
-		// XZ compressed
-		{"CSV XZ", FileTypeCSVXZ, fileparser.CSVXZ},
-		{"TSV XZ", FileTypeTSVXZ, fileparser.TSVXZ},
-		{"LTSV XZ", FileTypeLTSVXZ, fileparser.LTSVXZ},
-		{"Parquet XZ", FileTypeParquetXZ, fileparser.ParquetXZ},
-		{"XLSX XZ", FileTypeXLSXXZ, fileparser.XLSXXZ},
-
-		// ZSTD compressed
-		{"CSV ZSTD", FileTypeCSVZSTD, fileparser.CSVZSTD},
-		{"TSV ZSTD", FileTypeTSVZSTD, fileparser.TSVZSTD},
-		{"LTSV ZSTD", FileTypeLTSVZSTD, fileparser.LTSVZSTD},
-		{"Parquet ZSTD", FileTypeParquetZSTD, fileparser.ParquetZSTD},
-		{"XLSX ZSTD", FileTypeXLSXZSTD, fileparser.XLSXZSTD},
-
-		// ZLIB compressed
-		{"CSV ZLIB", FileTypeCSVZLIB, fileparser.CSVZLIB},
-		{"TSV ZLIB", FileTypeTSVZLIB, fileparser.TSVZLIB},
-		{"LTSV ZLIB", FileTypeLTSVZLIB, fileparser.LTSVZLIB},
-		{"Parquet ZLIB", FileTypeParquetZLIB, fileparser.ParquetZLIB},
-		{"XLSX ZLIB", FileTypeXLSXZLIB, fileparser.XLSXZLIB},
-
-		// SNAPPY compressed
-		{"CSV SNAPPY", FileTypeCSVSNAPPY, fileparser.CSVSNAPPY},
-		{"TSV SNAPPY", FileTypeTSVSNAPPY, fileparser.TSVSNAPPY},
-		{"LTSV SNAPPY", FileTypeLTSVSNAPPY, fileparser.LTSVSNAPPY},
-		{"Parquet SNAPPY", FileTypeParquetSNAPPY, fileparser.ParquetSNAPPY},
-		{"XLSX SNAPPY", FileTypeXLSXSNAPPY, fileparser.XLSXSNAPPY},
-
-		// S2 compressed
-		{"CSV S2", FileTypeCSVS2, fileparser.CSVS2},
-		{"TSV S2", FileTypeTSVS2, fileparser.TSVS2},
-		{"LTSV S2", FileTypeLTSVS2, fileparser.LTSVS2},
-		{"Parquet S2", FileTypeParquetS2, fileparser.ParquetS2},
-		{"XLSX S2", FileTypeXLSXS2, fileparser.XLSXS2},
-
-		// LZ4 compressed
-		{"CSV LZ4", FileTypeCSVLZ4, fileparser.CSVLZ4},
-		{"TSV LZ4", FileTypeTSVLZ4, fileparser.TSVLZ4},
-		{"LTSV LZ4", FileTypeLTSVLZ4, fileparser.LTSVLZ4},
-		{"Parquet LZ4", FileTypeParquetLZ4, fileparser.ParquetLZ4},
-		{"XLSX LZ4", FileTypeXLSXLZ4, fileparser.XLSXLZ4},
-
-		// JSON base types
-		{"JSON", FileTypeJSON, fileparser.JSON},
-		{"JSONL", FileTypeJSONL, fileparser.JSONL},
-
-		// JSON compressed
-		{"JSON GZ", FileTypeJSONGZ, fileparser.JSONGZ},
-		{"JSON BZ2", FileTypeJSONBZ2, fileparser.JSONBZ2},
-		{"JSON XZ", FileTypeJSONXZ, fileparser.JSONXZ},
-		{"JSON ZSTD", FileTypeJSONZSTD, fileparser.JSONZSTD},
-		{"JSON ZLIB", FileTypeJSONZLIB, fileparser.JSONZLIB},
-		{"JSON SNAPPY", FileTypeJSONSNAPPY, fileparser.JSONSNAPPY},
-		{"JSON S2", FileTypeJSONS2, fileparser.JSONS2},
-		{"JSON LZ4", FileTypeJSONLZ4, fileparser.JSONLZ4},
-
-		// JSONL compressed
-		{"JSONL GZ", FileTypeJSONLGZ, fileparser.JSONLGZ},
-		{"JSONL BZ2", FileTypeJSONLBZ2, fileparser.JSONLBZ2},
-		{"JSONL XZ", FileTypeJSONLXZ, fileparser.JSONLXZ},
-		{"JSONL ZSTD", FileTypeJSONLZSTD, fileparser.JSONLZSTD},
-		{"JSONL ZLIB", FileTypeJSONLZLIB, fileparser.JSONLZLIB},
-		{"JSONL SNAPPY", FileTypeJSONLSNAPPY, fileparser.JSONLSNAPPY},
-		{"JSONL S2", FileTypeJSONLS2, fileparser.JSONLS2},
-		{"JSONL LZ4", FileTypeJSONLLZ4, fileparser.JSONLLZ4},
-
-		// Unsupported / default case
-		{"Unsupported", FileTypeUnsupported, fileparser.Unsupported},
-		{"Unknown type", FileType(9999), fileparser.Unsupported},
-	}
-
-	for _, tt := range tests {
+	for _, tt := range parserBackedFileTypePairs() {
 		t.Run(tt.name, func(t *testing.T) {
-			result := parserFileType(tt.input)
-			assert.Equal(t, tt.expected, result)
+			result := parserFileType(tt.filesql)
+			assert.Equal(t, tt.parser, result)
 		})
 	}
+
+	t.Run("Unsupported", func(t *testing.T) {
+		result := parserFileType(FileTypeUnsupported)
+		assert.Equal(t, parser.Unsupported, result)
+	})
+
+	t.Run("Unknown type", func(t *testing.T) {
+		result := parserFileType(FileType(9999))
+		assert.Equal(t, parser.Unsupported, result)
+	})
+}
+
+func TestFilesqlFileType(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range parserBackedFileTypePairs() {
+		t.Run(tt.name, func(t *testing.T) {
+			result := filesqlFileType(tt.parser)
+			assert.Equal(t, tt.filesql, result)
+		})
+	}
+
+	t.Run("Unsupported", func(t *testing.T) {
+		result := filesqlFileType(parser.Unsupported)
+		assert.Equal(t, FileTypeUnsupported, result)
+	})
+
+	t.Run("Unknown type", func(t *testing.T) {
+		result := filesqlFileType(parser.FileType(9999))
+		assert.Equal(t, FileTypeUnsupported, result)
+	})
 }
 
 func TestParserColumnType(t *testing.T) {
@@ -121,14 +152,14 @@ func TestParserColumnType(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		input    fileparser.ColumnType
+		input    parser.ColumnType
 		expected columnType
 	}{
-		{"Integer", fileparser.TypeInteger, columnTypeInteger},
-		{"Real", fileparser.TypeReal, columnTypeReal},
-		{"Datetime", fileparser.TypeDatetime, columnTypeDatetime},
-		{"Text", fileparser.TypeText, columnTypeText},
-		{"Unknown defaults to Text", fileparser.ColumnType(9999), columnTypeText},
+		{"Integer", parser.TypeInteger, columnTypeInteger},
+		{"Real", parser.TypeReal, columnTypeReal},
+		{"Datetime", parser.TypeDatetime, columnTypeDatetime},
+		{"Text", parser.TypeText, columnTypeText},
+		{"Unknown defaults to Text", parser.ColumnType(9999), columnTypeText},
 	}
 
 	for _, tt := range tests {

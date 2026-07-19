@@ -1715,6 +1715,12 @@ func TestDetectFileType(t *testing.T) {
 		{".csv", FileTypeCSV},            // Hidden file with just extension
 		{".csv.gz", FileTypeCSVGZ},       // Hidden compressed file
 		{"file.gz", FileTypeUnsupported}, // Compression only, no base format
+
+		// Uppercase parser-backed extensions
+		{"DATA.CSV", FileTypeCSV},
+		{"DATA.CSV.GZ", FileTypeCSVGZ},
+		{"DATA.JSONL.SNAPPY", FileTypeJSONLSNAPPY},
+		{"DATA.PARQUET.LZ4", FileTypeParquetLZ4},
 	}
 
 	for _, tt := range tests {
