@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/apache/arrow/go/v18 v18.0.0-20241007013041-ab95a4d25142
 	github.com/google/go-cmp v0.7.0
-	github.com/klauspost/compress v1.19.0
+	github.com/klauspost/compress v1.19.1
 	github.com/moov-io/ach v1.61.0
 	github.com/moov-io/wire v0.15.7
 	github.com/nao1215/fileparser v0.5.2
