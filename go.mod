@@ -7,7 +7,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/klauspost/compress v1.19.0
 	github.com/moov-io/ach v1.61.0
-	github.com/moov-io/wire v0.15.7
+	github.com/moov-io/wire v0.15.8
 	github.com/nao1215/fileparser v0.5.2
 	github.com/parquet-go/parquet-go v0.30.1
 	github.com/pierrec/lz4/v4 v4.1.27
