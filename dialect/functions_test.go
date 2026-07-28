@@ -82,6 +82,56 @@ func TestUDFExecution(t *testing.T) {
 	}
 }
 
+// TestPostgreSQLUDFExecution runs the PostgreSQL helper UDFs through a real
+// SQLite connection.
+func TestPostgreSQLUDFExecution(t *testing.T) {
+	if err := RegisterFunctions(); err != nil {
+		t.Fatalf("RegisterFunctions() error: %v", err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{"to_char date", `SELECT TO_CHAR('2026-07-28 13:05:09', 'YYYY-MM-DD HH24:MI:SS')`, "2026-07-28 13:05:09"},
+		{"to_char month name", `SELECT TO_CHAR('2026-07-28', 'FMMonth DD, YYYY')`, "July 28, 2026"},
+		{"to_date", `SELECT TO_DATE('28/07/2026', 'DD/MM/YYYY')`, "2026-07-28"},
+		{"date_trunc month", `SELECT DATE_TRUNC('month', '2026-07-28 13:05:09')`, "2026-07-01 00:00:00"},
+		{"date_trunc year", `SELECT DATE_TRUNC('year', '2026-07-28')`, "2026-01-01 00:00:00"},
+		{"date_trunc quarter", `SELECT DATE_TRUNC('quarter', '2026-07-28')`, "2026-07-01 00:00:00"},
+		{"date_trunc week", `SELECT DATE_TRUNC('week', '2026-07-28')`, "2026-07-27 00:00:00"}, // Monday
+		{"split_part", `SELECT SPLIT_PART('a,b,c', ',', 2)`, "b"},
+		{"split_part neg", `SELECT SPLIT_PART('a,b,c', ',', -1)`, "c"},
+		{"split_part out of range", `SELECT SPLIT_PART('a,b', ',', 5)`, ""},
+		{"initcap", `SELECT INITCAP('hello WORLD_foo')`, "Hello World_Foo"},
+		{"strpos", `SELECT STRPOS('abcabc', 'c')`, "3"},
+		{"strpos not found", `SELECT STRPOS('abc', 'z')`, "0"},
+		{"left", `SELECT LEFT('abcdef', 3)`, "abc"},
+		{"left negative", `SELECT LEFT('abcdef', -2)`, "abcd"},
+		{"right", `SELECT RIGHT('abcdef', 2)`, "ef"},
+		{"right negative", `SELECT RIGHT('abcdef', -2)`, "cdef"},
+		{"regexp_replace", `SELECT REGEXP_REPLACE('foobar', 'o+', 'O')`, "fObar"},
+		{"regexp_replace backref", `SELECT REGEXP_REPLACE('2026-07', '(\d+)-(\d+)', '\2/\1')`, "07/2026"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got sql.NullString
+			if err := db.QueryRowContext(context.Background(), tt.sql).Scan(&got); err != nil {
+				t.Fatalf("%s: query error: %v", tt.sql, err)
+			}
+			if got.String != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.sql, got.String, tt.want)
+			}
+		})
+	}
+}
+
 // TestUDFNullHandling verifies that NULL arguments propagate to NULL for the
 // string/number helpers.
 func TestUDFNullHandling(t *testing.T) {
@@ -101,6 +151,18 @@ func TestUDFNullHandling(t *testing.T) {
 		`SELECT YEAR(NULL)`,
 		`SELECT TRUNCATE(NULL, 2)`,
 		`SELECT DATEDIFF('2026-01-01', NULL)`,
+		`SELECT TO_CHAR(NULL, 'YYYY')`,
+		`SELECT TO_CHAR('2026-01-01', NULL)`,
+		`SELECT TO_DATE(NULL, 'YYYY')`,
+		`SELECT DATE_TRUNC('day', NULL)`,
+		`SELECT DATE_TRUNC(NULL, '2026-01-01')`,
+		`SELECT SPLIT_PART(NULL, ',', 1)`,
+		`SELECT INITCAP(NULL)`,
+		`SELECT STRPOS(NULL, 'a')`,
+		`SELECT LEFT(NULL, 2)`,
+		`SELECT REGEXP_REPLACE(NULL, 'a', 'b')`,
+		`SELECT DATE_PART('year', NULL)`,
+		`SELECT DATE_PART(NULL, '2026-01-01')`,
 	} {
 		var got sql.NullString
 		if err := db.QueryRowContext(context.Background(), q).Scan(&got); err != nil {
@@ -191,10 +253,14 @@ func TestDatePartUnsupported(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	var got sql.NullString
-	err = db.QueryRowContext(context.Background(), `SELECT DATE_PART('century', '2026-07-28')`).Scan(&got)
-	if err == nil {
-		t.Fatal("DATE_PART('century', ...) should error")
+	for _, q := range []string{
+		`SELECT DATE_PART('century', '2026-07-28')`,
+		`SELECT DATE_TRUNC('decade', '2026-07-28')`,
+	} {
+		var got sql.NullString
+		if err := db.QueryRowContext(context.Background(), q).Scan(&got); err == nil {
+			t.Fatalf("%s should error", q)
+		}
 	}
 }
 

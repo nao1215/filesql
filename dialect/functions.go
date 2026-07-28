@@ -50,6 +50,15 @@ var (
 // layoutDateTime is the canonical datetime string the helpers emit.
 const layoutDateTime = "2006-01-02 15:04:05"
 
+// Go reference-time fragments for month and weekday names, shared by the MySQL
+// and PostgreSQL format mappings.
+const (
+	layoutMonthLong    = "January"
+	layoutMonthShort   = "Jan"
+	layoutWeekdayLong  = "Monday"
+	layoutWeekdayShort = "Mon"
+)
+
 // Date-part / interval unit names shared by the date helpers and the interval
 // rewrite so the same spelling is used for a function name, an INTERVAL unit,
 // and a DATE_PART argument.
@@ -98,6 +107,17 @@ func registerAll() error {
 		"repeat":          {2, fnRepeat},
 		"space":           {1, fnSpace},
 		"truncate":        {2, fnTruncate},
+
+		// PostgreSQL helpers.
+		"to_char":        {2, fnToChar},
+		"to_date":        {2, fnToDate},
+		"date_trunc":     {2, fnDateTrunc},
+		"split_part":     {3, fnSplitPart},
+		"initcap":        {1, fnInitcap},
+		"strpos":         {2, fnStrpos},
+		"left":           {2, fnLeft},
+		"right":          {2, fnRight},
+		"regexp_replace": {3, fnRegexpReplace},
 	}
 	for name, spec := range det {
 		if err := sqlite.RegisterDeterministicScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
@@ -312,10 +332,10 @@ var mysqlToGoLayout = map[byte]string{
 	's': "05",
 	'S': "05",
 	'p': "PM",
-	'M': "January",
-	'b': "Jan",
-	'W': "Monday",
-	'a': "Mon",
+	'M': layoutMonthLong,
+	'b': layoutMonthShort,
+	'W': layoutWeekdayLong,
+	'a': layoutWeekdayShort,
 }
 
 // fnDateFormat implements MySQL DATE_FORMAT(date, format).
@@ -591,6 +611,267 @@ func fnTruncate(args []driver.Value) (driver.Value, error) {
 	}
 	factor := math.Pow(10, float64(d))
 	return math.Trunc(x*factor) / factor, nil
+}
+
+// --- PostgreSQL scalar functions ---
+
+// pgToCharTokens maps TO_CHAR template patterns to Go reference-time layout
+// fragments, longest first so the scanner prefers the longest match.
+var pgToCharTokens = []struct{ pat, layout string }{
+	{"YYYY", "2006"},
+	{"YY", "06"},
+	{"MONTH", layoutMonthLong},
+	{"Month", layoutMonthLong},
+	{"MON", layoutMonthShort},
+	{"Mon", layoutMonthShort},
+	{"MM", "01"},
+	{"DAY", layoutWeekdayLong},
+	{"Day", layoutWeekdayLong},
+	{"DY", layoutWeekdayShort},
+	{"Dy", layoutWeekdayShort},
+	{"DD", "02"},
+	{"HH24", "15"},
+	{"HH12", "03"},
+	{"HH", "03"},
+	{"MI", "04"},
+	{"SS", "05"},
+	{"AM", "PM"},
+	{"PM", "PM"},
+	{"am", "pm"},
+	{"pm", "pm"},
+}
+
+// toCharLayout converts a PostgreSQL TO_CHAR/TO_DATE template into a Go layout,
+// dropping the "FM" fill-mode prefix and passing literal characters through.
+func toCharLayout(format string) string {
+	var b strings.Builder
+	for i := 0; i < len(format); {
+		if strings.HasPrefix(format[i:], "FM") {
+			i += 2
+			continue
+		}
+		matched := false
+		for _, tok := range pgToCharTokens {
+			if strings.HasPrefix(format[i:], tok.pat) {
+				b.WriteString(tok.layout)
+				i += len(tok.pat)
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			b.WriteByte(format[i])
+			i++
+		}
+	}
+	return b.String()
+}
+
+// fnToChar implements PostgreSQL TO_CHAR(value, format) for date/time values.
+func fnToChar(args []driver.Value) (driver.Value, error) {
+	format, ok := toString(args[1])
+	if !ok {
+		return nil, nil
+	}
+	tm, ok := toStringTime(args[0])
+	if !ok {
+		return nil, nil
+	}
+	return tm.Format(toCharLayout(format)), nil
+}
+
+// fnToDate implements PostgreSQL TO_DATE(str, format).
+func fnToDate(args []driver.Value) (driver.Value, error) {
+	s, ok := toString(args[0])
+	format, ok2 := toString(args[1])
+	if !ok || !ok2 {
+		return nil, nil
+	}
+	tm, ok := parseLayout(toCharLayout(format), s)
+	if !ok {
+		return nil, nil
+	}
+	return tm.Format("2006-01-02"), nil
+}
+
+// fnDateTrunc implements PostgreSQL DATE_TRUNC(unit, timestamp).
+func fnDateTrunc(args []driver.Value) (driver.Value, error) {
+	unit, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	tm, ok := toStringTime(args[1])
+	if !ok {
+		return nil, nil
+	}
+	y, mo, d := tm.Date()
+	loc := tm.Location()
+	switch strings.ToLower(strings.TrimSpace(unit)) {
+	case unitYear:
+		return time.Date(y, 1, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
+	case "quarter":
+		q := (int(mo)-1)/3*3 + 1
+		return time.Date(y, time.Month(q), 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
+	case unitMonth:
+		return time.Date(y, mo, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
+	case "week":
+		offset := (int(tm.Weekday()) + 6) % 7 // days since Monday
+		monday := time.Date(y, mo, d, 0, 0, 0, 0, loc).AddDate(0, 0, -offset)
+		return monday.Format(layoutDateTime), nil
+	case unitDay:
+		return time.Date(y, mo, d, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
+	case unitHour:
+		return time.Date(y, mo, d, tm.Hour(), 0, 0, 0, loc).Format(layoutDateTime), nil
+	case unitMinute:
+		return time.Date(y, mo, d, tm.Hour(), tm.Minute(), 0, 0, loc).Format(layoutDateTime), nil
+	case unitSecond:
+		return time.Date(y, mo, d, tm.Hour(), tm.Minute(), tm.Second(), 0, loc).Format(layoutDateTime), nil
+	default:
+		return nil, fmt.Errorf("dialect: unsupported DATE_TRUNC unit %q", unit)
+	}
+}
+
+// fnSplitPart implements PostgreSQL SPLIT_PART(string, delimiter, n) with a
+// 1-based field index.
+func fnSplitPart(args []driver.Value) (driver.Value, error) {
+	s, ok1 := toString(args[0])
+	delim, ok2 := toString(args[1])
+	n, ok3 := toInt(args[2])
+	if !ok1 || !ok2 || !ok3 {
+		return nil, nil
+	}
+	if delim == "" {
+		if n == 1 || n == -1 {
+			return s, nil
+		}
+		return "", nil
+	}
+	parts := strings.Split(s, delim)
+	idx := int(n)
+	if idx < 0 {
+		idx = len(parts) + idx + 1
+	}
+	if idx < 1 || idx > len(parts) {
+		return "", nil
+	}
+	return parts[idx-1], nil
+}
+
+// fnInitcap implements PostgreSQL INITCAP: uppercase the first letter of each
+// alphanumeric run, lowercase the rest.
+func fnInitcap(args []driver.Value) (driver.Value, error) {
+	s, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	var b strings.Builder
+	prevAlnum := false
+	for _, r := range s {
+		alnum := isAlnumRune(r)
+		switch {
+		case alnum && !prevAlnum:
+			b.WriteString(strings.ToUpper(string(r)))
+		case alnum:
+			b.WriteString(strings.ToLower(string(r)))
+		default:
+			b.WriteRune(r)
+		}
+		prevAlnum = alnum
+	}
+	return b.String(), nil
+}
+
+func isAlnumRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+}
+
+// fnStrpos implements PostgreSQL STRPOS(string, substring): 1-based index or 0.
+func fnStrpos(args []driver.Value) (driver.Value, error) {
+	s, ok1 := toString(args[0])
+	sub, ok2 := toString(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	idx := strings.Index(s, sub)
+	if idx < 0 {
+		return int64(0), nil
+	}
+	return int64(idx + 1), nil
+}
+
+func fnLeft(args []driver.Value) (driver.Value, error)  { return leftRight(args, true) }
+func fnRight(args []driver.Value) (driver.Value, error) { return leftRight(args, false) }
+
+// leftRight implements LEFT/RIGHT with PostgreSQL's negative-count semantics: a
+// negative n removes |n| characters from the far end.
+func leftRight(args []driver.Value, left bool) (driver.Value, error) {
+	s, ok1 := toString(args[0])
+	n, ok2 := toInt(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	runes := []rune(s)
+	count := int(n)
+	if count < 0 {
+		count = len(runes) + count
+	}
+	if count <= 0 {
+		return "", nil
+	}
+	if count > len(runes) {
+		count = len(runes)
+	}
+	if left {
+		return string(runes[:count]), nil
+	}
+	return string(runes[len(runes)-count:]), nil
+}
+
+// fnRegexpReplace implements REGEXP_REPLACE(source, pattern, replacement),
+// replacing every match. PostgreSQL back-references (\1) are translated to Go's
+// ${1} expansion form.
+func fnRegexpReplace(args []driver.Value) (driver.Value, error) {
+	src, ok1 := toString(args[0])
+	pattern, ok2 := toString(args[1])
+	repl, ok3 := toString(args[2])
+	if !ok1 || !ok2 || !ok3 {
+		return nil, nil
+	}
+	re, err := compileRegexp(pattern)
+	if err != nil {
+		return nil, err
+	}
+	return re.ReplaceAllString(src, pgReplacement(repl)), nil
+}
+
+// pgReplacement translates PostgreSQL replacement back-references (\1..\9, \&) to
+// the ${n} form Go's regexp expansion understands.
+func pgReplacement(repl string) string {
+	var b strings.Builder
+	for i := 0; i < len(repl); i++ {
+		if repl[i] == '\\' && i+1 < len(repl) {
+			c := repl[i+1]
+			switch {
+			case c >= '0' && c <= '9':
+				b.WriteString("${")
+				b.WriteByte(c)
+				b.WriteByte('}')
+			case c == '&':
+				b.WriteString("${0}")
+			default:
+				b.WriteByte(c)
+			}
+			i++
+			continue
+		}
+		if repl[i] == '$' {
+			// Escape a literal '$' so Go does not treat it as an expansion.
+			b.WriteString("$$")
+			continue
+		}
+		b.WriteByte(repl[i])
+	}
+	return b.String()
 }
 
 // --- time parsing ---
