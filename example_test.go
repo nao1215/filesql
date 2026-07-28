@@ -220,6 +220,9 @@ func ExampleOpen_multipleFiles() {
 		fmt.Printf("- %s\n", tableName)
 	}
 
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
 	// Output:
 	// Available tables:
 	// - departments
@@ -264,6 +267,9 @@ func ExampleOpenContext() {
 		fmt.Printf("- %s: $%.0f\n", name, salary)
 	}
 
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
 	// Output:
 	// High earners (>$70,000):
 	// - Alice Johnson: $95000
@@ -380,6 +386,9 @@ func ExampleOpen_salesAnalysis() {
 			category, region, orderCount, totalRevenue, avgOrderValue, firstOrder, lastOrder)
 	}
 
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
 	// Output:
 	// Sales Analysis by Category and Region:
 	// =====================================
@@ -452,6 +461,9 @@ func ExampleOpen_customerInsights() {
 			firstPurchase, lastPurchase, daysActive, categoriesPurchased)
 	}
 
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
 	// Output:
 	// Customer Insights (Multi-Purchase Customers):
 	// ===========================================
@@ -650,6 +662,9 @@ func ExampleOpen_performanceOptimization() {
 			}
 			fmt.Printf("  - %s (ID: %d, Orders: %d)\n", name, customerID, totalOrders)
 		}
+		if err := rows.Err(); err != nil {
+			log.Fatal(err)
+		}
 		_ = rows.Close() // Ignore close error in test cleanup
 		offset += pageSize
 	}
@@ -676,6 +691,9 @@ func ExampleOpen_performanceOptimization() {
 		fmt.Printf("  - %s (%s) - Registered: %s\n", name, email, regDate)
 	}
 
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
 	// Technique 3: Aggregate queries for summary statistics
 	fmt.Println("\n3. Summary statistics:")
 	var totalCustomers int
@@ -769,6 +787,9 @@ func ExampleOpen_advancedSQL() {
 		}
 		fmt.Printf("%-15s %-12s $%-7.0f %-10d %d\n", name, department, salary, salaryRank, overallRank)
 	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
 	_ = rows.Close() // Ignore close error in test cleanup
 
 	// Common Table Expressions (CTE)
@@ -823,6 +844,9 @@ func ExampleOpen_advancedSQL() {
 		fmt.Printf("%-12s %-5d $%-9.0f $%-11.0f $%-9.0f %s\n",
 			department, employeeCount, avgSalary, companyAvg, salaryDiff, comparison)
 	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
 	_ = rows.Close() // Ignore close error in test cleanup
 
 	// JSON operations (if data contains JSON)
@@ -856,6 +880,9 @@ func ExampleOpen_advancedSQL() {
 			log.Fatal(err)
 		}
 		fmt.Printf("%-15s %-6d %-15s %-8d %s\n", name, nameLength, formattedName, spacePos, firstName)
+	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
 	}
 	_ = rows.Close() // Ignore close error in test cleanup
 
@@ -934,6 +961,9 @@ func ExampleOpen_compressionSupport() {
 
 		fmt.Printf("- %s: %d records\n", tableName, count)
 	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
 	_ = rows.Close() // Ignore close error in test cleanup
 
 	// Demonstrate querying across compressed files
@@ -973,6 +1003,9 @@ func ExampleOpen_compressionSupport() {
 			log.Fatal(err)
 		}
 		fmt.Printf("%-12s %-8d %-19s %s\n", sourceTable, totalRecords, earliest, latest)
+	}
+	if err := analysisRows.Err(); err != nil {
+		log.Fatal(err)
 	}
 	_ = analysisRows.Close() // Ignore close error in test cleanup
 
@@ -1032,6 +1065,9 @@ func ExampleOpen_webLogAnalysis() {
 		}
 		fmt.Printf("%-20s %-6d %d\n", path, hits, unique)
 	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
 	_ = rows.Close() // Ignore close error in test cleanup
 
 	// Error analysis
@@ -1060,6 +1096,9 @@ func ExampleOpen_webLogAnalysis() {
 		}
 		fmt.Printf("%-12d %-6d %-10.2f%%\n", statusCode, errorCount, percentage)
 	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
 	_ = rows.Close() // Ignore close error in test cleanup
 
 	// Hourly traffic pattern
@@ -1086,6 +1125,9 @@ func ExampleOpen_webLogAnalysis() {
 			log.Fatal(err)
 		}
 		fmt.Printf("%-5d %-9d %-12.0fms\n", hour, requests, avgResponseTime)
+	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
 	}
 	_ = rows.Close() // Ignore close error in test cleanup
 
@@ -1159,6 +1201,9 @@ func ExampleOpen_financialDataAnalysis() {
 		}
 		fmt.Printf("%-8s %-6d $%-9.2f $%-7.2f $%.2f\n", month, count, revenue, average, largest)
 	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
 	_ = rows.Close() // Ignore close error in test cleanup
 
 	// Expense category breakdown
@@ -1190,6 +1235,9 @@ func ExampleOpen_financialDataAnalysis() {
 			log.Fatal(err)
 		}
 		fmt.Printf("%-15s %-6d $%-11.2f %-10.2f%%\n", category, count, expense, percentage)
+	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
 	}
 	_ = rows.Close() // Ignore close error in test cleanup
 
@@ -1489,7 +1537,7 @@ func ExampleDumpDatabase_multipleFormats() {
 	defer db.Close()
 
 	// Add some data to demonstrate functionality
-	_, err = db.Exec("INSERT INTO sample (id, name, age, email) VALUES (4, 'Alice Brown', 28, 'alice@example.com')")
+	_, err = db.ExecContext(context.Background(), "INSERT INTO sample (id, name, age, email) VALUES (4, 'Alice Brown', 28, 'alice@example.com')")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1585,7 +1633,7 @@ func ExampleDumpDatabase_dataProcessing() {
 	defer db.Close()
 
 	// Process data with SQL
-	_, err = db.Exec(`
+	_, err = db.ExecContext(context.Background(), `
 		UPDATE sample 
 		SET age = age + 1 
 		WHERE name LIKE '%John%'
@@ -1595,7 +1643,7 @@ func ExampleDumpDatabase_dataProcessing() {
 	}
 
 	// Add aggregated data
-	_, err = db.Exec(`
+	_, err = db.ExecContext(context.Background(), `
 		INSERT INTO sample (id, name, age, email) 
 		SELECT 999, 'Summary: ' || COUNT(*), AVG(age), 'summary@example.com'
 		FROM sample 
@@ -1799,7 +1847,7 @@ func ExampleDBBuilder_AddPath() {
 	defer db.Close()
 
 	// Query the data
-	rows, err := db.Query("SELECT COUNT(*) FROM users")
+	rows, err := db.QueryContext(context.Background(), "SELECT COUNT(*) FROM users")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1808,6 +1856,9 @@ func ExampleDBBuilder_AddPath() {
 	var count int
 	if rows.Next() {
 		rows.Scan(&count)
+	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
 	}
 	fmt.Printf("Number of users: %d\n", count)
 	// Output: Number of users: 2
@@ -1845,7 +1896,7 @@ func ExampleDBBuilder_AddPaths() {
 	defer db.Close()
 
 	// Query data from both tables
-	rows, err := db.Query(`
+	rows, err := db.QueryContext(context.Background(), `
 		SELECT u.name, p.product_name 
 		FROM users u 
 		JOIN products p ON u.id = p.id
@@ -1859,6 +1910,9 @@ func ExampleDBBuilder_AddPaths() {
 		var name, product string
 		rows.Scan(&name, &product)
 		fmt.Printf("%s has %s\n", name, product)
+	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
 	}
 	// Output: Alice has Laptop
 	// Bob has Phone
@@ -1892,7 +1946,7 @@ func ExampleDBBuilder_AddFS() {
 	// Clean up temporary files
 
 	// List all tables that were created from the filesystem
-	rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+	rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1905,6 +1959,9 @@ func ExampleDBBuilder_AddFS() {
 		tableCount++
 	}
 
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
 	fmt.Printf("Created %d tables from filesystem\n", tableCount)
 	// Output: Created 3 tables from filesystem
 }
@@ -1935,7 +1992,7 @@ func ExampleDBBuilder_AddFS_embedFS() {
 	// Clean up temporary files
 
 	// Count the number of tables created from embedded files
-	rows, err := db.Query("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
+	rows, err := db.QueryContext(context.Background(), "SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1944,6 +2001,9 @@ func ExampleDBBuilder_AddFS_embedFS() {
 	var tableCount int
 	if rows.Next() {
 		rows.Scan(&tableCount)
+	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
 	}
 
 	fmt.Printf("Created %d tables from embedded files\n", tableCount)
@@ -1999,7 +2059,7 @@ func ExampleDBBuilder_Open() {
 	defer db.Close()
 
 	// Perform complex SQL query
-	rows, err := db.Query(`
+	rows, err := db.QueryContext(context.Background(), `
 		SELECT name, salary,
 		       salary - (SELECT AVG(salary) FROM employees) as salary_diff
 		FROM employees 
@@ -2016,6 +2076,9 @@ func ExampleDBBuilder_Open() {
 		var salary, diff float64
 		rows.Scan(&name, &salary, &diff)
 		fmt.Printf("%s: $%.0f (+$%.0f above average)\n", name, salary, diff)
+	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
 	}
 	// Output: Bob: $60000 (+$5000 above average)
 }
@@ -2057,7 +2120,7 @@ func ExampleDBBuilder_chaining() {
 	defer connection.Close()
 
 	// Count tables from different sources
-	rows, err := connection.Query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+	rows, err := connection.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -2070,6 +2133,9 @@ func ExampleDBBuilder_chaining() {
 		tableCount++
 	}
 
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
 	fmt.Printf("Successfully loaded %d tables from mixed sources\n", tableCount)
 	// Output: Successfully loaded 3 tables from mixed sources
 }
@@ -2158,7 +2224,7 @@ func ExampleDBBuilder_AddReader() {
 	defer db.Close()
 
 	// Query the data
-	rows, err := db.Query(`
+	rows, err := db.QueryContext(context.Background(), `
 		SELECT name, department, salary 
 		FROM employees 
 		WHERE salary > 80000 
@@ -2178,6 +2244,9 @@ func ExampleDBBuilder_AddReader() {
 			log.Fatal(err)
 		}
 		fmt.Printf("- %s (%s): $%d\n", name, dept, salary)
+	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
 	}
 	// Output:
 	// High earners (salary > 80,000):
@@ -2210,7 +2279,7 @@ func ExampleDBBuilder_AddReader_compressed() {
 
 	// Query the products
 	var count int
-	err = db.QueryRow("SELECT COUNT(*) FROM products WHERE price < 100").Scan(&count)
+	err = db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM products WHERE price < 100").Scan(&count)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -2251,7 +2320,7 @@ func ExampleDBBuilder_AddReader_multiple() {
 	defer db.Close()
 
 	// Join query across both tables
-	rows, err := db.Query(`
+	rows, err := db.QueryContext(context.Background(), `
 		SELECT u.name, SUM(o.amount) as total_spent
 		FROM users u
 		JOIN orders o ON u.user_id = o.user_id
@@ -2271,6 +2340,9 @@ func ExampleDBBuilder_AddReader_multiple() {
 			log.Fatal(err)
 		}
 		fmt.Printf("- %s: $%.0f\n", name, total)
+	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
 	}
 	// Output:
 	// Customer spending:

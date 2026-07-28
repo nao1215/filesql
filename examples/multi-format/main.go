@@ -18,9 +18,9 @@ func main() {
 	// Open multiple files of different formats at once
 	// Each file becomes a separate table
 	db, err := filesql.OpenContext(ctx,
-		"products.csv",  // CSV format
-		"orders.tsv",    // TSV format
-		"logs.ltsv",     // LTSV format
+		"products.csv", // CSV format
+		"orders.tsv",   // TSV format
+		"logs.ltsv",    // LTSV format
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -82,7 +82,12 @@ func main() {
 }
 
 // printRows prints all rows from the query result.
-func printRows(rows interface{ Next() bool; Columns() ([]string, error); Scan(...interface{}) error; Close() error }) {
+func printRows(rows interface {
+	Next() bool
+	Columns() ([]string, error)
+	Scan(...interface{}) error
+	Close() error
+}) {
 	defer rows.Close()
 
 	cols, err := rows.Columns()

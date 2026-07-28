@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-07-29
+
+### Added
+- **Queries can now be written in MySQL, PostgreSQL, or GoogleSQL syntax.** Configure the builder with `WithDialect(dialect.MySQL)`, `dialect.PostgreSQL`, or `dialect.GoogleSQL` (BigQuery / Cloud Spanner), and filesql translates each query to SQLite before running it. Loading files always uses SQLite regardless of the dialect, so only the queries you write are affected. Translation is best-effort compatibility: common incompatibilities are rewritten (identifier quoting, `DATE_ADD`/`DATE_SUB`, `EXTRACT`, `::`/`SAFE_CAST` casts, `ILIKE`, `POSITION`, `SUBSTRING ... FROM ... FOR`, `STRING_AGG`, the `~`/`!~` regex operators, and more), function gaps are filled by helper functions registered into the driver (`NOW`, `DATE_FORMAT`, `TO_CHAR`, `SPLIT_PART`, `SAFE_DIVIDE`, `REGEXP_CONTAINS`, `GENERATE_UUID`, ...), constructs with no SQLite equivalent (for example `QUALIFY`, `DISTINCT ON`, and `ARRAY`/`STRUCT` types) return a clear error, and anything else is passed through to SQLite. The new `dialect` package (`Dialect`, `Parse`, `Translate`, `RegisterFunctions`, `RegisterTranslator`) exposes the translation layer for direct use. A non-SQLite dialect cannot be combined with auto-save in this release.
+
+### Internal
+- Added `context`-based query calls and `rows.Err()` checks to the runnable README/API examples, and applied `gofmt` to the standalone `examples/` module.
+
 ## [0.18.0] - 2026-07-19
 
 ### Added
@@ -769,7 +777,9 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.17.2...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/nao1215/filesql/compare/v0.18.0...v0.19.0
+[0.18.0]: https://github.com/nao1215/filesql/compare/v0.17.2...v0.18.0
 [0.17.2]: https://github.com/nao1215/filesql/compare/v0.17.1...v0.17.2
 [0.17.1]: https://github.com/nao1215/filesql/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/nao1215/filesql/compare/v0.16.0...v0.17.0

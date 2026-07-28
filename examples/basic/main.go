@@ -57,7 +57,12 @@ func main() {
 }
 
 // printRows prints all rows from the query result.
-func printRows(rows interface{ Next() bool; Columns() ([]string, error); Scan(...interface{}) error; Close() error }) {
+func printRows(rows interface {
+	Next() bool
+	Columns() ([]string, error)
+	Scan(...interface{}) error
+	Close() error
+}) {
 	defer rows.Close()
 
 	cols, err := rows.Columns()
