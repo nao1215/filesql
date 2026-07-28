@@ -28,6 +28,7 @@ filesql is for cases where the data is already in a file and the fastest useful 
 ## Features
 
 - Query file data with standard SQLite syntax, including joins, CTEs, and `json_extract()`.
+- Optionally query with MySQL, PostgreSQL, or GoogleSQL syntax via `WithDialect` (translated to SQLite).
 - Read from file paths, directories, `io.Reader`, and `embed.FS`.
 - Handle compressed CSV, TSV, LTSV, JSON, JSONL, Parquet, and XLSX files transparently.
 - Load into a new in-memory database or into a `*sql.DB` you already manage.
@@ -120,6 +121,64 @@ func main() {
 	}
 }
 ```
+
+### Query with another SQL dialect
+
+By default queries use SQLite syntax. `WithDialect` lets you write queries in
+MySQL, PostgreSQL, or GoogleSQL (BigQuery / Cloud Spanner) instead; filesql
+translates them to SQLite before running. Loading files always uses SQLite, so
+only the queries you write are affected.
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/nao1215/filesql"
+	"github.com/nao1215/filesql/dialect"
+)
+
+func main() {
+	ctx := context.Background()
+
+	builder, err := filesql.NewBuilder().
+		AddPath("users.csv").
+		WithDialect(dialect.PostgreSQL).
+		Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	db, err := builder.Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// PostgreSQL syntax: "::" cast and ILIKE.
+	rows, err := db.QueryContext(ctx,
+		"SELECT name, age::text FROM users WHERE name ILIKE 'a%'")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+	// ...
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("ok")
+}
+```
+
+Translation is best-effort compatibility, not a full emulator: common
+incompatibilities (identifier quoting, `DATE_ADD`, `SPLIT_PART`, `SAFE_DIVIDE`,
+`EXTRACT`, casts, …) are rewritten or backed by helper functions, constructs
+with no SQLite equivalent (for example `QUALIFY` or `DISTINCT ON`) return a
+clear error, and anything else is passed through to SQLite. A non-SQLite dialect
+cannot be combined with auto-save. See the [`dialect`](./dialect) package for the
+full list of supported translations.
 
 ### Load into a database you already own
 
