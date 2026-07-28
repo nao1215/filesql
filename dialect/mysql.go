@@ -69,70 +69,19 @@ func mysqlCallPass(tokens []token) ([]token, error) {
 // rewritten by the main pass.
 func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, error) {
 	switch strings.ToUpper(tokens[nameIdx].text) {
-	case "EXTRACT":
+	case fnNameExtract:
 		return rewriteExtractCall(tokens, open, closeIdx, mysqlCallPass)
 	case "DATE_ADD":
-		return rewriteDateArith(tokens, open, closeIdx, "+")
+		return rewriteDateArith(tokens, open, closeIdx, "+", mysqlCallPass)
 	case "DATE_SUB":
-		return rewriteDateArith(tokens, open, closeIdx, "-")
+		return rewriteDateArith(tokens, open, closeIdx, "-", mysqlCallPass)
 	case "GROUP_CONCAT":
 		return rewriteGroupConcat(tokens, nameIdx, open, closeIdx)
-	case "CAST":
+	case fnNameCast:
 		return rewriteCastCall(tokens, nameIdx, open, closeIdx, mysqlCastTypes, mysqlCallPass)
 	default:
 		return nil, false, nil
 	}
-}
-
-// mysqlIntervalUnits maps the INTERVAL units supported by M-5 to the SQLite
-// datetime modifier unit.
-var mysqlIntervalUnits = map[string]string{
-	"SECOND": unitSecond,
-	"MINUTE": unitMinute,
-	"HOUR":   unitHour,
-	"DAY":    unitDay,
-	"MONTH":  unitMonth,
-	"YEAR":   unitYear,
-}
-
-// rewriteDateArith implements M-5: DATE_ADD/DATE_SUB(x, INTERVAL n unit) ->
-// datetime(x, '±n unit'). sign is "+" for DATE_ADD and "-" for DATE_SUB.
-func rewriteDateArith(tokens []token, open, closeIdx int, sign string) ([]token, bool, error) {
-	comma := topLevelComma(tokens, open, closeIdx)
-	if comma < 0 {
-		return nil, false, nil
-	}
-	interval := nextSig(tokens, comma+1)
-	if interval < 0 || !isWordEq(tokens[interval], "INTERVAL") {
-		return nil, false, nil
-	}
-	value := nextSig(tokens, interval+1)
-	if value < 0 || tokens[value].kind != tokNumber {
-		return nil, false, fmt.Errorf("%w: DATE_ADD/DATE_SUB INTERVAL value must be a numeric literal", ErrUnsupportedSyntax)
-	}
-	unitTok := nextSig(tokens, value+1)
-	if unitTok < 0 || tokens[unitTok].kind != tokWord {
-		return nil, false, fmt.Errorf("%w: DATE_ADD/DATE_SUB INTERVAL is missing a unit", ErrUnsupportedSyntax)
-	}
-	unit, ok := mysqlIntervalUnits[strings.ToUpper(tokens[unitTok].text)]
-	if !ok {
-		return nil, false, fmt.Errorf("%w: unsupported INTERVAL unit %q", ErrUnsupportedSyntax, tokens[unitTok].text)
-	}
-	if after := nextSig(tokens, unitTok+1); after != closeIdx {
-		return nil, false, fmt.Errorf("%w: unsupported INTERVAL expression", ErrUnsupportedSyntax)
-	}
-
-	expr, err := mysqlCallPass(tokens[open+1 : comma])
-	if err != nil {
-		return nil, false, err
-	}
-	expr = trimSpaceTokens(expr)
-	modifier := sign + tokens[value].text + " " + unit
-	repl := make([]token, 0, len(expr)+6)
-	repl = append(repl, wordToken("datetime"), opToken("("))
-	repl = append(repl, expr...)
-	repl = append(repl, opToken(","), spaceToken(), stringToken(modifier), opToken(")"))
-	return repl, true, nil
 }
 
 // rewriteGroupConcat implements M-6: GROUP_CONCAT(x SEPARATOR s) ->

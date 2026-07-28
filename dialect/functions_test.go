@@ -132,6 +132,62 @@ func TestPostgreSQLUDFExecution(t *testing.T) {
 	}
 }
 
+// TestGoogleSQLUDFExecution runs the GoogleSQL helper UDFs through a real SQLite
+// connection.
+func TestGoogleSQLUDFExecution(t *testing.T) {
+	if err := RegisterFunctions(); err != nil {
+		t.Fatalf("RegisterFunctions() error: %v", err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{"safe_divide", `SELECT SAFE_DIVIDE(10, 4)`, "2.5"},
+		{"safe_divide by zero", `SELECT IFNULL(CAST(SAFE_DIVIDE(1, 0) AS TEXT), 'null')`, "null"},
+		{"starts_with true", `SELECT STARTS_WITH('foobar', 'foo')`, "1"},
+		{"starts_with false", `SELECT STARTS_WITH('foobar', 'bar')`, "0"},
+		{"ends_with", `SELECT ENDS_WITH('foobar', 'bar')`, "1"},
+		{"regexp_contains", `SELECT REGEXP_CONTAINS('abc123', '[0-9]+')`, "1"},
+		{"regexp_extract group", `SELECT REGEXP_EXTRACT('id=42', '=(\d+)')`, "42"},
+		{"regexp_extract whole", `SELECT REGEXP_EXTRACT('abc123', '[0-9]+')`, "123"},
+		{"date_diff day", `SELECT DATE_DIFF('2026-07-28', '2026-07-25', 'day')`, "3"},
+		{"date_diff week", `SELECT DATE_DIFF('2026-07-28', '2026-07-14', 'week')`, "2"},
+		{"date_diff month", `SELECT DATE_DIFF('2026-07-01', '2026-01-01', 'month')`, "6"},
+		{"date_diff quarter", `SELECT DATE_DIFF('2026-07-01', '2026-01-01', 'quarter')`, "2"},
+		{"date_diff year", `SELECT DATE_DIFF('2026-01-01', '2020-01-01', 'year')`, "6"},
+		{"timestamp_diff hour", `SELECT TIMESTAMP_DIFF('2026-01-01 05:00:00', '2026-01-01 00:00:00', 'hour')`, "5"},
+		{"timestamp_diff minute", `SELECT TIMESTAMP_DIFF('2026-01-01 00:30:00', '2026-01-01 00:00:00', 'minute')`, "30"},
+		{"timestamp_diff second", `SELECT TIMESTAMP_DIFF('2026-01-01 00:00:10', '2026-01-01 00:00:01', 'second')`, "9"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got sql.NullString
+			if err := db.QueryRowContext(context.Background(), tt.sql).Scan(&got); err != nil {
+				t.Fatalf("%s: query error: %v", tt.sql, err)
+			}
+			if got.String != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.sql, got.String, tt.want)
+			}
+		})
+	}
+
+	// GENERATE_UUID returns a well-formed v4 UUID.
+	var uuid string
+	if err := db.QueryRowContext(context.Background(), `SELECT GENERATE_UUID()`).Scan(&uuid); err != nil {
+		t.Fatalf("GENERATE_UUID: %v", err)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(uuid) {
+		t.Fatalf("GENERATE_UUID() = %q, not a v4 UUID", uuid)
+	}
+}
+
 // TestUDFNullHandling verifies that NULL arguments propagate to NULL for the
 // string/number helpers.
 func TestUDFNullHandling(t *testing.T) {
@@ -163,6 +219,11 @@ func TestUDFNullHandling(t *testing.T) {
 		`SELECT REGEXP_REPLACE(NULL, 'a', 'b')`,
 		`SELECT DATE_PART('year', NULL)`,
 		`SELECT DATE_PART(NULL, '2026-01-01')`,
+		`SELECT SAFE_DIVIDE(NULL, 2)`,
+		`SELECT STARTS_WITH(NULL, 'a')`,
+		`SELECT REGEXP_CONTAINS(NULL, 'a')`,
+		`SELECT REGEXP_EXTRACT('abc', 'z')`,
+		`SELECT DATE_DIFF(NULL, '2026-01-01', 'day')`,
 	} {
 		var got sql.NullString
 		if err := db.QueryRowContext(context.Background(), q).Scan(&got); err != nil {
@@ -256,6 +317,7 @@ func TestDatePartUnsupported(t *testing.T) {
 	for _, q := range []string{
 		`SELECT DATE_PART('century', '2026-07-28')`,
 		`SELECT DATE_TRUNC('decade', '2026-07-28')`,
+		`SELECT DATE_DIFF('2026-01-01', '2020-01-01', 'century')`,
 	} {
 		var got sql.NullString
 		if err := db.QueryRowContext(context.Background(), q).Scan(&got); err == nil {

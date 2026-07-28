@@ -72,6 +72,8 @@ const (
 	unitDayOfWeek = "dayofweek"
 	unitDayOfYear = "dayofyear"
 	unitWeekday   = "weekday"
+	unitQuarter   = "quarter"
+	unitWeek      = "week"
 )
 
 // scalarFn adapts a simpler signature (no context) to the driver's scalar
@@ -85,7 +87,6 @@ func registerAll() error {
 		fn   scalarFn
 	}{
 		"regexp":          {2, fnRegexp}, // REGEXP(pattern, s); also the "x REGEXP y" operator
-		"regexp_contains": {2, fnRegexp}, // GoogleSQL alias used by later dialects
 		"if":              {3, fnIf},     // IF(cond, a, b)
 		"date_format":     {2, fnDateFormat},
 		"str_to_date":     {2, fnStrToDate},
@@ -118,6 +119,15 @@ func registerAll() error {
 		"left":           {2, fnLeft},
 		"right":          {2, fnRight},
 		"regexp_replace": {3, fnRegexpReplace},
+
+		// GoogleSQL helpers.
+		"safe_divide":     {2, fnSafeDivide},
+		"starts_with":     {2, fnStartsWith},
+		"ends_with":       {2, fnEndsWith},
+		"regexp_contains": {2, fnRegexpContains},
+		"regexp_extract":  {2, fnRegexpExtract},
+		"date_diff":       {3, fnDateDiff3},
+		"timestamp_diff":  {3, fnDateDiff3},
 	}
 	for name, spec := range det {
 		if err := sqlite.RegisterDeterministicScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
@@ -130,10 +140,11 @@ func registerAll() error {
 		nArg int32
 		fn   scalarFn
 	}{
-		"now":     {0, fnNow},
-		"curdate": {0, fnCurdate},
-		"curtime": {0, fnCurtime},
-		"rand":    {0, fnRand},
+		"now":           {0, fnNow},
+		"curdate":       {0, fnCurdate},
+		"curtime":       {0, fnCurtime},
+		"rand":          {0, fnRand},
+		"generate_uuid": {0, fnGenerateUUID},
 	}
 	for name, spec := range nondet {
 		if err := sqlite.RegisterScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
@@ -466,9 +477,9 @@ func datePartValue(unit string, tm time.Time) (driver.Value, error) {
 		return int64((int(tm.Weekday()) + 6) % 7), nil
 	case "doy", unitDayOfYear:
 		return int64(tm.YearDay()), nil
-	case "quarter":
+	case unitQuarter:
 		return int64((int(tm.Month())-1)/3 + 1), nil
-	case "week":
+	case unitWeek:
 		_, wk := tm.ISOWeek()
 		return int64(wk), nil
 	case "epoch":
@@ -709,12 +720,12 @@ func fnDateTrunc(args []driver.Value) (driver.Value, error) {
 	switch strings.ToLower(strings.TrimSpace(unit)) {
 	case unitYear:
 		return time.Date(y, 1, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
-	case "quarter":
+	case unitQuarter:
 		q := (int(mo)-1)/3*3 + 1
 		return time.Date(y, time.Month(q), 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
 	case unitMonth:
 		return time.Date(y, mo, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
-	case "week":
+	case unitWeek:
 		offset := (int(tm.Weekday()) + 6) % 7 // days since Monday
 		monday := time.Date(y, mo, d, 0, 0, 0, 0, loc).AddDate(0, 0, -offset)
 		return monday.Format(layoutDateTime), nil
@@ -872,6 +883,130 @@ func pgReplacement(repl string) string {
 		b.WriteByte(repl[i])
 	}
 	return b.String()
+}
+
+// --- GoogleSQL scalar functions ---
+
+// fnSafeDivide implements GoogleSQL SAFE_DIVIDE(x, y): x/y, or NULL when y is 0
+// or either argument is NULL.
+func fnSafeDivide(args []driver.Value) (driver.Value, error) {
+	x, ok1 := toFloat(args[0])
+	y, ok2 := toFloat(args[1])
+	if !ok1 || !ok2 || y == 0 {
+		return nil, nil
+	}
+	return x / y, nil
+}
+
+// fnStartsWith implements GoogleSQL STARTS_WITH(value, prefix).
+func fnStartsWith(args []driver.Value) (driver.Value, error) {
+	s, ok1 := toString(args[0])
+	prefix, ok2 := toString(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	return boolToInt(strings.HasPrefix(s, prefix)), nil
+}
+
+// fnEndsWith implements GoogleSQL ENDS_WITH(value, suffix).
+func fnEndsWith(args []driver.Value) (driver.Value, error) {
+	s, ok1 := toString(args[0])
+	suffix, ok2 := toString(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	return boolToInt(strings.HasSuffix(s, suffix)), nil
+}
+
+func boolToInt(b bool) int64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// fnRegexpContains implements GoogleSQL REGEXP_CONTAINS(value, pattern). Note the
+// argument order is (value, pattern), the reverse of the REGEXP operator.
+func fnRegexpContains(args []driver.Value) (driver.Value, error) {
+	value, ok1 := toString(args[0])
+	pattern, ok2 := toString(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	re, err := compileRegexp(pattern)
+	if err != nil {
+		return nil, err
+	}
+	return boolToInt(re.MatchString(value)), nil
+}
+
+// fnRegexpExtract implements GoogleSQL REGEXP_EXTRACT(value, pattern): the first
+// capturing group when the pattern has one, otherwise the whole match, or NULL
+// when there is no match.
+func fnRegexpExtract(args []driver.Value) (driver.Value, error) {
+	value, ok1 := toString(args[0])
+	pattern, ok2 := toString(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	re, err := compileRegexp(pattern)
+	if err != nil {
+		return nil, err
+	}
+	m := re.FindStringSubmatch(value)
+	if m == nil {
+		return nil, nil
+	}
+	if len(m) > 1 {
+		return m[1], nil
+	}
+	return m[0], nil
+}
+
+// fnDateDiff3 implements GoogleSQL DATE_DIFF/TIMESTAMP_DIFF(a, b, unit): the
+// signed count of unit boundaries from b to a.
+func fnDateDiff3(args []driver.Value) (driver.Value, error) {
+	a, ok1 := toStringTime(args[0])
+	b, ok2 := toStringTime(args[1])
+	unit, ok3 := toString(args[2])
+	if !ok1 || !ok2 || !ok3 {
+		return nil, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(unit)) {
+	case unitYear:
+		return int64(a.Year() - b.Year()), nil
+	case unitQuarter:
+		return int64((a.Year()*4 + (int(a.Month())-1)/3) - (b.Year()*4 + (int(b.Month())-1)/3)), nil
+	case unitMonth:
+		return int64((a.Year()*12 + int(a.Month())) - (b.Year()*12 + int(b.Month()))), nil
+	case unitWeek:
+		return int64(truncDay(a).Sub(truncDay(b)).Hours() / 24 / 7), nil
+	case unitDay:
+		return int64(truncDay(a).Sub(truncDay(b)).Hours() / 24), nil
+	case unitHour:
+		return int64(a.Sub(b).Hours()), nil
+	case unitMinute:
+		return int64(a.Sub(b).Minutes()), nil
+	case unitSecond:
+		return int64(a.Sub(b).Seconds()), nil
+	default:
+		return nil, fmt.Errorf("dialect: unsupported DATE_DIFF unit %q", unit)
+	}
+}
+
+func truncDay(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// fnGenerateUUID implements GoogleSQL GENERATE_UUID: a random RFC 4122 v4 UUID.
+func fnGenerateUUID(_ []driver.Value) (driver.Value, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return nil, fmt.Errorf("dialect: generate_uuid: %w", err)
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
 // --- time parsing ---
