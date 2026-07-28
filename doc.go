@@ -14,6 +14,8 @@
 //   - Efficient streaming for large files with configurable chunk sizes
 //   - Cross-platform compatibility (Linux, macOS, Windows)
 //   - Optional auto-save functionality to persist changes
+//   - Optional MySQL, PostgreSQL, and GoogleSQL query dialects (queries are
+//     translated to SQLite; see WithDialect and the dialect subpackage)
 //
 // # Basic Usage
 //
@@ -83,4 +85,22 @@
 // result in an error.
 //
 // For complete SQL syntax documentation, see: https://www.sqlite.org/lang.html
+//
+// # Query Dialects
+//
+// By default queries use SQLite3 syntax. To accept a different dialect, configure
+// the builder with WithDialect:
+//
+//	db, err := filesql.NewBuilder().
+//	    AddPath("users.csv").
+//	    WithDialect(dialect.PostgreSQL).
+//	    Build(ctx)
+//	// db.Query("SELECT name::text FROM users WHERE name ILIKE 'a%'")
+//
+// The supported dialects are MySQL, PostgreSQL, and GoogleSQL (BigQuery / Cloud
+// Spanner). Queries are translated to SQLite before execution on a best-effort
+// basis: common incompatibilities are rewritten, constructs with no SQLite
+// equivalent are rejected with a clear error, and everything else is passed
+// through. Loading files always uses SQLite regardless of the dialect. See the
+// dialect subpackage for the full list of translations and their limitations.
 package filesql

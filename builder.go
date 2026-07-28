@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/nao1215/filesql/dialect"
 	"github.com/xuri/excelize/v2"
 	"modernc.org/sqlite" // Direct SQLite driver usage
 )
@@ -52,6 +53,13 @@ type DBBuilder struct {
 	parsedTables []*table
 	// autoSaveConfig contains auto-save settings
 	autoSaveConfig *autoSaveConfig
+	// sqlDialect is the SQL dialect accepted for queries against the opened
+	// database. Loading always uses SQLite regardless of this setting. The zero
+	// value ("") is treated as dialect.SQLite (no translation).
+	sqlDialect dialect.Dialect
+	// memDSN is the shared-cache in-memory DSN of the database created by
+	// createInMemoryDatabase, used by the dialect connector.
+	memDSN string
 	// defaultChunkSize is the default chunk size for reading large files (10MB)
 	defaultChunkSize int
 	// logger is the logger instance for internal logging
@@ -298,6 +306,40 @@ func (b *DBBuilder) DisableAutoSave() *DBBuilder {
 	return b
 }
 
+// WithDialect sets the SQL dialect accepted by the database returned from Open
+// and OpenReadOnly. Queries are translated from the given dialect to SQLite
+// before execution; see the dialect package for the supported translations and
+// their limitations.
+//
+// Loading data (CSV/TSV/Parquet/... ingestion) always uses SQLite internally
+// regardless of this setting, so only the queries a caller runs are affected.
+// The default is dialect.SQLite, which performs no translation.
+//
+// Constraints (enforced by Build):
+//   - The dialect must be a built-in dialect or one registered with
+//     dialect.RegisterTranslator.
+//   - A non-SQLite dialect cannot be combined with auto-save; the two connector
+//     wrappers are not composed in this version.
+//
+// Example:
+//
+//	db, err := filesql.NewBuilder().
+//		AddPath("users.csv").
+//		WithDialect(dialect.PostgreSQL).
+//		Build(ctx)
+//	// ... db.Query("SELECT name::text FROM users WHERE name ILIKE 'a%'")
+//
+// Returns the builder for method chaining.
+func (b *DBBuilder) WithDialect(d dialect.Dialect) *DBBuilder {
+	b.sqlDialect = d
+	return b
+}
+
+// usesDialectTranslation reports whether a non-SQLite dialect is configured.
+func (b *DBBuilder) usesDialectTranslation() bool {
+	return b.sqlDialect != "" && b.sqlDialect != dialect.SQLite
+}
+
 // Build validates all configured inputs and prepares the builder for opening a database.
 // This method must be called before Open(). It performs the following operations:
 //
@@ -324,6 +366,11 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 
 	// Use validator to validate auto-save config
 	if err := b.validator.validateAutoSaveConfig(b.autoSaveConfig); err != nil {
+		return nil, err
+	}
+
+	// Validate the SQL dialect and its constraints.
+	if err := b.validateDialect(); err != nil {
 		return nil, err
 	}
 
@@ -423,8 +470,34 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 		return nil, err
 	}
 
+	db, err = b.setupDialectIfNeeded(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+
 	b.logger.Info("database opened successfully")
 	return db, nil
+}
+
+// validateDialect checks the configured SQL dialect and rejects unsupported
+// combinations. It is a no-op for the default (SQLite) dialect.
+func (b *DBBuilder) validateDialect() error {
+	if !b.usesDialectTranslation() {
+		return nil
+	}
+	// The dialect must be translatable: either a probe translation succeeds or a
+	// custom translator is registered. Translate of a trivial query surfaces
+	// dialect.ErrUnknownDialect for an unrecognized dialect.
+	if _, err := dialect.Translate(b.sqlDialect, "SELECT 1"); err != nil {
+		if errors.Is(err, dialect.ErrUnknownDialect) {
+			return fmt.Errorf("%w: unknown SQL dialect %q", ErrDatabaseOperation, b.sqlDialect)
+		}
+		return fmt.Errorf("%w: dialect %q is not usable: %s", ErrDatabaseOperation, b.sqlDialect, err.Error())
+	}
+	if b.autoSaveConfig != nil && b.autoSaveConfig.enabled {
+		return fmt.Errorf("%w: WithDialect(%s) cannot be combined with auto-save", ErrDatabaseOperation, b.sqlDialect)
+	}
+	return nil
 }
 
 // OpenReadOnly creates a read-only database connection.
@@ -546,6 +619,10 @@ func (b *DBBuilder) createInMemoryDatabase() (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to create in-memory database: %s", ErrDatabaseOperation, err.Error())
 	}
+	// Remember the DSN so a dialect-translating connector can open its own
+	// connections to the same shared-cache in-memory database (see
+	// setupDialectIfNeeded).
+	b.memDSN = dsn
 	// A shared-cache in-memory database is discarded once its last connection
 	// closes. Disable idle timeouts so the pool keeps at least one connection
 	// (and therefore the data) alive until the caller closes the *sql.DB.
@@ -616,6 +693,50 @@ func (b *DBBuilder) setupAutoSaveIfNeeded(ctx context.Context, db *sql.DB) (*sql
 	}
 
 	return db, nil
+}
+
+// setupDialectIfNeeded swaps the plain loader database for one whose queries are
+// translated from the configured dialect to SQLite. It is a no-op for the
+// default (SQLite) dialect.
+//
+// The loaded data lives in a shared-cache in-memory database, so the translating
+// database can open its own connection to the same DSN. A live connection is
+// established (via Ping) before the loader database is closed, so the shared
+// cache—and the data—survives the swap.
+func (b *DBBuilder) setupDialectIfNeeded(ctx context.Context, db *sql.DB) (*sql.DB, error) {
+	if !b.usesDialectTranslation() {
+		return db, nil
+	}
+	if b.memDSN == "" {
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: dialect translation requires the in-memory database DSN", ErrDatabaseOperation)
+	}
+
+	// Register the dialect helper UDFs before opening the connection that runs
+	// translated queries; modernc exposes functions only to connections opened
+	// afterward.
+	if err := dialect.RegisterFunctions(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: failed to register dialect functions: %s", ErrDatabaseOperation, err.Error())
+	}
+
+	// Open translated connections through the same driver instance the loader
+	// used, so the dialect helper functions registered above are visible.
+	tdb := sql.OpenDB(&dialectConnector{drv: db.Driver(), dsn: b.memDSN, sqlDialect: b.sqlDialect})
+	tdb.SetConnMaxIdleTime(0)
+	tdb.SetConnMaxLifetime(0)
+
+	if err := tdb.PingContext(ctx); err != nil {
+		_ = tdb.Close()
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: failed to open dialect database: %s", ErrDatabaseOperation, err.Error())
+	}
+
+	if err := db.Close(); err != nil {
+		_ = tdb.Close()
+		return nil, fmt.Errorf("%w: failed to close loader database: %s", ErrDatabaseOperation, err.Error())
+	}
+	return tdb, nil
 }
 
 // streamXLSXFileToSQLite handles XLSX files by creating separate tables for each sheet
