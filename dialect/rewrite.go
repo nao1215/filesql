@@ -9,6 +9,64 @@ import "strings"
 // rendering preserves the original adjacency; rewrite rules therefore work in
 // terms of "significant" tokens (everything except whitespace and comments).
 
+// callRecurser rewrites a slice of argument tokens with a dialect's call pass so
+// nested recognized calls inside a rewritten call are handled too.
+type callRecurser func([]token) ([]token, error)
+
+// rewriteExtractCall implements the C-1 rule shared by every dialect:
+// EXTRACT(part FROM x) -> DATE_PART('part', x). It returns handled=false when the
+// call is not the "part FROM x" form so the caller leaves it untouched.
+func rewriteExtractCall(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
+	part := nextSig(tokens, open+1)
+	if part < 0 || tokens[part].kind != tokWord {
+		return nil, false, nil
+	}
+	from := nextSig(tokens, part+1)
+	if from < 0 || !isWordEq(tokens[from], "FROM") {
+		return nil, false, nil
+	}
+	expr, err := recurse(tokens[from+1 : closeIdx])
+	if err != nil {
+		return nil, false, err
+	}
+	expr = trimSpaceTokens(expr)
+	repl := make([]token, 0, len(expr)+6)
+	repl = append(repl, wordToken("DATE_PART"), opToken("("))
+	repl = append(repl, stringToken(strings.ToLower(tokens[part].text)))
+	repl = append(repl, opToken(","), spaceToken())
+	repl = append(repl, expr...)
+	repl = append(repl, opToken(")"))
+	return repl, true, nil
+}
+
+// rewriteCastCall maps the target type of a CAST(x AS type) call to a SQLite type
+// via types, shared by the dialects (M-8, P-8, G-4). An unmapped type leaves the
+// call unchanged (handled=false).
+func rewriteCastCall(tokens []token, nameIdx, open, closeIdx int, types map[string]string, recurse callRecurser) ([]token, bool, error) {
+	as := topLevelWord(tokens, open, closeIdx, "AS")
+	if as < 0 {
+		return nil, false, nil
+	}
+	typeName := nextSig(tokens, as+1)
+	if typeName < 0 || tokens[typeName].kind != tokWord {
+		return nil, false, nil
+	}
+	mapped, ok := lookupCastType(types, tokens[typeName].text)
+	if !ok {
+		return nil, false, nil
+	}
+	expr, err := recurse(tokens[open+1 : as])
+	if err != nil {
+		return nil, false, err
+	}
+	expr = trimSpaceTokens(expr)
+	repl := make([]token, 0, len(expr)+6)
+	repl = append(repl, tokens[nameIdx], opToken("("))
+	repl = append(repl, expr...)
+	repl = append(repl, spaceToken(), wordToken("AS"), spaceToken(), wordToken(mapped), opToken(")"))
+	return repl, true, nil
+}
+
 // trimSpaceTokens returns toks without leading or trailing whitespace tokens.
 func trimSpaceTokens(toks []token) []token {
 	lo, hi := 0, len(toks)

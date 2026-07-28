@@ -70,7 +70,7 @@ func mysqlCallPass(tokens []token) ([]token, error) {
 func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, error) {
 	switch strings.ToUpper(tokens[nameIdx].text) {
 	case "EXTRACT":
-		return rewriteExtract(tokens, open, closeIdx)
+		return rewriteExtractCall(tokens, open, closeIdx, mysqlCallPass)
 	case "DATE_ADD":
 		return rewriteDateArith(tokens, open, closeIdx, "+")
 	case "DATE_SUB":
@@ -78,34 +78,10 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 	case "GROUP_CONCAT":
 		return rewriteGroupConcat(tokens, nameIdx, open, closeIdx)
 	case "CAST":
-		return rewriteCast(tokens, nameIdx, open, closeIdx, mysqlCastTypes)
+		return rewriteCastCall(tokens, nameIdx, open, closeIdx, mysqlCastTypes, mysqlCallPass)
 	default:
 		return nil, false, nil
 	}
-}
-
-// rewriteExtract implements C-1: EXTRACT(part FROM x) -> DATE_PART('part', x).
-func rewriteExtract(tokens []token, open, closeIdx int) ([]token, bool, error) {
-	part := nextSig(tokens, open+1)
-	if part < 0 || tokens[part].kind != tokWord {
-		return nil, false, nil
-	}
-	from := nextSig(tokens, part+1)
-	if from < 0 || !isWordEq(tokens[from], "FROM") {
-		return nil, false, nil
-	}
-	expr, err := mysqlCallPass(tokens[from+1 : closeIdx])
-	if err != nil {
-		return nil, false, err
-	}
-	expr = trimSpaceTokens(expr)
-	repl := make([]token, 0, len(expr)+6)
-	repl = append(repl, wordToken("DATE_PART"), opToken("("))
-	repl = append(repl, stringToken(strings.ToLower(tokens[part].text)))
-	repl = append(repl, opToken(","), spaceToken())
-	repl = append(repl, expr...)
-	repl = append(repl, opToken(")"))
-	return repl, true, nil
 }
 
 // mysqlIntervalUnits maps the INTERVAL units supported by M-5 to the SQLite
@@ -188,33 +164,6 @@ func rewriteGroupConcat(tokens []token, nameIdx, open, closeIdx int) ([]token, b
 		repl = append(repl, inner[j])
 	}
 	repl = append(repl, opToken(")"))
-	return repl, true, nil
-}
-
-// rewriteCast implements M-8: CAST(x AS type) with the source type mapped to a
-// SQLite type via types. An unmapped type is left unchanged.
-func rewriteCast(tokens []token, nameIdx, open, closeIdx int, types map[string]string) ([]token, bool, error) {
-	as := topLevelWord(tokens, open, closeIdx, "AS")
-	if as < 0 {
-		return nil, false, nil
-	}
-	typeName := nextSig(tokens, as+1)
-	if typeName < 0 || tokens[typeName].kind != tokWord {
-		return nil, false, nil
-	}
-	mapped, ok := lookupCastType(types, tokens[typeName].text)
-	if !ok {
-		return nil, false, nil
-	}
-	expr, err := mysqlCallPass(tokens[open+1 : as])
-	if err != nil {
-		return nil, false, err
-	}
-	expr = trimSpaceTokens(expr)
-	repl := make([]token, 0, len(expr)+6)
-	repl = append(repl, tokens[nameIdx], opToken("("))
-	repl = append(repl, expr...)
-	repl = append(repl, spaceToken(), wordToken("AS"), spaceToken(), wordToken(mapped), opToken(")"))
 	return repl, true, nil
 }
 

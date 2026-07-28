@@ -34,7 +34,7 @@ func TestTranslateLexical(t *testing.T) {
 		{"postgres dollar quote", PostgreSQL, `SELECT $$hi$$`, `SELECT 'hi'`},
 		{"postgres tagged dollar quote", PostgreSQL, `SELECT $q$a'b$q$`, `SELECT 'a''b'`},
 		{"postgres numbered placeholder", PostgreSQL, `SELECT $1`, `SELECT $1`},
-		{"postgres cast passthrough", PostgreSQL, `SELECT a::int`, `SELECT a::int`},
+		{"postgres arithmetic passthrough", PostgreSQL, `SELECT a + b * c`, `SELECT a + b * c`},
 
 		// GoogleSQL lexical rules.
 		{"googlesql backtick path", GoogleSQL, "SELECT `p.d.t`", `SELECT "p.d.t"`},
