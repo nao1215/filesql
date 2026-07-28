@@ -91,13 +91,13 @@ func pgCallPass(tokens []token) ([]token, error) {
 
 func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, error) {
 	switch strings.ToUpper(tokens[nameIdx].text) {
-	case "EXTRACT":
+	case fnNameExtract:
 		return rewriteExtractCall(tokens, open, closeIdx, pgCallPass)
 	case "POSITION":
 		return rewritePosition(tokens, open, closeIdx)
 	case "SUBSTRING":
 		return rewriteSubstring(tokens, open, closeIdx)
-	case "CAST":
+	case fnNameCast:
 		return rewriteCastCall(tokens, nameIdx, open, closeIdx, pgCastTypes, pgCallPass)
 	default:
 		return nil, false, nil

@@ -12,83 +12,88 @@ const (
 	sqliteBlob    = "BLOB"
 )
 
-// mysqlCastTypes maps a MySQL CAST/CONVERT target type (its leading keyword,
-// uppercased) to the SQLite type used in the rewritten CAST. A type not present
-// here is left unchanged so SQLite can interpret it.
-var mysqlCastTypes = map[string]string{
-	"SIGNED":    sqliteInteger,
-	"UNSIGNED":  sqliteInteger,
+// commonCastTypes maps the standard SQL type names shared by the dialects to a
+// SQLite type. Each dialect map holds only the names unique to that dialect;
+// lookupCastType falls back to this table.
+var commonCastTypes = map[string]string{
+	"SMALLINT":  sqliteInteger,
 	"INT":       sqliteInteger,
 	"INTEGER":   sqliteInteger,
 	"BIGINT":    sqliteInteger,
-	"SMALLINT":  sqliteInteger,
 	"TINYINT":   sqliteInteger,
-	"MEDIUMINT": sqliteInteger,
 	"BOOL":      sqliteInteger,
 	"BOOLEAN":   sqliteInteger,
-	"CHAR":      sqliteText,
-	"NCHAR":     sqliteText,
-	"VARCHAR":   sqliteText,
-	"NVARCHAR":  sqliteText,
-	"TEXT":      sqliteText,
-	"JSON":      sqliteText,
-	"DECIMAL":   sqliteReal,
-	"DEC":       sqliteReal,
-	"NUMERIC":   sqliteReal,
+	"REAL":      sqliteReal,
 	"FLOAT":     sqliteReal,
 	"DOUBLE":    sqliteReal,
-	"REAL":      sqliteReal,
+	"NUMERIC":   sqliteReal,
+	"DECIMAL":   sqliteReal,
+	"CHAR":      sqliteText,
+	"VARCHAR":   sqliteText,
+	"TEXT":      sqliteText,
+	"JSON":      sqliteText,
 	"DATE":      sqliteText,
 	"DATETIME":  sqliteText,
 	"TIME":      sqliteText,
 	"TIMESTAMP": sqliteText,
-	"YEAR":      sqliteText,
-	"BINARY":    sqliteBlob,
-	"VARBINARY": sqliteBlob,
 	"BLOB":      sqliteBlob,
 }
 
-// pgCastTypes maps a PostgreSQL type name (uppercased) to the SQLite type used
-// in a rewritten CAST or "::" cast. A type not present here is left unchanged.
+// mysqlCastTypes holds the MySQL-only CAST target keywords (its leading keyword,
+// uppercased). Standard names fall back to commonCastTypes.
+var mysqlCastTypes = map[string]string{
+	"SIGNED":    sqliteInteger,
+	"UNSIGNED":  sqliteInteger,
+	"MEDIUMINT": sqliteInteger,
+	"NCHAR":     sqliteText,
+	"NVARCHAR":  sqliteText,
+	"DEC":       sqliteReal,
+	"YEAR":      sqliteText,
+	"BINARY":    sqliteBlob,
+	"VARBINARY": sqliteBlob,
+}
+
+// pgCastTypes holds the PostgreSQL-only type keywords. Standard names fall back
+// to commonCastTypes.
 var pgCastTypes = map[string]string{
-	"SMALLINT":    sqliteInteger,
 	"INT2":        sqliteInteger,
-	"INTEGER":     sqliteInteger,
-	"INT":         sqliteInteger,
 	"INT4":        sqliteInteger,
-	"BIGINT":      sqliteInteger,
 	"INT8":        sqliteInteger,
 	"SERIAL":      sqliteInteger,
 	"BIGSERIAL":   sqliteInteger,
-	"BOOLEAN":     sqliteInteger,
-	"BOOL":        sqliteInteger,
-	"REAL":        sqliteReal,
 	"FLOAT4":      sqliteReal,
 	"FLOAT8":      sqliteReal,
-	"DOUBLE":      sqliteReal, // "DOUBLE PRECISION"; leading keyword is DOUBLE
-	"NUMERIC":     sqliteReal,
-	"DECIMAL":     sqliteReal,
 	"MONEY":       sqliteReal,
-	"TEXT":        sqliteText,
-	"VARCHAR":     sqliteText,
 	"CHARACTER":   sqliteText, // "CHARACTER VARYING" / CHARACTER(n)
-	"CHAR":        sqliteText,
 	"BPCHAR":      sqliteText,
 	"NAME":        sqliteText,
 	"UUID":        sqliteText,
-	"JSON":        sqliteText,
 	"JSONB":       sqliteText,
-	"DATE":        sqliteText,
-	"TIME":        sqliteText,
-	"TIMESTAMP":   sqliteText,
 	"TIMESTAMPTZ": sqliteText,
 	"INTERVAL":    sqliteText,
 	"BYTEA":       sqliteBlob,
 }
 
-// lookupCastType returns the SQLite CAST target for a source-dialect type name
-// and whether a mapping exists.
+// googlesqlCastTypes holds the GoogleSQL-only type keywords. Standard names fall
+// back to commonCastTypes.
+var googlesqlCastTypes = map[string]string{
+	"INT64":      sqliteInteger,
+	"BYTEINT":    sqliteInteger,
+	"FLOAT64":    sqliteReal,
+	"BIGNUMERIC": sqliteReal,
+	"BIGDECIMAL": sqliteReal,
+	"STRING":     sqliteText,
+	"BYTES":      sqliteBlob,
+}
+
+// lookupCastType returns the SQLite CAST target for a source-dialect type name,
+// checking the dialect-specific map first and then the shared table, and reports
+// whether a mapping exists.
 func lookupCastType(m map[string]string, name string) (string, bool) {
-	mapped, ok := m[strings.ToUpper(name)]
+	upper := strings.ToUpper(name)
+	if mapped, ok := m[upper]; ok {
+		return mapped, true
+	}
+	mapped, ok := commonCastTypes[upper]
 	return mapped, ok
 }

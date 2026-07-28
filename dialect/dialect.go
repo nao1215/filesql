@@ -136,6 +136,8 @@ func rewriteTokens(d Dialect, tokens []token) ([]token, error) {
 		return rewriteMySQL(tokens)
 	case PostgreSQL:
 		return rewritePostgreSQL(tokens)
+	case GoogleSQL:
+		return rewriteGoogleSQL(tokens)
 	default:
 		return tokens, nil
 	}

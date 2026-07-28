@@ -1,6 +1,9 @@
 package dialect
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // This file holds the shared machinery the per-dialect rewrite passes use to
 // recognize and rewrite patterns in a token stream: token constructors,
@@ -8,6 +11,12 @@ import "strings"
 // boundary detection. The stream keeps whitespace and comment tokens so
 // rendering preserves the original adjacency; rewrite rules therefore work in
 // terms of "significant" tokens (everything except whitespace and comments).
+
+// Function-name keywords recognized by more than one dialect's call pass.
+const (
+	fnNameCast    = "CAST"
+	fnNameExtract = "EXTRACT"
+)
 
 // callRecurser rewrites a slice of argument tokens with a dialect's call pass so
 // nested recognized calls inside a rewritten call are handled too.
@@ -64,6 +73,73 @@ func rewriteCastCall(tokens []token, nameIdx, open, closeIdx int, types map[stri
 	repl = append(repl, tokens[nameIdx], opToken("("))
 	repl = append(repl, expr...)
 	repl = append(repl, spaceToken(), wordToken("AS"), spaceToken(), wordToken(mapped), opToken(")"))
+	return repl, true, nil
+}
+
+// intervalUnits maps the INTERVAL units that map cleanly onto a SQLite datetime
+// modifier. Units outside this set (WEEK, QUARTER, compound units) are rejected.
+var intervalUnits = map[string]string{
+	"SECOND": unitSecond,
+	"MINUTE": unitMinute,
+	"HOUR":   unitHour,
+	"DAY":    unitDay,
+	"MONTH":  unitMonth,
+	"YEAR":   unitYear,
+}
+
+// rewriteDateArith implements the shared "date +/- INTERVAL n unit" rewrite used
+// by MySQL M-5 (DATE_ADD/DATE_SUB) and GoogleSQL G-7 (DATE_ADD/DATE_SUB/
+// TIMESTAMP_ADD/TIMESTAMP_SUB): f(x, INTERVAL n unit) -> datetime(x, '±n unit').
+// sign is "+" for the ADD forms and "-" for the SUB forms.
+func rewriteDateArith(tokens []token, open, closeIdx int, sign string, recurse callRecurser) ([]token, bool, error) {
+	comma := topLevelComma(tokens, open, closeIdx)
+	if comma < 0 {
+		return nil, false, nil
+	}
+	interval := nextSig(tokens, comma+1)
+	if interval < 0 || !isWordEq(tokens[interval], "INTERVAL") {
+		return nil, false, nil
+	}
+	value := nextSig(tokens, interval+1)
+	if value < 0 || tokens[value].kind != tokNumber {
+		return nil, false, fmt.Errorf("%w: INTERVAL value must be a numeric literal", ErrUnsupportedSyntax)
+	}
+	unitTok := nextSig(tokens, value+1)
+	if unitTok < 0 || tokens[unitTok].kind != tokWord {
+		return nil, false, fmt.Errorf("%w: INTERVAL is missing a unit", ErrUnsupportedSyntax)
+	}
+	unit, ok := intervalUnits[strings.ToUpper(tokens[unitTok].text)]
+	if !ok {
+		return nil, false, fmt.Errorf("%w: unsupported INTERVAL unit %q", ErrUnsupportedSyntax, tokens[unitTok].text)
+	}
+	if after := nextSig(tokens, unitTok+1); after != closeIdx {
+		return nil, false, fmt.Errorf("%w: unsupported INTERVAL expression", ErrUnsupportedSyntax)
+	}
+
+	expr, err := recurse(tokens[open+1 : comma])
+	if err != nil {
+		return nil, false, err
+	}
+	expr = trimSpaceTokens(expr)
+	modifier := sign + tokens[value].text + " " + unit
+	repl := make([]token, 0, len(expr)+6)
+	repl = append(repl, wordToken("datetime"), opToken("("))
+	repl = append(repl, expr...)
+	repl = append(repl, opToken(","), spaceToken(), stringToken(modifier), opToken(")"))
+	return repl, true, nil
+}
+
+// rewriteRenameCall rewrites a call to use newName, recursing into its arguments.
+// It backs simple function renames such as GoogleSQL FORMAT -> printf.
+func rewriteRenameCall(tokens []token, open, closeIdx int, newName string, recurse callRecurser) ([]token, bool, error) {
+	inner, err := recurse(tokens[open+1 : closeIdx])
+	if err != nil {
+		return nil, false, err
+	}
+	repl := make([]token, 0, len(inner)+3)
+	repl = append(repl, wordToken(newName), opToken("("))
+	repl = append(repl, inner...)
+	repl = append(repl, opToken(")"))
 	return repl, true, nil
 }
 
@@ -216,6 +292,32 @@ func topLevelComma(toks []token, open, closeIdx int) int {
 		}
 	}
 	return -1
+}
+
+// topLevelCommas returns the indices of every "," at depth 1 inside the call
+// whose parentheses are open..closeIdx, in order.
+func topLevelCommas(toks []token, open, closeIdx int) []int {
+	depth := 0
+	var res []int
+	for j := open; j < closeIdx; j++ {
+		if !isSignificant(toks[j]) {
+			continue
+		}
+		if toks[j].kind != tokOp {
+			continue
+		}
+		switch toks[j].text {
+		case "(":
+			depth++
+		case ")":
+			depth--
+		case ",":
+			if depth == 1 {
+				res = append(res, j)
+			}
+		}
+	}
+	return res
 }
 
 // topLevelWord returns the index of the first word equal to kw at depth 1 inside
