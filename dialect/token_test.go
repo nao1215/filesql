@@ -24,6 +24,8 @@ func TestTranslateLexical(t *testing.T) {
 		{"mysql hash comment", MySQL, "SELECT 1 # note", "SELECT 1 -- note\n"},
 		{"mysql backslash escape", MySQL, `SELECT 'It\'s'`, `SELECT 'It''s'`},
 		{"mysql doubled quote", MySQL, `SELECT 'a''b'`, `SELECT 'a''b'`},
+		{"mysql backslash escapes", MySQL, `SELECT 'a\nb\tc\\d\0e'`, "SELECT 'a\nb\tc\\d\x00e'"},
+		{"mysql backslash unknown", MySQL, `SELECT 'a\qb'`, `SELECT 'aqb'`},
 		{"mysql blob passthrough", MySQL, `SELECT x'4142'`, `SELECT x'4142'`},
 
 		// PostgreSQL lexical rules.
@@ -86,6 +88,35 @@ func TestTranslateInvalidSyntax(t *testing.T) {
 				t.Fatalf("Translate(%s, %q) error = %v, want ErrInvalidSyntax", tt.dialect, tt.input, err)
 			}
 		})
+	}
+}
+
+func TestDecodeBackslash(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   string
+		want string
+		adv  int
+	}{
+		{`\n`, "\n", 2},
+		{`\t`, "\t", 2},
+		{`\r`, "\r", 2},
+		{`\0`, "\x00", 2},
+		{`\b`, "\b", 2},
+		{`\f`, "\f", 2},
+		{`\v`, "\v", 2},
+		{`\\`, "\\", 2},
+		{`\'`, "'", 2},
+		{`\"`, "\"", 2},
+		{"\\`", "`", 2},
+		{`\q`, "q", 2}, // unknown escape drops the backslash
+		{`\`, "\\", 1}, // trailing backslash with nothing after it
+	}
+	for _, c := range cases {
+		got, adv := decodeBackslash(c.in, 0)
+		if got != c.want || adv != c.adv {
+			t.Fatalf("decodeBackslash(%q) = (%q, %d), want (%q, %d)", c.in, got, adv, c.want, c.adv)
+		}
 	}
 }
 

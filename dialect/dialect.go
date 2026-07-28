@@ -119,5 +119,22 @@ func builtinTranslate(d Dialect, query string) (string, error) {
 		return "", err
 	}
 
+	tokens, err = rewriteTokens(d, tokens)
+	if err != nil {
+		return "", err
+	}
+
 	return render(tokens), nil
+}
+
+// rewriteTokens applies the dialect-specific token rewrite rules. Dialects
+// without a rewrite pass yet fall through and are translated by lexical
+// normalization alone.
+func rewriteTokens(d Dialect, tokens []token) ([]token, error) {
+	switch d {
+	case MySQL:
+		return rewriteMySQL(tokens)
+	default:
+		return tokens, nil
+	}
 }
