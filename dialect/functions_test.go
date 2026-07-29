@@ -68,6 +68,24 @@ func TestUDFExecution(t *testing.T) {
 		{"space", `SELECT '[' || SPACE(3) || ']'`, "[   ]"},
 		{"truncate", `SELECT TRUNCATE(3.14159, 2)`, "3.14"},
 		{"truncate negative digits", `SELECT TRUNCATE(1234.5, -2)`, "1200"},
+		{"least numeric", `SELECT LEAST(3, 1, 2)`, "1"},
+		{"least string", `SELECT LEAST('pear', 'apple')`, "apple"},
+		{"greatest numeric", `SELECT GREATEST(3, 1, 2)`, "3"},
+		{"greatest mixed sign", `SELECT GREATEST(-5, -1)`, "-1"},
+		{"reverse", `SELECT REVERSE('abc')`, "cba"},
+		{"reverse multibyte", `SELECT REVERSE('あいう')`, "ういあ"},
+		{"find_in_set", `SELECT FIND_IN_SET('b', 'a,b,c')`, "2"},
+		{"find_in_set missing", `SELECT FIND_IN_SET('z', 'a,b,c')`, "0"},
+		{"field", `SELECT FIELD('b', 'a', 'b', 'c')`, "2"},
+		{"field missing", `SELECT FIELD('z', 'a', 'b')`, "0"},
+		{"elt", `SELECT ELT(2, 'a', 'b')`, "b"},
+		{"monthname", `SELECT MONTHNAME('2026-02-05')`, "February"},
+		{"dayname", `SELECT DAYNAME('2026-02-05')`, "Thursday"},
+		{"last_day", `SELECT LAST_DAY('2026-02-05')`, "2026-02-28"},
+		{"last_day leap year", `SELECT LAST_DAY('2028-02-05')`, "2028-02-29"},
+		{"unix_timestamp", `SELECT UNIX_TIMESTAMP('2026-01-01 00:00:00')`, "1767225600"},
+		{"from_unixtime", `SELECT FROM_UNIXTIME(0)`, "1970-01-01 00:00:00"},
+		{"from_unixtime with format", `SELECT FROM_UNIXTIME(0, '%Y/%m/%d')`, "1970/01/01"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -118,6 +136,14 @@ func TestPostgreSQLUDFExecution(t *testing.T) {
 		{"right negative", `SELECT RIGHT('abcdef', -2)`, "cdef"},
 		{"regexp_replace", `SELECT REGEXP_REPLACE('foobar', 'o+', 'O')`, "fObar"},
 		{"regexp_replace backref", `SELECT REGEXP_REPLACE('2026-07', '(\d+)-(\d+)', '\2/\1')`, "07/2026"},
+		{"regexp_replace with flags", `SELECT REGEXP_REPLACE('a1b2', '[0-9]', '', 'g')`, "ab"},
+		{"regexp_replace case-insensitive flag", `SELECT REGEXP_REPLACE('ABC', 'b', 'x', 'i')`, "AxC"},
+		{"md5", `SELECT MD5('a')`, "0cc175b9c0f1b6a831c399e269772661"},
+		{"ascii", `SELECT ASCII('A')`, "65"},
+		{"ascii empty", `SELECT ASCII('')`, "0"},
+		{"chr", `SELECT CHR(65)`, "A"},
+		{"translate", `SELECT TRANSLATE('abc', 'ab', 'xy')`, "xyc"},
+		{"translate deletes unmapped", `SELECT TRANSLATE('abcd', 'abc', 'x')`, "xd"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -165,6 +191,25 @@ func TestGoogleSQLUDFExecution(t *testing.T) {
 		{"timestamp_diff hour", `SELECT TIMESTAMP_DIFF('2026-01-01 05:00:00', '2026-01-01 00:00:00', 'hour')`, "5"},
 		{"timestamp_diff minute", `SELECT TIMESTAMP_DIFF('2026-01-01 00:30:00', '2026-01-01 00:00:00', 'minute')`, "30"},
 		{"timestamp_diff second", `SELECT TIMESTAMP_DIFF('2026-01-01 00:00:10', '2026-01-01 00:00:01', 'second')`, "9"},
+		{"format_date", `SELECT FORMAT_DATE('%Y-%m', '2026-03-15')`, "2026-03"},
+		{"format_date month name", `SELECT FORMAT_DATE('%B %d, %Y', '2026-03-15')`, "March 15, 2026"},
+		{"format_timestamp minutes", `SELECT FORMAT_TIMESTAMP('%H:%M:%S', '2026-03-15 10:20:30')`, "10:20:30"},
+		{"parse_date", `SELECT PARSE_DATE('%Y-%m-%d', '2026-03-15')`, "2026-03-15"},
+		{"parse_timestamp", `SELECT PARSE_TIMESTAMP('%Y-%m-%d %H:%M:%S', '2026-03-15 10:20:30')`, "2026-03-15 10:20:30"},
+		{"unix_seconds", `SELECT UNIX_SECONDS('2026-01-01 00:00:00')`, "1767225600"},
+		{"unix_millis", `SELECT UNIX_MILLIS('2026-01-01 00:00:00')`, "1767225600000"},
+		{"timestamp_seconds", `SELECT TIMESTAMP_SECONDS(0)`, "1970-01-01 00:00:00"},
+		{"timestamp_millis", `SELECT TIMESTAMP_MILLIS(1000)`, "1970-01-01 00:00:01"},
+		{"to_hex", `SELECT TO_HEX('ab')`, "6162"},
+		{"is_nan false", `SELECT IS_NAN(1.0)`, "0"},
+		{"is_nan true", `SELECT IS_NAN('nan')`, "1"},
+		{"is_nan non-numeric text", `SELECT IS_NAN('abc')`, "0"},
+		{"safe_add", `SELECT SAFE_ADD(1, 2)`, "3"},
+		{"safe_add overflow", `SELECT IFNULL(CAST(SAFE_ADD(9223372036854775807, 1) AS TEXT), 'null')`, "null"},
+		{"safe_subtract", `SELECT SAFE_SUBTRACT(1, 2)`, "-1"},
+		{"safe_multiply", `SELECT SAFE_MULTIPLY(3, 4)`, "12"},
+		{"safe_multiply overflow", `SELECT IFNULL(CAST(SAFE_MULTIPLY(9223372036854775807, 2) AS TEXT), 'null')`, "null"},
+		{"safe_negate", `SELECT SAFE_NEGATE(5)`, "-5"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -224,6 +269,30 @@ func TestUDFNullHandling(t *testing.T) {
 		`SELECT REGEXP_CONTAINS(NULL, 'a')`,
 		`SELECT REGEXP_EXTRACT('abc', 'z')`,
 		`SELECT DATE_DIFF(NULL, '2026-01-01', 'day')`,
+		`SELECT LEAST(1, NULL)`,
+		`SELECT GREATEST(NULL, 'a')`,
+		`SELECT REVERSE(NULL)`,
+		`SELECT FIND_IN_SET(NULL, 'a,b')`,
+		`SELECT ELT(0, 'a', 'b')`,
+		`SELECT ELT(3, 'a', 'b')`,
+		`SELECT MONTHNAME(NULL)`,
+		`SELECT DAYNAME('not a date')`,
+		`SELECT LAST_DAY(NULL)`,
+		`SELECT UNIX_TIMESTAMP(NULL)`,
+		`SELECT FROM_UNIXTIME(NULL)`,
+		`SELECT MD5(NULL)`,
+		`SELECT ASCII(NULL)`,
+		`SELECT CHR(NULL)`,
+		`SELECT TRANSLATE(NULL, 'a', 'b')`,
+		`SELECT FORMAT_DATE('%Y', NULL)`,
+		`SELECT PARSE_DATE('%Y-%m-%d', 'nope')`,
+		`SELECT UNIX_SECONDS(NULL)`,
+		`SELECT TIMESTAMP_SECONDS(NULL)`,
+		`SELECT TO_HEX(NULL)`,
+		`SELECT IS_NAN(NULL)`,
+		`SELECT SAFE_ADD(NULL, 1)`,
+		`SELECT SAFE_NEGATE(NULL)`,
+		`SELECT REGEXP_REPLACE(NULL, 'a', 'b', 'g')`,
 	} {
 		var got sql.NullString
 		if err := db.QueryRowContext(context.Background(), q).Scan(&got); err != nil {
@@ -318,6 +387,14 @@ func TestDatePartUnsupported(t *testing.T) {
 		`SELECT DATE_PART('century', '2026-07-28')`,
 		`SELECT DATE_TRUNC('decade', '2026-07-28')`,
 		`SELECT DATE_DIFF('2026-01-01', '2020-01-01', 'century')`,
+		`SELECT CHR(-1)`,
+		`SELECT CHR(2000000)`,
+		`SELECT FIELD('a')`,
+		`SELECT ELT(1)`,
+		`SELECT REGEXP_REPLACE('a', 'a')`,
+		`SELECT REGEXP_REPLACE('a', 'a', 'b', 'g', 'extra')`,
+		`SELECT UNIX_TIMESTAMP('2026-01-01', 'extra')`,
+		`SELECT FROM_UNIXTIME(0, '%Y', 'extra')`,
 	} {
 		var got sql.NullString
 		if err := db.QueryRowContext(context.Background(), q).Scan(&got); err == nil {
@@ -353,6 +430,26 @@ func TestEdgeCaseUDFs(t *testing.T) {
 		{`SELECT IF('0', 'y', 'n')`, "n"},
 		{`SELECT IF('text', 'y', 'n')`, "y"},
 		{`SELECT IF(CAST('' AS BLOB), 'y', 'n')`, "n"},
+		{`SELECT LEAST(5)`, "5"},
+		{`SELECT GREATEST('10', '9')`, "10"},        // numeric strings compare numerically
+		{`SELECT GREATEST('b10', 'b9')`, "b9"},      // mixed content falls back to text order
+		{`SELECT FIND_IN_SET('', 'a,,b')`, "2"},     // an empty field is still a field
+		{`SELECT FIELD(1, '1', 'x')`, "1"},          // arguments are compared as text
+		{`SELECT TRANSLATE('abc', '', 'x')`, "abc"}, // an empty from-set changes nothing
+		{`SELECT REVERSE('')`, ""},
+		{`SELECT ASCII('あ')`, "12354"},
+		{`SELECT CHR(12354)`, "あ"},
+		{`SELECT LAST_DAY('2026-12-31')`, "2026-12-31"},
+		{`SELECT FROM_UNIXTIME(-1)`, "1969-12-31 23:59:59"},
+		{`SELECT SAFE_ADD(1.5, 2.0)`, "3.5"},
+		{`SELECT SAFE_NEGATE(1.5)`, "-1.5"},
+		{`SELECT REGEXP_REPLACE('a1b2', '[0-9]', 'X', '')`, "aXb2"}, // no "g": first match only
+		// A boundary-dependent pattern matches inside the source but not in the
+		// matched text on its own, so the first-match path has to expand against
+		// the source.
+		{`SELECT REGEXP_REPLACE('ab', '\Bb', 'X', '')`, "aX"},
+		{`SELECT REGEXP_REPLACE('ab', 'z', 'X', '')`, "ab"},
+		{`SELECT ELT(4294967298, 'a', 'b')`, ""}, // an index past int32 must stay out of range
 	}
 	for _, tt := range tests {
 		var got sql.NullString

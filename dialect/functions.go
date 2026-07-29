@@ -1,9 +1,12 @@
 package dialect
 
 import (
+	"crypto/md5" //nolint:gosec // MD5 backs PostgreSQL's MD5() function, not a security control
 	"crypto/rand"
 	"database/sql/driver"
 	"encoding/binary"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -11,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	sqlite "modernc.org/sqlite"
 )
@@ -108,6 +112,19 @@ func registerAll() error {
 		"repeat":          {2, fnRepeat},
 		"space":           {1, fnSpace},
 		"truncate":        {2, fnTruncate},
+		"reverse":         {1, fnReverse},
+		"find_in_set":     {2, fnFindInSet},
+		"field":           {-1, fnField},
+		"elt":             {-1, fnElt},
+		"monthname":       {1, fnMonthName},
+		"dayname":         {1, fnDayName},
+		"last_day":        {1, fnLastDay},
+		"from_unixtime":   {-1, fnFromUnixtime},
+
+		// Shared by every dialect; SQLite spells them min/max with several
+		// arguments, which collides with the aggregate forms.
+		"least":    {-1, fnLeast},
+		"greatest": {-1, fnGreatest},
 
 		// PostgreSQL helpers.
 		"to_char":        {2, fnToChar},
@@ -118,16 +135,38 @@ func registerAll() error {
 		"strpos":         {2, fnStrpos},
 		"left":           {2, fnLeft},
 		"right":          {2, fnRight},
-		"regexp_replace": {3, fnRegexpReplace},
+		"regexp_replace": {-1, fnRegexpReplace},
+		"md5":            {1, fnMD5},
+		"ascii":          {1, fnASCII},
+		"chr":            {1, fnChr},
+		"translate":      {3, fnTranslate},
 
 		// GoogleSQL helpers.
-		"safe_divide":     {2, fnSafeDivide},
-		"starts_with":     {2, fnStartsWith},
-		"ends_with":       {2, fnEndsWith},
-		"regexp_contains": {2, fnRegexpContains},
-		"regexp_extract":  {2, fnRegexpExtract},
-		"date_diff":       {3, fnDateDiff3},
-		"timestamp_diff":  {3, fnDateDiff3},
+		"safe_divide":       {2, fnSafeDivide},
+		"starts_with":       {2, fnStartsWith},
+		"ends_with":         {2, fnEndsWith},
+		"regexp_contains":   {2, fnRegexpContains},
+		"regexp_extract":    {2, fnRegexpExtract},
+		"date_diff":         {3, fnDateDiff3},
+		"timestamp_diff":    {3, fnDateDiff3},
+		"format_date":       {2, fnFormatDate},
+		"format_datetime":   {2, fnFormatDate},
+		"format_timestamp":  {2, fnFormatDate},
+		"parse_date":        {2, fnParseDate},
+		"parse_datetime":    {2, fnParseTimestamp},
+		"parse_timestamp":   {2, fnParseTimestamp},
+		"unix_seconds":      {1, unixScale(1)},
+		"unix_millis":       {1, unixScale(1000)},
+		"unix_micros":       {1, unixScale(1000000)},
+		"timestamp_seconds": {1, fromUnixScale(1)},
+		"timestamp_millis":  {1, fromUnixScale(1000)},
+		"timestamp_micros":  {1, fromUnixScale(1000000)},
+		"to_hex":            {1, fnToHex},
+		"is_nan":            {1, fnIsNaN},
+		"safe_add":          {2, safeArith(safeAddInt, func(a, b float64) float64 { return a + b })},
+		"safe_subtract":     {2, safeArith(safeSubInt, func(a, b float64) float64 { return a - b })},
+		"safe_multiply":     {2, safeArith(safeMulInt, func(a, b float64) float64 { return a * b })},
+		"safe_negate":       {1, fnSafeNegate},
 	}
 	for name, spec := range det {
 		if err := sqlite.RegisterDeterministicScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
@@ -140,11 +179,15 @@ func registerAll() error {
 		nArg int32
 		fn   scalarFn
 	}{
-		"now":           {0, fnNow},
-		"curdate":       {0, fnCurdate},
-		"curtime":       {0, fnCurtime},
-		"rand":          {0, fnRand},
-		"generate_uuid": {0, fnGenerateUUID},
+		"now":     {0, fnNow},
+		"curdate": {0, fnCurdate},
+		"curtime": {0, fnCurtime},
+		"rand":    {0, fnRand},
+		// UNIX_TIMESTAMP() with no argument reads the clock, so the whole
+		// function has to be registered as non-deterministic even though the
+		// one-argument form is pure.
+		"unix_timestamp": {-1, fnUnixTimestamp},
+		"generate_uuid":  {0, fnGenerateUUID},
 	}
 	for name, spec := range nondet {
 		if err := sqlite.RegisterScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
@@ -624,6 +667,174 @@ func fnTruncate(args []driver.Value) (driver.Value, error) {
 	return math.Trunc(x*factor) / factor, nil
 }
 
+// fnLeast implements LEAST(a, b, ...) and fnGreatest GREATEST(a, b, ...).
+// Values are compared numerically when every argument parses as a number and
+// lexicographically otherwise, matching how the source dialects coerce a mixed
+// list. A NULL argument makes the whole call NULL, which is MySQL and GoogleSQL
+// behavior; PostgreSQL instead skips NULLs, a difference callers should know
+// about.
+func fnLeast(args []driver.Value) (driver.Value, error) { return extremum(args, true) }
+
+func fnGreatest(args []driver.Value) (driver.Value, error) { return extremum(args, false) }
+
+func extremum(args []driver.Value, wantSmaller bool) (driver.Value, error) {
+	if len(args) == 0 {
+		return nil, errors.New("dialect: LEAST/GREATEST expects at least one argument")
+	}
+	strs := make([]string, len(args))
+	nums := make([]float64, len(args))
+	allNumeric := true
+	for i, a := range args {
+		s, ok := toString(a)
+		if !ok {
+			return nil, nil
+		}
+		strs[i] = s
+		if f, isNum := toFloat(a); isNum {
+			nums[i] = f
+		} else {
+			allNumeric = false
+		}
+	}
+	best := 0
+	for i := 1; i < len(args); i++ {
+		var smaller bool
+		if allNumeric {
+			smaller = nums[i] < nums[best]
+		} else {
+			smaller = strs[i] < strs[best]
+		}
+		if smaller == wantSmaller {
+			best = i
+		}
+	}
+	return args[best], nil
+}
+
+// fnReverse implements MySQL REVERSE, reversing runes rather than bytes so
+// multi-byte text survives.
+func fnReverse(args []driver.Value) (driver.Value, error) {
+	s, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	runes := []rune(s)
+	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+		runes[i], runes[j] = runes[j], runes[i]
+	}
+	return string(runes), nil
+}
+
+// fnFindInSet implements MySQL FIND_IN_SET(needle, "a,b,c"): the 1-based
+// position of needle in the comma-separated list, or 0 when it is absent.
+func fnFindInSet(args []driver.Value) (driver.Value, error) {
+	needle, ok1 := toString(args[0])
+	set, ok2 := toString(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	for i, part := range strings.Split(set, ",") {
+		if part == needle {
+			return int64(i + 1), nil
+		}
+	}
+	return int64(0), nil
+}
+
+// fnField implements MySQL FIELD(x, a, b, ...): the 1-based position of the
+// first argument that equals x, or 0 when none does.
+func fnField(args []driver.Value) (driver.Value, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("dialect: FIELD expects at least 2 arguments, got %d", len(args))
+	}
+	needle, ok := toString(args[0])
+	if !ok {
+		return int64(0), nil
+	}
+	for i, a := range args[1:] {
+		if s, ok := toString(a); ok && s == needle {
+			return int64(i + 1), nil
+		}
+	}
+	return int64(0), nil
+}
+
+// fnElt implements MySQL ELT(n, a, b, ...): the nth argument, or NULL when n is
+// out of range.
+func fnElt(args []driver.Value) (driver.Value, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("dialect: ELT expects at least 2 arguments, got %d", len(args))
+	}
+	n, ok := toInt(args[0])
+	if !ok || n < 1 || n > int64(len(args)-1) {
+		return nil, nil
+	}
+	return args[n], nil
+}
+
+// fnMonthName and fnDayName implement the MySQL MONTHNAME/DAYNAME helpers.
+func fnMonthName(args []driver.Value) (driver.Value, error) {
+	return namedTimePart(args[0], layoutMonthLong)
+}
+
+func fnDayName(args []driver.Value) (driver.Value, error) {
+	return namedTimePart(args[0], layoutWeekdayLong)
+}
+
+func namedTimePart(v driver.Value, layout string) (driver.Value, error) {
+	tm, ok := toStringTime(v)
+	if !ok {
+		return nil, nil
+	}
+	return tm.Format(layout), nil
+}
+
+// fnLastDay implements MySQL LAST_DAY(date): the last day of that month. It is
+// computed as "the day before the first of the next month" so leap years need
+// no special case.
+func fnLastDay(args []driver.Value) (driver.Value, error) {
+	tm, ok := toStringTime(args[0])
+	if !ok {
+		return nil, nil
+	}
+	firstOfNext := time.Date(tm.Year(), tm.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, 1, 0)
+	return firstOfNext.AddDate(0, 0, -1).Format("2006-01-02"), nil
+}
+
+// fnUnixTimestamp implements MySQL UNIX_TIMESTAMP([date]): the current epoch
+// second with no argument, or the epoch second of the given datetime. Values are
+// read as UTC, as everywhere else in this package.
+func fnUnixTimestamp(args []driver.Value) (driver.Value, error) {
+	if len(args) == 0 {
+		return time.Now().Unix(), nil
+	}
+	if len(args) > 1 {
+		return nil, fmt.Errorf("dialect: UNIX_TIMESTAMP expects 0 or 1 arguments, got %d", len(args))
+	}
+	tm, ok := toStringTime(args[0])
+	if !ok {
+		return nil, nil
+	}
+	return tm.Unix(), nil
+}
+
+// fnFromUnixtime implements MySQL FROM_UNIXTIME(seconds[, format]), the inverse
+// of UNIX_TIMESTAMP.
+func fnFromUnixtime(args []driver.Value) (driver.Value, error) {
+	if len(args) < 1 || len(args) > 2 {
+		return nil, fmt.Errorf("dialect: FROM_UNIXTIME expects 1 or 2 arguments, got %d", len(args))
+	}
+	sec, ok := toInt(args[0])
+	if !ok {
+		return nil, nil
+	}
+	tm := time.Unix(sec, 0).UTC()
+	if len(args) == 1 {
+		return tm.Format(layoutDateTime), nil
+	}
+	return fnDateFormat([]driver.Value{tm.Format(layoutDateTime), args[1]})
+}
+
 // --- PostgreSQL scalar functions ---
 
 // pgToCharTokens maps TO_CHAR template patterns to Go reference-time layout
@@ -838,21 +1049,122 @@ func leftRight(args []driver.Value, left bool) (driver.Value, error) {
 	return string(runes[len(runes)-count:]), nil
 }
 
-// fnRegexpReplace implements REGEXP_REPLACE(source, pattern, replacement),
-// replacing every match. PostgreSQL back-references (\1) are translated to Go's
-// ${1} expansion form.
+// fnRegexpReplace implements REGEXP_REPLACE(source, pattern, replacement
+// [, flags]). PostgreSQL back-references (\1) are translated to Go's ${1}
+// expansion form.
+//
+// The three-argument form replaces every match, which is GoogleSQL semantics.
+// PostgreSQL's three-argument form replaces only the first match and needs the
+// "g" flag for the rest; that difference is left in place because the same
+// function is shared by all dialects and replace-all is the behavior callers
+// expect. With an explicit flags argument the flags win: "g" replaces every
+// match and its absence replaces only the first, and "i" matches case
+// insensitively.
 func fnRegexpReplace(args []driver.Value) (driver.Value, error) {
+	if len(args) < 3 || len(args) > 4 {
+		return nil, fmt.Errorf("dialect: REGEXP_REPLACE expects 3 or 4 arguments, got %d", len(args))
+	}
 	src, ok1 := toString(args[0])
 	pattern, ok2 := toString(args[1])
 	repl, ok3 := toString(args[2])
 	if !ok1 || !ok2 || !ok3 {
 		return nil, nil
 	}
+	global := true
+	if len(args) == 4 {
+		flags, ok := toString(args[3])
+		if !ok {
+			return nil, nil
+		}
+		global = strings.Contains(flags, "g")
+		if strings.Contains(flags, "i") {
+			pattern = "(?i)" + pattern
+		}
+	}
 	re, err := compileRegexp(pattern)
 	if err != nil {
 		return nil, err
 	}
-	return re.ReplaceAllString(src, pgReplacement(repl)), nil
+	expansion := pgReplacement(repl)
+	if global {
+		return re.ReplaceAllString(src, expansion), nil
+	}
+	// Expand against the source rather than the matched text on its own: a
+	// boundary-dependent pattern such as `\Bb` matches inside "ab" but not in
+	// the isolated "b", which would leave ExpandString without submatch indices.
+	loc := re.FindStringSubmatchIndex(src)
+	if loc == nil {
+		return src, nil
+	}
+	out := re.ExpandString([]byte(src[:loc[0]]), expansion, src, loc)
+	return string(out) + src[loc[1]:], nil
+}
+
+// fnMD5 implements PostgreSQL MD5(text). MD5 is used here as a content
+// fingerprint compatible with the source dialect, never for security.
+func fnMD5(args []driver.Value) (driver.Value, error) {
+	s, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	sum := md5.Sum([]byte(s)) //nolint:gosec // required for PostgreSQL MD5() compatibility, not a security control
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// fnASCII implements ASCII(text): the code point of the first character, or 0
+// for an empty string.
+func fnASCII(args []driver.Value) (driver.Value, error) {
+	s, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	for _, r := range s {
+		return int64(r), nil
+	}
+	return int64(0), nil
+}
+
+// fnChr implements CHR(code): the character for a code point.
+func fnChr(args []driver.Value) (driver.Value, error) {
+	n, ok := toInt(args[0])
+	if !ok {
+		return nil, nil
+	}
+	if n < 0 || n > utf8.MaxRune {
+		return nil, fmt.Errorf("dialect: CHR: code point %d is out of range", n)
+	}
+	return string(rune(n)), nil
+}
+
+// fnTranslate implements PostgreSQL TRANSLATE(string, from, to): each character
+// of from is replaced by the character at the same position in to, and a
+// character whose position has no counterpart in to is dropped.
+func fnTranslate(args []driver.Value) (driver.Value, error) {
+	s, ok1 := toString(args[0])
+	from, ok2 := toString(args[1])
+	to, ok3 := toString(args[2])
+	if !ok1 || !ok2 || !ok3 {
+		return nil, nil
+	}
+	fromRunes := []rune(from)
+	toRunes := []rune(to)
+	var b strings.Builder
+	for _, r := range s {
+		idx := -1
+		for i, f := range fromRunes {
+			if f == r {
+				idx = i
+				break
+			}
+		}
+		switch {
+		case idx < 0:
+			b.WriteRune(r)
+		case idx < len(toRunes):
+			b.WriteRune(toRunes[idx])
+		}
+	}
+	return b.String(), nil
 }
 
 // pgReplacement translates PostgreSQL replacement back-references (\1..\9, \&) to
@@ -996,6 +1308,220 @@ func fnDateDiff3(args []driver.Value) (driver.Value, error) {
 
 func truncDay(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// strftimeToGoLayout maps the strftime-style specifiers GoogleSQL uses in
+// FORMAT_DATE and PARSE_DATE to Go reference-time layout fragments. They differ
+// from the MySQL DATE_FORMAT set: %M is the minute here but the month name
+// there, and the month and weekday names are %B and %A.
+var strftimeToGoLayout = map[byte]string{
+	'Y': "2006",
+	'y': "06",
+	'm': "01",
+	'd': "02",
+	'e': "_2",
+	'H': "15",
+	'I': "03",
+	'M': "04",
+	'S': "05",
+	'p': "PM",
+	'B': layoutMonthLong,
+	'b': layoutMonthShort,
+	'A': layoutWeekdayLong,
+	'a': layoutWeekdayShort,
+	'F': "2006-01-02",
+	'T': "15:04:05",
+	'R': "15:04",
+}
+
+// strftimeLayout converts a GoogleSQL format string into a Go layout. An
+// unknown specifier contributes its own letter, mirroring how DATE_FORMAT
+// handles the same case.
+func strftimeLayout(format string) string {
+	var b strings.Builder
+	for i := 0; i < len(format); i++ {
+		if format[i] == '%' && i+1 < len(format) {
+			if layout, ok := strftimeToGoLayout[format[i+1]]; ok {
+				b.WriteString(layout)
+			} else if format[i+1] == '%' {
+				b.WriteByte('%')
+			} else {
+				b.WriteByte(format[i+1])
+			}
+			i++
+			continue
+		}
+		b.WriteByte(format[i])
+	}
+	return b.String()
+}
+
+// fnFormatDate implements GoogleSQL FORMAT_DATE/FORMAT_DATETIME/
+// FORMAT_TIMESTAMP(format, value). The format comes first, the reverse of MySQL
+// DATE_FORMAT.
+func fnFormatDate(args []driver.Value) (driver.Value, error) {
+	format, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	tm, ok := toStringTime(args[1])
+	if !ok {
+		return nil, nil
+	}
+	return tm.Format(strftimeLayout(format)), nil
+}
+
+// fnParseDate implements GoogleSQL PARSE_DATE(format, text) and fnParseTimestamp
+// its datetime counterparts, returning NULL when the text does not match.
+func fnParseDate(args []driver.Value) (driver.Value, error) {
+	return parseWithStrftime(args, "2006-01-02")
+}
+
+func fnParseTimestamp(args []driver.Value) (driver.Value, error) {
+	return parseWithStrftime(args, layoutDateTime)
+}
+
+func parseWithStrftime(args []driver.Value, out string) (driver.Value, error) {
+	format, ok1 := toString(args[0])
+	s, ok2 := toString(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	tm, ok := parseLayout(strftimeLayout(format), s)
+	if !ok {
+		return nil, nil
+	}
+	return tm.Format(out), nil
+}
+
+// unixScale builds UNIX_SECONDS/UNIX_MILLIS/UNIX_MICROS, which differ only in
+// how many sub-second units they report.
+func unixScale(perSecond int64) scalarFn {
+	return func(args []driver.Value) (driver.Value, error) {
+		tm, ok := toStringTime(args[0])
+		if !ok {
+			return nil, nil
+		}
+		return tm.Unix()*perSecond + int64(tm.Nanosecond())/(1000000000/perSecond), nil
+	}
+}
+
+// fromUnixScale builds TIMESTAMP_SECONDS/TIMESTAMP_MILLIS/TIMESTAMP_MICROS, the
+// inverses of unixScale.
+func fromUnixScale(perSecond int64) scalarFn {
+	return func(args []driver.Value) (driver.Value, error) {
+		n, ok := toInt(args[0])
+		if !ok {
+			return nil, nil
+		}
+		nanos := (n % perSecond) * (1000000000 / perSecond)
+		return time.Unix(n/perSecond, nanos).UTC().Format(layoutDateTime), nil
+	}
+}
+
+// fnToHex implements GoogleSQL TO_HEX(bytes): the lowercase hexadecimal form of
+// the value's bytes.
+func fnToHex(args []driver.Value) (driver.Value, error) {
+	switch x := args[0].(type) {
+	case nil:
+		return nil, nil
+	case []byte:
+		return hex.EncodeToString(x), nil
+	default:
+		s, ok := toString(args[0])
+		if !ok {
+			return nil, nil
+		}
+		return hex.EncodeToString([]byte(s)), nil
+	}
+}
+
+// fnIsNaN implements GoogleSQL IS_NAN(x).
+func fnIsNaN(args []driver.Value) (driver.Value, error) {
+	f, ok := toFloat(args[0])
+	if !ok {
+		// A NULL argument is NULL; a non-numeric one is simply not NaN.
+		if _, present := toString(args[0]); !present {
+			return nil, nil
+		}
+		return int64(0), nil
+	}
+	return boolToInt(math.IsNaN(f)), nil
+}
+
+// safeArith builds the GoogleSQL SAFE_ADD/SAFE_SUBTRACT/SAFE_MULTIPLY family:
+// the operation, or NULL where the source dialect would raise an overflow. Two
+// integer arguments stay in int64 so overflow is detectable; anything else falls
+// back to float64, where the result is already an infinity rather than an error.
+func safeArith(intOp func(a, b int64) (int64, bool), floatOp func(a, b float64) float64) scalarFn {
+	return func(args []driver.Value) (driver.Value, error) {
+		if ai, ok := args[0].(int64); ok {
+			if bi, ok := args[1].(int64); ok {
+				res, fine := intOp(ai, bi)
+				if !fine {
+					return nil, nil
+				}
+				return res, nil
+			}
+		}
+		a, ok1 := toFloat(args[0])
+		b, ok2 := toFloat(args[1])
+		if !ok1 || !ok2 {
+			return nil, nil
+		}
+		res := floatOp(a, b)
+		if math.IsInf(res, 0) || math.IsNaN(res) {
+			return nil, nil
+		}
+		return res, nil
+	}
+}
+
+func safeAddInt(a, b int64) (int64, bool) {
+	sum := a + b
+	// The sum overflowed when both operands share a sign that the result lost.
+	if (a > 0 && b > 0 && sum < 0) || (a < 0 && b < 0 && sum >= 0) {
+		return 0, false
+	}
+	return sum, true
+}
+
+func safeSubInt(a, b int64) (int64, bool) {
+	if b == math.MinInt64 {
+		// Negating the minimum has no int64 representation, so handle it as an
+		// addition that cannot be expressed either.
+		if a >= 0 {
+			return 0, false
+		}
+		return a - b, true
+	}
+	return safeAddInt(a, -b)
+}
+
+func safeMulInt(a, b int64) (int64, bool) {
+	if a == 0 || b == 0 {
+		return 0, true
+	}
+	product := a * b
+	if product/b != a || (a == -1 && b == math.MinInt64) || (b == -1 && a == math.MinInt64) {
+		return 0, false
+	}
+	return product, true
+}
+
+// fnSafeNegate implements GoogleSQL SAFE_NEGATE(x).
+func fnSafeNegate(args []driver.Value) (driver.Value, error) {
+	if n, ok := args[0].(int64); ok {
+		if n == math.MinInt64 {
+			return nil, nil
+		}
+		return -n, nil
+	}
+	f, ok := toFloat(args[0])
+	if !ok {
+		return nil, nil
+	}
+	return -f, nil
 }
 
 // fnGenerateUUID implements GoogleSQL GENERATE_UUID: a random RFC 4122 v4 UUID.
