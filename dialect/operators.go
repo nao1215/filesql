@@ -259,3 +259,88 @@ func replaceOperatorWithWord(tokens []token, op, keyword string) []token {
 	}
 	return out
 }
+
+// similarToRegexp converts a SQL SIMILAR TO pattern into a Go regular
+// expression. SIMILAR TO is regex-like already: it keeps |, *, +, ?, {}, (), and
+// [] but spells "any run" as "%" and "any character" as "_", and it matches the
+// whole string.
+func similarToRegexp(pattern string) string {
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(pattern); i++ {
+		switch c := pattern[i]; c {
+		case '%':
+			b.WriteString(".*")
+		case '_':
+			b.WriteString(".")
+		case '.', '^', '$':
+			b.WriteString("\\")
+			b.WriteByte(c)
+		case '\\':
+			b.WriteByte(c)
+			if i+1 < len(pattern) {
+				i++
+				b.WriteByte(pattern[i])
+			}
+		default:
+			b.WriteByte(c)
+		}
+	}
+	b.WriteString("$")
+	return b.String()
+}
+
+// fnSimilarTo implements PostgreSQL's "x SIMILAR TO p".
+func fnSimilarTo(args []driver.Value) (driver.Value, error) {
+	pattern, ok1 := toString(args[0])
+	subject, ok2 := toString(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	re, err := compileRegexp(similarToRegexp(pattern))
+	if err != nil {
+		return nil, err
+	}
+	return boolToInt(re.MatchString(subject)), nil
+}
+
+// similarToPass rewrites "a SIMILAR TO b" into similar_to(b, a). SIMILAR TO is
+// two keywords, so it cannot go through the single-keyword LIKE pass.
+func similarToPass(tokens []token) ([]token, error) {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		if !isWordEq(tokens[i], "SIMILAR") {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		to := nextSig(tokens, i+1)
+		if to < 0 || !isWordEq(tokens[to], "TO") {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		rightStart := nextSig(tokens, to+1)
+		rightEnd, ok := primaryEndForward(tokens, to+1)
+		if !ok {
+			return nil, fmt.Errorf("%w: right operand of SIMILAR TO is not a primary expression", ErrUnsupportedSyntax)
+		}
+		negated := false
+		if n := lastSig(out); n >= 0 && isWordEq(out[n], "NOT") {
+			negated = true
+			out = out[:n]
+		}
+		left, start, ok := operandBack(out)
+		if !ok {
+			return nil, fmt.Errorf("%w: left operand of SIMILAR TO is not a primary expression", ErrUnsupportedSyntax)
+		}
+		out = out[:start]
+		if negated {
+			out = append(out, wordToken("NOT"), spaceToken())
+		}
+		out = append(out, callTokens("similar_to", tokens[rightStart:rightEnd+1], left)...)
+		i = rightEnd + 1
+	}
+	return out, nil
+}

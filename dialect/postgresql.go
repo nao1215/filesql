@@ -21,6 +21,8 @@ import (
 //	P-11 a ^ b                     -> power(a, b)
 //	P-12 x +/- INTERVAL 'text'     -> interval_text_add(x, 'text', ±1)
 //	P-13 DATE 'lit' / TIMESTAMP 'lit' -> 'lit'
+//	P-14 x SIMILAR TO p            -> similar_to(p, x)
+//	P-15 BOOL_AND / STDDEV / ...   -> SQLite aggregate expressions
 func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedPostgreSQL(tokens); err != nil {
 		return nil, err
@@ -64,8 +66,13 @@ func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
+	// P-14: SIMILAR TO is SQL-standard pattern matching that SQLite lacks.
+	out, err = similarToPass(out)
+	if err != nil {
+		return nil, err
+	}
 	out = renameWordPass(out, "STRING_AGG", "group_concat")
-	return out, nil
+	return aggregatePass(out, PostgreSQL)
 }
 
 // checkUnsupportedPostgreSQL rejects P-10 constructs that have no SQLite

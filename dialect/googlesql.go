@@ -23,6 +23,7 @@ import (
 //	G-12 x LIKE p                             -> like_sensitive(p, x)
 //	G-13 DATE_TRUNC(x, PART)                  -> date_trunc_part(x, 'part')
 //	G-14 CURRENT_DATE() and friends           -> CURRENT_DATE
+//	G-15 COUNTIF / LOGICAL_AND / STDDEV       -> SQLite aggregate expressions
 func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedGoogleSQL(tokens); err != nil {
 		return nil, err
@@ -42,7 +43,9 @@ func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
-	return currentValueParenPass(typePrefixedLiteralPass(out)), nil
+	// G-15: COUNTIF, LOGICAL_AND/OR, and the variance family have no SQLite
+	// aggregate.
+	return aggregatePass(currentValueParenPass(typePrefixedLiteralPass(out)), GoogleSQL)
 }
 
 // checkUnsupportedGoogleSQL rejects the G-9 constructs that have no SQLite
