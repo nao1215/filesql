@@ -153,6 +153,7 @@ func registerAll() error {
 		"mysql_unhex":         {1, fnMySQLUnhex},
 		"like_sensitive":      {2, likeCompare(true)},
 		"like_insensitive":    {2, likeCompare(false)},
+		"similar_to":          {2, fnSimilarTo},
 		"postgresql_cast":     {2, dialectCast(PostgreSQL, false)},
 		"googlesql_cast":      {2, dialectCast(GoogleSQL, false)},
 		"googlesql_divide":    {2, divideFloat(true)},
@@ -929,17 +930,80 @@ func toCharLayout(format string) string {
 	return b.String()
 }
 
-// fnToChar implements PostgreSQL TO_CHAR(value, format) for date/time values.
+// fnToChar implements PostgreSQL TO_CHAR(value, format) for date/time values and
+// for numbers. The two are told apart by the template: a numeric one is built
+// from digit positions, which no date template contains.
 func fnToChar(args []driver.Value) (driver.Value, error) {
 	format, ok := toString(args[1])
 	if !ok {
 		return nil, nil
+	}
+	if isNumericTemplate(format) {
+		return numericToChar(args[0], format)
 	}
 	tm, ok := toStringTime(args[0])
 	if !ok {
 		return nil, nil
 	}
 	return tm.Format(toCharLayout(format)), nil
+}
+
+// isNumericTemplate reports whether a TO_CHAR template describes a number.
+// "9" and "0" are digit positions and appear in no date template.
+func isNumericTemplate(format string) bool {
+	return strings.ContainsAny(format, "90")
+}
+
+// numericToChar formats a number against a PostgreSQL numeric template. It
+// supports the common pieces: "9" and "0" digit positions, "." for the decimal
+// point, "," for a group separator, and the leading space PostgreSQL reserves
+// for the sign. Anything else is passed through as a literal.
+func numericToChar(v driver.Value, format string) (driver.Value, error) {
+	value, ok := toFloat(v)
+	if !ok {
+		return nil, nil
+	}
+	intPart, fracPart, hasPoint := splitTemplate(format)
+	decimals := strings.Count(fracPart, "9") + strings.Count(fracPart, "0")
+	digits := strconv.FormatFloat(math.Abs(value), 'f', decimals, 64)
+
+	whole, frac, _ := strings.Cut(digits, ".")
+	if strings.Contains(intPart, ",") {
+		whole = groupThousands(whole)
+	}
+	if value < 0 {
+		whole = "-" + whole
+	}
+	// PostgreSQL pads to the template width and reserves one more column for the
+	// sign, so a positive number keeps a leading space.
+	width := strings.Count(intPart, "9") + strings.Count(intPart, "0") + strings.Count(intPart, ",") + 1
+	for len([]rune(whole)) < width {
+		whole = " " + whole
+	}
+	if hasPoint && decimals > 0 {
+		whole += "." + frac
+	}
+	return whole, nil
+}
+
+// splitTemplate divides a numeric template at its decimal point.
+func splitTemplate(format string) (intPart, fracPart string, hasPoint bool) {
+	if before, after, found := strings.Cut(format, "."); found {
+		return before, after, true
+	}
+	return format, "", false
+}
+
+// groupThousands inserts a comma every three digits from the right.
+func groupThousands(digits string) string {
+	var b strings.Builder
+	for i, r := range digits {
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // fnToDate implements PostgreSQL TO_DATE(str, format).

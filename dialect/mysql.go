@@ -23,6 +23,7 @@ import (
 //	M-15 CURRENT_DATE() and friends      -> CURRENT_DATE
 //	M-16 TIMESTAMPDIFF/TIMESTAMPADD      -> DATE_DIFF / interval_add
 //	M-17 POSITION(x IN y), SUBSTRING FROM -> INSTR / SUBSTR
+//	M-18 ANY_VALUE / STD / VARIANCE      -> SQLite aggregate expressions
 //
 // M-10 (LIMIT n, m) needs no rewrite: SQLite accepts it natively.
 func rewriteMySQL(tokens []token) ([]token, error) {
@@ -47,7 +48,8 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	// M-14/M-15: MySQL accepts typed date literals and the parenthesized
 	// CURRENT_DATE() spelling, neither of which SQLite parses.
 	out = currentValueParenPass(typePrefixedLiteralPass(out))
-	return renameWordPass(out, "RLIKE", "REGEXP"), nil
+	// M-18: ANY_VALUE and the variance family have no SQLite aggregate.
+	return aggregatePass(renameWordPass(out, "RLIKE", "REGEXP"), MySQL)
 }
 
 // mysqlCallPass rewrites the MySQL function-call rules (C-1, M-5, M-6, M-8),
@@ -120,32 +122,56 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 // group_concat(x, s). A leading DISTINCT is preserved.
 func rewriteGroupConcat(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, error) {
 	sep := topLevelWord(tokens, open, closeIdx, "SEPARATOR")
-	inner, err := mysqlCallPass(tokens[open+1 : closeIdx])
+	if sep < 0 {
+		inner, err := mysqlCallPass(tokens[open+1 : closeIdx])
+		if err != nil {
+			return nil, false, err
+		}
+		repl := []token{tokens[nameIdx], opToken("(")}
+		repl = append(repl, inner...)
+		return append(repl, opToken(")")), true, nil
+	}
+	// SQLite takes the separator as a second argument, and a second argument is
+	// incompatible with its DISTINCT aggregates. Say so rather than letting the
+	// engine report "DISTINCT aggregates must have exactly one argument", which
+	// says nothing about the query the caller wrote.
+	if distinct := nextSig(tokens, open+1); distinct >= 0 && isWordEq(tokens[distinct], "DISTINCT") {
+		return nil, false, fmt.Errorf("%w: GROUP_CONCAT cannot combine DISTINCT with SEPARATOR", ErrUnsupportedSyntax)
+	}
+
+	// The value ends at ORDER BY when there is one. SQLite spells the whole
+	// thing group_concat(value, separator ORDER BY ...), so the separator has to
+	// move ahead of the ORDER BY rather than replace the SEPARATOR keyword in
+	// place: left where it was, SQLite would read it as another sort term and
+	// silently fall back to a comma.
+	valueEnd := sep
+	orderBy := -1
+	if order := topLevelWord(tokens, open, sep, "ORDER"); order >= 0 {
+		orderBy = order
+		valueEnd = order
+	}
+	value, err := mysqlCallPass(tokens[open+1 : valueEnd])
 	if err != nil {
 		return nil, false, err
 	}
+	separator, err := mysqlCallPass(tokens[sep+1 : closeIdx])
+	if err != nil {
+		return nil, false, err
+	}
+
 	repl := []token{tokens[nameIdx], opToken("(")}
-	if sep < 0 {
-		repl = append(repl, inner...)
-		repl = append(repl, opToken(")"))
-		return repl, true, nil
-	}
-	// Replace the SEPARATOR keyword (offset-shifted into inner) with a comma,
-	// dropping any whitespace that immediately precedes it so the result reads
-	// "x, s" rather than "x , s".
-	sepInner := sep - (open + 1)
-	for j := range inner {
-		if j == sepInner {
-			for len(repl) > 2 && repl[len(repl)-1].kind == tokWhitespace {
-				repl = repl[:len(repl)-1]
-			}
-			repl = append(repl, opToken(","))
-			continue
+	repl = append(repl, trimSpaceTokens(value)...)
+	repl = append(repl, opToken(","), spaceToken())
+	repl = append(repl, trimSpaceTokens(separator)...)
+	if orderBy >= 0 {
+		order, err := mysqlCallPass(tokens[orderBy:sep])
+		if err != nil {
+			return nil, false, err
 		}
-		repl = append(repl, inner[j])
+		repl = append(repl, spaceToken())
+		repl = append(repl, trimSpaceTokens(order)...)
 	}
-	repl = append(repl, opToken(")"))
-	return repl, true, nil
+	return append(repl, opToken(")")), true, nil
 }
 
 // divPass implements M-7: a DIV b -> CAST(a / b AS INTEGER). The operands must
