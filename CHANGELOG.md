@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- More of each dialect's string and JSON spellings translate. MySQL: `CHAR_LENGTH`, `CHARACTER_LENGTH`, `ORD`, `JSON_UNQUOTE`, and `TRIM(BOTH 'x' FROM s)`. PostgreSQL: `BTRIM`, `OVERLAY(x PLACING y FROM n FOR m)`, `JSONB_ARRAY_LENGTH`, `JSON_ARRAY_LENGTH`, `CHAR_LENGTH`, and the same `TRIM` form. GoogleSQL: `JSON_VALUE`, `JSON_QUERY`, `JSON_EXTRACT_SCALAR`, `BYTE_LENGTH`, and `CHAR_LENGTH`. `UNION DISTINCT` is accepted under MySQL and GoogleSQL, where SQLite rejects the keyword and its plain `UNION` already deduplicates.
+- More of each dialect's string and JSON spellings translate. MySQL: `CHAR_LENGTH`, `CHARACTER_LENGTH`, `ORD`, `JSON_UNQUOTE`, and `TRIM(BOTH 'x' FROM s)`. PostgreSQL: `BTRIM`, `OVERLAY(x PLACING y FROM n FOR m)`, `JSONB_ARRAY_LENGTH`, `JSON_ARRAY_LENGTH`, `CHAR_LENGTH`, and the same `TRIM` form. GoogleSQL: `JSON_VALUE`, `JSON_QUERY` (which keeps its result in JSON text, unlike `JSON_VALUE`), `JSON_EXTRACT_SCALAR`, `BYTE_LENGTH`, and `CHAR_LENGTH`. `UNION DISTINCT` is accepted under MySQL and GoogleSQL, where SQLite rejects the keyword and its plain `UNION` already deduplicates.
 - A PostgreSQL array literal (`ARRAY[...]`) is reported by name instead of failing on the bracket, which said nothing useful.
 
 ### Fixed

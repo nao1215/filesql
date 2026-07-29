@@ -190,6 +190,10 @@ func TestStringAndJSONGaps(t *testing.T) {
 		{"postgresql char_length", PostgreSQL, `SELECT CHAR_LENGTH('あい')`, "2"},
 
 		{"googlesql json_value", GoogleSQL, `SELECT JSON_VALUE('{"a":"x"}', '$.a')`, "x"},
+		// JSON_QUERY keeps its result in JSON text, so a string value stays
+		// quoted; JSON_VALUE returns the value itself.
+		{"googlesql json_query keeps quotes", GoogleSQL, `SELECT JSON_QUERY('{"a":"x"}', '$.a')`, `"x"`},
+		{"googlesql json_query object", GoogleSQL, `SELECT JSON_QUERY('{"a":{"b":1}}', '$.a')`, `{"b":1}`},
 		{"googlesql byte_length", GoogleSQL, `SELECT BYTE_LENGTH('あい')`, "6"},
 		{"googlesql char_length", GoogleSQL, `SELECT CHAR_LENGTH('あい')`, "2"},
 		{"googlesql union distinct", GoogleSQL, `SELECT 1 UNION DISTINCT SELECT 1`, "1"},
@@ -235,6 +239,10 @@ func TestOverlayBoundaries(t *testing.T) {
 		{[]driver.Value{"abc", "XY", int64(2), int64(0)}, "aXYbc"},
 		{[]driver.Value{"abc", "XY", int64(2), int64(-1)}, "aXYbc"},
 		{[]driver.Value{"abc", "XY", int64(2), int64(99)}, "aXY"},
+		// A count near math.MaxInt64 is an ordinary SQLite integer literal and
+		// must not wrap into a negative slice bound.
+		{[]driver.Value{"ab", "X", int64(2), int64(9223372036854775807)}, "aX"},
+		{[]driver.Value{"ab", "X", int64(9223372036854775807)}, "abX"},
 	}
 	for _, tt := range tests {
 		got, err := fnOverlay(tt.args)

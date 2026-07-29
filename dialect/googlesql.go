@@ -130,8 +130,10 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 		return rewriteDateArith(tokens, open, closeIdx, "-", googlesqlCallPass)
 	case "DATE_DIFF", "TIMESTAMP_DIFF":
 		return rewriteDateDiff(tokens, nameIdx, open, closeIdx)
-	case "JSON_VALUE", "JSON_QUERY", "JSON_EXTRACT_SCALAR":
+	case "JSON_VALUE", "JSON_EXTRACT_SCALAR":
 		return rewriteRenameCall(tokens, open, closeIdx, "json_extract", googlesqlCallPass)
+	case "JSON_QUERY":
+		return rewriteJSONQuery(tokens, open, closeIdx, googlesqlCallPass)
 	case "BYTE_LENGTH":
 		return rewriteRenameCall(tokens, open, closeIdx, "octet_length", googlesqlCallPass)
 	case fnNameCharLen, fnNameCharLen2:

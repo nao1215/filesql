@@ -414,8 +414,12 @@ func fnOverlay(args []driver.Value) (driver.Value, error) {
 	if count < 0 {
 		count = 0
 	}
-	head := min(int(start)-1, len(runes))
-	tail := min(head+int(count), len(runes))
+	// Clamp in int64 before narrowing: a FOR count near math.MaxInt64 is a
+	// perfectly ordinary SQLite integer literal, and head+count would wrap to a
+	// negative slice bound.
+	length := int64(len(runes))
+	head := min(start-1, length)
+	tail := min(head+min(count, length), length)
 	return string(runes[:head]) + replacement + string(runes[tail:]), nil
 }
 
