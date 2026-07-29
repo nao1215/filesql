@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A compressed dump that failed to finish was written out as if it had succeeded.** The compression writer's `Close`, which is where a gzip, xz, zstd, zlib, snappy, s2, or lz4 stream writes its trailer, ran in a deferred call whose error was discarded. A dump that could not finish its archive therefore reported success and left a truncated file that no longer decompresses. Both that error and the file's own `Close` error are now returned.
+- **A failed table dump destroyed the file it was overwriting.** v0.23.0 staged the ACH and Fedwire writes; the CSV, TSV, LTSV, Parquet, and XLSX path still opened the destination with `os.Create`, which truncates before a byte has been produced. A format the writer rejects, or an I/O failure partway through, left the destination empty — the caller's own source file when the dump is a write-back over it. Every dump now writes to a temporary file beside its destination and moves it into place only on success, so the two paths behave the same way. Windows refuses to rename over a destination another handle still has open, and refuses to rename it out of the way too, which is exactly a save that overwrites a file this package is streaming from; there the staged bytes are copied over it after a copy of it has been taken, and that copy is restored if the write fails, so a refused commit still leaves the data that was there.
+
 ## [0.23.0] - 2026-07-29
 
 ### Fixed

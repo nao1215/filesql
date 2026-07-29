@@ -14,37 +14,62 @@ const defaultOutputFileMode os.FileMode = 0o644
 
 // writeFileAtomically hands write a writer for a temporary file in dest's
 // directory and renames it over dest only after write and the close both
-// succeed. When either fails, dest is left exactly as it was and the temporary
-// file is removed.
+// succeed. See writeFileAtomicallyAtPath for why every write goes through this.
+func writeFileAtomically(dest string, write func(io.Writer) error) error {
+	return writeFileAtomicallyAtPath(dest, func(path string) error {
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, defaultOutputFileMode) //nolint:gosec // path is the staged file this package just created
+		if err != nil {
+			return fmt.Errorf("%w: failed to open the staged file for %s: %s", ErrIOOperation, dest, err.Error())
+		}
+		if err := write(f); err != nil {
+			_ = f.Close()
+			return err
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("%w: failed to close the staged file for %s: %s", ErrIOOperation, dest, err.Error())
+		}
+		return nil
+	})
+}
+
+// writeFileAtomicallyAtPath reserves a temporary path in dest's directory, hands
+// it to write, and renames it over dest only when write returns nil. When write
+// fails, dest is left exactly as it was and the temporary file is removed. It is
+// the form for writers that need a path of their own (Parquet and XLSX open the
+// output themselves); writeFileAtomically is the form for writers that take an
+// io.Writer.
 //
-// Why this matters: the ACH and Fedwire encoders validate while they encode, so
-// a value the format cannot represent is rejected partway through the write.
-// Opening dest directly with os.Create truncated it first, which for an in-place
-// save is the caller's own source file — a rejected save destroyed the data it
-// was saving. Staging the write means a failure costs nothing.
+// Why every write goes through one of these: opening dest with os.Create
+// truncates it before a single byte has been produced, and a write can still
+// fail after that. The ACH and Fedwire encoders validate while they encode, so a
+// value the format cannot represent is rejected partway through; an encoder can
+// also fail on a full disk or an unwritable row. For an in-place save dest is
+// the caller's own source file, so a rejected write destroyed the data it was
+// saving. Staging means a failure costs nothing.
 //
 // The temporary file is created in dest's directory so the rename stays within
 // one filesystem, where it is atomic. An existing dest keeps its permissions; a
 // new file is created 0644.
-func writeFileAtomically(dest string, write func(io.Writer) error) error {
+func writeFileAtomicallyAtPath(dest string, write func(path string) error) error {
 	dir := filepath.Dir(dest)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(dest)+".tmp*")
 	if err != nil {
 		return fmt.Errorf("%w: failed to create a temporary file next to %s: %s", ErrIOOperation, dest, err.Error())
 	}
 	tmpName := tmp.Name()
-	// Remove the staged file unless the rename below claimed it. Both calls are
-	// no-ops after a successful rename.
+	// The handle only reserves the name; write opens the path itself.
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName) //nolint:errcheck // Best-effort cleanup of a file this package just created
+		return fmt.Errorf("%w: failed to close the temporary file for %s: %s", ErrIOOperation, dest, err.Error())
+	}
+	// Remove the staged file unless the rename below claimed it; a no-op after a
+	// successful rename.
 	defer func() {
-		_ = tmp.Close()
 		_ = os.Remove(tmpName) //nolint:errcheck // Best-effort cleanup; the file is gone after a successful rename
 	}()
 
-	if err := write(tmp); err != nil {
+	if err := write(tmpName); err != nil {
 		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("%w: failed to close the temporary file for %s: %s", ErrIOOperation, dest, err.Error())
 	}
 
 	mode := defaultOutputFileMode
@@ -57,8 +82,95 @@ func writeFileAtomically(dest string, write func(io.Writer) error) error {
 		return fmt.Errorf("%w: failed to set permissions on the temporary file for %s: %s", ErrIOOperation, dest, err.Error())
 	}
 
-	if err := os.Rename(tmpName, dest); err != nil {
+	if err := commitStagedFile(tmpName, dest); err != nil {
 		return fmt.Errorf("%w: failed to replace %s: %s", ErrIOOperation, dest, err.Error())
 	}
 	return nil
+}
+
+// commitStagedFile moves the staged file onto dest.
+//
+// A plain rename is the goal: it is atomic, so a reader sees either the old file
+// or the new one. Windows refuses to rename over a destination another handle
+// still has open, which is exactly a save that overwrites a file this package is
+// streaming from. When that happens the destination is renamed out of the way
+// first — moving an open file is allowed where replacing one is not — and put
+// back if the second rename fails, so the destination is never left missing or
+// half-written.
+func commitStagedFile(staged, dest string) error {
+	err := os.Rename(staged, dest)
+	if err == nil {
+		return nil
+	}
+	if _, statErr := os.Stat(dest); statErr != nil {
+		// Nothing was in the way, so the fallback cannot help; report the original
+		// failure.
+		return err
+	}
+	return commitByCopy(staged, dest)
+}
+
+// commitByCopy writes the staged bytes over dest through the handle Windows will
+// grant, after taking a copy of dest so a failure partway can put it back. It is
+// the fallback for a destination that cannot be renamed at all: while another
+// handle has the file open, Windows refuses both to rename over it and to rename
+// it out of the way, and an in-place save overwrites exactly the file this
+// package is reading from.
+//
+// This is not atomic — a reader watching during the copy can see a partial file
+// — but it keeps the guarantee that matters here: a failure does not cost the
+// data that was already there.
+func commitByCopy(staged, dest string) error {
+	backup, err := copyToBackup(dest)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = os.Remove(backup) //nolint:errcheck // Best-effort cleanup of this package's own temporary file
+	}()
+
+	if copyErr := copyOnto(staged, dest); copyErr != nil {
+		// Put back what was there. The restore is best effort: if it fails too, the
+		// write error is still the one worth reporting.
+		_ = copyOnto(backup, dest) //nolint:errcheck // Best-effort restore; copyErr is the failure to report
+		return copyErr
+	}
+	return nil
+}
+
+// copyToBackup copies path to a temporary file beside it and returns that path.
+func copyToBackup(path string) (string, error) {
+	backup, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".bak*")
+	if err != nil {
+		return "", err
+	}
+	name := backup.Name()
+	if err := backup.Close(); err != nil {
+		_ = os.Remove(name) //nolint:errcheck // Best-effort cleanup of this package's own temporary file
+		return "", err
+	}
+	if err := copyOnto(path, name); err != nil {
+		_ = os.Remove(name) //nolint:errcheck // Best-effort cleanup of this package's own temporary file
+		return "", err
+	}
+	return name, nil
+}
+
+// copyOnto replaces dest's contents with src's, truncating whatever was there.
+func copyOnto(src, dest string) error {
+	in, err := os.Open(src) //nolint:gosec // src is a file this package created or was given as the output
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, defaultOutputFileMode) //nolint:gosec // dest is the caller's chosen output
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
