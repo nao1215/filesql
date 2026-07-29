@@ -18,10 +18,10 @@ func TestMySQLTranslate(t *testing.T) {
 		{"C-1_extract", "SELECT EXTRACT(YEAR FROM d) FROM t", "SELECT DATE_PART('year', d) FROM t"},
 		{"C-1_extract_expr", "SELECT EXTRACT(MONTH FROM o.created) FROM t", "SELECT DATE_PART('month', o.created) FROM t"},
 
-		{"M-5_date_add", "SELECT DATE_ADD(d, INTERVAL 3 DAY) FROM t", "SELECT datetime(d, '+3 day') FROM t"},
-		{"M-5_date_sub", "SELECT DATE_SUB(d, INTERVAL 2 MONTH) FROM t", "SELECT datetime(d, '-2 month') FROM t"},
-		{"M-5_date_add_hour", "SELECT DATE_ADD(ts, INTERVAL 5 HOUR)", "SELECT datetime(ts, '+5 hour')"},
-		{"M-5_date_add_string_arg", "SELECT DATE_ADD('2020-01-01', INTERVAL 1 YEAR)", "SELECT datetime('2020-01-01', '+1 year')"},
+		{"M-5_date_add", "SELECT DATE_ADD(d, INTERVAL 3 DAY) FROM t", "SELECT interval_add(d, 3, 'day') FROM t"},
+		{"M-5_date_sub", "SELECT DATE_SUB(d, INTERVAL 2 MONTH) FROM t", "SELECT interval_add(d, -2, 'month') FROM t"},
+		{"M-5_date_add_hour", "SELECT DATE_ADD(ts, INTERVAL 5 HOUR)", "SELECT interval_add(ts, 5, 'hour')"},
+		{"M-5_date_add_string_arg", "SELECT DATE_ADD('2020-01-01', INTERVAL 1 YEAR)", "SELECT interval_add('2020-01-01', 1, 'year')"},
 
 		{"M-6_group_concat_separator", "SELECT GROUP_CONCAT(name SEPARATOR ', ') FROM t", "SELECT GROUP_CONCAT(name, ', ') FROM t"},
 		{"M-6_group_concat_plain", "SELECT GROUP_CONCAT(name) FROM t", "SELECT GROUP_CONCAT(name) FROM t"},
@@ -47,7 +47,7 @@ func TestMySQLTranslate(t *testing.T) {
 
 		{"M-10_limit_offset", "SELECT * FROM t LIMIT 5, 10", "SELECT * FROM t LIMIT 5, 10"},
 
-		{"nested_date_add_in_extract", "SELECT EXTRACT(DAY FROM DATE_ADD(d, INTERVAL 1 DAY))", "SELECT DATE_PART('day', datetime(d, '+1 day'))"},
+		{"nested_date_add_in_extract", "SELECT EXTRACT(DAY FROM DATE_ADD(d, INTERVAL 1 DAY))", "SELECT DATE_PART('day', interval_add(d, 1, 'day'))"},
 		{"unrelated_function_untouched", "SELECT COALESCE(a, b), SUM(c) FROM t", "SELECT COALESCE(a, b), SUM(c) FROM t"},
 		{"extract_without_from_passthrough", "SELECT EXTRACT(x) FROM t", "SELECT EXTRACT(x) FROM t"},
 		{"cast_without_as_passthrough", "SELECT CAST(x) FROM t", "SELECT CAST(x) FROM t"},
@@ -74,7 +74,7 @@ func TestMySQLTranslateUnsupported(t *testing.T) {
 		name  string
 		input string
 	}{
-		{"M-5_unsupported_unit", "SELECT DATE_ADD(d, INTERVAL 1 WEEK)"},
+		{"M-5_unsupported_unit", "SELECT DATE_ADD(d, INTERVAL 1 DAY_HOUR)"},
 		{"M-5_non_literal_interval", "SELECT DATE_ADD(d, INTERVAL n DAY)"},
 		{"M-5_compound_interval", "SELECT DATE_ADD(d, INTERVAL '1:1' MINUTE_SECOND)"},
 		{"M-5_missing_unit", "SELECT DATE_ADD(d, INTERVAL 3)"},

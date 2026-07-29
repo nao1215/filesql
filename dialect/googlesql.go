@@ -21,6 +21,8 @@ import (
 //	     -> ErrUnsupportedSyntax
 //	G-11 a / b                                -> googlesql_divide(a, b)
 //	G-12 x LIKE p                             -> like_sensitive(p, x)
+//	G-13 DATE_TRUNC(x, PART)                  -> date_trunc_part(x, 'part')
+//	G-14 CURRENT_DATE() and friends           -> CURRENT_DATE
 func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedGoogleSQL(tokens); err != nil {
 		return nil, err
@@ -40,7 +42,7 @@ func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
-	return typePrefixedLiteralPass(out), nil
+	return currentValueParenPass(typePrefixedLiteralPass(out)), nil
 }
 
 // checkUnsupportedGoogleSQL rejects the G-9 constructs that have no SQLite
@@ -120,6 +122,8 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 		return rewriteDateArith(tokens, open, closeIdx, "-", googlesqlCallPass)
 	case "DATE_DIFF", "TIMESTAMP_DIFF":
 		return rewriteDateDiff(tokens, nameIdx, open, closeIdx)
+	case "DATE_TRUNC", "TIMESTAMP_TRUNC", "DATETIME_TRUNC":
+		return rewriteTruncCall(tokens, open, closeIdx, googlesqlCallPass)
 	default:
 		return nil, false, nil
 	}
@@ -196,34 +200,4 @@ func rewriteDateDiff(tokens []token, nameIdx, open, closeIdx int) ([]token, bool
 	repl = append(repl, stringToken(strings.ToLower(tokens[unitTok].text)))
 	repl = append(repl, opToken(")"))
 	return repl, true, nil
-}
-
-// datePrefixTypes are the GoogleSQL type keywords that can prefix a string
-// literal (G-3), e.g. DATE '2026-01-01'.
-var datePrefixTypes = map[string]bool{
-	"DATE":      true,
-	"DATETIME":  true,
-	"TIMESTAMP": true,
-	"TIME":      true,
-}
-
-// typePrefixedLiteralPass implements G-3: a DATE/DATETIME/TIMESTAMP/TIME keyword
-// immediately followed by a string literal drops the keyword and keeps the
-// literal, since SQLite stores these values as text.
-func typePrefixedLiteralPass(tokens []token) []token {
-	out := make([]token, 0, len(tokens))
-	i := 0
-	for i < len(tokens) {
-		t := tokens[i]
-		if t.kind == tokWord && datePrefixTypes[strings.ToUpper(t.text)] {
-			if lit := nextSig(tokens, i+1); lit >= 0 && tokens[lit].kind == tokString {
-				out = append(out, tokens[lit])
-				i = lit + 1
-				continue
-			}
-		}
-		out = append(out, t)
-		i++
-	}
-	return out
 }

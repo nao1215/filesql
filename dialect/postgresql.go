@@ -19,6 +19,8 @@ import (
 //	P-8  CAST(x AS pg_type)        -> postgresql_cast(x, 'pg_type')
 //	P-10 DISTINCT ON (...), LATERAL -> ErrUnsupportedSyntax
 //	P-11 a ^ b                     -> power(a, b)
+//	P-12 x +/- INTERVAL 'text'     -> interval_text_add(x, 'text', ±1)
+//	P-13 DATE 'lit' / TIMESTAMP 'lit' -> 'lit'
 func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedPostgreSQL(tokens); err != nil {
 		return nil, err
@@ -49,6 +51,16 @@ func rewritePostgreSQL(tokens []token) ([]token, error) {
 	// P-11: "^" is exponentiation in PostgreSQL and not an operator at all in
 	// SQLite.
 	out, err = binaryOperatorPass(out, "^", "power")
+	if err != nil {
+		return nil, err
+	}
+	// P-13 runs before P-12 so that "DATE '2026-01-01' + INTERVAL '1 day'" has
+	// already lost its DATE keyword and the interval rewrite sees a plain
+	// literal as the left operand.
+	out = typePrefixedLiteralPass(out)
+	// P-12: "x + INTERVAL '1 day'" is the only way to do date arithmetic in
+	// PostgreSQL; SQLite has no interval type at all.
+	out, err = pgIntervalPass(out)
 	if err != nil {
 		return nil, err
 	}
