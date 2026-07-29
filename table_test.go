@@ -226,3 +226,44 @@ func TestTableFromFilePath_Additional(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizeTableName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"plain name", "users", "users"},
+		{"hyphen becomes underscore", "user-data", "user_data"},
+		{"space becomes underscore", "user data", "user_data"},
+		{"dot becomes underscore", "data.backup", "data_backup"},
+		{"punctuation is dropped", "user@#$data", "userdata"},
+		{"leading digit is prefixed", "123table", "sheet_123table"},
+		{"only punctuation falls back", "@#$%", "sheet"},
+		{"empty falls back", "", "sheet"},
+		{"uppercase is preserved", "UserData", "UserData"},
+		// A table name is always emitted double-quoted, so any letter SQLite
+		// accepts inside quotes survives. Dropping non-ASCII letters used to
+		// erase a Japanese, Chinese, Korean, Cyrillic, or accented-Latin file
+		// name down to the fallback, making two such files collide.
+		{"japanese is preserved", "売上", "売上"},
+		{"japanese kana is preserved", "テーブル", "テーブル"},
+		{"cyrillic is preserved", "Данные", "Данные"},
+		{"accented latin is preserved", "café", "café"},
+		{"decomposed accent is preserved", "café", "café"},
+		{"mixed script keeps both", "売上-2026", "売上_2026"},
+		{"non-ascii digit leads", "١٢", "sheet_١٢"},
+		{"emoji is dropped", "data\U0001F600", "data"},
+		{"quote is dropped", `a"b`, "ab"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.expected, sanitizeTableName(tt.input), "sanitizeTableName(%q)", tt.input)
+		})
+	}
+}

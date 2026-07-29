@@ -1387,8 +1387,8 @@ func Test_TableNameSecurity(t *testing.T) {
 		{
 			name:         "Unicode characters",
 			filePath:     "データ.csv",
-			expectedName: "sheet",
-			description:  "Should sanitize Unicode characters to fallback name",
+			expectedName: "データ",
+			description:  "Should keep a name written in a non-Latin script; the table name is quoted",
 		},
 		{
 			name:         "Special characters",
@@ -4795,4 +4795,54 @@ func TestOpenCompressedJSON(t *testing.T) {
 
 		assert.Equal(t, []string{"Alice", "Bob", "Charlie"}, names)
 	})
+}
+
+// Test_NonLatinFileNameBecomesQueryableTable pins the whole path from a file
+// name written in a non-Latin script to a query: the table keeps the name, and
+// two such files in one database stay distinct instead of both collapsing onto
+// the "sheet" fallback.
+func Test_NonLatinFileNameBecomesQueryableTable(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	dir := t.TempDir()
+	files := map[string]string{
+		"売上.csv":     "id,amount\n1,100\n2,200\n",
+		"顧客.csv":     "id,name\n1,alice\n",
+		"Данные.csv": "id\n7\n",
+		"café.csv":   "id\n9\n",
+	}
+	paths := make([]string, 0, len(files))
+	for name, body := range files {
+		path := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(path, []byte(body), 0600))
+		paths = append(paths, path)
+	}
+
+	db, err := OpenContext(ctx, paths...)
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Each file keeps its own table, so a query naming the file finds it.
+	var amount int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT amount FROM "売上" WHERE id = '2'`).Scan(&amount))
+	assert.Equal(t, 200, amount)
+
+	var name string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT name FROM "顧客" WHERE id = '1'`).Scan(&name))
+	assert.Equal(t, "alice", name)
+
+	var id int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT id FROM "Данные"`).Scan(&id))
+	assert.Equal(t, 7, id)
+
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT id FROM "café"`).Scan(&id))
+	assert.Equal(t, 9, id)
+
+	// None of them fell back to the shared "sheet" name.
+	rows, err := db.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sheet'`)
+	require.NoError(t, err)
+	defer rows.Close()
+	assert.False(t, rows.Next(), `no table should have collapsed onto the "sheet" fallback`)
+	require.NoError(t, rows.Err())
 }

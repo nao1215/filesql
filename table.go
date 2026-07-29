@@ -3,6 +3,8 @@ package filesql
 import (
 	"path/filepath"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // sheetFallbackName is the table name used when a sheet name sanitizes to empty.
@@ -92,33 +94,27 @@ func tableFromFilePath(filePath string) string {
 //
 // Transformations applied:
 //   - Replaces spaces, hyphens (-), and dots (.) with underscores (_)
-//   - Removes any non-alphanumeric characters except underscores
-//   - Adds "sheet_" prefix if the name starts with a number
+//   - Removes any character that is not a letter, a digit, a combining mark, or an underscore
+//   - Adds "sheet_" prefix if the name starts with a digit
 //   - Returns "sheet" as fallback for empty names
+//
+// Letters and digits are judged by Unicode category, not by the ASCII range: a
+// table name is always emitted double-quoted, so every letter SQLite accepts
+// inside quotes is kept. Restricting the set to ASCII erased a Japanese,
+// Chinese, Korean, Cyrillic, or accented-Latin file name down to the fallback,
+// which also made two such files collide on one table name.
 //
 // Example:
 //
 //	sanitizeTableName("with-hyphens") // returns "with_hyphens"
 //	sanitizeTableName("data.backup")  // returns "data_backup"
-//	sanitizeTableName("test@#$%")     // returns "test_"
+//	sanitizeTableName("test@#$%")     // returns "test"
+//	sanitizeTableName("売上")          // returns "売上"
 func sanitizeTableName(name string) string {
-	// Replace spaces and invalid characters with underscores
-	result := strings.ReplaceAll(name, " ", "_")
-	result = strings.ReplaceAll(result, "-", "_")
-	result = strings.ReplaceAll(result, ".", "_")
+	finalResult := identifierRunes(name)
 
-	// Remove any non-alphanumeric characters except underscore
-	var sanitized strings.Builder
-	for _, r := range result {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
-			sanitized.WriteRune(r)
-		}
-	}
-
-	finalResult := sanitized.String()
-
-	// Ensure it doesn't start with a number
-	if len(finalResult) > 0 && finalResult[0] >= '0' && finalResult[0] <= '9' {
+	// Ensure it doesn't start with a digit
+	if first, _ := utf8.DecodeRuneInString(finalResult); unicode.IsDigit(first) {
 		finalResult = "sheet_" + finalResult
 	}
 
@@ -128,4 +124,27 @@ func sanitizeTableName(name string) string {
 	}
 
 	return finalResult
+}
+
+// identifierRunes maps a derived name onto the characters an identifier may
+// carry: spaces, hyphens, and dots become underscores, and every remaining
+// character that is not a letter, a digit, a combining mark, or an underscore is
+// dropped. Letters and digits are judged by Unicode category so a name written
+// in any script survives; a combining mark is kept so a decomposed accent stays
+// with its base letter. Underscore is punctuation category-wise, so it is kept
+// by name. This is the one place both table-name sanitizers agree on the
+// character set, so a name derived from a file path and one built through
+// TableName cannot disagree.
+func identifierRunes(name string) string {
+	result := strings.ReplaceAll(name, " ", "_")
+	result = strings.ReplaceAll(result, "-", "_")
+	result = strings.ReplaceAll(result, ".", "_")
+
+	var sanitized strings.Builder
+	for _, r := range result {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r) || r == '_' {
+			sanitized.WriteRune(r)
+		}
+	}
+	return sanitized.String()
 }
