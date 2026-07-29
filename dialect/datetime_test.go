@@ -38,6 +38,10 @@ func TestDateArithmeticSemantics(t *testing.T) {
 		{"mysql quarter", MySQL, `SELECT DATE_ADD('2026-01-01', INTERVAL 1 QUARTER)`, "2026-04-01"},
 		{"mysql negative interval", MySQL, `SELECT DATE_ADD('2026-01-01', INTERVAL -1 DAY)`, "2025-12-31"},
 		{"mysql explicit positive interval", MySQL, `SELECT DATE_ADD('2026-01-01', INTERVAL +1 DAY)`, "2026-01-02"},
+		// MySQL accepts any expression as the amount, not only a literal.
+		{"mysql interval from a column", MySQL, `SELECT DATE_ADD('2026-01-01', INTERVAL n DAY) FROM (SELECT 3 AS n) t`, "2026-01-04"},
+		{"mysql interval from an expression", MySQL, `SELECT DATE_ADD('2026-01-01', INTERVAL (1 + 2) DAY)`, "2026-01-04"},
+		{"mysql date_sub from a column", MySQL, `SELECT DATE_SUB('2026-01-10', INTERVAL n DAY) FROM (SELECT 3 AS n) t`, "2026-01-07"},
 		{"googlesql week", GoogleSQL, `SELECT DATE_ADD(DATE '2026-01-01', INTERVAL 1 WEEK)`, "2026-01-08"},
 
 		// MySQL's TIMESTAMPDIFF counts forward from its second argument, the
@@ -120,7 +124,6 @@ func TestDateArithmeticRejects(t *testing.T) {
 		query   string
 	}{
 		{MySQL, `SELECT DATE_ADD(d, INTERVAL 1 DAY_HOUR)`},
-		{MySQL, `SELECT DATE_ADD('2026-01-01', INTERVAL 'x' DAY)`},
 		{PostgreSQL, `SELECT DATE '2026-01-01' + INTERVAL 'nonsense'`},
 		{PostgreSQL, `SELECT DATE '2026-01-01' + INTERVAL '1 fortnight'`},
 		{PostgreSQL, `SELECT DATE '2026-01-01' + INTERVAL '1.5 days'`},

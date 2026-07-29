@@ -19,7 +19,7 @@ func TestMySQLTranslate(t *testing.T) {
 		{"C-1_extract_expr", "SELECT EXTRACT(MONTH FROM o.created) FROM t", "SELECT DATE_PART('month', o.created) FROM t"},
 
 		{"M-5_date_add", "SELECT DATE_ADD(d, INTERVAL 3 DAY) FROM t", "SELECT interval_add(d, 3, 'day') FROM t"},
-		{"M-5_date_sub", "SELECT DATE_SUB(d, INTERVAL 2 MONTH) FROM t", "SELECT interval_add(d, -2, 'month') FROM t"},
+		{"M-5_date_sub", "SELECT DATE_SUB(d, INTERVAL 2 MONTH) FROM t", "SELECT interval_add(d, -(2), 'month') FROM t"},
 		{"M-5_date_add_hour", "SELECT DATE_ADD(ts, INTERVAL 5 HOUR)", "SELECT interval_add(ts, 5, 'hour')"},
 		{"M-5_date_add_string_arg", "SELECT DATE_ADD('2020-01-01', INTERVAL 1 YEAR)", "SELECT interval_add('2020-01-01', 1, 'year')"},
 
@@ -75,7 +75,7 @@ func TestMySQLTranslateUnsupported(t *testing.T) {
 		input string
 	}{
 		{"M-5_unsupported_unit", "SELECT DATE_ADD(d, INTERVAL 1 DAY_HOUR)"},
-		{"M-5_non_literal_interval", "SELECT DATE_ADD(d, INTERVAL n DAY)"},
+		{"M-5_missing_interval_value", "SELECT DATE_ADD(d, INTERVAL DAY)"},
 		{"M-5_compound_interval", "SELECT DATE_ADD(d, INTERVAL '1:1' MINUTE_SECOND)"},
 		{"M-5_missing_unit", "SELECT DATE_ADD(d, INTERVAL 3)"},
 		{"M-7_div_left_not_primary", "SELECT a, DIV b"},

@@ -116,6 +116,9 @@ var intervalUnits = map[string]string{
 // TIMESTAMP_ADD/TIMESTAMP_SUB): f(x, INTERVAL n unit) -> interval_add(x, ±n,
 // 'unit'). sign is "+" for the ADD forms and "-" for the SUB forms.
 //
+// The amount is any expression up to the trailing unit keyword, so a signed
+// literal and a column both work; MySQL accepts either.
+//
 // It goes through the helper rather than SQLite's datetime() modifier because
 // datetime() rolls a month-end overflow forward where every source dialect
 // clamps it, and always renders a time of day.
@@ -128,16 +131,21 @@ func rewriteDateArith(tokens []token, open, closeIdx int, sign string, recurse c
 	if interval < 0 || !isWordEq(tokens[interval], "INTERVAL") {
 		return nil, false, nil
 	}
-	amount, unitTok, err := readIntervalAmount(tokens, interval)
-	if err != nil {
-		return nil, false, err
+	unitTok := prevSig(tokens, closeIdx)
+	if unitTok < 0 || unitTok <= interval || tokens[unitTok].kind != tokWord {
+		return nil, false, fmt.Errorf("%w: INTERVAL is missing a unit", ErrUnsupportedSyntax)
 	}
 	unit, ok := intervalUnits[strings.ToUpper(tokens[unitTok].text)]
 	if !ok {
 		return nil, false, fmt.Errorf("%w: unsupported INTERVAL unit %q", ErrUnsupportedSyntax, tokens[unitTok].text)
 	}
-	if after := nextSig(tokens, unitTok+1); after != closeIdx {
-		return nil, false, fmt.Errorf("%w: unsupported INTERVAL expression", ErrUnsupportedSyntax)
+	amount, err := recurse(tokens[interval+1 : unitTok])
+	if err != nil {
+		return nil, false, err
+	}
+	amount = trimSpaceTokens(amount)
+	if len(amount) == 0 {
+		return nil, false, fmt.Errorf("%w: INTERVAL is missing a value", ErrUnsupportedSyntax)
 	}
 
 	expr, err := recurse(tokens[open+1 : comma])
@@ -145,38 +153,21 @@ func rewriteDateArith(tokens []token, open, closeIdx int, sign string, recurse c
 		return nil, false, err
 	}
 	expr = trimSpaceTokens(expr)
-	if sign == "-" {
-		amount = "-" + amount
-	}
-	repl := make([]token, 0, len(expr)+8)
+	repl := make([]token, 0, len(expr)+len(amount)+10)
 	repl = append(repl, wordToken("interval_add"), opToken("("))
 	repl = append(repl, expr...)
-	repl = append(repl, opToken(","), spaceToken(), wordToken(amount))
+	repl = append(repl, opToken(","), spaceToken())
+	if sign == "-" {
+		// Negate the whole amount, which may be an expression rather than a
+		// literal: MySQL accepts DATE_SUB(d, INTERVAL n DAY) with a column n.
+		repl = append(repl, opToken("-"), opToken("("))
+		repl = append(repl, amount...)
+		repl = append(repl, opToken(")"))
+	} else {
+		repl = append(repl, amount...)
+	}
 	repl = append(repl, opToken(","), spaceToken(), stringToken(unit), opToken(")"))
 	return repl, true, nil
-}
-
-// readIntervalAmount reads the signed numeric literal after an INTERVAL keyword
-// and returns it along with the index of the unit token that follows. A leading
-// "-" arrives as its own operator token, which is why the sign is handled here
-// rather than by requiring a single number token.
-func readIntervalAmount(tokens []token, interval int) (string, int, error) {
-	idx := nextSig(tokens, interval+1)
-	sign := ""
-	if idx >= 0 && (isOpEq(tokens[idx], "-") || isOpEq(tokens[idx], "+")) {
-		if tokens[idx].text == "-" {
-			sign = "-"
-		}
-		idx = nextSig(tokens, idx+1)
-	}
-	if idx < 0 || tokens[idx].kind != tokNumber {
-		return "", 0, fmt.Errorf("%w: INTERVAL value must be a numeric literal", ErrUnsupportedSyntax)
-	}
-	unitTok := nextSig(tokens, idx+1)
-	if unitTok < 0 || tokens[unitTok].kind != tokWord {
-		return "", 0, fmt.Errorf("%w: INTERVAL is missing a unit", ErrUnsupportedSyntax)
-	}
-	return sign + tokens[idx].text, unitTok, nil
 }
 
 // rewriteRenameCall rewrites a call to use newName, recursing into its arguments.
@@ -425,6 +416,12 @@ func primaryStartBack(toks []token) (int, bool) {
 		if open < 0 {
 			return 0, false
 		}
+		// A FILTER or OVER clause modifies the call in front of it, so the
+		// primary is the whole "f(...) FILTER (...) OVER (...)" and not just the
+		// clause's own parentheses.
+		if prev := prevSig(toks, open); prev >= 0 && isWindowClauseKeyword(toks[prev]) {
+			return primaryStartBack(toks[:prev])
+		}
 		// A "(" is a function call only when a name sits immediately before it
 		// (as in count(*)); a name separated by whitespace (as in the keyword of
 		// "SELECT (a + b)") is not part of the parenthesized primary.
@@ -433,9 +430,49 @@ func primaryStartBack(toks []token) (int, bool) {
 		}
 		return open, true
 	case isName(toks[end]) || isLiteral(toks[end]):
-		return chainStartBack(toks, end), true
+		start := chainStartBack(toks, end)
+		// "f(...) OVER w" names a window defined in a WINDOW clause; the name
+		// belongs to the call, not to whatever precedes it.
+		if prev := prevSig(toks, start); prev >= 0 && isWordEq(toks[prev], "OVER") {
+			return primaryStartBack(toks[:prev])
+		}
+		return start, true
 	default:
 		return 0, false
+	}
+}
+
+// isWindowClauseKeyword reports whether t introduces a postfix clause that binds
+// to the aggregate call before it.
+func isWindowClauseKeyword(t token) bool {
+	return isWordEq(t, "OVER") || isWordEq(t, "FILTER")
+}
+
+// extendWindowClauses walks forward across the FILTER and OVER clauses that
+// follow the call ending at end, so a binary-operator rewrite treats
+// "SUM(x) OVER (...)" as one operand rather than splitting it at the clause.
+func extendWindowClauses(toks []token, end int) int {
+	for {
+		next := nextSig(toks, end+1)
+		if next < 0 || !isWindowClauseKeyword(toks[next]) {
+			return end
+		}
+		after := nextSig(toks, next+1)
+		if after < 0 {
+			return end
+		}
+		switch {
+		case isOpEq(toks[after], "("):
+			closeIdx := matchParen(toks, after)
+			if closeIdx < 0 {
+				return end
+			}
+			end = closeIdx
+		case isWordEq(toks[next], "OVER") && isName(toks[after]):
+			end = after
+		default:
+			return end
+		}
 	}
 }
 
@@ -476,6 +513,7 @@ func primaryEndForward(toks []token, from int) (int, bool) {
 	default:
 		return 0, false
 	}
+	end = extendWindowClauses(toks, end)
 	// Extend over ".name" chains and any call parentheses that follow them.
 	for {
 		dot := nextSig(toks, end+1)
@@ -493,6 +531,7 @@ func primaryEndForward(toks []token, from int) (int, bool) {
 			}
 			end = e
 		}
+		end = extendWindowClauses(toks, end)
 	}
 }
 

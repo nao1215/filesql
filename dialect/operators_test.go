@@ -192,3 +192,44 @@ func TestOperandMustBePrimary(t *testing.T) {
 		}
 	}
 }
+
+// TestWindowFunctionOperands keeps a window or filter clause attached to the
+// aggregate it modifies. The operand scanners walk back from an operator to the
+// primary expression beside it, and a bare "SUM(x) OVER (...)" ends in the
+// clause's own parentheses, which is easy to mistake for the whole operand.
+func TestWindowFunctionOperands(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	if _, err := db.ExecContext(context.Background(), `CREATE TABLE w (id INTEGER, score INTEGER)`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `INSERT INTO w VALUES (1, 10), (2, 20), (3, 30)`); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		dialect Dialect
+		query   string
+		want    string
+	}{
+		{"mysql divides a windowed sum", MySQL, `SELECT SUM(score) OVER (ORDER BY id) / 2 FROM w ORDER BY id LIMIT 1`, "5"},
+		{"mysql divides by a windowed count", MySQL, `SELECT score / COUNT(*) OVER () FROM w ORDER BY id LIMIT 1`, "3.3333333333333335"},
+		{"googlesql divides a windowed sum", GoogleSQL, `SELECT SUM(score) OVER (ORDER BY id) / 2 FROM w ORDER BY id LIMIT 1`, "5"},
+		{"mysql divides a named window", MySQL, `SELECT SUM(score) OVER win / 2 FROM w WINDOW win AS (ORDER BY id) ORDER BY id LIMIT 1`, "5"},
+		{"mysql divides a filtered aggregate", MySQL, `SELECT COUNT(*) FILTER (WHERE id > 1) / 2 FROM w`, "1"},
+		{"postgresql matches a windowed value", PostgreSQL, `SELECT CAST(SUM(score) OVER (ORDER BY id) AS TEXT) LIKE '1%' FROM w ORDER BY id LIMIT 1`, "1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, tt.dialect, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if !got.Valid || got.String != tt.want {
+				t.Fatalf("%s = %v, want %q", tt.query, got, tt.want)
+			}
+		})
+	}
+}

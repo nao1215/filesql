@@ -33,7 +33,7 @@ func TestGoogleSQLTranslate(t *testing.T) {
 		{"G-6_format", "SELECT FORMAT('%d', n) FROM t", "SELECT printf('%d', n) FROM t"},
 
 		{"G-7_date_add", "SELECT DATE_ADD(d, INTERVAL 3 DAY)", "SELECT interval_add(d, 3, 'day')"},
-		{"G-7_timestamp_sub", "SELECT TIMESTAMP_SUB(ts, INTERVAL 2 HOUR)", "SELECT interval_add(ts, -2, 'hour')"},
+		{"G-7_timestamp_sub", "SELECT TIMESTAMP_SUB(ts, INTERVAL 2 HOUR)", "SELECT interval_add(ts, -(2), 'hour')"},
 
 		{"G-8_date_diff", "SELECT DATE_DIFF(a, b, DAY) FROM t", "SELECT DATE_DIFF(a, b, 'day') FROM t"},
 		{"G-8_timestamp_diff", "SELECT TIMESTAMP_DIFF(a, b, SECOND)", "SELECT TIMESTAMP_DIFF(a, b, 'second')"},
