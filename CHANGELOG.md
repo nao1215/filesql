@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-07-29
+
 ### Fixed
 - **A rejected ACH or Fedwire write destroyed the file it was overwriting.** Both encoders validate while they encode, so a value the format cannot hold — an amount wider than its field, a malformed amount string — is rejected partway through the write. The destination was opened with `os.Create` first, which truncates, and for an in-place save that destination is the caller's own source file: an 891-byte ACH file came back 0 bytes, and Fedwire went further and deleted the file outright, because its failure path removed the output path as a "partial file". The write is now staged in a temporary file next to the destination and renamed over it only after the encoder and the close both succeed, so a rejected write costs nothing. An existing destination keeps its permissions; a new file is created 0644.
 
@@ -811,7 +813,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/nao1215/filesql/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/nao1215/filesql/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/nao1215/filesql/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/nao1215/filesql/compare/v0.19.0...v0.20.0
