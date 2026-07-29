@@ -23,6 +23,15 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-5_date_add_hour", "SELECT DATE_ADD(ts, INTERVAL 5 HOUR)", "SELECT interval_add(ts, 5, 'hour')"},
 		{"M-5_date_add_string_arg", "SELECT DATE_ADD('2020-01-01', INTERVAL 1 YEAR)", "SELECT interval_add('2020-01-01', 1, 'year')"},
 
+		// MySQL CONCAT is NULL-propagating: any NULL argument makes the whole
+		// result NULL. SQLite's own concat() treats NULL as an empty string, so the
+		// call has to be routed to a helper rather than passed through.
+		{"M-x_concat", "SELECT CONCAT(a, b) FROM t", "SELECT strict_concat(a, b) FROM t"},
+		{"M-x_concat_one_arg", "SELECT CONCAT(a)", "SELECT strict_concat(a)"},
+		{"M-x_concat_nested", "SELECT CONCAT(a, CONCAT(b, c))", "SELECT strict_concat(a, strict_concat(b, c))"},
+		{"M-x_concat_ws_untouched", "SELECT CONCAT_WS(',', a, b)", "SELECT CONCAT_WS(',', a, b)"},
+		{"M-x_group_concat_untouched", "SELECT GROUP_CONCAT(a) FROM t", "SELECT GROUP_CONCAT(a) FROM t"},
+
 		{"M-6_group_concat_separator", "SELECT GROUP_CONCAT(name SEPARATOR ', ') FROM t", "SELECT GROUP_CONCAT(name, ', ') FROM t"},
 		{"M-6_group_concat_plain", "SELECT GROUP_CONCAT(name) FROM t", "SELECT GROUP_CONCAT(name) FROM t"},
 		{"M-6_group_concat_distinct", "SELECT GROUP_CONCAT(DISTINCT name) FROM t", "SELECT GROUP_CONCAT(DISTINCT name) FROM t"},

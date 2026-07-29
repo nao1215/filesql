@@ -233,3 +233,54 @@ func TestWindowFunctionOperands(t *testing.T) {
 		})
 	}
 }
+
+// TestStrictConcatSemantics runs CONCAT through the real driver for every
+// dialect. MySQL and GoogleSQL propagate a NULL argument to a NULL result;
+// PostgreSQL's concat() ignores NULLs, and SQLite's does too, so only the first
+// two are routed to the helper. Passing all of them through to SQLite answered a
+// plausible non-NULL string where MySQL and BigQuery answer NULL, with nothing
+// to notice.
+func TestStrictConcatSemantics(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name    string
+		dialect Dialect
+		query   string
+		want    string
+		null    bool
+	}{
+		{name: "mysql concat joins", dialect: MySQL, query: `SELECT CONCAT('a', 'b')`, want: "ab"},
+		{name: "mysql concat with null is null", dialect: MySQL, query: `SELECT CONCAT('a', NULL)`, null: true},
+		{name: "mysql concat null first", dialect: MySQL, query: `SELECT CONCAT(NULL, 'b')`, null: true},
+		{name: "mysql concat single argument", dialect: MySQL, query: `SELECT CONCAT('a')`, want: "a"},
+		{name: "mysql concat numbers", dialect: MySQL, query: `SELECT CONCAT(1, 2)`, want: "12"},
+		{name: "mysql concat nested null", dialect: MySQL, query: `SELECT CONCAT('a', CONCAT('b', NULL))`, null: true},
+		{name: "mysql concat_ws still skips null", dialect: MySQL, query: `SELECT CONCAT_WS(',', 'a', NULL, 'b')`, want: "a,b"},
+
+		{name: "googlesql concat joins", dialect: GoogleSQL, query: `SELECT CONCAT('a', 'b')`, want: "ab"},
+		{name: "googlesql concat with null is null", dialect: GoogleSQL, query: `SELECT CONCAT('a', NULL)`, null: true},
+
+		// PostgreSQL's concat() ignores NULLs, so it must NOT be rewritten.
+		{name: "postgresql concat ignores null", dialect: PostgreSQL, query: `SELECT CONCAT('a', NULL)`, want: "a"},
+		{name: "sqlite concat ignores null", dialect: SQLite, query: `SELECT CONCAT('a', NULL)`, want: "a"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, tt.dialect, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if tt.null {
+				if got.Valid {
+					t.Fatalf("%s = %q, want NULL", tt.query, got.String)
+				}
+				return
+			}
+			if !got.Valid || got.String != tt.want {
+				t.Fatalf("%s = %v, want %q", tt.query, got, tt.want)
+			}
+		})
+	}
+}

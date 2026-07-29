@@ -520,3 +520,24 @@ func unionDistinctPass(tokens []token) []token {
 	}
 	return out
 }
+
+// fnStrictConcat concatenates its arguments the way MySQL and GoogleSQL CONCAT
+// do: a NULL anywhere makes the whole result NULL. SQLite's own concat() treats
+// a NULL as an empty string, so a call passed through to it answered a plausible
+// non-NULL string where the source dialect answers NULL — a wrong answer with no
+// error to notice. PostgreSQL's concat() does ignore NULLs, so it keeps using
+// SQLite's and never reaches this helper.
+func fnStrictConcat(args []driver.Value) (driver.Value, error) {
+	var b strings.Builder
+	for _, arg := range args {
+		if arg == nil {
+			return nil, nil
+		}
+		s, ok := toString(arg)
+		if !ok {
+			return nil, nil
+		}
+		b.WriteString(s)
+	}
+	return b.String(), nil
+}

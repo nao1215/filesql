@@ -124,6 +124,10 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 		return rewriteSafeCast(tokens, open, closeIdx)
 	case "FORMAT":
 		return rewriteRenameCall(tokens, open, closeIdx, "printf", googlesqlCallPass)
+	case "CONCAT":
+		// GoogleSQL CONCAT returns NULL when any argument is NULL, like MySQL and
+		// unlike SQLite's own concat(), which treats a NULL as an empty string.
+		return rewriteRenameCall(tokens, open, closeIdx, "strict_concat", googlesqlCallPass)
 	case "DATE_ADD", "TIMESTAMP_ADD":
 		return rewriteDateArith(tokens, open, closeIdx, "+", googlesqlCallPass)
 	case "DATE_SUB", "TIMESTAMP_SUB":
