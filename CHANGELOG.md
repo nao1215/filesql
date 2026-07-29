@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-07-29
+
 ### Fixed
 - **A file name written in a non-Latin script keeps its table name.** Table names were sanitized against the ASCII letter range, so every other letter was deleted: `売上.csv` became `sheet`, `Данные.csv` became `sheet`, and `café.csv` became `caf`. Two such files in one database therefore collided on the same fallback name and only one of them loaded. A table name is always emitted double-quoted, so the restriction bought nothing; the sanitizer now judges letters and digits by Unicode category and keeps combining marks, so `SELECT * FROM "売上"` works. Excel sheet names, which go through the same sanitizer, are fixed with it. A name whose characters are all dropped still falls back to `sheet`, and punctuation, symbols, and quotes are still removed.
 
@@ -806,7 +808,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/nao1215/filesql/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/nao1215/filesql/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/nao1215/filesql/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/nao1215/filesql/compare/v0.18.0...v0.19.0
