@@ -146,6 +146,9 @@ func registerAll() error {
 		// SQLite's affinity; see cast.go.
 		"mysql_cast":          {2, dialectCast(MySQL, false)},
 		"mysql_divide":        {2, divideFloat(false)},
+		"interval_add":        {3, fnDateIntervalAdd},
+		"interval_text_add":   {3, fnIntervalTextAdd},
+		"date_trunc_part":     {2, fnDateTruncPart},
 		"mysql_hex":           {1, fnMySQLHex},
 		"mysql_unhex":         {1, fnMySQLUnhex},
 		"like_sensitive":      {2, likeCompare(true)},
@@ -556,6 +559,14 @@ func datePartValue(unit string, tm time.Time) (driver.Value, error) {
 		return int64(wk), nil
 	case "epoch":
 		return tm.Unix(), nil
+	case "date":
+		// GoogleSQL allows the date and time parts of a timestamp to be
+		// extracted, not just its numeric fields.
+		return tm.Format(layoutDateOnly), nil
+	case "time":
+		return tm.Format(layoutTimeOnly), nil
+	case "datetime":
+		return tm.Format(layoutDateTime), nil
 	default:
 		return nil, fmt.Errorf("dialect: unsupported date part %q", unit)
 	}

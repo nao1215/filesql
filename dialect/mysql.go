@@ -19,6 +19,10 @@ import (
 //	M-11 a / b                           -> mysql_divide(a, b)
 //	M-12 a || b                          -> a OR b
 //	M-13 a <=> b                         -> a IS b
+//	M-14 DATE 'lit' / TIMESTAMP 'lit'    -> 'lit'
+//	M-15 CURRENT_DATE() and friends      -> CURRENT_DATE
+//	M-16 TIMESTAMPDIFF/TIMESTAMPADD      -> DATE_DIFF / interval_add
+//	M-17 POSITION(x IN y), SUBSTRING FROM -> INSTR / SUBSTR
 //
 // M-10 (LIMIT n, m) needs no rewrite: SQLite accepts it natively.
 func rewriteMySQL(tokens []token) ([]token, error) {
@@ -40,6 +44,9 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	// and "<=>" as null-safe equality, which SQLite spells IS.
 	out = replaceOperatorWithWord(out, "||", "OR")
 	out = replaceOperatorWithWord(out, "<=>", "IS")
+	// M-14/M-15: MySQL accepts typed date literals and the parenthesized
+	// CURRENT_DATE() spelling, neither of which SQLite parses.
+	out = currentValueParenPass(typePrefixedLiteralPass(out))
 	return renameWordPass(out, "RLIKE", "REGEXP"), nil
 }
 
@@ -90,6 +97,14 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		return rewriteDateArith(tokens, open, closeIdx, "-", mysqlCallPass)
 	case "GROUP_CONCAT":
 		return rewriteGroupConcat(tokens, nameIdx, open, closeIdx)
+	case "TIMESTAMPDIFF":
+		return rewriteTimestampDiff(tokens, open, closeIdx, mysqlCallPass)
+	case "TIMESTAMPADD":
+		return rewriteTimestampAdd(tokens, open, closeIdx, mysqlCallPass)
+	case "POSITION":
+		return rewritePosition(tokens, open, closeIdx)
+	case "SUBSTRING":
+		return rewriteSubstring(tokens, open, closeIdx)
 	case "HEX":
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_hex", mysqlCallPass)
 	case "UNHEX":

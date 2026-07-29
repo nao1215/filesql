@@ -98,21 +98,27 @@ func castHelperCall(helper string, expr []token, target string) []token {
 	return repl
 }
 
-// intervalUnits maps the INTERVAL units that map cleanly onto a SQLite datetime
-// modifier. Units outside this set (WEEK, QUARTER, compound units) are rejected.
+// intervalUnits maps the INTERVAL units the interval helper implements. Compound
+// units (DAY_HOUR and friends) are rejected.
 var intervalUnits = map[string]string{
-	"SECOND": unitSecond,
-	"MINUTE": unitMinute,
-	"HOUR":   unitHour,
-	"DAY":    unitDay,
-	"MONTH":  unitMonth,
-	"YEAR":   unitYear,
+	"SECOND":  unitSecond,
+	"MINUTE":  unitMinute,
+	"HOUR":    unitHour,
+	"DAY":     unitDay,
+	"WEEK":    unitWeek,
+	"MONTH":   unitMonth,
+	"QUARTER": unitQuarter,
+	"YEAR":    unitYear,
 }
 
 // rewriteDateArith implements the shared "date +/- INTERVAL n unit" rewrite used
 // by MySQL M-5 (DATE_ADD/DATE_SUB) and GoogleSQL G-7 (DATE_ADD/DATE_SUB/
-// TIMESTAMP_ADD/TIMESTAMP_SUB): f(x, INTERVAL n unit) -> datetime(x, '±n unit').
-// sign is "+" for the ADD forms and "-" for the SUB forms.
+// TIMESTAMP_ADD/TIMESTAMP_SUB): f(x, INTERVAL n unit) -> interval_add(x, ±n,
+// 'unit'). sign is "+" for the ADD forms and "-" for the SUB forms.
+//
+// It goes through the helper rather than SQLite's datetime() modifier because
+// datetime() rolls a month-end overflow forward where every source dialect
+// clamps it, and always renders a time of day.
 func rewriteDateArith(tokens []token, open, closeIdx int, sign string, recurse callRecurser) ([]token, bool, error) {
 	comma := topLevelComma(tokens, open, closeIdx)
 	if comma < 0 {
@@ -122,13 +128,9 @@ func rewriteDateArith(tokens []token, open, closeIdx int, sign string, recurse c
 	if interval < 0 || !isWordEq(tokens[interval], "INTERVAL") {
 		return nil, false, nil
 	}
-	value := nextSig(tokens, interval+1)
-	if value < 0 || tokens[value].kind != tokNumber {
-		return nil, false, fmt.Errorf("%w: INTERVAL value must be a numeric literal", ErrUnsupportedSyntax)
-	}
-	unitTok := nextSig(tokens, value+1)
-	if unitTok < 0 || tokens[unitTok].kind != tokWord {
-		return nil, false, fmt.Errorf("%w: INTERVAL is missing a unit", ErrUnsupportedSyntax)
+	amount, unitTok, err := readIntervalAmount(tokens, interval)
+	if err != nil {
+		return nil, false, err
 	}
 	unit, ok := intervalUnits[strings.ToUpper(tokens[unitTok].text)]
 	if !ok {
@@ -143,12 +145,38 @@ func rewriteDateArith(tokens []token, open, closeIdx int, sign string, recurse c
 		return nil, false, err
 	}
 	expr = trimSpaceTokens(expr)
-	modifier := sign + tokens[value].text + " " + unit
-	repl := make([]token, 0, len(expr)+6)
-	repl = append(repl, wordToken("datetime"), opToken("("))
+	if sign == "-" {
+		amount = "-" + amount
+	}
+	repl := make([]token, 0, len(expr)+8)
+	repl = append(repl, wordToken("interval_add"), opToken("("))
 	repl = append(repl, expr...)
-	repl = append(repl, opToken(","), spaceToken(), stringToken(modifier), opToken(")"))
+	repl = append(repl, opToken(","), spaceToken(), wordToken(amount))
+	repl = append(repl, opToken(","), spaceToken(), stringToken(unit), opToken(")"))
 	return repl, true, nil
+}
+
+// readIntervalAmount reads the signed numeric literal after an INTERVAL keyword
+// and returns it along with the index of the unit token that follows. A leading
+// "-" arrives as its own operator token, which is why the sign is handled here
+// rather than by requiring a single number token.
+func readIntervalAmount(tokens []token, interval int) (string, int, error) {
+	idx := nextSig(tokens, interval+1)
+	sign := ""
+	if idx >= 0 && (isOpEq(tokens[idx], "-") || isOpEq(tokens[idx], "+")) {
+		if tokens[idx].text == "-" {
+			sign = "-"
+		}
+		idx = nextSig(tokens, idx+1)
+	}
+	if idx < 0 || tokens[idx].kind != tokNumber {
+		return "", 0, fmt.Errorf("%w: INTERVAL value must be a numeric literal", ErrUnsupportedSyntax)
+	}
+	unitTok := nextSig(tokens, idx+1)
+	if unitTok < 0 || tokens[unitTok].kind != tokWord {
+		return "", 0, fmt.Errorf("%w: INTERVAL is missing a unit", ErrUnsupportedSyntax)
+	}
+	return sign + tokens[idx].text, unitTok, nil
 }
 
 // rewriteRenameCall rewrites a call to use newName, recursing into its arguments.
@@ -477,4 +505,195 @@ func adjacentCallEnd(toks []token, nameIdx int) (int, bool) {
 		return matchParen(toks, nameIdx+1), true
 	}
 	return 0, false
+}
+
+// datePrefixTypes are the type keywords that can prefix a string literal, as in
+// DATE '2026-01-01'. All three dialects accept them; SQLite parses none of them.
+var datePrefixTypes = map[string]bool{
+	"DATE":      true,
+	"DATETIME":  true,
+	"TIMESTAMP": true,
+	"TIME":      true,
+}
+
+// typePrefixedLiteralPass drops a DATE/DATETIME/TIMESTAMP/TIME keyword that sits
+// immediately before a string literal and keeps the literal, since SQLite stores
+// these values as text (G-3, M-14, P-13).
+func typePrefixedLiteralPass(tokens []token) []token {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		t := tokens[i]
+		if t.kind == tokWord && datePrefixTypes[strings.ToUpper(t.text)] {
+			if lit := nextSig(tokens, i+1); lit >= 0 && tokens[lit].kind == tokString {
+				out = append(out, tokens[lit])
+				i = lit + 1
+				continue
+			}
+		}
+		out = append(out, t)
+		i++
+	}
+	return out
+}
+
+// currentValueKeywords are the no-argument datetime keywords SQLite accepts only
+// without parentheses, while MySQL and GoogleSQL write them as calls.
+var currentValueKeywords = map[string]bool{
+	"CURRENT_DATE":      true,
+	"CURRENT_TIME":      true,
+	"CURRENT_TIMESTAMP": true,
+}
+
+// currentValueParenPass drops the empty parentheses from CURRENT_DATE() and its
+// siblings, which SQLite rejects (M-15, G-14).
+func currentValueParenPass(tokens []token) []token {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		t := tokens[i]
+		if t.kind == tokWord && currentValueKeywords[strings.ToUpper(t.text)] {
+			if open := nextSig(tokens, i+1); open >= 0 && isOpEq(tokens[open], "(") {
+				if closeIdx := nextSig(tokens, open+1); closeIdx >= 0 && isOpEq(tokens[closeIdx], ")") {
+					out = append(out, t)
+					i = closeIdx + 1
+					continue
+				}
+			}
+		}
+		out = append(out, t)
+		i++
+	}
+	return out
+}
+
+// rewriteTruncCall implements GoogleSQL's DATE_TRUNC(value, PART) argument
+// order, where the part is a bare keyword. The PostgreSQL spelling,
+// DATE_TRUNC('part', value), is left alone so both work under either dialect.
+func rewriteTruncCall(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
+	comma := topLevelComma(tokens, open, closeIdx)
+	if comma < 0 {
+		return nil, false, nil
+	}
+	part := nextSig(tokens, comma+1)
+	if part < 0 || tokens[part].kind != tokWord {
+		return nil, false, nil
+	}
+	if after := nextSig(tokens, part+1); after != closeIdx {
+		return nil, false, nil
+	}
+	value, err := recurse(tokens[open+1 : comma])
+	if err != nil {
+		return nil, false, err
+	}
+	value = trimSpaceTokens(value)
+	repl := make([]token, 0, len(value)+6)
+	repl = append(repl, wordToken("date_trunc_part"), opToken("("))
+	repl = append(repl, value...)
+	repl = append(repl, opToken(","), spaceToken(), stringToken(strings.ToLower(tokens[part].text)), opToken(")"))
+	return repl, true, nil
+}
+
+// rewriteTimestampDiff implements MySQL TIMESTAMPDIFF(unit, start, end) ->
+// DATE_DIFF(end, start, 'unit'). MySQL counts forward from start, the reverse of
+// DATE_DIFF's argument order.
+func rewriteTimestampDiff(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
+	unit, args, ok, err := unitFirstCallArgs(tokens, open, closeIdx, 3, recurse)
+	if !ok || err != nil {
+		return nil, false, err
+	}
+	repl := make([]token, 0, len(args[0])+len(args[1])+8)
+	repl = append(repl, wordToken("DATE_DIFF"), opToken("("))
+	repl = append(repl, args[1]...)
+	repl = append(repl, opToken(","), spaceToken())
+	repl = append(repl, args[0]...)
+	repl = append(repl, opToken(","), spaceToken(), stringToken(unit), opToken(")"))
+	return repl, true, nil
+}
+
+// rewriteTimestampAdd implements MySQL TIMESTAMPADD(unit, n, x) ->
+// interval_add(x, n, 'unit').
+func rewriteTimestampAdd(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
+	unit, args, ok, err := unitFirstCallArgs(tokens, open, closeIdx, 3, recurse)
+	if !ok || err != nil {
+		return nil, false, err
+	}
+	repl := make([]token, 0, len(args[0])+len(args[1])+8)
+	repl = append(repl, wordToken("interval_add"), opToken("("))
+	repl = append(repl, args[1]...)
+	repl = append(repl, opToken(","), spaceToken())
+	repl = append(repl, args[0]...)
+	repl = append(repl, opToken(","), spaceToken(), stringToken(unit), opToken(")"))
+	return repl, true, nil
+}
+
+// unitFirstCallArgs splits a call whose first argument is a bare unit keyword,
+// returning the lowercased unit and the remaining arguments. It reports ok=false
+// when the call does not have that shape, so the caller leaves it untouched.
+func unitFirstCallArgs(tokens []token, open, closeIdx, want int, recurse callRecurser) (string, [][]token, bool, error) {
+	commas := topLevelCommas(tokens, open, closeIdx)
+	if len(commas) != want-1 {
+		return "", nil, false, nil
+	}
+	unitTok := nextSig(tokens, open+1)
+	if unitTok < 0 || tokens[unitTok].kind != tokWord || nextSig(tokens, unitTok+1) != commas[0] {
+		return "", nil, false, nil
+	}
+	unit, ok := intervalUnits[strings.ToUpper(tokens[unitTok].text)]
+	if !ok {
+		return "", nil, false, fmt.Errorf("%w: unsupported unit %q", ErrUnsupportedSyntax, tokens[unitTok].text)
+	}
+	bounds := append(commas, closeIdx)
+	args := make([][]token, 0, want-1)
+	for i := range commas {
+		arg, err := recurse(tokens[bounds[i]+1 : bounds[i+1]])
+		if err != nil {
+			return "", nil, false, err
+		}
+		args = append(args, trimSpaceTokens(arg))
+	}
+	return unit, args, true, nil
+}
+
+// pgIntervalPass implements P-12: "x + INTERVAL 'text'" and "x - INTERVAL 'text'"
+// become interval_text_add(x, 'text', ±1). PostgreSQL has no DATE_ADD, so this
+// operator form is the only date arithmetic that dialect offers.
+func pgIntervalPass(tokens []token) ([]token, error) {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		if !isWordEq(tokens[i], "INTERVAL") {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		lit := nextSig(tokens, i+1)
+		if lit < 0 || tokens[lit].kind != tokString {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		op := lastSig(out)
+		if op < 0 || (!isOpEq(out[op], "+") && !isOpEq(out[op], "-")) {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		sign := "1"
+		if out[op].text == "-" {
+			sign = "-1"
+		}
+		out = out[:op]
+		left, start, ok := operandBack(out)
+		if !ok {
+			return nil, fmt.Errorf("%w: left operand of INTERVAL arithmetic is not a primary expression", ErrUnsupportedSyntax)
+		}
+		out = out[:start]
+		out = append(out, wordToken("interval_text_add"), opToken("("))
+		out = append(out, left...)
+		out = append(out, opToken(","), spaceToken(), tokens[lit])
+		out = append(out, opToken(","), spaceToken(), wordToken(sign), opToken(")"))
+		i = lit + 1
+	}
+	return out, nil
 }
