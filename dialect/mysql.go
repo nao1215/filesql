@@ -17,6 +17,7 @@ import (
 //	M-8  CAST(x AS mysql_type)           -> mysql_cast(x, 'mysql_type')
 //	M-9  x RLIKE p                       -> x REGEXP p
 //	M-11 a / b                           -> mysql_divide(a, b)
+//	M-12 CONCAT(a, b)                   -> strict_concat(a, b)
 //	M-12 a || b                          -> a OR b
 //	M-13 a <=> b                         -> a IS b
 //	M-14 DATE 'lit' / TIMESTAMP 'lit'    -> 'lit'
@@ -118,6 +119,11 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		return rewriteRenameCall(tokens, open, closeIdx, "length", mysqlCallPass)
 	case "ORD":
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_ord", mysqlCallPass)
+	case "CONCAT":
+		// MySQL CONCAT returns NULL when any argument is NULL. SQLite's own
+		// concat() treats a NULL as an empty string, so passing the call through
+		// answered a plausible non-NULL string where MySQL answers NULL.
+		return rewriteRenameCall(tokens, open, closeIdx, "strict_concat", mysqlCallPass)
 	case fnNameTrim:
 		return rewriteTrim(tokens, open, closeIdx, mysqlCallPass)
 	case "HEX":

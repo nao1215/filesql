@@ -157,6 +157,7 @@ func registerAll() error {
 		"mysql_ord":           {1, fnMySQLOrd},
 		"json_unquote":        {1, fnJSONUnquote},
 		"overlay":             {-1, fnOverlay},
+		"strict_concat":       {-1, fnStrictConcat},
 		"postgresql_cast":     {2, dialectCast(PostgreSQL, false)},
 		"googlesql_cast":      {2, dialectCast(GoogleSQL, false)},
 		"googlesql_divide":    {2, divideFloat(true)},

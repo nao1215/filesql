@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **MySQL and GoogleSQL `CONCAT` swallowed a NULL argument.** Both return NULL when any argument is NULL; SQLite's own `concat()` treats a NULL as an empty string, and the call was passed straight through. `CONCAT(first_name, middle_name)` with a NULL middle name answered the first name where MySQL and BigQuery answer NULL, so a query written to detect incomplete rows reported them as complete. Both dialects now route the call to a NULL-propagating helper. PostgreSQL's `concat()` genuinely does ignore NULLs, so it is left on SQLite's, and `CONCAT_WS`, which skips NULLs in MySQL too, is unchanged.
+
+
 ## [0.24.0] - 2026-07-29
 
 ### Fixed
