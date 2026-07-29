@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-07-29
+
 ### Added
 - More of each dialect's string and JSON spellings translate. MySQL: `CHAR_LENGTH`, `CHARACTER_LENGTH`, `ORD`, `JSON_UNQUOTE`, and `TRIM(BOTH 'x' FROM s)`. PostgreSQL: `BTRIM`, `OVERLAY(x PLACING y FROM n FOR m)`, `JSONB_ARRAY_LENGTH`, `JSON_ARRAY_LENGTH`, `CHAR_LENGTH`, and the same `TRIM` form. GoogleSQL: `JSON_VALUE`, `JSON_QUERY` (which keeps its result in JSON text, unlike `JSON_VALUE`), `JSON_EXTRACT_SCALAR`, `BYTE_LENGTH`, and `CHAR_LENGTH`. `UNION DISTINCT` is accepted under MySQL and GoogleSQL, where SQLite rejects the keyword and its plain `UNION` already deduplicates.
 - A PostgreSQL array literal (`ARRAY[...]`) is reported by name instead of failing on the bracket, which said nothing useful.
@@ -801,7 +803,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/nao1215/filesql/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/nao1215/filesql/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/nao1215/filesql/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/nao1215/filesql/compare/v0.17.2...v0.18.0
