@@ -82,8 +82,46 @@ func writeFileAtomicallyAtPath(dest string, write func(path string) error) error
 		return fmt.Errorf("%w: failed to set permissions on the temporary file for %s: %s", ErrIOOperation, dest, err.Error())
 	}
 
-	if err := os.Rename(tmpName, dest); err != nil {
+	if err := commitStagedFile(tmpName, dest); err != nil {
 		return fmt.Errorf("%w: failed to replace %s: %s", ErrIOOperation, dest, err.Error())
 	}
 	return nil
+}
+
+// commitStagedFile moves the staged file onto dest.
+//
+// A rename is the goal: it is atomic, so a reader either sees the old file or
+// the new one. It is not always available. Windows refuses to rename over a
+// destination another handle still has open, which is exactly the case for a
+// save that overwrites a file this package is streaming from, and a rename
+// across filesystems fails everywhere. When the rename is refused, the staged
+// bytes are copied over dest instead. That still keeps the guarantee the staging
+// exists for — the destination is not touched until the data is complete and
+// valid — and gives up only atomicity for a reader watching during the copy.
+func commitStagedFile(staged, dest string) error {
+	if err := os.Rename(staged, dest); err == nil {
+		return nil
+	}
+	return copyStagedOnto(staged, dest)
+}
+
+// copyStagedOnto writes the staged file's bytes over dest, truncating whatever
+// was there. It is the fallback for a rename the platform refuses; see
+// commitStagedFile.
+func copyStagedOnto(staged, dest string) error {
+	src, err := os.Open(staged) //nolint:gosec // staged is the file this package just created
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, defaultOutputFileMode) //nolint:gosec // dest is the caller's chosen output
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, src); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }

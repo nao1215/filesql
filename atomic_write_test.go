@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -203,4 +204,59 @@ func TestDumpDatabase_SucceedsThroughStaging(t *testing.T) {
 	entries, err := os.ReadDir(outDir)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "no staged file may be left behind: %v", entries)
+}
+
+// TestCommitStagedFile_CopyFallback covers the path taken when the rename is
+// refused. Windows refuses to rename over a destination another handle still has
+// open, which is exactly a save that overwrites a file this package is streaming
+// from, so the commit falls back to copying the staged bytes over it.
+func TestCommitStagedFile_CopyFallback(t *testing.T) {
+	t.Parallel()
+
+	t.Run("copies onto an existing destination", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		staged := filepath.Join(dir, "staged")
+		dest := filepath.Join(dir, "dest")
+		require.NoError(t, os.WriteFile(staged, []byte("new"), 0o600))
+		require.NoError(t, os.WriteFile(dest, []byte("old content that is longer"), 0o600))
+
+		require.NoError(t, commitStagedFile(staged, dest))
+
+		got, err := os.ReadFile(dest) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		assert.Equal(t, "new", string(got))
+	})
+
+	t.Run("the copy leaves no tail of the old content", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		staged := filepath.Join(dir, "staged")
+		dest := filepath.Join(dir, "dest")
+		require.NoError(t, os.WriteFile(staged, []byte("short"), 0o600))
+		require.NoError(t, os.WriteFile(dest, []byte(strings.Repeat("x", 500)), 0o600))
+
+		require.NoError(t, copyStagedOnto(staged, dest))
+
+		got, err := os.ReadFile(dest) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		assert.Equal(t, "short", string(got), "O_TRUNC must drop the old bytes")
+	})
+
+	t.Run("creates a destination that does not exist", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		staged := filepath.Join(dir, "staged")
+		dest := filepath.Join(dir, "dest")
+		require.NoError(t, os.WriteFile(staged, []byte("new"), 0o600))
+
+		require.NoError(t, copyStagedOnto(staged, dest))
+
+		got, err := os.ReadFile(dest) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		assert.Equal(t, "new", string(got))
+	})
 }
