@@ -352,3 +352,42 @@ func findWireTestFile(t *testing.T) string {
 
 	return ""
 }
+
+// TestDumpFedWire_FailedWriteLeavesDestinationIntact pins that a rejected
+// Fedwire write does not damage the file it was going to overwrite. The writer
+// validates while encoding, and the failure path used to remove the output path
+// as a "partial file" — which, for an in-place save, is the caller's source.
+func TestDumpFedWire_FailedWriteLeavesDestinationIntact(t *testing.T) {
+	testFile := findWireTestFile(t)
+	if testFile == "" {
+		t.Skip("No test Fedwire file found")
+	}
+
+	ctx := context.Background()
+	ClearWireTableSetRegistry()
+	defer ClearWireTableSetRegistry()
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "customer-transfer.fed")
+	original, err := os.ReadFile(testFile) //nolint:gosec // Test fixture path
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(target, original, 0o600)) //nolint:gosec // Test path is constructed from t.TempDir()
+
+	db, err := OpenContext(ctx, target)
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.ExecContext(ctx, "UPDATE customer_transfer_message SET amount = 'BADAMOUNT'")
+	require.NoError(t, err)
+
+	err = DumpFedWire(ctx, db, "customer_transfer", target)
+	require.Error(t, err, "DumpFedWire should reject a malformed amount")
+
+	after, err := os.ReadFile(target) //nolint:gosec // Test fixture path
+	require.NoError(t, err)
+	assert.Equal(t, original, after, "a rejected write must leave the destination byte-for-byte unchanged")
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "a rejected write must not leave a temporary file behind: %v", entries)
+}

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"sync"
 
@@ -253,23 +252,17 @@ func DumpFedWireWithTableSet(ctx context.Context, db *sql.DB, baseTableName, out
 		return fmt.Errorf("%w: failed to read updated data from database: %s", ErrWire, err.Error())
 	}
 
-	// Write the Fedwire file using WriteToWriter
-	file, err := os.Create(outputPath) //nolint:gosec // Output path is user-specified
-	if err != nil {
-		return fmt.Errorf("%w: failed to create output file: %s", ErrIOOperation, err.Error())
-	}
-
-	if err := tableSet.WriteToWriter(file); err != nil {
-		_ = file.Close()
-		_ = os.Remove(outputPath) //nolint:errcheck // Best-effort cleanup of partial file
-		return fmt.Errorf("%w: failed to write Fedwire file: %s", ErrWire, err.Error())
-	}
-
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("%w: failed to close output file: %s", ErrIOOperation, err.Error())
-	}
-
-	return nil
+	// Write the Fedwire file using WriteToWriter. The writer validates while it
+	// encodes, so it can reject the data after the output has been opened.
+	// Staging the write keeps a rejection from destroying the destination; the
+	// previous failure path removed the output path as a "partial file", which
+	// for an in-place save deleted the source it was saving.
+	return writeFileAtomically(outputPath, func(w io.Writer) error {
+		if err := tableSet.WriteToWriter(w); err != nil {
+			return fmt.Errorf("%w: failed to write Fedwire file: %s", ErrWire, err.Error())
+		}
+		return nil
+	})
 }
 
 // updateWireTableSetFromDB reads updated data from the database and updates the TableSet.

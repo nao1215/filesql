@@ -408,3 +408,48 @@ func TestGetACHTableInfos_Empty(t *testing.T) {
 	assert.NotNil(t, infos)
 	assert.Empty(t, infos)
 }
+
+// TestDumpACH_FailedWriteLeavesDestinationIntact pins that a rejected ACH write
+// does not damage the file it was going to overwrite. The moov-io writer
+// validates while encoding, so a value the format cannot hold (an amount wider
+// than its field) fails after the destination has been opened. Opening it with
+// os.Create truncated the caller's own source file to zero bytes before the
+// validation ran, so a rejected save destroyed the data it was saving.
+func TestDumpACH_FailedWriteLeavesDestinationIntact(t *testing.T) {
+	testFile := findTestACHFile(t)
+	if testFile == "" {
+		t.Skip("No test ACH file found")
+	}
+
+	ctx := context.Background()
+	ClearACHTableSetRegistry()
+	defer ClearACHTableSetRegistry()
+
+	// Copy the fixture so the test writes back over its own file, which is what
+	// an in-place save does.
+	dir := t.TempDir()
+	target := filepath.Join(dir, "ppd-debit.ach")
+	original, err := os.ReadFile(testFile) //nolint:gosec // Test fixture path
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(target, original, 0o600)) //nolint:gosec // Test path is constructed from t.TempDir()
+
+	db, err := OpenContext(ctx, target)
+	require.NoError(t, err)
+	defer db.Close()
+
+	// An amount of twelve digits cannot fit the ten-digit ACH field, so the
+	// writer rejects it partway through encoding.
+	_, err = db.ExecContext(ctx, "UPDATE ppd_debit_entries SET amount = 999999999999")
+	require.NoError(t, err)
+
+	err = DumpACH(ctx, db, "ppd_debit", target)
+	require.Error(t, err, "DumpACH should reject an amount wider than the ACH field")
+
+	after, err := os.ReadFile(target) //nolint:gosec // Test fixture path
+	require.NoError(t, err)
+	assert.Equal(t, original, after, "a rejected write must leave the destination byte-for-byte unchanged")
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "a rejected write must not leave a temporary file behind: %v", entries)
+}

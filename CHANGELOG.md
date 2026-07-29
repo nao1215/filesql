@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A rejected ACH or Fedwire write destroyed the file it was overwriting.** Both encoders validate while they encode, so a value the format cannot hold — an amount wider than its field, a malformed amount string — is rejected partway through the write. The destination was opened with `os.Create` first, which truncates, and for an in-place save that destination is the caller's own source file: an 891-byte ACH file came back 0 bytes, and Fedwire went further and deleted the file outright, because its failure path removed the output path as a "partial file". The write is now staged in a temporary file next to the destination and renamed over it only after the encoder and the close both succeed, so a rejected write costs nothing. An existing destination keeps its permissions; a new file is created 0644.
+
 ## [0.22.0] - 2026-07-29
 
 ### Fixed

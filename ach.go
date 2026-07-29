@@ -122,7 +122,6 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"sync"
 
@@ -547,22 +546,16 @@ func DumpACHWithTableSet(ctx context.Context, db *sql.DB, baseTableName, outputP
 		return fmt.Errorf("%w: failed to read updated data from database: %s", ErrACH, err.Error())
 	}
 
-	// Write the ACH file using WriteToWriter (encapsulates moov-io/ach)
-	file, err := os.Create(outputPath) //nolint:gosec // Output path is user-specified
-	if err != nil {
-		return fmt.Errorf("%w: failed to create output file: %s", ErrIOOperation, err.Error())
-	}
-
-	if err := tableSet.WriteToWriter(file); err != nil {
-		_ = file.Close() // Ignore close error as we're already returning an error
-		return fmt.Errorf("%w: failed to write ACH file: %s", ErrACH, err.Error())
-	}
-
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("%w: failed to close output file: %s", ErrIOOperation, err.Error())
-	}
-
-	return nil
+	// Write the ACH file using WriteToWriter (encapsulates moov-io/ach). The
+	// writer validates while it encodes, so it can reject the data after the
+	// output has been opened; staging the write keeps a rejection from destroying
+	// the destination, which for an in-place save is the source file itself.
+	return writeFileAtomically(outputPath, func(w io.Writer) error {
+		if err := tableSet.WriteToWriter(w); err != nil {
+			return fmt.Errorf("%w: failed to write ACH file: %s", ErrACH, err.Error())
+		}
+		return nil
+	})
 }
 
 // updateTableSetFromDB reads updated data from the database and updates the TableSet.
