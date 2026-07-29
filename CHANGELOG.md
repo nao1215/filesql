@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Dialect queries can now call the scalar functions that were previously missing. Shared: `LEAST` and `GREATEST`. MySQL: `REVERSE`, `FIND_IN_SET`, `FIELD`, `ELT`, `MONTHNAME`, `DAYNAME`, `LAST_DAY`, `UNIX_TIMESTAMP`, `FROM_UNIXTIME`. PostgreSQL: `MD5`, `ASCII`, `CHR`, `TRANSLATE`. GoogleSQL: `FORMAT_DATE`, `FORMAT_DATETIME`, `FORMAT_TIMESTAMP`, `PARSE_DATE`, `PARSE_DATETIME`, `PARSE_TIMESTAMP`, `UNIX_SECONDS`, `UNIX_MILLIS`, `UNIX_MICROS`, `TIMESTAMP_SECONDS`, `TIMESTAMP_MILLIS`, `TIMESTAMP_MICROS`, `TO_HEX`, `IS_NAN`, `SAFE_ADD`, `SAFE_SUBTRACT`, `SAFE_MULTIPLY`, `SAFE_NEGATE`. Each previously failed with `no such function`.
+- `REGEXP_REPLACE` accepts PostgreSQL's fourth flags argument: `g` replaces every match, its absence replaces only the first, and `i` matches case insensitively. The three-argument form keeps replacing every match.
+
 ## [0.19.0] - 2026-07-29
 
 ### Added
