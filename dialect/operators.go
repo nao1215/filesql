@@ -1,0 +1,261 @@
+package dialect
+
+import (
+	"database/sql/driver"
+	"encoding/hex"
+	"fmt"
+	"strconv"
+	"strings"
+	"unicode"
+)
+
+// This file implements the operators whose meaning changes on the way to
+// SQLite. Like the cast helpers in cast.go, each is a silent divergence: the
+// query runs and returns a plausible answer that the source dialect would never
+// give.
+//
+//   - "/" is integer division in SQLite when both operands are integers, but
+//     floating-point division in MySQL and GoogleSQL. An average or a ratio came
+//     out truncated.
+//   - LIKE folds ASCII case in SQLite. It is case-sensitive in PostgreSQL and
+//     GoogleSQL, so a filter matched rows it should not have, and PostgreSQL's
+//     ILIKE became indistinguishable from LIKE.
+//   - MySQL reads "||" as a logical OR under its default sql_mode, where SQLite
+//     concatenates.
+//
+// The operators are rewritten into helper calls rather than left to SQLite,
+// since a pragma such as case_sensitive_like is connection-wide and would change
+// the SQLite dialect's behavior too.
+
+// ErrDivideByZero reports a division by zero in a dialect that raises for it.
+var ErrDivideByZero = fmt.Errorf("%w: division by zero", ErrInvalidCast)
+
+// divideFloat implements the "/" operator for the dialects whose division is
+// always floating point. MySQL answers NULL when the divisor is zero;
+// GoogleSQL raises, and offers SAFE_DIVIDE for callers who want the NULL.
+func divideFloat(raiseOnZero bool) scalarFn {
+	return func(args []driver.Value) (driver.Value, error) {
+		a, ok1 := toFloat(args[0])
+		b, ok2 := toFloat(args[1])
+		if !ok1 || !ok2 {
+			return nil, nil
+		}
+		if b == 0 {
+			if raiseOnZero {
+				return nil, ErrDivideByZero
+			}
+			return nil, nil
+		}
+		return a / b, nil
+	}
+}
+
+// likeCompare implements SQL LIKE, where "%" matches any run of characters and
+// "_" matches exactly one. SQLite's own LIKE folds ASCII case; this one folds
+// only when asked, so PostgreSQL and GoogleSQL keep their case-sensitive LIKE
+// and PostgreSQL's ILIKE folds every character rather than just the ASCII ones.
+func likeCompare(caseSensitive bool) scalarFn {
+	return func(args []driver.Value) (driver.Value, error) {
+		pattern, ok1 := toString(args[0])
+		subject, ok2 := toString(args[1])
+		if !ok1 || !ok2 {
+			return nil, nil
+		}
+		if !caseSensitive {
+			pattern = foldCase(pattern)
+			subject = foldCase(subject)
+		}
+		return boolToInt(likeMatch([]rune(pattern), []rune(subject))), nil
+	}
+}
+
+func foldCase(s string) string {
+	return strings.Map(unicode.ToLower, s)
+}
+
+// likeMatch reports whether subject matches pattern. It walks both strings once,
+// remembering the last "%" so a failed branch can resume there, which keeps a
+// pattern full of wildcards from backtracking exponentially.
+func likeMatch(pattern, subject []rune) bool {
+	var (
+		p, s          int
+		star          = -1
+		afterStarSubj int
+	)
+	for s < len(subject) {
+		switch {
+		case p < len(pattern) && (pattern[p] == '_' || pattern[p] == subject[s]):
+			p++
+			s++
+		case p < len(pattern) && pattern[p] == '%':
+			star = p
+			afterStarSubj = s
+			p++
+		case star >= 0:
+			// Backtrack: let the last "%" swallow one more character.
+			p = star + 1
+			afterStarSubj++
+			s = afterStarSubj
+		default:
+			return false
+		}
+	}
+	for p < len(pattern) && pattern[p] == '%' {
+		p++
+	}
+	return p == len(pattern)
+}
+
+// fnMySQLHex implements MySQL HEX(x): the hexadecimal digits of a number, or of
+// a string's bytes. SQLite's own HEX only does the latter, so HEX(255) answered
+// "323535" (the bytes of "255") instead of "FF".
+func fnMySQLHex(args []driver.Value) (driver.Value, error) {
+	switch x := args[0].(type) {
+	case nil:
+		return nil, nil
+	case int64:
+		return strings.ToUpper(strconv.FormatInt(x, 16)), nil
+	case float64:
+		return strings.ToUpper(strconv.FormatInt(int64(x), 16)), nil
+	case []byte:
+		return strings.ToUpper(hex.EncodeToString(x)), nil
+	}
+	s, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	// A numeric string is a number to MySQL, which hexes its value rather than
+	// its digits.
+	if n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
+		return strings.ToUpper(strconv.FormatInt(n, 16)), nil
+	}
+	return strings.ToUpper(hex.EncodeToString([]byte(s))), nil
+}
+
+// fnMySQLUnhex implements MySQL UNHEX(s), the inverse of HEX for a string.
+func fnMySQLUnhex(args []driver.Value) (driver.Value, error) {
+	s, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	raw, decodeErr := hex.DecodeString(s)
+	if decodeErr != nil {
+		// MySQL answers NULL rather than raising for a non-hexadecimal argument.
+		return nil, nil //nolint:nilerr // NULL is MySQL's documented result here
+	}
+	return string(raw), nil
+}
+
+// binaryOperatorPass rewrites "a <op> b" into helper(a, b) for every operator
+// token whose text is op. Both operands must be primary expressions, the same
+// requirement MySQL's DIV rewrite has.
+func binaryOperatorPass(tokens []token, op, helper string) ([]token, error) {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		if isOpEq(tokens[i], op) {
+			left, start, ok := operandBack(out)
+			if !ok {
+				return nil, fmt.Errorf("%w: left operand of %s is not a primary expression", ErrUnsupportedSyntax, op)
+			}
+			rightStart := nextSig(tokens, i+1)
+			rightEnd, ok := primaryEndForward(tokens, i+1)
+			if !ok {
+				return nil, fmt.Errorf("%w: right operand of %s is not a primary expression", ErrUnsupportedSyntax, op)
+			}
+			out = append(out[:start], callTokens(helper, left, tokens[rightStart:rightEnd+1])...)
+			i = rightEnd + 1
+			continue
+		}
+		out = append(out, tokens[i])
+		i++
+	}
+	return out, nil
+}
+
+// likePass rewrites "a LIKE b" (and the ILIKE and NOT forms) into a call to the
+// matching helper, so the comparison uses the source dialect's case rules rather
+// than SQLite's. A pattern with an ESCAPE clause is left alone: SQLite handles
+// it natively and the helpers do not model a custom escape character.
+func likePass(tokens []token, keyword, helper string) ([]token, error) {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		if !isWordEq(tokens[i], keyword) {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		rightStart := nextSig(tokens, i+1)
+		rightEnd, ok := primaryEndForward(tokens, i+1)
+		if !ok {
+			return nil, fmt.Errorf("%w: right operand of %s is not a primary expression", ErrUnsupportedSyntax, keyword)
+		}
+		if esc := nextSig(tokens, rightEnd+1); esc >= 0 && isWordEq(tokens[esc], "ESCAPE") {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+
+		// "a NOT LIKE b" puts NOT between the operand and the keyword; it belongs
+		// to the comparison, not to the left operand.
+		negated := false
+		if n := lastSig(out); n >= 0 && isWordEq(out[n], "NOT") {
+			negated = true
+			out = out[:n]
+		}
+		left, start, ok := operandBack(out)
+		if !ok {
+			return nil, fmt.Errorf("%w: left operand of %s is not a primary expression", ErrUnsupportedSyntax, keyword)
+		}
+		out = out[:start]
+		if negated {
+			out = append(out, wordToken("NOT"), spaceToken())
+		}
+		// The helper takes the pattern first, matching SQLite's own like().
+		out = append(out, callTokens(helper, tokens[rightStart:rightEnd+1], left)...)
+		i = rightEnd + 1
+	}
+	return out, nil
+}
+
+// operandBack extracts the primary expression that ends the tokens emitted so
+// far, returning it and the index it started at.
+func operandBack(out []token) ([]token, int, bool) {
+	start, ok := primaryStartBack(out)
+	if !ok {
+		return nil, 0, false
+	}
+	return append([]token{}, trimSpaceTokens(out[start:])...), start, true
+}
+
+// callTokens builds "name(a, b)".
+func callTokens(name string, a, b []token) []token {
+	repl := make([]token, 0, len(a)+len(b)+5)
+	repl = append(repl, wordToken(name), opToken("("))
+	repl = append(repl, a...)
+	repl = append(repl, opToken(","), spaceToken())
+	repl = append(repl, b...)
+	repl = append(repl, opToken(")"))
+	return repl
+}
+
+// replaceOperatorWithWord swaps an operator token for a keyword, spacing it so
+// "a||b" renders as "a OR b" rather than "aORb".
+func replaceOperatorWithWord(tokens []token, op, keyword string) []token {
+	out := make([]token, 0, len(tokens))
+	for i, t := range tokens {
+		if !isOpEq(t, op) {
+			out = append(out, t)
+			continue
+		}
+		if n := len(out); n > 0 && out[n-1].kind != tokWhitespace {
+			out = append(out, spaceToken())
+		}
+		out = append(out, wordToken(keyword))
+		if i+1 < len(tokens) && tokens[i+1].kind != tokWhitespace {
+			out = append(out, spaceToken())
+		}
+	}
+	return out
+}

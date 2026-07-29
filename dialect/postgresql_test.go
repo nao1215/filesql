@@ -22,8 +22,8 @@ func TestPostgreSQLTranslate(t *testing.T) {
 		{"P-1_cast_unknown_type", "SELECT a::inet", "SELECT CAST(a AS inet)"},
 		{"P-1_cast_paren_operand", "SELECT (a + b)::int", "SELECT postgresql_cast((a + b), 'int')"},
 
-		{"P-2_ilike", "SELECT * FROM t WHERE name ILIKE 'a%'", "SELECT * FROM t WHERE name LIKE 'a%'"},
-		{"P-2_not_ilike", "SELECT * FROM t WHERE name NOT ILIKE 'a%'", "SELECT * FROM t WHERE name NOT LIKE 'a%'"},
+		{"P-2_ilike", "SELECT * FROM t WHERE name ILIKE 'a%'", `SELECT * FROM t WHERE like_insensitive('a%', name)`},
+		{"P-2_not_ilike", "SELECT * FROM t WHERE name NOT ILIKE 'a%'", `SELECT * FROM t WHERE NOT like_insensitive('a%', name)`},
 
 		{"P-3_match", "SELECT * FROM t WHERE name ~ '^a'", "SELECT * FROM t WHERE name REGEXP '^a'"},
 		{"P-3_not_match", "SELECT * FROM t WHERE name !~ '^a'", "SELECT * FROM t WHERE name NOT REGEXP '^a'"},

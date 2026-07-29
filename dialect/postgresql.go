@@ -11,13 +11,14 @@ import (
 //
 //	C-1  EXTRACT(part FROM x)      -> DATE_PART('part', x)
 //	P-1  expr::type                -> postgresql_cast(expr, 'type')
-//	P-2  x ILIKE p / NOT ILIKE     -> x LIKE p / NOT LIKE
+//	P-2  x LIKE p / x ILIKE p      -> like_sensitive / like_insensitive
 //	P-3  x ~ p / !~ / ~* / !~*     -> x REGEXP p / NOT REGEXP / case-insensitive
 //	P-4  POSITION(x IN y)          -> INSTR(y, x)
 //	P-5  SUBSTRING(x FROM n FOR m) -> SUBSTR(x, n, m)
 //	P-6  STRING_AGG(x, s)          -> group_concat(x, s)
 //	P-8  CAST(x AS pg_type)        -> postgresql_cast(x, 'pg_type')
 //	P-10 DISTINCT ON (...), LATERAL -> ErrUnsupportedSyntax
+//	P-11 a ^ b                     -> power(a, b)
 func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedPostgreSQL(tokens); err != nil {
 		return nil, err
@@ -34,7 +35,23 @@ func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
-	out = renameWordPass(out, "ILIKE", "LIKE")
+	// P-2: SQLite's LIKE folds ASCII case, so it answers PostgreSQL's LIKE
+	// wrongly and makes ILIKE indistinguishable from it. Route both through
+	// helpers that decide case folding explicitly.
+	out, err = likePass(out, "ILIKE", "like_insensitive")
+	if err != nil {
+		return nil, err
+	}
+	out, err = likePass(out, "LIKE", "like_sensitive")
+	if err != nil {
+		return nil, err
+	}
+	// P-11: "^" is exponentiation in PostgreSQL and not an operator at all in
+	// SQLite.
+	out, err = binaryOperatorPass(out, "^", "power")
+	if err != nil {
+		return nil, err
+	}
 	out = renameWordPass(out, "STRING_AGG", "group_concat")
 	return out, nil
 }

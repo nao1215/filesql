@@ -419,6 +419,14 @@ func primaryEndForward(toks []token, from int) (int, bool) {
 	if s0 < 0 {
 		return 0, false
 	}
+	// A unary sign binds tighter than the binary operators this backs, so
+	// "a / -1" takes "-1" as the right operand rather than failing.
+	for s0 >= 0 && (isOpEq(toks[s0], "-") || isOpEq(toks[s0], "+")) {
+		s0 = nextSig(toks, s0+1)
+	}
+	if s0 < 0 {
+		return 0, false
+	}
 	var end int
 	switch {
 	case isOpEq(toks[s0], "("):
