@@ -19,6 +19,14 @@
 // filled by user-defined functions registered into the SQLite driver via
 // RegisterFunctions rather than by rewriting the SQL.
 //
+// Casts go through the same mechanism for a different reason. SQLite's own CAST
+// applies type affinity, which is close enough to look right and different
+// enough to be wrong: it truncates where the dialects round, and it coerces a
+// value the target type cannot represent instead of rejecting it. Each dialect
+// therefore rewrites CAST (and PostgreSQL's "::", and GoogleSQL's SAFE_CAST)
+// into a helper that converts with that dialect's rules and returns
+// ErrInvalidCast for a value it cannot represent.
+//
 // The SQLite dialect is the identity translation: Translate returns the input
 // unchanged.
 package dialect

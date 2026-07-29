@@ -14,7 +14,7 @@ import (
 //	M-5  DATE_ADD/DATE_SUB(x, INTERVAL n unit) -> datetime(x, '±n unit')
 //	M-6  GROUP_CONCAT(x SEPARATOR s)     -> group_concat(x, s)
 //	M-7  a DIV b                         -> CAST(a / b AS INTEGER)
-//	M-8  CAST(x AS mysql_type)           -> CAST(x AS sqlite_type)
+//	M-8  CAST(x AS mysql_type)           -> mysql_cast(x, 'mysql_type')
 //	M-9  x RLIKE p                       -> x REGEXP p
 //
 // M-10 (LIMIT n, m) needs no rewrite: SQLite accepts it natively.
@@ -78,7 +78,7 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 	case "GROUP_CONCAT":
 		return rewriteGroupConcat(tokens, nameIdx, open, closeIdx)
 	case fnNameCast:
-		return rewriteCastCall(tokens, nameIdx, open, closeIdx, mysqlCastTypes, mysqlCallPass)
+		return rewriteCastCall(tokens, open, closeIdx, MySQL, "mysql_cast", mysqlCallPass)
 	default:
 		return nil, false, nil
 	}
@@ -117,7 +117,9 @@ func rewriteGroupConcat(tokens []token, nameIdx, open, closeIdx int) ([]token, b
 }
 
 // divPass implements M-7: a DIV b -> CAST(a / b AS INTEGER). The operands must
-// be primary expressions.
+// be primary expressions. This keeps SQLite's own truncating CAST rather than
+// the MySQL cast helper, since DIV truncates toward zero while MySQL's CAST
+// rounds.
 func divPass(tokens []token) ([]token, error) {
 	out := make([]token, 0, len(tokens))
 	i := 0

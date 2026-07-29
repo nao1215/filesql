@@ -11,9 +11,9 @@ import (
 // tokenizer. This pass handles the structural rules:
 //
 //	C-1  EXTRACT(part FROM x)                 -> DATE_PART('part', x)
-//	G-2  SAFE_CAST(x AS t)                    -> CAST(x AS sqlite_type)
+//	G-2  SAFE_CAST(x AS t)                    -> googlesql_safe_cast(x, 't')
 //	G-3  DATE/DATETIME/TIMESTAMP/TIME 'lit'   -> 'lit'
-//	G-4  CAST(x AS googlesql_type)            -> CAST(x AS sqlite_type)
+//	G-4  CAST(x AS googlesql_type)            -> googlesql_cast(x, 'type')
 //	G-6  FORMAT(fmt, ...)                     -> printf(fmt, ...)
 //	G-7  DATE_ADD/DATE_SUB/TIMESTAMP_ADD/SUB  -> datetime(x, '±n unit')
 //	G-8  DATE_DIFF/TIMESTAMP_DIFF(a, b, UNIT) -> DATE_DIFF(a, b, 'unit')
@@ -96,7 +96,7 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 	case fnNameExtract:
 		return rewriteExtractCall(tokens, open, closeIdx, googlesqlCallPass)
 	case fnNameCast:
-		return rewriteCastCall(tokens, nameIdx, open, closeIdx, googlesqlCastTypes, googlesqlCallPass)
+		return rewriteCastCall(tokens, open, closeIdx, GoogleSQL, "googlesql_cast", googlesqlCallPass)
 	case "SAFE_CAST":
 		return rewriteSafeCast(tokens, open, closeIdx)
 	case "FORMAT":
@@ -112,10 +112,11 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 	}
 }
 
-// rewriteSafeCast implements G-2: SAFE_CAST(x AS type) -> CAST(x AS
-// sqlite_type). Unlike CAST it always rewrites (SAFE_CAST is not a SQLite
-// function); an unmapped type keeps its original name. The error-to-NULL
-// semantics of SAFE_CAST are not reproduced (documented as a known difference).
+// rewriteSafeCast implements G-2: SAFE_CAST(x AS type) -> a call to the
+// GoogleSQL cast helper that answers NULL instead of raising, which is what
+// SAFE_CAST means. Unlike CAST it always rewrites (SAFE_CAST is not a SQLite
+// function); an unmapped type keeps its original name and falls back to a plain
+// SQLite CAST.
 func rewriteSafeCast(tokens []token, open, closeIdx int) ([]token, bool, error) {
 	as := topLevelWord(tokens, open, closeIdx, "AS")
 	if as < 0 {
@@ -125,27 +126,23 @@ func rewriteSafeCast(tokens []token, open, closeIdx int) ([]token, bool, error) 
 	if typeName < 0 || tokens[typeName].kind != tokWord {
 		return nil, false, fmt.Errorf("%w: SAFE_CAST is missing a type name", ErrUnsupportedSyntax)
 	}
-	typeEnd := typeName
-	if e, ok := adjacentCallEnd(tokens, typeName); ok {
-		if e < 0 {
-			return nil, false, fmt.Errorf("%w: unbalanced type parameters in SAFE_CAST", ErrInvalidSyntax)
-		}
-		typeEnd = e
+	target, typeEnd, err := castTargetText(tokens, typeName)
+	if err != nil {
+		return nil, false, err
 	}
 	expr, err := googlesqlCallPass(tokens[open+1 : as])
 	if err != nil {
 		return nil, false, err
 	}
 	expr = trimSpaceTokens(expr)
+	if _, known := lookupCastKind(GoogleSQL, tokens[typeName].text); known {
+		return castHelperCall("googlesql_safe_cast", expr, target), true, nil
+	}
 	repl := make([]token, 0, len(expr)+6)
 	repl = append(repl, wordToken("CAST"), opToken("("))
 	repl = append(repl, expr...)
 	repl = append(repl, spaceToken(), wordToken("AS"), spaceToken())
-	if mapped, ok := lookupCastType(googlesqlCastTypes, tokens[typeName].text); ok {
-		repl = append(repl, wordToken(mapped))
-	} else {
-		repl = append(repl, tokens[typeName:typeEnd+1]...)
-	}
+	repl = append(repl, tokens[typeName:typeEnd+1]...)
 	repl = append(repl, opToken(")"))
 	return repl, true, nil
 }

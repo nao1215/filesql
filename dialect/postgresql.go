@@ -10,13 +10,13 @@ import (
 // (P-9) are native to SQLite. This pass handles the structural rules:
 //
 //	C-1  EXTRACT(part FROM x)      -> DATE_PART('part', x)
-//	P-1  expr::type                -> CAST(expr AS sqlite_type)
+//	P-1  expr::type                -> postgresql_cast(expr, 'type')
 //	P-2  x ILIKE p / NOT ILIKE     -> x LIKE p / NOT LIKE
 //	P-3  x ~ p / !~ / ~* / !~*     -> x REGEXP p / NOT REGEXP / case-insensitive
 //	P-4  POSITION(x IN y)          -> INSTR(y, x)
 //	P-5  SUBSTRING(x FROM n FOR m) -> SUBSTR(x, n, m)
 //	P-6  STRING_AGG(x, s)          -> group_concat(x, s)
-//	P-8  CAST(x AS pg_type)        -> CAST(x AS sqlite_type)
+//	P-8  CAST(x AS pg_type)        -> postgresql_cast(x, 'pg_type')
 //	P-10 DISTINCT ON (...), LATERAL -> ErrUnsupportedSyntax
 func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedPostgreSQL(tokens); err != nil {
@@ -98,7 +98,7 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 	case "SUBSTRING":
 		return rewriteSubstring(tokens, open, closeIdx)
 	case fnNameCast:
-		return rewriteCastCall(tokens, nameIdx, open, closeIdx, pgCastTypes, pgCallPass)
+		return rewriteCastCall(tokens, open, closeIdx, PostgreSQL, "postgresql_cast", pgCallPass)
 	default:
 		return nil, false, nil
 	}
@@ -189,9 +189,9 @@ func rewriteSubstring(tokens []token, open, closeIdx int) ([]token, bool, error)
 	return repl, true, nil
 }
 
-// pgCastOperatorPass implements P-1: expr::type -> CAST(expr AS sqlite_type).
-// It processes "::" left to right, so a chain such as a::int::text nests into
-// CAST(CAST(a AS INTEGER) AS TEXT).
+// pgCastOperatorPass implements P-1: expr::type -> postgresql_cast(expr,
+// 'type'). It processes "::" left to right, so a chain such as a::int::text
+// nests into postgresql_cast(postgresql_cast(a, 'int'), 'text').
 func pgCastOperatorPass(tokens []token) ([]token, error) {
 	out := make([]token, 0, len(tokens))
 	i := 0
@@ -205,25 +205,24 @@ func pgCastOperatorPass(tokens []token) ([]token, error) {
 			if typeName < 0 || tokens[typeName].kind != tokWord {
 				return nil, fmt.Errorf("%w: :: is missing a type name", ErrUnsupportedSyntax)
 			}
-			typeEnd := typeName
-			if e, ok := adjacentCallEnd(tokens, typeName); ok {
-				if e < 0 {
-					return nil, fmt.Errorf("%w: unbalanced type parameters in :: cast", ErrInvalidSyntax)
-				}
-				typeEnd = e
+			target, typeEnd, err := castTargetText(tokens, typeName)
+			if err != nil {
+				return nil, err
 			}
 
 			left := append([]token{}, trimSpaceTokens(out[start:])...)
 			out = out[:start]
-			out = append(out, wordToken("CAST"), opToken("("))
-			out = append(out, left...)
-			out = append(out, spaceToken(), wordToken("AS"), spaceToken())
-			if mapped, ok := lookupCastType(pgCastTypes, tokens[typeName].text); ok {
-				out = append(out, wordToken(mapped))
+			if _, known := lookupCastKind(PostgreSQL, tokens[typeName].text); known {
+				out = append(out, castHelperCall("postgresql_cast", left, target)...)
 			} else {
+				// An unrecognized type is left to SQLite, which at least keeps a
+				// query using a domain or extension type running.
+				out = append(out, wordToken("CAST"), opToken("("))
+				out = append(out, left...)
+				out = append(out, spaceToken(), wordToken("AS"), spaceToken())
 				out = append(out, tokens[typeName:typeEnd+1]...)
+				out = append(out, opToken(")"))
 			}
-			out = append(out, opToken(")"))
 			i = typeEnd + 1
 			continue
 		}
