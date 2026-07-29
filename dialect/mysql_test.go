@@ -34,12 +34,12 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-7_div_call_right", "SELECT x DIV ABS(y)", "SELECT CAST(x / ABS(y) AS INTEGER)"},
 		{"M-7_div_call_left", "SELECT ABS(x) DIV y", "SELECT CAST(ABS(x) / y AS INTEGER)"},
 
-		{"M-8_cast_signed", "SELECT CAST(x AS SIGNED) FROM t", "SELECT CAST(x AS INTEGER) FROM t"},
-		{"M-8_cast_unsigned_integer", "SELECT CAST(x AS UNSIGNED INTEGER)", "SELECT CAST(x AS INTEGER)"},
-		{"M-8_cast_char", "SELECT CAST(x AS CHAR)", "SELECT CAST(x AS TEXT)"},
-		{"M-8_cast_decimal", "SELECT CAST(x AS DECIMAL(10,2))", "SELECT CAST(x AS REAL)"},
-		{"M-8_cast_datetime", "SELECT CAST(x AS DATETIME)", "SELECT CAST(x AS TEXT)"},
-		{"M-8_cast_binary", "SELECT CAST(x AS BINARY)", "SELECT CAST(x AS BLOB)"},
+		{"M-8_cast_signed", "SELECT CAST(x AS SIGNED) FROM t", "SELECT mysql_cast(x, 'SIGNED') FROM t"},
+		{"M-8_cast_unsigned_integer", "SELECT CAST(x AS UNSIGNED INTEGER)", "SELECT mysql_cast(x, 'UNSIGNED')"},
+		{"M-8_cast_char", "SELECT CAST(x AS CHAR)", "SELECT mysql_cast(x, 'CHAR')"},
+		{"M-8_cast_decimal", "SELECT CAST(x AS DECIMAL(10,2))", "SELECT mysql_cast(x, 'DECIMAL(10,2)')"},
+		{"M-8_cast_datetime", "SELECT CAST(x AS DATETIME)", "SELECT mysql_cast(x, 'DATETIME')"},
+		{"M-8_cast_binary", "SELECT CAST(x AS BINARY)", "SELECT mysql_cast(x, 'BINARY')"},
 		{"M-8_cast_unknown_passthrough", "SELECT CAST(x AS GEOMETRY)", "SELECT CAST(x AS GEOMETRY)"},
 
 		{"M-9_rlike", "SELECT * FROM t WHERE name RLIKE '^a'", "SELECT * FROM t WHERE name REGEXP '^a'"},
@@ -52,7 +52,7 @@ func TestMySQLTranslate(t *testing.T) {
 		{"extract_without_from_passthrough", "SELECT EXTRACT(x) FROM t", "SELECT EXTRACT(x) FROM t"},
 		{"cast_without_as_passthrough", "SELECT CAST(x) FROM t", "SELECT CAST(x) FROM t"},
 		{"date_add_without_interval_passthrough", "SELECT DATE_ADD(a, b) FROM t", "SELECT DATE_ADD(a, b) FROM t"},
-		{"nested_cast_in_unrecognized_call", "SELECT COALESCE(CAST(x AS SIGNED), 0) FROM t", "SELECT COALESCE(CAST(x AS INTEGER), 0) FROM t"},
+		{"nested_cast_in_unrecognized_call", "SELECT COALESCE(CAST(x AS SIGNED), 0) FROM t", "SELECT COALESCE(mysql_cast(x, 'SIGNED'), 0) FROM t"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

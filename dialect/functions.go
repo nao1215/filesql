@@ -126,6 +126,14 @@ func registerAll() error {
 		"least":    {-1, fnLeast},
 		"greatest": {-1, fnGreatest},
 
+		// Cast helpers. Each dialect's rewrite pass routes CAST through its own
+		// helper so the conversion follows that dialect's rules rather than
+		// SQLite's affinity; see cast.go.
+		"mysql_cast":          {2, dialectCast(MySQL, false)},
+		"postgresql_cast":     {2, dialectCast(PostgreSQL, false)},
+		"googlesql_cast":      {2, dialectCast(GoogleSQL, false)},
+		"googlesql_safe_cast": {2, dialectCast(GoogleSQL, true)},
+
 		// PostgreSQL helpers.
 		"to_char":        {2, fnToChar},
 		"to_date":        {2, fnToDate},
@@ -359,11 +367,11 @@ func fnNow(_ []driver.Value) (driver.Value, error) {
 }
 
 func fnCurdate(_ []driver.Value) (driver.Value, error) {
-	return time.Now().Format("2006-01-02"), nil
+	return time.Now().Format(layoutDateOnly), nil
 }
 
 func fnCurtime(_ []driver.Value) (driver.Value, error) {
-	return time.Now().Format("15:04:05"), nil
+	return time.Now().Format(layoutTimeOnly), nil
 }
 
 func fnRand(_ []driver.Value) (driver.Value, error) {
@@ -798,7 +806,7 @@ func fnLastDay(args []driver.Value) (driver.Value, error) {
 		return nil, nil
 	}
 	firstOfNext := time.Date(tm.Year(), tm.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, 1, 0)
-	return firstOfNext.AddDate(0, 0, -1).Format("2006-01-02"), nil
+	return firstOfNext.AddDate(0, 0, -1).Format(layoutDateOnly), nil
 }
 
 // fnUnixTimestamp implements MySQL UNIX_TIMESTAMP([date]): the current epoch
@@ -913,7 +921,7 @@ func fnToDate(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
-	return tm.Format("2006-01-02"), nil
+	return tm.Format(layoutDateOnly), nil
 }
 
 // fnDateTrunc implements PostgreSQL DATE_TRUNC(unit, timestamp).
@@ -1329,8 +1337,8 @@ var strftimeToGoLayout = map[byte]string{
 	'b': layoutMonthShort,
 	'A': layoutWeekdayLong,
 	'a': layoutWeekdayShort,
-	'F': "2006-01-02",
-	'T': "15:04:05",
+	'F': layoutDateOnly,
+	'T': layoutTimeOnly,
 	'R': "15:04",
 }
 
@@ -1374,7 +1382,7 @@ func fnFormatDate(args []driver.Value) (driver.Value, error) {
 // fnParseDate implements GoogleSQL PARSE_DATE(format, text) and fnParseTimestamp
 // its datetime counterparts, returning NULL when the text does not match.
 func fnParseDate(args []driver.Value) (driver.Value, error) {
-	return parseWithStrftime(args, "2006-01-02")
+	return parseWithStrftime(args, layoutDateOnly)
 }
 
 func fnParseTimestamp(args []driver.Value) (driver.Value, error) {

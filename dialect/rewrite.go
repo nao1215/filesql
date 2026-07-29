@@ -48,10 +48,11 @@ func rewriteExtractCall(tokens []token, open, closeIdx int, recurse callRecurser
 	return repl, true, nil
 }
 
-// rewriteCastCall maps the target type of a CAST(x AS type) call to a SQLite type
-// via types, shared by the dialects (M-8, P-8, G-4). An unmapped type leaves the
-// call unchanged (handled=false).
-func rewriteCastCall(tokens []token, nameIdx, open, closeIdx int, types map[string]string, recurse callRecurser) ([]token, bool, error) {
+// rewriteCastCall rewrites CAST(x AS type) into a call to the dialect's cast
+// helper (M-8, P-8, G-4), so the conversion follows the source dialect's rules
+// rather than SQLite's type affinity; see cast.go. An unmapped type leaves the
+// call unchanged (handled=false) and is left to SQLite.
+func rewriteCastCall(tokens []token, open, closeIdx int, d Dialect, helper string, recurse callRecurser) ([]token, bool, error) {
 	as := topLevelWord(tokens, open, closeIdx, "AS")
 	if as < 0 {
 		return nil, false, nil
@@ -60,20 +61,41 @@ func rewriteCastCall(tokens []token, nameIdx, open, closeIdx int, types map[stri
 	if typeName < 0 || tokens[typeName].kind != tokWord {
 		return nil, false, nil
 	}
-	mapped, ok := lookupCastType(types, tokens[typeName].text)
-	if !ok {
+	if _, ok := lookupCastKind(d, tokens[typeName].text); !ok {
 		return nil, false, nil
+	}
+	target, _, err := castTargetText(tokens, typeName)
+	if err != nil {
+		return nil, false, err
 	}
 	expr, err := recurse(tokens[open+1 : as])
 	if err != nil {
 		return nil, false, err
 	}
-	expr = trimSpaceTokens(expr)
+	return castHelperCall(helper, trimSpaceTokens(expr), target), true, nil
+}
+
+// castTargetText renders the target type that starts at typeName, keeping any
+// parameter list so CHAR(3) and DECIMAL(10,2) reach the helper intact. It also
+// returns the index of the type's last token.
+func castTargetText(tokens []token, typeName int) (string, int, error) {
+	end := typeName
+	if e, ok := adjacentCallEnd(tokens, typeName); ok {
+		if e < 0 {
+			return "", 0, fmt.Errorf("%w: unbalanced type parameters in a cast", ErrInvalidSyntax)
+		}
+		end = e
+	}
+	return render(tokens[typeName : end+1]), end, nil
+}
+
+// castHelperCall builds "helper(expr, 'target')".
+func castHelperCall(helper string, expr []token, target string) []token {
 	repl := make([]token, 0, len(expr)+6)
-	repl = append(repl, tokens[nameIdx], opToken("("))
+	repl = append(repl, wordToken(helper), opToken("("))
 	repl = append(repl, expr...)
-	repl = append(repl, spaceToken(), wordToken("AS"), spaceToken(), wordToken(mapped), opToken(")"))
-	return repl, true, nil
+	repl = append(repl, opToken(","), spaceToken(), stringToken(target), opToken(")"))
+	return repl
 }
 
 // intervalUnits maps the INTERVAL units that map cleanly onto a SQLite datetime
