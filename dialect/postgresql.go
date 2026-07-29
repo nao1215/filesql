@@ -23,6 +23,8 @@ import (
 //	P-13 DATE 'lit' / TIMESTAMP 'lit' -> 'lit'
 //	P-14 x SIMILAR TO p            -> similar_to(p, x)
 //	P-15 BOOL_AND / STDDEV / ...   -> SQLite aggregate expressions
+//	P-16 TRIM(BOTH x FROM s), OVERLAY, BTRIM, JSONB_ARRAY_LENGTH
+//	P-17 ARRAY[...]                -> ErrUnsupportedSyntax
 func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedPostgreSQL(tokens); err != nil {
 		return nil, err
@@ -85,6 +87,11 @@ func checkUnsupportedPostgreSQL(tokens []token) error {
 		if isWordEq(t, "LATERAL") {
 			return fmt.Errorf("%w: LATERAL is not supported", ErrUnsupportedSyntax)
 		}
+		if isWordEq(t, "ARRAY") {
+			if b := nextSig(tokens, i+1); b >= 0 && isOpEq(tokens[b], "[") {
+				return fmt.Errorf("%w: array literals are not supported", ErrUnsupportedSyntax)
+			}
+		}
 		if isWordEq(t, "DISTINCT") {
 			if on := nextSig(tokens, i+1); on >= 0 && isWordEq(tokens[on], "ON") {
 				return fmt.Errorf("%w: DISTINCT ON is not supported", ErrUnsupportedSyntax)
@@ -133,6 +140,16 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 		return rewritePosition(tokens, open, closeIdx)
 	case "SUBSTRING":
 		return rewriteSubstring(tokens, open, closeIdx)
+	case fnNameTrim:
+		return rewriteTrim(tokens, open, closeIdx, pgCallPass)
+	case "OVERLAY":
+		return rewriteOverlay(tokens, open, closeIdx, pgCallPass)
+	case "BTRIM":
+		return rewriteRenameCall(tokens, open, closeIdx, "trim", pgCallPass)
+	case "JSONB_ARRAY_LENGTH", "JSON_ARRAY_LENGTH":
+		return rewriteRenameCall(tokens, open, closeIdx, "json_array_length", pgCallPass)
+	case fnNameCharLen, fnNameCharLen2:
+		return rewriteRenameCall(tokens, open, closeIdx, "length", pgCallPass)
 	case fnNameCast:
 		return rewriteCastCall(tokens, open, closeIdx, PostgreSQL, "postgresql_cast", pgCallPass)
 	default:

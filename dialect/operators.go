@@ -3,10 +3,12 @@ package dialect
 import (
 	"database/sql/driver"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // This file implements the operators whose meaning changes on the way to
@@ -343,4 +345,178 @@ func similarToPass(tokens []token) ([]token, error) {
 		i = rightEnd + 1
 	}
 	return out, nil
+}
+
+// fnMySQLOrd implements MySQL ORD(s): the code of the first character, read as
+// its UTF-8 bytes in big-endian order. A single-byte character therefore gives
+// the same answer as ASCII(), and a multi-byte one does not.
+func fnMySQLOrd(args []driver.Value) (driver.Value, error) {
+	s, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	if s == "" {
+		return int64(0), nil
+	}
+	r, size := utf8.DecodeRuneInString(s)
+	if r == utf8.RuneError && size <= 1 {
+		return int64(s[0]), nil
+	}
+	var code int64
+	for _, b := range []byte(s[:size]) {
+		code = code<<8 | int64(b)
+	}
+	return code, nil
+}
+
+// fnJSONUnquote implements MySQL JSON_UNQUOTE(s): a JSON string literal becomes
+// its value, and anything else is returned unchanged.
+func fnJSONUnquote(args []driver.Value) (driver.Value, error) {
+	s, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
+		return s, nil
+	}
+	var out string
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return s, nil //nolint:nilerr // MySQL leaves a value it cannot unquote alone
+	}
+	return out, nil
+}
+
+// fnOverlay implements PostgreSQL OVERLAY(target PLACING replacement FROM start
+// [FOR count]): replacement is written over count characters of target starting
+// at the 1-based start, defaulting to the length of replacement.
+func fnOverlay(args []driver.Value) (driver.Value, error) {
+	if len(args) < 3 || len(args) > 4 {
+		return nil, fmt.Errorf("dialect: OVERLAY expects 3 or 4 arguments, got %d", len(args))
+	}
+	target, ok1 := toString(args[0])
+	replacement, ok2 := toString(args[1])
+	start, ok3 := toInt(args[2])
+	if !ok1 || !ok2 || !ok3 {
+		return nil, nil
+	}
+	runes := []rune(target)
+	count := int64(len([]rune(replacement)))
+	if len(args) == 4 {
+		n, ok := toInt(args[3])
+		if !ok {
+			return nil, nil
+		}
+		count = n
+	}
+	if start < 1 {
+		start = 1
+	}
+	if count < 0 {
+		count = 0
+	}
+	// Clamp in int64 before narrowing: a FOR count near math.MaxInt64 is a
+	// perfectly ordinary SQLite integer literal, and head+count would wrap to a
+	// negative slice bound.
+	length := int64(len(runes))
+	head := min(start-1, length)
+	tail := min(head+min(count, length), length)
+	return string(runes[:head]) + replacement + string(runes[tail:]), nil
+}
+
+// trimKeywords are the SQL-standard TRIM specifications, mapped to the SQLite
+// function that trims that end.
+var trimKeywords = map[string]string{
+	"BOTH":     fnNameTrim,
+	"LEADING":  "LTRIM",
+	"TRAILING": "RTRIM",
+}
+
+// rewriteTrim implements the SQL-standard TRIM(BOTH 'x' FROM s) form that MySQL
+// and PostgreSQL accept and SQLite does not, mapping it onto SQLite's
+// trim/ltrim/rtrim with a character-set argument. The specification is optional
+// and defaults to BOTH. The comma form, TRIM(s, 'x'), is already SQLite's own
+// and is left alone.
+func rewriteTrim(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
+	from := topLevelWord(tokens, open, closeIdx, "FROM")
+	if from < 0 {
+		return nil, false, nil
+	}
+	fn := fnNameTrim
+	charsStart := open + 1
+	if spec := nextSig(tokens, open+1); spec >= 0 && spec < from {
+		if mapped, ok := trimKeywords[strings.ToUpper(tokens[spec].text)]; ok {
+			fn = mapped
+			charsStart = spec + 1
+		}
+	}
+	subject, err := recurse(tokens[from+1 : closeIdx])
+	if err != nil {
+		return nil, false, err
+	}
+	chars, err := recurse(tokens[charsStart:from])
+	if err != nil {
+		return nil, false, err
+	}
+	subject = trimSpaceTokens(subject)
+	chars = trimSpaceTokens(chars)
+
+	repl := make([]token, 0, len(subject)+len(chars)+5)
+	repl = append(repl, wordToken(fn), opToken("("))
+	repl = append(repl, subject...)
+	if len(chars) > 0 {
+		repl = append(repl, opToken(","), spaceToken())
+		repl = append(repl, chars...)
+	}
+	return append(repl, opToken(")")), true, nil
+}
+
+// rewriteOverlay implements PostgreSQL OVERLAY(x PLACING y FROM n [FOR m]),
+// turning the keyword-separated arguments into a call to the helper.
+func rewriteOverlay(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
+	placing := topLevelWord(tokens, open, closeIdx, "PLACING")
+	from := topLevelWord(tokens, open, closeIdx, "FROM")
+	if placing < 0 || from < 0 {
+		return nil, false, nil
+	}
+	forKw := topLevelWord(tokens, open, closeIdx, "FOR")
+	startEnd := closeIdx
+	if forKw > from {
+		startEnd = forKw
+	}
+	parts := [][2]int{{open + 1, placing}, {placing + 1, from}, {from + 1, startEnd}}
+	if forKw > from {
+		parts = append(parts, [2]int{forKw + 1, closeIdx})
+	}
+
+	repl := make([]token, 0, closeIdx-open+8)
+	repl = append(repl, wordToken("overlay"), opToken("("))
+	for i, part := range parts {
+		arg, err := recurse(tokens[part[0]:part[1]])
+		if err != nil {
+			return nil, false, err
+		}
+		if i > 0 {
+			repl = append(repl, opToken(","), spaceToken())
+		}
+		repl = append(repl, trimSpaceTokens(arg)...)
+	}
+	return append(repl, opToken(")")), true, nil
+}
+
+// unionDistinctPass drops the DISTINCT that MySQL and GoogleSQL allow after
+// UNION. SQLite rejects the keyword, and its plain UNION already deduplicates.
+func unionDistinctPass(tokens []token) []token {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		out = append(out, tokens[i])
+		if isWordEq(tokens[i], "UNION") {
+			if d := nextSig(tokens, i+1); d >= 0 && isWordEq(tokens[d], "DISTINCT") {
+				i = d + 1
+				continue
+			}
+		}
+		i++
+	}
+	return out
 }

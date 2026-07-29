@@ -1,6 +1,7 @@
 package dialect
 
 import (
+	"database/sql/driver"
 	"strings"
 	"testing"
 )
@@ -151,5 +152,108 @@ func TestGroupThousands(t *testing.T) {
 		if got := groupThousands(tt.in); got != tt.want {
 			t.Fatalf("groupThousands(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+// TestStringAndJSONGaps covers the string and JSON spellings each dialect has
+// and SQLite does not, plus the two places SQLite's own function means something
+// different from the dialect's.
+func TestStringAndJSONGaps(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name    string
+		dialect Dialect
+		query   string
+		want    string
+	}{
+		// MySQL LENGTH counts bytes, SQLite's counts characters. The query
+		// succeeds either way, so the difference is silent.
+		{"mysql length is bytes", MySQL, `SELECT LENGTH('あい')`, "6"},
+		{"mysql char_length is characters", MySQL, `SELECT CHAR_LENGTH('あい')`, "2"},
+		{"mysql ord ascii", MySQL, `SELECT ORD('A')`, "65"},
+		{"mysql ord multibyte", MySQL, `SELECT ORD('あ')`, "14909826"},
+		{"mysql json_unquote", MySQL, `SELECT JSON_UNQUOTE('"x"')`, "x"},
+		{"mysql json_unquote passthrough", MySQL, `SELECT JSON_UNQUOTE('x')`, "x"},
+		{"mysql trim both", MySQL, `SELECT TRIM(BOTH 'x' FROM 'xxaxx')`, "a"},
+		{"mysql trim leading", MySQL, `SELECT TRIM(LEADING 'x' FROM 'xxaxx')`, "axx"},
+		{"mysql trim trailing", MySQL, `SELECT TRIM(TRAILING 'x' FROM 'xxaxx')`, "xxa"},
+		{"mysql trim from only", MySQL, `SELECT TRIM(FROM '  a  ')`, "a"},
+		{"mysql union distinct", MySQL, `SELECT 1 UNION DISTINCT SELECT 1`, "1"},
+
+		{"postgresql btrim", PostgreSQL, `SELECT BTRIM('xxaxx', 'x')`, "a"},
+		{"postgresql trim both", PostgreSQL, `SELECT TRIM(BOTH 'x' FROM 'xxaxx')`, "a"},
+		{"postgresql overlay", PostgreSQL, `SELECT OVERLAY('abcdef' PLACING 'XY' FROM 2)`, "aXYdef"},
+		{"postgresql overlay with for", PostgreSQL, `SELECT OVERLAY('abcdef' PLACING 'XY' FROM 2 FOR 4)`, "aXYf"},
+		{"postgresql jsonb_array_length", PostgreSQL, `SELECT JSONB_ARRAY_LENGTH('[1,2,3]'::jsonb)`, "3"},
+		{"postgresql char_length", PostgreSQL, `SELECT CHAR_LENGTH('あい')`, "2"},
+
+		{"googlesql json_value", GoogleSQL, `SELECT JSON_VALUE('{"a":"x"}', '$.a')`, "x"},
+		// JSON_QUERY keeps its result in JSON text, so a string value stays
+		// quoted; JSON_VALUE returns the value itself.
+		{"googlesql json_query keeps quotes", GoogleSQL, `SELECT JSON_QUERY('{"a":"x"}', '$.a')`, `"x"`},
+		{"googlesql json_query object", GoogleSQL, `SELECT JSON_QUERY('{"a":{"b":1}}', '$.a')`, `{"b":1}`},
+		{"googlesql byte_length", GoogleSQL, `SELECT BYTE_LENGTH('あい')`, "6"},
+		{"googlesql char_length", GoogleSQL, `SELECT CHAR_LENGTH('あい')`, "2"},
+		{"googlesql union distinct", GoogleSQL, `SELECT 1 UNION DISTINCT SELECT 1`, "1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, tt.dialect, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if !got.Valid || got.String != tt.want {
+				t.Fatalf("%s = %v, want %q", tt.query, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPostgreSQLArrayLiteralIsRejected reports an array literal by name instead
+// of letting SQLite fail on the bracket, which says nothing useful.
+func TestPostgreSQLArrayLiteralIsRejected(t *testing.T) {
+	t.Parallel()
+
+	_, err := Translate(PostgreSQL, `SELECT name FROM t WHERE name LIKE ANY(ARRAY['a%'])`)
+	if err == nil {
+		t.Fatal("an array literal should be rejected")
+	}
+	if !strings.Contains(err.Error(), "array literals are not supported") {
+		t.Fatalf("error = %v, want it to name array literals", err)
+	}
+}
+
+// TestOverlayBoundaries covers the OVERLAY offsets that fall outside the target.
+func TestOverlayBoundaries(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		args []driver.Value
+		want string
+	}{
+		{[]driver.Value{"abc", "X", int64(1)}, "Xbc"},
+		{[]driver.Value{"abc", "X", int64(0)}, "Xbc"},
+		{[]driver.Value{"abc", "X", int64(9)}, "abcX"},
+		{[]driver.Value{"abc", "XY", int64(2), int64(0)}, "aXYbc"},
+		{[]driver.Value{"abc", "XY", int64(2), int64(-1)}, "aXYbc"},
+		{[]driver.Value{"abc", "XY", int64(2), int64(99)}, "aXY"},
+		// A count near math.MaxInt64 is an ordinary SQLite integer literal and
+		// must not wrap into a negative slice bound.
+		{[]driver.Value{"ab", "X", int64(2), int64(9223372036854775807)}, "aX"},
+		{[]driver.Value{"ab", "X", int64(9223372036854775807)}, "abX"},
+	}
+	for _, tt := range tests {
+		got, err := fnOverlay(tt.args)
+		if err != nil {
+			t.Fatalf("fnOverlay(%v): %v", tt.args, err)
+		}
+		if got != tt.want {
+			t.Fatalf("fnOverlay(%v) = %v, want %q", tt.args, got, tt.want)
+		}
+	}
+	if _, err := fnOverlay([]driver.Value{"abc", "X"}); err == nil {
+		t.Fatal("fnOverlay with 2 arguments should fail")
 	}
 }

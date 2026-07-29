@@ -14,8 +14,11 @@ import (
 
 // Function-name keywords recognized by more than one dialect's call pass.
 const (
-	fnNameCast    = "CAST"
-	fnNameExtract = "EXTRACT"
+	fnNameCast     = "CAST"
+	fnNameExtract  = "EXTRACT"
+	fnNameTrim     = "TRIM"
+	fnNameCharLen  = "CHAR_LENGTH"
+	fnNameCharLen2 = "CHARACTER_LENGTH"
 )
 
 // callRecurser rewrites a slice of argument tokens with a dialect's call pass so
@@ -735,4 +738,28 @@ func pgIntervalPass(tokens []token) ([]token, error) {
 		i = lit + 1
 	}
 	return out, nil
+}
+
+// rewriteJSONQuery implements GoogleSQL JSON_QUERY(json, path) as SQLite's "->"
+// operator. Unlike JSON_VALUE, JSON_QUERY keeps its result in JSON text, so a
+// string value stays quoted; "->" does that where json_extract does not.
+func rewriteJSONQuery(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
+	comma := topLevelComma(tokens, open, closeIdx)
+	if comma < 0 {
+		return nil, false, nil
+	}
+	doc, err := recurse(tokens[open+1 : comma])
+	if err != nil {
+		return nil, false, err
+	}
+	path, err := recurse(tokens[comma+1 : closeIdx])
+	if err != nil {
+		return nil, false, err
+	}
+	repl := make([]token, 0, len(doc)+len(path)+6)
+	repl = append(repl, opToken("("))
+	repl = append(repl, trimSpaceTokens(doc)...)
+	repl = append(repl, spaceToken(), opToken("->"), spaceToken())
+	repl = append(repl, trimSpaceTokens(path)...)
+	return append(repl, opToken(")")), true, nil
 }
