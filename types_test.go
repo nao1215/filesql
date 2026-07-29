@@ -105,6 +105,12 @@ func TestTableName_Sanitize(t *testing.T) {
 		{"empty after sanitize", "", "table"},
 		{"mixed invalid chars", "test-data.v2@new", "test_data_v2new"}, // only -, space, . are replaced with _
 		{"uppercase preserved", "UserData", "UserData"},
+		// The character set matches the file-path sanitizer, so a name in any
+		// script survives here too; only the fallback and prefix differ.
+		{"japanese preserved", "売上", "売上"},
+		{"cyrillic preserved", "Данные", "Данные"},
+		{"accented latin preserved", "café", "café"},
+		{"non-ascii digit leads", "١٢", "table_١٢"},
 	}
 
 	for _, tt := range tests {

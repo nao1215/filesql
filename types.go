@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // defaultTableName is the table name used when a derived name is empty.
@@ -21,24 +23,6 @@ const (
 	MinChunkSize = 1
 	// ValidationPeekSize is the size used for validation peek operations
 	ValidationPeekSize = 1
-)
-
-// Character validation constants
-const (
-	// firstDigitChar represents the first numeric character
-	firstDigitChar = '0'
-	// lastDigitChar represents the last numeric character
-	lastDigitChar = '9'
-	// firstLowerChar represents the first lowercase letter
-	firstLowerChar = 'a'
-	// lastLowerChar represents the last lowercase letter
-	lastLowerChar = 'z'
-	// firstUpperChar represents the first uppercase letter
-	firstUpperChar = 'A'
-	// lastUpperChar represents the last uppercase letter
-	lastUpperChar = 'Z'
-	// underscoreChar represents the underscore character
-	underscoreChar = '_'
 )
 
 // File format delimiters
@@ -78,28 +62,15 @@ func (tn TableName) Sanitize() TableName {
 	return TableName{value: tn.sanitizeString()}
 }
 
-// sanitizeString removes invalid characters from table names
+// sanitizeString removes invalid characters from table names. It keeps the same
+// characters as the file-path sanitizer (see identifierRunes), so a name written
+// in a non-Latin script survives here too, and differs only in the fallback and
+// prefix it uses when the result is empty or starts with a digit.
 func (tn TableName) sanitizeString() string {
-	// Replace spaces and invalid characters with underscores
-	result := strings.ReplaceAll(tn.value, " ", "_")
-	result = strings.ReplaceAll(result, "-", "_")
-	result = strings.ReplaceAll(result, ".", "_")
+	finalResult := identifierRunes(tn.value)
 
-	// Remove any non-alphanumeric characters except underscore
-	var sanitized strings.Builder
-	for _, r := range result {
-		if (r >= firstLowerChar && r <= lastLowerChar) ||
-			(r >= firstUpperChar && r <= lastUpperChar) ||
-			(r >= firstDigitChar && r <= lastDigitChar) ||
-			r == underscoreChar {
-			sanitized.WriteRune(r)
-		}
-	}
-
-	finalResult := sanitized.String()
-
-	// Ensure it doesn't start with a number
-	if len(finalResult) > 0 && finalResult[0] >= firstDigitChar && finalResult[0] <= lastDigitChar {
+	// Ensure it doesn't start with a digit
+	if first, _ := utf8.DecodeRuneInString(finalResult); unicode.IsDigit(first) {
 		finalResult = "table_" + finalResult
 	}
 
