@@ -766,7 +766,7 @@ func fnElt(args []driver.Value) (driver.Value, error) {
 		return nil, fmt.Errorf("dialect: ELT expects at least 2 arguments, got %d", len(args))
 	}
 	n, ok := toInt(args[0])
-	if !ok || n < 1 || int(n) > len(args)-1 {
+	if !ok || n < 1 || n > int64(len(args)-1) {
 		return nil, nil
 	}
 	return args[n], nil
@@ -1089,14 +1089,15 @@ func fnRegexpReplace(args []driver.Value) (driver.Value, error) {
 	if global {
 		return re.ReplaceAllString(src, expansion), nil
 	}
-	replaced := false
-	return re.ReplaceAllStringFunc(src, func(match string) string {
-		if replaced {
-			return match
-		}
-		replaced = true
-		return string(re.ExpandString(nil, expansion, match, re.FindStringSubmatchIndex(match)))
-	}), nil
+	// Expand against the source rather than the matched text on its own: a
+	// boundary-dependent pattern such as `\Bb` matches inside "ab" but not in
+	// the isolated "b", which would leave ExpandString without submatch indices.
+	loc := re.FindStringSubmatchIndex(src)
+	if loc == nil {
+		return src, nil
+	}
+	out := re.ExpandString([]byte(src[:loc[0]]), expansion, src, loc)
+	return string(out) + src[loc[1]:], nil
 }
 
 // fnMD5 implements PostgreSQL MD5(text). MD5 is used here as a content

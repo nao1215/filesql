@@ -444,6 +444,12 @@ func TestEdgeCaseUDFs(t *testing.T) {
 		{`SELECT SAFE_ADD(1.5, 2.0)`, "3.5"},
 		{`SELECT SAFE_NEGATE(1.5)`, "-1.5"},
 		{`SELECT REGEXP_REPLACE('a1b2', '[0-9]', 'X', '')`, "aXb2"}, // no "g": first match only
+		// A boundary-dependent pattern matches inside the source but not in the
+		// matched text on its own, so the first-match path has to expand against
+		// the source.
+		{`SELECT REGEXP_REPLACE('ab', '\Bb', 'X', '')`, "aX"},
+		{`SELECT REGEXP_REPLACE('ab', 'z', 'X', '')`, "ab"},
+		{`SELECT ELT(4294967298, 'a', 'b')`, ""}, // an index past int32 must stay out of range
 	}
 	for _, tt := range tests {
 		var got sql.NullString
