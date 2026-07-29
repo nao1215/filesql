@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -206,14 +205,14 @@ func TestDumpDatabase_SucceedsThroughStaging(t *testing.T) {
 	assert.Len(t, entries, 1, "no staged file may be left behind: %v", entries)
 }
 
-// TestCommitStagedFile_CopyFallback covers the path taken when the rename is
-// refused. Windows refuses to rename over a destination another handle still has
-// open, which is exactly a save that overwrites a file this package is streaming
-// from, so the commit falls back to copying the staged bytes over it.
-func TestCommitStagedFile_CopyFallback(t *testing.T) {
+// TestCommitStagedFile covers the commit half, including the path taken when the
+// plain rename is refused. Windows refuses to rename over a destination another
+// handle still has open, which is exactly a save that overwrites a file this
+// package is streaming from, so the fallback is not a rare path there.
+func TestCommitStagedFile(t *testing.T) {
 	t.Parallel()
 
-	t.Run("copies onto an existing destination", func(t *testing.T) {
+	t.Run("replaces an existing destination", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
@@ -226,23 +225,11 @@ func TestCommitStagedFile_CopyFallback(t *testing.T) {
 
 		got, err := os.ReadFile(dest) //nolint:gosec // Test path from t.TempDir()
 		require.NoError(t, err)
-		assert.Equal(t, "new", string(got))
-	})
+		assert.Equal(t, "new", string(got), "no tail of the old content may survive")
 
-	t.Run("the copy leaves no tail of the old content", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		staged := filepath.Join(dir, "staged")
-		dest := filepath.Join(dir, "dest")
-		require.NoError(t, os.WriteFile(staged, []byte("short"), 0o600))
-		require.NoError(t, os.WriteFile(dest, []byte(strings.Repeat("x", 500)), 0o600))
-
-		require.NoError(t, copyStagedOnto(staged, dest))
-
-		got, err := os.ReadFile(dest) //nolint:gosec // Test path from t.TempDir()
+		entries, err := os.ReadDir(dir)
 		require.NoError(t, err)
-		assert.Equal(t, "short", string(got), "O_TRUNC must drop the old bytes")
+		assert.Len(t, entries, 1, "neither the staged nor the moved-aside file may be left: %v", entries)
 	})
 
 	t.Run("creates a destination that does not exist", func(t *testing.T) {
@@ -253,10 +240,60 @@ func TestCommitStagedFile_CopyFallback(t *testing.T) {
 		dest := filepath.Join(dir, "dest")
 		require.NoError(t, os.WriteFile(staged, []byte("new"), 0o600))
 
-		require.NoError(t, copyStagedOnto(staged, dest))
+		require.NoError(t, commitStagedFile(staged, dest))
 
 		got, err := os.ReadFile(dest) //nolint:gosec // Test path from t.TempDir()
 		require.NoError(t, err)
 		assert.Equal(t, "new", string(got))
+	})
+
+	// The move-aside fallback, which is what runs on Windows whenever the
+	// destination is open. It is driven directly here because a plain rename
+	// succeeds on Unix, so commitStagedFile never reaches it on this platform.
+	t.Run("the move-aside fallback replaces the destination", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		staged := filepath.Join(dir, "staged")
+		dest := filepath.Join(dir, "dest")
+		require.NoError(t, os.WriteFile(staged, []byte("new"), 0o600))
+		require.NoError(t, os.WriteFile(dest, []byte("old content that is longer"), 0o600))
+
+		require.NoError(t, commitByMovingAside(staged, dest))
+
+		got, err := os.ReadFile(dest) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		assert.Equal(t, "new", string(got))
+
+		entries, err := os.ReadDir(dir)
+		require.NoError(t, err)
+		assert.Len(t, entries, 1, "the moved-aside file must not be left behind: %v", entries)
+	})
+
+	t.Run("the move-aside fallback restores the destination when it cannot finish", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		dest := filepath.Join(dir, "dest")
+		require.NoError(t, os.WriteFile(dest, []byte("precious"), 0o600))
+
+		// A staged file that is not there makes the second rename fail, after the
+		// destination has already been moved aside.
+		require.Error(t, commitByMovingAside(filepath.Join(dir, "missing"), dest))
+
+		got, err := os.ReadFile(dest) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		assert.Equal(t, "precious", string(got), "a refused commit must put the destination back")
+
+		entries, err := os.ReadDir(dir)
+		require.NoError(t, err)
+		assert.Len(t, entries, 1, "the moved-aside file must not be left behind: %v", entries)
+	})
+
+	t.Run("reports a staged file that is gone", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		require.Error(t, commitStagedFile(filepath.Join(dir, "missing"), filepath.Join(dir, "dest")))
 	})
 }

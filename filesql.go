@@ -411,20 +411,44 @@ func writeSQLiteTableData(outputPath string, columns []string, rows *sql.Rows, o
 
 // writeSQLiteTableDataTo writes table data to the given path with the specified
 // format. Callers reach it through writeSQLiteTableData, which stages the path.
-func writeSQLiteTableDataTo(outputPath string, columns []string, rows *sql.Rows, options DumpOptions) error {
+//
+// The named return lets the deferred closes report their own failure. A
+// compressor writes its trailer on Close, so a compressed output that failed to
+// finish is only detectable there; dropping that error would commit a truncated
+// archive over the destination as if it had been written.
+func writeSQLiteTableDataTo(outputPath string, columns []string, rows *sql.Rows, options DumpOptions) (err error) {
+	// Parquet and XLSX open the output themselves, so they neither need the file
+	// created here nor the compression wrapper.
+	switch options.Format {
+	case OutputFormatParquet:
+		return writeParquetTableData(outputPath, columns, rows, options.Compression)
+	case OutputFormatXLSX:
+		return writeXLSXTableData(outputPath, columns, rows, options.Compression)
+	}
+
 	// Create the file
 	file, err := os.Create(outputPath) //nolint:gosec // Output path is constructed from validated directory and table name
 	if err != nil {
 		return fmt.Errorf("%w: failed to create file %s: %s", ErrIOOperation, outputPath, err.Error())
 	}
-	defer file.Close()
+	// Registered first so it runs last: the compressor must flush its trailer
+	// into the file before the file is closed.
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("%w: failed to close file %s: %s", ErrIOOperation, outputPath, closeErr.Error())
+		}
+	}()
 
 	// Create writer with compression if needed
 	writer, closeWriter, err := createCompressedWriter(file, options.Compression)
 	if err != nil {
 		return fmt.Errorf("%w: failed to create writer: %s", ErrCompression, err.Error())
 	}
-	defer closeWriter()
+	defer func() {
+		if closeErr := closeWriter(); closeErr != nil && err == nil {
+			err = fmt.Errorf("%w: failed to finish writing %s: %s", ErrCompression, outputPath, closeErr.Error())
+		}
+	}()
 
 	// Write data based on format
 	switch options.Format {
@@ -434,10 +458,6 @@ func writeSQLiteTableDataTo(outputPath string, columns []string, rows *sql.Rows,
 		return writeTSVData(writer, columns, rows)
 	case OutputFormatLTSV:
 		return writeLTSVData(writer, columns, rows)
-	case OutputFormatParquet:
-		return writeParquetTableData(outputPath, columns, rows, options.Compression)
-	case OutputFormatXLSX:
-		return writeXLSXTableData(outputPath, columns, rows, options.Compression)
 	default:
 		return fmt.Errorf("%w: unsupported output format: %v", ErrUnsupportedFormat, options.Format)
 	}
