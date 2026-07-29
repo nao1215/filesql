@@ -103,29 +103,74 @@ func commitStagedFile(staged, dest string) error {
 		return nil
 	}
 	if _, statErr := os.Stat(dest); statErr != nil {
-		// Nothing was in the way, so moving something aside cannot help; report
-		// the original failure.
+		// Nothing was in the way, so the fallback cannot help; report the original
+		// failure.
 		return err
 	}
-	return commitByMovingAside(staged, dest)
+	return commitByCopy(staged, dest)
 }
 
-// commitByMovingAside renames dest out of the way, renames the staged file into
-// its place, and discards what it moved aside. If the second rename fails, dest
-// is put back exactly as it was, so a refused commit costs nothing. It is the
-// fallback for a platform that will not rename over dest; see commitStagedFile.
-func commitByMovingAside(staged, dest string) error {
-	aside := dest + ".filesql-replaced"
-	// Clear any leftover from an interrupted commit so the move below is not
-	// blocked by it.
-	_ = os.Remove(aside) //nolint:errcheck // Best-effort; the rename below reports it if it still matters
-	if err := os.Rename(dest, aside); err != nil {
+// commitByCopy writes the staged bytes over dest through the handle Windows will
+// grant, after taking a copy of dest so a failure partway can put it back. It is
+// the fallback for a destination that cannot be renamed at all: while another
+// handle has the file open, Windows refuses both to rename over it and to rename
+// it out of the way, and an in-place save overwrites exactly the file this
+// package is reading from.
+//
+// This is not atomic — a reader watching during the copy can see a partial file
+// — but it keeps the guarantee that matters here: a failure does not cost the
+// data that was already there.
+func commitByCopy(staged, dest string) error {
+	backup, err := copyToBackup(dest)
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(staged, dest); err != nil {
-		_ = os.Rename(aside, dest) //nolint:errcheck // Best-effort restore; err is the failure to report
-		return err
+	defer func() {
+		_ = os.Remove(backup) //nolint:errcheck // Best-effort cleanup of this package's own temporary file
+	}()
+
+	if copyErr := copyOnto(staged, dest); copyErr != nil {
+		// Put back what was there. The restore is best effort: if it fails too, the
+		// write error is still the one worth reporting.
+		_ = copyOnto(backup, dest) //nolint:errcheck // Best-effort restore; copyErr is the failure to report
+		return copyErr
 	}
-	_ = os.Remove(aside) //nolint:errcheck // Best-effort cleanup of the replaced file
 	return nil
+}
+
+// copyToBackup copies path to a temporary file beside it and returns that path.
+func copyToBackup(path string) (string, error) {
+	backup, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".bak*")
+	if err != nil {
+		return "", err
+	}
+	name := backup.Name()
+	if err := backup.Close(); err != nil {
+		_ = os.Remove(name) //nolint:errcheck // Best-effort cleanup of this package's own temporary file
+		return "", err
+	}
+	if err := copyOnto(path, name); err != nil {
+		_ = os.Remove(name) //nolint:errcheck // Best-effort cleanup of this package's own temporary file
+		return "", err
+	}
+	return name, nil
+}
+
+// copyOnto replaces dest's contents with src's, truncating whatever was there.
+func copyOnto(src, dest string) error {
+	in, err := os.Open(src) //nolint:gosec // src is a file this package created or was given as the output
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, defaultOutputFileMode) //nolint:gosec // dest is the caller's chosen output
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
