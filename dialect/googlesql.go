@@ -24,6 +24,8 @@ import (
 //	G-13 DATE_TRUNC(x, PART)                  -> date_trunc_part(x, 'part')
 //	G-14 CURRENT_DATE() and friends           -> CURRENT_DATE
 //	G-15 COUNTIF / LOGICAL_AND / STDDEV       -> SQLite aggregate expressions
+//	G-16 UNION DISTINCT                       -> UNION
+//	G-17 JSON_VALUE / BYTE_LENGTH / CHAR_LENGTH
 func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedGoogleSQL(tokens); err != nil {
 		return nil, err
@@ -45,7 +47,10 @@ func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	}
 	// G-15: COUNTIF, LOGICAL_AND/OR, and the variance family have no SQLite
 	// aggregate.
-	return aggregatePass(currentValueParenPass(typePrefixedLiteralPass(out)), GoogleSQL)
+	// G-16: SQLite rejects "UNION DISTINCT"; its plain UNION already
+	// deduplicates.
+	out = unionDistinctPass(currentValueParenPass(typePrefixedLiteralPass(out)))
+	return aggregatePass(out, GoogleSQL)
 }
 
 // checkUnsupportedGoogleSQL rejects the G-9 constructs that have no SQLite
@@ -125,6 +130,12 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 		return rewriteDateArith(tokens, open, closeIdx, "-", googlesqlCallPass)
 	case "DATE_DIFF", "TIMESTAMP_DIFF":
 		return rewriteDateDiff(tokens, nameIdx, open, closeIdx)
+	case "JSON_VALUE", "JSON_QUERY", "JSON_EXTRACT_SCALAR":
+		return rewriteRenameCall(tokens, open, closeIdx, "json_extract", googlesqlCallPass)
+	case "BYTE_LENGTH":
+		return rewriteRenameCall(tokens, open, closeIdx, "octet_length", googlesqlCallPass)
+	case fnNameCharLen, fnNameCharLen2:
+		return rewriteRenameCall(tokens, open, closeIdx, "length", googlesqlCallPass)
 	case "DATE_TRUNC", "TIMESTAMP_TRUNC", "DATETIME_TRUNC":
 		return rewriteTruncCall(tokens, open, closeIdx, googlesqlCallPass)
 	default:

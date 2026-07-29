@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- More of each dialect's string and JSON spellings translate. MySQL: `CHAR_LENGTH`, `CHARACTER_LENGTH`, `ORD`, `JSON_UNQUOTE`, and `TRIM(BOTH 'x' FROM s)`. PostgreSQL: `BTRIM`, `OVERLAY(x PLACING y FROM n FOR m)`, `JSONB_ARRAY_LENGTH`, `JSON_ARRAY_LENGTH`, `CHAR_LENGTH`, and the same `TRIM` form. GoogleSQL: `JSON_VALUE`, `JSON_QUERY`, `JSON_EXTRACT_SCALAR`, `BYTE_LENGTH`, and `CHAR_LENGTH`. `UNION DISTINCT` is accepted under MySQL and GoogleSQL, where SQLite rejects the keyword and its plain `UNION` already deduplicates.
+- A PostgreSQL array literal (`ARRAY[...]`) is reported by name instead of failing on the bracket, which said nothing useful.
+
 ### Fixed
+- **MySQL `LENGTH` counts bytes.** SQLite's counts characters, so `LENGTH('あい')` answered 2 where MySQL answers 6, and the query succeeded either way.
 - **A window or filter clause no longer breaks the operator rewrites.** `SUM(x) OVER (ORDER BY id) / 2` failed to parse under MySQL and GoogleSQL, and `x / COUNT(*) OVER ()` attached the `OVER` clause to the division helper instead of the count. The operand scanners walk back from an operator to the primary expression beside it, and a windowed aggregate ends in the clause's own parentheses, which they mistook for the whole operand. `FILTER (WHERE ...)` and `OVER window_name` had the same problem. Introduced in 0.20.0 with the division and `LIKE` rewrites.
 - **The `INTERVAL` amount can be any expression.** `DATE_ADD(d, INTERVAL n DAY)` with a column or an expression as the amount is valid MySQL but was rejected with "INTERVAL value must be a numeric literal".
 

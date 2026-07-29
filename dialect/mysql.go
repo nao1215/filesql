@@ -24,6 +24,8 @@ import (
 //	M-16 TIMESTAMPDIFF/TIMESTAMPADD      -> DATE_DIFF / interval_add
 //	M-17 POSITION(x IN y), SUBSTRING FROM -> INSTR / SUBSTR
 //	M-18 ANY_VALUE / STD / VARIANCE      -> SQLite aggregate expressions
+//	M-19 UNION DISTINCT                  -> UNION
+//	M-20 LENGTH / CHAR_LENGTH / ORD / TRIM(BOTH x FROM s)
 //
 // M-10 (LIMIT n, m) needs no rewrite: SQLite accepts it natively.
 func rewriteMySQL(tokens []token) ([]token, error) {
@@ -47,7 +49,9 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	out = replaceOperatorWithWord(out, "<=>", "IS")
 	// M-14/M-15: MySQL accepts typed date literals and the parenthesized
 	// CURRENT_DATE() spelling, neither of which SQLite parses.
-	out = currentValueParenPass(typePrefixedLiteralPass(out))
+	// M-19: SQLite rejects "UNION DISTINCT"; its plain UNION already
+	// deduplicates.
+	out = unionDistinctPass(currentValueParenPass(typePrefixedLiteralPass(out)))
 	// M-18: ANY_VALUE and the variance family have no SQLite aggregate.
 	return aggregatePass(renameWordPass(out, "RLIKE", "REGEXP"), MySQL)
 }
@@ -107,6 +111,15 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		return rewritePosition(tokens, open, closeIdx)
 	case "SUBSTRING":
 		return rewriteSubstring(tokens, open, closeIdx)
+	case "LENGTH", "OCTET_LENGTH":
+		// MySQL LENGTH counts bytes; SQLite's counts characters.
+		return rewriteRenameCall(tokens, open, closeIdx, "octet_length", mysqlCallPass)
+	case fnNameCharLen, fnNameCharLen2:
+		return rewriteRenameCall(tokens, open, closeIdx, "length", mysqlCallPass)
+	case "ORD":
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_ord", mysqlCallPass)
+	case fnNameTrim:
+		return rewriteTrim(tokens, open, closeIdx, mysqlCallPass)
 	case "HEX":
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_hex", mysqlCallPass)
 	case "UNHEX":
