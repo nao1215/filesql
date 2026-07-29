@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A failed table dump destroyed the file it was overwriting.** v0.23.0 staged the ACH and Fedwire writes; the CSV, TSV, LTSV, Parquet, and XLSX path still opened the destination with `os.Create`, which truncates before a byte has been produced. A format the writer rejects, or an I/O failure partway through, left the destination empty — the caller's own source file when the dump is a write-back over it. Every dump now writes to a temporary file beside its destination and renames it into place only on success, so the two paths behave the same way.
+
 ## [0.23.0] - 2026-07-29
 
 ### Fixed

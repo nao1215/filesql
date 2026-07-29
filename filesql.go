@@ -399,8 +399,19 @@ func getSQLiteTableColumns(db *sql.DB, tableName string) ([]string, error) {
 	return columns, nil
 }
 
-// writeSQLiteTableData writes table data to file with specified format
+// writeSQLiteTableData writes table data to file with specified format. The
+// write is staged and moved into place, so a format or I/O error partway through
+// leaves an existing destination — which for a write-back is the caller's source
+// file — exactly as it was.
 func writeSQLiteTableData(outputPath string, columns []string, rows *sql.Rows, options DumpOptions) error {
+	return writeFileAtomicallyAtPath(outputPath, func(path string) error {
+		return writeSQLiteTableDataTo(path, columns, rows, options)
+	})
+}
+
+// writeSQLiteTableDataTo writes table data to the given path with the specified
+// format. Callers reach it through writeSQLiteTableData, which stages the path.
+func writeSQLiteTableDataTo(outputPath string, columns []string, rows *sql.Rows, options DumpOptions) error {
 	// Create the file
 	file, err := os.Create(outputPath) //nolint:gosec // Output path is constructed from validated directory and table name
 	if err != nil {

@@ -141,3 +141,66 @@ func TestWriteFileAtomically(t *testing.T) {
 		assert.ErrorIs(t, err, ErrIOOperation)
 	})
 }
+
+// TestDumpDatabase_FailedWriteLeavesDestinationIntact pins that the tabular dump
+// path is staged as well as the financial ones. A format the writer rejects
+// reaches its switch after the destination has been opened, which used to
+// truncate whatever was already there — the source file itself when the dump is
+// a write-back over it.
+func TestDumpDatabase_FailedWriteLeavesDestinationIntact(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	srcDir := t.TempDir()
+	src := filepath.Join(srcDir, "data.csv")
+	require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
+
+	db, err := OpenContext(ctx, src)
+	require.NoError(t, err)
+	defer db.Close()
+
+	// An out-of-range format is rejected by the writer's switch, past the point
+	// where the destination used to be truncated.
+	opts := NewDumpOptions().WithFormat(OutputFormat(9999))
+
+	outDir := t.TempDir()
+	dest := filepath.Join(outDir, "data"+opts.FileExtension())
+	original := []byte("this content must survive\n")
+	require.NoError(t, os.WriteFile(dest, original, 0o600))
+
+	require.Error(t, DumpDatabase(db, outDir, opts))
+
+	after, err := os.ReadFile(dest) //nolint:gosec // Test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, original, after, "a rejected dump must leave the destination unchanged")
+
+	entries, err := os.ReadDir(outDir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "no staged file may be left behind: %v", entries)
+}
+
+// TestDumpDatabase_SucceedsThroughStaging keeps the ordinary path honest: the
+// staging must not change what a working dump produces.
+func TestDumpDatabase_SucceedsThroughStaging(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	srcDir := t.TempDir()
+	src := filepath.Join(srcDir, "data.csv")
+	require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
+
+	db, err := OpenContext(ctx, src)
+	require.NoError(t, err)
+	defer db.Close()
+
+	outDir := t.TempDir()
+	require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatCSV)))
+
+	got, err := os.ReadFile(filepath.Join(outDir, "data.csv")) //nolint:gosec // Test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Contains(t, string(got), "alice")
+
+	entries, err := os.ReadDir(outDir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "no staged file may be left behind: %v", entries)
+}
