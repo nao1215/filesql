@@ -51,6 +51,21 @@ var (
 	errRegister  error
 )
 
+// init registers the helper functions while the package is still initializing,
+// before any goroutine can open a connection. The driver exposes functions only
+// to connections opened after registration, and its registry is not safe to
+// write while another goroutine opens a connection, so doing this once at
+// startup is both the documented usage and the only race-free ordering.
+// RegisterFunctions stays exported and idempotent; it reports the same stored
+// error a caller would have seen here.
+//
+//nolint:gochecknoinits // the driver's function registry is not safe to write while another goroutine opens a connection, so registration has to finish before any connection can exist
+func init() {
+	// The error is intentionally dropped: it is stored and returned by
+	// RegisterFunctions, which callers already invoke.
+	_ = RegisterFunctions() //nolint:errcheck // reported by RegisterFunctions instead
+}
+
 // layoutDateTime is the canonical datetime string the helpers emit.
 const layoutDateTime = "2006-01-02 15:04:05"
 
@@ -130,8 +145,14 @@ func registerAll() error {
 		// helper so the conversion follows that dialect's rules rather than
 		// SQLite's affinity; see cast.go.
 		"mysql_cast":          {2, dialectCast(MySQL, false)},
+		"mysql_divide":        {2, divideFloat(false)},
+		"mysql_hex":           {1, fnMySQLHex},
+		"mysql_unhex":         {1, fnMySQLUnhex},
+		"like_sensitive":      {2, likeCompare(true)},
+		"like_insensitive":    {2, likeCompare(false)},
 		"postgresql_cast":     {2, dialectCast(PostgreSQL, false)},
 		"googlesql_cast":      {2, dialectCast(GoogleSQL, false)},
+		"googlesql_divide":    {2, divideFloat(true)},
 		"googlesql_safe_cast": {2, dialectCast(GoogleSQL, true)},
 
 		// PostgreSQL helpers.

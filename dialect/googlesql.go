@@ -19,11 +19,24 @@ import (
 //	G-8  DATE_DIFF/TIMESTAMP_DIFF(a, b, UNIT) -> DATE_DIFF(a, b, 'unit')
 //	G-9  QUALIFY / UNNEST / ARRAY<> / STRUCT<> / SELECT * EXCEPT / REPLACE
 //	     -> ErrUnsupportedSyntax
+//	G-11 a / b                                -> googlesql_divide(a, b)
+//	G-12 x LIKE p                             -> like_sensitive(p, x)
 func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedGoogleSQL(tokens); err != nil {
 		return nil, err
 	}
 	out, err := googlesqlCallPass(tokens)
+	if err != nil {
+		return nil, err
+	}
+	// G-11: GoogleSQL division always yields FLOAT64, so 5/2 is 2.5 rather than
+	// the 2 SQLite gives for two integers.
+	out, err = binaryOperatorPass(out, "/", "googlesql_divide")
+	if err != nil {
+		return nil, err
+	}
+	// G-12: GoogleSQL LIKE is case-sensitive; SQLite's folds ASCII case.
+	out, err = likePass(out, "LIKE", "like_sensitive")
 	if err != nil {
 		return nil, err
 	}
