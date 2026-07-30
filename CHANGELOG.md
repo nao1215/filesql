@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- An LTSV file's columns came out in a different order on every load. LTSV has no header line, so the columns are the labels its records carry; those were collected into a map and then read back out of it, and Go randomizes map iteration. The same file answered `SELECT *` as `id,name` one run and `name,id` the next, a dump of it wrote its columns in a different order each time, and any query written against the column positions was unreliable. The columns are now the labels in the order they first appear. Both the whole-file and the chunked load path had their own copy of this.
+
 ## [0.26.0] - 2026-07-30
 
 ### Fixed
