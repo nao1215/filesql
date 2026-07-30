@@ -8,70 +8,17 @@ import (
 	"github.com/nao1215/filesql/parser"
 )
 
+// filesqlToParserFileTypes maps a format to the parser's constant for it.
+// Only formats appear here: the parser's compressed constants are folded back
+// to their base by filesqlFileType.
 var filesqlToParserFileTypes = map[FileType]parser.FileType{
-	FileTypeCSV:           parser.CSV,
-	FileTypeTSV:           parser.TSV,
-	FileTypeLTSV:          parser.LTSV,
-	FileTypeParquet:       parser.Parquet,
-	FileTypeXLSX:          parser.XLSX,
-	FileTypeCSVGZ:         parser.CSVGZ,
-	FileTypeTSVGZ:         parser.TSVGZ,
-	FileTypeLTSVGZ:        parser.LTSVGZ,
-	FileTypeParquetGZ:     parser.ParquetGZ,
-	FileTypeCSVBZ2:        parser.CSVBZ2,
-	FileTypeTSVBZ2:        parser.TSVBZ2,
-	FileTypeLTSVBZ2:       parser.LTSVBZ2,
-	FileTypeParquetBZ2:    parser.ParquetBZ2,
-	FileTypeCSVXZ:         parser.CSVXZ,
-	FileTypeTSVXZ:         parser.TSVXZ,
-	FileTypeLTSVXZ:        parser.LTSVXZ,
-	FileTypeParquetXZ:     parser.ParquetXZ,
-	FileTypeCSVZSTD:       parser.CSVZSTD,
-	FileTypeTSVZSTD:       parser.TSVZSTD,
-	FileTypeLTSVZSTD:      parser.LTSVZSTD,
-	FileTypeParquetZSTD:   parser.ParquetZSTD,
-	FileTypeXLSXGZ:        parser.XLSXGZ,
-	FileTypeXLSXBZ2:       parser.XLSXBZ2,
-	FileTypeXLSXXZ:        parser.XLSXXZ,
-	FileTypeXLSXZSTD:      parser.XLSXZSTD,
-	FileTypeCSVZLIB:       parser.CSVZLIB,
-	FileTypeTSVZLIB:       parser.TSVZLIB,
-	FileTypeLTSVZLIB:      parser.LTSVZLIB,
-	FileTypeParquetZLIB:   parser.ParquetZLIB,
-	FileTypeXLSXZLIB:      parser.XLSXZLIB,
-	FileTypeCSVSNAPPY:     parser.CSVSNAPPY,
-	FileTypeTSVSNAPPY:     parser.TSVSNAPPY,
-	FileTypeLTSVSNAPPY:    parser.LTSVSNAPPY,
-	FileTypeParquetSNAPPY: parser.ParquetSNAPPY,
-	FileTypeXLSXSNAPPY:    parser.XLSXSNAPPY,
-	FileTypeCSVS2:         parser.CSVS2,
-	FileTypeTSVS2:         parser.TSVS2,
-	FileTypeLTSVS2:        parser.LTSVS2,
-	FileTypeParquetS2:     parser.ParquetS2,
-	FileTypeXLSXS2:        parser.XLSXS2,
-	FileTypeCSVLZ4:        parser.CSVLZ4,
-	FileTypeTSVLZ4:        parser.TSVLZ4,
-	FileTypeLTSVLZ4:       parser.LTSVLZ4,
-	FileTypeParquetLZ4:    parser.ParquetLZ4,
-	FileTypeXLSXLZ4:       parser.XLSXLZ4,
-	FileTypeJSON:          parser.JSON,
-	FileTypeJSONL:         parser.JSONL,
-	FileTypeJSONGZ:        parser.JSONGZ,
-	FileTypeJSONBZ2:       parser.JSONBZ2,
-	FileTypeJSONXZ:        parser.JSONXZ,
-	FileTypeJSONZSTD:      parser.JSONZSTD,
-	FileTypeJSONZLIB:      parser.JSONZLIB,
-	FileTypeJSONSNAPPY:    parser.JSONSNAPPY,
-	FileTypeJSONS2:        parser.JSONS2,
-	FileTypeJSONLZ4:       parser.JSONLZ4,
-	FileTypeJSONLGZ:       parser.JSONLGZ,
-	FileTypeJSONLBZ2:      parser.JSONLBZ2,
-	FileTypeJSONLXZ:       parser.JSONLXZ,
-	FileTypeJSONLZSTD:     parser.JSONLZSTD,
-	FileTypeJSONLZLIB:     parser.JSONLZLIB,
-	FileTypeJSONLSNAPPY:   parser.JSONLSNAPPY,
-	FileTypeJSONLS2:       parser.JSONLS2,
-	FileTypeJSONLLZ4:      parser.JSONLLZ4,
+	FileTypeCSV:     parser.CSV,
+	FileTypeTSV:     parser.TSV,
+	FileTypeLTSV:    parser.LTSV,
+	FileTypeParquet: parser.Parquet,
+	FileTypeXLSX:    parser.XLSX,
+	FileTypeJSON:    parser.JSON,
+	FileTypeJSONL:   parser.JSONL,
 }
 
 var parserToFilesqlFileTypes = reverseParserFileTypes(filesqlToParserFileTypes)
@@ -93,9 +40,11 @@ func parserFileType(ft FileType) parser.FileType {
 	return parser.Unsupported
 }
 
-// filesqlFileType converts parser.FileType to filesql.FileType.
+// filesqlFileType converts parser.FileType to filesql.FileType, folding any
+// compression the parser's constant carries away: parser.CSVGZ answers
+// FileTypeCSV, because FileType names the format only.
 func filesqlFileType(ft parser.FileType) FileType {
-	if filesqlType, ok := parserToFilesqlFileTypes[ft]; ok {
+	if filesqlType, ok := parserToFilesqlFileTypes[parser.BaseFileType(ft)]; ok {
 		return filesqlType
 	}
 
@@ -121,7 +70,7 @@ func parserColumnType(ct parser.ColumnType) columnType {
 func parseWithParser(reader io.Reader, fileType FileType, tableName string) (*table, error) {
 	// Strip a Unicode BOM (and transcode UTF-16) before the text parser sees it,
 	// matching the streaming path; binary formats keep their raw bytes.
-	if isTextBaseType(fileType.baseType()) {
+	if isTextBaseType(fileType) {
 		reader = decodeTextReader(reader)
 	}
 	result, err := parser.Parse(reader, parserFileType(fileType))

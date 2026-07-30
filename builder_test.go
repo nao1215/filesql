@@ -87,6 +87,61 @@ func TestDBBuilder_AddFS(t *testing.T) {
 	})
 }
 
+// TestDBBuilder_AddFS_Compressed loads a genuinely compressed file out of an
+// fs.FS. AddFS hands the file over still wrapped, so the codec has to travel
+// alongside the format on the reader input: the file name is the only place it
+// is written down, and nothing downstream sees that name.
+func TestDBBuilder_AddFS_Compressed(t *testing.T) {
+	t.Parallel()
+
+	csvData := "name,age\nAlice,30\nBob,25\n"
+
+	codecs := []struct {
+		compression CompressionType
+		ext         string
+	}{
+		{CompressionGZ, ".gz"},
+		{CompressionXZ, ".xz"},
+		{CompressionZSTD, ".zst"},
+		{CompressionZLIB, ".z"},
+		{CompressionSNAPPY, ".snappy"},
+		{CompressionS2, ".s2"},
+		{CompressionLZ4, ".lz4"},
+	}
+
+	for _, codec := range codecs {
+		t.Run(codec.compression.String(), func(t *testing.T) {
+			t.Parallel()
+
+			var compressed bytes.Buffer
+			w, closeWriter, err := NewCompressionHandler(codec.compression).CreateWriter(&compressed)
+			require.NoError(t, err)
+			_, err = w.Write([]byte(csvData))
+			require.NoError(t, err)
+			require.NoError(t, closeWriter())
+
+			mockFS := fstest.MapFS{
+				"users.csv" + codec.ext: &fstest.MapFile{Data: compressed.Bytes()},
+			}
+
+			ctx := context.Background()
+			validated, err := NewBuilder().AddFS(mockFS).Build(ctx)
+			require.NoError(t, err, "Build() failed for %s", codec.compression)
+
+			db, err := validated.Open(ctx)
+			require.NoError(t, err, "Open() failed for %s", codec.compression)
+			defer db.Close()
+
+			var name string
+			var age int
+			err = db.QueryRowContext(ctx, "SELECT name, age FROM users ORDER BY age").Scan(&name, &age)
+			require.NoError(t, err, "query failed for %s", codec.compression)
+			assert.Equal(t, "Bob", name)
+			assert.Equal(t, 25, age)
+		})
+	}
+}
+
 func TestDBBuilder_AddReader(t *testing.T) {
 	t.Parallel()
 
@@ -117,10 +172,10 @@ func TestDBBuilder_AddReader(t *testing.T) {
 		data := []byte{} // Empty data for test
 		reader := bytes.NewReader(data)
 
-		builder := NewBuilder().AddReader(reader, "logs", FileTypeCSVGZ)
+		builder := NewBuilder().AddReader(reader, "logs", FileTypeCSV, WithCompression(CompressionGZ))
 		assert.Len(t, builder.readers, 1, "should have 1 reader")
-		assert.Equal(t, FileTypeCSVGZ, builder.readers[0].fileType, "file type should be CSV.GZ")
-		// Regular CSV type for testing
+		assert.Equal(t, FileTypeCSV, builder.readers[0].fileType, "file type should be CSV")
+		assert.Equal(t, CompressionGZ, builder.readers[0].compression, "compression should be gzip")
 	})
 
 	t.Run("add multiple readers", func(t *testing.T) {

@@ -79,9 +79,31 @@ type readerInput struct {
 	tableName string
 	// fileType specifies the file format using domain/model types
 	fileType FileType
+	// compression is the codec wrapping the reader, CompressionNone when the
+	// bytes are already the format.
+	compression CompressionType
 	// closer is an optional closer for the reader (set when the reader was opened internally, e.g. from AddFS).
 	// User-provided readers (from AddReader) do not set this field.
 	closer io.Closer
+}
+
+// ReaderOption configures one reader added with AddReader.
+//
+// It is the place per-source settings go. A reader has no path, so anything a
+// file's name would have answered — which codec wraps it — has to be stated,
+// and stating it here keeps AddReader's ordinary three-argument call unchanged.
+type ReaderOption func(*readerInput)
+
+// WithCompression declares the codec wrapping a reader passed to AddReader.
+//
+// Example:
+//
+//	gz, _ := os.Open("users.csv.gz")
+//	builder.AddReader(gz, "users", filesql.FileTypeCSV, filesql.WithCompression(filesql.CompressionGZ))
+func WithCompression(compression CompressionType) ReaderOption {
+	return func(input *readerInput) {
+		input.compression = compression
+	}
 }
 
 // NewBuilder creates a new database builder.
@@ -147,19 +169,31 @@ func (b *DBBuilder) AddPaths(paths ...string) *DBBuilder {
 //   - reader: Any io.Reader (file, bytes.Buffer, http.Response.Body, etc.)
 //   - tableName: Name for the SQL table (e.g., "users")
 //   - fileType: Data format (FileTypeCSV, FileTypeTSV, FileTypeLTSV, etc.)
+//   - opts: Per-source settings, such as WithCompression
+//
+// The reader's bytes are read as fileType directly. When they are wrapped in a
+// codec, say so with WithCompression — a reader has no path to infer it from.
 //
 // Example:
 //
 //	resp, _ := http.Get("https://example.com/data.csv")
 //	builder.AddReader(resp.Body, "remote_data", FileTypeCSV)
 //
+//	gz, _ := os.Open("users.csv.gz")
+//	builder.AddReader(gz, "users", FileTypeCSV, WithCompression(CompressionGZ))
+//
 // Returns self for chaining.
-func (b *DBBuilder) AddReader(reader io.Reader, tableName string, fileType FileType) *DBBuilder {
-	b.readers = append(b.readers, readerInput{
-		reader:    reader,
-		tableName: tableName,
-		fileType:  fileType,
-	})
+func (b *DBBuilder) AddReader(reader io.Reader, tableName string, fileType FileType, opts ...ReaderOption) *DBBuilder {
+	input := readerInput{
+		reader:      reader,
+		tableName:   tableName,
+		fileType:    fileType,
+		compression: CompressionNone,
+	}
+	for _, opt := range opts {
+		opt(&input)
+	}
+	b.readers = append(b.readers, input)
 	return b
 }
 

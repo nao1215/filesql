@@ -153,7 +153,7 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db *sql.DB,
 
 	// Create file model to determine type and table name
 	fileModel := newFile(filePath)
-	baseFileType := fileModel.getFileType().baseType()
+	baseFileType := fileModel.getFileType()
 	sp.logger.Debug("detected file type", "path", filePath, "type", baseFileType.String())
 
 	// Create decompressed reader if needed
@@ -183,9 +183,10 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db *sql.DB,
 	tableName := sanitizeTableName(tableFromFilePath(filePath))
 	sp.logger.Debug("streaming file to table", "path", filePath, logKeyTable, tableName, "type", baseFileType.String())
 	readerInput := readerInput{
-		reader:    reader, // Use decompressed reader
-		tableName: tableName,
-		fileType:  baseFileType,
+		reader:      reader, // Use decompressed reader
+		tableName:   tableName,
+		fileType:    baseFileType,
+		compression: CompressionNone, // already unwrapped above
 	}
 	return sp.streamReaderToDatabase(ctx, db, readerInput)
 }
@@ -276,7 +277,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 	// When replacing, createTableFromChunk drops the old table before recreating it.
 
 	// Create streaming parser for chunked processing
-	parser := newStreamingParser(input.fileType, input.tableName, sp.chunkSize)
+	parser := newStreamingParser(input.fileType, input.compression, input.tableName, sp.chunkSize)
 	parser.malformedRowPolicy = sp.malformedRowPolicy
 
 	// Initialize the table schema (we need to peek at the first chunk to get headers)
@@ -459,7 +460,7 @@ func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, 
 // createEmptyTable creates an empty table for header-only files
 func (sp *streamProcessor) createEmptyTable(ctx context.Context, db *sql.DB, input readerInput) error {
 	// Parse just the header to get column information
-	tempParser := newStreamingParser(input.fileType, input.tableName, 1)
+	tempParser := newStreamingParser(input.fileType, input.compression, input.tableName, 1)
 	tempParser.malformedRowPolicy = sp.malformedRowPolicy
 	tempTable, err := tempParser.parseFromReader(input.reader)
 	if err != nil {

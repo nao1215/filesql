@@ -1316,7 +1316,7 @@ func Test_FileFormatDetection(t *testing.T) {
 		{
 			name:         "Compressed CSV",
 			fileName:     "test.csv.gz",
-			expectedType: FileTypeCSVGZ,
+			expectedType: FileTypeCSV,
 			isSupported:  true,
 		},
 		{
@@ -1354,7 +1354,7 @@ func Test_FileFormatDetection(t *testing.T) {
 			assert.Equal(t, tc.isSupported, isSupportedFile(tc.fileName), "Expected supported=%v, got %v", tc.isSupported, isSupportedFile(tc.fileName))
 
 			// Test type-specific methods
-			switch tc.expectedType.baseType() {
+			switch tc.expectedType {
 			case FileTypeCSV:
 				assert.True(t, file.isCSV(), "isCSV() should return true for CSV file")
 				assert.False(t, file.isTSV() || file.isLTSV(), "Type methods should be exclusive")

@@ -3,13 +3,14 @@ package filesql
 import (
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/nao1215/filesql/parser"
 )
 
-// FileType represents supported file types including compression variants
+// FileType names an input format. It says nothing about compression: a
+// gzipped CSV and a plain CSV are both FileTypeCSV, and the codec wrapping a
+// stream is stated separately with [WithCompression].
 type FileType int
 
 // String returns a human-readable string representation of the FileType.
@@ -35,130 +36,10 @@ const (
 	FileTypeParquet
 	// FileTypeXLSX represents Excel XLSX file type
 	FileTypeXLSX
-	// FileTypeCSVGZ represents gzip-compressed CSV file type
-	FileTypeCSVGZ
-	// FileTypeTSVGZ represents gzip-compressed TSV file type
-	FileTypeTSVGZ
-	// FileTypeLTSVGZ represents gzip-compressed LTSV file type
-	FileTypeLTSVGZ
-	// FileTypeParquetGZ represents gzip-compressed Parquet file type
-	FileTypeParquetGZ
-	// FileTypeCSVBZ2 represents bzip2-compressed CSV file type
-	FileTypeCSVBZ2
-	// FileTypeTSVBZ2 represents bzip2-compressed TSV file type
-	FileTypeTSVBZ2
-	// FileTypeLTSVBZ2 represents bzip2-compressed LTSV file type
-	FileTypeLTSVBZ2
-	// FileTypeParquetBZ2 represents bzip2-compressed Parquet file type
-	FileTypeParquetBZ2
-	// FileTypeCSVXZ represents xz-compressed CSV file type
-	FileTypeCSVXZ
-	// FileTypeTSVXZ represents xz-compressed TSV file type
-	FileTypeTSVXZ
-	// FileTypeLTSVXZ represents xz-compressed LTSV file type
-	FileTypeLTSVXZ
-	// FileTypeParquetXZ represents xz-compressed Parquet file type
-	FileTypeParquetXZ
-	// FileTypeCSVZSTD represents zstd-compressed CSV file type
-	FileTypeCSVZSTD
-	// FileTypeTSVZSTD represents zstd-compressed TSV file type
-	FileTypeTSVZSTD
-	// FileTypeLTSVZSTD represents zstd-compressed LTSV file type
-	FileTypeLTSVZSTD
-	// FileTypeParquetZSTD represents zstd-compressed Parquet file type
-	FileTypeParquetZSTD
-	// FileTypeXLSXGZ represents gzip-compressed Excel XLSX file type
-	FileTypeXLSXGZ
-	// FileTypeXLSXBZ2 represents bzip2-compressed Excel XLSX file type
-	FileTypeXLSXBZ2
-	// FileTypeXLSXXZ represents xz-compressed Excel XLSX file type
-	FileTypeXLSXXZ
-	// FileTypeXLSXZSTD represents zstd-compressed Excel XLSX file type
-	FileTypeXLSXZSTD
-
-	// FileTypeCSVZLIB represents zlib-compressed CSV file type
-	FileTypeCSVZLIB
-	// FileTypeTSVZLIB represents zlib-compressed TSV file type
-	FileTypeTSVZLIB
-	// FileTypeLTSVZLIB represents zlib-compressed LTSV file type
-	FileTypeLTSVZLIB
-	// FileTypeParquetZLIB represents zlib-compressed Parquet file type
-	FileTypeParquetZLIB
-	// FileTypeXLSXZLIB represents zlib-compressed XLSX file type
-	FileTypeXLSXZLIB
-
-	// FileTypeCSVSNAPPY represents snappy-compressed CSV file type
-	FileTypeCSVSNAPPY
-	// FileTypeTSVSNAPPY represents snappy-compressed TSV file type
-	FileTypeTSVSNAPPY
-	// FileTypeLTSVSNAPPY represents snappy-compressed LTSV file type
-	FileTypeLTSVSNAPPY
-	// FileTypeParquetSNAPPY represents snappy-compressed Parquet file type
-	FileTypeParquetSNAPPY
-	// FileTypeXLSXSNAPPY represents snappy-compressed XLSX file type
-	FileTypeXLSXSNAPPY
-
-	// FileTypeCSVS2 represents s2-compressed CSV file type
-	FileTypeCSVS2
-	// FileTypeTSVS2 represents s2-compressed TSV file type
-	FileTypeTSVS2
-	// FileTypeLTSVS2 represents s2-compressed LTSV file type
-	FileTypeLTSVS2
-	// FileTypeParquetS2 represents s2-compressed Parquet file type
-	FileTypeParquetS2
-	// FileTypeXLSXS2 represents s2-compressed XLSX file type
-	FileTypeXLSXS2
-
-	// FileTypeCSVLZ4 represents lz4-compressed CSV file type
-	FileTypeCSVLZ4
-	// FileTypeTSVLZ4 represents lz4-compressed TSV file type
-	FileTypeTSVLZ4
-	// FileTypeLTSVLZ4 represents lz4-compressed LTSV file type
-	FileTypeLTSVLZ4
-	// FileTypeParquetLZ4 represents lz4-compressed Parquet file type
-	FileTypeParquetLZ4
-	// FileTypeXLSXLZ4 represents lz4-compressed XLSX file type
-	FileTypeXLSXLZ4
-
 	// FileTypeJSON represents JSON file type
 	FileTypeJSON
 	// FileTypeJSONL represents JSON Lines file type
 	FileTypeJSONL
-
-	// FileTypeJSONGZ represents gzip-compressed JSON file type
-	FileTypeJSONGZ
-	// FileTypeJSONBZ2 represents bzip2-compressed JSON file type
-	FileTypeJSONBZ2
-	// FileTypeJSONXZ represents xz-compressed JSON file type
-	FileTypeJSONXZ
-	// FileTypeJSONZSTD represents zstd-compressed JSON file type
-	FileTypeJSONZSTD
-	// FileTypeJSONZLIB represents zlib-compressed JSON file type
-	FileTypeJSONZLIB
-	// FileTypeJSONSNAPPY represents snappy-compressed JSON file type
-	FileTypeJSONSNAPPY
-	// FileTypeJSONS2 represents s2-compressed JSON file type
-	FileTypeJSONS2
-	// FileTypeJSONLZ4 represents lz4-compressed JSON file type
-	FileTypeJSONLZ4
-
-	// FileTypeJSONLGZ represents gzip-compressed JSONL file type
-	FileTypeJSONLGZ
-	// FileTypeJSONLBZ2 represents bzip2-compressed JSONL file type
-	FileTypeJSONLBZ2
-	// FileTypeJSONLXZ represents xz-compressed JSONL file type
-	FileTypeJSONLXZ
-	// FileTypeJSONLZSTD represents zstd-compressed JSONL file type
-	FileTypeJSONLZSTD
-	// FileTypeJSONLZLIB represents zlib-compressed JSONL file type
-	FileTypeJSONLZLIB
-	// FileTypeJSONLSNAPPY represents snappy-compressed JSONL file type
-	FileTypeJSONLSNAPPY
-	// FileTypeJSONLS2 represents s2-compressed JSONL file type
-	FileTypeJSONLS2
-	// FileTypeJSONLLZ4 represents lz4-compressed JSONL file type
-	FileTypeJSONLLZ4
-
 	// FileTypeACH represents ACH (NACHA) file type
 	FileTypeACH
 	// FileTypeFedWire represents Fedwire file type
@@ -237,7 +118,11 @@ type chunkProcessor func(chunk *tableChunk) error
 
 // streamingParser represents a parser that can read from io.Reader directly
 type streamingParser struct {
-	fileType    FileType
+	fileType FileType
+	// compression is the codec wrapping the reader. A reader carries no path,
+	// so the caller states it; files answer CompressionNone because the file
+	// path is unwrapped before the parser sees it.
+	compression CompressionType
 	tableName   string
 	chunkSize   ChunkSize
 	memoryPool  *MemoryPool  // Pool for reusable memory allocations
@@ -288,7 +173,8 @@ func isSupportedExtension(ext string) bool {
 	return isSupportedFile("file" + ext)
 }
 
-// extension returns the file extension for the FileType
+// extension returns the file extension for the FileType. The codec's suffix is
+// not part of it: a gzipped CSV is FileTypeCSV plus CompressionGZ.Extension().
 func (ft FileType) extension() string {
 	switch ft {
 	case FileTypeCSV:
@@ -301,122 +187,10 @@ func (ft FileType) extension() string {
 		return extParquet
 	case FileTypeXLSX:
 		return extXLSX
-	case FileTypeCSVGZ:
-		return extCSV + extGZ
-	case FileTypeTSVGZ:
-		return extTSV + extGZ
-	case FileTypeLTSVGZ:
-		return extLTSV + extGZ
-	case FileTypeParquetGZ:
-		return extParquet + extGZ
-	case FileTypeCSVBZ2:
-		return extCSV + extBZ2
-	case FileTypeTSVBZ2:
-		return extTSV + extBZ2
-	case FileTypeLTSVBZ2:
-		return extLTSV + extBZ2
-	case FileTypeParquetBZ2:
-		return extParquet + extBZ2
-	case FileTypeCSVXZ:
-		return extCSV + extXZ
-	case FileTypeTSVXZ:
-		return extTSV + extXZ
-	case FileTypeLTSVXZ:
-		return extLTSV + extXZ
-	case FileTypeParquetXZ:
-		return extParquet + extXZ
-	case FileTypeCSVZSTD:
-		return extCSV + extZSTD
-	case FileTypeTSVZSTD:
-		return extTSV + extZSTD
-	case FileTypeLTSVZSTD:
-		return extLTSV + extZSTD
-	case FileTypeParquetZSTD:
-		return extParquet + extZSTD
-	case FileTypeXLSXGZ:
-		return extXLSX + extGZ
-	case FileTypeXLSXBZ2:
-		return extXLSX + extBZ2
-	case FileTypeXLSXXZ:
-		return extXLSX + extXZ
-	case FileTypeXLSXZSTD:
-		return extXLSX + extZSTD
-	case FileTypeCSVZLIB:
-		return extCSV + extZLIB
-	case FileTypeTSVZLIB:
-		return extTSV + extZLIB
-	case FileTypeLTSVZLIB:
-		return extLTSV + extZLIB
-	case FileTypeParquetZLIB:
-		return extParquet + extZLIB
-	case FileTypeXLSXZLIB:
-		return extXLSX + extZLIB
-	case FileTypeCSVSNAPPY:
-		return extCSV + extSNAPPY
-	case FileTypeTSVSNAPPY:
-		return extTSV + extSNAPPY
-	case FileTypeLTSVSNAPPY:
-		return extLTSV + extSNAPPY
-	case FileTypeParquetSNAPPY:
-		return extParquet + extSNAPPY
-	case FileTypeXLSXSNAPPY:
-		return extXLSX + extSNAPPY
-	case FileTypeCSVS2:
-		return extCSV + extS2
-	case FileTypeTSVS2:
-		return extTSV + extS2
-	case FileTypeLTSVS2:
-		return extLTSV + extS2
-	case FileTypeParquetS2:
-		return extParquet + extS2
-	case FileTypeXLSXS2:
-		return extXLSX + extS2
-	case FileTypeCSVLZ4:
-		return extCSV + extLZ4
-	case FileTypeTSVLZ4:
-		return extTSV + extLZ4
-	case FileTypeLTSVLZ4:
-		return extLTSV + extLZ4
-	case FileTypeParquetLZ4:
-		return extParquet + extLZ4
-	case FileTypeXLSXLZ4:
-		return extXLSX + extLZ4
 	case FileTypeJSON:
 		return extJSON
 	case FileTypeJSONL:
 		return extJSONL
-	case FileTypeJSONGZ:
-		return extJSON + extGZ
-	case FileTypeJSONBZ2:
-		return extJSON + extBZ2
-	case FileTypeJSONXZ:
-		return extJSON + extXZ
-	case FileTypeJSONZSTD:
-		return extJSON + extZSTD
-	case FileTypeJSONZLIB:
-		return extJSON + extZLIB
-	case FileTypeJSONSNAPPY:
-		return extJSON + extSNAPPY
-	case FileTypeJSONS2:
-		return extJSON + extS2
-	case FileTypeJSONLZ4:
-		return extJSON + extLZ4
-	case FileTypeJSONLGZ:
-		return extJSONL + extGZ
-	case FileTypeJSONLBZ2:
-		return extJSONL + extBZ2
-	case FileTypeJSONLXZ:
-		return extJSONL + extXZ
-	case FileTypeJSONLZSTD:
-		return extJSONL + extZSTD
-	case FileTypeJSONLZLIB:
-		return extJSONL + extZLIB
-	case FileTypeJSONLSNAPPY:
-		return extJSONL + extSNAPPY
-	case FileTypeJSONLS2:
-		return extJSONL + extS2
-	case FileTypeJSONLLZ4:
-		return extJSONL + extLZ4
 	case FileTypeACH:
 		return extACH
 	case FileTypeFedWire:
@@ -426,28 +200,10 @@ func (ft FileType) extension() string {
 	}
 }
 
-// baseType returns the base file type without compression
-func (ft FileType) baseType() FileType {
-	switch ft {
-	case FileTypeACH:
-		return FileTypeACH
-	case FileTypeFedWire:
-		return FileTypeFedWire
-	default:
-		return filesqlFileType(parser.BaseFileType(parserFileType(ft)))
-	}
-}
-
 // getFileExtension returns the file extension for a given FileType
 // Deprecated: Use FileType.extension() method instead
 func getFileExtension(fileType FileType) string {
 	return fileType.extension()
-}
-
-// getBaseFileType returns the base file type without compression
-// Deprecated: Use FileType.baseType() method instead
-func getBaseFileType(fileType FileType) FileType {
-	return fileType.baseType()
 }
 
 // getPath returns file path
@@ -462,22 +218,22 @@ func (f *file) getFileType() FileType {
 
 // isCSV returns true if the file is CSV format
 func (f *file) isCSV() bool {
-	return f.getFileType().baseType() == FileTypeCSV
+	return f.getFileType() == FileTypeCSV
 }
 
 // isTSV returns true if the file is TSV format
 func (f *file) isTSV() bool {
-	return f.getFileType().baseType() == FileTypeTSV
+	return f.getFileType() == FileTypeTSV
 }
 
 // isLTSV returns true if the file is LTSV format
 func (f *file) isLTSV() bool {
-	return f.getFileType().baseType() == FileTypeLTSV
+	return f.getFileType() == FileTypeLTSV
 }
 
 // isXLSX returns true if the file is XLSX format
 func (f *file) isXLSX() bool {
-	return f.getFileType().baseType() == FileTypeXLSX
+	return f.getFileType() == FileTypeXLSX
 }
 
 // isCompressed returns true if file is compressed
@@ -525,17 +281,20 @@ func (f *file) isLZ4() bool {
 	return strings.HasSuffix(f.path, extLZ4)
 }
 
-// toTable converts file to table structure
+// toTable converts file to table structure.
+//
+// The reader is opened through openReader so the codec is unwrapped here. The
+// parser is handed the format's own bytes, because fileType names the format
+// only and no longer tells the parser what to decompress.
 func (f *file) toTable() (*table, error) {
-	// Open file for reading
-	file, err := os.Open(f.path)
+	reader, closeReader, err := f.openReader()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file %s: %w", f.path, err)
 	}
-	defer file.Close()
+	defer handleCloseError(closeReader)()
 
 	tableName := sanitizeTableName(tableFromFilePath(f.path))
-	return parseWithParser(file, f.fileType, tableName)
+	return parseWithParser(reader, f.fileType, tableName)
 }
 
 // detectFileType detects file type from extension, considering compressed files

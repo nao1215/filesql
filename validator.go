@@ -55,7 +55,7 @@ func (v *validator) validateReader(reader any, tableName string, fileType FileTy
 	// For specific readers where we can safely peek without consuming, validate empty content
 	// This provides format-specific error messages at Build time
 	if stringReader, ok := reader.(*strings.Reader); ok && stringReader.Len() == 0 {
-		switch fileType.baseType() {
+		switch fileType {
 		case FileTypeCSV:
 			return fmt.Errorf("%w: empty CSV data", ErrEmptyData)
 		case FileTypeTSV:

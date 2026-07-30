@@ -507,7 +507,7 @@ func TestStreamingParser_ParseXLSXStream_MemoryOptimized(t *testing.T) {
 		// Create a small test XLSX
 		buf := createTestXLSX(t, 10, 3)
 
-		parser := newStreamingParser(FileTypeXLSX, "test_table", 5)
+		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "test_table", 5)
 		table, err := parser.parseXLSXStream(buf)
 
 		require.NoError(t, err)
@@ -520,7 +520,7 @@ func TestStreamingParser_ParseXLSXStream_MemoryOptimized(t *testing.T) {
 	t.Run("memory limit enforcement", func(t *testing.T) {
 		t.Parallel()
 		// Create parser with very restrictive memory limit
-		parser := newStreamingParser(FileTypeXLSX, "test_table", 1000)
+		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "test_table", 1000)
 		parser.memoryLimit = NewMemoryLimit(1) // 1MB limit - very restrictive
 
 		// Create a small XLSX file
@@ -540,7 +540,7 @@ func TestStreamingParser_ParseXLSXStream_MemoryOptimized(t *testing.T) {
 
 	t.Run("memory pool reuse", func(t *testing.T) {
 		t.Parallel()
-		parser := newStreamingParser(FileTypeXLSX, "test_table", 5)
+		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "test_table", 5)
 
 		// Process multiple XLSX files to test pool reuse
 		for range 3 {
@@ -568,7 +568,7 @@ func TestStreamingParser_ProcessXLSXInChunks_MemoryOptimized(t *testing.T) {
 		// Create XLSX with more rows than chunk size
 		buf := createTestXLSX(t, 25, 3) // 25 rows, 3 columns
 
-		parser := newStreamingParser(FileTypeXLSX, "test_table", 5) // 5 rows per chunk
+		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "test_table", 5) // 5 rows per chunk
 
 		var processedChunks int
 		var totalRecords int
@@ -601,7 +601,7 @@ func TestStreamingParser_ProcessXLSXInChunks_MemoryOptimized(t *testing.T) {
 
 		buf := createTestXLSX(t, 20, 3)
 
-		parser := newStreamingParser(FileTypeXLSX, "test_table", 10)
+		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "test_table", 10)
 		parser.memoryLimit = NewMemoryLimit(5) // Very small limit
 
 		var processedChunks int
@@ -627,7 +627,7 @@ func TestStreamingParser_ProcessXLSXInChunks_MemoryOptimized(t *testing.T) {
 		// Create XLSX with headers only
 		buf := createTestXLSX(t, 0, 3) // 0 data rows
 
-		parser := newStreamingParser(FileTypeXLSX, "test_table", 5)
+		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "test_table", 5)
 
 		var processedChunks int
 		var lastChunk *tableChunk
@@ -651,7 +651,7 @@ func TestStreamingParser_ProcessXLSXInChunks_MemoryOptimized(t *testing.T) {
 		t.Parallel()
 		buf := createTestXLSX(t, 10, 2)
 
-		parser := newStreamingParser(FileTypeXLSX, "test_table", 5)
+		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "test_table", 5)
 
 		err := parser.ProcessInChunks(buf, func(_ *tableChunk) error {
 			return assert.AnError // Return an error to test error handling
@@ -667,7 +667,7 @@ func TestStreamingParser_MemoryPoolIntegration(t *testing.T) {
 
 	t.Run("memory pool usage during XLSX processing", func(t *testing.T) {
 		t.Parallel()
-		parser := newStreamingParser(FileTypeXLSX, "test_table", 10)
+		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "test_table", 10)
 
 		// Verify memory pool is properly initialized
 		assert.NotNil(t, parser.memoryPool, "memory pool should be initialized")
@@ -689,7 +689,7 @@ func TestStreamingParser_MemoryPoolIntegration(t *testing.T) {
 
 	t.Run("memory limit configuration", func(t *testing.T) {
 		t.Parallel()
-		parser := newStreamingParser(FileTypeXLSX, "test_table", 10)
+		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "test_table", 10)
 
 		// Test memory limit operations
 		assert.True(t, parser.memoryLimit.IsEnabled(), "memory limit should be enabled by default")
@@ -712,7 +712,7 @@ func TestStreamingParser_XLSXErrorHandling(t *testing.T) {
 
 	t.Run("invalid XLSX data", func(t *testing.T) {
 		t.Parallel()
-		parser := newStreamingParser(FileTypeXLSX, "test_table", 10)
+		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "test_table", 10)
 
 		// Test with invalid XLSX data
 		invalidData := strings.NewReader("not an xlsx file")
@@ -724,7 +724,7 @@ func TestStreamingParser_XLSXErrorHandling(t *testing.T) {
 
 	t.Run("empty reader", func(t *testing.T) {
 		t.Parallel()
-		parser := newStreamingParser(FileTypeXLSX, "test_table", 10)
+		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "test_table", 10)
 
 		// Test with empty reader
 		emptyReader := strings.NewReader("")
@@ -780,7 +780,7 @@ func BenchmarkStreamingParser_XLSXProcessing(b *testing.B) {
 	testData := createTestData()
 
 	b.Run("parseXLSXStream", func(b *testing.B) {
-		parser := newStreamingParser(FileTypeXLSX, "bench_table", 100)
+		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "bench_table", 100)
 
 		b.ResetTimer()
 		for range b.N {
@@ -795,7 +795,7 @@ func BenchmarkStreamingParser_XLSXProcessing(b *testing.B) {
 	})
 
 	b.Run("processXLSXInChunks", func(b *testing.B) {
-		parser := newStreamingParser(FileTypeXLSX, "bench_table", 100)
+		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "bench_table", 100)
 
 		b.ResetTimer()
 		for range b.N {

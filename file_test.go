@@ -16,95 +16,128 @@ import (
 func TestNewFile(t *testing.T) {
 	t.Parallel()
 
+	// FileType names the format, and the codec is a separate axis. A compressed
+	// path answers the same FileType as its uncompressed form, and the codec is
+	// read off the same path by the compression factory.
 	tests := []struct {
-		name     string
-		path     string
-		expected FileType
+		name        string
+		path        string
+		expected    FileType
+		compression CompressionType
 	}{
 		{
-			name:     "CSV file",
-			path:     "test.csv",
-			expected: FileTypeCSV,
+			name:        "CSV file",
+			path:        "test.csv",
+			expected:    FileTypeCSV,
+			compression: CompressionNone,
 		},
 		{
-			name:     "TSV file",
-			path:     "test.tsv",
-			expected: FileTypeTSV,
+			name:        "TSV file",
+			path:        "test.tsv",
+			expected:    FileTypeTSV,
+			compression: CompressionNone,
 		},
 		{
-			name:     "LTSV file",
-			path:     "test.ltsv",
-			expected: FileTypeLTSV,
+			name:        "LTSV file",
+			path:        "test.ltsv",
+			expected:    FileTypeLTSV,
+			compression: CompressionNone,
 		},
 		{
-			name:     "Compressed CSV file",
-			path:     "test.csv.gz",
-			expected: FileTypeCSVGZ,
+			name:        "Compressed CSV file",
+			path:        "test.csv.gz",
+			expected:    FileTypeCSV,
+			compression: CompressionGZ,
 		},
 		{
-			name:     "Compressed TSV file",
-			path:     "test.tsv.bz2",
-			expected: FileTypeTSVBZ2,
+			name:        "Compressed TSV file",
+			path:        "test.tsv.bz2",
+			expected:    FileTypeTSV,
+			compression: CompressionBZ2,
 		},
 		{
-			name:     "Compressed LTSV file",
-			path:     "test.ltsv.xz",
-			expected: FileTypeLTSVXZ,
+			name:        "Compressed LTSV file",
+			path:        "test.ltsv.xz",
+			expected:    FileTypeLTSV,
+			compression: CompressionXZ,
 		},
 		{
-			name:     "Zstd compressed CSV file",
-			path:     "test.csv.zst",
-			expected: FileTypeCSVZSTD,
+			name:        "Zstd compressed CSV file",
+			path:        "test.csv.zst",
+			expected:    FileTypeCSV,
+			compression: CompressionZSTD,
 		},
 		{
-			name:     "XLSX file",
-			path:     "test.xlsx",
-			expected: FileTypeXLSX,
+			name:        "XLSX file",
+			path:        "test.xlsx",
+			expected:    FileTypeXLSX,
+			compression: CompressionNone,
 		},
 		{
-			name:     "Compressed XLSX file with gzip",
-			path:     "test.xlsx.gz",
-			expected: FileTypeXLSXGZ,
+			name:        "Compressed XLSX file with gzip",
+			path:        "test.xlsx.gz",
+			expected:    FileTypeXLSX,
+			compression: CompressionGZ,
 		},
 		{
-			name:     "Compressed XLSX file with bzip2",
-			path:     "test.xlsx.bz2",
-			expected: FileTypeXLSXBZ2,
+			name:        "Compressed XLSX file with bzip2",
+			path:        "test.xlsx.bz2",
+			expected:    FileTypeXLSX,
+			compression: CompressionBZ2,
 		},
 		{
-			name:     "Compressed XLSX file with xz",
-			path:     "test.xlsx.xz",
-			expected: FileTypeXLSXXZ,
+			name:        "Compressed XLSX file with xz",
+			path:        "test.xlsx.xz",
+			expected:    FileTypeXLSX,
+			compression: CompressionXZ,
 		},
 		{
-			name:     "Compressed XLSX file with zstd",
-			path:     "test.xlsx.zst",
-			expected: FileTypeXLSXZSTD,
+			name:        "Compressed XLSX file with zstd",
+			path:        "test.xlsx.zst",
+			expected:    FileTypeXLSX,
+			compression: CompressionZSTD,
 		},
 		{
-			name:     "Zlib compressed CSV file",
-			path:     "test.csv.z",
-			expected: FileTypeCSVZLIB,
+			name:        "Zlib compressed CSV file",
+			path:        "test.csv.z",
+			expected:    FileTypeCSV,
+			compression: CompressionZLIB,
 		},
 		{
-			name:     "Snappy compressed CSV file",
-			path:     "test.csv.snappy",
-			expected: FileTypeCSVSNAPPY,
+			name:        "Snappy compressed CSV file",
+			path:        "test.csv.snappy",
+			expected:    FileTypeCSV,
+			compression: CompressionSNAPPY,
 		},
 		{
-			name:     "S2 compressed CSV file",
-			path:     "test.csv.s2",
-			expected: FileTypeCSVS2,
+			name:        "S2 compressed CSV file",
+			path:        "test.csv.s2",
+			expected:    FileTypeCSV,
+			compression: CompressionS2,
 		},
 		{
-			name:     "LZ4 compressed CSV file",
-			path:     "test.csv.lz4",
-			expected: FileTypeCSVLZ4,
+			name:        "LZ4 compressed CSV file",
+			path:        "test.csv.lz4",
+			expected:    FileTypeCSV,
+			compression: CompressionLZ4,
 		},
 		{
-			name:     "Unsupported file",
-			path:     "test.txt",
-			expected: FileTypeUnsupported,
+			name:        "JSON file",
+			path:        "test.json",
+			expected:    FileTypeJSON,
+			compression: CompressionNone,
+		},
+		{
+			name:        "Compressed JSONL file",
+			path:        "test.jsonl.gz",
+			expected:    FileTypeJSONL,
+			compression: CompressionGZ,
+		},
+		{
+			name:        "Unsupported file",
+			path:        "test.txt",
+			expected:    FileTypeUnsupported,
+			compression: CompressionNone,
 		},
 	}
 
@@ -115,6 +148,8 @@ func TestNewFile(t *testing.T) {
 			file := newFile(tt.path)
 			assert.Equal(t, tt.expected, file.getFileType(), "File type mismatch")
 			assert.Equal(t, tt.path, file.getPath(), "File path mismatch")
+			assert.Equal(t, tt.compression, NewCompressionFactory().DetectCompressionType(tt.path),
+				"Compression mismatch")
 		})
 	}
 }
@@ -782,6 +817,8 @@ John,25,Doe,john@example.com,26`
 func TestFileTypeExtension(t *testing.T) {
 	t.Parallel()
 
+	// extension() answers the format's own suffix. The codec's suffix is not
+	// part of it; see TestFileTypeExtension_WithCompression for the compound.
 	tests := []struct {
 		name     string
 		fileType FileType
@@ -791,39 +828,11 @@ func TestFileTypeExtension(t *testing.T) {
 		{"TSV", FileTypeTSV, ".tsv"},
 		{"LTSV", FileTypeLTSV, ".ltsv"},
 		{"Parquet", FileTypeParquet, ".parquet"},
-		{"CSV GZ", FileTypeCSVGZ, ".csv.gz"},
-		{"TSV BZ2", FileTypeTSVBZ2, ".tsv.bz2"},
-		{"LTSV XZ", FileTypeLTSVXZ, ".ltsv.xz"},
-		{"CSV ZSTD", FileTypeCSVZSTD, ".csv.zst"},
 		{"XLSX", FileTypeXLSX, ".xlsx"},
-		{"XLSX GZ", FileTypeXLSXGZ, ".xlsx.gz"},
-		{"XLSX BZ2", FileTypeXLSXBZ2, ".xlsx.bz2"},
-		{"XLSX XZ", FileTypeXLSXXZ, ".xlsx.xz"},
-		{"XLSX ZSTD", FileTypeXLSXZSTD, ".xlsx.zst"},
-		{"Parquet GZ", FileTypeParquetGZ, ".parquet.gz"},
-		{"Parquet BZ2", FileTypeParquetBZ2, ".parquet.bz2"},
-		{"Parquet XZ", FileTypeParquetXZ, ".parquet.xz"},
-		{"Parquet ZSTD", FileTypeParquetZSTD, ".parquet.zst"},
-		{"CSV ZLIB", FileTypeCSVZLIB, ".csv.z"},
-		{"CSV SNAPPY", FileTypeCSVSNAPPY, ".csv.snappy"},
-		{"CSV S2", FileTypeCSVS2, ".csv.s2"},
-		{"CSV LZ4", FileTypeCSVLZ4, ".csv.lz4"},
-		{"TSV ZLIB", FileTypeTSVZLIB, ".tsv.z"},
-		{"TSV SNAPPY", FileTypeTSVSNAPPY, ".tsv.snappy"},
-		{"TSV S2", FileTypeTSVS2, ".tsv.s2"},
-		{"TSV LZ4", FileTypeTSVLZ4, ".tsv.lz4"},
-		{"LTSV ZLIB", FileTypeLTSVZLIB, ".ltsv.z"},
-		{"LTSV SNAPPY", FileTypeLTSVSNAPPY, ".ltsv.snappy"},
-		{"LTSV S2", FileTypeLTSVS2, ".ltsv.s2"},
-		{"LTSV LZ4", FileTypeLTSVLZ4, ".ltsv.lz4"},
-		{"Parquet ZLIB", FileTypeParquetZLIB, ".parquet.z"},
-		{"Parquet SNAPPY", FileTypeParquetSNAPPY, ".parquet.snappy"},
-		{"Parquet S2", FileTypeParquetS2, ".parquet.s2"},
-		{"Parquet LZ4", FileTypeParquetLZ4, ".parquet.lz4"},
-		{"XLSX ZLIB", FileTypeXLSXZLIB, ".xlsx.z"},
-		{"XLSX SNAPPY", FileTypeXLSXSNAPPY, ".xlsx.snappy"},
-		{"XLSX S2", FileTypeXLSXS2, ".xlsx.s2"},
-		{"XLSX LZ4", FileTypeXLSXLZ4, ".xlsx.lz4"},
+		{"JSON", FileTypeJSON, ".json"},
+		{"JSONL", FileTypeJSONL, ".jsonl"},
+		{FileTypeACH.String(), FileTypeACH, extACH},
+		{FileTypeFedWire.String(), FileTypeFedWire, extFED},
 		{"Unsupported", FileTypeUnsupported, ""},
 	}
 
@@ -834,6 +843,64 @@ func TestFileTypeExtension(t *testing.T) {
 				t.Errorf("FileType.extension() = %v, want %v", got, tt.expected)
 			}
 		})
+	}
+}
+
+// TestFileTypeExtension_WithCompression pins the compound suffix a compressed
+// file carries. It used to be one fused constant per cell of this grid; now it
+// is the format's extension followed by the codec's, and every cell of the
+// cross product still has to come out right.
+func TestFileTypeExtension_WithCompression(t *testing.T) {
+	t.Parallel()
+
+	formats := []struct {
+		fileType FileType
+		ext      string
+	}{
+		{FileTypeCSV, ".csv"},
+		{FileTypeTSV, ".tsv"},
+		{FileTypeLTSV, ".ltsv"},
+		{FileTypeParquet, ".parquet"},
+		{FileTypeXLSX, ".xlsx"},
+		{FileTypeJSON, ".json"},
+		{FileTypeJSONL, ".jsonl"},
+	}
+	codecs := []struct {
+		compression CompressionType
+		ext         string
+	}{
+		{CompressionNone, ""},
+		{CompressionGZ, ".gz"},
+		{CompressionBZ2, ".bz2"},
+		{CompressionXZ, ".xz"},
+		{CompressionZSTD, ".zst"},
+		{CompressionZLIB, ".z"},
+		{CompressionSNAPPY, ".snappy"},
+		{CompressionS2, ".s2"},
+		{CompressionLZ4, ".lz4"},
+	}
+
+	for _, format := range formats {
+		for _, codec := range codecs {
+			t.Run(format.fileType.String()+"_"+codec.compression.String(), func(t *testing.T) {
+				t.Parallel()
+
+				want := format.ext + codec.ext
+				got := format.fileType.extension() + codec.compression.Extension()
+				if got != want {
+					t.Errorf("extension() + Extension() = %q, want %q", got, want)
+				}
+
+				// The same path read back has to answer the pair it was built from.
+				path := "sample" + want
+				if ft := detectFileType(path); ft != format.fileType {
+					t.Errorf("detectFileType(%q) = %v, want %v", path, ft, format.fileType)
+				}
+				if c := NewCompressionFactory().DetectCompressionType(path); c != codec.compression {
+					t.Errorf("DetectCompressionType(%q) = %v, want %v", path, c, codec.compression)
+				}
+			})
+		}
 	}
 }
 
@@ -1161,7 +1228,7 @@ func TestGetFileExtension(t *testing.T) {
 		{FileTypeCSV, ".csv"},
 		{FileTypeTSV, ".tsv"},
 		{FileTypeLTSV, ".ltsv"},
-		{FileTypeCSVGZ, ".csv.gz"},
+		{FileTypeJSON, ".json"},
 		{FileTypeUnsupported, ""},
 	}
 
@@ -1175,55 +1242,16 @@ func TestGetFileExtension(t *testing.T) {
 	}
 }
 
-// TestGetBaseFileType tests the deprecated GetBaseFileType function
-func TestGetBaseFileType(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		fileType FileType
-		expected FileType
-	}{
-		{FileTypeCSV, FileTypeCSV},
-		{FileTypeCSVGZ, FileTypeCSV},
-		{FileTypeCSVBZ2, FileTypeCSV},
-		{FileTypeCSVZLIB, FileTypeCSV},
-		{FileTypeCSVSNAPPY, FileTypeCSV},
-		{FileTypeCSVS2, FileTypeCSV},
-		{FileTypeCSVLZ4, FileTypeCSV},
-		{FileTypeTSV, FileTypeTSV},
-		{FileTypeTSVGZ, FileTypeTSV},
-		{FileTypeTSVZLIB, FileTypeTSV},
-		{FileTypeLTSV, FileTypeLTSV},
-		{FileTypeLTSVXZ, FileTypeLTSV},
-		{FileTypeLTSVSNAPPY, FileTypeLTSV},
-		{FileTypeParquet, FileTypeParquet},
-		{FileTypeParquetLZ4, FileTypeParquet},
-		{FileTypeXLSX, FileTypeXLSX},
-		{FileTypeXLSXS2, FileTypeXLSX},
-		{FileTypeUnsupported, FileTypeUnsupported},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.fileType.extension(), func(t *testing.T) {
-			result := getBaseFileType(tt.fileType)
-			if result != tt.expected {
-				t.Errorf("getBaseFileType(%v) = %v, want %v", tt.fileType, result, tt.expected)
-			}
-		})
-	}
-}
-
 // TestCreateDecompressedReader tests the createDecompressedReader function
 func TestCreateDecompressedReader(t *testing.T) {
 	t.Parallel()
 
-	t.Run("unsupported compression", func(t *testing.T) {
+	t.Run("no compression", func(t *testing.T) {
 		t.Parallel()
 
-		parser := newStreamingParser(FileTypeCSV, "test", 1024)
+		parser := newStreamingParser(FileTypeCSV, CompressionNone, "test", 1024)
 		reader := strings.NewReader("test data")
 
-		// Test with unsupported compression (should return original reader)
 		result, closeFunc, err := parser.createDecompressedReader(reader)
 		if err != nil {
 			t.Errorf("createDecompressedReader should not error for uncompressed data: %v", err)
@@ -1233,8 +1261,14 @@ func TestCreateDecompressedReader(t *testing.T) {
 			t.Error("createDecompressedReader should return original reader for uncompressed data")
 		}
 
-		if closeFunc != nil {
-			t.Error("createDecompressedReader should not return close function for uncompressed data")
+		// CompressionHandler.CreateReader never hands back a nil close function,
+		// so an uncompressed source gets a no-op one rather than nil. Callers can
+		// therefore call it unconditionally.
+		if closeFunc == nil {
+			t.Fatal("createDecompressedReader should return a no-op close function, not nil")
+		}
+		if err := closeFunc(); err != nil {
+			t.Errorf("the no-op close function should not error: %v", err)
 		}
 	})
 
@@ -1252,7 +1286,7 @@ func TestCreateDecompressedReader(t *testing.T) {
 			t.Fatalf("Failed to close gzip writer: %v", err)
 		}
 
-		parser := newStreamingParser(FileTypeCSVGZ, "test", 1024)
+		parser := newStreamingParser(FileTypeCSV, CompressionGZ, "test", 1024)
 		reader := strings.NewReader(buf.String())
 
 		result, closeFunc, err := parser.createDecompressedReader(reader)
@@ -1279,7 +1313,7 @@ func TestCreateDecompressedReader(t *testing.T) {
 	t.Run("invalid gzip data", func(t *testing.T) {
 		t.Parallel()
 
-		parser := newStreamingParser(FileTypeCSVGZ, "test", 1024)
+		parser := newStreamingParser(FileTypeCSV, CompressionGZ, "test", 1024)
 		reader := strings.NewReader("invalid gzip data")
 
 		_, _, err := parser.createDecompressedReader(reader)
@@ -1603,7 +1637,9 @@ func TestConvertXLSXRowsToTable(t *testing.T) {
 	})
 }
 
-// TestDetectFileType tests the detectFileType function with all file type and compression combinations
+// TestDetectFileType pins that every supported extension, compressed or not,
+// resolves to its format. FileType names formats only, so the codec suffix no
+// longer changes the answer — it only has to not break the detection.
 func TestDetectFileType(t *testing.T) {
 	t.Parallel()
 
@@ -1611,116 +1647,91 @@ func TestDetectFileType(t *testing.T) {
 		path     string
 		expected FileType
 	}{
-		// Base types (uncompressed)
 		{"data.csv", FileTypeCSV},
 		{"data.tsv", FileTypeTSV},
 		{"data.ltsv", FileTypeLTSV},
 		{"data.parquet", FileTypeParquet},
-		{"data.xlsx", FileTypeXLSX},
-
-		// CSV with all compression types
-		{"data.csv.gz", FileTypeCSVGZ},
-		{"data.csv.bz2", FileTypeCSVBZ2},
-		{"data.csv.xz", FileTypeCSVXZ},
-		{"data.csv.zst", FileTypeCSVZSTD},
-		{"data.csv.z", FileTypeCSVZLIB},
-		{"data.csv.snappy", FileTypeCSVSNAPPY},
-		{"data.csv.s2", FileTypeCSVS2},
-		{"data.csv.lz4", FileTypeCSVLZ4},
-
-		// TSV with all compression types
-		{"data.tsv.gz", FileTypeTSVGZ},
-		{"data.tsv.bz2", FileTypeTSVBZ2},
-		{"data.tsv.xz", FileTypeTSVXZ},
-		{"data.tsv.zst", FileTypeTSVZSTD},
-		{"data.tsv.z", FileTypeTSVZLIB},
-		{"data.tsv.snappy", FileTypeTSVSNAPPY},
-		{"data.tsv.s2", FileTypeTSVS2},
-		{"data.tsv.lz4", FileTypeTSVLZ4},
-
-		// LTSV with all compression types
-		{"data.ltsv.gz", FileTypeLTSVGZ},
-		{"data.ltsv.bz2", FileTypeLTSVBZ2},
-		{"data.ltsv.xz", FileTypeLTSVXZ},
-		{"data.ltsv.zst", FileTypeLTSVZSTD},
-		{"data.ltsv.z", FileTypeLTSVZLIB},
-		{"data.ltsv.snappy", FileTypeLTSVSNAPPY},
-		{"data.ltsv.s2", FileTypeLTSVS2},
-		{"data.ltsv.lz4", FileTypeLTSVLZ4},
-
-		// Parquet with all compression types
-		{"data.parquet.gz", FileTypeParquetGZ},
-		{"data.parquet.bz2", FileTypeParquetBZ2},
-		{"data.parquet.xz", FileTypeParquetXZ},
-		{"data.parquet.zst", FileTypeParquetZSTD},
-		{"data.parquet.z", FileTypeParquetZLIB},
-		{"data.parquet.snappy", FileTypeParquetSNAPPY},
-		{"data.parquet.s2", FileTypeParquetS2},
-		{"data.parquet.lz4", FileTypeParquetLZ4},
-
-		// XLSX with all compression types
-		{"data.xlsx.gz", FileTypeXLSXGZ},
-		{"data.xlsx.bz2", FileTypeXLSXBZ2},
-		{"data.xlsx.xz", FileTypeXLSXXZ},
-		{"data.xlsx.zst", FileTypeXLSXZSTD},
-		{"data.xlsx.z", FileTypeXLSXZLIB},
-		{"data.xlsx.snappy", FileTypeXLSXSNAPPY},
-		{"data.xlsx.s2", FileTypeXLSXS2},
-		{"data.xlsx.lz4", FileTypeXLSXLZ4},
-
-		// JSON/JSONL types
+		{"data.xlsx", FileTypeXLSX}, // CSV with all compression types
+		{"data.csv.gz", FileTypeCSV},
+		{"data.csv.bz2", FileTypeCSV},
+		{"data.csv.xz", FileTypeCSV},
+		{"data.csv.zst", FileTypeCSV},
+		{"data.csv.z", FileTypeCSV},
+		{"data.csv.snappy", FileTypeCSV},
+		{"data.csv.s2", FileTypeCSV},
+		{"data.csv.lz4", FileTypeCSV}, // TSV with all compression types
+		{"data.tsv.gz", FileTypeTSV},
+		{"data.tsv.bz2", FileTypeTSV},
+		{"data.tsv.xz", FileTypeTSV},
+		{"data.tsv.zst", FileTypeTSV},
+		{"data.tsv.z", FileTypeTSV},
+		{"data.tsv.snappy", FileTypeTSV},
+		{"data.tsv.s2", FileTypeTSV},
+		{"data.tsv.lz4", FileTypeTSV}, // LTSV with all compression types
+		{"data.ltsv.gz", FileTypeLTSV},
+		{"data.ltsv.bz2", FileTypeLTSV},
+		{"data.ltsv.xz", FileTypeLTSV},
+		{"data.ltsv.zst", FileTypeLTSV},
+		{"data.ltsv.z", FileTypeLTSV},
+		{"data.ltsv.snappy", FileTypeLTSV},
+		{"data.ltsv.s2", FileTypeLTSV},
+		{"data.ltsv.lz4", FileTypeLTSV}, // Parquet with all compression types
+		{"data.parquet.gz", FileTypeParquet},
+		{"data.parquet.bz2", FileTypeParquet},
+		{"data.parquet.xz", FileTypeParquet},
+		{"data.parquet.zst", FileTypeParquet},
+		{"data.parquet.z", FileTypeParquet},
+		{"data.parquet.snappy", FileTypeParquet},
+		{"data.parquet.s2", FileTypeParquet},
+		{"data.parquet.lz4", FileTypeParquet}, // XLSX with all compression types
+		{"data.xlsx.gz", FileTypeXLSX},
+		{"data.xlsx.bz2", FileTypeXLSX},
+		{"data.xlsx.xz", FileTypeXLSX},
+		{"data.xlsx.zst", FileTypeXLSX},
+		{"data.xlsx.z", FileTypeXLSX},
+		{"data.xlsx.snappy", FileTypeXLSX},
+		{"data.xlsx.s2", FileTypeXLSX},
+		{"data.xlsx.lz4", FileTypeXLSX}, // JSON/JSONL types
 		{"data.json", FileTypeJSON},
 		{"data.jsonl", FileTypeJSONL},
-		{"data.json.gz", FileTypeJSONGZ},
-		{"data.json.bz2", FileTypeJSONBZ2},
-		{"data.json.xz", FileTypeJSONXZ},
-		{"data.json.zst", FileTypeJSONZSTD},
-		{"data.json.z", FileTypeJSONZLIB},
-		{"data.json.snappy", FileTypeJSONSNAPPY},
-		{"data.json.s2", FileTypeJSONS2},
-		{"data.json.lz4", FileTypeJSONLZ4},
-		{"data.jsonl.gz", FileTypeJSONLGZ},
-		{"data.jsonl.bz2", FileTypeJSONLBZ2},
-		{"data.jsonl.xz", FileTypeJSONLXZ},
-		{"data.jsonl.zst", FileTypeJSONLZSTD},
-		{"data.jsonl.z", FileTypeJSONLZLIB},
-		{"data.jsonl.snappy", FileTypeJSONLSNAPPY},
-		{"data.jsonl.s2", FileTypeJSONLS2},
-		{"data.jsonl.lz4", FileTypeJSONLLZ4},
-
-		// ACH and Fedwire types
+		{"data.json.gz", FileTypeJSON},
+		{"data.json.bz2", FileTypeJSON},
+		{"data.json.xz", FileTypeJSON},
+		{"data.json.zst", FileTypeJSON},
+		{"data.json.z", FileTypeJSON},
+		{"data.json.snappy", FileTypeJSON},
+		{"data.json.s2", FileTypeJSON},
+		{"data.json.lz4", FileTypeJSON},
+		{"data.jsonl.gz", FileTypeJSONL},
+		{"data.jsonl.bz2", FileTypeJSONL},
+		{"data.jsonl.xz", FileTypeJSONL},
+		{"data.jsonl.zst", FileTypeJSONL},
+		{"data.jsonl.z", FileTypeJSONL},
+		{"data.jsonl.snappy", FileTypeJSONL},
+		{"data.jsonl.s2", FileTypeJSONL},
+		{"data.jsonl.lz4", FileTypeJSONL}, // ACH and Fedwire types
 		{"payment.ach", FileTypeACH},
 		{"payment.ACH", FileTypeACH},
 		{"payment.fed", FileTypeFedWire},
 		{"payment.FED", FileTypeFedWire},
 		{".ach", FileTypeUnsupported}, // extension only
 		{".fed", FileTypeUnsupported}, // extension only
-
-		// Unsupported types
 		{"data.txt", FileTypeUnsupported},
 		{"data.xml", FileTypeUnsupported},
 		{"data", FileTypeUnsupported},
-		{"", FileTypeUnsupported},
-
-		// Paths with directories
+		{"", FileTypeUnsupported}, // Paths with directories
 		{"/path/to/data.csv", FileTypeCSV},
-		{"/path/to/data.csv.gz", FileTypeCSVGZ},
-		{"./relative/path/data.tsv.bz2", FileTypeTSVBZ2},
-
-		// Files with multiple dots in name
+		{"/path/to/data.csv.gz", FileTypeCSV},
+		{"./relative/path/data.tsv.bz2", FileTypeTSV}, // Files with multiple dots in name
 		{"my.data.file.csv", FileTypeCSV},
-		{"my.data.file.csv.gz", FileTypeCSVGZ},
-
-		// Edge cases
-		{".csv", FileTypeCSV},            // Hidden file with just extension
-		{".csv.gz", FileTypeCSVGZ},       // Hidden compressed file
-		{"file.gz", FileTypeUnsupported}, // Compression only, no base format
-
-		// Uppercase parser-backed extensions
+		{"my.data.file.csv.gz", FileTypeCSV}, // Edge cases
+		{".csv", FileTypeCSV},                // Hidden file with just extension
+		{".csv.gz", FileTypeCSV},             // Hidden compressed file
+		{"file.gz", FileTypeUnsupported},     // Compression only, no base format
 		{"DATA.CSV", FileTypeCSV},
-		{"DATA.CSV.GZ", FileTypeCSVGZ},
-		{"DATA.JSONL.SNAPPY", FileTypeJSONLSNAPPY},
-		{"DATA.PARQUET.LZ4", FileTypeParquetLZ4},
+		{"DATA.CSV.GZ", FileTypeCSV},
+		{"DATA.JSONL.SNAPPY", FileTypeJSONL},
+		{"DATA.PARQUET.LZ4", FileTypeParquet},
 	}
 
 	for _, tt := range tests {
@@ -1740,66 +1751,22 @@ func TestDetectFileType(t *testing.T) {
 func TestFileTypeString(t *testing.T) {
 	t.Parallel()
 
+	// String() names the format. It never carried a codec suffix of its own —
+	// the "CSV (gzip)" spellings came from the fused constants, and a codec is
+	// now described by CompressionType.String().
 	tests := []struct {
 		fileType FileType
 		expected string
 	}{
-		// Base types
 		{FileTypeCSV, "CSV"},
 		{FileTypeTSV, "TSV"},
 		{FileTypeLTSV, "LTSV"},
 		{FileTypeParquet, "Parquet"},
 		{FileTypeXLSX, "XLSX"},
-
-		// CSV compressed types
-		{FileTypeCSVGZ, "CSV (gzip)"},
-		{FileTypeCSVBZ2, "CSV (bzip2)"},
-		{FileTypeCSVXZ, "CSV (xz)"},
-		{FileTypeCSVZSTD, "CSV (zstd)"},
-		{FileTypeCSVZLIB, "CSV (zlib)"},
-		{FileTypeCSVSNAPPY, "CSV (snappy)"},
-		{FileTypeCSVS2, "CSV (s2)"},
-		{FileTypeCSVLZ4, "CSV (lz4)"},
-
-		// TSV compressed types
-		{FileTypeTSVGZ, "TSV (gzip)"},
-		{FileTypeTSVBZ2, "TSV (bzip2)"},
-		{FileTypeTSVXZ, "TSV (xz)"},
-		{FileTypeTSVZSTD, "TSV (zstd)"},
-		{FileTypeTSVZLIB, "TSV (zlib)"},
-		{FileTypeTSVSNAPPY, "TSV (snappy)"},
-		{FileTypeTSVS2, "TSV (s2)"},
-		{FileTypeTSVLZ4, "TSV (lz4)"},
-
-		// LTSV compressed types
-		{FileTypeLTSVGZ, "LTSV (gzip)"},
-		{FileTypeLTSVBZ2, "LTSV (bzip2)"},
-		{FileTypeLTSVXZ, "LTSV (xz)"},
-		{FileTypeLTSVZSTD, "LTSV (zstd)"},
-		{FileTypeLTSVZLIB, "LTSV (zlib)"},
-		{FileTypeLTSVSNAPPY, "LTSV (snappy)"},
-		{FileTypeLTSVS2, "LTSV (s2)"},
-		{FileTypeLTSVLZ4, "LTSV (lz4)"},
-
-		// Parquet compressed types
-		{FileTypeParquetGZ, "Parquet (gzip)"},
-		{FileTypeParquetBZ2, "Parquet (bzip2)"},
-		{FileTypeParquetXZ, "Parquet (xz)"},
-		{FileTypeParquetZSTD, "Parquet (zstd)"},
-		{FileTypeParquetZLIB, "Parquet (zlib)"},
-		{FileTypeParquetSNAPPY, "Parquet (snappy)"},
-		{FileTypeParquetS2, "Parquet (s2)"},
-		{FileTypeParquetLZ4, "Parquet (lz4)"},
-
-		// XLSX compressed types
-		{FileTypeXLSXGZ, "XLSX (gzip)"},
-		{FileTypeXLSXBZ2, "XLSX (bzip2)"},
-		{FileTypeXLSXXZ, "XLSX (xz)"},
-		{FileTypeXLSXZSTD, "XLSX (zstd)"},
-		{FileTypeXLSXZLIB, "XLSX (zlib)"},
-		{FileTypeXLSXSNAPPY, "XLSX (snappy)"},
-		{FileTypeXLSXS2, "XLSX (s2)"},
-		{FileTypeXLSXLZ4, "XLSX (lz4)"},
+		{FileTypeJSON, "JSON"},
+		{FileTypeJSONL, "JSONL"},
+		{FileTypeACH, "ACH"},
+		{FileTypeFedWire, "FedWire"},
 
 		// Unsupported type
 		{FileTypeUnsupported, "Unsupported"},

@@ -2,9 +2,6 @@ package filesql
 
 import (
 	"bufio"
-	"compress/bzip2"
-	"compress/gzip"
-	"compress/zlib"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -17,11 +14,6 @@ import (
 	"github.com/apache/arrow/go/v18/arrow/array"
 	pqfile "github.com/apache/arrow/go/v18/parquet/file"
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
-	"github.com/klauspost/compress/s2"
-	"github.com/klauspost/compress/snappy"
-	"github.com/klauspost/compress/zstd"
-	"github.com/pierrec/lz4/v4"
-	"github.com/ulikunitz/xz"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -38,9 +30,10 @@ func handleCloseError(closeFunc func() error) func() {
 // newStreamingParser creates a new streaming parser. The malformed-row policy
 // defaults to MalformedRowStop (the zero value); callers that need another
 // policy set the field after construction.
-func newStreamingParser(fileType FileType, tableName string, chunkSize int) *streamingParser {
+func newStreamingParser(fileType FileType, compression CompressionType, tableName string, chunkSize int) *streamingParser {
 	return &streamingParser{
 		fileType:    fileType,
+		compression: compression,
 		tableName:   tableName,
 		chunkSize:   NewChunkSize(chunkSize),
 		memoryPool:  NewMemoryPool(1024 * 1024), // 1MB default max buffer size
@@ -64,7 +57,7 @@ func (p *streamingParser) parseFromReader(reader io.Reader) (*table, error) {
 	}
 
 	// Parse based on base file type
-	baseType := p.fileType.baseType()
+	baseType := p.fileType
 	if isTextBaseType(baseType) {
 		decompressedReader = decodeTextReader(decompressedReader)
 	}
@@ -88,65 +81,14 @@ func (p *streamingParser) parseFromReader(reader io.Reader) (*table, error) {
 	}
 }
 
-// createDecompressedReader creates appropriate reader based on compression type
+// createDecompressedReader wraps reader with the codec the source was declared
+// to use. The per-format switch this replaced was a second implementation of
+// CompressionHandler.CreateReader, reached through the fused FileType.
+//
+// CompressionNone returns the reader unchanged with a no-op close function,
+// following CreateReader's convention that the close function is never nil.
 func (p *streamingParser) createDecompressedReader(reader io.Reader) (io.Reader, func() error, error) {
-	switch p.fileType {
-	case FileTypeCSVGZ, FileTypeTSVGZ, FileTypeLTSVGZ, FileTypeXLSXGZ, FileTypeParquetGZ,
-		FileTypeJSONGZ, FileTypeJSONLGZ:
-		gzReader, err := gzip.NewReader(reader)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%w: failed to create gzip reader: %s", ErrCompression, err.Error())
-		}
-		return gzReader, gzReader.Close, nil
-
-	case FileTypeCSVBZ2, FileTypeTSVBZ2, FileTypeLTSVBZ2, FileTypeXLSXBZ2, FileTypeParquetBZ2,
-		FileTypeJSONBZ2, FileTypeJSONLBZ2:
-		bz2Reader := bzip2.NewReader(reader)
-		return bz2Reader, nil, nil
-
-	case FileTypeCSVXZ, FileTypeTSVXZ, FileTypeLTSVXZ, FileTypeXLSXXZ, FileTypeParquetXZ,
-		FileTypeJSONXZ, FileTypeJSONLXZ:
-		xzReader, err := xz.NewReader(reader)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%w: failed to create xz reader: %s", ErrCompression, err.Error())
-		}
-		return xzReader, nil, nil
-
-	case FileTypeCSVZSTD, FileTypeTSVZSTD, FileTypeLTSVZSTD, FileTypeXLSXZSTD, FileTypeParquetZSTD,
-		FileTypeJSONZSTD, FileTypeJSONLZSTD:
-		decoder, err := zstd.NewReader(reader)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%w: failed to create zstd reader: %s", ErrCompression, err.Error())
-		}
-		return decoder, func() error { decoder.Close(); return nil }, nil
-
-	case FileTypeCSVZLIB, FileTypeTSVZLIB, FileTypeLTSVZLIB, FileTypeXLSXZLIB, FileTypeParquetZLIB,
-		FileTypeJSONZLIB, FileTypeJSONLZLIB:
-		zlibReader, err := zlib.NewReader(reader)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%w: failed to create zlib reader: %s", ErrCompression, err.Error())
-		}
-		return zlibReader, zlibReader.Close, nil
-
-	case FileTypeCSVSNAPPY, FileTypeTSVSNAPPY, FileTypeLTSVSNAPPY, FileTypeXLSXSNAPPY, FileTypeParquetSNAPPY,
-		FileTypeJSONSNAPPY, FileTypeJSONLSNAPPY:
-		snappyReader := snappy.NewReader(reader)
-		return snappyReader, nil, nil
-
-	case FileTypeCSVS2, FileTypeTSVS2, FileTypeLTSVS2, FileTypeXLSXS2, FileTypeParquetS2,
-		FileTypeJSONS2, FileTypeJSONLS2:
-		s2Reader := s2.NewReader(reader)
-		return s2Reader, nil, nil
-
-	case FileTypeCSVLZ4, FileTypeTSVLZ4, FileTypeLTSVLZ4, FileTypeXLSXLZ4, FileTypeParquetLZ4,
-		FileTypeJSONLZ4, FileTypeJSONLLZ4:
-		lz4Reader := lz4.NewReader(reader)
-		return lz4Reader, nil, nil
-
-	default:
-		// No compression
-		return reader, nil, nil
-	}
+	return NewCompressionHandler(p.compression).CreateReader(reader)
 }
 
 // parseDelimitedStream parses CSV or TSV data from reader using streaming approach
@@ -319,7 +261,7 @@ func (p *streamingParser) ProcessInChunks(reader io.Reader, processor chunkProce
 	}
 
 	// Parse based on base file type
-	baseType := p.fileType.baseType()
+	baseType := p.fileType
 	if isTextBaseType(baseType) {
 		decompressedReader = decodeTextReader(decompressedReader)
 	}

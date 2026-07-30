@@ -28,7 +28,7 @@ func TestStreamingParser_ParseFromReader_CSV(t *testing.T) {
 		data := "name,age,city\nAlice,30,Tokyo\nBob,25,Osaka\n"
 		reader := strings.NewReader(data)
 
-		parser := newStreamingParser(FileTypeCSV, "users", 1024)
+		parser := newStreamingParser(FileTypeCSV, CompressionNone, "users", 1024)
 		table, err := parser.parseFromReader(reader)
 		require.NoError(t, err, "ParseFromReader() failed")
 
@@ -49,7 +49,7 @@ func TestStreamingParser_ParseFromReader_CSV(t *testing.T) {
 		t.Parallel()
 		reader := strings.NewReader("")
 
-		parser := newStreamingParser(FileTypeCSV, "empty", 1024)
+		parser := newStreamingParser(FileTypeCSV, CompressionNone, "empty", 1024)
 		_, err := parser.parseFromReader(reader)
 		if err == nil {
 			t.Error("ParseFromReader() should fail for empty data")
@@ -65,7 +65,7 @@ func TestStreamingParser_ParseFromReader_TSV(t *testing.T) {
 		data := "name\tage\tcity\nAlice\t30\tTokyo\nBob\t25\tOsaka\n"
 		reader := strings.NewReader(data)
 
-		parser := newStreamingParser(FileTypeTSV, "users", 1024)
+		parser := newStreamingParser(FileTypeTSV, CompressionNone, "users", 1024)
 		table, err := parser.parseFromReader(reader)
 		require.NoError(t, err, "ParseFromReader() failed")
 
@@ -84,7 +84,7 @@ func TestStreamingParser_ParseFromReader_LTSV(t *testing.T) {
 		data := "name:Alice\tage:30\tcity:Tokyo\nname:Bob\tage:25\tcity:Osaka\n"
 		reader := strings.NewReader(data)
 
-		parser := newStreamingParser(FileTypeLTSV, "users", 1024)
+		parser := newStreamingParser(FileTypeLTSV, CompressionNone, "users", 1024)
 		table, err := parser.parseFromReader(reader)
 		require.NoError(t, err, "ParseFromReader() failed")
 
@@ -100,7 +100,7 @@ func TestStreamingParser_ParseFromReader_LTSV(t *testing.T) {
 		// drop the first, so the parser rejects it. Ref nao1215/sqly#467.
 		reader := strings.NewReader("x:1\tx:2\n")
 
-		parser := newStreamingParser(FileTypeLTSV, "dup", 1024)
+		parser := newStreamingParser(FileTypeLTSV, CompressionNone, "dup", 1024)
 		_, err := parser.parseFromReader(reader)
 		require.Error(t, err, "duplicate LTSV label should be rejected")
 		assert.Contains(t, err.Error(), "duplicate column name")
@@ -110,7 +110,7 @@ func TestStreamingParser_ParseFromReader_LTSV(t *testing.T) {
 		t.Parallel()
 		reader := strings.NewReader("x:1\ty:a\nx:2\ty:b\n")
 
-		parser := newStreamingParser(FileTypeLTSV, "ok", 1024)
+		parser := newStreamingParser(FileTypeLTSV, CompressionNone, "ok", 1024)
 		table, err := parser.parseFromReader(reader)
 		require.NoError(t, err)
 		assert.Len(t, table.getRecords(), 2)
@@ -132,7 +132,7 @@ func TestStreamingParser_ParseFromReader_Compressed(t *testing.T) {
 
 		// Note: This will fail because the data is not actually gzip compressed
 		// but the test demonstrates the compression handling logic
-		parser := newStreamingParser(FileTypeCSV, "users", 1024) // Use uncompressed for now
+		parser := newStreamingParser(FileTypeCSV, CompressionNone, "users", 1024) // Use uncompressed for now
 		table, err := parser.parseFromReader(reader)
 		require.NoError(t, err, "ParseFromReader() failed")
 
@@ -153,10 +153,10 @@ func TestFileType_Extension(t *testing.T) {
 		{FileTypeCSV, ".csv"},
 		{FileTypeTSV, ".tsv"},
 		{FileTypeLTSV, ".ltsv"},
-		{FileTypeCSVGZ, ".csv.gz"},
-		{FileTypeTSVBZ2, ".tsv.bz2"},
-		{FileTypeLTSVXZ, ".ltsv.xz"},
-		{FileTypeCSVZSTD, ".csv.zst"},
+		{FileTypeParquet, ".parquet"},
+		{FileTypeXLSX, ".xlsx"},
+		{FileTypeJSON, ".json"},
+		{FileTypeJSONL, ".jsonl"},
 		{FileTypeUnsupported, ""},
 	}
 
@@ -164,32 +164,6 @@ func TestFileType_Extension(t *testing.T) {
 		t.Run(tt.want, func(t *testing.T) {
 			if got := tt.fileType.extension(); got != tt.want {
 				t.Errorf("FileType.extension() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestFileType_BaseType(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		fileType FileType
-		want     FileType
-	}{
-		{FileTypeCSV, FileTypeCSV},
-		{FileTypeCSVGZ, FileTypeCSV},
-		{FileTypeCSVBZ2, FileTypeCSV},
-		{FileTypeTSV, FileTypeTSV},
-		{FileTypeTSVGZ, FileTypeTSV},
-		{FileTypeLTSV, FileTypeLTSV},
-		{FileTypeLTSVXZ, FileTypeLTSV},
-		{FileTypeUnsupported, FileTypeUnsupported},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.fileType.extension(), func(t *testing.T) {
-			if got := tt.fileType.baseType(); got != tt.want {
-				t.Errorf("FileType.BaseType() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -233,7 +207,7 @@ Charlie,35,London`
 	}
 
 	// Test parseParquetStream
-	parser := newStreamingParser(FileTypeParquet, "test_stream", 1000)
+	parser := newStreamingParser(FileTypeParquet, CompressionNone, "test_stream", 1000)
 	reader := bytes.NewReader(parquetData)
 
 	table, err := parser.parseParquetStream(reader)
@@ -311,7 +285,7 @@ func TestParquetStreamingChunks(t *testing.T) {
 	}
 
 	// Test processParquetInChunks with small chunk size
-	parser := newStreamingParser(FileTypeParquet, "test_chunks", 2) // Process 2 records at a time
+	parser := newStreamingParser(FileTypeParquet, CompressionNone, "test_chunks", 2) // Process 2 records at a time
 	reader := bytes.NewReader(parquetData)
 
 	var totalRecords int
@@ -359,22 +333,49 @@ func TestParquetStreamingChunks(t *testing.T) {
 	t.Logf("Successfully processed %d records in %d chunks", totalRecords, chunkCount)
 }
 
+// TestParquetStreamingCompressed reads a gzipped Parquet file end to end. It
+// used to hand parseParquetStream a string of garbage under a fused
+// FileTypeParquetGZ, which skipped the codec entirely and only proved that
+// garbage is not Parquet.
 func TestParquetStreamingCompressed(t *testing.T) {
 	t.Parallel()
 
-	// Test compressed parquet files (which should not be supported externally)
-	parser := newStreamingParser(FileTypeParquetGZ, "compressed_test", 1000)
+	tempDir := t.TempDir()
+	csvFile := filepath.Join(tempDir, "compressed_test.csv")
+	csvContent := "name,age\nAlice,25\nBob,30\n"
+	require.NoError(t, os.WriteFile(csvFile, []byte(csvContent), 0600))
 
-	// Create some dummy compressed data (this should fail gracefully)
-	compressedData := []byte("dummy compressed parquet data")
-	reader := bytes.NewReader(compressedData)
+	db, err := Open(csvFile)
+	require.NoError(t, err)
+	defer db.Close()
 
-	_, err := parser.parseParquetStream(reader)
-	if err == nil {
-		t.Error("Expected error for compressed parquet data, but got none")
-	}
+	outputDir := filepath.Join(tempDir, "output")
+	require.NoError(t, DumpDatabase(db, outputDir, NewDumpOptions().WithFormat(OutputFormatParquet)))
 
-	t.Logf("Correctly handled compressed parquet error: %v", err)
+	parquetData, err := os.ReadFile(filepath.Join(outputDir, "compressed_test.parquet")) //nolint:gosec
+	require.NoError(t, err)
+
+	var compressed bytes.Buffer
+	gz := gzip.NewWriter(&compressed)
+	_, err = gz.Write(parquetData)
+	require.NoError(t, err)
+	require.NoError(t, gz.Close())
+
+	parser := newStreamingParser(FileTypeParquet, CompressionGZ, "compressed_test", 1000)
+	table, err := parser.parseFromReader(bytes.NewReader(compressed.Bytes()))
+	require.NoError(t, err, "a gzipped Parquet file should load")
+
+	assert.Equal(t, "compressed_test", table.getName())
+	assert.Equal(t, header{"name", "age"}, table.getHeader())
+	assert.Len(t, table.getRecords(), 2)
+
+	t.Run("truncated gzip is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		parser := newStreamingParser(FileTypeParquet, CompressionGZ, "broken", 1000)
+		_, err := parser.parseFromReader(bytes.NewReader([]byte("not gzip at all")))
+		assert.Error(t, err, "data that is not gzip should not be read as Parquet")
+	})
 }
 
 // TestColumnInferenceAdvanced tests column inference with various data types
@@ -388,7 +389,7 @@ func TestColumnInferenceAdvanced(t *testing.T) {
 		csvData := "num,text,mixed\n123,hello,456\n456.7,world,text\n789,test,123.45\n"
 		reader := strings.NewReader(csvData)
 
-		parser := newStreamingParser(FileTypeCSV, "test_infer", 1024)
+		parser := newStreamingParser(FileTypeCSV, CompressionNone, "test_infer", 1024)
 		table, err := parser.parseFromReader(reader)
 		if err != nil {
 			t.Fatalf("Failed to parse CSV: %v", err)
@@ -410,7 +411,7 @@ func TestColumnInferenceAdvanced(t *testing.T) {
 		csvData := "col1,col2,col3\n123,,456.7\n,world,\ntest,456,789\n"
 		reader := strings.NewReader(csvData)
 
-		parser := newStreamingParser(FileTypeCSV, "test_empty", 1024)
+		parser := newStreamingParser(FileTypeCSV, CompressionNone, "test_empty", 1024)
 		table, err := parser.parseFromReader(reader)
 		if err != nil {
 			t.Fatalf("Failed to parse CSV with empty values: %v", err)
@@ -437,7 +438,7 @@ func TestProcessLTSVInChunks(t *testing.T) {
 		ltsvData := "name:Alice\tage:30\tcity:Tokyo\nname:Bob\tage:25\tcity:Osaka\nname:Charlie\tage:35\tcity:Kyoto\n"
 		reader := strings.NewReader(ltsvData)
 
-		parser := newStreamingParser(FileTypeLTSV, "test_ltsv", 2) // Small chunk size
+		parser := newStreamingParser(FileTypeLTSV, CompressionNone, "test_ltsv", 2) // Small chunk size
 
 		var totalRecords int
 		processor := func(chunk *tableChunk) error {
@@ -462,7 +463,7 @@ func TestProcessLTSVInChunks(t *testing.T) {
 		ltsvData := "name:Alice\tage:30\tcity:Tokyo\nname:Bob\tage:25\n"
 		reader := strings.NewReader(ltsvData)
 
-		parser := newStreamingParser(FileTypeLTSV, "test_patterns", 1024)
+		parser := newStreamingParser(FileTypeLTSV, CompressionNone, "test_patterns", 1024)
 		table, err := parser.parseFromReader(reader)
 		if err != nil {
 			t.Fatalf("Failed to parse LTSV: %v", err)
@@ -485,7 +486,7 @@ func TestProcessLTSVInChunks(t *testing.T) {
 		// large LTSV file cannot silently drop values. Ref nao1215/sqly#467.
 		reader := strings.NewReader("x:1\tx:2\n")
 
-		parser := newStreamingParser(FileTypeLTSV, "dup_chunk", 2)
+		parser := newStreamingParser(FileTypeLTSV, CompressionNone, "dup_chunk", 2)
 		err := parser.ProcessInChunks(reader, func(*tableChunk) error { return nil })
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "duplicate column name")
@@ -534,7 +535,7 @@ func TestStreamingParser_ParseFromReader_XLSX(t *testing.T) {
 		_ = f.Close() // Ignore close error in test
 
 		// Parse using streaming parser - should process first sheet only
-		parser := newStreamingParser(FileTypeXLSX, "test_workbook", 1024)
+		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "test_workbook", 1024)
 		table, err := parser.parseFromReader(&buf)
 		require.NoError(t, err, "ParseFromReader() failed")
 
@@ -576,7 +577,7 @@ func TestStreamingParser_ParseFromReader_XLSX(t *testing.T) {
 		}
 		_ = f.Close() // Ignore close error in test
 
-		parser := newStreamingParser(FileTypeXLSX, "empty_workbook", 1024)
+		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "empty_workbook", 1024)
 		_, err := parser.parseFromReader(&buf)
 		if err == nil {
 			t.Error("Expected error for empty XLSX file, got nil")
@@ -600,28 +601,36 @@ func TestStreamingParser_ParseFromReader_XLSX(t *testing.T) {
 			t.Fatal(err)
 		}
 		_ = f.Close() // Ignore close error in test
+		workbook := buf.Bytes()
 
-		// Test with different compression types
-		compressionTypes := []FileType{FileTypeXLSXGZ, FileTypeXLSXBZ2, FileTypeXLSXXZ, FileTypeXLSXZSTD}
+		// The workbook is really compressed with each codec and read back. This
+		// used to hand the parser uncompressed bytes under a compressed FileType
+		// and log whatever happened, so it never established that a compressed
+		// XLSX loads at all. bzip2 is absent because the library has no writer
+		// for it.
+		codecs := []CompressionType{
+			CompressionGZ, CompressionXZ, CompressionZSTD, CompressionZLIB,
+			CompressionSNAPPY, CompressionS2, CompressionLZ4,
+		}
 
-		for _, compType := range compressionTypes {
-			t.Run(compType.extension(), func(t *testing.T) {
-				parser := newStreamingParser(compType, "compressed_workbook", 1024)
+		for _, codec := range codecs {
+			t.Run(codec.String(), func(t *testing.T) {
+				t.Parallel()
 
-				// For compressed types, the parser expects compressed data
-				// But since createDecompressedReader handles the decompression,
-				// we can test with uncompressed data for this unit test
-				table, err := parser.parseFromReader(&buf)
-				if err != nil {
-					t.Logf("Compression type %v failed: %v (expected for some types)", compType, err)
-					// Some compression types might not work in this test setup
-					// This is acceptable for unit testing
-					return
-				}
+				var compressed bytes.Buffer
+				w, closeWriter, err := NewCompressionHandler(codec).CreateWriter(&compressed)
+				require.NoError(t, err, "failed to create %s writer", codec)
+				_, err = w.Write(workbook)
+				require.NoError(t, err, "failed to write workbook through %s", codec)
+				require.NoError(t, closeWriter(), "failed to flush %s writer", codec)
 
-				if table != nil && table.getName() != "compressed_workbook" {
-					t.Errorf("Table name = %s, want compressed_workbook", table.getName())
-				}
+				parser := newStreamingParser(FileTypeXLSX, codec, "compressed_workbook", 1024)
+				table, err := parser.parseFromReader(bytes.NewReader(compressed.Bytes()))
+				require.NoError(t, err, "parseFromReader() failed for %s", codec)
+
+				assert.Equal(t, "compressed_workbook", table.getName(), "Table name mismatch")
+				assert.Equal(t, header{"Test"}, table.getHeader(), "Header mismatch")
+				assert.Equal(t, []Record{{"Data"}}, table.getRecords(), "Records mismatch")
 			})
 		}
 	})
@@ -635,14 +644,19 @@ func TestCreateDecompressedReader_AllCompressionTypes(t *testing.T) {
 	originalData := "name,age,city\nAlice,30,Tokyo\nBob,25,Osaka\n"
 
 	tests := []struct {
-		name      string
-		fileType  FileType
-		compress  func([]byte) ([]byte, error)
-		expectErr bool
+		name     string
+		fileType FileType
+		// compression is the codec the row's compress func produced. FileType no
+		// longer carries it, and a blanket CompressionNone here compiles and then
+		// fails at parse time on the codec's magic bytes.
+		compression CompressionType
+		compress    func([]byte) ([]byte, error)
+		expectErr   bool
 	}{
 		{
-			name:     "gzip compressed CSV",
-			fileType: FileTypeCSVGZ,
+			name:        "gzip compressed CSV",
+			fileType:    FileTypeCSV,
+			compression: CompressionGZ,
 			compress: func(data []byte) ([]byte, error) {
 				var buf bytes.Buffer
 				w := gzip.NewWriter(&buf)
@@ -656,8 +670,9 @@ func TestCreateDecompressedReader_AllCompressionTypes(t *testing.T) {
 			},
 		},
 		{
-			name:     "zstd compressed CSV",
-			fileType: FileTypeCSVZSTD,
+			name:        "zstd compressed CSV",
+			fileType:    FileTypeCSV,
+			compression: CompressionZSTD,
 			compress: func(data []byte) ([]byte, error) {
 				var buf bytes.Buffer
 				w, err := zstd.NewWriter(&buf)
@@ -674,8 +689,9 @@ func TestCreateDecompressedReader_AllCompressionTypes(t *testing.T) {
 			},
 		},
 		{
-			name:     "xz compressed CSV",
-			fileType: FileTypeCSVXZ,
+			name:        "xz compressed CSV",
+			fileType:    FileTypeCSV,
+			compression: CompressionXZ,
 			compress: func(data []byte) ([]byte, error) {
 				var buf bytes.Buffer
 				w, err := xz.NewWriter(&buf)
@@ -692,8 +708,9 @@ func TestCreateDecompressedReader_AllCompressionTypes(t *testing.T) {
 			},
 		},
 		{
-			name:     "zlib compressed CSV",
-			fileType: FileTypeCSVZLIB,
+			name:        "zlib compressed CSV",
+			fileType:    FileTypeCSV,
+			compression: CompressionZLIB,
 			compress: func(data []byte) ([]byte, error) {
 				var buf bytes.Buffer
 				w := zlib.NewWriter(&buf)
@@ -707,8 +724,9 @@ func TestCreateDecompressedReader_AllCompressionTypes(t *testing.T) {
 			},
 		},
 		{
-			name:     "snappy compressed CSV",
-			fileType: FileTypeCSVSNAPPY,
+			name:        "snappy compressed CSV",
+			fileType:    FileTypeCSV,
+			compression: CompressionSNAPPY,
 			compress: func(data []byte) ([]byte, error) {
 				var buf bytes.Buffer
 				w := snappy.NewBufferedWriter(&buf)
@@ -722,8 +740,9 @@ func TestCreateDecompressedReader_AllCompressionTypes(t *testing.T) {
 			},
 		},
 		{
-			name:     "s2 compressed CSV",
-			fileType: FileTypeCSVS2,
+			name:        "s2 compressed CSV",
+			fileType:    FileTypeCSV,
+			compression: CompressionS2,
 			compress: func(data []byte) ([]byte, error) {
 				var buf bytes.Buffer
 				w := s2.NewWriter(&buf)
@@ -737,8 +756,9 @@ func TestCreateDecompressedReader_AllCompressionTypes(t *testing.T) {
 			},
 		},
 		{
-			name:     "lz4 compressed CSV",
-			fileType: FileTypeCSVLZ4,
+			name:        "lz4 compressed CSV",
+			fileType:    FileTypeCSV,
+			compression: CompressionLZ4,
 			compress: func(data []byte) ([]byte, error) {
 				var buf bytes.Buffer
 				w := lz4.NewWriter(&buf)
@@ -767,7 +787,7 @@ func TestCreateDecompressedReader_AllCompressionTypes(t *testing.T) {
 			compressedData, err := tt.compress([]byte(originalData))
 			require.NoError(t, err, "Failed to compress data")
 
-			parser := newStreamingParser(tt.fileType, "test", 1024)
+			parser := newStreamingParser(tt.fileType, tt.compression, "test", 1024)
 			reader := bytes.NewReader(compressedData)
 
 			table, err := parser.parseFromReader(reader)
@@ -779,13 +799,15 @@ func TestCreateDecompressedReader_AllCompressionTypes(t *testing.T) {
 			require.NoError(t, err, "parseFromReader() failed")
 			assert.Equal(t, "test", table.getName(), "Table name mismatch")
 
-			records := table.getRecords()
-			assert.Len(t, records, 2, "Records length mismatch")
-
-			// Verify first record
-			if len(records) > 0 && len(records[0]) > 0 {
-				assert.Equal(t, "Alice", records[0][0], "First record name mismatch")
-			}
+			// The header is checked as well as the rows. Snappy and s2 leave short
+			// incompressible input nearly verbatim after their frame magic, so a
+			// row that names the wrong codec still yields two plausible-looking
+			// records — only the header carries the corruption.
+			assert.Equal(t, header{"name", "age", "city"}, table.getHeader(), "Header mismatch")
+			assert.Equal(t, []Record{
+				{"Alice", "30", "Tokyo"},
+				{"Bob", "25", "Osaka"},
+			}, table.getRecords(), "Records mismatch")
 		})
 	}
 }
@@ -799,11 +821,14 @@ func TestCreateDecompressedReader_TSVCompressionTypes(t *testing.T) {
 	tests := []struct {
 		name     string
 		fileType FileType
-		compress func([]byte) ([]byte, error)
+		// compression is the codec the row's compress func produced.
+		compression CompressionType
+		compress    func([]byte) ([]byte, error)
 	}{
 		{
-			name:     "zlib compressed TSV",
-			fileType: FileTypeTSVZLIB,
+			name:        "zlib compressed TSV",
+			fileType:    FileTypeTSV,
+			compression: CompressionZLIB,
 			compress: func(data []byte) ([]byte, error) {
 				var buf bytes.Buffer
 				w := zlib.NewWriter(&buf)
@@ -817,8 +842,9 @@ func TestCreateDecompressedReader_TSVCompressionTypes(t *testing.T) {
 			},
 		},
 		{
-			name:     "snappy compressed TSV",
-			fileType: FileTypeTSVSNAPPY,
+			name:        "snappy compressed TSV",
+			fileType:    FileTypeTSV,
+			compression: CompressionSNAPPY,
 			compress: func(data []byte) ([]byte, error) {
 				var buf bytes.Buffer
 				w := snappy.NewBufferedWriter(&buf)
@@ -832,8 +858,9 @@ func TestCreateDecompressedReader_TSVCompressionTypes(t *testing.T) {
 			},
 		},
 		{
-			name:     "s2 compressed TSV",
-			fileType: FileTypeTSVS2,
+			name:        "s2 compressed TSV",
+			fileType:    FileTypeTSV,
+			compression: CompressionS2,
 			compress: func(data []byte) ([]byte, error) {
 				var buf bytes.Buffer
 				w := s2.NewWriter(&buf)
@@ -847,8 +874,9 @@ func TestCreateDecompressedReader_TSVCompressionTypes(t *testing.T) {
 			},
 		},
 		{
-			name:     "lz4 compressed TSV",
-			fileType: FileTypeTSVLZ4,
+			name:        "lz4 compressed TSV",
+			fileType:    FileTypeTSV,
+			compression: CompressionLZ4,
 			compress: func(data []byte) ([]byte, error) {
 				var buf bytes.Buffer
 				w := lz4.NewWriter(&buf)
@@ -870,7 +898,7 @@ func TestCreateDecompressedReader_TSVCompressionTypes(t *testing.T) {
 			compressedData, err := tt.compress([]byte(originalData))
 			require.NoError(t, err, "Failed to compress data")
 
-			parser := newStreamingParser(tt.fileType, "test_tsv", 1024)
+			parser := newStreamingParser(tt.fileType, tt.compression, "test_tsv", 1024)
 			reader := bytes.NewReader(compressedData)
 
 			table, err := parser.parseFromReader(reader)
@@ -878,8 +906,10 @@ func TestCreateDecompressedReader_TSVCompressionTypes(t *testing.T) {
 
 			assert.Equal(t, "test_tsv", table.getName(), "Table name mismatch")
 
-			records := table.getRecords()
-			assert.Len(t, records, 1, "Records length mismatch")
+			// The header is checked too; see the CSV table for why the rows alone
+			// do not pin the codec.
+			assert.Equal(t, header{"name", "age", "city"}, table.getHeader(), "Header mismatch")
+			assert.Equal(t, []Record{{"Alice", "30", "Tokyo"}}, table.getRecords(), "Records mismatch")
 		})
 	}
 }
@@ -893,11 +923,14 @@ func TestCreateDecompressedReader_LTSVCompressionTypes(t *testing.T) {
 	tests := []struct {
 		name     string
 		fileType FileType
-		compress func([]byte) ([]byte, error)
+		// compression is the codec the row's compress func produced.
+		compression CompressionType
+		compress    func([]byte) ([]byte, error)
 	}{
 		{
-			name:     "zlib compressed LTSV",
-			fileType: FileTypeLTSVZLIB,
+			name:        "zlib compressed LTSV",
+			fileType:    FileTypeLTSV,
+			compression: CompressionZLIB,
 			compress: func(data []byte) ([]byte, error) {
 				var buf bytes.Buffer
 				w := zlib.NewWriter(&buf)
@@ -911,8 +944,9 @@ func TestCreateDecompressedReader_LTSVCompressionTypes(t *testing.T) {
 			},
 		},
 		{
-			name:     "snappy compressed LTSV",
-			fileType: FileTypeLTSVSNAPPY,
+			name:        "snappy compressed LTSV",
+			fileType:    FileTypeLTSV,
+			compression: CompressionSNAPPY,
 			compress: func(data []byte) ([]byte, error) {
 				var buf bytes.Buffer
 				w := snappy.NewBufferedWriter(&buf)
@@ -926,8 +960,9 @@ func TestCreateDecompressedReader_LTSVCompressionTypes(t *testing.T) {
 			},
 		},
 		{
-			name:     "s2 compressed LTSV",
-			fileType: FileTypeLTSVS2,
+			name:        "s2 compressed LTSV",
+			fileType:    FileTypeLTSV,
+			compression: CompressionS2,
 			compress: func(data []byte) ([]byte, error) {
 				var buf bytes.Buffer
 				w := s2.NewWriter(&buf)
@@ -941,8 +976,9 @@ func TestCreateDecompressedReader_LTSVCompressionTypes(t *testing.T) {
 			},
 		},
 		{
-			name:     "lz4 compressed LTSV",
-			fileType: FileTypeLTSVLZ4,
+			name:        "lz4 compressed LTSV",
+			fileType:    FileTypeLTSV,
+			compression: CompressionLZ4,
 			compress: func(data []byte) ([]byte, error) {
 				var buf bytes.Buffer
 				w := lz4.NewWriter(&buf)
@@ -964,7 +1000,7 @@ func TestCreateDecompressedReader_LTSVCompressionTypes(t *testing.T) {
 			compressedData, err := tt.compress([]byte(originalData))
 			require.NoError(t, err, "Failed to compress data")
 
-			parser := newStreamingParser(tt.fileType, "test_ltsv", 1024)
+			parser := newStreamingParser(tt.fileType, tt.compression, "test_ltsv", 1024)
 			reader := bytes.NewReader(compressedData)
 
 			table, err := parser.parseFromReader(reader)
@@ -972,8 +1008,13 @@ func TestCreateDecompressedReader_LTSVCompressionTypes(t *testing.T) {
 
 			assert.Equal(t, "test_ltsv", table.getName(), "Table name mismatch")
 
-			records := table.getRecords()
-			assert.Len(t, records, 2, "Records length mismatch")
+			// The labels are checked too; see the CSV table for why the rows alone
+			// do not pin the codec.
+			assert.Equal(t, header{"name", "age", "city"}, table.getHeader(), "Header mismatch")
+			assert.Equal(t, []Record{
+				{"Alice", "30", "Tokyo"},
+				{"Bob", "25", "Osaka"},
+			}, table.getRecords(), "Records mismatch")
 		})
 	}
 }
@@ -985,20 +1026,21 @@ func TestCreateDecompressedReader_InvalidData(t *testing.T) {
 	invalidData := []byte("this is not valid compressed data")
 
 	tests := []struct {
-		name     string
-		fileType FileType
+		name        string
+		fileType    FileType
+		compression CompressionType
 	}{
-		{"invalid gzip", FileTypeCSVGZ},
-		{"invalid zstd", FileTypeCSVZSTD},
-		{"invalid xz", FileTypeCSVXZ},
-		{"invalid zlib", FileTypeCSVZLIB},
+		{"invalid gzip", FileTypeCSV, CompressionGZ},
+		{"invalid zstd", FileTypeCSV, CompressionZSTD},
+		{"invalid xz", FileTypeCSV, CompressionXZ},
+		{"invalid zlib", FileTypeCSV, CompressionZLIB},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			parser := newStreamingParser(tt.fileType, "test", 1024)
+			parser := newStreamingParser(tt.fileType, tt.compression, "test", 1024)
 			reader := bytes.NewReader(invalidData)
 
 			_, err := parser.parseFromReader(reader)
@@ -1047,7 +1089,7 @@ func TestHandleCloseError(t *testing.T) {
 func TestStreamingParser_ParseFromReader_UnsupportedFormat(t *testing.T) {
 	t.Parallel()
 
-	parser := newStreamingParser(FileTypeUnsupported, "test", 1024)
+	parser := newStreamingParser(FileTypeUnsupported, CompressionNone, "test", 1024)
 	reader := strings.NewReader("test data")
 
 	_, err := parser.parseFromReader(reader)
@@ -1058,7 +1100,7 @@ func TestStreamingParser_ParseFromReader_UnsupportedFormat(t *testing.T) {
 func TestStreamingParser_ProcessInChunks_UnsupportedFormat(t *testing.T) {
 	t.Parallel()
 
-	parser := newStreamingParser(FileTypeUnsupported, "test", 1024)
+	parser := newStreamingParser(FileTypeUnsupported, CompressionNone, "test", 1024)
 	reader := strings.NewReader("test data")
 
 	err := parser.ProcessInChunks(reader, func(_ *tableChunk) error {
@@ -1076,7 +1118,7 @@ func TestParseJSONStream(t *testing.T) {
 
 		input := `[{"name":"Alice","age":30},{"name":"Bob","age":25}]`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
 
 		result, err := parser.parseJSONStream(reader)
 
@@ -1092,7 +1134,7 @@ func TestParseJSONStream(t *testing.T) {
 
 		input := `{"name":"Alice","age":30}`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
 
 		result, err := parser.parseJSONStream(reader)
 
@@ -1107,7 +1149,7 @@ func TestParseJSONStream(t *testing.T) {
 
 		input := `[{"id":1,"address":{"city":"Tokyo","country":"Japan"},"tags":["dev","go"]}]`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
 
 		result, err := parser.parseJSONStream(reader)
 
@@ -1128,7 +1170,7 @@ func TestParseJSONStream(t *testing.T) {
 
 		input := `[{"name":"Alice"}]`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
 
 		result, err := parser.parseJSONStream(reader)
 
@@ -1140,7 +1182,7 @@ func TestParseJSONStream(t *testing.T) {
 		t.Parallel()
 
 		reader := strings.NewReader("")
-		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
 
 		_, err := parser.parseJSONStream(reader)
 
@@ -1152,7 +1194,7 @@ func TestParseJSONStream(t *testing.T) {
 		t.Parallel()
 
 		reader := strings.NewReader("[]")
-		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
 
 		_, err := parser.parseJSONStream(reader)
 
@@ -1164,7 +1206,7 @@ func TestParseJSONStream(t *testing.T) {
 		t.Parallel()
 
 		reader := strings.NewReader("{invalid json}")
-		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
 
 		_, err := parser.parseJSONStream(reader)
 
@@ -1181,7 +1223,7 @@ func TestParseJSONLStream(t *testing.T) {
 
 		input := "{\"name\":\"Alice\",\"age\":30}\n{\"name\":\"Bob\",\"age\":25}\n{\"name\":\"Charlie\",\"age\":35}"
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
 
 		result, err := parser.parseJSONLStream(reader)
 
@@ -1198,7 +1240,7 @@ func TestParseJSONLStream(t *testing.T) {
 
 		input := "{\"name\":\"Alice\"}\n\n{\"name\":\"Bob\"}\n\n"
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
 
 		result, err := parser.parseJSONLStream(reader)
 
@@ -1211,7 +1253,7 @@ func TestParseJSONLStream(t *testing.T) {
 
 		input := `{"id":1,"address":{"city":"Tokyo"},"tags":["dev","go"]}`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
 
 		result, err := parser.parseJSONLStream(reader)
 
@@ -1229,7 +1271,7 @@ func TestParseJSONLStream(t *testing.T) {
 
 		input := `{"name":"Alice"}`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
 
 		result, err := parser.parseJSONLStream(reader)
 
@@ -1241,7 +1283,7 @@ func TestParseJSONLStream(t *testing.T) {
 		t.Parallel()
 
 		reader := strings.NewReader("")
-		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
 
 		_, err := parser.parseJSONLStream(reader)
 
@@ -1254,7 +1296,7 @@ func TestParseJSONLStream(t *testing.T) {
 
 		input := "{\"name\":\"Alice\"}\nnot valid json\n{\"name\":\"Bob\"}"
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
 
 		_, err := parser.parseJSONLStream(reader)
 
@@ -1269,7 +1311,7 @@ func TestParseJSONLStream(t *testing.T) {
 		line := `{"big":"` + bigValue + `"}`
 		input := line + "\n" + `{"small":"ok"}`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
 
 		result, err := parser.parseJSONLStream(reader)
 
@@ -1288,7 +1330,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 
 		input := `[{"name":"Alice"},{"name":"Bob"},{"name":"Charlie"}]`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
 
 		var chunks []*tableChunk
 		err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
@@ -1306,7 +1348,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 
 		input := `[{"i":1},{"i":2},{"i":3},{"i":4},{"i":5}]`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSON, "test_json", 2) // chunk size = 2
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", 2) // chunk size = 2
 
 		var chunks []*tableChunk
 		err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
@@ -1333,7 +1375,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 
 		input := `{"name":"Alice"}`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
 
 		var chunks []*tableChunk
 		err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
@@ -1350,7 +1392,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 		t.Parallel()
 
 		reader := strings.NewReader("")
-		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
 
 		err := parser.processJSONInChunks(reader, func(_ *tableChunk) error {
 			return nil
@@ -1365,7 +1407,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 
 		input := `[{"a":1}] garbage`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSON, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
 
 		err := parser.processJSONInChunks(reader, func(_ *tableChunk) error {
 			return nil
@@ -1384,7 +1426,7 @@ func TestProcessJSONLInChunks(t *testing.T) {
 
 		input := "{\"name\":\"Alice\"}\n{\"name\":\"Bob\"}\n{\"name\":\"Charlie\"}"
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
 
 		var chunks []*tableChunk
 		err := parser.processJSONLInChunks(reader, func(chunk *tableChunk) error {
@@ -1402,7 +1444,7 @@ func TestProcessJSONLInChunks(t *testing.T) {
 
 		input := "{\"i\":1}\n{\"i\":2}\n{\"i\":3}\n{\"i\":4}\n{\"i\":5}"
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", 2) // chunk size = 2
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", 2) // chunk size = 2
 
 		var chunks []*tableChunk
 		err := parser.processJSONLInChunks(reader, func(chunk *tableChunk) error {
@@ -1427,7 +1469,7 @@ func TestProcessJSONLInChunks(t *testing.T) {
 		t.Parallel()
 
 		reader := strings.NewReader("")
-		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
 
 		err := parser.processJSONLInChunks(reader, func(_ *tableChunk) error {
 			return nil
@@ -1442,7 +1484,7 @@ func TestProcessJSONLInChunks(t *testing.T) {
 
 		input := "{\"name\":\"Alice\"}\nnot valid json\n{\"name\":\"Bob\"}"
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSONL, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
 
 		err := parser.processJSONLInChunks(reader, func(_ *tableChunk) error {
 			return nil
@@ -1496,7 +1538,7 @@ func TestStreamingParser_ParseFromReader_CompressedJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, gw.Close())
 
-		parser := newStreamingParser(FileTypeJSONGZ, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionGZ, "test_json", DefaultRowsPerChunk)
 		result, err := parser.parseFromReader(&buf)
 
 		require.NoError(t, err)
@@ -1513,7 +1555,7 @@ func TestStreamingParser_ParseFromReader_CompressedJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, gw.Close())
 
-		parser := newStreamingParser(FileTypeJSONLGZ, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionGZ, "test_jsonl", DefaultRowsPerChunk)
 		result, err := parser.parseFromReader(&buf)
 
 		require.NoError(t, err)
@@ -1531,7 +1573,7 @@ func TestStreamingParser_ParseFromReader_CompressedJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, enc.Close())
 
-		parser := newStreamingParser(FileTypeJSONZSTD, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionZSTD, "test_json", DefaultRowsPerChunk)
 		result, err := parser.parseFromReader(&buf)
 
 		require.NoError(t, err)
@@ -1548,7 +1590,7 @@ func TestStreamingParser_ParseFromReader_CompressedJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, enc.Close())
 
-		parser := newStreamingParser(FileTypeJSONLZSTD, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionZSTD, "test_jsonl", DefaultRowsPerChunk)
 		result, err := parser.parseFromReader(&buf)
 
 		require.NoError(t, err)
@@ -1564,7 +1606,7 @@ func TestStreamingParser_ParseFromReader_CompressedJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, sw.Close())
 
-		parser := newStreamingParser(FileTypeJSONSNAPPY, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionSNAPPY, "test_json", DefaultRowsPerChunk)
 		result, err := parser.parseFromReader(&buf)
 
 		require.NoError(t, err)
@@ -1580,7 +1622,7 @@ func TestStreamingParser_ParseFromReader_CompressedJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, sw.Close())
 
-		parser := newStreamingParser(FileTypeJSONLS2, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionS2, "test_jsonl", DefaultRowsPerChunk)
 		result, err := parser.parseFromReader(&buf)
 
 		require.NoError(t, err)
@@ -1596,7 +1638,7 @@ func TestStreamingParser_ParseFromReader_CompressedJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, lw.Close())
 
-		parser := newStreamingParser(FileTypeJSONLZ4, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionLZ4, "test_json", DefaultRowsPerChunk)
 		result, err := parser.parseFromReader(&buf)
 
 		require.NoError(t, err)
@@ -1612,7 +1654,7 @@ func TestStreamingParser_ParseFromReader_CompressedJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, zw.Close())
 
-		parser := newStreamingParser(FileTypeJSONLZLIB, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionZLIB, "test_jsonl", DefaultRowsPerChunk)
 		result, err := parser.parseFromReader(&buf)
 
 		require.NoError(t, err)
@@ -1634,7 +1676,7 @@ func TestStreamingParser_ProcessInChunks_CompressedJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, gw.Close())
 
-		parser := newStreamingParser(FileTypeJSONGZ, "test_json", 2)
+		parser := newStreamingParser(FileTypeJSON, CompressionGZ, "test_json", 2)
 
 		var chunks []*tableChunk
 		err = parser.ProcessInChunks(&buf, func(chunk *tableChunk) error {
