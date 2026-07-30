@@ -751,7 +751,9 @@ func parseLTSV(reader io.Reader) (*TableData, error) {
 	var parsedRecords []map[string]string
 
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
+		// Only the line terminator is removed. TrimSpace took the trailing spaces
+		// of the last field with it, so a value ending in a space lost it.
+		line = strings.TrimRight(line, "\r")
 		if line == "" {
 			continue
 		}
@@ -762,7 +764,11 @@ func parseLTSV(reader io.Reader) (*TableData, error) {
 			kv := strings.SplitN(pair, ":", 2)
 			if len(kv) == 2 {
 				key := strings.TrimSpace(kv[0])
-				value := strings.TrimSpace(kv[1])
+				// The value is the bytes up to the next tab or newline. Trimming it lost
+				// whitespace the writer had written and CSV would have kept, so the same
+				// data read from two formats disagreed. The label is trimmed because a
+				// space around one is malformed either way.
+				value := kv[1]
 				// A label repeated within one record cannot map to distinct columns.
 				// Reject it rather than silently keeping only the last value.
 				if _, dup := recordMap[key]; dup {
