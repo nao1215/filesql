@@ -859,10 +859,11 @@ func (o writeOnly) Write(p []byte) (int, error) {
 
 // writeParquetData writes data to Parquet format. nulls, when non-nil, marks the
 // cells to store as a Parquet null; rows[r][c] is ignored for a cell marked null.
+// A table with no rows is written as a schema with no row groups, which is a
+// valid Parquet file: the other formats write their header and nothing else, and
+// a dump that refused to write an emptied table let an auto-save keep the rows
+// the caller had deleted.
 func writeParquetData(w io.Writer, columns []string, rows [][]string, nulls [][]bool) error {
-	if len(rows) == 0 {
-		return fmt.Errorf("%w: no data to write", ErrEmptyData)
-	}
 	if len(columns) == 0 {
 		return fmt.Errorf("%w: no columns defined", ErrEmptyData)
 	}
@@ -914,9 +915,13 @@ func writeParquetData(w io.Writer, columns []string, rows [][]string, nulls [][]
 	if err != nil {
 		return fmt.Errorf("%w: failed to create parquet writer: %s", ErrIOOperation, err.Error())
 	}
-	if err := writer.Write(record); err != nil {
-		_ = writer.Close() // Release the writer; the write error is the one to report
-		return fmt.Errorf("%w: failed to write record to parquet: %s", ErrIOOperation, err.Error())
+	// An empty record has no row group to write; Close still writes the schema and
+	// the footer, which is the whole file for a table with no rows.
+	if record.NumRows() > 0 {
+		if err := writer.Write(record); err != nil {
+			_ = writer.Close() // Release the writer; the write error is the one to report
+			return fmt.Errorf("%w: failed to write record to parquet: %s", ErrIOOperation, err.Error())
+		}
 	}
 
 	// Close writes the footer, so this is where an incomplete file shows up.
