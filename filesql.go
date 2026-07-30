@@ -386,7 +386,7 @@ func dumpSQLiteTable(db *sql.DB, tableName, outputDir string, options DumpOption
 // "../escaped" had its dump written next to the output directory rather than in
 // it, past whatever the caller had decided the dump was allowed to touch. Both
 // separators are refused on every platform, not only the one the running OS
-// honours, so the same database dumped on Linux and on Windows agrees on which
+// honors, so the same database dumped on Linux and on Windows agrees on which
 // tables it can write.
 func dumpFilePath(outputDir, tableName, ext string) (string, error) {
 	name := tableName + ext
