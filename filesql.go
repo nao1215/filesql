@@ -293,7 +293,10 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 
 	// Export ACH files
 	for baseName := range achBaseNames {
-		outputPath := filepath.Join(outputDir, baseName+".ach")
+		outputPath, err := dumpFilePath(outputDir, baseName, extACH)
+		if err != nil {
+			return err
+		}
 		if err := DumpACH(ctx, db, baseName, outputPath); err != nil {
 			return fmt.Errorf("%w: failed to export ACH file %s: %w", ErrACH, baseName, err)
 		}
@@ -301,7 +304,10 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 
 	// Export Fedwire files
 	for baseName := range wireBaseNames {
-		outputPath := filepath.Join(outputDir, baseName+".fed")
+		outputPath, err := dumpFilePath(outputDir, baseName, extFED)
+		if err != nil {
+			return err
+		}
 		if err := DumpFedWire(ctx, db, baseName, outputPath); err != nil {
 			return fmt.Errorf("%w: failed to export Fedwire file %s: %w", ErrWire, baseName, err)
 		}
@@ -364,10 +370,32 @@ func dumpSQLiteTable(db *sql.DB, tableName, outputDir string, options DumpOption
 	defer rows.Close()
 
 	// Create output file
-	fileName := tableName + options.FileExtension()
-	outputPath := filepath.Join(outputDir, fileName)
+	outputPath, err := dumpFilePath(outputDir, tableName, options.FileExtension())
+	if err != nil {
+		return err
+	}
 
 	return writeSQLiteTableData(outputPath, tableName, columns, rows, options)
+}
+
+// dumpFilePath is the path a table's dump is written to, or an error when the
+// table's name cannot be one.
+//
+// A table name is an arbitrary SQL identifier, so it can carry a path separator
+// or a parent reference, and filepath.Join resolves those: a table created as
+// "../escaped" had its dump written next to the output directory rather than in
+// it, past whatever the caller had decided the dump was allowed to touch. Both
+// separators are refused on every platform, not only the one the running OS
+// honors, so the same database dumped on Linux and on Windows agrees on which
+// tables it can write.
+func dumpFilePath(outputDir, tableName, ext string) (string, error) {
+	name := tableName + ext
+	path := filepath.Join(outputDir, name)
+	if strings.ContainsAny(name, `/\`) || filepath.Dir(path) != filepath.Clean(outputDir) {
+		return "", fmt.Errorf("%w: table %q cannot be dumped because its name is not usable as a file name inside %s",
+			ErrInvalidData, tableName, outputDir)
+	}
+	return path, nil
 }
 
 // timeDeclTypes are the declared column types the SQLite driver turns into a
