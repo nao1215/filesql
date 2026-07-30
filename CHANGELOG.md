@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- An LTSV value lost the whitespace around it. The reader trimmed the value, while the LTSV writer wrote it and CSV and TSV kept theirs, so `v:  padded  ` loaded as `padded`: a dump and reload through LTSV lost the spaces, and the same data read from LTSV and from CSV disagreed. LTSV defines a value as everything up to the next tab or newline and says nothing about trimming, so the value is now read as those bytes. The trailing side needed the line-level trim narrowed to the line terminator, which had been taking the last field's trailing spaces with it. A label is still trimmed: LTSV restricts one to letters, digits, underscore, dot, and hyphen, so a space around a label is malformed either way.
+
 ## [0.28.0] - 2026-07-30
 
 ### Fixed

@@ -248,7 +248,9 @@ func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 	var records []map[string]string
 
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
+		// Only the line terminator is removed. TrimSpace took the trailing spaces
+		// of the last field with it, so a value ending in a space lost it.
+		line = strings.TrimRight(line, "\r")
 		if line == "" {
 			continue
 		}
@@ -258,7 +260,11 @@ func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 			kv := strings.SplitN(pair, ":", 2)
 			if len(kv) == 2 {
 				key := strings.TrimSpace(kv[0])
-				value := strings.TrimSpace(kv[1])
+				// The value is the bytes up to the next tab or newline. Trimming it lost
+				// whitespace the writer had written and CSV would have kept, so the same
+				// data read from two formats disagreed. The label is trimmed because a
+				// space around one is malformed either way.
+				value := kv[1]
 				// A label repeated within the same record cannot be two distinct
 				// columns; keeping the last value would silently drop the earlier
 				// one, so reject it. Ref nao1215/sqly#467.
@@ -493,7 +499,9 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 	// parseLTSVStream for why the order cannot come out of a map.
 	labels := newLabelOrder()
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
+		// Only the line terminator is removed. TrimSpace took the trailing spaces
+		// of the last field with it, so a value ending in a space lost it.
+		line = strings.TrimRight(line, "\r")
 		if line == "" {
 			continue
 		}
@@ -523,7 +531,9 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 	}
 
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
+		// Only the line terminator is removed. TrimSpace took the trailing spaces
+		// of the last field with it, so a value ending in a space lost it.
+		line = strings.TrimRight(line, "\r")
 		if line == "" {
 			continue
 		}
@@ -533,7 +543,11 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 			kv := strings.SplitN(pair, ":", 2)
 			if len(kv) == 2 {
 				key := strings.TrimSpace(kv[0])
-				value := strings.TrimSpace(kv[1])
+				// The value is the bytes up to the next tab or newline. Trimming it lost
+				// whitespace the writer had written and CSV would have kept, so the same
+				// data read from two formats disagreed. The label is trimmed because a
+				// space around one is malformed either way.
+				value := kv[1]
 				// A label repeated within the same record cannot be two distinct
 				// columns; keeping the last value would silently drop the earlier
 				// one, so reject it. Ref nao1215/sqly#467.
