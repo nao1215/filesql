@@ -295,7 +295,7 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 	for baseName := range achBaseNames {
 		outputPath := filepath.Join(outputDir, baseName+".ach")
 		if err := DumpACH(ctx, db, baseName, outputPath); err != nil {
-			return fmt.Errorf("%w: failed to export ACH file %s: %s", ErrACH, baseName, err.Error())
+			return fmt.Errorf("%w: failed to export ACH file %s: %w", ErrACH, baseName, err)
 		}
 	}
 
@@ -303,7 +303,7 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 	for baseName := range wireBaseNames {
 		outputPath := filepath.Join(outputDir, baseName+".fed")
 		if err := DumpFedWire(ctx, db, baseName, outputPath); err != nil {
-			return fmt.Errorf("%w: failed to export Fedwire file %s: %s", ErrWire, baseName, err.Error())
+			return fmt.Errorf("%w: failed to export Fedwire file %s: %w", ErrWire, baseName, err)
 		}
 	}
 
@@ -313,7 +313,7 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 			continue
 		}
 		if err := dumpSQLiteTable(db, tableName, outputDir, options); err != nil {
-			return fmt.Errorf("%w: failed to export table %s: %s", ErrIOOperation, tableName, err.Error())
+			return fmt.Errorf("%w: failed to export table %s: %w", ErrIOOperation, tableName, err)
 		}
 	}
 
@@ -583,6 +583,15 @@ func writeTSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
 
 // writeLTSVData writes data in LTSV format
 func writeLTSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
+	// A label is read up to the first colon, so a colon in a column name would
+	// make the rest of the name part of the value. Checked once, ahead of the
+	// rows, because it does not depend on them.
+	for _, col := range columns {
+		if err := checkLTSVLabel(col); err != nil {
+			return err
+		}
+	}
+
 	// Prepare for scanning
 	values := make([]any, len(columns))
 	scanArgs := make([]any, len(columns))
@@ -599,7 +608,11 @@ func writeLTSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
 		// Build LTSV record
 		parts := make([]string, 0, len(columns))
 		for i, col := range columns {
-			parts = append(parts, col+":"+formatDumpValue(values[i]))
+			value := formatDumpValue(values[i])
+			if err := checkLTSVValue(col, value); err != nil {
+				return err
+			}
+			parts = append(parts, col+":"+value)
 		}
 
 		line := strings.Join(parts, "\t") + "\n"
@@ -609,6 +622,52 @@ func writeLTSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
 	}
 
 	return rows.Err()
+}
+
+// ltsvForbidden names the characters that end a field or a record in LTSV, which
+// is why a value cannot carry one.
+var ltsvForbidden = []struct {
+	char rune
+	name string
+}{
+	{char: '\t', name: "tab"},
+	{char: '\n', name: "newline"},
+	{char: '\r', name: "carriage return"},
+}
+
+// checkLTSVValue refuses a value LTSV has no way to hold.
+//
+// LTSV separates fields with a tab and records with a newline, and defines no
+// escape for either. Writing one anyway produced a file that parses as something
+// else: a tab inside a value opened a second field, which has no label and which
+// a reader drops without a word, and a newline split the record in two. Failing
+// here costs nothing, because the dump is staged and the destination is only
+// replaced on success — where silently dropping the value cost the value.
+func checkLTSVValue(column, value string) error {
+	for _, f := range ltsvForbidden {
+		if strings.ContainsRune(value, f.char) {
+			return fmt.Errorf("%w: LTSV cannot hold a value that contains a %s, and column %q holds a %s; dump this table as CSV or TSV instead",
+				ErrUnsupportedFormat, f.name, column, f.name)
+		}
+	}
+	return nil
+}
+
+// checkLTSVLabel refuses a column name that would not read back as a label. A
+// colon is what separates a label from its value, so it is forbidden here on top
+// of the characters no field may carry.
+func checkLTSVLabel(column string) error {
+	if strings.ContainsRune(column, ':') {
+		return fmt.Errorf("%w: an LTSV label cannot contain a colon, and column %q holds a colon; dump this table as CSV or TSV instead",
+			ErrUnsupportedFormat, column)
+	}
+	for _, f := range ltsvForbidden {
+		if strings.ContainsRune(column, f.char) {
+			return fmt.Errorf("%w: an LTSV label cannot contain a %s, and column %q holds a %s; dump this table as CSV or TSV instead",
+				ErrUnsupportedFormat, f.name, column, f.name)
+		}
+	}
+	return nil
 }
 
 // bytesReaderAt implements io.ReaderAt for byte slices
