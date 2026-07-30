@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - An LTSV value lost the whitespace around it. The reader trimmed the value, while the LTSV writer wrote it and CSV and TSV kept theirs, so `v:  padded  ` loaded as `padded`: a dump and reload through LTSV lost the spaces, and the same data read from LTSV and from CSV disagreed. LTSV defines a value as everything up to the next tab or newline and says nothing about trimming, so the value is now read as those bytes. The trailing side needed the line-level trim narrowed to the line terminator, which had been taking the last field's trailing spaces with it. A label is still trimmed: LTSV restricts one to letters, digits, underscore, dot, and hyphen, so a space around a label is malformed either way.
+- An XLSX dump failed for a table whose name Excel cannot use as a sheet name. A table name comes from a file name, so one longer than 31 characters or holding one of `: \ / ? * [ ]` is ordinary input — a table named after `monthly_sales_report_2026_q3_final.csv` could not be exported to XLSX at all, and the error came from the Excel library rather than this package. The name is now adapted the way sqly already adapted it: the forbidden characters become underscores, the name is cut to 31 runes, and apostrophes are trimmed from the edges. A table whose name Excel cannot hold does not read back under it, because no name would; the alternative was refusing to write the file.
 
 ## [0.28.0] - 2026-07-30
 

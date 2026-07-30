@@ -13,6 +13,46 @@ const sheetFallbackName = "sheet"
 // defaultSheetName is the sheet a new Excel workbook is created with.
 const defaultSheetName = "Sheet1"
 
+// excelSheetNameMaxLen is the longest worksheet name Excel accepts, in runes.
+const excelSheetNameMaxLen = 31
+
+// excelForbiddenSheetChars are the characters Excel rejects in a worksheet name.
+const excelForbiddenSheetChars = `:\/?*[]`
+
+// excelSheetName adapts a table name to Excel's worksheet-name rules.
+//
+// A table name comes from a file name, so one that is long or punctuated is
+// ordinary input rather than a mistake — and handing it to Excel as-is failed the
+// whole dump, so a table named after monthly_sales_report_2026_q3_final.csv could
+// not be exported to XLSX at all. The forbidden characters become underscores,
+// the name is cut to 31 runes, and apostrophes are trimmed from the edges, which
+// Excel also disallows; a name that leaves nothing usable falls back.
+//
+// The adapted name is what a reader turns back into a table name, so a table
+// whose name Excel cannot hold does not survive a round trip under it. There is
+// no name that would: the alternative is refusing to write the file.
+func excelSheetName(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if strings.ContainsRune(excelForbiddenSheetChars, r) {
+			b.WriteByte('_')
+			continue
+		}
+		b.WriteRune(r)
+	}
+
+	sheet := []rune(b.String())
+	if len(sheet) > excelSheetNameMaxLen {
+		sheet = sheet[:excelSheetNameMaxLen]
+	}
+
+	trimmed := strings.Trim(string(sheet), "'")
+	if trimmed == "" {
+		return defaultSheetName
+	}
+	return trimmed
+}
+
 // table represents file contents as database table structure.
 type table struct {
 	// Name is table name derived from file path.
