@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-07-30
+
 ### Fixed
 - An XLSX dump could not be written at all. v0.24.0 staged every table dump in a temporary file next to its destination, and Excel was still saved with `SaveAs`, which picks the container format from the file extension — the staged name ends in `.tmp1234567`, which is not a workbook format, so every uncompressed `OutputFormatXLSX` dump failed with "unsupported workbook file format". A compressed one was written, but its sheet was named after the staged file, so reading it back produced a table called `seed__seed_xlsx_gz` instead of `seed`. Every format now writes to the writer it is handed and takes the table name as a parameter, so no format decides anything from a name that belongs to a temporary file.
 - A Parquet dump reported failure after writing the file correctly. The Parquet writer closes the destination it is given when it can, so the staged file was already closed when the dump came to close it and check that error, and a complete dump failed with "file already closed". The destination is now passed as a writer that exposes only `Write`.
@@ -836,7 +838,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.25.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/nao1215/filesql/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/nao1215/filesql/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/nao1215/filesql/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/nao1215/filesql/compare/v0.22.0...v0.23.0
