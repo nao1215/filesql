@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/array"
@@ -348,14 +349,14 @@ func getSQLiteTableNames(db *sql.DB) ([]string, error) {
 // dumpSQLiteTable exports a single table from SQLite database
 func dumpSQLiteTable(db *sql.DB, tableName, outputDir string, options DumpOptions) error {
 	// Get table columns
-	columns, err := getSQLiteTableColumns(db, tableName)
+	columns, declTypes, err := getSQLiteTableColumns(db, tableName)
 	if err != nil {
 		return fmt.Errorf("%w: failed to get columns for table %s: %s", ErrDatabaseOperation, tableName, err.Error())
 	}
 
 	// Query all data from table
 	ctx := context.Background()
-	query := fmt.Sprintf("SELECT * FROM `%s`", tableName) //nolint:gosec // Table name is validated and comes from database metadata
+	query := fmt.Sprintf("SELECT %s FROM `%s`", dumpSelectList(columns, declTypes), tableName) //nolint:gosec // Table and column names are quoted and come from database metadata
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return err
@@ -369,33 +370,71 @@ func dumpSQLiteTable(db *sql.DB, tableName, outputDir string, options DumpOption
 	return writeSQLiteTableData(outputPath, tableName, columns, rows, options)
 }
 
-// getSQLiteTableColumns retrieves column names for a specific table
-func getSQLiteTableColumns(db *sql.DB, tableName string) ([]string, error) {
+// timeDeclTypes are the declared column types the SQLite driver turns into a
+// time.Time. The driver uppercases a declared type before matching it, and it
+// parses the stored text against seven layouts, so what comes back no longer
+// says which one it was written in.
+var timeDeclTypes = map[string]bool{
+	"DATE":      true,
+	"DATETIME":  true,
+	"TIMESTAMP": true,
+}
+
+// dumpSelectList builds the select list a dump reads through. A column whose
+// declared type the driver converts to a time.Time is read as text instead.
+//
+// Why: a dump writes what the table holds, and the conversion is one-way. The
+// driver parses "2026-07-30" into a time.Time, which formats back as
+// "2026-07-30 00:00:00 +0000 UTC" — a Go value's default layout, not the value
+// that was stored, and not something a reader turns back into the same cell.
+// Asking SQLite for the text keeps whatever is in the cell, including an integer
+// stored in a DATE column, and leaves NULL as NULL.
+func dumpSelectList(columns, declTypes []string) string {
+	if len(columns) == 0 {
+		return "*"
+	}
+
+	parts := make([]string, 0, len(columns))
+	for i, col := range columns {
+		quoted := "`" + strings.ReplaceAll(col, "`", "``") + "`"
+		if i < len(declTypes) && timeDeclTypes[strings.ToUpper(declTypes[i])] {
+			parts = append(parts, "CAST("+quoted+" AS TEXT) AS "+quoted)
+			continue
+		}
+		parts = append(parts, quoted)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// getSQLiteTableColumns retrieves the column names of a table and the type each
+// was declared with. The declared type is what decides whether the driver hands
+// a value back converted; see dumpSelectList.
+func getSQLiteTableColumns(db *sql.DB, tableName string) (columns, declTypes []string, err error) {
 	ctx := context.Background()
 	query := fmt.Sprintf("PRAGMA table_info(`%s`)", tableName)
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
 
-	var columns []string
 	for rows.Next() {
 		var cid int
 		var name, dataType string
 		var notNull, dfltValue, pk any
 
 		if err := rows.Scan(&cid, &name, &dataType, &notNull, &dfltValue, &pk); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		columns = append(columns, name)
+		declTypes = append(declTypes, dataType)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return columns, nil
+	return columns, declTypes, nil
 }
 
 // writeSQLiteTableData writes table data to file with specified format. The
@@ -489,11 +528,7 @@ func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, deli
 
 		record := make([]string, len(columns))
 		for i, value := range values {
-			if value == nil {
-				record[i] = ""
-			} else {
-				record[i] = fmt.Sprintf("%v", value)
-			}
+			record[i] = formatDumpValue(value)
 		}
 
 		if err := csvWriter.Write(record); err != nil {
@@ -502,6 +537,38 @@ func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, deli
 	}
 
 	return rows.Err()
+}
+
+// formatDumpValue renders one cell for a text-based dump.
+//
+// Every type a SQL driver may hand back is named, because fmt's %v as a
+// catch-all prints a Go value rather than a data value: a BLOB came out as the
+// decimal bytes of a Go slice ("[104 101 108 108 111]" for "hello"), which no
+// reader turns back into the cell it came from. A NULL and an empty string both
+// render empty, which is what the text formats can express.
+func formatDumpValue(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	case []byte:
+		return string(v)
+	case int64:
+		return strconv.FormatInt(v, 10)
+	case float64:
+		// 'g' with -1 digits is the shortest form that reads back as the same
+		// float64, which is what %v produced for the values it did get right.
+		return strconv.FormatFloat(v, 'g', -1, 64)
+	case bool:
+		return strconv.FormatBool(v)
+	case time.Time:
+		// A dump reads date columns as text so this is not reached for them; it
+		// stays a defined answer for a driver that converts something else.
+		return v.Format(time.RFC3339Nano)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }
 
 // writeCSVData writes data in CSV format
@@ -530,13 +597,9 @@ func writeLTSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
 		}
 
 		// Build LTSV record
-		var parts []string
+		parts := make([]string, 0, len(columns))
 		for i, col := range columns {
-			value := ""
-			if values[i] != nil {
-				value = fmt.Sprintf("%v", values[i])
-			}
-			parts = append(parts, fmt.Sprintf("%s:%s", col, value))
+			parts = append(parts, col+":"+formatDumpValue(values[i]))
 		}
 
 		line := strings.Join(parts, "\t") + "\n"
@@ -682,9 +745,9 @@ func writeParquetTableData(w io.Writer, columns []string, rows *sql.Rows) error 
 		for i, value := range values {
 			if value == nil {
 				nullRow[i] = true
-			} else {
-				row[i] = fmt.Sprintf("%v", value)
+				continue
 			}
+			row[i] = formatDumpValue(value)
 		}
 		allRows = append(allRows, row)
 		allNulls = append(allNulls, nullRow)
@@ -838,21 +901,9 @@ func writeXLSXTableData(w io.Writer, tableName string, columns []string, rows *s
 			if err != nil {
 				return fmt.Errorf("failed to generate cell name for column %d, row %d: %w", i+1, rowIndex, err)
 			}
-			var cellValue interface{}
-
-			// Convert SQL values to appropriate Excel types
-			if val == nil {
-				cellValue = ""
-			} else {
-				switch v := val.(type) {
-				case []byte:
-					cellValue = string(v)
-				case string:
-					cellValue = v
-				default:
-					cellValue = fmt.Sprintf("%v", v)
-				}
-			}
+			// Every cell is written as text, the same string the text formats
+			// produce, so one table dumped twice does not disagree with itself.
+			cellValue := formatDumpValue(val)
 
 			if err := f.SetCellValue(sheetName, cell, cellValue); err != nil {
 				return fmt.Errorf("failed to set cell value at %s: %w", cell, err)

@@ -3004,7 +3004,7 @@ func TestSQLiteDumpFunctions(t *testing.T) {
 		}
 
 		// Test getSQLiteTableColumns
-		columns, err := getSQLiteTableColumns(db, "test_table")
+		columns, _, err := getSQLiteTableColumns(db, "test_table")
 		require.NoError(t, err, "getSQLiteTableColumns failed")
 
 		expectedColumns := []string{"id", "name", "age", "salary"}
