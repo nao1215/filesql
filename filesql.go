@@ -528,6 +528,16 @@ func createCompressedWriter(w io.Writer, compression CompressionType) (io.Writer
 	return handler.CreateWriter(w)
 }
 
+// loneEmptyField is what a record of one empty field is written as.
+//
+// Written plainly it is a blank line, and a blank line is not a record: a reader
+// skips it, so a one-column table's empty rows disappeared and the dump reported
+// success. The quotes say "one field, and it is empty", which cannot be read as
+// anything else. encoding/csv's writer does not quote an empty field — it has no
+// way to know it is the only one on the line — so this record is written around
+// it.
+const loneEmptyField = `""`
+
 // writeDelimitedData writes data in CSV or TSV format based on delimiter
 func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, delimiter rune) error {
 	csvWriter := csv.NewWriter(writer)
@@ -536,8 +546,22 @@ func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, deli
 	}
 	defer csvWriter.Flush()
 
+	// writeRecord writes one record, taking the lone empty field around the csv
+	// writer. Flushing first keeps the two writers' output in order.
+	writeRecord := func(record []string) error {
+		if len(record) != 1 || record[0] != "" {
+			return csvWriter.Write(record)
+		}
+		csvWriter.Flush()
+		if err := csvWriter.Error(); err != nil {
+			return err
+		}
+		_, err := io.WriteString(writer, loneEmptyField+"\n")
+		return err
+	}
+
 	// Write header
-	if err := csvWriter.Write(columns); err != nil {
+	if err := writeRecord(columns); err != nil {
 		return err
 	}
 
@@ -559,7 +583,7 @@ func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, deli
 			record[i] = formatDumpValue(value)
 		}
 
-		if err := csvWriter.Write(record); err != nil {
+		if err := writeRecord(record); err != nil {
 			return err
 		}
 	}
