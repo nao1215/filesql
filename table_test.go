@@ -267,3 +267,29 @@ func TestSanitizeTableName(t *testing.T) {
 		})
 	}
 }
+
+func TestXLSXSheetTableName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		base     string
+		sheet    string
+		expected string
+	}{
+		{"a differing sheet name is appended", "sample", "Sheet1", "sample_Sheet1"},
+		{"a second sheet keeps its own table", "sample", "Sheet2", "sample_Sheet2"},
+		{"a sheet named after the file is not repeated", "people", "people", "people"},
+		{"the comparison is made after sanitizing", "my_data", "my-data", "my_data"},
+		{"a sheet name that only differs in case is still appended", "people", "People", "people_People"},
+		{"an unusable sheet name falls back and is appended", "sample", "!!!", "sample_" + sheetFallbackName},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.expected, xlsxSheetTableName(tt.base, tt.sheet))
+		})
+	}
+}
