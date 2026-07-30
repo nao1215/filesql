@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-07-30
+
 ### Fixed
 - A row whose only column was empty disappeared from a CSV or TSV dump. Written plainly, a record of one empty field is a blank line, and a blank line is not a record — a reader skips it. A one-column table of five rows, two of them empty, was dumped and read back as three, and the dump reported success. Such a record is now written as `""`, which says "one field, and it is empty" and cannot be read as anything else. A record of several columns is unaffected, because its delimiters already say how many fields there are.
 
@@ -847,7 +849,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.27.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.28.0...HEAD
+[0.28.0]: https://github.com/nao1215/filesql/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/nao1215/filesql/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/nao1215/filesql/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/nao1215/filesql/compare/v0.24.0...v0.25.0
