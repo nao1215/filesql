@@ -1,7 +1,6 @@
 package filesql
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/csv"
@@ -367,7 +366,7 @@ func dumpSQLiteTable(db *sql.DB, tableName, outputDir string, options DumpOption
 	fileName := tableName + options.FileExtension()
 	outputPath := filepath.Join(outputDir, fileName)
 
-	return writeSQLiteTableData(outputPath, columns, rows, options)
+	return writeSQLiteTableData(outputPath, tableName, columns, rows, options)
 }
 
 // getSQLiteTableColumns retrieves column names for a specific table
@@ -403,50 +402,39 @@ func getSQLiteTableColumns(db *sql.DB, tableName string) ([]string, error) {
 // write is staged and moved into place, so a format or I/O error partway through
 // leaves an existing destination — which for a write-back is the caller's source
 // file — exactly as it was.
-func writeSQLiteTableData(outputPath string, columns []string, rows *sql.Rows, options DumpOptions) error {
-	return writeFileAtomicallyAtPath(outputPath, func(path string) error {
-		return writeSQLiteTableDataTo(path, columns, rows, options)
+func writeSQLiteTableData(outputPath, tableName string, columns []string, rows *sql.Rows, options DumpOptions) error {
+	return writeFileAtomically(outputPath, func(w io.Writer) error {
+		return writeSQLiteTableDataTo(w, tableName, columns, rows, options)
 	})
 }
 
-// writeSQLiteTableDataTo writes table data to the given path with the specified
-// format. Callers reach it through writeSQLiteTableData, which stages the path.
+// writeSQLiteTableDataTo writes table data to w in the requested format.
 //
-// The named return lets the deferred closes report their own failure. A
-// compressor writes its trailer on Close, so a compressed output that failed to
-// finish is only detectable there; dropping that error would commit a truncated
-// archive over the destination as if it had been written.
-func writeSQLiteTableDataTo(outputPath string, columns []string, rows *sql.Rows, options DumpOptions) (err error) {
-	// Parquet and XLSX open the output themselves, so they neither need the file
-	// created here nor the compression wrapper.
-	switch options.Format {
-	case OutputFormatParquet:
-		return writeParquetTableData(outputPath, columns, rows, options.Compression)
-	case OutputFormatXLSX:
-		return writeXLSXTableData(outputPath, columns, rows, options.Compression)
+// Why every format writes to an io.Writer rather than to a path of its own: the
+// caller stages the write, so the only path available here is a temporary one
+// whose name means nothing. Excel reads both its container format and its sheet
+// name out of the name it is given, so handing it the staged path produced a
+// rejected save or a sheet named after the temporary file. tableName carries the
+// one piece of naming a format legitimately needs.
+//
+// The named return lets the deferred close report its own failure. A compressor
+// writes its trailer on Close, so a compressed output that failed to finish is
+// only detectable there; dropping that error would commit a truncated archive
+// over the destination as if it had been written.
+func writeSQLiteTableDataTo(w io.Writer, tableName string, columns []string, rows *sql.Rows, options DumpOptions) (err error) {
+	// Parquet compresses per column internally, so an outer compressor would only
+	// bloat the file and hide it behind a second extension.
+	if options.Format == OutputFormatParquet && options.Compression != CompressionNone {
+		return fmt.Errorf("%w: external compression not supported for Parquet format - use Parquet's built-in compression instead", ErrUnsupportedFormat)
 	}
 
-	// Create the file
-	file, err := os.Create(outputPath) //nolint:gosec // Output path is constructed from validated directory and table name
-	if err != nil {
-		return fmt.Errorf("%w: failed to create file %s: %s", ErrIOOperation, outputPath, err.Error())
-	}
-	// Registered first so it runs last: the compressor must flush its trailer
-	// into the file before the file is closed.
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("%w: failed to close file %s: %s", ErrIOOperation, outputPath, closeErr.Error())
-		}
-	}()
-
-	// Create writer with compression if needed
-	writer, closeWriter, err := createCompressedWriter(file, options.Compression)
+	writer, closeWriter, err := createCompressedWriter(w, options.Compression)
 	if err != nil {
 		return fmt.Errorf("%w: failed to create writer: %s", ErrCompression, err.Error())
 	}
 	defer func() {
 		if closeErr := closeWriter(); closeErr != nil && err == nil {
-			err = fmt.Errorf("%w: failed to finish writing %s: %s", ErrCompression, outputPath, closeErr.Error())
+			err = fmt.Errorf("%w: failed to finish writing %s: %s", ErrCompression, tableName, closeErr.Error())
 		}
 	}()
 
@@ -458,15 +446,19 @@ func writeSQLiteTableDataTo(outputPath string, columns []string, rows *sql.Rows,
 		return writeTSVData(writer, columns, rows)
 	case OutputFormatLTSV:
 		return writeLTSVData(writer, columns, rows)
+	case OutputFormatParquet:
+		return writeParquetTableData(writer, columns, rows)
+	case OutputFormatXLSX:
+		return writeXLSXTableData(writer, tableName, columns, rows)
 	default:
 		return fmt.Errorf("%w: unsupported output format: %v", ErrUnsupportedFormat, options.Format)
 	}
 }
 
 // createCompressedWriter creates an appropriate writer based on compression type
-func createCompressedWriter(file *os.File, compression CompressionType) (io.Writer, func() error, error) {
+func createCompressedWriter(w io.Writer, compression CompressionType) (io.Writer, func() error, error) {
 	handler := NewCompressionHandler(compression)
-	return handler.CreateWriter(file)
+	return handler.CreateWriter(w)
 }
 
 // writeDelimitedData writes data in CSV or TSV format based on delimiter
@@ -662,15 +654,9 @@ func extractValueFromArrowArray(arr arrow.Array, index int64) string {
 }
 
 // writeParquetTableData writes SQLite table data to Parquet format
-func writeParquetTableData(outputPath string, columns []string, rows *sql.Rows, compression CompressionType) error {
+func writeParquetTableData(w io.Writer, columns []string, rows *sql.Rows) error {
 	if len(columns) == 0 {
 		return fmt.Errorf("%w: no columns defined", ErrEmptyData)
-	}
-
-	// For Parquet format, compression is handled at the file level, not stream level
-	// We ignore the compression parameter for now as Parquet has its own compression
-	if compression != CompressionNone {
-		return fmt.Errorf("%w: external compression not supported for Parquet format - use Parquet's built-in compression instead", ErrUnsupportedFormat)
 	}
 
 	// Read all rows into memory first. nulls runs parallel to rows and marks the
@@ -708,25 +694,28 @@ func writeParquetTableData(outputPath string, columns []string, rows *sql.Rows, 
 		return fmt.Errorf("%w: error iterating rows: %s", ErrDatabaseOperation, err.Error())
 	}
 
-	return writeParquetData(outputPath, columns, allRows, allNulls)
+	return writeParquetData(w, columns, allRows, allNulls)
+}
+
+// writeOnly exposes only Write, so a library that would close or seek the
+// destination it is given cannot reach past what it was handed.
+type writeOnly struct {
+	w io.Writer
+}
+
+func (o writeOnly) Write(p []byte) (int, error) {
+	return o.w.Write(p)
 }
 
 // writeParquetData writes data to Parquet format. nulls, when non-nil, marks the
 // cells to store as a Parquet null; rows[r][c] is ignored for a cell marked null.
-func writeParquetData(outputPath string, columns []string, rows [][]string, nulls [][]bool) error {
+func writeParquetData(w io.Writer, columns []string, rows [][]string, nulls [][]bool) error {
 	if len(rows) == 0 {
 		return fmt.Errorf("%w: no data to write", ErrEmptyData)
 	}
 	if len(columns) == 0 {
 		return fmt.Errorf("%w: no columns defined", ErrEmptyData)
 	}
-
-	// Create output file
-	file, err := os.Create(outputPath) //nolint:gosec
-	if err != nil {
-		return fmt.Errorf("%w: failed to create parquet file: %s", ErrIOOperation, err.Error())
-	}
-	defer file.Close()
 
 	// Create Arrow schema - for simplicity, treat all columns as strings
 	fields := make([]arrow.Field, len(columns))
@@ -767,18 +756,20 @@ func writeParquetData(outputPath string, columns []string, rows [][]string, null
 
 	// Create Parquet writer
 	arrowProps := pqarrow.NewArrowWriterProperties(pqarrow.WithStoreSchema())
-	writer, err := pqarrow.NewFileWriter(schema, file, nil, arrowProps)
+	// writeOnly hides the destination's Close from the Parquet writer, which
+	// closes its sink when it can. The caller owns the file and closes it after
+	// checking that error; a Parquet-side close leaves it with "file already
+	// closed" and turns a good dump into a failure.
+	writer, err := pqarrow.NewFileWriter(schema, writeOnly{w}, nil, arrowProps)
 	if err != nil {
 		return fmt.Errorf("%w: failed to create parquet writer: %s", ErrIOOperation, err.Error())
 	}
-	defer writer.Close()
-
-	// Write record to Parquet file
 	if err := writer.Write(record); err != nil {
+		_ = writer.Close() // Release the writer; the write error is the one to report
 		return fmt.Errorf("%w: failed to write record to parquet: %s", ErrIOOperation, err.Error())
 	}
 
-	// Flush and close writer explicitly
+	// Close writes the footer, so this is where an incomplete file shows up.
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("%w: failed to close parquet writer: %s", ErrIOOperation, err.Error())
 	}
@@ -787,7 +778,7 @@ func writeParquetData(outputPath string, columns []string, rows [][]string, null
 }
 
 // writeXLSXTableData writes SQLite table data to Excel XLSX format
-func writeXLSXTableData(outputPath string, columns []string, rows *sql.Rows, compression CompressionType) error {
+func writeXLSXTableData(w io.Writer, tableName string, columns []string, rows *sql.Rows) error {
 	if len(columns) == 0 {
 		return fmt.Errorf("%w: no columns defined", ErrEmptyData)
 	}
@@ -798,36 +789,21 @@ func writeXLSXTableData(outputPath string, columns []string, rows *sql.Rows, com
 		_ = f.Close() // Ignore close error
 	}()
 
-	// For Excel, we use the table name as sheet name
-	// Extract table name from output path (remove directory and extension)
-	fileName := filepath.Base(outputPath)
-
-	// First remove compression extension if present (case-insensitive)
-	compressionExts := []string{extGZ, extBZ2, extXZ, extZSTD, extZLIB, extSNAPPY, extS2, extLZ4}
-	for _, ext := range compressionExts {
-		if strings.HasSuffix(strings.ToLower(fileName), ext) {
-			fileName = strings.TrimSuffix(fileName, ext)
-			break
-		}
-	}
-
-	// Then remove the file extension (e.g., .xlsx)
-	tableName := strings.TrimSuffix(fileName, filepath.Ext(fileName))
-
-	// Create a sheet with the table name, or use default if invalid
+	// The sheet name is what a reader turns back into a table name, so it comes
+	// from the table this dump is of.
 	sheetName := tableName
 	if sheetName == "" {
-		sheetName = "Sheet1"
+		sheetName = defaultSheetName
 	}
 
 	// Create new sheet (replace default Sheet1)
-	if sheetName != "Sheet1" {
+	if sheetName != defaultSheetName {
 		_, err := f.NewSheet(sheetName)
 		if err != nil {
 			return fmt.Errorf("failed to create sheet %s: %w", sheetName, err)
 		}
 		// Delete default sheet
-		if err := f.DeleteSheet("Sheet1"); err != nil {
+		if err := f.DeleteSheet(defaultSheetName); err != nil {
 			return fmt.Errorf("failed to delete default sheet: %w", err)
 		}
 	}
@@ -889,39 +865,12 @@ func writeXLSXTableData(outputPath string, columns []string, rows *sql.Rows, com
 		return fmt.Errorf("error reading rows: %w", err)
 	}
 
-	// Handle compression by saving to buffer first if needed
-	if compression != CompressionNone {
-		// For compressed output, we need to save to a buffer first
-		var buf bytes.Buffer
-		if err := f.Write(&buf); err != nil {
-			return fmt.Errorf("failed to write Excel file to buffer: %w", err)
-		}
-
-		// Create compressed output file
-		file, err := os.Create(outputPath) //nolint:gosec // Output path is constructed from validated directory and table name
-		if err != nil {
-			return fmt.Errorf("failed to create output file: %w", err)
-		}
-		defer file.Close()
-
-		// Create compressed writer
-		compressedWriter, closeWriter, err := createCompressedWriter(file, compression)
-		if err != nil {
-			return fmt.Errorf("failed to create compressed writer: %w", err)
-		}
-		defer closeWriter()
-
-		// Write compressed data
-		if _, err := compressedWriter.Write(buf.Bytes()); err != nil {
-			return fmt.Errorf("failed to write compressed data: %w", err)
-		}
-
-		return nil
-	}
-
-	// Save directly to file for uncompressed output
-	if err := f.SaveAs(outputPath); err != nil {
-		return fmt.Errorf("failed to save Excel file: %w", err)
+	// Why Write and not SaveAs: SaveAs picks the container format from the file
+	// extension, and the caller stages the write, so the only name available here
+	// carries a temporary suffix that Excel rejects. Any compression the caller
+	// asked for is already wrapped around w.
+	if err := f.Write(w); err != nil {
+		return fmt.Errorf("%w: failed to write Excel file: %s", ErrIOOperation, err.Error())
 	}
 
 	return nil

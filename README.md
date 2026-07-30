@@ -45,7 +45,7 @@ filesql is for cases where the data is already in a file and the fastest useful 
 | `.json` | JSON | Query nested data with `json_extract()` |
 | `.jsonl` | JSONL | One JSON value per line |
 | `.parquet` | Parquet | Columnar format |
-| `.xlsx` | Excel XLSX | One sheet becomes one table |
+| `.xlsx` | Excel XLSX | One sheet becomes one table, named `file_sheet` (just `file` when the sheet repeats it) |
 | `.ach` | ACH (NACHA) | Experimental |
 | `.fed` | Fedwire | Experimental |
 

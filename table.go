@@ -10,6 +10,9 @@ import (
 // sheetFallbackName is the table name used when a sheet name sanitizes to empty.
 const sheetFallbackName = "sheet"
 
+// defaultSheetName is the sheet a new Excel workbook is created with.
+const defaultSheetName = "Sheet1"
+
 // table represents file contents as database table structure.
 type table struct {
 	// Name is table name derived from file path.
@@ -124,6 +127,23 @@ func sanitizeTableName(name string) string {
 	}
 
 	return finalResult
+}
+
+// xlsxSheetTableName is the table name a sheet is loaded under. The sheet name
+// is appended to the file's name because one workbook holds several sheets and
+// each needs a table of its own.
+//
+// It is not appended when it would only repeat the file name. That is the shape
+// a dump produces — one table per file, in a sheet named after the table — so
+// without this a dumped table read back gained a suffix ("people" became
+// "people_people") and a save that overwrote its own source stopped matching it.
+// A workbook whose sheet name differs from its file name is unaffected.
+func xlsxSheetTableName(baseTableName, sheetName string) string {
+	sanitized := sanitizeTableName(sheetName)
+	if sanitized == baseTableName {
+		return baseTableName
+	}
+	return baseTableName + "_" + sanitized
 }
 
 // identifierRunes maps a derived name onto the characters an identifier may

@@ -592,8 +592,7 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db *sql
 			continue
 		}
 
-		// Create table name: filename_sheetname
-		tableName := fmt.Sprintf("%s_%s", baseTableName, sanitizeTableName(sheetName))
+		tableName := xlsxSheetTableName(baseTableName, sheetName)
 		sp.logger.Debug("creating table from sheet", "path", filePath, logKeySheet, sheetName, logKeyTable, tableName, "rows", len(rows))
 
 		// Check if table already exists

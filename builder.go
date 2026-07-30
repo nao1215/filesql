@@ -781,8 +781,7 @@ func (b *DBBuilder) streamXLSXFileToSQLite(ctx context.Context, db *sql.DB, read
 			continue
 		}
 
-		// Create table name: filename_sheetname
-		tableName := fmt.Sprintf("%s_%s", baseTableName, sanitizeTableName(sheetName))
+		tableName := xlsxSheetTableName(baseTableName, sheetName)
 
 		// Check if table already exists
 		var tableExists int

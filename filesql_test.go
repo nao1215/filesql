@@ -3569,256 +3569,121 @@ func TestParquetDirectParsing(t *testing.T) {
 func TestWriteXLSXTableData(t *testing.T) {
 	t.Parallel()
 
-	t.Run("writeXLSXTableData with no compression", func(t *testing.T) {
-		// Create test data
+	// The write goes through writeSQLiteTableData rather than the XLSX writer
+	// directly: that is the path a dump takes, and it stages the file under a
+	// temporary name. Calling the writer with a final path hid the fact that a
+	// staged XLSX write could not succeed at all.
+	dumpSheet := func(t *testing.T, table, query string, opts DumpOptions) string {
+		t.Helper()
+
 		db, err := Open(filepath.Join("testdata", "excel", "sample.xlsx"))
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		defer db.Close()
 
-		// Query data from first sheet
-		rows, err := db.QueryContext(context.Background(), "SELECT * FROM sample_Sheet1")
-		if err != nil {
-			t.Fatal(err)
-		}
+		rows, err := db.QueryContext(context.Background(), query)
+		require.NoError(t, err)
 		defer rows.Close()
 
 		columns, err := rows.Columns()
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
-		// Create temp output file
-		tempDir := t.TempDir()
-		outputPath := filepath.Join(tempDir, "output.xlsx")
+		outputPath := filepath.Join(t.TempDir(), table+opts.FileExtension())
+		require.NoError(t, writeSQLiteTableData(outputPath, table, columns, rows, opts))
+		return outputPath
+	}
 
-		// Test writeXLSXTableData
-		err = writeXLSXTableData(outputPath, columns, rows, CompressionNone)
-		if err != nil {
-			t.Fatal(err)
-		}
+	t.Run("uncompressed output is a readable workbook named after the table", func(t *testing.T) {
+		t.Parallel()
 
-		// Verify file was created
-		if _, err := os.Stat(outputPath); os.IsNotExist(err) {
-			t.Error("Output file was not created")
-		}
+		opts := NewDumpOptions().WithFormat(OutputFormatXLSX)
+		outputPath := dumpSheet(t, "people", "SELECT * FROM sample_Sheet1", opts)
 
-		// Verify file can be read back
 		xlsxFile, err := excelize.OpenFile(outputPath)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		defer xlsxFile.Close()
 
-		// Check sheet exists
 		sheets := xlsxFile.GetSheetList()
-		if len(sheets) != 1 {
-			assert.Fail(t, "Expected 1 sheet, got %d", len(sheets))
-		}
-		if sheets[0] != "output" {
-			assert.Fail(t, "Expected sheet 'output', got '%s'", sheets[0])
-		}
+		require.Len(t, sheets, 1)
+		assert.Equal(t, "people", sheets[0], "the sheet is named after the table, not after the staged file")
 
-		// Check data
 		sheetRows, err := xlsxFile.GetRows(sheets[0])
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// Should have header + 3 data rows = 4 total rows
-		if len(sheetRows) != 4 {
-			assert.Fail(t, "Expected 4 rows (1 header + 3 data), got %d", len(sheetRows))
-		}
-
-		// Check header
-		expectedHeaders := []string{"id", "name"}
-		assert.Equal(t, expectedHeaders, sheetRows[0], "Expected headers %v, got %v", expectedHeaders, sheetRows[0])
-
-		// Check first data row
-		if len(sheetRows) > 1 {
-			if sheetRows[1][0] != "1" || sheetRows[1][1] != "Gina" {
-				assert.Fail(t, "Expected first row [1, Gina], got %v", sheetRows[1])
-			}
-		}
+		require.NoError(t, err)
+		require.Len(t, sheetRows, 4, "1 header + 3 data rows")
+		assert.Equal(t, []string{"id", "name"}, sheetRows[0])
+		assert.Equal(t, []string{"1", "Gina"}, sheetRows[1])
 	})
 
-	t.Run("writeXLSXTableData with gzip compression", func(t *testing.T) {
-		// Create test data
-		db, err := Open(filepath.Join("testdata", "excel", "sample.xlsx"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer db.Close()
+	t.Run("gzip output decompresses to the same workbook", func(t *testing.T) {
+		t.Parallel()
 
-		// Query data from second sheet
-		rows, err := db.QueryContext(context.Background(), "SELECT * FROM sample_Sheet2")
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer rows.Close()
+		opts := NewDumpOptions().WithFormat(OutputFormatXLSX).WithCompression(CompressionGZ)
+		outputPath := dumpSheet(t, "mails", "SELECT * FROM sample_Sheet2", opts)
 
-		columns, err := rows.Columns()
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// Create temp output file
-		tempDir := t.TempDir()
-		outputPath := filepath.Join(tempDir, "output.xlsx.gz")
-
-		// Test writeXLSXTableData with compression
-		err = writeXLSXTableData(outputPath, columns, rows, CompressionGZ)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// Verify compressed file was created
-		if _, err := os.Stat(outputPath); os.IsNotExist(err) {
-			t.Error("Compressed output file was not created")
-		}
-
-		// Verify file can be decompressed and read
 		file, err := os.Open(outputPath) //nolint:gosec // Test file path is safe
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		defer file.Close()
 
 		gzipReader, err := gzip.NewReader(file)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		defer gzipReader.Close()
 
-		// Read decompressed data into buffer
 		var buf bytes.Buffer
-		if _, err := io.Copy(&buf, gzipReader); err != nil { //nolint:gosec // Test data is safe
-			t.Fatal(err)
-		}
+		_, err = io.Copy(&buf, gzipReader) //nolint:gosec // Test data is safe
+		require.NoError(t, err)
 
-		// Create Excel reader from buffer
 		xlsxFile, err := excelize.OpenReader(&buf)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		defer xlsxFile.Close()
 
-		// Check data
 		sheets := xlsxFile.GetSheetList()
-		if len(sheets) != 1 {
-			assert.Fail(t, "Expected 1 sheet, got %d", len(sheets))
-		}
+		require.Len(t, sheets, 1)
+		assert.Equal(t, "mails", sheets[0])
 
 		sheetRows, err := xlsxFile.GetRows(sheets[0])
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// Should have header + 3 data rows = 4 total rows
-		if len(sheetRows) != 4 {
-			assert.Fail(t, "Expected 4 rows (1 header + 3 data), got %d", len(sheetRows))
-		}
-
-		// Check header
-		expectedHeaders := []string{"id", "mail"}
-		assert.Equal(t, expectedHeaders, sheetRows[0], "Expected headers %v, got %v", expectedHeaders, sheetRows[0])
+		require.NoError(t, err)
+		require.Len(t, sheetRows, 4, "1 header + 3 data rows")
+		assert.Equal(t, []string{"id", "mail"}, sheetRows[0])
 	})
 
-	t.Run("writeXLSXTableData with no columns error", func(t *testing.T) {
-		tempDir := t.TempDir()
-		outputPath := filepath.Join(tempDir, "empty.xlsx")
+	t.Run("xz output is written and is not empty", func(t *testing.T) {
+		t.Parallel()
 
-		// Test with no columns
-		err := writeXLSXTableData(outputPath, []string{}, nil, CompressionNone)
-		if err == nil {
-			t.Error("Expected error for no columns")
-		}
-		if !strings.Contains(err.Error(), "no columns defined") {
-			assert.NoError(t, err, "Expected 'no columns defined' error, got")
-		}
+		opts := NewDumpOptions().WithFormat(OutputFormatXLSX).WithCompression(CompressionXZ)
+		outputPath := dumpSheet(t, "people", "SELECT * FROM sample_Sheet1", opts)
+
+		info, err := os.Stat(outputPath)
+		require.NoError(t, err)
+		assert.Greater(t, info.Size(), int64(100), "a compressed workbook is larger than this")
 	})
 
-	t.Run("writeXLSXTableData with unsupported bz2 compression", func(t *testing.T) {
-		// Create test data
+	t.Run("no columns is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		err := writeXLSXTableData(io.Discard, "empty", []string{}, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no columns defined")
+	})
+
+	t.Run("bz2 is rejected because it has no writer", func(t *testing.T) {
+		t.Parallel()
+
 		db, err := Open(filepath.Join("testdata", "excel", "sample.xlsx"))
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		defer db.Close()
 
-		// Query data from first sheet
 		rows, err := db.QueryContext(context.Background(), "SELECT * FROM sample_Sheet1")
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		defer rows.Close()
 
 		columns, err := rows.Columns()
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
-		// Create temp output file
-		tempDir := t.TempDir()
-		outputPath := filepath.Join(tempDir, "output.xlsx.bz2")
-
-		// Test writeXLSXTableData with bz2 compression (should fail)
-		err = writeXLSXTableData(outputPath, columns, rows, CompressionBZ2)
-		if err == nil {
-			t.Error("Expected error for unsupported bz2 compression")
-		}
-		if !strings.Contains(err.Error(), "bzip2 compression is not supported") {
-			assert.NoError(t, err, "Expected 'bzip2 compression is not supported' error, got")
-		}
-	})
-
-	t.Run("writeXLSXTableData with xz compression", func(t *testing.T) {
-		// Create test data
-		db, err := Open(filepath.Join("testdata", "excel", "sample.xlsx"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer db.Close()
-
-		// Query data from first sheet
-		rows, err := db.QueryContext(context.Background(), "SELECT * FROM sample_Sheet1")
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer rows.Close()
-
-		columns, err := rows.Columns()
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// Create temp output file
-		tempDir := t.TempDir()
-		outputPath := filepath.Join(tempDir, "output.xlsx.xz")
-
-		// Test writeXLSXTableData with xz compression
-		err = writeXLSXTableData(outputPath, columns, rows, CompressionXZ)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// Verify compressed file was created
-		if _, err := os.Stat(outputPath); os.IsNotExist(err) {
-			t.Error("Compressed output file was not created")
-		}
-
-		// Verify file size is reasonable (compressed, but not empty)
-		fileInfo, err := os.Stat(outputPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if fileInfo.Size() == 0 {
-			t.Error("Compressed output file is empty")
-		}
-		if fileInfo.Size() < 100 {
-			assert.Fail(t, "Compressed file seems too small: %d bytes", fileInfo.Size())
-		}
+		opts := NewDumpOptions().WithFormat(OutputFormatXLSX).WithCompression(CompressionBZ2)
+		outputPath := filepath.Join(t.TempDir(), "people"+opts.FileExtension())
+		err = writeSQLiteTableData(outputPath, "people", columns, rows, opts)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "bzip2 compression is not supported")
+		assert.NoFileExists(t, outputPath, "a rejected dump leaves nothing behind")
 	})
 }
 
