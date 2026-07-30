@@ -252,6 +252,15 @@ func (b *DBBuilder) AddFS(filesystem fs.FS) *DBBuilder {
 //	builder.AddPath("data.csv").
 //		EnableAutoSave("") // Auto-save to original file on db.Close()
 //
+// Overwrite mode writes each table back to the file it was loaded from, in that
+// file's own format and compression; options is ignored, because the format is
+// the one the file already has. Only those files are written: a table created
+// during the session has no file to be written back to and is left unsaved, so
+// pass an output directory when you want everything in the database on disk. A
+// source in a format this package reads but does not write (JSON, JSONL), and a
+// workbook of more than one sheet, fail the save rather than being written as
+// something else.
+//
 // Concurrency: unlike a database opened without auto-save, a database opened
 // with auto-save is backed by a single connection (the save hook runs when that
 // connection closes), so it is not safe to share across goroutines. Use it from

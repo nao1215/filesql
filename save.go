@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"modernc.org/sqlite"
 )
@@ -269,7 +270,9 @@ type autoSaveConfig struct {
 	enabled bool
 	// timing specifies when to save (on close or on commit)
 	timing autoSaveTiming
-	// outputDir is the directory where files will be saved (overwrites original files)
+	// outputDir is the directory where files will be saved. Empty means overwrite
+	// mode, where each table goes back to the file it came from and options is
+	// unused, because the format is the one that file already has.
 	outputDir string
 	// options contains dump options for formatting
 	options DumpOptions
@@ -520,7 +523,19 @@ func (c *autoSaveConnection) performFedWireAutoSave(db *sql.DB, outputDir string
 	return nil
 }
 
-// overwriteOriginalFiles saves each table back to its original file location
+// overwriteOriginalFiles saves each table back to the file it was loaded from.
+//
+// Every file is written in its own format and its own compression, taken from
+// its path, and to that exact path. The ACH and Fedwire branches always worked
+// this way; the tabular ones handed the whole database to DumpDatabase with one
+// output directory and one format from the auto-save options, which defaults to
+// CSV. A .tsv source therefore got a new .csv beside it holding the change while
+// the .tsv the caller asked to overwrite still held the old rows, sources in
+// different directories all landed next to whichever was loaded first, and a
+// table the caller created was written out as a file of its own.
+//
+// A source whose format has no writer, or which holds more than one table, fails
+// the save rather than turning into something else on disk.
 func (c *autoSaveConnection) overwriteOriginalFiles(db *sql.DB) error {
 	if len(c.originalPaths) == 0 {
 		return errors.New("no original paths available for overwrite")
@@ -528,35 +543,122 @@ func (c *autoSaveConnection) overwriteOriginalFiles(db *sql.DB) error {
 
 	ctx := context.Background()
 
-	// Check if any original paths are ACH or Fedwire files
 	for _, path := range c.originalPaths {
-		if isACHFile(path) {
-			baseTableName := sanitizeTableName(tableFromFilePath(path))
-			if err := DumpACH(ctx, db, baseTableName, path); err != nil {
-				return fmt.Errorf("failed to overwrite ACH file %s: %w", path, err)
-			}
-		}
-		if isFedWireFile(path) {
-			baseTableName := sanitizeTableName(tableFromFilePath(path))
-			if err := DumpFedWire(ctx, db, baseTableName, path); err != nil {
-				return fmt.Errorf("failed to overwrite Fedwire file %s: %w", path, err)
-			}
+		if err := c.overwriteOriginalFile(ctx, db, path); err != nil {
+			return err
 		}
 	}
 
-	// For tabular files (CSV, TSV, etc.), use the directory-based approach
-	// Filter out ACH and Fedwire paths which are already handled above
-	tabularPaths := make([]string, 0)
-	for _, path := range c.originalPaths {
-		if !isACHFile(path) && !isFedWireFile(path) {
-			tabularPaths = append(tabularPaths, path)
+	return nil
+}
+
+// overwriteOriginalFile writes the table or tables path was loaded as back to
+// path, keeping the format and compression the file already has.
+func (c *autoSaveConnection) overwriteOriginalFile(ctx context.Context, db *sql.DB, path string) error {
+	baseTableName := sanitizeTableName(tableFromFilePath(path))
+
+	switch {
+	case isACHFile(path):
+		if err := DumpACH(ctx, db, baseTableName, path); err != nil {
+			return fmt.Errorf("failed to overwrite ACH file %s: %w", path, err)
+		}
+		return nil
+	case isFedWireFile(path):
+		if err := DumpFedWire(ctx, db, baseTableName, path); err != nil {
+			return fmt.Errorf("failed to overwrite Fedwire file %s: %w", path, err)
+		}
+		return nil
+	}
+
+	format, err := overwriteFormatFor(path)
+	if err != nil {
+		return err
+	}
+
+	factory := NewCompressionFactory()
+	options := DumpOptions{Format: format, Compression: factory.DetectCompressionType(path)}
+
+	// An Excel workbook holds a table per sheet, and the writer holds one sheet
+	// per file, so only a workbook that came in as a single table can go back out
+	// as one. The tables of a workbook are named after it, which is how the ones
+	// belonging to this path are found.
+	if format == OutputFormatXLSX {
+		tables, err := tablesFromWorkbook(db, baseTableName)
+		if err != nil {
+			return err
+		}
+		if len(tables) != 1 {
+			return fmt.Errorf("%w: %s holds %d sheets, and only a workbook of one sheet can be written back to itself; save to a directory instead",
+				ErrUnsupportedFormat, path, len(tables))
+		}
+		baseTableName = tables[0]
+	}
+
+	return overwriteTableAtPath(db, path, baseTableName, options)
+}
+
+// overwriteFormatFor is the output format a source file is written back in, or
+// an error naming the file when nothing can write it. JSON and JSONL are read
+// but have no writer, so a save that quietly turned them into CSV left the
+// caller's file untouched and the change in a file they never named.
+func overwriteFormatFor(path string) (OutputFormat, error) {
+	factory := NewCompressionFactory()
+	switch factory.GetBaseFileType(path) {
+	case FileTypeCSV:
+		return OutputFormatCSV, nil
+	case FileTypeTSV:
+		return OutputFormatTSV, nil
+	case FileTypeLTSV:
+		return OutputFormatLTSV, nil
+	case FileTypeParquet:
+		return OutputFormatParquet, nil
+	case FileTypeXLSX:
+		return OutputFormatXLSX, nil
+	default:
+		return 0, fmt.Errorf("%w: %s cannot be written back because this package reads that format but does not write it; save to a directory with a format it writes instead",
+			ErrUnsupportedFormat, path)
+	}
+}
+
+// tablesFromWorkbook lists the tables an Excel workbook was loaded as. A sheet
+// becomes baseTableName_sheet, or baseTableName alone when the sheet repeats the
+// file name.
+func tablesFromWorkbook(db *sql.DB, baseTableName string) ([]string, error) {
+	names, err := getSQLiteTableNames(db)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to get table names: %s", ErrDatabaseOperation, err.Error())
+	}
+
+	tables := make([]string, 0, 1)
+	for _, name := range names {
+		if name == baseTableName || strings.HasPrefix(name, baseTableName+"_") {
+			tables = append(tables, name)
 		}
 	}
+	return tables, nil
+}
 
-	if len(tabularPaths) > 0 {
-		outputDir := filepath.Dir(tabularPaths[0])
-		return DumpDatabase(db, outputDir, c.autoSaveConfig.options)
+// overwriteTableAtPath dumps one table to one path. It is the write half of
+// DumpDatabase's per-table loop, without the directory and the name derived from
+// it: the destination here is the file the table came from.
+func overwriteTableAtPath(db *sql.DB, path, tableName string, options DumpOptions) error {
+	columns, declTypes, err := getSQLiteTableColumns(db, tableName)
+	if err != nil {
+		return fmt.Errorf("%w: failed to get columns for table %s: %s", ErrDatabaseOperation, tableName, err.Error())
+	}
+	if len(columns) == 0 {
+		return fmt.Errorf("%w: table %s for %s no longer exists", ErrEmptyData, tableName, path)
 	}
 
+	query := fmt.Sprintf("SELECT %s FROM `%s`", dumpSelectList(columns, declTypes), tableName) //nolint:gosec // Table and column names are quoted and come from database metadata
+	rows, err := db.QueryContext(context.Background(), query)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	if err := writeSQLiteTableData(path, tableName, columns, rows, options); err != nil {
+		return fmt.Errorf("%w: failed to overwrite %s: %w", ErrIOOperation, path, err)
+	}
 	return nil
 }
