@@ -969,11 +969,8 @@ func writeXLSXTableData(w io.Writer, tableName string, columns []string, rows *s
 	}()
 
 	// The sheet name is what a reader turns back into a table name, so it comes
-	// from the table this dump is of.
-	sheetName := tableName
-	if sheetName == "" {
-		sheetName = defaultSheetName
-	}
+	// from the table this dump is of, adapted to what Excel accepts.
+	sheetName := excelSheetName(tableName)
 
 	// Create new sheet (replace default Sheet1)
 	if sheetName != defaultSheetName {
