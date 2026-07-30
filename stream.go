@@ -197,6 +197,38 @@ func (p *streamingParser) parseTSVStream(reader io.Reader) (*table, error) {
 }
 
 // parseLTSVStream parses LTSV data from reader using streaming approach
+// labelOrder collects LTSV labels, keeping each one once and in the order it was
+// first seen. LTSV has no header line, so the columns can only be the labels the
+// records carry; the set has to be built while reading, and the order has to be
+// remembered rather than recovered from the set afterwards.
+type labelOrder struct {
+	seen  map[string]bool
+	order []string
+}
+
+func newLabelOrder() *labelOrder {
+	return &labelOrder{seen: make(map[string]bool)}
+}
+
+// add records a label, ignoring one already seen.
+func (l *labelOrder) add(name string) {
+	if l.seen[name] {
+		return
+	}
+	l.seen[name] = true
+	l.order = append(l.order, name)
+}
+
+// names returns the labels in the order they were first seen.
+func (l *labelOrder) names() []string {
+	return l.order
+}
+
+// len returns how many distinct labels were seen.
+func (l *labelOrder) len() int {
+	return len(l.order)
+}
+
 func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 	content, err := io.ReadAll(reader)
 	if err != nil {
@@ -208,7 +240,11 @@ func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 		return nil, fmt.Errorf("%w: empty LTSV data", ErrEmptyData)
 	}
 
-	headerMap := make(map[string]bool)
+	// The columns are the labels in the order they first appear. Reading them out
+	// of a map instead drew a fresh order on every load, because Go randomizes map
+	// iteration: the same file answered SELECT * as "id,name" one run and
+	// "name,id" the next, and its dump was unstable with it.
+	labels := newLabelOrder()
 	var records []map[string]string
 
 	for _, line := range lines {
@@ -230,7 +266,7 @@ func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 					return nil, fmt.Errorf("%w: duplicate column name %q in LTSV record", ErrParsing, key)
 				}
 				recordMap[key] = value
-				headerMap[key] = true
+				labels.add(key)
 			}
 		}
 		if len(recordMap) > 0 {
@@ -242,10 +278,7 @@ func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 		return nil, fmt.Errorf("%w: no valid LTSV records found", ErrEmptyData)
 	}
 
-	var header header
-	for key := range headerMap {
-		header = append(header, key)
-	}
+	header := header(labels.names())
 
 	tablerecords := make([]Record, 0, len(records))
 	for _, recordMap := range records {
@@ -456,9 +489,9 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 		return fmt.Errorf("%w: empty LTSV data", ErrEmptyData)
 	}
 
-	headerMap := make(map[string]bool)
-
-	// First pass: collect all possible keys
+	// First pass: collect the labels in the order they first appear. See
+	// parseLTSVStream for why the order cannot come out of a map.
+	labels := newLabelOrder()
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -468,20 +501,16 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 		for pair := range strings.SplitSeq(line, "\t") {
 			kv := strings.SplitN(pair, ":", 2)
 			if len(kv) == 2 {
-				key := strings.TrimSpace(kv[0])
-				headerMap[key] = true
+				labels.add(strings.TrimSpace(kv[0]))
 			}
 		}
 	}
 
-	if len(headerMap) == 0 {
+	if labels.len() == 0 {
 		return fmt.Errorf("%w: no valid LTSV keys found", ErrEmptyData)
 	}
 
-	var header header
-	for key := range headerMap {
-		header = append(header, key)
-	}
+	header := header(labels.names())
 
 	// Second pass: process records in chunks
 	chunkrecords := make([]Record, 0) // Pre-allocate slice
