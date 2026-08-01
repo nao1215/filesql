@@ -125,8 +125,8 @@ type streamingParser struct {
 	compression CompressionType
 	tableName   string
 	chunkSize   ChunkSize
-	memoryPool  *MemoryPool  // Pool for reusable memory allocations
-	memoryLimit *MemoryLimit // Configurable memory limits
+	memoryPool  *memoryPool  // Pool for reusable memory allocations
+	memoryLimit *memoryLimit // Configurable memory limits
 	// malformedRowPolicy controls how a CSV/TSV record whose field count differs
 	// from the header is handled. The zero value is MalformedRowStop.
 	malformedRowPolicy MalformedRowPolicy

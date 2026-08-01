@@ -118,7 +118,7 @@ func TestTableName_Sanitize(t *testing.T) {
 			t.Parallel()
 
 			tn := NewTableName(tt.input)
-			sanitized := tn.Sanitize()
+			sanitized := tn.sanitize()
 			assert.Equal(t, tt.expected, sanitized.String())
 		})
 	}
@@ -543,7 +543,7 @@ func TestGetSampleValues(t *testing.T) {
 
 		result := getSampleValues(values)
 
-		assert.LessOrEqual(t, len(result), MaxSampleSize, "Sample size should not exceed MaxSampleSize")
+		assert.LessOrEqual(t, len(result), maxSampleSize, "Sample size should not exceed maxSampleSize")
 		assert.Greater(t, len(result), 0, "Sample should not be empty")
 
 		// Verify stratified sampling captured values from all sections
@@ -578,7 +578,7 @@ func TestGetSampleValues(t *testing.T) {
 	t.Run("small dataset fallback to simple sampling", func(t *testing.T) {
 		t.Parallel()
 
-		// Create dataset smaller than sampleSize*SamplingStratificationFactor (3000)
+		// Create dataset smaller than sampleSize*samplingStratificationFactor (3000)
 		values := make([]string, 2500)
 		for i := range 2500 {
 			values[i] = strconv.Itoa(i)
@@ -586,7 +586,7 @@ func TestGetSampleValues(t *testing.T) {
 
 		result := getSampleValues(values)
 
-		assert.LessOrEqual(t, len(result), MaxSampleSize, "Sample size should not exceed MaxSampleSize")
+		assert.LessOrEqual(t, len(result), maxSampleSize, "Sample size should not exceed maxSampleSize")
 		assert.Greater(t, len(result), 0, "Sample should not be empty")
 		assert.Equal(t, "0", result[0], "Simple sampling should start with first value")
 	})
@@ -600,7 +600,7 @@ func TestGetSampleValues(t *testing.T) {
 			values[i] = strconv.Itoa(i)
 		}
 
-		// Temporarily modify MaxSampleSize for this test by creating a custom function
+		// Temporarily modify maxSampleSize for this test by creating a custom function
 		// Since we can't modify constants, we'll test the boundary conditions indirectly
 		result := getSampleValues(values)
 
@@ -825,10 +825,10 @@ func TestInferColumnTypePerformance(t *testing.T) {
 	t.Run("early termination with text", func(t *testing.T) {
 		t.Parallel()
 
-		// Create dataset that exceeds EarlyTerminationThreshold (0.5) for text values
+		// Create dataset that exceeds earlyTerminationThreshold (0.5) for text values
 		values := make([]string, 1000)
 		for i := range 1000 {
-			if i < 600 { // 60% text values, exceeds EarlyTerminationThreshold
+			if i < 600 { // 60% text values, exceeds earlyTerminationThreshold
 				values[i] = "text_value"
 			} else {
 				values[i] = strconv.Itoa(i)
@@ -844,10 +844,10 @@ func TestInferColumnTypePerformance(t *testing.T) {
 	t.Run("no early termination below threshold", func(t *testing.T) {
 		t.Parallel()
 
-		// Create dataset that stays below EarlyTerminationThreshold (0.5) for text values
+		// Create dataset that stays below earlyTerminationThreshold (0.5) for text values
 		values := make([]string, 1000)
 		for i := range 1000 {
-			if i < 400 { // 40% text values, below EarlyTerminationThreshold
+			if i < 400 { // 40% text values, below earlyTerminationThreshold
 				values[i] = "text_value"
 			} else {
 				values[i] = strconv.Itoa(i)
@@ -1045,7 +1045,7 @@ func TestChunkSizeIsValid(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tt.expected, tt.cs.IsValid())
+			assert.Equal(t, tt.expected, tt.cs.isValid())
 		})
 	}
 }

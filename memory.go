@@ -49,8 +49,12 @@ type pooledStringSlice struct {
 	data []string
 }
 
-// MemoryPool manages a pool of reusable byte slices, record slices, and string slices
+// memoryPool manages a pool of reusable byte slices, record slices, and string slices
 // to reduce memory allocations during file processing operations.
+//
+// It is internal. The only pool this package builds is the one newStreamingParser
+// makes at a hardcoded 1MB, and nothing on DBBuilder passes another in, so the
+// exported form promised a knob a caller had no way to turn.
 //
 // The pool automatically manages object lifecycles and includes safeguards against
 // memory leaks by limiting the maximum size of objects that can be returned to the pool.
@@ -58,13 +62,13 @@ type pooledStringSlice struct {
 //
 // Usage example:
 //
-//	pool := NewMemoryPool(1024 * 1024) // 1MB max buffer size
-//	buffer := pool.GetByteBuffer()
-//	defer pool.PutByteBuffer(buffer)
+//	pool := newMemoryPool(1024 * 1024) // 1MB max buffer size
+//	buffer := pool.getByteBuffer()
+//	defer pool.putByteBuffer(buffer)
 //	// Use buffer...
 //
 // Thread Safety: All methods are safe for concurrent use by multiple goroutines.
-type MemoryPool struct {
+type memoryPool struct {
 	bytePool   sync.Pool // Pool for []byte slices
 	recordPool sync.Pool // Pool for []record slices
 	stringPool sync.Pool // Pool for []string slices
@@ -72,13 +76,13 @@ type MemoryPool struct {
 	maxSize    int // Maximum buffer size to pool
 }
 
-// NewMemoryPool creates a new memory pool with configurable max buffer size
-func NewMemoryPool(maxSize int) *MemoryPool {
+// newMemoryPool creates a new memory pool with configurable max buffer size
+func newMemoryPool(maxSize int) *memoryPool {
 	if maxSize <= 0 {
 		maxSize = defaultMemoryPoolSize
 	}
 
-	return &MemoryPool{
+	return &memoryPool{
 		maxSize: maxSize,
 		bytePool: sync.Pool{
 			New: func() any {
@@ -104,8 +108,8 @@ func NewMemoryPool(maxSize int) *MemoryPool {
 	}
 }
 
-// GetByteBuffer gets a byte buffer from the pool
-func (mp *MemoryPool) GetByteBuffer() []byte {
+// getByteBuffer gets a byte buffer from the pool
+func (mp *memoryPool) getByteBuffer() []byte {
 	pooled, ok := mp.bytePool.Get().(*pooledByteSlice)
 	if !ok {
 		// This should never happen with our pool setup, but provide fallback
@@ -115,15 +119,15 @@ func (mp *MemoryPool) GetByteBuffer() []byte {
 	return pooled.data
 }
 
-// PutByteBuffer returns a byte buffer to the pool if it's not too large
-func (mp *MemoryPool) PutByteBuffer(buf []byte) {
+// putByteBuffer returns a byte buffer to the pool if it's not too large
+func (mp *memoryPool) putByteBuffer(buf []byte) {
 	if cap(buf) <= mp.maxSize {
 		mp.bytePool.Put(&pooledByteSlice{data: buf})
 	}
 }
 
-// GetRecordSlice gets a record slice from the pool
-func (mp *MemoryPool) GetRecordSlice() []Record {
+// getRecordSlice gets a record slice from the pool
+func (mp *memoryPool) getRecordSlice() []Record {
 	pooled, ok := mp.recordPool.Get().(*pooledRecordSlice)
 	if !ok {
 		// This should never happen with our pool setup, but provide fallback
@@ -133,15 +137,15 @@ func (mp *MemoryPool) GetRecordSlice() []Record {
 	return pooled.data
 }
 
-// PutRecordSlice returns a record slice to the pool if it's not too large
-func (mp *MemoryPool) PutRecordSlice(slice []Record) {
+// putRecordSlice returns a record slice to the pool if it's not too large
+func (mp *memoryPool) putRecordSlice(slice []Record) {
 	if cap(slice) <= mp.maxSize/averageRecordSizeFactor {
 		mp.recordPool.Put(&pooledRecordSlice{data: slice})
 	}
 }
 
-// GetStringSlice gets a string slice from the pool
-func (mp *MemoryPool) GetStringSlice() []string {
+// getStringSlice gets a string slice from the pool
+func (mp *memoryPool) getStringSlice() []string {
 	pooled, ok := mp.stringPool.Get().(*pooledStringSlice)
 	if !ok {
 		// This should never happen with our pool setup, but provide fallback
@@ -151,15 +155,15 @@ func (mp *MemoryPool) GetStringSlice() []string {
 	return pooled.data
 }
 
-// PutStringSlice returns a string slice to the pool if it's not too large
-func (mp *MemoryPool) PutStringSlice(slice []string) {
+// putStringSlice returns a string slice to the pool if it's not too large
+func (mp *memoryPool) putStringSlice(slice []string) {
 	if cap(slice) <= mp.maxSize/averageStringSizeFactor {
 		mp.stringPool.Put(&pooledStringSlice{data: slice})
 	}
 }
 
-// ForceGC forces garbage collection and clears pools if memory pressure is high
-func (mp *MemoryPool) ForceGC() {
+// forceGC forces garbage collection and clears pools if memory pressure is high
+func (mp *memoryPool) forceGC() {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 
@@ -181,9 +185,13 @@ func (mp *MemoryPool) ForceGC() {
 	}
 }
 
-// MemoryLimit provides configurable memory limits with graceful degradation
+// memoryLimit provides configurable memory limits with graceful degradation
 // for file processing operations. It monitors heap usage and can trigger
 // memory management actions when thresholds are exceeded.
+//
+// It is internal, for the same reason as memoryPool: the only limit this package
+// builds is newStreamingParser's hardcoded 512MB, and there is no way to supply
+// another. "Configurable" describes the type, not anything a caller can reach.
 //
 // The system supports three states:
 //   - OK: Memory usage is within acceptable limits
@@ -192,23 +200,23 @@ func (mp *MemoryPool) ForceGC() {
 //
 // Usage example:
 //
-//	limit := NewMemoryLimit(512) // 512MB limit
-//	if limit.CheckMemoryUsage() == MemoryStatusExceeded {
-//	    return limit.CreateMemoryError("processing")
+//	limit := newMemoryLimit(512) // 512MB limit
+//	if limit.checkMemoryUsage() == memoryStatusExceeded {
+//	    return limit.createMemoryError("processing")
 //	}
 //
-// Performance Note: CheckMemoryUsage() calls runtime.ReadMemStats which can
+// Performance Note: checkMemoryUsage() calls runtime.ReadMemStats which can
 // pause for milliseconds. Use sparingly in hot paths.
 //
 // Thread Safety: All methods are safe for concurrent use by multiple goroutines.
-type MemoryLimit struct {
+type memoryLimit struct {
 	maxMemoryMB      int64   // Maximum memory limit in MB
 	warningThreshold float64 // Warning threshold as percentage (0.0-1.0)
 	enabled          int32   // Atomic flag for enable/disable
 }
 
-// NewMemoryLimit creates a new memory limit configuration
-func NewMemoryLimit(maxMemoryMB int64) *MemoryLimit {
+// newMemoryLimit creates a new memory limit configuration
+func newMemoryLimit(maxMemoryMB int64) *memoryLimit {
 	// Validate lower bound
 	if maxMemoryMB <= 0 {
 		maxMemoryMB = defaultMemoryLimit
@@ -219,7 +227,7 @@ func NewMemoryLimit(maxMemoryMB int64) *MemoryLimit {
 		maxMemoryMB = maxReasonableMemoryLimit
 	}
 
-	return &MemoryLimit{
+	return &memoryLimit{
 		maxMemoryMB:      maxMemoryMB,
 		warningThreshold: defaultWarningThreshold,
 		enabled:          atomicEnabled,
@@ -227,31 +235,31 @@ func NewMemoryLimit(maxMemoryMB int64) *MemoryLimit {
 }
 
 // IsEnabled returns whether memory limits are enabled
-func (ml *MemoryLimit) IsEnabled() bool {
+func (ml *memoryLimit) isEnabled() bool {
 	return atomic.LoadInt32(&ml.enabled) == atomicEnabled
 }
 
 // Enable enables memory limit checking
-func (ml *MemoryLimit) Enable() {
+func (ml *memoryLimit) enable() {
 	atomic.StoreInt32(&ml.enabled, atomicEnabled)
 }
 
 // Disable disables memory limit checking
-func (ml *MemoryLimit) Disable() {
+func (ml *memoryLimit) disable() {
 	atomic.StoreInt32(&ml.enabled, atomicDisabled)
 }
 
-// SetWarningThreshold sets the warning threshold (0.0-1.0)
-func (ml *MemoryLimit) SetWarningThreshold(threshold float64) {
+// setWarningThreshold sets the warning threshold (0.0-1.0)
+func (ml *memoryLimit) setWarningThreshold(threshold float64) {
 	if threshold > 0.0 && threshold <= 1.0 {
 		ml.warningThreshold = threshold
 	}
 }
 
-// CheckMemoryUsage checks current memory usage against limits
-func (ml *MemoryLimit) CheckMemoryUsage() MemoryStatus {
-	if !ml.IsEnabled() {
-		return MemoryStatusOK
+// checkMemoryUsage checks current memory usage against limits
+func (ml *memoryLimit) checkMemoryUsage() memoryStatus {
+	if !ml.isEnabled() {
+		return memoryStatusOK
 	}
 
 	var memStats runtime.MemStats
@@ -271,19 +279,19 @@ func (ml *MemoryLimit) CheckMemoryUsage() MemoryStatus {
 	maxMB := ml.maxMemoryMB
 
 	if currentMB >= maxMB {
-		return MemoryStatusExceeded
+		return memoryStatusExceeded
 	}
 
 	usage := float64(currentMB) / float64(maxMB)
 	if usage >= ml.warningThreshold {
-		return MemoryStatusWarning
+		return memoryStatusWarning
 	}
 
-	return MemoryStatusOK
+	return memoryStatusOK
 }
 
-// GetMemoryInfo returns current memory usage information
-func (ml *MemoryLimit) GetMemoryInfo() MemoryInfo {
+// getMemoryInfo returns current memory usage information
+func (ml *memoryLimit) getMemoryInfo() memoryInfo {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 
@@ -301,23 +309,23 @@ func (ml *MemoryLimit) GetMemoryInfo() MemoryInfo {
 	maxMB := ml.maxMemoryMB
 	usage := float64(currentMB) / float64(maxMB)
 
-	return MemoryInfo{
-		CurrentMB: currentMB,
-		LimitMB:   maxMB,
-		Usage:     usage,
-		Status:    ml.CheckMemoryUsage(),
+	return memoryInfo{
+		currentMB: currentMB,
+		limitMB:   maxMB,
+		usage:     usage,
+		status:    ml.checkMemoryUsage(),
 	}
 }
 
-// ShouldReduceChunkSize returns true if chunk size should be reduced for memory management
-func (ml *MemoryLimit) ShouldReduceChunkSize(chunkSize int) (bool, int) {
-	status := ml.CheckMemoryUsage()
+// shouldReduceChunkSize returns true if chunk size should be reduced for memory management
+func (ml *memoryLimit) shouldReduceChunkSize(chunkSize int) (bool, int) {
+	status := ml.checkMemoryUsage()
 
 	switch status {
-	case MemoryStatusWarning:
+	case memoryStatusWarning:
 		// Reduce chunk size by 50%
 		return true, chunkSize / 2
-	case MemoryStatusExceeded:
+	case memoryStatusExceeded:
 		// Reduce chunk size by 75%
 		return true, chunkSize / 4
 	default:
@@ -325,47 +333,47 @@ func (ml *MemoryLimit) ShouldReduceChunkSize(chunkSize int) (bool, int) {
 	}
 }
 
-// CreateMemoryError creates a memory limit error with helpful context
-func (ml *MemoryLimit) CreateMemoryError(operation string) error {
-	info := ml.GetMemoryInfo()
+// createMemoryError creates a memory limit error with helpful context
+func (ml *memoryLimit) createMemoryError(operation string) error {
+	info := ml.getMemoryInfo()
 	return fmt.Errorf(
 		"memory limit exceeded during %s: using %d MB / %d MB (%.1f%%), "+
 			"consider reducing chunk size or increasing memory limit",
-		operation, info.CurrentMB, info.LimitMB, info.Usage*100,
+		operation, info.currentMB, info.limitMB, info.usage*100,
 	)
 }
 
-// MemoryStatus represents the current memory status
-type MemoryStatus int
+// memoryStatus represents the current memory status
+type memoryStatus int
 
 // Memory status constants
 const (
-	// MemoryStatusOK indicates memory usage is within acceptable limits
-	MemoryStatusOK MemoryStatus = iota
-	// MemoryStatusWarning indicates memory usage is approaching the limit
-	MemoryStatusWarning
-	// MemoryStatusExceeded indicates memory usage has exceeded the limit
-	MemoryStatusExceeded
+	// memoryStatusOK indicates memory usage is within acceptable limits
+	memoryStatusOK memoryStatus = iota
+	// memoryStatusWarning indicates memory usage is approaching the limit
+	memoryStatusWarning
+	// memoryStatusExceeded indicates memory usage has exceeded the limit
+	memoryStatusExceeded
 )
 
 // String returns string representation of memory status
-func (ms MemoryStatus) String() string {
+func (ms memoryStatus) String() string {
 	switch ms {
-	case MemoryStatusOK:
+	case memoryStatusOK:
 		return "OK"
-	case MemoryStatusWarning:
+	case memoryStatusWarning:
 		return "WARNING"
-	case MemoryStatusExceeded:
+	case memoryStatusExceeded:
 		return "EXCEEDED"
 	default:
 		return "UNKNOWN"
 	}
 }
 
-// MemoryInfo contains detailed memory usage information
-type MemoryInfo struct {
-	CurrentMB int64        // Current memory usage in MB
-	LimitMB   int64        // Memory limit in MB
-	Usage     float64      // Usage percentage (0.0-1.0)
-	Status    MemoryStatus // Current status
+// memoryInfo contains detailed memory usage information
+type memoryInfo struct {
+	currentMB int64        // Current memory usage in MB
+	limitMB   int64        // Memory limit in MB
+	usage     float64      // usage percentage (0.0-1.0)
+	status    memoryStatus // Current status
 }

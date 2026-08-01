@@ -405,7 +405,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Export tables with format/compression options | `ExampleDumpDatabase`, `ExampleNewDumpOptions`, `ExampleDumpOptions_WithFormat`, `ExampleDumpOptions_WithCompression` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
 | Work with compression helpers directly | `ExampleNewCompressionHandler`, `ExampleNewCompressionFactory`, `ExampleCompressionFactory_DetectCompressionType` | [example_api_test.go](./example_api_test.go) |
 | Strip compression suffixes and inspect file types | `ExampleCompressionFactory_RemoveCompressionExtension`, `ExampleCompressionFactory_GetBaseFileType` | [example_api_test.go](./example_api_test.go) |
-| Build contextual errors | `ExampleNewErrorContext`, `ExampleMalformedRowPolicy_String` | [example_api_test.go](./example_api_test.go) |
+| Inspect the malformed-row policy | `ExampleMalformedRowPolicy_String` | [example_api_test.go](./example_api_test.go) |
 
 #### prep
 

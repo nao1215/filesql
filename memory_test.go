@@ -16,25 +16,25 @@ func TestNewMemoryPool(t *testing.T) {
 
 	t.Run("default max size", func(t *testing.T) {
 		t.Parallel()
-		pool := NewMemoryPool(0)
+		pool := newMemoryPool(0)
 		assert.Equal(t, 1024*1024, pool.maxSize, "should use default max size")
 	})
 
 	t.Run("custom max size", func(t *testing.T) {
 		t.Parallel()
 		customSize := 512 * 1024
-		pool := NewMemoryPool(customSize)
+		pool := newMemoryPool(customSize)
 		assert.Equal(t, customSize, pool.maxSize, "should use custom max size")
 	})
 }
 
 func TestMemoryPool_ByteBuffer(t *testing.T) {
 	t.Parallel()
-	pool := NewMemoryPool(1024 * 1024)
+	pool := newMemoryPool(1024 * 1024)
 
 	t.Run("get and put byte buffer", func(t *testing.T) {
 		t.Parallel()
-		buf := pool.GetByteBuffer()
+		buf := pool.getByteBuffer()
 		assert.NotNil(t, buf, "buffer should not be nil")
 		assert.Equal(t, 0, len(buf), "buffer length should be 0")
 		assert.GreaterOrEqual(t, cap(buf), 0, "buffer should have capacity")
@@ -44,35 +44,35 @@ func TestMemoryPool_ByteBuffer(t *testing.T) {
 		assert.Equal(t, 9, len(buf), "buffer should contain data")
 
 		// Put back to pool
-		pool.PutByteBuffer(buf)
+		pool.putByteBuffer(buf)
 
 		// Get another buffer (should be reused)
-		buf2 := pool.GetByteBuffer()
+		buf2 := pool.getByteBuffer()
 		assert.NotNil(t, buf2, "second buffer should not be nil")
 		assert.Equal(t, 0, len(buf2), "second buffer length should be reset to 0")
 	})
 
 	t.Run("reject oversized buffer", func(t *testing.T) {
 		t.Parallel()
-		smallPool := NewMemoryPool(100) // 100 byte limit
+		smallPool := newMemoryPool(100) // 100 byte limit
 
 		// Create a large buffer
 		largeBuf := make([]byte, 200)
 
 		// Pool should reject oversized buffer (no panic should occur)
 		require.NotPanics(t, func() {
-			smallPool.PutByteBuffer(largeBuf)
+			smallPool.putByteBuffer(largeBuf)
 		})
 	})
 }
 
 func TestMemoryPool_RecordSlice(t *testing.T) {
 	t.Parallel()
-	pool := NewMemoryPool(1024 * 1024)
+	pool := newMemoryPool(1024 * 1024)
 
 	t.Run("get and put record slice", func(t *testing.T) {
 		t.Parallel()
-		slice := pool.GetRecordSlice()
+		slice := pool.getRecordSlice()
 		assert.NotNil(t, slice, "slice should not be nil")
 		assert.Equal(t, 0, len(slice), "slice length should be 0")
 
@@ -82,10 +82,10 @@ func TestMemoryPool_RecordSlice(t *testing.T) {
 		assert.Equal(t, 2, len(slice), "slice should contain records")
 
 		// Put back to pool
-		pool.PutRecordSlice(slice)
+		pool.putRecordSlice(slice)
 
 		// Get another slice (should be reused)
-		slice2 := pool.GetRecordSlice()
+		slice2 := pool.getRecordSlice()
 		assert.NotNil(t, slice2, "second slice should not be nil")
 		assert.Equal(t, 0, len(slice2), "second slice length should be reset to 0")
 	})
@@ -93,11 +93,11 @@ func TestMemoryPool_RecordSlice(t *testing.T) {
 
 func TestMemoryPool_StringSlice(t *testing.T) {
 	t.Parallel()
-	pool := NewMemoryPool(1024 * 1024)
+	pool := newMemoryPool(1024 * 1024)
 
 	t.Run("get and put string slice", func(t *testing.T) {
 		t.Parallel()
-		slice := pool.GetStringSlice()
+		slice := pool.getStringSlice()
 		assert.NotNil(t, slice, "slice should not be nil")
 		assert.Equal(t, 0, len(slice), "slice length should be 0")
 
@@ -106,10 +106,10 @@ func TestMemoryPool_StringSlice(t *testing.T) {
 		assert.Equal(t, 2, len(slice), "slice should contain strings")
 
 		// Put back to pool
-		pool.PutStringSlice(slice)
+		pool.putStringSlice(slice)
 
 		// Get another slice (should be reused)
-		slice2 := pool.GetStringSlice()
+		slice2 := pool.getStringSlice()
 		assert.NotNil(t, slice2, "second slice should not be nil")
 		assert.Equal(t, 0, len(slice2), "second slice length should be reset to 0")
 	})
@@ -117,32 +117,32 @@ func TestMemoryPool_StringSlice(t *testing.T) {
 
 func TestMemoryPool_ForceGC(t *testing.T) {
 	t.Parallel()
-	pool := NewMemoryPool(1024 * 1024)
+	pool := newMemoryPool(1024 * 1024)
 
 	t.Run("force GC clears pools under memory pressure", func(t *testing.T) {
-		// This test is more about ensuring ForceGC doesn't panic
+		// This test is more about ensuring forceGC doesn't panic
 		// Actual memory pressure simulation is difficult in unit tests
 
 		// Get some buffers to populate pools
-		buf := pool.GetByteBuffer()
-		records := pool.GetRecordSlice()
-		strings := pool.GetStringSlice()
+		buf := pool.getByteBuffer()
+		records := pool.getRecordSlice()
+		strings := pool.getStringSlice()
 
 		// Put them back
-		pool.PutByteBuffer(buf)
-		pool.PutRecordSlice(records)
-		pool.PutStringSlice(strings)
+		pool.putByteBuffer(buf)
+		pool.putRecordSlice(records)
+		pool.putStringSlice(strings)
 
 		// Force GC should not panic
 		require.NotPanics(t, func() {
-			pool.ForceGC()
+			pool.forceGC()
 		})
 	})
 }
 
 func TestMemoryPool_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
-	pool := NewMemoryPool(1024 * 1024)
+	pool := newMemoryPool(1024 * 1024)
 
 	t.Run("concurrent access to byte buffers", func(t *testing.T) {
 		t.Parallel()
@@ -157,9 +157,9 @@ func TestMemoryPool_ConcurrentAccess(t *testing.T) {
 				defer func() { done <- true }()
 
 				for range iterations {
-					buf := pool.GetByteBuffer()
+					buf := pool.getByteBuffer()
 					buf = append(buf, []byte("test")...)
-					pool.PutByteBuffer(buf)
+					pool.putByteBuffer(buf)
 				}
 			}()
 		}
@@ -176,16 +176,16 @@ func TestNewMemoryLimit(t *testing.T) {
 
 	t.Run("default max memory", func(t *testing.T) {
 		t.Parallel()
-		limit := NewMemoryLimit(0)
+		limit := newMemoryLimit(0)
 		assert.Equal(t, int64(512), limit.maxMemoryMB, "should use default max memory")
-		assert.True(t, limit.IsEnabled(), "should be enabled by default")
+		assert.True(t, limit.isEnabled(), "should be enabled by default")
 		assert.Equal(t, 0.8, limit.warningThreshold, "should use default warning threshold")
 	})
 
 	t.Run("custom max memory", func(t *testing.T) {
 		t.Parallel()
 		customMemory := int64(1024)
-		limit := NewMemoryLimit(customMemory)
+		limit := newMemoryLimit(customMemory)
 		assert.Equal(t, customMemory, limit.maxMemoryMB, "should use custom max memory")
 	})
 
@@ -193,27 +193,27 @@ func TestNewMemoryLimit(t *testing.T) {
 		t.Parallel()
 		// Test that extremely large memory limits are capped
 		unreasonableMemory := int64(1000 * 1024) // 1000GB - unreasonable
-		limit := NewMemoryLimit(unreasonableMemory)
+		limit := newMemoryLimit(unreasonableMemory)
 		assert.Equal(t, int64(64*1024), limit.maxMemoryMB, "should cap at reasonable maximum of 64GB")
 	})
 }
 
 func TestMemoryLimit_EnableDisable(t *testing.T) {
 	t.Parallel()
-	limit := NewMemoryLimit(512)
+	limit := newMemoryLimit(512)
 
 	t.Run("enable and disable", func(t *testing.T) {
 		t.Parallel()
 		// Should be enabled by default
-		assert.True(t, limit.IsEnabled(), "should be enabled by default")
+		assert.True(t, limit.isEnabled(), "should be enabled by default")
 
 		// Disable
-		limit.Disable()
-		assert.False(t, limit.IsEnabled(), "should be disabled after Disable()")
+		limit.disable()
+		assert.False(t, limit.isEnabled(), "should be disabled after Disable()")
 
 		// Enable again
-		limit.Enable()
-		assert.True(t, limit.IsEnabled(), "should be enabled after Enable()")
+		limit.enable()
+		assert.True(t, limit.isEnabled(), "should be enabled after Enable()")
 	})
 }
 
@@ -222,12 +222,12 @@ func TestMemoryLimit_SetWarningThreshold(t *testing.T) {
 
 	t.Run("valid thresholds", func(t *testing.T) {
 		t.Parallel()
-		limit := NewMemoryLimit(512)
+		limit := newMemoryLimit(512)
 		// Test valid threshold values
 		validThresholds := []float64{0.1, 0.5, 0.7, 0.9, 1.0}
 
 		for _, threshold := range validThresholds {
-			limit.SetWarningThreshold(threshold)
+			limit.setWarningThreshold(threshold)
 			assert.Equal(t, threshold, limit.warningThreshold,
 				"should set valid threshold %.1f", threshold)
 		}
@@ -235,12 +235,12 @@ func TestMemoryLimit_SetWarningThreshold(t *testing.T) {
 
 	t.Run("invalid thresholds", func(t *testing.T) {
 		t.Parallel()
-		limit := NewMemoryLimit(512)
+		limit := newMemoryLimit(512)
 		originalThreshold := limit.warningThreshold
 		invalidThresholds := []float64{-0.1, 0.0, 1.1, 2.0}
 
 		for _, threshold := range invalidThresholds {
-			limit.SetWarningThreshold(threshold)
+			limit.setWarningThreshold(threshold)
 			assert.Equal(t, originalThreshold, limit.warningThreshold,
 				"should not change threshold for invalid value %.1f", threshold)
 		}
@@ -252,39 +252,39 @@ func TestMemoryLimit_CheckMemoryUsage(t *testing.T) {
 
 	t.Run("disabled limit returns OK", func(t *testing.T) {
 		t.Parallel()
-		limit := NewMemoryLimit(1) // Very small limit
-		limit.Disable()
+		limit := newMemoryLimit(1) // Very small limit
+		limit.disable()
 
-		status := limit.CheckMemoryUsage()
-		assert.Equal(t, MemoryStatusOK, status, "disabled limit should always return OK")
+		status := limit.checkMemoryUsage()
+		assert.Equal(t, memoryStatusOK, status, "disabled limit should always return OK")
 	})
 
 	t.Run("enabled limit checks actual usage", func(t *testing.T) {
 		t.Parallel()
 		// Use a very large limit to ensure we're in OK status for this test
-		limit := NewMemoryLimit(10000) // 10GB limit
-		limit.Enable()
+		limit := newMemoryLimit(10000) // 10GB limit
+		limit.enable()
 
-		status := limit.CheckMemoryUsage()
+		status := limit.checkMemoryUsage()
 		// With such a large limit, we should be OK
-		assert.Equal(t, MemoryStatusOK, status, "with large limit should return OK")
+		assert.Equal(t, memoryStatusOK, status, "with large limit should return OK")
 	})
 }
 
 func TestMemoryLimit_GetMemoryInfo(t *testing.T) {
 	t.Parallel()
-	limit := NewMemoryLimit(1024)
+	limit := newMemoryLimit(1024)
 
 	t.Run("memory info structure", func(t *testing.T) {
 		t.Parallel()
-		info := limit.GetMemoryInfo()
+		info := limit.getMemoryInfo()
 
-		assert.GreaterOrEqual(t, info.CurrentMB, int64(0), "current memory should be non-negative")
-		assert.Equal(t, int64(1024), info.LimitMB, "limit should match configured value")
-		assert.GreaterOrEqual(t, info.Usage, 0.0, "usage should be non-negative")
-		assert.LessOrEqual(t, info.Usage, 100.0, "usage should not exceed reasonable bounds")
-		assert.Contains(t, []MemoryStatus{MemoryStatusOK, MemoryStatusWarning, MemoryStatusExceeded},
-			info.Status, "status should be a valid MemoryStatus")
+		assert.GreaterOrEqual(t, info.currentMB, int64(0), "current memory should be non-negative")
+		assert.Equal(t, int64(1024), info.limitMB, "limit should match configured value")
+		assert.GreaterOrEqual(t, info.usage, 0.0, "usage should be non-negative")
+		assert.LessOrEqual(t, info.usage, 100.0, "usage should not exceed reasonable bounds")
+		assert.Contains(t, []memoryStatus{memoryStatusOK, memoryStatusWarning, memoryStatusExceeded},
+			info.status, "status should be a valid memoryStatus")
 	})
 }
 
@@ -294,23 +294,23 @@ func TestMemoryLimit_ShouldReduceChunkSize(t *testing.T) {
 	t.Run("OK status - no reduction", func(t *testing.T) {
 		t.Parallel()
 		// Use large limit to ensure OK status
-		limit := NewMemoryLimit(10000)
+		limit := newMemoryLimit(10000)
 		originalChunkSize := 1000
 
-		shouldReduce, newSize := limit.ShouldReduceChunkSize(originalChunkSize)
+		shouldReduce, newSize := limit.shouldReduceChunkSize(originalChunkSize)
 		assert.False(t, shouldReduce, "should not reduce chunk size when OK")
 		assert.Equal(t, originalChunkSize, newSize, "chunk size should remain unchanged")
 	})
 
 	t.Run("chunk size reduction logic", func(t *testing.T) {
 		t.Parallel()
-		limit := NewMemoryLimit(512)
+		limit := newMemoryLimit(512)
 		originalChunkSize := 1000
 
 		// We can't easily simulate WARNING or EXCEEDED status in unit tests
 		// since it depends on actual runtime memory usage, but we can test
 		// the logic by calling the method
-		shouldReduce, newSize := limit.ShouldReduceChunkSize(originalChunkSize)
+		shouldReduce, newSize := limit.shouldReduceChunkSize(originalChunkSize)
 
 		if shouldReduce {
 			// If reduction is recommended, new size should be smaller
@@ -324,12 +324,12 @@ func TestMemoryLimit_ShouldReduceChunkSize(t *testing.T) {
 
 func TestMemoryLimit_CreateMemoryError(t *testing.T) {
 	t.Parallel()
-	limit := NewMemoryLimit(512)
+	limit := newMemoryLimit(512)
 
 	t.Run("error message format", func(t *testing.T) {
 		t.Parallel()
 		operation := "test operation"
-		err := limit.CreateMemoryError(operation)
+		err := limit.createMemoryError(operation)
 
 		assert.Error(t, err, "should return an error")
 		assert.Contains(t, err.Error(), operation, "error should contain operation name")
@@ -343,13 +343,13 @@ func TestMemoryStatus_String(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
-		status   MemoryStatus
+		status   memoryStatus
 		expected string
 	}{
-		{MemoryStatusOK, "OK"},
-		{MemoryStatusWarning, "WARNING"},
-		{MemoryStatusExceeded, "EXCEEDED"},
-		{MemoryStatus(999), "UNKNOWN"}, // Invalid status
+		{memoryStatusOK, "OK"},
+		{memoryStatusWarning, "WARNING"},
+		{memoryStatusExceeded, "EXCEEDED"},
+		{memoryStatus(999), "UNKNOWN"}, // Invalid status
 	}
 
 	for _, tc := range testCases {
@@ -363,7 +363,7 @@ func TestMemoryStatus_String(t *testing.T) {
 
 func TestMemoryLimit_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
-	limit := NewMemoryLimit(512)
+	limit := newMemoryLimit(512)
 
 	t.Run("concurrent usage checks", func(t *testing.T) {
 		t.Parallel()
@@ -378,14 +378,14 @@ func TestMemoryLimit_ConcurrentAccess(t *testing.T) {
 
 				for j := range iterations {
 					// These operations should be thread-safe
-					_ = limit.CheckMemoryUsage()
-					_ = limit.GetMemoryInfo()
-					_, _ = limit.ShouldReduceChunkSize(1000)
+					_ = limit.checkMemoryUsage()
+					_ = limit.getMemoryInfo()
+					_, _ = limit.shouldReduceChunkSize(1000)
 
 					// Enable/disable operations
 					if j%10 == 0 {
-						limit.Disable()
-						limit.Enable()
+						limit.disable()
+						limit.enable()
 					}
 				}
 			}()
@@ -397,19 +397,19 @@ func TestMemoryLimit_ConcurrentAccess(t *testing.T) {
 		}
 
 		// Should still be enabled after concurrent access
-		assert.True(t, limit.IsEnabled(), "should remain enabled after concurrent access")
+		assert.True(t, limit.isEnabled(), "should remain enabled after concurrent access")
 	})
 }
 
 func BenchmarkMemoryPool_ByteBuffer(b *testing.B) {
-	pool := NewMemoryPool(1024 * 1024)
+	pool := newMemoryPool(1024 * 1024)
 
 	b.Run("with pool", func(b *testing.B) {
 		b.ResetTimer()
 		for range b.N {
-			buf := pool.GetByteBuffer()
+			buf := pool.getByteBuffer()
 			buf = append(buf, []byte("benchmark data")...)
-			pool.PutByteBuffer(buf)
+			pool.putByteBuffer(buf)
 		}
 	})
 
@@ -425,14 +425,14 @@ func BenchmarkMemoryPool_ByteBuffer(b *testing.B) {
 }
 
 func BenchmarkMemoryPool_RecordSlice(b *testing.B) {
-	pool := NewMemoryPool(1024 * 1024)
+	pool := newMemoryPool(1024 * 1024)
 
 	b.Run("with pool", func(b *testing.B) {
 		b.ResetTimer()
 		for range b.N {
-			slice := pool.GetRecordSlice()
+			slice := pool.getRecordSlice()
 			slice = append(slice, Record{"col1", "col2"})
-			pool.PutRecordSlice(slice)
+			pool.putRecordSlice(slice)
 		}
 	})
 
@@ -448,20 +448,20 @@ func BenchmarkMemoryPool_RecordSlice(b *testing.B) {
 }
 
 func BenchmarkMemoryLimit_CheckMemoryUsage(b *testing.B) {
-	limit := NewMemoryLimit(1024)
+	limit := newMemoryLimit(1024)
 
 	b.ResetTimer()
 	for range b.N {
-		_ = limit.CheckMemoryUsage()
+		_ = limit.checkMemoryUsage()
 	}
 }
 
 func BenchmarkMemoryLimit_GetMemoryInfo(b *testing.B) {
-	limit := NewMemoryLimit(1024)
+	limit := newMemoryLimit(1024)
 
 	b.ResetTimer()
 	for range b.N {
-		_ = limit.GetMemoryInfo()
+		_ = limit.getMemoryInfo()
 	}
 }
 
@@ -521,7 +521,7 @@ func TestStreamingParser_ParseXLSXStream_MemoryOptimized(t *testing.T) {
 		t.Parallel()
 		// Create parser with very restrictive memory limit
 		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "test_table", 1000)
-		parser.memoryLimit = NewMemoryLimit(1) // 1MB limit - very restrictive
+		parser.memoryLimit = newMemoryLimit(1) // 1MB limit - very restrictive
 
 		// Create a small XLSX file
 		buf := createTestXLSX(t, 5, 2)
@@ -602,7 +602,7 @@ func TestStreamingParser_ProcessXLSXInChunks_MemoryOptimized(t *testing.T) {
 		buf := createTestXLSX(t, 20, 3)
 
 		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "test_table", 10)
-		parser.memoryLimit = NewMemoryLimit(5) // Very small limit
+		parser.memoryLimit = newMemoryLimit(5) // Very small limit
 
 		var processedChunks int
 
@@ -674,17 +674,17 @@ func TestStreamingParser_MemoryPoolIntegration(t *testing.T) {
 		assert.NotNil(t, parser.memoryLimit, "memory limit should be initialized")
 
 		// Test that we can get resources from the pool
-		buf := parser.memoryPool.GetByteBuffer()
+		buf := parser.memoryPool.getByteBuffer()
 		assert.NotNil(t, buf, "should get byte buffer from pool")
-		parser.memoryPool.PutByteBuffer(buf)
+		parser.memoryPool.putByteBuffer(buf)
 
-		records := parser.memoryPool.GetRecordSlice()
+		records := parser.memoryPool.getRecordSlice()
 		assert.NotNil(t, records, "should get record slice from pool")
-		parser.memoryPool.PutRecordSlice(records)
+		parser.memoryPool.putRecordSlice(records)
 
-		strings := parser.memoryPool.GetStringSlice()
+		strings := parser.memoryPool.getStringSlice()
 		assert.NotNil(t, strings, "should get string slice from pool")
-		parser.memoryPool.PutStringSlice(strings)
+		parser.memoryPool.putStringSlice(strings)
 	})
 
 	t.Run("memory limit configuration", func(t *testing.T) {
@@ -692,18 +692,18 @@ func TestStreamingParser_MemoryPoolIntegration(t *testing.T) {
 		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "test_table", 10)
 
 		// Test memory limit operations
-		assert.True(t, parser.memoryLimit.IsEnabled(), "memory limit should be enabled by default")
+		assert.True(t, parser.memoryLimit.isEnabled(), "memory limit should be enabled by default")
 
-		info := parser.memoryLimit.GetMemoryInfo()
-		assert.Greater(t, info.LimitMB, int64(0), "memory limit should be positive")
+		info := parser.memoryLimit.getMemoryInfo()
+		assert.Greater(t, info.limitMB, int64(0), "memory limit should be positive")
 
 		// Test disabling
-		parser.memoryLimit.Disable()
-		assert.False(t, parser.memoryLimit.IsEnabled(), "memory limit should be disabled")
+		parser.memoryLimit.disable()
+		assert.False(t, parser.memoryLimit.isEnabled(), "memory limit should be disabled")
 
 		// Re-enable
-		parser.memoryLimit.Enable()
-		assert.True(t, parser.memoryLimit.IsEnabled(), "memory limit should be re-enabled")
+		parser.memoryLimit.enable()
+		assert.True(t, parser.memoryLimit.isEnabled(), "memory limit should be re-enabled")
 	})
 }
 
@@ -818,18 +818,18 @@ func BenchmarkStreamingParser_XLSXProcessing(b *testing.B) {
 func TestMemoryPool_GetByteBuffer_Fallback(t *testing.T) {
 	t.Parallel()
 
-	pool := NewMemoryPool(1024)
+	pool := newMemoryPool(1024)
 
 	// Get a buffer - should work normally
-	buf := pool.GetByteBuffer()
+	buf := pool.getByteBuffer()
 	assert.NotNil(t, buf)
 	assert.Equal(t, 0, len(buf))
 
 	// Test Put and Get cycle
 	buf = append(buf, []byte("test data")...)
-	pool.PutByteBuffer(buf)
+	pool.putByteBuffer(buf)
 
-	buf2 := pool.GetByteBuffer()
+	buf2 := pool.getByteBuffer()
 	assert.NotNil(t, buf2)
 	assert.Equal(t, 0, len(buf2)) // Should be reset
 }
@@ -837,18 +837,18 @@ func TestMemoryPool_GetByteBuffer_Fallback(t *testing.T) {
 func TestMemoryPool_GetRecordSlice_Fallback(t *testing.T) {
 	t.Parallel()
 
-	pool := NewMemoryPool(1024)
+	pool := newMemoryPool(1024)
 
 	// Get a slice - should work normally
-	slice := pool.GetRecordSlice()
+	slice := pool.getRecordSlice()
 	assert.NotNil(t, slice)
 	assert.Equal(t, 0, len(slice))
 
 	// Test Put and Get cycle
 	slice = append(slice, Record{"test"})
-	pool.PutRecordSlice(slice)
+	pool.putRecordSlice(slice)
 
-	slice2 := pool.GetRecordSlice()
+	slice2 := pool.getRecordSlice()
 	assert.NotNil(t, slice2)
 	assert.Equal(t, 0, len(slice2)) // Should be reset
 }
@@ -856,18 +856,18 @@ func TestMemoryPool_GetRecordSlice_Fallback(t *testing.T) {
 func TestMemoryPool_GetStringSlice_Fallback(t *testing.T) {
 	t.Parallel()
 
-	pool := NewMemoryPool(1024)
+	pool := newMemoryPool(1024)
 
 	// Get a slice - should work normally
-	slice := pool.GetStringSlice()
+	slice := pool.getStringSlice()
 	assert.NotNil(t, slice)
 	assert.Equal(t, 0, len(slice))
 
 	// Test Put and Get cycle
 	slice = append(slice, "test")
-	pool.PutStringSlice(slice)
+	pool.putStringSlice(slice)
 
-	slice2 := pool.GetStringSlice()
+	slice2 := pool.getStringSlice()
 	assert.NotNil(t, slice2)
 	assert.Equal(t, 0, len(slice2)) // Should be reset
 }
