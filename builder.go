@@ -98,7 +98,12 @@ type ReaderOption func(*readerInput)
 //
 // Example:
 //
-//	gz, _ := os.Open("users.csv.gz")
+//	gz, err := os.Open("users.csv.gz")
+//	if err != nil {
+//		return err
+//	}
+//	defer gz.Close()
+//
 //	builder.AddReader(gz, "users", filesql.FileTypeCSV, filesql.WithCompression(filesql.CompressionGZ))
 func WithCompression(compression CompressionType) ReaderOption {
 	return func(input *readerInput) {

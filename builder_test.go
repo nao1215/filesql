@@ -142,6 +142,52 @@ func TestDBBuilder_AddFS_Compressed(t *testing.T) {
 	}
 }
 
+// TestDBBuilder_AddFS_CompressedHeaderOnly loads a compressed file that has a
+// header and no rows. The chunked reader and the header-only fallback are two
+// different paths over the same reader, and only one of them can consume it, so
+// the case is worth pinning separately from the file that has rows.
+func TestDBBuilder_AddFS_CompressedHeaderOnly(t *testing.T) {
+	t.Parallel()
+
+	for _, codec := range []CompressionType{CompressionNone, CompressionGZ, CompressionZSTD, CompressionLZ4} {
+		t.Run(codec.String(), func(t *testing.T) {
+			t.Parallel()
+
+			var compressed bytes.Buffer
+			w, closeWriter, err := NewCompressionHandler(codec).CreateWriter(&compressed)
+			require.NoError(t, err)
+			_, err = w.Write([]byte("id,name,email\n"))
+			require.NoError(t, err)
+			require.NoError(t, closeWriter())
+
+			mockFS := fstest.MapFS{
+				"empty" + FileTypeCSV.extension() + codec.Extension(): &fstest.MapFile{Data: compressed.Bytes()},
+			}
+
+			ctx := context.Background()
+			validated, err := NewBuilder().AddFS(mockFS).Build(ctx)
+			require.NoError(t, err, "Build() failed for %s", codec)
+
+			db, err := validated.Open(ctx)
+			require.NoError(t, err, "Open() failed for %s", codec)
+			defer db.Close()
+
+			// The table exists with the header's columns and holds no rows.
+			var count int
+			require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM empty").Scan(&count))
+			assert.Equal(t, 0, count, "a header-only file should load no rows")
+
+			rows, err := db.QueryContext(ctx, "SELECT id, name, email FROM empty")
+			require.NoError(t, err, "the header's columns should exist for %s", codec)
+			defer rows.Close()
+			cols, err := rows.Columns()
+			require.NoError(t, err)
+			assert.Equal(t, []string{"id", "name", "email"}, cols)
+			require.NoError(t, rows.Err())
+		})
+	}
+}
+
 func TestDBBuilder_AddReader(t *testing.T) {
 	t.Parallel()
 

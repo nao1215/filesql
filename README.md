@@ -60,7 +60,12 @@ codec that is. A reader has no path, so `AddReader` takes the codec as an
 option:
 
 ```go
-gz, _ := os.Open("users.csv.gz")
+gz, err := os.Open("users.csv.gz")
+if err != nil {
+	return err
+}
+defer gz.Close()
+
 builder.AddReader(gz, "users", filesql.FileTypeCSV, filesql.WithCompression(filesql.CompressionGZ))
 ```
 
