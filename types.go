@@ -21,8 +21,6 @@ const (
 	DefaultChunkSize = DefaultRowsPerChunk
 	// MinChunkSize is the minimum allowed rows per chunk
 	MinChunkSize = 1
-	// ValidationPeekSize is the size used for validation peek operations
-	ValidationPeekSize = 1
 )
 
 // File format delimiters
@@ -57,8 +55,8 @@ func (tn TableName) Equal(other TableName) bool {
 	return tn.value == other.value
 }
 
-// Sanitize returns a sanitized version of the table name
-func (tn TableName) Sanitize() TableName {
+// sanitize returns a sanitized version of the table name
+func (tn TableName) sanitize() TableName {
 	return TableName{value: tn.sanitizeString()}
 }
 
@@ -144,11 +142,11 @@ const (
 )
 
 const (
-	// SQLTypeText is the SQL TEXT type string
+	// sqlTypeText is the SQL TEXT type string
 	sqlTypeText = "TEXT"
-	// SQLTypeInteger is the SQL INTEGER type string
+	// sqlTypeInteger is the SQL INTEGER type string
 	sqlTypeInteger = "INTEGER"
-	// SQLTypeReal is the SQL REAL type string
+	// sqlTypeReal is the SQL REAL type string
 	sqlTypeReal = "REAL"
 )
 
@@ -208,8 +206,8 @@ func (cs ChunkSize) String() string {
 	return strconv.Itoa(int(cs))
 }
 
-// IsValid checks if the chunk size is valid
-func (cs ChunkSize) IsValid() bool {
+// isValid checks if the chunk size is valid
+func (cs ChunkSize) isValid() bool {
 	return int(cs) >= MinChunkSize
 }
 
@@ -366,20 +364,20 @@ var cachedDatetimePatterns = []datetimePattern{
 
 // Type inference constants
 const (
-	// MaxSampleSize limits how many values to sample for type inference
-	MaxSampleSize = 1000
-	// MinConfidenceThreshold is the minimum percentage of values that must match a type
-	MinConfidenceThreshold = 0.8
-	// EarlyTerminationThreshold is the percentage of text values that triggers early termination
-	EarlyTerminationThreshold = 0.5
-	// MinDatetimeLength is the minimum reasonable length for datetime values
-	MinDatetimeLength = 4
-	// MaxDatetimeLength is the maximum reasonable length for datetime values
-	MaxDatetimeLength = 35
-	// SamplingStratificationFactor determines when to use stratified vs simple sampling
-	SamplingStratificationFactor = 3
-	// MinRealThreshold is the minimum percentage of real values needed to classify as REAL
-	MinRealThreshold = 0.1
+	// maxSampleSize limits how many values to sample for type inference
+	maxSampleSize = 1000
+	// minConfidenceThreshold is the minimum percentage of values that must match a type
+	minConfidenceThreshold = 0.8
+	// earlyTerminationThreshold is the percentage of text values that triggers early termination
+	earlyTerminationThreshold = 0.5
+	// minDatetimeLength is the minimum reasonable length for datetime values
+	minDatetimeLength = 4
+	// maxDatetimeLength is the maximum reasonable length for datetime values
+	maxDatetimeLength = 35
+	// samplingStratificationFactor determines when to use stratified vs simple sampling
+	samplingStratificationFactor = 3
+	// minRealThreshold is the minimum percentage of real values needed to classify as REAL
+	minRealThreshold = 0.1
 )
 
 // isDatetime checks if a string value represents a datetime with optimized pattern matching
@@ -391,7 +389,7 @@ func isDatetime(value string) bool {
 
 	// Quick length-based filtering to avoid regex on obviously non-datetime values
 	valueLen := len(value)
-	if valueLen < MinDatetimeLength || valueLen > MaxDatetimeLength {
+	if valueLen < minDatetimeLength || valueLen > maxDatetimeLength {
 		return false
 	}
 
@@ -459,7 +457,7 @@ func inferColumnType(values []string) columnType {
 		typeCounts[valueType]++
 
 		// Early termination: if too many text values, it's definitely text
-		if typeCounts[columnTypeText] > 0 && float64(typeCounts[columnTypeText])/float64(nonEmptyCount) > EarlyTerminationThreshold {
+		if typeCounts[columnTypeText] > 0 && float64(typeCounts[columnTypeText])/float64(nonEmptyCount) > earlyTerminationThreshold {
 			return columnTypeText
 		}
 	}
@@ -475,15 +473,15 @@ func inferColumnType(values []string) columnType {
 // getSampleValues returns a sample of values for type inference to improve performance
 // Uses stratified sampling to ensure better representation across the dataset
 func getSampleValues(values []string) []string {
-	if len(values) <= MaxSampleSize {
+	if len(values) <= maxSampleSize {
 		return values
 	}
 
-	sampleSize := MaxSampleSize
+	sampleSize := maxSampleSize
 	samples := make([]string, 0, sampleSize)
 
 	// For very small datasets relative to sample size, fall back to simple sampling
-	if len(values) < sampleSize*SamplingStratificationFactor {
+	if len(values) < sampleSize*samplingStratificationFactor {
 		step := max(1, len(values)/sampleSize)
 		for i := 0; i < sampleSize && i*step < len(values); i++ {
 			samples = append(samples, values[i*step])
@@ -492,7 +490,7 @@ func getSampleValues(values []string) []string {
 	}
 
 	// Stratified sampling: divide into 3 sections for better representation
-	sectionSize := len(values) / SamplingStratificationFactor
+	sectionSize := len(values) / samplingStratificationFactor
 	if sectionSize == 0 {
 		// If section size is 0, fall back to simple sampling
 		step := max(1, len(values)/sampleSize)
@@ -502,13 +500,13 @@ func getSampleValues(values []string) []string {
 		return samples
 	}
 
-	samplesPerSection := sampleSize / SamplingStratificationFactor
-	remainder := sampleSize % SamplingStratificationFactor
+	samplesPerSection := sampleSize / samplingStratificationFactor
+	remainder := sampleSize % samplingStratificationFactor
 
 	// Ensure each section gets at least one sample if possible
 	if samplesPerSection == 0 {
 		samplesPerSection = 1
-		remainder = max(0, sampleSize-SamplingStratificationFactor)
+		remainder = max(0, sampleSize-samplingStratificationFactor)
 	}
 
 	// Sample from beginning section with bounds checking
@@ -703,16 +701,16 @@ func selectColumnType(typeCounts map[columnType]int, totalCount int) columnType 
 	integerConfidence := float64(typeCounts[columnTypeInteger]) / float64(totalCount)
 
 	// Choose type with highest confidence above threshold
-	if datetimeConfidence >= MinConfidenceThreshold {
+	if datetimeConfidence >= minConfidenceThreshold {
 		return columnTypeDatetime
 	}
 	// For mixed numeric types, prefer REAL if there are significant real values
 	// Only classify as REAL if real values make up a reasonable portion
-	if realConfidence >= MinRealThreshold && (realConfidence+integerConfidence) >= MinConfidenceThreshold {
+	if realConfidence >= minRealThreshold && (realConfidence+integerConfidence) >= minConfidenceThreshold {
 		return columnTypeReal
 	}
 
-	if integerConfidence >= MinConfidenceThreshold {
+	if integerConfidence >= minConfidenceThreshold {
 		return columnTypeInteger
 	}
 

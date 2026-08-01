@@ -36,8 +36,8 @@ func newStreamingParser(fileType FileType, compression CompressionType, tableNam
 		compression: compression,
 		tableName:   tableName,
 		chunkSize:   NewChunkSize(chunkSize),
-		memoryPool:  NewMemoryPool(1024 * 1024), // 1MB default max buffer size
-		memoryLimit: NewMemoryLimit(512),        // 512MB default memory limit
+		memoryPool:  newMemoryPool(1024 * 1024), // 1MB default max buffer size
+		memoryLimit: newMemoryLimit(512),        // 512MB default memory limit
 	}
 }
 
@@ -769,8 +769,8 @@ func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chu
 // Use Open/OpenContext for full multi-sheet support with 1-sheet-1-table structure
 func (p *streamingParser) parseXLSXStream(reader io.Reader) (*table, error) {
 	// Check memory limits before processing
-	if p.memoryLimit != nil && p.memoryLimit.CheckMemoryUsage() == MemoryStatusExceeded {
-		return nil, p.memoryLimit.CreateMemoryError("XLSX parsing")
+	if p.memoryLimit != nil && p.memoryLimit.checkMemoryUsage() == memoryStatusExceeded {
+		return nil, p.memoryLimit.createMemoryError("XLSX parsing")
 	}
 
 	// Open XLSX directly from the reader (excelize will buffer as needed)
@@ -802,22 +802,22 @@ func (p *streamingParser) parseXLSXStream(reader io.Reader) (*table, error) {
 	)
 
 	// Use memory pool for record slice to reduce allocations
-	records := p.memoryPool.GetRecordSlice()
+	records := p.memoryPool.getRecordSlice()
 	originalRecords := records // Track original slice for proper pool return
 	defer func() {
 		// Always return the original slice to the pool, even if records grew
-		p.memoryPool.PutRecordSlice(originalRecords)
+		p.memoryPool.putRecordSlice(originalRecords)
 	}()
 
 	for iter.Next() {
 		// Check memory usage periodically (every 1000 records to reduce ReadMemStats overhead)
 		// runtime.ReadMemStats can pause for milliseconds, so we check less frequently
 		if p.memoryLimit != nil && len(records)%1000 == 0 {
-			if status := p.memoryLimit.CheckMemoryUsage(); status == MemoryStatusExceeded {
-				return nil, p.memoryLimit.CreateMemoryError("XLSX row processing")
-			} else if status == MemoryStatusWarning {
+			if status := p.memoryLimit.checkMemoryUsage(); status == memoryStatusExceeded {
+				return nil, p.memoryLimit.createMemoryError("XLSX row processing")
+			} else if status == memoryStatusWarning {
 				// Force GC at warning threshold
-				p.memoryPool.ForceGC()
+				p.memoryPool.forceGC()
 			}
 		}
 
@@ -852,8 +852,8 @@ func (p *streamingParser) parseXLSXStream(reader io.Reader) (*table, error) {
 // processXLSXInChunks processes XLSX data in chunks with memory optimization
 func (p *streamingParser) processXLSXInChunks(reader io.Reader, processor chunkProcessor) error {
 	// Check memory limits before processing
-	if p.memoryLimit != nil && p.memoryLimit.CheckMemoryUsage() == MemoryStatusExceeded {
-		return p.memoryLimit.CreateMemoryError("XLSX chunk processing")
+	if p.memoryLimit != nil && p.memoryLimit.checkMemoryUsage() == memoryStatusExceeded {
+		return p.memoryLimit.createMemoryError("XLSX chunk processing")
 	}
 
 	// Open XLSX file from reader
@@ -896,7 +896,7 @@ func (p *streamingParser) processXLSXInChunks(reader io.Reader, processor chunkP
 
 	// Adjust chunk size based on memory usage
 	if p.memoryLimit != nil {
-		if shouldReduce, newSize := p.memoryLimit.ShouldReduceChunkSize(chunkSize); shouldReduce {
+		if shouldReduce, newSize := p.memoryLimit.shouldReduceChunkSize(chunkSize); shouldReduce {
 			chunkSize = newSize
 			if chunkSize < 1 {
 				chunkSize = 1
@@ -905,22 +905,22 @@ func (p *streamingParser) processXLSXInChunks(reader io.Reader, processor chunkP
 	}
 
 	// Use memory pool for chunk records
-	chunkRecords = p.memoryPool.GetRecordSlice()
+	chunkRecords = p.memoryPool.getRecordSlice()
 	originalChunkRecords := chunkRecords // Track original slice for proper pool return
 	defer func() {
 		// Always return the original slice to the pool, even if chunkRecords grew
-		p.memoryPool.PutRecordSlice(originalChunkRecords)
+		p.memoryPool.putRecordSlice(originalChunkRecords)
 	}()
 
 	for iter.Next() {
 		// Check memory usage periodically (every 1000 rows to reduce ReadMemStats overhead)
 		// runtime.ReadMemStats can pause for milliseconds, so we check less frequently
 		if p.memoryLimit != nil && processedRows%1000 == 0 {
-			if status := p.memoryLimit.CheckMemoryUsage(); status == MemoryStatusExceeded {
-				return p.memoryLimit.CreateMemoryError("XLSX row processing")
-			} else if status == MemoryStatusWarning {
+			if status := p.memoryLimit.checkMemoryUsage(); status == memoryStatusExceeded {
+				return p.memoryLimit.createMemoryError("XLSX row processing")
+			} else if status == memoryStatusWarning {
 				// Force GC and reduce chunk size on memory pressure
-				p.memoryPool.ForceGC()
+				p.memoryPool.forceGC()
 				runtime.GC()
 				chunkSize = chunkSize / 2
 				if chunkSize < 1 {

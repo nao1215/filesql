@@ -364,16 +364,6 @@ func ExampleCompressionType_Extension() {
 	// .xz
 }
 
-func ExampleNewErrorContext() {
-	err := filesql.NewErrorContext("import", "users.csv").
-		WithTable("users").
-		WithDetails("duplicate column").
-		Error(filesql.ErrDuplicateColumn)
-	fmt.Println(err)
-	// Output:
-	// filesql: import failed, file: users.csv, table: users, details: duplicate column: filesql: duplicate column name
-}
-
 func ExampleMalformedRowPolicy_String() {
 	fmt.Println(filesql.MalformedRowStop)
 	fmt.Println(filesql.MalformedRowSkip)

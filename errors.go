@@ -2,8 +2,6 @@ package filesql
 
 import (
 	"errors"
-	"fmt"
-	"strings"
 )
 
 // Sentinel errors for consistent error handling across the package.
@@ -76,55 +74,3 @@ var (
 // errDuplicateColumnName is an internal alias for backward compatibility.
 // Deprecated: Use ErrDuplicateColumn instead.
 var errDuplicateColumnName = ErrDuplicateColumn
-
-// ErrorContext provides context for where an error occurred
-type ErrorContext struct {
-	Operation string
-	FilePath  string
-	TableName string
-	Details   string
-}
-
-// NewErrorContext creates a new error context
-func NewErrorContext(operation, filePath string) *ErrorContext {
-	return &ErrorContext{
-		Operation: operation,
-		FilePath:  filePath,
-	}
-}
-
-// WithTable adds table context to the error
-func (ec *ErrorContext) WithTable(tableName string) *ErrorContext {
-	ec.TableName = tableName
-	return ec
-}
-
-// WithDetails adds details to the error context
-func (ec *ErrorContext) WithDetails(details string) *ErrorContext {
-	ec.Details = details
-	return ec
-}
-
-// Error creates a formatted error with context
-func (ec *ErrorContext) Error(baseErr error) error {
-	var parts []string
-	parts = append(parts, fmt.Sprintf("filesql: %s failed", ec.Operation))
-
-	if ec.FilePath != "" {
-		parts = append(parts, "file: "+ec.FilePath)
-	}
-
-	if ec.TableName != "" {
-		parts = append(parts, "table: "+ec.TableName)
-	}
-
-	if ec.Details != "" {
-		parts = append(parts, "details: "+ec.Details)
-	}
-
-	context := strings.Join(parts, ", ")
-	if baseErr != nil {
-		return fmt.Errorf("%s: %w", context, baseErr)
-	}
-	return fmt.Errorf("%s", context)
-}
