@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `FileType` names a format and no longer fuses in the codec wrapping it, so it has 10 constants instead of 65. 56 of the old ones named a combination — `FileTypeCSVGZ`, `FileTypeCSVBZ2`, and the same eight codecs for TSV, LTSV, Parquet, XLSX, JSON, and JSONL — which made them the single largest part of this package's public API, and the naming was ambiguous where the two axes collided: `FileTypeJSONLZ4` was lz4-compressed JSON while `FileTypeJSONLLZ4` was lz4-compressed JSONL, one `L` apart with nothing in the name to say which reading was right. `AddReader` was the only caller that needed them, because an `io.Reader` carries no path to infer a codec from; it now takes options, and the codec is stated with `WithCompression(CompressionGZ)`. The existing three-argument call is unchanged, so a caller reading uncompressed bytes needs no edit. `prep` re-exported 56 of the parser's compressed constants under a second spelling and now re-exports formats only; `parser.FileType` keeps its fused constants, since that is the lower level where a format-and-codec name is the honest description of what it dispatches on, and `parser.BaseFileType` folds one back.
+- `stream.go`'s `createDecompressedReader` was 70 lines of eight arms naming seven formats each — a second implementation of what `CompressionHandler.CreateReader` already did from a `CompressionType` — and is now one line that calls it. One behavior follows from that: for an uncompressed source it returns a no-op close function rather than `nil`, which is `CreateReader`'s convention, so a caller can invoke it unconditionally.
+
 ## [0.29.0] - 2026-07-30
 
 ### Fixed

@@ -54,6 +54,24 @@ Compressed wrappers are supported for CSV, TSV, LTSV, JSON, JSONL, Parquet, and 
 
 ACH and Fedwire do not use external compression wrappers.
 
+Format and compression are separate. `FileType` names the format only —
+`FileTypeCSV` is a CSV whether or not a codec wraps it — and a path says which
+codec that is. A reader has no path, so `AddReader` takes the codec as an
+option:
+
+```go
+gz, err := os.Open("users.csv.gz")
+if err != nil {
+	return err
+}
+defer gz.Close()
+
+builder.AddReader(gz, "users", filesql.FileTypeCSV, filesql.WithCompression(filesql.CompressionGZ))
+```
+
+Without `WithCompression` the reader's bytes are read as the format directly,
+so the ordinary three-argument call is unchanged.
+
 ## Installation
 
 ```bash
@@ -378,6 +396,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Open files and query them | `ExampleOpen`, `ExampleOpenContext` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
 | Load files into an existing `*sql.DB` | `ExampleLoadInto`, `ExampleDBBuilder_LoadInto` | [example_api_test.go](./example_api_test.go) |
 | Build from readers, paths, or embedded FS | `ExampleNewBuilder`, `ExampleDBBuilder_AddReader`, `ExampleDBBuilder_AddPath`, `ExampleDBBuilder_AddFS` | [example_test.go](./example_test.go) |
+| Read a compressed reader | `ExampleDBBuilder_AddReader_compressed` | [example_test.go](./example_test.go) |
 | Tune chunked loading | `ExampleDBBuilder_SetDefaultChunkSize` | [example_api_test.go](./example_api_test.go) |
 | Handle malformed CSV/TSV rows | `ExampleDBBuilder_WithMalformedRowPolicy` | [example_api_test.go](./example_api_test.go) |
 | Attach your own logger | `ExampleDBBuilder_WithLogger`, `ExampleNewSlogAdapter` | [example_api_test.go](./example_api_test.go) |

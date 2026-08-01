@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// fileTypePair is one format and the parser constant that names it. Only
+// formats appear here: FileType no longer has a constant for a codec.
 type fileTypePair struct {
 	name    string
 	filesql FileType
@@ -16,92 +18,86 @@ type fileTypePair struct {
 
 func parserBackedFileTypePairs() []fileTypePair {
 	return []fileTypePair{
-		// Base types
 		{"CSV", FileTypeCSV, parser.CSV},
 		{"TSV", FileTypeTSV, parser.TSV},
 		{"LTSV", FileTypeLTSV, parser.LTSV},
 		{"Parquet", FileTypeParquet, parser.Parquet},
 		{"XLSX", FileTypeXLSX, parser.XLSX},
-
-		// GZ compressed
-		{"CSV GZ", FileTypeCSVGZ, parser.CSVGZ},
-		{"TSV GZ", FileTypeTSVGZ, parser.TSVGZ},
-		{"LTSV GZ", FileTypeLTSVGZ, parser.LTSVGZ},
-		{"Parquet GZ", FileTypeParquetGZ, parser.ParquetGZ},
-		{"XLSX GZ", FileTypeXLSXGZ, parser.XLSXGZ},
-
-		// BZ2 compressed
-		{"CSV BZ2", FileTypeCSVBZ2, parser.CSVBZ2},
-		{"TSV BZ2", FileTypeTSVBZ2, parser.TSVBZ2},
-		{"LTSV BZ2", FileTypeLTSVBZ2, parser.LTSVBZ2},
-		{"Parquet BZ2", FileTypeParquetBZ2, parser.ParquetBZ2},
-		{"XLSX BZ2", FileTypeXLSXBZ2, parser.XLSXBZ2},
-
-		// XZ compressed
-		{"CSV XZ", FileTypeCSVXZ, parser.CSVXZ},
-		{"TSV XZ", FileTypeTSVXZ, parser.TSVXZ},
-		{"LTSV XZ", FileTypeLTSVXZ, parser.LTSVXZ},
-		{"Parquet XZ", FileTypeParquetXZ, parser.ParquetXZ},
-		{"XLSX XZ", FileTypeXLSXXZ, parser.XLSXXZ},
-
-		// ZSTD compressed
-		{"CSV ZSTD", FileTypeCSVZSTD, parser.CSVZSTD},
-		{"TSV ZSTD", FileTypeTSVZSTD, parser.TSVZSTD},
-		{"LTSV ZSTD", FileTypeLTSVZSTD, parser.LTSVZSTD},
-		{"Parquet ZSTD", FileTypeParquetZSTD, parser.ParquetZSTD},
-		{"XLSX ZSTD", FileTypeXLSXZSTD, parser.XLSXZSTD},
-
-		// ZLIB compressed
-		{"CSV ZLIB", FileTypeCSVZLIB, parser.CSVZLIB},
-		{"TSV ZLIB", FileTypeTSVZLIB, parser.TSVZLIB},
-		{"LTSV ZLIB", FileTypeLTSVZLIB, parser.LTSVZLIB},
-		{"Parquet ZLIB", FileTypeParquetZLIB, parser.ParquetZLIB},
-		{"XLSX ZLIB", FileTypeXLSXZLIB, parser.XLSXZLIB},
-
-		// SNAPPY compressed
-		{"CSV SNAPPY", FileTypeCSVSNAPPY, parser.CSVSNAPPY},
-		{"TSV SNAPPY", FileTypeTSVSNAPPY, parser.TSVSNAPPY},
-		{"LTSV SNAPPY", FileTypeLTSVSNAPPY, parser.LTSVSNAPPY},
-		{"Parquet SNAPPY", FileTypeParquetSNAPPY, parser.ParquetSNAPPY},
-		{"XLSX SNAPPY", FileTypeXLSXSNAPPY, parser.XLSXSNAPPY},
-
-		// S2 compressed
-		{"CSV S2", FileTypeCSVS2, parser.CSVS2},
-		{"TSV S2", FileTypeTSVS2, parser.TSVS2},
-		{"LTSV S2", FileTypeLTSVS2, parser.LTSVS2},
-		{"Parquet S2", FileTypeParquetS2, parser.ParquetS2},
-		{"XLSX S2", FileTypeXLSXS2, parser.XLSXS2},
-
-		// LZ4 compressed
-		{"CSV LZ4", FileTypeCSVLZ4, parser.CSVLZ4},
-		{"TSV LZ4", FileTypeTSVLZ4, parser.TSVLZ4},
-		{"LTSV LZ4", FileTypeLTSVLZ4, parser.LTSVLZ4},
-		{"Parquet LZ4", FileTypeParquetLZ4, parser.ParquetLZ4},
-		{"XLSX LZ4", FileTypeXLSXLZ4, parser.XLSXLZ4},
-
-		// JSON base types
 		{"JSON", FileTypeJSON, parser.JSON},
 		{"JSONL", FileTypeJSONL, parser.JSONL},
+	}
+}
 
-		// JSON compressed
-		{"JSON GZ", FileTypeJSONGZ, parser.JSONGZ},
-		{"JSON BZ2", FileTypeJSONBZ2, parser.JSONBZ2},
-		{"JSON XZ", FileTypeJSONXZ, parser.JSONXZ},
-		{"JSON ZSTD", FileTypeJSONZSTD, parser.JSONZSTD},
-		{"JSON ZLIB", FileTypeJSONZLIB, parser.JSONZLIB},
-		{"JSON SNAPPY", FileTypeJSONSNAPPY, parser.JSONSNAPPY},
-		{"JSON S2", FileTypeJSONS2, parser.JSONS2},
-		{"JSON LZ4", FileTypeJSONLZ4, parser.JSONLZ4},
-
-		// JSONL compressed
-		{"JSONL GZ", FileTypeJSONLGZ, parser.JSONLGZ},
-		{"JSONL BZ2", FileTypeJSONLBZ2, parser.JSONLBZ2},
-		{"JSONL XZ", FileTypeJSONLXZ, parser.JSONLXZ},
-		{"JSONL ZSTD", FileTypeJSONLZSTD, parser.JSONLZSTD},
-		{"JSONL ZLIB", FileTypeJSONLZLIB, parser.JSONLZLIB},
-		{"JSONL SNAPPY", FileTypeJSONLSNAPPY, parser.JSONLSNAPPY},
-		{"JSONL S2", FileTypeJSONLS2, parser.JSONLS2},
-		{"JSONL LZ4", FileTypeJSONLLZ4, parser.JSONLLZ4},
+// compressedParserFileTypes lists every fused constant the parser still has,
+// paired with the format it folds to. filesqlFileType has to drop the codec:
+// the bridge is where the two enums stop agreeing, because parser.FileType is
+// the lower level and keeps naming the combination.
+func compressedParserFileTypes() []struct {
+	name    string
+	parser  parser.FileType
+	filesql FileType
+} {
+	return []struct {
+		name    string
+		parser  parser.FileType
+		filesql FileType
+	}{
+		{"CSV GZ", parser.CSVGZ, FileTypeCSV},
+		{"TSV GZ", parser.TSVGZ, FileTypeTSV},
+		{"LTSV GZ", parser.LTSVGZ, FileTypeLTSV},
+		{"Parquet GZ", parser.ParquetGZ, FileTypeParquet},
+		{"XLSX GZ", parser.XLSXGZ, FileTypeXLSX},
+		{"CSV BZ2", parser.CSVBZ2, FileTypeCSV},
+		{"TSV BZ2", parser.TSVBZ2, FileTypeTSV},
+		{"LTSV BZ2", parser.LTSVBZ2, FileTypeLTSV},
+		{"Parquet BZ2", parser.ParquetBZ2, FileTypeParquet},
+		{"XLSX BZ2", parser.XLSXBZ2, FileTypeXLSX},
+		{"CSV XZ", parser.CSVXZ, FileTypeCSV},
+		{"TSV XZ", parser.TSVXZ, FileTypeTSV},
+		{"LTSV XZ", parser.LTSVXZ, FileTypeLTSV},
+		{"Parquet XZ", parser.ParquetXZ, FileTypeParquet},
+		{"XLSX XZ", parser.XLSXXZ, FileTypeXLSX},
+		{"CSV ZSTD", parser.CSVZSTD, FileTypeCSV},
+		{"TSV ZSTD", parser.TSVZSTD, FileTypeTSV},
+		{"LTSV ZSTD", parser.LTSVZSTD, FileTypeLTSV},
+		{"Parquet ZSTD", parser.ParquetZSTD, FileTypeParquet},
+		{"XLSX ZSTD", parser.XLSXZSTD, FileTypeXLSX},
+		{"CSV ZLIB", parser.CSVZLIB, FileTypeCSV},
+		{"TSV ZLIB", parser.TSVZLIB, FileTypeTSV},
+		{"LTSV ZLIB", parser.LTSVZLIB, FileTypeLTSV},
+		{"Parquet ZLIB", parser.ParquetZLIB, FileTypeParquet},
+		{"XLSX ZLIB", parser.XLSXZLIB, FileTypeXLSX},
+		{"CSV SNAPPY", parser.CSVSNAPPY, FileTypeCSV},
+		{"TSV SNAPPY", parser.TSVSNAPPY, FileTypeTSV},
+		{"LTSV SNAPPY", parser.LTSVSNAPPY, FileTypeLTSV},
+		{"Parquet SNAPPY", parser.ParquetSNAPPY, FileTypeParquet},
+		{"XLSX SNAPPY", parser.XLSXSNAPPY, FileTypeXLSX},
+		{"CSV S2", parser.CSVS2, FileTypeCSV},
+		{"TSV S2", parser.TSVS2, FileTypeTSV},
+		{"LTSV S2", parser.LTSVS2, FileTypeLTSV},
+		{"Parquet S2", parser.ParquetS2, FileTypeParquet},
+		{"XLSX S2", parser.XLSXS2, FileTypeXLSX},
+		{"CSV LZ4", parser.CSVLZ4, FileTypeCSV},
+		{"TSV LZ4", parser.TSVLZ4, FileTypeTSV},
+		{"LTSV LZ4", parser.LTSVLZ4, FileTypeLTSV},
+		{"Parquet LZ4", parser.ParquetLZ4, FileTypeParquet},
+		{"XLSX LZ4", parser.XLSXLZ4, FileTypeXLSX},
+		{"JSON GZ", parser.JSONGZ, FileTypeJSON},
+		{"JSON BZ2", parser.JSONBZ2, FileTypeJSON},
+		{"JSON XZ", parser.JSONXZ, FileTypeJSON},
+		{"JSON ZSTD", parser.JSONZSTD, FileTypeJSON},
+		{"JSON ZLIB", parser.JSONZLIB, FileTypeJSON},
+		{"JSON SNAPPY", parser.JSONSNAPPY, FileTypeJSON},
+		{"JSON S2", parser.JSONS2, FileTypeJSON},
+		{"JSON LZ4", parser.JSONLZ4, FileTypeJSON},
+		{"JSONL GZ", parser.JSONLGZ, FileTypeJSONL},
+		{"JSONL BZ2", parser.JSONLBZ2, FileTypeJSONL},
+		{"JSONL XZ", parser.JSONLXZ, FileTypeJSONL},
+		{"JSONL ZSTD", parser.JSONLZSTD, FileTypeJSONL},
+		{"JSONL ZLIB", parser.JSONLZLIB, FileTypeJSONL},
+		{"JSONL SNAPPY", parser.JSONLSNAPPY, FileTypeJSONL},
+		{"JSONL S2", parser.JSONLS2, FileTypeJSONL},
+		{"JSONL LZ4", parser.JSONLLZ4, FileTypeJSONL},
 	}
 }
 
@@ -124,6 +120,26 @@ func TestParserFileType(t *testing.T) {
 		result := parserFileType(FileType(9999))
 		assert.Equal(t, parser.Unsupported, result)
 	})
+
+	// ACH and Fedwire are filesql's own formats; the parser does not handle
+	// them, so the bridge has nothing to hand it.
+	for _, ft := range []FileType{FileTypeACH, FileTypeFedWire} {
+		t.Run(ft.String(), func(t *testing.T) {
+			assert.Equal(t, parser.Unsupported, parserFileType(ft))
+		})
+	}
+}
+
+// TestParserFileType_RoundTrip pins that a format survives the trip through
+// the parser's enum and back.
+func TestParserFileType_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range parserBackedFileTypePairs() {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.filesql, filesqlFileType(parserFileType(tt.filesql)))
+		})
+	}
 }
 
 func TestFilesqlFileType(t *testing.T) {
@@ -145,6 +161,18 @@ func TestFilesqlFileType(t *testing.T) {
 		result := filesqlFileType(parser.FileType(9999))
 		assert.Equal(t, FileTypeUnsupported, result)
 	})
+}
+
+// TestFilesqlFileType_FoldsCompression checks the property the fused map used
+// to state entry by entry: a compressed parser constant answers its format.
+func TestFilesqlFileType_FoldsCompression(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range compressedParserFileTypes() {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.filesql, filesqlFileType(tt.parser))
+		})
+	}
 }
 
 func TestParserColumnType(t *testing.T) {

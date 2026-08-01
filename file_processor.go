@@ -207,19 +207,22 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 			return nil, fmt.Errorf("%w: failed to open FS file %s: %s", ErrIOOperation, match, err.Error())
 		}
 
-		// Determine file type from extension using NewFile
+		// Determine format and codec from the extension. The file is handed over
+		// still compressed, so the codec has to travel with it.
 		fileInfo := newFile(match)
 		fileType := fileInfo.getFileType()
+		compression := NewCompressionFactory().DetectCompressionType(match)
 
 		// Generate table name from file path (remove extension and clean up)
 		tableName := sanitizeTableName(tableFromFilePath(match))
 
 		// Create ReaderInput with closer so the file is released after streaming
 		readerInput := readerInput{
-			reader:    file,
-			tableName: tableName,
-			fileType:  fileType,
-			closer:    file,
+			reader:      file,
+			tableName:   tableName,
+			fileType:    fileType,
+			compression: compression,
+			closer:      file,
 		}
 
 		readers = append(readers, readerInput)

@@ -3,6 +3,7 @@ package filesql_test
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"embed"
 	"fmt"
@@ -2255,16 +2256,30 @@ func ExampleDBBuilder_AddReader() {
 	// - Diana (Marketing): $85000
 }
 
-// ExampleDBBuilder_AddReader_compressed demonstrates using compressed data from io.Reader
+// ExampleDBBuilder_AddReader_compressed demonstrates reading compressed data
+// from an io.Reader.
+//
+// A file's name says which codec wraps it, but a reader has no name, so the
+// codec is stated with WithCompression. The FileType stays the format itself:
+// gzipped TSV is FileTypeTSV plus CompressionGZ.
 func ExampleDBBuilder_AddReader_compressed() {
-	// Simulate compressed TSV data (in practice, this would be actual compressed data)
 	tsvData := "product_id\tproduct_name\tprice\n1\tLaptop\t999\n2\tMouse\t25\n3\tKeyboard\t75"
-	reader := bytes.NewReader([]byte(tsvData))
+
+	// Compress the TSV, standing in for a .tsv.gz opened from disk or fetched
+	// over the network.
+	var compressed bytes.Buffer
+	gz := gzip.NewWriter(&compressed)
+	if _, err := gz.Write([]byte(tsvData)); err != nil {
+		log.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		log.Fatal(err)
+	}
+	reader := bytes.NewReader(compressed.Bytes())
 
 	ctx := context.Background()
 	builder := filesql.NewBuilder().
-		// Specify that this is TSV data (not actually compressed in this example)
-		AddReader(reader, "products", filesql.FileTypeTSV)
+		AddReader(reader, "products", filesql.FileTypeTSV, filesql.WithCompression(filesql.CompressionGZ))
 
 	validatedBuilder, err := builder.Build(ctx)
 	if err != nil {
