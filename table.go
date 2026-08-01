@@ -186,6 +186,31 @@ func xlsxSheetTableName(baseTableName, sheetName string) string {
 	return baseTableName + "_" + sanitized
 }
 
+// xlsxSheetNameForTable undoes xlsxSheetTableName: it is the sheet a table of
+// this workbook goes back into when the workbook is overwritten in place.
+//
+// Naming the sheet after the table instead prefixed the file's name onto it on
+// every save. A workbook "book.xlsx" holding a sheet "Orders" loads as the table
+// "book_Orders", and writing that table's name back made the sheet "book_Orders";
+// loading again gave "book_book_Orders", and the prefix accumulated on each round
+// until Excel's 31-rune sheet name limit truncated it away.
+//
+// The reverse is not exact, because sanitizeTableName is not injective — a sheet
+// named "Q1 Sales" and one named "Q1-Sales" both load as "Q1_Sales", and only the
+// sanitized form can be recovered. What it does guarantee is that the mapping is
+// stable: the name a save writes is the one the next load reads back to the same
+// table, so nothing accumulates and no sheet is lost.
+func xlsxSheetNameForTable(baseTableName, tableName string) string {
+	if tableName == baseTableName {
+		return excelSheetName(baseTableName)
+	}
+	if suffix, ok := strings.CutPrefix(tableName, baseTableName+"_"); ok && suffix != "" {
+		return excelSheetName(suffix)
+	}
+	// A table that is not this workbook's is not this function's to rename.
+	return excelSheetName(tableName)
+}
+
 // identifierRunes maps a derived name onto the characters an identifier may
 // carry: spaces, hyphens, and dots become underscores, and every remaining
 // character that is not a letter, a digit, a combining mark, or an underscore is
