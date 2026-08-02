@@ -652,7 +652,7 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, options Dum
 			open: func() ([]string, *sql.Rows, error) {
 				columns, declTypes, err := getSQLiteTableColumns(db, tableName)
 				if err != nil {
-					return nil, nil, fmt.Errorf("%w: failed to get columns for table %s: %s", ErrDatabaseOperation, tableName, err.Error())
+					return nil, nil, fmt.Errorf("%w: failed to get columns for table %s: %w", ErrDatabaseOperation, tableName, err)
 				}
 				if len(columns) == 0 {
 					return nil, nil, fmt.Errorf("%w: table %s for %s no longer exists", ErrEmptyData, tableName, path)
@@ -685,11 +685,11 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, options Dum
 func writeXLSXWorkbookCompressed(w io.Writer, path string, sheets []xlsxSheet, compression CompressionType) (err error) {
 	writer, closeWriter, err := createCompressedWriter(w, compression)
 	if err != nil {
-		return fmt.Errorf("%w: failed to create writer: %s", ErrCompression, err.Error())
+		return fmt.Errorf("%w: failed to create writer: %w", ErrCompression, err)
 	}
 	defer func() {
 		if closeErr := closeWriter(); closeErr != nil && err == nil {
-			err = fmt.Errorf("%w: failed to finish writing %s: %s", ErrCompression, path, closeErr.Error())
+			err = fmt.Errorf("%w: failed to finish writing %s: %w", ErrCompression, path, closeErr)
 		}
 	}()
 
@@ -702,7 +702,7 @@ func writeXLSXWorkbookCompressed(w io.Writer, path string, sheets []xlsxSheet, c
 func tablesFromWorkbook(db *sql.DB, baseTableName string) ([]string, error) {
 	names, err := getSQLiteTableNames(db)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to get table names: %s", ErrDatabaseOperation, err.Error())
+		return nil, fmt.Errorf("%w: failed to get table names: %w", ErrDatabaseOperation, err)
 	}
 
 	tables := make([]string, 0, 1)
@@ -720,7 +720,7 @@ func tablesFromWorkbook(db *sql.DB, baseTableName string) ([]string, error) {
 func overwriteTableAtPath(db *sql.DB, path, tableName string, options DumpOptions) error {
 	columns, declTypes, err := getSQLiteTableColumns(db, tableName)
 	if err != nil {
-		return fmt.Errorf("%w: failed to get columns for table %s: %s", ErrDatabaseOperation, tableName, err.Error())
+		return fmt.Errorf("%w: failed to get columns for table %s: %w", ErrDatabaseOperation, tableName, err)
 	}
 	if len(columns) == 0 {
 		return fmt.Errorf("%w: table %s for %s no longer exists", ErrEmptyData, tableName, path)

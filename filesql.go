@@ -239,7 +239,7 @@ func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
 	// Get the underlying connection
 	conn, err := db.Conn(context.Background())
 	if err != nil {
-		return fmt.Errorf("%w: failed to get connection: %s", ErrDatabaseOperation, err.Error())
+		return fmt.Errorf("%w: failed to get connection: %w", ErrDatabaseOperation, err)
 	}
 	defer conn.Close()
 
@@ -251,13 +251,13 @@ func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
 func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error {
 	// Create output directory if it doesn't exist
 	if err := os.MkdirAll(outputDir, 0750); err != nil {
-		return fmt.Errorf("%w: failed to create output directory: %s", ErrIOOperation, err.Error())
+		return fmt.Errorf("%w: failed to create output directory: %w", ErrIOOperation, err)
 	}
 
 	// Get all table names
 	tableNames, err := getSQLiteTableNames(db)
 	if err != nil {
-		return fmt.Errorf("%w: failed to get table names: %s", ErrDatabaseOperation, err.Error())
+		return fmt.Errorf("%w: failed to get table names: %w", ErrDatabaseOperation, err)
 	}
 
 	if len(tableNames) == 0 {
@@ -357,7 +357,7 @@ func dumpSQLiteTable(db *sql.DB, tableName, outputDir string, options DumpOption
 	// Get table columns
 	columns, declTypes, err := getSQLiteTableColumns(db, tableName)
 	if err != nil {
-		return fmt.Errorf("%w: failed to get columns for table %s: %s", ErrDatabaseOperation, tableName, err.Error())
+		return fmt.Errorf("%w: failed to get columns for table %s: %w", ErrDatabaseOperation, tableName, err)
 	}
 
 	// Query all data from table
@@ -497,11 +497,11 @@ func writeSQLiteTableDataTo(w io.Writer, tableName string, columns []string, row
 
 	writer, closeWriter, err := createCompressedWriter(w, options.Compression)
 	if err != nil {
-		return fmt.Errorf("%w: failed to create writer: %s", ErrCompression, err.Error())
+		return fmt.Errorf("%w: failed to create writer: %w", ErrCompression, err)
 	}
 	defer func() {
 		if closeErr := closeWriter(); closeErr != nil && err == nil {
-			err = fmt.Errorf("%w: failed to finish writing %s: %s", ErrCompression, tableName, closeErr.Error())
+			err = fmt.Errorf("%w: failed to finish writing %s: %w", ErrCompression, tableName, closeErr)
 		}
 	}()
 
@@ -848,7 +848,7 @@ func writeParquetTableData(w io.Writer, columns []string, rows *sql.Rows) error 
 
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
-			return fmt.Errorf("%w: failed to scan row: %s", ErrDatabaseOperation, err.Error())
+			return fmt.Errorf("%w: failed to scan row: %w", ErrDatabaseOperation, err)
 		}
 
 		row := make([]string, len(columns))
@@ -865,7 +865,7 @@ func writeParquetTableData(w io.Writer, columns []string, rows *sql.Rows) error 
 	}
 
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("%w: error iterating rows: %s", ErrDatabaseOperation, err.Error())
+		return fmt.Errorf("%w: error iterating rows: %w", ErrDatabaseOperation, err)
 	}
 
 	return writeParquetData(w, columns, allRows, allNulls)
@@ -937,20 +937,20 @@ func writeParquetData(w io.Writer, columns []string, rows [][]string, nulls [][]
 	// closed" and turns a good dump into a failure.
 	writer, err := pqarrow.NewFileWriter(schema, writeOnly{w}, nil, arrowProps)
 	if err != nil {
-		return fmt.Errorf("%w: failed to create parquet writer: %s", ErrIOOperation, err.Error())
+		return fmt.Errorf("%w: failed to create parquet writer: %w", ErrIOOperation, err)
 	}
 	// An empty record has no row group to write; Close still writes the schema and
 	// the footer, which is the whole file for a table with no rows.
 	if record.NumRows() > 0 {
 		if err := writer.Write(record); err != nil {
 			_ = writer.Close() // Release the writer; the write error is the one to report
-			return fmt.Errorf("%w: failed to write record to parquet: %s", ErrIOOperation, err.Error())
+			return fmt.Errorf("%w: failed to write record to parquet: %w", ErrIOOperation, err)
 		}
 	}
 
 	// Close writes the footer, so this is where an incomplete file shows up.
 	if err := writer.Close(); err != nil {
-		return fmt.Errorf("%w: failed to close parquet writer: %s", ErrIOOperation, err.Error())
+		return fmt.Errorf("%w: failed to close parquet writer: %w", ErrIOOperation, err)
 	}
 
 	return nil
@@ -1018,7 +1018,7 @@ func writeXLSXWorkbook(w io.Writer, sheets []xlsxSheet) error {
 	// carries a temporary suffix that Excel rejects. Any compression the caller
 	// asked for is already wrapped around w.
 	if err := f.Write(w); err != nil {
-		return fmt.Errorf("%w: failed to write Excel file: %s", ErrIOOperation, err.Error())
+		return fmt.Errorf("%w: failed to write Excel file: %w", ErrIOOperation, err)
 	}
 
 	return nil

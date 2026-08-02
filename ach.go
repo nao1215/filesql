@@ -156,7 +156,7 @@ func parseACHFile(reader io.Reader, baseTableName string) ([]*table, *achconv.Ta
 	// Read ACH file using parser/ach (which encapsulates moov-io/ach)
 	tableSet, err := achconv.ParseReader(reader)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: failed to parse ACH file: %s", ErrACH, err.Error())
+		return nil, nil, fmt.Errorf("%w: failed to parse ACH file: %w", ErrACH, err)
 	}
 	if tableSet == nil {
 		return nil, nil, fmt.Errorf("%w: failed to convert ACH file to tables", ErrACH)
@@ -420,7 +420,7 @@ func streamACHFileToDatabase(ctx context.Context, db *sql.DB, reader io.Reader, 
 			t.getName(),
 		).Scan(&tableExists)
 		if err != nil {
-			return fmt.Errorf("%w: failed to check table existence: %s", ErrDatabaseOperation, err.Error())
+			return fmt.Errorf("%w: failed to check table existence: %w", ErrDatabaseOperation, err)
 		}
 
 		if tableExists > 0 {
@@ -429,19 +429,19 @@ func streamACHFileToDatabase(ctx context.Context, db *sql.DB, reader io.Reader, 
 			}
 			// Replace mode: drop the old table so the reloaded file's tables win.
 			if _, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS "`+t.getName()+`"`); err != nil {
-				return fmt.Errorf("%w: failed to drop existing table %s: %s", ErrDatabaseOperation, t.getName(), err.Error())
+				return fmt.Errorf("%w: failed to drop existing table %s: %w", ErrDatabaseOperation, t.getName(), err)
 			}
 		}
 
 		// Create table
 		if err := createTableFromColumnInfo(ctx, db, t.getName(), t.columnInfo); err != nil {
-			return fmt.Errorf("%w: failed to create table %s: %s", ErrDatabaseOperation, t.getName(), err.Error())
+			return fmt.Errorf("%w: failed to create table %s: %w", ErrDatabaseOperation, t.getName(), err)
 		}
 
 		// Insert records
 		if len(t.records) > 0 {
 			if err := insertRecordsIntoTable(ctx, db, t.getName(), t.header, t.records); err != nil {
-				return fmt.Errorf("%w: failed to insert records into %s: %s", ErrDatabaseOperation, t.getName(), err.Error())
+				return fmt.Errorf("%w: failed to insert records into %s: %w", ErrDatabaseOperation, t.getName(), err)
 			}
 		}
 	}
@@ -481,7 +481,7 @@ func insertRecordsIntoTable(ctx context.Context, db *sql.DB, tableName string, h
 
 	stmt, err := db.PrepareContext(ctx, query)
 	if err != nil {
-		return fmt.Errorf("%w: failed to prepare insert statement: %s", ErrDatabaseOperation, err.Error())
+		return fmt.Errorf("%w: failed to prepare insert statement: %w", ErrDatabaseOperation, err)
 	}
 	defer stmt.Close()
 
@@ -492,7 +492,7 @@ func insertRecordsIntoTable(ctx context.Context, db *sql.DB, tableName string, h
 		}
 
 		if _, err := stmt.ExecContext(ctx, values...); err != nil {
-			return fmt.Errorf("%w: failed to insert record: %s", ErrDatabaseOperation, err.Error())
+			return fmt.Errorf("%w: failed to insert record: %w", ErrDatabaseOperation, err)
 		}
 	}
 
@@ -543,7 +543,7 @@ func DumpACHWithTableSet(ctx context.Context, db *sql.DB, baseTableName, outputP
 
 	// Read updated data from database tables and update the TableSet
 	if err := updateTableSetFromDB(ctx, db, baseTableName, tableSet); err != nil {
-		return fmt.Errorf("%w: failed to read updated data from database: %s", ErrACH, err.Error())
+		return fmt.Errorf("%w: failed to read updated data from database: %w", ErrACH, err)
 	}
 
 	// Write the ACH file using WriteToWriter (encapsulates moov-io/ach). The
@@ -552,7 +552,7 @@ func DumpACHWithTableSet(ctx context.Context, db *sql.DB, baseTableName, outputP
 	// the destination, which for an in-place save is the source file itself.
 	return writeFileAtomically(outputPath, func(w io.Writer) error {
 		if err := tableSet.WriteToWriter(w); err != nil {
-			return fmt.Errorf("%w: failed to write ACH file: %s", ErrACH, err.Error())
+			return fmt.Errorf("%w: failed to write ACH file: %w", ErrACH, err)
 		}
 		return nil
 	})

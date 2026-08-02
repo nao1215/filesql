@@ -540,7 +540,7 @@ func (b *DBBuilder) validateDialect() error {
 		if errors.Is(err, dialect.ErrUnknownDialect) {
 			return fmt.Errorf("%w: unknown SQL dialect %q", ErrDatabaseOperation, b.sqlDialect)
 		}
-		return fmt.Errorf("%w: dialect %q is not usable: %s", ErrDatabaseOperation, b.sqlDialect, err.Error())
+		return fmt.Errorf("%w: dialect %q is not usable: %w", ErrDatabaseOperation, b.sqlDialect, err)
 	}
 	if b.autoSaveConfig != nil && b.autoSaveConfig.enabled {
 		return fmt.Errorf("%w: WithDialect(%s) cannot be combined with auto-save", ErrDatabaseOperation, b.sqlDialect)
@@ -660,12 +660,12 @@ func (b *DBBuilder) createInMemoryDatabase() (*sql.DB, error) {
 	// goroutines and still supports queries issued while iterating rows.
 	name, err := randomMemoryDBName()
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to name in-memory database: %s", ErrDatabaseOperation, err.Error())
+		return nil, fmt.Errorf("%w: failed to name in-memory database: %w", ErrDatabaseOperation, err)
 	}
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", name)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to create in-memory database: %s", ErrDatabaseOperation, err.Error())
+		return nil, fmt.Errorf("%w: failed to create in-memory database: %w", ErrDatabaseOperation, err)
 	}
 	// Remember the DSN so a dialect-translating connector can open its own
 	// connections to the same shared-cache in-memory database (see
@@ -713,13 +713,13 @@ func (b *DBBuilder) setupAutoSaveIfNeeded(ctx context.Context, db *sql.DB) (*sql
 	}
 
 	if err := db.Close(); err != nil {
-		return nil, fmt.Errorf("%w: failed to close intermediate database: %s", ErrDatabaseOperation, err.Error())
+		return nil, fmt.Errorf("%w: failed to close intermediate database: %w", ErrDatabaseOperation, err)
 	}
 
 	sqliteDriver := &sqlite.Driver{}
 	freshConn, err := sqliteDriver.Open(":memory:")
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to create fresh SQLite connection for auto-save: %s", ErrDatabaseOperation, err.Error())
+		return nil, fmt.Errorf("%w: failed to create fresh SQLite connection for auto-save: %w", ErrDatabaseOperation, err)
 	}
 
 	connector := &autoSaveConnector{
@@ -765,7 +765,7 @@ func (b *DBBuilder) setupDialectIfNeeded(ctx context.Context, db *sql.DB) (*sql.
 	// afterward.
 	if err := dialect.RegisterFunctions(); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("%w: failed to register dialect functions: %s", ErrDatabaseOperation, err.Error())
+		return nil, fmt.Errorf("%w: failed to register dialect functions: %w", ErrDatabaseOperation, err)
 	}
 
 	// Open translated connections through the same driver instance the loader
@@ -777,12 +777,12 @@ func (b *DBBuilder) setupDialectIfNeeded(ctx context.Context, db *sql.DB) (*sql.
 	if err := tdb.PingContext(ctx); err != nil {
 		_ = tdb.Close()
 		_ = db.Close()
-		return nil, fmt.Errorf("%w: failed to open dialect database: %s", ErrDatabaseOperation, err.Error())
+		return nil, fmt.Errorf("%w: failed to open dialect database: %w", ErrDatabaseOperation, err)
 	}
 
 	if err := db.Close(); err != nil {
 		_ = tdb.Close()
-		return nil, fmt.Errorf("%w: failed to close loader database: %s", ErrDatabaseOperation, err.Error())
+		return nil, fmt.Errorf("%w: failed to close loader database: %w", ErrDatabaseOperation, err)
 	}
 	return tdb, nil
 }
@@ -792,7 +792,7 @@ func (b *DBBuilder) streamXLSXFileToSQLite(ctx context.Context, db *sql.DB, read
 	// Read all data into memory (XLSX requires random access)
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return fmt.Errorf("%w: failed to read XLSX data: %s", ErrIOOperation, err.Error())
+		return fmt.Errorf("%w: failed to read XLSX data: %w", ErrIOOperation, err)
 	}
 
 	if len(data) == 0 {
@@ -802,7 +802,7 @@ func (b *DBBuilder) streamXLSXFileToSQLite(ctx context.Context, db *sql.DB, read
 	// Open XLSX file from bytes
 	xlsxFile, err := excelize.OpenReader(bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("%w: failed to open XLSX file: %s", ErrParsing, err.Error())
+		return fmt.Errorf("%w: failed to open XLSX file: %w", ErrParsing, err)
 	}
 	defer func() {
 		_ = xlsxFile.Close() // Ignore close error
@@ -821,7 +821,7 @@ func (b *DBBuilder) streamXLSXFileToSQLite(ctx context.Context, db *sql.DB, read
 	for _, sheetName := range sheetNames {
 		rows, err := xlsxFile.GetRows(sheetName)
 		if err != nil {
-			return fmt.Errorf("%w: failed to read sheet %s: %s", ErrParsing, sheetName, err.Error())
+			return fmt.Errorf("%w: failed to read sheet %s: %w", ErrParsing, sheetName, err)
 		}
 
 		// Skip empty sheets
@@ -838,7 +838,7 @@ func (b *DBBuilder) streamXLSXFileToSQLite(ctx context.Context, db *sql.DB, read
 			tableName,
 		).Scan(&tableExists)
 		if err != nil {
-			return fmt.Errorf("%w: failed to check table existence: %s", ErrDatabaseOperation, err.Error())
+			return fmt.Errorf("%w: failed to check table existence: %w", ErrDatabaseOperation, err)
 		}
 
 		if tableExists > 0 {
@@ -847,7 +847,7 @@ func (b *DBBuilder) streamXLSXFileToSQLite(ctx context.Context, db *sql.DB, read
 
 		// Process sheet data
 		if err := b.createTableFromXLSXSheet(ctx, db, tableName, rows); err != nil {
-			return fmt.Errorf("%w: failed to create table from sheet %s: %s", ErrDatabaseOperation, sheetName, err.Error())
+			return fmt.Errorf("%w: failed to create table from sheet %s: %w", ErrDatabaseOperation, sheetName, err)
 		}
 	}
 
@@ -902,13 +902,13 @@ func (b *DBBuilder) createTableFromXLSXSheet(ctx context.Context, db *sql.DB, ta
 
 	// Create table
 	if err := b.createSQLiteTable(ctx, db, tableName, columnInfo); err != nil {
-		return fmt.Errorf("%w: failed to create SQLite table: %s", ErrDatabaseOperation, err.Error())
+		return fmt.Errorf("%w: failed to create SQLite table: %w", ErrDatabaseOperation, err)
 	}
 
 	// Insert data
 	if len(records) > 0 {
 		if err := b.insertDataIntoTable(ctx, db, tableName, headers, records); err != nil {
-			return fmt.Errorf("%w: failed to insert data: %s", ErrDatabaseOperation, err.Error())
+			return fmt.Errorf("%w: failed to insert data: %w", ErrDatabaseOperation, err)
 		}
 	}
 
@@ -947,7 +947,7 @@ func (b *DBBuilder) insertDataIntoTable(ctx context.Context, db *sql.DB, tableNa
 
 	stmt, err := db.PrepareContext(ctx, query)
 	if err != nil {
-		return fmt.Errorf("%w: failed to prepare insert statement: %s", ErrDatabaseOperation, err.Error())
+		return fmt.Errorf("%w: failed to prepare insert statement: %w", ErrDatabaseOperation, err)
 	}
 	defer stmt.Close()
 
@@ -958,7 +958,7 @@ func (b *DBBuilder) insertDataIntoTable(ctx context.Context, db *sql.DB, tableNa
 		}
 
 		if _, err := stmt.ExecContext(ctx, values...); err != nil {
-			return fmt.Errorf("%w: failed to insert record: %s", ErrDatabaseOperation, err.Error())
+			return fmt.Errorf("%w: failed to insert record: %w", ErrDatabaseOperation, err)
 		}
 	}
 

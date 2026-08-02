@@ -50,7 +50,7 @@ func (p *streamingParser) parseFromReader(reader io.Reader) (*table, error) {
 	// Handle compression
 	decompressedReader, closeFunc, err = p.createDecompressedReader(reader)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to create decompressed reader: %s", ErrCompression, err.Error())
+		return nil, fmt.Errorf("%w: failed to create decompressed reader: %w", ErrCompression, err)
 	}
 	if closeFunc != nil {
 		defer handleCloseError(closeFunc)
@@ -100,7 +100,7 @@ func (p *streamingParser) parseDelimitedStream(reader io.Reader, delimiter rune,
 	csvReader.FieldsPerRecord = -1
 	records, err := csvReader.ReadAll()
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read %s: %s", ErrParsing, fileTypeName, err.Error())
+		return nil, fmt.Errorf("%w: failed to read %s: %w", ErrParsing, fileTypeName, err)
 	}
 
 	if len(records) == 0 {
@@ -174,7 +174,7 @@ func (l *labelOrder) len() int {
 func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 	content, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read LTSV: %s", ErrParsing, err.Error())
+		return nil, fmt.Errorf("%w: failed to read LTSV: %w", ErrParsing, err)
 	}
 
 	lines := strings.Split(string(content), "\n")
@@ -254,7 +254,7 @@ func (p *streamingParser) ProcessInChunks(reader io.Reader, processor chunkProce
 	// Handle compression
 	decompressedReader, closeFunc, err = p.createDecompressedReader(reader)
 	if err != nil {
-		return fmt.Errorf("%w: failed to create decompressed reader: %s", ErrCompression, err.Error())
+		return fmt.Errorf("%w: failed to create decompressed reader: %w", ErrCompression, err)
 	}
 	if closeFunc != nil {
 		defer handleCloseError(closeFunc)
@@ -301,7 +301,7 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 		if errors.Is(err, io.EOF) {
 			return fmt.Errorf("%w: empty %s data", ErrEmptyData, fileTypeName)
 		}
-		return fmt.Errorf("%w: failed to read %s header: %s", ErrParsing, fileTypeName, err.Error())
+		return fmt.Errorf("%w: failed to read %s header: %w", ErrParsing, fileTypeName, err)
 	}
 
 	// Validate header for duplicates
@@ -327,7 +327,7 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return fmt.Errorf("%w: failed to read %s record: %s", ErrParsing, fileTypeName, err.Error())
+			return fmt.Errorf("%w: failed to read %s record: %w", ErrParsing, fileTypeName, err)
 		}
 		rowNum++
 
@@ -429,7 +429,7 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 	// For LTSV, we need to read line by line
 	content, err := io.ReadAll(reader)
 	if err != nil {
-		return fmt.Errorf("%w: failed to read LTSV: %s", ErrParsing, err.Error())
+		return fmt.Errorf("%w: failed to read LTSV: %w", ErrParsing, err)
 	}
 
 	lines := strings.Split(string(content), "\n")
@@ -1055,7 +1055,7 @@ const jsonDataHeader = "data"
 func (p *streamingParser) parseJSONStream(reader io.Reader) (*table, error) {
 	content, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read JSON: %s", ErrParsing, err.Error())
+		return nil, fmt.Errorf("%w: failed to read JSON: %w", ErrParsing, err)
 	}
 
 	trimmed := strings.TrimSpace(string(content))
@@ -1084,7 +1084,7 @@ func (p *streamingParser) parseJSONStream(reader io.Reader) (*table, error) {
 	// Try as single value (object, string, number, boolean, null)
 	var obj json.RawMessage
 	if err := json.Unmarshal([]byte(trimmed), &obj); err != nil {
-		return nil, fmt.Errorf("%w: failed to parse JSON: %s", ErrInvalidData, err.Error())
+		return nil, fmt.Errorf("%w: failed to parse JSON: %w", ErrInvalidData, err)
 	}
 
 	t := newTable(p.tableName, h, []record{newRecord([]string{string(obj)})})
@@ -1128,7 +1128,7 @@ func (p *streamingParser) parseJSONLStream(reader io.Reader) (*table, error) {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return nil, fmt.Errorf("%w: failed to read JSONL: %s", ErrParsing, err.Error())
+			return nil, fmt.Errorf("%w: failed to read JSONL: %w", ErrParsing, err)
 		}
 	}
 
@@ -1161,7 +1161,7 @@ func (p *streamingParser) processJSONInChunks(reader io.Reader, processor chunkP
 		dec := json.NewDecoder(br)
 		// Consume the opening '['
 		if _, err := dec.Token(); err != nil {
-			return fmt.Errorf("%w: failed to parse JSON array: %s", ErrInvalidData, err.Error())
+			return fmt.Errorf("%w: failed to parse JSON array: %w", ErrInvalidData, err)
 		}
 		return p.processJSONArrayChunks(dec, h, colInfo, processor)
 	}
@@ -1169,7 +1169,7 @@ func (p *streamingParser) processJSONInChunks(reader io.Reader, processor chunkP
 	// Non-array: read the whole value and process as a single-row chunk.
 	content, err := io.ReadAll(br)
 	if err != nil {
-		return fmt.Errorf("%w: failed to read JSON: %s", ErrParsing, err.Error())
+		return fmt.Errorf("%w: failed to read JSON: %w", ErrParsing, err)
 	}
 
 	trimmed := strings.TrimSpace(string(content))
@@ -1179,7 +1179,7 @@ func (p *streamingParser) processJSONInChunks(reader io.Reader, processor chunkP
 
 	var obj json.RawMessage
 	if unmarshalErr := json.Unmarshal([]byte(trimmed), &obj); unmarshalErr != nil {
-		return fmt.Errorf("%w: failed to parse JSON: %s", ErrInvalidData, unmarshalErr.Error())
+		return fmt.Errorf("%w: failed to parse JSON: %w", ErrInvalidData, unmarshalErr)
 	}
 
 	chunk := &tableChunk{
@@ -1200,7 +1200,7 @@ func peekJSONIsArray(br *bufio.Reader) (bool, error) {
 			if errors.Is(err, io.EOF) {
 				return false, fmt.Errorf("%w: empty JSON data", ErrEmptyData)
 			}
-			return false, fmt.Errorf("%w: failed to read JSON: %s", ErrParsing, err.Error())
+			return false, fmt.Errorf("%w: failed to read JSON: %w", ErrParsing, err)
 		}
 		// Skip whitespace
 		if b == ' ' || b == '\t' || b == '\n' || b == '\r' {
@@ -1208,7 +1208,7 @@ func peekJSONIsArray(br *bufio.Reader) (bool, error) {
 		}
 		// Put the byte back so the decoder / ReadAll can consume it
 		if unreadErr := br.UnreadByte(); unreadErr != nil {
-			return false, fmt.Errorf("%w: failed to read JSON: %s", ErrParsing, unreadErr.Error())
+			return false, fmt.Errorf("%w: failed to read JSON: %w", ErrParsing, unreadErr)
 		}
 		return b == '[', nil
 	}
@@ -1230,7 +1230,7 @@ func (p *streamingParser) processJSONArrayChunks(
 	for dec.More() {
 		var elem json.RawMessage
 		if err := dec.Decode(&elem); err != nil {
-			return fmt.Errorf("%w: failed to decode JSON array element: %s", ErrParsing, err.Error())
+			return fmt.Errorf("%w: failed to decode JSON array element: %w", ErrParsing, err)
 		}
 		chunkRecords = append(chunkRecords, newRecord([]string{string(elem)}))
 		totalRecords++
@@ -1251,7 +1251,7 @@ func (p *streamingParser) processJSONArrayChunks(
 
 	// Consume the closing ']'
 	if _, err := dec.Token(); err != nil {
-		return fmt.Errorf("%w: failed to read JSON array end: %s", ErrParsing, err.Error())
+		return fmt.Errorf("%w: failed to read JSON array end: %w", ErrParsing, err)
 	}
 
 	// Reject trailing data after the array (e.g. "[1] garbage")
@@ -1326,7 +1326,7 @@ func (p *streamingParser) processJSONLInChunks(reader io.Reader, processor chunk
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return fmt.Errorf("%w: failed to read JSONL: %s", ErrParsing, err.Error())
+			return fmt.Errorf("%w: failed to read JSONL: %w", ErrParsing, err)
 		}
 	}
 
