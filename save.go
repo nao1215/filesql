@@ -627,14 +627,28 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, options Dum
 	if len(tables) == 0 {
 		return fmt.Errorf("%w: no table for %s remains", ErrEmptyData, path)
 	}
-	// The sheets go back in a fixed order rather than whatever the catalogue
+	// The sheets go back in a fixed order rather than whatever the catalog
 	// happens to list, so the same workbook saved twice is the same file.
 	sort.Strings(tables)
 
+	// Excel caps a sheet name at 31 runes and forbids some characters, so two
+	// table names can arrive at the same sheet. excelize's NewSheet answers with
+	// the existing sheet's index rather than an error, so the second table would
+	// overwrite the first's sheet and one table's rows would be gone while the
+	// save reported success. Losing a table silently is worse than not saving, so
+	// the collision is refused, the same way a format this package cannot write is.
+	bySheet := make(map[string]string, len(tables))
 	sheets := make([]xlsxSheet, 0, len(tables))
 	for _, tableName := range tables {
+		sheetName := xlsxSheetNameForTable(baseTableName, tableName)
+		if first, clash := bySheet[sheetName]; clash {
+			return fmt.Errorf("%w: tables %s and %s both become the sheet %q in %s, and Excel holds one sheet per name; rename one, or save to a directory instead",
+				ErrUnsupportedFormat, first, tableName, sheetName, path)
+		}
+		bySheet[sheetName] = tableName
+
 		sheets = append(sheets, xlsxSheet{
-			name: xlsxSheetNameForTable(baseTableName, tableName),
+			name: sheetName,
 			open: func() ([]string, *sql.Rows, error) {
 				columns, declTypes, err := getSQLiteTableColumns(db, tableName)
 				if err != nil {

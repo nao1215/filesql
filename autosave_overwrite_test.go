@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -348,6 +349,44 @@ func TestAutoSaveOverwriteXLSX(t *testing.T) {
 		require.NoError(t, reloaded.QueryRowContext(ctx, "SELECT city FROM book_Customers").Scan(&city))
 		assert.Equal(t, "bob", name)
 		assert.Equal(t, "osaka", city)
+	})
+
+	t.Run("two tables that would share a sheet name are refused", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := t.Context()
+		dir := t.TempDir()
+		src := filepath.Join(dir, "book.xlsx")
+		writeWorkbook(t, src, map[string][][]string{
+			"Orders": {{"id", "name"}, {"1", "alice"}},
+		})
+		before, err := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+		require.NoError(t, err)
+
+		validated, err := NewBuilder().AddPath(src).EnableAutoSave("").Build(ctx)
+		require.NoError(t, err)
+		db, err := validated.Open(ctx)
+		require.NoError(t, err)
+
+		// Excel caps a sheet name at 31 runes, so two tables of this workbook
+		// whose names agree for the first 31 and differ after map to one sheet.
+		// excelize's NewSheet returns the existing index rather than erroring, so
+		// the second table used to overwrite the first's sheet and one table's
+		// rows vanished while the save reported success.
+		stem := strings.Repeat("a", excelSheetNameMaxLen)
+		for _, suffix := range []string{stem + "X", stem + "Y"} {
+			_, execErr := db.ExecContext(ctx, "CREATE TABLE `book_"+suffix+"` (id TEXT)")
+			require.NoError(t, execErr)
+		}
+
+		err = db.Close()
+		require.Error(t, err, "a save that cannot keep both tables must not report success")
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		assert.Contains(t, err.Error(), stem, "the error names the sheet the two tables collide on")
+
+		after, err := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+		require.NoError(t, err)
+		assert.Equal(t, before, after, "the workbook must be left as it was")
 	})
 
 	t.Run("a workbook read from a fixture round-trips whole", func(t *testing.T) {
