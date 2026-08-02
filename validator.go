@@ -27,7 +27,7 @@ func (v *validator) validatePath(path string) error {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("%w: %s", ErrFileNotFound, path)
 		}
-		return fmt.Errorf("%w: failed to stat path %s: %s", ErrIOOperation, path, err.Error())
+		return fmt.Errorf("%w: failed to stat path %s: %w", ErrIOOperation, path, err)
 	}
 
 	// For files, check if they are supported

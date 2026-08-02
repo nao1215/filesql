@@ -533,12 +533,14 @@ func TestAutoSaveOverwriteRefusesCodecItCannotWrite(t *testing.T) {
 
 	err = autoSaveOverwrite(t, []string{src}, "UPDATE products SET price = 1")
 	require.Error(t, err, "a codec this package cannot write must not report a successful save")
-	assert.ErrorIs(t, err, ErrCompression)
 	assert.Contains(t, err.Error(), "bzip2")
-	// ErrUnsupportedFormat is what the message says and is not in the chain:
-	// the writer flattens the inner error with %s. Asserted so the day that
-	// changes is a deliberate one. See #216.
-	assert.NotErrorIs(t, err, ErrUnsupportedFormat)
+	// Every sentinel the failure passed through is reachable, so a caller can
+	// tell "this codec cannot be written" from "the compressor failed" without
+	// matching on the message. ErrUnsupportedFormat used to be text only,
+	// because the writer flattened the inner error with %s; see #216.
+	assert.ErrorIs(t, err, ErrUnsupportedFormat)
+	assert.ErrorIs(t, err, ErrCompression)
+	assert.ErrorIs(t, err, ErrIOOperation)
 
 	after, err := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
 	require.NoError(t, err)

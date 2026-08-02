@@ -37,7 +37,7 @@ func writeFileAtomically(dest string, write func(io.Writer) error) error {
 	dir := filepath.Dir(dest)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(dest)+".tmp*")
 	if err != nil {
-		return fmt.Errorf("%w: failed to create a temporary file next to %s: %s", ErrIOOperation, dest, err.Error())
+		return fmt.Errorf("%w: failed to create a temporary file next to %s: %w", ErrIOOperation, dest, err)
 	}
 	tmpName := tmp.Name()
 	// Remove the staged file unless the rename below claimed it; a no-op after a
@@ -51,21 +51,21 @@ func writeFileAtomically(dest string, write func(io.Writer) error) error {
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("%w: failed to close the staged file for %s: %s", ErrIOOperation, dest, err.Error())
+		return fmt.Errorf("%w: failed to close the staged file for %s: %w", ErrIOOperation, dest, err)
 	}
 
 	mode := defaultOutputFileMode
 	if info, statErr := os.Stat(dest); statErr == nil {
 		mode = info.Mode().Perm()
 	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return fmt.Errorf("%w: failed to inspect %s: %s", ErrIOOperation, dest, statErr.Error())
+		return fmt.Errorf("%w: failed to inspect %s: %w", ErrIOOperation, dest, statErr)
 	}
 	if err := os.Chmod(tmpName, mode); err != nil {
-		return fmt.Errorf("%w: failed to set permissions on the temporary file for %s: %s", ErrIOOperation, dest, err.Error())
+		return fmt.Errorf("%w: failed to set permissions on the temporary file for %s: %w", ErrIOOperation, dest, err)
 	}
 
 	if err := commitStagedFile(tmpName, dest); err != nil {
-		return fmt.Errorf("%w: failed to replace %s: %s", ErrIOOperation, dest, err.Error())
+		return fmt.Errorf("%w: failed to replace %s: %w", ErrIOOperation, dest, err)
 	}
 	return nil
 }

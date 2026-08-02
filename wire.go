@@ -29,7 +29,7 @@ func isFedWireFile(path string) bool {
 func parseFedWireFile(reader io.Reader, baseTableName string) ([]*table, *wireconv.TableSet, error) {
 	tableSet, err := wireconv.ParseReader(reader)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: failed to parse Fedwire file: %s", ErrWire, err.Error())
+		return nil, nil, fmt.Errorf("%w: failed to parse Fedwire file: %w", ErrWire, err)
 	}
 	if tableSet == nil {
 		return nil, nil, fmt.Errorf("%w: failed to convert Fedwire file to tables", ErrWire)
@@ -176,7 +176,7 @@ func streamWireFileToDatabase(ctx context.Context, db *sql.DB, reader io.Reader,
 			t.getName(),
 		).Scan(&tableExists)
 		if err != nil {
-			return fmt.Errorf("%w: failed to check table existence: %s", ErrDatabaseOperation, err.Error())
+			return fmt.Errorf("%w: failed to check table existence: %w", ErrDatabaseOperation, err)
 		}
 
 		if tableExists > 0 {
@@ -185,19 +185,19 @@ func streamWireFileToDatabase(ctx context.Context, db *sql.DB, reader io.Reader,
 			}
 			// Replace mode: drop the old table so the reloaded file's tables win.
 			if _, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS "`+t.getName()+`"`); err != nil {
-				return fmt.Errorf("%w: failed to drop existing table %s: %s", ErrDatabaseOperation, t.getName(), err.Error())
+				return fmt.Errorf("%w: failed to drop existing table %s: %w", ErrDatabaseOperation, t.getName(), err)
 			}
 		}
 
 		// Create table
 		if err := createTableFromColumnInfo(ctx, db, t.getName(), t.columnInfo); err != nil {
-			return fmt.Errorf("%w: failed to create table %s: %s", ErrDatabaseOperation, t.getName(), err.Error())
+			return fmt.Errorf("%w: failed to create table %s: %w", ErrDatabaseOperation, t.getName(), err)
 		}
 
 		// Insert records
 		if len(t.records) > 0 {
 			if err := insertRecordsIntoTable(ctx, db, t.getName(), t.header, t.records); err != nil {
-				return fmt.Errorf("%w: failed to insert records into %s: %s", ErrDatabaseOperation, t.getName(), err.Error())
+				return fmt.Errorf("%w: failed to insert records into %s: %w", ErrDatabaseOperation, t.getName(), err)
 			}
 		}
 	}
@@ -249,7 +249,7 @@ func DumpFedWireWithTableSet(ctx context.Context, db *sql.DB, baseTableName, out
 
 	// Read updated data from database and update the TableSet
 	if err := updateWireTableSetFromDB(ctx, db, baseTableName, tableSet); err != nil {
-		return fmt.Errorf("%w: failed to read updated data from database: %s", ErrWire, err.Error())
+		return fmt.Errorf("%w: failed to read updated data from database: %w", ErrWire, err)
 	}
 
 	// Write the Fedwire file using WriteToWriter. The writer validates while it
@@ -259,7 +259,7 @@ func DumpFedWireWithTableSet(ctx context.Context, db *sql.DB, baseTableName, out
 	// for an in-place save deleted the source it was saving.
 	return writeFileAtomically(outputPath, func(w io.Writer) error {
 		if err := tableSet.WriteToWriter(w); err != nil {
-			return fmt.Errorf("%w: failed to write Fedwire file: %s", ErrWire, err.Error())
+			return fmt.Errorf("%w: failed to write Fedwire file: %w", ErrWire, err)
 		}
 		return nil
 	})

@@ -1,0 +1,105 @@
+package filesql
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// TestErrorSentinelsAreReachable checks the property rather than one path: an
+// error this package returns has to satisfy errors.Is for every sentinel it
+// names, not only the outermost one.
+//
+// It did not. Errors were wrapped as fmt.Errorf("%w: ...: %s", Sentinel,
+// err.Error()) in 115 places, so the sentinel of the frame that failed was
+// rendered to text and lost. A save that failed because bzip2 has no writer
+// said "unsupported file format" and did not satisfy
+// errors.Is(err, ErrUnsupportedFormat), leaving a caller to match on the
+// message. Ref #216.
+func TestErrorSentinelsAreReachable(t *testing.T) {
+	t.Parallel()
+
+	// Each case names the sentinels its message mentions. The point is that the
+	// message and the chain agree.
+	tests := []struct {
+		name  string
+		run   func(t *testing.T) error
+		wants []error
+	}{
+		{
+			name: "a codec that cannot be written",
+			run: func(t *testing.T) error {
+				t.Helper()
+				dir := t.TempDir()
+				src := filepath.Join(dir, "products.tsv.bz2")
+				fixture, err := os.ReadFile(filepath.Join("testdata", "products.tsv.bz2"))
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(src, fixture, 0o600)) //nolint:gosec // src is under t.TempDir()
+				return autoSaveOverwrite(t, []string{src}, "UPDATE products SET price = 1")
+			},
+			wants: []error{ErrIOOperation, ErrCompression, ErrUnsupportedFormat},
+		},
+		{
+			name: "data that is not the codec it was declared to be",
+			run: func(t *testing.T) error {
+				t.Helper()
+				parser := newStreamingParser(FileTypeCSV, CompressionGZ, "t", 1024)
+				_, err := parser.parseFromReader(strings.NewReader("not gzip at all"))
+				return err
+			},
+			wants: []error{ErrCompression},
+		},
+		{
+			name: "a path with no file this package reads",
+			run: func(t *testing.T) error {
+				t.Helper()
+				dir := t.TempDir()
+				src := filepath.Join(dir, "notes.txt")
+				require.NoError(t, os.WriteFile(src, []byte("hello"), 0o600))
+				_, err := OpenContext(context.Background(), src)
+				return err
+			},
+			wants: []error{ErrUnsupportedFormat},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tt.run(t)
+			require.Error(t, err)
+			for _, want := range tt.wants {
+				assert.ErrorIs(t, err, want,
+					"%v is named in %q but not reachable through the chain", want, err)
+			}
+		})
+	}
+}
+
+// TestErrorWrappingKeepsTheMessage pins that making the chain reachable did not
+// change what an error says. fmt renders %w through the error's Error method,
+// so "%w: x: %w" and "%w: x: %s" with err.Error() produce the same string --
+// which is why 115 call sites could be converted without a message changing.
+func TestErrorWrappingKeepsTheMessage(t *testing.T) {
+	t.Parallel()
+
+	inner := errors.New("filesql: unsupported file format: bzip2 compression is not supported for writing")
+	withS := errors.New("filesql: compression operation failed: failed to create writer: " + inner.Error())
+	withW := wrapForTest(inner)
+
+	assert.Equal(t, withS.Error(), withW.Error())
+	assert.ErrorIs(t, withW, inner)
+	assert.NotErrorIs(t, withS, inner)
+}
+
+func wrapForTest(inner error) error {
+	return fmt.Errorf("%w: failed to create writer: %w", ErrCompression, inner)
+}

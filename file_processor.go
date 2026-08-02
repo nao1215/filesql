@@ -47,7 +47,7 @@ func (fp *fileProcessor) collectFilesFromPaths(paths []string) ([]string, error)
 		info, err := os.Stat(path)
 		if err != nil {
 			fp.logger.Error("failed to stat path", "path", path, "error", err)
-			return nil, fmt.Errorf("%w: failed to stat path %s: %s", ErrIOOperation, path, err.Error())
+			return nil, fmt.Errorf("%w: failed to stat path %s: %w", ErrIOOperation, path, err)
 		}
 
 		if info.IsDir() {
@@ -89,7 +89,7 @@ func (fp *fileProcessor) collectFilesFromDirectory(dirPath string, processedFile
 
 		absPath, err := filepath.Abs(filePath)
 		if err != nil {
-			return fmt.Errorf("%w: failed to get absolute path for %s: %s", ErrIOOperation, filePath, err.Error())
+			return fmt.Errorf("%w: failed to get absolute path for %s: %w", ErrIOOperation, filePath, err)
 		}
 
 		if !processedFiles[absPath] {
@@ -100,7 +100,7 @@ func (fp *fileProcessor) collectFilesFromDirectory(dirPath string, processedFile
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to walk directory %s: %s", ErrIOOperation, dirPath, err.Error())
+		return nil, fmt.Errorf("%w: failed to walk directory %s: %w", ErrIOOperation, dirPath, err)
 	}
 
 	return collectedPaths, nil
@@ -114,7 +114,7 @@ func (fp *fileProcessor) addSingleFile(filePath string, processedFiles map[strin
 
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
-		return fmt.Errorf("%w: failed to get absolute path for %s: %s", ErrIOOperation, filePath, err.Error())
+		return fmt.Errorf("%w: failed to get absolute path for %s: %w", ErrIOOperation, filePath, err)
 	}
 
 	if !processedFiles[absPath] {
@@ -156,7 +156,7 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 	for _, pattern := range supportedPatterns {
 		matches, err := fs.Glob(filesystem, pattern)
 		if err != nil {
-			return nil, fmt.Errorf("%w: failed to search pattern %s: %s", ErrIOOperation, pattern, err.Error())
+			return nil, fmt.Errorf("%w: failed to search pattern %s: %w", ErrIOOperation, pattern, err)
 		}
 		allMatches = append(allMatches, matches...)
 	}
@@ -188,7 +188,7 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 			return nil
 		})
 		if walkErr != nil {
-			return nil, fmt.Errorf("%w: failed to walk filesystem: %s", ErrIOOperation, walkErr.Error())
+			return nil, fmt.Errorf("%w: failed to walk filesystem: %w", ErrIOOperation, walkErr)
 		}
 	}
 
@@ -204,7 +204,7 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 		// Open the file from FS
 		file, err := filesystem.Open(match)
 		if err != nil {
-			return nil, fmt.Errorf("%w: failed to open FS file %s: %s", ErrIOOperation, match, err.Error())
+			return nil, fmt.Errorf("%w: failed to open FS file %s: %w", ErrIOOperation, match, err)
 		}
 
 		// Determine format and codec from the extension. The file is handed over
