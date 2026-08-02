@@ -151,17 +151,15 @@ func TestMalformedRowPolicy_Fill(t *testing.T) {
 		}
 	})
 
-	t.Run("long rows are truncated to the header width", func(t *testing.T) {
+	t.Run("long rows are rejected instead of truncated", func(t *testing.T) {
 		t.Parallel()
 		const csv = "id,name\n1,alice\n2,bob,extra\n"
 		db, err := openWithPolicy(t, csv, FileTypeCSV, MalformedRowFill)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if db != nil {
+			defer db.Close()
 		}
-		defer db.Close()
-		names := queryColumn(t, db, `SELECT name FROM t ORDER BY id`)
-		if strings.Join(names, ",") != "alice,bob" {
-			t.Fatalf("names = %v, want [alice bob]", names)
+		if !errors.Is(err, ErrColumnMismatch) {
+			t.Fatalf("expected ErrColumnMismatch, got %v", err)
 		}
 	})
 }

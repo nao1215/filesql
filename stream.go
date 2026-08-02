@@ -1148,13 +1148,12 @@ func (p *streamingParser) parseJSONLStream(reader io.Reader) (*table, error) {
 func (p *streamingParser) processJSONInChunks(reader io.Reader, processor chunkProcessor) error {
 	// Use bufio.Reader to peek at the first non-whitespace byte and decide the strategy.
 	br := bufio.NewReader(reader)
+	h := newHeader([]string{jsonDataHeader})
+	colInfo := []columnInfo{newColumnInfoWithType(jsonDataHeader)}
 	isArray, err := peekJSONIsArray(br)
 	if err != nil {
 		return err
 	}
-
-	h := newHeader([]string{jsonDataHeader})
-	colInfo := []columnInfo{newColumnInfoWithType(jsonDataHeader)}
 
 	if isArray {
 		// Stream array elements one by one via json.Decoder.
@@ -1260,7 +1259,7 @@ func (p *streamingParser) processJSONArrayChunks(
 	}
 
 	if totalRecords == 0 {
-		return fmt.Errorf("%w: empty JSON array", ErrEmptyData)
+		return processor(&tableChunk{tableName: p.tableName, headers: h, columnInfo: colInfo})
 	}
 
 	// Process remaining records
@@ -1296,9 +1295,13 @@ func (p *streamingParser) processJSONLInChunks(reader io.Reader, processor chunk
 	var chunkRecords []record
 	lineNum := 0
 	totalRecords := 0
+	sawInput := false
 
 	for {
 		rawLine, err := br.ReadBytes('\n')
+		if len(rawLine) > 0 {
+			sawInput = true
+		}
 		lineNum++
 		line := strings.TrimSpace(string(rawLine))
 		if line != "" {
@@ -1344,7 +1347,10 @@ func (p *streamingParser) processJSONLInChunks(reader io.Reader, processor chunk
 	}
 
 	if totalRecords == 0 {
-		return fmt.Errorf("%w: empty JSONL data", ErrEmptyData)
+		if !sawInput {
+			return fmt.Errorf("%w: empty JSONL data", ErrEmptyData)
+		}
+		return processor(&tableChunk{tableName: p.tableName, headers: h, columnInfo: colInfo})
 	}
 
 	return nil

@@ -67,11 +67,11 @@ func (sp *streamProcessor) setLogger(logger Logger) {
 }
 
 // streamAllFilesToDatabase streams all collected file paths to the database
-func (sp *streamProcessor) streamAllFilesToDatabase(ctx context.Context, db DBTX, collectedPaths []string) error {
+func (sp *streamProcessor) streamAllFilesToDatabase(ctx context.Context, db DBTX, collectedPaths []string, pending *PendingRegistries) error {
 	sp.logger.Info("starting file streaming", "file_count", len(collectedPaths))
 	for i, path := range collectedPaths {
 		sp.logger.Debug("streaming file", "path", path, "index", i+1, "total", len(collectedPaths))
-		if err := sp.streamFileToDatabase(ctx, db, path); err != nil {
+		if err := sp.streamFileToDatabase(ctx, db, path, pending); err != nil {
 			sp.logger.Error("failed to stream file", "path", path, "error", err)
 			// Wrap the underlying error with %w as well so a sentinel it carries
 			// (for example ErrColumnMismatch from the malformed-row policy) stays
@@ -84,14 +84,14 @@ func (sp *streamProcessor) streamAllFilesToDatabase(ctx context.Context, db DBTX
 }
 
 // streamAllReadersToDatabase streams all reader inputs to the database
-func (sp *streamProcessor) streamAllReadersToDatabase(ctx context.Context, db DBTX, readers []readerInput) error {
+func (sp *streamProcessor) streamAllReadersToDatabase(ctx context.Context, db DBTX, readers []readerInput, pending *PendingRegistries) error {
 	if len(readers) == 0 {
 		return nil
 	}
 	sp.logger.Info("starting reader streaming", "reader_count", len(readers))
 	for i, ri := range readers {
 		sp.logger.Debug("streaming reader", logKeyTable, ri.tableName, "file_type", ri.fileType.String(), "index", i+1, "total", len(readers))
-		if err := sp.streamReaderToDatabase(ctx, db, ri); err != nil {
+		if err := sp.streamReaderToDatabase(ctx, db, ri, pending); err != nil {
 			sp.closeReaderInput(ri)
 			sp.logger.Error("failed to stream reader", logKeyTable, ri.tableName, "error", err)
 			return streamError(ErrParsing, "failed to stream reader input for table '%s': %w", ri.tableName, err)
@@ -112,17 +112,17 @@ func (sp *streamProcessor) closeReaderInput(ri readerInput) {
 }
 
 // streamFileToDatabase streams data from a file path directly to SQLite database using chunked processing
-func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db DBTX, filePath string) error {
+func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db DBTX, filePath string, pending *PendingRegistries) error {
 	// Check if file is ACH format
 	if isACHFile(filePath) {
 		sp.logger.Debug("detected ACH file format", "path", filePath)
-		return sp.streamACHFileToDatabase(ctx, db, filePath)
+		return sp.streamACHFileToDatabase(ctx, db, filePath, pending)
 	}
 
 	// Check if file is Fedwire format
 	if isFedWireFile(filePath) {
 		sp.logger.Debug("detected Fedwire file format", "path", filePath)
-		return sp.streamFedWireFileToDatabase(ctx, db, filePath)
+		return sp.streamFedWireFileToDatabase(ctx, db, filePath, pending)
 	}
 
 	// Check if file is supported
@@ -176,7 +176,7 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db DBTX, fi
 	// Handle XLSX files specially - each sheet becomes a separate table
 	if baseFileType == FileTypeXLSX {
 		sp.logger.Debug("processing XLSX file with multiple sheets", "path", filePath)
-		return sp.streamXLSXFileToDatabase(ctx, db, reader, filePath)
+		return sp.streamXLSXFileToDatabase(ctx, db, reader, filePath, pending)
 	}
 
 	// Create reader input for streaming
@@ -188,11 +188,11 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db DBTX, fi
 		fileType:    baseFileType,
 		compression: CompressionNone, // already unwrapped above
 	}
-	return sp.streamReaderToDatabase(ctx, db, readerInput)
+	return sp.streamReaderToDatabase(ctx, db, readerInput, pending)
 }
 
 // streamACHFileToDatabase handles ACH files by creating multiple tables
-func (sp *streamProcessor) streamACHFileToDatabase(ctx context.Context, db DBTX, filePath string) error {
+func (sp *streamProcessor) streamACHFileToDatabase(ctx context.Context, db DBTX, filePath string, pending *PendingRegistries) error {
 	sp.logger.Debug("processing ACH file", "path", filePath)
 
 	// Open the file
@@ -215,11 +215,11 @@ func (sp *streamProcessor) streamACHFileToDatabase(ctx context.Context, db DBTX,
 	}
 
 	sp.logger.Debug("streaming ACH file to database", "path", filePath, "size", fileInfo.Size())
-	return streamACHFileToDatabase(ctx, db, file, filePath, sp.replaceExisting)
+	return streamACHFileToDatabase(ctx, db, file, filePath, sp.replaceExisting, pending)
 }
 
 // streamFedWireFileToDatabase handles Fedwire files by creating a single message table
-func (sp *streamProcessor) streamFedWireFileToDatabase(ctx context.Context, db DBTX, filePath string) error {
+func (sp *streamProcessor) streamFedWireFileToDatabase(ctx context.Context, db DBTX, filePath string, pending *PendingRegistries) error {
 	sp.logger.Debug("processing Fedwire file", "path", filePath)
 
 	// Open the file
@@ -242,17 +242,17 @@ func (sp *streamProcessor) streamFedWireFileToDatabase(ctx context.Context, db D
 	}
 
 	sp.logger.Debug("streaming Fedwire file to database", "path", filePath, "size", fileInfo.Size())
-	return streamWireFileToDatabase(ctx, db, file, filePath, sp.replaceExisting)
+	return streamWireFileToDatabase(ctx, db, file, filePath, sp.replaceExisting, pending)
 }
 
 // streamReaderToDatabase streams data from io.Reader directly to SQLite database
-func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, input readerInput) error {
+func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, input readerInput, pending *PendingRegistries) error {
 	// Route ACH/Fedwire readers to dedicated handlers
 	if input.fileType == FileTypeACH {
-		return streamACHFileToDatabase(ctx, db, input.reader, input.tableName+extACH, sp.replaceExisting)
+		return streamACHFileToDatabase(ctx, db, input.reader, input.tableName+extACH, sp.replaceExisting, pending)
 	}
 	if input.fileType == FileTypeFedWire {
-		return streamWireFileToDatabase(ctx, db, input.reader, input.tableName+extFED, sp.replaceExisting)
+		return streamWireFileToDatabase(ctx, db, input.reader, input.tableName+extFED, sp.replaceExisting, pending)
 	}
 
 	// Reader should already be validated at Build time, but ensure it's buffered
@@ -553,7 +553,7 @@ func (sp *streamProcessor) createDecompressedReader(file *os.File, filePath stri
 }
 
 // streamXLSXFileToDatabase handles XLSX files by creating separate tables for each sheet
-func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, filePath string) error {
+func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, filePath string, pending *PendingRegistries) error {
 	sp.logger.Debug("reading XLSX data into memory", "path", filePath)
 
 	// Read all data into memory (XLSX requires random access)

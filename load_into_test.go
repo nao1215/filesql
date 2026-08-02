@@ -88,6 +88,66 @@ func TestDBBuilder_LoadIntoTxUsesCallerTransaction(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestDBBuilder_LoadIntoTxWithPendingPublishesOnlyAfterCommit(t *testing.T) {
+	ClearACHTableSetRegistry()
+	defer ClearACHTableSetRegistry()
+
+	db := newCallerDB(t)
+	builder, err := NewBuilder().AddPath(filepath.Join("testdata", "ppd-debit.ach")).Build(context.Background())
+	require.NoError(t, err)
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	pending, err := builder.LoadIntoTxWithPending(context.Background(), tx)
+	require.NoError(t, err)
+	assert.Empty(t, GetACHTableInfos(), "registry must not change before commit")
+	require.NoError(t, tx.Commit())
+	pending.PublishRegistries()
+	assert.Contains(t, GetACHTableInfos(), ACHTableInfo{BaseName: "ppd_debit"})
+}
+
+func TestDBBuilder_LoadIntoTxWithPendingDiscardsRegistriesOnFailure(t *testing.T) {
+	ClearACHTableSetRegistry()
+	defer ClearACHTableSetRegistry()
+
+	dir := t.TempDir()
+	bad := writeTempCSV(t, dir, "broken.json", "[")
+	db := newCallerDB(t)
+	builder, err := NewBuilder().
+		AddPath(filepath.Join("testdata", "ppd-debit.ach")).
+		AddPath(bad).
+		Build(context.Background())
+	require.NoError(t, err)
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = builder.LoadIntoTxWithPending(context.Background(), tx)
+	require.Error(t, err)
+	assert.Empty(t, GetACHTableInfos(), "failed load must not publish registry metadata")
+	require.NoError(t, tx.Rollback())
+	assert.Empty(t, listTables(t, db), "failed load must be rolled back")
+}
+
+func TestDBBuilder_LoadIntoTxWithPendingDiscardsFedwireRegistryOnFailure(t *testing.T) {
+	ClearWireTableSetRegistry()
+	defer ClearWireTableSetRegistry()
+
+	dir := t.TempDir()
+	bad := writeTempCSV(t, dir, "broken.json", "[")
+	db := newCallerDB(t)
+	builder, err := NewBuilder().
+		AddPath(filepath.Join("testdata", "customer-transfer.fed")).
+		AddPath(bad).
+		Build(context.Background())
+	require.NoError(t, err)
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = builder.LoadIntoTxWithPending(context.Background(), tx)
+	require.Error(t, err)
+	assert.Empty(t, GetWireTableInfos(), "failed load must not publish registry metadata")
+	require.NoError(t, tx.Rollback())
+	assert.Empty(t, listTables(t, db), "failed load must be rolled back")
+}
+
 func TestLoadInto_PreservesExistingCallerTables(t *testing.T) {
 	db := newCallerDB(t)
 	_, err := db.ExecContext(context.Background(), `CREATE TABLE app (k TEXT); INSERT INTO app VALUES ('keep')`)

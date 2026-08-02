@@ -22,9 +22,8 @@ const (
 	// header and imports the remaining well-formed records.
 	MalformedRowSkip
 
-	// MalformedRowFill keeps every record, padding a short record with empty
-	// strings and truncating the extra trailing fields of a long record so it
-	// matches the header width.
+	// MalformedRowFill keeps every short record by padding it with empty strings.
+	// A long record is rejected so source data is never silently discarded.
 	MalformedRowFill
 )
 
@@ -55,14 +54,17 @@ func reconcileFieldCount(record []string, want, rowNum int, policy MalformedRowP
 	case MalformedRowSkip:
 		return nil, true, nil
 	case MalformedRowFill:
+		if len(record) > want {
+			return nil, false, fmt.Errorf("%w: row %d has %d fields, want at most %d", ErrColumnMismatch, rowNum, len(record), want)
+		}
 		return fitRecord(record, want), false, nil
 	default: // MalformedRowStop
 		return nil, false, fmt.Errorf("%w: row %d has %d fields, want %d", ErrColumnMismatch, rowNum, len(record), want)
 	}
 }
 
-// fitRecord returns a copy of record resized to exactly want fields: a short
-// record is padded with empty strings and a long record is truncated.
+// fitRecord returns a copy of a short record resized to exactly want fields by
+// padding missing values with empty strings.
 func fitRecord(record []string, want int) []string {
 	out := make([]string, want)
 	copy(out, record)
