@@ -1295,13 +1295,9 @@ func (p *streamingParser) processJSONLInChunks(reader io.Reader, processor chunk
 	var chunkRecords []record
 	lineNum := 0
 	totalRecords := 0
-	sawInput := false
 
 	for {
 		rawLine, err := br.ReadBytes('\n')
-		if len(rawLine) > 0 {
-			sawInput = true
-		}
 		lineNum++
 		line := strings.TrimSpace(string(rawLine))
 		if line != "" {
@@ -1347,10 +1343,7 @@ func (p *streamingParser) processJSONLInChunks(reader io.Reader, processor chunk
 	}
 
 	if totalRecords == 0 {
-		if !sawInput {
-			return fmt.Errorf("%w: empty JSONL data", ErrEmptyData)
-		}
-		return processor(&tableChunk{tableName: p.tableName, headers: h, columnInfo: colInfo})
+		return fmt.Errorf("%w: empty JSONL data", ErrEmptyData)
 	}
 
 	return nil

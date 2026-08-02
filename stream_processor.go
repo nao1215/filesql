@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -139,21 +140,24 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db DBTX, fi
 	}
 	defer file.Close()
 
-	// Check if file is empty before processing
+	// Determine the type before checking size so empty JSON/JSONL inputs can be
+	// represented as zero-row tables by the same streaming load path.
+	fileModel := newFile(filePath)
+	baseFileType := fileModel.getFileType()
+
+	// Check if file is empty before processing. JSON and JSONL are allowed to
+	// reach their parser because their empty input is a valid zero-row table.
 	fileInfo, err := file.Stat()
 	if err != nil {
 		sp.logger.Error("failed to get file info", "path", filePath, "error", err)
 		return fmt.Errorf("%w: failed to get file info for %s: %w", ErrIOOperation, filePath, err)
 	}
-	if fileInfo.Size() == 0 {
+	if fileInfo.Size() == 0 && baseFileType != FileTypeJSON && baseFileType != FileTypeJSONL {
 		sp.logger.Warn("empty file detected", "path", filePath)
 		return fmt.Errorf("%w: file is empty", ErrEmptyData)
 	}
 	sp.logger.Debug("file opened", "path", filePath, "size", fileInfo.Size())
 
-	// Create file model to determine type and table name
-	fileModel := newFile(filePath)
-	baseFileType := fileModel.getFileType()
 	sp.logger.Debug("detected file type", "path", filePath, "type", baseFileType.String())
 
 	// Create decompressed reader if needed
@@ -338,6 +342,20 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, 
 
 		return nil
 	})
+	if err != nil && !tableCreated && (input.fileType == FileTypeJSON || input.fileType == FileTypeJSONL) && errors.Is(err, ErrEmptyData) {
+		// Empty JSON/JSONL is a valid zero-row input. The parser has already
+		// consumed the only input stream, so create the known one-column JSON
+		// schema directly instead of opening the file a second time.
+		if createErr := sp.createTableFromChunk(ctx, db, &tableChunk{
+			tableName:  input.tableName,
+			headers:    newHeader([]string{jsonDataHeader}),
+			columnInfo: []columnInfo{newColumnInfoWithType(jsonDataHeader)},
+		}); createErr != nil {
+			return fmt.Errorf("%w: failed to create empty JSON table: %w", ErrDatabaseOperation, createErr)
+		}
+		tableCreated = true
+		err = nil
+	}
 
 	// Handle transaction commit/rollback
 	if tx != nil && ownTx {
