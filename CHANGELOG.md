@@ -7,10 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- `errors.Is` reached only one of the sentinels an error named. A failure was wrapped as `fmt.Errorf("%w: ...: %s", Sentinel, err.Error())` in 115 places, so the `%s` rendered everything below that frame to text: a save that failed because bzip2 has no writer ended its message with "filesql: unsupported file format: bzip2 compression is not supported for writing" and yet did not satisfy `errors.Is(err, ErrUnsupportedFormat)`, leaving a caller to match on the string to tell "this codec cannot be written" from "the compressor failed". Which sentinel survived depended on which frame happened to be outermost, which is not something a caller can reason about. Those sites now wrap with `%w`. No message changes: `fmt` renders `%w` through the error's own `Error` method, so the text is identical — the whole suite passed unaltered except the one assertion that had been pinning the old behavior on purpose.
+## [0.30.0] - 2026-08-02
+
+### Breaking Changes
+
+The public API of the root package went from 159 top-level declarations to 123, and the `FileType` constants from 65 to 10. Everything removed was either unreachable from outside the package or reachable and unusable; nothing that a caller could act on was taken away.
+
+- **The 56 fused `FileType` constants are gone.** `FileTypeCSVGZ`, `FileTypeTSVBZ2`, `FileTypeJSONLLZ4` and the rest named a format-and-codec combination. `FileType` now names formats only: `FileTypeCSV`, `FileTypeTSV`, `FileTypeLTSV`, `FileTypeParquet`, `FileTypeXLSX`, `FileTypeJSON`, `FileTypeJSONL`, `FileTypeACH`, `FileTypeFedWire`, `FileTypeUnsupported`.
+- **`prep` no longer re-exports the parser's 56 compressed constants**; it re-exports formats only. `parser.FileType` is unchanged and still has them.
+- **`MemoryPool`, `MemoryLimit`, `MemoryStatus`, `MemoryInfo`, `Record`, `TableName`, `ChunkSize`, `NewTableName`, `NewChunkSize`** and their methods are unexported. None appeared in any exported signature or struct field, so no call could have passed one in.
+- **`ErrorContext`, `NewErrorContext`, `WithTable`, `WithDetails`, `ErrorContext.Error` are removed.** No error this package returns was built through them.
+- **`ValidationPeekSize`, `MaxSampleSize`, `MinConfidenceThreshold`, `EarlyTerminationThreshold`, `MinDatetimeLength`, `MaxDatetimeLength`, `SamplingStratificationFactor`, `MinRealThreshold`** are unexported. `DefaultRowsPerChunk`, `DefaultChunkSize`, and `MinChunkSize` remain — they document what `SetDefaultChunkSize` does with its argument.
+
+### Migration Notes
+
+For users upgrading from v0.29.x:
+
+1. **`AddReader` with a compressed source.** Replace the fused constant with the format plus `WithCompression`. The three-argument call is unchanged, so a reader of uncompressed bytes needs no edit.
+
+   ```go
+   // before
+   builder.AddReader(gz, "users", filesql.FileTypeCSVGZ)
+
+   // after
+   builder.AddReader(gz, "users", filesql.FileTypeCSV, filesql.WithCompression(filesql.CompressionGZ))
+   ```
+
+2. **File paths are unaffected.** `AddPath("data.csv.gz")` and `Open("data.csv.gz")` still infer both format and codec from the name.
+
+3. **`errors.Is` now reaches every sentinel an error names.** Code that matched on message text to work around this can use `errors.Is` instead. Nothing that worked before stops working: the messages are unchanged.
+
+4. **Excel workbooks of several sheets can now be saved back in place.** A save that previously failed with "only a workbook of one sheet can be written back to itself" now succeeds. A save whose tables would collide on one sheet name is refused rather than silently dropping a table.
 
 ### Fixed
+- `errors.Is` reached only one of the sentinels an error named. A failure was wrapped as `fmt.Errorf("%w: ...: %s", Sentinel, err.Error())` in 115 places, so the `%s` rendered everything below that frame to text: a save that failed because bzip2 has no writer ended its message with "filesql: unsupported file format: bzip2 compression is not supported for writing" and yet did not satisfy `errors.Is(err, ErrUnsupportedFormat)`, leaving a caller to match on the string to tell "this codec cannot be written" from "the compressor failed". Which sentinel survived depended on which frame happened to be outermost, which is not something a caller can reason about. Those sites now wrap with `%w`. No message changes: `fmt` renders `%w` through the error's own `Error` method, so the text is identical — the whole suite passed unaltered except the one assertion that had been pinning the old behavior on purpose.
 - Saving a workbook whose tables collide on a sheet name lost one of them without saying so. Excel caps a sheet name at 31 runes, so two tables of a workbook whose names agree for the first 31 and differ after arrive at the same sheet; excelize answers `NewSheet` for an existing name with that sheet's index rather than an error, so the second table overwrote the first's sheet, one table's rows were gone from the file, and the save reported success. The collision is now refused with an error naming both tables and the sheet, and the workbook is left as it was — the same stance overwrite mode already takes for a format it cannot write.
 - Overwriting an Excel workbook in place renamed its sheet, and the rename accumulated. A workbook `book.xlsx` holding a sheet `Orders` loads as the table `book_Orders`, and the save wrote the table's name back as the sheet name, so the file came back with its sheet called `book_Orders`. Loading that gave `book_book_Orders`, then `book_book_book_Orders`, growing by the file's name on every round until Excel's 31-rune sheet name limit truncated it and the sheet stopped being recognizable. A sheet now goes back under the name it came in with. The reverse mapping is not exact — `sanitizeTableName` is not injective, so `Q1 Sales` and `Q1-Sales` both load as `Q1_Sales` and only that form can be recovered — but it is stable, which is what stops the accumulation.
 
@@ -873,7 +903,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.29.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.30.0...HEAD
+[0.30.0]: https://github.com/nao1215/filesql/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/nao1215/filesql/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/nao1215/filesql/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/nao1215/filesql/compare/v0.26.0...v0.27.0
