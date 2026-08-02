@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.1] - 2026-08-02
+
+### Added
+
+- **Caller-controlled transactions for loading.** `DBBuilder.LoadIntoTx` loads CSV, TSV, LTSV, JSON, JSONL, XLSX, ACH, and FedWire inputs into a caller-provided `*sql.Tx`. The loader does not commit or open nested transactions, so callers can combine multiple loads with their own schema changes and roll everything back together. Existing `LoadInto` behavior for standalone database loads is unchanged.
+
 ## [0.30.0] - 2026-08-02
 
 ### Breaking Changes
@@ -903,7 +909,8 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.30.0...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.30.1...HEAD
+[0.30.1]: https://github.com/nao1215/filesql/compare/v0.30.0...v0.30.1
 [0.30.0]: https://github.com/nao1215/filesql/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/nao1215/filesql/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/nao1215/filesql/compare/v0.27.0...v0.28.0
