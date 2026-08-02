@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Defer ACH and Fedwire registry publication until the transaction that creates
+  their SQLite tables commits successfully.
+- Make `MalformedRowFill` pad short CSV/TSV rows while rejecting long rows
+  instead of discarding source fields.
+- Handle empty JSON and JSONL inputs in the same streaming load path without a
+  second read.
+
 ## [0.30.1] - 2026-08-02
 
 ### Added
