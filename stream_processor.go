@@ -41,7 +41,7 @@ type streamProcessor struct {
 // dropIfReplacing drops a same-named table when replaceExisting is set, so the
 // following CREATE installs the file's schema and rows in place of any prior
 // table. It is a no-op in Open mode.
-func (sp *streamProcessor) dropIfReplacing(ctx context.Context, db *sql.DB, tableName string) error {
+func (sp *streamProcessor) dropIfReplacing(ctx context.Context, db DBTX, tableName string) error {
 	if !sp.replaceExisting {
 		return nil
 	}
@@ -67,7 +67,7 @@ func (sp *streamProcessor) setLogger(logger Logger) {
 }
 
 // streamAllFilesToDatabase streams all collected file paths to the database
-func (sp *streamProcessor) streamAllFilesToDatabase(ctx context.Context, db *sql.DB, collectedPaths []string) error {
+func (sp *streamProcessor) streamAllFilesToDatabase(ctx context.Context, db DBTX, collectedPaths []string) error {
 	sp.logger.Info("starting file streaming", "file_count", len(collectedPaths))
 	for i, path := range collectedPaths {
 		sp.logger.Debug("streaming file", "path", path, "index", i+1, "total", len(collectedPaths))
@@ -84,7 +84,7 @@ func (sp *streamProcessor) streamAllFilesToDatabase(ctx context.Context, db *sql
 }
 
 // streamAllReadersToDatabase streams all reader inputs to the database
-func (sp *streamProcessor) streamAllReadersToDatabase(ctx context.Context, db *sql.DB, readers []readerInput) error {
+func (sp *streamProcessor) streamAllReadersToDatabase(ctx context.Context, db DBTX, readers []readerInput) error {
 	if len(readers) == 0 {
 		return nil
 	}
@@ -112,7 +112,7 @@ func (sp *streamProcessor) closeReaderInput(ri readerInput) {
 }
 
 // streamFileToDatabase streams data from a file path directly to SQLite database using chunked processing
-func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db *sql.DB, filePath string) error {
+func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db DBTX, filePath string) error {
 	// Check if file is ACH format
 	if isACHFile(filePath) {
 		sp.logger.Debug("detected ACH file format", "path", filePath)
@@ -192,7 +192,7 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db *sql.DB,
 }
 
 // streamACHFileToDatabase handles ACH files by creating multiple tables
-func (sp *streamProcessor) streamACHFileToDatabase(ctx context.Context, db *sql.DB, filePath string) error {
+func (sp *streamProcessor) streamACHFileToDatabase(ctx context.Context, db DBTX, filePath string) error {
 	sp.logger.Debug("processing ACH file", "path", filePath)
 
 	// Open the file
@@ -219,7 +219,7 @@ func (sp *streamProcessor) streamACHFileToDatabase(ctx context.Context, db *sql.
 }
 
 // streamFedWireFileToDatabase handles Fedwire files by creating a single message table
-func (sp *streamProcessor) streamFedWireFileToDatabase(ctx context.Context, db *sql.DB, filePath string) error {
+func (sp *streamProcessor) streamFedWireFileToDatabase(ctx context.Context, db DBTX, filePath string) error {
 	sp.logger.Debug("processing Fedwire file", "path", filePath)
 
 	// Open the file
@@ -246,7 +246,7 @@ func (sp *streamProcessor) streamFedWireFileToDatabase(ctx context.Context, db *
 }
 
 // streamReaderToDatabase streams data from io.Reader directly to SQLite database
-func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.DB, input readerInput) error {
+func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, input readerInput) error {
 	// Route ACH/Fedwire readers to dedicated handlers
 	if input.fileType == FileTypeACH {
 		return streamACHFileToDatabase(ctx, db, input.reader, input.tableName+extACH, sp.replaceExisting)
@@ -284,6 +284,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 	var tableCreated bool
 	var insertStmt *sql.Stmt
 	var tx *sql.Tx
+	ownTx := false
 
 	// Process data in chunks with transaction batching for performance
 	var chunkCount int
@@ -300,15 +301,26 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 			// Start transaction for bulk inserts - significantly improves performance
 			// by reducing disk sync operations
 			var err error
-			tx, err = db.BeginTx(ctx, nil)
-			if err != nil {
-				return fmt.Errorf("%w: failed to begin transaction: %w", ErrDatabaseOperation, err)
+			if existingTx, ok := db.(*sql.Tx); ok {
+				tx = existingTx
+			} else {
+				dbConn, ok := db.(*sql.DB)
+				if !ok {
+					return fmt.Errorf("%w: unsupported database executor %T", ErrDatabaseOperation, db)
+				}
+				tx, err = dbConn.BeginTx(ctx, nil)
+				if err != nil {
+					return fmt.Errorf("%w: failed to begin transaction: %w", ErrDatabaseOperation, err)
+				}
+				ownTx = true
 			}
 
 			// Prepare insert statement within transaction
 			insertStmt, err = sp.prepareInsertStatementTx(ctx, tx, chunk) //nolint:sqlclosecheck // Statement is closed after processing
 			if err != nil {
-				_ = tx.Rollback() //nolint:errcheck // Ignore rollback error during error handling
+				if ownTx {
+					_ = tx.Rollback() //nolint:errcheck // Ignore rollback error during error handling
+				}
 				return fmt.Errorf("%w: failed to prepare insert statement: %w", ErrDatabaseOperation, err)
 			}
 
@@ -328,7 +340,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 	})
 
 	// Handle transaction commit/rollback
-	if tx != nil {
+	if tx != nil && ownTx {
 		if err != nil {
 			sp.logger.Debug("rolling back transaction", logKeyTable, input.tableName, "error", err)
 			_ = tx.Rollback() //nolint:errcheck // Ignore rollback error during error handling
@@ -369,7 +381,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db *sql.D
 }
 
 // createTableFromChunk creates a SQLite table from a tableChunk
-func (sp *streamProcessor) createTableFromChunk(ctx context.Context, db *sql.DB, chunk *tableChunk) error {
+func (sp *streamProcessor) createTableFromChunk(ctx context.Context, db DBTX, chunk *tableChunk) error {
 	columnInfo := chunk.getColumnInfo()
 	columns := make([]string, 0, len(columnInfo))
 	for _, col := range columnInfo {
@@ -391,7 +403,7 @@ func (sp *streamProcessor) createTableFromChunk(ctx context.Context, db *sql.DB,
 }
 
 // prepareInsertStatement prepares an insert statement for the table
-func (sp *streamProcessor) prepareInsertStatement(ctx context.Context, db *sql.DB, chunk *tableChunk) (*sql.Stmt, error) {
+func (sp *streamProcessor) prepareInsertStatement(ctx context.Context, db DBTX, chunk *tableChunk) (*sql.Stmt, error) {
 	query := sp.buildInsertQuery(chunk)
 	return db.PrepareContext(ctx, query)
 }
@@ -458,7 +470,7 @@ func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, 
 }
 
 // createEmptyTable creates an empty table for header-only files
-func (sp *streamProcessor) createEmptyTable(ctx context.Context, db *sql.DB, input readerInput) error {
+func (sp *streamProcessor) createEmptyTable(ctx context.Context, db DBTX, input readerInput) error {
 	// Parse just the header to get column information
 	tempParser := newStreamingParser(input.fileType, input.compression, input.tableName, 1)
 	tempParser.malformedRowPolicy = sp.malformedRowPolicy
@@ -511,7 +523,7 @@ func (sp *streamProcessor) createEmptyTable(ctx context.Context, db *sql.DB, inp
 }
 
 // createTableFromHeaders creates table from header information only (fallback method)
-func (sp *streamProcessor) createTableFromHeaders(ctx context.Context, db *sql.DB, input readerInput) error {
+func (sp *streamProcessor) createTableFromHeaders(ctx context.Context, db DBTX, input readerInput) error {
 	// Create a fallback table structure
 	query := fmt.Sprintf(
 		`CREATE TABLE IF NOT EXISTS "%s" (column1 TEXT)`,
@@ -541,7 +553,7 @@ func (sp *streamProcessor) createDecompressedReader(file *os.File, filePath stri
 }
 
 // streamXLSXFileToDatabase handles XLSX files by creating separate tables for each sheet
-func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db *sql.DB, reader io.Reader, filePath string) error {
+func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, filePath string) error {
 	sp.logger.Debug("reading XLSX data into memory", "path", filePath)
 
 	// Read all data into memory (XLSX requires random access)
