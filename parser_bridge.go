@@ -82,7 +82,7 @@ func parseWithParser(reader io.Reader, fileType FileType, tableName string) (*ta
 	// Convert parser.TableData to filesql table structure
 	headers := newHeader(result.Headers)
 
-	records := make([]Record, len(result.Records))
+	records := make([]record, len(result.Records))
 	for i, rec := range result.Records {
 		records[i] = newRecord(rec)
 	}
@@ -97,7 +97,7 @@ func parseWithParser(reader io.Reader, fileType FileType, tableName string) (*ta
 	}
 
 	return &table{
-		name:       NewTableName(tableName),
+		name:       newTableName(tableName),
 		header:     headers,
 		records:    records,
 		columnInfo: columnInfos,

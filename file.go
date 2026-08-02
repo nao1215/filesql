@@ -78,7 +78,7 @@ type file struct {
 type tableChunk struct {
 	tableName  string
 	headers    header
-	records    []Record
+	records    []record
 	columnInfo []columnInfo
 	// nulls, when non-nil, marks which cells were SQL NULL (nulls[row][col]).
 	// Formats without a null concept leave it nil, and the insert then treats
@@ -98,7 +98,7 @@ func (tc *tableChunk) getHeaders() header {
 }
 
 // getRecords returns the records in this chunk
-func (tc *tableChunk) getRecords() []Record {
+func (tc *tableChunk) getRecords() []record {
 	return tc.records
 }
 
@@ -124,7 +124,7 @@ type streamingParser struct {
 	// path is unwrapped before the parser sees it.
 	compression CompressionType
 	tableName   string
-	chunkSize   ChunkSize
+	chunkSize   chunkSizeValue
 	memoryPool  *memoryPool  // Pool for reusable memory allocations
 	memoryLimit *memoryLimit // Configurable memory limits
 	// malformedRowPolicy controls how a CSV/TSV record whose field count differs
@@ -318,9 +318,9 @@ func (f *file) openReader() (io.Reader, func() error, error) {
 
 // convertXLSXRowsToTable converts XLSX rows to table headers and records
 // First row becomes headers, remaining rows become records with padding
-func convertXLSXRowsToTable(rows [][]string) (header, []Record) {
+func convertXLSXRowsToTable(rows [][]string) (header, []record) {
 	var headers header
-	var records []Record
+	var records []record
 
 	// First row as headers
 	if len(rows) > 0 {
@@ -330,9 +330,9 @@ func convertXLSXRowsToTable(rows [][]string) (header, []Record) {
 
 	// Remaining rows as records
 	if len(rows) > 1 {
-		records = make([]Record, len(rows)-1)
+		records = make([]record, len(rows)-1)
 		for i, row := range rows[1:] {
-			record := make(Record, len(headers))
+			record := make(record, len(headers))
 			for j := range headers {
 				if j < len(row) {
 					record[j] = row[j]

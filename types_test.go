@@ -29,7 +29,7 @@ func TestNewTableName(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			tn := NewTableName(tt.input)
+			tn := newTableName(tt.input)
 			assert.Equal(t, tt.expected, tn.String())
 		})
 	}
@@ -38,7 +38,7 @@ func TestNewTableName(t *testing.T) {
 func TestTableName_String(t *testing.T) {
 	t.Parallel()
 
-	tn := NewTableName("test_table")
+	tn := newTableName("test_table")
 	assert.Equal(t, "test_table", tn.String())
 }
 
@@ -47,32 +47,32 @@ func TestTableName_Equal(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		tn1      TableName
-		tn2      TableName
+		tn1      tableName
+		tn2      tableName
 		expected bool
 	}{
 		{
 			name:     "equal table names",
-			tn1:      NewTableName("users"),
-			tn2:      NewTableName("users"),
+			tn1:      newTableName("users"),
+			tn2:      newTableName("users"),
 			expected: true,
 		},
 		{
 			name:     "different table names",
-			tn1:      NewTableName("users"),
-			tn2:      NewTableName("orders"),
+			tn1:      newTableName("users"),
+			tn2:      newTableName("orders"),
 			expected: false,
 		},
 		{
 			name:     "empty both",
-			tn1:      NewTableName(""),
-			tn2:      NewTableName(""),
+			tn1:      newTableName(""),
+			tn2:      newTableName(""),
 			expected: true,
 		},
 		{
 			name:     "case sensitive",
-			tn1:      NewTableName("Users"),
-			tn2:      NewTableName("users"),
+			tn1:      newTableName("Users"),
+			tn2:      newTableName("users"),
 			expected: false,
 		},
 	}
@@ -117,7 +117,7 @@ func TestTableName_Sanitize(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			tn := NewTableName(tt.input)
+			tn := newTableName(tt.input)
 			sanitized := tn.sanitize()
 			assert.Equal(t, tt.expected, sanitized.String())
 		})
@@ -214,8 +214,8 @@ func TestRecord_Equal(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		record1  Record
-		record2  Record
+		record1  record
+		record2  record
 		expected bool
 	}{
 		{
@@ -394,7 +394,7 @@ func TestNewColumnInfoList(t *testing.T) {
 
 	t.Run("mixed column types", func(t *testing.T) {
 		header := newHeader([]string{"id", "name", "age", "salary", "hire_date"})
-		records := []Record{
+		records := []record{
 			newRecord([]string{"1", "Alice", "30", "95000", "2023-01-15"}),
 			newRecord([]string{"2", "Bob", "25", "78000", "2023-02-20"}),
 			newRecord([]string{"3", "Charlie", "35", "102000", "2023-03-10"}),
@@ -420,7 +420,7 @@ func TestNewColumnInfoList(t *testing.T) {
 
 	t.Run("empty records", func(t *testing.T) {
 		header := newHeader([]string{"col1", "col2"})
-		records := []Record{}
+		records := []record{}
 
 		result := newColumnInfoList(header, records)
 
@@ -433,7 +433,7 @@ func TestNewColumnInfoList(t *testing.T) {
 
 	t.Run("datetime column inference", func(t *testing.T) {
 		header := newHeader([]string{"event_date", "event_time", "timestamp"})
-		records := []Record{
+		records := []record{
 			newRecord([]string{"2023-01-15", "10:30:00", "2023-01-15T10:30:00Z"}),
 			newRecord([]string{"2023-02-20", "14:45:30", "2023-02-20T14:45:30Z"}),
 			newRecord([]string{"2023-03-10", "09:15:45", "2023-03-10T09:15:45Z"}),
@@ -1010,12 +1010,12 @@ func TestChunkSizeString(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		cs       ChunkSize
+		cs       chunkSizeValue
 		expected string
 	}{
-		{"default chunk size", ChunkSize(DefaultRowsPerChunk), strconv.Itoa(DefaultRowsPerChunk)},
-		{"custom chunk size", ChunkSize(5000), "5000"},
-		{"min chunk size", ChunkSize(MinChunkSize), strconv.Itoa(MinChunkSize)},
+		{"default chunk size", chunkSizeValue(DefaultRowsPerChunk), strconv.Itoa(DefaultRowsPerChunk)},
+		{"custom chunk size", chunkSizeValue(5000), "5000"},
+		{"min chunk size", chunkSizeValue(MinChunkSize), strconv.Itoa(MinChunkSize)},
 	}
 
 	for _, tt := range tests {
@@ -1031,15 +1031,15 @@ func TestChunkSizeIsValid(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		cs       ChunkSize
+		cs       chunkSizeValue
 		expected bool
 	}{
-		{"valid default size", ChunkSize(DefaultRowsPerChunk), true},
-		{"valid min size", ChunkSize(MinChunkSize), true},
-		{"valid custom size", ChunkSize(5000), true},
-		{"invalid zero", ChunkSize(0), false},
-		{"invalid negative", ChunkSize(-1), false},
-		{"invalid below min", ChunkSize(MinChunkSize - 1), false},
+		{"valid default size", chunkSizeValue(DefaultRowsPerChunk), true},
+		{"valid min size", chunkSizeValue(MinChunkSize), true},
+		{"valid custom size", chunkSizeValue(5000), true},
+		{"invalid zero", chunkSizeValue(0), false},
+		{"invalid negative", chunkSizeValue(-1), false},
+		{"invalid below min", chunkSizeValue(MinChunkSize - 1), false},
 	}
 
 	for _, tt := range tests {

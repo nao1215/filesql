@@ -56,11 +56,11 @@ func excelSheetName(name string) string {
 // table represents file contents as database table structure.
 type table struct {
 	// Name is table name derived from file path.
-	name TableName
+	name tableName
 	// header is table header.
 	header header
 	// records is table records.
-	records []Record
+	records []record
 	// columnInfo contains inferred type information for each column
 	columnInfo []columnInfo
 }
@@ -69,13 +69,13 @@ type table struct {
 func newTable(
 	name string,
 	header header,
-	records []Record,
+	records []record,
 ) *table {
 	// Infer column types from data
 	columnInfo := newColumnInfoList(header, records)
 
 	return &table{
-		name:       NewTableName(name),
+		name:       newTableName(name),
 		header:     header,
 		records:    records,
 		columnInfo: columnInfo,
@@ -93,7 +93,7 @@ func (t *table) getHeader() header {
 }
 
 // getRecords return table records.
-func (t *table) getRecords() []Record {
+func (t *table) getRecords() []record {
 	return t.records
 }
 

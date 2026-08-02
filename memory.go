@@ -41,7 +41,7 @@ type pooledByteSlice struct {
 
 // pooledRecordSlice wraps []Record for pooling
 type pooledRecordSlice struct {
-	data []Record
+	data []record
 }
 
 // pooledStringSlice wraps []string for pooling
@@ -94,7 +94,7 @@ func newMemoryPool(maxSize int) *memoryPool {
 		recordPool: sync.Pool{
 			New: func() any {
 				return &pooledRecordSlice{
-					data: make([]Record, 0, defaultRecordSliceCapacity),
+					data: make([]record, 0, defaultRecordSliceCapacity),
 				}
 			},
 		},
@@ -127,18 +127,18 @@ func (mp *memoryPool) putByteBuffer(buf []byte) {
 }
 
 // getRecordSlice gets a record slice from the pool
-func (mp *memoryPool) getRecordSlice() []Record {
+func (mp *memoryPool) getRecordSlice() []record {
 	pooled, ok := mp.recordPool.Get().(*pooledRecordSlice)
 	if !ok {
 		// This should never happen with our pool setup, but provide fallback
-		return make([]Record, 0, defaultRecordSliceCapacity)
+		return make([]record, 0, defaultRecordSliceCapacity)
 	}
 	pooled.data = pooled.data[:0] // Reset length but keep capacity
 	return pooled.data
 }
 
 // putRecordSlice returns a record slice to the pool if it's not too large
-func (mp *memoryPool) putRecordSlice(slice []Record) {
+func (mp *memoryPool) putRecordSlice(slice []record) {
 	if cap(slice) <= mp.maxSize/averageRecordSizeFactor {
 		mp.recordPool.Put(&pooledRecordSlice{data: slice})
 	}

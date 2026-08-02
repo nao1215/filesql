@@ -77,8 +77,8 @@ func TestMemoryPool_RecordSlice(t *testing.T) {
 		assert.Equal(t, 0, len(slice), "slice length should be 0")
 
 		// Add some records
-		slice = append(slice, Record{"col1", "col2"})
-		slice = append(slice, Record{"val1", "val2"})
+		slice = append(slice, record{"col1", "col2"})
+		slice = append(slice, record{"val1", "val2"})
 		assert.Equal(t, 2, len(slice), "slice should contain records")
 
 		// Put back to pool
@@ -431,7 +431,7 @@ func BenchmarkMemoryPool_RecordSlice(b *testing.B) {
 		b.ResetTimer()
 		for range b.N {
 			slice := pool.getRecordSlice()
-			slice = append(slice, Record{"col1", "col2"})
+			slice = append(slice, record{"col1", "col2"})
 			pool.putRecordSlice(slice)
 		}
 	})
@@ -439,8 +439,8 @@ func BenchmarkMemoryPool_RecordSlice(b *testing.B) {
 	b.Run("without pool", func(b *testing.B) {
 		b.ResetTimer()
 		for range b.N {
-			slice := make([]Record, 0, 100)
-			slice = append(slice, Record{"col1", "col2"})
+			slice := make([]record, 0, 100)
+			slice = append(slice, record{"col1", "col2"})
 			// No pooling - let GC handle it
 			_ = slice
 		}
@@ -845,7 +845,7 @@ func TestMemoryPool_GetRecordSlice_Fallback(t *testing.T) {
 	assert.Equal(t, 0, len(slice))
 
 	// Test Put and Get cycle
-	slice = append(slice, Record{"test"})
+	slice = append(slice, record{"test"})
 	pool.putRecordSlice(slice)
 
 	slice2 := pool.getRecordSlice()
