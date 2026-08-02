@@ -401,7 +401,7 @@ func IsACHBaseTableName(tableName string) (baseName string, isACH bool) {
 }
 
 // streamACHFileToDatabase streams an ACH file to the database as multiple tables
-func streamACHFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, filePath string, replaceExisting bool) error {
+func streamACHFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, filePath string, replaceExisting bool, pending *PendingRegistries) error {
 	baseTableName := sanitizeTableName(tableFromFilePath(filePath))
 
 	tables, tableSet, err := parseACHFile(reader, baseTableName)
@@ -409,8 +409,8 @@ func streamACHFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, fil
 		return err
 	}
 
-	// Store the TableSet in the registry for later use by DumpACH
-	registerACHTableSet(baseTableName, tableSet)
+	// Keep the TableSet private until the caller commits the transaction.
+	pending.addACH(baseTableName, tableSet)
 
 	for _, t := range tables {
 		// Check if table already exists

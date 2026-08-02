@@ -157,7 +157,7 @@ func IsWireBaseTableName(tableName string) (baseName string, isWire bool) {
 }
 
 // streamWireFileToDatabase streams a Fedwire file to the database as a single table.
-func streamWireFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, filePath string, replaceExisting bool) error {
+func streamWireFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, filePath string, replaceExisting bool, pending *PendingRegistries) error {
 	baseTableName := sanitizeTableName(tableFromFilePath(filePath))
 
 	tables, tableSet, err := parseFedWireFile(reader, baseTableName)
@@ -165,8 +165,8 @@ func streamWireFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, fi
 		return err
 	}
 
-	// Store the TableSet in the registry for later use by DumpFedWire
-	registerWireTableSet(baseTableName, tableSet)
+	// Keep the TableSet private until the caller commits the transaction.
+	pending.addWire(baseTableName, tableSet)
 
 	for _, t := range tables {
 		// Check if table already exists
