@@ -401,7 +401,7 @@ func IsACHBaseTableName(tableName string) (baseName string, isACH bool) {
 }
 
 // streamACHFileToDatabase streams an ACH file to the database as multiple tables
-func streamACHFileToDatabase(ctx context.Context, db *sql.DB, reader io.Reader, filePath string, replaceExisting bool) error {
+func streamACHFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, filePath string, replaceExisting bool) error {
 	baseTableName := sanitizeTableName(tableFromFilePath(filePath))
 
 	tables, tableSet, err := parseACHFile(reader, baseTableName)
@@ -450,7 +450,7 @@ func streamACHFileToDatabase(ctx context.Context, db *sql.DB, reader io.Reader, 
 }
 
 // createTableFromColumnInfo creates a SQLite table with the given columns
-func createTableFromColumnInfo(ctx context.Context, db *sql.DB, tableName string, columnInfo []columnInfo) error {
+func createTableFromColumnInfo(ctx context.Context, db DBTX, tableName string, columnInfo []columnInfo) error {
 	columns := make([]string, 0, len(columnInfo))
 	for _, col := range columnInfo {
 		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.string()))
@@ -467,7 +467,7 @@ func createTableFromColumnInfo(ctx context.Context, db *sql.DB, tableName string
 }
 
 // insertRecordsIntoTable inserts records into the specified table
-func insertRecordsIntoTable(ctx context.Context, db *sql.DB, tableName string, headers header, records []record) error {
+func insertRecordsIntoTable(ctx context.Context, db DBTX, tableName string, headers header, records []record) error {
 	placeholders := make([]string, len(headers))
 	for i := range placeholders {
 		placeholders[i] = "?"

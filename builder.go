@@ -637,6 +637,34 @@ func (b *DBBuilder) LoadInto(ctx context.Context, db *sql.DB) error {
 	b.streamProcessor.replaceExisting = true
 	defer func() { b.streamProcessor.replaceExisting = false }()
 
+	return b.loadIntoExecutor(ctx, db)
+}
+
+// LoadIntoTx loads the builder's inputs into an existing transaction. No
+// transaction is started or committed by this method; the caller owns the
+// transaction and decides whether all changes are committed or rolled back.
+// This is intended for callers that need several files, including table
+// replacement and empty-table creation, to be one atomic operation.
+func (b *DBBuilder) LoadIntoTx(ctx context.Context, tx *sql.Tx) error {
+	if tx == nil {
+		return fmt.Errorf("%w: target transaction is nil", ErrDatabaseOperation)
+	}
+	if b.autoSaveConfig != nil && b.autoSaveConfig.enabled {
+		return fmt.Errorf("%w: auto-save is not supported by LoadIntoTx", ErrDatabaseOperation)
+	}
+	if err := b.validator.validateInputsAvailable(b.collectedPaths, b.readers); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	b.collectedPaths = b.fileProcessor.deduplicateCompressedFiles(b.collectedPaths)
+	b.streamProcessor.replaceExisting = true
+	defer func() { b.streamProcessor.replaceExisting = false }()
+	return b.loadIntoExecutor(ctx, tx)
+}
+
+func (b *DBBuilder) loadIntoExecutor(ctx context.Context, db DBTX) error {
 	if err := b.streamProcessor.streamAllFilesToDatabase(ctx, db, b.collectedPaths); err != nil {
 		return err
 	}

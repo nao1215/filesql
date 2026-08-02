@@ -68,6 +68,26 @@ func TestLoadInto_PackageFunc_CSV(t *testing.T) {
 	assert.Equal(t, "John Doe", name)
 }
 
+func TestDBBuilder_LoadIntoTxUsesCallerTransaction(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTempCSV(t, dir, "tx.csv", "id\n1\n")
+	db := newCallerDB(t)
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	builder, err := NewBuilder().AddPath(path).Build(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, builder.LoadIntoTx(context.Background(), tx))
+
+	var count int
+	require.NoError(t, tx.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM tx`).Scan(&count))
+	assert.Equal(t, 1, count)
+	// The API must not commit the caller's transaction itself.
+	assert.NoError(t, tx.Rollback())
+	_, err = db.ExecContext(context.Background(), `SELECT * FROM tx`)
+	assert.Error(t, err)
+}
+
 func TestLoadInto_PreservesExistingCallerTables(t *testing.T) {
 	db := newCallerDB(t)
 	_, err := db.ExecContext(context.Background(), `CREATE TABLE app (k TEXT); INSERT INTO app VALUES ('keep')`)
