@@ -630,7 +630,7 @@ func TestStreamingParser_ParseFromReader_XLSX(t *testing.T) {
 
 				assert.Equal(t, "compressed_workbook", table.getName(), "Table name mismatch")
 				assert.Equal(t, header{"Test"}, table.getHeader(), "Header mismatch")
-				assert.Equal(t, []Record{{"Data"}}, table.getRecords(), "Records mismatch")
+				assert.Equal(t, []record{{"Data"}}, table.getRecords(), "Records mismatch")
 			})
 		}
 	})
@@ -804,7 +804,7 @@ func TestCreateDecompressedReader_AllCompressionTypes(t *testing.T) {
 			// row that names the wrong codec still yields two plausible-looking
 			// records — only the header carries the corruption.
 			assert.Equal(t, header{"name", "age", "city"}, table.getHeader(), "Header mismatch")
-			assert.Equal(t, []Record{
+			assert.Equal(t, []record{
 				{"Alice", "30", "Tokyo"},
 				{"Bob", "25", "Osaka"},
 			}, table.getRecords(), "Records mismatch")
@@ -909,7 +909,7 @@ func TestCreateDecompressedReader_TSVCompressionTypes(t *testing.T) {
 			// The header is checked too; see the CSV table for why the rows alone
 			// do not pin the codec.
 			assert.Equal(t, header{"name", "age", "city"}, table.getHeader(), "Header mismatch")
-			assert.Equal(t, []Record{{"Alice", "30", "Tokyo"}}, table.getRecords(), "Records mismatch")
+			assert.Equal(t, []record{{"Alice", "30", "Tokyo"}}, table.getRecords(), "Records mismatch")
 		})
 	}
 }
@@ -1011,7 +1011,7 @@ func TestCreateDecompressedReader_LTSVCompressionTypes(t *testing.T) {
 			// The labels are checked too; see the CSV table for why the rows alone
 			// do not pin the codec.
 			assert.Equal(t, header{"name", "age", "city"}, table.getHeader(), "Header mismatch")
-			assert.Equal(t, []Record{
+			assert.Equal(t, []record{
 				{"Alice", "30", "Tokyo"},
 				{"Bob", "25", "Osaka"},
 			}, table.getRecords(), "Records mismatch")
@@ -1356,7 +1356,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 			c := &tableChunk{
 				tableName:  chunk.tableName,
 				headers:    chunk.headers,
-				records:    append([]Record(nil), chunk.records...),
+				records:    append([]record(nil), chunk.records...),
 				columnInfo: chunk.columnInfo,
 			}
 			chunks = append(chunks, c)
@@ -1451,7 +1451,7 @@ func TestProcessJSONLInChunks(t *testing.T) {
 			c := &tableChunk{
 				tableName:  chunk.tableName,
 				headers:    chunk.headers,
-				records:    append([]Record(nil), chunk.records...),
+				records:    append([]record(nil), chunk.records...),
 				columnInfo: chunk.columnInfo,
 			}
 			chunks = append(chunks, c)
@@ -1683,7 +1683,7 @@ func TestStreamingParser_ProcessInChunks_CompressedJSON(t *testing.T) {
 			c := &tableChunk{
 				tableName:  chunk.tableName,
 				headers:    chunk.headers,
-				records:    append([]Record(nil), chunk.records...),
+				records:    append([]record(nil), chunk.records...),
 				columnInfo: chunk.columnInfo,
 			}
 			chunks = append(chunks, c)

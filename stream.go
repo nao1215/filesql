@@ -35,7 +35,7 @@ func newStreamingParser(fileType FileType, compression CompressionType, tableNam
 		fileType:    fileType,
 		compression: compression,
 		tableName:   tableName,
-		chunkSize:   NewChunkSize(chunkSize),
+		chunkSize:   newChunkSize(chunkSize),
 		memoryPool:  newMemoryPool(1024 * 1024), // 1MB default max buffer size
 		memoryLimit: newMemoryLimit(512),        // 512MB default memory limit
 	}
@@ -113,7 +113,7 @@ func (p *streamingParser) parseDelimitedStream(reader io.Reader, delimiter rune,
 		return nil, err
 	}
 
-	tablerecords := make([]Record, 0, len(records)-1)
+	tablerecords := make([]record, 0, len(records)-1)
 	for i := 1; i < len(records); i++ {
 		record, skip, err := reconcileFieldCount(records[i], len(header), i, p.malformedRowPolicy)
 		if err != nil {
@@ -228,9 +228,9 @@ func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 
 	header := header(labels.names())
 
-	tablerecords := make([]Record, 0, len(records))
+	tablerecords := make([]record, 0, len(records))
 	for _, recordMap := range records {
-		var row Record
+		var row record
 		for _, key := range header {
 			if val, exists := recordMap[key]; exists {
 				row = append(row, val)
@@ -314,7 +314,7 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 	var columnValues [][]string
 
 	// Read records in chunks
-	var chunkrecords []Record
+	var chunkrecords []record
 	chunkSize := p.chunkSize.Int()
 	if chunkSize <= 0 {
 		chunkSize = DefaultRowsPerChunk
@@ -463,7 +463,7 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 	header := header(labels.names())
 
 	// Second pass: process records in chunks
-	chunkrecords := make([]Record, 0) // Pre-allocate slice
+	chunkrecords := make([]record, 0) // Pre-allocate slice
 	var columnValues [][]string
 	var columnInfo columnInfoList
 
@@ -504,7 +504,7 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 			continue
 		}
 
-		var row Record
+		var row record
 		for _, key := range header {
 			if val, exists := recordMap[key]; exists {
 				row = append(row, val)
@@ -623,14 +623,14 @@ func (p *streamingParser) parseParquetStream(reader io.Reader) (*table, error) {
 	tableReader := array.NewTableReader(table, 0)
 	defer tableReader.Release()
 
-	var allRecords []Record
+	var allRecords []record
 	for tableReader.Next() {
 		batch := tableReader.Record()
 
 		// Convert each row in the batch
 		numRows := batch.NumRows()
 		for i := range numRows {
-			row := make(Record, batch.NumCols())
+			row := make(record, batch.NumCols())
 			for j, col := range batch.Columns() {
 				value := extractValueFromArrowArray(col, i)
 				row[j] = value
@@ -724,11 +724,11 @@ func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chu
 	for tableReader.Next() {
 		batch := tableReader.Record()
 
-		var chunkRecords []Record
+		var chunkRecords []record
 		var chunkNulls [][]bool
 		numRows := batch.NumRows()
 		for i := range numRows {
-			row := make(Record, batch.NumCols())
+			row := make(record, batch.NumCols())
 			nullRow := make([]bool, batch.NumCols())
 			for j, col := range batch.Columns() {
 				if col.IsNull(int(i)) {
@@ -884,7 +884,7 @@ func (p *streamingParser) processXLSXInChunks(reader io.Reader, processor chunkP
 		columnInfo    columnInfoList
 		columnValues  [][]string
 		first         = true
-		chunkRecords  []Record
+		chunkRecords  []record
 		processedRows int
 	)
 
@@ -972,7 +972,7 @@ func (p *streamingParser) processXLSXInChunks(reader io.Reader, processor chunkP
 			}
 
 			// Copy to decouple from the reused backing array
-			chunkData := append([]Record(nil), chunkRecords...)
+			chunkData := append([]record(nil), chunkRecords...)
 			chunk := &tableChunk{
 				tableName:  p.tableName,
 				headers:    headers,
@@ -998,7 +998,7 @@ func (p *streamingParser) processXLSXInChunks(reader io.Reader, processor chunkP
 		}
 
 		// Copy to decouple from the reused backing array
-		chunkData := append([]Record(nil), chunkRecords...)
+		chunkData := append([]record(nil), chunkRecords...)
 		chunk := &tableChunk{
 			tableName:  p.tableName,
 			headers:    headers,
@@ -1072,7 +1072,7 @@ func (p *streamingParser) parseJSONStream(reader io.Reader) (*table, error) {
 		if len(arr) == 0 {
 			return nil, fmt.Errorf("%w: empty JSON array", ErrEmptyData)
 		}
-		records := make([]Record, 0, len(arr))
+		records := make([]record, 0, len(arr))
 		for _, elem := range arr {
 			records = append(records, newRecord([]string{string(elem)}))
 		}
@@ -1087,7 +1087,7 @@ func (p *streamingParser) parseJSONStream(reader io.Reader) (*table, error) {
 		return nil, fmt.Errorf("%w: failed to parse JSON: %s", ErrInvalidData, err.Error())
 	}
 
-	t := newTable(p.tableName, h, []Record{newRecord([]string{string(obj)})})
+	t := newTable(p.tableName, h, []record{newRecord([]string{string(obj)})})
 	t.columnInfo = colInfo
 	return t, nil
 }
@@ -1108,7 +1108,7 @@ func (p *streamingParser) parseJSONLStream(reader io.Reader) (*table, error) {
 
 	h := newHeader([]string{jsonDataHeader})
 	colInfo := []columnInfo{newColumnInfoWithType(jsonDataHeader)}
-	var records []Record
+	var records []record
 	lineNum := 0
 
 	for {
@@ -1185,7 +1185,7 @@ func (p *streamingParser) processJSONInChunks(reader io.Reader, processor chunkP
 	chunk := &tableChunk{
 		tableName:  p.tableName,
 		headers:    h,
-		records:    []Record{newRecord([]string{string(obj)})},
+		records:    []record{newRecord([]string{string(obj)})},
 		columnInfo: colInfo,
 	}
 	return processor(chunk)
@@ -1224,7 +1224,7 @@ func (p *streamingParser) processJSONArrayChunks(
 		chunkSize = DefaultRowsPerChunk
 	}
 
-	var chunkRecords []Record
+	var chunkRecords []record
 	totalRecords := 0
 
 	for dec.More() {
@@ -1293,7 +1293,7 @@ func (p *streamingParser) processJSONLInChunks(reader io.Reader, processor chunk
 		chunkSize = DefaultRowsPerChunk
 	}
 
-	var chunkRecords []Record
+	var chunkRecords []record
 	lineNum := 0
 	totalRecords := 0
 

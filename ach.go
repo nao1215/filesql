@@ -216,7 +216,7 @@ func parseACHFile(reader io.Reader, baseTableName string) ([]*table, *achconv.Ta
 // fileParserTableDataToTable converts parser.TableData to filesql table
 func fileParserTableDataToTable(td *parser.TableData, tableName string) *table {
 	headers := newHeader(td.Headers)
-	records := make([]Record, len(td.Records))
+	records := make([]record, len(td.Records))
 	for i, rec := range td.Records {
 		records[i] = newRecord(rec)
 	}
@@ -236,7 +236,7 @@ func fileParserTableDataToTable(td *parser.TableData, tableName string) *table {
 	}
 
 	return &table{
-		name:       NewTableName(tableName),
+		name:       newTableName(tableName),
 		header:     headers,
 		records:    records,
 		columnInfo: columnInfos,
@@ -467,7 +467,7 @@ func createTableFromColumnInfo(ctx context.Context, db *sql.DB, tableName string
 }
 
 // insertRecordsIntoTable inserts records into the specified table
-func insertRecordsIntoTable(ctx context.Context, db *sql.DB, tableName string, headers header, records []Record) error {
+func insertRecordsIntoTable(ctx context.Context, db *sql.DB, tableName string, headers header, records []record) error {
 	placeholders := make([]string, len(headers))
 	for i := range placeholders {
 		placeholders[i] = "?"

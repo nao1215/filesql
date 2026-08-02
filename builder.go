@@ -882,10 +882,10 @@ func (b *DBBuilder) createTableFromXLSXSheet(ctx context.Context, db *sql.DB, ta
 	}
 
 	// Create records for type inference
-	records := make([]Record, len(dataRows))
+	records := make([]record, len(dataRows))
 	for i, row := range dataRows {
 		// Pad row with empty strings if necessary
-		paddedRow := make(Record, len(headers))
+		paddedRow := make(record, len(headers))
 		for j := range headers {
 			if j < len(row) {
 				paddedRow[j] = row[j]
@@ -933,7 +933,7 @@ func (b *DBBuilder) createSQLiteTable(ctx context.Context, db *sql.DB, tableName
 }
 
 // insertDataIntoTable inserts records into the specified table
-func (b *DBBuilder) insertDataIntoTable(ctx context.Context, db *sql.DB, tableName string, headers []string, records []Record) error {
+func (b *DBBuilder) insertDataIntoTable(ctx context.Context, db *sql.DB, tableName string, headers []string, records []record) error {
 	placeholders := make([]string, len(headers))
 	for i := range placeholders {
 		placeholders[i] = "?"

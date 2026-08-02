@@ -31,40 +31,40 @@ const (
 	tsvDelimiter = '\t'
 )
 
-// TableName represents a table name with validation
-type TableName struct {
+// tableName represents a table name with validation
+type tableName struct {
 	value string
 }
 
-// NewTableName creates a new TableName with validation
-func NewTableName(name string) TableName {
+// newTableName creates a new tableName with validation
+func newTableName(name string) tableName {
 	// Basic validation - table name cannot be empty
 	if strings.TrimSpace(name) == "" {
-		return TableName{value: defaultTableName}
+		return tableName{value: defaultTableName}
 	}
-	return TableName{value: strings.TrimSpace(name)}
+	return tableName{value: strings.TrimSpace(name)}
 }
 
-// String returns the string representation of TableName
-func (tn TableName) String() string {
+// String returns the string representation of tableName
+func (tn tableName) String() string {
 	return tn.value
 }
 
 // Equal compares two table names
-func (tn TableName) Equal(other TableName) bool {
+func (tn tableName) Equal(other tableName) bool {
 	return tn.value == other.value
 }
 
 // sanitize returns a sanitized version of the table name
-func (tn TableName) sanitize() TableName {
-	return TableName{value: tn.sanitizeString()}
+func (tn tableName) sanitize() tableName {
+	return tableName{value: tn.sanitizeString()}
 }
 
 // sanitizeString removes invalid characters from table names. It keeps the same
 // characters as the file-path sanitizer (see identifierRunes), so a name written
 // in a non-Latin script survives here too, and differs only in the fallback and
 // prefix it uses when the result is empty or starts with a digit.
-func (tn TableName) sanitizeString() string {
+func (tn tableName) sanitizeString() string {
 	finalResult := identifierRunes(tn.value)
 
 	// Ensure it doesn't start with a digit
@@ -101,21 +101,21 @@ func (h header) equal(h2 header) bool {
 	return true
 }
 
-// Record represents file records as a slice of string fields.
-// This type was changed from unexported 'record' to exported 'Record' in v0.5.0
-// to fix lint issues with exported methods returning unexported types.
+// record is one row of a file, as its fields.
 //
-// Breaking change: Code that previously imported and used the unexported 'record'
-// type will need to be updated to use 'Record'.
-type Record []string
+// It was exported as Record in v0.5.0 to quiet a lint warning about an exported
+// method returning an unexported type. No exported method returns it any more,
+// so the warning is gone and the type is internal again — nothing a caller can
+// reach ever takes or returns one.
+type record []string
 
 // newRecord create new record.
-func newRecord(r []string) Record {
-	return Record(r)
+func newRecord(r []string) record {
+	return record(r)
 }
 
 // equal compare record.
-func (r Record) equal(r2 Record) bool {
+func (r record) equal(r2 record) bool {
 	if len(r) != len(r2) {
 		return false
 	}
@@ -185,29 +185,31 @@ func validateColumnNames(columns []string) error {
 	return nil
 }
 
-// ChunkSize represents a chunk size with validation
-type ChunkSize int
+// chunkSizeValue represents a chunk size with validation. The name carries the
+// "Value" suffix because "chunkSize" is taken by the many variables and fields
+// that hold one.
+type chunkSizeValue int
 
-// NewChunkSize creates a new ChunkSize with validation
-func NewChunkSize(size int) ChunkSize {
+// newChunkSize creates a new chunkSizeValue with validation
+func newChunkSize(size int) chunkSizeValue {
 	if size < MinChunkSize {
-		return ChunkSize(DefaultRowsPerChunk)
+		return chunkSizeValue(DefaultRowsPerChunk)
 	}
-	return ChunkSize(size)
+	return chunkSizeValue(size)
 }
 
-// Int returns the int value of ChunkSize
-func (cs ChunkSize) Int() int {
+// Int returns the int value of chunkSizeValue
+func (cs chunkSizeValue) Int() int {
 	return int(cs)
 }
 
-// String returns the string representation of ChunkSize
-func (cs ChunkSize) String() string {
+// String returns the string representation of chunkSizeValue
+func (cs chunkSizeValue) String() string {
 	return strconv.Itoa(int(cs))
 }
 
 // isValid checks if the chunk size is valid
-func (cs ChunkSize) isValid() bool {
+func (cs chunkSizeValue) isValid() bool {
 	return int(cs) >= MinChunkSize
 }
 
@@ -239,7 +241,7 @@ func newColumnInfoWithType(name string) columnInfo {
 type columnInfoList []columnInfo
 
 // newColumnInfoList creates column info list from header and records
-func newColumnInfoList(header header, records []Record) columnInfoList {
+func newColumnInfoList(header header, records []record) columnInfoList {
 	columnCount := len(header)
 	if columnCount == 0 {
 		return nil
@@ -730,7 +732,7 @@ func selectColumnType(typeCounts map[columnType]int, totalCount int) columnType 
 }
 
 // inferColumnsInfo infers column information from header and data records
-func inferColumnsInfo(header header, records []Record) []columnInfo {
+func inferColumnsInfo(header header, records []record) []columnInfo {
 	columnCount := len(header)
 	if columnCount == 0 {
 		return nil
