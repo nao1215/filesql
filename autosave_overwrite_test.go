@@ -1,6 +1,7 @@
 package filesql
 
 import (
+	"compress/gzip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xuri/excelize/v2"
 )
 
 // autoSaveOverwrite opens path with auto-save in overwrite mode, runs stmts, and
@@ -249,20 +251,173 @@ func TestAutoSaveOverwriteXLSX(t *testing.T) {
 		assert.Equal(t, "bob", name)
 	})
 
-	t.Run("a workbook of several sheets is refused", func(t *testing.T) {
+	t.Run("a sheet keeps its name across a round trip", func(t *testing.T) {
 		t.Parallel()
 
+		ctx := t.Context()
+		dir := t.TempDir()
+		src := filepath.Join(dir, "book.xlsx")
+		writeWorkbook(t, src, map[string][][]string{
+			"Orders": {{"id", "name"}, {"1", "alice"}},
+		})
+
+		require.NoError(t, autoSaveOverwrite(t, []string{src}, "UPDATE book_Orders SET name = 'bob'"))
+
+		assert.Equal(t, []string{"Orders"}, workbookSheets(t, src),
+			"overwriting a workbook in place must not rename its sheet")
+
+		// The name has to survive repeatedly, not just once: a prefix added on
+		// every save accumulates until Excel's 31-rune sheet name limit truncates it.
+		require.NoError(t, autoSaveOverwrite(t, []string{src}, "UPDATE book_Orders SET name = 'carol'"))
+		assert.Equal(t, []string{"Orders"}, workbookSheets(t, src))
+
+		reloaded, err := OpenContext(ctx, src)
+		require.NoError(t, err)
+		defer reloaded.Close()
+		var name string
+		require.NoError(t, reloaded.QueryRowContext(ctx, "SELECT name FROM book_Orders").Scan(&name))
+		assert.Equal(t, "carol", name)
+	})
+
+	t.Run("a workbook of several sheets is written back to itself", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := t.Context()
+		dir := t.TempDir()
+		src := filepath.Join(dir, "book.xlsx")
+		writeWorkbook(t, src, map[string][][]string{
+			"Orders":    {{"id", "name"}, {"1", "alice"}},
+			"Customers": {{"id", "city"}, {"1", "tokyo"}},
+		})
+
+		require.NoError(t, autoSaveOverwrite(t, []string{src},
+			"UPDATE book_Orders SET name = 'bob'",
+			"UPDATE book_Customers SET city = 'osaka'"))
+
+		assert.Equal(t, []string{"Customers", "Orders"}, workbookSheets(t, src),
+			"every sheet has to come back, under its own name")
+		assert.Equal(t, []string{"book.xlsx"}, dirEntries(t, dir), "nothing else may be written")
+
+		reloaded, err := OpenContext(ctx, src)
+		require.NoError(t, err)
+		defer reloaded.Close()
+		var name, city string
+		require.NoError(t, reloaded.QueryRowContext(ctx, "SELECT name FROM book_Orders").Scan(&name))
+		require.NoError(t, reloaded.QueryRowContext(ctx, "SELECT city FROM book_Customers").Scan(&city))
+		assert.Equal(t, "bob", name)
+		assert.Equal(t, "osaka", city)
+	})
+
+	t.Run("a compressed workbook of several sheets round-trips", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := t.Context()
+		dir := t.TempDir()
+		plain := filepath.Join(dir, "book.xlsx")
+		writeWorkbook(t, plain, map[string][][]string{
+			"Orders":    {{"id", "name"}, {"1", "alice"}},
+			"Customers": {{"id", "city"}, {"1", "tokyo"}},
+		})
+
+		// A compressed source has to be written back through its own codec, and
+		// the workbook still has to arrive whole on the other side of it.
+		raw, err := os.ReadFile(plain) //nolint:gosec // plain is under t.TempDir()
+		require.NoError(t, err)
+		require.NoError(t, os.Remove(plain))
+
+		src := filepath.Join(dir, "book.xlsx.gz")
+		out, err := os.Create(src) //nolint:gosec // src is under t.TempDir()
+		require.NoError(t, err)
+		gz := gzip.NewWriter(out)
+		_, err = gz.Write(raw)
+		require.NoError(t, err)
+		require.NoError(t, gz.Close())
+		require.NoError(t, out.Close())
+
+		require.NoError(t, autoSaveOverwrite(t, []string{src},
+			"UPDATE book_Orders SET name = 'bob'",
+			"UPDATE book_Customers SET city = 'osaka'"))
+
+		assert.Equal(t, []string{"book.xlsx.gz"}, dirEntries(t, dir), "nothing else may be written")
+
+		reloaded, err := OpenContext(ctx, src)
+		require.NoError(t, err)
+		defer reloaded.Close()
+		var name, city string
+		require.NoError(t, reloaded.QueryRowContext(ctx, "SELECT name FROM book_Orders").Scan(&name))
+		require.NoError(t, reloaded.QueryRowContext(ctx, "SELECT city FROM book_Customers").Scan(&city))
+		assert.Equal(t, "bob", name)
+		assert.Equal(t, "osaka", city)
+	})
+
+	t.Run("a workbook read from a fixture round-trips whole", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := t.Context()
 		dir := t.TempDir()
 		src := filepath.Join(dir, "book.xlsx")
 		data, err := os.ReadFile(filepath.Join("testdata", "excel", "sample.xlsx"))
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(src, data, 0o600)) //nolint:gosec // src is under t.TempDir()
 
-		err = autoSaveOverwrite(t, []string{src}, "UPDATE book_Sheet1 SET name = 'bob'")
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrUnsupportedFormat)
-		assert.Contains(t, err.Error(), "book.xlsx")
+		before := workbookSheets(t, src)
+		require.NoError(t, autoSaveOverwrite(t, []string{src}, "UPDATE book_Sheet1 SET name = 'bob'"))
 
+		assert.Equal(t, before, workbookSheets(t, src), "the sheets have to come back as they were")
 		assert.Equal(t, []string{"book.xlsx"}, dirEntries(t, dir), "nothing else may be written")
+
+		reloaded, err := OpenContext(ctx, src)
+		require.NoError(t, err)
+		defer reloaded.Close()
+		var name string
+		require.NoError(t, reloaded.QueryRowContext(ctx, "SELECT name FROM book_Sheet1").Scan(&name))
+		assert.Equal(t, "bob", name)
 	})
+}
+
+// writeWorkbook builds an xlsx at path holding the given sheets. Each sheet's
+// first row is its header.
+func writeWorkbook(t *testing.T, path string, sheets map[string][][]string) {
+	t.Helper()
+
+	f := excelize.NewFile()
+	defer func() {
+		_ = f.Close()
+	}()
+
+	names := make([]string, 0, len(sheets))
+	for name := range sheets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		if _, err := f.NewSheet(name); err != nil {
+			t.Fatal(err)
+		}
+		for r, row := range sheets[name] {
+			for c, value := range row {
+				cell, err := excelize.CoordinatesToCellName(c+1, r+1)
+				require.NoError(t, err)
+				require.NoError(t, f.SetCellValue(name, cell, value))
+			}
+		}
+	}
+	require.NoError(t, f.DeleteSheet(defaultSheetName))
+	require.NoError(t, f.SaveAs(path))
+}
+
+// workbookSheets returns the sheet names of the workbook at path, sorted.
+func workbookSheets(t *testing.T, path string) []string {
+	t.Helper()
+
+	f, err := excelize.OpenFile(path)
+	require.NoError(t, err)
+	defer func() {
+		_ = f.Close()
+	}()
+
+	names := f.GetSheetList()
+	sort.Strings(names)
+	return names
 }

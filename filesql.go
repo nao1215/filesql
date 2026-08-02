@@ -956,31 +956,90 @@ func writeParquetData(w io.Writer, columns []string, rows [][]string, nulls [][]
 	return nil
 }
 
-// writeXLSXTableData writes SQLite table data to Excel XLSX format
+// xlsxSheet is one sheet of a workbook being written. Rows are opened when the
+// sheet is reached rather than up front, because a *sql.Rows holds a cursor and
+// only one can be read at a time.
+type xlsxSheet struct {
+	// name is the sheet name, already adapted to what Excel accepts.
+	name string
+	// open yields the sheet's columns and rows.
+	open func() ([]string, *sql.Rows, error)
+}
+
+// writeXLSXTableData writes SQLite table data to Excel XLSX format as a
+// single-sheet workbook named after the table.
 func writeXLSXTableData(w io.Writer, tableName string, columns []string, rows *sql.Rows) error {
-	if len(columns) == 0 {
-		return fmt.Errorf("%w: no columns defined", ErrEmptyData)
+	// The sheet name is what a reader turns back into a table name, so it comes
+	// from the table this dump is of, adapted to what Excel accepts.
+	return writeXLSXWorkbook(w, []xlsxSheet{{
+		name: excelSheetName(tableName),
+		open: func() ([]string, *sql.Rows, error) { return columns, rows, nil },
+	}})
+}
+
+// writeXLSXWorkbook writes sheets as one workbook. A workbook overwritten in
+// place goes through here with every one of its sheets, so a file of several
+// sheets comes back whole rather than being refused or flattened to one.
+func writeXLSXWorkbook(w io.Writer, sheets []xlsxSheet) error {
+	if len(sheets) == 0 {
+		return fmt.Errorf("%w: no sheets to write", ErrEmptyData)
 	}
 
-	// Create new Excel file
 	f := excelize.NewFile()
 	defer func() {
 		_ = f.Close() // Ignore close error
 	}()
 
-	// The sheet name is what a reader turns back into a table name, so it comes
-	// from the table this dump is of, adapted to what Excel accepts.
-	sheetName := excelSheetName(tableName)
-
-	// Create new sheet (replace default Sheet1)
-	if sheetName != defaultSheetName {
-		_, err := f.NewSheet(sheetName)
-		if err != nil {
-			return fmt.Errorf("failed to create sheet %s: %w", sheetName, err)
+	for _, sheet := range sheets {
+		if err := writeXLSXSheet(f, sheet); err != nil {
+			return err
 		}
-		// Delete default sheet
-		if err := f.DeleteSheet(defaultSheetName); err != nil {
-			return fmt.Errorf("failed to delete default sheet: %w", err)
+	}
+
+	// excelize starts a workbook with a default sheet. It is only ours to remove
+	// once a sheet of our own exists, and not at all if a sheet reused its name.
+	if _, err := f.GetSheetIndex(defaultSheetName); err == nil {
+		hasOwn := false
+		for _, sheet := range sheets {
+			if sheet.name == defaultSheetName {
+				hasOwn = true
+				break
+			}
+		}
+		if !hasOwn {
+			if err := f.DeleteSheet(defaultSheetName); err != nil {
+				return fmt.Errorf("failed to delete default sheet: %w", err)
+			}
+		}
+	}
+
+	// Why Write and not SaveAs: SaveAs picks the container format from the file
+	// extension, and the caller stages the write, so the only name available here
+	// carries a temporary suffix that Excel rejects. Any compression the caller
+	// asked for is already wrapped around w.
+	if err := f.Write(w); err != nil {
+		return fmt.Errorf("%w: failed to write Excel file: %s", ErrIOOperation, err.Error())
+	}
+
+	return nil
+}
+
+// writeXLSXSheet adds one sheet to f and fills it.
+func writeXLSXSheet(f *excelize.File, sheet xlsxSheet) error {
+	columns, rows, err := sheet.open()
+	if err != nil {
+		return err
+	}
+	if rows != nil {
+		defer rows.Close()
+	}
+	if len(columns) == 0 {
+		return fmt.Errorf("%w: no columns defined", ErrEmptyData)
+	}
+
+	if sheet.name != defaultSheetName {
+		if _, err := f.NewSheet(sheet.name); err != nil {
+			return fmt.Errorf("failed to create sheet %s: %w", sheet.name, err)
 		}
 	}
 
@@ -990,7 +1049,7 @@ func writeXLSXTableData(w io.Writer, tableName string, columns []string, rows *s
 		if err != nil {
 			return fmt.Errorf("failed to generate cell name for column %d: %w", i+1, err)
 		}
-		if err := f.SetCellValue(sheetName, cell, col); err != nil {
+		if err := f.SetCellValue(sheet.name, cell, col); err != nil {
 			return fmt.Errorf("failed to set header %s: %w", col, err)
 		}
 	}
@@ -1018,7 +1077,7 @@ func writeXLSXTableData(w io.Writer, tableName string, columns []string, rows *s
 			// produce, so one table dumped twice does not disagree with itself.
 			cellValue := formatDumpValue(val)
 
-			if err := f.SetCellValue(sheetName, cell, cellValue); err != nil {
+			if err := f.SetCellValue(sheet.name, cell, cellValue); err != nil {
 				return fmt.Errorf("failed to set cell value at %s: %w", cell, err)
 			}
 		}
@@ -1027,14 +1086,6 @@ func writeXLSXTableData(w io.Writer, tableName string, columns []string, rows *s
 
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("error reading rows: %w", err)
-	}
-
-	// Why Write and not SaveAs: SaveAs picks the container format from the file
-	// extension, and the caller stages the write, so the only name available here
-	// carries a temporary suffix that Excel rejects. Any compression the caller
-	// asked for is already wrapped around w.
-	if err := f.Write(w); err != nil {
-		return fmt.Errorf("%w: failed to write Excel file: %s", ErrIOOperation, err.Error())
 	}
 
 	return nil

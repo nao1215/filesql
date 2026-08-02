@@ -6,8 +6,10 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"modernc.org/sqlite"
@@ -578,20 +580,11 @@ func (c *autoSaveConnection) overwriteOriginalFile(ctx context.Context, db *sql.
 	factory := NewCompressionFactory()
 	options := DumpOptions{Format: format, Compression: factory.DetectCompressionType(path)}
 
-	// An Excel workbook holds a table per sheet, and the writer holds one sheet
-	// per file, so only a workbook that came in as a single table can go back out
-	// as one. The tables of a workbook are named after it, which is how the ones
-	// belonging to this path are found.
+	// An Excel workbook holds a table per sheet, so all of them are written back
+	// together into the one file. The tables of a workbook are named after it,
+	// which is how the ones belonging to this path are found.
 	if format == OutputFormatXLSX {
-		tables, err := tablesFromWorkbook(db, baseTableName)
-		if err != nil {
-			return err
-		}
-		if len(tables) != 1 {
-			return fmt.Errorf("%w: %s holds %d sheets, and only a workbook of one sheet can be written back to itself; save to a directory instead",
-				ErrUnsupportedFormat, path, len(tables))
-		}
-		baseTableName = tables[0]
+		return overwriteWorkbookAtPath(db, path, baseTableName, options)
 	}
 
 	return overwriteTableAtPath(db, path, baseTableName, options)
@@ -618,6 +611,75 @@ func overwriteFormatFor(path string) (OutputFormat, error) {
 		return 0, fmt.Errorf("%w: %s cannot be written back because this package reads that format but does not write it; save to a directory with a format it writes instead",
 			ErrUnsupportedFormat, path)
 	}
+}
+
+// overwriteWorkbookAtPath writes every table of a workbook back to it, one sheet
+// per table, in a single staged write.
+//
+// A workbook of more than one sheet used to be refused here, because the writer
+// wrote one sheet per file and so could not represent the rest. Refusing meant a
+// caller who opened a two-sheet workbook with auto-save could not save at all.
+func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, options DumpOptions) error {
+	tables, err := tablesFromWorkbook(db, baseTableName)
+	if err != nil {
+		return err
+	}
+	if len(tables) == 0 {
+		return fmt.Errorf("%w: no table for %s remains", ErrEmptyData, path)
+	}
+	// The sheets go back in a fixed order rather than whatever the catalogue
+	// happens to list, so the same workbook saved twice is the same file.
+	sort.Strings(tables)
+
+	sheets := make([]xlsxSheet, 0, len(tables))
+	for _, tableName := range tables {
+		sheets = append(sheets, xlsxSheet{
+			name: xlsxSheetNameForTable(baseTableName, tableName),
+			open: func() ([]string, *sql.Rows, error) {
+				columns, declTypes, err := getSQLiteTableColumns(db, tableName)
+				if err != nil {
+					return nil, nil, fmt.Errorf("%w: failed to get columns for table %s: %s", ErrDatabaseOperation, tableName, err.Error())
+				}
+				if len(columns) == 0 {
+					return nil, nil, fmt.Errorf("%w: table %s for %s no longer exists", ErrEmptyData, tableName, path)
+				}
+				query := fmt.Sprintf("SELECT %s FROM `%s`", dumpSelectList(columns, declTypes), tableName) //nolint:gosec // Table and column names are quoted and come from database metadata
+				rows, err := db.QueryContext(context.Background(), query)
+				if err != nil {
+					return nil, nil, err
+				}
+				return columns, rows, nil
+			},
+		})
+	}
+
+	if err := writeFileAtomically(path, func(w io.Writer) error {
+		return writeXLSXWorkbookCompressed(w, path, sheets, options.Compression)
+	}); err != nil {
+		return fmt.Errorf("%w: failed to overwrite %s: %w", ErrIOOperation, path, err)
+	}
+	return nil
+}
+
+// writeXLSXWorkbookCompressed writes sheets to w through the requested codec.
+//
+// The named return lets the deferred close report its own failure. A compressor
+// writes its trailer on Close, so an archive that failed to finish is only
+// detectable there; dropping that error would commit a truncated file over the
+// caller's workbook. A write error already in flight wins, because it is the one
+// that explains the failure.
+func writeXLSXWorkbookCompressed(w io.Writer, path string, sheets []xlsxSheet, compression CompressionType) (err error) {
+	writer, closeWriter, err := createCompressedWriter(w, compression)
+	if err != nil {
+		return fmt.Errorf("%w: failed to create writer: %s", ErrCompression, err.Error())
+	}
+	defer func() {
+		if closeErr := closeWriter(); closeErr != nil && err == nil {
+			err = fmt.Errorf("%w: failed to finish writing %s: %s", ErrCompression, path, closeErr.Error())
+		}
+	}()
+
+	return writeXLSXWorkbook(writer, sheets)
 }
 
 // tablesFromWorkbook lists the tables an Excel workbook was loaded as. A sheet

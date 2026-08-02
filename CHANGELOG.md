@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Overwriting an Excel workbook in place renamed its sheet, and the rename accumulated. A workbook `book.xlsx` holding a sheet `Orders` loads as the table `book_Orders`, and the save wrote the table's name back as the sheet name, so the file came back with its sheet called `book_Orders`. Loading that gave `book_book_Orders`, then `book_book_book_Orders`, growing by the file's name on every round until Excel's 31-rune sheet name limit truncated it and the sheet stopped being recognisable. A sheet now goes back under the name it came in with. The reverse mapping is not exact — `sanitizeTableName` is not injective, so `Q1 Sales` and `Q1-Sales` both load as `Q1_Sales` and only that form can be recovered — but it is stable, which is what stops the accumulation.
+
 ### Added
+- An Excel workbook of more than one sheet can be saved back to itself. Auto-save in overwrite mode refused it with "only a workbook of one sheet can be written back to itself", because the writer wrote one sheet per file; a caller who opened a two-sheet workbook with auto-save could not save at all. Every table of the workbook is now written back as its own sheet in one staged write, in a fixed order so the same workbook saved twice is the same file, and through the source's own codec when it was compressed.
 - `TestLoadMemoryFootprint`, behind the `benchmark` build tag, reports what loading a CSV actually costs, and the README's "Memory and streaming" section now carries the figure it produces. The number this package had been tracking was `B/op` from `go test -benchmem`, which counts every byte a load ever allocated, garbage included; at around 141MB for the 100,000-row fixture it says nothing about how much memory is held at once, which is the question a caller has. Measured instead: the Go heap stays flat at about 24MB whether the file is 16MB or 131MB, because loading is chunked and the parser holds roughly a chunk; resident memory grows by about 2x the file's size, because the rows live in the in-memory SQLite database rather than on the Go heap. The test prints the table the figure comes from, so it can be re-derived rather than trusted.
 
 ### Changed
