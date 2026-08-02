@@ -382,6 +382,11 @@ func TestAutoSaveOverwriteXLSX(t *testing.T) {
 		err = db.Close()
 		require.Error(t, err, "a save that cannot keep both tables must not report success")
 		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		// Both table names, not just the sheet: the error's job is to say which
+		// two tables collided, and asserting only the sheet would pass an error
+		// that named neither.
+		assert.Contains(t, err.Error(), "book_"+stem+"X")
+		assert.Contains(t, err.Error(), "book_"+stem+"Y")
 		assert.Contains(t, err.Error(), stem, "the error names the sheet the two tables collide on")
 
 		after, err := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
@@ -459,4 +464,84 @@ func workbookSheets(t *testing.T, path string) []string {
 	names := f.GetSheetList()
 	sort.Strings(names)
 	return names
+}
+
+// TestAutoSaveOverwriteKeepsTheFileItWasGiven pins overwrite mode's core
+// promise from the file's side: the bytes go back into the path that was
+// opened, under the name it already had, or the save fails and the file is
+// left alone. Nothing covered either half for a name that is not already a
+// valid SQL identifier, and the table name is derived from the file name by a
+// mapping that is not reversible.
+func TestAutoSaveOverwriteKeepsTheFileItWasGiven(t *testing.T) {
+	t.Parallel()
+
+	// Each name loads as a table spelled differently from the file: "my-data"
+	// becomes my_data, "sales report" becomes sales_report, and a name starting
+	// with a digit gains a prefix. The file must keep its own spelling.
+	names := []string{
+		"my-data.csv",
+		"sales report.csv",
+		"2024.q1.csv",
+		"café.csv",
+	}
+
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			dir := t.TempDir()
+			src := filepath.Join(dir, name)
+			require.NoError(t, os.WriteFile(src, []byte("id,v\n1,a\n"), 0o600))
+
+			validated, err := NewBuilder().AddPath(src).EnableAutoSave("").Build(ctx)
+			require.NoError(t, err)
+			db, err := validated.Open(ctx)
+			require.NoError(t, err)
+
+			tables, err := getSQLiteTableNames(db)
+			require.NoError(t, err)
+			require.Len(t, tables, 1)
+
+			//nolint:gosec // the table name comes from the file this test just wrote
+			_, err = db.ExecContext(ctx, "UPDATE `"+tables[0]+"` SET v = 'b'")
+			require.NoError(t, err)
+			require.NoError(t, db.Close())
+
+			assert.Equal(t, []string{name}, dirEntries(t, dir),
+				"the save goes back to the file that was opened, under its own name")
+
+			content, err := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+			require.NoError(t, err)
+			assert.Equal(t, "id,v\n1,b\n", string(content))
+		})
+	}
+}
+
+// TestAutoSaveOverwriteRefusesCodecItCannotWrite pins the other half: bzip2 is
+// read but has no writer in this library, so a .bz2 source cannot be written
+// back. The save has to say so and leave the file untouched rather than report
+// success over a file it never wrote.
+func TestAutoSaveOverwriteRefusesCodecItCannotWrite(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "products.tsv.bz2")
+	fixture, err := os.ReadFile(filepath.Join("testdata", "products.tsv.bz2"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(src, fixture, 0o600)) //nolint:gosec // src is under t.TempDir()
+
+	err = autoSaveOverwrite(t, []string{src}, "UPDATE products SET price = 1")
+	require.Error(t, err, "a codec this package cannot write must not report a successful save")
+	assert.ErrorIs(t, err, ErrCompression)
+	assert.Contains(t, err.Error(), "bzip2")
+	// ErrUnsupportedFormat is what the message says and is not in the chain:
+	// the writer flattens the inner error with %s. Asserted so the day that
+	// changes is a deliberate one. See #216.
+	assert.NotErrorIs(t, err, ErrUnsupportedFormat)
+
+	after, err := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, fixture, after, "the source must be left byte for byte as it was")
+	assert.Equal(t, []string{"products.tsv.bz2"}, dirEntries(t, dir), "nothing else may be written")
 }
