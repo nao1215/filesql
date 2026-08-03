@@ -322,9 +322,10 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, 
 			// Prepare insert statement within transaction
 			insertStmt, err = sp.prepareInsertStatementTx(ctx, tx, chunk) //nolint:sqlclosecheck // Statement is closed after processing
 			if err != nil {
-				if ownTx {
-					_ = tx.Rollback() //nolint:errcheck // Ignore rollback error during error handling
-				}
+				// No rollback here: the transaction has one owner, and it is the
+				// commit/rollback block after this loop. Rolling back at both
+				// places left the second one to end an already-terminal
+				// transaction, whose sql.ErrTxDone was then discarded.
 				return fmt.Errorf("%w: failed to prepare insert statement: %w", ErrDatabaseOperation, err)
 			}
 
@@ -357,11 +358,26 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, 
 		err = nil
 	}
 
-	// Handle transaction commit/rollback
+	// End the transaction exactly once. A staging failure is rolled back; a
+	// commit is never followed by a rollback, because database/sql ends the
+	// transaction when Commit is called and a rollback afterwards could only
+	// report sql.ErrTxDone — a second error describing nothing the caller can
+	// act on.
 	if tx != nil && ownTx {
 		if err != nil {
 			sp.logger.Debug("rolling back transaction", logKeyTable, input.tableName, "error", err)
-			_ = tx.Rollback() //nolint:errcheck // Ignore rollback error during error handling
+			// A rollback runs because something already failed, so discarding
+			// its error hid the one case that produces one: the load failed and
+			// could not be undone. Both are reported.
+			rollbackErr := tx.Rollback()
+			// When the context is done, database/sql has already rolled the
+			// transaction back itself, so this call loses the race and reports
+			// sql.ErrTxDone. That is cancellation working as documented, not a
+			// cleanup failure, and the cause is already in err.
+			endedByCancellation := errors.Is(rollbackErr, sql.ErrTxDone) && ctx.Err() != nil
+			if !endedByCancellation {
+				err = joinCleanup(err, rollbackErr, "rollback import transaction")
+			}
 		} else {
 			if commitErr := tx.Commit(); commitErr != nil {
 				return fmt.Errorf("%w: failed to commit transaction: %w", ErrDatabaseOperation, commitErr)
@@ -386,9 +402,11 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, 
 		}
 	}
 
-	// Clean up the prepared statement
+	// Clean up the prepared statement. Its close failure is joined rather than
+	// dropped: a statement that cannot be closed holds a connection, which shows
+	// up later as an unrelated hang rather than as this load's problem.
 	if insertStmt != nil {
-		_ = insertStmt.Close() // Ignore close error during statement cleanup
+		err = joinCleanup(err, insertStmt.Close(), "close insert statement")
 	}
 
 	if err != nil {
