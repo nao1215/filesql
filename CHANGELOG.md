@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Report a failed rollback instead of discarding it. A load that fails and then
+  cannot be undone previously returned only the parse or schema error, so a
+  caller could not tell that the database had been left mid-load. The rollback
+  failure is now joined onto the cause and both are reachable with `errors.Is`
+  and `errors.As`.
+- End a load's transaction exactly once. A failure while preparing an insert
+  statement rolled the transaction back and then let the outer handler roll it
+  back again; the second call could only report `sql.ErrTxDone`, which was
+  discarded.
+- Report a prepared statement that fails to close. It holds a connection, so the
+  effect used to surface later as an unrelated stall rather than as this load's
+  failure.
+- Treat a rollback that reports `sql.ErrTxDone` under a cancelled context as
+  cancellation rather than a broken transaction, since `database/sql` has
+  already rolled the transaction back in that case.
+
+### Added
+
+- `ErrCleanup`, the sentinel marking a failure that happened while releasing or
+  undoing something after an operation finished. Use `errors.Is(err,
+  filesql.ErrCleanup)` to tell "the load failed" from "the load failed and
+  something was left behind".
+
+## [0.30.2] - 2026-08-02
+
+### Fixed
+
 - Defer ACH and Fedwire registry publication until the transaction that creates
   their SQLite tables commits successfully.
 - Make `MalformedRowFill` pad short CSV/TSV rows while rejecting long rows
