@@ -688,9 +688,10 @@ func writeXLSXWorkbookCompressed(w io.Writer, path string, sheets []xlsxSheet, c
 		return fmt.Errorf("%w: failed to create writer: %w", ErrCompression, err)
 	}
 	defer func() {
-		if closeErr := closeWriter(); closeErr != nil && err == nil {
-			err = fmt.Errorf("%w: failed to finish writing %s: %w", ErrCompression, path, closeErr)
-		}
+		// Closing a compressing writer is what flushes it, so a failure here can
+		// mean a truncated file. Joining rather than dropping it means a caller
+		// whose write already failed still learns the output is unusable.
+		err = joinCleanup(err, closeWriter(), "finish writing "+path)
 	}()
 
 	return writeXLSXWorkbook(writer, sheets)

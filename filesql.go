@@ -500,9 +500,10 @@ func writeSQLiteTableDataTo(w io.Writer, tableName string, columns []string, row
 		return fmt.Errorf("%w: failed to create writer: %w", ErrCompression, err)
 	}
 	defer func() {
-		if closeErr := closeWriter(); closeErr != nil && err == nil {
-			err = fmt.Errorf("%w: failed to finish writing %s: %w", ErrCompression, tableName, closeErr)
-		}
+		// Closing a compressing writer is what flushes it, so a failure here can
+		// mean a truncated file. Joining rather than dropping it means a caller
+		// whose write already failed still learns the output is unusable.
+		err = joinCleanup(err, closeWriter(), "finish writing "+tableName)
 	}()
 
 	// Write data based on format

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.4] - 2026-08-03
+
+### Fixed
+
+- Report the remaining cleanup failures instead of discarding them: closing a
+  compressing writer (which is what flushes it, so its failure can mean a
+  truncated file), closing the per-sheet insert statement of an XLSX load, and
+  removing the staged file an atomic write leaves behind. Each is joined onto
+  the operation's own error, so a caller whose write already failed still learns
+  the output is unusable or that a temporary file is still on disk.
+
 ## [0.30.3] - 2026-08-03
 
 ### Fixed
