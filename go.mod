@@ -6,7 +6,7 @@ require (
 	github.com/apache/arrow/go/v18 v18.0.0-20241007013041-ab95a4d25142
 	github.com/google/go-cmp v0.7.0
 	github.com/klauspost/compress v1.19.1
-	github.com/moov-io/ach v1.61.3
+	github.com/moov-io/ach v1.62.0
 	github.com/moov-io/wire v0.15.8
 	github.com/nao1215/fileparser v0.5.2
 	github.com/parquet-go/parquet-go v0.30.1
@@ -37,7 +37,7 @@ require (
 	github.com/minio/c2goasm v0.0.0-20190812172519-36a3d3bbc4f3 // indirect
 	github.com/moov-io/base v0.61.3 // indirect
 	github.com/moov-io/iso3166 v0.4.0 // indirect
-	github.com/moov-io/iso4217 v0.3.2 // indirect
+	github.com/moov-io/iso4217 v0.4.0 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/parquet-go/bitpack v1.0.0 // indirect
 	github.com/parquet-go/jsonlite v1.0.0 // indirect
