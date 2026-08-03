@@ -682,7 +682,10 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX
 			return fmt.Errorf("%w: failed to prepare insert statement for sheet %s: %w", ErrDatabaseOperation, sheetName, err)
 		}
 		defer func() {
-			_ = insertStmt.Close() // Ignore close error
+			// A statement that cannot be closed holds a connection, so its
+			// failure is joined onto whatever the sheet load returned rather
+			// than dropped.
+			err = joinCleanup(err, insertStmt.Close(), "close insert statement for sheet "+sheetName)
 		}()
 
 		if err := sp.insertChunkData(ctx, insertStmt, chunk); err != nil {

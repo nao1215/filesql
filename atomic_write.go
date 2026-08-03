@@ -43,7 +43,12 @@ func writeFileAtomically(dest string, write func(io.Writer) error) error {
 	// Remove the staged file unless the rename below claimed it; a no-op after a
 	// successful rename.
 	defer func() {
-		_ = os.Remove(tmpName) //nolint:errcheck // Best-effort cleanup; the file is gone after a successful rename
+		// A staged file left behind is a leftover in the user's directory, so
+		// its removal failure is reported rather than dropped. A successful
+		// rename already consumed it, which is not a failure.
+		if removeErr := os.Remove(tmpName); removeErr != nil && !os.IsNotExist(removeErr) {
+			err = joinCleanup(err, removeErr, "remove the staged file "+tmpName)
+		}
 	}()
 
 	if err := write(tmp); err != nil {
