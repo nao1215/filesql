@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Report a prepared statement that fails to close. It holds a connection, so the
   effect used to surface later as an unrelated stall rather than as this load's
   failure.
-- Treat a rollback that reports `sql.ErrTxDone` under a cancelled context as
+- Treat a rollback that reports `sql.ErrTxDone` under a canceled context as
   cancellation rather than a broken transaction, since `database/sql` has
   already rolled the transaction back in that case.
 

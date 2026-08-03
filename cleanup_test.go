@@ -240,7 +240,7 @@ func TestLoadIntoTxPendingRegistriesStayUnpublished(t *testing.T) {
 	_ = pending
 }
 
-// TestStreamProcessorContextCancelLeavesNoTable checks that cancelling mid-load
+// TestStreamProcessorContextCancelLeavesNoTable checks that canceling mid-load
 // does not leave a half-populated table behind, and that the cancellation is
 // reported as such rather than as a lifecycle defect.
 func TestStreamProcessorContextCancelLeavesNoTable(t *testing.T) {
@@ -263,7 +263,7 @@ func TestStreamProcessorContextCancelLeavesNoTable(t *testing.T) {
 	db, err := OpenContext(ctx, csvPath)
 	if err == nil {
 		_ = db.Close()
-		t.Fatal("OpenContext with a cancelled context = nil error, want a failure")
+		t.Fatal("OpenContext with a canceled context = nil error, want a failure")
 	}
 	if !errors.Is(err, context.Canceled) && !strings.Contains(err.Error(), "context canceled") {
 		t.Errorf("err = %v, want it to report the cancellation", err)
