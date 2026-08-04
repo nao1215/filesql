@@ -234,8 +234,9 @@ func TestOpenContextRefusesTwoSourcesWantingOneTable(t *testing.T) {
 		t.Errorf("error = %v, want ErrDuplicateTable", err)
 	}
 	// The second file is the one that found the name taken, so it is the one
-	// named. Reversing the arguments reverses that, which the next check asserts.
-	if !strings.Contains(err.Error(), filepath.ToSlash(second)) {
+	// named. The path is compared as the platform writes it — normalizing it
+	// here would have passed on Windows whatever the message said.
+	if !strings.Contains(err.Error(), second) {
 		t.Errorf("error %q should name the file that collided, %q", err, second)
 	}
 
@@ -244,7 +245,7 @@ func TestOpenContextRefusesTwoSourcesWantingOneTable(t *testing.T) {
 		_ = reversed.Close()
 		t.Fatal("OpenContext succeeded with the arguments reversed")
 	}
-	if !strings.Contains(err.Error(), filepath.ToSlash(first)) {
+	if !strings.Contains(err.Error(), first) {
 		t.Errorf("with the arguments reversed the error %q should name %q", err, first)
 	}
 }
