@@ -862,11 +862,16 @@ func (b *DBBuilder) streamXLSXFileToSQLite(ctx context.Context, db *sql.DB, read
 		return fmt.Errorf("%w: no sheets found in XLSX file", ErrEmptyData)
 	}
 
-	// Base table name from file path (sanitize to ensure a valid identifier)
-	baseTableName := sanitizeTableName(tableFromFilePath(filePath))
+	// Every sheet's table name is worked out before any of them is created, so a
+	// workbook whose sheets would share a table is refused instead of loading the
+	// last one over the others.
+	sheetTables, err := ExcelSheetTableNames(filePath, sheetNames)
+	if err != nil {
+		return err
+	}
 
 	// Process each sheet as a separate table
-	for _, sheetName := range sheetNames {
+	for sheetIndex, sheetName := range sheetNames {
 		rows, err := xlsxFile.GetRows(sheetName)
 		if err != nil {
 			return fmt.Errorf("%w: failed to read sheet %s: %w", ErrParsing, sheetName, err)
@@ -877,7 +882,7 @@ func (b *DBBuilder) streamXLSXFileToSQLite(ctx context.Context, db *sql.DB, read
 			continue
 		}
 
-		tableName := xlsxSheetTableName(baseTableName, sheetName)
+		tableName := sheetTables[sheetIndex]
 
 		// Check if table already exists
 		var tableExists int

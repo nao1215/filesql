@@ -623,8 +623,14 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX
 	}
 	sp.logger.Info("processing XLSX file", "path", filePath, "sheet_count", len(sheetNames))
 
-	// Base table name from file path (sanitize to ensure a valid identifier)
-	baseTableName := sanitizeTableName(tableFromFilePath(filePath))
+	// Every sheet's table name is worked out before any of them is created, so a
+	// workbook whose sheets would share a table is refused instead of loading the
+	// last one over the others.
+	sheetTables, err := ExcelSheetTableNames(filePath, sheetNames)
+	if err != nil {
+		sp.logger.Error("sheet names collide", "path", filePath, "error", err)
+		return err
+	}
 
 	// Process each sheet as a separate table
 	for i, sheetName := range sheetNames {
@@ -641,7 +647,7 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX
 			continue
 		}
 
-		tableName := xlsxSheetTableName(baseTableName, sheetName)
+		tableName := sheetTables[i]
 		sp.logger.Debug("creating table from sheet", "path", filePath, logKeySheet, sheetName, logKeyTable, tableName, "rows", len(rows))
 
 		// Check if table already exists
