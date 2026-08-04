@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.1] - 2026-08-04
+
+### Fixed
+
+- Stop discarding an input because another input shares its base name.
+  Deduplication — which exists so a dataset offered both plain and compressed is
+  read once — was keyed on the derived table name, so `a/users.csv` and
+  `b/users.csv` looked like one source and one of them was dropped without a
+  word. Files are now the same source only when they are in the same place: the
+  path with any compression suffix removed. `dir/users.csv` still displaces
+  `dir/users.csv.gz`; `a/users.csv` and `b/users.csv.gz` are two inputs and both
+  are loaded.
+- Return the surviving inputs in the order they were given. The result was built
+  by ranging over a map, so the order changed between runs of the same command.
+  Everything downstream reads it: which input a `LoadInto` leaves in place under
+  its last-wins rule, which malformed file a failing load names, and the order
+  the duplicate-table check works through.
+
+Loading a directory tree that holds two files of the same base name in different
+subdirectories now fails with `ErrDuplicateTable` instead of silently loading
+one of them. That is a behavior change, and it is the point: the previous
+outcome was to lose a file and not say which. `LoadInto` and `LoadIntoTx` keep
+their last-wins contract for a same-named table — what changed is that both
+inputs are now read at all.
+
 ## [0.32.0] - 2026-08-04
 
 ### Added
