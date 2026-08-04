@@ -345,7 +345,7 @@ type TableData struct {
 type ParseOption func(*parseConfig)
 
 // parseConfig holds the settings the options above set. Its zero value is the
-// behaviour Parse has without any option.
+// behavior Parse has without any option.
 type parseConfig struct {
 	// excelSheetPolicy decides which sheets of a workbook Parse may take its
 	// table from. The zero value takes any of them.

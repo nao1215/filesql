@@ -7,13 +7,13 @@ import "fmt"
 // A workbook can hide a sheet, and hiding one is how a spreadsheet keeps
 // scratch calculations, lookup tables, and stale drafts out of the way of the
 // sheets it means to present. Whether those belong in a database is the
-// caller's judgement rather than something this package can decide, so which
+// caller's judgment rather than something this package can decide, so which
 // sheets to take is a setting and not a rule.
 type ExcelSheetPolicy int
 
 const (
 	// ExcelSheetPolicyAll reads every sheet, hidden or not. It is the zero
-	// value, so a caller that names no policy keeps the behaviour this package
+	// value, so a caller that names no policy keeps the behavior this package
 	// had before the setting existed.
 	ExcelSheetPolicyAll ExcelSheetPolicy = iota
 

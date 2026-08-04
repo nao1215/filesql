@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Excel sheet visibility policy. `DBBuilder.WithExcelSheetPolicy` decides which
   sheets of a workbook a load reads: `ExcelSheetPolicyAll` (the default, and the
-  behaviour every previous release had) reads them all, and
+  behavior every previous release had) reads them all, and
   `ExcelSheetPolicyVisibleOnly` reads only the sheets the workbook shows. The
   policy applies to every source — a path, a directory, an embedded filesystem,
   a reader, and a compressed workbook alike — because all of them now select

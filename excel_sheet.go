@@ -18,7 +18,7 @@ type ExcelSheetPolicy = parser.ExcelSheetPolicy
 
 const (
 	// ExcelSheetPolicyAll loads every sheet of a workbook, hidden or not. It is
-	// the zero value, so a caller that names no policy keeps the behaviour
+	// the zero value, so a caller that names no policy keeps the behavior
 	// filesql had before the setting existed.
 	ExcelSheetPolicyAll = parser.ExcelSheetPolicyAll
 
