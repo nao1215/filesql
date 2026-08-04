@@ -1,6 +1,7 @@
 package filesql
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -184,6 +185,42 @@ func xlsxSheetTableName(baseTableName, sheetName string) string {
 		return baseTableName
 	}
 	return baseTableName + "_" + sanitized
+}
+
+// ExcelSheetTableNames maps every sheet of a workbook to the table it is loaded
+// as, and reports the sheets that would share one table.
+//
+// A workbook can name two sheets "Data" and "data", or "Q1 sales" and
+// "Q1.sales". Sanitizing makes the first pair identical in case only and the
+// second identical outright, and SQLite compares table names case-insensitively
+// for ASCII, so all four end up asking for the same table. Loading them in turn
+// means the last sheet read is the only one that survives, and the rows of the
+// others are gone with nothing said about it.
+//
+// This is the check that turns that into an error. It is exported because a
+// caller that wants to refuse such a workbook before loading anything — rather
+// than partway through — needs the same rule filesql applies, and a caller
+// reimplementing the sanitizer would drift from it.
+//
+// tables is parallel to sheetNames. err is non-nil when any two sheets collide,
+// and names both the sheets and the table they would share.
+func ExcelSheetTableNames(filePath string, sheetNames []string) (tables []string, err error) {
+	base := sanitizeTableName(tableFromFilePath(filePath))
+	tables = make([]string, len(sheetNames))
+	// SQLite folds ASCII case when it compares identifiers, so the key does too:
+	// "Data" and "data" are one table there, whatever the sanitizer preserved.
+	claimed := make(map[string]string, len(sheetNames))
+	for i, sheet := range sheetNames {
+		table := xlsxSheetTableName(base, sheet)
+		tables[i] = table
+		key := strings.ToLower(table)
+		if first, taken := claimed[key]; taken {
+			return nil, fmt.Errorf("%w: sheets %q and %q of %s both map to table %q; rename one of them",
+				ErrDuplicateTable, first, sheet, filepath.Base(filePath), table)
+		}
+		claimed[key] = sheet
+	}
+	return tables, nil
 }
 
 // xlsxSheetNameForTable undoes xlsxSheetTableName: it is the sheet a table of
