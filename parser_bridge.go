@@ -67,13 +67,13 @@ func parserColumnType(ct parser.ColumnType) columnType {
 
 // parseWithParser uses the fileparser package to parse data and returns a filesql table.
 // This function bridges the fileparser package with filesql's internal table structure.
-func parseWithParser(reader io.Reader, fileType FileType, tableName string) (*table, error) {
+func parseWithParser(reader io.Reader, fileType FileType, tableName string, excelSheetPolicy ExcelSheetPolicy) (*table, error) {
 	// Strip a Unicode BOM (and transcode UTF-16) before the text parser sees it,
 	// matching the streaming path; binary formats keep their raw bytes.
 	if isTextBaseType(fileType) {
 		reader = decodeTextReader(reader)
 	}
-	result, err := parser.Parse(reader, parserFileType(fileType))
+	result, err := parser.Parse(reader, parserFileType(fileType), parser.WithExcelSheetPolicy(excelSheetPolicy))
 	if err != nil {
 		// Convert parser errors to filesql errors for compatibility
 		return nil, convertParserError(err)

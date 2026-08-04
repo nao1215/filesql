@@ -72,6 +72,9 @@ const (
 type file struct {
 	path     string
 	fileType FileType
+	// excelSheetPolicy decides which sheets of a workbook toTable may take its
+	// table from. The zero value is ExcelSheetPolicyAll.
+	excelSheetPolicy ExcelSheetPolicy
 }
 
 // tableChunk represents a chunk of table data for streaming processing
@@ -130,6 +133,9 @@ type streamingParser struct {
 	// malformedRowPolicy controls how a CSV/TSV record whose field count differs
 	// from the header is handled. The zero value is MalformedRowStop.
 	malformedRowPolicy MalformedRowPolicy
+	// excelSheetPolicy controls which sheets of a workbook this parser may take
+	// its table from. The zero value is ExcelSheetPolicyAll.
+	excelSheetPolicy ExcelSheetPolicy
 }
 
 // newFile creates a new file
@@ -294,7 +300,7 @@ func (f *file) toTable() (*table, error) {
 	defer handleCloseError(closeReader)()
 
 	tableName := sanitizeTableName(tableFromFilePath(f.path))
-	return parseWithParser(reader, f.fileType, tableName)
+	return parseWithParser(reader, f.fileType, tableName, f.excelSheetPolicy)
 }
 
 // detectFileType detects file type from extension, considering compressed files

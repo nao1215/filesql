@@ -45,7 +45,7 @@ filesql is for cases where the data is already in a file and the fastest useful 
 | `.json` | JSON | Query nested data with `json_extract()` |
 | `.jsonl` | JSONL | One JSON value per line |
 | `.parquet` | Parquet | Columnar format |
-| `.xlsx` | Excel XLSX | One sheet becomes one table, named `file_sheet` (just `file` when the sheet repeats it) |
+| `.xlsx` | Excel XLSX | One sheet becomes one table, named `file_sheet` (just `file` when the sheet repeats it). Every sheet is loaded by default; see [Excel sheet visibility](#excel-sheet-visibility) |
 | `.ach` | ACH (NACHA) | Experimental |
 | `.fed` | Fedwire | Experimental |
 
@@ -383,6 +383,32 @@ Changes live in memory until you save them.
 - `EnableAutoSave` saves when `db.Close()` runs.
 - `EnableAutoSaveOnCommit` saves after each committed transaction.
 
+### Excel sheet visibility
+
+A workbook can hide a sheet, and a hidden sheet often holds the spreadsheet's own working-out rather than data anyone meant to publish. filesql loads every sheet by default, hidden or not, so existing programs keep the tables they have.
+
+Ask for only the sheets the workbook shows with `WithExcelSheetPolicy`:
+
+```go
+validatedBuilder, err := filesql.NewBuilder().
+	AddPath("book.xlsx").
+	WithExcelSheetPolicy(filesql.ExcelSheetPolicyVisibleOnly).
+	Build(ctx)
+```
+
+The policy applies to every source — a path, a directory, an embedded filesystem, a reader, and a compressed workbook alike. Table names are worked out after it has run, so a hidden sheet that would sanitize to the same table as a visible one is not a collision when it is not loaded.
+
+Excel separates "hidden", which a reader can undo from the sheet tabs, from "very hidden", which only the VBA editor can. The library filesql reads workbooks with reports one boolean covering both, so filesql does not tell them apart: `ExcelSheetPolicyVisibleOnly` leaves out either kind.
+
+`ExcelSheetsInFile` reports what a workbook holds without loading it, which is how a caller explains which sheets a policy left behind:
+
+```go
+sheets, err := filesql.ExcelSheetsInFile("book.xlsx")
+for _, sheet := range sheets {
+	fmt.Println(sheet.Name, sheet.Visible)
+}
+```
+
 ### ACH and Fedwire
 
 ACH (`.ach`) and Fedwire (`.fed`) support are experimental. They are useful for inspection, joins, and controlled updates, but the exported files still need domain knowledge from the caller.
@@ -403,6 +429,8 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Read a compressed reader | `ExampleDBBuilder_AddReader_compressed` | [example_test.go](./example_test.go) |
 | Tune chunked loading | `ExampleDBBuilder_SetDefaultChunkSize` | [example_api_test.go](./example_api_test.go) |
 | Handle malformed CSV/TSV rows | `ExampleDBBuilder_WithMalformedRowPolicy` | [example_api_test.go](./example_api_test.go) |
+| Load only the sheets a workbook shows | `ExampleDBBuilder_WithExcelSheetPolicy` | [example_api_test.go](./example_api_test.go) |
+| Report a workbook's sheets and their visibility | `ExampleExcelSheetsInFile` | [example_api_test.go](./example_api_test.go) |
 | Attach your own logger | `ExampleDBBuilder_WithLogger`, `ExampleNewSlogAdapter` | [example_api_test.go](./example_api_test.go) |
 | Open a read-only wrapper | `ExampleDBBuilder_OpenReadOnly` | [example_api_test.go](./example_api_test.go) |
 | Save on close or commit | `ExampleDBBuilder_EnableAutoSave`, `ExampleDBBuilder_EnableAutoSaveOnCommit`, `ExampleDBBuilder_DisableAutoSave` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |

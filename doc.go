@@ -61,6 +61,13 @@
 //   - "/path/to/logs.ltsv" becomes table "logs"
 //   - "sales.xlsx" with multiple sheets becomes tables "sales_Sheet1", "sales_Sheet2", etc.
 //
+// # Excel Sheet Visibility
+//
+// Every sheet of a workbook is loaded by default, whether or not the workbook
+// shows it. Use DBBuilder.WithExcelSheetPolicy with ExcelSheetPolicyVisibleOnly
+// to load only the shown ones, and ExcelSheetsInFile to report what a workbook
+// holds without loading it.
+//
 // # Data Modifications
 //
 // INSERT, UPDATE, and DELETE operations affect only the in-memory database.

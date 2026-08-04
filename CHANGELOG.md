@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Excel sheet visibility policy. `DBBuilder.WithExcelSheetPolicy` decides which
+  sheets of a workbook a load reads: `ExcelSheetPolicyAll` (the default, and the
+  behavior every previous release had) reads them all, and
+  `ExcelSheetPolicyVisibleOnly` reads only the sheets the workbook shows. The
+  policy applies to every source — a path, a directory, an embedded filesystem,
+  a reader, and a compressed workbook alike — because all of them now select
+  sheets through one function instead of each calling the sheet list itself.
+  Table names are worked out after the policy has run, so a hidden sheet that
+  would sanitize to the same table as a visible one is not a collision when it
+  is not loaded.
+- `ExcelSheetsInFile` and `ExcelSheetsInReader` report a workbook's sheets and
+  whether it shows each one, without loading anything. A caller that has to
+  explain which sheets a policy left behind needs the same view filesql uses,
+  and reimplementing it would let the two drift.
+- `parser.WithExcelSheetPolicy` applies the same setting to `parser.Parse`,
+  which reads one sheet: under the visible-only policy it takes the first sheet
+  the workbook shows rather than the first one stored.
+
+Excel separates "hidden", which a reader can undo from the sheet tabs, from
+"very hidden", which only the VBA editor can. excelize reports one boolean
+covering both, so filesql does not tell them apart: the visible-only policy
+leaves out either kind and claims nothing about which it was.
+
 ## [0.30.4] - 2026-08-03
 
 ### Fixed

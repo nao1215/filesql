@@ -340,6 +340,30 @@ type TableData struct {
 	ColumnTypes []ColumnType
 }
 
+// ParseOption adjusts how Parse reads a source. Options only affect the formats
+// they name; one that has nothing to say about the given fileType is ignored.
+type ParseOption func(*parseConfig)
+
+// parseConfig holds the settings the options above set. Its zero value is the
+// behavior Parse has without any option.
+type parseConfig struct {
+	// excelSheetPolicy decides which sheets of a workbook Parse may take its
+	// table from. The zero value takes any of them.
+	excelSheetPolicy ExcelSheetPolicy
+}
+
+// WithExcelSheetPolicy decides which sheets of a workbook Parse may take its
+// table from. It has no effect on other formats.
+//
+// Example:
+//
+//	result, err := parser.Parse(f, parser.XLSX, parser.WithExcelSheetPolicy(parser.ExcelSheetPolicyVisibleOnly))
+func WithExcelSheetPolicy(policy ExcelSheetPolicy) ParseOption {
+	return func(cfg *parseConfig) {
+		cfg.excelSheetPolicy = policy
+	}
+}
+
 // Parse reads data from an io.Reader and returns parsed results.
 // The fileType parameter specifies the format and compression of the data.
 //
@@ -348,9 +372,14 @@ type TableData struct {
 //	f, _ := os.Open("data.csv.gz")
 //	defer f.Close()
 //	result, err := parser.Parse(f, parser.CSVGZ)
-func Parse(reader io.Reader, fileType FileType) (result *TableData, err error) {
+func Parse(reader io.Reader, fileType FileType, opts ...ParseOption) (result *TableData, err error) {
 	if reader == nil {
 		return nil, errors.New("reader cannot be nil")
+	}
+
+	var cfg parseConfig
+	for _, opt := range opts {
+		opt(&cfg)
 	}
 
 	// Handle decompression
@@ -378,7 +407,7 @@ func Parse(reader io.Reader, fileType FileType) (result *TableData, err error) {
 	case Parquet:
 		return parseParquet(decompressedReader)
 	case XLSX:
-		return parseXLSX(decompressedReader)
+		return parseXLSX(decompressedReader, cfg.excelSheetPolicy)
 	case JSON:
 		return parseJSON(decompressedReader)
 	case JSONL:
