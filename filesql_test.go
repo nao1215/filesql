@@ -46,13 +46,19 @@ func TestOpen(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			// testdata/tree, not testdata: see
+			// TestOpenDirectoryWithCollidingBasenamesFails for why loading the
+			// whole tree is an error.
 			name:    "Directory path",
-			paths:   []string{"testdata"},
+			paths:   []string{filepath.Join("testdata", "tree")},
 			wantErr: false,
 		},
 		{
+			// sample2.csv, not sample.csv: the tree holds its own sample.csv, and
+			// two different files asking for one table is a collision rather than
+			// something to resolve silently.
 			name:    "Mixed file and directory paths",
-			paths:   []string{filepath.Join("testdata", "sample.csv"), "testdata"},
+			paths:   []string{filepath.Join("testdata", "sample2.csv"), filepath.Join("testdata", "tree")},
 			wantErr: false,
 		},
 		{
@@ -191,8 +197,11 @@ func TestMultipleFiles(t *testing.T) {
 		t.Skip("Skipping slow multiple files test in local development")
 	}
 
-	// Test loading multiple files from directory
-	db, err := Open("testdata")
+	// testdata/tree, not testdata: the wider tree holds several files that map
+	// to one table from different directories, which is now a reported
+	// collision rather than a silent drop. See
+	// TestOpenDirectoryWithCollidingBasenamesFails.
+	db, err := Open(filepath.Join("testdata", "tree"))
 	require.NoError(t, err, "Failed to open directory")
 	defer db.Close()
 
@@ -254,8 +263,8 @@ func TestJoinMultipleTables(t *testing.T) {
 		t.Skip("Skipping slow join multiple tables test in local development")
 	}
 
-	// Test joining tables from multiple files
-	db, err := Open("testdata")
+	// See TestMultipleFiles for why this is testdata/tree.
+	db, err := Open(filepath.Join("testdata", "tree"))
 	require.NoError(t, err, "Failed to open directory")
 	defer db.Close()
 
@@ -819,7 +828,8 @@ func TestDumpDatabase(t *testing.T) {
 			name: "Directory dump",
 			setupFunc: func(t *testing.T) *sql.DB {
 				t.Helper()
-				db, err := Open("testdata")
+				// See TestMultipleFiles for why this is testdata/tree.
+				db, err := Open(filepath.Join("testdata", "tree"))
 				require.NoError(t, err, "Failed to open database")
 				return db
 			},
@@ -2651,9 +2661,9 @@ func TestDirectoryLoading(t *testing.T) {
 		t.Skip("Skipping slow directory loading test in local development")
 	}
 
-	// Open database with directory path
-	db, err := Open("testdata")
-	require.NoError(t, err, "Open(testdata) failed")
+	// See TestMultipleFiles for why this is testdata/tree.
+	db, err := Open(filepath.Join("testdata", "tree"))
+	require.NoError(t, err, "Open(testdata/tree) failed")
 	defer db.Close()
 
 	// Get all table names
@@ -2863,8 +2873,9 @@ func TestMixedDirectoryAndFiles(t *testing.T) {
 	}
 	defer os.Remove(tempFile)
 
-	// Open with mixed paths: directory + specific file
-	db, err := Open("testdata", tempFile)
+	// Open with mixed paths: directory + specific file. See
+	// TestOpenDirectoryWithCollidingBasenamesFails for why this is testdata/tree.
+	db, err := Open(filepath.Join("testdata", "tree"), tempFile)
 	require.NoError(t, err, "Open with mixed paths failed")
 	defer db.Close()
 

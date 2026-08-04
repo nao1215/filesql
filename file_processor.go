@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -231,32 +232,65 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 	return readers, nil
 }
 
-// deduplicateCompressedFiles removes compressed files when their uncompressed versions exist
-func (fp *fileProcessor) deduplicateCompressedFiles(files []string) []string {
-	// Create a map of table names to file paths, prioritizing uncompressed files
-	tableToFile := make(map[string]string)
+// sourceIdentity is what makes two inputs the same source: the path with any
+// compression suffix removed.
+//
+// It is the path, and deliberately not the table name. A table name comes from
+// the base name alone, so "a/users.csv" and "b/users.csv" produce the same one
+// while naming entirely different files. Keying deduplication on it dropped one
+// of them without a word, and which one it dropped depended on Go's map
+// iteration order — so a load could lose a different file on every run. Two
+// inputs are the same source only when they are in the same place.
+//
+// Separators are normalized to "/" so a local path and an fs.FS path (always
+// slash-separated) compare the same way on every platform.
+//
+// Case is significant, including on Windows, where the filesystem's is not.
+// That errs toward keeping both: two paths that really are one file are then
+// loaded twice and reported as a table collision, rather than one of them
+// vanishing. Losing an input in silence is the failure this function exists to
+// prevent, so the tie is broken away from it.
+func sourceIdentity(filePath string) string {
+	stripped := NewCompressionFactory().RemoveCompressionExtension(filePath)
+	return path.Clean(filepath.ToSlash(stripped))
+}
 
-	// First pass: collect all uncompressed files
+// deduplicateCompressedFiles drops an input that is another input's compressed
+// twin, and an input listed twice, keeping the order the caller gave.
+//
+// Two things it must not do. It must not treat inputs from different places as
+// the same file: a directory holding "users.csv" and another holding
+// "users.csv.gz" are two datasets, and both belong in the load. And it must not
+// decide the surviving order from a map, because everything downstream depends
+// on it — which input a last-wins load leaves in place, which malformed file a
+// failing load reports, and the order the collision check sees.
+func (fp *fileProcessor) deduplicateCompressedFiles(files []string) []string {
+	// The sources that arrived uncompressed. A compressed input matching one of
+	// these is the same data behind a codec, so reading it would build the same
+	// table twice from the same place.
+	plain := make(map[string]struct{}, len(files))
 	for _, file := range files {
-		tableName := sanitizeTableName(tableFromFilePath(file))
 		if !fp.isCompressedFile(file) {
-			tableToFile[tableName] = file
+			plain[sourceIdentity(file)] = struct{}{}
 		}
 	}
 
-	// Second pass: add compressed files only if uncompressed version doesn't exist
+	result := make([]string, 0, len(files))
+	emitted := make(map[string]struct{}, len(files))
 	for _, file := range files {
-		tableName := sanitizeTableName(tableFromFilePath(file))
+		identity := sourceIdentity(file)
+		if _, already := emitted[identity]; already {
+			// The same source named twice — "./users.csv" and "users.csv", or a
+			// path repeated outright. Loading it twice would build one table from
+			// one file two times over.
+			continue
+		}
 		if fp.isCompressedFile(file) {
-			if _, exists := tableToFile[tableName]; !exists {
-				tableToFile[tableName] = file
+			if _, uncompressed := plain[identity]; uncompressed {
+				continue
 			}
 		}
-	}
-
-	// Convert map back to slice
-	result := make([]string, 0, len(tableToFile))
-	for _, file := range tableToFile {
+		emitted[identity] = struct{}{}
 		result = append(result, file)
 	}
 
