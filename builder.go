@@ -62,6 +62,11 @@ type DBBuilder struct {
 	memDSN string
 	// defaultChunkSize is the default chunk size for reading large files (10MB)
 	defaultChunkSize int
+	// excelSheetPolicy decides which sheets of a workbook this builder loads.
+	// The zero value is ExcelSheetPolicyAll. It is mirrored onto the stream
+	// processor, which is what the per-source load paths read, the same way the
+	// chunk size is.
+	excelSheetPolicy ExcelSheetPolicy
 	// logger is the logger instance for internal logging
 	logger Logger
 
@@ -237,6 +242,32 @@ func (b *DBBuilder) SetDefaultChunkSize(size int) *DBBuilder {
 // Returns self for chaining.
 func (b *DBBuilder) WithMalformedRowPolicy(policy MalformedRowPolicy) *DBBuilder {
 	b.streamProcessor.malformedRowPolicy = policy
+	return b
+}
+
+// WithExcelSheetPolicy decides which sheets of an Excel workbook this builder
+// loads. It applies to every source: a path, a directory, an embedded
+// filesystem, a reader, and a compressed workbook alike.
+//
+// The default is ExcelSheetPolicyAll, which loads every sheet whatever the
+// workbook says about showing it. ExcelSheetPolicyVisibleOnly loads only the
+// sheets the workbook shows, which is what a tool presenting a workbook to
+// someone who did not build it usually wants: a hidden sheet holds the
+// spreadsheet's own working-out, and turning that into a queryable table
+// surprises the reader.
+//
+// Table names are worked out after the policy has run, so a hidden sheet that
+// would sanitize to the same table as a visible one is not a collision when it
+// is not loaded.
+//
+// Example:
+//
+//	builder.AddPath("book.xlsx").WithExcelSheetPolicy(filesql.ExcelSheetPolicyVisibleOnly)
+//
+// Returns self for chaining.
+func (b *DBBuilder) WithExcelSheetPolicy(policy ExcelSheetPolicy) *DBBuilder {
+	b.excelSheetPolicy = policy
+	b.streamProcessor.excelSheetPolicy = policy
 	return b
 }
 
@@ -856,10 +887,15 @@ func (b *DBBuilder) streamXLSXFileToSQLite(ctx context.Context, db *sql.DB, read
 		_ = xlsxFile.Close() // Ignore close error
 	}()
 
-	// Get all sheet names
-	sheetNames := xlsxFile.GetSheetList()
+	// Get the sheet names the policy admits. Filtering here rather than while
+	// looping is what lets the collision check below see exactly the sheets that
+	// will become tables.
+	sheetNames, _, err := selectExcelSheets(xlsxFile, b.excelSheetPolicy)
+	if err != nil {
+		return err
+	}
 	if len(sheetNames) == 0 {
-		return fmt.Errorf("%w: no sheets found in XLSX file", ErrEmptyData)
+		return noExcelSheetsError(xlsxFile, b.excelSheetPolicy)
 	}
 
 	// Every sheet's table name is worked out before any of them is created, so a

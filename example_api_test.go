@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/nao1215/filesql"
+	"github.com/xuri/excelize/v2"
 	_ "modernc.org/sqlite"
 )
 
@@ -387,4 +388,92 @@ func ExampleNewSlogAdapter() {
 	fmt.Println(strings.Contains(buf.String(), "loaded"))
 	// Output:
 	// true
+}
+
+// exampleWorkbook writes a workbook holding one shown sheet and one hidden
+// sheet, and returns its path.
+func exampleWorkbook(dir string) string {
+	f := excelize.NewFile()
+	defer func() { _ = f.Close() }()
+
+	for _, sheet := range []string{"Sales", "Scratch"} {
+		if sheet != "Sheet1" {
+			if _, err := f.NewSheet(sheet); err != nil {
+				log.Fatal(err)
+			}
+		}
+		if err := f.SetCellValue(sheet, "A1", "region"); err != nil {
+			log.Fatal(err)
+		}
+		if err := f.SetCellValue(sheet, "A2", sheet); err != nil {
+			log.Fatal(err)
+		}
+	}
+	if err := f.DeleteSheet("Sheet1"); err != nil {
+		log.Fatal(err)
+	}
+	if err := f.SetSheetVisible("Scratch", false); err != nil {
+		log.Fatal(err)
+	}
+
+	path := filepath.Join(dir, "book.xlsx")
+	if err := f.SaveAs(path); err != nil {
+		log.Fatal(err)
+	}
+	return path
+}
+
+func ExampleDBBuilder_WithExcelSheetPolicy() {
+	path := exampleWorkbook(os.TempDir())
+	defer func() { _ = os.Remove(path) }()
+
+	validated, err := filesql.NewBuilder().
+		AddPath(path).
+		WithExcelSheetPolicy(filesql.ExcelSheetPolicyVisibleOnly).
+		Build(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	db, err := validated.Open(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(context.Background(),
+		`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(name)
+	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
+	// Output:
+	// book_Sales
+}
+
+func ExampleExcelSheetsInFile() {
+	path := exampleWorkbook(os.TempDir())
+	defer func() { _ = os.Remove(path) }()
+
+	sheets, err := filesql.ExcelSheetsInFile(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, sheet := range sheets {
+		fmt.Printf("%s visible=%t\n", sheet.Name, sheet.Visible)
+	}
+	// Output:
+	// Sales visible=true
+	// Scratch visible=false
 }

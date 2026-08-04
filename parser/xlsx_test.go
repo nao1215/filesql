@@ -26,7 +26,7 @@ func TestParseXLSX(t *testing.T) {
 		require.NoError(t, err)
 		defer f.Close()
 
-		result, err := parseXLSX(f)
+		result, err := parseXLSX(f, ExcelSheetPolicyAll)
 
 		require.NoError(t, err)
 		assert.Greater(t, len(result.Headers), 0)
@@ -38,7 +38,7 @@ func TestParseXLSX(t *testing.T) {
 
 		reader := bytes.NewReader([]byte{})
 
-		_, err := parseXLSX(reader)
+		_, err := parseXLSX(reader, ExcelSheetPolicyAll)
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to open XLSX")
@@ -49,7 +49,7 @@ func TestParseXLSX(t *testing.T) {
 
 		reader := strings.NewReader("not an xlsx file")
 
-		_, err := parseXLSX(reader)
+		_, err := parseXLSX(reader, ExcelSheetPolicyAll)
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to open XLSX")
@@ -66,7 +66,7 @@ func TestParseXLSX_ErrorCases(t *testing.T) {
 		// We primarily test the error path through invalid data
 		reader := bytes.NewReader([]byte{0x50, 0x4B, 0x03, 0x04}) // ZIP magic bytes but not valid XLSX
 
-		_, err := parseXLSX(reader)
+		_, err := parseXLSX(reader, ExcelSheetPolicyAll)
 
 		// Should fail during XLSX parsing
 		assert.Error(t, err)

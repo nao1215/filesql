@@ -782,13 +782,16 @@ func (p *streamingParser) parseXLSXStream(reader io.Reader) (*table, error) {
 		_ = xlsxFile.Close() // Ignore close error
 	}()
 
-	// Get all sheet names
-	sheetNames := xlsxFile.GetSheetList()
+	// Get the sheet names the policy admits
+	sheetNames, _, err := selectExcelSheets(xlsxFile, p.excelSheetPolicy)
+	if err != nil {
+		return nil, err
+	}
 	if len(sheetNames) == 0 {
-		return nil, fmt.Errorf("%w: no sheets found in XLSX file", ErrEmptyData)
+		return nil, noExcelSheetsError(xlsxFile, p.excelSheetPolicy)
 	}
 
-	// With the streaming parser, we only process the first sheet
+	// With the streaming parser, we only process the first sheet the policy left
 	sheetName := sheetNames[0]
 	iter, err := xlsxFile.Rows(sheetName)
 	if err != nil {
@@ -865,13 +868,16 @@ func (p *streamingParser) processXLSXInChunks(reader io.Reader, processor chunkP
 		_ = xlsxFile.Close() // Ignore close error
 	}()
 
-	// Get all sheet names
-	sheetNames := xlsxFile.GetSheetList()
+	// Get the sheet names the policy admits
+	sheetNames, _, err := selectExcelSheets(xlsxFile, p.excelSheetPolicy)
+	if err != nil {
+		return err
+	}
 	if len(sheetNames) == 0 {
-		return fmt.Errorf("%w: no sheets found in XLSX file", ErrEmptyData)
+		return noExcelSheetsError(xlsxFile, p.excelSheetPolicy)
 	}
 
-	// Process only the first sheet (streaming parser limitation)
+	// Process only the first admitted sheet (streaming parser limitation)
 	sheetName := sheetNames[0]
 	iter, err := xlsxFile.Rows(sheetName)
 	if err != nil {

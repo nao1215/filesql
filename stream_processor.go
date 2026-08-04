@@ -37,6 +37,9 @@ type streamProcessor struct {
 	// malformedRowPolicy controls how a CSV/TSV record whose field count differs
 	// from the header is handled. The zero value is MalformedRowStop.
 	malformedRowPolicy MalformedRowPolicy
+	// excelSheetPolicy controls which sheets of a workbook are loaded. The zero
+	// value is ExcelSheetPolicyAll.
+	excelSheetPolicy ExcelSheetPolicy
 }
 
 // dropIfReplacing drops a same-named table when replaceExisting is set, so the
@@ -283,6 +286,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, 
 	// Create streaming parser for chunked processing
 	parser := newStreamingParser(input.fileType, input.compression, input.tableName, sp.chunkSize)
 	parser.malformedRowPolicy = sp.malformedRowPolicy
+	parser.excelSheetPolicy = sp.excelSheetPolicy
 
 	// Initialize the table schema (we need to peek at the first chunk to get headers)
 	var tableCreated bool
@@ -510,6 +514,7 @@ func (sp *streamProcessor) createEmptyTable(ctx context.Context, db DBTX, input 
 	// Parse just the header to get column information
 	tempParser := newStreamingParser(input.fileType, input.compression, input.tableName, 1)
 	tempParser.malformedRowPolicy = sp.malformedRowPolicy
+	tempParser.excelSheetPolicy = sp.excelSheetPolicy
 	tempTable, err := tempParser.parseFromReader(input.reader)
 	if err != nil {
 		// Check if this is a parsing error we should preserve (like duplicate columns)
@@ -615,11 +620,20 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX
 		_ = xlsxFile.Close() // Ignore close error
 	}()
 
-	// Get all sheet names
-	sheetNames := xlsxFile.GetSheetList()
+	// Get the sheet names the policy admits. Filtering here rather than while
+	// looping is what lets the collision check below see exactly the sheets that
+	// will become tables.
+	sheetNames, skipped, err := selectExcelSheets(xlsxFile, sp.excelSheetPolicy)
+	if err != nil {
+		sp.logger.Error("failed to read sheet visibility", "path", filePath, "error", err)
+		return err
+	}
+	if len(skipped) > 0 {
+		sp.logger.Info("skipping sheets the workbook hides", "path", filePath, "skipped_count", len(skipped))
+	}
 	if len(sheetNames) == 0 {
-		sp.logger.Warn("no sheets found in XLSX file", "path", filePath)
-		return fmt.Errorf("%w: no sheets found in XLSX file", ErrEmptyData)
+		sp.logger.Warn("no sheets to load from XLSX file", "path", filePath)
+		return noExcelSheetsError(xlsxFile, sp.excelSheetPolicy)
 	}
 	sp.logger.Info("processing XLSX file", "path", filePath, "sheet_count", len(sheetNames))
 
