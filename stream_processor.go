@@ -411,7 +411,11 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, 
 	}
 
 	if err != nil {
-		return fmt.Errorf("%w: streaming processing failed: %w", ErrParsing, err)
+		// Returned as it came. The caller wraps this in a *ParseError, which
+		// carries ErrParsing and names the input, so announcing "parsing failed"
+		// again here put this package's name in the message twice for every cause
+		// that already had it.
+		return err
 	}
 
 	return nil

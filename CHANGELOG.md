@@ -17,7 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cause without it. The failure is now a `*ParseError` carrying `Source` and
   `Err`: its message names the input once, `errors.Is` still finds `ErrParsing`
   and whatever sentinel the cause holds, and a caller that loads one file at a
-  time can read `Err` and say the path itself.
+  time can read `Err` and say the path itself. The reader that produced the
+  cause no longer announces `parsing failed` a second time either, so a cause
+  that already carried `ErrParsing` is reported once rather than nested inside
+  itself.
 
 ## [0.32.1] - 2026-08-04
 

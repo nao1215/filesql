@@ -115,30 +115,59 @@ func wrapForTest(inner error) error {
 func TestParseFailure_NamesTheInputOnce(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	path := filepath.Join(dir, "rm.csv")
-	require.NoError(t, os.WriteFile(path, []byte("a,b,c\n1,2\n"), 0o600))
-
-	db, err := OpenContext(context.Background(), path)
-	if db != nil {
-		defer func() { _ = db.Close() }()
+	tests := []struct {
+		name    string
+		file    string
+		content string
+		// wantSentinel is the sentinel the cause carries, beyond ErrParsing.
+		wantSentinel error
+	}{
+		{
+			name:         "a row with fewer fields than the header",
+			file:         "rm.csv",
+			content:      "a,b,c\n1,2\n",
+			wantSentinel: ErrColumnMismatch,
+		},
+		{
+			// This one used to take the other framing path: the cause already
+			// carried ErrParsing, and the reader wrapped it in ErrParsing again,
+			// so the message announced the package twice on its own.
+			name:         "a quoted field the CSV reader cannot parse",
+			file:         "quote.csv",
+			content:      "a,b\n\"unclosed,2\n",
+			wantSentinel: ErrParsing,
+		},
 	}
-	require.Error(t, err)
 
-	msg := err.Error()
-	assert.Equal(t, 1, strings.Count(msg, "rm.csv"), "the path is named once: %s", msg)
-	assert.Equal(t, 1, strings.Count(msg, "filesql: "), "the package names itself once: %s", msg)
-	assert.NotContains(t, msg, "parsing failed", msg)
-	assert.NotContains(t, msg, "failed to stream file", msg)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	// The sentinel the old message spelled out is still reachable, and so is the
-	// cause, so nothing that branched on either has to change.
-	assert.ErrorIs(t, err, ErrParsing)
-	assert.ErrorIs(t, err, ErrColumnMismatch)
+			path := filepath.Join(t.TempDir(), tt.file)
+			require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o600))
 
-	// A caller that already named the file reaches the cause without the path.
-	var parseErr *ParseError
-	require.ErrorAs(t, err, &parseErr)
-	assert.Equal(t, path, parseErr.Source)
-	assert.NotContains(t, parseErr.Err.Error(), "rm.csv")
+			db, err := OpenContext(context.Background(), path)
+			if db != nil {
+				defer func() { _ = db.Close() }()
+			}
+			require.Error(t, err)
+
+			msg := err.Error()
+			assert.Equal(t, 1, strings.Count(msg, tt.file), "the path is named once: %s", msg)
+			assert.Equal(t, 1, strings.Count(msg, "filesql: "), "the package names itself once: %s", msg)
+			assert.NotContains(t, msg, "streaming processing failed", msg)
+			assert.NotContains(t, msg, "failed to stream file", msg)
+
+			// The sentinels the old message spelled out are still reachable, and so
+			// is the cause, so nothing that branched on either has to change.
+			assert.ErrorIs(t, err, ErrParsing)
+			assert.ErrorIs(t, err, tt.wantSentinel)
+
+			// A caller that already named the file reaches the cause without the path.
+			var parseErr *ParseError
+			require.ErrorAs(t, err, &parseErr)
+			assert.Equal(t, path, parseErr.Source)
+			assert.NotContains(t, parseErr.Err.Error(), tt.file)
+		})
+	}
 }
