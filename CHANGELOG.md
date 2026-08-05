@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A file that fails to load is reported once instead of three times. The wrapper
+  said `filesql: parsing failed: failed to stream file rm.csv: filesql: column
+  count mismatch: row 1 has 2 fields, want 3` — two framing verbs for one event
+  and the package's own name twice — and a caller that had already named the
+  file added a third mention of the path, because there was no way to reach the
+  cause without it. The failure is now a `*ParseError` carrying `Source` and
+  `Err`: its message names the input once, `errors.Is` still finds `ErrParsing`
+  and whatever sentinel the cause holds, and a caller that loads one file at a
+  time can read `Err` and say the path itself. The reader that produced the
+  cause no longer announces `parsing failed` a second time either, so a cause
+  that already carried `ErrParsing` is reported once rather than nested inside
+  itself.
+
 ## [0.32.1] - 2026-08-04
 
 ### Fixed
