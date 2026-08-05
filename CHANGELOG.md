@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Dialect.DisplayName()` returns a dialect spelled the way its own project
+  spells it: `SQLite`, `MySQL`, `PostgreSQL`, `GoogleSQL`. The wire value is a
+  lowercase identifier, right for a flag value and wrong in a sentence, so every
+  caller that printed one for a person kept its own table of names and drifted
+  from `Dialects()` as soon as a dialect was added. A dialect installed with
+  `RegisterTranslator` reads back as its wire value, so the result is never
+  empty.
+
 ## [0.33.0] - 2026-08-05
 
 ### Changed
