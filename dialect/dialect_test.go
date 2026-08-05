@@ -62,6 +62,45 @@ func TestDialects(t *testing.T) {
 	}
 }
 
+func TestDialectDisplayName(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		input Dialect
+		want  string
+	}{
+		{"sqlite", SQLite, "SQLite"},
+		{"mysql", MySQL, "MySQL"},
+		{"postgresql", PostgreSQL, "PostgreSQL"},
+		{"googlesql", GoogleSQL, "GoogleSQL"},
+		{"unregistered dialect reads back as its wire value", Dialect("oracle"), "oracle"},
+		{"empty dialect", Dialect(""), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.input.DisplayName(); got != tt.want {
+				t.Fatalf("Dialect(%q).DisplayName() = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEveryBuiltInDialectHasADisplayName(t *testing.T) {
+	t.Parallel()
+	// A dialect added to Dialects() without a spelling would read back as its
+	// lowercase wire value in a sentence, which is the drift this pins.
+	for _, d := range Dialects() {
+		name := d.DisplayName()
+		if name == "" {
+			t.Fatalf("Dialect(%q).DisplayName() is empty", d)
+		}
+		if name == string(d) {
+			t.Fatalf("Dialect(%q).DisplayName() = %q, want a spelled-out name", d, name)
+		}
+	}
+}
+
 func TestTranslateSQLiteIsIdentity(t *testing.T) {
 	t.Parallel()
 	// The SQLite dialect must never alter the query, including constructs the

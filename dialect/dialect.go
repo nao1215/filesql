@@ -41,6 +41,29 @@ func Dialects() []Dialect {
 	return []Dialect{SQLite, MySQL, PostgreSQL, GoogleSQL}
 }
 
+// displayNames spells each dialect the way its own project does. The wire value
+// is a lowercase identifier, which is right for parsing a flag value and wrong
+// in a sentence a person reads.
+var displayNames = map[Dialect]string{
+	SQLite:     "SQLite",
+	MySQL:      "MySQL",
+	PostgreSQL: "PostgreSQL",
+	GoogleSQL:  "GoogleSQL",
+}
+
+// DisplayName returns the dialect spelled the way its own project spells it, for
+// a message a person reads. A dialect with no spelling here — one installed by
+// RegisterTranslator — reads back as its wire value, so any dialect with a name
+// has one to print; the zero Dialect has neither and returns "". It lives beside
+// Dialects() so a dialect added to one arrives in the other, instead of every
+// caller keeping its own table of names.
+func (d Dialect) DisplayName() string {
+	if name, ok := displayNames[d]; ok {
+		return name
+	}
+	return string(d)
+}
+
 // Parse maps a user-supplied dialect name to a Dialect. Matching is
 // case-insensitive and ignores surrounding whitespace. Aliases are accepted:
 // "sqlite3" for SQLite; "postgres" and "pg" for PostgreSQL; "bigquery",
