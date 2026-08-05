@@ -20,11 +20,6 @@ const (
 	logKeySheet = "sheet"
 )
 
-// streamError wraps stream processing errors with sentinel errors for errors.Is() compatibility.
-func streamError(sentinel error, format string, args ...any) error {
-	return fmt.Errorf("%w: "+format, append([]any{sentinel}, args...)...)
-}
-
 // streamProcessor handles streaming operations for database loading
 type streamProcessor struct {
 	chunkSize int
@@ -77,10 +72,12 @@ func (sp *streamProcessor) streamAllFilesToDatabase(ctx context.Context, db DBTX
 		sp.logger.Debug("streaming file", "path", path, "index", i+1, "total", len(collectedPaths))
 		if err := sp.streamFileToDatabase(ctx, db, path, pending); err != nil {
 			sp.logger.Error("failed to stream file", "path", path, "error", err)
-			// Wrap the underlying error with %w as well so a sentinel it carries
-			// (for example ErrColumnMismatch from the malformed-row policy) stays
-			// detectable with errors.Is alongside ErrParsing.
-			return streamError(ErrParsing, "failed to stream file %s: %w", path, err)
+			// A *ParseError rather than more text: it names the file once and
+			// carries both ErrParsing and whatever sentinel the cause holds (for
+			// example ErrColumnMismatch from the malformed-row policy), so
+			// errors.Is finds either and a caller that already named the file can
+			// reach the cause alone.
+			return &ParseError{Source: path, Err: err}
 		}
 	}
 	sp.logger.Info("completed file streaming", "file_count", len(collectedPaths))
@@ -98,7 +95,7 @@ func (sp *streamProcessor) streamAllReadersToDatabase(ctx context.Context, db DB
 		if err := sp.streamReaderToDatabase(ctx, db, ri, pending); err != nil {
 			sp.closeReaderInput(ri)
 			sp.logger.Error("failed to stream reader", logKeyTable, ri.tableName, "error", err)
-			return streamError(ErrParsing, "failed to stream reader input for table '%s': %w", ri.tableName, err)
+			return &ParseError{Source: ri.tableName, Err: err}
 		}
 		sp.closeReaderInput(ri)
 	}

@@ -103,3 +103,42 @@ func TestErrorWrappingKeepsTheMessage(t *testing.T) {
 func wrapForTest(inner error) error {
 	return fmt.Errorf("%w: failed to create writer: %w", ErrCompression, inner)
 }
+
+// TestParseFailure_NamesTheInputOnce is the message half of the same concern.
+//
+// A file that fails to load used to be reported as
+// "filesql: parsing failed: failed to stream file rm.csv: filesql: column count
+// mismatch: row 1 has 2 fields, want 3": two generic framing verbs saying the
+// same thing, and this package's own name twice. A caller that already knows
+// which file it asked for then added a third mention of the path, because there
+// was no way to reach the cause without it.
+func TestParseFailure_NamesTheInputOnce(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rm.csv")
+	require.NoError(t, os.WriteFile(path, []byte("a,b,c\n1,2\n"), 0o600))
+
+	db, err := OpenContext(context.Background(), path)
+	if db != nil {
+		defer func() { _ = db.Close() }()
+	}
+	require.Error(t, err)
+
+	msg := err.Error()
+	assert.Equal(t, 1, strings.Count(msg, "rm.csv"), "the path is named once: %s", msg)
+	assert.Equal(t, 1, strings.Count(msg, "filesql: "), "the package names itself once: %s", msg)
+	assert.NotContains(t, msg, "parsing failed", msg)
+	assert.NotContains(t, msg, "failed to stream file", msg)
+
+	// The sentinel the old message spelled out is still reachable, and so is the
+	// cause, so nothing that branched on either has to change.
+	assert.ErrorIs(t, err, ErrParsing)
+	assert.ErrorIs(t, err, ErrColumnMismatch)
+
+	// A caller that already named the file reaches the cause without the path.
+	var parseErr *ParseError
+	require.ErrorAs(t, err, &parseErr)
+	assert.Equal(t, path, parseErr.Source)
+	assert.NotContains(t, parseErr.Err.Error(), "rm.csv")
+}
