@@ -53,9 +53,10 @@ var displayNames = map[Dialect]string{
 
 // DisplayName returns the dialect spelled the way its own project spells it, for
 // a message a person reads. A dialect with no spelling here — one installed by
-// RegisterTranslator — reads back as its wire value, so the result is never
-// empty. It lives beside Dialects() so a dialect added to one arrives in the
-// other, instead of every caller keeping its own table of names.
+// RegisterTranslator — reads back as its wire value, so any dialect with a name
+// has one to print; the zero Dialect has neither and returns "". It lives beside
+// Dialects() so a dialect added to one arrives in the other, instead of every
+// caller keeping its own table of names.
 func (d Dialect) DisplayName() string {
 	if name, ok := displayNames[d]; ok {
 		return name
