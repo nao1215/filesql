@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.2] - 2026-08-06
+
 ### Fixed
 
 - Column type detection no longer declares a type the storage will not match. `strconv.ParseFloat` accepts Go source syntax that SQLite's numeric affinity does not convert, so a digit-separating underscore (`1_000`) or a hexadecimal float (`0x1p4`) made the column `REAL` while every value in it was stored as text. A datetime alongside a number did the same: the numeric type won on confidence and the datetime was stored as text under it. Both are TEXT now, which is what the storage always was. A caller reading the schema to plan a numeric comparison had no way to detect the difference.
