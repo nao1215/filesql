@@ -138,6 +138,28 @@ func TestTranslatePreservesResultColumnLabels(t *testing.T) {
 			want:    `SELECT postgresql_cast(amt, 'text') COLLATE NOCASE AS "amt::text COLLATE NOCASE" FROM t`,
 		},
 		{
+			// A bare word after a closing paren is an alias, not part of the
+			// expression. Reading ")" as an operator appended a second name and
+			// produced "strict_concat(c,c) z AS \"CONCAT(c,c) z\"", which does
+			// not parse.
+			name:    "an implicit alias after a rewritten call is left alone",
+			dialect: MySQL,
+			query:   "SELECT CONCAT(a,b) z FROM t",
+			want:    "SELECT strict_concat(a,b) z FROM t",
+		},
+		{
+			name:    "an implicit alias after a rewritten cast call is left alone",
+			dialect: PostgreSQL,
+			query:   "SELECT CAST(amt AS text) label FROM t",
+			want:    "SELECT postgresql_cast(amt, 'text') label FROM t",
+		},
+		{
+			name:    "an implicit alias after a parenthesized expression is left alone",
+			dialect: MySQL,
+			query:   "SELECT (a / b) z FROM t",
+			want:    "SELECT (mysql_divide(a, b)) z FROM t",
+		},
+		{
 			name:    "an implicit alias after a keyword-ending expression is left alone",
 			dialect: PostgreSQL,
 			query:   "SELECT amt::text IS NULL flag FROM t",
