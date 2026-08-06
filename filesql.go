@@ -834,6 +834,18 @@ func writeParquetTableData(w io.Writer, columns []string, rows *sql.Rows) error 
 		return fmt.Errorf("%w: no columns defined", ErrEmptyData)
 	}
 
+	// The declared types are read before the scan loop. Draining Rows closes it,
+	// and ColumnTypes on a closed Rows fails, which would leave a table with no
+	// rows with nothing to take its schema from.
+	declared := make([]string, len(columns))
+	if types, err := rows.ColumnTypes(); err == nil {
+		for i, ct := range types {
+			if i < len(declared) {
+				declared[i] = ct.DatabaseTypeName()
+			}
+		}
+	}
+
 	// Read all rows into memory first. The raw driver values are kept rather than
 	// their rendered text because Parquet is a typed format: which Arrow type each
 	// column is written as is decided from the values themselves, below.
@@ -857,15 +869,6 @@ func writeParquetTableData(w io.Writer, columns []string, rows *sql.Rows) error 
 
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("%w: error iterating rows: %w", ErrDatabaseOperation, err)
-	}
-
-	declared := make([]string, len(columns))
-	if types, err := rows.ColumnTypes(); err == nil {
-		for i, ct := range types {
-			if i < len(declared) {
-				declared[i] = ct.DatabaseTypeName()
-			}
-		}
 	}
 
 	return writeParquetData(w, columns, allRows, declared)

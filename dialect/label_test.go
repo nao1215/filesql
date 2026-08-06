@@ -109,6 +109,41 @@ func TestTranslatePreservesResultColumnLabels(t *testing.T) {
 			want:    `SELECT x FROM (SELECT mysql_divide(a, b) AS "a / b" FROM t)`,
 		},
 		{
+			// A scalar subquery holds its own select list, so both items are
+			// labeled. The inner alias sits inside the outer item, which is why
+			// insertions are ordered by position rather than by item.
+			name:    "a scalar subquery labels both the outer item and its own",
+			dialect: MySQL,
+			query:   "SELECT (SELECT a / b FROM t)",
+			want:    `SELECT (SELECT mysql_divide(a, b) AS "a / b" FROM t) AS "(SELECT a / b FROM t)"`,
+		},
+		{
+			// DIV is an operator spelled as a word, so the operand after it is not
+			// an alias.
+			name:    "a word operator is not an implicit alias",
+			dialect: MySQL,
+			query:   "SELECT a DIV b FROM t",
+			want:    `SELECT CAST(mysql_divide(a, b) AS INTEGER) AS "a DIV b" FROM t`,
+		},
+		{
+			name:    "an expression ending in NULL is labeled",
+			dialect: PostgreSQL,
+			query:   "SELECT amt::text IS NULL FROM t",
+			want:    `SELECT postgresql_cast(amt, 'text') IS NULL AS "amt::text IS NULL" FROM t`,
+		},
+		{
+			name:    "a COLLATE suffix is not an implicit alias",
+			dialect: PostgreSQL,
+			query:   "SELECT amt::text COLLATE NOCASE FROM t",
+			want:    `SELECT postgresql_cast(amt, 'text') COLLATE NOCASE AS "amt::text COLLATE NOCASE" FROM t`,
+		},
+		{
+			name:    "an implicit alias after a keyword-ending expression is left alone",
+			dialect: PostgreSQL,
+			query:   "SELECT amt::text IS NULL flag FROM t",
+			want:    `SELECT postgresql_cast(amt, 'text') IS NULL flag FROM t`,
+		},
+		{
 			name:    "a quoted label is escaped",
 			dialect: PostgreSQL,
 			query:   `SELECT "od"::text FROM t`,

@@ -217,7 +217,45 @@ func TestParquetDumpWritesTypedColumns(t *testing.T) {
 		t.Fatalf("DumpDatabase: %v", err)
 	}
 
-	f, err := os.Open(filepath.Join(out, "goods.parquet")) //nolint:gosec // test-owned path
+	assertParquetSchema(t, filepath.Join(out, "goods.parquet"),
+		map[string]string{"name": "utf8", "price": "float64", "qty": "int64"})
+}
+
+// TestParquetDumpOfEmptyTableKeepsDeclaredTypes checks the one case the values
+// cannot decide. A table the session emptied still knows its declared types, and
+// an auto-save that rewrote them all as STRING would change the schema of a
+// table whose rows were merely deleted.
+func TestParquetDumpOfEmptyTableKeepsDeclaredTypes(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "src.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if _, err := db.ExecContext(ctx,
+		`CREATE TABLE goods (name TEXT, price REAL, qty INTEGER);`); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(dir, "out")
+	if err := DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
+		t.Fatalf("DumpDatabase: %v", err)
+	}
+
+	assertParquetSchema(t, filepath.Join(out, "goods.parquet"),
+		map[string]string{"name": "utf8", "price": "float64", "qty": "int64"})
+}
+
+// assertParquetSchema checks the Arrow type of each named column in a Parquet
+// file.
+func assertParquetSchema(t *testing.T, path string, want map[string]string) {
+	t.Helper()
+
+	f, err := os.Open(path) //nolint:gosec // test-owned path
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +276,6 @@ func TestParquetDumpWritesTypedColumns(t *testing.T) {
 		t.Fatalf("Schema: %v", err)
 	}
 
-	want := map[string]string{"name": "utf8", "price": "float64", "qty": "int64"}
 	for name, wantType := range want {
 		fields := schema.FieldIndices(name)
 		if len(fields) != 1 {

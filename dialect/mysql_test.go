@@ -36,12 +36,12 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-6_group_concat_plain", "SELECT GROUP_CONCAT(name) FROM t", "SELECT GROUP_CONCAT(name) FROM t"},
 		{"M-6_group_concat_distinct", "SELECT GROUP_CONCAT(DISTINCT name) FROM t", "SELECT GROUP_CONCAT(DISTINCT name) FROM t"},
 
-		{"M-7_div", "SELECT a DIV b FROM t", "SELECT CAST(mysql_divide(a, b) AS INTEGER) FROM t"},
+		{"M-7_div", "SELECT a DIV b FROM t", `SELECT CAST(mysql_divide(a, b) AS INTEGER) AS "a DIV b" FROM t`},
 		{"M-7_div_literals", "SELECT 7 DIV 2", "SELECT CAST(mysql_divide(7, 2) AS INTEGER) AS \"7 DIV 2\""},
 		{"M-7_div_qualified", "SELECT t.a DIV t.b FROM t", "SELECT CAST(mysql_divide(t.a, t.b) AS INTEGER) AS \"t.a DIV t.b\" FROM t"},
-		{"M-7_div_paren_left", "SELECT (a + b) DIV c", "SELECT CAST(mysql_divide((a + b), c) AS INTEGER)"},
+		{"M-7_div_paren_left", "SELECT (a + b) DIV c", `SELECT CAST(mysql_divide((a + b), c) AS INTEGER) AS "(a + b) DIV c"`},
 		{"M-7_div_call_right", "SELECT x DIV ABS(y)", "SELECT CAST(mysql_divide(x, ABS(y)) AS INTEGER) AS \"x DIV ABS(y)\""},
-		{"M-7_div_call_left", "SELECT ABS(x) DIV y", "SELECT CAST(mysql_divide(ABS(x), y) AS INTEGER)"},
+		{"M-7_div_call_left", "SELECT ABS(x) DIV y", `SELECT CAST(mysql_divide(ABS(x), y) AS INTEGER) AS "ABS(x) DIV y"`},
 
 		{"M-8_cast_signed", "SELECT CAST(x AS SIGNED) FROM t", "SELECT mysql_cast(x, 'SIGNED') AS \"CAST(x AS SIGNED)\" FROM t"},
 		{"M-8_cast_unsigned_integer", "SELECT CAST(x AS UNSIGNED INTEGER)", "SELECT mysql_cast(x, 'UNSIGNED') AS \"CAST(x AS UNSIGNED INTEGER)\""},

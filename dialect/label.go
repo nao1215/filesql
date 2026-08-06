@@ -1,6 +1,9 @@
 package dialect
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // SQLite names an unaliased result column after the text of the expression that
 // produced it, so rewriting an expression renames the caller's column. A
@@ -39,19 +42,30 @@ func preserveSelectLabels(original, rewritten []token) []token {
 		return rewritten
 	}
 
-	// Walk backwards so an insertion never shifts an index not yet used.
-	out := rewritten
-	for i := len(before) - 1; i >= 0; i-- {
+	// Collect first, then insert from the highest index down. Reverse item order
+	// is not the same as reverse position order: a scalar subquery's own item
+	// sits inside its parent's span, so inserting by item order shifted the
+	// parent's end index and put its alias in the middle of the subquery.
+	type insertion struct {
+		at    int
+		label string
+	}
+	var inserts []insertion
+	for i := range before {
 		label, ok := labelFor(original, before[i], rewritten, after[i])
 		if !ok {
 			continue
 		}
-		alias := []token{
+		inserts = append(inserts, insertion{at: lastSignificant(rewritten, after[i]) + 1, label: label})
+	}
+	sort.Slice(inserts, func(i, j int) bool { return inserts[i].at > inserts[j].at })
+
+	out := rewritten
+	for _, ins := range inserts {
+		out = insertTokens(out, ins.at, []token{
 			spaceToken(), wordToken("AS"), spaceToken(),
-			{kind: tokQuotedIdent, text: label},
-		}
-		end := lastSignificant(rewritten, after[i]) + 1
-		out = insertTokens(out, end, alias)
+			{kind: tokQuotedIdent, text: ins.label},
+		})
 	}
 	return out
 }
@@ -71,13 +85,34 @@ func labelFor(original []token, before tokenSpan, rewritten []token, after token
 	return origText, true
 }
 
+// expressionEndKeywords are words that finish an expression and can therefore
+// never be an alias: "CASE ... END", "x IS NULL", "TRUE".
+var expressionEndKeywords = map[string]bool{
+	"END": true, "NULL": true, "TRUE": true, "FALSE": true,
+	"CURRENT_DATE": true, "CURRENT_TIME": true, "CURRENT_TIMESTAMP": true,
+}
+
+// operandExpectingKeywords are words that must be followed by an operand, so the
+// word after one belongs to the expression rather than naming it. Not every SQL
+// keyword is here — only the ones that can stand immediately before the last
+// word of a select item, which is the only position that matters.
+var operandExpectingKeywords = map[string]bool{
+	"DIV": true, "MOD": true, "AND": true, "OR": true, "NOT": true, "IS": true,
+	"LIKE": true, "GLOB": true, "REGEXP": true, "MATCH": true, "BETWEEN": true,
+	"IN": true, "ESCAPE": true, "COLLATE": true, "WHEN": true, "THEN": true,
+	"ELSE": true, "CASE": true, "DISTINCT": true, "ALL": true, "INTERVAL": true,
+}
+
 // hasAlias reports whether a select item already names its column.
 //
 // An item ending in a word or a quoted identifier is ambiguous: "amt::text" ends
 // in a word that belongs to the expression, while "amt::text label" ends in an
-// alias. The token before it decides — an operator means the word is part of the
-// expression — and every other shape is read as an alias. That is the safe way
-// round: a missed alias leaves a label unimproved, while a wrongly added one
+// alias. What precedes the last word decides. An operator, or a keyword that
+// demands an operand, means the word is part of the expression; anything else is
+// read as an alias.
+//
+// The ambiguous cases are resolved towards "alias", because that is the safe way
+// round: a missed alias leaves one label unimproved, while a wrongly added one
 // makes the statement a syntax error.
 func hasAlias(tokens []token, span tokenSpan) bool {
 	last := lastSignificant(tokens, span)
@@ -87,11 +122,20 @@ func hasAlias(tokens []token, span tokenSpan) bool {
 	if tokens[last].kind != tokWord && tokens[last].kind != tokQuotedIdent {
 		return false
 	}
+	if tokens[last].kind == tokWord && expressionEndKeywords[strings.ToUpper(tokens[last].text)] {
+		return false
+	}
 	prev := lastSignificant(tokens, tokenSpan{start: span.start, end: last})
 	if prev < 0 {
 		return false
 	}
-	return tokens[prev].kind != tokOp
+	if tokens[prev].kind == tokOp {
+		return false
+	}
+	if tokens[prev].kind == tokWord && operandExpectingKeywords[strings.ToUpper(tokens[prev].text)] {
+		return false
+	}
+	return true
 }
 
 // isBareColumnRef reports whether a select item is nothing but a column
