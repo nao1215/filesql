@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-08-06
+
 ### Fixed
 
 - A Parquet file's declared column types now reach SQLite instead of every
