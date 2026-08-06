@@ -129,7 +129,12 @@ func hasAlias(tokens []token, span tokenSpan) bool {
 	if prev < 0 {
 		return false
 	}
-	if tokens[prev].kind == tokOp {
+	// A closing paren ends an expression, so a bare word after it is an alias:
+	// "CONCAT(c,c) z" names its column z. Every other operator expects an operand,
+	// and the word after one belongs to the expression. Reading ")" as an operator
+	// here appended a second name to an item that already had one, and the
+	// statement no longer parsed.
+	if tokens[prev].kind == tokOp && !isOpEq(tokens[prev], ")") {
 		return false
 	}
 	if tokens[prev].kind == tokWord && operandExpectingKeywords[strings.ToUpper(tokens[prev].text)] {

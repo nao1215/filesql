@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.1] - 2026-08-06
+
+### Fixed
+
+- A select item whose expression was rewritten and which already carried an
+  implicit alias is no longer given a second name. `SELECT CONCAT(a,b) z`
+  became `SELECT strict_concat(a,b) z AS "CONCAT(a,b) z"`, which does not
+  parse, so a query that worked in 0.34.0 failed in 0.35.0 with a syntax error
+  near `AS`. The alias detection read a closing parenthesis as an operator and
+  so took the name after it for part of the expression; a bare word after `)`
+  is an alias. Only the implicit form was affected — `AS z` was always
+  detected — and only for expressions a dialect rewrites.
+
 ## [0.35.0] - 2026-08-06
 
 ### Fixed
