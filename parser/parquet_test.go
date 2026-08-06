@@ -39,6 +39,9 @@ func TestParseParquet(t *testing.T) {
 		assert.Equal(t, "1", result.Records[0][0])
 		assert.Equal(t, "Laptop", result.Records[0][1])
 		assert.Equal(t, "999.99", result.Records[0][2])
+		// The types come from the Arrow schema (id INT64, name STRING, price
+		// DOUBLE), not from what the rendered values look like.
+		assert.Equal(t, []ColumnType{TypeInteger, TypeText, TypeReal}, result.ColumnTypes)
 	})
 
 	t.Run("returns error for empty data", func(t *testing.T) {

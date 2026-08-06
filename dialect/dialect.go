@@ -142,12 +142,17 @@ func builtinTranslate(d Dialect, query string) (string, error) {
 		return "", err
 	}
 
-	tokens, err = rewriteTokens(d, tokens)
+	rewritten, err := rewriteTokens(d, tokens)
 	if err != nil {
 		return "", err
 	}
 
-	return render(tokens), nil
+	// Rewriting changes the text of an expression, and SQLite names an unaliased
+	// result column after that text. This puts the original text back as an alias
+	// so the caller's column keeps its name.
+	rewritten = preserveSelectLabels(tokens, rewritten)
+
+	return render(rewritten), nil
 }
 
 // rewriteTokens applies the dialect-specific token rewrite rules. Dialects
