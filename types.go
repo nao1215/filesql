@@ -659,10 +659,10 @@ func isFloat(value string) bool {
 		return false
 	}
 
-	// strconv.ParseFloat accepts Go source syntax, which SQL does not have:
-	// digit-separating underscores ("1_000") and hexadecimal floats ("0x1p4").
-	// Calling those numeric declared a REAL column that SQLite then stored as
-	// text, so the schema said REAL and typeof() said text.
+	// strconv.ParseFloat accepts Go source syntax: digit-separating underscores
+	// ("1_000") and hexadecimal floats ("0x1p4"). SQLite's numeric affinity
+	// converts neither, so calling them numeric declared a REAL column whose
+	// values it then stored as text, leaving the schema and typeof() disagreeing.
 	if hasGoOnlyNumericSyntax(value) {
 		return false
 	}
@@ -672,8 +672,9 @@ func isFloat(value string) bool {
 }
 
 // hasGoOnlyNumericSyntax reports whether value uses numeric syntax that Go's
-// parsers accept but SQL does not: an underscore separator, or the "0x" prefix
-// that introduces a hexadecimal (and possibly p-exponent) literal.
+// parsers accept and SQLite's numeric affinity does not convert: an underscore
+// separator, or the "0x" prefix that introduces a hexadecimal (and possibly
+// p-exponent) literal.
 func hasGoOnlyNumericSyntax(value string) bool {
 	digits := strings.TrimSpace(value)
 	digits = strings.TrimPrefix(strings.TrimPrefix(digits, "+"), "-")

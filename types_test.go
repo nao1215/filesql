@@ -713,9 +713,9 @@ func TestIsFloat(t *testing.T) {
 		{"multiple dots", "12.34.56", false},
 		{"invalid scientific", "1e", false},
 
-		// Go accepts these literals and SQL does not. Calling them numeric
-		// declared a REAL column that SQLite then stored as text, so the schema
-		// said one thing and typeof() said another.
+		// Go's parser accepts these spellings and SQLite's numeric affinity does
+		// not convert them. Calling them numeric declared a REAL column that
+		// stored every value as text, so the schema and typeof() disagreed.
 		{"underscore separators", "1_000", false},
 		{"underscore in a decimal", "1_000.5", false},
 		{"short underscore form", "1_0", false},
