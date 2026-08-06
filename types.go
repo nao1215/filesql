@@ -659,8 +659,29 @@ func isFloat(value string) bool {
 		return false
 	}
 
+	// strconv.ParseFloat accepts Go source syntax: digit-separating underscores
+	// ("1_000") and hexadecimal floats ("0x1p4"). SQLite's numeric affinity
+	// converts neither, so calling them numeric declared a REAL column whose
+	// values it then stored as text, leaving the schema and typeof() disagreeing.
+	if hasGoOnlyNumericSyntax(value) {
+		return false
+	}
+
 	_, err := strconv.ParseFloat(value, 64)
 	return err == nil
+}
+
+// hasGoOnlyNumericSyntax reports whether value uses numeric syntax that Go's
+// parsers accept and SQLite's numeric affinity does not convert: an underscore
+// separator, or the "0x" prefix that introduces a hexadecimal (and possibly
+// p-exponent) literal.
+func hasGoOnlyNumericSyntax(value string) bool {
+	digits := strings.TrimSpace(value)
+	digits = strings.TrimPrefix(strings.TrimPrefix(digits, "+"), "-")
+	if strings.Contains(digits, "_") {
+		return true
+	}
+	return len(digits) > 1 && digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X')
 }
 
 // isIntegerLiteralOverflowingInt64 reports whether value is an integer literal
@@ -694,6 +715,15 @@ func isIntegerLiteralOverflowingInt64(value string) bool {
 func selectColumnType(typeCounts map[columnType]int, totalCount int) columnType {
 	// If any text values exist with reasonable confidence, choose text
 	if typeCounts[columnTypeText] > 0 {
+		return columnTypeText
+	}
+
+	// A datetime is stored as text, so a column that also holds a number has no
+	// type covering both, exactly as a column holding text does. Picking the
+	// numeric one declared INTEGER or REAL over values SQLite then stored as
+	// text, leaving the schema and typeof() disagreeing.
+	if typeCounts[columnTypeDatetime] > 0 &&
+		typeCounts[columnTypeInteger]+typeCounts[columnTypeReal] > 0 {
 		return columnTypeText
 	}
 
