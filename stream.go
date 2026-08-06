@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/array"
 	pqfile "github.com/apache/arrow/go/v18/parquet/file"
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
@@ -643,7 +644,50 @@ func (p *streamingParser) parseParquetStream(reader io.Reader) (*table, error) {
 		return nil, fmt.Errorf("error reading table records: %w", err)
 	}
 
-	return newTable(p.tableName, headerSlice, allRecords), nil
+	t := newTable(p.tableName, headerSlice, allRecords)
+	// The schema outranks what the values look like: a DOUBLE column holding
+	// whole numbers is still REAL, and a STRING column of digits is still TEXT.
+	t.columnInfo = arrowColumnInfoList(schema)
+	return t, nil
+}
+
+// arrowColumnInfoList maps a Parquet file's Arrow schema onto SQLite column
+// types. Parquet states the type of every column, so an import has nothing to
+// guess: reading the schema is both cheaper and more faithful than inferring
+// from the rendered values, which cannot tell a DOUBLE that happens to hold
+// whole numbers from an INT64, nor a STRING of digits from either.
+//
+// The type declared here has to agree with what extractValueFromArrowArray
+// renders, because SQLite applies the column's affinity to that string. A
+// mismatch is worse than TEXT: it would store a value the column claims not to
+// hold.
+func arrowColumnInfoList(schema *arrow.Schema) columnInfoList {
+	fields := schema.Fields()
+	columns := make(columnInfoList, len(fields))
+	for i, field := range fields {
+		columns[i] = columnInfo{Name: field.Name, Type: arrowColumnType(field.Type)}
+	}
+	return columns
+}
+
+// arrowColumnType is the SQLite type for one Arrow type. Anything not named
+// here stays TEXT, which is the safe answer: an unrecognized type is rendered by
+// extractValueFromArrowArray's default branch, and its shape is not known.
+func arrowColumnType(dt arrow.DataType) columnType {
+	switch dt.ID() {
+	// Booleans render as 1 and 0, and the temporal types render as the raw
+	// count they store (days, milliseconds, or ticks since the epoch), so all of
+	// them reach SQLite as integers.
+	case arrow.BOOL,
+		arrow.INT8, arrow.INT16, arrow.INT32, arrow.INT64,
+		arrow.UINT8, arrow.UINT16, arrow.UINT32, arrow.UINT64,
+		arrow.DATE32, arrow.DATE64, arrow.TIMESTAMP:
+		return columnTypeInteger
+	case arrow.FLOAT16, arrow.FLOAT32, arrow.FLOAT64:
+		return columnTypeReal
+	default:
+		return columnTypeText
+	}
 }
 
 // processParquetInChunks processes Parquet data in chunks
@@ -689,13 +733,7 @@ func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chu
 		headerSlice[i] = field.Name
 	}
 
-	// Infer column types from first batch
-	columnInfoList := make(columnInfoList, len(headerSlice))
-	for i, name := range headerSlice {
-		// For Parquet files, we'll default to TEXT for simplicity in streaming
-		// Real type inference could be done from Arrow schema
-		columnInfoList[i] = newColumnInfoWithType(name)
-	}
+	columnInfoList := arrowColumnInfoList(schema)
 
 	// Handle header-only Parquet files (schema exists but no data rows)
 	if table.NumRows() == 0 {

@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A Parquet file's declared column types now reach SQLite instead of every
+  column arriving as TEXT. Parquet states the type of each column in its own
+  schema, and the streaming import ignored it, so a `DOUBLE` price and an
+  `INT64` quantity became text and carried TEXT affinity into every comparison:
+  `MAX(price)` returned the lexicographically largest value, `ORDER BY price`
+  sorted digit strings, and `WHERE price > 100` compared `100` as `'100'`. The
+  same rows loaded from CSV, where types are inferred from the values, answered
+  those queries correctly, so one file gave two answers depending on its format.
+  The Arrow schema now decides the column type, which is also the only way to
+  tell a `STRING` column of zip codes from an `INT64` one. `parser.Parse` reads
+  the schema the same way.
+
+- A Parquet export writes each column as the type its values call for rather
+  than as `STRING`. Parquet readers trust the schema, so a numeric column
+  written as digit strings reached the next tool as text. A column whose values
+  are not all numeric is still written as `STRING`, because SQLite types values
+  rather than columns and a dump has to carry back what the rows held; a column
+  with no rows takes the declared type of the table it came from.
+
+- A dialect rewrite no longer renames the caller's result columns. SQLite names
+  an unaliased result column after the text of the expression that produced it,
+  so rewriting the expression renamed the column: PostgreSQL's `SELECT
+  amt::text` came back as `postgresql_cast(amt, 'text')`, and that name reached
+  the caller as a CSV header and a JSON key. MySQL's `/` and `CONCAT`,
+  GoogleSQL's `SAFE_CAST`, and every other rewritten select item had the same
+  problem. A rewritten item now carries its original text as an alias, so
+  `amt::text` stays `amt::text`. An item the query already named, a bare column
+  reference, and a `*` are left alone.
+
 ## [0.34.0] - 2026-08-05
 
 ### Added

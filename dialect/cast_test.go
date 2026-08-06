@@ -157,10 +157,12 @@ func TestCastUnknownTypePassesThrough(t *testing.T) {
 		query   string
 		want    string
 	}{
-		{PostgreSQL, "SELECT a::inet", "SELECT CAST(a AS inet)"},
+		// A pass-through still renames the column when the spelling changes, so
+		// the original text comes back as an alias.
+		{PostgreSQL, "SELECT a::inet", `SELECT CAST(a AS inet) AS "a::inet"`},
 		{PostgreSQL, "SELECT CAST(a AS inet)", "SELECT CAST(a AS inet)"},
 		{MySQL, "SELECT CAST(x AS GEOMETRY)", "SELECT CAST(x AS GEOMETRY)"},
-		{GoogleSQL, "SELECT SAFE_CAST(x AS GEOGRAPHY)", "SELECT CAST(x AS GEOGRAPHY)"},
+		{GoogleSQL, "SELECT SAFE_CAST(x AS GEOGRAPHY)", `SELECT CAST(x AS GEOGRAPHY) AS "SAFE_CAST(x AS GEOGRAPHY)"`},
 	}
 	for _, tt := range tests {
 		got, err := Translate(tt.dialect, tt.query)

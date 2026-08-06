@@ -331,3 +331,91 @@ func assertStrings(t *testing.T, got, want []string) {
 		}
 	}
 }
+
+// TestDialectQueryKeepsResultColumnNames runs the translated SQL against SQLite
+// and checks what the caller actually receives: the names of the result columns.
+// A rewrite renames an unaliased column, because SQLite names it after the text
+// of the expression, and that name is the CSV header or the JSON key the caller
+// ends up with.
+func TestDialectQueryKeepsResultColumnNames(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		dialect dialect.Dialect
+		query   string
+		want    []string
+	}{
+		{
+			name:    "postgresql cast operator",
+			dialect: dialect.PostgreSQL,
+			query:   `SELECT name, age::text FROM sample`,
+			want:    []string{"name", "age::text"},
+		},
+		{
+			name:    "mysql division",
+			dialect: dialect.MySQL,
+			query:   "SELECT age / 2 FROM sample",
+			want:    []string{"age / 2"},
+		},
+		{
+			// The label is the expression after lexical normalization, so a
+			// backtick identifier comes back double-quoted: backticks are not
+			// SQLite syntax and cannot appear in the statement that runs.
+			name:    "mysql backtick identifiers are normalized in the label",
+			dialect: dialect.MySQL,
+			query:   "SELECT `age` / 2 FROM `sample`",
+			want:    []string{`"age" / 2`},
+		},
+		{
+			name:    "googlesql safe cast",
+			dialect: dialect.GoogleSQL,
+			query:   "SELECT SAFE_CAST(age AS STRING) FROM sample",
+			want:    []string{"SAFE_CAST(age AS STRING)"},
+		},
+		{
+			name:    "an explicit alias still wins",
+			dialect: dialect.PostgreSQL,
+			query:   `SELECT age::text AS shown FROM sample`,
+			want:    []string{"shown"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			builder, err := NewBuilder().AddPath("testdata/sample.csv").WithDialect(tt.dialect).Build(ctx)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			db, err := builder.Open(ctx)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			rows, err := db.QueryContext(ctx, tt.query)
+			if err != nil {
+				t.Fatalf("query: %v", err)
+			}
+			defer func() { _ = rows.Close() }()
+
+			got, err := rows.Columns()
+			if err != nil {
+				t.Fatalf("Columns: %v", err)
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatalf("rows.Err: %v", err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("Columns() = %q, want %q", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("column %d = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}

@@ -111,11 +111,17 @@ func parseParquet(reader io.Reader) (*TableData, error) {
 		headers[i] = field.Name
 	}
 
+	// Parquet declares the type of every column, so the schema is read rather
+	// than inferred from the rendered values: inference cannot tell a STRING
+	// column of digits from an INT64 one, and would turn a zip code into a
+	// number.
+	columnTypes := arrowColumnTypes(schema)
+
 	if table.NumRows() == 0 {
 		return &TableData{
 			Headers:     headers,
 			Records:     [][]string{},
-			ColumnTypes: make([]ColumnType, len(headers)),
+			ColumnTypes: columnTypes,
 		}, nil
 	}
 
@@ -145,14 +151,41 @@ func parseParquet(reader io.Reader) (*TableData, error) {
 		return nil, fmt.Errorf("error reading table records: %w", err)
 	}
 
-	// Infer column types from the string records
-	columnTypes := inferColumnTypes(headers, records)
-
 	return &TableData{
 		Headers:     headers,
 		Records:     records,
 		ColumnTypes: columnTypes,
 	}, nil
+}
+
+// arrowColumnTypes maps a Parquet file's Arrow schema onto column types. The
+// type chosen for each column has to agree with what extractValueFromArrowArray
+// renders, because the value a caller reads back is parsed from that string.
+// Anything not named here stays text, which is the safe answer for a type whose
+// rendered shape is not known.
+func arrowColumnTypes(schema *arrow.Schema) []ColumnType {
+	fields := schema.Fields()
+	types := make([]ColumnType, len(fields))
+	for i, field := range fields {
+		types[i] = arrowColumnType(field.Type)
+	}
+	return types
+}
+
+// arrowColumnType is the column type for one Arrow type. Booleans render as
+// "true"/"false" and stay text; the temporal types render as the raw count they
+// store, which is an integer.
+func arrowColumnType(dt arrow.DataType) ColumnType {
+	switch dt.ID() {
+	case arrow.INT8, arrow.INT16, arrow.INT32, arrow.INT64,
+		arrow.UINT8, arrow.UINT16, arrow.UINT32, arrow.UINT64,
+		arrow.DATE32, arrow.DATE64, arrow.TIMESTAMP:
+		return TypeInteger
+	case arrow.FLOAT16, arrow.FLOAT32, arrow.FLOAT64:
+		return TypeReal
+	default:
+		return TypeText
+	}
 }
 
 // extractValueFromArrowArray extracts a value from an Arrow array at the given index.
