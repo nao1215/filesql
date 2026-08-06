@@ -712,6 +712,17 @@ func TestIsFloat(t *testing.T) {
 		{"no digits", "abc", false},
 		{"multiple dots", "12.34.56", false},
 		{"invalid scientific", "1e", false},
+
+		// Go accepts these literals and SQL does not. Calling them numeric
+		// declared a REAL column that SQLite then stored as text, so the schema
+		// said one thing and typeof() said another.
+		{"underscore separators", "1_000", false},
+		{"underscore in a decimal", "1_000.5", false},
+		{"short underscore form", "1_0", false},
+		{"hexadecimal float", "0x1p4", false},
+		{"hexadecimal integer", "0x10", false},
+		{"binary literal", "0b101", false},
+		{"octal literal", "0o17", false},
 	}
 
 	for _, tt := range tests {
@@ -757,6 +768,31 @@ func TestSelectColumnType(t *testing.T) {
 			expected:   columnTypeText,
 		},
 		{
+			// A datetime is stored as text, so a column holding one alongside a
+			// number has no type that covers both. Answering INTEGER declared a
+			// schema the storage did not match.
+			name: "datetime mixed with integer falls back to text",
+			typeCounts: map[columnType]int{
+				columnTypeInteger:  1,
+				columnTypeReal:     0,
+				columnTypeDatetime: 1,
+				columnTypeText:     0,
+			},
+			totalCount: 2,
+			expected:   columnTypeText,
+		},
+		{
+			name: "datetime mixed with real falls back to text",
+			typeCounts: map[columnType]int{
+				columnTypeInteger:  0,
+				columnTypeReal:     3,
+				columnTypeDatetime: 1,
+				columnTypeText:     0,
+			},
+			totalCount: 4,
+			expected:   columnTypeText,
+		},
+		{
 			name: "high confidence datetime",
 			typeCounts: map[columnType]int{
 				columnTypeInteger:  0,
@@ -772,11 +808,24 @@ func TestSelectColumnType(t *testing.T) {
 			typeCounts: map[columnType]int{
 				columnTypeInteger:  3,
 				columnTypeReal:     4,
+				columnTypeDatetime: 0,
+				columnTypeText:     0,
+			},
+			totalCount: 7,
+			expected:   columnTypeReal,
+		},
+		{
+			// REAL used to win this on confidence, and the two datetimes in it
+			// were then stored as text under a REAL declaration.
+			name: "low confidence numerics with a datetime fall back to text",
+			typeCounts: map[columnType]int{
+				columnTypeInteger:  3,
+				columnTypeReal:     4,
 				columnTypeDatetime: 2,
 				columnTypeText:     0,
 			},
 			totalCount: 10,
-			expected:   columnTypeReal,
+			expected:   columnTypeText,
 		},
 	}
 
