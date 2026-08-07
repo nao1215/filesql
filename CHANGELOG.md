@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-08-07
+
 ### Changed
 
 - A text source that is not valid UTF-8 is rejected instead of loaded. SQLite stores TEXT as UTF-8, so bytes in a legacy encoding were stored verbatim and read back as mojibake: `LENGTH` counted the wrong number of characters, `LIKE` and `UPPER` worked on fragments of characters, and the load reported success. A Shift-JIS CSV exported from Excel is the ordinary way to reach this. The load now fails with `ErrInvalidUTF8`, naming the offending byte and its offset, and the caller transcodes before loading. Validation is not detection: nothing in the byte stream says which encoding it is, and a wrong guess would be the same silent corruption in another shape. It covers CSV, TSV, LTSV, JSON, and JSONL, whose readers already share one entry point; UTF-16 with a byte-order mark is still transcoded as before, and valid UTF-8 passes through byte for byte.
