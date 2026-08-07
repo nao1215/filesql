@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.1] - 2026-08-07
+
 ### Removed
 
 - The second XLSX loader in `builder.go`, which no production path reached. `Open` and `OpenContext` load a workbook through the streaming processor; `streamXLSXFileToSQLite` and the three helpers under it were a parallel implementation only their own tests exercised. That is how the duplicate column rule came to differ by format in the first place — the copy nobody ran was free to disagree with the one that did. The behaviors those tests covered (a multi-sheet workbook, an empty one, invalid bytes, and a table name already taken) are covered against the loader that runs.
