@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A duplicate column name error says which column it means. The name was printed unquoted, so a header with two unnamed columns (`a,,`) produced `duplicate column name: ` with nothing after the colon, and neither the name nor its position was recoverable from the message. It now reads `duplicate column name: "" (column 3)`.
+- A duplicate column name error says which column it means. The name was printed unquoted, so a header with two unnamed columns (`a,,`) produced `duplicate column name:` with nothing after the colon, and neither the name nor its position was recoverable from the message. It now reads `duplicate column name: "" (column 3)`.
 
 ## [0.35.2] - 2026-08-06
 
