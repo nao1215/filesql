@@ -955,14 +955,12 @@ func (b *DBBuilder) createTableFromXLSXSheet(ctx context.Context, db *sql.DB, ta
 		return fmt.Errorf("%w: no columns in sheet header", ErrEmptyData)
 	}
 
-	// Check for duplicate column names. The name is quoted and located so a
-	// duplicate of the empty name still says which column it was.
-	columnsSeen := make(map[string]bool)
-	for i, col := range headers {
-		if columnsSeen[col] {
-			return fmt.Errorf("%w: %q (column %d)", errDuplicateColumnName, col, i+1)
-		}
-		columnsSeen[col] = true
+	// One rule for duplicate column names, wherever the header came from. This
+	// path compared the names as they stand while every other one compared them
+	// trimmed, so " name " beside "name" was a second column when it arrived in a
+	// workbook and a duplicate when it arrived in a CSV.
+	if err := validateColumnNames(headers); err != nil {
+		return err
 	}
 
 	// Collect data rows for type inference
