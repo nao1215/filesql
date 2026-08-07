@@ -683,6 +683,15 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX
 		// Convert XLSX rows to table headers and records
 		headers, records := convertXLSXRowsToTable(rows)
 
+		// A workbook header follows the same rule a CSV header does. This path
+		// checked nothing: an exact duplicate reached SQLite and came back as its
+		// "duplicate column name" wrapped in a database-operation error, which no
+		// caller can match with errors.Is, and names differing only by surrounding
+		// whitespace were two columns here and one duplicate in every other format.
+		if err := validateColumnNames(headers); err != nil {
+			return fmt.Errorf("sheet %s: %w", sheetName, err)
+		}
+
 		// Create table chunk for processing
 		columnInfo := inferColumnsInfo(headers, records)
 		chunk := &tableChunk{

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- One rule for duplicate column names, whatever format the header arrived in. Names are compared with surrounding whitespace removed, which is what reading a CSV has always done; a workbook was the exception on both counts. The loader that reads a workbook checked nothing, so `name` beside ` name ` became two columns there and a duplicate everywhere else, while an exact duplicate reached SQLite and came back as its own "duplicate column name" wrapped in a database-operation error — an error no caller can match with `errors.Is(err, ErrDuplicateColumn)`. A workbook now fails the same check a CSV does, with the same error and the offending column named.
+
 ## [0.36.0] - 2026-08-07
 
 ### Changed

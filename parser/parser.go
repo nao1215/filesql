@@ -844,19 +844,24 @@ func parseLTSV(reader io.Reader) (*TableData, error) {
 	}, nil
 }
 
-// validateColumnNames checks for duplicate column names.
+// validateColumnNames checks for duplicate column names, comparing them with
+// surrounding whitespace removed: " name " beside "name" is one name twice, not
+// two columns. Every loader in filesql applies that rule, so a header cannot be
+// a duplicate in one format and a second column in another.
 //
-// The message matches github.com/nao1215/fileparser exactly: parser is a fork of
-// it and a differential test holds the two to the same errors, so the quoting and
-// position filesql adds to its own duplicate-column message are added where
-// filesql builds that message rather than here.
+// This is a deliberate difference from github.com/nao1215/fileparser, which
+// parser is a fork of and which compares the names as they stand. The message
+// still matches it exactly, because a differential test holds the two to the
+// same errors and only the comparison is meant to differ; the quoting and
+// position filesql adds are added where filesql builds its own message.
 func validateColumnNames(columns []string) error {
 	seen := make(map[string]bool, len(columns))
 	for _, col := range columns {
-		if seen[col] {
+		trimmed := strings.TrimSpace(col)
+		if seen[trimmed] {
 			return fmt.Errorf("duplicate column name: %s", col)
 		}
-		seen[col] = true
+		seen[trimmed] = true
 	}
 	return nil
 }

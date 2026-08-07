@@ -93,6 +93,19 @@ func TestParse_CSV(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "duplicate column name")
 	})
+
+	// Surrounding whitespace does not make a second column: filesql compares
+	// header names trimmed, so this is the same duplicate as the case above. It
+	// is where this fork deliberately differs from github.com/nao1215/fileparser,
+	// which compares the names as they stand.
+	t.Run("returns error for names that differ only by surrounding whitespace", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := Parse(strings.NewReader("name, name ,city\nAlice,30,Tokyo"), CSV)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate column name")
+	})
 }
 
 func TestParse_TSV(t *testing.T) {

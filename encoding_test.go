@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xuri/excelize/v2"
 	"golang.org/x/text/encoding/japanese"
 	"golang.org/x/text/encoding/unicode"
 )
@@ -346,4 +347,104 @@ func TestDuplicateColumnErrorNamesTheColumn(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDuplicateColumnCheckIsTheSameEverywhere pins one rule for duplicate
+// column names across the formats and the loaders.
+//
+// The rule is CSV's: names are compared with surrounding whitespace removed, so
+// "name" and " name " are the same name. Reading a CSV said so and reading a
+// workbook did not, which made a header a duplicate or not depending on which
+// file it arrived in.
+func TestDuplicateColumnCheckIsTheSameEverywhere(t *testing.T) {
+	t.Parallel()
+
+	t.Run("csv rejects names that differ only by surrounding whitespace", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "dup.csv")
+		require.NoError(t, os.WriteFile(path, []byte("name, name \n1,2\n"), 0o600))
+
+		db, err := OpenContext(context.Background(), path)
+		if db != nil {
+			defer db.Close()
+		}
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrDuplicateColumn)
+	})
+
+	t.Run("xlsx rejects names that differ only by surrounding whitespace", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "book.xlsx")
+		writeXLSXHeaderFixture(t, path, []string{"name", " name "}, []string{"1", "2"})
+
+		db, err := OpenContext(context.Background(), path)
+		if db != nil {
+			defer db.Close()
+		}
+		require.Error(t, err, "a workbook header must follow the same rule a CSV header does")
+		assert.ErrorIs(t, err, ErrDuplicateColumn)
+		// The quoting is what makes this message readable: the two names differ
+		// only by the space the quotes show.
+		assert.Contains(t, err.Error(), `" name "`)
+	})
+
+	// An exact duplicate in a workbook reached SQLite, which refused it in its
+	// own words wrapped in a database-operation error. A caller matching on
+	// ErrDuplicateColumn saw a workbook fail for what looked like a different
+	// reason than a CSV failing the same way.
+	t.Run("xlsx reports an exact duplicate as a duplicate column", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "exact.xlsx")
+		writeXLSXHeaderFixture(t, path, []string{"name", "name"}, []string{"1", "2"})
+
+		db, err := OpenContext(context.Background(), path)
+		if db != nil {
+			defer db.Close()
+		}
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrDuplicateColumn)
+		assert.Contains(t, err.Error(), "column 2")
+	})
+
+	// Names that are distinct after trimming stay distinct, so the rule refuses
+	// a collision rather than every header that holds a space.
+	t.Run("xlsx keeps headers that differ by more than whitespace", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "ok.xlsx")
+		writeXLSXHeaderFixture(t, path, []string{"name", " other "}, []string{"1", "2"})
+
+		db, err := OpenContext(context.Background(), path)
+		require.NoError(t, err)
+		defer db.Close()
+
+		// A workbook becomes one table per sheet, named file_sheet.
+		var got string
+		require.NoError(t, db.QueryRowContext(context.Background(),
+			`SELECT "name" FROM ok_Sheet1`).Scan(&got))
+		assert.Equal(t, "1", got)
+	})
+}
+
+// writeXLSXHeaderFixture writes a one-sheet workbook whose first row is headers
+// and whose second row is values.
+func writeXLSXHeaderFixture(t *testing.T, path string, headers, values []string) {
+	t.Helper()
+
+	f := excelize.NewFile()
+	defer func() { _ = f.Close() }()
+	for i, header := range headers {
+		cell, err := excelize.CoordinatesToCellName(i+1, 1)
+		require.NoError(t, err)
+		require.NoError(t, f.SetCellValue("Sheet1", cell, header))
+	}
+	for i, value := range values {
+		cell, err := excelize.CoordinatesToCellName(i+1, 2)
+		require.NoError(t, err)
+		require.NoError(t, f.SetCellValue("Sheet1", cell, value))
+	}
+	require.NoError(t, f.SaveAs(path))
 }
