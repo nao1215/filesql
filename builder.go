@@ -1,7 +1,6 @@
 package filesql
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -10,11 +9,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
-	"strings"
 
 	"github.com/nao1215/filesql/dialect"
-	"github.com/xuri/excelize/v2"
 	"modernc.org/sqlite" // Direct SQLite driver usage
 )
 
@@ -864,206 +860,6 @@ func (b *DBBuilder) setupDialectIfNeeded(ctx context.Context, db *sql.DB) (*sql.
 		return nil, fmt.Errorf("%w: failed to close loader database: %w", ErrDatabaseOperation, err)
 	}
 	return tdb, nil
-}
-
-// streamXLSXFileToSQLite handles XLSX files by creating separate tables for each sheet
-func (b *DBBuilder) streamXLSXFileToSQLite(ctx context.Context, db *sql.DB, reader io.Reader, filePath string) error {
-	// Read all data into memory (XLSX requires random access)
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return fmt.Errorf("%w: failed to read XLSX data: %w", ErrIOOperation, err)
-	}
-
-	if len(data) == 0 {
-		return fmt.Errorf("%w: empty XLSX file", ErrEmptyData)
-	}
-
-	// Open XLSX file from bytes
-	xlsxFile, err := excelize.OpenReader(bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("%w: failed to open XLSX file: %w", ErrParsing, err)
-	}
-	defer func() {
-		_ = xlsxFile.Close() // Ignore close error
-	}()
-
-	// Get the sheet names the policy admits. Filtering here rather than while
-	// looping is what lets the collision check below see exactly the sheets that
-	// will become tables.
-	sheetNames, _, err := selectExcelSheets(xlsxFile, b.excelSheetPolicy)
-	if err != nil {
-		return err
-	}
-	if len(sheetNames) == 0 {
-		return noExcelSheetsError(xlsxFile, b.excelSheetPolicy)
-	}
-
-	// Every sheet's table name is worked out before any of them is created, so a
-	// workbook whose sheets would share a table is refused instead of loading the
-	// last one over the others.
-	sheetTables, err := ExcelSheetTableNames(filePath, sheetNames)
-	if err != nil {
-		return err
-	}
-
-	// Process each sheet as a separate table
-	for sheetIndex, sheetName := range sheetNames {
-		rows, err := xlsxFile.GetRows(sheetName)
-		if err != nil {
-			return fmt.Errorf("%w: failed to read sheet %s: %w", ErrParsing, sheetName, err)
-		}
-
-		// Skip empty sheets
-		if len(rows) == 0 {
-			continue
-		}
-
-		tableName := sheetTables[sheetIndex]
-
-		// Check if table already exists
-		var tableExists int
-		err = db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`,
-			tableName,
-		).Scan(&tableExists)
-		if err != nil {
-			return fmt.Errorf("%w: failed to check table existence: %w", ErrDatabaseOperation, err)
-		}
-
-		if tableExists > 0 {
-			return fmt.Errorf("%w: table '%s' already exists", ErrDuplicateTable, tableName)
-		}
-
-		// Process sheet data
-		if err := b.createTableFromXLSXSheet(ctx, db, tableName, rows); err != nil {
-			return fmt.Errorf("%w: failed to create table from sheet %s: %w", ErrDatabaseOperation, sheetName, err)
-		}
-	}
-
-	return nil
-}
-
-// createTableFromXLSXSheet creates a SQLite table from XLSX sheet data
-func (b *DBBuilder) createTableFromXLSXSheet(ctx context.Context, db *sql.DB, tableName string, rows [][]string) error {
-	if len(rows) == 0 {
-		return fmt.Errorf("%w: no rows in sheet", ErrEmptyData)
-	}
-
-	// First row is header
-	headers := rows[0]
-	if len(headers) == 0 {
-		return fmt.Errorf("%w: no columns in sheet header", ErrEmptyData)
-	}
-
-	// One rule for duplicate column names, wherever the header came from. This
-	// path compared the names as they stand while every other one compared them
-	// trimmed, so " name " beside "name" was a second column when it arrived in a
-	// workbook and a duplicate when it arrived in a CSV.
-	if err := validateColumnNames(headers); err != nil {
-		return err
-	}
-
-	// Collect data rows for type inference
-	dataRows := make([][]string, 0, len(rows)-1)
-	for i := 1; i < len(rows); i++ {
-		dataRows = append(dataRows, rows[i])
-	}
-
-	// Create records for type inference
-	records := make([]record, len(dataRows))
-	for i, row := range dataRows {
-		// Pad row with empty strings if necessary
-		paddedRow := make(record, len(headers))
-		for j := range headers {
-			if j < len(row) {
-				paddedRow[j] = row[j]
-			} else {
-				paddedRow[j] = ""
-			}
-		}
-		records[i] = paddedRow
-	}
-
-	// Infer column types
-	headerObj := header(headers)
-	columnInfo := inferColumnsInfo(headerObj, records)
-
-	// Create table
-	if err := b.createSQLiteTable(ctx, db, tableName, columnInfo); err != nil {
-		return fmt.Errorf("%w: failed to create SQLite table: %w", ErrDatabaseOperation, err)
-	}
-
-	// Insert data
-	if len(records) > 0 {
-		if err := b.insertDataIntoTable(ctx, db, tableName, headers, records); err != nil {
-			return fmt.Errorf("%w: failed to insert data: %w", ErrDatabaseOperation, err)
-		}
-	}
-
-	return nil
-}
-
-// createSQLiteTable creates a SQLite table with the given columns
-func (b *DBBuilder) createSQLiteTable(ctx context.Context, db *sql.DB, tableName string, columnInfo []columnInfo) error {
-	columns := make([]string, 0, len(columnInfo))
-	for _, col := range columnInfo {
-		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.string()))
-	}
-
-	query := fmt.Sprintf(
-		`CREATE TABLE IF NOT EXISTS "%s" (%s)`,
-		tableName,
-		strings.Join(columns, ", "),
-	)
-
-	_, err := db.ExecContext(ctx, query)
-	return err
-}
-
-// insertDataIntoTable inserts records into the specified table
-func (b *DBBuilder) insertDataIntoTable(ctx context.Context, db *sql.DB, tableName string, headers []string, records []record) error {
-	placeholders := make([]string, len(headers))
-	for i := range placeholders {
-		placeholders[i] = "?"
-	}
-
-	query := fmt.Sprintf( //nolint:gosec // SQL table name is validated, placeholders are safe
-		`INSERT INTO "%s" VALUES (%s)`,
-		tableName,
-		strings.Join(placeholders, ", "),
-	)
-
-	stmt, err := db.PrepareContext(ctx, query)
-	if err != nil {
-		return fmt.Errorf("%w: failed to prepare insert statement: %w", ErrDatabaseOperation, err)
-	}
-	defer stmt.Close()
-
-	for _, record := range records {
-		values := make([]any, len(record))
-		for i, value := range record {
-			values[i] = value
-		}
-
-		if _, err := stmt.ExecContext(ctx, values...); err != nil {
-			return fmt.Errorf("%w: failed to insert record: %w", ErrDatabaseOperation, err)
-		}
-	}
-
-	return nil
-}
-
-// createDecompressedReader creates a decompressed reader based on file extension
-func (b *DBBuilder) createDecompressedReader(file *os.File, filePath string) (io.Reader, error) {
-	factory := NewCompressionFactory()
-	handler := factory.CreateHandlerForFile(filePath)
-
-	reader, _, err := handler.CreateReader(file)
-	if err != nil {
-		return nil, err
-	}
-
-	return reader, nil
 }
 
 // collectOriginalPaths collects original file paths for overwrite mode
