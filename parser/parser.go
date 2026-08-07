@@ -845,6 +845,11 @@ func parseLTSV(reader io.Reader) (*TableData, error) {
 }
 
 // validateColumnNames checks for duplicate column names.
+//
+// The message matches github.com/nao1215/fileparser exactly: parser is a fork of
+// it and a differential test holds the two to the same errors, so the quoting and
+// position filesql adds to its own duplicate-column message are added where
+// filesql builds that message rather than here.
 func validateColumnNames(columns []string) error {
 	seen := make(map[string]bool, len(columns))
 	for _, col := range columns {

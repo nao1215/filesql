@@ -34,6 +34,12 @@ var (
 	// ErrDuplicateColumn indicates duplicate column names in the data source.
 	ErrDuplicateColumn = errors.New("filesql: duplicate column name")
 
+	// ErrInvalidUTF8 indicates a text source that is not valid UTF-8. SQLite
+	// stores TEXT as UTF-8, so such bytes would be stored verbatim and read back
+	// as mojibake by every consumer; the load fails instead, and the caller
+	// transcodes.
+	ErrInvalidUTF8 = errors.New("filesql: invalid UTF-8")
+
 	// ErrDuplicateTable indicates a table with the same name already exists.
 	ErrDuplicateTable = errors.New("filesql: duplicate table name")
 

@@ -173,12 +173,16 @@ func (ct columnType) String() string {
 
 // validateColumnNames checks for duplicate column names and returns error if found.
 // Column name comparison is case-sensitive to maintain backward compatibility.
+//
+// The message quotes the name and gives its 1-based position, because a header
+// can duplicate the empty name — two unnamed columns — and an unquoted empty
+// name printed nothing at all after the colon.
 func validateColumnNames(columns []string) error {
 	columnsSeen := make(map[string]bool)
-	for _, col := range columns {
+	for i, col := range columns {
 		trimmedCol := strings.TrimSpace(col)
 		if columnsSeen[trimmedCol] {
-			return fmt.Errorf("%w: %s", errDuplicateColumnName, col)
+			return fmt.Errorf("%w: %q (column %d)", errDuplicateColumnName, col, i+1)
 		}
 		columnsSeen[trimmedCol] = true
 	}
