@@ -266,6 +266,58 @@ func TestOpenACHFile_UpdateAmountAndWrite(t *testing.T) {
 	assert.Equal(t, after, totalDebit, "the batch control should follow the entries")
 }
 
+// TestOpenACHFile_RefusesOverWidthText covers the other half of what a
+// write-back has to do with an edit it cannot honor. An amount the record
+// cannot hold fails the write and says so; a name too long for its fixed-width
+// field was cut to fit and written at no error, so the file on disk held
+// different data than the session that wrote it.
+func TestOpenACHFile_RefusesOverWidthText(t *testing.T) {
+	testFile := findTestACHFile(t)
+	if testFile == "" {
+		t.Skip("No test ACH file found")
+	}
+
+	tests := []struct {
+		name   string
+		update string
+		column string
+	}{
+		{
+			// IndividualName holds 22 characters.
+			name:   "individual name past its field",
+			update: "UPDATE ppd_debit_entries SET individual_name = 'This name is much longer than twenty two characters' WHERE entry_index = 0",
+			column: "individual_name",
+		},
+		{
+			// CompanyName holds 16.
+			name:   "company name past its field",
+			update: "UPDATE ppd_debit_batches SET company_name = 'A company name far beyond sixteen characters' WHERE batch_index = 0",
+			column: "company_name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			db, err := OpenContext(ctx, testFile)
+			require.NoError(t, err)
+			defer db.Close()
+
+			_, err = db.ExecContext(ctx, tt.update)
+			require.NoError(t, err)
+
+			out := filepath.Join(t.TempDir(), "output.ach")
+			err = DumpACH(ctx, db, "ppd_debit", out)
+			require.Error(t, err, "a value the record cannot hold must fail the write, not be cut to fit")
+			assert.ErrorIs(t, err, ErrACH)
+			assert.Contains(t, err.Error(), tt.column)
+
+			_, statErr := os.Stat(out)
+			assert.True(t, os.IsNotExist(statErr), "a refused write must leave no file behind")
+		})
+	}
+}
+
 func TestOpenACHFile_IATFile(t *testing.T) {
 	testFile := findACHTestFile(t, "iat-credit.ach")
 	if testFile == "" {

@@ -65,6 +65,11 @@ func (ts *TableSet) ToFile() (*wire.File, error) {
 
 	if ts.Message != nil && len(ts.Message.Records) > 0 {
 		applyModifications(&newFile.FEDWireMessage, ts.Message)
+		// Every edit is in place, so this is where a value too wide for the
+		// record it goes into can be caught — before anything is written.
+		if err := validateFieldWidths(&newFile.FEDWireMessage); err != nil {
+			return nil, err
+		}
 	}
 
 	return &newFile, nil

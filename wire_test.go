@@ -132,6 +132,37 @@ func TestOpenFedWireFile_UpdateAndExport(t *testing.T) {
 	assert.Equal(t, "000005000000", amount, "amount should be updated")
 }
 
+// TestOpenFedWireFile_RefusesOverWidthText is the Fedwire half of the rule the
+// ACH tests pin: a fixed-width record cannot hold an over-long value, and
+// cutting it to fit writes data the session never asked for.
+func TestOpenFedWireFile_RefusesOverWidthText(t *testing.T) {
+	testFile := findWireTestFile(t)
+	if testFile == "" {
+		t.Skip("No test Fedwire file found")
+	}
+
+	ctx := context.Background()
+	ClearWireTableSetRegistry()
+	defer ClearWireTableSetRegistry()
+
+	db, err := OpenContext(ctx, testFile)
+	require.NoError(t, err)
+	defer db.Close()
+
+	// The originator name field holds 35 characters.
+	_, err = db.ExecContext(ctx,
+		"UPDATE customer_transfer_message SET originator_name = 'A very long originator name that surely exceeds the field'")
+	require.NoError(t, err)
+
+	out := filepath.Join(t.TempDir(), "output.fed")
+	err = DumpFedWire(ctx, db, "customer_transfer", out)
+	require.Error(t, err, "a value the record cannot hold must fail the write, not be cut to fit")
+	assert.Contains(t, err.Error(), "Name")
+
+	_, statErr := os.Stat(out)
+	assert.True(t, os.IsNotExist(statErr), "a refused write must leave no file behind")
+}
+
 func TestBuilderAddPathFedWire(t *testing.T) {
 	testFile := findWireTestFile(t)
 	if testFile == "" {
