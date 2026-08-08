@@ -845,9 +845,11 @@ func parseLTSV(reader io.Reader) (*TableData, error) {
 }
 
 // validateColumnNames checks for duplicate column names, comparing them with
-// surrounding whitespace removed: " name " beside "name" is one name twice, not
-// two columns. Every loader in filesql applies that rule, so a header cannot be
-// a duplicate in one format and a second column in another.
+// surrounding whitespace removed and case folded: " name " and "NAME" beside
+// "name" are one name three times, not three columns. Every loader in filesql
+// applies that rule, so a header cannot be a duplicate in one format and a
+// second column in another — and case is folded because SQLite, which ends up
+// holding the columns, compares their names that way too.
 //
 // This is a deliberate difference from github.com/nao1215/fileparser, which
 // parser is a fork of and which compares the names as they stand. The message
@@ -857,11 +859,11 @@ func parseLTSV(reader io.Reader) (*TableData, error) {
 func validateColumnNames(columns []string) error {
 	seen := make(map[string]bool, len(columns))
 	for _, col := range columns {
-		trimmed := strings.TrimSpace(col)
-		if seen[trimmed] {
+		key := strings.ToLower(strings.TrimSpace(col))
+		if seen[key] {
 			return fmt.Errorf("duplicate column name: %s", col)
 		}
-		seen[trimmed] = true
+		seen[key] = true
 	}
 	return nil
 }
