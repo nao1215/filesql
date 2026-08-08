@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `DumpOptions.WithEncoding` writes csv, tsv, and ltsv output in Shift-JIS, EUC-JP, ISO-2022-JP, or UTF-16 as well as UTF-8. The read side has understood these encodings for a long time and the write side had no matching option, so a caller that decoded a legacy source before loading had no way to get one back: every save wrote UTF-8, which meant an in-place save silently changed the file's encoding on disk and the caller's next read of the same file returned mojibake. Output is UTF-8 unless the option says otherwise, and the UTF-16 encodings write a byte-order mark so the read side recognizes them without being told. A value the encoding cannot write fails the save with `ErrEncoding` and leaves the destination untouched, rather than being replaced with a substitute character. Parquet and XLSX carry their own encoding and are unaffected.
+
 ### Fixed
 
 - `STRING_AGG(DISTINCT x, s)` is answered at translate time in the PostgreSQL and GoogleSQL dialects instead of reaching SQLite. Both dialects accept the form and SQLite cannot express it, because its DISTINCT aggregates take exactly one argument and the separator has nowhere to go. The call used to reach the engine and fail with "DISTINCT aggregates must have exactly one argument", which describes SQLite's parser rather than the query the caller wrote, so the construct was neither translated, rejected, nor runnable. A separator of `','` is now dropped, since that is already what `group_concat` joins with and the answer is unchanged; any other separator is refused by name, the way MySQL's `GROUP_CONCAT(DISTINCT x SEPARATOR s)` already was.
