@@ -356,8 +356,12 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 
 		// Process chunk when it reaches the target size
 		if len(chunkrecords) >= chunkSize {
-			// Infer column types on first chunk
-			if len(columnInfo) == 0 {
+			// Infer column types on first chunk. A later chunk does not
+			// re-infer, but it can still hold a value a numeric column would
+			// damage, so it is asked. See promoteForRecords.
+			if len(columnInfo) != 0 {
+				columnInfo.promoteForRecords(chunkrecords)
+			} else {
 				columnInfo = newColumnInfoListFromValues(header, columnValues)
 			}
 
@@ -381,7 +385,9 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 	// Process remaining records
 	if len(chunkrecords) > 0 {
 		// Infer column types if we haven't yet (small dataset)
-		if len(columnInfo) == 0 {
+		if len(columnInfo) != 0 {
+			columnInfo.promoteForRecords(chunkrecords)
+		} else {
 			columnInfo = newColumnInfoListFromValues(header, columnValues)
 		}
 
@@ -529,8 +535,12 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 
 		// Process chunk when it reaches the target size
 		if len(chunkrecords) >= chunkSize {
-			// Infer column types on first chunk
-			if len(columnInfo) == 0 {
+			// Infer column types on first chunk. A later chunk does not
+			// re-infer, but it can still hold a value a numeric column would
+			// damage, so it is asked. See promoteForRecords.
+			if len(columnInfo) != 0 {
+				columnInfo.promoteForRecords(chunkrecords)
+			} else {
 				columnInfo = newColumnInfoListFromValues(header, columnValues)
 			}
 
@@ -554,7 +564,9 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 	// Process remaining records
 	if len(chunkrecords) > 0 {
 		// Infer column types if we haven't yet
-		if len(columnInfo) == 0 {
+		if len(columnInfo) != 0 {
+			columnInfo.promoteForRecords(chunkrecords)
+		} else {
 			columnInfo = newColumnInfoListFromValues(header, columnValues)
 		}
 
@@ -1010,8 +1022,12 @@ func (p *streamingParser) processXLSXInChunks(reader io.Reader, processor chunkP
 
 		// Process chunk when it reaches the target size
 		if len(chunkRecords) >= chunkSize {
-			// Infer column types on first chunk
-			if len(columnInfo) == 0 {
+			// Infer column types on first chunk. A later chunk does not
+			// re-infer, but it can still hold a value a numeric column would
+			// damage, so it is asked. See promoteForRecords.
+			if len(columnInfo) != 0 {
+				columnInfo.promoteForRecords(chunkRecords)
+			} else {
 				columnInfo = newColumnInfoListFromValues(headers, columnValues)
 			}
 
@@ -1037,7 +1053,9 @@ func (p *streamingParser) processXLSXInChunks(reader io.Reader, processor chunkP
 	// Process remaining records
 	if len(chunkRecords) > 0 {
 		// Infer column types if we haven't yet (small dataset)
-		if len(columnInfo) == 0 {
+		if len(columnInfo) != 0 {
+			columnInfo.promoteForRecords(chunkRecords)
+		} else {
 			columnInfo = newColumnInfoListFromValues(headers, columnValues)
 		}
 
