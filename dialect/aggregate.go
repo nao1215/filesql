@@ -143,6 +143,54 @@ func applyAggregateRule(rule aggregateRule, arg []token) ([]token, error) {
 	}
 }
 
+// sqliteDefaultSeparator is what SQLite joins with when group_concat is given no
+// separator, which is what makes dropping an explicit "," a translation rather
+// than a change of answer.
+const sqliteDefaultSeparator = ","
+
+// rewriteStringAggDistinct rewrites STRING_AGG(DISTINCT x, s), which PostgreSQL
+// and GoogleSQL both accept and SQLite cannot express as written: its DISTINCT
+// aggregates take exactly one argument, so the separator has nowhere to go.
+//
+// Left alone the call reached the engine and failed with "DISTINCT aggregates
+// must have exactly one argument", which describes SQLite's parser rather than
+// the query the caller wrote — and STRING_AGG was neither translated, rejected,
+// nor runnable, so it belonged to none of the three classes the dialect contract
+// defines.
+//
+// A separator of "," is dropped, because that is already what group_concat joins
+// with, so the answer is unchanged. Any other separator is refused by name.
+// Joining with a comma regardless would answer a question nobody asked, which is
+// the one thing a translation must not do.
+//
+// It reports false for a call it does not handle — no DISTINCT, or no separator —
+// leaving the caller's own rewrite to run.
+func rewriteStringAggDistinct(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
+	distinct := nextSig(tokens, open+1)
+	if distinct < 0 || !isWordEq(tokens[distinct], "DISTINCT") {
+		return nil, false, nil
+	}
+	comma := topLevelComma(tokens, open, closeIdx)
+	if comma < 0 {
+		return nil, false, nil
+	}
+
+	separator := trimSpaceTokens(tokens[comma+1 : closeIdx])
+	if len(separator) != 1 || separator[0].kind != tokString || separator[0].text != sqliteDefaultSeparator {
+		return nil, false, fmt.Errorf(
+			"%w: STRING_AGG cannot combine DISTINCT with a separator other than ',' on the SQLite backend; drop DISTINCT, or use ','",
+			ErrUnsupportedSyntax)
+	}
+
+	value, err := recurse(tokens[distinct+1 : comma])
+	if err != nil {
+		return nil, false, err
+	}
+	repl := []token{wordToken("group_concat"), opToken("("), wordToken("DISTINCT"), spaceToken()}
+	repl = append(repl, trimSpaceTokens(value)...)
+	return append(repl, opToken(")")), true, nil
+}
+
 // varianceExpr builds the variance of expr from the sums SQLite does have. The
 // 1.0 factors keep the arithmetic in floating point, and dividing by the
 // (COUNT - 1) of a single row yields NULL, which is what the source dialects

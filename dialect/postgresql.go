@@ -15,7 +15,8 @@ import (
 //	P-3  x ~ p / !~ / ~* / !~*     -> x REGEXP p / NOT REGEXP / case-insensitive
 //	P-4  POSITION(x IN y)          -> INSTR(y, x)
 //	P-5  SUBSTRING(x FROM n FOR m) -> SUBSTR(x, n, m)
-//	P-6  STRING_AGG(x, s)          -> group_concat(x, s)
+//	P-6  STRING_AGG(x, s)          -> group_concat(x, s), and the DISTINCT form
+//	                                  -> group_concat(DISTINCT x) for s = ','
 //	P-8  CAST(x AS pg_type)        -> postgresql_cast(x, 'pg_type')
 //	P-10 DISTINCT ON (...), LATERAL -> ErrUnsupportedSyntax
 //	P-11 a ^ b                     -> power(a, b)
@@ -152,6 +153,10 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 		return rewriteRenameCall(tokens, open, closeIdx, "length", pgCallPass)
 	case fnNameCast:
 		return rewriteCastCall(tokens, open, closeIdx, PostgreSQL, "postgresql_cast", pgCallPass)
+	case fnNameStringAgg:
+		// Only the DISTINCT form is handled here; the plain one is renamed by the
+		// word pass below, which keeps the separator SQLite accepts there.
+		return rewriteStringAggDistinct(tokens, open, closeIdx, pgCallPass)
 	default:
 		return nil, false, nil
 	}

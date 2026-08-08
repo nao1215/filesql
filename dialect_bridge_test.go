@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nao1215/filesql/dialect"
@@ -103,6 +104,55 @@ func TestOpenWithDialectGoogleSQL(t *testing.T) {
 	}
 	if half != 15 {
 		t.Fatalf("SAFE_DIVIDE = %v, want 15", half)
+	}
+}
+
+// TestStringAggDistinctExecutes is the execution half of the STRING_AGG(DISTINCT)
+// rewrite. The translated text alone proves nothing here: the whole point is that
+// the old translation reached SQLite and failed there, so the check that matters
+// is that the query now returns a row.
+func TestStringAggDistinctExecutes(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name    string
+		dialect dialect.Dialect
+		query   string
+	}{
+		{
+			name:    "postgresql",
+			dialect: dialect.PostgreSQL,
+			query:   "SELECT STRING_AGG(DISTINCT name, ',') AS names FROM sample",
+		},
+		{
+			name:    "googlesql",
+			dialect: dialect.GoogleSQL,
+			query:   "SELECT STRING_AGG(DISTINCT name, ',') AS names FROM sample",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			builder, err := NewBuilder().AddPath("testdata/sample.csv").WithDialect(tt.dialect).Build(ctx)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			db, err := builder.Open(ctx)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer db.Close()
+
+			var names string
+			if err := db.QueryRowContext(ctx, tt.query).Scan(&names); err != nil {
+				t.Fatalf("query: %v", err)
+			}
+			// group_concat's default separator is the comma the query asked for,
+			// which is what makes dropping the argument a translation.
+			if !strings.Contains(names, ",") {
+				t.Errorf("names = %q, want the values joined by a comma", names)
+			}
+		})
 	}
 }
 

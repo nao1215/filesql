@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `STRING_AGG(DISTINCT x, s)` is answered at translate time in the PostgreSQL and GoogleSQL dialects instead of reaching SQLite. Both dialects accept the form and SQLite cannot express it, because its DISTINCT aggregates take exactly one argument and the separator has nowhere to go. The call used to reach the engine and fail with "DISTINCT aggregates must have exactly one argument", which describes SQLite's parser rather than the query the caller wrote, so the construct was neither translated, rejected, nor runnable. A separator of `','` is now dropped, since that is already what `group_concat` joins with and the answer is unchanged; any other separator is refused by name, the way MySQL's `GROUP_CONCAT(DISTINCT x SEPARATOR s)` already was.
+
 ## [0.37.1] - 2026-08-07
 
 ### Removed
