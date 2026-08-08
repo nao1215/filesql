@@ -2,8 +2,10 @@ package filesql
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -60,6 +62,35 @@ func TestInferColumnTypeInt64Overflow(t *testing.T) {
 		"11040320260000000002",
 	})
 	require.Equal(t, columnTypeText, got)
+}
+
+// TestOpenContextPreservesLargeIntegerPastTheFirstChunk is the same rule across
+// the boundary that decides the schema. Column types come from the first chunk,
+// so an account number past int64 arriving later met a column that was already
+// INTEGER, and came back as 1.104032026e+19 — the loss the classifier refuses
+// to allow in the first chunk, reached by arriving after it.
+func TestOpenContextPreservesLargeIntegerPastTheFirstChunk(t *testing.T) {
+	t.Parallel()
+
+	var b strings.Builder
+	b.WriteString("account\n")
+	for i := range DefaultRowsPerChunk * 2 {
+		fmt.Fprintf(&b, "%d\n", i+1)
+	}
+	b.WriteString("11040320260000000000\n")
+
+	path := filepath.Join(t.TempDir(), "accounts.csv")
+	require.NoError(t, os.WriteFile(path, []byte(b.String()), 0600))
+
+	ctx := context.Background()
+	db, err := OpenContext(ctx, path)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var got string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT account FROM accounts WHERE length(account) = 20`).Scan(&got))
+	require.Equal(t, "11040320260000000000", got)
 }
 
 // TestOpenContextPreservesLargeIntegerExactly is the end-to-end regression test

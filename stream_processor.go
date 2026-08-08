@@ -290,6 +290,8 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, 
 	var insertStmt *sql.Stmt
 	var tx *sql.Tx
 	ownTx := false
+	// createdTypes is the schema on disk, which a later chunk can widen.
+	var createdTypes columnInfoList
 
 	// Process data in chunks with transaction batching for performance
 	var chunkCount int
@@ -331,7 +333,21 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, 
 			}
 
 			tableCreated = true
+			createdTypes = columnInfoList(chunk.getColumnInfo()).clone()
 			sp.logger.Info("table created", logKeyTable, input.tableName)
+		}
+
+		// A chunk can widen a column the table was already created with, when a
+		// value only a TEXT column holds losslessly arrives after the schema was
+		// decided. Rebuild before inserting it, so the value never meets the
+		// affinity that would rewrite it.
+		if !createdTypes.equalTypes(chunk.getColumnInfo()) {
+			newStmt, err := sp.rebuildTableForWidenedColumns(ctx, tx, chunk, insertStmt) //nolint:sqlclosecheck // Statement is closed after processing
+			if err != nil {
+				return err
+			}
+			insertStmt = newStmt
+			createdTypes = columnInfoList(chunk.getColumnInfo()).clone()
 		}
 
 		// Insert chunk data
@@ -441,6 +457,54 @@ func (sp *streamProcessor) createTableFromChunk(ctx context.Context, db DBTX, ch
 
 	_, err := db.ExecContext(ctx, query)
 	return err
+}
+
+// rebuildTableForWidenedColumns recreates the table with the chunk's column
+// types and moves the rows already loaded into it, returning an insert
+// statement prepared against the new table.
+//
+// SQLite cannot change a column's declared type in place, so this is the
+// standard rename-copy-drop. Copying is lossless for what it copies: a column
+// is only widened to TEXT, and every row already inserted held a value the
+// numeric column accepted without altering it, so its text form is the text it
+// was read from.
+func (sp *streamProcessor) rebuildTableForWidenedColumns(ctx context.Context, tx *sql.Tx, chunk *tableChunk, insertStmt *sql.Stmt) (*sql.Stmt, error) {
+	table := chunk.getTableName()
+	sp.logger.Debug("widening column types", logKeyTable, table)
+
+	// The old statement is bound to the table this is about to drop.
+	if insertStmt != nil {
+		if err := insertStmt.Close(); err != nil {
+			return nil, fmt.Errorf("%w: failed to close insert statement before widening: %w", ErrDatabaseOperation, err)
+		}
+	}
+
+	staging := table + "_filesql_widen"
+	columnInfo := chunk.getColumnInfo()
+	columns := make([]string, 0, len(columnInfo))
+	names := make([]string, 0, len(columnInfo))
+	for _, col := range columnInfo {
+		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.string()))
+		names = append(names, fmt.Sprintf(`"%s"`, col.Name))
+	}
+
+	statements := []string{
+		fmt.Sprintf(`ALTER TABLE "%s" RENAME TO "%s"`, table, staging),
+		fmt.Sprintf(`CREATE TABLE "%s" (%s)`, table, strings.Join(columns, ", ")),
+		fmt.Sprintf(`INSERT INTO "%s" SELECT %s FROM "%s"`, table, strings.Join(names, ", "), staging),
+		fmt.Sprintf(`DROP TABLE "%s"`, staging),
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return nil, fmt.Errorf("%w: failed to widen column types: %w", ErrDatabaseOperation, err)
+		}
+	}
+
+	stmt, err := sp.prepareInsertStatementTx(ctx, tx, chunk)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to prepare insert statement after widening: %w", ErrDatabaseOperation, err)
+	}
+	return stmt, nil
 }
 
 // prepareInsertStatement prepares an insert statement for the table

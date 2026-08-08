@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A value that only a TEXT column holds losslessly keeps its column TEXT wherever it sits in the file ([#255](https://github.com/nao1215/filesql/issues/255)). Three kinds of value are damaged by a numeric column — a zero-padded code, an integer literal past int64, and Go-only numeric syntax — and the classifier already refused to call any of them numeric. It only ever saw a sample: at most 1000 values per column, taken from the first chunk. A code arriving after that met a column that was already INTEGER, and SQLite's affinity rewrote it on the way in, so `007` came back as `7` and an account number past int64 as `1.104032026e+19`, at exit 0 with nothing on stderr. Whether a column is INTEGER or REAL is still decided from a sample; whether a cell survives is now asked of every value, and a chunk that widens a column rebuilds the table before its rows are inserted.
+
+### Documentation
+
+- README describes what column-type inference guarantees and what it does not ([#256](https://github.com/nao1215/filesql/issues/256)). Decimal spelling is not preserved: `2.50` loads as the REAL `2.5`, `1.00` as `1`, and `1e3` as `1000`. Keeping the spelling would mean a TEXT column, and SQLite compares a TEXT column against a number as text, so `WHERE amount > 9.5` over `9.00` and `10.00` matches nothing — the arithmetic is worth more than the formatting. The rule is now written down beside the three cases that do force TEXT, rather than left to be discovered.
+
 ## [0.38.0] - 2026-08-08
 
 ### Added

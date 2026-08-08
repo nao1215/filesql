@@ -324,6 +324,47 @@ func newColumnInfoListFromValues(header header, columnValues [][]string) columnI
 	return columnInfos
 }
 
+// promoteForRecords widens any numeric column that these records show cannot
+// hold its values losslessly.
+//
+// Types are inferred once, from the first chunk, and a file is not obliged to
+// introduce its awkward values early. A zero-padded code or an int64-overflowing
+// literal arriving in a later chunk met a column that was already INTEGER, and
+// SQLite's affinity rewrote it on the way in — the same loss the guards prevent
+// in the first chunk, reached by arriving late. Only widening to TEXT is needed:
+// nothing here can make a TEXT column numeric again.
+func (c columnInfoList) promoteForRecords(records []record) {
+	for _, r := range records {
+		for i, value := range r {
+			if i >= len(c) || c[i].Type == columnTypeText {
+				continue
+			}
+			if mustStayText(value) {
+				c[i].Type = columnTypeText
+			}
+		}
+	}
+}
+
+// equalTypes reports whether both lists declare the same column types.
+func (c columnInfoList) equalTypes(other columnInfoList) bool {
+	if len(c) != len(other) {
+		return false
+	}
+	for i := range c {
+		if c[i].Type != other[i].Type {
+			return false
+		}
+	}
+	return true
+}
+
+// clone returns a copy that later promotions cannot reach, so a caller can hold
+// on to the types a table was actually created with.
+func (c columnInfoList) clone() columnInfoList {
+	return append(columnInfoList(nil), c...)
+}
+
 // datetimePattern represents a cached datetime pattern with compiled regex
 type datetimePattern struct {
 	pattern *regexp.Regexp
@@ -448,6 +489,13 @@ func isDatetime(value string) bool {
 func inferColumnType(values []string) columnType {
 	if len(values) == 0 {
 		return columnTypeText
+	}
+
+	// Asked of every value, not of the sample: see mustStayText.
+	for _, value := range values {
+		if mustStayText(value) {
+			return columnTypeText
+		}
 	}
 
 	// Use sampling for large datasets to improve performance
@@ -684,8 +732,36 @@ func isFloat(value string) bool {
 		return false
 	}
 
+	// Decimal spelling is deliberately not guarded the way the three cases above
+	// are. "2.50" loads as the REAL 2.5 and "1e3" as 1000: the quantity survives
+	// and the way it was written does not. Keeping the spelling would mean a
+	// TEXT column, and SQLite compares a TEXT column against a number as text —
+	// "WHERE amount > 9.5" over "9.00" and "10.00" then matches nothing at all.
+	// A column of money is worth more as numbers than as the strings it was
+	// typed as, so the trailing zeros go and the arithmetic stays.
 	_, err := strconv.ParseFloat(value, 64)
 	return err == nil
+}
+
+// mustStayText reports whether a numeric column would damage this value, so the
+// column holding it has to be TEXT.
+//
+// These are the three cases the classifier already refuses to call numeric, and
+// they differ from the rest of inference in kind rather than degree. Whether a
+// column is INTEGER or REAL is a judgement about the column, and a sample is a
+// reasonable way to make it. Whether a cell survives the load is not a
+// judgement: a zero-padded code, a literal past int64, or Go-only numeric
+// syntax is rewritten by SQLite's affinity the moment it reaches a numeric
+// column, and no later inspection can recover what it said. So every value is
+// asked this question, and only the leftovers are sampled.
+func mustStayText(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	return isZeroPaddedIntegerLiteral(value) ||
+		isIntegerLiteralOverflowingInt64(value) ||
+		hasGoOnlyNumericSyntax(value)
 }
 
 // hasGoOnlyNumericSyntax reports whether value uses numeric syntax that Go's
