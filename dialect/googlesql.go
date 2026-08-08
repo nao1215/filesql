@@ -26,6 +26,7 @@ import (
 //	G-15 COUNTIF / LOGICAL_AND / STDDEV       -> SQLite aggregate expressions
 //	G-16 UNION DISTINCT                       -> UNION
 //	G-17 JSON_VALUE / BYTE_LENGTH / CHAR_LENGTH
+//	G-18 STRING_AGG(DISTINCT x, ',')           -> group_concat(DISTINCT x)
 func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedGoogleSQL(tokens); err != nil {
 		return nil, err
@@ -144,6 +145,10 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 		return rewriteRenameCall(tokens, open, closeIdx, "length", googlesqlCallPass)
 	case "DATE_TRUNC", "TIMESTAMP_TRUNC", "DATETIME_TRUNC":
 		return rewriteTruncCall(tokens, open, closeIdx, googlesqlCallPass)
+	case fnNameStringAgg:
+		// SQLite has string_agg as an alias of group_concat, so the plain form
+		// runs as written and only the DISTINCT one needs rewriting.
+		return rewriteStringAggDistinct(tokens, open, closeIdx, googlesqlCallPass)
 	default:
 		return nil, false, nil
 	}

@@ -39,6 +39,15 @@ func TestPostgreSQLTranslate(t *testing.T) {
 		{"P-5_substring_comma_passthrough", "SELECT SUBSTRING(name, 2, 3) FROM t", "SELECT SUBSTRING(name, 2, 3) FROM t"},
 
 		{"P-6_string_agg", "SELECT STRING_AGG(name, ', ') FROM t", "SELECT group_concat(name, ', ') AS \"STRING_AGG(name, ', ')\" FROM t"},
+		// SQLite's DISTINCT aggregates take one argument, so the separator has to
+		// go. Dropping it is only correct when it is the comma SQLite defaults to.
+		{"P-6_string_agg_distinct_comma", "SELECT STRING_AGG(DISTINCT name, ',') FROM t", "SELECT group_concat(DISTINCT name) AS \"STRING_AGG(DISTINCT name, ',')\" FROM t"},
+		{"P-6_string_agg_distinct_comma_spaced", "SELECT STRING_AGG( DISTINCT name , ',' ) FROM t", "SELECT group_concat(DISTINCT name) AS \"STRING_AGG( DISTINCT name , ',' )\" FROM t"},
+		{"P-6_string_agg_distinct_expression", "SELECT STRING_AGG(DISTINCT UPPER(name), ',') FROM t", "SELECT group_concat(DISTINCT UPPER(name)) AS \"STRING_AGG(DISTINCT UPPER(name), ',')\" FROM t"},
+		// An ORDER BY belongs to the aggregate, not to the separator, and SQLite
+		// takes it inside group_concat.
+		{"P-6_string_agg_distinct_order_by", "SELECT STRING_AGG(DISTINCT name, ',' ORDER BY name) FROM t", "SELECT group_concat(DISTINCT name ORDER BY name) AS \"STRING_AGG(DISTINCT name, ',' ORDER BY name)\" FROM t"},
+		{"P-6_string_agg_distinct_order_by_desc", "SELECT STRING_AGG(DISTINCT name, ',' ORDER BY name DESC) FROM t", "SELECT group_concat(DISTINCT name ORDER BY name DESC) AS \"STRING_AGG(DISTINCT name, ',' ORDER BY name DESC)\" FROM t"},
 
 		{"P-8_cast_int4", "SELECT CAST(x AS int4) FROM t", "SELECT postgresql_cast(x, 'int4') AS \"CAST(x AS int4)\" FROM t"},
 		{"P-8_cast_boolean", "SELECT CAST(x AS boolean)", "SELECT postgresql_cast(x, 'boolean') AS \"CAST(x AS boolean)\""},
@@ -76,6 +85,10 @@ func TestPostgreSQLTranslateUnsupported(t *testing.T) {
 		{"P-10_distinct_on", "SELECT DISTINCT ON (a) a, b FROM t"},
 		{"P-10_lateral", "SELECT * FROM t, LATERAL (SELECT 1) s"},
 		{"P-3_ci_non_literal", "SELECT * FROM t WHERE a ~* b"},
+		// A separator SQLite cannot keep alongside DISTINCT. Answering with a
+		// comma-joined string would be a different answer, not a translation.
+		{"P-6_string_agg_distinct_other_separator", "SELECT STRING_AGG(DISTINCT name, '-') FROM t"},
+		{"P-6_string_agg_distinct_separator_expression", "SELECT STRING_AGG(DISTINCT name, sep) FROM t"},
 		{"P-1_missing_type", "SELECT a::"},
 		{"P-1_type_not_word", "SELECT a:: , b"},
 	}
