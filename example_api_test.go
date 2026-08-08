@@ -353,6 +353,15 @@ func ExampleDumpOptions_WithCompression() {
 	// .csv.gz
 }
 
+func ExampleDumpOptions_WithEncoding() {
+	// Output is UTF-8 unless asked otherwise. A value the encoding cannot write
+	// fails the save rather than being replaced.
+	opts := filesql.NewDumpOptions().WithEncoding(filesql.EncodingShiftJIS)
+	fmt.Println(opts.Encoding)
+	// Output:
+	// shift-jis
+}
+
 func ExampleOutputFormat_Extension() {
 	fmt.Println(filesql.OutputFormatParquet.Extension())
 	// Output:

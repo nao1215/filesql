@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `DumpOptions.WithEncoding` writes csv, tsv, and ltsv output in Shift-JIS, EUC-JP, ISO-2022-JP, or UTF-16 as well as UTF-8. The read side has understood these encodings for a long time and the write side had no matching option, so a caller that decoded a legacy source before loading had no way to get one back: every save wrote UTF-8, which meant an in-place save silently changed the file's encoding on disk and the caller's next read of the same file returned mojibake. Output is UTF-8 unless the option says otherwise, and the UTF-16 encodings write a byte-order mark so the read side recognizes them without being told. A value the encoding cannot write fails the save with `ErrEncoding` and leaves the destination untouched, rather than being replaced with a substitute character. Parquet and XLSX carry their own encoding and are unaffected.
+
 ### Fixed
 
 - ACH write-back rebuilds each batch control from the entries, so an edited amount can be written at all. `File.Create` builds the file control from the batch controls and leaves the batch controls alone — that is `Batch.Create`'s job — so each batch kept the control the original file arrived with, and every amount edit failed the write with "TotalDebitEntryDollarAmount calculated N is out-of-balance with batch control M". Editing the control column instead did not help, because the recalculation it was waiting for never ran. Control records are derived values: the write recalculates them, for IAT batches too, and an edit to a control column is overwritten rather than honored.

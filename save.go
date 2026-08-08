@@ -206,6 +206,9 @@ type DumpOptions struct {
 	Format OutputFormat
 	// Compression specifies the compression type
 	Compression CompressionType
+	// Encoding specifies the text encoding of csv, tsv, and ltsv output. It has
+	// no effect on Parquet and XLSX, which carry their own.
+	Encoding Encoding
 }
 
 // NewDumpOptions creates default export options (CSV, no compression).
@@ -217,6 +220,7 @@ func NewDumpOptions() DumpOptions {
 	return DumpOptions{
 		Format:      OutputFormatCSV,
 		Compression: CompressionNone,
+		Encoding:    EncodingUTF8,
 	}
 }
 
@@ -246,6 +250,30 @@ func (o DumpOptions) WithFormat(format OutputFormat) DumpOptions {
 //   - CompressionLZ4: LZ4 compression (.lz4)
 func (o DumpOptions) WithCompression(compression CompressionType) DumpOptions {
 	o.Compression = compression
+	return o
+}
+
+// WithEncoding sets the text encoding of csv, tsv, and ltsv output.
+//
+// It exists so a caller that decoded a legacy source before loading can write
+// one back: without it every save produced UTF-8, so an in-place save changed
+// the file's encoding on disk and the caller's next read of the same file
+// returned mojibake.
+//
+// A value the encoding cannot write fails the save with ErrEncoding, naming the
+// encoding, rather than being replaced — a substitution is the silent corruption
+// the read side already refuses. Parquet and XLSX carry their own encoding and
+// are unaffected.
+//
+// Options:
+//   - EncodingUTF8: UTF-8 (default)
+//   - EncodingShiftJIS: Shift-JIS (CP932)
+//   - EncodingEUCJP: EUC-JP
+//   - EncodingISO2022JP: ISO-2022-JP
+//   - EncodingUTF16LE: UTF-16 little-endian, with a byte-order mark
+//   - EncodingUTF16BE: UTF-16 big-endian, with a byte-order mark
+func (o DumpOptions) WithEncoding(enc Encoding) DumpOptions {
+	o.Encoding = enc
 	return o
 }
 

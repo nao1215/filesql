@@ -31,6 +31,7 @@ filesql is for cases where the data is already in a file and the fastest useful 
 - Optionally query with MySQL, PostgreSQL, or GoogleSQL syntax via `WithDialect` (translated to SQLite).
 - Read from file paths, directories, `io.Reader`, and `embed.FS`.
 - Handle compressed CSV, TSV, LTSV, JSON, JSONL, Parquet, and XLSX files transparently.
+- Write csv, tsv, and ltsv output in Shift-JIS, EUC-JP, ISO-2022-JP, or UTF-16 as well as UTF-8.
 - Load into a new in-memory database or into a `*sql.DB` you already manage.
 - Save changes with `DumpDatabase`, `EnableAutoSave`, or `EnableAutoSaveOnCommit`.
 - Stay in one module for loading (`filesql`), cleanup (`prep`), and lightweight transforms (`frame`).
@@ -385,6 +386,18 @@ Changes live in memory until you save them.
 - `EnableAutoSave` saves when `db.Close()` runs.
 - `EnableAutoSaveOnCommit` saves after each committed transaction.
 
+`DumpOptions` decides the format, the compression, and the text encoding of csv, tsv, and ltsv output:
+
+```go
+options := filesql.NewDumpOptions().
+	WithFormat(filesql.OutputFormatCSV).
+	WithEncoding(filesql.EncodingShiftJIS)
+
+err := filesql.DumpDatabase(db, "./output", options)
+```
+
+Output is UTF-8 unless `WithEncoding` says otherwise, which is what a save wrote before the option existed. `EncodingShiftJIS`, `EncodingEUCJP`, `EncodingISO2022JP`, `EncodingUTF16LE`, and `EncodingUTF16BE` are the others; the UTF-16 pair write a byte-order mark, so the read side recognizes them without being told. A value the encoding has no way to write fails the save with `ErrEncoding` and leaves the destination as it was, rather than being replaced with a substitute character — the same answer the read side gives to bytes it cannot decode. Parquet and XLSX carry their own encoding and ignore the option.
+
 ### Excel sheet visibility
 
 A workbook can hide a sheet, and a hidden sheet often holds the spreadsheet's own working-out rather than data anyone meant to publish. filesql loads every sheet by default, hidden or not, so existing programs keep the tables they have.
@@ -438,7 +451,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Attach your own logger | `ExampleDBBuilder_WithLogger`, `ExampleNewSlogAdapter` | [example_api_test.go](./example_api_test.go) |
 | Open a read-only wrapper | `ExampleDBBuilder_OpenReadOnly` | [example_api_test.go](./example_api_test.go) |
 | Save on close or commit | `ExampleDBBuilder_EnableAutoSave`, `ExampleDBBuilder_EnableAutoSaveOnCommit`, `ExampleDBBuilder_DisableAutoSave` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
-| Export tables with format/compression options | `ExampleDumpDatabase`, `ExampleNewDumpOptions`, `ExampleDumpOptions_WithFormat`, `ExampleDumpOptions_WithCompression` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
+| Export tables with format/compression/encoding options | `ExampleDumpDatabase`, `ExampleNewDumpOptions`, `ExampleDumpOptions_WithFormat`, `ExampleDumpOptions_WithCompression`, `ExampleDumpOptions_WithEncoding` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
 | Work with compression helpers directly | `ExampleNewCompressionHandler`, `ExampleNewCompressionFactory`, `ExampleCompressionFactory_DetectCompressionType` | [example_api_test.go](./example_api_test.go) |
 | Strip compression suffixes and inspect file types | `ExampleCompressionFactory_RemoveCompressionExtension`, `ExampleCompressionFactory_GetBaseFileType` | [example_api_test.go](./example_api_test.go) |
 | Inspect the malformed-row policy | `ExampleMalformedRowPolicy_String` | [example_api_test.go](./example_api_test.go) |

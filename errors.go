@@ -67,6 +67,10 @@ var (
 	// ErrCompression indicates a compression/decompression operation failed.
 	ErrCompression = errors.New("filesql: compression operation failed")
 
+	// ErrEncoding indicates a text encoding operation failed, which for a save
+	// means the target encoding has no way to write a value the table holds.
+	ErrEncoding = errors.New("filesql: text encoding failed")
+
 	// ErrParsing indicates a file parsing operation failed.
 	ErrParsing = errors.New("filesql: parsing failed")
 

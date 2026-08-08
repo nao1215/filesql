@@ -506,21 +506,45 @@ func writeSQLiteTableDataTo(w io.Writer, tableName string, columns []string, row
 		err = joinCleanup(err, closeWriter(), "finish writing "+tableName)
 	}()
 
-	// Write data based on format
+	// Parquet and XLSX state their own encoding, so running their bytes through
+	// a transcoder would corrupt the container rather than translate it. Only the
+	// text formats below are encoded.
 	switch options.Format {
-	case OutputFormatCSV:
-		return writeCSVData(writer, columns, rows)
-	case OutputFormatTSV:
-		return writeTSVData(writer, columns, rows)
-	case OutputFormatLTSV:
-		return writeLTSVData(writer, columns, rows)
 	case OutputFormatParquet:
 		return writeParquetTableData(writer, columns, rows)
 	case OutputFormatXLSX:
 		return writeXLSXTableData(writer, tableName, columns, rows)
+	}
+
+	// The encoder wraps inside the compressor: what a compressor stores is the
+	// encoded text, so a reader decompresses and then decodes.
+	encoded, encoder := options.Encoding.encodingWriter(writer)
+	defer func() {
+		if encoder == nil {
+			return
+		}
+		// Closing the encoder is what flushes a sequence it was still holding, so
+		// dropping this error would commit a truncated file.
+		if closeErr := encoder.Close(); closeErr != nil && err == nil {
+			err = encodingError(options.Encoding, closeErr)
+		}
+	}()
+
+	var writeErr error
+	switch options.Format {
+	case OutputFormatCSV:
+		writeErr = writeCSVData(encoded, columns, rows)
+	case OutputFormatTSV:
+		writeErr = writeTSVData(encoded, columns, rows)
+	case OutputFormatLTSV:
+		writeErr = writeLTSVData(encoded, columns, rows)
 	default:
 		return fmt.Errorf("%w: unsupported output format: %v", ErrUnsupportedFormat, options.Format)
 	}
+	if writeErr != nil && encoder.encoderFailed() {
+		return encodingError(options.Encoding, writeErr)
+	}
+	return writeErr
 }
 
 // createCompressedWriter creates an appropriate writer based on compression type
@@ -545,7 +569,6 @@ func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, deli
 	if delimiter != csvDelimiter {
 		csvWriter.Comma = delimiter
 	}
-	defer csvWriter.Flush()
 
 	// writeRecord writes one record, taking the lone empty field around the csv
 	// writer. Flushing first keeps the two writers' output in order.
@@ -589,7 +612,15 @@ func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, deli
 		}
 	}
 
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// The flush is where a buffered write reaches the writer underneath, so it is
+	// the first place a failure there can be seen — csv.Writer holds the error
+	// rather than returning it from Write. Flushing in a defer discarded it, and
+	// an encoder refusing a value it cannot write is exactly such a failure.
+	csvWriter.Flush()
+	return csvWriter.Error()
 }
 
 // formatDumpValue renders one cell for a text-based dump.
