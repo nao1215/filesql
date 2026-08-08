@@ -660,7 +660,25 @@ func (ts *TableSet) ToFile() (*ach.File, error) {
 		}
 	}
 
-	// Recalculate control records
+	// Recalculate control records. Each batch first, then the file.
+	//
+	// File.Create builds the file control from the batch controls and does not
+	// touch the batch controls themselves — that is Batch.Create's job. Without
+	// this loop each batch kept the control the deep copy carried over from the
+	// original file, so an edited entry amount was checked against the total the
+	// source was written with and every write failed as out-of-balance. The
+	// controls are derived values, so recalculating them is what makes an edit
+	// writable at all.
+	for i, batch := range newFile.Batches {
+		if err := batch.Create(); err != nil {
+			return nil, fmt.Errorf("failed to create batch control for batch %d: %w", i+1, err)
+		}
+	}
+	for i := range newFile.IATBatches {
+		if err := newFile.IATBatches[i].Create(); err != nil {
+			return nil, fmt.Errorf("failed to create IAT batch control for batch %d: %w", i+1, err)
+		}
+	}
 	if err := newFile.Create(); err != nil {
 		return nil, fmt.Errorf("failed to create file control: %w", err)
 	}

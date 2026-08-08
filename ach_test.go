@@ -220,6 +220,52 @@ func TestOpenACHFile_UpdateAndWrite(t *testing.T) {
 	assert.Equal(t, "Updated Name", name, "name should be updated")
 }
 
+// TestOpenACHFile_UpdateAmountAndWrite covers the edit the test above steps
+// around. An amount is what a batch control totals, so changing one is the case
+// that decides whether write-back recalculates the controls or writes the file
+// with the totals it was read with. It used to be the latter, and every amount
+// edit failed to write as out-of-balance, which left no way to change an amount
+// at all.
+func TestOpenACHFile_UpdateAmountAndWrite(t *testing.T) {
+	testFile := findTestACHFile(t)
+	if testFile == "" {
+		t.Skip("No test ACH file found")
+	}
+
+	ctx := context.Background()
+	db, err := OpenContext(ctx, testFile)
+	require.NoError(t, err)
+	defer db.Close()
+
+	var before int
+	require.NoError(t, db.QueryRowContext(ctx,
+		"SELECT amount FROM ppd_debit_entries WHERE entry_index = 0").Scan(&before))
+
+	after := before + 1
+	_, err = db.ExecContext(ctx,
+		"UPDATE ppd_debit_entries SET amount = ? WHERE entry_index = 0", after)
+	require.NoError(t, err)
+
+	tmpFile := filepath.Join(t.TempDir(), "output.ach")
+	require.NoError(t, DumpACH(ctx, db, "ppd_debit", tmpFile))
+
+	// Re-opening runs the reader's own balance check, so a file that opens is a
+	// file whose controls agree with its entries.
+	db2, err := OpenContext(ctx, tmpFile)
+	require.NoError(t, err)
+	defer db2.Close()
+
+	var got int
+	require.NoError(t, db2.QueryRowContext(ctx,
+		"SELECT amount FROM output_entries WHERE entry_index = 0").Scan(&got))
+	assert.Equal(t, after, got, "the edited amount should survive the write")
+
+	var totalDebit int
+	require.NoError(t, db2.QueryRowContext(ctx,
+		"SELECT total_debit FROM output_batches WHERE batch_index = 0").Scan(&totalDebit))
+	assert.Equal(t, after, totalDebit, "the batch control should follow the entries")
+}
+
 func TestOpenACHFile_IATFile(t *testing.T) {
 	testFile := findACHTestFile(t, "iat-credit.ach")
 	if testFile == "" {

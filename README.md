@@ -415,6 +415,8 @@ for _, sheet := range sheets {
 
 ACH (`.ach`) and Fedwire (`.fed`) support are experimental. They are useful for inspection, joins, and controlled updates, but the exported files still need domain knowledge from the caller.
 
+Control records are derived, not stored: writing an ACH file rebuilds each batch control and the file control from the entries, so an edited amount is balanced by the write rather than by the caller. An edit to a control column (`total_debit`, `total_credit`, `entry_hash`, `entry_addenda_count`) is therefore overwritten by the recalculation.
+
 ## Examples
 
 ### API example index
