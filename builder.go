@@ -483,6 +483,21 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 	return b, nil
 }
 
+// SkippedRows reports what WithMalformedRowPolicy(MalformedRowSkip) discarded
+// during the loads this builder has performed, one entry per table that lost
+// rows. A load that dropped nothing is not listed, so a non-empty result is
+// always something worth telling a user about.
+//
+// Skipping is an instruction from the caller, but an instruction that reports
+// nothing leaves one dropped row and most of the file dropped looking exactly
+// alike — and a write-back afterwards makes either one permanent. The counts
+// are what lets a caller say which of the two happened before that.
+//
+// It is valid after Open, OpenContext, LoadInto, or LoadIntoTx have run.
+func (b *DBBuilder) SkippedRows() []SkippedRows {
+	return b.streamProcessor.skippedRows()
+}
+
 // Open creates and returns a database connection using the configured and validated inputs.
 // This method can only be called after Build() has been successfully executed.
 // It creates an in-memory SQLite database and loads all configured files as tables using streaming.

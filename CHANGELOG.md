@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `DBBuilder.SkippedRows` reports what `MalformedRowSkip` discarded, per table, with the count and the number of data rows it was choosing from. Skipping is an instruction from the caller, but an instruction that reports nothing left an import that dropped one row and one that dropped most of the file looking identical — and a write-back afterwards makes either one permanent. A load that dropped nothing is not listed, so a non-empty result is always worth reporting to a user.
+
 ### Fixed
 
 - ACH and Fedwire write-back refuses a value too wide for its fixed-width record instead of cutting it to fit ([#257](https://github.com/nao1215/filesql/issues/257)). The two halves of the same edit behaved differently: an amount past its field failed the write with a FieldError, while a name past its field was shortened by the writer's own formatter and written at no error, so the file on disk held data the session never asked for — `individual_name` cut at 22 characters, `company_name` at 16, a Fedwire originator name at 35. No width is hardcoded: each field formatter returns exactly the number of characters its record holds, so its output is the specification's own answer. The Fedwire side walks the message rather than listing its fields, since the library defines close to three hundred of them, and only refuses a value whose formatted form is a strict prefix of it — the shape truncation leaves.

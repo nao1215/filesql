@@ -116,11 +116,13 @@ func (p *streamingParser) parseDelimitedStream(reader io.Reader, delimiter rune,
 
 	tablerecords := make([]record, 0, len(records)-1)
 	for i := 1; i < len(records); i++ {
+		p.totalRows++
 		record, skip, err := reconcileFieldCount(records[i], len(header), i, p.malformedRowPolicy)
 		if err != nil {
 			return nil, err
 		}
 		if skip {
+			p.skippedRows++
 			continue
 		}
 		tablerecords = append(tablerecords, newRecord(record))
@@ -332,11 +334,13 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 		}
 		rowNum++
 
+		p.totalRows++
 		record, skip, err := reconcileFieldCount(record, len(header), rowNum, p.malformedRowPolicy)
 		if err != nil {
 			return err
 		}
 		if skip {
+			p.skippedRows++
 			continue
 		}
 

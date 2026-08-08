@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -35,6 +36,42 @@ type streamProcessor struct {
 	// excelSheetPolicy controls which sheets of a workbook are loaded. The zero
 	// value is ExcelSheetPolicyAll.
 	excelSheetPolicy ExcelSheetPolicy
+	// skipped records what MalformedRowSkip discarded, per table, so a caller
+	// can report it. Loads run one file at a time here, but a builder can hold
+	// several, so the mutex covers a future that runs them together.
+	skippedMu sync.Mutex
+	skipped   []SkippedRows
+}
+
+// SkippedRows is how much of one table's input the malformed-row policy
+// discarded.
+type SkippedRows struct {
+	// Table is the table the rows would have gone into.
+	Table string
+	// Count is how many data rows were dropped.
+	Count int
+	// Total is how many data rows the input held, dropped ones included, so a
+	// caller can say "2 of 4" rather than a bare number.
+	Total int
+}
+
+// recordSkippedRows keeps what one load discarded. Nothing is recorded for a
+// load that dropped nothing, so a caller can treat a non-empty result as
+// something worth telling the user about.
+func (sp *streamProcessor) recordSkippedRows(table string, count, total int) {
+	if count == 0 {
+		return
+	}
+	sp.skippedMu.Lock()
+	defer sp.skippedMu.Unlock()
+	sp.skipped = append(sp.skipped, SkippedRows{Table: table, Count: count, Total: total})
+}
+
+// skippedRows returns what the loads so far discarded.
+func (sp *streamProcessor) skippedRows() []SkippedRows {
+	sp.skippedMu.Lock()
+	defer sp.skippedMu.Unlock()
+	return append([]SkippedRows(nil), sp.skipped...)
 }
 
 // dropIfReplacing drops a same-named table when replaceExisting is set, so the
@@ -284,6 +321,9 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, 
 	parser := newStreamingParser(input.fileType, input.compression, input.tableName, sp.chunkSize)
 	parser.malformedRowPolicy = sp.malformedRowPolicy
 	parser.excelSheetPolicy = sp.excelSheetPolicy
+	// What the malformed-row policy dropped is worth saying even when the load
+	// itself succeeded, so it is collected however this function returns.
+	defer func() { sp.recordSkippedRows(input.tableName, parser.skippedRows, parser.totalRows) }()
 
 	// Initialize the table schema (we need to peek at the first chunk to get headers)
 	var tableCreated bool
