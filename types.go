@@ -176,30 +176,53 @@ func (ct columnType) String() string {
 // The message quotes the name and gives its 1-based position, because a header
 // can duplicate the empty name — two unnamed columns — and an unquoted empty
 // name printed nothing at all after the colon.
+// Two names are the same column if either comparison says so, and the two are
+// kept apart rather than combined into one key. Whitespace is filesql's own
+// rule — " name " and "name" are one name typed twice — while case is SQLite's,
+// because SQLite is what ends up holding the columns. Folding a trimmed name
+// would apply both at once and refuse " A" beside "a", which neither rule
+// refuses on its own and which SQLite keeps as two columns.
 func validateColumnNames(columns []string) error {
-	columnsSeen := make(map[string]bool)
+	trimmed := make(map[string]bool, len(columns))
+	folded := make(map[string]bool, len(columns))
 	for i, col := range columns {
-		key := columnNameKey(col)
-		if columnsSeen[key] {
+		trimmedName := strings.TrimSpace(col)
+		foldedName := asciiFold(col)
+		if trimmed[trimmedName] || folded[foldedName] {
 			return fmt.Errorf("%w: %q (column %d)", errDuplicateColumnName, col, i+1)
 		}
-		columnsSeen[key] = true
+		trimmed[trimmedName] = true
+		folded[foldedName] = true
 	}
 	return nil
 }
 
-// columnNameKey reduces a header cell to what decides whether two of them are
-// the same column: surrounding whitespace is not part of the name, and neither
-// is case.
+// asciiFold lowercases the ASCII letters in s and leaves every other byte as it
+// is, which is how SQLite compares two column names: its default case folding
+// stops at ASCII, so "ä" and "Ä" stay two names. Folding with strings.ToLower
+// would make them one and refuse a header SQLite accepts.
 //
-// Case is folded because SQLite is what ends up holding these columns and it
-// compares their names without regard to it. Keeping the comparison
-// case-sensitive here did not make "ID" and "id" two columns; it only moved the
-// refusal to SQLite, which reported it as a failed CREATE TABLE wrapped in a
-// database-operation error — no ErrDuplicateColumn to match, and no column
-// position — which is the outcome this check exists to replace.
-func columnNameKey(column string) string {
-	return strings.ToLower(strings.TrimSpace(column))
+// Case has to be folded somewhere, because leaving it out did not make "ID" and
+// "id" two columns: it moved the refusal to SQLite, which reported it as a
+// failed CREATE TABLE wrapped in a database-operation error — no
+// ErrDuplicateColumn to match and no column position, which is the outcome this
+// check exists to replace.
+func asciiFold(s string) string {
+	var folded []byte
+	for i := range len(s) {
+		c := s[i]
+		if c < 'A' || c > 'Z' {
+			continue
+		}
+		if folded == nil {
+			folded = []byte(s)
+		}
+		folded[i] = c + ('a' - 'A')
+	}
+	if folded == nil {
+		return s
+	}
+	return string(folded)
 }
 
 // chunkSizeValue represents a chunk size with validation. The name carries the

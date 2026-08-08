@@ -456,18 +456,62 @@ func TestDuplicateColumnCheckIsTheSameEverywhere(t *testing.T) {
 		requireDuplicateColumnRefusal(t, err, `"nAmE"`, "column 2")
 	})
 
-	// Case and whitespace are one rule, not two applied in sequence by luck.
-	t.Run("csv rejects names that differ only by case and whitespace", func(t *testing.T) {
+	// Whitespace and case are two rules, and a name that differs by both
+	// satisfies neither: SQLite does not trim, so " NAME " and "name" are two
+	// columns to it, and an import that refused them would refuse a header the
+	// engine accepts.
+	t.Run("csv keeps names that differ by case and whitespace at once", func(t *testing.T) {
 		t.Parallel()
 
-		path := filepath.Join(t.TempDir(), "both.csv")
+		path := filepath.Join(t.TempDir(), "cased_spaced.csv")
 		require.NoError(t, os.WriteFile(path, []byte("name, NAME \n1,2\n"), 0o600))
 
 		db, err := OpenContext(context.Background(), path)
-		if db != nil {
-			defer db.Close()
-		}
-		requireDuplicateColumnRefusal(t, err, `" NAME "`, "column 2")
+		require.NoError(t, err)
+		defer db.Close()
+
+		var got string
+		require.NoError(t, db.QueryRowContext(context.Background(),
+			`SELECT "name" FROM cased_spaced`).Scan(&got))
+		assert.Equal(t, "1", got)
+	})
+
+	// The case rule is SQLite's, and SQLite's folding stops at ASCII: "ä" and
+	// "Ä" are two columns to it. Folding with strings.ToLower made them one and
+	// refused a header the engine accepts.
+	t.Run("csv keeps names that differ by non-ASCII case", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "accents.csv")
+		require.NoError(t, os.WriteFile(path, []byte("ä,Ä\n1,2\n"), 0o600))
+
+		db, err := OpenContext(context.Background(), path)
+		require.NoError(t, err, "SQLite tells these two apart, so the import must too")
+		defer db.Close()
+
+		var got string
+		require.NoError(t, db.QueryRowContext(context.Background(),
+			`SELECT "Ä" FROM accents`).Scan(&got))
+		assert.Equal(t, "2", got)
+	})
+
+	// The two comparisons are separate, not one folded-and-trimmed key. " A"
+	// and "a" differ by whitespace and by case, so neither rule matches on its
+	// own — and SQLite, which does not trim, keeps them as two columns.
+	t.Run("csv keeps names that differ by whitespace and case together", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "both.csv")
+		require.NoError(t, os.WriteFile(path, []byte(" A,a\n1,2\n"), 0o600))
+
+		db, err := OpenContext(context.Background(), path)
+		require.NoError(t, err, "neither the whitespace rule nor the case rule matches this pair")
+		defer db.Close()
+
+		var got string
+		require.NoError(t, db.QueryRowContext(context.Background(),
+			`SELECT "a" FROM both`).Scan(&got))
+		assert.Equal(t, "2", got)
 	})
 
 	// Names that are distinct after trimming stay distinct, so the rule refuses

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The duplicate-header check folds ASCII case only, and keeps its two comparisons apart. v0.39.0 folded with `strings.ToLower` over a trimmed name, which refused two headers SQLite accepts: `ä` beside `Ä`, whose case SQLite does not fold, and `" A"` beside `"a"`, which differ by whitespace and by case at once so that neither rule matches on its own. A name is now compared with surrounding whitespace removed, and again with ASCII case ignored, as two separate questions — the rule the export side of nao1215/sqly was written against, and the one SQLite itself applies.
+
 ## [0.39.0] - 2026-08-08
 
 ### Added
