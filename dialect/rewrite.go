@@ -14,11 +14,12 @@ import (
 
 // Function-name keywords recognized by more than one dialect's call pass.
 const (
-	fnNameCast     = "CAST"
-	fnNameExtract  = "EXTRACT"
-	fnNameTrim     = "TRIM"
-	fnNameCharLen  = "CHAR_LENGTH"
-	fnNameCharLen2 = "CHARACTER_LENGTH"
+	fnNameCast      = "CAST"
+	fnNameExtract   = "EXTRACT"
+	fnNameTrim      = "TRIM"
+	fnNameCharLen   = "CHAR_LENGTH"
+	fnNameCharLen2  = "CHARACTER_LENGTH"
+	fnNameStringAgg = "STRING_AGG"
 )
 
 // callRecurser rewrites a slice of argument tokens with a dialect's call pass so

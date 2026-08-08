@@ -32,6 +32,15 @@ func TestGoogleSQLTranslate(t *testing.T) {
 
 		{"G-6_format", "SELECT FORMAT('%d', n) FROM t", "SELECT printf('%d', n) AS \"FORMAT('%d', n)\" FROM t"},
 
+		// SQLite's DISTINCT aggregates take one argument, so the separator has to
+		// go. Dropping it is only correct when it is the comma SQLite defaults to.
+		{"G-18_string_agg", "SELECT STRING_AGG(name, ', ') FROM t", "SELECT STRING_AGG(name, ', ') FROM t"},
+		{"G-18_string_agg_distinct_comma", "SELECT STRING_AGG(DISTINCT name, ',') FROM t", "SELECT group_concat(DISTINCT name) AS \"STRING_AGG(DISTINCT name, ',')\" FROM t"},
+		{"G-18_string_agg_distinct_expression", "SELECT STRING_AGG(DISTINCT UPPER(name), ',') FROM t", "SELECT group_concat(DISTINCT UPPER(name)) AS \"STRING_AGG(DISTINCT UPPER(name), ',')\" FROM t"},
+		// An ORDER BY belongs to the aggregate, not to the separator, and SQLite
+		// takes it inside group_concat.
+		{"G-18_string_agg_distinct_order_by", "SELECT STRING_AGG(DISTINCT name, ',' ORDER BY name) FROM t", "SELECT group_concat(DISTINCT name ORDER BY name) AS \"STRING_AGG(DISTINCT name, ',' ORDER BY name)\" FROM t"},
+
 		{"G-7_date_add", "SELECT DATE_ADD(d, INTERVAL 3 DAY)", "SELECT interval_add(d, 3, 'day') AS \"DATE_ADD(d, INTERVAL 3 DAY)\""},
 		{"G-7_timestamp_sub", "SELECT TIMESTAMP_SUB(ts, INTERVAL 2 HOUR)", "SELECT interval_add(ts, -(2), 'hour') AS \"TIMESTAMP_SUB(ts, INTERVAL 2 HOUR)\""},
 
@@ -71,6 +80,10 @@ func TestGoogleSQLTranslateUnsupported(t *testing.T) {
 		{"G-9_struct_type", "SELECT STRUCT<a INT64>(1)"},
 		{"G-9_except", "SELECT * EXCEPT(col) FROM t"},
 		{"G-9_replace", "SELECT * REPLACE(a AS b) FROM t"},
+		// A separator SQLite cannot keep alongside DISTINCT. Answering with a
+		// comma-joined string would be a different answer, not a translation.
+		{"G-18_string_agg_distinct_other_separator", "SELECT STRING_AGG(DISTINCT name, '-') FROM t"},
+		{"G-18_string_agg_distinct_separator_expression", "SELECT STRING_AGG(DISTINCT name, sep) FROM t"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
