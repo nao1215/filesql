@@ -163,6 +163,10 @@ const sqliteDefaultSeparator = ","
 // Joining with a comma regardless would answer a question nobody asked, which is
 // the one thing a translation must not do.
 //
+// A trailing ORDER BY belongs to the aggregate rather than to the separator, and
+// SQLite accepts it inside group_concat, so it is carried over rather than read
+// as part of the separator and refused.
+//
 // It reports false for a call it does not handle — no DISTINCT, or no separator —
 // leaving the caller's own rewrite to run.
 func rewriteStringAggDistinct(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
@@ -175,7 +179,15 @@ func rewriteStringAggDistinct(tokens []token, open, closeIdx int, recurse callRe
 		return nil, false, nil
 	}
 
-	separator := trimSpaceTokens(tokens[comma+1 : closeIdx])
+	// The separator ends where the aggregate's own ORDER BY begins, when there is
+	// one. Everything to the end of the call is the separator otherwise.
+	separatorEnd := closeIdx
+	orderBy := topLevelWord(tokens, open, closeIdx, "ORDER")
+	if orderBy > comma {
+		separatorEnd = orderBy
+	}
+
+	separator := trimSpaceTokens(tokens[comma+1 : separatorEnd])
 	if len(separator) != 1 || separator[0].kind != tokString || separator[0].text != sqliteDefaultSeparator {
 		return nil, false, fmt.Errorf(
 			"%w: STRING_AGG cannot combine DISTINCT with a separator other than ',' on the SQLite backend; drop DISTINCT, or use ','",
@@ -188,6 +200,14 @@ func rewriteStringAggDistinct(tokens []token, open, closeIdx int, recurse callRe
 	}
 	repl := []token{wordToken("group_concat"), opToken("("), wordToken("DISTINCT"), spaceToken()}
 	repl = append(repl, trimSpaceTokens(value)...)
+	if separatorEnd != closeIdx {
+		order, err := recurse(tokens[orderBy:closeIdx])
+		if err != nil {
+			return nil, false, err
+		}
+		repl = append(repl, spaceToken())
+		repl = append(repl, trimSpaceTokens(order)...)
+	}
 	return append(repl, opToken(")")), true, nil
 }
 

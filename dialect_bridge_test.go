@@ -129,6 +129,11 @@ func TestStringAggDistinctExecutes(t *testing.T) {
 			dialect: dialect.GoogleSQL,
 			query:   "SELECT STRING_AGG(DISTINCT name, ',') AS names FROM sample",
 		},
+		{
+			name:    "postgresql_ordered",
+			dialect: dialect.PostgreSQL,
+			query:   "SELECT STRING_AGG(DISTINCT name, ',' ORDER BY name) AS names FROM sample",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
