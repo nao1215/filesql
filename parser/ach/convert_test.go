@@ -142,6 +142,68 @@ func TestToFile_ModifyAmount(t *testing.T) {
 	assert.Equal(t, 50000000, entries[0].Amount)
 }
 
+// TestToFile_ModifiedAmountIsWritable is the half TestToFile_ModifyAmount above
+// does not reach. That test reads the amount back off the returned file, which
+// the deep copy already carried; the writer is where the batch control is
+// checked against the entries, and it was still the control the original file
+// arrived with. Every amount edit was therefore unwritable: the value changed,
+// the control did not, and the write failed as out-of-balance.
+func TestToFile_ModifiedAmountIsWritable(t *testing.T) {
+	original := createTestACHFile(t)
+	ts := FromFile(original)
+	require.NotNil(t, ts)
+
+	amountIdx := findHeaderIndex(t, ts.Entries.Headers, "amount")
+
+	const newAmount = 50000000
+	ts.Entries.Records[0][amountIdx] = strconv.Itoa(newAmount)
+
+	var buf bytes.Buffer
+	require.NoError(t, ts.WriteToWriter(&buf))
+
+	// Re-parsing is what proves the file is valid ACH rather than merely bytes:
+	// the reader runs the same balance check the writer does.
+	reparsed, err := ParseReader(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+
+	entries := reparsed.originalFile.Batches[0].GetEntries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, newAmount, entries[0].Amount)
+
+	// The controls are derived from the entries, so they follow the edit rather
+	// than keeping the value the source file was written with.
+	control := reparsed.originalFile.Batches[0].GetControl()
+	require.NotNil(t, control)
+	assert.Equal(t, newAmount, control.TotalDebitEntryDollarAmount)
+	assert.Equal(t, newAmount, reparsed.originalFile.Control.TotalDebitEntryDollarAmountInFile)
+}
+
+// TestToFile_ModifiedIATAmountIsWritable is the IAT half of the recalculation.
+// IAT batches carry their own control record and are rebuilt by IATBatch.Create,
+// which File.Create does not call either, so they had the same defect.
+func TestToFile_ModifiedIATAmountIsWritable(t *testing.T) {
+	file, err := ach.ReadFile(findTestFile(t, "iat-credit.ach"))
+	require.NoError(t, err)
+
+	ts := FromFile(file)
+	require.NotNil(t, ts)
+	require.NotNil(t, ts.IATEntries)
+	require.NotEmpty(t, ts.IATEntries.Records)
+
+	amountIdx := findHeaderIndex(t, ts.IATEntries.Headers, "amount")
+	const newAmount = 50000
+	ts.IATEntries.Records[0][amountIdx] = strconv.Itoa(newAmount)
+
+	var buf bytes.Buffer
+	require.NoError(t, ts.WriteToWriter(&buf))
+
+	reparsed, err := ParseReader(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	entries := reparsed.originalFile.IATBatches[0].GetEntries()
+	require.NotEmpty(t, entries)
+	assert.Equal(t, newAmount, entries[0].Amount)
+}
+
 func TestToFile_RejectsNegativeBatchIndexInBatches(t *testing.T) {
 	file := createTestACHFile(t)
 	ts := FromFile(file)

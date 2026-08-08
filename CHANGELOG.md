@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- ACH write-back rebuilds each batch control from the entries, so an edited amount can be written at all. `File.Create` builds the file control from the batch controls and leaves the batch controls alone — that is `Batch.Create`'s job — so each batch kept the control the original file arrived with, and every amount edit failed the write with "TotalDebitEntryDollarAmount calculated N is out-of-balance with batch control M". Editing the control column instead did not help, because the recalculation it was waiting for never ran. Control records are derived values: the write recalculates them, for IAT batches too, and an edit to a control column is overwritten rather than honored.
+
 ## [0.37.1] - 2026-08-07
 
 ### Removed
