@@ -2,8 +2,11 @@ package filesql
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -80,6 +83,62 @@ func TestInferColumnTypeZeroPadded(t *testing.T) {
 
 	got := inferColumnType([]string{"02134", "00501", "10001"})
 	require.Equal(t, columnTypeText, got)
+}
+
+// TestInferColumnTypePreservesLateZeroPadded covers a value the sampler would
+// skip. Inference samples at most maxSampleSize values per column, and the
+// guards that keep a zero-padded code out of an INTEGER column only run on what
+// is sampled — so whether a code survived depended on where in the file it sat.
+func TestInferColumnTypePreservesLateZeroPadded(t *testing.T) {
+	t.Parallel()
+
+	values := make([]string, 0, maxSampleSize*2)
+	for i := range maxSampleSize * 2 {
+		values = append(values, strconv.Itoa(i+1))
+	}
+	values[len(values)-1] = "007"
+
+	require.Equal(t, columnTypeText, inferColumnType(values))
+}
+
+// TestOpenContextPreservesZeroPaddedCodesPastTheFirstChunk is the end-to-end
+// half of the same rule, across the boundary that decides the schema. Types are
+// inferred from the first chunk alone, so a code arriving in a later one met a
+// column that was already INTEGER and was rewritten by SQLite's affinity: 007
+// came back as 7, at no error and no warning.
+func TestOpenContextPreservesZeroPaddedCodesPastTheFirstChunk(t *testing.T) {
+	t.Parallel()
+
+	var b strings.Builder
+	b.WriteString("code\n")
+	for i := range DefaultRowsPerChunk * 2 {
+		fmt.Fprintf(&b, "%d\n", i+1)
+	}
+	b.WriteString("007\n")
+
+	path := filepath.Join(t.TempDir(), "codes.csv")
+	require.NoError(t, os.WriteFile(path, []byte(b.String()), 0600))
+
+	ctx := context.Background()
+	db, err := OpenContext(ctx, path)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var got string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT code FROM codes WHERE code LIKE '0%'`).Scan(&got))
+	require.Equal(t, "007", got)
+
+	// The rows that arrived before the promotion keep their own values: a plain
+	// integer's text form is the digits it was read from.
+	var first string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT code FROM codes LIMIT 1`).Scan(&first))
+	require.Equal(t, "1", first)
+
+	var rows int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM codes`).Scan(&rows))
+	require.Equal(t, DefaultRowsPerChunk*2+1, rows)
 }
 
 // TestOpenContextPreservesZeroPaddedCodes is the end-to-end regression test: a
