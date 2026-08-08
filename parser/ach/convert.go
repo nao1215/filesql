@@ -7,6 +7,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/moov-io/ach"
 	"github.com/nao1215/filesql/parser"
@@ -660,6 +661,12 @@ func (ts *TableSet) ToFile() (*ach.File, error) {
 		}
 	}
 
+	// Every edit is in place now, so this is where a value too wide for the
+	// record it goes into can be caught — before anything is written.
+	if err := validateFieldWidths(&newFile); err != nil {
+		return nil, err
+	}
+
 	// Recalculate control records. Each batch first, then the file.
 	//
 	// File.Create builds the file control from the batch controls and does not
@@ -684,6 +691,65 @@ func (ts *TableSet) ToFile() (*ach.File, error) {
 	}
 
 	return &newFile, nil
+}
+
+// validateFieldWidths reports every value that would not survive being written
+// into its fixed-width record.
+//
+// An ACH record is a fixed-width line, and the writer's field formatters cut a
+// value that does not fit instead of refusing it. That made the two halves of
+// the same edit behave differently: an amount past its field fails the write
+// with a FieldError, while a name past its field was quietly shortened and
+// written, so the file on disk held data the session never asked for.
+//
+// No width is written down here. Each formatter returns exactly the number of
+// characters the record holds — padding a short value, cutting a long one — so
+// its length is the specification's own answer, and it stays right when the
+// library's does. Only fields a caller can edit through a table are checked;
+// the control records are derived and recalculated below.
+func validateFieldWidths(file *ach.File) error {
+	var errs []error
+	check := func(column, value, formatted string) {
+		width := utf8.RuneCountInString(formatted)
+		got := utf8.RuneCountInString(value)
+		if got <= width {
+			return
+		}
+		errs = append(errs, fmt.Errorf(
+			"%s is %d characters, but the ACH record holds %d: %q would be written as %q",
+			column, got, width, value, formatted))
+	}
+
+	header := file.Header
+	check("file_header.immediate_destination", header.ImmediateDestination, header.ImmediateDestinationField())
+	check("file_header.immediate_origin", header.ImmediateOrigin, header.ImmediateOriginField())
+	check("file_header.immediate_destination_name", header.ImmediateDestinationName, header.ImmediateDestinationNameField())
+	check("file_header.immediate_origin_name", header.ImmediateOriginName, header.ImmediateOriginNameField())
+	check("file_header.reference_code", header.ReferenceCode, header.ReferenceCodeField())
+
+	for batchIdx, batch := range file.Batches {
+		bh := batch.GetHeader()
+		prefix := fmt.Sprintf("batches[%d].", batchIdx)
+		check(prefix+"company_name", bh.CompanyName, bh.CompanyNameField())
+		check(prefix+"company_discretionary_data", bh.CompanyDiscretionaryData, bh.CompanyDiscretionaryDataField())
+		check(prefix+"company_identification", bh.CompanyIdentification, bh.CompanyIdentificationField())
+		check(prefix+"company_entry_description", bh.CompanyEntryDescription, bh.CompanyEntryDescriptionField())
+		check(prefix+"company_descriptive_date", bh.CompanyDescriptiveDate, bh.CompanyDescriptiveDateField())
+		check(prefix+"effective_entry_date", bh.EffectiveEntryDate, bh.EffectiveEntryDateField())
+		check(prefix+"odfi_identification", bh.ODFIIdentification, bh.ODFIIdentificationField())
+
+		for entryIdx, entry := range batch.GetEntries() {
+			prefix := fmt.Sprintf("entries[%d][%d].", batchIdx, entryIdx)
+			check(prefix+"rdfi_identification", entry.RDFIIdentification, entry.RDFIIdentificationField())
+			check(prefix+"dfi_account_number", entry.DFIAccountNumber, entry.DFIAccountNumberField())
+			check(prefix+"identification_number", entry.IdentificationNumber, entry.IdentificationNumberField())
+			check(prefix+"individual_name", entry.IndividualName, entry.IndividualNameField())
+			check(prefix+"discretionary_data", entry.DiscretionaryData, entry.DiscretionaryDataField())
+			check(prefix+"trace_number", entry.TraceNumber, entry.TraceNumberField())
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // applyEntryModifications updates entries in the ACH file from TableData.
