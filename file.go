@@ -136,6 +136,13 @@ type streamingParser struct {
 	// excelSheetPolicy controls which sheets of a workbook this parser may take
 	// its table from. The zero value is ExcelSheetPolicyAll.
 	excelSheetPolicy ExcelSheetPolicy
+	// skippedRows and totalRows record what MalformedRowSkip discarded and how
+	// many data rows it was choosing from, so a caller can say how much of the
+	// file it is holding. Skipping is an instruction, and an instruction that
+	// reports nothing leaves one dropped row and most of the file dropped
+	// looking the same.
+	skippedRows int
+	totalRows   int
 }
 
 // newFile creates a new file

@@ -44,6 +44,67 @@ func openWithPolicy(t *testing.T, content string, ft FileType, policy MalformedR
 	return b.Open(context.Background())
 }
 
+// TestSkippedRowsReportsWhatWasDropped covers what a caller has to be able to
+// say after MalformedRowSkip has done its work. Skipping is an instruction, not
+// a silence: an import that dropped one row and one that dropped most of the
+// file looked identical, and there was no number a caller could put in front of
+// a user before a write-back made the loss permanent.
+func TestSkippedRowsReportsWhatWasDropped(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a skipping import counts the rows it dropped", func(t *testing.T) {
+		t.Parallel()
+
+		b, err := NewBuilder().
+			AddReader(strings.NewReader("a,b\n1,2\n3\n5,6\n7\n"), "t", FileTypeCSV).
+			WithMalformedRowPolicy(MalformedRowSkip).
+			Build(context.Background())
+		if err != nil {
+			t.Fatalf("build failed: %v", err)
+		}
+		db, err := b.Open(context.Background())
+		if err != nil {
+			t.Fatalf("open failed: %v", err)
+		}
+		defer db.Close()
+
+		got := b.SkippedRows()
+		if len(got) != 1 {
+			t.Fatalf("SkippedRows() = %v, want one entry", got)
+		}
+		if got[0].Table != "t" {
+			t.Errorf("Table = %q, want %q", got[0].Table, "t")
+		}
+		if got[0].Count != 2 {
+			t.Errorf("Count = %d, want 2 (rows 2 and 4 are short)", got[0].Count)
+		}
+		if got[0].Total != 4 {
+			t.Errorf("Total = %d, want 4 data rows seen", got[0].Total)
+		}
+	})
+
+	t.Run("an import that dropped nothing reports nothing", func(t *testing.T) {
+		t.Parallel()
+
+		b, err := NewBuilder().
+			AddReader(strings.NewReader("a,b\n1,2\n3,4\n"), "t", FileTypeCSV).
+			WithMalformedRowPolicy(MalformedRowSkip).
+			Build(context.Background())
+		if err != nil {
+			t.Fatalf("build failed: %v", err)
+		}
+		db, err := b.Open(context.Background())
+		if err != nil {
+			t.Fatalf("open failed: %v", err)
+		}
+		defer db.Close()
+
+		if got := b.SkippedRows(); len(got) != 0 {
+			t.Errorf("SkippedRows() = %v, want none: a clean import has nothing to report", got)
+		}
+	})
+}
+
 func TestMalformedRowPolicy_Stop(t *testing.T) {
 	t.Parallel()
 
