@@ -409,6 +409,55 @@ func TestDuplicateColumnCheckIsTheSameEverywhere(t *testing.T) {
 		assert.Contains(t, err.Error(), "column 2")
 	})
 
+	// SQLite compares column names without regard to case, so a header that
+	// differs only in case is a duplicate to the engine. The guard compared the
+	// names verbatim, so it passed them through and SQLite refused the CREATE
+	// TABLE in its own words, three wraps deep, with no sentinel to match and no
+	// column position — the outcome this guard exists to replace.
+	t.Run("csv rejects names that differ only by case", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "cased.csv")
+		require.NoError(t, os.WriteFile(path, []byte("ID,id\n1,2\n"), 0o600))
+
+		db, err := OpenContext(context.Background(), path)
+		if db != nil {
+			defer db.Close()
+		}
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrDuplicateColumn)
+		assert.Contains(t, err.Error(), "column 2")
+	})
+
+	t.Run("xlsx rejects names that differ only by case", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "cased.xlsx")
+		writeXLSXHeaderFixture(t, path, []string{"Name", "nAmE"}, []string{"1", "2"})
+
+		db, err := OpenContext(context.Background(), path)
+		if db != nil {
+			defer db.Close()
+		}
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrDuplicateColumn)
+	})
+
+	// Case and whitespace are one rule, not two applied in sequence by luck.
+	t.Run("csv rejects names that differ only by case and whitespace", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "both.csv")
+		require.NoError(t, os.WriteFile(path, []byte("name, NAME \n1,2\n"), 0o600))
+
+		db, err := OpenContext(context.Background(), path)
+		if db != nil {
+			defer db.Close()
+		}
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrDuplicateColumn)
+	})
+
 	// Names that are distinct after trimming stay distinct, so the rule refuses
 	// a collision rather than every header that holds a space.
 	t.Run("xlsx keeps headers that differ by more than whitespace", func(t *testing.T) {

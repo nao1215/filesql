@@ -172,7 +172,6 @@ func (ct columnType) String() string {
 }
 
 // validateColumnNames checks for duplicate column names and returns error if found.
-// Column name comparison is case-sensitive to maintain backward compatibility.
 //
 // The message quotes the name and gives its 1-based position, because a header
 // can duplicate the empty name — two unnamed columns — and an unquoted empty
@@ -180,13 +179,27 @@ func (ct columnType) String() string {
 func validateColumnNames(columns []string) error {
 	columnsSeen := make(map[string]bool)
 	for i, col := range columns {
-		trimmedCol := strings.TrimSpace(col)
-		if columnsSeen[trimmedCol] {
+		key := columnNameKey(col)
+		if columnsSeen[key] {
 			return fmt.Errorf("%w: %q (column %d)", errDuplicateColumnName, col, i+1)
 		}
-		columnsSeen[trimmedCol] = true
+		columnsSeen[key] = true
 	}
 	return nil
+}
+
+// columnNameKey reduces a header cell to what decides whether two of them are
+// the same column: surrounding whitespace is not part of the name, and neither
+// is case.
+//
+// Case is folded because SQLite is what ends up holding these columns and it
+// compares their names without regard to it. Keeping the comparison
+// case-sensitive here did not make "ID" and "id" two columns; it only moved the
+// refusal to SQLite, which reported it as a failed CREATE TABLE wrapped in a
+// database-operation error — no ErrDuplicateColumn to match, and no column
+// position — which is the outcome this check exists to replace.
+func columnNameKey(column string) string {
+	return strings.ToLower(strings.TrimSpace(column))
 }
 
 // chunkSizeValue represents a chunk size with validation. The name carries the
