@@ -857,13 +857,36 @@ func parseLTSV(reader io.Reader) (*TableData, error) {
 // same errors and only the comparison is meant to differ; the quoting and
 // position filesql adds are added where filesql builds its own message.
 func validateColumnNames(columns []string) error {
-	seen := make(map[string]bool, len(columns))
+	trimmed := make(map[string]bool, len(columns))
+	folded := make(map[string]bool, len(columns))
 	for _, col := range columns {
-		key := strings.ToLower(strings.TrimSpace(col))
-		if seen[key] {
+		trimmedName := strings.TrimSpace(col)
+		foldedName := asciiFold(col)
+		if trimmed[trimmedName] || folded[foldedName] {
 			return fmt.Errorf("duplicate column name: %s", col)
 		}
-		seen[key] = true
+		trimmed[trimmedName] = true
+		folded[foldedName] = true
 	}
 	return nil
+}
+
+// asciiFold lowercases the ASCII letters in s, which is how SQLite compares two
+// column names: its folding stops at ASCII, so "ä" and "Ä" stay two names.
+func asciiFold(s string) string {
+	var folded []byte
+	for i := range len(s) {
+		c := s[i]
+		if c < 'A' || c > 'Z' {
+			continue
+		}
+		if folded == nil {
+			folded = []byte(s)
+		}
+		folded[i] = c + ('a' - 'A')
+	}
+	if folded == nil {
+		return s
+	}
+	return string(folded)
 }
