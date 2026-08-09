@@ -778,13 +778,21 @@ func isFloat(value string) bool {
 // column, and no later inspection can recover what it said. So every value is
 // asked this question, and only the leftovers are sampled.
 func mustStayText(value string) bool {
-	value = strings.TrimSpace(value)
-	if value == "" {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
 		return false
 	}
-	return isZeroPaddedIntegerLiteral(value) ||
-		isIntegerLiteralOverflowingInt64(value) ||
-		hasGoOnlyNumericSyntax(value)
+	// Surrounding whitespace on a value that would otherwise be a number is the
+	// same kind of loss. SQLite's numeric affinity converts " 5 " to 5 and the
+	// spaces are gone, while the text column beside it keeps its own — so the
+	// same input was preserved or rewritten depending on what it looked like.
+	// A fixed-width padded code ("  42") is the case that costs.
+	if trimmed != value && (isInteger(trimmed) || isFloat(trimmed)) {
+		return true
+	}
+	return isZeroPaddedIntegerLiteral(trimmed) ||
+		isIntegerLiteralOverflowingInt64(trimmed) ||
+		hasGoOnlyNumericSyntax(trimmed)
 }
 
 // hasGoOnlyNumericSyntax reports whether value uses numeric syntax that Go's
