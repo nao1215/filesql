@@ -310,7 +310,8 @@ func TestDataFrame_Select(t *testing.T) {
 			{"a": 1, "b": 2, "c": 3},
 		})
 
-		result := df.Select("a", "c")
+		result, err := df.Select("a", "c")
+		require.NoError(t, err)
 
 		assert.Equal(t, []string{"a", "c"}, result.Columns())
 		records := result.ToRecords()
@@ -319,16 +320,33 @@ func TestDataFrame_Select(t *testing.T) {
 		assert.Nil(t, records[0]["b"])
 	})
 
-	t.Run("ignores non-existent columns silently", func(t *testing.T) {
+	// A typo used to be skipped, so the frame came back quietly missing that
+	// column while Sort, GroupBy and Rename all refused the same typo.
+	t.Run("refuses a column that does not exist", func(t *testing.T) {
 		t.Parallel()
 
 		df := NewDataFrameFromRecords([]map[string]any{
 			{"a": 1, "b": 2},
 		})
 
-		result := df.Select("a", "nonexistent")
+		_, err := df.Select("a", "nonexistent")
 
-		assert.Equal(t, []string{"a"}, result.Columns())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "nonexistent")
+	})
+
+	// Columns and ToCSV kept both, and ToRecords kept one, because a row is a
+	// map and a map cannot hold the name twice.
+	t.Run("refuses the same column twice", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"a": 1, "b": 2},
+		})
+
+		_, err := df.Select("a", "a")
+
+		require.Error(t, err)
 	})
 
 	t.Run("returns empty DataFrame when no columns specified", func(t *testing.T) {
@@ -338,7 +356,8 @@ func TestDataFrame_Select(t *testing.T) {
 			{"a": 1},
 		})
 
-		result := df.Select()
+		result, err := df.Select()
+		require.NoError(t, err)
 
 		assert.Empty(t, result.Columns())
 		assert.Empty(t, result.ToRecords())
@@ -351,7 +370,8 @@ func TestDataFrame_Select(t *testing.T) {
 			{"a": 1, "b": 2, "c": 3},
 		})
 
-		result := df.Select("c", "a", "b")
+		result, err := df.Select("c", "a", "b")
+		require.NoError(t, err)
 
 		assert.Equal(t, []string{"c", "a", "b"}, result.Columns())
 	})
@@ -1099,7 +1119,8 @@ func TestNewDataFrameFromPathWithOperations(t *testing.T) {
 		df, err := NewDataFrameFromPath(filepath.Join("testdata", "products.tsv"))
 		require.NoError(t, err)
 
-		selected := df.Select("name", "price")
+		selected, err := df.Select("name", "price")
+		require.NoError(t, err)
 
 		assert.Equal(t, []string{"name", "price"}, selected.Columns())
 		assert.Equal(t, 3, selected.Len())
@@ -1142,8 +1163,9 @@ func TestNewDataFrameFromPathWithOperations(t *testing.T) {
 		df, err := NewDataFrameFromPath(filepath.Join("testdata", "sample.csv.gz"))
 		require.NoError(t, err)
 
-		result := df.
-			Select("name", "age").
+		selected, err := df.Select("name", "age")
+		require.NoError(t, err)
+		result := selected.
 			Filter(func(row map[string]any) bool {
 				age, ok := row["age"].(int64)
 				return ok && age >= 25
@@ -1180,7 +1202,9 @@ func TestDataFrameCombinedOperations(t *testing.T) {
 		require.NoError(t, err)
 
 		// Select only name and age, then filter by age
-		result := df.Select("name", "age").Filter(func(row map[string]any) bool {
+		selected, err := df.Select("name", "age")
+		require.NoError(t, err)
+		result := selected.Filter(func(row map[string]any) bool {
 			age, ok := row["age"].(int64)
 			return ok && age >= 30
 		})
@@ -1235,14 +1259,16 @@ func TestDataFrameCombinedOperations(t *testing.T) {
 		require.NoError(t, err)
 
 		// Add full_name column, then select only that column
-		result := df.Mutate("full_name", func(row map[string]any) any {
+		mutated := df.Mutate("full_name", func(row map[string]any) any {
 			first, ok1 := row["first"].(string)
 			last, ok2 := row["last"].(string)
 			if !ok1 || !ok2 {
 				return ""
 			}
 			return first + " " + last
-		}).Select("full_name")
+		})
+		result, err := mutated.Select("full_name")
+		require.NoError(t, err)
 
 		assert.Equal(t, 2, result.Len())
 		assert.Equal(t, []string{"full_name"}, result.Columns())
@@ -1323,8 +1349,9 @@ func TestDataFrameCombinedOperations(t *testing.T) {
 		df, err := NewDataFrame(reader, CSV)
 		require.NoError(t, err)
 
-		result := df.
-			Select("name", "age", "salary").
+		selected, err := df.Select("name", "age", "salary")
+		require.NoError(t, err)
+		result := selected.
 			Filter(func(row map[string]any) bool {
 				age, ok := row["age"].(int64)
 				return ok && age >= 28
@@ -1366,7 +1393,8 @@ func TestDataFrameCombinedOperations(t *testing.T) {
 		originalCols := df.Columns()
 
 		// Perform various operations
-		_ = df.Select("name")
+		_, err = df.Select("name")
+		require.NoError(t, err)
 		_ = df.Filter(func(_ map[string]any) bool { return false })
 		_ = df.Mutate("new_col", func(_ map[string]any) any { return "value" })
 
@@ -2365,7 +2393,8 @@ func TestDataFrame_Drop(t *testing.T) {
 			{"name": "Alice", "age": int64(30), "city": "Tokyo"},
 		})
 
-		dropped := df.Drop("age", "city")
+		dropped, err := df.Drop("age", "city")
+		require.NoError(t, err)
 
 		assert.Equal(t, []string{"name"}, dropped.Columns())
 		records := dropped.ToRecords()
@@ -2374,14 +2403,30 @@ func TestDataFrame_Drop(t *testing.T) {
 		assert.False(t, hasAge)
 	})
 
-	t.Run("ignores non-existent columns silently", func(t *testing.T) {
+	// A typo used to be skipped, so the frame came back with the column the
+	// caller believed had been dropped.
+	t.Run("refuses a column that does not exist", func(t *testing.T) {
 		t.Parallel()
 
 		df := NewDataFrameFromRecords([]map[string]any{
 			{"name": "Alice", "age": int64(30)},
 		})
 
-		dropped := df.Drop("unknown", "age")
+		_, err := df.Drop("unknown", "age")
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown")
+	})
+
+	t.Run("drops a column that does exist", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"name": "Alice", "age": int64(30)},
+		})
+
+		dropped, err := df.Drop("age")
+		require.NoError(t, err)
 
 		assert.Equal(t, []string{"name"}, dropped.Columns())
 	})
@@ -2393,7 +2438,8 @@ func TestDataFrame_Drop(t *testing.T) {
 			{"name": "Alice"},
 		})
 
-		dropped := df.Drop()
+		dropped, err := df.Drop()
+		require.NoError(t, err)
 
 		assert.Equal(t, df.Columns(), dropped.Columns())
 		assert.Equal(t, df.ToRecords(), dropped.ToRecords())
@@ -2406,7 +2452,8 @@ func TestDataFrame_Drop(t *testing.T) {
 			{"name": "Alice", "age": int64(30)},
 		})
 
-		_ = df.Drop("age")
+		_, err := df.Drop("age")
+		require.NoError(t, err)
 
 		assert.Equal(t, []string{"age", "name"}, df.Columns())
 	})

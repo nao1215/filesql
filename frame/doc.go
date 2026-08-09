@@ -30,17 +30,24 @@
 //	}
 //
 //	// Select columns and filter rows
-//	result := df.
-//	    Select("product", "amount", "category").
-//	    Filter(func(row map[string]any) bool {
-//	        amount, ok := row["amount"].(float64)
-//	        return ok && amount > 1000
-//	    })
+//	selected, err := df.Select("product", "amount", "category")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	result := selected.Filter(func(row map[string]any) bool {
+//	    amount, ok := row["amount"].(float64)
+//	    return ok && amount > 1000
+//	})
 //
 //	// Group by and aggregate
-//	grouped := result.
-//	    GroupBy("category").
-//	    Sum("amount")
+//	byCategory, err := result.GroupBy("category")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	grouped, err := byCategory.Sum("amount")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
 //
 //	// Output to CSV
 //	if err := grouped.ToCSV("summary.csv"); err != nil {

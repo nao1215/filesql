@@ -743,7 +743,7 @@ func Example_dropRename() {
 	fmt.Printf("Original columns: %v\n", df.Columns())
 
 	// Drop internal column
-	cleaned := df.Drop("internal_code")
+	cleaned, _ := df.Drop("internal_code") //nolint:errcheck // the column exists
 	fmt.Printf("After Drop: %v\n", cleaned.Columns())
 
 	// Rename columns for clarity
@@ -836,7 +836,7 @@ func Example_dataframePipeline() {
 	df, _ := frame.NewDataFrame(strings.NewReader(salesCSV), frame.CSV) //nolint:errcheck
 
 	// Pipeline: Clean -> Transform -> Aggregate -> Sort -> Limit
-	result := df.
+	transformed := df.
 		// 1. Fill missing salesperson
 		FillNAByColumn(map[string]any{"salesperson": "Unknown"}).
 		// 2. Add calculated column
@@ -844,9 +844,9 @@ func Example_dataframePipeline() {
 			qty, _ := row["quantity"].(int64) //nolint:errcheck
 			price, _ := row["price"].(int64)  //nolint:errcheck
 			return float64(qty) * float64(price)
-		}).
-		// 3. Select relevant columns
-		Select("region", "product", "revenue", "salesperson")
+		})
+	// 3. Select relevant columns
+	result, _ := transformed.Select("region", "product", "revenue", "salesperson") //nolint:errcheck // the columns exist
 
 	// Group by region and sum revenue
 	grouped, _ := result.GroupBy("region") //nolint:errcheck
