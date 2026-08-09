@@ -27,6 +27,10 @@ import (
 //	M-18 ANY_VALUE / STD / VARIANCE      -> SQLite aggregate expressions
 //	M-19 UNION DISTINCT                  -> UNION
 //	M-20 LENGTH / CHAR_LENGTH / ORD / TRIM(BOTH x FROM s)
+//	M-21 a && b                          -> a AND b
+//	M-21 !a                              -> (NOT a)
+//	M-21 a ^ b                           -> mysql_bit_xor(a, b)
+//	M-21 a XOR b                         -> ErrUnsupportedSyntax
 //
 // M-10 (LIMIT n, m) needs no rewrite: SQLite accepts it natively.
 func rewriteMySQL(tokens []token) ([]token, error) {
@@ -44,9 +48,32 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
-	// M-12/M-13: MySQL reads "||" as a logical OR under its default sql_mode,
-	// and "<=>" as null-safe equality, which SQLite spells IS.
+	// M-21: "^" is a bitwise XOR in MySQL, which SQLite has no operator for. It
+	// binds tightly enough that both operands are primaries, so the rewrite is a
+	// helper call rather than the (a|b)&~(a&b) expansion, which would evaluate
+	// each operand twice.
+	out, err = binaryOperatorPass(out, "^", "mysql_bit_xor")
+	if err != nil {
+		return nil, err
+	}
+	// M-21: XOR has no SQLite spelling that keeps its precedence. It sits between
+	// OR and AND, so its operands are whole AND-expressions rather than the
+	// primaries a rewrite can pick out: translating it as if they were primaries
+	// would reassociate "a AND b XOR c" into something MySQL never meant.
+	if err := rejectWordPass(out, "XOR",
+		"SQLite has no operator with its precedence; write (a AND NOT b) OR (NOT a AND b)"); err != nil {
+		return nil, err
+	}
+	// M-21: "!" is MySQL's NOT, and it binds tighter than a comparison.
+	out, err = unaryNotPass(out)
+	if err != nil {
+		return nil, err
+	}
+	// M-12/M-13/M-21: MySQL reads "||" as a logical OR under its default
+	// sql_mode, "&&" as AND, and "<=>" as null-safe equality, which SQLite
+	// spells IS.
 	out = replaceOperatorWithWord(out, "||", "OR")
+	out = replaceOperatorWithWord(out, "&&", "AND")
 	out = replaceOperatorWithWord(out, "<=>", "IS")
 	// M-14/M-15: MySQL accepts typed date literals and the parenthesized
 	// CURRENT_DATE() spelling, neither of which SQLite parses.

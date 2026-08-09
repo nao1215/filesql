@@ -242,6 +242,66 @@ func callTokens(name string, a, b []token) []token {
 	return repl
 }
 
+// fnBitXor implements MySQL's "^", a bitwise exclusive OR over 64-bit integers.
+// SQLite has &, | and ~ but no XOR operator, and the expression built from them
+// would evaluate each operand twice.
+//
+// A NULL operand gives NULL, as every arithmetic operator in SQL does. An
+// operand that is not a number gives NULL rather than an error, as the other
+// operator helpers here do.
+func fnBitXor(args []driver.Value) (driver.Value, error) {
+	a, ok1 := toInt(args[0])
+	b, ok2 := toInt(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	return a ^ b, nil
+}
+
+// unaryNotPass rewrites MySQL's "!" into a parenthesized NOT over the primary it
+// applies to.
+//
+// MySQL's "!" binds tighter than a comparison while SQLite's NOT binds looser
+// than one, so "!a = b" written as
+// "NOT a = b" changes from negating a to negating the comparison. Wrapping the
+// result keeps it a primary, which is what the operator was.
+//
+// "!=" is one token to the tokenizer, so a not-equal comparison never reaches
+// here.
+func unaryNotPass(tokens []token) ([]token, error) {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		if !isOpEq(tokens[i], "!") {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		start := nextSig(tokens, i+1)
+		end, ok := primaryEndForward(tokens, i+1)
+		if !ok {
+			return nil, fmt.Errorf("%w: operand of ! is not a primary expression", ErrUnsupportedSyntax)
+		}
+		out = append(out, opToken("("), wordToken("NOT"), spaceToken())
+		out = append(out, tokens[start:end+1]...)
+		out = append(out, opToken(")"))
+		i = end + 1
+	}
+	return out, nil
+}
+
+// rejectWordPass refuses a construct that has no faithful SQLite spelling,
+// naming the construct rather than letting SQLite answer with a syntax error
+// near a keyword it does not know.
+func rejectWordPass(tokens []token, keyword, because string) error {
+	for _, t := range tokens {
+		if isWordEq(t, keyword) {
+			return fmt.Errorf("%w: %s is not supported; %s", ErrUnsupportedSyntax, keyword, because)
+		}
+	}
+	return nil
+}
+
 // replaceOperatorWithWord swaps an operator token for a keyword, spacing it so
 // "a||b" renders as "a OR b" rather than "aORb".
 func replaceOperatorWithWord(tokens []token, op, keyword string) []token {

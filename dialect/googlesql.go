@@ -27,8 +27,16 @@ import (
 //	G-16 UNION DISTINCT                       -> UNION
 //	G-17 JSON_VALUE / BYTE_LENGTH / CHAR_LENGTH
 //	G-18 STRING_AGG(DISTINCT x, ',')           -> group_concat(DISTINCT x)
+//	G-19 [1,2,3] / x[OFFSET(n)]               -> ErrUnsupportedSyntax
+//	G-20 SAFE.f(args)                         -> safe_f(args)
 func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedGoogleSQL(tokens); err != nil {
+		return nil, err
+	}
+	// G-20: fold BigQuery's "SAFE." call prefix into the underscore name the
+	// rest of the pass already knows, before any call is looked at.
+	tokens, err := safePrefixPass(tokens)
+	if err != nil {
 		return nil, err
 	}
 	out, err := googlesqlCallPass(tokens)
@@ -54,6 +62,77 @@ func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	return aggregatePass(out, GoogleSQL)
 }
 
+// safeFunctions are the functions a "SAFE." prefix can be honored for: those
+// with a safe_ helper registered for them, named the same lowercased. The prefix
+// means "return NULL rather than raise", and only a helper written for that can
+// promise it. The order is the message's, so it does not change between runs.
+var safeFunctions = []string{"ADD", "DIVIDE", "MULTIPLY", "NEGATE", "SUBTRACT"}
+
+// safeHelperFor returns the helper a "SAFE." prefix on name maps to, and
+// whether there is one.
+func safeHelperFor(name string) (string, bool) {
+	upper := strings.ToUpper(name)
+	for _, fn := range safeFunctions {
+		if fn == upper {
+			return "safe_" + strings.ToLower(fn), true
+		}
+	}
+	return "", false
+}
+
+// safePrefixPass implements G-20: SAFE.f(args) -> safe_f(args).
+//
+// BigQuery's own documentation writes the safe functions this way, and only a
+// few of them have an underscore name at all, so the prefix is the general
+// form. Left alone it reaches SQLite as a qualified name, which reports on the
+// "(" that follows rather than on the prefix, and says nothing about the
+// dialect.
+//
+// A prefix on a function with no safe form is refused rather than dropped:
+// dropping it would answer the query with the plain function, which raises
+// where the caller asked for a NULL.
+func safePrefixPass(tokens []token) ([]token, error) {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		name, end, ok := matchSafePrefix(tokens, i)
+		if !ok {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		helper, supported := safeHelperFor(name)
+		if !supported {
+			return nil, fmt.Errorf("%w: SAFE.%s is not supported; the SAFE. prefix works with %s",
+				ErrUnsupportedSyntax, strings.ToUpper(name), strings.Join(safeFunctions, ", "))
+		}
+		out = append(out, wordToken(helper))
+		i = end + 1
+	}
+	return out, nil
+}
+
+// matchSafePrefix reports whether tokens[i] starts a "SAFE . name (" sequence,
+// returning the function name and the index of the name token.
+func matchSafePrefix(tokens []token, i int) (string, int, bool) {
+	if !isWordEq(tokens[i], "SAFE") {
+		return "", 0, false
+	}
+	dot := nextSig(tokens, i+1)
+	if dot < 0 || !isOpEq(tokens[dot], ".") {
+		return "", 0, false
+	}
+	name := nextSig(tokens, dot+1)
+	if name < 0 || tokens[name].kind != tokWord {
+		return "", 0, false
+	}
+	// The "(" is what makes this a call rather than a qualified column.
+	if open := nextSig(tokens, name+1); open < 0 || !isOpEq(tokens[open], "(") {
+		return "", 0, false
+	}
+	return tokens[name].text, name, true
+}
+
 // checkUnsupportedGoogleSQL rejects the G-9 constructs that have no SQLite
 // equivalent.
 func checkUnsupportedGoogleSQL(tokens []token) error {
@@ -71,6 +150,14 @@ func checkUnsupportedGoogleSQL(tokens []token) error {
 			if lt := nextSig(tokens, i+1); lt >= 0 && isOpEq(tokens[lt], "<") {
 				return fmt.Errorf("%w: %s type is not supported", ErrUnsupportedSyntax, strings.ToUpper(t.text))
 			}
+		}
+		// G-19: SQLite has no array type, and "[" is its identifier quoting, so an
+		// array literal or subscript reaches the planner as a name: the error was
+		// "no such column: 1,2,3", about a column the query never wrote. Under
+		// GoogleSQL a "[" is never quoting — backticks are — so every one of them
+		// is an array.
+		if isOpEq(t, "[") {
+			return fmt.Errorf("%w: arrays are not supported; SQLite has no array type", ErrUnsupportedSyntax)
 		}
 		// SELECT * EXCEPT(...) / SELECT * REPLACE(...)
 		if isOpEq(t, "*") {

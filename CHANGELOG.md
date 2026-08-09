@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- MySQL's logical and bitwise operators that SQLite does not share are translated ([nao1215/sqly#893](https://github.com/nao1215/sqly/issues/893)). `&&` becomes `AND`. `!` becomes a parenthesized `NOT`: MySQL's `!` binds tighter than a comparison while SQLite's `NOT` binds looser, so a bare `NOT` would turn `!a = b` into a negation of the comparison. `^` has no SQLite operator at all and becomes a `mysql_bit_xor` helper call rather than the `(a|b)&~(a&b)` expansion, which would evaluate each operand twice.
+- BigQuery's `SAFE.` call prefix is translated ([nao1215/sqly#894](https://github.com/nao1215/sqly/issues/894)). `SAFE.DIVIDE(1, 0)` is now the same query as `SAFE_DIVIDE(1, 0)`; BigQuery's own documentation writes these functions with the prefix. A `SAFE.` prefix on any other function is refused rather than dropped.
+
+### Fixed
+
+- Constructs SQLite cannot represent are refused by name instead of reaching its parser ([nao1215/sqly#895](https://github.com/nao1215/sqly/issues/895)). A GoogleSQL array literal came back as `no such column: 1,2,3`, because SQLite reads `[...]` as identifier quoting, and a PostgreSQL `generate_series` as `no such table`, which reads as a missing input file. Both now say which construct is unsupported. MySQL's `XOR` is refused for the same reason: its precedence sits between `OR` and `AND`, which SQLite has no operator for, so its operands are not the primaries a rewrite can pick out and translating it would reassociate the expression. A `SAFE.` prefix on a function with no safe form is refused rather than dropped, since dropping it would answer with the plain function, which raises where the caller asked for a NULL.
+
 ## [0.40.1] - 2026-08-09
 
 ### Fixed
@@ -1161,7 +1172,7 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.30.1...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.40.1...HEAD
 [0.30.1]: https://github.com/nao1215/filesql/compare/v0.30.0...v0.30.1
 [0.30.0]: https://github.com/nao1215/filesql/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/nao1215/filesql/compare/v0.28.0...v0.29.0

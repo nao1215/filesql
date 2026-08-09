@@ -196,8 +196,9 @@ func main() {
 Translation is best-effort compatibility, not a full emulator: common
 incompatibilities (identifier quoting, `DATE_ADD`, `SPLIT_PART`, `SAFE_DIVIDE`,
 `EXTRACT`, casts, …) are rewritten or backed by helper functions, constructs
-with no SQLite equivalent (for example `QUALIFY` or `DISTINCT ON`) return a
-clear error, and anything else is passed through to SQLite. A non-SQLite dialect
+with no SQLite equivalent (for example `QUALIFY`, `DISTINCT ON`, or MySQL's
+`XOR`) return a clear error, and anything else is passed through to SQLite.
+A non-SQLite dialect
 cannot be combined with auto-save. See the [`dialect`](./dialect) package for the
 full list of supported translations.
 

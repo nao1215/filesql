@@ -9,9 +9,13 @@
 //   - Known incompatibilities that have a SQLite equivalent are rewritten (for
 //     example MySQL's backtick identifiers become double-quoted identifiers, and
 //     PostgreSQL's "expr::type" becomes "CAST(expr AS type)").
-//   - Known constructs with no SQLite equivalent (QUALIFY, ARRAY/STRUCT types,
-//     LATERAL, DISTINCT ON, ...) are rejected with ErrUnsupportedSyntax so the
-//     caller sees a clear error instead of a confusing engine message.
+//   - Known constructs with no SQLite equivalent (QUALIFY, arrays, STRUCT
+//     types, LATERAL, DISTINCT ON, PostgreSQL's set-returning functions,
+//     MySQL's XOR, ...) are rejected with ErrUnsupportedSyntax so the caller
+//     sees a clear error instead of a confusing engine message: an array
+//     literal reached SQLite as identifier quoting and came back as "no such
+//     column: 1,2,3", and generate_series as "no such table", each naming
+//     something the query never wrote.
 //   - Anything else is passed through unchanged and left to SQLite to accept or
 //     reject.
 //

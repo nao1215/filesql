@@ -76,6 +76,30 @@ func TestPostgreSQLTranslate(t *testing.T) {
 	}
 }
 
+// TestPostgreSQLSetReturningNameIsNotACall checks that a name which merely looks
+// like a set-returning function is not one: only a call is refused, so a column
+// or a table of that name still translates.
+func TestPostgreSQLSetReturningNameIsNotACall(t *testing.T) {
+	t.Parallel()
+	tests := []string{
+		"SELECT generate_series FROM t",
+		"SELECT a FROM generate_series",
+		"SELECT t.unnest FROM t",
+	}
+	for _, input := range tests {
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+			got, err := Translate(PostgreSQL, input)
+			if err != nil {
+				t.Fatalf("Translate(PostgreSQL, %q) unexpected error: %v", input, err)
+			}
+			if got != input {
+				t.Fatalf("Translate(PostgreSQL, %q) = %q, want it unchanged", input, got)
+			}
+		})
+	}
+}
+
 func TestPostgreSQLTranslateUnsupported(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -83,6 +107,13 @@ func TestPostgreSQLTranslateUnsupported(t *testing.T) {
 		input string
 	}{
 		{"P-10_distinct_on", "SELECT DISTINCT ON (a) a, b FROM t"},
+		// P-18: passed through, this reported "no such table: generate_series",
+		// which reads as a missing input file rather than as a construct the
+		// translation cannot express.
+		{"P-18_generate_series", "SELECT n FROM generate_series(1, 3) AS n"},
+		{"P-18_generate_series_in_select", "SELECT generate_series(1, 3)"},
+		{"P-18_unnest", "SELECT * FROM unnest(ARRAY[1, 2])"},
+		{"P-18_regexp_split_to_table", "SELECT regexp_split_to_table('a,b', ',')"},
 		{"P-10_lateral", "SELECT * FROM t, LATERAL (SELECT 1) s"},
 		{"P-3_ci_non_literal", "SELECT * FROM t WHERE a ~* b"},
 		// A separator SQLite cannot keep alongside DISTINCT. Answering with a

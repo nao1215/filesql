@@ -57,6 +57,34 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-10_limit_offset", "SELECT * FROM t LIMIT 5, 10", "SELECT * FROM t LIMIT 5, 10"},
 
 		{"nested_date_add_in_extract", "SELECT EXTRACT(DAY FROM DATE_ADD(d, INTERVAL 1 DAY))", "SELECT DATE_PART('day', interval_add(d, 1, 'day')) AS \"EXTRACT(DAY FROM DATE_ADD(d, INTERVAL 1 DAY))\""},
+		// M-21: the logical and bitwise operators MySQL spells with punctuation.
+		// "||" was translated and its siblings were not, so they reached SQLite's
+		// tokenizer as unrecognized tokens.
+		{"M-21_andand", "SELECT a && b FROM t", `SELECT a AND b AS "a && b" FROM t`},
+		{"M-21_andand_no_spaces", "SELECT a&&b FROM t", `SELECT a AND b AS "a&&b" FROM t`},
+		{"M-21_bang", "SELECT !a FROM t", `SELECT (NOT a) AS "!a" FROM t`},
+		{"M-21_bang_paren", "SELECT !(a AND b) FROM t", `SELECT (NOT (a AND b)) AS "!(a AND b)" FROM t`},
+		{"M-21_bang_call", "SELECT !f(a) FROM t", `SELECT (NOT f(a)) AS "!f(a)" FROM t`},
+		// "!" binds tighter than a comparison in MySQL, so the negation is of the
+		// operand alone. Written as a bare NOT it would have swallowed the
+		// comparison, because SQLite's NOT binds looser than "=".
+		{"M-21_bang_before_comparison", "SELECT !a = b FROM t", `SELECT (NOT a) = b AS "!a = b" FROM t`},
+		{"M-21_not_equal_untouched", "SELECT a != b FROM t", `SELECT a != b FROM t`},
+		{"M-21_bitxor", "SELECT a ^ b FROM t", `SELECT mysql_bit_xor(a, b) AS "a ^ b" FROM t`},
+		{"M-21_bitxor_literals", "SELECT 5 ^ 3", `SELECT mysql_bit_xor(5, 3) AS "5 ^ 3"`},
+		{"M-21_bitand_untouched", "SELECT a & b FROM t", "SELECT a & b FROM t"},
+		{"M-21_bitor_untouched", "SELECT a | b FROM t", "SELECT a | b FROM t"},
+		{"M-21_shifts_untouched", "SELECT a << 1, b >> 2 FROM t", "SELECT a << 1, b >> 2 FROM t"},
+		// The positions a rewrite has to survive: a WHERE clause, a CASE, a
+		// window's PARTITION BY, and a GROUP BY, where an operand that stopped at
+		// the wrong token has shown up before.
+		{"M-21_andand_in_where", "SELECT a FROM t WHERE b && c", "SELECT a FROM t WHERE b AND c"},
+		{"M-21_bitxor_in_where", "SELECT a FROM t WHERE b ^ c = 0", "SELECT a FROM t WHERE mysql_bit_xor(b, c) = 0"},
+		{"M-21_bitxor_in_case", "SELECT CASE WHEN a ^ b THEN 1 ELSE 0 END FROM t", `SELECT CASE WHEN mysql_bit_xor(a, b) THEN 1 ELSE 0 END AS "CASE WHEN a ^ b THEN 1 ELSE 0 END" FROM t`},
+		{"M-21_bitxor_in_group_by", "SELECT a FROM t GROUP BY a ^ b", "SELECT a FROM t GROUP BY mysql_bit_xor(a, b)"},
+		{"M-21_bitxor_in_window", "SELECT SUM(a) OVER (PARTITION BY b ^ c) FROM t", `SELECT SUM(a) OVER (PARTITION BY mysql_bit_xor(b, c)) AS "SUM(a) OVER (PARTITION BY b ^ c)" FROM t`},
+		{"M-21_bang_in_where", "SELECT a FROM t WHERE !b", "SELECT a FROM t WHERE (NOT b)"},
+
 		{"unrelated_function_untouched", "SELECT COALESCE(a, b), SUM(c) FROM t", "SELECT COALESCE(a, b), SUM(c) FROM t"},
 		{"extract_without_from_passthrough", "SELECT EXTRACT(x) FROM t", "SELECT EXTRACT(x) FROM t"},
 		{"cast_without_as_passthrough", "SELECT CAST(x) FROM t", "SELECT CAST(x) FROM t"},
@@ -89,6 +117,14 @@ func TestMySQLTranslateUnsupported(t *testing.T) {
 		{"M-5_missing_unit", "SELECT DATE_ADD(d, INTERVAL 3)"},
 		{"M-7_div_left_not_primary", "SELECT a, DIV b"},
 		{"M-7_div_right_missing", "SELECT a DIV"},
+		// XOR sits between OR and AND in MySQL's precedence, so its operands are
+		// whole AND-expressions rather than the primaries a rewrite can pick out.
+		// It is refused by name instead of being translated wrongly.
+		{"M-21_xor", "SELECT a XOR b FROM t"},
+		{"M-21_xor_lowercase", "SELECT a xor b FROM t"},
+		{"M-21_xor_in_where", "SELECT a FROM t WHERE b XOR c"},
+		{"M-21_bitxor_left_not_primary", "SELECT a, ^ b"},
+		{"M-21_bitxor_right_missing", "SELECT a ^"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

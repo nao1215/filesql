@@ -21,6 +21,20 @@ func TestGoogleSQLTranslate(t *testing.T) {
 		{"G-2_safe_cast", "SELECT SAFE_CAST(x AS INT64) FROM t", "SELECT googlesql_safe_cast(x, 'INT64') AS \"SAFE_CAST(x AS INT64)\" FROM t"},
 		{"G-2_safe_cast_unknown_type", "SELECT SAFE_CAST(x AS GEOGRAPHY)", "SELECT CAST(x AS GEOGRAPHY) AS \"SAFE_CAST(x AS GEOGRAPHY)\""},
 
+		// G-20: BigQuery writes the safe functions with a "SAFE." call prefix, and
+		// its own documentation uses that spelling. Only a few of them have an
+		// underscore name, so the prefix is the general form.
+		{"G-20_safe_divide", "SELECT SAFE.DIVIDE(1, 0)", `SELECT safe_divide(1, 0) AS "SAFE.DIVIDE(1, 0)"`},
+		{"G-20_safe_divide_lowercase", "SELECT safe.divide(a, b) FROM t", `SELECT safe_divide(a, b) AS "safe.divide(a, b)" FROM t`},
+		{"G-20_safe_add", "SELECT SAFE.ADD(a, b) FROM t", `SELECT safe_add(a, b) AS "SAFE.ADD(a, b)" FROM t`},
+		{"G-20_safe_negate", "SELECT SAFE.NEGATE(a) FROM t", `SELECT safe_negate(a) AS "SAFE.NEGATE(a)" FROM t`},
+		{"G-20_safe_multiply_nested", "SELECT SAFE.MULTIPLY(SAFE.ADD(a, b), c) FROM t", `SELECT safe_multiply(safe_add(a, b), c) AS "SAFE.MULTIPLY(SAFE.ADD(a, b), c)" FROM t`},
+		{"G-20_safe_divide_in_where", "SELECT a FROM t WHERE SAFE.DIVIDE(a, b) > 1", "SELECT a FROM t WHERE safe_divide(a, b) > 1"},
+		// A column named safe, and a qualified column on a table named safe, are
+		// not calls and keep their meaning.
+		{"G-20_safe_column_untouched", "SELECT safe FROM t", "SELECT safe FROM t"},
+		{"G-20_safe_qualified_column_untouched", "SELECT safe.divide FROM t", "SELECT safe.divide FROM t"},
+
 		{"G-3_date_literal", "SELECT DATE '2026-01-01'", "SELECT '2026-01-01' AS \"DATE '2026-01-01'\""},
 		{"G-3_timestamp_literal", "SELECT TIMESTAMP '2026-01-01 00:00:00'", "SELECT '2026-01-01 00:00:00' AS \"TIMESTAMP '2026-01-01 00:00:00'\""},
 		{"G-3_date_word_not_literal", "SELECT DATE FROM t", "SELECT DATE FROM t"},
@@ -84,6 +98,20 @@ func TestGoogleSQLTranslateUnsupported(t *testing.T) {
 		// comma-joined string would be a different answer, not a translation.
 		{"G-18_string_agg_distinct_other_separator", "SELECT STRING_AGG(DISTINCT name, '-') FROM t"},
 		{"G-18_string_agg_distinct_separator_expression", "SELECT STRING_AGG(DISTINCT name, sep) FROM t"},
+
+		// A SAFE. call whose function has no safe form here is refused by name.
+		// Passed through, SQLite reads "SAFE.SUBSTR" as schema.table and reports on
+		// the "(" instead.
+		{"G-20_safe_unknown_function", "SELECT SAFE.SUBSTR(s, 1, 2) FROM t"},
+		{"G-20_safe_cast_prefix", "SELECT SAFE.CAST(x AS INT64) FROM t"},
+
+		// G-19: SQLite reads "[...]" as an identifier, so an array literal came
+		// back as "no such column: 1,2,3", about a column the query never named.
+		{"G-19_array_literal", "SELECT ARRAY_LENGTH([1,2,3]) AS r"},
+		{"G-19_array_literal_bare", "SELECT [1, 2, 3]"},
+		{"G-19_array_subscript", "SELECT x[OFFSET(0)] AS r FROM t"},
+		{"G-19_array_subscript_ordinal", "SELECT x[ORDINAL(1)] FROM t"},
+		{"G-19_array_literal_in_where", "SELECT a FROM t WHERE b IN UNNEST([1, 2])"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

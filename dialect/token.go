@@ -385,7 +385,7 @@ func scanNumber(s string, i int) int {
 // multiCharOperators lists the multi-byte operators to recognize as one token,
 // longest first so matchOperator prefers the longest match.
 var multiCharOperators = []string{
-	"<=>", "!~*", "->>", "!~", "~*", "->", "<=", ">=", "<>", "!=", "||", "<<", ">>", "::", ":=",
+	"<=>", "!~*", "->>", "!~", "~*", "->", "<=", ">=", "<>", "!=", "||", "&&", "<<", ">>", "::", ":=",
 }
 
 // matchOperator returns the operator or punctuation token starting at s[i],

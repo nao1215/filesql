@@ -146,6 +146,7 @@ func registerAll() error {
 		// SQLite's affinity; see cast.go.
 		"mysql_cast":          {2, dialectCast(MySQL, false)},
 		"mysql_divide":        {2, divideFloat(false)},
+		"mysql_bit_xor":       {2, fnBitXor},
 		"interval_add":        {3, fnDateIntervalAdd},
 		"interval_text_add":   {3, fnIntervalTextAdd},
 		"date_trunc_part":     {2, fnDateTruncPart},
