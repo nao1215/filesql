@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A zero-padded code survives the `frame` package ([#274](https://github.com/nao1215/filesql/issues/274), [#278](https://github.com/nao1215/filesql/issues/278)). The parser's own type inference had none of the guards the SQLite load path was given: it called `007` an integer, so a DataFrame stored 7, and a round trip through `NewDataFrame` and `ToCSV` wrote back a file whose codes had lost their zeros. `Distinct` merged `007` into `7`, and `Join` matched a `007` account to a `7` account — a row pair in neither input. A zero-padded literal is now text wherever the parser classifies a value, and a `frame` column called numeric keeps a value the conversion would change, since the type is decided from a sample and a code can arrive below it. Decimal scale is unchanged: `1.50` is the real 1.5 here as everywhere else in filesql, because the quantity survives and only the way it was written does not.
+
 ## [0.41.0] - 2026-08-09
 
 ### Added

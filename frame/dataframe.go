@@ -111,14 +111,25 @@ func NewDataFrameFromPath(path string) (*DataFrame, error) {
 	return dataFrameFromParseResult(result), nil
 }
 
-// convertStringValue converts a string value to the appropriate Go type based on ColumnType.
+// convertStringValue converts a string value to the appropriate Go type based on
+// ColumnType.
+//
+// The column's type is decided from a sample, so a value that only text holds
+// can arrive in a column already called numeric — a zero-padded code below the
+// codes the sample saw. Such a value keeps its text form: the type says what the
+// column mostly is, and the value says what it is.
+//
+// Losslessness is asked of the integer conversion by rendering it back. It is
+// not asked of the real one: "1.50" is the real 1.5 here as it is everywhere
+// else in filesql, because the quantity survives and only the way it was
+// written does not.
 func convertStringValue(s string, ct parser.ColumnType) any {
 	switch ct {
 	case parser.TypeInteger:
 		if s == "" {
 			return s
 		}
-		if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+		if i, err := strconv.ParseInt(s, 10, 64); err == nil && strconv.FormatInt(i, 10) == s {
 			return i
 		}
 		return s

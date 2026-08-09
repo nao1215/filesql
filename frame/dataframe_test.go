@@ -2787,3 +2787,124 @@ func TestCompareValues(t *testing.T) {
 		assert.NotEqual(t, 0, result) // Just check it doesn't panic
 	})
 }
+
+// TestDataFrameKeepsValuesOnlyTextHolds pins the fidelity the SQLite load path
+// was given: a value that looks numeric but cannot be one without loss keeps its
+// text form. A zero-padded code and an integer past int64 are the two, and both
+// used to come back changed — 007 as 7, an account number as 1.104032026e+19 —
+// from a round trip that only read the file and wrote it out again.
+//
+// Decimal scale is not among them: "1.50" loads as the real 1.5 here as it does
+// everywhere else in filesql, because the quantity survives and only the way it
+// was written does not.
+func TestDataFrameKeepsValuesOnlyTextHolds(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "a zero-padded code keeps its zeros",
+			input: "code\n007\n010\n",
+			want:  "code\n007\n010\n",
+		},
+		{
+			name:  "an integer past int64 keeps its digits",
+			input: "n\n99999999999999999999\n",
+			want:  "n\n99999999999999999999\n",
+		},
+		{
+			name:  "an ordinary integer is still a number",
+			input: "n\n1\n2\n",
+			want:  "n\n1\n2\n",
+		},
+		{
+			name:  "a decimal keeps its quantity, not its scale",
+			input: "amt\n1.50\n2.00\n",
+			want:  "amt\n1.5\n2\n",
+		},
+		{
+			name:  "a zero-padded code mixed with a plain one keeps both",
+			input: "code\n007\n42\n",
+			want:  "code\n007\n42\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			df, err := NewDataFrame(strings.NewReader(tt.input), CSV)
+			if err != nil {
+				t.Fatalf("NewDataFrame: %v", err)
+			}
+
+			out := filepath.Join(t.TempDir(), "out.csv")
+			if err := df.ToCSV(out); err != nil {
+				t.Fatalf("ToCSV: %v", err)
+			}
+			got, err := os.ReadFile(out) //nolint:gosec // test-owned path
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("round trip = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDistinctAndJoinCompareValuesAsWritten covers what typing a value costs
+// when the value is an identifier. Both used to coerce: Distinct merged 007 into
+// 7 and kept the one without its zeros, and Join matched a 007 account to a 7
+// account, a row pair that exists in neither input.
+//
+// Values equal as numbers and written differently — 1, 1.0, 1.00 — still
+// collapse. That is the decimal-scale trade-off filesql makes everywhere: the
+// quantity survives and the spelling does not.
+func TestDistinctAndJoinCompareValuesAsWritten(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a zero-padded code is not the code without its zeros", func(t *testing.T) {
+		t.Parallel()
+
+		df, err := NewDataFrame(strings.NewReader("code\n007\n7\n7\n"), CSV)
+		require.NoError(t, err)
+
+		got := df.Distinct().ToRecords()
+
+		// Both are text: a column holding a code is a text column, and the two
+		// codes in it are two values.
+		assert.Equal(t, []map[string]any{{"code": "007"}, {"code": "7"}}, got)
+	})
+
+	t.Run("a join does not match a code to its numeric reading", func(t *testing.T) {
+		t.Parallel()
+
+		left, err := NewDataFrame(strings.NewReader("id,x\n007,a\n"), CSV)
+		require.NoError(t, err)
+		right, err := NewDataFrame(strings.NewReader("id,y\n7,Z\n"), CSV)
+		require.NoError(t, err)
+
+		joined, err := left.Join(right, JoinOption{On: []string{"id"}, How: InnerJoin})
+		require.NoError(t, err)
+
+		assert.Empty(t, joined.ToRecords(), "007 and 7 are different identifiers")
+	})
+
+	t.Run("a join still matches a code to itself", func(t *testing.T) {
+		t.Parallel()
+
+		left, err := NewDataFrame(strings.NewReader("id,x\n007,a\n"), CSV)
+		require.NoError(t, err)
+		right, err := NewDataFrame(strings.NewReader("id,y\n007,Z\n"), CSV)
+		require.NoError(t, err)
+
+		joined, err := left.Join(right, JoinOption{On: []string{"id"}, How: InnerJoin})
+		require.NoError(t, err)
+
+		assert.Equal(t, []map[string]any{{"id": "007", "x": "a", "y": "Z"}}, joined.ToRecords())
+	})
+}

@@ -107,6 +107,13 @@ func isInteger(s string) bool {
 		return false
 	}
 
+	// A zero-padded literal is not one. The leading zero is what the value means
+	// — a ZIP code, a product ID — and every numeric type drops it, so the only
+	// form that holds the value is text.
+	if isZeroPaddedIntegerLiteral(s) {
+		return false
+	}
+
 	_, err := strconv.ParseInt(s, 10, 64)
 	return err == nil
 }
@@ -123,8 +130,35 @@ func isFloat(s string) bool {
 		return false
 	}
 
+	if isZeroPaddedIntegerLiteral(s) {
+		return false
+	}
+
 	_, err := strconv.ParseFloat(s, 64)
 	return err == nil
+}
+
+// isZeroPaddedIntegerLiteral reports whether s is an integer literal with a
+// redundant leading zero, such as "007" or "02134".
+//
+// Decimal scale is deliberately not treated the same way. "1.50" is the real
+// 1.5 here as it is everywhere else in filesql: the quantity survives and only
+// the way it was written does not, while a leading zero is the value itself.
+// A lone "0" is an ordinary integer.
+func isZeroPaddedIntegerLiteral(s string) bool {
+	digits := s
+	if len(digits) > 0 && (digits[0] == '+' || digits[0] == '-') {
+		digits = digits[1:]
+	}
+	if len(digits) < 2 || digits[0] != '0' {
+		return false
+	}
+	for i := range len(digits) {
+		if digits[i] < '0' || digits[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // isDatetime checks if the string represents a datetime value.
