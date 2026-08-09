@@ -729,7 +729,7 @@ func createDecompressedReader(reader io.Reader, fileType FileType) (io.Reader, f
 
 // parseDelimited parses CSV or TSV data.
 func parseDelimited(reader io.Reader, delimiter rune, fileTypeName string) (*TableData, error) {
-	csvReader := csv.NewReader(reader)
+	csvReader := csv.NewReader(NormalizeLineEndings(reader))
 	csvReader.Comma = delimiter
 
 	records, err := csvReader.ReadAll()
@@ -764,7 +764,7 @@ func parseDelimited(reader io.Reader, delimiter rune, fileTypeName string) (*Tab
 // parseLTSV parses LTSV (Labeled Tab-Separated Values) data.
 // Column order is preserved as first-seen order for deterministic output.
 func parseLTSV(reader io.Reader) (*TableData, error) {
-	content, err := io.ReadAll(reader)
+	content, err := io.ReadAll(NormalizeLineEndings(reader))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read LTSV: %w", err)
 	}

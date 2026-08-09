@@ -108,6 +108,69 @@ func TestParse_CSV(t *testing.T) {
 	})
 }
 
+func TestParse_CROnlyLineEndings(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a CR-terminated CSV keeps its rows", func(t *testing.T) {
+		t.Parallel()
+
+		result, err := Parse(strings.NewReader("name,age\rAlice,30\rBob,40\r"), CSV)
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"name", "age"}, result.Headers)
+		assert.Equal(t, [][]string{{"Alice", "30"}, {"Bob", "40"}}, result.Records)
+	})
+
+	t.Run("a CR-terminated TSV keeps its rows", func(t *testing.T) {
+		t.Parallel()
+
+		result, err := Parse(strings.NewReader("name\tage\rAlice\t30\rBob\t40\r"), TSV)
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"name", "age"}, result.Headers)
+		assert.Equal(t, [][]string{{"Alice", "30"}, {"Bob", "40"}}, result.Records)
+	})
+
+	t.Run("a CR-terminated LTSV keeps its rows", func(t *testing.T) {
+		t.Parallel()
+
+		result, err := Parse(strings.NewReader("name:Alice\tage:30\rname:Bob\tage:40\r"), LTSV)
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"name", "age"}, result.Headers)
+		assert.Equal(t, [][]string{{"Alice", "30"}, {"Bob", "40"}}, result.Records)
+	})
+
+	t.Run("a CR inside a quoted field of an LF file is data, not a row boundary", func(t *testing.T) {
+		t.Parallel()
+
+		result, err := Parse(strings.NewReader("name,note\nAlice,\"a\rb\"\nBob,plain\n"), CSV)
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"Alice", "a\rb"}, {"Bob", "plain"}}, result.Records)
+	})
+
+	t.Run("a CRLF-terminated CSV keeps its rows", func(t *testing.T) {
+		t.Parallel()
+
+		result, err := Parse(strings.NewReader("name,age\r\nAlice,30\r\nBob,40\r\n"), CSV)
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"name", "age"}, result.Headers)
+		assert.Equal(t, [][]string{{"Alice", "30"}, {"Bob", "40"}}, result.Records)
+	})
+
+	t.Run("a single CR-terminated line is a header with no rows", func(t *testing.T) {
+		t.Parallel()
+
+		result, err := Parse(strings.NewReader("name,age\r"), CSV)
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"name", "age"}, result.Headers)
+		assert.Empty(t, result.Records)
+	})
+}
+
 func TestParse_TSV(t *testing.T) {
 	t.Parallel()
 
