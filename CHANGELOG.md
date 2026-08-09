@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `frame.Row` reads a callback's row without guessing what the load typed it as ([#277](https://github.com/nao1215/filesql/issues/277)). A CSV column of digits arrives as `int64`, so the natural `row["id"] == "1"` matched nothing and reported nothing — a filter that looks correct returning an empty result. `frame.Row(row).String("id")` answers with the value as the file spelled it, `Int` and `Float` with it as a number, and each returns false rather than a zero value when the column is absent, holds nil, or holds something it cannot represent, so a mistyped column name shows up in the predicate. The callbacks still take `map[string]any`, which converts to `Row` for free.
+
+### Documentation
+
+- What the `frame` type inference preserves is written down ([#276](https://github.com/nao1215/filesql/issues/276)). The quantity survives and the way it was written does not, so `1`, `1.0` and `1.00` are one value: `Distinct` collapses them to a single row and `Join` matches them to each other. Keeping the three apart would mean keeping the column as text, where `9.00` does not compare as less than `10.00`. A zero-padded code and an integer past `int64` are the values kept as text instead, because converting those changes what they are rather than how they look, and they stay distinct — that half was fixed in v0.41.1.
+
 ### Fixed
 
 - An ACH or Fedwire dump writes the file its own database was loaded from ([#210](https://github.com/nao1215/filesql/issues/210)). The structure a dump needs lived in a process-global map keyed by the base table name alone, so `/a/payment.ach` and `/b/payment.ach` were one key: loading the second replaced the first, and dumping the first database applied its rows to the second file's structure — an error when the shapes disagreed, and silently the wrong output when they happened to line up. Each database now records its own sources in a reserved table, `_filesql_sources`, so two databases cannot collide, nothing has to be released when a database closes, and a rolled-back load discards the metadata with the tables it describes. Table names beginning with `_filesql_` are reserved for this package and are hidden from `DumpDatabase` and from the table listings filesql returns.

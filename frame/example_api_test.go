@@ -143,6 +143,28 @@ func ExampleDataFrame_Filter() {
 	// apple
 }
 
+// A CSV carries no types, so the load infers them: this column of digits
+// becomes int64 and the obvious row["id"] == "1" matches nothing. Row.String
+// answers with the value as the file spelled it.
+func ExampleRow() {
+	df, err := frame.NewDataFrame(strings.NewReader("id,qty\n1,3\n2,1\n"), frame.CSV)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	filtered := df.Filter(func(row map[string]any) bool {
+		id, ok := frame.Row(row).String("id")
+		return ok && id == "1"
+	})
+
+	for _, row := range filtered.ToRecords() {
+		qty, _ := frame.Row(row).Int("qty")
+		fmt.Println(qty)
+	}
+	// Output:
+	// 3
+}
+
 func ExampleDataFrame_Mutate() {
 	df := frame.NewDataFrameFromRecords([]map[string]any{
 		{"product": "apple", "qty": int64(3), "price": int64(4)},

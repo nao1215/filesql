@@ -35,7 +35,7 @@
 //	    log.Fatal(err)
 //	}
 //	result := selected.Filter(func(row map[string]any) bool {
-//	    amount, ok := row["amount"].(float64)
+//	    amount, ok := frame.Row(row).Float("amount")
 //	    return ok && amount > 1000
 //	})
 //
@@ -53,6 +53,28 @@
 //	if err := grouped.ToCSV("summary.csv"); err != nil {
 //	    log.Fatal(err)
 //	}
+//
+// # Value Types
+//
+// CSV, TSV and LTSV carry no types, so a column's type is inferred from a
+// sample of its values and each cell is stored as an int64, a float64, or the
+// text it was read from. A callback therefore receives a value that may not be
+// the string the file held, which is what Row is for: its accessors return the
+// value in the form the caller asks for.
+//
+// What the inference preserves is the quantity, not the way it was written.
+// 1, 1.0 and 1.00 are all the real 1, so they are one value: Distinct collapses
+// them to a single row and a join matches them to each other. Keeping the
+// spelling instead would mean keeping the values as text, where 9.00 does not
+// compare as less than 10.00 and arithmetic on a column of money stops working.
+// A file whose decimal scale is meaningful is better read into a column of your
+// own declared as text, and formatted on the way out.
+//
+// Two kinds of value are kept as text for the opposite reason, because
+// converting them would change what they are rather than how they look: a
+// zero-padded code, where 007 and 7 are two different codes, and an integer
+// past the range of int64, which has no exact numeric form. Those stay distinct
+// through Distinct and Join.
 //
 // # Architecture
 //

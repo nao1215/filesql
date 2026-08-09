@@ -91,21 +91,21 @@ north,apple,1,100
 	}
 
 	sales := df.Mutate("revenue", func(row map[string]any) any {
-		qty, ok := row["qty"].(int64)
+		qty, ok := frame.Row(row).Int("qty")
 		if !ok {
-			t.Fatalf("row[qty] has type %T, want int64", row["qty"])
+			t.Fatalf("row[qty] = %v, want a number", row["qty"])
 		}
-		price, ok := row["price"].(int64)
+		price, ok := frame.Row(row).Int("price")
 		if !ok {
-			t.Fatalf("row[price] has type %T, want int64", row["price"])
+			t.Fatalf("row[price] = %v, want a number", row["price"])
 		}
 		return qty * price
 	})
 
 	northOnly := sales.Filter(func(row map[string]any) bool {
-		region, ok := row["region"].(string)
+		region, ok := frame.Row(row).String("region")
 		if !ok {
-			t.Fatalf("row[region] has type %T, want string", row["region"])
+			t.Fatalf("row[region] = %v, want text", row["region"])
 		}
 		return region == "north"
 	})
