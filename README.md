@@ -326,13 +326,13 @@ north,apple,1,100
 	}
 
 	sales := df.Mutate("revenue", func(row map[string]any) any {
-		qty, _ := row["qty"].(int64)
-		price, _ := row["price"].(int64)
+		qty, _ := frame.Row(row).Int("qty")
+		price, _ := frame.Row(row).Int("price")
 		return qty * price
 	})
 
 	northOnly := sales.Filter(func(row map[string]any) bool {
-		region, _ := row["region"].(string)
+		region, _ := frame.Row(row).String("region")
 		return region == "north"
 	})
 
@@ -367,6 +367,8 @@ Which of the three a column gets is decided from a sample. Whether a cell surviv
 | `1_000`, `0x1p4` | TEXT | Go parses these, SQLite's affinity does not convert them |
 
 What is not on that list is decimal formatting. `2.50` loads as the REAL `2.5`, `1.00` as `1`, and `1e3` as `1000`: the quantity is preserved and the way it was written is not. Storing those as TEXT would keep the spelling and break the arithmetic — SQLite compares a TEXT column against a number as text, so `WHERE amount > 9.5` over `9.00` and `10.00` returns nothing at all. A column of money is worth more as numbers than as the string it was typed as, so the trailing zeros go. Keep the source file if you need the original spelling, or read the column into a TEXT column of your own before loading.
+
+`frame` applies the same rules to its own values. `1`, `1.0` and `1.00` are one value there too, so `Distinct` collapses them to a single row and `Join` matches them to each other, while `007` and `7` stay two codes. A `frame` row therefore holds an `int64` or a `float64` where the file held text, which is what `frame.Row` is for: `frame.Row(row).String("code")` gives the value as the file spelled it, and `Int` and `Float` give it as a number, so a predicate does not have to guess which type the inference picked.
 
 ### Memory and streaming
 
@@ -499,6 +501,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Build a DataFrame directly from Go records | `ExampleNewDataFrameFromRecords` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Write transformed data back to CSV or TSV | `ExampleDataFrame_ToCSV`, `ExampleDataFrame_ToTSV` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Select, filter, and mutate rows | `ExampleDataFrame_Select`, `ExampleDataFrame_Filter`, `ExampleDataFrame_Mutate` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Read a callback's row without guessing its types | `ExampleRow` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Join in-memory tables | `ExampleDataFrame_Join` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Append frames with matching or mixed schemas | `ExampleDataFrame_Concat`, `ExampleConcatAll` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Group rows for aggregation | `ExampleDataFrame_GroupBy`, `ExampleGroupedDataFrame_Count` | [frame/example_api_test.go](./frame/example_api_test.go) |

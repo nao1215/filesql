@@ -370,10 +370,14 @@ func (df *DataFrame) Select(columns ...string) (*DataFrame, error) {
 // The predicate function receives a copy of each row to prevent accidental mutation
 // of the original DataFrame.
 //
+// A row holds values typed by the load, not the text they were read from.
+// Convert it to Row to compare without depending on which type the inference
+// chose.
+//
 // Example:
 //
 //	filtered := df.Filter(func(row map[string]any) bool {
-//	    age, ok := row["age"].(int64)
+//	    age, ok := frame.Row(row).Int("age")
 //	    return ok && age >= 18
 //	})
 func (df *DataFrame) Filter(fn func(row map[string]any) bool) *DataFrame {

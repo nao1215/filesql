@@ -2931,6 +2931,20 @@ func TestDistinctAndJoinCompareValuesAsWritten(t *testing.T) {
 		assert.Equal(t, []map[string]any{{"code": "007"}, {"code": "7"}}, got)
 	})
 
+	t.Run("values equal as numbers are one value however they were written", func(t *testing.T) {
+		t.Parallel()
+
+		df, err := NewDataFrame(strings.NewReader("v\n1\n1.0\n1.00\n"), CSV)
+		require.NoError(t, err)
+
+		got := df.Distinct().ToRecords()
+
+		// Keeping the three spellings apart would mean keeping the column as
+		// text, where 9.00 does not compare as less than 10.00. The quantity is
+		// worth more than the spelling, so the scale goes.
+		assert.Equal(t, []map[string]any{{"v": 1.0}}, got)
+	})
+
 	t.Run("a join does not match a code to its numeric reading", func(t *testing.T) {
 		t.Parallel()
 
