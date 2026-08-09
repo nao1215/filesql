@@ -1,12 +1,15 @@
 package filesql
 
 import (
+	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xuri/excelize/v2"
 )
 
 // TestExcelSheetName pins how a table name is adapted to Excel's worksheet-name
@@ -90,6 +93,165 @@ func TestDumpXLSXAdaptsSheetName(t *testing.T) {
 			// cannot hold the original, so the reloaded name is the adapted one.
 			require.Len(t, names, 1)
 			assert.Contains(t, names[0], sanitizeTableName(tt.wantSheet))
+		})
+	}
+}
+
+// TestXLSXDateCellsImportAsISO pins what a date cell holds against how it is
+// shown. A workbook stores a serial and a number format, and GetRows applies the
+// format: the same day arrived as "03-15-23" under format 14, so ORDER BY sorted
+// the column lexically and a comparison against an ISO literal never matched.
+func TestXLSXDateCellsImportAsISO(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "d.xlsx")
+
+	f := excelize.NewFile()
+	defer func() { _ = f.Close() }()
+	require.NoError(t, f.SetSheetRow("Sheet1", "A1", &[]any{"date", "shown", "n"}))
+	// 45000 is 2023-03-15. Column A is formatted mm-dd-yy, column B as a plain
+	// number, and column C holds text that looks like a date.
+	require.NoError(t, f.SetCellValue("Sheet1", "A2", 45000))
+	require.NoError(t, f.SetCellValue("Sheet1", "B2", 45000))
+	require.NoError(t, f.SetCellValue("Sheet1", "C2", "03-15-23"))
+	style, err := f.NewStyle(&excelize.Style{NumFmt: 14})
+	require.NoError(t, err)
+	require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
+	require.NoError(t, f.SaveAs(path))
+
+	db, err := OpenContext(ctx, path)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var date, shown, n string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT "date", shown, n FROM d_Sheet1`).Scan(&date, &shown, &n))
+
+	assert.Equal(t, "2023-03-15", date, "a date cell holds a day, whatever format shows it")
+	assert.Equal(t, "45000", shown, "a number formatted as a number is a number")
+	assert.Equal(t, "03-15-23", n, "text that looks like a date is text, and is left as it is")
+}
+
+// TestXLSXDateTimeCellKeepsItsTime covers the other half: a cell whose serial
+// carries a time of day keeps it, rather than being cut back to the date.
+func TestXLSXDateTimeCellKeepsItsTime(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "dt.xlsx")
+
+	f := excelize.NewFile()
+	defer func() { _ = f.Close() }()
+	require.NoError(t, f.SetSheetRow("Sheet1", "A1", &[]any{"at"}))
+	// Half a day past the date is noon.
+	require.NoError(t, f.SetCellValue("Sheet1", "A2", 45000.5))
+	style, err := f.NewStyle(&excelize.Style{NumFmt: 22})
+	require.NoError(t, err)
+	require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
+	require.NoError(t, f.SaveAs(path))
+
+	db, err := OpenContext(ctx, path)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var at string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT at FROM dt_Sheet1`).Scan(&at))
+
+	assert.Equal(t, "2023-03-15 12:00:00", at)
+}
+
+// TestXLSXDateHonorsTheWorkbookEpoch covers the other calendar. A workbook
+// written on a Mac before 2016 counts its serials from 1904, and reading them
+// against 1900 puts every date in the file four years and a day early.
+func TestXLSXDateHonorsTheWorkbookEpoch(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "mac.xlsx")
+
+	f := excelize.NewFile()
+	defer func() { _ = f.Close() }()
+	date1904 := true
+	require.NoError(t, f.SetWorkbookProps(&excelize.WorkbookPropsOptions{Date1904: &date1904}))
+	require.NoError(t, f.SetSheetRow("Sheet1", "A1", &[]any{"date"}))
+	require.NoError(t, f.SetCellValue("Sheet1", "A2", 45000))
+	style, err := f.NewStyle(&excelize.Style{NumFmt: 14})
+	require.NoError(t, err)
+	require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
+	require.NoError(t, f.SaveAs(path))
+
+	db, err := OpenContext(ctx, path)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var date string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT "date" FROM mac_Sheet1`).Scan(&date))
+
+	// The same serial is 2023-03-15 under the 1900 epoch and 2027-03-16 here.
+	assert.Equal(t, "2027-03-16", date)
+}
+
+// TestXLSXElapsedDurationIsNotADate pins what must not be converted. An elapsed
+// duration counts hours, not days from an epoch: [h]:mm of 1.5 is 36 hours, and
+// reading it as a calendar datetime invents a date the cell never held.
+func TestXLSXElapsedDurationIsNotADate(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "elapsed.xlsx")
+
+	f := excelize.NewFile()
+	defer func() { _ = f.Close() }()
+	require.NoError(t, f.SetSheetRow("Sheet1", "A1", &[]any{"worked"}))
+	require.NoError(t, f.SetCellValue("Sheet1", "A2", 1.5))
+	style, err := f.NewStyle(&excelize.Style{NumFmt: 46}) // [h]:mm:ss
+	require.NoError(t, err)
+	require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
+	require.NoError(t, f.SaveAs(path))
+
+	db, err := OpenContext(ctx, path)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var worked string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT worked FROM elapsed_Sheet1`).Scan(&worked))
+
+	assert.NotContains(t, worked, "1900-", "36 hours is not a day in January 1900")
+	assert.NotContains(t, worked, "1899-")
+}
+
+// TestXLSXLocalizedDateFormatImportsAsISO covers the date formats a workbook
+// written in Japanese, Chinese, or Korean uses. They are ordinary built-in
+// formats with their own IDs, and recognizing only the English-stable ones left
+// those files with the format-dependent text this conversion exists to remove.
+func TestXLSXLocalizedDateFormatImportsAsISO(t *testing.T) {
+	t.Parallel()
+
+	// 30 is "m/d/yy" in the East Asian tables, 27 "yyyy年m月", 36 a era date.
+	for _, numFmt := range []int{27, 30, 36} {
+		t.Run(fmt.Sprintf("number format %d", numFmt), func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "jp.xlsx")
+
+			f := excelize.NewFile()
+			defer func() { _ = f.Close() }()
+			require.NoError(t, f.SetSheetRow("Sheet1", "A1", &[]any{"date"}))
+			require.NoError(t, f.SetCellValue("Sheet1", "A2", 45000))
+			style, err := f.NewStyle(&excelize.Style{NumFmt: numFmt})
+			require.NoError(t, err)
+			require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
+			require.NoError(t, f.SaveAs(path))
+
+			db, err := OpenContext(ctx, path)
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+
+			var date string
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT "date" FROM jp_Sheet1`).Scan(&date))
+
+			assert.Equal(t, "2023-03-15", date)
 		})
 	}
 }

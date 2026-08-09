@@ -48,6 +48,7 @@ func parseXLSX(reader io.Reader, policy ExcelSheetPolicy) (table *TableData, err
 	if err != nil {
 		return nil, fmt.Errorf("failed to read sheet %s: %w", sheetName, err)
 	}
+	rows = NormalizeXLSXDates(f, sheetName, rows)
 
 	if len(rows) == 0 {
 		return nil, errors.New("empty XLSX sheet")
