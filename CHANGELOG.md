@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A `frame` aggregate says when it has no answer instead of inventing one ([#273](https://github.com/nao1215/filesql/issues/273), [#281](https://github.com/nao1215/filesql/issues/281)). `Sum` over a column with no number in it returned 0 for every group, which is what a real total of zero looks like, and `Mean` returned nil; both now refuse the column by name, while a group inside a numeric column that holds no value gets nil rather than 0. `Min` and `Max` over a text column returned nil, discarding an answer the data plainly held: they now follow SQLite's ordering, where a number sorts before any text and text compares lexically, so the minimum of `banana` and `apple` is `apple`.
+
+### Breaking Changes
+
+- `AggSum` returns nil rather than 0.0 for a group with no numeric value, and `AggMin`/`AggMax` return a string for a group holding only text. A caller asserting `float64` on those results must handle nil and string. This is what makes "nothing here was a number" distinguishable from "the numbers added to zero".
+
 ## [0.41.1] - 2026-08-09
 
 ### Fixed
