@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `frame.DataFrame.Select` and `Drop` return `(*DataFrame, error)` ([#272](https://github.com/nao1215/filesql/issues/272), [#282](https://github.com/nao1215/filesql/issues/282), [#283](https://github.com/nao1215/filesql/issues/283)). Both silently ignored a column that does not exist, so a typo returned a frame quietly missing a column, or one still holding the column the caller believed was dropped — while `Sort`, `GroupBy`, `Rename` and `Concat` all refused the same typo. `Select` also accepted a repeated name and produced a frame whose two representations disagreed: `Columns` and `ToCSV` kept both, `ToRecords` kept one, because a row is a map and a map cannot hold the name twice. Both now refuse what they cannot do, which is the contract the rest of the package already had. A caller updates `df.Select(...)` to take the error the sibling methods already return.
+
 ### Fixed
 
 - `DropNA` and `FillNA` agree on what is missing ([#271](https://github.com/nao1215/filesql/issues/271)). `DropNA` counted an empty string as missing and `FillNA` counted only a real nil, so on the same frame `DropNA` removed a row that `FillNA` would not fill — and a caller who filled a frame to make it safe for later processing was left holding the cell that made it unsafe. A CSV has no null, so `""` is how a missing value arrives from the format most frames are read from, and it now counts for both. A column `FillNAByColumn` was not given a value for keeps its cells rather than having them normalized to nil.

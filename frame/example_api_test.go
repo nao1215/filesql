@@ -118,7 +118,7 @@ func ExampleDataFrame_Select() {
 		{"name": "apple", "qty": 3, "region": "north"},
 	})
 
-	selected := df.Select("name", "region")
+	selected, _ := df.Select("name", "region") //nolint:errcheck // the columns exist
 	fmt.Println(selected.Columns())
 	// Output:
 	// [name region]

@@ -310,31 +310,44 @@ func formatValue(v any) string {
 	return fmt.Sprintf("%v", v)
 }
 
-// Select returns a new DataFrame with only the specified columns.
-// Columns that do not exist are silently ignored.
+// Select returns a new DataFrame with only the specified columns, in the order
+// given.
+//
+// Returns an error if a column does not exist, or if one is named twice.
+//
+// A missing column used to be skipped, so a typo returned a frame quietly
+// missing that column while Sort, GroupBy and Rename all refused the same typo.
+// A repeated name used to produce a frame whose two representations disagreed:
+// Columns and ToCSV kept both, and ToRecords kept one, because a row is a map
+// and a map cannot hold the name twice.
 //
 // Example:
 //
-//	selected := df.Select("name", "age")
-func (df *DataFrame) Select(columns ...string) *DataFrame {
+//	selected, err := df.Select("name", "age")
+func (df *DataFrame) Select(columns ...string) (*DataFrame, error) {
 	if len(columns) == 0 {
 		return &DataFrame{
 			columns: []string{},
 			rows:    []map[string]any{},
-		}
+		}, nil
 	}
 
-	// Filter to only existing columns, preserving order
 	existingCols := make(map[string]struct{}, len(df.columns))
 	for _, col := range df.columns {
 		existingCols[col] = struct{}{}
 	}
 
 	selectedCols := make([]string, 0, len(columns))
+	seen := make(map[string]struct{}, len(columns))
 	for _, col := range columns {
-		if _, exists := existingCols[col]; exists {
-			selectedCols = append(selectedCols, col)
+		if _, exists := existingCols[col]; !exists {
+			return nil, fmt.Errorf("column %q does not exist", col)
 		}
+		if _, dup := seen[col]; dup {
+			return nil, fmt.Errorf("column %q is selected twice, and a row cannot hold one name twice", col)
+		}
+		seen[col] = struct{}{}
+		selectedCols = append(selectedCols, col)
 	}
 
 	// Create new rows with only selected columns
@@ -350,7 +363,7 @@ func (df *DataFrame) Select(columns ...string) *DataFrame {
 	return &DataFrame{
 		columns: selectedCols,
 		rows:    newRows,
-	}
+	}, nil
 }
 
 // Filter returns a new DataFrame containing only rows that satisfy the predicate.
@@ -1175,19 +1188,30 @@ func (df *DataFrame) Limit(n int) *DataFrame {
 }
 
 // Drop returns a new DataFrame with the specified columns removed.
-// Columns that do not exist are silently ignored.
+// Returns an error if a column does not exist.
+//
+// A missing column used to be skipped, so a typo returned the frame unchanged
+// and the caller believed a column had been dropped that was still there —
+// while Sort, GroupBy and Rename all refused the same typo.
 //
 // Example:
 //
-//	dropped := df.Drop("temp_col", "debug_col")
-func (df *DataFrame) Drop(columns ...string) *DataFrame {
+//	dropped, err := df.Drop("temp_col", "debug_col")
+func (df *DataFrame) Drop(columns ...string) (*DataFrame, error) {
 	if len(columns) == 0 {
-		return df.clone()
+		return df.clone(), nil
 	}
 
-	// Create set of columns to drop
+	existingCols := make(map[string]struct{}, len(df.columns))
+	for _, col := range df.columns {
+		existingCols[col] = struct{}{}
+	}
+
 	dropSet := make(map[string]struct{}, len(columns))
 	for _, col := range columns {
+		if _, exists := existingCols[col]; !exists {
+			return nil, fmt.Errorf("column %q does not exist", col)
+		}
 		dropSet[col] = struct{}{}
 	}
 
@@ -1212,7 +1236,7 @@ func (df *DataFrame) Drop(columns ...string) *DataFrame {
 	return &DataFrame{
 		columns: newColumns,
 		rows:    newRows,
-	}
+	}, nil
 }
 
 // Rename returns a new DataFrame with the specified column renamed.
