@@ -117,6 +117,58 @@ func TestStreamingParser_ParseFromReader_LTSV(t *testing.T) {
 	})
 }
 
+func TestStreamingParser_CROnlyLineEndings(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a CR-terminated CSV keeps its rows", func(t *testing.T) {
+		t.Parallel()
+
+		p := newStreamingParser(FileTypeCSV, CompressionNone, "users", 1024)
+		table, err := p.parseFromReader(strings.NewReader("name,age\rAlice,30\rBob,40\r"))
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"name", "age"}, []string(table.getHeader()))
+		assert.Len(t, table.getRecords(), 2)
+	})
+
+	t.Run("a CR-terminated LTSV keeps its rows", func(t *testing.T) {
+		t.Parallel()
+
+		p := newStreamingParser(FileTypeLTSV, CompressionNone, "users", 1024)
+		table, err := p.parseFromReader(strings.NewReader("name:Alice\tage:30\rname:Bob\tage:40\r"))
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"name", "age"}, []string(table.getHeader()))
+		assert.Len(t, table.getRecords(), 2)
+	})
+
+	t.Run("a CR-terminated CSV keeps its rows when read in chunks", func(t *testing.T) {
+		t.Parallel()
+
+		p := newStreamingParser(FileTypeCSV, CompressionNone, "users", 1)
+		rows := 0
+		err := p.ProcessInChunks(strings.NewReader("name,age\rAlice,30\rBob,40\r"), func(chunk *tableChunk) error {
+			rows += len(chunk.records)
+			return nil
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, 2, rows)
+	})
+
+	t.Run("a CR inside a quoted field of an LF file is data, not a row boundary", func(t *testing.T) {
+		t.Parallel()
+
+		p := newStreamingParser(FileTypeCSV, CompressionNone, "notes", 1024)
+		table, err := p.parseFromReader(strings.NewReader("name,note\nAlice,\"a\rb\"\nBob,plain\n"))
+
+		require.NoError(t, err)
+		records := table.getRecords()
+		require.Len(t, records, 2)
+		assert.Equal(t, "a\rb", records[0][1])
+	})
+}
+
 func TestStreamingParser_ParseFromReader_Compressed(t *testing.T) {
 	t.Parallel()
 

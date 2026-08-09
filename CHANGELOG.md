@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A CSV, TSV, or LTSV whose lines end with a lone carriage return now imports its rows instead of loading empty ([#279](https://github.com/nao1215/filesql/issues/279)). The CSV and LTSV readers understand LF and CRLF, so a file written with the classic Mac OS 9 convention was one very long line: the data was folded into the column names and the table came out with zero rows, at no error. The line ending is now decided from the start of the file, and only a file that holds a carriage return and no line feed at all has its carriage returns read as line breaks — a carriage return inside a quoted field stays data, because a file that uses LF shows a line feed within that first 64 KiB.
+
 ## [0.39.1] - 2026-08-08
 
 ### Fixed

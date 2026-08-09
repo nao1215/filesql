@@ -15,6 +15,7 @@ import (
 	"github.com/apache/arrow/go/v18/arrow/array"
 	pqfile "github.com/apache/arrow/go/v18/parquet/file"
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
+	"github.com/nao1215/filesql/parser"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -94,7 +95,7 @@ func (p *streamingParser) createDecompressedReader(reader io.Reader) (io.Reader,
 
 // parseDelimitedStream parses CSV or TSV data from reader using streaming approach
 func (p *streamingParser) parseDelimitedStream(reader io.Reader, delimiter rune, fileTypeName string) (*table, error) {
-	csvReader := csv.NewReader(reader)
+	csvReader := csv.NewReader(parser.NormalizeLineEndings(reader))
 	csvReader.Comma = delimiter
 	// Accept a variable field count so a ragged row is handled by the configured
 	// malformed-row policy instead of aborting the whole read.
@@ -175,7 +176,7 @@ func (l *labelOrder) len() int {
 }
 
 func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
-	content, err := io.ReadAll(reader)
+	content, err := io.ReadAll(parser.NormalizeLineEndings(reader))
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to read LTSV: %w", ErrParsing, err)
 	}
@@ -290,7 +291,7 @@ func (p *streamingParser) ProcessInChunks(reader io.Reader, processor chunkProce
 
 // processDelimitedInChunks processes CSV or TSV data in chunks based on delimiter
 func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor chunkProcessor, delimiter rune, fileTypeName string) error {
-	csvReader := csv.NewReader(reader)
+	csvReader := csv.NewReader(parser.NormalizeLineEndings(reader))
 	if delimiter != csvDelimiter {
 		csvReader.Comma = delimiter
 	}
@@ -438,7 +439,7 @@ func (p *streamingParser) processTSVInChunks(reader io.Reader, processor chunkPr
 // processLTSVInChunks processes LTSV data in chunks
 func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkProcessor) error {
 	// For LTSV, we need to read line by line
-	content, err := io.ReadAll(reader)
+	content, err := io.ReadAll(parser.NormalizeLineEndings(reader))
 	if err != nil {
 		return fmt.Errorf("%w: failed to read LTSV: %w", ErrParsing, err)
 	}
