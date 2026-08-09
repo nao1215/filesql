@@ -1331,6 +1331,21 @@ func (df *DataFrame) RenameColumns(renames map[string]string) (*DataFrame, error
 	}, nil
 }
 
+// isNA reports whether a value is missing.
+//
+// One definition for the whole package. DropNA counted an empty string as
+// missing and FillNA counted only a real nil, so the two halves of the same API
+// disagreed about the same frame: DropNA removed a row that FillNA would not
+// fill. A CSV has no null, so a missing value arrives as "" and has to count, or
+// FillNA does nothing at all for the format most frames are read from.
+func isNA(v any) bool {
+	if v == nil {
+		return true
+	}
+	s, ok := v.(string)
+	return ok && s == ""
+}
+
 // DropNA returns a new DataFrame with rows containing missing values removed.
 // By default, removes rows where any column has a nil value or an empty string.
 //
@@ -1357,7 +1372,7 @@ func (df *DataFrame) DropNASubset(columns ...string) *DataFrame {
 	for _, row := range df.rows {
 		hasNA := false
 		for _, col := range columns {
-			if val, exists := row[col]; !exists || val == nil || val == "" {
+			if val, exists := row[col]; !exists || isNA(val) {
 				hasNA = true
 				break
 			}
@@ -1376,17 +1391,19 @@ func (df *DataFrame) DropNASubset(columns ...string) *DataFrame {
 	}
 }
 
-// FillNA returns a new DataFrame with nil values replaced by the specified value.
+// FillNA returns a new DataFrame with missing values replaced by the specified
+// value. Missing is what DropNA drops: a nil, or an empty string, which is how a
+// CSV spells one. See isNA.
 //
 // Example:
 //
-//	filled := df.FillNA(0)  // Replace all nil with 0
+//	filled := df.FillNA(0)  // Replace every missing value with 0
 func (df *DataFrame) FillNA(value any) *DataFrame {
 	newRows := make([]map[string]any, len(df.rows))
 	for i, row := range df.rows {
 		newRow := make(map[string]any, len(df.columns))
 		for _, col := range df.columns {
-			if val, exists := row[col]; !exists || val == nil {
+			if val, exists := row[col]; !exists || isNA(val) {
 				newRow[col] = value
 			} else {
 				newRow[col] = val
@@ -1404,8 +1421,9 @@ func (df *DataFrame) FillNA(value any) *DataFrame {
 	}
 }
 
-// FillNAByColumn returns a new DataFrame with nil values replaced by column-specific values.
-// Columns not in the map retain their nil values.
+// FillNAByColumn returns a new DataFrame with missing values replaced by
+// column-specific values. Missing is what DropNA drops; see isNA. A column the
+// map does not name keeps its cells as they are.
 //
 // Example:
 //
@@ -1424,11 +1442,14 @@ func (df *DataFrame) FillNAByColumn(values map[string]any) *DataFrame {
 		newRow := make(map[string]any, len(df.columns))
 		for _, col := range df.columns {
 			val := row[col]
-			if val == nil {
+			if isNA(val) {
 				if fillValue, ok := values[col]; ok {
 					newRow[col] = fillValue
 				} else {
-					newRow[col] = nil
+					// No fill value named for this column, so the cell is left
+					// as it is rather than normalized to nil: a caller filling
+					// one column did not ask about the others.
+					newRow[col] = val
 				}
 			} else {
 				newRow[col] = val

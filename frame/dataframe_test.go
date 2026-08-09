@@ -3035,3 +3035,62 @@ func TestConcatAndConcatAllAgreeOnCompatibleFrames(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+// TestDropNAAndFillNAAgreeOnMissing pins the one definition. DropNA counted an
+// empty string as missing and FillNA counted only a real nil, so on the same
+// frame DropNA removed a row that FillNA would not fill — and a caller filling a
+// frame to make it safe for later processing was left with the cell that made it
+// unsafe. A CSV has no null, so "" is how a missing value arrives from the
+// format most frames are read from.
+func TestDropNAAndFillNAAgreeOnMissing(t *testing.T) {
+	t.Parallel()
+
+	const csv = "id,v\n1,a\n2,\n3,c\n"
+
+	t.Run("FillNA fills what DropNA would drop", func(t *testing.T) {
+		t.Parallel()
+
+		dropped, err := NewDataFrame(strings.NewReader(csv), CSV)
+		require.NoError(t, err)
+		filled, err := NewDataFrame(strings.NewReader(csv), CSV)
+		require.NoError(t, err)
+
+		assert.Equal(t, 2, dropped.DropNA().Len(), "the empty cell is missing")
+		assert.Equal(t, 3, filled.FillNA("X").Len())
+		assert.Equal(t, "X", filled.FillNA("X").ToRecords()[1]["v"])
+	})
+
+	t.Run("a filled frame has nothing left for DropNA to drop", func(t *testing.T) {
+		t.Parallel()
+
+		df, err := NewDataFrame(strings.NewReader(csv), CSV)
+		require.NoError(t, err)
+
+		assert.Equal(t, 3, df.FillNA("X").DropNA().Len())
+	})
+
+	t.Run("FillNAByColumn fills what DropNASubset would drop", func(t *testing.T) {
+		t.Parallel()
+
+		df, err := NewDataFrame(strings.NewReader(csv), CSV)
+		require.NoError(t, err)
+
+		filled := df.FillNAByColumn(map[string]any{"v": "X"})
+
+		assert.Equal(t, "X", filled.ToRecords()[1]["v"])
+		assert.Equal(t, 3, filled.DropNASubset("v").Len())
+	})
+
+	t.Run("a column with no fill value named keeps its cells", func(t *testing.T) {
+		t.Parallel()
+
+		df, err := NewDataFrame(strings.NewReader("a,b\n,\n"), CSV)
+		require.NoError(t, err)
+
+		filled := df.FillNAByColumn(map[string]any{"a": "X"})
+
+		record := filled.ToRecords()[0]
+		assert.Equal(t, "X", record["a"])
+		assert.Equal(t, "", record["b"], "a caller filling one column did not ask about the other")
+	})
+}
