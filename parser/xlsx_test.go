@@ -110,9 +110,15 @@ func TestIsDateNumberFormat(t *testing.T) {
 		want   bool
 	}{
 		{name: "an ISO date", format: "yyyy-mm-dd", want: true},
-		{name: "a time", format: "hh:mm:ss", want: true},
 		{name: "a month and year", format: "mmm yyyy", want: true},
-		{name: "an elapsed time in brackets", format: "[h]:mm", want: true},
+		{name: "a date and time", format: "yyyy-mm-dd hh:mm", want: true},
+		// A time of day names no day, and an elapsed duration names none
+		// either: "[h]:mm" of 1.5 is 36 hours, not a day and a half after the
+		// epoch. Reading either as a calendar datetime invents a date.
+		{name: "a time of day", format: "hh:mm:ss", want: false},
+		{name: "minutes and seconds", format: "mm:ss", want: false},
+		{name: "an elapsed time in brackets", format: "[h]:mm", want: false},
+		{name: "an elapsed time beside a date token", format: "[h]:mm dd", want: false},
 		{name: "a plain number", format: "#,##0.00", want: false},
 		{name: "a currency", format: `"$"#,##0.00`, want: false},
 		{name: "a quoted word holding date letters", format: `#,##0" days"`, want: false},

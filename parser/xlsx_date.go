@@ -26,6 +26,14 @@ import (
 // Only cells the workbook itself calls dates are touched. A number formatted as
 // a number, and text that merely looks like a date, are left alone.
 func NormalizeXLSXDates(f *excelize.File, sheet string, rows [][]string) [][]string {
+	// The epoch is a workbook-wide setting, so it is asked once. A file written
+	// on a Mac before 2016 counts from 1904, and reading every serial against
+	// 1900 would put every date in such a file four years and a day early.
+	date1904 := false
+	if props, err := f.GetWorkbookProps(); err == nil && props.Date1904 != nil {
+		date1904 = *props.Date1904
+	}
+
 	for r, row := range rows {
 		for c := range row {
 			if row[c] == "" {
@@ -38,7 +46,7 @@ func NormalizeXLSXDates(f *excelize.File, sheet string, rows [][]string) [][]str
 			if !cellHoldsDate(f, sheet, axis) {
 				continue
 			}
-			if iso, ok := isoFromSerial(f, sheet, axis); ok {
+			if iso, ok := isoFromSerial(f, sheet, axis, date1904); ok {
 				rows[r][c] = iso
 			}
 		}
@@ -46,12 +54,16 @@ func NormalizeXLSXDates(f *excelize.File, sheet string, rows [][]string) [][]str
 	return rows
 }
 
-// builtinDateNumberFormats are the number-format IDs a workbook reserves for
-// dates and times. A cell is a date because of how it is formatted; nothing else
-// in the file says so, since the value itself is a serial number.
+// builtinDateNumberFormats are the number-format IDs whose rendering names a
+// calendar day. A cell is a date because of how it is formatted; nothing else in
+// the file says so, since the value itself is a serial number.
+//
+// The time-only formats are deliberately absent. 18 to 21 render a time of day
+// and 45 to 47 an elapsed duration — 46 is "[h]:mm:ss", where 1.5 means 36
+// hours, not a day and a half after the epoch. Reading either as a calendar
+// datetime invents a date the cell never held.
 var builtinDateNumberFormats = map[int]struct{}{
-	14: {}, 15: {}, 16: {}, 17: {}, 18: {}, 19: {}, 20: {}, 21: {}, 22: {},
-	45: {}, 46: {}, 47: {},
+	14: {}, 15: {}, 16: {}, 17: {}, 22: {},
 }
 
 // cellHoldsDate reports whether a cell's number format makes it a date.
@@ -74,37 +86,47 @@ func cellHoldsDate(f *excelize.File, sheet, axis string) bool {
 	return style.CustomNumFmt != nil && isDateNumberFormat(*style.CustomNumFmt)
 }
 
-// isDateNumberFormat reports whether a custom number format renders a date or a
-// time. The format language spells those with y, m, d, h and s; everything
-// inside quotes or brackets is literal text or a condition, so it is skipped —
-// a currency format quoting the word "days" is not a date.
+// isDateNumberFormat reports whether a custom number format names a calendar
+// day.
+//
+// A year or a day token is what says so. "m" is not enough on its own, because
+// it is both month and minute, and neither "hh:mm" nor "mm:ss" is a date. A
+// bracketed hour, minute or second is an elapsed duration — "[h]:mm" of 1.5 is
+// 36 hours — so a format holding one is never a date, whatever else it says.
+//
+// Everything inside quotes is literal text, so a currency format quoting a word
+// with a "d" in it is not a date either.
 func isDateNumberFormat(format string) bool {
 	inQuote := false
 	inBracket := false
+	elapsed := false
+	dated := false
 	for i := range len(format) {
-		switch c := format[i]; {
+		c := format[i]
+		switch {
 		case c == '"':
 			inQuote = !inQuote
+		case inQuote:
 		case c == '[':
 			inBracket = true
 		case c == ']':
 			inBracket = false
-		case inQuote || inBracket:
-		case c == 'y' || c == 'Y' || c == 'd' || c == 'D' || c == 'h' || c == 'H' || c == 's' || c == 'S':
-			return true
-		case c == 'm' || c == 'M':
-			// "m" is both month and minute, and either makes this a date format.
-			return true
+		case inBracket:
+			if c == 'h' || c == 'H' || c == 'm' || c == 'M' || c == 's' || c == 'S' {
+				elapsed = true
+			}
+		case c == 'y' || c == 'Y' || c == 'd' || c == 'D':
+			dated = true
 		}
 	}
-	return false
+	return dated && !elapsed
 }
 
 // isoFromSerial reads a cell's stored serial and renders it as ISO 8601. It
 // reports false when the cell holds something other than a serial — a date
 // stored as text, which is already in whatever form the file gave it, and has no
 // serial to convert.
-func isoFromSerial(f *excelize.File, sheet, axis string) (string, bool) {
+func isoFromSerial(f *excelize.File, sheet, axis string, date1904 bool) (string, bool) {
 	raw, err := f.GetCellValue(sheet, axis, excelize.Options{RawCellValue: true})
 	if err != nil {
 		return "", false
@@ -113,10 +135,7 @@ func isoFromSerial(f *excelize.File, sheet, axis string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	// The 1904 epoch is a workbook-wide setting; excelize resolves it when it
-	// renders, and reading it here would mean parsing the workbook properties
-	// for every cell. The 1900 epoch is what a file written this century uses.
-	at, err := excelize.ExcelDateToTime(serial, false)
+	at, err := excelize.ExcelDateToTime(serial, date1904)
 	if err != nil {
 		return "", false
 	}

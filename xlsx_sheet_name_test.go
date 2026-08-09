@@ -158,3 +158,63 @@ func TestXLSXDateTimeCellKeepsItsTime(t *testing.T) {
 
 	assert.Equal(t, "2023-03-15 12:00:00", at)
 }
+
+// TestXLSXDateHonorsTheWorkbookEpoch covers the other calendar. A workbook
+// written on a Mac before 2016 counts its serials from 1904, and reading them
+// against 1900 puts every date in the file four years and a day early.
+func TestXLSXDateHonorsTheWorkbookEpoch(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "mac.xlsx")
+
+	f := excelize.NewFile()
+	defer func() { _ = f.Close() }()
+	date1904 := true
+	require.NoError(t, f.SetWorkbookProps(&excelize.WorkbookPropsOptions{Date1904: &date1904}))
+	require.NoError(t, f.SetSheetRow("Sheet1", "A1", &[]any{"date"}))
+	require.NoError(t, f.SetCellValue("Sheet1", "A2", 45000))
+	style, err := f.NewStyle(&excelize.Style{NumFmt: 14})
+	require.NoError(t, err)
+	require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
+	require.NoError(t, f.SaveAs(path))
+
+	db, err := OpenContext(ctx, path)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var date string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT "date" FROM mac_Sheet1`).Scan(&date))
+
+	// The same serial is 2023-03-15 under the 1900 epoch and 2027-03-16 here.
+	assert.Equal(t, "2027-03-16", date)
+}
+
+// TestXLSXElapsedDurationIsNotADate pins what must not be converted. An elapsed
+// duration counts hours, not days from an epoch: [h]:mm of 1.5 is 36 hours, and
+// reading it as a calendar datetime invents a date the cell never held.
+func TestXLSXElapsedDurationIsNotADate(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "elapsed.xlsx")
+
+	f := excelize.NewFile()
+	defer func() { _ = f.Close() }()
+	require.NoError(t, f.SetSheetRow("Sheet1", "A1", &[]any{"worked"}))
+	require.NoError(t, f.SetCellValue("Sheet1", "A2", 1.5))
+	style, err := f.NewStyle(&excelize.Style{NumFmt: 46}) // [h]:mm:ss
+	require.NoError(t, err)
+	require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
+	require.NoError(t, f.SaveAs(path))
+
+	db, err := OpenContext(ctx, path)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var worked string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT worked FROM elapsed_Sheet1`).Scan(&worked))
+
+	assert.NotContains(t, worked, "1900-", "36 hours is not a day in January 1900")
+	assert.NotContains(t, worked, "1899-")
+}
