@@ -2,6 +2,7 @@ package filesql
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -217,4 +218,40 @@ func TestXLSXElapsedDurationIsNotADate(t *testing.T) {
 
 	assert.NotContains(t, worked, "1900-", "36 hours is not a day in January 1900")
 	assert.NotContains(t, worked, "1899-")
+}
+
+// TestXLSXLocalizedDateFormatImportsAsISO covers the date formats a workbook
+// written in Japanese, Chinese, or Korean uses. They are ordinary built-in
+// formats with their own IDs, and recognizing only the English-stable ones left
+// those files with the format-dependent text this conversion exists to remove.
+func TestXLSXLocalizedDateFormatImportsAsISO(t *testing.T) {
+	t.Parallel()
+
+	// 30 is "m/d/yy" in the East Asian tables, 27 "yyyy年m月", 36 a era date.
+	for _, numFmt := range []int{27, 30, 36} {
+		t.Run(fmt.Sprintf("number format %d", numFmt), func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "jp.xlsx")
+
+			f := excelize.NewFile()
+			defer func() { _ = f.Close() }()
+			require.NoError(t, f.SetSheetRow("Sheet1", "A1", &[]any{"date"}))
+			require.NoError(t, f.SetCellValue("Sheet1", "A2", 45000))
+			style, err := f.NewStyle(&excelize.Style{NumFmt: numFmt})
+			require.NoError(t, err)
+			require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
+			require.NoError(t, f.SaveAs(path))
+
+			db, err := OpenContext(ctx, path)
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+
+			var date string
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT "date" FROM jp_Sheet1`).Scan(&date))
+
+			assert.Equal(t, "2023-03-15", date)
+		})
+	}
 }
