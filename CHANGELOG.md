@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The reserved `_filesql_` table prefix is reserved in both directions. v0.43.0 began hiding those names from `DumpDatabase` and from the table listings this package returns, but still loaded a file called `_filesql_report.csv` into a table under the prefix: that table existed and answered queries while being absent from every listing and from any dump, so its rows were silently left out of an export. An input that would land in the namespace is now refused with `ErrReservedTableName`, naming the table and the prefix, which is how SQLite answers for its own `sqlite_` prefix. A name that merely resembles the prefix, such as `filesql_report`, is a normal table.
+
 ## [0.43.0] - 2026-08-09
 
 ### Added

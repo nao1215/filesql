@@ -55,6 +55,46 @@ func TestACHAndFedwireShareABaseNameInOneDatabase(t *testing.T) {
 	assert.Contains(t, readFileString(t, filepath.Join(outDir, "out.fed")), "{1500}")
 }
 
+// TestReservedTableNameIsRefused pins that the reserved prefix is reserved in
+// both directions. Hiding _filesql_ tables from dumps and listings while still
+// loading a file named _filesql_report.csv into one would leave that table
+// queryable but absent from everything that enumerates tables, so the load is
+// refused instead, the way SQLite refuses its own sqlite_ prefix.
+func TestReservedTableNameIsRefused(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	csvPath := filepath.Join(dir, "_filesql_report.csv")
+	require.NoError(t, os.WriteFile(csvPath, []byte("id,v\n1,a\n"), 0o600))
+
+	_, err := OpenContext(ctx, csvPath)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrReservedTableName)
+	assert.Contains(t, err.Error(), "_filesql_")
+
+	// A reader names its own table, so it can reach the namespace too.
+	builder, err := NewBuilder().
+		AddReader(strings.NewReader("id\n1\n"), "_filesql_sources", FileTypeCSV).
+		Build(ctx)
+	require.NoError(t, err)
+	_, err = builder.Open(ctx)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrReservedTableName)
+
+	// A name that merely resembles the prefix is a normal table.
+	okPath := filepath.Join(dir, "filesql_report.csv")
+	require.NoError(t, os.WriteFile(okPath, []byte("id,v\n1,a\n"), 0o600))
+	db, err := OpenContext(ctx, okPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	names, err := getSQLiteTableNames(db)
+	require.NoError(t, err)
+	assert.Contains(t, names, "filesql_report")
+}
+
 // TestSourceMetadataRolledBackWithTransaction pins that metadata written by a
 // load shares the fate of the tables it describes. A rolled-back load must not
 // leave a row pointing at tables that do not exist.

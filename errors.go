@@ -43,6 +43,10 @@ var (
 	// ErrDuplicateTable indicates a table with the same name already exists.
 	ErrDuplicateTable = errors.New("filesql: duplicate table name")
 
+	// ErrReservedTableName indicates an input would be loaded into a table whose
+	// name this package reserves for its own bookkeeping.
+	ErrReservedTableName = errors.New("filesql: reserved table name")
+
 	// ErrNilInput indicates a required input parameter is nil.
 	ErrNilInput = errors.New("filesql: nil input")
 

@@ -300,6 +300,10 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, 
 		return streamWireFileToDatabase(ctx, db, input.reader, input.tableName+extFED, "", sp.replaceExisting)
 	}
 
+	if err := validateTableName(input.tableName); err != nil {
+		return err
+	}
+
 	// Reader should already be validated at Build time, but ensure it's buffered
 	if _, ok := input.reader.(*bufio.Reader); !ok {
 		input.reader = bufio.NewReader(input.reader)
@@ -753,6 +757,11 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX
 	if err != nil {
 		sp.logger.Error("sheet names collide", "path", filePath, "error", err)
 		return err
+	}
+	for _, tableName := range sheetTables {
+		if err := validateTableName(tableName); err != nil {
+			return err
+		}
 	}
 
 	// Process each sheet as a separate table
