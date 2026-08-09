@@ -44,7 +44,9 @@ func TestOperatorSemantics(t *testing.T) {
 		{"mysql && is true when both are", MySQL, `SELECT 1 && 2`, "1", false},
 		{"mysql ! negates", MySQL, `SELECT !0`, "1", false},
 		{"mysql ! negates a nonzero", MySQL, `SELECT !5`, "0", false},
-		{"mysql ! binds tighter than a comparison", MySQL, `SELECT !0 = 1`, "1", false},
+		// The case that tells the two readings apart: "(!1) = 2" is 0, while the
+		// bare "NOT 1 = 2" SQLite would have parsed is 1.
+		{"mysql ! binds tighter than a comparison", MySQL, `SELECT !1 = 2`, "0", false},
 		{"mysql ! twice is the value's truth", MySQL, `SELECT !!5`, "1", false},
 		{"mysql ^ is a bitwise xor", MySQL, `SELECT 5 ^ 3`, "6", false},
 		{"mysql ^ of equal operands is zero", MySQL, `SELECT 7 ^ 7`, "0", false},
