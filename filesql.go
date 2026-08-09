@@ -16,6 +16,7 @@ import (
 	"github.com/apache/arrow/go/v18/arrow/array"
 	"github.com/apache/arrow/go/v18/arrow/memory"
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
+	"github.com/nao1215/filesql/parser"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -553,9 +554,9 @@ func createCompressedWriter(w io.Writer, compression CompressionType) (io.Writer
 	return handler.CreateWriter(w)
 }
 
-// loneEmptyField is what a record of one empty field is written as.
+// loneEmptyField is what a CSV record of one empty field is written as.
 //
-// Written plainly it is a blank line, and a blank line is not a record: a reader
+// Written plainly it is a blank line, and a blank line is not a CSV record: a reader
 // skips it, so a one-column table's empty rows disappeared and the dump reported
 // success. The quotes say "one field, and it is empty", which cannot be read as
 // anything else. encoding/csv's writer does not quote an empty field — it has no
@@ -573,6 +574,11 @@ func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, deli
 	// writeRecord writes one record, taking the lone empty field around the csv
 	// writer. Flushing first keeps the two writers' output in order.
 	writeRecord := func(record []string) error {
+		// TSV is written literally; see parser.WriteTSVRecord. A blank line is
+		// already the one-column empty value there, so it needs no form of its own.
+		if delimiter == tsvDelimiter {
+			return parser.WriteTSVRecord(writer, record)
+		}
 		if len(record) != 1 || record[0] != "" {
 			return csvWriter.Write(record)
 		}

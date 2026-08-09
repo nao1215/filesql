@@ -93,14 +93,33 @@ func (p *streamingParser) createDecompressedReader(reader io.Reader) (io.Reader,
 	return NewCompressionHandler(p.compression).CreateReader(reader)
 }
 
-// parseDelimitedStream parses CSV or TSV data from reader using streaming approach
-func (p *streamingParser) parseDelimitedStream(reader io.Reader, delimiter rune, fileTypeName string) (*table, error) {
-	csvReader := csv.NewReader(parser.NormalizeLineEndings(reader))
+// delimitedReader reads the records of a delimited file. CSV and TSV need
+// different readers because the formats differ on what a quote means: CSV
+// escapes with it, TSV has no escape at all.
+type delimitedReader interface {
+	Read() ([]string, error)
+	ReadAll() ([][]string, error)
+}
+
+// newDelimitedReader picks the reader delimiter names, over normalized line
+// endings so a carriage-return terminated file is read as lines.
+func newDelimitedReader(reader io.Reader, delimiter rune) delimitedReader {
+	normalized := parser.NormalizeLineEndings(reader)
+	if delimiter == tsvDelimiter {
+		return parser.NewTSVReader(normalized)
+	}
+
+	csvReader := csv.NewReader(normalized)
 	csvReader.Comma = delimiter
 	// Accept a variable field count so a ragged row is handled by the configured
 	// malformed-row policy instead of aborting the whole read.
 	csvReader.FieldsPerRecord = -1
-	records, err := csvReader.ReadAll()
+	return csvReader
+}
+
+// parseDelimitedStream parses CSV or TSV data from reader using streaming approach
+func (p *streamingParser) parseDelimitedStream(reader io.Reader, delimiter rune, fileTypeName string) (*table, error) {
+	records, err := newDelimitedReader(reader, delimiter).ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to read %s: %w", ErrParsing, fileTypeName, err)
 	}
@@ -291,16 +310,10 @@ func (p *streamingParser) ProcessInChunks(reader io.Reader, processor chunkProce
 
 // processDelimitedInChunks processes CSV or TSV data in chunks based on delimiter
 func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor chunkProcessor, delimiter rune, fileTypeName string) error {
-	csvReader := csv.NewReader(parser.NormalizeLineEndings(reader))
-	if delimiter != csvDelimiter {
-		csvReader.Comma = delimiter
-	}
-	// Accept a variable field count from the reader so a ragged row is handled by
-	// the configured malformed-row policy instead of aborting the whole read.
-	csvReader.FieldsPerRecord = -1
+	recordReader := newDelimitedReader(reader, delimiter)
 
 	// Read header first
-	headerrecord, err := csvReader.Read()
+	headerrecord, err := recordReader.Read()
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			return fmt.Errorf("%w: empty %s data", ErrEmptyData, fileTypeName)
@@ -326,7 +339,7 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 
 	rowNum := 0
 	for {
-		record, err := csvReader.Read()
+		record, err := recordReader.Read()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break

@@ -189,6 +189,129 @@ func TestParse_TSV(t *testing.T) {
 	})
 }
 
+func TestParse_TSVTakesFieldsLiterally(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a quote is data, not a quote character", func(t *testing.T) {
+		t.Parallel()
+
+		input := "name\tnote\nalice\t5'9\" tall\nbob\tsaid \"hi\" loudly\n"
+
+		result, err := Parse(strings.NewReader(input), TSV)
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"name", "note"}, result.Headers)
+		assert.Equal(t, [][]string{
+			{"alice", `5'9" tall`},
+			{"bob", `said "hi" loudly`},
+		}, result.Records)
+	})
+
+	t.Run("a field that begins and ends with a quote keeps both", func(t *testing.T) {
+		t.Parallel()
+
+		input := "name\tnote\nalice\t\"quoted\"\n"
+
+		result, err := Parse(strings.NewReader(input), TSV)
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"alice", `"quoted"`}}, result.Records)
+	})
+
+	t.Run("a doubled quote is two characters", func(t *testing.T) {
+		t.Parallel()
+
+		input := "v\na\"\"b\n"
+
+		result, err := Parse(strings.NewReader(input), TSV)
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{`a""b`}}, result.Records)
+	})
+
+	t.Run("a blank line is the empty value of a one-column file", func(t *testing.T) {
+		t.Parallel()
+
+		input := "v\nalice\n\nbob\n"
+
+		result, err := Parse(strings.NewReader(input), TSV)
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"alice"}, {""}, {"bob"}}, result.Records)
+	})
+
+	t.Run("a blank line between multi-column records is skipped", func(t *testing.T) {
+		t.Parallel()
+
+		input := "a\tb\n1\t2\n\n3\t4\n"
+
+		result, err := Parse(strings.NewReader(input), TSV)
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"1", "2"}, {"3", "4"}}, result.Records)
+	})
+
+	t.Run("CRLF line endings are stripped, not kept as data", func(t *testing.T) {
+		t.Parallel()
+
+		input := "a\tb\r\n1\t2\r\n"
+
+		result, err := Parse(strings.NewReader(input), TSV)
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"a", "b"}, result.Headers)
+		assert.Equal(t, [][]string{{"1", "2"}}, result.Records)
+	})
+
+	t.Run("CSV still reads a quoted field as one field", func(t *testing.T) {
+		t.Parallel()
+
+		input := "name,note\nalice,\"a,b\"\n"
+
+		result, err := Parse(strings.NewReader(input), CSV)
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"alice", "a,b"}}, result.Records)
+	})
+}
+
+func TestWriteTSVRecord(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a quote is written as is", func(t *testing.T) {
+		t.Parallel()
+
+		var out strings.Builder
+		require.NoError(t, WriteTSVRecord(&out, []string{"alice", `5'9" tall`}))
+		assert.Equal(t, "alice\t5'9\" tall\n", out.String())
+	})
+
+	t.Run("a value round trips through the reader", func(t *testing.T) {
+		t.Parallel()
+
+		record := []string{`said "hi"`, `a""b`, "", "plain"}
+
+		var out strings.Builder
+		require.NoError(t, WriteTSVRecord(&out, record))
+		got, err := NewTSVReader(strings.NewReader(out.String())).ReadAll()
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{record}, got)
+	})
+
+	t.Run("a value the format cannot hold is refused", func(t *testing.T) {
+		t.Parallel()
+
+		for _, field := range []string{"a\tb", "a\nb", "a\rb"} {
+			var out strings.Builder
+			err := WriteTSVRecord(&out, []string{field})
+
+			require.ErrorIs(t, err, ErrTSVUnrepresentable, "field %q", field)
+			assert.Empty(t, out.String(), "nothing is written for a refused record")
+		}
+	})
+}
+
 func TestParse_LTSV(t *testing.T) {
 	t.Parallel()
 

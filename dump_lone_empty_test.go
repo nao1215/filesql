@@ -12,12 +12,16 @@ import (
 // TestDumpLoneEmptyField pins that a row whose only column is empty survives a
 // dump and a reload.
 //
-// In CSV and TSV a record of one empty field, written plainly, is a blank line,
-// and a blank line is not a record — a reader skips it. A one-column table of
-// five rows, two of them empty, came back with three: the rows were gone and the
-// dump reported success. Quoting the field says "one field, empty" and cannot be
-// read as anything else. A record of several columns is unaffected, because the
+// In CSV a record of one empty field, written plainly, is a blank line, and a
+// blank line is not a record — a reader skips it. A one-column table of five
+// rows, two of them empty, came back with three: the rows were gone and the dump
+// reported success. Quoting the field says "one field, empty" and cannot be read
+// as anything else. A record of several columns is unaffected, because the
 // delimiters already say how many fields there are.
+//
+// TSV has no quoting to say that with, so the two halves agree the other way:
+// the blank line is the value, and the reader takes it back as that column's
+// empty field.
 func TestDumpLoneEmptyField(t *testing.T) {
 	t.Parallel()
 
@@ -27,7 +31,7 @@ func TestDumpLoneEmptyField(t *testing.T) {
 		want   string
 	}{
 		{name: "csv", format: OutputFormatCSV, want: "v\nalice\n\"\"\nbob\n"},
-		{name: "tsv", format: OutputFormatTSV, want: "v\nalice\n\"\"\nbob\n"},
+		{name: "tsv", format: OutputFormatTSV, want: "v\nalice\n\nbob\n"},
 	}
 
 	for _, tt := range tests {

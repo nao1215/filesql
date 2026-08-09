@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `parser.TSVReader` and `parser.WriteTSVRecord` read and write tab-separated records literally, and `parser.ErrTSVUnrepresentable` reports a value the format cannot hold. They are what the TSV fix below is built on, and they are exported because the package is the one that defines what TSV means here.
+
 ### Fixed
 
+- A TSV value containing a double quote imports, and a TSV dump writes it back unchanged ([#268](https://github.com/nao1215/filesql/issues/268)). TSV was read with a CSV reader, which brought CSV's quote handling with it, so a value as ordinary as `5'9" tall` failed the whole import with `bare " in non-quoted-field`. IANA's text/tab-separated-values has no quoting: a field is the bytes between two tabs, and a double quote there is an ordinary character. Both halves now agree on that — the reader splits on tabs and keeps what is between them, and the writer joins with tabs and refuses a value holding a tab or a line break, which the format cannot represent, rather than quoting it into something the reader would hand back with the quotes attached. A blank line in a one-column TSV is that column's empty value, which is how a dump writes it; with more columns it is skipped, as a CSV reader skips it.
 - A CSV, TSV, or LTSV whose lines end with a lone carriage return now imports its rows instead of loading empty ([#279](https://github.com/nao1215/filesql/issues/279)). The CSV and LTSV readers understand LF and CRLF, so a file written with the classic Mac OS 9 convention was one very long line: the data was folded into the column names and the table came out with zero rows, at no error. The line ending is now decided from the first 64 KiB of the file, counting only what sits outside quotes: a file is read this way when that window holds a carriage return outside quotes and no line feed outside them, and only carriage returns outside quotes are translated, so a quoted one stays data in either kind of file. A first record longer than that window is left as it is rather than guessed at.
 
 ## [0.39.1] - 2026-08-08

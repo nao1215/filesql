@@ -117,6 +117,41 @@ func TestStreamingParser_ParseFromReader_LTSV(t *testing.T) {
 	})
 }
 
+func TestStreamingParser_TSVTakesFieldsLiterally(t *testing.T) {
+	t.Parallel()
+
+	const input = "name\tnote\nalice\t5'9\" tall\nbob\tsaid \"hi\" loudly\n"
+
+	t.Run("a quote in a value does not fail the read", func(t *testing.T) {
+		t.Parallel()
+
+		p := newStreamingParser(FileTypeTSV, CompressionNone, "notes", 1024)
+		table, err := p.parseFromReader(strings.NewReader(input))
+
+		require.NoError(t, err)
+		records := table.getRecords()
+		require.Len(t, records, 2)
+		assert.Equal(t, `5'9" tall`, records[0][1])
+		assert.Equal(t, `said "hi" loudly`, records[1][1])
+	})
+
+	t.Run("the chunked reader agrees", func(t *testing.T) {
+		t.Parallel()
+
+		p := newStreamingParser(FileTypeTSV, CompressionNone, "notes", 1)
+		var values []string
+		err := p.ProcessInChunks(strings.NewReader(input), func(chunk *tableChunk) error {
+			for _, r := range chunk.records {
+				values = append(values, r[1])
+			}
+			return nil
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{`5'9" tall`, `said "hi" loudly`}, values)
+	})
+}
+
 func TestStreamingParser_CROnlyLineEndings(t *testing.T) {
 	t.Parallel()
 
