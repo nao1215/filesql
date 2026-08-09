@@ -2,6 +2,7 @@ package frame
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -150,7 +151,9 @@ func TestGroupedDataFrame_Mean(t *testing.T) {
 		assert.Equal(t, 20.0, records[0]["mean_value"])
 	})
 
-	t.Run("returns nil for non-numeric values only", func(t *testing.T) {
+	// A column with no number in it has no mean, and answering nil said so only
+	// to a caller who thought to look.
+	t.Run("refuses a column with nothing numeric in it", func(t *testing.T) {
 		t.Parallel()
 
 		df := NewDataFrameFromRecords([]map[string]any{
@@ -159,11 +162,10 @@ func TestGroupedDataFrame_Mean(t *testing.T) {
 
 		grouped, err := df.GroupBy("category")
 		require.NoError(t, err)
-		result, err := grouped.Mean("value")
-		require.NoError(t, err)
+		_, err = grouped.Mean("value")
 
-		records := result.ToRecords()
-		assert.Nil(t, records[0]["mean_value"])
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "value")
 	})
 }
 
@@ -190,11 +192,14 @@ func TestGroupedDataFrame_Min(t *testing.T) {
 		assert.Equal(t, 10.0, records[0]["min_value"])
 	})
 
-	t.Run("returns nil for non-numeric values only", func(t *testing.T) {
+	// Text has a minimum, and it used to be thrown away for a nil. SQLite's MIN
+	// over the same column answers the lexically smallest string.
+	t.Run("returns the lexically smallest text", func(t *testing.T) {
 		t.Parallel()
 
 		df := NewDataFrameFromRecords([]map[string]any{
-			{"category": "A", "value": "text"},
+			{"category": "A", "value": "banana"},
+			{"category": "A", "value": "apple"},
 		})
 
 		grouped, err := df.GroupBy("category")
@@ -203,7 +208,7 @@ func TestGroupedDataFrame_Min(t *testing.T) {
 		require.NoError(t, err)
 
 		records := result.ToRecords()
-		assert.Nil(t, records[0]["min_value"])
+		assert.Equal(t, "apple", records[0]["min_value"])
 	})
 }
 
@@ -398,22 +403,39 @@ func TestAggFunctions(t *testing.T) {
 		assert.Nil(t, result)
 	})
 
-	t.Run("AggMin returns nil for no numeric values", func(t *testing.T) {
+	t.Run("AggMin returns the smallest text when there is no number", func(t *testing.T) {
 		t.Parallel()
 
-		values := []any{"text", nil}
-		result := AggMin(values)
-
-		assert.Nil(t, result)
+		assert.Equal(t, "text", AggMin([]any{"text", nil}))
+		assert.Equal(t, "a", AggMin([]any{"b", "a"}))
 	})
 
-	t.Run("AggMax returns nil for no numeric values", func(t *testing.T) {
+	t.Run("AggMin returns nil when there is nothing at all", func(t *testing.T) {
 		t.Parallel()
 
-		values := []any{"text", nil}
-		result := AggMax(values)
+		assert.Nil(t, AggMin([]any{nil, nil}))
+	})
 
-		assert.Nil(t, result)
+	t.Run("AggMax returns the largest text when there is no number", func(t *testing.T) {
+		t.Parallel()
+
+		assert.Equal(t, "text", AggMax([]any{"text", nil}))
+		assert.Equal(t, "b", AggMax([]any{"a", "b"}))
+	})
+
+	t.Run("AggMax returns nil when there is nothing at all", func(t *testing.T) {
+		t.Parallel()
+
+		assert.Nil(t, AggMax([]any{nil, nil}))
+	})
+
+	// SQLite's ordering: any text is larger than any number, and a number is
+	// smaller than any text.
+	t.Run("text outranks a number for Max and loses to one for Min", func(t *testing.T) {
+		t.Parallel()
+
+		assert.Equal(t, "b", AggMax([]any{1, "b"}))
+		assert.InDelta(t, 1.0, AggMin([]any{1, "b"}), 0)
 	})
 }
 
@@ -675,5 +697,93 @@ func TestGroupBy_NonExistentAggregationColumn(t *testing.T) {
 
 		assert.Error(t, err)
 		assert.True(t, errors.Is(err, ErrColumnNotFound))
+	})
+}
+
+// TestAggregatesSayWhenTheyHaveNoAnswer covers the two ways an aggregate over a
+// column of text used to answer as if it had one: Sum said 0, which is what a
+// real total of zero says, and Min said nil for a column whose minimum the data
+// plainly holds.
+func TestAggregatesSayWhenTheyHaveNoAnswer(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Sum refuses a column with nothing numeric in it", func(t *testing.T) {
+		t.Parallel()
+
+		df, err := NewDataFrame(strings.NewReader("cat,val\na,x\na,y\n"), CSV)
+		require.NoError(t, err)
+		grouped, err := df.GroupBy("cat")
+		require.NoError(t, err)
+
+		_, err = grouped.Sum("val")
+
+		require.Error(t, err, "0 for every group is what a real total of zero looks like")
+		assert.Contains(t, err.Error(), "val")
+	})
+
+	// A column holding both numbers and text is a text column to the DataFrame,
+	// so none of its values is a number and the aggregate has nothing to add.
+	// It answered 0; it now says so.
+	t.Run("Sum refuses a column of numbers mixed with text", func(t *testing.T) {
+		t.Parallel()
+
+		df, err := NewDataFrame(strings.NewReader("cat,val\na,1\na,x\na,2\n"), CSV)
+		require.NoError(t, err)
+		grouped, err := df.GroupBy("cat")
+		require.NoError(t, err)
+
+		_, err = grouped.Sum("val")
+
+		require.Error(t, err)
+	})
+
+	t.Run("Sum adds a numeric column as before", func(t *testing.T) {
+		t.Parallel()
+
+		df, err := NewDataFrame(strings.NewReader("cat,val\na,1\na,2\n"), CSV)
+		require.NoError(t, err)
+		grouped, err := df.GroupBy("cat")
+		require.NoError(t, err)
+
+		result, err := grouped.Sum("val")
+
+		require.NoError(t, err)
+		assert.InDelta(t, 3.0, result.ToRecords()[0]["sum_val"], 0)
+	})
+
+	t.Run("Min and Max answer a text column the way SQLite does", func(t *testing.T) {
+		t.Parallel()
+
+		df, err := NewDataFrame(strings.NewReader("k,s\na,banana\na,apple\n"), CSV)
+		require.NoError(t, err)
+		grouped, err := df.GroupBy("k")
+		require.NoError(t, err)
+
+		minimum, err := grouped.Min("s")
+		require.NoError(t, err)
+		maximum, err := grouped.Max("s")
+		require.NoError(t, err)
+
+		assert.Equal(t, "apple", minimum.ToRecords()[0]["min_s"])
+		assert.Equal(t, "banana", maximum.ToRecords()[0]["max_s"])
+	})
+
+	t.Run("a group with nothing numeric gets nil, not zero", func(t *testing.T) {
+		t.Parallel()
+
+		df, err := NewDataFrame(strings.NewReader("cat,val\na,1\nb,\n"), CSV)
+		require.NoError(t, err)
+		grouped, err := df.GroupBy("cat")
+		require.NoError(t, err)
+
+		result, err := grouped.Sum("val")
+		require.NoError(t, err)
+
+		byGroup := map[string]any{}
+		for _, r := range result.ToRecords() {
+			byGroup[r["cat"].(string)] = r["sum_val"]
+		}
+		assert.InDelta(t, 1.0, byGroup["a"], 0)
+		assert.Nil(t, byGroup["b"], "the group held no value, which is not a total of zero")
 	})
 }
