@@ -386,9 +386,9 @@ func TestAutoSaveConnection_PerformACHAutoSave(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	// Check that ACH tables are registered
-	baseNames := getACHBaseTableNames()
-	require.NotEmpty(t, baseNames, "ACH tables should be registered")
+	// The database records the ACH file it was loaded from.
+	baseNames := fileSourceBaseNames(ctx, db, sourceFormatACH)
+	require.NotEmpty(t, baseNames, "the ACH source should be recorded")
 
 	// Create temp output directory
 	outputDir := t.TempDir()
@@ -426,9 +426,6 @@ func TestAutoSaveConnection_PerformACHAutoSave_NoTables(t *testing.T) {
 	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
-
-	// Clear any existing ACH registrations
-	ClearACHTableSetRegistry()
 
 	outputDir := t.TempDir()
 
@@ -509,40 +506,6 @@ func TestAutoSaveConnection_OverwriteOriginalFiles_NoOriginalPaths(t *testing.T)
 	assert.Contains(t, err.Error(), "no original paths available")
 }
 
-func TestAutoSaveConnection_CleanupACHRegistry(t *testing.T) {
-	testFile := findTestACHFile(t)
-	if testFile == "" {
-		t.Skip("No test ACH file found")
-	}
-
-	ctx := context.Background()
-
-	// Open ACH file to register table set
-	db, err := OpenContext(ctx, testFile)
-	require.NoError(t, err)
-
-	// Verify tables are registered
-	baseNames := getACHBaseTableNames()
-	require.NotEmpty(t, baseNames, "ACH tables should be registered after opening")
-
-	// Create connection with ACH path
-	conn := &autoSaveConnection{
-		originalPaths: []string{testFile},
-	}
-
-	// Clean up registry
-	conn.cleanupTableSetRegistries()
-
-	// Close the db
-	require.NoError(t, db.Close())
-
-	// Tables should be unregistered now
-	// Note: We need to check the specific table, not all tables
-	baseTableName := sanitizeTableName(tableFromFilePath(testFile))
-	ts := getACHTableSet(baseTableName)
-	assert.Nil(t, ts, "ACH table set should be unregistered after cleanup")
-}
-
 func TestAutoSaveConnection_Begin(t *testing.T) {
 	ctx := context.Background()
 
@@ -618,13 +581,10 @@ func TestAutoSaveConnection_PerformACHAutoSave_DumpError(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	// Clear any existing ACH registrations and register a fake one
-	ClearACHTableSetRegistry()
-
-	// Register a fake ACH table set with an invalid base name
-	// This will cause DumpACH to fail because the tables don't exist
-	registerACHTableSet("nonexistent_ach_table", nil)
-	defer UnregisterACHTableSet("nonexistent_ach_table")
+	// Record a source pointing at a file that does not exist, so rebuilding the
+	// ACH structure fails when the dump runs.
+	require.NoError(t, recordFileSource(ctx, db, "nonexistent_ach_table",
+		filepath.Join(t.TempDir(), "gone.ach"), sourceFormatACH))
 
 	outputDir := t.TempDir()
 
@@ -640,19 +600,6 @@ func TestAutoSaveConnection_PerformACHAutoSave_DumpError(t *testing.T) {
 	err = conn.performACHAutoSave(db, outputDir)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to export ACH file")
-}
-
-func TestAutoSaveConnection_CleanupTableSetRegistries_TabularPath(t *testing.T) {
-	// Test that cleanupTableSetRegistries handles tabular-only paths correctly (no-op)
-	conn := &autoSaveConnection{
-		originalPaths: []string{"test.csv", "data.tsv"},
-	}
-
-	// Should not panic or error - just silently skip tabular files
-	conn.cleanupTableSetRegistries()
-
-	// Verify connection state is valid after cleanup
-	assert.NotNil(t, conn.originalPaths)
 }
 
 func TestAutoSaveConnection_PerformAutoSave_Disabled(t *testing.T) {

@@ -88,28 +88,21 @@ func TestDBBuilder_LoadIntoTxUsesCallerTransaction(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestDBBuilder_LoadIntoTxWithPendingPublishesOnlyAfterCommit(t *testing.T) {
-	ClearACHTableSetRegistry()
-	defer ClearACHTableSetRegistry()
-
+func TestDBBuilder_LoadIntoTxACHIsDumpableOnlyAfterCommit(t *testing.T) {
 	db := newCallerDB(t)
 	builder, err := NewBuilder().AddPath(filepath.Join("testdata", "ppd-debit.ach")).Build(context.Background())
 	require.NoError(t, err)
 	tx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
 
-	pending, err := builder.LoadIntoTxWithPending(context.Background(), tx)
-	require.NoError(t, err)
-	assert.Empty(t, GetACHTableInfos(), "registry must not change before commit")
+	require.NoError(t, builder.LoadIntoTx(context.Background(), tx))
 	require.NoError(t, tx.Commit())
-	pending.PublishRegistries()
-	assert.Contains(t, GetACHTableInfos(), ACHTableInfo{BaseName: "ppd_debit"})
+
+	out := filepath.Join(t.TempDir(), "out.ach")
+	require.NoError(t, DumpACH(context.Background(), db, "ppd_debit", out))
 }
 
-func TestDBBuilder_LoadIntoTxWithPendingDiscardsRegistriesOnFailure(t *testing.T) {
-	ClearACHTableSetRegistry()
-	defer ClearACHTableSetRegistry()
-
+func TestDBBuilder_LoadIntoTxDiscardsACHMetadataOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	bad := writeTempCSV(t, dir, "broken.json", "[")
 	db := newCallerDB(t)
@@ -120,17 +113,12 @@ func TestDBBuilder_LoadIntoTxWithPendingDiscardsRegistriesOnFailure(t *testing.T
 	require.NoError(t, err)
 	tx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
-	_, err = builder.LoadIntoTxWithPending(context.Background(), tx)
-	require.Error(t, err)
-	assert.Empty(t, GetACHTableInfos(), "failed load must not publish registry metadata")
+	require.Error(t, builder.LoadIntoTx(context.Background(), tx))
 	require.NoError(t, tx.Rollback())
 	assert.Empty(t, listTables(t, db), "failed load must be rolled back")
 }
 
-func TestDBBuilder_LoadIntoTxWithPendingDiscardsFedwireRegistryOnFailure(t *testing.T) {
-	ClearWireTableSetRegistry()
-	defer ClearWireTableSetRegistry()
-
+func TestDBBuilder_LoadIntoTxDiscardsFedwireMetadataOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	bad := writeTempCSV(t, dir, "broken.json", "[")
 	db := newCallerDB(t)
@@ -141,9 +129,7 @@ func TestDBBuilder_LoadIntoTxWithPendingDiscardsFedwireRegistryOnFailure(t *test
 	require.NoError(t, err)
 	tx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
-	_, err = builder.LoadIntoTxWithPending(context.Background(), tx)
-	require.Error(t, err)
-	assert.Empty(t, GetWireTableInfos(), "failed load must not publish registry metadata")
+	require.Error(t, builder.LoadIntoTx(context.Background(), tx))
 	require.NoError(t, tx.Rollback())
 	assert.Empty(t, listTables(t, db), "failed load must be rolled back")
 }

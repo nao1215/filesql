@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 
 	wireconv "github.com/nao1215/filesql/parser/wire"
 )
@@ -44,40 +43,6 @@ func parseFedWireFile(reader io.Reader, baseTableName string) ([]*table, *wireco
 	return []*table{t}, tableSet, nil
 }
 
-// wireTableSetRegistry stores Fedwire TableSets for later retrieval by DumpFedWire.
-// Key is the base table name (e.g., "payment" for payment.fed).
-// Protected by wireRegistryMu for concurrent access safety.
-var (
-	wireTableSetRegistry = make(map[string]*wireconv.TableSet)
-	wireRegistryMu       sync.RWMutex
-)
-
-// registerWireTableSet stores a Fedwire TableSet in the registry for later retrieval.
-func registerWireTableSet(baseTableName string, ts *wireconv.TableSet) {
-	wireRegistryMu.Lock()
-	defer wireRegistryMu.Unlock()
-	wireTableSetRegistry[baseTableName] = ts
-}
-
-// getWireTableSet retrieves a Fedwire TableSet from the registry.
-func getWireTableSet(baseTableName string) *wireconv.TableSet {
-	wireRegistryMu.RLock()
-	defer wireRegistryMu.RUnlock()
-	return wireTableSetRegistry[baseTableName]
-}
-
-// getWireBaseTableNames returns all base table names that have registered Fedwire TableSets.
-// This is useful for auto-save functionality to know which Fedwire files need to be saved.
-func getWireBaseTableNames() []string {
-	wireRegistryMu.RLock()
-	defer wireRegistryMu.RUnlock()
-	names := make([]string, 0, len(wireTableSetRegistry))
-	for name := range wireTableSetRegistry {
-		names = append(names, name)
-	}
-	return names
-}
-
 // WireTableInfo represents information about Fedwire tables created from a Fedwire file.
 // It provides methods to get the complete table name for the message table.
 type WireTableInfo struct {
@@ -97,54 +62,10 @@ func (w WireTableInfo) AllTableNames() []string {
 	return []string{w.MessageTable()}
 }
 
-// GetWireTableInfos returns WireTableInfo for all registered Fedwire files.
-// Each WireTableInfo provides methods to get complete table names.
-//
-// Example:
-//
-//	db, _ := filesql.Open("payment.fed")
-//	infos := filesql.GetWireTableInfos()
-//	for _, info := range infos {
-//	    fmt.Println(info.MessageTable()) // "payment_message"
-//	}
-func GetWireTableInfos() []WireTableInfo {
-	wireRegistryMu.RLock()
-	defer wireRegistryMu.RUnlock()
-	infos := make([]WireTableInfo, 0, len(wireTableSetRegistry))
-	for name := range wireTableSetRegistry {
-		infos = append(infos, WireTableInfo{BaseName: name})
-	}
-	return infos
-}
-
-// UnregisterWireTableSet removes a Fedwire TableSet from the registry.
-// Call this when you're done with a Fedwire file to free memory.
-// This is automatically called by the auto-save connection when using EnableAutoSave.
-//
-// Example:
-//
-//	db, _ := filesql.Open("payment.fed")
-//	// ... work with the database ...
-//	db.Close()
-//	filesql.UnregisterWireTableSet("payment") // Free the TableSet memory
-func UnregisterWireTableSet(baseTableName string) {
-	wireRegistryMu.Lock()
-	defer wireRegistryMu.Unlock()
-	delete(wireTableSetRegistry, baseTableName)
-}
-
-// ClearWireTableSetRegistry removes all Fedwire TableSets from the registry.
-// Use this to reset state, typically in tests or when shutting down.
-func ClearWireTableSetRegistry() {
-	wireRegistryMu.Lock()
-	defer wireRegistryMu.Unlock()
-	wireTableSetRegistry = make(map[string]*wireconv.TableSet)
-}
-
 // IsWireBaseTableName checks if a table name matches the Fedwire naming convention
 // (ends with _message suffix and has a non-empty base name).
-// It does NOT verify that a TableSet is registered; callers should check
-// getWireTableSet(baseName) separately if registry confirmation is needed.
+// It does NOT verify that the database was loaded from a Fedwire file; any
+// table ending in _message matches.
 func IsWireBaseTableName(tableName string) (baseName string, isWire bool) {
 	const suffix = "_message"
 	if strings.HasSuffix(tableName, suffix) {
@@ -157,16 +78,13 @@ func IsWireBaseTableName(tableName string) (baseName string, isWire bool) {
 }
 
 // streamWireFileToDatabase streams a Fedwire file to the database as a single table.
-func streamWireFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, filePath string, replaceExisting bool, pending *PendingRegistries) error {
+func streamWireFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, filePath, sourcePath string, replaceExisting bool) error {
 	baseTableName := sanitizeTableName(tableFromFilePath(filePath))
 
-	tables, tableSet, err := parseFedWireFile(reader, baseTableName)
+	tables, _, err := parseFedWireFile(reader, baseTableName)
 	if err != nil {
 		return err
 	}
-
-	// Keep the TableSet private until the caller commits the transaction.
-	pending.addWire(baseTableName, tableSet)
 
 	for _, t := range tables {
 		// Check if table already exists
@@ -202,16 +120,18 @@ func streamWireFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, fi
 		}
 	}
 
-	return nil
+	// The source is recorded on the same DBTX as the tables, so a rolled-back
+	// load leaves neither behind.
+	return recordFileSource(ctx, db, baseTableName, sourcePath, sourceFormatFedWire)
 }
 
 // DumpFedWire exports Fedwire tables from the database back to a Fedwire file.
 // This function reconstructs the Fedwire file from the _message table that was
 // created when the file was loaded.
 //
-// The TableSet is automatically retrieved from the internal registry if the Fedwire file
-// was loaded via Open() or Builder. If you have the TableSet from another source,
-// use DumpFedWireWithTableSet instead.
+// The original structure is rebuilt from the file db records as its source, so
+// that file must still exist and be readable. A database loaded from an
+// io.Reader has no such file; pass the structure to DumpFedWireWithTableSet.
 //
 // Parameters:
 //   - ctx: Context for cancellation
@@ -219,11 +139,12 @@ func streamWireFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, fi
 //   - baseTableName: The base name used when the Fedwire file was loaded (e.g., "payment" for payment.fed)
 //   - outputPath: The path where the Fedwire file should be written
 //
-// Returns an error if the export fails or if no TableSet is found for the given base table name.
+// Returns an error if the export fails, or ErrSourceUnavailable if the file the
+// tables were loaded from cannot be read.
 func DumpFedWire(ctx context.Context, db *sql.DB, baseTableName, outputPath string) error {
-	tableSet := getWireTableSet(baseTableName)
-	if tableSet == nil {
-		return fmt.Errorf("%w: no Fedwire TableSet found for base table name '%s'; ensure the Fedwire file was loaded via Open() or Builder", ErrTableNotFound, baseTableName)
+	tableSet, err := wireTableSetForDump(ctx, db, baseTableName)
+	if err != nil {
+		return err
 	}
 	return DumpFedWireWithTableSet(ctx, db, baseTableName, outputPath, tableSet)
 }

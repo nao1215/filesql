@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -266,35 +267,26 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 		return ErrNoTables
 	}
 
-	// Detect ACH tables and group them by base name
-	achBaseNames := make(map[string]bool)
-	registryBackedTables := make(map[string]bool)
-	for _, tableName := range tableNames {
-		if baseName, isACH := IsACHBaseTableName(tableName); isACH {
-			// Only treat as ACH table if we have a registered TableSet
-			if getACHTableSet(baseName) != nil {
-				achBaseNames[baseName] = true
-				registryBackedTables[tableName] = true
-			}
-		}
-	}
-
-	// Detect Fedwire tables and group them by base name
-	wireBaseNames := make(map[string]bool)
-	for _, tableName := range tableNames {
-		if baseName, isWire := IsWireBaseTableName(tableName); isWire {
-			// Only treat as wire table if we have a registered TableSet
-			if getWireTableSet(baseName) != nil {
-				wireBaseNames[baseName] = true
-				registryBackedTables[tableName] = true
-			}
-		}
-	}
-
 	ctx := context.Background()
 
+	// A table only belongs to an ACH or Fedwire file when the database says it
+	// was loaded from one. The suffix alone is not enough: a caller's own table
+	// named orders_entries is not part of an ACH file.
+	achBaseNames := fileSourceBaseNames(ctx, db, sourceFormatACH)
+	wireBaseNames := fileSourceBaseNames(ctx, db, sourceFormatFedWire)
+
+	writeBackTables := make(map[string]bool)
+	for _, tableName := range tableNames {
+		if baseName, isACH := IsACHBaseTableName(tableName); isACH && slices.Contains(achBaseNames, baseName) {
+			writeBackTables[tableName] = true
+		}
+		if baseName, isWire := IsWireBaseTableName(tableName); isWire && slices.Contains(wireBaseNames, baseName) {
+			writeBackTables[tableName] = true
+		}
+	}
+
 	// Export ACH files
-	for baseName := range achBaseNames {
+	for _, baseName := range achBaseNames {
 		outputPath, err := dumpFilePath(outputDir, baseName, extACH)
 		if err != nil {
 			return err
@@ -305,7 +297,7 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 	}
 
 	// Export Fedwire files
-	for baseName := range wireBaseNames {
+	for _, baseName := range wireBaseNames {
 		outputPath, err := dumpFilePath(outputDir, baseName, extFED)
 		if err != nil {
 			return err
@@ -317,7 +309,7 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 
 	// Export remaining tabular tables in the requested format
 	for _, tableName := range tableNames {
-		if registryBackedTables[tableName] {
+		if writeBackTables[tableName] {
 			continue
 		}
 		if err := dumpSQLiteTable(db, tableName, outputDir, options); err != nil {
@@ -328,10 +320,14 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 	return nil
 }
 
-// getSQLiteTableNames retrieves all user-defined table names from SQLite database
+// getSQLiteTableNames retrieves all user-defined table names from SQLite database.
+// Tables this package keeps for its own bookkeeping are excluded, so they appear
+// neither in a dump nor in a listing shown to a caller.
 func getSQLiteTableNames(db *sql.DB) ([]string, error) {
 	ctx := context.Background()
-	query := "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+	query := `SELECT name FROM sqlite_master WHERE type='table'` +
+		` AND name NOT LIKE 'sqlite_%'` +
+		` AND name NOT LIKE '` + sourceTableLikePattern + `' ESCAPE '\'`
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err

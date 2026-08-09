@@ -79,6 +79,10 @@ var (
 
 	// ErrWire indicates a Fedwire file operation failed.
 	ErrWire = errors.New("filesql: Fedwire operation failed")
+
+	// ErrSourceUnavailable indicates an ACH or Fedwire export failed because the
+	// file its tables were loaded from is unknown or unreadable.
+	ErrSourceUnavailable = errors.New("filesql: source file for write-back is unavailable")
 )
 
 // errDuplicateColumnName is an internal alias for backward compatibility.

@@ -343,8 +343,6 @@ func (c *autoSaveConnection) Close() error {
 		if err := c.performAutoSave(); err != nil {
 			// Close the underlying connection first to avoid resource leaks
 			closeErr := c.conn.Close()
-			// Clean up ACH and Fedwire TableSet registry entries for this connection
-			c.cleanupTableSetRegistries()
 			// Return the auto-save error as it's more important for the user
 			if closeErr != nil {
 				return fmt.Errorf("auto-save failed: %w (also failed to close connection: %w)", err, closeErr)
@@ -353,24 +351,7 @@ func (c *autoSaveConnection) Close() error {
 		}
 	}
 
-	// Clean up ACH and Fedwire TableSet registry entries for this connection
-	c.cleanupTableSetRegistries()
-
 	return c.conn.Close()
-}
-
-// cleanupTableSetRegistries removes ACH and Fedwire TableSet entries for files loaded by this connection.
-func (c *autoSaveConnection) cleanupTableSetRegistries() {
-	for _, path := range c.originalPaths {
-		if isACHFile(path) {
-			baseTableName := sanitizeTableName(tableFromFilePath(path))
-			UnregisterACHTableSet(baseTableName)
-		}
-		if isFedWireFile(path) {
-			baseTableName := sanitizeTableName(tableFromFilePath(path))
-			UnregisterWireTableSet(baseTableName)
-		}
-	}
 }
 
 // Begin implements driver.Conn interface (deprecated, use BeginTx instead)
@@ -508,8 +489,8 @@ func (c *autoSaveConnection) performAutoSave() error {
 func (c *autoSaveConnection) performACHAutoSave(db *sql.DB, outputDir string) error {
 	ctx := context.Background()
 
-	// Get all registered ACH base table names
-	achBaseNames := getACHBaseTableNames()
+	// The database records the ACH files it was loaded from.
+	achBaseNames := fileSourceBaseNames(ctx, db, sourceFormatACH)
 	if len(achBaseNames) == 0 {
 		return errors.New("no ACH tables found to save")
 	}
@@ -534,7 +515,7 @@ func (c *autoSaveConnection) performACHAutoSave(db *sql.DB, outputDir string) er
 func (c *autoSaveConnection) performFedWireAutoSave(db *sql.DB, outputDir string) error {
 	ctx := context.Background()
 
-	wireBaseNames := getWireBaseTableNames()
+	wireBaseNames := fileSourceBaseNames(ctx, db, sourceFormatFedWire)
 	if len(wireBaseNames) == 0 {
 		return errors.New("no Fedwire tables found to save")
 	}

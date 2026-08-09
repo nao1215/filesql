@@ -1,0 +1,158 @@
+package filesql
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	achconv "github.com/nao1215/filesql/parser/ach"
+	wireconv "github.com/nao1215/filesql/parser/wire"
+)
+
+// sourceTableName is the reserved table recording where a write-back format was
+// loaded from.
+//
+// ACH and Fedwire cannot be rebuilt from their SQL tables alone: the writer
+// copies the original file and applies the edits to it, because fields no table
+// exposes exist only there. The database therefore has to remember its own
+// sources. Holding that in the database rather than in a process-global map is
+// what keeps two databases loaded from same-named files apart, and lets a
+// rolled-back load discard the metadata with the tables.
+const sourceTableName = "_filesql_sources"
+
+// sourceTableLikePattern matches the reserved _filesql_ prefix in a LIKE
+// clause, so this package's own bookkeeping tables stay hidden from callers and
+// from dumps. The underscores are escaped because LIKE reads a bare underscore
+// as a wildcard, which would also hide a caller's table named, say,
+// xfilesqly_totals.
+const sourceTableLikePattern = `\_filesql\_%`
+
+// sourceFormat names the reader that can rebuild a file's structure.
+type sourceFormat string
+
+const (
+	sourceFormatACH     sourceFormat = "ach"
+	sourceFormatFedWire sourceFormat = "fedwire"
+)
+
+// recordFileSource remembers that baseTableName was loaded from sourcePath.
+//
+// It runs on the same DBTX that created the tables, so a caller-owned
+// transaction commits or discards both together. An empty sourcePath records
+// nothing: a load from an io.Reader has no file to go back to.
+func recordFileSource(ctx context.Context, db DBTX, baseTableName, sourcePath string, format sourceFormat) error {
+	if sourcePath == "" {
+		return nil
+	}
+
+	// The path is resolved now because the process may change directory between
+	// load and dump, and a relative path would then name a different file.
+	absPath, err := filepath.Abs(sourcePath)
+	if err != nil {
+		return fmt.Errorf("%w: failed to resolve source path %s: %w", ErrIOOperation, sourcePath, err)
+	}
+
+	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS "`+sourceTableName+`" (
+		base_table_name TEXT PRIMARY KEY,
+		source_path TEXT NOT NULL,
+		format TEXT NOT NULL
+	)`); err != nil {
+		return fmt.Errorf("%w: failed to create %s: %w", ErrDatabaseOperation, sourceTableName, err)
+	}
+
+	// Reloading a file replaces its tables, so its row is replaced too.
+	if _, err := db.ExecContext(ctx,
+		`INSERT OR REPLACE INTO "`+sourceTableName+`" (base_table_name, source_path, format) VALUES (?, ?, ?)`,
+		baseTableName, absPath, string(format),
+	); err != nil {
+		return fmt.Errorf("%w: failed to record source of %s: %w", ErrDatabaseOperation, baseTableName, err)
+	}
+
+	return nil
+}
+
+// fileSourcePath returns the file baseTableName was loaded from, or false when
+// the database holds no such record.
+func fileSourcePath(ctx context.Context, db *sql.DB, baseTableName string, format sourceFormat) (string, bool) {
+	var path string
+	err := db.QueryRowContext(ctx,
+		`SELECT source_path FROM "`+sourceTableName+`" WHERE base_table_name = ? AND format = ?`,
+		baseTableName, string(format),
+	).Scan(&path)
+	if err != nil {
+		// A database that loaded no write-back format has no such table, so a
+		// missing table is not distinguished from a missing row.
+		return "", false
+	}
+	return path, true
+}
+
+// fileSourceBaseNames lists the base table names loaded from files of format,
+// in a stable order so repeated dumps write the same set of files.
+func fileSourceBaseNames(ctx context.Context, db *sql.DB, format sourceFormat) []string {
+	rows, err := db.QueryContext(ctx,
+		`SELECT base_table_name FROM "`+sourceTableName+`" WHERE format = ? ORDER BY base_table_name`,
+		string(format),
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil
+		}
+		names = append(names, name)
+	}
+	if rows.Err() != nil {
+		return nil
+	}
+	return names
+}
+
+// achTableSetForDump rebuilds the ACH structure of baseTableName by reading its
+// source file again.
+func achTableSetForDump(ctx context.Context, db *sql.DB, baseTableName string) (*achconv.TableSet, error) {
+	path, ok := fileSourcePath(ctx, db, baseTableName, sourceFormatACH)
+	if !ok {
+		return nil, fmt.Errorf("%w: no ACH source recorded for base table name %q; load the file with Open() or Builder from a path, or pass the structure to DumpACHWithTableSet", ErrSourceUnavailable, baseTableName)
+	}
+
+	file, err := os.Open(path) //nolint:gosec // Path was recorded by this package when the file was loaded
+	if err != nil {
+		return nil, fmt.Errorf("%w: cannot read the ACH file %s that %q was loaded from: %w", ErrSourceUnavailable, path, baseTableName, err)
+	}
+	defer file.Close()
+
+	tableSet, err := achconv.ParseReader(file)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to parse the ACH file %s that %q was loaded from: %w", ErrACH, path, baseTableName, err)
+	}
+	return tableSet, nil
+}
+
+// wireTableSetForDump rebuilds the Fedwire structure of baseTableName by
+// reading its source file again.
+func wireTableSetForDump(ctx context.Context, db *sql.DB, baseTableName string) (*wireconv.TableSet, error) {
+	path, ok := fileSourcePath(ctx, db, baseTableName, sourceFormatFedWire)
+	if !ok {
+		return nil, fmt.Errorf("%w: no Fedwire source recorded for base table name %q; load the file with Open() or Builder from a path, or pass the structure to DumpFedWireWithTableSet", ErrSourceUnavailable, baseTableName)
+	}
+
+	file, err := os.Open(path) //nolint:gosec // Path was recorded by this package when the file was loaded
+	if err != nil {
+		return nil, fmt.Errorf("%w: cannot read the Fedwire file %s that %q was loaded from: %w", ErrSourceUnavailable, path, baseTableName, err)
+	}
+	defer file.Close()
+
+	tableSet, err := wireconv.ParseReader(file)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to parse the Fedwire file %s that %q was loaded from: %w", ErrWire, path, baseTableName, err)
+	}
+	return tableSet, nil
+}

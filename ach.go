@@ -58,8 +58,20 @@ package filesql
 //
 //	filesql.DumpDatabase(db, "./output") // ACH tables → .ach files, others → CSV/etc
 //
-// DumpDatabase automatically detects ACH-related tables (by suffix pattern) and
-// exports them as combined ACH files when a registered TableSet exists.
+// DumpDatabase finds ACH files from the sources the database records and
+// exports their tables as combined ACH files.
+//
+// # Write-Back Needs the Source File
+//
+// An ACH file cannot be rebuilt from its SQL tables alone, since fields no
+// table exposes exist only in the original, so exporting reads the file the
+// tables were loaded from and applies the edits to it. That file must still
+// exist and be readable when the export runs; the path is recorded in the
+// database, in the reserved table _filesql_sources.
+//
+// A database loaded from an io.Reader has no source file, so DumpACH cannot
+// export it. Parse the reader with parser/ach and pass the result to
+// DumpACHWithTableSet instead.
 //
 // # Auto-Save Support
 //
@@ -78,25 +90,9 @@ package filesql
 //
 // # Concurrency
 //
-// The internal TableSet registry is protected by sync.RWMutex for concurrent access.
-// Multiple goroutines can safely load different ACH files simultaneously.
-//
-// # Registry Lifecycle
-//
-// ACH TableSets are stored in a global registry to enable DumpACH functionality.
-// Memory is managed as follows:
-//
-//   - When using EnableAutoSave: Registry entries are automatically cleaned up
-//     when the database connection is closed.
-//
-//   - When using Open() without EnableAutoSave: Call UnregisterACHTableSet()
-//     after closing the database to free memory:
-//
-//     db, _ := filesql.Open("payment.ach")
-//     defer filesql.UnregisterACHTableSet("payment")
-//     defer db.Close()
-//
-//   - For tests or shutdown: Call ClearACHTableSetRegistry() to remove all entries.
+// Each database carries its own source metadata, so two databases loaded from
+// different files that share a base name do not interfere. Multiple goroutines
+// can safely load ACH files into separate databases.
 //
 // # Example
 //
@@ -123,7 +119,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 
 	"github.com/nao1215/filesql/parser"
 	achconv "github.com/nao1215/filesql/parser/ach"
@@ -243,40 +238,6 @@ func fileParserTableDataToTable(td *parser.TableData, tableName string) *table {
 	}
 }
 
-// achTableSetRegistry stores ACH TableSets for later retrieval by DumpACH.
-// Key is the base table name (e.g., "payment" for payment.ach).
-// Protected by achRegistryMu for concurrent access safety.
-var (
-	achTableSetRegistry = make(map[string]*achconv.TableSet)
-	achRegistryMu       sync.RWMutex
-)
-
-// registerACHTableSet stores an ACH TableSet in the registry for later retrieval.
-func registerACHTableSet(baseTableName string, ts *achconv.TableSet) {
-	achRegistryMu.Lock()
-	defer achRegistryMu.Unlock()
-	achTableSetRegistry[baseTableName] = ts
-}
-
-// getACHTableSet retrieves an ACH TableSet from the registry.
-func getACHTableSet(baseTableName string) *achconv.TableSet {
-	achRegistryMu.RLock()
-	defer achRegistryMu.RUnlock()
-	return achTableSetRegistry[baseTableName]
-}
-
-// getACHBaseTableNames returns all base table names that have registered TableSets.
-// This is useful for auto-save functionality to know which ACH files need to be saved.
-func getACHBaseTableNames() []string {
-	achRegistryMu.RLock()
-	defer achRegistryMu.RUnlock()
-	names := make([]string, 0, len(achTableSetRegistry))
-	for name := range achTableSetRegistry {
-		names = append(names, name)
-	}
-	return names
-}
-
 // ACHTableInfo represents information about ACH tables created from an ACH file.
 // It provides methods to get the complete table names for each ACH table type.
 type ACHTableInfo struct {
@@ -341,50 +302,6 @@ func (a ACHTableInfo) AllTableNames() []string {
 	}
 }
 
-// GetACHTableInfos returns ACHTableInfo for all registered ACH files.
-// Each ACHTableInfo provides methods to get complete table names.
-//
-// Example:
-//
-//	db, _ := filesql.Open("payment.ach", "refund.ach")
-//	infos := filesql.GetACHTableInfos()
-//	for _, info := range infos {
-//	    fmt.Println(info.EntriesTable()) // "payment_entries", "refund_entries"
-//	}
-func GetACHTableInfos() []ACHTableInfo {
-	achRegistryMu.RLock()
-	defer achRegistryMu.RUnlock()
-	infos := make([]ACHTableInfo, 0, len(achTableSetRegistry))
-	for name := range achTableSetRegistry {
-		infos = append(infos, ACHTableInfo{BaseName: name})
-	}
-	return infos
-}
-
-// UnregisterACHTableSet removes an ACH TableSet from the registry.
-// Call this when you're done with an ACH file to free memory.
-// This is automatically called by the auto-save connection when using EnableAutoSave.
-//
-// Example:
-//
-//	db, _ := filesql.Open("payment.ach")
-//	// ... work with the database ...
-//	db.Close()
-//	filesql.UnregisterACHTableSet("payment") // Free the TableSet memory
-func UnregisterACHTableSet(baseTableName string) {
-	achRegistryMu.Lock()
-	defer achRegistryMu.Unlock()
-	delete(achTableSetRegistry, baseTableName)
-}
-
-// ClearACHTableSetRegistry removes all ACH TableSets from the registry.
-// Use this to reset state, typically in tests or when shutting down.
-func ClearACHTableSetRegistry() {
-	achRegistryMu.Lock()
-	defer achRegistryMu.Unlock()
-	achTableSetRegistry = make(map[string]*achconv.TableSet)
-}
-
 // IsACHBaseTableName checks if a table name is an ACH-related table
 // (ends with _file_header, _batches, _entries, _addenda, _iat_batches, _iat_entries, or _iat_addenda).
 func IsACHBaseTableName(tableName string) (baseName string, isACH bool) {
@@ -401,16 +318,13 @@ func IsACHBaseTableName(tableName string) (baseName string, isACH bool) {
 }
 
 // streamACHFileToDatabase streams an ACH file to the database as multiple tables
-func streamACHFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, filePath string, replaceExisting bool, pending *PendingRegistries) error {
+func streamACHFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, filePath, sourcePath string, replaceExisting bool) error {
 	baseTableName := sanitizeTableName(tableFromFilePath(filePath))
 
-	tables, tableSet, err := parseACHFile(reader, baseTableName)
+	tables, _, err := parseACHFile(reader, baseTableName)
 	if err != nil {
 		return err
 	}
-
-	// Keep the TableSet private until the caller commits the transaction.
-	pending.addACH(baseTableName, tableSet)
 
 	for _, t := range tables {
 		// Check if table already exists
@@ -446,7 +360,9 @@ func streamACHFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, fil
 		}
 	}
 
-	return nil
+	// The source is recorded on the same DBTX as the tables, so a rolled-back
+	// load leaves neither behind.
+	return recordFileSource(ctx, db, baseTableName, sourcePath, sourceFormatACH)
 }
 
 // createTableFromColumnInfo creates a SQLite table with the given columns
@@ -503,9 +419,9 @@ func insertRecordsIntoTable(ctx context.Context, db DBTX, tableName string, head
 // This function reconstructs the ACH file from the _file_header, _batches,
 // _entries, and _addenda tables that were created when the file was loaded.
 //
-// The TableSet is automatically retrieved from the internal registry if the ACH file
-// was loaded via Open() or Builder. If you have the TableSet from another source,
-// use DumpACHWithTableSet instead.
+// The original structure is rebuilt from the file db records as its source, so
+// that file must still exist and be readable. A database loaded from an
+// io.Reader has no such file; pass the structure to DumpACHWithTableSet.
 //
 // Parameters:
 //   - ctx: Context for cancellation
@@ -513,11 +429,12 @@ func insertRecordsIntoTable(ctx context.Context, db DBTX, tableName string, head
 //   - baseTableName: The base name used when the ACH file was loaded (e.g., "payment" for payment.ach)
 //   - outputPath: The path where the ACH file should be written
 //
-// Returns an error if the export fails or if no TableSet is found for the given base table name.
+// Returns an error if the export fails, or ErrSourceUnavailable if the file the
+// tables were loaded from cannot be read.
 func DumpACH(ctx context.Context, db *sql.DB, baseTableName, outputPath string) error {
-	tableSet := getACHTableSet(baseTableName)
-	if tableSet == nil {
-		return fmt.Errorf("%w: no ACH TableSet found for base table name '%s'; ensure the ACH file was loaded via Open() or Builder", ErrTableNotFound, baseTableName)
+	tableSet, err := achTableSetForDump(ctx, db, baseTableName)
+	if err != nil {
+		return err
 	}
 	return DumpACHWithTableSet(ctx, db, baseTableName, outputPath, tableSet)
 }

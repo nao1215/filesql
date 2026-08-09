@@ -163,7 +163,7 @@ func TestLoadIntoTxStagingFailureRollsBackEverything(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := goodBuilder.LoadIntoTxWithPending(t.Context(), tx); err != nil {
+	if err := goodBuilder.LoadIntoTx(t.Context(), tx); err != nil {
 		t.Fatalf("staging the good input: %v", err)
 	}
 
@@ -171,7 +171,7 @@ func TestLoadIntoTxStagingFailureRollsBackEverything(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := brokenBuilder.LoadIntoTxWithPending(t.Context(), tx); err == nil {
+	if err := brokenBuilder.LoadIntoTx(t.Context(), tx); err == nil {
 		t.Fatal("staging the broken input = nil, want an error")
 	}
 
@@ -190,22 +190,20 @@ func TestLoadIntoTxStagingFailureRollsBackEverything(t *testing.T) {
 	}
 }
 
-// TestLoadIntoTxPendingRegistriesStayUnpublished checks the other half: the
-// registry entries a load produces must not reach the process registry until
-// the caller decides the transaction committed. Returning them instead of
-// registering them is what lets a rollback leave nothing behind.
-func TestLoadIntoTxPendingRegistriesStayUnpublished(t *testing.T) {
+// TestLoadIntoTxACHMetadataStaysInTheTransaction checks the other half: the
+// write-back metadata a load produces lives in the transaction that carries the
+// tables, so a rollback leaves neither behind.
+func TestLoadIntoTxACHMetadataStaysInTheTransaction(t *testing.T) {
 	achPath := filepath.Join("testdata", "ppd-debit.ach")
 	if _, err := os.Stat(achPath); err != nil {
 		t.Skipf("ACH fixture not available: %v", err)
 	}
-	UnregisterACHTableSet("ppd_debit")
-	t.Cleanup(func() { UnregisterACHTableSet("ppd_debit") })
 
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
+	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = db.Close() })
 
 	tx, err := db.BeginTx(t.Context(), nil)
@@ -216,28 +214,21 @@ func TestLoadIntoTxPendingRegistriesStayUnpublished(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pending, err := builder.LoadIntoTxWithPending(t.Context(), tx)
-	if err != nil {
-		t.Fatalf("LoadIntoTxWithPending: %v", err)
+	if err := builder.LoadIntoTx(t.Context(), tx); err != nil {
+		t.Fatalf("LoadIntoTx: %v", err)
 	}
-
-	// Still inside the transaction: nothing may be visible yet.
-	for _, info := range GetACHTableInfos() {
-		if info.BaseName == "ppd_debit" {
-			t.Fatal("the ACH registry was published before the transaction ended")
-		}
-	}
-
 	if err := tx.Rollback(); err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
-	// The caller never published, so a rolled-back load leaves no entry.
-	for _, info := range GetACHTableInfos() {
-		if info.BaseName == "ppd_debit" {
-			t.Fatal("the ACH registry holds an entry for a rolled-back load")
-		}
+
+	var n int
+	if err := db.QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, sourceTableName).Scan(&n); err != nil {
+		t.Fatal(err)
 	}
-	_ = pending
+	if n != 0 {
+		t.Error("write-back metadata survived the rollback")
+	}
 }
 
 // TestStreamProcessorContextCancelLeavesNoTable checks that canceling mid-load

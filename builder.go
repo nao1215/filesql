@@ -538,14 +538,13 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 	}
 
 	// Use stream processor for all streaming operations (now includes XLSX support)
-	pending := newPendingRegistries()
-	if err := b.streamProcessor.streamAllFilesToDatabase(ctx, db, b.collectedPaths, pending); err != nil {
+	if err := b.streamProcessor.streamAllFilesToDatabase(ctx, db, b.collectedPaths); err != nil {
 		b.logger.Error("failed to stream files", "error", err)
 		_ = db.Close() // Ignore close error during error handling
 		return nil, err
 	}
 
-	if err := b.streamProcessor.streamAllReadersToDatabase(ctx, db, b.readers, pending); err != nil {
+	if err := b.streamProcessor.streamAllReadersToDatabase(ctx, db, b.readers); err != nil {
 		b.logger.Error("failed to stream readers", "error", err)
 		_ = db.Close() // Ignore close error during error handling
 		return nil, err
@@ -556,7 +555,7 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 		return nil, err
 	}
 
-	db, err = b.setupAutoSaveIfNeeded(ctx, db, pending)
+	db, err = b.setupAutoSaveIfNeeded(ctx, db)
 	if err != nil {
 		return nil, err
 	}
@@ -565,7 +564,6 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	pending.PublishRegistries()
 
 	b.logger.Info("database opened successfully")
 	return db, nil
@@ -681,12 +679,7 @@ func (b *DBBuilder) LoadInto(ctx context.Context, db *sql.DB) error {
 	b.streamProcessor.replaceExisting = true
 	defer func() { b.streamProcessor.replaceExisting = false }()
 
-	pending := newPendingRegistries()
-	if err := b.loadIntoExecutor(ctx, db, pending); err != nil {
-		return err
-	}
-	pending.PublishRegistries()
-	return nil
+	return b.loadIntoExecutor(ctx, db)
 }
 
 // LoadIntoTx loads the builder's inputs into an existing transaction. No
@@ -694,46 +687,32 @@ func (b *DBBuilder) LoadInto(ctx context.Context, db *sql.DB) error {
 // transaction and decides whether all changes are committed or rolled back.
 // This is intended for callers that need several files, including table
 // replacement and empty-table creation, to be one atomic operation.
+// Write-back metadata for ACH and Fedwire files is written inside tx, so a
+// rollback discards it along with the tables it describes.
 func (b *DBBuilder) LoadIntoTx(ctx context.Context, tx *sql.Tx) error {
-	_, err := b.LoadIntoTxWithPending(ctx, tx)
-	return err
-}
-
-// LoadIntoTxWithPending loads the builder's inputs into an existing
-// transaction and returns registry metadata that must be published only after
-// the caller successfully commits that transaction. If loading fails, the
-// returned metadata must be discarded with the transaction.
-func (b *DBBuilder) LoadIntoTxWithPending(ctx context.Context, tx *sql.Tx) (*PendingRegistries, error) {
 	if tx == nil {
-		return nil, fmt.Errorf("%w: target transaction is nil", ErrDatabaseOperation)
+		return fmt.Errorf("%w: target transaction is nil", ErrDatabaseOperation)
 	}
 	if b.autoSaveConfig != nil && b.autoSaveConfig.enabled {
-		return nil, fmt.Errorf("%w: auto-save is not supported by LoadIntoTx", ErrDatabaseOperation)
+		return fmt.Errorf("%w: auto-save is not supported by LoadIntoTx", ErrDatabaseOperation)
 	}
 	if err := b.validator.validateInputsAvailable(b.collectedPaths, b.readers); err != nil {
-		return nil, err
+		return err
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return err
 	}
 	b.collectedPaths = b.fileProcessor.deduplicateCompressedFiles(b.collectedPaths)
 	b.streamProcessor.replaceExisting = true
 	defer func() { b.streamProcessor.replaceExisting = false }()
-	pending := newPendingRegistries()
-	if err := b.loadIntoExecutor(ctx, tx, pending); err != nil {
-		return nil, err
-	}
-	return pending, nil
+	return b.loadIntoExecutor(ctx, tx)
 }
 
-func (b *DBBuilder) loadIntoExecutor(ctx context.Context, db DBTX, pending *PendingRegistries) error {
-	if err := b.streamProcessor.streamAllFilesToDatabase(ctx, db, b.collectedPaths, pending); err != nil {
+func (b *DBBuilder) loadIntoExecutor(ctx context.Context, db DBTX) error {
+	if err := b.streamProcessor.streamAllFilesToDatabase(ctx, db, b.collectedPaths); err != nil {
 		return err
 	}
-	if err := b.streamProcessor.streamAllReadersToDatabase(ctx, db, b.readers, pending); err != nil {
-		return err
-	}
-	return nil
+	return b.streamProcessor.streamAllReadersToDatabase(ctx, db, b.readers)
 }
 
 // deduplicateCompressedFiles removes compressed duplicates when uncompressed versions exist.
@@ -797,7 +776,7 @@ func (b *DBBuilder) validateDatabaseConnection(ctx context.Context, db *sql.DB) 
 }
 
 // setupAutoSaveIfNeeded sets up auto-save functionality if enabled.
-func (b *DBBuilder) setupAutoSaveIfNeeded(ctx context.Context, db *sql.DB, pending *PendingRegistries) (*sql.DB, error) {
+func (b *DBBuilder) setupAutoSaveIfNeeded(ctx context.Context, db *sql.DB) (*sql.DB, error) {
 	if b.autoSaveConfig == nil || !b.autoSaveConfig.enabled {
 		return db, nil
 	}
@@ -820,12 +799,12 @@ func (b *DBBuilder) setupAutoSaveIfNeeded(ctx context.Context, db *sql.DB, pendi
 	db = sql.OpenDB(connector)
 
 	// Use stream processor for all streaming operations (now includes XLSX support)
-	if err := b.streamProcessor.streamAllFilesToDatabase(ctx, db, b.collectedPaths, pending); err != nil {
+	if err := b.streamProcessor.streamAllFilesToDatabase(ctx, db, b.collectedPaths); err != nil {
 		_ = db.Close() // Ignore close error during error handling
 		return nil, err
 	}
 
-	if err := b.streamProcessor.streamAllReadersToDatabase(ctx, db, b.readers, pending); err != nil {
+	if err := b.streamProcessor.streamAllReadersToDatabase(ctx, db, b.readers); err != nil {
 		_ = db.Close() // Ignore close error during error handling
 		return nil, err
 	}
