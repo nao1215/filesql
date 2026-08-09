@@ -238,12 +238,23 @@ func (df *DataFrame) ToTSV(path string) error {
 }
 
 // toDelimitedFile writes the DataFrame to a file with the specified delimiter.
+//
+// TSV is written by parser.WriteTSVRecord rather than by a CSV writer with its
+// comma changed. TSV has no quoting: a CSV writer wrapped a value holding a tab
+// in double quotes, and to a TSV reader those quotes are two more characters
+// while the tab inside them is still a field boundary — the file came out with
+// the wrong shape and the quotes as data. A value the format cannot hold is
+// refused there rather than written as something else.
 func (df *DataFrame) toDelimitedFile(path string, delimiter rune) error {
 	f, err := os.Create(path) //nolint:gosec // path is provided by the user
 	if err != nil {
 		return fmt.Errorf("failed to create file: %w", err)
 	}
 	defer f.Close()
+
+	if delimiter == '\t' {
+		return df.writeTSV(f)
+	}
 
 	writer := csv.NewWriter(f)
 	writer.Comma = delimiter
@@ -270,6 +281,24 @@ func (df *DataFrame) toDelimitedFile(path string, delimiter rune) error {
 		return fmt.Errorf("failed to flush writer: %w", err)
 	}
 
+	return nil
+}
+
+// writeTSV writes the frame as tab-separated records, taking every field
+// literally.
+func (df *DataFrame) writeTSV(w io.Writer) error {
+	if err := parser.WriteTSVRecord(w, df.columns); err != nil {
+		return fmt.Errorf("failed to write header: %w", err)
+	}
+	record := make([]string, len(df.columns))
+	for _, row := range df.rows {
+		for i, col := range df.columns {
+			record[i] = formatValue(row[col])
+		}
+		if err := parser.WriteTSVRecord(w, record); err != nil {
+			return fmt.Errorf("failed to write row: %w", err)
+		}
+	}
 	return nil
 }
 

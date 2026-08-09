@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nao1215/filesql/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -2906,5 +2907,65 @@ func TestDistinctAndJoinCompareValuesAsWritten(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, []map[string]any{{"id": "007", "x": "a", "y": "Z"}}, joined.ToRecords())
+	})
+}
+
+// TestToTSVTakesFieldsLiterally pins what a TSV file can hold. A CSV writer with
+// its comma changed wrapped a value holding a tab in double quotes: to a TSV
+// reader those quotes are two more characters, and the tab inside them is still
+// a field boundary, so the file came out with the wrong shape and the quotes as
+// data. A value TSV cannot represent is refused rather than written as
+// something else.
+func TestToTSVTakesFieldsLiterally(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a quote is written as is, not doubled", func(t *testing.T) {
+		t.Parallel()
+
+		df, err := NewDataFrame(strings.NewReader("v\n\"a\"\"b\"\n"), CSV)
+		require.NoError(t, err)
+
+		out := filepath.Join(t.TempDir(), "out.tsv")
+		require.NoError(t, df.ToTSV(out))
+
+		got, err := os.ReadFile(out) //nolint:gosec // test-owned path
+		require.NoError(t, err)
+		assert.Equal(t, "v\na\"b\n", string(got))
+	})
+
+	t.Run("a value holding a tab is refused", func(t *testing.T) {
+		t.Parallel()
+
+		df, err := NewDataFrame(strings.NewReader("v\n\"a\tb\"\n"), CSV)
+		require.NoError(t, err)
+
+		err = df.ToTSV(filepath.Join(t.TempDir(), "out.tsv"))
+
+		require.ErrorIs(t, err, parser.ErrTSVUnrepresentable)
+	})
+
+	t.Run("a value holding a newline is refused", func(t *testing.T) {
+		t.Parallel()
+
+		df, err := NewDataFrame(strings.NewReader("v\n\"c\nd\"\n"), CSV)
+		require.NoError(t, err)
+
+		err = df.ToTSV(filepath.Join(t.TempDir(), "out.tsv"))
+
+		require.ErrorIs(t, err, parser.ErrTSVUnrepresentable)
+	})
+
+	t.Run("an ordinary frame round trips", func(t *testing.T) {
+		t.Parallel()
+
+		df, err := NewDataFrame(strings.NewReader("a,b\n1,x\n2,y\n"), CSV)
+		require.NoError(t, err)
+
+		out := filepath.Join(t.TempDir(), "out.tsv")
+		require.NoError(t, df.ToTSV(out))
+
+		reloaded, err := NewDataFrameFromPath(out)
+		require.NoError(t, err)
+		assert.Equal(t, df.ToRecords(), reloaded.ToRecords())
 	})
 }
