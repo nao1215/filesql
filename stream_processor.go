@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/nao1215/filesql/parser"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -759,6 +760,7 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX
 			sp.logger.Error("failed to read sheet", "path", filePath, logKeySheet, sheetName, "error", err)
 			return fmt.Errorf("%w: failed to read sheet %s: %w", ErrParsing, sheetName, err)
 		}
+		rows = parser.NormalizeXLSXDates(xlsxFile, sheetName, rows)
 
 		// Skip empty sheets
 		if len(rows) == 0 {

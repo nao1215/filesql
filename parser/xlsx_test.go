@@ -96,3 +96,36 @@ func TestParse_XLSX_FromTestdata(t *testing.T) {
 		assert.Equal(t, len(result.Headers), len(result.ColumnTypes))
 	})
 }
+
+// TestIsDateNumberFormat covers what makes a custom number format a date. The
+// format language spells dates and times with y, m, d, h and s, and everything
+// inside quotes or brackets is literal text or a condition — a currency format
+// quoting a word with a "d" in it is not a date.
+func TestIsDateNumberFormat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		format string
+		want   bool
+	}{
+		{name: "an ISO date", format: "yyyy-mm-dd", want: true},
+		{name: "a time", format: "hh:mm:ss", want: true},
+		{name: "a month and year", format: "mmm yyyy", want: true},
+		{name: "an elapsed time in brackets", format: "[h]:mm", want: true},
+		{name: "a plain number", format: "#,##0.00", want: false},
+		{name: "a currency", format: `"$"#,##0.00`, want: false},
+		{name: "a quoted word holding date letters", format: `#,##0" days"`, want: false},
+		{name: "a percentage", format: "0.0%", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := isDateNumberFormat(tt.format); got != tt.want {
+				t.Errorf("isDateNumberFormat(%q) = %v, want %v", tt.format, got, tt.want)
+			}
+		})
+	}
+}

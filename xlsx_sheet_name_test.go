@@ -1,12 +1,14 @@
 package filesql
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xuri/excelize/v2"
 )
 
 // TestExcelSheetName pins how a table name is adapted to Excel's worksheet-name
@@ -92,4 +94,67 @@ func TestDumpXLSXAdaptsSheetName(t *testing.T) {
 			assert.Contains(t, names[0], sanitizeTableName(tt.wantSheet))
 		})
 	}
+}
+
+// TestXLSXDateCellsImportAsISO pins what a date cell holds against how it is
+// shown. A workbook stores a serial and a number format, and GetRows applies the
+// format: the same day arrived as "03-15-23" under format 14, so ORDER BY sorted
+// the column lexically and a comparison against an ISO literal never matched.
+func TestXLSXDateCellsImportAsISO(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "d.xlsx")
+
+	f := excelize.NewFile()
+	defer func() { _ = f.Close() }()
+	require.NoError(t, f.SetSheetRow("Sheet1", "A1", &[]any{"date", "shown", "n"}))
+	// 45000 is 2023-03-15. Column A is formatted mm-dd-yy, column B as a plain
+	// number, and column C holds text that looks like a date.
+	require.NoError(t, f.SetCellValue("Sheet1", "A2", 45000))
+	require.NoError(t, f.SetCellValue("Sheet1", "B2", 45000))
+	require.NoError(t, f.SetCellValue("Sheet1", "C2", "03-15-23"))
+	style, err := f.NewStyle(&excelize.Style{NumFmt: 14})
+	require.NoError(t, err)
+	require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
+	require.NoError(t, f.SaveAs(path))
+
+	db, err := OpenContext(ctx, path)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var date, shown, n string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT "date", shown, n FROM d_Sheet1`).Scan(&date, &shown, &n))
+
+	assert.Equal(t, "2023-03-15", date, "a date cell holds a day, whatever format shows it")
+	assert.Equal(t, "45000", shown, "a number formatted as a number is a number")
+	assert.Equal(t, "03-15-23", n, "text that looks like a date is text, and is left as it is")
+}
+
+// TestXLSXDateTimeCellKeepsItsTime covers the other half: a cell whose serial
+// carries a time of day keeps it, rather than being cut back to the date.
+func TestXLSXDateTimeCellKeepsItsTime(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "dt.xlsx")
+
+	f := excelize.NewFile()
+	defer func() { _ = f.Close() }()
+	require.NoError(t, f.SetSheetRow("Sheet1", "A1", &[]any{"at"}))
+	// Half a day past the date is noon.
+	require.NoError(t, f.SetCellValue("Sheet1", "A2", 45000.5))
+	style, err := f.NewStyle(&excelize.Style{NumFmt: 22})
+	require.NoError(t, err)
+	require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
+	require.NoError(t, f.SaveAs(path))
+
+	db, err := OpenContext(ctx, path)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var at string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT at FROM dt_Sheet1`).Scan(&at))
+
+	assert.Equal(t, "2023-03-15 12:00:00", at)
 }
