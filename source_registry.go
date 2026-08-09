@@ -54,10 +54,14 @@ func recordFileSource(ctx context.Context, db DBTX, baseTableName, sourcePath st
 		return fmt.Errorf("%w: failed to resolve source path %s: %w", ErrIOOperation, sourcePath, err)
 	}
 
+	// The key is the pair, not the name alone: payment.ach and payment.fed make
+	// tables that do not collide, so both can be loaded into one database, and
+	// keying by name alone would let the second erase the first's source.
 	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS "`+sourceTableName+`" (
-		base_table_name TEXT PRIMARY KEY,
+		base_table_name TEXT NOT NULL,
 		source_path TEXT NOT NULL,
-		format TEXT NOT NULL
+		format TEXT NOT NULL,
+		PRIMARY KEY (base_table_name, format)
 	)`); err != nil {
 		return fmt.Errorf("%w: failed to create %s: %w", ErrDatabaseOperation, sourceTableName, err)
 	}

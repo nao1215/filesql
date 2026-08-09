@@ -36,6 +36,25 @@ func TestSourceTableIsHiddenFromCallers(t *testing.T) {
 	}
 }
 
+// TestACHAndFedwireShareABaseNameInOneDatabase pins that payment.ach and
+// payment.fed can live in one database and each still be dumped. Their SQL
+// tables do not collide, so both load; keying the source metadata by name alone
+// would let the second load erase the first's source.
+func TestACHAndFedwireShareABaseNameInOneDatabase(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := OpenContext(ctx, copyACHFixture(t, "ppd-debit.ach"), copyWireFixture(t, "customer-transfer.fed"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	outDir := t.TempDir()
+	require.NoError(t, DumpACH(ctx, db, "payment", filepath.Join(outDir, "out.ach")))
+	require.NoError(t, DumpFedWire(ctx, db, "payment", filepath.Join(outDir, "out.fed")))
+
+	assert.NotEmpty(t, readFileString(t, filepath.Join(outDir, "out.ach")))
+	assert.Contains(t, readFileString(t, filepath.Join(outDir, "out.fed")), "{1500}")
+}
+
 // TestSourceMetadataRolledBackWithTransaction pins that metadata written by a
 // load shares the fate of the tables it describes. A rolled-back load must not
 // leave a row pointing at tables that do not exist.
