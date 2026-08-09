@@ -81,3 +81,48 @@ func TestDumpDatabase_RoundTripPerFormat(t *testing.T) {
 		})
 	}
 }
+
+// TestDumpDatabase_TSVQuoteRoundTrip is the metamorphic half of TSV taking its
+// fields literally: what a dump writes is what a load reads back. A CSV writer
+// would quote a value holding a quote, and the literal reader would hand those
+// quotes back as part of the value.
+func TestDumpDatabase_TSVQuoteRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	stored := []string{`5'9" tall`, `said "hi" loudly`, `"quoted"`, `a""b`, "plain"}
+
+	ctx := t.Context()
+	src := filepath.Join(t.TempDir(), "seed.csv")
+	require.NoError(t, os.WriteFile(src, []byte("a\n1\n"), 0o600))
+
+	db, err := OpenContext(ctx, src)
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.ExecContext(ctx, "CREATE TABLE notes (v TEXT)")
+	require.NoError(t, err)
+	for _, v := range stored {
+		_, err = db.ExecContext(ctx, "INSERT INTO notes VALUES (?)", v)
+		require.NoError(t, err)
+	}
+
+	outDir := t.TempDir()
+	require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatTSV)))
+
+	reloaded, err := OpenContext(ctx, filepath.Join(outDir, "notes.tsv"))
+	require.NoError(t, err)
+	defer reloaded.Close()
+
+	rows, err := reloaded.QueryContext(ctx, "SELECT v FROM notes")
+	require.NoError(t, err)
+	defer rows.Close()
+	got := make([]string, 0, len(stored))
+	for rows.Next() {
+		var v string
+		require.NoError(t, rows.Scan(&v))
+		got = append(got, v)
+	}
+	require.NoError(t, rows.Err())
+
+	assert.Equal(t, stored, got)
+}

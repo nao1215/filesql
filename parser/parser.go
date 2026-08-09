@@ -727,12 +727,19 @@ func createDecompressedReader(reader io.Reader, fileType FileType) (io.Reader, f
 	}
 }
 
-// parseDelimited parses CSV or TSV data.
+// parseDelimited parses CSV or TSV data. TSV is read literally; see TSVReader.
 func parseDelimited(reader io.Reader, delimiter rune, fileTypeName string) (*TableData, error) {
-	csvReader := csv.NewReader(NormalizeLineEndings(reader))
-	csvReader.Comma = delimiter
+	normalized := NormalizeLineEndings(reader)
 
-	records, err := csvReader.ReadAll()
+	var records [][]string
+	var err error
+	if delimiter == '\t' {
+		records, err = NewTSVReader(normalized).ReadAll()
+	} else {
+		csvReader := csv.NewReader(normalized)
+		csvReader.Comma = delimiter
+		records, err = csvReader.ReadAll()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to read %s: %w", fileTypeName, err)
 	}

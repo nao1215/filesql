@@ -549,23 +549,18 @@ func (p *Processor) writeCSV(w io.Writer, headers []string, records [][]string) 
 	return csvWriter.Error()
 }
 
-// writeTSV writes data in TSV format
+// writeTSV writes data in TSV format, literally; see parser.WriteTSVRecord.
 func (p *Processor) writeTSV(w io.Writer, headers []string, records [][]string) error {
-	csvWriter := csv.NewWriter(w)
-	csvWriter.Comma = '\t'
-
-	if err := csvWriter.Write(headers); err != nil {
+	if err := parser.WriteTSVRecord(w, headers); err != nil {
 		return err
 	}
 
 	for _, record := range records {
-		if err := csvWriter.Write(record); err != nil {
+		if err := parser.WriteTSVRecord(w, record); err != nil {
 			return err
 		}
 	}
-
-	csvWriter.Flush()
-	return csvWriter.Error()
+	return nil
 }
 
 // writeLTSV writes data in LTSV format
