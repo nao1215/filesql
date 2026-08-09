@@ -41,8 +41,6 @@ func TestOpenFedWireFile(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ClearWireTableSetRegistry()
-	defer ClearWireTableSetRegistry()
 
 	db, err := OpenContext(ctx, testFile)
 	require.NoError(t, err)
@@ -72,8 +70,6 @@ func TestOpenFedWireFile_QueryFields(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ClearWireTableSetRegistry()
-	defer ClearWireTableSetRegistry()
 
 	db, err := OpenContext(ctx, testFile)
 	require.NoError(t, err)
@@ -99,8 +95,6 @@ func TestOpenFedWireFile_UpdateAndExport(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ClearWireTableSetRegistry()
-	defer ClearWireTableSetRegistry()
 
 	db, err := OpenContext(ctx, testFile)
 	require.NoError(t, err)
@@ -121,7 +115,6 @@ func TestOpenFedWireFile_UpdateAndExport(t *testing.T) {
 	assert.Greater(t, info.Size(), int64(0), "output file should not be empty")
 
 	// Re-open the written file and verify the change
-	ClearWireTableSetRegistry()
 	db2, err := OpenContext(ctx, tmpFile)
 	require.NoError(t, err)
 	defer db2.Close()
@@ -142,8 +135,6 @@ func TestOpenFedWireFile_RefusesOverWidthText(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ClearWireTableSetRegistry()
-	defer ClearWireTableSetRegistry()
 
 	db, err := OpenContext(ctx, testFile)
 	require.NoError(t, err)
@@ -170,8 +161,6 @@ func TestBuilderAddPathFedWire(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ClearWireTableSetRegistry()
-	defer ClearWireTableSetRegistry()
 
 	builder := NewBuilder().AddPath(testFile)
 	builder, err := builder.Build(ctx)
@@ -190,7 +179,6 @@ func TestBuilderAddPathFedWire(t *testing.T) {
 
 func TestDumpFedWire_NoTableSet(t *testing.T) {
 	ctx := context.Background()
-	ClearWireTableSetRegistry()
 
 	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
@@ -259,61 +247,38 @@ func TestIsWireBaseTableName(t *testing.T) {
 	}
 }
 
-func TestGetWireTableInfos(t *testing.T) {
+// TestWireSourceRecordedPerDatabase pins that loading a Fedwire file records
+// its source in the database it was loaded into, which is what makes the dump
+// find the right file.
+func TestWireSourceRecordedPerDatabase(t *testing.T) {
 	testFile := findWireTestFile(t)
 	if testFile == "" {
 		t.Skip("No test Fedwire file found")
 	}
 
 	ctx := context.Background()
-	ClearWireTableSetRegistry()
-	defer ClearWireTableSetRegistry()
 
 	db, err := OpenContext(ctx, testFile)
 	require.NoError(t, err)
 	defer db.Close()
 
-	infos := GetWireTableInfos()
-	require.NotEmpty(t, infos, "should have registered Fedwire table infos")
+	assert.Equal(t, []string{"customer_transfer"}, fileSourceBaseNames(ctx, db, sourceFormatFedWire))
 
-	for _, info := range infos {
-		assert.NotEmpty(t, info.BaseName)
-		assert.Contains(t, info.MessageTable(), "_message")
-	}
+	path, ok := fileSourcePath(ctx, db, "customer_transfer", sourceFormatFedWire)
+	require.True(t, ok)
+	assert.True(t, filepath.IsAbs(path), "the recorded path must survive a change of working directory: %s", path)
 }
 
-func TestGetWireTableInfos_Empty(t *testing.T) {
-	ClearWireTableSetRegistry()
+// TestWireSourceAbsentForOtherDatabases pins that a database that loaded no
+// Fedwire file reports none, so nothing is dumped as Fedwire by accident.
+func TestWireSourceAbsentForOtherDatabases(t *testing.T) {
+	ctx := context.Background()
 
-	infos := GetWireTableInfos()
-	assert.NotNil(t, infos)
-	assert.Empty(t, infos)
-}
+	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	require.NoError(t, err)
+	defer db.Close()
 
-func TestWireRegistryConcurrency(t *testing.T) {
-	t.Parallel()
-
-	ClearWireTableSetRegistry()
-	defer ClearWireTableSetRegistry()
-
-	// Register and unregister should not race
-	done := make(chan struct{})
-	go func() {
-		for range 100 {
-			registerWireTableSet("test", nil)
-			getWireTableSet("test")
-			getWireBaseTableNames()
-		}
-		close(done)
-	}()
-
-	for range 100 {
-		getWireTableSet("test")
-		GetWireTableInfos()
-	}
-	<-done
-
-	UnregisterWireTableSet("test")
+	assert.Empty(t, fileSourceBaseNames(ctx, db, sourceFormatFedWire))
 }
 
 func TestAddFS_FedWireFile(t *testing.T) {
@@ -323,8 +288,6 @@ func TestAddFS_FedWireFile(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ClearWireTableSetRegistry()
-	defer ClearWireTableSetRegistry()
 
 	// Copy .fed file to an isolated temp directory to avoid picking up other testdata files
 	tmpDir := t.TempDir()
@@ -355,8 +318,6 @@ func TestDumpFedWire_DroppedTable(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ClearWireTableSetRegistry()
-	defer ClearWireTableSetRegistry()
 
 	db, err := OpenContext(ctx, testFile)
 	require.NoError(t, err)
@@ -370,6 +331,76 @@ func TestDumpFedWire_DroppedTable(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "output.fed")
 	err = DumpFedWire(ctx, db, "customer_transfer", tmpFile)
 	assert.Error(t, err, "DumpFedWire should fail when message table is dropped")
+}
+
+// TestDumpFedWire_TwoDatabasesShareABaseName pins that two databases loaded
+// from different Fedwire files that happen to share a base name each dump their
+// own structure. The structure used to be looked up in a process-global map
+// keyed by the base name alone, so the second load replaced the first and dbA's
+// message was written into dbB's tag layout.
+func TestDumpFedWire_TwoDatabasesShareABaseName(t *testing.T) {
+	ctx := context.Background()
+
+	// One fixture carries the optional remittance tags, the other only the
+	// mandatory ones, so writing one database through the other's structure
+	// shows up as tags gained or lost.
+	pathA := copyWireFixture(t, "customer-transfer.fed")
+	pathB := copyWireFixture(t, "customer-transfer-minimal.fed")
+
+	dbA, err := OpenContext(ctx, pathA)
+	require.NoError(t, err)
+	defer dbA.Close()
+
+	dbB, err := OpenContext(ctx, pathB)
+	require.NoError(t, err)
+	defer dbB.Close()
+
+	outA := filepath.Join(t.TempDir(), "a.fed")
+	require.NoError(t, DumpFedWire(ctx, dbA, "payment", outA))
+
+	outB := filepath.Join(t.TempDir(), "b.fed")
+	require.NoError(t, DumpFedWire(ctx, dbB, "payment", outB))
+
+	assert.Contains(t, readFileString(t, outA), "{6500}", "dbA must dump the file it was loaded from")
+	assert.NotContains(t, readFileString(t, outB), "{6500}", "dbB must dump the file it was loaded from")
+}
+
+// TestDumpFedWire_MissingSourceFileIsNamed pins that a dump whose source file is
+// gone fails with an error naming that file.
+func TestDumpFedWire_MissingSourceFileIsNamed(t *testing.T) {
+	ctx := context.Background()
+
+	source := copyWireFixture(t, "customer-transfer.fed")
+	db, err := OpenContext(ctx, source)
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, os.Remove(source))
+
+	err = DumpFedWire(ctx, db, "payment", filepath.Join(t.TempDir(), "out.fed"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), source, "the error must name the source file it could not read")
+}
+
+// copyWireFixture copies a Fedwire fixture into a fresh directory under the
+// fixed name payment.fed, so several fixtures can share one base table name.
+func copyWireFixture(t *testing.T, fixture string) string {
+	t.Helper()
+
+	content, err := os.ReadFile(filepath.Join("testdata", fixture)) //nolint:gosec // Test fixture path
+	require.NoError(t, err)
+
+	path := filepath.Join(t.TempDir(), "payment.fed")
+	require.NoError(t, os.WriteFile(path, content, 0o600)) //nolint:gosec // Test path is constructed from t.TempDir()
+	return path
+}
+
+func readFileString(t *testing.T, path string) string {
+	t.Helper()
+
+	content, err := os.ReadFile(path) //nolint:gosec // Test path is constructed from t.TempDir()
+	require.NoError(t, err)
+	return string(content)
 }
 
 // findWireTestFile looks for a test Fedwire file in testdata directory.
@@ -395,8 +426,6 @@ func TestDumpFedWire_FailedWriteLeavesDestinationIntact(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ClearWireTableSetRegistry()
-	defer ClearWireTableSetRegistry()
 
 	dir := t.TempDir()
 	target := filepath.Join(dir, "customer-transfer.fed")

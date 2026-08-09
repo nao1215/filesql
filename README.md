@@ -445,6 +445,10 @@ ACH (`.ach`) and Fedwire (`.fed`) support are experimental. They are useful for 
 
 Control records are derived, not stored: writing an ACH file rebuilds each batch control and the file control from the entries, so an edited amount is balanced by the write rather than by the caller. An edit to a control column (`total_debit`, `total_credit`, `entry_hash`, `entry_addenda_count`) is therefore overwritten by the recalculation.
 
+Writing needs the source file. Neither format can be rebuilt from its SQL tables alone: fields no table exposes exist only in the original. `DumpACH` and `DumpFedWire` therefore read the file the tables were loaded from and apply the edits to it, and fail with `ErrSourceUnavailable`, naming the file, when it is gone or unreadable. A database loaded from an `io.Reader` has no such file: parse the reader with `parser/ach` or `parser/wire` and pass the result to `DumpACHWithTableSet` or `DumpFedWireWithTableSet`.
+
+Each database records its own source, so two databases loaded from files that share a name in different directories each export their own data. The record lives in a reserved table named `_filesql_sources`. Table names beginning with `_filesql_` belong to this package; they are hidden from `DumpDatabase` and from the table listings filesql returns, and a caller should not create them.
+
 ## Examples
 
 ### API example index

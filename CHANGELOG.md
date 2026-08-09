@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- An ACH or Fedwire dump writes the file its own database was loaded from ([#210](https://github.com/nao1215/filesql/issues/210)). The structure a dump needs lived in a process-global map keyed by the base table name alone, so `/a/payment.ach` and `/b/payment.ach` were one key: loading the second replaced the first, and dumping the first database applied its rows to the second file's structure — an error when the shapes disagreed, and silently the wrong output when they happened to line up. Each database now records its own sources in a reserved table, `_filesql_sources`, so two databases cannot collide, nothing has to be released when a database closes, and a rolled-back load discards the metadata with the tables it describes. Table names beginning with `_filesql_` are reserved for this package and are hidden from `DumpDatabase` and from the table listings filesql returns.
+
+### Breaking Changes
+
+- `DumpACH` and `DumpFedWire` need the source file to still be readable. Neither format can be rebuilt from its SQL tables alone, so the export reads the original and applies the edits to it; a missing or unreadable source now fails with `ErrSourceUnavailable` naming the file. A database loaded from an `io.Reader` records no source and cannot be exported this way: parse the reader with `parser/ach` or `parser/wire` and call `DumpACHWithTableSet` or `DumpFedWireWithTableSet`.
+
+- The registry API is removed because there is no registry left to manage: `GetACHTableInfos`, `UnregisterACHTableSet`, `ClearACHTableSetRegistry`, `GetWireTableInfos`, `UnregisterWireTableSet`, `ClearWireTableSetRegistry`, the `PendingRegistries` type with its `PublishRegistries` method, and `DBBuilder.LoadIntoTxWithPending`. A caller of `LoadIntoTxWithPending` calls `LoadIntoTx` and drops the publish step; the metadata is written inside the transaction and commits or rolls back with it. A caller of the unregister and clear functions drops the call: closing the database releases the metadata with it.
+
 ## [0.42.0] - 2026-08-09
 
 ### Breaking Changes

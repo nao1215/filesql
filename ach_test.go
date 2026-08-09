@@ -2,8 +2,10 @@ package filesql
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -404,6 +406,103 @@ func TestDumpACH_NilTableSet(t *testing.T) {
 	assert.Error(t, err, "should fail when tableSet is not found")
 }
 
+// TestDumpACH_TwoDatabasesShareABaseName pins that two databases loaded from
+// different ACH files that happen to share a base name each dump their own
+// structure. The structure used to be looked up in a process-global map keyed by
+// the base name alone, so the second load replaced the first and dbA's rows were
+// written into dbB's file layout.
+func TestDumpACH_TwoDatabasesShareABaseName(t *testing.T) {
+	ctx := context.Background()
+
+	// Standard (PPD) and IAT files have different batch structures, so applying
+	// one database's rows to the other's structure is detectable.
+	pathA := copyACHFixture(t, "ppd-debit.ach")
+	pathB := copyACHFixture(t, "iat-credit.ach")
+
+	dbA, err := OpenContext(ctx, pathA)
+	require.NoError(t, err)
+	defer dbA.Close()
+
+	dbB, err := OpenContext(ctx, pathB)
+	require.NoError(t, err)
+	defer dbB.Close()
+
+	outA := filepath.Join(t.TempDir(), "a.ach")
+	require.NoError(t, DumpACH(ctx, dbA, "payment", outA))
+
+	outB := filepath.Join(t.TempDir(), "b.ach")
+	require.NoError(t, DumpACH(ctx, dbB, "payment", outB))
+
+	assert.Equal(t, achTableNames(ctx, t, dbA), achTableNames(ctx, t, reopen(ctx, t, outA)),
+		"dbA must dump the file it was loaded from")
+	assert.Equal(t, achTableNames(ctx, t, dbB), achTableNames(ctx, t, reopen(ctx, t, outB)),
+		"dbB must dump the file it was loaded from")
+}
+
+// TestDumpACH_MissingSourceFileIsNamed pins that a dump whose source file is
+// gone fails with an error naming that file, rather than writing a file built
+// from a structure that no longer matches anything.
+func TestDumpACH_MissingSourceFileIsNamed(t *testing.T) {
+	ctx := context.Background()
+
+	source := copyACHFixture(t, "ppd-debit.ach")
+	db, err := OpenContext(ctx, source)
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, os.Remove(source))
+
+	err = DumpACH(ctx, db, "payment", filepath.Join(t.TempDir(), "out.ach"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), source, "the error must name the source file it could not read")
+}
+
+// copyACHFixture copies an ACH fixture into a fresh directory under the fixed
+// name payment.ach, so several fixtures can share one base table name.
+func copyACHFixture(t *testing.T, fixture string) string {
+	t.Helper()
+
+	content, err := os.ReadFile(filepath.Join("testdata", fixture)) //nolint:gosec // Test fixture path
+	require.NoError(t, err)
+
+	path := filepath.Join(t.TempDir(), "payment.ach")
+	require.NoError(t, os.WriteFile(path, content, 0o600)) //nolint:gosec // Test path is constructed from t.TempDir()
+	return path
+}
+
+// reopen loads a dumped file back into a database so its structure can be
+// compared with the database it came from.
+func reopen(ctx context.Context, t *testing.T, path string) *sql.DB {
+	t.Helper()
+
+	db, err := OpenContext(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, db.Close()) })
+	return db
+}
+
+// achTableNames returns the ACH tables of db with their base name stripped, so
+// databases loaded from differently named files stay comparable.
+func achTableNames(ctx context.Context, t *testing.T, db *sql.DB) []string {
+	t.Helper()
+
+	rows, err := db.QueryContext(ctx,
+		"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '\\_%' ESCAPE '\\' ORDER BY name")
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var suffixes []string
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		base, isACH := IsACHBaseTableName(name)
+		require.True(t, isACH, "unexpected table %s", name)
+		suffixes = append(suffixes, strings.TrimPrefix(name, base))
+	}
+	require.NoError(t, rows.Err())
+	return suffixes
+}
+
 // findTestACHFile looks for a test ACH file in common locations.
 func findTestACHFile(t *testing.T) string {
 	t.Helper()
@@ -469,44 +568,6 @@ func TestACHTableInfo_TableNames(t *testing.T) {
 	})
 }
 
-func TestGetACHTableInfos(t *testing.T) {
-	testFile := findTestACHFile(t)
-	if testFile == "" {
-		t.Skip("No test ACH file found")
-	}
-
-	ctx := context.Background()
-
-	// Clear registry before test
-	ClearACHTableSetRegistry()
-
-	// Open ACH file to register table set
-	db, err := OpenContext(ctx, testFile)
-	require.NoError(t, err)
-	defer db.Close()
-
-	// Get ACH table infos
-	infos := GetACHTableInfos()
-	require.NotEmpty(t, infos, "should have registered ACH table infos")
-
-	// Verify we can use the table info
-	for _, info := range infos {
-		assert.NotEmpty(t, info.BaseName, "BaseName should not be empty")
-		assert.Contains(t, info.EntriesTable(), "_entries")
-		assert.Contains(t, info.BatchesTable(), "_batches")
-	}
-}
-
-func TestGetACHTableInfos_Empty(t *testing.T) {
-	// Clear registry
-	ClearACHTableSetRegistry()
-
-	// Should return empty slice, not nil
-	infos := GetACHTableInfos()
-	assert.NotNil(t, infos)
-	assert.Empty(t, infos)
-}
-
 // TestDumpACH_FailedWriteLeavesDestinationIntact pins that a rejected ACH write
 // does not damage the file it was going to overwrite. The moov-io writer
 // validates while encoding, so a value the format cannot hold (an amount wider
@@ -520,8 +581,6 @@ func TestDumpACH_FailedWriteLeavesDestinationIntact(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ClearACHTableSetRegistry()
-	defer ClearACHTableSetRegistry()
 
 	// Copy the fixture so the test writes back over its own file, which is what
 	// an in-place save does.
