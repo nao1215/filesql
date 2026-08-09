@@ -173,10 +173,24 @@ func wireTableSetForDump(ctx context.Context, db *sql.DB, baseTableName string) 
 // queryable but absent from everything that enumerates tables — the kind of
 // half-present table a caller cannot debug. SQLite answers the same way for its
 // own sqlite_ prefix, so the rule and its message follow that precedent.
+//
+// The comparison ignores ASCII case because the LIKE that hides these tables
+// does: without that, _FILESQL_report loaded and then vanished from every
+// listing, which is the state this check exists to prevent.
 func validateTableName(tableName string) error {
-	if strings.HasPrefix(tableName, sourceTablePrefix) {
+	if hasReservedPrefix(tableName) {
 		return fmt.Errorf("%w: %q begins with %s, which this package keeps for its own tables; a table under it would be hidden from dumps and from table listings",
 			ErrReservedTableName, tableName, sourceTablePrefix)
 	}
 	return nil
+}
+
+// hasReservedPrefix reports whether tableName starts with sourceTablePrefix,
+// folding ASCII case only. SQLite's LIKE folds exactly that much, so matching it
+// here keeps the set of refused names equal to the set of hidden ones.
+func hasReservedPrefix(tableName string) bool {
+	if len(tableName) < len(sourceTablePrefix) {
+		return false
+	}
+	return strings.EqualFold(tableName[:len(sourceTablePrefix)], sourceTablePrefix)
 }

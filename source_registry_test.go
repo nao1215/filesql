@@ -83,6 +83,15 @@ func TestReservedTableNameIsRefused(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrReservedTableName)
 
+	// The LIKE that hides these tables folds ASCII case, so the refusal must
+	// too: an upper-case spelling used to load and then vanish from every
+	// listing while still answering queries.
+	upperPath := filepath.Join(dir, "_FILESQL_report.csv")
+	require.NoError(t, os.WriteFile(upperPath, []byte("id,v\n1,a\n"), 0o600))
+	_, err = OpenContext(ctx, upperPath)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrReservedTableName)
+
 	// A name that merely resembles the prefix is a normal table.
 	okPath := filepath.Join(dir, "filesql_report.csv")
 	require.NoError(t, os.WriteFile(okPath, []byte("id,v\n1,a\n"), 0o600))
