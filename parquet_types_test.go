@@ -3,8 +3,10 @@ package filesql
 import (
 	"context"
 	"database/sql"
+	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	pqfile "github.com/apache/arrow/go/v18/parquet/file"
@@ -284,5 +286,120 @@ func assertParquetSchema(t *testing.T, path string, want map[string]string) {
 		if got := schema.Field(fields[0]).Type.Name(); got != wantType {
 			t.Errorf("column %q has parquet type %q, want %q", name, got, wantType)
 		}
+	}
+}
+
+// TestParquetNonFiniteRealStaysReal pins the invariant arrowColumnInfoList
+// states: the column type taken from the Parquet schema and the text
+// extractValueFromArrowArray renders have to agree, because SQLite applies the
+// column's affinity to that text.
+//
+// "%g" spells an infinity "+Inf", which SQLite's REAL affinity cannot convert,
+// so the cell was stored as TEXT inside a column declared REAL: a double in the
+// file came back as a string, and typeof() said so.
+func TestParquetNonFiniteRealStaysReal(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "src.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if _, err := db.ExecContext(ctx, `CREATE TABLE m (v REAL);`); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []float64{math.Inf(1), math.Inf(-1), 1.5} {
+		if _, err := db.ExecContext(ctx, `INSERT INTO m VALUES (?);`, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out := filepath.Join(dir, "out")
+	if err := DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
+		t.Fatalf("DumpDatabase: %v", err)
+	}
+	assertParquetSchema(t, filepath.Join(out, "m.parquet"), map[string]string{"v": "float64"})
+
+	reloaded, err := OpenContext(ctx, filepath.Join(out, "m.parquet"))
+	if err != nil {
+		t.Fatalf("OpenContext: %v", err)
+	}
+	defer func() { _ = reloaded.Close() }()
+
+	rows, err := reloaded.QueryContext(ctx, `SELECT v, typeof(v) FROM m;`)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var (
+		values []float64
+		types  []string
+	)
+	for rows.Next() {
+		var (
+			v  float64
+			ty string
+		)
+		if err := rows.Scan(&v, &ty); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		values = append(values, v)
+		types = append(types, ty)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	if want := []string{"real", "real", "real"}; !reflect.DeepEqual(types, want) {
+		t.Errorf("typeof = %v, want %v: a double column stays REAL whatever it holds", types, want)
+	}
+	if len(values) != 3 || !math.IsInf(values[0], 1) || !math.IsInf(values[1], -1) || values[2] != 1.5 {
+		t.Errorf("values = %v, want [+Inf -Inf 1.5]", values)
+	}
+}
+
+// TestParquetNaNBecomesNull pins the one value SQLite cannot hold. It has no NaN
+// at all — a computed one is stored as NULL — so a NaN carried by a Parquet
+// double becomes NULL rather than the word "NaN" sitting in a REAL column as
+// text.
+func TestParquetNaNBecomesNull(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "src.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if _, err := db.ExecContext(ctx, `CREATE TABLE m (v REAL);`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO m VALUES (?);`, math.NaN()); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(dir, "out")
+	if err := DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
+		t.Fatalf("DumpDatabase: %v", err)
+	}
+
+	reloaded, err := OpenContext(ctx, filepath.Join(out, "m.parquet"))
+	if err != nil {
+		t.Fatalf("OpenContext: %v", err)
+	}
+	defer func() { _ = reloaded.Close() }()
+
+	var ty string
+	if err := reloaded.QueryRowContext(ctx, `SELECT typeof(v) FROM m;`).Scan(&ty); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if ty != "null" {
+		t.Errorf("typeof = %q, want \"null\": SQLite has no NaN to store", ty)
 	}
 }

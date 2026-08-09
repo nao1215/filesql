@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A Parquet double holding an infinity imports as a REAL instead of as text. The column type comes from the Parquet schema, but the value reached SQLite as the text `%g` renders, and `+Inf` is not a number to SQLite's REAL affinity: the cell was stored as TEXT inside a column declared REAL, so `typeof()` answered `text` for a value the file held as a double, and comparisons on it ordered lexically. An infinity now renders as `9e999`, which SQLite parses back to one. A NaN renders as NULL, because SQLite has no NaN at all — a computed one is NULL there — and the word would leave the same text-in-a-REAL-column mismatch.
+
 ## [0.40.0] - 2026-08-09
 
 ### Added
