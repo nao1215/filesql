@@ -42,6 +42,14 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
+	// M-21: "!" is MySQL's NOT, and it binds tighter than every operator the
+	// passes below rewrite, so it is resolved before them: "!a ^ b" is
+	// "(!a) ^ b", and a "^" pass that ran first would take "a" for its left
+	// operand and leave the negation outside the call.
+	out, err = unaryNotPass(out)
+	if err != nil {
+		return nil, err
+	}
 	// M-11: MySQL's "/" is floating-point division, so 5/2 is 2.5 rather than
 	// the 2 SQLite gives for two integers.
 	out, err = binaryOperatorPass(out, "/", "mysql_divide")
@@ -62,11 +70,6 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	// would reassociate "a AND b XOR c" into something MySQL never meant.
 	if err := rejectWordPass(out, "XOR",
 		"SQLite has no operator with its precedence; write (a AND NOT b) OR (NOT a AND b)"); err != nil {
-		return nil, err
-	}
-	// M-21: "!" is MySQL's NOT, and it binds tighter than a comparison.
-	out, err = unaryNotPass(out)
-	if err != nil {
 		return nil, err
 	}
 	// M-12/M-13/M-21: MySQL reads "||" as a logical OR under its default

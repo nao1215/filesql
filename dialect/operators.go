@@ -242,29 +242,61 @@ func callTokens(name string, a, b []token) []token {
 	return repl
 }
 
-// fnBitXor implements MySQL's "^", a bitwise exclusive OR over 64-bit integers.
-// SQLite has &, | and ~ but no XOR operator, and the expression built from them
-// would evaluate each operand twice.
+// fnBitXor implements MySQL's "^", a bitwise exclusive OR. SQLite has &, | and ~
+// but no XOR operator, and the expression built from them would evaluate each
+// operand twice.
+//
+// The arithmetic is unsigned, as MySQL's bitwise operators are: an operand with
+// the high bit set is 2^64-1 rather than -1 there, and an operand written past
+// int64 is an ordinary literal. The result comes back as the same 64 bits in
+// SQLite's only integer, which is signed, so a result with the high bit set
+// reads as a negative number where MySQL would print it unsigned.
 //
 // A NULL operand gives NULL, as every arithmetic operator in SQL does. An
 // operand that is not a number gives NULL rather than an error, as the other
 // operator helpers here do.
 func fnBitXor(args []driver.Value) (driver.Value, error) {
-	a, ok1 := toInt(args[0])
-	b, ok2 := toInt(args[1])
+	a, ok1 := toUint64Bits(args[0])
+	b, ok2 := toUint64Bits(args[1])
 	if !ok1 || !ok2 {
 		return nil, nil
 	}
-	return a ^ b, nil
+	return int64(a ^ b), nil //nolint:gosec // the bits are the value; SQLite has no unsigned integer
+}
+
+// toUint64Bits reads an operand as the 64 bits MySQL's bitwise operators work
+// on. A negative number is its two's complement, and a text operand past int64
+// is read as the unsigned literal MySQL would have taken it for.
+func toUint64Bits(v driver.Value) (uint64, bool) {
+	if s, ok := v.(string); ok {
+		if n, err := strconv.ParseUint(strings.TrimSpace(s), 10, 64); err == nil {
+			return n, true
+		}
+	}
+	if b, ok := v.([]byte); ok {
+		if n, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64); err == nil {
+			return n, true
+		}
+	}
+	n, ok := toInt(v)
+	if !ok {
+		return 0, false
+	}
+	return uint64(n), true //nolint:gosec // a negative operand is its two's complement, which is what MySQL uses
 }
 
 // unaryNotPass rewrites MySQL's "!" into a parenthesized NOT over the primary it
 // applies to.
 //
 // MySQL's "!" binds tighter than a comparison while SQLite's NOT binds looser
-// than one, so "!a = b" written as
-// "NOT a = b" changes from negating a to negating the comparison. Wrapping the
-// result keeps it a primary, which is what the operator was.
+// than one, so "!a = b" written as "NOT a = b" changes from negating a to
+// negating the comparison. Wrapping the result keeps it a primary, which is what
+// the operator was.
+//
+// A run of them is one operand each way round: "!!a" is a double negation in
+// MySQL, and the operand of the last one is what the primary rule applies to.
+// The operand is rewritten too, so a "!" inside a parenthesized one is not left
+// for SQLite.
 //
 // "!=" is one token to the tokenizer, so a not-equal comparison never reaches
 // here.
@@ -277,14 +309,35 @@ func unaryNotPass(tokens []token) ([]token, error) {
 			i++
 			continue
 		}
-		start := nextSig(tokens, i+1)
-		end, ok := primaryEndForward(tokens, i+1)
+
+		// Every "!" up to the operand, so "!!a" negates twice rather than failing
+		// on an operand that is another "!".
+		depth := 0
+		j := i
+		for j >= 0 && j < len(tokens) && isOpEq(tokens[j], "!") {
+			depth++
+			j = nextSig(tokens, j+1)
+		}
+		if j < 0 {
+			return nil, fmt.Errorf("%w: operand of ! is not a primary expression", ErrUnsupportedSyntax)
+		}
+		start := j
+		end, ok := primaryEndForward(tokens, j)
 		if !ok {
 			return nil, fmt.Errorf("%w: operand of ! is not a primary expression", ErrUnsupportedSyntax)
 		}
-		out = append(out, opToken("("), wordToken("NOT"), spaceToken())
-		out = append(out, tokens[start:end+1]...)
-		out = append(out, opToken(")"))
+		operand, err := unaryNotPass(tokens[start : end+1])
+		if err != nil {
+			return nil, err
+		}
+
+		for range depth {
+			out = append(out, opToken("("), wordToken("NOT"), spaceToken())
+		}
+		out = append(out, operand...)
+		for range depth {
+			out = append(out, opToken(")"))
+		}
 		i = end + 1
 	}
 	return out, nil

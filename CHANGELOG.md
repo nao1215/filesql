@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- MySQL's logical and bitwise operators that SQLite does not share are translated ([nao1215/sqly#893](https://github.com/nao1215/sqly/issues/893)). `&&` becomes `AND`. `!` becomes a parenthesized `NOT`: MySQL's `!` binds tighter than a comparison while SQLite's `NOT` binds looser, so a bare `NOT` would turn `!a = b` into a negation of the comparison. `^` has no SQLite operator at all and becomes a `mysql_bit_xor` helper call rather than the `(a|b)&~(a&b)` expansion, which would evaluate each operand twice.
+- MySQL's logical and bitwise operators that SQLite does not share are translated ([nao1215/sqly#893](https://github.com/nao1215/sqly/issues/893)). `&&` becomes `AND`. `!` becomes a parenthesized `NOT`: MySQL's `!` binds tighter than a comparison while SQLite's `NOT` binds looser, so a bare `NOT` would turn `!a = b` into a negation of the comparison. `^` has no SQLite operator at all and becomes a `mysql_bit_xor` helper call rather than the `(a|b)&~(a&b)` expansion, which would evaluate each operand twice; its arithmetic is unsigned, as MySQL's bitwise operators are, and the result comes back as the same 64 bits in SQLite's only integer, which is signed.
 - BigQuery's `SAFE.` call prefix is translated ([nao1215/sqly#894](https://github.com/nao1215/sqly/issues/894)). `SAFE.DIVIDE(1, 0)` is now the same query as `SAFE_DIVIDE(1, 0)`; BigQuery's own documentation writes these functions with the prefix. A `SAFE.` prefix on any other function is refused rather than dropped.
 
 ### Fixed

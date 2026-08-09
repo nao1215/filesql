@@ -84,6 +84,17 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-21_bitxor_in_group_by", "SELECT a FROM t GROUP BY a ^ b", "SELECT a FROM t GROUP BY mysql_bit_xor(a, b)"},
 		{"M-21_bitxor_in_window", "SELECT SUM(a) OVER (PARTITION BY b ^ c) FROM t", `SELECT SUM(a) OVER (PARTITION BY mysql_bit_xor(b, c)) AS "SUM(a) OVER (PARTITION BY b ^ c)" FROM t`},
 		{"M-21_bang_in_where", "SELECT a FROM t WHERE !b", "SELECT a FROM t WHERE (NOT b)"},
+		// "!" binds tighter than every operator rewritten below it, so it has to be
+		// resolved first: taken the other way round, the negation would end up
+		// outside the call and apply to the whole thing.
+		{"M-21_bang_left_of_bitxor", "SELECT !a ^ b FROM t", `SELECT mysql_bit_xor((NOT a), b) AS "!a ^ b" FROM t`},
+		{"M-21_bang_right_of_bitxor", "SELECT a ^ !b FROM t", `SELECT mysql_bit_xor(a, (NOT b)) AS "a ^ !b" FROM t`},
+		{"M-21_bang_left_of_divide", "SELECT !a / b FROM t", `SELECT mysql_divide((NOT a), b) AS "!a / b" FROM t`},
+		// A run of them negates as many times, and one inside a parenthesized
+		// operand is rewritten too rather than left for SQLite.
+		{"M-21_bang_double", "SELECT !!a FROM t", `SELECT (NOT (NOT a)) AS "!!a" FROM t`},
+		{"M-21_bang_nested_paren", "SELECT !(!a) FROM t", `SELECT (NOT ((NOT a))) AS "!(!a)" FROM t`},
+		{"M-21_bang_inside_call", "SELECT f(!a) FROM t", `SELECT f((NOT a)) AS "f(!a)" FROM t`},
 
 		{"unrelated_function_untouched", "SELECT COALESCE(a, b), SUM(c) FROM t", "SELECT COALESCE(a, b), SUM(c) FROM t"},
 		{"extract_without_from_passthrough", "SELECT EXTRACT(x) FROM t", "SELECT EXTRACT(x) FROM t"},
