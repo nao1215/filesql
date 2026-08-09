@@ -162,3 +162,69 @@ func TestOpenContextPreservesZeroPaddedCodes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "00501", got)
 }
+
+// TestSurroundingWhitespaceKeepsAValueText covers the other way a numeric column
+// rewrites what it was given. SQLite's affinity converts " 5 " to 5, so the
+// spaces the file quoted were gone, while the text column beside it kept its
+// own: the same input was preserved or altered depending on what it looked like.
+//
+// A value with no surrounding whitespace is unaffected, and whitespace around
+// something that is not a number was already text.
+func TestSurroundingWhitespaceKeepsAValueText(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "a padded integer", value: " 5 ", want: true},
+		{name: "a leading-space integer", value: "  42", want: true},
+		{name: "a trailing-space integer", value: "42 ", want: true},
+		{name: "a padded real", value: " 1.5 ", want: true},
+		{name: "a padded negative", value: " -7 ", want: true},
+		{name: "a plain integer", value: "5", want: false},
+		{name: "a plain real", value: "1.5", want: false},
+		{name: "padded text", value: " ab ", want: false},
+		{name: "whitespace only", value: "   ", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := mustStayText(tt.value); got != tt.want {
+				t.Errorf("mustStayText(%q) = %v, want %v", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestQuotedWhitespaceSurvivesTheLoad is the same rule seen through a load: both
+// columns keep the bytes the file quoted, which is what the quotes said.
+func TestQuotedWhitespaceSurvivesTheLoad(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "padded.csv")
+	if err := os.WriteFile(path, []byte("num,txt\n\" 5 \",\" ab \"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := OpenContext(ctx, path)
+	if err != nil {
+		t.Fatalf("OpenContext: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var num, txt string
+	if err := db.QueryRowContext(ctx, "SELECT num, txt FROM padded").Scan(&num, &txt); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if num != " 5 " {
+		t.Errorf("num = %q, want %q: the quotes made the spaces part of the value", num, " 5 ")
+	}
+	if txt != " ab " {
+		t.Errorf("txt = %q, want %q", txt, " ab ")
+	}
+}
