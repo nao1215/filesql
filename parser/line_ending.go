@@ -2,7 +2,6 @@ package parser
 
 import (
 	"bufio"
-	"bytes"
 	"errors"
 	"io"
 )
@@ -23,12 +22,12 @@ const lineEndingSniffLimit = 64 * 1024
 //
 // The convention is decided from the start of the file rather than by
 // translating every carriage return that appears, because a carriage return
-// inside a quoted field is data. Translation happens only for a file whose first
-// 64 KiB hold a carriage return outside quotes and no line feed at all, and only
-// carriage returns outside quotes are translated, so a quoted one survives in
-// either kind of file. A first record longer than that window is left alone
-// rather than guessed at: reading it as one line is what happens today, while a
-// wrong guess would rewrite data.
+// inside a quoted field is data. Only what sits outside quotes counts, on both
+// sides of the question: a file is read this way when its first 64 KiB hold a
+// carriage return outside quotes and no line feed outside them, and only
+// carriage returns outside quotes are translated. A first record longer than
+// that window is left alone rather than guessed at: reading it as one line is
+// what happens today, while a wrong guess would rewrite data.
 func NormalizeLineEndings(reader io.Reader) io.Reader {
 	return &lineEndingReader{buffered: bufio.NewReaderSize(reader, lineEndingSniffLimit)}
 }
@@ -95,26 +94,32 @@ func (l *lineEndingReader) sniff() {
 // usesCarriageReturnTerminator reports whether window comes from a file that
 // ends its lines with a lone carriage return.
 //
-// Two conditions, because either alone accepts a file it should not. A line feed
-// anywhere says the file already has a terminator this stack understands, so its
-// carriage returns are data. A carriage return inside quotes is data as well,
-// and a record long enough to fill the window can hold one, so the carriage
-// return that decides has to be outside them.
+// Only what sits outside quotes is a terminator; inside them both bytes are
+// data, and a record long enough to fill the window can hold either one. So a
+// quoted line feed does not disqualify a carriage-return file, and a quoted
+// carriage return does not qualify one.
+//
+// Two conditions, because either alone accepts a file it should not. An
+// unquoted line feed says the file already has a terminator this stack
+// understands, which leaves an unquoted carriage return beside it as the stray
+// byte of a malformed row rather than a row boundary. An unquoted carriage
+// return is what says the file has no other terminator to be read by.
 func usesCarriageReturnTerminator(window []byte) bool {
-	if bytes.ContainsRune(window, '\n') {
-		return false
-	}
-
 	inQuotes := false
+	sawCarriageReturn := false
 	for _, c := range window {
 		switch c {
 		case '"':
 			inQuotes = !inQuotes
+		case '\n':
+			if !inQuotes {
+				return false
+			}
 		case '\r':
 			if !inQuotes {
-				return true
+				sawCarriageReturn = true
 			}
 		}
 	}
-	return false
+	return sawCarriageReturn
 }

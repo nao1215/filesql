@@ -53,6 +53,16 @@ func TestNormalizeLineEndings(t *testing.T) {
 			input: "a,b\rx,\"y\rz\"\r",
 			want:  "a,b\nx,\"y\rz\"\n",
 		},
+		{
+			name:  "a quoted line feed does not disqualify a CR-terminated file",
+			input: "a,b\rx,\"y\nz\"\r",
+			want:  "a,b\nx,\"y\nz\"\n",
+		},
+		{
+			name:  "a stray carriage return beside a line feed stays data",
+			input: "a,b\nx\r,y\n",
+			want:  "a,b\nx\r,y\n",
+		},
 	}
 
 	for _, tt := range tests {
