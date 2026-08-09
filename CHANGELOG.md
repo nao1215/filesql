@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Concat` and `ConcatAll` agree on what frames go together ([#275](https://github.com/nao1215/filesql/issues/275), [#284](https://github.com/nao1215/filesql/issues/284)). `Concat` compared column slices positionally and refused frames whose columns were the same set in a different order, reporting `different columns` about columns that were the same, while `ConcatAll` accepted that very pair; it now compares the set, since a row is a map keyed by column name and there is nothing to reconcile, and the result keeps the receiver's order. `ConcatAll` dropped a nil frame silently, producing a result quietly missing that data, while `Concat` rejected the same nil — a nil is almost always a constructor whose error was mishandled, so both now refuse it.
+
 - A `frame` aggregate says when it has no answer instead of inventing one ([#273](https://github.com/nao1215/filesql/issues/273), [#281](https://github.com/nao1215/filesql/issues/281)). `Sum` over a column with no number in it returned 0 for every group, which is what a real total of zero looks like, and `Mean` returned nil; both now refuse the column by name, while a group inside a numeric column that holds no value gets nil rather than 0. `Min` and `Max` over a text column returned nil, discarding an answer the data plainly held: they now follow SQLite's ordering, where a number sorts before any text and text compares lexically, so the minimum of `banana` and `apple` is `apple`.
 
 ### Breaking Changes

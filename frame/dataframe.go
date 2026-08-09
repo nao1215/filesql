@@ -689,12 +689,16 @@ func (df *DataFrame) hasColumn(name string) bool {
 // This is useful for combining data from multiple sources with the same schema.
 //
 // Requirements:
-//   - All DataFrames must have exactly the same columns in the same order
-//   - If columns differ, use ConcatAll instead for flexible concatenation
+//   - All DataFrames must hold the same columns, in any order
+//   - If the columns differ, use ConcatAll, which takes the union of them
+//
+// The result keeps the receiver's column order. Order does not decide whether a
+// concat is allowed, because a row is a map keyed by column name and there is
+// nothing to reconcile.
 //
 // Returns an error if:
 //   - Any DataFrame is nil
-//   - Columns don't match (different names or different order)
+//   - The columns are not the same set
 //
 // Example - Combining monthly data:
 //
@@ -720,12 +724,16 @@ func (df *DataFrame) Concat(others ...*DataFrame) (*DataFrame, error) {
 		return df.clone(), nil
 	}
 
-	// Validate all DataFrames have the same columns
+	// Validate all DataFrames hold the same columns
 	for i, other := range others {
 		if other == nil {
 			return nil, fmt.Errorf("DataFrame at index %d is nil", i+1)
 		}
-		if !slices.Equal(df.columns, other.columns) {
+		// The set, not the order. A row is a map keyed by column name, so a frame
+		// whose columns are the same in a different order concatenates without
+		// anything to reconcile — and refusing it said "different columns" about
+		// columns that were the same, while ConcatAll accepted the very pair.
+		if !sameColumnSet(df.columns, other.columns) {
 			return nil, fmt.Errorf("DataFrame at index %d has different columns: expected %v, got %v",
 				i+1, df.columns, other.columns)
 		}
@@ -759,6 +767,25 @@ func (df *DataFrame) Concat(others ...*DataFrame) (*DataFrame, error) {
 		columns: resultColumns,
 		rows:    resultRows,
 	}, nil
+}
+
+// sameColumnSet reports whether two column lists name the same columns, in any
+// order. A duplicate name would make the counts disagree, which the length check
+// catches before the membership one.
+func sameColumnSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	inA := make(map[string]struct{}, len(a))
+	for _, col := range a {
+		inA[col] = struct{}{}
+	}
+	for _, col := range b {
+		if _, ok := inA[col]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // ConcatAll concatenates multiple DataFrames vertically, automatically handling
@@ -802,12 +829,18 @@ func ConcatAll(frames ...*DataFrame) (*DataFrame, error) {
 		}, nil
 	}
 
+	// A nil frame is almost always an upstream constructor whose error was
+	// mishandled. Skipping it produced a result quietly missing that data, while
+	// Concat rejected the same nil — so the two disagreed about what a nil means.
+	for i, df := range frames {
+		if df == nil {
+			return nil, fmt.Errorf("DataFrame at index %d is nil", i)
+		}
+	}
+
 	// Collect all unique columns
 	columnSet := make(map[string]struct{})
 	for _, df := range frames {
-		if df == nil {
-			continue
-		}
 		for _, col := range df.columns {
 			columnSet[col] = struct{}{}
 		}
@@ -823,17 +856,12 @@ func ConcatAll(frames ...*DataFrame) (*DataFrame, error) {
 	// Calculate total rows
 	totalRows := 0
 	for _, df := range frames {
-		if df != nil {
-			totalRows += len(df.rows)
-		}
+		totalRows += len(df.rows)
 	}
 
 	// Build result rows
 	resultRows := make([]map[string]any, 0, totalRows)
 	for _, df := range frames {
-		if df == nil {
-			continue
-		}
 		for _, row := range df.rows {
 			newRow := make(map[string]any, len(allColumns))
 			for _, col := range allColumns {

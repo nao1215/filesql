@@ -1816,15 +1816,18 @@ func TestConcatAll(t *testing.T) {
 		assert.Empty(t, result.Columns())
 	})
 
-	t.Run("skips nil DataFrames", func(t *testing.T) {
+	// A nil frame is almost always a constructor whose error was mishandled.
+	// Skipping it returned a result quietly missing that data, while Concat
+	// rejected the same nil.
+	t.Run("rejects a nil DataFrame, as Concat does", func(t *testing.T) {
 		t.Parallel()
 
 		df := NewDataFrameFromRecords([]map[string]any{{"id": int64(1)}})
 
-		result, err := ConcatAll(df, nil, df)
+		_, err := ConcatAll(df, nil, df)
 
-		require.NoError(t, err)
-		assert.Equal(t, 2, result.Len())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "index 1")
 	})
 
 	t.Run("handles DataFrames with completely different columns", func(t *testing.T) {
@@ -2967,5 +2970,68 @@ func TestToTSVTakesFieldsLiterally(t *testing.T) {
 		reloaded, err := NewDataFrameFromPath(out)
 		require.NoError(t, err)
 		assert.Equal(t, df.ToRecords(), reloaded.ToRecords())
+	})
+}
+
+// TestConcatAndConcatAllAgreeOnCompatibleFrames pins the two ways they used to
+// disagree about the same pair of frames.
+//
+// Concat compared column slices positionally and refused frames whose columns
+// were the same set in a different order, reporting "different columns" about
+// columns that were the same — while ConcatAll accepted that very pair. And
+// ConcatAll dropped a nil frame silently while Concat rejected it.
+func TestConcatAndConcatAllAgreeOnCompatibleFrames(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Concat accepts the same columns in a different order", func(t *testing.T) {
+		t.Parallel()
+
+		left, err := NewDataFrame(strings.NewReader("b,a\n1,2\n"), CSV)
+		require.NoError(t, err)
+		right, err := NewDataFrame(strings.NewReader("a,b\n3,4\n"), CSV)
+		require.NoError(t, err)
+
+		got, err := left.Concat(right)
+
+		require.NoError(t, err)
+		// The receiver's order is the result's, which is what it was before for
+		// the frames Concat already accepted.
+		assert.Equal(t, []string{"b", "a"}, got.Columns())
+		assert.Equal(t, []map[string]any{
+			{"b": int64(1), "a": int64(2)},
+			{"b": int64(4), "a": int64(3)},
+		}, got.ToRecords())
+	})
+
+	t.Run("Concat still refuses a genuinely different set", func(t *testing.T) {
+		t.Parallel()
+
+		left, err := NewDataFrame(strings.NewReader("a,b\n1,2\n"), CSV)
+		require.NoError(t, err)
+		right, err := NewDataFrame(strings.NewReader("a,c\n3,4\n"), CSV)
+		require.NoError(t, err)
+
+		_, err = left.Concat(right)
+
+		require.Error(t, err)
+	})
+
+	t.Run("Concat still refuses a nil", func(t *testing.T) {
+		t.Parallel()
+
+		left, err := NewDataFrame(strings.NewReader("a\n1\n"), CSV)
+		require.NoError(t, err)
+
+		_, err = left.Concat(nil)
+
+		require.Error(t, err)
+	})
+
+	t.Run("ConcatAll refuses a lone nil", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := ConcatAll(nil)
+
+		require.Error(t, err)
 	})
 }
