@@ -1393,7 +1393,8 @@ func TestDataFrameCombinedOperations(t *testing.T) {
 		originalCols := df.Columns()
 
 		// Perform various operations
-		_, _ = df.Select("name")
+		_, err = df.Select("name")
+		require.NoError(t, err)
 		_ = df.Filter(func(_ map[string]any) bool { return false })
 		_ = df.Mutate("new_col", func(_ map[string]any) any { return "value" })
 
@@ -2451,7 +2452,8 @@ func TestDataFrame_Drop(t *testing.T) {
 			{"name": "Alice", "age": int64(30)},
 		})
 
-		_, _ = df.Drop("age")
+		_, err := df.Drop("age")
+		require.NoError(t, err)
 
 		assert.Equal(t, []string{"age", "name"}, df.Columns())
 	})
