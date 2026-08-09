@@ -67,7 +67,9 @@ package filesql
 // table exposes exist only in the original, so exporting reads the file the
 // tables were loaded from and applies the edits to it. That file must still
 // exist and be readable when the export runs; the path is recorded in the
-// database, in the reserved table _filesql_sources.
+// database, in the reserved table _filesql_sources. Names beginning with
+// _filesql_ belong to this package, and an input that would load into one is
+// refused.
 //
 // A database loaded from an io.Reader has no source file, so DumpACH cannot
 // export it. Parse the reader with parser/ach and pass the result to
@@ -320,6 +322,9 @@ func IsACHBaseTableName(tableName string) (baseName string, isACH bool) {
 // streamACHFileToDatabase streams an ACH file to the database as multiple tables
 func streamACHFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, filePath, sourcePath string, replaceExisting bool) error {
 	baseTableName := sanitizeTableName(tableFromFilePath(filePath))
+	if err := validateTableName(baseTableName); err != nil {
+		return err
+	}
 
 	tables, _, err := parseACHFile(reader, baseTableName)
 	if err != nil {

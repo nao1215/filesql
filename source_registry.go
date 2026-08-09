@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	achconv "github.com/nao1215/filesql/parser/ach"
 	wireconv "github.com/nao1215/filesql/parser/wire"
@@ -22,11 +23,14 @@ import (
 // rolled-back load discard the metadata with the tables.
 const sourceTableName = "_filesql_sources"
 
-// sourceTableLikePattern matches the reserved _filesql_ prefix in a LIKE
-// clause, so this package's own bookkeeping tables stay hidden from callers and
-// from dumps. The underscores are escaped because LIKE reads a bare underscore
-// as a wildcard, which would also hide a caller's table named, say,
-// xfilesqly_totals.
+// sourceTablePrefix is reserved for this package's own bookkeeping tables.
+// A caller's table cannot occupy it; see validateTableName.
+const sourceTablePrefix = "_filesql_"
+
+// sourceTableLikePattern matches sourceTablePrefix in a LIKE clause, so those
+// tables stay hidden from callers and from dumps. The underscores are escaped
+// because LIKE reads a bare underscore as a wildcard, which would also hide a
+// caller's table named, say, xfilesqly_totals.
 const sourceTableLikePattern = `\_filesql\_%`
 
 // sourceFormat names the reader that can rebuild a file's structure.
@@ -159,4 +163,34 @@ func wireTableSetForDump(ctx context.Context, db *sql.DB, baseTableName string) 
 		return nil, fmt.Errorf("%w: failed to parse the Fedwire file %s that %q was loaded from: %w", ErrWire, path, baseTableName, err)
 	}
 	return tableSet, nil
+}
+
+// validateTableName refuses a table name in this package's reserved namespace.
+//
+// The prefix is only reserved if nothing else can occupy it. Hiding _filesql_
+// tables from dumps and listings while still loading a file named
+// _filesql_report.csv into one would make that file's table exist and be
+// queryable but absent from everything that enumerates tables — the kind of
+// half-present table a caller cannot debug. SQLite answers the same way for its
+// own sqlite_ prefix, so the rule and its message follow that precedent.
+//
+// The comparison ignores ASCII case because the LIKE that hides these tables
+// does: without that, _FILESQL_report loaded and then vanished from every
+// listing, which is the state this check exists to prevent.
+func validateTableName(tableName string) error {
+	if hasReservedPrefix(tableName) {
+		return fmt.Errorf("%w: %q begins with %s, which this package keeps for its own tables; a table under it would be hidden from dumps and from table listings",
+			ErrReservedTableName, tableName, sourceTablePrefix)
+	}
+	return nil
+}
+
+// hasReservedPrefix reports whether tableName starts with sourceTablePrefix,
+// folding ASCII case only. SQLite's LIKE folds exactly that much, so matching it
+// here keeps the set of refused names equal to the set of hidden ones.
+func hasReservedPrefix(tableName string) bool {
+	if len(tableName) < len(sourceTablePrefix) {
+		return false
+	}
+	return strings.EqualFold(tableName[:len(sourceTablePrefix)], sourceTablePrefix)
 }
