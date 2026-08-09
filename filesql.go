@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -804,6 +805,54 @@ func (b *bytesReaderAt) Read(p []byte) (int, error) {
 	return b.ReadAt(p, 0)
 }
 
+// arrowCellIsNull reports whether a cell has no value SQLite can store: a
+// Parquet null, or a NaN, which SQLite has no representation for at all — a
+// computed NaN is NULL there, so NULL is what the value already means in the
+// destination. Left as text it would sit in a column declared REAL as the word
+// "NaN".
+func arrowCellIsNull(arr arrow.Array, index int64) bool {
+	if arr.IsNull(int(index)) {
+		return true
+	}
+	switch a := arr.(type) {
+	case *array.Float32:
+		return math.IsNaN(float64(a.Value(int(index))))
+	case *array.Float64:
+		return math.IsNaN(a.Value(int(index)))
+	default:
+		return false
+	}
+}
+
+// sqliteFloatText renders a float at bitSize so SQLite's REAL affinity converts
+// it back to the same number, which "%g" does not for the three values that have
+// no decimal spelling.
+//
+// The column is declared REAL from the Parquet schema, and SQLite applies that
+// affinity to the text an import binds: "+Inf" is not a number to it, so the
+// cell was stored as TEXT inside a REAL column and typeof() answered "text" for
+// a value the file held as a double. "9e999" overflows to infinity when SQLite
+// parses it, which is the only spelling that survives.
+//
+// NaN renders as empty, the same as a null, because SQLite has no NaN at all: a
+// computed one becomes NULL there, so NULL is what the value already means in
+// the destination. Keeping the word would leave the same TEXT-in-a-REAL-column
+// mismatch this exists to remove.
+func sqliteFloatText(f float64, bitSize int) string {
+	// A literal SQLite overflows to an infinity while parsing it. There is no
+	// spelling of the value itself that its REAL affinity accepts.
+	const infinityLiteral = "9e999"
+	switch {
+	case math.IsInf(f, 1):
+		return infinityLiteral
+	case math.IsInf(f, -1):
+		return "-" + infinityLiteral
+	case math.IsNaN(f):
+		return ""
+	}
+	return strconv.FormatFloat(f, 'g', -1, bitSize)
+}
+
 // extractValueFromArrowArray extracts a value from an Arrow array at the given index
 func extractValueFromArrowArray(arr arrow.Array, index int64) string {
 	if arr.IsNull(int(index)) {
@@ -836,9 +885,9 @@ func extractValueFromArrowArray(arr arrow.Array, index int64) string {
 		return strconv.FormatUint(a.Value(int(index)), 10)
 
 	case *array.Float32:
-		return fmt.Sprintf("%g", a.Value(int(index)))
+		return sqliteFloatText(float64(a.Value(int(index))), 32)
 	case *array.Float64:
-		return fmt.Sprintf("%g", a.Value(int(index)))
+		return sqliteFloatText(a.Value(int(index)), 64)
 
 	case *array.String:
 		return a.Value(int(index))
