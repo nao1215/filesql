@@ -123,6 +123,12 @@ func TestIsDateNumberFormat(t *testing.T) {
 		{name: "a currency", format: `"$"#,##0.00`, want: false},
 		{name: "a quoted word holding date letters", format: `#,##0" days"`, want: false},
 		{name: "a percentage", format: "0.0%", want: false},
+		// A backslash, an underscore, and an asterisk each draw the character
+		// after them as itself, so a date letter there is literal text.
+		{name: "a backslash-escaped date letter", format: `0 \d`, want: false},
+		{name: "an underscore-escaped date letter", format: "0_y", want: false},
+		{name: "an asterisk-escaped date letter", format: "0*d", want: false},
+		{name: "an escape before a real date token", format: `\d yyyy`, want: true},
 	}
 
 	for _, tt := range tests {

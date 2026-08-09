@@ -63,7 +63,14 @@ func NormalizeXLSXDates(f *excelize.File, sheet string, rows [][]string) [][]str
 // hours, not a day and a half after the epoch. Reading either as a calendar
 // datetime invents a date the cell never held.
 var builtinDateNumberFormats = map[int]struct{}{
+	// The English-stable date formats.
 	14: {}, 15: {}, 16: {}, 17: {}, 22: {},
+	// The East Asian locale date formats, which a workbook written in Japanese,
+	// Chinese, or Korean uses for the same thing — 27 is "yyyy年m月". The
+	// time-only IDs among them (32 to 35, 55, 56) are left out for the same
+	// reason 18 to 21 are.
+	27: {}, 28: {}, 29: {}, 30: {}, 31: {}, 36: {},
+	50: {}, 51: {}, 52: {}, 53: {}, 54: {}, 57: {}, 58: {},
 }
 
 // cellHoldsDate reports whether a cell's number format makes it a date.
@@ -101,9 +108,13 @@ func isDateNumberFormat(format string) bool {
 	inBracket := false
 	elapsed := false
 	dated := false
-	for i := range len(format) {
+	for i := 0; i < len(format); i++ {
 		c := format[i]
 		switch {
+		case c == '\\' || c == '_' || c == '*':
+			// These escape the character after them, which is drawn as itself:
+			// "0 \d" ends in a literal "d" and is a number, not a date.
+			i++
 		case c == '"':
 			inQuote = !inQuote
 		case inQuote:
