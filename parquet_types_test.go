@@ -9,6 +9,10 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/apache/arrow/go/v18/arrow"
+	"github.com/apache/arrow/go/v18/arrow/array"
+	"github.com/apache/arrow/go/v18/arrow/memory"
+	"github.com/apache/arrow/go/v18/parquet"
 	pqfile "github.com/apache/arrow/go/v18/parquet/file"
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
 	_ "modernc.org/sqlite"
@@ -329,7 +333,7 @@ func TestParquetNonFiniteRealStaysReal(t *testing.T) {
 	}
 	defer func() { _ = reloaded.Close() }()
 
-	rows, err := reloaded.QueryContext(ctx, `SELECT v, typeof(v) FROM m;`)
+	rows, err := reloaded.QueryContext(ctx, `SELECT v, typeof(v) FROM m ORDER BY rowid;`)
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -366,40 +370,149 @@ func TestParquetNonFiniteRealStaysReal(t *testing.T) {
 // at all — a computed one is stored as NULL — so a NaN carried by a Parquet
 // double becomes NULL rather than the word "NaN" sitting in a REAL column as
 // text.
+//
+// The file is written directly rather than dumped from SQLite, because SQLite
+// turns a NaN into NULL on the way in: a dumped file holds a null, and the
+// renderer this covers would never see a NaN at all.
 func TestParquetNaNBecomesNull(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	dir := t.TempDir()
-	db, err := sql.Open("sqlite", filepath.Join(dir, "src.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = db.Close() }()
+	path := filepath.Join(t.TempDir(), "nan.parquet")
+	writeFloat64Parquet(t, path, "v", []float64{math.NaN(), 1.5})
 
-	if _, err := db.ExecContext(ctx, `CREATE TABLE m (v REAL);`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO m VALUES (?);`, math.NaN()); err != nil {
-		t.Fatal(err)
-	}
-
-	out := filepath.Join(dir, "out")
-	if err := DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
-		t.Fatalf("DumpDatabase: %v", err)
-	}
-
-	reloaded, err := OpenContext(ctx, filepath.Join(out, "m.parquet"))
+	db, err := OpenContext(ctx, path)
 	if err != nil {
 		t.Fatalf("OpenContext: %v", err)
 	}
-	defer func() { _ = reloaded.Close() }()
+	defer func() { _ = db.Close() }()
 
-	var ty string
-	if err := reloaded.QueryRowContext(ctx, `SELECT typeof(v) FROM m;`).Scan(&ty); err != nil {
+	rows, err := db.QueryContext(ctx, `SELECT typeof(v) FROM nan ORDER BY rowid;`)
+	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
-	if ty != "null" {
-		t.Errorf("typeof = %q, want \"null\": SQLite has no NaN to store", ty)
+	defer func() { _ = rows.Close() }()
+
+	var types []string
+	for rows.Next() {
+		var ty string
+		if err := rows.Scan(&ty); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		types = append(types, ty)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	if want := []string{"null", "real"}; !reflect.DeepEqual(types, want) {
+		t.Errorf("typeof = %v, want %v: SQLite has no NaN to store, and the finite value beside it is untouched", types, want)
+	}
+}
+
+// TestParquetInfinityFromFileStaysReal reads an infinity written straight into a
+// Parquet double, which is what a file another tool produced looks like.
+func TestParquetInfinityFromFileStaysReal(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "inf.parquet")
+	writeFloat64Parquet(t, path, "v", []float64{math.Inf(1), math.Inf(-1)})
+
+	db, err := OpenContext(ctx, path)
+	if err != nil {
+		t.Fatalf("OpenContext: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	rows, err := db.QueryContext(ctx, `SELECT v, typeof(v) FROM inf ORDER BY rowid;`)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var (
+		values []float64
+		types  []string
+	)
+	for rows.Next() {
+		var (
+			v  float64
+			ty string
+		)
+		if err := rows.Scan(&v, &ty); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		values = append(values, v)
+		types = append(types, ty)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	if want := []string{"real", "real"}; !reflect.DeepEqual(types, want) {
+		t.Errorf("typeof = %v, want %v", types, want)
+	}
+	if len(values) != 2 || !math.IsInf(values[0], 1) || !math.IsInf(values[1], -1) {
+		t.Errorf("values = %v, want [+Inf -Inf]", values)
+	}
+}
+
+// TestSQLiteFloatText covers the renderer directly, including the float32 width
+// a Parquet FLOAT column is read at: rendering it as a float64 would hand SQLite
+// the expansion (3.141590118408203) instead of the number the file holds.
+func TestSQLiteFloatText(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		value   float64
+		bitSize int
+		want    string
+	}{
+		{name: "positive infinity is a literal SQLite overflows to one", value: math.Inf(1), bitSize: 64, want: "9e999"},
+		{name: "negative infinity likewise", value: math.Inf(-1), bitSize: 64, want: "-9e999"},
+		{name: "NaN is empty, which is how a null is rendered", value: math.NaN(), bitSize: 64, want: ""},
+		{name: "a finite double is unchanged", value: 1.5, bitSize: 64, want: "1.5"},
+		{name: "a float32 renders at its own width", value: float64(float32(3.14159)), bitSize: 32, want: "3.14159"},
+		{name: "a float32 infinity is the same literal", value: float64(float32(math.Inf(1))), bitSize: 32, want: "9e999"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := sqliteFloatText(tt.value, tt.bitSize); got != tt.want {
+				t.Errorf("sqliteFloatText(%v, %d) = %q, want %q", tt.value, tt.bitSize, got, tt.want)
+			}
+		})
+	}
+}
+
+// writeFloat64Parquet writes a one-column Parquet file of doubles, so a test can
+// hand the reader a value SQLite would not have let through on the way in.
+func writeFloat64Parquet(t *testing.T, path, column string, values []float64) {
+	t.Helper()
+
+	schema := arrow.NewSchema([]arrow.Field{{Name: column, Type: arrow.PrimitiveTypes.Float64, Nullable: true}}, nil)
+	builder := array.NewFloat64Builder(memory.NewGoAllocator())
+	defer builder.Release()
+	builder.AppendValues(values, nil)
+
+	arr := builder.NewArray()
+	defer arr.Release()
+	rec := array.NewRecord(schema, []arrow.Array{arr}, int64(len(values)))
+	defer rec.Release()
+	tbl := array.NewTableFromRecords(schema, []arrow.Record{rec})
+	defer tbl.Release()
+
+	f, err := os.Create(path) //nolint:gosec // test-owned path
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if err := pqarrow.WriteTable(tbl, f, 1024, parquet.NewWriterProperties(), pqarrow.DefaultWriterProps()); err != nil {
+		t.Fatalf("write parquet: %v", err)
 	}
 }

@@ -805,6 +805,25 @@ func (b *bytesReaderAt) Read(p []byte) (int, error) {
 	return b.ReadAt(p, 0)
 }
 
+// arrowCellIsNull reports whether a cell has no value SQLite can store: a
+// Parquet null, or a NaN, which SQLite has no representation for at all — a
+// computed NaN is NULL there, so NULL is what the value already means in the
+// destination. Left as text it would sit in a column declared REAL as the word
+// "NaN".
+func arrowCellIsNull(arr arrow.Array, index int64) bool {
+	if arr.IsNull(int(index)) {
+		return true
+	}
+	switch a := arr.(type) {
+	case *array.Float32:
+		return math.IsNaN(float64(a.Value(int(index))))
+	case *array.Float64:
+		return math.IsNaN(a.Value(int(index)))
+	default:
+		return false
+	}
+}
+
 // sqliteFloatText renders a float at bitSize so SQLite's REAL affinity converts
 // it back to the same number, which "%g" does not for the three values that have
 // no decimal spelling.
@@ -820,11 +839,14 @@ func (b *bytesReaderAt) Read(p []byte) (int, error) {
 // the destination. Keeping the word would leave the same TEXT-in-a-REAL-column
 // mismatch this exists to remove.
 func sqliteFloatText(f float64, bitSize int) string {
+	// A literal SQLite overflows to an infinity while parsing it. There is no
+	// spelling of the value itself that its REAL affinity accepts.
+	const infinityLiteral = "9e999"
 	switch {
 	case math.IsInf(f, 1):
-		return "9e999"
+		return infinityLiteral
 	case math.IsInf(f, -1):
-		return "-9e999"
+		return "-" + infinityLiteral
 	case math.IsNaN(f):
 		return ""
 	}

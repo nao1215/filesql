@@ -3,6 +3,7 @@ package parser
 import (
 	"bytes"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -421,6 +422,41 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 
 		assert.Equal(t, "1.5", extractValueFromArrowArray(arr, 0))
 		assert.Equal(t, "2.5", extractValueFromArrowArray(arr, 1))
+	})
+
+	// An infinity has no decimal spelling, and SQLite's REAL affinity cannot read
+	// "+Inf": rendered that way it lands in a column declared REAL as text. The
+	// literal below is one SQLite overflows to an infinity.
+	t.Run("renders a float32 infinity as a literal SQLite reads as one", func(t *testing.T) {
+		t.Parallel()
+
+		builder := array.NewFloat32Builder(pool)
+		defer builder.Release()
+		builder.AppendValues([]float32{float32(math.Inf(1)), float32(math.Inf(-1)), float32(math.NaN()), 3.14159}, nil)
+		arr := builder.NewArray()
+		defer arr.Release()
+
+		assert.Equal(t, "9e999", extractValueFromArrowArray(arr, 0))
+		assert.Equal(t, "-9e999", extractValueFromArrowArray(arr, 1))
+		assert.Equal(t, "", extractValueFromArrowArray(arr, 2))
+		// The width is the array's, not float64's: through a float64 this would be
+		// its expansion, 3.141590118408203.
+		assert.Equal(t, "3.14159", extractValueFromArrowArray(arr, 3))
+	})
+
+	t.Run("renders a float64 infinity the same way", func(t *testing.T) {
+		t.Parallel()
+
+		builder := array.NewFloat64Builder(pool)
+		defer builder.Release()
+		builder.AppendValues([]float64{math.Inf(1), math.Inf(-1), math.NaN(), 1.5}, nil)
+		arr := builder.NewArray()
+		defer arr.Release()
+
+		assert.Equal(t, "9e999", extractValueFromArrowArray(arr, 0))
+		assert.Equal(t, "-9e999", extractValueFromArrowArray(arr, 1))
+		assert.Equal(t, "", extractValueFromArrowArray(arr, 2))
+		assert.Equal(t, "1.5", extractValueFromArrowArray(arr, 3))
 	})
 
 	t.Run("extracts binary value", func(t *testing.T) {

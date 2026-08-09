@@ -204,11 +204,14 @@ func arrowColumnType(dt arrow.DataType) ColumnType {
 // the destination. Keeping the word would leave the same TEXT-in-a-REAL-column
 // mismatch this exists to remove.
 func sqliteFloatText(f float64, bitSize int) string {
+	// A literal SQLite overflows to an infinity while parsing it. There is no
+	// spelling of the value itself that its REAL affinity accepts.
+	const infinityLiteral = "9e999"
 	switch {
 	case math.IsInf(f, 1):
-		return "9e999"
+		return infinityLiteral
 	case math.IsInf(f, -1):
-		return "-9e999"
+		return "-" + infinityLiteral
 	case math.IsNaN(f):
 		return ""
 	}

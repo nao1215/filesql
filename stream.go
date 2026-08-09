@@ -663,8 +663,7 @@ func (p *streamingParser) parseParquetStream(reader io.Reader) (*table, error) {
 		for i := range numRows {
 			row := make(record, batch.NumCols())
 			for j, col := range batch.Columns() {
-				value := extractValueFromArrowArray(col, i)
-				row[j] = value
+				row[j] = extractValueFromArrowArray(col, i)
 			}
 			allRecords = append(allRecords, row)
 		}
@@ -799,7 +798,7 @@ func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chu
 			row := make(record, batch.NumCols())
 			nullRow := make([]bool, batch.NumCols())
 			for j, col := range batch.Columns() {
-				if col.IsNull(int(i)) {
+				if arrowCellIsNull(col, i) {
 					nullRow[j] = true
 					continue
 				}
