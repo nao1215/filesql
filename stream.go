@@ -221,6 +221,9 @@ func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 		}
 
 		recordMap := make(map[string]string)
+		// Labels are compared folded; see ltsvLabelKey. recordMap keeps them as
+		// written, because that is what the column is named.
+		seen := make(map[string]struct{})
 		for pair := range strings.SplitSeq(line, "\t") {
 			kv := strings.SplitN(pair, ":", 2)
 			if len(kv) == 2 {
@@ -233,9 +236,10 @@ func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 				// A label repeated within the same record cannot be two distinct
 				// columns; keeping the last value would silently drop the earlier
 				// one, so reject it. Ref nao1215/sqly#467.
-				if _, dup := recordMap[key]; dup {
-					return nil, fmt.Errorf("%w: duplicate column name %q in LTSV record", ErrParsing, key)
+				if _, dup := seen[ltsvLabelKey(key)]; dup {
+					return nil, fmt.Errorf("%w: %q in LTSV record", errDuplicateColumnName, key)
 				}
+				seen[ltsvLabelKey(key)] = struct{}{}
 				recordMap[key] = value
 				labels.add(key)
 			}
@@ -506,6 +510,9 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 		}
 
 		recordMap := make(map[string]string)
+		// Labels are compared folded; see ltsvLabelKey. recordMap keeps them as
+		// written, because that is what the column is named.
+		seen := make(map[string]struct{})
 		for pair := range strings.SplitSeq(line, "\t") {
 			kv := strings.SplitN(pair, ":", 2)
 			if len(kv) == 2 {
@@ -518,9 +525,10 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 				// A label repeated within the same record cannot be two distinct
 				// columns; keeping the last value would silently drop the earlier
 				// one, so reject it. Ref nao1215/sqly#467.
-				if _, dup := recordMap[key]; dup {
-					return fmt.Errorf("%w: duplicate column name %q in LTSV record", ErrParsing, key)
+				if _, dup := seen[ltsvLabelKey(key)]; dup {
+					return fmt.Errorf("%w: %q in LTSV record", errDuplicateColumnName, key)
 				}
+				seen[ltsvLabelKey(key)] = struct{}{}
 				recordMap[key] = value
 			}
 		}

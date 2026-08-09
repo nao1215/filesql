@@ -795,6 +795,9 @@ func parseLTSV(reader io.Reader) (*TableData, error) {
 		}
 
 		recordMap := make(map[string]string)
+		// Labels are compared folded; see ltsvLabelKey. recordMap keeps them as
+		// written, because that is what the column is named.
+		seen := make(map[string]struct{})
 		pairs := strings.Split(line, "\t")
 		for _, pair := range pairs {
 			kv := strings.SplitN(pair, ":", 2)
@@ -807,9 +810,10 @@ func parseLTSV(reader io.Reader) (*TableData, error) {
 				value := kv[1]
 				// A label repeated within one record cannot map to distinct columns.
 				// Reject it rather than silently keeping only the last value.
-				if _, dup := recordMap[key]; dup {
+				if _, dup := seen[ltsvLabelKey(key)]; dup {
 					return nil, fmt.Errorf("duplicate column name %q in LTSV record", key)
 				}
+				seen[ltsvLabelKey(key)] = struct{}{}
 				recordMap[key] = value
 				// Track headers in first-seen order
 				if !headerSeen[key] {
@@ -876,6 +880,15 @@ func validateColumnNames(columns []string) error {
 		folded[foldedName] = true
 	}
 	return nil
+}
+
+// ltsvLabelKey is how two LTSV labels are compared for being one column. LTSV
+// carries its labels on every record rather than in a header, so the duplicate
+// check runs per record and had its own comparison, which was exact: a record
+// holding "A:1\ta:2" reached SQLite, which folds ASCII case, and failed there
+// instead.
+func ltsvLabelKey(label string) string {
+	return asciiFold(strings.TrimSpace(label))
 }
 
 // asciiFold lowercases the ASCII letters in s, which is how SQLite compares two

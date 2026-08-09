@@ -1,6 +1,8 @@
 package filesql
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,5 +120,58 @@ func TestLTSVColumnOrderSurvivesChunking(t *testing.T) {
 
 		require.Equal(t, []string{"id", "name", "age"}, got)
 		assert.Equal(t, 500, count)
+	}
+}
+
+// TestLTSVCaseOnlyDuplicateLabelIsRefused pins the gap the header formats had
+// closed. LTSV carries its labels on every record, so its duplicate check is its
+// own, and that one compared labels exactly: "A:1\ta:2" passed it and failed at
+// SQLite instead, which folds ASCII case — a raw CREATE TABLE error three wraps
+// deep, with no ErrDuplicateColumn to match.
+//
+// Only ASCII case is folded, as SQLite folds only that, so "ä" and "Ä" stay two
+// labels and a record using both still loads.
+func TestLTSVCaseOnlyDuplicateLabelIsRefused(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		refused bool
+	}{
+		{name: "labels differing only in ASCII case", content: "A:1\ta:2\n", refused: true},
+		{name: "labels repeated exactly", content: "a:1\ta:2\n", refused: true},
+		{name: "labels differing by surrounding space", content: "a:1\t a:2\n", refused: true},
+		{name: "labels differing beyond ASCII case", content: "ä:1\tÄ:2\n", refused: false},
+		{name: "labels that are simply different", content: "a:1\tb:2\n", refused: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "dup.ltsv")
+			if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			db, err := OpenContext(context.Background(), path)
+			if db != nil {
+				defer func() { _ = db.Close() }()
+			}
+
+			if !tt.refused {
+				if err != nil {
+					t.Fatalf("OpenContext refused a record it should load: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("OpenContext accepted a record whose labels are one column")
+			}
+			if !errors.Is(err, ErrDuplicateColumn) {
+				t.Errorf("error = %v, want it to match ErrDuplicateColumn", err)
+			}
+		})
 	}
 }

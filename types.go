@@ -197,6 +197,18 @@ func validateColumnNames(columns []string) error {
 	return nil
 }
 
+// ltsvLabelKey is how two LTSV labels are compared for being one column.
+//
+// LTSV carries its labels on every record rather than in a header, so the
+// duplicate check runs per record and had its own comparison, which was exact.
+// A record holding "A:1\ta:2" therefore reached SQLite, which folds ASCII case,
+// and failed as a raw CREATE TABLE error with no ErrDuplicateColumn to match —
+// the outcome the check exists to replace, left in the one format whose labels
+// do not go through validateColumnNames.
+func ltsvLabelKey(label string) string {
+	return asciiFold(strings.TrimSpace(label))
+}
+
 // asciiFold lowercases the ASCII letters in s and leaves every other byte as it
 // is, which is how SQLite compares two column names: its default case folding
 // stops at ASCII, so "ä" and "Ä" stay two names. Folding with strings.ToLower
