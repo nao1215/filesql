@@ -22,10 +22,13 @@ const lineEndingSniffLimit = 64 * 1024
 // names and the table comes out with zero rows, at no error.
 //
 // The convention is decided from the start of the file rather than by
-// translating every carriage return that appears. A carriage return inside a
-// quoted field is data, and a file that uses LF shows a line feed within the
-// first 64 KiB, so translation happens only when that window holds a carriage
-// return and no line feed at all.
+// translating every carriage return that appears, because a carriage return
+// inside a quoted field is data. Translation happens only for a file whose first
+// 64 KiB hold a carriage return outside quotes and no line feed at all, and only
+// carriage returns outside quotes are translated, so a quoted one survives in
+// either kind of file. A first record longer than that window is left alone
+// rather than guessed at: reading it as one line is what happens today, while a
+// wrong guess would rewrite data.
 func NormalizeLineEndings(reader io.Reader) io.Reader {
 	return &lineEndingReader{buffered: bufio.NewReaderSize(reader, lineEndingSniffLimit)}
 }
@@ -36,6 +39,10 @@ type lineEndingReader struct {
 	buffered  *bufio.Reader
 	sniffed   bool
 	translate bool
+	// inQuotes tracks whether the byte about to be read sits inside a quoted
+	// field, carried across reads because a field can span them. A doubled quote
+	// leaves and re-enters the field, which lands on the same answer.
+	inQuotes bool
 	// The error the sniff took, held until the bytes read before it have been
 	// handed on. bufio.Reader.Peek consumes the source's error, so dropping the
 	// peeked result would drop the error too — and a source that rejects its own
@@ -53,8 +60,13 @@ func (l *lineEndingReader) Read(p []byte) (int, error) {
 	n, err := l.buffered.Read(p)
 	if l.translate {
 		for i := range n {
-			if p[i] == '\r' {
-				p[i] = '\n'
+			switch p[i] {
+			case '"':
+				l.inQuotes = !l.inQuotes
+			case '\r':
+				if !l.inQuotes {
+					p[i] = '\n'
+				}
 			}
 		}
 	}
@@ -77,5 +89,32 @@ func (l *lineEndingReader) sniff() {
 	if err != nil && !errors.Is(err, io.EOF) {
 		l.sniffErr = err
 	}
-	l.translate = !bytes.ContainsRune(window, '\n') && bytes.ContainsRune(window, '\r')
+	l.translate = usesCarriageReturnTerminator(window)
+}
+
+// usesCarriageReturnTerminator reports whether window comes from a file that
+// ends its lines with a lone carriage return.
+//
+// Two conditions, because either alone accepts a file it should not. A line feed
+// anywhere says the file already has a terminator this stack understands, so its
+// carriage returns are data. A carriage return inside quotes is data as well,
+// and a record long enough to fill the window can hold one, so the carriage
+// return that decides has to be outside them.
+func usesCarriageReturnTerminator(window []byte) bool {
+	if bytes.ContainsRune(window, '\n') {
+		return false
+	}
+
+	inQuotes := false
+	for _, c := range window {
+		switch c {
+		case '"':
+			inQuotes = !inQuotes
+		case '\r':
+			if !inQuotes {
+				return true
+			}
+		}
+	}
+	return false
 }

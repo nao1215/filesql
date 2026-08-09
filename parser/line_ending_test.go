@@ -48,6 +48,11 @@ func TestNormalizeLineEndings(t *testing.T) {
 			input: "",
 			want:  "",
 		},
+		{
+			name:  "a quoted carriage return survives a CR-terminated file",
+			input: "a,b\rx,\"y\rz\"\r",
+			want:  "a,b\nx,\"y\rz\"\n",
+		},
 	}
 
 	for _, tt := range tests {
@@ -90,4 +95,38 @@ func (f *failingReader) Read(p []byte) (int, error) {
 	f.done = true
 	n := copy(p, f.data)
 	return n, f.err
+}
+
+// TestNormalizeLineEndings_OversizedFirstRecord covers the two ways a record
+// longer than the sniff window could be misread. Neither may corrupt data: the
+// window is a heuristic, so it decides only what it can see, and what it cannot
+// see is left as it was.
+func TestNormalizeLineEndings_OversizedFirstRecord(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a quoted carriage return in a huge LF record is not a terminator", func(t *testing.T) {
+		t.Parallel()
+
+		// The first line feed sits past the window, and the record holds a quoted
+		// carriage return before it. Translating that one would rewrite the value.
+		input := "name,note\nbig,\"a\rb" + strings.Repeat("x", lineEndingSniffLimit) + "\"\nlast,1\n"
+
+		got, err := io.ReadAll(NormalizeLineEndings(strings.NewReader(input)))
+
+		require.NoError(t, err)
+		assert.Equal(t, input, string(got))
+	})
+
+	t.Run("a record filling the window with no terminator is left alone", func(t *testing.T) {
+		t.Parallel()
+
+		// A quoted carriage return is all the window holds, so there is nothing
+		// that says this file ends its lines with one.
+		input := "\"a\rb" + strings.Repeat("x", lineEndingSniffLimit) + "\"\n"
+
+		got, err := io.ReadAll(NormalizeLineEndings(strings.NewReader(input)))
+
+		require.NoError(t, err)
+		assert.Equal(t, input, string(got))
+	})
 }
