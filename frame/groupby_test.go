@@ -781,7 +781,9 @@ func TestAggregatesSayWhenTheyHaveNoAnswer(t *testing.T) {
 
 		byGroup := map[string]any{}
 		for _, r := range result.ToRecords() {
-			byGroup[r["cat"].(string)] = r["sum_val"]
+			cat, ok := r["cat"].(string)
+			require.True(t, ok, "the grouped column is text")
+			byGroup[cat] = r["sum_val"]
 		}
 		assert.InDelta(t, 1.0, byGroup["a"], 0)
 		assert.Nil(t, byGroup["b"], "the group held no value, which is not a total of zero")
