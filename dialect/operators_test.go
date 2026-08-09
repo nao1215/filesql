@@ -38,6 +38,28 @@ func TestOperatorSemantics(t *testing.T) {
 		{"mysql DIV truncates toward zero", MySQL, `SELECT -7 DIV 2`, "-3", false},
 		{"postgresql keeps integer division", PostgreSQL, `SELECT 5/2`, "2", false},
 
+		// The operators MySQL spells with punctuation, executed rather than only
+		// rewritten: the rewrite is only right if the answer is.
+		{"mysql && is AND", MySQL, `SELECT 1 && 0`, "0", false},
+		{"mysql && is true when both are", MySQL, `SELECT 1 && 2`, "1", false},
+		{"mysql ! negates", MySQL, `SELECT !0`, "1", false},
+		{"mysql ! negates a nonzero", MySQL, `SELECT !5`, "0", false},
+		// The case that tells the two readings apart: "(!1) = 2" is 0, while the
+		// bare "NOT 1 = 2" SQLite would have parsed is 1.
+		{"mysql ! binds tighter than a comparison", MySQL, `SELECT !1 = 2`, "0", false},
+		{"mysql ! twice is the value's truth", MySQL, `SELECT !!5`, "1", false},
+		{"mysql ^ is a bitwise xor", MySQL, `SELECT 5 ^ 3`, "6", false},
+		{"mysql ^ of equal operands is zero", MySQL, `SELECT 7 ^ 7`, "0", false},
+		// The bits are what the operator works on, and SQLite's only integer is
+		// signed, so a result with the high bit set reads as a negative number
+		// where MySQL prints it unsigned.
+		{"mysql ^ works on the high bit", MySQL, `SELECT -1 ^ 0`, "-1", false},
+		// A text operand past int64 is read as the unsigned number it spells. As a
+		// literal it never reaches the helper unchanged: SQLite's own parser turns
+		// an integer past int64 into a float first.
+		{"mysql ^ of a high-bit text operand", MySQL, `SELECT '18446744073709551615' ^ 0`, "-1", false},
+		{"mysql ^ propagates null", MySQL, `SELECT 1 ^ NULL`, "", true},
+
 		// LIKE is case-sensitive outside MySQL; SQLite's folds ASCII case.
 		{"postgresql LIKE is case-sensitive", PostgreSQL, `SELECT 'ABC' LIKE 'abc'`, "0", false},
 		{"postgresql LIKE matches exactly", PostgreSQL, `SELECT 'abc' LIKE 'a%'`, "1", false},

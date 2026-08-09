@@ -26,6 +26,7 @@ import (
 //	P-15 BOOL_AND / STDDEV / ...   -> SQLite aggregate expressions
 //	P-16 TRIM(BOTH x FROM s), OVERLAY, BTRIM, JSONB_ARRAY_LENGTH
 //	P-17 ARRAY[...]                -> ErrUnsupportedSyntax
+//	P-18 generate_series(...) etc. -> ErrUnsupportedSyntax
 func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedPostgreSQL(tokens); err != nil {
 		return nil, err
@@ -98,8 +99,46 @@ func checkUnsupportedPostgreSQL(tokens []token) error {
 				return fmt.Errorf("%w: DISTINCT ON is not supported", ErrUnsupportedSyntax)
 			}
 		}
+		// P-18: a set-returning function is a row source, and SQLite has no form
+		// for one. Passed through, the error was "no such table: generate_series",
+		// which reads as a missing input file rather than as a construct the
+		// translation cannot express.
+		if name, ok := setReturningFunction(t); ok {
+			if open := nextSig(tokens, i+1); open >= 0 && isOpEq(tokens[open], "(") {
+				return fmt.Errorf("%w: %s is not supported; SQLite has no set-returning functions", ErrUnsupportedSyntax, name)
+			}
+		}
 	}
 	return nil
+}
+
+// pgSetReturningFunctions are the PostgreSQL functions that return a set of
+// rows. They are named rather than detected, because nothing in the syntax says
+// a call returns a set.
+//
+// It lists only the functions with no SQLite counterpart. The json ones are left
+// out on purpose: SQLite's json1 extension has json_each and json_tree, so a
+// query using them runs, and refusing it would take away something that works.
+var pgSetReturningFunctions = map[string]struct{}{
+	"generate_series":       {},
+	"generate_subscripts":   {},
+	"unnest":                {},
+	"regexp_split_to_table": {},
+	"string_to_table":       {},
+	"regexp_matches":        {},
+}
+
+// setReturningFunction reports whether t names a set-returning function,
+// returning the name PostgreSQL spells it with.
+func setReturningFunction(t token) (string, bool) {
+	if t.kind != tokWord {
+		return "", false
+	}
+	name := strings.ToLower(t.text)
+	if _, ok := pgSetReturningFunctions[name]; !ok {
+		return "", false
+	}
+	return name, true
 }
 
 // pgCallPass rewrites the PostgreSQL function-call rules (C-1, P-4, P-5, P-8),
