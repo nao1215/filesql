@@ -10,7 +10,7 @@ require (
 	github.com/moov-io/wire v0.15.8
 	github.com/nao1215/fileparser v0.5.2
 	github.com/parquet-go/parquet-go v0.30.1
-	github.com/pierrec/lz4/v4 v4.1.27
+	github.com/pierrec/lz4/v4 v4.1.28
 	github.com/stretchr/testify v1.11.1
 	github.com/tiendc/go-deepcopy v1.7.2
 	github.com/ulikunitz/xz v0.5.16
