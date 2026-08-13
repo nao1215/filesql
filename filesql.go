@@ -531,11 +531,11 @@ func writeSQLiteTableDataTo(w io.Writer, tableName string, columns []string, row
 	var writeErr error
 	switch options.Format {
 	case OutputFormatCSV:
-		writeErr = writeCSVData(encoded, columns, rows)
+		writeErr = writeCSVData(encoded, columns, rows, options.LineEnding)
 	case OutputFormatTSV:
-		writeErr = writeTSVData(encoded, columns, rows)
+		writeErr = writeTSVData(encoded, columns, rows, options.LineEnding)
 	case OutputFormatLTSV:
-		writeErr = writeLTSVData(encoded, columns, rows)
+		writeErr = writeLTSVData(encoded, columns, rows, options.LineEnding)
 	default:
 		return fmt.Errorf("%w: unsupported output format: %v", ErrUnsupportedFormat, options.Format)
 	}
@@ -562,11 +562,13 @@ func createCompressedWriter(w io.Writer, compression CompressionType) (io.Writer
 const loneEmptyField = `""`
 
 // writeDelimitedData writes data in CSV or TSV format based on delimiter
-func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, delimiter rune) error {
+func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, delimiter rune, lineEnding LineEnding) error {
 	csvWriter := csv.NewWriter(writer)
 	if delimiter != csvDelimiter {
 		csvWriter.Comma = delimiter
 	}
+	csvWriter.UseCRLF = lineEnding == LineEndingCRLF
+	terminator := lineEnding.terminator()
 
 	// writeRecord writes one record, taking the lone empty field around the csv
 	// writer. Flushing first keeps the two writers' output in order.
@@ -574,7 +576,7 @@ func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, deli
 		// TSV is written literally; see parser.WriteTSVRecord. A blank line is
 		// already the one-column empty value there, so it needs no form of its own.
 		if delimiter == tsvDelimiter {
-			return parser.WriteTSVRecord(writer, record)
+			return parser.WriteTSVRecordLineEnding(writer, record, terminator)
 		}
 		if len(record) != 1 || record[0] != "" {
 			return csvWriter.Write(record)
@@ -583,7 +585,7 @@ func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, deli
 		if err := csvWriter.Error(); err != nil {
 			return err
 		}
-		_, err := io.WriteString(writer, loneEmptyField+"\n")
+		_, err := io.WriteString(writer, loneEmptyField+terminator)
 		return err
 	}
 
@@ -659,17 +661,17 @@ func formatDumpValue(value any) string {
 }
 
 // writeCSVData writes data in CSV format
-func writeCSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
-	return writeDelimitedData(writer, columns, rows, csvDelimiter)
+func writeCSVData(writer io.Writer, columns []string, rows *sql.Rows, lineEnding LineEnding) error {
+	return writeDelimitedData(writer, columns, rows, csvDelimiter, lineEnding)
 }
 
 // writeTSVData writes data in TSV format
-func writeTSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
-	return writeDelimitedData(writer, columns, rows, tsvDelimiter)
+func writeTSVData(writer io.Writer, columns []string, rows *sql.Rows, lineEnding LineEnding) error {
+	return writeDelimitedData(writer, columns, rows, tsvDelimiter, lineEnding)
 }
 
 // writeLTSVData writes data in LTSV format
-func writeLTSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
+func writeLTSVData(writer io.Writer, columns []string, rows *sql.Rows, lineEnding LineEnding) error {
 	// A label is read up to the first colon, so a colon in a column name would
 	// make the rest of the name part of the value. Checked once, ahead of the
 	// rows, because it does not depend on them.
@@ -702,7 +704,7 @@ func writeLTSVData(writer io.Writer, columns []string, rows *sql.Rows) error {
 			parts = append(parts, col+":"+value)
 		}
 
-		line := strings.Join(parts, "\t") + "\n"
+		line := strings.Join(parts, "\t") + lineEnding.terminator()
 		if _, err := writer.Write([]byte(line)); err != nil {
 			return err
 		}

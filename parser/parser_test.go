@@ -312,6 +312,49 @@ func TestWriteTSVRecord(t *testing.T) {
 	})
 }
 
+func TestWriteTSVRecordLineEnding(t *testing.T) {
+	t.Parallel()
+
+	t.Run("writes the terminator it is given", func(t *testing.T) {
+		t.Parallel()
+
+		var out strings.Builder
+		require.NoError(t, WriteTSVRecordLineEnding(&out, []string{"id", "v"}, "\r\n"))
+		assert.Equal(t, "id\tv\r\n", out.String())
+	})
+
+	t.Run("an empty terminator still ends the record", func(t *testing.T) {
+		t.Parallel()
+
+		var out strings.Builder
+		require.NoError(t, WriteTSVRecordLineEnding(&out, []string{"id", "v"}, ""))
+		assert.Equal(t, "id\tv\n", out.String(), "records that run together are not TSV at all")
+	})
+
+	t.Run("a CRLF record round trips through the reader", func(t *testing.T) {
+		t.Parallel()
+
+		record := []string{"1", "a"}
+
+		var out strings.Builder
+		require.NoError(t, WriteTSVRecordLineEnding(&out, record, "\r\n"))
+		got, err := NewTSVReader(strings.NewReader(out.String())).ReadAll()
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{record}, got)
+	})
+
+	t.Run("a value the format cannot hold is refused whatever the terminator", func(t *testing.T) {
+		t.Parallel()
+
+		var out strings.Builder
+		err := WriteTSVRecordLineEnding(&out, []string{"a\tb"}, "\r\n")
+
+		require.ErrorIs(t, err, ErrTSVUnrepresentable)
+		assert.Empty(t, out.String(), "nothing is written for a refused record")
+	})
+}
+
 func TestParse_LTSV(t *testing.T) {
 	t.Parallel()
 

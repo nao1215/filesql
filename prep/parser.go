@@ -1,4 +1,3 @@
-//nolint:goconst // Tag parsing intentionally matches literal option names for readability.
 package prep
 
 import (

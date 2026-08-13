@@ -392,11 +392,17 @@ func similarToRegexp(pattern string) string {
 			b.WriteString("\\")
 			b.WriteByte(c)
 		case '\\':
-			b.WriteByte(c)
 			if i+1 < len(pattern) {
+				b.WriteByte(c)
 				i++
 				b.WriteByte(pattern[i])
+				break
 			}
+			// A pattern that ends in an escape has nothing to escape. Written
+			// through, the backslash would escape the anchor this appends instead,
+			// so "a\" became ^a\$ — a regex matching a literal "$" rather than the
+			// backslash the pattern ends with.
+			b.WriteString(`\\`)
 		default:
 			b.WriteByte(c)
 		}
