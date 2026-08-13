@@ -20,7 +20,7 @@ func TestLineEnding_String(t *testing.T) {
 
 	assert.Equal(t, "lf", LineEndingLF.String())
 	assert.Equal(t, "crlf", LineEndingCRLF.String())
-	assert.Equal(t, unknownName, LineEnding(9).String())
+	assert.Equal(t, "unknown", LineEnding(9).String())
 }
 
 // TestLineEnding_Terminator covers the bytes each value writes, including a

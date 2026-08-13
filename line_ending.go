@@ -31,7 +31,7 @@ func (l LineEnding) String() string {
 	case LineEndingCRLF:
 		return "crlf"
 	default:
-		return unknownName
+		return "unknown"
 	}
 }
 

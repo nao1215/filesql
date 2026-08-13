@@ -1,4 +1,3 @@
-//nolint:goconst // Arrow scalar conversions are easier to read with inline literal outputs.
 package parser
 
 import (

@@ -1,4 +1,3 @@
-//nolint:goconst // Preprocessor coercion tokens intentionally stay literal for readability.
 package prep
 
 import (

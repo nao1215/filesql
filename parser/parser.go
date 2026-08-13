@@ -1,4 +1,3 @@
-//nolint:goconst // File type/string tables intentionally repeat canonical tokens.
 package parser
 
 import (

@@ -50,6 +50,10 @@ linters:
     - wastedassign
     - whitespace
   settings:
+    goconst:
+      # A literal repeated across test cases is not a constant the package is
+      # missing, and counting them pushed production strings over the threshold.
+      ignore-tests: true
     errcheck:
       disable-default-exclusions: false
       check-type-assertions: true
