@@ -362,6 +362,16 @@ func ExampleDumpOptions_WithEncoding() {
 	// shift-jis
 }
 
+func ExampleDumpOptions_WithLineEnding() {
+	// Output ends its records with "\n" unless asked otherwise. A save that
+	// overwrites a file it loaded from a path keeps that file's own terminator
+	// without being told.
+	opts := filesql.NewDumpOptions().WithLineEnding(filesql.LineEndingCRLF)
+	fmt.Println(opts.LineEnding)
+	// Output:
+	// crlf
+}
+
 func ExampleOutputFormat_Extension() {
 	fmt.Println(filesql.OutputFormatParquet.Extension())
 	// Output:

@@ -35,6 +35,10 @@ const (
 	EncodingUTF16BE
 )
 
+// unknownName is what a String method answers for a value outside the set its
+// type defines, which a caller can produce by converting an int.
+const unknownName = "unknown"
+
 // String returns the name a user types for the encoding.
 func (e Encoding) String() string {
 	switch e {
@@ -51,7 +55,7 @@ func (e Encoding) String() string {
 	case EncodingUTF16BE:
 		return "utf-16be"
 	default:
-		return "unknown"
+		return unknownName
 	}
 }
 

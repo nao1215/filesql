@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `DumpOptions.WithLineEnding` sets the line terminator of csv, tsv, and ltsv output, and a save that overwrites a file it loaded from a path takes that file's own terminator without being asked ([#269](https://github.com/nao1215/filesql/issues/269)). A save kept a source's compression and its text encoding but wrote every record with `\n`, so a CRLF file saved in place came back LF throughout: a caller who edited one row got a file whose every line had changed, which is a whole-file diff in a repository configured for CRLF and a file the tools reading it no longer saw as they had. The terminator is read from the file about to be replaced — through its codec, so a `.csv.gz` is read as the text inside it — and a file with mixed terminators keeps whichever the majority of its lines use, so one stray ending cannot rewrite the rest. A dump to a new destination writes `\n` unless `WithLineEnding(LineEndingCRLF)` says otherwise, which is what every save wrote before this existed. `parser.WriteTSVRecordLineEnding` is the same choice for a caller writing TSV records directly. Parquet and XLSX are not line-based and are unaffected.
+
+### Changed
+
+- Dependencies: `github.com/moov-io/ach` 1.61.3 → 1.62.1, `github.com/moov-io/wire` 0.15.8 → 0.15.9, `modernc.org/sqlite` 1.55.0 → 1.56.0, `github.com/klauspost/compress` 1.19.1 → 1.19.2, `github.com/pierrec/lz4/v4` 4.1.27 → 4.1.28.
+
 ## [0.43.1] - 2026-08-09
 
 ### Fixed

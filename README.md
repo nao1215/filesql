@@ -403,17 +403,20 @@ Changes live in memory until you save them.
 - `EnableAutoSave` saves when `db.Close()` runs.
 - `EnableAutoSaveOnCommit` saves after each committed transaction.
 
-`DumpOptions` decides the format, the compression, and the text encoding of csv, tsv, and ltsv output:
+`DumpOptions` decides the format, the compression, the text encoding, and the line terminator of csv, tsv, and ltsv output:
 
 ```go
 options := filesql.NewDumpOptions().
 	WithFormat(filesql.OutputFormatCSV).
-	WithEncoding(filesql.EncodingShiftJIS)
+	WithEncoding(filesql.EncodingShiftJIS).
+	WithLineEnding(filesql.LineEndingCRLF)
 
 err := filesql.DumpDatabase(db, "./output", options)
 ```
 
 Output is UTF-8 unless `WithEncoding` says otherwise, which is what a save wrote before the option existed. `EncodingShiftJIS`, `EncodingEUCJP`, `EncodingISO2022JP`, `EncodingUTF16LE`, and `EncodingUTF16BE` are the others; the UTF-16 pair write a byte-order mark, so the read side recognizes them without being told. A value the encoding has no way to write fails the save with `ErrEncoding` and leaves the destination as it was, rather than being replaced with a substitute character — the same answer the read side gives to bytes it cannot decode. Parquet and XLSX carry their own encoding and ignore the option.
+
+Records end with `\n` unless `WithLineEnding` says otherwise. A save that overwrites a file it loaded from a path does not need to be told: it reads the terminator the file already uses and writes the same one, so a CRLF file edited in place stays CRLF and the rows nobody touched stay byte-identical. A file with mixed terminators keeps whichever one the majority of its lines use. Parquet and XLSX are not line-based and ignore the option.
 
 ### Excel sheet visibility
 
@@ -472,7 +475,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Attach your own logger | `ExampleDBBuilder_WithLogger`, `ExampleNewSlogAdapter` | [example_api_test.go](./example_api_test.go) |
 | Open a read-only wrapper | `ExampleDBBuilder_OpenReadOnly` | [example_api_test.go](./example_api_test.go) |
 | Save on close or commit | `ExampleDBBuilder_EnableAutoSave`, `ExampleDBBuilder_EnableAutoSaveOnCommit`, `ExampleDBBuilder_DisableAutoSave` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
-| Export tables with format/compression/encoding options | `ExampleDumpDatabase`, `ExampleNewDumpOptions`, `ExampleDumpOptions_WithFormat`, `ExampleDumpOptions_WithCompression`, `ExampleDumpOptions_WithEncoding` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
+| Export tables with format/compression/encoding/line-ending options | `ExampleDumpDatabase`, `ExampleNewDumpOptions`, `ExampleDumpOptions_WithFormat`, `ExampleDumpOptions_WithCompression`, `ExampleDumpOptions_WithEncoding`, `ExampleDumpOptions_WithLineEnding` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
 | Work with compression helpers directly | `ExampleNewCompressionHandler`, `ExampleNewCompressionFactory`, `ExampleCompressionFactory_DetectCompressionType` | [example_api_test.go](./example_api_test.go) |
 | Strip compression suffixes and inspect file types | `ExampleCompressionFactory_RemoveCompressionExtension`, `ExampleCompressionFactory_GetBaseFileType` | [example_api_test.go](./example_api_test.go) |
 | Inspect the malformed-row policy | `ExampleMalformedRowPolicy_String` | [example_api_test.go](./example_api_test.go) |

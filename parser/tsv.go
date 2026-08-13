@@ -88,13 +88,27 @@ func (t *TSVReader) ReadAll() ([][]string, error) {
 // A CSV writer would quote such a field instead, and to this reader a quote is
 // data, so what came back would carry the quotes the writer added.
 func WriteTSVRecord(w io.Writer, record []string) error {
+	return WriteTSVRecordLineEnding(w, record, "\n")
+}
+
+// WriteTSVRecordLineEnding is WriteTSVRecord with the line terminator named,
+// for a writer that has to keep the one its destination already uses: a file
+// rewritten with a different terminator differs on every line, including the
+// ones nobody edited.
+//
+// An empty lineEnding writes "\n", so a zero value behaves as WriteTSVRecord
+// does rather than running the records together.
+func WriteTSVRecordLineEnding(w io.Writer, record []string, lineEnding string) error {
 	for _, field := range record {
 		if i := strings.IndexAny(field, "\t\n\r"); i >= 0 {
 			return fmt.Errorf("%w: field %q contains %q", ErrTSVUnrepresentable, field, field[i:i+1])
 		}
 	}
 
-	if _, err := io.WriteString(w, strings.Join(record, "\t")+"\n"); err != nil {
+	if lineEnding == "" {
+		lineEnding = "\n"
+	}
+	if _, err := io.WriteString(w, strings.Join(record, "\t")+lineEnding); err != nil {
 		return fmt.Errorf("failed to write TSV record: %w", err)
 	}
 	return nil

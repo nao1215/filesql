@@ -209,6 +209,9 @@ type DumpOptions struct {
 	// Encoding specifies the text encoding of csv, tsv, and ltsv output. It has
 	// no effect on Parquet and XLSX, which carry their own.
 	Encoding Encoding
+	// LineEnding specifies the line terminator of csv, tsv, and ltsv output. It
+	// has no effect on Parquet and XLSX, which are not line-based.
+	LineEnding LineEnding
 }
 
 // NewDumpOptions creates default export options (CSV, no compression).
@@ -221,6 +224,7 @@ func NewDumpOptions() DumpOptions {
 		Format:      OutputFormatCSV,
 		Compression: CompressionNone,
 		Encoding:    EncodingUTF8,
+		LineEnding:  LineEndingLF,
 	}
 }
 
@@ -274,6 +278,24 @@ func (o DumpOptions) WithCompression(compression CompressionType) DumpOptions {
 //   - EncodingUTF16BE: UTF-16 big-endian, with a byte-order mark
 func (o DumpOptions) WithEncoding(enc Encoding) DumpOptions {
 	o.Encoding = enc
+	return o
+}
+
+// WithLineEnding sets the line terminator of csv, tsv, and ltsv output.
+//
+// It exists for the same reason WithEncoding does: a save wrote "\n" whatever
+// the source used, so a CRLF file saved in place came back LF throughout — every
+// line of the file changed although the caller had edited one row. A save that
+// overwrites a file it loaded from a path detects the file's own terminator and
+// keeps it, so this option is for a dump to a new destination.
+//
+// Options:
+//   - LineEndingLF: "\n" (default)
+//   - LineEndingCRLF: "\r\n"
+//
+// Parquet and XLSX are not line-based and are unaffected.
+func (o DumpOptions) WithLineEnding(lineEnding LineEnding) DumpOptions {
+	o.LineEnding = lineEnding
 	return o
 }
 
@@ -587,7 +609,15 @@ func (c *autoSaveConnection) overwriteOriginalFile(ctx context.Context, db *sql.
 	}
 
 	factory := NewCompressionFactory()
-	options := DumpOptions{Format: format, Compression: factory.DetectCompressionType(path)}
+	// The line terminator is read from the file about to be replaced, for the
+	// same reason the compression is read from its name: what comes back has to
+	// be the file the caller had, with their edit in it. Writing "\n" over a CRLF
+	// file changed every line of it while one row had been edited.
+	options := DumpOptions{
+		Format:      format,
+		Compression: factory.DetectCompressionType(path),
+		LineEnding:  detectLineEnding(path),
+	}
 
 	// An Excel workbook holds a table per sheet, so all of them are written back
 	// together into the one file. The tables of a workbook are named after it,

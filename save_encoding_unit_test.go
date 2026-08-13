@@ -36,7 +36,7 @@ func TestEncoding_String(t *testing.T) {
 		{EncodingISO2022JP, nameISO2022JP},
 		{EncodingUTF16LE, nameUTF16LE},
 		{EncodingUTF16BE, nameUTF16BE},
-		{Encoding(99), "unknown"},
+		{Encoding(99), unknownName},
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
