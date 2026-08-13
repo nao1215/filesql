@@ -616,7 +616,7 @@ func (c *autoSaveConnection) overwriteOriginalFile(ctx context.Context, db *sql.
 	options := DumpOptions{
 		Format:      format,
 		Compression: factory.DetectCompressionType(path),
-		LineEnding:  detectLineEnding(path),
+		LineEnding:  detectLineEnding(path, format),
 	}
 
 	// An Excel workbook holds a table per sheet, so all of them are written back

@@ -56,9 +56,11 @@ func TestMemoryLimit_ShouldReduceChunkSizeUnderPressure(t *testing.T) {
 	t.Run("exceeded cuts the chunk to a quarter", func(t *testing.T) {
 		t.Parallel()
 		limit := newMemoryLimit(defaultMemoryLimit)
-		// A limit at the heap this process already holds is exceeded however the
-		// heap moves afterwards, because it can only grow past it.
-		limit.maxMemoryMB = limit.getMemoryInfo().currentMB
+		// A limit of zero is exceeded by any heap at all, so the answer does not
+		// depend on what the heap happens to be doing while the test runs. Reading
+		// the current usage and setting the limit to it is not the same: a
+		// collection between the two readings puts the heap back under it.
+		limit.maxMemoryMB = 0
 		require.Equal(t, memoryStatusExceeded, limit.checkMemoryUsage())
 
 		shouldReduce, size := limit.shouldReduceChunkSize(1000)

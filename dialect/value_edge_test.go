@@ -263,7 +263,7 @@ func TestSimilarToRegexpEscapes(t *testing.T) {
 	}{
 		{name: "an anchor is escaped", pattern: "^a$", want: `^\^a\$$`},
 		{name: "an escape keeps the character after it", pattern: `a\%b`, want: `^a\%b$`},
-		{name: "a trailing escape is kept as is", pattern: `a\`, want: `^a\$`},
+		{name: "a trailing escape escapes itself", pattern: `a\`, want: `^a\\$`},
 		{name: "the regex parts pass through", pattern: "(a|b)+[0-9]{2}", want: "^(a|b)+[0-9]{2}$"},
 	}
 	for _, tt := range tests {

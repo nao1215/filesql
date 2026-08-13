@@ -1,7 +1,7 @@
 package filesql
 
 import (
-	"bytes"
+	"bufio"
 	"io"
 )
 
@@ -44,25 +44,28 @@ func (l LineEnding) terminator() string {
 	return "\n"
 }
 
-// lineEndingSampleSize is how much of a file is read to decide its line ending.
-// The terminator does not change halfway through a real file, so a sample
-// settles it; reading the whole of a large file to count the rest would cost the
-// save a second full read.
-const lineEndingSampleSize = 1 << 20 // 1 MiB
+// lineEndingReadSize is the buffer the detection reads through. The file is
+// counted whole — a terminator that is in the minority over the first megabyte
+// can be the majority over the file — but never held whole, so a file larger
+// than memory costs the same as a small one.
+const lineEndingReadSize = 64 << 10 // 64 KiB
 
 // detectLineEnding reports the line terminator path already uses, so a save that
-// overwrites it can write the same one.
+// overwrites it can write the same one. format is what the file will be written
+// back as, which is what says whether a quote in it means anything.
 //
-// The rule is the majority of the terminators in the sample, and LF on a tie or
-// on a file with no line ending at all. Majority rather than first-line-wins
+// The rule is the majority of the terminators in the file, and LF on a tie or on
+// a file with no line ending at all. Majority rather than first-line-wins
 // because the point is to leave rows the caller did not edit byte-identical: a
 // file that is LF except for one stray CRLF stays LF, where following the first
 // line would rewrite every other line in it.
 //
 // A file this package cannot read is reported as LF, which is what a save wrote
 // before this existed. The detection is an improvement on the destination's
-// behalf, so failing to detect must not fail the save.
-func detectLineEnding(path string) LineEnding {
+// behalf, so failing to detect must not fail the save — and a partial count is
+// not used either, because half a file is not evidence of what the whole one
+// uses.
+func detectLineEnding(path string, format OutputFormat) LineEnding {
 	reader, cleanup, err := NewCompressionFactory().CreateReaderForFile(path)
 	if err != nil {
 		return LineEndingLF
@@ -71,21 +74,55 @@ func detectLineEnding(path string) LineEnding {
 		_ = cleanup() //nolint:errcheck // Reading for detection only; a close failure cannot affect the answer
 	}()
 
-	sample, err := io.ReadAll(io.LimitReader(reader, lineEndingSampleSize))
-	if err != nil && len(sample) == 0 {
+	ending, err := countLineEndings(reader, format)
+	if err != nil {
 		return LineEndingLF
 	}
-	return dominantLineEnding(sample)
+	return ending
 }
 
-// dominantLineEnding is detectLineEnding's rule, over bytes already in hand.
-func dominantLineEnding(sample []byte) LineEnding {
-	crlf := bytes.Count(sample, []byte("\r\n"))
-	// Every "\r\n" also contains the "\n" counted here, so the lone ones are what
-	// is left after removing them.
-	lf := bytes.Count(sample, []byte("\n")) - crlf
-	if crlf > lf {
-		return LineEndingCRLF
+// countLineEndings is detectLineEnding's rule over a stream, reading it whole
+// through a fixed buffer.
+//
+// A quote is honored for CSV alone. A quoted CSV field carries its own line
+// breaks, and counting those as terminators is how a workbook-style export —
+// CRLF between records, LF inside a quoted address — was read as an LF file and
+// rewritten as one. TSV and LTSV define no quoting at all: a quote there is
+// data, and tracking it would let one unmatched quote swallow the rest of the
+// file's terminators.
+func countLineEndings(reader io.Reader, format OutputFormat) (LineEnding, error) {
+	quoted := format == OutputFormatCSV
+
+	buffered := bufio.NewReaderSize(reader, lineEndingReadSize)
+	var crlf, lf int
+	inQuotes := false
+	prevCR := false
+	for {
+		b, err := buffered.ReadByte()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return LineEndingLF, err
+		}
+
+		switch {
+		case quoted && b == '"':
+			// A doubled quote inside a field is an escaped quote, which this
+			// toggling handles on its own: the pair leaves the state as it found it.
+			inQuotes = !inQuotes
+		case b == '\n' && !inQuotes:
+			if prevCR {
+				crlf++
+			} else {
+				lf++
+			}
+		}
+		prevCR = b == '\r'
 	}
-	return LineEndingLF
+
+	if crlf > lf {
+		return LineEndingCRLF, nil
+	}
+	return LineEndingLF, nil
 }
