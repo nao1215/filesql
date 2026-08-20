@@ -496,3 +496,46 @@ func ExampleExcelSheetsInFile() {
 	// Sales visible=true
 	// Scratch visible=false
 }
+
+// ExampleLoadInto_dumpDatabase completes the cycle a caller-managed database is
+// for: load files into a database you already own, query across what was there
+// and what arrived, then write the result back out.
+func ExampleLoadInto_dumpDatabase() {
+	dir := createFilesqlExampleDir(map[string]string{
+		"users.csv": `
+id,name
+1,Alice
+2,Bob
+`,
+	})
+	defer os.RemoveAll(dir)
+
+	// openExampleSQLiteDB pins the pool to one connection, which SQLite's
+	// ":memory:" requires: the database is private per connection, so a second
+	// connection would not see the loaded tables.
+	db := openExampleSQLiteDB()
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := filesql.LoadInto(ctx, db, filepath.Join(dir, "users.csv")); err != nil {
+		log.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE users SET name = 'Carol' WHERE id = 2`); err != nil {
+		log.Fatal(err)
+	}
+
+	out := filepath.Join(dir, "out")
+	if err := filesql.DumpDatabase(db, out); err != nil {
+		log.Fatal(err)
+	}
+
+	saved, err := os.ReadFile(filepath.Join(out, "users.csv"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Print(string(saved))
+	// Output:
+	// id,name
+	// 1,Alice
+	// 2,Carol
+}

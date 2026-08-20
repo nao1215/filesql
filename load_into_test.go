@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -358,4 +359,42 @@ func TestLoadInto_DoesNotCloseCallerDB(t *testing.T) {
 	got := listTables(t, db)
 	sort.Strings(got)
 	assert.Equal(t, []string{"sample"}, got)
+}
+
+// TestLoadInto_DumpDatabaseOnCallerDB runs the cycle this package documents for
+// a caller-managed database from end to end: load files into it, query it, then
+// write it back out.
+//
+// The last step used to hang. DumpDatabase took a connection out of the pool
+// that it never read from and held it for the whole dump, so on the pool this
+// package tells the caller to pin to one connection every query the dump made
+// waited for the connection the dump itself was sitting on. The call returned
+// no error and never timed out; a caller who ran it in a goroutine leaked one.
+// The timeout below is a guard, not a measurement: a regression must fail the
+// test rather than hang the suite.
+func TestLoadInto_DumpDatabaseOnCallerDB(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	source := filepath.Join(dir, "users.csv")
+	require.NoError(t, os.WriteFile(source, []byte("id,name\n1,alice\n2,bob\n"), 0o600))
+
+	db := newCallerDB(t)
+	require.NoError(t, LoadInto(context.Background(), db, source))
+	require.Equal(t, 2, countRows(t, db, "users"))
+
+	outputDir := filepath.Join(dir, "out")
+	done := make(chan error, 1)
+	go func() { done <- DumpDatabase(db, outputDir) }()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("DumpDatabase did not return: it is waiting for a connection it is holding itself")
+	}
+
+	got, err := os.ReadFile(filepath.Join(outputDir, "users.csv")) //nolint:gosec // Test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, "id,name\n1,alice\n2,bob\n", string(got))
 }

@@ -239,12 +239,17 @@ func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
 		options = opts[0]
 	}
 
-	// Get the underlying connection
-	conn, err := db.Conn(context.Background())
-	if err != nil {
+	// Fail before creating the output directory when the database cannot be read
+	// at all, so a dump that never starts leaves nothing behind.
+	//
+	// Ping rather than Conn: the dump runs its queries through the pool and needs
+	// no connection of its own, and holding one deadlocks a database limited to a
+	// single open connection — which is what LoadInto asks the caller for, since
+	// SQLite's ":memory:" is private per connection. Every query below then waited
+	// for the connection the dump itself was holding, with no error and no timeout.
+	if err := db.PingContext(context.Background()); err != nil {
 		return fmt.Errorf("%w: failed to get connection: %w", ErrDatabaseOperation, err)
 	}
-	defer conn.Close()
 
 	// Use generic dump functionality for all connections
 	return dumpSQLiteDatabase(db, outputDir, options)
@@ -277,10 +282,10 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 
 	writeBackTables := make(map[string]bool)
 	for _, tableName := range tableNames {
-		if baseName, isACH := IsACHBaseTableName(tableName); isACH && slices.Contains(achBaseNames, baseName) {
+		if baseName, isACH := isACHBaseTableName(tableName); isACH && slices.Contains(achBaseNames, baseName) {
 			writeBackTables[tableName] = true
 		}
-		if baseName, isWire := IsWireBaseTableName(tableName); isWire && slices.Contains(wireBaseNames, baseName) {
+		if baseName, isWire := isWireBaseTableName(tableName); isWire && slices.Contains(wireBaseNames, baseName) {
 			writeBackTables[tableName] = true
 		}
 	}
