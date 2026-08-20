@@ -53,6 +53,11 @@ func TestMySQLTranslate(t *testing.T) {
 
 		{"M-9_rlike", "SELECT * FROM t WHERE name RLIKE '^a'", "SELECT * FROM t WHERE name REGEXP '^a'"},
 		{"M-9_not_rlike", "SELECT * FROM t WHERE name NOT RLIKE '^a'", "SELECT * FROM t WHERE name NOT REGEXP '^a'"},
+		// M-22: LIKE routes through the helper that folds case the way MySQL's
+		// default collation does and reads a trailing escape as itself. SQLite's
+		// own LIKE ... ESCAPE did neither.
+		{"M-22_like", "SELECT * FROM t WHERE name LIKE 'a%'", "SELECT * FROM t WHERE like_insensitive('a%', name)"},
+		{"M-22_like_with_escape_clause_is_left_alone", "SELECT * FROM t WHERE name LIKE 'a!%' ESCAPE '!'", "SELECT * FROM t WHERE name LIKE 'a!%' ESCAPE '!'"},
 
 		{"M-10_limit_offset", "SELECT * FROM t LIMIT 5, 10", "SELECT * FROM t LIMIT 5, 10"},
 
@@ -136,6 +141,14 @@ func TestMySQLTranslateUnsupported(t *testing.T) {
 		{"M-21_xor_in_where", "SELECT a FROM t WHERE b XOR c"},
 		{"M-21_bitxor_left_not_primary", "SELECT a, ^ b"},
 		{"M-21_bitxor_right_missing", "SELECT a ^"},
+		// M-23: 0x41 is the string "A" where MySQL prints a value and the number
+		// 65 where it does arithmetic. SQLite has only the number, and which
+		// reading applies is not something a token rewrite can see, so the
+		// literal is refused rather than translated into one of the two.
+		{"M-23_hex_literal", "SELECT 0x41"},
+		{"M-23_hex_literal_uppercase_prefix", "SELECT 0X41"},
+		{"M-23_hex_literal_in_arithmetic", "SELECT 1 + 0x10"},
+		{"M-23_hex_literal_in_comparison", "SELECT * FROM t WHERE s = 0x616263"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
