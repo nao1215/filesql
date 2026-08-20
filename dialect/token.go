@@ -3,7 +3,9 @@ package dialect
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
+	"unicode"
 )
 
 // tokenKind classifies a lexical token. Rendering and rewrite rules branch on
@@ -48,6 +50,18 @@ type lexConfig struct {
 	dollarQuote       bool // $tag$...$tag$ dollar-quoted strings (PostgreSQL)
 	rawStringPrefix   bool // r'...'/r"..." raw strings (GoogleSQL)
 	byteStringPrefix  bool // b'...'/b"..." byte strings (GoogleSQL)
+	tripleQuoteString bool // '''...''' and """...""" strings (GoogleSQL)
+	nestedComment     bool // /* */ block comments nest (PostgreSQL)
+	numericEscapes    bool // \xHH, \ooo, \uXXXX and \UXXXXXXXX name a character (GoogleSQL)
+}
+
+// escapeRules says how a backslash behaves inside a quoted literal. The two
+// halves are separate because they are configured separately: MySQL honors a
+// backslash but has no numeric escapes, while a PostgreSQL E'...' string has
+// both even though an ordinary PostgreSQL string has neither.
+type escapeRules struct {
+	backslash bool
+	numeric   bool
 }
 
 // lexConfigFor returns the lexical configuration for a built-in non-SQLite
@@ -67,6 +81,7 @@ func lexConfigFor(d Dialect) (lexConfig, bool) {
 			identDoubleQuote: true,
 			ePrefixString:    true,
 			dollarQuote:      true,
+			nestedComment:    true,
 		}, true
 	case GoogleSQL:
 		return lexConfig{
@@ -76,10 +91,18 @@ func lexConfigFor(d Dialect) (lexConfig, bool) {
 			backslashEscapes:  true,
 			rawStringPrefix:   true,
 			byteStringPrefix:  true,
+			tripleQuoteString: true,
+			numericEscapes:    true,
 		}, true
 	default:
 		return lexConfig{}, false
 	}
+}
+
+// stringEscapes is how a backslash behaves inside an ordinary quoted string of
+// the dialect cfg describes.
+func (cfg lexConfig) stringEscapes() escapeRules {
+	return escapeRules{backslash: cfg.backslashEscapes, numeric: cfg.numericEscapes}
 }
 
 // tokenize splits query into tokens using cfg. It returns ErrInvalidSyntax
@@ -118,18 +141,23 @@ func tokenize(query string, cfg lexConfig) ([]token, error) {
 			i = j
 
 		case c == '/' && next(query, i) == '*':
-			j := i + 2
-			for j+1 < len(query) && (query[j] != '*' || query[j+1] != '/') {
-				j++
-			}
-			if j+1 >= len(query) {
+			j, ok := scanBlockComment(query, i, cfg.nestedComment)
+			if !ok {
 				return nil, fmt.Errorf("%w: unterminated block comment at offset %d", ErrInvalidSyntax, start)
 			}
-			tokens = append(tokens, token{kind: tokBlockComment, text: query[i+2 : j], offset: start})
-			i = j + 2
+			tokens = append(tokens, token{kind: tokBlockComment, text: query[i+2 : j-2], offset: start})
+			i = j
+
+		case cfg.tripleQuoteString && isTripleQuoteStart(query, i):
+			content, ni, ok := scanTripleQuoted(query, i, c, cfg.stringEscapes())
+			if !ok {
+				return nil, fmt.Errorf("%w: unterminated string literal at offset %d", ErrInvalidSyntax, start)
+			}
+			tokens = append(tokens, token{kind: tokString, text: content, offset: start})
+			i = ni
 
 		case c == '\'':
-			content, ni, ok := scanQuoted(query, i, '\'', cfg.backslashEscapes)
+			content, ni, ok := scanQuoted(query, i, '\'', cfg.stringEscapes())
 			if !ok {
 				return nil, fmt.Errorf("%w: unterminated string literal at offset %d", ErrInvalidSyntax, start)
 			}
@@ -137,7 +165,7 @@ func tokenize(query string, cfg lexConfig) ([]token, error) {
 			i = ni
 
 		case c == '"' && cfg.identDoubleQuote:
-			content, ni, ok := scanQuoted(query, i, '"', false)
+			content, ni, ok := scanQuoted(query, i, '"', escapeRules{})
 			if !ok {
 				return nil, fmt.Errorf("%w: unterminated quoted identifier at offset %d", ErrInvalidSyntax, start)
 			}
@@ -145,7 +173,7 @@ func tokenize(query string, cfg lexConfig) ([]token, error) {
 			i = ni
 
 		case c == '"' && cfg.stringDoubleQuote:
-			content, ni, ok := scanQuoted(query, i, '"', cfg.backslashEscapes)
+			content, ni, ok := scanQuoted(query, i, '"', cfg.stringEscapes())
 			if !ok {
 				return nil, fmt.Errorf("%w: unterminated string literal at offset %d", ErrInvalidSyntax, start)
 			}
@@ -153,7 +181,7 @@ func tokenize(query string, cfg lexConfig) ([]token, error) {
 			i = ni
 
 		case c == '`' && cfg.identBacktick:
-			content, ni, ok := scanQuoted(query, i, '`', false)
+			content, ni, ok := scanQuoted(query, i, '`', escapeRules{})
 			if !ok {
 				return nil, fmt.Errorf("%w: unterminated quoted identifier at offset %d", ErrInvalidSyntax, start)
 			}
@@ -161,15 +189,24 @@ func tokenize(query string, cfg lexConfig) ([]token, error) {
 			i = ni
 
 		case (c == 'x' || c == 'X') && next(query, i) == '\'':
-			content, ni, ok := scanQuoted(query, i+1, '\'', false)
+			content, ni, ok := scanQuoted(query, i+1, '\'', escapeRules{})
 			if !ok {
 				return nil, fmt.Errorf("%w: unterminated blob literal at offset %d", ErrInvalidSyntax, start)
+			}
+			// A blob literal holds hexadecimal digits and nothing else. Accepting
+			// anything else rendered it back as x'<content>', which for content
+			// carrying a quote is SQL that no longer parses: the caller got a
+			// syntax error about text they had not written.
+			if !isHexDigits(content) {
+				return nil, fmt.Errorf("%w: blob literal is not hexadecimal at offset %d", ErrInvalidSyntax, start)
 			}
 			tokens = append(tokens, token{kind: tokBlob, text: strings.ToLower(content), offset: start})
 			i = ni
 
 		case cfg.ePrefixString && (c == 'e' || c == 'E') && next(query, i) == '\'':
-			content, ni, ok := scanQuoted(query, i+1, '\'', true)
+			// A PostgreSQL escape string decodes both the letter escapes and the
+			// numeric ones, whatever an ordinary string in the same dialect does.
+			content, ni, ok := scanQuoted(query, i+1, '\'', escapeRules{backslash: true, numeric: true})
 			if !ok {
 				return nil, fmt.Errorf("%w: unterminated string literal at offset %d", ErrInvalidSyntax, start)
 			}
@@ -177,7 +214,7 @@ func tokenize(query string, cfg lexConfig) ([]token, error) {
 			i = ni
 
 		case cfg.rawStringPrefix && (c == 'r' || c == 'R') && (next(query, i) == '\'' || next(query, i) == '"'):
-			content, ni, ok := scanQuoted(query, i+1, query[i+1], false)
+			content, ni, ok := scanQuoted(query, i+1, query[i+1], escapeRules{})
 			if !ok {
 				return nil, fmt.Errorf("%w: unterminated raw string literal at offset %d", ErrInvalidSyntax, start)
 			}
@@ -185,7 +222,7 @@ func tokenize(query string, cfg lexConfig) ([]token, error) {
 			i = ni
 
 		case cfg.byteStringPrefix && (c == 'b' || c == 'B') && (next(query, i) == '\'' || next(query, i) == '"'):
-			content, ni, ok := scanQuoted(query, i+1, query[i+1], true)
+			content, ni, ok := scanQuoted(query, i+1, query[i+1], cfg.stringEscapes())
 			if !ok {
 				return nil, fmt.Errorf("%w: unterminated byte string literal at offset %d", ErrInvalidSyntax, start)
 			}
@@ -246,6 +283,68 @@ func tokenize(query string, cfg lexConfig) ([]token, error) {
 	return tokens, nil
 }
 
+// scanBlockComment returns the index just past the block comment opening at
+// s[i], and whether it was closed. Where comments nest, an inner /* opens a
+// comment of its own and the outer one ends at the matching */.
+//
+// Ending at the first */ regardless made the text between the inner close and
+// the outer one part of the statement: a query that commented out a clause with
+// a nested comment ran with that clause back in, without error and without
+// anything in the result to say so.
+func scanBlockComment(s string, i int, nested bool) (int, bool) {
+	depth := 1
+	j := i + 2
+	for j+1 < len(s) {
+		switch {
+		case s[j] == '*' && s[j+1] == '/':
+			depth--
+			j += 2
+			if depth == 0 {
+				return j, true
+			}
+		case nested && s[j] == '/' && s[j+1] == '*':
+			depth++
+			j += 2
+		default:
+			j++
+		}
+	}
+	return j, false
+}
+
+// scanTripleQuoted returns the content of the triple-quoted string opening at
+// s[i] and the index just past its closing delimiter. GoogleSQL writes a string
+// that may hold quotes and line breaks this way; read as an ordinary string,
+// the doubled quotes look like SQL-escaped quotes and the literal keeps one
+// quote on each end.
+func scanTripleQuoted(s string, i int, quote byte, esc escapeRules) (content string, ni int, ok bool) {
+	var b strings.Builder
+	i += 3 // skip the opening delimiter
+	for i < len(s) {
+		switch {
+		case s[i] == quote && i+2 < len(s) && s[i+1] == quote && s[i+2] == quote:
+			return b.String(), i + 3, true
+		case esc.backslash && s[i] == '\\' && i+1 < len(s):
+			decoded, adv := decodeBackslash(s, i, esc)
+			b.WriteString(decoded)
+			i += adv
+		default:
+			b.WriteByte(s[i])
+			i++
+		}
+	}
+	return "", i, false
+}
+
+// isTripleQuoteStart reports whether a triple-quoted string opens at s[i].
+func isTripleQuoteStart(s string, i int) bool {
+	c := s[i]
+	if c != '\'' && c != '"' {
+		return false
+	}
+	return i+2 < len(s) && s[i+1] == c && s[i+2] == c
+}
+
 // next returns the byte after position i, or 0 if i is the last byte.
 func next(s string, i int) byte {
 	if i+1 < len(s) {
@@ -259,7 +358,7 @@ func next(s string, i int) byte {
 // yields one literal quote. When honorBackslash is true a backslash escapes the
 // following byte. It returns the decoded content, the index just past the
 // closing quote, and whether a closing quote was found.
-func scanQuoted(s string, i int, quote byte, honorBackslash bool) (content string, ni int, ok bool) {
+func scanQuoted(s string, i int, quote byte, esc escapeRules) (content string, ni int, ok bool) {
 	var b strings.Builder
 	i++ // skip opening quote
 	for i < len(s) {
@@ -272,9 +371,9 @@ func scanQuoted(s string, i int, quote byte, honorBackslash bool) (content strin
 				continue
 			}
 			return b.String(), i + 1, true
-		case honorBackslash && c == '\\' && i+1 < len(s):
-			esc, adv := decodeBackslash(s, i)
-			b.WriteString(esc)
+		case esc.backslash && c == '\\' && i+1 < len(s):
+			decoded, adv := decodeBackslash(s, i, esc)
+			b.WriteString(decoded)
 			i += adv
 		default:
 			b.WriteByte(c)
@@ -288,9 +387,14 @@ func scanQuoted(s string, i int, quote byte, honorBackslash bool) (content strin
 // backslash). It returns the decoded text and the number of bytes consumed. An
 // unrecognized escape drops the backslash and keeps the following byte, matching
 // the lenient behavior of MySQL and GoogleSQL for unknown escapes.
-func decodeBackslash(s string, i int) (string, int) {
+func decodeBackslash(s string, i int, esc escapeRules) (string, int) {
 	if i+1 >= len(s) {
 		return "\\", 1
+	}
+	if esc.numeric {
+		if decoded, adv, ok := decodeNumericEscape(s, i); ok {
+			return decoded, adv
+		}
 	}
 	switch s[i+1] {
 	case 'n':
@@ -330,6 +434,82 @@ func decodeBackslash(s string, i int) (string, int) {
 	default:
 		return string(s[i+1]), 2
 	}
+}
+
+// decodeNumericEscape decodes an escape that names a character by its number:
+// \xh[h] hexadecimal, \o[oo] octal, \uXXXX and \UXXXXXXXX by code point. It
+// reports false when the bytes after the backslash are not one of those, which
+// leaves the letter escapes and the lenient default to decodeBackslash.
+//
+// Dropping the backslash and keeping the digits, which is what the lenient
+// default does, turned E'\x41' into the three characters x41 rather than the
+// one character A — a literal that compares equal to different rows than the
+// one the caller wrote.
+func decodeNumericEscape(s string, i int) (string, int, bool) {
+	switch s[i+1] {
+	case 'x', 'X':
+		digits := hexRun(s, i+2, 2)
+		if digits == 0 {
+			return "", 0, false
+		}
+		v, err := strconv.ParseUint(s[i+2:i+2+digits], 16, 8)
+		if err != nil {
+			return "", 0, false
+		}
+		return string(rune(v)), 2 + digits, true
+	case 'u', 'U':
+		width := 4
+		if s[i+1] == 'U' {
+			width = 8
+		}
+		if hexRun(s, i+2, width) != width {
+			return "", 0, false
+		}
+		v, err := strconv.ParseUint(s[i+2:i+2+width], 16, 32)
+		if err != nil || v > unicode.MaxRune {
+			return "", 0, false
+		}
+		return string(rune(v)), 2 + width, true
+	case '0', '1', '2', '3', '4', '5', '6', '7':
+		digits := octalRun(s, i+1, 3)
+		v, err := strconv.ParseUint(s[i+1:i+1+digits], 8, 16)
+		if err != nil {
+			return "", 0, false
+		}
+		return string(rune(v)), 1 + digits, true
+	default:
+		return "", 0, false
+	}
+}
+
+// isHexDigits reports whether s is made only of hexadecimal digits, which is
+// what a blob literal may hold. The empty string qualifies: x” is the empty
+// blob.
+func isHexDigits(s string) bool {
+	for i := range len(s) {
+		if !isHex(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// hexRun counts the hexadecimal digits at s[i], up to max.
+func hexRun(s string, i, maxDigits int) int {
+	n := 0
+	for n < maxDigits && i+n < len(s) && isHex(s[i+n]) {
+		n++
+	}
+	return n
+}
+
+// octalRun counts the octal digits at s[i], up to max.
+func octalRun(s string, i, maxDigits int) int {
+	n := 0
+	for n < maxDigits && i+n < len(s) && s[i+n] >= '0' && s[i+n] <= '7' {
+		n++
+	}
+	return n
 }
 
 // isDollarQuoteStart reports whether a dollar-quoted string opens at s[i] (which
