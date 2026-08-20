@@ -43,30 +43,11 @@ func parseFedWireFile(reader io.Reader, baseTableName string) ([]*table, *wireco
 	return []*table{t}, tableSet, nil
 }
 
-// WireTableInfo represents information about Fedwire tables created from a Fedwire file.
-// It provides methods to get the complete table name for the message table.
-type WireTableInfo struct {
-	// BaseName is the base table name derived from the Fedwire filename.
-	// For example, if the file is "payment.fed", BaseName is "payment".
-	BaseName string
-}
-
-// MessageTable returns the complete table name for the message table.
-// Example: "payment" -> "payment_message"
-func (w WireTableInfo) MessageTable() string {
-	return w.BaseName + "_message"
-}
-
-// AllTableNames returns all Fedwire table names for this base name.
-func (w WireTableInfo) AllTableNames() []string {
-	return []string{w.MessageTable()}
-}
-
-// IsWireBaseTableName checks if a table name matches the Fedwire naming convention
+// isWireBaseTableName checks if a table name matches the Fedwire naming convention
 // (ends with _message suffix and has a non-empty base name).
 // It does NOT verify that the database was loaded from a Fedwire file; any
 // table ending in _message matches.
-func IsWireBaseTableName(tableName string) (baseName string, isWire bool) {
+func isWireBaseTableName(tableName string) (baseName string, isWire bool) {
 	const suffix = "_message"
 	if strings.HasSuffix(tableName, suffix) {
 		base := strings.TrimSuffix(tableName, suffix)
@@ -155,8 +136,10 @@ func DumpFedWire(ctx context.Context, db *sql.DB, baseTableName, outputPath stri
 // DumpFedWireWithTableSet exports Fedwire tables from the database back to a Fedwire file
 // using an explicitly provided TableSet.
 //
-// Use this function when you have the TableSet from a source other than the internal registry,
-// or when you need more control over which TableSet to use.
+// Use this function when the database has no source file to read the structure
+// back from, which is the case for one loaded from an io.Reader: parse the
+// reader with parser/wire and pass the TableSet it returns. DumpFedWire is the
+// same export for a database that does know its source.
 //
 // Parameters:
 //   - ctx: Context for cancellation

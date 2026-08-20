@@ -203,24 +203,7 @@ func TestDumpFedWireWithTableSet_NilTableSet(t *testing.T) {
 	assert.Error(t, err, "should fail with nil TableSet")
 }
 
-func TestWireTableInfo_TableNames(t *testing.T) {
-	t.Parallel()
-
-	info := WireTableInfo{BaseName: "payment"}
-
-	t.Run("MessageTable", func(t *testing.T) {
-		t.Parallel()
-		assert.Equal(t, "payment_message", info.MessageTable())
-	})
-
-	t.Run("AllTableNames", func(t *testing.T) {
-		t.Parallel()
-		expected := []string{"payment_message"}
-		assert.Equal(t, expected, info.AllTableNames())
-	})
-}
-
-func TestIsWireBaseTableName(t *testing.T) {
+func TestIsWireBaseTableNameSuffix(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -240,7 +223,7 @@ func TestIsWireBaseTableName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.tableName, func(t *testing.T) {
 			t.Parallel()
-			baseName, isWire := IsWireBaseTableName(tt.tableName)
+			baseName, isWire := isWireBaseTableName(tt.tableName)
 			assert.Equal(t, tt.expectedBase, baseName)
 			assert.Equal(t, tt.expectedWire, isWire)
 		})
