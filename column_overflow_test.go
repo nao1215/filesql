@@ -74,7 +74,7 @@ func TestOpenContextPreservesLargeIntegerPastTheFirstChunk(t *testing.T) {
 
 	var b strings.Builder
 	b.WriteString("account\n")
-	for i := range DefaultRowsPerChunk * 2 {
+	for i := range DefaultChunkSize * 2 {
 		fmt.Fprintf(&b, "%d\n", i+1)
 	}
 	b.WriteString("11040320260000000000\n")

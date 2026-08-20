@@ -126,7 +126,6 @@ func WithCompression(compression CompressionType) ReaderOption {
 //		AddPath("data.csv").
 //		EnableAutoSave("./backup")
 func NewBuilder() *DBBuilder {
-	chunkSize := DefaultChunkSize
 	return &DBBuilder{
 		paths:            make([]string, 0),
 		filesystems:      make([]fs.FS, 0),
@@ -134,13 +133,13 @@ func NewBuilder() *DBBuilder {
 		collectedPaths:   make([]string, 0),
 		parsedTables:     make([]*table, 0),
 		autoSaveConfig:   nil, // Default: no auto-save
-		defaultChunkSize: chunkSize,
+		defaultChunkSize: DefaultChunkSize,
 		logger:           newNopLogger(), // Default: no-op logger
 
 		// Initialize internal processors
 		validator:       newValidator(),
-		fileProcessor:   newFileProcessor(chunkSize),
-		streamProcessor: newStreamProcessor(chunkSize),
+		fileProcessor:   newFileProcessor(),
+		streamProcessor: newStreamProcessor(DefaultChunkSize),
 	}
 }
 
@@ -206,6 +205,7 @@ func (b *DBBuilder) AddReader(reader io.Reader, tableName string, fileType FileT
 // SetDefaultChunkSize sets chunk size (number of rows) for large file processing.
 //
 // Default: 1000 rows. Adjust based on available memory and processing needs.
+// A size of zero or less is ignored and the current size is kept.
 //
 // Example:
 //
@@ -215,6 +215,10 @@ func (b *DBBuilder) AddReader(reader io.Reader, tableName string, fileType FileT
 func (b *DBBuilder) SetDefaultChunkSize(size int) *DBBuilder {
 	if size > 0 {
 		b.defaultChunkSize = size
+		// The processor is what reads in chunks, and it was built with the
+		// default before this call. Leaving it to Build would make the option
+		// depend on being set before the build, which no other option does.
+		b.streamProcessor.setChunkSize(size)
 	}
 	return b
 }

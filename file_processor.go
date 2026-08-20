@@ -12,15 +12,13 @@ import (
 
 // fileProcessor handles file-specific processing operations
 type fileProcessor struct {
-	chunkSize int
 	validator *validator
 	logger    Logger
 }
 
 // newFileProcessor creates a new file processor instance
-func newFileProcessor(chunkSize int) *fileProcessor {
+func newFileProcessor() *fileProcessor {
 	return &fileProcessor{
-		chunkSize: chunkSize,
 		validator: newValidator(),
 		logger:    newNopLogger(),
 	}

@@ -23,7 +23,7 @@ func TestCollectFilesFromPaths_UnsupportedFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "notes.docx")
 	require.NoError(t, os.WriteFile(path, []byte("content"), 0o600))
 
-	_, err := newFileProcessor(100).collectFilesFromPaths([]string{path})
+	_, err := newFileProcessor().collectFilesFromPaths([]string{path})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUnsupportedFormat)
 }
@@ -48,7 +48,7 @@ func TestCollectFilesFromDirectory_UnreadableDirectory(t *testing.T) {
 	// lives in cannot be removed.
 	t.Cleanup(func() { require.NoError(t, os.Chmod(dir, 0o700)) }) //nolint:gosec // A directory needs its execute bit to be walked and removed
 
-	_, err := newFileProcessor(100).collectFilesFromPaths([]string{dir})
+	_, err := newFileProcessor().collectFilesFromPaths([]string{dir})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrIOOperation)
 }
@@ -65,7 +65,7 @@ func TestProcessFSToReaders_FindsFilesInSubdirectories(t *testing.T) {
 		"nested/notes.txt":   &fstest.MapFile{Data: []byte("ignored")},
 	}
 
-	readers, err := newFileProcessor(100).processFSToReaders(context.Background(), filesystem)
+	readers, err := newFileProcessor().processFSToReaders(context.Background(), filesystem)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		for _, r := range readers {
@@ -88,7 +88,7 @@ func TestProcessFSToReaders_FindsFilesInSubdirectories(t *testing.T) {
 func TestProcessFilesystemsToReaders_NilFilesystem(t *testing.T) {
 	t.Parallel()
 
-	_, err := newFileProcessor(100).processFilesystemsToReaders(context.Background(), []fs.FS{nil})
+	_, err := newFileProcessor().processFilesystemsToReaders(context.Background(), []fs.FS{nil})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNilInput)
 }
