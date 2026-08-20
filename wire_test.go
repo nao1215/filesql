@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -203,24 +204,7 @@ func TestDumpFedWireWithTableSet_NilTableSet(t *testing.T) {
 	assert.Error(t, err, "should fail with nil TableSet")
 }
 
-func TestWireTableInfo_TableNames(t *testing.T) {
-	t.Parallel()
-
-	info := WireTableInfo{BaseName: "payment"}
-
-	t.Run("MessageTable", func(t *testing.T) {
-		t.Parallel()
-		assert.Equal(t, "payment_message", info.MessageTable())
-	})
-
-	t.Run("AllTableNames", func(t *testing.T) {
-		t.Parallel()
-		expected := []string{"payment_message"}
-		assert.Equal(t, expected, info.AllTableNames())
-	})
-}
-
-func TestIsWireBaseTableName(t *testing.T) {
+func TestIsWireBaseTableNameSuffix(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -240,7 +224,7 @@ func TestIsWireBaseTableName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.tableName, func(t *testing.T) {
 			t.Parallel()
-			baseName, isWire := IsWireBaseTableName(tt.tableName)
+			baseName, isWire := isWireBaseTableName(tt.tableName)
 			assert.Equal(t, tt.expectedBase, baseName)
 			assert.Equal(t, tt.expectedWire, isWire)
 		})
@@ -450,4 +434,32 @@ func TestDumpFedWire_FailedWriteLeavesDestinationIntact(t *testing.T) {
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "a rejected write must not leave a temporary file behind: %v", entries)
+}
+
+// TestDumpFedWire_OnCallerManagedDatabase is the Fedwire half of the guard in
+// ach_test.go: the export runs its own queries rather than going through
+// DumpDatabase, so a connection held anywhere in its path stops it on the pool
+// this package asks a caller to pin to one connection, with no error to see.
+func TestDumpFedWire_OnCallerManagedDatabase(t *testing.T) {
+	testFile := findWireTestFile(t)
+	if testFile == "" {
+		t.Skip("No test Fedwire file found")
+	}
+
+	db := newCallerDB(t)
+	ctx := context.Background()
+	require.NoError(t, LoadInto(ctx, db, testFile))
+
+	out := filepath.Join(t.TempDir(), "written.fed")
+	done := make(chan error, 1)
+	go func() { done <- DumpFedWire(ctx, db, "customer_transfer", out) }()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("DumpFedWire did not return: the export is waiting for a connection it is holding itself")
+	}
+
+	assert.FileExists(t, out)
 }

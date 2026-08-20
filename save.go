@@ -285,9 +285,11 @@ func (o DumpOptions) WithEncoding(enc Encoding) DumpOptions {
 //
 // It exists for the same reason WithEncoding does: a save wrote "\n" whatever
 // the source used, so a CRLF file saved in place came back LF throughout — every
-// line of the file changed although the caller had edited one row. A save that
-// overwrites a file it loaded from a path detects the file's own terminator and
-// keeps it, so this option is for a dump to a new destination.
+// line of the file changed although the caller had edited one row. Writing back
+// in place, which is EnableAutoSave with an empty output directory, detects the
+// file's own terminator and keeps it. Every other save is an export and writes
+// what it is told, including one aimed at the directory a source came from, so
+// this option is how an export is asked for CRLF.
 //
 // Options:
 //   - LineEndingLF: "\n" (default)

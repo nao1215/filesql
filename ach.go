@@ -240,73 +240,9 @@ func fileParserTableDataToTable(td *parser.TableData, tableName string) *table {
 	}
 }
 
-// ACHTableInfo represents information about ACH tables created from an ACH file.
-// It provides methods to get the complete table names for each ACH table type.
-type ACHTableInfo struct {
-	// BaseName is the base table name derived from the ACH filename.
-	// For example, if the file is "payment.ach", BaseName is "payment".
-	BaseName string
-}
-
-// FileHeaderTable returns the complete table name for the file header table.
-// Example: "payment" -> "payment_file_header"
-func (a ACHTableInfo) FileHeaderTable() string {
-	return a.BaseName + "_file_header"
-}
-
-// BatchesTable returns the complete table name for the batches table.
-// Example: "payment" -> "payment_batches"
-func (a ACHTableInfo) BatchesTable() string {
-	return a.BaseName + "_batches"
-}
-
-// EntriesTable returns the complete table name for the entries table.
-// Example: "payment" -> "payment_entries"
-func (a ACHTableInfo) EntriesTable() string {
-	return a.BaseName + "_entries"
-}
-
-// AddendaTable returns the complete table name for the addenda table.
-// Example: "payment" -> "payment_addenda"
-func (a ACHTableInfo) AddendaTable() string {
-	return a.BaseName + "_addenda"
-}
-
-// IATBatchesTable returns the complete table name for the IAT batches table.
-// Example: "payment" -> "payment_iat_batches"
-func (a ACHTableInfo) IATBatchesTable() string {
-	return a.BaseName + "_iat_batches"
-}
-
-// IATEntriesTable returns the complete table name for the IAT entries table.
-// Example: "payment" -> "payment_iat_entries"
-func (a ACHTableInfo) IATEntriesTable() string {
-	return a.BaseName + "_iat_entries"
-}
-
-// IATAddendaTable returns the complete table name for the IAT addenda table.
-// Example: "payment" -> "payment_iat_addenda"
-func (a ACHTableInfo) IATAddendaTable() string {
-	return a.BaseName + "_iat_addenda"
-}
-
-// AllTableNames returns all possible ACH table names for this base name.
-// This includes both standard and IAT tables.
-func (a ACHTableInfo) AllTableNames() []string {
-	return []string{
-		a.FileHeaderTable(),
-		a.BatchesTable(),
-		a.EntriesTable(),
-		a.AddendaTable(),
-		a.IATBatchesTable(),
-		a.IATEntriesTable(),
-		a.IATAddendaTable(),
-	}
-}
-
-// IsACHBaseTableName checks if a table name is an ACH-related table
+// isACHBaseTableName checks if a table name is an ACH-related table
 // (ends with _file_header, _batches, _entries, _addenda, _iat_batches, _iat_entries, or _iat_addenda).
-func IsACHBaseTableName(tableName string) (baseName string, isACH bool) {
+func isACHBaseTableName(tableName string) (baseName string, isACH bool) {
 	suffixes := []string{
 		"_file_header", "_batches", "_entries", "_addenda",
 		"_iat_batches", "_iat_entries", "_iat_addenda",
@@ -447,8 +383,10 @@ func DumpACH(ctx context.Context, db *sql.DB, baseTableName, outputPath string) 
 // DumpACHWithTableSet exports ACH tables from the database back to an ACH file
 // using an explicitly provided TableSet.
 //
-// Use this function when you have the TableSet from a source other than the internal registry,
-// or when you need more control over which TableSet to use.
+// Use this function when the database has no source file to read the structure
+// back from, which is the case for one loaded from an io.Reader: parse the
+// reader with parser/ach and pass the TableSet it returns. DumpACH is the same
+// export for a database that does know its source.
 //
 // Parameters:
 //   - ctx: Context for cancellation

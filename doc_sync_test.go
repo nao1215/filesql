@@ -63,6 +63,15 @@ func TestEnglishReadmeHasStableMarkers(t *testing.T) {
 		"EnableAutoSave",
 		"SetDefaultChunkSize",
 		"SetMaxOpenConns",
+		// Which save keeps a source's line terminator is a distinction a caller
+		// acts on: the in-place mode reads it from the file, every other save
+		// writes "\n" unless told otherwise, and WithLineEnding is how the
+		// second is asked for the first. A README that keeps only the name of
+		// the mode still lets the other two halves of the rule go missing, so
+		// all three are pinned.
+		`EnableAutoSave("")`,
+		`EnableAutoSave("./dir")`,
+		"WithLineEnding(LineEndingCRLF)",
 	}
 
 	content := readReadme(t, englishReadmePath)

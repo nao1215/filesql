@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -495,7 +496,7 @@ func achTableNames(ctx context.Context, t *testing.T, db *sql.DB) []string {
 	for rows.Next() {
 		var name string
 		require.NoError(t, rows.Scan(&name))
-		base, isACH := IsACHBaseTableName(name)
+		base, isACH := isACHBaseTableName(name)
 		require.True(t, isACH, "unexpected table %s", name)
 		suffixes = append(suffixes, strings.TrimPrefix(name, base))
 	}
@@ -519,53 +520,6 @@ func findACHTestFile(t *testing.T, filename string) string {
 	}
 
 	return ""
-}
-
-func TestACHTableInfo_TableNames(t *testing.T) {
-	t.Parallel()
-
-	info := ACHTableInfo{BaseName: "payment"}
-
-	t.Run("FileHeaderTable", func(t *testing.T) {
-		assert.Equal(t, "payment_file_header", info.FileHeaderTable())
-	})
-
-	t.Run("BatchesTable", func(t *testing.T) {
-		assert.Equal(t, "payment_batches", info.BatchesTable())
-	})
-
-	t.Run("EntriesTable", func(t *testing.T) {
-		assert.Equal(t, "payment_entries", info.EntriesTable())
-	})
-
-	t.Run("AddendaTable", func(t *testing.T) {
-		assert.Equal(t, "payment_addenda", info.AddendaTable())
-	})
-
-	t.Run("IATBatchesTable", func(t *testing.T) {
-		assert.Equal(t, "payment_iat_batches", info.IATBatchesTable())
-	})
-
-	t.Run("IATEntriesTable", func(t *testing.T) {
-		assert.Equal(t, "payment_iat_entries", info.IATEntriesTable())
-	})
-
-	t.Run("IATAddendaTable", func(t *testing.T) {
-		assert.Equal(t, "payment_iat_addenda", info.IATAddendaTable())
-	})
-
-	t.Run("AllTableNames", func(t *testing.T) {
-		expected := []string{
-			"payment_file_header",
-			"payment_batches",
-			"payment_entries",
-			"payment_addenda",
-			"payment_iat_batches",
-			"payment_iat_entries",
-			"payment_iat_addenda",
-		}
-		assert.Equal(t, expected, info.AllTableNames())
-	})
 }
 
 // TestDumpACH_FailedWriteLeavesDestinationIntact pins that a rejected ACH write
@@ -609,4 +563,32 @@ func TestDumpACH_FailedWriteLeavesDestinationIntact(t *testing.T) {
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "a rejected write must not leave a temporary file behind: %v", entries)
+}
+
+// TestDumpACH_OnCallerManagedDatabase covers the rest of the export surface on
+// the pool this package asks a caller to pin to one connection.
+//
+// DumpDatabase used to hold a connection it never read from, which deadlocked
+// exactly this pool. The ACH and Fedwire exports run their own queries rather
+// than going through DumpDatabase, so they need their own guard: a connection
+// held anywhere in the export path stops the whole thing here, silently.
+func TestDumpACH_OnCallerManagedDatabase(t *testing.T) {
+	source := copyACHFixture(t, "ppd-debit.ach")
+
+	db := newCallerDB(t)
+	ctx := context.Background()
+	require.NoError(t, LoadInto(ctx, db, source))
+
+	out := filepath.Join(t.TempDir(), "written.ach")
+	done := make(chan error, 1)
+	go func() { done <- DumpACH(ctx, db, "payment", out) }()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("DumpACH did not return: the export is waiting for a connection it is holding itself")
+	}
+
+	assert.FileExists(t, out)
 }
