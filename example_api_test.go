@@ -529,7 +529,7 @@ id,name
 		log.Fatal(err)
 	}
 
-	saved, err := os.ReadFile(filepath.Join(out, "users.csv"))
+	saved, err := os.ReadFile(filepath.Join(out, "users.csv")) //nolint:gosec // path built from this example's own temp directory
 	if err != nil {
 		log.Fatal(err)
 	}

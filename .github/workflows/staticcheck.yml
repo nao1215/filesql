@@ -1,0 +1,33 @@
+name: staticcheck
+
+# staticcheck is kept off the pull request path on purpose. It builds SSA and
+# computes facts for every package in the import graph, and this module's graph
+# holds machine-generated Go with functions thousands of lines long, so a run
+# whose cache misses takes tens of minutes while the rest of the lint finishes
+# in seconds. Running it here means the checks still cover this code without
+# standing between a pull request and its merge; a failure shows up on main and
+# is fixed as a follow-up rather than blocking whoever landed it.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  staticcheck:
+    name: staticcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+
+      - name: Run staticcheck
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.0
+          args: --config .golangci.staticcheck.yml --timeout 55m
