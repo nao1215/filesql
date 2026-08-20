@@ -2959,6 +2959,93 @@ func TestDistinctAndJoinCompareValuesAsWritten(t *testing.T) {
 		assert.Empty(t, joined.ToRecords(), "007 and 7 are different identifiers")
 	})
 
+	t.Run("a number is not the text that spells it", func(t *testing.T) {
+		t.Parallel()
+
+		// The two rows arrive already typed, which is the shape a caller
+		// building a frame from records has. Formatting both with %v to key
+		// them made them one row.
+		df := NewDataFrameFromRecords([]map[string]any{{"a": int64(7)}, {"a": "7"}})
+
+		assert.Equal(t, 2, df.Distinct().Len(), "the integer 7 and the text \"7\" are two values")
+	})
+
+	t.Run("a missing value is not the text nil formats as", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{{"a": nil}, {"a": "<nil>"}})
+
+		assert.Equal(t, 2, df.Distinct().Len())
+	})
+
+	t.Run("a value carrying the separator stays in its own column", func(t *testing.T) {
+		t.Parallel()
+
+		// Joining the cells with a null byte let a value holding one reach
+		// across into its neighbor: these two rows keyed the same.
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"a": "x\x00y", "b": "z"},
+			{"a": "x", "b": "y\x00z"},
+		})
+
+		assert.Equal(t, 2, df.Distinct().Len())
+	})
+
+	t.Run("a boolean is not the text that spells it", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{{"a": true}, {"a": "true"}})
+
+		assert.Equal(t, 2, df.Distinct().Len())
+	})
+
+	t.Run("an empty value is not a missing one", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{{"a": ""}, {"a": nil}})
+
+		assert.Equal(t, 2, df.Distinct().Len())
+	})
+
+	t.Run("a join matches an integer to the equal real", func(t *testing.T) {
+		t.Parallel()
+
+		// Distinct collapses 1 and 1.0, and doc.go says a join matches them to
+		// each other. Indexing the join by the interface value did not: the two
+		// are different map keys.
+		left := NewDataFrameFromRecords([]map[string]any{{"id": int64(1), "x": "a"}})
+		right := NewDataFrameFromRecords([]map[string]any{{"id": float64(1), "y": "Z"}})
+
+		joined, err := left.Join(right, JoinOption{On: []string{"id"}, How: InnerJoin})
+		require.NoError(t, err)
+
+		assert.Equal(t, []map[string]any{{"id": int64(1), "x": "a", "y": "Z"}}, joined.ToRecords())
+	})
+
+	t.Run("a join matches an integer to the equal real the other way round", func(t *testing.T) {
+		t.Parallel()
+
+		left := NewDataFrameFromRecords([]map[string]any{{"id": float64(1), "x": "a"}})
+		right := NewDataFrameFromRecords([]map[string]any{{"id": int64(1), "y": "Z"}})
+
+		joined, err := left.Join(right, JoinOption{On: []string{"id"}, How: InnerJoin})
+		require.NoError(t, err)
+
+		assert.Equal(t, []map[string]any{{"id": float64(1), "x": "a", "y": "Z"}}, joined.ToRecords())
+	})
+
+	t.Run("a left join fills the right side when the reals match", func(t *testing.T) {
+		t.Parallel()
+
+		left := NewDataFrameFromRecords([]map[string]any{{"id": int64(1), "x": "a"}})
+		right := NewDataFrameFromRecords([]map[string]any{{"id": float64(1), "y": "Z"}})
+
+		joined, err := left.Join(right, JoinOption{On: []string{"id"}, How: LeftJoin})
+		require.NoError(t, err)
+
+		assert.Equal(t, []map[string]any{{"id": int64(1), "x": "a", "y": "Z"}}, joined.ToRecords())
+	})
+
 	t.Run("a join still matches a code to itself", func(t *testing.T) {
 		t.Parallel()
 

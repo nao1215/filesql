@@ -789,3 +789,70 @@ func TestAggregatesSayWhenTheyHaveNoAnswer(t *testing.T) {
 		assert.Nil(t, byGroup["b"], "the group held no value, which is not a total of zero")
 	})
 }
+
+// TestGroupByUsesTheSameEqualityAsDistinct pins that two rows land in one group
+// exactly when Distinct would call them one row.
+//
+// They did not: the key was every cell formatted with %v and joined by a null
+// byte, so a number and the text that spells it were one group, and a value
+// carrying a null byte reached across into its neighbor.
+func TestGroupByUsesTheSameEqualityAsDistinct(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a number and the text that spells it are two groups", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"a": int64(7), "b": int64(1)},
+			{"a": "7", "b": int64(2)},
+		})
+
+		grouped, err := df.GroupBy("a")
+		require.NoError(t, err)
+		assert.Equal(t, 2, grouped.Count().Len())
+	})
+
+	t.Run("values equal as numbers are one group", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"a": int64(1), "b": int64(1)},
+			{"a": float64(1), "b": int64(2)},
+		})
+
+		grouped, err := df.GroupBy("a")
+		require.NoError(t, err)
+		assert.Equal(t, 1, grouped.Count().Len(), "1 and 1.0 are one value")
+	})
+
+	t.Run("a value carrying the separator stays in its own column", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"a": "x\x00y", "b": "z", "n": int64(1)},
+			{"a": "x", "b": "y\x00z", "n": int64(2)},
+		})
+
+		grouped, err := df.GroupBy("a", "b")
+		require.NoError(t, err)
+		assert.Equal(t, 2, grouped.Count().Len())
+	})
+
+	t.Run("groups come back in the order they first appear", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"a": "z", "n": int64(1)},
+			{"a": "a", "n": int64(2)},
+			{"a": "z", "n": int64(3)},
+		})
+
+		grouped, err := df.GroupBy("a")
+		require.NoError(t, err)
+
+		got := grouped.Count().ToRecords()
+		require.Len(t, got, 2)
+		assert.Equal(t, "z", got[0]["a"], "the first group in the frame is the first group out")
+		assert.Equal(t, "a", got[1]["a"])
+	})
+}

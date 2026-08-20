@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"slices"
-	"strings"
 )
 
 // GroupedDataFrame represents a DataFrame grouped by one or more columns.
@@ -51,23 +49,31 @@ func (df *DataFrame) GroupBy(columns ...string) (*GroupedDataFrame, error) {
 	}, nil
 }
 
-// groupKey generates a unique key for a group based on the group columns.
+// groupKey generates a unique key for a group based on the group columns. Two
+// rows share a key exactly when this package treats their key values as equal,
+// which is the same relation Distinct uses.
 func (gdf *GroupedDataFrame) groupKey(row map[string]any) string {
-	parts := make([]string, len(gdf.groups))
-	for i, col := range gdf.groups {
-		parts[i] = fmt.Sprintf("%v", row[col])
-	}
-	return strings.Join(parts, "\x00")
+	return makeRowKey(row, gdf.groups)
 }
 
-// buildGroups organizes rows into groups based on group columns.
-func (gdf *GroupedDataFrame) buildGroups() map[string][]map[string]any {
+// buildGroups organizes rows into groups based on group columns, and returns
+// the keys in the order the groups first appear in the frame.
+//
+// Ordering by the key itself would order the output by the encoding of a value
+// rather than by the value, which is an implementation detail and not something
+// a caller can predict. First appearance is as deterministic and is what the
+// rows themselves say.
+func (gdf *GroupedDataFrame) buildGroups() (map[string][]map[string]any, []string) {
 	groups := make(map[string][]map[string]any)
+	order := make([]string, 0, len(gdf.df.rows))
 	for _, row := range gdf.df.rows {
 		key := gdf.groupKey(row)
+		if _, seen := groups[key]; !seen {
+			order = append(order, key)
+		}
 		groups[key] = append(groups[key], row)
 	}
-	return groups
+	return groups, order
 }
 
 // Agg performs a custom aggregation on the specified column.
@@ -99,7 +105,7 @@ func (gdf *GroupedDataFrame) validateColumn(column string) error {
 
 // aggregate is the internal implementation for all aggregation operations.
 func (gdf *GroupedDataFrame) aggregate(column string, fn AggFunc, resultColumn string) *DataFrame {
-	groups := gdf.buildGroups()
+	groups, keys := gdf.buildGroups()
 
 	// Build result columns: group columns + result column
 	resultColumns := make([]string, 0, len(gdf.groups)+1)
@@ -107,11 +113,6 @@ func (gdf *GroupedDataFrame) aggregate(column string, fn AggFunc, resultColumn s
 	resultColumns = append(resultColumns, resultColumn)
 
 	// Process each group
-	keys := make([]string, 0, len(groups))
-	for key := range groups {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys) // ensure deterministic order
 
 	rows := make([]map[string]any, 0, len(keys))
 	for _, key := range keys {
@@ -153,7 +154,7 @@ func (gdf *GroupedDataFrame) aggregate(column string, fn AggFunc, resultColumn s
 //
 //	counts := df.GroupBy("category").Count()
 func (gdf *GroupedDataFrame) Count() *DataFrame {
-	groups := gdf.buildGroups()
+	groups, keys := gdf.buildGroups()
 
 	// Build result columns: group columns + "count"
 	resultColumns := make([]string, 0, len(gdf.groups)+1)
@@ -161,11 +162,6 @@ func (gdf *GroupedDataFrame) Count() *DataFrame {
 	resultColumns = append(resultColumns, "count")
 
 	// Process each group
-	keys := make([]string, 0, len(groups))
-	for key := range groups {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
 
 	rows := make([]map[string]any, 0, len(keys))
 	for _, key := range keys {

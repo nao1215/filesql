@@ -119,17 +119,19 @@ func NewDataFrameFromPath(path string) (*DataFrame, error) {
 // codes the sample saw. Such a value keeps its text form: the type says what the
 // column mostly is, and the value says what it is.
 //
-// Losslessness is asked of the integer conversion by rendering it back. It is
-// not asked of the real one: "1.50" is the real 1.5 here as it is everywhere
-// else in filesql, because the quantity survives and only the way it was
-// written does not.
+// The spelling of a number is not kept, for either type: "+7" is the integer 7
+// and "1.50" is the real 1.5 here as they are everywhere else in filesql,
+// because the quantity survives and only the way it was written does not. A
+// spelling that does change the value — a leading zero, a magnitude past int64
+// — keeps its whole column text, decided before this by the column's type, so
+// there is nothing left for the conversion to protect against.
 func convertStringValue(s string, ct parser.ColumnType) any {
 	switch ct {
 	case parser.TypeInteger:
 		if s == "" {
 			return s
 		}
-		if i, err := strconv.ParseInt(s, 10, 64); err == nil && strconv.FormatInt(i, 10) == s {
+		if i, err := strconv.ParseInt(s, 10, 64); err == nil {
 			return i
 		}
 		return s
@@ -609,9 +611,12 @@ func (df *DataFrame) Join(other *DataFrame, opt JoinOption) (*DataFrame, error) 
 		index int
 		row   map[string]any
 	}
-	rightIndex := make(map[any][]indexedRow)
+	// Keyed by the text that stands for a value rather than by the value: the
+	// package documents that 1 and 1.0 are one value and that a join matches
+	// them, which a map keyed by the interface value does not do.
+	rightIndex := make(map[string][]indexedRow)
 	for i, row := range other.rows {
-		key := row[rightCol]
+		key := joinKey(row[rightCol])
 		rightIndex[key] = append(rightIndex[key], indexedRow{index: i, row: row})
 	}
 
@@ -641,7 +646,7 @@ func (df *DataFrame) Join(other *DataFrame, opt JoinOption) (*DataFrame, error) 
 
 	// Process left rows
 	for _, leftRow := range df.rows {
-		leftKey := leftRow[leftCol]
+		leftKey := joinKey(leftRow[leftCol])
 		indexedRows, found := rightIndex[leftKey]
 
 		if found {
@@ -1109,12 +1114,83 @@ func (df *DataFrame) DistinctBy(columns ...string) *DataFrame {
 
 // makeRowKey creates a string key from row values for the specified columns.
 func makeRowKey(row map[string]any, columns []string) string {
-	parts := make([]string, len(columns))
-	for i, col := range columns {
-		parts[i] = fmt.Sprintf("%v", row[col])
+	var b strings.Builder
+	for _, col := range columns {
+		writeValueKey(&b, row[col])
 	}
-	// Use null byte as separator to avoid collisions
-	return strings.Join(parts, "\x00")
+	return b.String()
+}
+
+// writeValueKey appends the text that stands for v's identity: two values write
+// the same text exactly when this package treats them as one value.
+//
+// The rule the package documents is that the quantity is the value and its
+// spelling is not, so 1, 1.0 and 1.00 are one value; everything else is
+// distinguished, including a number from the string that spells it and nil from
+// the text "<nil>". Formatting with %v told none of those apart, so Distinct
+// dropped a row that was not a duplicate and GroupBy merged two groups.
+//
+// Each part is written with its length in front, which is what keeps a value
+// carrying the separator from reaching across into its neighbor: "x\x00y" and
+// "z" used to key the same as "x" and "y\x00z".
+func writeValueKey(b *strings.Builder, v any) {
+	kind, text := valueKind(v)
+	b.WriteByte(kind)
+	b.WriteString(strconv.Itoa(len(text)))
+	b.WriteByte(':')
+	b.WriteString(text)
+}
+
+// valueKind returns a tag for v's type and the text that identifies it within
+// that type. Every numeric type shares one tag and one canonical spelling, so
+// the documented cross-type numeric equality survives.
+func valueKind(v any) (byte, string) {
+	switch value := v.(type) {
+	case nil:
+		return 'z', ""
+	case bool:
+		return 'b', strconv.FormatBool(value)
+	case string:
+		return 's', value
+	case int:
+		return 'n', canonicalNumber(float64(value))
+	case int8:
+		return 'n', canonicalNumber(float64(value))
+	case int16:
+		return 'n', canonicalNumber(float64(value))
+	case int32:
+		return 'n', canonicalNumber(float64(value))
+	case int64:
+		return 'n', canonicalNumber(float64(value))
+	case uint:
+		return 'n', canonicalNumber(float64(value))
+	case uint8:
+		return 'n', canonicalNumber(float64(value))
+	case uint16:
+		return 'n', canonicalNumber(float64(value))
+	case uint32:
+		return 'n', canonicalNumber(float64(value))
+	case uint64:
+		return 'n', canonicalNumber(float64(value))
+	case float32:
+		return 'n', canonicalNumber(float64(value))
+	case float64:
+		return 'n', canonicalNumber(value)
+	default:
+		return 'o', fmt.Sprintf("%v", value)
+	}
+}
+
+// canonicalNumber renders f the one way every spelling of that quantity renders.
+func canonicalNumber(f float64) string {
+	return strconv.FormatFloat(f, 'g', -1, 64)
+}
+
+// joinKey is the identity of one value, for indexing a join by it.
+func joinKey(v any) string {
+	var b strings.Builder
+	writeValueKey(&b, v)
+	return b.String()
 }
 
 // Head returns a new DataFrame with the first n rows.
