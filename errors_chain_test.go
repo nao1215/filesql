@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -170,4 +172,49 @@ func TestParseFailure_NamesTheInputOnce(t *testing.T) {
 			assert.NotContains(t, parseErr.Err.Error(), tt.file)
 		})
 	}
+}
+
+// TestUnreadableFileReportsFsErrPermission pins that a caller can tell "I may
+// not read this" from "this is not there" without a sentinel of this package's
+// own.
+//
+// filesql wraps the operating system's error all the way up, so the standard
+// library's answer already works. That is why ErrPermissionDenied was removed
+// rather than wired up: a package-specific alias for a condition io/fs already
+// names is a second way to ask the same question, and it was the way that
+// always answered false.
+func TestUnreadableFileReportsFsErrPermission(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("clearing the read bit does not deny the owner on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the read bit")
+	}
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "unreadable.csv")
+	require.NoError(t, os.WriteFile(path, []byte("id\n1\n"), 0o600))
+	require.NoError(t, os.Chmod(path, 0o000))
+
+	_, err := OpenContext(t.Context(), path)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, fs.ErrPermission, "the caller needs to see a permission problem as one")
+	assert.ErrorIs(t, err, ErrIOOperation, "and it stays inside this package's I/O category")
+}
+
+// TestCancelledLoadReportsContextError pins the same for cancellation:
+// context.Canceled is what a load reports, which is what a caller already knows
+// how to test for.
+func TestCancelledLoadReportsContextError(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "t.csv")
+	require.NoError(t, os.WriteFile(path, []byte("id\n1\n"), 0o600))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := OpenContext(ctx, path)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
 }

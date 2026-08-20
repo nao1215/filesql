@@ -22,15 +22,6 @@ var (
 	// ErrFileNotFound indicates file not found.
 	ErrFileNotFound = errors.New("filesql: file not found")
 
-	// ErrPermissionDenied indicates permission denied.
-	ErrPermissionDenied = errors.New("filesql: permission denied")
-
-	// ErrMemoryLimit indicates memory limit exceeded.
-	ErrMemoryLimit = errors.New("filesql: memory limit exceeded")
-
-	// ErrContextCancelled indicates context was cancelled.
-	ErrContextCancelled = errors.New("filesql: context cancelled")
-
 	// ErrDuplicateColumn indicates duplicate column names in the data source.
 	ErrDuplicateColumn = errors.New("filesql: duplicate column name")
 
