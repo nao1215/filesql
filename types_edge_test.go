@@ -185,6 +185,27 @@ func loadColumnForTypeTest(t *testing.T, values []string, chunkSize int) (string
 	return declared, got
 }
 
+// TestColumnEvidenceList_IgnoresCellsPastTheHeader covers a row wider than the
+// header it belongs to. The columns a table has are the ones the header names,
+// so a cell beyond the last of them cannot decide any column's type; a row
+// shorter than the header leaves the columns it does not reach alone, which is
+// what a missing cell means.
+func TestColumnEvidenceList_IgnoresCellsPastTheHeader(t *testing.T) {
+	t.Parallel()
+
+	header := newHeader([]string{"a", "b"})
+	evidence := newColumnEvidenceList(len(header))
+	evidence.addRecords([]record{
+		newRecord([]string{"1", "2", "abc"}),
+		newRecord([]string{"3"}),
+	})
+
+	assert.Equal(t, columnInfoList{
+		{Name: "a", Type: columnTypeInteger},
+		{Name: "b", Type: columnTypeInteger},
+	}, evidence.columnInfos(header))
+}
+
 // TestColumnType_IsTheSameWhereverTheAwkwardValueSits pins the type of a column
 // to the values it holds and not to the row one of them happens to sit on. A
 // value that arrives after the first chunk used to meet a type already decided
