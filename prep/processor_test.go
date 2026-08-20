@@ -2467,3 +2467,23 @@ func TestMinCountsRunesForAMultibyteString(t *testing.T) {
 		t.Errorf("ValidRowCount = %d, want 1: three runes satisfy min=3 (errors: %v)", result.ValidRowCount, result.Errors)
 	}
 }
+
+// fractionalMinRecord asks for a length no whole number of characters reaches
+// exactly, which the comparison has to keep rather than truncate.
+type fractionalMinRecord struct {
+	Name string `validate:"min=3.5"`
+}
+
+func TestMinKeepsAFractionalLengthThreshold(t *testing.T) {
+	t.Parallel()
+
+	var records []fractionalMinRecord
+	processor := NewProcessor(parser.CSV)
+	_, result, err := processor.Process(strings.NewReader("name\nabcd\nabc\n"), &records)
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if result.ValidRowCount != 1 {
+		t.Errorf("ValidRowCount = %d, want 1: four runes reach 3.5 and three do not (errors: %v)", result.ValidRowCount, result.Errors)
+	}
+}

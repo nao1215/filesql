@@ -543,8 +543,8 @@ func newMinValidator(threshold float64) *minValidator {
 // Validate checks if the value is at least the minimum
 func (v *minValidator) Validate(value string) string {
 	if v.measuresLength {
-		if utf8.RuneCountInString(value) < int(v.threshold) {
-			return "value must have at least " + strconv.Itoa(int(v.threshold)) + " characters"
+		if float64(utf8.RuneCountInString(value)) < v.threshold {
+			return "value must have at least " + strconv.FormatFloat(v.threshold, 'f', -1, 64) + " characters"
 		}
 		return ""
 	}
@@ -578,8 +578,8 @@ func newMaxValidator(threshold float64) *maxValidator {
 // Validate checks if the value is at most the maximum
 func (v *maxValidator) Validate(value string) string {
 	if v.measuresLength {
-		if utf8.RuneCountInString(value) > int(v.threshold) {
-			return "value must have at most " + strconv.Itoa(int(v.threshold)) + " characters"
+		if float64(utf8.RuneCountInString(value)) > v.threshold {
+			return "value must have at most " + strconv.FormatFloat(v.threshold, 'f', -1, 64) + " characters"
 		}
 		return ""
 	}

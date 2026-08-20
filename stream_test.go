@@ -1850,7 +1850,7 @@ func TestChunkSizeDoesNotChangeTheColumnType(t *testing.T) {
 					t.Fatalf("chunk size %d: open: %v", chunkSize, err)
 				}
 
-				rows, err := db.QueryContext(context.Background(), `SELECT v, typeof(v) FROM t`)
+				rows, err := db.QueryContext(context.Background(), `SELECT v, typeof(v) FROM t ORDER BY rowid`)
 				if err != nil {
 					t.Fatalf("chunk size %d: query: %v", chunkSize, err)
 				}
