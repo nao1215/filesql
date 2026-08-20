@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -433,4 +434,32 @@ func TestDumpFedWire_FailedWriteLeavesDestinationIntact(t *testing.T) {
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "a rejected write must not leave a temporary file behind: %v", entries)
+}
+
+// TestDumpFedWire_OnCallerManagedDatabase is the Fedwire half of the guard in
+// ach_test.go: the export runs its own queries rather than going through
+// DumpDatabase, so a connection held anywhere in its path stops it on the pool
+// this package asks a caller to pin to one connection, with no error to see.
+func TestDumpFedWire_OnCallerManagedDatabase(t *testing.T) {
+	testFile := findWireTestFile(t)
+	if testFile == "" {
+		t.Skip("No test Fedwire file found")
+	}
+
+	db := newCallerDB(t)
+	ctx := context.Background()
+	require.NoError(t, LoadInto(ctx, db, testFile))
+
+	out := filepath.Join(t.TempDir(), "written.fed")
+	done := make(chan error, 1)
+	go func() { done <- DumpFedWire(ctx, db, "customer_transfer", out) }()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("DumpFedWire did not return: the export is waiting for a connection it is holding itself")
+	}
+
+	assert.FileExists(t, out)
 }

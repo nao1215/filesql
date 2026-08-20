@@ -199,6 +199,27 @@ func TestSaveLineEndingByDestination(t *testing.T) {
 		assert.Equal(t, "id,v\n1,x\n2,b\n", string(got))
 	})
 
+	t.Run("auto-save into a directory is told the terminator instead", func(t *testing.T) {
+		t.Parallel()
+
+		path := newSource(t)
+		ctx := t.Context()
+		validated, err := NewBuilder().
+			AddPath(path).
+			EnableAutoSave(filepath.Dir(path), NewDumpOptions().WithLineEnding(LineEndingCRLF)).
+			Build(ctx)
+		require.NoError(t, err)
+		db, err := validated.Open(ctx)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, update)
+		require.NoError(t, err)
+		require.NoError(t, db.Close())
+
+		got, err := os.ReadFile(path) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		assert.Equal(t, "id,v\r\n1,x\r\n2,b\r\n", string(got))
+	})
+
 	t.Run("an export is told the terminator instead", func(t *testing.T) {
 		t.Parallel()
 
