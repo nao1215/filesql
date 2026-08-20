@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -397,4 +398,69 @@ func TestLoadInto_DumpDatabaseOnCallerDB(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(outputDir, "users.csv")) //nolint:gosec // Test path from t.TempDir()
 	require.NoError(t, err)
 	assert.Equal(t, "id,name\n1,alice\n2,bob\n", string(got))
+}
+
+// TestLoadInto_FailedLoadLeavesTheDatabaseAsItWas pins that a load which fails
+// partway does not take the caller's data with it.
+//
+// The table was created, and an existing one of the same name dropped, outside
+// the transaction the rows were inserted in. So a failed load rolled back the
+// rows and kept the empty table: a reload that failed left the caller holding a
+// table that answers queries and returns nothing, where their rows had been.
+// The error said the load failed and the database said the file was empty.
+func TestLoadInto_FailedLoadLeavesTheDatabaseAsItWas(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.csv")
+	require.NoError(t, os.WriteFile(path, []byte("id,payload\n1,first load\n2,second row\n"), 0o600))
+
+	db := newCallerDB(t)
+	require.NoError(t, LoadInto(context.Background(), db, path))
+	require.Equal(t, 2, countRows(t, db, "big"))
+
+	// The same table name, reloaded from a file large enough that the load is
+	// cut short. 200000 rows is well past what a five-millisecond budget reaches.
+	var body strings.Builder
+	body.WriteString("id,payload\n")
+	for i := range 200000 {
+		body.WriteString(strconv.Itoa(i))
+		body.WriteString(",")
+		body.WriteString(strings.Repeat("x", 200))
+		body.WriteString("\n")
+	}
+	require.NoError(t, os.WriteFile(path, []byte(body.String()), 0o600))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	require.Error(t, LoadInto(ctx, db, path), "the load has to fail for this test to say anything")
+
+	assert.Equal(t, 2, countRows(t, db, "big"), "a failed reload must not take the rows that were there")
+}
+
+// TestLoadInto_FailedFirstLoadLeavesNoTable is the other half: a load that
+// fails while creating a table the database did not have leaves nothing behind,
+// rather than an empty table named after the file.
+func TestLoadInto_FailedFirstLoadLeavesNoTable(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fresh.csv")
+
+	var body strings.Builder
+	body.WriteString("id,payload\n")
+	for i := range 200000 {
+		body.WriteString(strconv.Itoa(i))
+		body.WriteString(",")
+		body.WriteString(strings.Repeat("x", 200))
+		body.WriteString("\n")
+	}
+	require.NoError(t, os.WriteFile(path, []byte(body.String()), 0o600))
+
+	db := newCallerDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	require.Error(t, LoadInto(ctx, db, path))
+
+	assert.Empty(t, listTables(t, db), "a load that failed created nothing the caller can query")
 }

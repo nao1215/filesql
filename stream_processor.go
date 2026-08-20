@@ -348,13 +348,13 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, 
 		chunkCount++
 		// Create table on first chunk
 		if !tableCreated {
-			sp.logger.Debug("creating table", logKeyTable, input.tableName, "columns", len(chunk.getHeaders()))
-			if err := sp.createTableFromChunk(ctx, db, chunk); err != nil {
-				return fmt.Errorf("%w: failed to create table: %w", ErrDatabaseOperation, err)
-			}
-
-			// Start transaction for bulk inserts - significantly improves performance
-			// by reducing disk sync operations
+			// The transaction opens before the table is made, not after. It exists
+			// for the speed of batching the inserts, but the drop and create
+			// belong inside it for correctness: run outside, they survived a load
+			// that failed later, so a failed reload left an empty table where the
+			// caller's rows had been and a failed first load left a table named
+			// after the file. The error said the load failed and the database said
+			// the file was empty.
 			var err error
 			if existingTx, ok := db.(*sql.Tx); ok {
 				tx = existingTx
@@ -368,6 +368,11 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, 
 					return fmt.Errorf("%w: failed to begin transaction: %w", ErrDatabaseOperation, err)
 				}
 				ownTx = true
+			}
+
+			sp.logger.Debug("creating table", logKeyTable, input.tableName, "columns", len(chunk.getHeaders()))
+			if err := sp.createTableFromChunk(ctx, tx, chunk); err != nil {
+				return fmt.Errorf("%w: failed to create table: %w", ErrDatabaseOperation, err)
 			}
 
 			// Prepare insert statement within transaction

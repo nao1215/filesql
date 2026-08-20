@@ -639,6 +639,11 @@ func (b *DBBuilder) OpenReadOnly(ctx context.Context) (*ReadOnlyDB, error) {
 //     recreated), so reloading a file is idempotent and same-named inputs are
 //     last-wins. Other tables in db are left untouched.
 //   - The caller keeps ownership of db. LoadInto never closes it, even on error.
+//   - Each input is loaded atomically: a file that fails partway leaves the
+//     database as it was, including the table it was replacing. Inputs are not
+//     atomic with respect to each other, so when the third of three files fails
+//     the first two are loaded. Use LoadIntoTx when the whole set has to land or
+//     none of it.
 //   - For an in-memory database, pin the pool to one connection
 //     (db.SetMaxOpenConns(1)). SQLite ":memory:" is private per connection, so a
 //     multi-connection pool would not share the loaded tables.

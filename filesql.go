@@ -191,7 +191,8 @@ func OpenContext(ctx context.Context, paths ...string) (*sql.DB, error) {
 //
 // A table whose name matches a loaded file is replaced, so reloading is
 // idempotent (last-wins for same-named inputs); other tables in db are left
-// untouched. For an in-memory database, pin the pool to a single connection
+// untouched. Each input is loaded atomically, so a file that fails partway
+// leaves the database as it was, including the table it was replacing. For an in-memory database, pin the pool to a single connection
 // (db.SetMaxOpenConns(1)) because SQLite ":memory:" is private per connection.
 // See (*DBBuilder).LoadInto for the full semantics and for loading readers or
 // filesystems.
