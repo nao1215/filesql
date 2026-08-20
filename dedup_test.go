@@ -83,7 +83,7 @@ func TestSourceIdentity(t *testing.T) {
 func TestDeduplicateCompressedFiles(t *testing.T) {
 	t.Parallel()
 
-	fp := newFileProcessor(1)
+	fp := newFileProcessor()
 
 	tests := []struct {
 		name  string
@@ -174,7 +174,7 @@ func TestDeduplicateCompressedFiles(t *testing.T) {
 func TestDeduplicateCompressedFilesIsStable(t *testing.T) {
 	t.Parallel()
 
-	fp := newFileProcessor(1)
+	fp := newFileProcessor()
 	files := []string{
 		"a/users.csv", "b/users.csv.gz", "c/users.csv", "a/users.csv.gz",
 		"d/orders.tsv", "e/orders.tsv", "f/logs.ltsv.xz",

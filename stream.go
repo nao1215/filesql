@@ -311,6 +311,22 @@ func (p *streamingParser) ProcessInChunks(reader io.Reader, processor chunkProce
 	}
 }
 
+// emitChunk hands one chunk to the processor, typed by every row seen so far.
+// The three chunked readers differ in where their rows come from and not in how
+// a chunk is made, so they share this.
+func (p *streamingParser) emitChunk(processor chunkProcessor, headers header, records []record, evidence columnEvidenceList) error {
+	chunk := &tableChunk{
+		tableName:  p.tableName,
+		headers:    headers,
+		records:    records,
+		columnInfo: evidence.columnInfos(headers),
+	}
+	if err := processor(chunk); err != nil {
+		return fmt.Errorf("chunk processor error: %w", err)
+	}
+	return nil
+}
+
 // processDelimitedInChunks processes CSV or TSV data in chunks based on delimiter
 func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor chunkProcessor, delimiter rune, fileTypeName string) error {
 	recordReader := newDelimitedReader(reader, delimiter)
@@ -330,14 +346,14 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 	}
 
 	header := newHeader(headerrecord)
-	var columnInfo columnInfoList
-	var columnValues [][]string
+	evidence := newColumnEvidenceList(len(header))
 
 	// Read records in chunks
 	var chunkrecords []record
+	emitted := false
 	chunkSize := p.chunkSize.Int()
 	if chunkSize <= 0 {
-		chunkSize = DefaultRowsPerChunk
+		chunkSize = DefaultChunkSize
 	}
 
 	rowNum := 0
@@ -361,81 +377,26 @@ func (p *streamingParser) processDelimitedInChunks(reader io.Reader, processor c
 			continue
 		}
 
-		chunkrecords = append(chunkrecords, newRecord(record))
-
-		// Collect values for type inference (only on first chunk)
-		if len(columnInfo) == 0 {
-			if len(columnValues) == 0 {
-				columnValues = make([][]string, len(header))
-			}
-			for i, val := range record {
-				if i < len(columnValues) {
-					columnValues[i] = append(columnValues[i], val)
-				}
-			}
-		}
+		row := newRecord(record)
+		evidence.addRecord(row)
+		chunkrecords = append(chunkrecords, row)
 
 		// Process chunk when it reaches the target size
 		if len(chunkrecords) >= chunkSize {
-			// Infer column types on first chunk. A later chunk does not
-			// re-infer, but it can still hold a value a numeric column would
-			// damage, so it is asked. See promoteForRecords.
-			if len(columnInfo) != 0 {
-				columnInfo.promoteForRecords(chunkrecords)
-			} else {
-				columnInfo = newColumnInfoListFromValues(header, columnValues)
+			if err := p.emitChunk(processor, header, chunkrecords, evidence); err != nil {
+				return err
 			}
-
-			chunk := &tableChunk{
-				tableName:  p.tableName,
-				headers:    header,
-				records:    chunkrecords,
-				columnInfo: columnInfo,
-			}
-
-			if err := processor(chunk); err != nil {
-				return fmt.Errorf("chunk processor error: %w", err)
-			}
-
-			// Reset for next chunk
 			chunkrecords = nil
-			columnValues = nil // Don't collect values after first chunk
+			emitted = true
 		}
 	}
 
-	// Process remaining records
-	if len(chunkrecords) > 0 {
-		// Infer column types if we haven't yet (small dataset)
-		if len(columnInfo) != 0 {
-			columnInfo.promoteForRecords(chunkrecords)
-		} else {
-			columnInfo = newColumnInfoListFromValues(header, columnValues)
-		}
-
-		chunk := &tableChunk{
-			tableName:  p.tableName,
-			headers:    header,
-			records:    chunkrecords,
-			columnInfo: columnInfo,
-		}
-
-		if err := processor(chunk); err != nil {
-			return fmt.Errorf("chunk processor error: %w", err)
-		}
-	} else if len(columnInfo) == 0 {
-		// Handle header-only files: create empty chunk with header information
-		// This ensures table is created with correct column names even when no data records exist
-		columnInfo = newColumnInfoListFromValues(header, columnValues)
-
-		chunk := &tableChunk{
-			tableName:  p.tableName,
-			headers:    header,
-			records:    nil, // Empty records for header-only file
-			columnInfo: columnInfo,
-		}
-
-		if err := processor(chunk); err != nil {
-			return fmt.Errorf("chunk processor error: %w", err)
+	// Process remaining records. A file whose rows were all skipped, and one that
+	// is nothing but a header, still emit an empty chunk so the table is created
+	// with the columns the header names.
+	if len(chunkrecords) > 0 || !emitted {
+		if err := p.emitChunk(processor, header, chunkrecords, evidence); err != nil {
+			return err
 		}
 	}
 
@@ -492,12 +453,11 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 
 	// Second pass: process records in chunks
 	chunkrecords := make([]record, 0) // Pre-allocate slice
-	var columnValues [][]string
-	var columnInfo columnInfoList
+	evidence := newColumnEvidenceList(len(header))
 
 	chunkSize := p.chunkSize.Int()
 	if chunkSize <= 0 {
-		chunkSize = DefaultRowsPerChunk
+		chunkSize = DefaultChunkSize
 	}
 
 	for _, line := range lines {
@@ -544,66 +504,22 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 				row = append(row, "")
 			}
 		}
+		evidence.addRecord(row)
 		chunkrecords = append(chunkrecords, row)
-
-		// Collect values for type inference (only on first chunk)
-		if len(columnInfo) == 0 {
-			if len(columnValues) == 0 {
-				columnValues = make([][]string, len(header))
-			}
-			for i, val := range row {
-				if i < len(columnValues) {
-					columnValues[i] = append(columnValues[i], val)
-				}
-			}
-		}
 
 		// Process chunk when it reaches the target size
 		if len(chunkrecords) >= chunkSize {
-			// Infer column types on first chunk. A later chunk does not
-			// re-infer, but it can still hold a value a numeric column would
-			// damage, so it is asked. See promoteForRecords.
-			if len(columnInfo) != 0 {
-				columnInfo.promoteForRecords(chunkrecords)
-			} else {
-				columnInfo = newColumnInfoListFromValues(header, columnValues)
+			if err := p.emitChunk(processor, header, chunkrecords, evidence); err != nil {
+				return err
 			}
-
-			chunk := &tableChunk{
-				tableName:  p.tableName,
-				headers:    header,
-				records:    chunkrecords,
-				columnInfo: columnInfo,
-			}
-
-			if err := processor(chunk); err != nil {
-				return fmt.Errorf("chunk processor error: %w", err)
-			}
-
-			// Reset for next chunk
 			chunkrecords = nil
-			columnValues = nil
 		}
 	}
 
 	// Process remaining records
 	if len(chunkrecords) > 0 {
-		// Infer column types if we haven't yet
-		if len(columnInfo) != 0 {
-			columnInfo.promoteForRecords(chunkrecords)
-		} else {
-			columnInfo = newColumnInfoListFromValues(header, columnValues)
-		}
-
-		chunk := &tableChunk{
-			tableName:  p.tableName,
-			headers:    header,
-			records:    chunkrecords,
-			columnInfo: columnInfo,
-		}
-
-		if err := processor(chunk); err != nil {
-			return fmt.Errorf("chunk processor error: %w", err)
+		if err := p.emitChunk(processor, header, chunkrecords, evidence); err != nil {
+			return err
 		}
 	}
 
@@ -789,7 +705,7 @@ func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chu
 	// Process data in chunks using batch reader
 	chunkSize := p.chunkSize.Int()
 	if chunkSize <= 0 {
-		chunkSize = DefaultRowsPerChunk
+		chunkSize = DefaultChunkSize
 	}
 
 	tableReader := array.NewTableReader(table, int64(chunkSize))
@@ -961,9 +877,9 @@ func (p *streamingParser) processXLSXInChunks(reader io.Reader, processor chunkP
 
 	var (
 		headers       header
-		columnInfo    columnInfoList
-		columnValues  [][]string
+		evidence      columnEvidenceList
 		first         = true
+		emitted       bool
 		chunkRecords  []record
 		processedRows int
 	)
@@ -971,7 +887,7 @@ func (p *streamingParser) processXLSXInChunks(reader io.Reader, processor chunkP
 	// Get base chunk size and adjust for memory limits
 	chunkSize := p.chunkSize.Int()
 	if chunkSize <= 0 {
-		chunkSize = DefaultRowsPerChunk
+		chunkSize = DefaultChunkSize
 	}
 
 	// Adjust chunk size based on memory usage
@@ -1025,90 +941,42 @@ func (p *streamingParser) processXLSXInChunks(reader io.Reader, processor chunkP
 				return err
 			}
 			headers = newHeader(row)
+			evidence = newColumnEvidenceList(len(headers))
 			first = false
 			continue
 		}
 
-		chunkRecords = append(chunkRecords, newRecord(row))
+		cells := newRecord(row)
+		evidence.addRecord(cells)
+		chunkRecords = append(chunkRecords, cells)
 		processedRows++
-
-		// Collect values for type inference (only on first chunk)
-		if len(columnInfo) == 0 {
-			if len(columnValues) == 0 {
-				columnValues = make([][]string, len(headers))
-			}
-			for i, val := range row {
-				if i < len(columnValues) {
-					columnValues[i] = append(columnValues[i], val)
-				}
-			}
-		}
 
 		// Process chunk when it reaches the target size
 		if len(chunkRecords) >= chunkSize {
-			// Infer column types on first chunk. A later chunk does not
-			// re-infer, but it can still hold a value a numeric column would
-			// damage, so it is asked. See promoteForRecords.
-			if len(columnInfo) != 0 {
-				columnInfo.promoteForRecords(chunkRecords)
-			} else {
-				columnInfo = newColumnInfoListFromValues(headers, columnValues)
-			}
-
 			// Copy to decouple from the reused backing array
 			chunkData := append([]record(nil), chunkRecords...)
-			chunk := &tableChunk{
-				tableName:  p.tableName,
-				headers:    headers,
-				records:    chunkData,
-				columnInfo: columnInfo,
-			}
-
-			if err := processor(chunk); err != nil {
-				return fmt.Errorf("chunk processor error: %w", err)
+			if err := p.emitChunk(processor, headers, chunkData, evidence); err != nil {
+				return err
 			}
 
 			// Reset for next chunk, reuse memory pool slice
 			chunkRecords = chunkRecords[:0] // Reset length but keep capacity
-			columnValues = nil              // Don't collect values after first chunk
+			emitted = true
 		}
 	}
 
 	// Process remaining records
 	if len(chunkRecords) > 0 {
-		// Infer column types if we haven't yet (small dataset)
-		if len(columnInfo) != 0 {
-			columnInfo.promoteForRecords(chunkRecords)
-		} else {
-			columnInfo = newColumnInfoListFromValues(headers, columnValues)
-		}
-
 		// Copy to decouple from the reused backing array
 		chunkData := append([]record(nil), chunkRecords...)
-		chunk := &tableChunk{
-			tableName:  p.tableName,
-			headers:    headers,
-			records:    chunkData,
-			columnInfo: columnInfo,
+		if err := p.emitChunk(processor, headers, chunkData, evidence); err != nil {
+			return err
 		}
-
-		if err := processor(chunk); err != nil {
-			return fmt.Errorf("chunk processor error: %w", err)
-		}
-	} else if len(columnInfo) == 0 && len(headers) > 0 {
+	} else if !emitted && len(headers) > 0 {
 		// Handle header-only XLSX files: create empty chunk with header information
 		// This ensures table is created with correct column names even when no data records exist
-		columnInfo = newColumnInfoListFromValues(headers, columnValues)
-
-		chunk := &tableChunk{
-			tableName:  p.tableName,
-			headers:    headers,
-			records:    nil, // Empty records for header-only file
-			columnInfo: columnInfo,
-		}
-
-		if err := processor(chunk); err != nil {
-			return fmt.Errorf("chunk processor error: %w", err)
+		if err := p.emitChunk(processor, headers, nil, evidence); err != nil {
+			return err
 		}
 	} else if len(headers) == 0 {
 		// Completely empty XLSX - no headers, no data
@@ -1150,7 +1018,7 @@ func (p *streamingParser) parseJSONStream(reader io.Reader) (*table, error) {
 	}
 
 	h := newHeader([]string{jsonDataHeader})
-	colInfo := []columnInfo{newColumnInfoWithType(jsonDataHeader)}
+	colInfo := []columnInfo{newJSONDataColumn()}
 
 	// Try to parse as array first
 	var arr []json.RawMessage
@@ -1193,7 +1061,7 @@ func (p *streamingParser) parseJSONLStream(reader io.Reader) (*table, error) {
 	br := bufio.NewReader(reader)
 
 	h := newHeader([]string{jsonDataHeader})
-	colInfo := []columnInfo{newColumnInfoWithType(jsonDataHeader)}
+	colInfo := []columnInfo{newJSONDataColumn()}
 	var records []record
 	lineNum := 0
 
@@ -1235,7 +1103,7 @@ func (p *streamingParser) processJSONInChunks(reader io.Reader, processor chunkP
 	// Use bufio.Reader to peek at the first non-whitespace byte and decide the strategy.
 	br := bufio.NewReader(reader)
 	h := newHeader([]string{jsonDataHeader})
-	colInfo := []columnInfo{newColumnInfoWithType(jsonDataHeader)}
+	colInfo := []columnInfo{newJSONDataColumn()}
 	isArray, err := peekJSONIsArray(br)
 	if err != nil {
 		return err
@@ -1306,7 +1174,7 @@ func (p *streamingParser) processJSONArrayChunks(
 ) error {
 	chunkSize := p.chunkSize.Int()
 	if chunkSize <= 0 {
-		chunkSize = DefaultRowsPerChunk
+		chunkSize = DefaultChunkSize
 	}
 
 	var chunkRecords []record
@@ -1371,11 +1239,11 @@ func (p *streamingParser) processJSONLInChunks(reader io.Reader, processor chunk
 	br := bufio.NewReader(reader)
 
 	h := newHeader([]string{jsonDataHeader})
-	colInfo := []columnInfo{newColumnInfoWithType(jsonDataHeader)}
+	colInfo := []columnInfo{newJSONDataColumn()}
 
 	chunkSize := p.chunkSize.Int()
 	if chunkSize <= 0 {
-		chunkSize = DefaultRowsPerChunk
+		chunkSize = DefaultChunkSize
 	}
 
 	var chunkRecords []record

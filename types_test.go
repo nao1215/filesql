@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -508,107 +507,6 @@ func TestIsDatetime(t *testing.T) {
 	}
 }
 
-// TestGetSampleValues tests the sampling optimization for large datasets
-func TestGetSampleValues(t *testing.T) {
-	t.Parallel()
-
-	t.Run("small dataset - no sampling", func(t *testing.T) {
-		t.Parallel()
-		values := []string{"1", "2", "3", "4", "5"}
-		result := getSampleValues(values)
-
-		assert.Equal(t, values, result, "Small datasets should not be sampled")
-	})
-
-	t.Run("large dataset - stratified sampling applied", func(t *testing.T) {
-		// Skip slow tests unless running in GitHub Actions
-		if os.Getenv("GITHUB_ACTIONS") != "true" {
-			t.Skip("Skipping slow test in local environment. Set GITHUB_ACTIONS=true to run.")
-		}
-
-		t.Parallel()
-
-		// Create a large dataset with patterns in different sections
-		values := make([]string, 3000)
-		for i := range 3000 {
-			switch {
-			case i < 1000: // Beginning: integers
-				values[i] = strconv.Itoa(i)
-			case i < 2000: // Middle: floats
-				values[i] = fmt.Sprintf("%.2f", float64(i)/100)
-			default: // End: text
-				values[i] = "text_" + strconv.Itoa(i)
-			}
-		}
-
-		result := getSampleValues(values)
-
-		assert.LessOrEqual(t, len(result), maxSampleSize, "Sample size should not exceed maxSampleSize")
-		assert.Greater(t, len(result), 0, "Sample should not be empty")
-
-		// Verify stratified sampling captured values from all sections
-		hasInteger := false
-		hasFloat := false
-		hasText := false
-
-		for _, val := range result {
-			if _, err := strconv.Atoi(val); err == nil {
-				hasInteger = true
-			} else if _, err := strconv.ParseFloat(val, 64); err == nil {
-				hasFloat = true
-			} else if strings.HasPrefix(val, "text_") {
-				hasText = true
-			}
-		}
-
-		assert.True(t, hasInteger, "Sample should include integers from beginning section")
-		assert.True(t, hasFloat, "Sample should include floats from middle section")
-		assert.True(t, hasText, "Sample should include text from end section")
-	})
-
-	t.Run("empty dataset", func(t *testing.T) {
-		t.Parallel()
-
-		values := []string{}
-		result := getSampleValues(values)
-
-		assert.Empty(t, result, "Empty dataset should return empty sample")
-	})
-
-	t.Run("small dataset fallback to simple sampling", func(t *testing.T) {
-		t.Parallel()
-
-		// Create dataset smaller than sampleSize*samplingStratificationFactor (3000)
-		values := make([]string, 2500)
-		for i := range 2500 {
-			values[i] = strconv.Itoa(i)
-		}
-
-		result := getSampleValues(values)
-
-		assert.LessOrEqual(t, len(result), maxSampleSize, "Sample size should not exceed maxSampleSize")
-		assert.Greater(t, len(result), 0, "Sample should not be empty")
-		assert.Equal(t, "0", result[0], "Simple sampling should start with first value")
-	})
-
-	t.Run("very small sample size edge case", func(t *testing.T) {
-		t.Parallel()
-
-		// Test with sample size smaller than number of sections
-		values := make([]string, 100)
-		for i := range 100 {
-			values[i] = strconv.Itoa(i)
-		}
-
-		// Temporarily modify maxSampleSize for this test by creating a custom function
-		// Since we can't modify constants, we'll test the boundary conditions indirectly
-		result := getSampleValues(values)
-
-		assert.LessOrEqual(t, len(result), len(values), "Sample should not exceed input size")
-		assert.Greater(t, len(result), 0, "Sample should not be empty")
-	})
-}
-
 // TestClassifyValue tests individual value classification
 func TestClassifyValue(t *testing.T) {
 	t.Parallel()
@@ -735,97 +633,64 @@ func TestIsFloat(t *testing.T) {
 	}
 }
 
-// TestSelectColumnType tests confidence-based column type selection
-func TestSelectColumnType(t *testing.T) {
+// TestInferColumnType_PicksTheTypeThatHoldsEveryValue tests the rule that turns
+// the values of a column into its declared type. Every kind of value present
+// counts; how many of each there are does not, because a type chosen against a
+// minority is a type SQLite then has to store those values around.
+func TestInferColumnType_PicksTheTypeThatHoldsEveryValue(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		typeCounts map[columnType]int
-		totalCount int
-		expected   columnType
+		name     string
+		values   []string
+		expected columnType
 	}{
 		{
-			name: "high confidence integer",
-			typeCounts: map[columnType]int{
-				columnTypeInteger:  8,
-				columnTypeReal:     0,
-				columnTypeDatetime: 0,
-				columnTypeText:     0,
-			},
-			totalCount: 10,
-			expected:   columnTypeInteger,
+			name:     "integers only",
+			values:   []string{"1", "2", "3", "4", "5", "6", "7", "8"},
+			expected: columnTypeInteger,
 		},
 		{
-			name: "mixed with text preference",
-			typeCounts: map[columnType]int{
-				columnTypeInteger:  5,
-				columnTypeReal:     0,
-				columnTypeDatetime: 0,
-				columnTypeText:     3,
-			},
-			totalCount: 10,
-			expected:   columnTypeText,
+			name:     "text among integers",
+			values:   []string{"1", "2", "3", "4", "5", "a", "b", "c"},
+			expected: columnTypeText,
 		},
 		{
 			// A datetime is stored as text, so a column holding one alongside a
 			// number has no type that covers both. Answering INTEGER declared a
 			// schema the storage did not match.
-			name: "datetime mixed with integer falls back to text",
-			typeCounts: map[columnType]int{
-				columnTypeInteger:  1,
-				columnTypeReal:     0,
-				columnTypeDatetime: 1,
-				columnTypeText:     0,
-			},
-			totalCount: 2,
-			expected:   columnTypeText,
+			name:     "datetime beside an integer",
+			values:   []string{"5", "2026-08-20T10:00:00Z"},
+			expected: columnTypeText,
 		},
 		{
-			name: "datetime mixed with real falls back to text",
-			typeCounts: map[columnType]int{
-				columnTypeInteger:  0,
-				columnTypeReal:     3,
-				columnTypeDatetime: 1,
-				columnTypeText:     0,
-			},
-			totalCount: 4,
-			expected:   columnTypeText,
+			name:     "datetime beside a real",
+			values:   []string{"1.5", "2.5", "3.5", "2026-08-20T10:00:00Z"},
+			expected: columnTypeText,
 		},
 		{
-			name: "high confidence datetime",
-			typeCounts: map[columnType]int{
-				columnTypeInteger:  0,
-				columnTypeReal:     0,
-				columnTypeDatetime: 9,
-				columnTypeText:     0,
-			},
-			totalCount: 10,
-			expected:   columnTypeDatetime,
+			name:     "datetimes only",
+			values:   []string{"2026-08-20", "2026-08-21", "2026-08-22"},
+			expected: columnTypeDatetime,
 		},
 		{
-			name: "low confidence fallback to most common",
-			typeCounts: map[columnType]int{
-				columnTypeInteger:  3,
-				columnTypeReal:     4,
-				columnTypeDatetime: 0,
-				columnTypeText:     0,
-			},
-			totalCount: 7,
-			expected:   columnTypeReal,
+			name:     "integers and reals mixed",
+			values:   []string{"1", "2", "3", "1.5", "2.5", "3.5", "4.5"},
+			expected: columnTypeReal,
+		},
+		{
+			// One decimal is enough. Weighing them against the integers left an
+			// INTEGER column that rewrote 4.0 to 4, and made 5 / 2 answer 2.
+			name:     "a single real among many integers",
+			values:   []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12.5"},
+			expected: columnTypeReal,
 		},
 		{
 			// REAL used to win this on confidence, and the two datetimes in it
 			// were then stored as text under a REAL declaration.
-			name: "low confidence numerics with a datetime fall back to text",
-			typeCounts: map[columnType]int{
-				columnTypeInteger:  3,
-				columnTypeReal:     4,
-				columnTypeDatetime: 2,
-				columnTypeText:     0,
-			},
-			totalCount: 10,
-			expected:   columnTypeText,
+			name:     "numerics with a datetime among them",
+			values:   []string{"1", "2", "3", "1.5", "2.5", "3.5", "4.5", "2026-08-20", "2026-08-21"},
+			expected: columnTypeText,
 		},
 	}
 
@@ -833,14 +698,16 @@ func TestSelectColumnType(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := selectColumnType(tt.typeCounts, tt.totalCount)
-			assert.Equal(t, tt.expected, result, "selectColumnType failed")
+			result := inferColumnType(tt.values)
+			assert.Equal(t, tt.expected, result, "inferColumnType failed")
 		})
 	}
 }
 
-// TestInferColumnTypePerformance tests performance improvements with large datasets
-func TestInferColumnTypePerformance(t *testing.T) {
+// TestInferColumnTypeOverLargeColumns covers columns big enough that a sampler
+// would have looked at part of them, where a text value's share of the column
+// used to decide whether it was noticed at all.
+func TestInferColumnTypeOverLargeColumns(t *testing.T) {
 	// Skip slow tests unless running in GitHub Actions
 	if os.Getenv("GITHUB_ACTIONS") != "true" {
 		t.Skip("Skipping slow test in local environment. Set GITHUB_ACTIONS=true to run.")
@@ -848,10 +715,9 @@ func TestInferColumnTypePerformance(t *testing.T) {
 
 	t.Parallel()
 
-	t.Run("large dataset sampling", func(t *testing.T) {
+	t.Run("a third of a large column is text", func(t *testing.T) {
 		t.Parallel()
 
-		// Create a large dataset with mixed types - majority text to ensure text classification
 		values := make([]string, 10000)
 		for i := range 10000 {
 			switch i % 3 {
@@ -864,49 +730,37 @@ func TestInferColumnTypePerformance(t *testing.T) {
 			}
 		}
 
-		// The function should complete quickly due to sampling
-		result := inferColumnType(values)
-
-		// With majority text values, it should be classified as text
-		assert.Equal(t, columnTypeText, result, "Large mixed dataset should be classified as text")
+		assert.Equal(t, columnTypeText, inferColumnType(values))
 	})
 
-	t.Run("early termination with text", func(t *testing.T) {
+	t.Run("text values scattered through a large column", func(t *testing.T) {
 		t.Parallel()
 
-		// Create dataset that exceeds earlyTerminationThreshold (0.5) for text values
-		values := make([]string, 1000)
-		for i := range 1000 {
-			if i < 600 { // 60% text values, exceeds earlyTerminationThreshold
-				values[i] = "text_value"
-			} else {
-				values[i] = strconv.Itoa(i)
+		for _, texts := range []int{600, 400, 1} {
+			values := make([]string, 1000)
+			for i := range 1000 {
+				if i < texts {
+					values[i] = "text_value"
+				} else {
+					values[i] = strconv.Itoa(i)
+				}
 			}
+
+			assert.Equal(t, columnTypeText, inferColumnType(values),
+				"%d text values among 1000 integers", texts)
 		}
-
-		result := inferColumnType(values)
-
-		// Should terminate early and classify as text
-		assert.Equal(t, columnTypeText, result, "Dataset with >50% text values should be classified as text via early termination")
 	})
 
-	t.Run("no early termination below threshold", func(t *testing.T) {
+	t.Run("a text value at the very end of a large column", func(t *testing.T) {
 		t.Parallel()
 
-		// Create dataset that stays below earlyTerminationThreshold (0.5) for text values
-		values := make([]string, 1000)
-		for i := range 1000 {
-			if i < 400 { // 40% text values, below earlyTerminationThreshold
-				values[i] = "text_value"
-			} else {
-				values[i] = strconv.Itoa(i)
-			}
+		values := make([]string, 10000)
+		for i := range 10000 {
+			values[i] = strconv.Itoa(i)
 		}
+		values[len(values)-1] = "text_value"
 
-		result := inferColumnType(values)
-
-		// Should still classify as text but not via early termination
-		assert.Equal(t, columnTypeText, result, "Dataset with text values should still be classified as text even without early termination")
+		assert.Equal(t, columnTypeText, inferColumnType(values))
 	})
 }
 
@@ -998,7 +852,7 @@ func BenchmarkGetSampleValues(b *testing.B) {
 		b.Run(fmt.Sprintf("size_%d", size), func(b *testing.B) {
 			b.ResetTimer()
 			for range b.N {
-				_ = getSampleValues(values)
+				_ = inferColumnType(values)
 			}
 		})
 	}
@@ -1062,39 +916,15 @@ func TestChunkSizeString(t *testing.T) {
 		cs       chunkSizeValue
 		expected string
 	}{
-		{"default chunk size", chunkSizeValue(DefaultRowsPerChunk), strconv.Itoa(DefaultRowsPerChunk)},
+		{"default chunk size", chunkSizeValue(DefaultChunkSize), strconv.Itoa(DefaultChunkSize)},
 		{"custom chunk size", chunkSizeValue(5000), "5000"},
-		{"min chunk size", chunkSizeValue(MinChunkSize), strconv.Itoa(MinChunkSize)},
+		{"the smallest chunk", chunkSizeValue(1), "1"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.expected, tt.cs.String())
-		})
-	}
-}
-
-func TestChunkSizeIsValid(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		cs       chunkSizeValue
-		expected bool
-	}{
-		{"valid default size", chunkSizeValue(DefaultRowsPerChunk), true},
-		{"valid min size", chunkSizeValue(MinChunkSize), true},
-		{"valid custom size", chunkSizeValue(5000), true},
-		{"invalid zero", chunkSizeValue(0), false},
-		{"invalid negative", chunkSizeValue(-1), false},
-		{"invalid below min", chunkSizeValue(MinChunkSize - 1), false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tt.expected, tt.cs.isValid())
 		})
 	}
 }

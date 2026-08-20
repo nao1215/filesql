@@ -3,6 +3,7 @@ package filesql
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"embed"
 	"fmt"
 	"io"
@@ -257,6 +258,144 @@ func TestDBBuilder_SetDefaultChunkSize(t *testing.T) {
 		builder.SetDefaultChunkSize(-1)
 		assert.Equal(t, defaultSize, builder.defaultChunkSize, "chunk size should not change when set to negative")
 	})
+
+	t.Run("the configured size is the size the loader reads in", func(t *testing.T) {
+		t.Parallel()
+
+		const rows = 10
+		body := chunkCountingCSV(rows)
+		dir := t.TempDir()
+		path := filepath.Join(dir, "counted.csv")
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+
+		ctx := context.Background()
+		for _, size := range []int{1, 2, 5, 10, DefaultChunkSize} {
+			want := (rows + size - 1) / size
+
+			counter := &chunkCountingLogger{}
+			validated, err := NewBuilder().
+				AddPath(path).
+				SetDefaultChunkSize(size).
+				WithLogger(counter).
+				Build(ctx)
+			require.NoError(t, err)
+			db, err := validated.Open(ctx)
+			require.NoError(t, err)
+			require.NoError(t, db.Close())
+			assert.Equal(t, want, counter.count(), "chunk size %d over %d rows", size, rows)
+
+			// A reader is loaded by the same processor, so it has to chunk the
+			// same way a path does.
+			counter = &chunkCountingLogger{}
+			validated, err = NewBuilder().
+				AddReader(strings.NewReader(body), "counted", FileTypeCSV).
+				SetDefaultChunkSize(size).
+				WithLogger(counter).
+				Build(ctx)
+			require.NoError(t, err)
+			db, err = validated.Open(ctx)
+			require.NoError(t, err)
+			require.NoError(t, db.Close())
+			assert.Equal(t, want, counter.count(), "chunk size %d over %d rows, from a reader", size, rows)
+		}
+	})
+
+	t.Run("the loaded table is the same whatever the chunk size", func(t *testing.T) {
+		t.Parallel()
+
+		body := chunkCountingCSV(20)
+		ctx := context.Background()
+
+		var want string
+		for _, size := range []int{1, 2, 7, 20, DefaultChunkSize} {
+			validated, err := NewBuilder().
+				AddReader(strings.NewReader(body), "counted", FileTypeCSV).
+				SetDefaultChunkSize(size).
+				Build(ctx)
+			require.NoError(t, err)
+			db, err := validated.Open(ctx)
+			require.NoError(t, err)
+			got := describeTableForChunkTest(t, db, "counted")
+			require.NoError(t, db.Close())
+
+			if want == "" {
+				want = got
+				continue
+			}
+			assert.Equal(t, want, got, "chunk size %d loaded a different table", size)
+		}
+	})
+}
+
+// chunkCountingCSV builds a CSV of n rows whose columns cover the three types
+// the loader infers, so a chunk-size difference shows up in the schema as well
+// as in the row count.
+func chunkCountingCSV(n int) string {
+	var b strings.Builder
+	b.WriteString("id,amount,name\n")
+	for i := 1; i <= n; i++ {
+		fmt.Fprintf(&b, "%d,%d.5,name%d\n", i, i, i)
+	}
+	return b.String()
+}
+
+// chunkCountingLogger counts the chunks the loader reports inserting, which is
+// how a caller can observe the chunk size from outside the package.
+type chunkCountingLogger struct {
+	chunks int
+}
+
+func (l *chunkCountingLogger) Debug(msg string, _ ...any) {
+	if msg == "inserting chunk" {
+		l.chunks++
+	}
+}
+func (l *chunkCountingLogger) Info(string, ...any)  {}
+func (l *chunkCountingLogger) Warn(string, ...any)  {}
+func (l *chunkCountingLogger) Error(string, ...any) {}
+func (l *chunkCountingLogger) With(...any) Logger   { return l }
+func (l *chunkCountingLogger) count() int           { return l.chunks }
+
+// describeTableForChunkTest renders a table's declared types and every value it
+// holds, including the Go type each value scanned as, so two loads can be
+// compared for more than their row count.
+func describeTableForChunkTest(t *testing.T, db *sql.DB, tableName string) string {
+	t.Helper()
+
+	ctx := context.Background()
+	var out strings.Builder
+
+	schema, err := db.QueryContext(ctx, `SELECT name, type FROM pragma_table_info(?)`, tableName)
+	require.NoError(t, err)
+	for schema.Next() {
+		var name, columnType string
+		require.NoError(t, schema.Scan(&name, &columnType))
+		fmt.Fprintf(&out, "%s:%s ", name, columnType)
+	}
+	require.NoError(t, schema.Err())
+	require.NoError(t, schema.Close())
+	out.WriteString("\n")
+
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`SELECT * FROM %q`, tableName))
+	require.NoError(t, err)
+	defer rows.Close()
+	columns, err := rows.Columns()
+	require.NoError(t, err)
+	for rows.Next() {
+		values := make([]any, len(columns))
+		pointers := make([]any, len(columns))
+		for i := range values {
+			pointers[i] = &values[i]
+		}
+		require.NoError(t, rows.Scan(pointers...))
+		for _, v := range values {
+			fmt.Fprintf(&out, "%T(%v)|", v, v)
+		}
+		out.WriteString("\n")
+	}
+	require.NoError(t, rows.Err())
+
+	return out.String()
 }
 
 func TestDBBuilder_Build(t *testing.T) {

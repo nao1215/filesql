@@ -85,20 +85,20 @@ func TestInferColumnTypeZeroPadded(t *testing.T) {
 	require.Equal(t, columnTypeText, got)
 }
 
-// TestInferColumnTypePreservesLateZeroPadded covers a value the sampler would
-// skip. Inference samples at most maxSampleSize values per column, and the
-// guards that keep a zero-padded code out of an INTEGER column only run on what
-// is sampled — so whether a code survived depended on where in the file it sat.
+// TestInferColumnTypePreservesLateZeroPadded covers a value far enough down the
+// column that a sampler would have skipped it. Which type a column gets has to
+// follow from every value it holds, not from where in the file a value sits.
 func TestInferColumnTypePreservesLateZeroPadded(t *testing.T) {
 	t.Parallel()
 
-	values := make([]string, 0, maxSampleSize*2)
-	for i := range maxSampleSize * 2 {
-		values = append(values, strconv.Itoa(i+1))
+	const values = 2000
+	column := make([]string, 0, values)
+	for i := range values {
+		column = append(column, strconv.Itoa(i+1))
 	}
-	values[len(values)-1] = "007"
+	column[len(column)-1] = "007"
 
-	require.Equal(t, columnTypeText, inferColumnType(values))
+	require.Equal(t, columnTypeText, inferColumnType(column))
 }
 
 // TestOpenContextPreservesZeroPaddedCodesPastTheFirstChunk is the end-to-end
@@ -111,7 +111,7 @@ func TestOpenContextPreservesZeroPaddedCodesPastTheFirstChunk(t *testing.T) {
 
 	var b strings.Builder
 	b.WriteString("code\n")
-	for i := range DefaultRowsPerChunk * 2 {
+	for i := range DefaultChunkSize * 2 {
 		fmt.Fprintf(&b, "%d\n", i+1)
 	}
 	b.WriteString("007\n")
@@ -138,7 +138,7 @@ func TestOpenContextPreservesZeroPaddedCodesPastTheFirstChunk(t *testing.T) {
 
 	var rows int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM codes`).Scan(&rows))
-	require.Equal(t, DefaultRowsPerChunk*2+1, rows)
+	require.Equal(t, DefaultChunkSize*2+1, rows)
 }
 
 // TestOpenContextPreservesZeroPaddedCodes is the end-to-end regression test: a

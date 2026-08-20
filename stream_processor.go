@@ -96,6 +96,13 @@ func newStreamProcessor(chunkSize int) *streamProcessor {
 	}
 }
 
+// setChunkSize sets how many rows the processor reads at a time.
+func (sp *streamProcessor) setChunkSize(size int) {
+	if size > 0 {
+		sp.chunkSize = size
+	}
+}
+
 // setLogger sets the logger for the stream processor
 func (sp *streamProcessor) setLogger(logger Logger) {
 	if logger != nil {
@@ -420,7 +427,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, 
 		if createErr := sp.createTableFromChunk(ctx, db, &tableChunk{
 			tableName:  input.tableName,
 			headers:    newHeader([]string{jsonDataHeader}),
-			columnInfo: []columnInfo{newColumnInfoWithType(jsonDataHeader)},
+			columnInfo: []columnInfo{newJSONDataColumn()},
 		}); createErr != nil {
 			return fmt.Errorf("%w: failed to create empty JSON table: %w", ErrDatabaseOperation, createErr)
 		}
@@ -816,7 +823,7 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX
 		}
 
 		// Create table chunk for processing
-		columnInfo := inferColumnsInfo(headers, records)
+		columnInfo := newColumnInfoList(headers, records)
 		chunk := &tableChunk{
 			tableName:  tableName,
 			headers:    headers,

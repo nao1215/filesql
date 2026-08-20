@@ -1205,7 +1205,7 @@ func TestParseJSONStream(t *testing.T) {
 
 		input := `[{"name":"Alice","age":30},{"name":"Bob","age":25}]`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
 		result, err := parser.parseJSONStream(reader)
 
@@ -1221,7 +1221,7 @@ func TestParseJSONStream(t *testing.T) {
 
 		input := `{"name":"Alice","age":30}`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
 		result, err := parser.parseJSONStream(reader)
 
@@ -1236,7 +1236,7 @@ func TestParseJSONStream(t *testing.T) {
 
 		input := `[{"id":1,"address":{"city":"Tokyo","country":"Japan"},"tags":["dev","go"]}]`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
 		result, err := parser.parseJSONStream(reader)
 
@@ -1257,7 +1257,7 @@ func TestParseJSONStream(t *testing.T) {
 
 		input := `[{"name":"Alice"}]`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
 		result, err := parser.parseJSONStream(reader)
 
@@ -1269,7 +1269,7 @@ func TestParseJSONStream(t *testing.T) {
 		t.Parallel()
 
 		reader := strings.NewReader("")
-		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
 		_, err := parser.parseJSONStream(reader)
 
@@ -1281,7 +1281,7 @@ func TestParseJSONStream(t *testing.T) {
 		t.Parallel()
 
 		reader := strings.NewReader("[]")
-		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
 		_, err := parser.parseJSONStream(reader)
 
@@ -1293,7 +1293,7 @@ func TestParseJSONStream(t *testing.T) {
 		t.Parallel()
 
 		reader := strings.NewReader("{invalid json}")
-		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
 		_, err := parser.parseJSONStream(reader)
 
@@ -1310,7 +1310,7 @@ func TestParseJSONLStream(t *testing.T) {
 
 		input := "{\"name\":\"Alice\",\"age\":30}\n{\"name\":\"Bob\",\"age\":25}\n{\"name\":\"Charlie\",\"age\":35}"
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
 		result, err := parser.parseJSONLStream(reader)
 
@@ -1327,7 +1327,7 @@ func TestParseJSONLStream(t *testing.T) {
 
 		input := "{\"name\":\"Alice\"}\n\n{\"name\":\"Bob\"}\n\n"
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
 		result, err := parser.parseJSONLStream(reader)
 
@@ -1340,7 +1340,7 @@ func TestParseJSONLStream(t *testing.T) {
 
 		input := `{"id":1,"address":{"city":"Tokyo"},"tags":["dev","go"]}`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
 		result, err := parser.parseJSONLStream(reader)
 
@@ -1358,7 +1358,7 @@ func TestParseJSONLStream(t *testing.T) {
 
 		input := `{"name":"Alice"}`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
 		result, err := parser.parseJSONLStream(reader)
 
@@ -1370,7 +1370,7 @@ func TestParseJSONLStream(t *testing.T) {
 		t.Parallel()
 
 		reader := strings.NewReader("")
-		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
 		_, err := parser.parseJSONLStream(reader)
 
@@ -1383,7 +1383,7 @@ func TestParseJSONLStream(t *testing.T) {
 
 		input := "{\"name\":\"Alice\"}\nnot valid json\n{\"name\":\"Bob\"}"
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
 		_, err := parser.parseJSONLStream(reader)
 
@@ -1398,7 +1398,7 @@ func TestParseJSONLStream(t *testing.T) {
 		line := `{"big":"` + bigValue + `"}`
 		input := line + "\n" + `{"small":"ok"}`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
 		result, err := parser.parseJSONLStream(reader)
 
@@ -1417,7 +1417,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 
 		input := `[{"name":"Alice"},{"name":"Bob"},{"name":"Charlie"}]`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
 		var chunks []*tableChunk
 		err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
@@ -1462,7 +1462,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 
 		input := `{"name":"Alice"}`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
 		var chunks []*tableChunk
 		err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
@@ -1479,7 +1479,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 		t.Parallel()
 
 		reader := strings.NewReader("")
-		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
 		err := parser.processJSONInChunks(reader, func(_ *tableChunk) error {
 			return nil
@@ -1494,7 +1494,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 
 		input := `[{"a":1}] garbage`
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
 		err := parser.processJSONInChunks(reader, func(_ *tableChunk) error {
 			return nil
@@ -1513,7 +1513,7 @@ func TestProcessJSONLInChunks(t *testing.T) {
 
 		input := "{\"name\":\"Alice\"}\n{\"name\":\"Bob\"}\n{\"name\":\"Charlie\"}"
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
 		var chunks []*tableChunk
 		err := parser.processJSONLInChunks(reader, func(chunk *tableChunk) error {
@@ -1556,7 +1556,7 @@ func TestProcessJSONLInChunks(t *testing.T) {
 		t.Parallel()
 
 		reader := strings.NewReader("")
-		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
 		err := parser.processJSONLInChunks(reader, func(_ *tableChunk) error {
 			return nil
@@ -1571,7 +1571,7 @@ func TestProcessJSONLInChunks(t *testing.T) {
 
 		input := "{\"name\":\"Alice\"}\nnot valid json\n{\"name\":\"Bob\"}"
 		reader := strings.NewReader(input)
-		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
 		err := parser.processJSONLInChunks(reader, func(_ *tableChunk) error {
 			return nil
@@ -1625,7 +1625,7 @@ func TestStreamingParser_ParseFromReader_CompressedJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, gw.Close())
 
-		parser := newStreamingParser(FileTypeJSON, CompressionGZ, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionGZ, "test_json", DefaultChunkSize)
 		result, err := parser.parseFromReader(&buf)
 
 		require.NoError(t, err)
@@ -1642,7 +1642,7 @@ func TestStreamingParser_ParseFromReader_CompressedJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, gw.Close())
 
-		parser := newStreamingParser(FileTypeJSONL, CompressionGZ, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionGZ, "test_jsonl", DefaultChunkSize)
 		result, err := parser.parseFromReader(&buf)
 
 		require.NoError(t, err)
@@ -1660,7 +1660,7 @@ func TestStreamingParser_ParseFromReader_CompressedJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, enc.Close())
 
-		parser := newStreamingParser(FileTypeJSON, CompressionZSTD, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionZSTD, "test_json", DefaultChunkSize)
 		result, err := parser.parseFromReader(&buf)
 
 		require.NoError(t, err)
@@ -1677,7 +1677,7 @@ func TestStreamingParser_ParseFromReader_CompressedJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, enc.Close())
 
-		parser := newStreamingParser(FileTypeJSONL, CompressionZSTD, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionZSTD, "test_jsonl", DefaultChunkSize)
 		result, err := parser.parseFromReader(&buf)
 
 		require.NoError(t, err)
@@ -1693,7 +1693,7 @@ func TestStreamingParser_ParseFromReader_CompressedJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, sw.Close())
 
-		parser := newStreamingParser(FileTypeJSON, CompressionSNAPPY, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionSNAPPY, "test_json", DefaultChunkSize)
 		result, err := parser.parseFromReader(&buf)
 
 		require.NoError(t, err)
@@ -1709,7 +1709,7 @@ func TestStreamingParser_ParseFromReader_CompressedJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, sw.Close())
 
-		parser := newStreamingParser(FileTypeJSONL, CompressionS2, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionS2, "test_jsonl", DefaultChunkSize)
 		result, err := parser.parseFromReader(&buf)
 
 		require.NoError(t, err)
@@ -1725,7 +1725,7 @@ func TestStreamingParser_ParseFromReader_CompressedJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, lw.Close())
 
-		parser := newStreamingParser(FileTypeJSON, CompressionLZ4, "test_json", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSON, CompressionLZ4, "test_json", DefaultChunkSize)
 		result, err := parser.parseFromReader(&buf)
 
 		require.NoError(t, err)
@@ -1741,7 +1741,7 @@ func TestStreamingParser_ParseFromReader_CompressedJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, zw.Close())
 
-		parser := newStreamingParser(FileTypeJSONL, CompressionZLIB, "test_jsonl", DefaultRowsPerChunk)
+		parser := newStreamingParser(FileTypeJSONL, CompressionZLIB, "test_jsonl", DefaultChunkSize)
 		result, err := parser.parseFromReader(&buf)
 
 		require.NoError(t, err)

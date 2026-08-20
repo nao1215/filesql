@@ -15,12 +15,8 @@ const defaultTableName = "table"
 
 // Processing constants (rows-based)
 const (
-	// DefaultRowsPerChunk is the default number of rows per chunk
-	DefaultRowsPerChunk = 1000
-	// DefaultChunkSize is the default chunk size (rows); alias for clarity
-	DefaultChunkSize = DefaultRowsPerChunk
-	// MinChunkSize is the minimum allowed rows per chunk
-	MinChunkSize = 1
+	// DefaultChunkSize is the default number of rows read per chunk.
+	DefaultChunkSize = 1000
 )
 
 // File format delimiters
@@ -244,8 +240,9 @@ type chunkSizeValue int
 
 // newChunkSize creates a new chunkSizeValue with validation
 func newChunkSize(size int) chunkSizeValue {
-	if size < MinChunkSize {
-		return chunkSizeValue(DefaultRowsPerChunk)
+	// A chunk of no rows would read a file forever.
+	if size < 1 {
+		return chunkSizeValue(DefaultChunkSize)
 	}
 	return chunkSizeValue(size)
 }
@@ -260,31 +257,17 @@ func (cs chunkSizeValue) String() string {
 	return strconv.Itoa(int(cs))
 }
 
-// isValid checks if the chunk size is valid
-func (cs chunkSizeValue) isValid() bool {
-	return int(cs) >= MinChunkSize
-}
-
 // columnInfo represents column information with name and inferred type
 type columnInfo struct {
 	Name string
 	Type columnType
 }
 
-// newColumnInfo creates a new columnInfo with the given name and inferred type from values
-func newColumnInfo(name string, values []string) columnInfo {
+// newJSONDataColumn returns the single column a JSON or JSONL table has: the
+// raw JSON of each element, held as text for json_extract() to read.
+func newJSONDataColumn() columnInfo {
 	return columnInfo{
-		Name: name,
-		Type: inferColumnType(values),
-	}
-}
-
-// newColumnInfoWithType creates a new columnInfo with TEXT type.
-// This is used when the column type is known to be TEXT (e.g., JSON data columns,
-// Parquet schema columns in streaming mode).
-func newColumnInfoWithType(name string) columnInfo {
-	return columnInfo{
-		Name: name,
+		Name: jsonDataHeader,
 		Type: columnTypeText,
 	}
 }
@@ -292,93 +275,132 @@ func newColumnInfoWithType(name string) columnInfo {
 // columnInfoList represents a collection of column information
 type columnInfoList []columnInfo
 
-// newColumnInfoList creates column info list from header and records
+// newColumnInfoList names the columns of a header and gives each the type the
+// records require, folding every row in rather than sampling them.
 func newColumnInfoList(header header, records []record) columnInfoList {
-	columnCount := len(header)
-	if columnCount == 0 {
+	if len(header) == 0 {
 		return nil
 	}
 
-	columns := make(columnInfoList, columnCount)
-
-	// Initialize column info with headers
-	for i, name := range header {
-		columns[i] = columnInfo{
-			Name: name,
-			Type: columnTypeText, // Default to TEXT
-		}
-	}
-
-	// If no records, return with TEXT types
-	if len(records) == 0 {
-		return columns
-	}
-
-	// Pre-allocate column values slices to avoid repeated allocations
-	columnValues := make([][]string, columnCount)
-	for i := range columnValues {
-		columnValues[i] = make([]string, 0, len(records))
-	}
-
-	// Collect values for all columns in a single pass through records
-	for _, record := range records {
-		for i := range columnCount {
-			if i < len(record) {
-				columnValues[i] = append(columnValues[i], record[i])
-			}
-		}
-	}
-
-	// Infer type for each column
-	for i := range columnCount {
-		columns[i] = newColumnInfo(header[i], columnValues[i])
-	}
-
-	return columns
+	evidence := newColumnEvidenceList(len(header))
+	evidence.addRecords(records)
+	return evidence.columnInfos(header)
 }
 
-// newColumnInfoListFromValues creates column info list from header and column values
-func newColumnInfoListFromValues(header header, columnValues [][]string) columnInfoList {
-	if len(columnValues) == 0 {
-		// No data to infer from, use default TEXT type
-		columnInfos := make(columnInfoList, len(header))
-		for i, name := range header {
-			columnInfos[i] = newColumnInfoWithType(name)
-		}
-		return columnInfos
-	}
-
-	columnInfos := make(columnInfoList, len(header))
-	for i, name := range header {
-		var values []string
-		if i < len(columnValues) {
-			values = columnValues[i]
-		}
-		columnInfos[i] = newColumnInfo(name, values)
-	}
-	return columnInfos
-}
-
-// promoteForRecords widens any numeric column that these records show cannot
-// hold its values losslessly.
+// columnTypeEvidence records what the values of one column require of its type.
+// It accumulates, so a value read in an early chunk still counts when a later
+// one is judged: a column ends up with the type every value it holds can be
+// stored as, not the one its first chunk suggested.
 //
-// Types are inferred once, from the first chunk, and a file is not obliged to
-// introduce its awkward values early. A zero-padded code or an int64-overflowing
-// literal arriving in a later chunk met a column that was already INTEGER, and
-// SQLite's affinity rewrote it on the way in — the same loss the guards prevent
-// in the first chunk, reached by arriving late. Only widening to TEXT is needed:
-// nothing here can make a TEXT column numeric again.
-func (c columnInfoList) promoteForRecords(records []record) {
-	for _, r := range records {
-		for i, value := range r {
-			if i >= len(c) || c[i].Type == columnTypeText {
-				continue
-			}
-			if mustStayText(value) {
-				c[i].Type = columnTypeText
-			}
-		}
+// The types form a chain — an integer is held by REAL, and anything is held by
+// TEXT — so folding in another value can only move the answer along it. That is
+// what lets a table widen while it loads: a column never has to narrow, which a
+// table already holding rows could not do.
+type columnTypeEvidence struct {
+	// forcedText marks a value that only TEXT stores as written; see mustStayText.
+	forcedText bool
+	text       bool
+	datetime   bool
+	real       bool
+	integer    bool
+	// nonEmpty marks that some value was seen at all.
+	nonEmpty bool
+}
+
+// add folds one value into the evidence.
+func (e *columnTypeEvidence) add(value string) {
+	if e.forcedText || e.text {
+		// TEXT already holds anything a later value could ask for.
+		return
 	}
+	if mustStayText(value) {
+		e.forcedText = true
+		e.nonEmpty = true
+		return
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		// An empty cell says nothing about the type it belongs to.
+		return
+	}
+	e.nonEmpty = true
+	switch classifyValue(trimmed) {
+	case columnTypeDatetime:
+		e.datetime = true
+	case columnTypeReal:
+		e.real = true
+	case columnTypeInteger:
+		e.integer = true
+	default:
+		e.text = true
+	}
+}
+
+// columnType reports the narrowest type holding every value that was folded in.
+func (e columnTypeEvidence) columnType() columnType {
+	switch {
+	case !e.nonEmpty:
+		// Nothing was seen, and TEXT is the only type no later value is damaged by.
+		return columnTypeText
+	case e.forcedText || e.text:
+		return columnTypeText
+	case e.datetime && (e.integer || e.real):
+		// A datetime is stored as text, so a column that also holds a number has
+		// no type covering both. Picking the numeric one declared INTEGER or REAL
+		// over values SQLite then stored as text, leaving the schema and typeof()
+		// disagreeing.
+		return columnTypeText
+	case e.datetime:
+		return columnTypeDatetime
+	case e.real:
+		// One decimal is enough. Deciding this by how many decimals the column
+		// happens to hold left an INTEGER column that rewrote 4.0 to 4 and stored
+		// 2.5 against its own declared type, and adding one more decimal row
+		// changed the arithmetic of every row already there.
+		return columnTypeReal
+	default:
+		return columnTypeInteger
+	}
+}
+
+// columnEvidenceList holds the evidence for each column of a table.
+type columnEvidenceList []columnTypeEvidence
+
+// newColumnEvidenceList returns evidence for a table of the given width.
+func newColumnEvidenceList(columnCount int) columnEvidenceList {
+	return make(columnEvidenceList, columnCount)
+}
+
+// addRecord folds one row into the evidence of the columns it covers. A row
+// shorter than the header leaves the columns it does not reach alone, which is
+// what a missing cell means.
+func (c columnEvidenceList) addRecord(r record) {
+	for i, value := range r {
+		if i >= len(c) {
+			return
+		}
+		c[i].add(value)
+	}
+}
+
+// addRecords folds a chunk of rows in.
+func (c columnEvidenceList) addRecords(records []record) {
+	for _, r := range records {
+		c.addRecord(r)
+	}
+}
+
+// columnInfos names the columns and gives each the type its evidence requires.
+func (c columnEvidenceList) columnInfos(h header) columnInfoList {
+	infos := make(columnInfoList, len(h))
+	for i, name := range h {
+		info := columnInfo{Name: name, Type: columnTypeText}
+		if i < len(c) {
+			info.Type = c[i].columnType()
+		}
+		infos[i] = info
+	}
+	return infos
 }
 
 // equalTypes reports whether both lists declare the same column types.
@@ -459,20 +481,10 @@ var cachedDatetimePatterns = []datetimePattern{
 
 // Type inference constants
 const (
-	// maxSampleSize limits how many values to sample for type inference
-	maxSampleSize = 1000
-	// minConfidenceThreshold is the minimum percentage of values that must match a type
-	minConfidenceThreshold = 0.8
-	// earlyTerminationThreshold is the percentage of text values that triggers early termination
-	earlyTerminationThreshold = 0.5
 	// minDatetimeLength is the minimum reasonable length for datetime values
 	minDatetimeLength = 4
 	// maxDatetimeLength is the maximum reasonable length for datetime values
 	maxDatetimeLength = 35
-	// samplingStratificationFactor determines when to use stratified vs simple sampling
-	samplingStratificationFactor = 3
-	// minRealThreshold is the minimum percentage of real values needed to classify as REAL
-	minRealThreshold = 0.1
 )
 
 // isDatetime checks if a string value represents a datetime with optimized pattern matching
@@ -520,148 +532,17 @@ func isDatetime(value string) bool {
 	return false
 }
 
-// inferColumnType infers the SQL column type from a slice of string values with optimized sampling
+// inferColumnType infers the SQL column type from a slice of string values.
+//
+// Every value is folded in, not a sample of them: which type a column gets has
+// to follow from what the column holds, and a sample made the answer depend on
+// which values the sampler happened to look at.
 func inferColumnType(values []string) columnType {
-	if len(values) == 0 {
-		return columnTypeText
-	}
-
-	// Asked of every value, not of the sample: see mustStayText.
+	var evidence columnTypeEvidence
 	for _, value := range values {
-		if mustStayText(value) {
-			return columnTypeText
-		}
+		evidence.add(value)
 	}
-
-	// Use sampling for large datasets to improve performance
-	sampleValues := getSampleValues(values)
-
-	// Track type counts for confidence-based inference
-	typeCounts := map[columnType]int{
-		columnTypeText:     0,
-		columnTypeDatetime: 0,
-		columnTypeReal:     0,
-		columnTypeInteger:  0,
-	}
-
-	nonEmptyCount := 0
-
-	for _, value := range sampleValues {
-		// Skip empty values for type inference
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		nonEmptyCount++
-
-		// Determine the type of this value
-		valueType := classifyValue(value)
-		typeCounts[valueType]++
-
-		// Early termination: if too many text values, it's definitely text
-		if typeCounts[columnTypeText] > 0 && float64(typeCounts[columnTypeText])/float64(nonEmptyCount) > earlyTerminationThreshold {
-			return columnTypeText
-		}
-	}
-
-	if nonEmptyCount == 0 {
-		return columnTypeText
-	}
-
-	// Determine the most appropriate type based on confidence thresholds
-	return selectColumnType(typeCounts, nonEmptyCount)
-}
-
-// getSampleValues returns a sample of values for type inference to improve performance
-// Uses stratified sampling to ensure better representation across the dataset
-func getSampleValues(values []string) []string {
-	if len(values) <= maxSampleSize {
-		return values
-	}
-
-	sampleSize := maxSampleSize
-	samples := make([]string, 0, sampleSize)
-
-	// For very small datasets relative to sample size, fall back to simple sampling
-	if len(values) < sampleSize*samplingStratificationFactor {
-		step := max(1, len(values)/sampleSize)
-		for i := 0; i < sampleSize && i*step < len(values); i++ {
-			samples = append(samples, values[i*step])
-		}
-		return samples
-	}
-
-	// Stratified sampling: divide into 3 sections for better representation
-	sectionSize := len(values) / samplingStratificationFactor
-	if sectionSize == 0 {
-		// If section size is 0, fall back to simple sampling
-		step := max(1, len(values)/sampleSize)
-		for i := 0; i < sampleSize && i*step < len(values); i++ {
-			samples = append(samples, values[i*step])
-		}
-		return samples
-	}
-
-	samplesPerSection := sampleSize / samplingStratificationFactor
-	remainder := sampleSize % samplingStratificationFactor
-
-	// Ensure each section gets at least one sample if possible
-	if samplesPerSection == 0 {
-		samplesPerSection = 1
-		remainder = max(0, sampleSize-samplingStratificationFactor)
-	}
-
-	// Sample from beginning section with bounds checking
-	beginSamples := samplesPerSection
-	if remainder > 0 {
-		beginSamples++
-		remainder--
-	}
-	if beginSamples > 0 {
-		step := max(1, sectionSize/beginSamples)
-		for j := range beginSamples {
-			idx := j * step
-			if idx >= sectionSize || idx >= len(values) {
-				break
-			}
-			samples = append(samples, values[idx])
-		}
-	}
-
-	// Sample from middle section with bounds checking
-	middleSamples := samplesPerSection
-	if remainder > 0 {
-		middleSamples++
-	}
-	if middleSamples > 0 {
-		startMiddle := sectionSize
-		step := max(1, sectionSize/middleSamples)
-		targetSamples := len(samples) + middleSamples
-		for i := 0; i < sectionSize && len(samples) < targetSamples; i += step {
-			idx := startMiddle + i
-			if idx < len(values) {
-				samples = append(samples, values[idx])
-			}
-		}
-	}
-
-	// Sample from end section with bounds checking
-	endSamples := sampleSize - len(samples)
-	if endSamples > 0 {
-		startEnd := 2 * sectionSize
-		if startEnd < len(values) {
-			endSectionSize := len(values) - startEnd
-			step := max(1, endSectionSize/endSamples)
-			for i := 0; i < endSectionSize && len(samples) < sampleSize; i += step {
-				idx := startEnd + i
-				if idx < len(values) {
-					samples = append(samples, values[idx])
-				}
-			}
-		}
-	}
-
-	return samples
+	return evidence.columnType()
 }
 
 // classifyValue determines the type of a single value
@@ -845,100 +726,4 @@ func isIntegerLiteralOverflowingInt64(value string) bool {
 	// as an integer upstream; if ParseInt fails it overflows int64.
 	_, err := strconv.ParseInt(value, 10, 64)
 	return err != nil
-}
-
-// selectColumnType selects the best column type based on confidence analysis
-func selectColumnType(typeCounts map[columnType]int, totalCount int) columnType {
-	// If any text values exist with reasonable confidence, choose text
-	if typeCounts[columnTypeText] > 0 {
-		return columnTypeText
-	}
-
-	// A datetime is stored as text, so a column that also holds a number has no
-	// type covering both, exactly as a column holding text does. Picking the
-	// numeric one declared INTEGER or REAL over values SQLite then stored as
-	// text, leaving the schema and typeof() disagreeing.
-	if typeCounts[columnTypeDatetime] > 0 &&
-		typeCounts[columnTypeInteger]+typeCounts[columnTypeReal] > 0 {
-		return columnTypeText
-	}
-
-	// Calculate confidence for each type
-	datetimeConfidence := float64(typeCounts[columnTypeDatetime]) / float64(totalCount)
-	realConfidence := float64(typeCounts[columnTypeReal]) / float64(totalCount)
-	integerConfidence := float64(typeCounts[columnTypeInteger]) / float64(totalCount)
-
-	// Choose type with highest confidence above threshold
-	if datetimeConfidence >= minConfidenceThreshold {
-		return columnTypeDatetime
-	}
-	// For mixed numeric types, prefer REAL if there are significant real values
-	// Only classify as REAL if real values make up a reasonable portion
-	if realConfidence >= minRealThreshold && (realConfidence+integerConfidence) >= minConfidenceThreshold {
-		return columnTypeReal
-	}
-
-	if integerConfidence >= minConfidenceThreshold {
-		return columnTypeInteger
-	}
-
-	// If no type has sufficient confidence, choose the most appropriate numeric type
-	if realConfidence > 0 {
-		return columnTypeReal
-	}
-	if integerConfidence > 0 {
-		return columnTypeInteger
-	}
-	if datetimeConfidence > 0 {
-		return columnTypeDatetime
-	}
-
-	// Default to text if nothing else matches
-	return columnTypeText
-}
-
-// inferColumnsInfo infers column information from header and data records
-func inferColumnsInfo(header header, records []record) []columnInfo {
-	columnCount := len(header)
-	if columnCount == 0 {
-		return nil
-	}
-
-	columns := make([]columnInfo, columnCount)
-
-	// Initialize column info with headers
-	for i, name := range header {
-		columns[i] = columnInfo{
-			Name: name,
-			Type: columnTypeText, // Default to TEXT
-		}
-	}
-
-	// If no records, return with TEXT types
-	if len(records) == 0 {
-		return columns
-	}
-
-	// Pre-allocate column values slices to avoid repeated allocations
-	// This reduces memory allocations significantly for large datasets
-	columnValues := make([][]string, columnCount)
-	for i := range columnValues {
-		columnValues[i] = make([]string, 0, len(records))
-	}
-
-	// Collect values for all columns in a single pass through records
-	for _, record := range records {
-		for i := range columnCount {
-			if i < len(record) {
-				columnValues[i] = append(columnValues[i], record[i])
-			}
-		}
-	}
-
-	// Infer type for each column
-	for i := range columnCount {
-		columns[i].Type = inferColumnType(columnValues[i])
-	}
-
-	return columns
 }
