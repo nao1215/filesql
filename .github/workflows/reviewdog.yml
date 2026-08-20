@@ -5,7 +5,12 @@ jobs:
   golangci-lint:
     name: golangci-lint
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # A pull request that touches go.mod invalidates the action's cache, and
+    # linting this module from cold has to build arrow, parquet-go, excelize and
+    # modernc.org/sqlite first, which takes longer than ten minutes. The job was
+    # cancelled before golangci-lint could report, so every dependency update
+    # failed here for a reason that had nothing to do with its diff.
+    timeout-minutes: 30
     steps:
       - name: Check out code into the Go module directory
         uses: actions/checkout@v7
@@ -14,7 +19,9 @@ jobs:
       - name: golangci-lint
         uses: reviewdog/action-golangci-lint@v2
         with:
-          golangci_lint_flags: "--timeout 10m"
+          # Below the job timeout, so a genuine hang is reported as a lint
+          # timeout rather than as a cancelled job with no output.
+          golangci_lint_flags: "--timeout 25m"
           reporter: github-pr-review
           level: warning
 
