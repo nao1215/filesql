@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1783,4 +1785,100 @@ func TestStreamingParser_ProcessInChunks_CompressedJSON(t *testing.T) {
 		assert.Equal(t, 2, len(chunks[1].records))
 		assert.Equal(t, 1, len(chunks[2].records))
 	})
+}
+
+// TestChunkSizeDoesNotChangeTheColumnType loads one file at several chunk sizes
+// and requires the column to come out the same type each time, and the cells to
+// come out the same wherever the type was decided before any row was stored.
+//
+// A column that reads as a number and turns out to be text is created numeric
+// and rebuilt as TEXT when the text arrives, and the rows already stored carry
+// SQLite's spelling of the number rather than the file's. That is a documented
+// limit of chunked loading rather than something this test pins; what it pins is
+// that the type never depends on the chunk size, and that a column which never
+// changes type keeps its cells exactly.
+func TestChunkSizeDoesNotChangeTheColumnType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		body      string
+		wantType  string
+		wantCells []string
+	}{
+		{
+			name:      "an integer column that turns text keeps every cell as written",
+			body:      "v\n1\n2\nabc\n",
+			wantType:  "text",
+			wantCells: []string{"1", "2", "abc"},
+		},
+		{
+			name:      "a zero-padded code keeps its leading zero at any chunk size",
+			body:      "v\n007\n008\n009\n",
+			wantType:  "text",
+			wantCells: []string{"007", "008", "009"},
+		},
+		{
+			name:      "an integer past int64 stays text at any chunk size",
+			body:      "v\n11040320260000000000\n1\n2\n",
+			wantType:  "text",
+			wantCells: []string{"11040320260000000000", "1", "2"},
+		},
+		{
+			name:      "a column of text is not retyped by a late number",
+			body:      "v\nabc\ndef\n3\n",
+			wantType:  "text",
+			wantCells: []string{"abc", "def", "3"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, chunkSize := range []int{1, 2, 3, 4, 5, 0} {
+				builder := NewBuilder().AddReader(strings.NewReader(tt.body), "t", FileTypeCSV)
+				if chunkSize > 0 {
+					builder = builder.SetDefaultChunkSize(chunkSize)
+				}
+				built, err := builder.Build(context.Background())
+				if err != nil {
+					t.Fatalf("chunk size %d: build: %v", chunkSize, err)
+				}
+				db, err := built.Open(context.Background())
+				if err != nil {
+					t.Fatalf("chunk size %d: open: %v", chunkSize, err)
+				}
+
+				rows, err := db.QueryContext(context.Background(), `SELECT v, typeof(v) FROM t`)
+				if err != nil {
+					t.Fatalf("chunk size %d: query: %v", chunkSize, err)
+				}
+				cells := make([]string, 0, len(tt.wantCells))
+				for rows.Next() {
+					var cell, cellType string
+					if err := rows.Scan(&cell, &cellType); err != nil {
+						t.Fatalf("chunk size %d: scan: %v", chunkSize, err)
+					}
+					if cellType != tt.wantType {
+						t.Errorf("chunk size %d: typeof(%q) = %s, want %s", chunkSize, cell, cellType, tt.wantType)
+					}
+					cells = append(cells, cell)
+				}
+				if err := rows.Err(); err != nil {
+					t.Fatalf("chunk size %d: rows: %v", chunkSize, err)
+				}
+				if err := rows.Close(); err != nil {
+					t.Fatalf("chunk size %d: close rows: %v", chunkSize, err)
+				}
+				if err := db.Close(); err != nil {
+					t.Fatalf("chunk size %d: close db: %v", chunkSize, err)
+				}
+
+				if !reflect.DeepEqual(cells, tt.wantCells) {
+					t.Errorf("chunk size %d: got %q, want %q", chunkSize, cells, tt.wantCells)
+				}
+			}
+		})
+	}
 }

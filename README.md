@@ -394,9 +394,13 @@ validatedBuilder, err := filesql.NewBuilder().
 
 The final memory cost is still dominated by the size of the in-memory SQLite database. Chunking reduces loader overhead; it does not make a large dataset free.
 
+A column's type is the same at any chunk size, but the text of a numeric-looking cell is not always. A column that reads as a number for a while and turns out to be text — `1`, then `2.50`, then `abc` — is created numeric and rebuilt as TEXT when the text arrives, and the rows already stored then carry SQLite's spelling of the number rather than the file's: `2.50` comes back as `2.5`, and `1` as `1.0`. The default chunk size decides the type before any row is stored for a file of 1000 rows or fewer, so this shows up when the chunk size is lowered below the row where such a column turns text. Leave the chunk size alone, or raise it, when a column mixes numbers and text and the exact text matters.
+
 ### Concurrency
 
-The `*sql.DB` returned by `Open` and `OpenContext` is safe to share across goroutines. filesql uses a shared-cache in-memory SQLite database so pooled connections can see the same tables. Auto-save does not change that: the save runs once, when `Close` returns.
+The `*sql.DB` returned by `Open` and `OpenContext` is safe to share across goroutines. filesql uses a shared-cache in-memory SQLite database so pooled connections can see the same tables. Auto-save does not change that: with `EnableAutoSave` the save runs once, when `Close` returns, and with `EnableAutoSaveOnCommit` the saves run one at a time, so committing from several goroutines is safe.
+
+Loading is the exception. `LoadInto`, `DBBuilder.LoadInto` and `LoadIntoTx` create tables, and creating one takes a schema lock: two loads into the same database at the same time leave one of them reporting `database schema is locked`, with its table not created. Load from one goroutine, or hold your own lock around the load, and share the database for queries once it is loaded.
 
 `LoadInto` is different: you own the database and pool settings there. If you use `sql.Open("sqlite", ":memory:")`, keep `SetMaxOpenConns(1)` so every query hits the same in-memory database.
 
