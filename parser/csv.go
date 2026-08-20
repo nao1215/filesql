@@ -52,6 +52,9 @@ func NewCSVReader(r io.Reader) *CSVReader {
 // Read returns the next record, or io.EOF when there are none left. A blank
 // line is not a record and is skipped, which is what encoding/csv does.
 func (c *CSVReader) Read() ([]string, error) {
+	if err := c.validateComma(); err != nil {
+		return nil, err
+	}
 	for {
 		record, err := c.readRecord()
 		if err != nil {
@@ -98,17 +101,35 @@ func (c *CSVReader) checkFieldCount(record []string) error {
 	}
 }
 
-// comma is the delimiter as a byte, defaulting to ','.
+// comma is the delimiter as a byte. The zero value reads ','.
 //
-// A delimiter outside ASCII reads as ',' rather than as a truncated byte: the
-// callers pass ',' and the TSV reader handles the tab, so a wider rune here
-// would be a caller mistake, and answering with the low byte of one would split
-// records on a byte that is half of a character.
+// The conversion is safe because Read rejects anything at or above utf8.RuneSelf
+// before reaching here; see validateComma.
 func (c *CSVReader) comma() byte {
-	if c.Comma <= 0 || c.Comma >= utf8.RuneSelf {
+	if c.Comma == 0 {
 		return ','
 	}
-	return byte(c.Comma)
+	return byte(c.Comma) //nolint:gosec // validateComma has refused a delimiter that does not fit a byte
+}
+
+// validateComma refuses a delimiter this reader cannot honor, rather than
+// falling back to ',' and splitting the file somewhere the caller did not ask
+// for. A silent fallback is the failure this reader exists to stop, one level
+// up: the records would come back wrong with nothing to say so.
+func (c *CSVReader) validateComma() error {
+	switch {
+	case c.Comma == 0:
+		return nil
+	case c.Comma >= utf8.RuneSelf:
+		// Fields are found by scanning bytes, so a multi-byte delimiter would
+		// match the first byte of a character rather than the character.
+		return fmt.Errorf("%w: delimiter %q is not ASCII", ErrCSVSyntax, c.Comma)
+	case c.Comma == '"' || c.Comma == '\n' || c.Comma == '\r':
+		// These already mean something to a CSV record.
+		return fmt.Errorf("%w: delimiter %q is reserved by the format", ErrCSVSyntax, c.Comma)
+	default:
+		return nil
+	}
 }
 
 // appendLine reads one line, terminator included, onto buf. It reports whether

@@ -202,7 +202,7 @@ func TestDetectLineEnding_UnreadableFileKeepsTheDefault(t *testing.T) {
 // whose cell held "x\ny" came back holding "x\r\ny", and an LF file whose cell
 // held "x\r\ny" came back holding "x\ny". The third case passed for the wrong
 // reason — the read dropped the carriage return and the write put one back, so
-// the two errors cancelled out whenever the cell's break matched the file's
+// the two errors canceled out whenever the cell's break matched the file's
 // terminator.
 func TestQuotedLineBreakSurvivesSave(t *testing.T) {
 	t.Parallel()

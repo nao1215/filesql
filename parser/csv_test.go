@@ -104,6 +104,45 @@ func TestCSVReader_FieldsPerRecord(t *testing.T) {
 	})
 }
 
+// TestCSVReader_RefusesAnUnusableDelimiter pins that a delimiter this reader
+// cannot honor is reported rather than replaced with a comma. Falling back
+// would split the file somewhere the caller did not ask for and say nothing,
+// which is the shape of failure this reader exists to stop one level up.
+func TestCSVReader_RefusesAnUnusableDelimiter(t *testing.T) {
+	t.Parallel()
+
+	for name, comma := range map[string]rune{
+		"multi-byte":      '§',
+		"quote":           '"',
+		"line feed":       '\n',
+		"carriage return": '\r',
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			r := NewCSVReader(strings.NewReader("a,b\n1,2\n"))
+			r.Comma = comma
+			if _, err := r.ReadAll(); !errors.Is(err, ErrCSVSyntax) {
+				t.Fatalf("err = %v, want ErrCSVSyntax", err)
+			}
+		})
+	}
+
+	t.Run("an ordinary delimiter is accepted", func(t *testing.T) {
+		t.Parallel()
+
+		r := NewCSVReader(strings.NewReader("a;b\n1;2\n"))
+		r.Comma = ';'
+		got, err := r.ReadAll()
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if diff := cmp.Diff([][]string{{"a", "b"}, {"1", "2"}}, got); diff != "" {
+			t.Errorf("mismatch (-want +got):\n%s", diff)
+		}
+	})
+}
+
 // TestCSVReader_AgreesWithEncodingCSV is the differential the replacement has to
 // satisfy: for input without a carriage return inside quotes, which is the case
 // the standard library and this reader are meant to answer identically, they do.
