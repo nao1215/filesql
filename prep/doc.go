@@ -47,19 +47,10 @@
 //   - LTSV: Maximum line size is 10MB
 //   - JSON/JSONL: Data has a single "data" column containing raw JSON strings
 //
-// # Struct Fields and Columns
-//
-// A struct may cover a subset of the input's columns; extra columns are
-// ignored. A field naming a column the input does not have is refused with
-// ErrUnknownColumn, because a zero-filled field cannot be told apart from a
-// cell that is really empty: a typo would otherwise be reported as a missing
-// value in a column that does not exist. A field that is meant to work without
-// a column carries prep:"default=..." and is accepted, since the default is
-// where its value comes from.
-//
-// This is what makes the JSON and JSONL limitation above visible rather than
-// silent. Those formats expose one "data" column, so a struct written against
-// the JSON object's own keys matches nothing and is now told so.
+// A struct may cover a subset of the columns. A field naming a column the input
+// does not have is refused with ErrUnknownColumn, since a zero-filled field
+// cannot be told apart from a cell that is really empty; give such a field
+// prep:"default=..." if it is meant to work without a column.
 //
 // # Supported File Formats
 //

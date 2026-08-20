@@ -3,6 +3,7 @@ package filesql
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"errors"
 	"io"
 	"os"
@@ -186,5 +187,120 @@ func TestDumpDatabase_BinaryFormatsIgnoreEncoding(t *testing.T) {
 		require.NoError(t, reopened.QueryRowContext(ctx, "SELECT name FROM src").Scan(&name))
 		assert.Equal(t, "山田", name, "%v should keep its own encoding", format)
 		require.NoError(t, reopened.Close())
+	}
+}
+
+// TestDumpDatabase_ISO2022JPStaysValidCSV pins that an encoded value cannot
+// break the structure of the file it sits in.
+//
+// The encoder wrapped the whole stream, so encoding/csv decided what to quote by
+// looking at UTF-8 text and never saw the bytes the encoder introduced
+// afterwards. ISO-2022-JP is seven-bit and its JIS X 0208 bytes run from 0x21 to
+// 0x7E, which includes both the comma and the double quote: "が" encodes as
+// ESC $ B $ , ESC ( B, and the comma in the middle of it was read as a field
+// separator by every reader. "あ" carries a quote and made the record
+// unparseable outright.
+//
+// Shift-JIS and EUC-JP escaped this by accident, their trail bytes all being at
+// or above 0x80, so they are here to pin that they still write what they wrote.
+func TestDumpDatabase_ISO2022JPStaysValidCSV(t *testing.T) {
+	t.Parallel()
+
+	values := map[string]string{
+		"comma byte in the encoding": "が",
+		"quote byte in the encoding": "あ",
+		"neither":                    "日本語",
+		"mixed with ascii":           "aあ1",
+	}
+
+	for name, value := range values {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, "t.csv")
+			require.NoError(t, os.WriteFile(source, []byte("k,v\nrow,seed\n"), 0o600))
+
+			db, err := OpenContext(t.Context(), source)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = db.Close() })
+			_, err = db.ExecContext(t.Context(), `UPDATE t SET v = ?`, value)
+			require.NoError(t, err)
+
+			out := filepath.Join(dir, "out")
+			require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithEncoding(EncodingISO2022JP)))
+
+			raw, err := os.ReadFile(filepath.Join(out, "t.csv")) //nolint:gosec // Test path from t.TempDir()
+			require.NoError(t, err)
+
+			decoded, err := io.ReadAll(transform.NewReader(bytes.NewReader(raw), japanese.ISO2022JP.NewDecoder()))
+			require.NoError(t, err, "the file has to decode as the encoding it was written in")
+
+			records, err := csv.NewReader(bytes.NewReader(decoded)).ReadAll()
+			require.NoError(t, err, "the file has to parse as CSV")
+			require.Len(t, records, 2, "a header and one row")
+			require.Len(t, records[1], 2, "the row has as many fields as the table has columns")
+			assert.Equal(t, value, records[1][1], "and the value survives")
+		})
+	}
+}
+
+// TestOpen_NamesAnEscapeEncodedInput pins that a file filesql cannot read says
+// why.
+//
+// ISO-2022-JP is seven-bit, so it passes the UTF-8 check and used to fail later
+// as "column count mismatch": the escape sequences were read as text, so the
+// record really did have the wrong number of fields as far as the reader was
+// concerned. A caller saw a complaint about their data on a file filesql had
+// just written from it.
+func TestOpen_NamesAnEscapeEncodedInput(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	source := filepath.Join(dir, "t.csv")
+	require.NoError(t, os.WriteFile(source, []byte("k,v\nrow,seed\n"), 0o600))
+
+	db, err := OpenContext(t.Context(), source)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	_, err = db.ExecContext(t.Context(), `UPDATE t SET v = ?`, "が")
+	require.NoError(t, err)
+
+	out := filepath.Join(dir, "out")
+	require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithEncoding(EncodingISO2022JP)))
+
+	_, err = OpenContext(t.Context(), out)
+	require.Error(t, err, "filesql reads UTF-8, so it cannot read what it just wrote")
+	assert.ErrorIs(t, err, ErrEncoding)
+	assert.Contains(t, err.Error(), "ISO-2022-JP")
+}
+
+// TestOpen_StillNamesInvalidUTF8 pins that the encodings whose bytes are not
+// UTF-8 keep the clearer answer they already gave, rather than being swallowed
+// by the escape check.
+func TestOpen_StillNamesInvalidUTF8(t *testing.T) {
+	t.Parallel()
+
+	for _, enc := range []Encoding{EncodingShiftJIS, EncodingEUCJP} {
+		t.Run(enc.String(), func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, "t.csv")
+			require.NoError(t, os.WriteFile(source, []byte("k,v\nrow,seed\n"), 0o600))
+
+			db, err := OpenContext(t.Context(), source)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = db.Close() })
+			_, err = db.ExecContext(t.Context(), `UPDATE t SET v = ?`, "日本語")
+			require.NoError(t, err)
+
+			out := filepath.Join(dir, "out")
+			require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithEncoding(enc)))
+
+			_, err = OpenContext(t.Context(), out)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrInvalidUTF8)
+		})
 	}
 }
