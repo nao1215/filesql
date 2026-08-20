@@ -1,6 +1,7 @@
 package filesql
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/csv"
@@ -569,12 +570,31 @@ const loneEmptyField = `""`
 
 // writeDelimitedData writes data in CSV or TSV format based on delimiter
 func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, delimiter rune, lineEnding LineEnding) error {
-	csvWriter := csv.NewWriter(writer)
+	// Records are staged one at a time so the terminator is this package's
+	// choice rather than the csv writer's. UseCRLF would do it, but it rewrites
+	// every line feed the writer emits, inside a quoted field as well as between
+	// records: a cell holding a line break came back holding a different one, so
+	// saving a file changed a row nobody edited.
+	var staged bytes.Buffer
+	csvWriter := csv.NewWriter(&staged)
 	if delimiter != csvDelimiter {
 		csvWriter.Comma = delimiter
 	}
-	csvWriter.UseCRLF = lineEnding == LineEndingCRLF
 	terminator := lineEnding.terminator()
+
+	writeStaged := func(record []string) error {
+		staged.Reset()
+		if err := csvWriter.Write(record); err != nil {
+			return err
+		}
+		csvWriter.Flush()
+		if err := csvWriter.Error(); err != nil {
+			return err
+		}
+		line := strings.TrimSuffix(staged.String(), "\n")
+		_, err := io.WriteString(writer, line+terminator)
+		return err
+	}
 
 	// writeRecord writes one record, taking the lone empty field around the csv
 	// writer. Flushing first keeps the two writers' output in order.
@@ -585,11 +605,7 @@ func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, deli
 			return parser.WriteTSVRecordLineEnding(writer, record, terminator)
 		}
 		if len(record) != 1 || record[0] != "" {
-			return csvWriter.Write(record)
-		}
-		csvWriter.Flush()
-		if err := csvWriter.Error(); err != nil {
-			return err
+			return writeStaged(record)
 		}
 		_, err := io.WriteString(writer, loneEmptyField+terminator)
 		return err
@@ -626,12 +642,11 @@ func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, deli
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	// The flush is where a buffered write reaches the writer underneath, so it is
-	// the first place a failure there can be seen — csv.Writer holds the error
-	// rather than returning it from Write. Flushing in a defer discarded it, and
-	// an encoder refusing a value it cannot write is exactly such a failure.
-	csvWriter.Flush()
-	return csvWriter.Error()
+	// Nothing is buffered past this point: each record is flushed into the
+	// staging buffer and written on from there, so a failure of the writer
+	// underneath — an encoder refusing a value it cannot write, for instance —
+	// has already been returned by the write that caused it.
+	return nil
 }
 
 // formatDumpValue renders one cell for a text-based dump.

@@ -4,7 +4,6 @@ import (
 	"compress/bzip2"
 	"compress/gzip"
 	"compress/zlib"
-	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
@@ -735,7 +734,7 @@ func parseDelimited(reader io.Reader, delimiter rune, fileTypeName string) (*Tab
 	if delimiter == '\t' {
 		records, err = NewTSVReader(normalized).ReadAll()
 	} else {
-		csvReader := csv.NewReader(normalized)
+		csvReader := NewCSVReader(normalized)
 		csvReader.Comma = delimiter
 		records, err = csvReader.ReadAll()
 	}
