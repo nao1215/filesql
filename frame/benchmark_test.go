@@ -158,7 +158,7 @@ func BenchmarkSelect(b *testing.B) {
 		b.Run(bm.name, func(b *testing.B) {
 			b.ResetTimer()
 			for range b.N {
-				_ = df.Select("id", "name", "amount")
+				_, _ = df.Select("id", "name", "amount")
 			}
 		})
 	}
@@ -290,9 +290,10 @@ func BenchmarkChainedOperations(b *testing.B) {
 					amount, _ := row["amount"].(int64)
 					price, _ := row["price"].(float64)
 					return float64(amount) * price
-				}).Select("category", "total")
+				})
 
-				grouped, _ := result.GroupBy("category")
+				selected, _ := result.Select("category", "total")
+				grouped, _ := selected.GroupBy("category")
 				_, _ = grouped.Sum("total")
 			}
 		})

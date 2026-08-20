@@ -3,7 +3,6 @@ package filesql
 import (
 	"bufio"
 	"context"
-	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -109,7 +108,7 @@ func newDelimitedReader(reader io.Reader, delimiter rune) delimitedReader {
 		return parser.NewTSVReader(normalized)
 	}
 
-	csvReader := csv.NewReader(normalized)
+	csvReader := parser.NewCSVReader(normalized)
 	csvReader.Comma = delimiter
 	// Accept a variable field count so a ragged row is handled by the configured
 	// malformed-row policy instead of aborting the whole read.

@@ -193,3 +193,80 @@ func TestDetectLineEnding_UnreadableFileKeepsTheDefault(t *testing.T) {
 
 	assert.Equal(t, LineEndingLF, detectLineEnding(truncated, OutputFormatCSV))
 }
+
+// TestQuotedLineBreakSurvivesSave pins that a line break inside a quoted field
+// is data rather than a terminator, in both directions.
+//
+// It was rewritten to whatever the file's terminator is, so editing one row
+// changed the contents of a multi-line cell in a row nobody touched: a CRLF file
+// whose cell held "x\ny" came back holding "x\r\ny", and an LF file whose cell
+// held "x\r\ny" came back holding "x\ny". The third case passed for the wrong
+// reason — the read dropped the carriage return and the write put one back, so
+// the two errors cancelled out whenever the cell's break matched the file's
+// terminator.
+func TestQuotedLineBreakSurvivesSave(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "CRLF file, cell holds LF",
+			in:   "id,v\r\n1,\"x\ny\"\r\n2,b\r\n",
+			want: "id,v\r\n1,\"x\ny\"\r\n2,edited\r\n",
+		},
+		{
+			name: "LF file, cell holds CRLF",
+			in:   "id,v\n1,\"x\r\ny\"\n2,b\n",
+			want: "id,v\n1,\"x\r\ny\"\n2,edited\n",
+		},
+		{
+			name: "CRLF file, cell holds CRLF",
+			in:   "id,v\r\n1,\"x\r\ny\"\r\n2,b\r\n",
+			want: "id,v\r\n1,\"x\r\ny\"\r\n2,edited\r\n",
+		},
+		{
+			name: "LF file, cell holds LF",
+			in:   "id,v\n1,\"x\ny\"\n2,b\n",
+			want: "id,v\n1,\"x\ny\"\n2,edited\n",
+		},
+		{
+			name: "cell holds a lone carriage return",
+			in:   "id,v\n1,\"x\ry\"\n2,b\n",
+			want: "id,v\n1,\"x\ry\"\n2,edited\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "a.csv")
+			require.NoError(t, os.WriteFile(path, []byte(tt.in), 0o600))
+			require.NoError(t, autoSaveOverwrite(t, []string{path}, "UPDATE a SET v='edited' WHERE id=2"))
+
+			got, err := os.ReadFile(path) //nolint:gosec // Test path from t.TempDir()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, string(got), "only the edited row may differ from what was there")
+		})
+	}
+}
+
+// TestQuotedLineBreakSurvivesLoad is the read half on its own, so a fix to the
+// writer alone cannot look like progress.
+func TestQuotedLineBreakSurvivesLoad(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "a.csv")
+	require.NoError(t, os.WriteFile(path, []byte("id,address\n1,\"line1\r\nline2\"\n"), 0o600))
+
+	db, err := Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	var got string
+	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT address FROM a WHERE id=1`).Scan(&got))
+	assert.Equal(t, "line1\r\nline2", got, "the bytes between the quotes are what the file holds")
+}
