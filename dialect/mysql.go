@@ -83,6 +83,13 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	// M-19: SQLite rejects "UNION DISTINCT"; its plain UNION already
 	// deduplicates.
 	out = unionDistinctPass(currentValueParenPass(typePrefixedLiteralPass(out)))
+	// M-22: MySQL's LIKE escapes with a backslash unless an ESCAPE clause says
+	// otherwise; SQLite has no default escape, so an escaped wildcard reached it
+	// as a wildcard and matched rows the caller had excluded.
+	out, err = defaultEscapePass(out, "LIKE")
+	if err != nil {
+		return nil, err
+	}
 	// M-18: ANY_VALUE and the variance family have no SQLite aggregate.
 	return aggregatePass(renameWordPass(out, "RLIKE", "REGEXP"), MySQL)
 }

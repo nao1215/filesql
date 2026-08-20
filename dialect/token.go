@@ -307,6 +307,18 @@ func decodeBackslash(s string, i int) (string, int) {
 		return "\f", 2
 	case 'v':
 		return "\v", 2
+	case 'Z':
+		// MySQL's \Z is ASCII 26. Falling through to the default dropped the
+		// backslash and left a literal "Z".
+		return "\x1a", 2
+	case '%', '_':
+		// The two sequences that keep their backslash. MySQL documents them that
+		// way precisely so a LIKE pattern survives being written as a string
+		// literal: "\%" is the two characters, and the LIKE that reads them
+		// turns them into a literal percent. Dropping the backslash here left an
+		// ordinary wildcard behind, so a pattern asking for one row matched
+		// every row.
+		return s[i : i+2], 2
 	case '\\':
 		return "\\", 2
 	case '\'':
