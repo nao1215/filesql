@@ -474,3 +474,76 @@ func TestDialectQueryKeepsResultColumnNames(t *testing.T) {
 		})
 	}
 }
+
+// TestDialectLiteralsMeanWhatTheySay runs a query in a dialect against a query
+// written directly in SQLite that means the same thing, and requires the same
+// answer. It is the differential form of the lexical fixes: a literal that
+// translates without error but evaluates to something else is invisible in the
+// translated SQL and shows up only here.
+func TestDialectLiteralsMeanWhatTheySay(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		dialect dialect.Dialect
+		query   string
+		want    string
+	}{
+		{
+			// A nested block comment is one comment, so the "|| 'x'" inside it
+			// does not run. Ending the comment at the first close made it run.
+			name:    "a nested block comment hides everything up to its own close",
+			dialect: dialect.PostgreSQL,
+			query:   "SELECT 'a' /* /* inner */ || 'x' */",
+			want:    "a",
+		},
+		{
+			name:    "a PostgreSQL escape string decodes a hex escape",
+			dialect: dialect.PostgreSQL,
+			query:   `SELECT E'\x41'`,
+			want:    "A",
+		},
+		{
+			name:    "a PostgreSQL escape string decodes an octal escape",
+			dialect: dialect.PostgreSQL,
+			query:   `SELECT E'\101'`,
+			want:    "A",
+		},
+		{
+			name:    "a GoogleSQL string decodes a hex escape",
+			dialect: dialect.GoogleSQL,
+			query:   `SELECT '\x41'`,
+			want:    "A",
+		},
+		{
+			name:    "a GoogleSQL triple-quoted string holds its content bare",
+			dialect: dialect.GoogleSQL,
+			query:   "SELECT '''abc'''",
+			want:    "abc",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+
+			builder, err := NewBuilder().AddPath("testdata/sample.csv").WithDialect(tt.dialect).Build(ctx)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			db, err := builder.Open(ctx)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer db.Close()
+
+			var got string
+			if err := db.QueryRowContext(ctx, tt.query).Scan(&got); err != nil {
+				t.Fatalf("query %q: %v", tt.query, err)
+			}
+			if got != tt.want {
+				t.Fatalf("%s: %q returned %q, want %q", tt.dialect, tt.query, got, tt.want)
+			}
+		})
+	}
+}

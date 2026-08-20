@@ -31,6 +31,15 @@
 // into a helper that converts with that dialect's rules and returns
 // ErrInvalidCast for a value it cannot represent.
 //
+// Lexing is per dialect, because what counts as a string, an identifier, a
+// comment, or an escape differs between them: a double-quoted literal is a
+// string in MySQL and an identifier in PostgreSQL, block comments nest in
+// PostgreSQL and not elsewhere, and only some dialects decode an escape that
+// names a character by its number. Reading a literal by the wrong dialect's
+// rules is the worst kind of failure this package can have, because the
+// translation succeeds and the query answers from a value the caller never
+// wrote, so each of those rules is configured rather than assumed.
+//
 // The SQLite dialect is the identity translation: Translate returns the input
 // unchanged.
 package dialect
