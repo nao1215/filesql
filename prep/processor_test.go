@@ -2200,3 +2200,119 @@ func TestProcessToWriter_NilReader(t *testing.T) {
 		t.Error("nil reader via ProcessToWriter should NOT match ErrEmptyFile")
 	}
 }
+
+// TestProcess_RefusesAFieldWithNoColumn pins that a struct field naming a
+// column the input does not have is reported as what it is.
+//
+// It used to be filled with the zero value and then validated, so a field named
+// Emails against a column named email produced `row 1, column "emails": value
+// is required` on a file whose every row has an email. The error pointed at the
+// data, which is fine, instead of at the mapping, which is not — and a caller
+// had no way to tell the two apart.
+//
+// The same mistake made prep do nothing at all for JSON and JSONL, whose rows
+// arrive as a single "data" column: a struct written against the object's own
+// keys matched nothing, so no transform ran and every field was reported as a
+// missing required value.
+func TestProcess_RefusesAFieldWithNoColumn(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a field naming no column is refused, and the error says which", func(t *testing.T) {
+		t.Parallel()
+
+		type user struct {
+			Name   string `prep:"trim" validate:"required"`
+			Emails string `validate:"required"` // the column is "email", singular
+		}
+
+		var out []user
+		_, _, err := NewProcessor(FileTypeCSV).Process(strings.NewReader("name,email\nAlice,a@b.com\n"), &out)
+		if err == nil {
+			t.Fatal("Process accepted a struct whose field matches no column")
+		}
+		if !errors.Is(err, ErrUnknownColumn) {
+			t.Fatalf("err = %v, want ErrUnknownColumn", err)
+		}
+		for _, want := range []string{"Emails", "emails", "email"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("err = %q, want it to name %q so the caller can see the mistake", err, want)
+			}
+		}
+	})
+
+	t.Run("every missing field is named at once", func(t *testing.T) {
+		t.Parallel()
+
+		type user struct {
+			Name    string `prep:"trim"`
+			Emails  string
+			Missing string
+		}
+
+		var out []user
+		_, _, err := NewProcessor(FileTypeCSV).Process(strings.NewReader("name,email\nAlice,a@b.com\n"), &out)
+		if err == nil {
+			t.Fatal("Process accepted a struct with two fields matching no column")
+		}
+		for _, want := range []string{"Emails", "Missing"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("err = %q, want it to name %q; one error listing all of them beats one per row", err, want)
+			}
+		}
+	})
+
+	t.Run("a struct covering a subset of the columns is still accepted", func(t *testing.T) {
+		t.Parallel()
+
+		type user struct {
+			Name string `prep:"trim"`
+		}
+
+		var out []user
+		_, result, err := NewProcessor(FileTypeCSV).Process(strings.NewReader("name,address\n  Alice  ,1 Main St\n"), &out)
+		if err != nil {
+			t.Fatalf("narrowing the struct is legitimate and must not be refused: %v", err)
+		}
+		if len(out) != 1 || out[0].Name != "Alice" {
+			t.Fatalf("out = %+v, want the trimmed name", out)
+		}
+		if result.HasErrors() {
+			t.Fatalf("unexpected validation errors: %v", result.ValidationErrors())
+		}
+	})
+
+	t.Run("JSON says the only column is data rather than reporting empty values", func(t *testing.T) {
+		t.Parallel()
+
+		type user struct {
+			Name  string `prep:"trim" validate:"required"`
+			Email string `prep:"trim,lowercase" validate:"required"`
+		}
+
+		var out []user
+		_, _, err := NewProcessor(FileTypeJSON).Process(strings.NewReader(`[{"name":"  Alice  ","email":"A@B.COM"}]`), &out)
+		if err == nil {
+			t.Fatal("Process accepted a struct written against the JSON object's keys")
+		}
+		if !strings.Contains(err.Error(), "data") {
+			t.Errorf("err = %q, want it to name the \"data\" column so the caller learns the shape", err)
+		}
+	})
+
+	t.Run("a JSON struct naming the data column works", func(t *testing.T) {
+		t.Parallel()
+
+		type record struct {
+			Data string `name:"data" prep:"trim"`
+		}
+
+		var out []record
+		_, _, err := NewProcessor(FileTypeJSON).Process(strings.NewReader(`[{"id":1}]`), &out)
+		if err != nil {
+			t.Fatalf("the documented way to use JSON must keep working: %v", err)
+		}
+		if len(out) != 1 || !strings.Contains(out[0].Data, `"id"`) {
+			t.Fatalf("out = %+v, want the raw JSON element", out)
+		}
+	})
+}

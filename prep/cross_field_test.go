@@ -1,6 +1,7 @@
 package prep
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -1034,49 +1035,22 @@ func TestCrossFieldValidation_Processor(t *testing.T) {
 		TargetField string
 	}
 
-	t.Run("cross-field validation runs when source column is missing from CSV", func(t *testing.T) {
+	t.Run("a field whose column is missing is refused rather than treated as empty", func(t *testing.T) {
 		t.Parallel()
-		// CSV has only target_field column, not src_field
+		// This used to produce srcValue="" and let the comparison run, which
+		// cannot be told apart from a row whose cell really is empty. Refusing
+		// says which of the two it is; a field that is meant to work without a
+		// column carries prep:"default=..." and is still accepted.
 		csvData := "target_field\nhello\n"
 		var records []MissingSrcField
 
 		processor := NewProcessor(FileTypeCSV)
-		_, result, err := processor.Process(strings.NewReader(csvData), &records)
-		if err != nil {
-			t.Fatalf("Process() error = %v", err)
+		_, _, err := processor.Process(strings.NewReader(csvData), &records)
+		if err == nil {
+			t.Fatal("Process accepted a struct whose SrcField matches no column")
 		}
-
-		// Source column missing means srcValue="" which != "hello", so eqfield should fail
-		if len(result.Errors) == 0 {
-			t.Error("expected validation error when source column is missing, got none")
-		}
-		valErrors := result.ValidationErrors()
-		if len(valErrors) == 0 {
-			t.Fatal("expected ValidationError, got none")
-		}
-		if valErrors[0].Tag != "eqfield" {
-			t.Errorf("Tag = %q, want %q", valErrors[0].Tag, "eqfield")
-		}
-	})
-
-	t.Run("cross-field validation with missing source column treats value as empty string", func(t *testing.T) {
-		t.Parallel()
-		// CSV has only target_field column; source value will be "" which equals ""
-		csvData := "target_field\n\"\"\n"
-		var records []MissingSrcField
-
-		processor := NewProcessor(FileTypeCSV)
-		_, result, err := processor.Process(strings.NewReader(csvData), &records)
-		if err != nil {
-			t.Fatalf("Process() error = %v", err)
-		}
-
-		// srcValue="" == targetValue="" so eqfield should pass
-		if len(result.Errors) != 0 {
-			t.Errorf("expected 0 errors when both fields are empty, got %d: %v", len(result.Errors), result.Errors)
-		}
-		if result.ValidRowCount != 1 {
-			t.Errorf("expected 1 valid row, got %d", result.ValidRowCount)
+		if !errors.Is(err, ErrUnknownColumn) {
+			t.Fatalf("err = %v, want ErrUnknownColumn", err)
 		}
 	})
 }

@@ -1074,14 +1074,20 @@ func TestIntegration_XLSXProcessing(t *testing.T) {
 
 // TestIntegration_XLSXWithValidationErrors tests XLSX processing detects validation errors.
 // sample.xlsx has headers [id, name] and rows: [1,Gina], [2,Yulia], [3,Vika].
-// We map to a strict struct requiring an "email" column which doesn't exist, triggering errors.
+// The struct asks for a numeric name, which none of the three rows is, so every
+// row fails a rule the data really breaks.
+//
+// It used to ask for an "email" column the workbook does not have and count the
+// resulting empty values as failures. That reads as a validation test and was
+// really testing the zero-filling of an unmatched field, which is now refused:
+// a column that is not there and a cell that is empty were indistinguishable,
+// so the errors said the data was bad when the struct was wrong.
 func TestIntegration_XLSXWithValidationErrors(t *testing.T) {
 	t.Parallel()
 
 	type StrictRecord struct {
-		ID    string `validate:"required,numeric"`
-		Name  string `validate:"required"`
-		Email string `validate:"required,email"`
+		ID   string `validate:"required,numeric"`
+		Name string `validate:"required,numeric"`
 	}
 
 	file, err := os.Open(filepath.Join("testdata", "sample.xlsx"))
@@ -1109,25 +1115,24 @@ func TestIntegration_XLSXWithValidationErrors(t *testing.T) {
 
 	valErrors := result.ValidationErrors()
 	if len(valErrors) == 0 {
-		t.Fatal("expected validation errors from XLSX data with missing required email column")
+		t.Fatal("expected validation errors from XLSX data whose names are not numeric")
 	}
 
-	// Every row should fail the "required" check on the email column (column not in XLSX)
-	foundEmailRequired := false
+	foundNameNumeric := false
 	for _, ve := range valErrors {
-		if ve.Column == "email" && ve.Tag == "required" {
-			foundEmailRequired = true
+		if ve.Column == "name" && ve.Tag == "numeric" {
+			foundNameNumeric = true
 			break
 		}
 	}
-	if !foundEmailRequired {
-		t.Error("expected validation error for missing required email column")
+	if !foundNameNumeric {
+		t.Error("expected a numeric validation error on the name column")
 	}
 
-	// Verify all 3 rows fail email validation
+	// All three names (Gina, Yulia, Vika) fail the numeric rule.
 	emailErrors := 0
 	for _, ve := range valErrors {
-		if ve.Column == "email" {
+		if ve.Column == "name" {
 			emailErrors++
 		}
 	}

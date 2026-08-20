@@ -310,3 +310,45 @@ func Example_streamSeek() {
 	// name
 	// name
 }
+
+// ExampleProcessor_Process_unknownColumn shows what happens when a struct field
+// names a column the input does not have. The error names the field, the column
+// it looked for, and the columns that exist, so a typo reads as a typo rather
+// than as a row with a missing value.
+func ExampleProcessor_Process_unknownColumn() {
+	type user struct {
+		Name   string `prep:"trim"`
+		Emails string // the column is "email", singular
+	}
+
+	var users []user
+	_, _, err := prep.NewProcessor(prep.FileTypeCSV).
+		Process(strings.NewReader("name,email\nAlice,alice@example.com\n"), &users)
+
+	fmt.Println(errors.Is(err, prep.ErrUnknownColumn))
+	fmt.Println(err)
+	// Output:
+	// true
+	// struct field names a column the input does not have: Emails (column "emails"); the input has [name email]
+}
+
+// ExampleProcessor_Process_defaultForAbsentColumn shows the field that is meant
+// to work without a column: prep:"default=..." says where its value comes from,
+// so it is accepted rather than refused.
+func ExampleProcessor_Process_defaultForAbsentColumn() {
+	type row struct {
+		Comment string
+		Status  string `prep:"default=active"`
+	}
+
+	var rows []row
+	_, _, err := prep.NewProcessor(prep.FileTypeCSV).
+		Process(strings.NewReader("comment\nhello\n"), &rows)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("%+v\n", rows[0])
+	// Output:
+	// {Comment:hello Status:active}
+}
