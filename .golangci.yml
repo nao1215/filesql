@@ -50,14 +50,20 @@ linters:
     - whitespace
   disable:
     # staticcheck builds SSA and computes facts for every package in the import
-    # graph, and this module's graph holds machine-generated Go with functions
-    # thousands of lines long: modernc.org/sqlite/lib alone has one of 7,517
-    # lines. Analysis cost grows faster than linearly with function size, so the
-    # run takes tens of minutes while every other linter here finishes in
-    # seconds. It fits in the cache most of the time, but any change to go.sum
-    # invalidates it and the job then exceeds even a thirty-minute limit, which
-    # is why every dependency update failed lint for a reason unrelated to its
-    # diff. govet stays enabled and covers the overlapping checks.
+    # graph, and this module's graph holds machine-generated Go: the single
+    # largest function in modernc.org/sqlite/lib is 7,517 lines long, with two
+    # more past 2,400. Analysis cost grows faster than linearly with function
+    # size, so the run takes tens of minutes while every other linter here
+    # finishes in seconds. It fits in golangci-lint's cache most of the time,
+    # but any change to go.sum invalidates that cache and the run then exceeds
+    # even a thirty-minute limit, which is why every dependency update failed
+    # lint for a reason unrelated to its diff.
+    #
+    # This disables it for `make lint` as well as for CI, which is deliberate: a
+    # lint that takes twelve minutes locally is a lint nobody runs. govet stays
+    # enabled and covers what the two have in common. The checks staticcheck
+    # adds on top are taken back by a workflow that runs it off the pull request
+    # path, plus a make target for running it on purpose.
     - staticcheck
 
   settings:
