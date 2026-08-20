@@ -63,17 +63,20 @@ func parseXLSX(reader io.Reader, policy ExcelSheetPolicy) (table *TableData, err
 		return nil, err
 	}
 
-	// Normalize records to match header length
+	// Normalize records to match header length. A short row is padded: a
+	// workbook stores no cell for a trailing empty one, so a row ending in
+	// blanks is written short and means what the padding says. A row with more
+	// cells than the header has means the opposite — there is data in a column
+	// the header does not name — and truncating it dropped that data with no
+	// error, no count, and nothing else to say it had happened.
 	records := make([][]string, 0, len(rows)-1)
 	for i := 1; i < len(rows); i++ {
 		row := rows[i]
-		// Pad or truncate to match header length
-		normalizedRow := make([]string, len(headers))
-		for j := range headers {
-			if j < len(row) {
-				normalizedRow[j] = row[j]
-			}
+		if len(row) > len(headers) {
+			return nil, fmt.Errorf("row %d has %d cells where the header has %d", i+1, len(row), len(headers))
 		}
+		normalizedRow := make([]string, len(headers))
+		copy(normalizedRow, row)
 		records = append(records, normalizedRow)
 	}
 

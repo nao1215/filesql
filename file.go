@@ -331,7 +331,7 @@ func (f *file) openReader() (io.Reader, func() error, error) {
 
 // convertXLSXRowsToTable converts XLSX rows to table headers and records
 // First row becomes headers, remaining rows become records with padding
-func convertXLSXRowsToTable(rows [][]string) (header, []record) {
+func convertXLSXRowsToTable(rows [][]string) (header, []record, error) {
 	var headers header
 	var records []record
 
@@ -345,17 +345,20 @@ func convertXLSXRowsToTable(rows [][]string) (header, []record) {
 	if len(rows) > 1 {
 		records = make([]record, len(rows)-1)
 		for i, row := range rows[1:] {
-			record := make(record, len(headers))
-			for j := range headers {
-				if j < len(row) {
-					record[j] = row[j]
-				} else {
-					record[j] = "" // Pad with empty string if row is shorter
-				}
+			// A workbook stores no cell for a trailing empty one, so a row
+			// ending in blanks arrives short and the padding says what it
+			// means. More cells than the header has means the opposite — there
+			// is data in a column the header does not name — and truncating it
+			// dropped that data with no error and no count to say so.
+			if len(row) > len(headers) {
+				return nil, nil, fmt.Errorf("%w: row %d has %d cells where the header has %d",
+					ErrParsing, i+2, len(row), len(headers))
 			}
+			record := make(record, len(headers))
+			copy(record, row)
 			records[i] = record
 		}
 	}
 
-	return headers, records
+	return headers, records, nil
 }

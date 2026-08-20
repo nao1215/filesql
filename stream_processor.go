@@ -811,7 +811,10 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX
 		// When replacing, createTableFromChunk drops the old table before recreating it.
 
 		// Convert XLSX rows to table headers and records
-		headers, records := convertXLSXRowsToTable(rows)
+		headers, records, err := convertXLSXRowsToTable(rows)
+		if err != nil {
+			return fmt.Errorf("sheet %s: %w", sheetName, err)
+		}
 
 		// A workbook header follows the same rule a CSV header does. This path
 		// checked nothing: an exact duplicate reached SQLite and came back as its
