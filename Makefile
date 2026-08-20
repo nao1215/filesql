@@ -1,4 +1,4 @@
-.PHONY: test clean vet fmt chkfmt benchmark
+.PHONY: test clean vet fmt chkfmt benchmark lint lint-staticcheck
 
 APP         = filesql
 VERSION     = $(shell git describe --tags --abbrev=0)
@@ -30,6 +30,9 @@ tools: ## Install dependency tools
 
 lint: ## Lint code
 	golangci-lint run --config .golangci.yml
+
+lint-staticcheck: ## Run staticcheck (slow: tens of minutes when the cache is cold)
+	golangci-lint run --config .golangci.staticcheck.yml --timeout 60m
 
 benchmark: ## Run benchmark tests
 	$(GO_TEST) -tags=benchmark -bench=. -benchmem $(GO_PKGROOT) -run=^$$

@@ -330,7 +330,7 @@ func insertRecordsIntoTable(ctx context.Context, db DBTX, tableName string, head
 		placeholders[i] = "?"
 	}
 
-	query := fmt.Sprintf( //nolint:gosec // SQL table name is validated, placeholders are safe
+	query := fmt.Sprintf(
 		`INSERT INTO "%s" VALUES (%s)`,
 		tableName,
 		strings.Join(placeholders, ", "),

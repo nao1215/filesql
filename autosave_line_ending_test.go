@@ -187,10 +187,11 @@ func TestSaveLineEndingByDestination(t *testing.T) {
 		t.Parallel()
 
 		path := newSource(t)
+		ctx := t.Context()
 		db, err := Open(path)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = db.Close() })
-		_, err = db.Exec(update)
+		_, err = db.ExecContext(ctx, update)
 		require.NoError(t, err)
 		require.NoError(t, DumpDatabase(db, filepath.Dir(path)))
 
@@ -224,10 +225,11 @@ func TestSaveLineEndingByDestination(t *testing.T) {
 		t.Parallel()
 
 		path := newSource(t)
+		ctx := t.Context()
 		db, err := Open(path)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = db.Close() })
-		_, err = db.Exec(update)
+		_, err = db.ExecContext(ctx, update)
 		require.NoError(t, err)
 		require.NoError(t, DumpDatabase(db, filepath.Dir(path), NewDumpOptions().WithLineEnding(LineEndingCRLF)))
 
