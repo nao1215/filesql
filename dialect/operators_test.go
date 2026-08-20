@@ -74,6 +74,17 @@ func TestOperatorSemantics(t *testing.T) {
 		{"postgresql percent matches empty", PostgreSQL, `SELECT '' LIKE '%'`, "1", false},
 		{"googlesql LIKE is case-sensitive", GoogleSQL, `SELECT 'ABC' LIKE 'abc'`, "0", false},
 		{"mysql LIKE stays case-insensitive", MySQL, `SELECT 'ABC' LIKE 'abc'`, "1", false},
+		// MySQL's default collation folds case beyond ASCII, where SQLite's LIKE
+		// stops at it, so this pair used to answer 0.
+		{"mysql LIKE folds beyond ascii", MySQL, `SELECT 'É' LIKE 'é'`, "1", false},
+		// A pattern ending in the escape character reads that character as
+		// itself. SQLite's native LIKE ... ESCAPE matches nothing for it, so a
+		// row holding exactly that text was dropped.
+		{"mysql LIKE with a trailing escape", MySQL, `SELECT 'A\\' LIKE 'A\\'`, "1", false},
+		{"mysql LIKE still escapes a wildcard", MySQL, `SELECT 'a%b' LIKE 'a\%b'`, "1", false},
+		{"mysql LIKE escape excludes the wildcard match", MySQL, `SELECT 'axb' LIKE 'a\%b'`, "0", false},
+		{"mysql NOT LIKE", MySQL, `SELECT 'abc' NOT LIKE 'x%'`, "1", false},
+		{"mysql LIKE keeps a named escape", MySQL, `SELECT 'a%b' LIKE 'a!%b' ESCAPE '!'`, "1", false},
 
 		// PostgreSQL "^" is exponentiation, not a SQLite operator at all.
 		{"postgresql power", PostgreSQL, `SELECT 2 ^ 3`, "8", false},

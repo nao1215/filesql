@@ -208,42 +208,6 @@ func binaryOperatorPass(tokens []token, op, helper string) ([]token, error) {
 	return out, nil
 }
 
-// defaultEscapePass appends "ESCAPE '\\'" to a LIKE that was written without an
-// ESCAPE clause.
-//
-// MySQL's LIKE treats a backslash as the escape character unless told
-// otherwise, which is how a caller searches for a value containing "%" or "_".
-// SQLite has no default escape at all, so the same pattern reached it as an
-// ordinary wildcard and matched every row where one was meant. Saying the
-// escape out loud is the whole fix; SQLite's LIKE already implements it.
-//
-// A pattern that already carries an ESCAPE clause is left alone, since the
-// caller has named the character themselves.
-func defaultEscapePass(tokens []token, keyword string) ([]token, error) {
-	out := make([]token, 0, len(tokens))
-	i := 0
-	for i < len(tokens) {
-		if !isWordEq(tokens[i], keyword) {
-			out = append(out, tokens[i])
-			i++
-			continue
-		}
-		rightEnd, ok := primaryEndForward(tokens, i+1)
-		if !ok {
-			return nil, fmt.Errorf("%w: right operand of %s is not a primary expression", ErrUnsupportedSyntax, keyword)
-		}
-		if esc := nextSig(tokens, rightEnd+1); esc >= 0 && isWordEq(tokens[esc], "ESCAPE") {
-			out = append(out, tokens[i])
-			i++
-			continue
-		}
-		out = append(out, tokens[i:rightEnd+1]...)
-		out = append(out, spaceToken(), wordToken("ESCAPE"), spaceToken(), stringToken("\\"))
-		i = rightEnd + 1
-	}
-	return out, nil
-}
-
 // likePass rewrites "a LIKE b" (and the ILIKE and NOT forms) into a call to the
 // matching helper, so the comparison uses the source dialect's case rules rather
 // than SQLite's. A pattern with an ESCAPE clause is left alone: SQLite handles

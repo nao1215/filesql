@@ -516,6 +516,23 @@ func TestDialectLiteralsMeanWhatTheySay(t *testing.T) {
 			want:    "A",
 		},
 		{
+			// MySQL's default collation folds case beyond ASCII, where SQLite's
+			// LIKE stops at it.
+			name:    "a MySQL LIKE folds case beyond ASCII",
+			dialect: dialect.MySQL,
+			query:   `SELECT CASE WHEN 'É' LIKE 'é' THEN 'yes' ELSE 'no' END`,
+			want:    "yes",
+		},
+		{
+			// A pattern ending in the escape character reads it as itself. SQLite's
+			// native LIKE ... ESCAPE matched nothing for such a pattern, so a row
+			// holding exactly that text was dropped.
+			name:    "a MySQL LIKE pattern ending in a backslash matches that text",
+			dialect: dialect.MySQL,
+			query:   `SELECT CASE WHEN 'A\\' LIKE 'A\\' THEN 'yes' ELSE 'no' END`,
+			want:    "yes",
+		},
+		{
 			name:    "a GoogleSQL triple-quoted string holds its content bare",
 			dialect: dialect.GoogleSQL,
 			query:   "SELECT '''abc'''",

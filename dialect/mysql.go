@@ -84,10 +84,19 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	// deduplicates.
 	out = unionDistinctPass(currentValueParenPass(typePrefixedLiteralPass(out)))
 	// M-22: MySQL's LIKE escapes with a backslash unless an ESCAPE clause says
-	// otherwise; SQLite has no default escape, so an escaped wildcard reached it
-	// as a wildcard and matched rows the caller had excluded.
-	out, err = defaultEscapePass(out, "LIKE")
+	// otherwise, and its default collation folds case beyond ASCII. Appending
+	// SQLite's own ESCAPE clause covered the escape but left two gaps that the
+	// helper the other dialects already route through does not have: SQLite's
+	// LIKE matches nothing at all for a pattern ending in the escape character,
+	// where MySQL reads that character as itself, and its folding stops at
+	// ASCII, so "É" did not match "é".
+	out, err = likePass(out, "LIKE", "like_insensitive")
 	if err != nil {
+		return nil, err
+	}
+	// M-23: a hexadecimal literal means one thing or the other depending on where
+	// it sits, and the translation cannot see which.
+	if err := rejectHexLiteralPass(out); err != nil {
 		return nil, err
 	}
 	// M-18: ANY_VALUE and the variance family have no SQLite aggregate.
@@ -276,4 +285,32 @@ func renameWordPass(tokens []token, from, to string) []token {
 		}
 	}
 	return out
+}
+
+// rejectHexLiteralPass refuses MySQL's 0x hexadecimal literal.
+//
+// MySQL calls it a binary string: SELECT 0x41 prints "A", and comparing a
+// column against 0x616263 compares it against "abc". In numeric context the
+// same literal is the number: 0x10 + 1 is 17. SQLite has only the second
+// reading, so the literal reached it as a number and a comparison against a
+// text column quietly became a numeric one, matching different rows with
+// nothing to say so.
+//
+// Rewriting it to the string it stands for would fix that case and break the
+// other one just as quietly, because which reading applies depends on where the
+// literal sits — something a token rewrite cannot see. A literal with two
+// meanings and no way to tell them apart is what ErrUnsupportedSyntax is for:
+// the caller writes the one they meant, x'41' for the string or 65 for the
+// number, and gets what they asked for either way.
+func rejectHexLiteralPass(tokens []token) error {
+	for _, t := range tokens {
+		if t.kind != tokNumber || len(t.text) < 3 {
+			continue
+		}
+		if t.text[0] == '0' && (t.text[1] == 'x' || t.text[1] == 'X') {
+			return fmt.Errorf("%w: MySQL reads %s as a string in one place and as a number in another, and SQLite has only the number; write x'%s' for the string or the decimal for the number",
+				ErrUnsupportedSyntax, t.text, t.text[2:])
+		}
+	}
+	return nil
 }

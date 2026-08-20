@@ -89,7 +89,7 @@ func TestTranslateLexical(t *testing.T) {
 		// Common passthrough and whitespace normalization.
 		{"whitespace collapses", MySQL, "SELECT    *   FROM t", "SELECT * FROM t"},
 		{"operators preserved", PostgreSQL, "SELECT a <> b, c || d", "SELECT a <> b, c || d"},
-		{"numbers preserved", MySQL, "SELECT 3.5e+10, 0xFF, .25", "SELECT 3.5e+10, 0xFF, .25"},
+		{"numbers preserved", PostgreSQL, "SELECT 3.5e+10, 0xFF, .25", "SELECT 3.5e+10, 0xFF, .25"},
 		{"placeholders preserved", MySQL, "SELECT ?, ?1, @v, :name", "SELECT ?, ?1, @v, :name"},
 		{"block comment preserved", MySQL, "SELECT /* hi */ 1", "SELECT /* hi */ 1"},
 		{"function call no spacing", MySQL, "SELECT count(*) FROM t", "SELECT count(*) FROM t"},
