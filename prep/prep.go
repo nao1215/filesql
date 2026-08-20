@@ -140,6 +140,18 @@ func (p *defaultPreprocessor) Name() string {
 // preprocessors is a slice of Preprocessor
 type preprocessors []Preprocessor
 
+// hasDefault reports whether this field supplies a value when the input has
+// none, which is what makes a field with no matching column legitimate rather
+// than a typo.
+func (ps preprocessors) hasDefault() bool {
+	for _, pp := range ps {
+		if _, ok := pp.(*defaultPreprocessor); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // Process applies all preprocessors in order
 func (ps preprocessors) Process(value string) string {
 	result := value

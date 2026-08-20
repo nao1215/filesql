@@ -493,6 +493,8 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Stream cleaned output into any writer | `ExampleProcessor_ProcessToWriter` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Inspect validation counts | `ExampleProcessResult_InvalidRowCount`, `ExampleProcessResult_HasErrors` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Read validation error details | `ExampleProcessResult_ValidationErrors` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| See a struct field that names no column refused | `ExampleProcessor_Process_unknownColumn` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Give a field a default when the column is absent | `ExampleProcessor_Process_defaultForAbsentColumn` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Read preprocessing error details | `ExampleProcessResult_PrepErrors` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Detect compressed inputs | `ExampleIsCompressed`, `Example_detectFileType` | [prep/example_api_test.go](./prep/example_api_test.go), [prep/example_test.go](./prep/example_test.go) |
 | Check output and original formats | `ExampleStream_Format`, `ExampleStream_OriginalFormat` | [prep/example_api_test.go](./prep/example_api_test.go) |

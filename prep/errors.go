@@ -30,6 +30,11 @@ var (
 	ErrNilWriter = errors.New("writer must not be nil")
 	// ErrNilReader is returned when a nil io.Reader is passed to Process or ProcessToWriter.
 	ErrNilReader = errors.New("reader must not be nil")
+	// ErrUnknownColumn is returned when a struct field names a column the input
+	// does not have. Such a field used to be filled with the zero value and then
+	// validated, so a typo was reported as a missing value in a column that does
+	// not exist, and the caller could not tell a mapping mistake from bad data.
+	ErrUnknownColumn = errors.New("struct field names a column the input does not have")
 )
 
 // ValidationError represents a validation error with row and column information.

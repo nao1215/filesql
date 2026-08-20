@@ -242,13 +242,34 @@ func (p *Processor) processRecords(input io.Reader, structSlicePointer any) (
 		}
 	}
 
-	// Resolve column indices for each field based on column name
+	// Resolve column indices for each field based on column name. A field that
+	// matches nothing is the caller's mistake rather than a row with a missing
+	// value, and saying so here is the only place it can be told apart: once the
+	// rows start, an unmatched field is indistinguishable from an empty cell.
+	//
+	// Every unmatched field is collected before failing, since a struct written
+	// against the wrong shape usually has more than one, and one error listing
+	// them beats making the caller fix them one run at a time. A struct covering
+	// a subset of the columns is not a mistake and is not caught: extra columns
+	// are ordinary, extra fields are not.
+	var unmatched []string
 	for i := range sInfo.Fields {
 		fi := &sInfo.Fields[i]
-		if colIdx, ok := headerToColIdx[fi.ColumnName]; ok {
-			fi.ColumnIndex = colIdx
+		colIdx, ok := headerToColIdx[fi.ColumnName]
+		if !ok {
+			// A field carrying prep:"default=..." is meant to work without a
+			// column: the default is where its value comes from. Only a field
+			// with no other way to get one is a mistake.
+			if !fi.Preprocessors.hasDefault() {
+				unmatched = append(unmatched, fmt.Sprintf("%s (column %q)", fi.Name, fi.ColumnName))
+			}
+			continue
 		}
-		// If not found, ColumnIndex remains -1
+		fi.ColumnIndex = colIdx
+	}
+	if len(unmatched) > 0 {
+		return nil, nil, nil, fmt.Errorf("%w: %s; the input has %v",
+			ErrUnknownColumn, strings.Join(unmatched, ", "), headers)
 	}
 
 	// Process records: apply preprocessing and validation
