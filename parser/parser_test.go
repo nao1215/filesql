@@ -1182,3 +1182,68 @@ func TestIsCompressed(t *testing.T) {
 		})
 	}
 }
+
+// TestParse_LeadingByteOrderMark requires the mark a spreadsheet writes in front
+// of a file to be read as part of the encoding rather than as part of the first
+// column's name.
+func TestParse_LeadingByteOrderMark(t *testing.T) {
+	t.Parallel()
+
+	const bom = "\ufeff"
+
+	tests := []struct {
+		name        string
+		fileType    FileType
+		input       string
+		wantHeaders []string
+		wantFirst   []string
+	}{
+		{
+			name:        "CSV",
+			fileType:    CSV,
+			input:       bom + "name,memo\na,b\n",
+			wantHeaders: []string{"name", "memo"},
+			wantFirst:   []string{"a", "b"},
+		},
+		{
+			name:        "TSV",
+			fileType:    TSV,
+			input:       bom + "name\tmemo\na\tb\n",
+			wantHeaders: []string{"name", "memo"},
+			wantFirst:   []string{"a", "b"},
+		},
+		{
+			name:        "LTSV",
+			fileType:    LTSV,
+			input:       bom + "name:a\tmemo:b\n",
+			wantHeaders: []string{"name", "memo"},
+			wantFirst:   []string{"a", "b"},
+		},
+		{
+			name:        "JSONL",
+			fileType:    JSONL,
+			input:       bom + "{\"name\":\"a\",\"memo\":\"b\"}\n",
+			wantHeaders: []string{"data"},
+			wantFirst:   []string{"{\"name\":\"a\",\"memo\":\"b\"}"},
+		},
+		{
+			name:        "CSV without a mark is unchanged",
+			fileType:    CSV,
+			input:       "name,memo\na,b\n",
+			wantHeaders: []string{"name", "memo"},
+			wantFirst:   []string{"a", "b"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, err := Parse(strings.NewReader(tt.input), tt.fileType)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantHeaders, result.Headers)
+			require.Len(t, result.Records, 1)
+			assert.Equal(t, tt.wantFirst, result.Records[0])
+		})
+	}
+}

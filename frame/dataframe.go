@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -621,16 +622,17 @@ func (df *DataFrame) Join(other *DataFrame, opt JoinOption) (*DataFrame, error) 
 	}
 
 	// Build result columns (left columns + right columns excluding join column)
+	taken := make(map[string]struct{}, len(df.columns)+len(other.columns))
+	for _, col := range df.columns {
+		taken[col] = struct{}{}
+	}
 	rightColsToAdd := make([]string, 0, len(other.columns))
 	rightColsOriginal := make([]string, 0, len(other.columns))
 	for _, col := range other.columns {
 		if col != rightCol {
 			rightColsOriginal = append(rightColsOriginal, col)
-			// Handle column name conflicts by prefixing with "right_"
-			finalCol := col
-			if df.hasColumn(col) {
-				finalCol = "right_" + col
-			}
+			finalCol := freeColumnName(col, taken)
+			taken[finalCol] = struct{}{}
 			rightColsToAdd = append(rightColsToAdd, finalCol)
 		}
 	}
@@ -695,6 +697,24 @@ func (df *DataFrame) Join(other *DataFrame, opt JoinOption) (*DataFrame, error) 
 		columns: resultColumns,
 		rows:    resultRows,
 	}, nil
+}
+
+// freeColumnName is col if the join has not used that name yet, and otherwise
+// the name prefixed with right_ until it is free.
+//
+// The prefix alone was not enough. A left frame already holding right_v took the
+// name the right frame's v was renamed to, so the joined row carried one value
+// under it and the left column was gone, with Columns naming right_v twice and
+// nothing reporting a loss. Two right columns could collide with each other the
+// same way.
+func freeColumnName(col string, taken map[string]struct{}) string {
+	name := col
+	for {
+		if _, used := taken[name]; !used {
+			return name
+		}
+		name = "right_" + name
+	}
 }
 
 // hasColumn checks if the DataFrame has a column with the given name.
@@ -1153,25 +1173,25 @@ func valueKind(v any) (byte, string) {
 	case string:
 		return 's', value
 	case int:
-		return 'n', canonicalNumber(float64(value))
+		return 'n', canonicalSigned(int64(value))
 	case int8:
-		return 'n', canonicalNumber(float64(value))
+		return 'n', canonicalSigned(int64(value))
 	case int16:
-		return 'n', canonicalNumber(float64(value))
+		return 'n', canonicalSigned(int64(value))
 	case int32:
-		return 'n', canonicalNumber(float64(value))
+		return 'n', canonicalSigned(int64(value))
 	case int64:
-		return 'n', canonicalNumber(float64(value))
+		return 'n', canonicalSigned(value)
 	case uint:
-		return 'n', canonicalNumber(float64(value))
+		return 'n', canonicalUnsigned(uint64(value))
 	case uint8:
-		return 'n', canonicalNumber(float64(value))
+		return 'n', canonicalUnsigned(uint64(value))
 	case uint16:
-		return 'n', canonicalNumber(float64(value))
+		return 'n', canonicalUnsigned(uint64(value))
 	case uint32:
-		return 'n', canonicalNumber(float64(value))
+		return 'n', canonicalUnsigned(uint64(value))
 	case uint64:
-		return 'n', canonicalNumber(float64(value))
+		return 'n', canonicalUnsigned(value)
 	case float32:
 		return 'n', canonicalNumber(float64(value))
 	case float64:
@@ -1184,6 +1204,26 @@ func valueKind(v any) (byte, string) {
 // canonicalNumber renders f the one way every spelling of that quantity renders.
 func canonicalNumber(f float64) string {
 	return strconv.FormatFloat(f, 'g', -1, 64)
+}
+
+// canonicalSigned renders an integer the way its quantity renders. An integer a
+// float64 holds exactly takes the float spelling, which is what keeps 1 and 1.0
+// one value; one past 2^53 takes its own decimal text, because rounding it to a
+// float first gave two different integers the same spelling and made them one
+// value for Distinct, GroupBy and Join.
+func canonicalSigned(i int64) string {
+	if f := float64(i); int64(f) == i {
+		return canonicalNumber(f)
+	}
+	return strconv.FormatInt(i, 10)
+}
+
+// canonicalUnsigned is canonicalSigned for the unsigned kinds.
+func canonicalUnsigned(u uint64) string {
+	if f := float64(u); f < math.MaxUint64 && uint64(f) == u {
+		return canonicalNumber(f)
+	}
+	return strconv.FormatUint(u, 10)
 }
 
 // joinKey is the identity of one value, for indexing a join by it.

@@ -3242,3 +3242,163 @@ func TestDropNAAndFillNAAgreeOnMissing(t *testing.T) {
 		assert.Equal(t, "", record["b"], "a caller filling one column did not ask about the other")
 	})
 }
+
+// TestValueIdentityForLargeIntegers requires two integers that differ to be two
+// values. Every numeric type shares one canonical spelling so that 1 and 1.0 are
+// one value; that spelling has to be exact, or two integers a float64 cannot tell
+// apart become one row, one group, or a join match that was never equal.
+func TestValueIdentityForLargeIntegers(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Distinct keeps two int64 values past 2^53 apart", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"id": int64(9007199254740993)},
+			{"id": int64(9007199254740992)},
+		})
+		assert.Equal(t, 2, df.Distinct().Len())
+	})
+
+	t.Run("Distinct keeps three uint64 values near the maximum apart", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"id": uint64(18446744073709551615)},
+			{"id": uint64(18446744073709551614)},
+			{"id": uint64(18446744073709549568)},
+		})
+		assert.Equal(t, 3, df.Distinct().Len())
+	})
+
+	t.Run("GroupBy makes one group per distinct large integer", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"id": int64(9007199254740993)},
+			{"id": int64(9007199254740992)},
+		})
+		grouped, err := df.GroupBy("id")
+		require.NoError(t, err)
+		assert.Equal(t, 2, grouped.Count().Len())
+	})
+
+	t.Run("Join does not match two large integers that differ", func(t *testing.T) {
+		t.Parallel()
+
+		left := NewDataFrameFromRecords([]map[string]any{
+			{"id": int64(9007199254740993), "name": "alice"},
+		})
+		right := NewDataFrameFromRecords([]map[string]any{
+			{"id": int64(9007199254740992), "tag": "other"},
+		})
+		joined, err := left.Join(right, JoinOption{On: []string{"id"}, How: InnerJoin})
+		require.NoError(t, err)
+		assert.Equal(t, 0, joined.Len())
+	})
+
+	t.Run("a quantity spelled by different types is still one value", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"id": 1},
+			{"id": int64(1)},
+			{"id": float64(1.0)},
+			{"id": float32(1)},
+		})
+		assert.Equal(t, 1, df.Distinct().Len())
+
+		grouped, err := df.GroupBy("id")
+		require.NoError(t, err)
+		assert.Equal(t, 1, grouped.Count().Len())
+
+		left := NewDataFrameFromRecords([]map[string]any{{"id": int64(1), "name": "alice"}})
+		right := NewDataFrameFromRecords([]map[string]any{{"id": float64(1.0), "tag": "match"}})
+		joined, err := left.Join(right, JoinOption{On: []string{"id"}, How: InnerJoin})
+		require.NoError(t, err)
+		assert.Equal(t, 1, joined.Len())
+	})
+}
+
+// TestJoinNamesEveryColumnOnce requires a join to keep every column of both
+// frames. The right column that collides with a left one is renamed, and the
+// name it is renamed to has to be free, or the join overwrites the left column
+// it was supposed to leave alone.
+func TestJoinNamesEveryColumnOnce(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the invented name is already a left column", func(t *testing.T) {
+		t.Parallel()
+
+		left := NewDataFrameFromRecords([]map[string]any{
+			{"id": 1, "v": "left v", "right_v": "left right_v"},
+		})
+		right := NewDataFrameFromRecords([]map[string]any{
+			{"id": 1, "v": "right v"},
+		})
+		joined, err := left.Join(right, JoinOption{On: []string{"id"}, How: InnerJoin})
+		require.NoError(t, err)
+
+		columns := joined.Columns()
+		assert.Len(t, columns, 4)
+		seen := make(map[string]struct{}, len(columns))
+		for _, column := range columns {
+			_, duplicate := seen[column]
+			assert.False(t, duplicate, "column %q named twice in %v", column, columns)
+			seen[column] = struct{}{}
+		}
+
+		require.Equal(t, 1, joined.Len())
+		values := make([]string, 0, len(columns))
+		for _, column := range columns {
+			if text, ok := joined.ToRecords()[0][column].(string); ok {
+				values = append(values, text)
+			}
+		}
+		assert.Contains(t, values, "left v")
+		assert.Contains(t, values, "left right_v")
+		assert.Contains(t, values, "right v")
+	})
+
+	t.Run("two right columns want the same invented name", func(t *testing.T) {
+		t.Parallel()
+
+		left := NewDataFrameFromRecords([]map[string]any{
+			{"id": 1, "x": "left x"},
+		})
+		right := NewDataFrameFromRecords([]map[string]any{
+			{"id": 1, "x": "right x", "right_x": "right right_x"},
+		})
+		joined, err := left.Join(right, JoinOption{On: []string{"id"}, How: InnerJoin})
+		require.NoError(t, err)
+
+		columns := joined.Columns()
+		assert.Len(t, columns, 4)
+		require.Equal(t, 1, joined.Len())
+		values := make([]string, 0, len(columns))
+		for _, column := range columns {
+			if text, ok := joined.ToRecords()[0][column].(string); ok {
+				values = append(values, text)
+			}
+		}
+		assert.Contains(t, values, "left x")
+		assert.Contains(t, values, "right x")
+		assert.Contains(t, values, "right right_x")
+	})
+
+	t.Run("an ordinary collision still becomes right_name", func(t *testing.T) {
+		t.Parallel()
+
+		left := NewDataFrameFromRecords([]map[string]any{
+			{"id": 1, "name": "alice"},
+		})
+		right := NewDataFrameFromRecords([]map[string]any{
+			{"id": 1, "name": "bob"},
+		})
+		joined, err := left.Join(right, JoinOption{On: []string{"id"}, How: InnerJoin})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"id", "name", "right_name"}, joined.Columns())
+		assert.Equal(t, "alice", joined.ToRecords()[0]["name"])
+		assert.Equal(t, "bob", joined.ToRecords()[0]["right_name"])
+	})
+}

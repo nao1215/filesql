@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -150,4 +151,120 @@ func TestAutoSaveConcurrentQueries(t *testing.T) {
 	saved, err := os.ReadFile(path) //nolint:gosec // Test path from t.TempDir()
 	require.NoError(t, err)
 	require.Equal(t, "id,name\n1,bob\n", string(saved))
+}
+
+// TestAutoSaveOnCommitConcurrentCommits verifies that committing from several
+// goroutines saves once per commit and returns. Every commit writes the whole
+// database out through the connector's own connection, so the saves have to be
+// serialized: two of them running at once drove statements on one SQLite
+// connection with nothing between them, which hung and sometimes faulted.
+func TestAutoSaveOnCommitConcurrentCommits(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+
+	path := filepath.Join(t.TempDir(), "users.csv")
+	require.NoError(t, os.WriteFile(path, []byte("id,name\n1,alice\n"), 0o600))
+
+	outputDir := t.TempDir()
+	validated, err := NewBuilder().AddPath(path).EnableAutoSaveOnCommit(outputDir).Build(ctx)
+	require.NoError(t, err)
+	db, err := validated.Open(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	const goroutines = 4
+	const iterations = 25
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, goroutines*iterations)
+	for g := range goroutines {
+		wg.Go(func() {
+			for i := range iterations {
+				tx, err := db.BeginTx(ctx, nil)
+				if err != nil {
+					errCh <- err
+					return
+				}
+				if _, err := tx.ExecContext(ctx, "INSERT INTO users VALUES (?, ?)", g*iterations+i+2, "bob"); err != nil {
+					errCh <- err
+					errCh <- tx.Rollback()
+					return
+				}
+				if err := tx.Commit(); err != nil {
+					errCh <- err
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+
+	var count int
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count))
+	require.Equal(t, 1+goroutines*iterations, count)
+
+	saved, err := os.ReadFile(filepath.Join(outputDir, "users.csv")) //nolint:gosec // Test path from t.TempDir()
+	require.NoError(t, err)
+	require.Equal(t, 1+goroutines*iterations+1, len(strings.Split(strings.TrimRight(string(saved), "\n"), "\n")))
+}
+
+// TestAutoSaveOnCommitConcurrentQueriesAndCommits mixes reads with committing
+// writers, which is the shape that faulted rather than hung.
+func TestAutoSaveOnCommitConcurrentQueriesAndCommits(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+
+	path := filepath.Join(t.TempDir(), "users.csv")
+	require.NoError(t, os.WriteFile(path, []byte("id,name\n1,alice\n"), 0o600))
+
+	validated, err := NewBuilder().AddPath(path).EnableAutoSaveOnCommit(t.TempDir()).Build(ctx)
+	require.NoError(t, err)
+	db, err := validated.Open(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	const goroutines = 8
+	const iterations = 10
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, goroutines*iterations)
+	for g := range goroutines {
+		wg.Go(func() {
+			for i := range iterations {
+				if g%2 == 0 {
+					var count int
+					if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+						errCh <- err
+						return
+					}
+					continue
+				}
+				tx, err := db.BeginTx(ctx, nil)
+				if err != nil {
+					errCh <- err
+					return
+				}
+				if _, err := tx.ExecContext(ctx, "INSERT INTO users VALUES (?, ?)", g*iterations+i+2, "bob"); err != nil {
+					errCh <- err
+					errCh <- tx.Rollback()
+					return
+				}
+				if err := tx.Commit(); err != nil {
+					errCh <- err
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		require.NoError(t, err)
+	}
 }

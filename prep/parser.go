@@ -96,6 +96,11 @@ func parseStructType(structType reflect.Type, strict bool) (*structInfo, error) 
 			if err != nil {
 				return nil, fmt.Errorf("field %s: %w", field.Name, err)
 			}
+			if field.Type.Kind() == reflect.String {
+				for i, v := range vals {
+					vals[i] = measuringStringLength(v)
+				}
+			}
 			info.Validators = vals
 			info.CrossFieldValidators = crossVals
 		}

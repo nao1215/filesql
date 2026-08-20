@@ -356,6 +356,13 @@ type autoSaveConnector struct {
 	// free to close a connection whenever it likes, so the anchor is what keeps
 	// the data alive between pooled connections and what the save reads from.
 	anchor driver.Conn
+	// saveMu serializes the saves themselves. A save reads the whole database
+	// through the anchor connection, and a SQLite connection carries one
+	// statement at a time, so two goroutines committing at once drove statements
+	// into the same connection with nothing between them: the pair hung, and
+	// sometimes faulted inside the SQLite library. It is separate from mu, which
+	// only guards the fields, so a save never holds mu while it runs.
+	saveMu sync.Mutex
 	// armed reports whether a close has to save. It is set once the database is
 	// fully assembled, so a connection opened by a setup that then fails does
 	// not write out what that failure is about to discard.
@@ -552,11 +559,14 @@ func (c *autoSaveConnector) saveNow() error {
 }
 
 // save executes automatic saving using the configured settings, reading the
-// database through conn.
+// database through conn. One save runs at a time; see saveMu.
 func (c *autoSaveConnector) save(conn driver.Conn) error {
 	if c.autoSaveConfig == nil || !c.autoSaveConfig.enabled {
 		return nil // No auto-save configured
 	}
+
+	c.saveMu.Lock()
+	defer c.saveMu.Unlock()
 
 	// Read the database through the given connection. Closing tempDB would close
 	// that connection, which the caller still owns, so the pool is left to be

@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"bufio"
+	"bytes"
 	"compress/bzip2"
 	"compress/gzip"
 	"compress/zlib"
@@ -16,6 +18,11 @@ import (
 	"github.com/pierrec/lz4/v4"
 	"github.com/ulikunitz/xz"
 )
+
+// utf8BOM is the byte-order mark a UTF-8 file may begin with.
+//
+//nolint:gochecknoglobals // A byte slice cannot be a constant.
+var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
 // FileType represents supported file types including compression variants.
 type FileType int
@@ -362,6 +369,35 @@ func WithExcelSheetPolicy(policy ExcelSheetPolicy) ParseOption {
 	}
 }
 
+// isTextBaseType reports whether a format is read as text, which is where a
+// byte-order mark can appear. Parquet and XLSX carry their own container.
+func isTextBaseType(baseType FileType) bool {
+	switch baseType {
+	case CSV, TSV, LTSV, JSON, JSONL:
+		return true
+	default:
+		return false
+	}
+}
+
+// skipUTF8BOM drops a leading UTF-8 byte-order mark, which a spreadsheet writes
+// in front of a CSV it exports. The mark belongs to the encoding rather than to
+// the text, and leaving it in place named the first column with it attached: a
+// caller matching that column by name found nothing, and the name printed the
+// same as the one they asked for.
+//
+// Input with no mark passes through byte for byte.
+func skipUTF8BOM(reader io.Reader) io.Reader {
+	buffered := bufio.NewReader(reader)
+	mark, err := buffered.Peek(3)
+	if err == nil && bytes.Equal(mark, utf8BOM) {
+		if _, discardErr := buffered.Discard(len(utf8BOM)); discardErr != nil {
+			return buffered
+		}
+	}
+	return buffered
+}
+
 // Parse reads data from an io.Reader and returns parsed results.
 // The fileType parameter specifies the format and compression of the data.
 //
@@ -395,6 +431,9 @@ func Parse(reader io.Reader, fileType FileType, opts ...ParseOption) (result *Ta
 
 	// Parse based on base file type
 	baseType := BaseFileType(fileType)
+	if isTextBaseType(baseType) {
+		decompressedReader = skipUTF8BOM(decompressedReader)
+	}
 	switch baseType {
 	case CSV:
 		return parseDelimited(decompressedReader, ',', "CSV")
