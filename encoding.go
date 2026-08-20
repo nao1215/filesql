@@ -1,6 +1,7 @@
 package filesql
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -60,7 +61,30 @@ type utf8ValidatingReader struct {
 	// offset counts the bytes validated so far, so the error can say where the
 	// input stopped being UTF-8.
 	offset int64
+	// escTail holds the last bytes of the previous chunk, so an escape sequence
+	// split across two reads is still recognized.
+	escTail []byte
+	// failed is the error that ended this reader. It is returned again for every
+	// later read, because a reader that reported a failure and then carried on
+	// would hand the parser the bytes after the bad ones and let it succeed on a
+	// prefix of the file.
+	failed error
 }
+
+// iso2022JPDesignators are the escape sequences ISO-2022-JP uses to switch
+// character sets. A bare ESC is not enough to go on: it is a legal character and
+// may appear in data, while these three bytes together are not something
+// tabular text produces by accident.
+var iso2022JPDesignators = [][]byte{ //nolint:gochecknoglobals // constant-like lookup table
+	[]byte("\x1b$@"), // JIS X 0208-1978
+	[]byte("\x1b$B"), // JIS X 0208-1983
+	[]byte("\x1b(J"), // JIS X 0201 Roman
+	[]byte("\x1b(B"), // back to ASCII
+}
+
+// maxDesignator is how many trailing bytes have to be carried between reads so a
+// sequence split across two of them is still seen.
+const maxDesignator = 3
 
 // newUTF8ValidatingReader returns reader with UTF-8 validation applied to
 // everything read from it.
@@ -72,9 +96,21 @@ func newUTF8ValidatingReader(reader io.Reader) io.Reader {
 // is not UTF-8. The bytes themselves are passed through untouched, so validation
 // costs a scan and never changes what a parser sees.
 func (r *utf8ValidatingReader) Read(p []byte) (int, error) {
+	if r.failed != nil {
+		return 0, r.failed
+	}
 	n, err := r.reader.Read(p)
 	if n > 0 {
 		if invalid := r.validate(p[:n]); invalid != nil {
+			r.failed = invalid
+			if errors.Is(invalid, ErrEncoding) {
+				// An escape-encoded chunk is withheld rather than handed over with
+				// the error. Its bytes parse as text, so a parser given them reaches
+				// a conclusion about the data — a column count mismatch — before it
+				// looks at the error. Bytes that are not UTF-8 cannot be mistaken
+				// for structure that way, so those still travel with their error.
+				return 0, invalid
+			}
 			return n, invalid
 		}
 	}
@@ -92,6 +128,12 @@ func (r *utf8ValidatingReader) validate(chunk []byte) error {
 	buf := chunk
 	if len(r.pending) > 0 {
 		buf = append(r.pending, chunk...)
+	}
+
+	// ISO-2022-JP is seven-bit, so it passes the UTF-8 check below and fails much
+	// later as a field count, blaming the caller's data for the encoding.
+	if r.hasEscapeDesignator(buf) {
+		return fmt.Errorf("%w: input looks like ISO-2022-JP; filesql reads UTF-8, so transcode it first", ErrEncoding)
 	}
 
 	// A trailing incomplete rune is not an error yet, so it is held back and the
@@ -134,4 +176,26 @@ func splitTrailingPartialRune(buf []byte) (head, tail []byte) {
 		return buf[:start], buf[start:]
 	}
 	return buf, nil
+}
+
+// hasEscapeDesignator reports whether chunk carries an ISO-2022-JP designator,
+// carrying the trailing bytes so a sequence split across two reads is seen.
+func (r *utf8ValidatingReader) hasEscapeDesignator(chunk []byte) bool {
+	scan := chunk
+	if len(r.escTail) > 0 {
+		scan = append(r.escTail, chunk...)
+	}
+	found := false
+	for _, designator := range iso2022JPDesignators {
+		if bytes.Contains(scan, designator) {
+			found = true
+			break
+		}
+	}
+	tail := scan
+	if len(tail) > maxDesignator {
+		tail = tail[len(tail)-maxDesignator:]
+	}
+	r.escTail = append(r.escTail[:0], tail...)
+	return found
 }

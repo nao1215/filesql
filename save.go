@@ -264,6 +264,9 @@ func (o DumpOptions) WithCompression(compression CompressionType) DumpOptions {
 // the file's encoding on disk and the caller's next read of the same file
 // returned mojibake.
 //
+// filesql reads UTF-8 only, so a file written in another encoding is for other
+// tools rather than for loading back.
+//
 // A value the encoding cannot write fails the save with ErrEncoding, naming the
 // encoding, rather than being replaced — a substitution is the silent corruption
 // the read side already refuses. Parquet and XLSX carry their own encoding and
