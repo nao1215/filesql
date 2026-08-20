@@ -2474,16 +2474,69 @@ type fractionalMinRecord struct {
 	Name string `validate:"min=3.5"`
 }
 
-func TestMinKeepsAFractionalLengthThreshold(t *testing.T) {
+// fractionalMaxRecord is the other half of the same threshold.
+type fractionalMaxRecord struct {
+	Name string `validate:"max=3.5"`
+}
+
+func TestMinAndMaxKeepAFractionalLengthThreshold(t *testing.T) {
 	t.Parallel()
 
-	var records []fractionalMinRecord
-	processor := NewProcessor(parser.CSV)
-	_, result, err := processor.Process(strings.NewReader("name\nabcd\nabc\n"), &records)
-	if err != nil {
-		t.Fatalf("Process() error = %v", err)
+	tests := []struct {
+		name      string
+		records   any
+		input     string
+		wantValid []string
+		wantTag   string
+	}{
+		{
+			name:      "min=3.5 takes four runes and refuses three",
+			records:   &[]fractionalMinRecord{},
+			input:     "name\nabcd\nabc\n",
+			wantValid: []string{"abcd"},
+			wantTag:   "min",
+		},
+		{
+			name:      "max=3.5 takes three runes and refuses four",
+			records:   &[]fractionalMaxRecord{},
+			input:     "name\nabc\nabcd\n",
+			wantValid: []string{"abc"},
+			wantTag:   "max",
+		},
 	}
-	if result.ValidRowCount != 1 {
-		t.Errorf("ValidRowCount = %d, want 1: four runes reach 3.5 and three do not (errors: %v)", result.ValidRowCount, result.Errors)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			processor := NewProcessor(parser.CSV, WithValidRowsOnly())
+			reader, result, err := processor.Process(strings.NewReader(tt.input), tt.records)
+			if err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+
+			output, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatalf("read output: %v", err)
+			}
+			gotValid := strings.Split(strings.TrimRight(string(output), "\n"), "\n")[1:]
+			if diff := cmp.Diff(tt.wantValid, gotValid); diff != "" {
+				t.Errorf("valid rows mismatch (-want +got):\n%s", diff)
+			}
+
+			if len(result.Errors) != 1 {
+				t.Fatalf("errors = %v, want exactly one", result.Errors)
+			}
+			var validationErr *ValidationError
+			if !errors.As(result.Errors[0], &validationErr) {
+				t.Fatalf("error %v is not a *ValidationError", result.Errors[0])
+			}
+			if validationErr.Tag != tt.wantTag {
+				t.Errorf("tag = %q, want %q", validationErr.Tag, tt.wantTag)
+			}
+			if !strings.Contains(validationErr.Message, "3.5") {
+				t.Errorf("message = %q, want it to name the threshold 3.5", validationErr.Message)
+			}
+		})
 	}
 }
