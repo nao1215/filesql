@@ -56,9 +56,10 @@
 //
 // # Value Types
 //
-// CSV, TSV and LTSV carry no types, so a column's type is inferred from a
-// sample of its values and each cell is stored as an int64, a float64, or the
-// text it was read from. A callback therefore receives a value that may not be
+// CSV, TSV and LTSV carry no types, so a column's type is inferred from its
+// values and each cell is stored as an int64, a float64, or the text it was
+// read from. The rule is the one the filesql package applies to the same file,
+// so a table read here and the same table loaded into SQLite are typed alike. A callback therefore receives a value that may not be
 // the string the file held, which is what Row is for: its accessors return the
 // value in the form the caller asks for.
 //
@@ -75,6 +76,14 @@
 // zero-padded code, where 007 and 7 are two different codes, and an integer
 // past the range of int64, which has no exact numeric form. Those stay distinct
 // through Distinct and Join.
+//
+// Equal quantities are the only values that are one value. A number and the
+// text that spells it are two, a missing value is not the text nil formats as,
+// and a value carrying any byte at all is only ever compared against another
+// value in the same column. Distinct, GroupBy and Join all read equality this
+// way, so a row the one of them keeps is a row the others keep too.
+//
+// GroupBy returns its groups in the order they first appear in the frame.
 //
 // # Architecture
 //
