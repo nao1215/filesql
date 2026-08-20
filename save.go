@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"modernc.org/sqlite"
 )
@@ -335,49 +336,102 @@ type autoSaveConfig struct {
 	options DumpOptions
 }
 
-// autoSaveConnector implements driver.Connector interface with auto-save support
+// autoSaveConnector implements driver.Connector interface with auto-save support.
+//
+// Every connection it hands out is a real connection of its own, opened against
+// the shared-cache in-memory database the files were loaded into, so the pool
+// behaves the way it does without auto-save: connections are independent and the
+// database is safe to share across goroutines. The connector counts them so the
+// save runs once, through the last connection still open, which is the moment
+// the caller closes the database.
 type autoSaveConnector struct {
-	sqliteConn     driver.Conn
+	drv            driver.Driver
+	dsn            string
 	autoSaveConfig *autoSaveConfig
 	originalPaths  []string
+
+	mu sync.Mutex
+	// anchor is a connection of the connector's own. A shared-cache in-memory
+	// database is discarded once its last connection closes, and the pool is
+	// free to close a connection whenever it likes, so the anchor is what keeps
+	// the data alive between pooled connections and what the save reads from.
+	anchor driver.Conn
+	// armed reports whether a close has to save. It is set once the database is
+	// fully assembled, so a connection opened by a setup that then fails does
+	// not write out what that failure is about to discard.
+	armed bool
 }
 
 // Connect implements driver.Connector interface
 func (c *autoSaveConnector) Connect(_ context.Context) (driver.Conn, error) {
-	return &autoSaveConnection{
-		conn:           c.sqliteConn,
-		autoSaveConfig: c.autoSaveConfig,
-		originalPaths:  c.originalPaths,
-	}, nil
+	conn, err := c.drv.Open(c.dsn)
+	if err != nil {
+		return nil, err
+	}
+	return &autoSaveConnection{conn: conn, connector: c}, nil
 }
 
 // Driver implements driver.Connector interface
 func (c *autoSaveConnector) Driver() driver.Driver {
-	return &sqlite.Driver{}
+	return c.drv
 }
 
-// autoSaveConnection wraps a database connection with auto-save functionality
-type autoSaveConnection struct {
-	conn           driver.Conn
-	autoSaveConfig *autoSaveConfig
-	originalPaths  []string
-}
-
-// Close implements driver.Conn interface with auto-save on close
-func (c *autoSaveConnection) Close() error {
-	// Perform auto-save if configured for close timing
-	if c.autoSaveConfig != nil && c.autoSaveConfig.enabled && c.autoSaveConfig.timing == autoSaveOnClose {
-		if err := c.performAutoSave(); err != nil {
-			// Close the underlying connection first to avoid resource leaks
-			closeErr := c.conn.Close()
-			// Return the auto-save error as it's more important for the user
-			if closeErr != nil {
-				return fmt.Errorf("auto-save failed: %w (also failed to close connection: %w)", err, closeErr)
-			}
-			return fmt.Errorf("auto-save failed: %w", err)
-		}
+// open establishes the anchor connection. It has to succeed before the loader
+// database is closed, or the data goes with it.
+func (c *autoSaveConnector) open() error {
+	conn, err := c.drv.Open(c.dsn)
+	if err != nil {
+		return err
 	}
+	c.mu.Lock()
+	c.anchor = conn
+	c.mu.Unlock()
+	return nil
+}
 
+// arm allows a later close to save.
+func (c *autoSaveConnector) arm() {
+	c.mu.Lock()
+	c.armed = true
+	c.mu.Unlock()
+}
+
+// Close implements io.Closer, which database/sql calls once, when the caller
+// closes the database and after it has closed every pooled connection. That
+// makes it the one moment where saving is both correct and unambiguous: the
+// caller is done, and the anchor connection still holds the data.
+func (c *autoSaveConnector) Close() error {
+	c.mu.Lock()
+	anchor, armed := c.anchor, c.armed
+	c.anchor, c.armed = nil, false
+	c.mu.Unlock()
+
+	if anchor == nil {
+		return nil
+	}
+	var saveErr error
+	if armed {
+		saveErr = c.save(anchor)
+	}
+	closeErr := anchor.Close()
+	if saveErr != nil {
+		if closeErr != nil {
+			return fmt.Errorf("auto-save failed: %w (also failed to close connection: %w)", saveErr, closeErr)
+		}
+		return fmt.Errorf("auto-save failed: %w", saveErr)
+	}
+	return closeErr
+}
+
+// autoSaveConnection wraps one pooled connection. Saving belongs to the
+// connector, which outlives every connection the pool opens and closes.
+type autoSaveConnection struct {
+	conn      driver.Conn
+	connector *autoSaveConnector
+}
+
+// Close implements driver.Conn interface
+func (c *autoSaveConnection) Close() error {
 	return c.conn.Close()
 }
 
@@ -464,8 +518,8 @@ func (t *autoSaveTransaction) Commit() error {
 	}
 
 	// Perform auto-save if configured for commit timing
-	if t.conn.autoSaveConfig != nil && t.conn.autoSaveConfig.enabled && t.conn.autoSaveConfig.timing == autoSaveOnCommit {
-		if err := t.conn.performAutoSave(); err != nil {
+	if c := t.conn.connector; c != nil && c.savesOnCommit() {
+		if err := c.saveNow(); err != nil {
 			// Auto-save failed, but the transaction was already committed
 			// Return the auto-save error to notify the user
 			return fmt.Errorf("transaction committed successfully, but auto-save failed: %w", err)
@@ -480,14 +534,34 @@ func (t *autoSaveTransaction) Rollback() error {
 	return t.tx.Rollback()
 }
 
-// performAutoSave executes automatic saving using the configured settings
-func (c *autoSaveConnection) performAutoSave() error {
+// savesOnCommit reports whether a committed transaction has to save.
+func (c *autoSaveConnector) savesOnCommit() bool {
+	return c.autoSaveConfig != nil && c.autoSaveConfig.enabled && c.autoSaveConfig.timing == autoSaveOnCommit
+}
+
+// saveNow writes the database out through the anchor connection, for a caller
+// that is not the one tearing the connector down.
+func (c *autoSaveConnector) saveNow() error {
+	c.mu.Lock()
+	anchor := c.anchor
+	c.mu.Unlock()
+	if anchor == nil {
+		return nil
+	}
+	return c.save(anchor)
+}
+
+// save executes automatic saving using the configured settings, reading the
+// database through conn.
+func (c *autoSaveConnector) save(conn driver.Conn) error {
 	if c.autoSaveConfig == nil || !c.autoSaveConfig.enabled {
 		return nil // No auto-save configured
 	}
 
-	// Create a temporary SQL DB to use DumpDatabase function
-	tempDB := sql.OpenDB(&directConnector{conn: c.conn})
+	// Read the database through the given connection. Closing tempDB would close
+	// that connection, which the caller still owns, so the pool is left to be
+	// collected with the connector.
+	tempDB := sql.OpenDB(&directConnector{conn: conn})
 
 	outputDir := c.autoSaveConfig.outputDir
 	if outputDir == "" {
@@ -513,7 +587,7 @@ func (c *autoSaveConnection) performAutoSave() error {
 }
 
 // performACHAutoSave saves all ACH tables back to ACH files
-func (c *autoSaveConnection) performACHAutoSave(db *sql.DB, outputDir string) error {
+func (c *autoSaveConnector) performACHAutoSave(db *sql.DB, outputDir string) error {
 	ctx := context.Background()
 
 	// The database records the ACH files it was loaded from.
@@ -539,7 +613,7 @@ func (c *autoSaveConnection) performACHAutoSave(db *sql.DB, outputDir string) er
 }
 
 // performFedWireAutoSave saves all Fedwire tables back to Fedwire files
-func (c *autoSaveConnection) performFedWireAutoSave(db *sql.DB, outputDir string) error {
+func (c *autoSaveConnector) performFedWireAutoSave(db *sql.DB, outputDir string) error {
 	ctx := context.Background()
 
 	wireBaseNames := fileSourceBaseNames(ctx, db, sourceFormatFedWire)
@@ -574,7 +648,7 @@ func (c *autoSaveConnection) performFedWireAutoSave(db *sql.DB, outputDir string
 //
 // A source whose format has no writer, or which holds more than one table, fails
 // the save rather than turning into something else on disk.
-func (c *autoSaveConnection) overwriteOriginalFiles(db *sql.DB) error {
+func (c *autoSaveConnector) overwriteOriginalFiles(db *sql.DB) error {
 	if len(c.originalPaths) == 0 {
 		return errors.New("no original paths available for overwrite")
 	}
@@ -592,7 +666,7 @@ func (c *autoSaveConnection) overwriteOriginalFiles(db *sql.DB) error {
 
 // overwriteOriginalFile writes the table or tables path was loaded as back to
 // path, keeping the format and compression the file already has.
-func (c *autoSaveConnection) overwriteOriginalFile(ctx context.Context, db *sql.DB, path string) error {
+func (c *autoSaveConnector) overwriteOriginalFile(ctx context.Context, db *sql.DB, path string) error {
 	baseTableName := sanitizeTableName(tableFromFilePath(path))
 
 	switch {
@@ -614,13 +688,15 @@ func (c *autoSaveConnection) overwriteOriginalFile(ctx context.Context, db *sql.
 	}
 
 	factory := NewCompressionFactory()
-	// The line terminator is read from the file about to be replaced, for the
-	// same reason the compression is read from its name: what comes back has to
-	// be the file the caller had, with their edit in it. Writing "\n" over a CRLF
-	// file changed every line of it while one row had been edited.
+	// The text encoding and the line terminator are read from the file about to
+	// be replaced, for the same reason the compression is read from its name:
+	// what comes back has to be the file the caller had, with their edit in it.
+	// Writing "\n" over a CRLF file changed every line of it while one row had
+	// been edited, and writing UTF-8 over a UTF-16 file changed every byte.
 	options := DumpOptions{
 		Format:      format,
 		Compression: factory.DetectCompressionType(path),
+		Encoding:    detectSourceEncoding(path),
 		LineEnding:  detectLineEnding(path, format),
 	}
 

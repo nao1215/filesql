@@ -56,6 +56,17 @@ func TestAutoSaveOverwriteKeepsLineEnding(t *testing.T) {
 			update:  "UPDATE crlf SET v='x' WHERE id=1",
 			want:    "id:1\tv:x\r\nid:2\tv:b\r\n",
 		},
+		{
+			// The parser reads a CR-terminated file as lines rather than as one
+			// very long line, so the save has to be able to put CR back. It could
+			// not: the count only looked for "\n", so a file with none came back
+			// rewritten line by line.
+			name:    "CSV keeps a lone CR",
+			file:    "cr.csv",
+			content: "id,v\r1,a\r2,b\r",
+			update:  "UPDATE cr SET v='x' WHERE id=1",
+			want:    "id,v\r1,x\r2,b\r",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -237,4 +248,37 @@ func TestSaveLineEndingByDestination(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "id,v\r\n1,x\r\n2,b\r\n", string(got))
 	})
+}
+
+// TestAutoSaveOverwriteWithNoStatementIsByteIdentical pins the property the
+// terminator detection exists for, stated as an invariant rather than as one
+// terminator at a time: a database nobody wrote to has nothing to change on
+// disk, so the file has to come back exactly as it was.
+func TestAutoSaveOverwriteWithNoStatementIsByteIdentical(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		file    string
+		content string
+	}{
+		{name: "LF", file: "lf.csv", content: "id,v\n1,a\n2,b\n"},
+		{name: "CRLF", file: "crlf.csv", content: "id,v\r\n1,a\r\n2,b\r\n"},
+		{name: "lone CR", file: "cr.csv", content: "id,v\r1,a\r2,b\r"},
+		{name: "quoted CR is data, not a terminator", file: "quoted.csv", content: "id,v\n1,\"a\rb\"\n2,c\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), tt.file)
+			require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o600))
+
+			require.NoError(t, autoSaveOverwrite(t, []string{path}))
+
+			got, err := os.ReadFile(path) //nolint:gosec // Test path from t.TempDir()
+			require.NoError(t, err)
+			assert.Equal(t, tt.content, string(got))
+		})
+	}
 }

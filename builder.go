@@ -11,7 +11,6 @@ import (
 	"io/fs"
 
 	"github.com/nao1215/filesql/dialect"
-	"modernc.org/sqlite" // Direct SQLite driver usage
 )
 
 // DBBuilder configures and creates database connections from various data sources.
@@ -333,11 +332,8 @@ func (b *DBBuilder) AddFS(filesystem fs.FS) *DBBuilder {
 // workbook of more than one sheet, fail the save rather than being written as
 // something else.
 //
-// Concurrency: unlike a database opened without auto-save, a database opened
-// with auto-save is backed by a single connection (the save hook runs when that
-// connection closes), so it is not safe to share across goroutines. Use it from
-// one goroutine, or open the files without auto-save and persist explicitly with
-// DumpDatabase when you need concurrent access.
+// The save runs once, when Close returns, so a database with auto-save is as
+// safe to share across goroutines as one without it.
 //
 // Returns self for chaining.
 func (b *DBBuilder) EnableAutoSave(outputDir string, options ...DumpOptions) *DBBuilder {
@@ -355,7 +351,8 @@ func (b *DBBuilder) EnableAutoSave(outputDir string, options ...DumpOptions) *DB
 	return b
 }
 
-// EnableAutoSaveOnCommit automatically saves changes after each transaction commit.
+// EnableAutoSaveOnCommit automatically saves changes after each transaction
+// commit, and again when the database is closed.
 //
 // Use this for real-time persistence. Note: May impact performance.
 //
@@ -363,6 +360,11 @@ func (b *DBBuilder) EnableAutoSave(outputDir string, options ...DumpOptions) *DB
 //
 //	builder.AddPath("data.csv").
 //		EnableAutoSaveOnCommit("./output") // Save after each commit
+//
+// Saving at close as well is what keeps a statement run outside a transaction
+// from being lost: it is committed as soon as it runs, but no commit hook sees
+// it. This timing therefore saves earlier and more often than EnableAutoSave,
+// never less.
 //
 // Returns self for chaining.
 func (b *DBBuilder) EnableAutoSaveOnCommit(outputDir string, options ...DumpOptions) *DBBuilder {
@@ -786,41 +788,52 @@ func (b *DBBuilder) validateDatabaseConnection(ctx context.Context, db *sql.DB) 
 	return nil
 }
 
-// setupAutoSaveIfNeeded sets up auto-save functionality if enabled.
+// setupAutoSaveIfNeeded swaps the plain loader database for one whose
+// connections run the save when the caller closes it. It is a no-op when
+// auto-save is off.
+//
+// The loaded data lives in a shared-cache in-memory database, so the auto-save
+// database opens its own connections to the same DSN rather than loading the
+// files a second time. A live connection is established before the loader
+// database is closed, so the shared cache—and the data—survives the swap.
 func (b *DBBuilder) setupAutoSaveIfNeeded(ctx context.Context, db *sql.DB) (*sql.DB, error) {
 	if b.autoSaveConfig == nil || !b.autoSaveConfig.enabled {
 		return db, nil
 	}
-
-	if err := db.Close(); err != nil {
-		return nil, fmt.Errorf("%w: failed to close intermediate database: %w", ErrDatabaseOperation, err)
-	}
-
-	sqliteDriver := &sqlite.Driver{}
-	freshConn, err := sqliteDriver.Open(":memory:")
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to create fresh SQLite connection for auto-save: %w", ErrDatabaseOperation, err)
+	if b.memDSN == "" {
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: auto-save requires the in-memory database DSN", ErrDatabaseOperation)
 	}
 
 	connector := &autoSaveConnector{
-		sqliteConn:     freshConn,
+		drv:            db.Driver(),
+		dsn:            b.memDSN,
 		autoSaveConfig: b.autoSaveConfig,
 		originalPaths:  b.collectOriginalPaths(),
 	}
-	db = sql.OpenDB(connector)
-
-	// Use stream processor for all streaming operations (now includes XLSX support)
-	if err := b.streamProcessor.streamAllFilesToDatabase(ctx, db, b.collectedPaths); err != nil {
-		_ = db.Close() // Ignore close error during error handling
-		return nil, err
+	// The connector's own connection is what keeps the shared-cache database
+	// alive between pooled connections, so it has to exist before the loader
+	// database closes.
+	if err := connector.open(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: failed to open auto-save database: %w", ErrDatabaseOperation, err)
 	}
 
-	if err := b.streamProcessor.streamAllReadersToDatabase(ctx, db, b.readers); err != nil {
-		_ = db.Close() // Ignore close error during error handling
-		return nil, err
+	adb := sql.OpenDB(connector)
+	if err := adb.PingContext(ctx); err != nil {
+		_ = adb.Close()
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: failed to open auto-save database: %w", ErrDatabaseOperation, err)
+	}
+	if err := db.Close(); err != nil {
+		_ = adb.Close()
+		return nil, fmt.Errorf("%w: failed to close intermediate database: %w", ErrDatabaseOperation, err)
 	}
 
-	return db, nil
+	// Everything that could still discard the data is behind us, so a close from
+	// here on is the caller's and has to save.
+	connector.arm()
+	return adb, nil
 }
 
 // setupDialectIfNeeded swaps the plain loader database for one whose queries are

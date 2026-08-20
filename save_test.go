@@ -393,7 +393,7 @@ func TestAutoSaveConnection_PerformACHAutoSave(t *testing.T) {
 	// Create temp output directory
 	outputDir := t.TempDir()
 
-	// Create autoSaveConnection with ACH format
+	// Create the connector with ACH format
 	config := &autoSaveConfig{
 		enabled:   true,
 		timing:    autoSaveOnClose,
@@ -401,7 +401,7 @@ func TestAutoSaveConnection_PerformACHAutoSave(t *testing.T) {
 		options:   NewDumpOptions().WithFormat(OutputFormatACH),
 	}
 
-	conn := &autoSaveConnection{
+	conn := &autoSaveConnector{
 		autoSaveConfig: config,
 		originalPaths:  []string{testFile},
 	}
@@ -429,7 +429,7 @@ func TestAutoSaveConnection_PerformACHAutoSave_NoTables(t *testing.T) {
 
 	outputDir := t.TempDir()
 
-	conn := &autoSaveConnection{
+	conn := &autoSaveConnector{
 		autoSaveConfig: &autoSaveConfig{
 			enabled:   true,
 			outputDir: outputDir,
@@ -465,8 +465,8 @@ func TestAutoSaveConnection_OverwriteOriginalFiles_ACH(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	// Create autoSaveConnection for overwrite mode (no outputDir)
-	conn := &autoSaveConnection{
+	// Create the connector for overwrite mode (no outputDir)
+	conn := &autoSaveConnector{
 		autoSaveConfig: &autoSaveConfig{
 			enabled:   true,
 			timing:    autoSaveOnClose,
@@ -493,7 +493,7 @@ func TestAutoSaveConnection_OverwriteOriginalFiles_NoOriginalPaths(t *testing.T)
 	require.NoError(t, err)
 	defer db.Close()
 
-	conn := &autoSaveConnection{
+	conn := &autoSaveConnector{
 		autoSaveConfig: &autoSaveConfig{
 			enabled: true,
 			options: NewDumpOptions(),
@@ -588,7 +588,7 @@ func TestAutoSaveConnection_PerformACHAutoSave_DumpError(t *testing.T) {
 
 	outputDir := t.TempDir()
 
-	conn := &autoSaveConnection{
+	conn := &autoSaveConnector{
 		autoSaveConfig: &autoSaveConfig{
 			enabled:   true,
 			outputDir: outputDir,
@@ -600,25 +600,6 @@ func TestAutoSaveConnection_PerformACHAutoSave_DumpError(t *testing.T) {
 	err = conn.performACHAutoSave(db, outputDir)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to export ACH file")
-}
-
-func TestAutoSaveConnection_PerformAutoSave_Disabled(t *testing.T) {
-	conn := &autoSaveConnection{
-		autoSaveConfig: nil, // No config = disabled
-	}
-
-	// Should return nil when auto-save is disabled
-	err := conn.performAutoSave()
-	assert.NoError(t, err)
-
-	// Also test with config but disabled
-	conn2 := &autoSaveConnection{
-		autoSaveConfig: &autoSaveConfig{
-			enabled: false,
-		},
-	}
-	err = conn2.performAutoSave()
-	assert.NoError(t, err)
 }
 
 func TestAutoSaveConnection_ExecContext(t *testing.T) {

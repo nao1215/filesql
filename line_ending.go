@@ -21,6 +21,12 @@ const (
 	LineEndingLF LineEnding = iota
 	// LineEndingCRLF writes "\r\n".
 	LineEndingCRLF
+	// lineEndingCR writes "\r". It has no exported name because it is not an
+	// option a caller picks: WithLineEnding offers the two terminators worth
+	// choosing for new output. An in-place save reads the terminator from the
+	// file instead, and the parser reads CR-terminated files, so the write side
+	// needs a way to put one back.
+	lineEndingCR
 )
 
 // String returns the name a user types for the line ending.
@@ -30,6 +36,8 @@ func (l LineEnding) String() string {
 		return "lf"
 	case LineEndingCRLF:
 		return "crlf"
+	case lineEndingCR:
+		return "cr"
 	default:
 		return "unknown"
 	}
@@ -38,10 +46,14 @@ func (l LineEnding) String() string {
 // terminator returns the bytes the line ending is written as. An unknown value
 // writes "\n", the same answer a zero DumpOptions gives.
 func (l LineEnding) terminator() string {
-	if l == LineEndingCRLF {
+	switch l {
+	case LineEndingCRLF:
 		return "\r\n"
+	case lineEndingCR:
+		return "\r"
+	default:
+		return "\n"
 	}
-	return "\n"
 }
 
 // lineEndingReadSize is the buffer the detection reads through. The file is
@@ -66,7 +78,8 @@ const lineEndingReadSize = 64 << 10 // 64 KiB
 // not used either, because half a file is not evidence of what the whole one
 // uses.
 func detectLineEnding(path string, format OutputFormat) LineEnding {
-	reader, cleanup, err := NewCompressionFactory().CreateReaderForFile(path)
+	factory := NewCompressionFactory()
+	reader, cleanup, err := factory.CreateReaderForFile(path)
 	if err != nil {
 		return LineEndingLF
 	}
@@ -74,7 +87,16 @@ func detectLineEnding(path string, format OutputFormat) LineEnding {
 		_ = cleanup() //nolint:errcheck // Reading for detection only; a close failure cannot affect the answer
 	}()
 
-	ending, err := countLineEndings(reader, format)
+	// Count over text, not bytes. In UTF-16 a "\r\n" is "\r\x00\n\x00", so the
+	// byte before every "\n" is "\x00" and counting raw bytes reads a CRLF file
+	// as an LF one — which is how a UTF-16 file kept its terminators on the read
+	// side and lost them on the write side.
+	counted := reader
+	if isTextBaseType(factory.GetBaseFileType(path)) {
+		counted = decodeTextReader(reader)
+	}
+
+	ending, err := countLineEndings(counted, format)
 	if err != nil {
 		return LineEndingLF
 	}
@@ -82,7 +104,10 @@ func detectLineEnding(path string, format OutputFormat) LineEnding {
 }
 
 // countLineEndings is detectLineEnding's rule over a stream, reading it whole
-// through a fixed buffer.
+// through a fixed buffer. A lone "\r" counts as a terminator of its own: the
+// parser reads a file terminated that way as lines rather than as one very long
+// line, and a save that answered LF for it rewrote every line of a file nobody
+// had edited.
 //
 // A quote is honored for CSV alone. A quoted CSV field carries its own line
 // breaks, and counting those as terminators is how a workbook-style export —
@@ -94,7 +119,7 @@ func countLineEndings(reader io.Reader, format OutputFormat) (LineEnding, error)
 	quoted := format == OutputFormatCSV
 
 	buffered := bufio.NewReaderSize(reader, lineEndingReadSize)
-	var crlf, lf int
+	var crlf, lf, cr int
 	inQuotes := false
 	prevCR := false
 	for {
@@ -104,6 +129,11 @@ func countLineEndings(reader io.Reader, format OutputFormat) (LineEnding, error)
 				break
 			}
 			return LineEndingLF, err
+		}
+
+		// A "\r" that nothing follows with "\n" terminated a record on its own.
+		if prevCR && b != '\n' {
+			cr++
 		}
 
 		switch {
@@ -118,11 +148,17 @@ func countLineEndings(reader io.Reader, format OutputFormat) (LineEnding, error)
 				lf++
 			}
 		}
-		prevCR = b == '\r'
+		prevCR = b == '\r' && !inQuotes
+	}
+	if prevCR {
+		cr++
 	}
 
-	if crlf > lf {
+	if crlf > lf && crlf >= cr {
 		return LineEndingCRLF, nil
+	}
+	if cr > lf && cr > crlf {
+		return lineEndingCR, nil
 	}
 	return LineEndingLF, nil
 }

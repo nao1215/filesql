@@ -2,6 +2,7 @@ package filesql
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -98,4 +99,55 @@ func TestOpenConcurrentNestedQueries(t *testing.T) {
 	for err := range errCh {
 		require.NoError(t, err)
 	}
+}
+
+// TestAutoSaveConcurrentQueries verifies that a database opened with auto-save
+// is as safe to share across goroutines as one opened without it, and that the
+// save still runs once when it is closed.
+//
+// It was not: the auto-save connector handed every pooled connection a wrapper
+// around one shared driver.Conn, so concurrent queries reached the same SQLite
+// connection at the same time. Run with -race to detect regressions.
+func TestAutoSaveConcurrentQueries(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+
+	path := filepath.Join(t.TempDir(), "users.csv")
+	require.NoError(t, os.WriteFile(path, []byte("id,name\n1,alice\n"), 0o600))
+
+	validated, err := NewBuilder().AddPath(path).EnableAutoSave("").Build(ctx)
+	require.NoError(t, err)
+	db, err := validated.Open(ctx)
+	require.NoError(t, err)
+
+	const goroutines = 8
+	const iterations = 20
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, goroutines*iterations)
+	for range goroutines {
+		wg.Go(func() {
+			for range iterations {
+				var count int
+				if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+					errCh <- err
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+
+	_, err = db.ExecContext(ctx, "UPDATE users SET name = 'bob'")
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	saved, err := os.ReadFile(path) //nolint:gosec // Test path from t.TempDir()
+	require.NoError(t, err)
+	require.Equal(t, "id,name\n1,bob\n", string(saved))
 }
