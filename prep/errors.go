@@ -165,11 +165,11 @@ func (r *ProcessResult) PrepErrors() []*PrepError {
 	return errs
 }
 
-// emptyFileMessages lists the exact error messages returned by
-// fileparser v0.5.1 that indicate the input file/data is empty.
-// These are matched exactly (case-insensitive) to avoid false positives.
+// emptyFileMessages lists the exact error messages the parser package returns
+// to say the input file or data is empty. These are matched exactly
+// (case-insensitive) to avoid false positives.
 //
-// fileparser generates some messages dynamically via fmt.Errorf:
+// The parser package generates some messages dynamically via fmt.Errorf:
 //   - "empty %s data" where %s is CSV, TSV, JSON, JSONL, LTSV etc.
 //   - "empty parquet file", "empty XLSX sheet"
 //
@@ -182,10 +182,13 @@ var emptyFileMessages = map[string]struct{}{ //nolint:gochecknoglobals // consta
 	"no headers found in xlsx":     {},
 }
 
-// wrapParseError wraps errors returned by parser.Parse with the
-// appropriate fileprep sentinel error so that callers can use errors.Is.
-// fileparser does not export sentinel errors, so we match on the exact
-// error message text from fileparser v0.5.1.
+// wrapParseError wraps errors returned by parser.Parse with the appropriate
+// prep sentinel error so that callers can use errors.Is.
+//
+// The parser package does not export sentinels, so this matches on message text.
+// That is brittle, and it is brittle inside one repository now that the parser
+// is a sibling package rather than a separate module: the right fix is for
+// parser to export the sentinels and for this to use errors.Is.
 func wrapParseError(err error) error {
 	if err == nil {
 		return nil

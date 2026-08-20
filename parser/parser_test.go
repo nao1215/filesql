@@ -96,7 +96,8 @@ func TestParse_CSV(t *testing.T) {
 
 	// Surrounding whitespace does not make a second column: filesql compares
 	// header names trimmed, so this is the same duplicate as the case above. It
-	// is where this fork deliberately differs from github.com/nao1215/fileparser,
+	// is where this fork deliberately differs from the archived
+	// github.com/nao1215/fileparser it came from,
 	// which compares the names as they stand.
 	t.Run("returns error for names that differ only by surrounding whitespace", func(t *testing.T) {
 		t.Parallel()
@@ -786,7 +787,7 @@ func TestDetectFileType(t *testing.T) {
 		{"data.jsonl.s2", JSONLS2},
 		{"data.jsonl.lz4", JSONLLZ4},
 
-		// Unsupported (.fed is handled by fileparser/wire subpackage, not by Parse)
+		// Unsupported (.fed is handled by the wire subpackage, not by Parse)
 		{"payment.fed", Unsupported},
 		{"payment.FED", Unsupported},
 		{"payment.fed.gz", Unsupported},

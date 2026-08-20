@@ -861,7 +861,8 @@ func parseLTSV(reader io.Reader) (*TableData, error) {
 // second column in another — and case is folded because SQLite, which ends up
 // holding the columns, compares their names that way too.
 //
-// This is a deliberate difference from github.com/nao1215/fileparser, which
+// This is a deliberate difference from github.com/nao1215/fileparser, the
+// archived module this package was forked from, which
 // parser is a fork of and which compares the names as they stand. The message
 // still matches it exactly, because a differential test holds the two to the
 // same errors and only the comparison is meant to differ; the quoting and

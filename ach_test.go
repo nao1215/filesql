@@ -349,11 +349,11 @@ func TestOpenACHFile_IATFile(t *testing.T) {
 	assert.NotEmpty(t, tables, "should have IAT tables")
 }
 
+// TestOpenACHFile_ReturnFile covers a return entry, whose addenda carries the
+// reason the entry came back. It skips until testdata holds a return file: the
+// fixture has never been added, and the unconditional skip that used to stand
+// here named a dependency this repository no longer has.
 func TestOpenACHFile_ReturnFile(t *testing.T) {
-	// This test requires fileparser v0.3.0+ with the duplicate column fix
-	// Skip until the dependency is updated
-	t.Skip("Requires fileparser v0.3.0+ with duplicate column fix")
-
 	testFile := findACHTestFile(t, "return-WEB.ach")
 	if testFile == "" {
 		t.Skip("No return test ACH file found")

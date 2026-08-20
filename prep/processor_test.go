@@ -369,7 +369,7 @@ func TestProcessor_CSV_EdgeCases(t *testing.T) {
 			input:        "col1,col2,col3\na,b,c\nd,e\nf,g,h\n",
 			wantRowCount: 0,
 			wantColCount: 0,
-			wantErr:      true, // fileparser returns error for mismatched column count
+			wantErr:      true, // the parser package returns an error for a mismatched column count
 			checkRow:     -1,
 		},
 		{
@@ -614,7 +614,7 @@ func TestProcessor_CSV_ManyRows(t *testing.T) {
 }
 
 // JSONRecord is a test struct for JSON/JSONL processing.
-// fileparser stores JSON data in a single "data" column containing raw JSON strings.
+// The parser package stores JSON data in a single "data" column containing raw JSON strings.
 type JSONRecord struct {
 	Data string `name:"data" prep:"trim" validate:"required"`
 }
@@ -973,7 +973,7 @@ func TestProcessor_JSON_PrettyPrintedGzip(t *testing.T) {
 	t.Parallel()
 
 	// Verify that compressed pretty-printed JSON also produces compact JSONL.
-	// Decompression is handled by fileparser, but the full pipeline
+	// Decompression is handled by the parser package, but the full pipeline
 	// (decompress → parse → prep → compact → JSONL) should be exercised.
 	prettyJSON := `[
   {"name": "Alice", "age": 30},
@@ -1755,7 +1755,7 @@ func TestProcess_SliceReset(t *testing.T) {
 	}
 }
 
-// TestProcess_SentinelErrorWrapping verifies that fileparser errors are
+// TestProcess_SentinelErrorWrapping verifies that parser errors are
 // wrapped so callers can match with errors.Is.
 func TestProcess_SentinelErrorWrapping(t *testing.T) {
 	t.Parallel()
@@ -2120,8 +2120,8 @@ func TestCachedParseStructType_Concurrent(t *testing.T) {
 }
 
 // TestWrapParseError_AllBranches verifies that wrapParseError maps every
-// known fileparser error message to the correct sentinel error. This
-// guards against silent breakage if fileparser changes its error wording.
+// known parser error message to the correct sentinel error. This guards
+// against silent breakage if the parser package changes its error wording.
 func TestWrapParseError_AllBranches(t *testing.T) {
 	t.Parallel()
 

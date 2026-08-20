@@ -49,7 +49,7 @@ const (
 	FileTypeUnsupported
 )
 
-// File extension aliases from fileparser package
+// File extension aliases from the parser package
 const (
 	extCSV     = parser.ExtCSV
 	extTSV     = parser.ExtTSV

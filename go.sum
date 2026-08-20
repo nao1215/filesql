@@ -64,8 +64,6 @@ github.com/moov-io/iso4217 v0.4.0 h1:+97e9chdg8Cx3kMLmGmvN64+CtmtodPLfUT2PaCXUUE
 github.com/moov-io/iso4217 v0.4.0/go.mod h1:QvQE6pvu9KItHusChPLOJS10EhJnyQpcKHloIqHkQVM=
 github.com/moov-io/wire v0.15.9 h1:1dUaRHrMK8MTJUAxVg8LHOtQHcNu+atHwMU05NgPHwg=
 github.com/moov-io/wire v0.15.9/go.mod h1:VtrraXrIeCXiVo+AGA3aHu+/ewOGMiS/bei2wKN+/LI=
-github.com/nao1215/fileparser v0.5.2 h1:IXhH5m3UJf/TMidfTcVen8CSlZ4KEFEgBz6+2o+5KMs=
-github.com/nao1215/fileparser v0.5.2/go.mod h1:Jb16QbtYfgzQ2BR+UOVNSa1WeKMP2o+xnwBYFUNAG2Y=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/parquet-go/bitpack v1.0.0 h1:AUqzlKzPPXf2bCdjfj4sTeacrUwsT7NlcYDMUQxPcQA=
