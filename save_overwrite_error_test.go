@@ -25,7 +25,7 @@ func TestPerformFedWireAutoSave(t *testing.T) {
 		t.Cleanup(func() { _ = db.Close() })
 
 		outputDir := filepath.Join(t.TempDir(), "out")
-		require.NoError(t, (&autoSaveConnection{}).performFedWireAutoSave(db, outputDir))
+		require.NoError(t, (&autoSaveConnector{}).performFedWireAutoSave(db, outputDir))
 
 		// The file is named after the base table, which is the sanitized file name.
 		assert.FileExists(t, filepath.Join(outputDir, "customer_transfer.fed"))
@@ -36,7 +36,7 @@ func TestPerformFedWireAutoSave(t *testing.T) {
 
 		db := openTestDB(t)
 
-		err := (&autoSaveConnection{}).performFedWireAutoSave(db, t.TempDir())
+		err := (&autoSaveConnector{}).performFedWireAutoSave(db, t.TempDir())
 		assert.ErrorContains(t, err, "no Fedwire tables found to save")
 	})
 
@@ -51,7 +51,7 @@ func TestPerformFedWireAutoSave(t *testing.T) {
 		blocked := filepath.Join(t.TempDir(), "in-the-way")
 		require.NoError(t, os.WriteFile(blocked, nil, 0o600))
 
-		err = (&autoSaveConnection{}).performFedWireAutoSave(db, filepath.Join(blocked, "out"))
+		err = (&autoSaveConnector{}).performFedWireAutoSave(db, filepath.Join(blocked, "out"))
 		assert.ErrorContains(t, err, "failed to create output directory")
 	})
 }
@@ -68,7 +68,7 @@ func TestPerformACHAutoSave_UncreatableOutputDirectory(t *testing.T) {
 	blocked := filepath.Join(t.TempDir(), "in-the-way")
 	require.NoError(t, os.WriteFile(blocked, nil, 0o600))
 
-	err = (&autoSaveConnection{}).performACHAutoSave(db, filepath.Join(blocked, "out"))
+	err = (&autoSaveConnector{}).performACHAutoSave(db, filepath.Join(blocked, "out"))
 	assert.ErrorContains(t, err, "failed to create output directory")
 }
 
@@ -78,7 +78,7 @@ func TestPerformACHAutoSave_UncreatableOutputDirectory(t *testing.T) {
 func TestOverwriteOriginalFiles_NothingToOverwrite(t *testing.T) {
 	t.Parallel()
 
-	err := (&autoSaveConnection{}).overwriteOriginalFiles(openTestDB(t))
+	err := (&autoSaveConnector{}).overwriteOriginalFiles(openTestDB(t))
 	assert.ErrorContains(t, err, "no original paths available for overwrite")
 }
 
@@ -95,7 +95,7 @@ func TestOverwriteOriginalFile_WriteBackFormatFailures(t *testing.T) {
 		t.Parallel()
 
 		path := filepath.Join(t.TempDir(), "payment.ach")
-		err := (&autoSaveConnection{}).overwriteOriginalFile(ctx, db, path)
+		err := (&autoSaveConnector{}).overwriteOriginalFile(ctx, db, path)
 		assert.ErrorContains(t, err, "failed to overwrite ACH file")
 	})
 
@@ -103,7 +103,7 @@ func TestOverwriteOriginalFile_WriteBackFormatFailures(t *testing.T) {
 		t.Parallel()
 
 		path := filepath.Join(t.TempDir(), "payment.fed")
-		err := (&autoSaveConnection{}).overwriteOriginalFile(ctx, db, path)
+		err := (&autoSaveConnector{}).overwriteOriginalFile(ctx, db, path)
 		assert.ErrorContains(t, err, "failed to overwrite Fedwire file")
 	})
 }

@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"modernc.org/sqlite"
 )
 
 //go:embed testdata/embed_test/*.csv testdata/embed_test/*.tsv
@@ -1463,11 +1464,12 @@ func TestDriverMethods(t *testing.T) {
 	t.Run("autoSaveConnector Driver method", func(t *testing.T) {
 		t.Parallel()
 
-		connector := &autoSaveConnector{}
-		driver := connector.Driver()
-		if driver == nil {
-			assert.NotNil(t, driver, "Expected non-nil driver")
-		}
+		// The connector hands back the driver instance the loader used, not a
+		// fresh one: the dialect helper functions are registered per instance,
+		// so a new driver would not see them.
+		want := &sqlite.Driver{}
+		connector := &autoSaveConnector{drv: want}
+		assert.Same(t, want, connector.Driver())
 	})
 }
 
