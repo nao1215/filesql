@@ -129,3 +129,89 @@ func TestNewDumpOptions_DefaultsToLF(t *testing.T) {
 	assert.Equal(t, LineEndingLF, NewDumpOptions().LineEnding)
 	assert.Equal(t, LineEndingCRLF, NewDumpOptions().WithLineEnding(LineEndingCRLF).LineEnding)
 }
+
+// TestSaveLineEndingByDestination pins which save reads a source's terminator
+// and which does not, for every way of writing back over the file a table was
+// loaded from.
+//
+// Only the in-place mode reads it. A dump is an export: it writes the same bytes
+// whatever already sits in the destination, so pointing one at the source
+// directory replaces a CRLF file with an LF copy. That is a defensible split —
+// an export whose output depended on the destination's contents would write
+// different bytes on its second run — but it is not what a caller expects from
+// "save it back where it came from", so the three are pinned side by side here
+// and the README names the mode rather than describing every overwrite.
+func TestSaveLineEndingByDestination(t *testing.T) {
+	t.Parallel()
+
+	const source = "id,v\r\n1,a\r\n2,b\r\n"
+	const update = "UPDATE crlf SET v='x' WHERE id=1"
+
+	newSource := func(t *testing.T) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "crlf.csv")
+		require.NoError(t, os.WriteFile(path, []byte(source), 0o600))
+		return path
+	}
+
+	t.Run("in place keeps CRLF", func(t *testing.T) {
+		t.Parallel()
+
+		path := newSource(t)
+		require.NoError(t, autoSaveOverwrite(t, []string{path}, update))
+
+		got, err := os.ReadFile(path) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		assert.Equal(t, "id,v\r\n1,x\r\n2,b\r\n", string(got))
+	})
+
+	t.Run("auto-save into the source directory writes LF", func(t *testing.T) {
+		t.Parallel()
+
+		path := newSource(t)
+		ctx := t.Context()
+		validated, err := NewBuilder().AddPath(path).EnableAutoSave(filepath.Dir(path)).Build(ctx)
+		require.NoError(t, err)
+		db, err := validated.Open(ctx)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, update)
+		require.NoError(t, err)
+		require.NoError(t, db.Close())
+
+		got, err := os.ReadFile(path) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		assert.Equal(t, "id,v\n1,x\n2,b\n", string(got))
+	})
+
+	t.Run("dump into the source directory writes LF", func(t *testing.T) {
+		t.Parallel()
+
+		path := newSource(t)
+		db, err := Open(path)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = db.Close() })
+		_, err = db.Exec(update)
+		require.NoError(t, err)
+		require.NoError(t, DumpDatabase(db, filepath.Dir(path)))
+
+		got, err := os.ReadFile(path) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		assert.Equal(t, "id,v\n1,x\n2,b\n", string(got))
+	})
+
+	t.Run("an export is told the terminator instead", func(t *testing.T) {
+		t.Parallel()
+
+		path := newSource(t)
+		db, err := Open(path)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = db.Close() })
+		_, err = db.Exec(update)
+		require.NoError(t, err)
+		require.NoError(t, DumpDatabase(db, filepath.Dir(path), NewDumpOptions().WithLineEnding(LineEndingCRLF)))
+
+		got, err := os.ReadFile(path) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		assert.Equal(t, "id,v\r\n1,x\r\n2,b\r\n", string(got))
+	})
+}

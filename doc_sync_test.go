@@ -63,6 +63,11 @@ func TestEnglishReadmeHasStableMarkers(t *testing.T) {
 		"EnableAutoSave",
 		"SetDefaultChunkSize",
 		"SetMaxOpenConns",
+		// Which save keeps a source's line terminator is a distinction a caller
+		// acts on: the in-place mode reads it from the file, every other save
+		// writes "\n" unless told otherwise. A README that loses the
+		// distinction promises the first for all of them.
+		`EnableAutoSave("")`,
 	}
 
 	content := readReadme(t, englishReadmePath)

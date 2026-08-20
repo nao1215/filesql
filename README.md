@@ -417,7 +417,7 @@ err := filesql.DumpDatabase(db, "./output", options)
 
 Output is UTF-8 unless `WithEncoding` says otherwise, which is what a save wrote before the option existed. `EncodingShiftJIS`, `EncodingEUCJP`, `EncodingISO2022JP`, `EncodingUTF16LE`, and `EncodingUTF16BE` are the others; the UTF-16 pair write a byte-order mark, so the read side recognizes them without being told. A value the encoding has no way to write fails the save with `ErrEncoding` and leaves the destination as it was, rather than being replaced with a substitute character — the same answer the read side gives to bytes it cannot decode. Parquet and XLSX carry their own encoding and ignore the option.
 
-Records end with `\n` unless `WithLineEnding` says otherwise. A save that overwrites a file it loaded from a path does not need to be told: it reads the terminator the file already uses and writes the same one, so a CRLF file edited in place stays CRLF and the rows nobody touched stay byte-identical. A file with mixed terminators keeps whichever one the majority of its lines use. Parquet and XLSX are not line-based and ignore the option.
+Records end with `\n` unless `WithLineEnding` says otherwise. `EnableAutoSave("")` does not need to be told: writing a table back to the file it was loaded from reads the terminator that file already uses and writes the same one, so a CRLF file edited in place stays CRLF and the rows nobody touched keep the ending they had. A file with mixed terminators keeps whichever one the majority of its lines use. Every other save is an export, and an export writes the same bytes whatever happens to sit in the destination: `DumpDatabase` and `EnableAutoSave("./dir")` write `\n` even when the directory they are pointed at is the one a source was loaded from, so pass `WithLineEnding(LineEndingCRLF)` when the output has to be CRLF. Parquet and XLSX are not line-based and ignore the option.
 
 ### Excel sheet visibility
 
@@ -467,6 +467,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 |---------|------------------|--------|
 | Open files and query them | `ExampleOpen`, `ExampleOpenContext` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
 | Load files into an existing `*sql.DB` | `ExampleLoadInto`, `ExampleDBBuilder_LoadInto` | [example_api_test.go](./example_api_test.go) |
+| Load into your own database, edit, and save it back | `ExampleLoadInto_dumpDatabase` | [example_api_test.go](./example_api_test.go) |
 | Build from readers, paths, or embedded FS | `ExampleNewBuilder`, `ExampleDBBuilder_AddReader`, `ExampleDBBuilder_AddPath`, `ExampleDBBuilder_AddFS` | [example_test.go](./example_test.go) |
 | Read a compressed reader | `ExampleDBBuilder_AddReader_compressed` | [example_test.go](./example_test.go) |
 | Tune chunked loading | `ExampleDBBuilder_SetDefaultChunkSize` | [example_api_test.go](./example_api_test.go) |

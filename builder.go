@@ -319,8 +319,10 @@ func (b *DBBuilder) AddFS(filesystem fs.FS) *DBBuilder {
 //		EnableAutoSave("") // Auto-save to original file on db.Close()
 //
 // Overwrite mode writes each table back to the file it was loaded from, in that
-// file's own format and compression; options is ignored, because the format is
-// the one the file already has. Only those files are written: a table created
+// file's own format, compression and line terminator; options is ignored,
+// because all of those are what the file already has. An output directory is an
+// export instead, and writes what options says even when the directory named is
+// the one a source was loaded from. Only those files are written: a table created
 // during the session has no file to be written back to and is left unsaved, so
 // pass an output directory when you want everything in the database on disk. A
 // source in a format this package reads but does not write (JSON, JSONL), and a
