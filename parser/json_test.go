@@ -128,15 +128,33 @@ func TestParse_JSON(t *testing.T) {
 		assert.Contains(t, err.Error(), "empty JSON data")
 	})
 
-	t.Run("returns error for empty array", func(t *testing.T) {
+	t.Run("an empty array is a table with no rows", func(t *testing.T) {
 		t.Parallel()
 
+		// It used to be an error, where loading the same bytes through filesql
+		// gives a table with no rows: an array with nothing in it is a document
+		// that says there is nothing, not a document that cannot be read.
 		reader := strings.NewReader("[]")
 
-		_, err := Parse(reader, JSON)
+		td, err := Parse(reader, JSON)
 
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "empty JSON array")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"data"}, td.Headers)
+		assert.Empty(t, td.Records)
+	})
+
+	t.Run("a null root is one row holding null", func(t *testing.T) {
+		t.Parallel()
+
+		// "null" unmarshals into a slice as the empty slice, so the array branch
+		// swallowed it and answered "empty JSON array" about a document holding
+		// no array at all.
+		reader := strings.NewReader("null")
+
+		td, err := Parse(reader, JSON)
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"null"}}, td.Records)
 	})
 
 	t.Run("returns error for invalid JSON", func(t *testing.T) {
