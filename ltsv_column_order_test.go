@@ -175,3 +175,55 @@ func TestLTSVCaseOnlyDuplicateLabelIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// TestLTSVCaseOnlyLabelAcrossRecordsIsOneColumn pins that two records writing
+// the same label in different cases fill one column rather than two.
+//
+// They did not: the label was tracked as written, so "id" on one line and "ID"
+// on the next were two columns, each row filling only its own — and the table
+// SQLite was then asked to create was refused with "duplicate column name: ID",
+// an error naming neither the file nor the rule, because SQLite compares column
+// names the way this package already compares labels within one record.
+func TestLTSVCaseOnlyLabelAcrossRecordsIsOneColumn(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "labels.ltsv")
+	content := "id:1\tv:a\nID:2\tV:b\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := OpenContext(context.Background(), path)
+	if err != nil {
+		t.Fatalf("OpenContext: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	rows, err := db.QueryContext(context.Background(), "SELECT id, v FROM labels ORDER BY id")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var got [][2]string
+	for rows.Next() {
+		var id, v string
+		if err := rows.Scan(&id, &v); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got = append(got, [2]string{id, v})
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+
+	want := [][2]string{{"1", "a"}, {"2", "b"}}
+	if len(got) != len(want) {
+		t.Fatalf("rows = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("row %d = %v, want %v", i, got[i], want[i])
+		}
+	}
+}
