@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -149,6 +151,101 @@ func TestInferColumnTypes(t *testing.T) {
 		types := inferColumnTypes(headers, records)
 
 		assert.Equal(t, TypeReal, types[0])
+	})
+
+	t.Run("a value the chosen type cannot hold decides the column", func(t *testing.T) {
+		t.Parallel()
+
+		// Each of these is a single value among plain integers. Weighing them
+		// against the integers left a numeric column holding a value that is not
+		// one, so the odd value is what the type has to follow.
+		tests := map[string]string{
+			"text":                "abc",
+			"a zero padded code":  "007",
+			"an int64 overflow":   "11040320260000000000",
+			"a Go only literal":   "1_000",
+			"a hexadecimal float": "0x1p4",
+			"a padded number":     "  42",
+			"a datetime":          "2026-08-20T10:00:00Z",
+		}
+		for name, odd := range tests {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+
+				records := [][]string{{"1"}, {"2"}, {"3"}, {"4"}, {"5"}, {"6"}, {"7"}, {"8"}, {"9"}, {odd}}
+				assert.Equal(t, TypeText, inferColumnTypes([]string{"v"}, records)[0])
+			})
+		}
+	})
+
+	t.Run("one decimal among integers makes the column real", func(t *testing.T) {
+		t.Parallel()
+
+		records := [][]string{{"1"}, {"2"}, {"3"}, {"4"}, {"5"}, {"6"}, {"7"}, {"8"}, {"9"}, {"10"}, {"11.5"}}
+
+		assert.Equal(t, TypeReal, inferColumnTypes([]string{"v"}, records)[0])
+	})
+
+	t.Run("a column longer than a sample is read to its end", func(t *testing.T) {
+		t.Parallel()
+
+		const rows = 2000
+		build := func(oddAt int) [][]string {
+			records := make([][]string, 0, rows+1)
+			for i := range rows {
+				if i == oddAt {
+					records = append(records, []string{"abc"})
+				}
+				records = append(records, []string{strconv.Itoa(i + 1)})
+			}
+			if oddAt == rows {
+				records = append(records, []string{"abc"})
+			}
+			return records
+		}
+
+		// Neither end of a column is privileged: reading only the head made the
+		// answer depend on where the value sat.
+		for _, oddAt := range []int{0, rows / 2, rows} {
+			assert.Equal(t, TypeText, inferColumnTypes([]string{"v"}, build(oddAt))[0],
+				"a text value at position %d among %d integers", oddAt, rows)
+		}
+	})
+
+	t.Run("every value of a column converts to the type the column was given", func(t *testing.T) {
+		t.Parallel()
+
+		columns := map[string][]string{
+			"integers":                {"1", "2", "3"},
+			"decimals":                {"1.5", "2", "3"},
+			"text among integers":     {"1", "2", "3", "4", "5", "6", "7", "8", "9", "abc"},
+			"a code among integers":   {"1", "2", "3", "4", "5", "6", "7", "8", "9", "007"},
+			"datetimes":               {"2026-08-20", "2026-08-21"},
+			"a datetime among counts": {"1", "2", "3", "4", "5", "6", "7", "8", "9", "2026-08-20"},
+		}
+		want := map[ColumnType]string{
+			TypeInteger:  "int64",
+			TypeReal:     "float64",
+			TypeText:     "string",
+			TypeDatetime: "string",
+		}
+
+		for name, values := range columns {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+
+				records := make([][]string, 0, len(values))
+				for _, v := range values {
+					records = append(records, []string{v})
+				}
+				columnType := inferColumnTypes([]string{"v"}, records)[0]
+
+				for _, v := range values {
+					assert.Equal(t, want[columnType], fmt.Sprintf("%T", ParseValue(v, columnType)),
+						"%q in a column typed %v", v, columnType)
+				}
+			})
+		}
 	})
 }
 
