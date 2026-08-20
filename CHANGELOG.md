@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `github.com/nao1215/fileparser` is no longer a dependency. It was the module this repository's `parser` package was forked from, it has since been archived, and the only thing still importing it was one test comparing the fork against its origin. That comparison can no longer tell anyone anything: the reference is frozen, and `parser` has already diverged from it on purpose. Nothing in a build ever reached it — it was a test-only requirement — so no caller's build changes, and the archived module stops holding the floor under `excelize`, `moov-io/ach` and the rest at the versions it happened to pin.
+
 - Dependencies: `github.com/moov-io/ach` 1.61.3 → 1.63.3, `github.com/moov-io/wire` 0.15.8 → 0.16.0, `modernc.org/sqlite` 1.55.0 → 1.56.0, `github.com/klauspost/compress` 1.19.1 → 1.19.2, `github.com/pierrec/lz4/v4` 4.1.27 → 4.1.28, `github.com/parquet-go/parquet-go` 0.30.1 → 0.32.0, `github.com/stretchr/testify` 1.11.1 → 1.12.0, `golang.org/x/text` 0.40.0 → 0.41.0.
 
 ## [0.43.1] - 2026-08-09

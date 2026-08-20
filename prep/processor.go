@@ -225,7 +225,7 @@ func (p *Processor) processRecords(input io.Reader, structSlicePointer any) (
 	copy(fields, cachedInfo.Fields)
 	sInfo := &structInfo{Fields: fields}
 
-	// Parse the file using fileparser
+	// Parse the file using the parser package
 	tableData, err := parser.Parse(input, p.fileType)
 	if err != nil {
 		return nil, nil, nil, wrapParseError(err)
@@ -275,7 +275,7 @@ func (p *Processor) processRecords(input io.Reader, structSlicePointer any) (
 	baseType := parser.BaseFileType(p.fileType)
 	isJSONFormat := baseType == parser.JSON || baseType == parser.JSONL
 
-	// jsonDataColumn is the column name used by fileparser for JSON/JSONL data.
+	// jsonDataColumn is the column name the parser package uses for JSON/JSONL data.
 	// Each JSON element is stored as a raw JSON string in this single column.
 	const jsonDataColumn = "data"
 
@@ -598,12 +598,12 @@ func (p *Processor) writeLTSV(w io.Writer, headers []string, records [][]string)
 // Empty strings are skipped to avoid writing blank lines.
 //
 // Each value is compacted via json.Compact to ensure it occupies exactly one line.
-// Pretty-printed JSON from fileparser may contain newlines within a single element,
+// Pretty-printed JSON from the parser package may contain newlines within a single element,
 // which would break JSONL format without compaction.
 func (p *Processor) writeJSONL(w io.Writer, records [][]string) error {
 	var compactBuf bytes.Buffer
 	for _, record := range records {
-		// record[0] is the "data" column: fileparser stores each JSON element
+		// record[0] is the "data" column: the parser package stores each JSON element
 		// as a single-column row for JSON/JSONL input.
 		if len(record) == 0 || record[0] == "" {
 			continue
