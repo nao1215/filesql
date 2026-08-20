@@ -359,13 +359,14 @@ north,apple,1,100
 
 CSV, TSV, LTSV, and XLSX carry no types, so filesql reads the values and picks INTEGER, REAL, or TEXT per column. Parquet, ACH, and Fedwire bring their own schema and are not inferred.
 
-Which of the three a column gets follows from every value in the column, wherever the value sits and however large the file is. Three kinds of value are damaged by a numeric column, and one of them anywhere in the file makes the column TEXT:
+Which of the three a column gets follows from every value in the column, wherever the value sits and however large the file is. Four kinds of value are damaged by a numeric column, and one of them anywhere in the file makes the column TEXT:
 
 | Value | Column | Why |
 |:--|:--|:--|
 | `007`, `02134` | TEXT | A leading zero is part of a code, and INTEGER drops it |
 | `11040320260000000000` | TEXT | Past int64, and float64 would render it `1.104032026e+19` |
 | `1_000`, `0x1p4` | TEXT | Go parses these, SQLite's affinity does not convert them |
+| `  42`, ` 5 ` | TEXT | Numeric affinity drops the padding a fixed-width code carries |
 
 One decimal is enough to make a numeric column REAL. An INTEGER column either rewrites the decimal or stores it against its own declared type, and it turns the column's arithmetic into integer division, so `5 / 2` answers 2 rather than 2.5.
 
