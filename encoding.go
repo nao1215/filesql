@@ -199,3 +199,51 @@ func (r *utf8ValidatingReader) hasEscapeDesignator(chunk []byte) bool {
 	r.escTail = append(r.escTail[:0], tail...)
 	return found
 }
+
+// bomEncodings maps a leading byte-order mark to the encoding that wrote it.
+// These are exactly the encodings the read side recognizes without being told,
+// which is what makes them the ones an in-place save can put back.
+var bomEncodings = []struct {
+	mark     []byte
+	encoding Encoding
+}{
+	{mark: []byte{0xFF, 0xFE}, encoding: EncodingUTF16LE},
+	{mark: []byte{0xFE, 0xFF}, encoding: EncodingUTF16BE},
+	{mark: []byte{0xEF, 0xBB, 0xBF}, encoding: encodingUTF8BOM},
+}
+
+// detectSourceEncoding reports the text encoding path is written in, so a save
+// that overwrites it can write the same one. A save that always wrote plain
+// UTF-8 replaced a UTF-16 file with bytes its own reader would still accept but
+// every other reader of that file would not, and dropped the mark a UTF-8 file
+// carried, changing a header row nobody had edited.
+//
+// Only the marks decide. A file with no mark is UTF-8, because that is the only
+// thing the read side accepts without one, and a binary or record format is left
+// alone: nothing in it is text this package encodes.
+func detectSourceEncoding(path string) Encoding {
+	factory := NewCompressionFactory()
+	if !isTextBaseType(factory.GetBaseFileType(path)) {
+		return EncodingUTF8
+	}
+
+	reader, cleanup, err := factory.CreateReaderForFile(path)
+	if err != nil {
+		return EncodingUTF8
+	}
+	defer func() {
+		_ = cleanup() //nolint:errcheck // Reading for detection only; a close failure cannot affect the answer
+	}()
+
+	var head [3]byte
+	n, err := io.ReadFull(reader, head[:])
+	if err != nil && n == 0 {
+		return EncodingUTF8
+	}
+	for _, candidate := range bomEncodings {
+		if bytes.HasPrefix(head[:n], candidate.mark) {
+			return candidate.encoding
+		}
+	}
+	return EncodingUTF8
+}

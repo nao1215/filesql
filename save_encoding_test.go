@@ -304,3 +304,126 @@ func TestOpen_StillNamesInvalidUTF8(t *testing.T) {
 		})
 	}
 }
+
+// utf16Bytes encodes text in the given UTF-16 byte order, with a mark.
+func utf16Bytes(t *testing.T, text string, order unicode.Endianness) []byte {
+	t.Helper()
+
+	encoded, _, err := transform.Bytes(unicode.UTF16(order, unicode.UseBOM).NewEncoder(), []byte(text))
+	require.NoError(t, err)
+	return encoded
+}
+
+// TestAutoSaveOverwriteKeepsSourceEncoding pins that a save in place writes back
+// the encoding the file already used, the way it already writes back its
+// compression and its line terminator.
+//
+// It did not: every source was written as plain UTF-8 with no mark. A UTF-16
+// file — which the read side recognizes by that mark — was replaced by bytes no
+// other reader of the file would take, and a UTF-8 file that carried a mark lost
+// it, so a header row nobody edited changed and the spreadsheet program that
+// wrote the file no longer recognized its encoding.
+func TestAutoSaveOverwriteKeepsSourceEncoding(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content func(t *testing.T, text string) []byte
+	}{
+		{
+			name: "UTF-16LE",
+			content: func(t *testing.T, text string) []byte {
+				t.Helper()
+				return utf16Bytes(t, text, unicode.LittleEndian)
+			},
+		},
+		{
+			name: "UTF-16BE",
+			content: func(t *testing.T, text string) []byte {
+				t.Helper()
+				return utf16Bytes(t, text, unicode.BigEndian)
+			},
+		},
+		{
+			name: "UTF-8 with a byte-order mark",
+			content: func(t *testing.T, text string) []byte {
+				t.Helper()
+				return append([]byte{0xEF, 0xBB, 0xBF}, text...)
+			},
+		},
+		{
+			name: "UTF-8 without one",
+			content: func(t *testing.T, text string) []byte {
+				t.Helper()
+				return []byte(text)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "data.csv")
+			require.NoError(t, os.WriteFile(path, tt.content(t, "id,v\r\n1,a\r\n2,b\r\n"), 0o600))
+
+			require.NoError(t, autoSaveOverwrite(t, []string{path}, "UPDATE data SET v='x' WHERE id=1"))
+
+			got, err := os.ReadFile(path) //nolint:gosec // Test path from t.TempDir()
+			require.NoError(t, err)
+			assert.Equal(t, tt.content(t, "id,v\r\n1,x\r\n2,b\r\n"), got,
+				"only the edited row may differ from what was there")
+		})
+	}
+}
+
+// TestAutoSaveOverwriteWithNoStatementKeepsEveryByte states the same property as
+// an invariant: a database nobody wrote to has nothing to change on disk,
+// whatever encoding the file is in.
+func TestAutoSaveOverwriteWithNoStatementKeepsEveryByte(t *testing.T) {
+	t.Parallel()
+
+	text := "id,v\n1,a\n2,b\n"
+	tests := []struct {
+		name    string
+		content []byte
+	}{
+		{name: "UTF-16LE", content: utf16Bytes(t, text, unicode.LittleEndian)},
+		{name: "UTF-16BE", content: utf16Bytes(t, text, unicode.BigEndian)},
+		{name: "UTF-8 with a byte-order mark", content: append([]byte{0xEF, 0xBB, 0xBF}, text...)},
+		{name: "UTF-8 without one", content: []byte(text)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "data.csv")
+			require.NoError(t, os.WriteFile(path, tt.content, 0o600))
+
+			require.NoError(t, autoSaveOverwrite(t, []string{path}))
+
+			got, err := os.ReadFile(path) //nolint:gosec // Test path from t.TempDir()
+			require.NoError(t, err)
+			assert.Equal(t, tt.content, got)
+		})
+	}
+}
+
+// TestAutoSaveExportIgnoresSourceEncoding pins the boundary: an export writes
+// what DumpOptions says, so reading the source's encoding must not leak into it.
+func TestAutoSaveExportIgnoresSourceEncoding(t *testing.T) {
+	t.Parallel()
+
+	source := filepath.Join(t.TempDir(), "data.csv")
+	require.NoError(t, os.WriteFile(source, utf16Bytes(t, "id,v\n1,a\n", unicode.LittleEndian), 0o600))
+
+	outputDir := t.TempDir()
+	validated, err := NewBuilder().AddPath(source).EnableAutoSave(outputDir).Build(t.Context())
+	require.NoError(t, err)
+	db, err := validated.Open(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	got, err := os.ReadFile(filepath.Join(outputDir, "data.csv")) //nolint:gosec // Test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, "id,v\n1,a\n", string(got), "an export writes UTF-8 unless WithEncoding says otherwise")
+}

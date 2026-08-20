@@ -33,6 +33,11 @@ const (
 	EncodingUTF16LE
 	// EncodingUTF16BE writes big-endian UTF-16 with a byte-order mark.
 	EncodingUTF16BE
+	// encodingUTF8BOM writes UTF-8 led by a byte-order mark. It has no exported
+	// name because a caller asking for UTF-8 output wants it plain; the mark
+	// exists here so an in-place save can put back one the source carried, which
+	// is what a spreadsheet program uses to recognize the file it wrote.
+	encodingUTF8BOM
 )
 
 // String returns the name a user types for the encoding.
@@ -50,6 +55,8 @@ func (e Encoding) String() string {
 		return "utf-16le"
 	case EncodingUTF16BE:
 		return "utf-16be"
+	case encodingUTF8BOM:
+		return "utf-8-bom"
 	default:
 		return "unknown"
 	}
@@ -82,6 +89,8 @@ func (e Encoding) encoder() (transform.Transformer, bool) {
 		enc = unicode.UTF16(unicode.LittleEndian, unicode.UseBOM)
 	case EncodingUTF16BE:
 		enc = unicode.UTF16(unicode.BigEndian, unicode.UseBOM)
+	case encodingUTF8BOM:
+		enc = unicode.UTF8BOM
 	default:
 		return nil, false
 	}
