@@ -31,6 +31,7 @@ func TestLineEnding_Terminator(t *testing.T) {
 
 	assert.Equal(t, "\n", LineEndingLF.terminator())
 	assert.Equal(t, "\r\n", LineEndingCRLF.terminator())
+	assert.Equal(t, "\r", lineEndingCR.terminator())
 	assert.Equal(t, "\n", LineEnding(9).terminator())
 }
 
@@ -53,7 +54,11 @@ func TestCountLineEndings(t *testing.T) {
 		{"a tie keeps LF", "id,v\r\n1,a\n", LineEndingLF},
 		{"no line ending at all", "id,v", LineEndingLF},
 		{"nothing at all", "", LineEndingLF},
-		{"a lone carriage return is not a terminator", "id,v\r1,a\n", LineEndingLF},
+		{"a lone carriage return ties with the one LF", "id,v\r1,a\n", LineEndingLF},
+		{"all lone carriage returns", "id,v\r1,a\r2,b\r", lineEndingCR},
+		{"mostly lone carriage returns", "id,v\r1,a\r2,b\n", lineEndingCR},
+		{"CRLF outnumbers lone carriage returns", "id,v\r\n1,a\r\n2,b\r", LineEndingCRLF},
+		{"a quoted lone carriage return is not a terminator", "id,v\n1,\"a\rb\"\n", LineEndingLF},
 		{
 			// The shape a spreadsheet export has: CRLF between records, and a value
 			// carrying its own line breaks inside quotes.
