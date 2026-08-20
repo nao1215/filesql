@@ -359,13 +359,15 @@ north,apple,1,100
 
 CSV, TSV, LTSV, and XLSX carry no types, so filesql reads the values and picks INTEGER, REAL, or TEXT per column. Parquet, ACH, and Fedwire bring their own schema and are not inferred.
 
-Which of the three a column gets is decided from a sample. Whether a cell survives the load is not: three kinds of value are damaged by a numeric column, so any one of them anywhere in the file makes the column TEXT, wherever it sits.
+Which of the three a column gets follows from every value in the column, wherever the value sits and however large the file is. Three kinds of value are damaged by a numeric column, and one of them anywhere in the file makes the column TEXT:
 
 | Value | Column | Why |
 |:--|:--|:--|
 | `007`, `02134` | TEXT | A leading zero is part of a code, and INTEGER drops it |
 | `11040320260000000000` | TEXT | Past int64, and float64 would render it `1.104032026e+19` |
 | `1_000`, `0x1p4` | TEXT | Go parses these, SQLite's affinity does not convert them |
+
+One decimal is enough to make a numeric column REAL. An INTEGER column either rewrites the decimal or stores it against its own declared type, and it turns the column's arithmetic into integer division, so `5 / 2` answers 2 rather than 2.5.
 
 What is not on that list is decimal formatting. `2.50` loads as the REAL `2.5`, `1.00` as `1`, and `1e3` as `1000`: the quantity is preserved and the way it was written is not. Storing those as TEXT would keep the spelling and break the arithmetic — SQLite compares a TEXT column against a number as text, so `WHERE amount > 9.5` over `9.00` and `10.00` returns nothing at all. A column of money is worth more as numbers than as the string it was typed as, so the trailing zeros go. Keep the source file if you need the original spelling, or read the column into a TEXT column of your own before loading.
 
