@@ -2,9 +2,22 @@ package dialect
 
 import "testing"
 
-// FuzzTranslate checks that translation never panics and that a successful
-// translation is stable under the SQLite identity dialect (its output feeds
-// back through Translate(SQLite, ...) unchanged), across every built-in dialect.
+// sqliteLex is how SQLite reads the SQL a translation produces: double quotes
+// open an identifier, a backslash is an ordinary character, and comments do not
+// nest.
+var sqliteLex = lexConfig{identDoubleQuote: true}
+
+// FuzzTranslate checks that translation never panics, that it is deterministic,
+// and that what it produces is still SQL: the output has to lex as SQLite,
+// which is the language it is now written in.
+//
+// The check used to feed the output through Translate(SQLite, ...), which
+// returns its input untouched, so it compared a string with itself and passed
+// whatever the translation had produced. Feeding the output back through its
+// own dialect is not the property either — the output is SQLite, and reading
+// SQLite as MySQL turns a double-quoted identifier into a string. Lexing it as
+// SQLite is what is actually being claimed, and it catches an output that ends
+// a literal or a comment somewhere the input did not.
 func FuzzTranslate(f *testing.F) {
 	seeds := []string{
 		"SELECT * FROM t",
@@ -27,12 +40,20 @@ func FuzzTranslate(f *testing.F) {
 			if err != nil {
 				continue
 			}
-			again, err := Translate(SQLite, out)
+			again, err := Translate(d, query)
 			if err != nil {
-				t.Fatalf("Translate(SQLite, %q) after Translate(%s): %v", out, d, err)
+				t.Fatalf("Translate(%s, %q) succeeded then failed: %v", d, query, err)
 			}
 			if again != out {
-				t.Fatalf("not idempotent for dialect %s: %q -> %q -> %q", d, query, out, again)
+				t.Fatalf("Translate(%s, %q) is not deterministic: %q then %q", d, query, out, again)
+			}
+			if d == SQLite {
+				// SQLite is the identity translation: it hands back whatever it was
+				// given, so the output is only as well-formed as the input was.
+				continue
+			}
+			if _, err := tokenize(out, sqliteLex); err != nil {
+				t.Fatalf("Translate(%s, %q) produced %q, which does not lex as SQLite: %v", d, query, out, err)
 			}
 		}
 	})
