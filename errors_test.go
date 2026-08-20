@@ -3,9 +3,13 @@ package filesql
 import (
 	"errors"
 	"fmt"
+	"os"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestErrorVariables(t *testing.T) {
@@ -20,9 +24,6 @@ func TestErrorVariables(t *testing.T) {
 		assert.NotNil(t, ErrInvalidData)
 		assert.NotNil(t, ErrNoTables)
 		assert.NotNil(t, ErrFileNotFound)
-		assert.NotNil(t, ErrPermissionDenied)
-		assert.NotNil(t, ErrMemoryLimit)
-		assert.NotNil(t, ErrContextCancelled)
 		assert.NotNil(t, ErrDuplicateColumn)
 		assert.NotNil(t, ErrDuplicateTable)
 		assert.NotNil(t, ErrNilInput)
@@ -46,9 +47,6 @@ func TestErrorVariables(t *testing.T) {
 		assert.Contains(t, ErrInvalidData.Error(), "invalid")
 		assert.Contains(t, ErrNoTables.Error(), "no tables")
 		assert.Contains(t, ErrFileNotFound.Error(), "not found")
-		assert.Contains(t, ErrPermissionDenied.Error(), "permission")
-		assert.Contains(t, ErrMemoryLimit.Error(), "memory limit")
-		assert.Contains(t, ErrContextCancelled.Error(), "cancelled")
 		assert.Contains(t, ErrDuplicateColumn.Error(), "duplicate column")
 		assert.Contains(t, ErrDuplicateTable.Error(), "duplicate table")
 		assert.Contains(t, ErrNilInput.Error(), "nil input")
@@ -145,4 +143,49 @@ func TestSentinelErrorWrapping(t *testing.T) {
 		assert.True(t, errors.Is(errDuplicateColumnName, ErrDuplicateColumn),
 			"errDuplicateColumnName should be the same as ErrDuplicateColumn")
 	})
+}
+
+// TestExportedSentinelsAreReturnedSomewhere fails when this package exports an
+// error sentinel that no code path ever wraps.
+//
+// Three of them did not: ErrPermissionDenied, ErrMemoryLimit and
+// ErrContextCancelled were declared, referenced only by their own existence
+// test, and never returned. A caller writing errors.Is against one got false
+// forever, which is worse than the sentinel not existing — it reads like a
+// supported way to ask a question and silently answers wrong.
+//
+// The check reads this package's own sources rather than using reflection,
+// because "is it ever wrapped" is a property of the code and not of a value.
+func TestExportedSentinelsAreReturnedSomewhere(t *testing.T) {
+	t.Parallel()
+
+	const declarations = "errors.go"
+
+	raw, err := os.ReadFile(declarations)
+	require.NoError(t, err)
+
+	declared := regexp.MustCompile(`\n\t(Err[A-Za-z0-9]*)\s*=\s*(errors\.New|fmt\.Errorf)`).FindAllStringSubmatch(string(raw), -1)
+	require.NotEmpty(t, declared, "the declarations moved; this guard needs to follow them")
+
+	entries, err := os.ReadDir(".")
+	require.NoError(t, err)
+
+	var body strings.Builder
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || name == declarations {
+			continue
+		}
+		content, readErr := os.ReadFile(name) //nolint:gosec // fixed, in-repo source file
+		require.NoError(t, readErr)
+		body.Write(content)
+	}
+	sources := body.String()
+
+	for _, match := range declared {
+		name := match[1]
+		if !regexp.MustCompile(`\b` + name + `\b`).MatchString(sources) {
+			t.Errorf("%s is exported but never returned: either wrap it where it belongs, or remove it so errors.Is against it cannot answer false forever", name)
+		}
+	}
 }

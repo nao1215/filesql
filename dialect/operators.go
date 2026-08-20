@@ -52,6 +52,14 @@ func divideFloat(raiseOnZero bool) scalarFn {
 	}
 }
 
+// likeEscape is the character that makes the next one literal in a LIKE
+// pattern. PostgreSQL and GoogleSQL both use a backslash when no ESCAPE clause
+// says otherwise, which is how a caller searches for a value containing "%" or
+// "_". SQLite has no default escape at all, so this has to be honored here
+// rather than left to the engine — a pattern that arrived without an ESCAPE
+// clause has already lost the chance to be given one.
+const likeEscape = '\\'
+
 // likeCompare implements SQL LIKE, where "%" matches any run of characters and
 // "_" matches exactly one. SQLite's own LIKE folds ASCII case; this one folds
 // only when asked, so PostgreSQL and GoogleSQL keep their case-sensitive LIKE
@@ -78,6 +86,11 @@ func foldCase(s string) string {
 // likeMatch reports whether subject matches pattern. It walks both strings once,
 // remembering the last "%" so a failed branch can resume there, which keeps a
 // pattern full of wildcards from backtracking exponentially.
+//
+// An escape makes the character after it literal, so "a\\%b" matches the three
+// characters "a%b" and nothing else. A trailing escape stands for itself rather
+// than being an error, which is the same answer the SIMILAR TO translation
+// gives; erroring would turn a questionable pattern into a failed query.
 func likeMatch(pattern, subject []rune) bool {
 	var (
 		p, s          int
@@ -86,7 +99,10 @@ func likeMatch(pattern, subject []rune) bool {
 	)
 	for s < len(subject) {
 		switch {
-		case p < len(pattern) && (pattern[p] == '_' || pattern[p] == subject[s]):
+		case p < len(pattern) && pattern[p] == likeEscape && literalAt(pattern, p) == subject[s]:
+			p += escapedWidth(pattern, p)
+			s++
+		case p < len(pattern) && pattern[p] != likeEscape && (pattern[p] == '_' || pattern[p] == subject[s]):
 			p++
 			s++
 		case p < len(pattern) && pattern[p] == '%':
@@ -106,6 +122,23 @@ func likeMatch(pattern, subject []rune) bool {
 		p++
 	}
 	return p == len(pattern)
+}
+
+// literalAt is the character an escape at p stands for: the one after it, or
+// the escape itself when it ends the pattern.
+func literalAt(pattern []rune, p int) rune {
+	if p+1 < len(pattern) {
+		return pattern[p+1]
+	}
+	return likeEscape
+}
+
+// escapedWidth is how much of the pattern an escape at p consumes.
+func escapedWidth(pattern []rune, p int) int {
+	if p+1 < len(pattern) {
+		return 2
+	}
+	return 1
 }
 
 // fnMySQLHex implements MySQL HEX(x): the hexadecimal digits of a number, or of
@@ -171,6 +204,42 @@ func binaryOperatorPass(tokens []token, op, helper string) ([]token, error) {
 		}
 		out = append(out, tokens[i])
 		i++
+	}
+	return out, nil
+}
+
+// defaultEscapePass appends "ESCAPE '\\'" to a LIKE that was written without an
+// ESCAPE clause.
+//
+// MySQL's LIKE treats a backslash as the escape character unless told
+// otherwise, which is how a caller searches for a value containing "%" or "_".
+// SQLite has no default escape at all, so the same pattern reached it as an
+// ordinary wildcard and matched every row where one was meant. Saying the
+// escape out loud is the whole fix; SQLite's LIKE already implements it.
+//
+// A pattern that already carries an ESCAPE clause is left alone, since the
+// caller has named the character themselves.
+func defaultEscapePass(tokens []token, keyword string) ([]token, error) {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		if !isWordEq(tokens[i], keyword) {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		rightEnd, ok := primaryEndForward(tokens, i+1)
+		if !ok {
+			return nil, fmt.Errorf("%w: right operand of %s is not a primary expression", ErrUnsupportedSyntax, keyword)
+		}
+		if esc := nextSig(tokens, rightEnd+1); esc >= 0 && isWordEq(tokens[esc], "ESCAPE") {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		out = append(out, tokens[i:rightEnd+1]...)
+		out = append(out, spaceToken(), wordToken("ESCAPE"), spaceToken(), stringToken("\\"))
+		i = rightEnd + 1
 	}
 	return out, nil
 }

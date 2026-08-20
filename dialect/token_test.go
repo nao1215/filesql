@@ -111,6 +111,14 @@ func TestDecodeBackslash(t *testing.T) {
 		{"\\`", "`", 2},
 		{`\q`, "q", 2}, // unknown escape drops the backslash
 		{`\`, "\\", 1}, // trailing backslash with nothing after it
+		// The two that keep their backslash. MySQL documents them that way so a
+		// LIKE pattern survives being written as a literal: dropping it left an
+		// ordinary wildcard, and a pattern asking for one row matched every row.
+		{`\%`, `\%`, 2},
+		{`\_`, `\_`, 2},
+		// MySQL's \Z is ASCII 26. It used to fall through to the default and
+		// come out as a literal "Z".
+		{`\Z`, "\x1a", 2},
 	}
 	for _, c := range cases {
 		got, adv := decodeBackslash(c.in, 0)
