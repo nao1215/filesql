@@ -72,6 +72,15 @@ func TestTranslateLexical(t *testing.T) {
 		{"googlesql triple-quoted holds a quote", GoogleSQL, "SELECT '''a'b'''", `SELECT 'a''b'`},
 		{"googlesql triple-quoted holds a line break", GoogleSQL, "SELECT '''a\nb'''", "SELECT 'a\nb'"},
 		{"googlesql doubled quote is still an escape", GoogleSQL, `SELECT 'a''b'`, `SELECT 'a''b'`},
+		// A prefix and a triple quote combine: r, b, and both at once, in either
+		// order. The prefixed cases used to read the doubled quotes as an empty
+		// string and leave the rest as stray tokens.
+		{"googlesql raw triple-quoted string", GoogleSQL, "SELECT r'''a'''", `SELECT 'a'`},
+		{"googlesql byte triple-quoted string", GoogleSQL, `SELECT b"a"`, `SELECT x'61'`},
+		{"googlesql raw byte triple-quoted string", GoogleSQL, "SELECT rb'''a'''", `SELECT x'61'`},
+		{"googlesql byte raw prefix", GoogleSQL, `SELECT br'a'`, `SELECT x'61'`},
+		{"googlesql repeated prefix letter is not a prefix", GoogleSQL, `SELECT rr'a'`, `SELECT rr 'a'`},
+		{"googlesql raw string keeps its backslash", GoogleSQL, "SELECT r'''a\\nb'''", `SELECT 'a\nb'`},
 		// The escapes that name a character by its number.
 		{"googlesql hex escape", GoogleSQL, `SELECT '\x41'`, `SELECT 'A'`},
 		{"googlesql code point escape", GoogleSQL, `SELECT '\u0041'`, `SELECT 'A'`},

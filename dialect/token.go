@@ -213,20 +213,24 @@ func tokenize(query string, cfg lexConfig) ([]token, error) {
 			tokens = append(tokens, token{kind: tokString, text: content, offset: start})
 			i = ni
 
-		case cfg.rawStringPrefix && (c == 'r' || c == 'R') && (next(query, i) == '\'' || next(query, i) == '"'):
-			content, ni, ok := scanQuoted(query, i+1, query[i+1], escapeRules{})
-			if !ok {
-				return nil, fmt.Errorf("%w: unterminated raw string literal at offset %d", ErrInvalidSyntax, start)
+		case prefixLen(query, i, cfg) > 0:
+			n := prefixLen(query, i, cfg)
+			raw, isBytes := prefixMeaning(query[i : i+n])
+			esc := cfg.stringEscapes()
+			if raw {
+				// A raw string keeps its backslashes: that is what it is for.
+				esc = escapeRules{}
 			}
-			tokens = append(tokens, token{kind: tokString, text: content, offset: start})
-			i = ni
-
-		case cfg.byteStringPrefix && (c == 'b' || c == 'B') && (next(query, i) == '\'' || next(query, i) == '"'):
-			content, ni, ok := scanQuoted(query, i+1, query[i+1], cfg.stringEscapes())
+			quote := query[i+n]
+			content, ni, ok := scanStringLiteral(query, i+n, quote, esc, cfg.tripleQuoteString)
 			if !ok {
-				return nil, fmt.Errorf("%w: unterminated byte string literal at offset %d", ErrInvalidSyntax, start)
+				return nil, fmt.Errorf("%w: unterminated string literal at offset %d", ErrInvalidSyntax, start)
 			}
-			tokens = append(tokens, token{kind: tokBlob, text: hex.EncodeToString([]byte(content)), offset: start})
+			kind, text := tokString, content
+			if isBytes {
+				kind, text = tokBlob, hex.EncodeToString([]byte(content))
+			}
+			tokens = append(tokens, token{kind: kind, text: text, offset: start})
 			i = ni
 
 		case cfg.dollarQuote && c == '$' && isDollarQuoteStart(query, i):
@@ -310,6 +314,64 @@ func scanBlockComment(s string, i int, nested bool) (int, bool) {
 		}
 	}
 	return j, false
+}
+
+// prefixLen returns the length of the string prefix at s[i], or 0 when what is
+// there does not open a prefixed string. GoogleSQL writes a raw string as r'..',
+// a byte string as b'..', and both at once as rb'..' or br'..', in either case.
+func prefixLen(s string, i int, cfg lexConfig) int {
+	if !cfg.rawStringPrefix && !cfg.byteStringPrefix {
+		return 0
+	}
+	n := 0
+	var sawRaw, sawBytes bool
+	for n < 2 && i+n < len(s) {
+		switch s[i+n] {
+		case 'r', 'R':
+			if sawRaw || !cfg.rawStringPrefix {
+				return 0
+			}
+			sawRaw = true
+		case 'b', 'B':
+			if sawBytes || !cfg.byteStringPrefix {
+				return 0
+			}
+			sawBytes = true
+		default:
+			// Not a prefix letter: what follows has to be the quote.
+		}
+		if !sawRaw && !sawBytes {
+			return 0
+		}
+		n++
+		if i+n < len(s) && (s[i+n] == '\'' || s[i+n] == '"') {
+			return n
+		}
+	}
+	return 0
+}
+
+// prefixMeaning reads a string prefix: whether it makes the literal raw, and
+// whether it makes it bytes.
+func prefixMeaning(prefix string) (raw, isBytes bool) {
+	for i := range len(prefix) {
+		switch prefix[i] {
+		case 'r', 'R':
+			raw = true
+		case 'b', 'B':
+			isBytes = true
+		}
+	}
+	return raw, isBytes
+}
+
+// scanStringLiteral reads the string opening at s[i], which is a quote, taking
+// the triple-quoted form when the dialect has one and three quotes are there.
+func scanStringLiteral(s string, i int, quote byte, esc escapeRules, triple bool) (content string, ni int, ok bool) {
+	if triple && isTripleQuoteStart(s, i) {
+		return scanTripleQuoted(s, i, quote, esc)
+	}
+	return scanQuoted(s, i, quote, esc)
 }
 
 // scanTripleQuoted returns the content of the triple-quoted string opening at
