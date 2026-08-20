@@ -395,7 +395,7 @@ The final memory cost is still dominated by the size of the in-memory SQLite dat
 
 ### Concurrency
 
-The `*sql.DB` returned by `Open` and `OpenContext` is safe to share across goroutines. filesql uses a shared-cache in-memory SQLite database so pooled connections can see the same tables.
+The `*sql.DB` returned by `Open` and `OpenContext` is safe to share across goroutines. filesql uses a shared-cache in-memory SQLite database so pooled connections can see the same tables. Auto-save does not change that: the save runs once, when `Close` returns.
 
 `LoadInto` is different: you own the database and pool settings there. If you use `sql.Open("sqlite", ":memory:")`, keep `SetMaxOpenConns(1)` so every query hits the same in-memory database.
 
@@ -405,7 +405,7 @@ Changes live in memory until you save them.
 
 - `DumpDatabase` writes the current database out to files when you want an explicit export step.
 - `EnableAutoSave` saves when `db.Close()` runs.
-- `EnableAutoSaveOnCommit` saves after each committed transaction.
+- `EnableAutoSaveOnCommit` saves after each committed transaction, and again when `db.Close()` runs, so a statement executed outside a transaction is not lost.
 
 `DumpOptions` decides the format, the compression, the text encoding, and the line terminator of csv, tsv, and ltsv output:
 
