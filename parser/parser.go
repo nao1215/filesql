@@ -792,9 +792,11 @@ func parseLTSV(reader io.Reader) (*TableData, error) {
 			continue
 		}
 
+		// Labels are compared folded; see ltsvLabelKey. recordMap is keyed that
+		// way so a record finds its value under the column the first record
+		// named, whatever case this one wrote it in; headers keep the spelling
+		// that named the column.
 		recordMap := make(map[string]string)
-		// Labels are compared folded; see ltsvLabelKey. recordMap keeps them as
-		// written, because that is what the column is named.
 		seen := make(map[string]struct{})
 		pairs := strings.Split(line, "\t")
 		for _, pair := range pairs {
@@ -811,11 +813,17 @@ func parseLTSV(reader io.Reader) (*TableData, error) {
 				if _, dup := seen[ltsvLabelKey(key)]; dup {
 					return nil, fmt.Errorf("duplicate column name %q in LTSV record", key)
 				}
-				seen[ltsvLabelKey(key)] = struct{}{}
-				recordMap[key] = value
-				// Track headers in first-seen order
-				if !headerSeen[key] {
-					headerSeen[key] = true
+				folded := ltsvLabelKey(key)
+				seen[folded] = struct{}{}
+				recordMap[folded] = value
+				// Track headers in first-seen order. Two labels differing only in
+				// case are one column, the way they are within one record and the
+				// way SQLite compares the names it ends up holding: keying this by
+				// the label as written made "id" and "ID" two columns that SQLite
+				// then refused to create, with an error naming neither the file nor
+				// the rule.
+				if !headerSeen[folded] {
+					headerSeen[folded] = true
 					headers = append(headers, key)
 				}
 			}
@@ -834,7 +842,7 @@ func parseLTSV(reader io.Reader) (*TableData, error) {
 	for _, recordMap := range parsedRecords {
 		row := make([]string, len(headers))
 		for i, key := range headers {
-			if val, exists := recordMap[key]; exists {
+			if val, exists := recordMap[ltsvLabelKey(key)]; exists {
 				row[i] = val
 			} else {
 				row[i] = ""

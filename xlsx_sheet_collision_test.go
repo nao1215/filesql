@@ -166,3 +166,60 @@ func TestOpenXLSXWithDistinctSheetsStillWorks(t *testing.T) {
 		}
 	}
 }
+
+// TestOpenXLSXRefusesARowWiderThanItsHeader pins that a workbook row carrying
+// more cells than the header names is refused rather than truncated.
+//
+// It was truncated: the extra cell was dropped with no error, no skipped-row
+// count, and nothing else to say it had happened — silent data loss, and the
+// opposite of what MalformedRowFill documents for a long record. A short row is
+// still padded, because a workbook stores no cell for a trailing empty one.
+func TestOpenXLSXRefusesARowWiderThanItsHeader(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a row wider than the header", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "wide.xlsx")
+		writeWorkbook(t, path, map[string][][]string{
+			"wide": {{"a", "b"}, {"1", "2", "3"}},
+		})
+
+		db, err := OpenContext(context.Background(), path)
+		if db != nil {
+			defer func() { _ = db.Close() }()
+		}
+		if err == nil {
+			t.Fatal("OpenContext accepted a row whose last cell has no column")
+		}
+		if !errors.Is(err, ErrParsing) {
+			t.Errorf("error = %v, want it to match ErrParsing", err)
+		}
+		if !strings.Contains(err.Error(), "3 cells") {
+			t.Errorf("error = %v, want it to say how many cells the row has", err)
+		}
+	})
+
+	t.Run("a row shorter than the header is padded", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "short.xlsx")
+		writeWorkbook(t, path, map[string][][]string{
+			"short": {{"a", "b", "c"}, {"1", "2"}},
+		})
+
+		db, err := OpenContext(context.Background(), path)
+		if err != nil {
+			t.Fatalf("OpenContext: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		var c string
+		if err := db.QueryRowContext(context.Background(), "SELECT c FROM short").Scan(&c); err != nil {
+			t.Fatalf("query: %v", err)
+		}
+		if c != "" {
+			t.Errorf("c = %q, want the empty padding", c)
+		}
+	})
+}

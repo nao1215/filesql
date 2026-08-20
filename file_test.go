@@ -1545,7 +1545,10 @@ func TestConvertXLSXRowsToTable(t *testing.T) {
 			{"Bob", "30", "Osaka"},
 		}
 
-		headers, records := convertXLSXRowsToTable(rows)
+		headers, records, err := convertXLSXRowsToTable(rows)
+		if err != nil {
+			t.Fatalf("convertXLSXRowsToTable: %v", err)
+		}
 
 		// Check headers
 		expectedHeaders := []string{"Name", "Age", "City"}
@@ -1582,7 +1585,10 @@ func TestConvertXLSXRowsToTable(t *testing.T) {
 		t.Parallel()
 
 		var rows [][]string
-		headers, records := convertXLSXRowsToTable(rows)
+		headers, records, err := convertXLSXRowsToTable(rows)
+		if err != nil {
+			t.Fatalf("convertXLSXRowsToTable: %v", err)
+		}
 
 		if len(headers) != 0 {
 			t.Errorf("Expected empty headers, got %d", len(headers))
@@ -1599,7 +1605,10 @@ func TestConvertXLSXRowsToTable(t *testing.T) {
 			{"Name", "Age"},
 		}
 
-		headers, records := convertXLSXRowsToTable(rows)
+		headers, records, err := convertXLSXRowsToTable(rows)
+		if err != nil {
+			t.Fatalf("convertXLSXRowsToTable: %v", err)
+		}
 
 		expectedHeaders := []string{"Name", "Age"}
 		if len(headers) != len(expectedHeaders) {
@@ -1610,29 +1619,46 @@ func TestConvertXLSXRowsToTable(t *testing.T) {
 		}
 	})
 
-	t.Run("Uneven rows (padding)", func(t *testing.T) {
+	t.Run("A short row is padded", func(t *testing.T) {
 		t.Parallel()
 
+		// A workbook stores no cell for a trailing empty one, so a row ending in
+		// blanks arrives short and the padding says what it means.
 		rows := [][]string{
 			{"Name", "Age", "City"},
-			{"Alice", "25"},                 // Missing city
-			{"Bob", "30", "Osaka", "Extra"}, // Extra field (ignored)
+			{"Alice", "25"}, // Missing city
 		}
 
-		headers, records := convertXLSXRowsToTable(rows)
+		headers, records, err := convertXLSXRowsToTable(rows)
+		if err != nil {
+			t.Fatalf("convertXLSXRowsToTable: %v", err)
+		}
 
-		// Check headers length
 		if len(headers) != 3 {
 			t.Errorf("Expected 3 headers, got %d", len(headers))
 		}
-
-		// Check that missing fields are padded
 		if records[0][2] != "" {
 			t.Errorf("Expected empty padding for missing field, got %s", records[0][2])
 		}
-		// Check that extra fields don't cause issues
-		if len(records[1]) != 3 {
-			t.Errorf("Expected record length 3, got %d", len(records[1]))
+	})
+
+	t.Run("A row wider than its header is refused", func(t *testing.T) {
+		t.Parallel()
+
+		// It used to be truncated: the extra cell was dropped with no error and
+		// no count, which is data in a column the header does not name being
+		// discarded silently.
+		rows := [][]string{
+			{"Name", "Age", "City"},
+			{"Bob", "30", "Osaka", "Extra"},
+		}
+
+		_, _, err := convertXLSXRowsToTable(rows)
+		if err == nil {
+			t.Fatal("expected an error for a row wider than the header")
+		}
+		if !errors.Is(err, ErrParsing) {
+			t.Errorf("error = %v, want it to wrap ErrParsing", err)
 		}
 	})
 }

@@ -44,11 +44,16 @@ func parseJSON(reader io.Reader) (*TableData, error) {
 	headers := []string{jsonDataHeader}
 	columnTypes := []ColumnType{TypeText}
 
-	// Try to parse as array first
-	var arr []json.RawMessage
-	if err := json.Unmarshal([]byte(trimmed), &arr); err == nil {
-		if len(arr) == 0 {
-			return nil, errors.New("empty JSON array")
+	// An array is one row per element, decided by what the document opens with
+	// rather than by whether it unmarshals into a slice: "null" unmarshals into
+	// one as the empty slice, and answering "empty JSON array" for a document
+	// holding no array named something the caller had not written. An array with
+	// no elements is a table with no rows, which is what the SQL loader makes of
+	// the same bytes, rather than a failure.
+	if trimmed[0] == '[' {
+		var arr []json.RawMessage
+		if err := json.Unmarshal([]byte(trimmed), &arr); err != nil {
+			return nil, fmt.Errorf("failed to parse JSON: %w", err)
 		}
 		records := make([][]string, 0, len(arr))
 		for _, elem := range arr {

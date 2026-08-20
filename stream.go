@@ -174,12 +174,18 @@ func newLabelOrder() *labelOrder {
 	return &labelOrder{seen: make(map[string]bool)}
 }
 
-// add records a label, ignoring one already seen.
+// add records a label, ignoring one already seen. Two labels differing only in
+// case are one label, the way they are within a single record and the way
+// SQLite compares the column names it ends up holding: keeping them apart made
+// "id" and "ID" two columns, and the table SQLite was then asked to create was
+// refused with an error naming neither the file nor the rule. The spelling kept
+// is the one that named the column first.
 func (l *labelOrder) add(name string) {
-	if l.seen[name] {
+	folded := ltsvLabelKey(name)
+	if l.seen[folded] {
 		return
 	}
-	l.seen[name] = true
+	l.seen[folded] = true
 	l.order = append(l.order, name)
 }
 
@@ -220,8 +226,9 @@ func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 		}
 
 		recordMap := make(map[string]string)
-		// Labels are compared folded; see ltsvLabelKey. recordMap keeps them as
-		// written, because that is what the column is named.
+		// Labels are compared folded; see ltsvLabelKey. recordMap is keyed that
+		// way so a record finds its value under the column the first record
+		// named, whatever case this one wrote it in.
 		seen := make(map[string]struct{})
 		for pair := range strings.SplitSeq(line, "\t") {
 			kv := strings.SplitN(pair, ":", 2)
@@ -239,7 +246,7 @@ func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 					return nil, fmt.Errorf("%w: %q in LTSV record", errDuplicateColumnName, key)
 				}
 				seen[ltsvLabelKey(key)] = struct{}{}
-				recordMap[key] = value
+				recordMap[ltsvLabelKey(key)] = value
 				labels.add(key)
 			}
 		}
@@ -258,7 +265,7 @@ func (p *streamingParser) parseLTSVStream(reader io.Reader) (*table, error) {
 	for _, recordMap := range records {
 		var row record
 		for _, key := range header {
-			if val, exists := recordMap[key]; exists {
+			if val, exists := recordMap[ltsvLabelKey(key)]; exists {
 				row = append(row, val)
 			} else {
 				row = append(row, "")
@@ -469,8 +476,9 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 		}
 
 		recordMap := make(map[string]string)
-		// Labels are compared folded; see ltsvLabelKey. recordMap keeps them as
-		// written, because that is what the column is named.
+		// Labels are compared folded; see ltsvLabelKey. recordMap is keyed that
+		// way so a record finds its value under the column the first record
+		// named, whatever case this one wrote it in.
 		seen := make(map[string]struct{})
 		for pair := range strings.SplitSeq(line, "\t") {
 			kv := strings.SplitN(pair, ":", 2)
@@ -488,7 +496,7 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 					return fmt.Errorf("%w: %q in LTSV record", errDuplicateColumnName, key)
 				}
 				seen[ltsvLabelKey(key)] = struct{}{}
-				recordMap[key] = value
+				recordMap[ltsvLabelKey(key)] = value
 			}
 		}
 
@@ -498,7 +506,7 @@ func (p *streamingParser) processLTSVInChunks(reader io.Reader, processor chunkP
 
 		var row record
 		for _, key := range header {
-			if val, exists := recordMap[key]; exists {
+			if val, exists := recordMap[ltsvLabelKey(key)]; exists {
 				row = append(row, val)
 			} else {
 				row = append(row, "")
@@ -944,6 +952,16 @@ func (p *streamingParser) processXLSXInChunks(reader io.Reader, processor chunkP
 			evidence = newColumnEvidenceList(len(headers))
 			first = false
 			continue
+		}
+
+		// A workbook stores no cell for a trailing empty one, so a row ending in
+		// blanks arrives short and means what the padding says. More cells than
+		// the header has means the opposite — there is data in a column the
+		// header does not name — and the extra cells used to be dropped with no
+		// error and no count to say it had happened.
+		if len(row) > len(headers) {
+			return fmt.Errorf("%w: sheet %s row %d has %d cells where the header has %d",
+				ErrParsing, sheetName, processedRows+2, len(row), len(headers))
 		}
 
 		cells := newRecord(row)
