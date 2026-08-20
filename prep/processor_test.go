@@ -2316,3 +2316,154 @@ func TestProcess_RefusesAFieldWithNoColumn(t *testing.T) {
 		}
 	})
 }
+
+// bomHeaderRecord maps the two columns of a CSV whose header carries a UTF-8
+// byte-order mark, which is what a spreadsheet writes.
+type bomHeaderRecord struct {
+	Name string `prep:"trim"`
+	Memo string
+}
+
+// TestProcessStripsByteOrderMark requires prep to read a file the loader reads.
+// A UTF-8 BOM belongs to the encoding, not to the first column's name, so a
+// struct field naming that column has to match.
+func TestProcessStripsByteOrderMark(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		fileType   parser.FileType
+		input      string
+		wantOutput string
+	}{
+		{
+			name:       "CSV with a leading BOM",
+			fileType:   parser.CSV,
+			input:      "\ufeffname,memo\na,b\n",
+			wantOutput: "name,memo\na,b\n",
+		},
+		{
+			name:       "TSV with a leading BOM",
+			fileType:   parser.TSV,
+			input:      "\ufeffname\tmemo\na\tb\n",
+			wantOutput: "name\tmemo\na\tb\n",
+		},
+		{
+			name:       "CSV without a BOM is untouched",
+			fileType:   parser.CSV,
+			input:      "name,memo\na,b\n",
+			wantOutput: "name,memo\na,b\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var records []bomHeaderRecord
+			processor := NewProcessor(tt.fileType)
+			reader, result, err := processor.Process(strings.NewReader(tt.input), &records)
+			if err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+			if diff := cmp.Diff([]string{"name", "memo"}, result.Columns); diff != "" {
+				t.Errorf("columns mismatch (-want +got):\n%s", diff)
+			}
+			output, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatalf("read output: %v", err)
+			}
+			if got := string(output); got != tt.wantOutput {
+				t.Errorf("output = %q, want %q", got, tt.wantOutput)
+			}
+		})
+	}
+}
+
+// minMaxStringRecord measures a string field, which is what min and max mean for
+// a string in the validator dialect prep documents.
+type minMaxStringRecord struct {
+	Name string `validate:"min=3,max=5"`
+}
+
+// minMaxNumberRecord measures a magnitude, which is what the same tags mean for
+// a numeric field.
+type minMaxNumberRecord struct {
+	Age int `validate:"min=3,max=5"`
+}
+
+// lenStringRecord counts characters, which min and max have to agree with.
+type lenStringRecord struct {
+	Name string `validate:"len=3"`
+}
+
+func TestMinAndMaxMeasureAStringByItsLength(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		input         string
+		records       any
+		wantValidRows int
+	}{
+		{
+			name:          "a string within the length bounds passes",
+			input:         "name\nalice\nabc\n",
+			records:       &[]minMaxStringRecord{},
+			wantValidRows: 2,
+		},
+		{
+			name:          "a string outside the length bounds fails",
+			input:         "name\nab\nabcdef\n",
+			records:       &[]minMaxStringRecord{},
+			wantValidRows: 0,
+		},
+		{
+			name:          "a number within the bounds passes",
+			input:         "age\n3\n5\n",
+			records:       &[]minMaxNumberRecord{},
+			wantValidRows: 2,
+		},
+		{
+			name:          "a number outside the bounds fails",
+			input:         "age\n2\n6\n",
+			records:       &[]minMaxNumberRecord{},
+			wantValidRows: 0,
+		},
+		{
+			name:          "min and len agree, and both count runes",
+			input:         "name\n日本語\n",
+			records:       &[]lenStringRecord{},
+			wantValidRows: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			processor := NewProcessor(parser.CSV)
+			_, result, err := processor.Process(strings.NewReader(tt.input), tt.records)
+			if err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+			if result.ValidRowCount != tt.wantValidRows {
+				t.Errorf("ValidRowCount = %d, want %d (errors: %v)", result.ValidRowCount, tt.wantValidRows, result.Errors)
+			}
+		})
+	}
+}
+
+func TestMinCountsRunesForAMultibyteString(t *testing.T) {
+	t.Parallel()
+
+	var records []minMaxStringRecord
+	processor := NewProcessor(parser.CSV)
+	_, result, err := processor.Process(strings.NewReader("name\n日本語\n"), &records)
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if result.ValidRowCount != 1 {
+		t.Errorf("ValidRowCount = %d, want 1: three runes satisfy min=3 (errors: %v)", result.ValidRowCount, result.Errors)
+	}
+}

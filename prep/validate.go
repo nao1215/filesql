@@ -523,9 +523,16 @@ func (v *lessThanEqualValidator) Name() string {
 	return lessThanEqualTagValue
 }
 
-// minValidator validates that a value is at least the minimum
+// minValidator validates that a value is at least the minimum.
+//
+// What is measured follows the field: a magnitude for a numeric field, and the
+// number of characters for a string one, which is what the validator dialect
+// this package follows means by min. Measuring a string as a number reported
+// every name as "not a valid number", and disagreed with len, which counts
+// characters in the same struct.
 type minValidator struct {
-	threshold float64
+	threshold      float64
+	measuresLength bool
 }
 
 // newMinValidator creates a new min validator
@@ -535,6 +542,12 @@ func newMinValidator(threshold float64) *minValidator {
 
 // Validate checks if the value is at least the minimum
 func (v *minValidator) Validate(value string) string {
+	if v.measuresLength {
+		if utf8.RuneCountInString(value) < int(v.threshold) {
+			return "value must have at least " + strconv.Itoa(int(v.threshold)) + " characters"
+		}
+		return ""
+	}
 	f, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return errMsgValidNumber
@@ -550,9 +563,11 @@ func (v *minValidator) Name() string {
 	return minTagValue
 }
 
-// maxValidator validates that a value is at most the maximum
+// maxValidator validates that a value is at most the maximum. It measures what
+// minValidator measures; see there.
 type maxValidator struct {
-	threshold float64
+	threshold      float64
+	measuresLength bool
 }
 
 // newMaxValidator creates a new max validator
@@ -562,6 +577,12 @@ func newMaxValidator(threshold float64) *maxValidator {
 
 // Validate checks if the value is at most the maximum
 func (v *maxValidator) Validate(value string) string {
+	if v.measuresLength {
+		if utf8.RuneCountInString(value) > int(v.threshold) {
+			return "value must have at most " + strconv.Itoa(int(v.threshold)) + " characters"
+		}
+		return ""
+	}
 	f, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return errMsgValidNumber
@@ -570,6 +591,20 @@ func (v *maxValidator) Validate(value string) string {
 		return "value must be at most " + strconv.FormatFloat(v.threshold, 'f', -1, 64)
 	}
 	return ""
+}
+
+// measuringStringLength returns the validator a string field needs where the tag
+// it came from measures a number for a numeric field. Any other validator is
+// returned as it is.
+func measuringStringLength(v Validator) Validator {
+	switch typed := v.(type) {
+	case *minValidator:
+		return &minValidator{threshold: typed.threshold, measuresLength: true}
+	case *maxValidator:
+		return &maxValidator{threshold: typed.threshold, measuresLength: true}
+	default:
+		return v
+	}
 }
 
 // Name returns the validator name
