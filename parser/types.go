@@ -163,7 +163,7 @@ func isFloat(s string) bool {
 		return false
 	}
 
-	if isZeroPaddedIntegerLiteral(s) {
+	if isZeroPaddedIntegerLiteral(s) || hasGoOnlyNumericSyntax(s) {
 		return false
 	}
 
@@ -192,6 +192,22 @@ func isZeroPaddedIntegerLiteral(s string) bool {
 		}
 	}
 	return true
+}
+
+// hasGoOnlyNumericSyntax reports whether s uses numeric syntax that Go's
+// parsers accept and SQLite's numeric affinity does not convert: an underscore
+// separator, or the "0x" prefix that introduces a hexadecimal (and possibly
+// p-exponent) literal.
+//
+// strconv accepts both, so without this "1_0.5" was a real here and text in the
+// SQL loader, which types the same file by the same rule.
+func hasGoOnlyNumericSyntax(s string) bool {
+	digits := strings.TrimSpace(s)
+	digits = strings.TrimPrefix(strings.TrimPrefix(digits, "+"), "-")
+	if strings.Contains(digits, "_") {
+		return true
+	}
+	return len(digits) > 1 && digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X')
 }
 
 // isDatetime checks if the string represents a datetime value.
