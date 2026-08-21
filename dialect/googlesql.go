@@ -45,7 +45,7 @@ func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	}
 	// G-11: GoogleSQL division always yields FLOAT64, so 5/2 is 2.5 rather than
 	// the 2 SQLite gives for two integers.
-	out, err = binaryOperatorPass(out, "/", "googlesql_divide")
+	out, err = binaryChainOperatorPass(out, "/", "googlesql_divide")
 	if err != nil {
 		return nil, err
 	}

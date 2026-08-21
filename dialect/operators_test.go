@@ -63,6 +63,20 @@ func TestOperatorSemantics(t *testing.T) {
 		{"mysql DIV of a parenthesized sum", MySQL, `SELECT (2 + 8) DIV 3`, "3", false},
 		{"mysql DIV inside a call argument", MySQL, `SELECT MAX(8 * 5 DIV 2)`, "20", false},
 
+		// "/" takes its left operand the same way DIV does, and a remainder in
+		// that chain is the case where regrouping changes the value.
+		{"mysql divides a remainder", MySQL, `SELECT 7 % 4 / 2`, "1.5", false},
+		{"mysql divides a MOD result", MySQL, `SELECT 7 MOD 4 / 2`, "1.5", false},
+		{"mysql divides a longer chain", MySQL, `SELECT 9 % 4 * 2 / 4`, "0.5", false},
+		{"mysql division binds tighter than addition", MySQL, `SELECT 2 + 8 / 2`, "6", false},
+		{"mysql division binds tighter than subtraction", MySQL, `SELECT 2 - 8 / 2`, "-2", false},
+		// The other callers of the same pass must keep their own precedence: a
+		// bitwise XOR binds tighter than "*" in MySQL, and PostgreSQL's "^" is
+		// exponentiation, which it reads left to right.
+		{"mysql xor binds tighter than multiplication", MySQL, `SELECT 2 * 3 ^ 1`, "4", false},
+		{"postgresql power binds tighter than multiplication", PostgreSQL, `SELECT 2 * 3 ^ 2`, "18", false},
+		{"postgresql power associates left to right", PostgreSQL, `SELECT 2 ^ 3 ^ 2`, "64", false},
+
 		// The operators MySQL spells with punctuation, executed rather than only
 		// rewritten: the rewrite is only right if the answer is.
 		{"mysql && is AND", MySQL, `SELECT 1 && 0`, "0", false},
