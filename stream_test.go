@@ -1898,7 +1898,7 @@ func TestChunkSizeDoesNotChangeStoredValues(t *testing.T) {
 				db, err := built.Open(context.Background())
 				require.NoError(t, err)
 
-				rows, err := db.QueryContext(context.Background(), `SELECT v, typeof(v) FROM t`)
+				rows, err := db.QueryContext(context.Background(), `SELECT v, typeof(v) FROM t ORDER BY rowid`)
 				require.NoError(t, err)
 				var got []string
 				for rows.Next() {
