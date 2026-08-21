@@ -20,6 +20,9 @@ const (
 	fnNameCharLen   = "CHAR_LENGTH"
 	fnNameCharLen2  = "CHARACTER_LENGTH"
 	fnNameStringAgg = "STRING_AGG"
+	fnNameRound     = "ROUND"
+	fnNameSubstring = "SUBSTRING"
+	fnNameSubstr    = "SUBSTR"
 )
 
 // callRecurser rewrites a slice of argument tokens with a dialect's call pass so
@@ -355,6 +358,18 @@ func topLevelComma(toks []token, open, closeIdx int) int {
 		}
 	}
 	return -1
+}
+
+// rewriteRoundCall routes the two-argument ROUND onto the helper that honors a
+// negative digit count, which SQLite's own round() ignores: ROUND(12345, -2) is
+// 12300 in MySQL, PostgreSQL and BigQuery alike, and was 12345 here. The
+// one-argument form is left alone, since rounding to a whole number is what
+// SQLite already does and there is nothing for a dialect to disagree about.
+func rewriteRoundCall(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
+	if len(topLevelCommas(tokens, open, closeIdx)) != 1 {
+		return nil, false, nil
+	}
+	return rewriteRenameCall(tokens, open, closeIdx, "dialect_round", recurse)
 }
 
 // topLevelCommas returns the indices of every "," at depth 1 inside the call

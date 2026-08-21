@@ -236,6 +236,10 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 		return rewriteRenameCall(tokens, open, closeIdx, "json_extract", googlesqlCallPass)
 	case "JSON_QUERY":
 		return rewriteJSONQuery(tokens, open, closeIdx, googlesqlCallPass)
+	case fnNameSubstring, fnNameSubstr:
+		return rewriteSubstringCall(tokens, open, closeIdx, "googlesql_substr", googlesqlCallPass)
+	case fnNameRound:
+		return rewriteRoundCall(tokens, open, closeIdx, googlesqlCallPass)
 	case "BYTE_LENGTH":
 		return rewriteRenameCall(tokens, open, closeIdx, "octet_length", googlesqlCallPass)
 	case fnNameCharLen, fnNameCharLen2:
