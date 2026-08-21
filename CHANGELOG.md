@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `FORMAT_DATE`, `FORMAT_DATETIME` and `FORMAT_TIMESTAMP` write the value rather than the letter for twenty BigQuery specifiers ([#445](https://github.com/nao1215/filesql/issues/445)). `%j`, `%s`, `%C`, `%Q`, `%D`, `%x`, `%X`, `%c`, `%h`, `%k`, `%l`, `%P`, `%u`, `%w`, `%G`, `%V`, `%U`, `%W`, `%n` and `%t` came back as their own letter, which is also what BigQuery does for a specifier it does not know, so a report formatted with `'%F %X'` returned `2024-02-29 X` and looked like it had worked. The cause was structural rather than a missing table entry: the whole format string was turned into a Go reference-time layout, and a day of the year, a week number and an epoch second are computed rather than spelled, so there was nowhere for them to go. Rendering has its own walk over the format now and the layout is built only for `PARSE_DATE`, which is unchanged. Building the answer rather than a layout also stops the text around the specifiers being read as one: a literal `2006` or `1` in a format string used to reach `time.Format` and be rendered as the year or the month, so `FORMAT_DATE('year 2006 month 1', d)` came back as `year 2024 month 2` and is copied verbatim now. It is the same fault `DATE_FORMAT` had in [#436](https://github.com/nao1215/filesql/issues/436), in the other dialect's spelling.
+
+- `ROUND(x, n)` with a negative `n` rounds to a power of ten instead of returning `x` unchanged ([#446](https://github.com/nao1215/filesql/issues/446)). `ROUND(12345, -2)` is `12300` in MySQL, PostgreSQL and BigQuery alike and was `12345` under every one of them, because the call reached SQLite's own `round()`, whose second argument is a digit count after the decimal point and which ignores a negative one. A column of amounts rounded to the nearest thousand came back at full precision with nothing to say the rounding had not happened. All three engines agree on every value, half away from zero, so one helper answers all three rather than each naming its own the way `mysql_lpad` and `postgresql_lpad` do. `dialect.SQLite` is not rewritten: ignoring a negative digit count is SQLite's documented behavior and is what a caller who named no dialect asked for. The one-argument form is left alone in every dialect.
+
+- GoogleSQL `SUBSTR` and `SUBSTRING` follow BigQuery's rule rather than SQLite's ([#447](https://github.com/nao1215/filesql/issues/447)). [#428](https://github.com/nao1215/filesql/issues/428) gave MySQL and PostgreSQL each their own helper and left GoogleSQL on SQLite's, because no BigQuery was available to check its rule against. BigQuery's turns out to be a third rule: position 0 means position 1, a negative position counts back from the end, and a position that lands before the string clamps to its start with the length measured from there rather than consumed by the part that fell outside. So `SUBSTR('abcdef', 0, 2)` is `ab` where MySQL gives the empty string and PostgreSQL gives `a`, and `SUBSTR('abcdef', -10, 3)` is `abc` where both of the others give the empty string. Positions count characters, not bytes, as in the other two.
+
+### Changed
+
+- The GoogleSQL translations are checked against a BigQuery that runs them. `goccy/bigquery-emulator` serves the reference implementation locally, which is what the three fixes above were measured against, alongside MySQL 8.4 and PostgreSQL 17 for the dialects they also touch. Five of the emulator's answers are its own defects rather than BigQuery's and were taken from the documented definitions instead: it renders `%U` and `%W` as the ISO week, answers `%w` with 8 and `%I` with 13 where a 12-hour clock reads 01, drops the zero padding from `%j` and the week numbers, and slices bytes rather than characters in `SUBSTR` and `STRPOS`. Nothing is being reported to that project, per this repository's rule about third-party repositories.
+
 ## [0.44.0] - 2026-08-21
 
 ### Added
