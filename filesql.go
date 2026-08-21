@@ -680,9 +680,10 @@ func formatDumpValue(value any) string {
 	case int64:
 		return strconv.FormatInt(v, 10)
 	case float64:
-		// 'g' with -1 digits is the shortest form that reads back as the same
-		// float64, which is what %v produced for the values it did get right.
-		return strconv.FormatFloat(v, 'g', -1, 64)
+		// Rendered the way an import reads it back: a whole number keeps a
+		// decimal point, or the file reloads as an INTEGER column and integer
+		// division answers a different question than this database would.
+		return sqliteFloatText(v, 64)
 	case bool:
 		return strconv.FormatBool(v)
 	case time.Time:
@@ -882,7 +883,13 @@ func sqliteFloatText(f float64, bitSize int) string {
 	case math.IsNaN(f):
 		return ""
 	}
-	return strconv.FormatFloat(f, 'g', -1, bitSize)
+	text := strconv.FormatFloat(f, 'g', -1, bitSize)
+	// A whole number renders with neither a point nor an exponent, and read back
+	// that spelling is an integer. The suffix is what keeps the column REAL.
+	if !strings.ContainsAny(text, ".eE") {
+		text += ".0"
+	}
+	return text
 }
 
 // extractValueFromArrowArray extracts a value from an Arrow array at the given index
