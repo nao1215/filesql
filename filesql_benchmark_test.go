@@ -4,8 +4,11 @@ package filesql
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
+
+	"github.com/xuri/excelize/v2"
 )
 
 // BenchmarkOpenContext benchmarks the OpenContext function with a large CSV file.
@@ -60,6 +63,64 @@ func BenchmarkOpenWithAutoSave(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		validated, err := NewBuilder().AddPath(csvPath).EnableAutoSave(outputDir).Build(context.Background())
+		if err != nil {
+			b.Fatalf("Build failed: %v", err)
+		}
+		db, err := validated.Open(context.Background())
+		if err != nil {
+			b.Fatalf("Open failed: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			b.Fatalf("db.Close failed: %v", err)
+		}
+	}
+}
+
+// BenchmarkOverwriteWorkbook benchmarks an in-place save of an Excel workbook,
+// which is the write path that reads the file it is replacing and writes the
+// loaded sheets onto it rather than building a new workbook.
+//
+// The workbook is rebuilt each iteration because the save consumes it, and the
+// timer is stopped while that happens, so what is measured is the load and the
+// save rather than the fixture.
+func BenchmarkOverwriteWorkbook(b *testing.B) {
+	const rows, columns = 5000, 8
+
+	dir := b.TempDir()
+	path := filepath.Join(dir, "book.xlsx")
+
+	write := func() {
+		book := excelize.NewFile()
+		header := make([]any, columns)
+		for c := range columns {
+			header[c] = fmt.Sprintf("col%d", c)
+		}
+		if err := book.SetSheetRow("Sheet1", "A1", &header); err != nil {
+			b.Fatalf("SetSheetRow failed: %v", err)
+		}
+		cells := make([]any, columns)
+		for r := range rows {
+			for c := range columns {
+				cells[c] = fmt.Sprintf("r%dc%d", r, c)
+			}
+			if err := book.SetSheetRow("Sheet1", fmt.Sprintf("A%d", r+2), &cells); err != nil {
+				b.Fatalf("SetSheetRow failed: %v", err)
+			}
+		}
+		if err := book.SaveAs(path); err != nil {
+			b.Fatalf("SaveAs failed: %v", err)
+		}
+		if err := book.Close(); err != nil {
+			b.Fatalf("Close failed: %v", err)
+		}
+	}
+
+	for b.Loop() {
+		b.StopTimer()
+		write()
+		b.StartTimer()
+
+		validated, err := NewBuilder().AddPath(path).EnableAutoSave("").Build(context.Background())
 		if err != nil {
 			b.Fatalf("Build failed: %v", err)
 		}

@@ -456,6 +456,9 @@ var mysqlToGoLayout = map[byte]string{
 	's': "05",
 	'S': "05",
 	'p': "PM",
+	'l': "3",
+	'r': "03:04:05 PM",
+	'T': "15:04:05",
 	'M': layoutMonthLong,
 	'b': layoutMonthShort,
 	'W': layoutWeekdayLong,
@@ -491,19 +494,156 @@ func fnDateFormat(args []driver.Value) (driver.Value, error) {
 	return b.String(), nil
 }
 
-// dateFormatSpecial handles DATE_FORMAT specifiers that have no direct Go layout
-// (day of year, weekday index).
+// dateFormatSpecial handles DATE_FORMAT specifiers that have no direct Go
+// layout: the day of the year, the weekday index, the microseconds, the two
+// unpadded hours, the day with its English suffix, and the four week numberings
+// with the two years that go with them.
 func dateFormatSpecial(tm time.Time, spec byte) (string, bool) {
 	switch spec {
 	case 'j':
 		return fmt.Sprintf("%03d", tm.YearDay()), true
 	case 'w':
 		return strconv.Itoa(int(tm.Weekday())), true
+	case 'f':
+		return fmt.Sprintf("%06d", tm.Nanosecond()/1000), true
+	case 'k':
+		return strconv.Itoa(tm.Hour()), true
+	case 'D':
+		return strconv.Itoa(tm.Day()) + ordinalSuffix(tm.Day()), true
+	case 'u':
+		week, _ := mysqlWeek(tm, 1)
+		return fmt.Sprintf("%02d", week), true
+	case 'U':
+		week, _ := mysqlWeek(tm, 0)
+		return fmt.Sprintf("%02d", week), true
+	case 'v':
+		week, _ := mysqlWeek(tm, 3)
+		return fmt.Sprintf("%02d", week), true
+	case 'V':
+		week, _ := mysqlWeek(tm, 2)
+		return fmt.Sprintf("%02d", week), true
+	case 'x':
+		_, year := mysqlWeek(tm, 3)
+		return strconv.Itoa(year), true
+	case 'X':
+		_, year := mysqlWeek(tm, 2)
+		return strconv.Itoa(year), true
 	case '%':
 		return "%", true
 	default:
 		return "", false
 	}
+}
+
+// ordinalSuffix is the English suffix DATE_FORMAT's %D puts after a day. The
+// teens are the exception: 11, 12 and 13 take "th" where 1, 2 and 3 take "st",
+// "nd" and "rd".
+func ordinalSuffix(day int) string {
+	if day >= 11 && day <= 13 {
+		return "th"
+	}
+	switch day % 10 {
+	case 1:
+		return "st"
+	case 2:
+		return "nd"
+	case 3:
+		return "rd"
+	default:
+		return "th"
+	}
+}
+
+// mysqlWeek is the week number of tm under one of MySQL's week modes, and the
+// year that week belongs to.
+//
+// MySQL numbers weeks four ways and DATE_FORMAT reaches all four: %U is mode 0,
+// %u mode 1, %V mode 2 and %v mode 3. Two things vary. A week may start on
+// Sunday (modes 0 and 2) or on Monday (1 and 3), and week 1 may be the first
+// week holding a day of the new year's first weekday (0 and 2) or the first
+// week holding four or more days of the new year (1 and 3, the ISO rule).
+// Modes 0 and 1 number from zero, so the first days of January can be week 0;
+// modes 2 and 3 have no week 0 and lend those days to the previous year's last
+// week, which is why %X and %x exist to say which year the number belongs to.
+//
+// This follows MySQL's own calculation rather than deriving one, because the
+// years where the four disagree are exactly the ones a derivation gets wrong:
+// 2024-12-31 is week 53 by %u and week 1 of 2025 by %v.
+func mysqlWeek(tm time.Time, mode int) (week, year int) {
+	// MySQL turns a mode into three flags, inverting the "four or more days"
+	// rule for the Sunday-first modes.
+	const (
+		mondayFirst  = 1
+		weekYear     = 2
+		firstWeekday = 4
+	)
+	flags := mode & 7
+	if flags&mondayFirst == 0 {
+		flags ^= firstWeekday
+	}
+
+	year = tm.Year()
+	firstOfYear := time.Date(year, time.January, 1, 0, 0, 0, 0, tm.Location())
+	// weekday is how far the year's first day is into its own week, counted
+	// from whichever day the mode starts a week on.
+	weekday := weekdayIndex(firstOfYear, flags&mondayFirst != 0)
+	// startsWeekOne says whether the week holding January 1 is week 1 already.
+	startsWeekOne := func(weekday int) bool {
+		if flags&firstWeekday != 0 {
+			return weekday == 0
+		}
+		return weekday < 4
+	}
+
+	// borrowed says the count runs from the previous year's first day, which is
+	// so for the modes that have no week 0 and becomes so for the modes that do
+	// once a January day turns out to belong to the previous year's last week.
+	borrowed := flags&weekYear != 0
+
+	days := tm.YearDay() - 1
+	if tm.Month() == time.January && tm.Day() <= 7-weekday {
+		if !borrowed && !startsWeekOne(weekday) {
+			return 0, year
+		}
+		borrowed = true
+		year--
+		inPreviousYear := daysInYear(year)
+		days += inPreviousYear
+		weekday = (weekday + 53*7 - inPreviousYear) % 7
+	}
+
+	if startsWeekOne(weekday) {
+		days += weekday
+	} else {
+		days -= 7 - weekday
+	}
+
+	if borrowed && days >= 52*7 {
+		// A 53rd week only exists when the following year's first week starts
+		// late enough to hold this one; otherwise these days are week 1 of it.
+		weekday = (weekday + daysInYear(year)) % 7
+		if startsWeekOne(weekday) {
+			return 1, year + 1
+		}
+	}
+	return days/7 + 1, year
+}
+
+// weekdayIndex is how far into its week a day falls, counting from Monday or
+// from Sunday.
+func weekdayIndex(tm time.Time, mondayFirst bool) int {
+	if mondayFirst {
+		return (int(tm.Weekday()) + 6) % 7
+	}
+	return int(tm.Weekday())
+}
+
+// daysInYear is 366 in a leap year and 365 otherwise.
+func daysInYear(year int) int {
+	if (year%4 == 0 && year%100 != 0) || year%400 == 0 {
+		return 366
+	}
+	return 365
 }
 
 // fnStrToDate implements a pragmatic MySQL STR_TO_DATE(str, format): it parses
@@ -589,13 +729,13 @@ func datePartValue(unit string, tm time.Time) (driver.Value, error) {
 		return int64(tm.Weekday()), nil
 	case "isodow":
 		// PostgreSQL ISODOW: Monday=1..Sunday=7.
-		return int64((int(tm.Weekday())+6)%7) + 1, nil
+		return int64(weekdayIndex(tm, true)) + 1, nil
 	case unitDayOfWeek:
 		// MySQL DAYOFWEEK: Sunday=1..Saturday=7.
 		return int64(tm.Weekday()) + 1, nil
 	case unitWeekday:
 		// MySQL WEEKDAY: Monday=0..Sunday=6.
-		return int64((int(tm.Weekday()) + 6) % 7), nil
+		return int64(weekdayIndex(tm, true)), nil
 	case "doy", unitDayOfYear:
 		return int64(tm.YearDay()), nil
 	case unitQuarter:

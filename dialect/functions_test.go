@@ -741,3 +741,115 @@ func TestDialectBoundariesFollowTheirEngine(t *testing.T) {
 		})
 	}
 }
+
+// TestDateFormatMySQLSpecifiers pins DATE_FORMAT against MySQL 8.4 one
+// specifier at a time. Twelve of them used to be written as the letter itself,
+// which is what MySQL does for a specifier it does not know, so a format string
+// asking for a time came back holding a "T" and looked like it had worked.
+//
+// The week specifiers carry most of the weight, because MySQL numbers weeks
+// four ways: %U and %V start the week on Sunday, %u and %v on Monday, %U and %u
+// number from zero, and %V and %v borrow the previous year's last week, whose
+// year %X and %x give. The dates below are the ones where those four disagree.
+//
+// Every want was read from MySQL 8.4 rather than derived.
+func TestDateFormatMySQLSpecifiers(t *testing.T) {
+	if err := RegisterFunctions(); err != nil {
+		t.Fatalf("RegisterFunctions() error: %v", err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	// Each row is one date and what MySQL writes for the twelve specifiers, in
+	// the order of the header below.
+	specifiers := []string{"%f", "%k", "%l", "%r", "%T", "%D", "%u", "%U", "%v", "%V", "%x", "%X"}
+	rows := []struct {
+		date string
+		want []string
+	}{
+		{"2024-02-29 13:05:09.123456", []string{"123456", "13", "1", "01:05:09 PM", "13:05:09", "29th", "09", "08", "09", "08", "2024", "2024"}},
+		{"2024-12-31", []string{"000000", "0", "12", "12:00:00 AM", "00:00:00", "31st", "53", "52", "01", "52", "2025", "2024"}},
+		{"2024-01-01", []string{"000000", "0", "12", "12:00:00 AM", "00:00:00", "1st", "01", "00", "01", "53", "2024", "2023"}},
+		{"2023-01-01", []string{"000000", "0", "12", "12:00:00 AM", "00:00:00", "1st", "00", "01", "52", "01", "2022", "2023"}},
+		{"2021-01-01", []string{"000000", "0", "12", "12:00:00 AM", "00:00:00", "1st", "00", "00", "53", "52", "2020", "2020"}},
+		{"2015-01-01", []string{"000000", "0", "12", "12:00:00 AM", "00:00:00", "1st", "01", "00", "01", "52", "2015", "2014"}},
+		{"2016-01-03", []string{"000000", "0", "12", "12:00:00 AM", "00:00:00", "3rd", "00", "01", "53", "01", "2015", "2016"}},
+		{"2000-01-02", []string{"000000", "0", "12", "12:00:00 AM", "00:00:00", "2nd", "00", "01", "52", "01", "1999", "2000"}},
+		{"2010-01-01", []string{"000000", "0", "12", "12:00:00 AM", "00:00:00", "1st", "00", "00", "53", "52", "2009", "2009"}},
+		{"2012-12-31", []string{"000000", "0", "12", "12:00:00 AM", "00:00:00", "31st", "53", "53", "01", "53", "2013", "2012"}},
+		{"2017-01-01", []string{"000000", "0", "12", "12:00:00 AM", "00:00:00", "1st", "00", "01", "52", "01", "2016", "2017"}},
+		{"1999-12-31", []string{"000000", "0", "12", "12:00:00 AM", "00:00:00", "31st", "52", "52", "52", "52", "1999", "1999"}},
+		{"2024-06-03 09:07:00", []string{"000000", "9", "9", "09:07:00 AM", "09:07:00", "3rd", "23", "22", "23", "22", "2024", "2024"}},
+		{"2026-08-21 00:30:00", []string{"000000", "0", "12", "12:30:00 AM", "00:30:00", "21st", "34", "33", "34", "33", "2026", "2026"}},
+	}
+
+	for _, row := range rows {
+		for i, spec := range specifiers {
+			query := `SELECT DATE_FORMAT('` + row.date + `', '` + spec + `')`
+			var got sql.NullString
+			if err := db.QueryRowContext(context.Background(), query).Scan(&got); err != nil {
+				t.Fatalf("%s: %v", query, err)
+			}
+			if got.String != row.want[i] {
+				t.Errorf("%s = %q, want %q", query, got.String, row.want[i])
+			}
+		}
+	}
+}
+
+// TestDateFormatOrdinalSuffixes pins %D over the days whose suffix is not the
+// one their last digit suggests: 11, 12 and 13 take "th" where 1, 2 and 3 take
+// "st", "nd" and "rd". Read from MySQL 8.4.
+func TestDateFormatOrdinalSuffixes(t *testing.T) {
+	if err := RegisterFunctions(); err != nil {
+		t.Fatalf("RegisterFunctions() error: %v", err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	want := map[string]string{
+		"01": "1st", "02": "2nd", "03": "3rd", "04": "4th",
+		"11": "11th", "12": "12th", "13": "13th",
+		"21": "21st", "22": "22nd", "23": "23rd",
+		"30": "30th", "31": "31st",
+	}
+	for day, spelled := range want {
+		query := `SELECT DATE_FORMAT('2024-01-` + day + `', '%D')`
+		var got sql.NullString
+		if err := db.QueryRowContext(context.Background(), query).Scan(&got); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+		if got.String != spelled {
+			t.Errorf("%s = %q, want %q", query, got.String, spelled)
+		}
+	}
+}
+
+// TestDateFormatKeepsAnUnknownSpecifierAsItsLetter pins the fallback that hid
+// the twelve above as deliberate: MySQL writes an unknown specifier as the
+// letter itself, and so does this.
+func TestDateFormatKeepsAnUnknownSpecifierAsItsLetter(t *testing.T) {
+	if err := RegisterFunctions(); err != nil {
+		t.Fatalf("RegisterFunctions() error: %v", err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	var got sql.NullString
+	query := `SELECT DATE_FORMAT('2024-02-29', '%q%%%Z')`
+	if err := db.QueryRowContext(context.Background(), query).Scan(&got); err != nil {
+		t.Fatalf("%s: %v", query, err)
+	}
+	if got.String != "q%Z" {
+		t.Fatalf("%s = %q, want %q", query, got.String, "q%Z")
+	}
+}

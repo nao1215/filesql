@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -787,4 +788,183 @@ func TestSaveKeepsWhatItDidNotWrite(t *testing.T) {
 	rows, err := after.GetRows(defaultSheetName)
 	require.NoError(t, err)
 	assert.Equal(t, [][]string{{"n"}, {"3"}}, rows, "the rows are still the table's")
+}
+
+// TestSaveAndAFormulaCell pins the last thing a rebuilt workbook lost. A
+// formula is content rather than presentation: the cell that held one came back
+// empty, so the workbook no longer carried the rule that produced its numbers,
+// and a spreadsheet opening the file showed a blank column where a computed one
+// had been.
+//
+// A workbook stores a formula and the value it last evaluated to. filesql reads
+// the value, so writing that same value back says nothing the cell did not
+// already say -- and writing it is what took the formula. A cell whose value the
+// caller did change is the other half of the rule: it holds what they set, and a
+// formula that no longer produces it cannot stay.
+func TestSaveAndAFormulaCell(t *testing.T) {
+	t.Parallel()
+
+	// writeWorkbook makes a workbook whose second column is computed from its
+	// first, with no value cached for the computed cell.
+	writeWorkbook := func(t *testing.T, path string) {
+		t.Helper()
+		book := excelize.NewFile()
+		require.NoError(t, book.SetCellValue(defaultSheetName, "A1", "n"))
+		require.NoError(t, book.SetCellValue(defaultSheetName, "B1", "double"))
+		require.NoError(t, book.SetCellValue(defaultSheetName, "A2", 3))
+		require.NoError(t, book.SetCellFormula(defaultSheetName, "B2", "A2*2"))
+		// A row whose last cell is empty is stored short, which is the shape a
+		// blank cell arrives in and has to be recognized as unchanged too.
+		require.NoError(t, book.SetCellValue(defaultSheetName, "A3", 5))
+		require.NoError(t, book.SaveAs(path))
+		require.NoError(t, book.Close())
+	}
+
+	tests := []struct {
+		name string
+		// edit runs before the save, or is empty for a save that changes nothing.
+		edit string
+		// wantFormula is what B2 holds afterwards.
+		wantFormula string
+		// wantValue is what B2 shows afterwards.
+		wantValue string
+		// wantBlank is what B3, the cell the source workbook stored nothing
+		// for, shows afterwards.
+		wantBlank string
+	}{
+		{
+			name:        "a save that changed nothing keeps the formula",
+			wantFormula: "A2*2",
+		},
+		{
+			name:        "an edited cell holds the value the caller set",
+			edit:        "UPDATE calc_Sheet1 SET double = '99' WHERE n = '3'",
+			wantFormula: "",
+			wantValue:   "99",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "calc.xlsx")
+			writeWorkbook(t, path)
+
+			validated, err := NewBuilder().AddPath(path).EnableAutoSave("").Build(ctx)
+			require.NoError(t, err)
+			db, err := validated.Open(ctx)
+			require.NoError(t, err)
+			if tt.edit != "" {
+				_, err = db.ExecContext(ctx, tt.edit)
+				require.NoError(t, err)
+			}
+			require.NoError(t, db.Close()) // The save happens here.
+
+			after, err := excelize.OpenFile(path)
+			require.NoError(t, err)
+			defer after.Close()
+
+			formula, err := after.GetCellFormula(defaultSheetName, "B2")
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantFormula, formula)
+			value, err := after.GetCellValue(defaultSheetName, "B2")
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantValue, value)
+			blank, err := after.GetCellValue(defaultSheetName, "B3")
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantBlank, blank, "the cell the table has nothing for")
+		})
+	}
+}
+
+// TestSaveKeepsADateCellADate pins the same rule for the other thing a cell
+// holds beyond its text. A workbook stores a date as a serial number and a
+// number format; filesql reads it as the ISO 8601 the datetime inference wants,
+// and writing that string back turned a date cell into text, so the sheet that
+// showed 03-15-23 showed 2023-03-15 left-aligned and no longer sorted or
+// calculated as a date.
+func TestSaveKeepsADateCellADate(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "dated.xlsx")
+
+	book := excelize.NewFile()
+	require.NoError(t, book.SetCellValue(defaultSheetName, "A1", "when"))
+	require.NoError(t, book.SetCellValue(defaultSheetName, "A2", time.Date(2023, 3, 15, 0, 0, 0, 0, time.UTC)))
+	style, err := book.NewStyle(&excelize.Style{NumFmt: 14})
+	require.NoError(t, err)
+	require.NoError(t, book.SetCellStyle(defaultSheetName, "A2", "A2", style))
+	require.NoError(t, book.SaveAs(path))
+	require.NoError(t, book.Close())
+
+	before, err := excelize.OpenFile(path)
+	require.NoError(t, err)
+	serial, err := before.GetCellValue(defaultSheetName, "A2", excelize.Options{RawCellValue: true})
+	require.NoError(t, err)
+	shown, err := before.GetCellValue(defaultSheetName, "A2")
+	require.NoError(t, err)
+	require.NoError(t, before.Close())
+
+	validated, err := NewBuilder().AddPath(path).EnableAutoSave("").Build(ctx)
+	require.NoError(t, err)
+	db, err := validated.Open(ctx)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	after, err := excelize.OpenFile(path)
+	require.NoError(t, err)
+	defer after.Close()
+
+	stored, err := after.GetCellValue(defaultSheetName, "A2", excelize.Options{RawCellValue: true})
+	require.NoError(t, err)
+	assert.Equal(t, serial, stored, "the date became text instead of staying a serial number")
+	rendered, err := after.GetCellValue(defaultSheetName, "A2")
+	require.NoError(t, err)
+	assert.Equal(t, shown, rendered, "the sheet no longer shows the date the way it was formatted")
+}
+
+// TestSaveShrinksASheetTheTableNoLongerFills pins the other half of writing onto
+// an existing workbook. Cells are written over rather than the sheet being
+// cleared first, which is what keeps the styles and the merges, so the rows and
+// columns a deletion left behind have to be removed afterwards; without that a
+// sheet would keep the rows the table no longer has and the save would report
+// success over a file holding deleted data.
+func TestSaveShrinksASheetTheTableNoLongerFills(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "roster.xlsx")
+
+	book := excelize.NewFile()
+	for cell, value := range map[string]any{
+		"A1": "name", "B1": "team", "C1": "seat",
+		"A2": "ada", "B2": "core", "C2": "1",
+		"A3": "bob", "B3": "core", "C3": "2",
+		"A4": "cyd", "B4": "edge", "C4": "3",
+	} {
+		require.NoError(t, book.SetCellValue(defaultSheetName, cell, value))
+	}
+	require.NoError(t, book.SaveAs(path))
+	require.NoError(t, book.Close())
+
+	validated, err := NewBuilder().AddPath(path).EnableAutoSave("").Build(ctx)
+	require.NoError(t, err)
+	db, err := validated.Open(ctx)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, "DELETE FROM roster_Sheet1 WHERE team = 'core'")
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, "ALTER TABLE roster_Sheet1 DROP COLUMN seat")
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	after, err := excelize.OpenFile(path)
+	require.NoError(t, err)
+	defer after.Close()
+
+	rows, err := after.GetRows(defaultSheetName)
+	require.NoError(t, err)
+	assert.Equal(t, [][]string{{"name", "team"}, {"cyd", "edge"}}, rows)
 }
