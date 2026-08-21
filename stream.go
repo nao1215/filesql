@@ -80,22 +80,33 @@ func readArrowTable(ctx context.Context, arrowReader *pqarrow.FileReader) (tbl a
 	for _, col := range columnIndices {
 		includedLeaves[col] = true
 	}
-	readers := make([]*pqarrow.ColumnReader, len(fieldIndices))
-	fields := make([]arrow.Field, len(fieldIndices))
-	for i, fieldIndex := range fieldIndices {
+	// The readers are collected as they are built and released together, so a
+	// failure part way through this loop does not leave the ones before it
+	// unreleased.
+	readers := make([]*pqarrow.ColumnReader, 0, len(fieldIndices))
+	defer func() {
+		for _, reader := range readers {
+			reader.Release()
+		}
+	}()
+	fields := make([]arrow.Field, 0, len(fieldIndices))
+	for _, fieldIndex := range fieldIndices {
 		reader, readerErr := arrowReader.GetFieldReader(ctx, fieldIndex, includedLeaves, rowGroups)
 		if readerErr != nil {
 			return nil, readerErr
 		}
-		readers[i] = reader
-		fields[i] = *reader.Field()
-	}
-	for i := range readers {
-		defer readers[i].Release()
+		if reader == nil || reader.Field() == nil {
+			return nil, fmt.Errorf("parquet data is damaged: no reader for field %d", fieldIndex)
+		}
+		readers = append(readers, reader)
+		fields = append(fields, *reader.Field())
 	}
 	schema := arrow.NewSchema(fields, arrowReader.Manifest.SchemaMeta)
 
-	columns := make([]arrow.Column, schema.NumFields())
+	// The columns are appended as they are built, so the cleanup below releases
+	// the ones that exist and never a zero value, whose Release dereferences a
+	// chunk it does not have.
+	columns := make([]arrow.Column, 0, len(readers))
 	defer func() {
 		// The columns are copied into the table, which owns them from then on;
 		// on the way out with an error they are this function's to release.
@@ -111,7 +122,7 @@ func readArrowTable(ctx context.Context, arrowReader *pqarrow.FileReader) (tbl a
 		if readErr != nil {
 			return nil, readErr
 		}
-		columns[i] = *arrow.NewColumn(schema.Field(i), chunked)
+		columns = append(columns, *arrow.NewColumn(schema.Field(i), chunked))
 		chunked.Release()
 	}
 
