@@ -34,6 +34,13 @@ func NormalizeXLSXDates(f *excelize.File, sheet string, rows [][]string) [][]str
 		date1904 = *props.Date1904
 	}
 
+	// Whether a cell holds a date is decided by its style alone, and a column of
+	// dates shares one, so the answer is worked out once per style rather than
+	// once per cell: without this a wide sheet costs two random-access lookups
+	// into the workbook for every cell it holds, on top of the read that
+	// produced these rows.
+	dated := make(map[int]bool)
+
 	for r, row := range rows {
 		for c := range row {
 			if row[c] == "" {
@@ -43,7 +50,16 @@ func NormalizeXLSXDates(f *excelize.File, sheet string, rows [][]string) [][]str
 			if err != nil {
 				continue
 			}
-			if !cellHoldsDate(f, sheet, axis) {
+			styleID, err := f.GetCellStyle(sheet, axis)
+			if err != nil {
+				continue
+			}
+			holdsDate, seen := dated[styleID]
+			if !seen {
+				holdsDate = styleHoldsDate(f, styleID)
+				dated[styleID] = holdsDate
+			}
+			if !holdsDate {
 				continue
 			}
 			if iso, ok := isoFromSerial(f, sheet, axis, date1904); ok {
@@ -73,16 +89,14 @@ var builtinDateNumberFormats = map[int]struct{}{
 	50: {}, 51: {}, 52: {}, 53: {}, 54: {}, 57: {}, 58: {},
 }
 
-// cellHoldsDate reports whether a cell's number format makes it a date.
+// styleHoldsDate reports whether a number format makes the cells wearing it
+// dates.
 //
-// GetCellType is not the question: it reports the type attribute the XML
-// carries, and a date is stored as an ordinary number with no attribute at all,
-// so it answers "unset" for exactly the cells this exists to find.
-func cellHoldsDate(f *excelize.File, sheet, axis string) bool {
-	styleID, err := f.GetCellStyle(sheet, axis)
-	if err != nil {
-		return false
-	}
+// The cell's own type is not the question: GetCellType reports the type
+// attribute the XML carries, and a date is stored as an ordinary number with no
+// attribute at all, so it answers "unset" for exactly the cells this exists to
+// find.
+func styleHoldsDate(f *excelize.File, styleID int) bool {
 	style, err := f.GetStyle(styleID)
 	if err != nil || style == nil {
 		return false
