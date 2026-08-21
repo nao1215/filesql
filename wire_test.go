@@ -463,3 +463,29 @@ func TestDumpFedWire_OnCallerManagedDatabase(t *testing.T) {
 
 	assert.FileExists(t, out)
 }
+
+// TestDumpFedWire_WriteBackKeepsEveryValue is the property a caller can rely on
+// when the bytes change. A write-back is a rewrite rather than a patch, so the
+// tags come back in the order the format defines rather than the order the file
+// had them; what must survive is the data, so the file is written back with no
+// edit at all and reloaded, and every column has to match what the first load
+// held.
+func TestDumpFedWire_WriteBackKeepsEveryValue(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	source := copyWireFixture(t, "customer-transfer.fed")
+
+	db, err := OpenContext(ctx, source)
+	require.NoError(t, err)
+	before := achTableDump(ctx, t, db, "payment")
+	require.NoError(t, DumpFedWire(ctx, db, "payment", source))
+	require.NoError(t, db.Close())
+
+	reloaded, err := OpenContext(ctx, source)
+	require.NoError(t, err)
+	defer reloaded.Close()
+	after := achTableDump(ctx, t, reloaded, "payment")
+
+	assert.Equal(t, before, after, "a write-back with no edit must keep every value")
+}

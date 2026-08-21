@@ -117,6 +117,11 @@ func streamWireFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, fi
 // that file must still exist and be readable. A database loaded from an
 // io.Reader has no such file; pass the structure to DumpFedWireWithTableSet.
 //
+// The file is written from that structure rather than patched, so a tag the
+// caller did not edit can come back changed: tags are written in the order the
+// format defines rather than the order the file had them, and field padding is
+// normalized.
+//
 // Parameters:
 //   - ctx: Context for cancellation
 //   - db: The database containing Fedwire tables

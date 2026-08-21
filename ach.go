@@ -364,6 +364,10 @@ func insertRecordsIntoTable(ctx context.Context, db DBTX, tableName string, head
 // that file must still exist and be readable. A database loaded from an
 // io.Reader has no such file; pass the structure to DumpACHWithTableSet.
 //
+// The file is written from that structure rather than patched, so a record the
+// caller did not edit can come back formatted differently: field padding is
+// normalized and every record is written at its full width.
+//
 // Parameters:
 //   - ctx: Context for cancellation
 //   - db: The database containing ACH tables
