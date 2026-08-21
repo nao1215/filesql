@@ -1,11 +1,14 @@
 package reader
 
 import (
+	"math"
 	"testing"
 
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/array"
+	"github.com/apache/arrow/go/v18/arrow/float16"
 	"github.com/apache/arrow/go/v18/arrow/memory"
+	"github.com/nao1215/filesql/internal/infer"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -299,4 +302,31 @@ func TestExtractValueFromArrowArray_SQLiteRendering(t *testing.T) {
 			t.Error("Expected some string representation for unsupported type, got empty string")
 		}
 	})
+}
+
+// TestFloat16RendersLikeEveryOtherReal covers the half-float column a Parquet
+// file may hold. Its type is read as a real number, and without a case of its
+// own the value reached the default branch, where "%v" spelled a NaN as the
+// word "NaN" and a whole number without the point that keeps its column REAL --
+// both of them text sitting in a column declared REAL.
+func TestFloat16RendersLikeEveryOtherReal(t *testing.T) {
+	t.Parallel()
+
+	builder := array.NewFloat16Builder(memory.NewGoAllocator())
+	defer builder.Release()
+	builder.Append(float16.New(1.5))
+	builder.Append(float16.New(3))
+	builder.Append(float16.New(float32(math.NaN())))
+	builder.AppendNull()
+	arr := builder.NewArray()
+	defer arr.Release()
+
+	assert.Equal(t, infer.Real, arrowColumnType(arr.DataType(), RenderSQLite))
+	assert.Equal(t, "1.5", extractValueFromArrowArray(arr, 0, RenderSQLite))
+	assert.Equal(t, "3.0", extractValueFromArrowArray(arr, 1, RenderSQLite), "a whole real keeps its column REAL")
+	assert.True(t, arrowCellIsNull(arr, 2, RenderSQLite), "SQLite has no NaN, so a NaN is a null there")
+	assert.True(t, arrowCellIsNull(arr, 3, RenderSQLite))
+
+	assert.Equal(t, "3", extractValueFromArrowArray(arr, 1, RenderPlain), "a plain read spells the number as it is")
+	assert.False(t, arrowCellIsNull(arr, 2, RenderPlain), "only a load turns a NaN into a null")
 }

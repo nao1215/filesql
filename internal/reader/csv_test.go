@@ -112,9 +112,12 @@ func TestCSVReader_RefusesAnUnusableDelimiter(t *testing.T) {
 	t.Parallel()
 
 	for name, comma := range map[string]rune{
-		"multi-byte":      '§',
-		"quote":           '"',
-		"line feed":       '\n',
+		"multi-byte": '§',
+		"quote":      '"',
+		"line feed":  '\n',
+		// A negative rune is no character at all, and converting one to a byte
+		// gives an unrelated byte to split fields at.
+		"negative":        -1,
 		"carriage return": '\r',
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -323,6 +323,8 @@ func arrowCellIsNull(arr arrow.Array, index int64, rendering Rendering) bool {
 		return false
 	}
 	switch a := arr.(type) {
+	case *array.Float16:
+		return math.IsNaN(float64(a.Value(int(index)).Float32()))
 	case *array.Float32:
 		return math.IsNaN(float64(a.Value(int(index))))
 	case *array.Float64:
@@ -403,6 +405,13 @@ func extractValueFromArrowArray(arr arrow.Array, index int64, rendering Renderin
 	case *array.Uint64:
 		return strconv.FormatUint(a.Value(int(index)), 10)
 
+	// A half float is rendered at 32 bits, the narrowest width Go can format
+	// it at. Without a case of its own it reached the default branch, where
+	// "%v" spelled a NaN as "NaN" and a whole number without the point that
+	// keeps its column REAL -- in a column the schema had already declared
+	// REAL, since arrowColumnType reads FLOAT16 as a real number.
+	case *array.Float16:
+		return floatText(float64(a.Value(int(index)).Float32()), 32, rendering)
 	case *array.Float32:
 		return floatText(float64(a.Value(int(index))), 32, rendering)
 	case *array.Float64:

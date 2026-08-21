@@ -120,9 +120,11 @@ func (c *CSVReader) validateComma() error {
 	switch {
 	case c.Comma == 0:
 		return nil
-	case c.Comma >= utf8.RuneSelf:
+	case c.Comma < 0 || c.Comma >= utf8.RuneSelf:
 		// Fields are found by scanning bytes, so a multi-byte delimiter would
-		// match the first byte of a character rather than the character.
+		// match the first byte of a character rather than the character. A
+		// negative rune is no character at all, and converting one to a byte
+		// gives an unrelated one, which is the silent fallback this refuses.
 		return fmt.Errorf("%w: delimiter %q is not ASCII", ErrCSVSyntax, c.Comma)
 	case c.Comma == '"' || c.Comma == '\n' || c.Comma == '\r':
 		// These already mean something to a CSV record.
