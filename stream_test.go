@@ -6,6 +6,7 @@ import (
 	"compress/zlib"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -21,6 +22,25 @@ import (
 	"github.com/ulikunitz/xz"
 	"github.com/xuri/excelize/v2"
 )
+
+// parseFromReader reads the whole input through ProcessInChunks and returns it
+// as one table, typed as the reader said. Tests that care about what a format
+// parses to, and not about chunking, read through this.
+func (p *streamingParser) parseFromReader(reader io.Reader) (*table, error) {
+	var headers header
+	var records []record
+	columns, err := p.ProcessInChunks(reader, func(chunk *tableChunk) error {
+		headers = chunk.getHeaders()
+		records = append(records, chunk.getRecords()...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	t := newTable(p.tableName, headers, records)
+	t.columnInfo = columns
+	return t, nil
+}
 
 func TestStreamingParser_ParseFromReader_CSV(t *testing.T) {
 	t.Parallel()
@@ -142,7 +162,7 @@ func TestStreamingParser_TSVTakesFieldsLiterally(t *testing.T) {
 
 		p := newStreamingParser(FileTypeTSV, CompressionNone, "notes", 1)
 		var values []string
-		err := p.ProcessInChunks(strings.NewReader(input), func(chunk *tableChunk) error {
+		_, err := p.ProcessInChunks(strings.NewReader(input), func(chunk *tableChunk) error {
 			for _, r := range chunk.records {
 				values = append(values, r[1])
 			}
@@ -184,7 +204,7 @@ func TestStreamingParser_CROnlyLineEndings(t *testing.T) {
 
 		p := newStreamingParser(FileTypeCSV, CompressionNone, "users", 1)
 		rows := 0
-		err := p.ProcessInChunks(strings.NewReader("name,age\rAlice,30\rBob,40\r"), func(chunk *tableChunk) error {
+		_, err := p.ProcessInChunks(strings.NewReader("name,age\rAlice,30\rBob,40\r"), func(chunk *tableChunk) error {
 			rows += len(chunk.records)
 			return nil
 		})
@@ -232,32 +252,6 @@ func TestStreamingParser_ParseFromReader_Compressed(t *testing.T) {
 	})
 }
 
-func TestFileType_Extension(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		fileType FileType
-		want     string
-	}{
-		{FileTypeCSV, ".csv"},
-		{FileTypeTSV, ".tsv"},
-		{FileTypeLTSV, ".ltsv"},
-		{FileTypeParquet, ".parquet"},
-		{FileTypeXLSX, ".xlsx"},
-		{FileTypeJSON, ".json"},
-		{FileTypeJSONL, ".jsonl"},
-		{FileTypeUnsupported, ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.want, func(t *testing.T) {
-			if got := tt.fileType.extension(); got != tt.want {
-				t.Errorf("FileType.extension() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestParquetStreaming(t *testing.T) {
 	t.Parallel()
 
@@ -299,7 +293,7 @@ Charlie,35,London`
 	parser := newStreamingParser(FileTypeParquet, CompressionNone, "test_stream", 1000)
 	reader := bytes.NewReader(parquetData)
 
-	table, err := parser.parseParquetStream(reader)
+	table, err := parser.parseFromReader(reader)
 	if err != nil {
 		t.Fatalf("Failed to parse parquet stream: %v", err)
 	}
@@ -395,17 +389,15 @@ func TestParquetStreamingChunks(t *testing.T) {
 			t.Errorf("Expected %d headers, got %d", len(expectedHeaders), len(chunk.headers))
 		}
 
-		// Verify column info
-		if len(chunk.columnInfo) != len(expectedHeaders) {
-			t.Errorf("Expected %d column infos, got %d", len(expectedHeaders), len(chunk.columnInfo))
-		}
-
 		return nil
 	}
 
-	err = parser.ProcessInChunks(reader, processor)
+	columns, err := parser.ProcessInChunks(reader, processor)
 	if err != nil {
 		t.Fatalf("Failed to process parquet chunks: %v", err)
+	}
+	if len(columns) != 3 {
+		t.Errorf("Expected 3 column infos, got %d", len(columns))
 	}
 
 	// Verify we processed all records
@@ -535,7 +527,7 @@ func TestProcessLTSVInChunks(t *testing.T) {
 			return nil
 		}
 
-		err := parser.ProcessInChunks(reader, processor)
+		_, err := parser.ProcessInChunks(reader, processor)
 		if err != nil {
 			t.Fatalf("Failed to process LTSV chunks: %v", err)
 		}
@@ -576,7 +568,7 @@ func TestProcessLTSVInChunks(t *testing.T) {
 		reader := strings.NewReader("x:1\tx:2\n")
 
 		parser := newStreamingParser(FileTypeLTSV, CompressionNone, "dup_chunk", 2)
-		err := parser.ProcessInChunks(reader, func(*tableChunk) error { return nil })
+		_, err := parser.ProcessInChunks(reader, func(*tableChunk) error { return nil })
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "duplicate column name")
 	})
@@ -1190,7 +1182,7 @@ func TestStreamingParser_ProcessInChunks_UnsupportedFormat(t *testing.T) {
 	parser := newStreamingParser(FileTypeUnsupported, CompressionNone, "test", 1024)
 	reader := strings.NewReader("test data")
 
-	err := parser.ProcessInChunks(reader, func(_ *tableChunk) error {
+	_, err := parser.ProcessInChunks(reader, func(_ *tableChunk) error {
 		return nil
 	})
 	assert.Error(t, err)
@@ -1207,7 +1199,7 @@ func TestParseJSONStream(t *testing.T) {
 		reader := strings.NewReader(input)
 		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
-		result, err := parser.parseJSONStream(reader)
+		result, err := parser.parseFromReader(reader)
 
 		require.NoError(t, err)
 		assert.Equal(t, header{"data"}, result.header)
@@ -1223,7 +1215,7 @@ func TestParseJSONStream(t *testing.T) {
 		reader := strings.NewReader(input)
 		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
-		result, err := parser.parseJSONStream(reader)
+		result, err := parser.parseFromReader(reader)
 
 		require.NoError(t, err)
 		assert.Equal(t, header{"data"}, result.header)
@@ -1238,7 +1230,7 @@ func TestParseJSONStream(t *testing.T) {
 		reader := strings.NewReader(input)
 		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
-		result, err := parser.parseJSONStream(reader)
+		result, err := parser.parseFromReader(reader)
 
 		require.NoError(t, err)
 		assert.Equal(t, 1, len(result.records))
@@ -1259,34 +1251,23 @@ func TestParseJSONStream(t *testing.T) {
 		reader := strings.NewReader(input)
 		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
-		result, err := parser.parseJSONStream(reader)
+		result, err := parser.parseFromReader(reader)
 
 		require.NoError(t, err)
 		assert.Equal(t, columnTypeText, result.columnInfo[0].Type)
 	})
 
-	t.Run("returns error for empty input", func(t *testing.T) {
+	t.Run("empty input and an empty array are tables with no rows", func(t *testing.T) {
 		t.Parallel()
 
-		reader := strings.NewReader("")
-		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
-
-		_, err := parser.parseJSONStream(reader)
-
-		assert.Error(t, err)
-		assert.ErrorIs(t, err, ErrEmptyData)
-	})
-
-	t.Run("returns error for empty array", func(t *testing.T) {
-		t.Parallel()
-
-		reader := strings.NewReader("[]")
-		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
-
-		_, err := parser.parseJSONStream(reader)
-
-		assert.Error(t, err)
-		assert.ErrorIs(t, err, ErrEmptyData)
+		for _, input := range []string{"", "   ", "[]"} {
+			parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
+			result, err := parser.parseFromReader(strings.NewReader(input))
+			require.NoError(t, err, "input %q", input)
+			assert.Equal(t, header{jsonDataHeader}, result.getHeader(), "input %q", input)
+			assert.Empty(t, result.getRecords(), "input %q", input)
+			assert.Equal(t, []columnInfo{newJSONDataColumn()}, result.columnInfo, "input %q", input)
+		}
 	})
 
 	t.Run("returns error for invalid JSON", func(t *testing.T) {
@@ -1295,7 +1276,7 @@ func TestParseJSONStream(t *testing.T) {
 		reader := strings.NewReader("{invalid json}")
 		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
-		_, err := parser.parseJSONStream(reader)
+		_, err := parser.parseFromReader(reader)
 
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidData)
@@ -1312,7 +1293,7 @@ func TestParseJSONLStream(t *testing.T) {
 		reader := strings.NewReader(input)
 		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
-		result, err := parser.parseJSONLStream(reader)
+		result, err := parser.parseFromReader(reader)
 
 		require.NoError(t, err)
 		assert.Equal(t, header{"data"}, result.header)
@@ -1329,7 +1310,7 @@ func TestParseJSONLStream(t *testing.T) {
 		reader := strings.NewReader(input)
 		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
-		result, err := parser.parseJSONLStream(reader)
+		result, err := parser.parseFromReader(reader)
 
 		require.NoError(t, err)
 		assert.Equal(t, 2, len(result.records))
@@ -1342,7 +1323,7 @@ func TestParseJSONLStream(t *testing.T) {
 		reader := strings.NewReader(input)
 		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
-		result, err := parser.parseJSONLStream(reader)
+		result, err := parser.parseFromReader(reader)
 
 		require.NoError(t, err)
 		assert.Equal(t, 1, len(result.records))
@@ -1360,22 +1341,23 @@ func TestParseJSONLStream(t *testing.T) {
 		reader := strings.NewReader(input)
 		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
-		result, err := parser.parseJSONLStream(reader)
+		result, err := parser.parseFromReader(reader)
 
 		require.NoError(t, err)
 		assert.Equal(t, columnTypeText, result.columnInfo[0].Type)
 	})
 
-	t.Run("returns error for empty input", func(t *testing.T) {
+	t.Run("empty input is a table with no rows", func(t *testing.T) {
 		t.Parallel()
 
 		reader := strings.NewReader("")
 		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
-		_, err := parser.parseJSONLStream(reader)
+		result, err := parser.parseFromReader(reader)
 
-		assert.Error(t, err)
-		assert.ErrorIs(t, err, ErrEmptyData)
+		require.NoError(t, err)
+		assert.Equal(t, header{jsonDataHeader}, result.getHeader())
+		assert.Empty(t, result.getRecords())
 	})
 
 	t.Run("returns error for invalid JSON line", func(t *testing.T) {
@@ -1385,7 +1367,7 @@ func TestParseJSONLStream(t *testing.T) {
 		reader := strings.NewReader(input)
 		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
-		_, err := parser.parseJSONLStream(reader)
+		_, err := parser.parseFromReader(reader)
 
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidData)
@@ -1400,7 +1382,7 @@ func TestParseJSONLStream(t *testing.T) {
 		reader := strings.NewReader(input)
 		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
-		result, err := parser.parseJSONLStream(reader)
+		result, err := parser.parseFromReader(reader)
 
 		require.NoError(t, err)
 		assert.Equal(t, 2, len(result.records))
@@ -1420,7 +1402,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
 		var chunks []*tableChunk
-		err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
+		_, err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
 			chunks = append(chunks, chunk)
 			return nil
 		})
@@ -1438,13 +1420,12 @@ func TestProcessJSONInChunks(t *testing.T) {
 		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", 2) // chunk size = 2
 
 		var chunks []*tableChunk
-		err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
+		_, err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
 			// Copy records to avoid slice reuse issues
 			c := &tableChunk{
-				tableName:  chunk.tableName,
-				headers:    chunk.headers,
-				records:    append([]record(nil), chunk.records...),
-				columnInfo: chunk.columnInfo,
+				tableName: chunk.tableName,
+				headers:   chunk.headers,
+				records:   append([]record(nil), chunk.records...),
 			}
 			chunks = append(chunks, c)
 			return nil
@@ -1465,7 +1446,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
 		var chunks []*tableChunk
-		err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
+		_, err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
 			chunks = append(chunks, chunk)
 			return nil
 		})
@@ -1475,18 +1456,22 @@ func TestProcessJSONInChunks(t *testing.T) {
 		assert.Equal(t, 1, len(chunks[0].records))
 	})
 
-	t.Run("returns error for empty input", func(t *testing.T) {
+	t.Run("empty input is a table with no rows", func(t *testing.T) {
 		t.Parallel()
 
 		reader := strings.NewReader("")
 		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
-		err := parser.processJSONInChunks(reader, func(_ *tableChunk) error {
+		chunks := 0
+		columns, err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
+			chunks++
+			assert.Empty(t, chunk.getRecords())
 			return nil
 		})
 
-		assert.Error(t, err)
-		assert.ErrorIs(t, err, ErrEmptyData)
+		require.NoError(t, err)
+		assert.Equal(t, 1, chunks, "an empty document still makes its table")
+		assert.Equal(t, columnInfoList{newJSONDataColumn()}, columns)
 	})
 
 	t.Run("returns error for trailing garbage after JSON array", func(t *testing.T) {
@@ -1496,7 +1481,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 		reader := strings.NewReader(input)
 		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
-		err := parser.processJSONInChunks(reader, func(_ *tableChunk) error {
+		_, err := parser.processJSONInChunks(reader, func(_ *tableChunk) error {
 			return nil
 		})
 
@@ -1516,7 +1501,7 @@ func TestProcessJSONLInChunks(t *testing.T) {
 		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
 		var chunks []*tableChunk
-		err := parser.processJSONLInChunks(reader, func(chunk *tableChunk) error {
+		_, err := parser.processJSONLInChunks(reader, func(chunk *tableChunk) error {
 			chunks = append(chunks, chunk)
 			return nil
 		})
@@ -1534,12 +1519,11 @@ func TestProcessJSONLInChunks(t *testing.T) {
 		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", 2) // chunk size = 2
 
 		var chunks []*tableChunk
-		err := parser.processJSONLInChunks(reader, func(chunk *tableChunk) error {
+		_, err := parser.processJSONLInChunks(reader, func(chunk *tableChunk) error {
 			c := &tableChunk{
-				tableName:  chunk.tableName,
-				headers:    chunk.headers,
-				records:    append([]record(nil), chunk.records...),
-				columnInfo: chunk.columnInfo,
+				tableName: chunk.tableName,
+				headers:   chunk.headers,
+				records:   append([]record(nil), chunk.records...),
 			}
 			chunks = append(chunks, c)
 			return nil
@@ -1552,18 +1536,22 @@ func TestProcessJSONLInChunks(t *testing.T) {
 		assert.Equal(t, 1, len(chunks[2].records))
 	})
 
-	t.Run("returns error for empty input", func(t *testing.T) {
+	t.Run("empty input is a table with no rows", func(t *testing.T) {
 		t.Parallel()
 
 		reader := strings.NewReader("")
 		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
-		err := parser.processJSONLInChunks(reader, func(_ *tableChunk) error {
+		chunks := 0
+		columns, err := parser.processJSONLInChunks(reader, func(chunk *tableChunk) error {
+			chunks++
+			assert.Empty(t, chunk.getRecords())
 			return nil
 		})
 
-		assert.Error(t, err)
-		assert.ErrorIs(t, err, ErrEmptyData)
+		require.NoError(t, err)
+		assert.Equal(t, 1, chunks, "an empty input still makes its table")
+		assert.Equal(t, columnInfoList{newJSONDataColumn()}, columns)
 	})
 
 	t.Run("returns error for invalid JSON line", func(t *testing.T) {
@@ -1573,7 +1561,7 @@ func TestProcessJSONLInChunks(t *testing.T) {
 		reader := strings.NewReader(input)
 		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
-		err := parser.processJSONLInChunks(reader, func(_ *tableChunk) error {
+		_, err := parser.processJSONLInChunks(reader, func(_ *tableChunk) error {
 			return nil
 		})
 
@@ -1766,12 +1754,11 @@ func TestStreamingParser_ProcessInChunks_CompressedJSON(t *testing.T) {
 		parser := newStreamingParser(FileTypeJSON, CompressionGZ, "test_json", 2)
 
 		var chunks []*tableChunk
-		err = parser.ProcessInChunks(&buf, func(chunk *tableChunk) error {
+		_, err = parser.ProcessInChunks(&buf, func(chunk *tableChunk) error {
 			c := &tableChunk{
-				tableName:  chunk.tableName,
-				headers:    chunk.headers,
-				records:    append([]record(nil), chunk.records...),
-				columnInfo: chunk.columnInfo,
+				tableName: chunk.tableName,
+				headers:   chunk.headers,
+				records:   append([]record(nil), chunk.records...),
 			}
 			chunks = append(chunks, c)
 			return nil
@@ -1878,5 +1865,90 @@ func TestChunkSizeDoesNotChangeTheColumnType(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestChunkSizeDoesNotChangeStoredValues loads a column that reads as a number
+// until its last row at every chunk size and requires the stored cells to be
+// the file's spelling each time. Chunk size is a memory knob: a load that
+// declared the column from its first chunk and widened it later stored
+// SQLite's spelling of the numbers it had already converted, so 2.50 came
+// back as 2.5 at one chunk size and as 2.50 at another.
+func TestChunkSizeDoesNotChangeStoredValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{"real then text", "v\n1\n2.50\nabc\n", []string{"1/text", "2.50/text", "abc/text"}},
+		{"real then zero-padded", "v\n1.5\n2\n007\n", []string{"1.5/text", "2/text", "007/text"}},
+		{"integer then text", "v\n1\n2\nabc\n", []string{"1/text", "2/text", "abc/text"}},
+		{"integer then real", "v\n1\n2\n2.5\n", []string{"1/real", "2/real", "2.5/real"}},
+		{"integers throughout", "v\n1\n2\n3\n", []string{"1/integer", "2/integer", "3/integer"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			for _, chunk := range []int{1, 2, 3, 4, 5, DefaultChunkSize} {
+				b := NewBuilder().AddReader(strings.NewReader(tt.body), "t", FileTypeCSV).SetDefaultChunkSize(chunk)
+				built, err := b.Build(context.Background())
+				require.NoError(t, err)
+				db, err := built.Open(context.Background())
+				require.NoError(t, err)
+
+				rows, err := db.QueryContext(context.Background(), `SELECT v, typeof(v) FROM t ORDER BY rowid`)
+				require.NoError(t, err)
+				var got []string
+				for rows.Next() {
+					var v, ty string
+					require.NoError(t, rows.Scan(&v, &ty))
+					got = append(got, v+"/"+ty)
+				}
+				require.NoError(t, rows.Err())
+				require.NoError(t, rows.Close())
+				require.NoError(t, db.Close())
+				assert.Equal(t, tt.want, got, "chunk size %d", chunk)
+			}
+		})
+	}
+}
+
+// TestChunkSizeDoesNotChangeStoredValues_File is the same contract through a
+// path, which is loaded under its first chunk's types and read again when a
+// later chunk widens one, rather than staged as a reader is.
+func TestChunkSizeDoesNotChangeStoredValues_File(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "t.csv")
+	require.NoError(t, os.WriteFile(path, []byte("v,w\n1,x\n2.50,y\nabc,z\n"), 0o600))
+	want := []string{"1/text", "2.50/text", "abc/text"}
+
+	for _, chunk := range []int{1, 2, 3, 4, DefaultChunkSize} {
+		built, err := NewBuilder().AddPath(path).SetDefaultChunkSize(chunk).Build(context.Background())
+		require.NoError(t, err)
+		db, err := built.Open(context.Background())
+		require.NoError(t, err)
+
+		rows, err := db.QueryContext(context.Background(), `SELECT v, typeof(v) FROM t ORDER BY rowid`)
+		require.NoError(t, err)
+		var got []string
+		for rows.Next() {
+			var v, ty string
+			require.NoError(t, rows.Scan(&v, &ty))
+			got = append(got, v+"/"+ty)
+		}
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+
+		// The read-again path must leave nothing of its first attempt behind.
+		var tables int
+		require.NoError(t, db.QueryRowContext(context.Background(),
+			`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE '\_filesql\_%' ESCAPE '\'`).Scan(&tables))
+		require.NoError(t, db.Close())
+		assert.Equal(t, want, got, "chunk size %d", chunk)
+		assert.Equal(t, 0, tables, "chunk size %d leaves a working table behind", chunk)
 	}
 }

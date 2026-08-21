@@ -159,7 +159,7 @@ func TestDBBuilder_AddFS_CompressedHeaderOnly(t *testing.T) {
 			require.NoError(t, closeWriter())
 
 			mockFS := fstest.MapFS{
-				"empty" + FileTypeCSV.extension() + codec.Extension(): &fstest.MapFile{Data: compressed.Bytes()},
+				"empty" + extCSV + codec.Extension(): &fstest.MapFile{Data: compressed.Bytes()},
 			}
 
 			ctx := context.Background()

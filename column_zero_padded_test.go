@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nao1215/filesql/internal/infer"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,7 +36,7 @@ func TestIsIntegerRejectsZeroPadded(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			require.Equal(t, tt.want, isInteger(tt.value))
+			require.Equal(t, tt.want, infer.IsInteger(tt.value))
 		})
 	}
 }
@@ -59,7 +60,7 @@ func TestIsFloatRejectsZeroPadded(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			require.Equal(t, tt.want, isFloat(tt.value))
+			require.Equal(t, tt.want, infer.IsFloat(tt.value))
 		})
 	}
 }
@@ -69,11 +70,11 @@ func TestIsFloatRejectsZeroPadded(t *testing.T) {
 func TestClassifyValueZeroPadded(t *testing.T) {
 	t.Parallel()
 
-	require.Equal(t, columnTypeText, classifyValue("02134"))
-	require.Equal(t, columnTypeText, classifyValue("007"))
-	require.Equal(t, columnTypeInteger, classifyValue("0"))
-	require.Equal(t, columnTypeInteger, classifyValue("42"))
-	require.Equal(t, columnTypeReal, classifyValue("0.5"))
+	require.Equal(t, columnTypeText, columnTypeOf(infer.Classify("02134")))
+	require.Equal(t, columnTypeText, columnTypeOf(infer.Classify("007")))
+	require.Equal(t, columnTypeInteger, columnTypeOf(infer.Classify("0")))
+	require.Equal(t, columnTypeInteger, columnTypeOf(infer.Classify("42")))
+	require.Equal(t, columnTypeReal, columnTypeOf(infer.Classify("0.5")))
 }
 
 // TestInferColumnTypeZeroPadded verifies a column entirely made of zero-padded
@@ -81,7 +82,7 @@ func TestClassifyValueZeroPadded(t *testing.T) {
 func TestInferColumnTypeZeroPadded(t *testing.T) {
 	t.Parallel()
 
-	got := inferColumnType([]string{"02134", "00501", "10001"})
+	got := columnTypeOf(infer.Column([]string{"02134", "00501", "10001"}))
 	require.Equal(t, columnTypeText, got)
 }
 
@@ -98,7 +99,7 @@ func TestInferColumnTypePreservesLateZeroPadded(t *testing.T) {
 	}
 	column[len(column)-1] = "007"
 
-	require.Equal(t, columnTypeText, inferColumnType(column))
+	require.Equal(t, columnTypeText, columnTypeOf(infer.Column(column)))
 }
 
 // TestOpenContextPreservesZeroPaddedCodesPastTheFirstChunk is the end-to-end
@@ -193,8 +194,8 @@ func TestSurroundingWhitespaceKeepsAValueText(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := mustStayText(tt.value); got != tt.want {
-				t.Errorf("mustStayText(%q) = %v, want %v", tt.value, got, tt.want)
+			if got := infer.MustStayText(tt.value); got != tt.want {
+				t.Errorf("infer.MustStayText(%q) = %v, want %v", tt.value, got, tt.want)
 			}
 		})
 	}

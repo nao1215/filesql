@@ -3,6 +3,7 @@ package filesql
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -222,6 +223,13 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 			fileType:    fileType,
 			compression: compression,
 			closer:      file,
+			reopen: func() (io.Reader, func() error, error) {
+				again, err := filesystem.Open(match)
+				if err != nil {
+					return nil, nil, fmt.Errorf("%w: failed to open FS file %s: %w", ErrIOOperation, match, err)
+				}
+				return again, again.Close, nil
+			},
 		}
 
 		readers = append(readers, readerInput)

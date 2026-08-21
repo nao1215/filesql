@@ -93,7 +93,7 @@ func streamWireFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, fi
 		}
 
 		// Create table
-		if err := createTableFromColumnInfo(ctx, db, t.getName(), t.columnInfo); err != nil {
+		if err := createTable(ctx, db, t.getName(), t.columnInfo); err != nil {
 			return fmt.Errorf("%w: failed to create table %s: %w", ErrDatabaseOperation, t.getName(), err)
 		}
 

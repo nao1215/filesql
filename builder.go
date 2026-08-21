@@ -85,6 +85,10 @@ type readerInput struct {
 	// closer is an optional closer for the reader (set when the reader was opened internally, e.g. from AddFS).
 	// User-provided readers (from AddReader) do not set this field.
 	closer io.Closer
+	// reopen returns the same input read again from its first byte, in the
+	// same state of compression as reader, with what to close when done. It is
+	// nil for a reader a caller handed over, which can only be read once.
+	reopen func() (io.Reader, func() error, error)
 }
 
 // ReaderOption configures one reader added with AddReader.

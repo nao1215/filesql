@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/nao1215/filesql/internal/infer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -382,7 +383,7 @@ func TestInferColumnType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := inferColumnType(tt.values)
+			result := columnTypeOf(infer.Column(tt.values))
 			assert.Equal(t, tt.expected, result, "inferColumnType failed for values: %v", tt.values)
 		})
 	}
@@ -501,7 +502,7 @@ func TestIsDatetime(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isDatetime(tt.value)
+			result := infer.IsDatetime(tt.value)
 			assert.Equal(t, tt.expected, result, "isDatetime failed for value: %q", tt.value)
 		})
 	}
@@ -543,7 +544,7 @@ func TestClassifyValue(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := classifyValue(tt.value)
+			result := columnTypeOf(infer.Classify(tt.value))
 			assert.Equal(t, tt.expected, result, "classifyValue failed for value: %q", tt.value)
 		})
 	}
@@ -580,7 +581,7 @@ func TestIsInteger(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := isInteger(tt.value)
+			result := infer.IsInteger(tt.value)
 			assert.Equal(t, tt.expected, result, "isInteger failed for value: %q", tt.value)
 		})
 	}
@@ -627,7 +628,7 @@ func TestIsFloat(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := isFloat(tt.value)
+			result := infer.IsFloat(tt.value)
 			assert.Equal(t, tt.expected, result, "isFloat failed for value: %q", tt.value)
 		})
 	}
@@ -698,7 +699,7 @@ func TestInferColumnType_PicksTheTypeThatHoldsEveryValue(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := inferColumnType(tt.values)
+			result := columnTypeOf(infer.Column(tt.values))
 			assert.Equal(t, tt.expected, result, "inferColumnType failed")
 		})
 	}
@@ -730,7 +731,7 @@ func TestInferColumnTypeOverLargeColumns(t *testing.T) {
 			}
 		}
 
-		assert.Equal(t, columnTypeText, inferColumnType(values))
+		assert.Equal(t, columnTypeText, columnTypeOf(infer.Column(values)))
 	})
 
 	t.Run("text values scattered through a large column", func(t *testing.T) {
@@ -746,7 +747,7 @@ func TestInferColumnTypeOverLargeColumns(t *testing.T) {
 				}
 			}
 
-			assert.Equal(t, columnTypeText, inferColumnType(values),
+			assert.Equal(t, columnTypeText, columnTypeOf(infer.Column(values)),
 				"%d text values among 1000 integers", texts)
 		}
 	})
@@ -760,7 +761,7 @@ func TestInferColumnTypeOverLargeColumns(t *testing.T) {
 		}
 		values[len(values)-1] = "text_value"
 
-		assert.Equal(t, columnTypeText, inferColumnType(values))
+		assert.Equal(t, columnTypeText, columnTypeOf(infer.Column(values)))
 	})
 }
 
@@ -783,7 +784,7 @@ func BenchmarkInferColumnType(b *testing.B) {
 
 			b.ResetTimer()
 			for range b.N {
-				_ = inferColumnType(values)
+				_ = columnTypeOf(infer.Column(values))
 			}
 		})
 
@@ -804,7 +805,7 @@ func BenchmarkInferColumnType(b *testing.B) {
 
 			b.ResetTimer()
 			for range b.N {
-				_ = inferColumnType(values)
+				_ = columnTypeOf(infer.Column(values))
 			}
 		})
 	}
@@ -830,7 +831,7 @@ func BenchmarkIsDatetime(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		for _, value := range testValues {
-			_ = isDatetime(value)
+			_ = infer.IsDatetime(value)
 		}
 	}
 }
@@ -852,7 +853,7 @@ func BenchmarkGetSampleValues(b *testing.B) {
 		b.Run(fmt.Sprintf("size_%d", size), func(b *testing.B) {
 			b.ResetTimer()
 			for range b.N {
-				_ = inferColumnType(values)
+				_ = columnTypeOf(infer.Column(values))
 			}
 		})
 	}
@@ -880,7 +881,7 @@ func BenchmarkClassifyValue(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		for _, value := range testValues {
-			_ = classifyValue(value)
+			_ = columnTypeOf(infer.Classify(value))
 		}
 	}
 }

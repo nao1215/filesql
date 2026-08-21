@@ -1,7 +1,6 @@
 package filesql
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/nao1215/filesql/parser"
@@ -196,34 +195,4 @@ func TestParserColumnType(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
-}
-
-func TestConvertParserError(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil error returns nil", func(t *testing.T) {
-		result := convertParserError(nil)
-		assert.NoError(t, result)
-	})
-
-	t.Run("duplicate column name with column specified", func(t *testing.T) {
-		err := errors.New("duplicate column name: foo")
-		result := convertParserError(err)
-		assert.Error(t, result)
-		assert.ErrorIs(t, result, errDuplicateColumnName)
-		assert.Contains(t, result.Error(), "foo")
-	})
-
-	t.Run("duplicate column name without column specified", func(t *testing.T) {
-		err := errors.New("duplicate column name")
-		result := convertParserError(err)
-		assert.Error(t, result)
-		assert.Equal(t, errDuplicateColumnName, result)
-	})
-
-	t.Run("other error passes through", func(t *testing.T) {
-		err := errors.New("some other error")
-		result := convertParserError(err)
-		assert.Equal(t, err, result)
-	})
 }

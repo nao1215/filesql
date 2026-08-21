@@ -290,7 +290,7 @@ func streamACHFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, fil
 		}
 
 		// Create table
-		if err := createTableFromColumnInfo(ctx, db, t.getName(), t.columnInfo); err != nil {
+		if err := createTable(ctx, db, t.getName(), t.columnInfo); err != nil {
 			return fmt.Errorf("%w: failed to create table %s: %w", ErrDatabaseOperation, t.getName(), err)
 		}
 
@@ -305,23 +305,6 @@ func streamACHFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, fil
 	// The source is recorded on the same DBTX as the tables, so a rolled-back
 	// load leaves neither behind.
 	return recordFileSource(ctx, db, baseTableName, sourcePath, sourceFormatACH)
-}
-
-// createTableFromColumnInfo creates a SQLite table with the given columns
-func createTableFromColumnInfo(ctx context.Context, db DBTX, tableName string, columnInfo []columnInfo) error {
-	columns := make([]string, 0, len(columnInfo))
-	for _, col := range columnInfo {
-		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.string()))
-	}
-
-	query := fmt.Sprintf(
-		`CREATE TABLE IF NOT EXISTS "%s" (%s)`,
-		tableName,
-		strings.Join(columns, ", "),
-	)
-
-	_, err := db.ExecContext(ctx, query)
-	return err
 }
 
 // insertRecordsIntoTable inserts records into the specified table
