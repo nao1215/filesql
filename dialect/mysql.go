@@ -32,6 +32,7 @@ import (
 //	M-21 !a                              -> (NOT a)
 //	M-21 a ^ b                           -> mysql_bit_xor(a, b)
 //	M-21 a XOR b                         -> ErrUnsupportedSyntax
+//	M-25 UPPER(x) / LOWER(x)             -> unicode_upper / unicode_lower
 //
 // M-10 (LIMIT n, m) needs no rewrite: SQLite accepts it natively.
 func rewriteMySQL(tokens []token) ([]token, error) {
@@ -178,6 +179,10 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		return rewriteRenameCall(tokens, open, closeIdx, "strict_concat", mysqlCallPass)
 	case fnNameTrim:
 		return rewriteTrim(tokens, open, closeIdx, mysqlCallPass)
+	case fnNameUpper, fnNameLower:
+		// SQLite's own upper() and lower() fold ASCII alone, where every dialect
+		// here folds the whole of Unicode: UPPER('école') came back 'éCOLE'.
+		return rewriteRenameCall(tokens, open, closeIdx, unicodeCaseHelper(tokens[nameIdx].text), mysqlCallPass)
 	case "HEX":
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_hex", mysqlCallPass)
 	case "UNHEX":

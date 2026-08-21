@@ -188,6 +188,24 @@ func rewriteRenameCall(tokens []token, open, closeIdx int, newName string, recur
 	return repl, true, nil
 }
 
+// The case-folding call names, and the helpers they are rewritten onto. SQLite
+// folds ASCII alone; MySQL, PostgreSQL and GoogleSQL all fold the whole of
+// Unicode, so the call goes to a helper of this package's own for those three
+// and is left to SQLite for the SQLite dialect, whose callers want SQLite's
+// answers.
+const (
+	fnNameUpper = "UPPER"
+	fnNameLower = "LOWER"
+)
+
+// unicodeCaseHelper is the helper name for a call to UPPER or LOWER.
+func unicodeCaseHelper(name string) string {
+	if strings.EqualFold(name, fnNameLower) {
+		return "unicode_lower"
+	}
+	return "unicode_upper"
+}
+
 // trimSpaceTokens returns toks without leading or trailing whitespace tokens.
 func trimSpaceTokens(toks []token) []token {
 	lo, hi := 0, len(toks)

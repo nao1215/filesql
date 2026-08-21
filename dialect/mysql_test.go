@@ -63,6 +63,12 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-24_mod_literals", "SELECT 7 MOD 2", `SELECT 7 % 2 AS "7 MOD 2"`},
 		{"M-24_mod_in_where", "SELECT * FROM t WHERE a MOD b = 1", "SELECT * FROM t WHERE a % b = 1"},
 		{"M-24_mod_call_untouched", "SELECT MOD(7, 2)", "SELECT MOD(7, 2)"},
+
+		// UPPER and LOWER go to helpers that fold the whole of Unicode; SQLite's
+		// own fold only ASCII.
+		{"M-25_upper", "SELECT UPPER(name) FROM t", `SELECT unicode_upper(name) AS "UPPER(name)" FROM t`},
+		{"M-25_lower", "SELECT LOWER(name) FROM t", `SELECT unicode_lower(name) AS "LOWER(name)" FROM t`},
+		{"M-25_upper_nested", "SELECT UPPER(TRIM(name))", `SELECT unicode_upper(TRIM(name)) AS "UPPER(TRIM(name))"`},
 		{"M-24_mod_quoted_name_untouched", "SELECT `mod` FROM t", `SELECT "mod" FROM t`},
 		{"M-24_mod_alias_untouched", "SELECT a AS `mod` FROM t", `SELECT a AS "mod" FROM t`},
 		{"M-24_mod_parenthesized_right", "SELECT a MOD (b + 1) FROM t", `SELECT a % (b + 1) AS "a MOD (b + 1)" FROM t`},

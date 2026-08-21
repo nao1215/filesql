@@ -27,6 +27,7 @@ import (
 //	P-16 TRIM(BOTH x FROM s), OVERLAY, BTRIM, JSONB_ARRAY_LENGTH
 //	P-17 ARRAY[...]                -> ErrUnsupportedSyntax
 //	P-18 generate_series(...) etc. -> ErrUnsupportedSyntax
+//	P-19 UPPER(x) / LOWER(x)       -> unicode_upper / unicode_lower
 func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedPostgreSQL(tokens); err != nil {
 		return nil, err
@@ -184,6 +185,8 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 		return rewriteTrim(tokens, open, closeIdx, pgCallPass)
 	case "OVERLAY":
 		return rewriteOverlay(tokens, open, closeIdx, pgCallPass)
+	case fnNameUpper, fnNameLower:
+		return rewriteRenameCall(tokens, open, closeIdx, unicodeCaseHelper(tokens[nameIdx].text), pgCallPass)
 	case "BTRIM":
 		return rewriteRenameCall(tokens, open, closeIdx, "trim", pgCallPass)
 	case "JSONB_ARRAY_LENGTH", "JSON_ARRAY_LENGTH":

@@ -185,3 +185,23 @@ func TestTranslateIdempotent(t *testing.T) {
 		}
 	}
 }
+
+// TestSQLiteDialectKeepsItsOwnCaseFolding pins the boundary of the case-folding
+// rewrite: a caller writing SQLite gets SQLite's functions, whose folding stops
+// at ASCII, because that is what SQLite answers and what they asked for.
+func TestSQLiteDialectKeepsItsOwnCaseFolding(t *testing.T) {
+	t.Parallel()
+
+	for _, query := range []string{
+		`SELECT UPPER(name) FROM t`,
+		`SELECT LOWER(name) FROM t`,
+	} {
+		got, err := Translate(SQLite, query)
+		if err != nil {
+			t.Fatalf("Translate(SQLite, %q) error: %v", query, err)
+		}
+		if got != query {
+			t.Errorf("Translate(SQLite, %q) = %q, want it unchanged", query, got)
+		}
+	}
+}

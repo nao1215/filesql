@@ -29,6 +29,7 @@ import (
 //	G-18 STRING_AGG(DISTINCT x, ',')           -> group_concat(DISTINCT x)
 //	G-19 [1,2,3] / x[OFFSET(n)]               -> ErrUnsupportedSyntax
 //	G-20 SAFE.f(args)                         -> safe_f(args)
+//	G-21 UPPER(x) / LOWER(x)                  -> unicode_upper / unicode_lower
 func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedGoogleSQL(tokens); err != nil {
 		return nil, err
@@ -210,6 +211,8 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 		return rewriteCastCall(tokens, open, closeIdx, GoogleSQL, "googlesql_cast", googlesqlCallPass)
 	case "SAFE_CAST":
 		return rewriteSafeCast(tokens, open, closeIdx)
+	case fnNameUpper, fnNameLower:
+		return rewriteRenameCall(tokens, open, closeIdx, unicodeCaseHelper(tokens[nameIdx].text), googlesqlCallPass)
 	case "FORMAT":
 		return rewriteRenameCall(tokens, open, closeIdx, "printf", googlesqlCallPass)
 	case "CONCAT":
