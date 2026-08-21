@@ -425,15 +425,9 @@ func newMemoryDB(t *testing.T) *sql.DB {
 // they were written under are gone.
 func TestOpenRefusesTwoSourcesWhoseNamesDifferOnlyInCase(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "Users.csv"), []byte("a,b\n1,2\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "users.csv"), []byte("c,d\n3,4\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	first, second := caseDifferingPair(t)
 
-	db, err := Open(dir)
+	db, err := Open(first, second)
 	if err == nil {
 		_ = db.Close()
 		t.Fatal("Open succeeded on two files that both want one table, spelled in two cases")
@@ -441,6 +435,26 @@ func TestOpenRefusesTwoSourcesWhoseNamesDifferOnlyInCase(t *testing.T) {
 	if !errors.Is(err, ErrDuplicateTable) {
 		t.Errorf("error = %v, want ErrDuplicateTable", err)
 	}
+}
+
+// caseDifferingPair writes a/Users.csv and b/users.csv, each with its own
+// columns. They go in separate directories because macOS and Windows fold case
+// in file names: side by side, the second write would replace the first and
+// there would be nothing to collide.
+func caseDifferingPair(t *testing.T) (first, second string) {
+	t.Helper()
+	dir := t.TempDir()
+	first = filepath.Join(dir, "a", "Users.csv")
+	second = filepath.Join(dir, "b", "users.csv")
+	for path, body := range map[string]string{first: "a,b\n1,2\n", second: "c,d\n3,4\n"} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return first, second
 }
 
 // TestBuilderRefusesTwoReadersWhoseNamesDifferOnlyInCase asks it of the API
@@ -476,15 +490,7 @@ func TestBuilderRefusesTwoReadersWhoseNamesDifferOnlyInCase(t *testing.T) {
 func TestReplacingKeepsTheLaterSpellingsColumns(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	dir := t.TempDir()
-	first := filepath.Join(dir, "Users.csv")
-	second := filepath.Join(dir, "users.csv")
-	if err := os.WriteFile(first, []byte("a,b\n1,2\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(second, []byte("c,d\n3,4\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	first, second := caseDifferingPair(t)
 
 	db := newMemoryDB(t)
 	if err := LoadInto(ctx, db, first, second); err != nil {
