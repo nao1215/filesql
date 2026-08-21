@@ -524,3 +524,31 @@ func buildParquetForBounds(t *testing.T) []byte {
 	require.NoError(t, pqarrow.WriteTable(table, &buf, 1024, parquet.NewWriterProperties(), pqarrow.DefaultWriterProps()))
 	return buf.Bytes()
 }
+
+// TestChunkFitsFrom pins the two lengths a damaged file can declare that
+// arithmetic would otherwise let through: one large enough that adding it to the
+// offset overflows into a negative number, and one that is negative to begin
+// with.
+func TestChunkFitsFrom(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		start, length, size int64
+		want                bool
+	}{
+		"a chunk inside the file":         {start: 100, length: 100, size: 200, want: true},
+		"a chunk ending at the last byte": {start: 100, length: 100, size: 200, want: true},
+		"a chunk of no bytes":             {start: 100, length: 0, size: 200, want: true},
+		"a chunk one byte too long":       {start: 100, length: 101, size: 200, want: false},
+		"a length that overflows the sum": {start: 100, length: math.MaxInt64, size: 200, want: false},
+		"a negative length":               {start: 100, length: -1, size: 200, want: false},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, chunkFitsFrom(tt.start, tt.length, tt.size))
+		})
+	}
+}

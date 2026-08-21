@@ -122,7 +122,7 @@ func parquetChunksLieInTheFile(reader *pqfile.Reader, size int64) error {
 				// The chunk names no page at all, so there is nothing to bound.
 				continue
 			}
-			if length := chunk.TotalCompressedSize(); start+length > size {
+			if length := chunk.TotalCompressedSize(); !chunkFitsFrom(start, length, size) {
 				return parseError(nil,
 					"column %d of row group %d is declared as %d bytes from offset %d, which runs past the end of a file of %d bytes",
 					column, group, length, start, size)
@@ -130,6 +130,18 @@ func parquetChunksLieInTheFile(reader *pqfile.Reader, size int64) error {
 		}
 	}
 	return nil
+}
+
+// chunkFitsFrom reports whether length bytes from start are within a file of
+// size bytes, for a length the file itself declared and this package therefore
+// cannot trust.
+//
+// The comparison is written against what is left of the file rather than as
+// start+length, because that sum overflows for a length near the largest int64
+// and comes back negative, which reads as fitting. A negative length does not
+// describe a chunk at all and is refused rather than treated as zero.
+func chunkFitsFrom(start, length, size int64) bool {
+	return length >= 0 && length <= size-start
 }
 
 // readArrowTable is pqarrow.FileReader.ReadTable done in the calling goroutine,
