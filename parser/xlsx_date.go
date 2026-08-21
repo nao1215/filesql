@@ -178,9 +178,16 @@ func isoFromSerial(f *excelize.File, sheet, axis string, date1904 bool) (string,
 	if err != nil {
 		return "", false
 	}
+	var ok bool
 	serial, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
 	if err != nil {
 		return "", false
+	}
+	if !date1904 {
+		serial, ok = serialIn1900System(serial)
+		if !ok {
+			return "", false
+		}
 	}
 	at, err := excelize.ExcelDateToTime(serial, date1904)
 	if err != nil {
@@ -190,4 +197,31 @@ func isoFromSerial(f *excelize.File, sheet, axis string, date1904 bool) (string,
 		return at.Format(time.DateOnly), true
 	}
 	return at.Format(time.DateTime), true
+}
+
+// serialIn1900System is serial adjusted for the calendar the 1900 date system
+// actually keeps, and whether it names a day at all.
+//
+// Serial 1 is January 1, 1900 and serial 60 is a February 29, 1900 that no
+// calendar has, kept so files count days the way Lotus 1-2-3 did. Counting
+// plain days from 1899-12-30, which is what the conversion below this does, is
+// therefore right from serial 61 on and a day early before it. A serial below 1
+// is before the system starts, and the phantom day is not a day, so neither
+// converts: the cell keeps the text the workbook shows, for the reason an
+// elapsed duration does.
+//
+// This corrects the conversion rather than the file. It can go away if
+// excelize.ExcelDateToTime ever agrees with excelize's own rendering of the same
+// cell, which is to say when ExcelDateToTime(1, false) returns 1900-01-01.
+func serialIn1900System(serial float64) (float64, bool) {
+	switch {
+	case serial < 1:
+		return 0, false
+	case serial < 60:
+		return serial + 1, true
+	case serial < 61:
+		return 0, false
+	default:
+		return serial, true
+	}
 }

@@ -256,6 +256,177 @@ func TestXLSXLocalizedDateFormatImportsAsISO(t *testing.T) {
 	}
 }
 
+// dateCellWorkbook writes a workbook holding serial twice: once under numFmt,
+// which is the cell a test loads, and once under an ISO format, which is what
+// the workbook shows for that serial. It returns both renderings, so a test can
+// assert a load against the file rather than against a constant of its own.
+func dateCellWorkbook(t *testing.T, path string, serial float64, numFmt int, date1904 bool) (shown, iso string) {
+	t.Helper()
+
+	f := excelize.NewFile()
+	defer func() { _ = f.Close() }()
+	if date1904 {
+		yes := true
+		require.NoError(t, f.SetWorkbookProps(&excelize.WorkbookPropsOptions{Date1904: &yes}))
+	}
+	require.NoError(t, f.SetSheetRow("Sheet1", "A1", &[]any{"at", "oracle"}))
+	require.NoError(t, f.SetCellValue("Sheet1", "A2", serial))
+	require.NoError(t, f.SetCellValue("Sheet1", "B2", serial))
+	style, err := f.NewStyle(&excelize.Style{NumFmt: numFmt})
+	require.NoError(t, err)
+	require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
+	isoFormat := "yyyy-mm-dd hh:mm:ss"
+	oracle, err := f.NewStyle(&excelize.Style{CustomNumFmt: &isoFormat})
+	require.NoError(t, err)
+	require.NoError(t, f.SetCellStyle("Sheet1", "B2", "B2", oracle))
+	require.NoError(t, f.SaveAs(path))
+
+	shownFile, err := excelize.OpenFile(path)
+	require.NoError(t, err)
+	defer func() { _ = shownFile.Close() }()
+	rows, err := shownFile.GetRows("Sheet1")
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.Len(t, rows[1], 2)
+	// A cell at midnight holds a day and no time, which is how a date cell
+	// loads.
+	return rows[1][0], strings.TrimSuffix(rows[1][1], " 00:00:00")
+}
+
+// loadDateCell is the value a workbook's first date cell loads as.
+func loadDateCell(t *testing.T, path, table string) string {
+	t.Helper()
+
+	ctx := context.Background()
+	db, err := OpenContext(ctx, path)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var at string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT at FROM `+table+`_Sheet1`).Scan(&at))
+	return at
+}
+
+// TestXLSX1900SerialsMatchTheWorkbook pins a date cell to the day the workbook
+// shows. The 1900 date system counts serial 1 as January 1, 1900 and keeps a
+// February 29, 1900 that never existed, so a conversion that counts plain days
+// from 1899-12-30 is a day early for every date before March 1900 — a whole
+// column of historical records read as the day before the one in the file.
+func TestXLSX1900SerialsMatchTheWorkbook(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		serial float64
+		want   string
+	}{
+		{name: "the first day of the system", serial: 1, want: "1900-01-01"},
+		{name: "the second day", serial: 2, want: "1900-01-02"},
+		{name: "the day before the phantom leap day", serial: 59, want: "1900-02-28"},
+		{name: "the day after it", serial: 61, want: "1900-03-01"},
+		{name: "the day after that", serial: 62, want: "1900-03-02"},
+		{name: "a modern day", serial: 45000, want: "2023-03-15"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "d.xlsx")
+			// Number format 14 renders mm-dd-yy, which is the same day in
+			// another order.
+			_, iso := dateCellWorkbook(t, path, tt.serial, 14, false)
+			require.Equal(t, tt.want, iso, "the workbook shows a different day than the test expects")
+
+			assert.Equal(t, iso, loadDateCell(t, path, "d"))
+		})
+	}
+}
+
+// TestXLSXSerialWithoutADayStaysAsShown covers the two serials the 1900 system
+// has no calendar day for. Serial 60 is the February 29, 1900 Excel keeps for
+// compatibility and no calendar has, and a serial below 1 is before the system
+// starts; converting either invents a day, and converting both onto their
+// neighbors makes two different cells the same date.
+func TestXLSXSerialWithoutADayStaysAsShown(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name   string
+		serial float64
+	}{
+		{name: "the phantom leap day", serial: 60},
+		{name: "day zero", serial: 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "d.xlsx")
+			shown, _ := dateCellWorkbook(t, path, tt.serial, 14, false)
+
+			assert.Equal(t, shown, loadDateCell(t, path, "d"),
+				"a serial with no calendar day keeps the text the workbook shows")
+		})
+	}
+}
+
+// TestXLSX1900SerialKeepsItsTimeOfDay pins that the correction moves the day
+// and leaves the clock alone, on both sides of the boundary it turns on at.
+func TestXLSX1900SerialKeepsItsTimeOfDay(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name   string
+		serial float64
+		want   string
+	}{
+		{name: "before the phantom leap day", serial: 59.25, want: "1900-02-28 06:00:00"},
+		{name: "after it", serial: 61.5, want: "1900-03-01 12:00:00"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "d.xlsx")
+			// Number format 22 renders a date and a time of day.
+			_, iso := dateCellWorkbook(t, path, tt.serial, 22, false)
+			require.Equal(t, tt.want, iso, "the workbook shows a different time than the test expects")
+
+			assert.Equal(t, iso, loadDateCell(t, path, "d"))
+		})
+	}
+}
+
+// TestXLSX1904SerialsAreUntouched keeps the correction confined to the calendar
+// that needs it. The 1904 system starts at serial 0 and has no phantom day, so
+// nothing about it is off by one.
+//
+// The expected days here are Excel's documented meaning rather than the
+// workbook's own rendering, which the other tests in this file assert against:
+// the renderer shows the 1900 system's day-zero placeholder for serial 0 even
+// in a 1904 workbook, and that serial is the boundary worth pinning.
+func TestXLSX1904SerialsAreUntouched(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name   string
+		serial float64
+		want   string
+	}{
+		{name: "the first day of the system", serial: 0, want: "1904-01-01"},
+		{name: "the second day", serial: 1, want: "1904-01-02"},
+		{name: "a modern day", serial: 45000, want: "2027-03-16"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "mac1904.xlsx")
+			dateCellWorkbook(t, path, tt.serial, 14, true)
+
+			assert.Equal(t, tt.want, loadDateCell(t, path, "mac1904"))
+		})
+	}
+}
+
 // TestXLSXColoredDateFormatImportsAsISO pins that a cell's color has nothing to
 // do with whether it holds a date. A custom format may start with a color, and
 // two of Excel's color names hold a letter that also names an elapsed unit, so
