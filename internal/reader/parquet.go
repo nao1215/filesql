@@ -1,4 +1,4 @@
-package parser
+package reader
 
 import (
 	"bytes"
@@ -8,11 +8,13 @@ import (
 	"io"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/array"
 	pqfile "github.com/apache/arrow/go/v18/parquet/file"
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
+	"github.com/nao1215/filesql/internal/infer"
 )
 
 // readArrowTable is pqarrow.FileReader.ReadTable done in the calling goroutine,
@@ -123,7 +125,7 @@ var parquetMagic = []byte("PAR1") //nolint:gochecknoglobals // constant-like
 
 // errNotParquet reports bytes that do not begin the way the format says.
 func errNotParquet(head []byte) error {
-	return fmt.Errorf("not a parquet file: it begins %q rather than %q", head, parquetMagic)
+	return parseError(nil, "not a parquet file: it begins %q rather than %q", head, parquetMagic)
 }
 
 // bytesReaderAt wraps a byte slice to implement io.ReaderAt and io.Seeker
@@ -134,7 +136,7 @@ type bytesReaderAt struct {
 
 // ReadAt implements io.ReaderAt
 func (b *bytesReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
-	if off >= int64(len(b.data)) {
+	if off < 0 || off >= int64(len(b.data)) {
 		return 0, io.EOF
 	}
 	n = copy(p, b.data[off:])
@@ -181,125 +183,152 @@ func (b *bytesReaderAt) Seek(offset int64, whence int) (int64, error) {
 	return newOffset, nil
 }
 
-// parseParquet parses Parquet data from reader.
-func parseParquet(reader io.Reader) (*TableData, error) {
-	// Read all data into memory (Parquet requires random access)
-	data, err := io.ReadAll(reader)
+// readParquet reads a Parquet file in chunks. The whole file is buffered first
+// because the format is read back to front: its metadata is at the end.
+func readParquet(src io.Reader, opts Options, emit Emit) (Result, error) {
+	data, err := io.ReadAll(src)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read parquet data: %w", err)
+		return Result{}, parseError(err, "failed to read parquet data")
 	}
-
 	if len(data) == 0 {
-		return nil, errors.New("empty parquet file")
+		return Result{}, emptyError("empty parquet file")
 	}
 	if !bytes.HasPrefix(data, parquetMagic) {
-		return nil, errNotParquet(data[:min(len(data), len(parquetMagic))])
+		return Result{}, errNotParquet(data[:min(len(data), len(parquetMagic))])
 	}
 
-	// Create a bytes reader for the parquet data
-	bytesReader := &bytesReaderAt{data: data}
-
-	// Create parquet file reader from bytes
-	pqReader, err := pqfile.NewParquetReader(bytesReader)
+	pqReader, err := pqfile.NewParquetReader(&bytesReaderAt{data: data})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create parquet reader: %w", err)
+		return Result{}, parseError(err, "failed to create parquet reader")
 	}
 	defer pqReader.Close()
 
-	// Create arrow file reader
 	arrowReader, err := pqarrow.NewFileReader(pqReader, pqarrow.ArrowReadProperties{}, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create arrow reader: %w", err)
+		return Result{}, parseError(err, "failed to create arrow reader")
 	}
 
-	// Read all record batches using the table reader approach
 	table, err := readArrowTable(context.Background(), arrowReader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read table: %w", err)
+		return Result{}, parseError(err, "failed to read table")
 	}
 	defer table.Release()
 
-	// Extract headers from schema
 	schema := table.Schema()
-	headers := make([]string, schema.NumFields())
+	header := make([]string, schema.NumFields())
 	for i, field := range schema.Fields() {
-		headers[i] = field.Name
+		header[i] = field.Name
 	}
-
 	// Parquet declares the type of every column, so the schema is read rather
 	// than inferred from the rendered values: inference cannot tell a STRING
 	// column of digits from an INT64 one, and would turn a zip code into a
 	// number.
-	columnTypes := arrowColumnTypes(schema)
+	types := arrowColumnTypes(schema, opts.Rendering)
+	result := Result{Header: header, Types: types}
 
+	// A file with a schema and no rows still names its columns.
 	if table.NumRows() == 0 {
-		return &TableData{
-			Headers:     headers,
-			Records:     [][]string{},
-			ColumnTypes: columnTypes,
-		}, nil
+		return result, emit(&Chunk{Header: header, Types: types})
 	}
 
-	// Read data by converting table to record batches
-	tableReader := array.NewTableReader(table, 0)
+	tableReader := array.NewTableReader(table, int64(chunkSizeOf(opts)))
 	defer tableReader.Release()
 
-	var records [][]string
 	for tableReader.Next() {
 		batch := tableReader.Record()
 
-		// Convert each row in the batch
-		numRows := batch.NumRows()
-		for i := range numRows {
+		records := make([][]string, 0, batch.NumRows())
+		nulls := make([][]bool, 0, batch.NumRows())
+		for i := range batch.NumRows() {
 			row := make([]string, batch.NumCols())
+			nullRow := make([]bool, batch.NumCols())
 			for j, col := range batch.Columns() {
-				row[j] = extractValueFromArrowArray(col, i)
+				if arrowCellIsNull(col, i, opts.Rendering) {
+					nullRow[j] = true
+					continue
+				}
+				row[j] = extractValueFromArrowArray(col, i, opts.Rendering)
 			}
 			records = append(records, row)
+			nulls = append(nulls, nullRow)
 		}
 
-		// Release the batch to free memory immediately
-		batch.Release()
+		if len(records) == 0 {
+			continue
+		}
+		result.Rows += len(records)
+		result.Total += len(records)
+		if err := emit(&Chunk{Header: header, Records: records, Types: types, Nulls: nulls}); err != nil {
+			return Result{}, err
+		}
 	}
 
 	if err := tableReader.Err(); err != nil {
-		return nil, fmt.Errorf("error reading table records: %w", err)
+		return Result{}, parseError(err, "error reading table records")
 	}
-
-	return &TableData{
-		Headers:     headers,
-		Records:     records,
-		ColumnTypes: columnTypes,
-	}, nil
+	return result, nil
 }
 
-// arrowColumnTypes maps a Parquet file's Arrow schema onto column types. The
-// type chosen for each column has to agree with what extractValueFromArrowArray
-// renders, because the value a caller reads back is parsed from that string.
-// Anything not named here stays text, which is the safe answer for a type whose
-// rendered shape is not known.
-func arrowColumnTypes(schema *arrow.Schema) []ColumnType {
+// arrowColumnTypes maps a Parquet file's Arrow schema onto column types.
+//
+// The type chosen for each column has to agree with what
+// extractValueFromArrowArray renders under the same rendering, because a value
+// is read back by parsing that string -- and, for a load, because SQLite
+// applies the column's affinity to it. A mismatch is worse than text: it would
+// store a value the column claims not to hold.
+func arrowColumnTypes(schema *arrow.Schema, rendering Rendering) []infer.Type {
 	fields := schema.Fields()
-	types := make([]ColumnType, len(fields))
+	types := make([]infer.Type, len(fields))
 	for i, field := range fields {
-		types[i] = arrowColumnType(field.Type)
+		types[i] = arrowColumnType(field.Type, rendering)
 	}
 	return types
 }
 
-// arrowColumnType is the column type for one Arrow type. Booleans render as
-// "true"/"false" and stay text; the temporal types render as the raw count they
-// store, which is an integer.
-func arrowColumnType(dt arrow.DataType) ColumnType {
+// arrowColumnType is the column type for one Arrow type. The temporal types
+// render as the raw count they store (days, milliseconds, or ticks since the
+// epoch), which is an integer. Anything not named here stays text, which is the
+// safe answer: an unrecognized type is rendered by extractValueFromArrowArray's
+// default branch, and its shape is not known.
+func arrowColumnType(dt arrow.DataType, rendering Rendering) infer.Type {
 	switch dt.ID() {
+	case arrow.BOOL:
+		// A boolean renders as 1 or 0 for SQLite, which is an integer there, and
+		// as "true" or "false" otherwise, which is not.
+		if rendering == RenderSQLite {
+			return infer.Integer
+		}
+		return infer.Text
 	case arrow.INT8, arrow.INT16, arrow.INT32, arrow.INT64,
 		arrow.UINT8, arrow.UINT16, arrow.UINT32, arrow.UINT64,
 		arrow.DATE32, arrow.DATE64, arrow.TIMESTAMP:
-		return TypeInteger
+		return infer.Integer
 	case arrow.FLOAT16, arrow.FLOAT32, arrow.FLOAT64:
-		return TypeReal
+		return infer.Real
 	default:
-		return TypeText
+		return infer.Text
+	}
+}
+
+// arrowCellIsNull reports whether a cell has no value the destination can
+// store: a Parquet null always, and under RenderSQLite a NaN as well, which
+// SQLite has no representation for at all -- a computed NaN is NULL there, so
+// NULL is what the value already means. Left as text it would sit in a column
+// declared REAL as the word "NaN".
+func arrowCellIsNull(arr arrow.Array, index int64, rendering Rendering) bool {
+	if arr.IsNull(int(index)) {
+		return true
+	}
+	if rendering != RenderSQLite {
+		return false
+	}
+	switch a := arr.(type) {
+	case *array.Float32:
+		return math.IsNaN(float64(a.Value(int(index))))
+	case *array.Float64:
+		return math.IsNaN(a.Value(int(index)))
+	default:
+		return false
 	}
 }
 
@@ -317,7 +346,7 @@ func arrowColumnType(dt arrow.DataType) ColumnType {
 // computed one becomes NULL there, so NULL is what the value already means in
 // the destination. Keeping the word would leave the same TEXT-in-a-REAL-column
 // mismatch this exists to remove.
-func sqliteFloatText(f float64, bitSize int) string {
+func sqliteFloatText(f float64, bitSize int, rendering Rendering) string {
 	// A literal SQLite overflows to an infinity while parsing it. There is no
 	// spelling of the value itself that its REAL affinity accepts.
 	const infinityLiteral = "9e999"
@@ -329,21 +358,25 @@ func sqliteFloatText(f float64, bitSize int) string {
 	case math.IsNaN(f):
 		return ""
 	}
-	return strconv.FormatFloat(f, 'g', -1, bitSize)
+	text := strconv.FormatFloat(f, 'g', -1, bitSize)
+	// A whole number renders with neither a point nor an exponent, and read back
+	// that spelling is an integer. The suffix is what keeps a loaded column REAL;
+	// a caller that only renders the value has no column to keep.
+	if rendering == RenderSQLite && !strings.ContainsAny(text, ".eE") {
+		text += ".0"
+	}
+	return text
 }
 
 // extractValueFromArrowArray extracts a value from an Arrow array at the given index.
-func extractValueFromArrowArray(arr arrow.Array, index int64) string {
+func extractValueFromArrowArray(arr arrow.Array, index int64, rendering Rendering) string {
 	if arr.IsNull(int(index)) {
 		return ""
 	}
 
 	switch a := arr.(type) {
 	case *array.Boolean:
-		if a.Value(int(index)) {
-			return "true"
-		}
-		return "false"
+		return boolText(a.Value(int(index)), rendering)
 
 	case *array.Int8:
 		return strconv.Itoa(int(a.Value(int(index))))
@@ -364,27 +397,40 @@ func extractValueFromArrowArray(arr arrow.Array, index int64) string {
 		return strconv.FormatUint(a.Value(int(index)), 10)
 
 	case *array.Float32:
-		return sqliteFloatText(float64(a.Value(int(index))), 32)
+		return sqliteFloatText(float64(a.Value(int(index))), 32, rendering)
 	case *array.Float64:
-		return sqliteFloatText(a.Value(int(index)), 64)
+		return sqliteFloatText(a.Value(int(index)), 64, rendering)
 
 	case *array.String:
 		return a.Value(int(index))
 	case *array.Binary:
 		return string(a.Value(int(index)))
 
+	// The temporal types keep the raw count the file stores: days for Date32,
+	// milliseconds for Date64, and whatever unit the schema names for Timestamp.
 	case *array.Date32:
-		days := a.Value(int(index))
-		return fmt.Sprintf("%d", days)
+		return strconv.FormatInt(int64(a.Value(int(index))), 10)
 	case *array.Date64:
-		millis := a.Value(int(index))
-		return fmt.Sprintf("%d", millis)
-
+		return strconv.FormatInt(int64(a.Value(int(index))), 10)
 	case *array.Timestamp:
-		ts := a.Value(int(index))
-		return fmt.Sprintf("%d", ts)
+		return strconv.FormatInt(int64(a.Value(int(index))), 10)
 
 	default:
 		return fmt.Sprintf("%v", arr.GetOneForMarshal(int(index)))
 	}
+}
+
+// boolText spells a boolean the way its column is declared: 1 and 0 for the
+// INTEGER column a load declares, and the words otherwise.
+func boolText(v bool, rendering Rendering) string {
+	if rendering == RenderSQLite {
+		if v {
+			return "1"
+		}
+		return "0"
+	}
+	if v {
+		return "true"
+	}
+	return "false"
 }

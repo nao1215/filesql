@@ -7,20 +7,11 @@ import (
 	"github.com/nao1215/filesql/internal/infer"
 )
 
-// inferColumnTypes types each column by the rule the root package loads it
-// with, so a table read here and the same table loaded into SQLite agree.
-func inferColumnTypes(headers []string, records [][]string) []ColumnType {
-	evidence := make([]infer.Evidence, len(headers))
-	for _, r := range records {
-		for i := range headers {
-			if i < len(r) {
-				evidence[i].Add(r[i])
-			}
-		}
-	}
-	columnTypes := make([]ColumnType, len(headers))
-	for i := range headers {
-		columnTypes[i] = columnTypeOf(evidence[i].Type())
+// columnTypesOf names a read's inferred types in this package's vocabulary.
+func columnTypesOf(types []infer.Type) []ColumnType {
+	columnTypes := make([]ColumnType, len(types))
+	for i, t := range types {
+		columnTypes[i] = columnTypeOf(t)
 	}
 	return columnTypes
 }

@@ -1,6 +1,8 @@
 package parser
 
-import "fmt"
+import (
+	"github.com/nao1215/filesql/internal/reader"
+)
 
 // ExcelSheetPolicy decides which sheets of a workbook a read looks at.
 //
@@ -9,13 +11,13 @@ import "fmt"
 // sheets it means to present. Whether those belong in a database is the
 // caller's judgment rather than something this package can decide, so which
 // sheets to take is a setting and not a rule.
-type ExcelSheetPolicy int
+type ExcelSheetPolicy = reader.ExcelSheetPolicy
 
 const (
 	// ExcelSheetPolicyAll reads every sheet, hidden or not. It is the zero
 	// value, so a caller that names no policy keeps the behavior this package
 	// had before the setting existed.
-	ExcelSheetPolicyAll ExcelSheetPolicy = iota
+	ExcelSheetPolicyAll = reader.ExcelSheetPolicyAll
 
 	// ExcelSheetPolicyVisibleOnly reads only the sheets a workbook shows.
 	//
@@ -24,63 +26,29 @@ const (
 	// reports one boolean covering both, so neither does this package: a sheet
 	// the workbook does not show is left out under this policy, and no claim is
 	// made about which of the two ways it was hidden.
-	ExcelSheetPolicyVisibleOnly
+	ExcelSheetPolicyVisibleOnly = reader.ExcelSheetPolicyVisibleOnly
 )
 
-// String renders the policy for messages and logs.
-func (p ExcelSheetPolicy) String() string {
-	switch p {
-	case ExcelSheetPolicyVisibleOnly:
-		return "visible-only"
-	case ExcelSheetPolicyAll:
-		return "all"
-	default:
-		return fmt.Sprintf("ExcelSheetPolicy(%d)", int(p))
-	}
-}
-
 // ExcelSheet is one sheet of a workbook and whether the workbook shows it.
-type ExcelSheet struct {
-	// Name is the sheet name as the workbook stores it, before any sanitizing a
-	// caller applies to turn it into a table name.
-	Name string
-	// Visible is false for a sheet the workbook does not show, whether it is
-	// hidden or very hidden.
-	Visible bool
-}
+type ExcelSheet = reader.ExcelSheet
 
 // ExcelSheetSource is the part of an open workbook that sheet selection reads.
 //
 // It is an interface rather than the concrete workbook type for two reasons:
 // the excelize dependency stays out of this package's signatures, and the
-// selection rules — order, filtering, and what happens when a visibility cannot
-// be read — become testable without a workbook that has to be coaxed into
-// failing.
-type ExcelSheetSource interface {
-	// GetSheetList returns the sheet names in the order the workbook stores them.
-	GetSheetList() []string
-	// GetSheetVisible reports whether the workbook shows the named sheet.
-	GetSheetVisible(sheet string) (bool, error)
-}
+// selection rules -- order, filtering, and what happens when a visibility
+// cannot be read -- become testable without a workbook that has to be coaxed
+// into failing.
+type ExcelSheetSource = reader.ExcelSheetSource
 
 // ExcelSheets returns every sheet of the workbook in the order the workbook
 // stores them, with the visibility it reports for each.
 //
 // A visibility that cannot be read is an error, not an assumption. Defaulting
 // to visible would load a sheet the workbook hides; defaulting to hidden would
-// drop one it shows. Either way the caller is told something untrue about the
-// file, which is worse than being told the file could not be understood.
+// drop one it shows.
 func ExcelSheets(f ExcelSheetSource) ([]ExcelSheet, error) {
-	names := f.GetSheetList()
-	sheets := make([]ExcelSheet, 0, len(names))
-	for _, name := range names {
-		visible, err := f.GetSheetVisible(name)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read the visibility of sheet %q: %w", name, err)
-		}
-		sheets = append(sheets, ExcelSheet{Name: name, Visible: visible})
-	}
-	return sheets, nil
+	return reader.ExcelSheets(f)
 }
 
 // SelectExcelSheets returns the sheets policy admits, in workbook order, and
@@ -88,21 +56,7 @@ func ExcelSheets(f ExcelSheetSource) ([]ExcelSheet, error) {
 //
 // Every Excel read goes through this rather than filtering at its own call to
 // the sheet list, so "which sheets does this workbook contribute?" has one
-// answer whatever opened the file. That matters most for the caller that maps
-// sheets onto table names: the names it must keep apart are the ones actually
-// loaded, and a sheet nobody reads cannot collide with one that is read.
+// answer whatever opened the file.
 func SelectExcelSheets(f ExcelSheetSource, policy ExcelSheetPolicy) (loaded, skipped []string, err error) {
-	sheets, err := ExcelSheets(f)
-	if err != nil {
-		return nil, nil, err
-	}
-	loaded = make([]string, 0, len(sheets))
-	for _, sheet := range sheets {
-		if policy == ExcelSheetPolicyVisibleOnly && !sheet.Visible {
-			skipped = append(skipped, sheet.Name)
-			continue
-		}
-		loaded = append(loaded, sheet.Name)
-	}
-	return loaded, skipped, nil
+	return reader.SelectExcelSheets(f, policy)
 }
