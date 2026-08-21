@@ -1138,7 +1138,7 @@ func TestCreateDecompressedReader_InvalidData(t *testing.T) {
 	}
 }
 
-func TestHandleCloseError(t *testing.T) {
+func TestCloseQuietly(t *testing.T) {
 	t.Parallel()
 
 	t.Run("successful close", func(t *testing.T) {
@@ -1150,8 +1150,7 @@ func TestHandleCloseError(t *testing.T) {
 			return nil
 		}
 
-		handler := handleCloseError(closeFunc)
-		handler() // Should not panic
+		closeQuietly(closeFunc)
 
 		assert.True(t, called, "Close function should have been called")
 	})
@@ -1165,10 +1164,9 @@ func TestHandleCloseError(t *testing.T) {
 			return assert.AnError
 		}
 
-		handler := handleCloseError(closeFunc)
 		// Should not panic even with error
 		assert.NotPanics(t, func() {
-			handler()
+			closeQuietly(closeFunc)
 		})
 
 		assert.True(t, called, "Close function should have been called")
