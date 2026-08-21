@@ -1,6 +1,7 @@
 package reader
 
 import (
+	"bytes"
 	"io"
 	"math"
 	"testing"
@@ -8,7 +9,11 @@ import (
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/array"
 	"github.com/apache/arrow/go/v18/arrow/memory"
+	"github.com/apache/arrow/go/v18/parquet"
+	pqfile "github.com/apache/arrow/go/v18/parquet/file"
+	"github.com/apache/arrow/go/v18/parquet/pqarrow"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBytesReaderAt_ReadAt(t *testing.T) {
@@ -453,4 +458,69 @@ func TestExtractValueFromArrowArray(t *testing.T) {
 		assert.Equal(t, "1641024000000", extractValueFromArrowArray(arr, 0, RenderPlain))
 		assert.Equal(t, "1641110400000", extractValueFromArrowArray(arr, 1, RenderPlain))
 	})
+}
+
+// TestParquetChunksLieInTheFile pins the bound that keeps a damaged file from
+// being decoded: a column chunk has to name bytes the file actually holds.
+//
+// The undamaged case says the bound is loose enough for a real file, and the
+// short case says it catches a chunk running past the end. The size is varied
+// rather than the file, because a chunk that overruns is a disagreement between
+// the metadata and the length, and this is the honest way to state it without
+// hand-editing a Thrift footer.
+func TestParquetChunksLieInTheFile(t *testing.T) {
+	t.Parallel()
+
+	data := buildParquetForBounds(t)
+	reader, err := pqfile.NewParquetReader(&bytesReaderAt{data: data})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+
+	assert.NoError(t, parquetChunksLieInTheFile(reader, int64(len(data))),
+		"a file that holds its own chunks was refused")
+
+	chunk, err := reader.MetaData().RowGroup(0).ColumnChunk(0)
+	require.NoError(t, err)
+
+	tests := map[string]int64{
+		// Short enough that the data page begins past the end.
+		"a page declared outside the file": chunk.DataPageOffset() - 1,
+		// Long enough to hold both page offsets and too short to hold the
+		// bytes the chunk says it occupies.
+		"a chunk running past the end": chunk.DataPageOffset() + 1,
+	}
+
+	for name, size := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			err := parquetChunksLieInTheFile(reader, size)
+			require.Error(t, err, "a file of %d bytes was allowed to hold this chunk", size)
+			var readErr *Error
+			require.ErrorAs(t, err, &readErr)
+			assert.Equal(t, KindParse, readErr.Kind)
+		})
+	}
+}
+
+// buildParquetForBounds writes a small Parquet file with one column of values,
+// which is enough to have a dictionary page and a data page to bound.
+func buildParquetForBounds(t *testing.T) []byte {
+	t.Helper()
+
+	schema := arrow.NewSchema([]arrow.Field{{Name: "n", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	pool := memory.NewGoAllocator()
+	builder := array.NewInt64Builder(pool)
+	defer builder.Release()
+	builder.AppendValues([]int64{1, 2, 3}, nil)
+	column := builder.NewArray()
+	defer column.Release()
+	record := array.NewRecord(schema, []arrow.Array{column}, 3)
+	defer record.Release()
+	table := array.NewTableFromRecords(schema, []arrow.Record{record})
+	defer table.Release()
+
+	var buf bytes.Buffer
+	require.NoError(t, pqarrow.WriteTable(table, &buf, 1024, parquet.NewWriterProperties(), pqarrow.DefaultWriterProps()))
+	return buf.Bytes()
 }

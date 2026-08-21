@@ -815,3 +815,66 @@ func TestADamagedParquetFooterIsAnErrorNotAPanic(t *testing.T) {
 		})
 	}
 }
+
+// slowParquet is 433 bytes that hold OpenContext for as long as it is left to
+// run, allocating roughly 350MiB a second while it does. It was found by
+// fuzzing the Parquet reader, and its header was repaired afterwards so that the
+// magic-bytes check does not answer for it: what makes it dangerous is its
+// metadata, which declares column chunks lying past the end of a file this size.
+//
+// It is held as base64 rather than as a file under testdata so that what is
+// wrong with it stays next to the test that says so.
+const slowParquet = "UEFSMRUYFQAVCBUILBUGFRAVMBUwHBhvFTAZQTkEGAYwMDAwMDAVBjAVBCMwGAIwMDcwMDAw" +
+	"MDAwMDAVDCMwGAQwMDAwIzBMHDAwMBUKJTAYBTAwMDAwMBYwGRwZMCbaMBwVMBkwMDAwGRgC" +
+	"MDAVABYwFtIwFtIBJjAmCBwYIDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwWAgw" +
+	"MDAwMDAwMDAZIBUwFTAVMDAVMBUwFTAwMDAmjDAcFTAZMDAwMBkYBDAwMDAVABYwFrIwFrIB" +
+	"JrQwJtoBHDYwFjAYBTAwMDAwGAgwMDAwMDAwMDAZIBUwFTAVMDAVMBUwFTAwMDAm3jAcFTAZ" +
+	"MDAwMBkYBTAwMDAwFQAWMBbSMBbSASbYMCaMAxwYCDAwMDAwMDAwGAgwMDAwMDAwMBYwFjAY" +
+	"CDAwMDAwMDAwGAgwMDAwMDAwMDAZIBUwFTAVMDAVMBUwFTAwMDAW1jAWBiYwFtYwFDAwGQwY" +
+	"IjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAZMBwwMBwwMDAwMDCRAQAAUEFS" +
+	"MQ=="
+
+// TestADamagedParquetFileFailsQuickly pins that a Parquet file fails in time
+// bounded by its own size.
+//
+// The file above declares 24 rows and column chunks of about three kilobytes
+// inside 433 bytes, and its chunks begin at offsets 3098 and 3116, which are
+// past the end of it. Handed to the decoder as it stands, it never returns: the
+// page decoding neither checks the context it is given nor bounds what it
+// allocates against the file it is reading, so a caller who bounds their own
+// work cannot bound this and neither can a deadline passed down from here. A
+// column chunk that does not lie inside the file is refused before any of it is
+// decoded.
+func TestADamagedParquetFileFailsQuickly(t *testing.T) {
+	t.Parallel()
+
+	data, err := base64.StdEncoding.DecodeString(slowParquet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "slow.parquet")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		db, openErr := OpenContext(context.Background(), path)
+		if db != nil {
+			_ = db.Close()
+		}
+		done <- openErr
+	}()
+
+	select {
+	case openErr := <-done:
+		if openErr == nil {
+			t.Fatal("a file whose column chunks lie outside it loaded")
+		}
+		if !errors.Is(openErr, ErrParsing) {
+			t.Fatalf("the failure is not reportable as a parse error: %v", openErr)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a 433 byte file has held OpenContext for 10s")
+	}
+}

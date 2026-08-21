@@ -45,6 +45,10 @@ func parquetTable(ctx context.Context, data []byte) (tbl arrow.Table, err error)
 	}
 	defer pqReader.Close()
 
+	if err := parquetChunksLieInTheFile(pqReader, int64(len(data))); err != nil {
+		return nil, err
+	}
+
 	arrowReader, err := pqarrow.NewFileReader(pqReader, pqarrow.ArrowReadProperties{}, nil)
 	if err != nil {
 		return nil, parseError(err, "failed to create arrow reader")
@@ -55,6 +59,77 @@ func parquetTable(ctx context.Context, data []byte) (tbl arrow.Table, err error)
 		return nil, parseError(err, "failed to read table")
 	}
 	return table, nil
+}
+
+// parquetChunksLieInTheFile refuses a file whose metadata places a column chunk
+// outside it.
+//
+// A file's footer says where each column chunk begins and how many bytes it
+// occupies, and a chunk that runs past the end of the file it is in cannot be
+// read. The decoder does not check: handed a 433-byte file declaring chunks that
+// begin at offsets 3098 and 3116, it allocated some 350MiB a second for as long
+// as it was left to run. It cannot be stopped from outside either, because the
+// page decoding does not check the context it is given, so a deadline passed
+// down from here expires without effect and a caller who bounds their own work
+// cannot bound this. The only place the file can be refused is before any of it
+// is decoded, which is here.
+//
+// What is asked is only that the bytes a chunk names are in the file: each page
+// offset it declares falls inside it, and the chunk's own length does not run
+// past the end from wherever it starts. Nothing else is checked -- the footer's
+// own bytes are not excluded from the range a chunk may occupy, and a chunk
+// whose sizes disagree with each other is left alone -- because the purpose is
+// to bound a read rather than to validate a file, so a file that is merely
+// unusual passes and only one that could not be read either way is refused. A
+// chunk held in another file, which the format allows and this package does not
+// follow, is left to the reader to report.
+func parquetChunksLieInTheFile(reader *pqfile.Reader, size int64) error {
+	meta := reader.MetaData()
+	for group := range reader.NumRowGroups() {
+		rowGroup := meta.RowGroup(group)
+		for column := range rowGroup.NumColumns() {
+			chunk, err := rowGroup.ColumnChunk(column)
+			if err != nil {
+				return parseError(err, "failed to read the metadata of column %d in row group %d", column, group)
+			}
+			if chunk.FilePath() != "" {
+				continue
+			}
+
+			// An offset of zero means the page is not there rather than that it
+			// sits at the start of the file: a column of a row group with no
+			// rows has a dictionary page and no data page, and says so with a
+			// zero.
+			start := size
+			for _, page := range []struct {
+				what string
+				at   int64
+			}{
+				{"data page", chunk.DataPageOffset()},
+				{"dictionary page", chunk.DictionaryPageOffset()},
+			} {
+				if page.at == 0 {
+					continue
+				}
+				if page.at < int64(len(parquetMagic)) || page.at >= size {
+					return parseError(nil,
+						"the %s of column %d in row group %d is declared at offset %d, outside a file of %d bytes",
+						page.what, column, group, page.at, size)
+				}
+				start = min(start, page.at)
+			}
+			if start == size {
+				// The chunk names no page at all, so there is nothing to bound.
+				continue
+			}
+			if length := chunk.TotalCompressedSize(); start+length > size {
+				return parseError(nil,
+					"column %d of row group %d is declared as %d bytes from offset %d, which runs past the end of a file of %d bytes",
+					column, group, length, start, size)
+			}
+		}
+	}
+	return nil
 }
 
 // readArrowTable is pqarrow.FileReader.ReadTable done in the calling goroutine,
