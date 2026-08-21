@@ -27,6 +27,11 @@ const sourceTableName = "_filesql_sources"
 // A caller's table cannot occupy it; see validateTableName.
 const sourceTablePrefix = "_filesql_"
 
+// sqliteTablePrefix is reserved by SQLite for its own tables. A caller's table
+// cannot occupy it either, and refusing it here is what turns that library's
+// "object name reserved for internal use" into an answer a caller can match.
+const sqliteTablePrefix = "sqlite_"
+
 // sourceTableLikePattern matches sourceTablePrefix in a LIKE clause, so those
 // tables stay hidden from callers and from dumps. The underscores are escaped
 // because LIKE reads a bare underscore as a wildcard, which would also hide a
@@ -177,20 +182,30 @@ func wireTableSetForDump(ctx context.Context, db *sql.DB, baseTableName string) 
 // The comparison ignores ASCII case because the LIKE that hides these tables
 // does: without that, _FILESQL_report loaded and then vanished from every
 // listing, which is the state this check exists to prevent.
+//
+// SQLite's own sqlite_ prefix is refused here for the same reason it is cited
+// above. Left to the database, it surfaced as a raw "object name reserved for
+// internal use" wrapped in a database-operation error, after the file had
+// already been read, and no caller could tell it from a broken database.
 func validateTableName(tableName string) error {
-	if hasReservedPrefix(tableName) {
+	if hasPrefixFold(tableName, sourceTablePrefix) {
 		return fmt.Errorf("%w: %q begins with %s, which this package keeps for its own tables; a table under it would be hidden from dumps and from table listings",
 			ErrReservedTableName, tableName, sourceTablePrefix)
+	}
+	if hasPrefixFold(tableName, sqliteTablePrefix) {
+		return fmt.Errorf("%w: %q begins with %s, which SQLite keeps for its own tables; creating it fails there whatever this package does with it",
+			ErrReservedTableName, tableName, sqliteTablePrefix)
 	}
 	return nil
 }
 
-// hasReservedPrefix reports whether tableName starts with sourceTablePrefix,
-// folding ASCII case only. SQLite's LIKE folds exactly that much, so matching it
-// here keeps the set of refused names equal to the set of hidden ones.
-func hasReservedPrefix(tableName string) bool {
-	if len(tableName) < len(sourceTablePrefix) {
+// hasPrefixFold reports whether tableName starts with prefix, folding ASCII case
+// only. SQLite's LIKE and its identifier matching both fold exactly that much,
+// so matching it here keeps the set of refused names equal to the set the
+// database treats as taken.
+func hasPrefixFold(tableName, prefix string) bool {
+	if len(tableName) < len(prefix) {
 		return false
 	}
-	return strings.EqualFold(tableName[:len(sourceTablePrefix)], sourceTablePrefix)
+	return strings.EqualFold(tableName[:len(prefix)], prefix)
 }

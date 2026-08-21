@@ -416,3 +416,104 @@ func newMemoryDB(t *testing.T) *sql.DB {
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
+
+// TestOpenRefusesTwoSourcesWhoseNamesDifferOnlyInCase is the same question with
+// the names spelled differently. SQLite folds ASCII case when it compares
+// identifiers, so "Users" and "users" are one table there whatever the file
+// names were; the check that finds the clash has to fold the same way, or the
+// second file's rows land in the first file's table by position and the columns
+// they were written under are gone.
+func TestOpenRefusesTwoSourcesWhoseNamesDifferOnlyInCase(t *testing.T) {
+	t.Parallel()
+	first, second := caseDifferingPair(t)
+
+	db, err := Open(first, second)
+	if err == nil {
+		_ = db.Close()
+		t.Fatal("Open succeeded on two files that both want one table, spelled in two cases")
+	}
+	if !errors.Is(err, ErrDuplicateTable) {
+		t.Errorf("error = %v, want ErrDuplicateTable", err)
+	}
+}
+
+// caseDifferingPair writes a/Users.csv and b/users.csv, each with its own
+// columns. They go in separate directories because macOS and Windows fold case
+// in file names: side by side, the second write would replace the first and
+// there would be nothing to collide.
+func caseDifferingPair(t *testing.T) (first, second string) {
+	t.Helper()
+	dir := t.TempDir()
+	first = filepath.Join(dir, "a", "Users.csv")
+	second = filepath.Join(dir, "b", "users.csv")
+	for path, body := range map[string]string{first: "a,b\n1,2\n", second: "c,d\n3,4\n"} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return first, second
+}
+
+// TestBuilderRefusesTwoReadersWhoseNamesDifferOnlyInCase asks it of the API
+// where the caller picks the names outright, which no filesystem constrains.
+func TestBuilderRefusesTwoReadersWhoseNamesDifferOnlyInCase(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	validated, err := NewBuilder().
+		AddReader(strings.NewReader("a,b\n1,2\n"), "Users", FileTypeCSV).
+		AddReader(strings.NewReader("c,d\n3,4\n"), "users", FileTypeCSV).
+		Build(ctx)
+	if err != nil {
+		if !errors.Is(err, ErrDuplicateTable) {
+			t.Errorf("Build error = %v, want ErrDuplicateTable", err)
+		}
+		return
+	}
+
+	db, err := validated.Open(ctx)
+	if err == nil {
+		_ = db.Close()
+		t.Fatal("two readers named Users and users both loaded")
+	}
+	if !errors.Is(err, ErrDuplicateTable) {
+		t.Errorf("error = %v, want ErrDuplicateTable", err)
+	}
+}
+
+// TestReplacingKeepsTheLaterSpellingsColumns pins what the clash looks like when
+// replacing is asked for: one table, holding the second file's columns and rows
+// rather than the second file's rows under the first file's headers.
+func TestReplacingKeepsTheLaterSpellingsColumns(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	first, second := caseDifferingPair(t)
+
+	db := newMemoryDB(t)
+	if err := LoadInto(ctx, db, first, second); err != nil {
+		t.Fatalf("LoadInto: %v", err)
+	}
+
+	var tables int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE '\_filesql\_%' ESCAPE '\'`,
+	).Scan(&tables); err != nil {
+		t.Fatalf("count tables: %v", err)
+	}
+	if tables != 1 {
+		t.Errorf("database holds %d tables, want 1", tables)
+	}
+
+	var columns string
+	if err := db.QueryRowContext(ctx,
+		`SELECT group_concat(name) FROM pragma_table_info('users')`,
+	).Scan(&columns); err != nil {
+		t.Fatalf("read columns: %v", err)
+	}
+	if columns != "c,d" {
+		t.Errorf("the surviving table has columns %q, want %q; the later file's rows are stored under the earlier file's headers", columns, "c,d")
+	}
+}

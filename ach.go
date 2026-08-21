@@ -268,10 +268,11 @@ func streamACHFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, fil
 	}
 
 	for _, t := range tables {
-		// Check if table already exists
+		// Check if table already exists, folding ASCII case the way SQLite does
+		// when it matches identifiers.
 		var tableExists int
 		err := db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`,
+			`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ? COLLATE NOCASE`,
 			t.getName(),
 		).Scan(&tableExists)
 		if err != nil {

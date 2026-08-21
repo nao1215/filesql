@@ -104,6 +104,55 @@ func TestReservedTableNameIsRefused(t *testing.T) {
 	assert.Contains(t, names, "filesql_report")
 }
 
+// TestSQLitePrefixIsRefusedTheSameWay pins the other reserved namespace. SQLite
+// keeps sqlite_ for itself, and a file named for it used to reach CREATE TABLE
+// and come back as that library's "object name reserved for internal use"
+// wrapped in a database-operation error: unmatchable, silent about what to do,
+// and raised only after the file had been read.
+func TestSQLitePrefixIsRefusedTheSameWay(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	for _, name := range []string{"sqlite_stat1.csv", "SQLite_Notes.csv"} {
+		path := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(path, []byte("id,v\n1,a\n"), 0o600))
+
+		db, err := OpenContext(ctx, path)
+		if db != nil {
+			assert.NoError(t, db.Close())
+		}
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrReservedTableName)
+		assert.Contains(t, err.Error(), "sqlite_")
+	}
+
+	// A reader names its own table, so it can reach that namespace too.
+	builder, err := NewBuilder().
+		AddReader(strings.NewReader("id\n1\n"), "sqlite_x", FileTypeCSV).
+		Build(ctx)
+	require.NoError(t, err)
+	db, err := builder.Open(ctx)
+	if db != nil {
+		assert.NoError(t, db.Close())
+	}
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrReservedTableName)
+
+	// The prefix is sqlite_, not sqlite, so a name that merely starts with the
+	// letters is a normal table.
+	okPath := filepath.Join(dir, "sqliteish.csv")
+	require.NoError(t, os.WriteFile(okPath, []byte("id,v\n1,a\n"), 0o600))
+	ok, err := OpenContext(ctx, okPath)
+	require.NoError(t, err)
+	defer ok.Close()
+
+	names, err := getSQLiteTableNames(ok)
+	require.NoError(t, err)
+	assert.Contains(t, names, "sqliteish")
+}
+
 // TestSourceMetadataRolledBackWithTransaction pins that metadata written by a
 // load shares the fate of the tables it describes. A rolled-back load must not
 // leave a row pointing at tables that do not exist.

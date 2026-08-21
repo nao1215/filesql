@@ -316,10 +316,14 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, 
 		input.reader = bufio.NewReader(input.reader)
 	}
 
-	// Check if table already exists to avoid duplicates
+	// Check if table already exists to avoid duplicates. The comparison folds
+	// ASCII case because SQLite folds it when it matches identifiers: without
+	// NOCASE, a second file named Users.csv beside users.csv found the name free,
+	// and its CREATE TABLE IF NOT EXISTS then matched the table already there and
+	// did nothing, so its rows were inserted under the first file's headers.
 	var tableExists int
 	err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ? COLLATE NOCASE`,
 		input.tableName,
 	).Scan(&tableExists)
 	if err != nil {
@@ -795,10 +799,11 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX
 		tableName := sheetTables[i]
 		sp.logger.Debug("creating table from sheet", "path", filePath, logKeySheet, sheetName, logKeyTable, tableName, "rows", len(rows))
 
-		// Check if table already exists
+		// Check if table already exists, folding ASCII case the way SQLite does
+		// when it matches identifiers.
 		var tableExists int
 		err = db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`,
+			`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ? COLLATE NOCASE`,
 			tableName,
 		).Scan(&tableExists)
 		if err != nil {
