@@ -14,7 +14,8 @@ import (
 //	P-2  x LIKE p / x ILIKE p      -> like_sensitive / like_insensitive
 //	P-3  x ~ p / !~ / ~* / !~*     -> x REGEXP p / NOT REGEXP / case-insensitive
 //	P-4  POSITION(x IN y)          -> INSTR(y, x)
-//	P-5  SUBSTRING(x FROM n FOR m) -> SUBSTR(x, n, m)
+//	P-5  SUBSTRING(x FROM n FOR m) -> postgresql_substr(x, n, m), and the
+//	                                  comma form with it
 //	P-6  STRING_AGG(x, s)          -> group_concat(x, s), and the DISTINCT form
 //	                                  -> group_concat(DISTINCT x) for s = ','
 //	P-8  CAST(x AS pg_type)        -> postgresql_cast(x, 'pg_type')
@@ -28,6 +29,7 @@ import (
 //	P-17 ARRAY[...]                -> ErrUnsupportedSyntax
 //	P-18 generate_series(...) etc. -> ErrUnsupportedSyntax
 //	P-19 UPPER(x) / LOWER(x)       -> unicode_upper / unicode_lower
+//	P-20 LPAD(x, n, p) / RPAD      -> postgresql_lpad / postgresql_rpad
 func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedPostgreSQL(tokens); err != nil {
 		return nil, err
@@ -178,9 +180,9 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 	case fnNameExtract:
 		return rewriteExtractCall(tokens, open, closeIdx, pgCallPass)
 	case "POSITION":
-		return rewritePosition(tokens, open, closeIdx)
-	case "SUBSTRING":
-		return rewriteSubstring(tokens, open, closeIdx)
+		return rewritePosition(tokens, open, closeIdx, pgCallPass)
+	case "SUBSTRING", "SUBSTR":
+		return rewriteSubstringCall(tokens, open, closeIdx, "postgresql_substr", pgCallPass)
 	case fnNameTrim:
 		return rewriteTrim(tokens, open, closeIdx, pgCallPass)
 	case "OVERLAY":
@@ -193,6 +195,10 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 		return rewriteRenameCall(tokens, open, closeIdx, "json_array_length", pgCallPass)
 	case fnNameCharLen, fnNameCharLen2:
 		return rewriteRenameCall(tokens, open, closeIdx, "length", pgCallPass)
+	case "LPAD", "RPAD":
+		// A negative length and an empty pad are answered differently by each
+		// dialect, so each names its own helper rather than sharing one.
+		return rewriteRenameCall(tokens, open, closeIdx, "postgresql_"+strings.ToLower(tokens[nameIdx].text), pgCallPass)
 	case fnNameCast:
 		return rewriteCastCall(tokens, open, closeIdx, PostgreSQL, "postgresql_cast", pgCallPass)
 	case fnNameStringAgg:
@@ -205,16 +211,16 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 }
 
 // rewritePosition implements P-4: POSITION(x IN y) -> INSTR(y, x).
-func rewritePosition(tokens []token, open, closeIdx int) ([]token, bool, error) {
+func rewritePosition(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
 	in := topLevelWord(tokens, open, closeIdx, "IN")
 	if in < 0 {
 		return nil, false, nil
 	}
-	needle, err := pgCallPass(tokens[open+1 : in])
+	needle, err := recurse(tokens[open+1 : in])
 	if err != nil {
 		return nil, false, err
 	}
-	haystack, err := pgCallPass(tokens[in+1 : closeIdx])
+	haystack, err := recurse(tokens[in+1 : closeIdx])
 	if err != nil {
 		return nil, false, err
 	}
@@ -229,11 +235,22 @@ func rewritePosition(tokens []token, open, closeIdx int) ([]token, bool, error) 
 	return repl, true, nil
 }
 
-// rewriteSubstring implements P-5: SUBSTRING(x FROM n FOR m) -> SUBSTR(x, n, m).
+// rewriteSubstringCall routes both spellings of SUBSTRING onto the dialect's own
+// helper. The keyword form is converted to arguments by rewriteSubstring; the
+// comma form is renamed, since SQLite's own substr() answers position 0 and a
+// negative position by rules that are neither dialect's.
+func rewriteSubstringCall(tokens []token, open, closeIdx int, target string, recurse callRecurser) ([]token, bool, error) {
+	repl, ok, err := rewriteSubstring(tokens, open, closeIdx, target, recurse)
+	if ok || err != nil {
+		return repl, ok, err
+	}
+	return rewriteRenameCall(tokens, open, closeIdx, target, recurse)
+}
+
+// rewriteSubstring implements P-5: SUBSTRING(x FROM n FOR m) -> target(x, n, m).
 // The FROM and FOR parts are each optional; a missing FROM defaults the start to
-// 1. The comma-argument form SUBSTRING(x, n, m) is left unchanged (SQLite accepts
-// it natively).
-func rewriteSubstring(tokens []token, open, closeIdx int) ([]token, bool, error) {
+// 1. The comma-argument form is left to the caller, which renames it.
+func rewriteSubstring(tokens []token, open, closeIdx int, target string, recurse callRecurser) ([]token, bool, error) {
 	from := topLevelWord(tokens, open, closeIdx, "FROM")
 	forKw := topLevelWord(tokens, open, closeIdx, "FOR")
 	if from < 0 && forKw < 0 {
@@ -246,7 +263,7 @@ func rewriteSubstring(tokens []token, open, closeIdx int) ([]token, bool, error)
 	if from >= 0 {
 		subjectEnd = from
 	}
-	subject, err := pgCallPass(tokens[open+1 : subjectEnd])
+	subject, err := recurse(tokens[open+1 : subjectEnd])
 	if err != nil {
 		return nil, false, err
 	}
@@ -258,14 +275,14 @@ func rewriteSubstring(tokens []token, open, closeIdx int) ([]token, bool, error)
 		if forKw > from {
 			startEnd = forKw
 		}
-		start, err = pgCallPass(tokens[from+1 : startEnd])
+		start, err = recurse(tokens[from+1 : startEnd])
 		if err != nil {
 			return nil, false, err
 		}
 		start = trimSpaceTokens(start)
 	}
 	if forKw >= 0 {
-		length, err = pgCallPass(tokens[forKw+1 : closeIdx])
+		length, err = recurse(tokens[forKw+1 : closeIdx])
 		if err != nil {
 			return nil, false, err
 		}
@@ -273,7 +290,7 @@ func rewriteSubstring(tokens []token, open, closeIdx int) ([]token, bool, error)
 	}
 
 	repl := make([]token, 0, len(subject)+len(start)+len(length)+8)
-	repl = append(repl, wordToken("SUBSTR"), opToken("("))
+	repl = append(repl, wordToken(target), opToken("("))
 	repl = append(repl, subject...)
 	repl = append(repl, opToken(","), spaceToken())
 	if len(start) == 0 {

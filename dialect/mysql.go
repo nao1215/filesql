@@ -24,7 +24,8 @@ import (
 //	M-14 DATE 'lit' / TIMESTAMP 'lit'    -> 'lit'
 //	M-15 CURRENT_DATE() and friends      -> CURRENT_DATE
 //	M-16 TIMESTAMPDIFF/TIMESTAMPADD      -> DATE_DIFF / interval_add
-//	M-17 POSITION(x IN y), SUBSTRING FROM -> INSTR / SUBSTR
+//	M-17 POSITION(x IN y), SUBSTRING FROM -> INSTR / mysql_substr, and the
+//	                                     comma form of SUBSTRING with it
 //	M-18 ANY_VALUE / STD / VARIANCE      -> SQLite aggregate expressions
 //	M-19 UNION DISTINCT                  -> UNION
 //	M-20 LENGTH / CHAR_LENGTH / ORD / TRIM(BOTH x FROM s)
@@ -33,6 +34,7 @@ import (
 //	M-21 a ^ b                           -> mysql_bit_xor(a, b)
 //	M-21 a XOR b                         -> ErrUnsupportedSyntax
 //	M-25 UPPER(x) / LOWER(x)             -> unicode_upper / unicode_lower
+//	M-26 LPAD(x, n, p) / RPAD(x, n, p)   -> mysql_lpad / mysql_rpad
 //
 // M-10 (LIMIT n, m) needs no rewrite: SQLite accepts it natively.
 func rewriteMySQL(tokens []token) ([]token, error) {
@@ -162,9 +164,9 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 	case "TIMESTAMPADD":
 		return rewriteTimestampAdd(tokens, open, closeIdx, mysqlCallPass)
 	case "POSITION":
-		return rewritePosition(tokens, open, closeIdx)
-	case "SUBSTRING":
-		return rewriteSubstring(tokens, open, closeIdx)
+		return rewritePosition(tokens, open, closeIdx, mysqlCallPass)
+	case "SUBSTRING", "SUBSTR":
+		return rewriteSubstringCall(tokens, open, closeIdx, "mysql_substr", mysqlCallPass)
 	case "LENGTH", "OCTET_LENGTH":
 		// MySQL LENGTH counts bytes; SQLite's counts characters.
 		return rewriteRenameCall(tokens, open, closeIdx, "octet_length", mysqlCallPass)
@@ -187,6 +189,10 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_hex", mysqlCallPass)
 	case "UNHEX":
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_unhex", mysqlCallPass)
+	case "LPAD", "RPAD":
+		// A negative length and an empty pad are answered differently by each
+		// dialect, so each names its own helper rather than sharing one.
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_"+strings.ToLower(tokens[nameIdx].text), mysqlCallPass)
 	case fnNameCast:
 		return rewriteCastCall(tokens, open, closeIdx, MySQL, "mysql_cast", mysqlCallPass)
 	default:

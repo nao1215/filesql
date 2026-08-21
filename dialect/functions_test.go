@@ -366,7 +366,15 @@ func TestDateFormatSpecialAndParts(t *testing.T) {
 		{`SELECT DATE_PART('quarter', '2026-07-28')`, "3"},
 		{`SELECT DATE_PART('week', '2026-01-05')`, "2"},
 		{`SELECT DATE_PART('epoch', '1970-01-01 00:00:01')`, "1"},
-		{`SELECT DATE_PART('dow', '2026-07-28')`, "3"},
+		// 2026-07-28 is a Tuesday. PostgreSQL spells the field dow and numbers
+		// it from Sunday=0; MySQL spells it dayofweek and numbers it from
+		// Sunday=1; PostgreSQL's isodow runs Monday=1 through Sunday=7.
+		{`SELECT DATE_PART('dow', '2026-07-28')`, "2"},
+		{`SELECT DATE_PART('isodow', '2026-07-28')`, "2"},
+		{`SELECT DATE_PART('dayofweek', '2026-07-28')`, "3"},
+		{`SELECT DATE_PART('dow', '2026-08-02')`, "0"},
+		{`SELECT DATE_PART('isodow', '2026-08-02')`, "7"},
+		{`SELECT DATE_PART('dayofweek', '2026-08-02')`, "1"},
 		{`SELECT DATE_PART('doy', '2026-01-10')`, "10"},
 	}
 	for _, tt := range tests {
@@ -622,6 +630,113 @@ func TestStringHelpersCountCharacters(t *testing.T) {
 			}
 			if got.Valid && !utf8.ValidString(got.String) {
 				t.Errorf("%s returned bytes that are not UTF-8: %x", tt.sql, got.String)
+			}
+		})
+	}
+}
+
+// TestDialectBoundariesFollowTheirEngine pins the boundaries where MySQL and
+// PostgreSQL give different answers to the same call, and where both differ from
+// what SQLite's own function would do. Every expected value here was taken from
+// MySQL 8.4 and PostgreSQL 17 rather than from the documentation, because the
+// documentation does not describe most of these cases.
+func TestDialectBoundariesFollowTheirEngine(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name     string
+		dialect  Dialect
+		query    string
+		want     string
+		wantNull bool
+		wantErr  bool
+	}{
+		// LPAD and RPAD: a negative length is NULL in MySQL and an empty string
+		// in PostgreSQL; an empty pad that cannot reach the length is an empty
+		// string in MySQL and the input unchanged in PostgreSQL.
+		{name: "mysql pad refuses a negative length", dialect: MySQL, query: `SELECT LPAD('abc', -1, 'x')`, wantNull: true},
+		{name: "postgresql pad empties a negative length", dialect: PostgreSQL, query: `SELECT lpad('abc', -1, 'x')`, want: ""},
+		{name: "mysql pad gives up on an empty pad", dialect: MySQL, query: `SELECT LPAD('abc', 5, '')`, want: ""},
+		{name: "mysql rpad gives up on an empty pad", dialect: MySQL, query: `SELECT RPAD('abc', 5, '')`, want: ""},
+		{name: "postgresql pad keeps the input on an empty pad", dialect: PostgreSQL, query: `SELECT lpad('abc', 5, '')`, want: "abc"},
+		{name: "an empty pad still truncates", dialect: MySQL, query: `SELECT LPAD('abcdef', 3, '')`, want: "abc"},
+		{name: "postgresql pads with spaces by default", dialect: PostgreSQL, query: `SELECT lpad('abc', 5)`, want: "  abc"},
+		{name: "postgresql rpads with spaces by default", dialect: PostgreSQL, query: `SELECT rpad('abc', 5)`, want: "abc  "},
+		{name: "pad still counts characters", dialect: MySQL, query: `SELECT LPAD('日本', 4, '*')`, want: "**日本"},
+
+		// SUBSTRING: MySQL reads position 0 as no position at all, PostgreSQL
+		// counts from 1 and lets a start below 1 consume the requested length.
+		{name: "mysql substring at position zero", dialect: MySQL, query: `SELECT SUBSTRING('abcdef', 0)`, want: ""},
+		{name: "mysql substring at position zero with a length", dialect: MySQL, query: `SELECT SUBSTRING('abcdef', 0, 3)`, want: ""},
+		{name: "mysql substring from the end", dialect: MySQL, query: `SELECT SUBSTRING('abcdef', -2, 1)`, want: "e"},
+		{name: "mysql substring with no length", dialect: MySQL, query: `SELECT SUBSTRING('abcdef', 3)`, want: "cdef"},
+		{name: "mysql substring with a zero length", dialect: MySQL, query: `SELECT SUBSTRING('abcdef', 2, 0)`, want: ""},
+		{name: "postgresql substring before the start", dialect: PostgreSQL, query: `SELECT substr('abcdef', -1, 3)`, want: "a"},
+		{name: "postgresql substring at position zero", dialect: PostgreSQL, query: `SELECT substr('abcdef', 0, 3)`, want: "ab"},
+		{name: "postgresql substring with no count", dialect: PostgreSQL, query: `SELECT substr('abcdef', 0)`, want: "abcdef"},
+		{name: "postgresql substring refuses a negative count", dialect: PostgreSQL, query: `SELECT substr('abcdef', 2, -1)`, wantErr: true},
+		// Either bound can be any integer literal the query held, and the sum
+		// that decides where the result ends must not wrap around them.
+		{name: "postgresql substring from far below the string", dialect: PostgreSQL, query: `SELECT substr('abcdef', -9223372036854775808, 3)`, want: ""},
+		{name: "postgresql substring with a count past the range", dialect: PostgreSQL, query: `SELECT substr('abcdef', 2, 9223372036854775807)`, want: "bcdef"},
+		{name: "mysql substring with a length past the range", dialect: MySQL, query: `SELECT SUBSTRING('abcdef', 2, 9223372036854775807)`, want: "bcdef"},
+		{name: "postgresql keyword form", dialect: PostgreSQL, query: `SELECT SUBSTRING('abcdef' FROM 0 FOR 3)`, want: "ab"},
+		{name: "substring still counts characters", dialect: MySQL, query: `SELECT SUBSTRING('日本語', 2, 1)`, want: "本"},
+
+		// A fractional count is rounded by MySQL, not truncated.
+		{name: "repeat rounds its count up", dialect: MySQL, query: `SELECT REPEAT('ab', 2.7)`, want: "ababab"},
+		{name: "repeat rounds its count down", dialect: MySQL, query: `SELECT REPEAT('ab', 2.4)`, want: "abab"},
+		{name: "repeat rounds a half away from zero", dialect: MySQL, query: `SELECT REPEAT('ab', 2.5)`, want: "ababab"},
+		{name: "space rounds its count", dialect: MySQL, query: `SELECT CONCAT('[', SPACE(3.7), ']')`, want: "[    ]"},
+		{name: "elt rounds its index", dialect: MySQL, query: `SELECT ELT(2.7, 'a', 'b', 'c')`, want: "c"},
+
+		// An empty set holds nothing, including the empty string.
+		{name: "find_in_set in an empty set", dialect: MySQL, query: `SELECT FIND_IN_SET('', '')`, want: "0"},
+		{name: "find_in_set finds an empty element", dialect: MySQL, query: `SELECT FIND_IN_SET('', 'a,,c')`, want: "2"},
+
+		// PostgreSQL refuses a zero field position rather than answering.
+		{name: "split_part refuses a zero position", dialect: PostgreSQL, query: `SELECT split_part('a.b.c', '.', 0)`, wantErr: true},
+		{name: "split_part counts from the end", dialect: PostgreSQL, query: `SELECT split_part('a.b.c', '.', -1)`, want: "c"},
+
+		// The day of the week is numbered differently by each spelling.
+		{name: "postgresql dow on a Sunday", dialect: PostgreSQL, query: `SELECT DATE_PART('dow', '2026-08-02')`, want: "0"},
+		{name: "postgresql extract dow on a Sunday", dialect: PostgreSQL, query: `SELECT EXTRACT(DOW FROM TIMESTAMP '2026-08-02')`, want: "0"},
+		{name: "postgresql isodow on a Sunday", dialect: PostgreSQL, query: `SELECT DATE_PART('isodow', '2026-08-02')`, want: "7"},
+		{name: "mysql dayofweek on a Sunday", dialect: MySQL, query: `SELECT DAYOFWEEK('2026-08-02')`, want: "1"},
+		{name: "googlesql dayofweek on a Sunday", dialect: GoogleSQL, query: `SELECT EXTRACT(DAYOFWEEK FROM TIMESTAMP '2026-08-02')`, want: "1"},
+
+		// A call nested in one of the keyword forms is translated by the
+		// dialect's own pass. MySQL CONCAT is NULL when an argument is NULL;
+		// PostgreSQL's skips NULLs, so reading one as the other is visible here.
+		{name: "concat inside the substring keyword form", dialect: MySQL, query: `SELECT SUBSTRING(CONCAT('a', NULL) FROM 1 FOR 5)`, wantNull: true},
+		{name: "concat in the position needle", dialect: MySQL, query: `SELECT POSITION(CONCAT('b', NULL) IN 'abc')`, wantNull: true},
+		{name: "concat in the position haystack", dialect: MySQL, query: `SELECT POSITION('b' IN CONCAT('abc', NULL))`, wantNull: true},
+		{name: "mysql length counts bytes inside substring", dialect: MySQL, query: `SELECT SUBSTRING(CAST(LENGTH('日') AS CHAR) FROM 1)`, want: "3"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, tt.dialect, tt.query)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("%s: expected an error, got %q", tt.query, got.String)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			// NULL and the empty string are the answer these dialects
+			// disagree on, so they are told apart rather than folded together.
+			if got.Valid == tt.wantNull {
+				t.Fatalf("%s returned valid=%v (%q), want null=%v", tt.query, got.Valid, got.String, tt.wantNull)
+			}
+			if tt.wantNull {
+				return
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
 			}
 		})
 	}

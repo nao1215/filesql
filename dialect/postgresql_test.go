@@ -33,10 +33,10 @@ func TestPostgreSQLTranslate(t *testing.T) {
 		{"P-4_position", "SELECT POSITION('b' IN name) FROM t", "SELECT INSTR(name, 'b') AS \"POSITION('b' IN name)\" FROM t"},
 		{"P-4_position_expr", "SELECT POSITION(sub IN col) FROM t", "SELECT INSTR(col, sub) AS \"POSITION(sub IN col)\" FROM t"},
 
-		{"P-5_substring_from_for", "SELECT SUBSTRING(name FROM 2 FOR 3) FROM t", "SELECT SUBSTR(name, 2, 3) AS \"SUBSTRING(name FROM 2 FOR 3)\" FROM t"},
-		{"P-5_substring_from", "SELECT SUBSTRING(name FROM 2) FROM t", "SELECT SUBSTR(name, 2) AS \"SUBSTRING(name FROM 2)\" FROM t"},
-		{"P-5_substring_for", "SELECT SUBSTRING(name FOR 3) FROM t", "SELECT SUBSTR(name, 1, 3) AS \"SUBSTRING(name FOR 3)\" FROM t"},
-		{"P-5_substring_comma_passthrough", "SELECT SUBSTRING(name, 2, 3) FROM t", "SELECT SUBSTRING(name, 2, 3) FROM t"},
+		{"P-5_substring_from_for", "SELECT SUBSTRING(name FROM 2 FOR 3) FROM t", "SELECT postgresql_substr(name, 2, 3) AS \"SUBSTRING(name FROM 2 FOR 3)\" FROM t"},
+		{"P-5_substring_from", "SELECT SUBSTRING(name FROM 2) FROM t", "SELECT postgresql_substr(name, 2) AS \"SUBSTRING(name FROM 2)\" FROM t"},
+		{"P-5_substring_for", "SELECT SUBSTRING(name FOR 3) FROM t", "SELECT postgresql_substr(name, 1, 3) AS \"SUBSTRING(name FOR 3)\" FROM t"},
+		{"P-5_substring_comma_form", "SELECT SUBSTRING(name, 2, 3) FROM t", "SELECT postgresql_substr(name, 2, 3) AS \"SUBSTRING(name, 2, 3)\" FROM t"},
 
 		{"P-6_string_agg", "SELECT STRING_AGG(name, ', ') FROM t", "SELECT group_concat(name, ', ') AS \"STRING_AGG(name, ', ')\" FROM t"},
 		// SQLite's DISTINCT aggregates take one argument, so the separator has to

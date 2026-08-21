@@ -234,10 +234,13 @@ func TestOverlayBoundaries(t *testing.T) {
 		want string
 	}{
 		{[]driver.Value{"abc", "X", int64(1)}, "Xbc"},
-		{[]driver.Value{"abc", "X", int64(0)}, "Xbc"},
 		{[]driver.Value{"abc", "X", int64(9)}, "abcX"},
 		{[]driver.Value{"abc", "XY", int64(2), int64(0)}, "aXYbc"},
-		{[]driver.Value{"abc", "XY", int64(2), int64(-1)}, "aXYbc"},
+		// PostgreSQL defines the call as substring(s from 1 for start-1) ||
+		// replacement || substring(s from start+count), so a negative count
+		// makes the tail begin before the overlaid position and part of the
+		// string is repeated. Checked against PostgreSQL 17.
+		{[]driver.Value{"abc", "XY", int64(2), int64(-1)}, "aXYabc"},
 		{[]driver.Value{"abc", "XY", int64(2), int64(99)}, "aXY"},
 		// A count near math.MaxInt64 is an ordinary SQLite integer literal and
 		// must not wrap into a negative slice bound.
@@ -255,5 +258,10 @@ func TestOverlayBoundaries(t *testing.T) {
 	}
 	if _, err := fnOverlay([]driver.Value{"abc", "X"}); err == nil {
 		t.Fatal("fnOverlay with 2 arguments should fail")
+	}
+	// A start below 1 makes the first substring's length negative, which is the
+	// error PostgreSQL raises rather than an answer it gives.
+	if _, err := fnOverlay([]driver.Value{"abc", "X", int64(0)}); err == nil {
+		t.Fatal("fnOverlay at position 0 should fail, as PostgreSQL does")
 	}
 }
