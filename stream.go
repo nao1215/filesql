@@ -48,8 +48,6 @@ func newStreamingParser(fileType FileType, compression CompressionType, tableNam
 		compression: compression,
 		tableName:   tableName,
 		chunkSize:   newChunkSize(chunkSize),
-		memoryPool:  newMemoryPool(1024 * 1024), // 1MB default max buffer size
-		memoryLimit: newMemoryLimit(512),        // 512MB default memory limit
 	}
 }
 
