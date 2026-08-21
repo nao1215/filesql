@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/xuri/excelize/v2"
 	"modernc.org/sqlite"
 )
 
@@ -797,8 +798,18 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, options Dum
 		})
 	}
 
+	// The save writes onto the workbook it is replacing rather than onto a new
+	// one, so what this package does not hold survives: a sheet the sheet policy
+	// chose not to load, and the widths, merges and comments of the sheets it
+	// did. A workbook that cannot be reopened is written fresh, which is what
+	// every save did before this.
+	base, err := openWorkbookForOverwrite(path)
+	if err != nil {
+		return err
+	}
+
 	if err := writeFileAtomically(path, func(w io.Writer) error {
-		return writeXLSXWorkbookCompressed(w, path, sheets, options.Compression)
+		return writeXLSXWorkbookCompressed(w, path, base, sheets, options.Compression)
 	}); err != nil {
 		return fmt.Errorf("%w: failed to overwrite %s: %w", ErrIOOperation, path, err)
 	}
@@ -812,7 +823,7 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, options Dum
 // detectable there; dropping that error would commit a truncated file over the
 // caller's workbook. A write error already in flight wins, because it is the one
 // that explains the failure.
-func writeXLSXWorkbookCompressed(w io.Writer, path string, sheets []xlsxSheet, compression CompressionType) (err error) {
+func writeXLSXWorkbookCompressed(w io.Writer, path string, base *excelize.File, sheets []xlsxSheet, compression CompressionType) (err error) {
 	writer, closeWriter, err := createCompressedWriter(w, compression)
 	if err != nil {
 		return fmt.Errorf("%w: failed to create writer: %w", ErrCompression, err)
@@ -824,7 +835,32 @@ func writeXLSXWorkbookCompressed(w io.Writer, path string, sheets []xlsxSheet, c
 		err = joinCleanup(err, closeWriter(), "finish writing "+path)
 	}()
 
-	return writeXLSXWorkbook(writer, sheets)
+	return writeXLSXWorkbookOnto(writer, base, sheets)
+}
+
+// openWorkbookForOverwrite reads the workbook a save is about to replace, so the
+// save can write onto it. The file is read through its own codec, the way the
+// loader read it.
+//
+// A file that cannot be read as a workbook is not an error here: the save
+// replaces it either way, and a fresh workbook is what every save wrote before
+// this. Only a file that cannot be read at all stops the save, since that is the
+// file about to be overwritten.
+func openWorkbookForOverwrite(path string) (*excelize.File, error) {
+	reader, closeReader, err := NewCompressionFactory().CreateReaderForFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil //nolint:nilnil // No file to write onto is not a failure; the save creates one.
+		}
+		return nil, nil //nolint:nilnil // Unreadable through its codec; the save writes a fresh workbook.
+	}
+	defer func() { _ = closeReader() }()
+
+	book, err := excelize.OpenReader(reader)
+	if err != nil {
+		return nil, nil //nolint:nilnil // Unreadable as a workbook; the save writes a fresh one.
+	}
+	return book, nil
 }
 
 // tablesFromWorkbook lists the tables an Excel workbook was loaded as. A sheet

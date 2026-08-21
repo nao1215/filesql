@@ -1239,24 +1239,49 @@ func writeXLSXTableData(w io.Writer, tableName string, columns []string, rows *s
 // place goes through here with every one of its sheets, so a file of several
 // sheets comes back whole rather than being refused or flattened to one.
 func writeXLSXWorkbook(w io.Writer, sheets []xlsxSheet) error {
+	return writeXLSXWorkbookOnto(w, nil, sheets)
+}
+
+// writeXLSXWorkbookOnto writes sheets into base, or into a new workbook when
+// base is nil.
+//
+// A save that replaces a workbook writes onto the workbook it is replacing, so
+// what this package does not hold survives the save: a sheet the sheet policy
+// chose not to load used to be deleted from the caller's file, and a column
+// width, a merged range and a comment were gone from the sheets it did load.
+// Only the rows of a sheet a table was loaded from are rewritten, since those
+// rows are what the table is.
+func writeXLSXWorkbookOnto(w io.Writer, base *excelize.File, sheets []xlsxSheet) error {
 	if len(sheets) == 0 {
 		return fmt.Errorf("%w: no sheets to write", ErrEmptyData)
 	}
 
-	f := excelize.NewFile()
+	f := base
+	if f == nil {
+		f = excelize.NewFile()
+	}
 	defer func() {
 		_ = f.Close() // Ignore close error
 	}()
 
 	for _, sheet := range sheets {
-		if err := writeXLSXSheet(f, sheet); err != nil {
+		had, err := xlsxSheetExtent(f, sheet.name, base != nil)
+		if err != nil {
+			return err
+		}
+		written, err := writeXLSXSheet(f, sheet)
+		if err != nil {
+			return err
+		}
+		if err := trimXLSXSheet(f, sheet.name, had, written); err != nil {
 			return err
 		}
 	}
 
 	// excelize starts a workbook with a default sheet. It is only ours to remove
-	// once a sheet of our own exists, and not at all if a sheet reused its name.
-	if _, err := f.GetSheetIndex(defaultSheetName); err == nil {
+	// once a sheet of our own exists, and not at all if a sheet reused its name,
+	// and never when the workbook came from the caller rather than from here.
+	if _, err := f.GetSheetIndex(defaultSheetName); err == nil && base == nil {
 		hasOwn := false
 		for _, sheet := range sheets {
 			if sheet.name == defaultSheetName {
@@ -1282,22 +1307,74 @@ func writeXLSXWorkbook(w io.Writer, sheets []xlsxSheet) error {
 	return nil
 }
 
+// xlsxExtent is how far a sheet's values reached before it was rewritten.
+type xlsxExtent struct {
+	rows    int
+	columns int
+}
+
+// xlsxSheetExtent measures a sheet about to be rewritten, so what the table no
+// longer has can be removed afterwards. Nothing is removed up front: writing
+// over a cell keeps the style it carries, where clearing the sheet first would
+// take the styles, the merged ranges and the comments with it. A sheet the
+// workbook does not have yet has no extent, and neither does a workbook this
+// package is building from nothing.
+func xlsxSheetExtent(f *excelize.File, sheetName string, ontoExisting bool) (xlsxExtent, error) {
+	if !ontoExisting {
+		return xlsxExtent{}, nil
+	}
+	if _, err := f.GetSheetIndex(sheetName); err != nil {
+		return xlsxExtent{}, nil //nolint:nilerr // A sheet that is not there yet; writeXLSXSheet creates it.
+	}
+	rows, err := f.GetRows(sheetName)
+	if err != nil {
+		return xlsxExtent{}, fmt.Errorf("failed to read sheet %s: %w", sheetName, err)
+	}
+	extent := xlsxExtent{rows: len(rows)}
+	for _, row := range rows {
+		extent.columns = max(extent.columns, len(row))
+	}
+	return extent, nil
+}
+
+// trimXLSXSheet removes what the rewritten table no longer covers: rows below
+// its last one and columns to the right of its last. Removing from the far end
+// inward keeps the indexes gathered before the write correct as the sheet
+// shrinks. A sheet that grew has nothing to trim.
+func trimXLSXSheet(f *excelize.File, sheetName string, had xlsxExtent, wrote xlsxExtent) error {
+	for row := had.rows; row > wrote.rows; row-- {
+		if err := f.RemoveRow(sheetName, row); err != nil {
+			return fmt.Errorf("failed to remove row %d of sheet %s: %w", row, sheetName, err)
+		}
+	}
+	for column := had.columns; column > wrote.columns; column-- {
+		name, err := excelize.ColumnNumberToName(column)
+		if err != nil {
+			return fmt.Errorf("failed to name column %d of sheet %s: %w", column, sheetName, err)
+		}
+		if err := f.RemoveCol(sheetName, name); err != nil {
+			return fmt.Errorf("failed to remove column %s of sheet %s: %w", name, sheetName, err)
+		}
+	}
+	return nil
+}
+
 // writeXLSXSheet adds one sheet to f and fills it.
-func writeXLSXSheet(f *excelize.File, sheet xlsxSheet) error {
+func writeXLSXSheet(f *excelize.File, sheet xlsxSheet) (xlsxExtent, error) {
 	columns, rows, err := sheet.open()
 	if err != nil {
-		return err
+		return xlsxExtent{}, err
 	}
 	if rows != nil {
 		defer rows.Close()
 	}
 	if len(columns) == 0 {
-		return fmt.Errorf("%w: no columns defined", ErrEmptyData)
+		return xlsxExtent{}, fmt.Errorf("%w: no columns defined", ErrEmptyData)
 	}
 
 	if sheet.name != defaultSheetName {
 		if _, err := f.NewSheet(sheet.name); err != nil {
-			return fmt.Errorf("failed to create sheet %s: %w", sheet.name, err)
+			return xlsxExtent{}, fmt.Errorf("failed to create sheet %s: %w", sheet.name, err)
 		}
 	}
 
@@ -1305,10 +1382,10 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet) error {
 	for i, col := range columns {
 		cell, err := excelize.CoordinatesToCellName(i+1, 1)
 		if err != nil {
-			return fmt.Errorf("failed to generate cell name for column %d: %w", i+1, err)
+			return xlsxExtent{}, fmt.Errorf("failed to generate cell name for column %d: %w", i+1, err)
 		}
 		if err := f.SetCellValue(sheet.name, cell, col); err != nil {
-			return fmt.Errorf("failed to set header %s: %w", col, err)
+			return xlsxExtent{}, fmt.Errorf("failed to set header %s: %w", col, err)
 		}
 	}
 
@@ -1323,28 +1400,28 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet) error {
 	rowIndex := 2 // Start from row 2 (after header)
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
-			return fmt.Errorf("failed to scan row: %w", err)
+			return xlsxExtent{}, fmt.Errorf("failed to scan row: %w", err)
 		}
 
 		for i, val := range values {
 			cell, err := excelize.CoordinatesToCellName(i+1, rowIndex)
 			if err != nil {
-				return fmt.Errorf("failed to generate cell name for column %d, row %d: %w", i+1, rowIndex, err)
+				return xlsxExtent{}, fmt.Errorf("failed to generate cell name for column %d, row %d: %w", i+1, rowIndex, err)
 			}
 			// Every cell is written as text, the same string the text formats
 			// produce, so one table dumped twice does not disagree with itself.
 			cellValue := formatDumpValue(val)
 
 			if err := f.SetCellValue(sheet.name, cell, cellValue); err != nil {
-				return fmt.Errorf("failed to set cell value at %s: %w", cell, err)
+				return xlsxExtent{}, fmt.Errorf("failed to set cell value at %s: %w", cell, err)
 			}
 		}
 		rowIndex++
 	}
 
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("error reading rows: %w", err)
+		return xlsxExtent{}, fmt.Errorf("error reading rows: %w", err)
 	}
 
-	return nil
+	return xlsxExtent{rows: rowIndex - 1, columns: len(columns)}, nil
 }
