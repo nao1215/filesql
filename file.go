@@ -304,7 +304,7 @@ func (f *file) toTable() (*table, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file %s: %w", f.path, err)
 	}
-	defer handleCloseError(closeReader)()
+	defer closeQuietly(closeReader)
 
 	tableName := sanitizeTableName(tableFromFilePath(f.path))
 	return parseWithParser(reader, f.fileType, tableName, f.excelSheetPolicy)
