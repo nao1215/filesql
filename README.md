@@ -394,7 +394,7 @@ validatedBuilder, err := filesql.NewBuilder().
 
 The final memory cost is still dominated by the size of the in-memory SQLite database. Chunking reduces loader overhead; it does not make a large dataset free.
 
-A column's type is the same at any chunk size, but the text of a numeric-looking cell is not always. A column that reads as a number for a while and turns out to be text — `1`, then `2.50`, then `abc` — is created numeric and rebuilt as TEXT when the text arrives, and the rows already stored then carry SQLite's spelling of the number rather than the file's: `2.50` comes back as `2.5`, and `1` as `1.0`. The default chunk size decides the type before any row is stored for a file of 1000 rows or fewer, so this shows up when the chunk size is lowered below the row where such a column turns text. Leave the chunk size alone, or raise it, when a column mixes numbers and text and the exact text matters.
+Chunk size changes when rows reach the database, not what reaches it. A column's type and the text of every cell are the same at any chunk size, including a column that reads as a number for a while and turns out to be text: a file is loaded under the types its first chunk calls for and, when a later chunk needs a wider type, read again under the types the whole file calls for, so `2.50` is stored as `2.50` in a column that ends up TEXT however the file was chunked. A reader passed to `AddReader` cannot be read twice, so it is staged as text and typed once it has all been read, at the cost of one copy of the table inside SQLite.
 
 ### Concurrency
 
