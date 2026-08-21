@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.44.0] - 2026-08-21
 
 ### Added
 
@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `MalformedRowPolicy` documentation says what the package does ([#409](https://github.com/nao1215/filesql/issues/409)). `WithMalformedRowPolicy` described `MalformedRowFill` as "truncating long rows to the header width", where a long row is refused — which is what the policy constant's own godoc says, two files away, and what the code has done since the decision that source data is never silently discarded. The type's godoc gave a reason for excluding XLSX that stopped being true when a workbook row wider than its header started being refused: it said XLSX has no per-row field-count mismatch. Both now describe the behavior, and two tests pin it: `Fill` pads a short record and refuses a long one, and a workbook wider than its header is refused under every policy.
 
 - The README and the write-back functions say that an ACH or Fedwire write-back rewrites the whole file ([#395](https://github.com/nao1215/filesql/issues/395)). Both formats are written from the parsed structure rather than patched, so records nobody edited can come back formatted differently: loading one of the ACH files this repository ships and writing it straight back changes 891 bytes into 950, because the file header and file control in it are written short and the write-back writes every record at its full width, and a Fedwire file comes back with its tags in the order the format defines rather than the order the file had them. The values are the same either way. The serialization belongs to the libraries this package reads and writes those formats with, so the behavior is documented rather than changed: keeping a caller's byte-for-byte formatting would mean writing a NACHA and a Fedwire serializer here. What a caller can rely on is pinned instead: a test per format writes a file back with no edit in it, reloads it, and requires every column of every table to hold what the first load held.
+
+- `github.com/nao1215/fileparser` is no longer a dependency. It was the module this repository's `parser` package was forked from, it has since been archived, and the only thing still importing it was one test comparing the fork against its origin. That comparison can no longer tell anyone anything: the reference is frozen, and `parser` has already diverged from it on purpose. Nothing in a build ever reached it — it was a test-only requirement — so no caller's build changes, and the archived module stops holding the floor under `excelize`, `moov-io/ach` and the rest at the versions it happened to pin.
+
+- Dependencies: `github.com/moov-io/ach` 1.61.3 → 1.63.3, `github.com/moov-io/wire` 0.15.8 → 0.16.0, `modernc.org/sqlite` 1.55.0 → 1.56.0, `github.com/klauspost/compress` 1.19.1 → 1.19.2, `github.com/pierrec/lz4/v4` 4.1.27 → 4.1.28, `github.com/parquet-go/parquet-go` 0.30.1 → 0.32.0, `github.com/stretchr/testify` 1.11.1 → 1.12.0, `golang.org/x/text` 0.40.0 → 0.41.0.
 
 ### Fixed
 
@@ -169,6 +173,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `ExampleDBBuilder_WithDialect` shows a query written in another dialect. `WithDialect` is described in the README and had no tested example, so nothing ran the feature the way a caller reaches it; the example queries a table with MySQL's `DATE_FORMAT`, which is the call the fix above corrects.
 
+- staticcheck runs off the pull request path instead of in lint. It builds SSA and computes facts for every package in the import graph, and this module's graph holds machine-generated Go whose largest function is 7,517 lines, so a run whose cache misses takes tens of minutes while the other forty-five linters finish in thirteen seconds together. Any change to `go.sum` invalidated that cache, which is how every dependency update came to fail lint for a reason unrelated to its diff. The checks are kept rather than dropped: `.golangci.staticcheck.yml` enables staticcheck alone, a workflow runs it on pushes to main with an hour to work in, and `make lint-staticcheck` runs it on demand. What changed is that it no longer stands between a pull request and its merge.
+
+- Which save keeps a source's line terminator is written down as the mode it belongs to ([#326](https://github.com/nao1215/filesql/issues/326)). The README, the `WithLineEnding` godoc, and the `EnableAutoSave` godoc described the detection as a property of overwriting a file loaded from a path, but only writing back in place — `EnableAutoSave("")` — reads it. `DumpDatabase` and `EnableAutoSave("./dir")` are exports and write `\n` even when the directory named is the one a source came from, which is what an export should do: output that changed with whatever already sat in the destination would write different bytes on its second run. A caller who reads "save it back where it came from" as passing the source directory was told their CRLF file would be preserved and it was not; `WithLineEnding(LineEndingCRLF)` is how an export is asked for CRLF. All three paths are now pinned by a test side by side, so they cannot drift apart again.
+
 ### Breaking Changes
 
 - `DefaultRowsPerChunk` and `MinChunkSize` are removed. `DefaultRowsPerChunk` and `DefaultChunkSize` were two exported names for the same 1000, the second documented as an alias of the first, which left a caller no way to tell which one to reach for; `DefaultChunkSize` is the one that pairs with `SetDefaultChunkSize` and is what remains. `MinChunkSize` named a floor a caller cannot act on: `SetDefaultChunkSize` already ignores anything at or below zero, and the loader clamps on its own. A caller using either name replaces it with `DefaultChunkSize`, or with the literal 1 where the minimum was meant.
@@ -178,18 +186,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ErrPermissionDenied`, `ErrMemoryLimit` and `ErrContextCancelled` are removed ([#331](https://github.com/nao1215/filesql/issues/331)). No code path ever returned them, so `errors.Is` against any of the three answered false forever — worse than the sentinel not existing, because it reads like a supported way to ask a question and quietly answers wrong. Two of them have a standard library answer that already works: an unreadable file satisfies `errors.Is(err, fs.ErrPermission)`, because the operating system's error is wrapped all the way up, and a canceled load reports `context.Canceled` or `context.DeadlineExceeded`. Nothing detects a memory limit, so that one named a condition this package does not have. A test now fails when an exported sentinel is declared and never wrapped, so the catalog cannot drift again.
 
 - `ACHTableInfo` and `WireTableInfo` are removed, along with their table-name methods, and `IsACHBaseTableName` and `IsWireBaseTableName` are no longer exported. The two types were what the registry API returned; that API went in v0.43.0 and the types stayed behind, leaving them orphaned — nothing in this package returns one, accepts one, or constructs one, so a caller could only build one by hand to compute a string it already knew. The two predicates are how a dump decides which of its tables belong to an ACH or Fedwire file, and that decision is not one a caller outside this package can act on, since it also needs the source metadata the database holds. A caller that was appending the suffixes itself keeps doing so: they are `_file_header`, `_batches`, `_entries`, `_addenda`, `_iat_batches`, `_iat_entries`, `_iat_addenda` for ACH and `_message` for Fedwire, and none of them has changed.
-
-### Documentation
-
-- staticcheck runs off the pull request path instead of in lint. It builds SSA and computes facts for every package in the import graph, and this module's graph holds machine-generated Go whose largest function is 7,517 lines, so a run whose cache misses takes tens of minutes while the other forty-five linters finish in thirteen seconds together. Any change to `go.sum` invalidated that cache, which is how every dependency update came to fail lint for a reason unrelated to its diff. The checks are kept rather than dropped: `.golangci.staticcheck.yml` enables staticcheck alone, a workflow runs it on pushes to main with an hour to work in, and `make lint-staticcheck` runs it on demand. What changed is that it no longer stands between a pull request and its merge.
-
-- Which save keeps a source's line terminator is written down as the mode it belongs to ([#326](https://github.com/nao1215/filesql/issues/326)). The README, the `WithLineEnding` godoc, and the `EnableAutoSave` godoc described the detection as a property of overwriting a file loaded from a path, but only writing back in place — `EnableAutoSave("")` — reads it. `DumpDatabase` and `EnableAutoSave("./dir")` are exports and write `\n` even when the directory named is the one a source came from, which is what an export should do: output that changed with whatever already sat in the destination would write different bytes on its second run. A caller who reads "save it back where it came from" as passing the source directory was told their CRLF file would be preserved and it was not; `WithLineEnding(LineEndingCRLF)` is how an export is asked for CRLF. All three paths are now pinned by a test side by side, so they cannot drift apart again.
-
-### Changed
-
-- `github.com/nao1215/fileparser` is no longer a dependency. It was the module this repository's `parser` package was forked from, it has since been archived, and the only thing still importing it was one test comparing the fork against its origin. That comparison can no longer tell anyone anything: the reference is frozen, and `parser` has already diverged from it on purpose. Nothing in a build ever reached it — it was a test-only requirement — so no caller's build changes, and the archived module stops holding the floor under `excelize`, `moov-io/ach` and the rest at the versions it happened to pin.
-
-- Dependencies: `github.com/moov-io/ach` 1.61.3 → 1.63.3, `github.com/moov-io/wire` 0.15.8 → 0.16.0, `modernc.org/sqlite` 1.55.0 → 1.56.0, `github.com/klauspost/compress` 1.19.1 → 1.19.2, `github.com/pierrec/lz4/v4` 4.1.27 → 4.1.28, `github.com/parquet-go/parquet-go` 0.30.1 → 0.32.0, `github.com/stretchr/testify` 1.11.1 → 1.12.0, `golang.org/x/text` 0.40.0 → 0.41.0.
 
 ## [0.43.1] - 2026-08-09
 
@@ -1416,7 +1412,31 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
-[Unreleased]: https://github.com/nao1215/filesql/compare/v0.43.1...HEAD
+[Unreleased]: https://github.com/nao1215/filesql/compare/v0.44.0...HEAD
+[0.44.0]: https://github.com/nao1215/filesql/compare/v0.43.1...v0.44.0
+[0.43.1]: https://github.com/nao1215/filesql/compare/v0.43.0...v0.43.1
+[0.43.0]: https://github.com/nao1215/filesql/compare/v0.42.0...v0.43.0
+[0.42.0]: https://github.com/nao1215/filesql/compare/v0.41.1...v0.42.0
+[0.41.1]: https://github.com/nao1215/filesql/compare/v0.41.0...v0.41.1
+[0.41.0]: https://github.com/nao1215/filesql/compare/v0.40.1...v0.41.0
+[0.40.1]: https://github.com/nao1215/filesql/compare/v0.40.0...v0.40.1
+[0.40.0]: https://github.com/nao1215/filesql/compare/v0.39.1...v0.40.0
+[0.39.1]: https://github.com/nao1215/filesql/compare/v0.39.0...v0.39.1
+[0.39.0]: https://github.com/nao1215/filesql/compare/v0.38.0...v0.39.0
+[0.38.0]: https://github.com/nao1215/filesql/compare/v0.37.1...v0.38.0
+[0.37.1]: https://github.com/nao1215/filesql/compare/v0.37.0...v0.37.1
+[0.37.0]: https://github.com/nao1215/filesql/compare/v0.36.0...v0.37.0
+[0.36.0]: https://github.com/nao1215/filesql/compare/v0.35.2...v0.36.0
+[0.35.2]: https://github.com/nao1215/filesql/compare/v0.35.1...v0.35.2
+[0.35.1]: https://github.com/nao1215/filesql/compare/v0.35.0...v0.35.1
+[0.35.0]: https://github.com/nao1215/filesql/compare/v0.34.0...v0.35.0
+[0.34.0]: https://github.com/nao1215/filesql/compare/v0.33.0...v0.34.0
+[0.33.0]: https://github.com/nao1215/filesql/compare/v0.32.1...v0.33.0
+[0.32.1]: https://github.com/nao1215/filesql/compare/v0.32.0...v0.32.1
+[0.32.0]: https://github.com/nao1215/filesql/compare/v0.30.4...v0.32.0
+[0.30.4]: https://github.com/nao1215/filesql/compare/v0.30.3...v0.30.4
+[0.30.3]: https://github.com/nao1215/filesql/compare/v0.30.2...v0.30.3
+[0.30.2]: https://github.com/nao1215/filesql/compare/v0.30.1...v0.30.2
 [0.30.1]: https://github.com/nao1215/filesql/compare/v0.30.0...v0.30.1
 [0.30.0]: https://github.com/nao1215/filesql/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/nao1215/filesql/compare/v0.28.0...v0.29.0
