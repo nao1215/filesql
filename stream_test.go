@@ -1402,7 +1402,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
 		var chunks []*tableChunk
-		_, err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
+		_, err := parser.ProcessInChunks(reader, func(chunk *tableChunk) error {
 			chunks = append(chunks, chunk)
 			return nil
 		})
@@ -1420,7 +1420,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", 2) // chunk size = 2
 
 		var chunks []*tableChunk
-		_, err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
+		_, err := parser.ProcessInChunks(reader, func(chunk *tableChunk) error {
 			// Copy records to avoid slice reuse issues
 			c := &tableChunk{
 				tableName: chunk.tableName,
@@ -1446,7 +1446,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
 		var chunks []*tableChunk
-		_, err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
+		_, err := parser.ProcessInChunks(reader, func(chunk *tableChunk) error {
 			chunks = append(chunks, chunk)
 			return nil
 		})
@@ -1463,7 +1463,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
 		chunks := 0
-		columns, err := parser.processJSONInChunks(reader, func(chunk *tableChunk) error {
+		columns, err := parser.ProcessInChunks(reader, func(chunk *tableChunk) error {
 			chunks++
 			assert.Empty(t, chunk.getRecords())
 			return nil
@@ -1481,7 +1481,7 @@ func TestProcessJSONInChunks(t *testing.T) {
 		reader := strings.NewReader(input)
 		parser := newStreamingParser(FileTypeJSON, CompressionNone, "test_json", DefaultChunkSize)
 
-		_, err := parser.processJSONInChunks(reader, func(_ *tableChunk) error {
+		_, err := parser.ProcessInChunks(reader, func(_ *tableChunk) error {
 			return nil
 		})
 
@@ -1501,7 +1501,7 @@ func TestProcessJSONLInChunks(t *testing.T) {
 		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
 		var chunks []*tableChunk
-		_, err := parser.processJSONLInChunks(reader, func(chunk *tableChunk) error {
+		_, err := parser.ProcessInChunks(reader, func(chunk *tableChunk) error {
 			chunks = append(chunks, chunk)
 			return nil
 		})
@@ -1519,7 +1519,7 @@ func TestProcessJSONLInChunks(t *testing.T) {
 		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", 2) // chunk size = 2
 
 		var chunks []*tableChunk
-		_, err := parser.processJSONLInChunks(reader, func(chunk *tableChunk) error {
+		_, err := parser.ProcessInChunks(reader, func(chunk *tableChunk) error {
 			c := &tableChunk{
 				tableName: chunk.tableName,
 				headers:   chunk.headers,
@@ -1543,7 +1543,7 @@ func TestProcessJSONLInChunks(t *testing.T) {
 		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
 		chunks := 0
-		columns, err := parser.processJSONLInChunks(reader, func(chunk *tableChunk) error {
+		columns, err := parser.ProcessInChunks(reader, func(chunk *tableChunk) error {
 			chunks++
 			assert.Empty(t, chunk.getRecords())
 			return nil
@@ -1561,40 +1561,12 @@ func TestProcessJSONLInChunks(t *testing.T) {
 		reader := strings.NewReader(input)
 		parser := newStreamingParser(FileTypeJSONL, CompressionNone, "test_jsonl", DefaultChunkSize)
 
-		_, err := parser.processJSONLInChunks(reader, func(_ *tableChunk) error {
+		_, err := parser.ProcessInChunks(reader, func(_ *tableChunk) error {
 			return nil
 		})
 
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidData)
-	})
-}
-
-func TestTruncateLineForError(t *testing.T) {
-	t.Parallel()
-
-	t.Run("short string unchanged", func(t *testing.T) {
-		t.Parallel()
-
-		result := truncateLineForError("hello", 10)
-
-		assert.Equal(t, "hello", result)
-	})
-
-	t.Run("long string truncated with ellipsis", func(t *testing.T) {
-		t.Parallel()
-
-		result := truncateLineForError("this is a very long string", 10)
-
-		assert.Equal(t, "this is a ...", result)
-	})
-
-	t.Run("exact length unchanged", func(t *testing.T) {
-		t.Parallel()
-
-		result := truncateLineForError("12345", 5)
-
-		assert.Equal(t, "12345", result)
 	})
 }
 

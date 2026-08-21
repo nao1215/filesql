@@ -1,12 +1,11 @@
 package filesql
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 
+	"github.com/nao1215/filesql/internal/reader"
 	"github.com/nao1215/filesql/parser"
-	"github.com/xuri/excelize/v2"
 )
 
 // ExcelSheetPolicy decides which sheets of a workbook a load reads.
@@ -31,6 +30,9 @@ const (
 // ExcelSheet is one sheet of a workbook and whether the workbook shows it.
 type ExcelSheet = parser.ExcelSheet
 
+// ExcelSheetSource is the part of an open workbook that sheet selection reads.
+type ExcelSheetSource = parser.ExcelSheetSource
+
 // ExcelSheetsInFile reports the sheets of the workbook at path, in the order the
 // workbook stores them, and whether it shows each one. The path may carry a
 // compression suffix, exactly as it may for a load.
@@ -41,7 +43,7 @@ type ExcelSheet = parser.ExcelSheet
 // be a second implementation of the rule filesql itself applies, free to drift
 // from it.
 func ExcelSheetsInFile(path string) (sheets []ExcelSheet, err error) {
-	reader, cleanup, err := NewCompressionFactory().CreateReaderForFile(path)
+	source, cleanup, err := NewCompressionFactory().CreateReaderForFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -50,50 +52,43 @@ func ExcelSheetsInFile(path string) (sheets []ExcelSheet, err error) {
 			err = fmt.Errorf("%w: failed to close %s: %w", ErrIOOperation, path, cleanupErr)
 		}
 	}()
-	return ExcelSheetsInReader(reader)
+	return ExcelSheetsInReader(source)
 }
 
 // ExcelSheetsInReader is ExcelSheetsInFile for a workbook that has no path. The
 // reader must yield the workbook's own bytes; a codec around them has to be
 // unwrapped first, as it has no name to be detected from.
-func ExcelSheetsInReader(reader io.Reader) (sheets []ExcelSheet, err error) {
-	// excelize needs random access, and the reader may be a stream, so the
-	// workbook is buffered whole — the same thing every other XLSX path here
-	// does with it.
-	data, err := io.ReadAll(reader)
+func ExcelSheetsInReader(source io.Reader) (sheets []ExcelSheet, err error) {
+	workbook, err := reader.OpenWorkbook(source)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read XLSX data: %w", ErrIOOperation, err)
-	}
-	f, err := excelize.OpenReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to open XLSX file: %w", ErrParsing, err)
+		return nil, wrapReadError(err)
 	}
 	defer func() {
-		if closeErr := f.Close(); closeErr != nil && err == nil {
+		if closeErr := workbook.Close(); closeErr != nil && err == nil {
 			err = fmt.Errorf("%w: failed to close XLSX file: %w", ErrIOOperation, closeErr)
 		}
 	}()
-	return excelSheetList(f)
+	return excelSheetList(workbook.Source())
 }
 
-// excelSheetList is parser.ExcelSheets with filesql's sentinel attached, so a
-// workbook whose visibility cannot be read fails as a parse error like every
-// other unreadable input here.
-func excelSheetList(f parser.ExcelSheetSource) ([]ExcelSheet, error) {
-	sheets, err := parser.ExcelSheets(f)
+// excelSheetList is the reader's sheet listing with filesql's sentinel
+// attached, so a workbook whose visibility cannot be read fails as a parse
+// error like every other unreadable input here.
+func excelSheetList(f ExcelSheetSource) ([]ExcelSheet, error) {
+	sheets, err := reader.ExcelSheets(f)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrParsing, err)
+		return nil, wrapReadError(err)
 	}
 	return sheets, nil
 }
 
-// selectExcelSheets is parser.SelectExcelSheets with filesql's sentinel
+// selectExcelSheets is the reader's sheet selection with filesql's sentinel
 // attached. It is the single point every Excel load path here calls to turn an
 // open workbook into the list of sheets it contributes.
-func selectExcelSheets(f parser.ExcelSheetSource, policy ExcelSheetPolicy) (loaded, skipped []string, err error) {
-	loaded, skipped, err = parser.SelectExcelSheets(f, policy)
+func selectExcelSheets(f ExcelSheetSource, policy ExcelSheetPolicy) (loaded, skipped []string, err error) {
+	loaded, skipped, err = reader.SelectExcelSheets(f, policy)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %w", ErrParsing, err)
+		return nil, nil, wrapReadError(err)
 	}
 	return loaded, skipped, nil
 }
@@ -102,9 +97,6 @@ func selectExcelSheets(f parser.ExcelSheetSource, policy ExcelSheetPolicy) (load
 // separates a workbook with no sheets at all from one whose sheets were all
 // left out by the policy, because the two need different things done about
 // them: the first file is broken, the second is a setting the caller chose.
-func noExcelSheetsError(f parser.ExcelSheetSource, policy ExcelSheetPolicy) error {
-	if policy == ExcelSheetPolicyVisibleOnly && len(f.GetSheetList()) > 0 {
-		return fmt.Errorf("%w: no visible sheets found in XLSX file", ErrEmptyData)
-	}
-	return fmt.Errorf("%w: no sheets found in XLSX file", ErrEmptyData)
+func noExcelSheetsError(f ExcelSheetSource, policy ExcelSheetPolicy) error {
+	return wrapReadError(reader.NoExcelSheetsError(f, policy))
 }

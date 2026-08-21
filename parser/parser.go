@@ -3,20 +3,14 @@ package parser
 import (
 	"bufio"
 	"bytes"
-	"compress/bzip2"
-	"compress/gzip"
-	"compress/zlib"
 	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
 
-	"github.com/klauspost/compress/s2"
-	"github.com/klauspost/compress/snappy"
-	"github.com/klauspost/compress/zstd"
-	"github.com/pierrec/lz4/v4"
-	"github.com/ulikunitz/xz"
+	"github.com/nao1215/filesql/internal/codec"
+	"github.com/nao1215/filesql/internal/reader"
 )
 
 // utf8BOM is the byte-order mark a UTF-8 file may begin with.
@@ -398,6 +392,17 @@ func skipUTF8BOM(reader io.Reader) io.Reader {
 	return buffered
 }
 
+// readerFormat is the reader package's name for a base file type.
+var readerFormats = map[FileType]reader.Format{ //nolint:gochecknoglobals // constant-like lookup table
+	CSV:     reader.FormatCSV,
+	TSV:     reader.FormatTSV,
+	LTSV:    reader.FormatLTSV,
+	Parquet: reader.FormatParquet,
+	XLSX:    reader.FormatXLSX,
+	JSON:    reader.FormatJSON,
+	JSONL:   reader.FormatJSONL,
+}
+
 // Parse reads data from an io.Reader and returns parsed results.
 // The fileType parameter specifies the format and compression of the data.
 //
@@ -406,8 +411,8 @@ func skipUTF8BOM(reader io.Reader) io.Reader {
 //	f, _ := os.Open("data.csv.gz")
 //	defer f.Close()
 //	result, err := parser.Parse(f, parser.CSVGZ)
-func Parse(reader io.Reader, fileType FileType, opts ...ParseOption) (result *TableData, err error) {
-	if reader == nil {
+func Parse(input io.Reader, fileType FileType, opts ...ParseOption) (result *TableData, err error) {
+	if input == nil {
 		return nil, errors.New("reader cannot be nil")
 	}
 
@@ -416,42 +421,84 @@ func Parse(reader io.Reader, fileType FileType, opts ...ParseOption) (result *Ta
 		opt(&cfg)
 	}
 
-	// Handle decompression
-	decompressedReader, closeFunc, decompErr := createDecompressedReader(reader, fileType)
+	baseType := BaseFileType(fileType)
+	format, supported := readerFormats[baseType]
+	if !supported {
+		return nil, errors.New("unsupported file type")
+	}
+
+	decompressed, closeFunc, decompErr := createDecompressedReader(input, fileType)
 	if decompErr != nil {
 		return nil, fmt.Errorf("failed to decompress: %w", decompErr)
 	}
-	if closeFunc != nil {
-		defer func() {
-			if closeErr := closeFunc(); closeErr != nil && err == nil {
-				err = fmt.Errorf("failed to close decompressor: %w", closeErr)
-			}
-		}()
+	defer func() {
+		if closeErr := closeFunc(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close decompressor: %w", closeErr)
+		}
+	}()
+
+	if isTextBaseType(baseType) {
+		decompressed = skipUTF8BOM(decompressed)
 	}
 
-	// Parse based on base file type
-	baseType := BaseFileType(fileType)
-	if isTextBaseType(baseType) {
-		decompressedReader = skipUTF8BOM(decompressedReader)
+	// Every chunk is collected, because a TableData is the whole table. Reading
+	// in chunks is what a load needs, and collecting them is cheaper than the
+	// reverse: a whole-table read cannot be handed out a chunk at a time.
+	var headers []string
+	records := [][]string{}
+	read, readErr := reader.Read(decompressed, format, reader.Options{
+		Reconcile:        strictFieldCount(baseType),
+		ExcelSheetPolicy: cfg.excelSheetPolicy,
+	}, func(chunk *reader.Chunk) error {
+		headers = chunk.Header
+		records = append(records, chunk.Records...)
+		return nil
+	})
+	if readErr != nil {
+		return nil, parseError(readErr)
 	}
-	switch baseType {
-	case CSV:
-		return parseDelimited(decompressedReader, ',', "CSV")
-	case TSV:
-		return parseDelimited(decompressedReader, '\t', "TSV")
-	case LTSV:
-		return parseLTSV(decompressedReader)
-	case Parquet:
-		return parseParquet(decompressedReader)
-	case XLSX:
-		return parseXLSX(decompressedReader, cfg.excelSheetPolicy)
-	case JSON:
-		return parseJSON(decompressedReader)
-	case JSONL:
-		return parseJSONL(decompressedReader)
-	default:
-		return nil, errors.New("unsupported file type")
+	// JSON and JSONL alone tell a document holding nothing from one saying there
+	// is nothing, and this package has always reported the first as an error.
+	if read.EmptyInput {
+		return nil, fmt.Errorf("empty %s data", baseType)
 	}
+
+	return &TableData{
+		Headers:     headers,
+		Records:     records,
+		ColumnTypes: columnTypesOf(read.Types),
+	}, nil
+}
+
+// strictFieldCount refuses a delimited record whose field count differs from
+// the header's, which is what every reader of a TableData needs: everything
+// downstream reads a record by header position, so a record of another length
+// is a table nothing can use.
+//
+// It is nil for the other formats, which settle their own widths.
+func strictFieldCount(baseType FileType) reader.Reconcile {
+	if baseType != CSV && baseType != TSV {
+		return nil
+	}
+	syntaxError := ErrCSVSyntax
+	if baseType == TSV {
+		syntaxError = ErrTSVSyntax
+	}
+	return func(record []string, want, rowNum int) ([]string, bool, error) {
+		return nil, false, fmt.Errorf("%w: record on line %d has %d fields, the header has %d",
+			syntaxError, rowNum+1, len(record), want)
+	}
+}
+
+// parseError gives a failed read this package's wording for it. The reader
+// names no sentinel of its own, so what it says about a duplicate column has
+// the phrase this package has always used put in front of it.
+func parseError(err error) error {
+	var readErr *reader.Error
+	if errors.As(err, &readErr) && readErr.Kind == reader.KindDuplicateColumn {
+		return fmt.Errorf("duplicate column name: %s", readErr.Error())
+	}
+	return err
 }
 
 // File extensions
@@ -711,265 +758,31 @@ func BaseFileType(ft FileType) FileType {
 	}
 }
 
-// createDecompressedReader wraps the reader with appropriate decompression.
-func createDecompressedReader(reader io.Reader, fileType FileType) (io.Reader, func() error, error) {
+// codecOf is the compression a fused file type carries.
+func codecOf(fileType FileType) codec.Codec {
 	switch fileType {
 	case CSVGZ, TSVGZ, LTSVGZ, XLSXGZ, ParquetGZ, JSONGZ, JSONLGZ:
-		gzReader, err := gzip.NewReader(reader)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create gzip reader: %w", err)
-		}
-		return gzReader, func() error { return gzReader.Close() }, nil
-
+		return codec.GZ
 	case CSVBZ2, TSVBZ2, LTSVBZ2, XLSXBZ2, ParquetBZ2, JSONBZ2, JSONLBZ2:
-		bz2Reader := bzip2.NewReader(reader)
-		return bz2Reader, nil, nil
-
+		return codec.BZ2
 	case CSVXZ, TSVXZ, LTSVXZ, XLSXXZ, ParquetXZ, JSONXZ, JSONLXZ:
-		xzReader, err := xz.NewReader(reader)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create xz reader: %w", err)
-		}
-		return xzReader, nil, nil
-
+		return codec.XZ
 	case CSVZSTD, TSVZSTD, LTSVZSTD, XLSXZSTD, ParquetZSTD, JSONZSTD, JSONLZSTD:
-		decoder, err := zstd.NewReader(reader)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create zstd reader: %w", err)
-		}
-		return decoder, func() error { decoder.Close(); return nil }, nil
-
+		return codec.ZSTD
 	case CSVZLIB, TSVZLIB, LTSVZLIB, XLSXZLIB, ParquetZLIB, JSONZLIB, JSONLZLIB:
-		zlibReader, err := zlib.NewReader(reader)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create zlib reader: %w", err)
-		}
-		return zlibReader, func() error { return zlibReader.Close() }, nil
-
+		return codec.ZLIB
 	case CSVSNAPPY, TSVSNAPPY, LTSVSNAPPY, XLSXSNAPPY, ParquetSNAPPY, JSONSNAPPY, JSONLSNAPPY:
-		snappyReader := snappy.NewReader(reader)
-		return snappyReader, nil, nil
-
+		return codec.SNAPPY
 	case CSVS2, TSVS2, LTSVS2, XLSXS2, ParquetS2, JSONS2, JSONLS2:
-		s2Reader := s2.NewReader(reader)
-		return s2Reader, nil, nil
-
+		return codec.S2
 	case CSVLZ4, TSVLZ4, LTSVLZ4, XLSXLZ4, ParquetLZ4, JSONLZ4, JSONLLZ4:
-		lz4Reader := lz4.NewReader(reader)
-		return lz4Reader, nil, nil
-
+		return codec.LZ4
 	default:
-		// No compression
-		return reader, nil, nil
+		return codec.None
 	}
 }
 
-// delimitedSyntaxError is the sentinel for input of the given delimiter that
-// does not describe a table.
-func delimitedSyntaxError(delimiter rune) error {
-	if delimiter == '\t' {
-		return ErrTSVSyntax
-	}
-	return ErrCSVSyntax
-}
-
-// parseDelimited parses CSV or TSV data. TSV is read literally; see TSVReader.
-func parseDelimited(reader io.Reader, delimiter rune, fileTypeName string) (*TableData, error) {
-	normalized := NormalizeLineEndings(reader)
-
-	var records [][]string
-	var err error
-	if delimiter == '\t' {
-		records, err = NewTSVReader(normalized).ReadAll()
-	} else {
-		csvReader := NewCSVReader(normalized)
-		csvReader.Comma = delimiter
-		records, err = csvReader.ReadAll()
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to read %s: %w", fileTypeName, err)
-	}
-
-	if len(records) == 0 {
-		return nil, fmt.Errorf("empty %s data", fileTypeName)
-	}
-
-	headers := records[0]
-	if err := validateColumnNames(headers); err != nil {
-		return nil, err
-	}
-
-	dataRecords := make([][]string, 0, len(records)-1)
-	for i := 1; i < len(records); i++ {
-		// Everything downstream reads a record by header position, so a record
-		// of another length is a table nothing can use. The CSV reader reports
-		// this itself; the TSV one takes every line as it comes, which is what
-		// makes the check belong here rather than in either reader.
-		if len(records[i]) != len(headers) {
-			return nil, fmt.Errorf("%w: record on line %d has %d fields, the header has %d",
-				delimitedSyntaxError(delimiter), i+1, len(records[i]), len(headers))
-		}
-		dataRecords = append(dataRecords, records[i])
-	}
-
-	// Infer column types
-	columnTypes := inferColumnTypes(headers, dataRecords)
-
-	return &TableData{
-		Headers:     headers,
-		Records:     dataRecords,
-		ColumnTypes: columnTypes,
-	}, nil
-}
-
-// parseLTSV parses LTSV (Labeled Tab-Separated Values) data.
-// Column order is preserved as first-seen order for deterministic output.
-func parseLTSV(reader io.Reader) (*TableData, error) {
-	content, err := io.ReadAll(NormalizeLineEndings(reader))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read LTSV: %w", err)
-	}
-
-	lines := strings.Split(string(content), "\n")
-	if len(lines) == 0 {
-		return nil, errors.New("empty LTSV data")
-	}
-
-	// Use slice to preserve first-seen order
-	var headers []string
-	headerSeen := make(map[string]bool)
-	var parsedRecords []map[string]string
-
-	for _, line := range lines {
-		// Only the line terminator is removed. TrimSpace took the trailing spaces
-		// of the last field with it, so a value ending in a space lost it.
-		line = strings.TrimRight(line, "\r")
-		if line == "" {
-			continue
-		}
-
-		// Labels are compared folded; see ltsvLabelKey. recordMap is keyed that
-		// way so a record finds its value under the column the first record
-		// named, whatever case this one wrote it in; headers keep the spelling
-		// that named the column.
-		recordMap := make(map[string]string)
-		seen := make(map[string]struct{})
-		pairs := strings.Split(line, "\t")
-		for _, pair := range pairs {
-			kv := strings.SplitN(pair, ":", 2)
-			if len(kv) == 2 {
-				key := strings.TrimSpace(kv[0])
-				// The value is the bytes up to the next tab or newline. Trimming it lost
-				// whitespace the writer had written and CSV would have kept, so the same
-				// data read from two formats disagreed. The label is trimmed because a
-				// space around one is malformed either way.
-				value := kv[1]
-				// A label repeated within one record cannot map to distinct columns.
-				// Reject it rather than silently keeping only the last value.
-				if _, dup := seen[ltsvLabelKey(key)]; dup {
-					return nil, fmt.Errorf("duplicate column name %q in LTSV record", key)
-				}
-				folded := ltsvLabelKey(key)
-				seen[folded] = struct{}{}
-				recordMap[folded] = value
-				// Track headers in first-seen order. Two labels differing only in
-				// case are one column, the way they are within one record and the
-				// way SQLite compares the names it ends up holding: keying this by
-				// the label as written made "id" and "ID" two columns that SQLite
-				// then refused to create, with an error naming neither the file nor
-				// the rule.
-				if !headerSeen[folded] {
-					headerSeen[folded] = true
-					headers = append(headers, key)
-				}
-			}
-		}
-		if len(recordMap) > 0 {
-			parsedRecords = append(parsedRecords, recordMap)
-		}
-	}
-
-	if len(parsedRecords) == 0 {
-		return nil, errors.New("no valid LTSV records found")
-	}
-
-	// Convert to records using first-seen header order
-	records := make([][]string, 0, len(parsedRecords))
-	for _, recordMap := range parsedRecords {
-		row := make([]string, len(headers))
-		for i, key := range headers {
-			if val, exists := recordMap[ltsvLabelKey(key)]; exists {
-				row[i] = val
-			} else {
-				row[i] = ""
-			}
-		}
-		records = append(records, row)
-	}
-
-	// Infer column types
-	columnTypes := inferColumnTypes(headers, records)
-
-	return &TableData{
-		Headers:     headers,
-		Records:     records,
-		ColumnTypes: columnTypes,
-	}, nil
-}
-
-// validateColumnNames checks for duplicate column names, comparing them with
-// surrounding whitespace removed and case folded: " name " and "NAME" beside
-// "name" are one name three times, not three columns. Every loader in filesql
-// applies that rule, so a header cannot be a duplicate in one format and a
-// second column in another — and case is folded because SQLite, which ends up
-// holding the columns, compares their names that way too.
-//
-// This is a deliberate difference from github.com/nao1215/fileparser, the
-// archived module this package was forked from, which
-// parser is a fork of and which compares the names as they stand. The message
-// still matches it exactly, because a differential test holds the two to the
-// same errors and only the comparison is meant to differ; the quoting and
-// position filesql adds are added where filesql builds its own message.
-func validateColumnNames(columns []string) error {
-	trimmed := make(map[string]bool, len(columns))
-	folded := make(map[string]bool, len(columns))
-	for _, col := range columns {
-		trimmedName := strings.TrimSpace(col)
-		foldedName := asciiFold(col)
-		if trimmed[trimmedName] || folded[foldedName] {
-			return fmt.Errorf("duplicate column name: %s", col)
-		}
-		trimmed[trimmedName] = true
-		folded[foldedName] = true
-	}
-	return nil
-}
-
-// ltsvLabelKey is how two LTSV labels are compared for being one column. LTSV
-// carries its labels on every record rather than in a header, so the duplicate
-// check runs per record and had its own comparison, which was exact: a record
-// holding "A:1\ta:2" reached SQLite, which folds ASCII case, and failed there
-// instead.
-func ltsvLabelKey(label string) string {
-	return asciiFold(strings.TrimSpace(label))
-}
-
-// asciiFold lowercases the ASCII letters in s, which is how SQLite compares two
-// column names: its folding stops at ASCII, so "ä" and "Ä" stay two names.
-func asciiFold(s string) string {
-	var folded []byte
-	for i := range len(s) {
-		c := s[i]
-		if c < 'A' || c > 'Z' {
-			continue
-		}
-		if folded == nil {
-			folded = []byte(s)
-		}
-		folded[i] = c + ('a' - 'A')
-	}
-	if folded == nil {
-		return s
-	}
-	return string(folded)
+// createDecompressedReader wraps the reader with appropriate decompression.
+func createDecompressedReader(reader io.Reader, fileType FileType) (io.Reader, func() error, error) {
+	return codecOf(fileType).NewReader(reader)
 }

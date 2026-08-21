@@ -888,7 +888,10 @@ func TestCreateDecompressedReader_NoCompression(t *testing.T) {
 
 			assert.NoError(t, err)
 			assert.NotNil(t, reader)
-			assert.Nil(t, closeFunc)
+			// The close function is never nil, so a caller can defer it without
+			// asking whether this codec has anything to release.
+			require.NotNil(t, closeFunc)
+			assert.NoError(t, closeFunc())
 		})
 	}
 }
@@ -941,7 +944,10 @@ func TestCreateDecompressedReader_Bzip2(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
-	assert.Nil(t, closeFunc) // bzip2 doesn't have close func
+	// bzip2 has nothing to release, and still hands back a close function to
+	// defer.
+	require.NotNil(t, closeFunc)
+	assert.NoError(t, closeFunc())
 }
 
 func TestParse_UnsupportedFileType(t *testing.T) {

@@ -1,20 +1,14 @@
 package filesql
 
 import (
-	"compress/bzip2"
-	"compress/gzip"
-	"compress/zlib"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/klauspost/compress/s2"
-	"github.com/klauspost/compress/snappy"
-	"github.com/klauspost/compress/zstd"
-	"github.com/pierrec/lz4/v4"
-	"github.com/ulikunitz/xz"
+	"github.com/nao1215/filesql/internal/codec"
 )
 
 // CompressionHandler defines the interface for handling file compression/decompression
@@ -34,110 +28,25 @@ type compressionHandlerImpl struct {
 
 // CreateReader creates a decompression reader based on the compression type
 func (h *compressionHandlerImpl) CreateReader(reader io.Reader) (io.Reader, func() error, error) {
-	switch h.compressionType {
-	case CompressionNone:
-		return reader, func() error { return nil }, nil
-
-	case CompressionGZ:
-		gzReader, err := gzip.NewReader(reader)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%w: failed to create gzip reader: %w", ErrCompression, err)
-		}
-		return gzReader, gzReader.Close, nil
-
-	case CompressionBZ2:
-		// bzip2.NewReader doesn't need closing
-		return bzip2.NewReader(reader), func() error { return nil }, nil
-
-	case CompressionXZ:
-		xzReader, err := xz.NewReader(reader)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%w: failed to create xz reader: %w", ErrCompression, err)
-		}
-		// xz.Reader doesn't have a Close method
-		return xzReader, func() error { return nil }, nil
-
-	case CompressionZSTD:
-		decoder, err := zstd.NewReader(reader)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%w: failed to create zstd reader: %w", ErrCompression, err)
-		}
-		return decoder, func() error {
-			decoder.Close()
-			return nil
-		}, nil
-
-	case CompressionZLIB:
-		zlibReader, err := zlib.NewReader(reader)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%w: failed to create zlib reader: %w", ErrCompression, err)
-		}
-		return zlibReader, zlibReader.Close, nil
-
-	case CompressionSNAPPY:
-		snappyReader := snappy.NewReader(reader)
-		return snappyReader, func() error { return nil }, nil
-
-	case CompressionS2:
-		s2Reader := s2.NewReader(reader)
-		return s2Reader, func() error { return nil }, nil
-
-	case CompressionLZ4:
-		lz4Reader := lz4.NewReader(reader)
-		return lz4Reader, func() error { return nil }, nil
-
-	default:
-		return nil, nil, fmt.Errorf("%w: unsupported compression type for reading: %v", ErrCompression, h.compressionType)
+	decompressed, closeFunc, err := codec.Codec(h.compressionType).NewReader(reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %w", ErrCompression, err)
 	}
+	return decompressed, closeFunc, nil
 }
 
 // CreateWriter creates a compression writer based on the compression type
 func (h *compressionHandlerImpl) CreateWriter(writer io.Writer) (io.Writer, func() error, error) {
-	switch h.compressionType {
-	case CompressionNone:
-		return writer, func() error { return nil }, nil
-
-	case CompressionGZ:
-		gzWriter := gzip.NewWriter(writer)
-		return gzWriter, gzWriter.Close, nil
-
-	case CompressionBZ2:
-		// bzip2 doesn't have a writer in the standard library
-		return nil, nil, fmt.Errorf("%w: bzip2 compression is not supported for writing", ErrUnsupportedFormat)
-
-	case CompressionXZ:
-		xzWriter, err := xz.NewWriter(writer)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%w: failed to create xz writer: %w", ErrCompression, err)
+	compressed, closeFunc, err := codec.Codec(h.compressionType).NewWriter(writer)
+	if err != nil {
+		// A codec that has no writer at all is an unsupported format, not a
+		// compressor that failed to start.
+		if errors.Is(err, codec.ErrNoBZ2Writer) {
+			return nil, nil, fmt.Errorf("%w: %w", ErrUnsupportedFormat, err)
 		}
-		return xzWriter, xzWriter.Close, nil
-
-	case CompressionZSTD:
-		zstdWriter, err := zstd.NewWriter(writer)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%w: failed to create zstd writer: %w", ErrCompression, err)
-		}
-		return zstdWriter, zstdWriter.Close, nil
-
-	case CompressionZLIB:
-		zlibWriter := zlib.NewWriter(writer)
-		return zlibWriter, zlibWriter.Close, nil
-
-	case CompressionSNAPPY:
-		snappyWriter := snappy.NewBufferedWriter(writer)
-		return snappyWriter, snappyWriter.Close, nil
-
-	case CompressionS2:
-		s2Writer := s2.NewWriter(writer)
-		return s2Writer, s2Writer.Close, nil
-
-	case CompressionLZ4:
-		lz4Writer := lz4.NewWriter(writer)
-		return lz4Writer, lz4Writer.Close, nil
-
-	default:
-		return nil, nil, fmt.Errorf("%w: unsupported compression type for writing: %v", ErrCompression, h.compressionType)
+		return nil, nil, fmt.Errorf("%w: %w", ErrCompression, err)
 	}
+	return compressed, closeFunc, nil
 }
 
 // Extension returns the file extension for this compression type

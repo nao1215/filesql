@@ -1,7 +1,6 @@
 package filesql
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/nao1215/filesql/parser"
@@ -117,8 +116,6 @@ type streamingParser struct {
 	compression CompressionType
 	tableName   string
 	chunkSize   chunkSizeValue
-	memoryPool  *memoryPool  // Pool for reusable memory allocations
-	memoryLimit *memoryLimit // Configurable memory limits
 	// malformedRowPolicy controls how a CSV/TSV record whose field count differs
 	// from the header is handled. The zero value is MalformedRowStop.
 	malformedRowPolicy MalformedRowPolicy
@@ -196,38 +193,4 @@ func detectFileType(path string) FileType {
 	}
 
 	return filesqlFileType(parser.DetectFileType(path))
-}
-
-// convertXLSXRowsToTable converts XLSX rows to table headers and records
-// First row becomes headers, remaining rows become records with padding
-func convertXLSXRowsToTable(rows [][]string) (header, []record, error) {
-	var headers header
-	var records []record
-
-	// First row as headers
-	if len(rows) > 0 {
-		headers = make(header, len(rows[0]))
-		copy(headers, rows[0])
-	}
-
-	// Remaining rows as records
-	if len(rows) > 1 {
-		records = make([]record, len(rows)-1)
-		for i, row := range rows[1:] {
-			// A workbook stores no cell for a trailing empty one, so a row
-			// ending in blanks arrives short and the padding says what it
-			// means. More cells than the header has means the opposite — there
-			// is data in a column the header does not name — and truncating it
-			// dropped that data with no error and no count to say so.
-			if len(row) > len(headers) {
-				return nil, nil, fmt.Errorf("%w: row %d has %d cells where the header has %d",
-					ErrParsing, i+2, len(row), len(headers))
-			}
-			record := make(record, len(headers))
-			copy(record, row)
-			records[i] = record
-		}
-	}
-
-	return headers, records, nil
 }

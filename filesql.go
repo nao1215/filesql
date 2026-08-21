@@ -7,7 +7,6 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,6 +18,7 @@ import (
 	"github.com/apache/arrow/go/v18/arrow/array"
 	"github.com/apache/arrow/go/v18/arrow/memory"
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
+	"github.com/nao1215/filesql/internal/reader"
 	"github.com/nao1215/filesql/parser"
 	"github.com/xuri/excelize/v2"
 )
@@ -683,7 +683,7 @@ func formatDumpValue(value any) string {
 		// Rendered the way an import reads it back: a whole number keeps a
 		// decimal point, or the file reloads as an INTEGER column and integer
 		// division answers a different question than this database would.
-		return sqliteFloatText(v, 64)
+		return reader.SQLiteFloatText(v, 64)
 	case bool:
 		return strconv.FormatBool(v)
 	case time.Time:
@@ -792,165 +792,6 @@ func checkLTSVLabel(column string) error {
 		}
 	}
 	return nil
-}
-
-// bytesReaderAt implements io.ReaderAt for byte slices
-type bytesReaderAt struct {
-	data []byte
-}
-
-func (b *bytesReaderAt) ReadAt(p []byte, off int64) (int, error) {
-	if off < 0 || off >= int64(len(b.data)) {
-		return 0, io.EOF
-	}
-
-	n := copy(p, b.data[off:])
-	if n < len(p) {
-		return n, io.EOF
-	}
-	return n, nil
-}
-
-// Size returns the size of the data
-func (b *bytesReaderAt) Size() int64 {
-	return int64(len(b.data))
-}
-
-// Seek implements io.Seeker interface (required for ReaderAtSeeker)
-func (b *bytesReaderAt) Seek(offset int64, whence int) (int64, error) {
-	// bytesReaderAt doesn't maintain position state, so Seek is not meaningful
-	// However, we implement it to satisfy the ReaderAtSeeker interface
-	switch whence {
-	case io.SeekStart:
-		return offset, nil
-	case io.SeekCurrent:
-		return 0, nil // We don't track current position
-	case io.SeekEnd:
-		return int64(len(b.data)) + offset, nil
-	default:
-		return 0, fmt.Errorf("%w: invalid whence value", ErrInvalidData)
-	}
-}
-
-// Read implements io.Reader interface (required for ReaderAtSeeker)
-func (b *bytesReaderAt) Read(p []byte) (int, error) {
-	// For ReaderAtSeeker, we implement a basic Read that starts from beginning
-	return b.ReadAt(p, 0)
-}
-
-// arrowCellIsNull reports whether a cell has no value SQLite can store: a
-// Parquet null, or a NaN, which SQLite has no representation for at all — a
-// computed NaN is NULL there, so NULL is what the value already means in the
-// destination. Left as text it would sit in a column declared REAL as the word
-// "NaN".
-func arrowCellIsNull(arr arrow.Array, index int64) bool {
-	if arr.IsNull(int(index)) {
-		return true
-	}
-	switch a := arr.(type) {
-	case *array.Float32:
-		return math.IsNaN(float64(a.Value(int(index))))
-	case *array.Float64:
-		return math.IsNaN(a.Value(int(index)))
-	default:
-		return false
-	}
-}
-
-// sqliteFloatText renders a float at bitSize so SQLite's REAL affinity converts
-// it back to the same number, which "%g" does not for the three values that have
-// no decimal spelling.
-//
-// The column is declared REAL from the Parquet schema, and SQLite applies that
-// affinity to the text an import binds: "+Inf" is not a number to it, so the
-// cell was stored as TEXT inside a REAL column and typeof() answered "text" for
-// a value the file held as a double. "9e999" overflows to infinity when SQLite
-// parses it, which is the only spelling that survives.
-//
-// NaN renders as empty, the same as a null, because SQLite has no NaN at all: a
-// computed one becomes NULL there, so NULL is what the value already means in
-// the destination. Keeping the word would leave the same TEXT-in-a-REAL-column
-// mismatch this exists to remove.
-func sqliteFloatText(f float64, bitSize int) string {
-	// A literal SQLite overflows to an infinity while parsing it. There is no
-	// spelling of the value itself that its REAL affinity accepts.
-	const infinityLiteral = "9e999"
-	switch {
-	case math.IsInf(f, 1):
-		return infinityLiteral
-	case math.IsInf(f, -1):
-		return "-" + infinityLiteral
-	case math.IsNaN(f):
-		return ""
-	}
-	text := strconv.FormatFloat(f, 'g', -1, bitSize)
-	// A whole number renders with neither a point nor an exponent, and read back
-	// that spelling is an integer. The suffix is what keeps the column REAL.
-	if !strings.ContainsAny(text, ".eE") {
-		text += ".0"
-	}
-	return text
-}
-
-// extractValueFromArrowArray extracts a value from an Arrow array at the given index
-func extractValueFromArrowArray(arr arrow.Array, index int64) string {
-	if arr.IsNull(int(index)) {
-		return ""
-	}
-
-	switch a := arr.(type) {
-	case *array.Boolean:
-		if a.Value(int(index)) {
-			return "1"
-		}
-		return "0"
-
-	case *array.Int8:
-		return strconv.Itoa(int(a.Value(int(index))))
-	case *array.Int16:
-		return strconv.Itoa(int(a.Value(int(index))))
-	case *array.Int32:
-		return strconv.Itoa(int(a.Value(int(index))))
-	case *array.Int64:
-		return strconv.FormatInt(a.Value(int(index)), 10)
-
-	case *array.Uint8:
-		return strconv.FormatUint(uint64(a.Value(int(index))), 10)
-	case *array.Uint16:
-		return strconv.FormatUint(uint64(a.Value(int(index))), 10)
-	case *array.Uint32:
-		return strconv.FormatUint(uint64(a.Value(int(index))), 10)
-	case *array.Uint64:
-		return strconv.FormatUint(a.Value(int(index)), 10)
-
-	case *array.Float32:
-		return sqliteFloatText(float64(a.Value(int(index))), 32)
-	case *array.Float64:
-		return sqliteFloatText(a.Value(int(index)), 64)
-
-	case *array.String:
-		return a.Value(int(index))
-	case *array.Binary:
-		return string(a.Value(int(index)))
-
-	case *array.Date32:
-		// Convert days since epoch to string representation
-		days := a.Value(int(index))
-		return fmt.Sprintf("%d", days)
-	case *array.Date64:
-		// Convert milliseconds since epoch to string representation
-		millis := a.Value(int(index))
-		return fmt.Sprintf("%d", millis)
-
-	case *array.Timestamp:
-		// Convert timestamp to string
-		ts := a.Value(int(index))
-		return fmt.Sprintf("%d", ts)
-
-	default:
-		// For unsupported types, try to convert to string representation
-		return fmt.Sprintf("%v", arr.GetOneForMarshal(int(index)))
-	}
 }
 
 // writeParquetTableData writes SQLite table data to Parquet format

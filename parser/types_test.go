@@ -1,12 +1,32 @@
 package parser
 
 import (
+	"bytes"
+	"encoding/csv"
 	"fmt"
 	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// csvColumnTypes is the type Parse gives each column of a CSV holding the given
+// records. The rule these cases describe belongs to the reader now, and this is
+// the path a caller takes to it.
+func csvColumnTypes(t *testing.T, headers []string, records [][]string) []ColumnType {
+	t.Helper()
+
+	var buf bytes.Buffer
+	writer := csv.NewWriter(&buf)
+	require.NoError(t, writer.Write(headers))
+	require.NoError(t, writer.WriteAll(records))
+	require.NoError(t, writer.Error())
+
+	table, err := Parse(&buf, CSV)
+	require.NoError(t, err)
+	return table.ColumnTypes
+}
 
 func TestInferColumnTypes(t *testing.T) {
 	t.Parallel()
@@ -17,7 +37,7 @@ func TestInferColumnTypes(t *testing.T) {
 		headers := []string{"count"}
 		records := [][]string{{"1"}, {"2"}, {"3"}, {"4"}, {"5"}}
 
-		types := inferColumnTypes(headers, records)
+		types := csvColumnTypes(t, headers, records)
 
 		assert.Equal(t, TypeInteger, types[0])
 	})
@@ -28,7 +48,7 @@ func TestInferColumnTypes(t *testing.T) {
 		headers := []string{"price"}
 		records := [][]string{{"1.99"}, {"2.50"}, {"3.14"}, {"4.0"}, {"5.5"}}
 
-		types := inferColumnTypes(headers, records)
+		types := csvColumnTypes(t, headers, records)
 
 		assert.Equal(t, TypeReal, types[0])
 	})
@@ -39,7 +59,7 @@ func TestInferColumnTypes(t *testing.T) {
 		headers := []string{"mixed"}
 		records := [][]string{{"hello"}, {"42"}, {"world"}, {"100"}, {"test"}}
 
-		types := inferColumnTypes(headers, records)
+		types := csvColumnTypes(t, headers, records)
 
 		assert.Equal(t, TypeText, types[0])
 	})
@@ -50,7 +70,7 @@ func TestInferColumnTypes(t *testing.T) {
 		headers := []string{"col"}
 		records := [][]string{}
 
-		types := inferColumnTypes(headers, records)
+		types := csvColumnTypes(t, headers, records)
 
 		assert.Equal(t, TypeText, types[0])
 	})
@@ -61,7 +81,7 @@ func TestInferColumnTypes(t *testing.T) {
 		headers := []string{"amount"}
 		records := [][]string{{"1"}, {"2"}, {"3"}, {"4"}, {"1.5"}}
 
-		types := inferColumnTypes(headers, records)
+		types := csvColumnTypes(t, headers, records)
 
 		assert.Equal(t, TypeReal, types[0])
 	})
@@ -86,7 +106,7 @@ func TestInferColumnTypes(t *testing.T) {
 				t.Parallel()
 
 				records := [][]string{{"1"}, {"2"}, {"3"}, {"4"}, {"5"}, {"6"}, {"7"}, {"8"}, {"9"}, {odd}}
-				assert.Equal(t, TypeText, inferColumnTypes([]string{"v"}, records)[0])
+				assert.Equal(t, TypeText, csvColumnTypes(t, []string{"v"}, records)[0])
 			})
 		}
 	})
@@ -96,7 +116,7 @@ func TestInferColumnTypes(t *testing.T) {
 
 		records := [][]string{{"1"}, {"2"}, {"3"}, {"4"}, {"5"}, {"6"}, {"7"}, {"8"}, {"9"}, {"10"}, {"11.5"}}
 
-		assert.Equal(t, TypeReal, inferColumnTypes([]string{"v"}, records)[0])
+		assert.Equal(t, TypeReal, csvColumnTypes(t, []string{"v"}, records)[0])
 	})
 
 	t.Run("a column longer than a sample is read to its end", func(t *testing.T) {
@@ -120,7 +140,7 @@ func TestInferColumnTypes(t *testing.T) {
 		// Neither end of a column is privileged: reading only the head made the
 		// answer depend on where the value sat.
 		for _, oddAt := range []int{0, rows / 2, rows} {
-			assert.Equal(t, TypeText, inferColumnTypes([]string{"v"}, build(oddAt))[0],
+			assert.Equal(t, TypeText, csvColumnTypes(t, []string{"v"}, build(oddAt))[0],
 				"a text value at position %d among %d integers", oddAt, rows)
 		}
 	})
@@ -151,7 +171,7 @@ func TestInferColumnTypes(t *testing.T) {
 				for _, v := range values {
 					records = append(records, []string{v})
 				}
-				columnType := inferColumnTypes([]string{"v"}, records)[0]
+				columnType := csvColumnTypes(t, []string{"v"}, records)[0]
 
 				for _, v := range values {
 					assert.Equal(t, want[columnType], fmt.Sprintf("%T", ParseValue(v, columnType)),

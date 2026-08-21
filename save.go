@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/nao1215/filesql/internal/codec"
 	"github.com/xuri/excelize/v2"
 	"modernc.org/sqlite"
 )
@@ -118,19 +119,6 @@ const (
 	CompressionLZ4
 )
 
-// string constants for compression types
-const (
-	compressionNoneStr   = "none"
-	compressionGZStr     = "gz"
-	compressionBZ2Str    = "bz2"
-	compressionXZStr     = "xz"
-	compressionZSTDStr   = "zstd"
-	compressionZLIBStr   = "zlib"
-	compressionSNAPPYStr = "snappy"
-	compressionS2Str     = "s2"
-	compressionLZ4Str    = "lz4"
-)
-
 // string constants for output format names
 const (
 	formatCSVStr     = "csv"
@@ -144,54 +132,12 @@ const (
 
 // String returns the string representation of CompressionType
 func (c CompressionType) String() string {
-	switch c {
-	case CompressionNone:
-		return compressionNoneStr
-	case CompressionGZ:
-		return compressionGZStr
-	case CompressionBZ2:
-		return compressionBZ2Str
-	case CompressionXZ:
-		return compressionXZStr
-	case CompressionZSTD:
-		return compressionZSTDStr
-	case CompressionZLIB:
-		return compressionZLIBStr
-	case CompressionSNAPPY:
-		return compressionSNAPPYStr
-	case CompressionS2:
-		return compressionS2Str
-	case CompressionLZ4:
-		return compressionLZ4Str
-	default:
-		return compressionNoneStr
-	}
+	return codec.Codec(c).String()
 }
 
 // Extension returns the file extension for the compression type
 func (c CompressionType) Extension() string {
-	switch c {
-	case CompressionNone:
-		return ""
-	case CompressionGZ:
-		return extGZ
-	case CompressionBZ2:
-		return extBZ2
-	case CompressionXZ:
-		return extXZ
-	case CompressionZSTD:
-		return extZSTD
-	case CompressionZLIB:
-		return extZLIB
-	case CompressionSNAPPY:
-		return extSNAPPY
-	case CompressionS2:
-		return extS2
-	case CompressionLZ4:
-		return extLZ4
-	default:
-		return ""
-	}
+	return codec.Codec(c).Extension()
 }
 
 // DumpOptions configures how database tables are exported to files.

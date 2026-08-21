@@ -80,10 +80,6 @@ var (
 	ErrSourceUnavailable = errors.New("filesql: source file for write-back is unavailable")
 )
 
-// errDuplicateColumnName is an internal alias for backward compatibility.
-// Deprecated: Use ErrDuplicateColumn instead.
-var errDuplicateColumnName = ErrDuplicateColumn
-
 // ParseError is a failure reading one input, with the input named.
 //
 // Both this package and its callers want to say which file failed, and both
