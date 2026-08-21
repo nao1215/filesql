@@ -1,8 +1,10 @@
 package filesql
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"math"
 	"os"
 	"path/filepath"
@@ -15,6 +17,8 @@ import (
 	"github.com/apache/arrow/go/v18/parquet"
 	pqfile "github.com/apache/arrow/go/v18/parquet/file"
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
 
@@ -515,4 +519,118 @@ func writeFloat64Parquet(t *testing.T, path, column string, values []float64) {
 	if err := pqarrow.WriteTable(tbl, f, 1024, parquet.NewWriterProperties(), pqarrow.DefaultWriterProps()); err != nil {
 		t.Fatalf("write parquet: %v", err)
 	}
+}
+
+// damagedParquet is products.parquet with a data page corrupted, found by
+// fuzzing the binary readers. The Arrow library this package reads Parquet with
+// panics on it -- its error path releases a column it never built -- and a
+// caller reading a file chosen by someone else cannot defend against that, so
+// the boundary is held here and the file is an error like any other bad input.
+const damagedParquet = "BhwYCAMAAAAAAAAAGAgBAAAAAAAAABYAFgAYCAMAAAAAAAAAGAgBAAAAAAAAAAAAAAIDJAAV" +
+	"BBU+FT5MFQYVABIAAAYAAABMYXB0b3AFAAAATW91c2UIAAAAS2V5Ym9hcmQVABUIFQgsFQYV" +
+	"EBUGFQYcNgAWABgFTW91c2UYCEtleWJvYXJkAAAAAgMkABUEFTAVMEwVBhUAEgAAUrgehes/" +
+	"j0A9CtejcP09QI/C9Shc/1NAFQAVCBUILBUGFRAVBhUGHBgIUrgehes/j0AYCD0K16Nw/T1A" +
+	"FgAWABgIUrgehes/j0AYCD0K16Nw/T1AAAAAAgMkABUEGUw1BBgGc2NoZW1hFQYAFQQlABgC" +
+	"aWQlJEysE0ARAAAAFQwlABgEbmFtZSUATBwAAAAVCiUAGAVwcmljZQAWBhkcGTwm2gEcFQQZ" +
+	"NRAABhkYAmlkFQAWBhbSARbSASZUJggcGAgDAAAAAAAAABgIAQAAAAAAAAAWABYAGAgDAAAA" +
+	"AAAAABgIAQAAAAAAAAAAGSwVBBUAFQIAFQAVEBUCAAAAJowDHBUMGTUQAAYZGARuYW1lFQAW" +
+	"BhayARayASa0AibaARw2ABYAGAVNb3VzZRgIS2V5Ym9hcmQAGSwVBBUAFQIAFQAVEBUCAAAA" +
+	"Jt4EHBUKGTUQAAYZGAVwcmljZRUAFgYW0gEW0gEm2AMmjAMcGAhSuB6F6z+PQBgIPQrXowAS" +
+	"AEAWABYAGAhSuB6F6z+PQBgIPQrXo3D9PUAAGSwVBBUAFQIAFQAVEBUCAAAAFtYEFgYmCBbW" +
+	"BBQAABkMGCJwYXJxdWV0LWdvIHZlcnNpb24gMTguMC4wLVNOQVBTSE9UGTwcAAAcAAAcAAAA" +
+	"kQEAAFBBUjE="
+
+// TestDamagedParquetIsAnErrorNotAPanic pins that boundary at every door a
+// caller comes through.
+func TestDamagedParquetIsAnErrorNotAPanic(t *testing.T) {
+	t.Parallel()
+
+	data, err := base64.StdEncoding.DecodeString(damagedParquet)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "damaged.parquet")
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+
+	t.Run("through OpenContext", func(t *testing.T) {
+		t.Parallel()
+
+		var db *sql.DB
+		var err error
+		require.NotPanics(t, func() { db, err = OpenContext(ctx, path) })
+		if db != nil {
+			defer db.Close()
+		}
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrParsing)
+	})
+
+	t.Run("through AddReader", func(t *testing.T) {
+		t.Parallel()
+
+		require.NotPanics(t, func() {
+			built, err := NewBuilder().
+				AddReader(bytes.NewReader(data), "t", FileTypeParquet).Build(ctx)
+			if err != nil {
+				return
+			}
+			db, err := built.Open(ctx)
+			if db != nil {
+				assert.NoError(t, db.Close())
+			}
+			assert.Error(t, err)
+		})
+	})
+}
+
+// TestParquetDamageThatWasAlreadyReported keeps the recover above from hiding a
+// regression in the paths that report properly on their own.
+func TestParquetDamageThatWasAlreadyReported(t *testing.T) {
+	t.Parallel()
+
+	good, err := os.ReadFile(filepath.Join("parser", "testdata", "products.parquet"))
+	if os.IsNotExist(err) {
+		t.Skip("no parquet fixture")
+	}
+	require.NoError(t, err)
+
+	flip := func(b []byte, i int) []byte {
+		out := make([]byte, len(b))
+		copy(out, b)
+		out[i] ^= 0xFF
+		return out
+	}
+
+	for name, data := range map[string][]byte{
+		"four bytes":                   good[:4],
+		"truncated by one byte":        good[:len(good)-1],
+		"truncated to half":            good[:len(good)/2],
+		"a flipped byte in the footer": flip(good, len(good)/2),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "damaged.parquet")
+			require.NoError(t, os.WriteFile(path, data, 0o600))
+			db, err := OpenContext(context.Background(), path)
+			if db != nil {
+				defer db.Close()
+			}
+			require.Error(t, err)
+		})
+	}
+
+	t.Run("the undamaged file still loads", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "products.parquet")
+		require.NoError(t, os.WriteFile(path, good, 0o600)) //nolint:gosec // Test path is constructed from t.TempDir()
+		db, err := OpenContext(context.Background(), path)
+		require.NoError(t, err)
+		defer db.Close()
+		var n int
+		require.NoError(t, db.QueryRowContext(context.Background(),
+			`SELECT COUNT(*) FROM products`).Scan(&n))
+		assert.Positive(t, n)
+	})
 }

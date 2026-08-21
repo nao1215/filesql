@@ -15,6 +15,7 @@ import (
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xuri/excelize/v2"
 )
 
 func TestParseParquet(t *testing.T) {
@@ -688,5 +689,53 @@ func TestParse_Parquet(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []string{"id", "name", "price"}, result.Headers)
 		assert.Equal(t, 3, len(result.Records))
+	})
+}
+
+// FuzzParseBinary throws damaged workbooks and Parquet files at the binary
+// readers. The property is the one FuzzParseFormats holds for the text formats:
+// a parse either returns a table or an error, and never panics. It found a
+// panic in the Parquet path in under three seconds, raised inside the Arrow
+// library on its own error path, which is why that call is wrapped.
+func FuzzParseBinary(f *testing.F) {
+	workbook := excelize.NewFile()
+	if err := workbook.SetSheetRow("Sheet1", "A1", &[]any{"a", "b"}); err != nil {
+		f.Fatal(err)
+	}
+	if err := workbook.SetCellValue("Sheet1", "A2", 1); err != nil {
+		f.Fatal(err)
+	}
+	var wb bytes.Buffer
+	if err := workbook.Write(&wb); err != nil {
+		f.Fatal(err)
+	}
+	if err := workbook.Close(); err != nil {
+		f.Fatal(err)
+	}
+	f.Add(wb.Bytes())
+
+	if parquet, err := os.ReadFile(filepath.Join("testdata", "products.parquet")); err == nil {
+		f.Add(parquet)
+	}
+	f.Add([]byte("PK\x03\x04"))
+	f.Add([]byte("PAR1"))
+	f.Add([]byte{})
+	f.Add([]byte("not a file at all"))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		for _, fileType := range []FileType{XLSX, Parquet} {
+			result, err := Parse(bytes.NewReader(data), fileType)
+			if err != nil {
+				continue
+			}
+			if result == nil {
+				t.Fatalf("%v: nil result with no error for %d bytes", fileType, len(data))
+			}
+			for i, record := range result.Records {
+				if len(record) != len(result.Headers) {
+					t.Fatalf("%v: record %d has %d cells, %d headers", fileType, i, len(record), len(result.Headers))
+				}
+			}
+		}
 	})
 }

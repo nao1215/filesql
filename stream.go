@@ -36,6 +36,92 @@ func closeQuietly(closeFunc func() error) {
 	}
 }
 
+// readArrowTable is pqarrow.FileReader.ReadTable done in the calling goroutine,
+// with the panic a damaged file can raise turned into an error.
+//
+// A Parquet file this package did not write is untrusted input, and the reader
+// panics on some of it rather than reporting: a corrupted page header reaches a
+// nil dereference, and a row group that fails to read is cleaned up by releasing
+// a column that was never built. ReadTable does the column reads in goroutines
+// of its own, where a recover here cannot reach them and the process dies, so
+// the same reads are done here instead -- one column at a time, in this
+// goroutine, where the boundary can be held. A caller reading a file chosen by
+// someone else cannot defend against a panic; every other malformed input in
+// this package is an error, and this one is too now.
+//
+// The recover and this loop can go when the library stops panicking on its own
+// error paths; ReadTable is the call this replaces.
+func readArrowTable(ctx context.Context, arrowReader *pqarrow.FileReader) (tbl arrow.Table, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			tbl = nil
+			err = fmt.Errorf("parquet data is damaged: %v", r)
+		}
+	}()
+
+	meta := arrowReader.ParquetReader().MetaData()
+	columnIndices := make([]int, meta.Schema.NumColumns())
+	for i := range columnIndices {
+		columnIndices[i] = i
+	}
+	rowGroups := make([]int, arrowReader.ParquetReader().NumRowGroups())
+	for i := range rowGroups {
+		rowGroups[i] = i
+	}
+
+	// GetFieldReaders, the plural form, fans the per-field reads out into an
+	// errgroup, and a panic in one of those goroutines is not this function's to
+	// recover either. The singular form does the same work here.
+	fieldIndices, err := arrowReader.Manifest.GetFieldIndices(columnIndices)
+	if err != nil {
+		return nil, err
+	}
+	includedLeaves := make(map[int]bool, len(columnIndices))
+	for _, col := range columnIndices {
+		includedLeaves[col] = true
+	}
+	readers := make([]*pqarrow.ColumnReader, len(fieldIndices))
+	fields := make([]arrow.Field, len(fieldIndices))
+	for i, fieldIndex := range fieldIndices {
+		reader, readerErr := arrowReader.GetFieldReader(ctx, fieldIndex, includedLeaves, rowGroups)
+		if readerErr != nil {
+			return nil, readerErr
+		}
+		readers[i] = reader
+		fields[i] = *reader.Field()
+	}
+	for i := range readers {
+		defer readers[i].Release()
+	}
+	schema := arrow.NewSchema(fields, arrowReader.Manifest.SchemaMeta)
+
+	columns := make([]arrow.Column, schema.NumFields())
+	defer func() {
+		// The columns are copied into the table, which owns them from then on;
+		// on the way out with an error they are this function's to release.
+		if err == nil {
+			return
+		}
+		for i := range columns {
+			columns[i].Release()
+		}
+	}()
+	for i, reader := range readers {
+		chunked, readErr := arrowReader.ReadColumn(rowGroups, reader)
+		if readErr != nil {
+			return nil, readErr
+		}
+		columns[i] = *arrow.NewColumn(schema.Field(i), chunked)
+		chunked.Release()
+	}
+
+	var rows int
+	if len(columns) > 0 {
+		rows = columns[0].Len()
+	}
+	return array.NewTable(schema, columns, int64(rows)), nil
+}
+
 // newStreamingParser creates a new streaming parser. The malformed-row policy
 // defaults to MalformedRowStop (the zero value); callers that need another
 // policy set the field after construction.
@@ -568,7 +654,7 @@ func (p *streamingParser) parseParquetStream(reader io.Reader) (*table, error) {
 
 	// Read all record batches using the table reader approach
 	ctx := context.Background()
-	table, err := arrowReader.ReadTable(ctx)
+	table, err := readArrowTable(ctx, arrowReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read table: %w", err)
 	}
@@ -684,7 +770,7 @@ func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chu
 
 	// Read table to get schema and prepare for chunked reading
 	ctx := context.Background()
-	table, err := arrowReader.ReadTable(ctx)
+	table, err := readArrowTable(ctx, arrowReader)
 	if err != nil {
 		return fmt.Errorf("failed to read table: %w", err)
 	}
