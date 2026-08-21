@@ -18,7 +18,6 @@ func TestErrorVariables(t *testing.T) {
 	t.Run("error variables are not nil", func(t *testing.T) {
 		t.Parallel()
 
-		assert.NotNil(t, errDuplicateColumnName)
 		assert.NotNil(t, ErrEmptyData)
 		assert.NotNil(t, ErrUnsupportedFormat)
 		assert.NotNil(t, ErrInvalidData)
@@ -41,7 +40,6 @@ func TestErrorVariables(t *testing.T) {
 	t.Run("error messages are meaningful", func(t *testing.T) {
 		t.Parallel()
 
-		assert.Contains(t, errDuplicateColumnName.Error(), "duplicate column name")
 		assert.Contains(t, ErrEmptyData.Error(), "empty data")
 		assert.Contains(t, ErrUnsupportedFormat.Error(), "unsupported")
 		assert.Contains(t, ErrInvalidData.Error(), "invalid")
@@ -136,12 +134,6 @@ func TestSentinelErrorWrapping(t *testing.T) {
 					"wrapped error should contain sentinel error message")
 			})
 		}
-	})
-
-	t.Run("errDuplicateColumnName is alias for ErrDuplicateColumn", func(t *testing.T) {
-		t.Parallel()
-		assert.True(t, errors.Is(errDuplicateColumnName, ErrDuplicateColumn),
-			"errDuplicateColumnName should be the same as ErrDuplicateColumn")
 	})
 }
 

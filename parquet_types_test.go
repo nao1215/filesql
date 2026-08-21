@@ -18,6 +18,7 @@ import (
 	"github.com/apache/arrow/go/v18/parquet"
 	pqfile "github.com/apache/arrow/go/v18/parquet/file"
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
+	"github.com/nao1215/filesql/internal/reader"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -529,8 +530,8 @@ func TestSQLiteFloatText(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := sqliteFloatText(tt.value, tt.bitSize); got != tt.want {
-				t.Errorf("sqliteFloatText(%v, %d) = %q, want %q", tt.value, tt.bitSize, got, tt.want)
+			if got := reader.SQLiteFloatText(tt.value, tt.bitSize); got != tt.want {
+				t.Errorf("SQLiteFloatText(%v, %d) = %q, want %q", tt.value, tt.bitSize, got, tt.want)
 			}
 		})
 	}

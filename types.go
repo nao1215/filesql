@@ -1,17 +1,20 @@
 package filesql
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/nao1215/filesql/internal/infer"
+	"github.com/nao1215/filesql/internal/reader"
 )
 
 // defaultTableName is the table name used when a derived name is empty.
 const defaultTableName = "table"
+
+// jsonDataHeader is the single column a JSON or JSONL table has.
+const jsonDataHeader = reader.JSONDataColumn
 
 // Processing constants (rows-based)
 const (
@@ -167,72 +170,6 @@ func (ct columnType) String() string {
 	return ct.string()
 }
 
-// validateColumnNames checks for duplicate column names and returns error if found.
-//
-// The message quotes the name and gives its 1-based position, because a header
-// can duplicate the empty name — two unnamed columns — and an unquoted empty
-// name printed nothing at all after the colon.
-// Two names are the same column if either comparison says so, and the two are
-// kept apart rather than combined into one key. Whitespace is filesql's own
-// rule — " name " and "name" are one name typed twice — while case is SQLite's,
-// because SQLite is what ends up holding the columns. Folding a trimmed name
-// would apply both at once and refuse " A" beside "a", which neither rule
-// refuses on its own and which SQLite keeps as two columns.
-func validateColumnNames(columns []string) error {
-	trimmed := make(map[string]bool, len(columns))
-	folded := make(map[string]bool, len(columns))
-	for i, col := range columns {
-		trimmedName := strings.TrimSpace(col)
-		foldedName := asciiFold(col)
-		if trimmed[trimmedName] || folded[foldedName] {
-			return fmt.Errorf("%w: %q (column %d)", errDuplicateColumnName, col, i+1)
-		}
-		trimmed[trimmedName] = true
-		folded[foldedName] = true
-	}
-	return nil
-}
-
-// ltsvLabelKey is how two LTSV labels are compared for being one column.
-//
-// LTSV carries its labels on every record rather than in a header, so the
-// duplicate check runs per record and had its own comparison, which was exact.
-// A record holding "A:1\ta:2" therefore reached SQLite, which folds ASCII case,
-// and failed as a raw CREATE TABLE error with no ErrDuplicateColumn to match —
-// the outcome the check exists to replace, left in the one format whose labels
-// do not go through validateColumnNames.
-func ltsvLabelKey(label string) string {
-	return asciiFold(strings.TrimSpace(label))
-}
-
-// asciiFold lowercases the ASCII letters in s and leaves every other byte as it
-// is, which is how SQLite compares two column names: its default case folding
-// stops at ASCII, so "ä" and "Ä" stay two names. Folding with strings.ToLower
-// would make them one and refuse a header SQLite accepts.
-//
-// Case has to be folded somewhere, because leaving it out did not make "ID" and
-// "id" two columns: it moved the refusal to SQLite, which reported it as a
-// failed CREATE TABLE wrapped in a database-operation error — no
-// ErrDuplicateColumn to match and no column position, which is the outcome this
-// check exists to replace.
-func asciiFold(s string) string {
-	var folded []byte
-	for i := range len(s) {
-		c := s[i]
-		if c < 'A' || c > 'Z' {
-			continue
-		}
-		if folded == nil {
-			folded = []byte(s)
-		}
-		folded[i] = c + ('a' - 'A')
-	}
-	if folded == nil {
-		return s
-	}
-	return string(folded)
-}
-
 // chunkSizeValue represents a chunk size with validation. The name carries the
 // "Value" suffix because "chunkSize" is taken by the many variables and fields
 // that hold one.
@@ -274,6 +211,20 @@ func newJSONDataColumn() columnInfo {
 
 // columnInfoList represents a collection of column information
 type columnInfoList []columnInfo
+
+// columnInfos names the columns of a header and gives each the type a read
+// found it to require.
+func columnInfos(header []string, types []infer.Type) columnInfoList {
+	infos := make(columnInfoList, len(header))
+	for i, name := range header {
+		info := columnInfo{Name: name, Type: columnTypeText}
+		if i < len(types) {
+			info.Type = columnTypeOf(types[i])
+		}
+		infos[i] = info
+	}
+	return infos
+}
 
 // newColumnInfoList names the columns of a header and gives each the type the
 // records require, folding every row in rather than sampling them.

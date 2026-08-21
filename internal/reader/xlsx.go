@@ -54,12 +54,18 @@ func (w *Workbook) Select(policy ExcelSheetPolicy) (loaded, skipped []string, er
 	return SelectExcelSheets(w.file, policy)
 }
 
-// NoSheetsError explains a workbook that contributed nothing. It separates one
-// with no sheets at all from one whose sheets were all left out by the policy,
-// because the two need different things done about them: the first file is
-// broken, the second is a setting the caller chose.
-func (w *Workbook) NoSheetsError(policy ExcelSheetPolicy) error {
-	if policy == ExcelSheetPolicyVisibleOnly && len(w.file.GetSheetList()) > 0 {
+// Source is the workbook as sheet selection sees it, for a caller that reports
+// on the sheets rather than reading them.
+func (w *Workbook) Source() ExcelSheetSource {
+	return w.file
+}
+
+// NoExcelSheetsError explains a workbook that contributed nothing. It separates
+// one with no sheets at all from one whose sheets were all left out by the
+// policy, because the two need different things done about them: the first file
+// is broken, the second is a setting the caller chose.
+func NoExcelSheetsError(f ExcelSheetSource, policy ExcelSheetPolicy) error {
+	if policy == ExcelSheetPolicyVisibleOnly && len(f.GetSheetList()) > 0 {
 		return emptyError("no visible sheets found in XLSX file")
 	}
 	return emptyError("no sheets found in XLSX file")
@@ -158,7 +164,7 @@ func readXLSX(src io.Reader, opts Options, emit Emit) (result Result, err error)
 		return Result{}, err
 	}
 	if len(sheets) == 0 {
-		return Result{}, workbook.NoSheetsError(opts.ExcelSheetPolicy)
+		return Result{}, NoExcelSheetsError(workbook.Source(), opts.ExcelSheetPolicy)
 	}
 	return workbook.ReadSheet(sheets[0], opts, emit)
 }

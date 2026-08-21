@@ -332,9 +332,10 @@ func arrowCellIsNull(arr arrow.Array, index int64, rendering Rendering) bool {
 	}
 }
 
-// sqliteFloatText renders a float at bitSize so SQLite's REAL affinity converts
+// SQLiteFloatText renders a float at bitSize so SQLite's REAL affinity converts
 // it back to the same number, which "%g" does not for the three values that have
-// no decimal spelling.
+// no decimal spelling. It is what a load binds and what a dump writes, so a
+// value that survives one survives the other.
 //
 // The column is declared REAL from the Parquet schema, and SQLite applies that
 // affinity to the text an import binds: "+Inf" is not a number to it, so the
@@ -346,7 +347,13 @@ func arrowCellIsNull(arr arrow.Array, index int64, rendering Rendering) bool {
 // computed one becomes NULL there, so NULL is what the value already means in
 // the destination. Keeping the word would leave the same TEXT-in-a-REAL-column
 // mismatch this exists to remove.
-func sqliteFloatText(f float64, bitSize int, rendering Rendering) string {
+func SQLiteFloatText(f float64, bitSize int) string {
+	return floatText(f, bitSize, RenderSQLite)
+}
+
+// floatText is SQLiteFloatText with the ".0" suffix left off for a caller that
+// renders a value rather than storing it in a typed column.
+func floatText(f float64, bitSize int, rendering Rendering) string {
 	// A literal SQLite overflows to an infinity while parsing it. There is no
 	// spelling of the value itself that its REAL affinity accepts.
 	const infinityLiteral = "9e999"
@@ -397,9 +404,9 @@ func extractValueFromArrowArray(arr arrow.Array, index int64, rendering Renderin
 		return strconv.FormatUint(a.Value(int(index)), 10)
 
 	case *array.Float32:
-		return sqliteFloatText(float64(a.Value(int(index))), 32, rendering)
+		return floatText(float64(a.Value(int(index))), 32, rendering)
 	case *array.Float64:
-		return sqliteFloatText(a.Value(int(index)), 64, rendering)
+		return floatText(a.Value(int(index)), 64, rendering)
 
 	case *array.String:
 		return a.Value(int(index))

@@ -2,7 +2,6 @@ package filesql
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -12,8 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nao1215/filesql/parser"
-	"github.com/xuri/excelize/v2"
+	"github.com/nao1215/filesql/internal/reader"
 )
 
 // Structured log attribute keys used across stream processing.
@@ -732,36 +730,22 @@ func (sp *streamProcessor) createDecompressedReader(file *os.File, filePath stri
 }
 
 // streamXLSXFileToDatabase handles XLSX files by creating separate tables for each sheet
-func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, filePath string) error {
+func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX, source io.Reader, filePath string) error {
 	sp.logger.Debug("reading XLSX data into memory", "path", filePath)
 
-	// Read all data into memory (XLSX requires random access)
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		sp.logger.Error("failed to read XLSX data", "path", filePath, "error", err)
-		return fmt.Errorf("%w: failed to read XLSX data: %w", ErrIOOperation, err)
-	}
-
-	if len(data) == 0 {
-		sp.logger.Warn("empty XLSX file", "path", filePath)
-		return fmt.Errorf("%w: empty XLSX file", ErrEmptyData)
-	}
-	sp.logger.Debug("XLSX data loaded", "path", filePath, "size", len(data))
-
-	// Open XLSX file from bytes
-	xlsxFile, err := excelize.OpenReader(bytes.NewReader(data))
+	workbook, err := reader.OpenWorkbook(source)
 	if err != nil {
 		sp.logger.Error("failed to open XLSX file", "path", filePath, "error", err)
-		return fmt.Errorf("%w: failed to open XLSX file: %w", ErrParsing, err)
+		return wrapReadError(err)
 	}
 	defer func() {
-		_ = xlsxFile.Close() // Ignore close error
+		_ = workbook.Close() // Ignore close error
 	}()
 
 	// Get the sheet names the policy admits. Filtering here rather than while
 	// looping is what lets the collision check below see exactly the sheets that
 	// will become tables.
-	sheetNames, skipped, err := selectExcelSheets(xlsxFile, sp.excelSheetPolicy)
+	sheetNames, skipped, err := selectExcelSheets(workbook.Source(), sp.excelSheetPolicy)
 	if err != nil {
 		sp.logger.Error("failed to read sheet visibility", "path", filePath, "error", err)
 		return err
@@ -771,7 +755,7 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX
 	}
 	if len(sheetNames) == 0 {
 		sp.logger.Warn("no sheets to load from XLSX file", "path", filePath)
-		return noExcelSheetsError(xlsxFile, sp.excelSheetPolicy)
+		return noExcelSheetsError(workbook.Source(), sp.excelSheetPolicy)
 	}
 	sp.logger.Info("processing XLSX file", "path", filePath, "sheet_count", len(sheetNames))
 
@@ -792,54 +776,59 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX
 	// Process each sheet as a separate table
 	for i, sheetName := range sheetNames {
 		sp.logger.Debug("processing sheet", "path", filePath, logKeySheet, sheetName, "index", i+1, "total", len(sheetNames))
-		rows, err := xlsxFile.GetRows(sheetName)
-		if err != nil {
-			sp.logger.Error("failed to read sheet", "path", filePath, logKeySheet, sheetName, "error", err)
-			return fmt.Errorf("%w: failed to read sheet %s: %w", ErrParsing, sheetName, err)
-		}
-		rows = parser.NormalizeXLSXDates(xlsxFile, sheetName, rows)
-
-		// Skip empty sheets
-		if len(rows) == 0 {
-			sp.logger.Debug("skipping empty sheet", "path", filePath, logKeySheet, sheetName)
-			continue
-		}
-
-		tableName := sheetTables[i]
-		sp.logger.Debug("creating table from sheet", "path", filePath, logKeySheet, sheetName, logKeyTable, tableName, "rows", len(rows))
-
-		if err := sp.refuseExistingTable(ctx, db, tableName); err != nil {
+		if err := sp.streamXLSXSheetToDatabase(ctx, db, workbook, sheetName, sheetTables[i], filePath); err != nil {
 			return err
-		}
-
-		headers, records, err := convertXLSXRowsToTable(rows)
-		if err != nil {
-			return fmt.Errorf("sheet %s: %w", sheetName, err)
-		}
-
-		// A workbook header follows the same rule a CSV header does. This path
-		// checked nothing: an exact duplicate reached SQLite and came back as its
-		// "duplicate column name" wrapped in a database-operation error, which no
-		// caller can match with errors.Is, and names differing only by surrounding
-		// whitespace were two columns here and one duplicate in every other format.
-		if err := validateColumnNames(headers); err != nil {
-			return fmt.Errorf("sheet %s: %w", sheetName, err)
-		}
-
-		// The sheet is in memory, so its types are final before its one chunk
-		// is emitted, and reading it again is emitting it again.
-		types := newColumnInfoList(headers, records)
-		read := func(emit chunkProcessor) (columnInfoList, error) {
-			if err := emit(&tableChunk{tableName: tableName, headers: headers, records: records, types: types}); err != nil {
-				return nil, err
-			}
-			return types, nil
-		}
-		err = sp.loadTable(ctx, db, tableName, tableSource{read: read, reread: read})
-		if err != nil {
-			return fmt.Errorf("sheet %s: %w", sheetName, err)
 		}
 	}
 
+	return nil
+}
+
+// streamXLSXSheetToDatabase loads one sheet of an open workbook into its table.
+//
+// The sheet is read into memory first, which it already is: a workbook is a zip
+// archive read by random access. So its types are final before its rows are
+// inserted, and reading it again is handing out the same chunks.
+func (sp *streamProcessor) streamXLSXSheetToDatabase(ctx context.Context, db DBTX, workbook *reader.Workbook, sheetName, tableName, filePath string) error {
+	var chunks []*reader.Chunk
+	read, err := workbook.ReadSheet(sheetName, reader.Options{ChunkSize: sp.chunkSize}, func(chunk *reader.Chunk) error {
+		chunks = append(chunks, chunk)
+		return nil
+	})
+	if err != nil {
+		// A sheet holding nothing a table can be made from is passed over, the
+		// way a workbook's blank scratch sheet always has been. Anything else is
+		// the file being unreadable, and names the sheet it happened in.
+		var readErr *reader.Error
+		if errors.As(err, &readErr) && readErr.Kind == reader.KindEmpty {
+			sp.logger.Debug("skipping empty sheet", "path", filePath, logKeySheet, sheetName)
+			return nil
+		}
+		sp.logger.Error("failed to read sheet", "path", filePath, logKeySheet, sheetName, "error", err)
+		return fmt.Errorf("sheet %s: %w", sheetName, wrapReadError(err))
+	}
+
+	sp.logger.Debug("creating table from sheet", "path", filePath, logKeySheet, sheetName, logKeyTable, tableName, "rows", read.Rows)
+	if err := sp.refuseExistingTable(ctx, db, tableName); err != nil {
+		return err
+	}
+
+	types := columnInfos(read.Header, read.Types)
+	headers := newHeader(read.Header)
+	emitAll := func(emit chunkProcessor) (columnInfoList, error) {
+		for _, chunk := range chunks {
+			records := make([]record, len(chunk.Records))
+			for i, r := range chunk.Records {
+				records[i] = newRecord(r)
+			}
+			if err := emit(&tableChunk{tableName: tableName, headers: headers, records: records, types: types}); err != nil {
+				return nil, err
+			}
+		}
+		return types, nil
+	}
+	if err := sp.loadTable(ctx, db, tableName, tableSource{read: emitAll, reread: emitAll}); err != nil {
+		return fmt.Errorf("sheet %s: %w", sheetName, err)
+	}
 	return nil
 }

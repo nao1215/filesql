@@ -657,8 +657,10 @@ func TestStreamingParser_ProcessXLSXInChunks_MemoryOptimized(t *testing.T) {
 			return assert.AnError // Return an error to test error handling
 		})
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "chunk processor error", "should wrap processor error")
+		// The processor's error is handed back as it stands. It used to be
+		// wrapped in "chunk processor error", which named the mechanism rather
+		// than the fault and hid the sentinel the loader had put on it.
+		require.ErrorIs(t, err, assert.AnError)
 	})
 }
 
