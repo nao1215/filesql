@@ -165,8 +165,10 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		return rewriteTimestampAdd(tokens, open, closeIdx, mysqlCallPass)
 	case "POSITION":
 		return rewritePosition(tokens, open, closeIdx, mysqlCallPass)
-	case "SUBSTRING", "SUBSTR":
+	case fnNameSubstring, fnNameSubstr:
 		return rewriteSubstringCall(tokens, open, closeIdx, "mysql_substr", mysqlCallPass)
+	case fnNameRound:
+		return rewriteRoundCall(tokens, open, closeIdx, mysqlCallPass)
 	case "LENGTH", "OCTET_LENGTH":
 		// MySQL LENGTH counts bytes; SQLite's counts characters.
 		return rewriteRenameCall(tokens, open, closeIdx, "octet_length", mysqlCallPass)

@@ -181,8 +181,10 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 		return rewriteExtractCall(tokens, open, closeIdx, pgCallPass)
 	case "POSITION":
 		return rewritePosition(tokens, open, closeIdx, pgCallPass)
-	case "SUBSTRING", "SUBSTR":
+	case fnNameSubstring, fnNameSubstr:
 		return rewriteSubstringCall(tokens, open, closeIdx, "postgresql_substr", pgCallPass)
+	case fnNameRound:
+		return rewriteRoundCall(tokens, open, closeIdx, pgCallPass)
 	case fnNameTrim:
 		return rewriteTrim(tokens, open, closeIdx, pgCallPass)
 	case "OVERLAY":

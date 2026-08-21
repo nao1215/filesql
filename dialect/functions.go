@@ -139,6 +139,8 @@ func registerAll() error {
 		// dialect's rewrite names its own helper.
 		"mysql_substr":      {-1, fnMySQLSubstr},
 		"postgresql_substr": {-1, fnPostgreSQLSubstr},
+		"googlesql_substr":  {-1, fnGoogleSQLSubstr},
+		"dialect_round":     {2, fnDialectRound},
 		"repeat":            {2, fnRepeat},
 		"space":             {1, fnSpace},
 		"truncate":          {2, fnTruncate},
@@ -970,6 +972,131 @@ func fnPostgreSQLSubstr(args []driver.Value) (driver.Value, error) {
 		return "", nil
 	}
 	return string(runes[from-1 : to-1]), nil
+}
+
+// fnGoogleSQLSubstr implements BigQuery SUBSTR(s, position[, length]), which is
+// neither of the other two dialects' rules.
+//
+// Position 0 means position 1, a negative position counts back from the end
+// where -1 is the last character, and a position that lands before the string
+// clamps to its start with the length measured from there rather than consumed
+// by the part that fell outside. That last clause is what separates it from
+// PostgreSQL, where the out-of-range prefix eats the length, and the first is
+// what separates it from MySQL, where position 0 is no position at all.
+//
+// Positions count characters, not bytes.
+func fnGoogleSQLSubstr(args []driver.Value) (driver.Value, error) {
+	if len(args) < 2 || len(args) > 3 {
+		return nil, fmt.Errorf("dialect: SUBSTR expects 2 or 3 arguments, got %d", len(args))
+	}
+	s, ok1 := toString(args[0])
+	pos, ok2 := toCount(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	runes := []rune(s)
+	length := int64(len(runes))
+
+	start := pos - 1
+	if pos == 0 {
+		start = 0
+	} else if pos < 0 {
+		start = length + pos
+	}
+	// A position before the string starts the result at its first character.
+	start = max(start, 0)
+	if start >= length {
+		return "", nil
+	}
+
+	end := length
+	if len(args) == 3 {
+		count, ok := toCount(args[2])
+		if !ok {
+			return nil, nil
+		}
+		if count <= 0 {
+			return "", nil
+		}
+		if count < length-start {
+			end = start + count
+		}
+	}
+	return string(runes[start:end]), nil
+}
+
+// fnDialectRound implements ROUND(x, n) for the digit counts SQLite's own
+// round() will not take.
+//
+// A negative n rounds to a power of ten -- ROUND(12345, -2) is 12300 -- which is
+// how MySQL, PostgreSQL and BigQuery all spell "round to the nearest hundred".
+// SQLite reads the second argument as digits after the decimal point and ignores
+// a negative one, so the call succeeded and returned its input. All three
+// engines agree on every answer, half away from zero, so one helper serves them;
+// dialect.SQLite is not rewritten onto it, because ignoring a negative count is
+// SQLite's documented behavior and is what a caller who named no dialect asked
+// for.
+func fnDialectRound(args []driver.Value) (driver.Value, error) {
+	value, ok := toFloat(args[0])
+	if !ok {
+		return nil, nil
+	}
+	digits, ok := toCount(args[1])
+	if !ok {
+		return nil, nil
+	}
+	if digits >= 0 {
+		// What SQLite already does, kept here so one function answers the whole
+		// call rather than the rewrite having to decide which one to emit.
+		return roundHalfAwayFromZero(value, digits), nil
+	}
+	// Below the smallest power of ten a float64 holds, the whole value is under
+	// the rounding unit: ROUND(12345, -400) is 0 in MySQL and in BigQuery. The
+	// comparison comes before the negation because negating math.MinInt64 wraps.
+	if digits < -float64MaxDecimalExponent {
+		return int64(0), nil
+	}
+	scale := math.Pow(10, float64(-digits))
+	rounded := math.Round(value/scale) * scale
+	if math.IsInf(rounded, 0) {
+		// Rounding a value near the largest float64 up to the next unit lands
+		// past what a float64 holds. BigQuery raises on the overflow rather
+		// than answering, and an infinity here would flow into the rest of the
+		// query as a number.
+		return nil, fmt.Errorf("dialect: ROUND: rounding %v to %d digits overflows", value, digits)
+	}
+	// A whole result is returned as an integer so a rounded count does not
+	// arrive with a decimal point the engines do not put there.
+	if rounded == math.Trunc(rounded) && math.Abs(rounded) < 1e15 {
+		return int64(rounded), nil
+	}
+	return rounded, nil
+}
+
+// float64MaxDecimalExponent is the largest power of ten a float64 holds. Ten to
+// anything beyond it is infinite, and an infinite scale turns a finite value
+// into a NaN rather than into the answer every engine gives.
+const float64MaxDecimalExponent = 308
+
+// roundHalfAwayFromZero is value rounded to digits places after the decimal
+// point, with a half rounded away from zero, which is what all three engines do
+// and what SQLite's round() does.
+//
+// A digit count so large that the scaling cannot be represented leaves the value
+// alone rather than answering NaN. The test is on what the scaling produces
+// rather than on the count, because the two are not the same question: at 18
+// digits the scale is finite and 5e-19 does round, to 1e-18, while at 400 the
+// scale is infinite and nothing can.
+func roundHalfAwayFromZero(value float64, digits int64) float64 {
+	if digits == 0 {
+		return math.Round(value)
+	}
+	scale := math.Pow(10, float64(digits))
+	scaled := value * scale
+	if math.IsInf(scale, 0) || math.IsInf(scaled, 0) {
+		return value
+	}
+	return math.Round(scaled) / scale
 }
 
 // fnSubstringIndex implements MySQL SUBSTRING_INDEX(str, delim, count).
@@ -1812,6 +1939,12 @@ var strftimeToGoLayout = map[byte]string{
 	'F': layoutDateOnly,
 	'T': layoutTimeOnly,
 	'R': "15:04",
+	'h': layoutMonthShort,
+	'P': "pm",
+	'D': "01/02/06",
+	'x': "01/02/06",
+	'X': layoutTimeOnly,
+	'c': "Mon Jan _2 15:04:05 2006",
 }
 
 // strftimeLayout converts a GoogleSQL format string into a Go layout. An
@@ -1836,6 +1969,96 @@ func strftimeLayout(format string) string {
 	return b.String()
 }
 
+// strftimeRender writes tm according to a GoogleSQL format string.
+//
+// Rendering is separate from strftimeLayout, which builds a Go layout for
+// PARSE_DATE, because a layout can only carry what Go has a reference-time
+// fragment for. A day of the year, a week number and an epoch second are
+// computed rather than spelled, so twenty specifiers had nowhere to go and were
+// written as their own letter -- which is what BigQuery does for a specifier it
+// does not know, so a format asking for a time came back holding an "X" and
+// looked like it had worked.
+//
+// Building the answer rather than a layout also stops the text around the
+// specifiers being read as one. A literal "2006" or "1" in a format string used
+// to reach time.Format, which rendered it as the year or the month; the
+// characters between specifiers are copied verbatim now.
+func strftimeRender(tm time.Time, format string) string {
+	var b strings.Builder
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' || i+1 >= len(format) {
+			b.WriteByte(format[i])
+			continue
+		}
+		spec := format[i+1]
+		switch {
+		case spec == '%':
+			b.WriteByte('%')
+		default:
+			if layout, ok := strftimeToGoLayout[spec]; ok {
+				b.WriteString(tm.Format(layout))
+			} else if computed, ok := strftimeComputed(tm, spec); ok {
+				b.WriteString(computed)
+			} else {
+				// An unknown specifier is its own letter, which is what
+				// BigQuery does.
+				b.WriteByte(spec)
+			}
+		}
+		i++
+	}
+	return b.String()
+}
+
+// strftimeComputed handles the specifiers with no Go layout fragment: the ones
+// whose value is calculated from the date rather than spelled out of it.
+//
+// The week numbers are the four strftime defines. %V and %G are the ISO pair Go
+// answers directly; %U counts weeks from the year's first Sunday and %W from its
+// first Monday, both numbering the days before that week 0, which is the
+// calculation the C library does and is written out here rather than derived
+// from the ISO pair, since the three disagree at every turn of the year.
+func strftimeComputed(tm time.Time, spec byte) (string, bool) {
+	switch spec {
+	case 'j':
+		return fmt.Sprintf("%03d", tm.YearDay()), true
+	case 's':
+		return strconv.FormatInt(tm.Unix(), 10), true
+	case 'C':
+		return fmt.Sprintf("%02d", tm.Year()/100), true
+	case 'Q':
+		return strconv.Itoa((int(tm.Month())-1)/3 + 1), true
+	case 'k':
+		return fmt.Sprintf("%2d", tm.Hour()), true
+	case 'l':
+		hour := tm.Hour() % 12
+		if hour == 0 {
+			hour = 12
+		}
+		return fmt.Sprintf("%2d", hour), true
+	case 'u':
+		return strconv.Itoa(weekdayIndex(tm, true) + 1), true
+	case 'w':
+		return strconv.Itoa(int(tm.Weekday())), true
+	case 'G':
+		year, _ := tm.ISOWeek()
+		return strconv.Itoa(year), true
+	case 'V':
+		_, week := tm.ISOWeek()
+		return fmt.Sprintf("%02d", week), true
+	case 'U':
+		return fmt.Sprintf("%02d", (tm.YearDay()-1+7-int(tm.Weekday()))/7), true
+	case 'W':
+		return fmt.Sprintf("%02d", (tm.YearDay()-1+7-weekdayIndex(tm, true))/7), true
+	case 'n':
+		return "\n", true
+	case 't':
+		return "\t", true
+	default:
+		return "", false
+	}
+}
+
 // fnFormatDate implements GoogleSQL FORMAT_DATE/FORMAT_DATETIME/
 // FORMAT_TIMESTAMP(format, value). The format comes first, the reverse of MySQL
 // DATE_FORMAT.
@@ -1848,7 +2071,7 @@ func fnFormatDate(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
-	return tm.Format(strftimeLayout(format)), nil
+	return strftimeRender(tm, format), nil
 }
 
 // fnParseDate implements GoogleSQL PARSE_DATE(format, text) and fnParseTimestamp

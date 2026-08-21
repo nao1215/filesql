@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"math"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -851,5 +853,387 @@ func TestDateFormatKeepsAnUnknownSpecifierAsItsLetter(t *testing.T) {
 	}
 	if got.String != "q%Z" {
 		t.Fatalf("%s = %q, want %q", query, got.String, "q%Z")
+	}
+}
+
+// TestGoogleSQLSubstrFollowsBigQuery pins BigQuery's rule for SUBSTR beside the
+// two the other dialects follow, so the three are stated together.
+//
+// BigQuery reads position 0 as position 1, counts a negative position back from
+// the end, and clamps a position that lands before the string to its start with
+// the length measured from there. MySQL answers an empty string for position 0,
+// and PostgreSQL lets the out-of-range prefix consume the length.
+//
+// The values were read from BigQuery through goccy/bigquery-emulator, except
+// the multibyte rows: it slices bytes there and returns broken UTF-8, which is
+// its own defect. A position is a character position in all three dialects.
+func TestGoogleSQLSubstrFollowsBigQuery(t *testing.T) {
+	if err := RegisterFunctions(); err != nil {
+		t.Fatalf("RegisterFunctions() error: %v", err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	tests := []struct {
+		call                      string
+		google, mysql, postgresql string
+	}{
+		{"'abcdef', 0, 2", "ab", "", "a"},
+		{"'abcdef', 0, 1", "a", "", ""},
+		{"'abcdef', 0, 3", "abc", "", "ab"},
+		{"'abcdef', 1, 2", "ab", "ab", "ab"},
+		{"'abcdef', 3, 100", "cdef", "cdef", "cdef"},
+		{"'abcdef', 10, 2", "", "", ""},
+		{"'abcdef', 1, 0", "", "", ""},
+		{"'abcdef', -2, 3", "ef", "ef", ""},
+		{"'abcdef', -7, 2", "ab", "", ""},
+		{"'abcdef', -10, 3", "abc", "", ""},
+		{"'abcdef', -100, 100", "abcdef", "", ""},
+		{"'日本語です', 2, 2", "本語", "本語", "本語"},
+		{"'日本語です', 0, 2", "日本", "", "日"},
+	}
+
+	for _, tt := range tests {
+		for _, helper := range []struct {
+			fn   string
+			want string
+		}{
+			{"googlesql_substr", tt.google},
+			{"mysql_substr", tt.mysql},
+			{"postgresql_substr", tt.postgresql},
+		} {
+			query := "SELECT " + helper.fn + "(" + tt.call + ")"
+			var got sql.NullString
+			if err := db.QueryRowContext(context.Background(), query).Scan(&got); err != nil {
+				t.Errorf("%s: %v", query, err)
+				continue
+			}
+			if !got.Valid {
+				t.Errorf("%s = NULL, want %q", query, helper.want)
+				continue
+			}
+			if got.String != helper.want {
+				t.Errorf("%s = %q, want %q", query, got.String, helper.want)
+			}
+		}
+	}
+}
+
+// TestRoundHonorsANegativeDigitCount pins that rounding to a ten, a hundred or a
+// thousand happens. MySQL, PostgreSQL and BigQuery agree on every value below,
+// so one helper answers all three; SQLite's own round() ignores a negative
+// digit count, which is its documented behavior and stays the answer for
+// dialect.SQLite.
+//
+// Read from MySQL 8.4, PostgreSQL 17 and goccy/bigquery-emulator.
+func TestRoundHonorsANegativeDigitCount(t *testing.T) {
+	if err := RegisterFunctions(); err != nil {
+		t.Fatalf("RegisterFunctions() error: %v", err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	tests := map[string]string{
+		"12345, -1":  "12350",
+		"12345, -2":  "12300",
+		"12345, -3":  "12000",
+		"12345, -5":  "0",
+		"-12345, -2": "-12300",
+		"15, -1":     "20",
+		"25, -1":     "30",
+		"-15, -1":    "-20",
+		"999, -3":    "1000",
+		"0, -3":      "0",
+		"12345, 0":   "12345",
+		"1.26, 1":    "1.3",
+		// A tie rounds away from zero in all three engines, which is also what
+		// SQLite's own round() does.
+		"0.5, 0":  "1",
+		"1.5, 0":  "2",
+		"2.5, 0":  "3",
+		"-2.5, 0": "-3",
+		"1.25, 1": "1.3",
+		"1.35, 1": "1.4",
+		// A digit count past what a float64 carries: the value comes back as it
+		// is, and a count past the smallest power of ten it holds rounds the
+		// whole value away. Both are what MySQL and BigQuery answer, and both
+		// used to come back NaN from an infinite scale.
+		"1.5, 400":                    "1.5",
+		"12345, -400":                 "0",
+		"12345, -9223372036854775808": "0",
+	}
+
+	for call, want := range tests {
+		query := "SELECT dialect_round(" + call + ")"
+		var got sql.NullString
+		if err := db.QueryRowContext(context.Background(), query).Scan(&got); err != nil {
+			t.Errorf("%s: %v", query, err)
+			continue
+		}
+		if got.String != want {
+			t.Errorf("%s = %q, want %q", query, got.String, want)
+		}
+	}
+
+	var null sql.NullString
+	if err := db.QueryRowContext(context.Background(), "SELECT dialect_round(NULL, -2)").Scan(&null); err != nil {
+		t.Fatalf("dialect_round(NULL, -2): %v", err)
+	}
+	if null.Valid {
+		t.Fatalf("dialect_round(NULL, -2) = %q, want NULL", null.String)
+	}
+}
+
+// TestFormatDateKnowsItsSpecifiers pins FORMAT_DATE against BigQuery one
+// specifier at a time. Twenty of them used to be written as the letter itself,
+// which is what BigQuery does for a specifier it does not know, so a format
+// string asking for a time came back holding an "X".
+//
+// The values were read from BigQuery through goccy/bigquery-emulator, except
+// four it answers wrongly: it renders %U and %W as the ISO week, answers %w
+// with 8, and drops the zero padding from %j, %U, %V and %W. Those come from
+// the documented definitions instead -- %j is 001 to 366 and the week numbers
+// are 00 to 53 -- and %I, which it answers with 13 where a 12-hour clock reads
+// 01, was already right here.
+func TestFormatDateKnowsItsSpecifiers(t *testing.T) {
+	if err := RegisterFunctions(); err != nil {
+		t.Fatalf("RegisterFunctions() error: %v", err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	// Each row is one specifier and what BigQuery writes for it, for the four
+	// datetimes below. The dates are the ones where the four week numberings
+	// disagree with each other and where the week year is not the date's year.
+	dates := []string{"2024-02-29 13:05:09", "2024-01-01 00:00:00", "2023-01-01 00:00:00", "2024-12-31 00:00:00"}
+	tests := []struct {
+		spec string
+		want [4]string
+	}{
+		{"%j", [4]string{"060", "001", "001", "366"}},
+		{"%s", [4]string{"1709211909", "1704067200", "1672531200", "1735603200"}},
+		{"%C", [4]string{"20", "20", "20", "20"}},
+		{"%Q", [4]string{"1", "1", "1", "4"}},
+		{"%D", [4]string{"02/29/24", "01/01/24", "01/01/23", "12/31/24"}},
+		{"%x", [4]string{"02/29/24", "01/01/24", "01/01/23", "12/31/24"}},
+		{"%X", [4]string{"13:05:09", "00:00:00", "00:00:00", "00:00:00"}},
+		{"%c", [4]string{"Thu Feb 29 13:05:09 2024", "Mon Jan  1 00:00:00 2024", "Sun Jan  1 00:00:00 2023", "Tue Dec 31 00:00:00 2024"}},
+		{"%h", [4]string{"Feb", "Jan", "Jan", "Dec"}},
+		{"%k", [4]string{"13", " 0", " 0", " 0"}},
+		{"%l", [4]string{" 1", "12", "12", "12"}},
+		{"%P", [4]string{"pm", "am", "am", "am"}},
+		{"%u", [4]string{"4", "1", "7", "2"}},
+		{"%w", [4]string{"4", "1", "0", "2"}},
+		{"%G", [4]string{"2024", "2024", "2022", "2025"}},
+		{"%V", [4]string{"09", "01", "52", "01"}},
+		{"%U", [4]string{"08", "00", "01", "52"}},
+		{"%W", [4]string{"09", "01", "00", "53"}},
+		{"%n", [4]string{"\n", "\n", "\n", "\n"}},
+		{"%t", [4]string{"\t", "\t", "\t", "\t"}},
+	}
+
+	for _, tt := range tests {
+		for i, date := range dates {
+			query := `SELECT FORMAT_DATETIME('` + tt.spec + `', '` + date + `')`
+			var got sql.NullString
+			if err := db.QueryRowContext(context.Background(), query).Scan(&got); err != nil {
+				t.Errorf("%s: %v", query, err)
+				continue
+			}
+			if got.String != tt.want[i] {
+				t.Errorf("%s on %s = %q, want %q", tt.spec, date, got.String, tt.want[i])
+			}
+		}
+	}
+}
+
+// TestFormatDateKeepsAnUnknownSpecifierAsItsLetter pins the fallback that hid
+// the twenty above as deliberate, and TestParseDateStillParses that splitting
+// rendering from parsing left parsing alone.
+func TestFormatDateKeepsAnUnknownSpecifierAsItsLetter(t *testing.T) {
+	if err := RegisterFunctions(); err != nil {
+		t.Fatalf("RegisterFunctions() error: %v", err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	tests := map[string]string{
+		// An unknown specifier is its own letter, and %% is a percent sign.
+		`'%v%%%L'`: "v%L",
+		// Text around the specifiers is copied rather than read as a format.
+		// The whole string used to become a Go layout, so "2006" and "1" were
+		// rendered as the year and the month: this came back as
+		// "year 2024 month 2".
+		`'year 2006 month 1'`: "year 2006 month 1",
+		`'%Y-%m-%d'`:          "2024-02-29",
+	}
+
+	for format, want := range tests {
+		query := `SELECT FORMAT_DATETIME(` + format + `, '2024-02-29 13:05:09')`
+		var got sql.NullString
+		if err := db.QueryRowContext(context.Background(), query).Scan(&got); err != nil {
+			t.Errorf("%s: %v", query, err)
+			continue
+		}
+		if got.String != want {
+			t.Errorf("%s = %q, want %q", query, got.String, want)
+		}
+	}
+}
+
+// TestRoundIsRewrittenOnlyWhereADialectDisagrees pins which calls reach the
+// helper. The two-argument form goes to it in every translated dialect, because
+// all three answer a negative digit count the same way and SQLite answers none.
+// The one-argument form is left alone: rounding to a whole number is what
+// SQLite already does, and rewriting it would put a helper in front of a call
+// nobody disagrees about.
+func TestRoundIsRewrittenOnlyWhereADialectDisagrees(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		dialect Dialect
+		input   string
+		want    string
+	}{
+		{MySQL, "SELECT ROUND(a, -2) FROM t", `SELECT dialect_round(a, -2) AS "ROUND(a, -2)" FROM t`},
+		{PostgreSQL, "SELECT ROUND(a, -2) FROM t", `SELECT dialect_round(a, -2) AS "ROUND(a, -2)" FROM t`},
+		{GoogleSQL, "SELECT ROUND(a, -2) FROM t", `SELECT dialect_round(a, -2) AS "ROUND(a, -2)" FROM t`},
+		{MySQL, "SELECT ROUND(a) FROM t", "SELECT ROUND(a) FROM t"},
+		{GoogleSQL, "SELECT ROUND(a) FROM t", "SELECT ROUND(a) FROM t"},
+		{SQLite, "SELECT ROUND(a, -2) FROM t", "SELECT ROUND(a, -2) FROM t"},
+	}
+
+	for _, tt := range tests {
+		got, err := Translate(tt.dialect, tt.input)
+		if err != nil {
+			t.Errorf("Translate(%v, %q): %v", tt.dialect, tt.input, err)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("Translate(%v, %q)\n  = %q\nwant %q", tt.dialect, tt.input, got, tt.want)
+		}
+	}
+}
+
+// TestGoogleSQLSubstrIsRoutedToItsOwnHelper pins that the GoogleSQL rewrite
+// reaches the helper above rather than SQLite's substr, beside the other two
+// dialects so the three stay apart.
+func TestGoogleSQLSubstrIsRoutedToItsOwnHelper(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		dialect Dialect
+		want    string
+	}{
+		{GoogleSQL, `SELECT googlesql_substr(s, 0, 2) AS "SUBSTR(s, 0, 2)" FROM t`},
+		{MySQL, `SELECT mysql_substr(s, 0, 2) AS "SUBSTR(s, 0, 2)" FROM t`},
+		{PostgreSQL, `SELECT postgresql_substr(s, 0, 2) AS "SUBSTR(s, 0, 2)" FROM t`},
+		{SQLite, "SELECT SUBSTR(s, 0, 2) FROM t"},
+	}
+
+	for _, tt := range tests {
+		got, err := Translate(tt.dialect, "SELECT SUBSTR(s, 0, 2) FROM t")
+		if err != nil {
+			t.Errorf("Translate(%v): %v", tt.dialect, err)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("Translate(%v)\n  = %q\nwant %q", tt.dialect, got, tt.want)
+		}
+	}
+}
+
+// TestSubstrAndRoundAnswerNullAndBadArity pins the edges the tables above do not
+// reach: a NULL argument is NULL rather than an error, and a call with the wrong
+// number of arguments is refused by name.
+func TestSubstrAndRoundAnswerNullAndBadArity(t *testing.T) {
+	t.Parallel()
+
+	nulls := map[string][]driver.Value{
+		"googlesql_substr null string": {nil, int64(1)},
+		"googlesql_substr null pos":    {"abc", nil},
+		"googlesql_substr null len":    {"abc", int64(1), nil},
+		"dialect_round null value":     {nil, int64(-2)},
+		"dialect_round null digits":    {float64(1), nil},
+	}
+	for name, args := range nulls {
+		var got driver.Value
+		var err error
+		if strings.HasPrefix(name, "dialect_round") {
+			got, err = fnDialectRound(args)
+		} else {
+			got, err = fnGoogleSQLSubstr(args)
+		}
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if got != nil {
+			t.Errorf("%s = %v, want NULL", name, got)
+		}
+	}
+
+	if _, err := fnGoogleSQLSubstr([]driver.Value{"abc"}); err == nil {
+		t.Error("googlesql_substr accepted one argument")
+	}
+	if _, err := fnGoogleSQLSubstr([]driver.Value{"abc", int64(1), int64(2), int64(3)}); err == nil {
+		t.Error("googlesql_substr accepted four arguments")
+	}
+}
+
+// TestRoundAtTheEdgesOfAFloat64 pins the digit counts where the scaling itself
+// is the problem. The guard is on what the scaling produces rather than on the
+// count, because the two are not the same question: at 18 digits the scale is
+// finite and a value below it does round, while at 400 the scale is infinite and
+// nothing can.
+func TestRoundAtTheEdgesOfAFloat64(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		value   float64
+		digits  int64
+		want    float64
+		wantErr bool
+	}{
+		"a value below the last place still rounds":       {value: 5e-19, digits: 18, want: 1e-18},
+		"a scale too large to represent leaves the value": {value: 1.5, digits: 400, want: 1.5},
+		"a large value at a large scale leaves the value": {value: 1e300, digits: 300, want: 1e300},
+		"a large value rounded to a ten is unchanged":     {value: math.MaxFloat64, digits: -1, want: math.MaxFloat64},
+		// Rounding the largest float64 up to the next unit of 1e308 lands past
+		// what a float64 holds. BigQuery raises on the overflow, and an infinity
+		// here would flow into the rest of the query as a number.
+		"a result past the largest float64 is refused": {value: math.MaxFloat64, digits: -308, wantErr: true},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := fnDialectRound([]driver.Value{tt.value, tt.digits})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("dialect_round(%v, %d) = %v, want an error", tt.value, tt.digits, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("dialect_round(%v, %d): %v", tt.value, tt.digits, err)
+			}
+			if got != tt.want {
+				t.Fatalf("dialect_round(%v, %d) = %v, want %v", tt.value, tt.digits, got, tt.want)
+			}
+		})
 	}
 }
