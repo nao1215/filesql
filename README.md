@@ -51,7 +51,7 @@ filesql is for cases where the data is already in a file and the fastest useful 
 | `.ach` | ACH (NACHA) | Experimental |
 | `.fed` | Fedwire | Experimental |
 
-Two inputs are the same source only when they are in the same place. `dir/users.csv` and `dir/users.csv.gz` are one dataset offered twice, and the plain one is read; `a/users.csv` and `b/users.csv` are two files, and both are loaded. What happens when both then want the table `users` is the loading API's business: `Open` and `OpenContext` build a fresh database and refuse it with `ErrDuplicateTable`, while `LoadInto` and `LoadIntoTx` load into a database you own and keep their last-wins rule, so the later input replaces the table. Neither one silently drops a file.
+Two inputs are the same source only when they are in the same place. `dir/users.csv` and `dir/users.csv.gz` are one dataset offered twice, and the plain one is read; `a/users.csv` and `b/users.csv` are two files, and both are loaded. What happens when both then want the table `users` is the loading API's business: `Open` and `OpenContext` build a fresh database and refuse it with `ErrDuplicateTable`, while `LoadInto` and `LoadIntoTx` load into a database you own and keep their last-wins rule, so the later input replaces the table. Neither one silently drops a file. Table names are compared the way SQLite compares identifiers, with ASCII case folded, so `Users.csv` and `users.csv` want the same table too.
 
 Compressed wrappers are supported for CSV, TSV, LTSV, JSON, JSONL, Parquet, and XLSX:
 `.gz`, `.bz2`, `.xz`, `.zst`, `.z`, `.snappy`, `.s2`, `.lz4`.
@@ -463,7 +463,7 @@ A write-back rewrites the whole file. Both formats are written from the parsed s
 
 Writing needs the source file. Neither format can be rebuilt from its SQL tables alone: fields no table exposes exist only in the original. `DumpACH` and `DumpFedWire` therefore read the file the tables were loaded from and apply the edits to it, and fail with `ErrSourceUnavailable`, naming the file, when it is gone or unreadable. A database loaded from an `io.Reader` has no such file: parse the reader with `parser/ach` or `parser/wire` and pass the result to `DumpACHWithTableSet` or `DumpFedWireWithTableSet`.
 
-Each database records its own source, so two databases loaded from files that share a name in different directories each export their own data. The record lives in a reserved table named `_filesql_sources`. Table names beginning with `_filesql_` belong to this package: they are hidden from `DumpDatabase` and from the table listings filesql returns, and an input that would load into one is refused with `ErrReservedTableName`, the way SQLite refuses its own `sqlite_` prefix.
+Each database records its own source, so two databases loaded from files that share a name in different directories each export their own data. The record lives in a reserved table named `_filesql_sources`. Table names beginning with `_filesql_` belong to this package: they are hidden from `DumpDatabase` and from the table listings filesql returns, and an input that would load into one is refused with `ErrReservedTableName`. A name beginning with `sqlite_` is refused the same way, because SQLite keeps that prefix for its own tables. Both comparisons ignore ASCII case, as SQLite does.
 
 ## Examples
 
