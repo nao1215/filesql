@@ -377,6 +377,9 @@ func insertRecordsIntoTable(ctx context.Context, db DBTX, tableName string, head
 // Returns an error if the export fails, or ErrSourceUnavailable if the file the
 // tables were loaded from cannot be read.
 func DumpACH(ctx context.Context, db *sql.DB, baseTableName, outputPath string) error {
+	if db == nil {
+		return fmt.Errorf("%w: database must be a non-nil *sql.DB", ErrNilInput)
+	}
 	tableSet, err := achTableSetForDump(ctx, db, baseTableName)
 	if err != nil {
 		return err
@@ -401,6 +404,9 @@ func DumpACH(ctx context.Context, db *sql.DB, baseTableName, outputPath string) 
 //
 // Returns an error if the export fails.
 func DumpACHWithTableSet(ctx context.Context, db *sql.DB, baseTableName, outputPath string, tableSet *achconv.TableSet) error {
+	if db == nil {
+		return fmt.Errorf("%w: database must be a non-nil *sql.DB", ErrNilInput)
+	}
 	if tableSet == nil {
 		return fmt.Errorf("%w: tableSet must be a non-nil *achconv.TableSet", ErrNilInput)
 	}

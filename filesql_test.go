@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	achconv "github.com/nao1215/filesql/parser/ach"
+	wireconv "github.com/nao1215/filesql/parser/wire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -4721,4 +4723,55 @@ func Test_NonLatinFileNameBecomesQueryableTable(t *testing.T) {
 	defer rows.Close()
 	assert.False(t, rows.Next(), `no table should have collapsed onto the "sheet" fallback`)
 	require.NoError(t, rows.Err())
+}
+
+// TestDumpEntryPointsRefuseANilDatabase pins the answer this package gives to a
+// nil argument everywhere else: an error naming what was nil, not a panic. A
+// nil database is what a caller holds after an error they did not check, and a
+// library that crashes on it takes their process down over it.
+func TestDumpEntryPointsRefuseANilDatabase(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "DumpDatabase",
+			call: func() error { return DumpDatabase(nil, dir) },
+		},
+		{
+			name: "DumpACH",
+			call: func() error { return DumpACH(ctx, nil, "t", filepath.Join(dir, "a.ach")) },
+		},
+		{
+			name: "DumpACHWithTableSet",
+			call: func() error {
+				return DumpACHWithTableSet(ctx, nil, "t", filepath.Join(dir, "b.ach"), &achconv.TableSet{})
+			},
+		},
+		{
+			name: "DumpFedWire",
+			call: func() error { return DumpFedWire(ctx, nil, "t", filepath.Join(dir, "a.fed")) },
+		},
+		{
+			name: "DumpFedWireWithTableSet",
+			call: func() error {
+				return DumpFedWireWithTableSet(ctx, nil, "t", filepath.Join(dir, "b.fed"), &wireconv.TableSet{})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var err error
+			require.NotPanics(t, func() { err = tt.call() })
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrNilInput)
+		})
+	}
 }

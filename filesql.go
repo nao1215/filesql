@@ -235,6 +235,13 @@ func LoadInto(ctx context.Context, db *sql.DB, paths ...string) error {
 //		WithCompression(CompressionGZ)
 //	err := DumpDatabase(db, "./output", options)
 func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
+	// A nil database is what a caller holds after an error they did not check,
+	// and reaching into it here would take their process down over a mistake this
+	// package answers with an error everywhere else.
+	if db == nil {
+		return fmt.Errorf("%w: database must be a non-nil *sql.DB", ErrNilInput)
+	}
+
 	// Use default options if none provided
 	options := NewDumpOptions()
 	if len(opts) > 0 {
@@ -259,12 +266,10 @@ func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
 
 // dumpSQLiteDatabase implements generic dump functionality for SQLite databases
 func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error {
-	// Create output directory if it doesn't exist
-	if err := os.MkdirAll(outputDir, 0750); err != nil {
-		return fmt.Errorf("%w: failed to create output directory: %w", ErrIOOperation, err)
-	}
-
-	// Get all table names
+	// What there is to write is settled before the destination is touched, for
+	// the reason the ping above exists: a dump that writes nothing should leave
+	// nothing, and a database with no tables used to leave an empty directory
+	// behind along with its error.
 	tableNames, err := getSQLiteTableNames(db)
 	if err != nil {
 		return fmt.Errorf("%w: failed to get table names: %w", ErrDatabaseOperation, err)
@@ -272,6 +277,11 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 
 	if len(tableNames) == 0 {
 		return ErrNoTables
+	}
+
+	// Create output directory if it doesn't exist
+	if err := os.MkdirAll(outputDir, 0750); err != nil {
+		return fmt.Errorf("%w: failed to create output directory: %w", ErrIOOperation, err)
 	}
 
 	ctx := context.Background()

@@ -37,9 +37,24 @@ func TestDumpSQLiteDatabase_Failures(t *testing.T) {
 		blocked := filepath.Join(t.TempDir(), "in-the-way")
 		require.NoError(t, os.WriteFile(blocked, nil, 0o600))
 
-		err := dumpSQLiteDatabase(openTestDB(t), filepath.Join(blocked, "out"), NewDumpOptions())
+		// The directory is created once there is something to write, so the
+		// database needs a table for this path to be reached at all.
+		db := openTestDB(t)
+		_, err := db.ExecContext(context.Background(), `CREATE TABLE t (a TEXT)`)
+		require.NoError(t, err)
+
+		err = dumpSQLiteDatabase(db, filepath.Join(blocked, "out"), NewDumpOptions())
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrIOOperation)
+	})
+
+	t.Run("a database with no tables leaves no directory", func(t *testing.T) {
+		t.Parallel()
+
+		outputDir := filepath.Join(t.TempDir(), "out")
+		err := dumpSQLiteDatabase(openTestDB(t), outputDir, NewDumpOptions())
+		require.ErrorIs(t, err, ErrNoTables)
+		assert.NoDirExists(t, outputDir, "a dump with nothing to write must not leave a directory behind")
 	})
 
 	t.Run("the tables cannot be listed", func(t *testing.T) {
