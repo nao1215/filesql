@@ -38,6 +38,31 @@ func TestOperatorSemantics(t *testing.T) {
 		{"mysql DIV truncates toward zero", MySQL, `SELECT -7 DIV 2`, "-3", false},
 		{"postgresql keeps integer division", PostgreSQL, `SELECT 5/2`, "2", false},
 
+		// MOD is DIV's sibling and the same operation as SQLite's "%", including
+		// the sign rule: the result takes the sign of the dividend.
+		{"mysql MOD is the remainder", MySQL, `SELECT 7 MOD 2`, "1", false},
+		{"mysql MOD takes the dividend's sign", MySQL, `SELECT -7 MOD 2`, "-1", false},
+		{"mysql MOD by a negative divisor", MySQL, `SELECT 7 MOD -2`, "1", false},
+		{"mysql MOD binds like multiplication", MySQL, `SELECT 1 + 7 MOD 2`, "2", false},
+		{"mysql MOD chains left to right", MySQL, `SELECT 7 MOD 2 * 3`, "3", false},
+		{"mysql MOD as a function is unchanged", MySQL, `SELECT MOD(7, 2)`, "1", false},
+
+		// DIV, MOD, "*", "/" and "%" are one precedence level in MySQL and
+		// associate left to right, so the left operand of a DIV is the whole
+		// chain to its left rather than the value beside it.
+		{"mysql DIV divides a product", MySQL, `SELECT 8 * 5 DIV 2`, "20", false},
+		{"mysql DIV divides a quotient", MySQL, `SELECT 100 / 5 DIV 2`, "10", false},
+		{"mysql DIV divides a remainder", MySQL, `SELECT 8 % 5 DIV 2`, "1", false},
+		{"mysql DIV divides a MOD result", MySQL, `SELECT 8 MOD 5 DIV 2`, "1", false},
+		{"mysql MOD takes a product as its left operand", MySQL, `SELECT 4 * 5 MOD 7`, "6", false},
+		{"mysql DIV chains left to right", MySQL, `SELECT 8 DIV 2 DIV 2`, "2", false},
+		// An operator that binds less tightly stays outside the operand.
+		{"mysql DIV binds tighter than addition", MySQL, `SELECT 2 + 8 DIV 2`, "6", false},
+		{"mysql DIV binds tighter than subtraction", MySQL, `SELECT 2 - 8 DIV 2`, "-2", false},
+		{"mysql DIV of a call result", MySQL, `SELECT ABS(-8) DIV 2`, "4", false},
+		{"mysql DIV of a parenthesized sum", MySQL, `SELECT (2 + 8) DIV 3`, "3", false},
+		{"mysql DIV inside a call argument", MySQL, `SELECT MAX(8 * 5 DIV 2)`, "20", false},
+
 		// The operators MySQL spells with punctuation, executed rather than only
 		// rewritten: the rewrite is only right if the answer is.
 		{"mysql && is AND", MySQL, `SELECT 1 && 0`, "0", false},

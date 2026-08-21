@@ -231,27 +231,87 @@ func castToInt(d Dialect, v driver.Value, strict bool) (driver.Value, error) {
 	case bool:
 		return boolToInt(x), nil
 	case float64:
-		return roundForDialect(d, x), nil
+		return roundForDialect(d, x, strict)
 	}
 	s, _ := toString(v)
-	if n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
+	text := strings.TrimSpace(s)
+	n, err := strconv.ParseInt(text, 10, 64)
+	if err == nil {
 		return n, nil
 	}
-	if f, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
-		return roundForDialect(d, f), nil
+	// A well-formed integer outside the range is answered here rather than
+	// through the float below, which cannot tell -2^63-1 from -2^63: both are the
+	// same float64, so the range check would let the first one through as the
+	// second.
+	if errors.Is(err, strconv.ErrRange) {
+		return outOfRangeInt(strings.HasPrefix(text, "-"), strict, text)
+	}
+	// ParseFloat answers a well-formed number too large for a float64 with an
+	// infinity and ErrRange. That is a value, not a parse failure: reading it as
+	// one sent a 400-digit number down the numeric-prefix path below, where it
+	// came back as 0 instead of as the bound of the type.
+	if f, err := strconv.ParseFloat(text, 64); err == nil || errors.Is(err, strconv.ErrRange) {
+		return roundForDialect(d, f, strict)
 	}
 	if strict {
 		return nil, fmt.Errorf("%w: %q is not an integer", ErrInvalidCast, s)
 	}
 	// MySQL takes the leading numeric prefix and answers 0 when there is none.
-	return roundForDialect(d, numericPrefix(s)), nil
+	return roundForDialect(d, numericPrefix(s), strict)
 }
 
-func roundForDialect(d Dialect, f float64) int64 {
+// intRangeAsFloat is the int64 range measured in float64. The upper bound is 2^63
+// rather than the largest integer, because no float64 holds that one: the
+// nearest float above the range is 2^63 itself, so a value at or past it does
+// not fit. The lower bound is exact.
+const (
+	intUpperExclusiveAsFloat = 9223372036854775808.0  // 2^63
+	intLowerInclusiveAsFloat = -9223372036854775808.0 // -2^63
+)
+
+// roundForDialect rounds f the way d's cast does and answers what d answers for
+// a value the integer type has no room for.
+//
+// Every dialect here rounds a fractional value where SQLite truncates:
+// PostgreSQL rounds halves to even, MySQL and GoogleSQL away from zero. Past the
+// range the three part company. Converting out of range in Go is
+// implementation-defined and gave the most negative integer for a large positive
+// value, which is not any dialect's answer and not even a stable wrong one, so
+// the range is checked here: MySQL clamps to the bound of the type, which is
+// what it answers with a warning, and the dialects that raise for a value they
+// cannot represent raise. NaN is neither in range nor out of it and is not an
+// integer at all, so it takes the same two answers.
+func roundForDialect(d Dialect, f float64, strict bool) (driver.Value, error) {
+	rounded := math.Round(f)
 	if d == PostgreSQL {
-		return int64(math.RoundToEven(f))
+		rounded = math.RoundToEven(f)
 	}
-	return int64(math.Round(f))
+	switch {
+	case math.IsNaN(rounded):
+		if strict {
+			return nil, fmt.Errorf("%w: NaN is not an integer", ErrInvalidCast)
+		}
+		// MySQL's answer for a value that names no number at all.
+		return int64(0), nil
+	case rounded >= intUpperExclusiveAsFloat:
+		return outOfRangeInt(false, strict, fmt.Sprint(f))
+	case rounded < intLowerInclusiveAsFloat:
+		return outOfRangeInt(true, strict, fmt.Sprint(f))
+	}
+	return int64(rounded), nil
+}
+
+// outOfRangeInt is the answer for a value the integer type has no room for:
+// MySQL clamps to the bound it passed, and the dialects that raise for a value
+// they cannot represent raise. shown is the value as the error should name it.
+func outOfRangeInt(negative, strict bool, shown string) (driver.Value, error) {
+	if strict {
+		return nil, fmt.Errorf("%w: %s is out of range for an integer", ErrInvalidCast, shown)
+	}
+	if negative {
+		return int64(math.MinInt64), nil
+	}
+	return int64(math.MaxInt64), nil
 }
 
 // numericPrefix returns the value of the longest leading run of s that parses as

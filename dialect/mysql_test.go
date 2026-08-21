@@ -42,6 +42,26 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-7_div_paren_left", "SELECT (a + b) DIV c", `SELECT CAST(mysql_divide((a + b), c) AS INTEGER) AS "(a + b) DIV c"`},
 		{"M-7_div_call_right", "SELECT x DIV ABS(y)", "SELECT CAST(mysql_divide(x, ABS(y)) AS INTEGER) AS \"x DIV ABS(y)\""},
 		{"M-7_div_call_left", "SELECT ABS(x) DIV y", `SELECT CAST(mysql_divide(ABS(x), y) AS INTEGER) AS "ABS(x) DIV y"`},
+		// The left operand is the whole chain of equal-precedence operators, not
+		// the primary beside the DIV: MySQL reads "a * b DIV c" as "(a * b) DIV c".
+		{"M-7_div_of_a_product", "SELECT a * b DIV c", `SELECT CAST(mysql_divide((a * b), c) AS INTEGER) AS "a * b DIV c"`},
+		{"M-7_div_of_a_quotient", "SELECT a / b DIV c", `SELECT CAST(mysql_divide((mysql_divide(a, b)), c) AS INTEGER) AS "a / b DIV c"`},
+		{"M-7_div_of_a_remainder", "SELECT a % b DIV c", `SELECT CAST(mysql_divide((a % b), c) AS INTEGER) AS "a % b DIV c"`},
+		{"M-7_div_stops_at_lower_precedence", "SELECT a + b DIV c", `SELECT a + CAST(mysql_divide(b, c) AS INTEGER) AS "a + b DIV c"`},
+
+		// M-24: MOD is MySQL's spelling of the remainder operator, and SQLite's
+		// "%" is the same operation at the same precedence. The function
+		// spelling already works and is left alone.
+		{"M-24_mod", "SELECT a MOD b FROM t", `SELECT a % b AS "a MOD b" FROM t`},
+		{"M-24_mod_literals", "SELECT 7 MOD 2", `SELECT 7 % 2 AS "7 MOD 2"`},
+		{"M-24_mod_in_where", "SELECT * FROM t WHERE a MOD b = 1", "SELECT * FROM t WHERE a % b = 1"},
+		{"M-24_mod_call_untouched", "SELECT MOD(7, 2)", "SELECT MOD(7, 2)"},
+		{"M-24_mod_quoted_name_untouched", "SELECT `mod` FROM t", `SELECT "mod" FROM t`},
+		{"M-24_mod_alias_untouched", "SELECT a AS `mod` FROM t", `SELECT a AS "mod" FROM t`},
+		{"M-24_mod_parenthesized_right", "SELECT a MOD (b + 1) FROM t", `SELECT a % (b + 1) AS "a MOD (b + 1)" FROM t`},
+		{"M-24_mod_parenthesized_left", "SELECT (a + 1) MOD b FROM t", `SELECT (a + 1) % b AS "(a + 1) MOD b" FROM t`},
+		{"M-24_mod_call_arguments_untouched", "SELECT MOD(a MOD b, 2) FROM t", `SELECT MOD(a % b, 2) AS "MOD(a MOD b, 2)" FROM t`},
+		{"M-24_mod_without_a_right_operand_is_left_alone", "SELECT a MOD", "SELECT a MOD"},
 
 		{"M-8_cast_signed", "SELECT CAST(x AS SIGNED) FROM t", "SELECT mysql_cast(x, 'SIGNED') AS \"CAST(x AS SIGNED)\" FROM t"},
 		{"M-8_cast_unsigned_integer", "SELECT CAST(x AS UNSIGNED INTEGER)", "SELECT mysql_cast(x, 'UNSIGNED') AS \"CAST(x AS UNSIGNED INTEGER)\""},

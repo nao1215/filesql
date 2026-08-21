@@ -3,8 +3,11 @@ package dialect
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"math"
 	"reflect"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -93,6 +96,26 @@ func TestCastSemantics(t *testing.T) {
 		{"safe_cast valid date", GoogleSQL, `SELECT SAFE_CAST('2026-01-15' AS DATE)`, "2026-01-15", false},
 		{"safe_cast invalid timestamp", GoogleSQL, `SELECT SAFE_CAST('not-a-timestamp' AS TIMESTAMP)`, "", true},
 		{"safe_cast valid timestamp", GoogleSQL, `SELECT SAFE_CAST('2026-01-15 10:30:00' AS TIMESTAMP)`, "2026-01-15 10:30:00", false},
+
+		// A value past the integer range is not an integer. MySQL clamps to the
+		// bound of the type, which is the answer it gives with a warning; the
+		// dialects that raise are covered in TestCastRejectsInvalidValues.
+		{"mysql clamps a value above the range", MySQL, `SELECT CAST(1e30 AS SIGNED)`, "9223372036854775807", false},
+		{"mysql clamps a value below the range", MySQL, `SELECT CAST(-1e30 AS SIGNED)`, "-9223372036854775808", false},
+		{"mysql clamps an infinity", MySQL, `SELECT CAST(1e308*10 AS SIGNED)`, "9223372036854775807", false},
+		{"mysql clamps a string past the range", MySQL, `SELECT CAST('99999999999999999999' AS SIGNED)`, "9223372036854775807", false},
+		{"mysql keeps a value inside the range", MySQL, `SELECT CAST(9.2e18 AS SIGNED)`, "9200000000000000000", false},
+		{"mysql keeps the largest integer", MySQL, `SELECT CAST(9223372036854775807 AS SIGNED)`, "9223372036854775807", false},
+		{"mysql keeps the smallest integer", MySQL, `SELECT CAST(-9223372036854775808 AS SIGNED)`, "-9223372036854775808", false},
+		{"safe_cast nulls a value past the range", GoogleSQL, `SELECT SAFE_CAST(1e30 AS INT64)`, "", true},
+		{"safe_cast nulls a string past the range", GoogleSQL, `SELECT SAFE_CAST('99999999999999999999' AS INT64)`, "", true},
+		{"safe_cast keeps a value inside the range", GoogleSQL, `SELECT SAFE_CAST(9.2e18 AS INT64)`, "9200000000000000000", false},
+		// A digit string one past the range: no float64 tells it from the bound
+		// itself, so the answer has to come from the integer parse.
+		{"mysql clamps the string below the range", MySQL, `SELECT CAST('-9223372036854775809' AS SIGNED)`, "-9223372036854775808", false},
+		{"mysql clamps the string above the range", MySQL, `SELECT CAST('9223372036854775808' AS SIGNED)`, "9223372036854775807", false},
+		{"mysql keeps the string at the lower bound", MySQL, `SELECT CAST('-9223372036854775808' AS SIGNED)`, "-9223372036854775808", false},
+		{"safe_cast nulls the string below the range", GoogleSQL, `SELECT SAFE_CAST('-9223372036854775809' AS INT64)`, "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -137,6 +160,17 @@ func TestCastRejectsInvalidValues(t *testing.T) {
 		{"postgresql float", PostgreSQL, `SELECT 'abc'::float8`},
 		{"googlesql int64", GoogleSQL, `SELECT CAST('abc' AS INT64)`},
 		{"googlesql date", GoogleSQL, `SELECT CAST('2026-13-40' AS DATE)`},
+
+		// A value past the integer range is a value the type cannot represent,
+		// which is what these two dialects raise for.
+		{"postgresql integer above the range", PostgreSQL, `SELECT (1e30)::bigint`},
+		{"postgresql integer below the range", PostgreSQL, `SELECT (-1e30)::bigint`},
+		{"postgresql integer from a string past the range", PostgreSQL, `SELECT '99999999999999999999'::bigint`},
+		{"googlesql int64 above the range", GoogleSQL, `SELECT CAST(1e30 AS INT64)`},
+		{"googlesql int64 from an infinity", GoogleSQL, `SELECT CAST(1e308*10 AS INT64)`},
+		{"postgresql integer one below the range", PostgreSQL, `SELECT '-9223372036854775809'::bigint`},
+		{"postgresql integer one above the range", PostgreSQL, `SELECT '9223372036854775808'::bigint`},
+		{"googlesql int64 one below the range", GoogleSQL, `SELECT CAST('-9223372036854775809' AS INT64)`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -240,5 +274,88 @@ func TestCastErrorIsInvalidCast(t *testing.T) {
 	_, err := castValue(PostgreSQL, "integer", "abc")
 	if !errors.Is(err, ErrInvalidCast) {
 		t.Fatalf("castValue error = %v, want ErrInvalidCast", err)
+	}
+}
+
+// TestRoundForDialect covers the range rule directly, because SQLite has no way
+// to carry a NaN into a query: a NaN real comes back as NULL, so the value can
+// only reach the conversion from Go.
+func TestRoundForDialect(t *testing.T) {
+	t.Parallel()
+
+	nan := math.NaN()
+	tests := []struct {
+		name    string
+		dialect Dialect
+		value   float64
+		strict  bool
+		want    int64
+		wantErr bool
+	}{
+		{name: "mysql clamps NaN to zero", dialect: MySQL, value: nan, want: 0},
+		{name: "googlesql rejects NaN", dialect: GoogleSQL, value: nan, strict: true, wantErr: true},
+		{name: "mysql clamps above the range", dialect: MySQL, value: 1e30, want: math.MaxInt64},
+		{name: "mysql clamps below the range", dialect: MySQL, value: -1e30, want: math.MinInt64},
+		{name: "mysql clamps an infinity", dialect: MySQL, value: math.Inf(1), want: math.MaxInt64},
+		{name: "mysql clamps a negative infinity", dialect: MySQL, value: math.Inf(-1), want: math.MinInt64},
+		{name: "postgresql rejects above the range", dialect: PostgreSQL, value: 1e30, strict: true, wantErr: true},
+		{name: "postgresql rejects below the range", dialect: PostgreSQL, value: -1e30, strict: true, wantErr: true},
+		// The bound itself: no float64 holds the largest integer, so the nearest
+		// one above the range is 2^63 and it does not fit, while -2^63 is exact
+		// and does.
+		{name: "the upper bound does not fit", dialect: MySQL, value: 9223372036854775808.0, want: math.MaxInt64},
+		{name: "the lower bound fits", dialect: MySQL, value: -9223372036854775808.0, want: math.MinInt64},
+		{name: "a value inside the range converts", dialect: MySQL, value: 9.2e18, want: 9200000000000000000},
+		{name: "mysql rounds a half away from zero", dialect: MySQL, value: 2.5, want: 3},
+		{name: "postgresql rounds a half to even", dialect: PostgreSQL, value: 2.5, want: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := roundForDialect(tt.dialect, tt.value, tt.strict)
+			if tt.wantErr {
+				if !errors.Is(err, ErrInvalidCast) {
+					t.Fatalf("roundForDialect(%v, %v) error = %v, want ErrInvalidCast", tt.dialect, tt.value, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("roundForDialect(%v, %v) error = %v", tt.dialect, tt.value, err)
+			}
+			if got != driver.Value(tt.want) {
+				t.Fatalf("roundForDialect(%v, %v) = %v, want %v", tt.dialect, tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCastStringPastTheFloatRange covers the string a float64 cannot hold
+// either. strconv.ParseFloat answers such a string with an infinity and
+// ErrRange, and reading that as a parse failure sent the value down MySQL's
+// numeric-prefix path, where it came back as 0 rather than as the bound of the
+// type.
+func TestCastStringPastTheFloatRange(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	huge := strings.Repeat("9", 400)
+
+	got, err := runDialect(t, db, MySQL, "SELECT CAST('"+huge+"' AS SIGNED)")
+	if err != nil {
+		t.Fatalf("mysql: %v", err)
+	}
+	if want := "9223372036854775807"; got.String != want {
+		t.Errorf("mysql clamps a string past the float range: got %v, want %q", got, want)
+	}
+
+	// The engine returns the helper's message as a SQL error rather than as the
+	// wrapped Go error, which is why these assert on failing rather than on the
+	// sentinel; the message is checked in TestCastErrorIsInvalidCast.
+	if _, err := runDialect(t, db, PostgreSQL, "SELECT '"+huge+"'::bigint"); err == nil {
+		t.Error("postgresql must reject a string past the float range")
+	}
+	if _, err := runDialect(t, db, GoogleSQL, "SELECT CAST('"+huge+"' AS INT64)"); err == nil {
+		t.Error("googlesql must reject a string past the float range")
 	}
 }
