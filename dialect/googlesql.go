@@ -17,7 +17,7 @@ import (
 //	G-6  FORMAT(fmt, ...)                     -> printf(fmt, ...)
 //	G-7  DATE_ADD/DATE_SUB/TIMESTAMP_ADD/SUB  -> datetime(x, '±n unit')
 //	G-8  DATE_DIFF/TIMESTAMP_DIFF(a, b, UNIT) -> DATE_DIFF(a, b, 'unit')
-//	G-9  QUALIFY / UNNEST / ARRAY<> / STRUCT<> / SELECT * EXCEPT / REPLACE
+//	G-9  QUALIFY / UNNEST / ARRAY / STRUCT / SELECT * EXCEPT / REPLACE
 //	     -> ErrUnsupportedSyntax
 //	G-11 a / b                                -> googlesql_divide(a, b)
 //	G-12 x LIKE p                             -> like_sensitive(p, x)
@@ -147,9 +147,16 @@ func checkUnsupportedGoogleSQL(tokens []token) error {
 		if isWordEq(t, "UNNEST") {
 			return fmt.Errorf("%w: UNNEST is not supported", ErrUnsupportedSyntax)
 		}
+		// The type parameters spell these out — ARRAY<INT64>, STRUCT<a INT64> —
+		// and the parenthesis spells the same thing without them: STRUCT(1 AS a)
+		// is the ordinary way to write a struct, and ARRAY(SELECT ...) the
+		// ordinary way to build an array. Only the typed form was refused, so the
+		// spelling a caller is most likely to write reached SQLite as a call and
+		// failed on the AS inside it, or on a function name SQLite does not have.
 		if isWordEq(t, "ARRAY") || isWordEq(t, "STRUCT") {
-			if lt := nextSig(tokens, i+1); lt >= 0 && isOpEq(tokens[lt], "<") {
-				return fmt.Errorf("%w: %s type is not supported", ErrUnsupportedSyntax, strings.ToUpper(t.text))
+			if lt := nextSig(tokens, i+1); lt >= 0 && (isOpEq(tokens[lt], "<") || isOpEq(tokens[lt], "(")) {
+				return fmt.Errorf("%w: %s is not supported; SQLite has no %s type",
+					ErrUnsupportedSyntax, strings.ToUpper(t.text), strings.ToLower(t.text))
 			}
 		}
 		// G-19: SQLite has no array type, and "[" is its identifier quoting, so an

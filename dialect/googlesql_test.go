@@ -95,6 +95,12 @@ func TestGoogleSQLTranslateUnsupported(t *testing.T) {
 		{"G-9_unnest", "SELECT * FROM UNNEST([1, 2, 3])"},
 		{"G-9_array_type", "SELECT ARRAY<INT64>[1, 2]"},
 		{"G-9_struct_type", "SELECT STRUCT<a INT64>(1)"},
+		// The untyped constructor is the ordinary spelling, and reached SQLite as
+		// a call, which fails on the AS inside it.
+		{"G-9_struct_constructor", "SELECT STRUCT(1 AS a)"},
+		{"G-9_struct_constructor_two_fields", "SELECT STRUCT(1 AS a, 'x' AS b)"},
+		{"G-9_struct_constructor_in_a_subquery", "SELECT s.a FROM (SELECT STRUCT(1 AS a) AS s)"},
+		{"G-9_array_constructor", "SELECT ARRAY(SELECT 1)"},
 		{"G-9_except", "SELECT * EXCEPT(col) FROM t"},
 		{"G-9_replace", "SELECT * REPLACE(a AS b) FROM t"},
 		// A separator SQLite cannot keep alongside DISTINCT. Answering with a
