@@ -228,11 +228,14 @@ func (b *DBBuilder) SetDefaultChunkSize(size int) *DBBuilder {
 // The default is MalformedRowStop, which aborts the import with an error so a
 // corrupt or misaligned file is not imported as partial or empty data. Use
 // MalformedRowSkip to drop ragged rows and keep the well-formed ones, or
-// MalformedRowFill to keep every row by padding short rows with empty strings
-// and truncating long rows to the header width.
+// MalformedRowFill to keep every short row by padding it with empty strings. A
+// long row is refused whichever of the two is chosen, because truncating it
+// would discard a cell the file holds without saying so.
 //
-// The policy only affects delimited text formats. XLSX, LTSV, Parquet, and
-// JSON/JSONL have no per-row field-count mismatch and are unaffected.
+// The policy reaches delimited text alone. A workbook's rows are checked by the
+// XLSX reader itself, which refuses one wider than its header whatever this is
+// set to; LTSV pads a missing label; and Parquet and JSON/JSONL carry no
+// per-row field count to disagree about.
 //
 // Example:
 //
