@@ -5,6 +5,7 @@ package filesql
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -131,5 +132,46 @@ func BenchmarkOverwriteWorkbook(b *testing.B) {
 		if err := db.Close(); err != nil {
 			b.Fatalf("db.Close failed: %v", err)
 		}
+	}
+}
+
+// BenchmarkOpenParquet benchmarks loading a Parquet file of 100,000 rows, which
+// is the read path the column-chunk bound sits on.
+//
+// The file is written from the CSV of the same rows the first time the benchmark
+// runs, outside the timer, so no binary fixture of this size is kept in the
+// repository.
+func BenchmarkOpenParquet(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "customers.parquet")
+	writeBenchmarkParquet(b, path)
+
+	b.ResetTimer()
+	for b.Loop() {
+		db, err := OpenContext(context.Background(), path)
+		if err != nil {
+			b.Fatalf("OpenContext failed: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			b.Fatalf("db.Close failed: %v", err)
+		}
+	}
+}
+
+// writeBenchmarkParquet converts the benchmark CSV into a Parquet file at path.
+func writeBenchmarkParquet(b *testing.B, path string) {
+	b.Helper()
+
+	db, err := OpenContext(context.Background(), filepath.Join("testdata", "benchmark", "customers100000.csv"))
+	if err != nil {
+		b.Fatalf("OpenContext failed: %v", err)
+	}
+	defer db.Close()
+
+	dir := filepath.Dir(path)
+	if err := DumpDatabase(db, dir, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
+		b.Fatalf("DumpDatabase failed: %v", err)
+	}
+	if err := os.Rename(filepath.Join(dir, "customers100000.parquet"), path); err != nil {
+		b.Fatalf("rename failed: %v", err)
 	}
 }
