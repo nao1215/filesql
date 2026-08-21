@@ -249,6 +249,12 @@ func TestUDFNullHandling(t *testing.T) {
 	for _, q := range []string{
 		`SELECT DATE_FORMAT(NULL, '%Y')`,
 		`SELECT LPAD(NULL, 3, '0')`,
+		`SELECT LOCATE('a', 'abc', NULL)`,
+		`SELECT LOCATE(NULL, 'abc')`,
+		`SELECT STRPOS(NULL, 'a')`,
+		`SELECT INITCAP(NULL)`,
+		`SELECT unicode_upper(NULL)`,
+		`SELECT unicode_lower(NULL)`,
 		`SELECT REPEAT(NULL, 2)`,
 		`SELECT YEAR(NULL)`,
 		`SELECT TRUNCATE(NULL, 2)`,

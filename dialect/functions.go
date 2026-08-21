@@ -608,6 +608,11 @@ func fnLocate(args []driver.Value) (driver.Value, error) {
 	}
 	start := 0
 	if len(args) == 3 {
+		if args[2] == nil {
+			// MySQL answers NULL when any argument is NULL, which the other two
+			// already do by way of toString.
+			return nil, nil
+		}
 		pos, ok := toInt(args[2])
 		if !ok || pos < 1 {
 			return int64(0), nil
