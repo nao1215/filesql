@@ -1,6 +1,7 @@
 package filesql
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"path/filepath"
@@ -464,4 +465,39 @@ func TestXLSXColoredDateFormatImportsAsISO(t *testing.T) {
 	assert.Equal(t, "2023-03-15", red)
 	assert.Equal(t, "2023-03-15", magenta, "a color name holding an m is a color, not an elapsed unit")
 	assert.Equal(t, "2023-03-15", white, "a color name holding an h is a color, not an elapsed unit")
+}
+
+// TestXLSXDateCellsImportAsISOThroughAddReader is the same workbook handed to
+// the builder as bytes rather than named by path. The two took different code
+// paths, and only the path one rewrote a date cell into ISO 8601: the same file
+// gave a datetime column when opened by name and format-dependent text when
+// read from an io.Reader.
+func TestXLSXDateCellsImportAsISOThroughAddReader(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	f := excelize.NewFile()
+	defer func() { _ = f.Close() }()
+	require.NoError(t, f.SetSheetRow("Sheet1", "A1", &[]any{"date"}))
+	// 45000 is 2023-03-15, formatted mm-dd-yy so the shown text is not ISO.
+	require.NoError(t, f.SetCellValue("Sheet1", "A2", 45000))
+	style, err := f.NewStyle(&excelize.Style{NumFmt: 14})
+	require.NoError(t, err)
+	require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
+
+	var book bytes.Buffer
+	require.NoError(t, f.Write(&book))
+
+	db, err := NewBuilder().
+		AddReader(bytes.NewReader(book.Bytes()), "book", FileTypeXLSX).
+		Build(ctx)
+	require.NoError(t, err)
+	sqlDB, err := db.Open(ctx)
+	require.NoError(t, err)
+	defer func() { _ = sqlDB.Close() }()
+
+	var date string
+	require.NoError(t, sqlDB.QueryRowContext(ctx, `SELECT "date" FROM book`).Scan(&date))
+	assert.Equal(t, "2023-03-15", date, "a date cell holds a day whether the workbook came by path or by reader")
 }

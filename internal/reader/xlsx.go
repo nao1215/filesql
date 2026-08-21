@@ -42,12 +42,6 @@ func (w *Workbook) Close() error {
 	return w.file.Close()
 }
 
-// Sheets returns every sheet in the order the workbook stores them, with the
-// visibility it reports for each.
-func (w *Workbook) Sheets() ([]ExcelSheet, error) {
-	return ExcelSheets(w.file)
-}
-
 // Select returns the sheets policy admits, in workbook order, and the names it
 // left out.
 func (w *Workbook) Select(policy ExcelSheetPolicy) (loaded, skipped []string, err error) {
