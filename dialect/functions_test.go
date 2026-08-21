@@ -676,6 +676,11 @@ func TestDialectBoundariesFollowTheirEngine(t *testing.T) {
 		{name: "postgresql substring at position zero", dialect: PostgreSQL, query: `SELECT substr('abcdef', 0, 3)`, want: "ab"},
 		{name: "postgresql substring with no count", dialect: PostgreSQL, query: `SELECT substr('abcdef', 0)`, want: "abcdef"},
 		{name: "postgresql substring refuses a negative count", dialect: PostgreSQL, query: `SELECT substr('abcdef', 2, -1)`, wantErr: true},
+		// Either bound can be any integer literal the query held, and the sum
+		// that decides where the result ends must not wrap around them.
+		{name: "postgresql substring from far below the string", dialect: PostgreSQL, query: `SELECT substr('abcdef', -9223372036854775808, 3)`, want: ""},
+		{name: "postgresql substring with a count past the range", dialect: PostgreSQL, query: `SELECT substr('abcdef', 2, 9223372036854775807)`, want: "bcdef"},
+		{name: "mysql substring with a length past the range", dialect: MySQL, query: `SELECT SUBSTRING('abcdef', 2, 9223372036854775807)`, want: "bcdef"},
 		{name: "postgresql keyword form", dialect: PostgreSQL, query: `SELECT SUBSTRING('abcdef' FROM 0 FOR 3)`, want: "ab"},
 		{name: "substring still counts characters", dialect: MySQL, query: `SELECT SUBSTRING('日本語', 2, 1)`, want: "本"},
 

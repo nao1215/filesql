@@ -812,10 +812,16 @@ func fnPostgreSQLSubstr(args []driver.Value) (driver.Value, error) {
 		if count < 0 {
 			return nil, errors.New("dialect: SUBSTRING: negative substring length not allowed")
 		}
-		// Clamp before adding: a count near math.MaxInt64 is an ordinary SQLite
-		// integer literal and start+count would wrap to a negative bound.
-		if count < end-start {
-			end = start + count
+		// start+count is where the result ends, and both are whatever integer
+		// literal the query held, so the sum is guarded rather than clamped:
+		// subtracting a start near math.MinInt64 would wrap the comparison and
+		// widen the result to the whole string, and adding a count near
+		// math.MaxInt64 to a positive start would wrap it the other way. A sum
+		// that would overflow upward ends past the string, which end already is.
+		if start <= 0 || count <= math.MaxInt64-start {
+			if sum := start + count; sum < end {
+				end = sum
+			}
 		}
 	}
 	from := max(start, 1)
