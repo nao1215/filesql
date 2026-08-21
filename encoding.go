@@ -1,6 +1,7 @@
 package filesql
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -34,8 +35,143 @@ func isTextBaseType(ft FileType) bool {
 // legacy encoding (for example Shift-JIS) carries no mark to detect and would
 // otherwise be stored as bytes that are not characters, so it is rejected rather
 // than guessed at. Only call this for text formats; see isTextBaseType.
+// UTF-16 input is checked before it is decoded, because the decoder answers
+// damage with U+FFFD rather than with an error; see utf16ValidatingReader.
 func decodeTextReader(reader io.Reader) io.Reader {
-	return newUTF8ValidatingReader(transform.NewReader(reader, unicode.BOMOverride(transform.Nop)))
+	buffered := bufio.NewReader(reader)
+	var source io.Reader = buffered
+	if head, err := buffered.Peek(len(bomUTF16LE)); err == nil || len(head) == len(bomUTF16LE) {
+		switch {
+		case bytes.HasPrefix(head, bomUTF16LE):
+			source = newUTF16ValidatingReader(buffered, true)
+		case bytes.HasPrefix(head, bomUTF16BE):
+			source = newUTF16ValidatingReader(buffered, false)
+		}
+	}
+	return newUTF8ValidatingReader(transform.NewReader(source, unicode.BOMOverride(transform.Nop)))
+}
+
+// utf16ValidatingReader passes its input through unchanged and fails the read
+// that carries UTF-16 the decoder cannot use.
+//
+// The decoder answers a code unit it cannot use — half of a surrogate pair, or a
+// file that ends in the middle of a unit — with U+FFFD, and what reaches SQLite
+// is then a character the file never held and nothing can tell from one it did.
+// That is the silent corruption utf8ValidatingReader exists to refuse, arrived
+// at through the decoder instead of through a guess, so it is refused here in
+// the same shape: judge the bytes, do not edit them, and say where the input
+// stopped being decodable.
+//
+// The check runs before the decoder rather than after it because a U+FFFD the
+// file really holds is data, and after the decoder the two are the same bytes.
+type utf16ValidatingReader struct {
+	reader io.Reader
+	// littleEndian is the byte order the leading mark named. It is fixed for the
+	// whole stream: the mark appears once, at the start.
+	littleEndian bool
+	// half holds the first byte of a code unit whose second byte is in the next
+	// read.
+	half []byte
+	// wantLow records that the last complete unit was a high surrogate, whose
+	// low half may still arrive with the next read.
+	wantLow bool
+	// highAt is where that high surrogate started, so an unpaired one can be
+	// reported at its own offset rather than at the one after it.
+	highAt int64
+	// offset counts the bytes validated so far, so the error can say where the
+	// input stopped being decodable.
+	offset int64
+	// failed is the error that ended this reader, returned again for every later
+	// read for the reason utf8ValidatingReader gives.
+	failed error
+}
+
+// newUTF16ValidatingReader returns reader with UTF-16 validation applied to
+// everything read from it. littleEndian is the byte order of the mark that
+// selected it.
+func newUTF16ValidatingReader(reader io.Reader, littleEndian bool) io.Reader {
+	return &utf16ValidatingReader{reader: reader, littleEndian: littleEndian}
+}
+
+// Read reads from the underlying reader and reports an error when what it read
+// is not UTF-16 a decoder can use. The bytes are passed through untouched.
+func (r *utf16ValidatingReader) Read(p []byte) (int, error) {
+	if r.failed != nil {
+		return 0, r.failed
+	}
+	n, err := r.reader.Read(p)
+	if n > 0 {
+		if invalid := r.validate(p[:n]); invalid != nil {
+			r.failed = invalid
+			return n, invalid
+		}
+	}
+	if errors.Is(err, io.EOF) {
+		if invalid := r.atEnd(); invalid != nil {
+			r.failed = invalid
+			return n, invalid
+		}
+	}
+	return n, err
+}
+
+// validate scans one chunk, carrying over a code unit and a surrogate pair that
+// the previous chunk ended in the middle of.
+func (r *utf16ValidatingReader) validate(chunk []byte) error {
+	buf := chunk
+	if len(r.half) > 0 {
+		buf = append(r.half, chunk...)
+	}
+
+	for len(buf) >= 2 {
+		unit := uint16(buf[1])<<8 | uint16(buf[0])
+		if !r.littleEndian {
+			unit = uint16(buf[0])<<8 | uint16(buf[1])
+		}
+		switch {
+		case r.wantLow:
+			if !isLowSurrogate(unit) {
+				return fmt.Errorf("%w: UTF-16 input has a high surrogate with no low half at byte offset %d",
+					ErrEncoding, r.highAt)
+			}
+			r.wantLow = false
+		case isHighSurrogate(unit):
+			r.wantLow = true
+			r.highAt = r.offset
+		case isLowSurrogate(unit):
+			return fmt.Errorf("%w: UTF-16 input has a low surrogate with no high half at byte offset %d",
+				ErrEncoding, r.offset)
+		}
+		buf = buf[2:]
+		r.offset += 2
+	}
+	r.half = append(r.half[:0], buf...)
+	return nil
+}
+
+// atEnd is the verdict on what the input ended with. A unit left half read and a
+// surrogate pair left half written are both damage: there is no longer a next
+// chunk to complete them.
+func (r *utf16ValidatingReader) atEnd() error {
+	if r.wantLow {
+		return fmt.Errorf("%w: UTF-16 input ends with a high surrogate with no low half at byte offset %d",
+			ErrEncoding, r.highAt)
+	}
+	if len(r.half) > 0 {
+		return fmt.Errorf("%w: UTF-16 input ends in the middle of a code unit at byte offset %d",
+			ErrEncoding, r.offset)
+	}
+	return nil
+}
+
+// isHighSurrogate reports whether unit is the first half of a surrogate pair.
+func isHighSurrogate(unit uint16) bool {
+	return unit >= 0xD800 && unit <= 0xDBFF
+}
+
+// isLowSurrogate reports whether unit is the second half of a surrogate pair.
+func isLowSurrogate(unit uint16) bool {
+	return unit >= 0xDC00 && unit <= 0xDFFF
 }
 
 // utf8ValidatingReader passes its input through unchanged and fails the read
@@ -207,10 +343,17 @@ var bomEncodings = []struct {
 	mark     []byte
 	encoding Encoding
 }{
-	{mark: []byte{0xFF, 0xFE}, encoding: EncodingUTF16LE},
-	{mark: []byte{0xFE, 0xFF}, encoding: EncodingUTF16BE},
-	{mark: []byte{0xEF, 0xBB, 0xBF}, encoding: encodingUTF8BOM},
+	{mark: bomUTF16LE, encoding: EncodingUTF16LE},
+	{mark: bomUTF16BE, encoding: EncodingUTF16BE},
+	{mark: bomUTF8, encoding: encodingUTF8BOM},
 }
+
+// The byte-order marks this package recognizes on the read side.
+var (
+	bomUTF16LE = []byte{0xFF, 0xFE}       //nolint:gochecknoglobals // constant-like
+	bomUTF16BE = []byte{0xFE, 0xFF}       //nolint:gochecknoglobals // constant-like
+	bomUTF8    = []byte{0xEF, 0xBB, 0xBF} //nolint:gochecknoglobals // constant-like
+)
 
 // detectSourceEncoding reports the text encoding path is written in, so a save
 // that overwrites it can write the same one. A save that always wrote plain

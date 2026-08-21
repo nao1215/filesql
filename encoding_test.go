@@ -553,3 +553,237 @@ func writeXLSXHeaderFixture(t *testing.T, path string, headers, values []string)
 	}
 	require.NoError(t, f.SaveAs(path))
 }
+
+// utf16FromUnits builds a UTF-16 file from code units, so a test can put a unit in
+// it that a string cannot hold: an unpaired surrogate is not a rune, and Go's
+// encoders replace it rather than write it.
+func utf16FromUnits(littleEndian bool, units []uint16) []byte {
+	out := make([]byte, 0, 2+2*len(units))
+	if littleEndian {
+		out = append(out, 0xFF, 0xFE)
+	} else {
+		out = append(out, 0xFE, 0xFF)
+	}
+	for _, u := range units {
+		low, high := byte(u&0xFF), byte(u>>8)
+		if littleEndian {
+			out = append(out, low, high)
+		} else {
+			out = append(out, high, low)
+		}
+	}
+	return out
+}
+
+// utf16Units is the code units of s, which for this file's inputs is one unit
+// per rune: every rune used here is below U+10000.
+func utf16Units(s string) []uint16 {
+	units := make([]uint16, 0, len(s))
+	for _, r := range s {
+		units = append(units, uint16(r)) //nolint:gosec // test input stays below U+10000
+	}
+	return units
+}
+
+// TestOpenRejectsDamagedUTF16 pins the UTF-16 half of the rule
+// TestOpenRejectsInvalidUTF8 pins for UTF-8: a text source this package cannot
+// decode fails the load rather than being stored with a replacement character
+// nobody can tell from one the file really held. A truncated download and an
+// unpaired surrogate are the two shapes damage takes here.
+func TestOpenRejectsDamagedUTF16(t *testing.T) {
+	t.Parallel()
+
+	whole := utf16Units("v\nabc\n")
+	loneHigh := append(utf16Units("v\na"), 0xD800)
+	loneHigh = append(loneHigh, utf16Units("b\n")...)
+	loneLow := append(utf16Units("v\na"), 0xDC00)
+	loneLow = append(loneLow, utf16Units("b\n")...)
+	// A high surrogate at end of file is a pair whose second half never came.
+	danglingHigh := append(utf16Units("v\nab\n"), 0xD800)
+
+	// Enough rows that the damage lands well past the first read buffer, so the
+	// check cannot be one that only looks at the head of the file.
+	far := make([]uint16, 0, 2+20000*6+2)
+	far = append(far, utf16Units("v\n")...)
+	for range 20000 {
+		far = append(far, utf16Units("value\n")...)
+	}
+	far = append(far, 0xD800)
+	far = append(far, utf16Units("\n")...)
+
+	for _, littleEndian := range []bool{true, false} {
+		name := "utf-16be"
+		if littleEndian {
+			name = "utf-16le"
+		}
+		tests := []struct {
+			name    string
+			content []byte
+		}{
+			{name: "unpaired high surrogate", content: utf16FromUnits(littleEndian, loneHigh)},
+			{name: "unpaired low surrogate", content: utf16FromUnits(littleEndian, loneLow)},
+			{name: "high surrogate at end of file", content: utf16FromUnits(littleEndian, danglingHigh)},
+			{name: "damage past the first read buffer", content: utf16FromUnits(littleEndian, far)},
+			{
+				name: "file cut in the middle of a unit",
+				content: func() []byte {
+					b := utf16FromUnits(littleEndian, whole)
+					return b[:len(b)-1]
+				}(),
+			},
+		}
+		for _, tt := range tests {
+			t.Run(name+" "+tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				path := filepath.Join(t.TempDir(), "damaged.csv")
+				require.NoError(t, os.WriteFile(path, tt.content, 0o600))
+
+				db, err := OpenContext(context.Background(), path)
+				if db != nil {
+					defer db.Close()
+				}
+				require.Error(t, err, "damaged UTF-16 must fail rather than store a replacement character")
+				assert.ErrorIs(t, err, ErrEncoding)
+			})
+		}
+	}
+}
+
+// TestOpenAcceptsWellFormedUTF16 keeps the check above from rejecting what it
+// exists to protect: a replacement character the file really holds is data, and
+// a surrogate pair is one astral character rather than two broken halves.
+func TestOpenAcceptsWellFormedUTF16(t *testing.T) {
+	t.Parallel()
+
+	pair := append(utf16Units("v\n"), 0xD83C, 0xDF63) // U+1F363, a sushi emoji
+	pair = append(pair, utf16Units("\n")...)
+
+	tests := []struct {
+		name  string
+		units []uint16
+		want  string
+	}{
+		{name: "a replacement character in the source", units: append(utf16Units("v\na"), 0xFFFD, 'b', '\n'), want: "a�b"},
+		{name: "a surrogate pair", units: pair, want: "🍣"},
+		{name: "plain text", units: utf16Units("v\nabc\n"), want: "abc"},
+	}
+
+	for _, littleEndian := range []bool{true, false} {
+		name := "utf-16be"
+		if littleEndian {
+			name = "utf-16le"
+		}
+		for _, tt := range tests {
+			t.Run(name+" "+tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				path := filepath.Join(t.TempDir(), "ok.csv")
+				require.NoError(t, os.WriteFile(path, utf16FromUnits(littleEndian, tt.units), 0o600))
+
+				db, err := OpenContext(context.Background(), path)
+				require.NoError(t, err)
+				defer db.Close()
+
+				var got string
+				require.NoError(t, db.QueryRowContext(context.Background(), `SELECT v FROM ok`).Scan(&got))
+				assert.Equal(t, tt.want, got)
+			})
+		}
+	}
+}
+
+// TestUTF16RoundTripKeepsAstralCharacters is the round trip the check has to
+// leave working: what this package writes as UTF-16, it must read back.
+func TestUTF16RoundTripKeepsAstralCharacters(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	const want = "🍣と日本語�"
+
+	for _, enc := range []Encoding{EncodingUTF16LE, EncodingUTF16BE} {
+		t.Run(enc.String(), func(t *testing.T) {
+			t.Parallel()
+
+			built, err := NewBuilder().
+				AddReader(strings.NewReader("v\n"+want+"\n"), "t", FileTypeCSV).
+				Build(ctx)
+			require.NoError(t, err)
+			db, err := built.Open(ctx)
+			require.NoError(t, err)
+
+			dir := t.TempDir()
+			require.NoError(t, DumpDatabase(db, dir, NewDumpOptions().WithEncoding(enc)))
+			require.NoError(t, db.Close())
+
+			reloaded, err := OpenContext(ctx, filepath.Join(dir, "t.csv"))
+			require.NoError(t, err)
+			defer reloaded.Close()
+
+			var got string
+			require.NoError(t, reloaded.QueryRowContext(ctx, `SELECT v FROM t`).Scan(&got))
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
+// TestUTF16ValidatingReaderVerdictIndependentOfChunking pins the property a
+// streaming validator is most likely to get wrong: a code unit or a surrogate
+// pair split across two reads must not be judged on its first half. The verdict
+// has to be the same at every read size, and an accepted input has to come
+// through byte for byte.
+func TestUTF16ValidatingReaderVerdictIndependentOfChunking(t *testing.T) {
+	t.Parallel()
+
+	inputs := []struct {
+		name  string
+		units []uint16
+		valid bool
+	}{
+		{name: "plain text", units: utf16Units("ab"), valid: true},
+		{name: "a surrogate pair", units: []uint16{0xD83C, 0xDF63}, valid: true},
+		{name: "a pair between text", units: []uint16{'a', 0xD83C, 0xDF63, 'b'}, valid: true},
+		{name: "a replacement character", units: []uint16{0xFFFD}, valid: true},
+		{name: "nothing but the mark", units: nil, valid: true},
+		{name: "an unpaired high surrogate", units: []uint16{0xD800, 'a'}, valid: false},
+		{name: "an unpaired low surrogate", units: []uint16{0xDC00, 'a'}, valid: false},
+		{name: "two high surrogates", units: []uint16{0xD800, 0xD800}, valid: false},
+		{name: "a high surrogate at the end", units: []uint16{'a', 0xD800}, valid: false},
+	}
+
+	for _, littleEndian := range []bool{true, false} {
+		for _, input := range inputs {
+			whole := utf16FromUnits(littleEndian, input.units)
+			cases := []struct {
+				name  string
+				data  []byte
+				valid bool
+			}{
+				{name: input.name, data: whole, valid: input.valid},
+				// The same input with its last byte cut off ends in the middle of
+				// a unit, which is damage whatever the units before it were.
+				{name: input.name + ", cut mid unit", data: whole[:len(whole)-1], valid: false},
+			}
+			for _, tc := range cases {
+				for size := 1; size <= len(tc.data)+2; size++ {
+					got, err := io.ReadAll(newUTF16ValidatingReader(&chunkedReader{
+						data: tc.data,
+						size: size,
+					}, littleEndian))
+					if tc.valid != (err == nil) {
+						t.Errorf("%s (little endian %v) read %d bytes at a time: err = %v, want valid = %v",
+							tc.name, littleEndian, size, err, tc.valid)
+						continue
+					}
+					if err == nil && !bytes.Equal(got, tc.data) {
+						t.Errorf("%s (little endian %v) read %d bytes at a time: got %x", tc.name, littleEndian, size, got)
+					}
+					if err != nil && !errors.Is(err, ErrEncoding) {
+						t.Errorf("%s (little endian %v) read %d bytes at a time: err = %v, want ErrEncoding",
+							tc.name, littleEndian, size, err)
+					}
+				}
+			}
+		}
+	}
+}
