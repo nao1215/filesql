@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	_ "modernc.org/sqlite"
 )
@@ -539,5 +540,83 @@ func TestValueCoercions(t *testing.T) {
 	}
 	if _, ok := toFloat(driver.Value(nil)); ok {
 		t.Fatal("toFloat(nil) should report false")
+	}
+}
+
+// TestStringHelpersCountCharacters pins the helpers that measure a string to
+// the unit the dialects measure in. All three count characters, and counting
+// bytes cut a character in half in the padding pair and returned a position
+// nothing could use in the search pair.
+func TestStringHelpersCountCharacters(t *testing.T) {
+	if err := RegisterFunctions(); err != nil {
+		t.Fatalf("RegisterFunctions() error: %v", err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		// Padding: the length is a count of characters, and the fill is cut at
+		// a character boundary.
+		{"lpad pads to a character count", `SELECT LPAD('日本', 4, '*')`, "**日本"},
+		{"rpad pads to a character count", `SELECT RPAD('日本', 4, '*')`, "日本**"},
+		{"lpad cuts at a character", `SELECT LPAD('日本語', 2, '*')`, "日本"},
+		{"rpad cuts at a character", `SELECT RPAD('日本語', 2, '*')`, "日本"},
+		{"lpad fills with a multibyte pad", `SELECT LPAD('abc', 5, '日')`, "日日abc"},
+		{"rpad fills with a multibyte pad", `SELECT RPAD('abc', 5, '日')`, "abc日日"},
+		{"lpad fills an empty subject", `SELECT LPAD('', 3, '日')`, "日日日"},
+		{"lpad repeats a longer pad", `SELECT LPAD('a', 4, 'xy')`, "xyxa"},
+		// The ASCII cases that must not change.
+		{"lpad ascii", `SELECT LPAD('abc', 5, '*')`, "**abc"},
+		{"rpad ascii", `SELECT RPAD('abc', 5, '*')`, "abc**"},
+		{"lpad cuts a long subject", `SELECT LPAD('abcdef', 3, '*')`, "abc"},
+		{"lpad with an empty pad", `SELECT LPAD('abc', 5, '')`, "abc"},
+		{"lpad of the same length", `SELECT LPAD('abc', 3, '*')`, "abc"},
+
+		// Search: the position is a count of characters.
+		{"locate finds a character position", `SELECT LOCATE('本', '日本語')`, "2"},
+		{"locate at the start", `SELECT LOCATE('日', '日本語')`, "1"},
+		{"locate at the end", `SELECT LOCATE('語', '日本語')`, "3"},
+		{"locate from a character position", `SELECT LOCATE('語', '日本語', 2)`, "3"},
+		{"locate skips a match", `SELECT LOCATE('本', '本日本', 2)`, "3"},
+		{"locate not found", `SELECT LOCATE('x', '日本語')`, "0"},
+		{"locate past the end", `SELECT LOCATE('語', '日本語', 4)`, "0"},
+		{"strpos finds a character position", `SELECT STRPOS('日本語', '語')`, "3"},
+		{"strpos not found", `SELECT STRPOS('日本語', 'x')`, "0"},
+		// The ASCII cases that must not change.
+		{"locate ascii", `SELECT LOCATE('b', 'abcabc')`, "2"},
+		{"locate ascii with pos", `SELECT LOCATE('b', 'abcabc', 3)`, "5"},
+		{"strpos ascii", `SELECT STRPOS('abc', 'c')`, "3"},
+
+		// Case: a letter is a letter whatever its script.
+		{"initcap keeps an accent as a letter", `SELECT INITCAP('école du soir')`, "École Du Soir"},
+		{"initcap lowercases the rest of a word", `SELECT INITCAP('ÉCOLE')`, "École"},
+		{"initcap leaves text with no case alone", `SELECT INITCAP('日本語 の 文字')`, "日本語 の 文字"},
+		{"initcap ascii", `SELECT INITCAP('hello world')`, "Hello World"},
+		{"initcap a digit-led word", `SELECT INITCAP('123abc def')`, "123abc Def"},
+		{"unicode_upper folds beyond ascii", `SELECT unicode_upper('école')`, "ÉCOLE"},
+		{"unicode_lower folds beyond ascii", `SELECT unicode_lower('ÉCOLE')`, "école"},
+		{"unicode_upper leaves caseless text alone", `SELECT unicode_upper('日本語')`, "日本語"},
+		{"unicode_upper ascii", `SELECT unicode_upper('abc')`, "ABC"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got sql.NullString
+			if err := db.QueryRowContext(context.Background(), tt.sql).Scan(&got); err != nil {
+				t.Fatalf("%s: %v", tt.sql, err)
+			}
+			if !got.Valid || got.String != tt.want {
+				t.Errorf("%s = %v, want %q", tt.sql, got, tt.want)
+			}
+			if got.Valid && !utf8.ValidString(got.String) {
+				t.Errorf("%s returned bytes that are not UTF-8: %x", tt.sql, got.String)
+			}
+		})
 	}
 }

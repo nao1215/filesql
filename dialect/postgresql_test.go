@@ -43,7 +43,10 @@ func TestPostgreSQLTranslate(t *testing.T) {
 		// go. Dropping it is only correct when it is the comma SQLite defaults to.
 		{"P-6_string_agg_distinct_comma", "SELECT STRING_AGG(DISTINCT name, ',') FROM t", "SELECT group_concat(DISTINCT name) AS \"STRING_AGG(DISTINCT name, ',')\" FROM t"},
 		{"P-6_string_agg_distinct_comma_spaced", "SELECT STRING_AGG( DISTINCT name , ',' ) FROM t", "SELECT group_concat(DISTINCT name) AS \"STRING_AGG( DISTINCT name , ',' )\" FROM t"},
-		{"P-6_string_agg_distinct_expression", "SELECT STRING_AGG(DISTINCT UPPER(name), ',') FROM t", "SELECT group_concat(DISTINCT UPPER(name)) AS \"STRING_AGG(DISTINCT UPPER(name), ',')\" FROM t"},
+		{"P-x_upper", "SELECT UPPER(name) FROM t", `SELECT unicode_upper(name) AS "UPPER(name)" FROM t`},
+		{"P-x_lower", "SELECT LOWER(name) FROM t", `SELECT unicode_lower(name) AS "LOWER(name)" FROM t`},
+
+		{"P-6_string_agg_distinct_expression", "SELECT STRING_AGG(DISTINCT UPPER(name), ',') FROM t", "SELECT group_concat(DISTINCT unicode_upper(name)) AS \"STRING_AGG(DISTINCT UPPER(name), ',')\" FROM t"},
 		// An ORDER BY belongs to the aggregate, not to the separator, and SQLite
 		// takes it inside group_concat.
 		{"P-6_string_agg_distinct_order_by", "SELECT STRING_AGG(DISTINCT name, ',' ORDER BY name) FROM t", "SELECT group_concat(DISTINCT name ORDER BY name) AS \"STRING_AGG(DISTINCT name, ',' ORDER BY name)\" FROM t"},

@@ -184,6 +184,8 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 		return rewriteTrim(tokens, open, closeIdx, pgCallPass)
 	case "OVERLAY":
 		return rewriteOverlay(tokens, open, closeIdx, pgCallPass)
+	case fnNameUpper, fnNameLower:
+		return rewriteRenameCall(tokens, open, closeIdx, unicodeCaseHelper(tokens[nameIdx].text), pgCallPass)
 	case "BTRIM":
 		return rewriteRenameCall(tokens, open, closeIdx, "trim", pgCallPass)
 	case "JSONB_ARRAY_LENGTH", "JSON_ARRAY_LENGTH":

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	sqlite "modernc.org/sqlite"
@@ -165,11 +166,15 @@ func registerAll() error {
 		"googlesql_safe_cast": {2, dialectCast(GoogleSQL, true)},
 
 		// PostgreSQL helpers.
-		"to_char":        {2, fnToChar},
-		"to_date":        {2, fnToDate},
-		"date_trunc":     {2, fnDateTrunc},
-		"split_part":     {3, fnSplitPart},
-		"initcap":        {1, fnInitcap},
+		"to_char":    {2, fnToChar},
+		"to_date":    {2, fnToDate},
+		"date_trunc": {2, fnDateTrunc},
+		"split_part": {3, fnSplitPart},
+		"initcap":    {1, fnInitcap},
+		// SQLite's own upper() and lower() fold ASCII alone, which is not what
+		// any of these dialects does; their calls are rewritten onto these.
+		"unicode_upper":  {1, fnUnicodeUpper},
+		"unicode_lower":  {1, fnUnicodeLower},
 		"strpos":         {2, fnStrpos},
 		"left":           {2, fnLeft},
 		"right":          {2, fnRight},
@@ -607,21 +612,19 @@ func fnLocate(args []driver.Value) (driver.Value, error) {
 		if !ok || pos < 1 {
 			return int64(0), nil
 		}
+		// The start is a character position too, which is what makes it usable
+		// with the position this returns.
 		start = int(pos) - 1
-		if start > len(str) {
-			return int64(0), nil
-		}
 	}
-	idx := strings.Index(str[start:], substr)
-	if idx < 0 {
-		return int64(0), nil
-	}
-	return int64(start + idx + 1), nil
+	return int64(characterIndex(str, substr, start)), nil
 }
 
 func fnLpad(args []driver.Value) (driver.Value, error) { return pad(args, true) }
 func fnRpad(args []driver.Value) (driver.Value, error) { return pad(args, false) }
 
+// pad implements LPAD and RPAD. The length is a count of characters in all
+// three dialects, so the arithmetic is over runes: measuring in bytes cut a
+// multibyte character in half and returned bytes that are not UTF-8.
 func pad(args []driver.Value, left bool) (driver.Value, error) {
 	s, ok1 := toString(args[0])
 	n, ok2 := toInt(args[1])
@@ -633,22 +636,23 @@ func pad(args []driver.Value, left bool) (driver.Value, error) {
 		return nil, nil
 	}
 	length := int(n)
-	if len(s) >= length {
-		return s[:length], nil
+	runes := []rune(s)
+	if len(runes) >= length {
+		return string(runes[:length]), nil
 	}
 	if padStr == "" {
 		return s, nil
 	}
-	needed := length - len(s)
-	var fill strings.Builder
-	for fill.Len() < needed {
-		fill.WriteString(padStr)
+	padRunes := []rune(padStr)
+	filler := make([]rune, 0, length-len(runes))
+	for len(filler) < length-len(runes) {
+		filler = append(filler, padRunes...)
 	}
-	filler := fill.String()[:needed]
+	filler = filler[:length-len(runes)]
 	if left {
-		return filler + s, nil
+		return string(filler) + s, nil
 	}
-	return s + filler, nil
+	return s + string(filler), nil
 }
 
 // fnSubstringIndex implements MySQL SUBSTRING_INDEX(str, delim, count).
@@ -1112,8 +1116,31 @@ func fnInitcap(args []driver.Value) (driver.Value, error) {
 	return b.String(), nil
 }
 
+// isAlnumRune reports whether r is part of a word, which is what decides where
+// INITCAP capitalizes. A letter is a letter whatever its script: testing the
+// ASCII range read an accented letter as a separator, so "école" came back
+// "éCole".
+// fnUnicodeUpper and fnUnicodeLower fold case over the whole of Unicode, which
+// is what MySQL, PostgreSQL and GoogleSQL do and what SQLite's own upper() and
+// lower() do not: theirs stop at ASCII, so UPPER('école') came back 'éCOLE'.
+func fnUnicodeUpper(args []driver.Value) (driver.Value, error) {
+	s, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	return strings.ToUpper(s), nil
+}
+
+func fnUnicodeLower(args []driver.Value) (driver.Value, error) {
+	s, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	return strings.ToLower(s), nil
+}
+
 func isAlnumRune(r rune) bool {
-	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 // fnStrpos implements PostgreSQL STRPOS(string, substring): 1-based index or 0.
@@ -1123,11 +1150,25 @@ func fnStrpos(args []driver.Value) (driver.Value, error) {
 	if !ok1 || !ok2 {
 		return nil, nil
 	}
-	idx := strings.Index(s, sub)
-	if idx < 0 {
-		return int64(0), nil
+	return int64(characterIndex(s, sub, 0)), nil
+}
+
+// characterIndex is the 1-based position of sub in s counted in characters, or
+// 0 when it is not there. from is a character offset to start at, which is what
+// LOCATE's third argument means. Every dialect here counts a position in
+// characters; strings.Index answers in bytes, and returning that answered a
+// number that indexes nothing in text outside ASCII.
+func characterIndex(s, sub string, from int) int {
+	runes := []rune(s)
+	if from < 0 || from > len(runes) {
+		return 0
 	}
-	return int64(idx + 1), nil
+	tail := string(runes[from:])
+	idx := strings.Index(tail, sub)
+	if idx < 0 {
+		return 0
+	}
+	return from + utf8.RuneCountInString(tail[:idx]) + 1
 }
 
 func fnLeft(args []driver.Value) (driver.Value, error)  { return leftRight(args, true) }

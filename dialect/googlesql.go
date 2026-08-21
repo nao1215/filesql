@@ -210,6 +210,8 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 		return rewriteCastCall(tokens, open, closeIdx, GoogleSQL, "googlesql_cast", googlesqlCallPass)
 	case "SAFE_CAST":
 		return rewriteSafeCast(tokens, open, closeIdx)
+	case fnNameUpper, fnNameLower:
+		return rewriteRenameCall(tokens, open, closeIdx, unicodeCaseHelper(tokens[nameIdx].text), googlesqlCallPass)
 	case "FORMAT":
 		return rewriteRenameCall(tokens, open, closeIdx, "printf", googlesqlCallPass)
 	case "CONCAT":
