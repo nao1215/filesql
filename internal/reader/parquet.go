@@ -17,29 +17,60 @@ import (
 	"github.com/nao1215/filesql/internal/infer"
 )
 
+// parquetTable reads the whole of a Parquet file into an Arrow table, with the
+// panic a damaged file can raise turned into an error.
+//
+// A Parquet file this package did not write is untrusted input, and the Arrow
+// library panics on some of it rather than reporting -- while parsing the footer
+// as well as while reading a page. One changed byte in the footer of a file
+// whose magic bytes, length and offsets are all still right reached a nil
+// dereference inside NewParquetReader, before the guard that used to sit around
+// the table read alone. A caller loading a file chosen by someone else cannot
+// defend against a panic, and every other malformed input here is an error.
+//
+// The guard covers the library and nothing else: the rows go to the caller's
+// emit after this returns, so a failure of theirs is not reported as damaged
+// data. It can go when the library stops panicking on its own error paths.
+func parquetTable(ctx context.Context, data []byte) (tbl arrow.Table, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			tbl = nil
+			err = parseError(nil, "parquet data is damaged: %v", r)
+		}
+	}()
+
+	pqReader, err := pqfile.NewParquetReader(&bytesReaderAt{data: data})
+	if err != nil {
+		return nil, parseError(err, "failed to create parquet reader")
+	}
+	defer pqReader.Close()
+
+	arrowReader, err := pqarrow.NewFileReader(pqReader, pqarrow.ArrowReadProperties{}, nil)
+	if err != nil {
+		return nil, parseError(err, "failed to create arrow reader")
+	}
+
+	table, err := readArrowTable(ctx, arrowReader)
+	if err != nil {
+		return nil, parseError(err, "failed to read table")
+	}
+	return table, nil
+}
+
 // readArrowTable is pqarrow.FileReader.ReadTable done in the calling goroutine,
-// with the panic a damaged file can raise turned into an error.
+// so a panic it raises can be recovered by the read that called it.
 //
 // A Parquet file this package did not write is untrusted input, and the reader
 // panics on some of it rather than reporting: a corrupted page header reaches a
 // nil dereference, and a row group that fails to read is cleaned up by releasing
 // a column that was never built. ReadTable does the column reads in goroutines
-// of its own, where a recover here cannot reach them and the process dies, so
-// the same reads are done here instead -- one column at a time, in this
-// goroutine, where the boundary can be held. A caller reading a file chosen by
-// someone else cannot defend against a panic; every other malformed input in
-// this package is an error, and this one is too now.
+// of its own, where a recover in the calling goroutine cannot reach them and the
+// process dies, so the same reads are done here instead -- one column at a time,
+// where the boundary can be held.
 //
-// The recover and this loop can go when the library stops panicking on its own
-// error paths; ReadTable is the call this replaces.
+// This loop can go when the library stops panicking on its own error paths;
+// ReadTable is the call it replaces.
 func readArrowTable(ctx context.Context, arrowReader *pqarrow.FileReader) (tbl arrow.Table, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			tbl = nil
-			err = fmt.Errorf("parquet data is damaged: %v", r)
-		}
-	}()
-
 	meta := arrowReader.ParquetReader().MetaData()
 	columnIndices := make([]int, meta.Schema.NumColumns())
 	for i := range columnIndices {
@@ -197,20 +228,9 @@ func readParquet(src io.Reader, opts Options, emit Emit) (Result, error) {
 		return Result{}, errNotParquet(data[:min(len(data), len(parquetMagic))])
 	}
 
-	pqReader, err := pqfile.NewParquetReader(&bytesReaderAt{data: data})
+	table, err := parquetTable(context.Background(), data)
 	if err != nil {
-		return Result{}, parseError(err, "failed to create parquet reader")
-	}
-	defer pqReader.Close()
-
-	arrowReader, err := pqarrow.NewFileReader(pqReader, pqarrow.ArrowReadProperties{}, nil)
-	if err != nil {
-		return Result{}, parseError(err, "failed to create arrow reader")
-	}
-
-	table, err := readArrowTable(context.Background(), arrowReader)
-	if err != nil {
-		return Result{}, parseError(err, "failed to read table")
+		return Result{}, err
 	}
 	defer table.Release()
 
