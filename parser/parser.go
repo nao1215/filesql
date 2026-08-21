@@ -764,6 +764,15 @@ func createDecompressedReader(reader io.Reader, fileType FileType) (io.Reader, f
 	}
 }
 
+// delimitedSyntaxError is the sentinel for input of the given delimiter that
+// does not describe a table.
+func delimitedSyntaxError(delimiter rune) error {
+	if delimiter == '\t' {
+		return ErrTSVSyntax
+	}
+	return ErrCSVSyntax
+}
+
 // parseDelimited parses CSV or TSV data. TSV is read literally; see TSVReader.
 func parseDelimited(reader io.Reader, delimiter rune, fileTypeName string) (*TableData, error) {
 	normalized := NormalizeLineEndings(reader)
@@ -792,6 +801,14 @@ func parseDelimited(reader io.Reader, delimiter rune, fileTypeName string) (*Tab
 
 	dataRecords := make([][]string, 0, len(records)-1)
 	for i := 1; i < len(records); i++ {
+		// Everything downstream reads a record by header position, so a record
+		// of another length is a table nothing can use. The CSV reader reports
+		// this itself; the TSV one takes every line as it comes, which is what
+		// makes the check belong here rather than in either reader.
+		if len(records[i]) != len(headers) {
+			return nil, fmt.Errorf("%w: record on line %d has %d fields, the header has %d",
+				delimitedSyntaxError(delimiter), i+1, len(records[i]), len(headers))
+		}
 		dataRecords = append(dataRecords, records[i])
 	}
 
