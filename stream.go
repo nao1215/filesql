@@ -18,13 +18,21 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
-// handleCloseError is a helper function to handle close errors consistently
-func handleCloseError(closeFunc func() error) func() {
-	return func() {
-		if closeErr := closeFunc(); closeErr != nil {
-			// In the future, this could be enhanced with proper logging
-			_ = closeErr
-		}
+// closeQuietly closes what a decompression reader handed back, dropping the
+// error: a close failure on a reader says nothing about the data already read
+// from it, and the load either succeeded or has an error of its own to report.
+//
+// It performs the close rather than returning a function that does, because a
+// helper of the second shape reads as if the defer closes and does not: two of
+// the three callers wrote "defer handleCloseError(f)" and closed nothing, which
+// is a shape the compiler cannot object to.
+func closeQuietly(closeFunc func() error) {
+	if closeFunc == nil {
+		return
+	}
+	if closeErr := closeFunc(); closeErr != nil {
+		// In the future, this could be enhanced with proper logging
+		_ = closeErr
 	}
 }
 
@@ -53,9 +61,7 @@ func (p *streamingParser) parseFromReader(reader io.Reader) (*table, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to create decompressed reader: %w", ErrCompression, err)
 	}
-	if closeFunc != nil {
-		defer handleCloseError(closeFunc)
-	}
+	defer closeQuietly(closeFunc)
 
 	// Parse based on base file type
 	baseType := p.fileType
@@ -289,9 +295,7 @@ func (p *streamingParser) ProcessInChunks(reader io.Reader, processor chunkProce
 	if err != nil {
 		return fmt.Errorf("%w: failed to create decompressed reader: %w", ErrCompression, err)
 	}
-	if closeFunc != nil {
-		defer handleCloseError(closeFunc)
-	}
+	defer closeQuietly(closeFunc)
 
 	// Parse based on base file type
 	baseType := p.fileType
