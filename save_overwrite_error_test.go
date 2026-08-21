@@ -178,7 +178,7 @@ func TestOverwriteWorkbookAtPath_Failures(t *testing.T) {
 func TestWriteXLSXWorkbookCompressed_UnknownCodec(t *testing.T) {
 	t.Parallel()
 
-	err := writeXLSXWorkbookCompressed(&bytes.Buffer{}, "book.xlsx", nil, unknownCompression)
+	err := writeXLSXWorkbookCompressed(&bytes.Buffer{}, "book.xlsx", nil, nil, unknownCompression)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrCompression)
 }
