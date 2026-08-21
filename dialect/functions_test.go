@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"math"
 	"regexp"
 	"strings"
 	"testing"
@@ -1189,5 +1190,50 @@ func TestSubstrAndRoundAnswerNullAndBadArity(t *testing.T) {
 	}
 	if _, err := fnGoogleSQLSubstr([]driver.Value{"abc", int64(1), int64(2), int64(3)}); err == nil {
 		t.Error("googlesql_substr accepted four arguments")
+	}
+}
+
+// TestRoundAtTheEdgesOfAFloat64 pins the digit counts where the scaling itself
+// is the problem. The guard is on what the scaling produces rather than on the
+// count, because the two are not the same question: at 18 digits the scale is
+// finite and a value below it does round, while at 400 the scale is infinite and
+// nothing can.
+func TestRoundAtTheEdgesOfAFloat64(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		value   float64
+		digits  int64
+		want    float64
+		wantErr bool
+	}{
+		"a value below the last place still rounds":       {value: 5e-19, digits: 18, want: 1e-18},
+		"a scale too large to represent leaves the value": {value: 1.5, digits: 400, want: 1.5},
+		"a large value at a large scale leaves the value": {value: 1e300, digits: 300, want: 1e300},
+		"a large value rounded to a ten is unchanged":     {value: math.MaxFloat64, digits: -1, want: math.MaxFloat64},
+		// Rounding the largest float64 up to the next unit of 1e308 lands past
+		// what a float64 holds. BigQuery raises on the overflow, and an infinity
+		// here would flow into the rest of the query as a number.
+		"a result past the largest float64 is refused": {value: math.MaxFloat64, digits: -308, wantErr: true},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := fnDialectRound([]driver.Value{tt.value, tt.digits})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("dialect_round(%v, %d) = %v, want an error", tt.value, tt.digits, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("dialect_round(%v, %d): %v", tt.value, tt.digits, err)
+			}
+			if got != tt.want {
+				t.Fatalf("dialect_round(%v, %d) = %v, want %v", tt.value, tt.digits, got, tt.want)
+			}
+		})
 	}
 }
