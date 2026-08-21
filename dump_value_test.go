@@ -2,6 +2,7 @@ package filesql
 
 import (
 	"database/sql"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -128,7 +129,61 @@ func TestDumpValueFormatting(t *testing.T) {
 			"INSERT INTO t VALUES (9e999)",
 			"INSERT INTO t VALUES (-9e999)")
 
-		assert.Equal(t, "v\n9e999\n-9e999\n", dumpToString(t, db, NewDumpOptions()))
+		outDir := t.TempDir()
+		require.NoError(t, DumpDatabase(db, outDir))
+		assert.Equal(t, "v\n9e999\n-9e999\n", readFileString(t, filepath.Join(outDir, "t.csv")))
+
+		// Read back through this package the column is TEXT holding those
+		// literals, by the same rule that keeps an integer past int64 as text: a
+		// numeric column would damage the value, since no float64 holds it as
+		// written. What the literals are for is every other reader of the file,
+		// including SQLite's own REAL affinity, which converts them to the
+		// infinities they overflow to where "+Inf" is not a number at all.
+		back, err := OpenContext(t.Context(), filepath.Join(outDir, "t.csv"))
+		require.NoError(t, err)
+		defer back.Close()
+
+		rows, err := back.QueryContext(t.Context(), "SELECT typeof(v), v FROM t")
+		require.NoError(t, err)
+		defer rows.Close()
+
+		reloaded := make([]string, 0, 2)
+		for rows.Next() {
+			var kind, value string
+			require.NoError(t, rows.Scan(&kind, &value))
+			assert.Equal(t, "text", kind)
+			reloaded = append(reloaded, value)
+		}
+		require.NoError(t, rows.Err())
+		assert.Equal(t, []string{"9e999", "-9e999"}, reloaded)
+
+		// The literal is what SQLite's own affinity reads as an infinity, which
+		// is the promise the spelling carries.
+		var asReal float64
+		require.NoError(t, back.QueryRowContext(t.Context(),
+			`SELECT CAST(v AS REAL) FROM t LIMIT 1`).Scan(&asReal))
+		assert.True(t, math.IsInf(asReal, 1))
+	})
+
+	// An auto-save writes through the same formatting, and it is the path where
+	// a caller sees the change without asking for a dump: the file they loaded
+	// is the file that gets rewritten.
+	t.Run("a REAL column is still REAL after an auto-save and a load", func(t *testing.T) {
+		t.Parallel()
+
+		source := filepath.Join(t.TempDir(), "m.csv")
+		require.NoError(t, os.WriteFile(source, []byte("amount\n10.00\n5.00\n"), 0o600))
+		require.NoError(t, autoSaveOverwrite(t, []string{source}, "UPDATE m SET amount = amount WHERE 1"))
+
+		back, err := OpenContext(t.Context(), source)
+		require.NoError(t, err)
+		defer back.Close()
+
+		var kind, quarter string
+		require.NoError(t, back.QueryRowContext(t.Context(),
+			"SELECT typeof(amount), amount/4 FROM m LIMIT 1").Scan(&kind, &quarter))
+		assert.Equal(t, "real", kind)
+		assert.Equal(t, "2.5", quarter)
 	})
 
 	t.Run("a REAL column is still REAL after a save and a load", func(t *testing.T) {
