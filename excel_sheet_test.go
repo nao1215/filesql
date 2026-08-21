@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -688,4 +690,101 @@ func TestBuilderSheetPolicyDefaultIsAll(t *testing.T) {
 	if got := newStreamProcessor(1).excelSheetPolicy; got != ExcelSheetPolicyAll {
 		t.Errorf("a new stream processor loads with the %s policy, want %s", got, ExcelSheetPolicyAll)
 	}
+}
+
+// TestSaveKeepsTheSheetsThePolicyDidNotLoad pins that a write-back does not
+// delete what it did not read. The policy says which sheets to load; the save
+// used to rebuild the workbook from the tables it held, so a sheet the caller
+// had asked to ignore was removed from their file, with nothing said and no
+// query having to run.
+func TestSaveKeepsTheSheetsThePolicyDidNotLoad(t *testing.T) {
+	t.Parallel()
+
+	for _, hidden := range []sheetVisibility{sheetHidden, sheetVeryHidden} {
+		t.Run(map[sheetVisibility]string{sheetHidden: "hidden", sheetVeryHidden: "very hidden"}[hidden], func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			path := visibilityWorkbook(t, filepath.Join(t.TempDir(), "book.xlsx"),
+				sheetSpec{name: defaultSheetName},
+				sheetSpec{name: "Secret", visibility: hidden},
+			)
+
+			validated, err := NewBuilder().AddPath(path).
+				WithExcelSheetPolicy(ExcelSheetPolicyVisibleOnly).
+				EnableAutoSave("").Build(ctx)
+			require.NoError(t, err)
+			db, err := validated.Open(ctx)
+			require.NoError(t, err)
+			// The save happens on close, with nothing edited.
+			require.NoError(t, db.Close())
+
+			after, err := excelize.OpenFile(path)
+			require.NoError(t, err)
+			defer after.Close()
+
+			assert.Contains(t, after.GetSheetList(), "Secret", "the sheet the policy skipped was deleted from the workbook")
+			rows, err := after.GetRows("Secret")
+			require.NoError(t, err)
+			assert.Equal(t, [][]string{{"v"}, {"Secret"}}, rows, "the skipped sheet kept its rows")
+
+			visible, err := after.GetSheetVisible("Secret")
+			require.NoError(t, err)
+			assert.False(t, visible, "the skipped sheet is still hidden")
+		})
+	}
+}
+
+// TestSaveKeepsWhatItDidNotWrite pins the rest of what a workbook carries. The
+// save rebuilt the file from values, so a column width, a merged range and a
+// comment were gone after a save that changed nothing.
+func TestSaveKeepsWhatItDidNotWrite(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "styled.xlsx")
+
+	book := excelize.NewFile()
+	require.NoError(t, book.SetCellValue(defaultSheetName, "A1", "n"))
+	require.NoError(t, book.SetCellValue(defaultSheetName, "A2", 3))
+	require.NoError(t, book.SetColWidth(defaultSheetName, "A", "A", 30))
+	style, err := book.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
+	require.NoError(t, err)
+	require.NoError(t, book.SetCellStyle(defaultSheetName, "A2", "A2", style))
+	require.NoError(t, book.MergeCell(defaultSheetName, "D1", "E1"))
+	require.NoError(t, book.AddComment(defaultSheetName, excelize.Comment{Cell: "A1", Text: "note"}))
+	require.NoError(t, book.SaveAs(path))
+	require.NoError(t, book.Close())
+
+	validated, err := NewBuilder().AddPath(path).EnableAutoSave("").Build(ctx)
+	require.NoError(t, err)
+	db, err := validated.Open(ctx)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	after, err := excelize.OpenFile(path)
+	require.NoError(t, err)
+	defer after.Close()
+
+	// A cell the save does rewrite keeps the style it carried: the value is
+	// written over it rather than the cell being built again.
+	written, err := after.GetCellStyle(defaultSheetName, "A2")
+	require.NoError(t, err)
+	assert.NotZero(t, written, "the style of a rewritten cell was dropped")
+
+	width, err := after.GetColWidth(defaultSheetName, "A")
+	require.NoError(t, err)
+	assert.InDelta(t, 30.0, width, 0.001, "the column width was reset")
+
+	merged, err := after.GetMergeCells(defaultSheetName)
+	require.NoError(t, err)
+	assert.Len(t, merged, 1, "the merged range was dropped")
+
+	comments, err := after.GetComments(defaultSheetName)
+	require.NoError(t, err)
+	assert.Len(t, comments, 1, "the comment was dropped")
+
+	rows, err := after.GetRows(defaultSheetName)
+	require.NoError(t, err)
+	assert.Equal(t, [][]string{{"n"}, {"3"}}, rows, "the rows are still the table's")
 }
