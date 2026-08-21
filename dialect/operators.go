@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -596,18 +597,28 @@ func fnOverlay(args []driver.Value) (driver.Value, error) {
 		}
 		count = n
 	}
+	// PostgreSQL defines the call as
+	// substring(s from 1 for start-1) || replacement || substring(s from start+count),
+	// so following the definition settles the boundaries rather than clamping
+	// them one at a time. A start below 1 makes the first substring's length
+	// negative, which is the error PostgreSQL raises; a negative count makes the
+	// tail begin before the overlaid position, so part of the string is repeated,
+	// which is the answer it gives.
 	if start < 1 {
-		start = 1
-	}
-	if count < 0 {
-		count = 0
+		return nil, errors.New("dialect: OVERLAY: negative substring length not allowed")
 	}
 	// Clamp in int64 before narrowing: a FOR count near math.MaxInt64 is a
-	// perfectly ordinary SQLite integer literal, and head+count would wrap to a
+	// perfectly ordinary SQLite integer literal, and start+count would wrap to a
 	// negative slice bound.
 	length := int64(len(runes))
 	head := min(start-1, length)
-	tail := min(head+min(count, length), length)
+	tailStart := int64(1)
+	if count > length-start {
+		tailStart = length + 1
+	} else if start+count > 1 {
+		tailStart = start + count
+	}
+	tail := min(max(tailStart-1, 0), length)
 	return string(runes[:head]) + replacement + string(runes[tail:]), nil
 }
 

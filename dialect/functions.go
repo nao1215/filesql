@@ -106,36 +106,50 @@ func registerAll() error {
 		nArg int32
 		fn   scalarFn
 	}{
-		"regexp":          {2, fnRegexp}, // REGEXP(pattern, s); also the "x REGEXP y" operator
-		"if":              {3, fnIf},     // IF(cond, a, b)
-		"date_format":     {2, fnDateFormat},
-		"str_to_date":     {2, fnStrToDate},
-		"datediff":        {2, fnDateDiff},
-		"date_part":       {2, fnDatePart},
-		unitYear:          {1, unaryDatePart(unitYear)},
-		unitMonth:         {1, unaryDatePart(unitMonth)},
-		unitDay:           {1, unaryDatePart(unitDay)},
-		unitHour:          {1, unaryDatePart(unitHour)},
-		unitMinute:        {1, unaryDatePart(unitMinute)},
-		unitSecond:        {1, unaryDatePart(unitSecond)},
-		unitDayOfWeek:     {1, unaryDatePart(unitDayOfWeek)},
-		unitDayOfYear:     {1, unaryDatePart(unitDayOfYear)},
-		unitWeekday:       {1, unaryDatePart(unitWeekday)},
-		"locate":          {-1, fnLocate},
-		"lpad":            {3, fnLpad},
-		"rpad":            {3, fnRpad},
+		"regexp":      {2, fnRegexp}, // REGEXP(pattern, s); also the "x REGEXP y" operator
+		"if":          {3, fnIf},     // IF(cond, a, b)
+		"date_format": {2, fnDateFormat},
+		"str_to_date": {2, fnStrToDate},
+		"datediff":    {2, fnDateDiff},
+		"date_part":   {2, fnDatePart},
+		unitYear:      {1, unaryDatePart(unitYear)},
+		unitMonth:     {1, unaryDatePart(unitMonth)},
+		unitDay:       {1, unaryDatePart(unitDay)},
+		unitHour:      {1, unaryDatePart(unitHour)},
+		unitMinute:    {1, unaryDatePart(unitMinute)},
+		unitSecond:    {1, unaryDatePart(unitSecond)},
+		unitDayOfWeek: {1, unaryDatePart(unitDayOfWeek)},
+		unitDayOfYear: {1, unaryDatePart(unitDayOfYear)},
+		unitWeekday:   {1, unaryDatePart(unitWeekday)},
+		"locate":      {-1, fnLocate},
+		"lpad":        {-1, fnLpad},
+		"rpad":        {-1, fnRpad},
+
+		// LPAD and RPAD answer a negative length and an empty pad differently
+		// per dialect, so each dialect's rewrite names its own helper; see
+		// padRules.
+		"mysql_lpad":      {-1, padFor(mysqlPadRules, true)},
+		"mysql_rpad":      {-1, padFor(mysqlPadRules, false)},
+		"postgresql_lpad": {-1, padFor(postgresqlPadRules, true)},
+		"postgresql_rpad": {-1, padFor(postgresqlPadRules, false)},
 		"substring_index": {3, fnSubstringIndex},
-		"repeat":          {2, fnRepeat},
-		"space":           {1, fnSpace},
-		"truncate":        {2, fnTruncate},
-		"reverse":         {1, fnReverse},
-		"find_in_set":     {2, fnFindInSet},
-		"field":           {-1, fnField},
-		"elt":             {-1, fnElt},
-		"monthname":       {1, fnMonthName},
-		"dayname":         {1, fnDayName},
-		"last_day":        {1, fnLastDay},
-		"from_unixtime":   {-1, fnFromUnixtime},
+
+		// SUBSTRING at position 0 and at a negative position is answered
+		// differently by each dialect, and by SQLite's own substr(), so each
+		// dialect's rewrite names its own helper.
+		"mysql_substr":      {-1, fnMySQLSubstr},
+		"postgresql_substr": {-1, fnPostgreSQLSubstr},
+		"repeat":            {2, fnRepeat},
+		"space":             {1, fnSpace},
+		"truncate":          {2, fnTruncate},
+		"reverse":           {1, fnReverse},
+		"find_in_set":       {2, fnFindInSet},
+		"field":             {-1, fnField},
+		"elt":               {-1, fnElt},
+		"monthname":         {1, fnMonthName},
+		"dayname":           {1, fnDayName},
+		"last_day":          {1, fnLastDay},
+		"from_unixtime":     {-1, fnFromUnixtime},
 
 		// Shared by every dialect; SQLite spells them min/max with several
 		// arguments, which collides with the aggregate forms.
@@ -298,6 +312,19 @@ func toInt(v driver.Value) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// toCount converts a driver.Value to the whole number a dialect reads it as
+// where the argument counts things rather than being a numeric result: how many
+// times to repeat, how many spaces, which element of a list. MySQL rounds such a
+// value half away from zero, so REPEAT('ab', 2.7) repeats three times, where
+// truncating toward zero left it one short. A value that is already an integer,
+// or a string, goes through toInt unchanged.
+func toCount(v driver.Value) (int64, bool) {
+	if f, ok := v.(float64); ok {
+		return int64(math.Round(f)), true
+	}
+	return toInt(v)
 }
 
 // toFloat converts a driver.Value to a float64, reporting success.
@@ -555,7 +582,15 @@ func datePartValue(unit string, tm time.Time) (driver.Value, error) {
 		return int64(tm.Minute()), nil
 	case unitSecond:
 		return int64(tm.Second()), nil
-	case "dow", unitDayOfWeek:
+	case "dow":
+		// PostgreSQL DOW: Sunday=0..Saturday=6, which is Go's own numbering.
+		// This spelling is PostgreSQL's; dayofweek below is MySQL's and
+		// GoogleSQL's, and the two number the week differently.
+		return int64(tm.Weekday()), nil
+	case "isodow":
+		// PostgreSQL ISODOW: Monday=1..Sunday=7.
+		return int64((int(tm.Weekday())+6)%7) + 1, nil
+	case unitDayOfWeek:
 		// MySQL DAYOFWEEK: Sunday=1..Saturday=7.
 		return int64(tm.Weekday()) + 1, nil
 	case unitWeekday:
@@ -624,20 +659,54 @@ func fnLocate(args []driver.Value) (driver.Value, error) {
 	return int64(characterIndex(str, substr, start)), nil
 }
 
-func fnLpad(args []driver.Value) (driver.Value, error) { return pad(args, true) }
-func fnRpad(args []driver.Value) (driver.Value, error) { return pad(args, false) }
+func fnLpad(args []driver.Value) (driver.Value, error) { return pad(args, true, padRules{}) }
+func fnRpad(args []driver.Value) (driver.Value, error) { return pad(args, false, padRules{}) }
+
+// padRules holds the two boundary answers LPAD and RPAD differ on between the
+// dialects, checked against MySQL 8.4 and PostgreSQL 17.
+//
+//   - A negative length: MySQL answers NULL, PostgreSQL an empty string.
+//   - An empty pad with a length past the input: MySQL cannot reach the length
+//     with nothing to pad with and answers an empty string, PostgreSQL returns
+//     the input unpadded.
+//
+// The zero value is the answer given before either dialect had its own, and is
+// what the dialects without a verified rule keep.
+type padRules struct {
+	emptyOnNegativeLength bool
+	emptyOnEmptyPad       bool
+}
+
+var (
+	mysqlPadRules      = padRules{emptyOnEmptyPad: true}       //nolint:gochecknoglobals // constant-like
+	postgresqlPadRules = padRules{emptyOnNegativeLength: true} //nolint:gochecknoglobals // constant-like
+)
+
+func padFor(rules padRules, left bool) scalarFn {
+	return func(args []driver.Value) (driver.Value, error) { return pad(args, left, rules) }
+}
 
 // pad implements LPAD and RPAD. The length is a count of characters in all
 // three dialects, so the arithmetic is over runes: measuring in bytes cut a
-// multibyte character in half and returned bytes that are not UTF-8.
-func pad(args []driver.Value, left bool) (driver.Value, error) {
+// multibyte character in half and returned bytes that are not UTF-8. A call with
+// two arguments pads with spaces, which is PostgreSQL's short form.
+func pad(args []driver.Value, left bool, rules padRules) (driver.Value, error) {
+	if len(args) < 2 || len(args) > 3 {
+		return nil, fmt.Errorf("dialect: LPAD/RPAD expects 2 or 3 arguments, got %d", len(args))
+	}
 	s, ok1 := toString(args[0])
-	n, ok2 := toInt(args[1])
-	padStr, ok3 := toString(args[2])
+	n, ok2 := toCount(args[1])
+	padStr, ok3 := " ", true
+	if len(args) == 3 {
+		padStr, ok3 = toString(args[2])
+	}
 	if !ok1 || !ok2 || !ok3 {
 		return nil, nil
 	}
 	if n < 0 {
+		if rules.emptyOnNegativeLength {
+			return "", nil
+		}
 		return nil, nil
 	}
 	length := int(n)
@@ -646,6 +715,10 @@ func pad(args []driver.Value, left bool) (driver.Value, error) {
 		return string(runes[:length]), nil
 	}
 	if padStr == "" {
+		// Nothing to pad with and a length still to reach.
+		if rules.emptyOnEmptyPad {
+			return "", nil
+		}
 		return s, nil
 	}
 	padRunes := []rune(padStr)
@@ -658,6 +731,99 @@ func pad(args []driver.Value, left bool) (driver.Value, error) {
 		return string(filler) + s, nil
 	}
 	return s + string(filler), nil
+}
+
+// fnMySQLSubstr implements MySQL SUBSTRING(s, pos[, len]), which SQLite's own
+// substr() does not match at position 0: MySQL reads 0 as no position at all and
+// answers the empty string, where SQLite reads it as the place before the first
+// character and answers the whole string. That matters because 0 is what LOCATE
+// returns when it finds nothing, so SUBSTRING(s, LOCATE('x', s)) is empty in
+// MySQL for a row without an x and the whole of s under SQLite's rule.
+//
+// A negative position counts from the end, which SQLite does agree on, and the
+// arithmetic is over characters rather than bytes.
+func fnMySQLSubstr(args []driver.Value) (driver.Value, error) {
+	if len(args) < 2 || len(args) > 3 {
+		return nil, fmt.Errorf("dialect: SUBSTRING expects 2 or 3 arguments, got %d", len(args))
+	}
+	s, ok1 := toString(args[0])
+	pos, ok2 := toCount(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	runes := []rune(s)
+	length := int64(len(runes))
+	var start int64
+	switch {
+	case pos == 0:
+		return "", nil
+	case pos < 0:
+		start = length + pos
+		if start < 0 {
+			return "", nil
+		}
+	default:
+		start = pos - 1
+		if start >= length {
+			return "", nil
+		}
+	}
+	end := length
+	if len(args) == 3 {
+		count, ok := toCount(args[2])
+		if !ok {
+			return nil, nil
+		}
+		if count <= 0 {
+			return "", nil
+		}
+		if count < length-start {
+			end = start + count
+		}
+	}
+	return string(runes[start:end]), nil
+}
+
+// fnPostgreSQLSubstr implements PostgreSQL substr(s, start[, count]). Positions
+// are counted from 1 and a start below 1 is not an offset from the end: the
+// result is the characters at positions start through start+count-1 that the
+// string actually has, so substr('abcdef', -1, 3) covers positions -1, 0 and 1
+// and yields "a". SQLite's substr() reads a negative start from the end instead,
+// which is MySQL's rule, and answered "f".
+func fnPostgreSQLSubstr(args []driver.Value) (driver.Value, error) {
+	if len(args) < 2 || len(args) > 3 {
+		return nil, fmt.Errorf("dialect: SUBSTRING expects 2 or 3 arguments, got %d", len(args))
+	}
+	s, ok1 := toString(args[0])
+	start, ok2 := toCount(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	runes := []rune(s)
+	length := int64(len(runes))
+	// Positions are 1-based and the end is exclusive, so the whole string is
+	// positions 1 through length+1.
+	end := length + 1
+	if len(args) == 3 {
+		count, ok := toCount(args[2])
+		if !ok {
+			return nil, nil
+		}
+		if count < 0 {
+			return nil, errors.New("dialect: SUBSTRING: negative substring length not allowed")
+		}
+		// Clamp before adding: a count near math.MaxInt64 is an ordinary SQLite
+		// integer literal and start+count would wrap to a negative bound.
+		if count < end-start {
+			end = start + count
+		}
+	}
+	from := max(start, 1)
+	to := min(end, length+1)
+	if to <= from {
+		return "", nil
+	}
+	return string(runes[from-1 : to-1]), nil
 }
 
 // fnSubstringIndex implements MySQL SUBSTRING_INDEX(str, delim, count).
@@ -688,7 +854,7 @@ func fnSubstringIndex(args []driver.Value) (driver.Value, error) {
 // fnRepeat implements MySQL REPEAT(str, count).
 func fnRepeat(args []driver.Value) (driver.Value, error) {
 	s, ok1 := toString(args[0])
-	count, ok2 := toInt(args[1])
+	count, ok2 := toCount(args[1])
 	if !ok1 || !ok2 {
 		return nil, nil
 	}
@@ -700,7 +866,7 @@ func fnRepeat(args []driver.Value) (driver.Value, error) {
 
 // fnSpace implements MySQL SPACE(n).
 func fnSpace(args []driver.Value) (driver.Value, error) {
-	n, ok := toInt(args[0])
+	n, ok := toCount(args[0])
 	if !ok {
 		return nil, nil
 	}
@@ -788,6 +954,13 @@ func fnFindInSet(args []driver.Value) (driver.Value, error) {
 	if !ok1 || !ok2 {
 		return nil, nil
 	}
+	// An empty set holds nothing, including the empty string. Splitting it
+	// yields one empty element, which found an empty needle at position 1 where
+	// MySQL answers 0. An empty element inside a non-empty set is a real
+	// element and keeps its position.
+	if set == "" {
+		return int64(0), nil
+	}
 	for i, part := range strings.Split(set, ",") {
 		if part == needle {
 			return int64(i + 1), nil
@@ -820,7 +993,7 @@ func fnElt(args []driver.Value) (driver.Value, error) {
 	if len(args) < 2 {
 		return nil, fmt.Errorf("dialect: ELT expects at least 2 arguments, got %d", len(args))
 	}
-	n, ok := toInt(args[0])
+	n, ok := toCount(args[0])
 	if !ok || n < 1 || n > int64(len(args)-1) {
 		return nil, nil
 	}
@@ -1079,6 +1252,12 @@ func fnSplitPart(args []driver.Value) (driver.Value, error) {
 	n, ok3 := toInt(args[2])
 	if !ok1 || !ok2 || !ok3 {
 		return nil, nil
+	}
+	// PostgreSQL refuses a zero field position rather than answering with an
+	// empty string, which is what makes an off-by-one in a computed position
+	// visible instead of reading as an empty field.
+	if n == 0 {
+		return nil, errors.New("dialect: SPLIT_PART: field position must not be zero")
 	}
 	if delim == "" {
 		if n == 1 || n == -1 {
