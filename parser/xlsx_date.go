@@ -98,8 +98,12 @@ func cellHoldsDate(f *excelize.File, sheet, axis string) bool {
 //
 // A year or a day token is what says so. "m" is not enough on its own, because
 // it is both month and minute, and neither "hh:mm" nor "mm:ss" is a date. A
-// bracketed hour, minute or second is an elapsed duration — "[h]:mm" of 1.5 is
-// 36 hours — so a format holding one is never a date, whatever else it says.
+// bracket holding an elapsed unit is not a date either — "[h]:mm" of 1.5 is 36
+// hours — but a bracket may equally hold a color, a condition or a locale, and
+// judging it by the letters in it read the "m" of "[Magenta]" and the "h" of
+// "[White]" as elapsed units and left a colored date column as text. An elapsed
+// unit is one letter repeated and nothing else, which is what tells the two
+// apart.
 //
 // Everything inside quotes is literal text, so a currency format quoting a word
 // with a "d" in it is not a date either.
@@ -108,6 +112,7 @@ func isDateNumberFormat(format string) bool {
 	inBracket := false
 	elapsed := false
 	dated := false
+	var bracket []byte
 	for i := 0; i < len(format); i++ {
 		c := format[i]
 		switch {
@@ -120,17 +125,48 @@ func isDateNumberFormat(format string) bool {
 		case inQuote:
 		case c == '[':
 			inBracket = true
+			bracket = bracket[:0]
 		case c == ']':
 			inBracket = false
-		case inBracket:
-			if c == 'h' || c == 'H' || c == 'm' || c == 'M' || c == 's' || c == 'S' {
+			if isElapsedUnit(bracket) {
 				elapsed = true
 			}
+		case inBracket:
+			bracket = append(bracket, c)
 		case c == 'y' || c == 'Y' || c == 'd' || c == 'D':
 			dated = true
 		}
 	}
 	return dated && !elapsed
+}
+
+// isElapsedUnit reports whether a bracket's content is an elapsed unit rather
+// than a color, a condition or a locale. Excel writes an elapsed unit as one of
+// h, m or s repeated and nothing else, so "[hh]" is one and "[Magenta]" is a
+// color that happens to start with a letter one of them uses.
+func isElapsedUnit(bracket []byte) bool {
+	if len(bracket) == 0 {
+		return false
+	}
+	first := lowerASCII(bracket[0])
+	if first != 'h' && first != 'm' && first != 's' {
+		return false
+	}
+	for _, c := range bracket[1:] {
+		if lowerASCII(c) != first {
+			return false
+		}
+	}
+	return true
+}
+
+// lowerASCII is c in lower case, for the ASCII letters a number format is
+// written with.
+func lowerASCII(c byte) byte {
+	if c >= 'A' && c <= 'Z' {
+		return c + ('a' - 'A')
+	}
+	return c
 }
 
 // isoFromSerial reads a cell's stored serial and renders it as ISO 8601. It

@@ -129,6 +129,21 @@ func TestIsDateNumberFormat(t *testing.T) {
 		{name: "an underscore-escaped date letter", format: "0_y", want: false},
 		{name: "an asterisk-escaped date letter", format: "0*d", want: false},
 		{name: "an escape before a real date token", format: `\d yyyy`, want: true},
+		// A bracket holds a color, a condition, or a locale as well as an
+		// elapsed unit, and only the elapsed unit says the value is not a day.
+		// Excel writes an elapsed unit as one letter repeated and nothing else,
+		// so "Magenta" and "White" are colors that happen to share a letter
+		// with one.
+		{name: "a color before a date", format: "[Red]yyyy-mm-dd", want: true},
+		{name: "a color whose name holds an m", format: "[Magenta]mm/dd/yy", want: true},
+		{name: "a color whose name holds an h", format: "[White]yyyy-mm-dd", want: true},
+		{name: "a locale before a date", format: "[$-409]d-mmm-yy", want: true},
+		{name: "a condition before a date", format: "[>0]yyyy-mm-dd;@", want: true},
+		{name: "an empty bracket before a date", format: "[]yyyy", want: true},
+		{name: "elapsed hours", format: "[hh]:mm:ss", want: false},
+		{name: "elapsed minutes", format: "[mm]:ss", want: false},
+		{name: "elapsed seconds beside a date token", format: "[ss] dd", want: false},
+		{name: "a bracket of mixed letters is not an elapsed unit", format: "[hm] dd", want: true},
 	}
 
 	for _, tt := range tests {

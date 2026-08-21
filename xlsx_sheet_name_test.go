@@ -255,3 +255,42 @@ func TestXLSXLocalizedDateFormatImportsAsISO(t *testing.T) {
 		})
 	}
 }
+
+// TestXLSXColoredDateFormatImportsAsISO pins that a cell's color has nothing to
+// do with whether it holds a date. A custom format may start with a color, and
+// two of Excel's color names hold a letter that also names an elapsed unit, so
+// the same day in the same column arrived as a date in one row and as
+// format-dependent text in the next.
+func TestXLSXColoredDateFormatImportsAsISO(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "colored.xlsx")
+
+	formats := []string{"mm/dd/yy", "[Red]mm/dd/yy", "[Magenta]mm/dd/yy", "[White]mm/dd/yy"}
+	f := excelize.NewFile()
+	defer func() { _ = f.Close() }()
+	require.NoError(t, f.SetSheetRow("Sheet1", "A1", &[]any{"plain", "red", "magenta", "white"}))
+	for i := range formats {
+		axis, err := excelize.CoordinatesToCellName(i+1, 2)
+		require.NoError(t, err)
+		require.NoError(t, f.SetCellValue("Sheet1", axis, 45000))
+		style, err := f.NewStyle(&excelize.Style{CustomNumFmt: &formats[i]})
+		require.NoError(t, err)
+		require.NoError(t, f.SetCellStyle("Sheet1", axis, axis, style))
+	}
+	require.NoError(t, f.SaveAs(path))
+
+	db, err := OpenContext(ctx, path)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var plain, red, magenta, white string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT plain, red, magenta, white FROM colored_Sheet1`).Scan(&plain, &red, &magenta, &white))
+
+	assert.Equal(t, "2023-03-15", plain)
+	assert.Equal(t, "2023-03-15", red)
+	assert.Equal(t, "2023-03-15", magenta, "a color name holding an m is a color, not an elapsed unit")
+	assert.Equal(t, "2023-03-15", white, "a color name holding an h is a color, not an elapsed unit")
+}
