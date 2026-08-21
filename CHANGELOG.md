@@ -1413,6 +1413,30 @@ For users upgrading from v0.3.x:
 - Standard database/sql interface implementation
 
 [Unreleased]: https://github.com/nao1215/filesql/compare/v0.44.0...HEAD
+[0.44.0]: https://github.com/nao1215/filesql/compare/v0.43.1...v0.44.0
+[0.43.1]: https://github.com/nao1215/filesql/compare/v0.43.0...v0.43.1
+[0.43.0]: https://github.com/nao1215/filesql/compare/v0.42.0...v0.43.0
+[0.42.0]: https://github.com/nao1215/filesql/compare/v0.41.1...v0.42.0
+[0.41.1]: https://github.com/nao1215/filesql/compare/v0.41.0...v0.41.1
+[0.41.0]: https://github.com/nao1215/filesql/compare/v0.40.1...v0.41.0
+[0.40.1]: https://github.com/nao1215/filesql/compare/v0.40.0...v0.40.1
+[0.40.0]: https://github.com/nao1215/filesql/compare/v0.39.1...v0.40.0
+[0.39.1]: https://github.com/nao1215/filesql/compare/v0.39.0...v0.39.1
+[0.39.0]: https://github.com/nao1215/filesql/compare/v0.38.0...v0.39.0
+[0.38.0]: https://github.com/nao1215/filesql/compare/v0.37.1...v0.38.0
+[0.37.1]: https://github.com/nao1215/filesql/compare/v0.37.0...v0.37.1
+[0.37.0]: https://github.com/nao1215/filesql/compare/v0.36.0...v0.37.0
+[0.36.0]: https://github.com/nao1215/filesql/compare/v0.35.2...v0.36.0
+[0.35.2]: https://github.com/nao1215/filesql/compare/v0.35.1...v0.35.2
+[0.35.1]: https://github.com/nao1215/filesql/compare/v0.35.0...v0.35.1
+[0.35.0]: https://github.com/nao1215/filesql/compare/v0.34.0...v0.35.0
+[0.34.0]: https://github.com/nao1215/filesql/compare/v0.33.0...v0.34.0
+[0.33.0]: https://github.com/nao1215/filesql/compare/v0.32.1...v0.33.0
+[0.32.1]: https://github.com/nao1215/filesql/compare/v0.32.0...v0.32.1
+[0.32.0]: https://github.com/nao1215/filesql/compare/v0.30.4...v0.32.0
+[0.30.4]: https://github.com/nao1215/filesql/compare/v0.30.3...v0.30.4
+[0.30.3]: https://github.com/nao1215/filesql/compare/v0.30.2...v0.30.3
+[0.30.2]: https://github.com/nao1215/filesql/compare/v0.30.1...v0.30.2
 [0.30.1]: https://github.com/nao1215/filesql/compare/v0.30.0...v0.30.1
 [0.30.0]: https://github.com/nao1215/filesql/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/nao1215/filesql/compare/v0.28.0...v0.29.0
