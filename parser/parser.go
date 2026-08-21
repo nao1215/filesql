@@ -3,20 +3,13 @@ package parser
 import (
 	"bufio"
 	"bytes"
-	"compress/bzip2"
-	"compress/gzip"
-	"compress/zlib"
 	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
 
-	"github.com/klauspost/compress/s2"
-	"github.com/klauspost/compress/snappy"
-	"github.com/klauspost/compress/zstd"
-	"github.com/pierrec/lz4/v4"
-	"github.com/ulikunitz/xz"
+	"github.com/nao1215/filesql/internal/codec"
 )
 
 // utf8BOM is the byte-order mark a UTF-8 file may begin with.
@@ -711,57 +704,33 @@ func BaseFileType(ft FileType) FileType {
 	}
 }
 
-// createDecompressedReader wraps the reader with appropriate decompression.
-func createDecompressedReader(reader io.Reader, fileType FileType) (io.Reader, func() error, error) {
+// codecOf is the compression a fused file type carries.
+func codecOf(fileType FileType) codec.Codec {
 	switch fileType {
 	case CSVGZ, TSVGZ, LTSVGZ, XLSXGZ, ParquetGZ, JSONGZ, JSONLGZ:
-		gzReader, err := gzip.NewReader(reader)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create gzip reader: %w", err)
-		}
-		return gzReader, func() error { return gzReader.Close() }, nil
-
+		return codec.GZ
 	case CSVBZ2, TSVBZ2, LTSVBZ2, XLSXBZ2, ParquetBZ2, JSONBZ2, JSONLBZ2:
-		bz2Reader := bzip2.NewReader(reader)
-		return bz2Reader, nil, nil
-
+		return codec.BZ2
 	case CSVXZ, TSVXZ, LTSVXZ, XLSXXZ, ParquetXZ, JSONXZ, JSONLXZ:
-		xzReader, err := xz.NewReader(reader)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create xz reader: %w", err)
-		}
-		return xzReader, nil, nil
-
+		return codec.XZ
 	case CSVZSTD, TSVZSTD, LTSVZSTD, XLSXZSTD, ParquetZSTD, JSONZSTD, JSONLZSTD:
-		decoder, err := zstd.NewReader(reader)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create zstd reader: %w", err)
-		}
-		return decoder, func() error { decoder.Close(); return nil }, nil
-
+		return codec.ZSTD
 	case CSVZLIB, TSVZLIB, LTSVZLIB, XLSXZLIB, ParquetZLIB, JSONZLIB, JSONLZLIB:
-		zlibReader, err := zlib.NewReader(reader)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create zlib reader: %w", err)
-		}
-		return zlibReader, func() error { return zlibReader.Close() }, nil
-
+		return codec.ZLIB
 	case CSVSNAPPY, TSVSNAPPY, LTSVSNAPPY, XLSXSNAPPY, ParquetSNAPPY, JSONSNAPPY, JSONLSNAPPY:
-		snappyReader := snappy.NewReader(reader)
-		return snappyReader, nil, nil
-
+		return codec.SNAPPY
 	case CSVS2, TSVS2, LTSVS2, XLSXS2, ParquetS2, JSONS2, JSONLS2:
-		s2Reader := s2.NewReader(reader)
-		return s2Reader, nil, nil
-
+		return codec.S2
 	case CSVLZ4, TSVLZ4, LTSVLZ4, XLSXLZ4, ParquetLZ4, JSONLZ4, JSONLLZ4:
-		lz4Reader := lz4.NewReader(reader)
-		return lz4Reader, nil, nil
-
+		return codec.LZ4
 	default:
-		// No compression
-		return reader, nil, nil
+		return codec.None
 	}
+}
+
+// createDecompressedReader wraps the reader with appropriate decompression.
+func createDecompressedReader(reader io.Reader, fileType FileType) (io.Reader, func() error, error) {
+	return codecOf(fileType).NewReader(reader)
 }
 
 // delimitedSyntaxError is the sentinel for input of the given delimiter that
