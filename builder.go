@@ -335,9 +335,12 @@ func (b *DBBuilder) AddFS(filesystem fs.FS) *DBBuilder {
 // the one a source was loaded from. Only those files are written: a table created
 // during the session has no file to be written back to and is left unsaved, so
 // pass an output directory when you want everything in the database on disk. A
-// source in a format this package reads but does not write (JSON, JSONL), and a
-// workbook of more than one sheet, fail the save rather than being written as
-// something else.
+// source in a format this package reads but does not write (JSON, JSONL) fails
+// the save rather than being written as something else.
+//
+// A workbook is written onto the file it replaces: only the cells whose value
+// changed are rewritten, so formulas, dates, styles and the sheets no table was
+// loaded from stay as they were.
 //
 // The save runs once, when Close returns, so a database with auto-save is as
 // safe to share across goroutines as one without it.

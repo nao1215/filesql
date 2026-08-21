@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/nao1215/filesql"
+	"github.com/nao1215/filesql/dialect"
 	"github.com/xuri/excelize/v2"
 	_ "modernc.org/sqlite"
 )
@@ -148,6 +149,34 @@ func ExampleDBBuilder_WithMalformedRowPolicy() {
 	fmt.Printf("loaded rows=%d\n", rows)
 	// Output:
 	// loaded rows=2
+}
+
+func ExampleDBBuilder_WithDialect() {
+	validated, err := filesql.NewBuilder().
+		AddReader(strings.NewReader("id,shipped_at\n1,2024-12-31 09:07:00\n"), "orders", filesql.FileTypeCSV).
+		WithDialect(dialect.MySQL).
+		Build(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	db, err := validated.Open(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// MySQL syntax: DATE_FORMAT with the 24-hour time and the ISO week its
+	// year belongs to.
+	var shipped string
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT DATE_FORMAT(shipped_at, '%T on week %v of %x') FROM orders`).Scan(&shipped); err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(shipped)
+	// Output:
+	// 09:07:00 on week 01 of 2025
 }
 
 func ExampleDBBuilder_WithLogger() {
