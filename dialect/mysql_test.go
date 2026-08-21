@@ -42,6 +42,12 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-7_div_paren_left", "SELECT (a + b) DIV c", `SELECT CAST(mysql_divide((a + b), c) AS INTEGER) AS "(a + b) DIV c"`},
 		{"M-7_div_call_right", "SELECT x DIV ABS(y)", "SELECT CAST(mysql_divide(x, ABS(y)) AS INTEGER) AS \"x DIV ABS(y)\""},
 		{"M-7_div_call_left", "SELECT ABS(x) DIV y", `SELECT CAST(mysql_divide(ABS(x), y) AS INTEGER) AS "ABS(x) DIV y"`},
+		// The left operand is the whole chain of equal-precedence operators, not
+		// the primary beside the DIV: MySQL reads "a * b DIV c" as "(a * b) DIV c".
+		{"M-7_div_of_a_product", "SELECT a * b DIV c", `SELECT CAST(mysql_divide((a * b), c) AS INTEGER) AS "a * b DIV c"`},
+		{"M-7_div_of_a_quotient", "SELECT a / b DIV c", `SELECT CAST(mysql_divide((mysql_divide(a, b)), c) AS INTEGER) AS "a / b DIV c"`},
+		{"M-7_div_of_a_remainder", "SELECT a % b DIV c", `SELECT CAST(mysql_divide((a % b), c) AS INTEGER) AS "a % b DIV c"`},
+		{"M-7_div_stops_at_lower_precedence", "SELECT a + b DIV c", `SELECT a + CAST(mysql_divide(b, c) AS INTEGER) AS "a + b DIV c"`},
 
 		// M-24: MOD is MySQL's spelling of the remainder operator, and SQLite's
 		// "%" is the same operation at the same precedence. The function

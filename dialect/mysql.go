@@ -39,13 +39,15 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
+	// M-24: MOD is DIV's sibling, and SQLite's "%" is the same operation at the
+	// same precedence, so this one is a token replacement rather than a call. It
+	// runs before DIV so that a MOD standing to the left of a DIV is already an
+	// operator token when DIV goes looking for its left operand.
+	out = modPass(out)
 	out, err = divPass(out)
 	if err != nil {
 		return nil, err
 	}
-	// M-24: MOD is DIV's sibling, and SQLite's "%" is the same operation at the
-	// same precedence, so this one is a token replacement rather than a call.
-	out = modPass(out)
 	// M-21: "!" is MySQL's NOT, and it binds tighter than every operator the
 	// passes below rewrite, so it is resolved before them: "!a ^ b" is
 	// "(!a) ^ b", and a "^" pass that ran first would take "a" for its left
@@ -105,6 +107,32 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	}
 	// M-18: ANY_VALUE and the variance family have no SQLite aggregate.
 	return aggregatePass(renameWordPass(out, "RLIKE", "REGEXP"), MySQL)
+}
+
+// operandChainStartBack walks start back over the operators that share DIV's
+// precedence, so the operand is the whole chain rather than the primary beside
+// the operator. It reports whether it moved.
+func operandChainStartBack(toks []token, start int) (int, bool) {
+	moved := false
+	for {
+		prev := prevSig(toks, start)
+		if prev < 0 || !isEqualPrecedenceOperator(toks[prev]) {
+			return start, moved
+		}
+		next, ok := primaryStartBack(toks[:prev])
+		if !ok {
+			return start, moved
+		}
+		start = next
+		moved = true
+	}
+}
+
+// isEqualPrecedenceOperator reports whether t is one of the operators MySQL puts
+// on DIV's precedence level. MOD is not among them because it has already been
+// written as "%" by the time this runs.
+func isEqualPrecedenceOperator(t token) bool {
+	return isOpEq(t, "*") || isOpEq(t, "/") || isOpEq(t, "%")
 }
 
 // mysqlCallPass rewrites the MySQL function-call rules (C-1, M-5, M-6, M-8),
@@ -286,10 +314,17 @@ func isModOperator(out []token, tokens []token, i int) bool {
 	return ok
 }
 
-// divPass implements M-7: a DIV b -> CAST(a / b AS INTEGER). The operands must
-// be primary expressions. This keeps SQLite's own truncating CAST rather than
-// the MySQL cast helper, since DIV truncates toward zero while MySQL's CAST
-// rounds.
+// divPass implements M-7: a DIV b -> CAST(a / b AS INTEGER). This keeps SQLite's
+// own truncating CAST rather than the MySQL cast helper, since DIV truncates
+// toward zero while MySQL's CAST rounds.
+//
+// The right operand is one primary expression, which is what left-to-right
+// association gives it. The left operand is the whole chain of equal-precedence
+// operators before it: MySQL puts "*", "/", "%", DIV and MOD on one level, so
+// "8 * 5 DIV 2" is "(8 * 5) DIV 2" and reading only the primary beside the
+// operator answered 16 where MySQL answers 20. An extended operand is
+// parenthesized on the way out, so the "/" pass that runs later sees one
+// primary and cannot regroup it in turn.
 func divPass(tokens []token) ([]token, error) {
 	out := make([]token, 0, len(tokens))
 	i := 0
@@ -299,12 +334,16 @@ func divPass(tokens []token) ([]token, error) {
 			if !ok {
 				return nil, fmt.Errorf("%w: left operand of DIV is not a primary expression", ErrUnsupportedSyntax)
 			}
+			start, extended := operandChainStartBack(out, start)
 			rightStart := nextSig(tokens, i+1)
 			rightEnd, ok := primaryEndForward(tokens, i+1)
 			if !ok {
 				return nil, fmt.Errorf("%w: right operand of DIV is not a primary expression", ErrUnsupportedSyntax)
 			}
 			left := append([]token{}, trimSpaceTokens(out[start:])...)
+			if extended {
+				left = append([]token{opToken("(")}, append(left, opToken(")"))...)
+			}
 			out = out[:start]
 			out = append(out, wordToken("CAST"), opToken("("))
 			out = append(out, left...)
