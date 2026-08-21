@@ -14,6 +14,7 @@ import (
 //	M-5  DATE_ADD/DATE_SUB(x, INTERVAL n unit) -> datetime(x, '±n unit')
 //	M-6  GROUP_CONCAT(x SEPARATOR s)     -> group_concat(x, s)
 //	M-7  a DIV b                         -> CAST(a / b AS INTEGER)
+//	M-24 a MOD b                         -> a % b
 //	M-8  CAST(x AS mysql_type)           -> mysql_cast(x, 'mysql_type')
 //	M-9  x RLIKE p                       -> x REGEXP p
 //	M-11 a / b                           -> mysql_divide(a, b)
@@ -42,6 +43,9 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
+	// M-24: MOD is DIV's sibling, and SQLite's "%" is the same operation at the
+	// same precedence, so this one is a token replacement rather than a call.
+	out = modPass(out)
 	// M-21: "!" is MySQL's NOT, and it binds tighter than every operator the
 	// passes below rewrite, so it is resolved before them: "!a ^ b" is
 	// "(!a) ^ b", and a "^" pass that ran first would take "a" for its left
@@ -237,6 +241,49 @@ func rewriteGroupConcat(tokens []token, nameIdx, open, closeIdx int) ([]token, b
 		repl = append(repl, trimSpaceTokens(order)...)
 	}
 	return append(repl, opToken(")")), true, nil
+}
+
+// modPass implements M-24: a MOD b -> a % b.
+//
+// MySQL gives MOD, DIV, "%" and "*" one precedence level, and SQLite gives "%"
+// the level of "*" and "/", so replacing the word with the operator cannot
+// change how the expression groups; both also take the sign of the dividend, so
+// it cannot change the answer either. Left as it was, the word reached SQLite,
+// which has no such operator, and the caller was told their own query had a
+// syntax error near a token they did write.
+//
+// The word is only an operator when operands stand on both sides of it: MOD(a,
+// b) is a function call, which already works, and a name spelled "mod" that a
+// query quotes is an identifier token rather than a word by the time this runs.
+// A call is told from an operator the way MySQL's own parser tells them apart,
+// by whether the parenthesis follows the name with nothing between: "MOD(7, 2)"
+// is the function and "a MOD (b + 1)" is the operator.
+func modPass(tokens []token) []token {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		if isWordEq(tokens[i], "MOD") && isModOperator(out, tokens, i) {
+			out = append(out, opToken("%"))
+			i++
+			continue
+		}
+		out = append(out, tokens[i])
+		i++
+	}
+	return out
+}
+
+// isModOperator reports whether the MOD at index i stands between two operands
+// rather than naming a function or a column.
+func isModOperator(out []token, tokens []token, i int) bool {
+	if i+1 < len(tokens) && isOpEq(tokens[i+1], "(") {
+		return false
+	}
+	if _, ok := primaryStartBack(out); !ok {
+		return false
+	}
+	_, ok := primaryEndForward(tokens, i+1)
+	return ok
 }
 
 // divPass implements M-7: a DIV b -> CAST(a / b AS INTEGER). The operands must

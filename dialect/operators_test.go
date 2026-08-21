@@ -38,6 +38,15 @@ func TestOperatorSemantics(t *testing.T) {
 		{"mysql DIV truncates toward zero", MySQL, `SELECT -7 DIV 2`, "-3", false},
 		{"postgresql keeps integer division", PostgreSQL, `SELECT 5/2`, "2", false},
 
+		// MOD is DIV's sibling and the same operation as SQLite's "%", including
+		// the sign rule: the result takes the sign of the dividend.
+		{"mysql MOD is the remainder", MySQL, `SELECT 7 MOD 2`, "1", false},
+		{"mysql MOD takes the dividend's sign", MySQL, `SELECT -7 MOD 2`, "-1", false},
+		{"mysql MOD by a negative divisor", MySQL, `SELECT 7 MOD -2`, "1", false},
+		{"mysql MOD binds like multiplication", MySQL, `SELECT 1 + 7 MOD 2`, "2", false},
+		{"mysql MOD chains left to right", MySQL, `SELECT 7 MOD 2 * 3`, "3", false},
+		{"mysql MOD as a function is unchanged", MySQL, `SELECT MOD(7, 2)`, "1", false},
+
 		// The operators MySQL spells with punctuation, executed rather than only
 		// rewritten: the rewrite is only right if the answer is.
 		{"mysql && is AND", MySQL, `SELECT 1 && 0`, "0", false},
