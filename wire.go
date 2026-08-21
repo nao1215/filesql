@@ -131,6 +131,9 @@ func streamWireFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, fi
 // Returns an error if the export fails, or ErrSourceUnavailable if the file the
 // tables were loaded from cannot be read.
 func DumpFedWire(ctx context.Context, db *sql.DB, baseTableName, outputPath string) error {
+	if db == nil {
+		return fmt.Errorf("%w: database must be a non-nil *sql.DB", ErrNilInput)
+	}
 	tableSet, err := wireTableSetForDump(ctx, db, baseTableName)
 	if err != nil {
 		return err
@@ -155,6 +158,9 @@ func DumpFedWire(ctx context.Context, db *sql.DB, baseTableName, outputPath stri
 //
 // Returns an error if the export fails.
 func DumpFedWireWithTableSet(ctx context.Context, db *sql.DB, baseTableName, outputPath string, tableSet *wireconv.TableSet) error {
+	if db == nil {
+		return fmt.Errorf("%w: database must be a non-nil *sql.DB", ErrNilInput)
+	}
 	if tableSet == nil {
 		return fmt.Errorf("%w: tableSet must be a non-nil *wireconv.TableSet", ErrNilInput)
 	}
