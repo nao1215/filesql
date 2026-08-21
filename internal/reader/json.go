@@ -47,7 +47,7 @@ func readJSON(src io.Reader, opts Options, emit Emit) (Result, error) {
 	if isArray {
 		decoder := json.NewDecoder(buffered)
 		if _, err := decoder.Token(); err != nil {
-			return Result{}, invalidError(err, "failed to parse JSON array")
+			return Result{}, jsonError(err, "failed to parse JSON array")
 		}
 		rows, err := readJSONArray(decoder, opts, emit)
 		if err != nil {
@@ -69,6 +69,28 @@ func readJSON(src io.Reader, opts Options, emit Emit) (Result, error) {
 	result.Rows = 1
 	result.Total = 1
 	return result, emit(&Chunk{Header: header, Records: [][]string{{string(value)}}, Types: types})
+}
+
+// jsonError classifies a failure the JSON decoder reported, by what failed
+// rather than by which branch found it.
+//
+// A document that is not JSON is invalid data whatever value it opens with. The
+// array branch used to report every failure as a parse error, so a caller
+// writing errors.Is(err, ErrInvalidData) to mean "this file is not JSON" matched
+// an unterminated object and missed an unterminated array, with nothing in the
+// message to explain the difference.
+//
+// Swapping the two outright would be wrong in the other direction: the decoder
+// also hands back whatever the underlying reader said, and a disk that went away
+// is not a document that is not JSON. A syntax error, or an input that ended in
+// the middle of a value, is the format's fault; anything else came from
+// underneath and stays a parse failure.
+func jsonError(cause error, format string, args ...any) error {
+	var syntax *json.SyntaxError
+	if errors.As(cause, &syntax) || errors.Is(cause, io.EOF) || errors.Is(cause, io.ErrUnexpectedEOF) {
+		return invalidError(cause, format, args...)
+	}
+	return parseError(cause, format, args...)
 }
 
 // peekJSONIsArray reports whether the document opens with '[', and whether it
@@ -110,7 +132,7 @@ func readJSONArray(decoder *json.Decoder, opts Options, emit Emit) (int, error) 
 	for decoder.More() {
 		var element json.RawMessage
 		if err := decoder.Decode(&element); err != nil {
-			return 0, parseError(err, "failed to decode JSON array element")
+			return 0, jsonError(err, "failed to decode JSON array element")
 		}
 		chunk = append(chunk, []string{string(element)})
 		if len(chunk) >= chunkSize {
@@ -125,7 +147,7 @@ func readJSONArray(decoder *json.Decoder, opts Options, emit Emit) (int, error) 
 
 	// Consume the closing bracket, then refuse anything after it ("[1] garbage").
 	if _, err := decoder.Token(); err != nil {
-		return 0, parseError(err, "failed to read JSON array end")
+		return 0, jsonError(err, "failed to read JSON array end")
 	}
 	if decoder.More() {
 		return 0, invalidError(nil, "unexpected data after JSON array")

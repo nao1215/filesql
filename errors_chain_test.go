@@ -59,6 +59,23 @@ func TestErrorSentinelsAreReachable(t *testing.T) {
 			wants: []error{ErrCompression},
 		},
 		{
+			// A malformed JSON document is invalid data whichever value it
+			// opens with. The array branch used to report only ErrParsing,
+			// which every load failure carries, so a caller matching
+			// ErrInvalidData to mean "this file is not JSON" matched an
+			// unterminated object and missed an unterminated array.
+			name: "a JSON array that is not JSON",
+			run: func(t *testing.T) error {
+				t.Helper()
+				dir := t.TempDir()
+				src := filepath.Join(dir, "broken.json")
+				require.NoError(t, os.WriteFile(src, []byte(`[{"a":`), 0o600))
+				_, err := OpenContext(context.Background(), src)
+				return err
+			},
+			wants: []error{ErrParsing, ErrInvalidData},
+		},
+		{
 			name: "a path with no file this package reads",
 			run: func(t *testing.T) error {
 				t.Helper()
