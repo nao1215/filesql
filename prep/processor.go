@@ -234,11 +234,21 @@ func (p *Processor) processRecords(input io.Reader, structSlicePointer any) (
 	headers := tableData.Headers
 	records := tableData.Records
 
-	// Build header name to column index map (first occurrence wins for duplicates)
+	// Build header name to column index map (first occurrence wins for
+	// duplicates).
+	//
+	// The key is folded, and so is the lookup below, because a header and a
+	// field name are the same column when they differ only in case: SQLite
+	// compares the identifiers filesql creates from these headers that way, and
+	// the loader refuses two headers that differ only in case as duplicates for
+	// the same reason. Comparing as written meant a struct field "Name", whose
+	// column name is derived as "name", matched no column at all in a file whose
+	// header says "Name" -- which is what a spreadsheet writes.
 	headerToColIdx := make(map[string]int, len(headers))
 	for i, h := range headers {
-		if _, exists := headerToColIdx[h]; !exists {
-			headerToColIdx[h] = i
+		key := strings.ToLower(h)
+		if _, exists := headerToColIdx[key]; !exists {
+			headerToColIdx[key] = i
 		}
 	}
 
@@ -255,7 +265,7 @@ func (p *Processor) processRecords(input io.Reader, structSlicePointer any) (
 	var unmatched []string
 	for i := range sInfo.Fields {
 		fi := &sInfo.Fields[i]
-		colIdx, ok := headerToColIdx[fi.ColumnName]
+		colIdx, ok := headerToColIdx[strings.ToLower(fi.ColumnName)]
 		if !ok {
 			// A field carrying prep:"default=..." is meant to work without a
 			// column: the default is where its value comes from. Only a field

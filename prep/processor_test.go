@@ -2540,3 +2540,93 @@ func TestMinAndMaxKeepAFractionalLengthThreshold(t *testing.T) {
 		})
 	}
 }
+
+// TestProcess_MatchesAColumnWhateverItsCase pins the rule the loader already
+// follows: a header and a field name are the same column when they differ only
+// in case. SQLite compares the identifiers this package creates from these
+// headers that way, and prep's own duplicate check folds them, so a struct
+// written for "name" has to accept the "Name" a spreadsheet writes.
+func TestProcess_MatchesAColumnWhateverItsCase(t *testing.T) {
+	t.Parallel()
+
+	type user struct {
+		Name string `prep:"trim" validate:"required"`
+		Age  int    `validate:"gte=0"`
+	}
+
+	for _, header := range []string{"name,age", "Name,Age", "NAME,AGE", "nAmE,aGe"} {
+		t.Run(header, func(t *testing.T) {
+			t.Parallel()
+
+			var out []user
+			reader, result, err := NewProcessor(FileTypeCSV).
+				Process(strings.NewReader(header+"\n Alice ,30\n"), &out)
+			if err != nil {
+				t.Fatalf("Process(%q) error: %v", header, err)
+			}
+			if result.ValidRowCount != 1 {
+				t.Errorf("valid rows = %d, want 1", result.ValidRowCount)
+			}
+			if len(out) != 1 || out[0].Name != "Alice" || out[0].Age != 30 {
+				t.Errorf("out = %#v, want the trimmed name and the age", out)
+			}
+			cleaned, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The output keeps the header the file had; only the matching folds.
+			if want := header + "\nAlice,30\n"; string(cleaned) != want {
+				t.Errorf("cleaned = %q, want %q", string(cleaned), want)
+			}
+		})
+	}
+
+	t.Run("a field of more than one word", func(t *testing.T) {
+		t.Parallel()
+
+		type person struct {
+			FirstName string `prep:"trim"`
+		}
+		for _, header := range []string{"first_name", "First_Name", "FIRST_NAME"} {
+			var out []person
+			if _, _, err := NewProcessor(FileTypeCSV).
+				Process(strings.NewReader(header+"\n Bob \n"), &out); err != nil {
+				t.Errorf("Process(%q) error: %v", header, err)
+				continue
+			}
+			if len(out) != 1 || out[0].FirstName != "Bob" {
+				t.Errorf("header %q: out = %#v", header, out)
+			}
+		}
+	})
+
+	t.Run("an explicit name tag folds too", func(t *testing.T) {
+		t.Parallel()
+
+		type tagged struct {
+			Value string `name:"given name" prep:"trim"`
+		}
+		var out []tagged
+		if _, _, err := NewProcessor(FileTypeCSV).
+			Process(strings.NewReader("Given Name\n Carol \n"), &out); err != nil {
+			t.Fatalf("Process error: %v", err)
+		}
+		if len(out) != 1 || out[0].Value != "Carol" {
+			t.Errorf("out = %#v", out)
+		}
+	})
+
+	t.Run("a field naming no column is still refused", func(t *testing.T) {
+		t.Parallel()
+
+		type user struct {
+			Name   string
+			Emails string
+		}
+		var out []user
+		_, _, err := NewProcessor(FileTypeCSV).Process(strings.NewReader("Name,Email\nAlice,a@b.com\n"), &out)
+		if !errors.Is(err, ErrUnknownColumn) {
+			t.Fatalf("err = %v, want ErrUnknownColumn", err)
+		}
+	})
+}
