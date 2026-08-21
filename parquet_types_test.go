@@ -232,6 +232,48 @@ func TestParquetDumpWritesTypedColumns(t *testing.T) {
 		map[string]string{"name": "utf8", "price": "float64", "qty": "int64"})
 }
 
+// TestParquetDumpKeepsANumericColumnWithABlank pins the case one missing entry
+// used to decide. SQLite stores a blank in a numeric column as the empty string,
+// since "" has no numeric value to convert to, and the column's type was read
+// from its values: one blank made the whole column a Parquet STRING, so a column
+// of numbers reached the next tool as digits it compares and sorts as text, and
+// reloading it here gave a TEXT column.
+func TestParquetDumpKeepsANumericColumnWithABlank(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "t.csv")
+	require.NoError(t, os.WriteFile(source, []byte("amount,qty,note\n2.50,7,here\n,,\n"), 0o600))
+
+	db, err := OpenContext(ctx, source)
+	require.NoError(t, err)
+
+	out := filepath.Join(dir, "out")
+	require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatParquet)))
+	require.NoError(t, db.Close())
+
+	assertParquetSchema(t, filepath.Join(out, "t.parquet"),
+		map[string]string{"amount": "float64", "qty": "int64", "note": "utf8"})
+
+	back, err := OpenContext(ctx, filepath.Join(out, "t.parquet"))
+	require.NoError(t, err)
+	defer back.Close()
+
+	var amountKind, amount string
+	require.NoError(t, back.QueryRowContext(ctx,
+		"SELECT typeof(amount), amount FROM t WHERE qty = 7").Scan(&amountKind, &amount))
+	assert.Equal(t, "real", amountKind)
+	assert.Equal(t, "2.5", amount)
+
+	// The blank has no spelling in a numeric column, so it comes back as the
+	// null it means. A text column keeps the empty string it held.
+	var blanks int
+	require.NoError(t, back.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM t WHERE amount IS NULL AND qty IS NULL AND note = ''").Scan(&blanks))
+	assert.Equal(t, 1, blanks, "the blank row is a null in the numeric columns and an empty string in the text one")
+}
+
 // TestParquetDumpOfEmptyTableKeepsDeclaredTypes checks the one case the values
 // cannot decide. A table the session emptied still knows its declared types, and
 // an auto-save that rewrote them all as STRING would change the schema of a

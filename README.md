@@ -358,7 +358,7 @@ north,apple,1,100
 
 ### Column types
 
-CSV, TSV, LTSV, and XLSX carry no types, so filesql reads the values and picks INTEGER, REAL, or TEXT per column. A column whose values are all datetimes is recognized as one and stored as TEXT in ISO 8601, which is the form SQLite's date functions read; the [`parser`](./parser) and [`frame`](./frame) packages name that column DATETIME, since they report what was recognized rather than what SQLite stores. Parquet, ACH, and Fedwire bring their own schema and are not inferred.
+CSV, TSV, LTSV, and XLSX carry no types, so filesql reads the values and picks INTEGER, REAL, or TEXT per column. A column whose values are all datetimes is recognized as one and stored as TEXT in ISO 8601, which is the form SQLite's date functions read; the [`parser`](./parser) and [`frame`](./frame) packages name that column DATETIME, since they report what was recognized rather than what SQLite stores. Parquet, ACH, and Fedwire bring their own schema and are not inferred. A Parquet export writes each column as the type its values call for, and a blank cell in a numeric column is written as a null, since that format has no other way to say a number is missing.
 
 Which of the three a column gets follows from every value in the column, wherever the value sits and however large the file is. Four kinds of value are damaged by a numeric column, and one of them anywhere in the file makes the column TEXT:
 

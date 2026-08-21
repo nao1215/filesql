@@ -1021,7 +1021,11 @@ const (
 func parquetColumnKind(rows [][]any, col int, declaredType string) parquetKind {
 	kind := parquetKind(-1)
 	for _, row := range rows {
-		if col >= len(row) || row[col] == nil {
+		// A blank cell says nothing about the column's type. SQLite stores a
+		// blank in a numeric column as the empty string, since "" has no numeric
+		// value to convert to, and letting that decide the column wrote a column
+		// of numbers as text the moment one row was missing an entry.
+		if col >= len(row) || row[col] == nil || row[col] == "" {
 			continue
 		}
 		var cell parquetKind
@@ -1073,6 +1077,12 @@ func arrowTypeFor(kind parquetKind) arrow.DataType {
 // kind when every value in the column is numeric.
 func appendParquetValue(b array.Builder, kind parquetKind, value any) error {
 	if value == nil {
+		b.AppendNull()
+		return nil
+	}
+	// A numeric column has no spelling for a blank, so the blank is written as
+	// the null it means. A text column keeps its empty string.
+	if text, isText := value.(string); isText && text == "" && kind != parquetString {
 		b.AppendNull()
 		return nil
 	}
