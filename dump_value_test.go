@@ -88,7 +88,11 @@ func TestDumpValueFormatting(t *testing.T) {
 		assert.Equal(t, "flag\n1\n0\n", dumpToString(t, db, NewDumpOptions()))
 	})
 
-	t.Run("a REAL keeps its shortest exact form", func(t *testing.T) {
+	// A whole number keeps a decimal point because that is what makes the file
+	// read back as REAL. Written as "1", it reloaded as an INTEGER column, and
+	// integer division then answered a different question than the one the
+	// database being dumped would have answered.
+	t.Run("a REAL keeps its shortest exact form and its decimal point", func(t *testing.T) {
 		t.Parallel()
 
 		db := openWithTable(t,
@@ -97,7 +101,56 @@ func TestDumpValueFormatting(t *testing.T) {
 			"INSERT INTO t VALUES (1e21)",
 			"INSERT INTO t VALUES (1.0)")
 
-		assert.Equal(t, "v\n0.1\n1e+21\n1\n", dumpToString(t, db, NewDumpOptions()))
+		assert.Equal(t, "v\n0.1\n1e+21\n1.0\n", dumpToString(t, db, NewDumpOptions()))
+	})
+
+	// An INTEGER column is written bare: the suffix above belongs to the values
+	// SQLite hands back as floats, and nothing else.
+	t.Run("an INTEGER column is written without one", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t,
+			"CREATE TABLE t (v INTEGER)",
+			"INSERT INTO t VALUES (1)",
+			"INSERT INTO t VALUES (-10)")
+
+		assert.Equal(t, "v\n1\n-10\n", dumpToString(t, db, NewDumpOptions()))
+	})
+
+	// SQLite has no spelling of infinity that its own REAL affinity accepts, so
+	// a literal that overflows to one is what the file carries. Written "+Inf",
+	// the value reloaded as the text of that word inside a REAL column.
+	t.Run("an infinity is written as a literal that overflows to it", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t,
+			"CREATE TABLE t (v REAL)",
+			"INSERT INTO t VALUES (9e999)",
+			"INSERT INTO t VALUES (-9e999)")
+
+		assert.Equal(t, "v\n9e999\n-9e999\n", dumpToString(t, db, NewDumpOptions()))
+	})
+
+	t.Run("a REAL column is still REAL after a save and a load", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t,
+			"CREATE TABLE t (amount REAL)",
+			"INSERT INTO t VALUES (10.0)",
+			"INSERT INTO t VALUES (5.0)")
+
+		outDir := t.TempDir()
+		require.NoError(t, DumpDatabase(db, outDir))
+
+		back, err := OpenContext(t.Context(), filepath.Join(outDir, "t.csv"))
+		require.NoError(t, err)
+		defer back.Close()
+
+		var kind, quarter string
+		require.NoError(t, back.QueryRowContext(t.Context(),
+			"SELECT typeof(amount), amount/4 FROM t LIMIT 1").Scan(&kind, &quarter))
+		assert.Equal(t, "real", kind)
+		assert.Equal(t, "2.5", quarter, "a saved and reloaded REAL column divides as a REAL column")
 	})
 
 	t.Run("NULL and the empty string stay distinguishable in LTSV", func(t *testing.T) {
