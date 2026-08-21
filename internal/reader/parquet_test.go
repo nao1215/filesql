@@ -536,7 +536,7 @@ func TestChunkFitsFrom(t *testing.T) {
 		start, length, size int64
 		want                bool
 	}{
-		"a chunk inside the file":         {start: 100, length: 100, size: 200, want: true},
+		"a chunk inside the file":         {start: 100, length: 99, size: 200, want: true},
 		"a chunk ending at the last byte": {start: 100, length: 100, size: 200, want: true},
 		"a chunk of no bytes":             {start: 100, length: 0, size: 200, want: true},
 		"a chunk one byte too long":       {start: 100, length: 101, size: 200, want: false},
