@@ -1991,21 +1991,21 @@ func strftimeRender(tm time.Time, format string) string {
 			continue
 		}
 		spec := format[i+1]
-		switch {
-		case spec == '%':
-			b.WriteByte('%')
-		default:
-			if layout, ok := strftimeToGoLayout[spec]; ok {
-				b.WriteString(tm.Format(layout))
-			} else if computed, ok := strftimeComputed(tm, spec); ok {
-				b.WriteString(computed)
-			} else {
-				// An unknown specifier is its own letter, which is what
-				// BigQuery does.
-				b.WriteByte(spec)
-			}
-		}
 		i++
+		if spec == '%' {
+			b.WriteByte('%')
+			continue
+		}
+		if layout, ok := strftimeToGoLayout[spec]; ok {
+			b.WriteString(tm.Format(layout))
+			continue
+		}
+		if computed, ok := strftimeComputed(tm, spec); ok {
+			b.WriteString(computed)
+			continue
+		}
+		// An unknown specifier is its own letter, which is what BigQuery does.
+		b.WriteByte(spec)
 	}
 	return b.String()
 }
