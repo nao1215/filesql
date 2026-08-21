@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nao1215/filesql/internal/infer"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,7 +35,7 @@ func TestIsFloatRejectsInt64Overflow(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			require.Equal(t, tt.want, isFloat(tt.value))
+			require.Equal(t, tt.want, infer.IsFloat(tt.value))
 		})
 	}
 }
@@ -45,10 +46,10 @@ func TestIsFloatRejectsInt64Overflow(t *testing.T) {
 func TestClassifyValueInt64Overflow(t *testing.T) {
 	t.Parallel()
 
-	require.Equal(t, columnTypeText, classifyValue("11040320260000000000"))
-	require.Equal(t, columnTypeText, classifyValue("-11040320260000000000"))
-	require.Equal(t, columnTypeInteger, classifyValue("9223372036854775807"))
-	require.Equal(t, columnTypeReal, classifyValue("1.104032026e+19"))
+	require.Equal(t, columnTypeText, columnTypeOf(infer.Classify("11040320260000000000")))
+	require.Equal(t, columnTypeText, columnTypeOf(infer.Classify("-11040320260000000000")))
+	require.Equal(t, columnTypeInteger, columnTypeOf(infer.Classify("9223372036854775807")))
+	require.Equal(t, columnTypeReal, columnTypeOf(infer.Classify("1.104032026e+19")))
 }
 
 // TestInferColumnTypeInt64Overflow verifies that a column entirely made of
@@ -56,11 +57,11 @@ func TestClassifyValueInt64Overflow(t *testing.T) {
 func TestInferColumnTypeInt64Overflow(t *testing.T) {
 	t.Parallel()
 
-	got := inferColumnType([]string{
+	got := columnTypeOf(infer.Column([]string{
 		"11040320260000000000",
 		"11040320260000000001",
 		"11040320260000000002",
-	})
+	}))
 	require.Equal(t, columnTypeText, got)
 }
 

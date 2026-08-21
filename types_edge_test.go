@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/nao1215/filesql/frame"
+	"github.com/nao1215/filesql/internal/infer"
 	"github.com/nao1215/filesql/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,7 +52,7 @@ func TestColumnInfoList_EqualTypes(t *testing.T) {
 func TestInferColumnType_NoValues(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, columnTypeText, inferColumnType(nil))
+	assert.Equal(t, columnTypeText, columnTypeOf(infer.Column(nil)))
 }
 
 // TestColumnTypeEvidence_ChoosesTheTypeThatHoldsEveryValue covers the rule that
@@ -118,7 +119,7 @@ func TestColumnTypeEvidence_ChoosesTheTypeThatHoldsEveryValue(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tt.want, inferColumnType(tt.values))
+			assert.Equal(t, tt.want, columnTypeOf(infer.Column(tt.values)))
 		})
 	}
 }
@@ -130,11 +131,11 @@ func TestColumnTypeEvidence_DoesNotDependOnOrder(t *testing.T) {
 	t.Parallel()
 
 	values := []string{"1", "2", "3.5", "2026-08-20", "abc", "", "007"}
-	want := inferColumnType(values)
+	want := columnTypeOf(infer.Column(values))
 
 	for i := range values {
 		rotated := append(append([]string{}, values[i:]...), values[:i]...)
-		assert.Equal(t, want, inferColumnType(rotated), "rotated by %d", i)
+		assert.Equal(t, want, columnTypeOf(infer.Column(rotated)), "rotated by %d", i)
 	}
 }
 
@@ -143,8 +144,8 @@ func TestColumnTypeEvidence_DoesNotDependOnOrder(t *testing.T) {
 func TestIsIntegerLiteralOverflowingInt64_SignOnly(t *testing.T) {
 	t.Parallel()
 
-	assert.False(t, isIntegerLiteralOverflowingInt64("+"))
-	assert.False(t, isIntegerLiteralOverflowingInt64("-"))
+	assert.False(t, infer.IsIntegerLiteralOverflowingInt64("+"))
+	assert.False(t, infer.IsIntegerLiteralOverflowingInt64("-"))
 }
 
 // loadColumnForTypeTest loads a one-column CSV whose header is "v" and returns
