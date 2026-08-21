@@ -7,6 +7,7 @@ import (
 	"errors"
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -317,5 +318,35 @@ func TestRoundForDialect(t *testing.T) {
 				t.Fatalf("roundForDialect(%v, %v) = %v, want %v", tt.dialect, tt.value, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestCastStringPastTheFloatRange covers the string a float64 cannot hold
+// either. strconv.ParseFloat answers such a string with an infinity and
+// ErrRange, and reading that as a parse failure sent the value down MySQL's
+// numeric-prefix path, where it came back as 0 rather than as the bound of the
+// type.
+func TestCastStringPastTheFloatRange(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	huge := strings.Repeat("9", 400)
+
+	got, err := runDialect(t, db, MySQL, "SELECT CAST('"+huge+"' AS SIGNED)")
+	if err != nil {
+		t.Fatalf("mysql: %v", err)
+	}
+	if want := "9223372036854775807"; got.String != want {
+		t.Errorf("mysql clamps a string past the float range: got %v, want %q", got, want)
+	}
+
+	// The engine returns the helper's message as a SQL error rather than as the
+	// wrapped Go error, which is why these assert on failing rather than on the
+	// sentinel; the message is checked in TestCastErrorIsInvalidCast.
+	if _, err := runDialect(t, db, PostgreSQL, "SELECT '"+huge+"'::bigint"); err == nil {
+		t.Error("postgresql must reject a string past the float range")
+	}
+	if _, err := runDialect(t, db, GoogleSQL, "SELECT CAST('"+huge+"' AS INT64)"); err == nil {
+		t.Error("googlesql must reject a string past the float range")
 	}
 }

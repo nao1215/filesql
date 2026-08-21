@@ -237,7 +237,11 @@ func castToInt(d Dialect, v driver.Value, strict bool) (driver.Value, error) {
 	if n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
 		return n, nil
 	}
-	if f, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
+	// ParseFloat answers a well-formed number too large for a float64 with an
+	// infinity and ErrRange. That is a value, not a parse failure: reading it as
+	// one sent a 400-digit number down the numeric-prefix path below, where it
+	// came back as 0 instead of as the bound of the type.
+	if f, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil || errors.Is(err, strconv.ErrRange) {
 		return roundForDialect(d, f, strict)
 	}
 	if strict {
