@@ -190,6 +190,71 @@ func TestParse_TSV(t *testing.T) {
 	})
 }
 
+// TestParse_TSVRowShape pins a TSV row to its header. Everything downstream
+// reads a record by header position, so a record of another length is a
+// TableData nothing can use: prep called such a row valid and wrote it back,
+// and the file it wrote failed to load.
+func TestParse_TSVRowShape(t *testing.T) {
+	t.Parallel()
+
+	refused := []struct {
+		name  string
+		input string
+	}{
+		{name: "a row longer than the header", input: "a\n1\t2\n"},
+		{name: "a row shorter than the header", input: "a\tb\n1\n"},
+		{name: "an empty header and a row of two cells", input: "\n\t"},
+		{name: "a long row after a good one", input: "a\tb\n1\t2\n3\t4\t5\n"},
+	}
+	for _, tt := range refused {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := Parse(strings.NewReader(tt.input), TSV)
+
+			require.Error(t, err, "a row that does not fit its header must be refused")
+			assert.ErrorIs(t, err, ErrTSVSyntax)
+		})
+	}
+
+	accepted := []struct {
+		name    string
+		input   string
+		headers []string
+		records [][]string
+	}{
+		{
+			name:    "a row of exactly the header's width",
+			input:   "a\tb\n1\t2\n",
+			headers: []string{"a", "b"},
+			records: [][]string{{"1", "2"}},
+		},
+		{
+			name:    "a row of empty cells",
+			input:   "a\tb\n\t\n",
+			headers: []string{"a", "b"},
+			records: [][]string{{"", ""}},
+		},
+		{
+			name:    "a header alone",
+			input:   "a\tb\n",
+			headers: []string{"a", "b"},
+			records: [][]string{},
+		},
+	}
+	for _, tt := range accepted {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, err := Parse(strings.NewReader(tt.input), TSV)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.headers, result.Headers)
+			assert.Equal(t, tt.records, result.Records)
+		})
+	}
+}
+
 func TestParse_TSVTakesFieldsLiterally(t *testing.T) {
 	t.Parallel()
 
@@ -1246,4 +1311,52 @@ func TestParse_LeadingByteOrderMark(t *testing.T) {
 			assert.Equal(t, tt.wantFirst, result.Records[0])
 		})
 	}
+}
+
+// FuzzParseFormats holds the shape every text format's parse has to keep: a
+// parse that succeeds describes a rectangle, so a record can be read by header
+// position and a column type belongs to each header. TSV used to return a
+// record of another width, which is a TableData nothing downstream can use.
+func FuzzParseFormats(f *testing.F) {
+	seeds := []string{
+		"a,b\n1,2\n",
+		"a\tb\n1\t2\n",
+		"a:1\tb:2\n",
+		`[{"a":1}]`,
+		"{\"a\":1}\n{\"a\":2}\n",
+		"a,b\n\"x\ny\",2\n",
+		"\xef\xbb\xbfa,b\n1,2\n",
+		"a,a\n1,2\n",
+		"",
+		"\n\n\n",
+		"\n\t",
+		"a,b\n1,2,3\n",
+		`{"a":[1,2],"b":{"c":null}}`,
+	}
+	for _, seed := range seeds {
+		f.Add(seed)
+	}
+
+	types := []FileType{CSV, TSV, LTSV, JSON, JSONL}
+	f.Fuzz(func(t *testing.T, data string) {
+		for _, fileType := range types {
+			result, err := Parse(strings.NewReader(data), fileType)
+			if err != nil {
+				continue
+			}
+			if result == nil {
+				t.Fatalf("%v: nil result with no error for %q", fileType, data)
+			}
+			if len(result.ColumnTypes) != len(result.Headers) {
+				t.Fatalf("%v: %d column types for %d headers (input %q)",
+					fileType, len(result.ColumnTypes), len(result.Headers), data)
+			}
+			for i, record := range result.Records {
+				if len(record) != len(result.Headers) {
+					t.Fatalf("%v: record %d has %d cells, %d headers (input %q)",
+						fileType, i, len(record), len(result.Headers), data)
+				}
+			}
+		}
+	})
 }
