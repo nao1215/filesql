@@ -1046,9 +1046,21 @@ func fnDialectRound(args []driver.Value) (driver.Value, error) {
 		return nil, nil
 	}
 	if digits >= 0 {
+		// Past the precision a float64 carries there is nothing left to round,
+		// and the scale would be infinite: ROUND(1.5, 400) is 1.5 in MySQL and
+		// in BigQuery, not the NaN that dividing by an infinite scale gives.
+		if digits > float64SignificantDigits {
+			return value, nil
+		}
 		// What SQLite already does, kept here so one function answers the whole
 		// call rather than the rewrite having to decide which one to emit.
 		return roundHalfAwayFromZero(value, digits), nil
+	}
+	// Below the smallest power of ten a float64 holds, the whole value is under
+	// the rounding unit: ROUND(12345, -400) is 0 in MySQL and in BigQuery. The
+	// comparison comes before the negation because negating math.MinInt64 wraps.
+	if digits < -float64MaxDecimalExponent {
+		return int64(0), nil
 	}
 	scale := math.Pow(10, float64(-digits))
 	rounded := roundHalfAwayFromZero(value/scale, 0) * scale
@@ -1059,6 +1071,14 @@ func fnDialectRound(args []driver.Value) (driver.Value, error) {
 	}
 	return rounded, nil
 }
+
+// The bounds beyond which a float64 cannot carry the rounding: 10 to the power
+// of either would be infinite, and an infinite scale turns a finite value into
+// a NaN rather than into the answer every engine gives.
+const (
+	float64SignificantDigits  = 17
+	float64MaxDecimalExponent = 308
+)
 
 // roundHalfAwayFromZero is value rounded to digits places after the decimal
 // point, with a half rounded away from zero, which is what all three engines do

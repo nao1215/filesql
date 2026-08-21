@@ -910,6 +910,10 @@ func TestGoogleSQLSubstrFollowsBigQuery(t *testing.T) {
 				t.Errorf("%s: %v", query, err)
 				continue
 			}
+			if !got.Valid {
+				t.Errorf("%s = NULL, want %q", query, helper.want)
+				continue
+			}
 			if got.String != helper.want {
 				t.Errorf("%s = %q, want %q", query, got.String, helper.want)
 			}
@@ -947,6 +951,21 @@ func TestRoundHonorsANegativeDigitCount(t *testing.T) {
 		"0, -3":      "0",
 		"12345, 0":   "12345",
 		"1.26, 1":    "1.3",
+		// A tie rounds away from zero in all three engines, which is also what
+		// SQLite's own round() does.
+		"0.5, 0":  "1",
+		"1.5, 0":  "2",
+		"2.5, 0":  "3",
+		"-2.5, 0": "-3",
+		"1.25, 1": "1.3",
+		"1.35, 1": "1.4",
+		// A digit count past what a float64 carries: the value comes back as it
+		// is, and a count past the smallest power of ten it holds rounds the
+		// whole value away. Both are what MySQL and BigQuery answer, and both
+		// used to come back NaN from an infinite scale.
+		"1.5, 400":                    "1.5",
+		"12345, -400":                 "0",
+		"12345, -9223372036854775808": "0",
 	}
 
 	for call, want := range tests {
@@ -1000,6 +1019,7 @@ func TestFormatDateKnowsItsSpecifiers(t *testing.T) {
 		want [4]string
 	}{
 		{"%j", [4]string{"060", "001", "001", "366"}},
+		{"%s", [4]string{"1709211909", "1704067200", "1672531200", "1735603200"}},
 		{"%C", [4]string{"20", "20", "20", "20"}},
 		{"%Q", [4]string{"1", "1", "1", "4"}},
 		{"%D", [4]string{"02/29/24", "01/01/24", "01/01/23", "12/31/24"}},
