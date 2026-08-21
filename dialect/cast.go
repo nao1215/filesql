@@ -234,14 +234,23 @@ func castToInt(d Dialect, v driver.Value, strict bool) (driver.Value, error) {
 		return roundForDialect(d, x, strict)
 	}
 	s, _ := toString(v)
-	if n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
+	text := strings.TrimSpace(s)
+	n, err := strconv.ParseInt(text, 10, 64)
+	if err == nil {
 		return n, nil
+	}
+	// A well-formed integer outside the range is answered here rather than
+	// through the float below, which cannot tell -2^63-1 from -2^63: both are the
+	// same float64, so the range check would let the first one through as the
+	// second.
+	if errors.Is(err, strconv.ErrRange) {
+		return outOfRangeInt(strings.HasPrefix(text, "-"), strict, text)
 	}
 	// ParseFloat answers a well-formed number too large for a float64 with an
 	// infinity and ErrRange. That is a value, not a parse failure: reading it as
 	// one sent a 400-digit number down the numeric-prefix path below, where it
 	// came back as 0 instead of as the bound of the type.
-	if f, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil || errors.Is(err, strconv.ErrRange) {
+	if f, err := strconv.ParseFloat(text, 64); err == nil || errors.Is(err, strconv.ErrRange) {
 		return roundForDialect(d, f, strict)
 	}
 	if strict {
@@ -285,17 +294,24 @@ func roundForDialect(d Dialect, f float64, strict bool) (driver.Value, error) {
 		// MySQL's answer for a value that names no number at all.
 		return int64(0), nil
 	case rounded >= intUpperExclusiveAsFloat:
-		if strict {
-			return nil, fmt.Errorf("%w: %v is out of range for an integer", ErrInvalidCast, f)
-		}
-		return int64(math.MaxInt64), nil
+		return outOfRangeInt(false, strict, fmt.Sprint(f))
 	case rounded < intLowerInclusiveAsFloat:
-		if strict {
-			return nil, fmt.Errorf("%w: %v is out of range for an integer", ErrInvalidCast, f)
-		}
-		return int64(math.MinInt64), nil
+		return outOfRangeInt(true, strict, fmt.Sprint(f))
 	}
 	return int64(rounded), nil
+}
+
+// outOfRangeInt is the answer for a value the integer type has no room for:
+// MySQL clamps to the bound it passed, and the dialects that raise for a value
+// they cannot represent raise. shown is the value as the error should name it.
+func outOfRangeInt(negative, strict bool, shown string) (driver.Value, error) {
+	if strict {
+		return nil, fmt.Errorf("%w: %s is out of range for an integer", ErrInvalidCast, shown)
+	}
+	if negative {
+		return int64(math.MinInt64), nil
+	}
+	return int64(math.MaxInt64), nil
 }
 
 // numericPrefix returns the value of the longest leading run of s that parses as

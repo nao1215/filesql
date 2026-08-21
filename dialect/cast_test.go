@@ -110,6 +110,12 @@ func TestCastSemantics(t *testing.T) {
 		{"safe_cast nulls a value past the range", GoogleSQL, `SELECT SAFE_CAST(1e30 AS INT64)`, "", true},
 		{"safe_cast nulls a string past the range", GoogleSQL, `SELECT SAFE_CAST('99999999999999999999' AS INT64)`, "", true},
 		{"safe_cast keeps a value inside the range", GoogleSQL, `SELECT SAFE_CAST(9.2e18 AS INT64)`, "9200000000000000000", false},
+		// A digit string one past the range: no float64 tells it from the bound
+		// itself, so the answer has to come from the integer parse.
+		{"mysql clamps the string below the range", MySQL, `SELECT CAST('-9223372036854775809' AS SIGNED)`, "-9223372036854775808", false},
+		{"mysql clamps the string above the range", MySQL, `SELECT CAST('9223372036854775808' AS SIGNED)`, "9223372036854775807", false},
+		{"mysql keeps the string at the lower bound", MySQL, `SELECT CAST('-9223372036854775808' AS SIGNED)`, "-9223372036854775808", false},
+		{"safe_cast nulls the string below the range", GoogleSQL, `SELECT SAFE_CAST('-9223372036854775809' AS INT64)`, "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -162,6 +168,9 @@ func TestCastRejectsInvalidValues(t *testing.T) {
 		{"postgresql integer from a string past the range", PostgreSQL, `SELECT '99999999999999999999'::bigint`},
 		{"googlesql int64 above the range", GoogleSQL, `SELECT CAST(1e30 AS INT64)`},
 		{"googlesql int64 from an infinity", GoogleSQL, `SELECT CAST(1e308*10 AS INT64)`},
+		{"postgresql integer one below the range", PostgreSQL, `SELECT '-9223372036854775809'::bigint`},
+		{"postgresql integer one above the range", PostgreSQL, `SELECT '9223372036854775808'::bigint`},
+		{"googlesql int64 one below the range", GoogleSQL, `SELECT CAST('-9223372036854775809' AS INT64)`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
