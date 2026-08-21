@@ -27,6 +27,7 @@ import (
 //	P-16 TRIM(BOTH x FROM s), OVERLAY, BTRIM, JSONB_ARRAY_LENGTH
 //	P-17 ARRAY[...]                -> ErrUnsupportedSyntax
 //	P-18 generate_series(...) etc. -> ErrUnsupportedSyntax
+//	P-19 UPPER(x) / LOWER(x)       -> unicode_upper / unicode_lower
 func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedPostgreSQL(tokens); err != nil {
 		return nil, err

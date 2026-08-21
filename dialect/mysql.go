@@ -32,6 +32,7 @@ import (
 //	M-21 !a                              -> (NOT a)
 //	M-21 a ^ b                           -> mysql_bit_xor(a, b)
 //	M-21 a XOR b                         -> ErrUnsupportedSyntax
+//	M-25 UPPER(x) / LOWER(x)             -> unicode_upper / unicode_lower
 //
 // M-10 (LIMIT n, m) needs no rewrite: SQLite accepts it natively.
 func rewriteMySQL(tokens []token) ([]token, error) {

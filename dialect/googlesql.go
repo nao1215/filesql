@@ -29,6 +29,7 @@ import (
 //	G-18 STRING_AGG(DISTINCT x, ',')           -> group_concat(DISTINCT x)
 //	G-19 [1,2,3] / x[OFFSET(n)]               -> ErrUnsupportedSyntax
 //	G-20 SAFE.f(args)                         -> safe_f(args)
+//	G-21 UPPER(x) / LOWER(x)                  -> unicode_upper / unicode_lower
 func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedGoogleSQL(tokens); err != nil {
 		return nil, err
