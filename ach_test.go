@@ -592,3 +592,81 @@ func TestDumpACH_OnCallerManagedDatabase(t *testing.T) {
 
 	assert.FileExists(t, out)
 }
+
+// TestDumpACH_WriteBackKeepsEveryValue is the property a caller can rely on
+// when the bytes change. A write-back is a rewrite rather than a patch, so a
+// record nobody edited can come back with different padding; what must survive
+// is the data, so the file is written back with no edit at all and reloaded, and
+// every column of every table has to match what the first load held.
+func TestDumpACH_WriteBackKeepsEveryValue(t *testing.T) {
+	testFile := findTestACHFile(t)
+	if testFile == "" {
+		t.Skip("No test ACH file found")
+	}
+
+	ctx := context.Background()
+	source := filepath.Join(t.TempDir(), "ppd_debit.ach")
+	original, err := os.ReadFile(testFile) //nolint:gosec // Test fixture path
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(source, original, 0o600)) //nolint:gosec // Test path is constructed from t.TempDir()
+
+	db, err := OpenContext(ctx, source)
+	require.NoError(t, err)
+	before := achTableDump(ctx, t, db, "ppd_debit")
+	require.NoError(t, DumpACH(ctx, db, "ppd_debit", source))
+	require.NoError(t, db.Close())
+
+	reloaded, err := OpenContext(ctx, source)
+	require.NoError(t, err)
+	defer reloaded.Close()
+	after := achTableDump(ctx, t, reloaded, "ppd_debit")
+
+	assert.Equal(t, before, after, "a write-back with no edit must keep every value")
+}
+
+// achTableDump is every row of every table of one ACH file, as text, so two
+// loads can be compared without naming each column.
+func achTableDump(ctx context.Context, t *testing.T, db *sql.DB, base string) map[string][]string {
+	t.Helper()
+
+	names, err := db.QueryContext(ctx,
+		`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ? ORDER BY name`, base+"%")
+	require.NoError(t, err)
+	var tables []string
+	for names.Next() {
+		var name string
+		require.NoError(t, names.Scan(&name))
+		tables = append(tables, name)
+	}
+	require.NoError(t, names.Err())
+	require.NoError(t, names.Close())
+	require.NotEmpty(t, tables, "the file must load into at least one table")
+
+	dump := make(map[string][]string, len(tables))
+	for _, table := range tables {
+		rows, err := db.QueryContext(ctx, `SELECT * FROM "`+table+`"`) //nolint:gosec // The name comes from sqlite_master, not from a caller
+		require.NoError(t, err)
+		columns, err := rows.Columns()
+		require.NoError(t, err)
+		for rows.Next() {
+			cells := make([]sql.NullString, len(columns))
+			pointers := make([]any, len(columns))
+			for i := range cells {
+				pointers[i] = &cells[i]
+			}
+			require.NoError(t, rows.Scan(pointers...))
+			line := make([]string, 0, len(columns))
+			for i, cell := range cells {
+				if cell.Valid {
+					line = append(line, columns[i]+"="+cell.String)
+					continue
+				}
+				line = append(line, columns[i]+"=NULL")
+			}
+			dump[table] = append(dump[table], strings.Join(line, " "))
+		}
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+	}
+	return dump
+}
