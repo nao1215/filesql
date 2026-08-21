@@ -508,7 +508,7 @@ func TestStreamingParser_ParseXLSXStream_MemoryOptimized(t *testing.T) {
 		buf := createTestXLSX(t, 10, 3)
 
 		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "test_table", 5)
-		table, err := parser.parseXLSXStream(buf)
+		table, err := parser.parseFromReader(buf)
 
 		require.NoError(t, err)
 		assert.NotNil(t, table)
@@ -527,7 +527,7 @@ func TestStreamingParser_ParseXLSXStream_MemoryOptimized(t *testing.T) {
 		buf := createTestXLSX(t, 5, 2)
 
 		// This should work with small data
-		table, err := parser.parseXLSXStream(buf)
+		table, err := parser.parseFromReader(buf)
 
 		// Result depends on actual memory usage - either succeeds or fails with memory error
 		if err != nil {
@@ -545,7 +545,7 @@ func TestStreamingParser_ParseXLSXStream_MemoryOptimized(t *testing.T) {
 		// Process multiple XLSX files to test pool reuse
 		for range 3 {
 			buf := createTestXLSX(t, 5, 2)
-			table, err := parser.parseXLSXStream(buf)
+			table, err := parser.parseFromReader(buf)
 
 			require.NoError(t, err)
 			assert.NotNil(t, table)
@@ -573,7 +573,7 @@ func TestStreamingParser_ProcessXLSXInChunks_MemoryOptimized(t *testing.T) {
 		var processedChunks int
 		var totalRecords int
 
-		err := parser.ProcessInChunks(buf, func(chunk *tableChunk) error {
+		_, err := parser.ProcessInChunks(buf, func(chunk *tableChunk) error {
 			processedChunks++
 			totalRecords += len(chunk.records)
 
@@ -606,7 +606,7 @@ func TestStreamingParser_ProcessXLSXInChunks_MemoryOptimized(t *testing.T) {
 
 		var processedChunks int
 
-		err := parser.ProcessInChunks(buf, func(chunk *tableChunk) error {
+		_, err := parser.ProcessInChunks(buf, func(chunk *tableChunk) error {
 			processedChunks++
 			// Chunk size might be reduced due to memory pressure
 			assert.LessOrEqual(t, len(chunk.records), 10, "chunk size should be at most original limit")
@@ -632,7 +632,7 @@ func TestStreamingParser_ProcessXLSXInChunks_MemoryOptimized(t *testing.T) {
 		var processedChunks int
 		var lastChunk *tableChunk
 
-		err := parser.ProcessInChunks(buf, func(chunk *tableChunk) error {
+		_, err := parser.ProcessInChunks(buf, func(chunk *tableChunk) error {
 			processedChunks++
 			lastChunk = chunk
 			return nil
@@ -653,7 +653,7 @@ func TestStreamingParser_ProcessXLSXInChunks_MemoryOptimized(t *testing.T) {
 
 		parser := newStreamingParser(FileTypeXLSX, CompressionNone, "test_table", 5)
 
-		err := parser.ProcessInChunks(buf, func(_ *tableChunk) error {
+		_, err := parser.ProcessInChunks(buf, func(_ *tableChunk) error {
 			return assert.AnError // Return an error to test error handling
 		})
 
@@ -717,7 +717,7 @@ func TestStreamingParser_XLSXErrorHandling(t *testing.T) {
 		// Test with invalid XLSX data
 		invalidData := strings.NewReader("not an xlsx file")
 
-		_, err := parser.parseXLSXStream(invalidData)
+		_, err := parser.parseFromReader(invalidData)
 		assert.Error(t, err, "should fail with invalid XLSX data")
 		assert.Contains(t, err.Error(), "failed to open XLSX file", "should have appropriate error message")
 	})
@@ -729,7 +729,7 @@ func TestStreamingParser_XLSXErrorHandling(t *testing.T) {
 		// Test with empty reader
 		emptyReader := strings.NewReader("")
 
-		_, err := parser.parseXLSXStream(emptyReader)
+		_, err := parser.parseFromReader(emptyReader)
 		assert.Error(t, err, "should fail with empty reader")
 	})
 }
@@ -787,7 +787,7 @@ func BenchmarkStreamingParser_XLSXProcessing(b *testing.B) {
 			// Create fresh reader for each iteration
 			reader := bytes.NewReader(testData)
 
-			_, err := parser.parseXLSXStream(reader)
+			_, err := parser.parseFromReader(reader)
 			if err != nil {
 				b.Fatalf("benchmark failed: %v", err)
 			}
@@ -802,7 +802,7 @@ func BenchmarkStreamingParser_XLSXProcessing(b *testing.B) {
 			// Create fresh reader for each iteration
 			reader := bytes.NewReader(testData)
 
-			err := parser.ProcessInChunks(reader, func(chunk *tableChunk) error {
+			_, err := parser.ProcessInChunks(reader, func(chunk *tableChunk) error {
 				// Minimal processing to avoid skewing benchmark
 				_ = chunk.headers
 				_ = chunk.records

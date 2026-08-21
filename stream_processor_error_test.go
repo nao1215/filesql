@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -187,97 +188,192 @@ func TestDropIfReplacing(t *testing.T) {
 	})
 }
 
-// TestCreateEmptyTable covers the header-only file, which is a valid input that
-// produces a table with no rows.
-func TestCreateEmptyTable(t *testing.T) {
+// TestLoadTyped_ReadAgain covers the path a file takes when a later chunk
+// widens a column: the first attempt is dropped and the file is read again
+// under the types the whole of it calls for.
+func TestLoadTyped_ReadAgain(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
+	const body = "v\n1\n2.50\nabc\n"
 
-	t.Run("creates the columns the header names", func(t *testing.T) {
+	newSource := func(reread func(emit chunkProcessor) (columnInfoList, error)) tableSource {
+		return tableSource{
+			read: func(emit chunkProcessor) (columnInfoList, error) {
+				return newStreamingParser(FileTypeCSV, CompressionNone, "t", 1).ProcessInChunks(strings.NewReader(body), emit)
+			},
+			reread: reread,
+		}
+	}
+
+	t.Run("a second read that does not match the first is refused", func(t *testing.T) {
 		t.Parallel()
 
 		db := openTestDB(t)
-		input := readerInput{
-			reader:    strings.NewReader("id,name\n"),
-			tableName: "users",
-			fileType:  FileTypeCSV,
+		changed := func(emit chunkProcessor) (columnInfoList, error) {
+			return newStreamingParser(FileTypeCSV, CompressionNone, "t", 1).ProcessInChunks(strings.NewReader("v\n1\n2\n"), emit)
 		}
-		require.NoError(t, newStreamProcessor(100).createEmptyTable(ctx, db, input))
+		err := newStreamProcessor(1).loadTable(ctx, db, "t", newSource(changed))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrParsing)
+		assert.Contains(t, err.Error(), "changed while it was being read")
 
-		var count int
-		require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count))
-		assert.Equal(t, 0, count, "a header-only file loads as a table with no rows")
+		var tables int
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table'`).Scan(&tables))
+		assert.Equal(t, 0, tables, "a refused load leaves no table behind")
+	})
 
-		rows, err := db.QueryContext(ctx, `SELECT * FROM users`)
+	t.Run("a source that cannot be opened again reports why", func(t *testing.T) {
+		t.Parallel()
+
+		failing := func(chunkProcessor) (columnInfoList, error) { return nil, errStub }
+		err := newStreamProcessor(1).loadTable(ctx, openTestDB(t), "t", newSource(failing))
+		require.ErrorIs(t, err, errStub)
+	})
+
+	t.Run("a second read stores the file's text at every row", func(t *testing.T) {
+		t.Parallel()
+
+		db := openTestDB(t)
+		again := func(emit chunkProcessor) (columnInfoList, error) {
+			return newStreamingParser(FileTypeCSV, CompressionNone, "t", 1).ProcessInChunks(strings.NewReader(body), emit)
+		}
+		require.NoError(t, newStreamProcessor(1).loadTable(ctx, db, "t", newSource(again)))
+
+		rows, err := db.QueryContext(ctx, `SELECT v FROM t ORDER BY rowid`)
 		require.NoError(t, err)
 		defer rows.Close()
-		columns, err := rows.Columns()
-		require.NoError(t, err)
-		assert.Equal(t, []string{"id", "name"}, columns)
+		var got []string
+		for rows.Next() {
+			var v string
+			require.NoError(t, rows.Scan(&v))
+			got = append(got, v)
+		}
 		require.NoError(t, rows.Err())
-	})
-
-	t.Run("keeps a duplicate column refusal", func(t *testing.T) {
-		t.Parallel()
-
-		input := readerInput{
-			reader:    strings.NewReader("id,id\n"),
-			tableName: "users",
-			fileType:  FileTypeCSV,
-		}
-		err := newStreamProcessor(100).createEmptyTable(ctx, openTestDB(t), input)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "duplicate column name", "the parser's own refusal must not be replaced by a fallback table")
-	})
-
-	t.Run("reports a database that cannot take the table", func(t *testing.T) {
-		t.Parallel()
-
-		db := openTestDB(t)
-		require.NoError(t, db.Close())
-
-		input := readerInput{
-			reader:    strings.NewReader("id,name\n"),
-			tableName: "users",
-			fileType:  FileTypeCSV,
-		}
-		err := newStreamProcessor(100).createEmptyTable(ctx, db, input)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrDatabaseOperation)
+		assert.Equal(t, []string{"1", "2.50", "abc"}, got)
 	})
 }
 
-// TestCreateTableFromHeaders covers the fallback used when the header cannot be
-// parsed at all: the file still becomes a table, so a later query names a table
-// that exists instead of failing on a missing one.
-func TestCreateTableFromHeaders(t *testing.T) {
+// TestLoadStaged_CallerTransaction covers a load into a transaction the caller
+// owns: the staging table is dropped from it when the load fails, and the
+// transaction itself is left for the caller to end.
+func TestLoadStaged_CallerTransaction(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
+	db := openTestDB(t)
+	tx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
 
-	t.Run("creates a single-column table", func(t *testing.T) {
-		t.Parallel()
+	source := tableSource{read: func(emit chunkProcessor) (columnInfoList, error) {
+		return newStreamingParser(FileTypeCSV, CompressionNone, "t", 1).ProcessInChunks(strings.NewReader("v\n1\n2\nx,y\n"), emit)
+	}}
+	err = newStreamProcessor(1).loadTable(ctx, tx, "t", source)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrColumnMismatch)
 
-		db := openTestDB(t)
-		input := readerInput{tableName: "users", fileType: FileTypeCSV}
-		require.NoError(t, newStreamProcessor(100).createTableFromHeaders(ctx, db, input))
+	var tables int
+	require.NoError(t, tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table'`).Scan(&tables))
+	assert.Equal(t, 0, tables, "the staging table is dropped from the caller's transaction")
+}
 
-		var name string
-		require.NoError(t, db.QueryRowContext(ctx,
-			`SELECT name FROM sqlite_master WHERE type='table' AND name='users'`).Scan(&name))
-		assert.Equal(t, "users", name)
-	})
+// TestLoadStaged_TypesTheTableOnce covers the two ways a staged table is
+// declared: renamed when every column is TEXT, copied when one is not.
+func TestLoadStaged_TypesTheTableOnce(t *testing.T) {
+	t.Parallel()
 
-	t.Run("reports a database that cannot take the table", func(t *testing.T) {
-		t.Parallel()
+	ctx := context.Background()
+	tests := []struct {
+		name     string
+		body     string
+		wantType string
+		wantRows []string
+	}{
+		{"all text is renamed in place", "a,b\nx,y\n", "TEXT", []string{"x"}},
+		{"a numeric column is copied into its type", "a,b\n1,y\n2,z\n", "INTEGER", []string{"1", "2"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-		db := openTestDB(t)
-		require.NoError(t, db.Close())
+			db := openTestDB(t)
+			source := tableSource{read: func(emit chunkProcessor) (columnInfoList, error) {
+				return newStreamingParser(FileTypeCSV, CompressionNone, "t", 1).ProcessInChunks(strings.NewReader(tt.body), emit)
+			}}
+			require.NoError(t, newStreamProcessor(1).loadTable(ctx, db, "t", source))
 
-		input := readerInput{tableName: "users", fileType: FileTypeCSV}
-		err := newStreamProcessor(100).createTableFromHeaders(ctx, db, input)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrDatabaseOperation)
-	})
+			var declared string
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT type FROM pragma_table_info('t') WHERE name = 'a'`).Scan(&declared))
+			assert.Equal(t, tt.wantType, declared)
+
+			var names []string
+			rows, err := db.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type='table'`)
+			require.NoError(t, err)
+			for rows.Next() {
+				var name string
+				require.NoError(t, rows.Scan(&name))
+				names = append(names, name)
+			}
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
+			assert.Equal(t, []string{"t"}, names, "the staging table is gone")
+
+			rows, err = db.QueryContext(ctx, `SELECT a FROM t ORDER BY rowid`)
+			require.NoError(t, err)
+			defer rows.Close()
+			var got []string
+			for rows.Next() {
+				var a string
+				require.NoError(t, rows.Scan(&a))
+				got = append(got, a)
+			}
+			require.NoError(t, rows.Err())
+			assert.Equal(t, tt.wantRows, got)
+		})
+	}
+}
+
+// TestLoadTable_SourceWithoutChunks covers a source that returns without
+// emitting a chunk, which every reader in this package is written not to do.
+func TestLoadTable_SourceWithoutChunks(t *testing.T) {
+	t.Parallel()
+
+	silent := func(chunkProcessor) (columnInfoList, error) { return nil, nil }
+	for name, source := range map[string]tableSource{
+		"once":  {read: silent},
+		"twice": {read: silent, reread: silent},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := newStreamProcessor(1).loadTable(context.Background(), openTestDB(t), "t", source)
+			require.ErrorIs(t, err, ErrEmptyData)
+		})
+	}
+}
+
+// TestAddFS_ReadsAFileAgainWhenAColumnWidens covers the reopen an fs.FS input
+// carries: a file whose column widens late is read twice and stored as written.
+func TestAddFS_ReadsAFileAgainWhenAColumnWidens(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mockFS := fstest.MapFS{"t.csv": &fstest.MapFile{Data: []byte("v\n1\n2.50\nabc\n")}}
+	built, err := NewBuilder().AddFS(mockFS).SetDefaultChunkSize(1).Build(ctx)
+	require.NoError(t, err)
+	db, err := built.Open(ctx)
+	require.NoError(t, err)
+	defer db.Close()
+
+	rows, err := db.QueryContext(ctx, `SELECT v FROM t ORDER BY rowid`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var v string
+		require.NoError(t, rows.Scan(&v))
+		got = append(got, v)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{"1", "2.50", "abc"}, got)
 }

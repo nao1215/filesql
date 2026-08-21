@@ -2,7 +2,6 @@ package filesql
 
 import (
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/nao1215/filesql/parser"
@@ -72,27 +71,22 @@ const (
 type file struct {
 	path     string
 	fileType FileType
-	// excelSheetPolicy decides which sheets of a workbook toTable may take its
-	// table from. The zero value is ExcelSheetPolicyAll.
-	excelSheetPolicy ExcelSheetPolicy
 }
 
-// tableChunk represents a chunk of table data for streaming processing
+// tableChunk is one run of a table's rows on its way to the database.
 type tableChunk struct {
-	tableName  string
-	headers    header
-	records    []record
-	columnInfo []columnInfo
+	tableName string
+	headers   header
+	records   []record
+	// types is what every row read so far, this chunk included, requires of
+	// each column. A format with a schema states it from the first chunk; one
+	// without can only widen it as it reads, and the last chunk's is final.
+	types columnInfoList
 	// nulls, when non-nil, marks which cells were SQL NULL (nulls[row][col]).
 	// Formats without a null concept leave it nil, and the insert then treats
 	// every cell as a string. Parquet sets it so a stored null reloads as SQL NULL
 	// rather than an empty string.
 	nulls [][]bool
-}
-
-// getTableName returns the name of the table
-func (tc *tableChunk) getTableName() string {
-	return tc.tableName
 }
 
 // getHeaders returns the table headers
@@ -103,11 +97,6 @@ func (tc *tableChunk) getHeaders() header {
 // getRecords returns the records in this chunk
 func (tc *tableChunk) getRecords() []record {
 	return tc.records
-}
-
-// getColumnInfo returns the column information with inferred types
-func (tc *tableChunk) getColumnInfo() []columnInfo {
-	return tc.columnInfo
 }
 
 // getNulls returns the per-cell NULL mask, or nil when the source format has no
@@ -186,39 +175,6 @@ func isSupportedExtension(ext string) bool {
 	return isSupportedFile("file" + ext)
 }
 
-// extension returns the file extension for the FileType. The codec's suffix is
-// not part of it: a gzipped CSV is FileTypeCSV plus CompressionGZ.Extension().
-func (ft FileType) extension() string {
-	switch ft {
-	case FileTypeCSV:
-		return extCSV
-	case FileTypeTSV:
-		return extTSV
-	case FileTypeLTSV:
-		return extLTSV
-	case FileTypeParquet:
-		return extParquet
-	case FileTypeXLSX:
-		return extXLSX
-	case FileTypeJSON:
-		return extJSON
-	case FileTypeJSONL:
-		return extJSONL
-	case FileTypeACH:
-		return extACH
-	case FileTypeFedWire:
-		return extFED
-	default:
-		return ""
-	}
-}
-
-// getFileExtension returns the file extension for a given FileType
-// Deprecated: Use FileType.extension() method instead
-func getFileExtension(fileType FileType) string {
-	return fileType.extension()
-}
-
 // getPath returns file path
 func (f *file) getPath() string {
 	return f.path
@@ -227,87 +183,6 @@ func (f *file) getPath() string {
 // getFileType returns file type
 func (f *file) getFileType() FileType {
 	return f.fileType
-}
-
-// isCSV returns true if the file is CSV format
-func (f *file) isCSV() bool {
-	return f.getFileType() == FileTypeCSV
-}
-
-// isTSV returns true if the file is TSV format
-func (f *file) isTSV() bool {
-	return f.getFileType() == FileTypeTSV
-}
-
-// isLTSV returns true if the file is LTSV format
-func (f *file) isLTSV() bool {
-	return f.getFileType() == FileTypeLTSV
-}
-
-// isXLSX returns true if the file is XLSX format
-func (f *file) isXLSX() bool {
-	return f.getFileType() == FileTypeXLSX
-}
-
-// isCompressed returns true if file is compressed
-func (f *file) isCompressed() bool {
-	return f.isGZ() || f.isBZ2() || f.isXZ() || f.isZSTD() || f.isZLIB() || f.isSNAPPY() || f.isS2() || f.isLZ4()
-}
-
-// isGZ returns true if file is gzip compressed
-func (f *file) isGZ() bool {
-	return strings.HasSuffix(f.path, extGZ)
-}
-
-// isBZ2 returns true if file is bzip2 compressed
-func (f *file) isBZ2() bool {
-	return strings.HasSuffix(f.path, extBZ2)
-}
-
-// isXZ returns true if file is xz compressed
-func (f *file) isXZ() bool {
-	return strings.HasSuffix(f.path, extXZ)
-}
-
-// isZSTD returns true if file is zstd compressed
-func (f *file) isZSTD() bool {
-	return strings.HasSuffix(f.path, extZSTD)
-}
-
-// isZLIB returns true if file is zlib compressed
-func (f *file) isZLIB() bool {
-	return strings.HasSuffix(f.path, extZLIB)
-}
-
-// isSNAPPY returns true if file is snappy compressed
-func (f *file) isSNAPPY() bool {
-	return strings.HasSuffix(f.path, extSNAPPY)
-}
-
-// isS2 returns true if file is s2 compressed
-func (f *file) isS2() bool {
-	return strings.HasSuffix(f.path, extS2)
-}
-
-// isLZ4 returns true if file is lz4 compressed
-func (f *file) isLZ4() bool {
-	return strings.HasSuffix(f.path, extLZ4)
-}
-
-// toTable converts file to table structure.
-//
-// The reader is opened through openReader so the codec is unwrapped here. The
-// parser is handed the format's own bytes, because fileType names the format
-// only and no longer tells the parser what to decompress.
-func (f *file) toTable() (*table, error) {
-	reader, closeReader, err := f.openReader()
-	if err != nil {
-		return nil, fmt.Errorf("failed to open file %s: %w", f.path, err)
-	}
-	defer closeQuietly(closeReader)
-
-	tableName := sanitizeTableName(tableFromFilePath(f.path))
-	return parseWithParser(reader, f.fileType, tableName, f.excelSheetPolicy)
 }
 
 // detectFileType detects file type from extension, considering compressed files
@@ -321,12 +196,6 @@ func detectFileType(path string) FileType {
 	}
 
 	return filesqlFileType(parser.DetectFileType(path))
-}
-
-// openReader opens file and returns a reader that handles compression
-func (f *file) openReader() (io.Reader, func() error, error) {
-	factory := NewCompressionFactory()
-	return factory.CreateReaderForFile(f.path)
 }
 
 // convertXLSXRowsToTable converts XLSX rows to table headers and records

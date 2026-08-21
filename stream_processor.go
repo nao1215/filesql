@@ -236,6 +236,9 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db DBTX, fi
 		tableName:   tableName,
 		fileType:    baseFileType,
 		compression: CompressionNone, // already unwrapped above
+		reopen: func() (io.Reader, func() error, error) {
+			return NewCompressionFactory().CreateReaderForFile(filePath)
+		},
 	}
 	return sp.streamReaderToDatabase(ctx, db, readerInput)
 }
@@ -294,7 +297,7 @@ func (sp *streamProcessor) streamFedWireFileToDatabase(ctx context.Context, db D
 	return streamWireFileToDatabase(ctx, db, file, filePath, filePath, sp.replaceExisting)
 }
 
-// streamReaderToDatabase streams data from io.Reader directly to SQLite database
+// streamReaderToDatabase loads one reader into the table named for it.
 func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, input readerInput) error {
 	// Route ACH/Fedwire readers to dedicated handlers. No source path is
 	// recorded: a reader has no file to read again at dump time, so these tables
@@ -310,315 +313,391 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, 
 	if err := validateTableName(input.tableName); err != nil {
 		return err
 	}
+	if err := sp.refuseExistingTable(ctx, db, input.tableName); err != nil {
+		return err
+	}
 
 	// Reader should already be validated at Build time, but ensure it's buffered
 	if _, ok := input.reader.(*bufio.Reader); !ok {
 		input.reader = bufio.NewReader(input.reader)
 	}
 
-	// Check if table already exists to avoid duplicates. The comparison folds
-	// ASCII case because SQLite folds it when it matches identifiers: without
-	// NOCASE, a second file named Users.csv beside users.csv found the name free,
-	// and its CREATE TABLE IF NOT EXISTS then matched the table already there and
-	// did nothing, so its rows were inserted under the first file's headers.
-	var tableExists int
-	err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ? COLLATE NOCASE`,
-		input.tableName,
-	).Scan(&tableExists)
-	if err != nil {
-		return fmt.Errorf("%w: failed to check table existence: %w", ErrDatabaseOperation, err)
+	newParser := func() *streamingParser {
+		parser := newStreamingParser(input.fileType, input.compression, input.tableName, sp.chunkSize)
+		parser.malformedRowPolicy = sp.malformedRowPolicy
+		parser.excelSheetPolicy = sp.excelSheetPolicy
+		return parser
 	}
-
-	if tableExists > 0 && !sp.replaceExisting {
-		sp.logger.Warn("table already exists", logKeyTable, input.tableName)
-		return fmt.Errorf("%w: table '%s' already exists from another file", ErrDuplicateTable, input.tableName)
-	}
-	// When replacing, createTableFromChunk drops the old table before recreating it.
-
-	// Create streaming parser for chunked processing
-	parser := newStreamingParser(input.fileType, input.compression, input.tableName, sp.chunkSize)
-	parser.malformedRowPolicy = sp.malformedRowPolicy
-	parser.excelSheetPolicy = sp.excelSheetPolicy
+	parser := newParser()
 	// What the malformed-row policy dropped is worth saying even when the load
 	// itself succeeded, so it is collected however this function returns.
 	defer func() { sp.recordSkippedRows(input.tableName, parser.skippedRows, parser.totalRows) }()
 
-	// Initialize the table schema (we need to peek at the first chunk to get headers)
-	var tableCreated bool
-	var insertStmt *sql.Stmt
-	var tx *sql.Tx
-	ownTx := false
-	// createdTypes is the schema on disk, which a later chunk can widen.
-	var createdTypes columnInfoList
-
-	// Process data in chunks with transaction batching for performance
-	var chunkCount int
-	var totalRows int
-	err = parser.ProcessInChunks(input.reader, func(chunk *tableChunk) error {
-		chunkCount++
-		// Create table on first chunk
-		if !tableCreated {
-			// The transaction opens before the table is made, not after. It exists
-			// for the speed of batching the inserts, but the drop and create
-			// belong inside it for correctness: run outside, they survived a load
-			// that failed later, so a failed reload left an empty table where the
-			// caller's rows had been and a failed first load left a table named
-			// after the file. The error said the load failed and the database said
-			// the file was empty.
-			var err error
-			if existingTx, ok := db.(*sql.Tx); ok {
-				tx = existingTx
-			} else {
-				dbConn, ok := db.(*sql.DB)
-				if !ok {
-					return fmt.Errorf("%w: unsupported database executor %T", ErrDatabaseOperation, db)
-				}
-				tx, err = dbConn.BeginTx(ctx, nil)
-				if err != nil {
-					return fmt.Errorf("%w: failed to begin transaction: %w", ErrDatabaseOperation, err)
-				}
-				ownTx = true
-			}
-
-			sp.logger.Debug("creating table", logKeyTable, input.tableName, "columns", len(chunk.getHeaders()))
-			if err := sp.createTableFromChunk(ctx, tx, chunk); err != nil {
-				return fmt.Errorf("%w: failed to create table: %w", ErrDatabaseOperation, err)
-			}
-
-			// Prepare insert statement within transaction
-			insertStmt, err = sp.prepareInsertStatementTx(ctx, tx, chunk) //nolint:sqlclosecheck // Statement is closed after processing
+	source := tableSource{
+		read: func(emit chunkProcessor) (columnInfoList, error) {
+			return parser.ProcessInChunks(input.reader, emit)
+		},
+	}
+	if input.reopen != nil {
+		source.reread = func(emit chunkProcessor) (columnInfoList, error) {
+			again, closeAgain, err := input.reopen()
 			if err != nil {
-				// No rollback here: the transaction has one owner, and it is the
-				// commit/rollback block after this loop. Rolling back at both
-				// places left the second one to end an already-terminal
-				// transaction, whose sql.ErrTxDone was then discarded.
-				return fmt.Errorf("%w: failed to prepare insert statement: %w", ErrDatabaseOperation, err)
+				return nil, err
 			}
-
-			tableCreated = true
-			createdTypes = columnInfoList(chunk.getColumnInfo()).clone()
-			sp.logger.Info("table created", logKeyTable, input.tableName)
+			defer closeQuietly(closeAgain)
+			return newParser().ProcessInChunks(again, emit)
 		}
+	}
+	return sp.loadTable(ctx, db, input.tableName, source)
+}
 
-		// A chunk can widen a column the table was already created with, when a
-		// value only a TEXT column holds losslessly arrives after the schema was
-		// decided. Rebuild before inserting it, so the value never meets the
-		// affinity that would rewrite it.
-		if !createdTypes.equalTypes(chunk.getColumnInfo()) {
-			newStmt, err := sp.rebuildTableForWidenedColumns(ctx, tx, chunk, insertStmt) //nolint:sqlclosecheck // Statement is closed after processing
-			if err != nil {
-				return err
-			}
-			insertStmt = newStmt
-			createdTypes = columnInfoList(chunk.getColumnInfo()).clone()
-		}
-
-		// Insert chunk data
-		rowsInChunk := len(chunk.getRecords())
-		totalRows += rowsInChunk
-		sp.logger.Debug("inserting chunk", logKeyTable, input.tableName, "chunk", chunkCount, "rows", rowsInChunk)
-		if err := sp.insertChunkData(ctx, insertStmt, chunk); err != nil {
-			return fmt.Errorf("%w: failed to insert chunk data: %w", ErrDatabaseOperation, err)
-		}
-
+// refuseExistingTable reports ErrDuplicateTable when a table of this name is
+// already there and this load is not allowed to replace it. The comparison
+// folds ASCII case because SQLite folds it when it matches identifiers:
+// without NOCASE, a second file named Users.csv beside users.csv found the
+// name free, and its rows went under the first file's headers.
+func (sp *streamProcessor) refuseExistingTable(ctx context.Context, db DBTX, tableName string) error {
+	if sp.replaceExisting {
 		return nil
-	})
-	if err != nil && !tableCreated && (input.fileType == FileTypeJSON || input.fileType == FileTypeJSONL) && errors.Is(err, ErrEmptyData) {
-		// Empty JSON/JSONL is a valid zero-row input. The parser has already
-		// consumed the only input stream, so create the known one-column JSON
-		// schema directly instead of opening the file a second time.
-		if createErr := sp.createTableFromChunk(ctx, db, &tableChunk{
-			tableName:  input.tableName,
-			headers:    newHeader([]string{jsonDataHeader}),
-			columnInfo: []columnInfo{newJSONDataColumn()},
-		}); createErr != nil {
-			return fmt.Errorf("%w: failed to create empty JSON table: %w", ErrDatabaseOperation, createErr)
-		}
-		tableCreated = true
-		err = nil
 	}
-
-	// End the transaction exactly once. A staging failure is rolled back; a
-	// commit is never followed by a rollback, because database/sql ends the
-	// transaction when Commit is called and a rollback afterwards could only
-	// report sql.ErrTxDone — a second error describing nothing the caller can
-	// act on.
-	if tx != nil && ownTx {
-		if err != nil {
-			sp.logger.Debug("rolling back transaction", logKeyTable, input.tableName, "error", err)
-			// A rollback runs because something already failed, so discarding
-			// its error hid the one case that produces one: the load failed and
-			// could not be undone. Both are reported.
-			rollbackErr := tx.Rollback()
-			// When the context is done, database/sql has already rolled the
-			// transaction back itself, so this call loses the race and reports
-			// sql.ErrTxDone. That is cancellation working as documented, not a
-			// cleanup failure, and the cause is already in err.
-			endedByCancellation := errors.Is(rollbackErr, sql.ErrTxDone) && ctx.Err() != nil
-			if !endedByCancellation {
-				err = joinCleanup(err, rollbackErr, "rollback import transaction")
-			}
-		} else {
-			if commitErr := tx.Commit(); commitErr != nil {
-				return fmt.Errorf("%w: failed to commit transaction: %w", ErrDatabaseOperation, commitErr)
-			}
-			sp.logger.Debug("committed transaction", logKeyTable, input.tableName, "chunks", chunkCount, "total_rows", totalRows)
-		}
-	}
-
-	// Handle header-only files: if no data chunks were processed, create empty table
-	if !tableCreated {
-		// A processing error here is terminal: the input was not merely a
-		// header-only file, so surface the error instead of masking it with an
-		// empty table. Masking would silently drop data (for example a CSV whose
-		// rows have a different field count than the header under the stop policy).
-		if err != nil {
-			return err
-		}
-
-		// No error and no data chunk means a header-only file; create the empty table.
-		if createErr := sp.createEmptyTable(ctx, db, input); createErr != nil {
-			return fmt.Errorf("%w: failed to create empty table for header-only file: %w", ErrDatabaseOperation, createErr)
-		}
-	}
-
-	// Clean up the prepared statement. Its close failure is joined rather than
-	// dropped: a statement that cannot be closed holds a connection, which shows
-	// up later as an unrelated hang rather than as this load's problem.
-	if insertStmt != nil {
-		err = joinCleanup(err, insertStmt.Close(), "close insert statement")
-	}
-
+	var tableExists int
+	err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ? COLLATE NOCASE`,
+		tableName,
+	).Scan(&tableExists)
 	if err != nil {
-		// Returned as it came. The caller wraps this in a *ParseError, which
-		// carries ErrParsing and names the input, so announcing "parsing failed"
-		// again here put this package's name in the message twice for every cause
-		// that already had it.
-		return err
+		return fmt.Errorf("%w: failed to check table existence: %w", ErrDatabaseOperation, err)
 	}
-
+	if tableExists > 0 {
+		sp.logger.Warn("table already exists", logKeyTable, tableName)
+		return fmt.Errorf("%w: table '%s' already exists from another file", ErrDuplicateTable, tableName)
+	}
 	return nil
 }
 
-// createTableFromChunk creates a SQLite table from a tableChunk
-func (sp *streamProcessor) createTableFromChunk(ctx context.Context, db DBTX, chunk *tableChunk) error {
-	columnInfo := chunk.getColumnInfo()
-	columns := make([]string, 0, len(columnInfo))
-	for _, col := range columnInfo {
-		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.string()))
-	}
+// tableSource is what a load reads. read hands every chunk of rows to emit,
+// and then says what columns the rows require; reread is read again from the
+// first byte, or nil for an input that can only be read once.
+type tableSource struct {
+	read   func(emit chunkProcessor) (columnInfoList, error)
+	reread func(emit chunkProcessor) (columnInfoList, error)
+}
 
-	if err := sp.dropIfReplacing(ctx, db, chunk.getTableName()); err != nil {
+// loadTable loads one table from source in a single transaction.
+//
+// A column's type is decided by every row in the input, and for a format
+// without a schema the last row can still change it. Declaring the table from
+// the first rows and widening it later was where a chunk boundary changed the
+// data: a value inserted into a numeric column had already taken the column's
+// storage class, and the rebuild that widened the column to TEXT could only
+// carry forward SQLite's spelling of the number, not the file's. So no row is
+// stored under a type a later row can still widen. An input that can be read
+// again is loaded under the types its first chunk requires and, should a later
+// chunk require more, read again under the types the whole of it requires. An
+// input that cannot be read again is staged as text and typed once it has all
+// been read.
+func (sp *streamProcessor) loadTable(ctx context.Context, db DBTX, tableName string, source tableSource) error {
+	// The transaction opens before any table is made. It exists for the speed of
+	// batching the inserts, but the creates belong inside it for correctness: a
+	// load that fails leaves nothing behind, not a table named after the file
+	// with no rows in it.
+	tx, ownTx, err := sp.beginLoad(ctx, db)
+	if err != nil {
 		return err
 	}
 
-	query := fmt.Sprintf(
-		`CREATE TABLE IF NOT EXISTS "%s" (%s)`,
-		chunk.getTableName(),
-		strings.Join(columns, ", "),
-	)
+	if source.reread == nil {
+		err = sp.loadStaged(ctx, tx, tableName, source.read)
+	} else {
+		err = sp.loadTyped(ctx, tx, tableName, source)
+	}
+	if err != nil {
+		return sp.abandonLoad(ctx, tx, ownTx, tableName, err)
+	}
+	if ownTx {
+		if commitErr := tx.Commit(); commitErr != nil {
+			return fmt.Errorf("%w: failed to commit transaction: %w", ErrDatabaseOperation, commitErr)
+		}
+	}
+	return nil
+}
 
-	_, err := db.ExecContext(ctx, query)
+// tableWriter inserts the chunks of one table into a table of a given name.
+type tableWriter struct {
+	sp        *streamProcessor
+	tx        *sql.Tx
+	tableName string
+	// types are the columns the table was created with, nil until it was.
+	types  columnInfoList
+	stmt   *sql.Stmt
+	chunks int
+	rows   int
+}
+
+// create makes the table with the given columns and prepares its insert.
+func (w *tableWriter) create(ctx context.Context, headers header, types columnInfoList) error {
+	w.sp.logger.Debug("creating table", logKeyTable, w.tableName, "columns", len(headers))
+	if err := createTable(ctx, w.tx, w.tableName, types); err != nil {
+		return fmt.Errorf("%w: failed to create table: %w", ErrDatabaseOperation, err)
+	}
+	stmt, err := w.tx.PrepareContext(ctx, insertQuery(w.tableName, len(headers))) //nolint:sqlclosecheck // Closed by close once the load has ended.
+	if err != nil {
+		return fmt.Errorf("%w: failed to prepare insert statement: %w", ErrDatabaseOperation, err)
+	}
+	w.types = types
+	w.stmt = stmt
+	return nil
+}
+
+// insert stores one chunk.
+func (w *tableWriter) insert(ctx context.Context, chunk *tableChunk) error {
+	w.chunks++
+	w.rows += len(chunk.getRecords())
+	w.sp.logger.Debug("inserting chunk", logKeyTable, w.tableName, "chunk", w.chunks, "rows", len(chunk.getRecords()))
+	if err := w.sp.insertChunkData(ctx, w.stmt, chunk); err != nil {
+		return fmt.Errorf("%w: failed to insert chunk data: %w", ErrDatabaseOperation, err)
+	}
+	return nil
+}
+
+// close releases the insert statement. Its failure is joined onto err rather
+// than dropped: a statement that cannot be closed holds a connection, which
+// shows up later as an unrelated hang rather than as this load's problem.
+func (w *tableWriter) close(err error) error {
+	if w.stmt == nil {
+		return err
+	}
+	err = joinCleanup(err, w.stmt.Close(), "close insert statement")
+	w.stmt = nil
 	return err
 }
 
-// rebuildTableForWidenedColumns recreates the table with the chunk's column
-// types and moves the rows already loaded into it, returning an insert
-// statement prepared against the new table.
-//
-// SQLite cannot change a column's declared type in place, so this is the
-// standard rename-copy-drop. Copying is lossless for what it copies: a column
-// is only widened to TEXT, and every row already inserted held a value the
-// numeric column accepted without altering it, so its text form is the text it
-// was read from.
-func (sp *streamProcessor) rebuildTableForWidenedColumns(ctx context.Context, tx *sql.Tx, chunk *tableChunk, insertStmt *sql.Stmt) (*sql.Stmt, error) {
-	table := chunk.getTableName()
-	sp.logger.Debug("widening column types", logKeyTable, table)
+// loadTyped declares the table from the types its first chunk requires and
+// inserts as it reads, which is the whole cost of a load whose columns are what
+// their first rows say. When a later chunk requires a wider type, the rest of
+// the input is read for its types alone, the table is dropped, and the input
+// is read again under the types the whole of it requires.
+func (sp *streamProcessor) loadTyped(ctx context.Context, tx *sql.Tx, tableName string, source tableSource) (err error) {
+	w := &tableWriter{sp: sp, tx: tx, tableName: tableName}
+	defer func() { err = w.close(err) }()
 
-	// The old statement is bound to the table this is about to drop.
-	if insertStmt != nil {
-		if err := insertStmt.Close(); err != nil {
-			return nil, fmt.Errorf("%w: failed to close insert statement before widening: %w", ErrDatabaseOperation, err)
+	widened := false
+	final, err := source.read(func(chunk *tableChunk) error {
+		if widened {
+			return nil
 		}
+		if w.stmt == nil {
+			if err := sp.dropIfReplacing(ctx, tx, tableName); err != nil {
+				return err
+			}
+			if err := w.create(ctx, chunk.getHeaders(), chunk.types); err != nil {
+				return err
+			}
+		}
+		if !w.types.equalTypes(chunk.types) {
+			sp.logger.Debug("a later chunk widens a column; the input will be read again", logKeyTable, tableName)
+			widened = true
+			return nil
+		}
+		return w.insert(ctx, chunk)
+	})
+	if err != nil {
+		return err
+	}
+	if w.stmt == nil {
+		return fmt.Errorf("%w: no table found for %s", ErrEmptyData, tableName)
+	}
+	if !widened {
+		sp.logger.Info("table created", logKeyTable, tableName, "total_rows", w.rows)
+		return nil
 	}
 
-	staging := table + "_filesql_widen"
-	columnInfo := chunk.getColumnInfo()
-	columns := make([]string, 0, len(columnInfo))
-	names := make([]string, 0, len(columnInfo))
-	for _, col := range columnInfo {
-		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.string()))
-		names = append(names, fmt.Sprintf(`"%s"`, col.Name))
+	if err := w.close(nil); err != nil {
+		return err
 	}
+	if _, err := tx.ExecContext(ctx, `DROP TABLE "`+tableName+`"`); err != nil {
+		return fmt.Errorf("%w: failed to drop table before reading again: %w", ErrDatabaseOperation, err)
+	}
+	w.rows = 0
+	again, err := source.reread(func(chunk *tableChunk) error {
+		if w.stmt == nil {
+			if err := w.create(ctx, chunk.getHeaders(), final); err != nil {
+				return err
+			}
+		}
+		return w.insert(ctx, chunk)
+	})
+	if err != nil {
+		return err
+	}
+	// The second read decides nothing, so it has to have read the same input.
+	if !again.equalTypes(final) {
+		return fmt.Errorf("%w: %s changed while it was being read", ErrParsing, tableName)
+	}
+	sp.logger.Info("table created", logKeyTable, tableName, "total_rows", w.rows, "read_twice", true)
+	return nil
+}
 
+// loadStaged stages every row as text and declares the table once the last
+// row has been read. It is for an input that cannot be read twice: text is the
+// one form every later type can still be made from, so it is what is kept
+// until the type is final. The cost is a copy of the table inside SQLite at
+// the end, which an input that can be read again does not pay.
+func (sp *streamProcessor) loadStaged(ctx context.Context, tx *sql.Tx, tableName string, read func(emit chunkProcessor) (columnInfoList, error)) (err error) {
+	staging := stagingTableName(tableName)
+	w := &tableWriter{sp: sp, tx: tx, tableName: staging}
+	defer func() { err = w.close(err) }()
+
+	columns, err := read(func(chunk *tableChunk) error {
+		if w.stmt == nil {
+			if err := w.create(ctx, chunk.getHeaders(), textColumns(chunk.getHeaders())); err != nil {
+				return err
+			}
+		}
+		return w.insert(ctx, chunk)
+	})
+	if err != nil {
+		return err
+	}
+	if w.stmt == nil {
+		return fmt.Errorf("%w: no table found for %s", ErrEmptyData, tableName)
+	}
+	if err := sp.declareTable(ctx, tx, staging, tableName, columns); err != nil {
+		return err
+	}
+	sp.logger.Info("table created", logKeyTable, tableName, "total_rows", w.rows, "staged", true)
+	return nil
+}
+
+// beginLoad returns the transaction a load runs in: the caller's, when db is
+// one, or a new one this package owns and will end.
+func (sp *streamProcessor) beginLoad(ctx context.Context, db DBTX) (tx *sql.Tx, ownTx bool, err error) {
+	switch d := db.(type) {
+	case *sql.Tx:
+		return d, false, nil
+	case *sql.DB:
+		tx, err := d.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, false, fmt.Errorf("%w: failed to begin transaction: %w", ErrDatabaseOperation, err)
+		}
+		return tx, true, nil
+	default:
+		return nil, false, fmt.Errorf("%w: unsupported database executor %T", ErrDatabaseOperation, db)
+	}
+}
+
+// abandonLoad ends a failed load. A transaction this package opened is rolled
+// back; one the caller owns stays open, so the staging table is dropped from it
+// rather than left for the caller to find.
+func (sp *streamProcessor) abandonLoad(ctx context.Context, tx *sql.Tx, ownTx bool, tableName string, err error) error {
+	sp.logger.Debug("abandoning load", logKeyTable, tableName, "error", err)
+	if !ownTx {
+		_, dropErr := tx.ExecContext(ctx, `DROP TABLE IF EXISTS "`+stagingTableName(tableName)+`"`)
+		return joinCleanup(err, dropErr, "drop staging table")
+	}
+	// A rollback runs because something already failed, so discarding its error
+	// would hide the one case that produces one: the load failed and could not
+	// be undone. When the context is done, database/sql has already rolled the
+	// transaction back itself, so this call loses the race and reports
+	// sql.ErrTxDone. That is cancellation working as documented, and the cause
+	// is already in err.
+	rollbackErr := tx.Rollback()
+	if errors.Is(rollbackErr, sql.ErrTxDone) && ctx.Err() != nil {
+		return err
+	}
+	return joinCleanup(err, rollbackErr, "rollback import transaction")
+}
+
+// declareTable gives the staged rows their table's name and column types.
+//
+// A table whose every column is declared TEXT is the staging table renamed,
+// since that is already what it is. Any other is created with its types and
+// the rows copied into it. The copy is where a value written as text takes the
+// storage class its column calls for: SQLite applies the column's affinity to
+// each value, the same conversion an insert into that column would have made,
+// applied once, to every row, under the final types.
+func (sp *streamProcessor) declareTable(ctx context.Context, tx *sql.Tx, staging, tableName string, columns columnInfoList) error {
+	if err := sp.dropIfReplacing(ctx, tx, tableName); err != nil {
+		return err
+	}
+	if columns.allText() {
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE "%s" RENAME TO "%s"`, staging, tableName)); err != nil {
+			return fmt.Errorf("%w: failed to name table: %w", ErrDatabaseOperation, err)
+		}
+		return nil
+	}
+	if err := createTable(ctx, tx, tableName, columns); err != nil {
+		return fmt.Errorf("%w: failed to create table: %w", ErrDatabaseOperation, err)
+	}
 	statements := []string{
-		fmt.Sprintf(`ALTER TABLE "%s" RENAME TO "%s"`, table, staging),
-		fmt.Sprintf(`CREATE TABLE "%s" (%s)`, table, strings.Join(columns, ", ")),
-		fmt.Sprintf(`INSERT INTO "%s" SELECT %s FROM "%s"`, table, strings.Join(names, ", "), staging),
+		fmt.Sprintf(`INSERT INTO "%s" SELECT * FROM "%s"`, tableName, staging),
 		fmt.Sprintf(`DROP TABLE "%s"`, staging),
 	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return nil, fmt.Errorf("%w: failed to widen column types: %w", ErrDatabaseOperation, err)
+			return fmt.Errorf("%w: failed to type table: %w", ErrDatabaseOperation, err)
 		}
 	}
+	return nil
+}
 
-	stmt, err := sp.prepareInsertStatementTx(ctx, tx, chunk)
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to prepare insert statement after widening: %w", ErrDatabaseOperation, err)
+// stagingTableName names the table a load's rows wait in. It is under the
+// prefix this package keeps for itself, so no input can load into it, and it
+// is gone before the transaction ends.
+func stagingTableName(tableName string) string {
+	return sourceTablePrefix + "stage_" + tableName
+}
+
+// textColumns names every column of a header as TEXT, which is what a staging
+// table is.
+func textColumns(headers header) columnInfoList {
+	columns := make(columnInfoList, len(headers))
+	for i, name := range headers {
+		columns[i] = columnInfo{Name: name, Type: columnTypeText}
 	}
-	return stmt, nil
+	return columns
 }
 
-// prepareInsertStatement prepares an insert statement for the table
-func (sp *streamProcessor) prepareInsertStatement(ctx context.Context, db DBTX, chunk *tableChunk) (*sql.Stmt, error) {
-	query := sp.buildInsertQuery(chunk)
-	return db.PrepareContext(ctx, query)
+// createTable creates a table with the given columns.
+func createTable(ctx context.Context, db DBTX, tableName string, columns columnInfoList) error {
+	defs := make([]string, 0, len(columns))
+	for _, col := range columns {
+		defs = append(defs, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.string()))
+	}
+	_, err := db.ExecContext(ctx, fmt.Sprintf(`CREATE TABLE "%s" (%s)`, tableName, strings.Join(defs, ", ")))
+	return err
 }
 
-// prepareInsertStatementTx prepares an insert statement within a transaction
-func (sp *streamProcessor) prepareInsertStatementTx(ctx context.Context, tx *sql.Tx, chunk *tableChunk) (*sql.Stmt, error) {
-	query := sp.buildInsertQuery(chunk)
-	return tx.PrepareContext(ctx, query)
-}
-
-// buildInsertQuery builds the INSERT query string for a chunk
-func (sp *streamProcessor) buildInsertQuery(chunk *tableChunk) string {
-	headers := chunk.getHeaders()
-	placeholders := make([]string, len(headers))
+// insertQuery is the INSERT for a table of the given width.
+func insertQuery(tableName string, width int) string {
+	placeholders := make([]string, width)
 	for i := range placeholders {
 		placeholders[i] = "?"
 	}
-
-	return fmt.Sprintf(
-		`INSERT INTO "%s" VALUES (%s)`,
-		chunk.getTableName(),
-		strings.Join(placeholders, ", "),
-	)
+	return fmt.Sprintf(`INSERT INTO "%s" VALUES (%s)`, tableName, strings.Join(placeholders, ", "))
 }
 
-// insertChunkData inserts a chunk's worth of data using a prepared statement.
-// Performance is optimized by reusing a single values slice to reduce allocations.
+// insertChunkData inserts a chunk's worth of rows through a prepared statement.
+// One values slice is reused across rows to keep allocations down.
 func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, chunk *tableChunk) error {
 	records := chunk.getRecords()
 	if len(records) == 0 {
 		return nil
 	}
 
-	// Use header count as the authoritative column count to ensure consistency
+	// The header is the authoritative width.
 	colCount := len(chunk.getHeaders())
 	values := make([]any, colCount)
 	nulls := chunk.getNulls()
 
 	for rowIdx, record := range records {
-		// Fail fast if record has more columns than headers to prevent silent data truncation
+		// A record wider than the header would lose cells silently.
 		if len(record) > colCount {
 			return fmt.Errorf("%w: record has more columns (%d) than headers (%d)", ErrColumnMismatch, len(record), colCount)
 		}
 
-		// Fill values slice based on header count, handling records with fewer columns
-		// by setting missing columns to nil (NULL in SQLite)
+		// A record shorter than the header is missing its last cells, which are
+		// NULL.
 		for i := range colCount {
 			switch {
 			case nulls != nil && rowIdx < len(nulls) && i < len(nulls[rowIdx]) && nulls[rowIdx][i]:
@@ -633,76 +712,6 @@ func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, 
 		if _, err := stmt.ExecContext(ctx, values...); err != nil {
 			return fmt.Errorf("%w: failed to insert record: %w", ErrDatabaseOperation, err)
 		}
-	}
-
-	return nil
-}
-
-// createEmptyTable creates an empty table for header-only files
-func (sp *streamProcessor) createEmptyTable(ctx context.Context, db DBTX, input readerInput) error {
-	// Parse just the header to get column information
-	tempParser := newStreamingParser(input.fileType, input.compression, input.tableName, 1)
-	tempParser.malformedRowPolicy = sp.malformedRowPolicy
-	tempParser.excelSheetPolicy = sp.excelSheetPolicy
-	tempTable, err := tempParser.parseFromReader(input.reader)
-	if err != nil {
-		// Check if this is a parsing error we should preserve (like duplicate columns)
-		if strings.Contains(err.Error(), "duplicate column name") {
-			return err
-		}
-		// Don't propagate "empty CSV data" errors in createEmptyTable
-		// This function is called to handle header-only files, which is valid
-
-		// If ParseFromReader fails for other reasons, try a simpler header-only approach
-		return sp.createTableFromHeaders(ctx, db, input)
-	}
-
-	// Create table using the parsed headers
-	headers := tempTable.getHeader()
-	if len(headers) == 0 {
-		return fmt.Errorf("%w: no headers found in file for table %s", ErrEmptyData, input.tableName)
-	}
-
-	// Infer column types from headers (all as TEXT for header-only files)
-	columnInfoList := make([]columnInfo, len(headers))
-	for i, colName := range headers {
-		columnInfoList[i] = columnInfo{
-			Name: colName,
-			Type: columnTypeText,
-		}
-	}
-
-	// Create the table
-	columns := make([]string, 0, len(columnInfoList))
-	for _, col := range columnInfoList {
-		columns = append(columns, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.string()))
-	}
-
-	query := fmt.Sprintf(
-		`CREATE TABLE IF NOT EXISTS "%s" (%s)`,
-		input.tableName,
-		strings.Join(columns, ", "),
-	)
-
-	_, err = db.ExecContext(ctx, query)
-	if err != nil {
-		return fmt.Errorf("%w: failed to create empty table: %w", ErrDatabaseOperation, err)
-	}
-
-	return nil
-}
-
-// createTableFromHeaders creates table from header information only (fallback method)
-func (sp *streamProcessor) createTableFromHeaders(ctx context.Context, db DBTX, input readerInput) error {
-	// Create a fallback table structure
-	query := fmt.Sprintf(
-		`CREATE TABLE IF NOT EXISTS "%s" (column1 TEXT)`,
-		input.tableName,
-	)
-
-	_, err := db.ExecContext(ctx, query)
-	if err != nil {
-		return fmt.Errorf("%w: failed to create fallback table: %w", ErrDatabaseOperation, err)
 	}
 
 	return nil
@@ -799,23 +808,10 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX
 		tableName := sheetTables[i]
 		sp.logger.Debug("creating table from sheet", "path", filePath, logKeySheet, sheetName, logKeyTable, tableName, "rows", len(rows))
 
-		// Check if table already exists, folding ASCII case the way SQLite does
-		// when it matches identifiers.
-		var tableExists int
-		err = db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ? COLLATE NOCASE`,
-			tableName,
-		).Scan(&tableExists)
-		if err != nil {
-			return fmt.Errorf("%w: failed to check table existence: %w", ErrDatabaseOperation, err)
+		if err := sp.refuseExistingTable(ctx, db, tableName); err != nil {
+			return err
 		}
 
-		if tableExists > 0 && !sp.replaceExisting {
-			return fmt.Errorf("%w: table '%s' already exists from another file", ErrDuplicateTable, tableName)
-		}
-		// When replacing, createTableFromChunk drops the old table before recreating it.
-
-		// Convert XLSX rows to table headers and records
 		headers, records, err := convertXLSXRowsToTable(rows)
 		if err != nil {
 			return fmt.Errorf("sheet %s: %w", sheetName, err)
@@ -830,34 +826,18 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX
 			return fmt.Errorf("sheet %s: %w", sheetName, err)
 		}
 
-		// Create table chunk for processing
-		columnInfo := newColumnInfoList(headers, records)
-		chunk := &tableChunk{
-			tableName:  tableName,
-			headers:    headers,
-			records:    records,
-			columnInfo: columnInfo,
+		// The sheet is in memory, so its types are final before its one chunk
+		// is emitted, and reading it again is emitting it again.
+		types := newColumnInfoList(headers, records)
+		read := func(emit chunkProcessor) (columnInfoList, error) {
+			if err := emit(&tableChunk{tableName: tableName, headers: headers, records: records, types: types}); err != nil {
+				return nil, err
+			}
+			return types, nil
 		}
-
-		// Create table and insert data
-		if err := sp.createTableFromChunk(ctx, db, chunk); err != nil {
-			return fmt.Errorf("%w: failed to create table for sheet %s: %w", ErrDatabaseOperation, sheetName, err)
-		}
-
-		// Prepare and execute insert statement
-		insertStmt, err := sp.prepareInsertStatement(ctx, db, chunk)
+		err = sp.loadTable(ctx, db, tableName, tableSource{read: read, reread: read})
 		if err != nil {
-			return fmt.Errorf("%w: failed to prepare insert statement for sheet %s: %w", ErrDatabaseOperation, sheetName, err)
-		}
-		defer func() {
-			// A statement that cannot be closed holds a connection, so its
-			// failure is joined onto whatever the sheet load returned rather
-			// than dropped.
-			err = joinCleanup(err, insertStmt.Close(), "close insert statement for sheet "+sheetName)
-		}()
-
-		if err := sp.insertChunkData(ctx, insertStmt, chunk); err != nil {
-			return fmt.Errorf("%w: failed to insert data for sheet %s: %w", ErrDatabaseOperation, sheetName, err)
+			return fmt.Errorf("sheet %s: %w", sheetName, err)
 		}
 	}
 
