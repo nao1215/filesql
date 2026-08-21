@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/array"
@@ -632,5 +633,76 @@ func TestParquetDamageThatWasAlreadyReported(t *testing.T) {
 		require.NoError(t, db.QueryRowContext(context.Background(),
 			`SELECT COUNT(*) FROM products`).Scan(&n))
 		assert.Positive(t, n)
+	})
+}
+
+// unboundedParquet is the file from the fuzzing run that never finished
+// loading: 433 bytes that end with the format's mark and begin with something
+// else.
+const unboundedParquet = "MDAwMBUYFQAVCBUILBUGFRAVMBUwHBhvFTAZQTkEGAYwMDAwMDAVBjAVBCMwGAIwMDcwMDAw" +
+	"MDAwMDAVDCMwGAQwMDAwIzBMHDAwMBUKJTAYBTAwMDAwMBYwGRwZMCbaMBwVMBkwMDAwGRgC" +
+	"MDAVABYwFtIwFtIBJjAmCBwYIDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwWAgw" +
+	"MDAwMDAwMDAZIBUwFTAVMDAVMBUwFTAwMDAmjDAcFTAZMDAwMBkYBDAwMDAVABYwFrIwFrIB" +
+	"JrQwJtoBHDYwFjAYBTAwMDAwGAgwMDAwMDAwMDAZIBUwFTAVMDAVMBUwFTAwMDAm3jAcFTAZ" +
+	"MDAwMBkYBTAwMDAwFQAWMBbSMBbSASbYMCaMAxwYCDAwMDAwMDAwGAgwMDAwMDAwMBYwFjAY" +
+	"CDAwMDAwMDAwGAgwMDAwMDAwMDAZIBUwFTAVMDAVMBUwFTAwMDAW1jAWBiYwFtYwFDAwGQwY" +
+	"IjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAZMBwwMBwwMDAwMDCRAQAAUEFS" +
+	"MQ=="
+
+// TestParquetWithoutTheHeaderMarkIsRefused pins the check that keeps damaged
+// input away from the reader's metadata parsing. The format begins and ends with
+// a four-byte mark; the reader this package uses checks only the trailing one,
+// so a file that ends "PAR1" and begins with anything was read as Parquet -- and
+// that is the shape that panicked and that allocated without stopping.
+func TestParquetWithoutTheHeaderMarkIsRefused(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	for name, data := range map[string][]byte{
+		"only the trailing mark": []byte("\x00\x00\x00\x00 not parquet PAR1"),
+		"neither mark":           []byte("not a parquet file at all"),
+		"the mark in the middle": []byte("xxxxPAR1xxxx"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "t.parquet")
+			require.NoError(t, os.WriteFile(path, data, 0o600))
+
+			db, err := OpenContext(ctx, path)
+			if db != nil {
+				assert.NoError(t, db.Close())
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "not a parquet file")
+		})
+	}
+
+	t.Run("the file that allocated without stopping", func(t *testing.T) {
+		t.Parallel()
+
+		// 433 bytes, found by fuzzing: it ends with the mark and begins "0000",
+		// and reading it grew the heap by hundreds of megabytes a second.
+		data, err := base64.StdEncoding.DecodeString(unboundedParquet)
+		require.NoError(t, err)
+
+		path := filepath.Join(t.TempDir(), "unbounded.parquet")
+		require.NoError(t, os.WriteFile(path, data, 0o600))
+
+		done := make(chan error, 1)
+		go func() {
+			db, err := OpenContext(ctx, path)
+			if db != nil {
+				_ = db.Close()
+			}
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "not a parquet file")
+		case <-time.After(10 * time.Second):
+			t.Fatal("a 433 byte file held the load for ten seconds")
+		}
 	})
 }

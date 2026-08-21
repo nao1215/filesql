@@ -2,6 +2,7 @@ package filesql
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -131,6 +132,17 @@ func readArrowTable(ctx context.Context, arrowReader *pqarrow.FileReader) (tbl a
 		rows = columns[0].Len()
 	}
 	return array.NewTable(schema, columns, int64(rows)), nil
+}
+
+// parquetMagic is the four bytes a Parquet file begins and ends with. The
+// reader underneath checks only the trailing one, so a file that ends "PAR1" and
+// begins with anything is read into its metadata, where damaged input has
+// reached a panic and an allocation that does not stop.
+var parquetMagic = []byte("PAR1") //nolint:gochecknoglobals // constant-like
+
+// errNotParquet reports bytes that do not begin the way the format says.
+func errNotParquet(head []byte) error {
+	return fmt.Errorf("not a parquet file: it begins %q rather than %q", head, parquetMagic)
 }
 
 // newStreamingParser creates a new streaming parser. The malformed-row policy
@@ -646,6 +658,9 @@ func (p *streamingParser) parseParquetStream(reader io.Reader) (*table, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("%w: empty parquet file", ErrEmptyData)
 	}
+	if !bytes.HasPrefix(data, parquetMagic) {
+		return nil, errNotParquet(data[:min(len(data), len(parquetMagic))])
+	}
 
 	// Create a bytes reader for the parquet data
 	bytesReader := &bytesReaderAt{data: data}
@@ -761,6 +776,9 @@ func (p *streamingParser) processParquetInChunks(reader io.Reader, processor chu
 
 	if len(data) == 0 {
 		return fmt.Errorf("%w: empty parquet file", ErrEmptyData)
+	}
+	if !bytes.HasPrefix(data, parquetMagic) {
+		return errNotParquet(data[:min(len(data), len(parquetMagic))])
 	}
 
 	// Create a bytes reader for the parquet data

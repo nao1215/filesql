@@ -65,7 +65,39 @@ func TestParseParquet(t *testing.T) {
 		_, err := parseParquet(reader)
 
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to create parquet reader")
+		// The format begins with a four-byte mark, and these bytes do not, so
+		// the file is refused before the reader is asked to make sense of it.
+		assert.Contains(t, err.Error(), "not a parquet file")
+		assert.Contains(t, err.Error(), "PAR1")
+	})
+
+	t.Run("returns error for data that only ends with the mark", func(t *testing.T) {
+		t.Parallel()
+
+		// The reader this package uses checks the trailing mark alone, so this
+		// is the shape that reached its metadata parsing: damaged input that
+		// panicked there, and input that allocated without stopping.
+		reader := bytes.NewReader([]byte("\x00\x00\x00\x00 not parquet PAR1"))
+
+		_, err := parseParquet(reader)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "not a parquet file")
+	})
+
+	t.Run("accepts a file that begins with the mark", func(t *testing.T) {
+		t.Parallel()
+
+		good, readErr := os.ReadFile(filepath.Join("testdata", "products.parquet"))
+		if os.IsNotExist(readErr) {
+			t.Skip("no parquet fixture")
+		}
+		require.NoError(t, readErr)
+
+		result, err := parseParquet(bytes.NewReader(good))
+
+		require.NoError(t, err)
+		assert.NotEmpty(t, result.Headers)
 	})
 }
 
