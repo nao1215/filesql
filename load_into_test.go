@@ -31,7 +31,7 @@ func newCallerDB(t *testing.T) *sql.DB {
 
 func listTables(t *testing.T, db *sql.DB) []string {
 	t.Helper()
-	rows, err := db.QueryContext(context.Background(), `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+	rows, err := db.QueryContext(context.Background(), `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite\_%' ESCAPE '\' ORDER BY name`)
 	require.NoError(t, err)
 	defer func() { assert.NoError(t, rows.Close()) }()
 	var names []string

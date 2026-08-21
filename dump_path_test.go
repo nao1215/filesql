@@ -1,6 +1,7 @@
 package filesql
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -123,4 +124,45 @@ func TestDumpFilePath(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// TestDumpKeepsTablesThatOnlyLookReserved pins that the filter hiding SQLite's
+// own tables hides nothing else. It was written as NOT LIKE 'sqlite_%', where
+// LIKE reads a bare underscore as any one character, so a table named sqliteish
+// or sqlite2024 loaded and answered queries but appeared in no listing and in no
+// dump: a save wrote the database out without it and said nothing.
+func TestDumpKeepsTablesThatOnlyLookReserved(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	for _, name := range []string{"sqliteish.csv", "sqlite2024.csv", "sqlite.csv", "plain.csv"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("a,b\n1,2\n"), 0o600))
+	}
+
+	db, err := OpenContext(ctx, dir)
+	require.NoError(t, err)
+	defer db.Close()
+
+	names, err := getSQLiteTableNames(db)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"plain", "sqlite", "sqlite2024", "sqliteish"}, names)
+
+	// SQLite creates this one itself, and it stays hidden: the escape narrows
+	// the filter to the names the database reserves rather than removing it.
+	_, err = db.ExecContext(ctx, `ANALYZE`)
+	require.NoError(t, err)
+	names, err = getSQLiteTableNames(db)
+	require.NoError(t, err)
+	assert.NotContains(t, names, "sqlite_stat1")
+
+	out := t.TempDir()
+	require.NoError(t, DumpDatabase(db, out))
+	entries, err := os.ReadDir(out)
+	require.NoError(t, err)
+	written := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		written = append(written, entry.Name())
+	}
+	assert.ElementsMatch(t, []string{"plain.csv", "sqlite.csv", "sqlite2024.csv", "sqliteish.csv"}, written)
 }

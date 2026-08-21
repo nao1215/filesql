@@ -1715,7 +1715,7 @@ func Test_SQLInjectionProtection(t *testing.T) {
 
 	// Get the actual table name from the database
 	var tableName string
-	err = db.QueryRowContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1").Scan(&tableName)
+	err = db.QueryRowContext(context.Background(), `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite\_%' ESCAPE '\' LIMIT 1`).Scan(&tableName)
 	if err != nil {
 		t.Skip("Cannot determine table name, skipping SQL injection test")
 		return
@@ -2669,7 +2669,7 @@ func TestDirectoryLoading(t *testing.T) {
 	defer db.Close()
 
 	// Get all table names
-	rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+	rows, err := db.QueryContext(context.Background(), `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite\_%' ESCAPE '\' ORDER BY name`)
 	require.NoError(t, err, "Failed to get table names")
 	defer rows.Close()
 

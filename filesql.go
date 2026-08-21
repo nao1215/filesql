@@ -342,8 +342,11 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 // neither in a dump nor in a listing shown to a caller.
 func getSQLiteTableNames(db *sql.DB) ([]string, error) {
 	ctx := context.Background()
+	// Both underscores are escaped: LIKE reads a bare one as a wildcard, so
+	// 'sqlite_%' hid a caller's sqliteish table as readily as SQLite's own
+	// sqlite_stat1, and a dump written from this list left that table out.
 	query := `SELECT name FROM sqlite_master WHERE type='table'` +
-		` AND name NOT LIKE 'sqlite_%'` +
+		` AND name NOT LIKE 'sqlite\_%' ESCAPE '\'` +
 		` AND name NOT LIKE '` + sourceTableLikePattern + `' ESCAPE '\'`
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
