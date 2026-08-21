@@ -5,10 +5,12 @@ import "fmt"
 // MalformedRowPolicy controls how a delimited (CSV/TSV) record whose field count
 // differs from the header row is handled during import.
 //
-// The policy only applies to delimited text formats, where a row can have more
-// or fewer fields than the header. Other formats do not have this failure mode:
-// XLSX and LTSV already pad missing cells, and Parquet and JSON/JSONL carry no
-// per-row field-count concept.
+// The policy applies to delimited text alone, where a record's field count is
+// the only thing that says how wide it is. The other formats settle it
+// themselves: a workbook's rows are checked by the XLSX reader, which pads a
+// short one and refuses one wider than its header whatever this policy says;
+// LTSV pads a missing label; and Parquet and JSON/JSONL carry no per-row field
+// count to disagree about.
 type MalformedRowPolicy int
 
 const (
@@ -23,7 +25,9 @@ const (
 	MalformedRowSkip
 
 	// MalformedRowFill keeps every short record by padding it with empty strings.
-	// A long record is rejected so source data is never silently discarded.
+	// A long record is rejected so source data is never silently discarded --
+	// filling is for a record that is missing values, and a record carrying more
+	// than the header names is not that.
 	MalformedRowFill
 )
 

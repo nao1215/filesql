@@ -4,8 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/xuri/excelize/v2"
 )
 
 // queryColumn returns the values of a single column across all rows, ordered by
@@ -271,4 +276,70 @@ func TestMalformedRowPolicy_WellFormedUnaffected(t *testing.T) {
 			t.Fatalf("policy %v: names = %v", policy, names)
 		}
 	}
+}
+
+// TestXLSXIgnoresTheMalformedRowPolicy pins the independence the policy's
+// documentation claims. A workbook's rows are checked by the XLSX reader, which
+// refuses one wider than its header whatever the policy says, so a caller who
+// reaches for MalformedRowSkip to get past a ragged workbook has to know it does
+// not reach there.
+func TestXLSXIgnoresTheMalformedRowPolicy(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "report.xlsx")
+	f := excelize.NewFile()
+	defer func() { _ = f.Close() }()
+	// A title above the header, which is what a person's spreadsheet looks like:
+	// the first row is one cell, and the rows under it are three.
+	require.NoError(t, f.SetCellValue("Sheet1", "A1", "Quarterly report"))
+	require.NoError(t, f.SetSheetRow("Sheet1", "A2", &[]any{"Name", "Amount", "Joined"}))
+	require.NoError(t, f.SetSheetRow("Sheet1", "A3", &[]any{"Alice", 100, 45000}))
+	require.NoError(t, f.SaveAs(path))
+
+	for _, policy := range []MalformedRowPolicy{MalformedRowStop, MalformedRowSkip, MalformedRowFill} {
+		t.Run(policy.String(), func(t *testing.T) {
+			t.Parallel()
+
+			built, err := NewBuilder().AddPath(path).WithMalformedRowPolicy(policy).Build(ctx)
+			require.NoError(t, err)
+			db, err := built.Open(ctx)
+			if db != nil {
+				defer db.Close()
+			}
+			require.Error(t, err, "a workbook row wider than its header is refused whatever the policy says")
+			assert.Contains(t, err.Error(), "row 2 has 3 cells where the header has 1")
+		})
+	}
+}
+
+// TestMalformedRowFillRefusesALongRecord is the behavior the builder's godoc
+// describes: a short record is padded and a long one is refused, because
+// truncating it would discard a cell the file holds without saying so.
+func TestMalformedRowFillRefusesALongRecord(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	built, err := NewBuilder().
+		AddReader(strings.NewReader("a,b,c\n1,2\n"), "short", FileTypeCSV).
+		WithMalformedRowPolicy(MalformedRowFill).Build(ctx)
+	require.NoError(t, err)
+	db, err := built.Open(ctx)
+	require.NoError(t, err, "a short record is padded")
+	var c string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT c FROM short`).Scan(&c))
+	assert.Equal(t, "", c, "the missing cell is the empty string")
+	require.NoError(t, db.Close())
+
+	built, err = NewBuilder().
+		AddReader(strings.NewReader("a\n1,2\n"), "long", FileTypeCSV).
+		WithMalformedRowPolicy(MalformedRowFill).Build(ctx)
+	require.NoError(t, err)
+	db, err = built.Open(ctx)
+	if db != nil {
+		defer db.Close()
+	}
+	require.Error(t, err, "a long record is refused rather than truncated")
+	assert.ErrorIs(t, err, ErrColumnMismatch)
 }
