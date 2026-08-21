@@ -49,6 +49,13 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-7_div_of_a_remainder", "SELECT a % b DIV c", `SELECT CAST(mysql_divide((a % b), c) AS INTEGER) AS "a % b DIV c"`},
 		{"M-7_div_stops_at_lower_precedence", "SELECT a + b DIV c", `SELECT a + CAST(mysql_divide(b, c) AS INTEGER) AS "a + b DIV c"`},
 
+		// M-11: "/" takes its left operand the same way, so a remainder to its
+		// left is divided rather than dividing.
+		{"M-11_divide_of_a_remainder", "SELECT a % b / c", `SELECT mysql_divide((a % b), c) AS "a % b / c"`},
+		{"M-11_divide_of_a_product", "SELECT a * b / c", `SELECT mysql_divide((a * b), c) AS "a * b / c"`},
+		{"M-11_divide_stops_at_lower_precedence", "SELECT a + b / c", `SELECT a + mysql_divide(b, c) AS "a + b / c"`},
+		{"M-21_xor_operand_is_one_primary", "SELECT a * b ^ c", `SELECT a * mysql_bit_xor(b, c) AS "a * b ^ c"`},
+
 		// M-24: MOD is MySQL's spelling of the remainder operator, and SQLite's
 		// "%" is the same operation at the same precedence. The function
 		// spelling already works and is left alone.

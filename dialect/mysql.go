@@ -58,7 +58,7 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	}
 	// M-11: MySQL's "/" is floating-point division, so 5/2 is 2.5 rather than
 	// the 2 SQLite gives for two integers.
-	out, err = binaryOperatorPass(out, "/", "mysql_divide")
+	out, err = binaryChainOperatorPass(out, "/", "mysql_divide")
 	if err != nil {
 		return nil, err
 	}
@@ -107,32 +107,6 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	}
 	// M-18: ANY_VALUE and the variance family have no SQLite aggregate.
 	return aggregatePass(renameWordPass(out, "RLIKE", "REGEXP"), MySQL)
-}
-
-// operandChainStartBack walks start back over the operators that share DIV's
-// precedence, so the operand is the whole chain rather than the primary beside
-// the operator. It reports whether it moved.
-func operandChainStartBack(toks []token, start int) (int, bool) {
-	moved := false
-	for {
-		prev := prevSig(toks, start)
-		if prev < 0 || !isEqualPrecedenceOperator(toks[prev]) {
-			return start, moved
-		}
-		next, ok := primaryStartBack(toks[:prev])
-		if !ok {
-			return start, moved
-		}
-		start = next
-		moved = true
-	}
-}
-
-// isEqualPrecedenceOperator reports whether t is one of the operators MySQL puts
-// on DIV's precedence level. MOD is not among them because it has already been
-// written as "%" by the time this runs.
-func isEqualPrecedenceOperator(t token) bool {
-	return isOpEq(t, "*") || isOpEq(t, "/") || isOpEq(t, "%")
 }
 
 // mysqlCallPass rewrites the MySQL function-call rules (C-1, M-5, M-6, M-8),

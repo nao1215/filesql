@@ -184,12 +184,32 @@ func fnMySQLUnhex(args []driver.Value) (driver.Value, error) {
 // binaryOperatorPass rewrites "a <op> b" into helper(a, b) for every operator
 // token whose text is op. Both operands must be primary expressions, the same
 // requirement MySQL's DIV rewrite has.
+//
+// This is the pass for an operator that binds tighter than everything around it,
+// where one primary is the whole operand: MySQL's bitwise "^", and PostgreSQL's
+// exponentiation "^". An operator that shares its precedence level with others
+// takes binaryChainOperatorPass instead.
 func binaryOperatorPass(tokens []token, op, helper string) ([]token, error) {
+	return binaryOperatorPassWith(tokens, op, helper, operandBack)
+}
+
+// binaryChainOperatorPass is binaryOperatorPass for an operator that shares a
+// precedence level with "*", "/" and "%", where the left operand is the whole
+// chain to its left rather than the primary beside the operator: MySQL reads
+// "7 % 4 / 2" as "(7 % 4) / 2", and taking only the "4" answered 1 where MySQL
+// answers 1.5.
+func binaryChainOperatorPass(tokens []token, op, helper string) ([]token, error) {
+	return binaryOperatorPassWith(tokens, op, helper, chainOperandBack)
+}
+
+// binaryOperatorPassWith is the pass above, with left deciding how much of what
+// stands before the operator the operand takes.
+func binaryOperatorPassWith(tokens []token, op, helper string, operandOf func([]token) ([]token, int, bool)) ([]token, error) {
 	out := make([]token, 0, len(tokens))
 	i := 0
 	for i < len(tokens) {
 		if isOpEq(tokens[i], op) {
-			left, start, ok := operandBack(out)
+			left, start, ok := operandOf(out)
 			if !ok {
 				return nil, fmt.Errorf("%w: left operand of %s is not a primary expression", ErrUnsupportedSyntax, op)
 			}
@@ -262,6 +282,22 @@ func operandBack(out []token) ([]token, int, bool) {
 		return nil, 0, false
 	}
 	return append([]token{}, trimSpaceTokens(out[start:])...), start, true
+}
+
+// chainOperandBack is operandBack extended over the operators that share the
+// caller's precedence level, and parenthesized when it took more than one
+// primary so a later pass reading the same tokens cannot regroup them.
+func chainOperandBack(out []token) ([]token, int, bool) {
+	start, ok := primaryStartBack(out)
+	if !ok {
+		return nil, 0, false
+	}
+	start, extended := operandChainStartBack(out, start)
+	operand := append([]token{}, trimSpaceTokens(out[start:])...)
+	if extended {
+		operand = append([]token{opToken("(")}, append(operand, opToken(")"))...)
+	}
+	return operand, start, true
 }
 
 // callTokens builds "name(a, b)".
