@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xuri/excelize/v2"
 	_ "modernc.org/sqlite"
 )
 
@@ -463,4 +464,208 @@ func TestLoadInto_FailedFirstLoadLeavesNoTable(t *testing.T) {
 	require.Error(t, LoadInto(ctx, db, path))
 
 	assert.Empty(t, listTables(t, db), "a load that failed created nothing the caller can query")
+}
+
+// writeTwoSheetWorkbook writes a workbook whose first sheet loads and whose
+// second is refused for naming one column twice, so a load of the file fails
+// after the first sheet's table was already made.
+func writeTwoSheetWorkbook(t *testing.T, dir string) string {
+	t.Helper()
+	f := excelize.NewFile()
+	require.NoError(t, f.SetSheetName("Sheet1", "good"))
+	require.NoError(t, f.SetSheetRow("good", "A1", &[]any{"a", "b"}))
+	require.NoError(t, f.SetSheetRow("good", "A2", &[]any{1, "x"}))
+	_, err := f.NewSheet("bad")
+	require.NoError(t, err)
+	require.NoError(t, f.SetSheetRow("bad", "A1", &[]any{"id", "id"}))
+	require.NoError(t, f.SetSheetRow("bad", "A2", &[]any{1, 2}))
+	path := filepath.Join(dir, "book.xlsx")
+	require.NoError(t, f.SaveAs(path))
+	return path
+}
+
+// TestLoadInto_FailedXLSXLeavesTheDatabaseAsItWas pins the documented per-input
+// atomicity onto a file that maps to several tables: a workbook whose later
+// sheet fails must leave none of its sheets loaded and must leave a table it
+// was replacing exactly as it was.
+func TestLoadInto_FailedXLSXLeavesTheDatabaseAsItWas(t *testing.T) {
+	t.Parallel()
+	path := writeTwoSheetWorkbook(t, t.TempDir())
+
+	t.Run("no prior table", func(t *testing.T) {
+		t.Parallel()
+		db := newCallerDB(t)
+		builder, err := NewBuilder().AddPath(path).Build(context.Background())
+		require.NoError(t, err)
+		require.Error(t, builder.LoadInto(context.Background(), db))
+		assert.Empty(t, listTables(t, db), "a workbook that failed partway left a sheet's table behind")
+	})
+
+	t.Run("replacing a caller table", func(t *testing.T) {
+		t.Parallel()
+		db := newCallerDB(t)
+		_, err := db.ExecContext(context.Background(), `CREATE TABLE book_good (v)`)
+		require.NoError(t, err)
+		_, err = db.ExecContext(context.Background(), `INSERT INTO book_good VALUES ('precious')`)
+		require.NoError(t, err)
+		builder, err := NewBuilder().AddPath(path).Build(context.Background())
+		require.NoError(t, err)
+		require.Error(t, builder.LoadInto(context.Background(), db))
+		var kept string
+		require.NoError(t, db.QueryRowContext(context.Background(), `SELECT v FROM book_good`).Scan(&kept),
+			"the table the workbook was replacing must be as it was")
+		assert.Equal(t, "precious", kept)
+	})
+
+	t.Run("inside a caller transaction", func(t *testing.T) {
+		t.Parallel()
+		db := newCallerDB(t)
+		_, err := db.ExecContext(context.Background(), `CREATE TABLE book_good (v)`)
+		require.NoError(t, err)
+		_, err = db.ExecContext(context.Background(), `INSERT INTO book_good VALUES ('precious')`)
+		require.NoError(t, err)
+		builder, err := NewBuilder().AddPath(path).Build(context.Background())
+		require.NoError(t, err)
+		tx, err := db.BeginTx(context.Background(), nil)
+		require.NoError(t, err)
+		defer func() { _ = tx.Rollback() }()
+		require.Error(t, builder.LoadIntoTx(context.Background(), tx))
+		var kept string
+		require.NoError(t, tx.QueryRowContext(context.Background(), `SELECT v FROM book_good`).Scan(&kept),
+			"the caller's table must be as it was inside the still-open transaction")
+		assert.Equal(t, "precious", kept)
+	})
+}
+
+// TestLoadIntoTx_FailedInputLeavesCallersTable pins that a failed input leaves
+// the caller's still-open transaction as that input found it, for both kinds of
+// input. The path input is read in typed chunks and the reader input is staged,
+// and the two failure paths must not differ in what they leave behind.
+func TestLoadIntoTx_FailedInputLeavesCallersTable(t *testing.T) {
+	t.Parallel()
+
+	// A file that fails at row 3001 under the default MalformedRowStop policy,
+	// long after rows were inserted.
+	var body strings.Builder
+	body.WriteString("a,b\n")
+	for i := range 3000 {
+		body.WriteString(strconv.Itoa(i))
+		body.WriteString(",value\n")
+	}
+	body.WriteString("badrow-only-one-field\n")
+	content := body.String()
+
+	for _, tc := range []struct {
+		name      string
+		chunkSize int
+		viaReader bool
+	}{
+		{name: "path input many chunks", chunkSize: 100},
+		{name: "path input one chunk", chunkSize: 100000},
+		{name: "reader input many chunks", chunkSize: 100, viaReader: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			db := newCallerDB(t)
+			_, err := db.ExecContext(context.Background(), `CREATE TABLE tbl (old)`)
+			require.NoError(t, err)
+			_, err = db.ExecContext(context.Background(), `INSERT INTO tbl VALUES ('keep-me')`)
+			require.NoError(t, err)
+
+			builder := NewBuilder().SetDefaultChunkSize(tc.chunkSize)
+			if tc.viaReader {
+				builder = builder.AddReader(strings.NewReader(content), "tbl", FileTypeCSV)
+			} else {
+				builder = builder.AddPath(writeTempCSV(t, t.TempDir(), "tbl.csv", content))
+			}
+			built, err := builder.Build(context.Background())
+			require.NoError(t, err)
+
+			tx, err := db.BeginTx(context.Background(), nil)
+			require.NoError(t, err)
+			defer func() { _ = tx.Rollback() }()
+			require.Error(t, built.LoadIntoTx(context.Background(), tx))
+
+			var kept string
+			require.NoError(t, tx.QueryRowContext(context.Background(), `SELECT old FROM tbl LIMIT 1`).Scan(&kept),
+				"the caller's table must keep its schema and rows inside the transaction")
+			assert.Equal(t, "keep-me", kept)
+			var stagingCount int
+			require.NoError(t, tx.QueryRowContext(context.Background(),
+				`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE '\_filesql\_%' ESCAPE '\'`).Scan(&stagingCount))
+			assert.Zero(t, stagingCount, "no staging table may be left for the caller to find")
+		})
+	}
+}
+
+// TestLoadIntoTx_CancelledLoadLeavesCallersTable is the cancellation half of the
+// same guarantee. The caller's transaction is not built on the context the load
+// runs under, so cancelling the load leaves the transaction alive, and undoing
+// the input has to happen even though the context that failed it is done.
+func TestLoadIntoTx_CancelledLoadLeavesCallersTable(t *testing.T) {
+	t.Parallel()
+
+	var body strings.Builder
+	body.WriteString("a,b\n")
+	for i := range 200000 {
+		body.WriteString(strconv.Itoa(i))
+		body.WriteString(",")
+		body.WriteString(strings.Repeat("x", 200))
+		body.WriteString("\n")
+	}
+	path := writeTempCSV(t, t.TempDir(), "tbl.csv", body.String())
+
+	db := newCallerDB(t)
+	_, err := db.ExecContext(context.Background(), `CREATE TABLE tbl (old)`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(context.Background(), `INSERT INTO tbl VALUES ('keep-me')`)
+	require.NoError(t, err)
+
+	builder, err := NewBuilder().AddPath(path).SetDefaultChunkSize(100).Build(context.Background())
+	require.NoError(t, err)
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	require.Error(t, builder.LoadIntoTx(ctx, tx), "the load has to fail for this test to say anything")
+
+	var kept string
+	require.NoError(t, tx.QueryRowContext(context.Background(), `SELECT old FROM tbl LIMIT 1`).Scan(&kept),
+		"a cancelled load must leave the caller's table and transaction as they were")
+	assert.Equal(t, "keep-me", kept)
+}
+
+// TestLoadIntoTx_CancelledContextTheTransactionWasBuiltOn is the other half of
+// cancellation: when the caller's transaction is built on the context the load
+// runs under, the load reports the cancellation. What becomes of the
+// transaction is database/sql's to decide, and it ends it.
+func TestLoadIntoTx_CancelledContextTheTransactionWasBuiltOn(t *testing.T) {
+	t.Parallel()
+
+	var body strings.Builder
+	body.WriteString("a,b\n")
+	for i := range 200000 {
+		body.WriteString(strconv.Itoa(i))
+		body.WriteString(",")
+		body.WriteString(strings.Repeat("x", 200))
+		body.WriteString("\n")
+	}
+	path := writeTempCSV(t, t.TempDir(), "tbl.csv", body.String())
+
+	db := newCallerDB(t)
+	builder, err := NewBuilder().AddPath(path).SetDefaultChunkSize(100).Build(context.Background())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	tx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+
+	err = builder.LoadIntoTx(ctx, tx)
+	require.Error(t, err, "the load has to fail for this test to say anything")
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }

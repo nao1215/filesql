@@ -113,7 +113,10 @@ func (sp *streamProcessor) streamAllFilesToDatabase(ctx context.Context, db DBTX
 	sp.logger.Info("starting file streaming", "file_count", len(collectedPaths))
 	for i, path := range collectedPaths {
 		sp.logger.Debug("streaming file", "path", path, "index", i+1, "total", len(collectedPaths))
-		if err := sp.streamFileToDatabase(ctx, db, path); err != nil {
+		err := sp.runInputScope(ctx, db, func(scope *sql.Tx) error {
+			return sp.streamFileToDatabase(ctx, scope, path)
+		})
+		if err != nil {
 			sp.logger.Error("failed to stream file", "path", path, "error", err)
 			// A *ParseError rather than more text: it names the file once and
 			// carries both ErrParsing and whatever sentinel the cause holds (for
@@ -135,15 +138,97 @@ func (sp *streamProcessor) streamAllReadersToDatabase(ctx context.Context, db DB
 	sp.logger.Info("starting reader streaming", "reader_count", len(readers))
 	for i, ri := range readers {
 		sp.logger.Debug("streaming reader", logKeyTable, ri.tableName, "file_type", ri.fileType.String(), "index", i+1, "total", len(readers))
-		if err := sp.streamReaderToDatabase(ctx, db, ri); err != nil {
-			sp.closeReaderInput(ri)
+		err := sp.runInputScope(ctx, db, func(scope *sql.Tx) error {
+			return sp.streamReaderToDatabase(ctx, scope, ri)
+		})
+		sp.closeReaderInput(ri)
+		if err != nil {
 			sp.logger.Error("failed to stream reader", logKeyTable, ri.tableName, "error", err)
 			return &ParseError{Source: ri.tableName, Err: err}
 		}
-		sp.closeReaderInput(ri)
 	}
 	sp.logger.Info("completed reader streaming", "reader_count", len(readers))
 	return nil
+}
+
+// inputSavepoint is the savepoint one input loads under when the caller owns
+// the transaction. Its name carries the prefix this package reserves, so it
+// cannot be the name of a savepoint the caller opened.
+const inputSavepoint = `"_filesql_input"`
+
+// runInputScope runs one input's whole load atomically: either all of it lands
+// or none of it does, the drop of a table it was replacing included. The scope
+// is per input rather than per table because an input and a table are not the
+// same thing -- a workbook is one input and one table per sheet, an ACH file is
+// one input and several tables, and a Fedwire file is one input, its message
+// table and its write-back row -- and the documented contract is per input.
+//
+// On a database this package drives, the scope is a transaction. It is also
+// what batches the inserts, which is most of a load's speed, and the creates
+// belong inside it for the same reason the rows do: a load that fails leaves
+// nothing behind, not a table named after the file with no rows in it.
+//
+// Inside a transaction the caller owns, the scope is a savepoint: the
+// transaction is not this package's to end, but rolling back to the savepoint
+// leaves it exactly as the input found it, which is what lets the caller keep
+// using it after a failure.
+func (sp *streamProcessor) runInputScope(ctx context.Context, db DBTX, load func(*sql.Tx) error) error {
+	switch d := db.(type) {
+	case *sql.DB:
+		tx, err := d.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("%w: failed to begin transaction: %w", ErrDatabaseOperation, err)
+		}
+		if err := load(tx); err != nil {
+			// When the context is done, database/sql has already rolled the
+			// transaction back itself, so this call loses the race and reports
+			// sql.ErrTxDone. That is cancellation working as documented, and the
+			// cause is already in err.
+			rollbackErr := tx.Rollback()
+			if errors.Is(rollbackErr, sql.ErrTxDone) && ctx.Err() != nil {
+				return err
+			}
+			return joinCleanup(err, rollbackErr, "rollback import transaction")
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("%w: failed to commit transaction: %w", ErrDatabaseOperation, err)
+		}
+		return nil
+	case *sql.Tx:
+		if _, err := d.ExecContext(ctx, `SAVEPOINT `+inputSavepoint); err != nil {
+			return fmt.Errorf("%w: failed to open savepoint: %w", ErrDatabaseOperation, err)
+		}
+		if err := load(d); err != nil {
+			return joinCleanup(err, undoInput(ctx, d), "roll back to savepoint")
+		}
+		if _, err := d.ExecContext(ctx, `RELEASE `+inputSavepoint); err != nil {
+			return fmt.Errorf("%w: failed to release savepoint: %w", ErrDatabaseOperation, err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("%w: unsupported database executor %T", ErrDatabaseOperation, db)
+	}
+}
+
+// undoInput returns the caller's transaction to the savepoint the input opened
+// and pops it, since rolling back to a savepoint in SQLite leaves it standing.
+//
+// The two statements run under a context that cannot be canceled. A canceled
+// context is one of the reasons a load fails, and it is no reason to leave the
+// caller holding half an input: the undo is what has to happen either way. When
+// the caller opened their transaction with that same context, database/sql has
+// already rolled the whole transaction back and reports sql.ErrTxDone here,
+// which is this undo having happened by a larger one.
+func undoInput(ctx context.Context, tx *sql.Tx) error {
+	ctx = context.WithoutCancel(ctx)
+	if _, err := tx.ExecContext(ctx, `ROLLBACK TO `+inputSavepoint); err != nil {
+		if errors.Is(err, sql.ErrTxDone) {
+			return nil
+		}
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `RELEASE `+inputSavepoint)
+	return err
 }
 
 // closeReaderInput closes the underlying resource of a reader input if it was opened internally (e.g. from AddFS).
@@ -156,17 +241,17 @@ func (sp *streamProcessor) closeReaderInput(ri readerInput) {
 }
 
 // streamFileToDatabase streams data from a file path directly to SQLite database using chunked processing
-func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db DBTX, filePath string) error {
+func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, tx *sql.Tx, filePath string) error {
 	// Check if file is ACH format
 	if isACHFile(filePath) {
 		sp.logger.Debug("detected ACH file format", "path", filePath)
-		return sp.streamACHFileToDatabase(ctx, db, filePath)
+		return sp.streamACHFileToDatabase(ctx, tx, filePath)
 	}
 
 	// Check if file is Fedwire format
 	if isFedWireFile(filePath) {
 		sp.logger.Debug("detected Fedwire file format", "path", filePath)
-		return sp.streamFedWireFileToDatabase(ctx, db, filePath)
+		return sp.streamFedWireFileToDatabase(ctx, tx, filePath)
 	}
 
 	// Check if file is supported
@@ -223,7 +308,7 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db DBTX, fi
 	// Handle XLSX files specially - each sheet becomes a separate table
 	if baseFileType == FileTypeXLSX {
 		sp.logger.Debug("processing XLSX file with multiple sheets", "path", filePath)
-		return sp.streamXLSXFileToDatabase(ctx, db, reader, filePath)
+		return sp.streamXLSXFileToDatabase(ctx, tx, reader, filePath)
 	}
 
 	// Create reader input for streaming
@@ -238,11 +323,11 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, db DBTX, fi
 			return NewCompressionFactory().CreateReaderForFile(filePath)
 		},
 	}
-	return sp.streamReaderToDatabase(ctx, db, readerInput)
+	return sp.streamReaderToDatabase(ctx, tx, readerInput)
 }
 
 // streamACHFileToDatabase handles ACH files by creating multiple tables
-func (sp *streamProcessor) streamACHFileToDatabase(ctx context.Context, db DBTX, filePath string) error {
+func (sp *streamProcessor) streamACHFileToDatabase(ctx context.Context, tx *sql.Tx, filePath string) error {
 	sp.logger.Debug("processing ACH file", "path", filePath)
 
 	// Open the file
@@ -265,11 +350,11 @@ func (sp *streamProcessor) streamACHFileToDatabase(ctx context.Context, db DBTX,
 	}
 
 	sp.logger.Debug("streaming ACH file to database", "path", filePath, "size", fileInfo.Size())
-	return streamACHFileToDatabase(ctx, db, file, filePath, filePath, sp.replaceExisting)
+	return streamACHFileToDatabase(ctx, tx, file, filePath, filePath, sp.replaceExisting)
 }
 
 // streamFedWireFileToDatabase handles Fedwire files by creating a single message table
-func (sp *streamProcessor) streamFedWireFileToDatabase(ctx context.Context, db DBTX, filePath string) error {
+func (sp *streamProcessor) streamFedWireFileToDatabase(ctx context.Context, tx *sql.Tx, filePath string) error {
 	sp.logger.Debug("processing Fedwire file", "path", filePath)
 
 	// Open the file
@@ -292,26 +377,26 @@ func (sp *streamProcessor) streamFedWireFileToDatabase(ctx context.Context, db D
 	}
 
 	sp.logger.Debug("streaming Fedwire file to database", "path", filePath, "size", fileInfo.Size())
-	return streamWireFileToDatabase(ctx, db, file, filePath, filePath, sp.replaceExisting)
+	return streamWireFileToDatabase(ctx, tx, file, filePath, filePath, sp.replaceExisting)
 }
 
 // streamReaderToDatabase loads one reader into the table named for it.
-func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, input readerInput) error {
+func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, tx *sql.Tx, input readerInput) error {
 	// Route ACH/Fedwire readers to dedicated handlers. No source path is
 	// recorded: a reader has no file to read again at dump time, so these tables
 	// can only be written back through DumpACHWithTableSet or
 	// DumpFedWireWithTableSet.
 	if input.fileType == FileTypeACH {
-		return streamACHFileToDatabase(ctx, db, input.reader, input.tableName+extACH, "", sp.replaceExisting)
+		return streamACHFileToDatabase(ctx, tx, input.reader, input.tableName+extACH, "", sp.replaceExisting)
 	}
 	if input.fileType == FileTypeFedWire {
-		return streamWireFileToDatabase(ctx, db, input.reader, input.tableName+extFED, "", sp.replaceExisting)
+		return streamWireFileToDatabase(ctx, tx, input.reader, input.tableName+extFED, "", sp.replaceExisting)
 	}
 
 	if err := validateTableName(input.tableName); err != nil {
 		return err
 	}
-	if err := sp.refuseExistingTable(ctx, db, input.tableName); err != nil {
+	if err := sp.refuseExistingTable(ctx, tx, input.tableName); err != nil {
 		return err
 	}
 
@@ -346,7 +431,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, db DBTX, 
 			return newParser().ProcessInChunks(again, emit)
 		}
 	}
-	return sp.loadTable(ctx, db, input.tableName, source)
+	return sp.loadTable(ctx, tx, input.tableName, source)
 }
 
 // refuseExistingTable reports ErrDuplicateTable when a table of this name is
@@ -381,7 +466,9 @@ type tableSource struct {
 	reread func(emit chunkProcessor) (columnInfoList, error)
 }
 
-// loadTable loads one table from source in a single transaction.
+// loadTable loads one table from source into the scope its input runs in.
+// Undoing a failure is the scope's business, not this function's: everything
+// here happens inside one transaction, which runInputScope rolls back.
 //
 // A column's type is decided by every row in the input, and for a format
 // without a schema the last row can still change it. Declaring the table from
@@ -394,30 +481,11 @@ type tableSource struct {
 // chunk require more, read again under the types the whole of it requires. An
 // input that cannot be read again is staged as text and typed once it has all
 // been read.
-func (sp *streamProcessor) loadTable(ctx context.Context, db DBTX, tableName string, source tableSource) error {
-	// The transaction opens before any table is made. It exists for the speed of
-	// batching the inserts, but the creates belong inside it for correctness: a
-	// load that fails leaves nothing behind, not a table named after the file
-	// with no rows in it.
-	tx, ownTx, err := sp.beginLoad(ctx, db)
-	if err != nil {
-		return err
-	}
-
+func (sp *streamProcessor) loadTable(ctx context.Context, tx *sql.Tx, tableName string, source tableSource) error {
 	if source.reread == nil {
-		err = sp.loadStaged(ctx, tx, tableName, source.read)
-	} else {
-		err = sp.loadTyped(ctx, tx, tableName, source)
+		return sp.loadStaged(ctx, tx, tableName, source.read)
 	}
-	if err != nil {
-		return sp.abandonLoad(ctx, tx, ownTx, tableName, err)
-	}
-	if ownTx {
-		if commitErr := tx.Commit(); commitErr != nil {
-			return fmt.Errorf("%w: failed to commit transaction: %w", ErrDatabaseOperation, commitErr)
-		}
-	}
-	return nil
+	return sp.loadTyped(ctx, tx, tableName, source)
 }
 
 // tableWriter inserts the chunks of one table into a table of a given name.
@@ -567,45 +635,6 @@ func (sp *streamProcessor) loadStaged(ctx context.Context, tx *sql.Tx, tableName
 	return nil
 }
 
-// beginLoad returns the transaction a load runs in: the caller's, when db is
-// one, or a new one this package owns and will end.
-func (sp *streamProcessor) beginLoad(ctx context.Context, db DBTX) (tx *sql.Tx, ownTx bool, err error) {
-	switch d := db.(type) {
-	case *sql.Tx:
-		return d, false, nil
-	case *sql.DB:
-		tx, err := d.BeginTx(ctx, nil)
-		if err != nil {
-			return nil, false, fmt.Errorf("%w: failed to begin transaction: %w", ErrDatabaseOperation, err)
-		}
-		return tx, true, nil
-	default:
-		return nil, false, fmt.Errorf("%w: unsupported database executor %T", ErrDatabaseOperation, db)
-	}
-}
-
-// abandonLoad ends a failed load. A transaction this package opened is rolled
-// back; one the caller owns stays open, so the staging table is dropped from it
-// rather than left for the caller to find.
-func (sp *streamProcessor) abandonLoad(ctx context.Context, tx *sql.Tx, ownTx bool, tableName string, err error) error {
-	sp.logger.Debug("abandoning load", logKeyTable, tableName, "error", err)
-	if !ownTx {
-		_, dropErr := tx.ExecContext(ctx, `DROP TABLE IF EXISTS "`+stagingTableName(tableName)+`"`)
-		return joinCleanup(err, dropErr, "drop staging table")
-	}
-	// A rollback runs because something already failed, so discarding its error
-	// would hide the one case that produces one: the load failed and could not
-	// be undone. When the context is done, database/sql has already rolled the
-	// transaction back itself, so this call loses the race and reports
-	// sql.ErrTxDone. That is cancellation working as documented, and the cause
-	// is already in err.
-	rollbackErr := tx.Rollback()
-	if errors.Is(rollbackErr, sql.ErrTxDone) && ctx.Err() != nil {
-		return err
-	}
-	return joinCleanup(err, rollbackErr, "rollback import transaction")
-}
-
 // declareTable gives the staged rows their table's name and column types.
 //
 // A table whose every column is declared TEXT is the staging table renamed,
@@ -730,7 +759,7 @@ func (sp *streamProcessor) createDecompressedReader(file *os.File, filePath stri
 }
 
 // streamXLSXFileToDatabase handles XLSX files by creating separate tables for each sheet
-func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX, source io.Reader, filePath string) error {
+func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, tx *sql.Tx, source io.Reader, filePath string) error {
 	sp.logger.Debug("reading XLSX data into memory", "path", filePath)
 
 	workbook, err := reader.OpenWorkbook(source)
@@ -776,7 +805,7 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX
 	// Process each sheet as a separate table
 	for i, sheetName := range sheetNames {
 		sp.logger.Debug("processing sheet", "path", filePath, logKeySheet, sheetName, "index", i+1, "total", len(sheetNames))
-		if err := sp.streamXLSXSheetToDatabase(ctx, db, workbook, sheetName, sheetTables[i], filePath); err != nil {
+		if err := sp.streamXLSXSheetToDatabase(ctx, tx, workbook, sheetName, sheetTables[i], filePath); err != nil {
 			return err
 		}
 	}
@@ -789,7 +818,7 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, db DBTX
 // The sheet is read into memory first, which it already is: a workbook is a zip
 // archive read by random access. So its types are final before its rows are
 // inserted, and reading it again is handing out the same chunks.
-func (sp *streamProcessor) streamXLSXSheetToDatabase(ctx context.Context, db DBTX, workbook *reader.Workbook, sheetName, tableName, filePath string) error {
+func (sp *streamProcessor) streamXLSXSheetToDatabase(ctx context.Context, tx *sql.Tx, workbook *reader.Workbook, sheetName, tableName, filePath string) error {
 	var chunks []*reader.Chunk
 	read, err := workbook.ReadSheet(sheetName, reader.Options{ChunkSize: sp.chunkSize}, func(chunk *reader.Chunk) error {
 		chunks = append(chunks, chunk)
@@ -809,7 +838,7 @@ func (sp *streamProcessor) streamXLSXSheetToDatabase(ctx context.Context, db DBT
 	}
 
 	sp.logger.Debug("creating table from sheet", "path", filePath, logKeySheet, sheetName, logKeyTable, tableName, "rows", read.Rows)
-	if err := sp.refuseExistingTable(ctx, db, tableName); err != nil {
+	if err := sp.refuseExistingTable(ctx, tx, tableName); err != nil {
 		return err
 	}
 
@@ -827,7 +856,7 @@ func (sp *streamProcessor) streamXLSXSheetToDatabase(ctx context.Context, db DBT
 		}
 		return types, nil
 	}
-	if err := sp.loadTable(ctx, db, tableName, tableSource{read: emitAll, reread: emitAll}); err != nil {
+	if err := sp.loadTable(ctx, tx, tableName, tableSource{read: emitAll, reread: emitAll}); err != nil {
 		return fmt.Errorf("sheet %s: %w", sheetName, err)
 	}
 	return nil

@@ -3,6 +3,7 @@ package filesql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,10 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// plainExecutor is a DBTX that is neither *sql.DB nor *sql.Tx. The chunk loader
-// needs one of those two to open its own transaction, so a caller's own
-// implementation has to be refused by name rather than crashing on a type
-// assertion.
+// plainExecutor is a DBTX that is neither *sql.DB nor *sql.Tx. A load needs one
+// of those two to run its input under a transaction or a savepoint, so a
+// caller's own implementation has to be refused by name rather than crashing on
+// a type assertion.
 type plainExecutor struct {
 	db *sql.DB
 }
@@ -37,6 +38,24 @@ func (e plainExecutor) PrepareContext(ctx context.Context, query string) (*sql.S
 	return e.db.PrepareContext(ctx, query)
 }
 
+// openTestTx returns a transaction on an empty test database, which is the
+// scope runInputScope hands every load. A test that calls one of the loading
+// functions directly opens its own, so what it exercises is what a load
+// exercises.
+func openTestTx(t *testing.T) *sql.Tx {
+	t.Helper()
+
+	tx, err := openTestDB(t).BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		// A test that ended its own transaction leaves nothing to roll back.
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			t.Errorf("could not roll back the test transaction: %v", err)
+		}
+	})
+	return tx
+}
+
 // failingCloser reports a failure when the loader closes a reader it opened.
 type failingCloser struct{ closed bool }
 
@@ -53,7 +72,7 @@ func TestStreamFileToDatabase_UnsupportedFormat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "notes.docx")
 	require.NoError(t, os.WriteFile(path, []byte("content"), 0o600))
 
-	err := newStreamProcessor(100).streamFileToDatabase(context.Background(), openTestDB(t), path)
+	err := newStreamProcessor(100).streamFileToDatabase(context.Background(), openTestTx(t), path)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUnsupportedFormat)
 }
@@ -79,7 +98,7 @@ func TestStreamWriteBackFormatFiles_Failures(t *testing.T) {
 			t.Parallel()
 
 			path := filepath.Join(t.TempDir(), "missing"+tt.ext)
-			err := newStreamProcessor(100).streamFileToDatabase(ctx, openTestDB(t), path)
+			err := newStreamProcessor(100).streamFileToDatabase(ctx, openTestTx(t), path)
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrIOOperation)
 		})
@@ -90,28 +109,28 @@ func TestStreamWriteBackFormatFiles_Failures(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "empty"+tt.ext)
 			require.NoError(t, os.WriteFile(path, nil, 0o600))
 
-			err := newStreamProcessor(100).streamFileToDatabase(ctx, openTestDB(t), path)
+			err := newStreamProcessor(100).streamFileToDatabase(ctx, openTestTx(t), path)
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrEmptyData)
 		})
 	}
 }
 
-// TestStreamReaderToDatabase_UnsupportedExecutor covers a DBTX the loader cannot
-// start a transaction on. It is refused with the type in the message, because a
-// caller who passed their own wrapper has no other way to tell what was wrong.
-func TestStreamReaderToDatabase_UnsupportedExecutor(t *testing.T) {
+// TestRunInputScope_UnsupportedExecutor covers a DBTX an input cannot be scoped
+// on. It is refused with the type in the message, because a caller who passed
+// their own wrapper has no other way to tell what was wrong.
+func TestRunInputScope_UnsupportedExecutor(t *testing.T) {
 	t.Parallel()
 
-	db := openTestDB(t)
-	err := newStreamProcessor(100).streamReaderToDatabase(context.Background(), plainExecutor{db: db}, readerInput{
-		reader:    strings.NewReader("id,name\n1,Alice\n"),
-		tableName: "users",
-		fileType:  FileTypeCSV,
+	loaded := false
+	err := newStreamProcessor(100).runInputScope(context.Background(), plainExecutor{db: openTestDB(t)}, func(*sql.Tx) error {
+		loaded = true
+		return nil
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrDatabaseOperation)
 	assert.Contains(t, err.Error(), "unsupported database executor")
+	assert.False(t, loaded, "an input with nowhere to be undone must not be loaded at all")
 }
 
 // TestStreamReaderToDatabase_UnusableDatabase covers the check for a table of
@@ -119,10 +138,10 @@ func TestStreamReaderToDatabase_UnsupportedExecutor(t *testing.T) {
 func TestStreamReaderToDatabase_UnusableDatabase(t *testing.T) {
 	t.Parallel()
 
-	db := openTestDB(t)
-	require.NoError(t, db.Close())
+	tx := openTestTx(t)
+	require.NoError(t, tx.Rollback())
 
-	err := newStreamProcessor(100).streamReaderToDatabase(context.Background(), db, readerInput{
+	err := newStreamProcessor(100).streamReaderToDatabase(context.Background(), tx, readerInput{
 		reader:    strings.NewReader("id,name\n1,Alice\n"),
 		tableName: "users",
 		fileType:  FileTypeCSV,
@@ -136,7 +155,7 @@ func TestStreamReaderToDatabase_UnusableDatabase(t *testing.T) {
 func TestStreamReaderToDatabase_ReservedTableName(t *testing.T) {
 	t.Parallel()
 
-	err := newStreamProcessor(100).streamReaderToDatabase(context.Background(), openTestDB(t), readerInput{
+	err := newStreamProcessor(100).streamReaderToDatabase(context.Background(), openTestTx(t), readerInput{
 		reader:    strings.NewReader("id\n1\n"),
 		tableName: sourceTablePrefix + "report",
 		fileType:  FileTypeCSV,
@@ -209,17 +228,22 @@ func TestLoadTyped_ReadAgain(t *testing.T) {
 	t.Run("a second read that does not match the first is refused", func(t *testing.T) {
 		t.Parallel()
 
-		db := openTestDB(t)
+		tx := openTestTx(t)
 		changed := func(emit chunkProcessor) (columnInfoList, error) {
 			return newStreamingParser(FileTypeCSV, CompressionNone, "t", 1).ProcessInChunks(strings.NewReader("v\n1\n2\n"), emit)
 		}
-		err := newStreamProcessor(1).loadTable(ctx, db, "t", newSource(changed))
+		// Through the scope, because undoing a refused load is what the scope is
+		// for: loadTable itself only reports.
+		sp := newStreamProcessor(1)
+		err := sp.runInputScope(ctx, tx, func(scope *sql.Tx) error {
+			return sp.loadTable(ctx, scope, "t", newSource(changed))
+		})
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrParsing)
 		assert.Contains(t, err.Error(), "changed while it was being read")
 
 		var tables int
-		require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table'`).Scan(&tables))
+		require.NoError(t, tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table'`).Scan(&tables))
 		assert.Equal(t, 0, tables, "a refused load leaves no table behind")
 	})
 
@@ -227,20 +251,20 @@ func TestLoadTyped_ReadAgain(t *testing.T) {
 		t.Parallel()
 
 		failing := func(chunkProcessor) (columnInfoList, error) { return nil, errStub }
-		err := newStreamProcessor(1).loadTable(ctx, openTestDB(t), "t", newSource(failing))
+		err := newStreamProcessor(1).loadTable(ctx, openTestTx(t), "t", newSource(failing))
 		require.ErrorIs(t, err, errStub)
 	})
 
 	t.Run("a second read stores the file's text at every row", func(t *testing.T) {
 		t.Parallel()
 
-		db := openTestDB(t)
+		tx := openTestTx(t)
 		again := func(emit chunkProcessor) (columnInfoList, error) {
 			return newStreamingParser(FileTypeCSV, CompressionNone, "t", 1).ProcessInChunks(strings.NewReader(body), emit)
 		}
-		require.NoError(t, newStreamProcessor(1).loadTable(ctx, db, "t", newSource(again)))
+		require.NoError(t, newStreamProcessor(1).loadTable(ctx, tx, "t", newSource(again)))
 
-		rows, err := db.QueryContext(ctx, `SELECT v FROM t ORDER BY rowid`)
+		rows, err := tx.QueryContext(ctx, `SELECT v FROM t ORDER BY rowid`)
 		require.NoError(t, err)
 		defer rows.Close()
 		var got []string
@@ -254,28 +278,53 @@ func TestLoadTyped_ReadAgain(t *testing.T) {
 	})
 }
 
-// TestLoadStaged_CallerTransaction covers a load into a transaction the caller
-// owns: the staging table is dropped from it when the load fails, and the
-// transaction itself is left for the caller to end.
-func TestLoadStaged_CallerTransaction(t *testing.T) {
+// TestRunInputScope_CallerTransaction covers a failed load inside a transaction
+// the caller owns: rolling back to the savepoint takes the staging table and
+// every other trace of the input with it, leaves what the caller had, and
+// leaves the transaction itself for the caller to end.
+func TestRunInputScope_CallerTransaction(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	db := openTestDB(t)
-	tx, err := db.BeginTx(ctx, nil)
+	tx := openTestTx(t)
+	_, err := tx.ExecContext(ctx, `CREATE TABLE keep (v)`)
 	require.NoError(t, err)
-	defer func() { _ = tx.Rollback() }()
 
 	source := tableSource{read: func(emit chunkProcessor) (columnInfoList, error) {
 		return newStreamingParser(FileTypeCSV, CompressionNone, "t", 1).ProcessInChunks(strings.NewReader("v\n1\n2\nx,y\n"), emit)
 	}}
-	err = newStreamProcessor(1).loadTable(ctx, tx, "t", source)
+	sp := newStreamProcessor(1)
+	err = sp.runInputScope(ctx, tx, func(scope *sql.Tx) error {
+		return sp.loadTable(ctx, scope, "t", source)
+	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrColumnMismatch)
 
-	var tables int
-	require.NoError(t, tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table'`).Scan(&tables))
-	assert.Equal(t, 0, tables, "the staging table is dropped from the caller's transaction")
+	var left []string
+	rows, err := tx.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`)
+	require.NoError(t, err, "the caller's transaction is still usable")
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		left = append(left, name)
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	assert.Equal(t, []string{"keep"}, left, "the failed input left nothing in the caller's transaction")
+}
+
+// TestUndoInput_TransactionAlreadyEnded covers the undo of an input whose
+// transaction is already gone, which is what a load cancelled through the
+// context the caller's transaction was built on finds: database/sql has rolled
+// the whole transaction back, taking the savepoint with it, and that is the undo
+// having happened rather than a failure to report.
+func TestUndoInput_TransactionAlreadyEnded(t *testing.T) {
+	t.Parallel()
+
+	tx := openTestTx(t)
+	require.NoError(t, tx.Rollback())
+
+	assert.NoError(t, undoInput(context.Background(), tx))
 }
 
 // TestLoadStaged_TypesTheTableOnce covers the two ways a staged table is
@@ -297,18 +346,18 @@ func TestLoadStaged_TypesTheTableOnce(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			db := openTestDB(t)
+			tx := openTestTx(t)
 			source := tableSource{read: func(emit chunkProcessor) (columnInfoList, error) {
 				return newStreamingParser(FileTypeCSV, CompressionNone, "t", 1).ProcessInChunks(strings.NewReader(tt.body), emit)
 			}}
-			require.NoError(t, newStreamProcessor(1).loadTable(ctx, db, "t", source))
+			require.NoError(t, newStreamProcessor(1).loadTable(ctx, tx, "t", source))
 
 			var declared string
-			require.NoError(t, db.QueryRowContext(ctx, `SELECT type FROM pragma_table_info('t') WHERE name = 'a'`).Scan(&declared))
+			require.NoError(t, tx.QueryRowContext(ctx, `SELECT type FROM pragma_table_info('t') WHERE name = 'a'`).Scan(&declared))
 			assert.Equal(t, tt.wantType, declared)
 
 			var names []string
-			rows, err := db.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type='table'`)
+			rows, err := tx.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type='table'`)
 			require.NoError(t, err)
 			for rows.Next() {
 				var name string
@@ -319,7 +368,7 @@ func TestLoadStaged_TypesTheTableOnce(t *testing.T) {
 			require.NoError(t, rows.Close())
 			assert.Equal(t, []string{"t"}, names, "the staging table is gone")
 
-			rows, err = db.QueryContext(ctx, `SELECT a FROM t ORDER BY rowid`)
+			rows, err = tx.QueryContext(ctx, `SELECT a FROM t ORDER BY rowid`)
 			require.NoError(t, err)
 			defer rows.Close()
 			var got []string
@@ -346,7 +395,7 @@ func TestLoadTable_SourceWithoutChunks(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			err := newStreamProcessor(1).loadTable(context.Background(), openTestDB(t), "t", source)
+			err := newStreamProcessor(1).loadTable(context.Background(), openTestTx(t), "t", source)
 			require.ErrorIs(t, err, ErrEmptyData)
 		})
 	}
