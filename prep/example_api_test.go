@@ -354,3 +354,34 @@ func ExampleProcessor_Process_defaultForAbsentColumn() {
 	// Output:
 	// {Comment:hello Status:active}
 }
+
+// ExampleProcessor_Process_crossField shows a comparison between two columns,
+// which reads the cells as the field it lands on says they are: the dates are
+// strings and compare as text, so the range runs forwards, while the quantities
+// are numbers and compare as numbers, so 007 is not more than 7.
+func ExampleProcessor_Process_crossField() {
+	type shipment struct {
+		ShippedOn string `validate:"ltfield=DueOn"`
+		DueOn     string
+		Packed    int `validate:"ltefield=Ordered"`
+		Ordered   int
+	}
+
+	var rows []shipment
+	_, result, err := prep.NewProcessor(prep.FileTypeCSV).Process(strings.NewReader(
+		"shipped_on,due_on,packed,ordered\n"+
+			"2024-01-05,2024-01-31,007,7\n"+
+			"2024-02-10,2024-02-01,9,7\n"), &rows)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(result.ValidRowCount)
+	for _, e := range result.ValidationErrors() {
+		fmt.Printf("row %d: %s %s\n", e.Row, e.Column, e.Message)
+	}
+	// Output:
+	// 1
+	// row 2: shipped_on value must be less than field DueOn
+	// row 2: packed value must be less than or equal to field Ordered
+}
