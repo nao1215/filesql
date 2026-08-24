@@ -132,6 +132,18 @@ func tableFromFilePath(filePath string) string {
 	return strings.TrimSuffix(fileName, filepath.Ext(fileName))
 }
 
+// quoteIdentifier renders name as a SQLite double-quoted identifier, doubling
+// any embedded double quote so the quote closes the identifier only where it is
+// meant to. Column names are taken from the data unchanged -- a CSV header, an
+// XLSX cell, a Parquet field -- and a double quote is legal in all three, so a
+// name that carries one would otherwise break the CREATE TABLE it is written
+// into. Table names reach a statement already sanitized to letters, digits, and
+// underscores, but they are quoted through here too so every identifier the
+// package emits is escaped by one rule.
+func quoteIdentifier(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
 // sanitizeTableName removes invalid characters from table names and ensures SQL-safe identifiers.
 // This function is automatically applied to all table names generated from file paths to prevent
 // SQL syntax errors caused by special characters like hyphens, spaces, and other symbols.
