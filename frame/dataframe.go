@@ -1115,12 +1115,17 @@ func (df *DataFrame) SortBy(options ...SortOption) (*DataFrame, error) {
 //
 // Two strings compare lexically and two numbers compare numerically, whatever
 // kinds spell them: the identity rule of this package (see valueKind) says the
-// quantity is the value, so the order has to agree with it. Integer pairs
-// compare exactly rather than through float64, which collapses two distinct
-// integers past 2^53 into one spelling. Everything else — a number against a
-// string, a bool, a value of an unknown type — falls back to the text %v
-// renders, which orders a pair the same way whichever side each value arrives
-// on. That symmetry is the contract slices.SortFunc requires.
+// quantity is the value, so the order agrees with it for every pair it reads as
+// values. Integer pairs compare exactly rather than through float64, which
+// collapses two distinct integers past 2^53 into one spelling.
+//
+// Everything else — a number against a string, a bool, a value of an unknown
+// type — falls back to the text %v renders, which orders a pair the same way
+// whichever side each value arrives on. That symmetry is the contract
+// slices.SortFunc requires, and it is all the fallback promises: it can call
+// two values equal that the identity rule keeps apart, as it does for 1 and
+// "1". No identity decision is read from the order: Distinct, GroupBy and Join
+// read the key rather than this.
 func compareValues(a, b any) int {
 	// The kinds a load produces, compared directly; a column is almost always
 	// homogeneous, so this is the pair nearly every comparison is.
@@ -1381,7 +1386,17 @@ func valueKind(v any) (byte, string) {
 }
 
 // canonicalNumber renders f the one way every spelling of that quantity renders.
+//
+// A zero is written without its sign. FormatFloat spells negative zero "-0",
+// which is a different key from "0", so a column holding both — what a
+// rounding, a negation of a zero or a negated underflow writes — was two
+// values to Distinct, GroupBy and Join and one value to Sort, which compares
+// the numbers. The quantity is the value here, and the two are one quantity:
+// -0.0 == 0.0 in Go, and SQLite answers the same for the same file.
 func canonicalNumber(f float64) string {
+	if f == 0 {
+		return "0"
+	}
 	return strconv.FormatFloat(f, 'g', -1, 64)
 }
 

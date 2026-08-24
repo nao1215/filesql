@@ -3364,6 +3364,117 @@ func TestDistinctAndJoinCompareValuesAsWritten(t *testing.T) {
 
 		assert.Equal(t, []map[string]any{{"id": "007", "x": "a", "y": "Z"}}, joined.ToRecords())
 	})
+
+	t.Run("a zero is a zero whichever sign it was written with", func(t *testing.T) {
+		t.Parallel()
+
+		// A negative zero is what a rounding, a subtraction of equals or a
+		// negated underflow writes into a file, and it is the same quantity as
+		// zero: SQLite answers 1 to -0.0 = 0.0, and this package follows the
+		// loader. Rendering the key with FormatFloat gave it the text "-0", so
+		// every path built on the key kept the two apart.
+		df, err := NewDataFrame(strings.NewReader("k\n-0.0\n0.0\n0\n-0\n"), CSV)
+		require.NoError(t, err)
+
+		assert.Equal(t, 1, df.Distinct().Len(), "the four cells are one quantity")
+
+		grouped, err := df.GroupBy("k")
+		require.NoError(t, err)
+		assert.Equal(t, 1, grouped.Count().Len(), "the four cells are one group")
+
+		left, err := NewDataFrame(strings.NewReader("k,l\n-0.0,left\n"), CSV)
+		require.NoError(t, err)
+		right, err := NewDataFrame(strings.NewReader("k,r\n0.0,right\n"), CSV)
+		require.NoError(t, err)
+		joined, err := left.Join(right, JoinOption{On: []string{"k"}, How: InnerJoin})
+		require.NoError(t, err)
+		assert.Equal(t, 1, joined.Len(), "-0.0 and 0.0 are one key")
+	})
+
+	t.Run("a negative number is still not zero", func(t *testing.T) {
+		t.Parallel()
+
+		df, err := NewDataFrame(strings.NewReader("k\n-0.0\n-0.5\n0\n"), CSV)
+		require.NoError(t, err)
+
+		assert.Equal(t, 2, df.Distinct().Len(), "only the two zeros are one value")
+	})
+}
+
+// TestIdentityRelationIsOneRelation pins the contract Distinct, GroupBy and
+// Join share: for any pair of values, the three have to give the same answer to
+// whether the two are one value, because the three read one key. A negative
+// zero broke it in the direction the key alone could break it — the text
+// carried the sign, so the three agreed with each other and disagreed with the
+// quantity.
+//
+// Sort is checked against the same answer only for a pair the comparison
+// understands as values, which is a pair of numbers or a pair of strings. A
+// pair of different kinds falls back to the text the two render as, where 1 and
+// "1" compare equal although they are two values; that is the order being
+// total rather than the identity relation, and no identity decision reads
+// equality from it.
+func TestIdentityRelationIsOneRelation(t *testing.T) {
+	t.Parallel()
+
+	// sameBySort reads the comparison through the order: a stable sort keeps the
+	// input order under both directions only for a pair that compares equal.
+	sameBySort := func(t *testing.T, a, b any) bool {
+		t.Helper()
+		first := func(order SortOrder) int {
+			df := NewDataFrameFromRecords([]map[string]any{{"k": a, "i": 0}, {"k": b, "i": 1}})
+			sorted, err := df.Sort("k", order)
+			require.NoError(t, err)
+			index, ok := sorted.ToRecords()[0]["i"].(int)
+			require.True(t, ok)
+			return index
+		}
+		return first(Ascending) == 0 && first(Descending) == 0
+	}
+
+	tests := []struct {
+		name string
+		a, b any
+		want bool
+		// readAsValues says the comparison reads the two as values rather than
+		// as text, so the sort's answer is checked too.
+		readAsValues bool
+	}{
+		{"zero and negative zero", 0.0, math.Copysign(0, -1), true, true},
+		{"negative zero and an integer zero", math.Copysign(0, -1), 0, true, true},
+		{"an integer and the equal real", 1, 1.0, true, true},
+		{"two distinct integers past 2^53", int64(9007199254740993), int64(9007199254740992), false, true},
+		{"two NaNs", math.NaN(), math.NaN(), true, true},
+		{"two different numbers", 1.0, 2.0, false, true},
+		{"two different strings", "a", "b", false, true},
+		{"a number and the text that spells it", 1, "1", false, false},
+		{"a missing value and the text nil formats as", nil, "<nil>", false, false},
+		{"a boolean and the text that spells it", true, "true", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			byDistinct := NewDataFrameFromRecords([]map[string]any{{"k": tt.a}, {"k": tt.b}}).Distinct().Len() == 1
+
+			grouped, err := NewDataFrameFromRecords([]map[string]any{{"k": tt.a}, {"k": tt.b}}).GroupBy("k")
+			require.NoError(t, err)
+			byGroupBy := grouped.Count().Len() == 1
+
+			left := NewDataFrameFromRecords([]map[string]any{{"k": tt.a, "l": 1}})
+			right := NewDataFrameFromRecords([]map[string]any{{"k": tt.b, "r": 2}})
+			joined, err := left.Join(right, JoinOption{On: []string{"k"}, How: InnerJoin})
+			require.NoError(t, err)
+			byJoin := joined.Len() == 1
+
+			assert.Equal(t, tt.want, byDistinct, "Distinct")
+			assert.Equal(t, tt.want, byGroupBy, "GroupBy")
+			assert.Equal(t, tt.want, byJoin, "Join")
+			if tt.readAsValues {
+				assert.Equal(t, tt.want, sameBySort(t, tt.a, tt.b), "Sort")
+			}
+		})
+	}
 }
 
 // TestToTSVTakesFieldsLiterally pins what a TSV file can hold. A CSV writer with
