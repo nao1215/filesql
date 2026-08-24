@@ -32,8 +32,8 @@ github.com/moov-io/iso3166 v0.4.0 h1:WtXIptANC16DrHpbSAt4+itFciCCnA+C6eAi9k7HEsA
 github.com/moov-io/iso3166 v0.4.0/go.mod h1:13ubAoOZNfWzs2fN3x467zg8q982U867Ee+ulqrArlM=
 github.com/moov-io/iso4217 v0.4.0 h1:+97e9chdg8Cx3kMLmGmvN64+CtmtodPLfUT2PaCXUUE=
 github.com/moov-io/iso4217 v0.4.0/go.mod h1:QvQE6pvu9KItHusChPLOJS10EhJnyQpcKHloIqHkQVM=
-github.com/moov-io/wire v0.16.0 h1:WsZNGXGPreVBl27FFtAUEzuxWZzBOkM89AEP7fDkl9Q=
-github.com/moov-io/wire v0.16.0/go.mod h1:UQ0xtx/uE3jzokvi21n7tjLN3kEpwVJbBL0pVtxFDZs=
+github.com/moov-io/wire v0.16.1 h1:JbeIS8JcmJJuxkXVXG6uGt4xYfEwkYk7xKzf5VbP0yQ=
+github.com/moov-io/wire v0.16.1/go.mod h1:UQ0xtx/uE3jzokvi21n7tjLN3kEpwVJbBL0pVtxFDZs=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/parquet-go/bitpack v1.0.0 h1:AUqzlKzPPXf2bCdjfj4sTeacrUwsT7NlcYDMUQxPcQA=
