@@ -3,10 +3,29 @@ package prep
 import (
 	"fmt"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 )
+
+// oneOfParamRegex splits a oneof parameter the way the go-playground dialect
+// does: a single-quoted run is one value, spaces and all, and an unquoted run
+// is split on whitespace.
+//
+//nolint:gochecknoglobals // compiled once, read-only
+var oneOfParamRegex = regexp.MustCompile(`'[^']*'|\S+`)
+
+// splitOneOfValues returns the allowed values a oneof parameter names, matching
+// go-playground: split on the regex above, then drop the single quotes that
+// grouped a multi-word value.
+func splitOneOfValues(value string) []string {
+	tokens := oneOfParamRegex.FindAllString(value, -1)
+	for i, tok := range tokens {
+		tokens[i] = strings.ReplaceAll(tok, "'", "")
+	}
+	return tokens
+}
 
 // fieldInfo contains parsed information about a struct field
 type fieldInfo struct {
@@ -426,8 +445,8 @@ var validatorRegistry = map[string]validatorBuilder{
 
 	// String validators
 	oneOfTagValue: func(value string, _ bool) (validator, error) {
-		if value != "" {
-			return newOneOfValidator(strings.Fields(value)), nil
+		if values := splitOneOfValues(value); len(values) > 0 {
+			return newOneOfValidator(values), nil
 		}
 		return nil, nil //nolint:nilnil // empty value produces no validator
 	},
