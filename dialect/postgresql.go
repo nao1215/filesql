@@ -32,6 +32,8 @@ import (
 //	P-20 LPAD(x, n, p) / RPAD      -> postgresql_lpad / postgresql_rpad
 //	P-21 a / b, a % b, MOD(a, b)   -> postgresql_divide / postgresql_mod, which
 //	                                  raise on a zero divisor
+//	P-22 TRUNC(x, n)               -> trunc_scale(x, n); div and width_bucket
+//	                                  are helpers of their own names
 func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedPostgreSQL(tokens); err != nil {
 		return nil, err
@@ -210,6 +212,8 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 		return rewriteRenameCall(tokens, open, closeIdx, "trim", pgCallPass)
 	case fnNameMod:
 		return rewriteRenameCall(tokens, open, closeIdx, "postgresql_mod", pgCallPass)
+	case fnNameTrunc:
+		return rewriteTruncScaleCall(tokens, open, closeIdx, pgCallPass)
 	case "JSONB_ARRAY_LENGTH", "JSON_ARRAY_LENGTH":
 		return rewriteRenameCall(tokens, open, closeIdx, "json_array_length", pgCallPass)
 	case fnNameCharLen, fnNameCharLen2:

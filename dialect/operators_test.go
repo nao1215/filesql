@@ -299,6 +299,79 @@ func TestZeroDivisorLeavesTheArithmeticAlone(t *testing.T) {
 	}
 }
 
+// TestArithmeticFunctionsAreTranslated pins the five functions both engines
+// define that SQLite has no form of, so a query written for either dialect is
+// computed rather than refused with a SQLite message naming a function the
+// caller did not write. Every value was read from postgres:17-alpine, except
+// GoogleSQL's, which came from the BigQuery emulator; its TRUNC takes one
+// argument only, so the two-argument answer follows PostgreSQL's, which is what
+// BigQuery documents.
+func TestArithmeticFunctionsAreTranslated(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		dialect Dialect
+		query   string
+		want    string
+	}{
+		// An integer division truncates toward zero rather than flooring, so a
+		// negative operand answers -3 rather than -4.
+		{PostgreSQL, `SELECT div(7, 2)`, "3"},
+		{PostgreSQL, `SELECT div(-7, 2)`, "-3"},
+		{PostgreSQL, `SELECT div(7, -2)`, "-3"},
+		{GoogleSQL, `SELECT DIV(7, 2)`, "3"},
+		{GoogleSQL, `SELECT DIV(-7, 2)`, "-3"},
+
+		// A truncation at a scale cuts toward zero, and a negative scale
+		// truncates to a power of ten.
+		{PostgreSQL, `SELECT trunc(12.345, 2)`, "12.34"},
+		{PostgreSQL, `SELECT trunc(-12.345, 2)`, "-12.34"},
+		{PostgreSQL, `SELECT trunc(12.345, 0)`, "12"},
+		{PostgreSQL, `SELECT trunc(12.345, -1)`, "10"},
+		{PostgreSQL, `SELECT trunc(-12.345, -1)`, "-10"},
+		{PostgreSQL, `SELECT trunc(12345.6, -2)`, "12300"},
+		{GoogleSQL, `SELECT TRUNC(12.345, 2)`, "12.34"},
+
+		// The one-argument form is SQLite's own and must keep working.
+		{PostgreSQL, `SELECT trunc(12.345)`, "12"},
+		{GoogleSQL, `SELECT TRUNC(12.345)`, "12"},
+
+		// The buckets are numbered from 1, with 0 below the range and count+1
+		// above it, and the bounds may be given in either order.
+		{PostgreSQL, `SELECT width_bucket(5.35, 0.024, 10.06, 5)`, "3"},
+		{PostgreSQL, `SELECT width_bucket(0.0, 0.024, 10.06, 5)`, "0"},
+		{PostgreSQL, `SELECT width_bucket(20.0, 0.024, 10.06, 5)`, "6"},
+		{PostgreSQL, `SELECT width_bucket(5.0, 10.0, 0.0, 5)`, "3"},
+	}
+	for _, tt := range tests {
+		got, err := runDialect(t, db, tt.dialect, tt.query)
+		if err != nil {
+			t.Errorf("%v: %s: %v", tt.dialect, tt.query, err)
+			continue
+		}
+		if !got.Valid || got.String != tt.want {
+			t.Errorf("%v: %s = %v, want %q", tt.dialect, tt.query, got, tt.want)
+		}
+	}
+
+	// A zero divisor raises for the function the way it does for the operator,
+	// and a range of no width is refused the way PostgreSQL refuses it.
+	for _, tt := range []struct {
+		dialect Dialect
+		query   string
+	}{
+		{PostgreSQL, `SELECT div(7, 0)`},
+		{GoogleSQL, `SELECT DIV(7, 0)`},
+		{PostgreSQL, `SELECT width_bucket(5.0, 3.0, 3.0, 5)`},
+		{PostgreSQL, `SELECT width_bucket(5.0, 0.0, 10.0, 0)`},
+	} {
+		if _, err := runDialect(t, db, tt.dialect, tt.query); err == nil {
+			t.Errorf("%v: %s answered a value; the engine refuses it", tt.dialect, tt.query)
+		}
+	}
+}
+
 // TestLikeEscapeClauseIsLeftToSQLite keeps a pattern with a custom escape
 // character on SQLite's own LIKE, which the helpers do not model.
 func TestLikeEscapeClauseIsLeftToSQLite(t *testing.T) {
