@@ -15,8 +15,8 @@ func TestMySQLTranslate(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"C-1_extract", "SELECT EXTRACT(YEAR FROM d) FROM t", "SELECT DATE_PART('year', d) AS \"EXTRACT(YEAR FROM d)\" FROM t"},
-		{"C-1_extract_expr", "SELECT EXTRACT(MONTH FROM o.created) FROM t", "SELECT DATE_PART('month', o.created) AS \"EXTRACT(MONTH FROM o.created)\" FROM t"},
+		{"C-1_extract", "SELECT EXTRACT(YEAR FROM d) FROM t", "SELECT mysql_date_part('year', d) AS \"EXTRACT(YEAR FROM d)\" FROM t"},
+		{"C-1_extract_expr", "SELECT EXTRACT(MONTH FROM o.created) FROM t", "SELECT mysql_date_part('month', o.created) AS \"EXTRACT(MONTH FROM o.created)\" FROM t"},
 
 		{"M-5_date_add", "SELECT DATE_ADD(d, INTERVAL 3 DAY) FROM t", "SELECT interval_add(d, 3, 'day') AS \"DATE_ADD(d, INTERVAL 3 DAY)\" FROM t"},
 		{"M-5_date_sub", "SELECT DATE_SUB(d, INTERVAL 2 MONTH) FROM t", "SELECT interval_add(d, -(2), 'month') AS \"DATE_SUB(d, INTERVAL 2 MONTH)\" FROM t"},
@@ -94,7 +94,7 @@ func TestMySQLTranslate(t *testing.T) {
 
 		{"M-10_limit_offset", "SELECT * FROM t LIMIT 5, 10", "SELECT * FROM t LIMIT 5, 10"},
 
-		{"nested_date_add_in_extract", "SELECT EXTRACT(DAY FROM DATE_ADD(d, INTERVAL 1 DAY))", "SELECT DATE_PART('day', interval_add(d, 1, 'day')) AS \"EXTRACT(DAY FROM DATE_ADD(d, INTERVAL 1 DAY))\""},
+		{"nested_date_add_in_extract", "SELECT EXTRACT(DAY FROM DATE_ADD(d, INTERVAL 1 DAY))", "SELECT mysql_date_part('day', interval_add(d, 1, 'day')) AS \"EXTRACT(DAY FROM DATE_ADD(d, INTERVAL 1 DAY))\""},
 		// M-21: the logical and bitwise operators MySQL spells with punctuation.
 		// "||" was translated and its siblings were not, so they reached SQLite's
 		// tokenizer as unrecognized tokens.

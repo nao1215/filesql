@@ -178,7 +178,7 @@ func pgCallPass(tokens []token) ([]token, error) {
 func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, error) {
 	switch strings.ToUpper(tokens[nameIdx].text) {
 	case fnNameExtract:
-		return rewriteExtractCall(tokens, open, closeIdx, pgCallPass)
+		return rewriteExtractCall(tokens, open, closeIdx, "DATE_PART", pgCallPass)
 	case "POSITION":
 		return rewritePosition(tokens, open, closeIdx, pgCallPass)
 	case fnNameSubstring, fnNameSubstr:

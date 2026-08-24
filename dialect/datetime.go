@@ -221,12 +221,32 @@ func fnDateTruncPart(args []driver.Value) (driver.Value, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("dialect: trunc helper expects 2 arguments, got %d", len(args))
 	}
+	unit, _ := toString(args[1])
+	unit = strings.ToLower(strings.TrimSpace(unit))
+	// BigQuery's WEEK begins on Sunday and its ISOWEEK on Monday; the shared
+	// PostgreSQL helper below knows only the ISO week, so both land here.
+	if unit == unitWeek || unit == unitISOWeek {
+		tm, ok := toStringTime(args[0])
+		if !ok {
+			return nil, nil
+		}
+		weekStart := time.Sunday
+		if unit == unitISOWeek {
+			weekStart = time.Monday
+		}
+		offset := (int(tm.Weekday()) - int(weekStart) + 7) % 7
+		y, mo, d := tm.Date()
+		day := time.Date(y, mo, d, 0, 0, 0, 0, tm.Location()).AddDate(0, 0, -offset)
+		if hasTimePart(args[0]) {
+			return day.Format(layoutDateTime), nil
+		}
+		return day.Format(layoutDateOnly), nil
+	}
 	out, err := fnDateTrunc([]driver.Value{args[1], args[0]})
 	if err != nil || out == nil {
 		return out, err
 	}
-	unit, _ := toString(args[1])
-	if !hasTimePart(args[0]) && dateGrainedUnits[strings.ToLower(strings.TrimSpace(unit))] {
+	if !hasTimePart(args[0]) && dateGrainedUnits[unit] {
 		s, _ := toString(out)
 		if tm, ok := parseTime(s); ok {
 			return tm.Format(layoutDateOnly), nil

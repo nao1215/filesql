@@ -94,6 +94,8 @@ const (
 	unitWeekday   = "weekday"
 	unitQuarter   = "quarter"
 	unitWeek      = "week"
+	unitISOWeek   = "isoweek"
+	unitISOYear   = "isoyear"
 )
 
 // scalarFn adapts a simpler signature (no context) to the driver's scalar
@@ -112,18 +114,23 @@ func registerAll() error {
 		"str_to_date": {2, fnStrToDate},
 		"datediff":    {2, fnDateDiff},
 		"date_part":   {2, fnDatePart},
-		unitYear:      {1, unaryDatePart(unitYear)},
-		unitMonth:     {1, unaryDatePart(unitMonth)},
-		unitDay:       {1, unaryDatePart(unitDay)},
-		unitHour:      {1, unaryDatePart(unitHour)},
-		unitMinute:    {1, unaryDatePart(unitMinute)},
-		unitSecond:    {1, unaryDatePart(unitSecond)},
-		unitDayOfWeek: {1, unaryDatePart(unitDayOfWeek)},
-		unitDayOfYear: {1, unaryDatePart(unitDayOfYear)},
-		unitWeekday:   {1, unaryDatePart(unitWeekday)},
-		"locate":      {-1, fnLocate},
-		"lpad":        {-1, fnLpad},
-		"rpad":        {-1, fnRpad},
+		// EXTRACT names each dialect's own helper, because the dialects
+		// disagree on WEEK: PostgreSQL's is the ISO week, MySQL's and
+		// BigQuery's begin on Sunday, and BigQuery alone has ISOWEEK/ISOYEAR.
+		"mysql_date_part":     {2, fnMySQLDatePart},
+		"googlesql_date_part": {2, fnGoogleSQLDatePart},
+		unitYear:              {1, unaryDatePart(unitYear)},
+		unitMonth:             {1, unaryDatePart(unitMonth)},
+		unitDay:               {1, unaryDatePart(unitDay)},
+		unitHour:              {1, unaryDatePart(unitHour)},
+		unitMinute:            {1, unaryDatePart(unitMinute)},
+		unitSecond:            {1, unaryDatePart(unitSecond)},
+		unitDayOfWeek:         {1, unaryDatePart(unitDayOfWeek)},
+		unitDayOfYear:         {1, unaryDatePart(unitDayOfYear)},
+		unitWeekday:           {1, unaryDatePart(unitWeekday)},
+		"locate":              {-1, fnLocate},
+		"lpad":                {-1, fnLpad},
+		"rpad":                {-1, fnRpad},
 
 		// LPAD and RPAD answer a negative length and an empty pad differently
 		// per dialect, so each dialect's rewrite names its own helper; see
@@ -758,6 +765,58 @@ func datePartValue(unit string, tm time.Time) (driver.Value, error) {
 	default:
 		return nil, fmt.Errorf("dialect: unsupported date part %q", unit)
 	}
+}
+
+// fnGoogleSQLDatePart implements EXTRACT under GoogleSQL. BigQuery's WEEK
+// begins on Sunday and numbers the days before the year's first Sunday as week
+// 0 — MySQL's week mode 0 — and ISOWEEK and ISOYEAR are the ISO pair whose week
+// the shared helper spells "week". A value that does not parse is refused by name, the way
+// BigQuery refuses an invalid literal, rather than answered with NULL, which
+// would read as a statement about the data.
+func fnGoogleSQLDatePart(args []driver.Value) (driver.Value, error) {
+	unit, ok := toString(args[0])
+	if !ok || args[1] == nil {
+		return nil, nil
+	}
+	tm, ok := toStringTime(args[1])
+	if !ok {
+		s, _ := toString(args[1])
+		return nil, fmt.Errorf("dialect: not a date or timestamp: %q", s)
+	}
+	switch unit = strings.ToLower(strings.TrimSpace(unit)); unit {
+	case unitWeek:
+		week, _ := mysqlWeek(tm, 0)
+		return int64(week), nil
+	case unitISOWeek:
+		_, week := tm.ISOWeek()
+		return int64(week), nil
+	case unitISOYear:
+		year, _ := tm.ISOWeek()
+		return int64(year), nil
+	default:
+		return datePartValue(unit, tm)
+	}
+}
+
+// fnMySQLDatePart implements EXTRACT under MySQL, whose WEEK is WEEK(x) with
+// the session's default_week_format — 0 by default, the Sunday-first numbering
+// mysqlWeek computes. Everything else follows the shared helper, including NULL
+// for a value that does not parse, which is MySQL's own answer.
+func fnMySQLDatePart(args []driver.Value) (driver.Value, error) {
+	unit, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	tm, ok := toStringTime(args[1])
+	if !ok {
+		return nil, nil
+	}
+	unit = strings.ToLower(strings.TrimSpace(unit))
+	if unit == unitWeek {
+		week, _ := mysqlWeek(tm, 0)
+		return int64(week), nil
+	}
+	return datePartValue(unit, tm)
 }
 
 // unaryDatePart builds a one-argument function (YEAR, MONTH, ...) from a fixed
@@ -2241,11 +2300,14 @@ func fnGenerateUUID(_ []driver.Value) (driver.Value, error) {
 // --- time parsing ---
 
 // timeLayouts are tried in order by parseTime, covering the common SQL date and
-// datetime shapes.
+// datetime shapes. The Z07:00 pair reads a timezone suffix — a trailing Z or an
+// offset like +09:00 — which BigQuery's TIMESTAMP literals carry.
 var timeLayouts = []string{
 	"2006-01-02 15:04:05.999999999",
 	"2006-01-02 15:04:05",
+	"2006-01-02 15:04:05.999999999Z07:00",
 	"2006-01-02T15:04:05",
+	"2006-01-02T15:04:05.999999999Z07:00",
 	"2006-01-02 15:04",
 	"2006-01-02",
 	"2006/01/02 15:04:05",
@@ -2253,12 +2315,14 @@ var timeLayouts = []string{
 	"15:04:05",
 }
 
-// parseTime parses a date/time string against the supported layouts.
+// parseTime parses a date/time string against the supported layouts. A value
+// with a timezone suffix is normalized to UTC, which is the timezone BigQuery
+// extracts fields in by default.
 func parseTime(s string) (time.Time, bool) {
 	s = strings.TrimSpace(s)
 	for _, layout := range timeLayouts {
 		if tm, err := time.Parse(layout, s); err == nil {
-			return tm, true
+			return tm.UTC(), true
 		}
 	}
 	return time.Time{}, false

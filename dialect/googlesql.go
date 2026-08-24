@@ -213,7 +213,7 @@ func googlesqlCallPass(tokens []token) ([]token, error) {
 func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, error) {
 	switch strings.ToUpper(tokens[nameIdx].text) {
 	case fnNameExtract:
-		return rewriteExtractCall(tokens, open, closeIdx, googlesqlCallPass)
+		return rewriteExtractCall(tokens, open, closeIdx, "googlesql_date_part", googlesqlCallPass)
 	case fnNameCast:
 		return rewriteCastCall(tokens, open, closeIdx, GoogleSQL, "googlesql_cast", googlesqlCallPass)
 	case "SAFE_CAST":

@@ -13,7 +13,7 @@ func TestGoogleSQLTranslate(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"C-1_extract", "SELECT EXTRACT(YEAR FROM d) FROM t", "SELECT DATE_PART('year', d) AS \"EXTRACT(YEAR FROM d)\" FROM t"},
+		{"C-1_extract", "SELECT EXTRACT(YEAR FROM d) FROM t", "SELECT googlesql_date_part('year', d) AS \"EXTRACT(YEAR FROM d)\" FROM t"},
 
 		// G-1 backtick compound identifier is lexical (tokenizer).
 		{"G-1_backtick_path", "SELECT x FROM `proj.dataset.table`", `SELECT x FROM "proj.dataset.table"`},
@@ -69,7 +69,7 @@ func TestGoogleSQLTranslate(t *testing.T) {
 		{"G-10_byte_string", `SELECT b'AB'`, `SELECT x'4142'`},
 
 		{"double_quoted_string", `SELECT "hello"`, `SELECT 'hello'`},
-		{"nested_safe_cast_in_extract", "SELECT EXTRACT(YEAR FROM SAFE_CAST(s AS DATETIME))", "SELECT DATE_PART('year', googlesql_safe_cast(s, 'DATETIME')) AS \"EXTRACT(YEAR FROM SAFE_CAST(s AS DATETIME))\""},
+		{"nested_safe_cast_in_extract", "SELECT EXTRACT(YEAR FROM SAFE_CAST(s AS DATETIME))", "SELECT googlesql_date_part('year', googlesql_safe_cast(s, 'DATETIME')) AS \"EXTRACT(YEAR FROM SAFE_CAST(s AS DATETIME))\""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

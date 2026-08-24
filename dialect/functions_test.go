@@ -708,6 +708,14 @@ func TestDialectBoundariesFollowTheirEngine(t *testing.T) {
 		{name: "mysql dayofweek on a Sunday", dialect: MySQL, query: `SELECT DAYOFWEEK('2026-08-02')`, want: "1"},
 		{name: "googlesql dayofweek on a Sunday", dialect: GoogleSQL, query: `SELECT EXTRACT(DAYOFWEEK FROM TIMESTAMP '2026-08-02')`, want: "1"},
 
+		// A value the date functions cannot read is answered per dialect:
+		// MySQL warns and answers NULL, BigQuery refuses the query by name.
+		{name: "mysql extract answers null for a malformed date", dialect: MySQL, query: `SELECT EXTRACT(YEAR FROM 'not-a-date')`, wantNull: true},
+		{name: "mysql extract reads the year", dialect: MySQL, query: `SELECT EXTRACT(YEAR FROM '2024-02-29')`, want: "2024"},
+		{name: "googlesql extract refuses a malformed date", dialect: GoogleSQL, query: `SELECT EXTRACT(YEAR FROM 'not-a-date')`, wantErr: true},
+		{name: "googlesql extract of null is null", dialect: GoogleSQL, query: `SELECT EXTRACT(HOUR FROM NULL)`, wantNull: true},
+		{name: "googlesql date_trunc week of a malformed date is null", dialect: GoogleSQL, query: `SELECT DATE_TRUNC('not-a-date', WEEK)`, wantNull: true},
+
 		// A call nested in one of the keyword forms is translated by the
 		// dialect's own pass. MySQL CONCAT is NULL when an argument is NULL;
 		// PostgreSQL's skips NULLs, so reading one as the other is visible here.
@@ -1233,6 +1241,120 @@ func TestRoundAtTheEdgesOfAFloat64(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Fatalf("dialect_round(%v, %d) = %v, want %v", tt.value, tt.digits, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestTimestampLiteralsReachTheDateFunctions pins the GoogleSQL TIMESTAMP and
+// DATETIME literal forms against BigQuery. A timezone suffix used to miss every
+// layout parseTime tried, so EXTRACT answered NULL — a statement about the data
+// rather than the query — and a literal with an offset must land on the UTC
+// field values, which is the timezone BigQuery extracts in by default. A
+// malformed literal fails by name, the way BigQuery refuses it, rather than
+// joining the NULLs. Every want was read through goccy/bigquery-emulator.
+func TestTimestampLiteralsReachTheDateFunctions(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name    string
+		query   string
+		want    string
+		wantErr bool
+	}{
+		{name: "a plain timestamp", query: `SELECT EXTRACT(HOUR FROM TIMESTAMP '2024-02-29 13:05:09')`, want: "13"},
+		{name: "a utc suffix", query: `SELECT EXTRACT(HOUR FROM TIMESTAMP '2024-02-29 13:05:09Z')`, want: "13"},
+		{name: "a utc suffix keeps the minute", query: `SELECT EXTRACT(MINUTE FROM TIMESTAMP '2024-02-29 13:05:09Z')`, want: "5"},
+		{name: "a T separator with a utc suffix", query: `SELECT EXTRACT(HOUR FROM TIMESTAMP '2024-02-29T13:05:09Z')`, want: "13"},
+		{name: "an offset normalizes to utc", query: `SELECT EXTRACT(HOUR FROM TIMESTAMP '2024-02-29 13:05:09+09:00')`, want: "4"},
+		{name: "a negative offset normalizes to utc", query: `SELECT EXTRACT(HOUR FROM TIMESTAMP '2024-02-29 23:05:09-05:00')`, want: "4"},
+		{name: "a datetime literal", query: `SELECT EXTRACT(HOUR FROM DATETIME '2024-02-29 13:05:09')`, want: "13"},
+		{name: "unix_seconds reads a utc suffix", query: `SELECT UNIX_SECONDS(TIMESTAMP '2024-01-01 00:00:00Z')`, want: "1704067200"},
+		{name: "a date literal keeps working", query: `SELECT EXTRACT(YEAR FROM DATE '2024-02-29')`, want: "2024"},
+		{name: "a malformed literal fails by name", query: `SELECT EXTRACT(HOUR FROM TIMESTAMP 'not-a-time')`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, GoogleSQL, tt.query)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("%s = %q, want an error", tt.query, got.String)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if !got.Valid {
+				t.Fatalf("%s answered NULL, want %q", tt.query, tt.want)
+			}
+			if got.String != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
+
+// TestWeekNumberingFollowsEachDialect pins WEEK, ISOWEEK and ISOYEAR per
+// dialect, on the dates where the numberings disagree. BigQuery and MySQL begin
+// the week on Sunday and number the days before the year's first Sunday as week
+// 0; PostgreSQL's week is the ISO week, Monday-first with no week 0. The rows
+// hold all three dialects side by side so a change to one that quietly moved
+// another fails here. The BigQuery values were read through
+// goccy/bigquery-emulator (its year-boundary WEEK answers disagree with
+// BigQuery's own documentation, so those rows follow the documented Sunday
+// rule), the MySQL values from mysql:8.4 and the PostgreSQL values from
+// postgres:17.
+func TestWeekNumberingFollowsEachDialect(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name    string
+		dialect Dialect
+		query   string
+		want    string
+	}{
+		{name: "googlesql week mid-year", dialect: GoogleSQL, query: `SELECT EXTRACT(WEEK FROM DATE '2024-02-29')`, want: "8"},
+		{name: "googlesql week in june", dialect: GoogleSQL, query: `SELECT EXTRACT(WEEK FROM DATE '2024-06-15')`, want: "23"},
+		{name: "googlesql week before the first sunday", dialect: GoogleSQL, query: `SELECT EXTRACT(WEEK FROM DATE '2024-01-01')`, want: "0"},
+		{name: "googlesql week at the year's end", dialect: GoogleSQL, query: `SELECT EXTRACT(WEEK FROM DATE '2024-12-31')`, want: "52"},
+		{name: "googlesql week on a new year sunday", dialect: GoogleSQL, query: `SELECT EXTRACT(WEEK FROM DATE '2023-01-01')`, want: "1"},
+
+		{name: "mysql week mid-year", dialect: MySQL, query: `SELECT EXTRACT(WEEK FROM '2024-02-29')`, want: "8"},
+		{name: "mysql week in june", dialect: MySQL, query: `SELECT EXTRACT(WEEK FROM '2024-06-15')`, want: "23"},
+		{name: "mysql week before the first sunday", dialect: MySQL, query: `SELECT EXTRACT(WEEK FROM '2024-01-01')`, want: "0"},
+		{name: "mysql week at the year's end", dialect: MySQL, query: `SELECT EXTRACT(WEEK FROM '2024-12-31')`, want: "52"},
+		{name: "mysql week on a new year sunday", dialect: MySQL, query: `SELECT EXTRACT(WEEK FROM '2023-01-01')`, want: "1"},
+
+		{name: "postgresql week mid-year", dialect: PostgreSQL, query: `SELECT EXTRACT(WEEK FROM DATE '2024-02-29')`, want: "9"},
+		{name: "postgresql week in june", dialect: PostgreSQL, query: `SELECT EXTRACT(WEEK FROM DATE '2024-06-15')`, want: "24"},
+		{name: "postgresql week on new year's day", dialect: PostgreSQL, query: `SELECT EXTRACT(WEEK FROM DATE '2024-01-01')`, want: "1"},
+		{name: "postgresql week at the year's end", dialect: PostgreSQL, query: `SELECT EXTRACT(WEEK FROM DATE '2024-12-31')`, want: "1"},
+		{name: "postgresql week on a new year sunday", dialect: PostgreSQL, query: `SELECT EXTRACT(WEEK FROM DATE '2023-01-01')`, want: "52"},
+
+		{name: "googlesql isoweek at the year's end", dialect: GoogleSQL, query: `SELECT EXTRACT(ISOWEEK FROM DATE '2024-12-31')`, want: "1"},
+		{name: "googlesql isoyear at the year's end", dialect: GoogleSQL, query: `SELECT EXTRACT(ISOYEAR FROM DATE '2024-12-31')`, want: "2025"},
+		{name: "googlesql isoweek on a new year sunday", dialect: GoogleSQL, query: `SELECT EXTRACT(ISOWEEK FROM DATE '2023-01-01')`, want: "52"},
+		{name: "googlesql isoyear on a new year sunday", dialect: GoogleSQL, query: `SELECT EXTRACT(ISOYEAR FROM DATE '2023-01-01')`, want: "2022"},
+
+		{name: "googlesql date_trunc week lands on sunday", dialect: GoogleSQL, query: `SELECT DATE_TRUNC(DATE '2024-02-29', WEEK)`, want: "2024-02-25"},
+		{name: "googlesql date_trunc week from a saturday", dialect: GoogleSQL, query: `SELECT DATE_TRUNC(DATE '2024-02-24', WEEK)`, want: "2024-02-18"},
+		{name: "googlesql date_trunc week crosses the year", dialect: GoogleSQL, query: `SELECT DATE_TRUNC(DATE '2024-01-01', WEEK)`, want: "2023-12-31"},
+		{name: "googlesql date_trunc isoweek lands on monday", dialect: GoogleSQL, query: `SELECT DATE_TRUNC(DATE '2024-12-31', ISOWEEK)`, want: "2024-12-30"},
+		{name: "googlesql date_trunc week keeps a time's shape", dialect: GoogleSQL, query: `SELECT DATE_TRUNC(TIMESTAMP '2024-02-29 13:05:09', WEEK)`, want: "2024-02-25 00:00:00"},
+
+		{name: "postgresql date_trunc week stays on monday", dialect: PostgreSQL, query: `SELECT DATE_TRUNC('week', '2024-02-29')`, want: "2024-02-26 00:00:00"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, tt.dialect, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
 			}
 		})
 	}
