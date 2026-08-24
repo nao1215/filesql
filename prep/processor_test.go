@@ -2513,6 +2513,251 @@ func TestMinAndMaxKeepAFractionalLengthThreshold(t *testing.T) {
 	}
 }
 
+// comparisonEqStringRecord compares the string itself, which is what eq means
+// for a string field in the validator dialect prep documents.
+type comparisonEqStringRecord struct {
+	Role string `validate:"eq=admin"`
+}
+
+// comparisonNeStringRecord is the negated half of the same rule.
+type comparisonNeStringRecord struct {
+	Role string `validate:"ne=admin"`
+}
+
+// comparisonBoundsStringRecord counts characters, which is what gt and lt mean
+// for a string field, the same way min and max already do.
+type comparisonBoundsStringRecord struct {
+	Name string `validate:"gt=3,lt=6"`
+}
+
+// comparisonLenNumberRecord compares the value, which is what len means for a
+// numeric field.
+type comparisonLenNumberRecord struct {
+	Age int `validate:"len=2"`
+}
+
+func TestComparisonValidatorsFollowTheFieldType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		input         string
+		records       any
+		wantValidRows int
+	}{
+		{
+			name:          "eq on a string field passes the equal string",
+			input:         "role\nadmin\n",
+			records:       &[]comparisonEqStringRecord{},
+			wantValidRows: 1,
+		},
+		{
+			name:          "eq on a string field rejects a different string",
+			input:         "role\nroot\n",
+			records:       &[]comparisonEqStringRecord{},
+			wantValidRows: 0,
+		},
+		{
+			name:          "ne on a string field rejects the equal string",
+			input:         "role\nadmin\n",
+			records:       &[]comparisonNeStringRecord{},
+			wantValidRows: 0,
+		},
+		{
+			name:          "ne on a string field passes a different string",
+			input:         "role\nviewer\n",
+			records:       &[]comparisonNeStringRecord{},
+			wantValidRows: 1,
+		},
+		{
+			name:          "gt and lt on a string field count characters",
+			input:         "name\nabcd\nabcde\n",
+			records:       &[]comparisonBoundsStringRecord{},
+			wantValidRows: 2,
+		},
+		{
+			name:          "gt and lt on a string field refuse the boundary lengths",
+			input:         "name\nabc\nabcdef\n",
+			records:       &[]comparisonBoundsStringRecord{},
+			wantValidRows: 0,
+		},
+		{
+			name:          "gt on a string field counts runes, not bytes",
+			input:         "name\nあいうえ\n",
+			records:       &[]comparisonBoundsStringRecord{},
+			wantValidRows: 1,
+		},
+		{
+			name:          "len on a numeric field compares the value",
+			input:         "age\n2\n",
+			records:       &[]comparisonLenNumberRecord{},
+			wantValidRows: 1,
+		},
+		{
+			name:          "len on a numeric field rejects a two-character other value",
+			input:         "age\n99\n",
+			records:       &[]comparisonLenNumberRecord{},
+			wantValidRows: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			processor := NewProcessor(parser.CSV)
+			_, result, err := processor.Process(strings.NewReader(tt.input), tt.records)
+			if err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+			if result.ValidRowCount != tt.wantValidRows {
+				t.Errorf("ValidRowCount = %d, want %d (errors: %v)", result.ValidRowCount, tt.wantValidRows, result.Errors)
+			}
+		})
+	}
+}
+
+func TestStrictModeAcceptsAStringParameterForEqOnAStringField(t *testing.T) {
+	t.Parallel()
+
+	var records []comparisonEqStringRecord
+	processor := NewProcessor(parser.CSV, WithStrictTagParsing())
+	_, result, err := processor.Process(strings.NewReader("role\nadmin\n"), &records)
+	if err != nil {
+		t.Fatalf("Process() error = %v: eq=admin is a valid tag on a string field", err)
+	}
+	if result.ValidRowCount != 1 {
+		t.Errorf("ValidRowCount = %d, want 1 (errors: %v)", result.ValidRowCount, result.Errors)
+	}
+}
+
+// strictEqNumberRecord still requires a numeric parameter, because a numeric
+// field has no string to compare against.
+type strictEqNumberRecord struct {
+	Age int `validate:"eq=abc"`
+}
+
+func TestStrictModeStillRefusesAStringParameterForEqOnANumericField(t *testing.T) {
+	t.Parallel()
+
+	var records []strictEqNumberRecord
+	processor := NewProcessor(parser.CSV, WithStrictTagParsing())
+	_, _, err := processor.Process(strings.NewReader("age\n1\n"), &records)
+	if err == nil {
+		t.Fatal("Process() should refuse eq=abc on a numeric field in strict mode")
+	}
+}
+
+// declaredEqStringRecord pins the invariant that broke: a declared eq validator
+// must never be silently absent, whatever the strictness mode.
+type declaredEqStringRecord struct {
+	Role string `validate:"eq=admin"`
+}
+
+func TestADeclaredEqValidatorIsNeverSilentlyDropped(t *testing.T) {
+	t.Parallel()
+
+	var records []declaredEqStringRecord
+	processor := NewProcessor(parser.CSV)
+	_, result, err := processor.Process(strings.NewReader("role\nintruder\n"), &records)
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if len(result.Errors) == 0 {
+		t.Error("eq=admin was declared and the row does not satisfy it, so an error must be reported")
+	}
+}
+
+// boolFieldRecord carries both the validator and the converter for one value,
+// which must agree: anything setFieldValue converts, validate:"boolean" passes.
+type boolFieldRecord struct {
+	Flag bool `validate:"boolean"`
+}
+
+func TestBooleanValidatorAcceptsWhatABoolFieldAccepts(t *testing.T) {
+	t.Parallel()
+
+	for _, spelling := range []string{"true", "false", "True", "False", "TRUE", "FALSE", "t", "f", "T", "F", "0", "1"} {
+		t.Run(spelling, func(t *testing.T) {
+			t.Parallel()
+
+			var records []boolFieldRecord
+			processor := NewProcessor(parser.CSV)
+			_, result, err := processor.Process(strings.NewReader("flag\n"+spelling+"\n"), &records)
+			if err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+			if result.ValidRowCount != 1 {
+				t.Errorf("ValidRowCount = %d, want 1: %q converts into a bool field, so it must validate (errors: %v)",
+					result.ValidRowCount, spelling, result.Errors)
+			}
+		})
+	}
+
+	t.Run("a value ParseBool rejects fails both halves", func(t *testing.T) {
+		t.Parallel()
+
+		var records []boolFieldRecord
+		processor := NewProcessor(parser.CSV)
+		_, result, err := processor.Process(strings.NewReader("flag\nyes\n"), &records)
+		if err != nil {
+			t.Fatalf("Process() error = %v", err)
+		}
+		if result.ValidRowCount != 0 {
+			t.Error("ValidRowCount = 1, want 0: ParseBool rejects \"yes\"")
+		}
+	})
+}
+
+// emptyCellFamilyRecord carries one validator per family over columns that are
+// all empty; the row is valid because an empty value passes everything except
+// required.
+type emptyCellFamilyRecord struct {
+	A string `validate:"number"`
+	B string `validate:"boolean"`
+	C string `validate:"email"`
+	D string `validate:"uuid"`
+	E string `validate:"eq=5"`
+	F string `validate:"numeric"`
+}
+
+// requiredEmptyCellRecord opts back into presence checking.
+type requiredEmptyCellRecord struct {
+	A string `validate:"required,number"`
+}
+
+func TestAnEmptyCellPassesEveryValidatorButRequired(t *testing.T) {
+	t.Parallel()
+
+	t.Run("an all-empty row is valid without required", func(t *testing.T) {
+		t.Parallel()
+
+		var records []emptyCellFamilyRecord
+		processor := NewProcessor(parser.CSV)
+		_, result, err := processor.Process(strings.NewReader("a,b,c,d,e,f\n,,,,,\n"), &records)
+		if err != nil {
+			t.Fatalf("Process() error = %v", err)
+		}
+		if result.ValidRowCount != 1 {
+			t.Errorf("ValidRowCount = %d, want 1 (errors: %v)", result.ValidRowCount, result.Errors)
+		}
+	})
+
+	t.Run("required still rejects the empty cell", func(t *testing.T) {
+		t.Parallel()
+
+		var records []requiredEmptyCellRecord
+		processor := NewProcessor(parser.CSV)
+		_, result, err := processor.Process(strings.NewReader("a\n\"\"\n"), &records)
+		if err != nil {
+			t.Fatalf("Process() error = %v", err)
+		}
+		if result.ValidRowCount != 0 {
+			t.Error("ValidRowCount = 1, want 0: required must reject an empty cell")
+		}
+	})
+}
+
 // TestProcess_MatchesAColumnWhateverItsCase pins the rule the loader already
 // follows: a header and a field name are the same column when they differ only
 // in case. SQLite compares the identifiers this package creates from these

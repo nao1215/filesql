@@ -100,9 +100,11 @@ func TestParseValidateTag_AllValidatorTypes(t *testing.T) {
 		{"max=100", "max=100", 1, 0, false},
 		{"len=10", "len=10", 1, 0, false},
 
-		// Comparison validators with invalid values are silently skipped
-		{"eq=abc (invalid float)", "eq=abc", 0, 0, false},
-		{"ne=abc (invalid float)", "ne=abc", 0, 0, false},
+		// A threshold that must be numeric for every field kind is silently
+		// skipped when it is not; eq and ne keep their parameter for
+		// specializeValidator, where the field's kind decides its meaning.
+		{"eq=abc (deferred to the field)", "eq=abc", 1, 0, false},
+		{"ne=abc (deferred to the field)", "ne=abc", 1, 0, false},
 		{"gt=abc (invalid float)", "gt=abc", 0, 0, false},
 		{"len=abc (invalid int)", "len=abc", 0, 0, false},
 
@@ -768,8 +770,11 @@ func TestStrictTagParsing_ValidateTag(t *testing.T) {
 		wantErr bool
 	}{
 		{"eq with valid number", "eq=10", false},
-		{"eq with invalid value", "eq=abc", true},
-		{"ne with invalid value", "ne=xyz", true},
+		// eq and ne defer their parameter check to specializeValidator: on a
+		// string field "abc" is the string to compare, so the tag alone cannot
+		// be judged. See TestSpecializeValidatorJudgesADeferredParameter.
+		{"eq with a string parameter parses", "eq=abc", false},
+		{"ne with a string parameter parses", "ne=xyz", false},
 		{"gt with invalid value", "gt=notnum", true},
 		{"gte with invalid value", "gte=abc", true},
 		{"lt with invalid value", "lt=abc", true},
@@ -799,6 +804,47 @@ func TestStrictTagParsing_ValidateTag(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSpecializeValidatorJudgesADeferredParameter pins where the eq and ne
+// parameter check now lives: a string field takes any parameter as the string
+// to compare, and a numeric field requires a number — refused in strict mode,
+// dropped in non-strict mode.
+func TestSpecializeValidatorJudgesADeferredParameter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a string field takes eq=abc as the string to compare", func(t *testing.T) {
+		t.Parallel()
+		v, err := specializeValidator(&pendingEqualityValidator{tag: equalTagValue, param: "abc"}, true, true)
+		if err != nil {
+			t.Fatalf("specializeValidator() error = %v", err)
+		}
+		if msg := v.Validate("abc"); msg != "" {
+			t.Errorf("Validate(\"abc\") = %q, want a pass", msg)
+		}
+		if msg := v.Validate("other"); msg == "" {
+			t.Error("Validate(\"other\") should fail against eq=abc")
+		}
+	})
+
+	t.Run("a numeric field refuses eq=abc in strict mode", func(t *testing.T) {
+		t.Parallel()
+		_, err := specializeValidator(&pendingEqualityValidator{tag: equalTagValue, param: "abc"}, false, true)
+		if !errors.Is(err, ErrInvalidTagFormat) {
+			t.Errorf("error = %v, want ErrInvalidTagFormat", err)
+		}
+	})
+
+	t.Run("a numeric field takes eq=10 as the number to compare", func(t *testing.T) {
+		t.Parallel()
+		v, err := specializeValidator(&pendingEqualityValidator{tag: notEqualTagValue, param: "10"}, false, true)
+		if err != nil {
+			t.Fatalf("specializeValidator() error = %v", err)
+		}
+		if msg := v.Validate("10.0"); msg == "" {
+			t.Error("Validate(\"10.0\") should fail against ne=10: the quantity is equal")
+		}
+	})
 }
 
 func TestStrictTagParsing_PrepTag(t *testing.T) {
@@ -838,14 +884,21 @@ func TestStrictTagParsing_PrepTag(t *testing.T) {
 func TestStrictTagParsing_NonStrictIgnoresInvalidArgs(t *testing.T) {
 	t.Parallel()
 
-	t.Run("eq=abc is silently ignored in non-strict mode", func(t *testing.T) {
+	t.Run("eq=abc lands on a numeric field and is silently dropped in non-strict mode", func(t *testing.T) {
 		t.Parallel()
 		vals, _, err := parseValidateTag("eq=abc", false)
 		if err != nil {
 			t.Errorf("expected no error in non-strict mode, got %v", err)
 		}
-		if len(vals) != 0 {
-			t.Errorf("expected 0 validators (invalid arg ignored), got %d", len(vals))
+		if len(vals) != 1 {
+			t.Fatalf("expected 1 deferred validator, got %d", len(vals))
+		}
+		specialized, err := specializeValidator(vals[0], false, false)
+		if err != nil {
+			t.Errorf("expected no error in non-strict mode, got %v", err)
+		}
+		if specialized != nil {
+			t.Errorf("expected the invalid arg to be dropped, got %T", specialized)
 		}
 	})
 
@@ -897,8 +950,11 @@ func TestStrictTagParsing_NonStrictIgnoresInvalidArgs(t *testing.T) {
 func TestWithStrictTagParsing_Processor(t *testing.T) {
 	t.Parallel()
 
+	// The field is numeric: eq=abc on a string field is a legal comparison
+	// against the string "abc", so only a numeric field makes the parameter
+	// invalid.
 	type InvalidTag struct {
-		Value string `validate:"eq=abc"`
+		Value int `validate:"eq=abc"`
 	}
 
 	t.Run("strict mode returns error for invalid tag arguments", func(t *testing.T) {

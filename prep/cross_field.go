@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// CrossFieldValidator defines the interface for validators that compare values across fields
-type CrossFieldValidator interface {
+// crossFieldValidator defines the interface for validators that compare values across fields
+type crossFieldValidator interface {
 	// Validate checks if the source value is valid compared to the target value
 	// Returns empty string if validation passes, error message otherwise
 	Validate(srcValue, targetValue string) string
@@ -16,8 +16,8 @@ type CrossFieldValidator interface {
 	TargetField() string
 }
 
-// crossFieldValidators is a slice of CrossFieldValidator
-type crossFieldValidators []CrossFieldValidator
+// crossFieldValidators is a slice of crossFieldValidator
+type crossFieldValidators []crossFieldValidator
 
 // baseCrossFieldValidator contains common fields for cross-field validators
 type baseCrossFieldValidator struct {
