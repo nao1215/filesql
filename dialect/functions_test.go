@@ -1394,6 +1394,11 @@ func TestMySQLDateFunctionsFollowMySQL(t *testing.T) {
 		{name: "timestampdiff month completed by the time of day", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(MONTH, '2024-01-15 10:00:00', '2024-02-15 11:00:00')`, want: "1"},
 		{name: "timestampdiff seconds", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(SECOND, '2024-01-01 00:00:00', '2024-01-01 00:01:30')`, want: "90"},
 		{name: "timestampdiff minute short of a minute", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(MINUTE, '2024-01-01 00:00:59', '2024-01-01 00:01:58')`, want: "0"},
+		// MySQL's DATETIME range spans nine millennia, past what a
+		// time.Duration can hold.
+		{name: "timestampdiff day across nine millennia", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(DAY, '1000-01-01', '9999-12-31')`, want: "3287181"},
+		{name: "timestampdiff second across nine millennia", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(SECOND, '1000-01-01', '9999-12-31')`, want: "284012438400"},
+		{name: "timestampdiff year across nine millennia", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(YEAR, '1000-01-01', '9999-12-31')`, want: "8999"},
 
 		// BigQuery counts boundaries for the same spans; these rows keep the
 		// shared helper where it is.
@@ -1417,6 +1422,13 @@ func TestMySQLDateFunctionsFollowMySQL(t *testing.T) {
 		{name: "timediff clamps low", dialect: MySQL, query: `SELECT TIMEDIFF('2024-01-01 00:00:00', '2024-03-01 00:00:00')`, want: "-838:59:59"},
 		{name: "timediff of two times", dialect: MySQL, query: `SELECT TIMEDIFF('13:05:09', '01:05:09')`, want: "12:00:00"},
 		{name: "timediff keeps a fraction", dialect: MySQL, query: `SELECT TIMEDIFF('00:00:01.500000', '00:00:00')`, want: "00:00:01.500000"},
+		// A bare TIME's hours pass 23 and carry a sign, which no calendar
+		// layout reads.
+		{name: "timediff of a time past 24 hours", dialect: MySQL, query: `SELECT TIMEDIFF('25:00:00', '00:00:00')`, want: "25:00:00"},
+		{name: "timediff of a negative time", dialect: MySQL, query: `SELECT TIMEDIFF('-01:00:00', '00:00:00')`, want: "-01:00:00"},
+		{name: "timediff of a negative time and a positive one", dialect: MySQL, query: `SELECT TIMEDIFF('-01:00:00', '01:30:00')`, want: "-02:30:00"},
+		{name: "timediff of single-digit hours", dialect: MySQL, query: `SELECT TIMEDIFF('8:00:00', '0:30:00')`, want: "07:30:00"},
+		{name: "timediff clamps each argument first", dialect: MySQL, query: `SELECT TIMEDIFF('2000:00:00', '1000:00:00')`, want: "00:00:00"},
 		{name: "timediff refuses mixed shapes", dialect: MySQL, query: `SELECT TIMEDIFF('2024-01-01 00:00:00', '01:00:00')`, wantNull: true},
 		{name: "timediff of null", dialect: MySQL, query: `SELECT TIMEDIFF(NULL, '01:00:00')`, wantNull: true},
 		{name: "timediff of a malformed value", dialect: MySQL, query: `SELECT TIMEDIFF('not-a-time', '01:00:00')`, wantNull: true},

@@ -2030,18 +2030,17 @@ func fnMySQLDateDiff(args []driver.Value) (driver.Value, error) {
 	if !ok1 || !ok2 || !ok3 {
 		return nil, nil
 	}
-	d := end.Sub(start)
 	switch strings.ToLower(strings.TrimSpace(unit)) {
 	case unitSecond:
-		return int64(d / time.Second), nil
+		return wholeUnits(end, start, 1), nil
 	case unitMinute:
-		return int64(d / time.Minute), nil
+		return wholeUnits(end, start, 60), nil
 	case unitHour:
-		return int64(d / time.Hour), nil
+		return wholeUnits(end, start, 3600), nil
 	case unitDay:
-		return int64(d / (24 * time.Hour)), nil
+		return wholeUnits(end, start, 24*3600), nil
 	case unitWeek:
-		return int64(d / (daysPerWeek * 24 * time.Hour)), nil
+		return wholeUnits(end, start, daysPerWeek*24*3600), nil
 	case unitMonth:
 		return completeMonths(end, start), nil
 	case unitQuarter:
@@ -2051,6 +2050,21 @@ func fnMySQLDateDiff(args []driver.Value) (driver.Value, error) {
 	default:
 		return nil, fmt.Errorf("dialect: unsupported TIMESTAMPDIFF unit %q", unit)
 	}
+}
+
+// wholeUnits is the signed number of complete unitSeconds-second units from
+// start to end, truncated toward zero. It counts in whole seconds rather than
+// through a time.Duration, which saturates at about ±292 years while MySQL's
+// DATETIME range spans nine millennia.
+func wholeUnits(end, start time.Time, unitSeconds int64) int64 {
+	seconds := end.Unix() - start.Unix()
+	// The nanosecond fields decide whether the span's last second is complete.
+	if seconds > 0 && end.Nanosecond() < start.Nanosecond() {
+		seconds--
+	} else if seconds < 0 && end.Nanosecond() > start.Nanosecond() {
+		seconds++
+	}
+	return seconds / unitSeconds
 }
 
 // completeMonths is the signed number of complete calendar months from start to
@@ -2082,8 +2096,8 @@ const mysqlTimeMaxSeconds = 838*3600 + 59*60 + 59
 
 // fnMySQLTimeDiff implements MySQL TIMEDIFF(a, b): a minus b rendered as a
 // MySQL TIME, whose hours keep counting past 24 and clamp at ±838:59:59.
-// Mixing a datetime with a bare time is NULL, as it is in MySQL, and so is a
-// value that does not parse.
+// Two datetimes and two bare TIME values both work; mixing the two shapes is
+// NULL, as it is in MySQL, and so is a value that does not parse.
 func fnMySQLTimeDiff(args []driver.Value) (driver.Value, error) {
 	s1, ok1 := toString(args[0])
 	s2, ok2 := toString(args[1])
@@ -2093,32 +2107,102 @@ func fnMySQLTimeDiff(args []driver.Value) (driver.Value, error) {
 	if hasCalendarDate(s1) != hasCalendarDate(s2) {
 		return nil, nil
 	}
+	if !hasCalendarDate(s1) {
+		// Bare TIME values, whose hours may pass 23 and carry a sign, which
+		// the calendar parser cannot read.
+		n1, ok1 := mysqlClockNanos(s1)
+		n2, ok2 := mysqlClockNanos(s2)
+		if !ok1 || !ok2 {
+			return nil, nil
+		}
+		return renderMySQLTime(n1 - n2), nil
+	}
 	t1, ok1 := parseTime(s1)
 	t2, ok2 := parseTime(s2)
 	if !ok1 || !ok2 {
 		return nil, nil
 	}
-	d := t1.Sub(t2)
+	// Sub saturates at ±292 years, far past the ±838:59:59 clamp, so the
+	// saturated value renders the same clamped TIME.
+	return renderMySQLTime(int64(t1.Sub(t2))), nil
+}
+
+// renderMySQLTime renders signed nanoseconds as a MySQL TIME, clamped to
+// ±838:59:59, with a six-digit fraction only when the value has one.
+func renderMySQLTime(nanos int64) string {
 	sign := ""
-	if d < 0 {
+	if nanos < 0 {
 		sign = "-"
-		d = -d
+		nanos = -nanos
 	}
-	if d > mysqlTimeMaxSeconds*time.Second {
-		d = mysqlTimeMaxSeconds * time.Second
+	if nanos > mysqlTimeMaxSeconds*int64(time.Second) {
+		nanos = mysqlTimeMaxSeconds * int64(time.Second)
 	}
-	secs := d / time.Second
+	secs := nanos / int64(time.Second)
 	out := fmt.Sprintf("%s%02d:%02d:%02d", sign, secs/3600, secs/60%60, secs%60)
-	if frac := d % time.Second; frac != 0 {
-		out += fmt.Sprintf(".%06d", frac/time.Microsecond)
+	if frac := nanos % int64(time.Second); frac != 0 {
+		out += fmt.Sprintf(".%06d", frac/int64(time.Microsecond))
 	}
-	return out, nil
+	return out
+}
+
+// mysqlClockNanos reads a MySQL TIME value — an optional sign, hours that may
+// pass 23, minutes, seconds and an optional fraction — as signed nanoseconds
+// from 00:00:00. ok is false when s is not that shape.
+func mysqlClockNanos(s string) (int64, bool) {
+	s = strings.TrimSpace(s)
+	rest, negative := strings.CutPrefix(s, "-")
+	clock, frac, hasFrac := strings.Cut(rest, ".")
+	parts := strings.Split(clock, ":")
+	if len(parts) != 3 {
+		return 0, false
+	}
+	fields := make([]int64, 3)
+	for i, part := range parts {
+		if part == "" || (i > 0 && len(part) > 2) {
+			return 0, false
+		}
+		n, err := strconv.ParseInt(part, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		fields[i] = n
+	}
+	if fields[1] > 59 || fields[2] > 59 {
+		return 0, false
+	}
+	// MySQL clamps each TIME argument to its range before subtracting, so
+	// TIMEDIFF('2000:00:00', '1000:00:00') is zero. Clamping here also keeps
+	// an absurd hour count from overflowing the multiplication.
+	if fields[0] > mysqlTimeMaxSeconds/3600 {
+		nanos := int64(mysqlTimeMaxSeconds) * int64(time.Second)
+		if negative {
+			nanos = -nanos
+		}
+		return nanos, true
+	}
+	nanos := (fields[0]*3600 + fields[1]*60 + fields[2]) * int64(time.Second)
+	if hasFrac {
+		if len(frac) > 9 {
+			frac = frac[:9]
+		}
+		n, err := strconv.ParseInt(frac+strings.Repeat("0", 9-len(frac)), 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		nanos += n
+	}
+	if negative {
+		nanos = -nanos
+	}
+	return nanos, true
 }
 
 // hasCalendarDate reports whether a datetime string carries a calendar date,
-// which is what separates '2024-01-01 01:00:00' from a bare '01:00:00'.
+// which is what separates '2024-01-01 01:00:00' from a bare '01:00:00'. A
+// leading minus is a TIME's sign, not a date separator.
 func hasCalendarDate(s string) bool {
-	return strings.ContainsAny(s, "-/")
+	return strings.ContainsAny(strings.TrimPrefix(strings.TrimSpace(s), "-"), "-/")
 }
 
 // strftimeToGoLayout maps the strftime-style specifiers GoogleSQL uses in
