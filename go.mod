@@ -5,7 +5,7 @@ go 1.25.8
 require (
 	github.com/klauspost/compress v1.19.2
 	github.com/moov-io/ach v1.63.3
-	github.com/moov-io/wire v0.16.0
+	github.com/moov-io/wire v0.16.1
 	github.com/parquet-go/parquet-go v0.32.0
 	github.com/pierrec/lz4/v4 v4.1.29
 	github.com/stretchr/testify v1.12.1
