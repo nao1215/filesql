@@ -438,3 +438,45 @@ func TestColumnType_FrameAndTheLoaderAgree(t *testing.T) {
 		})
 	}
 }
+
+// TestDistinctValues_FrameAndTheLoaderAgree is the same pinning for the
+// question the two answer after the typing: how many values a column holds.
+// frame decides it from a key it builds and SQLite from its own comparison, so
+// a column of numbers that are equal has to come back as one value from both.
+//
+// A negative zero broke it: frame's key carried the sign, so a column holding
+// both signs of zero was two values there and one to SQLite.
+func TestDistinctValues_FrameAndTheLoaderAgree(t *testing.T) {
+	t.Parallel()
+
+	bodies := map[string]string{
+		"both signs of zero":              "v\n-0.0\n0.0\n0\n-0\n",
+		"one quantity spelled three ways": "v\n1\n1.0\n1.00\n",
+		"a negative beside a zero":        "v\n-0.0\n-0.5\n0\n",
+		"distinct decimals":               "v\n1.5\n2.5\n3.5\n",
+	}
+
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			validated, err := NewBuilder().
+				AddReader(strings.NewReader(body), "t", FileTypeCSV).
+				Build(ctx)
+			require.NoError(t, err)
+			db, err := validated.Open(ctx)
+			require.NoError(t, err)
+			defer db.Close()
+
+			var loaded int
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT v) FROM t`).Scan(&loaded))
+
+			df, err := frame.NewDataFrame(strings.NewReader(body), parser.CSV)
+			require.NoError(t, err)
+
+			assert.Equal(t, loaded, df.Distinct().Len(),
+				"the loader and frame counted the same column's values differently")
+		})
+	}
+}
