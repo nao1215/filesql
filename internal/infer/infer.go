@@ -8,6 +8,7 @@
 package infer
 
 import (
+	"errors"
 	"regexp"
 	"strconv"
 	"strings"
@@ -180,14 +181,7 @@ func IsInteger(value string) bool {
 // IsFloat reports whether value is a decimal or exponent spelling of a number
 // that SQLite's numeric affinity converts the same way strconv does.
 func IsFloat(value string) bool {
-	hasDigit := false
-	for _, r := range value {
-		if r >= '0' && r <= '9' {
-			hasDigit = true
-			break
-		}
-	}
-	if !hasDigit {
+	if !HasDigit(value) {
 		return false
 	}
 	// An integer-looking string that does not fit in int64 is not a float:
@@ -214,8 +208,34 @@ func IsFloat(value string) bool {
 	// and the way it was written does not. Keeping the spelling would mean a
 	// TEXT column, and SQLite compares a TEXT column against a number as text —
 	// "WHERE amount > 9.5" over "9.00" and "10.00" then matches nothing at all.
-	_, err := strconv.ParseFloat(value, 64)
-	return err == nil
+	_, ok := Float64(value)
+	return ok
+}
+
+// HasDigit reports whether value holds any ASCII digit, which every spelling
+// of a number does and the words Inf and NaN do not.
+func HasDigit(value string) bool {
+	for i := range len(value) {
+		if value[i] >= '0' && value[i] <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
+// Float64 reports the float64 a numeric spelling converts to, the way SQLite's
+// REAL affinity converts the same text. A spelling whose parse saturates is a
+// number too: strconv answers the saturated value beside ErrRange, and SQLite
+// stores that same value — "9e999" is the infinity to both — which is why the
+// dump spells an infinity that way. Refusing it here turned a dumped REAL
+// column holding one into TEXT. Vocabulary guards (a leading zero, Go-only
+// syntax, an integer past int64) are the caller's, run before this.
+func Float64(value string) (float64, bool) {
+	f, err := strconv.ParseFloat(value, 64)
+	if err == nil || errors.Is(err, strconv.ErrRange) {
+		return f, true
+	}
+	return 0, false
 }
 
 // MustStayText reports whether a numeric column would damage this value, so
