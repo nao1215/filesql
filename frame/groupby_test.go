@@ -2,6 +2,7 @@ package frame
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 
@@ -437,6 +438,62 @@ func TestAggFunctions(t *testing.T) {
 		assert.Equal(t, "b", AggMax([]any{1, "b"}))
 		assert.InDelta(t, 1.0, AggMin([]any{1, "b"}), 0)
 	})
+
+	t.Run("AggMin returns the +Inf a group holds and AggMax the -Inf", func(t *testing.T) {
+		t.Parallel()
+
+		assert.Equal(t, math.Inf(1), AggMin([]any{math.Inf(1)}))
+		assert.Equal(t, math.Inf(-1), AggMax([]any{math.Inf(-1)}))
+	})
+
+	t.Run("AggMin and AggMax keep the extreme finite values", func(t *testing.T) {
+		t.Parallel()
+
+		assert.Equal(t, math.MaxFloat64, AggMin([]any{math.MaxFloat64}))
+		assert.Equal(t, -math.MaxFloat64, AggMax([]any{-math.MaxFloat64}))
+	})
+
+	// SQLite cannot store NaN — it becomes NULL — so a NaN is no value at all
+	// for every aggregate here.
+	t.Run("the aggregates skip NaN the way SQLite skips NULL", func(t *testing.T) {
+		t.Parallel()
+
+		assert.InDelta(t, 5.0, AggMin([]any{math.NaN(), 5.0}), 0)
+		assert.InDelta(t, 5.0, AggMax([]any{math.NaN(), 5.0}), 0)
+		assert.InDelta(t, 6.0, AggSum([]any{math.NaN(), 2.0, 4.0}), 0)
+		assert.InDelta(t, 3.0, AggMean([]any{math.NaN(), 2.0, 4.0}), 0)
+		assert.Nil(t, AggMin([]any{math.NaN()}))
+		assert.Nil(t, AggMax([]any{math.NaN()}))
+		assert.Nil(t, AggSum([]any{math.NaN()}))
+		assert.Nil(t, AggMean([]any{math.NaN()}))
+	})
+
+	t.Run("AggMin answers with a member of the group", func(t *testing.T) {
+		t.Parallel()
+
+		group := []any{7.5, -2.0, 3.25, 100.0, -2.0}
+		got := AggMin(group)
+		assert.Contains(t, group, got)
+	})
+}
+
+// TestMinAndMaxSurviveInfinityThroughGroupBy pins the grouped path: a group
+// holding +Inf must report +Inf, not a fabricated finite extreme.
+func TestMinAndMaxSurviveInfinityThroughGroupBy(t *testing.T) {
+	t.Parallel()
+
+	df := NewDataFrameFromRecords([]map[string]any{
+		{"k": "a", "v": math.Inf(1)},
+		{"k": "b", "v": 1.0},
+	})
+	grouped, err := df.GroupBy("k")
+	require.NoError(t, err)
+
+	minimums, err := grouped.Min("v")
+	require.NoError(t, err)
+	records := minimums.ToRecords()
+	assert.Equal(t, math.Inf(1), records[0]["min_v"])
+	assert.InDelta(t, 1.0, records[1]["min_v"], 0)
 }
 
 func TestGroupBy_NoArguments(t *testing.T) {

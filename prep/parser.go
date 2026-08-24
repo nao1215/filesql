@@ -90,18 +90,25 @@ func parseStructType(structType reflect.Type, strict bool) (*structInfo, error) 
 			info.Preprocessors = preps
 		}
 
-		// Parse validate tag
+		// Parse validate tag, then give each comparison validator the meaning
+		// the field's kind decides; see specializeValidator.
 		if validateTag := field.Tag.Get(validateTagName); validateTag != "" {
 			vals, crossVals, err := parseValidateTag(validateTag, strict)
 			if err != nil {
 				return nil, fmt.Errorf("field %s: %w", field.Name, err)
 			}
-			if field.Type.Kind() == reflect.String {
-				for i, v := range vals {
-					vals[i] = measuringStringLength(v)
+			isString := field.Type.Kind() == reflect.String
+			specialized := make(validators, 0, len(vals))
+			for _, v := range vals {
+				sv, err := specializeValidator(v, isString, strict)
+				if err != nil {
+					return nil, fmt.Errorf("field %s: %w", field.Name, err)
+				}
+				if sv != nil {
+					specialized = append(specialized, sv)
 				}
 			}
-			info.Validators = vals
+			info.Validators = specialized
 			info.CrossFieldValidators = crossVals
 		}
 
@@ -306,8 +313,8 @@ func buildCrossFieldValidator(
 	tagName string,
 	value string,
 	strict bool,
-	factory func(string) CrossFieldValidator,
-) (CrossFieldValidator, error) {
+	factory func(string) crossFieldValidator,
+) (crossFieldValidator, error) {
 	if strings.TrimSpace(value) == "" {
 		if strict {
 			return nil, fmt.Errorf("%w: %s requires a field name", ErrInvalidTagFormat, tagName)
@@ -322,8 +329,8 @@ func buildConditionalCrossFieldValidator(
 	tagName string,
 	value string,
 	strict bool,
-	factory func(string, string) CrossFieldValidator,
-) (CrossFieldValidator, error) {
+	factory func(string, string) crossFieldValidator,
+) (crossFieldValidator, error) {
 	field, expectedVal := parseRequiredIfParams(value)
 	if field == "" || expectedVal == "" {
 		if strict {
@@ -340,15 +347,15 @@ func buildConditionalCrossFieldValidator(
 	return factory(field, expectedVal), nil
 }
 
-// validatorBuilder creates a Validator from a tag value parameter.
+// validatorBuilder creates a validator from a tag value parameter.
 // Returns the validator (nil if parameter is invalid in non-strict mode) and an error in strict mode.
-type validatorBuilder func(value string, strict bool) (Validator, error)
+type validatorBuilder func(value string, strict bool) (validator, error)
 
-// crossFieldValidatorBuilder creates a CrossFieldValidator from a tag value parameter.
-type crossFieldValidatorBuilder func(value string) CrossFieldValidator
+// crossFieldValidatorBuilder creates a crossFieldValidator from a tag value parameter.
+type crossFieldValidatorBuilder func(value string) crossFieldValidator
 
 // buildFloatValidator is a helper for validators that require a numeric threshold parameter.
-func buildFloatValidator(tagName string, value string, strict bool, factory func(float64) Validator) (Validator, error) {
+func buildFloatValidator(tagName string, value string, strict bool, factory func(float64) validator) (validator, error) {
 	threshold, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		if strict {
@@ -365,45 +372,48 @@ func buildFloatValidator(tagName string, value string, strict bool, factory func
 //nolint:gochecknoglobals // registry pattern requires package-level map for O(1) lookup
 var validatorRegistry = map[string]validatorBuilder{
 	// Sentinel
-	omitemptyTagValue: func(_ string, _ bool) (Validator, error) { return &omitemptyValidator{}, nil },
+	omitemptyTagValue: func(_ string, _ bool) (validator, error) { return &omitemptyValidator{}, nil },
 
 	// Basic validators
-	requiredTagValue:            func(_ string, _ bool) (Validator, error) { return newRequiredValidator(), nil },
-	booleanTagValue:             func(_ string, _ bool) (Validator, error) { return newBooleanValidator(), nil },
-	alphaTagValue:               func(_ string, _ bool) (Validator, error) { return newAlphaValidator(), nil },
-	alphaSpaceTagValue:          func(_ string, _ bool) (Validator, error) { return newAlphaSpaceValidator(), nil },
-	alphaUnicodeTagValue:        func(_ string, _ bool) (Validator, error) { return newAlphaUnicodeValidator(), nil },
-	numericTagValue:             func(_ string, _ bool) (Validator, error) { return newNumericValidator(), nil },
-	numberTagValue:              func(_ string, _ bool) (Validator, error) { return newNumberValidator(), nil },
-	alphanumericTagValue:        func(_ string, _ bool) (Validator, error) { return newAlphanumericValidator(), nil },
-	alphanumericUnicodeTagValue: func(_ string, _ bool) (Validator, error) { return newAlphanumericUnicodeValidator(), nil },
+	requiredTagValue:            func(_ string, _ bool) (validator, error) { return newRequiredValidator(), nil },
+	booleanTagValue:             func(_ string, _ bool) (validator, error) { return newBooleanValidator(), nil },
+	alphaTagValue:               func(_ string, _ bool) (validator, error) { return newAlphaValidator(), nil },
+	alphaSpaceTagValue:          func(_ string, _ bool) (validator, error) { return newAlphaSpaceValidator(), nil },
+	alphaUnicodeTagValue:        func(_ string, _ bool) (validator, error) { return newAlphaUnicodeValidator(), nil },
+	numericTagValue:             func(_ string, _ bool) (validator, error) { return newNumericValidator(), nil },
+	numberTagValue:              func(_ string, _ bool) (validator, error) { return newNumberValidator(), nil },
+	alphanumericTagValue:        func(_ string, _ bool) (validator, error) { return newAlphanumericValidator(), nil },
+	alphanumericUnicodeTagValue: func(_ string, _ bool) (validator, error) { return newAlphanumericUnicodeValidator(), nil },
 
-	// Comparison validators (with threshold)
-	equalTagValue: func(v string, s bool) (Validator, error) {
-		return buildFloatValidator("eq", v, s, func(t float64) Validator { return newEqualValidator(t) })
+	// Comparison validators (with threshold). eq and ne keep their raw
+	// parameter here: a string field compares the string itself while any
+	// other field compares the number, so the parameter can only be judged
+	// once the field's kind is known, in specializeValidator.
+	equalTagValue: func(v string, _ bool) (validator, error) {
+		return &pendingEqualityValidator{tag: equalTagValue, param: v}, nil
 	},
-	notEqualTagValue: func(v string, s bool) (Validator, error) {
-		return buildFloatValidator("ne", v, s, func(t float64) Validator { return newNotEqualValidator(t) })
+	notEqualTagValue: func(v string, _ bool) (validator, error) {
+		return &pendingEqualityValidator{tag: notEqualTagValue, param: v}, nil
 	},
-	greaterThanTagValue: func(v string, s bool) (Validator, error) {
-		return buildFloatValidator("gt", v, s, func(t float64) Validator { return newGreaterThanValidator(t) })
+	greaterThanTagValue: func(v string, s bool) (validator, error) {
+		return buildFloatValidator("gt", v, s, func(t float64) validator { return newGreaterThanValidator(t) })
 	},
-	greaterThanEqualTagValue: func(v string, s bool) (Validator, error) {
-		return buildFloatValidator("gte", v, s, func(t float64) Validator { return newGreaterThanEqualValidator(t) })
+	greaterThanEqualTagValue: func(v string, s bool) (validator, error) {
+		return buildFloatValidator("gte", v, s, func(t float64) validator { return newGreaterThanEqualValidator(t) })
 	},
-	lessThanTagValue: func(v string, s bool) (Validator, error) {
-		return buildFloatValidator("lt", v, s, func(t float64) Validator { return newLessThanValidator(t) })
+	lessThanTagValue: func(v string, s bool) (validator, error) {
+		return buildFloatValidator("lt", v, s, func(t float64) validator { return newLessThanValidator(t) })
 	},
-	lessThanEqualTagValue: func(v string, s bool) (Validator, error) {
-		return buildFloatValidator("lte", v, s, func(t float64) Validator { return newLessThanEqualValidator(t) })
+	lessThanEqualTagValue: func(v string, s bool) (validator, error) {
+		return buildFloatValidator("lte", v, s, func(t float64) validator { return newLessThanEqualValidator(t) })
 	},
-	minTagValue: func(v string, s bool) (Validator, error) {
-		return buildFloatValidator("min", v, s, func(t float64) Validator { return newMinValidator(t) })
+	minTagValue: func(v string, s bool) (validator, error) {
+		return buildFloatValidator("min", v, s, func(t float64) validator { return newMinValidator(t) })
 	},
-	maxTagValue: func(v string, s bool) (Validator, error) {
-		return buildFloatValidator("max", v, s, func(t float64) Validator { return newMaxValidator(t) })
+	maxTagValue: func(v string, s bool) (validator, error) {
+		return buildFloatValidator("max", v, s, func(t float64) validator { return newMaxValidator(t) })
 	},
-	lengthTagValue: func(value string, strict bool) (Validator, error) {
+	lengthTagValue: func(value string, strict bool) (validator, error) {
 		length, err := strconv.Atoi(value)
 		if err != nil || length <= 0 {
 			if strict {
@@ -415,80 +425,80 @@ var validatorRegistry = map[string]validatorBuilder{
 	},
 
 	// String validators
-	oneOfTagValue: func(value string, _ bool) (Validator, error) {
+	oneOfTagValue: func(value string, _ bool) (validator, error) {
 		if value != "" {
 			return newOneOfValidator(strings.Fields(value)), nil
 		}
 		return nil, nil //nolint:nilnil // empty value produces no validator
 	},
-	lowercaseValidatorTagValue: func(_ string, _ bool) (Validator, error) { return newLowercaseValidator(), nil },
-	uppercaseValidatorTagValue: func(_ string, _ bool) (Validator, error) { return newUppercaseValidator(), nil },
-	asciiTagValue:              func(_ string, _ bool) (Validator, error) { return newASCIIValidator(), nil },
-	printASCIITagValue:         func(_ string, _ bool) (Validator, error) { return newPrintASCIIValidator(), nil },
+	lowercaseValidatorTagValue: func(_ string, _ bool) (validator, error) { return newLowercaseValidator(), nil },
+	uppercaseValidatorTagValue: func(_ string, _ bool) (validator, error) { return newUppercaseValidator(), nil },
+	asciiTagValue:              func(_ string, _ bool) (validator, error) { return newASCIIValidator(), nil },
+	printASCIITagValue:         func(_ string, _ bool) (validator, error) { return newPrintASCIIValidator(), nil },
 
 	// Format validators
-	emailTagValue:      func(_ string, _ bool) (Validator, error) { return newEmailValidator(), nil },
-	uriTagValue:        func(_ string, _ bool) (Validator, error) { return newURIValidator(), nil },
-	urlTagValue:        func(_ string, _ bool) (Validator, error) { return newURLValidator(), nil },
-	httpURLTagValue:    func(_ string, _ bool) (Validator, error) { return newHTTPURLValidator(), nil },
-	httpsURLTagValue:   func(_ string, _ bool) (Validator, error) { return newHTTPSURLValidator(), nil },
-	urlEncodedTagValue: func(_ string, _ bool) (Validator, error) { return newURLEncodedValidator(), nil },
-	dataURITagValue:    func(_ string, _ bool) (Validator, error) { return newDataURIValidator(), nil },
+	emailTagValue:      func(_ string, _ bool) (validator, error) { return newEmailValidator(), nil },
+	uriTagValue:        func(_ string, _ bool) (validator, error) { return newURIValidator(), nil },
+	urlTagValue:        func(_ string, _ bool) (validator, error) { return newURLValidator(), nil },
+	httpURLTagValue:    func(_ string, _ bool) (validator, error) { return newHTTPURLValidator(), nil },
+	httpsURLTagValue:   func(_ string, _ bool) (validator, error) { return newHTTPSURLValidator(), nil },
+	urlEncodedTagValue: func(_ string, _ bool) (validator, error) { return newURLEncodedValidator(), nil },
+	dataURITagValue:    func(_ string, _ bool) (validator, error) { return newDataURIValidator(), nil },
 
 	// Network validators
-	ipAddrTagValue:  func(_ string, _ bool) (Validator, error) { return newIPAddrValidator(), nil },
-	ip4AddrTagValue: func(_ string, _ bool) (Validator, error) { return newIP4AddrValidator(), nil },
-	ip6AddrTagValue: func(_ string, _ bool) (Validator, error) { return newIP6AddrValidator(), nil },
-	cidrTagValue:    func(_ string, _ bool) (Validator, error) { return newCIDRValidator(), nil },
-	cidrv4TagValue:  func(_ string, _ bool) (Validator, error) { return newCIDRv4Validator(), nil },
-	cidrv6TagValue:  func(_ string, _ bool) (Validator, error) { return newCIDRv6Validator(), nil },
-	macTagValue:     func(_ string, _ bool) (Validator, error) { return newMACValidator(), nil },
+	ipAddrTagValue:  func(_ string, _ bool) (validator, error) { return newIPAddrValidator(), nil },
+	ip4AddrTagValue: func(_ string, _ bool) (validator, error) { return newIP4AddrValidator(), nil },
+	ip6AddrTagValue: func(_ string, _ bool) (validator, error) { return newIP6AddrValidator(), nil },
+	cidrTagValue:    func(_ string, _ bool) (validator, error) { return newCIDRValidator(), nil },
+	cidrv4TagValue:  func(_ string, _ bool) (validator, error) { return newCIDRv4Validator(), nil },
+	cidrv6TagValue:  func(_ string, _ bool) (validator, error) { return newCIDRv6Validator(), nil },
+	macTagValue:     func(_ string, _ bool) (validator, error) { return newMACValidator(), nil },
 
 	// Identifier validators
-	uuidTagValue:            func(_ string, _ bool) (Validator, error) { return newUUIDValidator(), nil },
-	fqdnTagValue:            func(_ string, _ bool) (Validator, error) { return newFQDNValidator(), nil },
-	hostnameTagValue:        func(_ string, _ bool) (Validator, error) { return newHostnameValidator(), nil },
-	hostnameRFC1123TagValue: func(_ string, _ bool) (Validator, error) { return newHostnameRFC1123Validator(), nil },
-	hostnamePortTagValue:    func(_ string, _ bool) (Validator, error) { return newHostnamePortValidator(), nil },
+	uuidTagValue:            func(_ string, _ bool) (validator, error) { return newUUIDValidator(), nil },
+	fqdnTagValue:            func(_ string, _ bool) (validator, error) { return newFQDNValidator(), nil },
+	hostnameTagValue:        func(_ string, _ bool) (validator, error) { return newHostnameValidator(), nil },
+	hostnameRFC1123TagValue: func(_ string, _ bool) (validator, error) { return newHostnameRFC1123Validator(), nil },
+	hostnamePortTagValue:    func(_ string, _ bool) (validator, error) { return newHostnamePortValidator(), nil },
 
 	// String content validators (with parameter)
-	startsWithTagValue: func(v string, _ bool) (Validator, error) {
+	startsWithTagValue: func(v string, _ bool) (validator, error) {
 		if v != "" {
 			return newStartsWithValidator(v), nil
 		}
 		return nil, nil
 	}, //nolint:nlreturn,nilnil // compact builder
-	startsNotWithTagValue: func(v string, _ bool) (Validator, error) {
+	startsNotWithTagValue: func(v string, _ bool) (validator, error) {
 		if v != "" {
 			return newStartsNotWithValidator(v), nil
 		}
 		return nil, nil
 	}, //nolint:nlreturn,nilnil // compact builder
-	endsWithTagValue: func(v string, _ bool) (Validator, error) {
+	endsWithTagValue: func(v string, _ bool) (validator, error) {
 		if v != "" {
 			return newEndsWithValidator(v), nil
 		}
 		return nil, nil
 	}, //nolint:nlreturn,nilnil // compact builder
-	endsNotWithTagValue: func(v string, _ bool) (Validator, error) {
+	endsNotWithTagValue: func(v string, _ bool) (validator, error) {
 		if v != "" {
 			return newEndsNotWithValidator(v), nil
 		}
 		return nil, nil
 	}, //nolint:nlreturn,nilnil // compact builder
-	containsTagValue: func(v string, _ bool) (Validator, error) {
+	containsTagValue: func(v string, _ bool) (validator, error) {
 		if v != "" {
 			return newContainsValidator(v), nil
 		}
 		return nil, nil
 	}, //nolint:nlreturn,nilnil // compact builder
-	containsAnyTagValue: func(v string, _ bool) (Validator, error) {
+	containsAnyTagValue: func(v string, _ bool) (validator, error) {
 		if v != "" {
 			return newContainsAnyValidator(v), nil
 		}
 		return nil, nil
 	}, //nolint:nlreturn,nilnil // compact builder
-	containsRuneTagValue: func(v string, _ bool) (Validator, error) {
+	containsRuneTagValue: func(v string, _ bool) (validator, error) {
 		if v != "" {
 			runes := []rune(v)
 			if len(runes) > 0 {
@@ -499,19 +509,19 @@ var validatorRegistry = map[string]validatorBuilder{
 	},
 
 	// Exclusion validators (with parameter)
-	excludesTagValue: func(v string, _ bool) (Validator, error) {
+	excludesTagValue: func(v string, _ bool) (validator, error) {
 		if v != "" {
 			return newExcludesValidator(v), nil
 		}
 		return nil, nil
 	}, //nolint:nlreturn,nilnil // compact builder
-	excludesAllTagValue: func(v string, _ bool) (Validator, error) {
+	excludesAllTagValue: func(v string, _ bool) (validator, error) {
 		if v != "" {
 			return newExcludesAllValidator(v), nil
 		}
 		return nil, nil
 	}, //nolint:nlreturn,nilnil // compact builder
-	excludesRuneTagValue: func(v string, _ bool) (Validator, error) {
+	excludesRuneTagValue: func(v string, _ bool) (validator, error) {
 		if v != "" {
 			runes := []rune(v)
 			if len(runes) > 0 {
@@ -522,14 +532,14 @@ var validatorRegistry = map[string]validatorBuilder{
 	},
 
 	// Misc validators
-	multibyteTagValue: func(_ string, _ bool) (Validator, error) { return newMultibyteValidator(), nil },
-	equalIgnoreCaseTagValue: func(v string, _ bool) (Validator, error) {
+	multibyteTagValue: func(_ string, _ bool) (validator, error) { return newMultibyteValidator(), nil },
+	equalIgnoreCaseTagValue: func(v string, _ bool) (validator, error) {
 		if v != "" {
 			return newEqualIgnoreCaseValidator(v), nil
 		}
 		return nil, nil //nolint:nlreturn,nilnil // compact builder
 	},
-	notEqualIgnoreCaseTagValue: func(v string, _ bool) (Validator, error) {
+	notEqualIgnoreCaseTagValue: func(v string, _ bool) (validator, error) {
 		if v != "" {
 			return newNotEqualIgnoreCaseValidator(v), nil
 		}
@@ -537,7 +547,7 @@ var validatorRegistry = map[string]validatorBuilder{
 	},
 
 	// Datetime validator
-	datetimeTagValue: func(v string, _ bool) (Validator, error) {
+	datetimeTagValue: func(v string, _ bool) (validator, error) {
 		if v != "" {
 			return newDatetimeValidator(v), nil
 		}
@@ -545,41 +555,41 @@ var validatorRegistry = map[string]validatorBuilder{
 	}, //nolint:nlreturn,nilnil // compact builder
 
 	// Phone number validator
-	e164TagValue: func(_ string, _ bool) (Validator, error) { return newE164Validator(), nil },
+	e164TagValue: func(_ string, _ bool) (validator, error) { return newE164Validator(), nil },
 
 	// Geolocation validators
-	latitudeTagValue:  func(_ string, _ bool) (Validator, error) { return newLatitudeValidator(), nil },
-	longitudeTagValue: func(_ string, _ bool) (Validator, error) { return newLongitudeValidator(), nil },
+	latitudeTagValue:  func(_ string, _ bool) (validator, error) { return newLatitudeValidator(), nil },
+	longitudeTagValue: func(_ string, _ bool) (validator, error) { return newLongitudeValidator(), nil },
 
 	// UUID variant validators
-	uuid3TagValue: func(_ string, _ bool) (Validator, error) { return newUUID3Validator(), nil },
-	uuid4TagValue: func(_ string, _ bool) (Validator, error) { return newUUID4Validator(), nil },
-	uuid5TagValue: func(_ string, _ bool) (Validator, error) { return newUUID5Validator(), nil },
-	ulidTagValue:  func(_ string, _ bool) (Validator, error) { return newULIDValidator(), nil },
+	uuid3TagValue: func(_ string, _ bool) (validator, error) { return newUUID3Validator(), nil },
+	uuid4TagValue: func(_ string, _ bool) (validator, error) { return newUUID4Validator(), nil },
+	uuid5TagValue: func(_ string, _ bool) (validator, error) { return newUUID5Validator(), nil },
+	ulidTagValue:  func(_ string, _ bool) (validator, error) { return newULIDValidator(), nil },
 
 	// Hexadecimal and color validators
-	hexadecimalTagValue: func(_ string, _ bool) (Validator, error) { return newHexadecimalValidator(), nil },
-	hexColorTagValue:    func(_ string, _ bool) (Validator, error) { return newHexColorValidator(), nil },
-	rgbTagValue:         func(_ string, _ bool) (Validator, error) { return newRGBValidator(), nil },
-	rgbaTagValue:        func(_ string, _ bool) (Validator, error) { return newRGBAValidator(), nil },
-	hslTagValue:         func(_ string, _ bool) (Validator, error) { return newHSLValidator(), nil },
-	hslaTagValue:        func(_ string, _ bool) (Validator, error) { return newHSLAValidator(), nil },
+	hexadecimalTagValue: func(_ string, _ bool) (validator, error) { return newHexadecimalValidator(), nil },
+	hexColorTagValue:    func(_ string, _ bool) (validator, error) { return newHexColorValidator(), nil },
+	rgbTagValue:         func(_ string, _ bool) (validator, error) { return newRGBValidator(), nil },
+	rgbaTagValue:        func(_ string, _ bool) (validator, error) { return newRGBAValidator(), nil },
+	hslTagValue:         func(_ string, _ bool) (validator, error) { return newHSLValidator(), nil },
+	hslaTagValue:        func(_ string, _ bool) (validator, error) { return newHSLAValidator(), nil },
 }
 
 // crossFieldValidatorRegistry maps tag names to their builder functions.
 //
 //nolint:gochecknoglobals // registry pattern requires package-level map for O(1) lookup
 var crossFieldValidatorRegistry = map[string]crossFieldValidatorBuilder{
-	eqFieldTagValue:         func(v string) CrossFieldValidator { return newEqFieldValidator(v) },
-	neFieldTagValue:         func(v string) CrossFieldValidator { return newNeFieldValidator(v) },
-	gtFieldTagValue:         func(v string) CrossFieldValidator { return newGtFieldValidator(v) },
-	gteFieldTagValue:        func(v string) CrossFieldValidator { return newGteFieldValidator(v) },
-	ltFieldTagValue:         func(v string) CrossFieldValidator { return newLtFieldValidator(v) },
-	lteFieldTagValue:        func(v string) CrossFieldValidator { return newLteFieldValidator(v) },
-	fieldContainsTagValue:   func(v string) CrossFieldValidator { return newFieldContainsValidator(v) },
-	fieldExcludesTagValue:   func(v string) CrossFieldValidator { return newFieldExcludesValidator(v) },
-	requiredWithTagValue:    func(v string) CrossFieldValidator { return newRequiredWithValidator(v) },
-	requiredWithoutTagValue: func(v string) CrossFieldValidator { return newRequiredWithoutValidator(v) },
+	eqFieldTagValue:         func(v string) crossFieldValidator { return newEqFieldValidator(v) },
+	neFieldTagValue:         func(v string) crossFieldValidator { return newNeFieldValidator(v) },
+	gtFieldTagValue:         func(v string) crossFieldValidator { return newGtFieldValidator(v) },
+	gteFieldTagValue:        func(v string) crossFieldValidator { return newGteFieldValidator(v) },
+	ltFieldTagValue:         func(v string) crossFieldValidator { return newLtFieldValidator(v) },
+	lteFieldTagValue:        func(v string) crossFieldValidator { return newLteFieldValidator(v) },
+	fieldContainsTagValue:   func(v string) crossFieldValidator { return newFieldContainsValidator(v) },
+	fieldExcludesTagValue:   func(v string) crossFieldValidator { return newFieldExcludesValidator(v) },
+	requiredWithTagValue:    func(v string) crossFieldValidator { return newRequiredWithValidator(v) },
+	requiredWithoutTagValue: func(v string) crossFieldValidator { return newRequiredWithoutValidator(v) },
 }
 
 // parseValidateTag parses the validate tag string and returns validators and cross-field validators.
@@ -633,7 +643,7 @@ func parseValidateTag(tag string, strict bool) (validators, crossFieldValidators
 				key,
 				value,
 				strict,
-				func(field string, expected string) CrossFieldValidator {
+				func(field string, expected string) crossFieldValidator {
 					return newRequiredIfValidator(field, expected)
 				},
 			)
@@ -648,7 +658,7 @@ func parseValidateTag(tag string, strict bool) (validators, crossFieldValidators
 				key,
 				value,
 				strict,
-				func(field string, expected string) CrossFieldValidator {
+				func(field string, expected string) crossFieldValidator {
 					return newRequiredUnlessValidator(field, expected)
 				},
 			)

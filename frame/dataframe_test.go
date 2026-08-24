@@ -2091,6 +2091,130 @@ func TestDataFrame_Sort(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, originalFirst, df.ToRecords()[0]["name"])
 	})
+
+	t.Run("sorts a uint column numerically", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"v": uint(10)}, {"v": uint(9)}, {"v": uint(100)},
+		})
+
+		sorted, err := df.Sort("v", Ascending)
+
+		require.NoError(t, err)
+		records := sorted.ToRecords()
+		assert.Equal(t, uint(9), records[0]["v"])
+		assert.Equal(t, uint(10), records[1]["v"])
+		assert.Equal(t, uint(100), records[2]["v"])
+	})
+
+	t.Run("sorts a column mixing numeric kinds numerically", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"v": 9}, {"v": 10.5}, {"v": int64(2)}, {"v": uint64(100)}, {"v": 30},
+		})
+
+		sorted, err := df.Sort("v", Ascending)
+
+		require.NoError(t, err)
+		records := sorted.ToRecords()
+		assert.Equal(t, int64(2), records[0]["v"])
+		assert.Equal(t, 9, records[1]["v"])
+		assert.Equal(t, 10.5, records[2]["v"])
+		assert.Equal(t, 30, records[3]["v"])
+		assert.Equal(t, uint64(100), records[4]["v"])
+	})
+
+	t.Run("keeps huge integers apart from their float neighbors", func(t *testing.T) {
+		t.Parallel()
+
+		// 1<<62 and 1<<62+1 collapse to the same float64; comparing them as
+		// integers keeps the order exact.
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"v": int64(1<<62 + 1)}, {"v": int64(1 << 62)},
+		})
+
+		sorted, err := df.Sort("v", Ascending)
+
+		require.NoError(t, err)
+		records := sorted.ToRecords()
+		assert.Equal(t, int64(1<<62), records[0]["v"])
+		assert.Equal(t, int64(1<<62+1), records[1]["v"])
+	})
+
+	t.Run("orders a huge integer after the float it does not equal", func(t *testing.T) {
+		t.Parallel()
+
+		// float64(1<<53) equals the integer 1<<53 exactly, so its successor
+		// must sort after the float, not tie with it: a tie here made
+		// equality intransitive (a == f, b == f, a < b) and the whole order
+		// arbitrary.
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"v": int64(1<<53 + 1)}, {"v": float64(1 << 53)}, {"v": int64(1 << 53)},
+		})
+
+		sorted, err := df.Sort("v", Ascending)
+
+		require.NoError(t, err)
+		records := sorted.ToRecords()
+		assert.Equal(t, int64(1<<53+1), records[2]["v"])
+	})
+}
+
+// TestCompareValuesIsAntisymmetric pins the contract slices.SortFunc requires
+// of the comparator: swapping the arguments flips the sign, for every pair of
+// kinds a frame can hold. An arm handling (int, float64) but not (float64, int)
+// once made Sort return an arbitrary order.
+func TestCompareValuesIsAntisymmetric(t *testing.T) {
+	t.Parallel()
+
+	values := []any{
+		int(3), int8(4), int16(5), int32(6), int64(7),
+		uint(3), uint8(4), uint16(5), uint32(6), uint64(7),
+		float32(2.5), float64(3.5), int(-1), int64(1 << 62),
+		uint64(1<<63 + 1), "3", "abc", true,
+		int64(1 << 53), int64(1<<53 + 1), float64(1 << 53),
+		uint64(1 << 53), uint64(1<<53 + 1),
+	}
+
+	for _, a := range values {
+		for _, b := range values {
+			got := compareValues(a, b)
+			mirror := compareValues(b, a)
+			if got != -mirror {
+				t.Errorf("compareValues(%v(%T), %v(%T)) = %d but the mirror = %d", a, a, b, b, got, mirror)
+			}
+		}
+	}
+
+	// A strict weak ordering also needs transitive equality and order: an
+	// integer that equaled the float its distinct neighbor also equaled once
+	// broke this, and the sort's answer became arbitrary.
+	for _, a := range values {
+		for _, b := range values {
+			for _, c := range values {
+				ab, bc, ac := compareValues(a, b), compareValues(b, c), compareValues(a, c)
+				if ab == 0 && bc == 0 && ac != 0 {
+					t.Errorf("equality is not transitive over %v(%T), %v(%T), %v(%T)", a, a, b, b, c, c)
+				}
+				if ab < 0 && bc < 0 && ac >= 0 {
+					t.Errorf("order is not transitive over %v(%T), %v(%T), %v(%T)", a, a, b, b, c, c)
+				}
+			}
+		}
+	}
+
+	// A pair of numbers orders numerically whatever kinds spell them.
+	if compareValues(uint(9), uint(10)) >= 0 {
+		t.Error("compareValues(uint(9), uint(10)) should be negative")
+	}
+	if compareValues(float64(10.5), int(9)) <= 0 {
+		t.Error("compareValues(10.5, int(9)) should be positive")
+	}
+	if compareValues(int(-1), uint64(1<<63+1)) >= 0 {
+		t.Error("compareValues(int(-1), a uint64 past int64) should be negative")
+	}
 }
 
 func TestDataFrame_SortBy(t *testing.T) {
@@ -2149,6 +2273,51 @@ func TestDataFrame_SortBy(t *testing.T) {
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not found")
+	})
+
+	t.Run("keeps the input order of rows that compare equal", func(t *testing.T) {
+		t.Parallel()
+
+		rows := make([]map[string]any, 0, 15)
+		for i := 1; i <= 15; i++ {
+			k := "a"
+			if i%2 == 0 {
+				k = "b"
+			}
+			rows = append(rows, map[string]any{"k": k, "seq": i})
+		}
+		df := NewDataFrameFromRecords(rows)
+
+		sorted, err := df.SortBy(SortOption{Column: "k", Order: Ascending})
+
+		require.NoError(t, err)
+		records := sorted.ToRecords()
+		want := []int{1, 3, 5, 7, 9, 11, 13, 15, 2, 4, 6, 8, 10, 12, 14}
+		for i, w := range want {
+			assert.Equal(t, w, records[i]["seq"], "row %d", i)
+		}
+	})
+
+	t.Run("keeps input order among rows equal on every sort key", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"k": "a", "n": int64(1), "seq": 1},
+			{"k": "a", "n": int64(1), "seq": 2},
+			{"k": "a", "n": int64(1), "seq": 3},
+			{"k": "a", "n": int64(1), "seq": 4},
+		})
+
+		sorted, err := df.SortBy(
+			SortOption{Column: "k", Order: Ascending},
+			SortOption{Column: "n", Order: Descending},
+		)
+
+		require.NoError(t, err)
+		records := sorted.ToRecords()
+		for i := range 4 {
+			assert.Equal(t, i+1, records[i]["seq"], "row %d", i)
+		}
 	})
 }
 

@@ -349,6 +349,52 @@ func ExampleGroupedDataFrame_Sum() {
 	// east 30
 }
 
+func ExampleGroupedDataFrame_Min() {
+	df := frame.NewDataFrameFromRecords([]map[string]any{
+		{"region": "east", "sales": 10},
+		{"region": "east", "sales": 20},
+		{"region": "west", "sales": 15},
+	})
+
+	grouped, err := df.GroupBy("region")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	minimums, err := grouped.Min("sales")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	row := minimums.ToRecords()[0]
+	fmt.Printf("%s %.0f\n", row["region"], row["min_sales"])
+	// Output:
+	// east 10
+}
+
+func ExampleGroupedDataFrame_Max() {
+	df := frame.NewDataFrameFromRecords([]map[string]any{
+		{"region": "east", "sales": 10},
+		{"region": "east", "sales": 20},
+		{"region": "west", "sales": 15},
+	})
+
+	grouped, err := df.GroupBy("region")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	maximums, err := grouped.Max("sales")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	row := maximums.ToRecords()[0]
+	fmt.Printf("%s %.0f\n", row["region"], row["max_sales"])
+	// Output:
+	// east 20
+}
+
 func ExampleDataFrame_Sort() {
 	df := frame.NewDataFrameFromRecords([]map[string]any{
 		{"product": "banana", "qty": int64(1)},

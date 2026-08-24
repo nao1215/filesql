@@ -1,8 +1,9 @@
-//nolint:goconst // Validator tag/value matching intentionally uses literal tokens.
+//nolint:goconst // validator tag/value matching intentionally uses literal tokens.
 package prep
 
 import (
 	"encoding/base64"
+	"fmt"
 	"net"
 	"net/url"
 	"regexp"
@@ -97,8 +98,8 @@ var (
 	hslaRegex        = regexp.MustCompile(hslaRegexPattern)
 )
 
-// Validator defines the interface for validating values
-type Validator interface {
+// validator defines the interface for validating values
+type validator interface {
 	// Validate checks if the value is valid and returns an error message if not
 	// Returns empty string if validation passes
 	Validate(value string) string
@@ -106,18 +107,31 @@ type Validator interface {
 	Name() string
 }
 
-// validators is a slice of Validator
-type validators []Validator
+// validators is a slice of validator
+type validators []validator
 
 // Validate applies all validators and returns the first error message.
-// If omitempty is present and the value is empty, subsequent validators are skipped.
-// Returns empty string if all validations pass.
+// Returns empty strings if all validations pass.
+//
+// An empty value passes every validator except required: an empty cell is how
+// CSV spells a missing value, so a column is optional unless required says
+// otherwise. A caller who needs both presence and format writes required
+// alongside the format tag. This is where this package deliberately leaves the
+// go-playground dialect, which fails most validators on an empty value;
+// omitempty is still accepted and is a no-op under this rule.
 func (vs validators) Validate(value string) (string, string) {
+	if value == "" {
+		for _, v := range vs {
+			if v.Name() == requiredTagValue {
+				if msg := v.Validate(value); msg != "" {
+					return requiredTagValue, msg
+				}
+			}
+		}
+		return "", ""
+	}
 	for _, v := range vs {
 		if v.Name() == omitemptyTagValue {
-			if value == "" {
-				return "", ""
-			}
 			continue
 		}
 		if msg := v.Validate(value); msg != "" {
@@ -166,7 +180,11 @@ func (v *requiredValidator) Name() string {
 	return requiredTagValue
 }
 
-// booleanValidator validates that a value is a boolean (true, false, 0, 1)
+// booleanValidator validates that a value is a boolean.
+//
+// The accepted spellings are exactly what strconv.ParseBool accepts: that is
+// what setFieldValue uses to fill a bool struct field, and how the
+// go-playground dialect this package follows defines boolean.
 type booleanValidator struct{}
 
 // newBooleanValidator creates a new boolean validator
@@ -176,10 +194,10 @@ func newBooleanValidator() *booleanValidator {
 
 // Validate checks if the value is a valid boolean
 func (v *booleanValidator) Validate(value string) string {
-	if value == "true" || value == "false" || value == "0" || value == "1" {
-		return ""
+	if _, err := strconv.ParseBool(value); err != nil {
+		return "value must be a boolean (1, t, T, TRUE, true, True, 0, f, F, FALSE, false, or False)"
 	}
-	return "value must be a boolean (true, false, 0, or 1)"
+	return ""
 }
 
 // Name returns the validator name
@@ -360,6 +378,81 @@ func (v *alphanumericUnicodeValidator) Name() string {
 // =============================================================================
 // Comparison Validators
 // =============================================================================
+//
+// The comparison tags follow the field they land on, which is what the
+// go-playground dialect this package documents means by them: on a string
+// field, eq and ne compare the string itself and gt, gte, lt, lte, min and
+// max compare the character count, while on any other field all of them
+// compare the numeric value and len means the value equals the parameter.
+// parseStructType specializes each validator once the field's kind is known.
+
+// pendingEqualityValidator carries an eq or ne tag whose meaning depends on
+// the field it lands on: a string field compares the string itself, any other
+// field compares the number, so the parameter cannot be judged before the
+// field's kind is known. parseStructType replaces it; it never validates.
+type pendingEqualityValidator struct {
+	tag   string // equalTagValue or notEqualTagValue
+	param string
+}
+
+// Validate reports the bug of running unspecialized, so a path that forgets
+// specialization fails loudly instead of validating nothing.
+func (v *pendingEqualityValidator) Validate(_ string) string {
+	return "internal: " + v.tag + " was not specialized for its field"
+}
+
+// Name returns the validator name
+func (v *pendingEqualityValidator) Name() string {
+	return v.tag
+}
+
+// textEqualValidator validates that a string field's value equals the expected
+// text, which is what eq means for a string in the validator dialect this
+// package follows.
+type textEqualValidator struct {
+	expected string
+}
+
+// newTextEqualValidator creates an eq validator for a string field
+func newTextEqualValidator(expected string) *textEqualValidator {
+	return &textEqualValidator{expected: expected}
+}
+
+// Validate checks if the value equals the expected text
+func (v *textEqualValidator) Validate(value string) string {
+	if value != v.expected {
+		return "value must equal '" + v.expected + "'"
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *textEqualValidator) Name() string {
+	return equalTagValue
+}
+
+// textNotEqualValidator is the negated half of textEqualValidator.
+type textNotEqualValidator struct {
+	expected string
+}
+
+// newTextNotEqualValidator creates a ne validator for a string field
+func newTextNotEqualValidator(expected string) *textNotEqualValidator {
+	return &textNotEqualValidator{expected: expected}
+}
+
+// Validate checks if the value does not equal the expected text
+func (v *textNotEqualValidator) Validate(value string) string {
+	if value == v.expected {
+		return "value must not equal '" + v.expected + "'"
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *textNotEqualValidator) Name() string {
+	return notEqualTagValue
+}
 
 // equalValidator validates that a value equals the threshold
 type equalValidator struct {
@@ -415,9 +508,11 @@ func (v *notEqualValidator) Name() string {
 	return notEqualTagValue
 }
 
-// greaterThanValidator validates that a value is greater than the threshold
+// greaterThanValidator validates that a value is greater than the threshold.
+// It measures what minValidator measures; see there.
 type greaterThanValidator struct {
-	threshold float64
+	threshold      float64
+	measuresLength bool
 }
 
 // newGreaterThanValidator creates a new greater than validator
@@ -427,6 +522,12 @@ func newGreaterThanValidator(threshold float64) *greaterThanValidator {
 
 // Validate checks if the value is greater than the threshold
 func (v *greaterThanValidator) Validate(value string) string {
+	if v.measuresLength {
+		if float64(utf8.RuneCountInString(value)) <= v.threshold {
+			return "value must have more than " + strconv.FormatFloat(v.threshold, 'f', -1, 64) + " characters"
+		}
+		return ""
+	}
 	f, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return errMsgValidNumber
@@ -442,9 +543,11 @@ func (v *greaterThanValidator) Name() string {
 	return greaterThanTagValue
 }
 
-// greaterThanEqualValidator validates that a value is greater than or equal to the threshold
+// greaterThanEqualValidator validates that a value is greater than or equal to
+// the threshold. It measures what minValidator measures; see there.
 type greaterThanEqualValidator struct {
-	threshold float64
+	threshold      float64
+	measuresLength bool
 }
 
 // newGreaterThanEqualValidator creates a new greater than or equal validator
@@ -454,6 +557,12 @@ func newGreaterThanEqualValidator(threshold float64) *greaterThanEqualValidator 
 
 // Validate checks if the value is greater than or equal to the threshold
 func (v *greaterThanEqualValidator) Validate(value string) string {
+	if v.measuresLength {
+		if float64(utf8.RuneCountInString(value)) < v.threshold {
+			return "value must have at least " + strconv.FormatFloat(v.threshold, 'f', -1, 64) + " characters"
+		}
+		return ""
+	}
 	f, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return errMsgValidNumber
@@ -469,9 +578,11 @@ func (v *greaterThanEqualValidator) Name() string {
 	return greaterThanEqualTagValue
 }
 
-// lessThanValidator validates that a value is less than the threshold
+// lessThanValidator validates that a value is less than the threshold.
+// It measures what minValidator measures; see there.
 type lessThanValidator struct {
-	threshold float64
+	threshold      float64
+	measuresLength bool
 }
 
 // newLessThanValidator creates a new less than validator
@@ -481,6 +592,12 @@ func newLessThanValidator(threshold float64) *lessThanValidator {
 
 // Validate checks if the value is less than the threshold
 func (v *lessThanValidator) Validate(value string) string {
+	if v.measuresLength {
+		if float64(utf8.RuneCountInString(value)) >= v.threshold {
+			return "value must have fewer than " + strconv.FormatFloat(v.threshold, 'f', -1, 64) + " characters"
+		}
+		return ""
+	}
 	f, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return errMsgValidNumber
@@ -496,9 +613,11 @@ func (v *lessThanValidator) Name() string {
 	return lessThanTagValue
 }
 
-// lessThanEqualValidator validates that a value is less than or equal to the threshold
+// lessThanEqualValidator validates that a value is less than or equal to the
+// threshold. It measures what minValidator measures; see there.
 type lessThanEqualValidator struct {
-	threshold float64
+	threshold      float64
+	measuresLength bool
 }
 
 // newLessThanEqualValidator creates a new less than or equal validator
@@ -508,6 +627,12 @@ func newLessThanEqualValidator(threshold float64) *lessThanEqualValidator {
 
 // Validate checks if the value is less than or equal to the threshold
 func (v *lessThanEqualValidator) Validate(value string) string {
+	if v.measuresLength {
+		if float64(utf8.RuneCountInString(value)) > v.threshold {
+			return "value must have at most " + strconv.FormatFloat(v.threshold, 'f', -1, 64) + " characters"
+		}
+		return ""
+	}
 	f, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return errMsgValidNumber
@@ -593,28 +718,78 @@ func (v *maxValidator) Validate(value string) string {
 	return ""
 }
 
-// measuringStringLength returns the validator a string field needs where the tag
-// it came from measures a number for a numeric field. Any other validator is
-// returned as it is.
-func measuringStringLength(v Validator) Validator {
-	switch typed := v.(type) {
-	case *minValidator:
-		return &minValidator{threshold: typed.threshold, measuresLength: true}
-	case *maxValidator:
-		return &maxValidator{threshold: typed.threshold, measuresLength: true}
-	default:
-		return v
-	}
-}
-
 // Name returns the validator name
 func (v *maxValidator) Name() string {
 	return maxTagValue
 }
 
-// lengthValidator validates that a value has exactly the specified length
+// specializeValidator returns the validator the field needs, once the field's
+// kind is known: a comparison on a string field measures the string, and len
+// on a numeric field means the value equals the parameter. Any validator that
+// does not depend on the field's kind is returned as it is. Returns an error
+// in strict mode when a deferred parameter turns out not to fit the field
+// (eq=abc on a numeric field), and nil in non-strict mode, which drops it the
+// way parse-time parameter checks already do.
+func specializeValidator(v validator, isString bool, strict bool) (validator, error) {
+	switch typed := v.(type) {
+	case *pendingEqualityValidator:
+		if isString {
+			if typed.tag == equalTagValue {
+				return newTextEqualValidator(typed.param), nil
+			}
+			return newTextNotEqualValidator(typed.param), nil
+		}
+		threshold, err := strconv.ParseFloat(typed.param, 64)
+		if err != nil {
+			if strict {
+				return nil, fmt.Errorf("%w: %s requires a numeric value on a numeric field, got %q",
+					ErrInvalidTagFormat, typed.tag, typed.param)
+			}
+			return nil, nil //nolint:nilnil // non-strict mode silently ignores invalid args
+		}
+		if typed.tag == equalTagValue {
+			return newEqualValidator(threshold), nil
+		}
+		return newNotEqualValidator(threshold), nil
+	case *minValidator:
+		if isString {
+			return &minValidator{threshold: typed.threshold, measuresLength: true}, nil
+		}
+	case *maxValidator:
+		if isString {
+			return &maxValidator{threshold: typed.threshold, measuresLength: true}, nil
+		}
+	case *greaterThanValidator:
+		if isString {
+			return &greaterThanValidator{threshold: typed.threshold, measuresLength: true}, nil
+		}
+	case *greaterThanEqualValidator:
+		if isString {
+			return &greaterThanEqualValidator{threshold: typed.threshold, measuresLength: true}, nil
+		}
+	case *lessThanValidator:
+		if isString {
+			return &lessThanValidator{threshold: typed.threshold, measuresLength: true}, nil
+		}
+	case *lessThanEqualValidator:
+		if isString {
+			return &lessThanEqualValidator{threshold: typed.threshold, measuresLength: true}, nil
+		}
+	case *lengthValidator:
+		if !isString {
+			return &lengthValidator{length: typed.length, measuresValue: true}, nil
+		}
+	}
+	return v, nil
+}
+
+// lengthValidator validates that a value has exactly the specified length for
+// a string field, and that the value is exactly the parameter for a numeric
+// one — which is what the validator dialect this package follows means by len
+// on a number.
 type lengthValidator struct {
-	length int
+	length        int
+	measuresValue bool
 }
 
 // newLengthValidator creates a new length validator
@@ -622,8 +797,18 @@ func newLengthValidator(length int) *lengthValidator {
 	return &lengthValidator{length: length}
 }
 
-// Validate checks if the value has exactly the specified length (grapheme clusters)
+// Validate checks the length of a string, or the value of a number.
 func (v *lengthValidator) Validate(value string) string {
+	if v.measuresValue {
+		f, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return errMsgValidNumber
+		}
+		if f != float64(v.length) {
+			return "value must be the number " + strconv.Itoa(v.length)
+		}
+		return ""
+	}
 	count := utf8.RuneCountInString(value)
 	if count != v.length {
 		return "value must have exactly " + strconv.Itoa(v.length) + " characters"
@@ -1244,15 +1429,8 @@ func (v *hostnamePortValidator) Validate(value string) string {
 		return errMsgValidHostnamePort
 	}
 
-	// Check for IPv6 in brackets
-	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
-		if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
-			return ""
-		}
-		return errMsgValidHostnamePort
-	}
-
-	// Check if it's an IP address
+	// Check if it's an IP address. SplitHostPort already stripped the
+	// brackets a literal IPv6 address arrives in.
 	if ip := net.ParseIP(host); ip != nil {
 		return ""
 	}
@@ -1587,7 +1765,7 @@ func (v *notEqualIgnoreCaseValidator) Name() string {
 }
 
 // =============================================================================
-// Datetime Validator
+// Datetime validator
 // =============================================================================
 
 // datetimeValidator validates that a value matches the specified datetime layout
@@ -1623,7 +1801,7 @@ func parseDateTimeImpl(value, layout string) error {
 }
 
 // =============================================================================
-// E.164 Phone Number Validator
+// E.164 Phone Number validator
 // =============================================================================
 
 // e164Validator validates that a value is a valid E.164 phone number
@@ -1939,7 +2117,7 @@ func (v *hslaValidator) Name() string {
 }
 
 // =============================================================================
-// MAC Address Validator
+// MAC Address validator
 // =============================================================================
 
 // macValidator validates that a value is a valid MAC address

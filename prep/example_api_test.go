@@ -12,8 +12,10 @@ import (
 )
 
 func ExampleWithStrictTagParsing() {
+	// eq on a numeric field needs a numeric parameter; on a string field the
+	// same tag would compare the string "abc" itself.
 	type record struct {
-		Value string `validate:"eq=abc"`
+		Value int `validate:"eq=abc"`
 	}
 
 	processor := prep.NewProcessor(prep.FileTypeCSV, prep.WithStrictTagParsing())

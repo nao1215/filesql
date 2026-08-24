@@ -16,8 +16,8 @@ const (
 	httpsSchemeType = "https"
 )
 
-// Preprocessor defines the interface for preprocessing values
-type Preprocessor interface {
+// preprocessor defines the interface for preprocessing values
+type preprocessor interface {
 	// Process applies preprocessing to the value and returns the result
 	Process(value string) string
 	// Name returns the name of the preprocessor for error reporting
@@ -137,8 +137,8 @@ func (p *defaultPreprocessor) Name() string {
 	return defaultTagValue
 }
 
-// preprocessors is a slice of Preprocessor
-type preprocessors []Preprocessor
+// preprocessors is a slice of preprocessor
+type preprocessors []preprocessor
 
 // hasDefault reports whether this field supplies a value when the input has
 // none, which is what makes a field with no matching column legitimate rather

@@ -85,11 +85,24 @@
 //
 // # Validate Tags
 //
-// The "validate" tag specifies validation rules (compatible with go-playground/validator):
+// The "validate" tag specifies validation rules (following the
+// go-playground/validator dialect):
 //   - required: Field must not be empty
 //   - email: Must be a valid email address
 //   - url: Must be a valid URL
 //   - And many more...
+//
+// An empty value passes every validator except required: an empty cell is how
+// CSV spells a missing value, so a column is optional unless required says
+// otherwise. This is where the dialect is deliberately left — that library
+// fails most validators on an empty value.
+//
+// The comparison tags follow the field they land on, as the dialect defines
+// them: on a string field, eq and ne compare the string itself and gt, gte,
+// lt, lte, min and max compare the character count, while on any other field
+// all of them compare the numeric value and len means the value equals the
+// parameter. boolean accepts what strconv.ParseBool accepts, which is also
+// how a bool struct field is filled.
 //
 // See https://pkg.go.dev/github.com/nao1215/filesql/prep for the complete list of supported validators.
 package prep

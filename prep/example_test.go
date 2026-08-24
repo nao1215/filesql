@@ -320,15 +320,18 @@ func Example_employeePreprocessing() {
 		Email string `prep:"trim,lowercase" validate:"required,email"`
 		// Department: normalize case, must be one of allowed values
 		Department string `prep:"trim,uppercase" validate:"required,oneof=ENGINEERING SALES MARKETING HR"`
-		// Salary: keep only digits, validate range
-		Salary string `prep:"trim,keep_digits" validate:"required,numeric,gte=30000,lte=500000"`
+		// Salary: keep only digits, validate range. Declared numeric so that
+		// gte and lte compare the amount; on a string field they would count
+		// characters.
+		Salary int `prep:"trim,keep_digits" validate:"required,numeric,gte=30000,lte=500000"`
 		// Phone: extract digits, validate E.164 format after adding country code
 		Phone string `prep:"trim,keep_digits,prefix=+1" validate:"e164"`
 		// Start date: validate datetime format
 		StartDate string `name:"start_date" prep:"trim" validate:"required,datetime=2006-01-02"`
 		// Manager ID: required only if department is not HR
 		ManagerID string `name:"manager_id" prep:"trim,pad_left=6:0" validate:"required_unless=Department HR"`
-		// Website: fix missing scheme, validate URL
+		// Website: fix missing scheme, validate URL. The column is optional:
+		// an empty value passes every validator except required.
 		Website string `prep:"trim,lowercase,fix_scheme=https" validate:"url"`
 	}
 
@@ -358,7 +361,7 @@ func Example_employeePreprocessing() {
 		fmt.Printf("  Name:       %s\n", emp.FullName)
 		fmt.Printf("  Email:      %s\n", emp.Email)
 		fmt.Printf("  Department: %s\n", emp.Department)
-		fmt.Printf("  Salary:     %s\n", emp.Salary)
+		fmt.Printf("  Salary:     %d\n", emp.Salary)
 		fmt.Printf("  Phone:      %s\n", emp.Phone)
 		fmt.Printf("  Start Date: %s\n", emp.StartDate)
 		fmt.Printf("  Manager ID: %s\n", emp.ManagerID)
@@ -371,7 +374,7 @@ func Example_employeePreprocessing() {
 
 	// Output:
 	// === Processing Result ===
-	// Total rows: 4, Valid rows: 3
+	// Total rows: 4, Valid rows: 4
 	//
 	// Employee 1:
 	//   ID:         000042
@@ -421,21 +424,24 @@ func Example_employeePreprocessing() {
 // Example_detailedErrorReporting demonstrates precise error information including
 // row number, column name, and specific validation failure reason.
 func Example_detailedErrorReporting() {
-	// Order represents an order with strict validation rules
+	// Order represents an order with strict validation rules. A comparison
+	// follows the field it lands on: gt, gte and lte compare the number of a
+	// numeric field and the character count of a string one, so the amount,
+	// quantity and price are declared numeric.
 	type Order struct {
-		OrderID    string `name:"order_id" validate:"required,uuid4"`
-		CustomerID string `name:"customer_id" validate:"required,numeric"`
-		Email      string `validate:"required,email"`
-		Amount     string `validate:"required,number,gt=0,lte=10000"`
-		Currency   string `validate:"required,len=3,uppercase"`
-		Country    string `validate:"required,alpha,len=2"`
-		OrderDate  string `name:"order_date" validate:"required,datetime=2006-01-02"`
-		ShipDate   string `name:"ship_date" validate:"datetime=2006-01-02,gtfield=OrderDate"`
-		IPAddress  string `name:"ip_address" validate:"required,ip_addr"`
-		PromoCode  string `name:"promo_code" validate:"alphanumeric"`
-		Quantity   string `validate:"required,numeric,gte=1,lte=100"`
-		UnitPrice  string `name:"unit_price" validate:"required,number,gt=0"`
-		TotalCheck string `name:"total_check" validate:"required,eqfield=Amount"`
+		OrderID    string  `name:"order_id" validate:"required,uuid4"`
+		CustomerID string  `name:"customer_id" validate:"required,numeric"`
+		Email      string  `validate:"required,email"`
+		Amount     float64 `validate:"required,number,gt=0,lte=10000"`
+		Currency   string  `validate:"required,len=3,uppercase"`
+		Country    string  `validate:"required,alpha,len=2"`
+		OrderDate  string  `name:"order_date" validate:"required,datetime=2006-01-02"`
+		ShipDate   string  `name:"ship_date" validate:"datetime=2006-01-02,gtfield=OrderDate"`
+		IPAddress  string  `name:"ip_address" validate:"required,ip_addr"`
+		PromoCode  string  `name:"promo_code" validate:"alphanumeric"`
+		Quantity   int     `validate:"required,numeric,gte=1,lte=100"`
+		UnitPrice  float64 `name:"unit_price" validate:"required,number,gt=0"`
+		TotalCheck string  `name:"total_check" validate:"required,eqfield=Amount"`
 	}
 
 	// CSV with multiple validation errors

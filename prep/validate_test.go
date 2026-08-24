@@ -133,6 +133,9 @@ func TestRequiredValidator(t *testing.T) {
 func TestBooleanValidator(t *testing.T) {
 	t.Parallel()
 
+	// The accepted set is exactly what strconv.ParseBool accepts, which is
+	// also what setFieldValue uses to fill a bool struct field: the validator
+	// and the converter must never disagree about one value.
 	tests := []struct {
 		input   string
 		wantErr bool
@@ -141,9 +144,17 @@ func TestBooleanValidator(t *testing.T) {
 		{"false", false},
 		{"0", false},
 		{"1", false},
+		{"True", false},
+		{"False", false},
+		{"TRUE", false},
+		{"FALSE", false},
+		{"t", false},
+		{"f", false},
+		{"T", false},
+		{"F", false},
 		{"yes", true},
 		{"no", true},
-		{"TRUE", true},
+		{"2", true},
 		{"", true},
 	}
 
@@ -1816,80 +1827,80 @@ func TestValidatorNames(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		createFunc func() Validator
+		createFunc func() validator
 		wantName   string
 	}{
 		// Basic validators
-		{"required", func() Validator { return newRequiredValidator() }, "required"},
-		{"boolean", func() Validator { return newBooleanValidator() }, "boolean"},
-		{"alpha", func() Validator { return newAlphaValidator() }, "alpha"},
-		{"alphaunicode", func() Validator { return newAlphaUnicodeValidator() }, "alphaunicode"},
-		{"alphaspace", func() Validator { return newAlphaSpaceValidator() }, "alphaspace"},
-		{"numeric", func() Validator { return newNumericValidator() }, "numeric"},
-		{"number", func() Validator { return newNumberValidator() }, "number"},
-		{"alphanumeric", func() Validator { return newAlphanumericValidator() }, "alphanumeric"},
-		{"alphanumunicode", func() Validator { return newAlphanumericUnicodeValidator() }, "alphanumunicode"},
+		{"required", func() validator { return newRequiredValidator() }, "required"},
+		{"boolean", func() validator { return newBooleanValidator() }, "boolean"},
+		{"alpha", func() validator { return newAlphaValidator() }, "alpha"},
+		{"alphaunicode", func() validator { return newAlphaUnicodeValidator() }, "alphaunicode"},
+		{"alphaspace", func() validator { return newAlphaSpaceValidator() }, "alphaspace"},
+		{"numeric", func() validator { return newNumericValidator() }, "numeric"},
+		{"number", func() validator { return newNumberValidator() }, "number"},
+		{"alphanumeric", func() validator { return newAlphanumericValidator() }, "alphanumeric"},
+		{"alphanumunicode", func() validator { return newAlphanumericUnicodeValidator() }, "alphanumunicode"},
 
 		// Comparison validators (take float64)
-		{"eq", func() Validator { return newEqualValidator(5.0) }, "eq"},
-		{"ne", func() Validator { return newNotEqualValidator(5.0) }, "ne"},
-		{"gt", func() Validator { return newGreaterThanValidator(5.0) }, "gt"},
-		{"gte", func() Validator { return newGreaterThanEqualValidator(5.0) }, "gte"},
-		{"lt", func() Validator { return newLessThanValidator(5.0) }, "lt"},
-		{"lte", func() Validator { return newLessThanEqualValidator(5.0) }, "lte"},
-		{"min", func() Validator { return newMinValidator(1.0) }, "min"},
-		{"max", func() Validator { return newMaxValidator(10.0) }, "max"},
-		{"len", func() Validator { return newLengthValidator(5) }, "len"},
+		{"eq", func() validator { return newEqualValidator(5.0) }, "eq"},
+		{"ne", func() validator { return newNotEqualValidator(5.0) }, "ne"},
+		{"gt", func() validator { return newGreaterThanValidator(5.0) }, "gt"},
+		{"gte", func() validator { return newGreaterThanEqualValidator(5.0) }, "gte"},
+		{"lt", func() validator { return newLessThanValidator(5.0) }, "lt"},
+		{"lte", func() validator { return newLessThanEqualValidator(5.0) }, "lte"},
+		{"min", func() validator { return newMinValidator(1.0) }, "min"},
+		{"max", func() validator { return newMaxValidator(10.0) }, "max"},
+		{"len", func() validator { return newLengthValidator(5) }, "len"},
 
 		// String validators
-		{"oneof", func() Validator { return newOneOfValidator([]string{"a", "b", "c"}) }, "oneof"},
-		{"lowercase", func() Validator { return newLowercaseValidator() }, "lowercase"},
-		{"uppercase", func() Validator { return newUppercaseValidator() }, "uppercase"},
-		{"ascii", func() Validator { return newASCIIValidator() }, "ascii"},
-		{"printascii", func() Validator { return newPrintASCIIValidator() }, "printascii"},
+		{"oneof", func() validator { return newOneOfValidator([]string{"a", "b", "c"}) }, "oneof"},
+		{"lowercase", func() validator { return newLowercaseValidator() }, "lowercase"},
+		{"uppercase", func() validator { return newUppercaseValidator() }, "uppercase"},
+		{"ascii", func() validator { return newASCIIValidator() }, "ascii"},
+		{"printascii", func() validator { return newPrintASCIIValidator() }, "printascii"},
 
 		// Format validators
-		{"email", func() Validator { return newEmailValidator() }, "email"},
-		{"uri", func() Validator { return newURIValidator() }, "uri"},
-		{"url", func() Validator { return newURLValidator() }, "url"},
-		{"http_url", func() Validator { return newHTTPURLValidator() }, "http_url"},
-		{"https_url", func() Validator { return newHTTPSURLValidator() }, "https_url"},
-		{"url_encoded", func() Validator { return newURLEncodedValidator() }, "url_encoded"},
-		{"datauri", func() Validator { return newDataURIValidator() }, "datauri"},
+		{"email", func() validator { return newEmailValidator() }, "email"},
+		{"uri", func() validator { return newURIValidator() }, "uri"},
+		{"url", func() validator { return newURLValidator() }, "url"},
+		{"http_url", func() validator { return newHTTPURLValidator() }, "http_url"},
+		{"https_url", func() validator { return newHTTPSURLValidator() }, "https_url"},
+		{"url_encoded", func() validator { return newURLEncodedValidator() }, "url_encoded"},
+		{"datauri", func() validator { return newDataURIValidator() }, "datauri"},
 
 		// Network validators
-		{"ip_addr", func() Validator { return newIPAddrValidator() }, "ip_addr"},
-		{"ip4_addr", func() Validator { return newIP4AddrValidator() }, "ip4_addr"},
-		{"ip6_addr", func() Validator { return newIP6AddrValidator() }, "ip6_addr"},
-		{"cidr", func() Validator { return newCIDRValidator() }, "cidr"},
-		{"cidrv4", func() Validator { return newCIDRv4Validator() }, "cidrv4"},
-		{"cidrv6", func() Validator { return newCIDRv6Validator() }, "cidrv6"},
+		{"ip_addr", func() validator { return newIPAddrValidator() }, "ip_addr"},
+		{"ip4_addr", func() validator { return newIP4AddrValidator() }, "ip4_addr"},
+		{"ip6_addr", func() validator { return newIP6AddrValidator() }, "ip6_addr"},
+		{"cidr", func() validator { return newCIDRValidator() }, "cidr"},
+		{"cidrv4", func() validator { return newCIDRv4Validator() }, "cidrv4"},
+		{"cidrv6", func() validator { return newCIDRv6Validator() }, "cidrv6"},
 
 		// Identifier validators
-		{"uuid", func() Validator { return newUUIDValidator() }, "uuid"},
-		{"fqdn", func() Validator { return newFQDNValidator() }, "fqdn"},
-		{"hostname", func() Validator { return newHostnameValidator() }, "hostname"},
-		{"hostname_rfc1123", func() Validator { return newHostnameRFC1123Validator() }, "hostname_rfc1123"},
-		{"hostname_port", func() Validator { return newHostnamePortValidator() }, "hostname_port"},
+		{"uuid", func() validator { return newUUIDValidator() }, "uuid"},
+		{"fqdn", func() validator { return newFQDNValidator() }, "fqdn"},
+		{"hostname", func() validator { return newHostnameValidator() }, "hostname"},
+		{"hostname_rfc1123", func() validator { return newHostnameRFC1123Validator() }, "hostname_rfc1123"},
+		{"hostname_port", func() validator { return newHostnamePortValidator() }, "hostname_port"},
 
 		// String content validators
-		{"startswith", func() Validator { return newStartsWithValidator("pre") }, "startswith"},
-		{"startsnotwith", func() Validator { return newStartsNotWithValidator("pre") }, "startsnotwith"},
-		{"endswith", func() Validator { return newEndsWithValidator("suf") }, "endswith"},
-		{"endsnotwith", func() Validator { return newEndsNotWithValidator("suf") }, "endsnotwith"},
-		{"contains", func() Validator { return newContainsValidator("sub") }, "contains"},
-		{"containsany", func() Validator { return newContainsAnyValidator("abc") }, "containsany"},
-		{"containsrune", func() Validator { return newContainsRuneValidator('a') }, "containsrune"},
+		{"startswith", func() validator { return newStartsWithValidator("pre") }, "startswith"},
+		{"startsnotwith", func() validator { return newStartsNotWithValidator("pre") }, "startsnotwith"},
+		{"endswith", func() validator { return newEndsWithValidator("suf") }, "endswith"},
+		{"endsnotwith", func() validator { return newEndsNotWithValidator("suf") }, "endsnotwith"},
+		{"contains", func() validator { return newContainsValidator("sub") }, "contains"},
+		{"containsany", func() validator { return newContainsAnyValidator("abc") }, "containsany"},
+		{"containsrune", func() validator { return newContainsRuneValidator('a') }, "containsrune"},
 
 		// Exclusion validators
-		{"excludes", func() Validator { return newExcludesValidator("sub") }, "excludes"},
-		{"excludesall", func() Validator { return newExcludesAllValidator("abc") }, "excludesall"},
-		{"excludesrune", func() Validator { return newExcludesRuneValidator('a') }, "excludesrune"},
+		{"excludes", func() validator { return newExcludesValidator("sub") }, "excludes"},
+		{"excludesall", func() validator { return newExcludesAllValidator("abc") }, "excludesall"},
+		{"excludesrune", func() validator { return newExcludesRuneValidator('a') }, "excludesrune"},
 
 		// Misc validators
-		{"multibyte", func() Validator { return newMultibyteValidator() }, "multibyte"},
-		{"eq_ignore_case", func() Validator { return newEqualIgnoreCaseValidator("test") }, "eq_ignore_case"},
-		{"ne_ignore_case", func() Validator { return newNotEqualIgnoreCaseValidator("test") }, "ne_ignore_case"},
+		{"multibyte", func() validator { return newMultibyteValidator() }, "multibyte"},
+		{"eq_ignore_case", func() validator { return newEqualIgnoreCaseValidator("test") }, "eq_ignore_case"},
+		{"ne_ignore_case", func() validator { return newNotEqualIgnoreCaseValidator("test") }, "ne_ignore_case"},
 	}
 
 	for _, tt := range tests {
@@ -2422,5 +2433,114 @@ func TestMACValidator(t *testing.T) {
 
 	if v.Name() != "mac" {
 		t.Errorf("Name() = %q, want %q", v.Name(), "mac")
+	}
+}
+
+// TestLengthComparisonValidators pins the character-count reading every
+// comparison validator takes on a string field, at the boundary on both sides.
+func TestLengthComparisonValidators(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		v       validator
+		input   string
+		wantErr bool
+	}{
+		{"gt=3 passes four runes", &greaterThanValidator{threshold: 3, measuresLength: true}, "abcd", false},
+		{"gt=3 refuses three runes", &greaterThanValidator{threshold: 3, measuresLength: true}, "abc", true},
+		{"gte=3 passes three runes", &greaterThanEqualValidator{threshold: 3, measuresLength: true}, "abc", false},
+		{"gte=3 refuses two runes", &greaterThanEqualValidator{threshold: 3, measuresLength: true}, "ab", true},
+		{"lt=3 passes two runes", &lessThanValidator{threshold: 3, measuresLength: true}, "ab", false},
+		{"lt=3 refuses three runes", &lessThanValidator{threshold: 3, measuresLength: true}, "abc", true},
+		{"lte=3 passes three runes", &lessThanEqualValidator{threshold: 3, measuresLength: true}, "abc", false},
+		{"lte=3 refuses four runes", &lessThanEqualValidator{threshold: 3, measuresLength: true}, "abcd", true},
+		{"gte=3 counts runes, not bytes", &greaterThanEqualValidator{threshold: 3, measuresLength: true}, "日本語", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			msg := tt.v.Validate(tt.input)
+			if (msg != "") != tt.wantErr {
+				t.Errorf("Validate(%q) = %q, wantErr %v", tt.input, msg, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestSentinelValidatorsAnswerDirectly covers the two validators whose Validate
+// never runs through the pipeline: omitempty is a marker, and an unspecialized
+// eq must fail loudly rather than validate nothing.
+func TestSentinelValidatorsAnswerDirectly(t *testing.T) {
+	t.Parallel()
+
+	if msg := (&omitemptyValidator{}).Validate("anything"); msg != "" {
+		t.Errorf("omitempty.Validate() = %q, want no message", msg)
+	}
+	pending := &pendingEqualityValidator{tag: equalTagValue, param: "x"}
+	if msg := pending.Validate("x"); msg == "" {
+		t.Error("an unspecialized eq must report itself instead of validating nothing")
+	}
+}
+
+// TestAnEmptyValueSkipsEveryValidatorExceptRequired pins the one empty-cell
+// rule for the whole registry: an empty value passes every validator except
+// required, and a caller who needs both presence and format writes required
+// alongside the format tag. Walking validatorRegistry keeps a future validator
+// from joining the wrong side unnoticed.
+func TestAnEmptyValueSkipsEveryValidatorExceptRequired(t *testing.T) {
+	t.Parallel()
+
+	// Parameters for the tags that need one; every other tag builds bare.
+	params := map[string]string{
+		equalTagValue:              "1",
+		notEqualTagValue:           "1",
+		greaterThanTagValue:        "1",
+		greaterThanEqualTagValue:   "1",
+		lessThanTagValue:           "1",
+		lessThanEqualTagValue:      "1",
+		minTagValue:                "1",
+		maxTagValue:                "1",
+		lengthTagValue:             "1",
+		oneOfTagValue:              "a b",
+		startsWithTagValue:         "a",
+		startsNotWithTagValue:      "a",
+		endsWithTagValue:           "a",
+		endsNotWithTagValue:        "a",
+		containsTagValue:           "a",
+		containsAnyTagValue:        "ab",
+		containsRuneTagValue:       "a",
+		excludesTagValue:           "a",
+		excludesAllTagValue:        "ab",
+		excludesRuneTagValue:       "a",
+		equalIgnoreCaseTagValue:    "a",
+		notEqualIgnoreCaseTagValue: "a",
+		datetimeTagValue:           "2006-01-02",
+	}
+
+	for tag, builder := range validatorRegistry {
+		t.Run(tag, func(t *testing.T) {
+			t.Parallel()
+
+			v, err := builder(params[tag], true)
+			if err != nil {
+				t.Fatalf("builder(%q) error = %v", params[tag], err)
+			}
+			if v == nil {
+				t.Fatalf("builder(%q) returned no validator", params[tag])
+			}
+
+			gotTag, msg := validators{v}.Validate("")
+			if tag == requiredTagValue {
+				if msg == "" {
+					t.Error("required must reject an empty value")
+				}
+				return
+			}
+			if msg != "" {
+				t.Errorf("an empty value must pass %q, got tag=%q msg=%q", tag, gotTag, msg)
+			}
+		})
 	}
 }
