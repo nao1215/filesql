@@ -19,7 +19,8 @@
 //   - Anything else is passed through unchanged and left to SQLite to accept or
 //     reject.
 //
-// Function gaps (NOW, DATE_FORMAT, TO_CHAR, SPLIT_PART, SAFE_DIVIDE, ...) are
+// Function gaps (NOW, DATE_FORMAT, TO_CHAR, SPLIT_PART, SAFE_DIVIDE, DIV,
+// WIDTH_BUCKET, ...) are
 // filled by user-defined functions registered into the SQLite driver via
 // RegisterFunctions rather than by rewriting the SQL.
 //
