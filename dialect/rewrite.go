@@ -23,6 +23,7 @@ const (
 	fnNameRound     = "ROUND"
 	fnNameSubstring = "SUBSTRING"
 	fnNameSubstr    = "SUBSTR"
+	fnNameMod       = "MOD"
 )
 
 // callRecurser rewrites a slice of argument tokens with a dialect's call pass so

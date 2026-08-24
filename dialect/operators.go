@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"unicode"
@@ -20,6 +21,9 @@ import (
 //   - "/" is integer division in SQLite when both operands are integers, but
 //     floating-point division in MySQL and GoogleSQL. An average or a ratio came
 //     out truncated.
+//   - A zero divisor answers NULL in SQLite and in MySQL, and raises in
+//     PostgreSQL and GoogleSQL. The NULL reads as missing data rather than as
+//     arithmetic the engine refused, so it survives into a report.
 //   - LIKE folds ASCII case in SQLite. It is case-sensitive in PostgreSQL and
 //     GoogleSQL, so a filter matched rows it should not have, and PostgreSQL's
 //     ILIKE became indistinguishable from LIKE.
@@ -51,6 +55,132 @@ func divideFloat(raiseOnZero bool) scalarFn {
 		}
 		return a / b, nil
 	}
+}
+
+// divideSQLite implements the "/" operator for a dialect that divides the way
+// SQLite does — two integers give an integer — but raises on a zero divisor
+// where SQLite answers NULL. PostgreSQL is that dialect: 7 / 2 is 3 in both,
+// and 7 / 0 stops the query in PostgreSQL.
+//
+// Both operands are read the way SQLite reads them, so only the zero divisor
+// moves: a pair of integers divides as integers, anything else as floats, and
+// text takes the number it spells, which is why "'7' / 2" is 3 rather than 3.5.
+// A NULL operand is nothing to divide with and stays NULL.
+func divideSQLite(args []driver.Value) (driver.Value, error) {
+	a, aok := sqliteOperand(args[0])
+	b, bok := sqliteOperand(args[1])
+	if !aok || !bok {
+		return nil, nil
+	}
+	if a.isInt && b.isInt {
+		if b.i == 0 {
+			return nil, ErrDivideByZero
+		}
+		return a.i / b.i, nil
+	}
+	if b.float() == 0 {
+		return nil, ErrDivideByZero
+	}
+	return a.float() / b.float(), nil
+}
+
+// moduloRaising implements "%" and mod() for a dialect that raises on a zero
+// divisor. SQLite answers NULL there, which reads as missing data rather than
+// as arithmetic the engine refused.
+//
+// SQLite's "%" is integer modulo whatever the operands look like — 7.5 % 2 is
+// 1, where PostgreSQL itself answers 1.5 — and this keeps SQLite's answer
+// rather than the dialect's, so a query that ran before this helper existed
+// keeps the number it had and only the zero divisor moves. Making the whole
+// operator follow PostgreSQL is a larger change than a zero divisor needs.
+func moduloRaising(args []driver.Value) (driver.Value, error) {
+	a, aok := sqliteOperand(args[0])
+	b, bok := sqliteOperand(args[1])
+	if !aok || !bok {
+		return nil, nil
+	}
+	if b.integer() == 0 {
+		return nil, ErrDivideByZero
+	}
+	remainder := a.integer() % b.integer()
+	// SQLite hands back a real when either operand is one, even though the
+	// arithmetic was integer, and the storage class follows the value into the
+	// column it lands in.
+	if !a.isInt || !b.isInt {
+		return float64(remainder), nil
+	}
+	return remainder, nil
+}
+
+// numOperand is one arithmetic operand as SQLite reads it: an integer, or a
+// float when it is not one.
+type numOperand struct {
+	isInt bool
+	i     int64
+	f     float64
+}
+
+func (n numOperand) float() float64 {
+	if n.isInt {
+		return float64(n.i)
+	}
+	return n.f
+}
+
+// integer is the operand as SQLite's "%" takes it, truncating toward zero and
+// stopping at the ends of the int64 range. The clamp is the whole reason this
+// is not a bare conversion: Go leaves int64(1e300) to the implementation, which
+// on amd64 is the most negative int64, so "1e300 % 7" answered -1 where SQLite
+// answers the 0 that clamping to the largest int64 gives.
+func (n numOperand) integer() int64 {
+	if n.isInt {
+		return n.i
+	}
+	switch {
+	case math.IsNaN(n.f):
+		return 0
+	case n.f >= math.MaxInt64:
+		return math.MaxInt64
+	case n.f <= math.MinInt64:
+		return math.MinInt64
+	default:
+		return int64(n.f)
+	}
+}
+
+// sqliteOperand applies the numeric affinity SQLite applies to an arithmetic
+// operand, so a helper standing in for an operator computes what the operator
+// computed: an integer stays one, a float stays one, and text takes the number
+// it spells — zero when it spells none, which is why "'abc' / 2" is 0 rather
+// than an error. NULL is nothing to compute with and reports false, which is
+// how the operator's NULL propagation is kept.
+func sqliteOperand(v driver.Value) (numOperand, bool) {
+	switch x := v.(type) {
+	case nil:
+		return numOperand{}, false
+	case int64:
+		return numOperand{isInt: true, i: x}, true
+	case float64:
+		return numOperand{f: x}, true
+	case string:
+		return textOperand(x), true
+	case []byte:
+		return textOperand(string(x)), true
+	default:
+		return numOperand{}, false
+	}
+}
+
+// textOperand is the number a text operand spells, or zero.
+func textOperand(s string) numOperand {
+	s = strings.TrimSpace(s)
+	if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return numOperand{isInt: true, i: i}
+	}
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return numOperand{f: f}
+	}
+	return numOperand{isInt: true}
 }
 
 // likeEscape is the character that makes the next one literal in a LIKE

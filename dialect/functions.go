@@ -190,8 +190,11 @@ func registerAll() error {
 		"overlay":             {-1, fnOverlay},
 		"strict_concat":       {-1, fnStrictConcat},
 		"postgresql_cast":     {2, dialectCast(PostgreSQL, false)},
+		"postgresql_divide":   {2, divideSQLite},
+		"postgresql_mod":      {2, moduloRaising},
 		"googlesql_cast":      {2, dialectCast(GoogleSQL, false)},
 		"googlesql_divide":    {2, divideFloat(true)},
+		"googlesql_mod":       {2, moduloRaising},
 		"googlesql_safe_cast": {2, dialectCast(GoogleSQL, true)},
 
 		// PostgreSQL helpers.
