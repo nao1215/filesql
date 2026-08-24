@@ -712,6 +712,12 @@ func (b *DBBuilder) LoadInto(ctx context.Context, db *sql.DB) error {
 // replacement and empty-table creation, to be one atomic operation.
 // Write-back metadata for ACH and Fedwire files is written inside tx, so a
 // rollback discards it along with the tables it describes.
+//
+// Each input loads under a savepoint, so an input that fails partway is rolled
+// back to where it began: the table it was replacing stands as it was, and
+// nothing of the failed input remains. Begin tx with a context of its own to
+// keep it usable after such a failure, since canceling the context it was begun
+// with ends the whole transaction.
 func (b *DBBuilder) LoadIntoTx(ctx context.Context, tx *sql.Tx) error {
 	if tx == nil {
 		return fmt.Errorf("%w: target transaction is nil", ErrDatabaseOperation)
