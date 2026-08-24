@@ -49,7 +49,7 @@ func TestUDFExecution(t *testing.T) {
 		{"if null cond", `SELECT IF(NULL, 'yes', 'no')`, "no"},
 		{"date_format", `SELECT DATE_FORMAT('2026-07-28 13:05:09', '%Y/%m/%d %H:%i')`, "2026/07/28 13:05"},
 		{"date_format month name", `SELECT DATE_FORMAT('2026-07-28', '%M %e, %Y')`, "July 28, 2026"},
-		{"str_to_date", `SELECT STR_TO_DATE('2026-07-28', '%Y-%m-%d')`, "2026-07-28 00:00:00"},
+		{"str_to_date", `SELECT STR_TO_DATE('2026-07-28', '%Y-%m-%d')`, "2026-07-28"},
 		{"datediff", `SELECT DATEDIFF('2026-07-28', '2026-07-25')`, "3"},
 		{"date_part year", `SELECT DATE_PART('year', '2026-07-28')`, "2026"},
 		{"year", `SELECT YEAR('2026-07-28')`, "2026"},
@@ -457,7 +457,6 @@ func TestEdgeCaseUDFs(t *testing.T) {
 		{`SELECT ASCII('あ')`, "12354"},
 		{`SELECT CHR(12354)`, "あ"},
 		{`SELECT LAST_DAY('2026-12-31')`, "2026-12-31"},
-		{`SELECT FROM_UNIXTIME(-1)`, "1969-12-31 23:59:59"},
 		{`SELECT SAFE_ADD(1.5, 2.0)`, "3.5"},
 		{`SELECT SAFE_NEGATE(1.5)`, "-1.5"},
 		{`SELECT REGEXP_REPLACE('a1b2', '[0-9]', 'X', '')`, "aXb2"}, // no "g": first match only
@@ -1354,6 +1353,106 @@ func TestWeekNumberingFollowsEachDialect(t *testing.T) {
 				t.Fatalf("%s: %v", tt.query, err)
 			}
 			if got.String != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
+
+// TestMySQLDateFunctionsFollowMySQL pins TIMESTAMPDIFF, FROM_UNIXTIME, TIMEDIFF
+// and STR_TO_DATE against MySQL 8.4. TIMESTAMPDIFF counts complete units, not
+// the calendar boundaries BigQuery's DATE_DIFF counts, so the GoogleSQL rows
+// stand guard beside the MySQL ones: a MySQL fix that moved the shared helper
+// would fail them. FROM_UNIXTIME is NULL outside MySQL's documented range,
+// TIMEDIFF answers in MySQL's TIME shape with its ±838:59:59 clamp, and
+// STR_TO_DATE's shape follows the format's specifiers, refusing an incomplete
+// date. Every want was read from mysql:8.4 or goccy/bigquery-emulator.
+func TestMySQLDateFunctionsFollowMySQL(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name     string
+		dialect  Dialect
+		query    string
+		want     string
+		wantNull bool
+	}{
+		// TIMESTAMPDIFF: a span short of a complete unit counts zero.
+		{name: "timestampdiff day short of 24 hours", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(DAY, '2024-01-01 23:00:00', '2024-01-02 22:00:00')`, want: "0"},
+		{name: "timestampdiff week short of 7 days", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(WEEK, '2024-01-01 23:00:00', '2024-01-08 22:00:00')`, want: "0"},
+		{name: "timestampdiff month to a shorter month's end", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(MONTH, '2024-01-31', '2024-02-29')`, want: "0"},
+		{name: "timestampdiff month one day short", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(MONTH, '2024-01-15', '2024-03-14')`, want: "1"},
+		{name: "timestampdiff month backward truncates toward zero", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(MONTH, '2024-02-29', '2024-01-31')`, want: "0"},
+		{name: "timestampdiff quarter one day short", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(QUARTER, '2024-01-31', '2024-04-30')`, want: "0"},
+		{name: "timestampdiff year one day short", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(YEAR, '2020-06-15', '2024-06-14')`, want: "3"},
+		{name: "timestampdiff year from a leap day", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(YEAR, '2024-02-29', '2028-02-28')`, want: "3"},
+		{name: "timestampdiff hour short of an hour", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(HOUR, '2024-01-01 00:30:00', '2024-01-01 01:29:00')`, want: "0"},
+		{name: "timestampdiff whole day", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(DAY, '2024-01-01', '2024-01-02')`, want: "1"},
+		{name: "timestampdiff backward whole days", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(DAY, '2026-01-10', '2026-01-01')`, want: "-9"},
+		{name: "timestampdiff month decided by the time of day", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(MONTH, '2024-01-15 10:00:00', '2024-02-15 09:00:00')`, want: "0"},
+		{name: "timestampdiff month completed by the time of day", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(MONTH, '2024-01-15 10:00:00', '2024-02-15 11:00:00')`, want: "1"},
+		{name: "timestampdiff seconds", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(SECOND, '2024-01-01 00:00:00', '2024-01-01 00:01:30')`, want: "90"},
+		{name: "timestampdiff minute short of a minute", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(MINUTE, '2024-01-01 00:00:59', '2024-01-01 00:01:58')`, want: "0"},
+		// MySQL's DATETIME range spans nine millennia, past what a
+		// time.Duration can hold.
+		{name: "timestampdiff day across nine millennia", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(DAY, '1000-01-01', '9999-12-31')`, want: "3287181"},
+		{name: "timestampdiff second across nine millennia", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(SECOND, '1000-01-01', '9999-12-31')`, want: "284012438400"},
+		{name: "timestampdiff year across nine millennia", dialect: MySQL, query: `SELECT TIMESTAMPDIFF(YEAR, '1000-01-01', '9999-12-31')`, want: "8999"},
+
+		// BigQuery counts boundaries for the same spans; these rows keep the
+		// shared helper where it is.
+		{name: "googlesql date_diff month counts the boundary", dialect: GoogleSQL, query: `SELECT DATE_DIFF(DATE '2024-02-29', DATE '2024-01-31', MONTH)`, want: "1"},
+		{name: "googlesql timestamp_diff day counts the boundary", dialect: GoogleSQL, query: `SELECT TIMESTAMP_DIFF(TIMESTAMP '2024-01-02 22:00:00', TIMESTAMP '2024-01-01 23:00:00', DAY)`, want: "1"},
+		{name: "googlesql timestamp_diff hour is a whole interval", dialect: GoogleSQL, query: `SELECT TIMESTAMP_DIFF(TIMESTAMP '2024-01-01 01:29:00', TIMESTAMP '2024-01-01 00:30:00', HOUR)`, want: "0"},
+
+		// FROM_UNIXTIME: NULL outside 0..32536771199.
+		{name: "from_unixtime refuses a negative epoch", dialect: MySQL, query: `SELECT FROM_UNIXTIME(-1)`, wantNull: true},
+		{name: "from_unixtime at zero", dialect: MySQL, query: `SELECT FROM_UNIXTIME(0)`, want: "1970-01-01 00:00:00"},
+		{name: "from_unixtime at the ceiling", dialect: MySQL, query: `SELECT FROM_UNIXTIME(32536771199)`, want: "3001-01-18 23:59:59"},
+		{name: "from_unixtime past the ceiling", dialect: MySQL, query: `SELECT FROM_UNIXTIME(32536771200)`, wantNull: true},
+		{name: "from_unixtime with a format refuses the same range", dialect: MySQL, query: `SELECT FROM_UNIXTIME(-1, '%Y')`, wantNull: true},
+		{name: "from_unixtime with a format inside the range", dialect: MySQL, query: `SELECT FROM_UNIXTIME(1, '%Y')`, want: "1970"},
+
+		// TIMEDIFF: MySQL's TIME shape, hours past 24, the ±838:59:59 clamp.
+		{name: "timediff within a day", dialect: MySQL, query: `SELECT TIMEDIFF('2024-01-02 01:30:00', '2024-01-02 00:00:00')`, want: "01:30:00"},
+		{name: "timediff crosses a day", dialect: MySQL, query: `SELECT TIMEDIFF('2024-01-02 01:30:00', '2024-01-01 00:00:00')`, want: "25:30:00"},
+		{name: "timediff negative", dialect: MySQL, query: `SELECT TIMEDIFF('2024-01-01 00:00:00', '2024-01-02 01:30:00')`, want: "-25:30:00"},
+		{name: "timediff clamps high", dialect: MySQL, query: `SELECT TIMEDIFF('2024-03-01 00:00:00', '2024-01-01 00:00:00')`, want: "838:59:59"},
+		{name: "timediff clamps low", dialect: MySQL, query: `SELECT TIMEDIFF('2024-01-01 00:00:00', '2024-03-01 00:00:00')`, want: "-838:59:59"},
+		{name: "timediff of two times", dialect: MySQL, query: `SELECT TIMEDIFF('13:05:09', '01:05:09')`, want: "12:00:00"},
+		{name: "timediff keeps a fraction", dialect: MySQL, query: `SELECT TIMEDIFF('00:00:01.500000', '00:00:00')`, want: "00:00:01.500000"},
+		// A bare TIME's hours pass 23 and carry a sign, which no calendar
+		// layout reads.
+		{name: "timediff of a time past 24 hours", dialect: MySQL, query: `SELECT TIMEDIFF('25:00:00', '00:00:00')`, want: "25:00:00"},
+		{name: "timediff of a negative time", dialect: MySQL, query: `SELECT TIMEDIFF('-01:00:00', '00:00:00')`, want: "-01:00:00"},
+		{name: "timediff of a negative time and a positive one", dialect: MySQL, query: `SELECT TIMEDIFF('-01:00:00', '01:30:00')`, want: "-02:30:00"},
+		{name: "timediff of single-digit hours", dialect: MySQL, query: `SELECT TIMEDIFF('8:00:00', '0:30:00')`, want: "07:30:00"},
+		{name: "timediff clamps each argument first", dialect: MySQL, query: `SELECT TIMEDIFF('2000:00:00', '1000:00:00')`, want: "00:00:00"},
+		{name: "timediff refuses mixed shapes", dialect: MySQL, query: `SELECT TIMEDIFF('2024-01-01 00:00:00', '01:00:00')`, wantNull: true},
+		{name: "timediff of null", dialect: MySQL, query: `SELECT TIMEDIFF(NULL, '01:00:00')`, wantNull: true},
+		{name: "timediff of a malformed value", dialect: MySQL, query: `SELECT TIMEDIFF('not-a-time', '01:00:00')`, wantNull: true},
+
+		// STR_TO_DATE: the shape follows the format's specifiers.
+		{name: "str_to_date date only", dialect: MySQL, query: `SELECT STR_TO_DATE('2024-02-29', '%Y-%m-%d')`, want: "2024-02-29"},
+		{name: "str_to_date time only", dialect: MySQL, query: `SELECT STR_TO_DATE('13:05:09', '%T')`, want: "13:05:09"},
+		{name: "str_to_date datetime", dialect: MySQL, query: `SELECT STR_TO_DATE('2024-02-29 13:05:09', '%Y-%m-%d %H:%i:%s')`, want: "2024-02-29 13:05:09"},
+		{name: "str_to_date hour only stays a time", dialect: MySQL, query: `SELECT STR_TO_DATE('07', '%H')`, want: "07:00:00"},
+		{name: "str_to_date refuses a year alone", dialect: MySQL, query: `SELECT STR_TO_DATE('2024', '%Y')`, wantNull: true},
+		{name: "str_to_date refuses a date without a day", dialect: MySQL, query: `SELECT STR_TO_DATE('2024-02', '%Y-%m')`, wantNull: true},
+		{name: "str_to_date refuses a weekday alone", dialect: MySQL, query: `SELECT STR_TO_DATE('Monday', '%W')`, wantNull: true},
+		{name: "str_to_date without a specifier is null", dialect: MySQL, query: `SELECT STR_TO_DATE('x', 'x')`, wantNull: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, tt.dialect, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.Valid == tt.wantNull {
+				t.Fatalf("%s returned valid=%v (%q), want null=%v", tt.query, got.Valid, got.String, tt.wantNull)
+			}
+			if !tt.wantNull && got.String != tt.want {
 				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
 			}
 		})

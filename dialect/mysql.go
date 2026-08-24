@@ -161,6 +161,11 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		return rewriteGroupConcat(tokens, nameIdx, open, closeIdx)
 	case "TIMESTAMPDIFF":
 		return rewriteTimestampDiff(tokens, open, closeIdx, mysqlCallPass)
+	case "TIMEDIFF":
+		// SQLite has its own timediff() since 3.43, which answers in SQLite's
+		// interval spelling; MySQL's answers a TIME. Renamed so the call cannot
+		// fall through to SQLite's.
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_timediff", mysqlCallPass)
 	case "TIMESTAMPADD":
 		return rewriteTimestampAdd(tokens, open, closeIdx, mysqlCallPass)
 	case "POSITION":

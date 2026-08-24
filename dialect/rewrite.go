@@ -700,15 +700,16 @@ func rewriteTruncCall(tokens []token, open, closeIdx int, recurse callRecurser) 
 }
 
 // rewriteTimestampDiff implements MySQL TIMESTAMPDIFF(unit, start, end) ->
-// DATE_DIFF(end, start, 'unit'). MySQL counts forward from start, the reverse of
-// DATE_DIFF's argument order.
+// mysql_date_diff(end, start, 'unit'). MySQL counts forward from start, the
+// reverse of the helper's argument order, and counts complete units where
+// BigQuery's DATE_DIFF counts boundaries, so the helper is MySQL's own.
 func rewriteTimestampDiff(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
 	unit, args, ok, err := unitFirstCallArgs(tokens, open, closeIdx, 3, recurse)
 	if !ok || err != nil {
 		return nil, false, err
 	}
 	repl := make([]token, 0, len(args[0])+len(args[1])+8)
-	repl = append(repl, wordToken("DATE_DIFF"), opToken("("))
+	repl = append(repl, wordToken("mysql_date_diff"), opToken("("))
 	repl = append(repl, args[1]...)
 	repl = append(repl, opToken(","), spaceToken())
 	repl = append(repl, args[0]...)
