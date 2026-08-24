@@ -686,6 +686,49 @@ func TestOneOfValidator(t *testing.T) {
 	}
 }
 
+func TestOneOfValidator_QuotedValues(t *testing.T) {
+	t.Parallel()
+
+	// The oneof parameter follows the go-playground dialect: a single-quoted
+	// run is one allowed value with its spaces intact, and the quotes are not
+	// part of the value. The validator is built through the tag parser so the
+	// parameter splitting is under test, not newOneOfValidator directly.
+	tests := []struct {
+		name    string
+		tag     string
+		input   string
+		wantErr bool
+	}{
+		{"quoted multi-word value passes", "oneof='red green' blue", "red green", false},
+		{"bare value beside a quoted one passes", "oneof='red green' blue", "blue", false},
+		{"a word from inside a quoted value fails", "oneof='red green' blue", "red", true},
+		{"the trailing quoted word fails alone", "oneof='red green' blue", "green", true},
+		{"the quote is not part of the value", "oneof='red green' blue", "'red", true},
+		{"first of three quoted cities passes", "oneof='New York' 'Los Angeles' Boston", "New York", false},
+		{"second of three quoted cities passes", "oneof='New York' 'Los Angeles' Boston", "Los Angeles", false},
+		{"bare city passes", "oneof='New York' 'Los Angeles' Boston", "Boston", false},
+		{"inner word of a quoted city fails", "oneof='New York' 'Los Angeles' Boston", "York", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			vals, _, err := parseValidateTag(tt.tag, false)
+			if err != nil {
+				t.Fatalf("parseValidateTag(%q) error = %v", tt.tag, err)
+			}
+			if len(vals) != 1 {
+				t.Fatalf("parseValidateTag(%q) produced %d validators, want 1", tt.tag, len(vals))
+			}
+			msg := vals[0].Validate(tt.input)
+			hasErr := msg != ""
+			if hasErr != tt.wantErr {
+				t.Errorf("Validate(%q) under %q error = %v, wantErr %v", tt.input, tt.tag, msg, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestOneOfValidator_ErrorMessagePreservesOrder(t *testing.T) {
 	t.Parallel()
 
