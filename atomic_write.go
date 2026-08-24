@@ -33,7 +33,7 @@ const defaultOutputFileMode os.FileMode = 0o644
 // The temporary file is created in dest's directory so the rename stays within
 // one filesystem, where it is atomic. An existing dest keeps its permissions; a
 // new file is created 0644.
-func writeFileAtomically(dest string, write func(io.Writer) error) error {
+func writeFileAtomically(dest string, write func(io.Writer) error) (err error) {
 	dir := filepath.Dir(dest)
 	tmp, err := createTempBeside(dir, filepath.Base(dest), stagedSuffix)
 	if err != nil {
