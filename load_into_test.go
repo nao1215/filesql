@@ -598,11 +598,11 @@ func TestLoadIntoTx_FailedInputLeavesCallersTable(t *testing.T) {
 	}
 }
 
-// TestLoadIntoTx_CancelledLoadLeavesCallersTable is the cancellation half of the
+// TestLoadIntoTx_CanceledLoadLeavesCallersTable is the cancellation half of the
 // same guarantee. The caller's transaction is not built on the context the load
-// runs under, so cancelling the load leaves the transaction alive, and undoing
+// runs under, so canceling the load leaves the transaction alive, and undoing
 // the input has to happen even though the context that failed it is done.
-func TestLoadIntoTx_CancelledLoadLeavesCallersTable(t *testing.T) {
+func TestLoadIntoTx_CanceledLoadLeavesCallersTable(t *testing.T) {
 	t.Parallel()
 
 	var body strings.Builder
@@ -634,15 +634,15 @@ func TestLoadIntoTx_CancelledLoadLeavesCallersTable(t *testing.T) {
 
 	var kept string
 	require.NoError(t, tx.QueryRowContext(context.Background(), `SELECT old FROM tbl LIMIT 1`).Scan(&kept),
-		"a cancelled load must leave the caller's table and transaction as they were")
+		"a canceled load must leave the caller's table and transaction as they were")
 	assert.Equal(t, "keep-me", kept)
 }
 
-// TestLoadIntoTx_CancelledContextTheTransactionWasBuiltOn is the other half of
+// TestLoadIntoTx_CanceledContextTheTransactionWasBuiltOn is the other half of
 // cancellation: when the caller's transaction is built on the context the load
 // runs under, the load reports the cancellation. What becomes of the
 // transaction is database/sql's to decide, and it ends it.
-func TestLoadIntoTx_CancelledContextTheTransactionWasBuiltOn(t *testing.T) {
+func TestLoadIntoTx_CanceledContextTheTransactionWasBuiltOn(t *testing.T) {
 	t.Parallel()
 
 	var body strings.Builder

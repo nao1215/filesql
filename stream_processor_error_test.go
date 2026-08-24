@@ -314,7 +314,7 @@ func TestRunInputScope_CallerTransaction(t *testing.T) {
 }
 
 // TestUndoInput_TransactionAlreadyEnded covers the undo of an input whose
-// transaction is already gone, which is what a load cancelled through the
+// transaction is already gone, which is what a load canceled through the
 // context the caller's transaction was built on finds: database/sql has rolled
 // the whole transaction back, taking the savepoint with it, and that is the undo
 // having happened rather than a failure to report.
