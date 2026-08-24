@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nao1215/filesql/internal/infer"
 	"github.com/nao1215/filesql/internal/reader"
 	"github.com/nao1215/filesql/parser"
 	"github.com/parquet-go/parquet-go"
@@ -858,6 +859,7 @@ const (
 // declared type at all.
 func parquetColumnKind(rows [][]any, col int, declaredType string) parquetKind {
 	kind := parquetKind(-1)
+	lossy := false // an int64 in this column that float64 cannot carry back
 	for _, row := range rows {
 		// A blank cell says nothing about the column's type. SQLite stores a
 		// blank in a numeric column as the empty string, since "" has no numeric
@@ -867,9 +869,10 @@ func parquetColumnKind(rows [][]any, col int, declaredType string) parquetKind {
 			continue
 		}
 		var cell parquetKind
-		switch row[col].(type) {
+		switch v := row[col].(type) {
 		case int64:
 			cell = parquetInt
+			lossy = lossy || !infer.Int64SurvivesFloat64(v)
 		case float64:
 			cell = parquetFloat
 		default:
@@ -879,10 +882,16 @@ func parquetColumnKind(rows [][]any, col int, declaredType string) parquetKind {
 		case kind < 0:
 			kind = cell
 		case kind != cell:
-			// int64 and float64 in one column widen to float64, which holds both
-			// without changing how the column compares.
+			// int64 and float64 in one column widen to float64, which holds
+			// both while every integer survives a float64 round-trip; one that
+			// does not makes the column STRING below, the answer a
+			// number-beside-text column already gets, because a dump has to
+			// carry back the value and DOUBLE would write a different number.
 			kind = parquetFloat
 		}
+	}
+	if kind == parquetFloat && lossy {
+		return parquetString
 	}
 	if kind >= 0 {
 		return kind
