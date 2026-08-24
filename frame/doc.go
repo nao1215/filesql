@@ -77,7 +77,8 @@
 // past the range of int64, which has no exact numeric form. Those stay distinct
 // through Distinct and Join.
 //
-// Equal quantities are the only values that are one value. A number and the
+// Equal quantities are the only values that are one value, and the sign of a
+// zero is not part of the quantity, so -0.0 and 0.0 are one. A number and the
 // text that spells it are two, a missing value is not the text nil formats as,
 // and a value carrying any byte at all is only ever compared against another
 // value in the same column. Distinct, GroupBy and Join all read equality this
