@@ -1,73 +1,42 @@
 //go:build ignore
 
+// Generates products.parquet, the Parquet fixture the tests read. The
+// committed fixture is not regenerated on every run — a new writer writes
+// different bytes for the same rows — so run this only when the fixture's
+// contents have to change, and expect the byte-level tests that pin damage
+// offsets to need new offsets afterwards.
 package main
 
 import (
 	"log"
 	"os"
 
-	"github.com/apache/arrow/go/v18/arrow"
-	"github.com/apache/arrow/go/v18/arrow/array"
-	"github.com/apache/arrow/go/v18/arrow/memory"
-	"github.com/apache/arrow/go/v18/parquet"
-	"github.com/apache/arrow/go/v18/parquet/pqarrow"
+	"github.com/parquet-go/parquet-go"
 )
 
 func main() {
-	// Define schema
-	schema := arrow.NewSchema(
-		[]arrow.Field{
-			{Name: "id", Type: arrow.PrimitiveTypes.Int64},
-			{Name: "name", Type: arrow.BinaryTypes.String},
-			{Name: "price", Type: arrow.PrimitiveTypes.Float64},
-		},
-		nil,
-	)
+	type product struct {
+		ID    int64   `parquet:"id"`
+		Name  string  `parquet:"name"`
+		Price float64 `parquet:"price"`
+	}
 
-	// Create record batch
-	pool := memory.NewGoAllocator()
-
-	idBuilder := array.NewInt64Builder(pool)
-	defer idBuilder.Release()
-	idBuilder.AppendValues([]int64{1, 2, 3}, nil)
-
-	nameBuilder := array.NewStringBuilder(pool)
-	defer nameBuilder.Release()
-	nameBuilder.AppendValues([]string{"Laptop", "Mouse", "Keyboard"}, nil)
-
-	priceBuilder := array.NewFloat64Builder(pool)
-	defer priceBuilder.Release()
-	priceBuilder.AppendValues([]float64{999.99, 29.99, 79.99}, nil)
-
-	// Build arrays
-	idArr := idBuilder.NewArray()
-	defer idArr.Release()
-	nameArr := nameBuilder.NewArray()
-	defer nameArr.Release()
-	priceArr := priceBuilder.NewArray()
-	defer priceArr.Release()
-
-	// Create record batch
-	record := array.NewRecord(schema, []arrow.Array{idArr, nameArr, priceArr}, 3)
-	defer record.Release()
-
-	// Create table from record
-	table := array.NewTableFromRecords(schema, []arrow.Record{record})
-	defer table.Release()
-
-	// Write to parquet file
 	f, err := os.Create("products.parquet")
 	if err != nil {
 		log.Fatalf("failed to create file: %v", err)
 	}
 	defer f.Close()
 
-	props := parquet.NewWriterProperties()
-	arrProps := pqarrow.DefaultWriterProps()
-
-	err = pqarrow.WriteTable(table, f, 1024, props, arrProps)
-	if err != nil {
+	w := parquet.NewGenericWriter[product](f)
+	if _, err := w.Write([]product{
+		{ID: 1, Name: "Laptop", Price: 999.99},
+		{ID: 2, Name: "Mouse", Price: 29.99},
+		{ID: 3, Name: "Keyboard", Price: 79.99},
+	}); err != nil {
 		log.Fatalf("failed to write parquet: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		log.Fatalf("failed to close parquet writer: %v", err)
 	}
 
 	log.Println("Created products.parquet")

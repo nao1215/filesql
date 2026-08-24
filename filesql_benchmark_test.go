@@ -157,6 +157,24 @@ func BenchmarkOpenParquet(b *testing.B) {
 	}
 }
 
+// BenchmarkDumpParquet measures the Parquet write path: the 100,000-row
+// benchmark table dumped as one Parquet file per iteration.
+func BenchmarkDumpParquet(b *testing.B) {
+	db, err := OpenContext(context.Background(), filepath.Join("testdata", "benchmark", "customers100000.csv"))
+	if err != nil {
+		b.Fatalf("OpenContext failed: %v", err)
+	}
+	defer db.Close()
+	dir := b.TempDir()
+
+	b.ResetTimer()
+	for b.Loop() {
+		if err := DumpDatabase(db, dir, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
+			b.Fatalf("DumpDatabase failed: %v", err)
+		}
+	}
+}
+
 // writeBenchmarkParquet converts the benchmark CSV into a Parquet file at path.
 func writeBenchmarkParquet(b *testing.B, path string) {
 	b.Helper()

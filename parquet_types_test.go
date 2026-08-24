@@ -13,13 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apache/arrow/go/v18/arrow"
-	"github.com/apache/arrow/go/v18/arrow/array"
-	"github.com/apache/arrow/go/v18/arrow/memory"
-	"github.com/apache/arrow/go/v18/parquet"
-	pqfile "github.com/apache/arrow/go/v18/parquet/file"
-	"github.com/apache/arrow/go/v18/parquet/pqarrow"
 	"github.com/nao1215/filesql/internal/reader"
+	"github.com/parquet-go/parquet-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -305,38 +300,40 @@ func TestParquetDumpOfEmptyTableKeepsDeclaredTypes(t *testing.T) {
 		map[string]string{"name": "utf8", "price": "float64", "qty": "int64"})
 }
 
-// assertParquetSchema checks the Arrow type of each named column in a Parquet
-// file.
+// assertParquetSchema checks the type of each named column in a Parquet file,
+// spelled "int64", "float64" or "utf8".
 func assertParquetSchema(t *testing.T, path string, want map[string]string) {
 	t.Helper()
 
-	f, err := os.Open(path) //nolint:gosec // test-owned path
+	data, err := os.ReadFile(path) //nolint:gosec // test-owned path
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = f.Close() }()
-
-	reader, err := pqfile.NewParquetReader(f)
+	file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		t.Fatalf("NewParquetReader: %v", err)
-	}
-	defer func() { _ = reader.Close() }()
-
-	arrowReader, err := pqarrow.NewFileReader(reader, pqarrow.ArrowReadProperties{}, nil)
-	if err != nil {
-		t.Fatalf("NewFileReader: %v", err)
-	}
-	schema, err := arrowReader.Schema()
-	if err != nil {
-		t.Fatalf("Schema: %v", err)
+		t.Fatalf("OpenFile: %v", err)
 	}
 
-	for name, wantType := range want {
-		fields := schema.FieldIndices(name)
-		if len(fields) != 1 {
-			t.Fatalf("column %q appears %d times in the parquet schema", name, len(fields))
+	counts := map[string]int{}
+	types := map[string]string{}
+	for _, field := range file.Schema().Fields() {
+		counts[field.Name()]++
+		switch field.Type().Kind() {
+		case parquet.Int64:
+			types[field.Name()] = "int64"
+		case parquet.Double:
+			types[field.Name()] = "float64"
+		case parquet.ByteArray:
+			types[field.Name()] = "utf8"
+		default:
+			types[field.Name()] = field.Type().String()
 		}
-		if got := schema.Field(fields[0]).Type.Name(); got != wantType {
+	}
+	for name, wantType := range want {
+		if counts[name] != 1 {
+			t.Fatalf("column %q appears %d times in the parquet schema", name, counts[name])
+		}
+		if got := types[name]; got != wantType {
 			t.Errorf("column %q has parquet type %q, want %q", name, got, wantType)
 		}
 	}
@@ -543,26 +540,25 @@ func TestSQLiteFloatText(t *testing.T) {
 func writeFloat64Parquet(t *testing.T, path, column string, values []float64) {
 	t.Helper()
 
-	schema := arrow.NewSchema([]arrow.Field{{Name: column, Type: arrow.PrimitiveTypes.Float64, Nullable: true}}, nil)
-	builder := array.NewFloat64Builder(memory.NewGoAllocator())
-	defer builder.Release()
-	builder.AppendValues(values, nil)
-
-	arr := builder.NewArray()
-	defer arr.Release()
-	rec := array.NewRecord(schema, []arrow.Array{arr}, int64(len(values)))
-	defer rec.Release()
-	tbl := array.NewTableFromRecords(schema, []arrow.Record{rec})
-	defer tbl.Release()
-
+	schema := parquet.NewSchema("table", parquet.Group{
+		column: parquet.Optional(parquet.Leaf(parquet.DoubleType)),
+	})
 	f, err := os.Create(path) //nolint:gosec // test-owned path
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = f.Close() }()
 
-	if err := pqarrow.WriteTable(tbl, f, 1024, parquet.NewWriterProperties(), pqarrow.DefaultWriterProps()); err != nil {
+	w := parquet.NewGenericWriter[any](f, schema)
+	rows := make([]parquet.Row, 0, len(values))
+	for _, v := range values {
+		rows = append(rows, parquet.Row{parquet.DoubleValue(v).Level(0, 1, 0)})
+	}
+	if _, err := w.WriteRows(rows); err != nil {
 		t.Fatalf("write parquet: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close parquet: %v", err)
 	}
 }
 
