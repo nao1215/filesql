@@ -2,6 +2,7 @@ package prep
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -1053,4 +1054,149 @@ func TestCrossFieldValidation_Processor(t *testing.T) {
 			t.Fatalf("err = %v, want ErrUnknownColumn", err)
 		}
 	})
+}
+
+// crossFieldHolds reports whether one CSV row of two cells passes the
+// cross-field tag the target's first field carries.
+func crossFieldHolds(t *testing.T, target any, a, b string) bool {
+	t.Helper()
+	_, result, err := NewProcessor(FileTypeCSV).Process(
+		strings.NewReader("a,b\n"+a+","+b+"\n"), target)
+	if err != nil {
+		t.Fatalf("Process(%q, %q) error = %v", a, b, err)
+	}
+	return len(result.Errors) == 0
+}
+
+// TestCrossFieldComparisonsFollowTheField pins that a cross-field comparison
+// means on each kind of field what the single-field comparison of the same name
+// means: the string itself on a string field, the number on any other.
+//
+// The two families used to disagree with each other. The four ordering tags
+// parsed both cells as numbers before falling back to text and the two equality
+// tags never did, so a pair could be neither greater than, nor equal to, nor
+// less than its target: "007" against "7" answered false to all three.
+func TestCrossFieldComparisonsFollowTheField(t *testing.T) {
+	t.Parallel()
+
+	type strGt struct {
+		A string `validate:"gtfield=B"`
+		B string
+	}
+	type strEq struct {
+		A string `validate:"eqfield=B"`
+		B string
+	}
+	type strNe struct {
+		A string `validate:"nefield=B"`
+		B string
+	}
+	type strLt struct {
+		A string `validate:"ltfield=B"`
+		B string
+	}
+	type numGt struct {
+		A float64 `validate:"gtfield=B"`
+		B float64
+	}
+	type numEq struct {
+		A float64 `validate:"eqfield=B"`
+		B float64
+	}
+	type numLt struct {
+		A float64 `validate:"ltfield=B"`
+		B float64
+	}
+	type intGt struct {
+		A int `validate:"gtfield=B"`
+		B int
+	}
+	type intEq struct {
+		A int `validate:"eqfield=B"`
+		B int
+	}
+	type intNe struct {
+		A int `validate:"nefield=B"`
+		B int
+	}
+
+	t.Run("exactly one of greater, equal and less holds", func(t *testing.T) {
+		t.Parallel()
+		pairs := [][2]string{
+			{"007", "7"}, {"1.0", "1"}, {"0", "-0"}, {"1e3", "1000"},
+			{"abc", "abc"}, {"abc", "abd"}, {"10", "9"}, {"9", "10"},
+		}
+		for _, pair := range pairs {
+			a, b := pair[0], pair[1]
+			for _, kind := range []struct {
+				name       string
+				gt, eq, lt any
+			}{
+				{"string fields", &[]strGt{}, &[]strEq{}, &[]strLt{}},
+				{"numeric fields", &[]numGt{}, &[]numEq{}, &[]numLt{}},
+			} {
+				if kind.name == "numeric fields" && !allNumeric(a, b) {
+					continue
+				}
+				held := 0
+				for _, target := range []any{kind.gt, kind.eq, kind.lt} {
+					if crossFieldHolds(t, target, a, b) {
+						held++
+					}
+				}
+				if held != 1 {
+					t.Errorf("%s (%q, %q): %d of gtfield, eqfield, ltfield hold, want exactly 1", kind.name, a, b, held)
+				}
+			}
+		}
+	})
+
+	t.Run("a numeric field compares the number", func(t *testing.T) {
+		t.Parallel()
+		if !crossFieldHolds(t, &[]intEq{}, "007", "7") {
+			t.Error("eqfield: 007 and 7 are the same number")
+		}
+		if crossFieldHolds(t, &[]intNe{}, "007", "7") {
+			t.Error("nefield: 007 and 7 are the same number")
+		}
+		if !crossFieldHolds(t, &[]intEq{}, "0", "-0") {
+			t.Error("eqfield: 0 and -0 are the same number")
+		}
+		if !crossFieldHolds(t, &[]intGt{}, "10", "9") {
+			t.Error("gtfield: 10 is greater than 9")
+		}
+	})
+
+	t.Run("a string field compares the string", func(t *testing.T) {
+		t.Parallel()
+		if !crossFieldHolds(t, &[]strLt{}, "007", "7") {
+			t.Error("ltfield: 007 sorts before 7")
+		}
+		if crossFieldHolds(t, &[]strEq{}, "1.0", "1") {
+			t.Error("eqfield: 1.0 and 1 are two different strings, which is what a password confirmation needs")
+		}
+		if !crossFieldHolds(t, &[]strNe{}, "1.0", "1") {
+			t.Error("nefield: 1.0 and 1 are two different strings")
+		}
+		// The date range this package is asked for most often, which the
+		// character-count rule of the reference dialect cannot express: both
+		// dates are ten characters.
+		if !crossFieldHolds(t, &[]strLt{}, "2024-01-01", "2024-12-31") {
+			t.Error("ltfield: a forward date range must pass")
+		}
+		if crossFieldHolds(t, &[]strLt{}, "2024-12-31", "2024-01-01") {
+			t.Error("ltfield: a backward date range must fail")
+		}
+	})
+}
+
+// allNumeric reports whether both cells can be read as numbers, so a pair that
+// only a string column can hold is not fed to a numeric one.
+func allNumeric(values ...string) bool {
+	for _, v := range values {
+		if _, err := strconv.ParseFloat(v, 64); err != nil {
+			return false
+		}
+	}
+	return true
 }
