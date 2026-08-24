@@ -3,6 +3,7 @@ package filesql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -640,8 +641,13 @@ func TestLoadIntoTx_CanceledLoadLeavesCallersTable(t *testing.T) {
 
 // TestLoadIntoTx_CanceledContextTheTransactionWasBuiltOn is the other half of
 // cancellation: when the caller's transaction is built on the context the load
-// runs under, the load reports the cancellation. What becomes of the
-// transaction is database/sql's to decide, and it ends it.
+// runs under, the load fails and nothing of it reaches the database, because
+// database/sql ends the transaction the context belonged to.
+//
+// Which error the load reports is not pinned. Ending a transaction closes the
+// statements prepared on it, so a load that is inserting when the context
+// expires reports either the context or the statement it can no longer use,
+// depending on which of the two the race goes to.
 func TestLoadIntoTx_CanceledContextTheTransactionWasBuiltOn(t *testing.T) {
 	t.Parallel()
 
@@ -663,9 +669,14 @@ func TestLoadIntoTx_CanceledContextTheTransactionWasBuiltOn(t *testing.T) {
 	defer cancel()
 	tx, err := db.BeginTx(ctx, nil)
 	require.NoError(t, err)
-	defer func() { _ = tx.Rollback() }()
 
-	err = builder.LoadIntoTx(ctx, tx)
-	require.Error(t, err, "the load has to fail for this test to say anything")
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Error(t, builder.LoadIntoTx(ctx, tx), "the load has to fail for this test to say anything")
+
+	// Ending the transaction here rather than in a defer frees the one pooled
+	// connection the listing below needs. database/sql may have ended it already,
+	// which is the whole point of the test.
+	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+		t.Fatalf("could not end the caller's transaction: %v", err)
+	}
+	assert.Empty(t, listTables(t, db), "nothing of the canceled load reached the database")
 }
