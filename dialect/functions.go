@@ -113,7 +113,13 @@ func registerAll() error {
 		"date_format": {2, fnDateFormat},
 		"str_to_date": {2, fnStrToDate},
 		"datediff":    {2, fnDateDiff},
-		"date_part":   {2, fnDatePart},
+		// TIMESTAMPDIFF and TIMEDIFF need MySQL's own helpers: the former
+		// counts complete units where BigQuery's date_diff counts boundaries,
+		// and the latter would otherwise fall through to SQLite's timediff(),
+		// which answers in SQLite's interval spelling.
+		"mysql_date_diff": {3, fnMySQLDateDiff},
+		"mysql_timediff":  {2, fnMySQLTimeDiff},
+		"date_part":       {2, fnDatePart},
 		// EXTRACT names each dialect's own helper, because the dialects
 		// disagree on WEEK: PostgreSQL's is the ISO week, MySQL's and
 		// BigQuery's begin on Sunday, and BigQuery alone has ISOWEEK/ISOYEAR.
@@ -665,12 +671,26 @@ func fnStrToDate(args []driver.Value) (driver.Value, error) {
 		return nil, nil
 	}
 	var layout strings.Builder
+	var sawYear, sawMonth, sawDay, sawWeekday, sawTime bool
 	for i := 0; i < len(format); i++ {
 		if format[i] == '%' && i+1 < len(format) {
-			if l, found := mysqlToGoLayout[format[i+1]]; found {
+			spec := format[i+1]
+			if l, found := mysqlToGoLayout[spec]; found {
 				layout.WriteString(l)
+				switch spec {
+				case 'Y', 'y':
+					sawYear = true
+				case 'm', 'c', 'M', 'b':
+					sawMonth = true
+				case 'd', 'e':
+					sawDay = true
+				case 'W', 'a':
+					sawWeekday = true
+				default:
+					sawTime = true
+				}
 			} else {
-				layout.WriteByte(format[i+1])
+				layout.WriteByte(spec)
 			}
 			i++
 			continue
@@ -681,7 +701,24 @@ func fnStrToDate(args []driver.Value) (driver.Value, error) {
 	if !ok3 {
 		return nil, nil
 	}
-	return tm.Format(layoutDateTime), nil
+	// The shape follows the format: a DATE for date specifiers, a TIME for
+	// time specifiers, a DATETIME for both. A format that names part of a date
+	// without completing it is NULL, which is MySQL's answer under its default
+	// sql_mode rather than a default-filled date.
+	hasDate := sawYear || sawMonth || sawDay || sawWeekday
+	if hasDate && (!sawYear || !sawMonth || !sawDay) {
+		return nil, nil
+	}
+	switch {
+	case hasDate && sawTime:
+		return tm.Format(layoutDateTime), nil
+	case hasDate:
+		return tm.Format(layoutDateOnly), nil
+	case sawTime:
+		return tm.Format(layoutTimeOnly), nil
+	default:
+		return nil, nil
+	}
 }
 
 // parseLayout parses s against a single Go layout, reporting success.
@@ -1388,6 +1425,11 @@ func fnFromUnixtime(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
+	// MySQL answers NULL outside the range of its TIMESTAMP type, 1970-01-01
+	// 00:00:00 UTC through 3001-01-18 23:59:59 (32536771199 seconds).
+	if sec < 0 || sec > 32536771199 {
+		return nil, nil
+	}
 	tm := time.Unix(sec, 0).UTC()
 	if len(args) == 1 {
 		return tm.Format(layoutDateTime), nil
@@ -1976,6 +2018,109 @@ func truncDay(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
 }
 
+// fnMySQLDateDiff implements MySQL TIMESTAMPDIFF(unit, start, end), called as
+// mysql_date_diff(end, start, 'unit'): the signed number of complete units from
+// start to end, where fnDateDiff3 counts the boundaries BigQuery counts. DAY
+// and WEEK are complete 24-hour and 7-day periods of the actual span, so 23
+// hours is zero days; MONTH, QUARTER and YEAR are complete calendar months.
+func fnMySQLDateDiff(args []driver.Value) (driver.Value, error) {
+	end, ok1 := toStringTime(args[0])
+	start, ok2 := toStringTime(args[1])
+	unit, ok3 := toString(args[2])
+	if !ok1 || !ok2 || !ok3 {
+		return nil, nil
+	}
+	d := end.Sub(start)
+	switch strings.ToLower(strings.TrimSpace(unit)) {
+	case unitSecond:
+		return int64(d / time.Second), nil
+	case unitMinute:
+		return int64(d / time.Minute), nil
+	case unitHour:
+		return int64(d / time.Hour), nil
+	case unitDay:
+		return int64(d / (24 * time.Hour)), nil
+	case unitWeek:
+		return int64(d / (daysPerWeek * 24 * time.Hour)), nil
+	case unitMonth:
+		return completeMonths(end, start), nil
+	case unitQuarter:
+		return completeMonths(end, start) / monthsPerQuartr, nil
+	case unitYear:
+		return completeMonths(end, start) / 12, nil
+	default:
+		return nil, fmt.Errorf("dialect: unsupported TIMESTAMPDIFF unit %q", unit)
+	}
+}
+
+// completeMonths is the signed number of complete calendar months from start to
+// end: the month delta, minus one when the end's day and time of day fall short
+// of the start's. MySQL has no month-end special case, so January 31 to
+// February 29 is zero complete months even though February 29 ends its month.
+func completeMonths(end, start time.Time) int64 {
+	sign := int64(1)
+	if end.Before(start) {
+		end, start = start, end
+		sign = -1
+	}
+	months := int64((end.Year()-start.Year())*12 + int(end.Month()) - int(start.Month()))
+	if end.Day() < start.Day() || (end.Day() == start.Day() && clockNanos(end) < clockNanos(start)) {
+		months--
+	}
+	return sign * months
+}
+
+// clockNanos is the time of day as nanoseconds since midnight.
+func clockNanos(tm time.Time) int64 {
+	return int64(tm.Hour())*int64(time.Hour) + int64(tm.Minute())*int64(time.Minute) +
+		int64(tm.Second())*int64(time.Second) + int64(tm.Nanosecond())
+}
+
+// mysqlTimeMaxSeconds is the ceiling of MySQL's TIME type, 838:59:59, which
+// TIMEDIFF clamps to on both sides.
+const mysqlTimeMaxSeconds = 838*3600 + 59*60 + 59
+
+// fnMySQLTimeDiff implements MySQL TIMEDIFF(a, b): a minus b rendered as a
+// MySQL TIME, whose hours keep counting past 24 and clamp at ±838:59:59.
+// Mixing a datetime with a bare time is NULL, as it is in MySQL, and so is a
+// value that does not parse.
+func fnMySQLTimeDiff(args []driver.Value) (driver.Value, error) {
+	s1, ok1 := toString(args[0])
+	s2, ok2 := toString(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	if hasCalendarDate(s1) != hasCalendarDate(s2) {
+		return nil, nil
+	}
+	t1, ok1 := parseTime(s1)
+	t2, ok2 := parseTime(s2)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	d := t1.Sub(t2)
+	sign := ""
+	if d < 0 {
+		sign = "-"
+		d = -d
+	}
+	if d > mysqlTimeMaxSeconds*time.Second {
+		d = mysqlTimeMaxSeconds * time.Second
+	}
+	secs := d / time.Second
+	out := fmt.Sprintf("%s%02d:%02d:%02d", sign, secs/3600, secs/60%60, secs%60)
+	if frac := d % time.Second; frac != 0 {
+		out += fmt.Sprintf(".%06d", frac/time.Microsecond)
+	}
+	return out, nil
+}
+
+// hasCalendarDate reports whether a datetime string carries a calendar date,
+// which is what separates '2024-01-01 01:00:00' from a bare '01:00:00'.
+func hasCalendarDate(s string) bool {
+	return strings.ContainsAny(s, "-/")
+}
+
 // strftimeToGoLayout maps the strftime-style specifiers GoogleSQL uses in
 // FORMAT_DATE and PARSE_DATE to Go reference-time layout fragments. They differ
 // from the MySQL DATE_FORMAT set: %M is the minute here but the month name
@@ -2313,6 +2458,7 @@ var timeLayouts = []string{
 	"2006/01/02 15:04:05",
 	"2006/01/02",
 	"15:04:05",
+	"15:04:05.999999999",
 }
 
 // parseTime parses a date/time string against the supported layouts. A value
