@@ -260,11 +260,23 @@ func (gdf *GroupedDataFrame) Max(column string) (*DataFrame, error) {
 // data. Only a column with no number in it at all has no answer to give.
 func (gdf *GroupedDataFrame) requireNumeric(column, aggregate string) error {
 	for _, row := range gdf.df.rows {
-		if _, ok := toFloat64(row[column]); ok {
+		if _, ok := aggNumber(row[column]); ok {
 			return nil
 		}
 	}
 	return fmt.Errorf("cannot %s column %q: no value in it is a number", aggregate, column)
+}
+
+// aggNumber reports the number an aggregate can work on, and whether there is
+// one. A NaN is not one: SQLite cannot store NaN — it arrives as NULL — and
+// NULL is what every SQLite aggregate skips, so the aggregates here skip NaN
+// the same way.
+func aggNumber(v any) (float64, bool) {
+	f, ok := toFloat64(v)
+	if !ok || math.IsNaN(f) {
+		return 0, false
+	}
+	return f, true
 }
 
 // Built-in aggregation functions
@@ -272,6 +284,7 @@ func (gdf *GroupedDataFrame) requireNumeric(column, aggregate string) error {
 // These functions handle type conversion automatically:
 //   - Numeric types (int, int8-64, uint, uint8-64, float32, float64) are converted to float64
 //   - Non-numeric types (string, bool, nil, etc.) are ignored in calculations
+//   - NaN is skipped the way SQLite aggregates skip NULL; see aggNumber
 //   - Returns nil when no valid numeric values exist (except AggSum which returns 0.0)
 
 // AggCount counts the number of non-nil values.
@@ -298,7 +311,7 @@ var AggSum AggFunc = func(values []any) any {
 	sum := 0.0
 	found := false
 	for _, v := range values {
-		if f, ok := toFloat64(v); ok {
+		if f, ok := aggNumber(v); ok {
 			sum += f
 			found = true
 		}
@@ -316,7 +329,7 @@ var AggMean AggFunc = func(values []any) any {
 	sum := 0.0
 	count := 0
 	for _, v := range values {
-		if f, ok := toFloat64(v); ok {
+		if f, ok := aggNumber(v); ok {
 			sum += f
 			count++
 		}
@@ -331,18 +344,16 @@ var AggMean AggFunc = func(values []any) any {
 // smaller than any text, and text compares lexically. Returns float64 when the
 // group holds a number, string when it holds only text, and nil when it holds
 // neither.
-//
-// Text used to be ignored, so the minimum of a column of words was nil — an
-// answer the data had, discarded. SQLite's MIN over the same column returns the
-// lexically smallest string.
 var AggMin AggFunc = func(values []any) any {
-	minNum := math.MaxFloat64
+	// The running extreme starts from the first number found rather than from
+	// a sentinel, so a group whose only number is +Inf answers +Inf.
+	var minNum float64
 	foundNum := false
 	var minText string
 	foundText := false
 	for _, v := range values {
-		if f, ok := toFloat64(v); ok {
-			if f < minNum {
+		if f, ok := aggNumber(v); ok {
+			if !foundNum || f < minNum {
 				minNum = f
 			}
 			foundNum = true
@@ -369,13 +380,13 @@ var AggMin AggFunc = func(values []any) any {
 // AggMax finds the largest value, following the same ordering as AggMin: any
 // text is larger than any number, so text decides whenever the group holds some.
 var AggMax AggFunc = func(values []any) any {
-	maxNum := -math.MaxFloat64
+	var maxNum float64
 	foundNum := false
 	var maxText string
 	foundText := false
 	for _, v := range values {
-		if f, ok := toFloat64(v); ok {
-			if f > maxNum {
+		if f, ok := aggNumber(v); ok {
+			if !foundNum || f > maxNum {
 				maxNum = f
 			}
 			foundNum = true
