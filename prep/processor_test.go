@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
 	"github.com/nao1215/filesql/parser"
 	"github.com/parquet-go/parquet-go"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestRecord is a test struct for processing
@@ -1053,9 +1053,7 @@ func TestSetFieldValue_IntTypes(t *testing.T) {
 			{ValInt: 42, ValInt8: 127, ValInt16: 32767, ValInt32: 2147483647, ValInt64: 9223372036854775807},
 			{ValInt: -100, ValInt8: -128, ValInt16: -32768, ValInt32: -2147483648, ValInt64: -9223372036854775808},
 		}
-		if diff := cmp.Diff(want, records); diff != "" {
-			t.Errorf("records mismatch (-want +got):\n%s", diff)
-		}
+		assert.Equal(t, want, records)
 		if result.RowCount != 2 {
 			t.Errorf("RowCount = %d, want 2", result.RowCount)
 		}
@@ -1073,9 +1071,7 @@ func TestSetFieldValue_IntTypes(t *testing.T) {
 		}
 
 		want := []IntRecord{{}}
-		if diff := cmp.Diff(want, records); diff != "" {
-			t.Errorf("records mismatch (-want +got):\n%s", diff)
-		}
+		assert.Equal(t, want, records)
 	})
 
 	t.Run("invalid int value produces type_conversion error", func(t *testing.T) {
@@ -1224,9 +1220,7 @@ func TestSetFieldValue_UintTypes(t *testing.T) {
 		want := []UintRecord{
 			{ValUint: 42, ValUint8: 255, ValUint16: 65535, ValUint32: 4294967295, ValUint64: 18446744073709551615},
 		}
-		if diff := cmp.Diff(want, records); diff != "" {
-			t.Errorf("records mismatch (-want +got):\n%s", diff)
-		}
+		assert.Equal(t, want, records)
 	})
 
 	t.Run("empty uint values default to zero", func(t *testing.T) {
@@ -1241,9 +1235,7 @@ func TestSetFieldValue_UintTypes(t *testing.T) {
 		}
 
 		want := []UintRecord{{}}
-		if diff := cmp.Diff(want, records); diff != "" {
-			t.Errorf("records mismatch (-want +got):\n%s", diff)
-		}
+		assert.Equal(t, want, records)
 	})
 
 	t.Run("negative value for uint produces type_conversion error", func(t *testing.T) {
@@ -1325,9 +1317,7 @@ func TestSetFieldValue_FloatTypes(t *testing.T) {
 		}
 
 		want := []FloatRecord{{ValFloat32: 1.5, ValFloat64: 3.14}}
-		if diff := cmp.Diff(want, records); diff != "" {
-			t.Errorf("records mismatch (-want +got):\n%s", diff)
-		}
+		assert.Equal(t, want, records)
 	})
 
 	t.Run("empty float values default to zero", func(t *testing.T) {
@@ -1342,9 +1332,7 @@ func TestSetFieldValue_FloatTypes(t *testing.T) {
 		}
 
 		want := []FloatRecord{{}}
-		if diff := cmp.Diff(want, records); diff != "" {
-			t.Errorf("records mismatch (-want +got):\n%s", diff)
-		}
+		assert.Equal(t, want, records)
 	})
 
 	t.Run("invalid float value produces type_conversion error", func(t *testing.T) {
@@ -1403,9 +1391,7 @@ func TestSetFieldValue_BoolType(t *testing.T) {
 			{ValBool: true, Dummy: "c"},
 			{ValBool: false, Dummy: "d"},
 		}
-		if diff := cmp.Diff(want, records); diff != "" {
-			t.Errorf("records mismatch (-want +got):\n%s", diff)
-		}
+		assert.Equal(t, want, records)
 	})
 
 	t.Run("empty bool value defaults to false", func(t *testing.T) {
@@ -1420,9 +1406,7 @@ func TestSetFieldValue_BoolType(t *testing.T) {
 		}
 
 		want := []BoolRecord{{ValBool: false, Dummy: "x"}}
-		if diff := cmp.Diff(want, records); diff != "" {
-			t.Errorf("records mismatch (-want +got):\n%s", diff)
-		}
+		assert.Equal(t, want, records)
 	})
 
 	t.Run("invalid bool value produces type_conversion error", func(t *testing.T) {
@@ -1475,9 +1459,7 @@ func TestSetFieldValue_StringType(t *testing.T) {
 		}
 
 		want := []StringRecord{{Name: "hello", Email: "world@example.com"}}
-		if diff := cmp.Diff(want, records); diff != "" {
-			t.Errorf("records mismatch (-want +got):\n%s", diff)
-		}
+		assert.Equal(t, want, records)
 	})
 
 	t.Run("empty string values are set as empty", func(t *testing.T) {
@@ -1492,9 +1474,7 @@ func TestSetFieldValue_StringType(t *testing.T) {
 		}
 
 		want := []StringRecord{{Name: "", Email: ""}}
-		if diff := cmp.Diff(want, records); diff != "" {
-			t.Errorf("records mismatch (-want +got):\n%s", diff)
-		}
+		assert.Equal(t, want, records)
 	})
 }
 
@@ -1523,9 +1503,7 @@ func TestSetFieldValue_MixedTypes(t *testing.T) {
 		{Name: "Alice", Age: 30, Score: 95.5, Active: true, Level: 5},
 		{Name: "Bob", Age: 0, Score: 0, Active: false, Level: 0},
 	}
-	if diff := cmp.Diff(want, records); diff != "" {
-		t.Errorf("records mismatch (-want +got):\n%s", diff)
-	}
+	assert.Equal(t, want, records)
 }
 
 func TestWithValidRowsOnly(t *testing.T) {
@@ -1562,9 +1540,7 @@ func TestWithValidRowsOnly(t *testing.T) {
 			{Name: "Alice", Email: "alice@example.com"},
 			{Name: "Bob", Email: "bob@example.com"},
 		}
-		if diff := cmp.Diff(want, records); diff != "" {
-			t.Errorf("records mismatch (-want +got):\n%s", diff)
-		}
+		assert.Equal(t, want, records)
 
 		// Output should contain only valid rows
 		output, err := io.ReadAll(reader)
@@ -2366,9 +2342,7 @@ func TestProcessStripsByteOrderMark(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Process() error = %v", err)
 			}
-			if diff := cmp.Diff([]string{"name", "memo"}, result.Columns); diff != "" {
-				t.Errorf("columns mismatch (-want +got):\n%s", diff)
-			}
+			assert.Equal(t, []string{"name", "memo"}, result.Columns)
 			output, err := io.ReadAll(reader)
 			if err != nil {
 				t.Fatalf("read output: %v", err)
@@ -2520,9 +2494,7 @@ func TestMinAndMaxKeepAFractionalLengthThreshold(t *testing.T) {
 				t.Fatalf("read output: %v", err)
 			}
 			gotValid := strings.Split(strings.TrimRight(string(output), "\n"), "\n")[1:]
-			if diff := cmp.Diff(tt.wantValid, gotValid); diff != "" {
-				t.Errorf("valid rows mismatch (-want +got):\n%s", diff)
-			}
+			assert.Equal(t, tt.wantValid, gotValid)
 
 			if len(result.Errors) != 1 {
 				t.Fatalf("errors = %v, want exactly one", result.Errors)

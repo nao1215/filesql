@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
 	"github.com/nao1215/filesql/parser"
 	"github.com/parquet-go/parquet-go"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestIntegration_AllPrepTags tests all prep tags in an integrated manner
@@ -1060,9 +1060,7 @@ func TestIntegration_XLSXProcessing(t *testing.T) {
 		{ID: "2", Name: "Yulia"},
 		{ID: "3", Name: "Vika"},
 	}
-	if diff := cmp.Diff(want, records); diff != "" {
-		t.Errorf("records mismatch (-want +got):\n%s", diff)
-	}
+	assert.Equal(t, want, records)
 
 	if result.RowCount != 3 {
 		t.Errorf("RowCount = %d, want 3", result.RowCount)
@@ -1200,9 +1198,7 @@ func TestIntegration_Parquet_FullPipeline(t *testing.T) {
 		{Name: "BOB", Email: "bob@example.com", Age: "25"},
 		{Name: "", Email: "nobody@example.com", Age: "99"},
 	}
-	if diff := cmp.Diff(want, records); diff != "" {
-		t.Errorf("records mismatch (-want +got):\n%s", diff)
-	}
+	assert.Equal(t, want, records)
 
 	// Verify validation errors
 	valErrors := result.ValidationErrors()
@@ -1220,9 +1216,7 @@ func TestIntegration_Parquet_FullPipeline(t *testing.T) {
 
 	// Verify columns
 	wantCols := []string{"name", "email", "age"}
-	if diff := cmp.Diff(wantCols, result.Columns); diff != "" {
-		t.Errorf("Columns mismatch (-want +got):\n%s", diff)
-	}
+	assert.Equal(t, wantCols, result.Columns)
 }
 
 // TestIntegration_Parquet_OutputAsCSV verifies Parquet output is valid CSV

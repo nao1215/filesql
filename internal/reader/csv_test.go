@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestCSVReader_ReadsWhatTheFileHolds covers the shapes a CSV reader has to get
@@ -44,9 +44,7 @@ func TestCSVReader_ReadsWhatTheFileHolds(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReadAll: %v", err)
 			}
-			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("mismatch (-want +got):\n%s", diff)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -98,9 +96,7 @@ func TestCSVReader_FieldsPerRecord(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadAll: %v", err)
 		}
-		if diff := cmp.Diff([][]string{{"a", "b"}, {"1"}}, got); diff != "" {
-			t.Errorf("mismatch (-want +got):\n%s", diff)
-		}
+		assert.Equal(t, [][]string{{"a", "b"}, {"1"}}, got)
 	})
 }
 
@@ -140,9 +136,7 @@ func TestCSVReader_RefusesAnUnusableDelimiter(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadAll: %v", err)
 		}
-		if diff := cmp.Diff([][]string{{"a", "b"}, {"1", "2"}}, got); diff != "" {
-			t.Errorf("mismatch (-want +got):\n%s", diff)
-		}
+		assert.Equal(t, [][]string{{"a", "b"}, {"1", "2"}}, got)
 	})
 }
 
@@ -174,9 +168,7 @@ func TestCSVReader_AgreesWithEncodingCSV(t *testing.T) {
 			if (wantErr != nil) != (gotErr != nil) {
 				t.Fatalf("error presence differs: encoding/csv=%v, ours=%v", wantErr, gotErr)
 			}
-			if diff := cmp.Diff(want, got); diff != "" {
-				t.Errorf("records differ from encoding/csv (-stdlib +ours):\n%s", diff)
-			}
+			assert.Equal(t, want, got, "records differ from encoding/csv")
 		})
 	}
 }
