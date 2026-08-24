@@ -30,6 +30,8 @@ import (
 //	P-18 generate_series(...) etc. -> ErrUnsupportedSyntax
 //	P-19 UPPER(x) / LOWER(x)       -> unicode_upper / unicode_lower
 //	P-20 LPAD(x, n, p) / RPAD      -> postgresql_lpad / postgresql_rpad
+//	P-21 a / b, a % b, MOD(a, b)   -> postgresql_divide / postgresql_mod, which
+//	                                  raise on a zero divisor
 func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedPostgreSQL(tokens); err != nil {
 		return nil, err
@@ -75,6 +77,19 @@ func rewritePostgreSQL(tokens []token) ([]token, error) {
 	}
 	// P-14: SIMILAR TO is SQL-standard pattern matching that SQLite lacks.
 	out, err = similarToPass(out)
+	if err != nil {
+		return nil, err
+	}
+	// P-21: PostgreSQL divides two integers the way SQLite does, so the helper
+	// keeps that arithmetic and moves only the zero divisor, which PostgreSQL
+	// raises on where SQLite answers NULL — a NULL in a numeric column reads as
+	// missing data rather than as arithmetic the engine refused. The remainder
+	// goes the same way, since mod(7, 0) raises in PostgreSQL too.
+	out, err = binaryChainOperatorPass(out, "/", "postgresql_divide")
+	if err != nil {
+		return nil, err
+	}
+	out, err = binaryChainOperatorPass(out, "%", "postgresql_mod")
 	if err != nil {
 		return nil, err
 	}
@@ -193,6 +208,8 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 		return rewriteRenameCall(tokens, open, closeIdx, unicodeCaseHelper(tokens[nameIdx].text), pgCallPass)
 	case "BTRIM":
 		return rewriteRenameCall(tokens, open, closeIdx, "trim", pgCallPass)
+	case fnNameMod:
+		return rewriteRenameCall(tokens, open, closeIdx, "postgresql_mod", pgCallPass)
 	case "JSONB_ARRAY_LENGTH", "JSON_ARRAY_LENGTH":
 		return rewriteRenameCall(tokens, open, closeIdx, "json_array_length", pgCallPass)
 	case fnNameCharLen, fnNameCharLen2:

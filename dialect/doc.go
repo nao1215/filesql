@@ -23,6 +23,14 @@
 // filled by user-defined functions registered into the SQLite driver via
 // RegisterFunctions rather than by rewriting the SQL.
 //
+// Arithmetic reaches the same helpers by the other route, rewriting the
+// operator into a call, where a dialect disagrees with SQLite about the answer.
+// Division disagrees twice over: MySQL and GoogleSQL divide two integers into a
+// real where SQLite and PostgreSQL answer an integer, and a zero divisor raises
+// in PostgreSQL and GoogleSQL where SQLite and MySQL answer NULL. So "/" is
+// rewritten for all three dialects and the remainder for the two that raise,
+// with GoogleSQL's SAFE_DIVIDE left as the way to ask for the NULL.
+//
 // Casts go through the same mechanism for a different reason. SQLite's own CAST
 // applies type affinity, which is close enough to look right and different
 // enough to be wrong: it truncates where the dialects round, and it coerces a

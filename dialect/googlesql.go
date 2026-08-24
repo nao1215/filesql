@@ -30,6 +30,8 @@ import (
 //	G-19 [1,2,3] / x[OFFSET(n)]               -> ErrUnsupportedSyntax
 //	G-20 SAFE.f(args)                         -> safe_f(args)
 //	G-21 UPPER(x) / LOWER(x)                  -> unicode_upper / unicode_lower
+//	G-22 a % b, MOD(a, b)                     -> googlesql_mod, which raises on a
+//	                                             zero divisor
 func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedGoogleSQL(tokens); err != nil {
 		return nil, err
@@ -47,6 +49,13 @@ func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	// G-11: GoogleSQL division always yields FLOAT64, so 5/2 is 2.5 rather than
 	// the 2 SQLite gives for two integers.
 	out, err = binaryChainOperatorPass(out, "/", "googlesql_divide")
+	if err != nil {
+		return nil, err
+	}
+	// G-22: GoogleSQL spells the remainder MOD() and has no "%" of its own, so
+	// the operator is this package's extension and follows MOD, which raises on
+	// a zero divisor where SQLite answers NULL.
+	out, err = binaryChainOperatorPass(out, "%", "googlesql_mod")
 	if err != nil {
 		return nil, err
 	}
@@ -226,6 +235,9 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 		// GoogleSQL CONCAT returns NULL when any argument is NULL, like MySQL and
 		// unlike SQLite's own concat(), which treats a NULL as an empty string.
 		return rewriteRenameCall(tokens, open, closeIdx, "strict_concat", googlesqlCallPass)
+	case fnNameMod:
+		// GoogleSQL raises on a zero divisor where SQLite answers NULL.
+		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_mod", googlesqlCallPass)
 	case "DATE_ADD", "TIMESTAMP_ADD":
 		return rewriteDateArith(tokens, open, closeIdx, "+", googlesqlCallPass)
 	case "DATE_SUB", "TIMESTAMP_SUB":

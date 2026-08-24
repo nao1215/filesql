@@ -177,6 +177,128 @@ func TestGoogleSQLDivideByZeroRaises(t *testing.T) {
 	}
 }
 
+// TestZeroDivisorFollowsTheDialect pins what each dialect does with a zero
+// divisor, which is the one place the three engines do not agree: two of them
+// stop the query and one answers NULL, while SQLite always answers NULL.
+// postgres:17-alpine raises "division by zero" for all four spellings, BigQuery
+// raises for "/" and MOD() and has no "%" of its own, and MySQL answers NULL.
+// So a PostgreSQL query the engine would have stopped came back with rows in
+// it, and a NULL in a numeric column reads as missing data rather than as
+// arithmetic the engine refused.
+func TestZeroDivisorFollowsTheDialect(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	raising := []struct {
+		dialect Dialect
+		queries []string
+	}{
+		{PostgreSQL, []string{`SELECT 7/0`, `SELECT 7.0/0.0`, `SELECT 7 % 0`, `SELECT mod(7, 0)`}},
+		{GoogleSQL, []string{`SELECT 7/0`, `SELECT 7 % 0`, `SELECT MOD(7, 0)`}},
+	}
+	for _, tt := range raising {
+		for _, query := range tt.queries {
+			_, err := runDialect(t, db, tt.dialect, query)
+			if err == nil {
+				t.Errorf("%v: %s answered a value; the engine raises", tt.dialect, query)
+				continue
+			}
+			// The driver renders a scalar function's error as text on the way
+			// out, so the sentinel does not survive to be matched with
+			// errors.Is; the message it carries is what a caller sees.
+			if !strings.Contains(err.Error(), ErrDivideByZero.Error()) {
+				t.Errorf("%v: %s = %v, want a division-by-zero failure", tt.dialect, query, err)
+			}
+		}
+	}
+
+	// A NULL operand is nothing to divide by, so it stays NULL rather than
+	// raising: the query has no zero in it.
+	for _, query := range []string{`SELECT 7 / NULL`, `SELECT 7 % NULL`, `SELECT NULL % 2`} {
+		got, err := runDialect(t, db, PostgreSQL, query)
+		if err != nil {
+			t.Errorf("PostgreSQL: %s = %v, want NULL", query, err)
+			continue
+		}
+		if got.Valid {
+			t.Errorf("PostgreSQL: %s = %q, want NULL", query, got.String)
+		}
+	}
+
+	// MySQL's NULL is correct and must not move.
+	for _, query := range []string{`SELECT 7/0`, `SELECT 7 % 0`, `SELECT MOD(7, 0)`} {
+		got, err := runDialect(t, db, MySQL, query)
+		if err != nil {
+			t.Errorf("MySQL: %s = %v, want NULL", query, err)
+			continue
+		}
+		if got.Valid {
+			t.Errorf("MySQL: %s = %q, want NULL", query, got.String)
+		}
+	}
+}
+
+// TestZeroDivisorLeavesTheArithmeticAlone is the other half: routing the
+// operators through a helper must not change what a division or a remainder
+// answers for any operand a query can carry. PostgreSQL divides two integers as
+// integers, the way SQLite does, while MySQL and GoogleSQL answer a real, and
+// text, floats and out-of-range values are read the way SQLite reads them.
+func TestZeroDivisorLeavesTheArithmeticAlone(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		dialect Dialect
+		query   string
+		want    string
+	}{
+		{PostgreSQL, `SELECT 7/2`, "3"},
+		{PostgreSQL, `SELECT -7/2`, "-3"},
+		{PostgreSQL, `SELECT 1/2`, "0"},
+		{PostgreSQL, `SELECT 7/2.0`, "3.5"},
+		{PostgreSQL, `SELECT 7.0/2`, "3.5"},
+		{PostgreSQL, `SELECT 7 % 2`, "1"},
+		{PostgreSQL, `SELECT -7 % 2`, "-1"},
+		{PostgreSQL, `SELECT mod(7, 2)`, "1"},
+		{GoogleSQL, `SELECT 7/2`, "3.5"},
+		{GoogleSQL, `SELECT 7 % 2`, "1"},
+		{GoogleSQL, `SELECT MOD(7, 2)`, "1"},
+		{MySQL, `SELECT 7/2`, "3.5"},
+		{MySQL, `SELECT 7 % 2`, "1"},
+
+		// The operand kinds a helper standing in for an operator has to read the
+		// way SQLite reads them: a float truncates for the remainder, text takes
+		// the number it spells, and text that spells none is zero.
+		{PostgreSQL, `SELECT 7.5 % 2`, "1"},
+		{PostgreSQL, `SELECT -7.5 % 2`, "-1"},
+		{PostgreSQL, `SELECT '7' % 2`, "1"},
+		{PostgreSQL, `SELECT 'abc' % 2`, "0"},
+		{PostgreSQL, `SELECT '7' / 2`, "3"},
+		{PostgreSQL, `SELECT 'abc' / 2`, "0"},
+		{GoogleSQL, `SELECT 'abc' % 2`, "0"},
+
+		// A float past the int64 range stops at the end of it, the way SQLite
+		// stops: a bare conversion is implementation-defined in Go and answered
+		// -1 here. The remainder keeps SQLite's storage class too, so a real
+		// operand gives a real back.
+		{PostgreSQL, `SELECT 1e300 % 7`, "0"},
+		{PostgreSQL, `SELECT 9223372036854775807.0 % 7`, "0"},
+		{PostgreSQL, `SELECT typeof(7.5 % 2)`, "real"},
+		{PostgreSQL, `SELECT typeof(7 % 2)`, "integer"},
+		{PostgreSQL, `SELECT typeof('7' / 2)`, "integer"},
+	}
+	for _, tt := range tests {
+		got, err := runDialect(t, db, tt.dialect, tt.query)
+		if err != nil {
+			t.Errorf("%v: %s: %v", tt.dialect, tt.query, err)
+			continue
+		}
+		if !got.Valid || got.String != tt.want {
+			t.Errorf("%v: %s = %v, want %q", tt.dialect, tt.query, got, tt.want)
+		}
+	}
+}
+
 // TestLikeEscapeClauseIsLeftToSQLite keeps a pattern with a custom escape
 // character on SQLite's own LIKE, which the helpers do not model.
 func TestLikeEscapeClauseIsLeftToSQLite(t *testing.T) {
