@@ -274,8 +274,17 @@ func TestNumericValidator(t *testing.T) {
 		{"0", false},
 		{"-123", false},
 		{"", false},
-		{"12.34", true},
+		// numeric follows the go-playground dialect: a signed decimal is valid.
+		{"12.34", false},
+		{"1.5", false},
+		{"45.0", false},
+		{"-1.5", false},
+		{"+1", false},
 		{"abc", true},
+		{"1e3", true},
+		{"1.2.3", true},
+		{".5", true},
+		{"5.", true},
 	}
 
 	v := newNumericValidator()
@@ -299,26 +308,29 @@ func TestNumberValidator(t *testing.T) {
 		input   string
 		wantErr bool
 	}{
+		// number follows the go-playground dialect: digits only, no sign,
+		// no decimal point.
 		{"123", false},
-		{"-123", false},
-		{"+123", false},
-		{"12.34", false},
-		{"-12.34", false},
+		{"0", false},
+		{"00123", false}, // Leading zeros are allowed
+		{"-123", true},
+		{"+123", true},
+		{"-1", true},
+		{"+1", true},
+		{"12.34", true},
+		{"-12.34", true},
+		{"45.0", true},
 		{"", true},
 		{".5", true},
 		{"5.", true},
 		{"abc", true},
-		// Scientific notation is NOT supported by the number validator
 		{"1e3", true},
 		{"1E3", true},
 		{"1.5e10", true},
 		{"-2.5E-3", true},
-		// Edge cases
-		{"0", false},
-		{"0.0", false},
-		{"+0", false},
-		{"-0", false},
-		{"00123", false}, // Leading zeros are allowed
+		{"+0", true},
+		{"-0", true},
+		{"0.0", true},
 	}
 
 	v := newNumberValidator()
@@ -373,6 +385,11 @@ func TestAlphanumericUnicodeValidator(t *testing.T) {
 		{"hello123", false},
 		{"Привет123", false},
 		{"日本語123", false},
+		// go-playground's alphanumunicode is ^[\p{L}\p{N}]+$, and \p{N} covers
+		// every Unicode number category, not just decimal digits.
+		{"Ⅷ", false}, // U+2167 Nl (letter number)
+		{"①", false}, // U+2460 No (other number)
+		{"²", false}, // U+00B2 No (other number)
 		{"hello world", true},
 		{"hello-world", true},
 		{"", false},
@@ -1188,6 +1205,9 @@ func TestCIDRValidator(t *testing.T) {
 		{"192.168.1.0/24", false},
 		{"10.0.0.0/8", false},
 		{"2001:db8::/32", false},
+		// The general cidr tag imposes no network-address rule (unlike cidrv4),
+		// so an address with host bits set is still accepted.
+		{"192.168.0.1/24", false},
 		{"192.168.1.1", true},
 		{"invalid", true},
 		{"", true},
@@ -1216,6 +1236,11 @@ func TestCIDRv4Validator(t *testing.T) {
 	}{
 		{"192.168.1.0/24", false},
 		{"10.0.0.0/8", false},
+		{"0.0.0.0/0", false},
+		// go-playground's cidrv4 requires the address to equal its network
+		// address, so an address with host bits set is rejected.
+		{"192.168.0.1/24", true},
+		{"10.0.0.5/8", true},
 		{"2001:db8::/32", true},
 		{"", true},
 	}
@@ -1298,9 +1323,18 @@ func TestFQDNValidator(t *testing.T) {
 	}{
 		{"example.com", false},
 		{"sub.example.com", false},
+		{"host.a1", false},
 		{"example", true},
 		{".example.com", true},
 		{"example.com.", true},
+		// go-playground requires a non-numeric top-level domain, so an
+		// all-numeric dotted string (an IPv4 address, or a bare numeric TLD) is
+		// not an FQDN.
+		{"127.0.0.1", true},
+		{"1.2.3", true},
+		{"45.0", true},
+		{"256.256.256.256", true},
+		{"host.123", true},
 		{"", true},
 	}
 

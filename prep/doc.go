@@ -102,7 +102,8 @@
 // lt, lte, min and max compare the character count, while on any other field
 // all of them compare the numeric value and len means the value equals the
 // parameter. boolean accepts what strconv.ParseBool accepts, which is also
-// how a bool struct field is filled.
+// how a bool struct field is filled. numeric accepts an optionally signed
+// decimal and number accepts digits alone, as the dialect defines them.
 //
 // See https://pkg.go.dev/github.com/nao1215/filesql/prep for the complete list of supported validators.
 package prep
