@@ -477,6 +477,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 |---------|------------------|--------|
 | Open files and query them | `ExampleOpen`, `ExampleOpenContext` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
 | Load files into an existing `*sql.DB` | `ExampleLoadInto`, `ExampleDBBuilder_LoadInto` | [example_api_test.go](./example_api_test.go) |
+| Load into a transaction you own | `ExampleDBBuilder_LoadIntoTx` | [example_api_test.go](./example_api_test.go) |
 | Load into your own database, edit, and save it back | `ExampleLoadInto_dumpDatabase` | [example_api_test.go](./example_api_test.go) |
 | Build from readers, paths, or embedded FS | `ExampleNewBuilder`, `ExampleDBBuilder_AddReader`, `ExampleDBBuilder_AddPath`, `ExampleDBBuilder_AddFS` | [example_test.go](./example_test.go) |
 | Read a compressed reader | `ExampleDBBuilder_AddReader_compressed` | [example_test.go](./example_test.go) |

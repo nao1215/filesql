@@ -302,6 +302,42 @@ func ExampleDBBuilder_LoadInto() {
 	// users=2 notes=1
 }
 
+func ExampleDBBuilder_LoadIntoTx() {
+	db := openExampleSQLiteDB()
+	defer db.Close()
+
+	ctx := context.Background()
+
+	validated, err := filesql.NewBuilder().
+		AddReader(strings.NewReader("id,name\n1,Alice\n2,Bob\n"), "users", filesql.FileTypeCSV).
+		Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// The caller owns the transaction: the load lands only on Commit, and a
+	// Rollback discards it.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := validated.LoadIntoTx(ctx, tx); err != nil {
+		log.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		log.Fatal(err)
+	}
+
+	var users int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&users); err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("users=%d\n", users)
+	// Output:
+	// users=2
+}
+
 func ExampleNewCompressionHandler() {
 	handler := filesql.NewCompressionHandler(filesql.CompressionGZ)
 
