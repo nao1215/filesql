@@ -1,6 +1,7 @@
 package frame
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -587,6 +588,110 @@ func TestDataFrame_ToCSV(t *testing.T) {
 	})
 }
 
+// TestDataFrame_ToCSVKeepsASingleColumnEmptyRow pins the lone-empty-field form
+// the dump already writes for the same shape: alone on its line, an empty cell
+// written plainly is a blank line, which a CSV reader skips, so the row
+// vanished on reload with nothing to say so. `""` says "one field, empty".
+// TSV needs no form of its own: the literal reader takes a blank line as a
+// one-column empty value.
+func TestDataFrame_ToCSVKeepsASingleColumnEmptyRow(t *testing.T) {
+	t.Parallel()
+
+	df := NewDataFrameFromRecords([]map[string]any{
+		{"v": "a"},
+		{"v": nil},
+		{"v": ""},
+	})
+
+	t.Run("csv", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "out.csv")
+		require.NoError(t, df.ToCSV(path))
+		raw, err := os.ReadFile(path) //nolint:gosec // test file path
+		require.NoError(t, err)
+		assert.Equal(t, "v\na\n\"\"\n\"\"\n", string(raw))
+
+		back, err := NewDataFrameFromPath(path)
+		require.NoError(t, err)
+		assert.Equal(t, 3, back.Len(), "the empty rows must survive the round trip")
+	})
+
+	t.Run("tsv", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "out.tsv")
+		require.NoError(t, df.ToTSV(path))
+
+		back, err := NewDataFrameFromPath(path)
+		require.NoError(t, err)
+		assert.Equal(t, 3, back.Len(), "the literal blank line is the one-column empty value")
+	})
+
+	t.Run("a two-column all-empty row needs no special form", func(t *testing.T) {
+		t.Parallel()
+
+		wide := NewDataFrameFromRecords([]map[string]any{
+			{"a": "x", "b": "y"},
+			{"a": nil, "b": nil},
+		})
+		path := filepath.Join(t.TempDir(), "wide.csv")
+		require.NoError(t, wide.ToCSV(path))
+		back, err := NewDataFrameFromPath(path)
+		require.NoError(t, err)
+		assert.Equal(t, 2, back.Len())
+	})
+}
+
+// TestDataFrame_ToCSVSpellsNonFiniteFloatsForTheReader pins the writers to
+// spellings the module's own read side converts back. %v spelled ±Inf and NaN
+// as words, which nothing reads as a number, so one non-finite value turned
+// the whole reloaded column TEXT and the finite values in it into strings.
+// The dump made the same pair of choices for the same reasons: 9e999 is the
+// spelling SQLite's affinity saturates back to the infinity, and a NaN is the
+// missing value it already is to DropNA and the aggregates.
+func TestDataFrame_ToCSVSpellsNonFiniteFloatsForTheReader(t *testing.T) {
+	t.Parallel()
+
+	// A second column keeps the NaN row a row: alone in its line, an empty
+	// cell would be an empty line, which a CSV reader skips entirely.
+	df := NewDataFrameFromRecords([]map[string]any{
+		{"id": int64(1), "v": math.Inf(1)},
+		{"id": int64(2), "v": math.Inf(-1)},
+		{"id": int64(3), "v": math.NaN()},
+		{"id": int64(4), "v": 2.5},
+	})
+
+	t.Run("csv", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "out.csv")
+		require.NoError(t, df.ToCSV(path))
+		raw, err := os.ReadFile(path) //nolint:gosec // test file path
+		require.NoError(t, err)
+		assert.Equal(t, "id,v\n1,9e999\n2,-9e999\n3,\n4,2.5\n", string(raw))
+
+		back, err := NewDataFrameFromPath(path)
+		require.NoError(t, err)
+		rows := back.ToRecords()
+		require.Len(t, rows, 4)
+		assert.Equal(t, math.Inf(1), rows[0]["v"])
+		assert.Equal(t, math.Inf(-1), rows[1]["v"])
+		assert.Equal(t, "", rows[2]["v"], "a NaN comes back as the missing value it was written as")
+		assert.Equal(t, 2.5, rows[3]["v"])
+	})
+
+	t.Run("tsv", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "out.tsv")
+		require.NoError(t, df.ToTSV(path))
+		raw, err := os.ReadFile(path) //nolint:gosec // test file path
+		require.NoError(t, err)
+		assert.Equal(t, "id\tv\n1\t9e999\n2\t-9e999\n3\t\n4\t2.5\n", string(raw))
+	})
+}
+
 func TestDataFrame_ToTSV(t *testing.T) {
 	t.Parallel()
 
@@ -679,6 +784,21 @@ func TestConvertStringValue(t *testing.T) {
 		assert.Equal(t, int64(100), records[0]["value"])
 		assert.Equal(t, "", records[1]["value"]) // Empty string preserved
 		assert.Equal(t, int64(200), records[2]["value"])
+	})
+
+	t.Run("a saturating spelling converts to the infinity it saturates to", func(t *testing.T) {
+		t.Parallel()
+
+		// The inference calls 9e999 a REAL because SQLite's affinity saturates
+		// it to the infinity, so the cell has to hold that float rather than
+		// fall back to text over the ErrRange beside it.
+		input := "value\n9e999\n-9e999\n2.5"
+		df, err := NewDataFrame(strings.NewReader(input), CSV)
+		require.NoError(t, err)
+		records := df.ToRecords()
+		assert.Equal(t, math.Inf(1), records[0]["value"])
+		assert.Equal(t, math.Inf(-1), records[1]["value"])
+		assert.Equal(t, 2.5, records[2]["value"])
 	})
 
 	t.Run("converts valid float string to float64", func(t *testing.T) {
