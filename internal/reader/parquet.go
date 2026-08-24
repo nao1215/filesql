@@ -2,303 +2,38 @@ package reader
 
 import (
 	"bytes"
-	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 
-	"github.com/apache/arrow/go/v18/arrow"
-	"github.com/apache/arrow/go/v18/arrow/array"
-	pqfile "github.com/apache/arrow/go/v18/parquet/file"
-	"github.com/apache/arrow/go/v18/parquet/pqarrow"
 	"github.com/nao1215/filesql/internal/infer"
+	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 )
 
-// parquetTable reads the whole of a Parquet file into an Arrow table, with the
-// panic a damaged file can raise turned into an error.
-//
-// A Parquet file this package did not write is untrusted input, and the Arrow
-// library panics on some of it rather than reporting -- while parsing the footer
-// as well as while reading a page. One changed byte in the footer of a file
-// whose magic bytes, length and offsets are all still right reached a nil
-// dereference inside NewParquetReader, before the guard that used to sit around
-// the table read alone. A caller loading a file chosen by someone else cannot
-// defend against a panic, and every other malformed input here is an error.
-//
-// The guard covers the library and nothing else: the rows go to the caller's
-// emit after this returns, so a failure of theirs is not reported as damaged
-// data. It can go when the library stops panicking on its own error paths.
-func parquetTable(ctx context.Context, data []byte) (tbl arrow.Table, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			tbl = nil
-			err = parseError(nil, "parquet data is damaged: %v", r)
-		}
-	}()
-
-	pqReader, err := pqfile.NewParquetReader(&bytesReaderAt{data: data})
-	if err != nil {
-		return nil, parseError(err, "failed to create parquet reader")
-	}
-	defer pqReader.Close()
-
-	if err := parquetChunksLieInTheFile(pqReader, int64(len(data))); err != nil {
-		return nil, err
-	}
-
-	arrowReader, err := pqarrow.NewFileReader(pqReader, pqarrow.ArrowReadProperties{}, nil)
-	if err != nil {
-		return nil, parseError(err, "failed to create arrow reader")
-	}
-
-	table, err := readArrowTable(ctx, arrowReader)
-	if err != nil {
-		return nil, parseError(err, "failed to read table")
-	}
-	return table, nil
-}
-
-// parquetChunksLieInTheFile refuses a file whose metadata places a column chunk
-// outside it.
-//
-// A file's footer says where each column chunk begins and how many bytes it
-// occupies, and a chunk that runs past the end of the file it is in cannot be
-// read. The decoder does not check: handed a 433-byte file declaring chunks that
-// begin at offsets 3098 and 3116, it allocated some 350MiB a second for as long
-// as it was left to run. It cannot be stopped from outside either, because the
-// page decoding does not check the context it is given, so a deadline passed
-// down from here expires without effect and a caller who bounds their own work
-// cannot bound this. The only place the file can be refused is before any of it
-// is decoded, which is here.
-//
-// What is asked is only that the bytes a chunk names are in the file: each page
-// offset it declares falls inside it, and the chunk's own length does not run
-// past the end from wherever it starts. Nothing else is checked -- the footer's
-// own bytes are not excluded from the range a chunk may occupy, and a chunk
-// whose sizes disagree with each other is left alone -- because the purpose is
-// to bound a read rather than to validate a file, so a file that is merely
-// unusual passes and only one that could not be read either way is refused. A
-// chunk held in another file, which the format allows and this package does not
-// follow, is left to the reader to report.
-func parquetChunksLieInTheFile(reader *pqfile.Reader, size int64) error {
-	meta := reader.MetaData()
-	for group := range reader.NumRowGroups() {
-		rowGroup := meta.RowGroup(group)
-		for column := range rowGroup.NumColumns() {
-			chunk, err := rowGroup.ColumnChunk(column)
-			if err != nil {
-				return parseError(err, "failed to read the metadata of column %d in row group %d", column, group)
-			}
-			if chunk.FilePath() != "" {
-				continue
-			}
-
-			// An offset of zero means the page is not there rather than that it
-			// sits at the start of the file: a column of a row group with no
-			// rows has a dictionary page and no data page, and says so with a
-			// zero.
-			start := size
-			for _, page := range []struct {
-				what string
-				at   int64
-			}{
-				{"data page", chunk.DataPageOffset()},
-				{"dictionary page", chunk.DictionaryPageOffset()},
-			} {
-				if page.at == 0 {
-					continue
-				}
-				if page.at < int64(len(parquetMagic)) || page.at >= size {
-					return parseError(nil,
-						"the %s of column %d in row group %d is declared at offset %d, outside a file of %d bytes",
-						page.what, column, group, page.at, size)
-				}
-				start = min(start, page.at)
-			}
-			if start == size {
-				// The chunk names no page at all, so there is nothing to bound.
-				continue
-			}
-			if length := chunk.TotalCompressedSize(); !chunkFitsFrom(start, length, size) {
-				return parseError(nil,
-					"column %d of row group %d is declared as %d bytes from offset %d, which runs past the end of a file of %d bytes",
-					column, group, length, start, size)
-			}
-		}
-	}
-	return nil
-}
-
-// chunkFitsFrom reports whether length bytes from start are within a file of
-// size bytes, for a length the file itself declared and this package therefore
-// cannot trust.
-//
-// The comparison is written against what is left of the file rather than as
-// start+length, because that sum overflows for a length near the largest int64
-// and comes back negative, which reads as fitting. A negative length does not
-// describe a chunk at all and is refused rather than treated as zero.
-func chunkFitsFrom(start, length, size int64) bool {
-	return length >= 0 && length <= size-start
-}
-
-// readArrowTable is pqarrow.FileReader.ReadTable done in the calling goroutine,
-// so a panic it raises can be recovered by the read that called it.
-//
-// A Parquet file this package did not write is untrusted input, and the reader
-// panics on some of it rather than reporting: a corrupted page header reaches a
-// nil dereference, and a row group that fails to read is cleaned up by releasing
-// a column that was never built. ReadTable does the column reads in goroutines
-// of its own, where a recover in the calling goroutine cannot reach them and the
-// process dies, so the same reads are done here instead -- one column at a time,
-// where the boundary can be held.
-//
-// This loop can go when the library stops panicking on its own error paths;
-// ReadTable is the call it replaces.
-func readArrowTable(ctx context.Context, arrowReader *pqarrow.FileReader) (tbl arrow.Table, err error) {
-	meta := arrowReader.ParquetReader().MetaData()
-	columnIndices := make([]int, meta.Schema.NumColumns())
-	for i := range columnIndices {
-		columnIndices[i] = i
-	}
-	rowGroups := make([]int, arrowReader.ParquetReader().NumRowGroups())
-	for i := range rowGroups {
-		rowGroups[i] = i
-	}
-
-	// GetFieldReaders, the plural form, fans the per-field reads out into an
-	// errgroup, and a panic in one of those goroutines is not this function's to
-	// recover either. The singular form does the same work here.
-	fieldIndices, err := arrowReader.Manifest.GetFieldIndices(columnIndices)
-	if err != nil {
-		return nil, err
-	}
-	includedLeaves := make(map[int]bool, len(columnIndices))
-	for _, col := range columnIndices {
-		includedLeaves[col] = true
-	}
-	// The readers are collected as they are built and released together, so a
-	// failure part way through this loop does not leave the ones before it
-	// unreleased.
-	readers := make([]*pqarrow.ColumnReader, 0, len(fieldIndices))
-	defer func() {
-		for _, reader := range readers {
-			reader.Release()
-		}
-	}()
-	fields := make([]arrow.Field, 0, len(fieldIndices))
-	for _, fieldIndex := range fieldIndices {
-		reader, readerErr := arrowReader.GetFieldReader(ctx, fieldIndex, includedLeaves, rowGroups)
-		if readerErr != nil {
-			return nil, readerErr
-		}
-		if reader == nil || reader.Field() == nil {
-			return nil, fmt.Errorf("parquet data is damaged: no reader for field %d", fieldIndex)
-		}
-		readers = append(readers, reader)
-		fields = append(fields, *reader.Field())
-	}
-	schema := arrow.NewSchema(fields, arrowReader.Manifest.SchemaMeta)
-
-	// The columns are appended as they are built, so the cleanup below releases
-	// the ones that exist and never a zero value, whose Release dereferences a
-	// chunk it does not have.
-	columns := make([]arrow.Column, 0, len(readers))
-	defer func() {
-		// The columns are copied into the table, which owns them from then on;
-		// on the way out with an error they are this function's to release.
-		if err == nil {
-			return
-		}
-		for i := range columns {
-			columns[i].Release()
-		}
-	}()
-	for i, reader := range readers {
-		chunked, readErr := arrowReader.ReadColumn(rowGroups, reader)
-		if readErr != nil {
-			return nil, readErr
-		}
-		columns = append(columns, *arrow.NewColumn(schema.Field(i), chunked))
-		chunked.Release()
-	}
-
-	var rows int
-	if len(columns) > 0 {
-		rows = columns[0].Len()
-	}
-	return array.NewTable(schema, columns, int64(rows)), nil
-}
+// The reader is github.com/parquet-go/parquet-go rather than the Arrow one it
+// replaced, because a Parquet file this package did not write is untrusted
+// input and the Arrow page decoder was unbounded on some of it: a 433-byte
+// file held a load forever while it allocated hundreds of megabytes a second,
+// it did not check the context it was given, and Go has no way to stop a
+// goroutine that is allocating. parquet-go refuses the same files in
+// microseconds, with time and memory bounded by the file's own size.
 
 // parquetMagic is the four bytes a Parquet file begins and ends with. The
-// format defines both, and checking the leading one is worth doing here because
-// the reader this package uses checks only the trailing one: a file that ends
-// "PAR1" and begins with anything at all is taken for a Parquet file and read
-// into its metadata, where damaged input has reached a panic and an allocation
-// that does not stop. Fuzzing the reader with the check in place ran 1.4 million
-// inputs without either; without it, a worker died within thirty seconds.
+// format defines both, and checking the leading one before handing the bytes
+// to a library is what keeps arbitrary non-Parquet input out of a decoder:
+// fuzzing the previous reader with the check in place ran 1.4 million inputs
+// without a hang or a panic; without it, a worker died within thirty seconds.
 var parquetMagic = []byte("PAR1") //nolint:gochecknoglobals // constant-like
 
 // errNotParquet reports bytes that do not begin the way the format says.
 func errNotParquet(head []byte) error {
 	return parseError(nil, "not a parquet file: it begins %q rather than %q", head, parquetMagic)
-}
-
-// bytesReaderAt wraps a byte slice to implement io.ReaderAt and io.Seeker
-type bytesReaderAt struct {
-	data   []byte
-	offset int64
-}
-
-// ReadAt implements io.ReaderAt
-func (b *bytesReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
-	if off < 0 || off >= int64(len(b.data)) {
-		return 0, io.EOF
-	}
-	n = copy(p, b.data[off:])
-	if n < len(p) {
-		err = io.EOF
-	}
-	return n, err
-}
-
-// Size returns the size of the data
-func (b *bytesReaderAt) Size() int64 {
-	return int64(len(b.data))
-}
-
-// Read implements io.Reader
-func (b *bytesReaderAt) Read(p []byte) (int, error) {
-	if b.offset >= int64(len(b.data)) {
-		return 0, io.EOF
-	}
-	n := copy(p, b.data[b.offset:])
-	b.offset += int64(n)
-	return n, nil
-}
-
-// Seek implements io.Seeker
-func (b *bytesReaderAt) Seek(offset int64, whence int) (int64, error) {
-	var newOffset int64
-	switch whence {
-	case io.SeekStart:
-		newOffset = offset
-	case io.SeekCurrent:
-		newOffset = b.offset + offset
-	case io.SeekEnd:
-		newOffset = int64(len(b.data)) + offset
-	default:
-		return 0, errors.New("invalid whence")
-	}
-
-	if newOffset < 0 {
-		return 0, errors.New("negative position")
-	}
-
-	b.offset = newOffset
-	return newOffset, nil
 }
 
 // readParquet reads a Parquet file in chunks. The whole file is buffered first
@@ -315,130 +50,500 @@ func readParquet(src io.Reader, opts Options, emit Emit) (Result, error) {
 		return Result{}, errNotParquet(data[:min(len(data), len(parquetMagic))])
 	}
 
-	table, err := parquetTable(context.Background(), data)
+	file, err := openParquet(data)
 	if err != nil {
 		return Result{}, err
 	}
-	defer table.Release()
 
-	schema := table.Schema()
-	header := make([]string, schema.NumFields())
-	for i, field := range schema.Fields() {
-		header[i] = field.Name
+	header, columns, leafField, flat, err := parquetSchemaLayout(file)
+	if err != nil {
+		return Result{}, err
 	}
 	// Parquet declares the type of every column, so the schema is read rather
 	// than inferred from the rendered values: inference cannot tell a STRING
 	// column of digits from an INT64 one, and would turn a zip code into a
 	// number.
-	types := arrowColumnTypes(schema, opts.Rendering)
+	types := make([]infer.Type, len(columns))
+	for i, col := range columns {
+		types[i] = col.columnType(opts.Rendering)
+	}
 	result := Result{Header: header, Types: types}
 
 	// A file with a schema and no rows still names its columns.
-	if table.NumRows() == 0 {
+	if file.NumRows() == 0 {
 		return result, emit(&Chunk{Header: header, Types: types})
 	}
 
-	tableReader := array.NewTableReader(table, int64(chunkSizeOf(opts)))
-	defer tableReader.Release()
-
-	for tableReader.Next() {
-		batch := tableReader.Record()
-
-		records := make([][]string, 0, batch.NumRows())
-		nulls := make([][]bool, 0, batch.NumRows())
-		for i := range batch.NumRows() {
-			row := make([]string, batch.NumCols())
-			nullRow := make([]bool, batch.NumCols())
-			for j, col := range batch.Columns() {
-				if arrowCellIsNull(col, i, opts.Rendering) {
-					nullRow[j] = true
-					continue
-				}
-				row[j] = extractValueFromArrowArray(col, i, opts.Rendering)
-			}
-			records = append(records, row)
-			nulls = append(nulls, nullRow)
-		}
-
+	chunkSize := chunkSizeOf(opts)
+	chunkCap := min(chunkSize, 1024)
+	records := make([][]string, 0, chunkCap)
+	nulls := make([][]bool, 0, chunkCap)
+	flush := func() error {
 		if len(records) == 0 {
-			continue
+			return nil
 		}
 		result.Rows += len(records)
 		result.Total += len(records)
-		if err := emit(&Chunk{Header: header, Records: records, Types: types, Nulls: nulls}); err != nil {
-			return Result{}, err
-		}
+		err := emit(&Chunk{Header: header, Records: records, Types: types, Nulls: nulls})
+		// The emitted chunk owns its slices -- a caller may keep them -- so the
+		// next chunk starts fresh rather than over the same backing array.
+		records = make([][]string, 0, chunkCap)
+		nulls = make([][]bool, 0, chunkCap)
+		return err
 	}
 
-	if err := tableReader.Err(); err != nil {
-		return Result{}, parseError(err, "error reading table records")
+	buf := make([]parquet.Row, min(chunkSize, 1024))
+	for _, rowGroup := range file.RowGroups() {
+		rows, err := openParquetRows(rowGroup)
+		if err != nil {
+			return Result{}, err
+		}
+		readErr := func() error {
+			defer rows.Close()
+			for {
+				n, err := readParquetRows(rows, buf)
+				for _, parquetRow := range buf[:n] {
+					row, nullRow := renderParquetRow(parquetRow, columns, leafField, flat, opts.Rendering)
+					records = append(records, row)
+					nulls = append(nulls, nullRow)
+					if len(records) >= chunkSize {
+						if err := flush(); err != nil {
+							return err
+						}
+					}
+				}
+				if errors.Is(err, io.EOF) {
+					return nil
+				}
+				if err != nil {
+					return parseError(err, "failed to read table")
+				}
+				// No rows, no error, and no EOF is a read that made no
+				// progress; looping on it would never return. A healthy read
+				// into a non-empty buffer always does one of the three.
+				if n == 0 {
+					return parseError(nil, "parquet data is damaged: a read returned no rows and no error")
+				}
+			}
+		}()
+		if readErr != nil {
+			return Result{}, readErr
+		}
+	}
+	if err := flush(); err != nil {
+		return Result{}, err
 	}
 	return result, nil
 }
 
-// arrowColumnTypes maps a Parquet file's Arrow schema onto column types.
-//
-// The type chosen for each column has to agree with what
-// extractValueFromArrowArray renders under the same rendering, because a value
-// is read back by parsing that string -- and, for a load, because SQLite
-// applies the column's affinity to it. A mismatch is worse than text: it would
-// store a value the column claims not to hold.
-func arrowColumnTypes(schema *arrow.Schema, rendering Rendering) []infer.Type {
-	fields := schema.Fields()
-	types := make([]infer.Type, len(fields))
-	for i, field := range fields {
-		types[i] = arrowColumnType(field.Type, rendering)
+// openParquet opens the file's metadata, with any panic the library raises on
+// damaged input turned into an error: a caller loading a file chosen by
+// someone else cannot defend against a panic, and every other malformed input
+// here is an error.
+func openParquet(data []byte) (file *parquet.File, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			file = nil
+			err = parseError(nil, "parquet data is damaged: %v", r)
+		}
+	}()
+	// The page index and bloom filters are for pruning reads; this read scans
+	// every row, so neither is worth decoding.
+	file, err = parquet.OpenFile(bytes.NewReader(data), int64(len(data)),
+		parquet.SkipPageIndex(true), parquet.SkipBloomFilters(true))
+	if err != nil {
+		return nil, parseError(err, "failed to create parquet reader")
 	}
-	return types
+	return file, nil
 }
 
-// arrowColumnType is the column type for one Arrow type. The temporal types
-// render as the raw count they store (days, milliseconds, or ticks since the
-// epoch), which is an integer. Anything not named here stays text, which is the
-// safe answer: an unrecognized type is rendered by extractValueFromArrowArray's
-// default branch, and its shape is not known.
-func arrowColumnType(dt arrow.DataType, rendering Rendering) infer.Type {
-	switch dt.ID() {
-	case arrow.BOOL:
-		// A boolean renders as 1 or 0 for SQLite, which is an integer there, and
-		// as "true" or "false" otherwise, which is not.
+// openParquetRows is RowGroup.Rows with the panic a damaged schema can raise
+// turned into an error: building the row reader asks every leaf type its kind,
+// which panics on the same inconsistent metadata parquetSchemaLayout guards
+// against, this time inside the library's own walk.
+func openParquetRows(rowGroup parquet.RowGroup) (rows parquet.Rows, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			rows = nil
+			err = parseError(nil, "parquet data is damaged: %v", r)
+		}
+	}()
+	return rowGroup.Rows(), nil
+}
+
+// readParquetRows is Rows.ReadRows with the panic a damaged page can raise
+// turned into an error.
+func readParquetRows(rows parquet.Rows, buf []parquet.Row) (n int, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			n = 0
+			err = fmt.Errorf("parquet data is damaged: %v", r)
+		}
+	}()
+	return rows.ReadRows(buf)
+}
+
+// parquetColumn is one top-level field of the schema and how its values are
+// rendered.
+type parquetColumn struct {
+	leaf     bool // a single non-repeated primitive, the common case
+	kind     parquet.Kind
+	unsigned bool  // INT(bits, false): the physical int carries an unsigned value
+	float16  bool  // FLOAT16: two bytes carrying a half-precision float
+	decimal  bool  // DECIMAL(precision, scale) over an int or fixed bytes
+	scale    int32 // the DECIMAL scale
+	uuid     bool  // UUID: sixteen bytes rendered in the canonical hex form
+}
+
+// parquetSchemaLayout reads the file's schema into the header, the column
+// descriptions, and the leaf-to-field mapping, with any panic the library
+// raises on a damaged schema turned into an error: the type of a leaf whose
+// metadata is inconsistent -- a MAP annotation on a node with a physical type,
+// found by fuzzing -- panics when asked its kind.
+func parquetSchemaLayout(file *parquet.File) (header []string, columns []parquetColumn, leafField []int, flat bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = parseError(nil, "parquet data is damaged: %v", r)
+		}
+	}()
+	fields := file.Schema().Fields()
+	header = make([]string, len(fields))
+	for i, field := range fields {
+		header[i] = field.Name()
+	}
+	columns = parquetColumns(file)
+	leafField, flat = parquetLeafFields(file.Schema(), columns)
+	return header, columns, leafField, flat, nil
+}
+
+// parquetColumns describes each top-level field of the file's schema.
+//
+// The FLOAT16 annotation is read from the file's raw metadata rather than from
+// the parsed schema, because the library's schema normalization does not carry
+// it: the parsed leaf presents as a plain fixed-length byte array.
+func parquetColumns(file *parquet.File) []parquetColumn {
+	halfFloats := float16Leaves(file.Metadata().Schema)
+	fields := file.Schema().Fields()
+	columns := make([]parquetColumn, len(fields))
+	leafIndex := 0
+	for i, field := range fields {
+		leaves := countParquetLeaves(field)
+		col := parquetColumn{leaf: field.Leaf() && !field.Repeated()}
+		if col.leaf {
+			typ := field.Type()
+			if lt := typ.LogicalType(); lt != nil {
+				switch v := lt.Value.(type) {
+				case *format.IntType:
+					col.unsigned = !v.IsSigned
+				case *format.DecimalType:
+					col.decimal = true
+					col.scale = v.Scale
+				case *format.UUIDType:
+					col.uuid = true
+				case *format.Float16Type:
+					// The format allows FLOAT16 on two fixed bytes alone; on
+					// any other shape the annotation is inconsistent metadata
+					// and the bytes are left as they are.
+					col.float16 = typ.Kind() == parquet.FixedLenByteArray && typ.Length() == 2
+				case *format.MapType, *format.ListType:
+					// A group annotation on a node with a physical type is
+					// inconsistent metadata; asking such a type its kind
+					// panics. The values still render, by their own kind.
+					col.leaf = false
+				}
+			}
+		}
+		if col.leaf {
+			col.kind = field.Type().Kind()
+			col.float16 = col.float16 || halfFloats[leafIndex]
+		}
+		columns[i] = col
+		leafIndex += leaves
+	}
+	return columns
+}
+
+// float16Leaves reports which leaf columns a file's own metadata annotates as
+// FLOAT16, by leaf index. The format allows the annotation on two fixed bytes
+// alone, so a length of anything else is inconsistent metadata and the column
+// is left as the bytes it holds rather than declared a real number it cannot
+// render.
+func float16Leaves(elements []format.SchemaElement) map[int]bool {
+	out := map[int]bool{}
+	leaf := 0
+	for _, element := range elements {
+		if !element.Type.Valid {
+			continue // a group node has no physical type and holds no column
+		}
+		if _, ok := element.LogicalType.Value.(*format.Float16Type); ok &&
+			element.Type.V == format.FixedLenByteArray &&
+			element.TypeLength.Valid && element.TypeLength.V == 2 {
+			out[leaf] = true
+		}
+		leaf++
+	}
+	return out
+}
+
+// countParquetLeaves is how many leaf columns sit under a field.
+func countParquetLeaves(field parquet.Field) int {
+	if field.Leaf() {
+		return 1
+	}
+	total := 0
+	for _, child := range field.Fields() {
+		total += countParquetLeaves(child)
+	}
+	return total
+}
+
+// parquetLeafFields maps each leaf column index onto the top-level field it
+// belongs to, and reports whether the schema is flat: every field one
+// non-repeated leaf, so a row's values line up with the fields one to one.
+func parquetLeafFields(schema *parquet.Schema, columns []parquetColumn) ([]int, bool) {
+	position := make(map[string]int, len(columns))
+	for i, field := range schema.Fields() {
+		position[field.Name()] = i
+	}
+	paths := schema.Columns()
+	leafField := make([]int, len(paths))
+	for i, path := range paths {
+		leafField[i] = position[path[0]]
+	}
+	flat := len(paths) == len(columns)
+	for _, col := range columns {
+		flat = flat && col.leaf
+	}
+	return leafField, flat
+}
+
+// columnType is the column type one field calls for. It has to agree with what
+// renderParquetValue renders under the same rendering, because a value is read
+// back by parsing that string -- and, for a load, because SQLite applies the
+// column's affinity to it. A mismatch is worse than text: it would store a
+// value the column claims not to hold.
+//
+// The temporal annotations (DATE, TIME, TIMESTAMP) render as the raw count the
+// file stores -- days, or ticks of the schema's unit -- which is an integer. A
+// nested or repeated field, and any leaf not named here, stays text, the safe
+// answer for a shape this function does not know.
+func (c parquetColumn) columnType(rendering Rendering) infer.Type {
+	switch {
+	case !c.leaf, c.decimal, c.uuid:
+		return infer.Text
+	case c.float16:
+		return infer.Real
+	}
+	switch c.kind {
+	case parquet.Boolean:
+		// A boolean renders as 1 or 0 for SQLite, which is an integer there,
+		// and as "true" or "false" otherwise, which is not.
 		if rendering == RenderSQLite {
 			return infer.Integer
 		}
 		return infer.Text
-	case arrow.INT8, arrow.INT16, arrow.INT32, arrow.INT64,
-		arrow.UINT8, arrow.UINT16, arrow.UINT32, arrow.UINT64,
-		arrow.DATE32, arrow.DATE64, arrow.TIMESTAMP:
+	case parquet.Int32, parquet.Int64, parquet.Int96:
 		return infer.Integer
-	case arrow.FLOAT16, arrow.FLOAT32, arrow.FLOAT64:
+	case parquet.Float, parquet.Double:
 		return infer.Real
 	default:
 		return infer.Text
 	}
 }
 
-// arrowCellIsNull reports whether a cell has no value the destination can
+// renderParquetRow renders one row into its cells and their null marks. In a
+// flat schema the row's values line up with the fields; otherwise the values
+// are gathered per field, and a field whose values are all null is a null cell
+// while any other set renders bracketed, the way a list prints.
+func renderParquetRow(row parquet.Row, columns []parquetColumn, leafField []int, flat bool, rendering Rendering) ([]string, []bool) {
+	cells := make([]string, len(columns))
+	nullRow := make([]bool, len(columns))
+	if flat {
+		for i, value := range row {
+			if i >= len(columns) {
+				break
+			}
+			if parquetCellIsNull(value, columns[i], rendering) {
+				nullRow[i] = true
+				continue
+			}
+			cells[i] = renderParquetValue(value, columns[i], rendering)
+		}
+		return cells, nullRow
+	}
+
+	parts := make([][]string, len(columns))
+	seen := make([]bool, len(columns))
+	for _, value := range row {
+		leaf := value.Column()
+		if leaf < 0 || leaf >= len(leafField) {
+			continue
+		}
+		i := leafField[leaf]
+		if parquetCellIsNull(value, columns[i], rendering) {
+			parts[i] = append(parts[i], "")
+			continue
+		}
+		seen[i] = true
+		parts[i] = append(parts[i], renderParquetValue(value, columns[i], rendering))
+	}
+	for i, col := range columns {
+		switch {
+		case !seen[i]:
+			nullRow[i] = true
+		case col.leaf && len(parts[i]) == 1:
+			cells[i] = parts[i][0]
+		default:
+			cells[i] = "[" + strings.Join(parts[i], " ") + "]"
+		}
+	}
+	return cells, nullRow
+}
+
+// parquetCellIsNull reports whether a cell has no value the destination can
 // store: a Parquet null always, and under RenderSQLite a NaN as well, which
 // SQLite has no representation for at all -- a computed NaN is NULL there, so
 // NULL is what the value already means. Left as text it would sit in a column
 // declared REAL as the word "NaN".
-func arrowCellIsNull(arr arrow.Array, index int64, rendering Rendering) bool {
-	if arr.IsNull(int(index)) {
+func parquetCellIsNull(v parquet.Value, col parquetColumn, rendering Rendering) bool {
+	if v.IsNull() {
 		return true
 	}
 	if rendering != RenderSQLite {
 		return false
 	}
-	switch a := arr.(type) {
-	case *array.Float16:
-		return math.IsNaN(float64(a.Value(int(index)).Float32()))
-	case *array.Float32:
-		return math.IsNaN(float64(a.Value(int(index))))
-	case *array.Float64:
-		return math.IsNaN(a.Value(int(index)))
-	default:
-		return false
+	switch v.Kind() {
+	case parquet.Float:
+		return math.IsNaN(float64(v.Float()))
+	case parquet.Double:
+		return math.IsNaN(v.Double())
+	case parquet.FixedLenByteArray:
+		if b := v.ByteArray(); col.float16 && len(b) == 2 {
+			return math.IsNaN(float64(float16To32(uint16(b[0]) | uint16(b[1])<<8)))
+		}
 	}
+	return false
+}
+
+// renderParquetValue renders one leaf value as the text its column type calls
+// for.
+func renderParquetValue(v parquet.Value, col parquetColumn, rendering Rendering) string {
+	switch v.Kind() {
+	case parquet.Boolean:
+		return boolText(v.Boolean(), rendering)
+	case parquet.Int32:
+		if col.decimal {
+			return decimalText(big.NewInt(int64(v.Int32())), col.scale)
+		}
+		if col.unsigned {
+			return strconv.FormatUint(uint64(uint32(v.Int32())), 10) //nolint:gosec // the unsigned column stores its value in the physical int's bits
+		}
+		return strconv.FormatInt(int64(v.Int32()), 10)
+	case parquet.Int64:
+		if col.decimal {
+			return decimalText(big.NewInt(v.Int64()), col.scale)
+		}
+		if col.unsigned {
+			return strconv.FormatUint(uint64(v.Int64()), 10) //nolint:gosec // the unsigned column stores its value in the physical int's bits
+		}
+		return strconv.FormatInt(v.Int64(), 10)
+	case parquet.Int96:
+		return strconv.FormatInt(int96EpochNanos([3]uint32(v.Int96())), 10)
+	case parquet.Float:
+		return floatText(float64(v.Float()), 32, rendering)
+	case parquet.Double:
+		return floatText(v.Double(), 64, rendering)
+	case parquet.ByteArray, parquet.FixedLenByteArray:
+		b := v.ByteArray()
+		switch {
+		// A half float is rendered at 32 bits, the narrowest width Go can
+		// format it at. The bytes are little-endian per the format.
+		case col.float16 && len(b) == 2:
+			return floatText(float64(float16To32(uint16(b[0])|uint16(b[1])<<8)), 32, rendering)
+		case col.decimal:
+			return decimalText(twosComplementBig(b), col.scale)
+		case col.uuid && len(b) == 16:
+			return uuidText(b)
+		}
+		return string(b)
+	default:
+		return v.String()
+	}
+}
+
+// int96EpochNanos converts the deprecated INT96 timestamp -- nanoseconds of
+// the day in its low eight bytes and a Julian day in its high four -- to
+// nanoseconds since the Unix epoch, which is what the Arrow reader rendered
+// for the same column.
+func int96EpochNanos(v [3]uint32) int64 {
+	const julianUnixEpoch = 2440588
+	const nanosPerDay = 24 * 60 * 60 * 1_000_000_000
+	nanos := int64(uint64(v[0]) | uint64(v[1])<<32) //nolint:gosec // a damaged count wraps to a wrong number, never past the slice it renders into
+	days := int64(v[2]) - julianUnixEpoch
+	return days*nanosPerDay + nanos
+}
+
+// float16To32 widens an IEEE 754 half-precision float to single precision.
+func float16To32(bits uint16) float32 {
+	sign := uint32(bits>>15) << 31
+	exponent := uint32(bits >> 10 & 0x1f)
+	mantissa := uint32(bits & 0x3ff)
+	switch exponent {
+	case 0:
+		if mantissa == 0 {
+			return math.Float32frombits(sign) // ±0
+		}
+		// A subnormal half is a normal float32: shift the mantissa up to its
+		// implicit leading bit, lowering the exponent as it goes.
+		exponent = 1
+		for mantissa&0x400 == 0 {
+			mantissa <<= 1
+			exponent--
+		}
+		mantissa &= 0x3ff
+	case 0x1f: // infinities and NaN
+		return math.Float32frombits(sign | 0x7f800000 | mantissa<<13)
+	}
+	return math.Float32frombits(sign | (exponent+112)<<23 | mantissa<<13)
+}
+
+// decimalText renders a DECIMAL's unscaled integer at its scale: "123.45" for
+// 12345 at scale 2, with a leading zero when the value is smaller than its
+// scale.
+func decimalText(unscaled *big.Int, scale int32) string {
+	if scale <= 0 {
+		if scale < 0 {
+			unscaled = new(big.Int).Mul(unscaled,
+				new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-scale)), nil))
+		}
+		return unscaled.String()
+	}
+	sign := ""
+	digits := unscaled.String()
+	if strings.HasPrefix(digits, "-") {
+		sign, digits = "-", digits[1:]
+	}
+	if len(digits) <= int(scale) {
+		digits = strings.Repeat("0", int(scale)-len(digits)+1) + digits
+	}
+	point := len(digits) - int(scale)
+	return sign + digits[:point] + "." + digits[point:]
+}
+
+// twosComplementBig reads a big-endian two's-complement integer, which is how
+// DECIMAL stores its unscaled value in a byte array.
+func twosComplementBig(b []byte) *big.Int {
+	n := new(big.Int).SetBytes(b)
+	if len(b) > 0 && b[0]&0x80 != 0 {
+		n.Sub(n, new(big.Int).Lsh(big.NewInt(1), uint(len(b)*8)))
+	}
+	return n
+}
+
+// uuidText renders sixteen bytes in the canonical 8-4-4-4-12 form.
+func uuidText(b []byte) string {
+	h := hex.EncodeToString(b)
+	return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
 }
 
 // SQLiteFloatText renders a float at bitSize so SQLite's REAL affinity converts
@@ -482,65 +587,6 @@ func floatText(f float64, bitSize int, rendering Rendering) string {
 		text += ".0"
 	}
 	return text
-}
-
-// extractValueFromArrowArray extracts a value from an Arrow array at the given index.
-func extractValueFromArrowArray(arr arrow.Array, index int64, rendering Rendering) string {
-	if arr.IsNull(int(index)) {
-		return ""
-	}
-
-	switch a := arr.(type) {
-	case *array.Boolean:
-		return boolText(a.Value(int(index)), rendering)
-
-	case *array.Int8:
-		return strconv.Itoa(int(a.Value(int(index))))
-	case *array.Int16:
-		return strconv.Itoa(int(a.Value(int(index))))
-	case *array.Int32:
-		return strconv.Itoa(int(a.Value(int(index))))
-	case *array.Int64:
-		return strconv.FormatInt(a.Value(int(index)), 10)
-
-	case *array.Uint8:
-		return strconv.FormatUint(uint64(a.Value(int(index))), 10)
-	case *array.Uint16:
-		return strconv.FormatUint(uint64(a.Value(int(index))), 10)
-	case *array.Uint32:
-		return strconv.FormatUint(uint64(a.Value(int(index))), 10)
-	case *array.Uint64:
-		return strconv.FormatUint(a.Value(int(index)), 10)
-
-	// A half float is rendered at 32 bits, the narrowest width Go can format
-	// it at. Without a case of its own it reached the default branch, where
-	// "%v" spelled a NaN as "NaN" and a whole number without the point that
-	// keeps its column REAL -- in a column the schema had already declared
-	// REAL, since arrowColumnType reads FLOAT16 as a real number.
-	case *array.Float16:
-		return floatText(float64(a.Value(int(index)).Float32()), 32, rendering)
-	case *array.Float32:
-		return floatText(float64(a.Value(int(index))), 32, rendering)
-	case *array.Float64:
-		return floatText(a.Value(int(index)), 64, rendering)
-
-	case *array.String:
-		return a.Value(int(index))
-	case *array.Binary:
-		return string(a.Value(int(index)))
-
-	// The temporal types keep the raw count the file stores: days for Date32,
-	// milliseconds for Date64, and whatever unit the schema names for Timestamp.
-	case *array.Date32:
-		return strconv.FormatInt(int64(a.Value(int(index))), 10)
-	case *array.Date64:
-		return strconv.FormatInt(int64(a.Value(int(index))), 10)
-	case *array.Timestamp:
-		return strconv.FormatInt(int64(a.Value(int(index))), 10)
-
-	default:
-		return fmt.Sprintf("%v", arr.GetOneForMarshal(int(index)))
-	}
 }
 
 // boolText spells a boolean the way its column is declared: 1 and 0 for the
