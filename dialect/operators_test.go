@@ -331,6 +331,12 @@ func TestArithmeticFunctionsAreTranslated(t *testing.T) {
 		{PostgreSQL, `SELECT trunc(12.345, -1)`, "10"},
 		{PostgreSQL, `SELECT trunc(-12.345, -1)`, "-10"},
 		{PostgreSQL, `SELECT trunc(12345.6, -2)`, "12300"},
+		{PostgreSQL, `SELECT trunc(12.345, -3)`, "0"},
+		// A scale whose power of ten leaves the float64 range at either end:
+		// PostgreSQL truncates everything away at one and keeps the value at
+		// the other.
+		{PostgreSQL, `SELECT trunc(12.345, -400)`, "0"},
+		{PostgreSQL, `SELECT trunc(12.345, 400)`, "12.345"},
 		{GoogleSQL, `SELECT TRUNC(12.345, 2)`, "12.34"},
 
 		// The one-argument form is SQLite's own and must keep working.

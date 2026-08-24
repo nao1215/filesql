@@ -146,7 +146,15 @@ func truncateScale(args []driver.Value) (driver.Value, error) {
 		return x, nil
 	}
 	factor := math.Pow(10, float64(scale.integer()))
-	if factor == 0 || math.IsInf(factor, 0) {
+	switch {
+	case factor == 0:
+		// A scale so negative that the power of ten underflows truncates every
+		// finite value to nothing, which is the 0 PostgreSQL answers for
+		// trunc(12.345, -400).
+		return float64(0), nil
+	case math.IsInf(factor, 0):
+		// A scale past every decimal the value has keeps the value, which is
+		// what PostgreSQL answers for trunc(12.345, 400).
 		return x, nil
 	}
 	return math.Trunc(x*factor) / factor, nil
