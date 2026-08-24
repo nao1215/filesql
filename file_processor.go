@@ -73,13 +73,34 @@ func (fp *fileProcessor) collectFilesFromPaths(paths []string) ([]string, error)
 func (fp *fileProcessor) collectFilesFromDirectory(dirPath string, processedFiles map[string]bool) ([]string, error) {
 	var collectedPaths []string
 
-	err := filepath.WalkDir(dirPath, func(filePath string, d os.DirEntry, err error) error {
+	// os.Stat, which is what said this path is a directory, follows a symbolic
+	// link; filepath.WalkDir lstats its root, so a linked directory was visited
+	// as the one unsupported entry the link itself is and the load failed with
+	// "no supported files found in directory" for a directory full of them. The
+	// root is resolved before the walk, and what is found under it is reported back
+	// under the name the caller gave: that is the path an in-place save writes
+	// to and the one an error message names. Links found inside the walk are
+	// still not followed, which is what keeps a cycle from running forever.
+	walkRoot := dirPath
+	if resolved, resolveErr := filepath.EvalSymlinks(dirPath); resolveErr == nil {
+		walkRoot = resolved
+	}
+
+	err := filepath.WalkDir(walkRoot, func(filePath string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		if d.IsDir() || !isSupportedFile(filePath) {
 			return nil
+		}
+
+		if walkRoot != dirPath {
+			rel, relErr := filepath.Rel(walkRoot, filePath)
+			if relErr != nil {
+				return fmt.Errorf("%w: failed to place %s under %s: %w", ErrIOOperation, filePath, dirPath, relErr)
+			}
+			filePath = filepath.Join(dirPath, rel)
 		}
 
 		absPath, err := filepath.Abs(filePath)
