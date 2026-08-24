@@ -131,11 +131,19 @@ func TestReadParquetUnsignedColumns(t *testing.T) {
 		U32 uint32 `parquet:"u32"`
 		U64 uint64 `parquet:"u64"`
 	}
-	data := writeParquet(t, []row{{U8: 255, U32: math.MaxUint32, U64: math.MaxUint64}})
+	data := writeParquet(t, []row{
+		{U8: 255, U32: math.MaxUint32, U64: math.MaxUint64},
+		{U8: 0, U32: 7, U64: 42},
+	})
 
-	_, chunks := collectParquet(t, data, Options{Rendering: RenderSQLite})
+	result, chunks := collectParquet(t, data, Options{Rendering: RenderSQLite})
 	require.Len(t, chunks, 1)
 	assert.Equal(t, []string{"255", "4294967295", "18446744073709551615"}, chunks[0].Records[0])
+	assert.Equal(t, []string{"0", "7", "42"}, chunks[0].Records[1])
+	// The narrower unsigned types fit in int64, and UINT64 does not: declared
+	// INTEGER, its upper half is converted to REAL by SQLite's affinity and the
+	// exact value is gone, so the column is TEXT the way DECIMAL and UUID are.
+	assert.Equal(t, []infer.Type{infer.Integer, infer.Integer, infer.Text}, result.Types)
 }
 
 func TestReadParquetDecimalColumn(t *testing.T) {

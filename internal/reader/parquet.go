@@ -339,6 +339,13 @@ func (c parquetColumn) columnType(rendering Rendering) infer.Type {
 	switch {
 	case !c.leaf, c.decimal, c.uuid:
 		return infer.Text
+	// A UINT64 column's upper half is past int64, and SQLite's INTEGER
+	// affinity converts such a literal to the nearest REAL, silently a
+	// different number. TEXT holds the whole range exactly, the same trade
+	// DECIMAL makes. The narrower unsigned types fit in int64 and stay
+	// INTEGER below.
+	case c.unsigned && c.kind == parquet.Int64:
+		return infer.Text
 	case c.float16:
 		return infer.Real
 	}
