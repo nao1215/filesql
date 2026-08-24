@@ -547,3 +547,26 @@ func TestAutoSaveOverwriteRefusesCodecItCannotWrite(t *testing.T) {
 	assert.Equal(t, fixture, after, "the source must be left byte for byte as it was")
 	assert.Equal(t, []string{"products.tsv.bz2"}, dirEntries(t, dir), "nothing else may be written")
 }
+
+// TestAutoSaveOverwriteLongSourceName pins the auto-save form of the staged-name
+// bug. Overwrite mode is where the failure costs the caller their edit: the save
+// runs from Close, after the change is in the database and with nowhere else for
+// it to go.
+func TestAutoSaveOverwriteLongSourceName(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	base := strings.Repeat("s", 246) + ".csv"
+	src := filepath.Join(dir, base)
+	if err := os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600); err != nil {
+		t.Skipf("this filesystem does not accept a %d-byte name: %v", len(base), err)
+	}
+
+	table := sanitizeTableName(tableFromFilePath(src))
+	require.NoError(t, autoSaveOverwrite(t, []string{src}, `UPDATE "`+table+`" SET name = 'bob'`))
+
+	got, err := os.ReadFile(src) //nolint:gosec // Test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, "id,name\n1,bob\n", string(got))
+	assert.Equal(t, []string{base}, dirEntries(t, dir), "no staged file may be left beside the source")
+}
