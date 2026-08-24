@@ -660,9 +660,9 @@ func textColumns(headers header) columnInfoList {
 func createTable(ctx context.Context, db DBTX, tableName string, columns columnInfoList) error {
 	defs := make([]string, 0, len(columns))
 	for _, col := range columns {
-		defs = append(defs, fmt.Sprintf(`"%s" %s`, col.Name, col.Type.string()))
+		defs = append(defs, fmt.Sprintf(`%s %s`, quoteIdentifier(col.Name), col.Type.string()))
 	}
-	_, err := db.ExecContext(ctx, fmt.Sprintf(`CREATE TABLE "%s" (%s)`, tableName, strings.Join(defs, ", ")))
+	_, err := db.ExecContext(ctx, fmt.Sprintf(`CREATE TABLE %s (%s)`, quoteIdentifier(tableName), strings.Join(defs, ", ")))
 	return err
 }
 

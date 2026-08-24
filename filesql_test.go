@@ -4097,3 +4097,99 @@ func TestDumpEntryPointsRefuseANilDatabase(t *testing.T) {
 		})
 	}
 }
+
+// loadedColumnNames reports the columns of a table in declaration order.
+func loadedColumnNames(t *testing.T, db *sql.DB, table string) []string {
+	t.Helper()
+	rows, err := db.QueryContext(context.Background(), `SELECT * FROM "`+table+`" LIMIT 0`) //nolint:gosec // table name is a test literal
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	cols, err := rows.Columns()
+	require.NoError(t, err)
+	require.NoError(t, rows.Err())
+	return cols
+}
+
+// TestLoadColumnNameContainingDoubleQuote covers a column whose name holds a
+// double quote, which the load path once dropped into a CREATE TABLE identifier
+// without doubling, breaking the statement. Every format that takes its column
+// names from the data reaches the same createTable, so the CSV, XLSX, and
+// Parquet paths are all exercised, and the name a"b must survive the round trip.
+func TestLoadColumnNameContainingDoubleQuote(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("csv", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		// A quoted CSV field "a""b" is the single column name a"b.
+		path := filepath.Join(dir, "quoted.csv")
+		require.NoError(t, os.WriteFile(path, []byte("\"a\"\"b\"\nvalue\n"), 0o600))
+
+		db, err := OpenContext(ctx, path)
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		assert.Equal(t, []string{`a"b`}, loadedColumnNames(t, db, "quoted"))
+		var got string
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT "a""b" FROM quoted`).Scan(&got))
+		assert.Equal(t, "value", got)
+	})
+
+	t.Run("csv name that is only a quote", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		path := filepath.Join(dir, "onlyquote.csv")
+		require.NoError(t, os.WriteFile(path, []byte("\"\"\"\"\nvalue\n"), 0o600))
+
+		db, err := OpenContext(ctx, path)
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		assert.Equal(t, []string{`"`}, loadedColumnNames(t, db, "onlyquote"))
+	})
+
+	t.Run("xlsx", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		path := filepath.Join(dir, "quoted.xlsx")
+		// The sheet is named after the file so the one table is "quoted".
+		f := excelize.NewFile()
+		require.NoError(t, f.SetSheetName("Sheet1", "quoted"))
+		require.NoError(t, f.SetCellValue("quoted", "A1", `a"b`))
+		require.NoError(t, f.SetCellValue("quoted", "A2", "value"))
+		require.NoError(t, f.SaveAs(path))
+		require.NoError(t, f.Close())
+
+		db, err := OpenContext(ctx, path)
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		assert.Equal(t, []string{`a"b`}, loadedColumnNames(t, db, "quoted"))
+		var got string
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT "a""b" FROM quoted`).Scan(&got))
+		assert.Equal(t, "value", got)
+	})
+
+	t.Run("parquet dump round-trip", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		src := filepath.Join(dir, "quoted.csv")
+		require.NoError(t, os.WriteFile(src, []byte("\"a\"\"b\"\n42\n"), 0o600))
+
+		db, err := OpenContext(ctx, src)
+		require.NoError(t, err)
+		out := filepath.Join(dir, "out")
+		require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatParquet)))
+		require.NoError(t, db.Close())
+
+		db2, err := OpenContext(ctx, filepath.Join(out, "quoted.parquet"))
+		require.NoError(t, err)
+		defer func() { _ = db2.Close() }()
+
+		assert.Equal(t, []string{`a"b`}, loadedColumnNames(t, db2, "quoted"))
+		var got string
+		require.NoError(t, db2.QueryRowContext(ctx, `SELECT "a""b" FROM quoted`).Scan(&got))
+		assert.Equal(t, "42", got)
+	})
+}
