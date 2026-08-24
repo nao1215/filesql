@@ -113,6 +113,32 @@ func BenchmarkNewDataFrameFromRecords(b *testing.B) {
 	}
 }
 
+// BenchmarkSort benchmarks the Sort operation, whose comparator is the hot
+// path of every ordered frame.
+func BenchmarkSort(b *testing.B) {
+	benchmarks := []struct {
+		name string
+		rows int
+	}{
+		{"Small_100rows", smallRows},
+		{"Medium_1000rows", mediumRows},
+		{"Large_10000rows", largeRows},
+	}
+
+	for _, bm := range benchmarks {
+		records := generateRecords(bm.rows)
+		df := NewDataFrameFromRecords(records)
+		b.Run(bm.name, func(b *testing.B) {
+			b.ResetTimer()
+			for range b.N {
+				if _, err := df.Sort("amount", Ascending); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 // BenchmarkFilter benchmarks the Filter operation.
 func BenchmarkFilter(b *testing.B) {
 	benchmarks := []struct {

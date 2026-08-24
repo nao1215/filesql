@@ -524,6 +524,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Append frames with matching or mixed schemas | `ExampleDataFrame_Concat`, `ExampleConcatAll` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Group rows for aggregation | `ExampleDataFrame_GroupBy`, `ExampleGroupedDataFrame_Count` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Run built-in or custom aggregations | `ExampleGroupedDataFrame_Sum`, `ExampleGroupedDataFrame_Agg` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Take the extremes of each group | `ExampleGroupedDataFrame_Min`, `ExampleGroupedDataFrame_Max` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Sort by one or multiple columns | `ExampleDataFrame_Sort`, `ExampleDataFrame_SortBy` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Remove duplicates by key columns | `ExampleDataFrame_DistinctBy` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Keep only the first rows | `ExampleDataFrame_Head` | [frame/example_api_test.go](./frame/example_api_test.go) |
