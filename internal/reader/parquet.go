@@ -242,9 +242,9 @@ func parquetColumns(file *parquet.File) []parquetColumn {
 					col.uuid = true
 				case *format.Float16Type:
 					// The format allows FLOAT16 on two fixed bytes alone; on
-					// any other width the annotation is inconsistent metadata
+					// any other shape the annotation is inconsistent metadata
 					// and the bytes are left as they are.
-					col.float16 = typ.Length() == 2
+					col.float16 = typ.Kind() == parquet.FixedLenByteArray && typ.Length() == 2
 				case *format.MapType, *format.ListType:
 					// A group annotation on a node with a physical type is
 					// inconsistent metadata; asking such a type its kind
@@ -276,6 +276,7 @@ func float16Leaves(elements []format.SchemaElement) map[int]bool {
 			continue // a group node has no physical type and holds no column
 		}
 		if _, ok := element.LogicalType.Value.(*format.Float16Type); ok &&
+			element.Type.V == format.FixedLenByteArray &&
 			element.TypeLength.Valid && element.TypeLength.V == 2 {
 			out[leaf] = true
 		}

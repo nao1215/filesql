@@ -256,10 +256,12 @@ func TestFloat16Leaves(t *testing.T) {
 		{Type: valid(format.Int64)},
 		{}, // a nested group
 		{Type: valid(format.FixedLenByteArray), TypeLength: length(2), LogicalType: half},
-		// The annotation on any width but two is inconsistent metadata and is
-		// not a half float.
+		// The annotation on any shape but two fixed bytes is inconsistent
+		// metadata and is not a half float: another width, a missing width,
+		// or a variable-length BYTE_ARRAY whose TypeLength means a bit cap.
 		{Type: valid(format.FixedLenByteArray), TypeLength: length(4), LogicalType: half},
 		{Type: valid(format.FixedLenByteArray), LogicalType: half},
+		{Type: valid(format.ByteArray), TypeLength: length(2), LogicalType: half},
 	}
 	assert.Equal(t, map[int]bool{0: true, 2: true}, float16Leaves(elements))
 	assert.Empty(t, float16Leaves(nil))
