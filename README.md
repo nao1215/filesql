@@ -358,7 +358,7 @@ north,apple,1,100
 
 ### Column types
 
-CSV, TSV, LTSV, and XLSX carry no types, so filesql reads the values and picks INTEGER, REAL, or TEXT per column. A column whose values are all datetimes is recognized as one and stored as TEXT in ISO 8601, which is the form SQLite's date functions read; the [`parser`](./parser) and [`frame`](./frame) packages name that column DATETIME, since they report what was recognized rather than what SQLite stores. Parquet, ACH, and Fedwire bring their own schema and are not inferred. A Parquet export writes each column as the type its values call for, and a blank cell in a numeric column is written as a null, since that format has no other way to say a number is missing.
+CSV, TSV, LTSV, and XLSX carry no types, so filesql reads the values and picks INTEGER, REAL, or TEXT per column. A column whose values are all datetimes is recognized as one and stored as TEXT in ISO 8601, which is the form SQLite's date functions read; the [`parser`](./parser) and [`frame`](./frame) packages name that column DATETIME, since they report what was recognized rather than what SQLite stores. Parquet, ACH, and Fedwire bring their own schema and are not inferred; a Parquet UINT64 column loads as TEXT, since the upper half of its range is past what SQLite's INTEGER holds exactly. A Parquet export writes each column as the type its values call for — STRING when no numeric type holds every value exactly — and a blank cell in a numeric column is written as a null, since that format has no other way to say a number is missing.
 
 Which of the three a column gets follows from every value in the column, wherever the value sits and however large the file is. Four kinds of value are damaged by a numeric column, and one of them anywhere in the file makes the column TEXT:
 
@@ -369,7 +369,7 @@ Which of the three a column gets follows from every value in the column, whereve
 | `1_000`, `0x1p4` | TEXT | Go parses these, SQLite's affinity does not convert them |
 | `  42`, ` 5 ` | TEXT | Numeric affinity drops the padding a fixed-width code carries |
 
-One decimal is enough to make a numeric column REAL. An INTEGER column either rewrites the decimal or stores it against its own declared type, and it turns the column's arithmetic into integer division, so `5 / 2` answers 2 rather than 2.5.
+One decimal is enough to make a numeric column REAL. An INTEGER column either rewrites the decimal or stores it against its own declared type, and it turns the column's arithmetic into integer division, so `5 / 2` answers 2 rather than 2.5. The exception is a column where a decimal meets an integer past 2^53 that REAL would round to a neighboring double: that column is TEXT, while the same integers with no decimal beside them stay INTEGER and exact.
 
 What is not on that list is decimal formatting. `2.50` loads as the REAL `2.5`, `1.00` as `1`, and `1e3` as `1000`: the quantity is preserved and the way it was written is not. Storing those as TEXT would keep the spelling and break the arithmetic — SQLite compares a TEXT column against a number as text, so `WHERE amount > 9.5` over `9.00` and `10.00` returns nothing at all. A column of money is worth more as numbers than as the string it was typed as, so the trailing zeros go. Keep the source file if you need the original spelling, or read the column into a TEXT column of your own before loading. What a save does keep is the type: a REAL column is written with a decimal point, so `1.00` comes back from a dump as `1.0` and the column loads as REAL again rather than as INTEGER.
 
