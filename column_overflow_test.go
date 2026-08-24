@@ -94,6 +94,38 @@ func TestOpenContextPreservesLargeIntegerPastTheFirstChunk(t *testing.T) {
 	require.Equal(t, "11040320260000000000", got)
 }
 
+// TestOpenContextKeepsAnIntegerPast2p53BesideAFloat pins the column-level form
+// of the same loss. An integer between 2^53 and int64 max is exact in an
+// INTEGER column, but a float beside it used to make the column REAL, and
+// SQLite's REAL affinity then stored the nearest double: 9007199254740993 came
+// back as 9007199254740992.0. Such a column has to be TEXT, and a dump of it
+// has to read back byte-identical.
+func TestOpenContextKeepsAnIntegerPast2p53BesideAFloat(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "mixed.csv")
+	require.NoError(t, os.WriteFile(csvPath, []byte("v\n9007199254740993\n0.5\n"), 0600))
+
+	ctx := context.Background()
+	db, err := OpenContext(ctx, csvPath)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var kinds, values string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT group_concat(typeof(v)), group_concat(quote(v)) FROM mixed`).Scan(&kinds, &values))
+	require.Equal(t, "text,text", kinds)
+	require.Equal(t, "'9007199254740993','0.5'", values)
+
+	// The dump writes the exact digits, so loading it lands in the same place.
+	out := filepath.Join(dir, "out")
+	require.NoError(t, DumpDatabase(db, out))
+	dumped, err := os.ReadFile(filepath.Join(out, "mixed.csv")) //nolint:gosec // test-owned path
+	require.NoError(t, err)
+	require.Equal(t, "v\n9007199254740993\n0.5\n", string(dumped))
+}
+
 // TestOpenContextPreservesLargeIntegerExactly is the end-to-end regression test
 // for nao1215/sqly#218. A CSV value larger than math.MaxInt64 must round-trip
 // through the loaded database as its exact textual value, not a lossy
