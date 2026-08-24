@@ -342,16 +342,25 @@ func formatValue(v any) string {
 	// reads as a number, so one such value turned the whole reloaded column
 	// TEXT. 9e999 is the spelling SQLite's affinity and the inference saturate
 	// back to the infinity — the dump's own choice — and a NaN is the missing
-	// value it already is to DropNA and the aggregates.
-	if f, isFloat := v.(float64); isFloat {
-		switch {
-		case math.IsInf(f, 1):
-			return "9e999"
-		case math.IsInf(f, -1):
-			return "-9e999"
-		case math.IsNaN(f):
-			return ""
-		}
+	// value it already is to DropNA and the aggregates. float32 is checked
+	// too, since NewDataFrameFromRecords stores whatever a caller hands it; a
+	// finite float32 stays on %v so its own shortest spelling is written.
+	var f float64
+	switch t := v.(type) {
+	case float64:
+		f = t
+	case float32:
+		f = float64(t)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+	switch {
+	case math.IsInf(f, 1):
+		return "9e999"
+	case math.IsInf(f, -1):
+		return "-9e999"
+	case math.IsNaN(f):
+		return ""
 	}
 	return fmt.Sprintf("%v", v)
 }

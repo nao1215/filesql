@@ -690,6 +690,22 @@ func TestDataFrame_ToCSVSpellsNonFiniteFloatsForTheReader(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "id\tv\n1\t9e999\n2\t-9e999\n3\t\n4\t2.5\n", string(raw))
 	})
+
+	t.Run("a float32 special is spelled the same way", func(t *testing.T) {
+		t.Parallel()
+
+		narrow := NewDataFrameFromRecords([]map[string]any{
+			{"id": int64(1), "v": float32(math.Inf(1))},
+			{"id": int64(2), "v": float32(math.Inf(-1))},
+			{"id": int64(3), "v": float32(math.NaN())},
+			{"id": int64(4), "v": float32(2.5)},
+		})
+		path := filepath.Join(t.TempDir(), "narrow.csv")
+		require.NoError(t, narrow.ToCSV(path))
+		raw, err := os.ReadFile(path) //nolint:gosec // test file path
+		require.NoError(t, err)
+		assert.Equal(t, "id,v\n1,9e999\n2,-9e999\n3,\n4,2.5\n", string(raw))
+	})
 }
 
 func TestDataFrame_ToTSV(t *testing.T) {
