@@ -2,6 +2,7 @@
 package ach
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/moov-io/ach"
 	"github.com/nao1215/filesql/parser"
-	"github.com/tiendc/go-deepcopy"
 )
 
 // Addenda type constants for the addenda_type column
@@ -608,9 +608,16 @@ func (ts *TableSet) ToFile() (*ach.File, error) {
 		return nil, errors.New("no original ACH file available")
 	}
 
-	// Create a true deep copy of the original file to avoid modifying it
+	// Create a true deep copy of the original file to avoid modifying it. The
+	// copy goes through the library's own JSON round-trip, whose MarshalJSON
+	// carries the file's validation settings and whose UnmarshalJSON restores
+	// them, so the copy validates the way the original was read.
+	encoded, err := json.Marshal(ts.originalFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to deep copy ACH file: %w", err)
+	}
 	var newFile ach.File
-	if err := deepcopy.Copy(&newFile, ts.originalFile); err != nil {
+	if err := json.Unmarshal(encoded, &newFile); err != nil {
 		return nil, fmt.Errorf("failed to deep copy ACH file: %w", err)
 	}
 
