@@ -942,7 +942,8 @@ type SortOption struct {
 }
 
 // Sort returns a new DataFrame sorted by the specified column.
-// Supports sorting by string, int64, and float64 values.
+// Numbers of any kind sort numerically, strings sort lexically, and equal
+// rows keep their input order.
 // Nil values are placed at the end regardless of sort order.
 //
 // Example:
@@ -993,6 +994,8 @@ func (df *DataFrame) Sort(column string, order SortOrder) (*DataFrame, error) {
 
 // SortBy returns a new DataFrame sorted by multiple columns.
 // Columns are sorted in the order specified (first column has highest priority).
+// Rows equal on every sort key keep their input order, the same guarantee
+// Sort gives.
 //
 // Example:
 //
@@ -1018,8 +1021,9 @@ func (df *DataFrame) SortBy(options ...SortOption) (*DataFrame, error) {
 		sortedRows[i] = copyRow(row)
 	}
 
-	// Sort using multiple columns
-	slices.SortFunc(sortedRows, func(a, b map[string]any) int {
+	// Sort using multiple columns. The stable variant keeps rows that compare
+	// equal on every key in their input order, as Sort already does.
+	slices.SortStableFunc(sortedRows, func(a, b map[string]any) int {
 		for _, opt := range options {
 			aVal := a[opt.Column]
 			bVal := b[opt.Column]
@@ -1056,39 +1060,115 @@ func (df *DataFrame) SortBy(options ...SortOption) (*DataFrame, error) {
 }
 
 // compareValues compares two values and returns -1, 0, or 1.
-// Supports string, int64, float64 comparisons.
+//
+// Two strings compare lexically and two numbers compare numerically, whatever
+// kinds spell them: the identity rule of this package (see valueKind) says the
+// quantity is the value, so the order has to agree with it. Integer pairs
+// compare exactly rather than through float64, which collapses two distinct
+// integers past 2^53 into one spelling. Everything else — a number against a
+// string, a bool, a value of an unknown type — falls back to the text %v
+// renders, which orders a pair the same way whichever side each value arrives
+// on. That symmetry is the contract slices.SortFunc requires.
 func compareValues(a, b any) int {
+	// The kinds a load produces, compared directly; a column is almost always
+	// homogeneous, so this is the pair nearly every comparison is.
 	switch aTyped := a.(type) {
 	case string:
 		if bTyped, ok := b.(string); ok {
 			return cmp.Compare(aTyped, bTyped)
 		}
 	case int64:
-		switch bTyped := b.(type) {
-		case int64:
+		if bTyped, ok := b.(int64); ok {
 			return cmp.Compare(aTyped, bTyped)
-		case float64:
-			return cmp.Compare(float64(aTyped), bTyped)
 		}
 	case float64:
-		switch bTyped := b.(type) {
-		case float64:
+		if bTyped, ok := b.(float64); ok {
 			return cmp.Compare(aTyped, bTyped)
-		case int64:
-			return cmp.Compare(aTyped, float64(bTyped))
 		}
-	case int:
-		switch bTyped := b.(type) {
-		case int:
-			return cmp.Compare(aTyped, bTyped)
-		case int64:
-			return cmp.Compare(int64(aTyped), bTyped)
-		case float64:
-			return cmp.Compare(float64(aTyped), bTyped)
+	}
+	if aNum, aOK := numericOperand(a); aOK {
+		if bNum, bOK := numericOperand(b); bOK {
+			return aNum.compare(bNum)
 		}
 	}
 	// Fallback: compare string representations
 	return cmp.Compare(fmt.Sprintf("%v", a), fmt.Sprintf("%v", b))
+}
+
+// numOperand is one number, kept in the widest kind that holds it exactly.
+type numOperand struct {
+	kind byte // 'i' for int64, 'u' for uint64, 'f' for float64
+	i    int64
+	u    uint64
+	f    float64
+}
+
+// numericOperand reports the numeric value v holds, for the same kinds
+// valueKind and toFloat64 treat as numbers.
+func numericOperand(v any) (numOperand, bool) {
+	switch value := v.(type) {
+	case int:
+		return numOperand{kind: 'i', i: int64(value)}, true
+	case int8:
+		return numOperand{kind: 'i', i: int64(value)}, true
+	case int16:
+		return numOperand{kind: 'i', i: int64(value)}, true
+	case int32:
+		return numOperand{kind: 'i', i: int64(value)}, true
+	case int64:
+		return numOperand{kind: 'i', i: value}, true
+	case uint:
+		return numOperand{kind: 'u', u: uint64(value)}, true
+	case uint8:
+		return numOperand{kind: 'u', u: uint64(value)}, true
+	case uint16:
+		return numOperand{kind: 'u', u: uint64(value)}, true
+	case uint32:
+		return numOperand{kind: 'u', u: uint64(value)}, true
+	case uint64:
+		return numOperand{kind: 'u', u: value}, true
+	case float32:
+		return numOperand{kind: 'f', f: float64(value)}, true
+	case float64:
+		return numOperand{kind: 'f', f: value}, true
+	default:
+		return numOperand{}, false
+	}
+}
+
+// compare orders two numbers. Integer pairs stay exact; a float on either side
+// compares as float64, which is the only common ground there is.
+func (a numOperand) compare(b numOperand) int {
+	switch {
+	case a.kind == 'i' && b.kind == 'i':
+		return cmp.Compare(a.i, b.i)
+	case a.kind == 'u' && b.kind == 'u':
+		return cmp.Compare(a.u, b.u)
+	case a.kind == 'i' && b.kind == 'u':
+		if a.i < 0 {
+			return -1
+		}
+		return cmp.Compare(uint64(a.i), b.u)
+	case a.kind == 'u' && b.kind == 'i':
+		if b.i < 0 {
+			return 1
+		}
+		return cmp.Compare(a.u, uint64(b.i))
+	default:
+		return cmp.Compare(a.float(), b.float())
+	}
+}
+
+// float widens the operand for a comparison that involves a float.
+func (a numOperand) float() float64 {
+	switch a.kind {
+	case 'i':
+		return float64(a.i)
+	case 'u':
+		return float64(a.u)
+	default:
+		return a.f
+	}
 }
 
 // Distinct returns a new DataFrame with duplicate rows removed.
