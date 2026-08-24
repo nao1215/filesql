@@ -118,6 +118,12 @@ func readParquet(src io.Reader, opts Options, emit Emit) (Result, error) {
 				if err != nil {
 					return parseError(err, "failed to read table")
 				}
+				// No rows, no error, and no EOF is a read that made no
+				// progress; looping on it would never return. A healthy read
+				// into a non-empty buffer always does one of the three.
+				if n == 0 {
+					return parseError(nil, "parquet data is damaged: a read returned no rows and no error")
+				}
 			}
 		}()
 		if readErr != nil {
@@ -235,7 +241,10 @@ func parquetColumns(file *parquet.File) []parquetColumn {
 				case *format.UUIDType:
 					col.uuid = true
 				case *format.Float16Type:
-					col.float16 = true
+					// The format allows FLOAT16 on two fixed bytes alone; on
+					// any other width the annotation is inconsistent metadata
+					// and the bytes are left as they are.
+					col.float16 = typ.Length() == 2
 				case *format.MapType, *format.ListType:
 					// A group annotation on a node with a physical type is
 					// inconsistent metadata; asking such a type its kind
@@ -255,7 +264,10 @@ func parquetColumns(file *parquet.File) []parquetColumn {
 }
 
 // float16Leaves reports which leaf columns a file's own metadata annotates as
-// FLOAT16, by leaf index.
+// FLOAT16, by leaf index. The format allows the annotation on two fixed bytes
+// alone, so a length of anything else is inconsistent metadata and the column
+// is left as the bytes it holds rather than declared a real number it cannot
+// render.
 func float16Leaves(elements []format.SchemaElement) map[int]bool {
 	out := map[int]bool{}
 	leaf := 0
@@ -263,7 +275,8 @@ func float16Leaves(elements []format.SchemaElement) map[int]bool {
 		if !element.Type.Valid {
 			continue // a group node has no physical type and holds no column
 		}
-		if _, ok := element.LogicalType.Value.(*format.Float16Type); ok {
+		if _, ok := element.LogicalType.Value.(*format.Float16Type); ok &&
+			element.TypeLength.Valid && element.TypeLength.V == 2 {
 			out[leaf] = true
 		}
 		leaf++

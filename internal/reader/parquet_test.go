@@ -248,12 +248,18 @@ func TestFloat16Leaves(t *testing.T) {
 	t.Parallel()
 
 	valid := func(t format.Type) thrift.Null[format.Type] { return thrift.Null[format.Type]{V: t, Valid: true} }
+	length := func(n int32) thrift.Null[int32] { return thrift.Null[int32]{V: n, Valid: true} }
+	half := format.LogicalType{Value: &format.Float16Type{}}
 	elements := []format.SchemaElement{
 		{}, // the root group has no physical type
-		{Type: valid(format.FixedLenByteArray), LogicalType: format.LogicalType{Value: &format.Float16Type{}}},
+		{Type: valid(format.FixedLenByteArray), TypeLength: length(2), LogicalType: half},
 		{Type: valid(format.Int64)},
 		{}, // a nested group
-		{Type: valid(format.FixedLenByteArray), LogicalType: format.LogicalType{Value: &format.Float16Type{}}},
+		{Type: valid(format.FixedLenByteArray), TypeLength: length(2), LogicalType: half},
+		// The annotation on any width but two is inconsistent metadata and is
+		// not a half float.
+		{Type: valid(format.FixedLenByteArray), TypeLength: length(4), LogicalType: half},
+		{Type: valid(format.FixedLenByteArray), LogicalType: half},
 	}
 	assert.Equal(t, map[int]bool{0: true, 2: true}, float16Leaves(elements))
 	assert.Empty(t, float16Leaves(nil))
