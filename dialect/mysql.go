@@ -152,7 +152,7 @@ func mysqlCallPass(tokens []token) ([]token, error) {
 func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, error) {
 	switch strings.ToUpper(tokens[nameIdx].text) {
 	case fnNameExtract:
-		return rewriteExtractCall(tokens, open, closeIdx, mysqlCallPass)
+		return rewriteExtractCall(tokens, open, closeIdx, "mysql_date_part", mysqlCallPass)
 	case "DATE_ADD":
 		return rewriteDateArith(tokens, open, closeIdx, "+", mysqlCallPass)
 	case "DATE_SUB":

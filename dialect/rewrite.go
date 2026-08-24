@@ -30,9 +30,12 @@ const (
 type callRecurser func([]token) ([]token, error)
 
 // rewriteExtractCall implements the C-1 rule shared by every dialect:
-// EXTRACT(part FROM x) -> DATE_PART('part', x). It returns handled=false when the
-// call is not the "part FROM x" form so the caller leaves it untouched.
-func rewriteExtractCall(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
+// EXTRACT(part FROM x) -> helper('part', x). The helper is the dialect's own
+// date-part function, because the dialects disagree on what a part means —
+// PostgreSQL's WEEK is the ISO week where MySQL's and BigQuery's begin on
+// Sunday. It returns handled=false when the call is not the "part FROM x" form
+// so the caller leaves it untouched.
+func rewriteExtractCall(tokens []token, open, closeIdx int, helper string, recurse callRecurser) ([]token, bool, error) {
 	part := nextSig(tokens, open+1)
 	if part < 0 || tokens[part].kind != tokWord {
 		return nil, false, nil
@@ -47,7 +50,7 @@ func rewriteExtractCall(tokens []token, open, closeIdx int, recurse callRecurser
 	}
 	expr = trimSpaceTokens(expr)
 	repl := make([]token, 0, len(expr)+6)
-	repl = append(repl, wordToken("DATE_PART"), opToken("("))
+	repl = append(repl, wordToken(helper), opToken("("))
 	repl = append(repl, stringToken(strings.ToLower(tokens[part].text)))
 	repl = append(repl, opToken(","), spaceToken())
 	repl = append(repl, expr...)
