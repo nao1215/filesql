@@ -92,3 +92,62 @@ func TestProcessFilesystemsToReaders_NilFilesystem(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNilInput)
 }
+
+// TestCollectFilesFromDirectory_LoadsEveryFileWhateverItIsNamed pins that a
+// directory scan interprets nothing out of a file's name.
+//
+// It interpreted one thing: a fixture filter written for this repository's own
+// testdata skipped any file whose base name contained "duplicate_columns", so an
+// ordinary CSV named that way vanished from a directory load with no error and
+// no table, while the same file named explicitly loaded fine.
+func TestCollectFilesFromDirectory_LoadsEveryFileWhateverItIsNamed(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	names := []string{
+		"sales.csv",
+		"duplicate_columns.csv",
+		"report_duplicate_columns_2026.csv",
+		"malformed_rows.csv",
+		"invalid.tsv",
+		"broken_input.ltsv",
+	}
+	for _, name := range names {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("id\n1\n"), 0o600))
+	}
+
+	collected, err := newFileProcessor().collectFilesFromPaths([]string{dir})
+	require.NoError(t, err)
+
+	got := make([]string, 0, len(collected))
+	for _, p := range collected {
+		got = append(got, filepath.Base(p))
+	}
+	assert.ElementsMatch(t, names, got, "a directory scan must not read meaning out of a file name")
+}
+
+// TestCollectFilesFromFS_LoadsEveryFileWhateverItIsNamed is the sibling of the
+// test above on the other collector. The two walk different trees through
+// different APIs and must agree on which files count, which they did not while
+// only one of them carried the fixture filter.
+func TestCollectFilesFromFS_LoadsEveryFileWhateverItIsNamed(t *testing.T) {
+	t.Parallel()
+
+	filesystem := fstest.MapFS{
+		"sales.csv":                         {Data: []byte("id\n1\n")},
+		"duplicate_columns.csv":             {Data: []byte("id\n1\n")},
+		"report_duplicate_columns_2026.csv": {Data: []byte("id\n1\n")},
+	}
+
+	readers, err := newFileProcessor().processFSToReaders(t.Context(), filesystem)
+	require.NoError(t, err)
+
+	got := make([]string, 0, len(readers))
+	for _, r := range readers {
+		got = append(got, r.tableName)
+		if r.closer != nil {
+			require.NoError(t, r.closer.Close())
+		}
+	}
+	assert.ElementsMatch(t, []string{"sales", "duplicate_columns", "report_duplicate_columns_2026"}, got)
+}

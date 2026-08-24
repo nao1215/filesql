@@ -82,11 +82,6 @@ func (fp *fileProcessor) collectFilesFromDirectory(dirPath string, processedFile
 			return nil
 		}
 
-		// Skip files with duplicate_columns in name (test files)
-		if strings.Contains(filepath.Base(filePath), "duplicate_columns") {
-			return nil
-		}
-
 		absPath, err := filepath.Abs(filePath)
 		if err != nil {
 			return fmt.Errorf("%w: failed to get absolute path for %s: %w", ErrIOOperation, filePath, err)
