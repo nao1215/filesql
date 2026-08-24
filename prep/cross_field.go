@@ -1,6 +1,7 @@
 package prep
 
 import (
+	"cmp"
 	"strconv"
 	"strings"
 )
@@ -22,11 +23,59 @@ type crossFieldValidators []crossFieldValidator
 // baseCrossFieldValidator contains common fields for cross-field validators
 type baseCrossFieldValidator struct {
 	targetField string
+	// comparesText makes a comparison read the two cells as the text they are.
+	// It follows the kind of field the tag lands on; see specializeCrossField.
+	// Only the six comparison tags set it — the rest read text either way.
+	comparesText bool
 }
 
 // TargetField returns the name of the field to compare against
 func (b *baseCrossFieldValidator) TargetField() string {
 	return b.targetField
+}
+
+// compare orders the two cells: negative when the source sorts first, zero when
+// the two are the same, positive when the source sorts last.
+//
+// One function answers for the whole comparison family, because the six tags
+// have to agree about what the values are. They did not: the four ordering tags
+// read numbers and the two equality tags read text, so "007" against "7" was
+// neither greater, nor equal, nor less. A comparison on a string field now
+// reads the strings, one on any other field reads the numbers the cells spell,
+// and a cell that spells no number falls back to its text so the fallback is
+// the same for all six.
+func (b *baseCrossFieldValidator) compare(srcValue, targetValue string) int {
+	if !b.comparesText {
+		srcFloat, srcErr := strconv.ParseFloat(srcValue, 64)
+		targetFloat, targetErr := strconv.ParseFloat(targetValue, 64)
+		if srcErr == nil && targetErr == nil {
+			return cmp.Compare(srcFloat, targetFloat)
+		}
+	}
+	return strings.Compare(srcValue, targetValue)
+}
+
+// specializeCrossField gives each comparison the meaning the field's kind
+// decides, the way specializeValidator does for the single-field tags. The
+// conditional-required family and the substring pair read text whatever field
+// they land on, and are left alone.
+func specializeCrossField(vals crossFieldValidators, isString bool) {
+	for _, v := range vals {
+		switch typed := v.(type) {
+		case *eqFieldValidator:
+			typed.comparesText = isString
+		case *neFieldValidator:
+			typed.comparesText = isString
+		case *gtFieldValidator:
+			typed.comparesText = isString
+		case *gteFieldValidator:
+			typed.comparesText = isString
+		case *ltFieldValidator:
+			typed.comparesText = isString
+		case *lteFieldValidator:
+			typed.comparesText = isString
+		}
+	}
 }
 
 // =====================================
@@ -44,7 +93,7 @@ func newEqFieldValidator(targetField string) *eqFieldValidator {
 
 // Validate checks if the source value equals the target value
 func (v *eqFieldValidator) Validate(srcValue, targetValue string) string {
-	if srcValue != targetValue {
+	if v.compare(srcValue, targetValue) != 0 {
 		return "value must equal field " + v.targetField
 	}
 	return ""
@@ -70,7 +119,7 @@ func newNeFieldValidator(targetField string) *neFieldValidator {
 
 // Validate checks if the source value does not equal the target value
 func (v *neFieldValidator) Validate(srcValue, targetValue string) string {
-	if srcValue == targetValue {
+	if v.compare(srcValue, targetValue) == 0 {
 		return "value must not equal field " + v.targetField
 	}
 	return ""
@@ -96,21 +145,8 @@ func newGtFieldValidator(targetField string) *gtFieldValidator {
 
 // Validate checks if the source value is greater than the target value
 func (v *gtFieldValidator) Validate(srcValue, targetValue string) string {
-	srcFloat, srcErr := strconv.ParseFloat(srcValue, 64)
-	targetFloat, targetErr := strconv.ParseFloat(targetValue, 64)
-
-	errMsg := "value must be greater than field " + v.targetField
-
-	if srcErr != nil || targetErr != nil {
-		// Fall back to string comparison
-		if srcValue <= targetValue {
-			return errMsg
-		}
-		return ""
-	}
-
-	if srcFloat <= targetFloat {
-		return errMsg
+	if v.compare(srcValue, targetValue) <= 0 {
+		return "value must be greater than field " + v.targetField
 	}
 	return ""
 }
@@ -135,21 +171,8 @@ func newGteFieldValidator(targetField string) *gteFieldValidator {
 
 // Validate checks if the source value is greater than or equal to the target value
 func (v *gteFieldValidator) Validate(srcValue, targetValue string) string {
-	srcFloat, srcErr := strconv.ParseFloat(srcValue, 64)
-	targetFloat, targetErr := strconv.ParseFloat(targetValue, 64)
-
-	errMsg := "value must be greater than or equal to field " + v.targetField
-
-	if srcErr != nil || targetErr != nil {
-		// Fall back to string comparison
-		if srcValue < targetValue {
-			return errMsg
-		}
-		return ""
-	}
-
-	if srcFloat < targetFloat {
-		return errMsg
+	if v.compare(srcValue, targetValue) < 0 {
+		return "value must be greater than or equal to field " + v.targetField
 	}
 	return ""
 }
@@ -174,21 +197,8 @@ func newLtFieldValidator(targetField string) *ltFieldValidator {
 
 // Validate checks if the source value is less than the target value
 func (v *ltFieldValidator) Validate(srcValue, targetValue string) string {
-	srcFloat, srcErr := strconv.ParseFloat(srcValue, 64)
-	targetFloat, targetErr := strconv.ParseFloat(targetValue, 64)
-
-	errMsg := "value must be less than field " + v.targetField
-
-	if srcErr != nil || targetErr != nil {
-		// Fall back to string comparison
-		if srcValue >= targetValue {
-			return errMsg
-		}
-		return ""
-	}
-
-	if srcFloat >= targetFloat {
-		return errMsg
+	if v.compare(srcValue, targetValue) >= 0 {
+		return "value must be less than field " + v.targetField
 	}
 	return ""
 }
@@ -213,21 +223,8 @@ func newLteFieldValidator(targetField string) *lteFieldValidator {
 
 // Validate checks if the source value is less than or equal to the target value
 func (v *lteFieldValidator) Validate(srcValue, targetValue string) string {
-	srcFloat, srcErr := strconv.ParseFloat(srcValue, 64)
-	targetFloat, targetErr := strconv.ParseFloat(targetValue, 64)
-
-	errMsg := "value must be less than or equal to field " + v.targetField
-
-	if srcErr != nil || targetErr != nil {
-		// Fall back to string comparison
-		if srcValue > targetValue {
-			return errMsg
-		}
-		return ""
-	}
-
-	if srcFloat > targetFloat {
-		return errMsg
+	if v.compare(srcValue, targetValue) > 0 {
+		return "value must be less than or equal to field " + v.targetField
 	}
 	return ""
 }

@@ -128,6 +128,7 @@ func parseStructType(structType reflect.Type, strict bool) (*structInfo, error) 
 				}
 			}
 			info.Validators = specialized
+			specializeCrossField(crossVals, isString)
 			info.CrossFieldValidators = crossVals
 		}
 

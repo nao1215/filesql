@@ -101,9 +101,14 @@
 // them: on a string field, eq and ne compare the string itself and gt, gte,
 // lt, lte, min and max compare the character count, while on any other field
 // all of them compare the numeric value and len means the value equals the
-// parameter. boolean accepts what strconv.ParseBool accepts, which is also
-// how a bool struct field is filled. numeric accepts an optionally signed
-// decimal and number accepts digits alone, as the dialect defines them.
+// parameter. The cross-field tags eqfield, nefield, gtfield, gtefield, ltfield
+// and ltefield follow the field the same way, except that on a string field
+// they order the strings rather than measure them, so ltfield says a date range
+// runs forwards. That is the second place this package leaves the dialect,
+// which compares string lengths there and so cannot express a date range at
+// all. boolean accepts what strconv.ParseBool accepts, which is also how a
+// bool struct field is filled. numeric accepts an optionally signed decimal
+// and number accepts digits alone, as the dialect defines them.
 //
 // See https://pkg.go.dev/github.com/nao1215/filesql/prep for the complete list of supported validators.
 package prep
