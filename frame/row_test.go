@@ -129,6 +129,23 @@ func TestRowFloat(t *testing.T) {
 		{"text that is not a number does not convert", Row{"c": "one"}, "c", 0, false},
 		{"a missing column is not a number", Row{"c": 1.5}, "other", 0, false},
 		{"a nil is not a number", Row{"c": nil}, "c", 0, false},
+		// The vocabulary is the one a data file spells numbers in, not Go's:
+		// an underscore separator and a hex float are Go source syntax, and the
+		// infinity and NaN words hold no digit, so none of them is a quantity
+		// here any more than it is to Row.Int or to SQLite's affinity.
+		{"a Go underscore separator does not convert", Row{"c": "1_000"}, "c", 0, false},
+		{"a Go hex float does not convert", Row{"c": "0x1p4"}, "c", 0, false},
+		{"the word Inf does not convert", Row{"c": "Inf"}, "c", 0, false},
+		{"the word Infinity does not convert", Row{"c": "Infinity"}, "c", 0, false},
+		{"the word -Inf does not convert", Row{"c": "-Inf"}, "c", 0, false},
+		{"the word NaN does not convert", Row{"c": "NaN"}, "c", 0, false},
+		{"the word nan does not convert", Row{"c": "nan"}, "c", 0, false},
+		// Deliberate acceptances stay: the zero-padded code, the exponent
+		// spelling, and the overflow spelling SQLite's affinity saturates.
+		{"a zero-padded code converts", Row{"c": "007"}, "c", 7, true},
+		{"an exponent spelling converts", Row{"c": "1e3"}, "c", 1000, true},
+		{"an overflowing spelling saturates to the infinity", Row{"c": "9e999"}, "c", math.Inf(1), true},
+		{"a negative overflowing spelling saturates", Row{"c": "-9e999"}, "c", math.Inf(-1), true},
 	}
 
 	for _, tt := range tests {
@@ -139,6 +156,23 @@ func TestRowFloat(t *testing.T) {
 				t.Errorf("Float(%q) = (%v, %v), want (%v, %v)", tt.column, got, ok, tt.want, tt.wantOK)
 			}
 		})
+	}
+}
+
+// TestRowIntAndFloatAgreeOnIntegerShapedText pins the pair to one vocabulary:
+// for integer-shaped text within int64's range, the two accessors answer ok
+// together or not at all. They part only where their result types part — on
+// real spellings, which Int refuses, and past int64, which only Float holds.
+func TestRowIntAndFloatAgreeOnIntegerShapedText(t *testing.T) {
+	t.Parallel()
+
+	for _, text := range []string{"7", "+7", "-7", "007", "0", "1_000", "0x10", "9223372036854775807", " 42", "42 "} {
+		row := Row{"c": text}
+		_, iok := row.Int("c")
+		_, fok := row.Float("c")
+		if iok != fok {
+			t.Errorf("%q: Int ok = %v, Float ok = %v; integer-shaped text must convert through both or neither", text, iok, fok)
+		}
 	}
 }
 

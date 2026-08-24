@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"fmt"
+	"math"
 	"strconv"
 	"testing"
 
@@ -199,6 +200,15 @@ func TestParseValue(t *testing.T) {
 		result := ParseValue("3.14", TypeReal)
 
 		assert.Equal(t, 3.14, result)
+	})
+
+	t.Run("a saturating spelling parses to the infinity it saturates to", func(t *testing.T) {
+		t.Parallel()
+
+		// 9e999 is a REAL to the inference because SQLite's affinity saturates
+		// it, so the parsed value has to be that float rather than the string.
+		assert.Equal(t, math.Inf(1), ParseValue("9e999", TypeReal))
+		assert.Equal(t, math.Inf(-1), ParseValue("-9e999", TypeReal))
 	})
 
 	t.Run("returns string for text type", func(t *testing.T) {

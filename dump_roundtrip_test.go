@@ -86,6 +86,38 @@ func TestDumpDatabase_RoundTripPerFormat(t *testing.T) {
 	}
 }
 
+// TestDumpDatabase_RealColumnWithInfinityRoundTrip pins the read side of the
+// SQLiteFloatText contract. The dump spells an infinity 9e999 because that is
+// the spelling SQLite's affinity converts back to the value, but the
+// inference refused it — ParseFloat answers the saturated value beside
+// ErrRange — so the whole reloaded column, finite values included, was TEXT.
+func TestDumpDatabase_RealColumnWithInfinityRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	dir := t.TempDir()
+	src, err := sql.Open("sqlite", filepath.Join(dir, "src.db"))
+	require.NoError(t, err)
+	defer func() { _ = src.Close() }()
+	_, err = src.ExecContext(ctx, `CREATE TABLE m (v REAL);`)
+	require.NoError(t, err)
+	_, err = src.ExecContext(ctx, `INSERT INTO m VALUES (9e999), (-9e999), (2.5);`)
+	require.NoError(t, err)
+
+	out := filepath.Join(dir, "out")
+	require.NoError(t, DumpDatabase(src, out))
+
+	reloaded, err := OpenContext(ctx, filepath.Join(out, "m.csv"))
+	require.NoError(t, err)
+	defer reloaded.Close()
+
+	var kinds, values string
+	require.NoError(t, reloaded.QueryRowContext(ctx,
+		`SELECT group_concat(typeof(v)), group_concat(quote(v)) FROM m`).Scan(&kinds, &values))
+	assert.Equal(t, "real,real,real", kinds)
+	assert.Equal(t, "9.0e+999,-9.0e+999,2.5", values)
+}
+
 // TestDumpDatabase_TSVQuoteRoundTrip is the metamorphic half of TSV taking its
 // fields literally: what a dump writes is what a load reads back. A CSV writer
 // would quote a value holding a quote, and the literal reader would hand those

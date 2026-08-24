@@ -55,6 +55,13 @@ func TestIsFloat(t *testing.T) {
 		{"0x1p4", false},
 		{"abc", false},
 		{"", false},
+		// A spelling whose parse saturates is still a float: SQLite's affinity
+		// stores the same saturated value for the same text, so refusing it
+		// turned a dumped REAL column holding an infinity into TEXT.
+		{"9e999", true},
+		{"-9e999", true},
+		{"1e309", true},
+		{"1e-400", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {

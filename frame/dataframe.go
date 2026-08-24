@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nao1215/filesql/internal/infer"
 	"github.com/nao1215/filesql/parser"
 )
 
@@ -140,7 +141,9 @@ func convertStringValue(s string, ct parser.ColumnType) any {
 		if s == "" {
 			return s
 		}
-		if f, err := strconv.ParseFloat(s, 64); err == nil {
+		// infer.Float64 accepts a saturating spelling ("9e999" is the
+		// infinity), so a value the inference called REAL converts here too.
+		if f, ok := infer.Float64(s); ok {
 			return f
 		}
 		return s
@@ -224,6 +227,10 @@ func (df *DataFrame) ToRecords() []map[string]any {
 
 // ToCSV writes the DataFrame to a CSV file.
 //
+// Values are spelled for the reader: a ±Inf as 9e999, a NaN as an empty cell,
+// and a single-column empty cell as "" so the row is not a blank line a
+// reader skips.
+//
 // Example:
 //
 //	err := df.ToCSV("output.csv")
@@ -232,6 +239,9 @@ func (df *DataFrame) ToCSV(path string) error {
 }
 
 // ToTSV writes the DataFrame to a TSV file.
+//
+// Non-finite values are spelled as in ToCSV: a ±Inf as 9e999, a NaN as an
+// empty cell.
 //
 // Example:
 //
@@ -262,8 +272,25 @@ func (df *DataFrame) toDelimitedFile(path string, delimiter rune) error {
 	writer := csv.NewWriter(f)
 	writer.Comma = delimiter
 
+	// writeRecord writes one record, taking the lone empty field around the
+	// csv writer: written plainly it is a blank line, which a reader skips, so
+	// a one-column frame's empty rows vanished on reload. `""` says "one
+	// field, empty" — the same form the filesql dump writes for the same
+	// shape. Flushing first keeps the two writers' output in order.
+	writeRecord := func(record []string) error {
+		if len(record) != 1 || record[0] != "" {
+			return writer.Write(record)
+		}
+		writer.Flush()
+		if err := writer.Error(); err != nil {
+			return err
+		}
+		_, err := io.WriteString(f, "\"\"\n")
+		return err
+	}
+
 	// Write header
-	if err := writer.Write(df.columns); err != nil {
+	if err := writeRecord(df.columns); err != nil {
 		return fmt.Errorf("failed to write header: %w", err)
 	}
 
@@ -273,7 +300,7 @@ func (df *DataFrame) toDelimitedFile(path string, delimiter rune) error {
 		for i, col := range df.columns {
 			record[i] = formatValue(row[col])
 		}
-		if err := writer.Write(record); err != nil {
+		if err := writeRecord(record); err != nil {
 			return fmt.Errorf("failed to write row: %w", err)
 		}
 	}
@@ -308,6 +335,31 @@ func (df *DataFrame) writeTSV(w io.Writer) error {
 // formatValue converts a value to its string representation for CSV output.
 func formatValue(v any) string {
 	if v == nil {
+		return ""
+	}
+	// A non-finite float is spelled the way the module's own read side
+	// converts back: %v wrote the words +Inf, -Inf and NaN, which nothing
+	// reads as a number, so one such value turned the whole reloaded column
+	// TEXT. 9e999 is the spelling SQLite's affinity and the inference saturate
+	// back to the infinity — the dump's own choice — and a NaN is the missing
+	// value it already is to DropNA and the aggregates. float32 is checked
+	// too, since NewDataFrameFromRecords stores whatever a caller hands it; a
+	// finite float32 stays on %v so its own shortest spelling is written.
+	var f float64
+	switch t := v.(type) {
+	case float64:
+		f = t
+	case float32:
+		f = float64(t)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+	switch {
+	case math.IsInf(f, 1):
+		return "9e999"
+	case math.IsInf(f, -1):
+		return "-9e999"
+	case math.IsNaN(f):
 		return ""
 	}
 	return fmt.Sprintf("%v", v)

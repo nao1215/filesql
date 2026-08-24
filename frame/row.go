@@ -3,6 +3,8 @@ package frame
 import (
 	"math"
 	"strconv"
+
+	"github.com/nao1215/filesql/internal/infer"
 )
 
 // Row is one row of a DataFrame, addressed by column name.
@@ -86,7 +88,11 @@ func (r Row) Int(column string) (int64, bool) {
 // Float returns the value of column as a float64.
 //
 // An integer widens, and text that spells a number converts, so a column kept
-// as text is still comparable as a quantity.
+// as text is still comparable as a quantity. The spellings that convert are
+// the ones a data file writes numbers in — digits, sign, decimal point,
+// exponent — not Go's: an underscore separator ("1_000"), a hex float
+// ("0x1p4"), and the digit-free words Inf and NaN have no numeric form here,
+// the same answer Row.Int and SQLite's affinity give the same text.
 //
 // The second result is false when the column is absent, holds nil, or holds a
 // value with no numeric form.
@@ -97,8 +103,10 @@ func (r Row) Float(column string) (float64, bool) {
 	case int64:
 		return float64(v), true
 	case string:
-		f, err := strconv.ParseFloat(v, 64)
-		return f, err == nil
+		if !infer.HasDigit(v) || infer.HasGoOnlyNumericSyntax(v) {
+			return 0, false
+		}
+		return infer.Float64(v)
 	default:
 		return 0, false
 	}

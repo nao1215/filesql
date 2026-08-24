@@ -52,7 +52,9 @@ func ParseValue(value string, colType ColumnType) any {
 		}
 		return value
 	case TypeReal:
-		if f, err := strconv.ParseFloat(trimmed, 64); err == nil {
+		// infer.Float64 accepts a saturating spelling ("9e999" is the
+		// infinity), so a value the inference called REAL converts here too.
+		if f, ok := infer.Float64(trimmed); ok {
 			return f
 		}
 		return value

@@ -133,12 +133,12 @@ func TestDumpValueFormatting(t *testing.T) {
 		require.NoError(t, DumpDatabase(db, outDir))
 		assert.Equal(t, "v\n9e999\n-9e999\n", readFileString(t, filepath.Join(outDir, "t.csv")))
 
-		// Read back through this package the column is TEXT holding those
-		// literals, by the same rule that keeps an integer past int64 as text: a
-		// numeric column would damage the value, since no float64 holds it as
-		// written. What the literals are for is every other reader of the file,
-		// including SQLite's own REAL affinity, which converts them to the
-		// infinities they overflow to where "+Inf" is not a number at all.
+		// Read back through this package the column is REAL again and holds the
+		// infinities: the inference calls a saturating spelling a float because
+		// SQLite's affinity saturates the same text to the same value. This is
+		// not the overflow-integer rule — there TEXT preserves digits a float64
+		// would lose, while here the value is the infinity, which float64 holds
+		// exactly and a TEXT column would replace with a five-byte word.
 		back, err := OpenContext(t.Context(), filepath.Join(outDir, "t.csv"))
 		require.NoError(t, err)
 		defer back.Close()
@@ -147,22 +147,16 @@ func TestDumpValueFormatting(t *testing.T) {
 		require.NoError(t, err)
 		defer rows.Close()
 
-		reloaded := make([]string, 0, 2)
+		reloaded := make([]float64, 0, 2)
 		for rows.Next() {
-			var kind, value string
+			var kind string
+			var value float64
 			require.NoError(t, rows.Scan(&kind, &value))
-			assert.Equal(t, "text", kind)
+			assert.Equal(t, "real", kind)
 			reloaded = append(reloaded, value)
 		}
 		require.NoError(t, rows.Err())
-		assert.Equal(t, []string{"9e999", "-9e999"}, reloaded)
-
-		// The literal is what SQLite's own affinity reads as an infinity, which
-		// is the promise the spelling carries.
-		var asReal float64
-		require.NoError(t, back.QueryRowContext(t.Context(),
-			`SELECT CAST(v AS REAL) FROM t LIMIT 1`).Scan(&asReal))
-		assert.True(t, math.IsInf(asReal, 1))
+		assert.Equal(t, []float64{math.Inf(1), math.Inf(-1)}, reloaded)
 	})
 
 	// An auto-save writes through the same formatting, and it is the path where
