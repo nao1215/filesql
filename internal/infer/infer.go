@@ -59,6 +59,10 @@ type Evidence struct {
 	datetime   bool
 	real       bool
 	integer    bool
+	// realBreakingInteger marks an integer float64 cannot carry back: exact in
+	// an INTEGER column, damaged in a REAL one, so it forces TEXT only when
+	// real evidence turns up beside it.
+	realBreakingInteger bool
 	// nonEmpty marks that some value was seen at all.
 	nonEmpty bool
 }
@@ -87,6 +91,7 @@ func (e *Evidence) Add(value string) {
 		e.real = true
 	case Integer:
 		e.integer = true
+		e.realBreakingInteger = e.realBreakingInteger || integerBreaksFloat64(trimmed)
 	default:
 		e.text = true
 	}
@@ -108,6 +113,11 @@ func (e Evidence) Type() Type {
 		return Text
 	case e.datetime:
 		return Datetime
+	case e.real && e.realBreakingInteger:
+		// A float beside an integer past 2^53 leaves no numeric type holding
+		// both: REAL rounds the integer to a neighboring double, and INTEGER
+		// does not hold the float. The integer alone stays Integer and exact.
+		return Text
 	case e.real:
 		// One decimal is enough. Deciding this by how many decimals the column
 		// happens to hold left an INTEGER column that rewrote 4.0 to 4 and stored
@@ -266,6 +276,38 @@ func HasGoOnlyNumericSyntax(value string) bool {
 		return true
 	}
 	return len(digits) > 1 && digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X')
+}
+
+// integerBreaksFloat64 reports whether value is an integer literal whose int64
+// value does not survive a float64 round-trip: exact in an INTEGER column and
+// damaged in a REAL one. Only a literal of 16 or more digits can exceed 2^53,
+// so shorter values -- almost every integer a file holds -- skip the parse.
+func integerBreaksFloat64(value string) bool {
+	digits := value
+	if len(digits) > 0 && (digits[0] == '+' || digits[0] == '-') {
+		digits = digits[1:]
+	}
+	if len(digits) < 16 {
+		return false
+	}
+	n, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return false
+	}
+	return !Int64SurvivesFloat64(n)
+}
+
+// Int64SurvivesFloat64 reports whether float64 carries v back unchanged. Above
+// 2^53 the doubles thin out and most integers round to a neighbor;
+// math.MinInt64 is a power of two and survives, while float64(math.MaxInt64)
+// rounds up to 2^63, which int64 cannot hold, so that edge is checked before
+// converting back.
+func Int64SurvivesFloat64(v int64) bool {
+	f := float64(v)
+	if f >= 9223372036854775808.0 { // 2^63
+		return false
+	}
+	return int64(f) == v
 }
 
 // IsIntegerLiteralOverflowingInt64 reports whether value is an integer literal

@@ -141,6 +141,14 @@ func TestColumn_TypeHoldsEveryValue(t *testing.T) {
 		{"padded whitespace", []string{"1", " 2"}, Text},
 		{"datetimes", []string{"2024-01-01", "2024-01-02"}, Datetime},
 		{"datetime beside a number", []string{"2024-01-01", "5"}, Text},
+		// An integer past 2^53 is exact in an INTEGER column and damaged in a
+		// REAL one, so a float beside it forces the column to TEXT while the
+		// integer alone keeps its numeric type.
+		{"a float beside an integer past 2^53", []string{"9007199254740993", "0.5"}, Text},
+		{"a float before an integer past 2^53", []string{"0.5", "9007199254740993"}, Text},
+		{"a float beside a negative integer past 2^53", []string{"-9007199254740993", "1.5"}, Text},
+		{"an integer past 2^53 alone", []string{"9007199254740993"}, Integer},
+		{"a float beside 2^53 itself", []string{"9007199254740992", "0.5"}, Real},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

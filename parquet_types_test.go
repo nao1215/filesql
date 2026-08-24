@@ -229,6 +229,103 @@ func TestParquetDumpWritesTypedColumns(t *testing.T) {
 		map[string]string{"name": "utf8", "price": "float64", "qty": "int64"})
 }
 
+// TestParquetUint64ColumnLoadsExactly pins the type a UINT64 column is declared
+// as. Declared INTEGER, a value past int64 max was converted to REAL by
+// SQLite's affinity — 18446744073709551615 loaded as 1.8446744073709552e+19 —
+// so the column is TEXT for the same reason DECIMAL and UUID are: it is the
+// only type that holds every value the schema admits. The type follows the
+// schema, not the values, so a UINT64 column of small values is TEXT too.
+func TestParquetUint64ColumnLoadsExactly(t *testing.T) {
+	t.Parallel()
+
+	type row struct {
+		U64 uint64 `parquet:"u64"`
+		U32 uint32 `parquet:"u32"`
+	}
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[row](&buf)
+	_, err := w.Write([]row{
+		{U64: math.MaxUint64, U32: math.MaxUint32},
+		{U64: 42, U32: 7},
+	})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "uints.parquet")
+	require.NoError(t, os.WriteFile(path, buf.Bytes(), 0o600))
+
+	ctx := context.Background()
+	db, err := OpenContext(ctx, path)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var kinds, values string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT group_concat(typeof(u64)), group_concat(quote(u64)) FROM uints`).Scan(&kinds, &values))
+	assert.Equal(t, "text,text", kinds)
+	assert.Equal(t, "'18446744073709551615','42'", values)
+
+	// UINT32 fits in int64, so it keeps the numeric column.
+	var u32Kind string
+	var u32 int64
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT typeof(u32), u32 FROM uints ORDER BY u32 DESC LIMIT 1`).Scan(&u32Kind, &u32))
+	assert.Equal(t, "integer", u32Kind)
+	assert.Equal(t, int64(math.MaxUint32), u32)
+}
+
+// TestParquetDumpKeepsAMixedColumnExact pins the type a dump gives a column
+// that mixes int64 and float64 values, which SQLite's per-value typing allows.
+// Widening to DOUBLE is lossless only while every integer survives a float64
+// round-trip; 9007199254740993 does not, and the dump used to write
+// 9007199254740992 into the file. Such a column is written as STRING, the same
+// answer a number-beside-text column already gets, while a losslessly widenable
+// mix keeps DOUBLE.
+func TestParquetDumpKeepsAMixedColumnExact(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		first    any // the two values of column v, inserted in order
+		second   any
+		wantType string // parquet physical type assertParquetSchema reports
+		wantBack string // group_concat(quote(v)) after reloading the dump
+	}{
+		{"an integer past 2^53 beside a float", int64(9007199254740993), 0.5, "utf8", "'9007199254740993','0.5'"},
+		{"a negative integer past 2^53 beside a float", int64(-9007199254740993), 0.5, "utf8", "'-9007199254740993','0.5'"},
+		{"a small integer beside a float", int64(42), 0.5, "float64", "42.0,0.5"},
+		{"2^53 itself beside a float", int64(9007199254740992), 0.5, "float64", "9007199254740992.0,0.5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			dir := t.TempDir()
+			src, err := sql.Open("sqlite", filepath.Join(dir, "src.db"))
+			require.NoError(t, err)
+			defer func() { _ = src.Close() }()
+			_, err = src.ExecContext(ctx, `CREATE TABLE mix (v);`)
+			require.NoError(t, err)
+			_, err = src.ExecContext(ctx, `INSERT INTO mix VALUES (?), (?);`, tt.first, tt.second)
+			require.NoError(t, err)
+
+			out := filepath.Join(dir, "out")
+			require.NoError(t, DumpDatabase(src, out, NewDumpOptions().WithFormat(OutputFormatParquet)))
+			assertParquetSchema(t, filepath.Join(out, "mix.parquet"), map[string]string{"v": tt.wantType})
+
+			back, err := OpenContext(ctx, filepath.Join(out, "mix.parquet"))
+			require.NoError(t, err)
+			defer func() { _ = back.Close() }()
+			var got string
+			require.NoError(t, back.QueryRowContext(ctx,
+				`SELECT group_concat(quote(v)) FROM mix`).Scan(&got))
+			assert.Equal(t, tt.wantBack, got)
+		})
+	}
+}
+
 // TestParquetDumpKeepsANumericColumnWithABlank pins the case one missing entry
 // used to decide. SQLite stores a blank in a numeric column as the empty string,
 // since "" has no numeric value to convert to, and the column's type was read
