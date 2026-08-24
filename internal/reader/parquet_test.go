@@ -220,6 +220,28 @@ func TestReadParquetRefusesDuplicateColumnNames(t *testing.T) {
 	})
 }
 
+// TestReadParquetKeepsColumnsSQLiteKeepsApart pins the boundary of the
+// validation above: names that differ by both whitespace and case -- " x" and
+// "X" -- are merged by neither the trim rule nor the case fold on its own, and
+// SQLite keeps them as two columns, so the header is accepted rather than
+// folded into a false duplicate that refuses a file SQLite would load.
+func TestReadParquetKeepsColumnsSQLiteKeepsApart(t *testing.T) {
+	t.Parallel()
+
+	schema := parquet.NewSchema("t", parquet.Group{
+		"X":  parquet.Optional(parquet.String()),
+		" x": parquet.Optional(parquet.String()),
+	})
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[map[string]any](&buf, schema)
+	_, err := w.Write([]map[string]any{{"X": "a", " x": "b"}})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	result, _ := collectParquet(t, buf.Bytes(), Options{Rendering: RenderSQLite})
+	assert.ElementsMatch(t, []string{"X", " x"}, result.Header)
+}
+
 func TestReadParquetRefusesWhatIsNotParquet(t *testing.T) {
 	t.Parallel()
 
