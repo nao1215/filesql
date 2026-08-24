@@ -108,10 +108,11 @@ func Example_complexPrepAndValidation() {
 		Name string `prep:"trim" validate:"required"`
 		// SKU: trim, uppercase, require non-empty and alphanumeric
 		SKU string `prep:"trim,uppercase" validate:"required,alphanumeric"`
-		// Price: trim, set default if empty, validate as number (int or decimal)
-		Price string `prep:"trim,default=0.00" validate:"number"`
-		// Quantity: trim, coerce to int, validate as integer
-		Quantity string `prep:"trim,coerce=int" validate:"numeric"`
+		// Price: trim, set default if empty, validate as a decimal (numeric
+		// accepts an optionally signed decimal; number would be digits only)
+		Price string `prep:"trim,default=0.00" validate:"numeric"`
+		// Quantity: trim, coerce to int, validate as digits only
+		Quantity string `prep:"trim,coerce=int" validate:"number"`
 		// Category: trim, lowercase, collapse multiple spaces
 		Category string `prep:"trim,lowercase,collapse_space"`
 		// Description: trim, strip HTML, truncate to 200 chars
@@ -184,7 +185,7 @@ func Example_complexPrepAndValidation() {
 	// Validation Errors:
 	//   Row 3, Field "Name": value is required
 	//   Row 3, Field "SKU": value must contain only alphanumeric characters
-	//   Row 3, Field "Price": value must be a valid number
+	//   Row 3, Field "Price": value must be numeric
 	//
 	// Preprocessed Records:
 	//   [1] Name="Widget Pro", SKU="ABC123", Price="19.99", Category="electronics"
@@ -432,7 +433,7 @@ func Example_detailedErrorReporting() {
 		OrderID    string  `name:"order_id" validate:"required,uuid4"`
 		CustomerID string  `name:"customer_id" validate:"required,numeric"`
 		Email      string  `validate:"required,email"`
-		Amount     float64 `validate:"required,number,gt=0,lte=10000"`
+		Amount     float64 `validate:"required,numeric,gt=0,lte=10000"`
 		Currency   string  `validate:"required,len=3,uppercase"`
 		Country    string  `validate:"required,alpha,len=2"`
 		OrderDate  string  `name:"order_date" validate:"required,datetime=2006-01-02"`
@@ -440,7 +441,7 @@ func Example_detailedErrorReporting() {
 		IPAddress  string  `name:"ip_address" validate:"required,ip_addr"`
 		PromoCode  string  `name:"promo_code" validate:"alphanumeric"`
 		Quantity   int     `validate:"required,numeric,gte=1,lte=100"`
-		UnitPrice  float64 `name:"unit_price" validate:"required,number,gt=0"`
+		UnitPrice  float64 `name:"unit_price" validate:"required,numeric,gt=0"`
 		TotalCheck string  `name:"total_check" validate:"required,eqfield=Amount"`
 	}
 

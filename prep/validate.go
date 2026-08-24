@@ -19,7 +19,10 @@ const (
 	uuidRegexPattern    = `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`
 	dataURIRegexPattern = `^data:[^;]+;base64,[A-Za-z0-9+/]+={0,2}$`
 	emailRegexPattern   = `^[A-Za-z0-9_%+\-]+(?:\.[A-Za-z0-9_%+\-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$`
-	numberRegexPattern  = `^[-+]?[0-9]+(\.[0-9]+)?$`
+	// numeric accepts an optionally signed decimal, and number accepts digits
+	// alone, matching the go-playground/validator dialect prep documents.
+	numericRegexPattern = `^[-+]?[0-9]+(\.[0-9]+)?$`
+	numberRegexPattern  = `^[0-9]+$`
 	fileScheme          = "file"
 
 	// E.164 phone number pattern
@@ -76,9 +79,11 @@ var (
 	uuidRegex                 = regexp.MustCompile(uuidRegexPattern)
 	dataURIRegex              = regexp.MustCompile(dataURIRegexPattern)
 	emailRegex                = regexp.MustCompile(emailRegexPattern)
+	numericRegex              = regexp.MustCompile(numericRegexPattern)
 	numberRegex               = regexp.MustCompile(numberRegexPattern)
 	urlEncodedRegex           = regexp.MustCompile(`^(?:[^%]|%[0-9A-Fa-f]{2})*$`)
 	fqdnLabelRegex            = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
+	fqdnTLDRegex              = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9]{0,62}$`)
 	hostnameRFC952LabelRegex  = regexp.MustCompile(`^[A-Za-z](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 	hostnameRFC1123LabelRegex = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 
@@ -279,7 +284,8 @@ func (v *alphaSpaceValidator) Name() string {
 	return alphaSpaceTagValue
 }
 
-// numericValidator validates that a value is a valid integer
+// numericValidator validates that a value is an optionally signed decimal,
+// which is what numeric means in the go-playground/validator dialect.
 type numericValidator struct{}
 
 // newNumericValidator creates a new numeric validator
@@ -287,12 +293,12 @@ func newNumericValidator() *numericValidator {
 	return &numericValidator{}
 }
 
-// Validate checks if the value is a valid integer
+// Validate checks if the value is an optionally signed decimal
 func (v *numericValidator) Validate(value string) string {
 	if value == "" {
 		return ""
 	}
-	if _, err := strconv.Atoi(value); err != nil {
+	if !numericRegex.MatchString(value) {
 		return "value must be numeric"
 	}
 	return ""
@@ -303,7 +309,8 @@ func (v *numericValidator) Name() string {
 	return numericTagValue
 }
 
-// numberValidator validates that a value is a valid number (integer or decimal)
+// numberValidator validates that a value is digits alone, which is what number
+// means in the go-playground/validator dialect.
 type numberValidator struct{}
 
 // newNumberValidator creates a new number validator
@@ -360,10 +367,13 @@ func newAlphanumericUnicodeValidator() *alphanumericUnicodeValidator {
 	return &alphanumericUnicodeValidator{}
 }
 
-// Validate checks if the value contains only unicode letters or digits
+// Validate checks if the value contains only unicode letters or numbers. The
+// dialect's alphanumunicode is ^[\p{L}\p{N}]+$, and \p{N} covers every Unicode
+// number category, so unicode.IsNumber is used rather than unicode.IsDigit,
+// which matches decimal digits alone.
 func (v *alphanumericUnicodeValidator) Validate(value string) string {
 	for _, r := range value {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) {
 			return "value must contain only unicode letters or digits"
 		}
 	}
@@ -1243,13 +1253,16 @@ func newCIDRv4Validator() *cidrv4Validator {
 	return &cidrv4Validator{}
 }
 
-// Validate checks if the value is a valid IPv4 CIDR notation
+// Validate checks if the value is a valid IPv4 CIDR notation. The dialect's
+// cidrv4 also requires the address to be the network address itself, so an
+// address with host bits set (192.168.0.1/24) is rejected where 192.168.0.0/24
+// is accepted. The general cidr and cidrv6 tags do not impose this rule.
 func (v *cidrv4Validator) Validate(value string) string {
 	if value == "" {
 		return "value must be a valid IPv4 CIDR"
 	}
-	ip, _, err := net.ParseCIDR(value)
-	if err != nil || ip.To4() == nil {
+	ip, network, err := net.ParseCIDR(value)
+	if err != nil || ip.To4() == nil || !network.IP.Equal(ip) {
 		return "value must be a valid IPv4 CIDR"
 	}
 	return ""
@@ -1326,6 +1339,12 @@ func (v *fqdnValidator) Validate(value string) string {
 
 	labels := strings.Split(value, ".")
 	if len(labels) < 2 {
+		return errMsgValidFQDN
+	}
+
+	// The dialect requires a non-numeric top-level domain, so an all-numeric
+	// dotted string (an IPv4 address, or a bare numeric TLD) is not an FQDN.
+	if !fqdnTLDRegex.MatchString(labels[len(labels)-1]) {
 		return errMsgValidFQDN
 	}
 
