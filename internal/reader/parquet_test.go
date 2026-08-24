@@ -173,6 +173,53 @@ func TestReadParquetNestedFieldRendersAsText(t *testing.T) {
 	assert.Equal(t, "1", chunks[0].Records[0][0], "the flat column beside it is unaffected")
 }
 
+// TestReadParquetRefusesDuplicateColumnNames pins that the Parquet reader
+// validates its header the way every other format does: two columns that are
+// one column to SQLite -- the same after case folding, or after trimming
+// surrounding whitespace -- are refused with the classified duplicate-column
+// error rather than left to fail later as a raw CREATE TABLE error.
+func TestReadParquetRefusesDuplicateColumnNames(t *testing.T) {
+	t.Parallel()
+
+	discard := func(*Chunk) error { return nil }
+
+	t.Run("names differing only in case", func(t *testing.T) {
+		t.Parallel()
+
+		type row struct {
+			Lower int64 `parquet:"id"`
+			Upper int64 `parquet:"ID"`
+		}
+		data := writeParquet(t, []row{{Lower: 1, Upper: 2}})
+
+		_, err := readParquet(bytes.NewReader(data), Options{Rendering: RenderSQLite}, discard)
+		require.Error(t, err)
+		var readErr *Error
+		require.ErrorAs(t, err, &readErr)
+		assert.Equal(t, KindDuplicateColumn, readErr.Kind)
+	})
+
+	t.Run("names differing only in surrounding whitespace", func(t *testing.T) {
+		t.Parallel()
+
+		schema := parquet.NewSchema("t", parquet.Group{
+			"x":  parquet.Optional(parquet.String()),
+			" x": parquet.Optional(parquet.String()),
+		})
+		var buf bytes.Buffer
+		w := parquet.NewGenericWriter[map[string]any](&buf, schema)
+		_, err := w.Write([]map[string]any{{"x": "a", " x": "b"}})
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+
+		_, err = readParquet(bytes.NewReader(buf.Bytes()), Options{Rendering: RenderSQLite}, discard)
+		require.Error(t, err)
+		var readErr *Error
+		require.ErrorAs(t, err, &readErr)
+		assert.Equal(t, KindDuplicateColumn, readErr.Kind)
+	})
+}
+
 func TestReadParquetRefusesWhatIsNotParquet(t *testing.T) {
 	t.Parallel()
 

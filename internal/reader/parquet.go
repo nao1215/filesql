@@ -59,6 +59,14 @@ func readParquet(src io.Reader, opts Options, emit Emit) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	// A Parquet file carries its own column names, which SQLite folds by case and
+	// filesql trims, so two of them can be one column downstream. The header is
+	// validated here, the way the delimited and XLSX readers validate theirs, so
+	// the clash is the classified duplicate-column error rather than a raw
+	// CREATE TABLE failure later.
+	if err := ValidateColumnNames(header); err != nil {
+		return Result{}, err
+	}
 	// Parquet declares the type of every column, so the schema is read rather
 	// than inferred from the rendered values: inference cannot tell a STRING
 	// column of digits from an INT64 one, and would turn a zip code into a
