@@ -32,6 +32,8 @@ import (
 //	G-21 UPPER(x) / LOWER(x)                  -> unicode_upper / unicode_lower
 //	G-22 a % b, MOD(a, b)                     -> googlesql_mod, which raises on a
 //	                                             zero divisor
+//	G-23 TRUNC(x, n)                          -> trunc_scale(x, n); DIV is a
+//	                                             helper of its own name
 func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedGoogleSQL(tokens); err != nil {
 		return nil, err
@@ -238,6 +240,8 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 	case fnNameMod:
 		// GoogleSQL raises on a zero divisor where SQLite answers NULL.
 		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_mod", googlesqlCallPass)
+	case fnNameTrunc:
+		return rewriteTruncScaleCall(tokens, open, closeIdx, googlesqlCallPass)
 	case "DATE_ADD", "TIMESTAMP_ADD":
 		return rewriteDateArith(tokens, open, closeIdx, "+", googlesqlCallPass)
 	case "DATE_SUB", "TIMESTAMP_SUB":

@@ -112,6 +112,89 @@ func moduloRaising(args []driver.Value) (driver.Value, error) {
 	return remainder, nil
 }
 
+// integerDivide implements PostgreSQL's div(x, y) and GoogleSQL's DIV(x, y):
+// the quotient truncated toward zero, which is what both engines answer for a
+// negative operand — div(-7, 2) is -3 rather than the -4 a floor would give.
+// A zero divisor raises, as it does for the operators.
+func integerDivide(args []driver.Value) (driver.Value, error) {
+	a, aok := sqliteOperand(args[0])
+	b, bok := sqliteOperand(args[1])
+	if !aok || !bok {
+		return nil, nil
+	}
+	if b.integer() == 0 {
+		return nil, ErrDivideByZero
+	}
+	return a.integer() / b.integer(), nil
+}
+
+// truncateScale implements PostgreSQL's trunc(x, n) and GoogleSQL's
+// TRUNC(x, n): x with everything past n decimal places cut off, toward zero, so
+// trunc(-12.345, 2) is -12.34 rather than -12.35. A negative scale truncates to
+// a power of ten, which is what PostgreSQL answers for trunc(12345.6, -2) with
+// 12300.
+func truncateScale(args []driver.Value) (driver.Value, error) {
+	x, ok := toFloat(args[0])
+	if !ok {
+		return nil, nil
+	}
+	scale, ok := sqliteOperand(args[1])
+	if !ok {
+		return nil, nil
+	}
+	if math.IsNaN(x) || math.IsInf(x, 0) {
+		return x, nil
+	}
+	factor := math.Pow(10, float64(scale.integer()))
+	switch {
+	case factor == 0:
+		// A scale so negative that the power of ten underflows truncates every
+		// finite value to nothing, which is the 0 PostgreSQL answers for
+		// trunc(12.345, -400).
+		return float64(0), nil
+	case math.IsInf(factor, 0):
+		// A scale past every decimal the value has keeps the value, which is
+		// what PostgreSQL answers for trunc(12.345, 400).
+		return x, nil
+	}
+	return math.Trunc(x*factor) / factor, nil
+}
+
+// widthBucket implements PostgreSQL's width_bucket(x, lo, hi, count): which of
+// count equal-width buckets spanning lo..hi the value falls in, numbered from
+// 1, with 0 for a value below the range and count+1 for one above it. The
+// bounds may be given in either order, which is how a descending scale is
+// bucketed, and a range of no width is refused the way PostgreSQL refuses it.
+func widthBucket(args []driver.Value) (driver.Value, error) {
+	x, ok1 := toFloat(args[0])
+	low, ok2 := toFloat(args[1])
+	high, ok3 := toFloat(args[2])
+	count, ok4 := sqliteOperand(args[3])
+	if !ok1 || !ok2 || !ok3 || !ok4 {
+		return nil, nil
+	}
+	buckets := count.integer()
+	if buckets <= 0 {
+		return nil, fmt.Errorf("%w: width_bucket count must be greater than zero", ErrInvalidCast)
+	}
+	if low == high {
+		return nil, fmt.Errorf("%w: width_bucket lower bound cannot equal upper bound", ErrInvalidCast)
+	}
+	if low > high {
+		// A descending range is the ascending one counted from the other end.
+		low, high, x = high, low, high+low-x
+	}
+	if x < low {
+		return int64(0), nil
+	}
+	if x >= high {
+		return buckets + 1, nil
+	}
+	// The buckets are numbered from 1, so the value's share of the range names
+	// the bucket below it and the one it is in is the next.
+	return int64(float64(buckets)*(x-low)/(high-low)) + 1, nil
+}
+
 // numOperand is one arithmetic operand as SQLite reads it: an integer, or a
 // float when it is not one.
 type numOperand struct {

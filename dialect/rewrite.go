@@ -24,6 +24,7 @@ const (
 	fnNameSubstring = "SUBSTRING"
 	fnNameSubstr    = "SUBSTR"
 	fnNameMod       = "MOD"
+	fnNameTrunc     = "TRUNC"
 )
 
 // callRecurser rewrites a slice of argument tokens with a dialect's call pass so
@@ -374,6 +375,17 @@ func rewriteRoundCall(tokens []token, open, closeIdx int, recurse callRecurser) 
 		return nil, false, nil
 	}
 	return rewriteRenameCall(tokens, open, closeIdx, "dialect_round", recurse)
+}
+
+// rewriteTruncScaleCall renames the two-argument TRUNC, which truncates at a
+// scale the way PostgreSQL's trunc(x, n) and GoogleSQL's TRUNC(x, n) do. The
+// one-argument form is SQLite's own trunc and is left alone, so the two live
+// under one name the way ROUND's two forms do.
+func rewriteTruncScaleCall(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
+	if len(topLevelCommas(tokens, open, closeIdx)) != 1 {
+		return nil, false, nil
+	}
+	return rewriteRenameCall(tokens, open, closeIdx, "trunc_scale", recurse)
 }
 
 // topLevelCommas returns the indices of every "," at depth 1 inside the call
