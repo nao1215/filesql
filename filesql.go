@@ -14,12 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/apache/arrow/go/v18/arrow"
-	"github.com/apache/arrow/go/v18/arrow/array"
-	"github.com/apache/arrow/go/v18/arrow/memory"
-	"github.com/apache/arrow/go/v18/parquet/pqarrow"
 	"github.com/nao1215/filesql/internal/reader"
 	"github.com/nao1215/filesql/parser"
+	"github.com/parquet-go/parquet-go"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -813,8 +810,8 @@ func writeParquetTableData(w io.Writer, columns []string, rows *sql.Rows) error 
 	}
 
 	// Read all rows into memory first. The raw driver values are kept rather than
-	// their rendered text because Parquet is a typed format: which Arrow type each
-	// column is written as is decided from the values themselves, below.
+	// their rendered text because Parquet is a typed format: which Parquet type
+	// each column is written as is decided from the values themselves, below.
 	var allRows [][]any
 
 	// Prepare for scanning
@@ -840,7 +837,7 @@ func writeParquetTableData(w io.Writer, columns []string, rows *sql.Rows) error 
 	return writeParquetData(w, columns, allRows, declared)
 }
 
-// parquetKind is the Arrow type one column is written as.
+// parquetKind is the Parquet type one column is written as.
 type parquetKind int
 
 const (
@@ -900,75 +897,74 @@ func parquetColumnKind(rows [][]any, col int, declaredType string) parquetKind {
 	}
 }
 
-// arrowTypeFor is the Arrow type a parquetKind is written as.
-func arrowTypeFor(kind parquetKind) arrow.DataType {
+// parquetNodeFor is the Parquet schema node a parquetKind is written as. Every
+// column is optional, so a stored null survives the round-trip.
+func parquetNodeFor(kind parquetKind) parquet.Node {
 	switch kind {
 	case parquetInt:
-		return arrow.PrimitiveTypes.Int64
+		return parquet.Optional(parquet.Leaf(parquet.Int64Type))
 	case parquetFloat:
-		return arrow.PrimitiveTypes.Float64
+		return parquet.Optional(parquet.Leaf(parquet.DoubleType))
 	default:
-		return arrow.BinaryTypes.String
+		return parquet.Optional(parquet.String())
 	}
 }
 
-// appendParquetValue appends one cell to the builder for its column. A nil value
-// is the SQL NULL the row carried; anything that does not match the column's
-// chosen kind cannot occur, because parquetColumnKind only chooses a numeric
-// kind when every value in the column is numeric.
-func appendParquetValue(b array.Builder, kind parquetKind, value any) error {
-	if value == nil {
-		b.AppendNull()
-		return nil
+// orderedGroup is parquet.Group with its fields kept in the order the table
+// declares its columns; parquet.Group alone sorts them by name, and a dump
+// that reordered its columns would hand every downstream reader a different
+// table than the one it was asked to write.
+type orderedGroup struct {
+	parquet.Group
+	names []string
+}
+
+// Fields returns the group's fields in declaration order.
+func (g orderedGroup) Fields() []parquet.Field {
+	sorted := g.Group.Fields()
+	byName := make(map[string]parquet.Field, len(sorted))
+	for _, field := range sorted {
+		byName[field.Name()] = field
 	}
-	// A numeric column has no spelling for a blank, so the blank is written as
-	// the null it means. A text column keeps its empty string.
+	fields := make([]parquet.Field, 0, len(g.names))
+	for _, name := range g.names {
+		fields = append(fields, byName[name])
+	}
+	return fields
+}
+
+// parquetCellValue renders one cell as the column's Parquet value. ok is false
+// for a null: a nil value is the SQL NULL the row carried, and a blank in a
+// numeric column is written as the null it means, since a number has no
+// spelling for a blank. A text column keeps its empty string. A value that does
+// not match a numeric column's kind cannot occur, because parquetColumnKind
+// only chooses a numeric kind when every value in the column is numeric.
+func parquetCellValue(kind parquetKind, value any) (parquet.Value, bool, error) {
+	if value == nil {
+		return parquet.Value{}, false, nil
+	}
 	if text, isText := value.(string); isText && text == "" && kind != parquetString {
-		b.AppendNull()
-		return nil
+		return parquet.Value{}, false, nil
 	}
 	switch kind {
 	case parquetInt:
-		ib, ok := b.(*array.Int64Builder)
-		if !ok {
-			return fmt.Errorf("%w: expected an Int64Builder for an integer column", ErrInvalidData)
-		}
 		n, ok := value.(int64)
 		if !ok {
-			return fmt.Errorf("%w: %T in an integer column", ErrInvalidData, value)
+			return parquet.Value{}, false, fmt.Errorf("%w: %T in an integer column", ErrInvalidData, value)
 		}
-		ib.Append(n)
+		return parquet.Int64Value(n), true, nil
 	case parquetFloat:
-		fb, ok := b.(*array.Float64Builder)
-		if !ok {
-			return fmt.Errorf("%w: expected a Float64Builder for a real column", ErrInvalidData)
-		}
 		switch v := value.(type) {
 		case float64:
-			fb.Append(v)
+			return parquet.DoubleValue(v), true, nil
 		case int64:
-			fb.Append(float64(v))
+			return parquet.DoubleValue(float64(v)), true, nil
 		default:
-			return fmt.Errorf("%w: %T in a real column", ErrInvalidData, value)
+			return parquet.Value{}, false, fmt.Errorf("%w: %T in a real column", ErrInvalidData, value)
 		}
 	default:
-		sb, ok := b.(*array.StringBuilder)
-		if !ok {
-			return fmt.Errorf("%w: expected a StringBuilder for a text column", ErrInvalidData)
-		}
-		sb.Append(formatDumpValue(value))
+		return parquet.ByteArrayValue([]byte(formatDumpValue(value))), true, nil
 	}
-	return nil
-}
-
-// writeOnly exposes only Write, so a library that would close or seek the
-// destination it is given cannot reach past what it was handed.
-type writeOnly struct {
-	w io.Writer
-}
-
-func (o writeOnly) Write(p []byte) (int, error) {
-	return o.w.Write(p)
 }
 
 // writeParquetData writes data to Parquet format. A nil cell in rows is stored
@@ -976,7 +972,7 @@ func (o writeOnly) Write(p []byte) (int, error) {
 // into an empty string. declared holds each column's declared SQL type, which
 // decides a column that has no rows to speak for it.
 //
-// Each column is written as the Arrow type its values call for rather than as
+// Each column is written as the Parquet type its values call for rather than as
 // STRING. Parquet states the type of every column in its schema and readers
 // trust it, so writing a numeric column as digit strings hands the next tool a
 // column it will compare and sort as text.
@@ -991,67 +987,69 @@ func writeParquetData(w io.Writer, columns []string, rows [][]any, declared []st
 	}
 
 	kinds := make([]parquetKind, len(columns))
-	fields := make([]arrow.Field, len(columns))
+	group := orderedGroup{Group: make(parquet.Group, len(columns)), names: columns}
 	for i, col := range columns {
 		declaredType := ""
 		if i < len(declared) {
 			declaredType = declared[i]
 		}
 		kinds[i] = parquetColumnKind(rows, i, declaredType)
-		fields[i] = arrow.Field{
-			Name:     col,
-			Type:     arrowTypeFor(kinds[i]),
-			Nullable: true, // allow a stored null so SQL NULL survives the round-trip
-		}
+		group.Group[col] = parquetNodeFor(kinds[i])
 	}
-	schema := arrow.NewSchema(fields, nil)
+	schema := parquet.NewSchema("table", group)
 
-	// Create Arrow record batch builder
-	pool := memory.NewGoAllocator()
-	builder := array.NewRecordBuilder(pool, schema)
-	defer builder.Release()
+	// The writer takes an io.Writer and never closes it, so the caller keeps
+	// ownership of the destination.
+	writer := parquet.NewGenericWriter[any](w, schema)
 
-	// Add data to builders
+	// Rows are built as Parquet values directly rather than deconstructed from
+	// Go values by reflection, which reads a zero value in an optional column
+	// as a null and would turn a stored 0 or "" into a missing cell.
+	buf := make([]parquet.Row, 0, min(len(rows), 1024))
+	flush := func() error {
+		if len(buf) == 0 {
+			return nil
+		}
+		if _, err := writer.WriteRows(buf); err != nil {
+			return fmt.Errorf("%w: failed to write rows to parquet: %w", ErrIOOperation, err)
+		}
+		buf = buf[:0]
+		return nil
+	}
 	for _, row := range rows {
+		out := make(parquet.Row, len(columns))
 		for i := range columns {
 			var value any
 			if i < len(row) {
 				value = row[i]
 			}
-			if err := appendParquetValue(builder.Field(i), kinds[i], value); err != nil {
+			cell, present, err := parquetCellValue(kinds[i], value)
+			if err != nil {
+				return err
+			}
+			if present {
+				out[i] = cell.Level(0, 1, i)
+			} else {
+				out[i] = parquet.NullValue().Level(0, 0, i)
+			}
+		}
+		buf = append(buf, out)
+		if len(buf) == cap(buf) {
+			if err := flush(); err != nil {
 				return err
 			}
 		}
 	}
-
-	// Build record
-	record := builder.NewRecord()
-	defer record.Release()
-
-	// Create Parquet writer
-	arrowProps := pqarrow.NewArrowWriterProperties(pqarrow.WithStoreSchema())
-	// writeOnly hides the destination's Close from the Parquet writer, which
-	// closes its sink when it can. The caller owns the file and closes it after
-	// checking that error; a Parquet-side close leaves it with "file already
-	// closed" and turns a good dump into a failure.
-	writer, err := pqarrow.NewFileWriter(schema, writeOnly{w}, nil, arrowProps)
-	if err != nil {
-		return fmt.Errorf("%w: failed to create parquet writer: %w", ErrIOOperation, err)
-	}
-	// An empty record has no row group to write; Close still writes the schema and
-	// the footer, which is the whole file for a table with no rows.
-	if record.NumRows() > 0 {
-		if err := writer.Write(record); err != nil {
-			_ = writer.Close() // Release the writer; the write error is the one to report
-			return fmt.Errorf("%w: failed to write record to parquet: %w", ErrIOOperation, err)
-		}
+	if err := flush(); err != nil {
+		return err
 	}
 
 	// Close writes the footer, so this is where an incomplete file shows up.
+	// For a table with no rows it writes the schema and the footer, which is
+	// the whole file.
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("%w: failed to close parquet writer: %w", ErrIOOperation, err)
 	}
-
 	return nil
 }
 

@@ -6,11 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/apache/arrow/go/v18/arrow"
-	"github.com/apache/arrow/go/v18/arrow/array"
-	"github.com/apache/arrow/go/v18/arrow/memory"
-	"github.com/apache/arrow/go/v18/parquet"
-	"github.com/apache/arrow/go/v18/parquet/pqarrow"
+	"github.com/parquet-go/parquet-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xuri/excelize/v2"
@@ -105,44 +101,15 @@ func TestParseParquet_WithGeneratedData(t *testing.T) {
 	t.Run("parses parquet with empty records", func(t *testing.T) {
 		t.Parallel()
 
-		// Create a parquet file with headers only (no data rows)
-		schema := arrow.NewSchema(
-			[]arrow.Field{
-				{Name: "col1", Type: arrow.PrimitiveTypes.Int64},
-				{Name: "col2", Type: arrow.BinaryTypes.String},
-			},
-			nil,
-		)
-
-		pool := memory.NewGoAllocator()
-
-		// Create empty arrays
-		col1Builder := array.NewInt64Builder(pool)
-		defer col1Builder.Release()
-		col1Arr := col1Builder.NewArray()
-		defer col1Arr.Release()
-
-		col2Builder := array.NewStringBuilder(pool)
-		defer col2Builder.Release()
-		col2Arr := col2Builder.NewArray()
-		defer col2Arr.Release()
-
-		// Create record with 0 rows
-		record := array.NewRecord(schema, []arrow.Array{col1Arr, col2Arr}, 0)
-		defer record.Release()
-
-		// Create table
-		table := array.NewTableFromRecords(schema, []arrow.Record{record})
-		defer table.Release()
-
-		// Write to buffer
+		// A parquet file with headers only (no data rows).
+		type row struct {
+			Col1 int64  `parquet:"col1"`
+			Col2 string `parquet:"col2"`
+		}
 		var buf bytes.Buffer
-		props := parquet.NewWriterProperties()
-		arrProps := pqarrow.DefaultWriterProps()
-		err := pqarrow.WriteTable(table, &buf, 1024, props, arrProps)
-		require.NoError(t, err)
+		w := parquet.NewGenericWriter[row](&buf)
+		require.NoError(t, w.Close())
 
-		// Parse the parquet data
 		result, err := Parse(bytes.NewReader(buf.Bytes()), Parquet)
 
 		require.NoError(t, err)
@@ -153,54 +120,21 @@ func TestParseParquet_WithGeneratedData(t *testing.T) {
 	t.Run("parses parquet with multiple data types", func(t *testing.T) {
 		t.Parallel()
 
-		schema := arrow.NewSchema(
-			[]arrow.Field{
-				{Name: "int_col", Type: arrow.PrimitiveTypes.Int64},
-				{Name: "str_col", Type: arrow.BinaryTypes.String},
-				{Name: "float_col", Type: arrow.PrimitiveTypes.Float64},
-				{Name: "bool_col", Type: arrow.FixedWidthTypes.Boolean},
-			},
-			nil,
-		)
-
-		pool := memory.NewGoAllocator()
-
-		intBuilder := array.NewInt64Builder(pool)
-		defer intBuilder.Release()
-		intBuilder.AppendValues([]int64{1, 2, 3}, nil)
-
-		strBuilder := array.NewStringBuilder(pool)
-		defer strBuilder.Release()
-		strBuilder.AppendValues([]string{"a", "b", "c"}, nil)
-
-		floatBuilder := array.NewFloat64Builder(pool)
-		defer floatBuilder.Release()
-		floatBuilder.AppendValues([]float64{1.1, 2.2, 3.3}, nil)
-
-		boolBuilder := array.NewBooleanBuilder(pool)
-		defer boolBuilder.Release()
-		boolBuilder.AppendValues([]bool{true, false, true}, nil)
-
-		intArr := intBuilder.NewArray()
-		defer intArr.Release()
-		strArr := strBuilder.NewArray()
-		defer strArr.Release()
-		floatArr := floatBuilder.NewArray()
-		defer floatArr.Release()
-		boolArr := boolBuilder.NewArray()
-		defer boolArr.Release()
-
-		record := array.NewRecord(schema, []arrow.Array{intArr, strArr, floatArr, boolArr}, 3)
-		defer record.Release()
-
-		table := array.NewTableFromRecords(schema, []arrow.Record{record})
-		defer table.Release()
-
+		type row struct {
+			IntCol   int64   `parquet:"int_col"`
+			StrCol   string  `parquet:"str_col"`
+			FloatCol float64 `parquet:"float_col"`
+			BoolCol  bool    `parquet:"bool_col"`
+		}
 		var buf bytes.Buffer
-		props := parquet.NewWriterProperties()
-		arrProps := pqarrow.DefaultWriterProps()
-		err := pqarrow.WriteTable(table, &buf, 1024, props, arrProps)
+		w := parquet.NewGenericWriter[row](&buf)
+		_, err := w.Write([]row{
+			{IntCol: 1, StrCol: "a", FloatCol: 1.1, BoolCol: true},
+			{IntCol: 2, StrCol: "b", FloatCol: 2.2, BoolCol: false},
+			{IntCol: 3, StrCol: "c", FloatCol: 3.3, BoolCol: true},
+		})
 		require.NoError(t, err)
+		require.NoError(t, w.Close())
 
 		result, err := Parse(bytes.NewReader(buf.Bytes()), Parquet)
 
@@ -215,35 +149,15 @@ func TestParseParquet_WithGeneratedData(t *testing.T) {
 	t.Run("parses parquet with null values", func(t *testing.T) {
 		t.Parallel()
 
-		schema := arrow.NewSchema(
-			[]arrow.Field{
-				{Name: "nullable_col", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-			},
-			nil,
-		)
-
-		pool := memory.NewGoAllocator()
-
-		builder := array.NewInt64Builder(pool)
-		defer builder.Release()
-		builder.Append(1)
-		builder.AppendNull()
-		builder.Append(3)
-
-		arr := builder.NewArray()
-		defer arr.Release()
-
-		record := array.NewRecord(schema, []arrow.Array{arr}, 3)
-		defer record.Release()
-
-		table := array.NewTableFromRecords(schema, []arrow.Record{record})
-		defer table.Release()
-
+		type row struct {
+			NullableCol *int64 `parquet:"nullable_col,optional"`
+		}
+		one, three := int64(1), int64(3)
 		var buf bytes.Buffer
-		props := parquet.NewWriterProperties()
-		arrProps := pqarrow.DefaultWriterProps()
-		err := pqarrow.WriteTable(table, &buf, 1024, props, arrProps)
+		w := parquet.NewGenericWriter[row](&buf)
+		_, err := w.Write([]row{{NullableCol: &one}, {NullableCol: nil}, {NullableCol: &three}})
 		require.NoError(t, err)
+		require.NoError(t, w.Close())
 
 		result, err := Parse(bytes.NewReader(buf.Bytes()), Parquet)
 
