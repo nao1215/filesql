@@ -1136,8 +1136,11 @@ func numericOperand(v any) (numOperand, bool) {
 	}
 }
 
-// compare orders two numbers. Integer pairs stay exact; a float on either side
-// compares as float64, which is the only common ground there is.
+// compare orders two numbers exactly, whichever kinds hold them. Rounding an
+// integer to float64 for a mixed pair collapsed two distinct integers past
+// 2^53 into one float, so an integer equaled a float that its neighbor also
+// equaled while the two integers stayed apart — equality was not transitive,
+// which slices.SortFunc's strict weak ordering forbids.
 func (a numOperand) compare(b numOperand) int {
 	switch {
 	case a.kind == 'i' && b.kind == 'i':
@@ -1154,21 +1157,65 @@ func (a numOperand) compare(b numOperand) int {
 			return 1
 		}
 		return cmp.Compare(a.u, uint64(b.i))
+	case a.kind == 'i' && b.kind == 'f':
+		return compareIntFloat(a.i, b.f)
+	case a.kind == 'f' && b.kind == 'i':
+		return -compareIntFloat(b.i, a.f)
+	case a.kind == 'u' && b.kind == 'f':
+		return compareUintFloat(a.u, b.f)
+	case a.kind == 'f' && b.kind == 'u':
+		return -compareUintFloat(b.u, a.f)
 	default:
-		return cmp.Compare(a.float(), b.float())
+		return cmp.Compare(a.f, b.f)
 	}
 }
 
-// float widens the operand for a comparison that involves a float.
-func (a numOperand) float() float64 {
-	switch a.kind {
-	case 'i':
-		return float64(a.i)
-	case 'u':
-		return float64(a.u)
-	default:
-		return a.f
+// compareIntFloat orders an int64 against a float64 without rounding the
+// integer. A NaN orders below every number, as cmp.Compare orders it.
+func compareIntFloat(i int64, f float64) int {
+	const twoTo63 = 1 << 63 // the first float64 past every int64; MinInt64 itself is exact
+	switch {
+	case math.IsNaN(f):
+		return 1
+	case f >= twoTo63:
+		return -1
+	case f < -twoTo63:
+		return 1
 	}
+	// f is within int64's range, so its integer part converts exactly.
+	if c := cmp.Compare(i, int64(f)); c != 0 {
+		return c
+	}
+	// The integer parts agree; the fraction truncation dropped decides.
+	frac := f - math.Trunc(f)
+	switch {
+	case frac > 0:
+		return -1
+	case frac < 0:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// compareUintFloat is compareIntFloat for the unsigned kinds.
+func compareUintFloat(u uint64, f float64) int {
+	const twoTo64 = 1 << 64 // the first float64 past every uint64
+	switch {
+	case math.IsNaN(f):
+		return 1
+	case f >= twoTo64:
+		return -1
+	case f < 0:
+		return 1
+	}
+	if c := cmp.Compare(u, uint64(f)); c != 0 {
+		return c
+	}
+	if f-math.Trunc(f) > 0 {
+		return -1
+	}
+	return 0
 }
 
 // Distinct returns a new DataFrame with duplicate rows removed.

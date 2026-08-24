@@ -2126,7 +2126,7 @@ func TestDataFrame_Sort(t *testing.T) {
 		assert.Equal(t, uint64(100), records[4]["v"])
 	})
 
-	t.Run("keeps huge integers apart from their float neighbours", func(t *testing.T) {
+	t.Run("keeps huge integers apart from their float neighbors", func(t *testing.T) {
 		t.Parallel()
 
 		// 1<<62 and 1<<62+1 collapse to the same float64; comparing them as
@@ -2142,6 +2142,24 @@ func TestDataFrame_Sort(t *testing.T) {
 		assert.Equal(t, int64(1<<62), records[0]["v"])
 		assert.Equal(t, int64(1<<62+1), records[1]["v"])
 	})
+
+	t.Run("orders a huge integer after the float it does not equal", func(t *testing.T) {
+		t.Parallel()
+
+		// float64(1<<53) equals the integer 1<<53 exactly, so its successor
+		// must sort after the float, not tie with it: a tie here made
+		// equality intransitive (a == f, b == f, a < b) and the whole order
+		// arbitrary.
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"v": int64(1<<53 + 1)}, {"v": float64(1 << 53)}, {"v": int64(1 << 53)},
+		})
+
+		sorted, err := df.Sort("v", Ascending)
+
+		require.NoError(t, err)
+		records := sorted.ToRecords()
+		assert.Equal(t, int64(1<<53+1), records[2]["v"])
+	})
 }
 
 // TestCompareValuesIsAntisymmetric pins the contract slices.SortFunc requires
@@ -2156,6 +2174,8 @@ func TestCompareValuesIsAntisymmetric(t *testing.T) {
 		uint(3), uint8(4), uint16(5), uint32(6), uint64(7),
 		float32(2.5), float64(3.5), int(-1), int64(1 << 62),
 		uint64(1<<63 + 1), "3", "abc", true,
+		int64(1 << 53), int64(1<<53 + 1), float64(1 << 53),
+		uint64(1 << 53), uint64(1<<53 + 1),
 	}
 
 	for _, a := range values {
@@ -2164,6 +2184,23 @@ func TestCompareValuesIsAntisymmetric(t *testing.T) {
 			mirror := compareValues(b, a)
 			if got != -mirror {
 				t.Errorf("compareValues(%v(%T), %v(%T)) = %d but the mirror = %d", a, a, b, b, got, mirror)
+			}
+		}
+	}
+
+	// A strict weak ordering also needs transitive equality and order: an
+	// integer that equaled the float its distinct neighbor also equaled once
+	// broke this, and the sort's answer became arbitrary.
+	for _, a := range values {
+		for _, b := range values {
+			for _, c := range values {
+				ab, bc, ac := compareValues(a, b), compareValues(b, c), compareValues(a, c)
+				if ab == 0 && bc == 0 && ac != 0 {
+					t.Errorf("equality is not transitive over %v(%T), %v(%T), %v(%T)", a, a, b, b, c, c)
+				}
+				if ab < 0 && bc < 0 && ac >= 0 {
+					t.Errorf("order is not transitive over %v(%T), %v(%T), %v(%T)", a, a, b, b, c, c)
+				}
 			}
 		}
 	}
