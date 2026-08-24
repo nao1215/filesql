@@ -185,3 +185,45 @@ func TestWriteFileAtomically_ReportsNoCleanupWhenNothingIsLeft(t *testing.T) {
 	}))
 	assert.Equal(t, []string{"out.csv"}, dirEntries(t, dir))
 }
+
+// TestCommitByCopy_KeepsTheDestinationWhenTheCopyFails pins the guarantee the
+// copy fallback actually offers, which is not the atomicity a plain rename
+// gives: a failure partway does not cost the data that was already there.
+func TestCommitByCopy_KeepsTheDestinationWhenTheCopyFails(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "dest.csv")
+	require.NoError(t, os.WriteFile(dest, []byte("precious"), 0o600))
+
+	// A staged path that is a directory cannot be copied from, so the copy
+	// fails after the backup was taken.
+	staged := filepath.Join(dir, "staged")
+	require.NoError(t, os.Mkdir(staged, 0o750))
+
+	require.Error(t, commitByCopy(staged, dest))
+
+	got, err := os.ReadFile(dest) //nolint:gosec // Test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, "precious", string(got), "a refused copy must leave the destination as it was")
+}
+
+// TestCommitByCopy_ReplacesTheDestination is the success half of the fallback,
+// exercised deliberately here because the only platform that reaches it on its
+// own is Windows.
+func TestCommitByCopy_ReplacesTheDestination(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "dest.csv")
+	require.NoError(t, os.WriteFile(dest, []byte("old content that is longer"), 0o600))
+	staged := filepath.Join(dir, "staged")
+	require.NoError(t, os.WriteFile(staged, []byte("new"), 0o600))
+
+	require.NoError(t, commitByCopy(staged, dest))
+
+	got, err := os.ReadFile(dest) //nolint:gosec // Test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, "new", string(got), "the old content must not survive as a tail")
+	assert.Equal(t, []string{"dest.csv", "staged"}, dirEntries(t, dir), "the backup must not be left behind")
+}
