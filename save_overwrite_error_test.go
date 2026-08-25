@@ -157,7 +157,7 @@ func TestOverwriteWorkbookAtPath_Failures(t *testing.T) {
 		db := openTestDB(t)
 		require.NoError(t, db.Close())
 
-		err := overwriteWorkbookAtPath(db, filepath.Join(t.TempDir(), "book.xlsx"), "book", NewDumpOptions())
+		err := overwriteWorkbookAtPath(db, filepath.Join(t.TempDir(), "book.xlsx"), "book", nil, NewDumpOptions())
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrDatabaseOperation)
 	})
@@ -167,7 +167,7 @@ func TestOverwriteWorkbookAtPath_Failures(t *testing.T) {
 
 		db := openTestDB(t)
 
-		err := overwriteWorkbookAtPath(db, filepath.Join(t.TempDir(), "book.xlsx"), "book", NewDumpOptions())
+		err := overwriteWorkbookAtPath(db, filepath.Join(t.TempDir(), "book.xlsx"), "book", nil, NewDumpOptions())
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrEmptyData)
 	})
@@ -191,7 +191,7 @@ func TestTablesFromWorkbook_UnreadableCatalog(t *testing.T) {
 	db := openTestDB(t)
 	require.NoError(t, db.Close())
 
-	_, err := tablesFromWorkbook(db, "book")
+	_, err := tablesFromWorkbook(db, "book", nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrDatabaseOperation)
 }

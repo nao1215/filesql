@@ -661,10 +661,24 @@ func (c *autoSaveConnector) overwriteOriginalFile(ctx context.Context, db *sql.D
 	// together into the one file. The tables of a workbook are named after it,
 	// which is how the ones belonging to this path are found.
 	if format == OutputFormatXLSX {
-		return overwriteWorkbookAtPath(db, path, baseTableName, options)
+		return overwriteWorkbookAtPath(db, path, baseTableName, c.siblingBaseTableNames(path), options)
 	}
 
 	return overwriteTableAtPath(db, path, baseTableName, options)
+}
+
+// siblingBaseTableNames is the table name every source of this save other than
+// path was loaded under. It is what tells a workbook's own tables from those of
+// a source whose name sits inside the workbook's prefix.
+func (c *autoSaveConnector) siblingBaseTableNames(path string) []string {
+	bases := make([]string, 0, len(c.originalPaths))
+	for _, other := range c.originalPaths {
+		if other == path {
+			continue
+		}
+		bases = append(bases, sanitizeTableName(tableFromFilePath(other)))
+	}
+	return bases
 }
 
 // overwriteFormatFor is the output format a source file is written back in, or
@@ -696,8 +710,8 @@ func overwriteFormatFor(path string) (OutputFormat, error) {
 // A workbook of more than one sheet used to be refused here, because the writer
 // wrote one sheet per file and so could not represent the rest. Refusing meant a
 // caller who opened a two-sheet workbook with auto-save could not save at all.
-func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, options DumpOptions) error {
-	tables, err := tablesFromWorkbook(db, baseTableName)
+func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBases []string, options DumpOptions) error {
+	tables, err := tablesFromWorkbook(db, baseTableName, siblingBases)
 	if err != nil {
 		return err
 	}
@@ -812,7 +826,16 @@ func openWorkbookForOverwrite(path string) (*excelize.File, error) {
 // tablesFromWorkbook lists the tables an Excel workbook was loaded as. A sheet
 // becomes baseTableName_sheet, or baseTableName alone when the sheet repeats the
 // file name.
-func tablesFromWorkbook(db *sql.DB, baseTableName string) ([]string, error) {
+//
+// siblingBases names the other sources loaded alongside this one, because the
+// prefix a workbook claims can hold another source whole. "book_v2.xlsx" loads
+// its sheet "Orders" as "book_v2_Orders", which is also a name "book.xlsx"
+// would answer to, so saving book.xlsx took the sibling's table for one of its
+// own: it looked for a sheet "v2_Orders" that book.xlsx never had, and the save
+// failed there with every file left as it was and the session's edits gone. A
+// name another source claims more specifically is that source's, so it is left
+// out here.
+func tablesFromWorkbook(db *sql.DB, baseTableName string, siblingBases []string) ([]string, error) {
 	names, err := getSQLiteTableNames(db)
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to get table names: %w", ErrDatabaseOperation, err)
@@ -820,11 +843,34 @@ func tablesFromWorkbook(db *sql.DB, baseTableName string) ([]string, error) {
 
 	tables := make([]string, 0, 1)
 	for _, name := range names {
-		if name == baseTableName || strings.HasPrefix(name, baseTableName+"_") {
-			tables = append(tables, name)
+		if !tableBelongsTo(name, baseTableName) {
+			continue
 		}
+		if claimedBySibling(name, baseTableName, siblingBases) {
+			continue
+		}
+		tables = append(tables, name)
 	}
 	return tables, nil
+}
+
+// tableBelongsTo reports whether tableName is one a source loaded as
+// baseTableName would be saved back as.
+func tableBelongsTo(tableName, baseTableName string) bool {
+	return tableName == baseTableName || strings.HasPrefix(tableName, baseTableName+"_")
+}
+
+// claimedBySibling reports whether another source loaded in the same session
+// names tableName more precisely than baseTableName does. Longer is more
+// precise: a base can only compete for this name by being baseTableName plus a
+// suffix, which is exactly the source whose own name the table starts with.
+func claimedBySibling(tableName, baseTableName string, siblingBases []string) bool {
+	for _, sibling := range siblingBases {
+		if len(sibling) > len(baseTableName) && tableBelongsTo(tableName, sibling) {
+			return true
+		}
+	}
+	return false
 }
 
 // overwriteTableAtPath dumps one table to one path. It is the write half of

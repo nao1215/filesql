@@ -309,6 +309,57 @@ func TestAutoSaveOverwriteXLSX(t *testing.T) {
 		assert.Equal(t, "osaka", city)
 	})
 
+	t.Run("a workbook keeps the sheets of a sibling whose name it prefixes out", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := t.Context()
+		dir := t.TempDir()
+		book := filepath.Join(dir, "book.xlsx")
+		sibling := filepath.Join(dir, "book_v2.xlsx")
+		writeWorkbook(t, book, map[string][][]string{
+			"Orders": {{"id", "name"}, {"1", "alice"}},
+		})
+		writeWorkbook(t, sibling, map[string][][]string{
+			"Orders": {{"id", "name"}, {"2", "dave"}},
+		})
+
+		require.NoError(t, autoSaveOverwrite(t, []string{book, sibling},
+			"UPDATE book_Orders SET name = 'bob'",
+			"UPDATE book_v2_Orders SET name = 'erin'"))
+
+		assert.Equal(t, []string{"Orders"}, workbookSheets(t, book),
+			"book.xlsx holds its own sheet only: book_v2.xlsx's tables are named inside book's prefix space, but they are not book's")
+		assert.Equal(t, []string{"Orders"}, workbookSheets(t, sibling))
+
+		reloaded, err := OpenContext(ctx, book, sibling)
+		require.NoError(t, err)
+		defer reloaded.Close()
+
+		var name string
+		require.NoError(t, reloaded.QueryRowContext(ctx, "SELECT name FROM book_Orders").Scan(&name))
+		assert.Equal(t, "bob", name)
+		require.NoError(t, reloaded.QueryRowContext(ctx, "SELECT name FROM book_v2_Orders").Scan(&name))
+		assert.Equal(t, "erin", name)
+	})
+
+	t.Run("a workbook keeps out a sibling of another format whose name it prefixes", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		book := filepath.Join(dir, "book.xlsx")
+		sibling := filepath.Join(dir, "book_v2.csv")
+		writeWorkbook(t, book, map[string][][]string{
+			"Orders": {{"id", "name"}, {"1", "alice"}},
+		})
+		require.NoError(t, os.WriteFile(sibling, []byte("id,name\n2,dave\n"), 0o600))
+
+		require.NoError(t, autoSaveOverwrite(t, []string{book, sibling},
+			"UPDATE book_Orders SET name = 'bob'"))
+
+		assert.Equal(t, []string{"Orders"}, workbookSheets(t, book),
+			"a CSV sibling loads as one table named inside the workbook's prefix space, and it is not the workbook's either")
+	})
+
 	t.Run("a compressed workbook of several sheets round-trips", func(t *testing.T) {
 		t.Parallel()
 
