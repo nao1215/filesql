@@ -80,10 +80,11 @@ func writeFileAtomically(dest string, write func(io.Writer) error) error {
 // A plain rename is the goal: it is atomic, so a reader sees either the old file
 // or the new one. Windows refuses to rename over a destination another handle
 // still has open, which is exactly a save that overwrites a file this package is
-// streaming from. When that happens the destination is renamed out of the way
-// first — moving an open file is allowed where replacing one is not — and put
-// back if the second rename fails, so the destination is never left missing or
-// half-written.
+// streaming from. When that happens the staged bytes are copied over dest through
+// the handle Windows will grant, after dest's previous contents are copied aside
+// so a failure partway can put them back. That copy is not atomic, so a
+// concurrent reader can observe a partial file, but a refused commit never costs
+// the data that was already there.
 func commitStagedFile(staged, dest string) error {
 	err := os.Rename(staged, dest)
 	if err == nil {
