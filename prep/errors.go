@@ -3,7 +3,6 @@ package prep
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/nao1215/filesql/parser"
 )
@@ -170,52 +169,27 @@ func (r *ProcessResult) PrepErrors() []*PrepError {
 	return errs
 }
 
-// emptyFileMessages lists the exact error messages the parser package returns
-// to say the input file or data is empty. These are matched exactly
-// (case-insensitive) to avoid false positives.
+// wrapParseError gives an error from parser.Parse the prep sentinel that
+// matches it, so a caller of this package can use errors.Is against the
+// sentinels this package documents.
 //
-// The parser package generates some messages dynamically via fmt.Errorf:
-//   - "empty %s data" where %s is CSV, TSV, JSON, JSONL, LTSV etc.
-//   - "empty parquet file", "empty XLSX sheet"
-//
-// We match both the static messages and the "empty ... data" pattern.
-var emptyFileMessages = map[string]struct{}{ //nolint:gochecknoglobals // constant-like lookup table
-	"empty parquet file":           {},
-	"empty xlsx sheet":             {},
-	"no valid ltsv records found":  {},
-	"no sheets found in xlsx file": {},
-	"no headers found in xlsx":     {},
-}
-
-// wrapParseError wraps errors returned by parser.Parse with the appropriate
-// prep sentinel error so that callers can use errors.Is.
-//
-// The parser package does not export sentinels, so this matches on message text.
-// That is brittle, and it is brittle inside one repository now that the parser
-// is a sibling package rather than a separate module: the right fix is for
-// parser to export the sentinels and for this to use errors.Is.
+// This matched the parser's message text until the parser exported a sentinel
+// for each of these three conditions. Matching text meant keeping a list of the
+// read side's wordings inside a package that cannot see them, and the list had
+// holes: "empty XLSX file" was never on it, so a workbook with nothing in it
+// reached the caller with no ErrEmptyFile on it, and a wording the reader gained
+// later was not on it either.
 func wrapParseError(err error) error {
-	if err == nil {
+	switch {
+	case err == nil:
 		return nil
-	}
-	msg := strings.ToLower(err.Error())
-
-	if msg == "unsupported file type" {
+	case errors.Is(err, parser.ErrUnsupportedFileType):
 		return fmt.Errorf("%w: %w", ErrUnsupportedFileType, err)
-	}
-	if msg == "reader cannot be nil" {
+	case errors.Is(err, parser.ErrNilReader):
 		return fmt.Errorf("%w: %w", ErrNilReader, err)
-	}
-	if _, ok := emptyFileMessages[msg]; ok {
+	case errors.Is(err, parser.ErrEmptyData):
 		return fmt.Errorf("%w: %w", ErrEmptyFile, err)
+	default:
+		return err
 	}
-	// Match "empty <format> data" pattern (e.g. "empty csv data", "empty json data")
-	if strings.HasPrefix(msg, "empty ") && strings.HasSuffix(msg, " data") {
-		return fmt.Errorf("%w: %w", ErrEmptyFile, err)
-	}
-	// Match "empty <format> array" pattern (e.g. "empty json array")
-	if strings.HasPrefix(msg, "empty ") && strings.HasSuffix(msg, " array") {
-		return fmt.Errorf("%w: %w", ErrEmptyFile, err)
-	}
-	return err
 }

@@ -413,7 +413,7 @@ var readerFormats = map[FileType]reader.Format{ //nolint:gochecknoglobals // con
 //	result, err := parser.Parse(f, parser.CSVGZ)
 func Parse(input io.Reader, fileType FileType, opts ...ParseOption) (result *TableData, err error) {
 	if input == nil {
-		return nil, errors.New("reader cannot be nil")
+		return nil, ErrNilReader
 	}
 
 	var cfg parseConfig
@@ -424,7 +424,7 @@ func Parse(input io.Reader, fileType FileType, opts ...ParseOption) (result *Tab
 	baseType := BaseFileType(fileType)
 	format, supported := readerFormats[baseType]
 	if !supported {
-		return nil, errors.New("unsupported file type")
+		return nil, ErrUnsupportedFileType
 	}
 
 	decompressed, closeFunc, decompErr := createDecompressedReader(input, fileType)
@@ -460,7 +460,7 @@ func Parse(input io.Reader, fileType FileType, opts ...ParseOption) (result *Tab
 	// JSON and JSONL alone tell a document holding nothing from one saying there
 	// is nothing, and this package has always reported the first as an error.
 	if read.EmptyInput {
-		return nil, fmt.Errorf("empty %s data", baseType)
+		return nil, &emptyInputError{err: fmt.Errorf("empty %s data", baseType)}
 	}
 
 	return &TableData{
@@ -490,15 +490,22 @@ func strictFieldCount(baseType FileType) reader.Reconcile {
 	}
 }
 
-// parseError gives a failed read this package's wording for it. The reader
-// names no sentinel of its own, so what it says about a duplicate column has
-// the phrase this package has always used put in front of it.
+// parseError gives a failed read this package's wording and sentinels for it.
+// The reader reports what went wrong as a Kind rather than as an error a caller
+// of this package would recognize, so the mapping happens here.
 func parseError(err error) error {
 	var readErr *reader.Error
-	if errors.As(err, &readErr) && readErr.Kind == reader.KindDuplicateColumn {
-		return fmt.Errorf("duplicate column name: %s", readErr.Error())
+	if !errors.As(err, &readErr) {
+		return err
 	}
-	return err
+	switch readErr.Kind {
+	case reader.KindDuplicateColumn:
+		return fmt.Errorf("duplicate column name: %s", readErr.Error())
+	case reader.KindEmpty:
+		return &emptyInputError{err: err}
+	default:
+		return err
+	}
 }
 
 // File extensions
