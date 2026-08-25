@@ -2,7 +2,6 @@ package prep
 
 import (
 	"bytes"
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nao1215/filesql/internal/writer"
 	"github.com/nao1215/filesql/parser"
 )
 
@@ -549,110 +549,34 @@ func (p *Processor) estimateOutputSize(headers []string, records [][]string) int
 //   - XLSX → CSV (tabular data as comma-delimited)
 //   - Parquet → CSV (tabular data as comma-delimited)
 func (p *Processor) writeOutput(w io.Writer, headers []string, records [][]string) error {
-	switch parser.BaseFileType(p.fileType) {
-	case parser.TSV:
-		return p.writeTSV(w, headers, records)
-	case parser.LTSV:
-		return p.writeLTSV(w, headers, records)
-	case parser.JSON, parser.JSONL:
-		return p.writeJSONL(w, records)
-	default:
-		// CSV, XLSX, Parquet all output as CSV (tabular format)
-		return p.writeCSV(w, headers, records)
+	format, ok := outputFormats[parser.BaseFileType(p.fileType)]
+	if !ok {
+		// CSV, XLSX and Parquet all come out as CSV: the two that are not text
+		// have no text form of their own, and a tabular one is what they hold.
+		format = writer.FormatCSV
 	}
-}
 
-// writeCSV writes data in CSV format
-func (p *Processor) writeCSV(w io.Writer, headers []string, records [][]string) error {
-	csvWriter := csv.NewWriter(w)
-
-	if err := csvWriter.Write(headers); err != nil {
+	out := writer.New(w, format, writer.Options{})
+	if err := out.Header(headers); err != nil {
 		return err
 	}
-
 	for _, record := range records {
-		if err := csvWriter.Write(record); err != nil {
+		if err := out.Record(record); err != nil {
 			return err
 		}
 	}
-
-	csvWriter.Flush()
-	return csvWriter.Error()
+	return out.Flush()
 }
 
-// writeTSV writes data in TSV format, literally; see parser.WriteTSVRecord.
-func (p *Processor) writeTSV(w io.Writer, headers []string, records [][]string) error {
-	if err := parser.WriteTSVRecord(w, headers); err != nil {
-		return err
-	}
-
-	for _, record := range records {
-		if err := parser.WriteTSVRecord(w, record); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// writeLTSV writes data in LTSV format
-func (p *Processor) writeLTSV(w io.Writer, headers []string, records [][]string) error {
-	// Pre-allocate a reusable buffer for building each line
-	var lineBuf strings.Builder
-	// Estimate line size: header + ":" + avg_value_size + "\t" for each field
-	estimatedLineSize := len(headers) * 20
-	lineBuf.Grow(estimatedLineSize)
-
-	for _, record := range records {
-		lineBuf.Reset()
-		for i, header := range headers {
-			if i > 0 {
-				lineBuf.WriteByte('\t')
-			}
-			lineBuf.WriteString(header)
-			lineBuf.WriteByte(':')
-			if i < len(record) {
-				lineBuf.WriteString(record[i])
-			}
-		}
-		lineBuf.WriteByte('\n')
-		if _, err := io.WriteString(w, lineBuf.String()); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// writeJSONL writes data in JSONL format (one JSON value per line).
-// For JSON/JSONL input, each record has a single "data" column containing
-// a raw JSON string. The output writes each JSON value on its own line,
-// producing valid JSONL that can be consumed by filesql.
-// Empty strings are skipped to avoid writing blank lines.
+// outputFormats names the format each input type is written back as. A type
+// that is not here is written as CSV.
 //
-// Each value is compacted via json.Compact to ensure it occupies exactly one line.
-// Pretty-printed JSON from the parser package may contain newlines within a single element,
-// which would break JSONL format without compaction.
-func (p *Processor) writeJSONL(w io.Writer, records [][]string) error {
-	var compactBuf bytes.Buffer
-	for _, record := range records {
-		// record[0] is the "data" column: the parser package stores each JSON element
-		// as a single-column row for JSON/JSONL input.
-		if len(record) == 0 || record[0] == "" {
-			continue
-		}
-		compactBuf.Reset()
-		if err := json.Compact(&compactBuf, []byte(record[0])); err != nil {
-			// Should not happen: invalid JSON is caught by ErrInvalidJSONAfterPrep
-			// before reaching writeJSONL. Return error rather than writing broken JSONL.
-			return fmt.Errorf("failed to compact JSON at output: %w", err)
-		}
-		if _, err := compactBuf.WriteTo(w); err != nil {
-			return err
-		}
-		if _, err := io.WriteString(w, "\n"); err != nil {
-			return err
-		}
-	}
-	return nil
+//nolint:gochecknoglobals // constant-like lookup table
+var outputFormats = map[parser.FileType]writer.Format{
+	parser.TSV:   writer.FormatTSV,
+	parser.LTSV:  writer.FormatLTSV,
+	parser.JSON:  writer.FormatJSONL,
+	parser.JSONL: writer.FormatJSONL,
 }
 
 // truncateForError truncates a string for inclusion in error messages.
