@@ -12,9 +12,10 @@ import (
 //
 // SQLite's datetime() modifier normalizes an out-of-range day forward, so
 // '2026-01-31' plus one month became 2026-03-03 where MySQL, PostgreSQL, and
-// GoogleSQL all clamp to 2026-02-28. It also always renders a full datetime, so
-// adding a day to a date grew a "00:00:00" the source dialect would not have
-// produced. Both are silent: the query succeeds and the date is simply wrong.
+// GoogleSQL all clamp to 2026-02-28. It also always renders a full datetime,
+// which is right for PostgreSQL, where a date plus an interval is a timestamp,
+// and wrong for MySQL and GoogleSQL, where adding a day to a date answers a
+// date. Both are silent: the query succeeds and the date is simply wrong.
 //
 // Interval arithmetic therefore goes through the helpers here rather than
 // through datetime().
@@ -177,7 +178,8 @@ func parseIntervalText(text string) ([]intervalTerm, error) {
 
 // fnIntervalTextAdd implements PostgreSQL's "value + INTERVAL 'text'" (and the
 // "-" form, via sign). PostgreSQL has no DATE_ADD, so this operator is the only
-// way to do date arithmetic in that dialect.
+// way to do date arithmetic in that dialect, and its result is always a
+// timestamp.
 func fnIntervalTextAdd(args []driver.Value) (driver.Value, error) {
 	if len(args) != 3 {
 		return nil, fmt.Errorf("dialect: interval_text_add expects 3 arguments, got %d", len(args))
@@ -198,19 +200,17 @@ func fnIntervalTextAdd(args []driver.Value) (driver.Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	onlyDateGrained := true
 	for _, term := range terms {
 		tm, err = addInterval(tm, sign*term.amount, term.unit)
 		if err != nil {
 			return nil, err
 		}
-		if !dateGrainedUnits[term.unit] {
-			onlyDateGrained = false
-		}
 	}
-	if !hasTimePart(args[0]) && onlyDateGrained {
-		return tm.Format(layoutDateOnly), nil
-	}
+	// A date plus an interval is a timestamp in PostgreSQL, whatever the
+	// interval was made of: pg_typeof on it says "timestamp without time zone"
+	// and the value carries the 00:00:00. That is the opposite of MySQL and
+	// GoogleSQL, whose DATE_ADD on a date answers a date, which is why the two
+	// helpers render their results differently rather than sharing one rule.
 	return tm.Format(layoutDateTime), nil
 }
 
