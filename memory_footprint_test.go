@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -149,6 +150,11 @@ func writeCSV(t *testing.T, header string, body []string, rows int) string {
 // The Go heap alone understates a load, because the rows are held by the
 // in-memory SQLite database rather than by Go.
 func readRSS() uint64 {
+	return readStatusField("VmRSS:")
+}
+
+// readStatusField reads one kilobyte-valued field of /proc/self/status.
+func readStatusField(name string) uint64 {
 	f, err := os.Open("/proc/self/status")
 	if err != nil {
 		return 0
@@ -158,7 +164,7 @@ func readRSS() uint64 {
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := sc.Text()
-		if !strings.HasPrefix(line, "VmRSS:") {
+		if !strings.HasPrefix(line, name) {
 			continue
 		}
 		fields := strings.Fields(line)
@@ -172,4 +178,165 @@ func readRSS() uint64 {
 		return kb * 1024
 	}
 	return 0
+}
+
+// TestLoadMemoryFootprintByFormat reports what the same rows cost through each
+// format, because "about twice the file's size" was measured on CSV alone and
+// the formats do not read alike: CSV, TSV and JSON arrays arrive in chunks,
+// while Parquet and XLSX are read whole before they become rows. The question a
+// caller has is whether a file fits, and the answer turns out to depend on which
+// format the same table is written in.
+//
+// Run with: go test -tags benchmark -run TestLoadMemoryFootprintByFormat -v .
+//
+// Each load runs in a process of its own and reports its peak resident memory,
+// which is what the reader that holds a file whole actually costs. Measuring
+// several loads inside one process cannot show it: the allocator does not give
+// pages back, so the second load reads as free and the third as negative.
+//
+// The row counts stay modest because a workbook of a million rows takes minutes
+// to write, and because what is compared is the ratio rather than the ceiling.
+func TestLoadMemoryFootprintByFormat(t *testing.T) {
+	if os.Getenv(footprintPathEnv) != "" {
+		t.Skip("this process is the child that loads one file")
+	}
+	header, body := readBenchmarkFixture(t)
+
+	t.Logf("%9s %-8s %10s %12s %8s %10s", "rows", "format", "file MB", "peak RSS MB", "ratio", "marginal")
+
+	for _, format := range []struct {
+		name  string
+		write func(t *testing.T, csvPath string) string
+	}{
+		{name: "csv", write: func(_ *testing.T, csvPath string) string { return csvPath }},
+		{name: "parquet", write: func(t *testing.T, csvPath string) string { return convertCSV(t, csvPath, OutputFormatParquet, ".parquet") }},
+		{name: "xlsx", write: func(t *testing.T, csvPath string) string { return convertCSV(t, csvPath, OutputFormatXLSX, ".xlsx") }},
+	} {
+		var prevFileMB, prevPeakMB float64
+		for _, rows := range []int{50000, 100000, 200000} {
+			path := format.write(t, writeCSV(t, header, body, rows))
+			fi, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			peak := loadInChildProcess(t, path, rows)
+			fileMB := float64(fi.Size()) / (1 << 20)
+			if peak == 0 {
+				t.Logf("%9d %-8s %10.1f %12s %8s %10s", rows, format.name, fileMB, "n/a", "n/a", "n/a")
+				continue
+			}
+			peakMB := float64(peak) / (1 << 20)
+			// The ratio carries the process's own baseline, which the marginal
+			// column cancels: the extra resident bytes per extra file byte
+			// between two sizes is what the format costs.
+			marginal := "-"
+			if prevFileMB > 0 {
+				marginal = fmt.Sprintf("%.1fx", (peakMB-prevPeakMB)/(fileMB-prevFileMB))
+			}
+			t.Logf("%9d %-8s %10.1f %12.1f %7.1fx %10s", rows, format.name, fileMB, peakMB, peakMB/fileMB, marginal)
+			prevFileMB, prevPeakMB = fileMB, peakMB
+		}
+	}
+}
+
+// footprintPathEnv names the file the child process loads. Its presence is also
+// what tells a process it is the child.
+const footprintPathEnv = "FILESQL_FOOTPRINT_PATH"
+
+// footprintRowsEnv names how many rows the child must find, so a measurement of
+// a load that did not happen cannot pass for one that did.
+const footprintRowsEnv = "FILESQL_FOOTPRINT_ROWS"
+
+// loadInChildProcess runs TestLoadOneFileFootprint in a process of its own and
+// returns the peak resident memory it reported, or zero where the platform does
+// not report one.
+func loadInChildProcess(t *testing.T, path string, rows int) uint64 {
+	t.Helper()
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestLoadOneFileFootprint", "-test.v")
+	cmd.Env = append(os.Environ(),
+		footprintPathEnv+"="+path,
+		footprintRowsEnv+"="+strconv.Itoa(rows),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("child load of %s: %v\n%s", path, err, out)
+	}
+	for line := range strings.Lines(string(out)) {
+		_, peak, found := strings.Cut(strings.TrimSpace(line), footprintPeakPrefix)
+		if !found {
+			continue
+		}
+		value, err := strconv.ParseUint(peak, 10, 64)
+		if err != nil {
+			t.Fatalf("child reported %q: %v", peak, err)
+		}
+		return value
+	}
+	return 0
+}
+
+// footprintPeakPrefix marks the one line of the child's output the parent reads.
+const footprintPeakPrefix = "FOOTPRINT_PEAK_BYTES="
+
+// TestLoadOneFileFootprint loads the file the environment names and reports the
+// process's peak resident memory. It is the child half of the test above and
+// does nothing on its own.
+func TestLoadOneFileFootprint(t *testing.T) {
+	path := os.Getenv(footprintPathEnv)
+	if path == "" {
+		t.Skip("no file named; this is the parent process")
+	}
+	want, err := strconv.Atoi(os.Getenv(footprintRowsEnv))
+	if err != nil {
+		t.Fatalf("%s: %v", footprintRowsEnv, err)
+	}
+
+	ctx := context.Background()
+	db, err := OpenContext(ctx, path)
+	if err != nil {
+		t.Fatalf("OpenContext(%s): %v", path, err)
+	}
+	var got int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM data").Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("row count = %d, want %d", got, want)
+	}
+	t.Logf("%s%d", footprintPeakPrefix, readPeakRSS())
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// readPeakRSS returns the highest resident set size the process has reached, or
+// zero where it cannot be read. Unlike the current size, it survives the load
+// finishing and the pages being handed back.
+func readPeakRSS() uint64 {
+	return readStatusField("VmHWM:")
+}
+
+// convertCSV writes the CSV's rows out again in another format, so the same
+// table can be measured through each reader.
+func convertCSV(t *testing.T, csvPath string, format OutputFormat, ext string) string {
+	t.Helper()
+
+	ctx := context.Background()
+	db, err := OpenContext(ctx, csvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	dir := t.TempDir()
+	if err := DumpDatabase(db, dir, NewDumpOptions().WithFormat(format)); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(dir, "data"+ext)
 }

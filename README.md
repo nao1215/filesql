@@ -385,13 +385,23 @@ What is not on that list is decimal formatting. `2.50` loads as the REAL `2.5`, 
 
 ### Memory and streaming
 
-filesql loads data into an in-memory SQLite database. CSV, TSV, and JSON arrays are read in chunks while loading. LTSV, non-array JSON/JSONL values, Parquet, XLSX, ACH, and Fedwire are read in full before they are turned into rows.
+filesql loads data into an in-memory SQLite database. CSV, TSV, JSON arrays, and Parquet arrive in chunks while loading. LTSV, non-array JSON/JSONL values, XLSX, ACH, and Fedwire are read in full before they are turned into rows. A Parquet file's compressed bytes are still buffered whole, because the format is read back to front, but its rows are handed over a chunk at a time.
 
 A blank line is not a record, in a delimited file or in a sheet. An XLSX row holding no cell at all is skipped, so a workbook whose used range reaches far down the sheet — a header in row 1 and one stray cell near the bottom — costs what it holds rather than what its range spans.
 
 Because the rows end up in that database rather than on the Go heap, the heap is not where the cost is. Loading CSVs of 16 MB through 131 MB, the Go heap stayed flat at about 24 MB — chunked loading holds roughly a chunk, not the file — while resident memory grew by about **2x the file's size**. Budget from the file size, and expect the database, not the parser, to be what occupies it.
 
 Measured on Linux with `go test -tags benchmark -run TestLoadMemoryFootprint -v .`, which prints the table it is drawn from so the figure can be re-derived rather than taken on trust. Note that `B/op` from `go test -benchmem` answers a different question: it counts every byte a load ever allocated, garbage included, so it runs several times higher than the memory actually held.
+
+The multiplier belongs to the format rather than to the library. The same 200,000 rows, each format loaded in a process of its own so the peak resident memory is that load's, with about 24 MB of it being the process before the load:
+
+| format | file | peak RSS | per extra file byte |
+|--------|------|----------|---------------------|
+| CSV | 32.8 MB | 100 MB | 2.1x |
+| Parquet | 32.2 MB | 177 MB | 4.1x |
+| XLSX | 17.6 MB | 1849 MB | about 100x |
+
+A workbook is the one to plan around. Reading its rows is not what costs: the streaming row read is 267 MB for an 18.5 MB workbook, and the rest is one random-access lookup per cell inside the date normalization, which makes the library underneath build the whole sheet as objects. Convert a large table out of XLSX before loading it, or expect a hundred times its size. `go test -tags benchmark -run TestLoadMemoryFootprintByFormat -v .` prints this table.
 
 Use `SetDefaultChunkSize` on the builder when you need to tune chunked loading:
 
