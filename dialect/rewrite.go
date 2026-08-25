@@ -162,6 +162,54 @@ var intervalUnits = map[string]string{
 	"YEAR":    unitYear,
 }
 
+// intervalAddCall builds the interval_add(expr, amount, 'unit') call the date
+// arithmetic of every dialect goes through.
+func intervalAddCall(expr, amount []token, sign, unit string) []token {
+	repl := make([]token, 0, len(expr)+len(amount)+10)
+	repl = append(repl, wordToken("interval_add"), opToken("("))
+	repl = append(repl, expr...)
+	repl = append(repl, opToken(","), spaceToken())
+	if sign == "-" {
+		// Negate the whole amount, which may be an expression rather than a
+		// literal: MySQL accepts DATE_SUB(d, INTERVAL n DAY) with a column n.
+		repl = append(repl, opToken("-"), opToken("("))
+		repl = append(repl, amount...)
+		repl = append(repl, opToken(")"))
+	} else {
+		repl = append(repl, amount...)
+	}
+	repl = append(repl, opToken(","), spaceToken(), stringToken(unit), opToken(")"))
+	return repl
+}
+
+// rewriteAddDate rewrites MySQL's ADDDATE and SUBDATE, which are DATE_ADD and
+// DATE_SUB under another name plus one shorthand: a second argument that is not
+// an interval counts days, so ADDDATE(d, 1) is DATE_ADD(d, INTERVAL 1 DAY).
+func rewriteAddDate(tokens []token, open, closeIdx int, sign string, recurse callRecurser) ([]token, bool, error) {
+	repl, handled, err := rewriteDateArith(tokens, open, closeIdx, sign, recurse)
+	if handled || err != nil {
+		return repl, handled, err
+	}
+	comma := topLevelComma(tokens, open, closeIdx)
+	if comma < 0 {
+		return nil, false, nil
+	}
+	expr, err := recurse(tokens[open+1 : comma])
+	if err != nil {
+		return nil, false, err
+	}
+	amount, err := recurse(tokens[comma+1 : closeIdx])
+	if err != nil {
+		return nil, false, err
+	}
+	expr = trimSpaceTokens(expr)
+	amount = trimSpaceTokens(amount)
+	if len(expr) == 0 || len(amount) == 0 {
+		return nil, false, nil
+	}
+	return intervalAddCall(expr, amount, sign, unitDay), true, nil
+}
+
 // rewriteDateArith implements the shared "date +/- INTERVAL n unit" rewrite used
 // by MySQL M-5 (DATE_ADD/DATE_SUB) and GoogleSQL G-7 (DATE_ADD/DATE_SUB/
 // TIMESTAMP_ADD/TIMESTAMP_SUB): f(x, INTERVAL n unit) -> interval_add(x, ±n,
