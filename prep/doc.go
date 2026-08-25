@@ -108,7 +108,17 @@
 // which compares string lengths there and so cannot express a date range at
 // all. boolean accepts what strconv.ParseBool accepts, which is also how a
 // bool struct field is filled. numeric accepts an optionally signed decimal
-// and number accepts digits alone, as the dialect defines them.
+// and number accepts digits alone, as the dialect defines them. The dialect
+// spells the letters-and-digits tag alphanum; alphanumeric names the same
+// validator, because this package answered only to that spelling before.
+//
+// Some validators are deliberately stricter or wider than the dialect. uri
+// requires a scheme, so a relative reference such as /a/b is not a URI. fqdn
+// refuses a label ending in a hyphen, which the dialect's fqdn pattern allows
+// though its hostname patterns do not. ulid requires a timestamp the format
+// can hold, and uuid3 the variant nibble uuid4 and uuid5 require. uuid3, uuid4
+// and uuid5 accept upper case, as uuid does. hostname_port takes a bracketed
+// IPv6 address and refuses a bare port.
 //
 // See https://pkg.go.dev/github.com/nao1215/filesql/prep for the complete list of supported validators.
 package prep

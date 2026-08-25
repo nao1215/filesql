@@ -1039,6 +1039,10 @@ func TestURIValidator(t *testing.T) {
 		{"http://example.com#frag ment", true},
 		{"", true},
 		{"invalid", true},
+		// A URI needs a scheme, so a relative reference is not one. The
+		// dialect accepts these; prep's doc.go records the difference.
+		{"/a/b", true},
+		{"//example.com", true},
 	}
 
 	v := newURIValidator()
@@ -1554,6 +1558,9 @@ func TestHostnamePortValidator(t *testing.T) {
 		{"localhost:0", true},
 		{"localhost:99999", true},
 		{"", true},
+		// A port with no host names nothing. The dialect accepts this;
+		// prep's doc.go records the difference.
+		{":80", true},
 	}
 
 	v := newHostnamePortValidator()
@@ -2258,6 +2265,9 @@ func TestUUID4Validator(t *testing.T) {
 	}{
 		{"550e8400-e29b-41d4-a716-446655440000", false},
 		{"f47ac10b-58cc-4372-a567-0e02b2c3d479", false},
+		// Upper case is accepted here as it is for uuid, which is where the
+		// dialect is inconsistent and prep is not.
+		{"F47AC10B-58CC-4372-A567-0E02B2C3D479", false},
 		{"a3bb189e-8bf9-3888-9912-ace4e6543002", true}, // UUID v3
 		{"invalid", true},
 		{"", true},
