@@ -2,6 +2,7 @@ package prep
 
 import (
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -1045,4 +1046,102 @@ func TestWithStrictTagParsing_Processor(t *testing.T) {
 			t.Errorf("expected no error in non-strict mode, got %v", err)
 		}
 	})
+}
+
+// TestParameterizedValidatorsNeedTheirParameter covers the tags that cannot
+// work without a parameter. Dropping the tag when the parameter is missing
+// leaves the column unchecked, and a datetime tag written without a layout is
+// the mistake most likely to be made, so strict mode has to report it.
+func TestParameterizedValidatorsNeedTheirParameter(t *testing.T) {
+	t.Parallel()
+
+	// Each tag is tried in both spellings a caller writes it in: the bare name,
+	// and the name with an empty parameter after the equals sign.
+	tags := []string{
+		"startswith", "startsnotwith", "endswith", "endsnotwith",
+		"contains", "containsany", "containsrune",
+		"excludes", "excludesall", "excludesrune",
+		"eq_ignore_case", "ne_ignore_case", "datetime",
+	}
+	for _, tag := range tags {
+		for _, spelling := range []string{tag, tag + "="} {
+			t.Run("strict refuses "+spelling, func(t *testing.T) {
+				t.Parallel()
+				_, _, err := parseValidateTag(spelling, true)
+				if err == nil {
+					t.Fatalf("parseValidateTag(%q, strict=true) = nil, want an error", spelling)
+				}
+				if !errors.Is(err, ErrInvalidTagFormat) {
+					t.Fatalf("parseValidateTag(%q, strict=true) error = %v, want ErrInvalidTagFormat", spelling, err)
+				}
+			})
+			t.Run("non-strict drops "+spelling, func(t *testing.T) {
+				t.Parallel()
+				validators, _, err := parseValidateTag(spelling, false)
+				if err != nil {
+					t.Fatalf("parseValidateTag(%q, strict=false) error = %v", spelling, err)
+				}
+				if len(validators) != 0 {
+					t.Fatalf("parseValidateTag(%q, strict=false) built %d validators, want none", spelling, len(validators))
+				}
+			})
+		}
+	}
+
+	// The tags whose empty parameter means something keep meaning it. eq and ne
+	// compare against the empty string, and the substring tags find it in every
+	// value, which is what the dialect answers for them.
+	for _, tag := range []string{"eq=", "ne=", "contains=x", "datetime=2006-01-02"} {
+		t.Run("strict accepts "+tag, func(t *testing.T) {
+			t.Parallel()
+			if _, _, err := parseValidateTag(tag, true); err != nil {
+				t.Fatalf("parseValidateTag(%q, strict=true) error = %v", tag, err)
+			}
+		})
+	}
+}
+
+// TestValidateTagSkipMarker covers the dialect's "-", which asks for no
+// validation of the field it is on.
+func TestValidateTagSkipMarker(t *testing.T) {
+	t.Parallel()
+
+	for _, strict := range []bool{false, true} {
+		t.Run("the whole tag is a skip", func(t *testing.T) {
+			t.Parallel()
+			validators, crossField, err := parseValidateTag("-", strict)
+			if err != nil {
+				t.Fatalf("parseValidateTag(\"-\", strict=%v) error = %v", strict, err)
+			}
+			if len(validators) != 0 || len(crossField) != 0 {
+				t.Fatalf("parseValidateTag(\"-\", strict=%v) built %d validators and %d cross-field validators, want none",
+					strict, len(validators), len(crossField))
+			}
+		})
+		t.Run("a skip among other tags is still unknown", func(t *testing.T) {
+			t.Parallel()
+			if _, _, err := parseValidateTag("-,required", strict); !errors.Is(err, ErrInvalidTagFormat) {
+				t.Fatalf("parseValidateTag(\"-,required\", strict=%v) error = %v, want ErrInvalidTagFormat", strict, err)
+			}
+		})
+	}
+}
+
+// TestPrepTagsAreDocumented holds the package documentation against the tags
+// the parser accepts. The list in doc.go was written when the package had six
+// preprocessors and did not grow with them, so a caller had nowhere to read the
+// spelling of the rest.
+func TestPrepTagsAreDocumented(t *testing.T) {
+	t.Parallel()
+
+	doc, err := os.ReadFile("doc.go")
+	if err != nil {
+		t.Fatalf("read doc.go: %v", err)
+	}
+	text := string(doc)
+	for _, tag := range prepTagNames() {
+		if !strings.Contains(text, tag) {
+			t.Errorf("prep tag %q is accepted by the parser but not named in doc.go", tag)
+		}
+	}
 }

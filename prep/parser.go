@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -140,6 +141,174 @@ func parseStructType(structType reflect.Type, strict bool) (*structInfo, error) 
 }
 
 // parsePrepTag parses the prep tag string and returns preprocessors
+// requiresParam is a builder for a validator whose parameter is the value it
+// checks against, and which has nothing to check without one. An empty
+// parameter is a malformed tag rather than a validator that passes every value:
+// strict mode reports it, and non-strict mode drops it, which is what its
+// documented behavior for an invalid tag argument is. Dropping it silently in
+// both modes left a column unchecked with nothing to say so, and a datetime tag
+// written without a layout is the way that is most easily reached.
+func requiresParam[T validator](build func(string) T, message string) func(string, bool) (validator, error) {
+	return func(value string, strict bool) (validator, error) {
+		if value == "" {
+			return nil, invalidValidateParam(strict, message)
+		}
+		return build(value), nil
+	}
+}
+
+// requiresRuneParam is requiresParam for the two tags whose parameter is a
+// single character; a longer parameter keeps its first character, as the
+// dialect reads it.
+func requiresRuneParam[T validator](build func(rune) T, message string) func(string, bool) (validator, error) {
+	return func(value string, strict bool) (validator, error) {
+		runes := []rune(value)
+		if len(runes) == 0 {
+			return nil, invalidValidateParam(strict, message)
+		}
+		return build(runes[0]), nil
+	}
+}
+
+// invalidValidateParam is the answer to a validate tag parameter that cannot be
+// used: the error in strict mode, and nothing at all in non-strict mode.
+func invalidValidateParam(strict bool, message string) error {
+	if !strict {
+		return nil
+	}
+	return fmt.Errorf("%w: %s", ErrInvalidTagFormat, message)
+}
+
+// prepBuilders maps a prep tag to the preprocessor it builds. A builder answers
+// a nil preprocessor when the tag needs a parameter it was not given and strict
+// is off, which is how a non-strict parse drops what it cannot use; in strict
+// mode the same case is an ErrInvalidTagFormat naming the tag.
+//
+// The table is what parsePrepTag looks a tag up in, so a tag exists exactly when
+// it has an entry here — which is what lets prepTagNames report the vocabulary
+// rather than repeating it.
+var prepBuilders = map[string]func(value string, strict bool) (preprocessor, error){
+	// Basic preprocessors.
+	trimTagValue:      noParamPrep(newTrimPreprocessor),
+	ltrimTagValue:     noParamPrep(newLtrimPreprocessor),
+	rtrimTagValue:     noParamPrep(newRtrimPreprocessor),
+	lowercaseTagValue: noParamPrep(newLowercasePreprocessor),
+	uppercaseTagValue: noParamPrep(newUppercasePreprocessor),
+	// A default of the empty string is a default: it says the column may be
+	// missing and its cells stay empty, which is how a struct covers a column
+	// the input does not have.
+	defaultTagValue: func(value string, _ bool) (preprocessor, error) {
+		return newDefaultPreprocessor(value), nil
+	},
+
+	// String transformation preprocessors.
+	replaceTagValue: func(value string, strict bool) (preprocessor, error) {
+		oldStr, newStr, found := parseColonSeparatedValue(value)
+		if !found {
+			return nil, invalidPrepParam(strict, "replace requires old:new format, got %q", value)
+		}
+		return newReplacePreprocessor(oldStr, newStr), nil
+	},
+	prefixTagValue: valuePrep(newPrefixPreprocessor, "prefix requires a value"),
+	suffixTagValue: valuePrep(newSuffixPreprocessor, "suffix requires a value"),
+	truncateTagValue: func(value string, strict bool) (preprocessor, error) {
+		n, err := strconv.Atoi(value)
+		if err != nil || n <= 0 {
+			return nil, invalidPrepParam(strict, "truncate requires a positive integer, got %q", value)
+		}
+		return newTruncatePreprocessor(n), nil
+	},
+	stripHTMLTagValue:     noParamPrep(newStripHTMLPreprocessor),
+	stripNewlineTagValue:  noParamPrep(newStripNewlinePreprocessor),
+	collapseSpaceTagValue: noParamPrep(newCollapseSpacePreprocessor),
+
+	// Character filtering preprocessors.
+	removeDigitsTagValue: noParamPrep(newRemoveDigitsPreprocessor),
+	removeAlphaTagValue:  noParamPrep(newRemoveAlphaPreprocessor),
+	keepDigitsTagValue:   noParamPrep(newKeepDigitsPreprocessor),
+	keepAlphaTagValue:    noParamPrep(newKeepAlphaPreprocessor),
+	trimSetTagValue:      valuePrep(newTrimSetPreprocessor, "trim_set requires characters to trim"),
+
+	// Padding preprocessors. The parameter is "N:char"; the comma already
+	// separates one tag from the next and cannot also separate a tag's own
+	// parameters.
+	padLeftTagValue:  padPrep(newPadLeftPreprocessor, padLeftTagValue),
+	padRightTagValue: padPrep(newPadRightPreprocessor, padRightTagValue),
+
+	// Advanced preprocessors.
+	normalizeUnicodeTagValue: noParamPrep(newNormalizeUnicodePreprocessor),
+	nullifyTagValue:          valuePrep(newNullifyPreprocessor, "nullify requires a value"),
+	coerceTagValue: func(value string, strict bool) (preprocessor, error) {
+		if value != "int" && value != "float" && value != "bool" {
+			return nil, invalidPrepParam(strict, "coerce requires int, float, or bool, got %q", value)
+		}
+		return newCoercePreprocessor(value), nil
+	},
+	fixSchemeTagValue: valuePrep(newFixSchemePreprocessor, "fix_scheme requires a scheme value"),
+	regexReplaceTagValue: func(value string, strict bool) (preprocessor, error) {
+		pattern, replacement, found := parseColonSeparatedValue(value)
+		if !found {
+			return nil, invalidPrepParam(strict, "regex_replace requires pattern:replacement format, got %q", value)
+		}
+		rp := newRegexReplacePreprocessor(pattern, replacement)
+		if rp == nil {
+			return nil, invalidPrepParam(strict, "regex_replace has invalid pattern %q", pattern)
+		}
+		return rp, nil
+	},
+}
+
+// noParamPrep is a builder for a tag that takes no parameter.
+func noParamPrep[T preprocessor](build func() T) func(string, bool) (preprocessor, error) {
+	return func(_ string, _ bool) (preprocessor, error) { return build(), nil }
+}
+
+// valuePrep is a builder for a tag whose parameter is the value it works with,
+// and which has nothing to do without one.
+func valuePrep[T preprocessor](build func(string) T, message string) func(string, bool) (preprocessor, error) {
+	return func(value string, strict bool) (preprocessor, error) {
+		if value == "" {
+			return nil, invalidPrepParam(strict, "%s", message)
+		}
+		return build(value), nil
+	}
+}
+
+// padPrep is a builder for the padding tags, whose parameter is a length and an
+// optional pad character.
+func padPrep[T preprocessor](build func(int, rune) T, tag string) func(string, bool) (preprocessor, error) {
+	return func(value string, strict bool) (preprocessor, error) {
+		length, padChar := parsePadParams(value)
+		if length <= 0 {
+			return nil, invalidPrepParam(strict, "%s requires a positive length, got %q", tag, value)
+		}
+		return build(length, padChar), nil
+	}
+}
+
+// invalidPrepParam is the answer to a parameter a tag cannot work with: the
+// error in strict mode, and nothing at all in non-strict mode, where the
+// documented behavior is to ignore what cannot be used.
+func invalidPrepParam(strict bool, format string, args ...any) error {
+	if !strict {
+		return nil
+	}
+	return fmt.Errorf("%w: "+format, append([]any{ErrInvalidTagFormat}, args...)...)
+}
+
+// prepTagNames is every prep tag the parser accepts, sorted so the answer does
+// not depend on map iteration order.
+func prepTagNames() []string {
+	names := make([]string, 0, len(prepBuilders))
+	for name := range prepBuilders {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// parsePrepTag builds the preprocessors one field's prep tag asks for. The tag
+// is a comma-separated list, so a tag's own parameters cannot use a comma.
 func parsePrepTag(tag string, strict bool) (preprocessors, error) {
 	if tag == "" {
 		return nil, nil
@@ -154,129 +323,17 @@ func parsePrepTag(tag string, strict bool) (preprocessors, error) {
 			continue
 		}
 
-		// Handle preprocessors with parameters (key=value format)
 		key, value := splitTagKeyValue(part)
-
-		switch key {
-		// Basic preprocessors
-		case trimTagValue:
-			preps = append(preps, newTrimPreprocessor())
-		case ltrimTagValue:
-			preps = append(preps, newLtrimPreprocessor())
-		case rtrimTagValue:
-			preps = append(preps, newRtrimPreprocessor())
-		case lowercaseTagValue:
-			preps = append(preps, newLowercasePreprocessor())
-		case uppercaseTagValue:
-			preps = append(preps, newUppercasePreprocessor())
-		case defaultTagValue:
-			preps = append(preps, newDefaultPreprocessor(value))
-
-		// String transformation preprocessors
-		case replaceTagValue:
-			// replace=old:new format
-			oldStr, newStr, found := parseColonSeparatedValue(value)
-			if found {
-				preps = append(preps, newReplacePreprocessor(oldStr, newStr))
-			} else if strict {
-				return nil, fmt.Errorf("%w: replace requires old:new format, got %q", ErrInvalidTagFormat, value)
-			}
-		case prefixTagValue:
-			if value != "" {
-				preps = append(preps, newPrefixPreprocessor(value))
-			} else if strict {
-				return nil, fmt.Errorf("%w: prefix requires a value", ErrInvalidTagFormat)
-			}
-		case suffixTagValue:
-			if value != "" {
-				preps = append(preps, newSuffixPreprocessor(value))
-			} else if strict {
-				return nil, fmt.Errorf("%w: suffix requires a value", ErrInvalidTagFormat)
-			}
-		case truncateTagValue:
-			if n, err := strconv.Atoi(value); err == nil && n > 0 {
-				preps = append(preps, newTruncatePreprocessor(n))
-			} else if strict {
-				return nil, fmt.Errorf("%w: truncate requires a positive integer, got %q", ErrInvalidTagFormat, value)
-			}
-		case stripHTMLTagValue:
-			preps = append(preps, newStripHTMLPreprocessor())
-		case stripNewlineTagValue:
-			preps = append(preps, newStripNewlinePreprocessor())
-		case collapseSpaceTagValue:
-			preps = append(preps, newCollapseSpacePreprocessor())
-
-		// Character filtering preprocessors
-		case removeDigitsTagValue:
-			preps = append(preps, newRemoveDigitsPreprocessor())
-		case removeAlphaTagValue:
-			preps = append(preps, newRemoveAlphaPreprocessor())
-		case keepDigitsTagValue:
-			preps = append(preps, newKeepDigitsPreprocessor())
-		case keepAlphaTagValue:
-			preps = append(preps, newKeepAlphaPreprocessor())
-		case trimSetTagValue:
-			if value != "" {
-				preps = append(preps, newTrimSetPreprocessor(value))
-			} else if strict {
-				return nil, fmt.Errorf("%w: trim_set requires characters to trim", ErrInvalidTagFormat)
-			}
-
-		// Padding preprocessors
-		case padLeftTagValue:
-			// pad_left=N,char format
-			length, padChar := parsePadParams(value)
-			if length > 0 {
-				preps = append(preps, newPadLeftPreprocessor(length, padChar))
-			} else if strict {
-				return nil, fmt.Errorf("%w: pad_left requires a positive length, got %q", ErrInvalidTagFormat, value)
-			}
-		case padRightTagValue:
-			// pad_right=N,char format
-			length, padChar := parsePadParams(value)
-			if length > 0 {
-				preps = append(preps, newPadRightPreprocessor(length, padChar))
-			} else if strict {
-				return nil, fmt.Errorf("%w: pad_right requires a positive length, got %q", ErrInvalidTagFormat, value)
-			}
-
-		// Advanced preprocessors
-		case normalizeUnicodeTagValue:
-			preps = append(preps, newNormalizeUnicodePreprocessor())
-		case nullifyTagValue:
-			if value != "" {
-				preps = append(preps, newNullifyPreprocessor(value))
-			} else if strict {
-				return nil, fmt.Errorf("%w: nullify requires a value", ErrInvalidTagFormat)
-			}
-		case coerceTagValue:
-			if value == "int" || value == "float" || value == "bool" {
-				preps = append(preps, newCoercePreprocessor(value))
-			} else if strict {
-				return nil, fmt.Errorf("%w: coerce requires int, float, or bool, got %q", ErrInvalidTagFormat, value)
-			}
-		case fixSchemeTagValue:
-			if value != "" {
-				preps = append(preps, newFixSchemePreprocessor(value))
-			} else if strict {
-				return nil, fmt.Errorf("%w: fix_scheme requires a scheme value", ErrInvalidTagFormat)
-			}
-		case regexReplaceTagValue:
-			// regex_replace=pattern:replacement format
-			pattern, replacement, found := parseColonSeparatedValue(value)
-			if found {
-				rp := newRegexReplacePreprocessor(pattern, replacement)
-				if rp != nil {
-					preps = append(preps, rp)
-				} else if strict {
-					return nil, fmt.Errorf("%w: regex_replace has invalid pattern %q", ErrInvalidTagFormat, pattern)
-				}
-			} else if strict {
-				return nil, fmt.Errorf("%w: regex_replace requires pattern:replacement format, got %q", ErrInvalidTagFormat, value)
-			}
-
-		default:
+		build, known := prepBuilders[key]
+		if !known {
 			return nil, fmt.Errorf("%w: unknown prep tag %q", ErrInvalidTagFormat, part)
+		}
+		prep, err := build(value, strict)
+		if err != nil {
+			return nil, err
+		}
+		if prep != nil {
+			preps = append(preps, prep)
 		}
 	}
 
@@ -507,97 +564,24 @@ var validatorRegistry = map[string]validatorBuilder{
 	hostnamePortTagValue:    func(_ string, _ bool) (validator, error) { return newHostnamePortValidator(), nil },
 
 	// String content validators (with parameter)
-	startsWithTagValue: func(v string, _ bool) (validator, error) {
-		if v != "" {
-			return newStartsWithValidator(v), nil
-		}
-		return nil, nil
-	}, //nolint:nlreturn,nilnil // compact builder
-	startsNotWithTagValue: func(v string, _ bool) (validator, error) {
-		if v != "" {
-			return newStartsNotWithValidator(v), nil
-		}
-		return nil, nil
-	}, //nolint:nlreturn,nilnil // compact builder
-	endsWithTagValue: func(v string, _ bool) (validator, error) {
-		if v != "" {
-			return newEndsWithValidator(v), nil
-		}
-		return nil, nil
-	}, //nolint:nlreturn,nilnil // compact builder
-	endsNotWithTagValue: func(v string, _ bool) (validator, error) {
-		if v != "" {
-			return newEndsNotWithValidator(v), nil
-		}
-		return nil, nil
-	}, //nolint:nlreturn,nilnil // compact builder
-	containsTagValue: func(v string, _ bool) (validator, error) {
-		if v != "" {
-			return newContainsValidator(v), nil
-		}
-		return nil, nil
-	}, //nolint:nlreturn,nilnil // compact builder
-	containsAnyTagValue: func(v string, _ bool) (validator, error) {
-		if v != "" {
-			return newContainsAnyValidator(v), nil
-		}
-		return nil, nil
-	}, //nolint:nlreturn,nilnil // compact builder
-	containsRuneTagValue: func(v string, _ bool) (validator, error) {
-		if v != "" {
-			runes := []rune(v)
-			if len(runes) > 0 {
-				return newContainsRuneValidator(runes[0]), nil
-			}
-		}
-		return nil, nil //nolint:nilnil // empty value produces no validator
-	},
+	startsWithTagValue:    requiresParam(newStartsWithValidator, "startswith requires a prefix"),
+	startsNotWithTagValue: requiresParam(newStartsNotWithValidator, "startsnotwith requires a prefix"),
+	endsWithTagValue:      requiresParam(newEndsWithValidator, "endswith requires a suffix"),
+	endsNotWithTagValue:   requiresParam(newEndsNotWithValidator, "endsnotwith requires a suffix"),
+	containsTagValue:      requiresParam(newContainsValidator, "contains requires a substring"),
+	containsAnyTagValue:   requiresParam(newContainsAnyValidator, "containsany requires the characters to look for"),
+	containsRuneTagValue:  requiresRuneParam(newContainsRuneValidator, "containsrune requires a character"),
 
 	// Exclusion validators (with parameter)
-	excludesTagValue: func(v string, _ bool) (validator, error) {
-		if v != "" {
-			return newExcludesValidator(v), nil
-		}
-		return nil, nil
-	}, //nolint:nlreturn,nilnil // compact builder
-	excludesAllTagValue: func(v string, _ bool) (validator, error) {
-		if v != "" {
-			return newExcludesAllValidator(v), nil
-		}
-		return nil, nil
-	}, //nolint:nlreturn,nilnil // compact builder
-	excludesRuneTagValue: func(v string, _ bool) (validator, error) {
-		if v != "" {
-			runes := []rune(v)
-			if len(runes) > 0 {
-				return newExcludesRuneValidator(runes[0]), nil
-			}
-		}
-		return nil, nil //nolint:nilnil // empty value produces no validator
-	},
+	excludesTagValue:     requiresParam(newExcludesValidator, "excludes requires a substring"),
+	excludesAllTagValue:  requiresParam(newExcludesAllValidator, "excludesall requires the characters to refuse"),
+	excludesRuneTagValue: requiresRuneParam(newExcludesRuneValidator, "excludesrune requires a character"),
 
 	// Misc validators
-	multibyteTagValue: func(_ string, _ bool) (validator, error) { return newMultibyteValidator(), nil },
-	equalIgnoreCaseTagValue: func(v string, _ bool) (validator, error) {
-		if v != "" {
-			return newEqualIgnoreCaseValidator(v), nil
-		}
-		return nil, nil //nolint:nlreturn,nilnil // compact builder
-	},
-	notEqualIgnoreCaseTagValue: func(v string, _ bool) (validator, error) {
-		if v != "" {
-			return newNotEqualIgnoreCaseValidator(v), nil
-		}
-		return nil, nil //nolint:nlreturn,nilnil // compact builder
-	},
-
-	// Datetime validator
-	datetimeTagValue: func(v string, _ bool) (validator, error) {
-		if v != "" {
-			return newDatetimeValidator(v), nil
-		}
-		return nil, nil
-	}, //nolint:nlreturn,nilnil // compact builder
+	multibyteTagValue:          func(_ string, _ bool) (validator, error) { return newMultibyteValidator(), nil },
+	equalIgnoreCaseTagValue:    requiresParam(newEqualIgnoreCaseValidator, "eq_ignore_case requires a value to compare"),
+	notEqualIgnoreCaseTagValue: requiresParam(newNotEqualIgnoreCaseValidator, "ne_ignore_case requires a value to compare"),
+	datetimeTagValue:           requiresParam(newDatetimeValidator, "datetime requires a layout"),
 
 	// Phone number validator
 	e164TagValue: func(_ string, _ bool) (validator, error) { return newE164Validator(), nil },
@@ -659,6 +643,12 @@ var fieldListValidatorRegistry = map[string]fieldListValidatorBuilder{
 // The registry-based approach replaces the large switch statement for easier maintenance.
 func parseValidateTag(tag string, strict bool) (validators, crossFieldValidators, error) {
 	if tag == "" {
+		return nil, nil, nil
+	}
+	// The dialect writes "-" for a field it validates nothing on. Only the whole
+	// tag means that: inside a list it is a tag name like any other, and an
+	// unknown one, which is what a caller who wrote it there meant to be told.
+	if strings.TrimSpace(tag) == validateSkipTagValue {
 		return nil, nil, nil
 	}
 

@@ -12,6 +12,9 @@ const (
 
 // Validation tag values
 const (
+	// validateSkipTagValue is the whole-tag value the go-playground dialect
+	// reads as "validate nothing on this field".
+	validateSkipTagValue = "-"
 	// omitemptyTagValue is the tag value for skipping validation on empty values.
 	// When present, subsequent validators are skipped if the value is empty.
 	omitemptyTagValue = "omitempty"
@@ -250,9 +253,11 @@ const (
 	trimSetTagValue = "trim_set"
 
 	// Padding preprocessors
-	// padLeftTagValue is the tag value for left padding (pad_left=N,char)
+	// padLeftTagValue is the tag value for left padding (pad_left=N:char). The
+	// comma separates one tag from the next, so a tag's own parameters cannot
+	// use it.
 	padLeftTagValue = "pad_left"
-	// padRightTagValue is the tag value for right padding (pad_right=N,char)
+	// padRightTagValue is the tag value for right padding (pad_right=N:char)
 	padRightTagValue = "pad_right"
 
 	// Advanced preprocessors
