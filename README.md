@@ -399,9 +399,9 @@ The multiplier belongs to the format rather than to the library. The same 200,00
 |--------|------|----------|---------------------|
 | CSV | 32.8 MB | 101 MB | 2.1x |
 | Parquet | 32.2 MB | 111 MB | 2.1x |
-| XLSX | 17.6 MB | 1849 MB | about 100x |
+| XLSX | 17.6 MB | 351 MB | about 20x |
 
-A workbook is the one to plan around. Reading its rows is not what costs: the streaming row read is 267 MB for an 18.5 MB workbook, and the rest is one random-access lookup per cell inside the date normalization, which makes the library underneath build the whole sheet as objects. Convert a large table out of XLSX before loading it, or expect a hundred times its size. `go test -tags benchmark -run TestLoadMemoryFootprintByFormat -v .` prints this table.
+A workbook is still the one to plan around, and what it costs depends on whether it holds dates. Reading its rows is 267 MB for an 18.5 MB workbook; asking the library about one cell's style makes it build the whole sheet as objects, which is another 1470 MB. filesql asks only when the workbook's style table holds a date format, since a cell is a date because of its style, so a workbook of plain values costs about twenty times its size and the same workbook with one date-formatted cell costs about a hundred. Convert a large dated table out of XLSX before loading it. `go test -tags benchmark -run TestLoadMemoryFootprintByFormat -v .` prints this table.
 
 Use `SetDefaultChunkSize` on the builder when you need to tune chunked loading:
 
