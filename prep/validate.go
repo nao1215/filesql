@@ -22,7 +22,6 @@ const (
 	// payload is checked again by decoding it, so the class here only has to
 	// find where it starts.
 	dataURIRegexPattern = `^data:(?:[\w.+-]+/[\w.+-]+)?(?:;[\w.+-]+=[^;,]*)*;base64,[A-Za-z0-9+/]+={0,2}$`
-	emailRegexPattern   = `^[A-Za-z0-9_%+\-]+(?:\.[A-Za-z0-9_%+\-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$`
 	// numeric accepts an optionally signed decimal, and number accepts digits
 	// alone, matching the go-playground/validator dialect prep documents.
 	numericRegexPattern = `^[-+]?[0-9]+(\.[0-9]+)?$`
@@ -68,6 +67,27 @@ const (
 	// HSLA color pattern
 	hslaRegexPattern = `^hsla\(\s*` + hueComponentRegexPattern + `\s*,\s*` + hslPercentComponentRegexPattern + `\s*,\s*` + hslPercentComponentRegexPattern + `\s*,\s*` + alphaComponentRegexPattern + `\s*\)$`
 )
+
+// The dialect admits these Unicode ranges on both sides of the @, which is what
+// lets an internationalized address through. They stop at the BMP, so a
+// character above U+FFFF is not a letter here.
+const emailUnicodeRanges = `\x{00A0}-\x{D7FF}\x{F900}-\x{FDCF}\x{FDF0}-\x{FFEF}`
+
+// emailRegexPattern follows the go-playground/validator dialect: the local part
+// is either dot-separated atoms of RFC 5322 atext or a quoted string, each
+// domain label starts and ends with a letter or a digit, and the last label
+// starts with a letter so that a numeric top-level domain is not an address.
+const emailRegexPattern = `^(?:[` + emailAtextClass + `]+(?:\.[` + emailAtextClass + `]+)*` +
+	`|"(?:[^"\\\r\n]|\\.)*")` +
+	`@(?:[` + emailLabelClass + `](?:[` + emailLabelClass + `-]{0,61}[` + emailLabelClass + `])?\.)+` +
+	`[A-Za-z` + emailUnicodeRanges + `](?:[` + emailLabelClass + `-]{0,61}[` + emailLabelClass + `])?$`
+
+// emailAtextClass is the RFC 5322 atext set the dialect accepts, plus the
+// Unicode ranges. The hyphen is last so that it is a literal.
+const emailAtextClass = "A-Za-z0-9!#$%&'*+/=?^_`{|}~" + emailUnicodeRanges + `-`
+
+// emailLabelClass is what a domain label may start and end with.
+const emailLabelClass = `A-Za-z0-9` + emailUnicodeRanges
 
 // Common error messages (to avoid goconst warnings)
 const (

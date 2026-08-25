@@ -900,6 +900,18 @@ func TestEmailValidator(t *testing.T) {
 		{"user@example.com", false},
 		{"user.name@example.co.jp", false},
 		{"user+tag@example.com", false},
+		// The dialect admits an internationalized address on either side of
+		// the @, and the punycode spelling of a domain must agree with the
+		// Unicode one.
+		{"user@日本.jp", false},
+		{"user@xn--wgv71a.jp", false},
+		{"山田@example.com", false},
+		{"user@例え.テスト", false},
+		// The dialect admits the RFC 5322 atext specials in the local part.
+		{"o'brien@example.com", false},
+		{"a!b@example.com", false},
+		{"a/b@example.com", false},
+		{"a=b@example.com", false},
 		{"invalid", true},
 		{"@example.com", true},
 		{"user@", true},
@@ -954,8 +966,13 @@ func TestEmailValidator_BoundaryConditions(t *testing.T) {
 		{"trailing dot in domain", "user@example.com.", true},
 
 		// Invalid: TLD issues
-		{"single char TLD", "user@example.a", true},
+		{"single char TLD", "user@example.a", false},
+		{"quoted local part", `"a b"@example.com`, false},
 		{"numeric TLD", "user@example.123", true},
+		{"local part is only Japanese", "山田@example.com", false},
+		{"domain is only Japanese", "user@日本.jp", false},
+		{"hyphen at start of domain label", "user@-example.com", true},
+		{"emoji in local part", "\U0001F600@example.com", true},
 
 		// Invalid: dot placement
 		{"leading dot in local", ".user@example.com", true},
