@@ -428,7 +428,9 @@ func Example_detailedErrorReporting() {
 	// Order represents an order with strict validation rules. A comparison
 	// follows the field it lands on: gt, gte and lte compare the number of a
 	// numeric field and the character count of a string one, so the amount,
-	// quantity and price are declared numeric.
+	// quantity and price are declared numeric. The third row leaves ship_date
+	// empty, and an empty cell passes every validator but required, so its
+	// gtfield is not reported.
 	type Order struct {
 		OrderID    string  `name:"order_id" validate:"required,uuid4"`
 		CustomerID string  `name:"customer_id" validate:"required,numeric"`
@@ -480,7 +482,7 @@ invalid-uuid,abc,not-an-email,-100,US,USA,2024/01/15,2024-01-10,999.999.999.999,
 	// Total rows:     4
 	// Valid rows:     1
 	// Invalid rows:   3
-	// Total errors:   23
+	// Total errors:   22
 	//
 	// === Error Details ===
 	// Row 2, Column 'order_id': value must be a valid UUID version 4
@@ -504,7 +506,6 @@ invalid-uuid,abc,not-an-email,-100,US,USA,2024/01/15,2024-01-10,999.999.999.999,
 	// Row 3, Column 'order_date': value must be a valid datetime in format: 2006-01-02
 	// Row 3, Column 'quantity': value must be less than or equal to 100
 	// Row 3, Column 'unit_price': value must be greater than 0
-	// Row 3, Column 'ship_date': value must be greater than field OrderDate
 	// Row 4, Column 'ship_date': value must be greater than field OrderDate
 }
 

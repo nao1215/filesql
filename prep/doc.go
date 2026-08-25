@@ -95,7 +95,12 @@
 // An empty value passes every validator except required: an empty cell is how
 // CSV spells a missing value, so a column is optional unless required says
 // otherwise. This is where the dialect is deliberately left — that library
-// fails most validators on an empty value.
+// fails most validators on an empty value. The rule reaches the cross-field
+// comparisons too, on either side: a comparison is skipped as soon as one of
+// the two cells is empty, since a value has no order against a value that is
+// not there. The required_if, required_unless, required_with, required_with_all,
+// required_without and required_without_all tags are the exception, because
+// deciding whether an empty cell is allowed is what they are for.
 //
 // The comparison tags follow the field they land on, as the dialect defines
 // them: on a string field, eq and ne compare the string itself and gt, gte,
@@ -106,7 +111,13 @@
 // they order the strings rather than measure them, so ltfield says a date range
 // runs forwards. That is the second place this package leaves the dialect,
 // which compares string lengths there and so cannot express a date range at
-// all. boolean accepts what strconv.ParseBool accepts, which is also how a
+// all. required_if and required_unless take field and value pairs, as many as
+// the tag names, and a value holding a space is written in single quotes:
+// required_if=Kind paid Tier 'gold member' asks for a value only when both
+// cells match. required_with and its three siblings take a list of field names
+// instead: required_with fires when any of them carries a value and
+// required_with_all when all of them do, while required_without fires when any
+// of them is empty and required_without_all when all of them are. boolean accepts what strconv.ParseBool accepts, which is also how a
 // bool struct field is filled. numeric accepts an optionally signed decimal
 // and number accepts digits alone, as the dialect defines them. The dialect
 // spells the letters-and-digits tag alphanum; alphanumeric names the same
