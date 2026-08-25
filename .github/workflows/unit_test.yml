@@ -9,7 +9,7 @@ on:
 
 jobs:
   unit_test:
-    name: Unit test (linux)
+    name: Unit test
 
     strategy:
       matrix:
@@ -34,3 +34,23 @@ jobs:
       - name: Run tests with coverage report output
         run: go test -cover -coverpkg=./... -coverprofile=coverage.out ./...
 
+  race_test:
+    name: Unit test (race detector)
+
+    # One combination rather than the matrix above. The race detector rebuilds
+    # the module and slows every test in it, and what it watches here - the
+    # goroutines sharing the *sql.DB that Open returns, and the auto-save
+    # connector's anchor connection - is the same Go code on every operating
+    # system, so a second platform would buy repetition rather than coverage.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+
+      - name: Run tests with the race detector
+        run: go test -race ./...
