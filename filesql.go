@@ -508,7 +508,7 @@ func writeSQLiteTableDataTo(w io.Writer, tableName string, columns []string, row
 		return fmt.Errorf("%w: external compression not supported for Parquet format - use Parquet's built-in compression instead", ErrUnsupportedFormat)
 	}
 
-	writer, closeWriter, err := createCompressedWriter(w, options.Compression)
+	compressed, closeWriter, err := createCompressedWriter(w, options.Compression)
 	if err != nil {
 		return fmt.Errorf("%w: failed to create writer: %w", ErrCompression, err)
 	}
@@ -524,14 +524,14 @@ func writeSQLiteTableDataTo(w io.Writer, tableName string, columns []string, row
 	// text formats below are encoded.
 	switch options.Format {
 	case OutputFormatParquet:
-		return writeParquetTableData(writer, columns, rows)
+		return writeParquetTableData(compressed, columns, rows)
 	case OutputFormatXLSX:
-		return writeXLSXTableData(writer, tableName, columns, rows)
+		return writeXLSXTableData(compressed, tableName, columns, rows)
 	}
 
 	// The encoder wraps inside the compressor: what a compressor stores is the
 	// encoded text, so a reader decompresses and then decodes.
-	encoded, encoder := options.Encoding.encodingWriter(writer)
+	encoded, encoder := options.Encoding.encodingWriter(compressed)
 	defer func() {
 		if encoder == nil {
 			return
