@@ -510,8 +510,13 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, tx *sql.T
 		return err
 	}
 
-	// Reader should already be validated at Build time, but ensure it's buffered
-	if _, ok := input.reader.(*bufio.Reader); !ok {
+	// A text parser reads its input in small pieces, so it wants a buffer in
+	// front of it. A binary container does not: Parquet reads its file at both
+	// ends and then by column chunk, so it is handed the source as it stands,
+	// and a file that can already serve a read at an offset is then read where
+	// it lies rather than copied into memory first. Wrapping it here would hide
+	// that it is a file.
+	if _, ok := input.reader.(*bufio.Reader); !ok && isTextBaseType(input.fileType) {
 		input.reader = bufio.NewReader(input.reader)
 	}
 

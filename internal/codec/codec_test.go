@@ -433,3 +433,64 @@ func TestPushbackReader(t *testing.T) {
 		}
 	})
 }
+
+// TestConcatenatedStreams holds one answer across the codecs: a file holding
+// several streams reads as all of them, and bytes behind the last stream that
+// are not a stream are reported rather than dropped.
+//
+// zlib gave neither. Ten streams of the same sixteen bytes were 280 bytes in
+// and sixteen bytes out with a nil error, so nine tenths of a file a caller had
+// made with `cat a.z b.z` went missing with nothing to say so, while every
+// other codec here read the whole of it.
+func TestConcatenatedStreams(t *testing.T) {
+	const payload = "id,name\n1,alice\n"
+	const copies = 10
+
+	for _, c := range []Codec{GZ, XZ, ZSTD, ZLIB, SNAPPY, S2, LZ4} {
+		t.Run(c.String(), func(t *testing.T) {
+			var one bytes.Buffer
+			writer, closeWriter, err := c.NewWriter(&one)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.WriteString(writer, payload); err != nil {
+				t.Fatal(err)
+			}
+			if err := closeWriter(); err != nil {
+				t.Fatal(err)
+			}
+
+			many := make([]byte, 0, one.Len()*copies)
+			for range copies {
+				many = append(many, one.Bytes()...)
+			}
+
+			out, err := decodeAll(t, c, many)
+			if err != nil {
+				t.Fatalf("reading %d concatenated streams: %v", copies, err)
+			}
+			if want := strings.Repeat(payload, copies); out != want {
+				t.Errorf("read %d bytes, want %d", len(out), len(want))
+			}
+
+			if _, err := decodeAll(t, c, append(append([]byte{}, one.Bytes()...), []byte("junk")...)); err == nil {
+				t.Error("bytes behind the last stream that are not a stream were dropped")
+			}
+		})
+	}
+}
+
+// decodeAll reads a whole compressed input through the codec.
+func decodeAll(t *testing.T, c Codec, data []byte) (string, error) {
+	t.Helper()
+
+	reader, closeFn, err := c.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	out, err := io.ReadAll(reader)
+	if closeErr := closeFn(); err == nil {
+		err = closeErr
+	}
+	return string(out), err
+}
