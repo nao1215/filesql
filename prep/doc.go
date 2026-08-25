@@ -75,13 +75,33 @@
 //
 // # Prep Tags
 //
-// The "prep" tag specifies preprocessing operations applied before validation:
-//   - trim: Remove leading and trailing whitespace
-//   - ltrim: Remove leading whitespace
-//   - rtrim: Remove trailing whitespace
-//   - lowercase: Convert to lowercase
-//   - uppercase: Convert to uppercase
-//   - default=value: Set default value if empty
+// The "prep" tag specifies preprocessing operations applied before validation.
+// A comma separates one tag from the next, so a tag's own parameters are
+// separated by a colon rather than a comma:
+//
+//   - trim, ltrim, rtrim: remove whitespace from both ends, the left, the right
+//   - collapse_space: replace each run of whitespace with one space
+//   - strip_newline: remove carriage returns and line feeds
+//   - strip_html: remove HTML tags
+//   - lowercase, uppercase: fold case
+//   - normalize_unicode: normalize to NFC
+//   - default=value: use value when the cell is empty
+//   - nullify=value: read value as an empty cell
+//   - prefix=value, suffix=value: add value at the front or the back
+//   - replace=old:new: replace every occurrence of old
+//   - regex_replace=pattern:replacement: replace every match of pattern
+//   - truncate=N: keep the first N characters
+//   - pad_left=N:char, pad_right=N:char: pad to N characters, with char or a
+//     space
+//   - trim_set=chars: remove any of chars from both ends
+//   - keep_digits, keep_alpha: keep only digits, or only letters
+//   - remove_digits, remove_alpha: remove digits, or letters
+//   - coerce=int|float|bool: normalize the written form of a number or a
+//     boolean
+//   - fix_scheme=scheme: add scheme:// to a URL that has no scheme
+//
+// A tag that needs a parameter and is given none is an invalid tag argument:
+// WithStrictTagParsing reports it, and without that option it is ignored.
 //
 // # Validate Tags
 //
@@ -91,6 +111,9 @@
 //   - email: Must be a valid email address
 //   - url: Must be a valid URL
 //   - And many more...
+//
+// A field tagged validate:"-" is validated by nothing, as in the dialect. Its
+// prep tag still runs.
 //
 // An empty value passes every validator except required and the required
 // family: an empty cell is how CSV spells a missing value, so a column is
