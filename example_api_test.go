@@ -604,3 +604,124 @@ id,name
 	// 1,Alice
 	// 2,Carol
 }
+
+// ExampleExcelSheetsInReader is ExampleExcelSheetsInFile for a workbook that
+// arrived as bytes rather than as a file.
+func ExampleExcelSheetsInReader() {
+	path := exampleWorkbook(os.TempDir())
+	defer func() { _ = os.Remove(path) }()
+
+	// A workbook a caller holds in memory, downloaded or embedded rather than
+	// read from disk. The reader must yield the workbook itself: a codec around
+	// it has no name to be detected from.
+	body, err := os.ReadFile(path) //nolint:gosec // path built by this example
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	sheets, err := filesql.ExcelSheetsInReader(bytes.NewReader(body))
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, sheet := range sheets {
+		fmt.Printf("%s visible=%t\n", sheet.Name, sheet.Visible)
+	}
+	// Output:
+	// Sales visible=true
+	// Scratch visible=false
+}
+
+func ExampleExcelSheetTableNames() {
+	tables, err := filesql.ExcelSheetTableNames("book.xlsx", []string{"Sales", "Q1 sales"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(tables)
+
+	// "Q1 sales" and "Q1.sales" both sanitize to one identifier, so the second
+	// sheet loaded would replace the first with nothing said about it. Asking
+	// first is how a caller refuses the workbook before loading any of it.
+	_, err = filesql.ExcelSheetTableNames("book.xlsx", []string{"Q1 sales", "Q1.sales"})
+	fmt.Println(errors.Is(err, filesql.ErrDuplicateTable))
+	// Output:
+	// [book_Sales book_Q1_sales]
+	// true
+}
+
+// ExampleDBBuilder_SkippedRows shows what MalformedRowSkip discarded. The
+// policy is an instruction from the caller, but one dropped row and most of the
+// file dropped look alike without the counts.
+func ExampleDBBuilder_SkippedRows() {
+	csvData := "id,name\n1,Alice\n2\n3,Cora,extra\n4,Dave\n"
+
+	validated, err := filesql.NewBuilder().
+		AddReader(strings.NewReader(csvData), "users", filesql.FileTypeCSV).
+		WithMalformedRowPolicy(filesql.MalformedRowSkip).
+		Build(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	db, err := validated.Open(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	for _, skipped := range validated.SkippedRows() {
+		fmt.Printf("%s: %d of %d rows skipped\n", skipped.Table, skipped.Count, skipped.Total)
+	}
+	// Output:
+	// users: 2 of 4 rows skipped
+}
+
+// ExampleNewReadOnlyDB wraps a database the caller already has. Use
+// (*DBBuilder).OpenReadOnly when filesql is the one opening it.
+func ExampleNewReadOnlyDB() {
+	db := openExampleSQLiteDB()
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := filesql.LoadInto(ctx, db, "testdata/sample.csv"); err != nil {
+		log.Fatal(err)
+	}
+
+	rodb := filesql.NewReadOnlyDB(db)
+
+	var rows int
+	if err := rodb.QueryRowContext(ctx, `SELECT COUNT(*) FROM sample`).Scan(&rows); err != nil {
+		log.Fatal(err)
+	}
+
+	// The wrapper refuses the write; the database underneath is untouched and
+	// still writable through db itself.
+	_, err := rodb.ExecContext(ctx, `DELETE FROM sample`)
+	fmt.Printf("rows=%d write_blocked=%t\n", rows, errors.Is(err, filesql.ErrReadOnly))
+	// Output:
+	// rows=3 write_blocked=true
+}
+
+func ExampleFileType_String() {
+	fmt.Println(filesql.FileTypeCSV, filesql.FileTypeLTSV, filesql.FileTypeParquet)
+	// Output: CSV LTSV Parquet
+}
+
+func ExampleCompressionType_String() {
+	fmt.Println(filesql.CompressionNone, filesql.CompressionGZ, filesql.CompressionZSTD)
+	// Output: none gz zstd
+}
+
+func ExampleEncoding_String() {
+	fmt.Println(filesql.EncodingUTF8, filesql.EncodingShiftJIS, filesql.EncodingEUCJP)
+	// Output: utf-8 shift-jis euc-jp
+}
+
+func ExampleLineEnding_String() {
+	fmt.Println(filesql.LineEndingLF, filesql.LineEndingCRLF)
+	// Output: lf crlf
+}
+
+func ExampleOutputFormat_String() {
+	fmt.Println(filesql.OutputFormatCSV, filesql.OutputFormatTSV, filesql.OutputFormatXLSX)
+	// Output: csv tsv xlsx
+}
