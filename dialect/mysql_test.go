@@ -185,12 +185,15 @@ func TestMySQLTranslateUnsupported(t *testing.T) {
 		{"M-21_xor_in_where", "SELECT a FROM t WHERE b XOR c"},
 		{"M-21_bitxor_left_not_primary", "SELECT a, ^ b"},
 		{"M-21_bitxor_right_missing", "SELECT a ^"},
+		// M-24: MySQL FORMAT takes a locale as its third argument, and answering
+		// en_US formatting for a query that named another one would be worse than
+		// saying so.
+		{"M-24_format_with_locale", "SELECT FORMAT(x, 2, 'de_DE') FROM t"},
+
 		// M-23: 0x41 is the string "A" where MySQL prints a value and the number
 		// 65 where it does arithmetic. SQLite has only the number, and which
 		// reading applies is not something a token rewrite can see, so the
 		// literal is refused rather than translated into one of the two.
-		{"M-24_format_with_locale", "SELECT FORMAT(x, 2, 'de_DE') FROM t"},
-
 		{"M-23_hex_literal", "SELECT 0x41"},
 		{"M-23_hex_literal_uppercase_prefix", "SELECT 0X41"},
 		{"M-23_hex_literal_in_arithmetic", "SELECT 1 + 0x10"},
