@@ -1,9 +1,13 @@
 package reader
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/base64"
+	"io"
 	"math"
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -30,11 +34,17 @@ func writeParquet[T any](t *testing.T, rows []T) []byte {
 	return buf.Bytes()
 }
 
-// collectParquet reads a Parquet file whole, gathering every chunk.
-func collectParquet(t *testing.T, data []byte, opts Options) (Result, []*Chunk) {
+// collectParquet reads a Parquet file whole, gathering every chunk. It reads
+// from src when one is given and from data otherwise, so a case can compare the
+// route a file takes with the route a stream takes.
+func collectParquet(t *testing.T, data []byte, opts Options, src ...io.Reader) (Result, []*Chunk) {
 	t.Helper()
+	var from io.Reader = bytes.NewReader(data)
+	if len(src) == 1 && src[0] != nil {
+		from = src[0]
+	}
 	var chunks []*Chunk
-	result, err := readParquet(bytes.NewReader(data), opts, func(c *Chunk) error {
+	result, err := readParquet(from, opts, func(c *Chunk) error {
 		chunks = append(chunks, c)
 		return nil
 	})
@@ -455,4 +465,76 @@ func TestFloat16To32AgreesWithTheStandard(t *testing.T) {
 	assert.True(t, math.IsInf(float64(float16To32(0xfc00)), -1))
 	assert.True(t, math.IsNaN(float64(float16To32(0x7e01))))
 	assert.Equal(t, float32(math.Copysign(0, -1)), float16To32(0x8000))
+}
+
+// TestReadParquetReadsAFileWhereItLies covers the decision that keeps a load
+// from holding a second copy of the file it is reading. The format is read at
+// both ends and then by column chunk, so a source that can already serve a read
+// at an offset is used as it stands; anything else has to be buffered, because
+// a stream cannot go back.
+func TestReadParquetReadsAFileWhereItLies(t *testing.T) {
+	t.Parallel()
+
+	type row struct {
+		ID   int64  `parquet:"id"`
+		Name string `parquet:"name"`
+	}
+	data := writeParquet(t, []row{{ID: 1, Name: "alice"}, {ID: 2, Name: "bob"}})
+
+	path := filepath.Join(t.TempDir(), "people.parquet")
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+
+	t.Run("a file is read where it lies", func(t *testing.T) {
+		t.Parallel()
+
+		f, err := os.Open(path) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, f.Close()) })
+
+		at, size, ok := wholeFileAt(f)
+		require.True(t, ok, "an open file is addressable")
+		assert.Equal(t, int64(len(data)), size)
+		assert.NotNil(t, at)
+	})
+
+	t.Run("a file already read from is not", func(t *testing.T) {
+		t.Parallel()
+
+		f, err := os.Open(path) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, f.Close()) })
+		_, err = f.Read(make([]byte, 1))
+		require.NoError(t, err)
+
+		// What was taken is unknown here, so the file is no longer the whole
+		// input and reading it from the start would read those bytes twice.
+		_, _, ok := wholeFileAt(f)
+		assert.False(t, ok)
+	})
+
+	t.Run("a stream is not", func(t *testing.T) {
+		t.Parallel()
+
+		_, _, ok := wholeFileAt(bufio.NewReader(bytes.NewReader(data)))
+		assert.False(t, ok)
+	})
+
+	t.Run("both routes read the same table", func(t *testing.T) {
+		t.Parallel()
+
+		f, err := os.Open(path) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, f.Close()) })
+
+		fromFile, fileChunks := collectParquet(t, nil, Options{}, f)
+		fromStream, streamChunks := collectParquet(t, data, Options{}, nil)
+
+		assert.Equal(t, fromStream.Header, fromFile.Header)
+		assert.Equal(t, fromStream.Types, fromFile.Types)
+		assert.Equal(t, fromStream.Rows, fromFile.Rows)
+		require.Len(t, fileChunks, len(streamChunks))
+		for i := range fileChunks {
+			assert.Equal(t, streamChunks[i].Records, fileChunks[i].Records)
+		}
+	})
 }

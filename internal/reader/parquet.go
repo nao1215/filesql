@@ -47,16 +47,88 @@ func errNotParquet(head []byte) error {
 // costs no more than its own size, which is the rule this reader was chosen
 // for, so the declared number is checked against the bytes that are there
 // before the library is handed anything.
-func parquetFooterFits(data []byte) error {
+func parquetFooterFits(at io.ReaderAt, size int64) error {
 	// Four bytes of footer length and four of magic sit at the end, after the
 	// footer itself, and the leading magic sits in front of it.
 	const trailer = 8
-	if len(data) < len(parquetMagic)+trailer {
-		return parseError(nil, "parquet file is %d bytes, too short to hold a footer", len(data))
+	if size < int64(len(parquetMagic))+trailer {
+		return parseError(nil, "parquet file is %d bytes, too short to hold a footer", size)
 	}
-	declared := binary.LittleEndian.Uint32(data[len(data)-trailer:])
-	if uint64(declared)+uint64(len(parquetMagic))+trailer > uint64(len(data)) {
-		return parseError(nil, "parquet footer declares %d bytes in a file of %d", declared, len(data))
+	tail := make([]byte, trailer)
+	if _, err := at.ReadAt(tail, size-trailer); err != nil {
+		return parseError(err, "failed to read parquet footer")
+	}
+	// The declared length is compared in int64, which holds every uint32 and
+	// every size a file can have, so neither side can wrap.
+	declared := int64(binary.LittleEndian.Uint32(tail))
+	if declared+int64(len(parquetMagic))+trailer > size {
+		return parseError(nil, "parquet footer declares %d bytes in a file of %d", declared, size)
+	}
+	return nil
+}
+
+// parquetBytes gives the reader something it can read at both ends and then by
+// column chunk, which is what the format asks for.
+//
+// A file named by path arrives here as the *os.File itself, and a file already
+// serves reads at an offset, so nothing is copied: the load holds the rows it
+// has read and the pages the operating system was holding anyway, rather than
+// a second copy of the compressed bytes. Anything else -- a reader passed to
+// AddReader, a decompressed stream -- has to be buffered, because the format is
+// read back to front and a stream cannot go back.
+func parquetBytes(src io.Reader) (io.ReaderAt, int64, error) {
+	if at, size, ok := wholeFileAt(src); ok {
+		if size == 0 {
+			return nil, 0, emptyError("empty parquet file")
+		}
+		return at, size, nil
+	}
+	data, err := io.ReadAll(src)
+	if err != nil {
+		return nil, 0, parseError(err, "failed to read parquet data")
+	}
+	if len(data) == 0 {
+		return nil, 0, emptyError("empty parquet file")
+	}
+	return bytes.NewReader(data), int64(len(data)), nil
+}
+
+// wholeFileAt reports whether src is a whole file this read may address
+// directly, and how large it is. A source that has already been read from is
+// refused, because what the format needs is the file from its start and this
+// cannot know what the bytes already taken were.
+func wholeFileAt(src io.Reader) (io.ReaderAt, int64, bool) {
+	at, ok := src.(io.ReaderAt)
+	if !ok {
+		return nil, 0, false
+	}
+	seeker, ok := src.(io.Seeker)
+	if !ok {
+		return nil, 0, false
+	}
+	here, err := seeker.Seek(0, io.SeekCurrent)
+	if err != nil || here != 0 {
+		return nil, 0, false
+	}
+	size, err := seeker.Seek(0, io.SeekEnd)
+	if err != nil {
+		return nil, 0, false
+	}
+	if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+		return nil, 0, false
+	}
+	return at, size, true
+}
+
+// parquetBeginsWithMagic refuses bytes that do not begin the way the format
+// says, before the library is handed anything.
+func parquetBeginsWithMagic(at io.ReaderAt, size int64) error {
+	head := make([]byte, min(size, int64(len(parquetMagic))))
+	if _, err := at.ReadAt(head, 0); err != nil {
+		return parseError(err, "failed to read parquet header")
+	}
+	if !bytes.Equal(head, parquetMagic) {
+		return errNotParquet(head)
 	}
 	return nil
 }
@@ -64,21 +136,18 @@ func parquetFooterFits(data []byte) error {
 // readParquet reads a Parquet file in chunks. The whole file is buffered first
 // because the format is read back to front: its metadata is at the end.
 func readParquet(src io.Reader, opts Options, emit Emit) (Result, error) {
-	data, err := io.ReadAll(src)
+	at, size, err := parquetBytes(src)
 	if err != nil {
-		return Result{}, parseError(err, "failed to read parquet data")
+		return Result{}, err
 	}
-	if len(data) == 0 {
-		return Result{}, emptyError("empty parquet file")
+	if err := parquetBeginsWithMagic(at, size); err != nil {
+		return Result{}, err
 	}
-	if !bytes.HasPrefix(data, parquetMagic) {
-		return Result{}, errNotParquet(data[:min(len(data), len(parquetMagic))])
-	}
-	if err := parquetFooterFits(data); err != nil {
+	if err := parquetFooterFits(at, size); err != nil {
 		return Result{}, err
 	}
 
-	file, err := openParquet(data)
+	file, err := openParquet(at, size)
 	if err != nil {
 		return Result{}, err
 	}
@@ -176,7 +245,7 @@ func readParquet(src io.Reader, opts Options, emit Emit) (Result, error) {
 // damaged input turned into an error: a caller loading a file chosen by
 // someone else cannot defend against a panic, and every other malformed input
 // here is an error.
-func openParquet(data []byte) (file *parquet.File, err error) {
+func openParquet(at io.ReaderAt, size int64) (file *parquet.File, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			file = nil
@@ -185,7 +254,7 @@ func openParquet(data []byte) (file *parquet.File, err error) {
 	}()
 	// The page index and bloom filters are for pruning reads; this read scans
 	// every row, so neither is worth decoding.
-	file, err = parquet.OpenFile(bytes.NewReader(data), int64(len(data)),
+	file, err = parquet.OpenFile(at, size,
 		parquet.SkipPageIndex(true), parquet.SkipBloomFilters(true))
 	if err != nil {
 		return nil, parseError(err, "failed to create parquet reader")
