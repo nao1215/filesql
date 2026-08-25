@@ -1384,16 +1384,33 @@ func TestUUIDValidator(t *testing.T) {
 func TestFQDNValidator(t *testing.T) {
 	t.Parallel()
 
+	label63 := strings.Repeat("a", 63)
+	// 253 bytes without the root dot is the longest name there is, and the
+	// dot must not count towards it.
+	name253 := label63 + "." + label63 + "." + label63 + "." + strings.Repeat("a", 61)
+	name254 := label63 + "." + label63 + "." + label63 + "." + strings.Repeat("a", 62)
+
 	tests := []struct {
 		input   string
 		wantErr bool
 	}{
+		{name253, false},
+		{name253 + ".", false},
+		{name254, true},
 		{"example.com", false},
 		{"sub.example.com", false},
 		{"host.a1", false},
+		// The trailing dot is what makes a name fully qualified, so it is
+		// accepted and does not change the verdict.
+		{"example.com.", false},
+		{"sub.example.com.", false},
 		{"example", true},
 		{".example.com", true},
-		{"example.com.", true},
+		{"example.com..", true},
+		{".", true},
+		// The dialect accepts a label ending in a hyphen; this package does
+		// not, which prep's doc.go records as deliberate.
+		{"a-.com", true},
 		// go-playground requires a non-numeric top-level domain, so an
 		// all-numeric dotted string (an IPv4 address, or a bare numeric TLD) is
 		// not an FQDN.

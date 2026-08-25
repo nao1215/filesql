@@ -1357,11 +1357,17 @@ func newFQDNValidator() *fqdnValidator {
 
 // Validate checks if the value is a valid FQDN
 func (v *fqdnValidator) Validate(value string) string {
-	if strings.HasPrefix(value, ".") || strings.HasSuffix(value, ".") {
+	if strings.HasPrefix(value, ".") {
 		return errMsgValidFQDN
 	}
 
-	labels := strings.Split(value, ".")
+	// A trailing dot anchors the name at the DNS root, which is what "fully
+	// qualified" means, so example.com. and example.com are the same name and
+	// get the same verdict. A second trailing dot survives the strip and is
+	// caught below as an empty label.
+	name := strings.TrimSuffix(value, ".")
+
+	labels := strings.Split(name, ".")
 	if len(labels) < 2 {
 		return errMsgValidFQDN
 	}
