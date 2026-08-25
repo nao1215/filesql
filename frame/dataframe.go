@@ -1684,15 +1684,28 @@ func (df *DataFrame) DropNASubset(columns ...string) *DataFrame {
 //
 //	filled := df.FillNA(0)  // Replace every missing value with 0
 func (df *DataFrame) FillNA(value any) *DataFrame {
+	return df.filledNA(func(string) (any, bool) { return value, true })
+}
+
+// filledNA returns a copy of df with every missing cell replaced by what fill
+// answers for that cell's column. A fill that answers false leaves the cell as
+// it is. It is the rebuild FillNA and FillNAByColumn share; the two differ only
+// in what they fill a column with.
+//
+// A row that has no key for a column reads as nil, which is missing, so a filled
+// frame's rows all carry every column whether the originals did or not.
+func (df *DataFrame) filledNA(fill func(col string) (any, bool)) *DataFrame {
 	newRows := make([]map[string]any, len(df.rows))
 	for i, row := range df.rows {
 		newRow := make(map[string]any, len(df.columns))
 		for _, col := range df.columns {
-			if val, exists := row[col]; !exists || isNA(val) {
-				newRow[col] = value
-			} else {
-				newRow[col] = val
+			val := row[col]
+			if isNA(val) {
+				if fillValue, ok := fill(col); ok {
+					val = fillValue
+				}
 			}
+			newRow[col] = val
 		}
 		newRows[i] = newRow
 	}
@@ -1722,32 +1735,11 @@ func (df *DataFrame) FillNAByColumn(values map[string]any) *DataFrame {
 		return df.clone()
 	}
 
-	newRows := make([]map[string]any, len(df.rows))
-	for i, row := range df.rows {
-		newRow := make(map[string]any, len(df.columns))
-		for _, col := range df.columns {
-			val := row[col]
-			if isNA(val) {
-				if fillValue, ok := values[col]; ok {
-					newRow[col] = fillValue
-				} else {
-					// No fill value named for this column, so the cell is left
-					// as it is rather than normalized to nil: a caller filling
-					// one column did not ask about the others.
-					newRow[col] = val
-				}
-			} else {
-				newRow[col] = val
-			}
-		}
-		newRows[i] = newRow
-	}
-
-	columns := make([]string, len(df.columns))
-	copy(columns, df.columns)
-
-	return &DataFrame{
-		columns: columns,
-		rows:    newRows,
-	}
+	// A column the map does not name keeps its cell as it is rather than being
+	// normalized to nil: a caller filling one column did not ask about the
+	// others.
+	return df.filledNA(func(col string) (any, bool) {
+		fillValue, ok := values[col]
+		return fillValue, ok
+	})
 }

@@ -3082,6 +3082,22 @@ func TestDataFrame_FillNA(t *testing.T) {
 		records := df.ToRecords()
 		assert.Nil(t, records[0]["name"])
 	})
+
+	t.Run("a column the row has no key for is filled", func(t *testing.T) {
+		t.Parallel()
+
+		// The second record names no age, so the column exists in the frame and
+		// not in that row. It is missing, the same as a nil would be.
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"name": "Alice", "age": int64(30)},
+			{"name": "Bob"},
+		})
+
+		filled := df.FillNA("N/A")
+
+		records := filled.ToRecords()
+		assert.Equal(t, "N/A", records[1]["age"])
+	})
 }
 
 func TestDataFrame_FillNAByColumn(t *testing.T) {
@@ -3133,6 +3149,23 @@ func TestDataFrame_FillNAByColumn(t *testing.T) {
 
 		records := filled.ToRecords()
 		assert.Nil(t, records[0]["name"])
+	})
+
+	t.Run("a column the row has no key for is filled by name", func(t *testing.T) {
+		t.Parallel()
+
+		// The second record names neither age nor city. The named one is
+		// filled; the unnamed one is left missing, and reads back as nil.
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"name": "Alice", "age": int64(30), "city": "Tokyo"},
+			{"name": "Bob"},
+		})
+
+		filled := df.FillNAByColumn(map[string]any{"age": int64(0)})
+
+		records := filled.ToRecords()
+		assert.Equal(t, int64(0), records[1]["age"])
+		assert.Nil(t, records[1]["city"])
 	})
 }
 
