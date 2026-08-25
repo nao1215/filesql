@@ -1,16 +1,20 @@
-//nolint:errcheck // Test cleanup error handling is intentionally ignored
+//nolint:errcheck,gosec // Test cleanup errors are intentionally ignored, and the hand-built headers have fixed widths
 package filesql
 
 import (
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/s2"
 	"github.com/klauspost/compress/snappy"
@@ -804,4 +808,197 @@ func TestCompressionFactory_CreateWriterForFile(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, testData, readData)
 	})
+}
+
+// xzStreamDeclaring builds a minimal xz stream whose LZMA2 filter property asks
+// for the dictionary the prop byte encodes: dict = (2 | (prop & 1)) << (prop/2 + 11),
+// so 20 is 4 MiB, 28 is what "xz -9" writes, and 40 is the format's maximum of
+// 4 GiB. The payload is deliberately truncated; what is under test is what the
+// header alone costs.
+func xzStreamDeclaring(prop byte) []byte {
+	var b bytes.Buffer
+	b.Write([]byte{0xFD, '7', 'z', 'X', 'Z', 0x00})
+	flags := []byte{0x00, 0x00}
+	b.Write(flags)
+	_ = binary.Write(&b, binary.LittleEndian, crc32.ChecksumIEEE(flags))
+
+	fields := []byte{0x00, 0x00, 0x21, 0x01, prop}
+	total := len(fields) + 4 // the CRC is part of Block Header Size
+	for total%4 != 0 {
+		fields = append(fields, 0x00)
+		total = len(fields) + 4
+	}
+	fields[0] = byte(total/4 - 1)
+	b.Write(fields)
+	_ = binary.Write(&b, binary.LittleEndian, crc32.ChecksumIEEE(fields))
+	b.Write([]byte{0x01, 0x00, 0x00, 'A'})
+	return b.Bytes()
+}
+
+// zstdFrameDeclaring builds a minimal zstd frame holding body in one raw block,
+// whose window descriptor asks for the window the exponent selects:
+// windowLog = 10 + exp, so 10 is 1 MiB and 19 is 512 MiB.
+func zstdFrameDeclaring(exp byte, body []byte) []byte {
+	b := []byte{0x28, 0xB5, 0x2F, 0xFD, 0x00, exp << 3}
+	v := uint32(1) | (uint32(len(body)) << 3) // last block, raw
+	b = append(b, byte(v), byte(v>>8), byte(v>>16))
+	return append(b, body...)
+}
+
+// TestCompressionRefusesAnImplausibleDeclaredSize pins that what a damaged or
+// hostile stream costs is bounded by this package's own limit rather than by the
+// number the stream asserts.
+//
+// It was not. An xz file declares its dictionary size in one byte and a zstd
+// frame declares its window in one byte, and both were honored as written: a
+// 28-byte xz stream asking for 4 GiB allocated 4 GiB before failing, and a
+// 14-byte zstd frame asking for 512 MiB allocated 513 MiB and then loaded its
+// one row. Twenty opens took peak resident memory to 8224 MiB and 1050 MiB
+// respectively.
+//
+// The oracle is bytes allocated rather than wall time: the allocation is what
+// costs, and a large one only becomes resident once the runtime reuses the span,
+// so a stopwatch reports a fresh process as fast while the harm is real. The
+// test does not run in parallel because ReadMemStats would otherwise count what
+// the tests beside it allocate.
+func TestCompressionRefusesAnImplausibleDeclaredSize(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ct   CompressionType
+		data []byte
+	}{
+		{name: "xz asking for a 4 GiB dictionary", ct: CompressionXZ, data: xzStreamDeclaring(40)},
+		{name: "xz asking for a 1 GiB dictionary", ct: CompressionXZ, data: xzStreamDeclaring(36)},
+		{name: "zstd asking for a 512 MiB window", ct: CompressionZSTD, data: zstdFrameDeclaring(19, []byte("id\n1\n"))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var before, after runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+
+			reader, cleanup, err := NewCompressionHandler(tc.ct).CreateReader(bytes.NewReader(tc.data))
+			if err == nil {
+				_, err = io.Copy(io.Discard, reader)
+				cleanup()
+			}
+			runtime.ReadMemStats(&after)
+			allocated := after.TotalAlloc - before.TotalAlloc
+
+			require.Error(t, err, "a stream declaring more than the limit must be refused")
+			assert.ErrorIs(t, err, ErrCompression)
+			assert.Less(t, allocated, uint64(32<<20),
+				"the refusal must not pay for the size the stream asked for; allocated %d MiB", allocated>>20)
+		})
+	}
+}
+
+// TestCompressionAcceptsTheSizesRealFilesDeclare is the other side of the
+// boundary: the limit cannot be tightened into refusing files people have.
+// "xz -6" declares 8 MiB, "xz -9" declares 64 MiB, this package's own writer
+// declares 8 MiB, and the zstd CLI declares 2 MiB at -3 and 8 MiB at -19.
+func TestCompressionAcceptsTheSizesRealFilesDeclare(t *testing.T) {
+	t.Parallel()
+
+	t.Run("xz dictionaries up to what xz -9 writes", func(t *testing.T) {
+		t.Parallel()
+
+		for _, prop := range []byte{20, 22, 28} { // 4 MiB, 8 MiB, 64 MiB
+			reader, cleanup, err := NewCompressionHandler(CompressionXZ).CreateReader(
+				bytes.NewReader(xzStreamDeclaring(prop)))
+			require.NoError(t, err, "prop %d is a dictionary real files declare", prop)
+			_, err = io.Copy(io.Discard, reader)
+			// The payload is truncated on purpose, so the read fails on the
+			// data rather than on the declared size.
+			assert.NotErrorIs(t, err, ErrCompression, "prop %d must not be refused for its size", prop)
+			cleanup()
+		}
+	})
+
+	t.Run("zstd windows up to the limit", func(t *testing.T) {
+		t.Parallel()
+
+		for _, exp := range []byte{10, 13, 17} { // 1 MiB, 8 MiB, 128 MiB
+			reader, cleanup, err := NewCompressionHandler(CompressionZSTD).CreateReader(
+				bytes.NewReader(zstdFrameDeclaring(exp, []byte("id\n1\n"))))
+			require.NoError(t, err)
+			got, err := io.ReadAll(reader)
+			require.NoError(t, err, "exp %d is a window real files declare", exp)
+			assert.Equal(t, "id\n1\n", string(got))
+			cleanup()
+		}
+	})
+
+	t.Run("a round trip through this package's own writers", func(t *testing.T) {
+		t.Parallel()
+
+		payload := []byte("id,name\n1,alice\n2,bob\n")
+		for _, ct := range []CompressionType{CompressionXZ, CompressionZSTD} {
+			var buf bytes.Buffer
+			w, closeWriter, err := NewCompressionHandler(ct).CreateWriter(&buf)
+			require.NoError(t, err)
+			_, err = w.Write(payload)
+			require.NoError(t, err)
+			require.NoError(t, closeWriter())
+
+			reader, cleanup, err := NewCompressionHandler(ct).CreateReader(bytes.NewReader(buf.Bytes()))
+			require.NoError(t, err)
+			got, err := io.ReadAll(reader)
+			require.NoError(t, err)
+			assert.Equal(t, payload, got)
+			cleanup()
+		}
+	})
+}
+
+// TestEveryCodecFailsFastOnADamagedStream is the invariant that would have
+// caught both: whatever a stream's header says, a codec that cannot read it
+// gives up in a fixed budget rather than in one proportional to the number the
+// header asserts.
+func TestEveryCodecFailsFastOnADamagedStream(t *testing.T) {
+	t.Parallel()
+
+	payload := bytes.Repeat([]byte("id,name,amount\n1,alice,2.5\n"), 200)
+	for _, ct := range []CompressionType{
+		CompressionGZ, CompressionXZ, CompressionZSTD, CompressionZLIB,
+		CompressionSNAPPY, CompressionS2, CompressionLZ4,
+	} {
+		t.Run(ct.Extension(), func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			w, closeWriter, err := NewCompressionHandler(ct).CreateWriter(&buf)
+			require.NoError(t, err)
+			_, err = w.Write(payload)
+			require.NoError(t, err)
+			require.NoError(t, closeWriter())
+			good := buf.Bytes()
+
+			// Sixteen prefixes of the stream, and the stream with each of its
+			// first sixteen bytes set to 0xFF and to zero: the header fields
+			// that drive an allocation all live there.
+			cases := make([][]byte, 0, 48)
+			for i := 1; i <= 16; i++ {
+				cases = append(cases, append([]byte(nil), good[:len(good)*i/17]...))
+			}
+			for i := 0; i < 16 && i < len(good); i++ {
+				m := append([]byte(nil), good...)
+				m[i] = 0xFF
+				cases = append(cases, m)
+				m2 := append([]byte(nil), good...)
+				m2[i] = 0x00
+				cases = append(cases, m2)
+			}
+
+			for idx, data := range cases {
+				start := time.Now()
+				reader, cleanup, err := NewCompressionHandler(ct).CreateReader(bytes.NewReader(data))
+				if err == nil {
+					_, _ = io.Copy(io.Discard, io.LimitReader(reader, 1<<20))
+					cleanup()
+				}
+				assert.Less(t, time.Since(start), 500*time.Millisecond,
+					"case %d of %s took too long, which is what an allocation driven by the header looks like", idx, ct.Extension())
+			}
+		})
+	}
 }
