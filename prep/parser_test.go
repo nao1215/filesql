@@ -483,6 +483,12 @@ func TestGetStructType(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Errorf("getStructType() error = %v, wantErr %v", err, tt.wantErr)
 			}
+			// Every refusal here carries the one sentinel, whichever of the
+			// shapes it is, so a caller can match on it rather than on the
+			// wording that names the shape.
+			if tt.wantErr && !errors.Is(err, ErrStructSlicePointer) {
+				t.Errorf("getStructType() error = %v, want it to wrap ErrStructSlicePointer", err)
+			}
 		})
 	}
 }
