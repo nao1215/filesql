@@ -638,6 +638,7 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://debimate.jp/"><img src="https://avatars.githubusercontent.com/u/22737008?v=4?s=75" width="75px;" alt="CHIKAMATSU Naohiro"/><br /><sub><b>CHIKAMATSU Naohiro</b></sub></a><br /><a href="https://github.com/nao1215/filesql/commits?author=nao1215" title="Code">💻</a> <a href="https://github.com/nao1215/filesql/commits?author=nao1215" title="Documentation">📖</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://sayportfolio.vercel.app/"><img src="https://avatars.githubusercontent.com/u/240962040?v=4?s=75" width="75px;" alt="Sai Asish Y"/><br /><sub><b>Sai Asish Y</b></sub></a><br /><a href="https://github.com/nao1215/filesql/pulls?q=is%3Apr+author%3ASAY-5" title="Documentation">📖</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/krishna3554"><img src="https://avatars.githubusercontent.com/u/87197325?v=4?s=75" width="75px;" alt="Krishna lokhande"/><br /><sub><b>Krishna lokhande</b></sub></a><br /><a href="https://github.com/nao1215/filesql/issues?q=author%3Akrishna3554" title="Bug reports">🐛</a></td>
     </tr>
   </tbody>
 </table>

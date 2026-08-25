@@ -317,25 +317,76 @@ func outOfRangeInt(negative, strict bool, shown string) (driver.Value, error) {
 // numericPrefix returns the value of the longest leading run of s that parses as
 // a number, or 0 when there is none. It reproduces MySQL's coercion of a string
 // to a number.
+//
+// The run is measured as it is scanned rather than taken as everything that
+// looks numeric and parsed afterwards. Scanning greedily and parsing once read
+// "1.2.3" as a five-character candidate, which no parser accepts, so a string
+// with a perfectly good number in front of it coerced to 0 — the answer for a
+// string with no number in it at all — where MySQL answers 1.2. The same
+// greedy scan stopped at the "e" of "1e5" and answered 1 for a number MySQL
+// reads whole as 100000.
+//
+// So the scanner follows the grammar: an optional sign, digits around at most
+// one point, and an exponent only when a digit follows it. end trails one
+// character past the last position that forms a number, which is what makes a
+// broken tail ("1e", "1.2.3") end the number instead of voiding it.
 func numericPrefix(s string) float64 {
 	s = strings.TrimSpace(s)
+	i := 0
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		i++
+	}
 	end := 0
-	for end < len(s) {
-		c := s[end]
-		isDigit := c >= '0' && c <= '9'
-		isSign := (c == '+' || c == '-') && end == 0
-		isPoint := c == '.'
-		if !isDigit && !isSign && !isPoint {
-			break
+	for i < len(s) && isASCIIDigit(s[i]) {
+		i++
+		end = i
+	}
+	if i < len(s) && s[i] == '.' {
+		i++
+		// "1." is a number and ".5" is one; "." alone is not, so the point
+		// extends the run only once a digit has been seen on one side of it.
+		if end > 0 {
+			end = i
 		}
-		end++
+		for i < len(s) && isASCIIDigit(s[i]) {
+			i++
+			end = i
+		}
+	}
+	if end > 0 && i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+		j := i + 1
+		if j < len(s) && (s[j] == '+' || s[j] == '-') {
+			j++
+		}
+		if j < len(s) && isASCIIDigit(s[j]) {
+			for j < len(s) && isASCIIDigit(s[j]) {
+				j++
+			}
+			end = j
+		}
+	}
+	if end == 0 {
+		return 0
 	}
 	f, err := strconv.ParseFloat(s[:end], 64)
+	// A run too large for a float64 is a number all the same, and ParseFloat
+	// hands back the infinity along with the range error. MySQL answers the
+	// bound of the type there rather than nothing, and the bound is also what
+	// keeps an integer cast on the same path as a well-formed number too large
+	// to hold, which castToInt already clamps.
+	if errors.Is(err, strconv.ErrRange) {
+		return math.Copysign(math.MaxFloat64, f)
+	}
 	if err != nil {
 		return 0
 	}
 	return f
 }
+
+// isASCIIDigit reports whether c is one of the digits a number is written with.
+// unicode.IsDigit is wider than that: it accepts digits of other scripts, which
+// no numeric parser here reads.
+func isASCIIDigit(c byte) bool { return c >= '0' && c <= '9' }
 
 func castToFloat(v driver.Value, strict bool) (driver.Value, error) {
 	if f, ok := toFloat(v); ok {
