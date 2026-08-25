@@ -193,32 +193,7 @@ func checkUnsupportedGoogleSQL(tokens []token) error {
 // googlesqlCallPass rewrites the GoogleSQL function-call rules (C-1, G-2, G-4,
 // G-6, G-7, G-8), recursing into the arguments of recognized calls.
 func googlesqlCallPass(tokens []token) ([]token, error) {
-	out := make([]token, 0, len(tokens))
-	i := 0
-	for i < len(tokens) {
-		t := tokens[i]
-		if t.kind == tokWord {
-			open := nextSig(tokens, i+1)
-			if open >= 0 && isOpEq(tokens[open], "(") {
-				closeIdx := matchParen(tokens, open)
-				if closeIdx < 0 {
-					return nil, fmt.Errorf("%w: unbalanced parentheses after %s", ErrInvalidSyntax, t.text)
-				}
-				repl, handled, err := googlesqlRewriteCall(tokens, i, open, closeIdx)
-				if err != nil {
-					return nil, err
-				}
-				if handled {
-					out = append(out, repl...)
-					i = closeIdx + 1
-					continue
-				}
-			}
-		}
-		out = append(out, t)
-		i++
-	}
-	return out, nil
+	return walkCalls(tokens, googlesqlRewriteCall)
 }
 
 func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, error) {

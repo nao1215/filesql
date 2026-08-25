@@ -4,8 +4,6 @@ import (
 	"errors"
 	"io"
 	"strings"
-
-	"github.com/nao1215/filesql/internal/infer"
 )
 
 // The delimiters the two delimited formats are separated by.
@@ -53,12 +51,8 @@ func readDelimited(src io.Reader, delimiter rune, format Format, opts Options, e
 	}
 
 	header := headerRecord
-	evidence := make([]infer.Evidence, len(header))
-	chunkSize := chunkSizeOf(opts)
 	result := Result{Header: header}
-
-	var chunk [][]string
-	emitted := false
+	rows := newChunker(header, opts, emit)
 	rowNum := 0
 	for {
 		record, err := records.Read()
@@ -83,50 +77,17 @@ func readDelimited(src io.Reader, delimiter rune, format Format, opts Options, e
 			}
 		}
 
-		addEvidence(evidence, record)
-		chunk = append(chunk, record)
-		if len(chunk) >= chunkSize {
-			result.Rows += len(chunk)
-			if err := emit(&Chunk{Header: header, Records: chunk, Types: typesOf(evidence)}); err != nil {
-				return Result{}, err
-			}
-			chunk = nil
-			emitted = true
-		}
-	}
-
-	// A file whose records were all skipped, and one that is nothing but a
-	// header, still emit an empty chunk so the table is made with the columns
-	// the header names.
-	if len(chunk) > 0 || !emitted {
-		result.Rows += len(chunk)
-		if err := emit(&Chunk{Header: header, Records: chunk, Types: typesOf(evidence)}); err != nil {
+		if err := rows.add(record); err != nil {
 			return Result{}, err
 		}
 	}
-	result.Types = typesOf(evidence)
+
+	if err := rows.finish(); err != nil {
+		return Result{}, err
+	}
+	result.Rows = rows.rows
+	result.Types = rows.types()
 	return result, nil
-}
-
-// addEvidence folds one record into the evidence of the columns it covers. A
-// record shorter than the header leaves the columns it does not reach alone,
-// which is what a missing cell means.
-func addEvidence(evidence []infer.Evidence, record []string) {
-	for i, value := range record {
-		if i >= len(evidence) {
-			return
-		}
-		evidence[i].Add(value)
-	}
-}
-
-// typesOf is the type each column's evidence requires.
-func typesOf(evidence []infer.Evidence) []infer.Type {
-	types := make([]infer.Type, len(evidence))
-	for i := range evidence {
-		types[i] = evidence[i].Type()
-	}
-	return types
 }
 
 // ValidateColumnNames reports a header that names one column twice.
