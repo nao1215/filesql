@@ -3,8 +3,11 @@ package writer
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/nao1215/filesql/internal/reader"
 )
 
 // TestFormatsWriteWhatTheyRead holds each format's output against the bytes a
@@ -424,6 +427,53 @@ func TestTSVRecordWritesOneRecord(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "failed to write TSV record") {
 			t.Errorf("error = %q, want it to name the record it could not write", err.Error())
+		}
+	})
+
+	t.Run("a quote is written as is", func(t *testing.T) {
+		t.Parallel()
+
+		var out bytes.Buffer
+		if err := TSVRecord(&out, []string{"alice", `5'9" tall`}, "\n"); err != nil {
+			t.Fatalf("TSVRecord() = %v", err)
+		}
+		if got, want := out.String(), "alice\t5'9\" tall\n"; got != want {
+			t.Errorf("output = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("a record round trips through the TSV reader", func(t *testing.T) {
+		t.Parallel()
+
+		record := []string{`said "hi"`, `a""b`, "", "plain"}
+
+		var out bytes.Buffer
+		if err := TSVRecord(&out, record, "\r\n"); err != nil {
+			t.Fatalf("TSVRecord() = %v", err)
+		}
+		got, err := reader.NewTSVReader(strings.NewReader(out.String())).ReadAll()
+		if err != nil {
+			t.Fatalf("ReadAll() = %v", err)
+		}
+		if len(got) != 1 || !slices.Equal(got[0], record) {
+			t.Errorf("read back %q, want %q", got, [][]string{record})
+		}
+	})
+
+	t.Run("a value the format cannot hold is refused and nothing is written", func(t *testing.T) {
+		t.Parallel()
+
+		for _, field := range []string{"a\tb", "a\nb", "a\rb"} {
+			var out bytes.Buffer
+			err := TSVRecord(&out, []string{field}, "\n")
+
+			var writeErr *Error
+			if !errors.As(err, &writeErr) || writeErr.Kind != KindUnrepresentable {
+				t.Errorf("field %q: error = %v, want an unrepresentable one", field, err)
+			}
+			if out.Len() != 0 {
+				t.Errorf("field %q: wrote %q, want nothing", field, out.String())
+			}
 		}
 	})
 }

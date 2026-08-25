@@ -2,11 +2,9 @@ package parser
 
 import (
 	"errors"
-	"fmt"
 	"io"
 
 	"github.com/nao1215/filesql/internal/reader"
-	"github.com/nao1215/filesql/internal/writer"
 )
 
 // ErrTSVSyntax reports tab-separated input that does not describe a table: a
@@ -32,30 +30,4 @@ type TSVReader = reader.TSVReader
 // NewTSVReader returns a reader over the tab-separated records in r.
 func NewTSVReader(r io.Reader) *TSVReader {
 	return reader.NewTSVReader(r)
-}
-
-// WriteTSVRecord writes one record as a line of tab-separated fields, and
-// reports a field the format cannot hold rather than writing something else.
-//
-// A CSV writer would quote such a field instead, and to this reader a quote is
-// data, so what came back would carry the quotes the writer added.
-func WriteTSVRecord(w io.Writer, record []string) error {
-	return WriteTSVRecordLineEnding(w, record, "\n")
-}
-
-// WriteTSVRecordLineEnding is WriteTSVRecord with the line terminator named,
-// for a writer that has to keep the one its destination already uses: a file
-// rewritten with a different terminator differs on every line, including the
-// ones nobody edited.
-//
-// An empty lineEnding writes "\n", so a zero value behaves as WriteTSVRecord
-// does rather than running the records together.
-func WriteTSVRecordLineEnding(w io.Writer, record []string, lineEnding string) error {
-	err := writer.TSVRecord(w, record, lineEnding)
-
-	var writeErr *writer.Error
-	if errors.As(err, &writeErr) && writeErr.Kind == writer.KindUnrepresentable {
-		return fmt.Errorf("%w: %s", ErrTSVUnrepresentable, writeErr.Error())
-	}
-	return err
 }

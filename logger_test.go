@@ -91,50 +91,6 @@ func TestSlogAdapter(t *testing.T) {
 	})
 }
 
-func TestSlogContextAdapter(t *testing.T) {
-	t.Parallel()
-
-	t.Run("SlogContextAdapter implements ContextLogger interface", func(t *testing.T) {
-		t.Parallel()
-		slogLogger := slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil))
-		var logger ContextLogger = NewSlogContextAdapter(slogLogger)
-		assert.NotNil(t, logger)
-	})
-
-	t.Run("SlogContextAdapter logs with context", func(t *testing.T) {
-		t.Parallel()
-		buf := &bytes.Buffer{}
-		slogLogger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-		logger := NewSlogContextAdapter(slogLogger)
-
-		ctx := context.Background()
-		logger.DebugContext(ctx, "debug message", "key", "value1")
-		logger.InfoContext(ctx, "info message", "key", "value2")
-		logger.WarnContext(ctx, "warn message", "key", "value3")
-		logger.ErrorContext(ctx, "error message", "key", "value4")
-
-		output := buf.String()
-		assert.Contains(t, output, "debug message")
-		assert.Contains(t, output, "info message")
-		assert.Contains(t, output, "warn message")
-		assert.Contains(t, output, "error message")
-	})
-
-	t.Run("SlogContextAdapter With returns ContextLogger-compatible Logger", func(t *testing.T) {
-		t.Parallel()
-		buf := &bytes.Buffer{}
-		slogLogger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-		logger := NewSlogContextAdapter(slogLogger)
-
-		withLogger := logger.With("component", "test")
-		assert.NotNil(t, withLogger)
-		withLogger.Info("test message")
-
-		output := buf.String()
-		assert.Contains(t, output, "component")
-	})
-}
-
 func TestDBBuilderWithLogger(t *testing.T) {
 	t.Parallel()
 

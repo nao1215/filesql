@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -341,86 +340,6 @@ func TestParse_TSVTakesFieldsLiterally(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, [][]string{{"alice", "a,b"}}, result.Records)
-	})
-}
-
-func TestWriteTSVRecord(t *testing.T) {
-	t.Parallel()
-
-	t.Run("a quote is written as is", func(t *testing.T) {
-		t.Parallel()
-
-		var out strings.Builder
-		require.NoError(t, WriteTSVRecord(&out, []string{"alice", `5'9" tall`}))
-		assert.Equal(t, "alice\t5'9\" tall\n", out.String())
-	})
-
-	t.Run("a value round trips through the reader", func(t *testing.T) {
-		t.Parallel()
-
-		record := []string{`said "hi"`, `a""b`, "", "plain"}
-
-		var out strings.Builder
-		require.NoError(t, WriteTSVRecord(&out, record))
-		got, err := NewTSVReader(strings.NewReader(out.String())).ReadAll()
-
-		require.NoError(t, err)
-		assert.Equal(t, [][]string{record}, got)
-	})
-
-	t.Run("a value the format cannot hold is refused", func(t *testing.T) {
-		t.Parallel()
-
-		for _, field := range []string{"a\tb", "a\nb", "a\rb"} {
-			var out strings.Builder
-			err := WriteTSVRecord(&out, []string{field})
-
-			require.ErrorIs(t, err, ErrTSVUnrepresentable, "field %q", field)
-			assert.Empty(t, out.String(), "nothing is written for a refused record")
-		}
-	})
-}
-
-func TestWriteTSVRecordLineEnding(t *testing.T) {
-	t.Parallel()
-
-	t.Run("writes the terminator it is given", func(t *testing.T) {
-		t.Parallel()
-
-		var out strings.Builder
-		require.NoError(t, WriteTSVRecordLineEnding(&out, []string{"id", "v"}, "\r\n"))
-		assert.Equal(t, "id\tv\r\n", out.String())
-	})
-
-	t.Run("an empty terminator still ends the record", func(t *testing.T) {
-		t.Parallel()
-
-		var out strings.Builder
-		require.NoError(t, WriteTSVRecordLineEnding(&out, []string{"id", "v"}, ""))
-		assert.Equal(t, "id\tv\n", out.String(), "records that run together are not TSV at all")
-	})
-
-	t.Run("a CRLF record round trips through the reader", func(t *testing.T) {
-		t.Parallel()
-
-		record := []string{"1", "a"}
-
-		var out strings.Builder
-		require.NoError(t, WriteTSVRecordLineEnding(&out, record, "\r\n"))
-		got, err := NewTSVReader(strings.NewReader(out.String())).ReadAll()
-
-		require.NoError(t, err)
-		assert.Equal(t, [][]string{record}, got)
-	})
-
-	t.Run("a value the format cannot hold is refused whatever the terminator", func(t *testing.T) {
-		t.Parallel()
-
-		var out strings.Builder
-		err := WriteTSVRecordLineEnding(&out, []string{"a\tb"}, "\r\n")
-
-		require.ErrorIs(t, err, ErrTSVUnrepresentable)
-		assert.Empty(t, out.String(), "nothing is written for a refused record")
 	})
 }
 
@@ -1501,12 +1420,6 @@ func TestNormalizeLineEndings(t *testing.T) {
 	}
 }
 
-// failingWriter refuses every write, which is what a full disk looks like to a
-// record writer.
-type failingWriter struct{}
-
-func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
-
 func TestParserSurfaceEdges(t *testing.T) {
 	t.Parallel()
 
@@ -1530,14 +1443,5 @@ func TestParserSurfaceEdges(t *testing.T) {
 		// A cell that spells no number keeps its text rather than becoming zero.
 		assert.Equal(t, "n/a", ParseValue("n/a", TypeInteger))
 		assert.Equal(t, "n/a", ParseValue("n/a", TypeReal))
-	})
-
-	t.Run("a write that fails is reported with the record's error", func(t *testing.T) {
-		t.Parallel()
-
-		err := WriteTSVRecordLineEnding(failingWriter{}, []string{"a", "b"}, "\r\n")
-
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to write TSV record")
 	})
 }
