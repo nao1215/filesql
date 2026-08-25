@@ -399,11 +399,11 @@ The multiplier belongs to the format rather than to the library. The same 200,00
 |--------|------|----------|---------------------|
 | CSV | 32.8 MB | 101 MB | 2.1x |
 | Parquet | 32.2 MB | 111 MB | 2.1x |
-| XLSX | 17.6 MB | 351 MB | about 20x |
+| XLSX | 17.6 MB | 422 MB | about 24x |
 
 A file this package did not write can still cost more than its size, and two numbers are what decide that. filesql checks the ones it can reach: an xz stream's dictionary, a zstd frame's window, and a Parquet file's footer length are all read and refused before the library that would allocate them sees the file. A Parquet page header is not reachable, because it sits inside a column chunk and is decoded by the library as the rows are read, and it states the size of the page's statistics: a damaged 473-byte file can cost 98 MB that way. Budget for that where the files come from somewhere you do not control.
 
-A workbook is still the one to plan around, and what it costs depends on whether it holds dates. Reading its rows is 267 MB for an 18.5 MB workbook; asking the library about one cell's style makes it build the whole sheet as objects, which is another 1470 MB. filesql asks only when the workbook's style table holds a date format, since a cell is a date because of its style, so a workbook of plain values costs about twenty times its size and the same workbook with one date-formatted cell costs about a hundred. Convert a large dated table out of XLSX before loading it. `go test -tags benchmark -run TestLoadMemoryFootprintByFormat -v .` prints this table.
+A workbook is the one to plan around, and it costs the same whether or not it holds dates. Its rows are read as a stream, and the date cells are found by reading the sheet's own XML, so nothing in a load asks the library about one cell at a time: doing that once makes it build the whole sheet as objects, which was another 1470 MB. XLSX is a compressed container, so the multiplier is against a smaller file than the same table as CSV. `go test -tags benchmark -run TestLoadMemoryFootprintByFormat -v .` prints this table.
 
 Use `SetDefaultChunkSize` on the builder when you need to tune chunked loading:
 

@@ -87,24 +87,33 @@ func NormalizeXLSXDates(f *excelize.File, sheet string, rows [][]string) [][]str
 // can reason about, and the answer falls back to looking at the cells.
 const maxCellFormats = 1 << 16
 
-// definesADateStyle reports whether the workbook's style table holds a number
-// format that names a calendar day.
+// dateStyleIDs returns the ids of the workbook's styles whose number format
+// names a calendar day, and whether the table was short enough to walk to its
+// end.
 //
 // It reads the style table alone, which is cheap, and says nothing about which
-// cells wear which style. A false answer is conclusive -- no style, no date
-// cell -- and a true one only means the cells have to be looked at.
-func definesADateStyle(f *excelize.File) bool {
+// cells wear which style. An empty set from a complete walk is conclusive -- no
+// style, no date cell -- and anything else only means the cells have to be
+// looked at.
+func dateStyleIDs(f *excelize.File) (map[int]bool, bool) {
+	dated := make(map[int]bool)
 	for id := range maxCellFormats {
 		style, err := f.GetStyle(id)
 		if err != nil || style == nil {
-			return false
+			return dated, true
 		}
 		if styleHoldsDate(f, id) {
-			return true
+			dated[id] = true
 		}
 	}
 	// A table this long is not one to draw a conclusion from.
-	return true
+	return dated, false
+}
+
+// definesADateStyle reports whether the workbook could hold a date cell at all.
+func definesADateStyle(f *excelize.File) bool {
+	dated, complete := dateStyleIDs(f)
+	return len(dated) > 0 || !complete
 }
 
 // builtinDateNumberFormats are the number-format IDs whose rendering names a
@@ -229,6 +238,14 @@ func isoFromSerial(f *excelize.File, sheet, axis string, date1904 bool) (string,
 	if err != nil {
 		return "", false
 	}
+	return isoFromRaw(raw, date1904)
+}
+
+// isoFromRaw renders a cell's stored serial as ISO 8601. It reports false when
+// the text is not a serial -- a date stored as text, which is already in
+// whatever form the file gave it -- and for the serials the 1900 system does
+// not turn into a day.
+func isoFromRaw(raw string, date1904 bool) (string, bool) {
 	var ok bool
 	serial, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
 	if err != nil {

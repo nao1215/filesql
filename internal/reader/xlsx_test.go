@@ -251,3 +251,150 @@ func TestReadXLSXGapRowsCostNothing(t *testing.T) {
 		t.Errorf("reading a %d-byte workbook allocated %d MiB", len(data), allocated>>20)
 	}
 }
+
+// TestReadXLSXDates covers the date normalization where a load meets it: the
+// rows a sheet read produces, rather than the exported helper. A workbook
+// stores a date as a serial number and a number format, so what a cell looks
+// like depends on how the sheet was formatted, and only one of those forms
+// sorts chronologically.
+//
+// The sheet these build is named "people" with "Sheet1" deleted, which is also
+// the case that says the sheet's part cannot be guessed from its position: the
+// styles are read out of the sheet's own XML, and finding that XML follows the
+// workbook's relationships.
+func TestReadXLSXDates(t *testing.T) {
+	t.Parallel()
+
+	// 45000 is 2023-03-15, and 45000.5 is midday on it.
+	for _, tc := range []struct {
+		name   string
+		numFmt int
+		custom string
+		value  any
+		want   string
+	}{
+		{name: "the American built-in date format", numFmt: 14, value: 45000, want: "2023-03-15"},
+		{name: "a day and abbreviated month", numFmt: 16, value: 45000, want: "2023-03-15"},
+		{name: "a date and time", numFmt: 22, value: 45000.5, want: "2023-03-15 12:00:00"},
+		{name: "a Japanese locale date format", numFmt: 27, value: 45000, want: "2023-03-15"},
+		{name: "a custom ISO format", custom: "yyyy-mm-dd", value: 45000, want: "2023-03-15"},
+		{name: "a custom format wearing a color", custom: "[Magenta]yyyy-mm-dd", value: 45000, want: "2023-03-15"},
+		// A cell the workbook does not call a date keeps what the sheet shows.
+		{name: "a plain number", numFmt: 3, value: 45000, want: "45,000"},
+		{name: "a time of day", numFmt: 18, value: 45000.5, want: "12:00 PM"},
+		{name: "an elapsed duration", numFmt: 46, value: 1.5, want: "36:00:00"},
+		{name: "a percentage", numFmt: 10, value: 0.5, want: "50.00%"},
+		// Serial 60 is a February 29, 1900 no calendar has, kept so files count
+		// days the way Lotus 1-2-3 did. It names no day, so it is not converted.
+		{name: "the phantom day of the 1900 system", numFmt: 14, value: 60, want: "02-29-00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			data := datedWorkbook(t, tc.numFmt, tc.custom, tc.value, false)
+
+			_, records, err := readSheet(t, data)
+
+			require.NoError(t, err)
+			require.Len(t, records, 1)
+			assert.Equal(t, tc.want, records[0][0])
+		})
+	}
+
+	t.Run("text that merely looks like a date is untouched", func(t *testing.T) {
+		t.Parallel()
+
+		data := workbookOf(t, [][]string{{"when"}, {"2023-03-15"}, {"15-Mar-23"}})
+
+		_, records, err := readSheet(t, data)
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"2023-03-15"}, {"15-Mar-23"}}, records)
+	})
+
+	t.Run("a workbook counting from 1904 converts against 1904", func(t *testing.T) {
+		t.Parallel()
+
+		// The 1904 system counts from a day 1462 days later, so the same serial
+		// names a day four years and a day further on.
+		data := datedWorkbook(t, 14, "", 45000, true)
+
+		_, records, err := readSheet(t, data)
+
+		require.NoError(t, err)
+		require.Len(t, records, 1)
+		assert.Equal(t, "2027-03-16", records[0][0])
+	})
+
+	t.Run("a date beside values that are not dates", func(t *testing.T) {
+		t.Parallel()
+
+		const sheet = "people"
+		f := excelize.NewFile()
+		defer func() { require.NoError(t, f.Close()) }()
+		index, err := f.NewSheet(sheet)
+		require.NoError(t, err)
+		f.SetActiveSheet(index)
+		require.NoError(t, f.DeleteSheet("Sheet1"))
+
+		style, err := f.NewStyle(&excelize.Style{NumFmt: 14})
+		require.NoError(t, err)
+		require.NoError(t, f.SetCellStr(sheet, "A1", "name"))
+		require.NoError(t, f.SetCellStr(sheet, "B1", "joined"))
+		require.NoError(t, f.SetCellStr(sheet, "C1", "score"))
+		require.NoError(t, f.SetCellStr(sheet, "A2", "alice"))
+		require.NoError(t, f.SetCellValue(sheet, "B2", 45000))
+		require.NoError(t, f.SetCellStyle(sheet, "B2", "B2", style))
+		require.NoError(t, f.SetCellValue(sheet, "C2", 42))
+		require.NoError(t, f.SetCellStr(sheet, "A3", "bob"))
+		require.NoError(t, f.SetCellValue(sheet, "B3", 45001))
+		require.NoError(t, f.SetCellStyle(sheet, "B3", "B3", style))
+		require.NoError(t, f.SetCellValue(sheet, "C3", 7))
+
+		var buf bytes.Buffer
+		require.NoError(t, f.Write(&buf))
+
+		_, records, err := readSheet(t, buf.Bytes())
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{
+			{"alice", "2023-03-15", "42"},
+			{"bob", "2023-03-16", "7"},
+		}, records)
+	})
+}
+
+// datedWorkbook returns a workbook whose one data cell holds value under the
+// given number format, on a sheet that is not the one the file was created
+// with.
+func datedWorkbook(t *testing.T, numFmt int, custom string, value any, date1904 bool) []byte {
+	t.Helper()
+
+	const sheet = "people"
+	f := excelize.NewFile()
+	defer func() { require.NoError(t, f.Close()) }()
+	index, err := f.NewSheet(sheet)
+	require.NoError(t, err)
+	f.SetActiveSheet(index)
+	require.NoError(t, f.DeleteSheet("Sheet1"))
+	if date1904 {
+		require.NoError(t, f.SetWorkbookProps(&excelize.WorkbookPropsOptions{Date1904: &date1904}))
+	}
+
+	style := &excelize.Style{}
+	if custom != "" {
+		style.CustomNumFmt = &custom
+	} else {
+		style.NumFmt = numFmt
+	}
+	styleID, err := f.NewStyle(style)
+	require.NoError(t, err)
+
+	require.NoError(t, f.SetCellStr(sheet, "A1", "when"))
+	require.NoError(t, f.SetCellValue(sheet, "A2", value))
+	require.NoError(t, f.SetCellStyle(sheet, "A2", "A2", styleID))
+
+	var buf bytes.Buffer
+	require.NoError(t, f.Write(&buf))
+	return buf.Bytes()
+}

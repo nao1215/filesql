@@ -16,6 +16,11 @@ import (
 // policy admits.
 type Workbook struct {
 	file *excelize.File
+	// data is the workbook as it arrived. It is what lets the date
+	// normalization read the sheet's own XML instead of asking the library
+	// about one cell at a time, which is the difference between 422 MB and
+	// 1939 MB on an 18.5 MB workbook of 200,000 rows.
+	data []byte
 }
 
 // OpenWorkbook reads a workbook from src.
@@ -34,7 +39,7 @@ func OpenWorkbook(src io.Reader) (*Workbook, error) {
 	if err != nil {
 		return nil, parseError(err, "failed to open XLSX file")
 	}
-	return &Workbook{file: file}, nil
+	return &Workbook{file: file, data: data}, nil
 }
 
 // Close releases the workbook.
@@ -79,7 +84,7 @@ func (w *Workbook) ReadSheet(name string, opts Options, emit Emit) (Result, erro
 	// cells that hold one are rewritten into the ISO 8601 the datetime inference
 	// recognizes. Without this a column of dates is text in whatever shape the
 	// sheet was formatted, and ORDER BY sorts it lexically.
-	rows = NormalizeXLSXDates(w.file, name, rows)
+	rows = w.normalizeDates(name, rows)
 
 	if len(rows) == 0 {
 		return Result{}, emptyError("empty XLSX sheet")
@@ -171,4 +176,47 @@ func readXLSX(src io.Reader, opts Options, emit Emit) (result Result, err error)
 		return Result{}, NoExcelSheetsError(workbook.Source(), opts.ExcelSheetPolicy)
 	}
 	return workbook.ReadSheet(sheets[0], opts, emit)
+}
+
+// normalizeDates rewrites a sheet's date cells into ISO 8601, reading the
+// sheet's own XML for the styles rather than asking the library cell by cell.
+//
+// The two ways agree on which cells are dates and on what they become; they
+// differ in what finding out costs. Asking the library makes it unmarshal the
+// whole worksheet into its object model, which for an 18.5 MB workbook of
+// 200,000 rows is 1470 MB on top of the 267 MB the rows themselves cost.
+// Reading the XML costs what the date cells cost. The asking way remains for
+// the exported NormalizeXLSXDates, which is handed an open workbook and no
+// bytes, and it is also what this falls back to when the workbook's parts do
+// not say where the sheet is -- a sheet missing its dates would be worse than
+// a slow one.
+func (w *Workbook) normalizeDates(sheet string, rows [][]string) [][]string {
+	dateStyles, complete := dateStyleIDs(w.file)
+	if complete && len(dateStyles) == 0 {
+		return rows
+	}
+	if len(w.data) == 0 || !complete {
+		return NormalizeXLSXDates(w.file, sheet, rows)
+	}
+
+	// A file written on a Mac before 2016 counts from 1904, and reading every
+	// serial against 1900 would put every date in such a file four years and a
+	// day early.
+	date1904 := false
+	if props, err := w.file.GetWorkbookProps(); err == nil && props.Date1904 != nil {
+		date1904 = *props.Date1904
+	}
+
+	dates, ok := dateCellsFromXML(w.data, sheet, dateStyles, date1904)
+	if !ok {
+		return NormalizeXLSXDates(w.file, sheet, rows)
+	}
+	for cell, iso := range dates {
+		r, c := cell.row-1, cell.col-1
+		if r < 0 || r >= len(rows) || c < 0 || c >= len(rows[r]) {
+			continue
+		}
+		rows[r][c] = iso
+	}
+	return rows
 }
