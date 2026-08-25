@@ -314,12 +314,17 @@ func retryWhileLockedFor(ctx context.Context, budget, wallBudget time.Duration, 
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			// The load stopped because the caller's context stopped, and that is
-			// what the caller branches on. The lock is joined rather than
-			// replaced, because it is what the load was waiting for and the only
-			// thing that says why the context ran out.
-			return errors.Join(err, ctx.Err())
 		case <-timer.C:
+		}
+		// What ended the wait is asked here rather than in the select, because
+		// both of its cases can be ready at once and it picks either: asking
+		// there let a canceled load pay for one more attempt before it answered.
+		// The load stopped because the caller's context stopped, and that is what
+		// the caller branches on. The lock is joined rather than replaced,
+		// because it is what the load was waiting for and the only thing that
+		// says why the context ran out.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return errors.Join(err, ctxErr)
 		}
 		if wait *= 2; wait > loadLockCeiling {
 			wait = loadLockCeiling
