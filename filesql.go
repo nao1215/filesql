@@ -44,7 +44,7 @@ func Open(paths ...string) (*sql.DB, error) {
 }
 
 // OpenContext is Open with a context, for a load that has to time out or be
-// cancelled: a large file, or a server that abandons the request.
+// canceled: a large file, or a server that abandons the request.
 //
 //	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 //	defer cancel()

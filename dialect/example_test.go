@@ -9,8 +9,9 @@ import (
 )
 
 func ExampleTranslate() {
-	// MySQL quotes an identifier with backticks, which SQLite reads as a
-	// string, so the quoting is rewritten.
+	// MySQL quotes an identifier with backticks. SQLite accepts those too, for
+	// compatibility, and translation normalizes them to its own double-quote
+	// form so the query that reaches the engine is standard SQL.
 	sqlite, err := dialect.Translate(dialect.MySQL, "SELECT `name` FROM `users`")
 	if err != nil {
 		fmt.Println(err)

@@ -50,6 +50,16 @@ func createFilesqlExampleDir(files map[string]string) string {
 	return dir
 }
 
+// exampleTempDir is a directory of its own for an example to write into, so
+// that no example touches a path another program may already be using.
+func exampleTempDir() string {
+	dir, err := os.MkdirTemp("", "filesql-api-example")
+	if err != nil {
+		log.Fatal(err)
+	}
+	return dir
+}
+
 func openExampleSQLiteDB() *sql.DB {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -510,8 +520,10 @@ func exampleWorkbook(dir string) string {
 }
 
 func ExampleDBBuilder_WithExcelSheetPolicy() {
-	path := exampleWorkbook(os.TempDir())
-	defer func() { _ = os.Remove(path) }()
+	dir := exampleTempDir()
+	defer os.RemoveAll(dir)
+
+	path := exampleWorkbook(dir)
 
 	validated, err := filesql.NewBuilder().
 		AddPath(path).
@@ -549,8 +561,10 @@ func ExampleDBBuilder_WithExcelSheetPolicy() {
 }
 
 func ExampleExcelSheetsInFile() {
-	path := exampleWorkbook(os.TempDir())
-	defer func() { _ = os.Remove(path) }()
+	dir := exampleTempDir()
+	defer os.RemoveAll(dir)
+
+	path := exampleWorkbook(dir)
 
 	sheets, err := filesql.ExcelSheetsInFile(path)
 	if err != nil {
@@ -610,8 +624,10 @@ id,name
 // ExampleExcelSheetsInReader is ExampleExcelSheetsInFile for a workbook that
 // arrived as bytes rather than as a file.
 func ExampleExcelSheetsInReader() {
-	path := exampleWorkbook(os.TempDir())
-	defer func() { _ = os.Remove(path) }()
+	dir := exampleTempDir()
+	defer os.RemoveAll(dir)
+
+	path := exampleWorkbook(dir)
 
 	// A workbook a caller holds in memory, downloaded or embedded rather than
 	// read from disk. The reader must yield the workbook itself: a codec around
@@ -726,15 +742,6 @@ func ExampleLineEnding_String() {
 func ExampleOutputFormat_String() {
 	fmt.Println(filesql.OutputFormatCSV, filesql.OutputFormatTSV, filesql.OutputFormatXLSX)
 	// Output: csv tsv xlsx
-}
-
-// exampleTempDir is a directory an example writes its output into.
-func exampleTempDir() string {
-	dir, err := os.MkdirTemp("", "filesql-ach-example")
-	if err != nil {
-		log.Fatal(err)
-	}
-	return dir
 }
 
 // ExampleDumpACH loads an ACH file, edits one entry, and writes the file back.
