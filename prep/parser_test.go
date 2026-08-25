@@ -330,30 +330,33 @@ func TestParsePrepTag_AllPreprocessorTypes(t *testing.T) {
 	}
 }
 
-func TestParseRequiredIfParams(t *testing.T) {
+func TestSplitTagParams(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		input     string
-		wantField string
-		wantValue string
+		name  string
+		input string
+		want  []string
 	}{
-		{"field and value", "Status active", "Status", "active"},
-		{"field only", "Status", "Status", ""},
-		{"empty string", "", "", ""},
-		{"field with space in value", "Status active user", "Status", "active user"},
+		{"field and value", "Status active", []string{"Status", "active"}},
+		{"field only", "Status", []string{"Status"}},
+		{"empty string", "", nil},
+		{"two pairs", "Kind paid Tier gold", []string{"Kind", "paid", "Tier", "gold"}},
+		{"quoted value keeps its space", "Status 'on hold'", []string{"Status", "on hold"}},
+		{"runs of spaces are one separator", "Status   active", []string{"Status", "active"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			field, value := parseRequiredIfParams(tt.input)
-			if field != tt.wantField {
-				t.Errorf("parseRequiredIfParams(%q) field = %q, want %q", tt.input, field, tt.wantField)
+			got := splitTagParams(tt.input)
+			if len(got) != len(tt.want) {
+				t.Fatalf("splitTagParams(%q) = %q, want %q", tt.input, got, tt.want)
 			}
-			if value != tt.wantValue {
-				t.Errorf("parseRequiredIfParams(%q) value = %q, want %q", tt.input, value, tt.wantValue)
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("splitTagParams(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+				}
 			}
 		})
 	}
@@ -820,6 +823,13 @@ func TestStrictTagParsing_ValidateTag(t *testing.T) {
 		{"eqfield with empty value", "eqfield=", true},
 		{"required_if without expected value", "required_if=OtherField", true},
 		{"required_unless without expected value", "required_unless=OtherField", true},
+		{"required_if with an odd number of tokens", "required_if=A yes B", true},
+		{"required_unless with an odd number of tokens", "required_unless=A yes B", true},
+		{"required_if with two pairs", "required_if=A yes B no", false},
+		{"required_with naming two fields", "required_with=A B", false},
+		{"required_with_all naming two fields", "required_with_all=A B", false},
+		{"required_without_all naming two fields", "required_without_all=A B", false},
+		{"required_with with no field", "required_with=", true},
 		{"required needs no value", "required", false},
 		{"email needs no value", "email", false},
 	}
@@ -970,6 +980,28 @@ func TestStrictTagParsing_NonStrictIgnoresInvalidArgs(t *testing.T) {
 	t.Run("required_if without expected value is silently ignored in non-strict mode", func(t *testing.T) {
 		t.Parallel()
 		_, crossVals, err := parseValidateTag("required_if=OtherField", false)
+		if err != nil {
+			t.Errorf("expected no error in non-strict mode, got %v", err)
+		}
+		if len(crossVals) != 0 {
+			t.Errorf("expected 0 cross-field validators (invalid arg ignored), got %d", len(crossVals))
+		}
+	})
+
+	t.Run("required_if with an odd number of tokens is silently ignored in non-strict mode", func(t *testing.T) {
+		t.Parallel()
+		_, crossVals, err := parseValidateTag("required_if=A yes B", false)
+		if err != nil {
+			t.Errorf("expected no error in non-strict mode, got %v", err)
+		}
+		if len(crossVals) != 0 {
+			t.Errorf("expected 0 cross-field validators (invalid arg ignored), got %d", len(crossVals))
+		}
+	})
+
+	t.Run("required_with with no field is silently ignored in non-strict mode", func(t *testing.T) {
+		t.Parallel()
+		_, crossVals, err := parseValidateTag("required_with=", false)
 		if err != nil {
 			t.Errorf("expected no error in non-strict mode, got %v", err)
 		}

@@ -9,18 +9,19 @@ import (
 	"sync"
 )
 
-// oneOfParamRegex splits a oneof parameter the way the go-playground dialect
-// does: a single-quoted run is one value, spaces and all, and an unquoted run
-// is split on whitespace.
+// tagParamRegex splits a tag parameter the way the go-playground dialect does:
+// a single-quoted run is one token, spaces and all, and an unquoted run is
+// split on whitespace.
 //
 //nolint:gochecknoglobals // compiled once, read-only
-var oneOfParamRegex = regexp.MustCompile(`'[^']*'|\S+`)
+var tagParamRegex = regexp.MustCompile(`'[^']*'|\S+`)
 
-// splitOneOfValues returns the allowed values a oneof parameter names, matching
-// go-playground: split on the regex above, then drop the single quotes that
-// grouped a multi-word value.
-func splitOneOfValues(value string) []string {
-	tokens := oneOfParamRegex.FindAllString(value, -1)
+// splitTagParams returns the tokens a tag parameter names: split on the regex
+// above, then drop the single quotes that grouped a multi-word token. oneof
+// names its allowed values this way, and the conditional-required family names
+// its fields and expected values the same way.
+func splitTagParams(value string) []string {
+	tokens := tagParamRegex.FindAllString(value, -1)
 	for i, tok := range tokens {
 		tokens[i] = strings.ReplaceAll(tok, "'", "")
 	}
@@ -314,21 +315,6 @@ func parsePadParams(value string) (int, rune) {
 	return length, padChar
 }
 
-// parseRequiredIfParams parses "FieldName value" format for required_if/required_unless
-// Returns field name and expected/except value
-func parseRequiredIfParams(value string) (string, string) {
-	parts := strings.SplitN(value, " ", 2)
-	if len(parts) == 0 {
-		return "", ""
-	}
-	field := parts[0]
-	expectedVal := ""
-	if len(parts) == 2 {
-		expectedVal = parts[1]
-	}
-	return field, expectedVal
-}
-
 func buildCrossFieldValidator(
 	tagName string,
 	value string,
@@ -345,17 +331,41 @@ func buildCrossFieldValidator(
 	return factory(value), nil
 }
 
+// buildFieldListValidator builds a tag that names a list of fields, such as
+// required_with. The dialect lets a tag name several fields, so the parameter
+// is tokenized rather than taken whole; taking it whole named a field no struct
+// has and reported a missing field on every row.
+func buildFieldListValidator(
+	tagName string,
+	value string,
+	strict bool,
+	factory func([]string) crossFieldValidator,
+) (crossFieldValidator, error) {
+	fields := splitTagParams(value)
+	if len(fields) == 0 {
+		if strict {
+			return nil, fmt.Errorf("%w: %s requires a field name", ErrInvalidTagFormat, tagName)
+		}
+		return nil, nil //nolint:nilnil // non-strict mode silently ignores invalid args
+	}
+
+	return factory(fields), nil
+}
+
+// buildConditionalCrossFieldValidator builds required_if or required_unless.
+// The dialect writes their parameter as field and value pairs, and a value
+// holding a space is quoted, so the parameter is tokenized the way oneof is.
 func buildConditionalCrossFieldValidator(
 	tagName string,
 	value string,
 	strict bool,
-	factory func(string, string) crossFieldValidator,
+	factory func([]fieldCondition) crossFieldValidator,
 ) (crossFieldValidator, error) {
-	field, expectedVal := parseRequiredIfParams(value)
-	if field == "" || expectedVal == "" {
+	tokens := splitTagParams(value)
+	if len(tokens) == 0 || len(tokens)%2 != 0 {
 		if strict {
 			return nil, fmt.Errorf(
-				"%w: %s requires \"FieldName value\" format, got %q",
+				"%w: %s requires pairs of \"FieldName value\", got %q",
 				ErrInvalidTagFormat,
 				tagName,
 				value,
@@ -364,7 +374,12 @@ func buildConditionalCrossFieldValidator(
 		return nil, nil //nolint:nilnil // non-strict mode silently ignores invalid args
 	}
 
-	return factory(field, expectedVal), nil
+	conditions := make([]fieldCondition, 0, len(tokens)/2)
+	for i := 0; i < len(tokens); i += 2 {
+		conditions = append(conditions, fieldCondition{field: tokens[i], expected: tokens[i+1]})
+	}
+
+	return factory(conditions), nil
 }
 
 // validatorBuilder creates a validator from a tag value parameter.
@@ -373,6 +388,10 @@ type validatorBuilder func(value string, strict bool) (validator, error)
 
 // crossFieldValidatorBuilder creates a crossFieldValidator from a tag value parameter.
 type crossFieldValidatorBuilder func(value string) crossFieldValidator
+
+// fieldListValidatorBuilder creates a crossFieldValidator from the field names
+// a tag parameter lists.
+type fieldListValidatorBuilder func(fields []string) crossFieldValidator
 
 // buildFloatValidator is a helper for validators that require a numeric threshold parameter.
 func buildFloatValidator(tagName string, value string, strict bool, factory func(float64) validator) (validator, error) {
@@ -452,7 +471,7 @@ var validatorRegistry = map[string]validatorBuilder{
 
 	// String validators
 	oneOfTagValue: func(value string, _ bool) (validator, error) {
-		if values := splitOneOfValues(value); len(values) > 0 {
+		if values := splitTagParams(value); len(values) > 0 {
 			return newOneOfValidator(values), nil
 		}
 		return nil, nil //nolint:nilnil // empty value produces no validator
@@ -606,16 +625,33 @@ var validatorRegistry = map[string]validatorBuilder{
 //
 //nolint:gochecknoglobals // registry pattern requires package-level map for O(1) lookup
 var crossFieldValidatorRegistry = map[string]crossFieldValidatorBuilder{
-	eqFieldTagValue:         func(v string) crossFieldValidator { return newEqFieldValidator(v) },
-	neFieldTagValue:         func(v string) crossFieldValidator { return newNeFieldValidator(v) },
-	gtFieldTagValue:         func(v string) crossFieldValidator { return newGtFieldValidator(v) },
-	gteFieldTagValue:        func(v string) crossFieldValidator { return newGteFieldValidator(v) },
-	ltFieldTagValue:         func(v string) crossFieldValidator { return newLtFieldValidator(v) },
-	lteFieldTagValue:        func(v string) crossFieldValidator { return newLteFieldValidator(v) },
-	fieldContainsTagValue:   func(v string) crossFieldValidator { return newFieldContainsValidator(v) },
-	fieldExcludesTagValue:   func(v string) crossFieldValidator { return newFieldExcludesValidator(v) },
-	requiredWithTagValue:    func(v string) crossFieldValidator { return newRequiredWithValidator(v) },
-	requiredWithoutTagValue: func(v string) crossFieldValidator { return newRequiredWithoutValidator(v) },
+	eqFieldTagValue:       func(v string) crossFieldValidator { return newEqFieldValidator(v) },
+	neFieldTagValue:       func(v string) crossFieldValidator { return newNeFieldValidator(v) },
+	gtFieldTagValue:       func(v string) crossFieldValidator { return newGtFieldValidator(v) },
+	gteFieldTagValue:      func(v string) crossFieldValidator { return newGteFieldValidator(v) },
+	ltFieldTagValue:       func(v string) crossFieldValidator { return newLtFieldValidator(v) },
+	lteFieldTagValue:      func(v string) crossFieldValidator { return newLteFieldValidator(v) },
+	fieldContainsTagValue: func(v string) crossFieldValidator { return newFieldContainsValidator(v) },
+	fieldExcludesTagValue: func(v string) crossFieldValidator { return newFieldExcludesValidator(v) },
+}
+
+// fieldListValidatorRegistry maps the tags whose parameter is a list of field
+// names to their builder functions.
+//
+//nolint:gochecknoglobals // registry pattern requires package-level map for O(1) lookup
+var fieldListValidatorRegistry = map[string]fieldListValidatorBuilder{
+	requiredWithTagValue: func(f []string) crossFieldValidator {
+		return newRequiredWithValidator(f, false)
+	},
+	requiredWithAllTagValue: func(f []string) crossFieldValidator {
+		return newRequiredWithValidator(f, true)
+	},
+	requiredWithoutTagValue: func(f []string) crossFieldValidator {
+		return newRequiredWithoutValidator(f, false)
+	},
+	requiredWithoutAllTagValue: func(f []string) crossFieldValidator {
+		return newRequiredWithoutValidator(f, true)
+	},
 }
 
 // parseValidateTag parses the validate tag string and returns validators and cross-field validators.
@@ -662,15 +698,27 @@ func parseValidateTag(tag string, strict bool) (validators, crossFieldValidators
 			continue
 		}
 
-		// Conditional required validators need special parsing (two-parameter format)
+		// Tags whose parameter lists field names
+		if builder, ok := fieldListValidatorRegistry[key]; ok {
+			cv, err := buildFieldListValidator(key, value, strict, builder)
+			if err != nil {
+				return nil, nil, err
+			}
+			if cv != nil {
+				crossVals = append(crossVals, cv)
+			}
+			continue
+		}
+
+		// Conditional required validators need special parsing (field and value pairs)
 		switch key {
 		case requiredIfTagValue:
 			cv, err := buildConditionalCrossFieldValidator(
 				key,
 				value,
 				strict,
-				func(field string, expected string) crossFieldValidator {
-					return newRequiredIfValidator(field, expected)
+				func(conditions []fieldCondition) crossFieldValidator {
+					return newRequiredIfValidator(conditions)
 				},
 			)
 			if err != nil {
@@ -684,8 +732,8 @@ func parseValidateTag(tag string, strict bool) (validators, crossFieldValidators
 				key,
 				value,
 				strict,
-				func(field string, expected string) crossFieldValidator {
-					return newRequiredUnlessValidator(field, expected)
+				func(conditions []fieldCondition) crossFieldValidator {
+					return newRequiredUnlessValidator(conditions)
 				},
 			)
 			if err != nil {

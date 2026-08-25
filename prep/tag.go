@@ -139,6 +139,10 @@ const (
 	requiredWithTagValue = "required_with"
 	// requiredWithoutTagValue is the tag value for required if another field is not present
 	requiredWithoutTagValue = "required_without"
+	// requiredWithAllTagValue is the tag value for required if every named field is present
+	requiredWithAllTagValue = "required_with_all"
+	// requiredWithoutAllTagValue is the tag value for required if every named field is absent
+	requiredWithoutAllTagValue = "required_without_all"
 
 	// Date/time validator
 	// datetimeTagValue is the tag value for datetime format validation
