@@ -2,6 +2,7 @@ package reader
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -36,6 +37,30 @@ func errNotParquet(head []byte) error {
 	return parseError(nil, "not a parquet file: it begins %q rather than %q", head, parquetMagic)
 }
 
+// parquetFooterFits refuses a file whose declared footer is larger than the
+// file holding it.
+//
+// The last eight bytes of a Parquet file are the footer's length and the magic,
+// and the library allocates that length before checking the file is that big:
+// eight bytes reading "PAR1PAR1" declare a footer of 826364240 bytes, and
+// opening them allocated 789 MiB before failing with "negative offset". A file
+// costs no more than its own size, which is the rule this reader was chosen
+// for, so the declared number is checked against the bytes that are there
+// before the library is handed anything.
+func parquetFooterFits(data []byte) error {
+	// Four bytes of footer length and four of magic sit at the end, after the
+	// footer itself, and the leading magic sits in front of it.
+	const trailer = 8
+	if len(data) < len(parquetMagic)+trailer {
+		return parseError(nil, "parquet file is %d bytes, too short to hold a footer", len(data))
+	}
+	declared := binary.LittleEndian.Uint32(data[len(data)-trailer:])
+	if uint64(declared)+uint64(len(parquetMagic))+trailer > uint64(len(data)) {
+		return parseError(nil, "parquet footer declares %d bytes in a file of %d", declared, len(data))
+	}
+	return nil
+}
+
 // readParquet reads a Parquet file in chunks. The whole file is buffered first
 // because the format is read back to front: its metadata is at the end.
 func readParquet(src io.Reader, opts Options, emit Emit) (Result, error) {
@@ -48,6 +73,9 @@ func readParquet(src io.Reader, opts Options, emit Emit) (Result, error) {
 	}
 	if !bytes.HasPrefix(data, parquetMagic) {
 		return Result{}, errNotParquet(data[:min(len(data), len(parquetMagic))])
+	}
+	if err := parquetFooterFits(data); err != nil {
+		return Result{}, err
 	}
 
 	file, err := openParquet(data)
