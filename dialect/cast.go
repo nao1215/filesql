@@ -240,24 +240,57 @@ func castToInt(d Dialect, v driver.Value, strict bool) (driver.Value, error) {
 		return n, nil
 	}
 	// A well-formed integer outside the range is answered here rather than
-	// through the float below, which cannot tell -2^63-1 from -2^63: both are the
-	// same float64, so the range check would let the first one through as the
-	// second.
+	// through a float, which cannot tell -2^63-1 from -2^63: both are the same
+	// float64, so the range check would let the first one through as the second.
 	if errors.Is(err, strconv.ErrRange) {
 		return outOfRangeInt(strings.HasPrefix(text, "-"), strict, text)
 	}
-	// ParseFloat answers a well-formed number too large for a float64 with an
-	// infinity and ErrRange. That is a value, not a parse failure: reading it as
-	// one sent a 400-digit number down the numeric-prefix path below, where it
-	// came back as 0 instead of as the bound of the type.
-	if f, err := strconv.ParseFloat(text, 64); err == nil || errors.Is(err, strconv.ErrRange) {
-		return roundForDialect(d, f, strict)
-	}
 	if strict {
+		// PostgreSQL and GoogleSQL read the string as an integer literal, so
+		// "1.5" and "1e3" are not smaller integers but values the type cannot
+		// hold: both engines raise there, and GoogleSQL's SAFE_CAST answers NULL.
+		// Rounding them instead answered 2 and 1000 for text neither engine
+		// accepts. A number past the float64 range is still reported as out of
+		// range rather than as a parse failure.
+		if f, ferr := strconv.ParseFloat(text, 64); errors.Is(ferr, strconv.ErrRange) {
+			return outOfRangeInt(math.Signbit(f), strict, text)
+		}
 		return nil, fmt.Errorf("%w: %q is not an integer", ErrInvalidCast, s)
 	}
-	// MySQL takes the leading numeric prefix and answers 0 when there is none.
-	return roundForDialect(d, numericPrefix(s), strict)
+	// MySQL reads the leading run of digits and stops at the first character
+	// that cannot be part of an integer, so "1.5" is 1 and "1e3" is 1. Its
+	// coercion in a numeric context reads the whole number instead, which is what
+	// numericPrefix is for; a cast to an integer type is not that context.
+	return mysqlIntegerPrefix(text), nil
+}
+
+// mysqlIntegerPrefix returns the integer MySQL reads at the front of text when
+// it casts a string to an integer type: an optional sign followed by digits,
+// stopping at the first character that is neither. A string with no digits at
+// the front is 0, and a run too large for an int64 clamps to the bound of the
+// type, which is what MySQL answers alongside a warning.
+func mysqlIntegerPrefix(text string) int64 {
+	end := 0
+	negative := false
+	if end < len(text) && (text[end] == '+' || text[end] == '-') {
+		negative = text[end] == '-'
+		end++
+	}
+	digits := end
+	for end < len(text) && text[end] >= '0' && text[end] <= '9' {
+		end++
+	}
+	if end == digits {
+		return 0
+	}
+	n, err := strconv.ParseInt(text[:end], 10, 64)
+	if err != nil {
+		if negative {
+			return math.MinInt64
+		}
+		return math.MaxInt64
+	}
+	return n
 }
 
 // intRangeAsFloat is the int64 range measured in float64. The upper bound is 2^63

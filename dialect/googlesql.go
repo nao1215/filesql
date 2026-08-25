@@ -14,7 +14,7 @@ import (
 //	G-2  SAFE_CAST(x AS t)                    -> googlesql_safe_cast(x, 't')
 //	G-3  DATE/DATETIME/TIMESTAMP/TIME 'lit'   -> 'lit'
 //	G-4  CAST(x AS googlesql_type)            -> googlesql_cast(x, 'type')
-//	G-6  FORMAT(fmt, ...)                     -> printf(fmt, ...)
+//	G-6  FORMAT(fmt, ...)                     -> googlesql_format(fmt, ...)
 //	G-7  DATE_ADD/DATE_SUB/TIMESTAMP_ADD/SUB  -> datetime(x, '±n unit')
 //	G-8  DATE_DIFF/TIMESTAMP_DIFF(a, b, UNIT) -> DATE_DIFF(a, b, 'unit')
 //	G-9  QUALIFY / UNNEST / ARRAY / STRUCT / SELECT * EXCEPT / REPLACE
@@ -34,6 +34,8 @@ import (
 //	                                             zero divisor
 //	G-23 TRUNC(x, n)                          -> trunc_scale(x, n); DIV is a
 //	                                             helper of its own name
+//	G-24 LEFT(x, n) / RIGHT(x, n)             -> googlesql_left / googlesql_right
+//	G-25 LOG(x) / LOG(x, base)                -> ln(x) / log(base, x)
 func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedGoogleSQL(tokens); err != nil {
 		return nil, err
@@ -207,7 +209,16 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 	case fnNameUpper, fnNameLower:
 		return rewriteRenameCall(tokens, open, closeIdx, unicodeCaseHelper(tokens[nameIdx].text), googlesqlCallPass)
 	case "FORMAT":
-		return rewriteRenameCall(tokens, open, closeIdx, "printf", googlesqlCallPass)
+		// The verbs GoogleSQL shares with printf are printed the same way, but %t
+		// and %T are its own and SQLite's printf answers NULL for a format string
+		// holding a verb it does not know.
+		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_format", googlesqlCallPass)
+	case "LOG":
+		return rewriteGoogleSQLLog(tokens, open, closeIdx)
+	case "LEFT", "RIGHT":
+		// GoogleSQL raises for a negative length where PostgreSQL, whose helper
+		// carries the shared name, trims the far end.
+		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_"+strings.ToLower(tokens[nameIdx].text), googlesqlCallPass)
 	case "CONCAT":
 		// GoogleSQL CONCAT returns NULL when any argument is NULL, like MySQL and
 		// unlike SQLite's own concat(), which treats a NULL as an empty string.
@@ -241,6 +252,39 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 		// SQLite has string_agg as an alias of group_concat, so the plain form
 		// runs as written and only the DISTINCT one needs rewriting.
 		return rewriteStringAggDistinct(tokens, open, closeIdx, googlesqlCallPass)
+	default:
+		return nil, false, nil
+	}
+}
+
+// rewriteGoogleSQLLog implements G-25: GoogleSQL LOG(x) is a synonym of LN(x),
+// where SQLite's log(x) is the base-ten logarithm, and GoogleSQL's LOG(x, base)
+// writes its base second where SQLite's log(base, x) writes it first.
+func rewriteGoogleSQLLog(tokens []token, open, closeIdx int) ([]token, bool, error) {
+	commas := topLevelCommas(tokens, open, closeIdx)
+	switch len(commas) {
+	case 0:
+		if callArity(tokens, open, closeIdx) != 1 {
+			return nil, false, nil
+		}
+		return rewriteRenameCall(tokens, open, closeIdx, "ln", googlesqlCallPass)
+	case 1:
+		value, err := googlesqlCallPass(tokens[open+1 : commas[0]])
+		if err != nil {
+			return nil, false, err
+		}
+		base, err := googlesqlCallPass(tokens[commas[0]+1 : closeIdx])
+		if err != nil {
+			return nil, false, err
+		}
+		value, base = trimSpaceTokens(value), trimSpaceTokens(base)
+		repl := make([]token, 0, len(value)+len(base)+5)
+		repl = append(repl, wordToken("log"), opToken("("))
+		repl = append(repl, base...)
+		repl = append(repl, opToken(","), spaceToken())
+		repl = append(repl, value...)
+		repl = append(repl, opToken(")"))
+		return repl, true, nil
 	default:
 		return nil, false, nil
 	}

@@ -134,6 +134,17 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-21_bang_nested_paren", "SELECT !(!a) FROM t", `SELECT (NOT ((NOT a))) AS "!(!a)" FROM t`},
 		{"M-21_bang_inside_call", "SELECT f(!a) FROM t", `SELECT f((NOT a)) AS "f(!a)" FROM t`},
 
+		// The calls SQLite spells the same way and means something else by.
+		{"M-24_log", "SELECT LOG(x) FROM t", `SELECT ln(x) AS "LOG(x)" FROM t`},
+		{"M-24_log_with_base_untouched", "SELECT LOG(2, x) FROM t", "SELECT LOG(2, x) FROM t"},
+		{"M-24_log_without_arguments_untouched", "SELECT LOG() FROM t", "SELECT LOG() FROM t"},
+		{"M-24_log_nested", "SELECT ROUND(LOG(x), 2) FROM t", `SELECT dialect_round(ln(x), 2) AS "ROUND(LOG(x), 2)" FROM t`},
+		{"M-24_format", "SELECT FORMAT(x, 2) FROM t", `SELECT mysql_format(x, 2) AS "FORMAT(x, 2)" FROM t`},
+		{"M-24_left", "SELECT LEFT(name, 3) FROM t", `SELECT mysql_left(name, 3) AS "LEFT(name, 3)" FROM t`},
+		{"M-24_right", "SELECT RIGHT(name, 3) FROM t", `SELECT mysql_right(name, 3) AS "RIGHT(name, 3)" FROM t`},
+		{"M-24_regexp_replace", "SELECT REGEXP_REPLACE(s, 'a', 'b') FROM t", `SELECT mysql_regexp_replace(s, 'a', 'b') AS "REGEXP_REPLACE(s, 'a', 'b')" FROM t`},
+		{"M-24_regexp_replace_with_position", "SELECT REGEXP_REPLACE(s, 'a', 'b', 2, 1) FROM t", `SELECT mysql_regexp_replace(s, 'a', 'b', 2, 1) AS "REGEXP_REPLACE(s, 'a', 'b', 2, 1)" FROM t`},
+
 		{"unrelated_function_untouched", "SELECT COALESCE(a, b), SUM(c) FROM t", "SELECT COALESCE(a, b), SUM(c) FROM t"},
 		{"extract_without_from_passthrough", "SELECT EXTRACT(x) FROM t", "SELECT EXTRACT(x) FROM t"},
 		{"cast_without_as_passthrough", "SELECT CAST(x) FROM t", "SELECT CAST(x) FROM t"},
@@ -178,6 +189,8 @@ func TestMySQLTranslateUnsupported(t *testing.T) {
 		// 65 where it does arithmetic. SQLite has only the number, and which
 		// reading applies is not something a token rewrite can see, so the
 		// literal is refused rather than translated into one of the two.
+		{"M-24_format_with_locale", "SELECT FORMAT(x, 2, 'de_DE') FROM t"},
+
 		{"M-23_hex_literal", "SELECT 0x41"},
 		{"M-23_hex_literal_uppercase_prefix", "SELECT 0X41"},
 		{"M-23_hex_literal_in_arithmetic", "SELECT 1 + 0x10"},

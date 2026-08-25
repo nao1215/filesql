@@ -44,7 +44,19 @@ func TestGoogleSQLTranslate(t *testing.T) {
 		{"G-4_cast_string", "SELECT CAST(x AS STRING)", "SELECT googlesql_cast(x, 'STRING') AS \"CAST(x AS STRING)\""},
 		{"G-4_cast_bytes", "SELECT CAST(x AS BYTES)", "SELECT googlesql_cast(x, 'BYTES') AS \"CAST(x AS BYTES)\""},
 
-		{"G-6_format", "SELECT FORMAT('%d', n) FROM t", "SELECT printf('%d', n) AS \"FORMAT('%d', n)\" FROM t"},
+		{"G-6_format", "SELECT FORMAT('%d', n) FROM t", "SELECT googlesql_format('%d', n) AS \"FORMAT('%d', n)\" FROM t"},
+
+		{"G-24_left", "SELECT LEFT(name, 3) FROM t", `SELECT googlesql_left(name, 3) AS "LEFT(name, 3)" FROM t`},
+		{"G-24_right", "SELECT RIGHT(name, 3) FROM t", `SELECT googlesql_right(name, 3) AS "RIGHT(name, 3)" FROM t`},
+
+		// G-25: the one-argument form is the natural logarithm, and the
+		// two-argument one writes its base second where SQLite writes it first.
+		{"G-25_log", "SELECT LOG(x) FROM t", `SELECT ln(x) AS "LOG(x)" FROM t`},
+		{"G-25_log_with_base", "SELECT LOG(x, 2) FROM t", `SELECT log(2, x) AS "LOG(x, 2)" FROM t`},
+		{"G-25_log_nested", "SELECT LOG(LOG(x), 2) FROM t", `SELECT log(2, ln(x)) AS "LOG(LOG(x), 2)" FROM t`},
+		{"G-25_log10_untouched", "SELECT LOG10(x) FROM t", "SELECT LOG10(x) FROM t"},
+		{"G-25_log_three_arguments_untouched", "SELECT LOG(a, b, c) FROM t", "SELECT LOG(a, b, c) FROM t"},
+		{"G-25_log_without_arguments_untouched", "SELECT LOG() FROM t", "SELECT LOG() FROM t"},
 
 		// SQLite's DISTINCT aggregates take one argument, so the separator has to
 		// go. Dropping it is only correct when it is the comma SQLite defaults to.

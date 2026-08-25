@@ -30,6 +30,13 @@ func TestPostgreSQLTranslate(t *testing.T) {
 		{"P-3_match_ci", "SELECT * FROM t WHERE name ~* '^a'", "SELECT * FROM t WHERE name REGEXP '(?i)^a'"},
 		{"P-3_not_match_ci", "SELECT * FROM t WHERE name !~* '^a'", "SELECT * FROM t WHERE name NOT REGEXP '(?i)^a'"},
 
+		// The calls another dialect's helper of the same name would have taken:
+		// to_hex hexes bytes for GoogleSQL, and regexp_replace replaces every
+		// match there where PostgreSQL replaces the first alone.
+		{"P-14_to_hex", "SELECT to_hex(n) FROM t", `SELECT postgresql_to_hex(n) AS "to_hex(n)" FROM t`},
+		{"P-14_regexp_replace", "SELECT regexp_replace(s, 'a', 'b') FROM t", `SELECT postgresql_regexp_replace(s, 'a', 'b') AS "regexp_replace(s, 'a', 'b')" FROM t`},
+		{"P-14_regexp_replace_with_flags", "SELECT regexp_replace(s, 'a', 'b', 'g') FROM t", `SELECT postgresql_regexp_replace(s, 'a', 'b', 'g') AS "regexp_replace(s, 'a', 'b', 'g')" FROM t`},
+
 		{"P-4_position", "SELECT POSITION('b' IN name) FROM t", "SELECT INSTR(name, 'b') AS \"POSITION('b' IN name)\" FROM t"},
 		{"P-4_position_expr", "SELECT POSITION(sub IN col) FROM t", "SELECT INSTR(col, sub) AS \"POSITION(sub IN col)\" FROM t"},
 
