@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -507,6 +508,51 @@ func BenchmarkCSVOutput(b *testing.B) {
 		var buf bytes.Buffer
 		buf.Grow(processor.estimateOutputSize(headers, records))
 		if err := processor.writeOutput(&buf, headers, records); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// crossFieldRecord carries one tag from each cross-field family, so the
+// benchmark measures the per-row cost of resolving target fields.
+type crossFieldRecord struct {
+	Start   string `validate:"required"`
+	End     string `validate:"gtefield=Start"`
+	Invoice string `validate:"required_if=Kind paid Tier gold"`
+	Address string `validate:"required_with=City Zip"`
+	Kind    string
+	Tier    string
+	City    string
+	Zip     string
+}
+
+// generateCrossFieldCSV builds a CSV whose every row passes, so the benchmark
+// measures the validation path rather than error reporting.
+func generateCrossFieldCSV(rows int) string {
+	var sb strings.Builder
+	sb.WriteString("start,end,invoice,address,kind,tier,city,zip\n")
+	for i := range rows {
+		sb.WriteString("2024-01-01,2024-12-31,INV-")
+		sb.WriteString(strconv.Itoa(i))
+		sb.WriteString(",1 Main St,paid,gold,Kyoto,600-8216\n")
+	}
+	return sb.String()
+}
+
+// BenchmarkProcessCrossFieldCSV benchmarks a struct whose fields carry
+// cross-field tags, the path that resolves one target value per named field on
+// every row.
+func BenchmarkProcessCrossFieldCSV(b *testing.B) {
+	csvData := generateCrossFieldCSV(1000)
+	processor := NewProcessor(FileTypeCSV)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for range b.N {
+		var records []crossFieldRecord
+		_, _, err := processor.Process(strings.NewReader(csvData), &records)
+		if err != nil {
 			b.Fatal(err)
 		}
 	}
