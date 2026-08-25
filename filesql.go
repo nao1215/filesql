@@ -1,10 +1,9 @@
 package filesql
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/nao1215/filesql/internal/infer"
 	"github.com/nao1215/filesql/internal/reader"
+	"github.com/nao1215/filesql/internal/writer"
 	"github.com/nao1215/filesql/parser"
 	"github.com/parquet-go/parquet-go"
 	"github.com/xuri/excelize/v2"
@@ -546,17 +546,11 @@ func writeSQLiteTableDataTo(w io.Writer, tableName string, columns []string, row
 		}
 	}()
 
-	var writeErr error
-	switch options.Format {
-	case OutputFormatCSV:
-		writeErr = writeCSVData(encoded, columns, rows, options.LineEnding)
-	case OutputFormatTSV:
-		writeErr = writeTSVData(encoded, columns, rows, options.LineEnding)
-	case OutputFormatLTSV:
-		writeErr = writeLTSVData(encoded, columns, rows, options.LineEnding)
-	default:
+	text, ok := textDumpFormats[options.Format]
+	if !ok {
 		return fmt.Errorf("%w: unsupported output format: %v", ErrUnsupportedFormat, options.Format)
 	}
+	writeErr := writeTextData(encoded, columns, rows, text, options.LineEnding)
 	if writeErr != nil && encoder.encoderFailed() {
 		return encodingError(options.Encoding, writeErr)
 	}
@@ -569,62 +563,41 @@ func createCompressedWriter(w io.Writer, compression CompressionType) (io.Writer
 	return handler.CreateWriter(w)
 }
 
-// loneEmptyField is what a CSV record of one empty field is written as.
+// textDumpFormat is how one text output format is written, and the sentinel a
+// value it cannot hold has always been reported with.
+type textDumpFormat struct {
+	// format is the writer package's name for this one.
+	format writer.Format
+	// sentinel is the error a refused value carried before this package had one
+	// of its own for it, or nil where there was none. It is kept on the error so
+	// a caller matching it goes on matching it.
+	sentinel error
+}
+
+// textDumpFormats are the output formats written as text. Parquet and XLSX are
+// not among them: they are typed container formats, written by their own
+// functions from the driver's values rather than from rendered text.
 //
-// Written plainly it is a blank line, and a blank line is not a CSV record: a reader
-// skips it, so a one-column table's empty rows disappeared and the dump reported
-// success. The quotes say "one field, and it is empty", which cannot be read as
-// anything else. encoding/csv's writer does not quote an empty field — it has no
-// way to know it is the only one on the line — so this record is written around
-// it.
-const loneEmptyField = `""`
+//nolint:gochecknoglobals // constant-like lookup table
+var textDumpFormats = map[OutputFormat]textDumpFormat{
+	OutputFormatCSV:  {format: writer.FormatCSV},
+	OutputFormatTSV:  {format: writer.FormatTSV, sentinel: parser.ErrTSVUnrepresentable},
+	OutputFormatLTSV: {format: writer.FormatLTSV},
+}
 
-// writeDelimitedData writes data in CSV or TSV format based on delimiter
-func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, delimiter rune, lineEnding LineEnding) error {
-	// Records are staged one at a time so the terminator is this package's
-	// choice rather than the csv writer's. UseCRLF would do it, but it rewrites
-	// every line feed the writer emits, inside a quoted field as well as between
-	// records: a cell holding a line break came back holding a different one, so
-	// saving a file changed a row nobody edited.
-	var staged bytes.Buffer
-	csvWriter := csv.NewWriter(&staged)
-	if delimiter != csvDelimiter {
-		csvWriter.Comma = delimiter
-	}
-	terminator := lineEnding.terminator()
+// writeTextData writes a table's rows to w in one of the text formats.
+//
+// The encoding is the writer package's; what is here is the part that is this
+// package's own: reading a row out of the driver and rendering each value as
+// the text a reader turns back into the same cell.
+func writeTextData(w io.Writer, columns []string, rows *sql.Rows, text textDumpFormat, lineEnding LineEnding) error {
+	out := writer.New(w, text.format, writer.Options{LineEnding: lineEnding.terminator()})
 
-	writeStaged := func(record []string) error {
-		staged.Reset()
-		if err := csvWriter.Write(record); err != nil {
-			return err
-		}
-		csvWriter.Flush()
-		if err := csvWriter.Error(); err != nil {
-			return err
-		}
-		line := strings.TrimSuffix(staged.String(), "\n")
-		_, err := io.WriteString(writer, line+terminator)
-		return err
-	}
-
-	// writeRecord writes one record, taking the lone empty field around the csv
-	// writer. Flushing first keeps the two writers' output in order.
-	writeRecord := func(record []string) error {
-		// TSV is written literally; see parser.WriteTSVRecord. A blank line is
-		// already the one-column empty value there, so it needs no form of its own.
-		if delimiter == tsvDelimiter {
-			return parser.WriteTSVRecordLineEnding(writer, record, terminator)
-		}
-		if len(record) != 1 || record[0] != "" {
-			return writeStaged(record)
-		}
-		_, err := io.WriteString(writer, loneEmptyField+terminator)
-		return err
-	}
-
-	// Write header
-	if err := writeRecord(columns); err != nil {
-		return err
+	// The header is written — or, for LTSV, checked and kept as the label of
+	// each field — before the rows, so a table whose column name the format
+	// cannot express is refused whether or not it has any rows.
+	if err := out.Header(columns); err != nil {
+		return dumpFormatError(err, text)
 	}
 
 	// Prepare for scanning
@@ -633,31 +606,54 @@ func writeDelimitedData(writer io.Writer, columns []string, rows *sql.Rows, deli
 	for i := range values {
 		scanArgs[i] = &values[i]
 	}
+	// One record is reused across rows: the writer has encoded it by the time
+	// Record returns, so it keeps no reference to the strings in it.
+	record := make([]string, len(columns))
 
-	// Write data rows
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
 			return err
 		}
-
-		record := make([]string, len(columns))
 		for i, value := range values {
 			record[i] = formatDumpValue(value)
 		}
-
-		if err := writeRecord(record); err != nil {
-			return err
+		if err := out.Record(record); err != nil {
+			return dumpFormatError(err, text)
 		}
 	}
 
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	// Nothing is buffered past this point: each record is flushed into the
-	// staging buffer and written on from there, so a failure of the writer
-	// underneath — an encoder refusing a value it cannot write, for instance —
-	// has already been returned by the write that caused it.
-	return nil
+	// The writer buffers, so this is where a destination that could not take the
+	// bytes — an encoder refusing a value it cannot write, for instance —
+	// reports it. Nothing is buffered past this point.
+	return dumpFormatError(out.Flush(), text)
+}
+
+// dumpFormatError gives a value the output format cannot hold this package's
+// sentinel and the advice that goes with it.
+//
+// The writer package names no sentinel, because the three callers of it have
+// three different ones for this. What a dump has to say is that the table is
+// fine and the format is not, which is what ErrUnsupportedFormat means here,
+// and which format to ask for instead.
+//
+// That advice is always CSV, because CSV is the only text format here that can
+// hold what the others cannot: it quotes a field, so a tab, a line break and a
+// carriage return are ordinary characters inside one. LTSV used to answer "CSV
+// or TSV", which is wrong for all three of the characters it forbids in a
+// value, since TSV forbids the same three. CSV itself never reaches this, there
+// being no value it cannot write.
+func dumpFormatError(err error, text textDumpFormat) error {
+	var writeErr *writer.Error
+	if !errors.As(err, &writeErr) || writeErr.Kind != writer.KindUnrepresentable {
+		return err
+	}
+	if text.sentinel != nil {
+		return fmt.Errorf("%w: %w: %s; dump this table as CSV instead", ErrUnsupportedFormat, text.sentinel, writeErr.Error())
+	}
+	return fmt.Errorf("%w: %w; dump this table as CSV instead", ErrUnsupportedFormat, err)
 }
 
 // formatDumpValue renders one cell for a text-based dump.
@@ -691,105 +687,6 @@ func formatDumpValue(value any) string {
 	default:
 		return fmt.Sprintf("%v", v)
 	}
-}
-
-// writeCSVData writes data in CSV format
-func writeCSVData(writer io.Writer, columns []string, rows *sql.Rows, lineEnding LineEnding) error {
-	return writeDelimitedData(writer, columns, rows, csvDelimiter, lineEnding)
-}
-
-// writeTSVData writes data in TSV format
-func writeTSVData(writer io.Writer, columns []string, rows *sql.Rows, lineEnding LineEnding) error {
-	return writeDelimitedData(writer, columns, rows, tsvDelimiter, lineEnding)
-}
-
-// writeLTSVData writes data in LTSV format
-func writeLTSVData(writer io.Writer, columns []string, rows *sql.Rows, lineEnding LineEnding) error {
-	// A label is read up to the first colon, so a colon in a column name would
-	// make the rest of the name part of the value. Checked once, ahead of the
-	// rows, because it does not depend on them.
-	for _, col := range columns {
-		if err := checkLTSVLabel(col); err != nil {
-			return err
-		}
-	}
-
-	// Prepare for scanning
-	values := make([]any, len(columns))
-	scanArgs := make([]any, len(columns))
-	for i := range values {
-		scanArgs[i] = &values[i]
-	}
-
-	// Write data rows
-	for rows.Next() {
-		if err := rows.Scan(scanArgs...); err != nil {
-			return err
-		}
-
-		// Build LTSV record
-		parts := make([]string, 0, len(columns))
-		for i, col := range columns {
-			value := formatDumpValue(values[i])
-			if err := checkLTSVValue(col, value); err != nil {
-				return err
-			}
-			parts = append(parts, col+":"+value)
-		}
-
-		line := strings.Join(parts, "\t") + lineEnding.terminator()
-		if _, err := writer.Write([]byte(line)); err != nil {
-			return err
-		}
-	}
-
-	return rows.Err()
-}
-
-// ltsvForbidden names the characters that end a field or a record in LTSV, which
-// is why a value cannot carry one.
-var ltsvForbidden = []struct {
-	char rune
-	name string
-}{
-	{char: '\t', name: "tab"},
-	{char: '\n', name: "newline"},
-	{char: '\r', name: "carriage return"},
-}
-
-// checkLTSVValue refuses a value LTSV has no way to hold.
-//
-// LTSV separates fields with a tab and records with a newline, and defines no
-// escape for either. Writing one anyway produced a file that parses as something
-// else: a tab inside a value opened a second field, which has no label and which
-// a reader drops without a word, and a newline split the record in two. Failing
-// here costs nothing, because the dump is staged and the destination is only
-// replaced on success — where silently dropping the value cost the value.
-func checkLTSVValue(column, value string) error {
-	for _, f := range ltsvForbidden {
-		if strings.ContainsRune(value, f.char) {
-			return fmt.Errorf("%w: LTSV cannot hold a value that contains a %s, and column %q holds a %s; dump this table as CSV or TSV instead",
-				ErrUnsupportedFormat, f.name, column, f.name)
-		}
-	}
-	return nil
-}
-
-// checkLTSVLabel refuses a column name that would not read back as a label. A
-// colon is what separates a label from its value, so it is forbidden here on top
-// of the characters no field may carry.
-func checkLTSVLabel(column string) error {
-	if strings.ContainsRune(column, ':') {
-		return fmt.Errorf("%w: an LTSV label cannot contain a colon, and column %q holds a colon; dump this table as CSV or TSV instead",
-			ErrUnsupportedFormat, column)
-	}
-	for _, f := range ltsvForbidden {
-		if strings.ContainsRune(column, f.char) {
-			return fmt.Errorf("%w: an LTSV label cannot contain a %s, and column %q holds a %s; dump this table as CSV or TSV instead",
-				ErrUnsupportedFormat, f.name, column, f.name)
-		}
-	}
-	return nil
 }
 
 // writeParquetTableData writes SQLite table data to Parquet format
