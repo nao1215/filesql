@@ -58,7 +58,7 @@ jobs:
       # `go test` run.
       - name: Upload the crashing input
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-${{ matrix.target }}
           path: "**/testdata/fuzz/**"
