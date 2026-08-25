@@ -547,6 +547,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 |---------|------------------|--------|
 | Parse a delimited file into headers, records, and column types | `ExampleParse_csv`, `ExampleParse_tsv`, `ExampleParse_ltsv` | [parser/example_test.go](./parser/example_test.go) |
 | Read CSV keeping a line break inside a quoted field | `ExampleNewCSVReader` | [parser/example_test.go](./parser/example_test.go) |
+| Read TSV taking every field literally, quotes included | `ExampleNewTSVReader` | [parser/example_test.go](./parser/example_test.go) |
 | Read a file whose lines end with a lone carriage return | `ExampleNormalizeLineEndings` | [parser/example_test.go](./parser/example_test.go) |
 | Detect a file type and whether it is compressed | `ExampleDetectFileType`, `ExampleIsCompressed`, `ExampleBaseFileType` | [parser/example_test.go](./parser/example_test.go) |
 | Convert a cell by the column type it belongs to | `ExampleParseValue`, `ExampleTableData_columnTypes` | [parser/example_test.go](./parser/example_test.go) |

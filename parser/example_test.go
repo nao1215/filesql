@@ -183,6 +183,21 @@ func ExampleNewCSVReader() {
 	// [["note"] ["x\r\ny"]]
 }
 
+func ExampleNewTSVReader() {
+	// TSV has no quoting, so every byte between two tabs is data: a double
+	// quote is an ordinary character rather than the start of a quoted field.
+	// A CSV reader handed the same input fails with `bare " in non-quoted-field`.
+	records, err := parser.NewTSVReader(strings.NewReader("name\theight\nalice\t5'9\" tall\n")).ReadAll()
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	fmt.Printf("%q\n", records)
+	// Output:
+	// [["name" "height"] ["alice" "5'9\" tall"]]
+}
+
 func ExampleNormalizeLineEndings() {
 	// A file written the classic Mac OS way ends its lines with a lone carriage
 	// return, which nothing downstream reads as a line break.
