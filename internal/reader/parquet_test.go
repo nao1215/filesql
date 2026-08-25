@@ -277,7 +277,8 @@ func TestReadParquetRefusesWhatIsNotParquet(t *testing.T) {
 // always right; what it cost was not, which is why this asserts on allocation
 // rather than on the error alone.
 func TestReadParquetCostsNoMoreThanItsOwnSize(t *testing.T) {
-	t.Parallel()
+	// Not parallel, and neither are its cases: the measurement is this
+	// process's total allocation, so anything running beside it is counted in.
 
 	// Wide next to the tens of bytes each input is, and far below the 789 MiB
 	// the first of them used to cost.
@@ -293,9 +294,8 @@ func TestReadParquetCostsNoMoreThanItsOwnSize(t *testing.T) {
 		{name: "too short to hold a footer at all", data: []byte("PAR1")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
 			var before, after runtime.MemStats
+			runtime.GC()
 			runtime.ReadMemStats(&before)
 			_, err := readParquet(bytes.NewReader(tc.data), Options{}, func(*Chunk) error { return nil })
 			runtime.ReadMemStats(&after)
@@ -308,8 +308,6 @@ func TestReadParquetCostsNoMoreThanItsOwnSize(t *testing.T) {
 	}
 
 	t.Run("a real file whose footer fits still loads", func(t *testing.T) {
-		t.Parallel()
-
 		type row struct {
 			ID int64 `parquet:"id"`
 		}
