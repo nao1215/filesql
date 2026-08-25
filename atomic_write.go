@@ -104,10 +104,10 @@ func createTempBeside(dir, base, suffix string) (*os.File, error) {
 // or the new one. Windows refuses to rename over a destination another handle
 // still has open, which is exactly a save that overwrites a file this package is
 // streaming from. When that happens the bytes are copied over the destination
-// instead, through the handle Windows will grant. That copy is not atomic, so
-// the guarantee drops from "a reader sees one file or the other" to "a failure
-// does not cost the data that was already there"; commitByCopy is where the
-// second one is kept.
+// instead, through the handle Windows will grant. That copy is not atomic and it
+// truncates the destination before it can fail, so what stands in for atomicity
+// is a backup taken first and put back after a failed copy — best effort, since
+// putting it back is itself a copy. See commitByCopy.
 func commitStagedFile(staged, dest string) error {
 	err := os.Rename(staged, dest)
 	if err == nil {
@@ -129,8 +129,10 @@ func commitStagedFile(staged, dest string) error {
 // package is reading from.
 //
 // This is not atomic — a reader watching during the copy can see a partial file
-// — but it keeps the guarantee that matters here: a failure does not cost the
-// data that was already there.
+// — and the copy truncates dest before it can fail, so the backup is what stands
+// between a refused write and the caller's data. Putting it back is itself a
+// copy and can fail in turn, which is why the write error is the one reported:
+// it is the failure the caller can act on.
 func commitByCopy(staged, dest string) error {
 	backup, err := copyToBackup(dest)
 	if err != nil {

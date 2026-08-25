@@ -186,9 +186,11 @@ func TestWriteFileAtomically_ReportsNoCleanupWhenNothingIsLeft(t *testing.T) {
 	assert.Equal(t, []string{"out.csv"}, dirEntries(t, dir))
 }
 
-// TestCommitByCopy_KeepsTheDestinationWhenTheCopyFails pins the guarantee the
-// copy fallback actually offers, which is not the atomicity a plain rename
-// gives: a failure partway does not cost the data that was already there.
+// TestCommitByCopy_KeepsTheDestinationWhenTheCopyFails pins what stands in for
+// the atomicity a plain rename gives. The copy truncates the destination before
+// it can fail, so the backup taken first is what puts the original bytes back —
+// best effort, since that restore is itself a copy, which is why the copy error
+// stays the one reported.
 func TestCommitByCopy_KeepsTheDestinationWhenTheCopyFails(t *testing.T) {
 	t.Parallel()
 
