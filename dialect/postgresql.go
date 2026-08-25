@@ -164,32 +164,7 @@ func setReturningFunction(t token) (string, bool) {
 // pgCallPass rewrites the PostgreSQL function-call rules (C-1, P-4, P-5, P-8),
 // recursing into the arguments of recognized calls.
 func pgCallPass(tokens []token) ([]token, error) {
-	out := make([]token, 0, len(tokens))
-	i := 0
-	for i < len(tokens) {
-		t := tokens[i]
-		if t.kind == tokWord {
-			open := nextSig(tokens, i+1)
-			if open >= 0 && isOpEq(tokens[open], "(") {
-				closeIdx := matchParen(tokens, open)
-				if closeIdx < 0 {
-					return nil, fmt.Errorf("%w: unbalanced parentheses after %s", ErrInvalidSyntax, t.text)
-				}
-				repl, handled, err := pgRewriteCall(tokens, i, open, closeIdx)
-				if err != nil {
-					return nil, err
-				}
-				if handled {
-					out = append(out, repl...)
-					i = closeIdx + 1
-					continue
-				}
-			}
-		}
-		out = append(out, t)
-		i++
-	}
-	return out, nil
+	return walkCalls(tokens, pgRewriteCall)
 }
 
 func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, error) {

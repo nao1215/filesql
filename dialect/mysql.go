@@ -116,32 +116,7 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 // recursing into the arguments of recognized calls so nested calls are handled
 // in one pass.
 func mysqlCallPass(tokens []token) ([]token, error) {
-	out := make([]token, 0, len(tokens))
-	i := 0
-	for i < len(tokens) {
-		t := tokens[i]
-		if t.kind == tokWord {
-			open := nextSig(tokens, i+1)
-			if open >= 0 && isOpEq(tokens[open], "(") {
-				closeIdx := matchParen(tokens, open)
-				if closeIdx < 0 {
-					return nil, fmt.Errorf("%w: unbalanced parentheses after %s", ErrInvalidSyntax, t.text)
-				}
-				repl, handled, err := mysqlRewriteCall(tokens, i, open, closeIdx)
-				if err != nil {
-					return nil, err
-				}
-				if handled {
-					out = append(out, repl...)
-					i = closeIdx + 1
-					continue
-				}
-			}
-		}
-		out = append(out, t)
-		i++
-	}
-	return out, nil
+	return walkCalls(tokens, mysqlRewriteCall)
 }
 
 // mysqlRewriteCall rewrites the recognized MySQL call that starts with the word

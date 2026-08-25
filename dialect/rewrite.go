@@ -31,6 +31,45 @@ const (
 // nested recognized calls inside a rewritten call are handled too.
 type callRecurser func([]token) ([]token, error)
 
+// callRewriter is a dialect's answer for one function call: the tokens that
+// replace it, whether it recognized the call at all, and the error that ends
+// the translation. It is given the whole stream with the call's name and
+// parenthesis positions, since a rule may look at the arguments.
+type callRewriter func(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, error)
+
+// walkCalls hands every "name(" in the stream to the dialect's rewriter and
+// keeps whatever it does not recognize. The walk is the same for all three
+// dialects, only the rewriter differs, and an unbalanced parenthesis after a
+// name ends the translation rather than being rendered back out.
+func walkCalls(tokens []token, rewrite callRewriter) ([]token, error) {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		t := tokens[i]
+		if t.kind == tokWord {
+			open := nextSig(tokens, i+1)
+			if open >= 0 && isOpEq(tokens[open], "(") {
+				closeIdx := matchParen(tokens, open)
+				if closeIdx < 0 {
+					return nil, fmt.Errorf("%w: unbalanced parentheses after %s", ErrInvalidSyntax, t.text)
+				}
+				repl, handled, err := rewrite(tokens, i, open, closeIdx)
+				if err != nil {
+					return nil, err
+				}
+				if handled {
+					out = append(out, repl...)
+					i = closeIdx + 1
+					continue
+				}
+			}
+		}
+		out = append(out, t)
+		i++
+	}
+	return out, nil
+}
+
 // rewriteExtractCall implements the C-1 rule shared by every dialect:
 // EXTRACT(part FROM x) -> helper('part', x). The helper is the dialect's own
 // date-part function, because the dialects disagree on what a part means —
