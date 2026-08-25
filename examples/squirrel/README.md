@@ -47,8 +47,8 @@ id	name	email	age
 
 === Users Age >= 30 ===
 id	name	age
-2	Bob	35
 4	Diana	31
+2	Bob	35
 
 === Users (age 25-35) ===
 id	name	email	age
@@ -59,6 +59,7 @@ id	name	email	age
 
 === Users with 'a' in name ===
 id	name
+1	Alice
 3	Charlie
 4	Diana
 

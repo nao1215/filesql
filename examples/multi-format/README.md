@@ -2,13 +2,13 @@
 
 This example demonstrates filesql's ability to work with multiple file formats simultaneously.
 
-## Supported Formats
+## Formats Used Here
 
-- **CSV** - Comma-separated values
-- **TSV** - Tab-separated values
-- **LTSV** - Labeled Tab-separated Values
-- **Parquet** - Apache Parquet columnar format
-- **XLSX** - Microsoft Excel workbook format
+- CSV - Comma-separated values
+- TSV - Tab-separated values
+- LTSV - Labeled Tab-separated values
+
+filesql reads more than these three; see the root README for the full list.
 
 ## Running the Example
 
@@ -67,7 +67,7 @@ time	level	message	user_id
 order_id	product_name	quantity	price	total
 1	Laptop	2	999.99	1999.98
 2	Mouse	5	29.99	149.95
-3	Keyboard	3	79.99	239.97
+3	Keyboard	3	79.99	239.96999999999997
 4	Desk	1	199.99	199.99
 5	Chair	2	149.99	299.98
 ```

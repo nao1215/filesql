@@ -548,7 +548,7 @@ The [examples](./examples) directory shows how to use filesql with regular Go da
 | Example | Description |
 |---------|-------------|
 | [basic](./examples/basic) | Basic CSV queries |
-| [multi-format](./examples/multi-format) | Join across CSV, TSV, LTSV, and Parquet |
+| [multi-format](./examples/multi-format) | Join across CSV, TSV, and LTSV |
 | [sqlc](./examples/sqlc) | Use filesql with `sqlc` |
 | [gorm](./examples/gorm) | Use filesql with GORM |
 | [sqlx](./examples/sqlx) | Use filesql with `sqlx` |
