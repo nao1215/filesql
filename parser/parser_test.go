@@ -1,6 +1,9 @@
 package parser
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1364,5 +1367,177 @@ func FuzzParseFormats(f *testing.F) {
 				}
 			}
 		}
+	})
+}
+
+// TestNewCSVReader pins what the exported reader does when a caller uses it
+// directly rather than through Parse. It is the reason this package has a CSV
+// reader of its own: encoding/csv turns a CRLF inside a quoted field into an
+// LF, which rewrites a value on the way through.
+func TestNewCSVReader(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a CRLF inside a quoted field survives", func(t *testing.T) {
+		t.Parallel()
+
+		records, err := NewCSVReader(strings.NewReader("a,b\n\"x\r\ny\",2\n")).ReadAll()
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"a", "b"}, {"x\r\ny", "2"}}, records)
+	})
+
+	t.Run("a lone CR inside a quoted field survives", func(t *testing.T) {
+		t.Parallel()
+
+		records, err := NewCSVReader(strings.NewReader("a\n\"x\ry\"\n")).ReadAll()
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"a"}, {"x\ry"}}, records)
+	})
+
+	t.Run("a doubled quote is one quote", func(t *testing.T) {
+		t.Parallel()
+
+		records, err := NewCSVReader(strings.NewReader("a\n\"x\"\"y\"\n")).ReadAll()
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"a"}, {`x"y`}}, records)
+	})
+
+	t.Run("no input is no records", func(t *testing.T) {
+		t.Parallel()
+
+		records, err := NewCSVReader(strings.NewReader("")).ReadAll()
+
+		require.NoError(t, err)
+		assert.Empty(t, records)
+	})
+
+	t.Run("one line with no terminator is one record", func(t *testing.T) {
+		t.Parallel()
+
+		records, err := NewCSVReader(strings.NewReader("a,b")).ReadAll()
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"a", "b"}}, records)
+	})
+
+	t.Run("a field is bytes, whatever script they spell", func(t *testing.T) {
+		t.Parallel()
+
+		records, err := NewCSVReader(strings.NewReader("名前,絵\n日本語,\U0001F600\n")).ReadAll()
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"名前", "絵"}, {"日本語", "\U0001F600"}}, records)
+	})
+
+	t.Run("a quote that never closes is a syntax error", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewCSVReader(strings.NewReader("a\n\"x\n")).ReadAll()
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrCSVSyntax)
+	})
+
+	t.Run("rows of differing widths need FieldsPerRecord set to -1", func(t *testing.T) {
+		t.Parallel()
+
+		reader := NewCSVReader(strings.NewReader("a,b\n1\n"))
+		reader.FieldsPerRecord = -1
+
+		records, err := reader.ReadAll()
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"a", "b"}, {"1"}}, records)
+	})
+
+	t.Run("a file of many rows reads them all", func(t *testing.T) {
+		t.Parallel()
+
+		var input strings.Builder
+		input.WriteString("i\n")
+		const rows = 20000
+		for i := range rows {
+			fmt.Fprintf(&input, "%d\n", i)
+		}
+
+		records, err := NewCSVReader(strings.NewReader(input.String())).ReadAll()
+
+		require.NoError(t, err)
+		require.Len(t, records, rows+1)
+		assert.Equal(t, []string{"19999"}, records[rows])
+	})
+}
+
+// TestNormalizeLineEndings pins the wrapper a caller reaches for when it holds
+// a file written the classic Mac OS way. The decision is made from the start of
+// the file rather than per carriage return, because a carriage return inside a
+// quoted field is data.
+func TestNormalizeLineEndings(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "CR-terminated lines become LF", in: "a\rb\rc\r", want: "a\nb\nc\n"},
+		{name: "LF-terminated lines are untouched", in: "a\nb\n", want: "a\nb\n"},
+		{name: "CRLF-terminated lines are untouched", in: "a\r\nb\r\n", want: "a\r\nb\r\n"},
+		{name: "no input stays no input", in: "", want: ""},
+		{name: "one line with no terminator is untouched", in: "a,b", want: "a,b"},
+		{name: "a CR inside a quoted field of an LF file is data", in: "a\n\"x\ry\"\n", want: "a\n\"x\ry\"\n"},
+		{name: "a lone CR at the end of an LF file is left alone", in: "a\nb\r", want: "a\nb\r"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := io.ReadAll(NormalizeLineEndings(strings.NewReader(tc.in)))
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, string(got))
+		})
+	}
+}
+
+// failingWriter refuses every write, which is what a full disk looks like to a
+// record writer.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+func TestParserSurfaceEdges(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a column type outside the named ones prints as TEXT", func(t *testing.T) {
+		t.Parallel()
+
+		// TEXT is the type that holds anything, so it is the answer that cannot
+		// misdescribe a value.
+		assert.Equal(t, "TEXT", ColumnType(99).String())
+	})
+
+	t.Run("a value converts by the type it is asked for", func(t *testing.T) {
+		t.Parallel()
+
+		// A datetime keeps its text, since SQLite stores one as text, and a type
+		// outside the named ones does the same.
+		assert.Equal(t, "2023-03-15T00:00:00Z", ParseValue("2023-03-15T00:00:00Z", TypeDatetime))
+		assert.Equal(t, "anything", ParseValue("anything", ColumnType(99)))
+		// A cell of only spaces is missing rather than a value.
+		assert.Nil(t, ParseValue("   ", TypeInteger))
+		// A cell that spells no number keeps its text rather than becoming zero.
+		assert.Equal(t, "n/a", ParseValue("n/a", TypeInteger))
+		assert.Equal(t, "n/a", ParseValue("n/a", TypeReal))
+	})
+
+	t.Run("a write that fails is reported with the record's error", func(t *testing.T) {
+		t.Parallel()
+
+		err := WriteTSVRecordLineEnding(failingWriter{}, []string{"a", "b"}, "\r\n")
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to write TSV record")
 	})
 }
