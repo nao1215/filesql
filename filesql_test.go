@@ -1208,8 +1208,11 @@ func TestOpenContext(t *testing.T) {
 		{
 			name: "Timeout during operation",
 			setupCtx: func() (context.Context, context.CancelFunc) {
-				// Very short timeout to trigger during ping
-				return context.WithTimeout(t.Context(), 1*time.Nanosecond)
+				// A deadline already in the past, so the context carries its
+				// error the moment it is built. A very short timeout does not:
+				// its error arrives when the runtime timer fires, which on a
+				// loaded Windows runner is late enough to lose the race.
+				return context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
 			},
 			paths:       []string{filepath.Join("testdata", "sample.csv")},
 			wantErr:     true,
@@ -1223,11 +1226,6 @@ func TestOpenContext(t *testing.T) {
 
 			ctx, cancel := tt.setupCtx()
 			defer cancel()
-
-			// For timeout test, add a small delay to ensure timeout triggers
-			if tt.name == "Timeout during operation" {
-				time.Sleep(10 * time.Millisecond)
-			}
 
 			db, err := OpenContext(ctx, tt.paths...)
 			if tt.wantErr {

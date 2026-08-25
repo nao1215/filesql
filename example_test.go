@@ -483,15 +483,14 @@ func ExampleOpen_errorHandling() {
 		fmt.Printf("Expected error for non-existent file: %v\n", err)
 	}
 
-	// Example 2: Context timeout handling
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond) // Very short timeout
+	// Example 2: Context timeout handling. The deadline is already in the
+	// past, so the load stops before it reads anything.
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 
-	// This will likely timeout
 	tmpDir := createTempTestData()
 	defer os.RemoveAll(tmpDir)
 
-	time.Sleep(10 * time.Millisecond) // Ensure timeout triggers
 	_, err = filesql.OpenContext(ctx, tmpDir)
 	if err != nil {
 		// Extract the core error message (context deadline exceeded)
