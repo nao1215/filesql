@@ -170,16 +170,12 @@ func (c Codec) NewReader(reader io.Reader) (io.Reader, func() error, error) {
 		return bzip2.NewReader(reader), noClose, nil
 
 	case XZ:
-		checked, err := xzWithinDictionaryLimit(reader)
+		streams, err := newXZStreams(reader)
 		if err != nil {
 			return nil, nil, err
 		}
-		xzReader, err := xz.NewReader(checked)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create xz reader: %w", err)
-		}
-		// xz.Reader has no Close.
-		return xzReader, noClose, nil
+		// The xz decoder has no Close.
+		return streams, noClose, nil
 
 	case ZSTD:
 		checked, err := zstdWithinWindowLimit(reader)
@@ -280,69 +276,217 @@ const headerPeekSize = 12 + 1024
 // size the decoder must allocate.
 const lzma2FilterID = 0x21
 
-// xzWithinDictionaryLimit reads far enough into reader to learn the dictionary
-// the first block asks for, and refuses the stream when it asks for more than
-// maxXZDictionary. It returns a reader that still yields everything, including
-// the bytes it read.
+// xzWithinDictionaryLimit reads far enough into src to learn the dictionary the
+// stream's first block asks for and refuses the stream when it asks for more
+// than maxXZDictionary.
 //
 // This is filesql's own check because github.com/ulikunitz/xz offers no ceiling
 // to pass: ReaderConfig.DictCap is a floor rather than a limit, raised to
 // whatever the file declares.
 //
-// The buffered reader it returns is also what the decoder then reads through,
-// which is worth keeping: the library reads its input in small pieces, and
-// loading a 100,000-row xz through the buffer measured 2.5 times faster than
-// reading straight from the file.
-//
-// What it covers is the first block of the first stream, which is where a
-// damaged file and a plain hostile one declare their size. It does not cover a
-// later block, whose header is not reachable without decoding the blocks before
-// it, nor a second stream concatenated after the first, which the library opens
-// on its own: a 116-byte file made by concatenating an ordinary xz with a
-// 28-byte one declaring 2 GiB still allocates 2056 MiB. Closing those needs a
-// decoder that takes a dictionary ceiling, which is also the condition for
-// removing this: if ulikunitz/xz grows one, the limit can be passed to the
-// library instead.
+// It covers the first block of every stream, which is where a damaged file and
+// a plain hostile one declare their size, because xzStreams opens the streams
+// one at a time and calls this in front of each. It does not cover a later
+// block of a stream, whose header is not reachable without decoding the blocks
+// before it. Closing that needs a decoder that takes a dictionary ceiling,
+// which is also the condition for removing this check: if ulikunitz/xz grows
+// one, the limit can be passed to the library instead.
 //
 // Anything the header does not clearly say is left to the library to report:
 // a truncated header, an unreadable one, a size field out of range. This
 // function exists to refuse one specific claim, not to validate the format.
-func xzWithinDictionaryLimit(reader io.Reader) (io.Reader, error) {
-	buffered := bufio.NewReaderSize(reader, headerPeekSize)
-	header, err := buffered.Peek(13)
+func xzWithinDictionaryLimit(src *pushbackReader) error {
+	header, err := src.peek(13)
 	if err != nil {
-		return buffered, nil //nolint:nilerr // Too short to hold a block header; the library reports it
+		return nil //nolint:nilerr // Too short to hold a block header; the library reports it
 	}
 	// Without this, a file named .xz that is not one could still have a
 	// thirteenth byte that reads as a block header size and bytes after it that
 	// parse as an LZMA2 filter, and would then be refused for a dictionary it
 	// never declared instead of for not being an xz stream.
 	if !bytes.Equal(header[:6], xzStreamMagic) {
-		return buffered, nil
+		return nil
 	}
 
 	// The byte after the stream header gives the block header's length in units
 	// of four. Zero marks the index, which means the stream holds no blocks.
 	blockHeaderLen := (int(header[12]) + 1) * 4
 	if header[12] == 0 {
-		return buffered, nil
+		return nil
 	}
 
-	block, err := buffered.Peek(12 + blockHeaderLen)
+	block, err := src.peek(12 + blockHeaderLen)
 	if err != nil {
-		return buffered, nil //nolint:nilerr // Truncated; the library reports it
+		return nil //nolint:nilerr // Truncated; the library reports it
 	}
 	block = block[12:]
 
 	dictionary, ok := lzma2DictionarySize(block)
 	if !ok {
-		return buffered, nil
+		return nil
 	}
 	if dictionary > maxXZDictionary {
-		return nil, fmt.Errorf("%w: the xz stream declares a %d MiB dictionary and the limit is %d MiB",
+		return fmt.Errorf("%w: the xz stream declares a %d MiB dictionary and the limit is %d MiB",
 			ErrDeclaredSizeTooLarge, dictionary>>20, uint64(maxXZDictionary)>>20)
 	}
-	return buffered, nil
+	return nil
+}
+
+// xzStreams reads an xz file one stream at a time so the dictionary check runs
+// in front of every stream rather than only the first.
+//
+// An xz file may hold several streams, one after another, which is what `cat
+// a.xz b.xz` produces and what a rotated log archive looks like. The library
+// reads them all from one reader, opening each on its own, so a check made
+// before the first stream said nothing about the second: an ordinary xz with a
+// 28-byte stream appended, 100 bytes in all, decoded to seventeen bytes and
+// allocated 4104 MiB on the way, with no error to say anything had happened.
+//
+// The split is possible because the library will read a single stream on
+// request. Asked for one, it reads past the end to see whether anything
+// follows, and fails when something does; those bytes are the next stream's, so
+// they are handed back and the next stream is opened after its own check. What
+// makes the handing back safe is that the next stream is only opened when what
+// comes back really is a stream header, so a decoder that read past the end for
+// its own reasons still surfaces its own error.
+type xzStreams struct {
+	src *pushbackReader
+	cur *xz.Reader
+}
+
+// newXZStreams checks and opens the first stream, so a file whose first stream
+// is refused fails where the caller opened it.
+func newXZStreams(reader io.Reader) (*xzStreams, error) {
+	s := &xzStreams{src: &pushbackReader{src: bufio.NewReaderSize(reader, headerPeekSize)}}
+	if err := s.open(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// open checks the stream the source is positioned at and builds its decoder.
+func (s *xzStreams) open() error {
+	if err := xzWithinDictionaryLimit(s.src); err != nil {
+		return err
+	}
+	// The buffered reader underneath is also what the decoder reads through,
+	// which is worth keeping: the library reads its input in small pieces, and
+	// loading a 100,000-row xz through the buffer measured 2.5 times faster
+	// than reading straight from the file.
+	cur, err := xz.ReaderConfig{SingleStream: true}.NewReader(s.src)
+	if err != nil {
+		return fmt.Errorf("failed to create xz reader: %w", err)
+	}
+	s.cur = cur
+	return nil
+}
+
+// Read implements io.Reader over the whole file, stream after stream.
+func (s *xzStreams) Read(p []byte) (int, error) {
+	for {
+		if s.cur == nil {
+			if err := s.open(); err != nil {
+				return 0, err
+			}
+		}
+		n, err := s.cur.Read(p)
+		if err == nil || errors.Is(err, io.EOF) {
+			return n, err
+		}
+		// The read that failed is the one that went past the end of this
+		// stream, so its bytes go back before anything looks at them. They are
+		// only treated as the next stream when they are one; anything else is
+		// the decoder's own failure and is returned as it stands.
+		s.src.rewind()
+		if !s.atStreamHeader() {
+			return n, err
+		}
+		s.cur = nil
+		if n > 0 {
+			return n, nil
+		}
+	}
+}
+
+// atStreamHeader reports whether another xz stream begins where the source now
+// stands, stepping over the padding the format allows between streams.
+func (s *xzStreams) atStreamHeader() bool {
+	for {
+		head, err := s.src.peek(len(xzStreamMagic))
+		if err != nil {
+			return false
+		}
+		if !bytes.Equal(head[:4], xzStreamPadding) {
+			return bytes.Equal(head, xzStreamMagic)
+		}
+		if err := s.src.discard(len(xzStreamPadding)); err != nil {
+			return false
+		}
+	}
+}
+
+// pushbackReader serves bytes from a buffered reader, can put back the bytes of
+// its most recent Read, and can look ahead across both.
+//
+// Undoing one Read is what finding a stream boundary needs: the decoder reads
+// past the end of a stream to see whether anything follows, and whatever it
+// took belongs to the next stream. Undoing whatever the last Read returned,
+// rather than a fixed number of bytes, is what keeps that independent of how
+// the library chooses to look.
+type pushbackReader struct {
+	src  *bufio.Reader
+	back []byte
+	last []byte
+}
+
+func (p *pushbackReader) Read(b []byte) (int, error) {
+	if len(p.back) > 0 {
+		n := copy(b, p.back)
+		p.back = p.back[n:]
+		p.last = append(p.last[:0], b[:n]...)
+		return n, nil
+	}
+	n, err := p.src.Read(b)
+	p.last = append(p.last[:0], b[:n]...)
+	return n, err
+}
+
+// rewind puts back the bytes of the most recent Read. It is a no-op when the
+// most recent Read returned nothing or when its bytes are already back.
+func (p *pushbackReader) rewind() {
+	if len(p.last) == 0 {
+		return
+	}
+	p.back = append(append([]byte(nil), p.last...), p.back...)
+	p.last = p.last[:0]
+}
+
+// peek returns the next n bytes without consuming them.
+func (p *pushbackReader) peek(n int) ([]byte, error) {
+	if len(p.back) >= n {
+		return p.back[:n], nil
+	}
+	rest, err := p.src.Peek(n - len(p.back))
+	if err != nil {
+		return nil, err
+	}
+	if len(p.back) == 0 {
+		return rest, nil
+	}
+	return append(append([]byte(nil), p.back...), rest...), nil
+}
+
+// discard drops the next n bytes.
+func (p *pushbackReader) discard(n int) error {
+	if taken := min(n, len(p.back)); taken > 0 {
+		p.back = p.back[taken:]
+		n -= taken
+	}
+	if n == 0 {
+		return nil
+	}
+	_, err := p.src.Discard(n)
+	return err
 }
 
 // lzma2DictionarySize walks an xz block header to the LZMA2 filter's property
@@ -437,6 +581,9 @@ func xzVarint(b []byte) (uint64, int) {
 var (
 	xzStreamMagic  = []byte{0xFD, '7', 'z', 'X', 'Z', 0x00}
 	zstdFrameMagic = []byte{0x28, 0xB5, 0x2F, 0xFD}
+	// xzStreamPadding is the four zero bytes the format allows between
+	// concatenated streams, in any multiple.
+	xzStreamPadding = []byte{0x00, 0x00, 0x00, 0x00}
 )
 
 // zstdWithinWindowLimit is xzWithinDictionaryLimit's counterpart for zstd: it

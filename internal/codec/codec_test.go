@@ -2,12 +2,14 @@
 package codec
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
 	"io"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -218,4 +220,206 @@ func TestNewReaderBoundsWhatAStreamMayDeclare(t *testing.T) {
 func notXZButBlockHeaderShaped() []byte {
 	head := []byte("not an xz str") // thirteen bytes, so twelve plus a spare
 	return append(head[:12], 0x01, 0x00, lzma2FilterID, 0x01, 40, 0x00, 0x00, 0x00)
+}
+
+// realXZ compresses payload the way this package's own writer does, so a case
+// can concatenate genuine streams.
+func realXZ(t *testing.T, payload string) []byte {
+	t.Helper()
+
+	var out bytes.Buffer
+	writer, closeFn, err := XZ.NewWriter(&out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(writer, payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := closeFn(); err != nil {
+		t.Fatal(err)
+	}
+	return out.Bytes()
+}
+
+// TestXZChecksEveryStream covers the half of the dictionary bound that the
+// first stream's header cannot reach. An xz file may hold several streams, one
+// after another -- what `cat a.xz b.xz` produces -- and the decoder used to open
+// the later ones itself, past anything this package had looked at: an ordinary
+// xz with a 28-byte stream appended, 100 bytes in all, decoded to seventeen
+// bytes and allocated 4104 MiB on the way, with no error to say so.
+func TestXZChecksEveryStream(t *testing.T) {
+	first := realXZ(t, "id,name\n1,alice\n")
+	second := realXZ(t, "2,bob\n")
+
+	join := func(parts ...[]byte) []byte {
+		var out []byte
+		for _, part := range parts {
+			out = append(out, part...)
+		}
+		return out
+	}
+
+	for _, tc := range []struct {
+		name    string
+		data    []byte
+		want    string
+		refused bool
+	}{
+		{
+			name:    "a hostile stream behind an ordinary one is refused",
+			data:    join(first, xzStream(40, false)),
+			want:    "id,name\n1,alice\n",
+			refused: true,
+		},
+		{
+			name:    "the same, with the format's padding between them",
+			data:    join(first, []byte{0, 0, 0, 0}, xzStream(40, false)),
+			want:    "id,name\n1,alice\n",
+			refused: true,
+		},
+		{name: "one stream reads as itself", data: first, want: "id,name\n1,alice\n"},
+		{name: "two streams read as one file", data: join(first, second), want: "id,name\n1,alice\n2,bob\n"},
+		{
+			name: "padding between two streams is stepped over",
+			data: join(first, []byte{0, 0, 0, 0, 0, 0, 0, 0}, second),
+			want: "id,name\n1,alice\n2,bob\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var before, after runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+
+			reader, closeFn, err := XZ.NewReader(bytes.NewReader(tc.data))
+			if err != nil {
+				t.Fatalf("NewReader: %v", err)
+			}
+			out, readErr := io.ReadAll(reader)
+			_ = closeFn()
+			runtime.ReadMemStats(&after)
+			allocated := after.TotalAlloc - before.TotalAlloc
+
+			if got := string(out); got != tc.want {
+				t.Errorf("read %q, want %q", got, tc.want)
+			}
+			if !tc.refused {
+				if readErr != nil {
+					t.Fatalf("read: %v", readErr)
+				}
+				return
+			}
+			if !errors.Is(readErr, ErrDeclaredSizeTooLarge) {
+				t.Fatalf("err = %v, want ErrDeclaredSizeTooLarge", readErr)
+			}
+			// The whole point: refusing costs nothing like what the stream asked
+			// for. 4104 MiB was the figure before the streams were split.
+			if allocated > 64<<20 {
+				t.Errorf("refusing allocated %d MiB", allocated>>20)
+			}
+		})
+	}
+
+	t.Run("bytes behind the last stream that are not one are reported", func(t *testing.T) {
+		reader, closeFn, err := XZ.NewReader(bytes.NewReader(join(first, []byte("trailing junk"))))
+		if err != nil {
+			t.Fatalf("NewReader: %v", err)
+		}
+		out, readErr := io.ReadAll(reader)
+		_ = closeFn()
+
+		if got := string(out); got != "id,name\n1,alice\n" {
+			t.Errorf("read %q", got)
+		}
+		if readErr == nil {
+			t.Fatal("trailing bytes that are not a stream were accepted")
+		}
+	})
+
+	t.Run("a stream cut short is reported rather than truncated silently", func(t *testing.T) {
+		reader, closeFn, err := XZ.NewReader(bytes.NewReader(first[:len(first)/2]))
+		if err != nil {
+			t.Fatalf("NewReader: %v", err)
+		}
+		_, readErr := io.ReadAll(reader)
+		_ = closeFn()
+
+		if readErr == nil {
+			t.Fatal("a truncated stream read as a whole file")
+		}
+	})
+}
+
+// TestPushbackReader covers the piece the stream split rests on: whatever the
+// most recent Read handed out can be put back, and a look ahead sees the same
+// bytes whether they come from the pushback or from the source.
+func TestPushbackReader(t *testing.T) {
+	newReader := func() *pushbackReader {
+		return &pushbackReader{src: bufio.NewReaderSize(strings.NewReader("abcdefgh"), 16)}
+	}
+
+	t.Run("the most recent read goes back", func(t *testing.T) {
+		r := newReader()
+		buf := make([]byte, 3)
+		if _, err := io.ReadFull(r, buf); err != nil {
+			t.Fatal(err)
+		}
+		r.rewind()
+
+		rest, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(rest) != "abcdefgh" {
+			t.Errorf("read %q after rewind", rest)
+		}
+	})
+
+	t.Run("only the most recent read goes back", func(t *testing.T) {
+		r := newReader()
+		buf := make([]byte, 2)
+		if _, err := io.ReadFull(r, buf); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.ReadFull(r, buf); err != nil {
+			t.Fatal(err)
+		}
+		r.rewind()
+		r.rewind()
+
+		rest, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(rest) != "cdefgh" {
+			t.Errorf("read %q after rewind", rest)
+		}
+	})
+
+	t.Run("a look ahead spans the pushback and the source", func(t *testing.T) {
+		r := newReader()
+		buf := make([]byte, 2)
+		if _, err := io.ReadFull(r, buf); err != nil {
+			t.Fatal(err)
+		}
+		r.rewind()
+
+		head, err := r.peek(5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(head) != "abcde" {
+			t.Errorf("peek gave %q", head)
+		}
+		if err := r.discard(3); err != nil {
+			t.Fatal(err)
+		}
+
+		rest, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(rest) != "defgh" {
+			t.Errorf("read %q after discard", rest)
+		}
+	})
 }
