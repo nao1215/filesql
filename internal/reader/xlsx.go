@@ -105,6 +105,16 @@ func (w *Workbook) ReadSheet(name string, opts Options, emit Emit) (Result, erro
 	var chunk [][]string
 	emitted := false
 	for i, row := range rows[1:] {
+		// A row holding no cell at all is not a record, the way a blank line is
+		// not one in any other format read here. It is also what a sheet is made
+		// of between its last written row and a stray cell further down: those
+		// rows arrive by the million from a file of a few kilobytes, and padding
+		// each one to the header's width was the whole cost of loading such a
+		// workbook. A row whose cells are present and empty is a different thing
+		// and stays a record, the way a CSV line reading "," is one.
+		if len(row) == 0 {
+			continue
+		}
 		// A workbook stores no cell for a trailing empty one, so a row ending in
 		// blanks arrives short and means what the padding says. More cells than
 		// the header has means the opposite -- there is data in a column the

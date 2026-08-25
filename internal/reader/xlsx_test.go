@@ -2,6 +2,8 @@ package reader
 
 import (
 	"bytes"
+	"fmt"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -143,6 +145,45 @@ func TestReadXLSX_SheetShape(t *testing.T) {
 		assert.Equal(t, KindEmpty, readErr.Kind)
 	})
 
+	t.Run("a row holding no cell at all is not a record", func(t *testing.T) {
+		t.Parallel()
+
+		// A blank line is not a record in any other format this package reads,
+		// and a sheet's blank row is the same thing: encoding/csv skips one, and
+		// so do the LTSV and JSONL readers.
+		data := workbookOf(t, [][]string{
+			{"Name", "Age"},
+			{"Alice", "25"},
+			{},
+			{"Bob", "30"},
+		})
+
+		result, records, err := readSheet(t, data)
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"Alice", "25"}, {"Bob", "30"}}, records)
+		assert.Equal(t, 2, result.Rows)
+	})
+
+	t.Run("a row whose leading cells are empty keeps them", func(t *testing.T) {
+		t.Parallel()
+
+		// The row above holds nothing and is dropped; this one holds a value in
+		// its second column and nothing in its first, which is a record whose
+		// first field is empty. A workbook writes no cell for an empty value, so
+		// the two shapes are told apart by whether the row reaches any column at
+		// all.
+		data := workbookOf(t, [][]string{
+			{"Name", "Age"},
+			{"", "30"},
+		})
+
+		_, records, err := readSheet(t, data)
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"", "30"}}, records)
+	})
+
 	t.Run("rows are handed out a chunk at a time", func(t *testing.T) {
 		t.Parallel()
 
@@ -160,4 +201,52 @@ func TestReadXLSX_SheetShape(t *testing.T) {
 		assert.Equal(t, []int{2, 2, 1}, sizes)
 		assert.Equal(t, 5, result.Rows)
 	})
+}
+
+// TestReadXLSXGapRowsCostNothing pins the property the gap-row rule exists for:
+// a workbook whose used range reaches far down the sheet costs what it holds
+// rather than what its range spans. Padding every row of the range to the
+// header's width made a file of a few kilobytes allocate gigabytes and put a
+// million rows of empty strings into the table, and the allocation is what
+// there is to assert, since the row count alone would pass a fix that only
+// dropped the rows after building them.
+func TestReadXLSXGapRowsCostNothing(t *testing.T) {
+	t.Parallel()
+
+	const columns = 20
+	const farRow = 200000
+
+	f := excelize.NewFile()
+	t.Cleanup(func() { require.NoError(t, f.Close()) })
+	for c := 1; c <= columns; c++ {
+		axis, err := excelize.CoordinatesToCellName(c, 1)
+		require.NoError(t, err)
+		require.NoError(t, f.SetCellStr("Sheet1", axis, fmt.Sprintf("c%d", c)))
+	}
+	far, err := excelize.CoordinatesToCellName(columns, farRow)
+	require.NoError(t, err)
+	require.NoError(t, f.SetCellStr("Sheet1", far, "x"))
+
+	var buf bytes.Buffer
+	require.NoError(t, f.Write(&buf))
+	data := buf.Bytes()
+	require.Less(t, len(data), 64*1024, "the workbook itself has to stay small for the ratio to mean anything")
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	_, records, err := readSheet(t, data)
+	runtime.ReadMemStats(&after)
+	require.NoError(t, err)
+
+	want := make([]string, columns)
+	want[columns-1] = "x"
+	assert.Equal(t, [][]string{want}, records)
+
+	// Generous next to the 6 KiB the file is, and well below the 119 MiB that
+	// padding 200000 rows of 20 columns cost before.
+	const ceiling = 32 << 20
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > ceiling {
+		t.Errorf("reading a %d-byte workbook allocated %d MiB", len(data), allocated>>20)
+	}
 }
