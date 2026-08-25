@@ -553,6 +553,8 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Convert a cell by the column type it belongs to | `ExampleParseValue`, `ExampleTableData_columnTypes` | [parser/example_test.go](./parser/example_test.go) |
 | List a workbook's sheets and pick the ones a policy admits | `ExampleExcelSheets`, `ExampleSelectExcelSheets` | [parser/example_test.go](./parser/example_test.go) |
 | Rewrite a sheet's date cells into ISO 8601 | `ExampleNormalizeXLSXDates` | [parser/example_test.go](./parser/example_test.go) |
+| Turn an ACH file into its tables | `ExampleParseReader`, `ExampleFromFile` | [parser/ach/example_test.go](./parser/ach/example_test.go) |
+| Turn a Fedwire file into its table | `ExampleParseReader`, `ExampleFromFile` | [parser/wire/example_test.go](./parser/wire/example_test.go) |
 
 #### dialect
 
