@@ -573,17 +573,19 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Build a DataFrame directly from Go records | `ExampleNewDataFrameFromRecords` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Write transformed data back to CSV or TSV | `ExampleDataFrame_ToCSV`, `ExampleDataFrame_ToTSV` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Select, filter, and mutate rows | `ExampleDataFrame_Select`, `ExampleDataFrame_Filter`, `ExampleDataFrame_Mutate` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Read a callback's row without guessing its types | `ExampleRow` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Read a callback's row without guessing its types | `ExampleRow`, `ExampleRow_Int` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Join in-memory tables | `ExampleDataFrame_Join` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Append frames with matching or mixed schemas | `ExampleDataFrame_Concat`, `ExampleConcatAll` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Group rows for aggregation | `ExampleDataFrame_GroupBy`, `ExampleGroupedDataFrame_Count` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Run built-in or custom aggregations | `ExampleGroupedDataFrame_Sum`, `ExampleGroupedDataFrame_Agg` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Run built-in or custom aggregations | `ExampleGroupedDataFrame_Sum`, `ExampleGroupedDataFrame_Mean`, `ExampleGroupedDataFrame_Agg` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Take the extremes of each group | `ExampleGroupedDataFrame_Min`, `ExampleGroupedDataFrame_Max` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Sort by one or multiple columns | `ExampleDataFrame_Sort`, `ExampleDataFrame_SortBy` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Remove duplicates by key columns | `ExampleDataFrame_DistinctBy` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Keep only the first rows | `ExampleDataFrame_Head` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Rename columns in bulk | `ExampleDataFrame_RenameColumns` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Fill or drop missing values | `ExampleDataFrame_FillNAByColumn`, `ExampleDataFrame_DropNASubset` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Remove duplicates by whole rows or by key columns | `ExampleDataFrame_Distinct`, `ExampleDataFrame_DistinctBy` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Keep only the first or last rows | `ExampleDataFrame_Head`, `ExampleDataFrame_Tail`, `ExampleDataFrame_Limit` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Rename one column or many | `ExampleDataFrame_Rename`, `ExampleDataFrame_RenameColumns` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Drop columns | `ExampleDataFrame_Drop` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Fill or drop missing values | `ExampleDataFrame_FillNA`, `ExampleDataFrame_FillNAByColumn`, `ExampleDataFrame_DropNA`, `ExampleDataFrame_DropNASubset` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Inspect a frame's columns, rows, and records | `ExampleDataFrame_Columns`, `ExampleDataFrame_Len`, `ExampleDataFrame_ToRecords` | [frame/example_api_test.go](./frame/example_api_test.go) |
 
 ### Integration examples
 
