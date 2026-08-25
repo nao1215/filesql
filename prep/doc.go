@@ -116,9 +116,9 @@
 // requires a scheme, so a relative reference such as /a/b is not a URI. fqdn
 // refuses a label ending in a hyphen, which the dialect's fqdn pattern allows
 // though its hostname patterns do not. ulid requires a timestamp the format
-// can hold, and uuid3 the variant nibble uuid4 and uuid5 require. uuid3, uuid4
-// and uuid5 accept upper case, as uuid does. hostname_port takes a bracketed
-// IPv6 address and refuses a bare port.
+// can hold. uuid3 requires the variant nibble that uuid4 and uuid5 require,
+// and all three accept upper case, as uuid does. hostname_port takes a
+// bracketed IPv6 address and refuses a bare port.
 //
 // See https://pkg.go.dev/github.com/nao1215/filesql/prep for the complete list of supported validators.
 package prep
