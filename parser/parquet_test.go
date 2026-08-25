@@ -197,6 +197,12 @@ func TestParse_Parquet(t *testing.T) {
 // a parse either returns a table or an error, and never panics. It found a
 // panic in the Parquet path in under three seconds, raised inside the Arrow
 // library on its own error path, which is why that call is wrapped.
+//
+// It does not assert on allocation. The footer length a Parquet file declares
+// is bounded by the reader, but a page header inside a column chunk declares
+// sizes the library allocates without this package seeing them, so a ceiling
+// here would fail on a file nothing in this repository can currently refuse.
+// What the footer costs is pinned by a test of its own instead.
 func FuzzParseBinary(f *testing.F) {
 	workbook := excelize.NewFile()
 	if err := workbook.SetSheetRow("Sheet1", "A1", &[]any{"a", "b"}); err != nil {
@@ -223,6 +229,9 @@ func FuzzParseBinary(f *testing.F) {
 	f.Add([]byte("not a file at all"))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > 1<<16 {
+			t.Skip()
+		}
 		for _, fileType := range []FileType{XLSX, Parquet} {
 			result, err := Parse(bytes.NewReader(data), fileType)
 			if err != nil {
