@@ -134,9 +134,17 @@ func registerAll() error {
 		unitDayOfWeek:         {1, unaryDatePart(unitDayOfWeek)},
 		unitDayOfYear:         {1, unaryDatePart(unitDayOfYear)},
 		unitWeekday:           {1, unaryDatePart(unitWeekday)},
-		"locate":              {-1, fnLocate},
-		"lpad":                {-1, fnLpad},
-		"rpad":                {-1, fnRpad},
+		unitQuarter:           {1, unaryDatePart(unitQuarter)},
+
+		// The week functions carry MySQL's name because MySQL's week is not
+		// everyone's: it starts on Sunday or Monday by mode, where PostgreSQL
+		// has only the ISO week and BigQuery has both under separate names.
+		"mysql_week":       {-1, fnMySQLWeek},
+		"mysql_weekofyear": {1, fnMySQLWeekOfYear},
+		"mysql_yearweek":   {-1, fnMySQLYearWeek},
+		"locate":           {-1, fnLocate},
+		"lpad":             {-1, fnLpad},
+		"rpad":             {-1, fnRpad},
 
 		// LPAD and RPAD answer a negative length and an empty pad differently
 		// per dialect, so each dialect's rewrite names its own helper; see
@@ -486,6 +494,36 @@ var mysqlToGoLayout = map[byte]string{
 	'a': layoutWeekdayShort,
 }
 
+// mysqlParseLayout overrides mysqlToGoLayout for the specifiers whose parsing
+// width differs from their formatting width. MySQL pads a number on output and
+// reads one digit or two on input, while a Go layout element means both at once:
+// "01" formats a month as two digits and refuses one, and "1" accepts either and
+// formats without the padding. So the two directions need two maps, and only the
+// numeric specifiers appear here.
+var mysqlParseLayout = map[byte]string{
+	'm': "1",
+	'd': "2",
+	'h': "3",
+	'I': "3",
+	'i': "4",
+	's': "5",
+	'S': "5",
+	'r': "3:4:5 PM",
+	'T': "15:4:5",
+}
+
+// mysqlLayoutFor is the Go layout fragment a MySQL specifier means, in the
+// direction asked for.
+func mysqlLayoutFor(spec byte, parsing bool) (string, bool) {
+	if parsing {
+		if l, found := mysqlParseLayout[spec]; found {
+			return l, true
+		}
+	}
+	l, found := mysqlToGoLayout[spec]
+	return l, found
+}
+
 // fnDateFormat implements MySQL DATE_FORMAT(date, format).
 func fnDateFormat(args []driver.Value) (driver.Value, error) {
 	s, ok := toString(args[0])
@@ -575,6 +613,11 @@ func ordinalSuffix(day int) string {
 	}
 }
 
+// weekModeYear is the MySQL week-mode flag that makes the count belong to a
+// year rather than start over at week 0, which is the difference between WEEK
+// and YEARWEEK at the turn of a year.
+const weekModeYear = 2
+
 // mysqlWeek is the week number of tm under one of MySQL's week modes, and the
 // year that week belongs to.
 //
@@ -595,7 +638,7 @@ func mysqlWeek(tm time.Time, mode int) (week, year int) {
 	// rule for the Sunday-first modes.
 	const (
 		mondayFirst  = 1
-		weekYear     = 2
+		weekYear     = weekModeYear
 		firstWeekday = 4
 	)
 	flags := mode & 7
@@ -681,7 +724,7 @@ func fnStrToDate(args []driver.Value) (driver.Value, error) {
 	for i := 0; i < len(format); i++ {
 		if format[i] == '%' && i+1 < len(format) {
 			spec := format[i+1]
-			if l, found := mysqlToGoLayout[spec]; found {
+			if l, found := mysqlLayoutFor(spec, true); found {
 				layout.WriteString(l)
 				switch spec {
 				case 'Y', 'y':
@@ -860,6 +903,70 @@ func fnMySQLDatePart(args []driver.Value) (driver.Value, error) {
 		return int64(week), nil
 	}
 	return datePartValue(unit, tm)
+}
+
+// weekMode reads the optional mode argument MySQL's week functions take,
+// answering the default when there is none.
+func weekMode(args []driver.Value, defaultMode int) (int, bool) {
+	if len(args) < 2 {
+		return defaultMode, true
+	}
+	n, ok := toInt(args[1])
+	if !ok {
+		return 0, false
+	}
+	return int(n), true
+}
+
+// fnMySQLWeek implements MySQL WEEK(date[, mode]). Mode 0, the default, starts
+// the week on Sunday and numbers from zero, so the first days of January can be
+// week 0.
+func fnMySQLWeek(args []driver.Value) (driver.Value, error) {
+	if len(args) < 1 || len(args) > 2 {
+		return nil, fmt.Errorf("dialect: WEEK expects 1 or 2 arguments, got %d", len(args))
+	}
+	tm, ok := toStringTime(args[0])
+	if !ok {
+		return nil, nil
+	}
+	mode, ok := weekMode(args, 0)
+	if !ok {
+		return nil, nil
+	}
+	week, _ := mysqlWeek(tm, mode)
+	return int64(week), nil
+}
+
+// fnMySQLWeekOfYear implements MySQL WEEKOFYEAR(date), which is WEEK(date, 3):
+// the ISO week, starting on Monday and numbering from one.
+func fnMySQLWeekOfYear(args []driver.Value) (driver.Value, error) {
+	tm, ok := toStringTime(args[0])
+	if !ok {
+		return nil, nil
+	}
+	week, _ := mysqlWeek(tm, 3)
+	return int64(week), nil
+}
+
+// fnMySQLYearWeek implements MySQL YEARWEEK(date[, mode]) as year*100 + week.
+// The year is the one the week belongs to rather than the one the date is in,
+// so the first days of January can answer with the previous year: YEARWEEK
+// forces on the mode flag that lends them to the previous year's last week,
+// which is why it has no week 0 where WEEK does.
+func fnMySQLYearWeek(args []driver.Value) (driver.Value, error) {
+	if len(args) < 1 || len(args) > 2 {
+		return nil, fmt.Errorf("dialect: YEARWEEK expects 1 or 2 arguments, got %d", len(args))
+	}
+	tm, ok := toStringTime(args[0])
+	if !ok {
+		return nil, nil
+	}
+	mode, ok := weekMode(args, 0)
+	if !ok {
+		return nil, nil
+	}
+	week, year := mysqlWeek(tm, mode|weekModeYear)
+	return int64(year)*100 + int64(week), nil
 }
 
 // unaryDatePart builds a one-argument function (YEAR, MONTH, ...) from a fixed

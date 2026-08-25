@@ -1359,8 +1359,50 @@ func TestWeekNumberingFollowsEachDialect(t *testing.T) {
 	}
 }
 
-// TestMySQLDateFunctionsFollowMySQL pins TIMESTAMPDIFF, FROM_UNIXTIME, TIMEDIFF
-// and STR_TO_DATE against MySQL 8.4. TIMESTAMPDIFF counts complete units, not
+// TestAddDateShapesItDoesNotKnow covers the ADDDATE calls the rewrite leaves
+// alone. A call it cannot read as "value, interval" or "value, days" is passed
+// through for SQLite to reject, which is what this package does with anything it
+// does not recognize, rather than guessed at.
+func TestAddDateShapesItDoesNotKnow(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	for _, query := range []string{
+		`SELECT ADDDATE('2026-01-01')`,
+		`SELECT SUBDATE('2026-01-01')`,
+		`SELECT ADDDATE('2026-01-01', )`,
+	} {
+		t.Run(query, func(t *testing.T) {
+			if _, err := runDialect(t, db, MySQL, query); err == nil {
+				t.Fatalf("%s returned no error", query)
+			}
+		})
+	}
+}
+
+// TestMySQLWeekFunctionsRejectWrongArity covers the arity guards of the week
+// functions, which take one argument or two and nothing else.
+func TestMySQLWeekFunctionsRejectWrongArity(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	for _, query := range []string{
+		`SELECT WEEK()`,
+		`SELECT WEEK('2026-01-01', 0, 0)`,
+		`SELECT YEARWEEK()`,
+		`SELECT YEARWEEK('2026-01-01', 0, 0)`,
+	} {
+		t.Run(query, func(t *testing.T) {
+			if _, err := runDialect(t, db, MySQL, query); err == nil {
+				t.Fatalf("%s returned no error", query)
+			}
+		})
+	}
+}
+
+// TestMySQLDateFunctionsFollowMySQL pins TIMESTAMPDIFF, FROM_UNIXTIME, TIMEDIFF,
+// STR_TO_DATE, the ADDDATE and SUBDATE synonyms and the week and quarter
+// functions against MySQL 8.4. TIMESTAMPDIFF counts complete units, not
 // the calendar boundaries BigQuery's DATE_DIFF counts, so the GoogleSQL rows
 // stand guard beside the MySQL ones: a MySQL fix that moved the shared helper
 // would fail them. FROM_UNIXTIME is NULL outside MySQL's documented range,
@@ -1442,6 +1484,62 @@ func TestMySQLDateFunctionsFollowMySQL(t *testing.T) {
 		{name: "str_to_date refuses a date without a day", dialect: MySQL, query: `SELECT STR_TO_DATE('2024-02', '%Y-%m')`, wantNull: true},
 		{name: "str_to_date refuses a weekday alone", dialect: MySQL, query: `SELECT STR_TO_DATE('Monday', '%W')`, wantNull: true},
 		{name: "str_to_date without a specifier is null", dialect: MySQL, query: `SELECT STR_TO_DATE('x', 'x')`, wantNull: true},
+
+		// STR_TO_DATE's numeric specifiers are padded on output only. On input
+		// each reads one digit or two, which is why a date written the way a
+		// spreadsheet writes it parses in MySQL.
+		{name: "str_to_date reads an unpadded month and day", dialect: MySQL, query: `SELECT STR_TO_DATE('2026-1-5', '%Y-%m-%d')`, want: "2026-01-05"},
+		{name: "str_to_date reads a padded month and day", dialect: MySQL, query: `SELECT STR_TO_DATE('2026-01-05', '%Y-%m-%d')`, want: "2026-01-05"},
+		{name: "str_to_date reads an unpadded day first", dialect: MySQL, query: `SELECT STR_TO_DATE('5,1,2026', '%d,%m,%Y')`, want: "2026-01-05"},
+		{name: "str_to_date reads an unpadded time", dialect: MySQL, query: `SELECT STR_TO_DATE('2026-01-05 9:7:5', '%Y-%m-%d %H:%i:%s')`, want: "2026-01-05 09:07:05"},
+		{name: "str_to_date reads an unpadded twelve-hour time", dialect: MySQL, query: `SELECT STR_TO_DATE('2026-01-05 1:07:05 PM', '%Y-%m-%d %h:%i:%s %p')`, want: "2026-01-05 13:07:05"},
+		{name: "str_to_date still refuses an impossible date", dialect: MySQL, query: `SELECT STR_TO_DATE('2026-02-30', '%Y-%m-%d')`, wantNull: true},
+		{name: "str_to_date still refuses a value that is not a date", dialect: MySQL, query: `SELECT STR_TO_DATE('abc', '%Y-%m-%d')`, wantNull: true},
+		// The two-digit year keeps its width: MySQL reads 99 as 1999 and 26 as
+		// 2026, which a variable-width year would not.
+		{name: "str_to_date reads a two-digit year as MySQL does", dialect: MySQL, query: `SELECT STR_TO_DATE('99-1-5', '%y-%c-%e')`, want: "1999-01-05"},
+
+		// ADDDATE and SUBDATE are MySQL's synonyms of DATE_ADD and DATE_SUB,
+		// interval form and day shorthand alike.
+		{name: "adddate takes an interval", dialect: MySQL, query: `SELECT ADDDATE('2026-01-31', INTERVAL 1 MONTH)`, want: "2026-02-28"},
+		{name: "subdate takes an interval", dialect: MySQL, query: `SELECT SUBDATE('2026-03-31', INTERVAL 1 MONTH)`, want: "2026-02-28"},
+		{name: "adddate takes a day count", dialect: MySQL, query: `SELECT ADDDATE('2026-01-31', 1)`, want: "2026-02-01"},
+		{name: "subdate takes a day count", dialect: MySQL, query: `SELECT SUBDATE('2026-01-31', 1)`, want: "2026-01-30"},
+		{name: "subdate of a negative day count adds", dialect: MySQL, query: `SELECT SUBDATE('2026-01-31', -1)`, want: "2026-02-01"},
+		{name: "adddate agrees with date_add", dialect: MySQL, query: `SELECT ADDDATE('2026-01-31', INTERVAL 1 MONTH) = DATE_ADD('2026-01-31', INTERVAL 1 MONTH)`, want: "1"},
+
+		// WEEK, WEEKOFYEAR, YEARWEEK and QUARTER, whose numbers EXTRACT and
+		// DATE_FORMAT already reach. The year boundaries are the rows worth
+		// having: MySQL lends the first days of January to the previous year in
+		// the modes that have no week 0.
+		{name: "week defaults to mode zero", dialect: MySQL, query: `SELECT WEEK('2026-01-01')`, want: "0"},
+		{name: "week of the first full week", dialect: MySQL, query: `SELECT WEEK('2026-01-04')`, want: "1"},
+		{name: "week at the end of the year", dialect: MySQL, query: `SELECT WEEK('2026-12-31')`, want: "52"},
+		{name: "week in mode one", dialect: MySQL, query: `SELECT WEEK('2026-01-01', 1)`, want: "1"},
+		{name: "week in mode three", dialect: MySQL, query: `SELECT WEEK('2026-01-01', 3)`, want: "1"},
+		{name: "week agrees with extract", dialect: MySQL, query: `SELECT WEEK('2026-01-04') = EXTRACT(WEEK FROM '2026-01-04')`, want: "1"},
+		{name: "weekofyear is the iso week", dialect: MySQL, query: `SELECT WEEKOFYEAR('2026-01-01')`, want: "1"},
+		{name: "yearweek lends january to the previous year", dialect: MySQL, query: `SELECT YEARWEEK('2026-01-01')`, want: "202552"},
+		{name: "yearweek of the first full week", dialect: MySQL, query: `SELECT YEARWEEK('2026-01-04')`, want: "202601"},
+		{name: "yearweek at the end of the year", dialect: MySQL, query: `SELECT YEARWEEK('2026-12-31')`, want: "202652"},
+		{name: "quarter of january", dialect: MySQL, query: `SELECT QUARTER('2026-01-31')`, want: "1"},
+		{name: "quarter of april", dialect: MySQL, query: `SELECT QUARTER('2026-04-01')`, want: "2"},
+		{name: "quarter of december", dialect: MySQL, query: `SELECT QUARTER('2026-12-31')`, want: "4"},
+		{name: "quarter agrees with extract", dialect: MySQL, query: `SELECT QUARTER('2026-12-31') = EXTRACT(QUARTER FROM '2026-12-31')`, want: "1"},
+
+		// A value that is not a date, and a mode that is not a number, answer
+		// NULL rather than a zero that would read as a real week.
+		{name: "week of null", dialect: MySQL, query: `SELECT WEEK(NULL)`, wantNull: true},
+		{name: "week of a value that is not a date", dialect: MySQL, query: `SELECT WEEK('not-a-date')`, wantNull: true},
+		{name: "week with a null mode", dialect: MySQL, query: `SELECT WEEK('2026-01-04', NULL)`, wantNull: true},
+		{name: "weekofyear of null", dialect: MySQL, query: `SELECT WEEKOFYEAR(NULL)`, wantNull: true},
+		{name: "yearweek of null", dialect: MySQL, query: `SELECT YEARWEEK(NULL)`, wantNull: true},
+		{name: "yearweek with a null mode", dialect: MySQL, query: `SELECT YEARWEEK('2026-01-04', NULL)`, wantNull: true},
+		{name: "quarter of null", dialect: MySQL, query: `SELECT QUARTER(NULL)`, wantNull: true},
+		{name: "adddate of null", dialect: MySQL, query: `SELECT ADDDATE(NULL, 1)`, wantNull: true},
+		{name: "adddate of a null day count", dialect: MySQL, query: `SELECT ADDDATE('2026-01-01', NULL)`, wantNull: true},
+		// The mode is read as MySQL reads it, by its low three bits.
+		{name: "week of a mode past the range", dialect: MySQL, query: `SELECT WEEK('2026-01-01', 8)`, want: "0"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

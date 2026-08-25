@@ -35,6 +35,9 @@ import (
 //	M-21 a XOR b                         -> ErrUnsupportedSyntax
 //	M-25 UPPER(x) / LOWER(x)             -> unicode_upper / unicode_lower
 //	M-26 LPAD(x, n, p) / RPAD(x, n, p)   -> mysql_lpad / mysql_rpad
+//	M-27 ADDDATE / SUBDATE               -> interval_add, interval or day form
+//	M-28 WEEK / WEEKOFYEAR / YEARWEEK    -> mysql_week / mysql_weekofyear /
+//	                                     mysql_yearweek
 //
 // M-10 (LIMIT n, m) needs no rewrite: SQLite accepts it natively.
 func rewriteMySQL(tokens []token) ([]token, error) {
@@ -143,6 +146,15 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_timediff", mysqlCallPass)
 	case "TIMESTAMPADD":
 		return rewriteTimestampAdd(tokens, open, closeIdx, mysqlCallPass)
+	case "ADDDATE":
+		return rewriteAddDate(tokens, open, closeIdx, "+", mysqlCallPass)
+	case "SUBDATE":
+		return rewriteAddDate(tokens, open, closeIdx, "-", mysqlCallPass)
+	case "WEEK", "WEEKOFYEAR", "YEARWEEK":
+		// MySQL numbers weeks its own way, by a mode that decides which day
+		// starts a week and which week is week 1, so the call carries MySQL's
+		// name rather than a shared one.
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_"+strings.ToLower(tokens[nameIdx].text), mysqlCallPass)
 	case "POSITION":
 		return rewritePosition(tokens, open, closeIdx, mysqlCallPass)
 	case fnNameSubstring, fnNameSubstr:

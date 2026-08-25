@@ -30,6 +30,7 @@ func TestDateArithmeticSemantics(t *testing.T) {
 
 		// A date stays a date; only a time-grained unit promotes it.
 		{"mysql keeps a date a date", MySQL, `SELECT DATE_ADD('2026-01-01', INTERVAL 1 DAY)`, "2026-01-02"},
+		{"googlesql keeps a date a date", GoogleSQL, `SELECT DATE_ADD(DATE '2026-01-01', INTERVAL 1 DAY)`, "2026-01-02"},
 		{"mysql promotes on an hour", MySQL, `SELECT DATE_ADD('2026-01-01', INTERVAL 1 HOUR)`, "2026-01-01 01:00:00"},
 		{"mysql keeps a datetime a datetime", MySQL, `SELECT DATE_ADD('2026-01-01 10:00:00', INTERVAL 1 DAY)`, "2026-01-02 10:00:00"},
 
@@ -52,12 +53,16 @@ func TestDateArithmeticSemantics(t *testing.T) {
 		{"mysql timestampadd hour", MySQL, `SELECT TIMESTAMPADD(HOUR, 2, '2026-01-01 00:00:00')`, "2026-01-01 02:00:00"},
 
 		// PostgreSQL has no DATE_ADD; the interval operator is its only date
-		// arithmetic.
-		{"postgresql adds a day", PostgreSQL, `SELECT DATE '2026-01-15' + INTERVAL '1 day'`, "2026-01-16"},
-		{"postgresql subtracts a month", PostgreSQL, `SELECT DATE '2026-03-31' - INTERVAL '1 month'`, "2026-02-28"},
-		{"postgresql adds a compound interval", PostgreSQL, `SELECT DATE '2026-01-01' + INTERVAL '1 year 6 months'`, "2027-07-01"},
+		// arithmetic. It answers a timestamp whatever it was given, where the
+		// other two dialects leave a date a date, so the shape is per dialect
+		// rather than per unit. Every want here was read from postgres:17.
+		{"postgresql adds a day", PostgreSQL, `SELECT DATE '2026-01-15' + INTERVAL '1 day'`, "2026-01-16 00:00:00"},
+		{"postgresql subtracts a month", PostgreSQL, `SELECT DATE '2026-03-31' - INTERVAL '1 month'`, "2026-02-28 00:00:00"},
+		{"postgresql adds a compound interval", PostgreSQL, `SELECT DATE '2026-01-01' + INTERVAL '1 year 6 months'`, "2027-07-01 00:00:00"},
+		{"postgresql adds weeks", PostgreSQL, `SELECT DATE '2026-01-31' + INTERVAL '2 weeks'`, "2026-02-14 00:00:00"},
 		{"postgresql promotes on an hour", PostgreSQL, `SELECT DATE '2026-01-01' + INTERVAL '2 hours'`, "2026-01-01 02:00:00"},
-		{"postgresql adds to a cast value", PostgreSQL, `SELECT '2026-01-15'::date + INTERVAL '1 day'`, "2026-01-16"},
+		{"postgresql adds to a cast value", PostgreSQL, `SELECT '2026-01-15'::date + INTERVAL '1 day'`, "2026-01-16 00:00:00"},
+		{"postgresql keeps a timestamp's time", PostgreSQL, `SELECT TIMESTAMP '2026-01-31 08:00:00' + INTERVAL '1 month'`, "2026-02-28 08:00:00"},
 
 		// Typed date literals, which SQLite does not parse in any dialect.
 		{"mysql date literal", MySQL, `SELECT DATE '2026-01-01'`, "2026-01-01"},
