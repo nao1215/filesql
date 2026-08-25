@@ -2,7 +2,6 @@ package frame
 
 import (
 	"cmp"
-	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/nao1215/filesql/internal/infer"
+	"github.com/nao1215/filesql/internal/writer"
 	"github.com/nao1215/filesql/parser"
 )
 
@@ -235,7 +235,7 @@ func (df *DataFrame) ToRecords() []map[string]any {
 //
 //	err := df.ToCSV("output.csv")
 func (df *DataFrame) ToCSV(path string) error {
-	return df.toDelimitedFile(path, ',')
+	return df.toDelimitedFile(path, writer.FormatCSV)
 }
 
 // ToTSV writes the DataFrame to a TSV file.
@@ -247,89 +247,57 @@ func (df *DataFrame) ToCSV(path string) error {
 //
 //	err := df.ToTSV("output.tsv")
 func (df *DataFrame) ToTSV(path string) error {
-	return df.toDelimitedFile(path, '\t')
+	return df.toDelimitedFile(path, writer.FormatTSV)
 }
 
-// toDelimitedFile writes the DataFrame to a file with the specified delimiter.
+// toDelimitedFile writes the DataFrame to a file in the given format.
 //
-// TSV is written by parser.WriteTSVRecord rather than by a CSV writer with its
-// comma changed. TSV has no quoting: a CSV writer wrapped a value holding a tab
-// in double quotes, and to a TSV reader those quotes are two more characters
-// while the tab inside them is still a field boundary — the file came out with
-// the wrong shape and the quotes as data. A value the format cannot hold is
-// refused there rather than written as something else.
-func (df *DataFrame) toDelimitedFile(path string, delimiter rune) error {
+// TSV is not a CSV writer with its comma changed. TSV has no quoting: a CSV
+// writer wrapped a value holding a tab in double quotes, and to a TSV reader
+// those quotes are two more characters while the tab inside them is still a
+// field boundary — the file came out with the wrong shape and the quotes as
+// data. A value the format cannot hold is refused instead.
+func (df *DataFrame) toDelimitedFile(path string, format writer.Format) error {
 	f, err := os.Create(path) //nolint:gosec // path is provided by the user
 	if err != nil {
 		return fmt.Errorf("failed to create file: %w", err)
 	}
 	defer f.Close()
 
-	if delimiter == '\t' {
-		return df.writeTSV(f)
+	out := writer.New(f, format, writer.Options{})
+	if err := out.Header(df.columns); err != nil {
+		return fmt.Errorf("failed to write header: %w", unrepresentableError(err))
 	}
 
-	writer := csv.NewWriter(f)
-	writer.Comma = delimiter
-
-	// writeRecord writes one record, taking the lone empty field around the
-	// csv writer: written plainly it is a blank line, which a reader skips, so
-	// a one-column frame's empty rows vanished on reload. `""` says "one
-	// field, empty" — the same form the filesql dump writes for the same
-	// shape. Flushing first keeps the two writers' output in order.
-	writeRecord := func(record []string) error {
-		if len(record) != 1 || record[0] != "" {
-			return writer.Write(record)
-		}
-		writer.Flush()
-		if err := writer.Error(); err != nil {
-			return err
-		}
-		_, err := io.WriteString(f, "\"\"\n")
-		return err
-	}
-
-	// Write header
-	if err := writeRecord(df.columns); err != nil {
-		return fmt.Errorf("failed to write header: %w", err)
-	}
-
-	// Write rows
-	for _, row := range df.rows {
-		record := make([]string, len(df.columns))
-		for i, col := range df.columns {
-			record[i] = formatValue(row[col])
-		}
-		if err := writeRecord(record); err != nil {
-			return fmt.Errorf("failed to write row: %w", err)
-		}
-	}
-
-	// Flush buffered data and check for errors
-	writer.Flush()
-	if err := writer.Error(); err != nil {
-		return fmt.Errorf("failed to flush writer: %w", err)
-	}
-
-	return nil
-}
-
-// writeTSV writes the frame as tab-separated records, taking every field
-// literally.
-func (df *DataFrame) writeTSV(w io.Writer) error {
-	if err := parser.WriteTSVRecord(w, df.columns); err != nil {
-		return fmt.Errorf("failed to write header: %w", err)
-	}
+	// One record is reused across rows: the writer has encoded it by the time
+	// Record returns, so it keeps no reference to the strings in it.
 	record := make([]string, len(df.columns))
 	for _, row := range df.rows {
 		for i, col := range df.columns {
 			record[i] = formatValue(row[col])
 		}
-		if err := parser.WriteTSVRecord(w, record); err != nil {
-			return fmt.Errorf("failed to write row: %w", err)
+		if err := out.Record(record); err != nil {
+			return fmt.Errorf("failed to write row: %w", unrepresentableError(err))
 		}
 	}
+
+	if err := out.Flush(); err != nil {
+		return fmt.Errorf("failed to flush writer: %w", unrepresentableError(err))
+	}
 	return nil
+}
+
+// unrepresentableError gives a value the format cannot hold the sentinel this
+// package has always reported it with. The writer package names none, because
+// its three callers name three different ones for the same fault.
+//
+// Only TSV reaches it: a CSV writer can hold any value, quoting what it must.
+func unrepresentableError(err error) error {
+	var writeErr *writer.Error
+	if !errors.As(err, &writeErr) || writeErr.Kind != writer.KindUnrepresentable {
+		return err
+	}
+	return fmt.Errorf("%w: %s", parser.ErrTSVUnrepresentable, writeErr.Error())
 }
 
 // formatValue converts a value to its string representation for CSV output.

@@ -3,6 +3,7 @@
 package frame
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -370,5 +371,55 @@ func BenchmarkGlobalAggregation(b *testing.B) {
 				_, _ = grouped.Sum("amount")
 			}
 		})
+	}
+}
+
+// BenchmarkToCSV measures writing a frame out as CSV, which is the encoding
+// half of the round trip BenchmarkNewDataFrame measures the reading half of.
+func BenchmarkToCSV(b *testing.B) {
+	benchmarks := []struct {
+		name string
+		rows int
+	}{
+		{"small", smallRows},
+		{"medium", mediumRows},
+		{"large", largeRows},
+	}
+
+	for _, bm := range benchmarks {
+		b.Run(bm.name, func(b *testing.B) {
+			df, err := NewDataFrame(strings.NewReader(generateCSVData(bm.rows)), CSV)
+			if err != nil {
+				b.Fatal(err)
+			}
+			path := filepath.Join(b.TempDir(), "out.csv")
+
+			b.ResetTimer()
+			b.ReportAllocs()
+			for range b.N {
+				if err := df.ToCSV(path); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkToTSV measures the same write as tab-separated records, which take
+// a different path: TSV has no quoting, so it is written literally rather than
+// through encoding/csv.
+func BenchmarkToTSV(b *testing.B) {
+	df, err := NewDataFrame(strings.NewReader(generateCSVData(largeRows)), CSV)
+	if err != nil {
+		b.Fatal(err)
+	}
+	path := filepath.Join(b.TempDir(), "out.tsv")
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for range b.N {
+		if err := df.ToTSV(path); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
