@@ -92,14 +92,16 @@
 //   - url: Must be a valid URL
 //   - And many more...
 //
-// An empty value passes every validator except required: an empty cell is how
-// CSV spells a missing value, so a column is optional unless required says
-// otherwise. This is where the dialect is deliberately left — that library
-// fails most validators on an empty value. The rule reaches the cross-field
-// comparisons too, on either side: a comparison is skipped as soon as one of
-// the two cells is empty, since a value has no order against a value that is
-// not there. The required_if, required_unless, required_with, required_with_all,
-// required_without and required_without_all tags are the exception, because
+// An empty value passes every validator except required and the required
+// family: an empty cell is how CSV spells a missing value, so a column is
+// optional unless one of those tags says otherwise. This is where the dialect
+// is deliberately left — that library fails most validators on an empty value.
+// The rule reaches the cross-field comparisons too, on either side: a
+// comparison is skipped as soon as one of the two cells is empty, since a value
+// has no order against a value that is not there. The required family —
+// required_if, required_unless, required_with, required_with_all,
+// required_without and required_without_all — is the exception: each of those
+// tags runs on an empty cell and reports it when its condition holds, since
 // deciding whether an empty cell is allowed is what they are for.
 //
 // The comparison tags follow the field they land on, as the dialect defines
