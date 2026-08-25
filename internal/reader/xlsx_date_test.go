@@ -1,6 +1,12 @@
 package reader
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/xuri/excelize/v2"
+)
 
 // TestIsDateNumberFormat covers what makes a custom number format a date. The
 // format language spells dates and times with y, m, d, h and s, and everything
@@ -60,4 +66,76 @@ func TestIsDateNumberFormat(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDefinesADateStyle covers the question that is asked before any cell is,
+// and the reason it is asked first: a cell is a date because of its style, so a
+// workbook whose style table holds no date format has no date cells. The style
+// table is a part of the file on its own and costs nothing to read, while
+// asking about one cell's style makes the library build the whole sheet as
+// objects -- 24 MB against 1470 MB for an 18.5 MB workbook of 200,000 rows.
+func TestDefinesADateStyle(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a workbook of plain values defines none", func(t *testing.T) {
+		t.Parallel()
+
+		f := excelize.NewFile()
+		t.Cleanup(func() { require.NoError(t, f.Close()) })
+		require.NoError(t, f.SetCellStr("Sheet1", "A1", "name"))
+		require.NoError(t, f.SetCellValue("Sheet1", "A2", 42))
+
+		assert.False(t, definesADateStyle(f))
+	})
+
+	t.Run("a built-in date format is one", func(t *testing.T) {
+		t.Parallel()
+
+		f := excelize.NewFile()
+		t.Cleanup(func() { require.NoError(t, f.Close()) })
+		style, err := f.NewStyle(&excelize.Style{NumFmt: 15}) // d-mmm-yy
+		require.NoError(t, err)
+		require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
+
+		assert.True(t, definesADateStyle(f))
+	})
+
+	t.Run("a custom date format is one", func(t *testing.T) {
+		t.Parallel()
+
+		f := excelize.NewFile()
+		t.Cleanup(func() { require.NoError(t, f.Close()) })
+		custom := "yyyy-mm-dd"
+		style, err := f.NewStyle(&excelize.Style{CustomNumFmt: &custom})
+		require.NoError(t, err)
+		require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
+
+		assert.True(t, definesADateStyle(f))
+	})
+
+	t.Run("a format that is not a date is not one", func(t *testing.T) {
+		t.Parallel()
+
+		f := excelize.NewFile()
+		t.Cleanup(func() { require.NoError(t, f.Close()) })
+		custom := `#,##0.00" days"`
+		style, err := f.NewStyle(&excelize.Style{CustomNumFmt: &custom})
+		require.NoError(t, err)
+		require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
+
+		assert.False(t, definesADateStyle(f))
+	})
+
+	t.Run("a workbook with no date style leaves its rows alone", func(t *testing.T) {
+		t.Parallel()
+
+		f := excelize.NewFile()
+		t.Cleanup(func() { require.NoError(t, f.Close()) })
+		require.NoError(t, f.SetCellStr("Sheet1", "A1", "when"))
+		require.NoError(t, f.SetCellValue("Sheet1", "A2", 45000))
+
+		rows := [][]string{{"when"}, {"45000"}}
+
+		assert.Equal(t, rows, NormalizeXLSXDates(f, "Sheet1", rows))
+	})
 }
