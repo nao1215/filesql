@@ -608,6 +608,67 @@ func TestLoadRetryBudgetIsSpentOnWaiting(t *testing.T) {
 	})
 }
 
+// TestLoadRetryReportsWhyItStopped covers the load that ends because its
+// context ended. It reported the lock it was waiting for and nothing else, so
+// errors.Is(err, context.DeadlineExceeded) was false for an operation that
+// ended for exactly that reason and a caller could not tell a deadline of their
+// own from a bad input.
+func TestLoadRetryReportsWhyItStopped(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		with func(context.Context) (context.Context, context.CancelFunc)
+		want error
+	}{
+		{
+			name: "canceled",
+			with: func(ctx context.Context) (context.Context, context.CancelFunc) {
+				return context.WithCancel(ctx)
+			},
+			want: context.Canceled,
+		},
+		{
+			name: "deadline exceeded",
+			with: func(ctx context.Context) (context.Context, context.CancelFunc) {
+				return context.WithTimeout(ctx, 20*time.Millisecond)
+			},
+			want: context.DeadlineExceeded,
+		},
+	} {
+		t.Run(tc.name+" is what the load reports", func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := tc.with(t.Context())
+			defer cancel()
+			if errors.Is(tc.want, context.Canceled) {
+				time.AfterFunc(20*time.Millisecond, cancel)
+			}
+
+			locked := lockedStep(t)
+			err := retryWhileLockedFor(ctx, time.Minute, time.Minute, locked)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, tc.want, "the reason the wait stopped has to be reachable")
+			assert.True(t, lockedByAnotherConnection(err), "what it was waiting for is still worth keeping")
+		})
+	}
+
+	t.Run("a context already done still gets one attempt", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		attempts := 0
+		err := retryWhileLockedFor(ctx, time.Minute, time.Minute, func() error {
+			attempts++
+			return nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 1, attempts, "the operation answers for itself before the context does")
+	})
+}
+
 // TestLoadRetryOnlyWaitsForLocks keeps the waiting from spreading: only the two
 // answers SQLite gives when someone else holds what a load needs are worth
 // waiting on, and everything else has to come back at once. A bad input that
