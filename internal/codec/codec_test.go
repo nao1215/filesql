@@ -176,6 +176,11 @@ func TestNewReaderBoundsWhatAStreamMayDeclare(t *testing.T) {
 		{name: "zstd 1.5 TiB window", codec: ZSTD, data: zstdFrame(30, 4), refused: true},
 		{name: "zstd 128 MiB window, the limit itself", codec: ZSTD, data: zstdFrame(17, 0)},
 		{name: "zstd 2 MiB window, what zstd -3 declares", codec: ZSTD, data: zstdFrame(11, 0)},
+		// A file named for a codec that is not what it holds is refused for
+		// what it is, not for a size it never declared: the bytes below would
+		// read as a 4 GiB dictionary if the magic were not checked first.
+		{name: "not an xz stream at all", codec: XZ, data: notXZButBlockHeaderShaped()},
+		{name: "not a zstd frame at all", codec: ZSTD, data: []byte("not zstd at allZZ")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var before, after runtime.MemStats
@@ -204,4 +209,13 @@ func TestNewReaderBoundsWhatAStreamMayDeclare(t *testing.T) {
 			}
 		})
 	}
+}
+
+// notXZButBlockHeaderShaped is twelve bytes that are not the xz magic, followed
+// by bytes that do read as a block header declaring a 4 GiB dictionary. Without
+// the magic check in front, such a file would be refused for a size it never
+// declared rather than for not being an xz stream.
+func notXZButBlockHeaderShaped() []byte {
+	head := []byte("not an xz str") // thirteen bytes, so twelve plus a spare
+	return append(head[:12], 0x01, 0x00, lzma2FilterID, 0x01, 40, 0x00, 0x00, 0x00)
 }

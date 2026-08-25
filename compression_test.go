@@ -14,7 +14,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/klauspost/compress/s2"
 	"github.com/klauspost/compress/snappy"
@@ -950,21 +949,22 @@ func TestCompressionAcceptsTheSizesRealFilesDeclare(t *testing.T) {
 	})
 }
 
-// TestEveryCodecFailsFastOnADamagedStream is the invariant that would have
+// TestEveryCodecHoldsADamagedStreamToABudget is the invariant that would have
 // caught both: whatever a stream's header says, a codec that cannot read it
-// gives up in a fixed budget rather than in one proportional to the number the
-// header asserts.
-func TestEveryCodecFailsFastOnADamagedStream(t *testing.T) {
-	t.Parallel()
-
+// costs a fixed budget rather than one proportional to the number the header
+// asserts.
+//
+// The oracle is bytes allocated rather than wall time, for the reason given on
+// the test above and because a wall-clock budget over this many cases would
+// fail on a loaded runner for reasons it does not measure. Neither this test nor
+// its subtests run in parallel, so ReadMemStats counts only what they allocate.
+func TestEveryCodecHoldsADamagedStreamToABudget(t *testing.T) {
 	payload := bytes.Repeat([]byte("id,name,amount\n1,alice,2.5\n"), 200)
 	for _, ct := range []CompressionType{
 		CompressionGZ, CompressionXZ, CompressionZSTD, CompressionZLIB,
 		CompressionSNAPPY, CompressionS2, CompressionLZ4,
 	} {
 		t.Run(ct.Extension(), func(t *testing.T) {
-			t.Parallel()
-
 			var buf bytes.Buffer
 			w, closeWriter, err := NewCompressionHandler(ct).CreateWriter(&buf)
 			require.NoError(t, err)
@@ -990,14 +990,19 @@ func TestEveryCodecFailsFastOnADamagedStream(t *testing.T) {
 			}
 
 			for idx, data := range cases {
-				start := time.Now()
+				var before, after runtime.MemStats
+				runtime.ReadMemStats(&before)
 				reader, cleanup, err := NewCompressionHandler(ct).CreateReader(bytes.NewReader(data))
 				if err == nil {
 					_, _ = io.Copy(io.Discard, io.LimitReader(reader, 1<<20))
 					cleanup()
 				}
-				assert.Less(t, time.Since(start), 500*time.Millisecond,
-					"case %d of %s took too long, which is what an allocation driven by the header looks like", idx, ct.Extension())
+				runtime.ReadMemStats(&after)
+				// Above the 256 MiB an accepted header may still legitimately
+				// ask for, and far below the 513 MiB and 4096 MiB the
+				// unbounded readers took.
+				assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(300<<20),
+					"case %d of %s allocated too much, which is what a header-driven allocation looks like", idx, ct.Extension())
 			}
 		})
 	}

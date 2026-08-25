@@ -313,6 +313,13 @@ func xzWithinDictionaryLimit(reader io.Reader) (io.Reader, error) {
 	if err != nil {
 		return buffered, nil //nolint:nilerr // Too short to hold a block header; the library reports it
 	}
+	// Without this, a file named .xz that is not one could still have a
+	// thirteenth byte that reads as a block header size and bytes after it that
+	// parse as an LZMA2 filter, and would then be refused for a dictionary it
+	// never declared instead of for not being an xz stream.
+	if !bytes.Equal(header[:6], xzStreamMagic) {
+		return buffered, nil
+	}
 
 	// The byte after the stream header gives the block header's length in units
 	// of four. Zero marks the index, which means the stream holds no blocks.
@@ -423,9 +430,14 @@ func xzVarint(b []byte) (uint64, int) {
 	return 0, 0
 }
 
-// zstdFrameMagic marks a zstd frame. A skippable frame has a different magic
-// and carries no window, so it is left alone.
-var zstdFrameMagic = []byte{0x28, 0xB5, 0x2F, 0xFD}
+// xzStreamMagic and zstdFrameMagic mark the streams the checks below read. A
+// zstd skippable frame has a different magic and carries no window, so it is
+// left alone; anything that is not one of these is not a header this package
+// can read meaning out of, and the library reports the format error.
+var (
+	xzStreamMagic  = []byte{0xFD, '7', 'z', 'X', 'Z', 0x00}
+	zstdFrameMagic = []byte{0x28, 0xB5, 0x2F, 0xFD}
+)
 
 // zstdWithinWindowLimit is xzWithinDictionaryLimit's counterpart for zstd: it
 // reads the first frame's header to learn the window it asks for and refuses the
