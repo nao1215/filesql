@@ -44,7 +44,7 @@ for target in $targets; do
 		seen && /^```/ { if (inside) exit; inside = 1; next }
 		inside { print }
 	' "$dir/README.md" >"$work/expected"
-	if [ ! -s "$work/expected" ]; then
+	if ! grep -q '[^[:space:]]' "$work/expected"; then
 		echo "verify.sh: $target/README.md has no Expected Output block" >&2
 		status=1
 		continue
