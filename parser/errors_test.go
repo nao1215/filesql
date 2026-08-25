@@ -50,7 +50,7 @@ func TestParseSentinels(t *testing.T) {
 		},
 		{
 			name:     "LTSV holding no record of that shape",
-			input:    func() *bytes.Reader { return bytes.NewReader([]byte("not a labelled field\n")) },
+			input:    func() *bytes.Reader { return bytes.NewReader([]byte("not a labeled field\n")) },
 			fileType: LTSV,
 			sentinel: ErrEmptyData,
 			message:  "no valid LTSV records found",

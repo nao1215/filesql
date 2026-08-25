@@ -2096,44 +2096,69 @@ func TestCachedParseStructType_Concurrent(t *testing.T) {
 }
 
 // TestWrapParseError_AllBranches verifies that wrapParseError maps every
-// known parser error message to the correct sentinel error. This guards
-// against silent breakage if the parser package changes its error wording.
+// failure parser.Parse reports for input it cannot turn into a table onto the
+// prep sentinel that matches it. The errors are produced by calling the parser
+// rather than written out here, so the test fails if the mapping stops
+// reaching a real error rather than if a message is reworded.
 func TestWrapParseError_AllBranches(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		msg      string
+		name     string
+		input    []byte
+		nilInput bool
+		fileType parser.FileType
 		sentinel error
 	}{
-		// Exact matches from emptyFileMessages
-		{"empty parquet file", ErrEmptyFile},
-		{"empty XLSX sheet", ErrEmptyFile},
-		{"no valid LTSV records found", ErrEmptyFile},
-		{"no sheets found in XLSX file", ErrEmptyFile},
-		{"no headers found in XLSX", ErrEmptyFile},
-		// Dynamic "empty <format> data" pattern
-		{"empty CSV data", ErrEmptyFile},
-		{"empty TSV data", ErrEmptyFile},
-		{"empty JSON data", ErrEmptyFile},
-		{"empty JSONL data", ErrEmptyFile},
-		{"empty LTSV data", ErrEmptyFile},
-		// Dynamic "empty <format> array" pattern
-		{"empty JSON array", ErrEmptyFile},
-		// Unsupported file type
-		{"unsupported file type", ErrUnsupportedFileType},
-		// Nil reader
-		{"reader cannot be nil", ErrNilReader},
+		{name: "no reader", nilInput: true, fileType: parser.CSV, sentinel: ErrNilReader},
+		{name: "file type the parser does not read", input: []byte("a,b\n"), fileType: parser.FileType(-1), sentinel: ErrUnsupportedFileType},
+		{name: "empty CSV", fileType: parser.CSV, sentinel: ErrEmptyFile},
+		{name: "empty TSV", fileType: parser.TSV, sentinel: ErrEmptyFile},
+		{name: "empty JSON", fileType: parser.JSON, sentinel: ErrEmptyFile},
+		{name: "empty JSONL", fileType: parser.JSONL, sentinel: ErrEmptyFile},
+		{name: "LTSV holding no record of that shape", input: []byte("not a labeled field\n"), fileType: parser.LTSV, sentinel: ErrEmptyFile},
+		{name: "empty Parquet", fileType: parser.Parquet, sentinel: ErrEmptyFile},
+		{name: "empty XLSX", fileType: parser.XLSX, sentinel: ErrEmptyFile},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.msg, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			wrapped := wrapParseError(errors.New(tt.msg))
+
+			var err error
+			if tt.nilInput {
+				_, err = parser.Parse(nil, tt.fileType)
+			} else {
+				_, err = parser.Parse(bytes.NewReader(tt.input), tt.fileType)
+			}
+			if err == nil {
+				t.Fatalf("parser.Parse(%v) returned no error", tt.fileType)
+			}
+
+			wrapped := wrapParseError(err)
 			if !errors.Is(wrapped, tt.sentinel) {
-				t.Errorf("wrapParseError(%q) should match %v, got: %v", tt.msg, tt.sentinel, wrapped)
+				t.Errorf("wrapParseError(%v) should match %v, got: %v", err, tt.sentinel, wrapped)
+			}
+			if !errors.Is(wrapped, err) {
+				t.Errorf("wrapParseError(%v) dropped the cause, got: %v", err, wrapped)
 			}
 		})
 	}
+
+	t.Run("a syntax error keeps its own sentinel and gains none", func(t *testing.T) {
+		t.Parallel()
+		_, err := parser.Parse(strings.NewReader("a,b\n1\n"), parser.CSV)
+		if err == nil {
+			t.Fatal("expected an error for a record shorter than the header")
+		}
+		wrapped := wrapParseError(err)
+		if !errors.Is(wrapped, parser.ErrCSVSyntax) {
+			t.Errorf("expected the CSV syntax error to survive, got: %v", wrapped)
+		}
+		if errors.Is(wrapped, ErrEmptyFile) {
+			t.Errorf("a broken file is not an empty one, got: %v", wrapped)
+		}
+	})
 
 	t.Run("unknown error passes through unchanged", func(t *testing.T) {
 		t.Parallel()
