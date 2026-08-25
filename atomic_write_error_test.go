@@ -135,3 +135,97 @@ func TestCopyOnto(t *testing.T) {
 		assert.Error(t, copyOnto(dir, dest), "reading a directory as a file must be reported")
 	})
 }
+
+// TestWriteFileAtomically_ReportsAStagedFileItCannotRemove pins the contract the
+// deferred cleanup states: a staged file left in the caller's directory is
+// reported rather than dropped.
+//
+// It was dropped. The result was unnamed, so the join inside the deferred
+// closure wrote to a local nothing read afterwards, and a save that left a hidden
+// .tmp file beside the caller's data returned no sign of it.
+func TestWriteFileAtomically_ReportsAStagedFileItCannotRemove(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions do not stop a rename on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	t.Parallel()
+
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "out.csv")
+	t.Cleanup(func() {
+		_ = os.Chmod(dir, 0o700) //nolint:errcheck,gosec // Test cleanup so t.TempDir can remove the directory
+	})
+
+	err := writeFileAtomically(dest, func(w io.Writer) error {
+		if _, writeErr := w.Write([]byte("id\n1\n")); writeErr != nil {
+			return writeErr
+		}
+		// Take the directory's write bit away, so both the rename and the
+		// staged file's removal are refused.
+		return os.Chmod(dir, 0o500) //nolint:gosec // A directory mode, deliberately read-only for this test
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrIOOperation, "the failed replace stays the primary error")
+	assert.ErrorIs(t, err, ErrCleanup, "the staged file that is still there must be reported")
+}
+
+// TestWriteFileAtomically_ReportsNoCleanupWhenNothingIsLeft is the sibling that
+// keeps the fix honest: the rename consumes the staged file, and that is not a
+// cleanup failure.
+func TestWriteFileAtomically_ReportsNoCleanupWhenNothingIsLeft(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "out.csv")
+	require.NoError(t, writeFileAtomically(dest, func(w io.Writer) error {
+		_, writeErr := w.Write([]byte("id\n1\n"))
+		return writeErr
+	}))
+	assert.Equal(t, []string{"out.csv"}, dirEntries(t, dir))
+}
+
+// TestCommitByCopy_KeepsTheDestinationWhenTheCopyFails pins what stands in for
+// the atomicity a plain rename gives. The copy truncates the destination before
+// it can fail, so the backup taken first is what puts the original bytes back —
+// best effort, since that restore is itself a copy, which is why the copy error
+// stays the one reported.
+func TestCommitByCopy_KeepsTheDestinationWhenTheCopyFails(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "dest.csv")
+	require.NoError(t, os.WriteFile(dest, []byte("precious"), 0o600))
+
+	// A staged path that is a directory cannot be copied from, so the copy
+	// fails after the backup was taken.
+	staged := filepath.Join(dir, "staged")
+	require.NoError(t, os.Mkdir(staged, 0o750))
+
+	require.Error(t, commitByCopy(staged, dest))
+
+	got, err := os.ReadFile(dest) //nolint:gosec // Test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, "precious", string(got), "a refused copy must leave the destination as it was")
+}
+
+// TestCommitByCopy_ReplacesTheDestination is the success half of the fallback,
+// exercised deliberately here because the only platform that reaches it on its
+// own is Windows.
+func TestCommitByCopy_ReplacesTheDestination(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "dest.csv")
+	require.NoError(t, os.WriteFile(dest, []byte("old content that is longer"), 0o600))
+	staged := filepath.Join(dir, "staged")
+	require.NoError(t, os.WriteFile(staged, []byte("new"), 0o600))
+
+	require.NoError(t, commitByCopy(staged, dest))
+
+	got, err := os.ReadFile(dest) //nolint:gosec // Test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, "new", string(got), "the old content must not survive as a tail")
+	assert.Equal(t, []string{"dest.csv", "staged"}, dirEntries(t, dir), "the backup must not be left behind")
+}

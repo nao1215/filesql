@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -305,4 +306,80 @@ func assertNoBackupLeft(t *testing.T, dir string) {
 	for _, e := range entries {
 		assert.NotContains(t, e.Name(), ".bak", "the backup must not be left behind: %s", e.Name())
 	}
+}
+
+// TestWriteFileAtomically_LongDestinationName pins that a destination the
+// filesystem accepts can be written.
+//
+// The staged file's name was the destination's with a dot in front and
+// ".tmp<random>" behind, up to fifteen bytes longer, so a legal file name close
+// to the 255-byte component limit could be loaded and queried but never saved:
+// the save failed with "file name too long" naming a path the caller had not
+// chosen.
+func TestWriteFileAtomically_LongDestinationName(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		base string
+	}{
+		{name: "ascii", base: strings.Repeat("a", 246) + ".csv"},
+		// Multi-byte runes, so a fix that cuts by bytes cannot split one.
+		{name: "multibyte", base: strings.Repeat("あ", 82) + ".csv"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			dest := filepath.Join(dir, tc.base)
+			if err := os.WriteFile(dest, []byte("placeholder"), 0o600); err != nil {
+				t.Skipf("this filesystem does not accept a %d-byte name: %v", len(tc.base), err)
+			}
+
+			err := writeFileAtomically(dest, func(w io.Writer) error {
+				_, writeErr := io.WriteString(w, "saved")
+				return writeErr
+			})
+			require.NoError(t, err, "a destination the filesystem holds must be writable")
+
+			got, err := os.ReadFile(dest) //nolint:gosec // Test path from t.TempDir()
+			require.NoError(t, err)
+			assert.Equal(t, "saved", string(got))
+
+			entries, err := os.ReadDir(dir)
+			require.NoError(t, err)
+			assert.Len(t, entries, 1, "no staged file may be left behind: %v", entries)
+		})
+	}
+}
+
+// TestDumpDatabase_LongOutputFileName is the caller-visible form of the same
+// bug: the output file name is the table's, so a long table name is what makes
+// the destination long.
+func TestDumpDatabase_LongOutputFileName(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	tableName := strings.Repeat("t", 246)
+	validated, err := NewBuilder().
+		AddReader(strings.NewReader("id,name\n1,alice\n"), tableName, FileTypeCSV).
+		Build(ctx)
+	require.NoError(t, err)
+	db, err := validated.Open(ctx)
+	require.NoError(t, err)
+	defer db.Close()
+
+	out := t.TempDir()
+	if err := os.WriteFile(filepath.Join(out, tableName+".csv"), nil, 0o600); err != nil {
+		t.Skipf("this filesystem does not accept a %d-byte name: %v", len(tableName)+4, err)
+	}
+	require.NoError(t, DumpDatabase(db, out, NewDumpOptions()))
+
+	reloaded, err := OpenContext(ctx, filepath.Join(out, tableName+".csv"))
+	require.NoError(t, err)
+	defer reloaded.Close()
+
+	var name string
+	require.NoError(t, reloaded.QueryRowContext(ctx, `SELECT name FROM "`+tableName+`"`).Scan(&name))
+	assert.Equal(t, "alice", name)
 }

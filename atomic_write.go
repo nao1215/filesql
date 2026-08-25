@@ -33,9 +33,9 @@ const defaultOutputFileMode os.FileMode = 0o644
 // The temporary file is created in dest's directory so the rename stays within
 // one filesystem, where it is atomic. An existing dest keeps its permissions; a
 // new file is created 0644.
-func writeFileAtomically(dest string, write func(io.Writer) error) error {
+func writeFileAtomically(dest string, write func(io.Writer) error) (err error) {
 	dir := filepath.Dir(dest)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(dest)+".tmp*")
+	tmp, err := createTempBeside(dir, filepath.Base(dest), stagedSuffix)
 	if err != nil {
 		return fmt.Errorf("%w: failed to create a temporary file next to %s: %w", ErrIOOperation, dest, err)
 	}
@@ -75,15 +75,39 @@ func writeFileAtomically(dest string, write func(io.Writer) error) error {
 	return nil
 }
 
+// stagedSuffix and backupSuffix name what a temporary file beside a destination
+// is for, so one left behind by an interrupted save can be told apart.
+const (
+	stagedSuffix = ".tmp"
+	backupSuffix = ".bak"
+)
+
+// createTempBeside creates a temporary file in dir, named after base where the
+// name fits, so a file left behind says which destination it belongs to.
+//
+// The descriptive name is up to fifteen bytes longer than base, which is more
+// than the filesystem accepts when base is itself close to the limit: a file
+// this package could load and query could not be saved, because the name chosen
+// for the staging did not fit even though the caller's did. No portable constant
+// gives that limit, so the descriptive name is tried first and a short fixed one
+// takes over when it is refused, which needs no length calculation.
+func createTempBeside(dir, base, suffix string) (*os.File, error) {
+	if file, err := os.CreateTemp(dir, "."+base+suffix+"*"); err == nil {
+		return file, nil
+	}
+	return os.CreateTemp(dir, ".filesql"+suffix+"*")
+}
+
 // commitStagedFile moves the staged file onto dest.
 //
 // A plain rename is the goal: it is atomic, so a reader sees either the old file
 // or the new one. Windows refuses to rename over a destination another handle
 // still has open, which is exactly a save that overwrites a file this package is
-// streaming from. When that happens the destination is renamed out of the way
-// first — moving an open file is allowed where replacing one is not — and put
-// back if the second rename fails, so the destination is never left missing or
-// half-written.
+// streaming from. When that happens the bytes are copied over the destination
+// instead, through the handle Windows will grant. That copy is not atomic and it
+// truncates the destination before it can fail, so what stands in for atomicity
+// is a backup taken first and put back after a failed copy — best effort, since
+// putting it back is itself a copy. See commitByCopy.
 func commitStagedFile(staged, dest string) error {
 	err := os.Rename(staged, dest)
 	if err == nil {
@@ -105,8 +129,10 @@ func commitStagedFile(staged, dest string) error {
 // package is reading from.
 //
 // This is not atomic — a reader watching during the copy can see a partial file
-// — but it keeps the guarantee that matters here: a failure does not cost the
-// data that was already there.
+// — and the copy truncates dest before it can fail, so the backup is what stands
+// between a refused write and the caller's data. Putting it back is itself a
+// copy and can fail in turn, which is why the write error is the one reported:
+// it is the failure the caller can act on.
 func commitByCopy(staged, dest string) error {
 	backup, err := copyToBackup(dest)
 	if err != nil {
@@ -127,7 +153,7 @@ func commitByCopy(staged, dest string) error {
 
 // copyToBackup copies path to a temporary file beside it and returns that path.
 func copyToBackup(path string) (string, error) {
-	backup, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".bak*")
+	backup, err := createTempBeside(filepath.Dir(path), filepath.Base(path), backupSuffix)
 	if err != nil {
 		return "", err
 	}
