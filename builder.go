@@ -664,8 +664,10 @@ func (b *DBBuilder) OpenReadOnly(ctx context.Context) (*ReadOnlyDB, error) {
 //     (db.SetMaxOpenConns(1)). SQLite ":memory:" is private per connection, so a
 //     multi-connection pool would not share the loaded tables.
 //   - Several goroutines may load into one database. A load that meets another
-//     load's lock waits it out, except where the input is a reader, which
-//     cannot be read a second time.
+//     load's lock waits for it -- five seconds of waiting, half a minute in
+//     all -- and then returns the error the database gave. A reader is the
+//     exception: it cannot be read a second time, so only the step before the
+//     reading is tried again.
 //
 // Auto-save is not supported because the caller owns the database lifecycle;
 // configuring it returns an error.
