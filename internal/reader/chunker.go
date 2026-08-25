@@ -17,8 +17,10 @@ type chunker struct {
 	emit     Emit
 	evidence []infer.Evidence
 	declared []infer.Type
+	room     int
 
 	chunk   [][]string
+	nulls   [][]bool
 	emitted bool
 	rows    int
 }
@@ -46,13 +48,35 @@ func newTypedChunker(header []string, types []infer.Type, opts Options, emit Emi
 	}
 }
 
+// reserve asks for room for n records ahead of each chunk, for a format that
+// knows how many are coming. It returns the chunker so a constructor call can
+// carry it.
+func (c *chunker) reserve(n int) *chunker {
+	c.room = n
+	c.chunk = make([][]string, 0, n)
+	return c
+}
+
 // add takes one record, folding it into the evidence when the format infers its
 // types, and flushes the chunk if this record filled it.
 func (c *chunker) add(record []string) error {
+	return c.addWithNulls(record, nil)
+}
+
+// addWithNulls is add for a format that knows which of a record's cells hold SQL
+// NULL rather than text. Passing nil leaves the chunk's mask nil, which is what
+// a format with no null of its own means.
+func (c *chunker) addWithNulls(record []string, nulls []bool) error {
 	if c.evidence != nil {
 		addEvidence(c.evidence, record)
 	}
 	c.chunk = append(c.chunk, record)
+	if nulls != nil {
+		if c.nulls == nil {
+			c.nulls = make([][]bool, 0, c.room)
+		}
+		c.nulls = append(c.nulls, nulls)
+	}
 	if len(c.chunk) < c.size {
 		return nil
 	}
@@ -72,12 +96,14 @@ func (c *chunker) finish() error {
 // not reused, since emit may keep them.
 func (c *chunker) flush() error {
 	c.rows += len(c.chunk)
-	if err := c.emit(&Chunk{Header: c.header, Records: c.chunk, Types: c.types()}); err != nil {
-		return err
-	}
+	err := c.emit(&Chunk{Header: c.header, Records: c.chunk, Types: c.types(), Nulls: c.nulls})
 	c.chunk = nil
+	c.nulls = nil
+	if c.room > 0 {
+		c.chunk = make([][]string, 0, c.room)
+	}
 	c.emitted = true
-	return nil
+	return err
 }
 
 // types is what the columns require as things stand.

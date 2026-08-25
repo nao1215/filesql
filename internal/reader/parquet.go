@@ -180,41 +180,22 @@ func readParquet(src io.Reader, opts Options, emit Emit) (Result, error) {
 	}
 
 	chunkSize := chunkSizeOf(opts)
-	chunkCap := min(chunkSize, 1024)
-	records := make([][]string, 0, chunkCap)
-	nulls := make([][]bool, 0, chunkCap)
-	flush := func() error {
-		if len(records) == 0 {
-			return nil
-		}
-		result.Rows += len(records)
-		result.Total += len(records)
-		err := emit(&Chunk{Header: header, Records: records, Types: types, Nulls: nulls})
-		// The emitted chunk owns its slices -- a caller may keep them -- so the
-		// next chunk starts fresh rather than over the same backing array.
-		records = make([][]string, 0, chunkCap)
-		nulls = make([][]bool, 0, chunkCap)
-		return err
-	}
+	rows := newTypedChunker(header, types, opts, emit).reserve(min(chunkSize, 1024))
 
 	buf := make([]parquet.Row, min(chunkSize, 1024))
 	for _, rowGroup := range file.RowGroups() {
-		rows, err := openParquetRows(rowGroup)
+		group, err := openParquetRows(rowGroup)
 		if err != nil {
 			return Result{}, err
 		}
 		readErr := func() error {
-			defer rows.Close()
+			defer group.Close()
 			for {
-				n, err := readParquetRows(rows, buf)
+				n, err := readParquetRows(group, buf)
 				for _, parquetRow := range buf[:n] {
 					row, nullRow := renderParquetRow(parquetRow, columns, leafField, flat, opts.Rendering)
-					records = append(records, row)
-					nulls = append(nulls, nullRow)
-					if len(records) >= chunkSize {
-						if err := flush(); err != nil {
-							return err
-						}
+					if err := rows.addWithNulls(row, nullRow); err != nil {
+						return err
 					}
 				}
 				if errors.Is(err, io.EOF) {
@@ -235,9 +216,11 @@ func readParquet(src io.Reader, opts Options, emit Emit) (Result, error) {
 			return Result{}, readErr
 		}
 	}
-	if err := flush(); err != nil {
+	if err := rows.finish(); err != nil {
 		return Result{}, err
 	}
+	result.Rows = rows.rows
+	result.Total = rows.rows
 	return result, nil
 }
 
