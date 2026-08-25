@@ -15,6 +15,8 @@ import (
 
 	"github.com/nao1215/filesql"
 	"github.com/nao1215/filesql/dialect"
+	achconv "github.com/nao1215/filesql/parser/ach"
+	wireconv "github.com/nao1215/filesql/parser/wire"
 	"github.com/xuri/excelize/v2"
 	_ "modernc.org/sqlite"
 )
@@ -724,4 +726,212 @@ func ExampleLineEnding_String() {
 func ExampleOutputFormat_String() {
 	fmt.Println(filesql.OutputFormatCSV, filesql.OutputFormatTSV, filesql.OutputFormatXLSX)
 	// Output: csv tsv xlsx
+}
+
+// exampleTempDir is a directory an example writes its output into.
+func exampleTempDir() string {
+	dir, err := os.MkdirTemp("", "filesql-ach-example")
+	if err != nil {
+		log.Fatal(err)
+	}
+	return dir
+}
+
+// ExampleDumpACH loads an ACH file, edits one entry, and writes the file back.
+//
+// The write rebuilds the file from the source it was loaded from, so that file
+// must still be readable. Control records are derived rather than stored: an
+// edited amount is balanced by the write, and an edit to a control column is
+// overwritten by the recalculation.
+func ExampleDumpACH() {
+	dir := exampleTempDir()
+	defer os.RemoveAll(dir)
+
+	ctx := context.Background()
+	db, err := filesql.Open("testdata/ppd-debit.ach")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.ExecContext(ctx,
+		`UPDATE ppd_debit_entries SET individual_name = 'Alice Smith'`); err != nil {
+		log.Fatal(err)
+	}
+
+	out := filepath.Join(dir, "edited.ach")
+	if err := filesql.DumpACH(ctx, db, "ppd_debit", out); err != nil {
+		log.Fatal(err)
+	}
+
+	reloaded, err := filesql.Open(out)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer reloaded.Close()
+
+	var name string
+	var amount int64
+	if err := reloaded.QueryRowContext(ctx,
+		`SELECT individual_name, amount FROM edited_entries`).Scan(&name, &amount); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%s %d\n", name, amount)
+	// Output:
+	// Alice Smith 100000000
+}
+
+// ExampleDumpFedWire loads a Fedwire file, edits the message, and writes it back.
+//
+// Tags are written in the order the format defines rather than the order the
+// file had them, so a diff after a write-back shows lines nobody edited.
+func ExampleDumpFedWire() {
+	dir := exampleTempDir()
+	defer os.RemoveAll(dir)
+
+	ctx := context.Background()
+	db, err := filesql.Open("testdata/customer-transfer.fed")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.ExecContext(ctx,
+		`UPDATE customer_transfer_message SET amount = '000000012500'`); err != nil {
+		log.Fatal(err)
+	}
+
+	out := filepath.Join(dir, "edited.fed")
+	if err := filesql.DumpFedWire(ctx, db, "customer_transfer", out); err != nil {
+		log.Fatal(err)
+	}
+
+	reloaded, err := filesql.Open(out)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer reloaded.Close()
+
+	var amount string
+	if err := reloaded.QueryRowContext(ctx,
+		`SELECT amount FROM edited_message`).Scan(&amount); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(amount)
+	// Output:
+	// 000000012500
+}
+
+// ExampleDumpACHWithTableSet writes back a database loaded from an io.Reader.
+// Such a database has no file to rebuild from, so DumpACH refuses it with
+// ErrSourceUnavailable; parse the same bytes with parser/ach and hand over the
+// structure instead.
+func ExampleDumpACHWithTableSet() {
+	dir := exampleTempDir()
+	defer os.RemoveAll(dir)
+
+	body, err := os.ReadFile("testdata/ppd-debit.ach")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ctx := context.Background()
+	validated, err := filesql.NewBuilder().
+		AddReader(bytes.NewReader(body), "payment", filesql.FileTypeACH).
+		Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	db, err := validated.Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	out := filepath.Join(dir, "payment.ach")
+	err = filesql.DumpACH(ctx, db, "payment", out)
+	fmt.Println("without the structure:", errors.Is(err, filesql.ErrSourceUnavailable))
+
+	tableSet, err := achconv.ParseReader(bytes.NewReader(body))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE payment_entries SET individual_name = 'Alice Smith'`); err != nil {
+		log.Fatal(err)
+	}
+	if err := filesql.DumpACHWithTableSet(ctx, db, "payment", out, tableSet); err != nil {
+		log.Fatal(err)
+	}
+
+	reloaded, err := filesql.Open(out)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer reloaded.Close()
+
+	var name string
+	if err := reloaded.QueryRowContext(ctx,
+		`SELECT individual_name FROM payment_entries`).Scan(&name); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(name)
+	// Output:
+	// without the structure: true
+	// Alice Smith
+}
+
+// ExampleDumpFedWireWithTableSet is ExampleDumpACHWithTableSet for Fedwire: a
+// database loaded from an io.Reader is written back through the structure
+// parser/wire returns for the same bytes.
+func ExampleDumpFedWireWithTableSet() {
+	dir := exampleTempDir()
+	defer os.RemoveAll(dir)
+
+	body, err := os.ReadFile("testdata/customer-transfer.fed")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ctx := context.Background()
+	validated, err := filesql.NewBuilder().
+		AddReader(bytes.NewReader(body), "transfer", filesql.FileTypeFedWire).
+		Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	db, err := validated.Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	tableSet, err := wireconv.ParseReader(bytes.NewReader(body))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE transfer_message SET amount = '000000012500'`); err != nil {
+		log.Fatal(err)
+	}
+
+	out := filepath.Join(dir, "transfer.fed")
+	if err := filesql.DumpFedWireWithTableSet(ctx, db, "transfer", out, tableSet); err != nil {
+		log.Fatal(err)
+	}
+
+	reloaded, err := filesql.Open(out)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer reloaded.Close()
+
+	var amount string
+	if err := reloaded.QueryRowContext(ctx,
+		`SELECT amount FROM transfer_message`).Scan(&amount); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(amount)
+	// Output:
+	// 000000012500
 }
