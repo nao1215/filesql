@@ -1,10 +1,12 @@
 package filesql
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/nao1215/filesql/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -108,4 +110,66 @@ func TestDumpLTSVUnrepresentableValues(t *testing.T) {
 		assert.Equal(t, "plain", a)
 		assert.Equal(t, "with space", b)
 	})
+}
+
+// TestDumpUnrepresentableSentinels pins what a dump reports when the output
+// format cannot hold a value, for both formats that can refuse one.
+//
+// Two things are pinned. Every such failure carries ErrUnsupportedFormat, which
+// says the table is fine and the format is not; TSV used to carry only
+// parser.ErrTSVUnrepresentable, so the two formats answered the same fault in
+// two ways. And that sentinel is still on a TSV failure, because a caller may
+// have been matching it since before this package had one of its own.
+//
+// The advice names CSV in every case. LTSV used to answer "CSV or TSV", which
+// is wrong for all three characters it forbids in a value: TSV forbids the same
+// three, having no quoting to hold them in.
+func TestDumpUnrepresentableSentinels(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		format      OutputFormat
+		insert      string
+		wantTSVUnre bool
+	}{
+		{
+			name:        "a tab is the delimiter TSV separates fields with",
+			format:      OutputFormatTSV,
+			insert:      "INSERT INTO t VALUES ('x\ty')",
+			wantTSVUnre: true,
+		},
+		{
+			name:        "a newline ends a TSV record",
+			format:      OutputFormatTSV,
+			insert:      "INSERT INTO t VALUES ('x\ny')",
+			wantTSVUnre: true,
+		},
+		{
+			name:   "a tab is the delimiter LTSV separates fields with",
+			format: OutputFormatLTSV,
+			insert: "INSERT INTO t VALUES ('x\ty')",
+		},
+		{
+			name:   "a newline ends an LTSV record",
+			format: OutputFormatLTSV,
+			insert: "INSERT INTO t VALUES ('x\ny')",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := openWithTable(t, "CREATE TABLE t (a TEXT)", tt.insert)
+
+			err := DumpDatabase(db, t.TempDir(), NewDumpOptions().WithFormat(tt.format))
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrUnsupportedFormat)
+			assert.Equal(t, tt.wantTSVUnre, errors.Is(err, parser.ErrTSVUnrepresentable),
+				"parser.ErrTSVUnrepresentable should be on a TSV failure and only on one")
+			assert.Contains(t, err.Error(), "dump this table as CSV instead")
+		})
+	}
 }

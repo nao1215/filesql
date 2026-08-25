@@ -1627,77 +1627,109 @@ func (errWriter) Write([]byte) (int, error) {
 	return 0, errors.New("write error")
 }
 
-func TestWriteCSV_ErrorPath(t *testing.T) {
+// TestWriteOutput_ErrorPath holds that a destination that cannot take the
+// bytes is reported for every format, rather than a write reporting success
+// over an output nothing received.
+func TestWriteOutput_ErrorPath(t *testing.T) {
 	t.Parallel()
 
-	p := NewProcessor(FileTypeCSV)
+	tests := []struct {
+		name     string
+		fileType parser.FileType
+		headers  []string
+		records  [][]string
+	}{
+		{name: "CSV", fileType: parser.CSV, headers: []string{"a", "b"}, records: [][]string{{"1", "2"}}},
+		{name: "TSV", fileType: parser.TSV, headers: []string{"a", "b"}, records: [][]string{{"1", "2"}}},
+		{name: "LTSV", fileType: parser.LTSV, headers: []string{"key"}, records: [][]string{{"value"}}},
+		{name: "JSONL", fileType: parser.JSONL, headers: []string{"data"}, records: [][]string{{`{"key":"value"}`}}},
+	}
 
-	t.Run("header write error", func(t *testing.T) {
-		t.Parallel()
-		err := p.writeCSV(errWriter{}, []string{"a", "b"}, [][]string{{"1", "2"}})
-		if err == nil {
-			t.Error("expected error from errWriter, got nil")
-		}
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p := &Processor{fileType: tt.fileType}
+			if err := p.writeOutput(errWriter{}, tt.headers, tt.records); err == nil {
+				t.Error("expected error from errWriter, got nil")
+			}
+		})
+	}
 }
 
-func TestWriteTSV_ErrorPath(t *testing.T) {
+// TestWriteOutput_LoneEmptyFieldSurvivesAReload holds that a one-column row
+// whose only value is empty comes back as a row.
+//
+// Written plainly it is a blank line, and a blank line is not a CSV record: the
+// reader skips it, so every empty row of a one-column file disappeared on the
+// way back in and the write reported success. The root package's dump wrote the
+// quoted empty field for this shape, and so did frame; prep did not, and prep is
+// where a one-column file of free text is most likely to arrive.
+func TestWriteOutput_LoneEmptyFieldSurvivesAReload(t *testing.T) {
 	t.Parallel()
 
-	p := &Processor{fileType: parser.TSV}
+	p := &Processor{fileType: parser.CSV}
+	var buf bytes.Buffer
+	if err := p.writeOutput(&buf, []string{"note"}, [][]string{{"x"}, {""}, {"y"}}); err != nil {
+		t.Fatalf("writeOutput() = %v", err)
+	}
+	if got, want := buf.String(), "note\nx\n\"\"\ny\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
 
-	t.Run("header write error", func(t *testing.T) {
-		t.Parallel()
-		err := p.writeTSV(errWriter{}, []string{"a", "b"}, [][]string{{"1", "2"}})
-		if err == nil {
-			t.Error("expected error from errWriter, got nil")
-		}
-	})
+	table, err := parser.Parse(bytes.NewReader(buf.Bytes()), parser.CSV)
+	if err != nil {
+		t.Fatalf("reading the output back: %v", err)
+	}
+	if len(table.Records) != 3 {
+		t.Errorf("the output reads back as %d rows, want 3: %q", len(table.Records), buf.String())
+	}
 }
 
-func TestWriteLTSV_ErrorPath(t *testing.T) {
+// TestLTSVValueThatTheFormatCannotHoldIsRefused holds that a value carrying a
+// tab is reported rather than written.
+//
+// LTSV separates fields with a tab and defines no escape for one, so writing a
+// value that holds a tab produces a file that parses as something else. The tab
+// cannot arrive in the input, since the same rule applies to the file the
+// records were read from — but a preprocessor can put one there. A struct tag's
+// value is unquoted by reflect.StructTag.Get, so a "prefix" tag written with a
+// \t carries a real tab, and the tag parser trims whitespace only at the ends
+// of a tag part, which leaves one in the middle alone. Before this was checked,
+// "note:v" preprocessed that way was written as "note:A\tBv", and reading it
+// back gave "A": the rest of the record became a second field with no label,
+// which the reader drops without a word, so the value was gone and nothing said
+// so.
+func TestLTSVValueThatTheFormatCannotHoldIsRefused(t *testing.T) {
 	t.Parallel()
 
-	p := &Processor{fileType: parser.LTSV}
+	type row struct {
+		Note string `csv:"note" prep:"prefix=A\tB"`
+	}
 
-	t.Run("write error returns error", func(t *testing.T) {
-		t.Parallel()
-		err := p.writeLTSV(errWriter{}, []string{"key"}, [][]string{{"value"}})
-		if err == nil {
-			t.Error("expected error from errWriter, got nil")
-		}
-	})
+	p := NewProcessor(FileTypeLTSV)
+	var records []row
+	_, _, err := p.Process(strings.NewReader("note:v\n"), &records)
+	if err == nil {
+		t.Fatal("a value holding a tab was written as LTSV")
+	}
+	if !strings.Contains(err.Error(), `column "note" holds a tab`) {
+		t.Errorf("error = %q, want it to name the column and the character", err.Error())
+	}
 }
 
-func TestWriteJSONL_ErrorPath(t *testing.T) {
+// TestWriteOutput_JSONLSkipsEmptyRecords holds that a row with no JSON in it is
+// left out rather than written as a blank line, which is not a JSONL record.
+func TestWriteOutput_JSONLSkipsEmptyRecords(t *testing.T) {
 	t.Parallel()
 
 	p := &Processor{fileType: parser.JSONL}
-
-	t.Run("write error returns error", func(t *testing.T) {
-		t.Parallel()
-		err := p.writeJSONL(errWriter{}, [][]string{{`{"key":"value"}`}})
-		if err == nil {
-			t.Error("expected error from errWriter, got nil")
-		}
-	})
-
-	t.Run("empty record is skipped", func(t *testing.T) {
-		t.Parallel()
-		var buf bytes.Buffer
-		err := p.writeJSONL(&buf, [][]string{{""}, {}, {`{"a":1}`}})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !strings.Contains(buf.String(), `{"a":1}`) {
-			t.Errorf("expected valid JSON in output, got: %s", buf.String())
-		}
-		// Empty records should be skipped, so only 1 line
-		lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
-		if len(lines) != 1 {
-			t.Errorf("expected 1 line (empty records skipped), got %d: %s", len(lines), buf.String())
-		}
-	})
+	var buf bytes.Buffer
+	if err := p.writeOutput(&buf, []string{"data"}, [][]string{{""}, {}, {`{"a":1}`}}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := buf.String(); got != "{\"a\":1}\n" {
+		t.Errorf("output = %q, want %q", got, "{\"a\":1}\n")
+	}
 }
 
 // TestProcess_SliceReset verifies that reusing the same destination slice

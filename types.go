@@ -22,14 +22,6 @@ const (
 	DefaultChunkSize = 1000
 )
 
-// File format delimiters
-const (
-	// csvDelimiter is the delimiter for CSV files
-	csvDelimiter = ','
-	// tsvDelimiter is the delimiter for TSV files
-	tsvDelimiter = '\t'
-)
-
 // tableName represents a table name with validation
 type tableName struct {
 	value string

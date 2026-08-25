@@ -506,7 +506,7 @@ func BenchmarkCSVOutput(b *testing.B) {
 	for range b.N {
 		var buf bytes.Buffer
 		buf.Grow(processor.estimateOutputSize(headers, records))
-		if err := processor.writeCSV(&buf, headers, records); err != nil {
+		if err := processor.writeOutput(&buf, headers, records); err != nil {
 			b.Fatal(err)
 		}
 	}

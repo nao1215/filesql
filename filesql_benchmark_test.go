@@ -175,6 +175,44 @@ func BenchmarkDumpParquet(b *testing.B) {
 	}
 }
 
+// BenchmarkDumpText measures the three text write paths against the same
+// 100,000-row table: CSV through encoding/csv, TSV written literally, and LTSV
+// built one labeled field at a time.
+//
+// The CSV path is also under BenchmarkOpenWithAutoSave, which measures a load
+// and a save together; this measures the write on its own, and it is the only
+// place the other two formats are measured at all.
+func BenchmarkDumpText(b *testing.B) {
+	db, err := OpenContext(context.Background(), filepath.Join("testdata", "benchmark", "customers100000.csv"))
+	if err != nil {
+		b.Fatalf("OpenContext failed: %v", err)
+	}
+	defer db.Close()
+
+	formats := []struct {
+		name   string
+		format OutputFormat
+	}{
+		{name: "csv", format: OutputFormatCSV},
+		{name: "tsv", format: OutputFormatTSV},
+		{name: "ltsv", format: OutputFormatLTSV},
+	}
+
+	for _, tt := range formats {
+		b.Run(tt.name, func(b *testing.B) {
+			dir := b.TempDir()
+			options := NewDumpOptions().WithFormat(tt.format)
+
+			b.ResetTimer()
+			for b.Loop() {
+				if err := DumpDatabase(db, dir, options); err != nil {
+					b.Fatalf("DumpDatabase failed: %v", err)
+				}
+			}
+		})
+	}
+}
+
 // writeBenchmarkParquet converts the benchmark CSV into a Parquet file at path.
 func writeBenchmarkParquet(b *testing.B, path string) {
 	b.Helper()
