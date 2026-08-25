@@ -1359,8 +1359,8 @@ func TestWeekNumberingFollowsEachDialect(t *testing.T) {
 	}
 }
 
-// TestMySQLDateFunctionsFollowMySQL pins TIMESTAMPDIFF, FROM_UNIXTIME, TIMEDIFF
-// and STR_TO_DATE against MySQL 8.4. TIMESTAMPDIFF counts complete units, not
+// TestMySQLDateFunctionsFollowMySQL pins TIMESTAMPDIFF, FROM_UNIXTIME, TIMEDIFF,
+// STR_TO_DATE against MySQL 8.4. TIMESTAMPDIFF counts complete units, not
 // the calendar boundaries BigQuery's DATE_DIFF counts, so the GoogleSQL rows
 // stand guard beside the MySQL ones: a MySQL fix that moved the shared helper
 // would fail them. FROM_UNIXTIME is NULL outside MySQL's documented range,
@@ -1442,6 +1442,20 @@ func TestMySQLDateFunctionsFollowMySQL(t *testing.T) {
 		{name: "str_to_date refuses a date without a day", dialect: MySQL, query: `SELECT STR_TO_DATE('2024-02', '%Y-%m')`, wantNull: true},
 		{name: "str_to_date refuses a weekday alone", dialect: MySQL, query: `SELECT STR_TO_DATE('Monday', '%W')`, wantNull: true},
 		{name: "str_to_date without a specifier is null", dialect: MySQL, query: `SELECT STR_TO_DATE('x', 'x')`, wantNull: true},
+
+		// STR_TO_DATE's numeric specifiers are padded on output only. On input
+		// each reads one digit or two, which is why a date written the way a
+		// spreadsheet writes it parses in MySQL.
+		{name: "str_to_date reads an unpadded month and day", dialect: MySQL, query: `SELECT STR_TO_DATE('2026-1-5', '%Y-%m-%d')`, want: "2026-01-05"},
+		{name: "str_to_date reads a padded month and day", dialect: MySQL, query: `SELECT STR_TO_DATE('2026-01-05', '%Y-%m-%d')`, want: "2026-01-05"},
+		{name: "str_to_date reads an unpadded day first", dialect: MySQL, query: `SELECT STR_TO_DATE('5,1,2026', '%d,%m,%Y')`, want: "2026-01-05"},
+		{name: "str_to_date reads an unpadded time", dialect: MySQL, query: `SELECT STR_TO_DATE('2026-01-05 9:7:5', '%Y-%m-%d %H:%i:%s')`, want: "2026-01-05 09:07:05"},
+		{name: "str_to_date reads an unpadded twelve-hour time", dialect: MySQL, query: `SELECT STR_TO_DATE('2026-01-05 1:07:05 PM', '%Y-%m-%d %h:%i:%s %p')`, want: "2026-01-05 13:07:05"},
+		{name: "str_to_date still refuses an impossible date", dialect: MySQL, query: `SELECT STR_TO_DATE('2026-02-30', '%Y-%m-%d')`, wantNull: true},
+		{name: "str_to_date still refuses a value that is not a date", dialect: MySQL, query: `SELECT STR_TO_DATE('abc', '%Y-%m-%d')`, wantNull: true},
+		// The two-digit year keeps its width: MySQL reads 99 as 1999 and 26 as
+		// 2026, which a variable-width year would not.
+		{name: "str_to_date reads a two-digit year as MySQL does", dialect: MySQL, query: `SELECT STR_TO_DATE('99-1-5', '%y-%c-%e')`, want: "1999-01-05"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

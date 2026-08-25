@@ -486,6 +486,36 @@ var mysqlToGoLayout = map[byte]string{
 	'a': layoutWeekdayShort,
 }
 
+// mysqlParseLayout overrides mysqlToGoLayout for the specifiers whose parsing
+// width differs from their formatting width. MySQL pads a number on output and
+// reads one digit or two on input, while a Go layout element means both at once:
+// "01" formats a month as two digits and refuses one, and "1" accepts either and
+// formats without the padding. So the two directions need two maps, and only the
+// numeric specifiers appear here.
+var mysqlParseLayout = map[byte]string{
+	'm': "1",
+	'd': "2",
+	'h': "3",
+	'I': "3",
+	'i': "4",
+	's': "5",
+	'S': "5",
+	'r': "3:4:5 PM",
+	'T': "15:4:5",
+}
+
+// mysqlLayoutFor is the Go layout fragment a MySQL specifier means, in the
+// direction asked for.
+func mysqlLayoutFor(spec byte, parsing bool) (string, bool) {
+	if parsing {
+		if l, found := mysqlParseLayout[spec]; found {
+			return l, true
+		}
+	}
+	l, found := mysqlToGoLayout[spec]
+	return l, found
+}
+
 // fnDateFormat implements MySQL DATE_FORMAT(date, format).
 func fnDateFormat(args []driver.Value) (driver.Value, error) {
 	s, ok := toString(args[0])
@@ -681,7 +711,7 @@ func fnStrToDate(args []driver.Value) (driver.Value, error) {
 	for i := 0; i < len(format); i++ {
 		if format[i] == '%' && i+1 < len(format) {
 			spec := format[i+1]
-			if l, found := mysqlToGoLayout[spec]; found {
+			if l, found := mysqlLayoutFor(spec, true); found {
 				layout.WriteString(l)
 				switch spec {
 				case 'Y', 'y':
