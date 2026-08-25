@@ -1,4 +1,4 @@
-.PHONY: test clean vet fmt chkfmt benchmark lint lint-staticcheck
+.PHONY: test clean vet fmt chkfmt benchmark lint lint-staticcheck examples
 
 APP         = filesql
 VERSION     = $(shell git describe --tags --abbrev=0)
@@ -36,6 +36,9 @@ lint-staticcheck: ## Run staticcheck (slow: tens of minutes when the cache is co
 
 benchmark: ## Run benchmark tests
 	$(GO_TEST) -tags=benchmark -bench=. -benchmem $(GO_PKGROOT) -run=^$$
+
+examples: ## Build and run examples/ against this checkout
+	./examples/verify.sh
 
 .DEFAULT_GOAL := help
 help:  
