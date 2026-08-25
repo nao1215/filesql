@@ -284,6 +284,16 @@ func TestXZChecksEveryStream(t *testing.T) {
 			data: join(first, []byte{0, 0, 0, 0, 0, 0, 0, 0}, second),
 			want: "id,name\n1,alice\n2,bob\n",
 		},
+		{
+			name: "a file ending in the padding it is allowed ends there",
+			data: join(first, []byte{0, 0, 0, 0}),
+			want: "id,name\n1,alice\n",
+		},
+		{
+			name: "the same with several padding groups",
+			data: join(first, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}),
+			want: "id,name\n1,alice\n",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var before, after runtime.MemStats

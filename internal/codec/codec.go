@@ -398,30 +398,60 @@ func (s *xzStreams) Read(p []byte) (int, error) {
 		// only treated as the next stream when they are one; anything else is
 		// the decoder's own failure and is returned as it stands.
 		s.src.rewind()
-		if !s.atStreamHeader() {
+		switch s.afterStream() {
+		case anotherStream:
+			s.cur = nil
+			if n > 0 {
+				return n, nil
+			}
+		case endOfFile:
+			return n, io.EOF
+		default:
 			return n, err
-		}
-		s.cur = nil
-		if n > 0 {
-			return n, nil
 		}
 	}
 }
 
-// atStreamHeader reports whether another xz stream begins where the source now
-// stands, stepping over the padding the format allows between streams.
-func (s *xzStreams) atStreamHeader() bool {
+// whatFollows says what stands where a stream ended.
+type whatFollows int
+
+const (
+	// anotherStream is a stream header, which the file continues with.
+	anotherStream whatFollows = iota
+	// endOfFile is nothing, which the file ends with. A file may end with the
+	// padding the format allows, and it does end there.
+	endOfFile
+	// somethingElse is bytes that are neither, which the decoder reports.
+	somethingElse
+)
+
+// afterStream steps over the padding the format allows between streams and says
+// what is behind it.
+func (s *xzStreams) afterStream() whatFollows {
+	// Running out of bytes only ends the file when padding was what ran out.
+	// A stream cut short also leaves the source empty, and that is the decoder
+	// failing rather than the file ending, so its error has to stand.
+	padded := false
 	for {
-		head, err := s.src.peek(len(xzStreamMagic))
+		pad, err := s.src.peek(len(xzStreamPadding))
 		if err != nil {
-			return false
+			if _, err := s.src.peek(1); err != nil && padded {
+				return endOfFile
+			}
+			return somethingElse
 		}
-		if !bytes.Equal(head[:4], xzStreamPadding) {
-			return bytes.Equal(head, xzStreamMagic)
+		if bytes.Equal(pad, xzStreamPadding) {
+			if err := s.src.discard(len(xzStreamPadding)); err != nil {
+				return somethingElse
+			}
+			padded = true
+			continue
 		}
-		if err := s.src.discard(len(xzStreamPadding)); err != nil {
-			return false
+		head, err := s.src.peek(len(xzStreamMagic))
+		if err != nil || !bytes.Equal(head, xzStreamMagic) {
+			return somethingElse
 		}
+		return anotherStream
 	}
 }
 
