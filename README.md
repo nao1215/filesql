@@ -58,6 +58,14 @@ Compressed wrappers are supported for CSV, TSV, LTSV, JSON, JSONL, Parquet, and 
 
 ACH and Fedwire do not use external compression wrappers.
 
+An xz or zstd stream states in its header how much working memory its decoder
+must hold, and a decoder allocates it before reading any data. filesql caps that
+at a 256 MiB xz dictionary, four times what `xz -9` declares, and a 128 MiB zstd
+window, which is the largest the `zstd` CLI reaches on its own. A damaged file
+therefore costs a fixed ceiling rather than whatever its header names. The zstd
+cap holds for every frame; the xz one is read from the first block of the first
+stream, so a later block or a concatenated second stream is not covered.
+
 Format and compression are separate. `FileType` names the format only —
 `FileTypeCSV` is a CSV whether or not a codec wraps it — and a path says which
 codec that is. A reader has no path, so `AddReader` takes the codec as an
