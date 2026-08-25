@@ -1131,7 +1131,14 @@ func TestDataURIValidator(t *testing.T) {
 	}{
 		{"valid text data URI", "data:text/plain;base64,SGVsbG8=", false},
 		{"valid image data URI", "data:image/png;base64,iVBORw0KGgo=", false},
+		{"charset parameter", "data:text/plain;charset=utf-8;base64,aGVsbG8=", false},
+		{"plus in subtype with parameter", "data:image/svg+xml;charset=UTF-8;base64,PHN2Zz48L3N2Zz4=", false},
+		{"two parameters", "data:text/plain;charset=utf-8;foo=bar;base64,aGVsbG8=", false},
+		{"omitted media type", "data:;base64,aGVsbG8=", false},
+		{"omitted media type with parameter", "data:;charset=utf-8;base64,aGVsbG8=", false},
 		{"missing base64 encoding", "data:text/plain,hello", true},
+		{"empty payload", "data:text/plain;base64,", true},
+		{"not a data URI scheme", "notdata:text/plain;base64,aGVsbG8=", true},
 		{"invalid string", "invalid", true},
 		{"empty string", "", true},
 		// Passes regex but fails base64 decode due to missing padding

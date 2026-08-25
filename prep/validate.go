@@ -16,8 +16,12 @@ import (
 
 // Regex patterns for validation
 const (
-	uuidRegexPattern    = `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`
-	dataURIRegexPattern = `^data:[^;]+;base64,[A-Za-z0-9+/]+={0,2}$`
+	uuidRegexPattern = `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`
+	// RFC 2397 gives a data URI as data:[<mediatype>][;base64],<data>, where
+	// the media type may carry parameters and may be omitted entirely. The
+	// payload is checked again by decoding it, so the class here only has to
+	// find where it starts.
+	dataURIRegexPattern = `^data:(?:[\w.+-]+/[\w.+-]+)?(?:;[\w.+-]+=[^;,]*)*;base64,[A-Za-z0-9+/]+={0,2}$`
 	emailRegexPattern   = `^[A-Za-z0-9_%+\-]+(?:\.[A-Za-z0-9_%+\-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$`
 	// numeric accepts an optionally signed decimal, and number accepts digits
 	// alone, matching the go-playground/validator dialect prep documents.
