@@ -2,6 +2,9 @@ package filesql
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // TestOpenConcurrentQueries verifies that a database returned by Open can be
@@ -354,4 +359,198 @@ func TestAutoSaveSavesOnceUnderConcurrentClose(t *testing.T) {
 	entries, err := os.ReadDir(filepath.Dir(path))
 	require.NoError(t, err)
 	require.Len(t, entries, 1, "the save left a staged file behind: %v", entries)
+}
+
+// TestConcurrentLoadInto verifies that loading into one database from several
+// goroutines lands every table.
+//
+// It did not: creating a table takes a lock on the schema, and SQLite refuses a
+// second writer rather than queueing it, so a load that met another load's lock
+// came back with `database schema is locked` on a shared-cache database or
+// `database is locked` on a file, its table not created. Sixteen concurrent
+// loads into a file database left the database empty and sixteen errors behind.
+// The load now waits the lock out. Run with -race.
+func TestConcurrentLoadInto(t *testing.T) {
+	t.Parallel()
+
+	source := func(t *testing.T, n int) []string {
+		t.Helper()
+		dir := t.TempDir()
+		paths := make([]string, n)
+		for i := range n {
+			paths[i] = filepath.Join(dir, fmt.Sprintf("t%d.csv", i))
+			require.NoError(t, os.WriteFile(paths[i], []byte("id,name\n1,alice\n"), 0o600))
+		}
+		return paths
+	}
+
+	// The three shapes a caller's database can have, plus this package's own.
+	// They fail differently: a file database answers SQLITE_BUSY, a shared-cache
+	// one answers SQLITE_LOCKED, and a pinned ":memory:" pool cannot collide at
+	// all because every load goes through the one connection.
+	for _, tc := range []struct {
+		name string
+		open func(t *testing.T) *sql.DB
+	}{
+		{
+			name: "a pinned in-memory pool",
+			open: func(t *testing.T) *sql.DB {
+				t.Helper()
+				db, err := sql.Open("sqlite", ":memory:")
+				require.NoError(t, err)
+				db.SetMaxOpenConns(1)
+				return db
+			},
+		},
+		{
+			name: "a file database",
+			open: func(t *testing.T) *sql.DB {
+				t.Helper()
+				db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "load.db"))
+				require.NoError(t, err)
+				return db
+			},
+		},
+		{
+			name: "a database this package opened",
+			open: func(t *testing.T) *sql.DB {
+				t.Helper()
+				db, err := OpenContext(t.Context(), source(t, 1)[0])
+				require.NoError(t, err)
+				return db
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			const goroutines = 8
+
+			db := tc.open(t)
+			t.Cleanup(func() { require.NoError(t, db.Close()) })
+			paths := source(t, goroutines)
+
+			var wg sync.WaitGroup
+			errs := make([]error, goroutines)
+			for i := range goroutines {
+				wg.Go(func() { errs[i] = LoadInto(t.Context(), db, paths[i]) })
+			}
+			wg.Wait()
+
+			for i, err := range errs {
+				require.NoErrorf(t, err, "load %d", i)
+			}
+			for i := range goroutines {
+				var count int
+				require.NoError(t, db.QueryRowContext(t.Context(), fmt.Sprintf("SELECT COUNT(*) FROM t%d", i)).Scan(&count))
+				assert.Equal(t, 1, count, "table t%d", i)
+			}
+		})
+	}
+}
+
+// TestConcurrentLoadIntoFromReaders is the same for inputs that cannot be read
+// twice. A reader is spent by the attempt that reads it, so only the step
+// before the reading is tried again -- which on a shared-cache database is
+// where the lock is taken, since that is where the schema lock lands.
+func TestConcurrentLoadIntoFromReaders(t *testing.T) {
+	t.Parallel()
+
+	seed := filepath.Join(t.TempDir(), "seed.csv")
+	require.NoError(t, os.WriteFile(seed, []byte("id,name\n1,alice\n"), 0o600))
+	db, err := OpenContext(t.Context(), seed)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	const goroutines = 8
+
+	var wg sync.WaitGroup
+	errs := make([]error, goroutines)
+	for i := range goroutines {
+		wg.Go(func() {
+			builder, buildErr := NewBuilder().
+				AddReader(strings.NewReader("id,name\n1,alice\n"), fmt.Sprintf("r%d", i), FileTypeCSV).
+				Build(t.Context())
+			if buildErr != nil {
+				errs[i] = buildErr
+				return
+			}
+			errs[i] = builder.LoadInto(t.Context(), db)
+		})
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		require.NoErrorf(t, err, "load %d", i)
+	}
+	for i := range goroutines {
+		var count int
+		require.NoError(t, db.QueryRowContext(t.Context(), fmt.Sprintf("SELECT COUNT(*) FROM r%d", i)).Scan(&count))
+		assert.Equal(t, 1, count, "table r%d", i)
+	}
+}
+
+// TestLoadRetryOnlyWaitsForLocks keeps the waiting from spreading: only the two
+// answers SQLite gives when someone else holds what a load needs are worth
+// waiting on, and everything else has to come back at once. A bad input that
+// became a slow bad input would be a worse trade than the one this makes.
+func TestLoadRetryOnlyWaitsForLocks(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the codes that mean someone else holds it", func(t *testing.T) {
+		t.Parallel()
+
+		// The extended codes are the ones a caller actually meets: 262 is what a
+		// shared-cache table lock answers, and 517 is what a write into a stale
+		// snapshot answers. Both carry their primary code in the low byte.
+		for _, code := range []int{
+			sqlite3.SQLITE_BUSY,
+			sqlite3.SQLITE_LOCKED,
+			sqlite3.SQLITE_LOCKED_SHAREDCACHE,
+			sqlite3.SQLITE_BUSY_SNAPSHOT,
+		} {
+			assert.Truef(t, isLockCode(code), "code %d", code)
+		}
+	})
+
+	t.Run("the codes that mean the input is wrong", func(t *testing.T) {
+		t.Parallel()
+
+		for _, code := range []int{
+			sqlite3.SQLITE_OK,
+			sqlite3.SQLITE_ERROR,
+			sqlite3.SQLITE_CONSTRAINT,
+			sqlite3.SQLITE_FULL,
+			sqlite3.SQLITE_READONLY,
+		} {
+			assert.Falsef(t, isLockCode(code), "code %d", code)
+		}
+	})
+
+	t.Run("anything else comes back at once", func(t *testing.T) {
+		t.Parallel()
+
+		assert.False(t, lockedByAnotherConnection(nil))
+		assert.False(t, lockedByAnotherConnection(errors.New("disk full")))
+		assert.False(t, lockedByAnotherConnection(fmt.Errorf("%w: no such table", ErrDatabaseOperation)))
+	})
+
+	t.Run("a load that fails for its own reasons fails fast", func(t *testing.T) {
+		t.Parallel()
+
+		db, err := sql.Open("sqlite", ":memory:")
+		require.NoError(t, err)
+		db.SetMaxOpenConns(1)
+		t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+		path := filepath.Join(t.TempDir(), "dup.csv")
+		require.NoError(t, os.WriteFile(path, []byte("id,id\n1,2\n"), 0o600))
+
+		start := time.Now()
+		loadErr := LoadInto(t.Context(), db, path)
+		elapsed := time.Since(start)
+
+		require.Error(t, loadErr)
+		assert.Less(t, elapsed, time.Second, "a duplicate column was waited on as though it were a lock")
+	})
 }

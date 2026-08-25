@@ -123,7 +123,7 @@ func TestRunInputScope_UnsupportedExecutor(t *testing.T) {
 	t.Parallel()
 
 	loaded := false
-	err := newStreamProcessor(100).runInputScope(context.Background(), plainExecutor{db: openTestDB(t)}, func(*sql.Tx) error {
+	err := newStreamProcessor(100).runInputScope(context.Background(), plainExecutor{db: openTestDB(t)}, rereadableInput, func(*sql.Tx) error {
 		loaded = true
 		return nil
 	})
@@ -235,7 +235,7 @@ func TestLoadTyped_ReadAgain(t *testing.T) {
 		// Through the scope, because undoing a refused load is what the scope is
 		// for: loadTable itself only reports.
 		sp := newStreamProcessor(1)
-		err := sp.runInputScope(ctx, tx, func(scope *sql.Tx) error {
+		err := sp.runInputScope(ctx, tx, rereadableInput, func(scope *sql.Tx) error {
 			return sp.loadTable(ctx, scope, "t", newSource(changed))
 		})
 		require.Error(t, err)
@@ -294,7 +294,7 @@ func TestRunInputScope_CallerTransaction(t *testing.T) {
 		return newStreamingParser(FileTypeCSV, CompressionNone, "t", 1).ProcessInChunks(strings.NewReader("v\n1\n2\nx,y\n"), emit)
 	}}
 	sp := newStreamProcessor(1)
-	err = sp.runInputScope(ctx, tx, func(scope *sql.Tx) error {
+	err = sp.runInputScope(ctx, tx, rereadableInput, func(scope *sql.Tx) error {
 		return sp.loadTable(ctx, scope, "t", source)
 	})
 	require.Error(t, err)

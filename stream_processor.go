@@ -7,11 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nao1215/filesql/internal/reader"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // Structured log attribute keys used across stream processing.
@@ -113,7 +117,9 @@ func (sp *streamProcessor) streamAllFilesToDatabase(ctx context.Context, db DBTX
 	sp.logger.Info("starting file streaming", "file_count", len(collectedPaths))
 	for i, path := range collectedPaths {
 		sp.logger.Debug("streaming file", "path", path, "index", i+1, "total", len(collectedPaths))
-		err := sp.runInputScope(ctx, db, func(scope *sql.Tx) error {
+		// A path can be read again, so an input that met another load's lock
+		// waits and starts over rather than failing.
+		err := sp.runInputScope(ctx, db, rereadableInput, func(scope *sql.Tx) error {
 			return sp.streamFileToDatabase(ctx, scope, path)
 		})
 		if err != nil {
@@ -138,7 +144,9 @@ func (sp *streamProcessor) streamAllReadersToDatabase(ctx context.Context, db DB
 	sp.logger.Info("starting reader streaming", "reader_count", len(readers))
 	for i, ri := range readers {
 		sp.logger.Debug("streaming reader", logKeyTable, ri.tableName, "file_type", ri.fileType.String(), "index", i+1, "total", len(readers))
-		err := sp.runInputScope(ctx, db, func(scope *sql.Tx) error {
+		// A reader is spent by the attempt that reads it, so only the step
+		// before anything is read can be tried again.
+		err := sp.runInputScope(ctx, db, spentInput, func(scope *sql.Tx) error {
 			return sp.streamReaderToDatabase(ctx, scope, ri)
 		})
 		sp.closeReaderInput(ri)
@@ -172,28 +180,13 @@ const inputSavepoint = `"_filesql_input"`
 // transaction is not this package's to end, but rolling back to the savepoint
 // leaves it exactly as the input found it, which is what lets the caller keep
 // using it after a failure.
-func (sp *streamProcessor) runInputScope(ctx context.Context, db DBTX, load func(*sql.Tx) error) error {
+func (sp *streamProcessor) runInputScope(ctx context.Context, db DBTX, kind inputKind, load func(*sql.Tx) error) error {
 	switch d := db.(type) {
 	case *sql.DB:
-		tx, err := d.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("%w: failed to begin transaction: %w", ErrDatabaseOperation, err)
+		if kind == spentInput {
+			return sp.runInputTx(ctx, d, load)
 		}
-		if err := load(tx); err != nil {
-			// When the context is done, database/sql has already rolled the
-			// transaction back itself, so this call loses the race and reports
-			// sql.ErrTxDone. That is cancellation working as documented, and the
-			// cause is already in err.
-			rollbackErr := tx.Rollback()
-			if errors.Is(rollbackErr, sql.ErrTxDone) && ctx.Err() != nil {
-				return err
-			}
-			return joinCleanup(err, rollbackErr, "rollback import transaction")
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("%w: failed to commit transaction: %w", ErrDatabaseOperation, err)
-		}
-		return nil
+		return retryWhileLocked(ctx, func() error { return sp.runInputTx(ctx, d, load) })
 	case *sql.Tx:
 		if _, err := d.ExecContext(ctx, `SAVEPOINT `+inputSavepoint); err != nil {
 			return fmt.Errorf("%w: failed to open savepoint: %w", ErrDatabaseOperation, err)
@@ -207,6 +200,123 @@ func (sp *streamProcessor) runInputScope(ctx context.Context, db DBTX, load func
 		return nil
 	default:
 		return fmt.Errorf("%w: unsupported database executor %T", ErrDatabaseOperation, db)
+	}
+}
+
+// runInputTx runs one input in a transaction of its own.
+func (sp *streamProcessor) runInputTx(ctx context.Context, db *sql.DB, load func(*sql.Tx) error) error {
+	var tx *sql.Tx
+	// Beginning is retried whatever the input is: nothing has been read yet, so
+	// starting over costs nothing and loses nothing.
+	if err := retryWhileLocked(ctx, func() (err error) {
+		tx, err = db.BeginTx(ctx, nil)
+		return err
+	}); err != nil {
+		return fmt.Errorf("%w: failed to begin transaction: %w", ErrDatabaseOperation, err)
+	}
+	if err := load(tx); err != nil {
+		// When the context is done, database/sql has already rolled the
+		// transaction back itself, so this call loses the race and reports
+		// sql.ErrTxDone. That is cancellation working as documented, and the
+		// cause is already in err.
+		rollbackErr := tx.Rollback()
+		if errors.Is(rollbackErr, sql.ErrTxDone) && ctx.Err() != nil {
+			return err
+		}
+		return joinCleanup(err, rollbackErr, "rollback import transaction")
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%w: failed to commit transaction: %w", ErrDatabaseOperation, err)
+	}
+	return nil
+}
+
+// inputKind says whether an input can be read a second time, which decides how
+// much of a load may be tried again when another load holds the database.
+type inputKind int
+
+const (
+	// rereadableInput is a path: the file is still there, so a whole load can
+	// start over.
+	rereadableInput inputKind = iota
+	// spentInput is a reader: what it held is gone once it has been read, so
+	// only the steps before the reading can be tried again.
+	spentInput
+)
+
+// How long an input waits for another load to let go, and how the wait grows.
+//
+// SQLite does not queue a second writer; it refuses one. Creating a table takes
+// a lock on the schema, so two loads into the same database at the same time
+// left one of them reporting `database schema is locked` on a shared-cache
+// database or `database is locked` on a file, with its table not created and
+// nothing having queued behind anything. Waiting is what every SQLite
+// application does about that, and five seconds is the budget the drivers'
+// busy_timeout defaults sit around; past it the error the database gave is
+// returned as it stands.
+const (
+	loadLockBudget  = 5 * time.Second
+	loadLockFloor   = time.Millisecond
+	loadLockCeiling = 50 * time.Millisecond
+)
+
+// retryWhileLocked runs step until it succeeds, fails for a reason other than
+// another connection's lock, runs out of budget, or the context ends.
+//
+// The wait doubles and carries jitter, because the loads that collide are the
+// loads that would otherwise retry in step with one another.
+func retryWhileLocked(ctx context.Context, step func() error) error {
+	deadline := time.Now().Add(loadLockBudget)
+	for wait := loadLockFloor; ; {
+		err := step()
+		if err == nil || !lockedByAnotherConnection(err) {
+			return err
+		}
+		// The wait is cut to what is left of the budget, so the last attempt
+		// happens inside it rather than just past it.
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return err
+		}
+		delay := wait/2 + rand.N(wait/2+1) //nolint:gosec // Jitter, not a secret
+		if delay > remaining {
+			delay = remaining
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return err
+		case <-timer.C:
+		}
+		if wait *= 2; wait > loadLockCeiling {
+			wait = loadLockCeiling
+		}
+	}
+}
+
+// lockedByAnotherConnection reports the two answers SQLite gives when someone
+// else holds what this load needs. It reads the driver's code rather than the
+// message, which differs between a file database and a shared-cache one and is
+// not this package's to depend on: SQLITE_BUSY for a file, SQLITE_LOCKED for a
+// shared-cache table, each with extended codes above them that carry the same
+// primary code in their low byte.
+func lockedByAnotherConnection(err error) bool {
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	return isLockCode(sqliteErr.Code())
+}
+
+// isLockCode reads a result code's low byte, which is where an extended code
+// carries the primary one it refines.
+func isLockCode(code int) bool {
+	switch code & 0xFF {
+	case sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED:
+		return true
+	default:
+		return false
 	}
 }
 
