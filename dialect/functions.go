@@ -2829,10 +2829,13 @@ func fnGoogleSQLFormat(args []driver.Value) (driver.Value, error) {
 		next++
 		return v
 	}
-	var b strings.Builder
+	// The result is built in a byte slice rather than a strings.Builder so the
+	// printf verbs can be appended in place: Appendf writes into it, where
+	// Sprintf would allocate a string per verb only to copy it in.
+	out := make([]byte, 0, len(format)+16)
 	for i := 0; i < len(format); {
 		if format[i] != '%' {
-			b.WriteByte(format[i])
+			out = append(out, format[i])
 			i++
 			continue
 		}
@@ -2840,13 +2843,13 @@ func fnGoogleSQLFormat(args []driver.Value) (driver.Value, error) {
 		switch {
 		case end < 0:
 			// A trailing "%" with no verb after it stands for itself.
-			b.WriteString(format[i:])
+			out = append(out, format[i:]...)
 			i = len(format)
 		case verb == '%':
-			b.WriteByte('%')
+			out = append(out, '%')
 			i = end
 		case verb == 't' || verb == 'T':
-			b.WriteString(googlesqlPrintValue(take(), verb == 'T'))
+			out = append(out, googlesqlPrintValue(take(), verb == 'T')...)
 			i = end
 		default:
 			operands := make([]any, 0, strings.Count(spec, "*")+1)
@@ -2854,11 +2857,11 @@ func fnGoogleSQLFormat(args []driver.Value) (driver.Value, error) {
 				operands = append(operands, formatOperand('d', take()))
 			}
 			operands = append(operands, formatOperand(verb, take()))
-			b.WriteString(fmt.Sprintf(goFormatSpec(spec, verb), operands...))
+			out = fmt.Appendf(out, goFormatSpec(spec, verb), operands...)
 			i = end
 		}
 	}
-	return b.String(), nil
+	return string(out), nil
 }
 
 // scanFormatSpec reads the conversion specification that starts at the "%" at
