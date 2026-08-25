@@ -385,7 +385,7 @@ What is not on that list is decimal formatting. `2.50` loads as the REAL `2.5`, 
 
 ### Memory and streaming
 
-filesql loads data into an in-memory SQLite database. CSV, TSV, JSON arrays, and Parquet arrive in chunks while loading. LTSV, non-array JSON/JSONL values, XLSX, ACH, and Fedwire are read in full before they are turned into rows. A Parquet file's compressed bytes are still buffered whole, because the format is read back to front, but its rows are handed over a chunk at a time.
+filesql loads data into an in-memory SQLite database. CSV, TSV, JSON arrays, and Parquet arrive in chunks while loading. LTSV, non-array JSON/JSONL values, XLSX, ACH, and Fedwire are read in full before they are turned into rows. A Parquet file named by path is read where it lies, since the format needs to read at an offset and a file already serves that; a Parquet reader passed to `AddReader` is buffered whole instead, because a stream cannot go back and the format is read back to front.
 
 A blank line is not a record, in a delimited file or in a sheet. An XLSX row holding no cell at all is skipped, so a workbook whose used range reaches far down the sheet — a header in row 1 and one stray cell near the bottom — costs what it holds rather than what its range spans.
 
@@ -397,8 +397,8 @@ The multiplier belongs to the format rather than to the library. The same 200,00
 
 | format | file | peak RSS | per extra file byte |
 |--------|------|----------|---------------------|
-| CSV | 32.8 MB | 100 MB | 2.1x |
-| Parquet | 32.2 MB | 177 MB | 4.1x |
+| CSV | 32.8 MB | 101 MB | 2.1x |
+| Parquet | 32.2 MB | 111 MB | 2.1x |
 | XLSX | 17.6 MB | 1849 MB | about 100x |
 
 A workbook is the one to plan around. Reading its rows is not what costs: the streaming row read is 267 MB for an 18.5 MB workbook, and the rest is one random-access lookup per cell inside the date normalization, which makes the library underneath build the whole sheet as objects. Convert a large table out of XLSX before loading it, or expect a hundred times its size. `go test -tags benchmark -run TestLoadMemoryFootprintByFormat -v .` prints this table.
