@@ -193,3 +193,56 @@ func writeBenchmarkParquet(b *testing.B, path string) {
 		b.Fatalf("rename failed: %v", err)
 	}
 }
+
+// benchmarkCompressedCopy writes the benchmark CSV through a codec into b's
+// temporary directory and returns the path, so a compressed load is measured
+// against the same rows the uncompressed one uses.
+func benchmarkCompressedCopy(b *testing.B, compression CompressionType) string {
+	b.Helper()
+
+	plain, err := os.ReadFile(filepath.Join("testdata", "benchmark", "customers100000.csv"))
+	if err != nil {
+		b.Fatalf("read the benchmark CSV: %v", err)
+	}
+	path := filepath.Join(b.TempDir(), "customers100000.csv"+compression.Extension())
+	file, err := os.Create(path) //nolint:gosec // Path from b.TempDir()
+	if err != nil {
+		b.Fatalf("create %s: %v", path, err)
+	}
+	writer, closeWriter, err := NewCompressionHandler(compression).CreateWriter(file)
+	if err != nil {
+		b.Fatalf("create the %s writer: %v", compression.Extension(), err)
+	}
+	if _, err := writer.Write(plain); err != nil {
+		b.Fatalf("write the compressed copy: %v", err)
+	}
+	if err := closeWriter(); err != nil {
+		b.Fatalf("close the %s writer: %v", compression.Extension(), err)
+	}
+	if err := file.Close(); err != nil {
+		b.Fatalf("close %s: %v", path, err)
+	}
+	return path
+}
+
+// BenchmarkOpenCompressed measures loading through the two codecs whose headers
+// are inspected before the decoder is built, so the cost of that inspection is
+// visible next to the decompression it stands in front of.
+func BenchmarkOpenCompressed(b *testing.B) {
+	for _, compression := range []CompressionType{CompressionXZ, CompressionZSTD, CompressionGZ} {
+		b.Run(compression.Extension(), func(b *testing.B) {
+			path := benchmarkCompressedCopy(b, compression)
+
+			b.ResetTimer()
+			for b.Loop() {
+				db, err := OpenContext(context.Background(), path)
+				if err != nil {
+					b.Fatalf("OpenContext failed: %v", err)
+				}
+				if err := db.Close(); err != nil {
+					b.Fatalf("db.Close failed: %v", err)
+				}
+			}
+		})
+	}
+}
