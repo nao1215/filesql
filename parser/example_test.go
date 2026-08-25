@@ -3,8 +3,10 @@ package parser_test
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/nao1215/filesql/parser"
+	"github.com/xuri/excelize/v2"
 )
 
 func ExampleParse_csv() {
@@ -165,4 +167,115 @@ func ExampleTableData_columnTypes() {
 	// name: TEXT
 	// score: REAL
 	// date: DATETIME
+}
+
+func ExampleNewCSVReader() {
+	// A CRLF inside a quoted field is data, and this reader keeps it. That is
+	// the one difference from encoding/csv, which would hand back "x\ny".
+	records, err := parser.NewCSVReader(strings.NewReader("note\n\"x\r\ny\"\n")).ReadAll()
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	fmt.Printf("%q\n", records)
+	// Output:
+	// [["note"] ["x\r\ny"]]
+}
+
+func ExampleNormalizeLineEndings() {
+	// A file written the classic Mac OS way ends its lines with a lone carriage
+	// return, which nothing downstream reads as a line break.
+	normalized := parser.NormalizeLineEndings(strings.NewReader("name,age\rAlice,30\r"))
+
+	result, err := parser.Parse(normalized, parser.CSV)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	fmt.Println(result.Headers, result.Records)
+	// Output:
+	// [name age] [[Alice 30]]
+}
+
+// workbook is one sheet of a workbook as sheet selection reads it: the names in
+// the order the file stores them, and whether each is shown.
+type workbook struct {
+	names   []string
+	visible map[string]bool
+}
+
+func (w workbook) GetSheetList() []string { return w.names }
+
+func (w workbook) GetSheetVisible(sheet string) (bool, error) { return w.visible[sheet], nil }
+
+func ExampleExcelSheets() {
+	sheets, err := parser.ExcelSheets(workbook{
+		names:   []string{"summary", "scratch"},
+		visible: map[string]bool{"summary": true, "scratch": false},
+	})
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	for _, sheet := range sheets {
+		fmt.Println(sheet.Name, sheet.Visible)
+	}
+	// Output:
+	// summary true
+	// scratch false
+}
+
+func ExampleSelectExcelSheets() {
+	loaded, skipped, err := parser.SelectExcelSheets(workbook{
+		names:   []string{"summary", "scratch"},
+		visible: map[string]bool{"summary": true, "scratch": false},
+	}, parser.ExcelSheetPolicyVisibleOnly)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	fmt.Println("loaded:", loaded)
+	fmt.Println("skipped:", skipped)
+	// Output:
+	// loaded: [summary]
+	// skipped: [scratch]
+}
+
+func ExampleNormalizeXLSXDates() {
+	f := excelize.NewFile()
+	defer f.Close()
+
+	style, err := f.NewStyle(&excelize.Style{NumFmt: 15}) // d-mmm-yy
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+	if err := f.SetCellStr("Sheet1", "A1", "when"); err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+	if err := f.SetCellValue("Sheet1", "A2", time.Date(2023, 3, 15, 0, 0, 0, 0, time.UTC)); err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+	if err := f.SetCellStyle("Sheet1", "A2", "A2", style); err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	rows, err := f.GetRows("Sheet1")
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	fmt.Println("as the sheet renders it:", rows[1][0])
+	fmt.Println("as the inference reads it:", parser.NormalizeXLSXDates(f, "Sheet1", rows)[1][0])
+	// Output:
+	// as the sheet renders it: 15-Mar-23
+	// as the inference reads it: 2023-03-15
 }
