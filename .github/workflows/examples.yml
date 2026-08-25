@@ -1,0 +1,48 @@
+name: Examples
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  examples:
+    name: ${{ matrix.example }}
+
+    # Each example under examples/ is its own Go module pinned to a released
+    # filesql, so the root `go test ./...` never compiles them. examples/verify.sh
+    # wires the example to this checkout through a temporary go.work, which is
+    # what makes a shrunk or renamed public symbol fail here before it reaches
+    # the people the README sends to that directory.
+    strategy:
+      matrix:
+        example:
+          - basic
+          - multi-format
+          - sqlc
+          - gorm
+          - sqlx
+          - bun
+          - squirrel
+          - ent
+      fail-fast: false
+
+    # Linux only, and a single Go version. These examples exercise the public
+    # API rather than anything platform-specific, and the unit test matrix
+    # already runs that API on three operating systems and two Go versions.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+
+      - name: Vet, run, and compare the output with the README
+        run: ./examples/verify.sh "${{ matrix.example }}"

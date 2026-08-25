@@ -43,7 +43,13 @@ go test ./...
 make lint
 ```
 
-If you change behavior in examples or docs, run the tests that cover those paths as well.
+If you touch the public API, also run the examples. They are separate modules, so `go test ./...` never compiles them:
+
+```bash
+make examples
+```
+
+That builds each example against your checkout and diffs what it prints against the `Expected Output` block of its README.
 
 ## Pull Requests
 
