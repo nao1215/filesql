@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"math"
+	"runtime"
 	"testing"
 	"time"
 
@@ -265,6 +266,58 @@ func TestReadParquetRefusesWhatIsNotParquet(t *testing.T) {
 	// The right magic with nothing behind it is damage, not a table.
 	_, err = readParquet(bytes.NewReader([]byte("PAR1PAR1")), Options{}, discard)
 	assert.Error(t, err)
+}
+
+// TestReadParquetCostsNoMoreThanItsOwnSize holds the rule this reader was
+// chosen for, on the number a file states about itself. The last eight bytes of
+// a Parquet file are the footer's length and the magic, and the library
+// allocates that length before checking the file is that big, so eight bytes
+// reading "PAR1PAR1" -- whose second magic reads as a footer of 826364240 bytes
+// -- allocated 789 MiB before failing with "negative offset". The error was
+// always right; what it cost was not, which is why this asserts on allocation
+// rather than on the error alone.
+func TestReadParquetCostsNoMoreThanItsOwnSize(t *testing.T) {
+	// Not parallel, and neither are its cases: the measurement is this
+	// process's total allocation, so anything running beside it is counted in.
+
+	// Wide next to the tens of bytes each input is, and far below the 789 MiB
+	// the first of them used to cost.
+	const ceiling = 8 << 20
+
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{name: "the trailing magic read as a footer length", data: []byte("PAR1PAR1")},
+		{name: "a footer of the largest length there is", data: append([]byte("PAR1"), 0xFF, 0xFF, 0xFF, 0xFF, 'P', 'A', 'R', '1')},
+		{name: "a footer one byte past the end", data: append([]byte("PAR1"), 0x01, 0x00, 0x00, 0x00, 'P', 'A', 'R', '1')},
+		{name: "too short to hold a footer at all", data: []byte("PAR1")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var before, after runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+			_, err := readParquet(bytes.NewReader(tc.data), Options{}, func(*Chunk) error { return nil })
+			runtime.ReadMemStats(&after)
+
+			require.Error(t, err)
+			if allocated := after.TotalAlloc - before.TotalAlloc; allocated > ceiling {
+				t.Errorf("refusing %d bytes allocated %d MiB", len(tc.data), allocated>>20)
+			}
+		})
+	}
+
+	t.Run("a real file whose footer fits still loads", func(t *testing.T) {
+		type row struct {
+			ID int64 `parquet:"id"`
+		}
+		data := writeParquet(t, []row{{ID: 1}})
+
+		result, err := readParquet(bytes.NewReader(data), Options{}, func(*Chunk) error { return nil })
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"id"}, result.Header)
+	})
 }
 
 // slowParquet is a 433-byte file whose metadata declares column chunks outside

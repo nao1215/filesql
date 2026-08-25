@@ -211,7 +211,8 @@ func TestReadXLSX_SheetShape(t *testing.T) {
 // there is to assert, since the row count alone would pass a fix that only
 // dropped the rows after building them.
 func TestReadXLSXGapRowsCostNothing(t *testing.T) {
-	t.Parallel()
+	// Not parallel: the measurement is this process's total allocation, so
+	// anything running beside it is counted in.
 
 	const columns = 20
 	const farRow = 200000
