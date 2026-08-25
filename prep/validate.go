@@ -310,6 +310,30 @@ func (v *alphaSpaceValidator) Name() string {
 	return alphaSpaceTagValue
 }
 
+// alphanumSpaceValidator validates that a value contains only alphanumeric
+// characters or spaces
+type alphanumSpaceValidator struct{}
+
+// newAlphanumSpaceValidator creates a new alphanumSpace validator
+func newAlphanumSpaceValidator() *alphanumSpaceValidator {
+	return &alphanumSpaceValidator{}
+}
+
+// Validate checks if the value contains only alphanumeric characters or spaces
+func (v *alphanumSpaceValidator) Validate(value string) string {
+	for _, r := range value {
+		if !isAlpha(r) && !isNumeric(r) && r != ' ' {
+			return "value must contain only alphanumeric characters or spaces"
+		}
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *alphanumSpaceValidator) Name() string {
+	return alphanumSpaceTagValue
+}
+
 // numericValidator validates that a value is an optionally signed decimal,
 // which is what numeric means in the go-playground/validator dialect.
 type numericValidator struct{}
@@ -357,12 +381,18 @@ func (v *numberValidator) Name() string {
 	return numberTagValue
 }
 
-// alphanumericValidator validates that a value contains only ASCII alphanumeric characters
-type alphanumericValidator struct{}
+// alphanumericValidator validates that a value contains only ASCII alphanumeric
+// characters. It carries the tag because the dialect's alphanum and this
+// package's older alphanumeric both name it, and a reported error should name
+// the spelling the caller wrote.
+type alphanumericValidator struct {
+	tag string
+}
 
-// newAlphanumericValidator creates a new alphanumeric validator
-func newAlphanumericValidator() *alphanumericValidator {
-	return &alphanumericValidator{}
+// newAlphanumericValidator creates a new alphanumeric validator under the given
+// spelling
+func newAlphanumericValidator(tag string) *alphanumericValidator {
+	return &alphanumericValidator{tag: tag}
 }
 
 // Validate checks if the value contains only alphanumeric characters
@@ -377,7 +407,7 @@ func (v *alphanumericValidator) Validate(value string) string {
 
 // Name returns the validator name
 func (v *alphanumericValidator) Name() string {
-	return alphanumericTagValue
+	return v.tag
 }
 
 // isNumeric returns true if the rune is a numeric character

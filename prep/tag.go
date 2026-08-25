@@ -29,8 +29,14 @@ const (
 	numericTagValue = "numeric"
 	// numberTagValue is the tag value for number (int/decimal) validation
 	numberTagValue = "number"
-	// alphanumericTagValue is the tag value for alphanumeric validation
+	// alphanumTagValue is the tag value for alphanumeric validation, spelled
+	// as the dialect spells it.
+	alphanumTagValue = "alphanum"
+	// alphanumericTagValue is the spelling prep accepted first. It builds the
+	// same validator.
 	alphanumericTagValue = "alphanumeric"
+	// alphanumSpaceTagValue is the tag value for alphanumeric with spaces validation
+	alphanumSpaceTagValue = "alphanumspace"
 	// alphanumericUnicodeTagValue is the tag value for unicode alphanumeric validation
 	alphanumericUnicodeTagValue = "alphanumunicode"
 	// equalTagValue is the tag value for equal validation

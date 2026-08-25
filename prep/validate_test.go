@@ -263,6 +263,35 @@ func TestAlphaSpaceValidator(t *testing.T) {
 	}
 }
 
+func TestAlphanumSpaceValidator(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input   string
+		wantErr bool
+	}{
+		{"hello world", false},
+		{"Hello World 123", false},
+		{"ABC123", false},
+		{"hello-world", true},
+		{"日本語", true},
+		{"", false},
+	}
+
+	v := newAlphanumSpaceValidator()
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+			msg := v.Validate(tt.input)
+			hasErr := msg != ""
+			if hasErr != tt.wantErr {
+				t.Errorf("Validate(%q) error = %v, wantErr %v", tt.input, msg, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestNumericValidator(t *testing.T) {
 	t.Parallel()
 
@@ -361,7 +390,7 @@ func TestAlphanumericValidator(t *testing.T) {
 		{"", false},
 	}
 
-	v := newAlphanumericValidator()
+	v := newAlphanumericValidator(alphanumTagValue)
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -1956,7 +1985,8 @@ func TestValidatorNames(t *testing.T) {
 		{"alphaspace", func() validator { return newAlphaSpaceValidator() }, "alphaspace"},
 		{"numeric", func() validator { return newNumericValidator() }, "numeric"},
 		{"number", func() validator { return newNumberValidator() }, "number"},
-		{"alphanumeric", func() validator { return newAlphanumericValidator() }, "alphanumeric"},
+		{"alphanum", func() validator { return newAlphanumericValidator(alphanumTagValue) }, "alphanum"},
+		{"alphanumeric", func() validator { return newAlphanumericValidator(alphanumericTagValue) }, "alphanumeric"},
 		{"alphanumunicode", func() validator { return newAlphanumericUnicodeValidator() }, "alphanumunicode"},
 
 		// Comparison validators (take float64)
