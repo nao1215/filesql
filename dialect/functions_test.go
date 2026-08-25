@@ -1556,3 +1556,203 @@ func TestMySQLDateFunctionsFollowMySQL(t *testing.T) {
 		})
 	}
 }
+
+// TestFunctionsFollowTheSourceDialect covers the calls SQLite spells the same
+// way as a source dialect but means something else by, where passing the call
+// through answered a plausible wrong value rather than an error. Every expected
+// value here was read from the engine itself: mysql:8.4, postgres:17-alpine, and
+// the BigQuery documentation for the GoogleSQL rows.
+func TestFunctionsFollowTheSourceDialect(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name     string
+		dialect  Dialect
+		query    string
+		want     string
+		wantNull bool
+		wantErr  bool
+	}{
+		// LOG. MySQL and GoogleSQL mean the natural logarithm by the one-argument
+		// form, where SQLite means the base-10 one, and GoogleSQL writes the base
+		// second where SQLite writes it first.
+		{name: "mysql log is the natural logarithm", dialect: MySQL, query: `SELECT LOG(10)`, want: "2.302585092994046"},
+		{name: "mysql log takes its base first", dialect: MySQL, query: `SELECT LOG(2, 8)`, want: "3"},
+		{name: "mysql log10 is unchanged", dialect: MySQL, query: `SELECT LOG10(100)`, want: "2"},
+		{name: "mysql log2 is unchanged", dialect: MySQL, query: `SELECT LOG2(8)`, want: "3"},
+		{name: "mysql log nested in another call", dialect: MySQL, query: `SELECT ROUND(LOG(10), 3)`, want: "2.303"},
+		{name: "googlesql log is the natural logarithm", dialect: GoogleSQL, query: `SELECT LOG(10)`, want: "2.302585092994046"},
+		{name: "googlesql log takes its base second", dialect: GoogleSQL, query: `SELECT LOG(8, 2)`, want: "3"},
+		{name: "postgresql log is the base-ten logarithm", dialect: PostgreSQL, query: `SELECT log(10)`, want: "1"},
+		{name: "postgresql log takes its base first", dialect: PostgreSQL, query: `SELECT log(2, 8)`, want: "3"},
+		{name: "log of null", dialect: MySQL, query: `SELECT LOG(NULL)`, wantNull: true},
+
+		// PostgreSQL to_hex converts an integer; GoogleSQL TO_HEX hexes bytes.
+		{name: "postgresql to_hex converts the integer", dialect: PostgreSQL, query: `SELECT to_hex(255)`, want: "ff"},
+		{name: "postgresql to_hex of zero", dialect: PostgreSQL, query: `SELECT to_hex(0)`, want: "0"},
+		{name: "postgresql to_hex reads a negative as two's complement", dialect: PostgreSQL, query: `SELECT to_hex(-1)`, want: "ffffffffffffffff"},
+		{name: "postgresql to_hex of null", dialect: PostgreSQL, query: `SELECT to_hex(NULL)`, wantNull: true},
+		{name: "postgresql to_hex refuses a value that is not an integer", dialect: PostgreSQL, query: `SELECT to_hex('abc')`, wantErr: true},
+		{name: "postgresql to_hex refuses a fractional value", dialect: PostgreSQL, query: `SELECT to_hex(2.5)`, wantErr: true},
+		{name: "postgresql to_hex reads an integer written as text", dialect: PostgreSQL, query: `SELECT to_hex('255')`, want: "ff"},
+		{name: "googlesql to_hex still hexes bytes", dialect: GoogleSQL, query: `SELECT TO_HEX('ab')`, want: "6162"},
+
+		// REGEXP_REPLACE: MySQL's fourth argument is a start position and its
+		// fifth an occurrence, PostgreSQL's fourth is a flag string and its
+		// three-argument form replaces one match.
+		{name: "mysql regexp_replace replaces every match", dialect: MySQL, query: `SELECT REGEXP_REPLACE('aaa', 'a', 'X')`, want: "XXX"},
+		{name: "mysql regexp_replace starts at a position", dialect: MySQL, query: `SELECT REGEXP_REPLACE('aaa', 'a', 'X', 2)`, want: "aXX"},
+		{name: "mysql regexp_replace takes one occurrence", dialect: MySQL, query: `SELECT REGEXP_REPLACE('aaa', 'a', 'X', 1, 2)`, want: "aXa"},
+		{name: "mysql regexp_replace occurrence zero means every match", dialect: MySQL, query: `SELECT REGEXP_REPLACE('aaa', 'a', 'X', 1, 0)`, want: "XXX"},
+		{name: "mysql regexp_replace past the last occurrence", dialect: MySQL, query: `SELECT REGEXP_REPLACE('aaa', 'a', 'X', 1, 9)`, want: "aaa"},
+		{name: "mysql regexp_replace at one past the end", dialect: MySQL, query: `SELECT REGEXP_REPLACE('aaa', 'a', 'X', 4)`, want: "aaa"},
+		{name: "mysql regexp_replace counts the position in characters", dialect: MySQL, query: `SELECT REGEXP_REPLACE('日本語', '.', 'X', 2)`, want: "日XX"},
+		{name: "mysql regexp_replace folds case on request", dialect: MySQL, query: `SELECT REGEXP_REPLACE('AAA', 'a', 'X', 1, 0, 'i')`, want: "XXX"},
+		{name: "mysql regexp_replace refuses position zero", dialect: MySQL, query: `SELECT REGEXP_REPLACE('aaa', 'a', 'X', 0)`, wantErr: true},
+		{name: "mysql regexp_replace refuses a position past the end", dialect: MySQL, query: `SELECT REGEXP_REPLACE('aaa', 'a', 'X', 5)`, wantErr: true},
+		{name: "mysql regexp_replace of null", dialect: MySQL, query: `SELECT REGEXP_REPLACE(NULL, 'a', 'X')`, wantNull: true},
+		{name: "postgresql regexp_replace replaces one match", dialect: PostgreSQL, query: `SELECT regexp_replace('aaa', 'a', 'X')`, want: "Xaa"},
+		{name: "postgresql regexp_replace replaces all with the g flag", dialect: PostgreSQL, query: `SELECT regexp_replace('aaa', 'a', 'X', 'g')`, want: "XXX"},
+		{name: "postgresql regexp_replace folds case with the i flag", dialect: PostgreSQL, query: `SELECT regexp_replace('ABC', 'b', 'x', 'i')`, want: "AxC"},
+		{name: "postgresql regexp_replace expands a back reference", dialect: PostgreSQL, query: `SELECT regexp_replace('2026-07', '(\d+)-(\d+)', '\2/\1')`, want: "07/2026"},
+		{name: "mysql regexp_replace expands a group reference", dialect: MySQL, query: `SELECT REGEXP_REPLACE('2026-07', '([0-9]+)-([0-9]+)', '$2/$1')`, want: "07/2026"},
+		{name: "mysql regexp_replace writes a lone dollar as itself", dialect: MySQL, query: `SELECT REGEXP_REPLACE('a', 'a', '$')`, want: "$"},
+		{name: "mysql regexp_replace writes an escaped dollar", dialect: MySQL, query: `SELECT REGEXP_REPLACE('a', 'a', '\\$')`, want: "$"},
+		{name: "mysql regexp_replace matches across lines", dialect: MySQL, query: "SELECT REGEXP_REPLACE('a\nb', 'a.b', 'X', 1, 0, 'n')", want: "X"},
+		{name: "mysql regexp_replace anchors per line", dialect: MySQL, query: "SELECT REGEXP_REPLACE('a\nb', '^b', 'X', 1, 0, 'm')", want: "a\nX"},
+		{name: "mysql regexp_replace refuses a match type it cannot honor", dialect: MySQL, query: `SELECT REGEXP_REPLACE('a', 'a', 'X', 1, 0, 'u')`, wantErr: true},
+		{name: "googlesql regexp_replace replaces every match", dialect: GoogleSQL, query: `SELECT REGEXP_REPLACE('aaa', 'a', 'X')`, want: "XXX"},
+
+		// MySQL FORMAT is a number formatter, not printf.
+		{name: "mysql format rounds and groups", dialect: MySQL, query: `SELECT FORMAT(1234.5678, 2)`, want: "1,234.57"},
+		{name: "mysql format with no decimals", dialect: MySQL, query: `SELECT FORMAT(1234.5678, 0)`, want: "1,235"},
+		{name: "mysql format keeps the sign", dialect: MySQL, query: `SELECT FORMAT(-1234.5, 1)`, want: "-1,234.5"},
+		{name: "mysql format groups every three digits", dialect: MySQL, query: `SELECT FORMAT(1234567.891, 2)`, want: "1,234,567.89"},
+		{name: "mysql format pads to the asked precision", dialect: MySQL, query: `SELECT FORMAT(12.3, 4)`, want: "12.3000"},
+		{name: "mysql format reads a negative precision as zero", dialect: MySQL, query: `SELECT FORMAT(1234.5678, -1)`, want: "1,235"},
+		{name: "mysql format leaves a short number ungrouped", dialect: MySQL, query: `SELECT FORMAT(999, 0)`, want: "999"},
+		{name: "mysql format of null", dialect: MySQL, query: `SELECT FORMAT(NULL, 2)`, wantNull: true},
+		{name: "mysql format refuses a locale", dialect: MySQL, query: `SELECT FORMAT(1234.5, 2, 'de_DE')`, wantErr: true},
+		{name: "googlesql format still expands printf verbs", dialect: GoogleSQL, query: `SELECT FORMAT('%d items', 3)`, want: "3 items"},
+		{name: "postgresql format still expands printf verbs", dialect: PostgreSQL, query: `SELECT format('%d items', 3)`, want: "3 items"},
+
+		// LEFT and RIGHT with a negative length.
+		{name: "mysql left of a negative length is empty", dialect: MySQL, query: `SELECT LEFT('abcd', -1)`, want: ""},
+		{name: "mysql right of a negative length is empty", dialect: MySQL, query: `SELECT RIGHT('abcd', -1)`, want: ""},
+		{name: "mysql left of zero is empty", dialect: MySQL, query: `SELECT LEFT('abcd', 0)`, want: ""},
+		{name: "mysql left past the end is the whole string", dialect: MySQL, query: `SELECT LEFT('abc', 10)`, want: "abc"},
+		{name: "mysql left counts characters", dialect: MySQL, query: `SELECT LEFT('日本語', 2)`, want: "日本"},
+		{name: "mysql right counts characters", dialect: MySQL, query: `SELECT RIGHT('日本語', 2)`, want: "本語"},
+		{name: "googlesql left refuses a negative length", dialect: GoogleSQL, query: `SELECT LEFT('abcd', -1)`, wantErr: true},
+		{name: "googlesql right refuses a negative length", dialect: GoogleSQL, query: `SELECT RIGHT('abcd', -1)`, wantErr: true},
+		{name: "googlesql left of zero is empty", dialect: GoogleSQL, query: `SELECT LEFT('abcd', 0)`, want: ""},
+		{name: "postgresql left keeps its negative length", dialect: PostgreSQL, query: `SELECT left('abcd', -1)`, want: "abc"},
+		{name: "postgresql right keeps its negative length", dialect: PostgreSQL, query: `SELECT right('abcd', -1)`, want: "bcd"},
+		{name: "mysql left of null", dialect: MySQL, query: `SELECT LEFT(NULL, 1)`, wantNull: true},
+		{name: "googlesql left of null", dialect: GoogleSQL, query: `SELECT LEFT(NULL, 1)`, wantNull: true},
+
+		// GoogleSQL FORMAT's own verbs.
+		{name: "googlesql format prints a string bare", dialect: GoogleSQL, query: `SELECT FORMAT('%t', 'x')`, want: "x"},
+		{name: "googlesql format prints a string literal", dialect: GoogleSQL, query: `SELECT FORMAT('%T', 'x')`, want: `"x"`},
+		{name: "googlesql format quotes what a literal needs quoted", dialect: GoogleSQL, query: `SELECT FORMAT('%T', 'a"b')`, want: `"a\"b"`},
+		{name: "googlesql format prints a real", dialect: GoogleSQL, query: `SELECT FORMAT('%t', 1.5)`, want: "1.5"},
+		{name: "googlesql format prints an integer literal", dialect: GoogleSQL, query: `SELECT FORMAT('%T', 3)`, want: "3"},
+		{name: "googlesql format prints null", dialect: GoogleSQL, query: `SELECT FORMAT('%t', NULL)`, want: "NULL"},
+		{name: "googlesql format prints a null literal", dialect: GoogleSQL, query: `SELECT FORMAT('%T', NULL)`, want: "NULL"},
+		{name: "googlesql format mixes its verbs with printf", dialect: GoogleSQL, query: `SELECT FORMAT('%s=%T', 'a', 'b')`, want: `a="b"`},
+		{name: "googlesql format keeps a literal percent", dialect: GoogleSQL, query: `SELECT FORMAT('100%% %t', 'x')`, want: "100% x"},
+		{name: "googlesql format keeps the printf verbs", dialect: GoogleSQL, query: `SELECT FORMAT('%05.2f', 3.14159)`, want: "03.14"},
+		{name: "googlesql format ends on a bare percent", dialect: GoogleSQL, query: `SELECT FORMAT('done %')`, want: "done %"},
+		{name: "googlesql format takes a width from an argument", dialect: GoogleSQL, query: `SELECT FORMAT('%*d', 4, 7)`, want: "   7"},
+		// A value with no finite decimal form has no MySQL answer either, since
+		// MySQL cannot hold one; NULL says so rather than printing "+Inf".
+		{name: "mysql format of a value that is not finite", dialect: MySQL, query: `SELECT FORMAT(1e400, 2)`, wantNull: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, tt.dialect, tt.query)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("%s = %q, want an error", tt.query, got.String)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.Valid == tt.wantNull {
+				t.Fatalf("%s returned valid=%v (%q), want null=%v", tt.query, got.Valid, got.String, tt.wantNull)
+			}
+			if !tt.wantNull && got.String != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
+
+// TestCastOfAStringToAnIntegerFollowsTheSourceDialect covers the string form of
+// a cast to an integer type, which each dialect reads its own way: MySQL takes
+// the leading run of digits, while PostgreSQL and GoogleSQL read the whole text
+// as an integer literal and raise when it is not one.
+func TestCastOfAStringToAnIntegerFollowsTheSourceDialect(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name     string
+		dialect  Dialect
+		query    string
+		want     string
+		wantNull bool
+		wantErr  bool
+	}{
+		{name: "mysql truncates a fraction", dialect: MySQL, query: `SELECT CAST('1.5' AS SIGNED)`, want: "1"},
+		{name: "mysql stops at an exponent", dialect: MySQL, query: `SELECT CAST('1e3' AS SIGNED)`, want: "1"},
+		{name: "mysql takes the leading digits", dialect: MySQL, query: `SELECT CAST('12abc' AS SIGNED)`, want: "12"},
+		{name: "mysql keeps a leading sign", dialect: MySQL, query: `SELECT CAST('-12abc' AS SIGNED)`, want: "-12"},
+		{name: "mysql reads a leading plus", dialect: MySQL, query: `SELECT CAST('+5' AS SIGNED)`, want: "5"},
+		{name: "mysql reads a leading point as zero", dialect: MySQL, query: `SELECT CAST('.5' AS SIGNED)`, want: "0"},
+		{name: "mysql trims surrounding spaces", dialect: MySQL, query: `SELECT CAST(' 12 ' AS SIGNED)`, want: "12"},
+		{name: "mysql answers zero for a string with no number", dialect: MySQL, query: `SELECT CAST('abc' AS SIGNED)`, want: "0"},
+		{name: "mysql clamps a string past the range", dialect: MySQL, query: `SELECT CAST('9223372036854775808' AS SIGNED)`, want: "9223372036854775807"},
+		{name: "mysql clamps a leading run past the range", dialect: MySQL, query: `SELECT CAST('99999999999999999999abc' AS SIGNED)`, want: "9223372036854775807"},
+		{name: "mysql clamps a negative run past the range", dialect: MySQL, query: `SELECT CAST('-99999999999999999999abc' AS SIGNED)`, want: "-9223372036854775808"},
+		{name: "mysql still rounds a number", dialect: MySQL, query: `SELECT CAST(1.5 AS SIGNED)`, want: "2"},
+
+		{name: "postgresql refuses a fraction", dialect: PostgreSQL, query: `SELECT CAST('1.5' AS integer)`, wantErr: true},
+		{name: "postgresql refuses an exponent", dialect: PostgreSQL, query: `SELECT CAST('1e3' AS integer)`, wantErr: true},
+		{name: "postgresql accepts an integer string", dialect: PostgreSQL, query: `SELECT CAST('12' AS integer)`, want: "12"},
+		{name: "postgresql still rounds a number", dialect: PostgreSQL, query: `SELECT CAST(2.5 AS integer)`, want: "2"},
+		{name: "postgresql reports a string past the range as out of range", dialect: PostgreSQL, query: `SELECT CAST('9223372036854775808' AS integer)`, wantErr: true},
+		{name: "postgresql reports a string past the float range as out of range", dialect: PostgreSQL, query: `SELECT CAST('1e400' AS integer)`, wantErr: true},
+		{name: "postgresql refuses a string that underflows to zero", dialect: PostgreSQL, query: `SELECT CAST('1e-400' AS integer)`, wantErr: true},
+
+		{name: "googlesql refuses a fraction", dialect: GoogleSQL, query: `SELECT CAST('1.5' AS INT64)`, wantErr: true},
+		{name: "googlesql refuses an exponent", dialect: GoogleSQL, query: `SELECT CAST('1e3' AS INT64)`, wantErr: true},
+		{name: "googlesql accepts an integer string", dialect: GoogleSQL, query: `SELECT CAST('12' AS INT64)`, want: "12"},
+		{name: "googlesql safe_cast answers null for a fraction", dialect: GoogleSQL, query: `SELECT SAFE_CAST('1.5' AS INT64)`, wantNull: true},
+		{name: "googlesql safe_cast still reads an integer string", dialect: GoogleSQL, query: `SELECT SAFE_CAST('12' AS INT64)`, want: "12"},
+		{name: "googlesql still rounds a number", dialect: GoogleSQL, query: `SELECT CAST(1.5 AS INT64)`, want: "2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, tt.dialect, tt.query)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("%s = %q, want an error", tt.query, got.String)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.Valid == tt.wantNull {
+				t.Fatalf("%s returned valid=%v (%q), want null=%v", tt.query, got.Valid, got.String, tt.wantNull)
+			}
+			if !tt.wantNull && got.String != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}

@@ -182,31 +182,37 @@ func registerAll() error {
 		// Cast helpers. Each dialect's rewrite pass routes CAST through its own
 		// helper so the conversion follows that dialect's rules rather than
 		// SQLite's affinity; see cast.go.
-		"mysql_cast":          {2, dialectCast(MySQL, false)},
-		"mysql_divide":        {2, divideFloat(false)},
-		"mysql_bit_xor":       {2, fnBitXor},
-		"interval_add":        {3, fnDateIntervalAdd},
-		"interval_text_add":   {3, fnIntervalTextAdd},
-		"date_trunc_part":     {2, fnDateTruncPart},
-		"mysql_hex":           {1, fnMySQLHex},
-		"mysql_unhex":         {1, fnMySQLUnhex},
-		"like_sensitive":      {2, likeCompare(true)},
-		"like_insensitive":    {2, likeCompare(false)},
-		"similar_to":          {2, fnSimilarTo},
-		"mysql_ord":           {1, fnMySQLOrd},
-		"json_unquote":        {1, fnJSONUnquote},
-		"overlay":             {-1, fnOverlay},
-		"strict_concat":       {-1, fnStrictConcat},
-		"div":                 {2, integerDivide},
-		"trunc_scale":         {2, truncateScale},
-		"width_bucket":        {4, widthBucket},
-		"postgresql_cast":     {2, dialectCast(PostgreSQL, false)},
-		"postgresql_divide":   {2, divideSQLite},
-		"postgresql_mod":      {2, moduloRaising},
-		"googlesql_cast":      {2, dialectCast(GoogleSQL, false)},
-		"googlesql_divide":    {2, divideFloat(true)},
-		"googlesql_mod":       {2, moduloRaising},
-		"googlesql_safe_cast": {2, dialectCast(GoogleSQL, true)},
+		"mysql_cast":                {2, dialectCast(MySQL, false)},
+		"mysql_format":              {2, fnMySQLFormat},
+		"mysql_left":                {2, fnMySQLLeft},
+		"mysql_right":               {2, fnMySQLRight},
+		"mysql_regexp_replace":      {-1, fnMySQLRegexpReplace},
+		"mysql_divide":              {2, divideFloat(false)},
+		"mysql_bit_xor":             {2, fnBitXor},
+		"interval_add":              {3, fnDateIntervalAdd},
+		"interval_text_add":         {3, fnIntervalTextAdd},
+		"date_trunc_part":           {2, fnDateTruncPart},
+		"mysql_hex":                 {1, fnMySQLHex},
+		"mysql_unhex":               {1, fnMySQLUnhex},
+		"like_sensitive":            {2, likeCompare(true)},
+		"like_insensitive":          {2, likeCompare(false)},
+		"similar_to":                {2, fnSimilarTo},
+		"mysql_ord":                 {1, fnMySQLOrd},
+		"json_unquote":              {1, fnJSONUnquote},
+		"overlay":                   {-1, fnOverlay},
+		"strict_concat":             {-1, fnStrictConcat},
+		"div":                       {2, integerDivide},
+		"trunc_scale":               {2, truncateScale},
+		"width_bucket":              {4, widthBucket},
+		"postgresql_cast":           {2, dialectCast(PostgreSQL, false)},
+		"postgresql_to_hex":         {1, fnPostgresToHex},
+		"postgresql_regexp_replace": {-1, fnPostgresRegexpReplace},
+		"postgresql_divide":         {2, divideSQLite},
+		"postgresql_mod":            {2, moduloRaising},
+		"googlesql_cast":            {2, dialectCast(GoogleSQL, false)},
+		"googlesql_divide":          {2, divideFloat(true)},
+		"googlesql_mod":             {2, moduloRaising},
+		"googlesql_safe_cast":       {2, dialectCast(GoogleSQL, true)},
 
 		// PostgreSQL helpers.
 		"to_char":    {2, fnToChar},
@@ -248,6 +254,9 @@ func registerAll() error {
 		"timestamp_millis":  {1, fromUnixScale(1000)},
 		"timestamp_micros":  {1, fromUnixScale(1000000)},
 		"to_hex":            {1, fnToHex},
+		"googlesql_format":  {-1, fnGoogleSQLFormat},
+		"googlesql_left":    {2, fnGoogleSQLLeft},
+		"googlesql_right":   {2, fnGoogleSQLRight},
 		"is_nan":            {1, fnIsNaN},
 		"safe_add":          {2, safeArith(safeAddInt, func(a, b float64) float64 { return a + b })},
 		"safe_subtract":     {2, safeArith(safeSubInt, func(a, b float64) float64 { return a - b })},
@@ -1845,43 +1854,99 @@ func characterIndex(s, sub string, from int) int {
 func fnLeft(args []driver.Value) (driver.Value, error)  { return leftRight(args, true) }
 func fnRight(args []driver.Value) (driver.Value, error) { return leftRight(args, false) }
 
+func fnMySQLLeft(args []driver.Value) (driver.Value, error)  { return mysqlLeftRight(args, true) }
+func fnMySQLRight(args []driver.Value) (driver.Value, error) { return mysqlLeftRight(args, false) }
+
+func fnGoogleSQLLeft(args []driver.Value) (driver.Value, error) {
+	return googlesqlLeftRight(args, true)
+}
+
+func fnGoogleSQLRight(args []driver.Value) (driver.Value, error) {
+	return googlesqlLeftRight(args, false)
+}
+
 // leftRight implements LEFT/RIGHT with PostgreSQL's negative-count semantics: a
 // negative n removes |n| characters from the far end.
 func leftRight(args []driver.Value, left bool) (driver.Value, error) {
-	s, ok1 := toString(args[0])
-	n, ok2 := toInt(args[1])
-	if !ok1 || !ok2 {
+	s, n, ok := leftRightArgs(args)
+	if !ok {
 		return nil, nil
 	}
-	runes := []rune(s)
 	count := int(n)
 	if count < 0 {
-		count = len(runes) + count
+		count = len([]rune(s)) + count
 	}
+	return takeRunes(s, count, left), nil
+}
+
+// mysqlLeftRight implements LEFT/RIGHT with MySQL's negative-count semantics: a
+// negative n answers the empty string rather than trimming the far end.
+func mysqlLeftRight(args []driver.Value, left bool) (driver.Value, error) {
+	s, n, ok := leftRightArgs(args)
+	if !ok {
+		return nil, nil
+	}
+	return takeRunes(s, int(n), left), nil
+}
+
+// googlesqlLeftRight implements LEFT/RIGHT with GoogleSQL's rule for a negative
+// count, which is to raise: BigQuery has no meaning for a negative length and
+// answering PostgreSQL's trimmed string for one would hide the mistake.
+func googlesqlLeftRight(args []driver.Value, left bool) (driver.Value, error) {
+	s, n, ok := leftRightArgs(args)
+	if !ok {
+		return nil, nil
+	}
+	if n < 0 {
+		return nil, fmt.Errorf("dialect: LEFT/RIGHT length must not be negative, got %d", n)
+	}
+	return takeRunes(s, int(n), left), nil
+}
+
+// leftRightArgs coerces the shared (string, count) arguments of LEFT and RIGHT.
+func leftRightArgs(args []driver.Value) (string, int64, bool) {
+	s, ok1 := toString(args[0])
+	n, ok2 := toInt(args[1])
+	return s, n, ok1 && ok2
+}
+
+// takeRunes returns the first or last count characters of s, the whole of s when
+// it is shorter than that, and the empty string when count is not positive.
+func takeRunes(s string, count int, fromLeft bool) string {
 	if count <= 0 {
-		return "", nil
+		return ""
 	}
+	runes := []rune(s)
 	if count > len(runes) {
 		count = len(runes)
 	}
-	if left {
-		return string(runes[:count]), nil
+	if fromLeft {
+		return string(runes[:count])
 	}
-	return string(runes[len(runes)-count:]), nil
+	return string(runes[len(runes)-count:])
 }
 
-// fnRegexpReplace implements REGEXP_REPLACE(source, pattern, replacement
-// [, flags]). PostgreSQL back-references (\1) are translated to Go's ${1}
-// expansion form.
-//
-// The three-argument form replaces every match, which is GoogleSQL semantics.
-// PostgreSQL's three-argument form replaces only the first match and needs the
-// "g" flag for the rest; that difference is left in place because the same
-// function is shared by all dialects and replace-all is the behavior callers
-// expect. With an explicit flags argument the flags win: "g" replaces every
-// match and its absence replaces only the first, and "i" matches case
-// insensitively.
+// fnRegexpReplace implements GoogleSQL REGEXP_REPLACE(source, pattern,
+// replacement), which replaces every match, and is also what a query written in
+// the SQLite dialect reaches. PostgreSQL back-references (\1) are translated to
+// Go's ${1} expansion form. A flags argument is accepted here for the callers
+// that already pass one: "g" replaces every match and its absence replaces only
+// the first, and "i" matches case insensitively.
 func fnRegexpReplace(args []driver.Value) (driver.Value, error) {
+	return regexpReplace(args, true)
+}
+
+// fnPostgresRegexpReplace implements PostgreSQL regexp_replace(source, pattern,
+// replacement[, flags]), whose three-argument form replaces the first match
+// alone; the rest need the "g" flag.
+func fnPostgresRegexpReplace(args []driver.Value) (driver.Value, error) {
+	return regexpReplace(args, false)
+}
+
+// regexpReplace is the shared body of the flag-taking REGEXP_REPLACE forms.
+// defaultGlobal is what the three-argument form means, which is every match for
+// GoogleSQL and the first alone for PostgreSQL.
+func regexpReplace(args []driver.Value, defaultGlobal bool) (driver.Value, error) {
 	if len(args) < 3 || len(args) > 4 {
 		return nil, fmt.Errorf("dialect: REGEXP_REPLACE expects 3 or 4 arguments, got %d", len(args))
 	}
@@ -1891,7 +1956,7 @@ func fnRegexpReplace(args []driver.Value) (driver.Value, error) {
 	if !ok1 || !ok2 || !ok3 {
 		return nil, nil
 	}
-	global := true
+	global := defaultGlobal
 	if len(args) == 4 {
 		flags, ok := toString(args[3])
 		if !ok {
@@ -1919,6 +1984,128 @@ func fnRegexpReplace(args []driver.Value) (driver.Value, error) {
 	}
 	out := re.ExpandString([]byte(src[:loc[0]]), expansion, src, loc)
 	return string(out) + src[loc[1]:], nil
+}
+
+// fnMySQLRegexpReplace implements MySQL REGEXP_REPLACE(subject, pattern,
+// replacement[, pos[, occurrence[, match_type]]]). MySQL's fourth argument is a
+// 1-based character position to start at rather than PostgreSQL's flag string,
+// and its fifth selects one match to replace, with 0 meaning every match from
+// the position onward.
+func fnMySQLRegexpReplace(args []driver.Value) (driver.Value, error) {
+	if len(args) < 3 || len(args) > 6 {
+		return nil, fmt.Errorf("dialect: REGEXP_REPLACE expects 3 to 6 arguments, got %d", len(args))
+	}
+	src, ok1 := toString(args[0])
+	pattern, ok2 := toString(args[1])
+	repl, ok3 := toString(args[2])
+	if !ok1 || !ok2 || !ok3 {
+		return nil, nil
+	}
+	pos, occurrence := int64(1), int64(0)
+	if len(args) >= 4 {
+		n, ok := toInt(args[3])
+		if !ok {
+			return nil, nil
+		}
+		pos = n
+	}
+	if len(args) >= 5 {
+		n, ok := toInt(args[4])
+		if !ok {
+			return nil, nil
+		}
+		occurrence = n
+	}
+	if len(args) == 6 {
+		matchType, ok := toString(args[5])
+		if !ok {
+			return nil, nil
+		}
+		var err error
+		if pattern, err = applyMySQLMatchType(pattern, matchType); err != nil {
+			return nil, err
+		}
+	}
+	runes := []rune(src)
+	if pos < 1 || int(pos) > len(runes)+1 {
+		return nil, fmt.Errorf("dialect: REGEXP_REPLACE position %d is out of bounds", pos)
+	}
+	re, err := compileRegexp(pattern)
+	if err != nil {
+		return nil, err
+	}
+	head, tail := string(runes[:pos-1]), string(runes[pos-1:])
+	expansion := mysqlReplacement(repl)
+	if occurrence == 0 {
+		return head + re.ReplaceAllString(tail, expansion), nil
+	}
+	// A negative occurrence is not a form MySQL documents; it answers the first
+	// match there, so the count below starts at one for anything under it.
+	wanted := int(occurrence)
+	if wanted < 1 {
+		wanted = 1
+	}
+	matches := re.FindAllStringSubmatchIndex(tail, wanted)
+	if len(matches) < wanted {
+		return src, nil
+	}
+	loc := matches[wanted-1]
+	out := re.ExpandString([]byte(tail[:loc[0]]), expansion, tail, loc)
+	return head + string(out) + tail[loc[1]:], nil
+}
+
+// applyMySQLMatchType folds a MySQL match_type string into the pattern as Go
+// regexp flags. MySQL spells them c (case sensitive), i (case insensitive), m
+// (multi-line) and n (a dot matches a newline); u, which selects Unix line
+// endings, has no Go equivalent and is refused rather than ignored.
+func applyMySQLMatchType(pattern, matchType string) (string, error) {
+	var flags string
+	for _, c := range matchType {
+		switch c {
+		case 'c':
+			// The default; nothing to add.
+		case 'i':
+			flags += "i"
+		case 'm':
+			flags += "m"
+		case 'n':
+			flags += "s"
+		default:
+			return "", fmt.Errorf("dialect: REGEXP_REPLACE match type %q is not supported", matchType)
+		}
+	}
+	if flags == "" {
+		return pattern, nil
+	}
+	return "(?" + flags + ")" + pattern, nil
+}
+
+// mysqlReplacement translates MySQL replacement references ($1..$9) to the ${n}
+// form Go's regexp expansion understands. MySQL writes a literal "$" as "\$",
+// and a backslash before anything else stands for that character.
+func mysqlReplacement(repl string) string {
+	var b strings.Builder
+	for i := 0; i < len(repl); i++ {
+		switch {
+		case repl[i] == '\\' && i+1 < len(repl):
+			if repl[i+1] == '$' {
+				b.WriteString("$$")
+			} else {
+				b.WriteByte(repl[i+1])
+			}
+			i++
+		case repl[i] == '$' && i+1 < len(repl) && repl[i+1] >= '0' && repl[i+1] <= '9':
+			b.WriteString("${")
+			b.WriteByte(repl[i+1])
+			b.WriteByte('}')
+			i++
+		case repl[i] == '$':
+			b.WriteString("$$")
+		default:
+			b.WriteByte(repl[i])
+		}
+	}
+	return b.String()
 }
 
 // fnMD5 implements PostgreSQL MD5(text). MD5 is used here as a content
@@ -2538,6 +2725,209 @@ func fnToHex(args []driver.Value) (driver.Value, error) {
 		}
 		return hex.EncodeToString([]byte(s)), nil
 	}
+}
+
+// fnPostgresToHex implements PostgreSQL to_hex(n): the lowercase hexadecimal
+// digits of an integer, with a negative read as a 64-bit two's complement value
+// the way PostgreSQL reads it. PostgreSQL has no string form of the function, so
+// a value that names no integer is refused rather than hexed as text, which is
+// what GoogleSQL's TO_HEX does with its bytes.
+func fnPostgresToHex(args []driver.Value) (driver.Value, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+	n, ok, err := postgresHexArgument(args[0])
+	if err != nil || !ok {
+		return nil, err
+	}
+	// The unsigned reading is the point: PostgreSQL answers the digits of the
+	// 64-bit two's complement value, so to_hex(-1) is sixteen f's.
+	return strconv.FormatUint(uint64(n), 16), nil //nolint:gosec // the two's complement reading is what PostgreSQL prints for a negative
+}
+
+// postgresHexArgument reads the integer to_hex converts. ok is false when the
+// value carries no value at all; err is set when it names something that is not
+// an integer, which PostgreSQL has no to_hex for.
+func postgresHexArgument(v driver.Value) (int64, bool, error) {
+	switch x := v.(type) {
+	case int64:
+		return x, true, nil
+	case float64:
+		if math.IsNaN(x) || math.IsInf(x, 0) || x != math.Trunc(x) {
+			return 0, false, fmt.Errorf("%w: to_hex expects an integer, got %v", ErrInvalidCast, x)
+		}
+		return int64(x), true, nil
+	}
+	s, ok := toString(v)
+	if !ok {
+		return 0, false, nil
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("%w: to_hex expects an integer, got %q", ErrInvalidCast, s)
+	}
+	return n, true, nil
+}
+
+// fnMySQLFormat implements MySQL FORMAT(x, d): x rounded to d decimal places and
+// written with a comma every three digits. SQLite has a format() of its own, an
+// alias of printf, so an untranslated call answered the first argument expanded
+// as a format string instead.
+func fnMySQLFormat(args []driver.Value) (driver.Value, error) {
+	x, ok1 := toFloat(args[0])
+	d, ok2 := toInt(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	if math.IsNaN(x) || math.IsInf(x, 0) {
+		return nil, nil
+	}
+	// MySQL reads a negative number of decimal places as none, and caps the
+	// count at the 30 its DECIMAL type holds.
+	if d < 0 {
+		d = 0
+	}
+	if d > mysqlFormatMaxDecimals {
+		d = mysqlFormatMaxDecimals
+	}
+	text := strconv.FormatFloat(roundHalfAwayFromZero(x, d), 'f', int(d), 64)
+	sign := ""
+	if strings.HasPrefix(text, "-") {
+		sign, text = "-", text[1:]
+	}
+	whole, fraction, hasFraction := strings.Cut(text, ".")
+	out := sign + groupThousands(whole)
+	if hasFraction {
+		out += "." + fraction
+	}
+	return out, nil
+}
+
+// mysqlFormatMaxDecimals is the number of decimal places MySQL FORMAT keeps at
+// most, which is the scale of its DECIMAL type.
+const mysqlFormatMaxDecimals = 30
+
+// fnGoogleSQLFormat implements GoogleSQL FORMAT(format, ...). The verbs it
+// shares with printf are handed to Sprintf, so they answer what SQLite's printf
+// answered before; %t and %T are BigQuery's own and are printed here. Left to
+// SQLite they made the whole call NULL, since printf answers NULL for a format
+// string holding a verb it does not know.
+func fnGoogleSQLFormat(args []driver.Value) (driver.Value, error) {
+	if len(args) == 0 {
+		return nil, errors.New("dialect: FORMAT expects a format string")
+	}
+	format, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	rest, next := args[1:], 0
+	take := func() driver.Value {
+		if next >= len(rest) {
+			return nil
+		}
+		v := rest[next]
+		next++
+		return v
+	}
+	var b strings.Builder
+	for i := 0; i < len(format); {
+		if format[i] != '%' {
+			b.WriteByte(format[i])
+			i++
+			continue
+		}
+		spec, verb, end := scanFormatSpec(format, i)
+		switch {
+		case end < 0:
+			// A trailing "%" with no verb after it stands for itself.
+			b.WriteString(format[i:])
+			i = len(format)
+		case verb == '%':
+			b.WriteByte('%')
+			i = end
+		case verb == 't' || verb == 'T':
+			b.WriteString(googlesqlPrintValue(take(), verb == 'T'))
+			i = end
+		default:
+			operands := make([]any, 0, strings.Count(spec, "*")+1)
+			for range strings.Count(spec, "*") {
+				operands = append(operands, formatOperand('d', take()))
+			}
+			operands = append(operands, formatOperand(verb, take()))
+			b.WriteString(fmt.Sprintf(goFormatSpec(spec, verb), operands...))
+			i = end
+		}
+	}
+	return b.String(), nil
+}
+
+// scanFormatSpec reads the conversion specification that starts at the "%" at
+// index start, returning the specification text, its verb, and the index just
+// past it. end is -1 when the string ends before a verb.
+func scanFormatSpec(format string, start int) (string, byte, int) {
+	i := start + 1
+	for i < len(format) && strings.IndexByte("+-# 0123456789.*'", format[i]) >= 0 {
+		i++
+	}
+	if i >= len(format) {
+		return format[start:], 0, -1
+	}
+	return format[start : i+1], format[i], i + 1
+}
+
+// goFormatSpec adapts a printf specification to the one Go understands: the
+// apostrophe flag, which asks C for digit grouping, has no Go equivalent and is
+// dropped, and %i is the spelling of %d that C printf accepts.
+func goFormatSpec(spec string, verb byte) string {
+	spec = strings.ReplaceAll(spec, "'", "")
+	if verb == 'i' {
+		spec = spec[:len(spec)-1] + "d"
+	}
+	return spec
+}
+
+// formatOperand coerces a value to the Go type the verb prints, the way SQLite's
+// printf coerces its own arguments: a missing or unreadable value prints as the
+// zero of the verb's type rather than as a Go error string.
+func formatOperand(verb byte, v driver.Value) any {
+	switch verb {
+	case 'd', 'i', 'o', 'b', 'x', 'X', 'c', 'U':
+		n, _ := toInt(v)
+		return n
+	case 'e', 'E', 'f', 'F', 'g', 'G':
+		f, _ := toFloat(v)
+		return f
+	default:
+		s, _ := toString(v)
+		return s
+	}
+}
+
+// nullText is how GoogleSQL's FORMAT prints a value that has none.
+const nullText = "NULL"
+
+// googlesqlPrintValue implements GoogleSQL's %t and %T: the printable form of a
+// value, and the literal that would produce it. A boolean reaches here as the
+// integer SQLite stores, so it prints as 0 or 1 rather than as false or true.
+func googlesqlPrintValue(v driver.Value, literal bool) string {
+	switch x := v.(type) {
+	case nil:
+		return nullText
+	case int64:
+		return strconv.FormatInt(x, 10)
+	case float64:
+		return strconv.FormatFloat(x, 'g', -1, 64)
+	case bool:
+		return strconv.FormatBool(x)
+	}
+	s, ok := toString(v)
+	if !ok {
+		return nullText
+	}
+	if literal {
+		return strconv.Quote(s)
+	}
+	return s
 }
 
 // fnIsNaN implements GoogleSQL IS_NAN(x).

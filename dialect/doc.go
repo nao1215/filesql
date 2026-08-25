@@ -40,6 +40,17 @@
 // into a helper that converts with that dialect's rules and returns
 // ErrInvalidCast for a value it cannot represent.
 //
+// A name SQLite shares with a dialect needs the same treatment when the two mean
+// different things by it, since the call runs and answers a plausible value.
+// LOG is the natural logarithm in MySQL and GoogleSQL and the base-ten one in
+// SQLite, MySQL's FORMAT groups a number where SQLite's is printf,
+// PostgreSQL's to_hex converts an integer where GoogleSQL's hexes bytes, and
+// LEFT, RIGHT and REGEXP_REPLACE each read a negative length or a fourth
+// argument their own way. Those calls are rewritten to a helper named for the
+// dialect rather than left to the name SQLite already has. GoogleSQL's FORMAT
+// prints its own %t and %T verbs there; a boolean reaches the helper as the
+// integer SQLite stores, so it prints as 0 or 1.
+//
 // Lexing is per dialect, because what counts as a string, an identifier, a
 // comment, or an escape differs between them: a double-quoted literal is a
 // string in MySQL and an identifier in PostgreSQL, block comments nest in

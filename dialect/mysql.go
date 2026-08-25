@@ -166,6 +166,30 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		return rewriteRenameCall(tokens, open, closeIdx, "octet_length", mysqlCallPass)
 	case fnNameCharLen, fnNameCharLen2:
 		return rewriteRenameCall(tokens, open, closeIdx, "length", mysqlCallPass)
+	case "LOG":
+		// MySQL LOG(x) is the natural logarithm where SQLite's log(x) is the
+		// base-ten one. The two-argument form already writes its base first, the
+		// way SQLite's does, so it is left alone.
+		if callArity(tokens, open, closeIdx) == 1 {
+			return rewriteRenameCall(tokens, open, closeIdx, "ln", mysqlCallPass)
+		}
+		return nil, false, nil
+	case "FORMAT":
+		// MySQL FORMAT(x, d) rounds and groups a number. SQLite's format() is an
+		// alias of printf, which reads the first argument as a format string and
+		// answered the number unchanged.
+		if callArity(tokens, open, closeIdx) != 2 {
+			return nil, false, fmt.Errorf("%w: FORMAT takes a value and a number of decimal places; its locale argument is not supported", ErrUnsupportedSyntax)
+		}
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_format", mysqlCallPass)
+	case "LEFT", "RIGHT":
+		// A negative length answers the empty string in MySQL and trims the far
+		// end in PostgreSQL, so each dialect names its own helper.
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_"+strings.ToLower(tokens[nameIdx].text), mysqlCallPass)
+	case "REGEXP_REPLACE":
+		// MySQL's fourth argument is a start position and its fifth an
+		// occurrence, where PostgreSQL's fourth is a flag string.
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_regexp_replace", mysqlCallPass)
 	case "ORD":
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_ord", mysqlCallPass)
 	case "CONCAT":

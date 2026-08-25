@@ -462,6 +462,16 @@ func rewriteTruncScaleCall(tokens []token, open, closeIdx int, recurse callRecur
 
 // topLevelCommas returns the indices of every "," at depth 1 inside the call
 // whose parentheses are open..closeIdx, in order.
+// callArity returns how many top-level arguments the call spanning open..close
+// takes, so a rewrite can tell the forms of an overloaded name apart. An empty
+// argument list is zero.
+func callArity(toks []token, open, closeIdx int) int {
+	if nextSig(toks, open+1) == closeIdx {
+		return 0
+	}
+	return len(topLevelCommas(toks, open, closeIdx)) + 1
+}
+
 func topLevelCommas(toks []token, open, closeIdx int) []int {
 	depth := 0
 	var res []int

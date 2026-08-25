@@ -183,6 +183,13 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 		return rewriteOverlay(tokens, open, closeIdx, pgCallPass)
 	case fnNameUpper, fnNameLower:
 		return rewriteRenameCall(tokens, open, closeIdx, unicodeCaseHelper(tokens[nameIdx].text), pgCallPass)
+	case "TO_HEX":
+		// PostgreSQL to_hex(n) converts an integer; GoogleSQL TO_HEX hexes the
+		// bytes of its argument, and the helper of that name is written for it.
+		return rewriteRenameCall(tokens, open, closeIdx, "postgresql_to_hex", pgCallPass)
+	case "REGEXP_REPLACE":
+		// PostgreSQL replaces the first match alone unless the flags say "g".
+		return rewriteRenameCall(tokens, open, closeIdx, "postgresql_regexp_replace", pgCallPass)
 	case "BTRIM":
 		return rewriteRenameCall(tokens, open, closeIdx, "trim", pgCallPass)
 	case fnNameMod:
