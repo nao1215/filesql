@@ -387,6 +387,8 @@ What is not on that list is decimal formatting. `2.50` loads as the REAL `2.5`, 
 
 filesql loads data into an in-memory SQLite database. CSV, TSV, and JSON arrays are read in chunks while loading. LTSV, non-array JSON/JSONL values, Parquet, XLSX, ACH, and Fedwire are read in full before they are turned into rows.
 
+A blank line is not a record, in a delimited file or in a sheet. An XLSX row holding no cell at all is skipped, so a workbook whose used range reaches far down the sheet — a header in row 1 and one stray cell near the bottom — costs what it holds rather than what its range spans.
+
 Because the rows end up in that database rather than on the Go heap, the heap is not where the cost is. Loading CSVs of 16 MB through 131 MB, the Go heap stayed flat at about 24 MB — chunked loading holds roughly a chunk, not the file — while resident memory grew by about **2x the file's size**. Budget from the file size, and expect the database, not the parser, to be what occupies it.
 
 Measured on Linux with `go test -tags benchmark -run TestLoadMemoryFootprint -v .`, which prints the table it is drawn from so the figure can be re-derived rather than taken on trust. Note that `B/op` from `go test -benchmem` answers a different question: it counts every byte a load ever allocated, garbage included, so it runs several times higher than the memory actually held.
