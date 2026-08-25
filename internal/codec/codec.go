@@ -196,11 +196,11 @@ func (c Codec) NewReader(reader io.Reader) (io.Reader, func() error, error) {
 		}, nil
 
 	case ZLIB:
-		zlibReader, err := zlib.NewReader(reader)
+		streams, err := newZlibStreams(reader)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create zlib reader: %w", err)
+			return nil, nil, err
 		}
-		return zlibReader, zlibReader.Close, nil
+		return streams, streams.Close, nil
 
 	case SNAPPY:
 		return snappy.NewReader(reader), noClose, nil
@@ -331,6 +331,65 @@ func xzWithinDictionaryLimit(src *pushbackReader) error {
 	}
 	return nil
 }
+
+// zlibStreams reads a file of concatenated zlib streams, which is what `cat
+// a.z b.z` produces.
+//
+// Reading only the first was the previous answer, and it was silent: ten
+// streams of the same sixteen bytes are 280 bytes in and sixteen bytes out with
+// a nil error, so nine tenths of the file went missing with nothing to say so.
+// Every other codec here reads what it is given whole -- gzip's members are
+// part of that format, and xz's streams are read one after another above -- so
+// this is the odd one out rather than a rule.
+//
+// The source is buffered because a *bufio.Reader is an io.ByteReader, which is
+// what keeps the flate decoder from reading past the end of a stream: it then
+// takes exactly the bits it needs, and the next stream's header is still there
+// when this asks for it.
+type zlibStreams struct {
+	src *bufio.Reader
+	cur io.ReadCloser
+}
+
+// newZlibStreams opens the first stream, so a file that is not zlib at all
+// fails where the caller opened it.
+func newZlibStreams(reader io.Reader) (*zlibStreams, error) {
+	src := bufio.NewReaderSize(reader, headerPeekSize)
+	cur, err := zlib.NewReader(src)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create zlib reader: %w", err)
+	}
+	return &zlibStreams{src: src, cur: cur}, nil
+}
+
+// Read implements io.Reader over the whole file, stream after stream.
+func (z *zlibStreams) Read(p []byte) (int, error) {
+	for {
+		n, err := z.cur.Read(p)
+		if err == nil || !errors.Is(err, io.EOF) {
+			return n, err
+		}
+		if _, peekErr := z.src.Peek(1); peekErr != nil {
+			return n, io.EOF
+		}
+		// Whatever follows has to be a stream. Reset reads and checks the two
+		// header bytes, so bytes that are not one come back as an error rather
+		// than being dropped.
+		resetter, ok := z.cur.(zlib.Resetter)
+		if !ok {
+			return n, io.EOF
+		}
+		if resetErr := resetter.Reset(z.src, nil); resetErr != nil {
+			return n, fmt.Errorf("failed to read the zlib stream behind the first: %w", resetErr)
+		}
+		if n > 0 {
+			return n, nil
+		}
+	}
+}
+
+// Close releases the stream being read.
+func (z *zlibStreams) Close() error { return z.cur.Close() }
 
 // xzStreams reads an xz file one stream at a time so the dictionary check runs
 // in front of every stream rather than only the first.
