@@ -18,8 +18,8 @@ type Workbook struct {
 	file *excelize.File
 	// data is the workbook as it arrived. It is what lets the date
 	// normalization read the sheet's own XML instead of asking the library
-	// about one cell at a time, which is the difference between 351 MB and
-	// 1939 MB on an 18.5 MB workbook.
+	// about one cell at a time, which is the difference between 422 MB and
+	// 1939 MB on an 18.5 MB workbook of 200,000 rows.
 	data []byte
 }
 
