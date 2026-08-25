@@ -1,0 +1,65 @@
+name: Fuzz
+
+# `go test` walks a fuzz target's seed corpus once and stops, so the fuzz
+# targets in this module have never looked for an input nobody had already
+# written down. This job does the looking.
+#
+# It runs on a schedule rather than on pull requests because a fuzz run has no
+# natural end: it either finds something or it runs out the clock, and neither
+# answer is worth holding a merge for. Ten minutes per target is what fits a
+# nightly run; the corpus each run builds is not kept, so every night starts
+# from the seeds in the repository and searches somewhere else.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 19 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+
+    strategy:
+      matrix:
+        include:
+          - package: ./internal/reader
+            target: FuzzCSVReader
+          - package: ./parser
+            target: FuzzParseFormats
+          - package: ./parser
+            target: FuzzParseBinary
+          - package: ./dialect
+            target: FuzzTranslate
+          - package: ./internal/codec
+            target: FuzzCodecReader
+      fail-fast: false
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+
+      - name: Fuzz for ten minutes
+        run: go test ${{ matrix.package }} -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 10m
+
+      # A failing run writes the input that caused it under testdata/fuzz/, and
+      # that file is the finding: without it the failure is a stack trace nobody
+      # can reproduce. Uploading it hands it to a person, who commits it as a
+      # seed beside the fix so the case is checked from then on by the ordinary
+      # `go test` run.
+      - name: Upload the crashing input
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: "**/testdata/fuzz/**"
+          if-no-files-found: ignore
