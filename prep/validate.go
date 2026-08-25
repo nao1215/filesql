@@ -16,17 +16,22 @@ import (
 
 // Regex patterns for validation
 const (
-	uuidRegexPattern    = `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`
-	dataURIRegexPattern = `^data:[^;]+;base64,[A-Za-z0-9+/]+={0,2}$`
-	emailRegexPattern   = `^[A-Za-z0-9_%+\-]+(?:\.[A-Za-z0-9_%+\-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$`
+	uuidRegexPattern = `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`
+	// RFC 2397 gives a data URI as data:[<mediatype>][;base64],<data>, where
+	// the media type may carry parameters and may be omitted entirely. The
+	// payload is checked again by decoding it, so the class here only has to
+	// find where it starts.
+	dataURIRegexPattern = `^data:(?:[\w.+-]+/[\w.+-]+)?(?:;[\w.+-]+=[^;,]*)*;base64,[A-Za-z0-9+/]+={0,2}$`
 	// numeric accepts an optionally signed decimal, and number accepts digits
 	// alone, matching the go-playground/validator dialect prep documents.
 	numericRegexPattern = `^[-+]?[0-9]+(\.[0-9]+)?$`
 	numberRegexPattern  = `^[0-9]+$`
 	fileScheme          = "file"
 
-	// E.164 phone number pattern
-	e164RegexPattern = `^\+[1-9][0-9]{7,14}$`
+	// E.164 phone number pattern. The leading plus is a notation convention
+	// rather than part of the number, and a spreadsheet export strips it, so
+	// the dialect makes it optional and so does this.
+	e164RegexPattern = `^\+?[1-9][0-9]{7,14}$`
 	// Latitude pattern: -90 to 90
 	latitudeRegexPattern = `^[-+]?([1-8]?\d(\.\d+)?|90(\.0+)?)$`
 	// Longitude pattern: -180 to 180
@@ -64,6 +69,27 @@ const (
 	// HSLA color pattern
 	hslaRegexPattern = `^hsla\(\s*` + hueComponentRegexPattern + `\s*,\s*` + hslPercentComponentRegexPattern + `\s*,\s*` + hslPercentComponentRegexPattern + `\s*,\s*` + alphaComponentRegexPattern + `\s*\)$`
 )
+
+// The dialect admits these Unicode ranges on both sides of the @, which is what
+// lets an internationalized address through. They stop at the BMP, so a
+// character above U+FFFF is not a letter here.
+const emailUnicodeRanges = `\x{00A0}-\x{D7FF}\x{F900}-\x{FDCF}\x{FDF0}-\x{FFEF}`
+
+// emailRegexPattern follows the go-playground/validator dialect: the local part
+// is either dot-separated atoms of RFC 5322 atext or a quoted string, each
+// domain label starts and ends with a letter or a digit, and the last label
+// starts with a letter so that a numeric top-level domain is not an address.
+const emailRegexPattern = `^(?:[` + emailAtextClass + `]+(?:\.[` + emailAtextClass + `]+)*` +
+	`|"(?:[^"\\\r\n]|\\.)*")` +
+	`@(?:[` + emailLabelClass + `](?:[` + emailLabelClass + `-]{0,61}[` + emailLabelClass + `])?\.)+` +
+	`[A-Za-z` + emailUnicodeRanges + `](?:[` + emailLabelClass + `-]{0,61}[` + emailLabelClass + `])?$`
+
+// emailAtextClass is the RFC 5322 atext set the dialect accepts, plus the
+// Unicode ranges. The hyphen is last so that it is a literal.
+const emailAtextClass = "A-Za-z0-9!#$%&'*+/=?^_`{|}~" + emailUnicodeRanges + `-`
+
+// emailLabelClass is what a domain label may start and end with.
+const emailLabelClass = `A-Za-z0-9` + emailUnicodeRanges
 
 // Common error messages (to avoid goconst warnings)
 const (
@@ -284,6 +310,30 @@ func (v *alphaSpaceValidator) Name() string {
 	return alphaSpaceTagValue
 }
 
+// alphanumSpaceValidator validates that a value contains only alphanumeric
+// characters or spaces
+type alphanumSpaceValidator struct{}
+
+// newAlphanumSpaceValidator creates a new alphanumSpace validator
+func newAlphanumSpaceValidator() *alphanumSpaceValidator {
+	return &alphanumSpaceValidator{}
+}
+
+// Validate checks if the value contains only alphanumeric characters or spaces
+func (v *alphanumSpaceValidator) Validate(value string) string {
+	for _, r := range value {
+		if !isAlpha(r) && !isNumeric(r) && r != ' ' {
+			return "value must contain only alphanumeric characters or spaces"
+		}
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *alphanumSpaceValidator) Name() string {
+	return alphanumSpaceTagValue
+}
+
 // numericValidator validates that a value is an optionally signed decimal,
 // which is what numeric means in the go-playground/validator dialect.
 type numericValidator struct{}
@@ -331,12 +381,18 @@ func (v *numberValidator) Name() string {
 	return numberTagValue
 }
 
-// alphanumericValidator validates that a value contains only ASCII alphanumeric characters
-type alphanumericValidator struct{}
+// alphanumericValidator validates that a value contains only ASCII alphanumeric
+// characters. It carries the tag because the dialect's alphanum and this
+// package's older alphanumeric both name it, and a reported error should name
+// the spelling the caller wrote.
+type alphanumericValidator struct {
+	tag string
+}
 
-// newAlphanumericValidator creates a new alphanumeric validator
-func newAlphanumericValidator() *alphanumericValidator {
-	return &alphanumericValidator{}
+// newAlphanumericValidator creates a new alphanumeric validator under the given
+// spelling
+func newAlphanumericValidator(tag string) *alphanumericValidator {
+	return &alphanumericValidator{tag: tag}
 }
 
 // Validate checks if the value contains only alphanumeric characters
@@ -351,7 +407,7 @@ func (v *alphanumericValidator) Validate(value string) string {
 
 // Name returns the validator name
 func (v *alphanumericValidator) Name() string {
-	return alphanumericTagValue
+	return v.tag
 }
 
 // isNumeric returns true if the rune is a numeric character
@@ -1333,11 +1389,17 @@ func newFQDNValidator() *fqdnValidator {
 
 // Validate checks if the value is a valid FQDN
 func (v *fqdnValidator) Validate(value string) string {
-	if strings.HasPrefix(value, ".") || strings.HasSuffix(value, ".") {
+	if strings.HasPrefix(value, ".") {
 		return errMsgValidFQDN
 	}
 
-	labels := strings.Split(value, ".")
+	// A trailing dot anchors the name at the DNS root, which is what "fully
+	// qualified" means, so example.com. and example.com are the same name and
+	// get the same verdict. A second trailing dot survives the strip and is
+	// caught below as an empty label.
+	name := strings.TrimSuffix(value, ".")
+
+	labels := strings.Split(name, ".")
 	if len(labels) < 2 {
 		return errMsgValidFQDN
 	}

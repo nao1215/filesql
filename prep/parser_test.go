@@ -87,6 +87,8 @@ func TestParseValidateTag_AllValidatorTypes(t *testing.T) {
 		{"numeric", "numeric", 1, 0, false},
 		{"number", "number", 1, 0, false},
 		{"alphanumeric", "alphanumeric", 1, 0, false},
+		{"alphanum", "alphanum", 1, 0, false},
+		{"alphanumspace", "alphanumspace", 1, 0, false},
 		{"alphanumunicode", "alphanumunicode", 1, 0, false},
 
 		// Comparison validators
@@ -224,6 +226,30 @@ func TestParseValidateTag_AllValidatorTypes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The dialect spells this tag alphanum. prep answered only to alphanumeric,
+// so a struct carrying tags copied from a go-playground struct failed to parse
+// on the tag the dialect uses most.
+func TestAlphanumIsTheDialectSpellingOfAlphanumeric(t *testing.T) {
+	t.Parallel()
+
+	inputs := []string{"hello123", "ABC123", "hello world", "hello-world", ""}
+	for _, spelling := range []string{"alphanum", "alphanumeric"} {
+		vals, _, err := parseValidateTag(spelling, false)
+		if err != nil {
+			t.Fatalf("parseValidateTag(%q) = %v", spelling, err)
+		}
+		if len(vals) != 1 {
+			t.Fatalf("parseValidateTag(%q) built %d validators, want 1", spelling, len(vals))
+		}
+		for _, in := range inputs {
+			want := newAlphanumericValidator(spelling).Validate(in)
+			if got := vals[0].Validate(in); got != want {
+				t.Errorf("%s.Validate(%q) = %q, want %q", spelling, in, got, want)
+			}
+		}
 	}
 }
 

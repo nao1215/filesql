@@ -263,6 +263,35 @@ func TestAlphaSpaceValidator(t *testing.T) {
 	}
 }
 
+func TestAlphanumSpaceValidator(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input   string
+		wantErr bool
+	}{
+		{"hello world", false},
+		{"Hello World 123", false},
+		{"ABC123", false},
+		{"hello-world", true},
+		{"日本語", true},
+		{"", false},
+	}
+
+	v := newAlphanumSpaceValidator()
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+			msg := v.Validate(tt.input)
+			hasErr := msg != ""
+			if hasErr != tt.wantErr {
+				t.Errorf("Validate(%q) error = %v, wantErr %v", tt.input, msg, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestNumericValidator(t *testing.T) {
 	t.Parallel()
 
@@ -361,7 +390,7 @@ func TestAlphanumericValidator(t *testing.T) {
 		{"", false},
 	}
 
-	v := newAlphanumericValidator()
+	v := newAlphanumericValidator(alphanumTagValue)
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -900,6 +929,18 @@ func TestEmailValidator(t *testing.T) {
 		{"user@example.com", false},
 		{"user.name@example.co.jp", false},
 		{"user+tag@example.com", false},
+		// The dialect admits an internationalized address on either side of
+		// the @, and the punycode spelling of a domain must agree with the
+		// Unicode one.
+		{"user@日本.jp", false},
+		{"user@xn--wgv71a.jp", false},
+		{"山田@example.com", false},
+		{"user@例え.テスト", false},
+		// The dialect admits the RFC 5322 atext specials in the local part.
+		{"o'brien@example.com", false},
+		{"a!b@example.com", false},
+		{"a/b@example.com", false},
+		{"a=b@example.com", false},
 		{"invalid", true},
 		{"@example.com", true},
 		{"user@", true},
@@ -954,8 +995,13 @@ func TestEmailValidator_BoundaryConditions(t *testing.T) {
 		{"trailing dot in domain", "user@example.com.", true},
 
 		// Invalid: TLD issues
-		{"single char TLD", "user@example.a", true},
+		{"single char TLD", "user@example.a", false},
+		{"quoted local part", `"a b"@example.com`, false},
 		{"numeric TLD", "user@example.123", true},
+		{"local part is only Japanese", "山田@example.com", false},
+		{"domain is only Japanese", "user@日本.jp", false},
+		{"hyphen at start of domain label", "user@-example.com", true},
+		{"emoji in local part", "\U0001F600@example.com", true},
 
 		// Invalid: dot placement
 		{"leading dot in local", ".user@example.com", true},
@@ -993,6 +1039,10 @@ func TestURIValidator(t *testing.T) {
 		{"http://example.com#frag ment", true},
 		{"", true},
 		{"invalid", true},
+		// A URI needs a scheme, so a relative reference is not one. The
+		// dialect accepts these; prep's doc.go records the difference.
+		{"/a/b", true},
+		{"//example.com", true},
 	}
 
 	v := newURIValidator()
@@ -1131,7 +1181,14 @@ func TestDataURIValidator(t *testing.T) {
 	}{
 		{"valid text data URI", "data:text/plain;base64,SGVsbG8=", false},
 		{"valid image data URI", "data:image/png;base64,iVBORw0KGgo=", false},
+		{"charset parameter", "data:text/plain;charset=utf-8;base64,aGVsbG8=", false},
+		{"plus in subtype with parameter", "data:image/svg+xml;charset=UTF-8;base64,PHN2Zz48L3N2Zz4=", false},
+		{"two parameters", "data:text/plain;charset=utf-8;foo=bar;base64,aGVsbG8=", false},
+		{"omitted media type", "data:;base64,aGVsbG8=", false},
+		{"omitted media type with parameter", "data:;charset=utf-8;base64,aGVsbG8=", false},
 		{"missing base64 encoding", "data:text/plain,hello", true},
+		{"empty payload", "data:text/plain;base64,", true},
+		{"not a data URI scheme", "notdata:text/plain;base64,aGVsbG8=", true},
 		{"invalid string", "invalid", true},
 		{"empty string", "", true},
 		// Passes regex but fails base64 decode due to missing padding
@@ -1360,16 +1417,33 @@ func TestUUIDValidator(t *testing.T) {
 func TestFQDNValidator(t *testing.T) {
 	t.Parallel()
 
+	label63 := strings.Repeat("a", 63)
+	// 253 bytes without the root dot is the longest name there is, and the
+	// dot must not count towards it.
+	name253 := label63 + "." + label63 + "." + label63 + "." + strings.Repeat("a", 61)
+	name254 := label63 + "." + label63 + "." + label63 + "." + strings.Repeat("a", 62)
+
 	tests := []struct {
 		input   string
 		wantErr bool
 	}{
+		{name253, false},
+		{name253 + ".", false},
+		{name254, true},
 		{"example.com", false},
 		{"sub.example.com", false},
 		{"host.a1", false},
+		// The trailing dot is what makes a name fully qualified, so it is
+		// accepted and does not change the verdict.
+		{"example.com.", false},
+		{"sub.example.com.", false},
 		{"example", true},
 		{".example.com", true},
-		{"example.com.", true},
+		{"example.com..", true},
+		{".", true},
+		// The dialect accepts a label ending in a hyphen; this package does
+		// not, which prep's doc.go records as deliberate.
+		{"a-.com", true},
 		// go-playground requires a non-numeric top-level domain, so an
 		// all-numeric dotted string (an IPv4 address, or a bare numeric TLD) is
 		// not an FQDN.
@@ -1484,6 +1558,9 @@ func TestHostnamePortValidator(t *testing.T) {
 		{"localhost:0", true},
 		{"localhost:99999", true},
 		{"", true},
+		// A port with no host names nothing. The dialect accepts this;
+		// prep's doc.go records the difference.
+		{":80", true},
 	}
 
 	v := newHostnamePortValidator()
@@ -1915,7 +1992,8 @@ func TestValidatorNames(t *testing.T) {
 		{"alphaspace", func() validator { return newAlphaSpaceValidator() }, "alphaspace"},
 		{"numeric", func() validator { return newNumericValidator() }, "numeric"},
 		{"number", func() validator { return newNumberValidator() }, "number"},
-		{"alphanumeric", func() validator { return newAlphanumericValidator() }, "alphanumeric"},
+		{"alphanum", func() validator { return newAlphanumericValidator(alphanumTagValue) }, "alphanum"},
+		{"alphanumeric", func() validator { return newAlphanumericValidator(alphanumericTagValue) }, "alphanumeric"},
 		{"alphanumunicode", func() validator { return newAlphanumericUnicodeValidator() }, "alphanumunicode"},
 
 		// Comparison validators (take float64)
@@ -2039,7 +2117,14 @@ func TestE164Validator(t *testing.T) {
 		{"+819012345678", false},
 		{"+1234567890123", false},
 		{"", false}, // empty is valid
-		{"12025551234", true},
+		// The dialect makes the leading plus optional, and a spreadsheet
+		// export strips it.
+		{"12025551234", false},
+		{"819012345678", false},
+		{"123456789012345", false}, // fifteen digits, the upper bound
+		{"1234567890123456", true}, // sixteen digits
+		{"+", true},
+		{"++819012345678", true},
 		{"+1", true},
 		{"+123456", true},
 		{"+0123456789", true},
@@ -2180,6 +2265,9 @@ func TestUUID4Validator(t *testing.T) {
 	}{
 		{"550e8400-e29b-41d4-a716-446655440000", false},
 		{"f47ac10b-58cc-4372-a567-0e02b2c3d479", false},
+		// Upper case is accepted here as it is for uuid, which is where the
+		// dialect is inconsistent and prep is not.
+		{"F47AC10B-58CC-4372-A567-0E02B2C3D479", false},
 		{"a3bb189e-8bf9-3888-9912-ace4e6543002", true}, // UUID v3
 		{"invalid", true},
 		{"", true},

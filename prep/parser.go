@@ -395,14 +395,20 @@ var validatorRegistry = map[string]validatorBuilder{
 	omitemptyTagValue: func(_ string, _ bool) (validator, error) { return &omitemptyValidator{}, nil },
 
 	// Basic validators
-	requiredTagValue:            func(_ string, _ bool) (validator, error) { return newRequiredValidator(), nil },
-	booleanTagValue:             func(_ string, _ bool) (validator, error) { return newBooleanValidator(), nil },
-	alphaTagValue:               func(_ string, _ bool) (validator, error) { return newAlphaValidator(), nil },
-	alphaSpaceTagValue:          func(_ string, _ bool) (validator, error) { return newAlphaSpaceValidator(), nil },
-	alphaUnicodeTagValue:        func(_ string, _ bool) (validator, error) { return newAlphaUnicodeValidator(), nil },
-	numericTagValue:             func(_ string, _ bool) (validator, error) { return newNumericValidator(), nil },
-	numberTagValue:              func(_ string, _ bool) (validator, error) { return newNumberValidator(), nil },
-	alphanumericTagValue:        func(_ string, _ bool) (validator, error) { return newAlphanumericValidator(), nil },
+	requiredTagValue:     func(_ string, _ bool) (validator, error) { return newRequiredValidator(), nil },
+	booleanTagValue:      func(_ string, _ bool) (validator, error) { return newBooleanValidator(), nil },
+	alphaTagValue:        func(_ string, _ bool) (validator, error) { return newAlphaValidator(), nil },
+	alphaSpaceTagValue:   func(_ string, _ bool) (validator, error) { return newAlphaSpaceValidator(), nil },
+	alphaUnicodeTagValue: func(_ string, _ bool) (validator, error) { return newAlphaUnicodeValidator(), nil },
+	numericTagValue:      func(_ string, _ bool) (validator, error) { return newNumericValidator(), nil },
+	numberTagValue:       func(_ string, _ bool) (validator, error) { return newNumberValidator(), nil },
+	alphanumTagValue: func(_ string, _ bool) (validator, error) {
+		return newAlphanumericValidator(alphanumTagValue), nil
+	},
+	alphanumericTagValue: func(_ string, _ bool) (validator, error) {
+		return newAlphanumericValidator(alphanumericTagValue), nil
+	},
+	alphanumSpaceTagValue:       func(_ string, _ bool) (validator, error) { return newAlphanumSpaceValidator(), nil },
 	alphanumericUnicodeTagValue: func(_ string, _ bool) (validator, error) { return newAlphanumericUnicodeValidator(), nil },
 
 	// Comparison validators (with threshold). eq and ne keep their raw
