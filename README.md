@@ -549,6 +549,15 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | List a workbook's sheets and pick the ones a policy admits | `ExampleExcelSheets`, `ExampleSelectExcelSheets` | [parser/example_test.go](./parser/example_test.go) |
 | Rewrite a sheet's date cells into ISO 8601 | `ExampleNormalizeXLSXDates` | [parser/example_test.go](./parser/example_test.go) |
 
+#### dialect
+
+| Feature | Example function | Source |
+|---------|------------------|--------|
+| Translate a query into SQLite SQL and recognize what has no equivalent | `ExampleTranslate` | [dialect/example_test.go](./dialect/example_test.go) |
+| Turn a user-supplied dialect name into a `Dialect` | `ExampleParse` | [dialect/example_test.go](./dialect/example_test.go) |
+| List the built-in dialects and spell one for a person | `ExampleDialects`, `ExampleDialect_DisplayName` | [dialect/example_test.go](./dialect/example_test.go) |
+| Install a translator of your own | `ExampleRegisterTranslator` | [dialect/example_test.go](./dialect/example_test.go) |
+
 #### frame
 
 | Feature | Example function | Source |
