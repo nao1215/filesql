@@ -254,10 +254,25 @@ const (
 // application does about that, and five seconds is the budget the drivers'
 // busy_timeout defaults sit around; past it the error the database gave is
 // returned as it stands.
+//
+// The budget is spent on waiting alone. It used to be wall clock over the whole
+// attempt, and an attempt is a whole input. For a CSV that costs nothing, since
+// the drop and the create come before the rows are read, but a workbook has to
+// be opened and its sheets listed before the load knows what tables to make: a
+// 40000-row XLSX waiting on a lock held for eight seconds gave up at five with
+// the parse having eaten the budget three attempts in, where counting the
+// waiting alone gets it in as soon as the lock is free.
+//
+// Waiting on something is not the same as retrying it, so the wall clock is
+// bounded too. Each attempt at an input this expensive costs its parse again,
+// and a hundred attempts of a workbook that takes a second to read is a load
+// that looks hung. Half a minute is long enough for any queue of loads worth
+// waiting for and short enough to be an answer rather than a hang.
 const (
-	loadLockBudget  = 5 * time.Second
-	loadLockFloor   = time.Millisecond
-	loadLockCeiling = 50 * time.Millisecond
+	loadLockBudget     = 5 * time.Second
+	loadLockWallBudget = 30 * time.Second
+	loadLockFloor      = time.Millisecond
+	loadLockCeiling    = 50 * time.Millisecond
 )
 
 // retryWhileLocked runs step until it succeeds, fails for a reason other than
@@ -266,22 +281,35 @@ const (
 // The wait doubles and carries jitter, because the loads that collide are the
 // loads that would otherwise retry in step with one another.
 func retryWhileLocked(ctx context.Context, step func() error) error {
-	deadline := time.Now().Add(loadLockBudget)
+	return retryWhileLockedFor(ctx, loadLockBudget, loadLockWallBudget, step)
+}
+
+// retryWhileLockedFor is retryWhileLocked with the two budgets named, so a test
+// can pin the shape of the waiting without waiting the whole of it.
+//
+// What is counted down is the sleeping, not the clock: an attempt may take as
+// long as its input is large without spending anything, so an input that has to
+// be parsed before it reaches its first write statement still gets the waiting
+// it was promised. The clock bounds the whole thing separately, so retrying
+// something expensive cannot run away with it.
+func retryWhileLockedFor(ctx context.Context, budget, wallBudget time.Duration, step func() error) error {
+	remaining := budget
+	wallDeadline := time.Now().Add(wallBudget)
 	for wait := loadLockFloor; ; {
 		err := step()
 		if err == nil || !lockedByAnotherConnection(err) {
 			return err
 		}
-		// The wait is cut to what is left of the budget, so the last attempt
-		// happens inside it rather than just past it.
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
+		if remaining <= 0 || !time.Now().Before(wallDeadline) {
 			return err
 		}
+		// The wait is cut to what is left of the budget, so the last attempt
+		// happens inside it rather than just past it.
 		delay := wait/2 + rand.N(wait/2+1) //nolint:gosec // Jitter, not a secret
 		if delay > remaining {
 			delay = remaining
 		}
+		remaining -= delay
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():

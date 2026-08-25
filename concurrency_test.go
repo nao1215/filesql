@@ -490,6 +490,124 @@ func TestConcurrentLoadIntoFromReaders(t *testing.T) {
 	}
 }
 
+// lockedStep answers with the error a write meets while another connection
+// holds the database. The error has to be the driver's own, since that is what
+// the retry reads to tell "someone else holds it" from "the input is wrong",
+// and the driver does not export a way to build one.
+func lockedStep(t *testing.T) func() error {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "locked.db")
+	holder, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, holder.Close()) })
+	_, err = holder.ExecContext(t.Context(), "CREATE TABLE keep(x)")
+	require.NoError(t, err)
+	tx, err := holder.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(t.Context(), "INSERT INTO keep VALUES (1)")
+	require.NoError(t, err)
+	// The transaction is bound to the test's context, which is canceled before
+	// the cleanup runs, so database/sql may have rolled it back already.
+	t.Cleanup(func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			t.Errorf("roll back the holding transaction: %v", err)
+		}
+	})
+
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	// The step runs under a context of its own so that a caller's canceled one
+	// turns the answer into a context error rather than the lock being tested.
+	return func() error {
+		_, execErr := db.ExecContext(context.Background(), "CREATE TABLE mine(x)")
+		require.Error(t, execErr)
+		return execErr
+	}
+}
+
+// TestLoadRetryBudgetIsSpentOnWaiting pins what the five seconds bound. They
+// bound how long a load waits for another load to let go, not how long its
+// attempts take: an attempt reads the input and infers its column types before
+// it reaches the statement that needs the write lock, so a wall-clock budget was
+// consumed by work that was then thrown away and the load failed with the
+// database's own error while it had barely waited at all. Thirty-two goroutines
+// loading a 200000-row CSV each lost twelve of the thirty-two that way.
+func TestLoadRetryBudgetIsSpentOnWaiting(t *testing.T) {
+	t.Parallel()
+
+	t.Run("an attempt that takes longer than the budget does not use it up", func(t *testing.T) {
+		t.Parallel()
+
+		locked := lockedStep(t)
+		attempts := 0
+		err := retryWhileLockedFor(t.Context(), 30*time.Millisecond, time.Minute, func() error {
+			attempts++
+			// Longer than the whole budget, the way reading a large input is.
+			time.Sleep(20 * time.Millisecond)
+			if attempts < 4 {
+				return locked()
+			}
+			return nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 4, attempts, "the time an attempt takes is not time spent waiting")
+	})
+
+	t.Run("the waiting itself is still bounded", func(t *testing.T) {
+		t.Parallel()
+
+		locked := lockedStep(t)
+		attempts := 0
+		start := time.Now()
+		err := retryWhileLockedFor(t.Context(), 30*time.Millisecond, time.Minute, func() error {
+			attempts++
+			return locked()
+		})
+		elapsed := time.Since(start)
+
+		require.Error(t, err)
+		assert.True(t, lockedByAnotherConnection(err), "the database's own answer comes back once the wait is over")
+		assert.Less(t, elapsed, time.Second, "a lock nobody lets go of is waited on for the budget, not forever")
+		assert.Greater(t, attempts, 1)
+	})
+
+	t.Run("retrying something expensive is bounded by the clock too", func(t *testing.T) {
+		t.Parallel()
+
+		locked := lockedStep(t)
+		attempts := 0
+		start := time.Now()
+		// Waiting is cheap here and the attempt is not, which is the workbook's
+		// shape: without a bound of its own the retry would keep re-parsing.
+		err := retryWhileLockedFor(t.Context(), time.Minute, 60*time.Millisecond, func() error {
+			attempts++
+			time.Sleep(20 * time.Millisecond)
+			return locked()
+		})
+		elapsed := time.Since(start)
+
+		require.Error(t, err)
+		assert.True(t, lockedByAnotherConnection(err))
+		assert.Less(t, elapsed, time.Second, "the attempts have to stop even while there is waiting left")
+		assert.Greater(t, attempts, 1)
+	})
+
+	t.Run("a failure that is not a lock is not waited on", func(t *testing.T) {
+		t.Parallel()
+
+		attempts := 0
+		err := retryWhileLockedFor(t.Context(), time.Minute, time.Minute, func() error {
+			attempts++
+			return errors.New("disk full")
+		})
+		require.Error(t, err)
+		assert.Equal(t, 1, attempts)
+	})
+}
+
 // TestLoadRetryOnlyWaitsForLocks keeps the waiting from spreading: only the two
 // answers SQLite gives when someone else holds what a load needs are worth
 // waiting on, and everything else has to come back at once. A bad input that
