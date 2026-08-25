@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/nao1215/filesql/internal/reader"
+	"github.com/nao1215/filesql/internal/writer"
 )
 
 // ErrTSVSyntax reports tab-separated input that does not describe a table: a
@@ -51,17 +51,11 @@ func WriteTSVRecord(w io.Writer, record []string) error {
 // An empty lineEnding writes "\n", so a zero value behaves as WriteTSVRecord
 // does rather than running the records together.
 func WriteTSVRecordLineEnding(w io.Writer, record []string, lineEnding string) error {
-	for _, field := range record {
-		if i := strings.IndexAny(field, "\t\n\r"); i >= 0 {
-			return fmt.Errorf("%w: field %q contains %q", ErrTSVUnrepresentable, field, field[i:i+1])
-		}
-	}
+	err := writer.TSVRecord(w, record, lineEnding)
 
-	if lineEnding == "" {
-		lineEnding = "\n"
+	var writeErr *writer.Error
+	if errors.As(err, &writeErr) && writeErr.Kind == writer.KindUnrepresentable {
+		return fmt.Errorf("%w: %s", ErrTSVUnrepresentable, writeErr.Error())
 	}
-	if _, err := io.WriteString(w, strings.Join(record, "\t")+lineEnding); err != nil {
-		return fmt.Errorf("failed to write TSV record: %w", err)
-	}
-	return nil
+	return err
 }
