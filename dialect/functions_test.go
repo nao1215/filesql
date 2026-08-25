@@ -1725,6 +1725,8 @@ func TestCastOfAStringToAnIntegerFollowsTheSourceDialect(t *testing.T) {
 		{name: "postgresql accepts an integer string", dialect: PostgreSQL, query: `SELECT CAST('12' AS integer)`, want: "12"},
 		{name: "postgresql still rounds a number", dialect: PostgreSQL, query: `SELECT CAST(2.5 AS integer)`, want: "2"},
 		{name: "postgresql reports a string past the range as out of range", dialect: PostgreSQL, query: `SELECT CAST('9223372036854775808' AS integer)`, wantErr: true},
+		{name: "postgresql reports a string past the float range as out of range", dialect: PostgreSQL, query: `SELECT CAST('1e400' AS integer)`, wantErr: true},
+		{name: "postgresql refuses a string that underflows to zero", dialect: PostgreSQL, query: `SELECT CAST('1e-400' AS integer)`, wantErr: true},
 
 		{name: "googlesql refuses a fraction", dialect: GoogleSQL, query: `SELECT CAST('1.5' AS INT64)`, wantErr: true},
 		{name: "googlesql refuses an exponent", dialect: GoogleSQL, query: `SELECT CAST('1e3' AS INT64)`, wantErr: true},

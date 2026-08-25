@@ -223,7 +223,9 @@ func castValue(d Dialect, target string, v driver.Value) (driver.Value, error) {
 // castToInt rounds rather than truncates: every dialect here rounds a
 // fractional value on the way to an integer type, while SQLite truncates toward
 // zero. PostgreSQL rounds halves to even; MySQL and GoogleSQL round them away
-// from zero.
+// from zero. A string is not a fractional value but a literal to be read, and
+// the dialects part company there: PostgreSQL and GoogleSQL raise for text that
+// is not an integer, and MySQL takes the digits at the front of it.
 func castToInt(d Dialect, v driver.Value, strict bool) (driver.Value, error) {
 	switch x := v.(type) {
 	case int64:
@@ -252,7 +254,7 @@ func castToInt(d Dialect, v driver.Value, strict bool) (driver.Value, error) {
 		// Rounding them instead answered 2 and 1000 for text neither engine
 		// accepts. A number past the float64 range is still reported as out of
 		// range rather than as a parse failure.
-		if f, ferr := strconv.ParseFloat(text, 64); errors.Is(ferr, strconv.ErrRange) {
+		if f, ferr := strconv.ParseFloat(text, 64); errors.Is(ferr, strconv.ErrRange) && math.IsInf(f, 0) {
 			return outOfRangeInt(math.Signbit(f), strict, text)
 		}
 		return nil, fmt.Errorf("%w: %q is not an integer", ErrInvalidCast, s)
