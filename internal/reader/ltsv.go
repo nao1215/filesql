@@ -3,8 +3,6 @@ package reader
 import (
 	"io"
 	"strings"
-
-	"github.com/nao1215/filesql/internal/infer"
 )
 
 // labelOrder collects LTSV labels, keeping each one once and in the order it
@@ -62,12 +60,8 @@ func readLTSV(src io.Reader, opts Options, emit Emit) (Result, error) {
 	}
 
 	header := labels.order
-	evidence := make([]infer.Evidence, len(header))
-	chunkSize := chunkSizeOf(opts)
 	result := Result{Header: header}
-
-	var chunk [][]string
-	emitted := false
+	rows := newChunker(header, opts, emit)
 	for _, line := range lines {
 		values := make(map[string]string)
 		// Labels are compared folded; see LTSVLabelKey. The map is keyed that way
@@ -97,27 +91,17 @@ func readLTSV(src io.Reader, opts Options, emit Emit) (Result, error) {
 		for i, key := range header {
 			record[i] = values[LTSVLabelKey(key)]
 		}
-		addEvidence(evidence, record)
-		chunk = append(chunk, record)
 		result.Total++
-
-		if len(chunk) >= chunkSize {
-			result.Rows += len(chunk)
-			if err := emit(&Chunk{Header: header, Records: chunk, Types: typesOf(evidence)}); err != nil {
-				return Result{}, err
-			}
-			chunk = nil
-			emitted = true
-		}
-	}
-
-	if len(chunk) > 0 || !emitted {
-		result.Rows += len(chunk)
-		if err := emit(&Chunk{Header: header, Records: chunk, Types: typesOf(evidence)}); err != nil {
+		if err := rows.add(record); err != nil {
 			return Result{}, err
 		}
 	}
-	result.Types = typesOf(evidence)
+
+	if err := rows.finish(); err != nil {
+		return Result{}, err
+	}
+	result.Rows = rows.rows
+	result.Types = rows.types()
 	return result, nil
 }
 

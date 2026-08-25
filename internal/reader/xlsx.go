@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"io"
 
-	"github.com/nao1215/filesql/internal/infer"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -103,12 +102,8 @@ func (w *Workbook) ReadSheet(name string, opts Options, emit Emit) (Result, erro
 		return Result{}, err
 	}
 
-	evidence := make([]infer.Evidence, len(header))
-	chunkSize := chunkSizeOf(opts)
 	result := Result{Header: header}
-
-	var chunk [][]string
-	emitted := false
+	records := newChunker(header, opts, emit)
 	for i, row := range rows[1:] {
 		// A row holding no cell at all is not a record, the way a blank line is
 		// not one in any other format read here. It is also what a sheet is made
@@ -131,27 +126,17 @@ func (w *Workbook) ReadSheet(name string, opts Options, emit Emit) (Result, erro
 		record := make([]string, len(header))
 		copy(record, row)
 
-		addEvidence(evidence, record)
-		chunk = append(chunk, record)
 		result.Total++
-		if len(chunk) >= chunkSize {
-			result.Rows += len(chunk)
-			if err := emit(&Chunk{Header: header, Records: chunk, Types: typesOf(evidence)}); err != nil {
-				return Result{}, err
-			}
-			chunk = nil
-			emitted = true
-		}
-	}
-
-	// A sheet that is nothing but a header still names its columns.
-	if len(chunk) > 0 || !emitted {
-		result.Rows += len(chunk)
-		if err := emit(&Chunk{Header: header, Records: chunk, Types: typesOf(evidence)}); err != nil {
+		if err := records.add(record); err != nil {
 			return Result{}, err
 		}
 	}
-	result.Types = typesOf(evidence)
+
+	if err := records.finish(); err != nil {
+		return Result{}, err
+	}
+	result.Rows = records.rows
+	result.Types = records.types()
 	return result, nil
 }
 

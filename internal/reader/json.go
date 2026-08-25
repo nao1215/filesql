@@ -124,24 +124,14 @@ func peekJSONIsArray(buffered *bufio.Reader) (isArray, empty bool, err error) {
 // decoder has already consumed, and returns how many rows it emitted.
 func readJSONArray(decoder *json.Decoder, opts Options, emit Emit) (int, error) {
 	header, types := jsonHeader()
-	chunkSize := chunkSizeOf(opts)
-
-	var chunk [][]string
-	rows := 0
-	emitted := false
+	elements := newTypedChunker(header, types, opts, emit)
 	for decoder.More() {
 		var element json.RawMessage
 		if err := decoder.Decode(&element); err != nil {
 			return 0, jsonError(err, "failed to decode JSON array element")
 		}
-		chunk = append(chunk, []string{string(element)})
-		if len(chunk) >= chunkSize {
-			rows += len(chunk)
-			if err := emit(&Chunk{Header: header, Records: chunk, Types: types}); err != nil {
-				return 0, err
-			}
-			chunk = nil
-			emitted = true
+		if err := elements.add([]string{string(element)}); err != nil {
+			return 0, err
 		}
 	}
 
@@ -153,14 +143,10 @@ func readJSONArray(decoder *json.Decoder, opts Options, emit Emit) (int, error) 
 		return 0, invalidError(nil, "unexpected data after JSON array")
 	}
 
-	// An empty array still makes its table.
-	if len(chunk) > 0 || !emitted {
-		rows += len(chunk)
-		if err := emit(&Chunk{Header: header, Records: chunk, Types: types}); err != nil {
-			return 0, err
-		}
+	if err := elements.finish(); err != nil {
+		return 0, err
 	}
-	return rows, nil
+	return elements.rows, nil
 }
 
 // readJSONL reads one JSON value per line into the "data" column. A blank line
@@ -169,10 +155,7 @@ func readJSONL(src io.Reader, opts Options, emit Emit) (Result, error) {
 	buffered := bufio.NewReader(src)
 	header, types := jsonHeader()
 	result := Result{Header: header, Types: types}
-	chunkSize := chunkSizeOf(opts)
-
-	var chunk [][]string
-	emitted := false
+	values := newTypedChunker(header, types, opts, emit)
 	lineNum := 0
 	for {
 		raw, err := buffered.ReadBytes('\n')
@@ -184,14 +167,8 @@ func readJSONL(src io.Reader, opts Options, emit Emit) (Result, error) {
 			if !json.Valid([]byte(line)) {
 				return Result{}, invalidError(nil, "invalid JSON on line %d: %s", lineNum, truncateLine(line, 100))
 			}
-			chunk = append(chunk, []string{line})
-			if len(chunk) >= chunkSize {
-				result.Rows += len(chunk)
-				if err := emit(&Chunk{Header: header, Records: chunk, Types: types}); err != nil {
-					return Result{}, err
-				}
-				chunk = nil
-				emitted = true
+			if err := values.add([]string{line}); err != nil {
+				return Result{}, err
 			}
 		}
 		if err != nil {
@@ -204,12 +181,10 @@ func readJSONL(src io.Reader, opts Options, emit Emit) (Result, error) {
 
 	// An input with no lines is a table with no rows. Only the caller knows
 	// whether that is a failure.
-	if len(chunk) > 0 || !emitted {
-		result.Rows += len(chunk)
-		if err := emit(&Chunk{Header: header, Records: chunk, Types: types}); err != nil {
-			return Result{}, err
-		}
+	if err := values.finish(); err != nil {
+		return Result{}, err
 	}
+	result.Rows = values.rows
 	result.Total = result.Rows
 	result.EmptyInput = result.Rows == 0
 	return result, nil
