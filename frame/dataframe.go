@@ -1540,22 +1540,28 @@ func (df *DataFrame) Rename(oldName, newName string) (*DataFrame, error) {
 		return nil, fmt.Errorf("column %q already exists", newName)
 	}
 
-	// Build new column list
+	return df.renamed(map[string]string{oldName: newName}), nil
+}
+
+// renamed returns a copy of df with every column the map names carrying its new
+// name, in both the column list and each row. It is the rebuild Rename and
+// RenameColumns share; the caller has already decided the renames are legal,
+// which is where the two differ.
+func (df *DataFrame) renamed(renames map[string]string) *DataFrame {
 	newColumns := make([]string, len(df.columns))
 	for i, col := range df.columns {
-		if col == oldName {
+		if newName, ok := renames[col]; ok {
 			newColumns[i] = newName
 		} else {
 			newColumns[i] = col
 		}
 	}
 
-	// Build new rows with renamed column
 	newRows := make([]map[string]any, len(df.rows))
 	for i, row := range df.rows {
 		newRow := make(map[string]any, len(row))
 		for k, v := range row {
-			if k == oldName {
+			if newName, ok := renames[k]; ok {
 				newRow[newName] = v
 			} else {
 				newRow[k] = v
@@ -1567,7 +1573,7 @@ func (df *DataFrame) Rename(oldName, newName string) (*DataFrame, error) {
 	return &DataFrame{
 		columns: newColumns,
 		rows:    newRows,
-	}, nil
+	}
 }
 
 // RenameColumns returns a new DataFrame with multiple columns renamed.
@@ -1607,34 +1613,7 @@ func (df *DataFrame) RenameColumns(renames map[string]string) (*DataFrame, error
 		}
 	}
 
-	// Build new column list
-	newColumns := make([]string, len(df.columns))
-	for i, col := range df.columns {
-		if newName, ok := renames[col]; ok {
-			newColumns[i] = newName
-		} else {
-			newColumns[i] = col
-		}
-	}
-
-	// Build new rows with renamed columns
-	newRows := make([]map[string]any, len(df.rows))
-	for i, row := range df.rows {
-		newRow := make(map[string]any, len(row))
-		for k, v := range row {
-			if newName, ok := renames[k]; ok {
-				newRow[newName] = v
-			} else {
-				newRow[k] = v
-			}
-		}
-		newRows[i] = newRow
-	}
-
-	return &DataFrame{
-		columns: newColumns,
-		rows:    newRows,
-	}, nil
+	return df.renamed(renames), nil
 }
 
 // isNA reports whether a value is missing.
@@ -1705,15 +1684,28 @@ func (df *DataFrame) DropNASubset(columns ...string) *DataFrame {
 //
 //	filled := df.FillNA(0)  // Replace every missing value with 0
 func (df *DataFrame) FillNA(value any) *DataFrame {
+	return df.filledNA(func(string) (any, bool) { return value, true })
+}
+
+// filledNA returns a copy of df with every missing cell replaced by what fill
+// answers for that cell's column. A fill that answers false leaves the cell as
+// it is. It is the rebuild FillNA and FillNAByColumn share; the two differ only
+// in what they fill a column with.
+//
+// A row that has no key for a column reads as nil, which is missing, so a filled
+// frame's rows all carry every column whether the originals did or not.
+func (df *DataFrame) filledNA(fill func(col string) (any, bool)) *DataFrame {
 	newRows := make([]map[string]any, len(df.rows))
 	for i, row := range df.rows {
 		newRow := make(map[string]any, len(df.columns))
 		for _, col := range df.columns {
-			if val, exists := row[col]; !exists || isNA(val) {
-				newRow[col] = value
-			} else {
-				newRow[col] = val
+			val := row[col]
+			if isNA(val) {
+				if fillValue, ok := fill(col); ok {
+					val = fillValue
+				}
 			}
+			newRow[col] = val
 		}
 		newRows[i] = newRow
 	}
@@ -1743,32 +1735,11 @@ func (df *DataFrame) FillNAByColumn(values map[string]any) *DataFrame {
 		return df.clone()
 	}
 
-	newRows := make([]map[string]any, len(df.rows))
-	for i, row := range df.rows {
-		newRow := make(map[string]any, len(df.columns))
-		for _, col := range df.columns {
-			val := row[col]
-			if isNA(val) {
-				if fillValue, ok := values[col]; ok {
-					newRow[col] = fillValue
-				} else {
-					// No fill value named for this column, so the cell is left
-					// as it is rather than normalized to nil: a caller filling
-					// one column did not ask about the others.
-					newRow[col] = val
-				}
-			} else {
-				newRow[col] = val
-			}
-		}
-		newRows[i] = newRow
-	}
-
-	columns := make([]string, len(df.columns))
-	copy(columns, df.columns)
-
-	return &DataFrame{
-		columns: columns,
-		rows:    newRows,
-	}
+	// A column the map does not name keeps its cell as it is rather than being
+	// normalized to nil: a caller filling one column did not ask about the
+	// others.
+	return df.filledNA(func(col string) (any, bool) {
+		fillValue, ok := values[col]
+		return fillValue, ok
+	})
 }

@@ -1,9 +1,6 @@
 package filesql
 
-import (
-	"context"
-	"log/slog"
-)
+import "log/slog"
 
 // Logger defines the interface for logging within filesql.
 // Users can implement this interface to use their own logging solution.
@@ -54,54 +51,6 @@ func (s *SlogAdapter) Error(msg string, args ...any) {
 // With returns a new Logger with the given key-value pairs added
 func (s *SlogAdapter) With(args ...any) Logger {
 	return &SlogAdapter{logger: s.logger.With(args...)}
-}
-
-// ContextLogger extends Logger with context-aware logging methods
-type ContextLogger interface {
-	Logger
-	// DebugContext logs a debug message with context
-	DebugContext(ctx context.Context, msg string, args ...any)
-	// InfoContext logs an info message with context
-	InfoContext(ctx context.Context, msg string, args ...any)
-	// WarnContext logs a warning message with context
-	WarnContext(ctx context.Context, msg string, args ...any)
-	// ErrorContext logs an error message with context
-	ErrorContext(ctx context.Context, msg string, args ...any)
-}
-
-// SlogContextAdapter wraps slog.Logger to implement the ContextLogger interface
-type SlogContextAdapter struct {
-	SlogAdapter
-}
-
-// NewSlogContextAdapter creates a new SlogContextAdapter wrapping the given slog.Logger
-func NewSlogContextAdapter(logger *slog.Logger) *SlogContextAdapter {
-	return &SlogContextAdapter{SlogAdapter: SlogAdapter{logger: logger}}
-}
-
-// DebugContext logs a debug message with context
-func (s *SlogContextAdapter) DebugContext(ctx context.Context, msg string, args ...any) {
-	s.logger.DebugContext(ctx, msg, args...)
-}
-
-// InfoContext logs an info message with context
-func (s *SlogContextAdapter) InfoContext(ctx context.Context, msg string, args ...any) {
-	s.logger.InfoContext(ctx, msg, args...)
-}
-
-// WarnContext logs a warning message with context
-func (s *SlogContextAdapter) WarnContext(ctx context.Context, msg string, args ...any) {
-	s.logger.WarnContext(ctx, msg, args...)
-}
-
-// ErrorContext logs an error message with context
-func (s *SlogContextAdapter) ErrorContext(ctx context.Context, msg string, args ...any) {
-	s.logger.ErrorContext(ctx, msg, args...)
-}
-
-// With returns a new ContextLogger with the given key-value pairs added
-func (s *SlogContextAdapter) With(args ...any) Logger {
-	return &SlogContextAdapter{SlogAdapter: SlogAdapter{logger: s.logger.With(args...)}}
 }
 
 // nopLogger is a no-op logger that discards all log messages

@@ -267,6 +267,14 @@ func streamACHFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, fil
 		return err
 	}
 
+	return loadParsedTablesIntoDatabase(ctx, db, tables, baseTableName, sourcePath, sourceFormatACH, replaceExisting)
+}
+
+// loadParsedTablesIntoDatabase creates each parsed table, fills it, and records
+// where the file came from. The ACH and Fedwire loads reach it with the tables
+// their own parser produced; everything after that parse is the same for both,
+// so it lives once rather than in a copy per format.
+func loadParsedTablesIntoDatabase(ctx context.Context, db DBTX, tables []*table, baseTableName, sourcePath string, format sourceFormat, replaceExisting bool) error {
 	for _, t := range tables {
 		// Check if table already exists, folding ASCII case the way SQLite does
 		// when it matches identifiers.
@@ -304,7 +312,7 @@ func streamACHFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, fil
 
 	// The source is recorded on the same DBTX as the tables, so a rolled-back
 	// load leaves neither behind.
-	return recordFileSource(ctx, db, baseTableName, sourcePath, sourceFormatACH)
+	return recordFileSource(ctx, db, baseTableName, sourcePath, format)
 }
 
 // insertRecordsIntoTable inserts records into the specified table

@@ -507,16 +507,20 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Read a compressed reader | `ExampleDBBuilder_AddReader_compressed` | [example_test.go](./example_test.go) |
 | Tune chunked loading | `ExampleDBBuilder_SetDefaultChunkSize` | [example_api_test.go](./example_api_test.go) |
 | Handle malformed CSV/TSV rows | `ExampleDBBuilder_WithMalformedRowPolicy` | [example_api_test.go](./example_api_test.go) |
+| Count the rows a skip policy discarded | `ExampleDBBuilder_SkippedRows` | [example_api_test.go](./example_api_test.go) |
 | Query with MySQL, PostgreSQL, or GoogleSQL syntax | `ExampleDBBuilder_WithDialect` | [example_api_test.go](./example_api_test.go) |
 | Load only the sheets a workbook shows | `ExampleDBBuilder_WithExcelSheetPolicy` | [example_api_test.go](./example_api_test.go) |
-| Report a workbook's sheets and their visibility | `ExampleExcelSheetsInFile` | [example_api_test.go](./example_api_test.go) |
+| Report a workbook's sheets and their visibility | `ExampleExcelSheetsInFile`, `ExampleExcelSheetsInReader` | [example_api_test.go](./example_api_test.go) |
+| Check a workbook's sheets for table names that collide | `ExampleExcelSheetTableNames` | [example_api_test.go](./example_api_test.go) |
 | Attach your own logger | `ExampleDBBuilder_WithLogger`, `ExampleNewSlogAdapter` | [example_api_test.go](./example_api_test.go) |
-| Open a read-only wrapper | `ExampleDBBuilder_OpenReadOnly` | [example_api_test.go](./example_api_test.go) |
+| Open a read-only wrapper | `ExampleDBBuilder_OpenReadOnly`, `ExampleNewReadOnlyDB` | [example_api_test.go](./example_api_test.go) |
 | Save on close or commit | `ExampleDBBuilder_EnableAutoSave`, `ExampleDBBuilder_EnableAutoSaveOnCommit`, `ExampleDBBuilder_DisableAutoSave` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
 | Export tables with format/compression/encoding/line-ending options | `ExampleDumpDatabase`, `ExampleNewDumpOptions`, `ExampleDumpOptions_WithFormat`, `ExampleDumpOptions_WithCompression`, `ExampleDumpOptions_WithEncoding`, `ExampleDumpOptions_WithLineEnding` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
 | Work with compression helpers directly | `ExampleNewCompressionHandler`, `ExampleNewCompressionFactory`, `ExampleCompressionFactory_DetectCompressionType` | [example_api_test.go](./example_api_test.go) |
 | Strip compression suffixes and inspect file types | `ExampleCompressionFactory_RemoveCompressionExtension`, `ExampleCompressionFactory_GetBaseFileType` | [example_api_test.go](./example_api_test.go) |
-| Inspect the malformed-row policy | `ExampleMalformedRowPolicy_String` | [example_api_test.go](./example_api_test.go) |
+| Write an ACH or Fedwire file back after editing it | `ExampleDumpACH`, `ExampleDumpFedWire` | [example_api_test.go](./example_api_test.go) |
+| Write one back when the database came from an `io.Reader` | `ExampleDumpACHWithTableSet`, `ExampleDumpFedWireWithTableSet` | [example_api_test.go](./example_api_test.go) |
+| Inspect enum names | `ExampleMalformedRowPolicy_String`, `ExampleFileType_String`, `ExampleCompressionType_String`, `ExampleEncoding_String`, `ExampleLineEnding_String`, `ExampleOutputFormat_String` | [example_api_test.go](./example_api_test.go) |
 
 #### prep
 
@@ -543,11 +547,23 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 |---------|------------------|--------|
 | Parse a delimited file into headers, records, and column types | `ExampleParse_csv`, `ExampleParse_tsv`, `ExampleParse_ltsv` | [parser/example_test.go](./parser/example_test.go) |
 | Read CSV keeping a line break inside a quoted field | `ExampleNewCSVReader` | [parser/example_test.go](./parser/example_test.go) |
+| Read TSV taking every field literally, quotes included | `ExampleNewTSVReader` | [parser/example_test.go](./parser/example_test.go) |
 | Read a file whose lines end with a lone carriage return | `ExampleNormalizeLineEndings` | [parser/example_test.go](./parser/example_test.go) |
 | Detect a file type and whether it is compressed | `ExampleDetectFileType`, `ExampleIsCompressed`, `ExampleBaseFileType` | [parser/example_test.go](./parser/example_test.go) |
 | Convert a cell by the column type it belongs to | `ExampleParseValue`, `ExampleTableData_columnTypes` | [parser/example_test.go](./parser/example_test.go) |
 | List a workbook's sheets and pick the ones a policy admits | `ExampleExcelSheets`, `ExampleSelectExcelSheets` | [parser/example_test.go](./parser/example_test.go) |
 | Rewrite a sheet's date cells into ISO 8601 | `ExampleNormalizeXLSXDates` | [parser/example_test.go](./parser/example_test.go) |
+| Turn an ACH file into its tables | `ExampleParseReader`, `ExampleFromFile` | [parser/ach/example_test.go](./parser/ach/example_test.go) |
+| Turn a Fedwire file into its table | `ExampleParseReader`, `ExampleFromFile` | [parser/wire/example_test.go](./parser/wire/example_test.go) |
+
+#### dialect
+
+| Feature | Example function | Source |
+|---------|------------------|--------|
+| Translate a query into SQLite SQL and recognize what has no equivalent | `ExampleTranslate` | [dialect/example_test.go](./dialect/example_test.go) |
+| Turn a user-supplied dialect name into a `Dialect` | `ExampleParse` | [dialect/example_test.go](./dialect/example_test.go) |
+| List the built-in dialects and spell one for a person | `ExampleDialects`, `ExampleDialect_DisplayName` | [dialect/example_test.go](./dialect/example_test.go) |
+| Install a translator of your own | `ExampleRegisterTranslator` | [dialect/example_test.go](./dialect/example_test.go) |
 
 #### frame
 
@@ -557,17 +573,19 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Build a DataFrame directly from Go records | `ExampleNewDataFrameFromRecords` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Write transformed data back to CSV or TSV | `ExampleDataFrame_ToCSV`, `ExampleDataFrame_ToTSV` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Select, filter, and mutate rows | `ExampleDataFrame_Select`, `ExampleDataFrame_Filter`, `ExampleDataFrame_Mutate` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Read a callback's row without guessing its types | `ExampleRow` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Read a callback's row without guessing its types | `ExampleRow`, `ExampleRow_Int` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Join in-memory tables | `ExampleDataFrame_Join` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Append frames with matching or mixed schemas | `ExampleDataFrame_Concat`, `ExampleConcatAll` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Group rows for aggregation | `ExampleDataFrame_GroupBy`, `ExampleGroupedDataFrame_Count` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Run built-in or custom aggregations | `ExampleGroupedDataFrame_Sum`, `ExampleGroupedDataFrame_Agg` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Run built-in or custom aggregations | `ExampleGroupedDataFrame_Sum`, `ExampleGroupedDataFrame_Mean`, `ExampleGroupedDataFrame_Agg` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Take the extremes of each group | `ExampleGroupedDataFrame_Min`, `ExampleGroupedDataFrame_Max` | [frame/example_api_test.go](./frame/example_api_test.go) |
 | Sort by one or multiple columns | `ExampleDataFrame_Sort`, `ExampleDataFrame_SortBy` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Remove duplicates by key columns | `ExampleDataFrame_DistinctBy` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Keep only the first rows | `ExampleDataFrame_Head` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Rename columns in bulk | `ExampleDataFrame_RenameColumns` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Fill or drop missing values | `ExampleDataFrame_FillNAByColumn`, `ExampleDataFrame_DropNASubset` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Remove duplicates by whole rows or by key columns | `ExampleDataFrame_Distinct`, `ExampleDataFrame_DistinctBy` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Keep only the first or last rows | `ExampleDataFrame_Head`, `ExampleDataFrame_Tail`, `ExampleDataFrame_Limit` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Rename one column or many | `ExampleDataFrame_Rename`, `ExampleDataFrame_RenameColumns` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Drop columns | `ExampleDataFrame_Drop` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Fill or drop missing values | `ExampleDataFrame_FillNA`, `ExampleDataFrame_FillNAByColumn`, `ExampleDataFrame_DropNA`, `ExampleDataFrame_DropNASubset` | [frame/example_api_test.go](./frame/example_api_test.go) |
+| Inspect a frame's columns, rows, and records | `ExampleDataFrame_Columns`, `ExampleDataFrame_Len`, `ExampleDataFrame_ToRecords` | [frame/example_api_test.go](./frame/example_api_test.go) |
 
 ### Integration examples
 

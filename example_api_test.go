@@ -15,6 +15,8 @@ import (
 
 	"github.com/nao1215/filesql"
 	"github.com/nao1215/filesql/dialect"
+	achconv "github.com/nao1215/filesql/parser/ach"
+	wireconv "github.com/nao1215/filesql/parser/wire"
 	"github.com/xuri/excelize/v2"
 	_ "modernc.org/sqlite"
 )
@@ -44,6 +46,16 @@ func createFilesqlExampleDir(files map[string]string) string {
 		if err := os.WriteFile(path, []byte(strings.TrimLeft(body, "\n")), 0600); err != nil {
 			log.Fatal(err)
 		}
+	}
+	return dir
+}
+
+// exampleTempDir is a directory of its own for an example to write into, so
+// that no example touches a path another program may already be using.
+func exampleTempDir() string {
+	dir, err := os.MkdirTemp("", "filesql-api-example")
+	if err != nil {
+		log.Fatal(err)
 	}
 	return dir
 }
@@ -508,8 +520,10 @@ func exampleWorkbook(dir string) string {
 }
 
 func ExampleDBBuilder_WithExcelSheetPolicy() {
-	path := exampleWorkbook(os.TempDir())
-	defer func() { _ = os.Remove(path) }()
+	dir := exampleTempDir()
+	defer os.RemoveAll(dir)
+
+	path := exampleWorkbook(dir)
 
 	validated, err := filesql.NewBuilder().
 		AddPath(path).
@@ -547,8 +561,10 @@ func ExampleDBBuilder_WithExcelSheetPolicy() {
 }
 
 func ExampleExcelSheetsInFile() {
-	path := exampleWorkbook(os.TempDir())
-	defer func() { _ = os.Remove(path) }()
+	dir := exampleTempDir()
+	defer os.RemoveAll(dir)
+
+	path := exampleWorkbook(dir)
 
 	sheets, err := filesql.ExcelSheetsInFile(path)
 	if err != nil {
@@ -603,4 +619,326 @@ id,name
 	// id,name
 	// 1,Alice
 	// 2,Carol
+}
+
+// ExampleExcelSheetsInReader is ExampleExcelSheetsInFile for a workbook that
+// arrived as bytes rather than as a file.
+func ExampleExcelSheetsInReader() {
+	dir := exampleTempDir()
+	defer os.RemoveAll(dir)
+
+	path := exampleWorkbook(dir)
+
+	// A workbook a caller holds in memory, downloaded or embedded rather than
+	// read from disk. The reader must yield the workbook itself: a codec around
+	// it has no name to be detected from.
+	body, err := os.ReadFile(path) //nolint:gosec // path built by this example
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	sheets, err := filesql.ExcelSheetsInReader(bytes.NewReader(body))
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, sheet := range sheets {
+		fmt.Printf("%s visible=%t\n", sheet.Name, sheet.Visible)
+	}
+	// Output:
+	// Sales visible=true
+	// Scratch visible=false
+}
+
+func ExampleExcelSheetTableNames() {
+	tables, err := filesql.ExcelSheetTableNames("book.xlsx", []string{"Sales", "Q1 sales"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(tables)
+
+	// "Q1 sales" and "Q1.sales" both sanitize to one identifier, so the second
+	// sheet loaded would replace the first with nothing said about it. Asking
+	// first is how a caller refuses the workbook before loading any of it.
+	_, err = filesql.ExcelSheetTableNames("book.xlsx", []string{"Q1 sales", "Q1.sales"})
+	fmt.Println(errors.Is(err, filesql.ErrDuplicateTable))
+	// Output:
+	// [book_Sales book_Q1_sales]
+	// true
+}
+
+// ExampleDBBuilder_SkippedRows shows what MalformedRowSkip discarded. The
+// policy is an instruction from the caller, but one dropped row and most of the
+// file dropped look alike without the counts.
+func ExampleDBBuilder_SkippedRows() {
+	csvData := "id,name\n1,Alice\n2\n3,Cora,extra\n4,Dave\n"
+
+	validated, err := filesql.NewBuilder().
+		AddReader(strings.NewReader(csvData), "users", filesql.FileTypeCSV).
+		WithMalformedRowPolicy(filesql.MalformedRowSkip).
+		Build(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	db, err := validated.Open(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	for _, skipped := range validated.SkippedRows() {
+		fmt.Printf("%s: %d of %d rows skipped\n", skipped.Table, skipped.Count, skipped.Total)
+	}
+	// Output:
+	// users: 2 of 4 rows skipped
+}
+
+// ExampleNewReadOnlyDB wraps a database the caller already has. Use
+// (*DBBuilder).OpenReadOnly when filesql is the one opening it.
+func ExampleNewReadOnlyDB() {
+	db := openExampleSQLiteDB()
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := filesql.LoadInto(ctx, db, "testdata/sample.csv"); err != nil {
+		log.Fatal(err)
+	}
+
+	rodb := filesql.NewReadOnlyDB(db)
+
+	var rows int
+	if err := rodb.QueryRowContext(ctx, `SELECT COUNT(*) FROM sample`).Scan(&rows); err != nil {
+		log.Fatal(err)
+	}
+
+	// The wrapper refuses the write; the database underneath is untouched and
+	// still writable through db itself.
+	_, err := rodb.ExecContext(ctx, `DELETE FROM sample`)
+	fmt.Printf("rows=%d write_blocked=%t\n", rows, errors.Is(err, filesql.ErrReadOnly))
+	// Output:
+	// rows=3 write_blocked=true
+}
+
+func ExampleFileType_String() {
+	fmt.Println(filesql.FileTypeCSV, filesql.FileTypeLTSV, filesql.FileTypeParquet)
+	// Output: CSV LTSV Parquet
+}
+
+func ExampleCompressionType_String() {
+	fmt.Println(filesql.CompressionNone, filesql.CompressionGZ, filesql.CompressionZSTD)
+	// Output: none gz zstd
+}
+
+func ExampleEncoding_String() {
+	fmt.Println(filesql.EncodingUTF8, filesql.EncodingShiftJIS, filesql.EncodingEUCJP)
+	// Output: utf-8 shift-jis euc-jp
+}
+
+func ExampleLineEnding_String() {
+	fmt.Println(filesql.LineEndingLF, filesql.LineEndingCRLF)
+	// Output: lf crlf
+}
+
+func ExampleOutputFormat_String() {
+	fmt.Println(filesql.OutputFormatCSV, filesql.OutputFormatTSV, filesql.OutputFormatXLSX)
+	// Output: csv tsv xlsx
+}
+
+// ExampleDumpACH loads an ACH file, edits one entry, and writes the file back.
+//
+// The write rebuilds the file from the source it was loaded from, so that file
+// must still be readable. Control records are derived rather than stored: an
+// edited amount is balanced by the write, and an edit to a control column is
+// overwritten by the recalculation.
+func ExampleDumpACH() {
+	dir := exampleTempDir()
+	defer os.RemoveAll(dir)
+
+	ctx := context.Background()
+	db, err := filesql.Open("testdata/ppd-debit.ach")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.ExecContext(ctx,
+		`UPDATE ppd_debit_entries SET individual_name = 'Alice Smith'`); err != nil {
+		log.Fatal(err)
+	}
+
+	out := filepath.Join(dir, "edited.ach")
+	if err := filesql.DumpACH(ctx, db, "ppd_debit", out); err != nil {
+		log.Fatal(err)
+	}
+
+	reloaded, err := filesql.Open(out)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer reloaded.Close()
+
+	var name string
+	var amount int64
+	if err := reloaded.QueryRowContext(ctx,
+		`SELECT individual_name, amount FROM edited_entries`).Scan(&name, &amount); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%s %d\n", name, amount)
+	// Output:
+	// Alice Smith 100000000
+}
+
+// ExampleDumpFedWire loads a Fedwire file, edits the message, and writes it back.
+//
+// Tags are written in the order the format defines rather than the order the
+// file had them, so a diff after a write-back shows lines nobody edited.
+func ExampleDumpFedWire() {
+	dir := exampleTempDir()
+	defer os.RemoveAll(dir)
+
+	ctx := context.Background()
+	db, err := filesql.Open("testdata/customer-transfer.fed")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.ExecContext(ctx,
+		`UPDATE customer_transfer_message SET amount = '000000012500'`); err != nil {
+		log.Fatal(err)
+	}
+
+	out := filepath.Join(dir, "edited.fed")
+	if err := filesql.DumpFedWire(ctx, db, "customer_transfer", out); err != nil {
+		log.Fatal(err)
+	}
+
+	reloaded, err := filesql.Open(out)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer reloaded.Close()
+
+	var amount string
+	if err := reloaded.QueryRowContext(ctx,
+		`SELECT amount FROM edited_message`).Scan(&amount); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(amount)
+	// Output:
+	// 000000012500
+}
+
+// ExampleDumpACHWithTableSet writes back a database loaded from an io.Reader.
+// Such a database has no file to rebuild from, so DumpACH refuses it with
+// ErrSourceUnavailable; parse the same bytes with parser/ach and hand over the
+// structure instead.
+func ExampleDumpACHWithTableSet() {
+	dir := exampleTempDir()
+	defer os.RemoveAll(dir)
+
+	body, err := os.ReadFile("testdata/ppd-debit.ach")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ctx := context.Background()
+	validated, err := filesql.NewBuilder().
+		AddReader(bytes.NewReader(body), "payment", filesql.FileTypeACH).
+		Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	db, err := validated.Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	out := filepath.Join(dir, "payment.ach")
+	err = filesql.DumpACH(ctx, db, "payment", out)
+	fmt.Println("without the structure:", errors.Is(err, filesql.ErrSourceUnavailable))
+
+	tableSet, err := achconv.ParseReader(bytes.NewReader(body))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE payment_entries SET individual_name = 'Alice Smith'`); err != nil {
+		log.Fatal(err)
+	}
+	if err := filesql.DumpACHWithTableSet(ctx, db, "payment", out, tableSet); err != nil {
+		log.Fatal(err)
+	}
+
+	reloaded, err := filesql.Open(out)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer reloaded.Close()
+
+	var name string
+	if err := reloaded.QueryRowContext(ctx,
+		`SELECT individual_name FROM payment_entries`).Scan(&name); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(name)
+	// Output:
+	// without the structure: true
+	// Alice Smith
+}
+
+// ExampleDumpFedWireWithTableSet is ExampleDumpACHWithTableSet for Fedwire: a
+// database loaded from an io.Reader is written back through the structure
+// parser/wire returns for the same bytes.
+func ExampleDumpFedWireWithTableSet() {
+	dir := exampleTempDir()
+	defer os.RemoveAll(dir)
+
+	body, err := os.ReadFile("testdata/customer-transfer.fed")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ctx := context.Background()
+	validated, err := filesql.NewBuilder().
+		AddReader(bytes.NewReader(body), "transfer", filesql.FileTypeFedWire).
+		Build(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	db, err := validated.Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	tableSet, err := wireconv.ParseReader(bytes.NewReader(body))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE transfer_message SET amount = '000000012500'`); err != nil {
+		log.Fatal(err)
+	}
+
+	out := filepath.Join(dir, "transfer.fed")
+	if err := filesql.DumpFedWireWithTableSet(ctx, db, "transfer", out, tableSet); err != nil {
+		log.Fatal(err)
+	}
+
+	reloaded, err := filesql.Open(out)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer reloaded.Close()
+
+	var amount string
+	if err := reloaded.QueryRowContext(ctx,
+		`SELECT amount FROM transfer_message`).Scan(&amount); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(amount)
+	// Output:
+	// 000000012500
 }

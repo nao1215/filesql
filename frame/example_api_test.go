@@ -504,3 +504,191 @@ func ExampleDataFrame_DropNASubset() {
 	// Output:
 	// 2
 }
+
+func ExampleDataFrame_Columns() {
+	df := frame.NewDataFrameFromRecords([]map[string]any{
+		{"product": "apple", "qty": 3},
+	})
+
+	fmt.Println(df.Columns())
+	// Output:
+	// [product qty]
+}
+
+func ExampleDataFrame_Len() {
+	df := frame.NewDataFrameFromRecords([]map[string]any{
+		{"name": "Alice"},
+		{"name": "Bob"},
+	})
+
+	fmt.Println(df.Len())
+	// Output:
+	// 2
+}
+
+func ExampleDataFrame_Tail() {
+	df := frame.NewDataFrameFromRecords([]map[string]any{
+		{"name": "Alice"},
+		{"name": "Bob"},
+		{"name": "Cora"},
+	})
+
+	tail := df.Tail(2)
+	fmt.Printf("%d %s\n", tail.Len(), tail.ToRecords()[0]["name"])
+	// Output:
+	// 2 Bob
+}
+
+func ExampleDataFrame_Limit() {
+	df := frame.NewDataFrameFromRecords([]map[string]any{
+		{"name": "Alice"},
+		{"name": "Bob"},
+		{"name": "Cora"},
+	})
+
+	// Limit is Head under the name a SQL reader reaches for.
+	fmt.Println(df.Limit(2).Len())
+	// Output:
+	// 2
+}
+
+func ExampleDataFrame_Drop() {
+	df := frame.NewDataFrameFromRecords([]map[string]any{
+		{"name": "Alice", "email": "alice@example.com", "debug": "x"},
+	})
+
+	dropped, err := df.Drop("debug")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(dropped.Columns())
+
+	// A column the frame does not have is reported rather than skipped, so a
+	// typo cannot look like a successful drop.
+	_, err = df.Drop("dbeug")
+	fmt.Println(err)
+	// Output:
+	// [email name]
+	// column "dbeug" does not exist
+}
+
+func ExampleDataFrame_Distinct() {
+	df := frame.NewDataFrameFromRecords([]map[string]any{
+		{"team": "east", "shift": "am"},
+		{"team": "east", "shift": "am"},
+		{"team": "east", "shift": "pm"},
+	})
+
+	// Two rows are the same row only when every column agrees; DistinctBy
+	// compares the columns you name.
+	fmt.Println(df.Distinct().Len())
+	// Output:
+	// 2
+}
+
+func ExampleDataFrame_DropNA() {
+	df := frame.NewDataFrameFromRecords([]map[string]any{
+		{"name": "Alice", "email": "alice@example.com"},
+		{"name": "Bob", "email": ""},
+		{"name": nil, "email": "cora@example.com"},
+	})
+
+	// A CSV has no null, so an empty string is missing too.
+	fmt.Println(df.DropNA().Len())
+	// Output:
+	// 1
+}
+
+func ExampleDataFrame_FillNA() {
+	df := frame.NewDataFrameFromRecords([]map[string]any{
+		{"task": "import", "owner": nil},
+		{"task": "review", "owner": ""},
+	})
+
+	rows := df.FillNA("unassigned").ToRecords()
+	fmt.Printf("%s %s\n", rows[0]["owner"], rows[1]["owner"])
+	// Output:
+	// unassigned unassigned
+}
+
+func ExampleDataFrame_Rename() {
+	df := frame.NewDataFrameFromRecords([]map[string]any{
+		{"name": "apple", "qty": 3},
+	})
+
+	renamed, err := df.Rename("qty", "units")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(renamed.Columns())
+
+	// A name the frame already carries is refused, since renaming onto it
+	// would drop a column.
+	_, err = df.Rename("qty", "name")
+	fmt.Println(err)
+	// Output:
+	// [name units]
+	// column "name" already exists
+}
+
+func ExampleDataFrame_ToRecords() {
+	df := frame.NewDataFrameFromRecords([]map[string]any{
+		{"product": "apple", "qty": int64(3)},
+	})
+
+	records := df.ToRecords()
+	fmt.Printf("%s %d\n", records[0]["product"], records[0]["qty"])
+	// Output:
+	// apple 3
+}
+
+func ExampleGroupedDataFrame_Mean() {
+	df := frame.NewDataFrameFromRecords([]map[string]any{
+		{"region": "east", "sales": 10},
+		{"region": "east", "sales": 20},
+		{"region": "west", "sales": 15},
+	})
+
+	grouped, err := df.GroupBy("region")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	means, err := grouped.Mean("sales")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	row := means.ToRecords()[0]
+	fmt.Printf("%s %.0f\n", row["region"], row["mean_sales"])
+	// Output:
+	// east 15
+}
+
+func ExampleRow_Int() {
+	df, err := frame.NewDataFrame(strings.NewReader("id,price,name\n1,4.50,apple\n"), frame.CSV)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// A frame stores values typed rather than as the text they were read from,
+	// so the accessors ask for the form the caller wants. Each reports false
+	// for a column that is absent, nil, or something it cannot represent,
+	// rather than handing back a zero.
+	row := frame.Row(df.ToRecords()[0])
+
+	id, okID := row.Int("id")
+	price, okPrice := row.Float("price")
+	name, okName := row.String("name")
+	_, okMissing := row.Int("qty")
+
+	fmt.Println(id, okID)
+	fmt.Println(price, okPrice)
+	fmt.Println(name, okName)
+	fmt.Println(okMissing)
+	// Output:
+	// 1 true
+	// 4.5 true
+	// apple true
+	// false
+}

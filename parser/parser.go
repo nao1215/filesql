@@ -517,14 +517,20 @@ const (
 	ExtXLSX    = ".xlsx"
 	ExtJSON    = ".json"
 	ExtJSONL   = ".jsonl"
-	ExtGZ      = ".gz"
-	ExtBZ2     = ".bz2"
-	ExtXZ      = ".xz"
-	ExtZSTD    = ".zst"
-	ExtZLIB    = ".z"
-	ExtSNAPPY  = ".snappy"
-	ExtS2      = ".s2"
-	ExtLZ4     = ".lz4"
+)
+
+// Compression extensions: ".gz", ".bz2", ".xz", ".zst", ".z", ".snappy", ".s2"
+// and ".lz4". Each is named by the codec that reads and writes it, so the two
+// spellings cannot drift apart.
+const (
+	ExtGZ     = codec.ExtGZ
+	ExtBZ2    = codec.ExtBZ2
+	ExtXZ     = codec.ExtXZ
+	ExtZSTD   = codec.ExtZSTD
+	ExtZLIB   = codec.ExtZLIB
+	ExtSNAPPY = codec.ExtSNAPPY
+	ExtS2     = codec.ExtS2
+	ExtLZ4    = codec.ExtLZ4
 )
 
 // Compression type identifiers

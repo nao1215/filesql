@@ -18,9 +18,7 @@ import (
 	"github.com/nao1215/filesql/parser"
 )
 
-// Open creates an SQL database from CSV, TSV, or LTSV files.
-//
-// Quick start:
+// Open creates an SQL database from the files at the given paths.
 //
 //	db, err := filesql.Open("data.csv")
 //	if err != nil {
@@ -30,142 +28,28 @@ import (
 //
 //	rows, err := db.Query("SELECT * FROM data WHERE age > 25")
 //
-// Parameters:
-//   - paths: One or more file paths or directories
-//   - Files: "users.csv", "products.tsv", "logs.ltsv"
-//   - Compressed: "data.csv.gz", "archive.tsv.bz2"
-//   - Directories: "/data/" (loads all CSV/TSV/LTSV files recursively)
+// A path is a file, a compressed file ("data.csv.gz", "archive.tsv.bz2"), or a
+// directory, which is loaded recursively.
 //
-// Table names:
-//   - "users.csv" → table "users"
-//   - "data.tsv.gz" → table "data"
-//   - "/path/to/sales.csv" → table "sales"
-//   - "user-data.csv" → table "user_data" (hyphens become underscores)
-//   - "my file.csv" → table "my_file" (spaces become underscores)
+// A file becomes a table named after it, with the extensions dropped and
+// characters SQL cannot hold in a bare identifier replaced by underscores:
+// "users.csv" and "data.tsv.gz" become "users" and "data", "user-data.csv"
+// becomes "user_data", and "my file.csv" becomes "my_file".
 //
-// Special characters in file names are automatically sanitized for SQL safety.
-//
-// Note: Original files are never modified. Changes exist only in memory.
-// To save changes, use DumpDatabase() function.
-//
-// Example with multiple files:
-//
-//	// Open a single CSV file
-//	db, err := filesql.Open("data/users.csv")
-//	if err != nil {
-//		log.Fatal(err)
-//	}
-//	defer db.Close()
-//
-//	// Complex query with JOINs, aggregation, and window functions
-//	rows, err := db.Query(`
-//		SELECT
-//			u.name,
-//			u.department,
-//			u.salary,
-//			AVG(u.salary) OVER (PARTITION BY u.department) as dept_avg_salary,
-//			RANK() OVER (PARTITION BY u.department ORDER BY u.salary DESC) as salary_rank,
-//			COUNT(*) OVER (PARTITION BY u.department) as dept_size
-//		FROM users u
-//		WHERE u.salary > (
-//			SELECT AVG(salary) * 0.8
-//			FROM users
-//			WHERE department = u.department
-//		)
-//		ORDER BY u.department, u.salary DESC
-//	`)
-//	if err != nil {
-//		log.Fatal(err)
-//	}
-//	defer rows.Close()
-//
-//	// Process results
-//	for rows.Next() {
-//		var name, dept string
-//		var salary, deptAvg float64
-//		var rank, deptSize int
-//		if err := rows.Scan(&name, &dept, &salary, &deptAvg, &rank, &deptSize); err != nil {
-//			log.Fatal(err)
-//		}
-//		fmt.Printf("%s (%s): $%.2f (Rank: %d/%d, Dept Avg: $%.2f)\n",
-//			name, dept, salary, rank, deptSize, deptAvg)
-//	}
+// The files are never modified. Changes live in the database until
+// DumpDatabase writes them out, or until an auto-save configured through
+// NewBuilder does.
 func Open(paths ...string) (*sql.DB, error) {
 	return OpenContext(context.Background(), paths...)
 }
 
-// OpenContext is like Open but accepts a context for cancellation and timeout control.
-//
-// Use this when you need to:
-//   - Set timeouts for loading large files
-//   - Support cancellation in server applications
-//   - Integrate with context-aware code
-//
-// Example with timeout:
-//
-//	// Open a single CSV file with timeout
-//	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-//	defer cancel()
-//	db, err := filesql.OpenContext(ctx, "data/users.csv")
-//	if err != nil {
-//		log.Fatal(err)
-//	}
-//	defer db.Close()
-//
-//	// Complex query with JOINs, aggregation, and window functions
-//	rows, err := db.QueryContext(ctx, `
-//		SELECT
-//			u.name,
-//			u.department,
-//			u.salary,
-//			AVG(u.salary) OVER (PARTITION BY u.department) as dept_avg_salary,
-//			RANK() OVER (PARTITION BY u.department ORDER BY u.salary DESC) as salary_rank,
-//			COUNT(*) OVER (PARTITION BY u.department) as dept_size
-//		FROM users u
-//		WHERE u.salary > (
-//			SELECT AVG(salary) * 0.8
-//			FROM users
-//			WHERE department = u.department
-//		)
-//		ORDER BY u.department, u.salary DESC
-//	`)
-//	if err != nil {
-//		log.Fatal(err)
-//	}
-//	defer rows.Close()
-//
-//	// Process results
-//	for rows.Next() {
-//		var name, dept string
-//		var salary, deptAvg float64
-//		var rank, deptSize int
-//		if err := rows.Scan(&name, &dept, &salary, &deptAvg, &rank, &deptSize); err != nil {
-//			log.Fatal(err)
-//		}
-//		fmt.Printf("%s (%s): $%.2f (Rank: %d/%d, Dept Avg: $%.2f)\n",
-//			name, dept, salary, rank, deptSize, deptAvg)
-//	}
-//
-// OpenContext creates an SQL database from CSV, TSV, or LTSV files with context support.
-//
-// This function is similar to Open() but allows cancellation and timeout control through context.
-// Table names are automatically generated from file names with special characters
-// sanitized for SQL safety (e.g., hyphens become underscores: "data-file.csv" → "data_file").
-//
-// Example:
+// OpenContext is Open with a context, for a load that has to time out or be
+// canceled: a large file, or a server that abandons the request.
 //
 //	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 //	defer cancel()
 //
 //	db, err := filesql.OpenContext(ctx, "large-dataset.csv")
-//	if err != nil {
-//		return err
-//	}
-//	defer db.Close()
-//
-// Parameters:
-//   - ctx: Context for cancellation and timeout control
-//   - paths: One or more file paths or directories to load
 func OpenContext(ctx context.Context, paths ...string) (*sql.DB, error) {
 	// Use builder pattern internally for backward compatibility
 	builder := NewBuilder().AddPaths(paths...)

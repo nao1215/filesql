@@ -382,26 +382,11 @@ func matchOpenParen(toks []token, closeIdx int) int {
 // topLevelComma returns the index of the first "," at depth 1 inside the call
 // whose parentheses are open..close, or -1 if there is none.
 func topLevelComma(toks []token, open, closeIdx int) int {
-	depth := 0
-	for j := open; j < closeIdx; j++ {
-		if !isSignificant(toks[j]) {
-			continue
-		}
-		if toks[j].kind != tokOp {
-			continue
-		}
-		switch toks[j].text {
-		case "(":
-			depth++
-		case ")":
-			depth--
-		case ",":
-			if depth == 1 {
-				return j
-			}
-		}
+	commas := topLevelCommas(toks, open, closeIdx)
+	if len(commas) == 0 {
+		return -1
 	}
-	return -1
+	return commas[0]
 }
 
 // rewriteRoundCall routes the two-argument ROUND onto the helper that honors a

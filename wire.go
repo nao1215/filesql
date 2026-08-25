@@ -70,44 +70,7 @@ func streamWireFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, fi
 		return err
 	}
 
-	for _, t := range tables {
-		// Check if table already exists, folding ASCII case the way SQLite does
-		// when it matches identifiers.
-		var tableExists int
-		err := db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ? COLLATE NOCASE`,
-			t.getName(),
-		).Scan(&tableExists)
-		if err != nil {
-			return fmt.Errorf("%w: failed to check table existence: %w", ErrDatabaseOperation, err)
-		}
-
-		if tableExists > 0 {
-			if !replaceExisting {
-				return fmt.Errorf("%w: table '%s' already exists", ErrDuplicateTable, t.getName())
-			}
-			// Replace mode: drop the old table so the reloaded file's tables win.
-			if _, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS "`+t.getName()+`"`); err != nil {
-				return fmt.Errorf("%w: failed to drop existing table %s: %w", ErrDatabaseOperation, t.getName(), err)
-			}
-		}
-
-		// Create table
-		if err := createTable(ctx, db, t.getName(), t.columnInfo); err != nil {
-			return fmt.Errorf("%w: failed to create table %s: %w", ErrDatabaseOperation, t.getName(), err)
-		}
-
-		// Insert records
-		if len(t.records) > 0 {
-			if err := insertRecordsIntoTable(ctx, db, t.getName(), t.header, t.records); err != nil {
-				return fmt.Errorf("%w: failed to insert records into %s: %w", ErrDatabaseOperation, t.getName(), err)
-			}
-		}
-	}
-
-	// The source is recorded on the same DBTX as the tables, so a rolled-back
-	// load leaves neither behind.
-	return recordFileSource(ctx, db, baseTableName, sourcePath, sourceFormatFedWire)
+	return loadParsedTablesIntoDatabase(ctx, db, tables, baseTableName, sourcePath, sourceFormatFedWire, replaceExisting)
 }
 
 // DumpFedWire exports Fedwire tables from the database back to a Fedwire file.
