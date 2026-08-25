@@ -269,10 +269,20 @@ func retryWhileLocked(ctx context.Context, step func() error) error {
 	deadline := time.Now().Add(loadLockBudget)
 	for wait := loadLockFloor; ; {
 		err := step()
-		if err == nil || !lockedByAnotherConnection(err) || !time.Now().Before(deadline) {
+		if err == nil || !lockedByAnotherConnection(err) {
 			return err
 		}
-		timer := time.NewTimer(wait/2 + rand.N(wait/2+1)) //nolint:gosec // Jitter, not a secret
+		// The wait is cut to what is left of the budget, so the last attempt
+		// happens inside it rather than just past it.
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return err
+		}
+		delay := wait/2 + rand.N(wait/2+1) //nolint:gosec // Jitter, not a secret
+		if delay > remaining {
+			delay = remaining
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
