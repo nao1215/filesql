@@ -1540,22 +1540,28 @@ func (df *DataFrame) Rename(oldName, newName string) (*DataFrame, error) {
 		return nil, fmt.Errorf("column %q already exists", newName)
 	}
 
-	// Build new column list
+	return df.renamed(map[string]string{oldName: newName}), nil
+}
+
+// renamed returns a copy of df with every column the map names carrying its new
+// name, in both the column list and each row. It is the rebuild Rename and
+// RenameColumns share; the caller has already decided the renames are legal,
+// which is where the two differ.
+func (df *DataFrame) renamed(renames map[string]string) *DataFrame {
 	newColumns := make([]string, len(df.columns))
 	for i, col := range df.columns {
-		if col == oldName {
+		if newName, ok := renames[col]; ok {
 			newColumns[i] = newName
 		} else {
 			newColumns[i] = col
 		}
 	}
 
-	// Build new rows with renamed column
 	newRows := make([]map[string]any, len(df.rows))
 	for i, row := range df.rows {
 		newRow := make(map[string]any, len(row))
 		for k, v := range row {
-			if k == oldName {
+			if newName, ok := renames[k]; ok {
 				newRow[newName] = v
 			} else {
 				newRow[k] = v
@@ -1567,7 +1573,7 @@ func (df *DataFrame) Rename(oldName, newName string) (*DataFrame, error) {
 	return &DataFrame{
 		columns: newColumns,
 		rows:    newRows,
-	}, nil
+	}
 }
 
 // RenameColumns returns a new DataFrame with multiple columns renamed.
@@ -1607,34 +1613,7 @@ func (df *DataFrame) RenameColumns(renames map[string]string) (*DataFrame, error
 		}
 	}
 
-	// Build new column list
-	newColumns := make([]string, len(df.columns))
-	for i, col := range df.columns {
-		if newName, ok := renames[col]; ok {
-			newColumns[i] = newName
-		} else {
-			newColumns[i] = col
-		}
-	}
-
-	// Build new rows with renamed columns
-	newRows := make([]map[string]any, len(df.rows))
-	for i, row := range df.rows {
-		newRow := make(map[string]any, len(row))
-		for k, v := range row {
-			if newName, ok := renames[k]; ok {
-				newRow[newName] = v
-			} else {
-				newRow[k] = v
-			}
-		}
-		newRows[i] = newRow
-	}
-
-	return &DataFrame{
-		columns: newColumns,
-		rows:    newRows,
-	}, nil
+	return df.renamed(renames), nil
 }
 
 // isNA reports whether a value is missing.
