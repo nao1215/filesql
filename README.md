@@ -410,7 +410,9 @@ Chunk size changes when rows reach the database, not what reaches it. A column's
 
 The `*sql.DB` returned by `Open` and `OpenContext` is safe to share across goroutines. filesql uses a shared-cache in-memory SQLite database so pooled connections can see the same tables. Auto-save does not change that: with `EnableAutoSave` the save runs once, when `Close` returns, and with `EnableAutoSaveOnCommit` the saves run one at a time, so committing from several goroutines is safe.
 
-Loading is the exception. `LoadInto`, `DBBuilder.LoadInto` and `LoadIntoTx` create tables, and creating one takes a schema lock: two loads into the same database at the same time leave one of them reporting `database schema is locked`, with its table not created. Load from one goroutine, or hold your own lock around the load, and share the database for queries once it is loaded.
+Loading into one database from several goroutines works. Creating a table takes a write lock, and SQLite refuses a second holder rather than queueing it, so a load that meets another load's lock waits it out and starts over, for up to five seconds before it gives the database's own error back. Paths and directories are covered whatever database they load into. A reader passed to `AddReader` is not fully covered, because starting over would have nothing left to read: only the steps before the reading are tried again, which is enough for a database this package opened and not always enough for a file database. `LoadIntoTx` is not retried at all — the transaction is yours, and one transaction belongs to one goroutine.
+
+A `DBBuilder` is not safe to share across goroutines; the database is. Build one per goroutine.
 
 `LoadInto` is different: you own the database and pool settings there. If you use `sql.Open("sqlite", ":memory:")`, keep `SetMaxOpenConns(1)` so every query hits the same in-memory database.
 
