@@ -359,6 +359,38 @@ func ExampleProcessor_Process_defaultForAbsentColumn() {
 // which reads the cells as the field it lands on says they are: the dates are
 // strings and compare as text, so the range runs forwards, while the quantities
 // are numbers and compare as numbers, so 007 is not more than 7.
+func ExampleProcessor_Process_conditionalRequired() {
+	type order struct {
+		// Required when both other columns hold the value named beside them.
+		Invoice string `validate:"required_if=Kind paid Tier 'gold member'"`
+		// Required as soon as either named column holds a value.
+		Address string `validate:"required_with=City Zip"`
+		Kind    string
+		Tier    string
+		City    string
+		Zip     string
+	}
+
+	var rows []order
+	_, result, err := prep.NewProcessor(prep.FileTypeCSV).Process(strings.NewReader(
+		"invoice,address,kind,tier,city,zip\n"+
+			",,paid,gold member,,\n"+
+			",,paid,silver,Kyoto,\n"+
+			"INV-1,1 Main St,paid,gold member,Kyoto,600-8216\n"), &rows)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(result.ValidRowCount)
+	for _, e := range result.ValidationErrors() {
+		fmt.Printf("row %d: %s %s\n", e.Row, e.Column, e.Message)
+	}
+	// Output:
+	// 1
+	// row 1: invoice value is required when Kind is paid and Tier is gold member
+	// row 2: address value is required when City or Zip is present
+}
+
 func ExampleProcessor_Process_crossField() {
 	type shipment struct {
 		ShippedOn string `validate:"ltfield=DueOn"`

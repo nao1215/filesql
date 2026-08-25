@@ -8,13 +8,19 @@ import (
 
 // crossFieldValidator defines the interface for validators that compare values across fields
 type crossFieldValidator interface {
-	// Validate checks if the source value is valid compared to the target value
-	// Returns empty string if validation passes, error message otherwise
-	Validate(srcValue, targetValue string) string
+	// Validate checks the source value against the values of the fields named
+	// by TargetFields, in that order. It returns an empty string when the row
+	// passes and an error message otherwise.
+	Validate(srcValue string, targetValues []string) string
 	// Name returns the name of the validator for error reporting
 	Name() string
-	// TargetField returns the name of the field to compare against
-	TargetField() string
+	// TargetFields returns the names of the fields to compare against
+	TargetFields() []string
+	// decidesPresence reports whether the tag exists to say when an empty cell
+	// is allowed. Those tags run on every row; the rest follow the rule that an
+	// empty cell passes every validator but required, so they are skipped as
+	// soon as either side of the comparison is missing.
+	decidesPresence() bool
 }
 
 // crossFieldValidators is a slice of crossFieldValidator
@@ -22,16 +28,51 @@ type crossFieldValidators []crossFieldValidator
 
 // baseCrossFieldValidator contains common fields for cross-field validators
 type baseCrossFieldValidator struct {
-	targetField string
+	targetFields []string
 	// comparesText makes a comparison read the two cells as the text they are.
 	// It follows the kind of field the tag lands on; see specializeCrossField.
 	// Only the six comparison tags set it — the rest read text either way.
 	comparesText bool
 }
 
-// TargetField returns the name of the field to compare against
-func (b *baseCrossFieldValidator) TargetField() string {
-	return b.targetField
+// TargetFields returns the names of the fields to compare against
+func (b *baseCrossFieldValidator) TargetFields() []string {
+	return b.targetFields
+}
+
+// decidesPresence answers for every tag that compares values rather than
+// deciding whether an empty cell is allowed.
+func (b *baseCrossFieldValidator) decidesPresence() bool {
+	return false
+}
+
+// firstTarget names the single field a comparison tag takes, for its message.
+func (b *baseCrossFieldValidator) firstTarget() string {
+	if len(b.targetFields) == 0 {
+		return ""
+	}
+	return b.targetFields[0]
+}
+
+// presenceCrossFieldValidator is the base of the tags that decide whether an
+// empty cell is allowed. They run on every row, including the rows where the
+// cell they guard is empty, which is the only row where they have anything to
+// say.
+type presenceCrossFieldValidator struct {
+	baseCrossFieldValidator
+}
+
+// decidesPresence reports that this family runs on an empty cell.
+func (p *presenceCrossFieldValidator) decidesPresence() bool {
+	return true
+}
+
+// singleTarget returns the one value a comparison tag compares against.
+func singleTarget(targetValues []string) string {
+	if len(targetValues) == 0 {
+		return ""
+	}
+	return targetValues[0]
 }
 
 // compare orders the two cells: negative when the source sorts first, zero when
@@ -78,6 +119,11 @@ func specializeCrossField(vals crossFieldValidators, isString bool) {
 	}
 }
 
+// newBaseCrossField builds the base a single-target comparison tag needs.
+func newBaseCrossField(targetField string) baseCrossFieldValidator {
+	return baseCrossFieldValidator{targetFields: []string{targetField}}
+}
+
 // =====================================
 // eqFieldValidator - Equal to another field
 // =====================================
@@ -88,13 +134,13 @@ type eqFieldValidator struct {
 
 // newEqFieldValidator creates a new equal field validator
 func newEqFieldValidator(targetField string) *eqFieldValidator {
-	return &eqFieldValidator{baseCrossFieldValidator{targetField: targetField}}
+	return &eqFieldValidator{newBaseCrossField(targetField)}
 }
 
 // Validate checks if the source value equals the target value
-func (v *eqFieldValidator) Validate(srcValue, targetValue string) string {
-	if v.compare(srcValue, targetValue) != 0 {
-		return "value must equal field " + v.targetField
+func (v *eqFieldValidator) Validate(srcValue string, targetValues []string) string {
+	if v.compare(srcValue, singleTarget(targetValues)) != 0 {
+		return "value must equal field " + v.firstTarget()
 	}
 	return ""
 }
@@ -114,13 +160,13 @@ type neFieldValidator struct {
 
 // newNeFieldValidator creates a new not equal field validator
 func newNeFieldValidator(targetField string) *neFieldValidator {
-	return &neFieldValidator{baseCrossFieldValidator{targetField: targetField}}
+	return &neFieldValidator{newBaseCrossField(targetField)}
 }
 
 // Validate checks if the source value does not equal the target value
-func (v *neFieldValidator) Validate(srcValue, targetValue string) string {
-	if v.compare(srcValue, targetValue) == 0 {
-		return "value must not equal field " + v.targetField
+func (v *neFieldValidator) Validate(srcValue string, targetValues []string) string {
+	if v.compare(srcValue, singleTarget(targetValues)) == 0 {
+		return "value must not equal field " + v.firstTarget()
 	}
 	return ""
 }
@@ -140,13 +186,13 @@ type gtFieldValidator struct {
 
 // newGtFieldValidator creates a new greater than field validator
 func newGtFieldValidator(targetField string) *gtFieldValidator {
-	return &gtFieldValidator{baseCrossFieldValidator{targetField: targetField}}
+	return &gtFieldValidator{newBaseCrossField(targetField)}
 }
 
 // Validate checks if the source value is greater than the target value
-func (v *gtFieldValidator) Validate(srcValue, targetValue string) string {
-	if v.compare(srcValue, targetValue) <= 0 {
-		return "value must be greater than field " + v.targetField
+func (v *gtFieldValidator) Validate(srcValue string, targetValues []string) string {
+	if v.compare(srcValue, singleTarget(targetValues)) <= 0 {
+		return "value must be greater than field " + v.firstTarget()
 	}
 	return ""
 }
@@ -166,13 +212,13 @@ type gteFieldValidator struct {
 
 // newGteFieldValidator creates a new greater than or equal field validator
 func newGteFieldValidator(targetField string) *gteFieldValidator {
-	return &gteFieldValidator{baseCrossFieldValidator{targetField: targetField}}
+	return &gteFieldValidator{newBaseCrossField(targetField)}
 }
 
 // Validate checks if the source value is greater than or equal to the target value
-func (v *gteFieldValidator) Validate(srcValue, targetValue string) string {
-	if v.compare(srcValue, targetValue) < 0 {
-		return "value must be greater than or equal to field " + v.targetField
+func (v *gteFieldValidator) Validate(srcValue string, targetValues []string) string {
+	if v.compare(srcValue, singleTarget(targetValues)) < 0 {
+		return "value must be greater than or equal to field " + v.firstTarget()
 	}
 	return ""
 }
@@ -192,13 +238,13 @@ type ltFieldValidator struct {
 
 // newLtFieldValidator creates a new less than field validator
 func newLtFieldValidator(targetField string) *ltFieldValidator {
-	return &ltFieldValidator{baseCrossFieldValidator{targetField: targetField}}
+	return &ltFieldValidator{newBaseCrossField(targetField)}
 }
 
 // Validate checks if the source value is less than the target value
-func (v *ltFieldValidator) Validate(srcValue, targetValue string) string {
-	if v.compare(srcValue, targetValue) >= 0 {
-		return "value must be less than field " + v.targetField
+func (v *ltFieldValidator) Validate(srcValue string, targetValues []string) string {
+	if v.compare(srcValue, singleTarget(targetValues)) >= 0 {
+		return "value must be less than field " + v.firstTarget()
 	}
 	return ""
 }
@@ -218,13 +264,13 @@ type lteFieldValidator struct {
 
 // newLteFieldValidator creates a new less than or equal field validator
 func newLteFieldValidator(targetField string) *lteFieldValidator {
-	return &lteFieldValidator{baseCrossFieldValidator{targetField: targetField}}
+	return &lteFieldValidator{newBaseCrossField(targetField)}
 }
 
 // Validate checks if the source value is less than or equal to the target value
-func (v *lteFieldValidator) Validate(srcValue, targetValue string) string {
-	if v.compare(srcValue, targetValue) > 0 {
-		return "value must be less than or equal to field " + v.targetField
+func (v *lteFieldValidator) Validate(srcValue string, targetValues []string) string {
+	if v.compare(srcValue, singleTarget(targetValues)) > 0 {
+		return "value must be less than or equal to field " + v.firstTarget()
 	}
 	return ""
 }
@@ -244,13 +290,13 @@ type fieldContainsValidator struct {
 
 // newFieldContainsValidator creates a new field contains validator
 func newFieldContainsValidator(targetField string) *fieldContainsValidator {
-	return &fieldContainsValidator{baseCrossFieldValidator{targetField: targetField}}
+	return &fieldContainsValidator{newBaseCrossField(targetField)}
 }
 
 // Validate checks if the source value contains the target value
-func (v *fieldContainsValidator) Validate(srcValue, targetValue string) string {
-	if !strings.Contains(srcValue, targetValue) {
-		return "value must contain field " + v.targetField + " value"
+func (v *fieldContainsValidator) Validate(srcValue string, targetValues []string) string {
+	if !strings.Contains(srcValue, singleTarget(targetValues)) {
+		return "value must contain field " + v.firstTarget() + " value"
 	}
 	return ""
 }
@@ -270,13 +316,13 @@ type fieldExcludesValidator struct {
 
 // newFieldExcludesValidator creates a new field excludes validator
 func newFieldExcludesValidator(targetField string) *fieldExcludesValidator {
-	return &fieldExcludesValidator{baseCrossFieldValidator{targetField: targetField}}
+	return &fieldExcludesValidator{newBaseCrossField(targetField)}
 }
 
 // Validate checks if the source value does not contain the target value
-func (v *fieldExcludesValidator) Validate(srcValue, targetValue string) string {
-	if strings.Contains(srcValue, targetValue) {
-		return "value must not contain field " + v.targetField + " value"
+func (v *fieldExcludesValidator) Validate(srcValue string, targetValues []string) string {
+	if strings.Contains(srcValue, singleTarget(targetValues)) {
+		return "value must not contain field " + v.firstTarget() + " value"
 	}
 	return ""
 }
@@ -287,29 +333,101 @@ func (v *fieldExcludesValidator) Name() string {
 }
 
 // =====================================
-// requiredIfValidator - Required if another field equals a specific value
+// Conditional required validators
 // =====================================
 
-// requiredIfValidator validates that a field is required when another field has a specific value
-type requiredIfValidator struct {
-	baseCrossFieldValidator
-	expectedValue string
+// The two words an error message joins a list of fields with: "and" when every
+// one of them takes part, "or" when any one of them is enough.
+const (
+	joinerAnd = "and"
+	joinerOr  = "or"
+)
+
+// fieldCondition pairs a field name with the value that field must hold for the
+// condition to count as met.
+type fieldCondition struct {
+	field    string
+	expected string
 }
 
-// newRequiredIfValidator creates a new required_if validator
-// targetField is the field name, expectedValue is the value that triggers the requirement
-func newRequiredIfValidator(targetField, expectedValue string) *requiredIfValidator {
+// fieldNames returns the field names the conditions name, in order.
+func fieldNames(conditions []fieldCondition) []string {
+	names := make([]string, len(conditions))
+	for i, c := range conditions {
+		names[i] = c.field
+	}
+	return names
+}
+
+// describeConditions spells the conditions the way the error message reads
+// them, joined by the word the tag's rule uses.
+func describeConditions(conditions []fieldCondition, joiner string) string {
+	parts := make([]string, len(conditions))
+	for i, c := range conditions {
+		parts[i] = c.field + " is " + c.expected
+	}
+	return strings.Join(parts, " "+joiner+" ")
+}
+
+// describeFields spells a list of field names with the verb that agrees with
+// it: "A or B is present" reads of either one, "A and B are present" reads of
+// both together, and one field alone keeps the message this package has always
+// produced.
+func describeFields(names []string, joiner string) (string, string) {
+	verb := "is"
+	if len(names) > 1 && joiner == joinerAnd {
+		verb = "are"
+	}
+	return strings.Join(names, " "+joiner+" "), verb
+}
+
+// joinerFor names the word a rule over a list of fields reads with.
+func joinerFor(all bool) string {
+	if all {
+		return joinerAnd
+	}
+	return joinerOr
+}
+
+// conditionsMet reports whether every condition, or any one of them, is met by
+// the row's values, which arrive in the order the conditions name their fields.
+func conditionsMet(conditions []fieldCondition, values []string, all bool) bool {
+	if len(conditions) == 0 || len(values) != len(conditions) {
+		return false
+	}
+	for i, c := range conditions {
+		if (values[i] == c.expected) != all {
+			return !all
+		}
+	}
+	return all
+}
+
+// requiredIfValidator validates that a field is required when every named field
+// holds the value paired with it.
+type requiredIfValidator struct {
+	presenceCrossFieldValidator
+	conditions []fieldCondition
+}
+
+// newRequiredIfValidator creates a new required_if validator from the field and
+// value pairs the tag names.
+func newRequiredIfValidator(conditions []fieldCondition) *requiredIfValidator {
 	return &requiredIfValidator{
-		baseCrossFieldValidator: baseCrossFieldValidator{targetField: targetField},
-		expectedValue:           expectedValue,
+		presenceCrossFieldValidator: presenceCrossFieldValidator{
+			baseCrossFieldValidator{targetFields: fieldNames(conditions)},
+		},
+		conditions: conditions,
 	}
 }
 
-// Validate checks if the source value is present when target field equals expected value
-func (v *requiredIfValidator) Validate(srcValue, targetValue string) string {
-	// If target field equals expected value, source field is required
-	if targetValue == v.expectedValue && srcValue == "" {
-		return "value is required when " + v.targetField + " is " + v.expectedValue
+// Validate checks if the source value is present when every condition holds
+func (v *requiredIfValidator) Validate(srcValue string, targetValues []string) string {
+	if !conditionsMet(v.conditions, targetValues, true) {
+		return ""
+	}
+	if srcValue == "" {
+		return "value is required when " + describeConditions(v.conditions, joinerAnd)
 	}
 	return ""
 }
@@ -319,30 +437,31 @@ func (v *requiredIfValidator) Name() string {
 	return requiredIfTagValue
 }
 
-// =====================================
-// requiredUnlessValidator - Required unless another field equals a specific value
-// =====================================
-
-// requiredUnlessValidator validates that a field is required unless another field has a specific value
+// requiredUnlessValidator validates that a field is required unless at least
+// one named field holds the value paired with it.
 type requiredUnlessValidator struct {
-	baseCrossFieldValidator
-	exceptValue string
+	presenceCrossFieldValidator
+	conditions []fieldCondition
 }
 
-// newRequiredUnlessValidator creates a new required_unless validator
-// targetField is the field name, exceptValue is the value that exempts the requirement
-func newRequiredUnlessValidator(targetField, exceptValue string) *requiredUnlessValidator {
+// newRequiredUnlessValidator creates a new required_unless validator from the
+// field and value pairs the tag names.
+func newRequiredUnlessValidator(conditions []fieldCondition) *requiredUnlessValidator {
 	return &requiredUnlessValidator{
-		baseCrossFieldValidator: baseCrossFieldValidator{targetField: targetField},
-		exceptValue:             exceptValue,
+		presenceCrossFieldValidator: presenceCrossFieldValidator{
+			baseCrossFieldValidator{targetFields: fieldNames(conditions)},
+		},
+		conditions: conditions,
 	}
 }
 
-// Validate checks if the source value is present unless target field equals except value
-func (v *requiredUnlessValidator) Validate(srcValue, targetValue string) string {
-	// If target field does NOT equal except value, source field is required
-	if targetValue != v.exceptValue && srcValue == "" {
-		return "value is required unless " + v.targetField + " is " + v.exceptValue
+// Validate checks if the source value is present unless one condition holds
+func (v *requiredUnlessValidator) Validate(srcValue string, targetValues []string) string {
+	if conditionsMet(v.conditions, targetValues, false) {
+		return ""
+	}
+	if srcValue == "" {
+		return "value is required unless " + describeConditions(v.conditions, joinerOr)
 	}
 	return ""
 }
@@ -352,58 +471,93 @@ func (v *requiredUnlessValidator) Name() string {
 	return requiredUnlessTagValue
 }
 
-// =====================================
-// requiredWithValidator - Required if another field is present (non-empty)
-// =====================================
-
-// requiredWithValidator validates that a field is required when another field is present
+// requiredWithValidator validates that a field is required when the named
+// fields carry values. all decides whether every named field must carry one or
+// whether any of them is enough.
 type requiredWithValidator struct {
-	baseCrossFieldValidator
+	presenceCrossFieldValidator
+	all bool
 }
 
 // newRequiredWithValidator creates a new required_with validator
-func newRequiredWithValidator(targetField string) *requiredWithValidator {
-	return &requiredWithValidator{baseCrossFieldValidator{targetField: targetField}}
+func newRequiredWithValidator(targetFields []string, all bool) *requiredWithValidator {
+	return &requiredWithValidator{
+		presenceCrossFieldValidator: presenceCrossFieldValidator{
+			baseCrossFieldValidator{targetFields: targetFields},
+		},
+		all: all,
+	}
 }
 
-// Validate checks if the source value is present when target field is non-empty
-func (v *requiredWithValidator) Validate(srcValue, targetValue string) string {
-	// If target field is present (non-empty), source field is required
-	if targetValue != "" && srcValue == "" {
-		return "value is required when " + v.targetField + " is present"
+// Validate checks if the source value is present when the named fields are
+func (v *requiredWithValidator) Validate(srcValue string, targetValues []string) string {
+	if !fires(targetValues, v.all, func(value string) bool { return value != "" }) {
+		return ""
+	}
+	if srcValue == "" {
+		names, verb := describeFields(v.targetFields, joinerFor(v.all))
+		return "value is required when " + names + " " + verb + " present"
 	}
 	return ""
 }
 
 // Name returns the validator name
 func (v *requiredWithValidator) Name() string {
+	if v.all {
+		return requiredWithAllTagValue
+	}
 	return requiredWithTagValue
 }
 
-// =====================================
-// requiredWithoutValidator - Required if another field is absent (empty)
-// =====================================
-
-// requiredWithoutValidator validates that a field is required when another field is absent
+// requiredWithoutValidator validates that a field is required when the named
+// fields are empty. all decides whether every named field must be empty or
+// whether any of them is enough.
 type requiredWithoutValidator struct {
-	baseCrossFieldValidator
+	presenceCrossFieldValidator
+	all bool
 }
 
 // newRequiredWithoutValidator creates a new required_without validator
-func newRequiredWithoutValidator(targetField string) *requiredWithoutValidator {
-	return &requiredWithoutValidator{baseCrossFieldValidator{targetField: targetField}}
+func newRequiredWithoutValidator(targetFields []string, all bool) *requiredWithoutValidator {
+	return &requiredWithoutValidator{
+		presenceCrossFieldValidator: presenceCrossFieldValidator{
+			baseCrossFieldValidator{targetFields: targetFields},
+		},
+		all: all,
+	}
 }
 
-// Validate checks if the source value is present when target field is empty
-func (v *requiredWithoutValidator) Validate(srcValue, targetValue string) string {
-	// If target field is absent (empty), source field is required
-	if targetValue == "" && srcValue == "" {
-		return "value is required when " + v.targetField + " is absent"
+// Validate checks if the source value is present when the named fields are not
+func (v *requiredWithoutValidator) Validate(srcValue string, targetValues []string) string {
+	if !fires(targetValues, v.all, func(value string) bool { return value == "" }) {
+		return ""
+	}
+	if srcValue == "" {
+		names, verb := describeFields(v.targetFields, joinerFor(v.all))
+		return "value is required when " + names + " " + verb + " absent"
 	}
 	return ""
 }
 
 // Name returns the validator name
 func (v *requiredWithoutValidator) Name() string {
+	if v.all {
+		return requiredWithoutAllTagValue
+	}
 	return requiredWithoutTagValue
+}
+
+// fires reports whether the values satisfy holds, either all of them or any of
+// them. An empty list never fires, since a tag that names no field asks for
+// nothing.
+func fires(values []string, all bool, holds func(string) bool) bool {
+	if len(values) == 0 {
+		return false
+	}
+	for _, value := range values {
+		if holds(value) != all {
+			return !all
+		}
+	}
+	return all
 }

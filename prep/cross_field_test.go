@@ -51,15 +51,15 @@ func TestEqFieldValidator(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			v := newEqFieldValidator(tt.targetField)
-			got := v.Validate(tt.srcValue, tt.targetValue)
+			got := v.Validate(tt.srcValue, []string{tt.targetValue})
 			if (got != "") != tt.wantErr {
 				t.Errorf("eqFieldValidator.Validate() = %q, wantErr %v", got, tt.wantErr)
 			}
 			if v.Name() != eqFieldTagValue {
 				t.Errorf("eqFieldValidator.Name() = %q, want %q", v.Name(), eqFieldTagValue)
 			}
-			if v.TargetField() != tt.targetField {
-				t.Errorf("eqFieldValidator.TargetField() = %q, want %q", v.TargetField(), tt.targetField)
+			if v.TargetFields()[0] != tt.targetField {
+				t.Errorf("eqFieldValidator.TargetField() = %q, want %q", v.TargetFields()[0], tt.targetField)
 			}
 		})
 	}
@@ -102,7 +102,7 @@ func TestNeFieldValidator(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			v := newNeFieldValidator(tt.targetField)
-			got := v.Validate(tt.srcValue, tt.targetValue)
+			got := v.Validate(tt.srcValue, []string{tt.targetValue})
 			if (got != "") != tt.wantErr {
 				t.Errorf("neFieldValidator.Validate() = %q, wantErr %v", got, tt.wantErr)
 			}
@@ -171,7 +171,7 @@ func TestGtFieldValidator(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			v := newGtFieldValidator(tt.targetField)
-			got := v.Validate(tt.srcValue, tt.targetValue)
+			got := v.Validate(tt.srcValue, []string{tt.targetValue})
 			if (got != "") != tt.wantErr {
 				t.Errorf("gtFieldValidator.Validate() = %q, wantErr %v", got, tt.wantErr)
 			}
@@ -226,7 +226,7 @@ func TestGteFieldValidator(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			v := newGteFieldValidator(tt.targetField)
-			got := v.Validate(tt.srcValue, tt.targetValue)
+			got := v.Validate(tt.srcValue, []string{tt.targetValue})
 			if (got != "") != tt.wantErr {
 				t.Errorf("gteFieldValidator.Validate() = %q, wantErr %v", got, tt.wantErr)
 			}
@@ -281,7 +281,7 @@ func TestLtFieldValidator(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			v := newLtFieldValidator(tt.targetField)
-			got := v.Validate(tt.srcValue, tt.targetValue)
+			got := v.Validate(tt.srcValue, []string{tt.targetValue})
 			if (got != "") != tt.wantErr {
 				t.Errorf("ltFieldValidator.Validate() = %q, wantErr %v", got, tt.wantErr)
 			}
@@ -329,7 +329,7 @@ func TestLteFieldValidator(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			v := newLteFieldValidator(tt.targetField)
-			got := v.Validate(tt.srcValue, tt.targetValue)
+			got := v.Validate(tt.srcValue, []string{tt.targetValue})
 			if (got != "") != tt.wantErr {
 				t.Errorf("lteFieldValidator.Validate() = %q, wantErr %v", got, tt.wantErr)
 			}
@@ -384,7 +384,7 @@ func TestFieldContainsValidator(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			v := newFieldContainsValidator(tt.targetField)
-			got := v.Validate(tt.srcValue, tt.targetValue)
+			got := v.Validate(tt.srcValue, []string{tt.targetValue})
 			if (got != "") != tt.wantErr {
 				t.Errorf("fieldContainsValidator.Validate() = %q, wantErr %v", got, tt.wantErr)
 			}
@@ -432,7 +432,7 @@ func TestFieldExcludesValidator(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			v := newFieldExcludesValidator(tt.targetField)
-			got := v.Validate(tt.srcValue, tt.targetValue)
+			got := v.Validate(tt.srcValue, []string{tt.targetValue})
 			if (got != "") != tt.wantErr {
 				t.Errorf("fieldExcludesValidator.Validate() = %q, wantErr %v", got, tt.wantErr)
 			}
@@ -491,16 +491,16 @@ func TestRequiredIfValidator(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			v := newRequiredIfValidator(tt.targetField, tt.expectedValue)
-			got := v.Validate(tt.srcValue, tt.targetValue)
+			v := newRequiredIfValidator([]fieldCondition{{field: tt.targetField, expected: tt.expectedValue}})
+			got := v.Validate(tt.srcValue, []string{tt.targetValue})
 			if (got != "") != tt.wantErr {
 				t.Errorf("requiredIfValidator.Validate() = %q, wantErr %v", got, tt.wantErr)
 			}
 			if v.Name() != requiredIfTagValue {
 				t.Errorf("requiredIfValidator.Name() = %q, want %q", v.Name(), requiredIfTagValue)
 			}
-			if v.TargetField() != tt.targetField {
-				t.Errorf("requiredIfValidator.TargetField() = %q, want %q", v.TargetField(), tt.targetField)
+			if v.TargetFields()[0] != tt.targetField {
+				t.Errorf("requiredIfValidator.TargetField() = %q, want %q", v.TargetFields()[0], tt.targetField)
 			}
 		})
 	}
@@ -546,16 +546,16 @@ func TestRequiredUnlessValidator(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			v := newRequiredUnlessValidator(tt.targetField, tt.exceptValue)
-			got := v.Validate(tt.srcValue, tt.targetValue)
+			v := newRequiredUnlessValidator([]fieldCondition{{field: tt.targetField, expected: tt.exceptValue}})
+			got := v.Validate(tt.srcValue, []string{tt.targetValue})
 			if (got != "") != tt.wantErr {
 				t.Errorf("requiredUnlessValidator.Validate() = %q, wantErr %v", got, tt.wantErr)
 			}
 			if v.Name() != requiredUnlessTagValue {
 				t.Errorf("requiredUnlessValidator.Name() = %q, want %q", v.Name(), requiredUnlessTagValue)
 			}
-			if v.TargetField() != tt.targetField {
-				t.Errorf("requiredUnlessValidator.TargetField() = %q, want %q", v.TargetField(), tt.targetField)
+			if v.TargetFields()[0] != tt.targetField {
+				t.Errorf("requiredUnlessValidator.TargetField() = %q, want %q", v.TargetFields()[0], tt.targetField)
 			}
 		})
 	}
@@ -597,16 +597,16 @@ func TestRequiredWithValidator(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			v := newRequiredWithValidator(tt.targetField)
-			got := v.Validate(tt.srcValue, tt.targetValue)
+			v := newRequiredWithValidator([]string{tt.targetField}, false)
+			got := v.Validate(tt.srcValue, []string{tt.targetValue})
 			if (got != "") != tt.wantErr {
 				t.Errorf("requiredWithValidator.Validate() = %q, wantErr %v", got, tt.wantErr)
 			}
 			if v.Name() != requiredWithTagValue {
 				t.Errorf("requiredWithValidator.Name() = %q, want %q", v.Name(), requiredWithTagValue)
 			}
-			if v.TargetField() != tt.targetField {
-				t.Errorf("requiredWithValidator.TargetField() = %q, want %q", v.TargetField(), tt.targetField)
+			if v.TargetFields()[0] != tt.targetField {
+				t.Errorf("requiredWithValidator.TargetField() = %q, want %q", v.TargetFields()[0], tt.targetField)
 			}
 		})
 	}
@@ -648,16 +648,16 @@ func TestRequiredWithoutValidator(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			v := newRequiredWithoutValidator(tt.targetField)
-			got := v.Validate(tt.srcValue, tt.targetValue)
+			v := newRequiredWithoutValidator([]string{tt.targetField}, false)
+			got := v.Validate(tt.srcValue, []string{tt.targetValue})
 			if (got != "") != tt.wantErr {
 				t.Errorf("requiredWithoutValidator.Validate() = %q, wantErr %v", got, tt.wantErr)
 			}
 			if v.Name() != requiredWithoutTagValue {
 				t.Errorf("requiredWithoutValidator.Name() = %q, want %q", v.Name(), requiredWithoutTagValue)
 			}
-			if v.TargetField() != tt.targetField {
-				t.Errorf("requiredWithoutValidator.TargetField() = %q, want %q", v.TargetField(), tt.targetField)
+			if v.TargetFields()[0] != tt.targetField {
+				t.Errorf("requiredWithoutValidator.TargetField() = %q, want %q", v.TargetFields()[0], tt.targetField)
 			}
 		})
 	}
@@ -851,8 +851,8 @@ func TestCrossFieldValidation_Integration(t *testing.T) {
 			if crossVals[0].Name() != gtFieldTagValue {
 				t.Errorf("expected validator name %q, got %q", gtFieldTagValue, crossVals[0].Name())
 			}
-			if crossVals[0].TargetField() != "MaxPrice" {
-				t.Errorf("expected target field %q, got %q", "MaxPrice", crossVals[0].TargetField())
+			if crossVals[0].TargetFields()[0] != "MaxPrice" {
+				t.Errorf("expected target field %q, got %q", "MaxPrice", crossVals[0].TargetFields()[0])
 			}
 		}
 	})
@@ -1199,4 +1199,350 @@ func allNumeric(values ...string) bool {
 		}
 	}
 	return true
+}
+
+// crossFieldRow reports whether one CSV row passes the cross-field tags the
+// target's fields carry. The columns are named a, b, c ... in order, so a
+// struct field named A carries the tag under test and B and C are its targets.
+func crossFieldRow(t *testing.T, target any, cells ...string) bool {
+	t.Helper()
+	headers := make([]string, len(cells))
+	for i := range cells {
+		headers[i] = string(rune('a' + i))
+	}
+	csv := strings.Join(headers, ",") + "\n" + strings.Join(cells, ",") + "\n"
+	_, result, err := NewProcessor(FileTypeCSV).Process(strings.NewReader(csv), target)
+	if err != nil {
+		t.Fatalf("Process(%q) error = %v", csv, err)
+	}
+	return len(result.Errors) == 0
+}
+
+// TestConditionalRequiredReadsEveryPair pins that required_if and
+// required_unless read their parameter as a list of field and value pairs, the
+// way the dialect this package follows defines them. Both used to keep the
+// first field name and fold the rest of the parameter into the expected value,
+// so a tag naming two pairs compared one cell against a string no cell holds
+// and the field was silently optional in every row.
+func TestConditionalRequiredReadsEveryPair(t *testing.T) {
+	t.Parallel()
+
+	type ifTwo struct {
+		A string `validate:"required_if=B paid C gold"`
+		B string
+		C string
+	}
+	type unlessTwo struct {
+		A string `validate:"required_unless=B free C trial"`
+		B string
+		C string
+	}
+	type ifQuoted struct {
+		A string `validate:"required_if=B 'on hold'"`
+		B string
+	}
+
+	t.Run("required_if demands a value only when every pair matches", func(t *testing.T) {
+		t.Parallel()
+		if crossFieldRow(t, &[]ifTwo{}, "", "paid", "gold") {
+			t.Error("both pairs match and the cell is empty, so the row must be invalid")
+		}
+		if !crossFieldRow(t, &[]ifTwo{}, "x", "paid", "gold") {
+			t.Error("both pairs match and the cell is filled, so the row must be valid")
+		}
+		if !crossFieldRow(t, &[]ifTwo{}, "", "paid", "silver") {
+			t.Error("only the first pair matches, so the empty cell must be allowed")
+		}
+		if !crossFieldRow(t, &[]ifTwo{}, "", "free", "gold") {
+			t.Error("only the second pair matches, so the empty cell must be allowed")
+		}
+	})
+
+	t.Run("required_unless allows an empty cell as soon as one pair matches", func(t *testing.T) {
+		t.Parallel()
+		if crossFieldRow(t, &[]unlessTwo{}, "", "paid", "gold") {
+			t.Error("no pair matches and the cell is empty, so the row must be invalid")
+		}
+		if !crossFieldRow(t, &[]unlessTwo{}, "", "free", "gold") {
+			t.Error("the first pair matches, so the empty cell must be allowed")
+		}
+		if !crossFieldRow(t, &[]unlessTwo{}, "", "paid", "trial") {
+			t.Error("the second pair matches, so the empty cell must be allowed")
+		}
+	})
+
+	t.Run("a quoted expected value keeps its spaces and loses its quotes", func(t *testing.T) {
+		t.Parallel()
+		if crossFieldRow(t, &[]ifQuoted{}, "", "on hold") {
+			t.Error("the cell holds the quoted value, so the empty cell must be refused")
+		}
+		if !crossFieldRow(t, &[]ifQuoted{}, "", "'on hold'") {
+			t.Error("a cell holding the quotes themselves is a different value and must not match")
+		}
+		if !crossFieldRow(t, &[]ifQuoted{}, "", "active") {
+			t.Error("a cell holding another value must leave the empty cell alone")
+		}
+	})
+}
+
+// TestConditionalRequiredReadsEveryField pins that the required_with and
+// required_without families read their parameter as a list of field names.
+// Both used to take the whole parameter as one field name, so a correctly
+// spelled list was reported as a missing field on every row.
+func TestConditionalRequiredReadsEveryField(t *testing.T) {
+	t.Parallel()
+
+	type withAny struct {
+		A string `validate:"required_with=B C"`
+		B string
+		C string
+	}
+	type withAll struct {
+		A string `validate:"required_with_all=B C"`
+		B string
+		C string
+	}
+	type withoutAny struct {
+		A string `validate:"required_without=B C"`
+		B string
+		C string
+	}
+	type withoutAll struct {
+		A string `validate:"required_without_all=B C"`
+		B string
+		C string
+	}
+	type misspelled struct {
+		A string `validate:"required_with=Nowhere"`
+		B string
+	}
+
+	t.Run("required_with fires when any named field carries a value", func(t *testing.T) {
+		t.Parallel()
+		if !crossFieldRow(t, &[]withAny{}, "", "", "") {
+			t.Error("no target carries a value, so the empty cell must be allowed")
+		}
+		if crossFieldRow(t, &[]withAny{}, "", "street", "") {
+			t.Error("the first target carries a value, so the empty cell must be refused")
+		}
+		if crossFieldRow(t, &[]withAny{}, "", "", "zip") {
+			t.Error("the second target carries a value, so the empty cell must be refused")
+		}
+		if !crossFieldRow(t, &[]withAny{}, "kyoto", "street", "zip") {
+			t.Error("the cell is filled, so the row must be valid")
+		}
+	})
+
+	t.Run("required_with_all fires only when every named field carries a value", func(t *testing.T) {
+		t.Parallel()
+		if !crossFieldRow(t, &[]withAll{}, "", "street", "") {
+			t.Error("only one target carries a value, so the empty cell must be allowed")
+		}
+		if crossFieldRow(t, &[]withAll{}, "", "street", "zip") {
+			t.Error("both targets carry a value, so the empty cell must be refused")
+		}
+	})
+
+	t.Run("required_without fires when any named field is empty", func(t *testing.T) {
+		t.Parallel()
+		if !crossFieldRow(t, &[]withoutAny{}, "", "street", "zip") {
+			t.Error("every target carries a value, so the empty cell must be allowed")
+		}
+		if crossFieldRow(t, &[]withoutAny{}, "", "street", "") {
+			t.Error("one target is empty, so the empty cell must be refused")
+		}
+	})
+
+	t.Run("required_without_all fires only when every named field is empty", func(t *testing.T) {
+		t.Parallel()
+		if !crossFieldRow(t, &[]withoutAll{}, "", "street", "") {
+			t.Error("one target carries a value, so the empty cell must be allowed")
+		}
+		if crossFieldRow(t, &[]withoutAll{}, "", "", "") {
+			t.Error("every target is empty, so the empty cell must be refused")
+		}
+	})
+
+	t.Run("a field name no struct field answers to is still reported", func(t *testing.T) {
+		t.Parallel()
+		if crossFieldRow(t, &[]misspelled{}, "kyoto", "street") {
+			t.Error("a misspelled field name must be reported, which is the only report it gets")
+		}
+	})
+}
+
+// TestCrossFieldComparisonsPassAnEmptyCell pins that the comparison and
+// substring tags follow the package rule that an empty cell passes every
+// validator but required, which the single-field validators already follow.
+// They used to compare an empty cell against a filled one, so a column that
+// was optional by every other measure was reported invalid on every row that
+// left it blank.
+func TestCrossFieldComparisonsPassAnEmptyCell(t *testing.T) {
+	t.Parallel()
+
+	type eq struct {
+		A string `validate:"eqfield=B"`
+		B string
+	}
+	type ne struct {
+		A string `validate:"nefield=B"`
+		B string
+	}
+	type gt struct {
+		A string `validate:"gtfield=B"`
+		B string
+	}
+	type gte struct {
+		A string `validate:"gtefield=B"`
+		B string
+	}
+	type lt struct {
+		A string `validate:"ltfield=B"`
+		B string
+	}
+	type lte struct {
+		A string `validate:"ltefield=B"`
+		B string
+	}
+	type fcontains struct {
+		A string `validate:"fieldcontains=B"`
+		B string
+	}
+	type fexcludes struct {
+		A string `validate:"fieldexcludes=B"`
+		B string
+	}
+
+	tags := []struct {
+		name string
+		make func() any
+	}{
+		{"eqfield", func() any { return &[]eq{} }},
+		{"nefield", func() any { return &[]ne{} }},
+		{"gtfield", func() any { return &[]gt{} }},
+		{"gtefield", func() any { return &[]gte{} }},
+		{"ltfield", func() any { return &[]lt{} }},
+		{"ltefield", func() any { return &[]lte{} }},
+		{"fieldcontains", func() any { return &[]fcontains{} }},
+		{"fieldexcludes", func() any { return &[]fexcludes{} }},
+	}
+
+	t.Run("a missing cell on either side is not compared", func(t *testing.T) {
+		t.Parallel()
+		for _, tag := range tags {
+			if !crossFieldRow(t, tag.make(), "", "b") {
+				t.Errorf("%s: an empty source cell must pass", tag.name)
+			}
+			if !crossFieldRow(t, tag.make(), "a", "") {
+				t.Errorf("%s: an empty target cell must pass", tag.name)
+			}
+			if !crossFieldRow(t, tag.make(), "", "") {
+				t.Errorf("%s: two empty cells must pass", tag.name)
+			}
+		}
+	})
+
+	t.Run("two filled cells are still compared", func(t *testing.T) {
+		t.Parallel()
+		if crossFieldRow(t, &[]eq{}, "a", "b") {
+			t.Error("eqfield: two different strings must fail")
+		}
+		if crossFieldRow(t, &[]ne{}, "a", "a") {
+			t.Error("nefield: two equal strings must fail")
+		}
+		if crossFieldRow(t, &[]gt{}, "a", "b") {
+			t.Error("gtfield: a sorts before b")
+		}
+		if crossFieldRow(t, &[]gte{}, "a", "b") {
+			t.Error("gtefield: a sorts before b")
+		}
+		if crossFieldRow(t, &[]lt{}, "b", "a") {
+			t.Error("ltfield: b sorts after a")
+		}
+		if crossFieldRow(t, &[]lte{}, "b", "a") {
+			t.Error("ltefield: b sorts after a")
+		}
+		if crossFieldRow(t, &[]fcontains{}, "abc", "zz") {
+			t.Error("fieldcontains: abc does not contain zz")
+		}
+		if crossFieldRow(t, &[]fexcludes{}, "abc", "bc") {
+			t.Error("fieldexcludes: abc contains bc")
+		}
+	})
+
+	t.Run("the tags that decide presence still run on an empty cell", func(t *testing.T) {
+		t.Parallel()
+		type reqIf struct {
+			A string `validate:"required_if=B paid"`
+			B string
+		}
+		type reqUnless struct {
+			A string `validate:"required_unless=B free"`
+			B string
+		}
+		type reqWith struct {
+			A string `validate:"required_with=B"`
+			B string
+		}
+		type reqWithout struct {
+			A string `validate:"required_without=B"`
+			B string
+		}
+		if crossFieldRow(t, &[]reqIf{}, "", "paid") {
+			t.Error("required_if must refuse an empty cell when its condition holds")
+		}
+		if crossFieldRow(t, &[]reqUnless{}, "", "paid") {
+			t.Error("required_unless must refuse an empty cell when no condition holds")
+		}
+		if crossFieldRow(t, &[]reqWith{}, "", "b") {
+			t.Error("required_with must refuse an empty cell when its target is present")
+		}
+		if crossFieldRow(t, &[]reqWithout{}, "", "") {
+			t.Error("required_without must refuse an empty cell when its target is absent")
+		}
+	})
+}
+
+// TestCrossFieldValidatorsWithoutTargets pins that a validator handed no target
+// value answers rather than panicking. The processor always hands one value per
+// name the validator asks for, so this guards the interface itself.
+func TestCrossFieldValidatorsWithoutTargets(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a comparison reads a missing target as an empty value", func(t *testing.T) {
+		t.Parallel()
+		if msg := newEqFieldValidator("Other").Validate("", nil); msg != "" {
+			t.Errorf("eqFieldValidator.Validate(\"\", nil) = %q, want no message", msg)
+		}
+		if msg := newFieldContainsValidator("Other").Validate("abc", nil); msg != "" {
+			t.Errorf("fieldContainsValidator.Validate(\"abc\", nil) = %q, want no message", msg)
+		}
+	})
+
+	t.Run("a tag naming no field asks for nothing", func(t *testing.T) {
+		t.Parallel()
+		if msg := newRequiredWithValidator(nil, false).Validate("", nil); msg != "" {
+			t.Errorf("requiredWithValidator.Validate(\"\", nil) = %q, want no message", msg)
+		}
+		if msg := newRequiredWithoutValidator(nil, true).Validate("", nil); msg != "" {
+			t.Errorf("requiredWithoutValidator.Validate(\"\", nil) = %q, want no message", msg)
+		}
+		if got := newRequiredWithValidator(nil, false).firstTarget(); got != "" {
+			t.Errorf("firstTarget() = %q, want an empty string", got)
+		}
+	})
+
+	t.Run("a condition without its value is not met", func(t *testing.T) {
+		t.Parallel()
+		if msg := newRequiredIfValidator(nil).Validate("", nil); msg != "" {
+			t.Errorf("requiredIfValidator.Validate(\"\", nil) = %q, want no message", msg)
+		}
+		conditions := []fieldCondition{{field: "Kind", expected: "paid"}}
+		if msg := newRequiredIfValidator(conditions).Validate("", nil); msg != "" {
+			t.Errorf("requiredIfValidator with no value = %q, want no message", msg)
+		}
+		if msg := newRequiredUnlessValidator(conditions).Validate("x", nil); msg != "" {
+			t.Errorf("requiredUnlessValidator with a filled cell = %q, want no message", msg)
+		}
+	})
 }

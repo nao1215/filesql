@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -315,6 +316,11 @@ func (p *Processor) processRecords(input io.Reader, structSlicePointer any) (
 		result.validRecords = make([][]string, 0, len(records))
 	}
 
+	// One buffer holds the target values of whichever cross-field validator is
+	// running, so a file with cross-field tags does not allocate a slice per
+	// validator per row.
+	targetScratch := make([]string, 0, maxCrossFieldTargets(sInfo))
+
 	// Process records in-place to avoid unnecessary allocations
 	for rowIdx := range records {
 		record := records[rowIdx]
@@ -341,7 +347,7 @@ func (p *Processor) processRecords(input io.Reader, structSlicePointer any) (
 		}
 
 		// Second pass: cross-field validation using processed field values
-		if p.applyCrossFieldValidation(rowNum, sInfo, fieldValues, result) {
+		if p.applyCrossFieldValidation(rowNum, sInfo, fieldValues, result, targetScratch) {
 			rowHasError = true
 		}
 
@@ -453,6 +459,7 @@ func (p *Processor) applyCrossFieldValidation(
 	structInfo *structInfo,
 	fieldValues map[string]string,
 	result *ProcessResult,
+	targetScratch []string,
 ) bool {
 	hasError := false
 
@@ -465,19 +472,22 @@ func (p *Processor) applyCrossFieldValidation(
 		colName := fieldInfo.ColumnName
 
 		for _, crossValidator := range fieldInfo.CrossFieldValidators {
-			targetFieldName := crossValidator.TargetField()
-			targetValue, ok := fieldValues[targetFieldName]
-			if !ok {
+			targetValues, missing := resolveTargets(crossValidator, fieldValues, targetScratch)
+			if missing != "" {
 				result.Errors = append(result.Errors, newValidationError(
 					rowNum, colName, fieldInfo.Name, srcValue,
 					crossValidator.Name(),
-					fmt.Sprintf("target field %s not found", targetFieldName),
+					fmt.Sprintf("target field %s not found", missing),
 				))
 				hasError = true
 				continue
 			}
 
-			if msg := crossValidator.Validate(srcValue, targetValue); msg != "" {
+			if skipCrossField(crossValidator, srcValue, targetValues) {
+				continue
+			}
+
+			if msg := crossValidator.Validate(srcValue, targetValues); msg != "" {
 				result.Errors = append(result.Errors, newValidationError(
 					rowNum, colName, fieldInfo.Name, srcValue,
 					crossValidator.Name(), msg,
@@ -488,6 +498,52 @@ func (p *Processor) applyCrossFieldValidation(
 	}
 
 	return hasError
+}
+
+// resolveTargets reads the row's value for each field the validator names. It
+// returns the name of the first field the struct does not have, so a misspelled
+// field name is reported rather than compared against nothing.
+func resolveTargets(cv crossFieldValidator, fieldValues map[string]string, buf []string) ([]string, string) {
+	values := buf[:0]
+	for _, name := range cv.TargetFields() {
+		value, ok := fieldValues[name]
+		if !ok {
+			return nil, name
+		}
+		values = append(values, value)
+	}
+	return values, ""
+}
+
+// maxCrossFieldTargets returns the longest list of fields any cross-field
+// validator in the struct names, which is how large one row's buffer has to be.
+func maxCrossFieldTargets(structInfo *structInfo) int {
+	longest := 0
+	for _, fieldInfo := range structInfo.Fields {
+		for _, cv := range fieldInfo.CrossFieldValidators {
+			if n := len(cv.TargetFields()); n > longest {
+				longest = n
+			}
+		}
+	}
+	return longest
+}
+
+// skipCrossField reports whether a comparison has nothing to say about this
+// row. An empty cell passes every validator but required, the rule the
+// single-field validators already follow, so a comparison is skipped as soon as
+// either side is missing; comparing a value against a value that is not there
+// has no answer. The tags that decide whether an empty cell is allowed are the
+// exception, since an empty cell is the only row they have anything to say
+// about.
+func skipCrossField(cv crossFieldValidator, srcValue string, targetValues []string) bool {
+	if cv.decidesPresence() {
+		return false
+	}
+	if srcValue == "" {
+		return true
+	}
+	return slices.Contains(targetValues, "")
 }
 
 // buildOutput generates the output io.Reader from the given records.
