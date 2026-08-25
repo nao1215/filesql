@@ -68,6 +68,9 @@ func TestCastSemantics(t *testing.T) {
 		// MySQL coerces where the others raise.
 		{"mysql coerces a non-numeric string", MySQL, `SELECT CAST('abc' AS SIGNED)`, "0", false},
 		{"mysql takes a numeric prefix", MySQL, `SELECT CAST('12abc' AS SIGNED)`, "12", false},
+		{"mysql takes the prefix before a second point", MySQL, `SELECT CAST('1.2.3' AS SIGNED)`, "1", false},
+		{"mysql reads a version string as a number", MySQL, `SELECT CAST('10.5.2' AS DOUBLE)`, "10.5", false},
+		{"mysql reads an exponent whole", MySQL, `SELECT CAST('1e5' AS DOUBLE)`, "100000", false},
 		{"mysql nulls an invalid date", MySQL, `SELECT CAST('not a date' AS DATE)`, "", true},
 		{"mysql keeps a valid date", MySQL, `SELECT CAST('2026-01-15' AS DATE)`, "2026-01-15", false},
 
@@ -244,6 +247,30 @@ func TestNumericPrefix(t *testing.T) {
 		{"", 0},
 		{"+7", 7},
 		{"..", 0},
+		// A second dot ends the number rather than voiding it: MySQL answers
+		// 1.2 for '1.2.3'+0, not 0.
+		{"1.2.3", 1.2},
+		{"10.5.2", 10.5},
+		{".5.5", 0.5},
+		{"1.", 1},
+		{"1.2.", 1.2},
+		// An exponent is part of the number MySQL reads, and a broken one is
+		// not: '1e5'+0 is 100000 while '1e'+0 and '1e+'+0 are both 1.
+		{"1e5", 100000},
+		{"1E5", 100000},
+		{"1e+5", 100000},
+		{"2.5e-3", 0.0025},
+		{"1e", 1},
+		{"1e+", 1},
+		{"1e5x", 100000},
+		{"1.2.3e4", 1.2},
+		{".e5", 0},
+		{"--3", 0},
+		{"-", 0},
+		// A run past the range of a float64 is still a number, and MySQL
+		// answers the bound of the type for it rather than 0.
+		{"1e999abc", math.MaxFloat64},
+		{"-1e999", -math.MaxFloat64},
 	}
 	for _, tt := range tests {
 		if got := numericPrefix(tt.in); got != tt.want {
