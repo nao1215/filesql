@@ -2080,7 +2080,14 @@ func TestE164Validator(t *testing.T) {
 		{"+819012345678", false},
 		{"+1234567890123", false},
 		{"", false}, // empty is valid
-		{"12025551234", true},
+		// The dialect makes the leading plus optional, and a spreadsheet
+		// export strips it.
+		{"12025551234", false},
+		{"819012345678", false},
+		{"123456789012345", false}, // fifteen digits, the upper bound
+		{"1234567890123456", true}, // sixteen digits
+		{"+", true},
+		{"++819012345678", true},
 		{"+1", true},
 		{"+123456", true},
 		{"+0123456789", true},

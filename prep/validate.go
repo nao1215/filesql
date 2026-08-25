@@ -28,8 +28,10 @@ const (
 	numberRegexPattern  = `^[0-9]+$`
 	fileScheme          = "file"
 
-	// E.164 phone number pattern
-	e164RegexPattern = `^\+[1-9][0-9]{7,14}$`
+	// E.164 phone number pattern. The leading plus is a notation convention
+	// rather than part of the number, and a spreadsheet export strips it, so
+	// the dialect makes it optional and so does this.
+	e164RegexPattern = `^\+?[1-9][0-9]{7,14}$`
 	// Latitude pattern: -90 to 90
 	latitudeRegexPattern = `^[-+]?([1-8]?\d(\.\d+)?|90(\.0+)?)$`
 	// Longitude pattern: -180 to 180
