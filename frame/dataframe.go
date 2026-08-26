@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nao1215/filesql/internal/atomicwrite"
 	"github.com/nao1215/filesql/internal/infer"
 	"github.com/nao1215/filesql/internal/writer"
 	"github.com/nao1215/filesql/parser"
@@ -257,34 +258,39 @@ func (df *DataFrame) ToTSV(path string) error {
 // those quotes are two more characters while the tab inside them is still a
 // field boundary — the file came out with the wrong shape and the quotes as
 // data. A value the format cannot hold is refused instead.
+//
+// The bytes are staged beside the destination and moved onto it only once the
+// last row is written, the writer is flushed and the staged file is closed.
+// Refusing a value the format cannot hold is a failure partway through the
+// write, and the write used to begin by truncating the destination with
+// os.Create: a frame holding one tab in one cell emptied the file it was asked
+// to write, which for a caller rewriting a file they had just read is the data
+// itself. A failure now costs nothing, and neither a success nor a failure
+// leaves the staged file behind. See internal/atomicwrite.
 func (df *DataFrame) toDelimitedFile(path string, format writer.Format) error {
-	f, err := os.Create(path) //nolint:gosec // path is provided by the user
-	if err != nil {
-		return fmt.Errorf("failed to create file: %w", err)
-	}
-	defer f.Close()
-
-	out := writer.New(f, format, writer.Options{})
-	if err := out.Header(df.columns); err != nil {
-		return fmt.Errorf("failed to write header: %w", unrepresentableError(err))
-	}
-
-	// One record is reused across rows: the writer has encoded it by the time
-	// Record returns, so it keeps no reference to the strings in it.
-	record := make([]string, len(df.columns))
-	for _, row := range df.rows {
-		for i, col := range df.columns {
-			record[i] = formatValue(row[col])
+	return atomicwrite.Write(path, func(w io.Writer) error {
+		out := writer.New(w, format, writer.Options{})
+		if err := out.Header(df.columns); err != nil {
+			return fmt.Errorf("failed to write header: %w", unrepresentableError(err))
 		}
-		if err := out.Record(record); err != nil {
-			return fmt.Errorf("failed to write row: %w", unrepresentableError(err))
-		}
-	}
 
-	if err := out.Flush(); err != nil {
-		return fmt.Errorf("failed to flush writer: %w", unrepresentableError(err))
-	}
-	return nil
+		// One record is reused across rows: the writer has encoded it by the
+		// time Record returns, so it keeps no reference to the strings in it.
+		record := make([]string, len(df.columns))
+		for _, row := range df.rows {
+			for i, col := range df.columns {
+				record[i] = formatValue(row[col])
+			}
+			if err := out.Record(record); err != nil {
+				return fmt.Errorf("failed to write row: %w", unrepresentableError(err))
+			}
+		}
+
+		if err := out.Flush(); err != nil {
+			return fmt.Errorf("failed to flush writer: %w", unrepresentableError(err))
+		}
+		return nil
+	}, atomicwrite.Options{})
 }
 
 // unrepresentableError gives a value the format cannot hold the sentinel this

@@ -4,6 +4,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -4043,4 +4045,124 @@ func TestDataFrame_UnknownColumnIsRefused(t *testing.T) {
 		assert.Equal(t, 2, df.Distinct().Len())
 		assert.Equal(t, 2, df.DropNA().Len())
 	})
+}
+
+// TestDataFrame_DelimitedWriteIsStaged drives the fault the staging exists for.
+// The write used to begin with os.Create, which truncates before a byte has been
+// produced, and the TSV writer refuses a value the format cannot hold — so a
+// frame with one tab in one cell returned an error and emptied the file it was
+// asked to write. For a caller rewriting a file they had just read, that file is
+// the data.
+func TestDataFrame_DelimitedWriteIsStaged(t *testing.T) {
+	t.Parallel()
+
+	const existing = "keep,this\n1,2\n"
+
+	t.Run("a refused TSV value leaves the destination as it was", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			name string
+			csv  string
+		}{
+			{"a tab", "v\n\"a\tb\"\n"},
+			{"a newline", "v\n\"c\nd\"\n"},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				dir := t.TempDir()
+				path := filepath.Join(dir, "out.tsv")
+				require.NoError(t, os.WriteFile(path, []byte(existing), 0o600))
+
+				df, err := NewDataFrame(strings.NewReader(tt.csv), CSV)
+				require.NoError(t, err)
+
+				err = df.ToTSV(path)
+				require.ErrorIs(t, err, parser.ErrTSVUnrepresentable)
+
+				got, err := os.ReadFile(path) //nolint:gosec // test-owned path
+				require.NoError(t, err)
+				assert.Equal(t, existing, string(got), "a refused write must not touch the destination")
+
+				assert.Equal(t, []string{"out.tsv"}, dirNames(t, dir), "no staged file may be left behind")
+			})
+		}
+	})
+
+	t.Run("a successful write replaces the destination", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			name  string
+			file  string
+			write func(*DataFrame, string) error
+			want  string
+		}{
+			{"ToCSV", "out.csv", (*DataFrame).ToCSV, "a,b\n1,x\n"},
+			{"ToTSV", "out.tsv", (*DataFrame).ToTSV, "a\tb\n1\tx\n"},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				dir := t.TempDir()
+				path := filepath.Join(dir, tt.file)
+				require.NoError(t, os.WriteFile(path, []byte("stale content that is much longer\n"), 0o600))
+
+				df, err := NewDataFrame(strings.NewReader("a,b\n1,x\n"), CSV)
+				require.NoError(t, err)
+				require.NoError(t, tt.write(df, path))
+
+				got, err := os.ReadFile(path) //nolint:gosec // test-owned path
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, string(got), "no tail of the old content may survive")
+
+				assert.Equal(t, []string{tt.file}, dirNames(t, dir), "no staged file may be left behind")
+			})
+		}
+	})
+
+	t.Run("an existing destination keeps its permissions", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Windows does not carry Unix permission bits")
+		}
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "out.csv")
+		// 0600 rather than the 0644 a file this package creates gets, so the
+		// assertion below cannot pass by the staging having ignored the
+		// destination's own mode.
+		require.NoError(t, os.WriteFile(path, []byte("old\n"), 0o600))
+
+		df, err := NewDataFrame(strings.NewReader("a\n1\n"), CSV)
+		require.NoError(t, err)
+		require.NoError(t, df.ToCSV(path))
+
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	})
+
+	t.Run("a destination that cannot be created is reported", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{{"value": 1}})
+
+		assert.Error(t, df.ToCSV(filepath.Join(t.TempDir(), "no-such-directory", "out.csv")))
+	})
+}
+
+// dirNames lists dir's entries by name, sorted, so a test can say exactly what a
+// directory holds after a write.
+func dirNames(t *testing.T, dir string) []string {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	slices.Sort(names)
+	return names
 }
