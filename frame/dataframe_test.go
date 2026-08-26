@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nao1215/filesql/parser"
@@ -4165,4 +4166,50 @@ func dirNames(t *testing.T, dir string) []string {
 	}
 	slices.Sort(names)
 	return names
+}
+
+// TestDataFrameIsSafeForConcurrentReads pins what every transformation here
+// promises: it answers a new frame and leaves the one it read alone. Several
+// goroutines reading one frame is the case that turns a shared slice into a
+// wrong answer rather than a compile error.
+func TestDataFrameIsSafeForConcurrentReads(t *testing.T) {
+	t.Parallel()
+
+	df, err := NewDataFrame(strings.NewReader("id,name,amount\n1,alice,30\n2,bob,10\n3,carol,20\n"), CSV)
+	if err != nil {
+		t.Fatalf("NewDataFrame: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 20 {
+				sorted, err := df.Sort("amount", Ascending)
+				if err != nil {
+					t.Errorf("Sort: %v", err)
+					return
+				}
+				if got := sorted.ToRecords()[0]["name"]; got != "bob" {
+					t.Errorf("first row after sorting = %v, want bob", got)
+					return
+				}
+				if got := df.Filter(func(row map[string]any) bool { return row["name"] != "bob" }).Len(); got != 2 {
+					t.Errorf("filtered length = %d, want 2", got)
+					return
+				}
+				if got := df.Mutate("double", func(row map[string]any) any { return row["amount"] }).Len(); got != 3 {
+					t.Errorf("mutated length = %d, want 3", got)
+					return
+				}
+				// The frame every one of them read has not moved.
+				if df.Len() != 3 || len(df.Columns()) != 3 {
+					t.Errorf("the source frame changed under a reader: %d rows, %d columns", df.Len(), len(df.Columns()))
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
