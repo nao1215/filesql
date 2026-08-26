@@ -9,6 +9,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nao1215/filesql/parser"
@@ -2903,4 +2904,51 @@ func TestProcess_MatchesAColumnWhateverItsCase(t *testing.T) {
 			t.Fatalf("err = %v, want ErrUnknownColumn", err)
 		}
 	})
+}
+
+// TestProcessorIsSafeForConcurrentUse pins what the struct-tag cache was built
+// for: one Processor read by several goroutines. Each call copies the cached
+// fields before it resolves their column indices, so two callers cannot write
+// the same shared structInfo, and the cache itself is filled by whichever
+// goroutine arrives first.
+func TestProcessorIsSafeForConcurrentUse(t *testing.T) {
+	t.Parallel()
+
+	type row struct {
+		ID     string `validate:"required,numeric"`
+		Name   string `prep:"trim,lowercase" validate:"required"`
+		Amount string `validate:"numeric"`
+	}
+	const body = "id,name,amount\n1,  ALICE ,10\n2,Bob,20\n3,carol,30\n"
+	processor := NewProcessor(parser.CSV)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 20 {
+				var rows []row
+				reader, result, err := processor.Process(strings.NewReader(body), &rows)
+				if err != nil {
+					t.Errorf("Process: %v", err)
+					return
+				}
+				if result.RowCount != 3 || len(rows) != 3 {
+					t.Errorf("rows = %d, records = %d, want 3 and 3", result.RowCount, len(rows))
+					return
+				}
+				if rows[0].Name != "alice" {
+					t.Errorf("name = %q, want alice", rows[0].Name)
+					return
+				}
+				var sink strings.Builder
+				if _, err := io.Copy(&sink, reader); err != nil {
+					t.Errorf("read: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }

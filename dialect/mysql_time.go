@@ -470,7 +470,7 @@ func fnToDays(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
-	return daysFromCivil(tm) + toDaysEpoch, nil
+	return dayNumber(tm) + toDaysEpoch, nil
 }
 
 // fnFromDays implements FROM_DAYS(n): the date a day number names.
@@ -488,13 +488,7 @@ func fnFromDays(args []driver.Value) (driver.Value, error) {
 	return civilFromDays(n - toDaysEpoch).Format(layoutDateOnly), nil
 }
 
-// daysFromCivil is the number of days between 1970-01-01 and the date of tm,
-// negative for a date before it.
-func daysFromCivil(tm time.Time) int64 {
-	return int64(math.Floor(float64(time.Date(tm.Year(), tm.Month(), tm.Day(), 0, 0, 0, 0, time.UTC).Unix()) / float64(24*60*60)))
-}
-
-// civilFromDays is the inverse of daysFromCivil.
+// civilFromDays is the inverse of dayNumber.
 func civilFromDays(days int64) time.Time {
 	return time.Unix(days*24*60*60, 0).UTC()
 }

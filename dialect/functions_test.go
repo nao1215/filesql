@@ -929,6 +929,46 @@ func TestDialectBoundariesFollowTheirEngine(t *testing.T) {
 		{name: "postgresql substring from a column pattern", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM p) FROM (SELECT '[0-9]+' AS p)`, want: "123"},
 		{name: "postgresql substring from a column position", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM p) FROM (SELECT 2 AS p)`, want: "bc123"},
 
+		// A distance between two times is counted in a unit the answer fits,
+		// rather than through a time.Duration, whose int64 of nanoseconds
+		// saturates about 292 years out. 9999-12-31 is the ordinary "no
+		// expiry" sentinel, so counting the days to it is a query people
+		// write, and it used to answer 106751 -- the bound -- for every unit.
+		{name: "date_diff in days over a millennium", dialect: GoogleSQL, query: `SELECT DATE_DIFF(DATE '9999-12-31', DATE '2024-03-05', DAY)`, want: "2913109"},
+		{name: "date_diff in hours over a millennium", dialect: GoogleSQL, query: `SELECT DATE_DIFF(DATE '9999-12-31', DATE '2024-03-05', HOUR)`, want: "69914616"},
+		{name: "date_diff in minutes over a millennium", dialect: GoogleSQL, query: `SELECT DATE_DIFF(DATE '9999-12-31', DATE '2024-03-05', MINUTE)`, want: "4194876960"},
+		{name: "date_diff in seconds over a millennium", dialect: GoogleSQL, query: `SELECT DATE_DIFF(DATE '9999-12-31', DATE '2024-03-05', SECOND)`, want: "251692617600"},
+		{name: "date_diff in weeks over a millennium", dialect: GoogleSQL, query: `SELECT DATE_DIFF(DATE '9999-12-31', DATE '2024-03-05', WEEK)`, want: "416158"},
+		{name: "date_diff in days backwards over a millennium", dialect: GoogleSQL, query: `SELECT DATE_DIFF(DATE '2024-03-05', DATE '9999-12-31', DAY)`, want: "-2913109"},
+		{name: "mysql datediff over a millennium", dialect: MySQL, query: `SELECT DATEDIFF('9999-12-31', '2024-03-05')`, want: "2913109"},
+		// The day either side of where the saturation used to begin.
+		{name: "date_diff at the old bound", dialect: GoogleSQL, query: `SELECT DATE_DIFF(DATE '2262-04-11', DATE '1970-01-01', DAY)`, want: "106751"},
+		{name: "date_diff one day past the old bound", dialect: GoogleSQL, query: `SELECT DATE_DIFF(DATE '2262-04-12', DATE '1970-01-01', DAY)`, want: "106752"},
+		{name: "unix_date past the old bound", dialect: GoogleSQL, query: `SELECT UNIX_DATE(DATE '2300-01-01')`, want: "120530"},
+		{name: "unix_date before the old bound", dialect: GoogleSQL, query: `SELECT UNIX_DATE(DATE '1600-01-01')`, want: "-135140"},
+		{name: "date_from_unix_date round trips past the old bound", dialect: GoogleSQL, query: `SELECT DATE_FROM_UNIX_DATE(120530)`, want: "2300-01-01"},
+		{name: "date_bin with a far origin", dialect: PostgreSQL, query: `SELECT DATE_BIN('1 day', TIMESTAMP '2400-03-05 10:11:12', TIMESTAMP '1970-01-01 00:00:00')`, want: "2400-03-05 00:00:00"},
+		{name: "week extraction past the old bound", dialect: GoogleSQL, query: `SELECT EXTRACT(WEEK(MONDAY) FROM DATE '2400-03-05')`, want: "9"},
+
+		// A greatest common divisor is not negative. The magnitude of the
+		// smallest int64 is not an int64, so taking the sign off it used to
+		// leave it negative and Euclid carried that sign into the answer.
+		{name: "gcd at the smallest int64", dialect: PostgreSQL, query: `SELECT GCD(-9223372036854775808, 6)`, want: "2"},
+		{name: "gcd of the smallest int64 and zero", dialect: PostgreSQL, query: `SELECT GCD(-9223372036854775808, 0)`, wantErr: true},
+		{name: "gcd of zero and the smallest int64", dialect: PostgreSQL, query: `SELECT GCD(0, -9223372036854775808)`, wantErr: true},
+		{name: "gcd of the smallest int64 with itself", dialect: PostgreSQL, query: `SELECT GCD(-9223372036854775808, -9223372036854775808)`, wantErr: true},
+		{name: "lcm at the smallest int64", dialect: PostgreSQL, query: `SELECT LCM(-9223372036854775808, 1)`, wantErr: true},
+
+		// TO_CHAR reads its argument to tell a date from a number. The
+		// template cannot say: a digit in a date template is literal text and
+		// a letter in a numeric one is too.
+		{name: "a date template holding a fixed time", dialect: PostgreSQL, query: `SELECT TO_CHAR(TIMESTAMP '2024-03-05 13:04:05', 'YYYY-MM-DD 00:00:00')`, want: "2024-03-05 00:00:00"},
+		{name: "a date template holding a zone in its text", dialect: PostgreSQL, query: `SELECT TO_CHAR(TIMESTAMP '2024-03-05 13:04:05', 'HH24:MI (UTC+0)')`, want: "13:04 (UTC+0)"},
+		{name: "a date template holding a digit", dialect: PostgreSQL, query: `SELECT TO_CHAR(DATE '2024-03-05', 'FMDay 0')`, want: "Tuesday 0"},
+		{name: "a numeric template on a date is literal text", dialect: PostgreSQL, query: `SELECT TO_CHAR(DATE '2024-03-05', '9999')`, want: "9999"},
+		{name: "a date template on a number is literal text", dialect: PostgreSQL, query: `SELECT TO_CHAR(2024, 'YYYY')`, want: "YYYY"},
+		{name: "text that is neither still reads the template", dialect: PostgreSQL, query: `SELECT TO_CHAR('2024', '9999')`, want: " 2024"},
+
 		// A sign is told from the binary operator by what stands before it.
 		{name: "a sign after a closing paren is binary", dialect: MySQL, query: `SELECT (4) - 1 >> 1`, want: "1"},
 		{name: "a sign after a quoted name is binary", dialect: MySQL, query: "SELECT `n` - 1 >> 1 FROM (SELECT 9 AS n)", want: "4"},

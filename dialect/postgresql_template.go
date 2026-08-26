@@ -603,6 +603,12 @@ func pgFormatNumber(value float64, format string) string {
 	if t.hasPoint && whole == "0" && t.zeroFrom() < 0 {
 		whole = ""
 	}
+	// A template with no digit position has nowhere to print a number, so only
+	// its literal text comes out -- no field to pad and no column to hold a
+	// sign. TO_CHAR(2024, 'YYYY') is "YYYY" in PostgreSQL for that reason.
+	if t.intDigits() == 0 && t.fracCells == 0 && !t.hasPoint {
+		return t.prefix + t.suffix
+	}
 	body, overflowed := pgNumericBody(t, whole, frac, fillMode)
 	out := t.prefix + pgApplySign(t, body, negative, fillMode) + t.suffix
 	// TH prints nothing for a negative value or for one that did not fit its
