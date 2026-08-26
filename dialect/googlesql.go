@@ -40,13 +40,13 @@ func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedGoogleSQL(tokens); err != nil {
 		return nil, err
 	}
-	// G-20: fold BigQuery's "SAFE." call prefix into the underscore name the
-	// rest of the pass already knows, before any call is looked at.
-	tokens, err := safePrefixPass(tokens)
+	out, err := googlesqlCallPass(tokens)
 	if err != nil {
 		return nil, err
 	}
-	out, err := googlesqlCallPass(tokens)
+	// G-20: the "SAFE." prefix wraps whatever the call pass above turned the
+	// call into, so it runs after that pass rather than before it.
+	out, err = safePrefixPass(out)
 	if err != nil {
 		return nil, err
 	}
@@ -85,52 +85,68 @@ func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	return aggregatePass(out, GoogleSQL)
 }
 
-// safeFunctions are the functions a "SAFE." prefix can be honored for: those
-// with a safe_ helper registered for them, named the same lowercased. The prefix
-// means "return NULL rather than raise", and only a helper written for that can
-// promise it. The order is the message's, so it does not change between runs.
-var safeFunctions = []string{"ADD", "DIVIDE", "MULTIPLY", "NEGATE", "SUBTRACT"}
-
-// safeHelperFor returns the helper a "SAFE." prefix on name maps to, and
-// whether there is one.
-func safeHelperFor(name string) (string, bool) {
-	upper := strings.ToUpper(name)
-	for _, fn := range safeFunctions {
-		if fn == upper {
-			return "safe_" + strings.ToLower(fn), true
-		}
-	}
-	return "", false
+// safePrefixPass implements G-20: SAFE.f(args) becomes safe_call('f', args),
+// which runs f and answers NULL where f would have raised.
+//
+// It runs after the call pass, so the name it wraps is whatever that pass
+// turned the call into: SAFE.SUBSTR reaches here as googlesql_substr. A name
+// this package does not compute itself -- a SQLite built-in such as ABS or
+// LENGTH -- is passed through with the prefix dropped, since there is no way to
+// reach inside SQLite's own function from here; those are the ones that do not
+// raise in the first place, which is why BigQuery callers reach for the prefix
+// on the parsing and casting functions instead.
+var safeArithmeticAliases = map[string]string{ //nolint:gochecknoglobals // a fixed table read by the SAFE. pass
+	"ADD": "safe_add", "DIVIDE": "safe_divide", "MULTIPLY": "safe_multiply",
+	"NEGATE": "safe_negate", "SUBTRACT": "safe_subtract",
 }
 
-// safePrefixPass implements G-20: SAFE.f(args) -> safe_f(args).
-//
-// BigQuery's own documentation writes the safe functions this way, and only a
-// few of them have an underscore name at all, so the prefix is the general
-// form. Left alone it reaches SQLite as a qualified name, which reports on the
-// "(" that follows rather than on the prefix, and says nothing about the
-// dialect.
-//
-// A prefix on a function with no safe form is refused rather than dropped:
-// dropping it would answer the query with the plain function, which raises
-// where the caller asked for a NULL.
 func safePrefixPass(tokens []token) ([]token, error) {
 	out := make([]token, 0, len(tokens))
 	i := 0
 	for i < len(tokens) {
-		name, end, ok := matchSafePrefix(tokens, i)
+		name, nameIdx, ok := matchSafePrefix(tokens, i)
 		if !ok {
 			out = append(out, tokens[i])
 			i++
 			continue
 		}
-		helper, supported := safeHelperFor(name)
-		if !supported {
-			return nil, fmt.Errorf("%w: SAFE.%s is not supported; the SAFE. prefix works with %s",
-				ErrUnsupportedSyntax, strings.ToUpper(name), strings.Join(safeFunctions, ", "))
+		open := nextSig(tokens, nameIdx+1)
+		closeIdx := matchParen(tokens, open)
+		if closeIdx < 0 {
+			return nil, fmt.Errorf("%w: unbalanced parentheses after SAFE.%s", ErrInvalidSyntax, name)
 		}
-		out = append(out, wordToken(helper))
-		i = end + 1
+		args, err := safePrefixPass(tokens[open+1 : closeIdx])
+		if err != nil {
+			return nil, err
+		}
+		helper := strings.ToLower(name)
+		if alias, aliased := safeArithmeticAliases[strings.ToUpper(name)]; aliased {
+			// BigQuery spells these five with an underscore -- SAFE_ADD and the
+			// rest -- and this package answered to the dotted form before the
+			// prefix was general, so it still does.
+			helper = alias
+		}
+		if !isRegisteredFunction(helper) {
+			out = append(out, tokens[nameIdx], tokens[open])
+			out = append(out, args...)
+			out = append(out, tokens[closeIdx])
+			i = closeIdx + 1
+			continue
+		}
+		if _, aliased := safeArithmeticAliases[strings.ToUpper(name)]; aliased {
+			out = append(out, wordToken(helper), opToken("("))
+			out = append(out, args...)
+			out = append(out, opToken(")"))
+			i = closeIdx + 1
+			continue
+		}
+		out = append(out, wordToken("safe_call"), opToken("("), stringToken(helper))
+		if len(trimSpaceTokens(args)) > 0 {
+			out = append(out, opToken(","), spaceToken())
+			out = append(out, args...)
+		}
+		out = append(out, opToken(")"))
+		i = closeIdx + 1
 	}
 	return out, nil
 }
@@ -165,6 +181,12 @@ func checkUnsupportedGoogleSQL(tokens []token) error {
 		}
 		if isWordEq(t, "QUALIFY") {
 			return fmt.Errorf("%w: QUALIFY is not supported", ErrUnsupportedSyntax)
+		}
+		// SAFE.CAST is not BigQuery: the safe cast is SAFE_CAST. It is caught
+		// here, before the call pass turns the CAST into the cast helper and
+		// the prefix has nothing left to recognize.
+		if name, _, ok := matchSafePrefix(tokens, i); ok && strings.EqualFold(name, fnNameCast) {
+			return fmt.Errorf("%w: SAFE.CAST is not supported; the safe cast is SAFE_CAST(x AS type)", ErrUnsupportedSyntax)
 		}
 		if isWordEq(t, "UNNEST") {
 			return fmt.Errorf("%w: UNNEST is not supported", ErrUnsupportedSyntax)

@@ -123,7 +123,7 @@ func TestGoogleSQLTranslateUnsupported(t *testing.T) {
 		// A SAFE. call whose function has no safe form here is refused by name.
 		// Passed through, SQLite reads "SAFE.SUBSTR" as schema.table and reports on
 		// the "(" instead.
-		{"G-20_safe_unknown_function", "SELECT SAFE.SUBSTR(s, 1, 2) FROM t"},
+		{"G-20_safe_cast_is_not_a_prefix", "SELECT SAFE.CAST(x AS INT64) FROM t"},
 		{"G-20_safe_cast_prefix", "SELECT SAFE.CAST(x AS INT64) FROM t"},
 
 		// G-19: SQLite reads "[...]" as an identifier, so an array literal came

@@ -158,3 +158,58 @@ func TestDigestsFollowTheirDialect(t *testing.T) {
 		})
 	}
 }
+
+// TestSafePrefixRunsAnyHelper covers BigQuery's SAFE. prefix, which turns an
+// error into a NULL. It used to be honored for five names -- and those five are
+// the separate SAFE_ADD family rather than the prefix at all -- so every other
+// function it was written in front of failed to translate.
+func TestSafePrefixRunsAnyHelper(t *testing.T) {
+	db := castDB(t)
+
+	for _, tt := range []struct {
+		name     string
+		query    string
+		want     string
+		wantNull bool
+		wantErr  bool
+	}{
+		// A call that succeeds is unchanged by the prefix.
+		{name: "safe substr", query: `SELECT SAFE.SUBSTR('abc', 1, 2)`, want: "ab"},
+		{name: "safe parse_date that parses", query: `SELECT SAFE.PARSE_DATE('%Y-%m-%d', '2024-03-05')`, want: "2024-03-05"},
+		{name: "safe date that is a date", query: `SELECT SAFE.DATE(2024, 3, 5)`, want: "2024-03-05"},
+		// A call that would raise answers NULL instead, which is the point.
+		{name: "safe parse_date that does not parse", query: `SELECT SAFE.PARSE_DATE('%Y-%m-%d', 'nope')`, wantNull: true},
+		{name: "safe date of a month that is not one", query: `SELECT SAFE.DATE(2024, 13, 1)`, wantNull: true},
+		{name: "safe mod by zero", query: `SELECT SAFE.MOD(1, 0)`, wantNull: true},
+		{name: "the same call raises without the prefix", query: `SELECT MOD(1, 0)`, wantErr: true},
+		// The five underscore names keep their dotted spelling, which this
+		// package answered to before the prefix was general.
+		{name: "safe divide", query: `SELECT SAFE.DIVIDE(1, 0)`, wantNull: true},
+		{name: "safe add", query: `SELECT SAFE.ADD(1, 2)`, want: "3"},
+		{name: "nested safe arithmetic", query: `SELECT SAFE.MULTIPLY(SAFE.ADD(1, 2), 3)`, want: "9"},
+		// A function SQLite computes itself is out of reach, so the prefix is
+		// dropped and the call runs as written.
+		{name: "safe on a sqlite builtin", query: `SELECT SAFE.LENGTH('abc')`, want: "3"},
+		// A name nothing defines still says so, rather than becoming a NULL.
+		{name: "safe on a name nothing defines", query: `SELECT SAFE.NOSUCHFN(1)`, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, GoogleSQL, tt.query)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("%s: expected an error, got %q", tt.query, got.String)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.Valid == tt.wantNull {
+				t.Fatalf("%s returned valid=%v (%q), want null=%v", tt.query, got.Valid, got.String, tt.wantNull)
+			}
+			if !tt.wantNull && got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}

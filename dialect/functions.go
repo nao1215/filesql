@@ -294,6 +294,7 @@ func registerAll() error {
 			return fmt.Errorf("dialect: register %s: %w", name, err)
 		}
 	}
+	registeredFunctions = det
 
 	// Non-deterministic functions must not be registered as deterministic.
 	nondet := map[string]scalarSpec{
@@ -309,12 +310,57 @@ func registerAll() error {
 	}
 	maps.Copy(nondet, postgresqlNonDeterministicFunctions())
 	maps.Copy(nondet, googlesqlNonDeterministicFunctions())
+	// safe_call runs one of the helpers above and swallows its error, which is
+	// what BigQuery's SAFE. prefix asks for. It is registered here rather than
+	// in nondet's table because it has to see the finished table.
+	nondet["safe_call"] = scalarSpec{nArg: -1, fn: fnSafeCall}
 	for name, spec := range nondet {
 		if err := sqlite.RegisterScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
 			return fmt.Errorf("dialect: register %s: %w", name, err)
 		}
 	}
+	maps.Copy(registeredFunctions, nondet)
 	return nil
+}
+
+// registeredFunctions is every scalar function this package computes itself,
+// which is what the SAFE. prefix can promise a NULL for: a function SQLite
+// computes is out of reach from here. It is written once, during registration,
+// before any connection can exist.
+var registeredFunctions map[string]scalarSpec //nolint:gochecknoglobals // the table registerAll built, read by safe_call
+
+// isRegisteredFunction reports whether this package computes name itself.
+func isRegisteredFunction(name string) bool {
+	_, ok := registeredFunctions[name]
+	return ok
+}
+
+// fnSafeCall runs the helper its first argument names over the rest, answering
+// NULL where that helper would have raised. It is BigQuery's SAFE. prefix,
+// which turns an error into a NULL for one call.
+func fnSafeCall(args []driver.Value) (driver.Value, error) {
+	if len(args) == 0 {
+		return nil, errors.New("dialect: safe_call expects a function name")
+	}
+	name, ok := toString(args[0])
+	if !ok {
+		return nil, errors.New("dialect: safe_call expects a function name")
+	}
+	spec, found := registeredFunctions[name]
+	if !found {
+		return nil, fmt.Errorf("dialect: safe_call: no such function %q", name)
+	}
+	rest := args[1:]
+	if spec.nArg >= 0 && len(rest) != int(spec.nArg) {
+		// An arity the function does not have is the caller's mistake rather
+		// than a value it could not compute, so it is reported.
+		return nil, fmt.Errorf("dialect: %s expects %d arguments, got %d", name, spec.nArg, len(rest))
+	}
+	out, err := spec.fn(rest)
+	if err != nil {
+		return nil, nil //nolint:nilerr,nilnil // swallowing the error is what SAFE. asks for
+	}
+	return out, nil
 }
 
 func wrapScalar(fn scalarFn) func(ctx *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
