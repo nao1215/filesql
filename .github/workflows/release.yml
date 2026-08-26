@@ -38,7 +38,7 @@ jobs:
       # likely to fail: a tag that is not SemVer, or one whose version has no
       # changelog entry, is refused here rather than published with a
       # placeholder body. See .github/scripts/release-metadata.sh, whose
-      # behaviour is pinned by release_metadata_test.go.
+      # behavior is pinned by release_metadata_test.go.
       - name: Validate the tag and extract its changelog entry
         id: meta
         env:

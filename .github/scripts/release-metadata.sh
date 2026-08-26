@@ -101,7 +101,7 @@ changelog_body() {
 	' "$changelog"
 }
 
-# Trim the blank lines a section is separated from its neighbours by, so a
+# Trim the blank lines a section is separated from its neighbors by, so a
 # heading followed by nothing at all reads as empty rather than as a body of
 # newlines.
 trim_blank_lines() {

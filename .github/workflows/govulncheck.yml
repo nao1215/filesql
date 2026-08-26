@@ -1,7 +1,7 @@
 name: govulncheck
 
 # Vulnerability scanning runs on every pull request and on main, unlike
-# staticcheck: govulncheck loads the vulnerability database and analyses call
+# staticcheck: govulncheck loads the vulnerability database and analyzes call
 # graphs, which finishes in under a minute on this module, so there is no reason
 # to keep it off the path a change takes to get merged. What it catches is a
 # dependency — or a standard library — that has grown a known advisory since the

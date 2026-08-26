@@ -159,7 +159,7 @@ func TestReleaseMetadata_ExtractsTheWholeEntry(t *testing.T) {
 	}
 	for _, unwanted := range []string{"not released yet", "a candidate", "the first one"} {
 		if strings.Contains(body, unwanted) {
-			t.Errorf("body reached into a neighbouring entry (%q):\n%s", unwanted, body)
+			t.Errorf("body reached into a neighboring entry (%q):\n%s", unwanted, body)
 		}
 	}
 }
