@@ -175,10 +175,13 @@ func fnQuoteNullable(args []driver.Value) (driver.Value, error) {
 
 func quoteSQLLiteral(s string) string {
 	quoted := "'" + strings.ReplaceAll(s, "'", "''") + "'"
-	if strings.Contains(s, `\`) {
-		return " E" + strings.ReplaceAll(quoted, `\`, `\\`)
+	if !strings.Contains(s, `\`) {
+		return quoted
 	}
-	return quoted
+	// A backslash means the literal has to be an escape string, or the reader
+	// takes it as itself or as an escape depending on their
+	// standard_conforming_strings; the E prefix says which.
+	return "E" + strings.ReplaceAll(quoted, `\`, `\\`)
 }
 
 // --- regular expressions ---

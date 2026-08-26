@@ -230,3 +230,114 @@ func TestToCharNumericTemplate(t *testing.T) {
 func trimFloat(v float64) string {
 	return strconv.FormatFloat(v, 'g', -1, 64)
 }
+
+// TestToCharNumericTemplateUnderFillMode covers the sign spellings under FM,
+// where no column is reserved for a sign that is not there. They are a
+// separate arm of the layout from the padded one above and were otherwise
+// reached only through the default sign.
+func TestToCharNumericTemplateUnderFillMode(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		value  float64
+		format string
+		want   string
+	}{
+		{12, "FMS999", "+12"},
+		{-12, "FMS999", "-12"},
+		{12, "FM999S", "12+"},
+		{-12, "FM999S", "12-"},
+		{12, "FMSG999", "+12"},
+		{-12, "FM999SG", "12-"},
+		{12, "FMMI999", "12"},
+		{-12, "FMMI999", "-12"},
+		{-12, "FM999MI", "12-"},
+		{12, "FMPL999", "+12"},
+		{-12, "FMPL999", "-12"},
+		{12, "FM999PL", "12+"},
+		{12, "FM999PR", "12"},
+		{-12, "FM999PR", "<12>"},
+		{-1234, "FM999", "-###"},
+	} {
+		t.Run(tt.format+"/"+trimFloat(tt.value), func(t *testing.T) {
+			t.Parallel()
+
+			if got := pgFormatNumber(tt.value, tt.format); got != tt.want {
+				t.Errorf("TO_CHAR(%v, %q) = %q, want %q", tt.value, tt.format, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestToCharDateTemplateAtTheEdges covers the days and eras the two fixed
+// timestamps above cannot reach: a Sunday, which is the day ISO numbering and
+// PostgreSQL's own D disagree most about, and a year before the common era.
+func TestToCharDateTemplateAtTheEdges(t *testing.T) {
+	t.Parallel()
+
+	sunday := time.Date(2024, 3, 3, 0, 0, 0, 0, time.UTC)
+	for _, tt := range []struct {
+		format string
+		want   string
+	}{
+		{"D", "1"},
+		{"ID", "7"},
+		{"DY", "SUN"},
+		{"IW", "09"},
+	} {
+		t.Run("sunday/"+tt.format, func(t *testing.T) {
+			t.Parallel()
+
+			if got := pgFormatTime(tt.format, sunday); got != tt.want {
+				t.Errorf("TO_CHAR(sunday, %q) = %q, want %q", tt.format, got, tt.want)
+			}
+		})
+	}
+
+	beforeTheEra := time.Date(-1, 6, 1, 0, 0, 0, 0, time.UTC)
+	for _, tt := range []struct {
+		format string
+		want   string
+	}{
+		{"BC", "BC"},
+		{"bc", "bc"},
+		{"B.C.", "B.C."},
+	} {
+		t.Run("bc/"+tt.format, func(t *testing.T) {
+			t.Parallel()
+
+			if got := pgFormatTime(tt.format, beforeTheEra); got != tt.want {
+				t.Errorf("TO_CHAR(bc, %q) = %q, want %q", tt.format, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestIsDateTemplateTellsTheTwoApart covers the choice TO_CHAR makes before it
+// formats anything: a template with a digit position is numeric, RN is the one
+// numeric template with none, and a digit inside double quotes is literal text
+// and says nothing about either.
+func TestIsDateTemplateTellsTheTwoApart(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		format string
+		want   bool
+	}{
+		{"YYYY-MM-DD", true},
+		{"999", false},
+		{"0.9", false},
+		{"RN", false},
+		{"rn", false},
+		{`"9" YYYY`, true},
+		{`"RN" YYYY`, true},
+	} {
+		t.Run(tt.format, func(t *testing.T) {
+			t.Parallel()
+
+			if got := isDateTemplate(tt.format); got != tt.want {
+				t.Errorf("isDateTemplate(%q) = %v, want %v", tt.format, got, tt.want)
+			}
+		})
+	}
+}

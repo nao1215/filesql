@@ -226,3 +226,76 @@ func TestGenRandomUUIDIsDistinct(t *testing.T) {
 		seen[got.String] = true
 	}
 }
+
+// TestPostgreSQLByteHelpersAtTheEdges covers the byte paths a plain ASCII round
+// trip does not reach: a byte with no printable spelling, which the escape
+// encoding writes as an octal escape, and a backslash, which it doubles.
+func TestPostgreSQLByteHelpersAtTheEdges(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name  string
+		bytes []byte
+		want  string
+	}{
+		{name: "a printable byte is itself", bytes: []byte("abc"), want: "abc"},
+		{name: "a control byte is an octal escape", bytes: []byte{'a', 0x0a, 'b'}, want: `a\012b`},
+		{name: "a byte past ASCII is an octal escape", bytes: []byte{0xff}, want: `\377`},
+		{name: "a backslash is doubled", bytes: []byte(`a\b`), want: `a\\b`},
+		{name: "nothing encodes to nothing", bytes: nil, want: ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := escapeBytes(tt.bytes)
+			if got != tt.want {
+				t.Fatalf("escapeBytes(%q) = %q, want %q", tt.bytes, got, tt.want)
+			}
+			if back := unescapeBytes(got); back != string(tt.bytes) {
+				t.Errorf("unescapeBytes(%q) = %q, want %q", got, back, string(tt.bytes))
+			}
+		})
+	}
+}
+
+// TestQuoteLiteralEscapesABackslash covers the spelling PostgreSQL uses when a
+// literal holds a backslash: the string is prefixed with E and the backslash is
+// doubled, since a plain literal would read it as itself under
+// standard_conforming_strings and as an escape without.
+func TestQuoteLiteralEscapesABackslash(t *testing.T) {
+	db := castDB(t)
+
+	got, err := runDialect(t, db, PostgreSQL, `SELECT quote_literal('a\b')`)
+	if err != nil {
+		t.Fatalf("quote_literal: %v", err)
+	}
+	if want := `E'a\\b'`; got.String != want {
+		t.Errorf("quote_literal('a\\b') = %q, want %q", got.String, want)
+	}
+}
+
+// TestQuoteIdentQuotesAReservedWord covers the arm of the identifier rule that
+// is not about the characters in the name: a word that is syntax unquoted has
+// to be quoted even when it is spelled in lower case.
+func TestQuoteIdentQuotesAReservedWord(t *testing.T) {
+	db := castDB(t)
+
+	for _, tt := range []struct {
+		name string
+		want string
+	}{
+		{name: "select", want: `"select"`},
+		{name: "where", want: `"where"`},
+		{name: "selection", want: "selection"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, PostgreSQL, `SELECT quote_ident('`+tt.name+`')`)
+			if err != nil {
+				t.Fatalf("quote_ident(%q): %v", tt.name, err)
+			}
+			if got.String != tt.want {
+				t.Errorf("quote_ident(%q) = %q, want %q", tt.name, got.String, tt.want)
+			}
+		})
+	}
+}
