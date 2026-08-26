@@ -262,7 +262,7 @@ func dumpSQLiteTable(db *sql.DB, tableName, outputDir string, options DumpOption
 
 	// Query all data from table
 	ctx := context.Background()
-	query := fmt.Sprintf("SELECT %s FROM `%s`", dumpSelectList(columns, declTypes), tableName) //nolint:gosec // Table and column names are quoted and come from database metadata
+	query := fmt.Sprintf("SELECT %s FROM %s", dumpSelectList(columns, declTypes), quoteIdentifier(tableName)) //nolint:gosec // Table and column names are quoted
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return err
@@ -284,18 +284,66 @@ func dumpSQLiteTable(db *sql.DB, tableName, outputDir string, options DumpOption
 // A table name is an arbitrary SQL identifier, so it can carry a path separator
 // or a parent reference, and filepath.Join resolves those: a table created as
 // "../escaped" had its dump written next to the output directory rather than in
-// it, past whatever the caller had decided the dump was allowed to touch. Both
-// separators are refused on every platform, not only the one the running OS
-// honors, so the same database dumped on Linux and on Windows agrees on which
-// tables it can write.
+// it, past whatever the caller had decided the dump was allowed to touch.
+//
+// What is refused is what no platform this package builds for can hold, judged
+// the same way everywhere rather than by the rules of the running one, so the
+// same database dumped on Linux and on Windows agrees on which tables it can
+// write. Refusing rather than rewriting is what keeps two tables from colliding
+// on one file.
 func dumpFilePath(outputDir, tableName, ext string) (string, error) {
 	name := tableName + ext
 	path := filepath.Join(outputDir, name)
-	if strings.ContainsAny(name, `/\`) || filepath.Dir(path) != filepath.Clean(outputDir) {
+	if !usableAsFileName(name) || filepath.Dir(path) != filepath.Clean(outputDir) {
 		return "", fmt.Errorf("%w: table %q cannot be dumped because its name is not usable as a file name inside %s",
 			ErrInvalidData, tableName, outputDir)
 	}
 	return path, nil
+}
+
+// reservedDeviceNames are the names Windows resolves to a device rather than to
+// a file, with or without an extension: writing to one goes to the device and
+// the rows go nowhere. They are matched without regard to case, which is how
+// Windows matches them.
+//
+//nolint:gochecknoglobals // constant-like lookup table
+var reservedDeviceNames = map[string]bool{
+	"con": true, "prn": true, "aux": true, "nul": true,
+	"com1": true, "com2": true, "com3": true, "com4": true, "com5": true,
+	"com6": true, "com7": true, "com8": true, "com9": true,
+	"lpt1": true, "lpt2": true, "lpt3": true, "lpt4": true, "lpt5": true,
+	"lpt6": true, "lpt7": true, "lpt8": true, "lpt9": true,
+}
+
+// forbiddenFileNameRunes are the characters no file name may carry. The two
+// separators are what a dump has to refuse anywhere, since either one makes the
+// name a path; the rest are what Windows forbids, and a colon is the worst of
+// them, because it names an alternate data stream rather than failing.
+const forbiddenFileNameRunes = `/\<>:"|?*`
+
+// usableAsFileName reports whether name can be a file name on every platform
+// this package builds for.
+func usableAsFileName(name string) bool {
+	if name == "" || strings.ContainsAny(name, forbiddenFileNameRunes) {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	// Windows strips a trailing dot or space, so such a name reaches the disk
+	// as a different one and two tables can land on one file.
+	if last := name[len(name)-1]; last == '.' || last == ' ' {
+		return false
+	}
+	// A device name is reserved whatever follows the first dot, so CON.csv is
+	// the console and not a file.
+	stem := name
+	if i := strings.IndexByte(stem, '.'); i >= 0 {
+		stem = stem[:i]
+	}
+	return !reservedDeviceNames[strings.ToLower(stem)]
 }
 
 // timeDeclTypes are the declared column types the SQLite driver turns into a
@@ -339,7 +387,7 @@ func dumpSelectList(columns, declTypes []string) string {
 // a value back converted; see dumpSelectList.
 func getSQLiteTableColumns(db *sql.DB, tableName string) (columns, declTypes []string, err error) {
 	ctx := context.Background()
-	query := fmt.Sprintf("PRAGMA table_info(`%s`)", tableName)
+	query := fmt.Sprintf("PRAGMA table_info(%s)", quoteIdentifier(tableName))
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, nil, err

@@ -734,7 +734,7 @@ func (sp *streamProcessor) loadTyped(ctx context.Context, tx *sql.Tx, tableName 
 	if err := w.close(nil); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DROP TABLE "`+tableName+`"`); err != nil {
+	if _, err := tx.ExecContext(ctx, `DROP TABLE `+quoteIdentifier(tableName)); err != nil {
 		return fmt.Errorf("%w: failed to drop table before reading again: %w", ErrDatabaseOperation, err)
 	}
 	w.rows = 0
@@ -801,7 +801,7 @@ func (sp *streamProcessor) declareTable(ctx context.Context, tx *sql.Tx, staging
 		return err
 	}
 	if columns.allText() {
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE "%s" RENAME TO "%s"`, staging, tableName)); err != nil {
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s RENAME TO %s`, quoteIdentifier(staging), quoteIdentifier(tableName))); err != nil {
 			return fmt.Errorf("%w: failed to name table: %w", ErrDatabaseOperation, err)
 		}
 		return nil
@@ -810,8 +810,8 @@ func (sp *streamProcessor) declareTable(ctx context.Context, tx *sql.Tx, staging
 		return fmt.Errorf("%w: failed to create table: %w", ErrDatabaseOperation, err)
 	}
 	statements := []string{
-		fmt.Sprintf(`INSERT INTO "%s" SELECT * FROM "%s"`, tableName, staging),
-		fmt.Sprintf(`DROP TABLE "%s"`, staging),
+		fmt.Sprintf(`INSERT INTO %s SELECT * FROM %s`, quoteIdentifier(tableName), quoteIdentifier(staging)),
+		`DROP TABLE ` + quoteIdentifier(staging),
 	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
@@ -854,7 +854,7 @@ func insertQuery(tableName string, width int) string {
 	for i := range placeholders {
 		placeholders[i] = "?"
 	}
-	return fmt.Sprintf(`INSERT INTO "%s" VALUES (%s)`, tableName, strings.Join(placeholders, ", "))
+	return fmt.Sprintf(`INSERT INTO %s VALUES (%s)`, quoteIdentifier(tableName), strings.Join(placeholders, ", "))
 }
 
 // insertChunkData inserts a chunk's worth of rows through a prepared statement.

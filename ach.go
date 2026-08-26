@@ -323,8 +323,8 @@ func insertRecordsIntoTable(ctx context.Context, db dbtx, tableName string, head
 	}
 
 	query := fmt.Sprintf(
-		`INSERT INTO "%s" VALUES (%s)`,
-		tableName,
+		`INSERT INTO %s VALUES (%s)`,
+		quoteIdentifier(tableName),
 		strings.Join(placeholders, ", "),
 	)
 
@@ -490,7 +490,7 @@ func readTableToTableData(ctx context.Context, db *sql.DB, tableName string) (*p
 	}
 
 	// Get columns
-	query := fmt.Sprintf("PRAGMA table_info(`%s`)", tableName)
+	query := fmt.Sprintf("PRAGMA table_info(%s)", quoteIdentifier(tableName))
 	colRows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -512,7 +512,7 @@ func readTableToTableData(ctx context.Context, db *sql.DB, tableName string) (*p
 	}
 
 	// Get data
-	dataQuery := fmt.Sprintf("SELECT * FROM `%s`", tableName) //nolint:gosec // Table name comes from database metadata
+	dataQuery := "SELECT * FROM " + quoteIdentifier(tableName) //nolint:gosec // Table name is quoted
 	dataRows, err := db.QueryContext(ctx, dataQuery)
 	if err != nil {
 		return nil, err
