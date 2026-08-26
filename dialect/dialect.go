@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 )
 
 // Dialect is a SQL dialect accepted at query time. The storage engine is always
@@ -26,7 +25,7 @@ const (
 // Sentinel errors returned by this package. Use errors.Is to check for them.
 var (
 	// ErrUnknownDialect indicates a dialect name that does not map to a built-in
-	// dialect and has no registered translator.
+	// dialect.
 	ErrUnknownDialect = errors.New("dialect: unknown SQL dialect")
 	// ErrUnsupportedSyntax indicates a construct that is valid in the source
 	// dialect but has no equivalent on the SQLite backend.
@@ -52,9 +51,9 @@ var displayNames = map[Dialect]string{
 }
 
 // DisplayName returns the dialect spelled the way its own project spells it, for
-// a message a person reads. A dialect with no spelling here — one installed by
-// RegisterTranslator — reads back as its wire value, so any dialect with a name
-// has one to print; the zero Dialect has neither and returns "". It lives beside
+// a message a person reads. A dialect with no spelling here reads back as its
+// wire value, so a name a caller built by conversion still has something to
+// print; the zero Dialect has neither and returns "". It lives beside
 // Dialects() so a dialect added to one arrives in the other, instead of every
 // caller keeping its own table of names.
 func (d Dialect) DisplayName() string {
@@ -84,43 +83,13 @@ func Parse(name string) (Dialect, error) {
 	}
 }
 
-// TranslatorFunc converts a single query written in some dialect into SQLite SQL.
-type TranslatorFunc func(query string) (string, error)
-
-var (
-	customMu    sync.RWMutex
-	customTrans = map[Dialect]TranslatorFunc{}
-)
-
-// RegisterTranslator installs a custom translator for name, replacing the
-// built-in translator if one exists. It is the extension point for future
-// parser-based translators. It is safe for concurrent use.
-func RegisterTranslator(name Dialect, fn TranslatorFunc) {
-	customMu.Lock()
-	defer customMu.Unlock()
-	if fn == nil {
-		delete(customTrans, name)
-		return
-	}
-	customTrans[name] = fn
-}
-
-func lookupTranslator(d Dialect) TranslatorFunc {
-	customMu.RLock()
-	defer customMu.RUnlock()
-	return customTrans[d]
-}
-
 // Translate converts a query written in dialect d into SQLite SQL. When d is
-// SQLite the input is returned unchanged. A custom translator registered with
-// RegisterTranslator takes precedence over the built-in one. Errors wrap
+// SQLite the input is returned unchanged, and a dialect this package does not
+// implement is refused rather than passed through. Errors wrap
 // ErrUnsupportedSyntax, ErrInvalidSyntax, or ErrUnknownDialect.
 func Translate(d Dialect, query string) (string, error) {
 	if d == SQLite {
 		return query, nil
-	}
-	if fn := lookupTranslator(d); fn != nil {
-		return fn(query)
 	}
 	return builtinTranslate(d, query)
 }

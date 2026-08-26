@@ -3,7 +3,6 @@ package dialect_test
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/nao1215/filesql/dialect"
 )
@@ -59,25 +58,4 @@ func ExampleDialect_DisplayName() {
 	// Output:
 	// postgresql -> PostgreSQL
 	// googlesql -> GoogleSQL
-}
-
-func ExampleRegisterTranslator() {
-	const shouty = dialect.Dialect("shouty")
-
-	dialect.RegisterTranslator(shouty, func(query string) (string, error) {
-		return strings.ToUpper(query), nil
-	})
-
-	sqlite, err := dialect.Translate(shouty, "select * from users")
-	fmt.Println(sqlite, err)
-
-	// The registry is global, so a translator installed for a test is removed
-	// again. Registering nil is how a name is taken back out.
-	dialect.RegisterTranslator(shouty, nil)
-
-	_, err = dialect.Translate(shouty, "select * from users")
-	fmt.Println(errors.Is(err, dialect.ErrUnknownDialect))
-	// Output:
-	// SELECT * FROM USERS <nil>
-	// true
 }

@@ -409,8 +409,7 @@ func (b *DBBuilder) DisableAutoSave() *DBBuilder {
 // The default is dialect.SQLite, which performs no translation.
 //
 // Constraints (enforced by Build):
-//   - The dialect must be a built-in dialect or one registered with
-//     dialect.RegisterTranslator.
+//   - The dialect must be one of the built-in dialects; see dialect.Dialects.
 //   - A non-SQLite dialect cannot be combined with auto-save; the two connector
 //     wrappers are not composed in this version.
 //
@@ -605,8 +604,8 @@ func (b *DBBuilder) validateDialect() error {
 	if !b.usesDialectTranslation() {
 		return nil
 	}
-	// The dialect must be translatable: either a probe translation succeeds or a
-	// custom translator is registered. Translate of a trivial query surfaces
+	// The dialect must be translatable, which a probe translation is what
+	// establishes: Translate of a trivial query surfaces
 	// dialect.ErrUnknownDialect for an unrecognized dialect.
 	if _, err := dialect.Translate(b.sqlDialect, "SELECT 1"); err != nil {
 		if errors.Is(err, dialect.ErrUnknownDialect) {
