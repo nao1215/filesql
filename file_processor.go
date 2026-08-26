@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -14,7 +15,7 @@ import (
 // fileProcessor handles file-specific processing operations
 type fileProcessor struct {
 	validator *validator
-	logger    Logger
+	logger    *slog.Logger
 }
 
 // newFileProcessor creates a new file processor instance
@@ -26,7 +27,7 @@ func newFileProcessor() *fileProcessor {
 }
 
 // setLogger sets the logger for the file processor
-func (fp *fileProcessor) setLogger(logger Logger) {
+func (fp *fileProcessor) setLogger(logger *slog.Logger) {
 	if logger != nil {
 		fp.logger = logger
 	}

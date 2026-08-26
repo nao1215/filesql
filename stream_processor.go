@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"os"
 	"strings"
@@ -27,7 +28,7 @@ const (
 // streamProcessor handles streaming operations for database loading
 type streamProcessor struct {
 	chunkSize int
-	logger    Logger
+	logger    *slog.Logger
 	// replaceExisting makes table creation drop a same-named table first instead
 	// of erroring or appending. It is enabled for LoadInto (loading into a
 	// caller-owned database, where last-wins replacement is the useful default)
@@ -106,7 +107,7 @@ func (sp *streamProcessor) setChunkSize(size int) {
 }
 
 // setLogger sets the logger for the stream processor
-func (sp *streamProcessor) setLogger(logger Logger) {
+func (sp *streamProcessor) setLogger(logger *slog.Logger) {
 	if logger != nil {
 		sp.logger = logger
 	}
