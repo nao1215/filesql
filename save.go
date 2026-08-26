@@ -665,6 +665,15 @@ func (c *autoSaveConnector) overwriteOriginalFiles(db *sql.DB) error {
 		return errors.New("no original paths available for overwrite")
 	}
 
+	// Nothing is replaced until every source is known to be writable. The loop
+	// below wrote them one at a time and stopped at the first it could not
+	// write, so a set holding one of those came out of a failed save with its
+	// earlier files carrying the session's rows and the rest carrying the old
+	// ones, and nothing on disk saying which was which.
+	if err := checkOverwriteTargets(c.originalPaths); err != nil {
+		return err
+	}
+
 	ctx := context.Background()
 
 	for _, path := range c.originalPaths {
@@ -734,6 +743,32 @@ func (c *autoSaveConnector) siblingBaseTableNames(path string) []string {
 		bases = append(bases, sanitizeTableName(tableFromFilePath(other)))
 	}
 	return bases
+}
+
+// checkOverwriteTargets reports the first of paths that overwrite mode could
+// never write back, from the path alone: a format this package reads but does
+// not write, or a compression codec it reads but does not write. Both answers
+// are in the file's name, so this runs from Build as well, where the caller
+// hears about it before the session rather than after the session's work has
+// been discarded.
+//
+// A workbook holding more than one table is the failure this cannot see: it
+// takes opening the file to know, and it is left to the save.
+func checkOverwriteTargets(paths []string) error {
+	factory := NewCompressionFactory()
+	for _, path := range paths {
+		if isACHFile(path) || isFedWireFile(path) {
+			// Both have writers of their own and take no external compression.
+			continue
+		}
+		if _, err := overwriteFormatFor(path); err != nil {
+			return err
+		}
+		if err := codec.Codec(factory.DetectCompressionType(path)).CannotWrite(); err != nil {
+			return fmt.Errorf("%w: %s cannot be written back: %w", ErrUnsupportedFormat, path, err)
+		}
+	}
+	return nil
 }
 
 // overwriteFormatFor is the output format a source file is written back in, or

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nao1215/filesql/internal/codec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xuri/excelize/v2"
@@ -914,9 +915,9 @@ func TestAutoSaveOverwriteRefusesFormatItCannotWrite(t *testing.T) {
 			src := filepath.Join(dir, tt.file)
 			require.NoError(t, os.WriteFile(src, []byte(tt.content), 0o600))
 
-			// A JSON source becomes one table with a single "data" column holding the
-			// raw value, which json_extract reads into.
-			err := autoSaveOverwrite(t, []string{src}, `UPDATE records SET data = '{"id":2}'`)
+			// The extension is the whole of the answer, so Build is where the
+			// caller hears it: no database is opened and no file is touched.
+			_, err := NewBuilder().AddPath(src).EnableAutoSave("").Build(t.Context())
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrUnsupportedFormat)
 			assert.Contains(t, err.Error(), tt.file)
@@ -1296,16 +1297,16 @@ func TestAutoSaveOverwriteRefusesCodecItCannotWrite(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(src, fixture, 0o600)) //nolint:gosec // src is under t.TempDir()
 
-	err = autoSaveOverwrite(t, []string{src}, "UPDATE products SET price = 1")
+	_, err = NewBuilder().AddPath(src).EnableAutoSave("").Build(t.Context())
 	require.Error(t, err, "a codec this package cannot write must not report a successful save")
 	assert.Contains(t, err.Error(), "bzip2")
-	// Every sentinel the failure passed through is reachable, so a caller can
-	// tell "this codec cannot be written" from "the compressor failed" without
-	// matching on the message. ErrUnsupportedFormat used to be text only,
-	// because the writer flattened the inner error with %s; see #216.
+	// The codec is read off the name, so the refusal comes from Build, before
+	// there is a database to change or a file to replace. ErrUnsupportedFormat
+	// is the sentinel it carries, the same one the writer reports when a dump
+	// asks for bzip2; TestDumpDatabase_RefusesACodecItCannotWrite covers the
+	// rest of that chain.
 	assert.ErrorIs(t, err, ErrUnsupportedFormat)
-	assert.ErrorIs(t, err, ErrCompression)
-	assert.ErrorIs(t, err, ErrIOOperation)
+	assert.ErrorIs(t, err, codec.ErrNoBZ2Writer)
 
 	after, err := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
 	require.NoError(t, err)
@@ -1514,4 +1515,46 @@ func TestAutoSaveOverwriteFollowsASymlink(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "id,name\n1,alice\n2,bob\n", string(got), "the file the link names is what receives the row")
 	assert.Equal(t, []string{"real.csv", "users.csv"}, dirEntries(t, dir), "no staged file may be left behind")
+}
+
+// TestAutoSaveOverwriteRefusesASourceItCannotWriteBeforeOpening pins where a
+// source that overwrite mode can never write back is reported. It was reported
+// from Close, one file at a time, so a set holding such a source had its earlier
+// files replaced before the caller heard about it: half the directory held the
+// session's rows and half held the old ones, with nothing on disk saying which
+// was which. The extension decides the answer, so Build knows it before any
+// database exists and refuses there.
+func TestAutoSaveOverwriteRefusesASourceItCannotWriteBeforeOpening(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "aaa.csv")
+	require.NoError(t, os.WriteFile(csvPath, []byte("id,name\n1,alice\n"), 0o600))
+	jsonPath := filepath.Join(dir, "zzz.json")
+	require.NoError(t, os.WriteFile(jsonPath, []byte(`[{"id":1}]`), 0o600))
+
+	_, err := NewBuilder().AddPath(csvPath).AddPath(jsonPath).EnableAutoSave("").Build(t.Context())
+	require.Error(t, err, "a set that cannot be saved must be refused before it is loaded")
+	assert.ErrorIs(t, err, ErrUnsupportedFormat)
+	assert.Contains(t, err.Error(), "zzz.json")
+
+	got, readErr := os.ReadFile(csvPath) //nolint:gosec // csvPath is under t.TempDir()
+	require.NoError(t, readErr)
+	assert.Equal(t, "id,name\n1,alice\n", string(got), "no file may be replaced by a save that cannot finish")
+
+	t.Run("an output directory is unaffected", func(t *testing.T) {
+		t.Parallel()
+
+		// Export mode writes what DumpOptions says into a directory of its own,
+		// so a source with no writer is read and written out as CSV and no
+		// source file is replaced. The refusal is about overwrite mode only.
+		out := filepath.Join(t.TempDir(), "out")
+		validated, buildErr := NewBuilder().AddPath(csvPath).AddPath(jsonPath).EnableAutoSave(out).Build(t.Context())
+		require.NoError(t, buildErr)
+		db, openErr := validated.Open(t.Context())
+		require.NoError(t, openErr)
+		require.NoError(t, db.Close())
+
+		assert.Equal(t, []string{"aaa.csv", "zzz.csv"}, dirEntries(t, out))
+	})
 }

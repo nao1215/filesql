@@ -335,8 +335,9 @@ func (b *DBBuilder) AddFS(filesystem fs.FS) *DBBuilder {
 // the one a source was loaded from. Only those files are written: a table created
 // during the session has no file to be written back to and is left unsaved, so
 // pass an output directory when you want everything in the database on disk. A
-// source in a format this package reads but does not write (JSON, JSONL) fails
-// the save rather than being written as something else.
+// source this package reads but cannot write back, by its format (JSON, JSONL)
+// or by its compression (bzip2), is refused by Build rather than written as
+// something else.
 //
 // A workbook is written onto the file it replaces: only the cells whose value
 // changed are rewritten, so formulas, dates, styles and the sheets no table was
@@ -495,6 +496,16 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 	// Use validator to validate final state
 	if err := b.validator.validateFinalState(b.collectedPaths, b.readers, b.paths); err != nil {
 		return nil, err
+	}
+
+	// Overwrite mode writes every source back to itself, and a source in a
+	// format or a codec this package reads but does not write makes that save
+	// fail. The file's name is the whole of the answer, so the caller hears it
+	// here rather than from Close, after a session's work has been done.
+	if b.autoSaveEnabled() && b.autoSaveConfig.outputDir == "" {
+		if err := checkOverwriteTargets(b.fileProcessor.deduplicateCompressedFiles(b.collectedPaths)); err != nil {
+			return nil, err
+		}
 	}
 
 	// Pass logger to internal processors

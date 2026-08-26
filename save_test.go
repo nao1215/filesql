@@ -900,3 +900,88 @@ func TestOverwriteTableAtPath_Failures(t *testing.T) {
 		assert.NoFileExists(t, path, "a refused save must not create the file it could not write")
 	})
 }
+
+// TestDumpDatabase_RefusesACodecItCannotWrite pins the whole error chain a dump
+// asking for bzip2 reports. Every sentinel it passed through stays reachable, so
+// a caller can tell "this codec cannot be written" from "the compressor failed"
+// without matching on the message; ErrUnsupportedFormat used to be text only,
+// because the writer flattened the inner error with %s.
+func TestDumpDatabase_RefusesACodecItCannotWrite(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "users.csv")
+	require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
+
+	validated, err := NewBuilder().AddPath(src).Build(t.Context())
+	require.NoError(t, err)
+	db, err := validated.Open(t.Context())
+	require.NoError(t, err)
+	defer db.Close()
+
+	out := filepath.Join(dir, "out")
+	err = DumpDatabase(db, out, NewDumpOptions().WithCompression(CompressionBZ2))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnsupportedFormat)
+	assert.ErrorIs(t, err, ErrCompression)
+	assert.ErrorIs(t, err, ErrIOOperation)
+	assert.Contains(t, err.Error(), "bzip2")
+}
+
+// TestCheckOverwriteTargets pins the pre-flight overwrite mode runs before it
+// replaces anything. What matters is that a list is answered as a whole: a
+// source that cannot be written is reported wherever it sits, so the earlier
+// entries are never written on the way to finding it.
+func TestCheckOverwriteTargets(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		paths   []string
+		wantErr string
+	}{
+		{
+			name:  "every source has a writer",
+			paths: []string{"a.csv", "b.tsv", "c.ltsv", "d.parquet", "e.xlsx", "f.csv.gz"},
+		},
+		{
+			name:  "ACH and Fedwire have writers of their own",
+			paths: []string{"payment.ach", "transfer.fed"},
+		},
+		{
+			name:    "a format with no writer, last",
+			paths:   []string{"a.csv", "z.json"},
+			wantErr: "z.json",
+		},
+		{
+			name:    "a format with no writer, first",
+			paths:   []string{"a.jsonl", "z.csv"},
+			wantErr: "a.jsonl",
+		},
+		{
+			name:    "a codec with no writer, last",
+			paths:   []string{"a.csv", "z.tsv.bz2"},
+			wantErr: "z.tsv.bz2",
+		},
+		{
+			name:    "a codec with no writer, first",
+			paths:   []string{"a.csv.bz2", "z.csv"},
+			wantErr: "a.csv.bz2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := checkOverwriteTargets(tt.paths)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrUnsupportedFormat)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
