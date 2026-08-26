@@ -1798,3 +1798,28 @@ func TestApplyModifications_RefusesAMovedCoordinate(t *testing.T) {
 		}
 	})
 }
+
+// TestCoordinateKey_ComparesThePositionNotTheSpelling pins the rule the
+// coordinate check compares by. These columns are integers, and a table that
+// has been through SQLite comes back with its numbers spelled the way SQLite
+// spells them, so a coordinate is the record it names rather than the text it
+// arrived as: "0" and "00" are one position and a round trip does not lose a
+// row for having lost a leading zero.
+func TestCoordinateKey_ComparesThePositionNotTheSpelling(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile(filepath.Join("testdata", "ppd-debit.ach"))
+	require.NoError(t, err)
+	ts, err := ParseReader(bytes.NewReader(raw))
+	require.NoError(t, err)
+	require.NotEmpty(t, ts.Entries.Records)
+
+	at := findHeaderIndex(t, ts.Entries.Headers, "batch_index")
+	require.Equal(t, "0", ts.Entries.Records[0][at], "the fixture must start at batch 0")
+	ts.Entries.Records[0][at] = "00"
+	ts.UpdateEntriesFromTableData(ts.Entries)
+
+	var buf bytes.Buffer
+	assert.NoError(t, ts.WriteToWriter(&buf),
+		"a coordinate respelled as the same number names the same record")
+}

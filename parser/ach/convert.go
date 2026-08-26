@@ -134,9 +134,12 @@ func coordinateKeys(td *parser.TableData, columns ...string) []string {
 }
 
 // coordinateKey spells one coordinate. Both sides of the comparison go through
-// it, so a value that was parsed as "0" and edited to "00" is a different
-// coordinate, which is what it is: the row no longer names the record it was
-// parsed from.
+// it and the callers hand it numbers rather than the text they read, so a
+// coordinate is compared by the record it names and not by how it was spelled:
+// "0" and "00" are one position, which is what they are. That is deliberate.
+// These columns are integers, and a table that has been through SQLite comes
+// back with its numbers spelled the way SQLite spells them, so comparing the
+// text would refuse an honest round trip for having lost a leading zero.
 func coordinateKey(columns []string, values []string) string {
 	parts := make([]string, len(columns))
 	for i, col := range columns {
