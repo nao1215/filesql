@@ -43,6 +43,12 @@ type TableSet struct {
 
 	// originalFile stores the original ACH file for reconstruction
 	originalFile *ach.File
+
+	// parsedCoords holds, per table, the coordinate each row was parsed with.
+	// A write compares every row against it, which is what tells a row that
+	// names its own record apart from one that names another's. See
+	// coordinateTracker.
+	parsedCoords map[string][]string
 }
 
 // fromFile converts an ACH file to a set of TableData structures.
@@ -83,7 +89,60 @@ func fromFile(file *ach.File) *TableSet {
 		ts.IATAddenda = convertIATAddenda(file)
 	}
 
+	ts.parsedCoords = map[string][]string{
+		"batches":     coordinateKeys(ts.Batches, "batch_index"),
+		"entries":     coordinateKeys(ts.Entries, "batch_index", "entry_index"),
+		"addenda":     coordinateKeys(ts.Addenda, "batch_index", "entry_index", "addenda_index"),
+		"iat_batches": coordinateKeys(ts.IATBatches, "batch_index"),
+		"iat_entries": coordinateKeys(ts.IATEntries, "batch_index", "entry_index"),
+		"iat_addenda": coordinateKeys(ts.IATAddenda, "batch_index", "entry_index", "addenda_index"),
+	}
+
 	return ts
+}
+
+// coordinateKeys reads the coordinate of every row of td, in the spelling
+// coordinateTracker compares against. A nil table has no rows and no
+// coordinates.
+func coordinateKeys(td *parser.TableData, columns ...string) []string {
+	if td == nil {
+		return nil
+	}
+	at := make([]int, 0, len(columns))
+	for _, want := range columns {
+		for i, h := range td.Headers {
+			if h == want {
+				at = append(at, i)
+				break
+			}
+		}
+	}
+	if len(at) != len(columns) {
+		return nil
+	}
+	keys := make([]string, 0, len(td.Records))
+	for _, record := range td.Records {
+		values := make([]string, len(at))
+		for i, idx := range at {
+			if idx < len(record) {
+				values[i] = record[idx]
+			}
+		}
+		keys = append(keys, coordinateKey(columns, values))
+	}
+	return keys
+}
+
+// coordinateKey spells one coordinate. Both sides of the comparison go through
+// it, so a value that was parsed as "0" and edited to "00" is a different
+// coordinate, which is what it is: the row no longer names the record it was
+// parsed from.
+func coordinateKey(columns []string, values []string) string {
+	parts := make([]string, len(columns))
+	for i, col := range columns {
+		parts[i] = col + "=" + values[i]
+	}
+	return strings.Join(parts, " ")
 }
 
 // convertFileHeader extracts file header information into TableData.
@@ -774,27 +833,59 @@ func validateFieldWidths(file *ach.File) error {
 // entries and batches reported an out-of-range coordinate while addenda and
 // every IAT table skipped the row in silence. Both halves are errors now.
 type coordinateTracker struct {
-	table string
-	seen  map[string]bool
+	table  string
+	parsed []string
+	row    int
+	seen   map[string]bool
 }
 
-func newCoordinateTracker(table string) *coordinateTracker {
-	return &coordinateTracker{table: table, seen: make(map[string]bool)}
-}
-
-// claim records that a row names this coordinate and refuses a repeat.
-func (c *coordinateTracker) claim(columns []string, values []int) error {
-	parts := make([]string, len(columns))
-	for i, col := range columns {
-		parts[i] = fmt.Sprintf("%s=%d", col, values[i])
+func (ts *TableSet) newCoordinateTracker(table string) *coordinateTracker {
+	return &coordinateTracker{
+		table:  table,
+		parsed: ts.parsedCoords[table],
+		seen:   make(map[string]bool),
 	}
-	key := strings.Join(parts, " ")
+}
+
+// claim checks the coordinate the next row names and advances to the one after
+// it. A row must name the record it was parsed from: comparing against the
+// parsed coordinate rather than only against the coordinates other rows have
+// claimed is what catches two rows that exchange positions, where every
+// coordinate is still unique, still in range, and still points at the wrong
+// record.
+func (c *coordinateTracker) claim(columns []string, values []int) error {
+	row := c.row
+	c.row++
+
+	strs := make([]string, len(columns))
+	for i, v := range values {
+		strs[i] = strconv.Itoa(v)
+	}
+	key := coordinateKey(columns, strs)
+	named := strings.Join(columns, " and ")
+
 	if c.seen[key] {
 		return fmt.Errorf(
 			"%s: two rows name the same record (%s); %s give the position of the record a row updates, not a value it stores",
-			c.table, key, strings.Join(columns, " and "))
+			c.table, key, named)
 	}
 	c.seen[key] = true
+
+	// A TableSet built by hand rather than parsed has nothing to compare
+	// against; the duplicate check above still applies to it.
+	if c.parsed == nil {
+		return nil
+	}
+	if row >= len(c.parsed) {
+		return fmt.Errorf(
+			"%s: row %d was not in the file this table was read from; rows cannot be added by a write",
+			c.table, row)
+	}
+	if c.parsed[row] != key {
+		return fmt.Errorf(
+			"%s: row %d names %s but was read from %s; %s give the position of the record a row updates, not a value it stores",
+			c.table, row, key, c.parsed[row], named)
+	}
 	return nil
 }
 
@@ -805,7 +896,7 @@ func (ts *TableSet) applyEntryModifications(file *ach.File) error {
 		headerIndex[h] = i
 	}
 
-	coords := newCoordinateTracker("entries")
+	coords := ts.newCoordinateTracker("entries")
 	for _, record := range ts.Entries.Records {
 		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
 		if err != nil {
@@ -922,7 +1013,7 @@ func (ts *TableSet) applyBatchModifications(file *ach.File) error {
 		headerIndex[h] = i
 	}
 
-	coords := newCoordinateTracker("batches")
+	coords := ts.newCoordinateTracker("batches")
 	for _, record := range ts.Batches.Records {
 		batchIdxVal, ok := headerIndex["batch_index"]
 		if !ok {
@@ -993,7 +1084,7 @@ func (ts *TableSet) applyAddendaModifications(file *ach.File) error {
 		headerIndex[h] = i
 	}
 
-	coords := newCoordinateTracker("addenda")
+	coords := ts.newCoordinateTracker("addenda")
 	for _, record := range ts.Addenda.Records {
 		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
 		if err != nil {
@@ -1707,7 +1798,7 @@ func (ts *TableSet) applyIATBatchModifications(file *ach.File) error {
 		headerIndex[h] = i
 	}
 
-	coords := newCoordinateTracker("iat_batches")
+	coords := ts.newCoordinateTracker("iat_batches")
 	for _, record := range ts.IATBatches.Records {
 		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
 		if err != nil {
@@ -1783,7 +1874,7 @@ func (ts *TableSet) applyIATEntryModifications(file *ach.File) error {
 		headerIndex[h] = i
 	}
 
-	coords := newCoordinateTracker("iat_entries")
+	coords := ts.newCoordinateTracker("iat_entries")
 	for _, record := range ts.IATEntries.Records {
 		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
 		if err != nil {
@@ -1859,7 +1950,7 @@ func (ts *TableSet) applyIATAddendaModifications(file *ach.File) error {
 		headerIndex[h] = i
 	}
 
-	coords := newCoordinateTracker("iat_addenda")
+	coords := ts.newCoordinateTracker("iat_addenda")
 	for _, record := range ts.IATAddenda.Records {
 		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
 		if err != nil {

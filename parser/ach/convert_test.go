@@ -1692,6 +1692,68 @@ func TestApplyModifications_RefusesAMovedCoordinate(t *testing.T) {
 		assert.Equal(t, "EDITED NAME", back.Entries.Records[0][nameIdx])
 	})
 
+	t.Run("two rows that exchange coordinates are refused", func(t *testing.T) {
+		t.Parallel()
+
+		// Every coordinate stays unique and in range here, so nothing but the
+		// row's own parsed position tells the swap apart from an honest edit.
+		// The damage is real: each row's values land on the other's record, so
+		// two payments trade account numbers and amounts.
+		_, ts := load(t)
+		require.GreaterOrEqual(t, len(ts.Entries.Records), 2)
+
+		batchIdx := column(ts.Entries, "batch_index")
+		entryIdx := column(ts.Entries, "entry_index")
+		first := []string{ts.Entries.Records[0][batchIdx], ts.Entries.Records[0][entryIdx]}
+		ts.Entries.Records[0][batchIdx] = ts.Entries.Records[1][batchIdx]
+		ts.Entries.Records[0][entryIdx] = ts.Entries.Records[1][entryIdx]
+		ts.Entries.Records[1][batchIdx] = first[0]
+		ts.Entries.Records[1][entryIdx] = first[1]
+		ts.UpdateEntriesFromTableData(ts.Entries)
+
+		var buf bytes.Buffer
+		err := ts.WriteToWriter(&buf)
+		require.Error(t, err, "two rows trading positions must be refused")
+		assert.Contains(t, err.Error(), "batch_index")
+		assert.Zero(t, buf.Len(), "nothing may be written when the write is refused")
+	})
+
+	t.Run("an addenda_index naming no addenda is refused", func(t *testing.T) {
+		t.Parallel()
+
+		// A singleton addenda ignores addenda_index when it applies the row, so
+		// before the coordinate was checked an out-of-range value still updated
+		// the record it happened to land beside.
+		raw, err := os.ReadFile(filepath.Join("testdata", "cor-example.ach"))
+		require.NoError(t, err)
+		ts, err := ParseReader(bytes.NewReader(raw))
+		require.NoError(t, err)
+		require.NotEmpty(t, ts.Addenda.Records)
+
+		at := column(ts.Addenda, "addenda_index")
+		require.GreaterOrEqual(t, at, 0)
+		ts.Addenda.Records[0][at] = "9"
+		ts.UpdateAddendaFromTableData(ts.Addenda)
+
+		var buf bytes.Buffer
+		writeErr := ts.WriteToWriter(&buf)
+		require.Error(t, writeErr, "an addenda_index naming no addenda must be refused")
+		assert.Contains(t, writeErr.Error(), "addenda_index")
+	})
+
+	t.Run("a row added to the table is refused", func(t *testing.T) {
+		t.Parallel()
+
+		// Adding rows was never supported; it used to be applied anyway, to
+		// whatever record the new row's coordinates named.
+		_, ts := load(t)
+		ts.Entries.Records = append(ts.Entries.Records, append([]string(nil), ts.Entries.Records[0]...))
+		ts.UpdateEntriesFromTableData(ts.Entries)
+
+		var buf bytes.Buffer
+		assert.Error(t, ts.WriteToWriter(&buf), "a row the file did not have must be refused")
+	})
+
 	t.Run("every table guards its own coordinates", func(t *testing.T) {
 		t.Parallel()
 
