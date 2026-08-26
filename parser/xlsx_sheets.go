@@ -31,12 +31,3 @@ const (
 
 // ExcelSheet is one sheet of a workbook and whether the workbook shows it.
 type ExcelSheet = reader.ExcelSheet
-
-// ExcelSheetSource is the part of an open workbook that sheet selection reads.
-//
-// It is an interface rather than the concrete workbook type for two reasons:
-// the excelize dependency stays out of this package's signatures, and the
-// selection rules -- order, filtering, and what happens when a visibility
-// cannot be read -- become testable without a workbook that has to be coaxed
-// into failing.
-type ExcelSheetSource = reader.ExcelSheetSource
