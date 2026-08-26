@@ -41,6 +41,9 @@ import (
 //	M-29 a << b / a >> b                 -> mysql_shift_left / mysql_shift_right
 //	M-30 x REGEXP p, QUOTE, ASCII        -> mysql_regexp / mysql_quote /
 //	                                     mysql_ascii
+//	M-31 INSERT(...)                     -> mysql_insert(...)
+//	M-31 ISNULL(x)                       -> (x IS NULL)
+//	M-31 ATAN(y, x)                      -> atan2(y, x)
 //
 // M-10 (LIMIT n, m) needs no rewrite: SQLite accepts it natively.
 func rewriteMySQL(tokens []token) ([]token, error) {
@@ -211,6 +214,22 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_regexp_replace", mysqlCallPass)
 	case "ORD":
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_ord", mysqlCallPass)
+	case "INSERT":
+		// INSERT begins a statement in SQLite, so the call form is a syntax
+		// error there whatever this package registers. It is renamed rather
+		// than registered.
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_insert", mysqlCallPass)
+	case "ISNULL":
+		// SQLite spells this as a postfix operator, so ISNULL(x) is a syntax
+		// error to it and the call becomes the operator instead.
+		return rewriteIsNull(tokens, open, closeIdx, mysqlCallPass)
+	case "ATAN":
+		// SQLite's atan takes one argument; MySQL's two-argument form is its
+		// atan2, with the same argument order.
+		if callArity(tokens, open, closeIdx) == 2 {
+			return rewriteRenameCall(tokens, open, closeIdx, "atan2", mysqlCallPass)
+		}
+		return nil, false, nil
 	case "CONCAT":
 		// MySQL CONCAT returns NULL when any argument is NULL. SQLite's own
 		// concat() treats a NULL as an empty string, so passing the call through
@@ -429,4 +448,22 @@ func rejectHexLiteralPass(tokens []token) error {
 		}
 	}
 	return nil
+}
+
+// rewriteIsNull implements the ISNULL part of M-31: ISNULL(x) -> (x IS NULL).
+// SQLite reads ISNULL as a postfix operator, so the call form is a syntax error
+// there and a rename would not help.
+func rewriteIsNull(tokens []token, open, closeIdx int, pass func([]token) ([]token, error)) ([]token, bool, error) {
+	if callArity(tokens, open, closeIdx) != 1 {
+		return nil, false, fmt.Errorf("%w: ISNULL takes one argument", ErrUnsupportedSyntax)
+	}
+	inner, err := pass(tokens[open+1 : closeIdx])
+	if err != nil {
+		return nil, false, err
+	}
+	repl := make([]token, 0, len(inner)+6)
+	repl = append(repl, opToken("("))
+	repl = append(repl, trimSpaceTokens(inner)...)
+	repl = append(repl, spaceToken(), wordToken("IS"), spaceToken(), wordToken("NULL"), opToken(")"))
+	return repl, true, nil
 }

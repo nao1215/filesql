@@ -22,7 +22,13 @@
 // Function gaps (NOW, DATE_FORMAT, TO_CHAR, SPLIT_PART, SAFE_DIVIDE, DIV,
 // WIDTH_BUCKET, ...) are
 // filled by user-defined functions registered into the SQLite driver via
-// RegisterFunctions rather than by rewriting the SQL.
+// RegisterFunctions rather than by rewriting the SQL. The MySQL-only ones are
+// in mysql_functions.go, registered under the names MySQL gives them: a name
+// that is not a SQLite keyword and that no other dialect means something else
+// by needs no rewrite, and keeping the call text as the query wrote it keeps
+// the result column's name with it. STRCMP is the one whose answer is an
+// approximation rather than a match: it folds case, which MySQL's default
+// collation does, and not accents, which that collation also does.
 //
 // Arithmetic reaches the same helpers by the other route, rewriting the
 // operator into a call, where a dialect disagrees with SQLite about the answer.
