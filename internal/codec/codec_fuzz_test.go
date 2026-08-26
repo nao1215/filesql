@@ -75,6 +75,12 @@ func FuzzCodecReader(f *testing.F) {
 	f.Add(xzStream(34, false))
 	f.Add(zstdFrame(19, 0))
 	f.Add(zstdFrame(11, 0))
+	// The two sides of the zstd ceiling. Exponent 17 selects 2^27, which is
+	// exactly maxZstdWindow and is accepted; 18 selects twice that and is
+	// refused. The accepted one is the most a zstd stream may ask this package
+	// to spend, so it is the one worth opening every run.
+	f.Add(zstdFrame(17, 0))
+	f.Add(zstdFrame(18, 0))
 	// A frame the fuzzer found: a valid header declaring a 64 MiB window
 	// (descriptor 0x80 is exponent 16, so 2^26) in front of bytes that are not
 	// compressed data. It is accepted, because the window is under the ceiling,
