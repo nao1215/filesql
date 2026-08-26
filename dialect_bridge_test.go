@@ -231,9 +231,10 @@ func TestOpenReadOnlyWithDialect(t *testing.T) {
 		t.Fatalf("count = %d, want 2", n)
 	}
 
-	// A write is rejected before translation.
-	if _, err := rodb.ExecContext(ctx, "DELETE FROM sample"); !errors.Is(err, ErrReadOnly) {
-		t.Fatalf("ExecContext(DELETE) error = %v, want ErrReadOnly", err)
+	// A write is translated and then refused by SQLite, so the two settings
+	// compose rather than one of them winning.
+	if _, err := rodb.ExecContext(ctx, "DELETE FROM sample"); err == nil {
+		t.Fatal("ExecContext(DELETE) succeeded on a read-only database")
 	}
 }
 

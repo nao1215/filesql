@@ -513,7 +513,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Report a workbook's sheets and their visibility | `ExampleExcelSheetsInFile`, `ExampleExcelSheetsInReader` | [example_api_test.go](./example_api_test.go) |
 | Check a workbook's sheets for table names that collide | `ExampleExcelSheetTableNames` | [example_api_test.go](./example_api_test.go) |
 | Attach your own logger | `ExampleDBBuilder_WithLogger`, `ExampleNewSlogAdapter` | [example_api_test.go](./example_api_test.go) |
-| Open a read-only wrapper | `ExampleDBBuilder_OpenReadOnly`, `ExampleNewReadOnlyDB` | [example_api_test.go](./example_api_test.go) |
+| Open a database that refuses writes | `ExampleDBBuilder_OpenReadOnly` | [example_api_test.go](./example_api_test.go) |
 | Save on close or commit | `ExampleDBBuilder_EnableAutoSave`, `ExampleDBBuilder_EnableAutoSaveOnCommit`, `ExampleDBBuilder_DisableAutoSave` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
 | Export tables with format/compression/encoding/line-ending options | `ExampleDumpDatabase`, `ExampleNewDumpOptions`, `ExampleDumpOptions_WithFormat`, `ExampleDumpOptions_WithCompression`, `ExampleDumpOptions_WithEncoding`, `ExampleDumpOptions_WithLineEnding` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
 | Work with compression helpers directly | `ExampleNewCompressionHandler`, `ExampleNewCompressionFactory`, `ExampleCompressionFactory_DetectCompressionType` | [example_api_test.go](./example_api_test.go) |
