@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1127,4 +1129,131 @@ func TestDataIntegrityValidation(t *testing.T) {
 		assert.NoError(t, rows.Err())
 		assert.Equal(t, 0, duplicates, "Should have no duplicate user IDs")
 	})
+}
+
+// TestEveryRouteBuildsTheSameTable pins that the four ways of naming an input
+// agree about what they build.
+//
+// A path, an embedded filesystem, a reader and LoadInto reach different code:
+// a path is read where it lies, an fs.FS entry is turned into a reader, a
+// reader cannot be read twice and so is typed differently, and LoadInto loads
+// into a database the caller owns. The table name each of them chooses is
+// theirs to choose, but the columns, the types and the cells are the file's,
+// and a difference there is a difference the caller did not ask for.
+func TestEveryRouteBuildsTheSameTable(t *testing.T) {
+	t.Parallel()
+
+	// Values chosen to make every inference decision: a zero-padded code and an
+	// integer past int64 force TEXT, a decimal forces REAL, an empty cell is the
+	// one that must not become the empty string or the other way round.
+	const body = "code,amount,note,count\n" +
+		"007,2.50,alpha,1\n" +
+		"11040320260000000000,1.00,,2\n" +
+		"042,-0.5,\"a,b\",3\n"
+
+	ctx := t.Context()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "rows.csv")
+	require.NoError(t, os.WriteFile(src, []byte(body), 0o600))
+
+	want := tableShape(ctx, t, func() (*sql.DB, func()) {
+		db := openBuilt(ctx, t, NewBuilder().AddPath(src))
+		return db, func() { _ = db.Close() }
+	})
+
+	t.Run("an embedded filesystem", func(t *testing.T) {
+		t.Parallel()
+
+		got := tableShape(ctx, t, func() (*sql.DB, func()) {
+			db := openBuilt(ctx, t, NewBuilder().AddFS(os.DirFS(dir)))
+			return db, func() { _ = db.Close() }
+		})
+		assert.Equal(t, want, got)
+	})
+
+	t.Run("a reader", func(t *testing.T) {
+		t.Parallel()
+
+		got := tableShape(ctx, t, func() (*sql.DB, func()) {
+			db := openBuilt(ctx, t, NewBuilder().AddReader(strings.NewReader(body), "rows", FileTypeCSV))
+			return db, func() { _ = db.Close() }
+		})
+		assert.Equal(t, want, got)
+	})
+
+	t.Run("a database the caller owns", func(t *testing.T) {
+		t.Parallel()
+
+		got := tableShape(ctx, t, func() (*sql.DB, func()) {
+			db, err := sql.Open("sqlite", ":memory:")
+			require.NoError(t, err)
+			// ":memory:" is private per connection, so the pool has to be one.
+			db.SetMaxOpenConns(1)
+			builder, err := NewBuilder().AddPath(src).Build(ctx)
+			require.NoError(t, err)
+			require.NoError(t, builder.LoadInto(ctx, db))
+			return db, func() { _ = db.Close() }
+		})
+		assert.Equal(t, want, got)
+	})
+}
+
+// openBuilt builds and opens a builder, failing the test on either step.
+func openBuilt(ctx context.Context, t *testing.T, b *DBBuilder) *sql.DB {
+	t.Helper()
+
+	built, err := b.Build(ctx)
+	require.NoError(t, err)
+	db, err := built.Open(ctx)
+	require.NoError(t, err)
+	return db
+}
+
+// tableShape is a table's columns, their declared types and every cell, with a
+// NULL rendered apart from an empty string so the two cannot be confused.
+// The table is always "rows": every route in this test loads the same file,
+// and the name each of them chooses for it is not what is being compared.
+const routeTable = "rows"
+
+func tableShape(ctx context.Context, t *testing.T, open func() (*sql.DB, func())) string {
+	t.Helper()
+
+	const table = routeTable
+
+	db, closeDB := open()
+	defer closeDB()
+
+	var shape strings.Builder
+	info, err := db.QueryContext(ctx, `SELECT name, type FROM pragma_table_info(?)`, table)
+	require.NoError(t, err)
+	names := make([]string, 0, 4)
+	for info.Next() {
+		var name, declared string
+		require.NoError(t, info.Scan(&name, &declared))
+		names = append(names, name)
+		fmt.Fprintf(&shape, "%s %s\n", name, declared)
+	}
+	require.NoError(t, info.Err())
+	require.NoError(t, info.Close())
+	require.NotEmpty(t, names, "table %q has no columns", table)
+
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = fmt.Sprintf(`quote("%s")`, n)
+	}
+	rows, err := db.QueryContext(ctx,
+		fmt.Sprintf(`SELECT %s FROM "%s"`, strings.Join(quoted, ", "), table))
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		cells := make([]string, len(names))
+		ptrs := make([]any, len(names))
+		for i := range cells {
+			ptrs[i] = &cells[i]
+		}
+		require.NoError(t, rows.Scan(ptrs...))
+		shape.WriteString(strings.Join(cells, "|") + "\n")
+	}
+	require.NoError(t, rows.Err())
+	return shape.String()
 }

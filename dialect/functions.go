@@ -282,6 +282,18 @@ func registerAll() error {
 		"safe_subtract":     {2, safeArith(safeSubInt, func(a, b float64) float64 { return a - b })},
 		"safe_multiply":     {2, safeArith(safeMulInt, func(a, b float64) float64 { return a * b })},
 		"safe_negate":       {1, fnSafeNegate},
+		// The clock helpers every engine fixes at the start of the statement.
+		// Registering them as deterministic is what fixes them: SQLite computes
+		// a deterministic function whose arguments are constant once per
+		// execution and reuses the answer for every row, and computes it again
+		// the next time the statement runs. UNIX_TIMESTAMP is variadic and only
+		// its no-argument form reads the clock; the form that takes a datetime
+		// is pure, so both belong here.
+		"now":              {0, fnNow},
+		"curdate":          {0, fnCurdate},
+		"curtime":          {0, fnCurtime},
+		"unix_timestamp":   {-1, fnUnixTimestamp},
+		"current_datetime": {-1, fnCurrentDatetime},
 	}
 	// The MySQL-only helpers live in their own file, because there are enough of
 	// them that listing them here would bury the ones every dialect shares.
@@ -296,23 +308,11 @@ func registerAll() error {
 	}
 	registeredFunctions = det
 
-	// Non-deterministic functions must not be registered as deterministic.
-	nondet := map[string]scalarSpec{
-		"now":     {0, fnNow},
-		"curdate": {0, fnCurdate},
-		"curtime": {0, fnCurtime},
-		"rand":    {0, fnRand},
-		// UNIX_TIMESTAMP() with no argument reads the clock, so the whole
-		// function has to be registered as non-deterministic even though the
-		// one-argument form is pure.
-		"unix_timestamp": {-1, fnUnixTimestamp},
-		"generate_uuid":  {0, fnGenerateUUID},
-	}
-	maps.Copy(nondet, postgresqlNonDeterministicFunctions())
-	maps.Copy(nondet, googlesqlNonDeterministicFunctions())
+	nondet := nonDeterministicFunctions()
 	// safe_call runs one of the helpers above and swallows its error, which is
 	// what BigQuery's SAFE. prefix asks for. It is registered here rather than
-	// in nondet's table because it has to see the finished table.
+	// in that table because it has to see the finished one, and it stays
+	// non-deterministic because the helper it is given may be clock_timestamp.
 	nondet["safe_call"] = scalarSpec{nArg: -1, fn: fnSafeCall}
 	for name, spec := range nondet {
 		if err := sqlite.RegisterScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
@@ -321,6 +321,24 @@ func registerAll() error {
 	}
 	maps.Copy(registeredFunctions, nondet)
 	return nil
+}
+
+// nonDeterministicFunctions is every helper SQLite must call again for each row.
+// Two kinds belong here and nothing else does: the ones that are meant to give
+// a different answer every time they are asked -- a random number, a fresh UUID
+// -- and PostgreSQL's changing clock, which is the whole of what separates
+// clock_timestamp and timeofday from now and statement_timestamp. Everything
+// that reads the clock once at the start of the statement is registered as
+// deterministic instead, which is what makes one statement see one reading.
+func nonDeterministicFunctions() map[string]scalarSpec {
+	nondet := map[string]scalarSpec{
+		"rand":          {0, fnRand},
+		"generate_uuid": {0, fnGenerateUUID},
+	}
+	// GoogleSQL has nothing to add: BigQuery fixes CURRENT_DATETIME at the
+	// start of the statement, like the rest of its CURRENT_ family.
+	maps.Copy(nondet, postgresqlNonDeterministicFunctions())
+	return nondet
 }
 
 // registeredFunctions is every scalar function this package computes itself,
@@ -603,16 +621,53 @@ func leadingNumber(s string) float64 {
 	return f
 }
 
+// statementClockWindow is how long one reading of the clock is reused.
+//
+// Registering the fixed clock as deterministic takes it off the row, but not
+// quite onto the statement: SQLite folds each occurrence of the call once, so a
+// query naming NOW twice reads the clock twice, microseconds apart, and the two
+// answers differ whenever those microseconds straddle a second. Every engine
+// this package translates gives one answer to every occurrence in a statement.
+// Sharing a reading for a window wider than the gap between the occurrences and
+// far narrower than the second these functions are formatted to is what closes
+// that gap.
+//
+// A statement that begins within the window of the one before it therefore sees
+// that statement's reading, which is at most a window old and never earlier
+// than what an earlier statement was given.
+const statementClockWindow = time.Millisecond
+
+//nolint:gochecknoglobals // one reading, shared by every helper that must not move within a statement
+var (
+	clockMu   sync.Mutex
+	lastClock time.Time
+)
+
+// clockUTC is the reading the fixed clock functions answer from. It is UTC
+// because this package carries no time zone -- no column has one, no cast
+// produces one, and a zone argument is refused -- so UTC is the reading that is
+// the same on every machine, and it is the one SQLite's own CURRENT_TIMESTAMP
+// answers.
+func clockUTC() time.Time {
+	clockMu.Lock()
+	defer clockMu.Unlock()
+
+	if now := time.Now(); now.Sub(lastClock) >= statementClockWindow {
+		lastClock = now
+	}
+	return lastClock.UTC()
+}
+
 func fnNow(_ []driver.Value) (driver.Value, error) {
-	return time.Now().Format(layoutDateTime), nil
+	return clockUTC().Format(layoutDateTime), nil
 }
 
 func fnCurdate(_ []driver.Value) (driver.Value, error) {
-	return time.Now().Format(layoutDateOnly), nil
+	return clockUTC().Format(layoutDateOnly), nil
 }
 
 func fnCurtime(_ []driver.Value) (driver.Value, error) {
-	return time.Now().Format(layoutTimeOnly), nil
+	return clockUTC().Format(layoutTimeOnly), nil
 }
 
 func fnRand(_ []driver.Value) (driver.Value, error) {
@@ -1782,7 +1837,7 @@ func fnLastDay(args []driver.Value) (driver.Value, error) {
 // read as UTC, as everywhere else in this package.
 func fnUnixTimestamp(args []driver.Value) (driver.Value, error) {
 	if len(args) == 0 {
-		return time.Now().Unix(), nil
+		return clockUTC().Unix(), nil
 	}
 	if len(args) > 1 {
 		return nil, fmt.Errorf("dialect: UNIX_TIMESTAMP expects 0 or 1 arguments, got %d", len(args))

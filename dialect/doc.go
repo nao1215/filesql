@@ -144,6 +144,16 @@
 // other thing there is no type for, so BigQuery's forms that take one are
 // refused rather than answered unshifted, which would be a different instant.
 //
+// The clock follows from the same absence. NOW, CURDATE, CURTIME,
+// UNIX_TIMESTAMP, PostgreSQL's now and its two fixed siblings, and BigQuery's
+// CURRENT_DATETIME all read UTC, which is what SQLite's own CURRENT_TIMESTAMP
+// answers and what BigQuery answers when no zone is named; MySQL and
+// PostgreSQL answer a session zone that has no counterpart here. Each of them
+// is fixed at the start of the statement, so every row of one result carries
+// the same reading and so does every place the statement names one of them.
+// PostgreSQL's clock_timestamp and timeofday are the exception and advance
+// while the statement runs, which is what they are for.
+//
 // One consequence of that has no error to report it: subtracting one timestamp
 // from another is an interval in PostgreSQL and an ordinary subtraction to
 // SQLite, so "ts2 - ts1" answers a number rather than a span, and for two

@@ -5,7 +5,11 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"math"
+	"os"
+	"os/exec"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -2182,4 +2186,223 @@ func TestHexFunctions(t *testing.T) {
 			})
 		}
 	})
+}
+
+// TestClockFunctionsReadUTC pins the zone every clock helper answers in.
+//
+// They read the host's local zone, so the same query answered a different hour
+// on every machine and disagreed with SQLite's own CURRENT_TIMESTAMP in the
+// same row. This package carries no zone -- no column has one, no cast produces
+// one, and a zone argument is refused -- so UTC is the only reading that is the
+// same everywhere, and it is what SQLite's own clock and BigQuery's default
+// answer.
+//
+// The assertions run in a child process with TZ set away from UTC, because a
+// test host that is already on UTC cannot tell a local reading from a UTC one:
+// on such a machine this test passes whether the bug is present or not, and CI
+// runs on exactly such machines.
+func TestClockFunctionsReadUTC(t *testing.T) {
+	if os.Getenv(clockZoneChildEnv) != "1" {
+		runInAnotherZone(t, "TestClockFunctionsReadUTC")
+		return
+	}
+	if time.Now().Format(layoutTimeOnly) == time.Now().UTC().Format(layoutTimeOnly) {
+		t.Skip("this platform did not take the zone from TZ, so a local reading cannot be told from a UTC one")
+	}
+	if err := RegisterFunctions(); err != nil {
+		t.Fatalf("RegisterFunctions() error: %v", err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	// SQLite's own clock is UTC and is the reference. A second of slack covers
+	// the two readings landing either side of a tick.
+	tests := []struct {
+		name      string
+		expr      string
+		reference string
+	}{
+		{"NOW", `NOW()`, `strftime('%Y-%m-%d %H:%M:%S','now')`},
+		{"CURDATE", `CURDATE()`, `strftime('%Y-%m-%d','now')`},
+		{"CURTIME", `CURTIME()`, `strftime('%H:%M:%S','now')`},
+		{"postgres now", `now()`, `strftime('%Y-%m-%d %H:%M:%S','now')`},
+		{"statement_timestamp", `statement_timestamp()`, `strftime('%Y-%m-%d %H:%M:%S','now')`},
+		{"transaction_timestamp", `transaction_timestamp()`, `strftime('%Y-%m-%d %H:%M:%S','now')`},
+		{"clock_timestamp", `clock_timestamp()`, `strftime('%Y-%m-%d %H:%M:%S','now')`},
+		{"CURRENT_DATETIME", `CURRENT_DATETIME()`, `strftime('%Y-%m-%d %H:%M:%S','now')`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got, want string
+			q := "SELECT " + tt.expr + ", " + tt.reference
+			if err := db.QueryRowContext(context.Background(), q).Scan(&got, &want); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+			if got == want {
+				return
+			}
+			// Only a tick may separate them, so retry once against a fresh
+			// reference rather than failing on a boundary.
+			if err := db.QueryRowContext(context.Background(), q).Scan(&got, &want); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+			if got != want {
+				t.Errorf("%s = %q, want SQLite's own UTC clock %q", tt.expr, got, want)
+			}
+		})
+	}
+}
+
+// TestClockSharesOneReadingWithinItsWindow pins the mechanism the statement
+// guarantee rests on, which SQL cannot show: the answers are formatted to
+// whole seconds, so two readings microseconds apart look alike whether they are
+// shared or not, and the case that tells them apart is the one where those
+// microseconds straddle a second.
+func TestClockSharesOneReadingWithinItsWindow(t *testing.T) {
+	t.Parallel()
+
+	first := clockUTC()
+	if again := clockUTC(); !again.Equal(first) {
+		t.Errorf("two readings inside the window differ: %v and %v", first, again)
+	}
+
+	time.Sleep(20 * statementClockWindow)
+	later := clockUTC()
+	if !later.After(first) {
+		t.Errorf("the reading did not move past the window: %v then %v", first, later)
+	}
+}
+
+// clockZoneChildEnv marks the child process the zone-sensitive clock tests run
+// their assertions in.
+const clockZoneChildEnv = "FILESQL_DIALECT_CLOCK_ZONE_CHILD"
+
+// runInAnotherZone re-runs one test in a child process whose TZ is not UTC. Go
+// reads the zone once, so setting it from inside the test is too late; a child
+// is the one way to see what a caller outside UTC sees.
+func runInAnotherZone(t *testing.T, name string) {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^"+name+"$", "-test.v") //nolint:gosec // os.Args[0] is this test binary
+	cmd.Env = append(os.Environ(), clockZoneChildEnv+"=1", "TZ=Asia/Tokyo")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Errorf("%s outside UTC failed: %v\n%s", name, err, out)
+	}
+}
+
+// TestClockFunctionsAreFixedPerStatement pins that one statement sees one
+// reading.
+//
+// A scalar function registered as non-deterministic is called once per row, so
+// SELECT NOW() FROM t answered a different time on different rows and a row
+// could be stamped after the row below it. Every engine this package translates
+// fixes these at the start of the statement, and so does SQLite's own
+// CURRENT_TIMESTAMP, so a query mixing the two compared two clocks.
+func TestClockFunctionsAreFixedPerStatement(t *testing.T) {
+	if err := RegisterFunctions(); err != nil {
+		t.Fatalf("RegisterFunctions() error: %v", err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `CREATE TABLE rows_(n INTEGER)`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`WITH RECURSIVE c(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM c WHERE n < 2000)
+		 INSERT INTO rows_ SELECT n FROM c`); err != nil {
+		t.Fatalf("fill: %v", err)
+	}
+
+	fixed := []string{
+		`NOW()`, `CURDATE()`, `CURTIME()`, `UNIX_TIMESTAMP()`,
+		`now()`, `statement_timestamp()`, `transaction_timestamp()`,
+		`CURRENT_DATETIME()`,
+	}
+	for _, expr := range fixed {
+		t.Run(expr, func(t *testing.T) {
+			var distinct int
+			q := `SELECT COUNT(DISTINCT ` + expr + `) FROM rows_`
+			if err := db.QueryRowContext(ctx, q).Scan(&distinct); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+			if distinct != 1 {
+				t.Errorf("%s answered %d different values in one statement, want 1", expr, distinct)
+			}
+		})
+	}
+
+	t.Run("every occurrence in one statement reads the same clock", func(t *testing.T) {
+		// Registering the fixed clock as deterministic takes it off the row but
+		// not quite onto the statement: SQLite folds each occurrence of the
+		// call once, so a query naming NOW twice used to read the clock twice,
+		// microseconds apart, and the two answers differed whenever those
+		// microseconds straddled a second. The engines this package translates
+		// give one answer to every occurrence.
+		for _, q := range []string{
+			`SELECT NOW() = (SELECT NOW()) FROM rows_ LIMIT 1`,
+			`SELECT CURTIME() = (SELECT CURTIME()) FROM rows_ LIMIT 1`,
+			`SELECT UNIX_TIMESTAMP() = (SELECT UNIX_TIMESTAMP()) FROM rows_ LIMIT 1`,
+		} {
+			var same int
+			if err := db.QueryRowContext(ctx, q).Scan(&same); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+			if same != 1 {
+				t.Errorf("%s: the two occurrences disagree", q)
+			}
+		}
+	})
+
+	t.Run("a later statement reads the clock again", func(t *testing.T) {
+		// The reading is fixed per statement, not per connection: SQLite folds
+		// it once per execution and computes it again for the next one.
+		var first string
+		if err := db.QueryRowContext(ctx, `SELECT NOW()`).Scan(&first); err != nil {
+			t.Fatal(err)
+		}
+		var again string
+		if err := db.QueryRowContext(ctx, `SELECT strftime('%Y-%m-%d %H:%M:%S','now')`).Scan(&again); err != nil {
+			t.Fatal(err)
+		}
+		if first > again {
+			t.Errorf("NOW() = %q is ahead of a later reading %q, so the value is stale", first, again)
+		}
+	})
+}
+
+// TestOnlyTheChangingHelpersAreNonDeterministic pins which helpers SQLite is
+// told to call again for every row.
+//
+// The registration is what decides whether a statement sees one reading or one
+// per row, and a second is too coarse to tell the two apart from SQL: every row
+// of a fast statement lands in the same second whichever way it is registered.
+// So the table itself is the assertion. Two kinds belong in it and nothing
+// else: the helpers meant to answer differently every time, and PostgreSQL's
+// changing clock, which is the whole of what separates clock_timestamp and
+// timeofday from now and statement_timestamp.
+func TestOnlyTheChangingHelpersAreNonDeterministic(t *testing.T) {
+	want := []string{
+		"clock_timestamp",
+		"gen_random_uuid",
+		"generate_uuid",
+		"rand",
+		"timeofday",
+	}
+	got := make([]string, 0, len(want))
+	for name := range nonDeterministicFunctions() {
+		got = append(got, name)
+	}
+	sort.Strings(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("non-deterministic helpers = %v, want %v", got, want)
+	}
 }
