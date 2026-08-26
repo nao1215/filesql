@@ -38,6 +38,10 @@ type pgTemplateItem struct {
 	pattern string
 	// text is the pattern as the template spelled it, or the literal text.
 	text string
+	// fill is set when FM stood in front of this pattern. FM binds to the one
+	// pattern that follows it rather than to the whole template, so
+	// "FMDay, DD" is "Tuesday, 05" and not "Tuesday, 5".
+	fill bool
 }
 
 // pgTemplatePatterns are the template patterns, longest first so the scanner
@@ -54,14 +58,18 @@ var pgTemplatePatterns = []string{ //nolint:gochecknoglobals // a fixed table re
 	"Y", "I", "D", "W", "Q", "J", "V", "S", "L", "G",
 }
 
-// scanPGTemplate splits a template into patterns and literal text, and reports
-// whether it carried the FM prefix. Text in double quotes is literal with the
-// quotes removed, which is how a template asks for a letter that would
-// otherwise be read as a pattern.
+// scanPGTemplate splits a template into patterns and literal text, marking each
+// pattern an FM stood in front of, and reports whether the template held an FM
+// at all -- which is what the numeric half needs, since a numeric template
+// formats one number and there is nothing for a per-pattern flag to
+// distinguish. Text in double quotes is literal with the quotes removed, which
+// is how a template asks for a letter that would otherwise be read as a
+// pattern.
 func scanPGTemplate(format string) (items []pgTemplateItem, fillMode bool) {
+	pendingFill := false
 	for i := 0; i < len(format); {
 		if strings.HasPrefix(format[i:], "FM") || strings.HasPrefix(format[i:], "fm") {
-			fillMode = true
+			fillMode, pendingFill = true, true
 			i += 2
 			continue
 		}
@@ -87,7 +95,8 @@ func scanPGTemplate(format string) (items []pgTemplateItem, fillMode bool) {
 			if len(format[i:]) < len(pat) || !strings.EqualFold(format[i:i+len(pat)], pat) {
 				continue
 			}
-			items = append(items, pgTemplateItem{pattern: pat, text: format[i : i+len(pat)]})
+			items = append(items, pgTemplateItem{pattern: pat, text: format[i : i+len(pat)], fill: pendingFill})
+			pendingFill = false
 			i += len(pat)
 			matched = true
 			break
@@ -197,7 +206,7 @@ func toRoman(n int) string {
 
 // pgFormatTime renders a time against a PostgreSQL date/time template.
 func pgFormatTime(format string, tm time.Time) string {
-	items, fillMode := scanPGTemplate(format)
+	items, _ := scanPGTemplate(format)
 	var b strings.Builder
 	last := 0 // the number the previous pattern printed, for TH
 	for _, it := range items {
@@ -205,7 +214,7 @@ func pgFormatTime(format string, tm time.Time) string {
 			b.WriteString(it.text)
 			continue
 		}
-		out, n := pgTimePattern(it, tm, fillMode)
+		out, n := pgTimePattern(it, tm, it.fill)
 		if it.pattern == "TH" {
 			b.WriteString(applyCase(it.pattern, it.text, ordinalSuffix(last)))
 			continue

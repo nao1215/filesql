@@ -52,12 +52,16 @@ func TestToCharDateTemplate(t *testing.T) {
 		{"RM", "III "},
 		{"rm", "iii "},
 
-		// FM suppresses the padding of a name.
+		// FM suppresses the padding of a name, and it binds to the one pattern
+		// that follows it rather than to the whole template.
 		{"FMDay", "Tuesday"},
 		{"FMMonth", "March"},
 		{"FMDD", "5"},
 		{"FMMM", "3"},
 		{"FMDDD", "65"},
+		{"FMDay, DD FMMonth YYYY", "Tuesday, 05 March 2024"},
+		{"DD FMDD", "05 5"},
+		{"FMDD DD", "5 05"},
 
 		// The prefix collisions: each of these shares its first characters with
 		// a shorter pattern, and the shorter one used to win.
