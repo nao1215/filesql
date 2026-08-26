@@ -45,7 +45,11 @@
 //
 // # Usage
 //
-//	import "github.com/nao1215/filesql/parser/ach"
+//	import (
+//	    "os"
+//
+//	    "github.com/nao1215/filesql/parser/ach"
+//	)
 //
 //	// Read an ACH file into TableData for SQL queries
 //	f, _ := os.Open("payment.ach")
