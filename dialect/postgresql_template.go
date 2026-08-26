@@ -4,6 +4,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 )
@@ -66,6 +68,41 @@ var pgTemplatePatterns = []string{ //nolint:gochecknoglobals // a fixed table re
 // is how a template asks for a letter that would otherwise be read as a
 // pattern.
 func scanPGTemplate(format string) (items []pgTemplateItem, fillMode bool) {
+	if cached, ok := scannedTemplates.Load(format); ok {
+		scan := cached.(scannedTemplate) //nolint:forcetypeassert,errcheck // the map holds only this type
+		return scan.items, scan.fillMode
+	}
+	items, fillMode = scanPGTemplateUncached(format)
+	// A template is nearly always a literal in the query, so the same string
+	// arrives once per row; scanning it once is most of what TO_CHAR costs. The
+	// cache is bounded because the format can be a column, and an unbounded map
+	// keyed by data is a way to run out of memory on a large file.
+	if scannedTemplateCount.Load() < maxScannedTemplates {
+		if _, loaded := scannedTemplates.LoadOrStore(format, scannedTemplate{items: items, fillMode: fillMode}); !loaded {
+			scannedTemplateCount.Add(1)
+		}
+	}
+	return items, fillMode
+}
+
+// scannedTemplate is one cached scan. Its items are never written after they go
+// into the map, so every reader shares the one slice.
+type scannedTemplate struct {
+	items    []pgTemplateItem
+	fillMode bool
+}
+
+// maxScannedTemplates bounds the cache. A query holds a handful of distinct
+// templates; a number this size is reached only by a format that comes from the
+// data, and then the cache stops growing and the scan runs as it did before.
+const maxScannedTemplates = 256
+
+var (
+	scannedTemplates     sync.Map     //nolint:gochecknoglobals // a process-wide cache of scanned templates
+	scannedTemplateCount atomic.Int64 //nolint:gochecknoglobals // the bound on the cache above
+)
+
+func scanPGTemplateUncached(format string) (items []pgTemplateItem, fillMode bool) {
 	pendingFill := false
 	for i := 0; i < len(format); {
 		if strings.HasPrefix(format[i:], "FM") || strings.HasPrefix(format[i:], "fm") {
@@ -436,6 +473,36 @@ func (t *pgNumericTemplate) zeroFrom() int {
 	return -1
 }
 
+// numericTemplateFor reads a numeric template, from the cache when it has been
+// read before. A template is nearly always a literal in the query, so the same
+// string arrives once per row and reading it once is most of what TO_CHAR
+// costs; the parsed form is never written after it is stored.
+func numericTemplateFor(format string) (*pgNumericTemplate, bool) {
+	if cached, ok := numericTemplates.Load(format); ok {
+		parsed := cached.(parsedNumericTemplate) //nolint:forcetypeassert,errcheck // the map holds only this type
+		return parsed.template, parsed.fillMode
+	}
+	items, fillMode := scanPGTemplate(format)
+	t := parseNumericTemplate(items)
+	if numericTemplateCount.Load() < maxScannedTemplates {
+		if _, loaded := numericTemplates.LoadOrStore(format, parsedNumericTemplate{template: t, fillMode: fillMode}); !loaded {
+			numericTemplateCount.Add(1)
+		}
+	}
+	return t, fillMode
+}
+
+// parsedNumericTemplate is one cached numeric template.
+type parsedNumericTemplate struct {
+	template *pgNumericTemplate
+	fillMode bool
+}
+
+var (
+	numericTemplates     sync.Map     //nolint:gochecknoglobals // a process-wide cache of parsed numeric templates
+	numericTemplateCount atomic.Int64 //nolint:gochecknoglobals // the bound on the cache above
+)
+
 // parseNumericTemplate reads the scanned items of a numeric template.
 //
 //nolint:cyclop,gocyclo // one arm per template element
@@ -503,8 +570,7 @@ func pgSignOf(pattern string) pgNumericSign {
 
 // pgFormatNumber renders a value against a PostgreSQL numeric template.
 func pgFormatNumber(value float64, format string) string {
-	items, fillMode := scanPGTemplate(format)
-	t := parseNumericTemplate(items)
+	t, fillMode := numericTemplateFor(format)
 	if t.roman {
 		return applyCase("RN", t.romanSpelling, padRoman(int(roundHalfAway(value)), fillMode))
 	}
@@ -566,18 +632,26 @@ func padRoman(n int, fillMode bool) string {
 func pgNumericBody(t *pgNumericTemplate, whole, frac string, fillMode bool) (string, bool) {
 	width := t.intDigits()
 	overflowed := len(whole) > width
-	padded := whole
-	if overflowed {
+	var padded string
+	switch {
+	case overflowed:
 		padded = strings.Repeat("#", width)
-	} else {
+	case len(whole) >= width:
+		padded = whole
+	default:
+		// The pad is written left to right into one buffer rather than
+		// prepended a character at a time, which reallocated the whole string
+		// per column.
 		zeroFrom := t.zeroFrom()
-		for len(padded) < width {
-			fill := " "
-			if zeroFrom >= 0 && width-len(padded)-1 >= zeroFrom {
-				fill = "0"
+		buf := make([]byte, 0, width)
+		for i := range width - len(whole) {
+			fill := byte(' ')
+			if zeroFrom >= 0 && i >= zeroFrom {
+				fill = '0'
 			}
-			padded = fill + padded
+			buf = append(buf, fill)
 		}
+		padded = string(append(buf, whole...))
 	}
 
 	// A separator standing to the left of the first digit that was really

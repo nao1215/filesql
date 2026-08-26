@@ -59,6 +59,11 @@ func BenchmarkDialectFunctions(b *testing.B) {
 		{"postgresql_regexp_replace", PostgreSQL, `SELECT regexp_replace('aaa', 'a', 'X')`},
 		{"googlesql_format", GoogleSQL, `SELECT FORMAT('%s=%t', 'a', 'b')`},
 		{"googlesql_left", GoogleSQL, `SELECT LEFT('abcdef', 3)`},
+		// TO_CHAR scans its template on every call, so its cost is per row
+		// rather than per statement. The two templates are the shapes a caller
+		// writes: a date laid out for a report and a number formatted for one.
+		{"postgresql_to_char_date", PostgreSQL, `SELECT TO_CHAR(TIMESTAMP '2026-08-26 13:04:05', 'FMDay, DD FMMonth YYYY HH24:MI:SS')`},
+		{"postgresql_to_char_number", PostgreSQL, `SELECT TO_CHAR(1234567.891, 'FM999G999G999D99')`},
 	}
 	for _, c := range cases {
 		translated, err := Translate(c.dialect, c.query)
