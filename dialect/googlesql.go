@@ -172,6 +172,12 @@ func matchSafePrefix(tokens []token, i int) (string, int, bool) {
 	return tokens[name].text, name, true
 }
 
+// arrayAggregates are the BigQuery aggregates whose result is an array.
+var arrayAggregates = map[string]bool{ //nolint:gochecknoglobals // a fixed table read by the unsupported check
+	"ARRAY_AGG": true, "ARRAY_CONCAT_AGG": true, "APPROX_QUANTILES": true,
+	"APPROX_TOP_COUNT": true, "APPROX_TOP_SUM": true,
+}
+
 // checkUnsupportedGoogleSQL rejects the G-9 constructs that have no SQLite
 // equivalent.
 func checkUnsupportedGoogleSQL(tokens []token) error {
@@ -190,6 +196,16 @@ func checkUnsupportedGoogleSQL(tokens []token) error {
 		}
 		if isWordEq(t, "UNNEST") {
 			return fmt.Errorf("%w: UNNEST is not supported", ErrUnsupportedSyntax)
+		}
+		// The aggregates whose result is an array. Left alone they reached
+		// SQLite as "no such function", telling the caller a name they did
+		// write does not exist rather than that the construct has no SQLite
+		// form -- which is what every other array-shaped construct here says.
+		if arrayAggregates[strings.ToUpper(t.text)] && t.kind == tokWord {
+			if open := nextSig(tokens, i+1); open >= 0 && isOpEq(tokens[open], "(") {
+				return fmt.Errorf("%w: %s is not supported; its result is an array and SQLite has no array type",
+					ErrUnsupportedSyntax, strings.ToUpper(t.text))
+			}
 		}
 		// The type parameters spell these out — ARRAY<INT64>, STRUCT<a INT64> —
 		// and the parenthesis spells the same thing without them: STRUCT(1 AS a)

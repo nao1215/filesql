@@ -213,3 +213,143 @@ func TestSafePrefixRunsAnyHelper(t *testing.T) {
 		})
 	}
 }
+
+// TestGoogleSQLScalarFunctions pins the GoogleSQL-only scalar functions. Every
+// want was read from BigQuery except where a note says the emulator used to
+// read them disagrees with the documented definition, in which case the
+// definition was taken.
+func TestGoogleSQLScalarFunctions(t *testing.T) {
+	db := castDB(t)
+
+	for _, tt := range []struct {
+		name    string
+		query   string
+		want    string
+		wantErr bool
+	}{
+		// INSTR takes a position and an occurrence, where SQLite's own takes
+		// two arguments and nothing else.
+		{name: "instr finds the first match", query: `SELECT INSTR('abcabc', 'b')`, want: "2"},
+		{name: "instr starts where it is told", query: `SELECT INSTR('abcabc', 'b', 3)`, want: "5"},
+		{name: "instr counts occurrences", query: `SELECT INSTR('abcabc', 'b', 1, 2)`, want: "5"},
+		{name: "instr with no match", query: `SELECT INSTR('abcabc', 'z')`, want: "0"},
+		{name: "instr past the occurrences", query: `SELECT INSTR('abcabc', 'b', 1, 3)`, want: "0"},
+		// A negative position searches backwards from that far from the end,
+		// and the answer is still counted from the beginning. The emulator
+		// used to read these answers disagrees -- it answers 4 here, a
+		// position 'b' does not occupy at all -- so the documented reading was
+		// taken.
+		{name: "instr searches backwards", query: `SELECT INSTR('abcabc', 'b', -1)`, want: "5"},
+		{name: "instr searches backwards for a later occurrence", query: `SELECT INSTR('abcabc', 'b', -1, 2)`, want: "2"},
+		{name: "instr counts characters rather than bytes", query: `SELECT INSTR('日本語', '語')`, want: "3"},
+		{name: "instr refuses a zero position", query: `SELECT INSTR('abcabc', 'b', 0)`, wantErr: true},
+
+		// CONTAINS_SUBSTR normalizes to NFKC and casefolds, so it matches
+		// across case and not across accents.
+		{name: "contains_substr across case", query: `SELECT CONTAINS_SUBSTR('alphabet', 'PHA')`, want: "1"},
+		{name: "contains_substr with the case the other way", query: `SELECT CONTAINS_SUBSTR('AlphaBet', 'pha')`, want: "1"},
+		{name: "contains_substr does not cross an accent", query: `SELECT CONTAINS_SUBSTR('café', 'cafe')`, want: "0"},
+		{name: "contains_substr with no match", query: `SELECT CONTAINS_SUBSTR('alphabet', 'zz')`, want: "0"},
+
+		// NORMALIZE takes its mode as a bare keyword, which the rewrite turns
+		// into an argument.
+		{name: "normalize defaults to NFC", query: `SELECT LENGTH(NORMALIZE('a` + "\u0301" + `'))`, want: "1"},
+		{name: "normalize to NFC", query: `SELECT LENGTH(NORMALIZE('a` + "\u0301" + `', NFC))`, want: "1"},
+		{name: "normalize to NFD", query: `SELECT LENGTH(NORMALIZE('a` + "\u0301" + `', NFD))`, want: "2"},
+		{name: "normalize to NFKC", query: `SELECT NORMALIZE('` + "\ufb01" + `', NFKC)`, want: "fi"},
+		{name: "normalize_and_casefold folds case", query: `SELECT NORMALIZE_AND_CASEFOLD('AbC')`, want: "abc"},
+		{name: "normalize refuses a mode it has not got", query: `SELECT NORMALIZE('a', NFQ)`, wantErr: true},
+
+		// EDIT_DISTANCE writes its cap as a named argument, which SQLite has
+		// no syntax for.
+		{name: "edit_distance", query: `SELECT EDIT_DISTANCE('kitten', 'sitting')`, want: "3"},
+		{name: "edit_distance of equal strings", query: `SELECT EDIT_DISTANCE('abc', 'abc')`, want: "0"},
+		{name: "edit_distance from nothing", query: `SELECT EDIT_DISTANCE('', 'abc')`, want: "3"},
+		{name: "edit_distance with a cap", query: `SELECT EDIT_DISTANCE('kitten', 'sitting', max_distance => 2)`, want: "2"},
+		{name: "edit_distance with a cap and no spaces", query: `SELECT EDIT_DISTANCE('kitten', 'sitting', max_distance=>2)`, want: "2"},
+		{name: "edit_distance counts characters", query: `SELECT EDIT_DISTANCE('日本', '日和')`, want: "1"},
+
+		// The byte encoders and their inverses.
+		{name: "from_hex round trips", query: `SELECT TO_HEX(FROM_HEX('616263'))`, want: "616263"},
+		{name: "to_base32", query: `SELECT TO_BASE32(b'abc')`, want: "MFRGG==="},
+		{name: "to_base32 of nothing", query: `SELECT TO_BASE32(b'')`, want: ""},
+		{name: "from_base32 round trips", query: `SELECT TO_HEX(FROM_BASE32('MFRGG==='))`, want: "616263"},
+		{name: "from_hex refuses text that is not hexadecimal", query: `SELECT FROM_HEX('zz')`, wantErr: true},
+		{name: "from_base32 refuses text that is not base32", query: `SELECT FROM_BASE32('!!')`, wantErr: true},
+
+		{name: "to_json_string quotes a string", query: `SELECT TO_JSON_STRING('a')`, want: `"a"`},
+		{name: "to_json_string of a number", query: `SELECT TO_JSON_STRING(1)`, want: "1"},
+		{name: "to_json_string of null", query: `SELECT TO_JSON_STRING(NULL)`, want: "null"},
+
+		// IEEE_DIVIDE answers where "/" raises under this dialect.
+		{name: "ieee_divide by zero", query: `SELECT IEEE_DIVIDE(1, 0)`, want: "+Inf"},
+		{name: "ieee_divide a negative by zero", query: `SELECT IEEE_DIVIDE(-1, 0)`, want: "-Inf"},
+		{name: "ieee_divide of two zeros", query: `SELECT IEEE_DIVIDE(0, 0)`, want: ""},
+		{name: "ieee_divide of two numbers", query: `SELECT IEEE_DIVIDE(6, 3)`, want: "2"},
+		{name: "the operator still raises", query: `SELECT 1 / 0`, wantErr: true},
+		{name: "is_inf of an infinity", query: `SELECT IS_INF(IEEE_DIVIDE(1, 0))`, want: "1"},
+		{name: "is_inf of a number", query: `SELECT IS_INF(1)`, want: "0"},
+
+		// The reciprocal trigonometric functions.
+		{name: "csc", query: `SELECT CSC(1)`, want: "1.1883951057781212"},
+		{name: "sec", query: `SELECT SEC(1)`, want: "1.8508157176809255"},
+		{name: "csch", query: `SELECT CSCH(1)`, want: "0.8509181282393216"},
+		{name: "sech", query: `SELECT SECH(1)`, want: "0.6480542736638855"},
+		{name: "coth", query: `SELECT COTH(1)`, want: "1.3130352854993315"},
+
+		{name: "error raises with its message", query: `SELECT ERROR('boom')`, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, GoogleSQL, tt.query)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("%s: expected an error, got %q", tt.query, got.String)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
+
+// TestGoogleSQLFunctionsAnswerNullForNull covers the rule every SQL function
+// follows: a NULL argument makes the answer NULL.
+func TestGoogleSQLFunctionsAnswerNullForNull(t *testing.T) {
+	db := castDB(t)
+
+	for _, q := range []string{
+		`SELECT INSTR(NULL, 'a')`,
+		`SELECT CONTAINS_SUBSTR(NULL, 'a')`,
+		`SELECT NORMALIZE(NULL)`,
+		`SELECT NORMALIZE_AND_CASEFOLD(NULL)`,
+		`SELECT EDIT_DISTANCE(NULL, 'a')`,
+		`SELECT FROM_HEX(NULL)`,
+		`SELECT TO_BASE32(NULL)`,
+		`SELECT FROM_BASE32(NULL)`,
+		`SELECT IEEE_DIVIDE(NULL, 1)`,
+		`SELECT IS_INF(NULL)`,
+		`SELECT CSC(NULL)`,
+		`SELECT MD5(NULL)`,
+		`SELECT DATE(NULL, 1, 1)`,
+		`SELECT TIME(NULL, 1, 1)`,
+		`SELECT UNIX_DATE(NULL)`,
+		`SELECT DATE_FROM_UNIX_DATE(NULL)`,
+		`SELECT LAST_DAY(NULL)`,
+		`SELECT TIME_DIFF(NULL, TIME '12:00:00', HOUR)`,
+	} {
+		t.Run(q, func(t *testing.T) {
+			got, err := runDialect(t, db, GoogleSQL, q)
+			if err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+			if got.Valid {
+				t.Errorf("%s = %q, want NULL", q, got.String)
+			}
+		})
+	}
+}

@@ -2,6 +2,7 @@ package dialect
 
 import (
 	"database/sql/driver"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -17,6 +18,7 @@ func TestAggregateTranslation(t *testing.T) {
 	// divide by.
 	const pair = `FROM (SELECT 1 AS x UNION ALL SELECT 3) t`
 	const bools = `FROM (SELECT 1 AS x UNION ALL SELECT 0) t`
+	const pairs = `FROM (SELECT 1 AS x, 2 AS y UNION ALL SELECT 2, 4 UNION ALL SELECT 3, 7) t`
 
 	tests := []struct {
 		name    string
@@ -32,6 +34,20 @@ func TestAggregateTranslation(t *testing.T) {
 		{"postgresql bool_and", PostgreSQL, `SELECT BOOL_AND(x) ` + bools, "0"},
 		{"postgresql bool_or", PostgreSQL, `SELECT BOOL_OR(x) ` + bools, "1"},
 		{"mysql any_value", MySQL, `SELECT ANY_VALUE(x) ` + pair, "1"},
+
+		// BigQuery's APPROX_COUNT_DISTINCT estimates what SQLite counts
+		// exactly, which is a correct answer to the question it asks.
+		{"googlesql approx_count_distinct", GoogleSQL, `SELECT APPROX_COUNT_DISTINCT(x) FROM (SELECT 1 AS x UNION ALL SELECT 1 UNION ALL SELECT 2) t`, "2"},
+
+		// The correlation and the covariances, over the three pairs BigQuery
+		// was asked for the same answers with. A row where either side is NULL
+		// takes no part in any of them.
+		{"googlesql corr", GoogleSQL, `SELECT CORR(x, y) ` + pairs, "0.9933992677987828"},
+		{"googlesql covar_pop", GoogleSQL, `SELECT COVAR_POP(x, y) ` + pairs, "1.6666666666666667"},
+		{"googlesql covar_samp", GoogleSQL, `SELECT COVAR_SAMP(x, y) ` + pairs, "2.5"},
+		{"googlesql corr of a column with itself", GoogleSQL, `SELECT CORR(x, x) ` + pairs, "1"},
+		{"googlesql covar_pop over one row", GoogleSQL, `SELECT COVAR_POP(x, x) FROM (SELECT 1 AS x) t`, "0"},
+		{"googlesql covar_pop skips an incomplete pair", GoogleSQL, `SELECT COVAR_POP(x, y) FROM (SELECT 1 AS x, 2 AS y UNION ALL SELECT 2, NULL UNION ALL SELECT 3, 7) t`, "2.5"},
 
 		// PostgreSQL and GoogleSQL default to the sample estimator; MySQL's
 		// STDDEV and VARIANCE are the population ones.
@@ -263,5 +279,57 @@ func TestOverlayBoundaries(t *testing.T) {
 	// error PostgreSQL raises rather than an answer it gives.
 	if _, err := fnOverlay([]driver.Value{"abc", "X", int64(0)}); err == nil {
 		t.Fatal("fnOverlay at position 0 should fail, as PostgreSQL does")
+	}
+}
+
+// TestGoogleSQLPairAggregatesAtTheEdges covers the answers a covariance gives
+// where there is not enough to compute one: the sample estimator needs two
+// complete pairs and the population one needs one.
+func TestGoogleSQLPairAggregatesAtTheEdges(t *testing.T) {
+	db := castDB(t)
+
+	got, err := runDialect(t, db, GoogleSQL, `SELECT COVAR_SAMP(x, x) FROM (SELECT 1 AS x) t`)
+	if err != nil {
+		t.Fatalf("COVAR_SAMP over one row: %v", err)
+	}
+	if got.Valid {
+		t.Errorf("COVAR_SAMP over one row = %q, want NULL", got.String)
+	}
+
+	got, err = runDialect(t, db, GoogleSQL, `SELECT CORR(x, y) FROM (SELECT 1 AS x, 1 AS y UNION ALL SELECT 1, 2) t`)
+	if err != nil {
+		t.Fatalf("CORR with no spread: %v", err)
+	}
+	if got.Valid {
+		t.Errorf("CORR with no spread in one column = %q, want NULL", got.String)
+	}
+}
+
+// TestGoogleSQLArrayAggregatesAreRejected keeps the aggregates whose result is
+// an array on the same footing as every other array-shaped construct: refused
+// by name rather than reported as an unknown function.
+func TestGoogleSQLArrayAggregatesAreRejected(t *testing.T) {
+	t.Parallel()
+
+	for _, query := range []string{
+		"SELECT ARRAY_AGG(s) FROM t",
+		"SELECT ARRAY_CONCAT_AGG(s) FROM t",
+		"SELECT APPROX_QUANTILES(n, 2) FROM t",
+		"SELECT APPROX_TOP_COUNT(s, 2) FROM t",
+		"SELECT APPROX_TOP_SUM(s, n, 2) FROM t",
+	} {
+		t.Run(query, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := Translate(GoogleSQL, query); !errors.Is(err, ErrUnsupportedSyntax) {
+				t.Errorf("Translate(GoogleSQL, %q) error = %v, want ErrUnsupportedSyntax", query, err)
+			}
+		})
+	}
+
+	// A column of that name is not the aggregate: only a "(" after the word
+	// makes it a call.
+	if _, err := Translate(GoogleSQL, "SELECT array_agg FROM t"); err != nil {
+		t.Errorf("a column named array_agg must translate: %v", err)
 	}
 }
