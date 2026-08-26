@@ -841,7 +841,7 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBase
 				if len(columns) == 0 {
 					return nil, nil, fmt.Errorf("%w: table %s for %s no longer exists", ErrEmptyData, tableName, path)
 				}
-				query := fmt.Sprintf("SELECT %s FROM `%s`", dumpSelectList(columns, declTypes), tableName) //nolint:gosec // Table and column names are quoted and come from database metadata
+				query := fmt.Sprintf("SELECT %s FROM %s", dumpSelectList(columns, declTypes), quoteIdentifier(tableName)) //nolint:gosec // Table and column names are quoted
 				rows, err := db.QueryContext(context.Background(), query)
 				if err != nil {
 					return nil, nil, err
@@ -978,7 +978,7 @@ func overwriteTableAtPath(db *sql.DB, path, tableName string, options DumpOption
 		return fmt.Errorf("%w: table %s for %s no longer exists", ErrEmptyData, tableName, path)
 	}
 
-	query := fmt.Sprintf("SELECT %s FROM `%s`", dumpSelectList(columns, declTypes), tableName) //nolint:gosec // Table and column names are quoted and come from database metadata
+	query := fmt.Sprintf("SELECT %s FROM %s", dumpSelectList(columns, declTypes), quoteIdentifier(tableName)) //nolint:gosec // Table and column names are quoted
 	rows, err := db.QueryContext(context.Background(), query)
 	if err != nil {
 		return err

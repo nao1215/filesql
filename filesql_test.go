@@ -4191,3 +4191,63 @@ func TestLoadColumnNameContainingDoubleQuote(t *testing.T) {
 		assert.Equal(t, "42", got)
 	})
 }
+
+// TestTableNameHoldingAQuotingCharacter pins that a name SQLite accepts is a
+// name this package accepts.
+//
+// A table name reached SQL by concatenation almost everywhere, so a name
+// carrying the character that ends the quoting broke the statement and the
+// caller was handed SQLite's tokenizer error about a token they never wrote. A
+// double quote failed the load and a backtick loaded and then failed the dump,
+// because the load quoted with one and the dump with the other. Both are legal
+// identifiers, and AddReader keeps the name the caller gives it, so a name that
+// came from user input reaches these statements unaltered.
+func TestTableNameHoldingAQuotingCharacter(t *testing.T) {
+	t.Parallel()
+
+	names := []struct {
+		name  string
+		table string
+	}{
+		{name: "a double quote, which ends the load's own quoting", table: `a"b`},
+		{name: "two double quotes, which the escaping must not collapse", table: `a""b`},
+		{name: "a backtick, which ends the dump's", table: "a`b"},
+		{name: "a single quote", table: "a'b"},
+		{name: "brackets", table: "a[b]"},
+		{name: "a newline", table: "a\nb"},
+		{name: "a name that is not ASCII", table: "テーブル"},
+	}
+
+	for _, tt := range names {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			validated, err := NewBuilder().
+				AddReader(strings.NewReader("v\n1\n2\n"), tt.table, FileTypeCSV).
+				Build(ctx)
+			require.NoError(t, err)
+			db, err := validated.Open(ctx)
+			require.NoError(t, err, "a name SQLite accepts must load")
+			defer db.Close()
+
+			var rows int
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM `+quoteIdentifier(tt.table)).Scan(&rows))
+			assert.Equal(t, 2, rows)
+
+			// The dump reads the table through statements of its own, which is
+			// where the backtick failed after the load had succeeded.
+			out := filepath.Join(t.TempDir(), "out")
+			err = DumpDatabase(db, out)
+			if usableAsFileName(tt.table + ".csv") {
+				require.NoError(t, err, "a name that can be a file name must be dumped")
+				return
+			}
+			// A name the file system cannot hold is refused by this package,
+			// with its own error rather than the driver's.
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrInvalidData)
+		})
+	}
+}

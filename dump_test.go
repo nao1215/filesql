@@ -1318,3 +1318,126 @@ func TestBlankCellInNumericColumnSurvivesARoundTrip(t *testing.T) {
 		})
 	}
 }
+
+// TestDumpRefusesNamesNoPlatformCanHold pins the rule dumpFilePath's comment
+// states: a table name that cannot be a file name is refused on every platform,
+// not only the one the running OS objects to, so the same database dumped on
+// Linux and on Windows agrees about which tables it can write.
+//
+// It refused the two path separators and nothing else, so a table named CON,
+// NUL or a:b was written on Linux under a name Windows reserves or forbids.
+// AddReader keeps the name the caller gives it, so a name that came from user
+// input reached the dump unaltered.
+func TestDumpRefusesNamesNoPlatformCanHold(t *testing.T) {
+	t.Parallel()
+
+	refused := []struct {
+		name  string
+		table string
+	}{
+		{name: "a forward slash", table: "a/b"},
+		{name: "a backslash", table: `a\b`},
+		{name: "a colon, which names an alternate stream on Windows", table: "a:b"},
+		{name: "a pipe", table: "a|b"},
+		{name: "an asterisk", table: "a*b"},
+		{name: "a question mark", table: "a?b"},
+		{name: "a quotation mark", table: `a"b`},
+		{name: "a less-than sign", table: "a<b"},
+		{name: "a greater-than sign", table: "a>b"},
+		{name: "a control byte", table: "a\x01b"},
+		{name: "the console device", table: "CON"},
+		{name: "the console device in lower case", table: "con"},
+		{name: "the null device", table: "NUL"},
+		{name: "a serial port", table: "COM1"},
+		{name: "a printer port", table: "LPT9"},
+		{name: "the auxiliary device", table: "aux"},
+		{name: "a device name with an extension in front of the dump's own", table: "CON.backup"},
+	}
+
+	for _, tt := range refused {
+		t.Run("refused: "+tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, out := loadOneTable(t, tt.table)
+			err := DumpDatabase(db, out)
+			require.Error(t, err, "a name no platform can hold must not be written")
+			assert.ErrorIs(t, err, ErrInvalidData)
+			assert.Contains(t, err.Error(), tt.table)
+			assert.Empty(t, dirEntriesOrNone(t, out), "nothing may be written for a refused table")
+		})
+	}
+
+	kept := []struct {
+		name  string
+		table string
+		file  string
+	}{
+		{name: "a dot inside the name", table: "a.b", file: "a.b.csv"},
+		{name: "a space inside the name", table: "a b", file: "a b.csv"},
+		{name: "a name that is not ASCII", table: "日本語", file: "日本語.csv"},
+		{name: "a word that contains a device name", table: "console", file: "console.csv"},
+		{name: "another word that contains one", table: "nullable", file: "nullable.csv"},
+		// The dump appends its own extension, so a table name ending in a dot
+		// or a space does not make a file name that ends in one.
+		{name: "a trailing dot", table: "a.", file: "a..csv"},
+		{name: "a trailing space", table: "a ", file: "a .csv"},
+	}
+
+	for _, tt := range kept {
+		t.Run("kept: "+tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, out := loadOneTable(t, tt.table)
+			require.NoError(t, DumpDatabase(db, out))
+			assert.Equal(t, []string{tt.file}, dirEntriesOrNone(t, out))
+		})
+	}
+}
+
+// TestUsableAsFileNameRejectsWhatTheDumpCannotReach pins the two rules a dump
+// cannot exercise, because it appends its own extension and so never asks about
+// a name that ends in a dot or a space. Windows strips both from the last
+// component, which turns such a name into a different file and lets two of them
+// land on one.
+func TestUsableAsFileNameRejectsWhatTheDumpCannotReach(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"", "a.", "a ", "a..", "a  "} {
+		assert.False(t, usableAsFileName(name), "%q is not a file name every platform can hold", name)
+	}
+	for _, name := range []string{"a", "a.b", ".a", " a", "a.csv", "console.csv"} {
+		assert.True(t, usableAsFileName(name), "%q is a file name every platform can hold", name)
+	}
+}
+
+// loadOneTable builds a database holding one table of the given name, and the
+// directory a dump of it is written to.
+func loadOneTable(t *testing.T, table string) (*sql.DB, string) {
+	t.Helper()
+
+	validated, err := NewBuilder().
+		AddReader(strings.NewReader("v\n1\n"), table, FileTypeCSV).
+		Build(t.Context())
+	require.NoError(t, err)
+	db, err := validated.Open(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	return db, filepath.Join(t.TempDir(), "out")
+}
+
+// dirEntriesOrNone is the names in dir, or none when the dump never made it.
+func dirEntriesOrNone(t *testing.T, dir string) []string {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	return names
+}
