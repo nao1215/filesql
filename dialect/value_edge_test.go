@@ -71,7 +71,8 @@ func TestCastToBool(t *testing.T) {
 		{name: "a zero float", value: 0.0, want: 0},
 		{name: "the word yes", value: " YES ", want: 1},
 		{name: "the word off", value: "off", want: 0},
-		{name: "a word that is not a boolean is read for truthiness", value: "maybe", want: 1},
+		{name: "a word that is not a boolean reads as the number it spells", value: "maybe", want: 0},
+		{name: "a word with a number in front of it is truthy", value: "1 maybe", want: 1},
 		{name: "an empty value is not truthy", value: "", want: 0},
 		{name: "a word that is not a boolean, strictly", value: "maybe", strict: true, wantErr: true},
 	}
@@ -201,9 +202,14 @@ func TestHexFunctions(t *testing.T) {
 		}{
 			{name: "a NULL stays NULL", value: nil, want: nil},
 			{name: "an integer", value: int64(255), want: "FF"},
-			{name: "a float truncates", value: 255.9, want: "FF"},
+			{name: "a float rounds", value: 255.4, want: "FF"},
+			{name: "a float rounds a half away from zero", value: 2.5, want: "3"},
+			{name: "a negative number is unsigned", value: int64(-1), want: "FFFFFFFFFFFFFFFF"},
+			{name: "a number past int64 clamps", value: 1e300, want: "7FFFFFFFFFFFFFFF"},
+			{name: "a number below int64 clamps", value: -1e300, want: "8000000000000000"},
+			{name: "a NaN is zero", value: math.NaN(), want: "0"},
 			{name: "bytes", value: []byte("abc"), want: "616263"},
-			{name: "a numeric string is hexed as its value", value: "255", want: "FF"},
+			{name: "a numeric string is hexed as its bytes", value: "255", want: "323535"},
 			{name: "a string that is not a number is hexed as its bytes", value: "abc", want: "616263"},
 		}
 		for _, tt := range tests {
