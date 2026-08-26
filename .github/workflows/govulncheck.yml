@@ -1,0 +1,67 @@
+name: govulncheck
+
+# Vulnerability scanning runs on every pull request and on main, unlike
+# staticcheck: govulncheck loads the vulnerability database and analyzes call
+# graphs, which finishes in under a minute on this module, so there is no reason
+# to keep it off the path a change takes to get merged. What it catches is a
+# dependency — or a standard library — that has grown a known advisory since the
+# last time anybody looked, which is exactly the thing nobody looks for on their
+# own.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: govulncheck (Go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Both supported Go lines, because govulncheck reports on the standard
+    # library of whichever Go builds the module. Scanning with 1.25.13 alone
+    # would say nothing about an advisory that only affects 1.26, which is a Go
+    # this module supports and which some callers will be building it with.
+    strategy:
+      matrix:
+        go:
+          - "1.25.13"
+          - "1.26.6"
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+
+      # Pinned rather than @latest: a scanner that changes under the project
+      # turns an unrelated pull request red for a reason nobody in it can act
+      # on, and a pinned version makes the run reproducible from the commit.
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+
+      - name: Scan the module
+        run: govulncheck ./...
+
+      # The examples are separate modules pinned to a released filesql, so
+      # `./...` above never reaches them. They are what the README sends people
+      # to copy, so an advisory against a driver or ORM one of them pins is
+      # worth the same report.
+      - name: Scan the examples
+        run: |
+          set -euo pipefail
+          for dir in examples/*/; do
+            [ -f "${dir}go.mod" ] || continue
+            echo "== ${dir}"
+            (cd "${dir}" && govulncheck ./...)
+          done

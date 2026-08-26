@@ -12,6 +12,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   staticcheck:
     name: staticcheck
@@ -24,7 +27,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.25"
+          go-version: "1.25.13"
 
       - name: Run staticcheck
         uses: golangci/golangci-lint-action@v9

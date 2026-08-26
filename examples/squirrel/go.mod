@@ -1,6 +1,6 @@
 module github.com/nao1215/filesql/examples/squirrel
 
-go 1.25.8
+go 1.25.13
 
 require (
 	github.com/Masterminds/squirrel v1.5.4

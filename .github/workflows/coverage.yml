@@ -7,6 +7,15 @@ on:
   pull_request:
     branches: [main]
 
+# Spelled out rather than left to the repository default, and not cut down to
+# contents: read either: octocov comments the coverage report onto the pull
+# request and keeps its baseline in an Actions artifact, so those are the two
+# writes this job genuinely needs and the only ones it gets.
+permissions:
+  contents: read
+  pull-requests: write
+  actions: write
+
 jobs:
   unit_test:
     name: Unit test (linux)
@@ -19,12 +28,18 @@ jobs:
     timeout-minutes: 10
 
     steps:
+      # The module's own tests run in this job, so the checkout leaves no
+      # credential in .git/config for them to reach.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1"
-          check-latest: true
+          # Pinned rather than floating on "1": the baseline this module
+          # states is Go 1.25.13, and 1.26.6 is the 1.26 release carrying the
+          # same standard library fixes.
+          go-version: "1.26.6"
 
       - name: Run tests with coverage report output
         run: go test -cover -coverpkg=./... -coverprofile=coverage.out ./...

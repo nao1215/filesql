@@ -1,6 +1,6 @@
 module github.com/nao1215/filesql/examples/bun
 
-go 1.25.8
+go 1.25.13
 
 require (
 	github.com/nao1215/filesql v0.45.0

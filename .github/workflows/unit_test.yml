@@ -7,6 +7,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   unit_test:
     name: Unit test
@@ -17,15 +20,22 @@ jobs:
           - "ubuntu-latest"
           - "windows-latest"
           - "macos-latest"
+        # Pinned to the patch releases that carry the standard library fixes
+        # this module's baseline requires: GO-2026-6088 (encoding/xml) and
+        # GO-2026-5972 (encoding/asn1) are fixed in 1.25.13 and 1.26.6. A
+        # floating "1.25" would happily test on a Go the go.mod directive
+        # already refuses to vouch for.
         go:
-          - "1.25"
-          - "1.26"
+          - "1.25.13"
+          - "1.26.6"
       fail-fast: false
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v7
         with:
@@ -47,10 +57,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.25"
+          go-version: "1.25.13"
 
       - name: Run tests with the race detector
         run: go test -race ./...
