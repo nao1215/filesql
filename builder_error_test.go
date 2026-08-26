@@ -115,8 +115,8 @@ func TestLoadIntoTx_Refusals(t *testing.T) {
 	})
 }
 
-// TestOpenReadOnly_PassesTheOpenFailureThrough checks that the read-only wrapper
-// does not swallow the failure of the load it wraps.
+// TestOpenReadOnly_PassesTheOpenFailureThrough checks that a read-only open
+// does not swallow the failure of the load it performs.
 func TestOpenReadOnly_PassesTheOpenFailureThrough(t *testing.T) {
 	t.Parallel()
 

@@ -49,26 +49,6 @@ func TestExcelSheetsInReader_NotAWorkbook(t *testing.T) {
 	assert.ErrorIs(t, err, ErrParsing)
 }
 
-// TestReadOnlyTx_QueryRowRejectsWrite covers the last read entry point of a
-// read-only transaction. QueryRow has no error to return, so the write is turned
-// into a query whose Scan reports the refusal.
-func TestReadOnlyTx_QueryRowRejectsWrite(t *testing.T) {
-	t.Parallel()
-
-	db := openTestDB(t)
-	_, err := db.ExecContext(context.Background(), `CREATE TABLE users (id TEXT)`)
-	require.NoError(t, err)
-
-	tx, err := NewReadOnlyDB(db).Begin()
-	require.NoError(t, err)
-	defer func() { _ = tx.Rollback() }()
-
-	var id string
-	err = tx.QueryRow(`DELETE FROM users`).Scan(&id)
-	require.Error(t, err, "a write must not be executed by the read-only wrapper")
-	assert.Contains(t, err.Error(), "read-only")
-}
-
 // TestDialectConnector_UnusableDSN covers the connector that opens the
 // translating connections. A DSN the driver refuses has to be reported when the
 // connection is made rather than at the first query.

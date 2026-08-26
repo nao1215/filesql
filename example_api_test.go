@@ -253,26 +253,31 @@ id,name
 }
 
 func ExampleDBBuilder_OpenReadOnly() {
+	ctx := context.Background()
+
 	validated, err := filesql.NewBuilder().
 		AddReader(strings.NewReader("id,name\n1,Alice\n2,Bob\n"), "users", filesql.FileTypeCSV).
-		Build(context.Background())
+		Build(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	rodb, err := validated.OpenReadOnly(context.Background())
+	// The result is an ordinary *sql.DB whose connections carry SQLite's
+	// query_only pragma, so a write is refused by the engine rather than by
+	// this package.
+	db, err := validated.OpenReadOnly(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer rodb.Close()
+	defer db.Close()
 
 	var rows int
-	if err := rodb.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&rows); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&rows); err != nil {
 		log.Fatal(err)
 	}
 
-	_, err = rodb.Exec(`INSERT INTO users VALUES (3, 'Cora')`)
-	fmt.Printf("rows=%d write_blocked=%t\n", rows, errors.Is(err, filesql.ErrReadOnly))
+	_, err = db.ExecContext(ctx, `INSERT INTO users VALUES (3, 'Cora')`)
+	fmt.Printf("rows=%d write_blocked=%t\n", rows, err != nil)
 	// Output:
 	// rows=2 write_blocked=true
 }
@@ -691,32 +696,6 @@ func ExampleDBBuilder_SkippedRows() {
 	}
 	// Output:
 	// users: 2 of 4 rows skipped
-}
-
-// ExampleNewReadOnlyDB wraps a database the caller already has. Use
-// (*DBBuilder).OpenReadOnly when filesql is the one opening it.
-func ExampleNewReadOnlyDB() {
-	db := openExampleSQLiteDB()
-	defer db.Close()
-
-	ctx := context.Background()
-	if err := filesql.LoadInto(ctx, db, "testdata/sample.csv"); err != nil {
-		log.Fatal(err)
-	}
-
-	rodb := filesql.NewReadOnlyDB(db)
-
-	var rows int
-	if err := rodb.QueryRowContext(ctx, `SELECT COUNT(*) FROM sample`).Scan(&rows); err != nil {
-		log.Fatal(err)
-	}
-
-	// The wrapper refuses the write; the database underneath is untouched and
-	// still writable through db itself.
-	_, err := rodb.ExecContext(ctx, `DELETE FROM sample`)
-	fmt.Printf("rows=%d write_blocked=%t\n", rows, errors.Is(err, filesql.ErrReadOnly))
-	// Output:
-	// rows=3 write_blocked=true
 }
 
 func ExampleFileType_String() {

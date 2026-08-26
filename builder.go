@@ -534,6 +534,13 @@ func (b *DBBuilder) SkippedRows() []SkippedRows {
 //
 // Returns a *sql.DB connection or an error if the database cannot be created.
 func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
+	return b.open(ctx, false)
+}
+
+// open loads the configured inputs and returns the database handle the caller
+// keeps. readOnly decides whether that handle's connections are opened with
+// SQLite's query_only pragma; the loading itself always needs to write.
+func (b *DBBuilder) open(ctx context.Context, readOnly bool) (*sql.DB, error) {
 	b.logger.Debug("opening database")
 
 	// Use validator to validate inputs availability
@@ -573,12 +580,17 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 		return nil, err
 	}
 
-	db, err = b.setupAutoSaveIfNeeded(ctx, db)
+	db, err = b.setupAutoSaveIfNeeded(ctx, db, readOnly)
 	if err != nil {
 		return nil, err
 	}
 
-	db, err = b.setupDialectIfNeeded(ctx, db)
+	db, err = b.setupDialectIfNeeded(ctx, db, readOnly)
+	if err != nil {
+		return nil, err
+	}
+
+	db, err = b.setupReadOnlyIfNeeded(ctx, db, readOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -608,40 +620,44 @@ func (b *DBBuilder) validateDialect() error {
 	return nil
 }
 
-// OpenReadOnly creates a read-only database connection.
-// This is a convenience method that calls Open() and wraps the result in a ReadOnlyDB.
-// All SELECT queries work normally, but write operations return ErrReadOnly.
+// OpenReadOnly is Open for a caller who means only to read. The database it
+// returns is an ordinary *sql.DB, and every connection it opens carries SQLite's
+// query_only pragma, so a statement that would change the database fails in the
+// engine rather than being turned away by this package.
 //
-// This is useful for audit scenarios where you want to query data without
-// risk of accidental modification.
+// That makes the refusal complete in a way inspecting the SQL could not be: a
+// write reached through Query rather than Exec, through a prepared statement, or
+// inside a transaction is refused the same way, and the error is the driver's --
+// SQLite's "attempt to write a readonly database" -- rather than a sentinel of
+// filesql's own. A caller can still lift the restriction on a connection by
+// running "PRAGMA query_only = 0"; the pragma guards against writing by
+// accident, not against a caller who sets out to write.
+//
+// It composes with the rest of the builder. With WithDialect the returned
+// database still translates queries; with EnableAutoSave a close still writes
+// the tables back out, which for a read-only handle means writing out what was
+// loaded. The caller closes the returned database as they would any other.
 //
 // Example:
 //
-//	builder := filesql.NewBuilder().
-//		AddPath("payment.ach")
-//
-//	validatedBuilder, err := builder.Build(ctx)
+//	validated, err := filesql.NewBuilder().AddPath("payment.ach").Build(ctx)
 //	if err != nil {
 //		return err
 //	}
 //
-//	rodb, err := validatedBuilder.OpenReadOnly(ctx)
+//	db, err := validated.OpenReadOnly(ctx)
 //	if err != nil {
 //		return err
 //	}
-//	defer rodb.Close()
+//	defer db.Close()
 //
-//	// SELECT works
-//	rows, _ := rodb.Query("SELECT * FROM payment_entries")
+//	// Reads work.
+//	rows, err := db.QueryContext(ctx, "SELECT * FROM payment_entries")
 //
-//	// Write operations are rejected
-//	_, err = rodb.Exec("DELETE FROM payment_entries") // returns ErrReadOnly
-func (b *DBBuilder) OpenReadOnly(ctx context.Context) (*ReadOnlyDB, error) {
-	db, err := b.Open(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return NewReadOnlyDB(db), nil
+//	// Writes are refused by SQLite.
+//	_, err = db.ExecContext(ctx, "DELETE FROM payment_entries")
+func (b *DBBuilder) OpenReadOnly(ctx context.Context) (*sql.DB, error) {
+	return b.open(ctx, true)
 }
 
 // LoadInto loads the builder's configured inputs into an existing database
@@ -817,8 +833,8 @@ func (b *DBBuilder) validateDatabaseConnection(ctx context.Context, db *sql.DB) 
 // database opens its own connections to the same DSN rather than loading the
 // files a second time. A live connection is established before the loader
 // database is closed, so the shared cache—and the data—survives the swap.
-func (b *DBBuilder) setupAutoSaveIfNeeded(ctx context.Context, db *sql.DB) (*sql.DB, error) {
-	if b.autoSaveConfig == nil || !b.autoSaveConfig.enabled {
+func (b *DBBuilder) setupAutoSaveIfNeeded(ctx context.Context, db *sql.DB, readOnly bool) (*sql.DB, error) {
+	if !b.autoSaveEnabled() {
 		return db, nil
 	}
 	if b.memDSN == "" {
@@ -828,7 +844,7 @@ func (b *DBBuilder) setupAutoSaveIfNeeded(ctx context.Context, db *sql.DB) (*sql
 
 	connector := &autoSaveConnector{
 		drv:            db.Driver(),
-		dsn:            b.memDSN,
+		dsn:            b.handleDSN(readOnly),
 		autoSaveConfig: b.autoSaveConfig,
 		originalPaths:  b.collectOriginalPaths(),
 	}
@@ -865,7 +881,7 @@ func (b *DBBuilder) setupAutoSaveIfNeeded(ctx context.Context, db *sql.DB) (*sql
 // database can open its own connection to the same DSN. A live connection is
 // established (via Ping) before the loader database is closed, so the shared
 // cache—and the data—survives the swap.
-func (b *DBBuilder) setupDialectIfNeeded(ctx context.Context, db *sql.DB) (*sql.DB, error) {
+func (b *DBBuilder) setupDialectIfNeeded(ctx context.Context, db *sql.DB, readOnly bool) (*sql.DB, error) {
 	if !b.usesDialectTranslation() {
 		return db, nil
 	}
@@ -884,7 +900,7 @@ func (b *DBBuilder) setupDialectIfNeeded(ctx context.Context, db *sql.DB) (*sql.
 
 	// Open translated connections through the same driver instance the loader
 	// used, so the dialect helper functions registered above are visible.
-	tdb := sql.OpenDB(&dialectConnector{drv: db.Driver(), dsn: b.memDSN, sqlDialect: b.sqlDialect})
+	tdb := sql.OpenDB(&dialectConnector{drv: db.Driver(), dsn: b.handleDSN(readOnly), sqlDialect: b.sqlDialect})
 	tdb.SetConnMaxIdleTime(0)
 	tdb.SetConnMaxLifetime(0)
 
@@ -899,6 +915,61 @@ func (b *DBBuilder) setupDialectIfNeeded(ctx context.Context, db *sql.DB) (*sql.
 		return nil, fmt.Errorf("%w: failed to close loader database: %w", ErrDatabaseOperation, err)
 	}
 	return tdb, nil
+}
+
+// setupReadOnlyIfNeeded swaps the loader database for one whose connections
+// refuse to write. It is a no-op for a writable open, and for a read-only open
+// whose handle was already built by one of the swaps above: those open their
+// connections through handleDSN, so they carry the pragma already.
+func (b *DBBuilder) setupReadOnlyIfNeeded(ctx context.Context, db *sql.DB, readOnly bool) (*sql.DB, error) {
+	if !readOnly || b.autoSaveEnabled() || b.usesDialectTranslation() {
+		return db, nil
+	}
+	if b.memDSN == "" {
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: read-only mode requires the in-memory database DSN", ErrDatabaseOperation)
+	}
+
+	rodb, err := sql.Open("sqlite", b.handleDSN(true))
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: failed to open read-only database: %w", ErrDatabaseOperation, err)
+	}
+	rodb.SetConnMaxIdleTime(0)
+	rodb.SetConnMaxLifetime(0)
+
+	// A live connection has to exist before the loader database closes, or the
+	// shared cache -- and the loaded data with it -- is discarded.
+	if err := rodb.PingContext(ctx); err != nil {
+		_ = rodb.Close()
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: failed to open read-only database: %w", ErrDatabaseOperation, err)
+	}
+
+	if err := db.Close(); err != nil {
+		_ = rodb.Close()
+		return nil, fmt.Errorf("%w: failed to close loader database: %w", ErrDatabaseOperation, err)
+	}
+	return rodb, nil
+}
+
+// autoSaveEnabled reports whether a close of the returned database has to write
+// the tables back out.
+func (b *DBBuilder) autoSaveEnabled() bool {
+	return b.autoSaveConfig != nil && b.autoSaveConfig.enabled
+}
+
+// handleDSN is the DSN the database handed to the caller opens its connections
+// with. It is the loader's DSN, plus SQLite's query_only pragma when the caller
+// asked for a read-only database: the pragma is per-connection, so it has to be
+// part of the DSN every one of that handle's connections is opened from rather
+// than a statement run once on whichever connection happened to be first.
+func (b *DBBuilder) handleDSN(readOnly bool) string {
+	if !readOnly {
+		return b.memDSN
+	}
+	// memDSN always carries a query string, so the pragma is appended with "&".
+	return b.memDSN + "&_pragma=query_only(1)"
 }
 
 // collectOriginalPaths collects original file paths for overwrite mode
