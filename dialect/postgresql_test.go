@@ -50,6 +50,8 @@ func TestPostgreSQLTranslate(t *testing.T) {
 		// go. Dropping it is only correct when it is the comma SQLite defaults to.
 		{"P-6_string_agg_distinct_comma", "SELECT STRING_AGG(DISTINCT name, ',') FROM t", "SELECT group_concat(DISTINCT name) AS \"STRING_AGG(DISTINCT name, ',')\" FROM t"},
 		{"P-6_string_agg_distinct_comma_spaced", "SELECT STRING_AGG( DISTINCT name , ',' ) FROM t", "SELECT group_concat(DISTINCT name) AS \"STRING_AGG( DISTINCT name , ',' )\" FROM t"},
+		{"P-20_greatest", "SELECT GREATEST(a, b) FROM t", `SELECT postgresql_greatest(a, b) AS "GREATEST(a, b)" FROM t`},
+		{"P-20_least", "SELECT LEAST(a, b) FROM t", `SELECT postgresql_least(a, b) AS "LEAST(a, b)" FROM t`},
 		{"P-19_upper", "SELECT UPPER(name) FROM t", `SELECT unicode_upper(name) AS "UPPER(name)" FROM t`},
 		{"P-19_lower", "SELECT LOWER(name) FROM t", `SELECT unicode_lower(name) AS "LOWER(name)" FROM t`},
 

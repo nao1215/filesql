@@ -837,6 +837,24 @@ func TestDialectBoundariesFollowTheirEngine(t *testing.T) {
 		{name: "an unknown match type is refused", dialect: MySQL, query: `SELECT REGEXP_REPLACE('a', 'a', 'X', 1, 0, 'z')`, wantErr: true},
 		{name: "an invalid pattern is refused", dialect: MySQL, query: `SELECT 'a' REGEXP '('`, wantErr: true},
 
+		// GREATEST and LEAST: PostgreSQL ignores its NULL arguments, MySQL and
+		// BigQuery answer NULL for the whole call. An empty cell loads as NULL,
+		// so under the wrong rule a row missing one column reports no extreme.
+		{name: "postgresql greatest skips a null", dialect: PostgreSQL, query: `SELECT GREATEST(1, NULL, 2)`, want: "2"},
+		{name: "postgresql least skips a null", dialect: PostgreSQL, query: `SELECT LEAST(1, NULL, 2)`, want: "1"},
+		{name: "mysql greatest answers null", dialect: MySQL, query: `SELECT GREATEST(1, NULL, 2)`, wantNull: true},
+		{name: "mysql least answers null", dialect: MySQL, query: `SELECT LEAST(1, NULL, 2)`, wantNull: true},
+		{name: "googlesql greatest answers null", dialect: GoogleSQL, query: `SELECT GREATEST(1, NULL, 2)`, wantNull: true},
+		{name: "googlesql least answers null", dialect: GoogleSQL, query: `SELECT LEAST(1, NULL, 2)`, wantNull: true},
+		// The NULLs go before the numeric-or-string choice is made, so a
+		// string list still orders as strings, and a list of nothing but NULL
+		// has no extreme to answer with.
+		{name: "postgresql greatest of strings skips a null", dialect: PostgreSQL, query: `SELECT GREATEST('a', NULL, 'b')`, want: "b"},
+		{name: "postgresql greatest of only nulls", dialect: PostgreSQL, query: `SELECT GREATEST(NULL, NULL)`, wantNull: true},
+		{name: "postgresql least of only nulls", dialect: PostgreSQL, query: `SELECT LEAST(NULL, NULL)`, wantNull: true},
+		{name: "postgresql greatest with only a trailing value", dialect: PostgreSQL, query: `SELECT GREATEST(NULL, NULL, 7)`, want: "7"},
+		{name: "postgresql greatest of one argument", dialect: PostgreSQL, query: `SELECT GREATEST(3)`, want: "3"},
+
 		// A sign is told from the binary operator by what stands before it.
 		{name: "a sign after a closing paren is binary", dialect: MySQL, query: `SELECT (4) - 1 >> 1`, want: "1"},
 		{name: "a sign after a quoted name is binary", dialect: MySQL, query: "SELECT `n` - 1 >> 1 FROM (SELECT 9 AS n)", want: "4"},

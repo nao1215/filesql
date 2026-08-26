@@ -184,6 +184,11 @@ func registerAll() error {
 		"least":    {-1, fnLeast},
 		"greatest": {-1, fnGreatest},
 
+		// PostgreSQL's pair skips NULL arguments where the two above answer
+		// NULL for the whole call.
+		"postgresql_least":    {-1, fnPostgresLeast},
+		"postgresql_greatest": {-1, fnPostgresGreatest},
+
 		// Cast helpers. Each dialect's rewrite pass routes CAST through its own
 		// helper so the conversion follows that dialect's rules rather than
 		// SQLite's affinity; see cast.go.
@@ -1466,16 +1471,41 @@ func fnTruncate(args []driver.Value) (driver.Value, error) {
 // fnLeast implements LEAST(a, b, ...) and fnGreatest GREATEST(a, b, ...).
 // Values are compared numerically when every argument parses as a number and
 // lexicographically otherwise, matching how the source dialects coerce a mixed
-// list. A NULL argument makes the whole call NULL, which is MySQL and GoogleSQL
-// behavior; PostgreSQL instead skips NULLs, a difference callers should know
-// about.
-func fnLeast(args []driver.Value) (driver.Value, error) { return extremum(args, true) }
+// list. A NULL argument makes the whole call NULL, which is what MySQL and
+// GoogleSQL answer; PostgreSQL skips its NULLs and reaches the pair below
+// instead.
+func fnLeast(args []driver.Value) (driver.Value, error) { return extremum(args, true, false) }
 
-func fnGreatest(args []driver.Value) (driver.Value, error) { return extremum(args, false) }
+func fnGreatest(args []driver.Value) (driver.Value, error) { return extremum(args, false, false) }
 
-func extremum(args []driver.Value, wantSmaller bool) (driver.Value, error) {
+// fnPostgresLeast and fnPostgresGreatest implement PostgreSQL's LEAST and
+// GREATEST, which ignore their NULL arguments and answer NULL only when every
+// argument is NULL. An empty cell loads as NULL, so under the other rule a row
+// missing one of the columns being compared reports no extreme at all.
+func fnPostgresLeast(args []driver.Value) (driver.Value, error) { return extremum(args, true, true) }
+
+func fnPostgresGreatest(args []driver.Value) (driver.Value, error) {
+	return extremum(args, false, true)
+}
+
+func extremum(args []driver.Value, wantSmaller, skipNulls bool) (driver.Value, error) {
 	if len(args) == 0 {
 		return nil, errors.New("dialect: LEAST/GREATEST expects at least one argument")
+	}
+	// The NULLs are dropped before anything else is decided, so the numeric or
+	// lexicographic choice below is made from the values that are really
+	// compared rather than from a list a NULL is still standing in.
+	if skipNulls {
+		kept := make([]driver.Value, 0, len(args))
+		for _, a := range args {
+			if a != nil {
+				kept = append(kept, a)
+			}
+		}
+		if len(kept) == 0 {
+			return nil, nil
+		}
+		args = kept
 	}
 	strs := make([]string, len(args))
 	nums := make([]float64, len(args))

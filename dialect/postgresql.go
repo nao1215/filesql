@@ -192,6 +192,10 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 		return rewriteRenameCall(tokens, open, closeIdx, "postgresql_regexp_replace", pgCallPass)
 	case "BTRIM":
 		return rewriteRenameCall(tokens, open, closeIdx, "trim", pgCallPass)
+	case "GREATEST", "LEAST":
+		// PostgreSQL ignores a NULL argument; MySQL and BigQuery answer NULL
+		// for the whole call, which is what the shared helpers do.
+		return rewriteRenameCall(tokens, open, closeIdx, "postgresql_"+strings.ToLower(tokens[nameIdx].text), pgCallPass)
 	case fnNameMod:
 		return rewriteRenameCall(tokens, open, closeIdx, "postgresql_mod", pgCallPass)
 	case fnNameTrunc:
