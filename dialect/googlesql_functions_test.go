@@ -36,6 +36,15 @@ func TestGoogleSQLDateAndTimeFunctions(t *testing.T) {
 		// the forms that take one are refused rather than answered unshifted.
 		{name: "timestamp refuses a time zone", query: `SELECT TIMESTAMP('2024-03-05 13:04:05', 'UTC')`, wantErr: true},
 		{name: "datetime refuses a time zone", query: `SELECT DATETIME(TIMESTAMP '2024-03-05 13:04:05', 'UTC')`, wantErr: true},
+		// An arity no signature has is the caller's mistake rather than a
+		// value the function could not build.
+		{name: "datetime refuses an arity it has not got", query: `SELECT DATETIME(2024, 3, 5, 13)`, wantErr: true},
+		{name: "date refuses an arity it has not got", query: `SELECT DATE(2024, 3)`, wantErr: true},
+		{name: "time refuses an arity it has not got", query: `SELECT TIME(13, 4)`, wantErr: true},
+		{name: "timestamp refuses an arity it has not got", query: `SELECT TIMESTAMP('2024-03-05', 'UTC', 'x')`, wantErr: true},
+		{name: "datetime of a value that is not one", query: `SELECT DATETIME('not a datetime')`, want: ""},
+		{name: "timestamp of a value that is not one", query: `SELECT TIMESTAMP('not a timestamp')`, want: ""},
+		{name: "string of a value that is not a timestamp", query: `SELECT STRING('not a timestamp')`, want: ""},
 
 		// Days since the epoch, negative before it.
 		{name: "unix_date", query: `SELECT UNIX_DATE(DATE '2024-03-05')`, want: "19787"},
@@ -55,6 +64,13 @@ func TestGoogleSQLDateAndTimeFunctions(t *testing.T) {
 		{name: "last_day of a week from a named day", query: `SELECT LAST_DAY(DATE '2024-03-05', WEEK(MONDAY))`, want: "2024-03-10"},
 		{name: "last_day of a quarter", query: `SELECT LAST_DAY(DATE '2024-03-05', QUARTER)`, want: "2024-03-31"},
 		{name: "last_day of a year", query: `SELECT LAST_DAY(DATE '2024-03-05', YEAR)`, want: "2024-12-31"},
+		// An ISO year ends on the Sunday that closes its last ISO week, which
+		// is rarely 31 December: ISO year 2024 runs to 2024-12-29, and
+		// 2021-01-01 belongs to ISO year 2020, which runs to 2021-01-03. The
+		// emulator answers 31 December for both, falling back to the calendar
+		// year, so the definition was taken.
+		{name: "last_day of an ISO year", query: `SELECT LAST_DAY(DATE '2024-03-05', ISOYEAR)`, want: "2024-12-29"},
+		{name: "last_day of the ISO year a January day belongs to", query: `SELECT LAST_DAY(DATE '2021-01-01', ISOYEAR)`, want: "2021-01-03"},
 		{name: "last_day refuses a part it has not got", query: `SELECT LAST_DAY(DATE '2024-03-05', FORTNIGHT)`, wantErr: true},
 
 		// The DATETIME family answers what the TIMESTAMP family answers, since
@@ -75,6 +91,8 @@ func TestGoogleSQLDateAndTimeFunctions(t *testing.T) {
 		{name: "time_diff is signed", query: `SELECT TIME_DIFF(TIME '12:04:05', TIME '13:04:05', HOUR)`, want: "-1"},
 		{name: "time_trunc to an hour", query: `SELECT TIME_TRUNC(TIME '13:04:05', HOUR)`, want: "13:00:00"},
 		{name: "time_trunc to a minute", query: `SELECT TIME_TRUNC(TIME '13:04:05', MINUTE)`, want: "13:04:00"},
+		{name: "time_trunc to a millisecond", query: `SELECT TIME_TRUNC(TIME '13:04:05.123', MILLISECOND)`, want: "13:04:05"},
+		{name: "time_diff in seconds", query: `SELECT TIME_DIFF(TIME '13:04:05', TIME '13:04:04', SECOND)`, want: "1"},
 		{name: "the time family refuses a calendar unit", query: `SELECT TIME_TRUNC(TIME '13:04:05', MONTH)`, wantErr: true},
 
 		// The week parts. WEEK begins on Sunday and the days before the year's
@@ -355,5 +373,21 @@ func TestGoogleSQLFunctionsAnswerNullForNull(t *testing.T) {
 				t.Errorf("%s = %q, want NULL", q, got.String)
 			}
 		})
+	}
+}
+
+// TestCurrentDatetimeReadsTheClock covers the one GoogleSQL function that
+// cannot be pinned to a value: what is asserted is that it runs and answers
+// something shaped like a datetime. It is registered as non-deterministic, or
+// SQLite would fold it to one value per statement.
+func TestCurrentDatetimeReadsTheClock(t *testing.T) {
+	db := castDB(t)
+
+	got, err := runDialect(t, db, GoogleSQL, `SELECT CURRENT_DATETIME()`)
+	if err != nil {
+		t.Fatalf("CURRENT_DATETIME(): %v", err)
+	}
+	if !got.Valid || len(got.String) != len("2006-01-02 15:04:05") {
+		t.Fatalf("CURRENT_DATETIME() = %q, want a datetime", got.String)
 	}
 }
