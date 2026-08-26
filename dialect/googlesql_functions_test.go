@@ -95,6 +95,15 @@ func TestGoogleSQLDateAndTimeFunctions(t *testing.T) {
 		{name: "time_trunc to a microsecond", query: `SELECT TIME_TRUNC(TIME '13:04:05.123456', MICROSECOND)`, want: "13:04:05.123456"},
 		{name: "time_trunc to a second drops the fraction", query: `SELECT TIME_TRUNC(TIME '13:04:05.123', SECOND)`, want: "13:04:05"},
 		{name: "time_add keeps a fraction of a second", query: `SELECT TIME_ADD(TIME '13:04:05.5', INTERVAL 1 HOUR)`, want: "14:04:05.5"},
+		// A whole number of days changes nothing, and an amount past what a
+		// Duration holds is reduced before it is multiplied out rather than
+		// wrapping to some other time. The emulator overflows on both of
+		// these and answers a time with a fraction of a second in it.
+		{name: "time_add of a whole day", query: `SELECT TIME_ADD(TIME '13:04:05', INTERVAL 24 HOUR)`, want: "13:04:05"},
+		{name: "time_add of many whole days", query: `SELECT TIME_ADD(TIME '13:04:05', INTERVAL 3000000 HOUR)`, want: "13:04:05"},
+		{name: "time_sub of many whole days", query: `SELECT TIME_SUB(TIME '13:04:05', INTERVAL 3000000 HOUR)`, want: "13:04:05"},
+		{name: "time_add past a day", query: `SELECT TIME_ADD(TIME '13:04:05', INTERVAL 25 HOUR)`, want: "14:04:05"},
+		{name: "time_add of the largest int64 of seconds", query: `SELECT TIME_ADD(TIME '13:04:05', INTERVAL 9223372036854775807 SECOND)`, want: "04:34:12"},
 		{name: "current_datetime refuses a time zone", query: `SELECT CURRENT_DATETIME('UTC')`, wantErr: true},
 		{name: "time_diff in seconds", query: `SELECT TIME_DIFF(TIME '13:04:05', TIME '13:04:04', SECOND)`, want: "1"},
 		{name: "the time family refuses a calendar unit", query: `SELECT TIME_TRUNC(TIME '13:04:05', MONTH)`, wantErr: true},

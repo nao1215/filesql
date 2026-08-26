@@ -679,6 +679,12 @@ func fnTimeAdd(args []driver.Value) (driver.Value, error) {
 		return nil, err
 	}
 	const day = 24 * time.Hour
+	// A whole number of days added to a time of day changes nothing, so the
+	// amount is reduced to less than one day before it is multiplied out --
+	// otherwise a large interval overflows the int64 of nanoseconds a Duration
+	// is and wraps to some other time. Every unit the TIME family takes
+	// divides a day evenly, so the reduction loses nothing.
+	amount %= int64(day / step)
 	offset := (timeOfDay(tm) + time.Duration(amount)*step) % day
 	if offset < 0 {
 		offset += day
