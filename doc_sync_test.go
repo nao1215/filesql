@@ -165,3 +165,58 @@ func TestPackageDocMatchesTheColumnNameRule(t *testing.T) {
 		}
 	})
 }
+
+// TestSecurityPolicyNamesTheCurrentReleaseSeries keeps SECURITY.md's supported
+// version table in step with the newest released version in CHANGELOG.md. The
+// table is what a reporter reads to decide whether the version they found a
+// problem in is still supported, and it is edited by hand at release time, so
+// it drifted once already. The CHANGELOG is the source rather than git tags
+// because a shallow checkout has no tags and the release step edits the
+// CHANGELOG anyway.
+func TestSecurityPolicyNamesTheCurrentReleaseSeries(t *testing.T) {
+	t.Parallel()
+
+	changelog, err := os.ReadFile("CHANGELOG.md")
+	if err != nil {
+		t.Fatalf("failed to read CHANGELOG.md: %v", err)
+	}
+	series, ok := latestReleasedSeries(string(changelog))
+	if !ok {
+		t.Fatal("CHANGELOG.md has no released version section")
+	}
+
+	policy, err := os.ReadFile("SECURITY.md")
+	if err != nil {
+		t.Fatalf("failed to read SECURITY.md: %v", err)
+	}
+	want := "| `" + series + "` | Yes |"
+	if !strings.Contains(string(policy), want) {
+		t.Errorf("SECURITY.md does not mark %s as supported; the table needs a row starting %q", series, want)
+	}
+}
+
+// latestReleasedSeries reads the newest "## [X.Y.Z] - date" heading of a
+// Keep a Changelog document and returns its minor series as "X.Y.x". The
+// Unreleased heading carries no date and is skipped.
+func latestReleasedSeries(changelog string) (string, bool) {
+	for line := range strings.Lines(changelog) {
+		rest, found := strings.CutPrefix(strings.TrimSpace(line), "## [")
+		if !found {
+			continue
+		}
+		version, _, found := strings.Cut(rest, "]")
+		if !found || !strings.Contains(rest, "] - ") {
+			continue
+		}
+		major, tail, found := strings.Cut(version, ".")
+		if !found {
+			continue
+		}
+		minor, _, found := strings.Cut(tail, ".")
+		if !found {
+			continue
+		}
+		return major + "." + minor + ".x", true
+	}
+	return "", false
+}
