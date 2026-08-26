@@ -1,6 +1,6 @@
 module github.com/nao1215/filesql
 
-go 1.25.8
+go 1.25.13
 
 require (
 	github.com/klauspost/compress v1.19.2

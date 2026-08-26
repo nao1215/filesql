@@ -92,8 +92,14 @@ go get github.com/nao1215/filesql
 
 Requirements:
 
-- Go 1.25 or later
+- Go 1.25.13 or later, or 1.26.6 or later on the 1.26 line
 - Linux, macOS, or Windows
+
+The patch releases are the point: 1.25.13 and 1.26.6 are the ones carrying the
+standard library fixes for [GO-2026-6088](https://pkg.go.dev/vuln/GO-2026-6088)
+(`encoding/xml`) and [GO-2026-5972](https://pkg.go.dev/vuln/GO-2026-5972)
+(`encoding/asn1`), and filesql reaches `encoding/xml` on every XLSX it reads. An
+earlier 1.26 is not supported, even though it is a later release than 1.25.13.
 
 ## Quick Start
 

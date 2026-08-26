@@ -23,7 +23,22 @@ cd filesql
 make tools
 ```
 
-filesql requires Go 1.25 or later.
+filesql requires Go 1.25.13 or later. On the 1.26 line the minimum is 1.26.6,
+not 1.26.0: those two patch releases are where the standard library fixes for
+[GO-2026-6088](https://pkg.go.dev/vuln/GO-2026-6088) (`encoding/xml`) and
+[GO-2026-5972](https://pkg.go.dev/vuln/GO-2026-5972) (`encoding/asn1`) landed,
+and the CI matrix pins exactly those two.
+
+`govulncheck` runs on every pull request and on `main`. To run it yourself:
+
+```bash
+go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+govulncheck ./...
+```
+
+It reports on the standard library of whichever Go builds the module, so a
+toolchain older than the minimum above will report those two advisories against
+your local Go rather than against filesql.
 
 ## Development Rules
 
