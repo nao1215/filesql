@@ -40,10 +40,21 @@ func postgresqlScalarFunctions() map[string]scalarSpec {
 		"postgresql_substring_from": {2, fnPostgresSubstringFrom},
 
 		// Arithmetic SQLite has no operator or function for.
-		"cbrt":      {1, fnCbrt},
-		"factorial": {1, fnFactorial},
-		"gcd":       {2, fnGCD},
-		"lcm":       {2, fnLCM},
+		"cbrt": {1, fnCbrt},
+		// TO_TIMESTAMP reads no clock: it turns an epoch second or a formatted
+		// string into a timestamp, so the same arguments always give the same
+		// answer.
+		"to_timestamp": {-1, fnToTimestamp},
+		// PostgreSQL fixes these two when the statement begins, which is what
+		// separates them from clock_timestamp. filesql runs each statement on
+		// its own, so the transaction's start and the statement's are the same
+		// moment; they are separate names because a query naming either should
+		// not fail.
+		"statement_timestamp":   {0, fnNow},
+		"transaction_timestamp": {0, fnNow},
+		"factorial":             {1, fnFactorial},
+		"gcd":                   {2, fnGCD},
+		"lcm":                   {2, fnLCM},
 
 		// The trigonometric functions that take and answer degrees. They exist
 		// so the quadrant angles are exact -- sind(30) is 0.5 and not
@@ -90,20 +101,19 @@ func postgresqlScalarFunctions() map[string]scalarSpec {
 	}
 }
 
-// postgresqlNonDeterministicFunctions read the clock, so they must not be
-// registered as deterministic: SQLite would fold them to one value.
+// postgresqlNonDeterministicFunctions must be called again for every row.
+//
+// PostgreSQL separates the moment of the call from the start of the statement:
+// clock_timestamp and timeofday advance while a statement runs, which is the
+// only reason either exists, while now, statement_timestamp and
+// transaction_timestamp are fixed when the statement begins. That second group
+// is registered as deterministic with the rest of the fixed clock, so it is not
+// here.
 func postgresqlNonDeterministicFunctions() map[string]scalarSpec {
 	return map[string]scalarSpec{
-		// PostgreSQL distinguishes the transaction's start from the statement's
-		// from the moment of the call. filesql runs each statement on its own,
-		// so the three answer the same clock; they are separate names because a
-		// query that names one of them should not fail.
-		"clock_timestamp":       {0, fnNow},
-		"statement_timestamp":   {0, fnNow},
-		"transaction_timestamp": {0, fnNow},
-		"timeofday":             {0, fnTimeOfDay},
-		"gen_random_uuid":       {0, fnGenerateUUID},
-		"to_timestamp":          {-1, fnToTimestamp},
+		"clock_timestamp": {0, fnNow},
+		"timeofday":       {0, fnTimeOfDay},
+		"gen_random_uuid": {0, fnGenerateUUID},
 	}
 }
 
@@ -820,5 +830,5 @@ func parseFloatOrNothing(s string) (float64, bool) {
 
 // fnTimeOfDay is PostgreSQL's textual clock reading.
 func fnTimeOfDay(_ []driver.Value) (driver.Value, error) {
-	return time.Now().Format("Mon Jan 02 15:04:05.000000 2006 MST"), nil
+	return time.Now().UTC().Format("Mon Jan 02 15:04:05.000000 2006 MST"), nil
 }

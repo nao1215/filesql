@@ -82,13 +82,6 @@ func googlesqlScalarFunctions() map[string]scalarSpec {
 	}
 }
 
-// googlesqlNonDeterministicFunctions read the clock.
-func googlesqlNonDeterministicFunctions() map[string]scalarSpec {
-	return map[string]scalarSpec{
-		"current_datetime": {-1, fnCurrentDatetime},
-	}
-}
-
 // --- constructors ---
 
 // fnGoogleSQLDate implements DATE(y, m, d), DATE(timestamp) and DATE(datetime).
@@ -259,7 +252,7 @@ func fnCurrentDatetime(args []driver.Value) (driver.Value, error) {
 	if len(args) > 0 {
 		return nil, errUnsupportedTimeZone("CURRENT_DATETIME")
 	}
-	return time.Now().Format(layoutDateTime), nil
+	return time.Now().UTC().Format(layoutDateTime), nil
 }
 
 // --- days since the epoch ---

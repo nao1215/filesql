@@ -282,6 +282,18 @@ func registerAll() error {
 		"safe_subtract":     {2, safeArith(safeSubInt, func(a, b float64) float64 { return a - b })},
 		"safe_multiply":     {2, safeArith(safeMulInt, func(a, b float64) float64 { return a * b })},
 		"safe_negate":       {1, fnSafeNegate},
+		// The clock helpers every engine fixes at the start of the statement.
+		// Registering them as deterministic is what fixes them: SQLite computes
+		// a deterministic function whose arguments are constant once per
+		// execution and reuses the answer for every row, and computes it again
+		// the next time the statement runs. UNIX_TIMESTAMP is variadic and only
+		// its no-argument form reads the clock; the form that takes a datetime
+		// is pure, so both belong here.
+		"now":              {0, fnNow},
+		"curdate":          {0, fnCurdate},
+		"curtime":          {0, fnCurtime},
+		"unix_timestamp":   {-1, fnUnixTimestamp},
+		"current_datetime": {-1, fnCurrentDatetime},
 	}
 	// The MySQL-only helpers live in their own file, because there are enough of
 	// them that listing them here would bury the ones every dialect shares.
@@ -296,23 +308,11 @@ func registerAll() error {
 	}
 	registeredFunctions = det
 
-	// Non-deterministic functions must not be registered as deterministic.
-	nondet := map[string]scalarSpec{
-		"now":     {0, fnNow},
-		"curdate": {0, fnCurdate},
-		"curtime": {0, fnCurtime},
-		"rand":    {0, fnRand},
-		// UNIX_TIMESTAMP() with no argument reads the clock, so the whole
-		// function has to be registered as non-deterministic even though the
-		// one-argument form is pure.
-		"unix_timestamp": {-1, fnUnixTimestamp},
-		"generate_uuid":  {0, fnGenerateUUID},
-	}
-	maps.Copy(nondet, postgresqlNonDeterministicFunctions())
-	maps.Copy(nondet, googlesqlNonDeterministicFunctions())
+	nondet := nonDeterministicFunctions()
 	// safe_call runs one of the helpers above and swallows its error, which is
 	// what BigQuery's SAFE. prefix asks for. It is registered here rather than
-	// in nondet's table because it has to see the finished table.
+	// in that table because it has to see the finished one, and it stays
+	// non-deterministic because the helper it is given may be clock_timestamp.
 	nondet["safe_call"] = scalarSpec{nArg: -1, fn: fnSafeCall}
 	for name, spec := range nondet {
 		if err := sqlite.RegisterScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
@@ -321,6 +321,24 @@ func registerAll() error {
 	}
 	maps.Copy(registeredFunctions, nondet)
 	return nil
+}
+
+// nonDeterministicFunctions is every helper SQLite must call again for each row.
+// Two kinds belong here and nothing else does: the ones that are meant to give
+// a different answer every time they are asked -- a random number, a fresh UUID
+// -- and PostgreSQL's changing clock, which is the whole of what separates
+// clock_timestamp and timeofday from now and statement_timestamp. Everything
+// that reads the clock once at the start of the statement is registered as
+// deterministic instead, which is what makes one statement see one reading.
+func nonDeterministicFunctions() map[string]scalarSpec {
+	nondet := map[string]scalarSpec{
+		"rand":          {0, fnRand},
+		"generate_uuid": {0, fnGenerateUUID},
+	}
+	// GoogleSQL has nothing to add: BigQuery fixes CURRENT_DATETIME at the
+	// start of the statement, like the rest of its CURRENT_ family.
+	maps.Copy(nondet, postgresqlNonDeterministicFunctions())
+	return nondet
 }
 
 // registeredFunctions is every scalar function this package computes itself,
@@ -603,16 +621,20 @@ func leadingNumber(s string) float64 {
 	return f
 }
 
+// fnNow reads the clock in UTC. This package carries no time zone -- no
+// column has one, no cast produces one, and a zone argument is refused -- so
+// UTC is the reading that is the same on every machine, and it is the one
+// SQLite's own CURRENT_TIMESTAMP answers.
 func fnNow(_ []driver.Value) (driver.Value, error) {
-	return time.Now().Format(layoutDateTime), nil
+	return time.Now().UTC().Format(layoutDateTime), nil
 }
 
 func fnCurdate(_ []driver.Value) (driver.Value, error) {
-	return time.Now().Format(layoutDateOnly), nil
+	return time.Now().UTC().Format(layoutDateOnly), nil
 }
 
 func fnCurtime(_ []driver.Value) (driver.Value, error) {
-	return time.Now().Format(layoutTimeOnly), nil
+	return time.Now().UTC().Format(layoutTimeOnly), nil
 }
 
 func fnRand(_ []driver.Value) (driver.Value, error) {
