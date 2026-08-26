@@ -450,7 +450,7 @@ func fnMySQLQuote(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		// MySQL answers the word rather than NULL, so the result can be pasted
 		// into a statement whatever the value was.
-		return "NULL", nil
+		return nullText, nil
 	}
 	var b strings.Builder
 	b.Grow(len(s) + 2)

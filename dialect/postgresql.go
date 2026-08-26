@@ -100,6 +100,11 @@ func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
+	// P-24: LOCALTIMESTAMP and LOCALTIME are keywords rather than calls in
+	// PostgreSQL, so SQLite read them as column names and reported no such
+	// column. They name the same clock the corresponding functions read.
+	out = wordToCallPass(out, "LOCALTIMESTAMP", "now")
+	out = wordToCallPass(out, "LOCALTIME", "curtime")
 	// P-23: BETWEEN SYMMETRIC has no SQLite form. It runs after the call pass
 	// so the least() and greatest() it emits are the shared helpers rather than
 	// PostgreSQL's NULL-skipping pair, which would lose a NULL bound.
@@ -254,6 +259,25 @@ func rewritePosition(tokens []token, open, closeIdx int, recurse callRecurser) (
 	repl = append(repl, needle...)
 	repl = append(repl, opToken(")"))
 	return repl, true, nil
+}
+
+// wordToCallPass replaces a bare keyword with a call to name, for the
+// PostgreSQL words that read a value without parentheses. A word already
+// followed by "(" is left alone, since it is a call the caller wrote.
+func wordToCallPass(tokens []token, word, name string) []token {
+	out := make([]token, 0, len(tokens))
+	for i, t := range tokens {
+		if !isWordEq(t, word) {
+			out = append(out, t)
+			continue
+		}
+		if next := nextSig(tokens, i+1); next >= 0 && isOpEq(tokens[next], "(") {
+			out = append(out, t)
+			continue
+		}
+		out = append(out, wordToken(name), opToken("("), opToken(")"))
+	}
+	return out
 }
 
 // rewriteSubstringCall routes both spellings of SUBSTRING onto the dialect's own

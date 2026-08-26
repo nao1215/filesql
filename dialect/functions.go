@@ -285,6 +285,7 @@ func registerAll() error {
 	// them that listing them here would bury the ones every dialect shares.
 	maps.Copy(det, mysqlScalarFunctions())
 	maps.Copy(det, mysqlTimeFunctions())
+	maps.Copy(det, postgresqlScalarFunctions())
 	for name, spec := range det {
 		if err := sqlite.RegisterDeterministicScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
 			return fmt.Errorf("dialect: register %s: %w", name, err)
@@ -303,6 +304,7 @@ func registerAll() error {
 		"unix_timestamp": {-1, fnUnixTimestamp},
 		"generate_uuid":  {0, fnGenerateUUID},
 	}
+	maps.Copy(nondet, postgresqlNonDeterministicFunctions())
 	for name, spec := range nondet {
 		if err := sqlite.RegisterScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
 			return fmt.Errorf("dialect: register %s: %w", name, err)
@@ -3023,7 +3025,9 @@ func formatOperand(verb byte, v driver.Value) any {
 	}
 }
 
-// nullText is how GoogleSQL's FORMAT prints a value that has none.
+// nullText is how a value that has none is spelled where SQL spells it out:
+// GoogleSQL's FORMAT prints it, MySQL's QUOTE answers it, PostgreSQL's
+// quote_nullable answers it, and the keyword tables in this package hold it.
 const nullText = "NULL"
 
 // googlesqlPrintValue implements GoogleSQL's %t and %T: the printable form of a

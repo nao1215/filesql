@@ -88,7 +88,7 @@ func labelFor(original []token, before tokenSpan, rewritten []token, after token
 // expressionEndKeywords are words that finish an expression and can therefore
 // never be an alias: "CASE ... END", "x IS NULL", "TRUE".
 var expressionEndKeywords = map[string]bool{
-	"END": true, "NULL": true, "TRUE": true, "FALSE": true,
+	"END": true, nullText: true, "TRUE": true, "FALSE": true,
 	"CURRENT_DATE": true, "CURRENT_TIME": true, "CURRENT_TIMESTAMP": true,
 }
 
