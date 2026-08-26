@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -384,5 +385,95 @@ func TestCastStringPastTheFloatRange(t *testing.T) {
 	}
 	if _, err := runDialect(t, db, GoogleSQL, "SELECT CAST('"+huge+"' AS INT64)"); err == nil {
 		t.Error("googlesql must reject a string past the float range")
+	}
+}
+
+// TestCastToBlob covers the BLOB target, which every dialect spells differently
+// but which all of them mean as "the value's bytes".
+func TestCastToBlob(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value driver.Value
+		want  string
+		null  bool
+	}{
+		{name: "bytes pass through", value: []byte("abc"), want: "abc"},
+		{name: "a string becomes its bytes", value: "abc", want: "abc"},
+		{name: "a number becomes its digits", value: int64(255), want: "255"},
+		{name: "a time becomes its written form", value: time.Date(2026, 7, 28, 13, 5, 9, 0, time.UTC), want: "2026-07-28 13:05:09"},
+		{name: "a NULL has no bytes", value: nil, null: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := castToBlob(tt.value)
+			if err != nil {
+				t.Fatalf("castToBlob(%v) error: %v", tt.value, err)
+			}
+			if tt.null {
+				if got != nil {
+					t.Fatalf("castToBlob(%v) = %v, want NULL", tt.value, got)
+				}
+				return
+			}
+			b, ok := got.([]byte)
+			if !ok {
+				t.Fatalf("castToBlob(%v) = %T, want []byte", tt.value, got)
+			}
+			if string(b) != tt.want {
+				t.Fatalf("castToBlob(%v) = %q, want %q", tt.value, b, tt.want)
+			}
+		})
+	}
+}
+
+// TestCastToBool covers the two answers a non-boolean value gets. MySQL takes
+// anything and reads it for truthiness; the other dialects refuse a value that
+// is not a boolean, because silently reading "maybe" as false is a wrong answer
+// rather than a missing one.
+func TestCastToBool(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		value   driver.Value
+		strict  bool
+		want    int64
+		wantErr bool
+	}{
+		{name: "a true boolean", value: true, want: 1},
+		{name: "a false boolean", value: false, want: 0},
+		{name: "a non-zero integer", value: int64(7), want: 1},
+		{name: "zero", value: int64(0), want: 0},
+		{name: "a non-zero float", value: 0.5, want: 1},
+		{name: "a zero float", value: 0.0, want: 0},
+		{name: "the word yes", value: " YES ", want: 1},
+		{name: "the word off", value: "off", want: 0},
+		{name: "a word that is not a boolean reads as the number it spells", value: "maybe", want: 0},
+		{name: "a word with a number in front of it is truthy", value: "1 maybe", want: 1},
+		{name: "an empty value is not truthy", value: "", want: 0},
+		{name: "a word that is not a boolean, strictly", value: "maybe", strict: true, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := castToBool(PostgreSQL, tt.value, tt.strict)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("castToBool(%v, strict) = %v, want an error", tt.value, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("castToBool(%v) error: %v", tt.value, err)
+			}
+			if got != tt.want {
+				t.Fatalf("castToBool(%v) = %v, want %v", tt.value, got, tt.want)
+			}
+		})
 	}
 }

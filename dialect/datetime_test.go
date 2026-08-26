@@ -205,3 +205,50 @@ func TestHasTimePart(t *testing.T) {
 		}
 	}
 }
+
+// TestAddInterval covers the interval arithmetic the three dialects share,
+// including the month clamping Go's AddDate does not do: "January 31 plus one
+// month" is the last day of February, not March 3.
+func TestAddInterval(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 1, 31, 10, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		n       int64
+		unit    string
+		want    time.Time
+		wantErr bool
+	}{
+		{name: "years", n: 1, unit: unitYear, want: time.Date(2027, 1, 31, 10, 0, 0, 0, time.UTC)},
+		{name: "quarters", n: 1, unit: unitQuarter, want: time.Date(2026, 4, 30, 10, 0, 0, 0, time.UTC)},
+		{name: "months clamp to the last day", n: 1, unit: unitMonth, want: time.Date(2026, 2, 28, 10, 0, 0, 0, time.UTC)},
+		{name: "months backwards", n: -1, unit: unitMonth, want: time.Date(2025, 12, 31, 10, 0, 0, 0, time.UTC)},
+		{name: "weeks", n: 1, unit: unitWeek, want: time.Date(2026, 2, 7, 10, 0, 0, 0, time.UTC)},
+		{name: "days", n: 1, unit: unitDay, want: time.Date(2026, 2, 1, 10, 0, 0, 0, time.UTC)},
+		{name: "hours", n: 2, unit: unitHour, want: time.Date(2026, 1, 31, 12, 0, 0, 0, time.UTC)},
+		{name: "minutes", n: 30, unit: unitMinute, want: time.Date(2026, 1, 31, 10, 30, 0, 0, time.UTC)},
+		{name: "seconds", n: 45, unit: unitSecond, want: time.Date(2026, 1, 31, 10, 0, 45, 0, time.UTC)},
+		{name: "a unit no dialect defines", n: 1, unit: "fortnight", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := addInterval(base, tt.n, tt.unit)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("addInterval(%d, %q) = %v, want an error", tt.n, tt.unit, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("addInterval(%d, %q) error: %v", tt.n, tt.unit, err)
+			}
+			if !got.Equal(tt.want) {
+				t.Fatalf("addInterval(%d, %q) = %v, want %v", tt.n, tt.unit, got, tt.want)
+			}
+		})
+	}
+}

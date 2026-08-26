@@ -563,3 +563,30 @@ func TestStrictConcatSemantics(t *testing.T) {
 		})
 	}
 }
+
+// TestSimilarToRegexpEscapes covers the characters the SIMILAR TO translation
+// has to protect from the regular expression it produces, and the escape a
+// pattern can use to make % or _ mean itself.
+func TestSimilarToRegexpEscapes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		pattern string
+		want    string
+	}{
+		{name: "an anchor is escaped", pattern: "^a$", want: `^\^a\$$`},
+		{name: "an escape keeps the character after it", pattern: `a\%b`, want: `^a\%b$`},
+		{name: "a trailing escape escapes itself", pattern: `a\`, want: `^a\\$`},
+		{name: "the regex parts pass through", pattern: "(a|b)+[0-9]{2}", want: "^(a|b)+[0-9]{2}$"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := similarToRegexp(tt.pattern); got != tt.want {
+				t.Fatalf("similarToRegexp(%q) = %q, want %q", tt.pattern, got, tt.want)
+			}
+		})
+	}
+}

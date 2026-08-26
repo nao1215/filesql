@@ -426,3 +426,54 @@ func TestAddFS_ReadsAFileAgainWhenAColumnWidens(t *testing.T) {
 	require.NoError(t, rows.Err())
 	assert.Equal(t, []string{"1", "2.50", "abc"}, got)
 }
+
+// TestParseFromReader_EmptyInput covers what each format's parser answers for an
+// input with nothing in it. JSON and JSONL are excluded on purpose: an empty one
+// is a valid zero-row table, which the loader turns into an empty table rather
+// than a failure. XLSX is excluded because no bytes at all is not an empty
+// workbook but an unreadable one, which the case below covers.
+func TestParseFromReader_EmptyInput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		fileType FileType
+	}{
+		{"CSV", FileTypeCSV},
+		{"TSV", FileTypeTSV},
+		{"Parquet", FileTypeParquet},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			parser := newStreamingParser(tt.fileType, CompressionNone, "empty", 100)
+			_, err := parser.parseFromReader(strings.NewReader(""))
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrEmptyData)
+		})
+	}
+}
+
+// TestParseFromReader_UnparsableInput covers the binary formats given bytes that
+// are not the format at all, which is what a mislabelled file looks like.
+func TestParseFromReader_UnparsableInput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		fileType FileType
+	}{
+		{"Parquet", FileTypeParquet},
+		{"XLSX", FileTypeXLSX},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			parser := newStreamingParser(tt.fileType, CompressionNone, "wrong", 100)
+			_, err := parser.parseFromReader(strings.NewReader("id,name\n1,Alice\n"))
+			assert.Error(t, err, "bytes that are not the format must not load as a table")
+		})
+	}
+}
