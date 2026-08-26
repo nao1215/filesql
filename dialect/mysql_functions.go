@@ -80,7 +80,7 @@ func mysqlScalarFunctions() map[string]scalarSpec {
 //
 // The comparison folds case, which is what MySQL's default collation does. It
 // does not fold accents, which that collation also does -- MySQL answers 0 for
-// STRCMP('é', 'e') and this answers a difference. Modelling that would mean
+// STRCMP('é', 'e') and this answers a difference. Modeling that would mean
 // carrying the collation's weight tables, and the case rule is the one a query
 // over a file is written against.
 func fnMySQLStrcmp(args []driver.Value) (driver.Value, error) {
@@ -104,7 +104,7 @@ func fnMySQLBitLength(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
-	return int64(8 * len(s)), nil
+	return 8 * int64(len(s)), nil
 }
 
 // fnMySQLInsert implements INSERT(str, pos, len, newstr): str with len
@@ -126,9 +126,10 @@ func fnMySQLInsert(args []driver.Value) (driver.Value, error) {
 	}
 	head := runes[:pos-1]
 	tail := len(runes)
-	// The sum is computed in int64 so a length near the top of the range cannot
-	// wrap around into a position inside the string.
-	if length >= 0 && pos-1+length < int64(len(runes)) {
+	// The length is bounded before it is added to the position, because a
+	// length near the top of the int64 range wraps the sum negative and would
+	// then pass for a position inside the string.
+	if length >= 0 && length < int64(len(runes)) && pos-1+length < int64(len(runes)) {
 		tail = int(pos - 1 + length)
 	}
 	return string(head) + repl + string(runes[tail:]), nil
@@ -437,6 +438,12 @@ func regexpOccurrence(args []driver.Value, subject, pattern, matchType, name str
 	runes := []rune(subject)
 	if pos < 1 || pos > int64(len(runes))+1 {
 		return nil, false, fmt.Errorf("dialect: %s position %d is out of bounds", name, pos)
+	}
+	// Non-overlapping matches cannot outnumber the characters, so an occurrence
+	// past that has none. The check also keeps the count below what an int holds
+	// on a 32-bit build, where a truncated negative would mean "every match".
+	if occurrence > int64(len(runes))+1 {
+		return nil, false, nil
 	}
 	re, err := compileMySQLRegexp(pattern, matchType)
 	if err != nil {

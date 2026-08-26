@@ -110,6 +110,16 @@ func TestMySQLOnlyFunctions(t *testing.T) {
 		{query: `SELECT INSERT('Quadratic', 0, 4, 'What')`, want: "Quadratic"},
 		{query: `SELECT INSERT('Quadratic', 3, 100, 'What')`, want: "QuWhat"},
 		{query: `SELECT INSERT('abc', 2, -1, 'X')`, want: "aX"},
+		{query: `SELECT INSERT('abc', 2, 9223372036854775807, 'X')`, want: "aX"},
+		{query: `SELECT INSERT('abc', 2, -9223372036854775808, 'X')`, want: "aX"},
+		// An occurrence past the number of matches has none. MySQL 8.4 answers
+		// the first match for an occurrence at or above 2^32, where its own
+		// counter wraps, and NULL for every value below that; the wrap is not a
+		// behavior worth copying, so these follow the answer MySQL gives for
+		// 2147483647 rather than the one it gives for 4294967296.
+		{query: `SELECT REGEXP_SUBSTR('abc', 'b', 1, 9223372036854775807)`, wantNull: true},
+		{query: `SELECT REGEXP_INSTR('abc', 'b', 1, 9223372036854775807)`, want: "0"},
+		{query: `SELECT REGEXP_SUBSTR('abc', 'b', 1, 3)`, wantNull: true},
 		{query: `SELECT INSERT('abc', 4, 1, 'X')`, want: "abc"},
 		{query: `SELECT INSERT('abc', 5, 1, 'X')`, want: "abc"},
 		{query: `SELECT INSERT('日本語', 2, 1, 'X')`, want: "日X語"},
