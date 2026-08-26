@@ -128,11 +128,16 @@ func NewDataFrameFromPath(path string) (*DataFrame, error) {
 // spelling that does change the value — a leading zero, a magnitude past int64
 // — keeps its whole column text, decided before this by the column's type, so
 // there is nothing left for the conversion to protect against.
+// A blank cell in a numeric column is a missing number and becomes nil, which
+// is what the same cell becomes in the database: text orders above every number
+// in SQLite, so leaving it as the empty string made the maximum of a column the
+// empty string. A blank cell in a text column stays the empty string, where it
+// is a value the file holds.
 func convertStringValue(s string, ct parser.ColumnType) any {
 	switch ct {
 	case parser.TypeInteger:
 		if s == "" {
-			return s
+			return nil
 		}
 		if i, err := strconv.ParseInt(s, 10, 64); err == nil {
 			return i
@@ -140,7 +145,7 @@ func convertStringValue(s string, ct parser.ColumnType) any {
 		return s
 	case parser.TypeReal:
 		if s == "" {
-			return s
+			return nil
 		}
 		// infer.Float64 accepts a saturating spelling ("9e999" is the
 		// infinity), so a value the inference called REAL converts here too.

@@ -673,7 +673,7 @@ func (w *tableWriter) insert(ctx context.Context, chunk *tableChunk) error {
 	w.chunks++
 	w.rows += len(chunk.getRecords())
 	w.sp.logger.Debug("inserting chunk", logKeyTable, w.tableName, "chunk", w.chunks, "rows", len(chunk.getRecords()))
-	if err := w.sp.insertChunkData(ctx, w.stmt, chunk); err != nil {
+	if err := w.sp.insertChunkData(ctx, w.stmt, chunk, w.types); err != nil {
 		return fmt.Errorf("%w: failed to insert chunk data: %w", ErrDatabaseOperation, err)
 	}
 	return nil
@@ -859,7 +859,7 @@ func insertQuery(tableName string, width int) string {
 
 // insertChunkData inserts a chunk's worth of rows through a prepared statement.
 // One values slice is reused across rows to keep allocations down.
-func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, chunk *tableChunk) error {
+func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, chunk *tableChunk, types columnInfoList) error {
 	records := chunk.getRecords()
 	if len(records) == 0 {
 		return nil
@@ -883,7 +883,7 @@ func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, 
 			case nulls != nil && rowIdx < len(nulls) && i < len(nulls[rowIdx]) && nulls[rowIdx][i]:
 				values[i] = nil // a source NULL (e.g. a Parquet null) inserts as SQL NULL
 			case i < len(record):
-				values[i] = record[i]
+				values[i] = cellValue(record[i], types, i)
 			default:
 				values[i] = nil
 			}
@@ -895,6 +895,30 @@ func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, 
 	}
 
 	return nil
+}
+
+// cellValue is what one cell binds to. Everything binds as the text the file
+// holds, except a blank cell in a column the read found to be numeric, which
+// binds as NULL.
+//
+// SQLite converts text that spells a number to the column's type and leaves
+// text that does not, and the empty string does not, so a blank cell used to
+// sit in an INTEGER or REAL column as text. Text orders above every number
+// there, which made MAX answer the empty string rather than the largest value,
+// AVG divide by the rows holding nothing, ORDER BY DESC put those rows first
+// and a numeric filter pass them, while IS NULL matched none of them. A blank
+// cell in a text column stays the empty string: there it is a value the file
+// holds, and telling it from a missing one is a distinction worth keeping. A
+// column recognized as datetime is stored as text and is left alone for the
+// same reason.
+func cellValue(cell string, types columnInfoList, i int) any {
+	if cell != "" || i >= len(types) {
+		return cell
+	}
+	if types[i].Type == columnTypeInteger || types[i].Type == columnTypeReal {
+		return nil
+	}
+	return cell
 }
 
 // createDecompressedReader creates a reader that handles compression
