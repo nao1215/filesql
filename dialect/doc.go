@@ -23,12 +23,22 @@
 // WIDTH_BUCKET, ...) are
 // filled by user-defined functions registered into the SQLite driver via
 // RegisterFunctions rather than by rewriting the SQL. The MySQL-only ones are
-// in mysql_functions.go, registered under the names MySQL gives them: a name
+// in mysql_functions.go and mysql_time.go, registered under the names MySQL
+// gives them: a name
 // that is not a SQLite keyword and that no other dialect means something else
 // by needs no rewrite, and keeping the call text as the query wrote it keeps
 // the result column's name with it. STRCMP is the one whose answer is an
 // approximation rather than a match: it folds case, which MySQL's default
 // collation does, and not accents, which that collation also does.
+//
+// The TIME functions have a file of their own because a MySQL TIME is not a
+// point on a clock. It is a signed span running from -838:59:59 to 838:59:59,
+// so SEC_TO_TIME answers 100:00:00 for 360000 and TIME_FORMAT prints an hour
+// field of three digits with a sign in front of the whole result, none of which
+// a time.Time holds. What that file cannot carry is MySQL's fractional-seconds
+// precision, which comes from the type of each argument rather than its value:
+// MySQL prints SEC_TO_TIME('3661') as 01:01:01.000000 and this prints
+// 01:01:01, because SQLite has no type to take the six from.
 //
 // Arithmetic reaches the same helpers by the other route, rewriting the
 // operator into a call, where a dialect disagrees with SQLite about the answer.

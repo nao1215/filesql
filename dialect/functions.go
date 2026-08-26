@@ -279,6 +279,7 @@ func registerAll() error {
 	// The MySQL-only helpers live in their own file, because there are enough of
 	// them that listing them here would bury the ones every dialect shares.
 	maps.Copy(det, mysqlScalarFunctions())
+	maps.Copy(det, mysqlTimeFunctions())
 	for name, spec := range det {
 		if err := sqlite.RegisterDeterministicScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
 			return fmt.Errorf("dialect: register %s: %w", name, err)
