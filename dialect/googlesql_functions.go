@@ -252,7 +252,13 @@ func timeFromFields(args []driver.Value) (string, error) {
 	return fmt.Sprintf("%02d:%02d:%02d", hour, minute, second), nil
 }
 
-func fnCurrentDatetime(_ []driver.Value) (driver.Value, error) {
+// fnCurrentDatetime reads the clock. BigQuery's takes an optional time zone,
+// which filesql does not carry: answering the local instant under another
+// zone's name would be a different reading, so a zone is refused.
+func fnCurrentDatetime(args []driver.Value) (driver.Value, error) {
+	if len(args) > 0 {
+		return nil, errUnsupportedTimeZone("CURRENT_DATETIME")
+	}
 	return time.Now().Format(layoutDateTime), nil
 }
 
@@ -673,10 +679,7 @@ func fnTimeAdd(args []driver.Value) (driver.Value, error) {
 		return nil, err
 	}
 	const day = 24 * time.Hour
-	offset := time.Duration(tm.Hour())*time.Hour +
-		time.Duration(tm.Minute())*time.Minute +
-		time.Duration(tm.Second())*time.Second
-	offset = (offset + time.Duration(amount)*step) % day
+	offset := (timeOfDay(tm) + time.Duration(amount)*step) % day
 	if offset < 0 {
 		offset += day
 	}
@@ -728,8 +731,16 @@ func timeOfDay(tm time.Time) time.Duration {
 		time.Duration(tm.Nanosecond())
 }
 
+// timeOfDayString spells a duration as a time of day, with its fraction of a
+// second when it has one -- so a TIME truncated to a millisecond keeps the
+// millisecond rather than reading as the second below it.
 func timeOfDayString(d time.Duration) string {
-	return fmt.Sprintf("%02d:%02d:%02d", int(d.Hours()), int(d.Minutes())%60, int(d.Seconds())%60)
+	out := fmt.Sprintf("%02d:%02d:%02d", int(d.Hours()), int(d.Minutes())%60, int(d.Seconds())%60)
+	frac := d % time.Second
+	if frac == 0 {
+		return out
+	}
+	return out + "." + strings.TrimRight(fmt.Sprintf("%09d", frac), "0")
 }
 
 // timeUnitDuration is the length of a unit the TIME family takes. The calendar

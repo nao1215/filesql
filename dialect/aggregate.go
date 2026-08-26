@@ -126,6 +126,18 @@ func aggregatePass(tokens []token, d Dialect) ([]token, error) {
 		if closeIdx < 0 {
 			return nil, fmt.Errorf("%w: unbalanced parentheses after %s", ErrInvalidSyntax, t.text)
 		}
+		// A rule that expands into an expression rather than a rename cannot
+		// carry a window: the result is several aggregates inside arithmetic,
+		// and an OVER after it belongs to none of them. Left alone, SQLite
+		// reported on whichever generated function it happened to reach --
+		// "sqrt() may not be used as a window function" for a standard
+		// deviation -- naming a function the query does not contain.
+		if rule.rename == "" {
+			if over := nextSig(tokens, closeIdx+1); over >= 0 && isWordEq(tokens[over], "OVER") {
+				return nil, fmt.Errorf("%w: %s cannot be used as a window function; SQLite has no aggregate to attach the window to",
+					ErrUnsupportedSyntax, strings.ToUpper(t.text))
+			}
+		}
 		// Rewrite the argument first so a nested aggregate is handled too.
 		arg, err := aggregatePass(tokens[open+1:closeIdx], d)
 		if err != nil {

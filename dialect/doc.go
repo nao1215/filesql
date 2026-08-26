@@ -109,11 +109,14 @@
 // day.
 //
 // BigQuery's SAFE. prefix is a wrapper rather than a name: SAFE.f(args) becomes
-// safe_call('f', args), which runs f and answers NULL where f would have
-// raised. It runs after the call pass, so what it wraps is whatever that pass
-// turned the call into. A function SQLite computes itself is out of reach from
-// a user-defined function, so the prefix is dropped there and the call runs as
-// written -- those are the ones that do not raise in the first place.
+// safe_call('f', args), which runs f and answers NULL where f could not compute
+// a value from what it was given. It runs after the call pass, so what it wraps
+// is whatever that pass turned the call into. Two kinds of failure are still
+// reported rather than answered with a NULL, because neither is about the data:
+// a name nothing here defines, and an argument count the function does not
+// have. A function SQLite computes itself is out of reach from a user-defined
+// function, so the prefix is dropped there and the call runs as written --
+// those are the ones that do not raise in the first place.
 //
 // TO_CHAR has a file of its own for the same kind of reason: its template is a
 // language rather than a set of names, and it cannot be translated into a Go

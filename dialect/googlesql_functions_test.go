@@ -91,7 +91,11 @@ func TestGoogleSQLDateAndTimeFunctions(t *testing.T) {
 		{name: "time_diff is signed", query: `SELECT TIME_DIFF(TIME '12:04:05', TIME '13:04:05', HOUR)`, want: "-1"},
 		{name: "time_trunc to an hour", query: `SELECT TIME_TRUNC(TIME '13:04:05', HOUR)`, want: "13:00:00"},
 		{name: "time_trunc to a minute", query: `SELECT TIME_TRUNC(TIME '13:04:05', MINUTE)`, want: "13:04:00"},
-		{name: "time_trunc to a millisecond", query: `SELECT TIME_TRUNC(TIME '13:04:05.123', MILLISECOND)`, want: "13:04:05"},
+		{name: "time_trunc to a millisecond", query: `SELECT TIME_TRUNC(TIME '13:04:05.123', MILLISECOND)`, want: "13:04:05.123"},
+		{name: "time_trunc to a microsecond", query: `SELECT TIME_TRUNC(TIME '13:04:05.123456', MICROSECOND)`, want: "13:04:05.123456"},
+		{name: "time_trunc to a second drops the fraction", query: `SELECT TIME_TRUNC(TIME '13:04:05.123', SECOND)`, want: "13:04:05"},
+		{name: "time_add keeps a fraction of a second", query: `SELECT TIME_ADD(TIME '13:04:05.5', INTERVAL 1 HOUR)`, want: "14:04:05.5"},
+		{name: "current_datetime refuses a time zone", query: `SELECT CURRENT_DATETIME('UTC')`, wantErr: true},
 		{name: "time_diff in seconds", query: `SELECT TIME_DIFF(TIME '13:04:05', TIME '13:04:04', SECOND)`, want: "1"},
 		{name: "the time family refuses a calendar unit", query: `SELECT TIME_TRUNC(TIME '13:04:05', MONTH)`, wantErr: true},
 

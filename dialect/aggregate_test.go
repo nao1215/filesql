@@ -333,3 +333,44 @@ func TestGoogleSQLArrayAggregatesAreRejected(t *testing.T) {
 		t.Errorf("a column named array_agg must translate: %v", err)
 	}
 }
+
+// TestExpandedAggregatesRefuseAWindow keeps the aggregates that expand into an
+// expression from reaching SQLite with an OVER after them. The result is
+// several aggregates inside arithmetic, and a window belongs to none of them;
+// left alone SQLite reported on whichever generated function it happened to
+// reach -- "sqrt() may not be used as a window function" for a standard
+// deviation -- naming a function the query does not contain.
+func TestExpandedAggregatesRefuseAWindow(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		dialect Dialect
+		query   string
+	}{
+		{GoogleSQL, "SELECT CORR(x, y) OVER () FROM t"},
+		{GoogleSQL, "SELECT COVAR_POP(x, y) OVER () FROM t"},
+		{GoogleSQL, "SELECT COUNTIF(x > 1) OVER () FROM t"},
+		{GoogleSQL, "SELECT APPROX_COUNT_DISTINCT(x) OVER () FROM t"},
+		{GoogleSQL, "SELECT STDDEV(x) OVER () FROM t"},
+		{PostgreSQL, "SELECT VAR_POP(x) OVER () FROM t"},
+		{MySQL, "SELECT STD(x) OVER () FROM t"},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := Translate(tt.dialect, tt.query); !errors.Is(err, ErrUnsupportedSyntax) {
+				t.Errorf("Translate(%s, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.query, err)
+			}
+		})
+	}
+
+	// A rename carries a window fine, since what runs is one SQLite aggregate.
+	for _, query := range []string{
+		"SELECT LOGICAL_AND(x) OVER () FROM t",
+		"SELECT ANY_VALUE(x) OVER () FROM t",
+	} {
+		if _, err := Translate(GoogleSQL, query); err != nil {
+			t.Errorf("Translate(GoogleSQL, %q) must translate: %v", query, err)
+		}
+	}
+}
