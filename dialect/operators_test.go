@@ -206,8 +206,14 @@ func TestZeroDivisorFollowsTheDialect(t *testing.T) {
 			// The driver renders a scalar function's error as text on the way
 			// out, so the sentinel does not survive to be matched with
 			// errors.Is; the message it carries is what a caller sees.
-			if !strings.Contains(err.Error(), ErrDivideByZero.Error()) {
+			if !strings.Contains(err.Error(), "dialect: division by zero") {
 				t.Errorf("%v: %s = %v, want a division-by-zero failure", tt.dialect, query, err)
+			}
+			// The words matter as much as the failure: the message used to
+			// read "invalid cast: division by zero", naming a conversion the
+			// query does not contain.
+			if strings.Contains(err.Error(), "invalid cast") {
+				t.Errorf("%v: %s = %v, want no mention of a cast", tt.dialect, query, err)
 			}
 		}
 	}

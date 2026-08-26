@@ -35,7 +35,11 @@ import (
 // the SQLite dialect's behavior too.
 
 // ErrDivideByZero reports a division by zero in a dialect that raises for it.
-var ErrDivideByZero = fmt.Errorf("%w: division by zero", ErrInvalidCast)
+// It stands on its own rather than wrapping ErrInvalidCast, which is about a
+// value a target type cannot represent: a division by zero converts nothing,
+// and an error reading "invalid cast: division by zero" sent the reader looking
+// at CAST expressions their query does not contain.
+var ErrDivideByZero = errors.New("dialect: division by zero")
 
 // divideFloat implements the "/" operator for the dialects whose division is
 // always floating point. MySQL answers NULL when the divisor is zero;
