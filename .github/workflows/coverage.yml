@@ -7,6 +7,15 @@ on:
   pull_request:
     branches: [main]
 
+# Spelled out rather than left to the repository default, and not cut down to
+# contents: read either: octocov comments the coverage report onto the pull
+# request and keeps its baseline in an Actions artifact, so those are the two
+# writes this job genuinely needs and the only ones it gets.
+permissions:
+  contents: read
+  pull-requests: write
+  actions: write
+
 jobs:
   unit_test:
     name: Unit test (linux)
@@ -20,10 +29,7 @@ jobs:
 
     steps:
       # The module's own tests run in this job, so the checkout leaves no
-      # credential in .git/config for them to reach. No workflow-level
-      # permissions block goes with it: octocov comments on the pull request and
-      # reads and writes an artifact datastore, so a contents-read-only token
-      # would take away what this job is here to do.
+      # credential in .git/config for them to reach.
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
