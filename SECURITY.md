@@ -92,8 +92,17 @@ later block or a concatenated second stream is not covered by it.
 
 ### ACH and Fedwire
 
-Both loaders are experimental. They are not recommended for untrusted input, and
-their behavior on malformed files is not part of any compatibility promise yet.
+Both formats are parsed by the moov-io libraries, which validate as they read, so
+a malformed file is refused rather than partly loaded. Neither format is
+compressed and neither declares a size for filesql to allocate against, so the
+memory a file costs is bounded by the file.
+
+A Fedwire write-back is verified before it reaches your file: the message is
+written to a buffer, read back, and compared field by field with the table it was
+written from. A field that did not survive refuses the whole write, and nothing
+is written, so a refused export leaves the original where it was. An ACH
+write-back is not verified the same way, because ACH control records are
+recalculated by the write and so cannot be compared against what was read.
 
 ## SQL and the Query Surface
 
