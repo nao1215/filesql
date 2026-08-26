@@ -1875,6 +1875,46 @@ func TestBlankCellInNumericColumnIsNull(t *testing.T) {
 	}
 }
 
+// TestBlankCellInNumericColumnInEveryDelimitedFormat pins that the readers
+// agree about what a blank cell is. Each of them produces the cell's text and
+// hands it to the same insert, so a reader that spelled a blank differently
+// would put the empty string back in a numeric column for its format alone.
+func TestBlankCellInNumericColumnInEveryDelimitedFormat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		file string
+		body string
+	}{
+		{name: "csv", file: "rows.csv", body: "region,amount\nnorth,10\nsouth,\neast,30\n"},
+		{name: "tsv", file: "rows.tsv", body: "region\tamount\nnorth\t10\nsouth\t\neast\t30\n"},
+		{name: "ltsv", file: "rows.ltsv", body: "region:north\tamount:10\nregion:south\tamount:\nregion:east\tamount:30\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			src := filepath.Join(t.TempDir(), tt.file)
+			require.NoError(t, os.WriteFile(src, []byte(tt.body), 0o600))
+
+			db, err := OpenContext(ctx, src)
+			require.NoError(t, err)
+			defer db.Close()
+
+			var missing, present int
+			var largest int64
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT SUM(amount IS NULL), COUNT(amount), MAX(amount) FROM rows`).Scan(&missing, &present, &largest))
+			assert.Equal(t, 1, missing)
+			assert.Equal(t, 2, present)
+			assert.Equal(t, int64(30), largest)
+		})
+	}
+}
+
 // TestBlankCellInNumericColumnAtEveryChunkSize pins that the blank cell reaches
 // the database the same way wherever it falls, since the insert runs per chunk.
 func TestBlankCellInNumericColumnAtEveryChunkSize(t *testing.T) {
