@@ -51,6 +51,13 @@ func TestPostgreSQLTranslate(t *testing.T) {
 		{"P-6_string_agg_distinct_comma", "SELECT STRING_AGG(DISTINCT name, ',') FROM t", "SELECT group_concat(DISTINCT name) AS \"STRING_AGG(DISTINCT name, ',')\" FROM t"},
 		{"P-6_string_agg_distinct_comma_spaced", "SELECT STRING_AGG( DISTINCT name , ',' ) FROM t", "SELECT group_concat(DISTINCT name) AS \"STRING_AGG( DISTINCT name , ',' )\" FROM t"},
 		{"P-20_greatest", "SELECT GREATEST(a, b) FROM t", `SELECT postgresql_greatest(a, b) AS "GREATEST(a, b)" FROM t`},
+		// P-23: the bounds are sorted with the shared helpers, which answer
+		// NULL for the whole call, rather than with PostgreSQL's NULL-skipping
+		// pair, which would drop a NULL bound and turn a NULL answer into false.
+		{"P-23_between_symmetric", "SELECT * FROM t WHERE x BETWEEN SYMMETRIC a AND b", "SELECT * FROM t WHERE x BETWEEN least(a, b) AND greatest(a, b)"},
+		{"P-23_not_between_symmetric", "SELECT * FROM t WHERE x NOT BETWEEN SYMMETRIC a AND b", "SELECT * FROM t WHERE x NOT BETWEEN least(a, b) AND greatest(a, b)"},
+		{"P-23_between_asymmetric", "SELECT * FROM t WHERE x BETWEEN ASYMMETRIC a AND b", "SELECT * FROM t WHERE x BETWEEN a AND b"},
+		{"P-23_symmetric_is_not_a_keyword_alone", "SELECT symmetric FROM t", "SELECT symmetric FROM t"},
 		{"P-20_least", "SELECT LEAST(a, b) FROM t", `SELECT postgresql_least(a, b) AS "LEAST(a, b)" FROM t`},
 		{"P-19_upper", "SELECT UPPER(name) FROM t", `SELECT unicode_upper(name) AS "UPPER(name)" FROM t`},
 		{"P-19_lower", "SELECT LOWER(name) FROM t", `SELECT unicode_lower(name) AS "LOWER(name)" FROM t`},
@@ -134,6 +141,12 @@ func TestPostgreSQLTranslateUnsupported(t *testing.T) {
 		{"P-6_string_agg_distinct_separator_expression", "SELECT STRING_AGG(DISTINCT name, sep) FROM t"},
 		{"P-1_missing_type", "SELECT a::"},
 		{"P-1_type_not_word", "SELECT a:: , b"},
+		// P-12: an INTERVAL literal is only translatable as the right operand
+		// of date arithmetic. Anywhere else it reached SQLite's parser, which
+		// reported a syntax error naming a token from the caller's own query.
+		{"P-12_bare_interval", "SELECT INTERVAL '3 days'"},
+		{"P-12_interval_as_an_argument", "SELECT JUSTIFY_DAYS(INTERVAL '35 days')"},
+		{"P-12_interval_on_the_left", "SELECT INTERVAL '1 day' + d FROM t"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

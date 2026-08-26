@@ -77,6 +77,11 @@ func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Whatever INTERVAL the pass above did not consume has no SQLite form at
+	// all, so it is refused here rather than left to SQLite's parser.
+	if err := checkLeftoverInterval(out); err != nil {
+		return nil, err
+	}
 	// P-14: SIMILAR TO is SQL-standard pattern matching that SQLite lacks.
 	out, err = similarToPass(out)
 	if err != nil {
@@ -92,6 +97,13 @@ func rewritePostgreSQL(tokens []token) ([]token, error) {
 		return nil, err
 	}
 	out, err = binaryChainOperatorPass(out, "%", "postgresql_mod")
+	if err != nil {
+		return nil, err
+	}
+	// P-23: BETWEEN SYMMETRIC has no SQLite form. It runs after the call pass
+	// so the least() and greatest() it emits are the shared helpers rather than
+	// PostgreSQL's NULL-skipping pair, which would lose a NULL bound.
+	out, err = betweenSymmetricPass(out)
 	if err != nil {
 		return nil, err
 	}

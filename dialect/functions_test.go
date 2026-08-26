@@ -883,6 +883,28 @@ func TestDialectBoundariesFollowTheirEngine(t *testing.T) {
 		{name: "postgresql date_trunc microsecond", dialect: PostgreSQL, query: `SELECT DATE_TRUNC('microsecond', TIMESTAMP '2024-03-05 10:11:12.123456')`, want: "2024-03-05 10:11:12.123456"},
 		{name: "postgresql date_trunc millisecond of a whole second", dialect: PostgreSQL, query: `SELECT DATE_TRUNC('millisecond', TIMESTAMP '2024-03-05 10:11:12')`, want: "2024-03-05 10:11:12"},
 
+		// BETWEEN SYMMETRIC takes its bounds in either order. A NULL bound
+		// makes the whole comparison NULL, which is what keeps the rewrite off
+		// PostgreSQL's NULL-skipping LEAST and GREATEST.
+		{name: "symmetric with the bounds reversed", dialect: PostgreSQL, query: `SELECT 5 BETWEEN SYMMETRIC 7 AND 3`, want: "1"},
+		{name: "symmetric with the bounds in order", dialect: PostgreSQL, query: `SELECT 5 BETWEEN SYMMETRIC 3 AND 7`, want: "1"},
+		{name: "symmetric outside the range", dialect: PostgreSQL, query: `SELECT 9 BETWEEN SYMMETRIC 7 AND 3`, want: "0"},
+		{name: "not between symmetric", dialect: PostgreSQL, query: `SELECT 5 NOT BETWEEN SYMMETRIC 7 AND 3`, want: "0"},
+		{name: "symmetric with a null bound", dialect: PostgreSQL, query: `SELECT 5 BETWEEN SYMMETRIC NULL AND 3`, wantNull: true},
+		{name: "asymmetric keeps the written order", dialect: PostgreSQL, query: `SELECT 5 BETWEEN ASYMMETRIC 7 AND 3`, want: "0"},
+		{name: "symmetric over strings", dialect: PostgreSQL, query: `SELECT 'b' BETWEEN SYMMETRIC 'c' AND 'a'`, want: "1"},
+		{name: "symmetric with a call as a bound", dialect: PostgreSQL, query: `SELECT 5 BETWEEN SYMMETRIC ABS(-7) AND 3`, want: "1"},
+		{name: "symmetric with arithmetic in a bound", dialect: PostgreSQL, query: `SELECT 5 BETWEEN SYMMETRIC 3+1 AND 7`, want: "1"},
+
+		// The operator spelling of date arithmetic answers what the function
+		// spelling answers.
+		{name: "mysql interval operator adds a day", dialect: MySQL, query: `SELECT DATE '2026-01-01' + INTERVAL 1 DAY`, want: "2026-01-02"},
+		{name: "mysql interval function adds a day", dialect: MySQL, query: `SELECT DATE_ADD('2026-01-01', INTERVAL 1 DAY)`, want: "2026-01-02"},
+		{name: "mysql interval operator subtracts", dialect: MySQL, query: `SELECT DATE '2026-01-01' - INTERVAL 1 DAY`, want: "2025-12-31"},
+		{name: "mysql interval operator crosses a month", dialect: MySQL, query: `SELECT DATE '2026-01-31' + INTERVAL 1 MONTH`, want: "2026-02-28"},
+		{name: "mysql interval operator with a negative amount", dialect: MySQL, query: `SELECT DATE '2026-01-01' + INTERVAL -1 DAY`, want: "2025-12-31"},
+		{name: "googlesql interval operator adds a day", dialect: GoogleSQL, query: `SELECT DATE '2026-01-01' + INTERVAL 1 DAY`, want: "2026-01-02"},
+
 		// A sign is told from the binary operator by what stands before it.
 		{name: "a sign after a closing paren is binary", dialect: MySQL, query: `SELECT (4) - 1 >> 1`, want: "1"},
 		{name: "a sign after a quoted name is binary", dialect: MySQL, query: "SELECT `n` - 1 >> 1 FROM (SELECT 9 AS n)", want: "4"},

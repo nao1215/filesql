@@ -22,6 +22,14 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-5_date_sub", "SELECT DATE_SUB(d, INTERVAL 2 MONTH) FROM t", "SELECT interval_add(d, -(2), 'month') AS \"DATE_SUB(d, INTERVAL 2 MONTH)\" FROM t"},
 		{"M-5_date_add_hour", "SELECT DATE_ADD(ts, INTERVAL 5 HOUR)", "SELECT interval_add(ts, 5, 'hour') AS \"DATE_ADD(ts, INTERVAL 5 HOUR)\""},
 		{"M-5_date_add_string_arg", "SELECT DATE_ADD('2020-01-01', INTERVAL 1 YEAR)", "SELECT interval_add('2020-01-01', 1, 'year') AS \"DATE_ADD('2020-01-01', INTERVAL 1 YEAR)\""},
+		// The operator spelling of the same arithmetic has to reach the same
+		// call as the function spelling above.
+		{"M-5_interval_operator_add", "SELECT d + INTERVAL 3 DAY FROM t", "SELECT interval_add(d, 3, 'day') FROM t"},
+		{"M-5_interval_operator_sub", "SELECT d - INTERVAL 2 MONTH FROM t", "SELECT interval_add(d, -(2), 'month') FROM t"},
+		{"M-5_interval_operator_expression_amount", "SELECT d + INTERVAL n + 1 DAY FROM t", "SELECT interval_add(d, n + 1, 'day') FROM t"},
+		// INTERVAL(n, a, b) is an ordinary MySQL function that has nothing to do
+		// with dates; a "(" after the word is what tells the two apart.
+		{"M-5_interval_function_is_left_alone", "SELECT INTERVAL(3, 1, 2, 5)", "SELECT INTERVAL(3, 1, 2, 5)"},
 
 		// MySQL CONCAT is NULL-propagating: any NULL argument makes the whole
 		// result NULL. SQLite's own concat() treats NULL as an empty string, so the
@@ -205,6 +213,12 @@ func TestMySQLTranslateUnsupported(t *testing.T) {
 		{"M-23_hex_literal_uppercase_prefix", "SELECT 0X41"},
 		{"M-23_hex_literal_in_arithmetic", "SELECT 1 + 0x10"},
 		{"M-23_hex_literal_in_comparison", "SELECT * FROM t WHERE s = 0x616263"},
+
+		// M-5: an INTERVAL literal outside date arithmetic has no SQLite form,
+		// and passed through it reported a syntax error naming the amount.
+		{"M-5_bare_interval", "SELECT INTERVAL 1 DAY"},
+		{"M-5_interval_as_an_argument", "SELECT f(INTERVAL 1 DAY)"},
+		{"M-5_unsupported_interval_unit", "SELECT d + INTERVAL 1 FORTNIGHT FROM t"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
