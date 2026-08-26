@@ -131,33 +131,6 @@ func TestTranslateUnknownDialect(t *testing.T) {
 	}
 }
 
-func TestRegisterTranslator(t *testing.T) {
-	// Not parallel: mutates the process-global translator registry.
-	const custom = "CUSTOM OUTPUT"
-	RegisterTranslator(MySQL, func(string) (string, error) {
-		return custom, nil
-	})
-	t.Cleanup(func() { RegisterTranslator(MySQL, nil) })
-
-	got, err := Translate(MySQL, "anything at all")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != custom {
-		t.Fatalf("Translate(MySQL) = %q, want %q from custom translator", got, custom)
-	}
-
-	// Removing the custom translator restores the built-in behavior.
-	RegisterTranslator(MySQL, nil)
-	got, err = Translate(MySQL, "SELECT 1")
-	if err != nil {
-		t.Fatalf("unexpected error after removing translator: %v", err)
-	}
-	if got != "SELECT 1" {
-		t.Fatalf("Translate(MySQL, %q) = %q, want built-in result", "SELECT 1", got)
-	}
-}
-
 // TestTranslateIdempotent verifies that feeding a translated statement back
 // through the SQLite (identity) dialect leaves it unchanged, as guaranteed by
 // the package's idempotency invariant.

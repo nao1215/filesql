@@ -235,39 +235,6 @@ Bob,password1,wrongpass
 	//   Row 2, Field "ConfirmPassword": value must equal field Password
 }
 
-// Example_detectFileType demonstrates automatic file type detection from file paths.
-func Example_detectFileType() {
-	files := []string{
-		"data.csv",
-		"data.csv.gz",
-		"report.xlsx",
-		"logs.tsv.bz2",
-		"events.parquet",
-		"access.ltsv.zst",
-		"config.json",
-		"config.json.gz",
-		"events.jsonl",
-		"events.jsonl.zst",
-	}
-
-	for _, f := range files {
-		ft := prep.DetectFileType(f)
-		fmt.Printf("%s -> %s (compressed: %v)\n", f, ft, prep.IsCompressed(ft))
-	}
-
-	// Output:
-	// data.csv -> CSV (compressed: false)
-	// data.csv.gz -> CSV (gzip) (compressed: true)
-	// report.xlsx -> XLSX (compressed: false)
-	// logs.tsv.bz2 -> TSV (bzip2) (compressed: true)
-	// events.parquet -> Parquet (compressed: false)
-	// access.ltsv.zst -> LTSV (zstd) (compressed: true)
-	// config.json -> JSON (compressed: false)
-	// config.json.gz -> JSON (gzip) (compressed: true)
-	// events.jsonl -> JSONL (compressed: false)
-	// events.jsonl.zst -> JSONL (zstd) (compressed: true)
-}
-
 // Example_jsonProcessing demonstrates processing JSON data.
 // JSON arrays are parsed into rows, each containing the raw JSON element
 // in a single "data" column.

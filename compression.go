@@ -130,38 +130,6 @@ func (f *CompressionFactory) CreateReaderForFile(path string) (io.Reader, func()
 	return reader, compositeCleanup, nil
 }
 
-// CreateWriterForFile creates a file and returns a writer that handles compression
-func (f *CompressionFactory) CreateWriterForFile(path string, compressionType CompressionType) (io.Writer, func() error, error) {
-	file, err := os.Create(path) //nolint:gosec // User-provided path is necessary for file operations
-	if err != nil {
-		return nil, nil, fmt.Errorf("%w: failed to create file: %w", ErrIOOperation, err)
-	}
-
-	handler := NewCompressionHandler(compressionType)
-	writer, cleanup, err := handler.CreateWriter(file)
-	if err != nil {
-		_ = file.Close()
-		return nil, nil, err
-	}
-
-	// Create a composite cleanup function
-	compositeCleanup := func() error {
-		var cleanupErr error
-		if cleanup != nil {
-			cleanupErr = cleanup()
-		}
-		if syncErr := file.Sync(); syncErr != nil && cleanupErr == nil {
-			cleanupErr = syncErr
-		}
-		if closeErr := file.Close(); closeErr != nil && cleanupErr == nil {
-			cleanupErr = closeErr
-		}
-		return cleanupErr
-	}
-
-	return writer, compositeCleanup, nil
-}
-
 // RemoveCompressionExtension removes the compression extension from a file path if present
 func (f *CompressionFactory) RemoveCompressionExtension(path string) string {
 	for _, ext := range []string{extGZ, extBZ2, extXZ, extZSTD, extZLIB, extSNAPPY, extS2, extLZ4} {

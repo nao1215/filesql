@@ -538,7 +538,6 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Compare one column against another | `ExampleProcessor_Process_crossField` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Require a column only when other columns say so | `ExampleProcessor_Process_conditionalRequired` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Read preprocessing error details | `ExampleProcessResult_PrepErrors` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Detect compressed inputs | `ExampleIsCompressed`, `Example_detectFileType` | [prep/example_api_test.go](./prep/example_api_test.go), [prep/example_test.go](./prep/example_test.go) |
 | Check output and original formats | `ExampleStream_Format`, `ExampleStream_OriginalFormat` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Rewind and reread the processed stream | `Example_streamLen`, `Example_streamSeek` | [prep/example_api_test.go](./prep/example_api_test.go) |
 
@@ -559,7 +558,6 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Translate a query into SQLite SQL and recognize what has no equivalent | `ExampleTranslate` | [dialect/example_test.go](./dialect/example_test.go) |
 | Turn a user-supplied dialect name into a `Dialect` | `ExampleParse` | [dialect/example_test.go](./dialect/example_test.go) |
 | List the built-in dialects and spell one for a person | `ExampleDialects`, `ExampleDialect_DisplayName` | [dialect/example_test.go](./dialect/example_test.go) |
-| Install a translator of your own | `ExampleRegisterTranslator` | [dialect/example_test.go](./dialect/example_test.go) |
 
 #### frame
 

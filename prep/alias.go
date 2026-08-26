@@ -27,15 +27,3 @@ const (
 
 	FileTypeUnsupported = parser.Unsupported
 )
-
-// DetectFileType detects file type from extension.
-// This is a convenience wrapper around parser.DetectFileType.
-func DetectFileType(path string) FileType {
-	return parser.DetectFileType(path)
-}
-
-// IsCompressed returns true if the file type is compressed.
-// This is a convenience wrapper around parser.IsCompressed.
-func IsCompressed(ft FileType) bool {
-	return parser.IsCompressed(ft)
-}

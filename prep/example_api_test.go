@@ -200,12 +200,6 @@ func ExampleProcessResult_PrepErrors() {
 	// empty_json_data 1
 }
 
-func ExampleIsCompressed() {
-	fmt.Println(prep.IsCompressed(prep.DetectFileType("users.csv.gz")))
-	// Output:
-	// true
-}
-
 func ExampleStream_Format() {
 	type user struct {
 		Name string
