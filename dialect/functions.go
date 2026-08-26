@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"regexp"
 	"strconv"
@@ -102,12 +103,16 @@ const (
 // function shape.
 type scalarFn func(args []driver.Value) (driver.Value, error)
 
+// scalarSpec is a scalar function's argument count and implementation, in the
+// shape the driver's registry takes them. An nArg of -1 accepts any count.
+type scalarSpec struct {
+	nArg int32
+	fn   scalarFn
+}
+
 func registerAll() error {
 	// deterministic functions: same output for the same inputs.
-	det := map[string]struct {
-		nArg int32
-		fn   scalarFn
-	}{
+	det := map[string]scalarSpec{
 		"regexp":      {2, fnRegexp}, // REGEXP(pattern, s); also the "x REGEXP y" operator
 		"if":          {3, fnIf},     // IF(cond, a, b)
 		"date_format": {2, fnDateFormat},
@@ -271,6 +276,9 @@ func registerAll() error {
 		"safe_multiply":     {2, safeArith(safeMulInt, func(a, b float64) float64 { return a * b })},
 		"safe_negate":       {1, fnSafeNegate},
 	}
+	// The MySQL-only helpers live in their own file, because there are enough of
+	// them that listing them here would bury the ones every dialect shares.
+	maps.Copy(det, mysqlScalarFunctions())
 	for name, spec := range det {
 		if err := sqlite.RegisterDeterministicScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
 			return fmt.Errorf("dialect: register %s: %w", name, err)
@@ -278,10 +286,7 @@ func registerAll() error {
 	}
 
 	// Non-deterministic functions must not be registered as deterministic.
-	nondet := map[string]struct {
-		nArg int32
-		fn   scalarFn
-	}{
+	nondet := map[string]scalarSpec{
 		"now":     {0, fnNow},
 		"curdate": {0, fnCurdate},
 		"curtime": {0, fnCurtime},
