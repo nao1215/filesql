@@ -335,15 +335,21 @@ func (b *DBBuilder) AddFS(filesystem fs.FS) *DBBuilder {
 // the one a source was loaded from. Only those files are written: a table created
 // during the session has no file to be written back to and is left unsaved, so
 // pass an output directory when you want everything in the database on disk. A
-// source in a format this package reads but does not write (JSON, JSONL) fails
-// the save rather than being written as something else.
+// source this package reads but cannot write back, by its format (JSON, JSONL)
+// or by its compression (bzip2), is refused by Build rather than written as
+// something else.
 //
 // A workbook is written onto the file it replaces: only the cells whose value
 // changed are rewritten, so formulas, dates, styles and the sheets no table was
 // loaded from stay as they were.
 //
 // The save runs once, when Close returns, so a database with auto-save is as
-// safe to share across goroutines as one without it.
+// safe to share across goroutines as one without it. A transaction still open
+// at that point stops it: Close reports that the save was skipped rather than
+// writing out rows the caller has neither committed nor rolled back.
+//
+// A path that is a symbolic link is followed: the file it names receives the
+// rows and the link stays a link.
 //
 // Returns self for chaining.
 func (b *DBBuilder) EnableAutoSave(outputDir string, options ...DumpOptions) *DBBuilder {
@@ -374,7 +380,7 @@ func (b *DBBuilder) EnableAutoSave(outputDir string, options ...DumpOptions) *DB
 // Saving at close as well is what keeps a statement run outside a transaction
 // from being lost: it is committed as soon as it runs, but no commit hook sees
 // it. This timing therefore saves earlier and more often than EnableAutoSave,
-// never less.
+// never less, and its save at close follows EnableAutoSave's rules.
 //
 // Returns self for chaining.
 func (b *DBBuilder) EnableAutoSaveOnCommit(outputDir string, options ...DumpOptions) *DBBuilder {
@@ -490,6 +496,16 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 	// Use validator to validate final state
 	if err := b.validator.validateFinalState(b.collectedPaths, b.readers, b.paths); err != nil {
 		return nil, err
+	}
+
+	// Overwrite mode writes every source back to itself, and a source in a
+	// format or a codec this package reads but does not write makes that save
+	// fail. The file's name is the whole of the answer, so the caller hears it
+	// here rather than from Close, after a session's work has been done.
+	if b.autoSaveEnabled() && b.autoSaveConfig.outputDir == "" {
+		if err := checkOverwriteTargets(b.fileProcessor.deduplicateCompressedFiles(b.collectedPaths)); err != nil {
+			return nil, err
+		}
 	}
 
 	// Pass logger to internal processors

@@ -448,6 +448,10 @@ Changes live in memory until you save them.
 - `EnableAutoSave` saves when `db.Close()` runs.
 - `EnableAutoSaveOnCommit` saves after each committed transaction, and again when `db.Close()` runs, so a statement executed outside a transaction is not lost.
 
+A transaction still open when `db.Close()` runs is one you have neither committed nor rolled back, so the save is skipped and `Close` reports that it was.
+
+`EnableAutoSave("")` writes each source back to itself, so `Build` refuses a source this package reads but cannot write: the JSON and JSONL formats, and the bzip2 codec. Pass an output directory to load those alongside auto-save. A source reached through a symbolic link is followed: the file the link names receives the rows and the link stays a link. `DumpDatabase` does the same with a destination that already exists as a link.
+
 `DumpOptions` decides the format, the compression, the text encoding, and the line terminator of csv, tsv, and ltsv output:
 
 ```go

@@ -12,7 +12,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/nao1215/filesql/internal/codec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xuri/excelize/v2"
@@ -67,6 +69,12 @@ type stubTx struct{}
 
 func (stubTx) Commit() error   { return nil }
 func (stubTx) Rollback() error { return nil }
+
+// failingCommitTx is a transaction whose commit fails, which is the outcome
+// that leaves database/sql calling neither Commit again nor Rollback.
+type failingCommitTx struct{ stubTx }
+
+func (failingCommitTx) Commit() error { return errStub }
 
 // stubRows is an empty result set.
 type stubRows struct{}
@@ -227,6 +235,29 @@ func TestAutoSaveTransaction_CommitReportsAFailedSave(t *testing.T) {
 	err := tx.Commit()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "transaction committed successfully")
+}
+
+// TestAutoSaveTransaction_CommitThatFailedStopsCountingAsOpen covers the
+// transaction a caller has no way to finish. database/sql does not call
+// Rollback after a Commit that returned an error, and the driver has already
+// rolled the connection back, so a transaction left in the connector's count
+// there would make every later close refuse a save that had nothing to wait
+// for.
+func TestAutoSaveTransaction_CommitThatFailedStopsCountingAsOpen(t *testing.T) {
+	t.Parallel()
+
+	connector := &autoSaveConnector{
+		autoSaveConfig: &autoSaveConfig{enabled: true, timing: autoSaveOnClose},
+	}
+	conn := &autoSaveConnection{conn: &plainConn{}, connector: connector}
+	tx := conn.wrapTx(failingCommitTx{})
+
+	require.ErrorIs(t, tx.Commit(), errStub)
+
+	connector.mu.Lock()
+	open := connector.openTx
+	connector.mu.Unlock()
+	assert.Zero(t, open, "a transaction that cannot be committed is still over")
 }
 
 // TestAutoSaveTransaction_RollbackNeverSaves checks that a rollback reaches the
@@ -913,9 +944,9 @@ func TestAutoSaveOverwriteRefusesFormatItCannotWrite(t *testing.T) {
 			src := filepath.Join(dir, tt.file)
 			require.NoError(t, os.WriteFile(src, []byte(tt.content), 0o600))
 
-			// A JSON source becomes one table with a single "data" column holding the
-			// raw value, which json_extract reads into.
-			err := autoSaveOverwrite(t, []string{src}, `UPDATE records SET data = '{"id":2}'`)
+			// The extension is the whole of the answer, so Build is where the
+			// caller hears it: no database is opened and no file is touched.
+			_, err := NewBuilder().AddPath(src).EnableAutoSave("").Build(t.Context())
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrUnsupportedFormat)
 			assert.Contains(t, err.Error(), tt.file)
@@ -1295,16 +1326,16 @@ func TestAutoSaveOverwriteRefusesCodecItCannotWrite(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(src, fixture, 0o600)) //nolint:gosec // src is under t.TempDir()
 
-	err = autoSaveOverwrite(t, []string{src}, "UPDATE products SET price = 1")
+	_, err = NewBuilder().AddPath(src).EnableAutoSave("").Build(t.Context())
 	require.Error(t, err, "a codec this package cannot write must not report a successful save")
 	assert.Contains(t, err.Error(), "bzip2")
-	// Every sentinel the failure passed through is reachable, so a caller can
-	// tell "this codec cannot be written" from "the compressor failed" without
-	// matching on the message. ErrUnsupportedFormat used to be text only,
-	// because the writer flattened the inner error with %s; see #216.
+	// The codec is read off the name, so the refusal comes from Build, before
+	// there is a database to change or a file to replace. ErrUnsupportedFormat
+	// is the sentinel it carries, the same one the writer reports when a dump
+	// asks for bzip2; TestDumpDatabase_RefusesACodecItCannotWrite covers the
+	// rest of that chain.
 	assert.ErrorIs(t, err, ErrUnsupportedFormat)
-	assert.ErrorIs(t, err, ErrCompression)
-	assert.ErrorIs(t, err, ErrIOOperation)
+	assert.ErrorIs(t, err, codec.ErrNoBZ2Writer)
 
 	after, err := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
 	require.NoError(t, err)
@@ -1333,4 +1364,226 @@ func TestAutoSaveOverwriteLongSourceName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "id,name\n1,bob\n", string(got))
 	assert.Equal(t, []string{base}, dirEntries(t, dir), "no staged file may be left beside the source")
+}
+
+// TestAutoSaveCloseWithAnOpenTransaction pins that closing a database with a
+// transaction still open returns. It did not: the save reads every table
+// through the connector's own connection, an uncommitted write holds the lock
+// on the table it touched, and the driver waits for that lock with no deadline
+// and no context. The only goroutine that could release it was the one inside
+// Close, so a caller whose error path forgot a rollback did not leak a
+// connection -- their process stopped.
+func TestAutoSaveCloseWithAnOpenTransaction(t *testing.T) {
+	t.Parallel()
+
+	// closeWithin runs Close on a goroutine so a Close that never returns fails
+	// the test instead of hanging the run until the package timeout.
+	closeWithin := func(t *testing.T, db *sql.DB) error {
+		t.Helper()
+
+		done := make(chan error, 1)
+		go func() { done <- db.Close() }()
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(30 * time.Second):
+			t.Fatal("db.Close did not return; the save is waiting on a lock it cannot get")
+			return nil
+		}
+	}
+
+	setup := func(t *testing.T, enable func(*DBBuilder) *DBBuilder) (*sql.DB, string) {
+		t.Helper()
+
+		dir := t.TempDir()
+		src := filepath.Join(dir, "users.csv")
+		require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
+
+		validated, err := enable(NewBuilder().AddPath(src)).Build(t.Context())
+		require.NoError(t, err)
+		db, err := validated.Open(t.Context())
+		require.NoError(t, err)
+		return db, src
+	}
+
+	onClose := func(b *DBBuilder) *DBBuilder { return b.EnableAutoSave("") }
+	onCommit := func(b *DBBuilder) *DBBuilder { return b.EnableAutoSaveOnCommit("") }
+
+	for _, tt := range []struct {
+		name   string
+		enable func(*DBBuilder) *DBBuilder
+	}{
+		{name: "save on close", enable: onClose},
+		{name: "save on commit", enable: onCommit},
+	} {
+		t.Run("a write left uncommitted stops the save ("+tt.name+")", func(t *testing.T) {
+			t.Parallel()
+
+			db, src := setup(t, tt.enable)
+			tx, err := db.BeginTx(t.Context(), nil)
+			require.NoError(t, err)
+			_, err = tx.ExecContext(t.Context(), "INSERT INTO users VALUES (2,'bob')")
+			require.NoError(t, err)
+
+			err = closeWithin(t, db)
+			require.Error(t, err, "a save that was skipped must be reported, not passed off as done")
+			assert.ErrorIs(t, err, ErrDatabaseOperation)
+			assert.Contains(t, err.Error(), "transaction")
+
+			got, readErr := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+			require.NoError(t, readErr)
+			assert.Equal(t, "id,name\n1,alice\n", string(got), "nothing uncommitted may reach the file")
+		})
+	}
+
+	t.Run("a transaction that only read is refused the same way", func(t *testing.T) {
+		t.Parallel()
+
+		// Reading takes no write lock, so this one never hung. It is refused
+		// all the same: a transaction still open at Close is a caller who is
+		// not done with the database, and one rule is easier to rely on than a
+		// rule that depends on what the transaction happened to run.
+		db, src := setup(t, onClose)
+		tx, err := db.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+		var n int
+		require.NoError(t, tx.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM users").Scan(&n))
+		require.Equal(t, 1, n)
+
+		err = closeWithin(t, db)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "transaction")
+
+		got, readErr := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+		require.NoError(t, readErr)
+		assert.Equal(t, "id,name\n1,alice\n", string(got))
+	})
+
+	t.Run("a committed transaction saves", func(t *testing.T) {
+		t.Parallel()
+
+		db, src := setup(t, onClose)
+		tx, err := db.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+		_, err = tx.ExecContext(t.Context(), "INSERT INTO users VALUES (2,'bob')")
+		require.NoError(t, err)
+		require.NoError(t, tx.Commit())
+
+		require.NoError(t, closeWithin(t, db))
+
+		got, readErr := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+		require.NoError(t, readErr)
+		assert.Equal(t, "id,name\n1,alice\n2,bob\n", string(got))
+	})
+
+	t.Run("a rolled back transaction saves what the rollback left", func(t *testing.T) {
+		t.Parallel()
+
+		db, src := setup(t, onClose)
+		_, err := db.ExecContext(t.Context(), "INSERT INTO users VALUES (2,'bob')")
+		require.NoError(t, err)
+		tx, err := db.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+		_, err = tx.ExecContext(t.Context(), "INSERT INTO users VALUES (3,'carol')")
+		require.NoError(t, err)
+		require.NoError(t, tx.Rollback())
+
+		require.NoError(t, closeWithin(t, db))
+
+		got, readErr := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+		require.NoError(t, readErr)
+		assert.Equal(t, "id,name\n1,alice\n2,bob\n", string(got))
+	})
+
+	t.Run("an unclosed rows iterator still saves", func(t *testing.T) {
+		t.Parallel()
+
+		// Rows hold a pooled connection but no transaction and no lock the save
+		// waits on, so this has to keep working: a fix that refused whenever a
+		// connection was still checked out would break it silently.
+		db, src := setup(t, onClose)
+		_, err := db.ExecContext(t.Context(), "INSERT INTO users VALUES (2,'bob')")
+		require.NoError(t, err)
+		rows, err := db.QueryContext(t.Context(), "SELECT * FROM users")
+		require.NoError(t, err)
+		require.True(t, rows.Next())
+
+		require.NoError(t, closeWithin(t, db))
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+
+		got, readErr := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+		require.NoError(t, readErr)
+		assert.Equal(t, "id,name\n1,alice\n2,bob\n", string(got))
+	})
+}
+
+// TestAutoSaveOverwriteFollowsASymlink pins that a source reached through a
+// symbolic link is written back through it. The staged file was renamed onto
+// the link itself, so the link became a regular file holding the change and the
+// file it named still held the old rows: the save reported success while the
+// data the caller meant to update never moved.
+func TestAutoSaveOverwriteFollowsASymlink(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real.csv")
+	require.NoError(t, os.WriteFile(target, []byte("id,name\n1,alice\n"), 0o600))
+	link := filepath.Join(dir, "users.csv")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("this platform does not allow a symlink to be created: %v", err)
+	}
+
+	require.NoError(t, autoSaveOverwrite(t, []string{link}, "INSERT INTO users VALUES (2,'bob')"))
+
+	info, err := os.Lstat(link)
+	require.NoError(t, err)
+	assert.NotZero(t, info.Mode()&os.ModeSymlink, "the link must survive the save")
+
+	got, err := os.ReadFile(target) //nolint:gosec // target is under t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, "id,name\n1,alice\n2,bob\n", string(got), "the file the link names is what receives the row")
+	assert.Equal(t, []string{"real.csv", "users.csv"}, dirEntries(t, dir), "no staged file may be left behind")
+}
+
+// TestAutoSaveOverwriteRefusesASourceItCannotWriteBeforeOpening pins where a
+// source that overwrite mode can never write back is reported. It was reported
+// from Close, one file at a time, so a set holding such a source had its earlier
+// files replaced before the caller heard about it: half the directory held the
+// session's rows and half held the old ones, with nothing on disk saying which
+// was which. The extension decides the answer, so Build knows it before any
+// database exists and refuses there.
+func TestAutoSaveOverwriteRefusesASourceItCannotWriteBeforeOpening(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "aaa.csv")
+	require.NoError(t, os.WriteFile(csvPath, []byte("id,name\n1,alice\n"), 0o600))
+	jsonPath := filepath.Join(dir, "zzz.json")
+	require.NoError(t, os.WriteFile(jsonPath, []byte(`[{"id":1}]`), 0o600))
+
+	_, err := NewBuilder().AddPath(csvPath).AddPath(jsonPath).EnableAutoSave("").Build(t.Context())
+	require.Error(t, err, "a set that cannot be saved must be refused before it is loaded")
+	assert.ErrorIs(t, err, ErrUnsupportedFormat)
+	assert.Contains(t, err.Error(), "zzz.json")
+
+	got, readErr := os.ReadFile(csvPath) //nolint:gosec // csvPath is under t.TempDir()
+	require.NoError(t, readErr)
+	assert.Equal(t, "id,name\n1,alice\n", string(got), "no file may be replaced by a save that cannot finish")
+
+	t.Run("an output directory is unaffected", func(t *testing.T) {
+		t.Parallel()
+
+		// Export mode writes what DumpOptions says into a directory of its own,
+		// so a source with no writer is read and written out as CSV and no
+		// source file is replaced. The refusal is about overwrite mode only.
+		out := filepath.Join(t.TempDir(), "out")
+		validated, buildErr := NewBuilder().AddPath(csvPath).AddPath(jsonPath).EnableAutoSave(out).Build(t.Context())
+		require.NoError(t, buildErr)
+		db, openErr := validated.Open(t.Context())
+		require.NoError(t, openErr)
+		require.NoError(t, db.Close())
+
+		assert.Equal(t, []string{"aaa.csv", "zzz.csv"}, dirEntries(t, out))
+	})
 }

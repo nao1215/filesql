@@ -211,11 +211,14 @@ func TestErrorSentinelsAreReachable(t *testing.T) {
 			run: func(t *testing.T) error {
 				t.Helper()
 				dir := t.TempDir()
-				src := filepath.Join(dir, "products.tsv.bz2")
-				fixture, err := os.ReadFile(filepath.Join("testdata", "products.tsv.bz2"))
+				src := filepath.Join(dir, "users.csv")
+				require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
+				validated, err := NewBuilder().AddPath(src).Build(t.Context())
 				require.NoError(t, err)
-				require.NoError(t, os.WriteFile(src, fixture, 0o600)) //nolint:gosec // src is under t.TempDir()
-				return autoSaveOverwrite(t, []string{src}, "UPDATE products SET price = 1")
+				db, err := validated.Open(t.Context())
+				require.NoError(t, err)
+				defer db.Close()
+				return DumpDatabase(db, filepath.Join(dir, "out"), NewDumpOptions().WithCompression(CompressionBZ2))
 			},
 			wants: []error{ErrIOOperation, ErrCompression, ErrUnsupportedFormat},
 		},

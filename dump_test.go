@@ -1231,3 +1231,41 @@ func TestDumpValueFormatting(t *testing.T) {
 		}
 	})
 }
+
+// TestDumpDatabaseFollowsASymlink pins that a destination which already exists
+// as a symbolic link is followed. Dumping into a directory whose entries are
+// links into a shared location wrote regular files over the links, so the files
+// the links named kept their old contents and the layout that made the
+// directory work was gone -- all while DumpDatabase reported success.
+func TestDumpDatabaseFollowsASymlink(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	src := filepath.Join(root, "users.csv")
+	require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
+
+	target := filepath.Join(root, "shared.csv")
+	require.NoError(t, os.WriteFile(target, []byte("old\n"), 0o600))
+	out := filepath.Join(root, "out")
+	require.NoError(t, os.Mkdir(out, 0o750))
+	link := filepath.Join(out, "users.csv")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("this platform does not allow a symlink to be created: %v", err)
+	}
+
+	validated, err := NewBuilder().AddPath(src).Build(t.Context())
+	require.NoError(t, err)
+	db, err := validated.Open(t.Context())
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, DumpDatabase(db, out))
+
+	info, err := os.Lstat(link)
+	require.NoError(t, err)
+	assert.NotZero(t, info.Mode()&os.ModeSymlink, "the link must survive the dump")
+
+	got, err := os.ReadFile(target) //nolint:gosec // target is under t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, "id,name\n1,alice\n", string(got), "the file the link names is what receives the dump")
+}

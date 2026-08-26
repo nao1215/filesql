@@ -216,6 +216,16 @@ func (c Codec) NewReader(reader io.Reader) (io.Reader, func() error, error) {
 	}
 }
 
+// CannotWrite returns the error NewWriter would give for this codec, or nil
+// when the codec has a writer. It answers before there is anything to write, so
+// a caller can refuse a save that would end in ErrNoBZ2Writer.
+func (c Codec) CannotWrite() error {
+	if c == BZ2 {
+		return ErrNoBZ2Writer
+	}
+	return nil
+}
+
 // NewWriter wraps writer so what is written to it is compressed, and returns
 // the function that flushes and releases the compressor. The close function is
 // never nil.
@@ -229,7 +239,7 @@ func (c Codec) NewWriter(writer io.Writer) (io.Writer, func() error, error) {
 		return gzWriter, gzWriter.Close, nil
 
 	case BZ2:
-		return nil, nil, ErrNoBZ2Writer
+		return nil, nil, c.CannotWrite()
 
 	case XZ:
 		xzWriter, err := xz.NewWriter(writer)

@@ -113,6 +113,9 @@ func LoadInto(ctx context.Context, db *sql.DB, paths ...string) error {
 //		WithFormat(OutputFormatTSV).
 //		WithCompression(CompressionGZ)
 //	err := DumpDatabase(db, "./output", options)
+//
+// A destination that already exists as a symbolic link is followed: the file it
+// names receives the rows and the link stays a link.
 func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
 	// A nil database is what a caller holds after an error they did not check,
 	// and reaching into it here would take their process down over a mistake this

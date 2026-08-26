@@ -314,6 +314,13 @@ type autoSaveConnector struct {
 	// fully assembled, so a connection opened by a setup that then fails does
 	// not write out what that failure is about to discard.
 	armed bool
+	// openTx counts the transactions the caller has begun and not yet finished.
+	// A save reads every table, and a transaction that has written holds the
+	// lock on the table it touched, so a save that starts while one is open
+	// waits for a lock that only the caller can release -- and the caller is
+	// inside Close. That wait has no deadline and no context, so it never ends.
+	// Counting the transactions is what lets Close return instead.
+	openTx int
 }
 
 // Connect implements driver.Connector interface
@@ -356,7 +363,7 @@ func (c *autoSaveConnector) arm() {
 // caller is done, and the anchor connection still holds the data.
 func (c *autoSaveConnector) Close() error {
 	c.mu.Lock()
-	anchor, armed := c.anchor, c.armed
+	anchor, armed, open := c.anchor, c.armed, c.openTx
 	c.anchor, c.armed = nil, false
 	c.mu.Unlock()
 
@@ -364,17 +371,47 @@ func (c *autoSaveConnector) Close() error {
 		return nil
 	}
 	var saveErr error
-	if armed {
-		saveErr = c.save(anchor)
+	switch {
+	case !armed:
+	case open > 0:
+		// The database is closing with work the caller has neither committed
+		// nor rolled back, so what is in it is not a state they asked to keep.
+		// Saying so is the whole of the fix: reading it here would wait on a
+		// lock that nothing left running can release.
+		saveErr = fmt.Errorf("%w: auto-save was skipped because the database was closed while a transaction was still open; commit or roll back before closing",
+			ErrDatabaseOperation)
+	default:
+		if err := c.save(anchor); err != nil {
+			saveErr = fmt.Errorf("auto-save failed: %w", err)
+		}
 	}
 	closeErr := anchor.Close()
 	if saveErr != nil {
 		if closeErr != nil {
-			return fmt.Errorf("auto-save failed: %w (also failed to close connection: %w)", saveErr, closeErr)
+			return fmt.Errorf("%w (also failed to close connection: %w)", saveErr, closeErr)
 		}
-		return fmt.Errorf("auto-save failed: %w", saveErr)
+		return saveErr
 	}
 	return closeErr
+}
+
+// transactionBegan and transactionEnded keep the count Close reads. A
+// transaction the caller started through database/sql always reaches one of
+// Commit and Rollback, so the count returns to zero on its own; one started by
+// running BEGIN through Exec is invisible here, and a close during one of those
+// still waits forever.
+func (c *autoSaveConnector) transactionBegan() {
+	c.mu.Lock()
+	c.openTx++
+	c.mu.Unlock()
+}
+
+func (c *autoSaveConnector) transactionEnded() {
+	c.mu.Lock()
+	if c.openTx > 0 {
+		c.openTx--
+	}
+	c.mu.Unlock()
 }
 
 // autoSaveConnection wraps one pooled connection. Saving belongs to the
@@ -401,10 +438,7 @@ func (c *autoSaveConnection) BeginTx(ctx context.Context, opts driver.TxOptions)
 		if err != nil {
 			return nil, err
 		}
-		return &autoSaveTransaction{
-			tx:   tx,
-			conn: c,
-		}, nil
+		return c.wrapTx(tx), nil
 	}
 
 	// Fallback for connections that don't support BeginTx
@@ -413,10 +447,16 @@ func (c *autoSaveConnection) BeginTx(ctx context.Context, opts driver.TxOptions)
 	if err != nil {
 		return nil, err
 	}
-	return &autoSaveTransaction{
-		tx:   tx,
-		conn: c,
-	}, nil
+	return c.wrapTx(tx), nil
+}
+
+// wrapTx counts the transaction as open and hands back the wrapper that counts
+// it as finished.
+func (c *autoSaveConnection) wrapTx(tx driver.Tx) driver.Tx {
+	if c.connector != nil {
+		c.connector.transactionBegan()
+	}
+	return &autoSaveTransaction{tx: tx, conn: c}
 }
 
 // Prepare implements driver.Conn interface
@@ -462,13 +502,30 @@ func (c *autoSaveConnection) QueryContext(ctx context.Context, query string, arg
 type autoSaveTransaction struct {
 	tx   driver.Tx
 	conn *autoSaveConnection
+	// finished keeps the connector's count right if a driver ever calls both
+	// Commit and Rollback on the same transaction.
+	finished sync.Once
+}
+
+// finish takes this transaction out of the count of open ones.
+func (t *autoSaveTransaction) finish() {
+	if c := t.conn.connector; c != nil {
+		t.finished.Do(c.transactionEnded)
+	}
 }
 
 // Commit implements driver.Tx interface with auto-save on commit
 func (t *autoSaveTransaction) Commit() error {
 	// First commit the underlying transaction
-	if err := t.tx.Commit(); err != nil {
-		return err
+	commitErr := t.tx.Commit()
+	// Whether it committed or not, this transaction is over: database/sql does
+	// not call Rollback after a failed Commit, and the driver already rolled
+	// the connection back itself, so leaving it in the count would make every
+	// later close refuse a save it should have run. Dropping it comes before
+	// the save below, which reads the same database.
+	t.finish()
+	if commitErr != nil {
+		return commitErr
 	}
 
 	// Perform auto-save if configured for commit timing
@@ -485,6 +542,7 @@ func (t *autoSaveTransaction) Commit() error {
 
 // Rollback implements driver.Tx interface
 func (t *autoSaveTransaction) Rollback() error {
+	defer t.finish()
 	return t.tx.Rollback()
 }
 
@@ -610,6 +668,15 @@ func (c *autoSaveConnector) overwriteOriginalFiles(db *sql.DB) error {
 		return errors.New("no original paths available for overwrite")
 	}
 
+	// Nothing is replaced until every source is known to be writable. The loop
+	// below wrote them one at a time and stopped at the first it could not
+	// write, so a set holding one of those came out of a failed save with its
+	// earlier files carrying the session's rows and the rest carrying the old
+	// ones, and nothing on disk saying which was which.
+	if err := checkOverwriteTargets(c.originalPaths); err != nil {
+		return err
+	}
+
 	ctx := context.Background()
 
 	for _, path := range c.originalPaths {
@@ -679,6 +746,32 @@ func (c *autoSaveConnector) siblingBaseTableNames(path string) []string {
 		bases = append(bases, sanitizeTableName(tableFromFilePath(other)))
 	}
 	return bases
+}
+
+// checkOverwriteTargets reports the first of paths that overwrite mode could
+// never write back, from the path alone: a format this package reads but does
+// not write, or a compression codec it reads but does not write. Both answers
+// are in the file's name, so this runs from Build as well, where the caller
+// hears about it before the session rather than after the session's work has
+// been discarded.
+//
+// A workbook holding more than one table is the failure this cannot see: it
+// takes opening the file to know, and it is left to the save.
+func checkOverwriteTargets(paths []string) error {
+	factory := NewCompressionFactory()
+	for _, path := range paths {
+		if isACHFile(path) || isFedWireFile(path) {
+			// Both have writers of their own and take no external compression.
+			continue
+		}
+		if _, err := overwriteFormatFor(path); err != nil {
+			return err
+		}
+		if err := codec.Codec(factory.DetectCompressionType(path)).CannotWrite(); err != nil {
+			return fmt.Errorf("%w: %s cannot be written back: %w", ErrUnsupportedFormat, path, err)
+		}
+	}
+	return nil
 }
 
 // overwriteFormatFor is the output format a source file is written back in, or
