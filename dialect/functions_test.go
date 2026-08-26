@@ -905,6 +905,20 @@ func TestDialectBoundariesFollowTheirEngine(t *testing.T) {
 		{name: "mysql interval operator with a negative amount", dialect: MySQL, query: `SELECT DATE '2026-01-01' + INTERVAL -1 DAY`, want: "2025-12-31"},
 		{name: "googlesql interval operator adds a day", dialect: GoogleSQL, query: `SELECT DATE '2026-01-01' + INTERVAL 1 DAY`, want: "2026-01-02"},
 
+		// SUBSTRING(s FROM p) with a pattern extracts the match, and returns
+		// the first capture group when the pattern has one. Every want was
+		// read from PostgreSQL 17.10.
+		{name: "postgresql substring extracts a match", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM '[0-9]+')`, want: "123"},
+		{name: "postgresql substring returns the capture group", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM 'b(c)1')`, want: "c"},
+		{name: "postgresql substring with no match", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM '[x]+')`, wantNull: true},
+		// A numeric-looking pattern is still a pattern, because PostgreSQL
+		// reads the operand's type rather than its value.
+		{name: "postgresql substring reads a numeric string as a pattern", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM '2')`, want: "2"},
+		{name: "postgresql substring reads a number as a position", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM 2)`, want: "bc123"},
+		{name: "postgresql substring with a length is positional", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM 2 FOR 3)`, want: "bc1"},
+		// The other two dialects have only the positional reading.
+		{name: "mysql substring from a string operand", dialect: MySQL, query: `SELECT SUBSTRING('abc123' FROM 2)`, want: "bc123"},
+
 		// A sign is told from the binary operator by what stands before it.
 		{name: "a sign after a closing paren is binary", dialect: MySQL, query: `SELECT (4) - 1 >> 1`, want: "1"},
 		{name: "a sign after a quoted name is binary", dialect: MySQL, query: "SELECT `n` - 1 >> 1 FROM (SELECT 9 AS n)", want: "4"},

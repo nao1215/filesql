@@ -186,7 +186,7 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 	case "POSITION":
 		return rewritePosition(tokens, open, closeIdx, pgCallPass)
 	case fnNameSubstring, fnNameSubstr:
-		return rewriteSubstringCall(tokens, open, closeIdx, "postgresql_substr", pgCallPass)
+		return rewritePostgresSubstringCall(tokens, open, closeIdx, pgCallPass)
 	case fnNameRound:
 		return rewriteRoundCall(tokens, open, closeIdx, pgCallPass)
 	case fnNameTrim:
@@ -266,6 +266,53 @@ func rewriteSubstringCall(tokens []token, open, closeIdx int, target string, rec
 		return repl, ok, err
 	}
 	return rewriteRenameCall(tokens, open, closeIdx, target, recurse)
+}
+
+// rewritePostgresSubstringCall is rewriteSubstringCall plus the two forms only
+// PostgreSQL has. SUBSTRING(s FROM p) extracts the text matching p when p is a
+// pattern rather than a position, and SUBSTRING(s SIMILAR p ESCAPE e) is the
+// SQL-standard regular-expression form, which has no SQLite equivalent.
+//
+// PostgreSQL decides between a position and a pattern on the static type of the
+// operand, so SUBSTRING('abc123' FROM '2') is the match of the pattern 2 rather
+// than the substring starting at position 2. SQLite has no declared type to
+// consult once the query runs, and the token stream is the one place the same
+// information exists: a string literal is what PostgreSQL would type as text.
+// An operand that is anything else -- a number, a column, an expression --
+// keeps the positional reading.
+func rewritePostgresSubstringCall(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
+	if similar := topLevelWord(tokens, open, closeIdx, "SIMILAR"); similar >= 0 {
+		return nil, false, fmt.Errorf("%w: SUBSTRING(x SIMILAR p ESCAPE e) is not supported", ErrUnsupportedSyntax)
+	}
+	from := topLevelWord(tokens, open, closeIdx, "FROM")
+	forKw := topLevelWord(tokens, open, closeIdx, "FOR")
+	if from >= 0 && forKw < 0 {
+		if pattern, ok := loneStringLiteral(tokens, from+1, closeIdx); ok {
+			subject, err := recurse(tokens[open+1 : from])
+			if err != nil {
+				return nil, false, err
+			}
+			return callTokens("regexp_extract", trimSpaceTokens(subject), []token{pattern}), true, nil
+		}
+	}
+	return rewriteSubstringCall(tokens, open, closeIdx, "postgresql_substr", recurse)
+}
+
+// loneStringLiteral reports the single string literal that fills the tokens
+// between from and end, if that is all there is between them.
+func loneStringLiteral(tokens []token, from, end int) (token, bool) {
+	found := token{}
+	seen := false
+	for i := from; i < end; i++ {
+		if !isSignificant(tokens[i]) {
+			continue
+		}
+		if seen || tokens[i].kind != tokString {
+			return token{}, false
+		}
+		found, seen = tokens[i], true
+	}
+	return found, seen
 }
 
 // rewriteSubstring implements P-5: SUBSTRING(x FROM n FOR m) -> target(x, n, m).

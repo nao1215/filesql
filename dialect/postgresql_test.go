@@ -44,6 +44,13 @@ func TestPostgreSQLTranslate(t *testing.T) {
 		{"P-5_substring_from", "SELECT SUBSTRING(name FROM 2) FROM t", "SELECT postgresql_substr(name, 2) AS \"SUBSTRING(name FROM 2)\" FROM t"},
 		{"P-5_substring_for", "SELECT SUBSTRING(name FOR 3) FROM t", "SELECT postgresql_substr(name, 1, 3) AS \"SUBSTRING(name FOR 3)\" FROM t"},
 		{"P-5_substring_comma_form", "SELECT SUBSTRING(name, 2, 3) FROM t", "SELECT postgresql_substr(name, 2, 3) AS \"SUBSTRING(name, 2, 3)\" FROM t"},
+		// A string literal after FROM is a pattern, not a position: PostgreSQL
+		// tells the two readings apart on the operand's type, and the token
+		// stream is where that information still exists.
+		{"P-5_substring_pattern", "SELECT SUBSTRING(name FROM '[0-9]+') FROM t", `SELECT regexp_extract(name, '[0-9]+') AS "SUBSTRING(name FROM '[0-9]+')" FROM t`},
+		{"P-5_substring_numeric_operand_is_a_position", "SELECT SUBSTRING(name FROM 2) FROM t", "SELECT postgresql_substr(name, 2) AS \"SUBSTRING(name FROM 2)\" FROM t"},
+		{"P-5_substring_column_operand_is_a_position", "SELECT SUBSTRING(name FROM n) FROM t", "SELECT postgresql_substr(name, n) AS \"SUBSTRING(name FROM n)\" FROM t"},
+		{"P-5_substring_pattern_with_a_length_is_a_position", "SELECT SUBSTRING(name FROM '2' FOR 3) FROM t", "SELECT postgresql_substr(name, '2', 3) AS \"SUBSTRING(name FROM '2' FOR 3)\" FROM t"},
 
 		{"P-6_string_agg", "SELECT STRING_AGG(name, ', ') FROM t", "SELECT group_concat(name, ', ') AS \"STRING_AGG(name, ', ')\" FROM t"},
 		// SQLite's DISTINCT aggregates take one argument, so the separator has to
@@ -147,6 +154,10 @@ func TestPostgreSQLTranslateUnsupported(t *testing.T) {
 		{"P-12_bare_interval", "SELECT INTERVAL '3 days'"},
 		{"P-12_interval_as_an_argument", "SELECT JUSTIFY_DAYS(INTERVAL '35 days')"},
 		{"P-12_interval_on_the_left", "SELECT INTERVAL '1 day' + d FROM t"},
+		// P-5: the SQL-standard regular-expression form, whose third operand is
+		// an escape character rather than a length. Read positionally it would
+		// answer something the query never asked for.
+		{"P-5_substring_similar_escape", "SELECT SUBSTRING(s SIMILAR 'a#\"b#\"c' ESCAPE '#') FROM t"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
