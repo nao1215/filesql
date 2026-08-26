@@ -737,6 +737,26 @@ func freeColumnName(col string, taken map[string]struct{}) string {
 	}
 }
 
+// requireColumns reports the first name the frame does not have, wrapping
+// ErrColumnNotFound. Every name is checked before the caller starts building
+// anything, so a method that refuses one name has not already dropped a row for
+// another.
+func (df *DataFrame) requireColumns(columns []string) error {
+	if len(columns) == 0 {
+		return nil
+	}
+	existing := make(map[string]struct{}, len(df.columns))
+	for _, col := range df.columns {
+		existing[col] = struct{}{}
+	}
+	for _, col := range columns {
+		if _, ok := existing[col]; !ok {
+			return fmt.Errorf("%w: %s", ErrColumnNotFound, col)
+		}
+	}
+	return nil
+}
+
 // hasColumn checks if the DataFrame has a column with the given name.
 func (df *DataFrame) hasColumn(name string) bool {
 	for _, col := range df.columns {
@@ -1246,20 +1266,42 @@ func compareUintFloat(u uint64, f float64) int {
 // Distinct returns a new DataFrame with duplicate rows removed.
 // Two rows are considered duplicates if all their column values are equal.
 //
+// Every column of the frame is a key column, so there is no name for the frame
+// not to have and nothing to report; this is why Distinct returns no error
+// while DistinctBy does.
+//
 // Example:
 //
 //	unique := df.Distinct()
 func (df *DataFrame) Distinct() *DataFrame {
-	return df.DistinctBy(df.columns...)
+	return df.distinctBy(df.columns)
 }
 
 // DistinctBy returns a new DataFrame with duplicate rows removed based on
 // the specified columns only.
 //
+// Returns an error wrapping ErrColumnNotFound if a column does not exist, and
+// the frame is left untouched. A missing key column used to read as a column
+// every row shares the missing value in, so it contributed nothing to the key
+// and the frame collapsed onto the columns that were spelled correctly: with a
+// single misspelled name, every row keyed the same and all but the first were
+// dropped as duplicates. Nothing said a name had gone unread.
+//
+// Passing no columns returns a copy of the frame, as it always did.
+//
 // Example:
 //
-//	unique := df.DistinctBy("name", "email")
-func (df *DataFrame) DistinctBy(columns ...string) *DataFrame {
+//	unique, err := df.DistinctBy("name", "email")
+func (df *DataFrame) DistinctBy(columns ...string) (*DataFrame, error) {
+	if err := df.requireColumns(columns); err != nil {
+		return nil, err
+	}
+	return df.distinctBy(columns), nil
+}
+
+// distinctBy is the rebuild Distinct and DistinctBy share. The caller has
+// already established that the frame has every column named.
+func (df *DataFrame) distinctBy(columns []string) *DataFrame {
 	if len(columns) == 0 {
 		return df.clone()
 	}
@@ -1638,17 +1680,33 @@ func isNA(v any) bool {
 //
 //	cleaned := df.DropNA()
 func (df *DataFrame) DropNA() *DataFrame {
-	return df.DropNASubset(df.columns...)
+	return df.dropNASubset(df.columns)
 }
 
 // DropNASubset returns a new DataFrame with rows removed where any of the
 // specified columns have missing values.
 // Missing values are treated as nil or the empty string.
 //
+// Returns an error wrapping ErrColumnNotFound if a column does not exist, and
+// the frame is left untouched. A missing column used to read as a column every
+// row is missing a value in, so every row was dropped and the caller was handed
+// an empty frame that looked like data with nothing worth keeping in it.
+//
+// Passing no columns returns a copy of the frame, as it always did.
+//
 // Example:
 //
-//	cleaned := df.DropNASubset("required_field1", "required_field2")
-func (df *DataFrame) DropNASubset(columns ...string) *DataFrame {
+//	cleaned, err := df.DropNASubset("required_field1", "required_field2")
+func (df *DataFrame) DropNASubset(columns ...string) (*DataFrame, error) {
+	if err := df.requireColumns(columns); err != nil {
+		return nil, err
+	}
+	return df.dropNASubset(columns), nil
+}
+
+// dropNASubset is the rebuild DropNA and DropNASubset share. The caller has
+// already established that the frame has every column named.
+func (df *DataFrame) dropNASubset(columns []string) *DataFrame {
 	if len(columns) == 0 {
 		return df.clone()
 	}

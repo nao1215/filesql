@@ -439,9 +439,21 @@ func ExampleDataFrame_DistinctBy() {
 		{"email": "bob@example.com", "team": "east"},
 	})
 
-	fmt.Println(df.DistinctBy("email").Len())
+	unique, err := df.DistinctBy("email")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(unique.Len())
+
+	// A name the frame does not have is refused rather than read as a column
+	// every row shares a value in, which would key every row the same and leave
+	// one row behind.
+	if _, err := df.DistinctBy("mail"); err != nil {
+		fmt.Println(err)
+	}
 	// Output:
 	// 2
+	// column not found: mail
 }
 
 func ExampleDataFrame_Head() {
@@ -499,10 +511,20 @@ func ExampleDataFrame_DropNASubset() {
 		{"name": "Cora", "email": "cora@example.com"},
 	})
 
-	cleaned := df.DropNASubset("email")
+	cleaned, err := df.DropNASubset("email")
+	if err != nil {
+		log.Fatal(err)
+	}
 	fmt.Println(cleaned.Len())
+
+	// A name the frame does not have is refused rather than read as a column
+	// every row is missing a value in, which would drop every row.
+	if _, err := df.DropNASubset("mail"); err != nil {
+		fmt.Println(err)
+	}
 	// Output:
 	// 2
+	// column not found: mail
 }
 
 func ExampleDataFrame_Columns() {

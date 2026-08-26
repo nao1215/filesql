@@ -2520,7 +2520,8 @@ func TestDataFrame_DistinctBy(t *testing.T) {
 			{"name": "Bob", "age": int64(25), "city": "Tokyo"},
 		})
 
-		unique := df.DistinctBy("name", "age")
+		unique, err := df.DistinctBy("name", "age")
+		require.NoError(t, err)
 
 		assert.Equal(t, 2, unique.Len())
 		records := unique.ToRecords()
@@ -2537,7 +2538,8 @@ func TestDataFrame_DistinctBy(t *testing.T) {
 			{"name": "Alice"},
 		})
 
-		unique := df.DistinctBy()
+		unique, err := df.DistinctBy()
+		require.NoError(t, err)
 
 		assert.Equal(t, 2, unique.Len())
 	})
@@ -3016,7 +3018,8 @@ func TestDataFrame_DropNASubset(t *testing.T) {
 			{"name": "Charlie", "age": int64(35), "city": "Osaka"},
 		})
 
-		cleaned := df.DropNASubset("name", "age")
+		cleaned, err := df.DropNASubset("name", "age")
+		require.NoError(t, err)
 
 		// Should keep rows where name and age are not nil (even if city is nil)
 		assert.Equal(t, 2, cleaned.Len())
@@ -3029,7 +3032,8 @@ func TestDataFrame_DropNASubset(t *testing.T) {
 			{"name": nil},
 		})
 
-		cleaned := df.DropNASubset()
+		cleaned, err := df.DropNASubset()
+		require.NoError(t, err)
 
 		assert.Equal(t, 1, cleaned.Len())
 	})
@@ -3719,7 +3723,9 @@ func TestDropNAAndFillNAAgreeOnMissing(t *testing.T) {
 		filled := df.FillNAByColumn(map[string]any{"v": "X"})
 
 		assert.Equal(t, "X", filled.ToRecords()[1]["v"])
-		assert.Equal(t, 3, filled.DropNASubset("v").Len())
+		dropped, err := filled.DropNASubset("v")
+		require.NoError(t, err)
+		assert.Equal(t, 3, dropped.Len())
 	})
 
 	t.Run("a column with no fill value named keeps its cells", func(t *testing.T) {
@@ -3893,5 +3899,148 @@ func TestJoinNamesEveryColumnOnce(t *testing.T) {
 		assert.Equal(t, []string{"id", "name", "right_name"}, joined.Columns())
 		assert.Equal(t, "alice", joined.ToRecords()[0]["name"])
 		assert.Equal(t, "bob", joined.ToRecords()[0]["right_name"])
+	})
+}
+
+// TestDataFrame_UnknownColumnIsRefused drives the fault the two subset methods
+// were changed for. A name the frame does not have used to be read as a column
+// whose value every row is missing: DistinctBy keyed every row the same and kept
+// one, and DropNASubset found a missing value in every row and kept none. Both
+// answers are a frame with data in it, so nothing said the name had gone unread.
+func TestDataFrame_UnknownColumnIsRefused(t *testing.T) {
+	t.Parallel()
+
+	records := func() []map[string]any {
+		return []map[string]any{
+			{"name": "Alice", "age": int64(30)},
+			{"name": "Bob", "age": int64(25)},
+		}
+	}
+
+	t.Run("DistinctBy refuses a name the frame does not have", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords(records())
+
+		got, err := df.DistinctBy("typo")
+		require.Error(t, err, "an unknown column must be reported, not collapsed onto")
+		assert.ErrorIs(t, err, ErrColumnNotFound)
+		assert.Contains(t, err.Error(), "typo", "the error must name the column")
+		assert.Nil(t, got, "no partial frame is handed back")
+		assert.Equal(t, 2, df.Len(), "the frame the call refused must be unchanged")
+	})
+
+	t.Run("DropNASubset refuses a name the frame does not have", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords(records())
+
+		got, err := df.DropNASubset("typo")
+		require.Error(t, err, "an unknown column must be reported, not read as missing everywhere")
+		assert.ErrorIs(t, err, ErrColumnNotFound)
+		assert.Contains(t, err.Error(), "typo")
+		assert.Nil(t, got)
+		assert.Equal(t, 2, df.Len(), "the frame the call refused must be unchanged")
+	})
+
+	t.Run("one unknown name among known ones refuses the whole call", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			name string
+			call func(*DataFrame) (*DataFrame, error)
+		}{
+			{"DistinctBy", func(df *DataFrame) (*DataFrame, error) { return df.DistinctBy("name", "typo") }},
+			{"DropNASubset", func(df *DataFrame) (*DataFrame, error) { return df.DropNASubset("name", "typo") }},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				df := NewDataFrameFromRecords(records())
+
+				got, err := tt.call(df)
+				require.Error(t, err, "the whole call is refused when any one name is unknown")
+				assert.ErrorIs(t, err, ErrColumnNotFound)
+				assert.Nil(t, got, "the rows the known column would have kept are not returned either")
+				assert.Equal(t, 2, df.Len())
+			})
+		}
+	})
+
+	t.Run("every name checked before any row is read", func(t *testing.T) {
+		t.Parallel()
+
+		// "name" alone would drop the second row and keep the first, so a
+		// method that validated as it walked would have built a one-row frame
+		// before meeting "typo". The frame it refuses with must be nothing at
+		// all.
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"name": "Alice", "age": int64(30)},
+			{"name": "", "age": int64(25)},
+		})
+
+		got, err := df.DropNASubset("name", "typo")
+		require.Error(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("no columns still returns a copy", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			name string
+			call func(*DataFrame) (*DataFrame, error)
+		}{
+			{"DistinctBy", func(df *DataFrame) (*DataFrame, error) { return df.DistinctBy() }},
+			{"DropNASubset", func(df *DataFrame) (*DataFrame, error) { return df.DropNASubset() }},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				df := NewDataFrameFromRecords([]map[string]any{
+					{"name": "Alice"},
+					{"name": "Alice"},
+					{"name": nil},
+				})
+
+				got, err := tt.call(df)
+				require.NoError(t, err, "no columns names nothing that can be missing")
+				assert.Equal(t, 3, got.Len(), "an empty subset is a copy, not a filter")
+				assert.Equal(t, df.Columns(), got.Columns())
+			})
+		}
+	})
+
+	t.Run("known columns keep working", func(t *testing.T) {
+		t.Parallel()
+
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"name": "Alice", "city": "Tokyo"},
+			{"name": "Alice", "city": "Osaka"},
+			{"name": "Bob", "city": ""},
+		})
+
+		unique, err := df.DistinctBy("name")
+		require.NoError(t, err)
+		assert.Equal(t, 2, unique.Len())
+
+		cleaned, err := df.DropNASubset("city")
+		require.NoError(t, err)
+		assert.Equal(t, 2, cleaned.Len())
+	})
+
+	t.Run("Distinct and DropNA keep their signatures", func(t *testing.T) {
+		t.Parallel()
+
+		// The whole-frame halves name no column of their own, so there is
+		// nothing for them to refuse and they were left as they were.
+		df := NewDataFrameFromRecords([]map[string]any{
+			{"name": "Alice", "city": "Tokyo"},
+			{"name": "Alice", "city": "Tokyo"},
+			{"name": "Bob", "city": ""},
+		})
+
+		assert.Equal(t, 2, df.Distinct().Len())
+		assert.Equal(t, 2, df.DropNA().Len())
 	})
 }

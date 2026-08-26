@@ -782,7 +782,7 @@ func Example_handleMissingValues() {
 	fmt.Printf("After DropNA: %d rows\n", cleaned.Len())
 
 	// DropNASubset: Remove rows with nil only in specific columns
-	partialClean := df.DropNASubset("name")
+	partialClean, _ := df.DropNASubset("name") //nolint:errcheck // the column exists
 	fmt.Printf("After DropNASubset(name): %d rows\n", partialClean.Len())
 
 	// FillNA: Replace all nil values with a default
