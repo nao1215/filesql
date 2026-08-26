@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// plainExecutor is a DBTX that is neither *sql.DB nor *sql.Tx. A load needs one
+// plainExecutor is a dbtx that is neither *sql.DB nor *sql.Tx. A load needs one
 // of those two to run its input under a transaction or a savepoint, so a
 // caller's own implementation has to be refused by name rather than crashing on
 // a type assertion.
@@ -116,7 +116,7 @@ func TestStreamWriteBackFormatFiles_Failures(t *testing.T) {
 	}
 }
 
-// TestRunInputScope_UnsupportedExecutor covers a DBTX an input cannot be scoped
+// TestRunInputScope_UnsupportedExecutor covers a dbtx an input cannot be scoped
 // on. It is refused with the type in the message, because a caller who passed
 // their own wrapper has no other way to tell what was wrong.
 func TestRunInputScope_UnsupportedExecutor(t *testing.T) {

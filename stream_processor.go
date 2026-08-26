@@ -80,7 +80,7 @@ func (sp *streamProcessor) skippedRows() []SkippedRows {
 // dropIfReplacing drops a same-named table when replaceExisting is set, so the
 // following CREATE installs the file's schema and rows in place of any prior
 // table. It is a no-op in Open mode.
-func (sp *streamProcessor) dropIfReplacing(ctx context.Context, db DBTX, tableName string) error {
+func (sp *streamProcessor) dropIfReplacing(ctx context.Context, db dbtx, tableName string) error {
 	if !sp.replaceExisting {
 		return nil
 	}
@@ -113,7 +113,7 @@ func (sp *streamProcessor) setLogger(logger Logger) {
 }
 
 // streamAllFilesToDatabase streams all collected file paths to the database
-func (sp *streamProcessor) streamAllFilesToDatabase(ctx context.Context, db DBTX, collectedPaths []string) error {
+func (sp *streamProcessor) streamAllFilesToDatabase(ctx context.Context, db dbtx, collectedPaths []string) error {
 	sp.logger.Info("starting file streaming", "file_count", len(collectedPaths))
 	for i, path := range collectedPaths {
 		sp.logger.Debug("streaming file", "path", path, "index", i+1, "total", len(collectedPaths))
@@ -137,7 +137,7 @@ func (sp *streamProcessor) streamAllFilesToDatabase(ctx context.Context, db DBTX
 }
 
 // streamAllReadersToDatabase streams all reader inputs to the database
-func (sp *streamProcessor) streamAllReadersToDatabase(ctx context.Context, db DBTX, readers []readerInput) error {
+func (sp *streamProcessor) streamAllReadersToDatabase(ctx context.Context, db dbtx, readers []readerInput) error {
 	if len(readers) == 0 {
 		return nil
 	}
@@ -180,7 +180,7 @@ const inputSavepoint = `"_filesql_input"`
 // transaction is not this package's to end, but rolling back to the savepoint
 // leaves it exactly as the input found it, which is what lets the caller keep
 // using it after a failure.
-func (sp *streamProcessor) runInputScope(ctx context.Context, db DBTX, kind inputKind, load func(*sql.Tx) error) error {
+func (sp *streamProcessor) runInputScope(ctx context.Context, db dbtx, kind inputKind, load func(*sql.Tx) error) error {
 	switch d := db.(type) {
 	case *sql.DB:
 		if kind == spentInput {
@@ -591,7 +591,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, tx *sql.T
 // folds ASCII case because SQLite folds it when it matches identifiers:
 // without NOCASE, a second file named Users.csv beside users.csv found the
 // name free, and its rows went under the first file's headers.
-func (sp *streamProcessor) refuseExistingTable(ctx context.Context, db DBTX, tableName string) error {
+func (sp *streamProcessor) refuseExistingTable(ctx context.Context, db dbtx, tableName string) error {
 	if sp.replaceExisting {
 		return nil
 	}
@@ -838,7 +838,7 @@ func textColumns(headers header) columnInfoList {
 }
 
 // createTable creates a table with the given columns.
-func createTable(ctx context.Context, db DBTX, tableName string, columns columnInfoList) error {
+func createTable(ctx context.Context, db dbtx, tableName string, columns columnInfoList) error {
 	defs := make([]string, 0, len(columns))
 	for _, col := range columns {
 		defs = append(defs, fmt.Sprintf(`%s %s`, quoteIdentifier(col.Name), col.Type.string()))

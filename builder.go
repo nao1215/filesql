@@ -136,13 +136,13 @@ func NewBuilder() *DBBuilder {
 		collectedPaths:   make([]string, 0),
 		parsedTables:     make([]*table, 0),
 		autoSaveConfig:   nil, // Default: no auto-save
-		defaultChunkSize: DefaultChunkSize,
+		defaultChunkSize: defaultChunkSizeRows,
 		logger:           newNopLogger(), // Default: no-op logger
 
 		// Initialize internal processors
 		validator:       newValidator(),
 		fileProcessor:   newFileProcessor(),
-		streamProcessor: newStreamProcessor(DefaultChunkSize),
+		streamProcessor: newStreamProcessor(defaultChunkSizeRows),
 	}
 }
 
@@ -742,7 +742,7 @@ func (b *DBBuilder) LoadIntoTx(ctx context.Context, tx *sql.Tx) error {
 	return b.loadIntoExecutor(ctx, tx)
 }
 
-func (b *DBBuilder) loadIntoExecutor(ctx context.Context, db DBTX) error {
+func (b *DBBuilder) loadIntoExecutor(ctx context.Context, db dbtx) error {
 	if err := b.streamProcessor.streamAllFilesToDatabase(ctx, db, b.collectedPaths); err != nil {
 		return err
 	}

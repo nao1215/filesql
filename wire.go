@@ -59,7 +59,7 @@ func isWireBaseTableName(tableName string) (baseName string, isWire bool) {
 }
 
 // streamWireFileToDatabase streams a Fedwire file to the database as a single table.
-func streamWireFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, filePath, sourcePath string, replaceExisting bool) error {
+func streamWireFileToDatabase(ctx context.Context, db dbtx, reader io.Reader, filePath, sourcePath string, replaceExisting bool) error {
 	baseTableName := sanitizeTableName(tableFromFilePath(filePath))
 	if err := validateTableName(baseTableName); err != nil {
 		return err

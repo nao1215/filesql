@@ -917,7 +917,7 @@ func TestChunkSizeString(t *testing.T) {
 		cs       chunkSizeValue
 		expected string
 	}{
-		{"default chunk size", chunkSizeValue(DefaultChunkSize), strconv.Itoa(DefaultChunkSize)},
+		{"default chunk size", chunkSizeValue(defaultChunkSizeRows), strconv.Itoa(defaultChunkSizeRows)},
 		{"custom chunk size", chunkSizeValue(5000), "5000"},
 		{"the smallest chunk", chunkSizeValue(1), "1"},
 	}

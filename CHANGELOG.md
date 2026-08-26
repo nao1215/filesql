@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Three names leave the root package's exported surface. `DBTX`, the execution surface `*sql.DB` and `*sql.Tx` share, was named in no exported signature: every function taking one is unexported, so the interface was a name a caller could write down but never had a reason to, and it is now `dbtx`. `ExcelSheetSource` was an alias of `parser.ExcelSheetSource` used only by three unexported helpers in this package, and a caller who needs the type can name `parser.ExcelSheetSource`, which is where it is documented and which the alias pointed at anyway. `DefaultChunkSize` was the constant `SetDefaultChunkSize` starts from; the number it held is stated in that method's godoc, which is where a caller reading about chunk size already is, so the constant becomes internal rather than a second place the default has to be kept true. The Excel policy names beside it -- `ExcelSheetPolicy`, `ExcelSheet`, `ExcelSheetPolicyAll` and `ExcelSheetPolicyVisibleOnly` -- are unchanged, as are `ExcelSheetsInFile`, `ExcelSheetsInReader` and `ExcelSheetTableNames`.
+
 ### Added
 
 - A field tagged `validate:"-"` is validated by nothing ([#578](https://github.com/nao1215/filesql/issues/578)). The go-playground dialect reserves `-` for a field it checks nothing on, and prep, whose doc.go names that dialect and whose own history includes adding `alphanum` because a caller arrives with tags copied from a go-playground struct, refused it: the tag was looked up as a validator name and the load failed with `unknown validate tag "-"`, so nothing loaded at all. Only the whole tag means a skip, since inside a list `-` is a tag name like any other and an unknown one is what a caller who wrote it there needs to be told; `validate:"-,required"` therefore still fails. The field is still read from its column and still preprocessed by its `prep` tag, because `-` speaks about validation alone, as it does in the dialect.

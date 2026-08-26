@@ -256,7 +256,7 @@ func isACHBaseTableName(tableName string) (baseName string, isACH bool) {
 }
 
 // streamACHFileToDatabase streams an ACH file to the database as multiple tables
-func streamACHFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, filePath, sourcePath string, replaceExisting bool) error {
+func streamACHFileToDatabase(ctx context.Context, db dbtx, reader io.Reader, filePath, sourcePath string, replaceExisting bool) error {
 	baseTableName := sanitizeTableName(tableFromFilePath(filePath))
 	if err := validateTableName(baseTableName); err != nil {
 		return err
@@ -274,7 +274,7 @@ func streamACHFileToDatabase(ctx context.Context, db DBTX, reader io.Reader, fil
 // where the file came from. The ACH and Fedwire loads reach it with the tables
 // their own parser produced; everything after that parse is the same for both,
 // so it lives once rather than in a copy per format.
-func loadParsedTablesIntoDatabase(ctx context.Context, db DBTX, tables []*table, baseTableName, sourcePath string, format sourceFormat, replaceExisting bool) error {
+func loadParsedTablesIntoDatabase(ctx context.Context, db dbtx, tables []*table, baseTableName, sourcePath string, format sourceFormat, replaceExisting bool) error {
 	for _, t := range tables {
 		// Check if table already exists, folding ASCII case the way SQLite does
 		// when it matches identifiers.
@@ -310,13 +310,13 @@ func loadParsedTablesIntoDatabase(ctx context.Context, db DBTX, tables []*table,
 		}
 	}
 
-	// The source is recorded on the same DBTX as the tables, so a rolled-back
+	// The source is recorded on the same dbtx as the tables, so a rolled-back
 	// load leaves neither behind.
 	return recordFileSource(ctx, db, baseTableName, sourcePath, format)
 }
 
 // insertRecordsIntoTable inserts records into the specified table
-func insertRecordsIntoTable(ctx context.Context, db DBTX, tableName string, headers header, records []record) error {
+func insertRecordsIntoTable(ctx context.Context, db dbtx, tableName string, headers header, records []record) error {
 	placeholders := make([]string, len(headers))
 	for i := range placeholders {
 		placeholders[i] = "?"

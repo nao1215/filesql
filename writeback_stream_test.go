@@ -41,14 +41,14 @@ func TestStreamWriteBackFormatsToDatabase(t *testing.T) {
 	tests := []struct {
 		name string
 		ext  string
-		load func(ctx context.Context, db DBTX, content []byte, filePath string, replaceExisting bool) error
+		load func(ctx context.Context, db dbtx, content []byte, filePath string, replaceExisting bool) error
 		data func(t *testing.T) []byte
 	}{
 		{
 			name: "ACH file",
 			ext:  extACH,
 			data: achFixture,
-			load: func(ctx context.Context, db DBTX, content []byte, filePath string, replaceExisting bool) error {
+			load: func(ctx context.Context, db dbtx, content []byte, filePath string, replaceExisting bool) error {
 				return streamACHFileToDatabase(ctx, db, strings.NewReader(string(content)), filePath, "", replaceExisting)
 			},
 		},
@@ -56,7 +56,7 @@ func TestStreamWriteBackFormatsToDatabase(t *testing.T) {
 			name: "Fedwire",
 			ext:  extFED,
 			data: wireFixture,
-			load: func(ctx context.Context, db DBTX, content []byte, filePath string, replaceExisting bool) error {
+			load: func(ctx context.Context, db dbtx, content []byte, filePath string, replaceExisting bool) error {
 				return streamWireFileToDatabase(ctx, db, strings.NewReader(string(content)), filePath, "", replaceExisting)
 			},
 		},

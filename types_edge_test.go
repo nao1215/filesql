@@ -21,8 +21,8 @@ import (
 func TestNewChunkSize_BelowTheMinimum(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, chunkSizeValue(DefaultChunkSize), newChunkSize(0))
-	assert.Equal(t, chunkSizeValue(DefaultChunkSize), newChunkSize(-1))
+	assert.Equal(t, chunkSizeValue(defaultChunkSizeRows), newChunkSize(0))
+	assert.Equal(t, chunkSizeValue(defaultChunkSizeRows), newChunkSize(-1))
 	assert.Equal(t, chunkSizeValue(1), newChunkSize(1))
 }
 
@@ -234,7 +234,7 @@ func TestColumnType_IsTheSameWhereverTheAwkwardValueSits(t *testing.T) {
 
 			const integers = 8
 			positions := []int{0, integers / 2, integers}
-			for _, chunkSize := range []int{1, 2, 4, DefaultChunkSize} {
+			for _, chunkSize := range []int{1, 2, 4, defaultChunkSizeRows} {
 				var wantValues []string
 				for _, at := range positions {
 					// The awkward value is inserted rather than substituted, so
@@ -285,8 +285,8 @@ func TestColumnType_TextAfterTheDefaultChunkBoundary(t *testing.T) {
 	}
 	late = append(late, "abc")
 
-	earlyType, earlyValues := loadColumnForTypeTest(t, early, DefaultChunkSize)
-	lateType, lateValues := loadColumnForTypeTest(t, late, DefaultChunkSize)
+	earlyType, earlyValues := loadColumnForTypeTest(t, early, defaultChunkSizeRows)
+	lateType, lateValues := loadColumnForTypeTest(t, late, defaultChunkSizeRows)
 
 	assert.Equal(t, "TEXT", earlyType)
 	assert.Equal(t, "TEXT", lateType, "a text value on row 1001 has to reach the column type")
@@ -317,7 +317,7 @@ func TestColumnType_ADecimalMakesTheColumnReal(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			declared, _ := loadColumnForTypeTest(t, tt.values, DefaultChunkSize)
+			declared, _ := loadColumnForTypeTest(t, tt.values, defaultChunkSizeRows)
 			assert.Equal(t, tt.wantType, declared)
 		})
 	}

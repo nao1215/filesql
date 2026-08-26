@@ -112,7 +112,7 @@ func TestOpenContextPreservesZeroPaddedCodesPastTheFirstChunk(t *testing.T) {
 
 	var b strings.Builder
 	b.WriteString("code\n")
-	for i := range DefaultChunkSize * 2 {
+	for i := range defaultChunkSizeRows * 2 {
 		fmt.Fprintf(&b, "%d\n", i+1)
 	}
 	b.WriteString("007\n")
@@ -139,7 +139,7 @@ func TestOpenContextPreservesZeroPaddedCodesPastTheFirstChunk(t *testing.T) {
 
 	var rows int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM codes`).Scan(&rows))
-	require.Equal(t, DefaultChunkSize*2+1, rows)
+	require.Equal(t, defaultChunkSizeRows*2+1, rows)
 }
 
 // TestOpenContextPreservesZeroPaddedCodes is the end-to-end regression test: a
