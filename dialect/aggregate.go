@@ -26,6 +26,15 @@ type aggregateRule struct {
 	sample bool
 	// root marks a standard deviation, which is the square root of the variance.
 	root bool
+	// pair marks an aggregate over two columns: the covariances and the
+	// correlation.
+	pair bool
+	// correlation selects CORR over the covariance the pair flag otherwise
+	// computes.
+	correlation bool
+	// distinctCount marks an approximate distinct count, which SQLite answers
+	// exactly.
+	distinctCount bool
 }
 
 // The aggregate names shared by more than one dialect's table.
@@ -74,12 +83,18 @@ var aggregateRules = map[Dialect]map[string]aggregateRule{
 		"LOGICAL_OR":  {rename: sqliteMax},
 		aggAnyValue:   {rename: sqliteMin},
 		"COUNTIF":     {countif: true},
-		aggStddev:     {stat: true, root: true, sample: true},
-		aggStddevPop:  {stat: true, root: true},
-		aggStddevSamp: {stat: true, root: true, sample: true},
-		aggVariance:   {stat: true, sample: true},
-		aggVarPop:     {stat: true},
-		aggVarSamp:    {stat: true, sample: true},
+		// BigQuery's count is approximate and SQLite's is exact, which is a
+		// correct answer to the question the approximation estimates.
+		"APPROX_COUNT_DISTINCT": {distinctCount: true},
+		"CORR":                  {pair: true, correlation: true},
+		"COVAR_POP":             {pair: true},
+		"COVAR_SAMP":            {pair: true, sample: true},
+		aggStddev:               {stat: true, root: true, sample: true},
+		aggStddevPop:            {stat: true, root: true},
+		aggStddevSamp:           {stat: true, root: true, sample: true},
+		aggVariance:             {stat: true, sample: true},
+		aggVarPop:               {stat: true},
+		aggVarSamp:              {stat: true, sample: true},
 	},
 }
 
@@ -111,6 +126,18 @@ func aggregatePass(tokens []token, d Dialect) ([]token, error) {
 		if closeIdx < 0 {
 			return nil, fmt.Errorf("%w: unbalanced parentheses after %s", ErrInvalidSyntax, t.text)
 		}
+		// A rule that expands into an expression rather than a rename cannot
+		// carry a window: the result is several aggregates inside arithmetic,
+		// and an OVER after it belongs to none of them. Left alone, SQLite
+		// reported on whichever generated function it happened to reach --
+		// "sqrt() may not be used as a window function" for a standard
+		// deviation -- naming a function the query does not contain.
+		if rule.rename == "" {
+			if over := nextSig(tokens, closeIdx+1); over >= 0 && isWordEq(tokens[over], "OVER") {
+				return nil, fmt.Errorf("%w: %s cannot be used as a window function; SQLite has no aggregate to attach the window to",
+					ErrUnsupportedSyntax, strings.ToUpper(t.text))
+			}
+		}
 		// Rewrite the argument first so a nested aggregate is handled too.
 		arg, err := aggregatePass(tokens[open+1:closeIdx], d)
 		if err != nil {
@@ -138,6 +165,21 @@ func applyAggregateRule(rule aggregateRule, arg []token) ([]token, error) {
 		return sqliteExpr(fmt.Sprintf("IFNULL(SUM(CASE WHEN (%s) THEN 1 ELSE 0 END), 0)", render(arg)))
 	case rule.stat:
 		return sqliteExpr(varianceExpr(render(arg), rule.sample, rule.root))
+	case rule.distinctCount:
+		repl := make([]token, 0, len(arg)+5)
+		repl = append(repl, wordToken("COUNT"), opToken("("), wordToken("DISTINCT"), spaceToken())
+		repl = append(repl, arg...)
+		return append(repl, opToken(")")), nil
+	case rule.pair:
+		commas := argumentCommas(arg)
+		if len(commas) != 1 {
+			return nil, fmt.Errorf("%w: this aggregate takes two arguments", ErrUnsupportedSyntax)
+		}
+		return sqliteExpr(pairStatExpr(
+			render(trimSpaceTokens(arg[:commas[0]])),
+			render(trimSpaceTokens(arg[commas[0]+1:])),
+			rule.sample, rule.correlation,
+		))
 	default:
 		return nil, fmt.Errorf("%w: no rewrite for this aggregate", ErrUnsupportedSyntax)
 	}
@@ -228,6 +270,55 @@ func varianceExpr(expr string, sample, root bool) string {
 		return "sqrt(" + variance + ")"
 	}
 	return variance
+}
+
+// argumentCommas finds the commas that separate the arguments in a token slice
+// that is the inside of a call, with its own parentheses already stripped --
+// where topLevelCommas expects the opening parenthesis to still be there.
+func argumentCommas(arg []token) []int {
+	depth := 0
+	var res []int
+	for i, t := range arg {
+		if t.kind != tokOp {
+			continue
+		}
+		switch t.text {
+		case "(":
+			depth++
+		case ")":
+			depth--
+		case ",":
+			if depth == 0 {
+				res = append(res, i)
+			}
+		}
+	}
+	return res
+}
+
+// pairStatExpr is the covariance or the correlation of two expressions. A row
+// where either is NULL takes no part in either, so both are read through a CASE
+// that answers NULL unless the pair is complete -- otherwise the sums and the
+// count would be taken over different sets of rows.
+func pairStatExpr(x, y string, sample, correlation bool) string {
+	both := func(expr string) string {
+		return fmt.Sprintf("CASE WHEN (%s) IS NOT NULL AND (%s) IS NOT NULL THEN 1.0*(%s) END", x, y, expr)
+	}
+	fx, fy := both(x), both(y)
+	n := fmt.Sprintf("COUNT(%s)", fx)
+	// The centered sum of products, which both answers are built from.
+	covariance := fmt.Sprintf("(SUM((%[1]s)*(%[2]s)) - SUM(%[1]s)*SUM(%[2]s)/%[3]s)", fx, fy, n)
+	if correlation {
+		spread := func(f string) string {
+			return fmt.Sprintf("(SUM((%[1]s)*(%[1]s)) - SUM(%[1]s)*SUM(%[1]s)/%[2]s)", f, n)
+		}
+		return fmt.Sprintf("(%s / sqrt((%s)*(%s)))", covariance, spread(fx), spread(fy))
+	}
+	divisor := n
+	if sample {
+		divisor = fmt.Sprintf("(%s - 1.0)", n)
+	}
+	return fmt.Sprintf("(%s / %s)", covariance, divisor)
 }
 
 // sqliteExpr tokenizes SQL this package generates. It reads the text with

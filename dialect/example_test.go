@@ -96,3 +96,37 @@ func ExampleTranslate_postgreSQL() {
 	// 2
 	// 1
 }
+
+func ExampleTranslate_googleSQL() {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer db.Close()
+
+	// Three BigQuery constructs SQLite has no form for: a date built out of
+	// its fields, a digest printed as hexadecimal, and the SAFE. prefix, which
+	// answers NULL where the call would have raised.
+	for _, query := range []string{
+		`SELECT FORMAT_DATE('%Y-%m-%d', DATE(2024, 3, 5))`,
+		`SELECT TO_HEX(MD5('abc'))`,
+		`SELECT IFNULL(SAFE.PARSE_DATE('%Y-%m-%d', 'not a date'), 'unparsed')`,
+	} {
+		translated, err := dialect.Translate(dialect.GoogleSQL, query)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		var answer string
+		if err := db.QueryRowContext(context.Background(), translated).Scan(&answer); err != nil {
+			fmt.Println(err)
+			return
+		}
+		fmt.Println(answer)
+	}
+	// Output:
+	// 2024-03-05
+	// 900150983cd24fb0d6963f7d28e17f72
+	// unparsed
+}

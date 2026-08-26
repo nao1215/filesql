@@ -77,10 +77,10 @@ var commonCastKinds = map[string]castKind{
 	"VARCHAR":     castText,
 	"TEXT":        castText,
 	"JSON":        castJSON,
-	"DATE":        castDate,
-	"DATETIME":    castTimestamp,
-	"TIME":        castTime,
-	"TIMESTAMP":   castTimestamp,
+	typeDate:      castDate,
+	typeDatetime:  castTimestamp,
+	typeTime:      castTime,
+	typeTimestamp: castTimestamp,
 	"BLOB":        castBlob,
 }
 
@@ -237,6 +237,14 @@ func castToInt(d Dialect, v driver.Value, strict bool) (driver.Value, error) {
 	}
 	s, _ := toString(v)
 	text := strings.TrimSpace(s)
+	// GoogleSQL reads a hexadecimal string, which is how a column of
+	// hexadecimal identifiers becomes numbers. The other two dialects do not:
+	// PostgreSQL raises for it and MySQL reads the leading digits.
+	if d == GoogleSQL {
+		if n, ok, err := hexadecimalInt(text, strict); ok {
+			return n, err
+		}
+	}
 	n, err := strconv.ParseInt(text, 10, 64)
 	if err == nil {
 		return n, nil
@@ -264,6 +272,48 @@ func castToInt(d Dialect, v driver.Value, strict bool) (driver.Value, error) {
 	// coercion in a numeric context reads the whole number instead, which is what
 	// numericPrefix is for; a cast to an integer type is not that context.
 	return mysqlIntegerPrefix(text), nil
+}
+
+// hexadecimalInt reads GoogleSQL's hexadecimal string form -- an optional sign
+// then "0x" or "0X" then hexadecimal digits. It reports whether the text was
+// written that way at all, so a decimal string falls through to the reader
+// below rather than being refused here.
+func hexadecimalInt(text string, strict bool) (driver.Value, bool, error) {
+	digits, negative := text, false
+	if rest, found := strings.CutPrefix(digits, "-"); found {
+		digits, negative = rest, true
+	} else if rest, found := strings.CutPrefix(digits, "+"); found {
+		digits = rest
+	}
+	rest, found := strings.CutPrefix(digits, "0x")
+	if !found {
+		if rest, found = strings.CutPrefix(digits, "0X"); !found {
+			return nil, false, nil
+		}
+	}
+	if rest == "" {
+		return nil, true, fmt.Errorf("%w: %q is not an integer", ErrInvalidCast, text)
+	}
+	n, err := strconv.ParseUint(rest, 16, 64)
+	switch {
+	case errors.Is(err, strconv.ErrRange):
+		out, rangeErr := outOfRangeInt(negative, strict, text)
+		return out, true, rangeErr
+	case err != nil:
+		return nil, true, fmt.Errorf("%w: %q is not an integer", ErrInvalidCast, text)
+	}
+	if negative {
+		if n > 1<<63 {
+			out, rangeErr := outOfRangeInt(true, strict, text)
+			return out, true, rangeErr
+		}
+		return -int64(n), true, nil //nolint:gosec // the bound above keeps the negation inside an int64
+	}
+	if n > math.MaxInt64 {
+		out, rangeErr := outOfRangeInt(false, strict, text)
+		return out, true, rangeErr
+	}
+	return int64(n), true, nil
 }
 
 // mysqlIntegerPrefix returns the integer MySQL reads at the front of text when

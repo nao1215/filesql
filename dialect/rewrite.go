@@ -77,11 +77,11 @@ func walkCalls(tokens []token, rewrite callRewriter) ([]token, error) {
 // Sunday. It returns handled=false when the call is not the "part FROM x" form
 // so the caller leaves it untouched.
 func rewriteExtractCall(tokens []token, open, closeIdx int, helper string, recurse callRecurser) ([]token, bool, error) {
-	part := nextSig(tokens, open+1)
-	if part < 0 || tokens[part].kind != tokWord {
+	part, last, ok := datePartAt(tokens, nextSig(tokens, open+1))
+	if !ok {
 		return nil, false, nil
 	}
-	from := nextSig(tokens, part+1)
+	from := nextSig(tokens, last+1)
 	if from < 0 || !isWordEq(tokens[from], "FROM") {
 		return nil, false, nil
 	}
@@ -92,11 +92,141 @@ func rewriteExtractCall(tokens []token, open, closeIdx int, helper string, recur
 	expr = trimSpaceTokens(expr)
 	repl := make([]token, 0, len(expr)+6)
 	repl = append(repl, wordToken(helper), opToken("("))
-	repl = append(repl, stringToken(strings.ToLower(tokens[part].text)))
+	repl = append(repl, stringToken(part))
 	repl = append(repl, opToken(","), spaceToken())
 	repl = append(repl, expr...)
 	repl = append(repl, opToken(")"))
 	return repl, true, nil
+}
+
+// datePartAt reads the date part written at i and returns it in the spelling
+// the helpers take, together with the index of its last token. A part is
+// usually one word; BigQuery also writes the week ones as a call naming the
+// weekday a week begins on -- WEEK(MONDAY) -- which reaches the helpers as
+// "week_monday", so one string still carries the whole part.
+func datePartAt(tokens []token, i int) (string, int, bool) {
+	if i < 0 || i >= len(tokens) || tokens[i].kind != tokWord {
+		return "", 0, false
+	}
+	name := strings.ToLower(tokens[i].text)
+	open := nextSig(tokens, i+1)
+	if name != unitWeek || open < 0 || !isOpEq(tokens[open], "(") {
+		return name, i, true
+	}
+	day := nextSig(tokens, open+1)
+	if day < 0 || tokens[day].kind != tokWord {
+		return "", 0, false
+	}
+	closeIdx := nextSig(tokens, day+1)
+	if closeIdx < 0 || !isOpEq(tokens[closeIdx], ")") {
+		return "", 0, false
+	}
+	return unitWeek + "_" + strings.ToLower(tokens[day].text), closeIdx, true
+}
+
+// rewriteDatePartArgCall rewrites a call whose last argument is a bare date
+// part into one taking that part as a string, under the given name. The part is
+// optional: a call with one argument is renamed and left alone.
+func rewriteDatePartArgCall(tokens []token, open, closeIdx int, target string, recurse callRecurser) ([]token, bool, error) {
+	comma := topLevelComma(tokens, open, closeIdx)
+	if comma < 0 {
+		return rewriteRenameCall(tokens, open, closeIdx, target, recurse)
+	}
+	part, last, ok := datePartAt(tokens, nextSig(tokens, comma+1))
+	if !ok {
+		return nil, false, nil
+	}
+	if after := nextSig(tokens, last+1); after != closeIdx {
+		return nil, false, nil
+	}
+	value, err := recurse(tokens[open+1 : comma])
+	if err != nil {
+		return nil, false, err
+	}
+	value = trimSpaceTokens(value)
+	repl := make([]token, 0, len(value)+6)
+	repl = append(repl, wordToken(target), opToken("("))
+	repl = append(repl, value...)
+	repl = append(repl, opToken(","), spaceToken(), stringToken(part), opToken(")"))
+	return repl, true, nil
+}
+
+// rewriteKeywordArgCall rewrites a call whose argument at index keywordArg is a
+// bare keyword into one taking that keyword as a string. BigQuery's NORMALIZE
+// writes its normalization form that way, and a bare word would reach SQLite as
+// a column name.
+func rewriteKeywordArgCall(tokens []token, open, closeIdx int, target string, keywordArg int, recurse callRecurser) ([]token, bool, error) {
+	commas := topLevelCommas(tokens, open, closeIdx)
+	if len(commas) < keywordArg {
+		return rewriteRenameCall(tokens, open, closeIdx, target, recurse)
+	}
+	bounds := append([]int{open}, commas...)
+	bounds = append(bounds, closeIdx)
+	repl := make([]token, 0, closeIdx-open+8)
+	repl = append(repl, wordToken(target), opToken("("))
+	for i := range len(bounds) - 1 {
+		if i > 0 {
+			repl = append(repl, opToken(","), spaceToken())
+		}
+		if i == keywordArg {
+			word := nextSig(tokens, bounds[i]+1)
+			if word < 0 || tokens[word].kind != tokWord || nextSig(tokens, word+1) != bounds[i+1] {
+				return nil, false, nil
+			}
+			repl = append(repl, stringToken(tokens[word].text))
+			continue
+		}
+		arg, err := recurse(tokens[bounds[i]+1 : bounds[i+1]])
+		if err != nil {
+			return nil, false, err
+		}
+		repl = append(repl, trimSpaceTokens(arg)...)
+	}
+	return append(repl, opToken(")")), true, nil
+}
+
+// rewriteEditDistance rewrites EDIT_DISTANCE, whose third argument is written
+// as a named one -- "max_distance => 2" -- which SQLite has no syntax for. The
+// name is dropped and the value kept, since there is only one named argument to
+// drop it in favor of.
+func rewriteEditDistance(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
+	commas := topLevelCommas(tokens, open, closeIdx)
+	bounds := append([]int{open}, commas...)
+	bounds = append(bounds, closeIdx)
+	repl := make([]token, 0, closeIdx-open+8)
+	repl = append(repl, wordToken("edit_distance"), opToken("("))
+	for i := range len(bounds) - 1 {
+		if i > 0 {
+			repl = append(repl, opToken(","), spaceToken())
+		}
+		from := bounds[i] + 1
+		if arrow := topLevelOperator(tokens, bounds[i], bounds[i+1], "=>"); arrow >= 0 {
+			from = arrow + 1
+		}
+		arg, err := recurse(tokens[from:bounds[i+1]])
+		if err != nil {
+			return nil, false, err
+		}
+		repl = append(repl, trimSpaceTokens(arg)...)
+	}
+	return append(repl, opToken(")")), true, nil
+}
+
+// topLevelOperator finds an operator between open and closeIdx that is not
+// inside nested parentheses.
+func topLevelOperator(tokens []token, open, closeIdx int, op string) int {
+	depth := 0
+	for i := open + 1; i < closeIdx; i++ {
+		switch {
+		case isOpEq(tokens[i], "("):
+			depth++
+		case isOpEq(tokens[i], ")"):
+			depth--
+		case depth == 0 && isOpEq(tokens[i], op):
+			return i
+		}
+	}
+	return -1
 }
 
 // rewriteCastCall rewrites CAST(x AS type) into a call to the dialect's cast
@@ -222,6 +352,13 @@ func rewriteAddDate(tokens []token, open, closeIdx int, sign string, recurse cal
 // datetime() rolls a month-end overflow forward where every source dialect
 // clamps it, and always renders a time of day.
 func rewriteDateArith(tokens []token, open, closeIdx int, sign string, recurse callRecurser) ([]token, bool, error) {
+	return rewriteDateArithNamed(tokens, open, closeIdx, sign, "interval_add", recurse)
+}
+
+// rewriteDateArithNamed is rewriteDateArith under a helper the caller names. A
+// BigQuery TIME is a time of day rather than a point in time, so TIME_ADD wraps
+// around midnight and reaches a helper of its own.
+func rewriteDateArithNamed(tokens []token, open, closeIdx int, sign, helper string, recurse callRecurser) ([]token, bool, error) {
 	comma := topLevelComma(tokens, open, closeIdx)
 	if comma < 0 {
 		return nil, false, nil
@@ -253,7 +390,7 @@ func rewriteDateArith(tokens []token, open, closeIdx int, sign string, recurse c
 	}
 	expr = trimSpaceTokens(expr)
 	repl := make([]token, 0, len(expr)+len(amount)+10)
-	repl = append(repl, wordToken("interval_add"), opToken("("))
+	repl = append(repl, wordToken(helper), opToken("("))
 	repl = append(repl, expr...)
 	repl = append(repl, opToken(","), spaceToken())
 	if sign == "-" {
@@ -775,11 +912,11 @@ func rewriteTruncCall(tokens []token, open, closeIdx int, recurse callRecurser) 
 	if comma < 0 {
 		return nil, false, nil
 	}
-	part := nextSig(tokens, comma+1)
-	if part < 0 || tokens[part].kind != tokWord {
+	part, last, ok := datePartAt(tokens, nextSig(tokens, comma+1))
+	if !ok {
 		return nil, false, nil
 	}
-	if after := nextSig(tokens, part+1); after != closeIdx {
+	if after := nextSig(tokens, last+1); after != closeIdx {
 		return nil, false, nil
 	}
 	value, err := recurse(tokens[open+1 : comma])
@@ -790,7 +927,7 @@ func rewriteTruncCall(tokens []token, open, closeIdx int, recurse callRecurser) 
 	repl := make([]token, 0, len(value)+6)
 	repl = append(repl, wordToken("date_trunc_part"), opToken("("))
 	repl = append(repl, value...)
-	repl = append(repl, opToken(","), spaceToken(), stringToken(strings.ToLower(tokens[part].text)), opToken(")"))
+	repl = append(repl, opToken(","), spaceToken(), stringToken(part), opToken(")"))
 	return repl, true, nil
 }
 
@@ -1111,6 +1248,16 @@ func intervalUnitAfter(tokens []token, start int) int {
 // kwHaving and kwLimit are spelled in more than one of the keyword tables in
 // this package, which is what makes them constants rather than literals.
 const (
+	// The date and time type names, and the sub-second units, are each spelled
+	// in more than one table in this package.
+	typeDate      = "DATE"
+	typeDatetime  = "DATETIME"
+	typeTime      = "TIME"
+	typeTimestamp = "TIMESTAMP"
+
+	unitMillisecond = "millisecond"
+	unitMicrosecond = "microsecond"
+
 	kwHaving = "HAVING"
 	kwLimit  = "LIMIT"
 	kwWhere  = "WHERE"

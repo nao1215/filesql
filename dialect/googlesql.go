@@ -40,13 +40,13 @@ func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	if err := checkUnsupportedGoogleSQL(tokens); err != nil {
 		return nil, err
 	}
-	// G-20: fold BigQuery's "SAFE." call prefix into the underscore name the
-	// rest of the pass already knows, before any call is looked at.
-	tokens, err := safePrefixPass(tokens)
+	out, err := googlesqlCallPass(tokens)
 	if err != nil {
 		return nil, err
 	}
-	out, err := googlesqlCallPass(tokens)
+	// G-20: the "SAFE." prefix wraps whatever the call pass above turned the
+	// call into, so it runs after that pass rather than before it.
+	out, err = safePrefixPass(out)
 	if err != nil {
 		return nil, err
 	}
@@ -85,52 +85,68 @@ func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	return aggregatePass(out, GoogleSQL)
 }
 
-// safeFunctions are the functions a "SAFE." prefix can be honored for: those
-// with a safe_ helper registered for them, named the same lowercased. The prefix
-// means "return NULL rather than raise", and only a helper written for that can
-// promise it. The order is the message's, so it does not change between runs.
-var safeFunctions = []string{"ADD", "DIVIDE", "MULTIPLY", "NEGATE", "SUBTRACT"}
-
-// safeHelperFor returns the helper a "SAFE." prefix on name maps to, and
-// whether there is one.
-func safeHelperFor(name string) (string, bool) {
-	upper := strings.ToUpper(name)
-	for _, fn := range safeFunctions {
-		if fn == upper {
-			return "safe_" + strings.ToLower(fn), true
-		}
-	}
-	return "", false
+// safePrefixPass implements G-20: SAFE.f(args) becomes safe_call('f', args),
+// which runs f and answers NULL where f would have raised.
+//
+// It runs after the call pass, so the name it wraps is whatever that pass
+// turned the call into: SAFE.SUBSTR reaches here as googlesql_substr. A name
+// this package does not compute itself -- a SQLite built-in such as ABS or
+// LENGTH -- is passed through with the prefix dropped, since there is no way to
+// reach inside SQLite's own function from here; those are the ones that do not
+// raise in the first place, which is why BigQuery callers reach for the prefix
+// on the parsing and casting functions instead.
+var safeArithmeticAliases = map[string]string{ //nolint:gochecknoglobals // a fixed table read by the SAFE. pass
+	"ADD": "safe_add", "DIVIDE": "safe_divide", "MULTIPLY": "safe_multiply",
+	"NEGATE": "safe_negate", "SUBTRACT": "safe_subtract",
 }
 
-// safePrefixPass implements G-20: SAFE.f(args) -> safe_f(args).
-//
-// BigQuery's own documentation writes the safe functions this way, and only a
-// few of them have an underscore name at all, so the prefix is the general
-// form. Left alone it reaches SQLite as a qualified name, which reports on the
-// "(" that follows rather than on the prefix, and says nothing about the
-// dialect.
-//
-// A prefix on a function with no safe form is refused rather than dropped:
-// dropping it would answer the query with the plain function, which raises
-// where the caller asked for a NULL.
 func safePrefixPass(tokens []token) ([]token, error) {
 	out := make([]token, 0, len(tokens))
 	i := 0
 	for i < len(tokens) {
-		name, end, ok := matchSafePrefix(tokens, i)
+		name, nameIdx, ok := matchSafePrefix(tokens, i)
 		if !ok {
 			out = append(out, tokens[i])
 			i++
 			continue
 		}
-		helper, supported := safeHelperFor(name)
-		if !supported {
-			return nil, fmt.Errorf("%w: SAFE.%s is not supported; the SAFE. prefix works with %s",
-				ErrUnsupportedSyntax, strings.ToUpper(name), strings.Join(safeFunctions, ", "))
+		open := nextSig(tokens, nameIdx+1)
+		closeIdx := matchParen(tokens, open)
+		if closeIdx < 0 {
+			return nil, fmt.Errorf("%w: unbalanced parentheses after SAFE.%s", ErrInvalidSyntax, name)
 		}
-		out = append(out, wordToken(helper))
-		i = end + 1
+		args, err := safePrefixPass(tokens[open+1 : closeIdx])
+		if err != nil {
+			return nil, err
+		}
+		helper := strings.ToLower(name)
+		if alias, aliased := safeArithmeticAliases[strings.ToUpper(name)]; aliased {
+			// BigQuery spells these five with an underscore -- SAFE_ADD and the
+			// rest -- and this package answered to the dotted form before the
+			// prefix was general, so it still does.
+			helper = alias
+		}
+		if !isRegisteredFunction(helper) {
+			out = append(out, tokens[nameIdx], tokens[open])
+			out = append(out, args...)
+			out = append(out, tokens[closeIdx])
+			i = closeIdx + 1
+			continue
+		}
+		if _, aliased := safeArithmeticAliases[strings.ToUpper(name)]; aliased {
+			out = append(out, wordToken(helper), opToken("("))
+			out = append(out, args...)
+			out = append(out, opToken(")"))
+			i = closeIdx + 1
+			continue
+		}
+		out = append(out, wordToken("safe_call"), opToken("("), stringToken(helper))
+		if len(trimSpaceTokens(args)) > 0 {
+			out = append(out, opToken(","), spaceToken())
+			out = append(out, args...)
+		}
+		out = append(out, opToken(")"))
+		i = closeIdx + 1
 	}
 	return out, nil
 }
@@ -156,6 +172,12 @@ func matchSafePrefix(tokens []token, i int) (string, int, bool) {
 	return tokens[name].text, name, true
 }
 
+// arrayAggregates are the BigQuery aggregates whose result is an array.
+var arrayAggregates = map[string]bool{ //nolint:gochecknoglobals // a fixed table read by the unsupported check
+	"ARRAY_AGG": true, "ARRAY_CONCAT_AGG": true, "APPROX_QUANTILES": true,
+	"APPROX_TOP_COUNT": true, "APPROX_TOP_SUM": true,
+}
+
 // checkUnsupportedGoogleSQL rejects the G-9 constructs that have no SQLite
 // equivalent.
 func checkUnsupportedGoogleSQL(tokens []token) error {
@@ -166,8 +188,24 @@ func checkUnsupportedGoogleSQL(tokens []token) error {
 		if isWordEq(t, "QUALIFY") {
 			return fmt.Errorf("%w: QUALIFY is not supported", ErrUnsupportedSyntax)
 		}
+		// SAFE.CAST is not BigQuery: the safe cast is SAFE_CAST. It is caught
+		// here, before the call pass turns the CAST into the cast helper and
+		// the prefix has nothing left to recognize.
+		if name, _, ok := matchSafePrefix(tokens, i); ok && strings.EqualFold(name, fnNameCast) {
+			return fmt.Errorf("%w: SAFE.CAST is not supported; the safe cast is SAFE_CAST(x AS type)", ErrUnsupportedSyntax)
+		}
 		if isWordEq(t, "UNNEST") {
 			return fmt.Errorf("%w: UNNEST is not supported", ErrUnsupportedSyntax)
+		}
+		// The aggregates whose result is an array. Left alone they reached
+		// SQLite as "no such function", telling the caller a name they did
+		// write does not exist rather than that the construct has no SQLite
+		// form -- which is what every other array-shaped construct here says.
+		if arrayAggregates[strings.ToUpper(t.text)] && t.kind == tokWord {
+			if open := nextSig(tokens, i+1); open >= 0 && isOpEq(tokens[open], "(") {
+				return fmt.Errorf("%w: %s is not supported; its result is an array and SQLite has no array type",
+					ErrUnsupportedSyntax, strings.ToUpper(t.text))
+			}
 		}
 		// The type parameters spell these out — ARRAY<INT64>, STRUCT<a INT64> —
 		// and the parenthesis spells the same thing without them: STRUCT(1 AS a)
@@ -237,12 +275,37 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_mod", googlesqlCallPass)
 	case fnNameTrunc:
 		return rewriteTruncScaleCall(tokens, open, closeIdx, googlesqlCallPass)
-	case "DATE_ADD", "TIMESTAMP_ADD":
+	case "DATE_ADD", "TIMESTAMP_ADD", "DATETIME_ADD":
 		return rewriteDateArith(tokens, open, closeIdx, "+", googlesqlCallPass)
-	case "DATE_SUB", "TIMESTAMP_SUB":
+	case "DATE_SUB", "TIMESTAMP_SUB", "DATETIME_SUB":
 		return rewriteDateArith(tokens, open, closeIdx, "-", googlesqlCallPass)
-	case "DATE_DIFF", "TIMESTAMP_DIFF":
+	// A BigQuery TIME is a time of day, so its arithmetic wraps around midnight
+	// rather than moving to another day.
+	case "TIME_ADD":
+		return rewriteDateArithNamed(tokens, open, closeIdx, "+", "time_add", googlesqlCallPass)
+	case "TIME_SUB":
+		return rewriteDateArithNamed(tokens, open, closeIdx, "-", "time_add", googlesqlCallPass)
+	case "DATE_DIFF", "TIMESTAMP_DIFF", "DATETIME_DIFF", "TIME_DIFF":
 		return rewriteDateDiff(tokens, nameIdx, open, closeIdx)
+	// BigQuery's digests answer bytes; the shared MD5 is PostgreSQL's, which
+	// answers hexadecimal text, and the shared SHA1 is MySQL's, which does too.
+	case "MD5", "SHA1":
+		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_"+strings.ToLower(tokens[nameIdx].text), googlesqlCallPass)
+	// The constructors. SQLite has date(), time() and datetime() of its own,
+	// which answer NULL for the field arguments BigQuery builds a value from.
+	case typeDate, typeDatetime, typeTime, typeTimestamp:
+		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_"+strings.ToLower(tokens[nameIdx].text), googlesqlCallPass)
+	case "STRING":
+		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_string", googlesqlCallPass)
+	case "LAST_DAY":
+		return rewriteDatePartArgCall(tokens, open, closeIdx, "googlesql_last_day", googlesqlCallPass)
+	case "INSTR":
+		// SQLite's own INSTR takes two arguments; BigQuery's takes up to four.
+		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_instr", googlesqlCallPass)
+	case "NORMALIZE", "NORMALIZE_AND_CASEFOLD":
+		return rewriteKeywordArgCall(tokens, open, closeIdx, strings.ToLower(tokens[nameIdx].text), 1, googlesqlCallPass)
+	case "EDIT_DISTANCE":
+		return rewriteEditDistance(tokens, open, closeIdx, googlesqlCallPass)
 	case "JSON_VALUE", "JSON_EXTRACT_SCALAR":
 		return rewriteRenameCall(tokens, open, closeIdx, "json_extract", googlesqlCallPass)
 	case "JSON_QUERY":
@@ -257,6 +320,8 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 		return rewriteRenameCall(tokens, open, closeIdx, "length", googlesqlCallPass)
 	case "DATE_TRUNC", "TIMESTAMP_TRUNC", "DATETIME_TRUNC":
 		return rewriteTruncCall(tokens, open, closeIdx, googlesqlCallPass)
+	case "TIME_TRUNC":
+		return rewriteDatePartArgCall(tokens, open, closeIdx, "time_trunc", googlesqlCallPass)
 	case fnNameStringAgg:
 		// SQLite has string_agg as an alias of group_concat, so the plain form
 		// runs as written and only the DISTINCT one needs rewriting.
@@ -343,11 +408,11 @@ func rewriteDateDiff(tokens []token, nameIdx, open, closeIdx int) ([]token, bool
 		return nil, false, nil
 	}
 	firstComma, secondComma := commas[0], commas[1]
-	unitTok := nextSig(tokens, secondComma+1)
-	if unitTok < 0 || tokens[unitTok].kind != tokWord {
+	unit, last, ok := datePartAt(tokens, nextSig(tokens, secondComma+1))
+	if !ok {
 		return nil, false, nil
 	}
-	if after := nextSig(tokens, unitTok+1); after != closeIdx {
+	if after := nextSig(tokens, last+1); after != closeIdx {
 		return nil, false, nil
 	}
 
@@ -362,12 +427,12 @@ func rewriteDateDiff(tokens []token, nameIdx, open, closeIdx int) ([]token, bool
 	argA = trimSpaceTokens(argA)
 	argB = trimSpaceTokens(argB)
 	repl := make([]token, 0, len(argA)+len(argB)+8)
-	repl = append(repl, tokens[nameIdx], opToken("("))
+	repl = append(repl, wordToken(strings.ToLower(tokens[nameIdx].text)), opToken("("))
 	repl = append(repl, argA...)
 	repl = append(repl, opToken(","), spaceToken())
 	repl = append(repl, argB...)
 	repl = append(repl, opToken(","), spaceToken())
-	repl = append(repl, stringToken(strings.ToLower(tokens[unitTok].text)))
+	repl = append(repl, stringToken(unit))
 	repl = append(repl, opToken(")"))
 	return repl, true, nil
 }

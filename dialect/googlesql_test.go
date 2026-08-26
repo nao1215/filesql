@@ -73,8 +73,8 @@ func TestGoogleSQLTranslate(t *testing.T) {
 		{"G-7_date_add", "SELECT DATE_ADD(d, INTERVAL 3 DAY)", "SELECT interval_add(d, 3, 'day') AS \"DATE_ADD(d, INTERVAL 3 DAY)\""},
 		{"G-7_timestamp_sub", "SELECT TIMESTAMP_SUB(ts, INTERVAL 2 HOUR)", "SELECT interval_add(ts, -(2), 'hour') AS \"TIMESTAMP_SUB(ts, INTERVAL 2 HOUR)\""},
 
-		{"G-8_date_diff", "SELECT DATE_DIFF(a, b, DAY) FROM t", "SELECT DATE_DIFF(a, b, 'day') AS \"DATE_DIFF(a, b, DAY)\" FROM t"},
-		{"G-8_timestamp_diff", "SELECT TIMESTAMP_DIFF(a, b, SECOND)", "SELECT TIMESTAMP_DIFF(a, b, 'second') AS \"TIMESTAMP_DIFF(a, b, SECOND)\""},
+		{"G-8_date_diff", "SELECT DATE_DIFF(a, b, DAY) FROM t", "SELECT date_diff(a, b, 'day') AS \"DATE_DIFF(a, b, DAY)\" FROM t"},
+		{"G-8_timestamp_diff", "SELECT TIMESTAMP_DIFF(a, b, SECOND)", "SELECT timestamp_diff(a, b, 'second') AS \"TIMESTAMP_DIFF(a, b, SECOND)\""},
 
 		// G-10 raw and byte strings are lexical.
 		{"G-10_raw_string", `SELECT r'a\nb'`, `SELECT 'a\nb'`},
@@ -123,7 +123,7 @@ func TestGoogleSQLTranslateUnsupported(t *testing.T) {
 		// A SAFE. call whose function has no safe form here is refused by name.
 		// Passed through, SQLite reads "SAFE.SUBSTR" as schema.table and reports on
 		// the "(" instead.
-		{"G-20_safe_unknown_function", "SELECT SAFE.SUBSTR(s, 1, 2) FROM t"},
+		{"G-20_safe_cast_is_not_a_prefix", "SELECT SAFE.CAST(x AS INT64) FROM t"},
 		{"G-20_safe_cast_prefix", "SELECT SAFE.CAST(x AS INT64) FROM t"},
 
 		// G-19: SQLite reads "[...]" as an identifier, so an array literal came
