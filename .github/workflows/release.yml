@@ -6,72 +6,72 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
+    name: Release
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      # Only the last step needs this, and it is the only step that writes
+      # anything outside the runner.
+      contents: write
+
+    # One job, in order, with the release last. A tag reaches this workflow
+    # having passed nothing: the pull request checks ran against the branch, and
+    # a tag can be pushed onto any commit at all, including one that was never in
+    # a pull request. So everything the branch is asked for is asked again here,
+    # and the release is created only after all of it has passed.
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Extract tag name
-        id: tag
-        run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.25.13"
 
-      - name: Extract changelog for this version
-        id: changelog
-        run: |
-          # Extract the current version's changelog
-          TAG="${{ steps.tag.outputs.TAG_NAME }}"
-          TAG_WITHOUT_V="${TAG#v}"
-          
-          # Create a temporary file for the changelog content
-          CHANGELOG_FILE="changelog_content.md"
-          
-          # Extract content between the current version and the next version header
-          # This handles different possible formats: ## [x.y.z], ## x.y.z, ### [x.y.z], ### x.y.z
-          awk -v ver="$TAG_WITHOUT_V" '
-            BEGIN { found = 0; }
-            $0 ~ "^#{2,3} \\[?" ver "\\]?" { found = 1; next; }
-            /^#{2,3} \[?[0-9]+\.[0-9]+\.[0-9]+\]?/ { if (found) exit; }
-            found { print; }
-          ' CHANGELOG.md > "$CHANGELOG_FILE"
-          
-          # If no content found with version without 'v', try with 'v'
-          if [ ! -s "$CHANGELOG_FILE" ]; then
-            awk -v ver="$TAG" '
-              BEGIN { found = 0; }
-              $0 ~ "^#{2,3} \\[?" ver "\\]?" { found = 1; next; }
-              /^#{2,3} \[?v?[0-9]+\.[0-9]+\.[0-9]+\]?/ { if (found) exit; }
-              found { print; }
-            ' CHANGELOG.md > "$CHANGELOG_FILE"
-          fi
-          
-          # If still no content, use a default message
-          if [ ! -s "$CHANGELOG_FILE" ]; then
-            echo "No changelog entry found for version $TAG" > "$CHANGELOG_FILE"
-            echo ""
-            echo "Please check CHANGELOG.md for updates." >> "$CHANGELOG_FILE"
-          fi
-          
-          # Set the output
-          {
-            echo 'CHANGELOG_CONTENT<<EOF'
-            cat "$CHANGELOG_FILE"
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
+      # First, because it is the cheapest and because it is the check most
+      # likely to fail: a tag that is not SemVer, or one whose version has no
+      # changelog entry, is refused here rather than published with a
+      # placeholder body. See .github/scripts/release-metadata.sh, whose
+      # behaviour is pinned by release_metadata_test.go.
+      - name: Validate the tag and extract its changelog entry
+        id: meta
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: ./.github/scripts/release-metadata.sh "$TAG_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -count=1 ./...
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.0
+          args: --config .golangci.yml --timeout 10m
+
+      # The examples are separate modules pinned to a released filesql, so the
+      # test run above never compiles them. They are what the README sends
+      # people to, and a release that breaks them breaks the documentation with
+      # it.
+      - name: Examples
+        run: ./examples/verify.sh
 
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ steps.tag.outputs.TAG_NAME }}
-          name: ${{ steps.tag.outputs.TAG_NAME }}
-          body: ${{ steps.changelog.outputs.CHANGELOG_CONTENT }}
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: ${{ steps.meta.outputs.body_path }}
           draft: false
-          prerelease: ${{ contains(steps.tag.outputs.TAG_NAME, '-alpha') || contains(steps.tag.outputs.TAG_NAME, '-beta') || contains(steps.tag.outputs.TAG_NAME, '-rc') }}
+          prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
