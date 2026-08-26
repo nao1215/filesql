@@ -3,6 +3,7 @@ package filesql
 import (
 	"strings"
 
+	"github.com/nao1215/filesql/internal/codec"
 	"github.com/nao1215/filesql/parser"
 )
 
@@ -47,23 +48,28 @@ const (
 	FileTypeUnsupported
 )
 
-// File extension aliases from the parser package
+// File extensions of the formats this package loads and writes.
 const (
-	extCSV     = parser.ExtCSV
-	extTSV     = parser.ExtTSV
-	extLTSV    = parser.ExtLTSV
-	extParquet = parser.ExtParquet
-	extXLSX    = parser.ExtXLSX
-	extGZ      = parser.ExtGZ
-	extBZ2     = parser.ExtBZ2
-	extXZ      = parser.ExtXZ
-	extZSTD    = parser.ExtZSTD
-	extZLIB    = parser.ExtZLIB
-	extSNAPPY  = parser.ExtSNAPPY
-	extS2      = parser.ExtS2
-	extLZ4     = parser.ExtLZ4
-	extJSON    = parser.ExtJSON
-	extJSONL   = parser.ExtJSONL
+	extCSV     = ".csv"
+	extTSV     = ".tsv"
+	extLTSV    = ".ltsv"
+	extParquet = ".parquet"
+	extXLSX    = ".xlsx"
+	extJSON    = ".json"
+	extJSONL   = ".jsonl"
+)
+
+// Compression extensions, named by the codec that reads and writes each one so
+// the suffix a path carries and the codec chosen for it cannot drift apart.
+const (
+	extGZ     = codec.ExtGZ
+	extBZ2    = codec.ExtBZ2
+	extXZ     = codec.ExtXZ
+	extZSTD   = codec.ExtZSTD
+	extZLIB   = codec.ExtZLIB
+	extSNAPPY = codec.ExtSNAPPY
+	extS2     = codec.ExtS2
+	extLZ4    = codec.ExtLZ4
 )
 
 // file represents a file that can be converted to table

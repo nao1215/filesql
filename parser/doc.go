@@ -30,8 +30,4 @@
 //	}
 //	fmt.Println("Columns:", result.Headers)
 //	fmt.Println("Rows:", len(result.Records))
-//
-// # Type Conversion
-//
-// Use [ParseValue] to convert string records to typed Go values based on [ColumnType].
 package parser

@@ -3,8 +3,6 @@ package parser
 import (
 	"bytes"
 	"encoding/csv"
-	"fmt"
-	"math"
 	"strconv"
 	"testing"
 
@@ -144,110 +142,5 @@ func TestInferColumnTypes(t *testing.T) {
 			assert.Equal(t, TypeText, csvColumnTypes(t, []string{"v"}, build(oddAt))[0],
 				"a text value at position %d among %d integers", oddAt, rows)
 		}
-	})
-
-	t.Run("every value of a column converts to the type the column was given", func(t *testing.T) {
-		t.Parallel()
-
-		columns := map[string][]string{
-			"integers":                {"1", "2", "3"},
-			"decimals":                {"1.5", "2", "3"},
-			"text among integers":     {"1", "2", "3", "4", "5", "6", "7", "8", "9", "abc"},
-			"a code among integers":   {"1", "2", "3", "4", "5", "6", "7", "8", "9", "007"},
-			"datetimes":               {"2026-08-20", "2026-08-21"},
-			"a datetime among counts": {"1", "2", "3", "4", "5", "6", "7", "8", "9", "2026-08-20"},
-		}
-		want := map[ColumnType]string{
-			TypeInteger:  "int64",
-			TypeReal:     "float64",
-			TypeText:     "string",
-			TypeDatetime: "string",
-		}
-
-		for name, values := range columns {
-			t.Run(name, func(t *testing.T) {
-				t.Parallel()
-
-				records := make([][]string, 0, len(values))
-				for _, v := range values {
-					records = append(records, []string{v})
-				}
-				columnType := csvColumnTypes(t, []string{"v"}, records)[0]
-
-				for _, v := range values {
-					assert.Equal(t, want[columnType], fmt.Sprintf("%T", ParseValue(v, columnType)),
-						"%q in a column typed %v", v, columnType)
-				}
-			})
-		}
-	})
-}
-
-func TestParseValue(t *testing.T) {
-	t.Parallel()
-
-	t.Run("parses integer", func(t *testing.T) {
-		t.Parallel()
-
-		result := ParseValue("42", TypeInteger)
-
-		assert.Equal(t, int64(42), result)
-	})
-
-	t.Run("parses float", func(t *testing.T) {
-		t.Parallel()
-
-		result := ParseValue("3.14", TypeReal)
-
-		assert.Equal(t, 3.14, result)
-	})
-
-	t.Run("a saturating spelling parses to the infinity it saturates to", func(t *testing.T) {
-		t.Parallel()
-
-		// 9e999 is a REAL to the inference because SQLite's affinity saturates
-		// it, so the parsed value has to be that float rather than the string.
-		assert.Equal(t, math.Inf(1), ParseValue("9e999", TypeReal))
-		assert.Equal(t, math.Inf(-1), ParseValue("-9e999", TypeReal))
-	})
-
-	t.Run("returns string for text type", func(t *testing.T) {
-		t.Parallel()
-
-		result := ParseValue("hello", TypeText)
-
-		assert.Equal(t, "hello", result)
-	})
-
-	t.Run("preserves whitespace for text type", func(t *testing.T) {
-		t.Parallel()
-
-		result := ParseValue("  hello  ", TypeText)
-
-		assert.Equal(t, "  hello  ", result)
-	})
-
-	t.Run("preserves whitespace for datetime type", func(t *testing.T) {
-		t.Parallel()
-
-		result := ParseValue(" 2024-01-15 ", TypeDatetime)
-
-		assert.Equal(t, " 2024-01-15 ", result)
-	})
-
-	t.Run("returns nil for empty value", func(t *testing.T) {
-		t.Parallel()
-
-		result := ParseValue("", TypeInteger)
-
-		assert.Nil(t, result)
-	})
-
-	t.Run("returns original string for invalid integer", func(t *testing.T) {
-		t.Parallel()
-
-		result := ParseValue("not-a-number", TypeInteger)
-
-		assert.Equal(t, "not-a-number", result)
 	})
 }
