@@ -1,11 +1,6 @@
 package parser
 
-import (
-	"strconv"
-	"strings"
-
-	"github.com/nao1215/filesql/internal/infer"
-)
+import "github.com/nao1215/filesql/internal/infer"
 
 // columnTypesOf names a read's inferred types in this package's vocabulary.
 func columnTypesOf(types []infer.Type) []ColumnType {
@@ -27,41 +22,5 @@ func columnTypeOf(t infer.Type) ColumnType {
 		return TypeDatetime
 	default:
 		return TypeText
-	}
-}
-
-// ParseValue converts a string value to the appropriate Go type based on ColumnType.
-// This function is useful for converting string records from TableData to typed values.
-//
-// Conversion rules:
-//   - TypeInteger: returns int64, or original string if parsing fails
-//   - TypeReal: returns float64, or original string if parsing fails
-//   - TypeDatetime: returns string (caller can parse with time.Parse if needed)
-//   - TypeText: returns string as-is
-//   - Empty values return nil
-func ParseValue(value string, colType ColumnType) any {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return nil
-	}
-
-	switch colType {
-	case TypeInteger:
-		if i, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
-			return i
-		}
-		return value
-	case TypeReal:
-		// infer.Float64 accepts a saturating spelling ("9e999" is the
-		// infinity), so a value the inference called REAL converts here too.
-		if f, ok := infer.Float64(trimmed); ok {
-			return f
-		}
-		return value
-	case TypeDatetime:
-		// Return as string for now; caller can parse if needed
-		return value
-	default:
-		return value
 	}
 }

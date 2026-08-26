@@ -46,16 +46,18 @@
 // # Usage
 //
 //	import (
+//	    "os"
+//
 //	    "github.com/nao1215/filesql/parser/ach"
-//	    moovach "github.com/moov-io/ach"
 //	)
 //
-//	// Read ACH file
-//	achFile, _ := moovach.ReadFile("payment.ach")
+//	// Read an ACH file into TableData for SQL queries
+//	f, _ := os.Open("payment.ach")
+//	defer f.Close()
+//	tables, _ := ach.ParseReader(f)
 //
-//	// Convert to TableData for SQL queries
-//	tables := ach.FromFile(achFile)
-//
-//	// After SQL modifications, convert back to ACH
-//	newFile, _ := tables.ToFile()
+//	// After SQL modifications, write the file back out
+//	out, _ := os.Create("modified.ach")
+//	defer out.Close()
+//	tables.WriteToWriter(out)
 package ach

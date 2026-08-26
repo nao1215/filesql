@@ -510,27 +510,27 @@ func parseError(err error) error {
 
 // File extensions
 const (
-	ExtCSV     = ".csv"
-	ExtTSV     = ".tsv"
-	ExtLTSV    = ".ltsv"
-	ExtParquet = ".parquet"
-	ExtXLSX    = ".xlsx"
-	ExtJSON    = ".json"
-	ExtJSONL   = ".jsonl"
+	extCSV     = ".csv"
+	extTSV     = ".tsv"
+	extLTSV    = ".ltsv"
+	extParquet = ".parquet"
+	extXLSX    = ".xlsx"
+	extJSON    = ".json"
+	extJSONL   = ".jsonl"
 )
 
 // Compression extensions: ".gz", ".bz2", ".xz", ".zst", ".z", ".snappy", ".s2"
 // and ".lz4". Each is named by the codec that reads and writes it, so the two
 // spellings cannot drift apart.
 const (
-	ExtGZ     = codec.ExtGZ
-	ExtBZ2    = codec.ExtBZ2
-	ExtXZ     = codec.ExtXZ
-	ExtZSTD   = codec.ExtZSTD
-	ExtZLIB   = codec.ExtZLIB
-	ExtSNAPPY = codec.ExtSNAPPY
-	ExtS2     = codec.ExtS2
-	ExtLZ4    = codec.ExtLZ4
+	extGZ     = codec.ExtGZ
+	extBZ2    = codec.ExtBZ2
+	extXZ     = codec.ExtXZ
+	extZSTD   = codec.ExtZSTD
+	extZLIB   = codec.ExtZLIB
+	extSNAPPY = codec.ExtSNAPPY
+	extS2     = codec.ExtS2
+	extLZ4    = codec.ExtLZ4
 )
 
 // Compression type identifiers
@@ -553,35 +553,35 @@ func DetectFileType(path string) FileType {
 	// Remove compression extensions
 	lowerPath := strings.ToLower(path)
 	switch {
-	case strings.HasSuffix(lowerPath, ExtGZ):
-		basePath = path[:len(path)-len(ExtGZ)]
+	case strings.HasSuffix(lowerPath, extGZ):
+		basePath = path[:len(path)-len(extGZ)]
 		compressionType = compGZ
-	case strings.HasSuffix(lowerPath, ExtBZ2):
-		basePath = path[:len(path)-len(ExtBZ2)]
+	case strings.HasSuffix(lowerPath, extBZ2):
+		basePath = path[:len(path)-len(extBZ2)]
 		compressionType = compBZ2
-	case strings.HasSuffix(lowerPath, ExtXZ):
-		basePath = path[:len(path)-len(ExtXZ)]
+	case strings.HasSuffix(lowerPath, extXZ):
+		basePath = path[:len(path)-len(extXZ)]
 		compressionType = compXZ
-	case strings.HasSuffix(lowerPath, ExtZSTD):
-		basePath = path[:len(path)-len(ExtZSTD)]
+	case strings.HasSuffix(lowerPath, extZSTD):
+		basePath = path[:len(path)-len(extZSTD)]
 		compressionType = compZSTD
-	case strings.HasSuffix(lowerPath, ExtZLIB):
-		basePath = path[:len(path)-len(ExtZLIB)]
+	case strings.HasSuffix(lowerPath, extZLIB):
+		basePath = path[:len(path)-len(extZLIB)]
 		compressionType = compZLIB
-	case strings.HasSuffix(lowerPath, ExtSNAPPY):
-		basePath = path[:len(path)-len(ExtSNAPPY)]
+	case strings.HasSuffix(lowerPath, extSNAPPY):
+		basePath = path[:len(path)-len(extSNAPPY)]
 		compressionType = compSNAPPY
-	case strings.HasSuffix(lowerPath, ExtS2):
-		basePath = path[:len(path)-len(ExtS2)]
+	case strings.HasSuffix(lowerPath, extS2):
+		basePath = path[:len(path)-len(extS2)]
 		compressionType = compS2
-	case strings.HasSuffix(lowerPath, ExtLZ4):
-		basePath = path[:len(path)-len(ExtLZ4)]
+	case strings.HasSuffix(lowerPath, extLZ4):
+		basePath = path[:len(path)-len(extLZ4)]
 		compressionType = compLZ4
 	}
 
 	ext := strings.ToLower(filepath.Ext(basePath))
 	switch ext {
-	case ExtCSV:
+	case extCSV:
 		switch compressionType {
 		case compGZ:
 			return CSVGZ
@@ -602,7 +602,7 @@ func DetectFileType(path string) FileType {
 		default:
 			return CSV
 		}
-	case ExtTSV:
+	case extTSV:
 		switch compressionType {
 		case compGZ:
 			return TSVGZ
@@ -623,7 +623,7 @@ func DetectFileType(path string) FileType {
 		default:
 			return TSV
 		}
-	case ExtLTSV:
+	case extLTSV:
 		switch compressionType {
 		case compGZ:
 			return LTSVGZ
@@ -644,7 +644,7 @@ func DetectFileType(path string) FileType {
 		default:
 			return LTSV
 		}
-	case ExtParquet:
+	case extParquet:
 		switch compressionType {
 		case compGZ:
 			return ParquetGZ
@@ -665,7 +665,7 @@ func DetectFileType(path string) FileType {
 		default:
 			return Parquet
 		}
-	case ExtXLSX:
+	case extXLSX:
 		switch compressionType {
 		case compGZ:
 			return XLSXGZ
@@ -686,7 +686,7 @@ func DetectFileType(path string) FileType {
 		default:
 			return XLSX
 		}
-	case ExtJSON:
+	case extJSON:
 		switch compressionType {
 		case compGZ:
 			return JSONGZ
@@ -707,7 +707,7 @@ func DetectFileType(path string) FileType {
 		default:
 			return JSON
 		}
-	case ExtJSONL:
+	case extJSONL:
 		switch compressionType {
 		case compGZ:
 			return JSONLGZ

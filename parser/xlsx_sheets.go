@@ -40,23 +40,3 @@ type ExcelSheet = reader.ExcelSheet
 // cannot be read -- become testable without a workbook that has to be coaxed
 // into failing.
 type ExcelSheetSource = reader.ExcelSheetSource
-
-// ExcelSheets returns every sheet of the workbook in the order the workbook
-// stores them, with the visibility it reports for each.
-//
-// A visibility that cannot be read is an error, not an assumption. Defaulting
-// to visible would load a sheet the workbook hides; defaulting to hidden would
-// drop one it shows.
-func ExcelSheets(f ExcelSheetSource) ([]ExcelSheet, error) {
-	return reader.ExcelSheets(f)
-}
-
-// SelectExcelSheets returns the sheets policy admits, in workbook order, and
-// the names it left out.
-//
-// Every Excel read goes through this rather than filtering at its own call to
-// the sheet list, so "which sheets does this workbook contribute?" has one
-// answer whatever opened the file.
-func SelectExcelSheets(f ExcelSheetSource, policy ExcelSheetPolicy) (loaded, skipped []string, err error) {
-	return reader.SelectExcelSheets(f, policy)
-}

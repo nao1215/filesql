@@ -22,7 +22,7 @@ func openTestDB(t *testing.T) *sql.DB {
 }
 
 // TestRecordFileSource_ReportsAnUnusableDatabase covers the two writes the
-// bookkeeping makes. They run on the caller's own DBTX, so a database that
+// bookkeeping makes. They run on the caller's own dbtx, so a database that
 // cannot take them has to be reported rather than leaving tables whose source is
 // silently unrecorded — a later dump would then refuse with a puzzling
 // "no source recorded".

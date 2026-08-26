@@ -48,10 +48,10 @@ const (
 
 // recordFileSource remembers that baseTableName was loaded from sourcePath.
 //
-// It runs on the same DBTX that created the tables, so a caller-owned
+// It runs on the same dbtx that created the tables, so a caller-owned
 // transaction commits or discards both together. An empty sourcePath records
 // nothing: a load from an io.Reader has no file to go back to.
-func recordFileSource(ctx context.Context, db DBTX, baseTableName, sourcePath string, format sourceFormat) error {
+func recordFileSource(ctx context.Context, db dbtx, baseTableName, sourcePath string, format sourceFormat) error {
 	if sourcePath == "" {
 		return nil
 	}

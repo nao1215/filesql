@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	moovach "github.com/moov-io/ach"
 	"github.com/nao1215/filesql/parser/ach"
 )
 
@@ -34,29 +33,4 @@ func ExampleParseReader() {
 	// entries rows: 1
 	// addenda rows: 0
 	// entry columns: 13
-}
-
-func ExampleFromFile() {
-	// FromFile is ParseReader for a caller who already has the moov-io value,
-	// having read or built it themselves.
-	file, err := os.Open("testdata/ppd-debit.ach")
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-	defer file.Close()
-
-	parsed, err := moovach.NewReader(file).Read()
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-
-	tableSet := ach.FromFile(&parsed)
-
-	fmt.Println(tableSet.GetFileHeaderTable().Headers)
-	fmt.Println("entries rows:", len(tableSet.GetEntriesTable().Records))
-	// Output:
-	// [immediate_destination immediate_origin file_creation_date file_creation_time file_id_modifier immediate_destination_name immediate_origin_name reference_code]
-	// entries rows: 1
 }

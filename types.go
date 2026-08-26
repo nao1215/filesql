@@ -18,8 +18,8 @@ const jsonDataHeader = reader.JSONDataColumn
 
 // Processing constants (rows-based)
 const (
-	// DefaultChunkSize is the default number of rows read per chunk.
-	DefaultChunkSize = 1000
+	// defaultChunkSizeRows is the default number of rows read per chunk.
+	defaultChunkSizeRows = 1000
 )
 
 // tableName represents a table name with validation
@@ -171,7 +171,7 @@ type chunkSizeValue int
 func newChunkSize(size int) chunkSizeValue {
 	// A chunk of no rows would read a file forever.
 	if size < 1 {
-		return chunkSizeValue(DefaultChunkSize)
+		return chunkSizeValue(defaultChunkSizeRows)
 	}
 	return chunkSizeValue(size)
 }

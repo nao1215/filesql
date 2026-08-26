@@ -248,7 +248,7 @@ func TestDBBuilder_SetDefaultChunkSize(t *testing.T) {
 
 	t.Run("zero or negative size ignored", func(t *testing.T) {
 		t.Parallel()
-		defaultSize := DefaultChunkSize
+		defaultSize := defaultChunkSizeRows
 		builder := NewBuilder()
 
 		// Zero should be ignored
@@ -270,7 +270,7 @@ func TestDBBuilder_SetDefaultChunkSize(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 
 		ctx := context.Background()
-		for _, size := range []int{1, 2, 5, 10, DefaultChunkSize} {
+		for _, size := range []int{1, 2, 5, 10, defaultChunkSizeRows} {
 			want := (rows + size - 1) / size
 
 			counter := &chunkCountingLogger{}
@@ -308,7 +308,7 @@ func TestDBBuilder_SetDefaultChunkSize(t *testing.T) {
 		ctx := context.Background()
 
 		var want string
-		for _, size := range []int{1, 2, 7, 20, DefaultChunkSize} {
+		for _, size := range []int{1, 2, 7, 20, defaultChunkSizeRows} {
 			validated, err := NewBuilder().
 				AddReader(strings.NewReader(body), "counted", FileTypeCSV).
 				SetDefaultChunkSize(size).

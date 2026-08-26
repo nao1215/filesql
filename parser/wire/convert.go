@@ -19,12 +19,13 @@ type TableSet struct {
 	original *wire.File
 }
 
-// FromFile converts a wire.File to a TableSet with a single flat table.
-// The returned TableSet can be used with filesql for SQL queries.
+// fromFile converts a wire.File to a TableSet with a single flat table.
+// It is what ParseReader hands back, and the TableSet can be used with filesql
+// for SQL queries.
 //
-// Note: The TableSet stores a reference to the original file (not a copy).
-// ToFile() creates a deep copy before applying TableData modifications.
-func FromFile(file *wire.File) *TableSet {
+// Note: The TableSet stores a reference to the original file (not a copy), and
+// toFile creates a deep copy before applying TableData modifications.
+func fromFile(file *wire.File) *TableSet {
 	if file == nil {
 		return nil
 	}
@@ -49,14 +50,14 @@ func FromFile(file *wire.File) *TableSet {
 	return ts
 }
 
-// ToFile reconstructs a wire.File from modified TableData.
+// toFile reconstructs a wire.File from modified TableData.
 // This allows round-trip editing: Wire -> TableData -> SQL modifications -> Wire
 //
 // The function creates a deep copy of the original wire file and applies
 // modifications from the TableData. Sub-structs that were nil in the original
 // file are lazily allocated when the TableData record contains non-empty values
 // for their fields, enabling addition of new sections via SQL edits.
-func (ts *TableSet) ToFile() (*wire.File, error) {
+func (ts *TableSet) toFile() (*wire.File, error) {
 	if ts == nil || ts.original == nil {
 		return nil, errors.New("no original wire file available")
 	}
@@ -88,7 +89,7 @@ func ParseReader(reader io.Reader) (*TableSet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse wire file: %w", err)
 	}
-	return FromFile(&file), nil
+	return fromFile(&file), nil
 }
 
 // WriteToWriter writes the wire file from a TableSet to an io.Writer.
@@ -102,7 +103,7 @@ func (ts *TableSet) WriteToWriter(writer io.Writer) error {
 	if writer == nil {
 		return errors.New("wire: writer must not be nil")
 	}
-	wireFile, err := ts.ToFile()
+	wireFile, err := ts.toFile()
 	if err != nil {
 		return err
 	}
@@ -119,7 +120,7 @@ func (ts *TableSet) GetMessageTable() *parser.TableData {
 }
 
 // UpdateMessageFromTableData updates the internal message data from modified TableData.
-// Call this after making SQL modifications to prepare for ToFile().
+// Call this after making SQL modifications to prepare for WriteToWriter.
 func (ts *TableSet) UpdateMessageFromTableData(td *parser.TableData) {
 	if ts != nil {
 		ts.Message = td
