@@ -582,7 +582,14 @@ func TestLoadRetryBudgetIsSpentOnWaiting(t *testing.T) {
 		start := time.Now()
 		// Waiting is cheap here and the attempt is not, which is the workbook's
 		// shape: without a bound of its own the retry would keep re-parsing.
-		err := retryWhileLockedFor(t.Context(), time.Minute, 60*time.Millisecond, func() error {
+		//
+		// The budget is twelve times one attempt rather than three. At three
+		// this test failed under -race on a loaded machine: one 20ms sleep can
+		// take longer than a 60ms budget when every core is busy, and then only
+		// one attempt fits and the assertion below has nothing to stand on. The
+		// ratio is what the test is about, so widening it costs a fifth of a
+		// second and takes the wall clock out of the result.
+		err := retryWhileLockedFor(t.Context(), time.Minute, 240*time.Millisecond, func() error {
 			attempts++
 			time.Sleep(20 * time.Millisecond)
 			return locked()
@@ -591,7 +598,7 @@ func TestLoadRetryBudgetIsSpentOnWaiting(t *testing.T) {
 
 		require.Error(t, err)
 		assert.True(t, lockedByAnotherConnection(err))
-		assert.Less(t, elapsed, time.Second, "the attempts have to stop even while there is waiting left")
+		assert.Less(t, elapsed, 2*time.Second, "the attempts have to stop even while there is waiting left")
 		assert.Greater(t, attempts, 1)
 	})
 
