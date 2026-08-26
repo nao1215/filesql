@@ -401,8 +401,8 @@ func TestDatePartUnsupported(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	for _, q := range []string{
-		`SELECT DATE_PART('century', '2026-07-28')`,
-		`SELECT DATE_TRUNC('decade', '2026-07-28')`,
+		`SELECT DATE_PART('fortnight', '2026-07-28')`,
+		`SELECT DATE_TRUNC('fortnight', '2026-07-28')`,
 		`SELECT DATE_DIFF('2026-01-01', '2020-01-01', 'century')`,
 		`SELECT CHR(-1)`,
 		`SELECT CHR(2000000)`,
@@ -854,6 +854,34 @@ func TestDialectBoundariesFollowTheirEngine(t *testing.T) {
 		{name: "postgresql least of only nulls", dialect: PostgreSQL, query: `SELECT LEAST(NULL, NULL)`, wantNull: true},
 		{name: "postgresql greatest with only a trailing value", dialect: PostgreSQL, query: `SELECT GREATEST(NULL, NULL, 7)`, want: "7"},
 		{name: "postgresql greatest of one argument", dialect: PostgreSQL, query: `SELECT GREATEST(3)`, want: "3"},
+
+		// PostgreSQL's coarse and sub-second date parts. Every want was read
+		// from PostgreSQL 17.10 rather than derived; the centuries and
+		// millennia count from 1, which is the off-by-one these units invite.
+		{name: "postgresql millennium", dialect: PostgreSQL, query: `SELECT DATE_PART('millennium', TIMESTAMP '2024-03-05 10:11:12')`, want: "3"},
+		{name: "postgresql millennium at its first year", dialect: PostgreSQL, query: `SELECT DATE_PART('millennium', DATE '2000-01-01')`, want: "2"},
+		{name: "postgresql century", dialect: PostgreSQL, query: `SELECT DATE_PART('century', DATE '2024-03-05')`, want: "21"},
+		{name: "postgresql century of a year ending in 00", dialect: PostgreSQL, query: `SELECT DATE_PART('century', DATE '2000-06-01')`, want: "20"},
+		{name: "postgresql century of a year ending in 01", dialect: PostgreSQL, query: `SELECT DATE_PART('century', DATE '2001-06-01')`, want: "21"},
+		{name: "postgresql decade", dialect: PostgreSQL, query: `SELECT DATE_PART('decade', DATE '2024-01-01')`, want: "202"},
+		{name: "postgresql isoyear inside its own year", dialect: PostgreSQL, query: `SELECT DATE_PART('isoyear', DATE '2024-01-01')`, want: "2024"},
+		{name: "postgresql isoyear borrowed from the year before", dialect: PostgreSQL, query: `SELECT DATE_PART('isoyear', DATE '2023-01-01')`, want: "2022"},
+		{name: "postgresql milliseconds carry the seconds", dialect: PostgreSQL, query: `SELECT DATE_PART('milliseconds', TIMESTAMP '2024-03-05 10:11:12.5')`, want: "12500"},
+		{name: "postgresql microseconds carry the seconds", dialect: PostgreSQL, query: `SELECT DATE_PART('microseconds', TIMESTAMP '2024-03-05 10:11:12.5')`, want: "12500000"},
+		{name: "postgresql second carries its fraction", dialect: PostgreSQL, query: `SELECT DATE_PART('second', TIMESTAMP '2024-03-05 10:11:12.5')`, want: "12.5"},
+		{name: "postgresql second without a fraction", dialect: PostgreSQL, query: `SELECT DATE_PART('second', TIMESTAMP '2024-03-05 10:11:12')`, want: "12"},
+		// The other two dialects number seconds whole, so the fraction above
+		// must not have reached the shared helper.
+		{name: "mysql second is whole", dialect: MySQL, query: `SELECT SECOND('2024-03-05 10:11:12.5')`, want: "12"},
+		{name: "googlesql second is whole", dialect: GoogleSQL, query: `SELECT EXTRACT(SECOND FROM TIMESTAMP '2024-03-05 10:11:12.5')`, want: "12"},
+		{name: "googlesql isoyear still answers", dialect: GoogleSQL, query: `SELECT EXTRACT(ISOYEAR FROM DATE '2023-01-01')`, want: "2022"},
+
+		{name: "postgresql date_trunc decade", dialect: PostgreSQL, query: `SELECT DATE_TRUNC('decade', TIMESTAMP '2024-03-05 10:11:12')`, want: "2020-01-01 00:00:00"},
+		{name: "postgresql date_trunc century", dialect: PostgreSQL, query: `SELECT DATE_TRUNC('century', TIMESTAMP '2024-03-05 10:11:12')`, want: "2001-01-01 00:00:00"},
+		{name: "postgresql date_trunc millennium", dialect: PostgreSQL, query: `SELECT DATE_TRUNC('millennium', TIMESTAMP '2024-03-05 10:11:12')`, want: "2001-01-01 00:00:00"},
+		{name: "postgresql date_trunc millisecond", dialect: PostgreSQL, query: `SELECT DATE_TRUNC('millisecond', TIMESTAMP '2024-03-05 10:11:12.123456')`, want: "2024-03-05 10:11:12.123"},
+		{name: "postgresql date_trunc microsecond", dialect: PostgreSQL, query: `SELECT DATE_TRUNC('microsecond', TIMESTAMP '2024-03-05 10:11:12.123456')`, want: "2024-03-05 10:11:12.123456"},
+		{name: "postgresql date_trunc millisecond of a whole second", dialect: PostgreSQL, query: `SELECT DATE_TRUNC('millisecond', TIMESTAMP '2024-03-05 10:11:12')`, want: "2024-03-05 10:11:12"},
 
 		// A sign is told from the binary operator by what stands before it.
 		{name: "a sign after a closing paren is binary", dialect: MySQL, query: `SELECT (4) - 1 >> 1`, want: "1"},

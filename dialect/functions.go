@@ -898,7 +898,15 @@ func fnDatePart(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
-	return datePartValue(strings.ToLower(strings.TrimSpace(unit)), tm)
+	unit = strings.ToLower(strings.TrimSpace(unit))
+	// PostgreSQL's second carries the fraction of a second with it, so
+	// DATE_PART('second', '10:11:12.5') is 12.5. MySQL's SECOND() and
+	// BigQuery's EXTRACT(SECOND) both answer the whole number, which is what
+	// the shared helper below gives them.
+	if unit == unitSecond {
+		return secondsWithFraction(tm), nil
+	}
+	return datePartValue(unit, tm)
 }
 
 func datePartValue(unit string, tm time.Time) (driver.Value, error) {
@@ -936,6 +944,26 @@ func datePartValue(unit string, tm time.Time) (driver.Value, error) {
 	case unitWeek:
 		_, wk := tm.ISOWeek()
 		return int64(wk), nil
+	case unitISOYear:
+		// The year the ISO week belongs to, which is the companion of the ISO
+		// week above: without it the last week of December and the first week
+		// of January group together.
+		year, _ := tm.ISOWeek()
+		return int64(year), nil
+	case "decade":
+		return int64(decadeOf(tm.Year())), nil
+	case "century":
+		return int64(centuryOf(tm.Year())), nil
+	case "millennium", "millenium":
+		// PostgreSQL answers to the misspelling as well as to the spelling.
+		return int64(millenniumOf(tm.Year())), nil
+	case "milliseconds":
+		return secondsWithFraction(tm) * 1000, nil
+	case "microseconds":
+		// A microsecond is the finest a PostgreSQL timestamp holds, so the
+		// count is always whole; answering it as an integer also keeps SQLite
+		// from spelling a large REAL in exponent form.
+		return int64(math.Round(secondsWithFraction(tm) * 1000000)), nil
 	case "epoch":
 		return tm.Unix(), nil
 	case "date":
@@ -949,6 +977,41 @@ func datePartValue(unit string, tm time.Time) (driver.Value, error) {
 	default:
 		return nil, fmt.Errorf("dialect: unsupported date part %q", unit)
 	}
+}
+
+// secondsWithFraction is the seconds field of a time together with whatever
+// fraction of a second it carries. PostgreSQL's second, milliseconds and
+// microseconds parts are all built from it, which is why 12.5 seconds is 12500
+// milliseconds rather than 500.
+func secondsWithFraction(tm time.Time) float64 {
+	return float64(tm.Second()) + float64(tm.Nanosecond())/1e9
+}
+
+// decadeOf, centuryOf and millenniumOf number the year the way PostgreSQL does.
+// A century counts from 1, so the year 2000 is in century 20 and 2001 is the
+// first year of century 21; the same rule one order of magnitude up gives the
+// millennium. A decade is the plain division, since there is no year zero to
+// shift it. Each has its own arm for a year before the common era, where the
+// division has to round the other way.
+func decadeOf(year int) int {
+	if year >= 0 {
+		return year / 10
+	}
+	return -((8 - (year - 1)) / 10)
+}
+
+func centuryOf(year int) int {
+	if year > 0 {
+		return (year + 99) / 100
+	}
+	return -((99 - (year - 1)) / 100)
+}
+
+func millenniumOf(year int) int {
+	if year > 0 {
+		return (year + 999) / 1000
+	}
+	return -((999 - (year - 1)) / 1000)
 }
 
 // fnGoogleSQLDatePart implements EXTRACT under GoogleSQL. BigQuery's WEEK
@@ -974,9 +1037,6 @@ func fnGoogleSQLDatePart(args []driver.Value) (driver.Value, error) {
 	case unitISOWeek:
 		_, week := tm.ISOWeek()
 		return int64(week), nil
-	case unitISOYear:
-		year, _ := tm.ISOWeek()
-		return int64(year), nil
 	default:
 		return datePartValue(unit, tm)
 	}
@@ -1849,9 +1909,33 @@ func fnDateTrunc(args []driver.Value) (driver.Value, error) {
 		return time.Date(y, mo, d, tm.Hour(), tm.Minute(), 0, 0, loc).Format(layoutDateTime), nil
 	case unitSecond:
 		return time.Date(y, mo, d, tm.Hour(), tm.Minute(), tm.Second(), 0, loc).Format(layoutDateTime), nil
+	case "decade":
+		return time.Date(decadeOf(y)*10, 1, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
+	case "century":
+		// A century starts in its first year, which is the year ending in 01:
+		// truncating 2024 to a century gives 2001 rather than 2000.
+		return time.Date((centuryOf(y)-1)*100+1, 1, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
+	case "millennium", "millenium":
+		return time.Date((millenniumOf(y)-1)*1000+1, 1, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
+	case "milliseconds", "millisecond":
+		return truncatedFraction(tm, time.Millisecond), nil
+	case "microseconds", "microsecond":
+		return truncatedFraction(tm, time.Microsecond), nil
 	default:
 		return nil, fmt.Errorf("dialect: unsupported DATE_TRUNC unit %q", unit)
 	}
+}
+
+// truncatedFraction rounds a time down to a multiple of unit and spells it with
+// however much of the fraction survives, trailing zeros removed, which is how
+// PostgreSQL prints a timestamp: DATE_TRUNC('millisecond', '10:11:12.123456')
+// is 10:11:12.123 and a whole second keeps no decimal point at all.
+func truncatedFraction(tm time.Time, unit time.Duration) string {
+	out := tm.Truncate(unit)
+	if out.Nanosecond() == 0 {
+		return out.Format(layoutDateTime)
+	}
+	return strings.TrimRight(out.Format(layoutDateTime+".000000000"), "0")
 }
 
 // fnSplitPart implements PostgreSQL SPLIT_PART(string, delimiter, n) with a
