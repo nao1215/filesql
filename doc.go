@@ -1,15 +1,22 @@
 // Package filesql provides a file-based SQL driver implementation that enables
-// querying CSV, TSV, LTSV, Parquet, and Excel (XLSX) files using SQLite3 SQL syntax.
+// querying CSV, TSV, LTSV, JSON, JSONL, Parquet, and Excel (XLSX) files using
+// SQLite3 SQL syntax.
 //
 // filesql allows you to treat structured text files as SQL databases without
 // any data import or transformation steps. It uses SQLite3 as an in-memory
 // database engine, providing full SQL capabilities including JOINs, aggregations,
 // window functions, and CTEs.
 //
+// ACH (NACHA) and Fedwire files are also loaded, and both are experimental: what
+// they turn into and how they behave on a malformed file may still change.
+//
 // # Features
 //
-//   - Query CSV, TSV, LTSV, Parquet, and Excel (XLSX) files using standard SQL
-//   - Automatic handling of compressed files (gzip, bzip2, xz, zstandard)
+//   - Query CSV, TSV, LTSV, JSON, JSONL, Parquet, and Excel (XLSX) files using
+//     standard SQL
+//   - Automatic handling of compressed files: gzip (.gz), bzip2 (.bz2), xz
+//     (.xz), zstandard (.zst), zlib (.z), snappy (.snappy), s2 (.s2) and
+//     LZ4 (.lz4)
 //   - Support for multiple input sources (files, directories, io.Reader, embed.FS)
 //   - Efficient streaming for large files with configurable chunk sizes
 //   - Cross-platform compatibility (Linux, macOS, Windows)
@@ -86,10 +93,24 @@
 //
 // # Column Name Handling
 //
-// Column names are handled with case-sensitive comparison for duplicate detection,
-// maintaining backward compatibility. Headers with identical names after trimming
-// whitespace (regardless of case differences) are considered duplicates and will
-// result in an error.
+// A header that names one column twice is refused with ErrDuplicateColumn. Two
+// names are the same column if either of two separate rules says so, and the
+// rules are applied one at a time rather than combined:
+//
+//   - Two names that differ only in ASCII letter case are one column, which is
+//     SQLite's rule, since SQLite is what ends up holding them: "ID" and "id"
+//     are a duplicate. The folding stops at ASCII, as SQLite's does, so "ä" and
+//     "Ä" remain two columns.
+//   - Two names that are identical after leading and trailing whitespace is
+//     trimmed are one column, which is filesql's own rule: " name " and "name"
+//     are one name typed twice.
+//
+// Because the two are separate, neither is applied on top of the other: " A"
+// beside "a" is accepted, since trimming alone does not make them equal and
+// folding alone does not either, and SQLite likewise keeps them as two columns.
+//
+// LTSV carries its labels on every record rather than in a header, so the check
+// runs per record; a record holding "A:1\ta:2" is refused for the same reason.
 //
 // For complete SQL syntax documentation, see: https://www.sqlite.org/lang.html
 //

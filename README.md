@@ -53,6 +53,8 @@ filesql is for cases where the data is already in a file and the fastest useful 
 
 Two inputs are the same source only when they are in the same place. `dir/users.csv` and `dir/users.csv.gz` are one dataset offered twice, and the plain one is read; `a/users.csv` and `b/users.csv` are two files, and both are loaded. What happens when both then want the table `users` is the loading API's business: `Open` and `OpenContext` build a fresh database and refuse it with `ErrDuplicateTable`, while `LoadInto` and `LoadIntoTx` load into a database you own and keep their last-wins rule, so the later input replaces the table. Neither one silently drops a file. Table names are compared the way SQLite compares identifiers, with ASCII case folded, so `Users.csv` and `users.csv` want the same table too.
 
+Column names inside a file follow two separate rules, and a header that breaks either is refused with `ErrDuplicateColumn` before it reaches SQLite. Two names differing only in ASCII letter case are one column, because SQLite is what holds them — `ID` and `id` are a duplicate — and the folding stops at ASCII as SQLite's does, so `ä` and `Ä` stay two columns. Two names identical after their surrounding whitespace is trimmed are one column too: `name` and `" name "` are one name typed twice. The rules are applied one at a time and never combined, so `" A"` beside `a` is accepted, which is what SQLite does with it as well. LTSV carries its labels on every record rather than in a header, so the same check runs per record.
+
 Compressed wrappers are supported for CSV, TSV, LTSV, JSON, JSONL, Parquet, and XLSX:
 `.gz`, `.bz2`, `.xz`, `.zst`, `.z`, `.snappy`, `.s2`, `.lz4`.
 
