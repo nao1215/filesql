@@ -904,6 +904,10 @@ func TestDialectBoundariesFollowTheirEngine(t *testing.T) {
 		{name: "mysql interval operator crosses a month", dialect: MySQL, query: `SELECT DATE '2026-01-31' + INTERVAL 1 MONTH`, want: "2026-02-28"},
 		{name: "mysql interval operator with a negative amount", dialect: MySQL, query: `SELECT DATE '2026-01-01' + INTERVAL -1 DAY`, want: "2025-12-31"},
 		{name: "googlesql interval operator adds a day", dialect: GoogleSQL, query: `SELECT DATE '2026-01-01' + INTERVAL 1 DAY`, want: "2026-01-02"},
+		// The amount is an expression, and a CASE inside it holds the words
+		// that otherwise end the scan for the unit.
+		{name: "mysql interval amount is a case expression", dialect: MySQL, query: `SELECT DATE '2026-01-01' + INTERVAL CASE WHEN 1 THEN 1 ELSE 2 END DAY`, want: "2026-01-02"},
+		{name: "mysql interval amount is arithmetic", dialect: MySQL, query: `SELECT DATE '2026-01-01' + INTERVAL 1 + 1 DAY`, want: "2026-01-03"},
 
 		// SUBSTRING(s FROM p) with a pattern extracts the match, and returns
 		// the first capture group when the pattern has one. Every want was
@@ -918,6 +922,12 @@ func TestDialectBoundariesFollowTheirEngine(t *testing.T) {
 		{name: "postgresql substring with a length is positional", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM 2 FOR 3)`, want: "bc1"},
 		// The other two dialects have only the positional reading.
 		{name: "mysql substring from a string operand", dialect: MySQL, query: `SELECT SUBSTRING('abc123' FROM 2)`, want: "bc123"},
+		// A non-literal operand carries no kind into the translation, so the
+		// helper reads it from the value: a number is a position and anything
+		// else is a pattern.
+		{name: "postgresql substring from a computed position", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM 1 + 1)`, want: "bc123"},
+		{name: "postgresql substring from a column pattern", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM p) FROM (SELECT '[0-9]+' AS p)`, want: "123"},
+		{name: "postgresql substring from a column position", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM p) FROM (SELECT 2 AS p)`, want: "bc123"},
 
 		// A sign is told from the binary operator by what stands before it.
 		{name: "a sign after a closing paren is binary", dialect: MySQL, query: `SELECT (4) - 1 >> 1`, want: "1"},

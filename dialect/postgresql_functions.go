@@ -34,6 +34,11 @@ func postgresqlScalarFunctions() map[string]scalarSpec {
 		// Regular expressions.
 		"regexp_count": {-1, fnRegexpCount},
 
+		// SUBSTRING(s FROM x) where x is neither a string literal nor a number
+		// literal: the rewrite cannot see what it is, so the reading is chosen
+		// here from the value.
+		"postgresql_substring_from": {2, fnPostgresSubstringFrom},
+
 		// Arithmetic SQLite has no operator or function for.
 		"cbrt":      {1, fnCbrt},
 		"factorial": {1, fnFactorial},
@@ -229,6 +234,22 @@ func fnRegexpCount(args []driver.Value) (driver.Value, error) {
 		return nil, err
 	}
 	return int64(len(re.FindAllString(string(runes[start-1:]), -1))), nil
+}
+
+// fnPostgresSubstringFrom implements SUBSTRING(s FROM x) for an operand whose
+// kind the translation could not see. PostgreSQL chooses between a position and
+// a pattern on the operand's declared type; SQLite has no declared type, so the
+// choice is made from the value: a number is a position and anything else is a
+// pattern. That is PostgreSQL's answer for every integer column and for every
+// text column that does not hold digits, and differs from it for a text column
+// that does. A string literal or a number literal in the query never reaches
+// here -- the rewrite reads those from the query text, where PostgreSQL's own
+// rule applies exactly.
+func fnPostgresSubstringFrom(args []driver.Value) (driver.Value, error) {
+	if _, isNumber := toFloat(args[1]); isNumber {
+		return fnPostgreSQLSubstr(args)
+	}
+	return fnRegexpExtract(args)
 }
 
 // --- arithmetic ---
@@ -515,7 +536,14 @@ func fnPostgresMakeTime(args []driver.Value) (driver.Value, error) {
 	if second < 0 || second >= 60 {
 		return nil, fmt.Errorf("dialect: MAKE_TIME: second %v is out of range", second)
 	}
-	return fmt.Sprintf("%02d:%02d:%02d", hour, minute, int(second)), nil
+	out := fmt.Sprintf("%02d:%02d:%02d", hour, minute, int(second))
+	// The seconds field takes a fraction, and PostgreSQL keeps it:
+	// MAKE_TIME(10, 11, 12.5) is 10:11:12.5. Its trailing zeros go, as they do
+	// everywhere else a fraction of a second is printed here.
+	if frac := second - math.Trunc(second); frac != 0 {
+		out += strings.TrimRight(strconv.FormatFloat(frac, 'f', 6, 64)[1:], "0")
+	}
+	return out, nil
 }
 
 // fnDateBin rounds a timestamp down to the start of the stride-wide interval it

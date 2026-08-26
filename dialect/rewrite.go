@@ -1069,7 +1069,7 @@ func intervalUnitAfter(tokens []token, start int) int {
 	if start < 0 {
 		return -1
 	}
-	depth := 0
+	depth, caseDepth := 0, 0
 	for i := start; i < len(tokens); i++ {
 		t := tokens[i]
 		if !isSignificant(t) {
@@ -1086,6 +1086,16 @@ func intervalUnitAfter(tokens []token, start int) int {
 		case depth > 0:
 		case isOpEq(t, ","):
 			return -1
+		case isWordEq(t, "CASE"):
+			// A CASE is one expression and its WHEN, THEN and ELSE are inside
+			// it, so the stop words below do not apply until its END.
+			caseDepth++
+		case isWordEq(t, "END"):
+			if caseDepth == 0 {
+				return -1
+			}
+			caseDepth--
+		case caseDepth > 0:
 		case t.kind == tokWord:
 			if _, ok := intervalUnits[strings.ToUpper(t.text)]; ok {
 				return i

@@ -106,10 +106,10 @@
 // templates as well as the date ones, and TO_DATE and TO_TIMESTAMP read their
 // templates through the same scanner.
 //
-// What the translation cannot reach is SQLite's type system. SQLite has three
-// storage classes for a value and no boolean, no interval, no array and no
-// arbitrary-precision numeric, so a construct whose answer is one of those has
-// nowhere to land. A comparison answers 1 or 0 rather than true or false; an
+// What the translation cannot reach is SQLite's type system. SQLite has five
+// storage classes -- NULL, INTEGER, REAL, TEXT and BLOB -- and so no boolean,
+// no interval, no array and no arbitrary-precision numeric, and a construct
+// whose answer is one of those has nowhere to land. A comparison answers 1 or 0 rather than true or false; an
 // INTERVAL literal is translatable only as the right operand of date
 // arithmetic, and anywhere else it is refused with ErrUnsupportedSyntax rather
 // than passed on to fail as a syntax error naming something else; an array

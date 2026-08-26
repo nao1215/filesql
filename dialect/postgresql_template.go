@@ -202,19 +202,23 @@ func padName(s string, width int, fillMode bool) string {
 	return s + strings.Repeat(" ", width-len(s))
 }
 
-// padNumber writes n zero-padded to width, or without the padding under FM.
+// padNumber writes n zero-padded to width, or without the padding under FM. A
+// negative number keeps its sign in front of the zeros rather than behind them,
+// which is how PostgreSQL prints the one field that can be negative: CC on a
+// date before the common era is -01.
 func padNumber(n, width int, fillMode bool) string {
-	s := strconv.Itoa(n)
+	sign := ""
 	if n < 0 {
-		s = "-" + strconv.Itoa(-n)
+		sign, n = "-", -n
 	}
+	s := strconv.Itoa(n)
 	if fillMode {
-		return s
+		return sign + s
 	}
 	for len(s) < width {
 		s = "0" + s
 	}
-	return s
+	return sign + s
 }
 
 // romanNumerals spells 1..3999, which is all a month number or a small integer
@@ -268,8 +272,13 @@ func pgFormatTime(format string, tm time.Time) string {
 //
 //nolint:cyclop,funlen,gocyclo // one arm per template pattern; splitting it would only scatter the table
 func pgTimePattern(it pgTemplateItem, tm time.Time, fillMode bool) (string, int) {
-	year, month, day := tm.Date()
-	isoYear, isoWeek := tm.ISOWeek()
+	calendarYear, month, day := tm.Date()
+	rawISOYear, isoWeek := tm.ISOWeek()
+	// The year patterns print the year of its era, which is what BC and AD
+	// name: PostgreSQL prints TO_CHAR(DATE '0044-03-15 BC', 'YYYY') as 0044,
+	// and the year Go counts is -43. CC and the era patterns read the year Go
+	// counts, since one keeps the sign and the other reports it.
+	year, isoYear := eraYear(calendarYear), eraYear(rawISOYear)
 	switch it.pattern {
 	case patHH24:
 		return padNumber(tm.Hour(), 2, fillMode), tm.Hour()
@@ -315,7 +324,7 @@ func pgTimePattern(it pgTemplateItem, tm time.Time, fillMode bool) (string, int)
 	case "I":
 		return strconv.Itoa(isoYear % 10), isoYear % 10
 	case "BC", "AD", "B.C.", "A.D.":
-		return pgEra(it, year), 0
+		return pgEra(it, calendarYear), 0
 	case patMonth:
 		return applyCase(it.pattern, it.text, padName(month.String(), 9, fillMode)), int(month)
 	case patMon:
@@ -348,7 +357,7 @@ func pgTimePattern(it pgTemplateItem, tm time.Time, fillMode bool) (string, int)
 	case "IW":
 		return padNumber(isoWeek, 2, fillMode), isoWeek
 	case "CC":
-		return padNumber(centuryOf(year), 2, fillMode), centuryOf(year)
+		return padNumber(centuryOf(calendarYear), 2, fillMode), centuryOf(calendarYear)
 	case "Q":
 		n := (int(month)-1)/3 + 1
 		return strconv.Itoa(n), n
@@ -388,6 +397,15 @@ func pgEra(it pgTemplateItem, year int) string {
 		s = s[:1] + "." + s[1:] + "."
 	}
 	return applyCase(it.pattern, it.text, s)
+}
+
+// eraYear turns the year Go counts, where 1 BC is year 0 and 2 BC is year -1,
+// into the year its era names.
+func eraYear(year int) int {
+	if year <= 0 {
+		return 1 - year
+	}
+	return year
 }
 
 // isoWeekday numbers Monday 1 through Sunday 7, which is what ID prints and

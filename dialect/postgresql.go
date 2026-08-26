@@ -310,33 +310,51 @@ func rewritePostgresSubstringCall(tokens []token, open, closeIdx int, recurse ca
 	}
 	from := topLevelWord(tokens, open, closeIdx, "FROM")
 	forKw := topLevelWord(tokens, open, closeIdx, "FOR")
-	if from >= 0 && forKw < 0 {
-		if pattern, ok := loneStringLiteral(tokens, from+1, closeIdx); ok {
-			subject, err := recurse(tokens[open+1 : from])
-			if err != nil {
-				return nil, false, err
-			}
-			return callTokens("regexp_extract", trimSpaceTokens(subject), []token{pattern}), true, nil
-		}
+	if from < 0 || forKw >= 0 {
+		return rewriteSubstringCall(tokens, open, closeIdx, "postgresql_substr", recurse)
 	}
-	return rewriteSubstringCall(tokens, open, closeIdx, "postgresql_substr", recurse)
+	subject, err := recurse(tokens[open+1 : from])
+	if err != nil {
+		return nil, false, err
+	}
+	operand, err := recurse(tokens[from+1 : closeIdx])
+	if err != nil {
+		return nil, false, err
+	}
+	subject, operand = trimSpaceTokens(subject), trimSpaceTokens(operand)
+	switch kind := loneLiteralKind(tokens, from+1, closeIdx); kind {
+	case tokString:
+		return callTokens("regexp_extract", subject, operand), true, nil
+	case tokNumber:
+		return callTokens("postgresql_substr", subject, operand), true, nil
+	default:
+		// A column, a placeholder or an expression: the kind of the operand is
+		// not in the query text, so the reading has to be chosen from the value
+		// at run time. It is the reading PostgreSQL would have chosen whenever
+		// the operand's type matches what its value looks like, which is every
+		// integer column and every text column that does not hold digits.
+		return callTokens("postgresql_substring_from", subject, operand), true, nil
+	}
 }
 
-// loneStringLiteral reports the single string literal that fills the tokens
-// between from and end, if that is all there is between them.
-func loneStringLiteral(tokens []token, from, end int) (token, bool) {
-	found := token{}
+// loneLiteralKind reports the kind of the single literal that fills the tokens
+// between from and end, or tokWord when what is there is anything else.
+func loneLiteralKind(tokens []token, from, end int) tokenKind {
+	kind := tokWord
 	seen := false
 	for i := from; i < end; i++ {
 		if !isSignificant(tokens[i]) {
 			continue
 		}
-		if seen || tokens[i].kind != tokString {
-			return token{}, false
+		if seen || (tokens[i].kind != tokString && tokens[i].kind != tokNumber) {
+			return tokWord
 		}
-		found, seen = tokens[i], true
+		kind, seen = tokens[i].kind, true
 	}
-	return found, seen
+	if !seen {
+		return tokWord
+	}
+	return kind
 }
 
 // rewriteSubstring implements P-5: SUBSTRING(x FROM n FOR m) -> target(x, n, m).

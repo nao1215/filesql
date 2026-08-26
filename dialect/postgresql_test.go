@@ -49,7 +49,10 @@ func TestPostgreSQLTranslate(t *testing.T) {
 		// stream is where that information still exists.
 		{"P-5_substring_pattern", "SELECT SUBSTRING(name FROM '[0-9]+') FROM t", `SELECT regexp_extract(name, '[0-9]+') AS "SUBSTRING(name FROM '[0-9]+')" FROM t`},
 		{"P-5_substring_numeric_operand_is_a_position", "SELECT SUBSTRING(name FROM 2) FROM t", "SELECT postgresql_substr(name, 2) AS \"SUBSTRING(name FROM 2)\" FROM t"},
-		{"P-5_substring_column_operand_is_a_position", "SELECT SUBSTRING(name FROM n) FROM t", "SELECT postgresql_substr(name, n) AS \"SUBSTRING(name FROM n)\" FROM t"},
+		// A column is neither literal, so which reading applies is not in the
+		// query text and the helper decides it from the value.
+		{"P-5_substring_column_operand_decides_at_run_time", "SELECT SUBSTRING(name FROM n) FROM t", "SELECT postgresql_substring_from(name, n) AS \"SUBSTRING(name FROM n)\" FROM t"},
+		{"P-5_substring_expression_operand_decides_at_run_time", "SELECT SUBSTRING(name FROM n + 1) FROM t", "SELECT postgresql_substring_from(name, n + 1) AS \"SUBSTRING(name FROM n + 1)\" FROM t"},
 		{"P-5_substring_pattern_with_a_length_is_a_position", "SELECT SUBSTRING(name FROM '2' FOR 3) FROM t", "SELECT postgresql_substr(name, '2', 3) AS \"SUBSTRING(name FROM '2' FOR 3)\" FROM t"},
 
 		{"P-6_string_agg", "SELECT STRING_AGG(name, ', ') FROM t", "SELECT group_concat(name, ', ') AS \"STRING_AGG(name, ', ')\" FROM t"},

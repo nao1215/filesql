@@ -92,6 +92,8 @@ func TestPostgreSQLScalarFunctions(t *testing.T) {
 		{name: "make_time", query: `SELECT make_time(10, 11, 12)`, want: "10:11:12"},
 		{name: "make_time at midnight", query: `SELECT make_time(0, 0, 0)`, want: "00:00:00"},
 		{name: "make_time refuses a sixty-first minute", query: `SELECT make_time(10, 61, 0)`, wantErr: true},
+		{name: "make_time keeps a fraction of a second", query: `SELECT make_time(10, 11, 12.5)`, want: "10:11:12.5"},
+		{name: "make_time keeps a fraction below a second", query: `SELECT make_time(10, 11, 0.25)`, want: "10:11:00.25"},
 
 		{name: "isfinite of a date", query: `SELECT isfinite(DATE '2024-03-05')`, want: "1"},
 

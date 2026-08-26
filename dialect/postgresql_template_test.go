@@ -294,7 +294,10 @@ func TestToCharDateTemplateAtTheEdges(t *testing.T) {
 		})
 	}
 
-	beforeTheEra := time.Date(-1, 6, 1, 0, 0, 0, 0, time.UTC)
+	// Go counts 1 BC as year 0 and 44 BC as year -43, and the year patterns
+	// print the year of the era rather than the year Go counts, so this is
+	// 44 BC and TO_CHAR prints 0044. CC is the one field that keeps the sign.
+	beforeTheEra := time.Date(-43, 3, 15, 0, 0, 0, 0, time.UTC)
 	for _, tt := range []struct {
 		format string
 		want   string
@@ -302,6 +305,11 @@ func TestToCharDateTemplateAtTheEdges(t *testing.T) {
 		{"BC", "BC"},
 		{"bc", "bc"},
 		{"B.C.", "B.C."},
+		{"YYYY", "0044"},
+		{"YYY", "044"},
+		{"YYYY-MM-DD BC", "0044-03-15 BC"},
+		{"CC", "-01"},
+		{"FMYYYY", "44"},
 	} {
 		t.Run("bc/"+tt.format, func(t *testing.T) {
 			t.Parallel()
