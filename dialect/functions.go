@@ -940,7 +940,7 @@ func fnDateDiff(args []driver.Value) (driver.Value, error) {
 	}
 	da := time.Date(a.Year(), a.Month(), a.Day(), 0, 0, 0, 0, time.UTC)
 	db := time.Date(b.Year(), b.Month(), b.Day(), 0, 0, 0, 0, time.UTC)
-	return int64(da.Sub(db).Hours() / 24), nil
+	return dayNumber(da) - dayNumber(db), nil
 }
 
 // fnDatePart implements DATE_PART(unit, date), returning the requested field as
@@ -1122,7 +1122,7 @@ func weekNumberFrom(tm time.Time, start time.Weekday) int {
 	if day.Before(firstStart) {
 		return 0
 	}
-	return int(day.Sub(firstStart)/(24*time.Hour))/7 + 1
+	return int((dayNumber(day)-dayNumber(firstStart))/7) + 1
 }
 
 // fnMySQLDatePart implements EXTRACT under MySQL, whose WEEK is WEEK(x) with
@@ -1826,6 +1826,21 @@ func fnToChar(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
+	// The argument decides which template language this is, because it is the
+	// only thing that carries the answer: a digit in a date template is
+	// literal text and a letter in a numeric one is too, so PostgreSQL reads
+	// the argument's type and never the template. A number is a number; text
+	// that parses as a date is a date. Text that is neither has no type to
+	// read, and there the template is the only signal left.
+	switch value := args[0].(type) {
+	case int64:
+		return pgFormatNumber(float64(value), format), nil
+	case float64:
+		return pgFormatNumber(value, format), nil
+	}
+	if tm, ok := toStringTime(args[0]); ok {
+		return pgFormatTime(format, tm), nil
+	}
 	if !isDateTemplate(format) {
 		value, ok := toFloat(args[0])
 		if !ok {
@@ -1833,11 +1848,7 @@ func fnToChar(args []driver.Value) (driver.Value, error) {
 		}
 		return pgFormatNumber(value, format), nil
 	}
-	tm, ok := toStringTime(args[0])
-	if !ok {
-		return nil, nil
-	}
-	return pgFormatTime(format, tm), nil
+	return nil, nil
 }
 
 // groupThousands inserts a comma every three digits from the right.
@@ -2510,13 +2521,13 @@ func fnDateDiff3(args []driver.Value) (driver.Value, error) {
 		}
 		return int64(weekBoundariesBetween(a, b, start)), nil
 	case unitDay:
-		return int64(truncDay(a).Sub(truncDay(b)).Hours() / 24), nil
+		return dayNumber(a) - dayNumber(b), nil
 	case unitHour:
-		return int64(a.Sub(b).Hours()), nil
+		return secondsBetween(a, b) / 3600, nil
 	case unitMinute:
-		return int64(a.Sub(b).Minutes()), nil
+		return secondsBetween(a, b) / 60, nil
 	case unitSecond:
-		return int64(a.Sub(b).Seconds()), nil
+		return secondsBetween(a, b), nil
 	default:
 		if start, ok := weekStartDay(part); ok {
 			return int64(weekBoundariesBetween(a, b, start)), nil
@@ -2528,15 +2539,56 @@ func fnDateDiff3(args []driver.Value) (driver.Value, error) {
 // weekBoundariesBetween counts the weeks that begin on start between two dates,
 // signed, which is what DATE_DIFF counts for every week spelling.
 func weekBoundariesBetween(a, b time.Time, start time.Weekday) int {
-	weekStart := func(t time.Time) time.Time {
-		day := truncDay(t)
-		return day.AddDate(0, 0, -((int(day.Weekday()) - int(start) + 7) % 7))
+	weekStartDayNumber := func(t time.Time) int64 {
+		return dayNumber(t) - int64((int(t.Weekday())-int(start)+7)%7)
 	}
-	return int(weekStart(a).Sub(weekStart(b)) / (7 * 24 * time.Hour))
+	return int((weekStartDayNumber(a) - weekStartDayNumber(b)) / 7)
 }
 
-func truncDay(t time.Time) time.Time {
-	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+// dayNumber is the day a time falls on, counted from 1970-01-01 and computed
+// from the civil date rather than from a duration. A time.Duration is an int64
+// of nanoseconds, so subtracting two times saturates about 292 years out and
+// answers the bound rather than the distance -- which made the days to a
+// 9999-12-31 sentinel 106751 instead of 2913109.
+func dayNumber(t time.Time) int64 {
+	y, m, d := t.Date()
+	return civilDayNumber(int64(y), int64(m), int64(d))
+}
+
+// civilDayNumber is the day number of a proleptic Gregorian date, counted from
+// 1970-01-01. It shifts the year to start in March so a leap day falls at the
+// end of a four-century cycle, which is what lets the whole thing be integer
+// arithmetic with no table and no bound short of the int64 the year is in.
+func civilDayNumber(year, month, day int64) int64 {
+	if month <= 2 {
+		year--
+	}
+	era := year / 400
+	if year < 0 {
+		era = (year - 399) / 400
+	}
+	yearOfEra := year - era*400 // [0, 399]
+	monthShift := int64(9)
+	if month > 2 {
+		monthShift = -3
+	}
+	dayOfYear := (153*(month+monthShift)+2)/5 + day - 1                 // [0, 365]
+	dayOfEra := yearOfEra*365 + yearOfEra/4 - yearOfEra/100 + dayOfYear // [0, 146096]
+	return era*146097 + dayOfEra - 719468
+}
+
+// secondsBetween is the signed distance between two times in seconds, built
+// from the day number and the time of day so it is exact for every date the
+// calendar holds.
+func secondsBetween(a, b time.Time) int64 {
+	const secondsPerDay = 24 * 60 * 60
+	days := dayNumber(a) - dayNumber(b)
+	return days*secondsPerDay + secondsOfDay(a) - secondsOfDay(b)
+}
+
+// secondsOfDay is how far into its day a time is, in whole seconds.
+func secondsOfDay(t time.Time) int64 {
+	return int64(t.Hour())*3600 + int64(t.Minute())*60 + int64(t.Second())
 }
 
 // fnMySQLDateDiff implements MySQL TIMESTAMPDIFF(unit, start, end), called as

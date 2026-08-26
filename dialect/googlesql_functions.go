@@ -272,9 +272,7 @@ func fnUnixDate(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
-	y, m, d := tm.Date()
-	day := time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
-	return int64(day.Sub(unixEpochDay) / (24 * time.Hour)), nil
+	return dayNumber(tm), nil
 }
 
 func fnDateFromUnixDate(args []driver.Value) (driver.Value, error) {

@@ -291,7 +291,14 @@ func fnGCD(args []driver.Value) (driver.Value, error) {
 	if !ok1 || !ok2 {
 		return nil, nil
 	}
-	return greatestCommonDivisor(a, b), nil
+	divisor := greatestCommonDivisor(magnitude(a), magnitude(b))
+	if divisor > math.MaxInt64 {
+		// Only the magnitude of the smallest int64 reaches here, and it is not
+		// an int64. Answering it as one would be a negative divisor, which a
+		// greatest common divisor never is.
+		return nil, errors.New("dialect: GCD: the result does not fit a 64-bit integer")
+	}
+	return int64(divisor), nil
 }
 
 func fnLCM(args []driver.Value) (driver.Value, error) {
@@ -303,27 +310,34 @@ func fnLCM(args []driver.Value) (driver.Value, error) {
 	if a == 0 || b == 0 {
 		return int64(0), nil
 	}
-	g := greatestCommonDivisor(a, b)
-	quotient := absInt64(a) / g
-	if quotient != 0 && absInt64(b) > math.MaxInt64/quotient {
+	magA, magB := magnitude(a), magnitude(b)
+	quotient := magA / greatestCommonDivisor(magA, magB)
+	if quotient != 0 && magB > math.MaxInt64/quotient {
 		return nil, errors.New("dialect: LCM: the result does not fit a 64-bit integer")
 	}
-	return quotient * absInt64(b), nil
+	return int64(quotient * magB), nil //nolint:gosec // the bound above keeps the product inside an int64
 }
 
-func greatestCommonDivisor(a, b int64) int64 {
-	a, b = absInt64(a), absInt64(b)
+// greatestCommonDivisor runs Euclid over magnitudes, which are unsigned because
+// the magnitude of the smallest int64 is not an int64: negating it overflows
+// back to itself, and every remainder after that carries the sign.
+func greatestCommonDivisor(a, b uint64) uint64 {
 	for b != 0 {
 		a, b = b, a%b
 	}
 	return a
 }
 
-func absInt64(v int64) int64 {
+// magnitude is the absolute value of an int64, in a type that can hold it. The
+// smallest int64 is why it is not an int64: negating that one overflows back to
+// itself, so the "absolute value" would still be negative.
+func magnitude(v int64) uint64 {
 	if v < 0 {
-		return -v
+		// -(v+1) is at most the largest int64, so the conversion is exact and
+		// adding one back reaches the magnitude without ever leaving uint64.
+		return uint64(-(v + 1)) + 1 //nolint:gosec // the expression is inside the int64 range by construction
 	}
-	return v
+	return uint64(v)
 }
 
 // degreeKindValue names which trigonometric function a degree helper computes.
@@ -562,12 +576,44 @@ func fnDateBin(args []driver.Value) (driver.Value, error) {
 	if width <= 0 {
 		return nil, errors.New("dialect: DATE_BIN: the stride must be greater than zero")
 	}
-	delta := source.Sub(origin)
-	bins := int64(delta / width)
-	if delta < 0 && delta%width != 0 {
+	return binStart(source, origin, width).Format(layoutDateTime), nil
+}
+
+// binStart is the beginning of the stride-wide interval that source falls in,
+// counted from origin. The distance is measured in whole days plus the time of
+// day rather than as a time.Duration, whose int64 of nanoseconds saturates
+// about 292 years out and would bin every far date onto the same instant.
+func binStart(source, origin time.Time, width time.Duration) time.Time {
+	const day = 24 * time.Hour
+	days := dayNumber(source) - dayNumber(origin)
+	within := timeOfDay(source) - timeOfDay(origin)
+	// Carry the time of day into the day count so what is left is inside one
+	// day, which is what keeps both branches below free of a multiplication
+	// that could overflow.
+	for within < 0 {
+		within += day
+		days--
+	}
+	for within >= day {
+		within -= day
+		days++
+	}
+	if width < day {
+		// Every sub-day stride divides a day evenly, so the day count converts
+		// exactly into the stride's own unit.
+		unitsPerDay := int64(day / width)
+		bins := days*unitsPerDay + int64(within/width)
+		return origin.AddDate(0, 0, int(bins/unitsPerDay)).Add(time.Duration(bins%unitsPerDay) * width)
+	}
+	// A stride of a day or more is a whole number of days, and the time of day
+	// left over is smaller than the stride, so the day count alone decides the
+	// bin.
+	strideDays := int64(width / day)
+	bins := days / strideDays
+	if days < 0 && days%strideDays != 0 {
 		bins--
 	}
-	return origin.Add(time.Duration(bins * int64(width))).Format(layoutDateTime), nil
+	return origin.AddDate(0, 0, int(bins*strideDays))
 }
 
 // intervalTextDuration reads a DATE_BIN stride as a fixed length of time. It
