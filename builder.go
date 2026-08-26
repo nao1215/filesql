@@ -343,7 +343,12 @@ func (b *DBBuilder) AddFS(filesystem fs.FS) *DBBuilder {
 // loaded from stay as they were.
 //
 // The save runs once, when Close returns, so a database with auto-save is as
-// safe to share across goroutines as one without it.
+// safe to share across goroutines as one without it. A transaction still open
+// at that point stops it: Close reports that the save was skipped rather than
+// writing out rows the caller has neither committed nor rolled back.
+//
+// A path that is a symbolic link is followed: the file it names receives the
+// rows and the link stays a link.
 //
 // Returns self for chaining.
 func (b *DBBuilder) EnableAutoSave(outputDir string, options ...DumpOptions) *DBBuilder {
@@ -374,7 +379,7 @@ func (b *DBBuilder) EnableAutoSave(outputDir string, options ...DumpOptions) *DB
 // Saving at close as well is what keeps a statement run outside a transaction
 // from being lost: it is committed as soon as it runs, but no commit hook sees
 // it. This timing therefore saves earlier and more often than EnableAutoSave,
-// never less.
+// never less, and its save at close follows EnableAutoSave's rules.
 //
 // Returns self for chaining.
 func (b *DBBuilder) EnableAutoSaveOnCommit(outputDir string, options ...DumpOptions) *DBBuilder {

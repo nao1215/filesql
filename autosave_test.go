@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1333,4 +1334,184 @@ func TestAutoSaveOverwriteLongSourceName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "id,name\n1,bob\n", string(got))
 	assert.Equal(t, []string{base}, dirEntries(t, dir), "no staged file may be left beside the source")
+}
+
+// TestAutoSaveCloseWithAnOpenTransaction pins that closing a database with a
+// transaction still open returns. It did not: the save reads every table
+// through the connector's own connection, an uncommitted write holds the lock
+// on the table it touched, and the driver waits for that lock with no deadline
+// and no context. The only goroutine that could release it was the one inside
+// Close, so a caller whose error path forgot a rollback did not leak a
+// connection -- their process stopped.
+func TestAutoSaveCloseWithAnOpenTransaction(t *testing.T) {
+	t.Parallel()
+
+	// closeWithin runs Close on a goroutine so a Close that never returns fails
+	// the test instead of hanging the run until the package timeout.
+	closeWithin := func(t *testing.T, db *sql.DB) error {
+		t.Helper()
+
+		done := make(chan error, 1)
+		go func() { done <- db.Close() }()
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(30 * time.Second):
+			t.Fatal("db.Close did not return; the save is waiting on a lock it cannot get")
+			return nil
+		}
+	}
+
+	setup := func(t *testing.T, enable func(*DBBuilder) *DBBuilder) (*sql.DB, string) {
+		t.Helper()
+
+		dir := t.TempDir()
+		src := filepath.Join(dir, "users.csv")
+		require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
+
+		validated, err := enable(NewBuilder().AddPath(src)).Build(t.Context())
+		require.NoError(t, err)
+		db, err := validated.Open(t.Context())
+		require.NoError(t, err)
+		return db, src
+	}
+
+	onClose := func(b *DBBuilder) *DBBuilder { return b.EnableAutoSave("") }
+	onCommit := func(b *DBBuilder) *DBBuilder { return b.EnableAutoSaveOnCommit("") }
+
+	for _, tt := range []struct {
+		name   string
+		enable func(*DBBuilder) *DBBuilder
+	}{
+		{name: "save on close", enable: onClose},
+		{name: "save on commit", enable: onCommit},
+	} {
+		t.Run("a write left uncommitted stops the save ("+tt.name+")", func(t *testing.T) {
+			t.Parallel()
+
+			db, src := setup(t, tt.enable)
+			tx, err := db.BeginTx(t.Context(), nil)
+			require.NoError(t, err)
+			_, err = tx.ExecContext(t.Context(), "INSERT INTO users VALUES (2,'bob')")
+			require.NoError(t, err)
+
+			err = closeWithin(t, db)
+			require.Error(t, err, "a save that was skipped must be reported, not passed off as done")
+			assert.ErrorIs(t, err, ErrDatabaseOperation)
+			assert.Contains(t, err.Error(), "transaction")
+
+			got, readErr := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+			require.NoError(t, readErr)
+			assert.Equal(t, "id,name\n1,alice\n", string(got), "nothing uncommitted may reach the file")
+		})
+	}
+
+	t.Run("a transaction that only read is refused the same way", func(t *testing.T) {
+		t.Parallel()
+
+		// Reading takes no write lock, so this one never hung. It is refused
+		// all the same: a transaction still open at Close is a caller who is
+		// not done with the database, and one rule is easier to rely on than a
+		// rule that depends on what the transaction happened to run.
+		db, src := setup(t, onClose)
+		tx, err := db.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+		var n int
+		require.NoError(t, tx.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM users").Scan(&n))
+		require.Equal(t, 1, n)
+
+		err = closeWithin(t, db)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "transaction")
+
+		got, readErr := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+		require.NoError(t, readErr)
+		assert.Equal(t, "id,name\n1,alice\n", string(got))
+	})
+
+	t.Run("a committed transaction saves", func(t *testing.T) {
+		t.Parallel()
+
+		db, src := setup(t, onClose)
+		tx, err := db.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+		_, err = tx.ExecContext(t.Context(), "INSERT INTO users VALUES (2,'bob')")
+		require.NoError(t, err)
+		require.NoError(t, tx.Commit())
+
+		require.NoError(t, closeWithin(t, db))
+
+		got, readErr := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+		require.NoError(t, readErr)
+		assert.Equal(t, "id,name\n1,alice\n2,bob\n", string(got))
+	})
+
+	t.Run("a rolled back transaction saves what the rollback left", func(t *testing.T) {
+		t.Parallel()
+
+		db, src := setup(t, onClose)
+		_, err := db.ExecContext(t.Context(), "INSERT INTO users VALUES (2,'bob')")
+		require.NoError(t, err)
+		tx, err := db.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+		_, err = tx.ExecContext(t.Context(), "INSERT INTO users VALUES (3,'carol')")
+		require.NoError(t, err)
+		require.NoError(t, tx.Rollback())
+
+		require.NoError(t, closeWithin(t, db))
+
+		got, readErr := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+		require.NoError(t, readErr)
+		assert.Equal(t, "id,name\n1,alice\n2,bob\n", string(got))
+	})
+
+	t.Run("an unclosed rows iterator still saves", func(t *testing.T) {
+		t.Parallel()
+
+		// Rows hold a pooled connection but no transaction and no lock the save
+		// waits on, so this has to keep working: a fix that refused whenever a
+		// connection was still checked out would break it silently.
+		db, src := setup(t, onClose)
+		_, err := db.ExecContext(t.Context(), "INSERT INTO users VALUES (2,'bob')")
+		require.NoError(t, err)
+		rows, err := db.QueryContext(t.Context(), "SELECT * FROM users")
+		require.NoError(t, err)
+		require.True(t, rows.Next())
+
+		require.NoError(t, closeWithin(t, db))
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+
+		got, readErr := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+		require.NoError(t, readErr)
+		assert.Equal(t, "id,name\n1,alice\n2,bob\n", string(got))
+	})
+}
+
+// TestAutoSaveOverwriteFollowsASymlink pins that a source reached through a
+// symbolic link is written back through it. The staged file was renamed onto
+// the link itself, so the link became a regular file holding the change and the
+// file it named still held the old rows: the save reported success while the
+// data the caller meant to update never moved.
+func TestAutoSaveOverwriteFollowsASymlink(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real.csv")
+	require.NoError(t, os.WriteFile(target, []byte("id,name\n1,alice\n"), 0o600))
+	link := filepath.Join(dir, "users.csv")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("this platform does not allow a symlink to be created: %v", err)
+	}
+
+	require.NoError(t, autoSaveOverwrite(t, []string{link}, "INSERT INTO users VALUES (2,'bob')"))
+
+	info, err := os.Lstat(link)
+	require.NoError(t, err)
+	assert.NotZero(t, info.Mode()&os.ModeSymlink, "the link must survive the save")
+
+	got, err := os.ReadFile(target) //nolint:gosec // target is under t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, "id,name\n1,alice\n2,bob\n", string(got), "the file the link names is what receives the row")
+	assert.Equal(t, []string{"real.csv", "users.csv"}, dirEntries(t, dir), "no staged file may be left behind")
 }

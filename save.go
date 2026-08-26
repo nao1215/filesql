@@ -314,6 +314,13 @@ type autoSaveConnector struct {
 	// fully assembled, so a connection opened by a setup that then fails does
 	// not write out what that failure is about to discard.
 	armed bool
+	// openTx counts the transactions the caller has begun and not yet finished.
+	// A save reads every table, and a transaction that has written holds the
+	// lock on the table it touched, so a save that starts while one is open
+	// waits for a lock that only the caller can release -- and the caller is
+	// inside Close. That wait has no deadline and no context, so it never ends.
+	// Counting the transactions is what lets Close return instead.
+	openTx int
 }
 
 // Connect implements driver.Connector interface
@@ -356,7 +363,7 @@ func (c *autoSaveConnector) arm() {
 // caller is done, and the anchor connection still holds the data.
 func (c *autoSaveConnector) Close() error {
 	c.mu.Lock()
-	anchor, armed := c.anchor, c.armed
+	anchor, armed, open := c.anchor, c.armed, c.openTx
 	c.anchor, c.armed = nil, false
 	c.mu.Unlock()
 
@@ -364,17 +371,47 @@ func (c *autoSaveConnector) Close() error {
 		return nil
 	}
 	var saveErr error
-	if armed {
-		saveErr = c.save(anchor)
+	switch {
+	case !armed:
+	case open > 0:
+		// The database is closing with work the caller has neither committed
+		// nor rolled back, so what is in it is not a state they asked to keep.
+		// Saying so is the whole of the fix: reading it here would wait on a
+		// lock that nothing left running can release.
+		saveErr = fmt.Errorf("%w: auto-save was skipped because the database was closed while a transaction was still open; commit or roll back before closing",
+			ErrDatabaseOperation)
+	default:
+		if err := c.save(anchor); err != nil {
+			saveErr = fmt.Errorf("auto-save failed: %w", err)
+		}
 	}
 	closeErr := anchor.Close()
 	if saveErr != nil {
 		if closeErr != nil {
-			return fmt.Errorf("auto-save failed: %w (also failed to close connection: %w)", saveErr, closeErr)
+			return fmt.Errorf("%w (also failed to close connection: %w)", saveErr, closeErr)
 		}
-		return fmt.Errorf("auto-save failed: %w", saveErr)
+		return saveErr
 	}
 	return closeErr
+}
+
+// transactionBegan and transactionEnded keep the count Close reads. A
+// transaction the caller started through database/sql always reaches one of
+// Commit and Rollback, so the count returns to zero on its own; one started by
+// running BEGIN through Exec is invisible here, and a close during one of those
+// still waits forever.
+func (c *autoSaveConnector) transactionBegan() {
+	c.mu.Lock()
+	c.openTx++
+	c.mu.Unlock()
+}
+
+func (c *autoSaveConnector) transactionEnded() {
+	c.mu.Lock()
+	if c.openTx > 0 {
+		c.openTx--
+	}
+	c.mu.Unlock()
 }
 
 // autoSaveConnection wraps one pooled connection. Saving belongs to the
@@ -401,10 +438,7 @@ func (c *autoSaveConnection) BeginTx(ctx context.Context, opts driver.TxOptions)
 		if err != nil {
 			return nil, err
 		}
-		return &autoSaveTransaction{
-			tx:   tx,
-			conn: c,
-		}, nil
+		return c.wrapTx(tx), nil
 	}
 
 	// Fallback for connections that don't support BeginTx
@@ -413,10 +447,16 @@ func (c *autoSaveConnection) BeginTx(ctx context.Context, opts driver.TxOptions)
 	if err != nil {
 		return nil, err
 	}
-	return &autoSaveTransaction{
-		tx:   tx,
-		conn: c,
-	}, nil
+	return c.wrapTx(tx), nil
+}
+
+// wrapTx counts the transaction as open and hands back the wrapper that counts
+// it as finished.
+func (c *autoSaveConnection) wrapTx(tx driver.Tx) driver.Tx {
+	if c.connector != nil {
+		c.connector.transactionBegan()
+	}
+	return &autoSaveTransaction{tx: tx, conn: c}
 }
 
 // Prepare implements driver.Conn interface
@@ -462,6 +502,16 @@ func (c *autoSaveConnection) QueryContext(ctx context.Context, query string, arg
 type autoSaveTransaction struct {
 	tx   driver.Tx
 	conn *autoSaveConnection
+	// finished keeps the connector's count right if a driver ever calls both
+	// Commit and Rollback on the same transaction.
+	finished sync.Once
+}
+
+// finish takes this transaction out of the count of open ones.
+func (t *autoSaveTransaction) finish() {
+	if c := t.conn.connector; c != nil {
+		t.finished.Do(c.transactionEnded)
+	}
 }
 
 // Commit implements driver.Tx interface with auto-save on commit
@@ -470,6 +520,10 @@ func (t *autoSaveTransaction) Commit() error {
 	if err := t.tx.Commit(); err != nil {
 		return err
 	}
+	// The commit is done, so this transaction is no longer one Close has to
+	// refuse. Dropping it from the count comes before the save below, which
+	// reads the same database.
+	t.finish()
 
 	// Perform auto-save if configured for commit timing
 	if c := t.conn.connector; c != nil && c.savesOnCommit() {
@@ -485,6 +539,7 @@ func (t *autoSaveTransaction) Commit() error {
 
 // Rollback implements driver.Tx interface
 func (t *autoSaveTransaction) Rollback() error {
+	defer t.finish()
 	return t.tx.Rollback()
 }
 
