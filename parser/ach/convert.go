@@ -759,6 +759,45 @@ func validateFieldWidths(file *ach.File) error {
 }
 
 // applyEntryModifications updates entries in the ACH file from TableData.
+// coordinateTracker refuses a record two modification rows both name.
+//
+// batch_index, entry_index and addenda_index say which record a row's other
+// columns belong to. They are not data a caller may edit, and a row that names
+// a record another row already named used to be applied anyway: the update
+// landed on the other record, overwriting its account number, amount and trace
+// number, while the row that was edited came back unchanged. The table then
+// read as if the edit had been ignored, and a different entry had silently
+// become a copy of this one -- the worst way for a payment file to be wrong.
+//
+// Whether a caller was told depended only on whether the new coordinate
+// happened to fall outside the file, and the tables disagreed about even that:
+// entries and batches reported an out-of-range coordinate while addenda and
+// every IAT table skipped the row in silence. Both halves are errors now.
+type coordinateTracker struct {
+	table string
+	seen  map[string]bool
+}
+
+func newCoordinateTracker(table string) *coordinateTracker {
+	return &coordinateTracker{table: table, seen: make(map[string]bool)}
+}
+
+// claim records that a row names this coordinate and refuses a repeat.
+func (c *coordinateTracker) claim(columns []string, values []int) error {
+	parts := make([]string, len(columns))
+	for i, col := range columns {
+		parts[i] = fmt.Sprintf("%s=%d", col, values[i])
+	}
+	key := strings.Join(parts, " ")
+	if c.seen[key] {
+		return fmt.Errorf(
+			"%s: two rows name the same record (%s); %s give the position of the record a row updates, not a value it stores",
+			c.table, key, strings.Join(columns, " and "))
+	}
+	c.seen[key] = true
+	return nil
+}
+
 func (ts *TableSet) applyEntryModifications(file *ach.File) error {
 	// Build index mapping for quick lookup
 	headerIndex := make(map[string]int)
@@ -766,6 +805,7 @@ func (ts *TableSet) applyEntryModifications(file *ach.File) error {
 		headerIndex[h] = i
 	}
 
+	coords := newCoordinateTracker("entries")
 	for _, record := range ts.Entries.Records {
 		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
 		if err != nil {
@@ -783,6 +823,10 @@ func (ts *TableSet) applyEntryModifications(file *ach.File) error {
 		entries := file.Batches[batchIdx].GetEntries()
 		if entryIdx < 0 || entryIdx >= len(entries) {
 			return fmt.Errorf("entry_index %d out of range for batch %d", entryIdx, batchIdx)
+		}
+
+		if err := coords.claim([]string{"batch_index", "entry_index"}, []int{batchIdx, entryIdx}); err != nil {
+			return err
 		}
 
 		entry := entries[entryIdx]
@@ -878,6 +922,7 @@ func (ts *TableSet) applyBatchModifications(file *ach.File) error {
 		headerIndex[h] = i
 	}
 
+	coords := newCoordinateTracker("batches")
 	for _, record := range ts.Batches.Records {
 		batchIdxVal, ok := headerIndex["batch_index"]
 		if !ok {
@@ -890,6 +935,9 @@ func (ts *TableSet) applyBatchModifications(file *ach.File) error {
 
 		if batchIdx < 0 || batchIdx >= len(file.Batches) {
 			return fmt.Errorf("batch_index %d out of range", batchIdx)
+		}
+		if err := coords.claim([]string{"batch_index"}, []int{batchIdx}); err != nil {
+			return err
 		}
 
 		bh := file.Batches[batchIdx].GetHeader()
@@ -945,6 +993,7 @@ func (ts *TableSet) applyAddendaModifications(file *ach.File) error {
 		headerIndex[h] = i
 	}
 
+	coords := newCoordinateTracker("addenda")
 	for _, record := range ts.Addenda.Records {
 		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
 		if err != nil {
@@ -960,12 +1009,17 @@ func (ts *TableSet) applyAddendaModifications(file *ach.File) error {
 		}
 
 		if batchIdx < 0 || batchIdx >= len(file.Batches) {
-			continue // Skip if batch doesn't exist
+			return fmt.Errorf("batch_index %d out of range", batchIdx)
 		}
 
 		entries := file.Batches[batchIdx].GetEntries()
 		if entryIdx < 0 || entryIdx >= len(entries) {
-			continue // Skip if entry doesn't exist
+			return fmt.Errorf("entry_index %d out of range for batch %d", entryIdx, batchIdx)
+		}
+		if err := coords.claim(
+			[]string{"batch_index", "entry_index", "addenda_index"},
+			[]int{batchIdx, entryIdx, addendaIdx}); err != nil {
+			return err
 		}
 
 		entry := entries[entryIdx]
@@ -1653,6 +1707,7 @@ func (ts *TableSet) applyIATBatchModifications(file *ach.File) error {
 		headerIndex[h] = i
 	}
 
+	coords := newCoordinateTracker("iat_batches")
 	for _, record := range ts.IATBatches.Records {
 		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
 		if err != nil {
@@ -1660,7 +1715,10 @@ func (ts *TableSet) applyIATBatchModifications(file *ach.File) error {
 		}
 
 		if batchIdx < 0 || batchIdx >= len(file.IATBatches) {
-			continue // Skip rows outside original range
+			return fmt.Errorf("batch_index %d out of range", batchIdx)
+		}
+		if err := coords.claim([]string{"batch_index"}, []int{batchIdx}); err != nil {
+			return err
 		}
 
 		bh := file.IATBatches[batchIdx].Header
@@ -1725,6 +1783,7 @@ func (ts *TableSet) applyIATEntryModifications(file *ach.File) error {
 		headerIndex[h] = i
 	}
 
+	coords := newCoordinateTracker("iat_entries")
 	for _, record := range ts.IATEntries.Records {
 		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
 		if err != nil {
@@ -1736,10 +1795,13 @@ func (ts *TableSet) applyIATEntryModifications(file *ach.File) error {
 		}
 
 		if batchIdx < 0 || batchIdx >= len(file.IATBatches) {
-			continue // Skip rows outside original range
+			return fmt.Errorf("batch_index %d out of range", batchIdx)
 		}
 		if entryIdx < 0 || entryIdx >= len(file.IATBatches[batchIdx].Entries) {
-			continue // Skip rows outside original range
+			return fmt.Errorf("entry_index %d out of range for batch %d", entryIdx, batchIdx)
+		}
+		if err := coords.claim([]string{"batch_index", "entry_index"}, []int{batchIdx, entryIdx}); err != nil {
+			return err
 		}
 
 		entry := file.IATBatches[batchIdx].Entries[entryIdx]
@@ -1797,6 +1859,7 @@ func (ts *TableSet) applyIATAddendaModifications(file *ach.File) error {
 		headerIndex[h] = i
 	}
 
+	coords := newCoordinateTracker("iat_addenda")
 	for _, record := range ts.IATAddenda.Records {
 		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
 		if err != nil {
@@ -1806,12 +1869,21 @@ func (ts *TableSet) applyIATAddendaModifications(file *ach.File) error {
 		if err != nil {
 			return fmt.Errorf("invalid entry_index: %w", err)
 		}
+		addendaIdx, err := strconv.Atoi(record[headerIndex["addenda_index"]])
+		if err != nil {
+			return fmt.Errorf("invalid addenda_index: %w", err)
+		}
 
 		if batchIdx < 0 || batchIdx >= len(file.IATBatches) {
-			continue
+			return fmt.Errorf("batch_index %d out of range", batchIdx)
 		}
 		if entryIdx < 0 || entryIdx >= len(file.IATBatches[batchIdx].Entries) {
-			continue
+			return fmt.Errorf("entry_index %d out of range for batch %d", entryIdx, batchIdx)
+		}
+		if err := coords.claim(
+			[]string{"batch_index", "entry_index", "addenda_index"},
+			[]int{batchIdx, entryIdx, addendaIdx}); err != nil {
+			return err
 		}
 
 		entry := file.IATBatches[batchIdx].Entries[entryIdx]

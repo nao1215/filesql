@@ -1595,3 +1595,144 @@ func TestModifyAddenda99Contested(t *testing.T) {
 	assert.Equal(t, newContestedReturnCode, foundAddenda99Contested.ContestedReturnCode)
 	assert.Equal(t, newOriginalSettlementDate, foundAddenda99Contested.OriginalSettlementDate)
 }
+
+// TestApplyModifications_RefusesAMovedCoordinate drives the fault the index
+// columns had. batch_index, entry_index and addenda_index say which record a
+// row updates; they are not values the row stores. Nothing stopped a caller
+// from changing them, and a changed one retargeted the update: a row pointed at
+// another row's coordinates overwrote that record's account number, amount and
+// trace number while the row that was edited came back unchanged, so the table
+// read as if the edit had been ignored and a different entry had silently
+// become a copy of this one.
+//
+// The same mistake was already an error when the new coordinate happened to be
+// out of range, so whether a caller was told depended only on how many batches
+// the file had.
+func TestApplyModifications_RefusesAMovedCoordinate(t *testing.T) {
+	t.Parallel()
+
+	load := func(t *testing.T) ([]byte, *TableSet) {
+		t.Helper()
+		// return-WEB.ach carries two batches with one entry each, which is
+		// what makes the retargeted coordinate land in range.
+		raw, err := os.ReadFile(filepath.Join("testdata", "return-WEB.ach"))
+		require.NoError(t, err)
+		ts, err := ParseReader(bytes.NewReader(raw))
+		require.NoError(t, err)
+		return raw, ts
+	}
+
+	column := func(td *parser.TableData, name string) int {
+		for i, h := range td.Headers {
+			if h == name {
+				return i
+			}
+		}
+		return -1
+	}
+
+	t.Run("an entry pointed at another entry is refused", func(t *testing.T) {
+		t.Parallel()
+
+		_, ts := load(t)
+		require.GreaterOrEqual(t, len(ts.Entries.Records), 2, "the fixture must have two entries")
+
+		batchIdx := column(ts.Entries, "batch_index")
+		entryIdx := column(ts.Entries, "entry_index")
+		before := append([]string(nil), ts.Entries.Records[0]...)
+
+		// No value column is touched. Only the coordinates move.
+		ts.Entries.Records[1][batchIdx] = ts.Entries.Records[0][batchIdx]
+		ts.Entries.Records[1][entryIdx] = ts.Entries.Records[0][entryIdx]
+		ts.UpdateEntriesFromTableData(ts.Entries)
+
+		var buf bytes.Buffer
+		err := ts.WriteToWriter(&buf)
+		require.Error(t, err, "a row that names another row's record must be refused")
+		assert.Contains(t, err.Error(), "batch_index", "the error must name the column")
+
+		// Nothing may have been written, so the entry that was not edited is
+		// still what it was.
+		if buf.Len() > 0 {
+			back, parseErr := ParseReader(bytes.NewReader(buf.Bytes()))
+			require.NoError(t, parseErr)
+			assert.Equal(t, before, back.Entries.Records[0],
+				"the entry nobody edited must not be overwritten")
+		}
+	})
+
+	t.Run("an out-of-range coordinate keeps reporting its own error", func(t *testing.T) {
+		t.Parallel()
+
+		_, ts := load(t)
+		batchIdx := column(ts.Entries, "batch_index")
+		ts.Entries.Records[0][batchIdx] = "99"
+		ts.UpdateEntriesFromTableData(ts.Entries)
+
+		var buf bytes.Buffer
+		err := ts.WriteToWriter(&buf)
+		require.Error(t, err, "a coordinate outside the file must stay an error")
+		assert.Contains(t, err.Error(), "batch_index")
+	})
+
+	t.Run("editing a value column is still allowed", func(t *testing.T) {
+		t.Parallel()
+
+		_, ts := load(t)
+		nameIdx := column(ts.Entries, "individual_name")
+		require.GreaterOrEqual(t, nameIdx, 0)
+		ts.Entries.Records[0][nameIdx] = "EDITED NAME"
+		ts.UpdateEntriesFromTableData(ts.Entries)
+
+		var buf bytes.Buffer
+		require.NoError(t, ts.WriteToWriter(&buf), "the ordinary edit must keep working")
+
+		back, err := ParseReader(bytes.NewReader(buf.Bytes()))
+		require.NoError(t, err)
+		assert.Equal(t, "EDITED NAME", back.Entries.Records[0][nameIdx])
+	})
+
+	t.Run("every table guards its own coordinates", func(t *testing.T) {
+		t.Parallel()
+
+		raw, err := os.ReadFile(filepath.Join("testdata", "iat-credit.ach"))
+		require.NoError(t, err)
+
+		for _, tt := range []struct {
+			name  string
+			get   func(*TableSet) *parser.TableData
+			apply func(*TableSet, *parser.TableData)
+			coord string
+			bogus string
+		}{
+			{"Batches", func(ts *TableSet) *parser.TableData { return ts.Batches },
+				func(ts *TableSet, td *parser.TableData) { ts.UpdateBatchesFromTableData(td) }, "batch_index", "7"},
+			{"IATBatches", func(ts *TableSet) *parser.TableData { return ts.IATBatches },
+				func(ts *TableSet, td *parser.TableData) { ts.UpdateIATBatchesFromTableData(td) }, "batch_index", "7"},
+			{"IATEntries", func(ts *TableSet) *parser.TableData { return ts.IATEntries },
+				func(ts *TableSet, td *parser.TableData) { ts.UpdateIATEntriesFromTableData(td) }, "entry_index", "7"},
+			{"IATAddenda", func(ts *TableSet) *parser.TableData { return ts.IATAddenda },
+				func(ts *TableSet, td *parser.TableData) { ts.UpdateIATAddendaFromTableData(td) }, "addenda_index", "7"},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				ts, parseErr := ParseReader(bytes.NewReader(raw))
+				require.NoError(t, parseErr)
+				td := tt.get(ts)
+				if td == nil || len(td.Records) == 0 {
+					t.Skipf("the fixture has no %s rows", tt.name)
+				}
+				at := column(td, tt.coord)
+				require.GreaterOrEqual(t, at, 0, "%s has no %s column", tt.name, tt.coord)
+
+				td.Records[0][at] = tt.bogus
+				tt.apply(ts, td)
+
+				var buf bytes.Buffer
+				assert.Error(t, ts.WriteToWriter(&buf),
+					"%s must refuse a row whose %s names no record it was parsed with", tt.name, tt.coord)
+			})
+		}
+	})
+}
