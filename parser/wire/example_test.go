@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	moovwire "github.com/moov-io/wire"
 	"github.com/nao1215/filesql/parser/wire"
 )
 
@@ -32,27 +31,4 @@ func ExampleParseReader() {
 	// rows: 1
 	// columns: 326
 	// first columns: [sender_supplied_format_version sender_supplied_user_request_correlation sender_supplied_test_production_code]
-}
-
-func ExampleFromFile() {
-	// FromFile is ParseReader for a caller who already has the moov-io value,
-	// having read or built it themselves.
-	file, err := os.Open("testdata/fedWireMessage-CustomerTransfer.fed")
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-	defer file.Close()
-
-	parsed, err := moovwire.NewReader(file).Read()
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-
-	tableSet := wire.FromFile(&parsed)
-
-	fmt.Println("rows:", len(tableSet.GetMessageTable().Records))
-	// Output:
-	// rows: 1
 }

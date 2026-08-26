@@ -549,8 +549,8 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Parse a delimited file into headers, records, and column types | `ExampleParse_csv`, `ExampleParse_tsv`, `ExampleParse_ltsv` | [parser/example_test.go](./parser/example_test.go) |
 | Detect a file type and whether it is compressed | `ExampleDetectFileType`, `ExampleIsCompressed`, `ExampleBaseFileType` | [parser/example_test.go](./parser/example_test.go) |
 | Read the type each column was given | `ExampleTableData_columnTypes` | [parser/example_test.go](./parser/example_test.go) |
-| Turn an ACH file into its tables | `ExampleParseReader`, `ExampleFromFile` | [parser/ach/example_test.go](./parser/ach/example_test.go) |
-| Turn a Fedwire file into its table | `ExampleParseReader`, `ExampleFromFile` | [parser/wire/example_test.go](./parser/wire/example_test.go) |
+| Turn an ACH file into its tables | `ExampleParseReader` | [parser/ach/example_test.go](./parser/ach/example_test.go) |
+| Turn a Fedwire file into its table | `ExampleParseReader` | [parser/wire/example_test.go](./parser/wire/example_test.go) |
 
 #### dialect
 

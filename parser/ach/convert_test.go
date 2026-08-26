@@ -28,7 +28,7 @@ func findHeaderIndex(t *testing.T, headers []string, name string) int {
 }
 
 func TestFromFile_NilFile(t *testing.T) {
-	ts := FromFile(nil)
+	ts := fromFile(nil)
 	assert.Nil(t, ts)
 }
 
@@ -40,7 +40,7 @@ func TestFromFile_EmptyFile(t *testing.T) {
 	file.Header.FileCreationTime = "0000"
 	file.Header.FileIDModifier = "A"
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// File header should have 1 row
@@ -57,7 +57,7 @@ func TestFromFile_EmptyFile(t *testing.T) {
 func TestFromFile_WithBatchAndEntry(t *testing.T) {
 	file := createTestACHFile(t)
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// Check file header
@@ -84,7 +84,7 @@ func TestFromFile_WithBatchAndEntry(t *testing.T) {
 
 func TestToFile_NilTableSet(t *testing.T) {
 	var ts *TableSet
-	file, err := ts.ToFile()
+	file, err := ts.toFile()
 	assert.Error(t, err)
 	assert.Nil(t, file)
 }
@@ -94,11 +94,11 @@ func TestToFile_RoundTrip(t *testing.T) {
 	originalFile := createTestACHFile(t)
 
 	// Convert to TableSet
-	ts := FromFile(originalFile)
+	ts := fromFile(originalFile)
 	require.NotNil(t, ts)
 
 	// Convert back to file
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 	require.NotNil(t, newFile)
 
@@ -113,7 +113,7 @@ func TestToFile_ModifyAmount(t *testing.T) {
 	originalFile := createTestACHFile(t)
 
 	// Convert to TableSet
-	ts := FromFile(originalFile)
+	ts := fromFile(originalFile)
 	require.NotNil(t, ts)
 
 	// Modify amount in entries
@@ -132,7 +132,7 @@ func TestToFile_ModifyAmount(t *testing.T) {
 	ts.Entries.Records[0][amountIdx] = "50000000"
 
 	// Convert back to file
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 	require.NotNil(t, newFile)
 
@@ -150,7 +150,7 @@ func TestToFile_ModifyAmount(t *testing.T) {
 // the control did not, and the write failed as out-of-balance.
 func TestToFile_ModifiedAmountIsWritable(t *testing.T) {
 	original := createTestACHFile(t)
-	ts := FromFile(original)
+	ts := fromFile(original)
 	require.NotNil(t, ts)
 
 	amountIdx := findHeaderIndex(t, ts.Entries.Headers, "amount")
@@ -185,7 +185,7 @@ func TestToFile_ModifiedIATAmountIsWritable(t *testing.T) {
 	file, err := ach.ReadFile(findTestFile(t, "iat-credit.ach"))
 	require.NoError(t, err)
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 	require.NotNil(t, ts.IATEntries)
 	require.NotEmpty(t, ts.IATEntries.Records)
@@ -206,14 +206,14 @@ func TestToFile_ModifiedIATAmountIsWritable(t *testing.T) {
 
 func TestToFile_RejectsNegativeBatchIndexInBatches(t *testing.T) {
 	file := createTestACHFile(t)
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 	require.Len(t, ts.Batches.Records, 1)
 
 	batchIdx := findHeaderIndex(t, ts.Batches.Headers, "batch_index")
 	ts.Batches.Records[0][batchIdx] = "-1"
 
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 
 	require.Error(t, err)
 	assert.Nil(t, newFile)
@@ -222,14 +222,14 @@ func TestToFile_RejectsNegativeBatchIndexInBatches(t *testing.T) {
 
 func TestToFile_RejectsNegativeBatchIndexInEntries(t *testing.T) {
 	file := createTestACHFile(t)
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 	require.Len(t, ts.Entries.Records, 1)
 
 	batchIdx := findHeaderIndex(t, ts.Entries.Headers, "batch_index")
 	ts.Entries.Records[0][batchIdx] = "-1"
 
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 
 	require.Error(t, err)
 	assert.Nil(t, newFile)
@@ -238,7 +238,7 @@ func TestToFile_RejectsNegativeBatchIndexInEntries(t *testing.T) {
 
 func TestGetters(t *testing.T) {
 	file := createTestACHFile(t)
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	assert.NotNil(t, ts.GetEntriesTable())
@@ -255,12 +255,12 @@ func TestGetters(t *testing.T) {
 }
 
 func TestToFile_DeepCopy(t *testing.T) {
-	// This test verifies that ToFile creates a true deep copy
+	// This test verifies that toFile creates a true deep copy
 	// and does not modify the original file
 	file := createTestACHFile(t)
 	originalAmount := file.Batches[0].GetEntries()[0].Amount
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// Modify amount in entries TableData
@@ -278,7 +278,7 @@ func TestToFile_DeepCopy(t *testing.T) {
 	ts.Entries.Records[0][amountIdx] = strconv.Itoa(newAmount)
 
 	// Convert to new file
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 
 	// Verify new file has modified amount
@@ -299,7 +299,7 @@ func TestFromFile_RealACHFile(t *testing.T) {
 	file, err := ach.ReadFile(testFile)
 	require.NoError(t, err)
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// Basic structure checks
@@ -321,7 +321,7 @@ func TestFromFile_WithAddenda99Return(t *testing.T) {
 	file, err := ach.ReadFile(testFile)
 	require.NoError(t, err)
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// Should have addenda records
@@ -344,7 +344,7 @@ func TestFromFile_WithAddenda98COR(t *testing.T) {
 	file, err := ach.ReadFile(testFile)
 	require.NoError(t, err)
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// Should have addenda records
@@ -367,7 +367,7 @@ func TestFromFile_WithIATBatch(t *testing.T) {
 	file, err := ach.ReadFile(testFile)
 	require.NoError(t, err)
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// IAT batches should be present
@@ -403,11 +403,11 @@ func TestIATRoundTrip(t *testing.T) {
 	file, err := ach.ReadFile(testFile)
 	require.NoError(t, err)
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// Round-trip
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 	require.NotNil(t, newFile)
 
@@ -447,7 +447,7 @@ func TestWriteToWriter(t *testing.T) {
 	file, err := ach.ReadFile(testFile)
 	require.NoError(t, err)
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	var buf bytes.Buffer
@@ -462,7 +462,7 @@ func TestWriteToWriter(t *testing.T) {
 // TestUpdateFromTableData tests updating internal TableData
 func TestUpdateFromTableData(t *testing.T) {
 	file := createTestACHFile(t)
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// Create modified TableData
@@ -506,7 +506,7 @@ func TestUpdateIATFromTableData(t *testing.T) {
 	file, err := ach.ReadFile(testFile)
 	require.NoError(t, err)
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 	require.NotNil(t, ts.IATBatches)
 
@@ -538,7 +538,7 @@ func TestUpdateIATFromTableData(t *testing.T) {
 // TestModifyBatchHeader tests modifying batch header fields
 func TestModifyBatchHeader(t *testing.T) {
 	file := createTestACHFile(t)
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 	require.NotEmpty(t, ts.Batches.Records)
 
@@ -558,7 +558,7 @@ func TestModifyBatchHeader(t *testing.T) {
 	ts.Batches.Records[0][companyNameIdx] = newName
 
 	// Convert back
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 
 	// Verify change
@@ -570,7 +570,7 @@ func TestModifyBatchHeader(t *testing.T) {
 // TestModifyFileHeader tests modifying file header fields
 func TestModifyFileHeader(t *testing.T) {
 	file := createTestACHFile(t)
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 	require.Len(t, ts.FileHeader.Records, 1)
 
@@ -589,7 +589,7 @@ func TestModifyFileHeader(t *testing.T) {
 	ts.FileHeader.Records[0][destNameIdx] = newName
 
 	// Convert back
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 
 	// Verify change
@@ -640,7 +640,7 @@ func TestModifyAddenda05(t *testing.T) {
 	require.NoError(t, file.Create())
 
 	// Convert to TableSet
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 	require.NotEmpty(t, ts.Addenda.Records)
 
@@ -659,7 +659,7 @@ func TestModifyAddenda05(t *testing.T) {
 	ts.Addenda.Records[0][paymentInfoIdx] = newPaymentInfo
 
 	// Convert back
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 
 	// Verify change
@@ -707,7 +707,7 @@ func TestApplyAddendaModifications_AdjustsAddenda05IndexAfterAddenda02(t *testin
 	batcher.AddEntry(entry)
 	file.AddBatch(batcher)
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 	require.Len(t, ts.Addenda.Records, 2)
 
@@ -729,7 +729,7 @@ func TestApplyAddendaModifications_AdjustsAddenda05IndexAfterAddenda02(t *testin
 // TestColumnTypes tests that column types are correctly set
 func TestColumnTypes(t *testing.T) {
 	file := createTestACHFile(t)
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// Check entries column types
@@ -761,7 +761,7 @@ func TestColumnTypes(t *testing.T) {
 // TestFileHeaderColumnTypes tests file header column types
 func TestFileHeaderColumnTypes(t *testing.T) {
 	file := createTestACHFile(t)
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	assert.NotEmpty(t, ts.FileHeader.ColumnTypes)
@@ -776,7 +776,7 @@ func TestFileHeaderColumnTypes(t *testing.T) {
 // TestBatchColumnTypes tests batch column types
 func TestBatchColumnTypes(t *testing.T) {
 	file := createTestACHFile(t)
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	assert.NotEmpty(t, ts.Batches.ColumnTypes)
@@ -797,7 +797,7 @@ func TestBatchColumnTypes(t *testing.T) {
 // TestEmptyAddenda tests file with no addenda records
 func TestEmptyAddenda(t *testing.T) {
 	file := createTestACHFile(t)
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// Addenda should be initialized but may be empty
@@ -847,7 +847,7 @@ func TestMultipleBatches(t *testing.T) {
 	require.NoError(t, file.Create())
 
 	// Convert to TableSet
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// Should have 2 batch records
@@ -861,13 +861,13 @@ func TestMultipleBatches(t *testing.T) {
 	assert.Equal(t, "1", ts.Entries.Records[1][0]) // Second entry in batch 1
 }
 
-// TestToFile_NilOriginalFile tests ToFile with nil original file
+// TestToFile_NilOriginalFile tests toFile with nil original file
 func TestToFile_NilOriginalFile(t *testing.T) {
 	ts := &TableSet{
 		originalFile: nil,
 	}
 
-	file, err := ts.ToFile()
+	file, err := ts.toFile()
 	assert.Error(t, err)
 	assert.Nil(t, file)
 	assert.Contains(t, err.Error(), "no original ACH file")
@@ -883,7 +883,7 @@ func TestModifyIATBatchHeader(t *testing.T) {
 	file, err := ach.ReadFile(testFile)
 	require.NoError(t, err)
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 	require.NotEmpty(t, ts.IATBatches.Records)
 
@@ -902,7 +902,7 @@ func TestModifyIATBatchHeader(t *testing.T) {
 	ts.IATBatches.Records[0][descIdx] = newDesc
 
 	// Convert back
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 
 	// Verify change
@@ -919,7 +919,7 @@ func TestModifyIATEntry(t *testing.T) {
 	file, err := ach.ReadFile(testFile)
 	require.NoError(t, err)
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 	require.NotEmpty(t, ts.IATEntries.Records)
 
@@ -938,7 +938,7 @@ func TestModifyIATEntry(t *testing.T) {
 	ts.IATEntries.Records[0][amountIdx] = strconv.Itoa(newAmount)
 
 	// Convert back
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 
 	// Verify change
@@ -955,7 +955,7 @@ func TestModifyIATAddenda(t *testing.T) {
 	file, err := ach.ReadFile(testFile)
 	require.NoError(t, err)
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 	require.NotEmpty(t, ts.IATAddenda.Records)
 
@@ -993,7 +993,7 @@ func TestModifyIATAddenda(t *testing.T) {
 	ts.IATAddenda.Records[addenda11RecordIdx][originatorNameIdx] = newName
 
 	// Convert back
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 
 	// Verify change
@@ -1011,7 +1011,7 @@ func TestAddenda02Handling(t *testing.T) {
 	file, err := ach.ReadFile(testFile)
 	require.NoError(t, err)
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// Check if there are Addenda02 records
@@ -1028,7 +1028,7 @@ func TestAddenda02Handling(t *testing.T) {
 	}
 
 	// Verify round-trip
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 	require.NotNil(t, newFile)
 }
@@ -1036,14 +1036,14 @@ func TestAddenda02Handling(t *testing.T) {
 // TestEmptyFileHeaderRecords tests edge case with empty file header
 func TestEmptyFileHeaderRecords(t *testing.T) {
 	file := createTestACHFile(t)
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// Clear file header records
 	ts.FileHeader.Records = [][]string{}
 
 	// Convert back - should not panic
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 	require.NotNil(t, newFile)
 }
@@ -1086,7 +1086,7 @@ func TestModifyAddenda98(t *testing.T) {
 	file, err := ach.ReadFile(testFile)
 	require.NoError(t, err)
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 	require.NotEmpty(t, ts.Addenda.Records)
 
@@ -1136,7 +1136,7 @@ func TestModifyAddenda98(t *testing.T) {
 	ts.Addenda.Records[addenda98RecordIdx][correctedDataIdx] = newCorrectedData
 
 	// Convert back
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 
 	// Find the entry with Addenda98 and verify changes
@@ -1165,7 +1165,7 @@ func TestModifyAddenda99(t *testing.T) {
 	file, err := ach.ReadFile(testFile)
 	require.NoError(t, err)
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 	require.NotEmpty(t, ts.Addenda.Records)
 
@@ -1215,7 +1215,7 @@ func TestModifyAddenda99(t *testing.T) {
 	ts.Addenda.Records[addenda99RecordIdx][addendaInfoIdx] = newAddendaInfo
 
 	// Convert back
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 
 	// Find the entry with Addenda99 and verify changes
@@ -1285,7 +1285,7 @@ func TestModifyAddenda98Refused(t *testing.T) {
 	require.NoError(t, file.Create())
 
 	// Convert to TableSet
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 	require.NotEmpty(t, ts.Addenda.Records)
 
@@ -1335,7 +1335,7 @@ func TestModifyAddenda98Refused(t *testing.T) {
 	ts.Addenda.Records[addenda98RefusedRecordIdx][correctedDataIdx] = newCorrectedData
 
 	// Convert back
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 
 	// Find the entry with Addenda98Refused and verify changes
@@ -1404,7 +1404,7 @@ func TestModifyAddenda99Dishonored(t *testing.T) {
 	require.NoError(t, file.Create())
 
 	// Convert to TableSet
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 	require.NotEmpty(t, ts.Addenda.Records)
 
@@ -1454,7 +1454,7 @@ func TestModifyAddenda99Dishonored(t *testing.T) {
 	ts.Addenda.Records[addenda99DishonoredRecordIdx][addendaInfoIdx] = newAddendaInfo
 
 	// Convert back
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 
 	// Find the entry with Addenda99Dishonored and verify changes
@@ -1527,7 +1527,7 @@ func TestModifyAddenda99Contested(t *testing.T) {
 	require.NoError(t, file.Create())
 
 	// Convert to TableSet
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 	require.NotEmpty(t, ts.Addenda.Records)
 
@@ -1577,7 +1577,7 @@ func TestModifyAddenda99Contested(t *testing.T) {
 	ts.Addenda.Records[addenda99ContestedRecordIdx][originalSettlementDateIdx] = newOriginalSettlementDate
 
 	// Convert back
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 
 	// Find the entry with Addenda99Contested and verify changes

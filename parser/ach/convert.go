@@ -45,8 +45,9 @@ type TableSet struct {
 	originalFile *ach.File
 }
 
-// FromFile converts an ACH file to a set of TableData structures.
-// The returned TableSet can be used with filesql for SQL queries.
+// fromFile converts an ACH file to a set of TableData structures.
+// It is what ParseReader hands back, and the TableSet can be used with filesql
+// for SQL queries.
 //
 // Tables created for standard batches:
 //   - file_header: File header information (1 row)
@@ -59,11 +60,9 @@ type TableSet struct {
 //   - iat_entries: IAT entry details
 //   - iat_addenda: IAT addenda records (types 10-18, 98, 99)
 //
-// Note: The TableSet stores a reference to the original file (not a copy).
-// If you modify the passed-in *ach.File after calling FromFile, the changes
-// will be reflected when calling ToFile(). ToFile() creates a deep copy
-// before applying TableData modifications.
-func FromFile(file *ach.File) *TableSet {
+// Note: The TableSet stores a reference to the original file (not a copy), and
+// toFile creates a deep copy before applying TableData modifications.
+func fromFile(file *ach.File) *TableSet {
 	if file == nil {
 		return nil
 	}
@@ -596,14 +595,14 @@ func convertAddenda(file *ach.File) *parser.TableData {
 	}
 }
 
-// ToFile reconstructs an ACH file from modified TableData.
+// toFile reconstructs an ACH file from modified TableData.
 // This allows round-trip editing: ACH -> TableData -> SQL modifications -> ACH
 //
 // The function creates a deep copy of the original ACH file and applies
 // modifications from all TableData (FileHeader, Batches, Entries, Addenda).
 //
 // After modification, the file's control records are automatically recalculated.
-func (ts *TableSet) ToFile() (*ach.File, error) {
+func (ts *TableSet) toFile() (*ach.File, error) {
 	if ts == nil || ts.originalFile == nil {
 		return nil, errors.New("no original ACH file available")
 	}
@@ -1221,7 +1220,7 @@ func (ts *TableSet) GetAddendaTable() *parser.TableData {
 }
 
 // UpdateEntriesFromTableData updates the internal entries data from modified TableData.
-// Call this after making SQL modifications to prepare for ToFile().
+// Call this after making SQL modifications to prepare for WriteToWriter.
 func (ts *TableSet) UpdateEntriesFromTableData(entries *parser.TableData) {
 	if ts != nil {
 		ts.Entries = entries
@@ -1257,14 +1256,14 @@ func ParseReader(reader io.Reader) (*TableSet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse ACH file: %w", err)
 	}
-	return FromFile(&achFile), nil
+	return fromFile(&achFile), nil
 }
 
 // WriteToWriter writes the ACH file from a TableSet to an io.Writer.
 // This function encapsulates the moov-io/ach dependency so that callers
 // don't need to import moov-io/ach directly.
 func (ts *TableSet) WriteToWriter(writer io.Writer) error {
-	achFile, err := ts.ToFile()
+	achFile, err := ts.toFile()
 	if err != nil {
 		return err
 	}

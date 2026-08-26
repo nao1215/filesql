@@ -15,7 +15,7 @@ import (
 
 func TestFromFile_NilFile(t *testing.T) {
 	t.Parallel()
-	ts := FromFile(nil)
+	ts := fromFile(nil)
 	assert.Nil(t, ts)
 }
 
@@ -38,7 +38,7 @@ func TestWriteToWriter_NilReceiver(t *testing.T) {
 func TestWriteToWriter_NilWriter(t *testing.T) {
 	t.Parallel()
 	file := readTestFile(t, filepath.Join("testdata", "fedWireMessage-CustomerTransfer.fed"))
-	ts := FromFile(file)
+	ts := fromFile(file)
 	err := ts.WriteToWriter(nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "writer must not be nil")
@@ -48,7 +48,7 @@ func TestFromFile_CustomerTransfer(t *testing.T) {
 	t.Parallel()
 
 	file := readTestFile(t, filepath.Join("testdata", "fedWireMessage-CustomerTransfer.fed"))
-	ts := FromFile(file)
+	ts := fromFile(file)
 
 	require.NotNil(t, ts)
 	require.NotNil(t, ts.Message)
@@ -99,7 +99,7 @@ func TestFromFile_BankTransfer(t *testing.T) {
 	t.Parallel()
 
 	file := readTestFile(t, filepath.Join("testdata", "fedWireMessage-BankTransfer.fed"))
-	ts := FromFile(file)
+	ts := fromFile(file)
 
 	require.NotNil(t, ts)
 	require.NotNil(t, ts.Message)
@@ -114,7 +114,7 @@ func TestFromFile_CustomerTransferPlusCOVS(t *testing.T) {
 	t.Parallel()
 
 	file := readTestFile(t, filepath.Join("testdata", "fedWireMessage-CustomerTransferPlusCOVS.fed"))
-	ts := FromFile(file)
+	ts := fromFile(file)
 
 	require.NotNil(t, ts)
 	require.NotNil(t, ts.Message)
@@ -166,7 +166,7 @@ func TestToFile_NilTableSet(t *testing.T) {
 	t.Parallel()
 
 	var ts *TableSet
-	_, err := ts.ToFile()
+	_, err := ts.toFile()
 	assert.Error(t, err)
 }
 
@@ -174,7 +174,7 @@ func TestToFile_NoOriginal(t *testing.T) {
 	t.Parallel()
 
 	ts := &TableSet{}
-	_, err := ts.ToFile()
+	_, err := ts.toFile()
 	assert.Error(t, err)
 }
 
@@ -182,11 +182,11 @@ func TestRoundTrip_CustomerTransfer(t *testing.T) {
 	t.Parallel()
 
 	file := readTestFile(t, filepath.Join("testdata", "fedWireMessage-CustomerTransfer.fed"))
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// Convert back to wire.File
-	result, err := ts.ToFile()
+	result, err := ts.toFile()
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -217,7 +217,7 @@ func TestRoundTrip_Modification(t *testing.T) {
 	t.Parallel()
 
 	file := readTestFile(t, filepath.Join("testdata", "fedWireMessage-CustomerTransfer.fed"))
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// Modify the amount via TableData
@@ -230,7 +230,7 @@ func TestRoundTrip_Modification(t *testing.T) {
 	ts.Message.Records[0][amountIdx] = newAmount
 
 	// Convert back
-	result, err := ts.ToFile()
+	result, err := ts.toFile()
 	require.NoError(t, err)
 
 	// Verify modification was applied
@@ -268,7 +268,7 @@ func TestWriteToWriter(t *testing.T) {
 	t.Parallel()
 
 	file := readTestFile(t, filepath.Join("testdata", "fedWireMessage-CustomerTransfer.fed"))
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	var buf bytes.Buffer
@@ -295,7 +295,7 @@ func TestGetMessageTable(t *testing.T) {
 
 	// Valid TableSet
 	file := readTestFile(t, filepath.Join("testdata", "fedWireMessage-CustomerTransfer.fed"))
-	ts = FromFile(file)
+	ts = fromFile(file)
 	table := ts.GetMessageTable()
 	require.NotNil(t, table)
 	assert.Equal(t, ts.Message, table)
@@ -305,7 +305,7 @@ func TestUpdateMessageFromTableData(t *testing.T) {
 	t.Parallel()
 
 	file := readTestFile(t, filepath.Join("testdata", "fedWireMessage-CustomerTransfer.fed"))
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	newTD := &parser.TableData{
@@ -481,7 +481,7 @@ func TestFromFile_StructuredRemittance(t *testing.T) {
 	t.Parallel()
 
 	file := readTestFile(t, filepath.Join("testdata", "fedWireMessage-StructuredRemittance.fed"))
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	headerIndex := buildHeaderIndex(ts.Message.Headers)
@@ -531,7 +531,7 @@ func TestFromFile_RelatedRemittance(t *testing.T) {
 		RemittanceLocationElectronicAddress: "http://example.com",
 	}
 
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	headerIndex := buildHeaderIndex(ts.Message.Headers)
@@ -545,10 +545,10 @@ func TestRoundTrip_StructuredRemittance(t *testing.T) {
 	t.Parallel()
 
 	file := readTestFile(t, filepath.Join("testdata", "fedWireMessage-StructuredRemittance.fed"))
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
-	result, err := ts.ToFile()
+	result, err := ts.toFile()
 	require.NoError(t, err)
 
 	// Verify remittance fields are preserved
@@ -579,7 +579,7 @@ func TestRoundTrip_COVSModification(t *testing.T) {
 	t.Parallel()
 
 	file := readTestFile(t, filepath.Join("testdata", "fedWireMessage-CustomerTransferPlusCOVS.fed"))
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// Modify a CoverPayment field
@@ -588,7 +588,7 @@ func TestRoundTrip_COVSModification(t *testing.T) {
 		ts.Message.Records[0][idx] = "MODIFIED LINE ONE"
 	}
 
-	result, err := ts.ToFile()
+	result, err := ts.toFile()
 	require.NoError(t, err)
 
 	if result.FEDWireMessage.OrderingCustomer != nil {
@@ -1023,7 +1023,7 @@ func TestToFile_RoundTripWithNewSections(t *testing.T) {
 	assert.Nil(t, file.FEDWireMessage.Charges, "precondition: Charges should be nil")
 
 	// Convert to TableSet
-	ts := FromFile(file)
+	ts := fromFile(file)
 	require.NotNil(t, ts)
 
 	// Simulate SQL edit: set charges in the TableData
@@ -1033,7 +1033,7 @@ func TestToFile_RoundTripWithNewSections(t *testing.T) {
 	}
 
 	// Round-trip back to wire.File
-	newFile, err := ts.ToFile()
+	newFile, err := ts.toFile()
 	require.NoError(t, err)
 
 	// The new file should have a Charges section with the user's value
