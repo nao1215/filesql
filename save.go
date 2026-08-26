@@ -517,13 +517,16 @@ func (t *autoSaveTransaction) finish() {
 // Commit implements driver.Tx interface with auto-save on commit
 func (t *autoSaveTransaction) Commit() error {
 	// First commit the underlying transaction
-	if err := t.tx.Commit(); err != nil {
-		return err
-	}
-	// The commit is done, so this transaction is no longer one Close has to
-	// refuse. Dropping it from the count comes before the save below, which
-	// reads the same database.
+	commitErr := t.tx.Commit()
+	// Whether it committed or not, this transaction is over: database/sql does
+	// not call Rollback after a failed Commit, and the driver already rolled
+	// the connection back itself, so leaving it in the count would make every
+	// later close refuse a save it should have run. Dropping it comes before
+	// the save below, which reads the same database.
 	t.finish()
+	if commitErr != nil {
+		return commitErr
+	}
 
 	// Perform auto-save if configured for commit timing
 	if c := t.conn.connector; c != nil && c.savesOnCommit() {

@@ -70,6 +70,12 @@ type stubTx struct{}
 func (stubTx) Commit() error   { return nil }
 func (stubTx) Rollback() error { return nil }
 
+// failingCommitTx is a transaction whose commit fails, which is the outcome
+// that leaves database/sql calling neither Commit again nor Rollback.
+type failingCommitTx struct{ stubTx }
+
+func (failingCommitTx) Commit() error { return errStub }
+
 // stubRows is an empty result set.
 type stubRows struct{}
 
@@ -229,6 +235,29 @@ func TestAutoSaveTransaction_CommitReportsAFailedSave(t *testing.T) {
 	err := tx.Commit()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "transaction committed successfully")
+}
+
+// TestAutoSaveTransaction_CommitThatFailedStopsCountingAsOpen covers the
+// transaction a caller has no way to finish. database/sql does not call
+// Rollback after a Commit that returned an error, and the driver has already
+// rolled the connection back, so a transaction left in the connector's count
+// there would make every later close refuse a save that had nothing to wait
+// for.
+func TestAutoSaveTransaction_CommitThatFailedStopsCountingAsOpen(t *testing.T) {
+	t.Parallel()
+
+	connector := &autoSaveConnector{
+		autoSaveConfig: &autoSaveConfig{enabled: true, timing: autoSaveOnClose},
+	}
+	conn := &autoSaveConnection{conn: &plainConn{}, connector: connector}
+	tx := conn.wrapTx(failingCommitTx{})
+
+	require.ErrorIs(t, tx.Commit(), errStub)
+
+	connector.mu.Lock()
+	open := connector.openTx
+	connector.mu.Unlock()
+	assert.Zero(t, open, "a transaction that cannot be committed is still over")
 }
 
 // TestAutoSaveTransaction_RollbackNeverSaves checks that a rollback reaches the
