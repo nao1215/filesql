@@ -77,10 +77,10 @@ var commonCastKinds = map[string]castKind{
 	"VARCHAR":     castText,
 	"TEXT":        castText,
 	"JSON":        castJSON,
-	"DATE":        castDate,
-	"DATETIME":    castTimestamp,
-	"TIME":        castTime,
-	"TIMESTAMP":   castTimestamp,
+	typeDate:      castDate,
+	typeDatetime:  castTimestamp,
+	typeTime:      castTime,
+	typeTimestamp: castTimestamp,
 	"BLOB":        castBlob,
 }
 

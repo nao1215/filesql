@@ -237,12 +237,37 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_mod", googlesqlCallPass)
 	case fnNameTrunc:
 		return rewriteTruncScaleCall(tokens, open, closeIdx, googlesqlCallPass)
-	case "DATE_ADD", "TIMESTAMP_ADD":
+	case "DATE_ADD", "TIMESTAMP_ADD", "DATETIME_ADD":
 		return rewriteDateArith(tokens, open, closeIdx, "+", googlesqlCallPass)
-	case "DATE_SUB", "TIMESTAMP_SUB":
+	case "DATE_SUB", "TIMESTAMP_SUB", "DATETIME_SUB":
 		return rewriteDateArith(tokens, open, closeIdx, "-", googlesqlCallPass)
-	case "DATE_DIFF", "TIMESTAMP_DIFF":
+	// A BigQuery TIME is a time of day, so its arithmetic wraps around midnight
+	// rather than moving to another day.
+	case "TIME_ADD":
+		return rewriteDateArithNamed(tokens, open, closeIdx, "+", "time_add", googlesqlCallPass)
+	case "TIME_SUB":
+		return rewriteDateArithNamed(tokens, open, closeIdx, "-", "time_add", googlesqlCallPass)
+	case "DATE_DIFF", "TIMESTAMP_DIFF", "DATETIME_DIFF", "TIME_DIFF":
 		return rewriteDateDiff(tokens, nameIdx, open, closeIdx)
+	// BigQuery's digests answer bytes; the shared MD5 is PostgreSQL's, which
+	// answers hexadecimal text, and the shared SHA1 is MySQL's, which does too.
+	case "MD5", "SHA1":
+		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_"+strings.ToLower(tokens[nameIdx].text), googlesqlCallPass)
+	// The constructors. SQLite has date(), time() and datetime() of its own,
+	// which answer NULL for the field arguments BigQuery builds a value from.
+	case typeDate, typeDatetime, typeTime, typeTimestamp:
+		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_"+strings.ToLower(tokens[nameIdx].text), googlesqlCallPass)
+	case "STRING":
+		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_string", googlesqlCallPass)
+	case "LAST_DAY":
+		return rewriteDatePartArgCall(tokens, open, closeIdx, "googlesql_last_day", googlesqlCallPass)
+	case "INSTR":
+		// SQLite's own INSTR takes two arguments; BigQuery's takes up to four.
+		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_instr", googlesqlCallPass)
+	case "NORMALIZE", "NORMALIZE_AND_CASEFOLD":
+		return rewriteKeywordArgCall(tokens, open, closeIdx, strings.ToLower(tokens[nameIdx].text), 1, googlesqlCallPass)
+	case "EDIT_DISTANCE":
+		return rewriteEditDistance(tokens, open, closeIdx, googlesqlCallPass)
 	case "JSON_VALUE", "JSON_EXTRACT_SCALAR":
 		return rewriteRenameCall(tokens, open, closeIdx, "json_extract", googlesqlCallPass)
 	case "JSON_QUERY":
@@ -257,6 +282,8 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 		return rewriteRenameCall(tokens, open, closeIdx, "length", googlesqlCallPass)
 	case "DATE_TRUNC", "TIMESTAMP_TRUNC", "DATETIME_TRUNC":
 		return rewriteTruncCall(tokens, open, closeIdx, googlesqlCallPass)
+	case "TIME_TRUNC":
+		return rewriteDatePartArgCall(tokens, open, closeIdx, "time_trunc", googlesqlCallPass)
 	case fnNameStringAgg:
 		// SQLite has string_agg as an alias of group_concat, so the plain form
 		// runs as written and only the DISTINCT one needs rewriting.
@@ -343,11 +370,11 @@ func rewriteDateDiff(tokens []token, nameIdx, open, closeIdx int) ([]token, bool
 		return nil, false, nil
 	}
 	firstComma, secondComma := commas[0], commas[1]
-	unitTok := nextSig(tokens, secondComma+1)
-	if unitTok < 0 || tokens[unitTok].kind != tokWord {
+	unit, last, ok := datePartAt(tokens, nextSig(tokens, secondComma+1))
+	if !ok {
 		return nil, false, nil
 	}
-	if after := nextSig(tokens, unitTok+1); after != closeIdx {
+	if after := nextSig(tokens, last+1); after != closeIdx {
 		return nil, false, nil
 	}
 
@@ -362,12 +389,12 @@ func rewriteDateDiff(tokens []token, nameIdx, open, closeIdx int) ([]token, bool
 	argA = trimSpaceTokens(argA)
 	argB = trimSpaceTokens(argB)
 	repl := make([]token, 0, len(argA)+len(argB)+8)
-	repl = append(repl, tokens[nameIdx], opToken("("))
+	repl = append(repl, wordToken(strings.ToLower(tokens[nameIdx].text)), opToken("("))
 	repl = append(repl, argA...)
 	repl = append(repl, opToken(","), spaceToken())
 	repl = append(repl, argB...)
 	repl = append(repl, opToken(","), spaceToken())
-	repl = append(repl, stringToken(strings.ToLower(tokens[unitTok].text)))
+	repl = append(repl, stringToken(unit))
 	repl = append(repl, opToken(")"))
 	return repl, true, nil
 }

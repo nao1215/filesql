@@ -259,6 +259,8 @@ func registerAll() error {
 		"regexp_extract":    {2, fnRegexpExtract},
 		"date_diff":         {3, fnDateDiff3},
 		"timestamp_diff":    {3, fnDateDiff3},
+		"datetime_diff":     {3, fnDateDiff3},
+		"time_diff":         {3, fnTimeDiff},
 		"format_date":       {2, fnFormatDate},
 		"format_datetime":   {2, fnFormatDate},
 		"format_timestamp":  {2, fnFormatDate},
@@ -286,6 +288,7 @@ func registerAll() error {
 	maps.Copy(det, mysqlScalarFunctions())
 	maps.Copy(det, mysqlTimeFunctions())
 	maps.Copy(det, postgresqlScalarFunctions())
+	maps.Copy(det, googlesqlScalarFunctions())
 	for name, spec := range det {
 		if err := sqlite.RegisterDeterministicScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
 			return fmt.Errorf("dialect: register %s: %w", name, err)
@@ -305,6 +308,7 @@ func registerAll() error {
 		"generate_uuid":  {0, fnGenerateUUID},
 	}
 	maps.Copy(nondet, postgresqlNonDeterministicFunctions())
+	maps.Copy(nondet, googlesqlNonDeterministicFunctions())
 	for name, spec := range nondet {
 		if err := sqlite.RegisterScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
 			return fmt.Errorf("dialect: register %s: %w", name, err)
@@ -963,9 +967,9 @@ func datePartValue(unit string, tm time.Time) (driver.Value, error) {
 		return int64(centuryOf(tm.Year())), nil
 	case "millennium":
 		return int64(millenniumOf(tm.Year())), nil
-	case "milliseconds":
+	case "milliseconds", unitMillisecond:
 		return secondsWithFraction(tm) * 1000, nil
-	case "microseconds":
+	case "microseconds", unitMicrosecond:
 		// A microsecond is the finest a PostgreSQL timestamp holds, so the
 		// count is always whole; answering it as an integer also keeps SQLite
 		// from spelling a large REAL in exponent form.
@@ -1043,9 +1047,36 @@ func fnGoogleSQLDatePart(args []driver.Value) (driver.Value, error) {
 	case unitISOWeek:
 		_, week := tm.ISOWeek()
 		return int64(week), nil
+	// BigQuery's MILLISECOND and MICROSECOND are the fraction of a second
+	// alone, where PostgreSQL's are the seconds field with the fraction scaled
+	// into it, and PostgreSQL answers to both spellings. So 13:04:05.123 is
+	// 123 milliseconds here and 5123 there.
+	case unitMillisecond:
+		return int64(tm.Nanosecond() / 1e6), nil
+	case unitMicrosecond:
+		return int64(tm.Nanosecond() / 1e3), nil
 	default:
+		// BigQuery writes a week numbered from another weekday as
+		// WEEK(<WEEKDAY>), which reaches here as "week_monday" and the rest.
+		if start, ok := weekStartDay(unit); ok {
+			return int64(weekNumberFrom(tm, start)), nil
+		}
 		return datePartValue(unit, tm)
 	}
+}
+
+// weekNumberFrom counts the weeks that begin on start, with the days before the
+// year's first such weekday in week 0 -- which is the rule BigQuery's plain
+// WEEK already follows for Sunday, generalized to the weekday WEEK(<WEEKDAY>)
+// names.
+func weekNumberFrom(tm time.Time, start time.Weekday) int {
+	jan1 := time.Date(tm.Year(), time.January, 1, 0, 0, 0, 0, tm.Location())
+	firstStart := jan1.AddDate(0, 0, (int(start)-int(jan1.Weekday())+7)%7)
+	day := time.Date(tm.Year(), tm.Month(), tm.Day(), 0, 0, 0, 0, tm.Location())
+	if day.Before(firstStart) {
+		return 0
+	}
+	return int(day.Sub(firstStart)/(24*time.Hour))/7 + 1
 }
 
 // fnMySQLDatePart implements EXTRACT under MySQL, whose WEEK is WEEK(x) with
@@ -1829,9 +1860,9 @@ func fnDateTrunc(args []driver.Value) (driver.Value, error) {
 		return time.Date((centuryOf(y)-1)*100+1, 1, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
 	case "millennium":
 		return time.Date((millenniumOf(y)-1)*1000+1, 1, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
-	case "milliseconds", "millisecond":
+	case "milliseconds", unitMillisecond:
 		return truncatedFraction(tm, time.Millisecond), nil
-	case "microseconds", "microsecond":
+	case "microseconds", unitMicrosecond:
 		return truncatedFraction(tm, time.Microsecond), nil
 	default:
 		return nil, fmt.Errorf("dialect: unsupported DATE_TRUNC unit %q", unit)
@@ -2411,15 +2442,27 @@ func fnDateDiff3(args []driver.Value) (driver.Value, error) {
 	if !ok1 || !ok2 || !ok3 {
 		return nil, nil
 	}
-	switch strings.ToLower(strings.TrimSpace(unit)) {
+	switch part := strings.ToLower(strings.TrimSpace(unit)); part {
 	case unitYear:
 		return int64(a.Year() - b.Year()), nil
+	case unitISOYear:
+		yearA, _ := a.ISOWeek()
+		yearB, _ := b.ISOWeek()
+		return int64(yearA - yearB), nil
 	case unitQuarter:
 		return int64((a.Year()*4 + (int(a.Month())-1)/3) - (b.Year()*4 + (int(b.Month())-1)/3)), nil
 	case unitMonth:
 		return int64((a.Year()*12 + int(a.Month())) - (b.Year()*12 + int(b.Month()))), nil
-	case unitWeek:
-		return int64(truncDay(a).Sub(truncDay(b)).Hours() / 24 / 7), nil
+	case unitWeek, unitISOWeek:
+		// A week difference counts the week boundaries crossed rather than the
+		// seven-day spans between the two dates, so a Saturday and the Sunday
+		// after it are one week apart. WEEK begins on Sunday and ISOWEEK on
+		// Monday.
+		start := time.Sunday
+		if part == unitISOWeek {
+			start = time.Monday
+		}
+		return int64(weekBoundariesBetween(a, b, start)), nil
 	case unitDay:
 		return int64(truncDay(a).Sub(truncDay(b)).Hours() / 24), nil
 	case unitHour:
@@ -2429,8 +2472,21 @@ func fnDateDiff3(args []driver.Value) (driver.Value, error) {
 	case unitSecond:
 		return int64(a.Sub(b).Seconds()), nil
 	default:
+		if start, ok := weekStartDay(part); ok {
+			return int64(weekBoundariesBetween(a, b, start)), nil
+		}
 		return nil, fmt.Errorf("dialect: unsupported DATE_DIFF unit %q", unit)
 	}
+}
+
+// weekBoundariesBetween counts the weeks that begin on start between two dates,
+// signed, which is what DATE_DIFF counts for every week spelling.
+func weekBoundariesBetween(a, b time.Time, start time.Weekday) int {
+	weekStart := func(t time.Time) time.Time {
+		day := truncDay(t)
+		return day.AddDate(0, 0, -((int(day.Weekday()) - int(start) + 7) % 7))
+	}
+	return int(weekStart(a).Sub(weekStart(b)) / (7 * 24 * time.Hour))
 }
 
 func truncDay(t time.Time) time.Time {

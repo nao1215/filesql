@@ -223,16 +223,13 @@ func fnDateTruncPart(args []driver.Value) (driver.Value, error) {
 	}
 	unit, _ := toString(args[1])
 	unit = strings.ToLower(strings.TrimSpace(unit))
-	// BigQuery's WEEK begins on Sunday and its ISOWEEK on Monday; the shared
-	// PostgreSQL helper below knows only the ISO week, so both land here.
-	if unit == unitWeek || unit == unitISOWeek {
+	// BigQuery's WEEK begins on Sunday, its ISOWEEK on Monday, and
+	// WEEK(<WEEKDAY>) on whichever day it names; the shared PostgreSQL helper
+	// below knows only the ISO week, so all of them land here.
+	if weekStart, isWeek := weekStartDay(unit); isWeek {
 		tm, ok := toStringTime(args[0])
 		if !ok {
 			return nil, nil
-		}
-		weekStart := time.Sunday
-		if unit == unitISOWeek {
-			weekStart = time.Monday
 		}
 		offset := (int(tm.Weekday()) - int(weekStart) + 7) % 7
 		y, mo, d := tm.Date()
