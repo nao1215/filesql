@@ -2024,3 +2024,162 @@ func TestCastOfAStringToAnIntegerFollowsTheSourceDialect(t *testing.T) {
 		})
 	}
 }
+
+// TestSafeIntArithmetic covers the overflow checks behind SAFE_ADD,
+// SAFE_SUBTRACT, and SAFE_MULTIPLY. A result that does not fit answers NULL,
+// which is the whole point of the SAFE_ family: wrapping around would produce a
+// number of the wrong sign and report success.
+func TestSafeIntArithmetic(t *testing.T) {
+	t.Parallel()
+
+	t.Run("addition", func(t *testing.T) {
+		t.Parallel()
+
+		if _, ok := safeAddInt(math.MaxInt64, 1); ok {
+			t.Fatal("adding past the maximum must not report success")
+		}
+		if _, ok := safeAddInt(math.MinInt64, -1); ok {
+			t.Fatal("adding past the minimum must not report success")
+		}
+		if got, ok := safeAddInt(2, 3); !ok || got != 5 {
+			t.Fatalf("safeAddInt(2, 3) = %v, %v", got, ok)
+		}
+	})
+
+	t.Run("subtraction", func(t *testing.T) {
+		t.Parallel()
+
+		// Subtracting the minimum is negating it, which has no int64 form.
+		if _, ok := safeSubInt(1, math.MinInt64); ok {
+			t.Fatal("subtracting the minimum from a positive must not report success")
+		}
+		if got, ok := safeSubInt(-1, math.MinInt64); !ok || got != math.MaxInt64 {
+			t.Fatalf("safeSubInt(-1, MinInt64) = %v, %v", got, ok)
+		}
+		if _, ok := safeSubInt(math.MinInt64, 1); ok {
+			t.Fatal("subtracting past the minimum must not report success")
+		}
+		if got, ok := safeSubInt(5, 3); !ok || got != 2 {
+			t.Fatalf("safeSubInt(5, 3) = %v, %v", got, ok)
+		}
+	})
+
+	t.Run("multiplication", func(t *testing.T) {
+		t.Parallel()
+
+		if _, ok := safeMulInt(math.MaxInt64, 2); ok {
+			t.Fatal("multiplying past the maximum must not report success")
+		}
+		if got, ok := safeMulInt(6, 7); !ok || got != 42 {
+			t.Fatalf("safeMulInt(6, 7) = %v, %v", got, ok)
+		}
+	})
+}
+
+// TestToInt covers the conversion every numeric UDF starts from. A value it
+// cannot read as a number is not zero: reporting false is what lets the caller
+// answer NULL instead of counting it as 0.
+func TestToInt(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value driver.Value
+		want  int64
+		ok    bool
+	}{
+		{name: "a NULL is not a number", value: nil},
+		{name: "an integer", value: int64(7), want: 7, ok: true},
+		{name: "a float truncates", value: 7.9, want: 7, ok: true},
+		{name: "true", value: true, want: 1, ok: true},
+		{name: "false", value: false, want: 0, ok: true},
+		{name: "a numeric string", value: " 42 ", want: 42, ok: true},
+		{name: "a string that is not a number", value: "abc"},
+		{name: "numeric bytes", value: []byte("42"), want: 42, ok: true},
+		{name: "bytes that are not a number", value: []byte("abc")},
+		{name: "a value of another type", value: time.Time{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := toInt(tt.value)
+			if ok != tt.ok {
+				t.Fatalf("toInt(%v) ok = %v, want %v", tt.value, ok, tt.ok)
+			}
+			if ok && got != tt.want {
+				t.Fatalf("toInt(%v) = %v, want %v", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestHexFunctions covers the two HEX spellings. MySQL's answers with the
+// hexadecimal of a number's value, where SQLite's own HEX would answer with the
+// hexadecimal of the digits' bytes — "323535" for 255 instead of "FF".
+func TestHexFunctions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("MySQL HEX", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name  string
+			value driver.Value
+			want  driver.Value
+		}{
+			{name: "a NULL stays NULL", value: nil, want: nil},
+			{name: "an integer", value: int64(255), want: "FF"},
+			{name: "a float rounds", value: 255.4, want: "FF"},
+			{name: "a float rounds a half away from zero", value: 2.5, want: "3"},
+			{name: "a negative number is unsigned", value: int64(-1), want: "FFFFFFFFFFFFFFFF"},
+			{name: "a number past int64 clamps", value: 1e300, want: "7FFFFFFFFFFFFFFF"},
+			{name: "a number below int64 clamps", value: -1e300, want: "8000000000000000"},
+			{name: "a NaN is zero", value: math.NaN(), want: "0"},
+			{name: "bytes", value: []byte("abc"), want: "616263"},
+			{name: "a numeric string is hexed as its bytes", value: "255", want: "323535"},
+			{name: "a string that is not a number is hexed as its bytes", value: "abc", want: "616263"},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				got, err := fnMySQLHex([]driver.Value{tt.value})
+				if err != nil {
+					t.Fatalf("fnMySQLHex(%v) error: %v", tt.value, err)
+				}
+				if got != tt.want {
+					t.Fatalf("fnMySQLHex(%v) = %v, want %v", tt.value, got, tt.want)
+				}
+			})
+		}
+	})
+
+	t.Run("GoogleSQL TO_HEX", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name  string
+			value driver.Value
+			want  driver.Value
+		}{
+			{name: "a NULL stays NULL", value: nil, want: nil},
+			{name: "bytes", value: []byte("abc"), want: "616263"},
+			{name: "a string is taken as its bytes", value: "abc", want: "616263"},
+			{name: "a number is taken as the bytes of its digits", value: int64(255), want: "323535"},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				got, err := fnToHex([]driver.Value{tt.value})
+				if err != nil {
+					t.Fatalf("fnToHex(%v) error: %v", tt.value, err)
+				}
+				if got != tt.want {
+					t.Fatalf("fnToHex(%v) = %v, want %v", tt.value, got, tt.want)
+				}
+			})
+		}
+	})
+}

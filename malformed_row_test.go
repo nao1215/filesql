@@ -343,3 +343,66 @@ func TestMalformedRowFillRefusesALongRecord(t *testing.T) {
 	require.Error(t, err, "a long record is refused rather than truncated")
 	assert.ErrorIs(t, err, ErrColumnMismatch)
 }
+
+// TestParseDelimitedStream_MalformedRowPolicies covers what a ragged row does
+// under each policy. The counts matter as much as the outcome: a load that
+// dropped rows reports how many, so a caller can tell a clean load from a lossy
+// one.
+func TestParseDelimitedStream_MalformedRowPolicies(t *testing.T) {
+	t.Parallel()
+
+	// The second row has one field too few and the third one too many.
+	const content = "id,name,email\n1,Alice\n3,Carol,c@example.com,extra\n4,Dave,d@example.com\n"
+
+	t.Run("stop refuses the file", func(t *testing.T) {
+		t.Parallel()
+
+		parser := newStreamingParser(FileTypeCSV, CompressionNone, "users", 100)
+		parser.malformedRowPolicy = MalformedRowStop
+
+		_, err := parser.parseFromReader(strings.NewReader(content))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrColumnMismatch)
+	})
+
+	t.Run("skip drops the ragged rows and counts them", func(t *testing.T) {
+		t.Parallel()
+
+		parser := newStreamingParser(FileTypeCSV, CompressionNone, "users", 100)
+		parser.malformedRowPolicy = MalformedRowSkip
+
+		table, err := parser.parseFromReader(strings.NewReader(content))
+		require.NoError(t, err)
+		assert.Len(t, table.getRecords(), 1, "only the well-formed row is kept")
+		assert.Equal(t, 2, parser.skippedRows)
+		assert.Equal(t, 3, parser.totalRows)
+	})
+
+	t.Run("fill pads a short row and still refuses a long one", func(t *testing.T) {
+		t.Parallel()
+
+		parser := newStreamingParser(FileTypeCSV, CompressionNone, "users", 100)
+		parser.malformedRowPolicy = MalformedRowFill
+
+		short := newStreamingParser(FileTypeCSV, CompressionNone, "users", 100)
+		short.malformedRowPolicy = MalformedRowFill
+		table, err := short.parseFromReader(strings.NewReader("id,name,email\n1,Alice\n"))
+		require.NoError(t, err)
+		require.Len(t, table.getRecords(), 1)
+		assert.Equal(t, []string{"1", "Alice", ""}, []string(table.getRecords()[0]), "a missing field becomes an empty one")
+
+		_, err = parser.parseFromReader(strings.NewReader(content))
+		require.Error(t, err, "a row with more fields than the header would lose data if it were reshaped")
+		assert.ErrorIs(t, err, ErrColumnMismatch)
+	})
+}
+
+// TestMalformedRowPolicy_String pins the names the policies are configured by.
+func TestMalformedRowPolicy_String(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "stop", MalformedRowStop.String())
+	assert.Equal(t, "skip", MalformedRowSkip.String())
+	assert.Equal(t, "fill", MalformedRowFill.String())
+	assert.Equal(t, "MalformedRowPolicy(9)", MalformedRowPolicy(9).String())
+}

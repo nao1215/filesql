@@ -45,6 +45,7 @@ your local Go rather than against filesql.
 - Follow normal Go style. [`Effective Go`](https://go.dev/doc/effective_go) is the baseline.
 - Keep public APIs documented.
 - Add or update tests with the code change.
+- Put the test in `<source>_test.go`, next to the source that implements the behavior. A new test file belongs with a new source file, not with a new case: `foo_edge_test.go` beside `foo_test.go` splits one subject across two files, and the next person adds a third. Group cases with `t.Run` instead.
 - Prefer direct, explicit tests over clever test abstractions.
 - If you change a README code sample, keep the sample covered by tests.
 - Do not leave stale docs, stale examples, or dead code behind.
