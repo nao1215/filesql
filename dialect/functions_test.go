@@ -1945,6 +1945,23 @@ func TestCastOfAStringToAnIntegerFollowsTheSourceDialect(t *testing.T) {
 		{name: "googlesql safe_cast answers null for a fraction", dialect: GoogleSQL, query: `SELECT SAFE_CAST('1.5' AS INT64)`, wantNull: true},
 		{name: "googlesql safe_cast still reads an integer string", dialect: GoogleSQL, query: `SELECT SAFE_CAST('12' AS INT64)`, want: "12"},
 		{name: "googlesql still rounds a number", dialect: GoogleSQL, query: `SELECT CAST(1.5 AS INT64)`, want: "2"},
+
+		// GoogleSQL reads a hexadecimal string, which is how a column of
+		// hexadecimal identifiers becomes numbers. The other two do not:
+		// PostgreSQL raises for it and MySQL reads the leading digits, which
+		// is the 0 its prefix rule gives.
+		{name: "googlesql reads a hexadecimal string", dialect: GoogleSQL, query: `SELECT CAST('0x10' AS INT64)`, want: "16"},
+		{name: "googlesql reads an upper-case prefix", dialect: GoogleSQL, query: `SELECT CAST('0X1f' AS INT64)`, want: "31"},
+		{name: "googlesql reads a signed hexadecimal string", dialect: GoogleSQL, query: `SELECT CAST('-0x10' AS INT64)`, want: "-16"},
+		{name: "googlesql refuses a prefix with no digits", dialect: GoogleSQL, query: `SELECT CAST('0x' AS INT64)`, wantErr: true},
+		{name: "googlesql refuses hexadecimal that is not", dialect: GoogleSQL, query: `SELECT CAST('0xzz' AS INT64)`, wantErr: true},
+		{name: "googlesql reads the largest hexadecimal int64", dialect: GoogleSQL, query: `SELECT CAST('0x7fffffffffffffff' AS INT64)`, want: "9223372036854775807"},
+		{name: "googlesql refuses one past the largest", dialect: GoogleSQL, query: `SELECT CAST('0x8000000000000000' AS INT64)`, wantErr: true},
+		{name: "googlesql reads the smallest hexadecimal int64", dialect: GoogleSQL, query: `SELECT CAST('-0x8000000000000000' AS INT64)`, want: "-9223372036854775808"},
+		{name: "googlesql safe_cast reads a hexadecimal string", dialect: GoogleSQL, query: `SELECT SAFE_CAST('0x10' AS INT64)`, want: "16"},
+		{name: "googlesql safe_cast answers null for bad hexadecimal", dialect: GoogleSQL, query: `SELECT SAFE_CAST('0xzz' AS INT64)`, wantNull: true},
+		{name: "postgresql refuses a hexadecimal string", dialect: PostgreSQL, query: `SELECT CAST('0x10' AS integer)`, wantErr: true},
+		{name: "mysql reads no digits out of a hexadecimal string", dialect: MySQL, query: `SELECT CAST('0x10' AS SIGNED)`, want: "0"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
