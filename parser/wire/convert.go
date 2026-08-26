@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -107,8 +108,59 @@ func (ts *TableSet) WriteToWriter(writer io.Writer) error {
 	if err != nil {
 		return err
 	}
-	w := wire.NewWriter(writer, wire.VariableLengthFields(true))
-	return w.Write(wireFile)
+	// Stage the message and read it back before any of it reaches the caller's
+	// writer. A Fedwire message carries no derived totals, so every field in
+	// the written file has to be the field that went into it, and reparsing is
+	// the only check that covers all 326 of them at once.
+	//
+	// It caught a real one. moov-io/wire v0.16.1 writes the remittance
+	// originator's fourth address line from its first, so a file that was read
+	// and written straight back came out with line four replaced by a copy of
+	// line one and the original gone, with nothing to say so. Refusing the
+	// write leaves the caller holding the file they started with, which for a
+	// payment file is the only safe answer: a silently wrong export is worse
+	// than a failed one.
+	var staged bytes.Buffer
+	w := wire.NewWriter(&staged, wire.VariableLengthFields(true))
+	if err := w.Write(wireFile); err != nil {
+		return err
+	}
+	if err := verifyWritten(ts.Message, staged.Bytes()); err != nil {
+		return err
+	}
+	_, err = writer.Write(staged.Bytes())
+	return err
+}
+
+// verifyWritten reparses the staged bytes and reports the first column whose
+// value the write did not preserve. want is the table the write was made from,
+// so a column that differs is one the caller asked for and did not get.
+//
+// A message that cannot be reparsed at all is reported the same way: bytes this
+// package cannot read back are bytes it should not hand out.
+func verifyWritten(want *parser.TableData, staged []byte) error {
+	if want == nil || len(want.Records) == 0 {
+		return nil
+	}
+	back, err := ParseReader(bytes.NewReader(staged))
+	if err != nil {
+		return fmt.Errorf("the written message cannot be read back: %w", err)
+	}
+	got := back.Message
+	if got == nil || len(got.Records) == 0 {
+		return errors.New("the written message came back with no rows")
+	}
+	for i, column := range want.Headers {
+		if i >= len(want.Records[0]) || i >= len(got.Records[0]) {
+			break
+		}
+		if want.Records[0][i] != got.Records[0][i] {
+			return fmt.Errorf(
+				"the written message would hold %q in %s, not %q; the file was not written",
+				got.Records[0][i], column, want.Records[0][i])
+		}
+	}
+	return nil
 }
 
 // GetMessageTable returns the message TableData for use with filesql.
