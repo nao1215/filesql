@@ -7,8 +7,11 @@
 // database engine, providing full SQL capabilities including JOINs, aggregations,
 // window functions, and CTEs.
 //
-// ACH (NACHA) and Fedwire files are also loaded, and both are experimental: what
-// they turn into and how they behave on a malformed file may still change.
+// ACH (NACHA) and Fedwire files are also loaded. Both are written back by
+// rebuilding the file from the parsed structure rather than by patching it, so
+// a write normalizes formatting and recalculates the records the format derives.
+// See the ACH and Fedwire section of README for what that means for control
+// columns and for the columns that name a record's position.
 //
 // # Features
 //

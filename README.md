@@ -48,8 +48,8 @@ filesql is for cases where the data is already in a file and the fastest useful 
 | `.jsonl` | JSONL | One JSON value per line |
 | `.parquet` | Parquet | Columnar format |
 | `.xlsx` | Excel XLSX | One sheet becomes one table, named `file_sheet` (just `file` when the sheet repeats it). Every sheet is loaded by default; see [Excel sheet visibility](#excel-sheet-visibility) |
-| `.ach` | ACH (NACHA) | Experimental |
-| `.fed` | Fedwire | Experimental |
+| `.ach` | ACH (NACHA) | One table per record kind; see [ACH and Fedwire](#ach-and-fedwire) |
+| `.fed` | Fedwire | One message becomes one row 326 columns wide; see [ACH and Fedwire](#ach-and-fedwire) |
 
 Two inputs are the same source only when they are in the same place. `dir/users.csv` and `dir/users.csv.gz` are one dataset offered twice, and the plain one is read; `a/users.csv` and `b/users.csv` are two files, and both are loaded. What happens when both then want the table `users` is the loading API's business: `Open` and `OpenContext` build a fresh database and refuse it with `ErrDuplicateTable`, while `LoadInto` and `LoadIntoTx` load into a database you own and keep their last-wins rule, so the later input replaces the table. Neither one silently drops a file. Table names are compared the way SQLite compares identifiers, with ASCII case folded, so `Users.csv` and `users.csv` want the same table too.
 
@@ -487,9 +487,15 @@ for _, sheet := range sheets {
 
 ### ACH and Fedwire
 
-ACH (`.ach`) and Fedwire (`.fed`) support are experimental. They are useful for inspection, joins, and controlled updates, but the exported files still need domain knowledge from the caller.
+ACH (`.ach`) and Fedwire (`.fed`) are loaded, queried and written back like any other format. They are useful for inspection, joins, and controlled updates, but the exported files still need domain knowledge from the caller: both formats carry rules about what a valid file is, and this package checks only the ones the format itself defines.
 
 Control records are derived, not stored: writing an ACH file rebuilds each batch control and the file control from the entries, so an edited amount is balanced by the write rather than by the caller. An edit to a control column (`total_debit`, `total_credit`, `entry_hash`, `entry_addenda_count`) is therefore overwritten by the recalculation.
+
+The `batch_index`, `entry_index` and `addenda_index` columns say which record a row updates. They are not values the row stores, and a write refuses a row whose coordinates name a record that is not there or one another row has already named. Editing them used to retarget the update: a row pointed at another row's coordinates overwrote that record's account number, amount and trace number, the edited row came back unchanged, and nothing reported it.
+
+A Fedwire write is verified before it reaches your file. The message is written to a buffer, read back, and compared column by column with the table it was written from; if any field did not survive, the write is refused and the error names the field. Nothing is written in that case, so the file you started with is still there. One field reaches this today: `remittance_originator_address_line_four`, which the underlying library writes from line one, so a message whose fourth address line differs from its first cannot be exported until that is fixed upstream.
+
+Fedwire files must be the delimiter-separated form. filesql parses a message's variable-length fields by looking for the `*` that ends each one, so a file written in the fixed-width form is refused, naming every record it could not read. Files written by filesql are always the delimiter-separated form.
 
 A write-back rewrites the whole file. Both formats are written from the parsed structure rather than patched, so records the caller did not edit can come back formatted differently: an ACH record is written at its full width with its padding normalized, and Fedwire tags are written in the order the format defines rather than the order the file had them. The values are unchanged; the bytes are not, so a file diff after a write-back shows lines nobody edited.
 

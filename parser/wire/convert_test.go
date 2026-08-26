@@ -2,6 +2,7 @@ package wire
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1089,4 +1090,117 @@ func assertFieldNonEmpty(t *testing.T, record []string, headerIndex map[string]i
 	require.True(t, ok, "field %s not found in headers", field)
 	require.Less(t, idx, len(record), "field %s index out of range", field)
 	assert.NotEmpty(t, record[idx], "field %s should not be empty", field)
+}
+
+// TestWriteToWriter_RefusesAMessageItCannotWriteFaithfully drives the fault a
+// write-back used to have: a field written from the wrong source, with nothing
+// to say so.
+//
+// moov-io/wire v0.16.1 writes the remittance originator's fourth address line
+// from its first, so a file that was read and written straight back came out
+// with line four replaced by a copy of line one and the original gone. The
+// stock fixture hid it by repeating "Address Line One" in the line-four
+// position, so the wrong value happened to equal the right one.
+//
+// filesql cannot make that write correct without patching another package's
+// output, so it refuses it: the caller keeps the file they started with and is
+// told which field could not be written. When the dependency is fixed this test
+// starts failing, which is the signal to delete it along with whatever is left
+// of the workaround.
+func TestWriteToWriter_RefusesAMessageItCannotWriteFaithfully(t *testing.T) {
+	t.Parallel()
+
+	// Give every address line of the remittance originator a value of its own,
+	// so a field written from its neighbor cannot pass unnoticed.
+	raw, err := os.ReadFile(filepath.Join("testdata", "fedWireMessage-StructuredRemittance.fed"))
+	require.NoError(t, err)
+
+	lines := strings.Split(string(raw), "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "{8300}") {
+			continue
+		}
+		parts := strings.Split(line, "*")
+		seen := 0
+		for j, p := range parts {
+			if !strings.HasPrefix(p, "Address Line ") {
+				continue
+			}
+			seen++
+			parts[j] = fmt.Sprintf("LINE%d", seen)
+		}
+		lines[i] = strings.Join(parts, "*")
+	}
+
+	ts, err := ParseReader(strings.NewReader(strings.Join(lines, "\n")))
+	require.NoError(t, err)
+
+	cell := func(ts *TableSet, column string) string {
+		idx := buildHeaderIndex(ts.Message.Headers)
+		i, ok := idx[column]
+		require.True(t, ok, "no such column: %s", column)
+		return ts.Message.Records[0][i]
+	}
+
+	// Reading is unaffected: every line comes back in its own column.
+	for column, value := range map[string]string{
+		"remittance_originator_address_line_one":   "LINE1",
+		"remittance_originator_address_line_two":   "LINE2",
+		"remittance_originator_address_line_three": "LINE3",
+		"remittance_originator_address_line_four":  "LINE4",
+		"remittance_originator_address_line_five":  "LINE5",
+		"remittance_originator_address_line_six":   "LINE6",
+		"remittance_originator_address_line_seven": "LINE7",
+	} {
+		require.Equal(t, value, cell(ts, column), "the fixture was not read as intended: %s", column)
+	}
+
+	var buf bytes.Buffer
+	err = ts.WriteToWriter(&buf)
+	require.Error(t, err, "a write that cannot keep a field must be refused, not silently wrong")
+	assert.Contains(t, err.Error(), "remittance_originator_address_line_four",
+		"the error must name the field that could not be written")
+	assert.Zero(t, buf.Len(), "nothing may reach the caller's writer when the write is refused")
+}
+
+// TestWriteToWriter_KeepsEveryFieldOfEveryFixture is the invariant the check
+// above exists to serve, held over every Fedwire fixture in the repository:
+// parse, write with no edits, parse again, and every one of the 326 columns
+// still holds what the file held.
+//
+// The fixtures pass it today. What they did not do before is fail when a field
+// was written from the wrong source, because one of them repeats the same text
+// in two address positions -- so the invariant is only worth as much as the
+// distinctness of the values it runs on, which is what the test above adds.
+func TestWriteToWriter_KeepsEveryFieldOfEveryFixture(t *testing.T) {
+	t.Parallel()
+
+	entries, err := os.ReadDir("testdata")
+	require.NoError(t, err)
+
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) != ".fed" {
+			continue
+		}
+		t.Run(entry.Name(), func(t *testing.T) {
+			t.Parallel()
+
+			raw, readErr := os.ReadFile(filepath.Join("testdata", entry.Name()))
+			require.NoError(t, readErr)
+
+			ts, parseErr := ParseReader(bytes.NewReader(raw))
+			require.NoError(t, parseErr, "every fixture in testdata must be a message this package reads")
+
+			var buf bytes.Buffer
+			require.NoError(t, ts.WriteToWriter(&buf))
+
+			back, err := ParseReader(bytes.NewReader(buf.Bytes()))
+			require.NoError(t, err)
+			require.Equal(t, ts.Message.Headers, back.Message.Headers)
+			for i, column := range ts.Message.Headers {
+				assert.Equal(t, ts.Message.Records[0][i], back.Message.Records[0][i],
+					"%s did not survive a write with no edits", column)
+			}
+		})
+	}
 }
