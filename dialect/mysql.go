@@ -38,6 +38,9 @@ import (
 //	M-27 ADDDATE / SUBDATE               -> interval_add, interval or day form
 //	M-28 WEEK / WEEKOFYEAR / YEARWEEK    -> mysql_week / mysql_weekofyear /
 //	                                     mysql_yearweek
+//	M-29 a << b / a >> b                 -> mysql_shift_left / mysql_shift_right
+//	M-30 x REGEXP p, QUOTE, ASCII        -> mysql_regexp / mysql_quote /
+//	                                     mysql_ascii
 //
 // M-10 (LIMIT n, m) needs no rewrite: SQLite accepts it natively.
 func rewriteMySQL(tokens []token) ([]token, error) {
@@ -76,6 +79,14 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
+	// M-29: MySQL shifts an unsigned 64-bit value where SQLite shifts a signed
+	// one, so ">>" brought the sign bit down instead of zeros. This runs after
+	// the passes above so their operators are already calls, leaving only the
+	// arithmetic that an operand of a shift has to reach across.
+	out, err = shiftPass(out)
+	if err != nil {
+		return nil, err
+	}
 	// M-21: XOR has no SQLite spelling that keeps its precedence. It sits between
 	// OR and AND, so its operands are whole AND-expressions rather than the
 	// primaries a rewrite can pick out: translating it as if they were primaries
@@ -106,13 +117,21 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
+	// M-9/M-30: RLIKE is a second spelling of REGEXP, and both match under the
+	// collation of their operands, which folds case by default the way LIKE
+	// above does. Left as an operator, the match ran with Go's own rules and
+	// answered no for a letter MySQL matches.
+	out, err = regexpPass(renameWordPass(out, "RLIKE", "REGEXP"), "mysql_regexp")
+	if err != nil {
+		return nil, err
+	}
 	// M-23: a hexadecimal literal means one thing or the other depending on where
 	// it sits, and the translation cannot see which.
 	if err := rejectHexLiteralPass(out); err != nil {
 		return nil, err
 	}
 	// M-18: ANY_VALUE and the variance family have no SQLite aggregate.
-	return aggregatePass(renameWordPass(out, "RLIKE", "REGEXP"), MySQL)
+	return aggregatePass(out, MySQL)
 }
 
 // mysqlCallPass rewrites the MySQL function-call rules (C-1, M-5, M-6, M-8),
@@ -205,6 +224,14 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		return rewriteRenameCall(tokens, open, closeIdx, unicodeCaseHelper(tokens[nameIdx].text), mysqlCallPass)
 	case "HEX":
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_hex", mysqlCallPass)
+	case "QUOTE":
+		// SQLite's own quote() doubles the single quote and leaves a number
+		// unquoted, neither of which MySQL reads back.
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_quote", mysqlCallPass)
+	case "ASCII":
+		// MySQL's ASCII answers a byte and PostgreSQL's a code point, and the
+		// shared helper answers the latter.
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_ascii", mysqlCallPass)
 	case "UNHEX":
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_unhex", mysqlCallPass)
 	case "LPAD", "RPAD":

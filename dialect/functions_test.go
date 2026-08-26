@@ -445,7 +445,7 @@ func TestEdgeCaseUDFs(t *testing.T) {
 		{`SELECT LPAD('x', 5, '')`, "x"},
 		{`SELECT IF(2.5, 'y', 'n')`, "y"},
 		{`SELECT IF('0', 'y', 'n')`, "n"},
-		{`SELECT IF('text', 'y', 'n')`, "y"},
+		{`SELECT IF('text', 'y', 'n')`, "n"}, // a string with no number in it is zero
 		{`SELECT IF(CAST('' AS BLOB), 'y', 'n')`, "n"},
 		{`SELECT LEAST(5)`, "5"},
 		{`SELECT GREATEST('10', '9')`, "10"},        // numeric strings compare numerically
@@ -555,6 +555,22 @@ func TestValueCoercions(t *testing.T) {
 	}
 	if _, ok := toFloat(driver.Value(nil)); ok {
 		t.Fatal("toFloat(nil) should report false")
+	}
+
+	// A string in a numeric context is the number its leading digits spell.
+	for in, want := range map[string]float64{
+		"abc": 0, "true": 0, "": 0, " 1 ": 1, "1abc": 1, "0abc": 0,
+		"-1": -1, "+2": 2, ".5": 0.5, "1e2": 100, "1e": 1, "0.0": 0, ".": 0,
+	} {
+		if got := leadingNumber(in); got != want {
+			t.Errorf("leadingNumber(%q) = %v, want %v", in, got, want)
+		}
+	}
+
+	// A NUL byte cannot survive the round trip through SQLite's text values, so
+	// the escape for it is checked here rather than through a query.
+	if got, err := fnMySQLQuote([]driver.Value{"a\x00b"}); err != nil || got != `'a\0b'` {
+		t.Errorf(`fnMySQLQuote("a\x00b") = %v, %v, want 'a\0b'`, got, err)
 	}
 }
 
@@ -722,6 +738,109 @@ func TestDialectBoundariesFollowTheirEngine(t *testing.T) {
 		{name: "concat in the position needle", dialect: MySQL, query: `SELECT POSITION(CONCAT('b', NULL) IN 'abc')`, wantNull: true},
 		{name: "concat in the position haystack", dialect: MySQL, query: `SELECT POSITION('b' IN CONCAT('abc', NULL))`, wantNull: true},
 		{name: "mysql length counts bytes inside substring", dialect: MySQL, query: `SELECT SUBSTRING(CAST(LENGTH('日') AS CHAR) FROM 1)`, want: "3"},
+
+		// MySQL's default collation folds case, and its regular expressions
+		// match under that collation. LIKE already follows it here; REGEXP has
+		// to as well, or one dialect answers two ways about the same letter.
+		{name: "mysql regexp folds case", dialect: MySQL, query: `SELECT 'abc' REGEXP 'B'`, want: "1"},
+		{name: "mysql rlike folds case", dialect: MySQL, query: `SELECT 'ABC' RLIKE 'b'`, want: "1"},
+		{name: "mysql regexp folds beyond ascii", dialect: MySQL, query: `SELECT 'école' REGEXP 'É'`, want: "1"},
+		{name: "mysql regexp_replace folds case", dialect: MySQL, query: `SELECT REGEXP_REPLACE('aAa', 'a', 'X')`, want: "XXX"},
+		{name: "mysql regexp keeps an inline flag", dialect: MySQL, query: `SELECT 'abc' REGEXP '(?-i)B'`, want: "0"},
+		{name: "postgresql regexp stays case-sensitive", dialect: PostgreSQL, query: `SELECT CASE WHEN 'abc' ~ 'B' THEN 1 ELSE 0 END`, want: "0"},
+		{name: "googlesql regexp stays case-sensitive", dialect: GoogleSQL, query: `SELECT REGEXP_CONTAINS('abc', 'B')`, want: "0"},
+
+		// QUOTE exists to produce a literal the source engine can read back,
+		// and MySQL escapes with a backslash where SQLite doubles the quote.
+		{name: "mysql quote escapes with a backslash", dialect: MySQL, query: `SELECT QUOTE('O''Reilly')`, want: `'O\'Reilly'`},
+		{name: "mysql quote doubles a backslash", dialect: MySQL, query: `SELECT QUOTE('a\\b')`, want: `'a\\b'`},
+		{name: "mysql quote quotes a number", dialect: MySQL, query: `SELECT QUOTE(1.5)`, want: "'1.5'"},
+		{name: "mysql quote of an empty string", dialect: MySQL, query: `SELECT QUOTE('')`, want: "''"},
+		{name: "mysql quote of null is the word", dialect: MySQL, query: `SELECT QUOTE(NULL)`, want: "NULL"},
+		{name: "mysql quote escapes a control z", dialect: MySQL, query: `SELECT QUOTE(UNHEX('1A'))`, want: `'\Z'`},
+		{name: "postgresql quote is left to sqlite", dialect: PostgreSQL, query: `SELECT QUOTE('a''b')`, want: "'a''b'"},
+
+		// ASCII answers a byte in MySQL and a code point in PostgreSQL, and ORD
+		// is the one that answers the whole character to a MySQL caller.
+		{name: "mysql ascii answers the first byte", dialect: MySQL, query: `SELECT ASCII('Ā')`, want: "196"},
+		{name: "mysql ascii of a multibyte character", dialect: MySQL, query: `SELECT ASCII('日')`, want: "230"},
+		{name: "mysql ascii of an empty string", dialect: MySQL, query: `SELECT ASCII('')`, want: "0"},
+		{name: "mysql ascii reads a number as its digits", dialect: MySQL, query: `SELECT ASCII(255)`, want: "50"},
+		{name: "mysql ord answers the character", dialect: MySQL, query: `SELECT ORD('日')`, want: "15112101"},
+		{name: "postgresql ascii answers the code point", dialect: PostgreSQL, query: `SELECT ascii('Ā')`, want: "256"},
+
+		// HEX reads a number as unsigned and rounds a fraction, and it hexes
+		// the bytes of anything that arrives as a string.
+		{name: "mysql hex of a negative number", dialect: MySQL, query: `SELECT HEX(-1)`, want: "FFFFFFFFFFFFFFFF"},
+		{name: "mysql hex of a larger negative number", dialect: MySQL, query: `SELECT HEX(-255)`, want: "FFFFFFFFFFFFFF01"},
+		{name: "mysql hex rounds up", dialect: MySQL, query: `SELECT HEX(1.9)`, want: "2"},
+		{name: "mysql hex rounds a half away from zero", dialect: MySQL, query: `SELECT HEX(2.5)`, want: "3"},
+		{name: "mysql hex rounds toward zero from below one", dialect: MySQL, query: `SELECT HEX(-0.4)`, want: "0"},
+		{name: "mysql hex of a numeric string hexes its bytes", dialect: MySQL, query: `SELECT HEX('255')`, want: "323535"},
+		{name: "mysql hex of a number hexes its value", dialect: MySQL, query: `SELECT HEX(255)`, want: "FF"},
+		{name: "mysql hex of a string hexes its bytes", dialect: MySQL, query: `SELECT HEX('abc')`, want: "616263"},
+		{name: "mysql unhex reads hex back", dialect: MySQL, query: `SELECT HEX(UNHEX(HEX(-1)))`, want: "FFFFFFFFFFFFFFFF"},
+
+		// MySQL shifts an unsigned 64-bit value; SQLite shifts a signed one and
+		// reads a negative count as a shift the other way.
+		{name: "mysql shifts zeros in from the left", dialect: MySQL, query: `SELECT -1 >> 1`, want: "9223372036854775807"},
+		{name: "mysql shift right of a negative value", dialect: MySQL, query: `SELECT -8 >> 1`, want: "9223372036854775804"},
+		{name: "mysql shift right past the width", dialect: MySQL, query: `SELECT -1 >> 64`, want: "0"},
+		{name: "mysql shift by a negative count", dialect: MySQL, query: `SELECT 1 >> -1`, want: "0"},
+		{name: "mysql shift left past the width", dialect: MySQL, query: `SELECT -1 << 64`, want: "0"},
+		{name: "mysql shift left into the top bit", dialect: MySQL, query: `SELECT 1 << 63`, want: "-9223372036854775808"},
+		{name: "mysql shift right of a positive value", dialect: MySQL, query: `SELECT 16 >> 2`, want: "4"},
+		// A shift binds looser than the arithmetic on both sides of it and
+		// tighter than "&" and "|", so the operand a rewrite takes has to reach
+		// across the one and stop at the other. Every want was read from MySQL
+		// 8.4 rather than derived.
+		{name: "mysql shift takes the sum on its left", dialect: MySQL, query: `SELECT 1 + 2 >> 1`, want: "1"},
+		{name: "mysql shift takes the sum on its right", dialect: MySQL, query: `SELECT 4 >> 1 + 1`, want: "1"},
+		{name: "mysql shift takes the product on its left", dialect: MySQL, query: `SELECT 2 * 3 >> 1`, want: "3"},
+		{name: "mysql shift takes the difference on its right", dialect: MySQL, query: `SELECT 8 >> 3 - 1`, want: "2"},
+		{name: "mysql shift takes the remainder on its left", dialect: MySQL, query: `SELECT 7 % 4 >> 1`, want: "1"},
+		{name: "mysql shift takes the quotient on its left", dialect: MySQL, query: `SELECT 100 / 4 >> 2`, want: "6"},
+		{name: "mysql shift binds tighter than or", dialect: MySQL, query: `SELECT 1 | 4 >> 1`, want: "3"},
+		{name: "mysql shift binds tighter than and", dialect: MySQL, query: `SELECT 3 & 12 >> 2`, want: "3"},
+		{name: "mysql shift chains to the left", dialect: MySQL, query: `SELECT 16 >> 2 >> 1`, want: "2"},
+		{name: "mysql shift left chains to the left", dialect: MySQL, query: `SELECT 1 << 2 << 3`, want: "32"},
+		{name: "mysql shift of a complement", dialect: MySQL, query: `SELECT ~0 >> 60`, want: "15"},
+		{name: "mysql shift of a negative sum", dialect: MySQL, query: `SELECT -8 >> 1 + 1`, want: "4611686018427387902"},
+		{name: "mysql shift by a product", dialect: MySQL, query: `SELECT -1 >> 1 * 2`, want: "4611686018427387903"},
+		{name: "mysql shift after a keyword and a sign", dialect: MySQL, query: `SELECT 1 WHERE -1 >> 1 = 9223372036854775807`, want: "1"},
+		{name: "mysql shift of a column expression", dialect: MySQL, query: `SELECT n - 1 >> 1 FROM (SELECT 9 AS n)`, want: "4"},
+
+		// A string in boolean context is the number its leading digits spell,
+		// which is what MySQL and SQLite both do and what IF did not.
+		{name: "if reads a non-numeric string as zero", dialect: MySQL, query: `SELECT IF('abc', 1, 0)`, want: "0"},
+		{name: "if reads a boolean word as zero", dialect: MySQL, query: `SELECT IF('true', 1, 0)`, want: "0"},
+		{name: "if reads a numeric prefix", dialect: MySQL, query: `SELECT IF('1abc', 1, 0)`, want: "1"},
+		{name: "if reads a zero prefix as zero", dialect: MySQL, query: `SELECT IF('0abc', 1, 0)`, want: "0"},
+		{name: "if reads a zero decimal as zero", dialect: MySQL, query: `SELECT IF('0.0', 1, 0)`, want: "0"},
+		{name: "if trims before reading", dialect: MySQL, query: `SELECT IF(' 1 ', 1, 0)`, want: "1"},
+		{name: "if reads an empty string as zero", dialect: MySQL, query: `SELECT IF('', 1, 0)`, want: "0"},
+		{name: "if reads a zero byte as zero", dialect: MySQL, query: `SELECT IF(X'00', 1, 0)`, want: "0"},
+
+		// NULL flows through the new helpers rather than being answered for.
+		{name: "mysql regexp of a null pattern", dialect: MySQL, query: `SELECT 'a' REGEXP NULL`, wantNull: true},
+		{name: "mysql shift of a null value", dialect: MySQL, query: `SELECT NULL >> 1`, wantNull: true},
+		{name: "mysql shift by a null count", dialect: MySQL, query: `SELECT 1 << NULL`, wantNull: true},
+		{name: "mysql ascii of null", dialect: MySQL, query: `SELECT ASCII(NULL)`, wantNull: true},
+		{name: "mysql hex of null", dialect: MySQL, query: `SELECT HEX(NULL)`, wantNull: true},
+		{name: "mysql quote of null is the word", dialect: MySQL, query: `SELECT QUOTE(NULL)`, want: "NULL"},
+
+		// The match type still selects the other flags, and an unknown one is
+		// reported rather than folded into the default.
+		{name: "match type m anchors each line", dialect: MySQL, query: "SELECT REGEXP_REPLACE('a" + "\n" + "b', 'a$', 'X', 1, 1, 'm')", want: "X\nb"},
+		{name: "match type n lets a dot cross a newline", dialect: MySQL, query: "SELECT REGEXP_REPLACE('a" + "\n" + "b', 'a.b', 'X', 1, 1, 'n')", want: "X"},
+		{name: "match type c turns folding off", dialect: MySQL, query: `SELECT REGEXP_REPLACE('aAa', 'a', 'X', 1, 0, 'c')`, want: "XAX"},
+		{name: "an unknown match type is refused", dialect: MySQL, query: `SELECT REGEXP_REPLACE('a', 'a', 'X', 1, 0, 'z')`, wantErr: true},
+		{name: "an invalid pattern is refused", dialect: MySQL, query: `SELECT 'a' REGEXP '('`, wantErr: true},
+
+		// A sign is told from the binary operator by what stands before it.
+		{name: "a sign after a closing paren is binary", dialect: MySQL, query: `SELECT (4) - 1 >> 1`, want: "1"},
+		{name: "a sign after a quoted name is binary", dialect: MySQL, query: "SELECT `n` - 1 >> 1 FROM (SELECT 9 AS n)", want: "4"},
+		{name: "a sign after an operator is a sign", dialect: MySQL, query: `SELECT 8 * -1 >> 1`, want: "9223372036854775804"},
 	}
 
 	for _, tt := range tests {

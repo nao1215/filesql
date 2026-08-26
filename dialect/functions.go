@@ -182,18 +182,26 @@ func registerAll() error {
 		// Cast helpers. Each dialect's rewrite pass routes CAST through its own
 		// helper so the conversion follows that dialect's rules rather than
 		// SQLite's affinity; see cast.go.
-		"mysql_cast":                {2, dialectCast(MySQL, false)},
-		"mysql_format":              {2, fnMySQLFormat},
-		"mysql_left":                {2, fnMySQLLeft},
-		"mysql_right":               {2, fnMySQLRight},
-		"mysql_regexp_replace":      {-1, fnMySQLRegexpReplace},
-		"mysql_divide":              {2, divideFloat(false)},
-		"mysql_bit_xor":             {2, fnBitXor},
-		"interval_add":              {3, fnDateIntervalAdd},
-		"interval_text_add":         {3, fnIntervalTextAdd},
-		"date_trunc_part":           {2, fnDateTruncPart},
-		"mysql_hex":                 {1, fnMySQLHex},
-		"mysql_unhex":               {1, fnMySQLUnhex},
+		"mysql_cast":           {2, dialectCast(MySQL, false)},
+		"mysql_format":         {2, fnMySQLFormat},
+		"mysql_left":           {2, fnMySQLLeft},
+		"mysql_right":          {2, fnMySQLRight},
+		"mysql_regexp_replace": {-1, fnMySQLRegexpReplace},
+		"mysql_divide":         {2, divideFloat(false)},
+		"mysql_bit_xor":        {2, fnBitXor},
+		"interval_add":         {3, fnDateIntervalAdd},
+		"interval_text_add":    {3, fnIntervalTextAdd},
+		"date_trunc_part":      {2, fnDateTruncPart},
+		"mysql_hex":            {1, fnMySQLHex},
+		"mysql_unhex":          {1, fnMySQLUnhex},
+		"mysql_quote":          {1, fnMySQLQuote},
+		"mysql_ascii":          {1, fnMySQLASCII},
+		"mysql_shift_left":     {2, mysqlShift(true)},
+		"mysql_shift_right":    {2, mysqlShift(false)},
+		// MySQL matches a regular expression under the collation of its
+		// operands, and its default collation folds case; the shared regexp()
+		// is right for PostgreSQL and BigQuery, which do not.
+		"mysql_regexp":              {2, fnMySQLRegexp},
 		"like_sensitive":            {2, likeCompare(true)},
 		"like_insensitive":          {2, likeCompare(false)},
 		"similar_to":                {2, fnSimilarTo},
@@ -430,6 +438,29 @@ func fnRegexp(args []driver.Value) (driver.Value, error) {
 	return int64(0), nil
 }
 
+// fnMySQLRegexp implements the MySQL "subject REGEXP pattern" operator. It is
+// fnRegexp with MySQL's default collation applied, which folds case over the
+// whole of Unicode rather than matching the pattern as written.
+func fnMySQLRegexp(args []driver.Value) (driver.Value, error) {
+	pattern, ok1 := toString(args[0])
+	subject, ok2 := toString(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	folded, err := mysqlRegexpPattern(pattern, "")
+	if err != nil {
+		return nil, err
+	}
+	re, err := compileRegexp(folded)
+	if err != nil {
+		return nil, err
+	}
+	if re.MatchString(subject) {
+		return int64(1), nil
+	}
+	return int64(0), nil
+}
+
 // fnIf implements IF(cond, a, b): a when cond is truthy, else b.
 func fnIf(args []driver.Value) (driver.Value, error) {
 	if isTruthy(args[0]) {
@@ -450,16 +481,63 @@ func isTruthy(v driver.Value) bool {
 	case bool:
 		return x
 	case string:
-		f, err := strconv.ParseFloat(strings.TrimSpace(x), 64)
-		if err != nil {
-			return x != ""
-		}
-		return f != 0
+		return leadingNumber(x) != 0
 	case []byte:
-		return len(x) != 0
+		return leadingNumber(string(x)) != 0
 	default:
 		return true
 	}
+}
+
+// leadingNumber reads a string the way MySQL and SQLite both read one in a
+// numeric context: skip leading space, take the longest prefix that spells a
+// number, and answer zero when there is none. Requiring the whole string to
+// parse and falling back to "not empty" made every non-numeric string true, so
+// IF('abc', a, b) took the a branch where both engines take b.
+func leadingNumber(s string) float64 {
+	t := strings.TrimLeft(s, " \t\n\v\f\r")
+	i := 0
+	if i < len(t) && (t[i] == '+' || t[i] == '-') {
+		i++
+	}
+	digits := false
+	for i < len(t) && t[i] >= '0' && t[i] <= '9' {
+		i++
+		digits = true
+	}
+	if i < len(t) && t[i] == '.' {
+		i++
+		for i < len(t) && t[i] >= '0' && t[i] <= '9' {
+			i++
+			digits = true
+		}
+	}
+	if !digits {
+		return 0
+	}
+	end := i
+	// An exponent counts only when digits follow it, so "1e" is the number 1
+	// with a letter after it rather than a malformed number.
+	if i < len(t) && (t[i] == 'e' || t[i] == 'E') {
+		j := i + 1
+		if j < len(t) && (t[j] == '+' || t[j] == '-') {
+			j++
+		}
+		for j < len(t) && t[j] >= '0' && t[j] <= '9' {
+			j++
+			end = j
+		}
+	}
+	f, err := strconv.ParseFloat(t[:end], 64)
+	if err != nil {
+		// A prefix this built is a number Go can read, save for one too large
+		// for a float64, which comes back as an infinity and is not zero.
+		if errors.Is(err, strconv.ErrRange) {
+			return f
+		}
+		return 0
+	}
+	return f
 }
 
 func fnNow(_ []driver.Value) (driver.Value, error) {
@@ -2016,15 +2094,19 @@ func fnMySQLRegexpReplace(args []driver.Value) (driver.Value, error) {
 		}
 		occurrence = n
 	}
+	matchType := ""
 	if len(args) == 6 {
-		matchType, ok := toString(args[5])
+		m, ok := toString(args[5])
 		if !ok {
 			return nil, nil
 		}
-		var err error
-		if pattern, err = applyMySQLMatchType(pattern, matchType); err != nil {
-			return nil, err
-		}
+		matchType = m
+	}
+	// The pattern goes through the match-type mapping even when no match type
+	// was given, because MySQL's default is not Go's: its collation folds case.
+	pattern, err := mysqlRegexpPattern(pattern, matchType)
+	if err != nil {
+		return nil, err
 	}
 	runes := []rune(src)
 	if pos < 1 || int(pos) > len(runes)+1 {
@@ -2058,25 +2140,30 @@ func fnMySQLRegexpReplace(args []driver.Value) (driver.Value, error) {
 // regexp flags. MySQL spells them c (case sensitive), i (case insensitive), m
 // (multi-line) and n (a dot matches a newline); u, which selects Unix line
 // endings, has no Go equivalent and is refused rather than ignored.
-func applyMySQLMatchType(pattern, matchType string) (string, error) {
+func mysqlRegexpPattern(pattern, matchType string) (string, error) {
+	fold := true
 	var flags string
 	for _, c := range matchType {
 		switch c {
 		case 'c':
-			// The default; nothing to add.
+			fold = false
 		case 'i':
-			flags += "i"
+			fold = true
 		case 'm':
 			flags += "m"
 		case 'n':
 			flags += "s"
 		default:
-			return "", fmt.Errorf("dialect: REGEXP_REPLACE match type %q is not supported", matchType)
+			return "", fmt.Errorf("dialect: regular expression match type %q is not supported", matchType)
 		}
 	}
-	if flags == "" {
-		return pattern, nil
+	if fold {
+		flags = "i" + flags
+	} else {
+		flags += "-i"
 	}
+	// The flag group leads the pattern, so a group the caller wrote themselves
+	// stands after it and wins for the rest of the pattern.
 	return "(?" + flags + ")" + pattern, nil
 }
 

@@ -84,8 +84,12 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-8_cast_binary", "SELECT CAST(x AS BINARY)", "SELECT mysql_cast(x, 'BINARY') AS \"CAST(x AS BINARY)\""},
 		{"M-8_cast_unknown_passthrough", "SELECT CAST(x AS GEOMETRY)", "SELECT CAST(x AS GEOMETRY)"},
 
-		{"M-9_rlike", "SELECT * FROM t WHERE name RLIKE '^a'", "SELECT * FROM t WHERE name REGEXP '^a'"},
-		{"M-9_not_rlike", "SELECT * FROM t WHERE name NOT RLIKE '^a'", "SELECT * FROM t WHERE name NOT REGEXP '^a'"},
+		{"M-9_rlike", "SELECT * FROM t WHERE name RLIKE '^a'", "SELECT * FROM t WHERE mysql_regexp('^a', name)"},
+		{"M-9_not_rlike", "SELECT * FROM t WHERE name NOT RLIKE '^a'", "SELECT * FROM t WHERE NOT mysql_regexp('^a', name)"},
+		{"M-30_regexp", "SELECT * FROM t WHERE name REGEXP '^a'", "SELECT * FROM t WHERE mysql_regexp('^a', name)"},
+		{"M-30_regexp_call_form_untouched", "SELECT REGEXP('^a', name) FROM t", "SELECT REGEXP('^a', name) FROM t"},
+		{"M-30_quote", "SELECT QUOTE(a) FROM t", `SELECT mysql_quote(a) AS "QUOTE(a)" FROM t`},
+		{"M-30_ascii", "SELECT ASCII(a) FROM t", `SELECT mysql_ascii(a) AS "ASCII(a)" FROM t`},
 		// M-22: LIKE routes through the helper that folds case the way MySQL's
 		// default collation does and reads a trailing escape as itself. SQLite's
 		// own LIKE ... ESCAPE did neither.
@@ -112,7 +116,7 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-21_bitxor_literals", "SELECT 5 ^ 3", `SELECT mysql_bit_xor(5, 3) AS "5 ^ 3"`},
 		{"M-21_bitand_untouched", "SELECT a & b FROM t", "SELECT a & b FROM t"},
 		{"M-21_bitor_untouched", "SELECT a | b FROM t", "SELECT a | b FROM t"},
-		{"M-21_shifts_untouched", "SELECT a << 1, b >> 2 FROM t", "SELECT a << 1, b >> 2 FROM t"},
+		{"M-29_shifts", "SELECT a << 1, b >> 2 FROM t", `SELECT mysql_shift_left(a, 1) AS "a << 1", mysql_shift_right(b, 2) AS "b >> 2" FROM t`},
 		// The positions a rewrite has to survive: a WHERE clause, a CASE, a
 		// window's PARTITION BY, and a GROUP BY, where an operand that stopped at
 		// the wrong token has shown up before.
@@ -185,6 +189,9 @@ func TestMySQLTranslateUnsupported(t *testing.T) {
 		{"M-21_xor_in_where", "SELECT a FROM t WHERE b XOR c"},
 		{"M-21_bitxor_left_not_primary", "SELECT a, ^ b"},
 		{"M-21_bitxor_right_missing", "SELECT a ^"},
+		{"M-29_shift_left_operand_missing", "SELECT a, >> b"},
+		{"M-29_shift_right_operand_missing", "SELECT a >>"},
+		{"M-29_shift_left_operand_missing_left_shift", "SELECT a, << b"},
 		// M-24: MySQL FORMAT takes a locale as its third argument, and answering
 		// en_US formatting for a query that named another one would be worse than
 		// saying so.

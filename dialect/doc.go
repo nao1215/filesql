@@ -44,12 +44,30 @@
 // different things by it, since the call runs and answers a plausible value.
 // LOG is the natural logarithm in MySQL and GoogleSQL and the base-ten one in
 // SQLite, MySQL's FORMAT groups a number where SQLite's is printf,
-// PostgreSQL's to_hex converts an integer where GoogleSQL's hexes bytes, and
-// LEFT, RIGHT and REGEXP_REPLACE each read a negative length or a fourth
-// argument their own way. Those calls are rewritten to a helper named for the
-// dialect rather than left to the name SQLite already has. GoogleSQL's FORMAT
-// prints its own %t and %T verbs there; a boolean reaches the helper as the
-// integer SQLite stores, so it prints as 0 or 1.
+// PostgreSQL's to_hex converts an integer where GoogleSQL's hexes bytes,
+// MySQL's QUOTE escapes with a backslash where SQLite doubles the quote, its
+// ASCII answers a byte where PostgreSQL's answers a code point, and LEFT, RIGHT
+// and REGEXP_REPLACE each read a negative length or a fourth argument their own
+// way. Those calls are rewritten to a helper named for the dialect rather than
+// left to the name SQLite already has. GoogleSQL's FORMAT prints its own %t and
+// %T verbs there; a boolean reaches the helper as the integer SQLite stores, so
+// it prints as 0 or 1.
+//
+// Collation is part of what a call means. MySQL's default collation folds case,
+// so its LIKE and its REGEXP both match a letter in either case, and both are
+// routed to helpers that do. The operators are left alone: "=", IN, BETWEEN,
+// ORDER BY, DISTINCT and GROUP BY compare inside the engine, where a token
+// rewrite cannot reach every one of them, so under the MySQL dialect they
+// compare the way SQLite does and 'abc' = 'ABC' is false here and true in MySQL.
+//
+// Bit operations have a ceiling this package cannot lift. MySQL computes them on
+// an unsigned 64-bit value, and SQLite has no unsigned 64-bit integer to answer
+// with. The shifts are rewritten because their bits genuinely differ: SQLite's
+// ">>" copies the sign bit where MySQL brings in zeros, and SQLite reads a
+// negative shift count as a shift the other way. What stays different is only
+// how a result with its top bit set is spelled: MySQL prints ~0 as
+// 18446744073709551615 and this prints -1, the same bits under the only reading
+// SQLite has for them.
 //
 // Lexing is per dialect, because what counts as a string, an identifier, a
 // comment, or an escape differs between them: a double-quoted literal is a

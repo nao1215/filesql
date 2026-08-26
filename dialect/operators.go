@@ -358,14 +358,21 @@ func escapedWidth(pattern []rune, p int) int {
 // fnMySQLHex implements MySQL HEX(x): the hexadecimal digits of a number, or of
 // a string's bytes. SQLite's own HEX only does the latter, so HEX(255) answered
 // "323535" (the bytes of "255") instead of "FF".
+//
+// A number is read as an unsigned 64-bit value and a fraction is rounded before
+// it is hexed, which is what makes UNHEX(HEX(n)) round-trip: formatting a
+// negative value as a signed number wrote "-1", which holds no hexadecimal
+// digits and which UNHEX answers NULL for. Which of the two forms applies is
+// decided by the argument's type and not by its contents, so HEX('255') hexes
+// three bytes where HEX(255) hexes one.
 func fnMySQLHex(args []driver.Value) (driver.Value, error) {
 	switch x := args[0].(type) {
 	case nil:
 		return nil, nil
 	case int64:
-		return strings.ToUpper(strconv.FormatInt(x, 16)), nil
+		return hexUnsigned(uint64(x)), nil //nolint:gosec // reinterpreting the bits is what MySQL's unsigned reading is
 	case float64:
-		return strings.ToUpper(strconv.FormatInt(int64(x), 16)), nil
+		return hexUnsigned(uint64(roundToInt64(x))), nil //nolint:gosec // same reinterpretation, after rounding
 	case []byte:
 		return strings.ToUpper(hex.EncodeToString(x)), nil
 	}
@@ -373,12 +380,113 @@ func fnMySQLHex(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
-	// A numeric string is a number to MySQL, which hexes its value rather than
-	// its digits.
-	if n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
-		return strings.ToUpper(strconv.FormatInt(n, 16)), nil
-	}
 	return strings.ToUpper(hex.EncodeToString([]byte(s))), nil
+}
+
+// hexUnsigned prints u as MySQL writes it: uppercase, without a sign and
+// without leading zeros.
+func hexUnsigned(u uint64) string {
+	return strings.ToUpper(strconv.FormatUint(u, 16))
+}
+
+// roundToInt64 rounds v half away from zero, the way MySQL converts a fraction
+// to an integer, and clamps rather than converting a value no int64 holds, since
+// that conversion is undefined in Go.
+func roundToInt64(v float64) int64 {
+	r := math.Round(v)
+	switch {
+	case math.IsNaN(r):
+		return 0
+	case r >= math.MaxInt64:
+		return math.MaxInt64
+	case r <= math.MinInt64:
+		return math.MinInt64
+	default:
+		return int64(r)
+	}
+}
+
+// mysqlShift implements MySQL's "<<" and ">>", which shift an unsigned 64-bit
+// value. SQLite's own shifts are signed: ">>" copies the sign bit rather than
+// bringing in zeros, so -1 >> 1 stayed -1 where MySQL answers the 63 one bits
+// below the sign, and a shift by 64 or more left a negative value untouched
+// where MySQL clears it. SQLite also reads a negative count as a shift the other
+// way, where MySQL reads the count as unsigned too and so shifts past the width.
+//
+// A result whose top bit is set comes back as the negative integer holding those
+// bits, because SQLite has no unsigned 64-bit integer to return it in: ~0 >> 0
+// is 18446744073709551615 in MySQL and -1 here, carrying the same bits under the
+// only reading SQLite has for them.
+func mysqlShift(left bool) scalarFn {
+	return func(args []driver.Value) (driver.Value, error) {
+		v, ok := toInt(args[0])
+		if !ok {
+			return nil, nil
+		}
+		n, ok := toInt(args[1])
+		if !ok {
+			return nil, nil
+		}
+		count := uint64(n) //nolint:gosec // MySQL reads the count as unsigned, so a negative one is a count past the width
+		if count >= 64 {
+			return int64(0), nil
+		}
+		u := uint64(v) //nolint:gosec // the shift is defined on the bits, which is what the reinterpretation keeps
+		if left {
+			u <<= count
+		} else {
+			u >>= count
+		}
+		return int64(u), nil //nolint:gosec // SQLite has no unsigned integer to answer with; the bits are the answer
+	}
+}
+
+// fnMySQLQuote implements MySQL QUOTE(x): the value as a literal a MySQL
+// statement can hold. SQLite's own quote() escapes by doubling the single quote
+// and leaves a number unquoted, which is right for SQLite and is neither the
+// escape nor the shape MySQL reads back.
+func fnMySQLQuote(args []driver.Value) (driver.Value, error) {
+	s, ok := toString(args[0])
+	if !ok {
+		// MySQL answers the word rather than NULL, so the result can be pasted
+		// into a statement whatever the value was.
+		return "NULL", nil
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('\'')
+	// Escaping runs over bytes rather than runes: every byte MySQL escapes is
+	// ASCII, and no byte of a multi-byte UTF-8 sequence is.
+	for i := range len(s) {
+		switch s[i] {
+		case '\'', '\\':
+			b.WriteByte('\\')
+			b.WriteByte(s[i])
+		case 0:
+			b.WriteString(`\0`)
+		case 26:
+			b.WriteString(`\Z`)
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	b.WriteByte('\'')
+	return b.String(), nil
+}
+
+// fnMySQLASCII implements MySQL ASCII(x): the leftmost byte of the value's
+// string form, which is a number in 0..255. The shared ascii() helper answers
+// the code point, which is what PostgreSQL means by the name and what makes
+// ASCII indistinguishable from ORD for a MySQL caller.
+func fnMySQLASCII(args []driver.Value) (driver.Value, error) {
+	s, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	if s == "" {
+		return int64(0), nil
+	}
+	return int64(s[0]), nil
 }
 
 // fnMySQLUnhex implements MySQL UNHEX(s), the inverse of HEX for a string.
@@ -447,6 +555,35 @@ func binaryOperatorPassWith(tokens []token, op, helper string, operandOf func([]
 // than SQLite's. A pattern with an ESCAPE clause is left alone: SQLite handles
 // it natively and the helpers do not model a custom escape character.
 func likePass(tokens []token, keyword, helper string) ([]token, error) {
+	return infixMatchPass(tokens, keyword, helper, escapeClauseFollows)
+}
+
+// regexpPass rewrites "a REGEXP b" into a call, so the match runs under MySQL's
+// collation rather than Go's default. RLIKE is renamed to REGEXP before this
+// runs, so both spellings arrive here as one.
+func regexpPass(tokens []token, helper string) ([]token, error) {
+	return infixMatchPass(tokens, "REGEXP", helper, callFormFollows)
+}
+
+// escapeClauseFollows reports whether an ESCAPE clause follows the pattern,
+// which is the LIKE form this package leaves to SQLite.
+func escapeClauseFollows(tokens []token, _, rightEnd int) bool {
+	esc := nextSig(tokens, rightEnd+1)
+	return esc >= 0 && isWordEq(tokens[esc], "ESCAPE")
+}
+
+// callFormFollows reports whether the keyword at i names a function rather than
+// standing between two operands. A parenthesis immediately after the name with
+// nothing between is how MySQL's own parser tells a call from an operator, which
+// is the same rule the MOD pass uses.
+func callFormFollows(tokens []token, i, _ int) bool {
+	return i+1 < len(tokens) && isOpEq(tokens[i+1], "(")
+}
+
+// infixMatchPass rewrites "a KEYWORD b" (and its NOT form) into helper(b, a),
+// skipping the occurrences skip reports. The pattern comes first because that is
+// the argument order SQLite's own like() and regexp() take.
+func infixMatchPass(tokens []token, keyword, helper string, skip func(tokens []token, i, rightEnd int) bool) ([]token, error) {
 	out := make([]token, 0, len(tokens))
 	i := 0
 	for i < len(tokens) {
@@ -460,7 +597,7 @@ func likePass(tokens []token, keyword, helper string) ([]token, error) {
 		if !ok {
 			return nil, fmt.Errorf("%w: right operand of %s is not a primary expression", ErrUnsupportedSyntax, keyword)
 		}
-		if esc := nextSig(tokens, rightEnd+1); esc >= 0 && isWordEq(tokens[esc], "ESCAPE") {
+		if skip(tokens, i, rightEnd) {
 			out = append(out, tokens[i])
 			i++
 			continue
@@ -486,6 +623,154 @@ func likePass(tokens []token, keyword, helper string) ([]token, error) {
 		i = rightEnd + 1
 	}
 	return out, nil
+}
+
+// shiftPass rewrites "a << b" and "a >> b" into calls to the helpers above.
+//
+// The operands are not single primaries. MySQL and SQLite agree that "*", "/",
+// "%", "+" and "-" all bind tighter than a shift, so "1 + 2 >> 1" is "(1 + 2) >>
+// 1" to both of them and taking only the primary beside the operator would have
+// answered 2 where both engines answer 1. They disagree about "&" and "|", which
+// MySQL puts below the shifts and SQLite puts on the same level; taking the
+// operand no further than the arithmetic gives MySQL's grouping for those too.
+func shiftPass(tokens []token) ([]token, error) {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		var op string
+		switch {
+		case isOpEq(tokens[i], "<<"):
+			op = "mysql_shift_left"
+		case isOpEq(tokens[i], ">>"):
+			op = "mysql_shift_right"
+		default:
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		left, start, ok := shiftOperandBack(out)
+		if !ok {
+			return nil, fmt.Errorf("%w: left operand of %s is not an expression", ErrUnsupportedSyntax, tokens[i].text)
+		}
+		rightStart := nextSig(tokens, i+1)
+		rightEnd, ok := shiftOperandForward(tokens, i+1)
+		if !ok {
+			return nil, fmt.Errorf("%w: right operand of %s is not an expression", ErrUnsupportedSyntax, tokens[i].text)
+		}
+		out = append(out[:start], callTokens(op, left, tokens[rightStart:rightEnd+1])...)
+		i = rightEnd + 1
+	}
+	return out, nil
+}
+
+// shiftOperandBack extracts the expression that ends the tokens emitted so far,
+// walking back across the arithmetic that binds tighter than a shift.
+func shiftOperandBack(out []token) ([]token, int, bool) {
+	start, ok := primaryStartBack(out)
+	if !ok {
+		return nil, 0, false
+	}
+	start = extendUnaryBack(out, start)
+	for {
+		prev := prevSig(out, start)
+		if prev < 0 || !isShiftTighterOperator(out[prev]) || isUnarySign(out, prev) {
+			break
+		}
+		next, ok := primaryStartBack(out[:prev])
+		if !ok {
+			break
+		}
+		start = extendUnaryBack(out, next)
+	}
+	return append([]token{}, trimSpaceTokens(out[start:])...), start, true
+}
+
+// extendUnaryBack walks start back over the prefix operators that bind tighter
+// than a shift: MySQL's bitwise complement, and a sign that is not the binary
+// operator of the same spelling.
+func extendUnaryBack(tokens []token, start int) int {
+	for {
+		prev := prevSig(tokens, start)
+		if prev < 0 || (!isOpEq(tokens[prev], "~") && !isUnarySign(tokens, prev)) {
+			return start
+		}
+		start = prev
+	}
+}
+
+// shiftOperandForward returns the index of the last token of the expression
+// beginning at or after from, walking forward across the same arithmetic.
+func shiftOperandForward(tokens []token, from int) (int, bool) {
+	// A complement stands in front of its operand, and the caller slices from
+	// the first significant token, so skipping it here keeps it in the operand.
+	for {
+		s := nextSig(tokens, from)
+		if s < 0 || !isOpEq(tokens[s], "~") {
+			break
+		}
+		from = s + 1
+	}
+	end, ok := primaryEndForward(tokens, from)
+	if !ok {
+		return 0, false
+	}
+	for {
+		op := nextSig(tokens, end+1)
+		if op < 0 || !isShiftTighterOperator(tokens[op]) {
+			return end, true
+		}
+		next, ok := primaryEndForward(tokens, op+1)
+		if !ok {
+			return end, true
+		}
+		end = next
+	}
+}
+
+// isShiftTighterOperator reports whether t binds tighter than "<<" and ">>" in
+// MySQL. DIV, MOD and "/" are already calls by the time the shift pass runs, so
+// only the four that stay operators are listed.
+func isShiftTighterOperator(t token) bool {
+	return isOpEq(t, "*") || isOpEq(t, "%") || isOpEq(t, "+") || isOpEq(t, "-")
+}
+
+// isUnarySign reports whether the "+" or "-" at i is a sign on the operand after
+// it rather than the binary operator of the same spelling. A sign follows
+// nothing, an operator other than a closing parenthesis, or one of the words in
+// operandExpectingKeywords and clauseKeywords; anything else before it ends an
+// operand, which makes the token binary. An unquoted word neither table lists is
+// read as a column name, and a keyword missing from them turns into a SQLite
+// syntax error rather than into a different answer, because the operand would
+// then start at the keyword.
+func isUnarySign(tokens []token, i int) bool {
+	if !isOpEq(tokens[i], "+") && !isOpEq(tokens[i], "-") {
+		return false
+	}
+	prev := prevSig(tokens, i)
+	if prev < 0 {
+		return true
+	}
+	switch {
+	case isOpEq(tokens[prev], ")"):
+		return false
+	case tokens[prev].kind == tokOp:
+		return true
+	case tokens[prev].kind == tokWord:
+		word := strings.ToUpper(tokens[prev].text)
+		return operandExpectingKeywords[word] || clauseKeywords[word]
+	default:
+		return false
+	}
+}
+
+// clauseKeywords are the unquoted words that introduce a clause and so stand in
+// front of an expression. Together with operandExpectingKeywords, which lists
+// the words that demand an operand inside an expression, they are the words a
+// "+" or "-" can follow as a sign rather than as the binary operator.
+var clauseKeywords = map[string]bool{ //nolint:gochecknoglobals // a fixed table read by the sign rule
+	"SELECT": true, "WHERE": true, "HAVING": true, "ON": true, "BY": true,
+	"LIMIT": true, "OFFSET": true, "VALUES": true, "SET": true,
+	"RETURNING": true, "USING": true, "XOR": true,
 }
 
 // operandBack extracts the primary expression that ends the tokens emitted so
