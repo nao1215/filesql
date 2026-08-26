@@ -43,11 +43,14 @@ func postgresqlScalarFunctions() map[string]scalarSpec {
 		// The trigonometric functions that take and answer degrees. They exist
 		// so the quadrant angles are exact -- sind(30) is 0.5 and not
 		// 0.49999999999999994 -- which is what converting through radians
-		// costs.
-		"sind":     {1, degreeTrig(math.Sin)},
-		"cosd":     {1, degreeTrig(math.Cos)},
-		"tand":     {1, degreeTrig(math.Tan)},
-		"cotd":     {1, degreeTrig(func(x float64) float64 { return 1 / math.Tan(x) })},
+		// costs. Away from those angles the answer is the conversion, and it
+		// can differ from PostgreSQL's in the last place: PostgreSQL reduces
+		// the angle to the first quadrant before converting, and the C library
+		// underneath is not the same one either.
+		"sind":     {1, degreeTrig(degreeSin)},
+		"cosd":     {1, degreeTrig(degreeCos)},
+		"tand":     {1, degreeTrig(degreeTan)},
+		"cotd":     {1, degreeTrig(degreeCot)},
 		"asind":    {1, inverseDegreeTrig(math.Asin)},
 		"acosd":    {1, inverseDegreeTrig(math.Acos)},
 		"atand":    {1, inverseDegreeTrig(math.Atan)},
@@ -302,27 +305,55 @@ func absInt64(v int64) int64 {
 	return v
 }
 
-// degreeTrig turns a function of radians into one of degrees, answering the
-// exact value at each quadrant angle rather than what the conversion gives.
-func degreeTrig(fn func(float64) float64) scalarFn {
+// degreeKindValue names which trigonometric function a degree helper computes.
+// It is carried rather than inferred, so the exact table below is chosen by the
+// caller instead of by probing the function, which cannot tell tangent from
+// sine.
+type degreeKindValue int
+
+const (
+	degreeSin degreeKindValue = iota
+	degreeCos
+	degreeTan
+	degreeCot
+)
+
+// exactDegreeValues are the angles PostgreSQL answers exactly. Its
+// implementation reduces an angle to the first quadrant and answers the
+// quadrant angles from a table rather than from the conversion to radians,
+// which is the whole reason these functions exist beside the radian ones:
+// SIND(30) is 0.5 and not 0.49999999999999994. Every value was read from
+// PostgreSQL 17.10.
+var exactDegreeValues = map[degreeKindValue]map[int64]float64{ //nolint:gochecknoglobals // a fixed table read by the degree helpers
+	degreeSin: {0: 0, 30: 0.5, 90: 1, 150: 0.5, 180: 0, 210: -0.5, 270: -1, 330: -0.5},
+	degreeCos: {0: 1, 60: 0.5, 90: 0, 120: -0.5, 180: -1, 240: -0.5, 270: 0, 300: 0.5},
+	degreeTan: {0: 0, 45: 1, 90: math.Inf(1), 135: -1, 180: 0, 225: 1, 270: math.Inf(-1), 315: -1},
+	degreeCot: {0: math.Inf(1), 45: 1, 90: 0, 135: -1, 180: math.Inf(-1), 225: 1, 270: 0, 315: -1},
+}
+
+// degreeTrig computes one of the four functions of an angle in degrees.
+func degreeTrig(kind degreeKindValue) scalarFn {
+	radian := map[degreeKindValue]func(float64) float64{
+		degreeSin: math.Sin,
+		degreeCos: math.Cos,
+		degreeTan: math.Tan,
+		degreeCot: func(x float64) float64 { return 1 / math.Tan(x) },
+	}[kind]
 	return func(args []driver.Value) (driver.Value, error) {
 		deg, ok := toFloat(args[0])
 		if !ok {
 			return nil, nil
 		}
-		if exact, found := exactDegreeValue(fn, deg); found {
+		if exact, found := exactDegreeValue(kind, deg); found {
 			return exact, nil
 		}
-		return fn(deg * math.Pi / 180), nil
+		return radian(deg * math.Pi / 180), nil
 	}
 }
 
-// exactDegreeValue answers the quadrant angles by table. Sine and cosine at a
-// multiple of 30 or 45 degrees, and the tangent at a multiple of 45, have exact
-// values that the conversion to radians does not reproduce, and answering 0.5
-// rather than 0.49999999999999994 for sind(30) is why PostgreSQL has these
-// functions at all.
-func exactDegreeValue(fn func(float64) float64, deg float64) (float64, bool) {
+// exactDegreeValue looks an angle up in the table above, reducing it to one
+// turn first.
+func exactDegreeValue(kind degreeKindValue, deg float64) (float64, bool) {
 	if deg != math.Trunc(deg) {
 		return 0, false
 	}
@@ -330,47 +361,8 @@ func exactDegreeValue(fn func(float64) float64, deg float64) (float64, bool) {
 	if d < 0 {
 		d += 360
 	}
-	sin := map[int64]float64{0: 0, 30: 0.5, 90: 1, 150: 0.5, 180: 0, 210: -0.5, 270: -1, 330: -0.5}
-	switch reference := degreeKind(fn); reference {
-	case degreeSin:
-		v, ok := sin[d]
-		return v, ok
-	case degreeCos:
-		v, ok := sin[(d+90)%360]
-		return v, ok
-	default:
-		switch d {
-		case 0, 180:
-			return 0, true
-		case 45, 225:
-			return 1, true
-		case 135, 315:
-			return -1, true
-		}
-		return 0, false
-	}
-}
-
-// degreeKind names which of the three functions a degree helper wraps, read
-// from what it answers at zero and at a right angle rather than carried
-// alongside it.
-type degreeKindValue int
-
-const (
-	degreeSin degreeKindValue = iota
-	degreeCos
-	degreeOther
-)
-
-func degreeKind(fn func(float64) float64) degreeKindValue {
-	switch {
-	case fn(0) == 0 && fn(math.Pi/2) > 0.99:
-		return degreeSin
-	case fn(0) == 1:
-		return degreeCos
-	default:
-		return degreeOther
-	}
+	v, ok := exactDegreeValues[kind][d]
+	return v, ok
 }
 
 // inverseDegreeTrig turns a function answering radians into one answering

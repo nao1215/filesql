@@ -60,6 +60,16 @@ func TestPostgreSQLScalarFunctions(t *testing.T) {
 		{name: "cosd at zero", query: `SELECT cosd(0)`, want: "1"},
 		{name: "tand at forty-five degrees", query: `SELECT tand(45)`, want: "1"},
 		{name: "cotd at forty-five degrees", query: `SELECT cotd(45)`, want: "1"},
+		{name: "sind wraps a whole turn", query: `SELECT sind(390)`, want: "0.5"},
+		{name: "sind of a negative angle", query: `SELECT sind(-30)`, want: "-0.5"},
+		{name: "cosd of a negative angle", query: `SELECT cosd(-60)`, want: "0.5"},
+		{name: "tand in the third quadrant", query: `SELECT tand(225)`, want: "1"},
+		{name: "cotd in the third quadrant", query: `SELECT cotd(225)`, want: "1"},
+		// The poles are an infinity, which PostgreSQL prints as Infinity and
+		// SQLite has no spelling of its own for; the value is the same.
+		{name: "tand at a pole", query: `SELECT tand(90)`, want: "+Inf"},
+		{name: "cotd at a pole", query: `SELECT cotd(0)`, want: "+Inf"},
+		{name: "tand at the other pole", query: `SELECT tand(270)`, want: "-Inf"},
 		{name: "asind", query: `SELECT asind(0.5)`, want: "30"},
 		{name: "acosd", query: `SELECT acosd(0.5)`, want: "60"},
 		{name: "atand", query: `SELECT atand(1)`, want: "45"},
