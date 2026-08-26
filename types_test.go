@@ -1757,3 +1757,191 @@ func TestQuotedWhitespaceSurvivesTheLoad(t *testing.T) {
 		t.Errorf("txt = %q, want %q", txt, " ab ")
 	}
 }
+
+// TestBlankCellInNumericColumnIsNull pins what a blank cell becomes, which
+// decides what every aggregate and comparison over that column answers.
+//
+// It was the empty string. SQLite orders text above every number, so MAX
+// answered "" rather than the largest value, AVG divided by the rows that held
+// nothing, COUNT of the column counted them, ORDER BY DESC put the blank row
+// first, a numeric filter passed it, and IS NULL -- the way a caller asks which
+// values are missing -- matched no row. None of it raised. The Parquet exporter
+// already wrote that cell as a null, so the package disagreed with itself and a
+// round trip through Parquet changed the value.
+func TestBlankCellInNumericColumnIsNull(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		body     string
+		declared string
+		// wantNull is whether the blank cell has to reach the database as NULL.
+		wantNull bool
+		wantMax  any
+	}{
+		{
+			name:     "an integer column",
+			body:     "region,amount\nnorth,10\nsouth,\neast,30\n",
+			declared: sqlTypeInteger,
+			wantNull: true,
+			wantMax:  int64(30),
+		},
+		{
+			name:     "a real column",
+			body:     "region,amount\nnorth,10.5\nsouth,\neast,30.5\n",
+			declared: sqlTypeReal,
+			wantNull: true,
+			wantMax:  30.5,
+		},
+		{
+			// The empty string is a value a text column can hold, and telling it
+			// from a missing one is a distinction this package keeps.
+			name:     "a text column keeps the empty string",
+			body:     "region,label\nnorth,x\nsouth,\neast,z\n",
+			declared: sqlTypeText,
+			wantNull: false,
+			wantMax:  "z",
+		},
+		{
+			// A datetime column is stored as TEXT, where the empty string sorts
+			// below every date and so produces no wrong maximum. It is left as
+			// it is; this case is here so the decision is written down.
+			name:     "a datetime column keeps the empty string",
+			body:     "region,seen\nnorth,2024-01-02\nsouth,\neast,2024-03-04\n",
+			declared: sqlTypeText,
+			wantNull: false,
+			wantMax:  "2024-03-04",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			src := filepath.Join(t.TempDir(), "rows.csv")
+			require.NoError(t, os.WriteFile(src, []byte(tt.body), 0o600))
+
+			db, err := OpenContext(ctx, src)
+			require.NoError(t, err)
+			defer db.Close()
+
+			column := "amount"
+			if !tt.wantNull {
+				column = strings.TrimSpace(strings.Split(strings.SplitN(tt.body, "\n", 2)[0], ",")[1])
+			}
+
+			var declared string
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT type FROM pragma_table_info('rows') WHERE name = ?`, column).Scan(&declared))
+			assert.Equal(t, tt.declared, declared)
+
+			var kind string
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT typeof("`+column+`") FROM rows WHERE region = 'south'`).Scan(&kind))
+			if tt.wantNull {
+				assert.Equal(t, "null", kind, "a blank cell in a numeric column is a missing number")
+			} else {
+				assert.Equal(t, "text", kind, "a blank cell in a text column is the empty string")
+			}
+
+			var missing, present int
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT SUM("`+column+`" IS NULL), COUNT("`+column+`") FROM rows`).Scan(&missing, &present))
+			if tt.wantNull {
+				assert.Equal(t, 1, missing, "IS NULL is how a caller asks which values are missing")
+				assert.Equal(t, 2, present, "counting a column counts the values it holds")
+			} else {
+				assert.Equal(t, 0, missing)
+				assert.Equal(t, 3, present)
+			}
+
+			var got any
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT MAX("`+column+`") FROM rows`).Scan(&got))
+			assert.Equal(t, tt.wantMax, got)
+
+			if tt.wantNull {
+				var top string
+				require.NoError(t, db.QueryRowContext(ctx,
+					`SELECT region FROM rows ORDER BY "`+column+`" DESC LIMIT 1`).Scan(&top))
+				assert.Equal(t, "east", top, "a row with no value must not sort above the values")
+
+				var passed int
+				require.NoError(t, db.QueryRowContext(ctx,
+					`SELECT COUNT(*) FROM rows WHERE "`+column+`" > 5`).Scan(&passed))
+				assert.Equal(t, 2, passed, "a row with no value must not pass a numeric filter")
+			}
+		})
+	}
+}
+
+// TestBlankCellInNumericColumnInEveryDelimitedFormat pins that the readers
+// agree about what a blank cell is. Each of them produces the cell's text and
+// hands it to the same insert, so a reader that spelled a blank differently
+// would put the empty string back in a numeric column for its format alone.
+func TestBlankCellInNumericColumnInEveryDelimitedFormat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		file string
+		body string
+	}{
+		{name: "csv", file: "rows.csv", body: "region,amount\nnorth,10\nsouth,\neast,30\n"},
+		{name: "tsv", file: "rows.tsv", body: "region\tamount\nnorth\t10\nsouth\t\neast\t30\n"},
+		{name: "ltsv", file: "rows.ltsv", body: "region:north\tamount:10\nregion:south\tamount:\nregion:east\tamount:30\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			src := filepath.Join(t.TempDir(), tt.file)
+			require.NoError(t, os.WriteFile(src, []byte(tt.body), 0o600))
+
+			db, err := OpenContext(ctx, src)
+			require.NoError(t, err)
+			defer db.Close()
+
+			var missing, present int
+			var largest int64
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT SUM(amount IS NULL), COUNT(amount), MAX(amount) FROM rows`).Scan(&missing, &present, &largest))
+			assert.Equal(t, 1, missing)
+			assert.Equal(t, 2, present)
+			assert.Equal(t, int64(30), largest)
+		})
+	}
+}
+
+// TestBlankCellInNumericColumnAtEveryChunkSize pins that the blank cell reaches
+// the database the same way wherever it falls, since the insert runs per chunk.
+func TestBlankCellInNumericColumnAtEveryChunkSize(t *testing.T) {
+	t.Parallel()
+
+	const body = "region,amount\nnorth,10\nsouth,\neast,30\nwest,\nsouthwest,50\n"
+	for _, chunk := range []int{1, 2, 3, 5, 1000} {
+		t.Run(fmt.Sprintf("chunk=%d", chunk), func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			src := filepath.Join(t.TempDir(), "rows.csv")
+			require.NoError(t, os.WriteFile(src, []byte(body), 0o600))
+
+			validated, err := NewBuilder().AddPath(src).SetDefaultChunkSize(chunk).Build(ctx)
+			require.NoError(t, err)
+			db, err := validated.Open(ctx)
+			require.NoError(t, err)
+			defer db.Close()
+
+			var missing, present int
+			var largest int64
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT SUM(amount IS NULL), COUNT(amount), MAX(amount) FROM rows`).Scan(&missing, &present, &largest))
+			assert.Equal(t, 2, missing)
+			assert.Equal(t, 3, present)
+			assert.Equal(t, int64(50), largest)
+		})
+	}
+}

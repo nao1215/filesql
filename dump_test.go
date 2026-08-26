@@ -1269,3 +1269,52 @@ func TestDumpDatabaseFollowsASymlink(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "id,name\n1,alice\n", string(got), "the file the link names is what receives the dump")
 }
+
+// TestBlankCellInNumericColumnSurvivesARoundTrip pins that a missing number
+// stays missing through a dump and back, in every format that can carry it.
+//
+// The loader used to store that cell as the empty string while the Parquet
+// exporter wrote it as a null, so the two disagreed and a round trip through
+// Parquet changed the value. They agree now, and this is what keeps them
+// agreeing.
+func TestBlankCellInNumericColumnSurvivesARoundTrip(t *testing.T) {
+	t.Parallel()
+
+	formats := []struct {
+		name   string
+		format OutputFormat
+		ext    string
+	}{
+		{name: "csv", format: OutputFormatCSV, ext: ".csv"},
+		{name: "tsv", format: OutputFormatTSV, ext: ".tsv"},
+		{name: "parquet", format: OutputFormatParquet, ext: ".parquet"},
+	}
+
+	for _, tt := range formats {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			src := filepath.Join(t.TempDir(), "sales.csv")
+			require.NoError(t, os.WriteFile(src, []byte("region,amount\nnorth,10\nsouth,\neast,30\n"), 0o600))
+
+			db, err := OpenContext(ctx, src)
+			require.NoError(t, err)
+			out := filepath.Join(t.TempDir(), "out")
+			require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(tt.format)))
+			require.NoError(t, db.Close())
+
+			back, err := OpenContext(ctx, filepath.Join(out, "sales"+tt.ext))
+			require.NoError(t, err)
+			defer back.Close()
+
+			var missing, present int
+			var largest int64
+			require.NoError(t, back.QueryRowContext(ctx,
+				`SELECT SUM(amount IS NULL), COUNT(amount), MAX(amount) FROM sales`).Scan(&missing, &present, &largest))
+			assert.Equal(t, 1, missing, "the row with no amount is still the row with no amount")
+			assert.Equal(t, 2, present)
+			assert.Equal(t, int64(30), largest)
+		})
+	}
+}

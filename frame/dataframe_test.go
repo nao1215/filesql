@@ -680,7 +680,7 @@ func TestDataFrame_ToCSVSpellsNonFiniteFloatsForTheReader(t *testing.T) {
 		require.Len(t, rows, 4)
 		assert.Equal(t, math.Inf(1), rows[0]["v"])
 		assert.Equal(t, math.Inf(-1), rows[1]["v"])
-		assert.Equal(t, "", rows[2]["v"], "a NaN comes back as the missing value it was written as")
+		assert.Nil(t, rows[2]["v"], "a NaN comes back as the missing value it was written as")
 		assert.Equal(t, 2.5, rows[3]["v"])
 	})
 
@@ -792,7 +792,7 @@ func TestConvertStringValue(t *testing.T) {
 		assert.Equal(t, "456", records[2]["value"])
 	})
 
-	t.Run("returns empty string as-is for integer column", func(t *testing.T) {
+	t.Run("a blank cell in an integer column is a missing number", func(t *testing.T) {
 		t.Parallel()
 
 		input := "id,value\n1,100\n2,\n3,200"
@@ -801,7 +801,7 @@ func TestConvertStringValue(t *testing.T) {
 		records := df.ToRecords()
 
 		assert.Equal(t, int64(100), records[0]["value"])
-		assert.Equal(t, "", records[1]["value"]) // Empty string preserved
+		assert.Nil(t, records[1]["value"], "the same cell reaches the database as NULL")
 		assert.Equal(t, int64(200), records[2]["value"])
 	})
 
@@ -830,7 +830,7 @@ func TestConvertStringValue(t *testing.T) {
 		assert.InDelta(t, 3.14159, records[0]["value"], 0.00001)
 	})
 
-	t.Run("returns empty string as-is for float column", func(t *testing.T) {
+	t.Run("a blank cell in a float column is a missing number", func(t *testing.T) {
 		t.Parallel()
 
 		input := "id,value\n1,1.5\n2,\n3,2.5"
@@ -839,7 +839,7 @@ func TestConvertStringValue(t *testing.T) {
 		records := df.ToRecords()
 
 		assert.Equal(t, 1.5, records[0]["value"])
-		assert.Equal(t, "", records[1]["value"]) // Empty string preserved
+		assert.Nil(t, records[1]["value"], "the same cell reaches the database as NULL")
 		assert.Equal(t, 2.5, records[2]["value"])
 	})
 

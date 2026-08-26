@@ -1707,3 +1707,52 @@ func TestExcelSheetsInReader_NotAWorkbook(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrParsing)
 }
+
+// TestBlankSheetCellInNumericColumnIsNull pins that a workbook's blank cell
+// reaches the database as the missing number it is, the way a blank cell in a
+// delimited file does. The sheet reader is a different one, so its answer is
+// worth pinning next to the readers that share a path.
+func TestBlankSheetCellInNumericColumnIsNull(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sales.xlsx")
+	book := excelize.NewFile()
+	t.Cleanup(func() { _ = book.Close() })
+	for row, cells := range [][]string{
+		{"region", "amount"},
+		{"north", "10"},
+		{"south", ""},
+		{"east", "30"},
+	} {
+		for col, value := range cells {
+			name, err := excelize.CoordinatesToCellName(col+1, row+1)
+			if err != nil {
+				t.Fatalf("cell name: %v", err)
+			}
+			if err := book.SetCellStr("Sheet1", name, value); err != nil {
+				t.Fatalf("set cell: %v", err)
+			}
+		}
+	}
+	if err := book.SaveAs(path); err != nil {
+		t.Fatalf("save workbook: %v", err)
+	}
+
+	db, err := OpenContext(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	var missing, present int
+	var largest int64
+	if err := db.QueryRowContext(t.Context(),
+		`SELECT SUM(amount IS NULL), COUNT(amount), MAX(amount) FROM sales_Sheet1`).
+		Scan(&missing, &present, &largest); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if missing != 1 || present != 2 || largest != 30 {
+		t.Errorf("missing=%d present=%d max=%d, want 1, 2 and 30", missing, present, largest)
+	}
+}
