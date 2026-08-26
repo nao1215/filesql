@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 
 	"github.com/nao1215/filesql/dialect"
 )
@@ -63,7 +64,7 @@ type DBBuilder struct {
 	// chunk size is.
 	excelSheetPolicy ExcelSheetPolicy
 	// logger is the logger instance for internal logging
-	logger Logger
+	logger *slog.Logger
 
 	// Internal processors for handling different responsibilities
 	validator       *validator
@@ -277,22 +278,21 @@ func (b *DBBuilder) WithExcelSheetPolicy(policy ExcelSheetPolicy) *DBBuilder {
 	return b
 }
 
-// WithLogger sets a custom logger for internal operations.
+// WithLogger sets the logger this package reports its progress to: which files
+// it collected, which table each one became, how many rows landed, and what
+// failed. Nothing is logged by default.
 //
-// The logger interface is compatible with slog.Logger. You can use the provided
-// SlogAdapter to wrap an existing slog.Logger, or implement your own Logger.
+// The logger is a *slog.Logger, so where the records go and which levels are
+// kept are decided by the handler the caller builds, as they are everywhere
+// else slog is used. A nil logger leaves the current one in place.
 //
-// Examples:
+// Example:
 //
-//	// Using slog
-//	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-//	builder.WithLogger(filesql.NewSlogAdapter(logger))
-//
-//	// Using a custom logger
-//	builder.WithLogger(myCustomLogger)
+//	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+//	builder.WithLogger(logger)
 //
 // Returns self for chaining.
-func (b *DBBuilder) WithLogger(logger Logger) *DBBuilder {
+func (b *DBBuilder) WithLogger(logger *slog.Logger) *DBBuilder {
 	if logger != nil {
 		b.logger = logger
 	}

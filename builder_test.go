@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -273,11 +275,11 @@ func TestDBBuilder_SetDefaultChunkSize(t *testing.T) {
 		for _, size := range []int{1, 2, 5, 10, defaultChunkSizeRows} {
 			want := (rows + size - 1) / size
 
-			counter := &chunkCountingLogger{}
+			counter := &chunkCountingHandler{}
 			validated, err := NewBuilder().
 				AddPath(path).
 				SetDefaultChunkSize(size).
-				WithLogger(counter).
+				WithLogger(slog.New(counter)).
 				Build(ctx)
 			require.NoError(t, err)
 			db, err := validated.Open(ctx)
@@ -287,11 +289,11 @@ func TestDBBuilder_SetDefaultChunkSize(t *testing.T) {
 
 			// A reader is loaded by the same processor, so it has to chunk the
 			// same way a path does.
-			counter = &chunkCountingLogger{}
+			counter = &chunkCountingHandler{}
 			validated, err = NewBuilder().
 				AddReader(strings.NewReader(body), "counted", FileTypeCSV).
 				SetDefaultChunkSize(size).
-				WithLogger(counter).
+				WithLogger(slog.New(counter)).
 				Build(ctx)
 			require.NoError(t, err)
 			db, err = validated.Open(ctx)
@@ -340,22 +342,35 @@ func chunkCountingCSV(n int) string {
 	return b.String()
 }
 
-// chunkCountingLogger counts the chunks the loader reports inserting, which is
-// how a caller can observe the chunk size from outside the package.
-type chunkCountingLogger struct {
+// chunkCountingHandler counts the chunks the loader reports inserting, which is
+// how a caller can observe the chunk size from outside the package. It is a
+// slog.Handler because that is where a caller's own logging plugs in now that
+// the builder takes a *slog.Logger.
+type chunkCountingHandler struct {
+	mu     sync.Mutex
 	chunks int
 }
 
-func (l *chunkCountingLogger) Debug(msg string, _ ...any) {
-	if msg == "inserting chunk" {
-		l.chunks++
+func (h *chunkCountingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *chunkCountingHandler) Handle(_ context.Context, record slog.Record) error {
+	if record.Message == "inserting chunk" {
+		h.mu.Lock()
+		h.chunks++
+		h.mu.Unlock()
 	}
+	return nil
 }
-func (l *chunkCountingLogger) Info(string, ...any)  {}
-func (l *chunkCountingLogger) Warn(string, ...any)  {}
-func (l *chunkCountingLogger) Error(string, ...any) {}
-func (l *chunkCountingLogger) With(...any) Logger   { return l }
-func (l *chunkCountingLogger) count() int           { return l.chunks }
+
+func (h *chunkCountingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h *chunkCountingHandler) WithGroup(string) slog.Handler { return h }
+
+func (h *chunkCountingHandler) count() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.chunks
+}
 
 // describeTableForChunkTest renders a table's declared types and every value it
 // holds, including the Go type each value scanned as, so two loads can be

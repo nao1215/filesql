@@ -13,155 +13,123 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// debugLogger is a logger that keeps every record, including debug ones, in buf.
+// It is what a test reads the package's own reporting out of.
+func debugLogger(buf *bytes.Buffer) *slog.Logger {
+	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
 func TestNopLogger(t *testing.T) {
 	t.Parallel()
 
-	t.Run("nopLogger implements Logger interface", func(t *testing.T) {
+	t.Run("it writes nothing and never panics", func(t *testing.T) {
 		t.Parallel()
-		logger := newNopLogger()
-		// Verify it implements Logger interface by using interface methods
-		assert.NotNil(t, logger)
-		assert.NotPanics(t, func() { logger.Info("test") })
-	})
 
-	t.Run("nopLogger methods do not panic", func(t *testing.T) {
-		t.Parallel()
 		logger := newNopLogger()
+		require.NotNil(t, logger)
 
 		assert.NotPanics(t, func() {
 			logger.Debug("debug message", "key", "value")
 			logger.Info("info message", "key", "value")
 			logger.Warn("warn message", "key", "value")
 			logger.Error("error message", "key", "value")
+			logger.With("key", "value").Info("with message")
 		})
 	})
 
-	t.Run("nopLogger With returns same logger", func(t *testing.T) {
+	t.Run("it reports every level as disabled", func(t *testing.T) {
 		t.Parallel()
+
+		// A discarding handler that answered Enabled with true would still make
+		// every call build its record, which is the cost the default is meant to
+		// avoid.
 		logger := newNopLogger()
-		withLogger := logger.With("key", "value")
-		assert.NotNil(t, withLogger)
-	})
-}
-
-func TestSlogAdapter(t *testing.T) {
-	t.Parallel()
-
-	t.Run("SlogAdapter implements Logger interface", func(t *testing.T) {
-		t.Parallel()
-		slogLogger := slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil))
-		var logger Logger = NewSlogAdapter(slogLogger)
-		assert.NotNil(t, logger)
-	})
-
-	t.Run("SlogAdapter logs messages", func(t *testing.T) {
-		t.Parallel()
-		buf := &bytes.Buffer{}
-		slogLogger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-		logger := NewSlogAdapter(slogLogger)
-
-		logger.Debug("debug message", "key", "value1")
-		logger.Info("info message", "key", "value2")
-		logger.Warn("warn message", "key", "value3")
-		logger.Error("error message", "key", "value4")
-
-		output := buf.String()
-		assert.Contains(t, output, "debug message")
-		assert.Contains(t, output, "info message")
-		assert.Contains(t, output, "warn message")
-		assert.Contains(t, output, "error message")
-		assert.Contains(t, output, "value1")
-		assert.Contains(t, output, "value2")
-		assert.Contains(t, output, "value3")
-		assert.Contains(t, output, "value4")
-	})
-
-	t.Run("SlogAdapter With adds context", func(t *testing.T) {
-		t.Parallel()
-		buf := &bytes.Buffer{}
-		slogLogger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-		logger := NewSlogAdapter(slogLogger)
-
-		withLogger := logger.With("component", "test")
-		withLogger.Info("test message")
-
-		output := buf.String()
-		assert.Contains(t, output, "component")
-		assert.Contains(t, output, "test")
+		for _, level := range []slog.Level{slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError} {
+			assert.False(t, logger.Enabled(context.Background(), level), "level %v", level)
+		}
 	})
 }
 
 func TestDBBuilderWithLogger(t *testing.T) {
 	t.Parallel()
 
-	t.Run("WithLogger sets custom logger", func(t *testing.T) {
+	t.Run("a nil logger leaves the current one in place", func(t *testing.T) {
 		t.Parallel()
-		buf := &bytes.Buffer{}
-		slogLogger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-		logger := NewSlogAdapter(slogLogger)
 
-		builder := NewBuilder().WithLogger(logger)
-		assert.NotNil(t, builder)
+		builder := NewBuilder()
+		original := builder.logger
+
+		assert.Same(t, original, builder.WithLogger(nil).logger)
+		assert.NotPanics(t, func() { builder.logger.Info("still usable") })
 	})
 
-	t.Run("WithLogger with nil does not change logger", func(t *testing.T) {
+	t.Run("the builder reports what it loaded from a path", func(t *testing.T) {
 		t.Parallel()
-		builder := NewBuilder().WithLogger(nil)
-		assert.NotNil(t, builder)
-	})
 
-	t.Run("logging during Build and Open", func(t *testing.T) {
-		t.Parallel()
 		buf := &bytes.Buffer{}
-		slogLogger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-		logger := NewSlogAdapter(slogLogger)
-
-		// Create a temp CSV file
-		tempDir := t.TempDir()
-		csvFile := filepath.Join(tempDir, "test.csv")
-		require.NoError(t, os.WriteFile(csvFile, []byte("a,b\n1,2\n3,4"), 0600))
+		dir := t.TempDir()
+		csvFile := filepath.Join(dir, "test.csv")
+		require.NoError(t, os.WriteFile(csvFile, []byte("a,b\n1,2\n3,4"), 0o600))
 
 		ctx := context.Background()
-		builder := NewBuilder().
-			WithLogger(logger).
-			AddPath(csvFile)
-
-		validatedBuilder, err := builder.Build(ctx)
+		validated, err := NewBuilder().
+			WithLogger(debugLogger(buf)).
+			AddPath(csvFile).
+			Build(ctx)
 		require.NoError(t, err)
 
-		db, err := validatedBuilder.Open(ctx)
+		db, err := validated.Open(ctx)
 		require.NoError(t, err)
-		defer db.Close()
+		defer func() { _ = db.Close() }()
 
 		output := buf.String()
-		// Check that logging occurred
 		assert.Contains(t, output, "starting build")
 		assert.Contains(t, output, "build completed")
 		assert.Contains(t, output, "opening database")
 		assert.Contains(t, output, "database opened successfully")
 	})
 
-	t.Run("logging with reader input", func(t *testing.T) {
+	t.Run("the builder reports what it loaded from a reader", func(t *testing.T) {
 		t.Parallel()
+
 		buf := &bytes.Buffer{}
-		slogLogger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-		logger := NewSlogAdapter(slogLogger)
-
 		ctx := context.Background()
-		builder := NewBuilder().
-			WithLogger(logger).
-			AddReader(strings.NewReader("a,b\n1,2"), "test_table", FileTypeCSV)
-
-		validatedBuilder, err := builder.Build(ctx)
+		validated, err := NewBuilder().
+			WithLogger(debugLogger(buf)).
+			AddReader(strings.NewReader("a,b\n1,2"), "test_table", FileTypeCSV).
+			Build(ctx)
 		require.NoError(t, err)
 
-		db, err := validatedBuilder.Open(ctx)
+		db, err := validated.Open(ctx)
 		require.NoError(t, err)
-		defer db.Close()
+		defer func() { _ = db.Close() }()
 
 		output := buf.String()
 		assert.Contains(t, output, "starting reader streaming")
 		assert.Contains(t, output, "test_table")
+	})
+
+	t.Run("the handler decides which levels are kept", func(t *testing.T) {
+		t.Parallel()
+
+		// Levels are the handler's business rather than this package's, so a
+		// logger that keeps only warnings has to drop the debug and info
+		// records the load emits.
+		buf := &bytes.Buffer{}
+		logger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+		ctx := context.Background()
+		validated, err := NewBuilder().
+			WithLogger(logger).
+			AddReader(strings.NewReader("a,b\n1,2"), "quiet", FileTypeCSV).
+			Build(ctx)
+		require.NoError(t, err)
+
+		db, err := validated.Open(ctx)
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		assert.Empty(t, buf.String())
 	})
 }
 
@@ -170,13 +138,10 @@ func TestStreamProcessorLogger(t *testing.T) {
 
 	t.Run("setLogger updates logger", func(t *testing.T) {
 		t.Parallel()
-		sp := newStreamProcessor(1000)
 
 		buf := &bytes.Buffer{}
-		slogLogger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-		logger := NewSlogAdapter(slogLogger)
-
-		sp.setLogger(logger)
+		sp := newStreamProcessor(1000)
+		sp.setLogger(debugLogger(buf))
 		sp.logger.Info("test message")
 
 		assert.Contains(t, buf.String(), "test message")
@@ -184,11 +149,37 @@ func TestStreamProcessorLogger(t *testing.T) {
 
 	t.Run("setLogger with nil does not change logger", func(t *testing.T) {
 		t.Parallel()
+
 		sp := newStreamProcessor(1000)
 		originalLogger := sp.logger
 
 		sp.setLogger(nil)
-		assert.Equal(t, originalLogger, sp.logger)
+		assert.Same(t, originalLogger, sp.logger)
+	})
+}
+
+func TestFileProcessorLogger(t *testing.T) {
+	t.Parallel()
+
+	t.Run("setLogger updates logger", func(t *testing.T) {
+		t.Parallel()
+
+		buf := &bytes.Buffer{}
+		fp := newFileProcessor()
+		fp.setLogger(debugLogger(buf))
+		fp.logger.Info("test message")
+
+		assert.Contains(t, buf.String(), "test message")
+	})
+
+	t.Run("setLogger with nil does not change logger", func(t *testing.T) {
+		t.Parallel()
+
+		fp := newFileProcessor()
+		originalLogger := fp.logger
+
+		fp.setLogger(nil)
+		assert.Same(t, originalLogger, fp.logger)
 	})
 }
 
@@ -201,10 +192,9 @@ func BenchmarkNopLogger(b *testing.B) {
 	}
 }
 
-func BenchmarkSlogAdapter(b *testing.B) {
+func BenchmarkTextLogger(b *testing.B) {
 	buf := &bytes.Buffer{}
-	slogLogger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	logger := NewSlogAdapter(slogLogger)
+	logger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	b.ResetTimer()
 	for range b.N {
 		logger.Debug("debug message", "key1", "value1", "key2", 123)
@@ -212,11 +202,10 @@ func BenchmarkSlogAdapter(b *testing.B) {
 	}
 }
 
-func BenchmarkSlogAdapterDiscardLevel(b *testing.B) {
+func BenchmarkTextLoggerDiscardLevel(b *testing.B) {
 	buf := &bytes.Buffer{}
-	// Set level to Info, so Debug messages are discarded
-	slogLogger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	logger := NewSlogAdapter(slogLogger)
+	// Level Info, so the debug message is dropped by the handler.
+	logger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	b.ResetTimer()
 	for range b.N {
 		logger.Debug("debug message", "key1", "value1", "key2", 123)

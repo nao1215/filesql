@@ -21,18 +21,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type exampleLogger struct {
-	messages []string
-}
-
-func (l *exampleLogger) Debug(msg string, _ ...any) { l.messages = append(l.messages, msg) }
-func (l *exampleLogger) Info(msg string, _ ...any)  { l.messages = append(l.messages, msg) }
-func (l *exampleLogger) Warn(msg string, _ ...any)  { l.messages = append(l.messages, msg) }
-func (l *exampleLogger) Error(msg string, _ ...any) { l.messages = append(l.messages, msg) }
-func (l *exampleLogger) With(_ ...any) filesql.Logger {
-	return l
-}
-
 func createFilesqlExampleDir(files map[string]string) string {
 	dir, err := os.MkdirTemp("", "filesql-api-example")
 	if err != nil {
@@ -192,27 +180,42 @@ func ExampleDBBuilder_WithDialect() {
 }
 
 func ExampleDBBuilder_WithLogger() {
-	recorder := &exampleLogger{}
+	ctx := context.Background()
+
+	// A *slog.Logger is what the builder takes, so where the records go and
+	// which levels are kept are the handler's business. This one drops the
+	// timestamp so the example's output is stable.
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+		ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
+			if attr.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return attr
+		},
+	}))
 
 	validated, err := filesql.NewBuilder().
-		WithLogger(recorder).
+		WithLogger(logger).
 		AddReader(strings.NewReader("id,name\n1,Alice\n"), "users", filesql.FileTypeCSV).
-		Build(context.Background())
+		Build(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	db, err := validated.Open(context.Background())
+	db, err := validated.Open(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 
-	fmt.Println(recorder.messages[0])
-	fmt.Println(recorder.messages[len(recorder.messages)-1])
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	fmt.Println(lines[0])
+	fmt.Println(lines[len(lines)-1])
 	// Output:
-	// starting build
-	// database opened successfully
+	// level=INFO msg="build completed" collected_paths=0 readers=1
+	// level=INFO msg="database opened successfully"
 }
 
 func ExampleDBBuilder_DisableAutoSave() {
@@ -474,21 +477,6 @@ func ExampleMalformedRowPolicy_String() {
 	// stop
 	// skip
 	// fill
-}
-
-func ExampleNewSlogAdapter() {
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
-		if attr.Key == slog.TimeKey {
-			return slog.Attr{}
-		}
-		return attr
-	}}))
-
-	filesql.NewSlogAdapter(logger).Info("loaded", "rows", 2)
-	fmt.Println(strings.Contains(buf.String(), "loaded"))
-	// Output:
-	// true
 }
 
 // exampleWorkbook writes a workbook holding one shown sheet and one hidden
