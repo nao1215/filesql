@@ -71,9 +71,16 @@ func (o Options) failCleanup(primary error, what string, err error) error {
 // The temporary file is created in dest's directory so the rename stays within
 // one filesystem, where it is atomic. An existing dest keeps its permissions; a
 // new file is created with DefaultFileMode.
+//
+// A dest that is a symbolic link names the file to replace rather than being
+// it, so the staging and the rename both move to the file it points at and the
+// link stays a link.
 func Write(dest string, write func(io.Writer) error, opt Options) (err error) {
-	dir := filepath.Dir(dest)
-	tmp, err := createTempBeside(dir, filepath.Base(dest), stagedSuffix)
+	// The caller's own dest stays in the error wording, which is the path they
+	// named; only the file being replaced follows the link.
+	target := resolveLinks(dest)
+	dir := filepath.Dir(target)
+	tmp, err := createTempBeside(dir, filepath.Base(target), stagedSuffix)
 	if err != nil {
 		return opt.failIO("failed to create a temporary file next to "+dest, err)
 	}
@@ -98,7 +105,7 @@ func Write(dest string, write func(io.Writer) error, opt Options) (err error) {
 	}
 
 	mode := DefaultFileMode
-	if info, statErr := os.Stat(dest); statErr == nil {
+	if info, statErr := os.Stat(target); statErr == nil {
 		mode = info.Mode().Perm()
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return opt.failIO("failed to inspect "+dest, statErr)
@@ -107,10 +114,24 @@ func Write(dest string, write func(io.Writer) error, opt Options) (err error) {
 		return opt.failIO("failed to set permissions on the temporary file for "+dest, err)
 	}
 
-	if err := commitStagedFile(tmpName, dest); err != nil {
+	if err := commitStagedFile(tmpName, target); err != nil {
 		return opt.failIO("failed to replace "+dest, err)
 	}
 	return nil
+}
+
+// resolveLinks returns the file a write to path has to replace: the file path
+// names when it is a symbolic link, and path itself otherwise.
+//
+// A broken link and a path that does not exist yet both fail to resolve and
+// keep path, so the contents go where the caller asked rather than to a file
+// this package invented a name for.
+func resolveLinks(path string) string {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return path
+	}
+	return resolved
 }
 
 // stagedSuffix and backupSuffix name what a temporary file beside a destination

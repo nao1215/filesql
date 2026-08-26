@@ -157,3 +157,158 @@ func TestWrite_KeepsTheDestinationsMode(t *testing.T) {
 		assert.Equal(t, DefaultFileMode, info.Mode().Perm())
 	})
 }
+
+// TestWrite_FollowsASymlink pins that a destination which is a symbolic link is
+// followed rather than replaced. A rename puts the staged file where the link
+// itself was, so the link disappeared and the file it named still held the old
+// rows: the caller's edit landed at a path they never asked for, and the tool
+// reading the real file saw no change at all.
+func TestWrite_FollowsASymlink(t *testing.T) {
+	t.Parallel()
+
+	newContents := func(w io.Writer) error {
+		_, err := w.Write([]byte("new"))
+		return err
+	}
+
+	t.Run("a link beside its target", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		target := filepath.Join(dir, "target.csv")
+		require.NoError(t, os.WriteFile(target, []byte("old"), 0o600))
+		link := filepath.Join(dir, "link.csv")
+		requireSymlink(t, target, link)
+
+		require.NoError(t, Write(link, newContents, Options{}))
+
+		assertSymlink(t, link, target)
+		assert.Equal(t, "new", readFile(t, target), "the target is what receives the write")
+		assert.Equal(t, []string{"link.csv", "target.csv"}, dirEntries(t, dir))
+	})
+
+	t.Run("a link into another directory", func(t *testing.T) {
+		t.Parallel()
+
+		// The staging has to move with the target, or the rename crosses from
+		// the link's directory into the target's; a link beside its target
+		// cannot tell the two apart.
+		root := t.TempDir()
+		data := filepath.Join(root, "data")
+		require.NoError(t, os.Mkdir(data, 0o750))
+		target := filepath.Join(data, "target.csv")
+		require.NoError(t, os.WriteFile(target, []byte("old"), 0o600))
+		work := filepath.Join(root, "work")
+		require.NoError(t, os.Mkdir(work, 0o750))
+		link := filepath.Join(work, "users.csv")
+		requireSymlink(t, target, link)
+
+		require.NoError(t, Write(link, newContents, Options{}))
+
+		assertSymlink(t, link, target)
+		assert.Equal(t, "new", readFile(t, target))
+		assert.Equal(t, []string{"users.csv"}, dirEntries(t, work), "no staged file may be left beside the link")
+		assert.Equal(t, []string{"target.csv"}, dirEntries(t, data), "nor beside the target")
+	})
+
+	t.Run("a relative link", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		target := filepath.Join(dir, "target.csv")
+		require.NoError(t, os.WriteFile(target, []byte("old"), 0o600))
+		link := filepath.Join(dir, "link.csv")
+		if err := os.Symlink("target.csv", link); err != nil {
+			t.Skipf("this platform does not allow a symlink to be created: %v", err)
+		}
+
+		require.NoError(t, Write(link, newContents, Options{}))
+
+		assertSymlink(t, link, target)
+		assert.Equal(t, "new", readFile(t, target))
+	})
+
+	t.Run("a chain of links", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		target := filepath.Join(dir, "target.csv")
+		require.NoError(t, os.WriteFile(target, []byte("old"), 0o600))
+		middle := filepath.Join(dir, "middle.csv")
+		requireSymlink(t, target, middle)
+		link := filepath.Join(dir, "link.csv")
+		requireSymlink(t, middle, link)
+
+		require.NoError(t, Write(link, newContents, Options{}))
+
+		assertSymlink(t, link, middle)
+		assertSymlink(t, middle, target)
+		assert.Equal(t, "new", readFile(t, target))
+	})
+
+	t.Run("a dangling link is written at its own path", func(t *testing.T) {
+		t.Parallel()
+
+		// There is no file to follow, so the link is where the contents go; the
+		// alternative is creating a file the caller never named.
+		dir := t.TempDir()
+		link := filepath.Join(dir, "link.csv")
+		requireSymlink(t, filepath.Join(dir, "gone.csv"), link)
+
+		require.NoError(t, Write(link, newContents, Options{}))
+
+		assert.Equal(t, "new", readFile(t, link))
+		assert.Equal(t, []string{"link.csv"}, dirEntries(t, dir), "the link's own path is the only thing written")
+	})
+
+	t.Run("the target's mode is the one that is kept", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Windows does not carry Unix permission bits")
+		}
+		t.Parallel()
+
+		dir := t.TempDir()
+		target := filepath.Join(dir, "target.csv")
+		require.NoError(t, os.WriteFile(target, []byte("old"), 0o600))
+		link := filepath.Join(dir, "link.csv")
+		requireSymlink(t, target, link)
+
+		require.NoError(t, Write(link, newContents, Options{}))
+
+		info, err := os.Stat(target)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "the target's mode, not the mode a new file gets")
+	})
+}
+
+// requireSymlink creates link pointing at target, or skips the test where the
+// platform refuses: Windows needs a privilege for it that a test run may lack.
+func requireSymlink(t *testing.T, target, link string) {
+	t.Helper()
+
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("this platform does not allow a symlink to be created: %v", err)
+	}
+}
+
+// assertSymlink asserts link is still a symbolic link naming target.
+func assertSymlink(t *testing.T, link, target string) {
+	t.Helper()
+
+	info, err := os.Lstat(link)
+	require.NoError(t, err)
+	require.NotZero(t, info.Mode()&os.ModeSymlink, "%s must still be a symbolic link", link)
+	resolved, err := filepath.EvalSymlinks(link)
+	require.NoError(t, err)
+	wantResolved, err := filepath.EvalSymlinks(target)
+	require.NoError(t, err)
+	assert.Equal(t, wantResolved, resolved)
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+
+	got, err := os.ReadFile(path) //nolint:gosec // path from t.TempDir()
+	require.NoError(t, err)
+	return string(got)
+}
