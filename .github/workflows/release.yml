@@ -9,20 +9,20 @@ permissions:
   contents: read
 
 jobs:
-  release:
-    name: Release
+  # A tag reaches this workflow having passed nothing: the pull request checks
+  # ran against the branch, and a tag can be pushed onto any commit at all,
+  # including one that was never in a pull request. So everything the branch is
+  # asked for is asked again here, and nothing is published until it passes.
+  #
+  # This job keeps the workflow's read-only token. It runs third-party actions
+  # and the module's own tests, and neither should be able to reach a token that
+  # can write to the repository; creating the release is a separate job for
+  # exactly that reason.
+  verify:
+    name: Verify the tag
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    permissions:
-      # Only the last step needs this, and it is the only step that writes
-      # anything outside the runner.
-      contents: write
 
-    # One job, in order, with the release last. A tag reaches this workflow
-    # having passed nothing: the pull request checks ran against the branch, and
-    # a tag can be pushed onto any commit at all, including one that was never in
-    # a pull request. So everything the branch is asked for is asked again here,
-    # and the release is created only after all of it has passed.
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -40,10 +40,9 @@ jobs:
       # placeholder body. See .github/scripts/release-metadata.sh, whose
       # behavior is pinned by release_metadata_test.go.
       - name: Validate the tag and extract its changelog entry
-        id: meta
         env:
           TAG_NAME: ${{ github.ref_name }}
-        run: ./.github/scripts/release-metadata.sh "$TAG_NAME" >> "$GITHUB_OUTPUT"
+        run: ./.github/scripts/release-metadata.sh "$TAG_NAME"
 
       - name: Vet
         run: go vet ./...
@@ -63,6 +62,31 @@ jobs:
       # it.
       - name: Examples
         run: ./examples/verify.sh
+
+  # The only job that can write to the repository, and the only thing it does is
+  # create the release. The tag is validated and its body extracted again here
+  # rather than carried over from the job above, because that is two seconds of
+  # awk and it keeps the write-capable job from having to trust an output.
+  release:
+    name: Create the release
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Extract the changelog entry for this tag
+        id: meta
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: ./.github/scripts/release-metadata.sh "$TAG_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Create Release
         uses: softprops/action-gh-release@v3

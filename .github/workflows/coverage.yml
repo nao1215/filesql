@@ -19,7 +19,14 @@ jobs:
     timeout-minutes: 10
 
     steps:
+      # The module's own tests run in this job, so the checkout leaves no
+      # credential in .git/config for them to reach. No workflow-level
+      # permissions block goes with it: octocov comments on the pull request and
+      # reads and writes an artifact datastore, so a contents-read-only token
+      # would take away what this job is here to do.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v7
         with:

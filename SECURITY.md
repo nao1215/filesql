@@ -58,12 +58,13 @@ today.
 
 ### Parquet
 
-A Parquet page header states how large the page's statistics are, and the
-library filesql reads Parquet with allocates that before reading the bytes to
-see whether they are there. A damaged 473-byte file therefore allocates about
-98 MiB and is then refused. The refusal is fast — under a millisecond — so this
-is exhaustion of memory, not of time, and the cost is paid again on every call:
-a long-running process opening the same file twenty times pays it twenty times.
+A Parquet page header states how large the page's statistics are. filesql reads
+Parquet through `parquet-go`, and that decoder allocates the declared amount
+before reading the bytes, so it never finds out that they are not there. A
+damaged 473-byte file therefore allocates about 98 MiB and is then refused. The
+refusal is fast — under a millisecond — so this is exhaustion of memory, not of
+time, and the cost is paid again on every call: a long-running process opening
+the same file twenty times pays it twenty times.
 
 The number sits inside a column chunk rather than in the footer, so filesql
 never sees it and has nothing to check in front. The footer length, which is the

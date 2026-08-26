@@ -20,9 +20,20 @@ permissions:
 
 jobs:
   govulncheck:
-    name: govulncheck
+    name: govulncheck (Go ${{ matrix.go }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
+    # Both supported Go lines, because govulncheck reports on the standard
+    # library of whichever Go builds the module. Scanning with 1.25.13 alone
+    # would say nothing about an advisory that only affects 1.26, which is a Go
+    # this module supports and which some callers will be building it with.
+    strategy:
+      matrix:
+        go:
+          - "1.25.13"
+          - "1.26.6"
+      fail-fast: false
 
     steps:
       - uses: actions/checkout@v7
@@ -31,10 +42,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          # The Go that builds the module is also the standard library
-          # govulncheck reports on, so this has to be a release carrying the
-          # fixes the baseline requires, not a floating "1.25".
-          go-version: "1.25.13"
+          go-version: ${{ matrix.go }}
 
       # Pinned rather than @latest: a scanner that changes under the project
       # turns an unrelated pull request red for a reason nobody in it can act

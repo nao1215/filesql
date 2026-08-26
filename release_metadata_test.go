@@ -284,4 +284,21 @@ func TestReleaseWorkflowGatesTheRelease(t *testing.T) {
 			t.Errorf("%q runs after the release is created", gate)
 		}
 	}
+
+	// The checks and the release are two jobs so that the only token able to
+	// write to the repository belongs to the job that does nothing but create
+	// the release. Verification runs third-party actions and this module's own
+	// tests, and a write-capable token in the same job would be reachable from
+	// all of them.
+	if !strings.Contains(workflow, "needs: verify") {
+		t.Error("the release job no longer waits for the verification job")
+	}
+	if at := strings.Index(workflow, "contents: write"); at == -1 || at > release {
+		t.Error("the release job must be the one that declares contents: write")
+	}
+	if verify := strings.Index(workflow, "verify:"); verify == -1 {
+		t.Error("the verification job is gone")
+	} else if strings.Contains(workflow[verify:strings.Index(workflow, "release:")], "contents: write") {
+		t.Error("the verification job may not hold a token that can write to the repository")
+	}
 }
