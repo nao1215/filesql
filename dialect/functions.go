@@ -692,14 +692,19 @@ func dateFormatSpecial(tm time.Time, spec byte) (string, bool) {
 	}
 }
 
-// ordinalSuffix is the English suffix DATE_FORMAT's %D puts after a day. The
-// teens are the exception: 11, 12 and 13 take "th" where 1, 2 and 3 take "st",
-// "nd" and "rd".
-func ordinalSuffix(day int) string {
-	if day >= 11 && day <= 13 {
+// ordinalSuffix is the English suffix DATE_FORMAT's %D puts after a day and
+// TO_CHAR's TH after a number. The teens are the exception: 11, 12 and 13 take
+// "th" where 1, 2 and 3 take "st", "nd" and "rd", and so does every hundred
+// above them, which is why the test is on the last two digits rather than on
+// the value.
+func ordinalSuffix(n int) string {
+	if n < 0 {
+		n = -n
+	}
+	if n%100 >= 11 && n%100 <= 13 {
 		return "th"
 	}
-	switch day % 10 {
+	switch n % 10 {
 	case 1:
 		return "st"
 	case 2:
@@ -954,8 +959,7 @@ func datePartValue(unit string, tm time.Time) (driver.Value, error) {
 		return int64(decadeOf(tm.Year())), nil
 	case "century":
 		return int64(centuryOf(tm.Year())), nil
-	case "millennium", "millenium":
-		// PostgreSQL answers to the misspelling as well as to the spelling.
+	case "millennium":
 		return int64(millenniumOf(tm.Year())), nil
 	case "milliseconds":
 		return secondsWithFraction(tm) * 1000, nil
@@ -1735,58 +1739,6 @@ func fnFromUnixtime(args []driver.Value) (driver.Value, error) {
 
 // --- PostgreSQL scalar functions ---
 
-// pgToCharTokens maps TO_CHAR template patterns to Go reference-time layout
-// fragments, longest first so the scanner prefers the longest match.
-var pgToCharTokens = []struct{ pat, layout string }{
-	{"YYYY", "2006"},
-	{"YY", "06"},
-	{"MONTH", layoutMonthLong},
-	{"Month", layoutMonthLong},
-	{"MON", layoutMonthShort},
-	{"Mon", layoutMonthShort},
-	{"MM", "01"},
-	{"DAY", layoutWeekdayLong},
-	{"Day", layoutWeekdayLong},
-	{"DY", layoutWeekdayShort},
-	{"Dy", layoutWeekdayShort},
-	{"DD", "02"},
-	{"HH24", "15"},
-	{"HH12", "03"},
-	{"HH", "03"},
-	{"MI", "04"},
-	{"SS", "05"},
-	{"AM", "PM"},
-	{"PM", "PM"},
-	{"am", "pm"},
-	{"pm", "pm"},
-}
-
-// toCharLayout converts a PostgreSQL TO_CHAR/TO_DATE template into a Go layout,
-// dropping the "FM" fill-mode prefix and passing literal characters through.
-func toCharLayout(format string) string {
-	var b strings.Builder
-	for i := 0; i < len(format); {
-		if strings.HasPrefix(format[i:], "FM") {
-			i += 2
-			continue
-		}
-		matched := false
-		for _, tok := range pgToCharTokens {
-			if strings.HasPrefix(format[i:], tok.pat) {
-				b.WriteString(tok.layout)
-				i += len(tok.pat)
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			b.WriteByte(format[i])
-			i++
-		}
-	}
-	return b.String()
-}
-
 // fnToChar implements PostgreSQL TO_CHAR(value, format) for date/time values and
 // for numbers. The two are told apart by the template: a numeric one is built
 // from digit positions, which no date template contains.
@@ -1795,60 +1747,18 @@ func fnToChar(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
-	if isNumericTemplate(format) {
-		return numericToChar(args[0], format)
+	if !isDateTemplate(format) {
+		value, ok := toFloat(args[0])
+		if !ok {
+			return nil, nil
+		}
+		return pgFormatNumber(value, format), nil
 	}
 	tm, ok := toStringTime(args[0])
 	if !ok {
 		return nil, nil
 	}
-	return tm.Format(toCharLayout(format)), nil
-}
-
-// isNumericTemplate reports whether a TO_CHAR template describes a number.
-// "9" and "0" are digit positions and appear in no date template.
-func isNumericTemplate(format string) bool {
-	return strings.ContainsAny(format, "90")
-}
-
-// numericToChar formats a number against a PostgreSQL numeric template. It
-// supports the common pieces: "9" and "0" digit positions, "." for the decimal
-// point, "," for a group separator, and the leading space PostgreSQL reserves
-// for the sign. Anything else is passed through as a literal.
-func numericToChar(v driver.Value, format string) (driver.Value, error) {
-	value, ok := toFloat(v)
-	if !ok {
-		return nil, nil
-	}
-	intPart, fracPart, hasPoint := splitTemplate(format)
-	decimals := strings.Count(fracPart, "9") + strings.Count(fracPart, "0")
-	digits := strconv.FormatFloat(math.Abs(value), 'f', decimals, 64)
-
-	whole, frac, _ := strings.Cut(digits, ".")
-	if strings.Contains(intPart, ",") {
-		whole = groupThousands(whole)
-	}
-	if value < 0 {
-		whole = "-" + whole
-	}
-	// PostgreSQL pads to the template width and reserves one more column for the
-	// sign, so a positive number keeps a leading space.
-	width := strings.Count(intPart, "9") + strings.Count(intPart, "0") + strings.Count(intPart, ",") + 1
-	for len([]rune(whole)) < width {
-		whole = " " + whole
-	}
-	if hasPoint && decimals > 0 {
-		whole += "." + frac
-	}
-	return whole, nil
-}
-
-// splitTemplate divides a numeric template at its decimal point.
-func splitTemplate(format string) (intPart, fracPart string, hasPoint bool) {
-	if before, after, found := strings.Cut(format, "."); found {
-		return before, after, true
-	}
-	return format, "", false
+	return pgFormatTime(format, tm), nil
 }
 
 // groupThousands inserts a comma every three digits from the right.
@@ -1870,7 +1780,7 @@ func fnToDate(args []driver.Value) (driver.Value, error) {
 	if !ok || !ok2 {
 		return nil, nil
 	}
-	tm, ok := parseLayout(toCharLayout(format), s)
+	tm, ok := parseLayout(pgParseLayout(format), s)
 	if !ok {
 		return nil, nil
 	}
@@ -1915,7 +1825,7 @@ func fnDateTrunc(args []driver.Value) (driver.Value, error) {
 		// A century starts in its first year, which is the year ending in 01:
 		// truncating 2024 to a century gives 2001 rather than 2000.
 		return time.Date((centuryOf(y)-1)*100+1, 1, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
-	case "millennium", "millenium":
+	case "millennium":
 		return time.Date((millenniumOf(y)-1)*1000+1, 1, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
 	case "milliseconds", "millisecond":
 		return truncatedFraction(tm, time.Millisecond), nil

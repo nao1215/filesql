@@ -1098,12 +1098,20 @@ func intervalUnitAfter(tokens []token, start int) int {
 	return -1
 }
 
+// kwHaving and kwLimit are spelled in more than one of the keyword tables in
+// this package, which is what makes them constants rather than literals.
+const (
+	kwHaving = "HAVING"
+	kwLimit  = "LIMIT"
+	kwWhere  = "WHERE"
+)
+
 // intervalScanStopWords end the expression that carries an interval's amount.
 // They are the words that can follow a complete expression, so a unit keyword
 // standing past one of them belongs to something else.
 var intervalScanStopWords = map[string]bool{ //nolint:gochecknoglobals // a fixed table read by the interval scan
-	"FROM": true, "WHERE": true, "GROUP": true, "ORDER": true, "HAVING": true,
-	"LIMIT": true, "OFFSET": true, "AS": true, "AND": true, "OR": true,
+	"FROM": true, kwWhere: true, "GROUP": true, "ORDER": true, kwHaving: true,
+	kwLimit: true, "OFFSET": true, "AS": true, "AND": true, "OR": true,
 	"NOT": true, "WHEN": true, "THEN": true, "ELSE": true, "END": true,
 	"ON": true, "USING": true, "JOIN": true, "UNION": true, "INTO": true,
 	"SELECT": true, "IS": true, "IN": true, "LIKE": true, "BETWEEN": true,

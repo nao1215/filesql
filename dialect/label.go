@@ -219,8 +219,8 @@ func selectListItems(tokens []token) []tokenSpan {
 // nothing and keeps a malformed statement from swallowing the rest of the query
 // as one select item.
 var selectListEnd = map[string]bool{
-	"FROM": true, "INTO": true, "WHERE": true, "GROUP": true, "HAVING": true,
-	"ORDER": true, "LIMIT": true, "WINDOW": true,
+	"FROM": true, "INTO": true, kwWhere: true, "GROUP": true, kwHaving: true,
+	"ORDER": true, kwLimit: true, "WINDOW": true,
 	"UNION": true, "INTERSECT": true, "EXCEPT": true,
 }
 

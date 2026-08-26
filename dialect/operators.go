@@ -768,8 +768,8 @@ func isUnarySign(tokens []token, i int) bool {
 // the words that demand an operand inside an expression, they are the words a
 // "+" or "-" can follow as a sign rather than as the binary operator.
 var clauseKeywords = map[string]bool{ //nolint:gochecknoglobals // a fixed table read by the sign rule
-	"SELECT": true, "WHERE": true, "HAVING": true, "ON": true, "BY": true,
-	"LIMIT": true, "OFFSET": true, "VALUES": true, "SET": true,
+	"SELECT": true, kwWhere: true, kwHaving: true, "ON": true, "BY": true,
+	kwLimit: true, "OFFSET": true, "VALUES": true, "SET": true,
 	"RETURNING": true, "USING": true, "XOR": true,
 }
 
