@@ -495,7 +495,7 @@ The `batch_index`, `entry_index` and `addenda_index` columns say which record a 
 
 A Fedwire write is verified before it reaches your file. The message is written to a buffer, read back, and compared column by column with the table it was written from; if any field did not survive, the write is refused and the error names the field. Nothing is written in that case, so the file you started with is still there. One field reaches this today: `remittance_originator_address_line_four`, which the underlying library writes from line one, so a message whose fourth address line differs from its first cannot be exported until that is fixed upstream.
 
-Fedwire files must be the delimiter-separated form. The library filesql reads them with parses a message's variable-length fields by looking for the `*` that ends each one, so a file written in the fixed-width form is refused, naming every record it could not read. Files written by filesql are always the delimiter-separated form.
+Fedwire files must be the delimiter-separated form. filesql parses a message's variable-length fields by looking for the `*` that ends each one, so a file written in the fixed-width form is refused, naming every record it could not read. Files written by filesql are always the delimiter-separated form.
 
 A write-back rewrites the whole file. Both formats are written from the parsed structure rather than patched, so records the caller did not edit can come back formatted differently: an ACH record is written at its full width with its padding normalized, and Fedwire tags are written in the order the format defines rather than the order the file had them. The values are unchanged; the bytes are not, so a file diff after a write-back shows lines nobody edited.
 

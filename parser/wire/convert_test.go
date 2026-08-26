@@ -1111,7 +1111,7 @@ func TestWriteToWriter_RefusesAMessageItCannotWriteFaithfully(t *testing.T) {
 	t.Parallel()
 
 	// Give every address line of the remittance originator a value of its own,
-	// so a field written from its neighbour cannot pass unnoticed.
+	// so a field written from its neighbor cannot pass unnoticed.
 	raw, err := os.ReadFile(filepath.Join("testdata", "fedWireMessage-StructuredRemittance.fed"))
 	require.NoError(t, err)
 
