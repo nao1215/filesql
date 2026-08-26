@@ -621,20 +621,53 @@ func leadingNumber(s string) float64 {
 	return f
 }
 
-// fnNow reads the clock in UTC. This package carries no time zone -- no
-// column has one, no cast produces one, and a zone argument is refused -- so
-// UTC is the reading that is the same on every machine, and it is the one
-// SQLite's own CURRENT_TIMESTAMP answers.
+// statementClockWindow is how long one reading of the clock is reused.
+//
+// Registering the fixed clock as deterministic takes it off the row, but not
+// quite onto the statement: SQLite folds each occurrence of the call once, so a
+// query naming NOW twice reads the clock twice, microseconds apart, and the two
+// answers differ whenever those microseconds straddle a second. Every engine
+// this package translates gives one answer to every occurrence in a statement.
+// Sharing a reading for a window wider than the gap between the occurrences and
+// far narrower than the second these functions are formatted to is what closes
+// that gap.
+//
+// A statement that begins within the window of the one before it therefore sees
+// that statement's reading, which is at most a window old and never earlier
+// than what an earlier statement was given.
+const statementClockWindow = time.Millisecond
+
+//nolint:gochecknoglobals // one reading, shared by every helper that must not move within a statement
+var (
+	clockMu   sync.Mutex
+	lastClock time.Time
+)
+
+// clockUTC is the reading the fixed clock functions answer from. It is UTC
+// because this package carries no time zone -- no column has one, no cast
+// produces one, and a zone argument is refused -- so UTC is the reading that is
+// the same on every machine, and it is the one SQLite's own CURRENT_TIMESTAMP
+// answers.
+func clockUTC() time.Time {
+	clockMu.Lock()
+	defer clockMu.Unlock()
+
+	if now := time.Now(); now.Sub(lastClock) >= statementClockWindow {
+		lastClock = now
+	}
+	return lastClock.UTC()
+}
+
 func fnNow(_ []driver.Value) (driver.Value, error) {
-	return time.Now().UTC().Format(layoutDateTime), nil
+	return clockUTC().Format(layoutDateTime), nil
 }
 
 func fnCurdate(_ []driver.Value) (driver.Value, error) {
-	return time.Now().UTC().Format(layoutDateOnly), nil
+	return clockUTC().Format(layoutDateOnly), nil
 }
 
 func fnCurtime(_ []driver.Value) (driver.Value, error) {
-	return time.Now().UTC().Format(layoutTimeOnly), nil
+	return clockUTC().Format(layoutTimeOnly), nil
 }
 
 func fnRand(_ []driver.Value) (driver.Value, error) {
@@ -1804,7 +1837,7 @@ func fnLastDay(args []driver.Value) (driver.Value, error) {
 // read as UTC, as everywhere else in this package.
 func fnUnixTimestamp(args []driver.Value) (driver.Value, error) {
 	if len(args) == 0 {
-		return time.Now().Unix(), nil
+		return clockUTC().Unix(), nil
 	}
 	if len(args) > 1 {
 		return nil, fmt.Errorf("dialect: UNIX_TIMESTAMP expects 0 or 1 arguments, got %d", len(args))

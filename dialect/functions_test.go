@@ -2256,6 +2256,26 @@ func TestClockFunctionsReadUTC(t *testing.T) {
 	}
 }
 
+// TestClockSharesOneReadingWithinItsWindow pins the mechanism the statement
+// guarantee rests on, which SQL cannot show: the answers are formatted to
+// whole seconds, so two readings microseconds apart look alike whether they are
+// shared or not, and the case that tells them apart is the one where those
+// microseconds straddle a second.
+func TestClockSharesOneReadingWithinItsWindow(t *testing.T) {
+	t.Parallel()
+
+	first := clockUTC()
+	if again := clockUTC(); !again.Equal(first) {
+		t.Errorf("two readings inside the window differ: %v and %v", first, again)
+	}
+
+	time.Sleep(20 * statementClockWindow)
+	later := clockUTC()
+	if !later.After(first) {
+		t.Errorf("the reading did not move past the window: %v then %v", first, later)
+	}
+}
+
 // clockZoneChildEnv marks the child process the zone-sensitive clock tests run
 // their assertions in.
 const clockZoneChildEnv = "FILESQL_DIALECT_CLOCK_ZONE_CHILD"
@@ -2319,6 +2339,28 @@ func TestClockFunctionsAreFixedPerStatement(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("every occurrence in one statement reads the same clock", func(t *testing.T) {
+		// Registering the fixed clock as deterministic takes it off the row but
+		// not quite onto the statement: SQLite folds each occurrence of the
+		// call once, so a query naming NOW twice used to read the clock twice,
+		// microseconds apart, and the two answers differed whenever those
+		// microseconds straddled a second. The engines this package translates
+		// give one answer to every occurrence.
+		for _, q := range []string{
+			`SELECT NOW() = (SELECT NOW()) FROM rows_ LIMIT 1`,
+			`SELECT CURTIME() = (SELECT CURTIME()) FROM rows_ LIMIT 1`,
+			`SELECT UNIX_TIMESTAMP() = (SELECT UNIX_TIMESTAMP()) FROM rows_ LIMIT 1`,
+		} {
+			var same int
+			if err := db.QueryRowContext(ctx, q).Scan(&same); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+			if same != 1 {
+				t.Errorf("%s: the two occurrences disagree", q)
+			}
+		}
+	})
 
 	t.Run("a later statement reads the clock again", func(t *testing.T) {
 		// The reading is fixed per statement, not per connection: SQLite folds

@@ -150,8 +150,9 @@
 // answers and what BigQuery answers when no zone is named; MySQL and
 // PostgreSQL answer a session zone that has no counterpart here. Each of them
 // is fixed at the start of the statement, so every row of one result carries
-// the same reading. PostgreSQL's clock_timestamp and timeofday are the
-// exception and advance while the statement runs, which is what they are for.
+// the same reading and so does every place the statement names one of them.
+// PostgreSQL's clock_timestamp and timeofday are the exception and advance
+// while the statement runs, which is what they are for.
 //
 // One consequence of that has no error to report it: subtracting one timestamp
 // from another is an interval in PostgreSQL and an ordinary subtraction to

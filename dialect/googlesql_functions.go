@@ -252,7 +252,7 @@ func fnCurrentDatetime(args []driver.Value) (driver.Value, error) {
 	if len(args) > 0 {
 		return nil, errUnsupportedTimeZone("CURRENT_DATETIME")
 	}
-	return time.Now().UTC().Format(layoutDateTime), nil
+	return clockUTC().Format(layoutDateTime), nil
 }
 
 // --- days since the epoch ---

@@ -111,7 +111,7 @@ func postgresqlScalarFunctions() map[string]scalarSpec {
 // here.
 func postgresqlNonDeterministicFunctions() map[string]scalarSpec {
 	return map[string]scalarSpec{
-		"clock_timestamp": {0, fnNow},
+		"clock_timestamp": {0, fnClockTimestamp},
 		"timeofday":       {0, fnTimeOfDay},
 		"gen_random_uuid": {0, fnGenerateUUID},
 	}
@@ -829,6 +829,13 @@ func parseFloatOrNothing(s string) (float64, bool) {
 }
 
 // fnTimeOfDay is PostgreSQL's textual clock reading.
+// fnClockTimestamp reads the clock itself rather than the reading the fixed
+// clock shares. Moving while a statement runs is the whole of what separates
+// this function from now, so it must not be given a value held still for one.
+func fnClockTimestamp(_ []driver.Value) (driver.Value, error) {
+	return time.Now().UTC().Format(layoutDateTime), nil
+}
+
 func fnTimeOfDay(_ []driver.Value) (driver.Value, error) {
 	return time.Now().UTC().Format("Mon Jan 02 15:04:05.000000 2006 MST"), nil
 }
