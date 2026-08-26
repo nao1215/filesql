@@ -899,6 +899,256 @@ func pgIntervalPass(tokens []token) ([]token, error) {
 	return out, nil
 }
 
+// betweenSymmetricPass implements P-23: "x BETWEEN SYMMETRIC a AND b" is true
+// when x lies between a and b in whichever order the two are, and SQLite has no
+// such form -- passed through, its parser reports a syntax error naming a token
+// from the middle of the caller's own query. The rewrite sorts the two bounds
+// with least() and greatest() so each operand is still written once, which
+// matters when one of them is a function call the caller does not expect to be
+// evaluated twice.
+//
+// The two shared helpers are named rather than PostgreSQL's own pair, because a
+// NULL bound makes the whole comparison NULL in PostgreSQL, and the shared ones
+// answer NULL for the whole call while PostgreSQL's LEAST and GREATEST skip
+// their NULLs and would leave a bound behind. ASYMMETRIC is PostgreSQL's
+// explicit spelling of the ordinary reading, so the keyword is simply dropped.
+func betweenSymmetricPass(tokens []token) ([]token, error) {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		symmetric := isWordEq(tokens[i], "SYMMETRIC")
+		if !symmetric && !isWordEq(tokens[i], "ASYMMETRIC") {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		if prev := lastSig(out); prev < 0 || !isWordEq(out[prev], "BETWEEN") {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		// The whitespace that stood before the keyword is already in out, so
+		// the keyword and the run of whitespace after it go together; leaving
+		// the latter behind would double the space.
+		if !symmetric {
+			i = skipInsignificant(tokens, i+1)
+			continue
+		}
+		lo, hi, next, err := betweenBounds(tokens, i+1)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, callTokens("least", lo, hi)...)
+		out = append(out, spaceToken(), wordToken("AND"), spaceToken())
+		out = append(out, callTokens("greatest", lo, hi)...)
+		i = next
+	}
+	return out, nil
+}
+
+// skipInsignificant returns the index of the first significant token at or
+// after from, or len(tokens) when there is none.
+func skipInsignificant(tokens []token, from int) int {
+	for i := from; i < len(tokens); i++ {
+		if isSignificant(tokens[i]) {
+			return i
+		}
+	}
+	return len(tokens)
+}
+
+// betweenBounds reads the two operands of a BETWEEN range starting at from,
+// returning them and the index just past the second.
+func betweenBounds(tokens []token, from int) (lo, hi []token, next int, err error) {
+	fail := fmt.Errorf("%w: BETWEEN SYMMETRIC needs two bounds this translation can read", ErrUnsupportedSyntax)
+	loEnd, ok := betweenOperandForward(tokens, from)
+	if !ok {
+		return nil, nil, 0, fail
+	}
+	and := nextSig(tokens, loEnd+1)
+	if and < 0 || !isWordEq(tokens[and], "AND") {
+		return nil, nil, 0, fail
+	}
+	hiEnd, ok := betweenOperandForward(tokens, and+1)
+	if !ok {
+		return nil, nil, 0, fail
+	}
+	loStart := nextSig(tokens, from)
+	hiStart := nextSig(tokens, and+1)
+	lo = append([]token{}, trimSpaceTokens(tokens[loStart:loEnd+1])...)
+	hi = append([]token{}, trimSpaceTokens(tokens[hiStart:hiEnd+1])...)
+	return lo, hi, hiEnd + 1, nil
+}
+
+// betweenOperandForward returns the index of the last token of a BETWEEN bound
+// beginning at or after from. A bound binds tighter than the AND that separates
+// the two, so it runs across the arithmetic and concatenation operators and
+// stops at the first word, which is that AND or whatever follows the range.
+func betweenOperandForward(tokens []token, from int) (int, bool) {
+	end, ok := primaryEndForward(tokens, from)
+	if !ok {
+		return 0, false
+	}
+	for {
+		op := nextSig(tokens, end+1)
+		if op < 0 || tokens[op].kind != tokOp || !betweenTighterOperators[tokens[op].text] {
+			return end, true
+		}
+		next, ok := primaryEndForward(tokens, op+1)
+		if !ok {
+			return end, true
+		}
+		end = next
+	}
+}
+
+// betweenTighterOperators are the operators that bind tighter than the AND of a
+// BETWEEN range, so a bound extends across them.
+var betweenTighterOperators = map[string]bool{ //nolint:gochecknoglobals // a fixed table read by the bound scan
+	"*": true, "/": true, "%": true, "+": true, "-": true, "||": true,
+	"&": true, "|": true, "<<": true, ">>": true,
+}
+
+// unitIntervalPass rewrites "x + INTERVAL n unit" and "x - INTERVAL n unit"
+// into interval_add(x, ±n, 'unit'), the call DATE_ADD and DATE_SUB already
+// produce. MySQL and BigQuery both write the arithmetic this way as well as
+// through the functions, and the two spellings have to answer the same thing.
+//
+// A "(" directly after the word is not an interval literal: MySQL's
+// INTERVAL(n, a, b, ...) is an ordinary function that returns the index of the
+// first argument larger than n, so it is left for the call pass to see.
+func unitIntervalPass(tokens []token) ([]token, error) {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		if !isWordEq(tokens[i], "INTERVAL") {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		op := lastSig(out)
+		if op < 0 || (!isOpEq(out[op], "+") && !isOpEq(out[op], "-")) {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		amountStart := nextSig(tokens, i+1)
+		unitTok := intervalUnitAfter(tokens, amountStart)
+		if amountStart < 0 || unitTok < 0 {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		unit, ok := intervalUnits[strings.ToUpper(tokens[unitTok].text)]
+		if !ok {
+			return nil, fmt.Errorf("%w: unsupported INTERVAL unit %q", ErrUnsupportedSyntax, tokens[unitTok].text)
+		}
+		sign := out[op].text
+		out = out[:op]
+		left, start, ok := operandBack(out)
+		if !ok {
+			return nil, fmt.Errorf("%w: left operand of INTERVAL arithmetic is not a primary expression", ErrUnsupportedSyntax)
+		}
+		out = out[:start]
+		amount := trimSpaceTokens(tokens[amountStart:unitTok])
+		out = append(out, intervalAddCall(left, amount, sign, unit)...)
+		i = unitTok + 1
+	}
+	return out, nil
+}
+
+// intervalUnitAfter finds the unit keyword that closes an interval literal
+// beginning at start, or -1 when there is none. MySQL writes the literal as an
+// expression followed by a unit keyword, and the expression can name columns,
+// so the scan runs forward to the first word that is a unit rather than
+// assuming the amount is one token. It stops at a word that ends the expression
+// instead, and at a comma or a closing parenthesis outside any nesting, so a
+// unit-shaped word further along the statement is not mistaken for this
+// literal's unit.
+func intervalUnitAfter(tokens []token, start int) int {
+	if start < 0 {
+		return -1
+	}
+	depth, caseDepth := 0, 0
+	for i := start; i < len(tokens); i++ {
+		t := tokens[i]
+		if !isSignificant(t) {
+			continue
+		}
+		switch {
+		case isOpEq(t, "("):
+			depth++
+		case isOpEq(t, ")"):
+			if depth == 0 {
+				return -1
+			}
+			depth--
+		case depth > 0:
+		case isOpEq(t, ","):
+			return -1
+		case isWordEq(t, "CASE"):
+			// A CASE is one expression and its WHEN, THEN and ELSE are inside
+			// it, so the stop words below do not apply until its END.
+			caseDepth++
+		case isWordEq(t, "END"):
+			if caseDepth == 0 {
+				return -1
+			}
+			caseDepth--
+		case caseDepth > 0:
+		case t.kind == tokWord:
+			if _, ok := intervalUnits[strings.ToUpper(t.text)]; ok {
+				return i
+			}
+			if intervalScanStopWords[strings.ToUpper(t.text)] {
+				return -1
+			}
+		}
+	}
+	return -1
+}
+
+// kwHaving and kwLimit are spelled in more than one of the keyword tables in
+// this package, which is what makes them constants rather than literals.
+const (
+	kwHaving = "HAVING"
+	kwLimit  = "LIMIT"
+	kwWhere  = "WHERE"
+)
+
+// intervalScanStopWords end the expression that carries an interval's amount.
+// They are the words that can follow a complete expression, so a unit keyword
+// standing past one of them belongs to something else.
+var intervalScanStopWords = map[string]bool{ //nolint:gochecknoglobals // a fixed table read by the interval scan
+	"FROM": true, kwWhere: true, "GROUP": true, "ORDER": true, kwHaving: true,
+	kwLimit: true, "OFFSET": true, "AS": true, "AND": true, "OR": true,
+	"NOT": true, "WHEN": true, "THEN": true, "ELSE": true, "END": true,
+	"ON": true, "USING": true, "JOIN": true, "UNION": true, "INTO": true,
+	"SELECT": true, "IS": true, "IN": true, "LIKE": true, "BETWEEN": true,
+}
+
+// checkLeftoverInterval reports an INTERVAL literal that no arithmetic rewrite
+// consumed. SQLite has no interval type, so such a literal reaches its parser
+// as a syntax error naming a token from the middle of the caller's own query --
+// "near \"1\"" for INTERVAL 1 DAY -- which reads as a mistake in the SQL
+// rather than as a construct the translation does not cover.
+func checkLeftoverInterval(tokens []token) error {
+	for i, t := range tokens {
+		if !isWordEq(t, "INTERVAL") {
+			continue
+		}
+		next := nextSig(tokens, i+1)
+		if next < 0 || isOpEq(tokens[next], "(") {
+			continue
+		}
+		if tokens[next].kind != tokString && tokens[next].kind != tokNumber && tokens[next].kind != tokWord {
+			continue
+		}
+		return fmt.Errorf("%w: an INTERVAL literal is only supported in date arithmetic; SQLite has no interval type", ErrUnsupportedSyntax)
+	}
+	return nil
+}
+
 // rewriteJSONQuery implements GoogleSQL JSON_QUERY(json, path) as SQLite's "->"
 // operator. Unlike JSON_VALUE, JSON_QUERY keeps its result in JSON text, so a
 // string value stays quoted; "->" does that where json_extract does not.

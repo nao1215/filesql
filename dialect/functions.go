@@ -184,6 +184,11 @@ func registerAll() error {
 		"least":    {-1, fnLeast},
 		"greatest": {-1, fnGreatest},
 
+		// PostgreSQL's pair skips NULL arguments where the two above answer
+		// NULL for the whole call.
+		"postgresql_least":    {-1, fnPostgresLeast},
+		"postgresql_greatest": {-1, fnPostgresGreatest},
+
 		// Cast helpers. Each dialect's rewrite pass routes CAST through its own
 		// helper so the conversion follows that dialect's rules rather than
 		// SQLite's affinity; see cast.go.
@@ -280,6 +285,7 @@ func registerAll() error {
 	// them that listing them here would bury the ones every dialect shares.
 	maps.Copy(det, mysqlScalarFunctions())
 	maps.Copy(det, mysqlTimeFunctions())
+	maps.Copy(det, postgresqlScalarFunctions())
 	for name, spec := range det {
 		if err := sqlite.RegisterDeterministicScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
 			return fmt.Errorf("dialect: register %s: %w", name, err)
@@ -298,6 +304,7 @@ func registerAll() error {
 		"unix_timestamp": {-1, fnUnixTimestamp},
 		"generate_uuid":  {0, fnGenerateUUID},
 	}
+	maps.Copy(nondet, postgresqlNonDeterministicFunctions())
 	for name, spec := range nondet {
 		if err := sqlite.RegisterScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
 			return fmt.Errorf("dialect: register %s: %w", name, err)
@@ -687,14 +694,19 @@ func dateFormatSpecial(tm time.Time, spec byte) (string, bool) {
 	}
 }
 
-// ordinalSuffix is the English suffix DATE_FORMAT's %D puts after a day. The
-// teens are the exception: 11, 12 and 13 take "th" where 1, 2 and 3 take "st",
-// "nd" and "rd".
-func ordinalSuffix(day int) string {
-	if day >= 11 && day <= 13 {
+// ordinalSuffix is the English suffix DATE_FORMAT's %D puts after a day and
+// TO_CHAR's TH after a number. The teens are the exception: 11, 12 and 13 take
+// "th" where 1, 2 and 3 take "st", "nd" and "rd", and so does every hundred
+// above them, which is why the test is on the last two digits rather than on
+// the value.
+func ordinalSuffix(n int) string {
+	if n < 0 {
+		n = -n
+	}
+	if n%100 >= 11 && n%100 <= 13 {
 		return "th"
 	}
-	switch day % 10 {
+	switch n % 10 {
 	case 1:
 		return "st"
 	case 2:
@@ -893,7 +905,15 @@ func fnDatePart(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
-	return datePartValue(strings.ToLower(strings.TrimSpace(unit)), tm)
+	unit = strings.ToLower(strings.TrimSpace(unit))
+	// PostgreSQL's second carries the fraction of a second with it, so
+	// DATE_PART('second', '10:11:12.5') is 12.5. MySQL's SECOND() and
+	// BigQuery's EXTRACT(SECOND) both answer the whole number, which is what
+	// the shared helper below gives them.
+	if unit == unitSecond {
+		return secondsWithFraction(tm), nil
+	}
+	return datePartValue(unit, tm)
 }
 
 func datePartValue(unit string, tm time.Time) (driver.Value, error) {
@@ -931,6 +951,25 @@ func datePartValue(unit string, tm time.Time) (driver.Value, error) {
 	case unitWeek:
 		_, wk := tm.ISOWeek()
 		return int64(wk), nil
+	case unitISOYear:
+		// The year the ISO week belongs to, which is the companion of the ISO
+		// week above: without it the last week of December and the first week
+		// of January group together.
+		year, _ := tm.ISOWeek()
+		return int64(year), nil
+	case "decade":
+		return int64(decadeOf(tm.Year())), nil
+	case "century":
+		return int64(centuryOf(tm.Year())), nil
+	case "millennium":
+		return int64(millenniumOf(tm.Year())), nil
+	case "milliseconds":
+		return secondsWithFraction(tm) * 1000, nil
+	case "microseconds":
+		// A microsecond is the finest a PostgreSQL timestamp holds, so the
+		// count is always whole; answering it as an integer also keeps SQLite
+		// from spelling a large REAL in exponent form.
+		return int64(math.Round(secondsWithFraction(tm) * 1000000)), nil
 	case "epoch":
 		return tm.Unix(), nil
 	case "date":
@@ -944,6 +983,41 @@ func datePartValue(unit string, tm time.Time) (driver.Value, error) {
 	default:
 		return nil, fmt.Errorf("dialect: unsupported date part %q", unit)
 	}
+}
+
+// secondsWithFraction is the seconds field of a time together with whatever
+// fraction of a second it carries. PostgreSQL's second, milliseconds and
+// microseconds parts are all built from it, which is why 12.5 seconds is 12500
+// milliseconds rather than 500.
+func secondsWithFraction(tm time.Time) float64 {
+	return float64(tm.Second()) + float64(tm.Nanosecond())/1e9
+}
+
+// decadeOf, centuryOf and millenniumOf number the year the way PostgreSQL does.
+// A century counts from 1, so the year 2000 is in century 20 and 2001 is the
+// first year of century 21; the same rule one order of magnitude up gives the
+// millennium. A decade is the plain division, since there is no year zero to
+// shift it. Each has its own arm for a year before the common era, where the
+// division has to round the other way.
+func decadeOf(year int) int {
+	if year >= 0 {
+		return year / 10
+	}
+	return -((8 - (year - 1)) / 10)
+}
+
+func centuryOf(year int) int {
+	if year > 0 {
+		return (year + 99) / 100
+	}
+	return -((99 - (year - 1)) / 100)
+}
+
+func millenniumOf(year int) int {
+	if year > 0 {
+		return (year + 999) / 1000
+	}
+	return -((999 - (year - 1)) / 1000)
 }
 
 // fnGoogleSQLDatePart implements EXTRACT under GoogleSQL. BigQuery's WEEK
@@ -969,9 +1043,6 @@ func fnGoogleSQLDatePart(args []driver.Value) (driver.Value, error) {
 	case unitISOWeek:
 		_, week := tm.ISOWeek()
 		return int64(week), nil
-	case unitISOYear:
-		year, _ := tm.ISOWeek()
-		return int64(year), nil
 	default:
 		return datePartValue(unit, tm)
 	}
@@ -1466,16 +1537,41 @@ func fnTruncate(args []driver.Value) (driver.Value, error) {
 // fnLeast implements LEAST(a, b, ...) and fnGreatest GREATEST(a, b, ...).
 // Values are compared numerically when every argument parses as a number and
 // lexicographically otherwise, matching how the source dialects coerce a mixed
-// list. A NULL argument makes the whole call NULL, which is MySQL and GoogleSQL
-// behavior; PostgreSQL instead skips NULLs, a difference callers should know
-// about.
-func fnLeast(args []driver.Value) (driver.Value, error) { return extremum(args, true) }
+// list. A NULL argument makes the whole call NULL, which is what MySQL and
+// GoogleSQL answer; PostgreSQL skips its NULLs and reaches the pair below
+// instead.
+func fnLeast(args []driver.Value) (driver.Value, error) { return extremum(args, true, false) }
 
-func fnGreatest(args []driver.Value) (driver.Value, error) { return extremum(args, false) }
+func fnGreatest(args []driver.Value) (driver.Value, error) { return extremum(args, false, false) }
 
-func extremum(args []driver.Value, wantSmaller bool) (driver.Value, error) {
+// fnPostgresLeast and fnPostgresGreatest implement PostgreSQL's LEAST and
+// GREATEST, which ignore their NULL arguments and answer NULL only when every
+// argument is NULL. An empty cell loads as NULL, so under the other rule a row
+// missing one of the columns being compared reports no extreme at all.
+func fnPostgresLeast(args []driver.Value) (driver.Value, error) { return extremum(args, true, true) }
+
+func fnPostgresGreatest(args []driver.Value) (driver.Value, error) {
+	return extremum(args, false, true)
+}
+
+func extremum(args []driver.Value, wantSmaller, skipNulls bool) (driver.Value, error) {
 	if len(args) == 0 {
 		return nil, errors.New("dialect: LEAST/GREATEST expects at least one argument")
+	}
+	// The NULLs are dropped before anything else is decided, so the numeric or
+	// lexicographic choice below is made from the values that are really
+	// compared rather than from a list a NULL is still standing in.
+	if skipNulls {
+		kept := make([]driver.Value, 0, len(args))
+		for _, a := range args {
+			if a != nil {
+				kept = append(kept, a)
+			}
+		}
+		if len(kept) == 0 {
+			return nil, nil
+		}
+		args = kept
 	}
 	strs := make([]string, len(args))
 	nums := make([]float64, len(args))
@@ -1645,58 +1741,6 @@ func fnFromUnixtime(args []driver.Value) (driver.Value, error) {
 
 // --- PostgreSQL scalar functions ---
 
-// pgToCharTokens maps TO_CHAR template patterns to Go reference-time layout
-// fragments, longest first so the scanner prefers the longest match.
-var pgToCharTokens = []struct{ pat, layout string }{
-	{"YYYY", "2006"},
-	{"YY", "06"},
-	{"MONTH", layoutMonthLong},
-	{"Month", layoutMonthLong},
-	{"MON", layoutMonthShort},
-	{"Mon", layoutMonthShort},
-	{"MM", "01"},
-	{"DAY", layoutWeekdayLong},
-	{"Day", layoutWeekdayLong},
-	{"DY", layoutWeekdayShort},
-	{"Dy", layoutWeekdayShort},
-	{"DD", "02"},
-	{"HH24", "15"},
-	{"HH12", "03"},
-	{"HH", "03"},
-	{"MI", "04"},
-	{"SS", "05"},
-	{"AM", "PM"},
-	{"PM", "PM"},
-	{"am", "pm"},
-	{"pm", "pm"},
-}
-
-// toCharLayout converts a PostgreSQL TO_CHAR/TO_DATE template into a Go layout,
-// dropping the "FM" fill-mode prefix and passing literal characters through.
-func toCharLayout(format string) string {
-	var b strings.Builder
-	for i := 0; i < len(format); {
-		if strings.HasPrefix(format[i:], "FM") {
-			i += 2
-			continue
-		}
-		matched := false
-		for _, tok := range pgToCharTokens {
-			if strings.HasPrefix(format[i:], tok.pat) {
-				b.WriteString(tok.layout)
-				i += len(tok.pat)
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			b.WriteByte(format[i])
-			i++
-		}
-	}
-	return b.String()
-}
-
 // fnToChar implements PostgreSQL TO_CHAR(value, format) for date/time values and
 // for numbers. The two are told apart by the template: a numeric one is built
 // from digit positions, which no date template contains.
@@ -1705,60 +1749,18 @@ func fnToChar(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
-	if isNumericTemplate(format) {
-		return numericToChar(args[0], format)
+	if !isDateTemplate(format) {
+		value, ok := toFloat(args[0])
+		if !ok {
+			return nil, nil
+		}
+		return pgFormatNumber(value, format), nil
 	}
 	tm, ok := toStringTime(args[0])
 	if !ok {
 		return nil, nil
 	}
-	return tm.Format(toCharLayout(format)), nil
-}
-
-// isNumericTemplate reports whether a TO_CHAR template describes a number.
-// "9" and "0" are digit positions and appear in no date template.
-func isNumericTemplate(format string) bool {
-	return strings.ContainsAny(format, "90")
-}
-
-// numericToChar formats a number against a PostgreSQL numeric template. It
-// supports the common pieces: "9" and "0" digit positions, "." for the decimal
-// point, "," for a group separator, and the leading space PostgreSQL reserves
-// for the sign. Anything else is passed through as a literal.
-func numericToChar(v driver.Value, format string) (driver.Value, error) {
-	value, ok := toFloat(v)
-	if !ok {
-		return nil, nil
-	}
-	intPart, fracPart, hasPoint := splitTemplate(format)
-	decimals := strings.Count(fracPart, "9") + strings.Count(fracPart, "0")
-	digits := strconv.FormatFloat(math.Abs(value), 'f', decimals, 64)
-
-	whole, frac, _ := strings.Cut(digits, ".")
-	if strings.Contains(intPart, ",") {
-		whole = groupThousands(whole)
-	}
-	if value < 0 {
-		whole = "-" + whole
-	}
-	// PostgreSQL pads to the template width and reserves one more column for the
-	// sign, so a positive number keeps a leading space.
-	width := strings.Count(intPart, "9") + strings.Count(intPart, "0") + strings.Count(intPart, ",") + 1
-	for len([]rune(whole)) < width {
-		whole = " " + whole
-	}
-	if hasPoint && decimals > 0 {
-		whole += "." + frac
-	}
-	return whole, nil
-}
-
-// splitTemplate divides a numeric template at its decimal point.
-func splitTemplate(format string) (intPart, fracPart string, hasPoint bool) {
-	if before, after, found := strings.Cut(format, "."); found {
-		return before, after, true
-	}
-	return format, "", false
+	return pgFormatTime(format, tm), nil
 }
 
 // groupThousands inserts a comma every three digits from the right.
@@ -1780,7 +1782,7 @@ func fnToDate(args []driver.Value) (driver.Value, error) {
 	if !ok || !ok2 {
 		return nil, nil
 	}
-	tm, ok := parseLayout(toCharLayout(format), s)
+	tm, ok := parseLayout(pgParseLayout(format), s)
 	if !ok {
 		return nil, nil
 	}
@@ -1819,9 +1821,33 @@ func fnDateTrunc(args []driver.Value) (driver.Value, error) {
 		return time.Date(y, mo, d, tm.Hour(), tm.Minute(), 0, 0, loc).Format(layoutDateTime), nil
 	case unitSecond:
 		return time.Date(y, mo, d, tm.Hour(), tm.Minute(), tm.Second(), 0, loc).Format(layoutDateTime), nil
+	case "decade":
+		return time.Date(decadeOf(y)*10, 1, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
+	case "century":
+		// A century starts in its first year, which is the year ending in 01:
+		// truncating 2024 to a century gives 2001 rather than 2000.
+		return time.Date((centuryOf(y)-1)*100+1, 1, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
+	case "millennium":
+		return time.Date((millenniumOf(y)-1)*1000+1, 1, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
+	case "milliseconds", "millisecond":
+		return truncatedFraction(tm, time.Millisecond), nil
+	case "microseconds", "microsecond":
+		return truncatedFraction(tm, time.Microsecond), nil
 	default:
 		return nil, fmt.Errorf("dialect: unsupported DATE_TRUNC unit %q", unit)
 	}
+}
+
+// truncatedFraction rounds a time down to a multiple of unit and spells it with
+// however much of the fraction survives, trailing zeros removed, which is how
+// PostgreSQL prints a timestamp: DATE_TRUNC('millisecond', '10:11:12.123456')
+// is 10:11:12.123 and a whole second keeps no decimal point at all.
+func truncatedFraction(tm time.Time, unit time.Duration) string {
+	out := tm.Truncate(unit)
+	if out.Nanosecond() == 0 {
+		return out.Format(layoutDateTime)
+	}
+	return strings.TrimRight(out.Format(layoutDateTime+".000000000"), "0")
 }
 
 // fnSplitPart implements PostgreSQL SPLIT_PART(string, delimiter, n) with a
@@ -2999,7 +3025,9 @@ func formatOperand(verb byte, v driver.Value) any {
 	}
 }
 
-// nullText is how GoogleSQL's FORMAT prints a value that has none.
+// nullText is how a value that has none is spelled where SQL spells it out:
+// GoogleSQL's FORMAT prints it, MySQL's QUOTE answers it, PostgreSQL's
+// quote_nullable answers it, and the keyword tables in this package hold it.
 const nullText = "NULL"
 
 // googlesqlPrintValue implements GoogleSQL's %t and %T: the printable form of a

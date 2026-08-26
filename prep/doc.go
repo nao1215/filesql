@@ -37,10 +37,19 @@
 //
 // # Memory Usage
 //
-// prep loads the entire file into memory for processing. This enables
-// multi-pass operations (preprocessing then validation) but means memory
-// usage scales with file size. For large files, use ProcessToWriter to
-// reduce peak memory by avoiding the output buffer.
+// prep holds the whole input in memory, so its peak scales with the size of the
+// file rather than staying flat the way filesql's own chunked loading does.
+// Three things are live at once: the parsed rows, one element of the struct
+// slice per row, and, for Process, the buffer the preprocessed output is built
+// in. ProcessToWriter removes the third of those and not the first two, since
+// the struct slice is what the caller asked for and the rows are what a second
+// pass over them needs.
+//
+// That is the design rather than an oversight: preprocessing and validation are
+// separate passes over the same rows, and the row a validator reports on has to
+// be somewhere when it does. A file large enough for this to matter is better
+// loaded with filesql, which reads it in chunks, and validated afterwards with
+// SQL over the loaded table.
 //
 // Format-specific limitations:
 //   - XLSX: Only the first sheet is processed

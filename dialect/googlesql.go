@@ -73,6 +73,15 @@ func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	// G-16: SQLite rejects "UNION DISTINCT"; its plain UNION already
 	// deduplicates.
 	out = unionDistinctPass(currentValueParenPass(typePrefixedLiteralPass(out)))
+	// G-7: BigQuery writes date arithmetic as an operator as well as through
+	// DATE_ADD, and the two have to answer the same thing.
+	out, err = unitIntervalPass(out)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkLeftoverInterval(out); err != nil {
+		return nil, err
+	}
 	return aggregatePass(out, GoogleSQL)
 }
 

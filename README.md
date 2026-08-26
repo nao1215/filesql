@@ -216,6 +216,10 @@ incompatibilities (identifier quoting, `DATE_ADD`, `SPLIT_PART`, `SAFE_DIVIDE`,
 with no SQLite equivalent (for example `QUALIFY`, `DISTINCT ON`, MySQL's `XOR`,
 or MySQL's `0x` literal, which is a string in one place and a number in another)
 return a clear error, and anything else is passed through to SQLite.
+What the translation cannot reach is SQLite's type system: there is no boolean,
+no interval and no array, so a comparison answers `1` or `0`, an `INTERVAL`
+literal works only in date arithmetic, and a construct whose result would be one
+of those types is refused rather than answered.
 A non-SQLite dialect
 cannot be combined with auto-save. See the [`dialect`](./dialect) package for the
 full list of supported translations.
@@ -570,6 +574,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Feature | Example function | Source |
 |---------|------------------|--------|
 | Translate a query into SQLite SQL and recognize what has no equivalent | `ExampleTranslate` | [dialect/example_test.go](./dialect/example_test.go) |
+| Run PostgreSQL constructs SQLite has no form for | `ExampleTranslate_postgreSQL` | [dialect/example_test.go](./dialect/example_test.go) |
 | Turn a user-supplied dialect name into a `Dialect` | `ExampleParse` | [dialect/example_test.go](./dialect/example_test.go) |
 | List the built-in dialects and spell one for a person | `ExampleDialects`, `ExampleDialect_DisplayName` | [dialect/example_test.go](./dialect/example_test.go) |
 

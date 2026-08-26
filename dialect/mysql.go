@@ -109,6 +109,17 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	// M-19: SQLite rejects "UNION DISTINCT"; its plain UNION already
 	// deduplicates.
 	out = unionDistinctPass(currentValueParenPass(typePrefixedLiteralPass(out)))
+	// M-5: "x + INTERVAL n unit" is the operator spelling of DATE_ADD, and the
+	// two have to answer the same thing. It runs after the typed literal above
+	// so that "DATE '2026-01-01' + INTERVAL 1 DAY" has already lost its DATE
+	// keyword and the left operand is a plain literal.
+	out, err = unitIntervalPass(out)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkLeftoverInterval(out); err != nil {
+		return nil, err
+	}
 	// M-22: MySQL's LIKE escapes with a backslash unless an ESCAPE clause says
 	// otherwise, and its default collation folds case beyond ASCII. Appending
 	// SQLite's own ESCAPE clause covered the escape but left two gaps that the

@@ -44,12 +44,31 @@ func TestPostgreSQLTranslate(t *testing.T) {
 		{"P-5_substring_from", "SELECT SUBSTRING(name FROM 2) FROM t", "SELECT postgresql_substr(name, 2) AS \"SUBSTRING(name FROM 2)\" FROM t"},
 		{"P-5_substring_for", "SELECT SUBSTRING(name FOR 3) FROM t", "SELECT postgresql_substr(name, 1, 3) AS \"SUBSTRING(name FOR 3)\" FROM t"},
 		{"P-5_substring_comma_form", "SELECT SUBSTRING(name, 2, 3) FROM t", "SELECT postgresql_substr(name, 2, 3) AS \"SUBSTRING(name, 2, 3)\" FROM t"},
+		// A string literal after FROM is a pattern, not a position: PostgreSQL
+		// tells the two readings apart on the operand's type, and the token
+		// stream is where that information still exists.
+		{"P-5_substring_pattern", "SELECT SUBSTRING(name FROM '[0-9]+') FROM t", `SELECT regexp_extract(name, '[0-9]+') AS "SUBSTRING(name FROM '[0-9]+')" FROM t`},
+		{"P-5_substring_numeric_operand_is_a_position", "SELECT SUBSTRING(name FROM 2) FROM t", "SELECT postgresql_substr(name, 2) AS \"SUBSTRING(name FROM 2)\" FROM t"},
+		// A column is neither literal, so which reading applies is not in the
+		// query text and the helper decides it from the value.
+		{"P-5_substring_column_operand_decides_at_run_time", "SELECT SUBSTRING(name FROM n) FROM t", "SELECT postgresql_substring_from(name, n) AS \"SUBSTRING(name FROM n)\" FROM t"},
+		{"P-5_substring_expression_operand_decides_at_run_time", "SELECT SUBSTRING(name FROM n + 1) FROM t", "SELECT postgresql_substring_from(name, n + 1) AS \"SUBSTRING(name FROM n + 1)\" FROM t"},
+		{"P-5_substring_pattern_with_a_length_is_a_position", "SELECT SUBSTRING(name FROM '2' FOR 3) FROM t", "SELECT postgresql_substr(name, '2', 3) AS \"SUBSTRING(name FROM '2' FOR 3)\" FROM t"},
 
 		{"P-6_string_agg", "SELECT STRING_AGG(name, ', ') FROM t", "SELECT group_concat(name, ', ') AS \"STRING_AGG(name, ', ')\" FROM t"},
 		// SQLite's DISTINCT aggregates take one argument, so the separator has to
 		// go. Dropping it is only correct when it is the comma SQLite defaults to.
 		{"P-6_string_agg_distinct_comma", "SELECT STRING_AGG(DISTINCT name, ',') FROM t", "SELECT group_concat(DISTINCT name) AS \"STRING_AGG(DISTINCT name, ',')\" FROM t"},
 		{"P-6_string_agg_distinct_comma_spaced", "SELECT STRING_AGG( DISTINCT name , ',' ) FROM t", "SELECT group_concat(DISTINCT name) AS \"STRING_AGG( DISTINCT name , ',' )\" FROM t"},
+		{"P-20_greatest", "SELECT GREATEST(a, b) FROM t", `SELECT postgresql_greatest(a, b) AS "GREATEST(a, b)" FROM t`},
+		// P-23: the bounds are sorted with the shared helpers, which answer
+		// NULL for the whole call, rather than with PostgreSQL's NULL-skipping
+		// pair, which would drop a NULL bound and turn a NULL answer into false.
+		{"P-23_between_symmetric", "SELECT * FROM t WHERE x BETWEEN SYMMETRIC a AND b", "SELECT * FROM t WHERE x BETWEEN least(a, b) AND greatest(a, b)"},
+		{"P-23_not_between_symmetric", "SELECT * FROM t WHERE x NOT BETWEEN SYMMETRIC a AND b", "SELECT * FROM t WHERE x NOT BETWEEN least(a, b) AND greatest(a, b)"},
+		{"P-23_between_asymmetric", "SELECT * FROM t WHERE x BETWEEN ASYMMETRIC a AND b", "SELECT * FROM t WHERE x BETWEEN a AND b"},
+		{"P-23_symmetric_is_not_a_keyword_alone", "SELECT symmetric FROM t", "SELECT symmetric FROM t"},
+		{"P-20_least", "SELECT LEAST(a, b) FROM t", `SELECT postgresql_least(a, b) AS "LEAST(a, b)" FROM t`},
 		{"P-19_upper", "SELECT UPPER(name) FROM t", `SELECT unicode_upper(name) AS "UPPER(name)" FROM t`},
 		{"P-19_lower", "SELECT LOWER(name) FROM t", `SELECT unicode_lower(name) AS "LOWER(name)" FROM t`},
 
@@ -132,6 +151,16 @@ func TestPostgreSQLTranslateUnsupported(t *testing.T) {
 		{"P-6_string_agg_distinct_separator_expression", "SELECT STRING_AGG(DISTINCT name, sep) FROM t"},
 		{"P-1_missing_type", "SELECT a::"},
 		{"P-1_type_not_word", "SELECT a:: , b"},
+		// P-12: an INTERVAL literal is only translatable as the right operand
+		// of date arithmetic. Anywhere else it reached SQLite's parser, which
+		// reported a syntax error naming a token from the caller's own query.
+		{"P-12_bare_interval", "SELECT INTERVAL '3 days'"},
+		{"P-12_interval_as_an_argument", "SELECT JUSTIFY_DAYS(INTERVAL '35 days')"},
+		{"P-12_interval_on_the_left", "SELECT INTERVAL '1 day' + d FROM t"},
+		// P-5: the SQL-standard regular-expression form, whose third operand is
+		// an escape character rather than a length. Read positionally it would
+		// answer something the query never asked for.
+		{"P-5_substring_similar_escape", "SELECT SUBSTRING(s SIMILAR 'a#\"b#\"c' ESCAPE '#') FROM t"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

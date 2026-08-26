@@ -77,6 +77,11 @@ func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Whatever INTERVAL the pass above did not consume has no SQLite form at
+	// all, so it is refused here rather than left to SQLite's parser.
+	if err := checkLeftoverInterval(out); err != nil {
+		return nil, err
+	}
 	// P-14: SIMILAR TO is SQL-standard pattern matching that SQLite lacks.
 	out, err = similarToPass(out)
 	if err != nil {
@@ -92,6 +97,18 @@ func rewritePostgreSQL(tokens []token) ([]token, error) {
 		return nil, err
 	}
 	out, err = binaryChainOperatorPass(out, "%", "postgresql_mod")
+	if err != nil {
+		return nil, err
+	}
+	// P-24: LOCALTIMESTAMP and LOCALTIME are keywords rather than calls in
+	// PostgreSQL, so SQLite read them as column names and reported no such
+	// column. They name the same clock the corresponding functions read.
+	out = wordToCallPass(out, "LOCALTIMESTAMP", "now")
+	out = wordToCallPass(out, "LOCALTIME", "curtime")
+	// P-23: BETWEEN SYMMETRIC has no SQLite form. It runs after the call pass
+	// so the least() and greatest() it emits are the shared helpers rather than
+	// PostgreSQL's NULL-skipping pair, which would lose a NULL bound.
+	out, err = betweenSymmetricPass(out)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +191,7 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 	case "POSITION":
 		return rewritePosition(tokens, open, closeIdx, pgCallPass)
 	case fnNameSubstring, fnNameSubstr:
-		return rewriteSubstringCall(tokens, open, closeIdx, "postgresql_substr", pgCallPass)
+		return rewritePostgresSubstringCall(tokens, open, closeIdx, pgCallPass)
 	case fnNameRound:
 		return rewriteRoundCall(tokens, open, closeIdx, pgCallPass)
 	case fnNameTrim:
@@ -192,6 +209,10 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 		return rewriteRenameCall(tokens, open, closeIdx, "postgresql_regexp_replace", pgCallPass)
 	case "BTRIM":
 		return rewriteRenameCall(tokens, open, closeIdx, "trim", pgCallPass)
+	case "GREATEST", "LEAST":
+		// PostgreSQL ignores a NULL argument; MySQL and BigQuery answer NULL
+		// for the whole call, which is what the shared helpers do.
+		return rewriteRenameCall(tokens, open, closeIdx, "postgresql_"+strings.ToLower(tokens[nameIdx].text), pgCallPass)
 	case fnNameMod:
 		return rewriteRenameCall(tokens, open, closeIdx, "postgresql_mod", pgCallPass)
 	case fnNameTrunc:
@@ -240,6 +261,25 @@ func rewritePosition(tokens []token, open, closeIdx int, recurse callRecurser) (
 	return repl, true, nil
 }
 
+// wordToCallPass replaces a bare keyword with a call to name, for the
+// PostgreSQL words that read a value without parentheses. A word already
+// followed by "(" is left alone, since it is a call the caller wrote.
+func wordToCallPass(tokens []token, word, name string) []token {
+	out := make([]token, 0, len(tokens))
+	for i, t := range tokens {
+		if !isWordEq(t, word) {
+			out = append(out, t)
+			continue
+		}
+		if next := nextSig(tokens, i+1); next >= 0 && isOpEq(tokens[next], "(") {
+			out = append(out, t)
+			continue
+		}
+		out = append(out, wordToken(name), opToken("("), opToken(")"))
+	}
+	return out
+}
+
 // rewriteSubstringCall routes both spellings of SUBSTRING onto the dialect's own
 // helper. The keyword form is converted to arguments by rewriteSubstring; the
 // comma form is renamed, since SQLite's own substr() answers position 0 and a
@@ -250,6 +290,71 @@ func rewriteSubstringCall(tokens []token, open, closeIdx int, target string, rec
 		return repl, ok, err
 	}
 	return rewriteRenameCall(tokens, open, closeIdx, target, recurse)
+}
+
+// rewritePostgresSubstringCall is rewriteSubstringCall plus the two forms only
+// PostgreSQL has. SUBSTRING(s FROM p) extracts the text matching p when p is a
+// pattern rather than a position, and SUBSTRING(s SIMILAR p ESCAPE e) is the
+// SQL-standard regular-expression form, which has no SQLite equivalent.
+//
+// PostgreSQL decides between a position and a pattern on the static type of the
+// operand, so SUBSTRING('abc123' FROM '2') is the match of the pattern 2 rather
+// than the substring starting at position 2. SQLite has no declared type to
+// consult once the query runs, and the token stream is the one place the same
+// information exists: a string literal is what PostgreSQL would type as text.
+// An operand that is anything else -- a number, a column, an expression --
+// keeps the positional reading.
+func rewritePostgresSubstringCall(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
+	if similar := topLevelWord(tokens, open, closeIdx, "SIMILAR"); similar >= 0 {
+		return nil, false, fmt.Errorf("%w: SUBSTRING(x SIMILAR p ESCAPE e) is not supported", ErrUnsupportedSyntax)
+	}
+	from := topLevelWord(tokens, open, closeIdx, "FROM")
+	forKw := topLevelWord(tokens, open, closeIdx, "FOR")
+	if from < 0 || forKw >= 0 {
+		return rewriteSubstringCall(tokens, open, closeIdx, "postgresql_substr", recurse)
+	}
+	subject, err := recurse(tokens[open+1 : from])
+	if err != nil {
+		return nil, false, err
+	}
+	operand, err := recurse(tokens[from+1 : closeIdx])
+	if err != nil {
+		return nil, false, err
+	}
+	subject, operand = trimSpaceTokens(subject), trimSpaceTokens(operand)
+	switch kind := loneLiteralKind(tokens, from+1, closeIdx); kind {
+	case tokString:
+		return callTokens("regexp_extract", subject, operand), true, nil
+	case tokNumber:
+		return callTokens("postgresql_substr", subject, operand), true, nil
+	default:
+		// A column, a placeholder or an expression: the kind of the operand is
+		// not in the query text, so the reading has to be chosen from the value
+		// at run time. It is the reading PostgreSQL would have chosen whenever
+		// the operand's type matches what its value looks like, which is every
+		// integer column and every text column that does not hold digits.
+		return callTokens("postgresql_substring_from", subject, operand), true, nil
+	}
+}
+
+// loneLiteralKind reports the kind of the single literal that fills the tokens
+// between from and end, or tokWord when what is there is anything else.
+func loneLiteralKind(tokens []token, from, end int) tokenKind {
+	kind := tokWord
+	seen := false
+	for i := from; i < end; i++ {
+		if !isSignificant(tokens[i]) {
+			continue
+		}
+		if seen || (tokens[i].kind != tokString && tokens[i].kind != tokNumber) {
+			return tokWord
+		}
+		kind, seen = tokens[i].kind, true
+	}
+	if !seen {
+		return tokWord
+	}
+	return kind
 }
 
 // rewriteSubstring implements P-5: SUBSTRING(x FROM n FOR m) -> target(x, n, m).

@@ -88,7 +88,7 @@ func labelFor(original []token, before tokenSpan, rewritten []token, after token
 // expressionEndKeywords are words that finish an expression and can therefore
 // never be an alias: "CASE ... END", "x IS NULL", "TRUE".
 var expressionEndKeywords = map[string]bool{
-	"END": true, "NULL": true, "TRUE": true, "FALSE": true,
+	"END": true, nullText: true, "TRUE": true, "FALSE": true,
 	"CURRENT_DATE": true, "CURRENT_TIME": true, "CURRENT_TIMESTAMP": true,
 }
 
@@ -219,8 +219,8 @@ func selectListItems(tokens []token) []tokenSpan {
 // nothing and keeps a malformed statement from swallowing the rest of the query
 // as one select item.
 var selectListEnd = map[string]bool{
-	"FROM": true, "INTO": true, "WHERE": true, "GROUP": true, "HAVING": true,
-	"ORDER": true, "LIMIT": true, "WINDOW": true,
+	"FROM": true, "INTO": true, kwWhere: true, "GROUP": true, kwHaving: true,
+	"ORDER": true, kwLimit: true, "WINDOW": true,
 	"UNION": true, "INTERSECT": true, "EXCEPT": true,
 }
 

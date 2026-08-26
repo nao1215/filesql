@@ -401,8 +401,8 @@ func TestDatePartUnsupported(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	for _, q := range []string{
-		`SELECT DATE_PART('century', '2026-07-28')`,
-		`SELECT DATE_TRUNC('decade', '2026-07-28')`,
+		`SELECT DATE_PART('fortnight', '2026-07-28')`,
+		`SELECT DATE_TRUNC('fortnight', '2026-07-28')`,
 		`SELECT DATE_DIFF('2026-01-01', '2020-01-01', 'century')`,
 		`SELECT CHR(-1)`,
 		`SELECT CHR(2000000)`,
@@ -836,6 +836,98 @@ func TestDialectBoundariesFollowTheirEngine(t *testing.T) {
 		{name: "match type c turns folding off", dialect: MySQL, query: `SELECT REGEXP_REPLACE('aAa', 'a', 'X', 1, 0, 'c')`, want: "XAX"},
 		{name: "an unknown match type is refused", dialect: MySQL, query: `SELECT REGEXP_REPLACE('a', 'a', 'X', 1, 0, 'z')`, wantErr: true},
 		{name: "an invalid pattern is refused", dialect: MySQL, query: `SELECT 'a' REGEXP '('`, wantErr: true},
+
+		// GREATEST and LEAST: PostgreSQL ignores its NULL arguments, MySQL and
+		// BigQuery answer NULL for the whole call. An empty cell loads as NULL,
+		// so under the wrong rule a row missing one column reports no extreme.
+		{name: "postgresql greatest skips a null", dialect: PostgreSQL, query: `SELECT GREATEST(1, NULL, 2)`, want: "2"},
+		{name: "postgresql least skips a null", dialect: PostgreSQL, query: `SELECT LEAST(1, NULL, 2)`, want: "1"},
+		{name: "mysql greatest answers null", dialect: MySQL, query: `SELECT GREATEST(1, NULL, 2)`, wantNull: true},
+		{name: "mysql least answers null", dialect: MySQL, query: `SELECT LEAST(1, NULL, 2)`, wantNull: true},
+		{name: "googlesql greatest answers null", dialect: GoogleSQL, query: `SELECT GREATEST(1, NULL, 2)`, wantNull: true},
+		{name: "googlesql least answers null", dialect: GoogleSQL, query: `SELECT LEAST(1, NULL, 2)`, wantNull: true},
+		// The NULLs go before the numeric-or-string choice is made, so a
+		// string list still orders as strings, and a list of nothing but NULL
+		// has no extreme to answer with.
+		{name: "postgresql greatest of strings skips a null", dialect: PostgreSQL, query: `SELECT GREATEST('a', NULL, 'b')`, want: "b"},
+		{name: "postgresql greatest of only nulls", dialect: PostgreSQL, query: `SELECT GREATEST(NULL, NULL)`, wantNull: true},
+		{name: "postgresql least of only nulls", dialect: PostgreSQL, query: `SELECT LEAST(NULL, NULL)`, wantNull: true},
+		{name: "postgresql greatest with only a trailing value", dialect: PostgreSQL, query: `SELECT GREATEST(NULL, NULL, 7)`, want: "7"},
+		{name: "postgresql greatest of one argument", dialect: PostgreSQL, query: `SELECT GREATEST(3)`, want: "3"},
+
+		// PostgreSQL's coarse and sub-second date parts. Every want was read
+		// from PostgreSQL 17.10 rather than derived; the centuries and
+		// millennia count from 1, which is the off-by-one these units invite.
+		{name: "postgresql millennium", dialect: PostgreSQL, query: `SELECT DATE_PART('millennium', TIMESTAMP '2024-03-05 10:11:12')`, want: "3"},
+		{name: "postgresql millennium at its first year", dialect: PostgreSQL, query: `SELECT DATE_PART('millennium', DATE '2000-01-01')`, want: "2"},
+		{name: "postgresql century", dialect: PostgreSQL, query: `SELECT DATE_PART('century', DATE '2024-03-05')`, want: "21"},
+		{name: "postgresql century of a year ending in 00", dialect: PostgreSQL, query: `SELECT DATE_PART('century', DATE '2000-06-01')`, want: "20"},
+		{name: "postgresql century of a year ending in 01", dialect: PostgreSQL, query: `SELECT DATE_PART('century', DATE '2001-06-01')`, want: "21"},
+		{name: "postgresql decade", dialect: PostgreSQL, query: `SELECT DATE_PART('decade', DATE '2024-01-01')`, want: "202"},
+		{name: "postgresql isoyear inside its own year", dialect: PostgreSQL, query: `SELECT DATE_PART('isoyear', DATE '2024-01-01')`, want: "2024"},
+		{name: "postgresql isoyear borrowed from the year before", dialect: PostgreSQL, query: `SELECT DATE_PART('isoyear', DATE '2023-01-01')`, want: "2022"},
+		{name: "postgresql milliseconds carry the seconds", dialect: PostgreSQL, query: `SELECT DATE_PART('milliseconds', TIMESTAMP '2024-03-05 10:11:12.5')`, want: "12500"},
+		{name: "postgresql microseconds carry the seconds", dialect: PostgreSQL, query: `SELECT DATE_PART('microseconds', TIMESTAMP '2024-03-05 10:11:12.5')`, want: "12500000"},
+		{name: "postgresql second carries its fraction", dialect: PostgreSQL, query: `SELECT DATE_PART('second', TIMESTAMP '2024-03-05 10:11:12.5')`, want: "12.5"},
+		{name: "postgresql second without a fraction", dialect: PostgreSQL, query: `SELECT DATE_PART('second', TIMESTAMP '2024-03-05 10:11:12')`, want: "12"},
+		// The other two dialects number seconds whole, so the fraction above
+		// must not have reached the shared helper.
+		{name: "mysql second is whole", dialect: MySQL, query: `SELECT SECOND('2024-03-05 10:11:12.5')`, want: "12"},
+		{name: "googlesql second is whole", dialect: GoogleSQL, query: `SELECT EXTRACT(SECOND FROM TIMESTAMP '2024-03-05 10:11:12.5')`, want: "12"},
+		{name: "googlesql isoyear still answers", dialect: GoogleSQL, query: `SELECT EXTRACT(ISOYEAR FROM DATE '2023-01-01')`, want: "2022"},
+
+		{name: "postgresql date_trunc decade", dialect: PostgreSQL, query: `SELECT DATE_TRUNC('decade', TIMESTAMP '2024-03-05 10:11:12')`, want: "2020-01-01 00:00:00"},
+		{name: "postgresql date_trunc century", dialect: PostgreSQL, query: `SELECT DATE_TRUNC('century', TIMESTAMP '2024-03-05 10:11:12')`, want: "2001-01-01 00:00:00"},
+		{name: "postgresql date_trunc millennium", dialect: PostgreSQL, query: `SELECT DATE_TRUNC('millennium', TIMESTAMP '2024-03-05 10:11:12')`, want: "2001-01-01 00:00:00"},
+		{name: "postgresql date_trunc millisecond", dialect: PostgreSQL, query: `SELECT DATE_TRUNC('millisecond', TIMESTAMP '2024-03-05 10:11:12.123456')`, want: "2024-03-05 10:11:12.123"},
+		{name: "postgresql date_trunc microsecond", dialect: PostgreSQL, query: `SELECT DATE_TRUNC('microsecond', TIMESTAMP '2024-03-05 10:11:12.123456')`, want: "2024-03-05 10:11:12.123456"},
+		{name: "postgresql date_trunc millisecond of a whole second", dialect: PostgreSQL, query: `SELECT DATE_TRUNC('millisecond', TIMESTAMP '2024-03-05 10:11:12')`, want: "2024-03-05 10:11:12"},
+
+		// BETWEEN SYMMETRIC takes its bounds in either order. A NULL bound
+		// makes the whole comparison NULL, which is what keeps the rewrite off
+		// PostgreSQL's NULL-skipping LEAST and GREATEST.
+		{name: "symmetric with the bounds reversed", dialect: PostgreSQL, query: `SELECT 5 BETWEEN SYMMETRIC 7 AND 3`, want: "1"},
+		{name: "symmetric with the bounds in order", dialect: PostgreSQL, query: `SELECT 5 BETWEEN SYMMETRIC 3 AND 7`, want: "1"},
+		{name: "symmetric outside the range", dialect: PostgreSQL, query: `SELECT 9 BETWEEN SYMMETRIC 7 AND 3`, want: "0"},
+		{name: "not between symmetric", dialect: PostgreSQL, query: `SELECT 5 NOT BETWEEN SYMMETRIC 7 AND 3`, want: "0"},
+		{name: "symmetric with a null bound", dialect: PostgreSQL, query: `SELECT 5 BETWEEN SYMMETRIC NULL AND 3`, wantNull: true},
+		{name: "asymmetric keeps the written order", dialect: PostgreSQL, query: `SELECT 5 BETWEEN ASYMMETRIC 7 AND 3`, want: "0"},
+		{name: "symmetric over strings", dialect: PostgreSQL, query: `SELECT 'b' BETWEEN SYMMETRIC 'c' AND 'a'`, want: "1"},
+		{name: "symmetric with a call as a bound", dialect: PostgreSQL, query: `SELECT 5 BETWEEN SYMMETRIC ABS(-7) AND 3`, want: "1"},
+		{name: "symmetric with arithmetic in a bound", dialect: PostgreSQL, query: `SELECT 5 BETWEEN SYMMETRIC 3+1 AND 7`, want: "1"},
+
+		// The operator spelling of date arithmetic answers what the function
+		// spelling answers.
+		{name: "mysql interval operator adds a day", dialect: MySQL, query: `SELECT DATE '2026-01-01' + INTERVAL 1 DAY`, want: "2026-01-02"},
+		{name: "mysql interval function adds a day", dialect: MySQL, query: `SELECT DATE_ADD('2026-01-01', INTERVAL 1 DAY)`, want: "2026-01-02"},
+		{name: "mysql interval operator subtracts", dialect: MySQL, query: `SELECT DATE '2026-01-01' - INTERVAL 1 DAY`, want: "2025-12-31"},
+		{name: "mysql interval operator crosses a month", dialect: MySQL, query: `SELECT DATE '2026-01-31' + INTERVAL 1 MONTH`, want: "2026-02-28"},
+		{name: "mysql interval operator with a negative amount", dialect: MySQL, query: `SELECT DATE '2026-01-01' + INTERVAL -1 DAY`, want: "2025-12-31"},
+		{name: "googlesql interval operator adds a day", dialect: GoogleSQL, query: `SELECT DATE '2026-01-01' + INTERVAL 1 DAY`, want: "2026-01-02"},
+		// The amount is an expression, and a CASE inside it holds the words
+		// that otherwise end the scan for the unit.
+		{name: "mysql interval amount is a case expression", dialect: MySQL, query: `SELECT DATE '2026-01-01' + INTERVAL CASE WHEN 1 THEN 1 ELSE 2 END DAY`, want: "2026-01-02"},
+		{name: "mysql interval amount is arithmetic", dialect: MySQL, query: `SELECT DATE '2026-01-01' + INTERVAL 1 + 1 DAY`, want: "2026-01-03"},
+
+		// SUBSTRING(s FROM p) with a pattern extracts the match, and returns
+		// the first capture group when the pattern has one. Every want was
+		// read from PostgreSQL 17.10.
+		{name: "postgresql substring extracts a match", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM '[0-9]+')`, want: "123"},
+		{name: "postgresql substring returns the capture group", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM 'b(c)1')`, want: "c"},
+		{name: "postgresql substring with no match", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM '[x]+')`, wantNull: true},
+		// A numeric-looking pattern is still a pattern, because PostgreSQL
+		// reads the operand's type rather than its value.
+		{name: "postgresql substring reads a numeric string as a pattern", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM '2')`, want: "2"},
+		{name: "postgresql substring reads a number as a position", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM 2)`, want: "bc123"},
+		{name: "postgresql substring with a length is positional", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM 2 FOR 3)`, want: "bc1"},
+		// The other two dialects have only the positional reading.
+		{name: "mysql substring from a string operand", dialect: MySQL, query: `SELECT SUBSTRING('abc123' FROM 2)`, want: "bc123"},
+		// A non-literal operand carries no kind into the translation, so the
+		// helper reads it from the value: a number is a position and anything
+		// else is a pattern.
+		{name: "postgresql substring from a computed position", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM 1 + 1)`, want: "bc123"},
+		{name: "postgresql substring from a column pattern", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM p) FROM (SELECT '[0-9]+' AS p)`, want: "123"},
+		{name: "postgresql substring from a column position", dialect: PostgreSQL, query: `SELECT SUBSTRING('abc123' FROM p) FROM (SELECT 2 AS p)`, want: "bc123"},
 
 		// A sign is told from the binary operator by what stands before it.
 		{name: "a sign after a closing paren is binary", dialect: MySQL, query: `SELECT (4) - 1 >> 1`, want: "1"},

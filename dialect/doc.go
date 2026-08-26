@@ -23,7 +23,8 @@
 // WIDTH_BUCKET, ...) are
 // filled by user-defined functions registered into the SQLite driver via
 // RegisterFunctions rather than by rewriting the SQL. The MySQL-only ones are
-// in mysql_functions.go and mysql_time.go, registered under the names MySQL
+// in mysql_functions.go and mysql_time.go and the PostgreSQL-only ones in
+// postgresql_functions.go, registered under the names each engine
 // gives them: a name
 // that is not a SQLite keyword and that no other dialect means something else
 // by needs no rewrite, and keeping the call text as the query wrote it keeps
@@ -93,6 +94,41 @@
 // rules is the worst kind of failure this package can have, because the
 // translation succeeds and the query answers from a value the caller never
 // wrote, so each of those rules is configured rather than assumed.
+//
+// TO_CHAR has a file of its own for the same kind of reason: its template is a
+// language rather than a set of names, and it cannot be translated into a Go
+// layout string. A Go layout has one spelling per field, so MONTH, Month and
+// month would be one answer where PostgreSQL gives three, it has no fixed-width
+// form for the nine columns PostgreSQL pads a day or a month name to, and a
+// pattern with no Go equivalent has to be copied out as literal text, which is
+// how TO_CHAR(d, 'DDD') answered "05D". postgresql_template.go scans the
+// template into its elements and renders one at a time, for the numeric
+// templates as well as the date ones, and TO_DATE and TO_TIMESTAMP read their
+// templates through the same scanner.
+//
+// What the translation cannot reach is SQLite's type system. SQLite has five
+// storage classes -- NULL, INTEGER, REAL, TEXT and BLOB -- and so no boolean,
+// no interval, no array and no arbitrary-precision numeric, and a construct
+// whose answer is one of those has nowhere to land. A comparison answers 1 or 0 rather than true or false; an
+// INTERVAL literal is translatable only as the right operand of date
+// arithmetic, and anywhere else it is refused with ErrUnsupportedSyntax rather
+// than passed on to fail as a syntax error naming something else; an array
+// literal and the set-returning functions are refused for the same reason; and
+// the functions whose answer is one of those types -- PostgreSQL's AGE,
+// JUSTIFY_DAYS, REGEXP_MATCH, SCALE and TRIM_SCALE -- are not implemented,
+// since there would be no value to return.
+//
+// One consequence of that has no error to report it: subtracting one timestamp
+// from another is an interval in PostgreSQL and an ordinary subtraction to
+// SQLite, so "ts2 - ts1" answers a number rather than a span, and for two
+// dates in the same year it answers 0. The operands are columns as often as
+// literals and a token rewrite cannot see their types, so there is no shape to
+// match on; DATE_PART and DATE_DIFF are the ways to ask this question here.
+//
+// Comparison is the other place the engine has the last word. "=", IN, BETWEEN,
+// ORDER BY, DISTINCT and GROUP BY compare inside SQLite, so a string and a
+// number are different values here where PostgreSQL coerces them, and '5' = 5
+// is false.
 //
 // The SQLite dialect is the identity translation: Translate returns the input
 // unchanged.

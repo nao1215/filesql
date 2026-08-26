@@ -35,7 +35,11 @@ import (
 // the SQLite dialect's behavior too.
 
 // ErrDivideByZero reports a division by zero in a dialect that raises for it.
-var ErrDivideByZero = fmt.Errorf("%w: division by zero", ErrInvalidCast)
+// It stands on its own rather than wrapping ErrInvalidCast, which is about a
+// value a target type cannot represent: a division by zero converts nothing,
+// and an error reading "invalid cast: division by zero" sent the reader looking
+// at CAST expressions their query does not contain.
+var ErrDivideByZero = errors.New("dialect: division by zero")
 
 // divideFloat implements the "/" operator for the dialects whose division is
 // always floating point. MySQL answers NULL when the divisor is zero;
@@ -450,7 +454,7 @@ func fnMySQLQuote(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		// MySQL answers the word rather than NULL, so the result can be pasted
 		// into a statement whatever the value was.
-		return "NULL", nil
+		return nullText, nil
 	}
 	var b strings.Builder
 	b.Grow(len(s) + 2)
@@ -768,8 +772,8 @@ func isUnarySign(tokens []token, i int) bool {
 // the words that demand an operand inside an expression, they are the words a
 // "+" or "-" can follow as a sign rather than as the binary operator.
 var clauseKeywords = map[string]bool{ //nolint:gochecknoglobals // a fixed table read by the sign rule
-	"SELECT": true, "WHERE": true, "HAVING": true, "ON": true, "BY": true,
-	"LIMIT": true, "OFFSET": true, "VALUES": true, "SET": true,
+	"SELECT": true, kwWhere: true, kwHaving: true, "ON": true, "BY": true,
+	kwLimit: true, "OFFSET": true, "VALUES": true, "SET": true,
 	"RETURNING": true, "USING": true, "XOR": true,
 }
 
