@@ -129,6 +129,16 @@ func TestPostgreSQLScalarFunctions(t *testing.T) {
 		{name: "date_bin to an hour", query: `SELECT date_bin('1 hour', TIMESTAMP '2024-03-05 10:59:59', TIMESTAMP '2024-03-05 00:00:00')`, want: "2024-03-05 10:00:00"},
 		{name: "date_bin to half a minute", query: `SELECT date_bin('30 seconds', TIMESTAMP '2024-03-05 10:11:12', TIMESTAMP '2024-03-05 10:00:00')`, want: "2024-03-05 10:11:00"},
 		{name: "date_bin refuses a stride of no fixed length", query: `SELECT date_bin('1 month', TIMESTAMP '2024-03-05 10:11:12', TIMESTAMP '2024-01-01 00:00:00')`, wantErr: true},
+		// The two branches of the bin arithmetic -- a stride inside a day and
+		// one that is a whole number of days -- with a source on either side
+		// of the origin, which is what exercises the floor rather than the
+		// truncation an integer division does on its own.
+		{name: "date_bin to a whole day", query: `SELECT date_bin('1 day', TIMESTAMP '2024-03-05 10:11:12', TIMESTAMP '2024-03-01 00:00:00')`, want: "2024-03-05 00:00:00"},
+		{name: "date_bin to a week", query: `SELECT date_bin('1 week', TIMESTAMP '2024-03-05 10:11:12', TIMESTAMP '2024-01-01 00:00:00')`, want: "2024-03-04 00:00:00"},
+		{name: "date_bin to a multi-day stride from a shifted origin", query: `SELECT date_bin('2 days', TIMESTAMP '2024-03-05 10:11:12', TIMESTAMP '2024-03-01 06:00:00')`, want: "2024-03-05 06:00:00"},
+		{name: "date_bin before its origin", query: `SELECT date_bin('1 day', TIMESTAMP '2023-12-31 23:00:00', TIMESTAMP '2024-03-05 06:00:00')`, want: "2023-12-31 06:00:00"},
+		{name: "date_bin before its origin by a sub-day stride", query: `SELECT date_bin('30 seconds', TIMESTAMP '2023-01-01 00:00:00', TIMESTAMP '2024-03-05 10:00:00')`, want: "2023-01-01 00:00:00"},
+		{name: "date_bin over eight centuries", query: `SELECT date_bin('1 hour', TIMESTAMP '1600-06-01 10:11:12', TIMESTAMP '2400-01-01 00:00:00')`, want: "1600-06-01 10:00:00"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := runDialect(t, db, PostgreSQL, tt.query)
