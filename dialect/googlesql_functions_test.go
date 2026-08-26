@@ -32,6 +32,10 @@ func TestGoogleSQLDateAndTimeFunctions(t *testing.T) {
 		{name: "time from a datetime", query: `SELECT TIME(DATETIME '2024-03-05 13:04:05')`, want: "13:04:05"},
 		{name: "timestamp from a string", query: `SELECT TIMESTAMP('2024-03-05 13:04:05')`, want: "2024-03-05 13:04:05"},
 		{name: "string of a timestamp", query: `SELECT STRING(TIMESTAMP '2024-03-05 13:04:05')`, want: "2024-03-05 13:04:05"},
+		// A time zone would shift the instant, and filesql carries none, so
+		// the forms that take one are refused rather than answered unshifted.
+		{name: "timestamp refuses a time zone", query: `SELECT TIMESTAMP('2024-03-05 13:04:05', 'UTC')`, wantErr: true},
+		{name: "datetime refuses a time zone", query: `SELECT DATETIME(TIMESTAMP '2024-03-05 13:04:05', 'UTC')`, wantErr: true},
 
 		// Days since the epoch, negative before it.
 		{name: "unix_date", query: `SELECT UNIX_DATE(DATE '2024-03-05')`, want: "19787"},

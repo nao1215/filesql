@@ -95,6 +95,26 @@
 // translation succeeds and the query answers from a value the caller never
 // wrote, so each of those rules is configured rather than assumed.
 //
+// GoogleSQL's own file holds the two kinds of name it needs. Some are BigQuery
+// functions SQLite has nothing like -- CONTAINS_SUBSTR, EDIT_DISTANCE,
+// IEEE_DIVIDE, the base32 pair. The rest are names another dialect here already
+// means something else by: BigQuery's MD5 and SHA1 answer bytes where
+// PostgreSQL's MD5 and MySQL's SHA1 answer hexadecimal text, so TO_HEX(MD5(x))
+// -- the spelling BigQuery's documentation uses to print a digest -- hexed the
+// hex; and DATE, DATETIME and TIME are constructors where SQLite has functions
+// of those names that read a time value and modifiers, so DATE(2024, 3, 5)
+// found nothing it could read and answered NULL. Its TIME family needs
+// arithmetic of its own for the same reason MySQL's does: a BigQuery TIME is a
+// time of day, so TIME_ADD wraps around midnight rather than moving to another
+// day.
+//
+// BigQuery's SAFE. prefix is a wrapper rather than a name: SAFE.f(args) becomes
+// safe_call('f', args), which runs f and answers NULL where f would have
+// raised. It runs after the call pass, so what it wraps is whatever that pass
+// turned the call into. A function SQLite computes itself is out of reach from
+// a user-defined function, so the prefix is dropped there and the call runs as
+// written -- those are the ones that do not raise in the first place.
+//
 // TO_CHAR has a file of its own for the same kind of reason: its template is a
 // language rather than a set of names, and it cannot be translated into a Go
 // layout string. A Go layout has one spelling per field, so MONTH, Month and
@@ -115,8 +135,11 @@
 // than passed on to fail as a syntax error naming something else; an array
 // literal and the set-returning functions are refused for the same reason; and
 // the functions whose answer is one of those types -- PostgreSQL's AGE,
-// JUSTIFY_DAYS, REGEXP_MATCH, SCALE and TRIM_SCALE -- are not implemented,
-// since there would be no value to return.
+// JUSTIFY_DAYS, REGEXP_MATCH, SCALE and TRIM_SCALE, and BigQuery's ARRAY_AGG,
+// APPROX_QUANTILES and the rest of its array-returning aggregates -- are not
+// implemented, since there would be no value to return. A time zone is the
+// other thing there is no type for, so BigQuery's forms that take one are
+// refused rather than answered unshifted, which would be a different instant.
 //
 // One consequence of that has no error to report it: subtracting one timestamp
 // from another is an interval in PostgreSQL and an ordinary subtraction to

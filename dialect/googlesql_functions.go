@@ -127,6 +127,12 @@ func fnGoogleSQLDatetime(args []driver.Value) (driver.Value, error) {
 		if !ok1 || !ok2 {
 			return nil, nil
 		}
+		// The other two-argument form is DATETIME(timestamp, time_zone), and a
+		// zone is something filesql does not carry. Answering the timestamp
+		// unshifted would be a different instant, so it is refused.
+		if _, ok := parseTime(strings.TrimSpace(clock)); !ok {
+			return nil, errUnsupportedTimeZone("DATETIME")
+		}
 		tm, ok := toStringTime(strings.TrimSpace(date) + " " + strings.TrimSpace(clock))
 		if !ok {
 			return nil, nil
@@ -171,7 +177,11 @@ func fnGoogleSQLTime(args []driver.Value) (driver.Value, error) {
 // datetime. BigQuery answers a value carrying a zone; filesql has none to
 // carry, so the answer is the same datetime this package spells everywhere.
 func fnGoogleSQLTimestamp(args []driver.Value) (driver.Value, error) {
-	if len(args) < 1 || len(args) > 2 {
+	switch len(args) {
+	case 1:
+	case 2:
+		return nil, errUnsupportedTimeZone(typeTimestamp)
+	default:
 		return nil, fmt.Errorf("dialect: TIMESTAMP expects 1 or 2 arguments, got %d", len(args))
 	}
 	tm, ok := toStringTime(args[0])
@@ -179,6 +189,13 @@ func fnGoogleSQLTimestamp(args []driver.Value) (driver.Value, error) {
 		return nil, nil
 	}
 	return tm.Format(layoutDateTime), nil
+}
+
+// errUnsupportedTimeZone reports the time-zone argument this package cannot
+// honor. Shifting an instant by a zone it does not carry would answer a
+// different point in time, which is worse than saying so.
+func errUnsupportedTimeZone(name string) error {
+	return fmt.Errorf("dialect: %s: a time zone argument is not supported; filesql carries no time zone", name)
 }
 
 // fnGoogleSQLString implements STRING(timestamp), which spells a timestamp.

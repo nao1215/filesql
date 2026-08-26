@@ -575,6 +575,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 |---------|------------------|--------|
 | Translate a query into SQLite SQL and recognize what has no equivalent | `ExampleTranslate` | [dialect/example_test.go](./dialect/example_test.go) |
 | Run PostgreSQL constructs SQLite has no form for | `ExampleTranslate_postgreSQL` | [dialect/example_test.go](./dialect/example_test.go) |
+| Run BigQuery constructs SQLite has no form for | `ExampleTranslate_googleSQL` | [dialect/example_test.go](./dialect/example_test.go) |
 | Turn a user-supplied dialect name into a `Dialect` | `ExampleParse` | [dialect/example_test.go](./dialect/example_test.go) |
 | List the built-in dialects and spell one for a person | `ExampleDialects`, `ExampleDialect_DisplayName` | [dialect/example_test.go](./dialect/example_test.go) |
 
