@@ -1,10 +1,13 @@
 package dialect_test
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
 	"github.com/nao1215/filesql/dialect"
+	_ "modernc.org/sqlite"
 )
 
 func ExampleTranslate() {
@@ -58,4 +61,38 @@ func ExampleDialect_DisplayName() {
 	// Output:
 	// postgresql -> PostgreSQL
 	// googlesql -> GoogleSQL
+}
+
+func ExampleTranslate_postgreSQL() {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer db.Close()
+
+	// Three PostgreSQL constructs SQLite has no form for: a TO_CHAR template,
+	// GREATEST over a column that has a NULL in it, and a range whose bounds
+	// are written in either order.
+	for _, query := range []string{
+		`SELECT TO_CHAR(DATE '2024-03-05', 'FMDay, DD FMMonth YYYY')`,
+		`SELECT GREATEST(1, NULL, 2)`,
+		`SELECT 5 BETWEEN SYMMETRIC 7 AND 3`,
+	} {
+		translated, err := dialect.Translate(dialect.PostgreSQL, query)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		var answer string
+		if err := db.QueryRowContext(context.Background(), translated).Scan(&answer); err != nil {
+			fmt.Println(err)
+			return
+		}
+		fmt.Println(answer)
+	}
+	// Output:
+	// Tuesday, 05 March 2024
+	// 2
+	// 1
 }
