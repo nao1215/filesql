@@ -8,6 +8,48 @@ import (
 	"testing"
 )
 
+// maxSetupAlloc is what opening a stream may allocate before any of it has
+// been read.
+//
+// It is what this package says a stream may cost, rather than a number of its
+// own. A zstd frame declaring maxZstdWindow and an xz stream declaring
+// maxXZDictionary are both accepted -- README states that ceiling as the
+// intended price of a damaged file -- so a budget below either of them fails
+// the target on a stream the package promises to read, which is a red nightly
+// and no defect. Deriving it here is what keeps the two from drifting apart
+// when a ceiling moves.
+//
+// The margin on top covers the decompressor's own buffers and the fact that
+// this measurement is process-wide: klauspost/compress allocates the window in
+// goroutines that outlive zstd.NewReader, so a previous iteration's work can
+// land inside this one's reading.
+const maxSetupAlloc = maxAcceptedDeclaration + 64<<20
+
+// maxAcceptedDeclaration is the largest working memory any stream this package
+// accepts may declare.
+const maxAcceptedDeclaration = max(maxXZDictionary, maxZstdWindow)
+
+// TestFuzzBudgetStillCatchesTheBugsItWasWrittenFor pins the budget between the
+// two numbers that give it meaning: above every declaration this package
+// accepts, so it cannot fail on a stream that is merely expensive, and below
+// the smaller of the two failures it exists to catch, so it has not been
+// widened into a tautology. Those were 4 GiB from a 28-byte xz stream and
+// 512 MiB from a 14-byte zstd one. A ceiling raised past this range has to be
+// argued for here rather than discovered by a nightly.
+func TestFuzzBudgetStillCatchesTheBugsItWasWrittenFor(t *testing.T) {
+	t.Parallel()
+
+	const smallestBugCaught = 512 << 20
+	if maxSetupAlloc <= maxAcceptedDeclaration {
+		t.Errorf("budget %d MiB is not above the largest accepted declaration %d MiB",
+			maxSetupAlloc>>20, maxAcceptedDeclaration>>20)
+	}
+	if maxSetupAlloc >= smallestBugCaught {
+		t.Errorf("budget %d MiB would no longer catch the %d MiB allocation it was written for",
+			maxSetupAlloc>>20, smallestBugCaught>>20)
+	}
+}
+
 // FuzzCodecReader holds two properties over the decompressors, on any bytes at
 // all: reading a stream never panics, and building the reader never allocates
 // working memory out of proportion to the stream that asked for it.
@@ -25,8 +67,27 @@ func FuzzCodecReader(f *testing.F) {
 	f.Add([]byte("not compressed at all"))
 	f.Add(xzStream(40, false))
 	f.Add(xzStream(22, false))
+	// The two sides of the xz ceiling, which had no seed of its own. Property 32
+	// encodes exactly maxXZDictionary and is accepted; 34 encodes twice that and
+	// is refused. The accepted one is the expensive case worth opening every
+	// run, the same way the zstd frame below is.
+	f.Add(xzStream(32, false))
+	f.Add(xzStream(34, false))
 	f.Add(zstdFrame(19, 0))
 	f.Add(zstdFrame(11, 0))
+	// The two sides of the zstd ceiling. Exponent 17 selects 2^27, which is
+	// exactly maxZstdWindow and is accepted; 18 selects twice that and is
+	// refused. The accepted one is the most a zstd stream may ask this package
+	// to spend, so it is the one worth opening every run.
+	f.Add(zstdFrame(17, 0))
+	f.Add(zstdFrame(18, 0))
+	// A frame the fuzzer found: a valid header declaring a 64 MiB window
+	// (descriptor 0x80 is exponent 16, so 2^26) in front of bytes that are not
+	// compressed data. It is accepted, because the window is under the ceiling,
+	// and opening it costs that window. Seeded so the most expensive stream
+	// this package accepts is opened on every run rather than when the fuzzer
+	// rediscovers it.
+	f.Add([]byte("(\xb5/\xfd\x04\x80\x81\x00\x00id:name\n1,alice\n\x8c\xd7\xcf\xef"))
 	for _, c := range []Codec{GZ, XZ, ZSTD, ZLIB, SNAPPY, S2, LZ4} {
 		var out bytes.Buffer
 		writer, closeFn, err := c.NewWriter(&out)
@@ -41,12 +102,6 @@ func FuzzCodecReader(f *testing.F) {
 		}
 		f.Add(out.Bytes())
 	}
-
-	// A header is small, so what a reader may hold before any data is read is
-	// small too. The margin is wide enough for a decompressor's own buffers and
-	// far below the sizes the two fixed bugs reached, which were 4 GiB and
-	// 512 MiB from streams of 28 and 14 bytes.
-	const maxSetupAlloc = 64 << 20
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > 1<<16 {
