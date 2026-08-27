@@ -1,11 +1,10 @@
 // Package writer turns a table's records into the bytes of a text format.
 //
 // It is the one implementation of every text format filesql writes. The root
-// package wrote a dump's rows, prep wrote a processed file's rows and frame
-// wrote a data frame's rows, each with its own copy of the same encoding, and
-// the copies drifted: the rule that keeps a one-column empty row from being
-// written as a blank line existed in two of the three, and the check that
-// refuses a value LTSV cannot hold existed in one of the two that write LTSV.
+// package wrote a dump's rows and prep wrote a processed file's, each with its
+// own copy of the same encoding, and the copies drifted: prep was missing the
+// rule that keeps a one-column empty row from being written as a blank line,
+// and it was missing the check that refuses a value LTSV cannot hold.
 // Both are rules a reader depends on and neither is evident from the code that
 // writes the bytes, which is the kind that does not survive being copied.
 //

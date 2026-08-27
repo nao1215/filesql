@@ -9,10 +9,7 @@
 
 filesql loads files into an in-memory SQLite database. Open CSV, TSV, LTSV, JSON, JSONL, Parquet, XLSX, ACH, or Fedwire inputs, then query them with normal SQLite syntax.
 
-The same module also includes two companion packages for work that usually happens before or after SQL:
-
-- [`prep`](https://pkg.go.dev/github.com/nao1215/filesql/prep) cleans and validates rows before they become tables.
-- [`frame`](https://pkg.go.dev/github.com/nao1215/filesql/frame) handles small in-memory transforms in plain Go.
+The same module also includes [`prep`](https://pkg.go.dev/github.com/nao1215/filesql/prep), which cleans and validates rows before they become tables.
 
 [sqly](https://github.com/nao1215/sqly) is the shell built on the same core.
 
@@ -24,7 +21,6 @@ filesql is for cases where the data is already in a file and the fastest useful 
 - Join across CSV, TSV, LTSV, JSON, JSONL, Parquet, XLSX, ACH, and Fedwire.
 - Keep edits in memory until you decide to save them.
 - Clean inputs with `prep` before loading them.
-- Reshape small datasets with `frame` when SQL is not the right fit.
 
 ## Features
 
@@ -35,7 +31,7 @@ filesql is for cases where the data is already in a file and the fastest useful 
 - Write csv, tsv, and ltsv output in Shift-JIS, EUC-JP, ISO-2022-JP, or UTF-16 as well as UTF-8.
 - Load into a new in-memory database or into a `*sql.DB` you already manage.
 - Save changes with `DumpDatabase`, `EnableAutoSave`, or `EnableAutoSaveOnCommit`.
-- Stay in one module for loading (`filesql`), cleanup (`prep`), and lightweight transforms (`frame`).
+- Stay in one module for loading (`filesql`) and cleanup (`prep`).
 
 ## Supported File Formats
 
@@ -319,66 +315,11 @@ Bob,bob@example.com,user
 }
 ```
 
-### Transform small datasets with frame
-
-Use `frame` when the data should stay in Go values instead of SQL: filter rows, add calculated columns, and aggregate small or medium datasets in memory.
-
-```go
-package main
-
-import (
-	"fmt"
-	"log"
-	"strings"
-
-	"github.com/nao1215/filesql/frame"
-)
-
-func main() {
-	csvData := `region,product,qty,price
-north,apple,2,100
-south,apple,1,100
-north,orange,3,80
-north,apple,1,100
-`
-
-	df, err := frame.NewDataFrame(strings.NewReader(csvData), frame.CSV)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	sales := df.Mutate("revenue", func(row map[string]any) any {
-		qty, _ := frame.Row(row).Int("qty")
-		price, _ := frame.Row(row).Int("price")
-		return qty * price
-	})
-
-	northOnly := sales.Filter(func(row map[string]any) bool {
-		region, _ := frame.Row(row).String("region")
-		return region == "north"
-	})
-
-	grouped, err := northOnly.GroupBy("product")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	summary, err := grouped.Sum("revenue")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	for _, row := range summary.ToRecords() {
-		fmt.Printf("%s: %.0f\n", row["product"], row["sum_revenue"])
-	}
-}
-```
-
 ## Important Notes
 
 ### Column types
 
-CSV, TSV, LTSV, and XLSX carry no types, so filesql reads the values and picks INTEGER, REAL, or TEXT per column. A column whose values are all datetimes is recognized as one and stored as TEXT in ISO 8601, which is the form SQLite's date functions read; the [`parser`](./parser) and [`frame`](./frame) packages name that column DATETIME, since they report what was recognized rather than what SQLite stores. Parquet, ACH, and Fedwire bring their own schema and are not inferred; a Parquet UINT64 column loads as TEXT, since the upper half of its range is past what SQLite's INTEGER holds exactly. A Parquet export writes each column as the type its values call for — STRING when no numeric type holds every value exactly — and a blank cell in a numeric column is written as a null, since that format has no other way to say a number is missing.
+CSV, TSV, LTSV, and XLSX carry no types, so filesql reads the values and picks INTEGER, REAL, or TEXT per column. A column whose values are all datetimes is recognized as one and stored as TEXT in ISO 8601, which is the form SQLite's date functions read; the [`parser`](./parser) package names that column DATETIME, since it reports what was recognized rather than what SQLite stores. Parquet, ACH, and Fedwire bring their own schema and are not inferred; a Parquet UINT64 column loads as TEXT, since the upper half of its range is past what SQLite's INTEGER holds exactly. A Parquet export writes each column as the type its values call for — STRING when no numeric type holds every value exactly — and a blank cell in a numeric column is written as a null, since that format has no other way to say a number is missing.
 
 Which of the three a column gets follows from every value in the column, wherever the value sits and however large the file is. Four kinds of value are damaged by a numeric column, and one of them anywhere in the file makes the column TEXT:
 
@@ -393,11 +334,9 @@ One decimal is enough to make a numeric column REAL. An INTEGER column either re
 
 A table is dumped to a file named after it, so a table whose name cannot be a file name is refused rather than written: the two path separators, `< > : " | ? *`, a control character, a name ending in a dot or a space, and the names Windows reserves for devices — `CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9` and `LPT1` to `LPT9`, with or without an extension. The same set is refused on every platform, so a database dumped on Linux and on Windows agrees about which tables it can write. Rename the table before dumping it. A name derived from a file cannot reach that set except as a device name, since only letters, digits, marks and underscore survive; a name given to `AddReader` or to `CREATE TABLE` can.
 
-A blank cell in an INTEGER or REAL column is a missing number, and the database holds it as NULL. That is what makes `MAX` answer the largest value rather than the blank, `AVG` divide by the values that are there, `COUNT(column)` count them, and `WHERE column IS NULL` find the rows that have none. A blank cell in a TEXT column is the empty string, which is a value the file holds and is worth telling apart from a missing one; a column recognized as DATETIME is stored as TEXT and follows that rule. `frame` gives the same cell a `nil`, for the same reason.
+A blank cell in an INTEGER or REAL column is a missing number, and the database holds it as NULL. That is what makes `MAX` answer the largest value rather than the blank, `AVG` divide by the values that are there, `COUNT(column)` count them, and `WHERE column IS NULL` find the rows that have none. A blank cell in a TEXT column is the empty string, which is a value the file holds and is worth telling apart from a missing one; a column recognized as DATETIME is stored as TEXT and follows that rule.
 
 What is not on that list is decimal formatting. `2.50` loads as the REAL `2.5`, `1.00` as `1`, and `1e3` as `1000`: the quantity is preserved and the way it was written is not. Storing those as TEXT would keep the spelling and break the arithmetic — SQLite compares a TEXT column against a number as text, so `WHERE amount > 9.5` over `9.00` and `10.00` returns nothing at all. A column of money is worth more as numbers than as the string it was typed as, so the trailing zeros go. Keep the source file if you need the original spelling, or read the column into a TEXT column of your own before loading. What a save does keep is the type: a REAL column is written with a decimal point, so `1.00` comes back from a dump as `1.0` and the column loads as REAL again rather than as INTEGER. An infinity is written as the literal `9e999`, which loads back as the infinity in a REAL column.
-
-`frame` applies the same rules to its own values. `1`, `1.0` and `1.00` are one value there too, so `Distinct` collapses them to a single row and `Join` matches them to each other, while `007` and `7` stay two codes. A `frame` row therefore holds an `int64` or a `float64` where the file held text, which is what `frame.Row` is for: `frame.Row(row).String("code")` gives the value as the file spelled it, and `Int` and `Float` give it as a number, so a predicate does not have to guess which type the inference picked.
 
 ### Memory and streaming
 
@@ -594,28 +533,6 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Turn a user-supplied dialect name into a `Dialect` | `ExampleParse` | [dialect/example_test.go](./dialect/example_test.go) |
 | List the built-in dialects and spell one for a person | `ExampleDialects`, `ExampleDialect_DisplayName` | [dialect/example_test.go](./dialect/example_test.go) |
 
-#### frame
-
-| Feature | Example function | Source |
-|---------|------------------|--------|
-| Create a DataFrame from a reader or path | `ExampleNewDataFrame`, `ExampleNewDataFrameFromPath` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Build a DataFrame directly from Go records | `ExampleNewDataFrameFromRecords` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Write transformed data back to CSV or TSV | `ExampleDataFrame_ToCSV`, `ExampleDataFrame_ToTSV` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Select, filter, and mutate rows | `ExampleDataFrame_Select`, `ExampleDataFrame_Filter`, `ExampleDataFrame_Mutate` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Read a callback's row without guessing its types | `ExampleRow`, `ExampleRow_Int` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Join in-memory tables | `ExampleDataFrame_Join` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Append frames with matching or mixed schemas | `ExampleDataFrame_Concat`, `ExampleConcatAll` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Group rows for aggregation | `ExampleDataFrame_GroupBy`, `ExampleGroupedDataFrame_Count` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Run built-in or custom aggregations | `ExampleGroupedDataFrame_Sum`, `ExampleGroupedDataFrame_Mean`, `ExampleGroupedDataFrame_Agg` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Take the extremes of each group | `ExampleGroupedDataFrame_Min`, `ExampleGroupedDataFrame_Max` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Sort by one or multiple columns | `ExampleDataFrame_Sort`, `ExampleDataFrame_SortBy` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Remove duplicates by whole rows or by key columns | `ExampleDataFrame_Distinct`, `ExampleDataFrame_DistinctBy` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Keep only the first or last rows | `ExampleDataFrame_Head`, `ExampleDataFrame_Tail`, `ExampleDataFrame_Limit` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Rename one column or many | `ExampleDataFrame_Rename`, `ExampleDataFrame_RenameColumns` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Drop columns | `ExampleDataFrame_Drop` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Fill or drop missing values | `ExampleDataFrame_FillNA`, `ExampleDataFrame_FillNAByColumn`, `ExampleDataFrame_DropNA`, `ExampleDataFrame_DropNASubset` | [frame/example_api_test.go](./frame/example_api_test.go) |
-| Inspect a frame's columns, rows, and records | `ExampleDataFrame_Columns`, `ExampleDataFrame_Len`, `ExampleDataFrame_ToRecords` | [frame/example_api_test.go](./frame/example_api_test.go) |
-
 ### Integration examples
 
 The [examples](./examples) directory shows how to use filesql with regular Go database tooling:
@@ -637,7 +554,6 @@ The [examples](./examples) directory shows how to use filesql with regular Go da
 |---------|-------------|
 | [sqly](https://github.com/nao1215/sqly) | Interactive shell for ad-hoc SQL against files |
 | [filesql/prep](https://pkg.go.dev/github.com/nao1215/filesql/prep) | Row cleanup and validation before SQL |
-| [filesql/frame](https://pkg.go.dev/github.com/nao1215/filesql/frame) | Lightweight in-memory transforms in Go |
 
 ## Contributing
 

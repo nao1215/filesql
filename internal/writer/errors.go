@@ -1,8 +1,8 @@
 package writer
 
 // Kind is what a write failed on, in a form a caller can map onto its own
-// sentinel. This package names no sentinel of its own: the three callers have
-// three different ones for the same fault, and the wording each puts in front
+// sentinel. This package names no sentinel of its own: its callers have
+// different ones for the same fault, and the wording each puts in front
 // belongs to the caller rather than to the encoding.
 type Kind int
 
