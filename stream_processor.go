@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/nao1215/filesql/internal/infer"
 	"github.com/nao1215/filesql/internal/reader"
@@ -943,21 +944,53 @@ func (sp *streamProcessor) declareTable(ctx context.Context, tx *sql.Tx, staging
 // has every column as TEXT while it reads, so cellValue sees a text column for
 // every cell and the rule has to be applied here instead. Leaving the copy as
 // SELECT * left it out: SQLite's affinity converts text that spells a number
-// and leaves text that does not, and the empty string does not, so the blank
-// stayed in the numeric column as text -- MAX answered it, COUNT counted it and
-// IS NULL found none of them. Naming the columns rather than copying them by
-// position also stops the copy depending on the staging table's column order.
+// and leaves text that does not, and a blank cell does not, so the blank stayed
+// in the numeric column as text -- MAX answered it, COUNT counted it and IS NULL
+// found none of them. Naming the columns rather than copying them by position
+// also stops the copy depending on the staging table's column order.
+//
+// Blank is a cell that holds nothing but whitespace, which is what
+// infer.IsBlank says on the other path, so the test is written as a TRIM of
+// that same set rather than as NULLIF against the empty string: SQLite's own
+// TRIM strips spaces alone, and asking it only about the empty string left a
+// cell of spaces in the numeric column -- the whole defect back, for the
+// spelling of blank a fixed-width export produces. The cell itself is copied
+// rather than the trimmed text, since a value that is not blank is data.
 func stagedColumns(columns columnInfoList) string {
 	selected := make([]string, len(columns))
 	for i, col := range columns {
 		name := quoteIdentifier(col.Name)
 		if col.Type == columnTypeInteger || col.Type == columnTypeReal {
-			name = "NULLIF(" + name + ", '')"
+			name = "CASE WHEN TRIM(" + name + ", '" + sqlBlankCharacters + "') = '' THEN NULL ELSE " + name + " END"
 		}
 		selected[i] = name
 	}
 	return strings.Join(selected, ", ")
 }
+
+// sqlBlankCharacters are the characters a staged copy asks SQLite to trim when
+// it decides whether a cell is blank. They are the characters unicode.IsSpace
+// names, which is the set strings.TrimSpace strips and so the set infer.IsBlank
+// counts as blank; one list rather than two is what keeps the two load paths
+// answering the same question about the same cell.
+//
+//nolint:gochecknoglobals // constant-like, built from the unicode tables
+var sqlBlankCharacters = func() string {
+	var b strings.Builder
+	for _, table := range []*unicode.RangeTable{unicode.White_Space} {
+		for _, r := range table.R16 {
+			for c := rune(r.Lo); c <= rune(r.Hi); c += rune(r.Stride) {
+				b.WriteRune(c)
+			}
+		}
+		for _, r := range table.R32 {
+			for c := rune(r.Lo); c <= rune(r.Hi); c += rune(r.Stride) {
+				b.WriteRune(c)
+			}
+		}
+	}
+	return b.String()
+}()
 
 // stagingTableName names the table a load's rows wait in. It is under the
 // prefix this package keeps for itself, so no input can load into it, and it

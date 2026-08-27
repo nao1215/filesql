@@ -651,3 +651,71 @@ func TestCancelingALoadAlwaysReportsTheContextError(t *testing.T) {
 		t.Fatal("no attempt was interrupted, so no cancellation was checked")
 	}
 }
+
+// TestStagedCopyReadsBlankTheWayTheTypingDoes pins the staged path's answer to
+// the question the typing asks of the same cell. That path has every column as
+// TEXT while it reads, so the blank-cell rule is applied by the copy that types
+// the table, in SQL rather than in Go -- and SQLite's own TRIM strips spaces
+// alone, so a copy that asked about the empty string left a cell of spaces in a
+// numeric column, where MAX answered it.
+func TestStagedCopyReadsBlankTheWayTheTypingDoes(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	blanks := []struct {
+		name string
+		cell string
+	}{
+		{name: "nothing at all", cell: ""},
+		{name: "a space", cell: " "},
+		{name: "several spaces", cell: "   "},
+		{name: "a tab", cell: "\t"},
+		{name: "a newline", cell: "\n"},
+		{name: "a no-break space", cell: " "},
+		{name: "an ideographic space", cell: "　"},
+	}
+
+	for _, tt := range blanks {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			body := "region,amount\nnorth,10\nsouth,\"" + tt.cell + "\"\neast,30\n"
+			db, err := openReaderTable(ctx, body, FileTypeCSV)
+			require.NoError(t, err)
+			defer db.Close()
+
+			var declared, kind string
+			var largest int64
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT type FROM pragma_table_info('rows') WHERE name = 'amount'`).Scan(&declared))
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT typeof(amount) FROM rows WHERE region = 'south'`).Scan(&kind))
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT MAX(amount) FROM rows`).Scan(&largest))
+
+			assert.Equal(t, sqlTypeInteger, declared, "a blank cell says nothing about the column's type")
+			assert.Equal(t, "null", kind, "a blank cell in a number column is a missing number")
+			assert.Equal(t, int64(30), largest, "MAX answers the largest number, not the blank")
+		})
+	}
+
+	t.Run("a value that is not blank is copied as it is", func(t *testing.T) {
+		t.Parallel()
+
+		// The copy tests the trimmed text and copies the cell, so a text
+		// column keeps its padding and a number column keeps the value that
+		// made it a number column.
+		body := "region,amount,label\nnorth,10,  padded  \nsouth,20,x\n"
+		db, err := openReaderTable(ctx, body, FileTypeCSV)
+		require.NoError(t, err)
+		defer db.Close()
+
+		var label string
+		var amount int64
+		require.NoError(t, db.QueryRowContext(ctx,
+			`SELECT label, amount FROM rows WHERE region = 'north'`).Scan(&label, &amount))
+		assert.Equal(t, "  padded  ", label, "the padding of a text cell is data")
+		assert.Equal(t, int64(10), amount)
+	})
+}
