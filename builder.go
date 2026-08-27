@@ -457,9 +457,12 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 // 4. Validates that all files have supported extensions
 //
 // It runs once per builder: the second call returns immediately, because the
-// third step appends to readers and repeating it would load every file of an
-// added filesystem a second time. The context is used for file operations and
-// can be used for cancellation.
+// third step adds to readers and repeating it would load every file of an
+// added filesystem a second time. Nothing it derives reaches the builder until
+// every check has passed, so a build that failed and is tried again -- after
+// the caller created the file that was missing, say -- starts from the inputs
+// the caller registered rather than from what the failed attempt left behind.
+// The context is used for file operations and can be used for cancellation.
 func (b *DBBuilder) build(ctx context.Context) error {
 	if b.built {
 		return nil
@@ -491,24 +494,25 @@ func (b *DBBuilder) build(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	b.collectedPaths = collectedPaths
 
 	// Use file processor to handle filesystems
 	fsReaders, err := b.fileProcessor.processFilesystemsToReaders(ctx, b.filesystems)
 	if err != nil {
 		return err
 	}
-	b.readers = append(b.readers, fsReaders...)
+	readers := make([]readerInput, 0, len(b.readers)+len(fsReaders))
+	readers = append(readers, b.readers...)
+	readers = append(readers, fsReaders...)
 
 	// Use validator to validate reader inputs
-	for _, readerInput := range b.readers {
+	for _, readerInput := range readers {
 		if err := b.validator.validateReader(readerInput.reader, readerInput.tableName, readerInput.fileType); err != nil {
 			return err
 		}
 	}
 
 	// Use validator to validate final state
-	if err := b.validator.validateFinalState(b.collectedPaths, b.readers, b.paths); err != nil {
+	if err := b.validator.validateFinalState(collectedPaths, readers, b.paths); err != nil {
 		return err
 	}
 
@@ -517,7 +521,7 @@ func (b *DBBuilder) build(ctx context.Context) error {
 	// fail. The file's name is the whole of the answer, so the caller hears it
 	// here rather than from Close, after a session's work has been done.
 	if b.autoSaveEnabled() && b.autoSaveConfig.outputDir == "" {
-		if err := checkOverwriteTargets(b.fileProcessor.deduplicateCompressedFiles(b.collectedPaths)); err != nil {
+		if err := checkOverwriteTargets(b.fileProcessor.deduplicateCompressedFiles(collectedPaths)); err != nil {
 			return err
 		}
 	}
@@ -526,6 +530,9 @@ func (b *DBBuilder) build(ctx context.Context) error {
 	b.streamProcessor.setLogger(b.logger)
 	b.fileProcessor.setLogger(b.logger)
 
+	// Everything has passed, so what the build derived becomes the builder's.
+	b.collectedPaths = collectedPaths
+	b.readers = readers
 	b.built = true
 	b.logger.Info("build completed", "collected_paths", len(b.collectedPaths), "readers", len(b.readers))
 	return nil

@@ -754,6 +754,37 @@ func TestDBBuilder_Open(t *testing.T) {
 		assert.Equal(t, 1, rows, "the file must be loaded once, not once per build")
 	})
 
+	t.Run("open after a failed open loads an added filesystem once", func(t *testing.T) {
+		// The first open fails on the auto-save target, which is a check that
+		// runs after the build has derived its readers from the filesystem.
+		// Those readers must not stay behind: registering them a second time
+		// loads the file twice.
+		dir := t.TempDir()
+		jsonPath := filepath.Join(dir, "orders.json")
+		require.NoError(t, os.WriteFile(jsonPath, []byte(`[{"id":1}]`), 0600))
+
+		fsys := fstest.MapFS{
+			"users.csv": &fstest.MapFile{Data: []byte("id,name\n1,Alice\n")},
+		}
+		// Overwrite mode cannot write a JSON source back to itself.
+		builder := NewBuilder().AddFS(fsys).AddPath(jsonPath).EnableAutoSave("")
+
+		db, err := builder.Open(ctx)
+		if db != nil {
+			_ = db.Close()
+		}
+		require.Error(t, err, "Open() should refuse to overwrite a source it cannot write")
+
+		// Correct the configuration and try again.
+		db, err = builder.EnableAutoSave(filepath.Join(dir, "out")).Open(ctx)
+		require.NoError(t, err, "Open() should succeed once auto-save has an output directory")
+		defer func() { _ = db.Close() }()
+
+		var rows int
+		require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&rows))
+		assert.Equal(t, 1, rows, "the filesystem's file must be loaded once, not once per attempt")
+	})
+
 	t.Run("successful open with CSV file", func(t *testing.T) {
 		// Create a temporary CSV file
 		tempDir := t.TempDir()
