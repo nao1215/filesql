@@ -10,9 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nao1215/filesql/frame"
 	"github.com/nao1215/filesql/internal/infer"
-	"github.com/nao1215/filesql/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1299,105 +1297,6 @@ func TestColumnType_DeclaredTypeAgreesWithStoredType(t *testing.T) {
 			require.NoError(t, db.QueryRowContext(ctx,
 				`SELECT count(*) FROM t WHERE v IS NOT NULL AND typeof(v) != ?`, storage).Scan(&disagreeing))
 			assert.Zero(t, disagreeing, "column declared %s holds values SQLite stored otherwise", declared)
-		})
-	}
-}
-
-// TestColumnType_FrameAndTheLoaderAgree pins the two inferences to each other.
-// The README says frame applies the same rules to its own values, and it holds
-// only while both answer the same question the same way — they are separate
-// implementations, so the agreement has to be tested rather than assumed.
-func TestColumnType_FrameAndTheLoaderAgree(t *testing.T) {
-	t.Parallel()
-
-	bodies := map[string]string{
-		"integers":                  "v\n1\n2\n3\n",
-		"decimals":                  "v\n1.5\n2.5\n3\n",
-		"one decimal among many":    "v\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11.5\n",
-		"one text among many":       "v\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\nabc\n",
-		"a zero padded code":        "v\n1\n2\n007\n",
-		"an int64 overflow":         "v\n1\n2\n11040320260000000000\n",
-		"a literal only Go parses":  "v\n1\n2\n1_000\n",
-		"a padded number":           "v\n1\n2\n  42\n",
-		"a datetime among integers": "v\n1\n2\n3\n4\n5\n6\n7\n8\n9\n2026-08-20\n",
-		"datetimes only":            "v\n2026-08-20\n2026-08-21\n",
-		"empty cells":               "v\n\n\n5\n",
-	}
-
-	for name, body := range bodies {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			ctx := context.Background()
-			validated, err := NewBuilder().
-				AddReader(strings.NewReader(body), "t", FileTypeCSV).
-				Build(ctx)
-			require.NoError(t, err)
-			db, err := validated.Open(ctx)
-			require.NoError(t, err)
-			defer db.Close()
-
-			rows, err := db.QueryContext(ctx, `SELECT v FROM t ORDER BY rowid`)
-			require.NoError(t, err)
-			defer rows.Close()
-			var loaded []string
-			for rows.Next() {
-				var v any
-				require.NoError(t, rows.Scan(&v))
-				loaded = append(loaded, fmt.Sprintf("%T", v))
-			}
-			require.NoError(t, rows.Err())
-
-			df, err := frame.NewDataFrame(strings.NewReader(body), parser.CSV)
-			require.NoError(t, err)
-			var framed []string
-			for _, row := range df.ToRecords() {
-				framed = append(framed, fmt.Sprintf("%T", row["v"]))
-			}
-
-			assert.Equal(t, loaded, framed, "the loader and frame typed the same column differently")
-		})
-	}
-}
-
-// TestDistinctValues_FrameAndTheLoaderAgree is the same pinning for the
-// question the two answer after the typing: how many values a column holds.
-// frame decides it from a key it builds and SQLite from its own comparison, so
-// a column of numbers that are equal has to come back as one value from both.
-//
-// A negative zero broke it: frame's key carried the sign, so a column holding
-// both signs of zero was two values there and one to SQLite.
-func TestDistinctValues_FrameAndTheLoaderAgree(t *testing.T) {
-	t.Parallel()
-
-	bodies := map[string]string{
-		"both signs of zero":              "v\n-0.0\n0.0\n0\n-0\n",
-		"one quantity spelled three ways": "v\n1\n1.0\n1.00\n",
-		"a negative beside a zero":        "v\n-0.0\n-0.5\n0\n",
-		"distinct decimals":               "v\n1.5\n2.5\n3.5\n",
-	}
-
-	for name, body := range bodies {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			ctx := context.Background()
-			validated, err := NewBuilder().
-				AddReader(strings.NewReader(body), "t", FileTypeCSV).
-				Build(ctx)
-			require.NoError(t, err)
-			db, err := validated.Open(ctx)
-			require.NoError(t, err)
-			defer db.Close()
-
-			var loaded int
-			require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT v) FROM t`).Scan(&loaded))
-
-			df, err := frame.NewDataFrame(strings.NewReader(body), parser.CSV)
-			require.NoError(t, err)
-
-			assert.Equal(t, loaded, df.Distinct().Len(),
-				"the loader and frame counted the same column's values differently")
 		})
 	}
 }

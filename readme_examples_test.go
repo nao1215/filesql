@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/nao1215/filesql"
-	"github.com/nao1215/filesql/frame"
 	"github.com/nao1215/filesql/prep"
 )
 
@@ -72,69 +71,5 @@ Bob,bob@example.com,user
 	}
 	if role != "ADMIN" {
 		t.Fatalf("role = %q, want %q", role, "ADMIN")
-	}
-}
-
-func TestReadmeFrameExample(t *testing.T) {
-	t.Parallel()
-
-	csvData := `region,product,qty,price
-north,apple,2,100
-south,apple,1,100
-north,orange,3,80
-north,apple,1,100
-`
-
-	df, err := frame.NewDataFrame(strings.NewReader(csvData), frame.CSV)
-	if err != nil {
-		t.Fatalf("NewDataFrame() error = %v", err)
-	}
-
-	sales := df.Mutate("revenue", func(row map[string]any) any {
-		qty, ok := frame.Row(row).Int("qty")
-		if !ok {
-			t.Fatalf("row[qty] = %v, want a number", row["qty"])
-		}
-		price, ok := frame.Row(row).Int("price")
-		if !ok {
-			t.Fatalf("row[price] = %v, want a number", row["price"])
-		}
-		return qty * price
-	})
-
-	northOnly := sales.Filter(func(row map[string]any) bool {
-		region, ok := frame.Row(row).String("region")
-		if !ok {
-			t.Fatalf("row[region] = %v, want text", row["region"])
-		}
-		return region == "north"
-	})
-
-	grouped, err := northOnly.GroupBy("product")
-	if err != nil {
-		t.Fatalf("GroupBy() error = %v", err)
-	}
-
-	summary, err := grouped.Sum("revenue")
-	if err != nil {
-		t.Fatalf("Sum() error = %v", err)
-	}
-
-	records := summary.ToRecords()
-	if len(records) != 2 {
-		t.Fatalf("len(records) = %d, want 2", len(records))
-	}
-
-	if got := records[0]["product"]; got != "apple" {
-		t.Fatalf("records[0][product] = %v, want apple", got)
-	}
-	if got := records[0]["sum_revenue"]; got != float64(300) {
-		t.Fatalf("records[0][sum_revenue] = %v, want 300", got)
-	}
-	if got := records[1]["product"]; got != "orange" {
-		t.Fatalf("records[1][product] = %v, want orange", got)
-	}
-	if got := records[1]["sum_revenue"]; got != float64(240) {
-		t.Fatalf("records[1][sum_revenue] = %v, want 240", got)
 	}
 }
