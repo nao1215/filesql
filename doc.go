@@ -86,7 +86,9 @@
 //
 // # Cancellation
 //
-// Every load and DumpDatabaseContext take a context. A load stops soon after
+// OpenContext, DBBuilder.Open, DBBuilder.OpenReadOnly, LoadInto, LoadIntoTx and
+// DumpDatabaseContext take a context; Open and DumpDatabase are the same calls
+// with a background one, so they cannot be canceled. A load stops soon after
 // its context ends, and whatever the database said on the way out, the error it
 // returns matches context.Canceled or context.DeadlineExceeded. Soon is the next
 // read for a source that is a stream, and the next chunk for one that is an open
