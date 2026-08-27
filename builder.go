@@ -398,13 +398,6 @@ func (b *DBBuilder) EnableAutoSaveOnCommit(outputDir string, options ...DumpOpti
 	return b
 }
 
-// DisableAutoSave disables automatic saving (default behavior).
-// Returns the builder for method chaining.
-func (b *DBBuilder) DisableAutoSave() *DBBuilder {
-	b.autoSaveConfig = nil
-	return b
-}
-
 // WithDialect sets the SQL dialect accepted by the database returned from Open
 // and OpenReadOnly. Queries are translated from the given dialect to SQLite
 // before execution; see the dialect package for the supported translations and

@@ -219,43 +219,6 @@ func ExampleDBBuilder_WithLogger() {
 	// level=INFO msg="database opened successfully"
 }
 
-func ExampleDBBuilder_DisableAutoSave() {
-	dir := createFilesqlExampleDir(map[string]string{
-		"users.csv": `
-id,name
-1,Alice
-`,
-	})
-	defer os.RemoveAll(dir)
-
-	outputDir := filepath.Join(dir, "backup")
-	validated, err := filesql.NewBuilder().
-		AddPath(filepath.Join(dir, "users.csv")).
-		EnableAutoSave(outputDir).
-		DisableAutoSave().
-		Build(context.Background())
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	db, err := validated.Open(context.Background())
-	if err != nil {
-		log.Fatal(err)
-	}
-	ctx := context.Background()
-	if _, err := db.ExecContext(ctx, `INSERT INTO users VALUES (2, 'Bob')`); err != nil {
-		log.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		log.Fatal(err)
-	}
-
-	_, err = os.Stat(filepath.Join(outputDir, "users.csv"))
-	fmt.Printf("autosaved=%t\n", err == nil)
-	// Output:
-	// autosaved=false
-}
-
 func ExampleDBBuilder_OpenReadOnly() {
 	ctx := context.Background()
 

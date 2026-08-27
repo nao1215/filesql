@@ -972,7 +972,7 @@ func TestAutoSave_OnCommit(t *testing.T) {
 	assert.Contains(t, string(content), "David", "Auto-saved file should contain committed data")
 }
 
-func TestAutoSave_DisableAutoSave(t *testing.T) {
+func TestAutoSave_OffByDefault(t *testing.T) {
 	// Create temporary directory
 	tmpDir := t.TempDir()
 
@@ -987,7 +987,7 @@ func TestAutoSave_DisableAutoSave(t *testing.T) {
 	err = os.MkdirAll(outputDir, 0750)
 	require.NoError(t, err, "Failed to create output dir")
 
-	// Build database without auto-save (default behavior)
+	// Build database without auto-save (the default)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -1019,7 +1019,7 @@ func TestAutoSave_DisableAutoSave(t *testing.T) {
 	// Check that no output file was created
 	outputFile := filepath.Join(outputDir, "test.csv")
 	if _, err := os.Stat(outputFile); !os.IsNotExist(err) {
-		assert.NoFileExists(t, outputFile, "Auto-save file should not have been created when auto-save is disabled")
+		assert.NoFileExists(t, outputFile, "Auto-save file should not have been created when auto-save was never enabled")
 	}
 }
 
@@ -1154,60 +1154,6 @@ func TestAutoSave_MultipleCommitsOverwrite(t *testing.T) {
 
 	// Verify original count (1) was overwritten
 	assert.NotContains(t, string(content3), "Initial,1", "File should not contain old count (1) after update")
-}
-
-func TestAutoSave_ExplicitDisable(t *testing.T) {
-	// Test the DisableAutoSave method explicitly
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-
-	// Create test CSV file
-	csvPath := filepath.Join(tmpDir, "test.csv")
-	csvContent := "name,age\nAlice,25\n"
-	err := os.WriteFile(csvPath, []byte(csvContent), 0600)
-	require.NoError(t, err, "Failed to write test CSV")
-
-	// Create output directory
-	outputDir := filepath.Join(tmpDir, "output")
-	err = os.MkdirAll(outputDir, 0750)
-	require.NoError(t, err, "Failed to create output dir")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// First enable auto-save, then explicitly disable it
-	builder := NewBuilder().
-		AddPath(csvPath).
-		EnableAutoSave(outputDir).
-		DisableAutoSave() // This should override the previous EnableAutoSave
-
-	validatedBuilder, err := builder.Build(ctx)
-	if err != nil {
-		require.NoError(t, err, "Build should succeed")
-	}
-
-	db, err := validatedBuilder.Open(ctx)
-	if err != nil {
-		require.NoError(t, err, "Open should succeed")
-	}
-
-	// Modify data
-	_, err = db.ExecContext(ctx, "INSERT INTO test (name, age) VALUES ('Disabled', 99)")
-	if err != nil {
-		require.NoError(t, err, "Insert should succeed")
-	}
-
-	// Close database (should NOT trigger auto-save due to DisableAutoSave)
-	if err := db.Close(); err != nil {
-		require.NoError(t, err, "Close should succeed")
-	}
-
-	// Check that no output file was created
-	outputFile := filepath.Join(outputDir, "test.csv")
-	if _, err := os.Stat(outputFile); !os.IsNotExist(err) {
-		assert.NoFileExists(t, outputFile, "Auto-save file should not have been created when explicitly disabled")
-	}
 }
 
 func TestBuilder_ErrorCases(t *testing.T) {
