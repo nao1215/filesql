@@ -43,7 +43,7 @@ filesql is for cases where the data is already in a file and the fastest useful 
 | `.json` | JSON | Query nested data with `json_extract()` |
 | `.jsonl` | JSONL | One JSON value per line |
 | `.parquet` | Parquet | Columnar format |
-| `.xlsx` | Excel XLSX | One sheet becomes one table, named `file_sheet` (just `file` when the sheet repeats it). A workbook handed to `AddReader` hangs its sheets off the table name given there instead of off a file name. Every sheet that names a column is loaded by default, a blank scratch sheet being passed over; see [Excel sheet visibility](#excel-sheet-visibility) |
+| `.xlsx` | Excel XLSX | One sheet becomes one table, named `file_sheet` (just `file` when the sheet repeats it). A workbook handed to `AddReader` hangs its sheets off the table name given there instead of off a file name, so a workbook added as `book` loads as `book_Sheet1` and as plain `book` when the sheet is itself named `book`. `ExcelSheetTableNames` works out the same names when it is given that table name in place of a path, and `sqlite_master` has them after a load. Every sheet that names a column is loaded by default, a blank scratch sheet being passed over; see [Excel sheet visibility](#excel-sheet-visibility) |
 | `.ach` | ACH (NACHA) | One table per record kind; see [ACH and Fedwire](#ach-and-fedwire) |
 | `.fed` | Fedwire | One message becomes one row 326 columns wide; see [ACH and Fedwire](#ach-and-fedwire) |
 

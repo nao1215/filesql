@@ -216,6 +216,10 @@ func xlsxSheetTableName(baseTableName, sheetName string) string {
 //
 // tables is parallel to sheetNames. err is non-nil when any two sheets collide,
 // and names both the sheets and the table they would share.
+//
+// filePath is what the sheets hang off, and a workbook has no file name when it
+// arrives through AddReader: pass the table name given there instead, which is
+// what that load uses as the base.
 func ExcelSheetTableNames(filePath string, sheetNames []string) (tables []string, err error) {
 	return excelSheetTableNames(sanitizeTableName(tableFromFilePath(filePath)), filepath.Base(filePath), sheetNames)
 }
