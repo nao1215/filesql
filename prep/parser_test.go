@@ -174,6 +174,35 @@ func TestParseValidateTag_AllValidatorTypes(t *testing.T) {
 		{"latitude", "latitude", 1, 0, false},
 		{"longitude", "longitude", 1, 0, false},
 
+		// Structured format validators
+		{"json", "json", 1, 0, false},
+		{"timezone", "timezone", 1, 0, false},
+		{"semver", "semver", 1, 0, false},
+
+		// RFC 4648 encoding validators
+		{"base32", "base32", 1, 0, false},
+		{"base64", "base64", 1, 0, false},
+		{"base64url", "base64url", 1, 0, false},
+		{"base64rawurl", "base64rawurl", 1, 0, false},
+
+		// Case-insensitive membership
+		{"oneofci=red green", "oneofci=red green", 1, 0, false},
+		{"oneofci= (empty)", "oneofci=", 0, 0, false},
+
+		// Checksummed identifier validators
+		{"credit_card", "credit_card", 1, 0, false},
+		{"luhn_checksum", "luhn_checksum", 1, 0, false},
+		{"isbn", "isbn", 1, 0, false},
+		{"isbn10", "isbn10", 1, 0, false},
+		{"isbn13", "isbn13", 1, 0, false},
+		{"issn", "issn", 1, 0, false},
+
+		// Message digest validators
+		{"md5", "md5", 1, 0, false},
+		{"sha256", "sha256", 1, 0, false},
+		{"sha384", "sha384", 1, 0, false},
+		{"sha512", "sha512", 1, 0, false},
+
 		// Hexadecimal and color validators
 		{"hexadecimal", "hexadecimal", 1, 0, false},
 		{"hexcolor", "hexcolor", 1, 0, false},
@@ -1046,7 +1075,29 @@ func TestStrictTagParsing_NonStrictIgnoresInvalidArgs(t *testing.T) {
 func TestNetworkTagsParseAloneAndWithRequired(t *testing.T) {
 	t.Parallel()
 
-	for _, tag := range []string{ipTagValue, ipv4TagValue, ipv6TagValue, portTagValue} {
+	tagsParseAloneAndWithRequired(t, ipTagValue, ipv4TagValue, ipv6TagValue, portTagValue)
+}
+
+// The format and checksum tags parse the same way.
+func TestFormatAndChecksumTagsParseAloneAndWithRequired(t *testing.T) {
+	t.Parallel()
+
+	tagsParseAloneAndWithRequired(t,
+		jsonTagValue, timezoneTagValue, semverTagValue,
+		base32TagValue, base64TagValue, base64URLTagValue, base64RawURLTagValue,
+		creditCardTagValue, luhnChecksumTagValue,
+		isbnTagValue, isbn10TagValue, isbn13TagValue, issnTagValue,
+		md5TagValue, sha256TagValue, sha384TagValue, sha512TagValue,
+	)
+}
+
+// tagsParseAloneAndWithRequired checks that each tag builds one validator on
+// its own and two beside required, and that required still reports an empty
+// cell the format tag passes.
+func tagsParseAloneAndWithRequired(t *testing.T, tags ...string) {
+	t.Helper()
+
+	for _, tag := range tags {
 		t.Run(tag, func(t *testing.T) {
 			t.Parallel()
 			alone, _, err := parseValidateTag(tag, true)
