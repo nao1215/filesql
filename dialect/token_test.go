@@ -298,3 +298,63 @@ func TestTokenizeOffsets(t *testing.T) {
 		prev = tok.offset
 	}
 }
+
+// TestLiteralFormsAreOneToken pins the literal spellings the lexer used to
+// split, each of which reached SQLite as a bare word and failed naming
+// something the caller had not written. The values were read from mysql:8.4 and
+// postgres:17-alpine.
+func TestLiteralFormsAreOneToken(t *testing.T) {
+	t.Parallel()
+
+	// A bit literal has MySQL's two readings, the same as the hexadecimal one,
+	// so both spellings are refused rather than answered. Before "0b1010" was
+	// scanned as one token it split into a zero and an alias and answered 0.
+	refused := []struct {
+		dialect Dialect
+		query   string
+	}{
+		{MySQL, "SELECT 0b1010"},
+		{MySQL, "SELECT 0B1010"},
+		{MySQL, "SELECT 0b1010 + 0"},
+		{MySQL, "SELECT b'1010'"},
+		{MySQL, "SELECT B'1010'"},
+		{MySQL, "SELECT 0x41"},
+		{MySQL, "SELECT _latin1'abc'"},
+	}
+	for _, tt := range refused {
+		if _, err := Translate(tt.dialect, tt.query); !errors.Is(err, ErrUnsupportedSyntax) {
+			t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.query, err)
+		}
+	}
+
+	// A charset introducer naming UTF-8 is dropped, _binary becomes the
+	// literal's own bytes, and the near-misses are left alone.
+	translated := []struct {
+		dialect Dialect
+		query   string
+		want    string
+	}{
+		// The label keeps a space between the introducer and the literal,
+		// because render puts one between two atoms that a quote used to
+		// separate; the value is what matters and it is the literal's.
+		{MySQL, "SELECT _utf8mb4'abc'", `SELECT 'abc' AS "_utf8mb4 'abc'"`},
+		{MySQL, "SELECT N'abc'", `SELECT 'abc' AS "N 'abc'"`},
+		{MySQL, "SELECT _binary'abc'", `SELECT x'616263' AS "_binary 'abc'"`},
+		{MySQL, "SELECT 0 b1010 FROM t", "SELECT 0 b1010 FROM t"},
+		{PostgreSQL, `SELECT U&'\0041'`, `SELECT 'A' AS "U&'\0041'"`},
+		{PostgreSQL, `SELECT U&'\+000041'`, `SELECT 'A' AS "U&'\+000041'"`},
+		{PostgreSQL, `SELECT U&'d!0061t!+000061' UESCAPE '!'`, `SELECT 'data' AS "U&'d!0061t!+000061' UESCAPE '!'"`},
+		// A column named u, and an ordinary bitwise AND, are not the literal.
+		{PostgreSQL, "SELECT u & 1 FROM t", "SELECT u & 1 FROM t"},
+	}
+	for _, tt := range translated {
+		got, err := Translate(tt.dialect, tt.query)
+		if err != nil {
+			t.Errorf("Translate(%v, %q): %v", tt.dialect, tt.query, err)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("Translate(%v, %q)\n  = %q\nwant %q", tt.dialect, tt.query, got, tt.want)
+		}
+	}
+}

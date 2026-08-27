@@ -82,6 +82,12 @@ func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	if err := checkLeftoverInterval(out); err != nil {
 		return nil, err
 	}
+	// A COLLATE clause names an ordering SQLite does not have, so it is mapped
+	// onto the SQLite collation that means the same or refused by name.
+	out, err = collatePass(out)
+	if err != nil {
+		return nil, err
+	}
 	return aggregatePass(out, GoogleSQL)
 }
 
