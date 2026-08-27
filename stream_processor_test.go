@@ -624,6 +624,7 @@ func TestCancelingALoadAlwaysReportsTheContextError(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	interrupted := 0
 	for attempt := range 30 {
 		// A spread of deadlines so the cancellation lands at a different point
 		// of the load each time, which is what makes the race happen at all.
@@ -638,8 +639,15 @@ func TestCancelingALoadAlwaysReportsTheContextError(t *testing.T) {
 		if err == nil {
 			continue // the load beat the deadline, which is not this test's case
 		}
+		interrupted++
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("deadline %v: error = %v, want it to match context.DeadlineExceeded", deadline, err)
 		}
+	}
+	// Without this the test passes by never having tested anything: a machine
+	// that loads the file inside one millisecond would take every attempt to
+	// the end and assert nothing.
+	if interrupted == 0 {
+		t.Fatal("no attempt was interrupted, so no cancellation was checked")
 	}
 }

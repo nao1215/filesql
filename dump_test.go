@@ -1540,10 +1540,7 @@ func TestDumpDatabaseContext_StopsWhenTheContextEnds(t *testing.T) {
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, context.Canceled)
-		entries, readErr := os.ReadDir(out)
-		if readErr == nil {
-			assert.Empty(t, entries, "a dump that never started left files behind")
-		}
+		assert.NoDirExists(t, out, "a dump that never started must not create the output directory")
 	})
 
 	t.Run("a deadline that expires during the export leaves no partial file", func(t *testing.T) {

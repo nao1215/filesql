@@ -442,6 +442,7 @@ func TestCanceledLoadNamesThePackageOnce(t *testing.T) {
 	}
 	require.NoError(t, os.WriteFile(path, []byte(body.String()), 0o600))
 
+	interrupted := 0
 	for attempt := range 20 {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(1+attempt)*time.Millisecond)
 		db, err := OpenContext(ctx, path)
@@ -452,6 +453,7 @@ func TestCanceledLoadNamesThePackageOnce(t *testing.T) {
 		if err == nil {
 			continue
 		}
+		interrupted++
 		// At most once rather than exactly once: a deadline that expires before
 		// the load has begun is answered with the context's own error and
 		// nothing else, which names the package no times and is right.
@@ -459,4 +461,8 @@ func TestCanceledLoadNamesThePackageOnce(t *testing.T) {
 		require.LessOrEqual(t, strings.Count(msg, "filesql: "), 1, "the package names itself at most once: %s", msg)
 		assert.ErrorIs(t, err, context.DeadlineExceeded)
 	}
+	// Without this the test passes by never having tested anything: a machine
+	// that loads the file inside one millisecond would take every attempt to
+	// the end and assert nothing.
+	require.Positive(t, interrupted, "no attempt was interrupted, so the framing was never checked")
 }
