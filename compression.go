@@ -17,8 +17,6 @@ type CompressionHandler interface {
 	CreateReader(reader io.Reader) (io.Reader, func() error, error)
 	// CreateWriter wraps an io.Writer with a compression writer if needed
 	CreateWriter(writer io.Writer) (io.Writer, func() error, error)
-	// Extension returns the file extension for this compression type (e.g., ".gz")
-	Extension() string
 }
 
 // compressionHandlerImpl implements the CompressionHandler interface
@@ -49,11 +47,6 @@ func (h *compressionHandlerImpl) CreateWriter(writer io.Writer) (io.Writer, func
 	return compressed, closeFunc, nil
 }
 
-// Extension returns the file extension for this compression type
-func (h *compressionHandlerImpl) Extension() string {
-	return h.compressionType.Extension()
-}
-
 // NewCompressionHandler creates a new compression handler for the given compression type
 func NewCompressionHandler(compressionType CompressionType) CompressionHandler {
 	return &compressionHandlerImpl{
@@ -69,8 +62,8 @@ func NewCompressionFactory() *CompressionFactory {
 	return &CompressionFactory{}
 }
 
-// DetectCompressionType detects the compression type from a file path
-func (f *CompressionFactory) DetectCompressionType(path string) CompressionType {
+// detectCompressionType detects the compression type from a file path
+func (f *CompressionFactory) detectCompressionType(path string) CompressionType {
 	path = strings.ToLower(path)
 
 	switch {
@@ -95,9 +88,9 @@ func (f *CompressionFactory) DetectCompressionType(path string) CompressionType 
 	}
 }
 
-// CreateHandlerForFile creates an appropriate compression handler for a given file path
-func (f *CompressionFactory) CreateHandlerForFile(path string) CompressionHandler {
-	compressionType := f.DetectCompressionType(path)
+// createHandlerForFile creates an appropriate compression handler for a given file path
+func (f *CompressionFactory) createHandlerForFile(path string) CompressionHandler {
+	compressionType := f.detectCompressionType(path)
 	return NewCompressionHandler(compressionType)
 }
 
@@ -108,7 +101,7 @@ func (f *CompressionFactory) CreateReaderForFile(path string) (io.Reader, func()
 		return nil, nil, fmt.Errorf("%w: failed to open file: %w", ErrIOOperation, err)
 	}
 
-	handler := f.CreateHandlerForFile(path)
+	handler := f.createHandlerForFile(path)
 	reader, cleanup, err := handler.CreateReader(file)
 	if err != nil {
 		_ = file.Close()
@@ -140,8 +133,8 @@ func (f *CompressionFactory) RemoveCompressionExtension(path string) string {
 	return path
 }
 
-// GetBaseFileType determines the base file type after removing compression extensions
-func (f *CompressionFactory) GetBaseFileType(path string) FileType {
+// getBaseFileType determines the base file type after removing compression extensions
+func (f *CompressionFactory) getBaseFileType(path string) FileType {
 	basePath := f.RemoveCompressionExtension(path)
 	ext := strings.ToLower(filepath.Ext(basePath))
 

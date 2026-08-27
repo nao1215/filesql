@@ -95,8 +95,8 @@ func TestCompressionHandlerInterface(t *testing.T) {
 
 			handler := NewCompressionHandler(tt.compressionType)
 
-			// Test Extension method
-			if got := handler.Extension(); got != tt.extension {
+			// The extension the handler was built for
+			if got := tt.compressionType.Extension(); got != tt.extension {
 				t.Errorf("Extension() = %v, want %v", got, tt.extension)
 			}
 
@@ -213,7 +213,7 @@ func TestCompressionHandlerInterface(t *testing.T) {
 func TestCompressionFactory(t *testing.T) {
 	t.Parallel()
 
-	t.Run("DetectCompressionType", func(t *testing.T) {
+	t.Run("detectCompressionType", func(t *testing.T) {
 		t.Parallel()
 
 		factory := NewCompressionFactory()
@@ -238,9 +238,9 @@ func TestCompressionFactory(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.path, func(t *testing.T) {
-				got := factory.DetectCompressionType(tt.path)
+				got := factory.detectCompressionType(tt.path)
 				if got != tt.expected {
-					t.Errorf("DetectCompressionType(%q) = %v, want %v", tt.path, got, tt.expected)
+					t.Errorf("detectCompressionType(%q) = %v, want %v", tt.path, got, tt.expected)
 				}
 			})
 		}
@@ -279,7 +279,7 @@ func TestCompressionFactory(t *testing.T) {
 		}
 	})
 
-	t.Run("GetBaseFileType", func(t *testing.T) {
+	t.Run("getBaseFileType", func(t *testing.T) {
 		t.Parallel()
 
 		factory := NewCompressionFactory()
@@ -302,15 +302,15 @@ func TestCompressionFactory(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.path, func(t *testing.T) {
-				got := factory.GetBaseFileType(tt.path)
+				got := factory.getBaseFileType(tt.path)
 				if got != tt.expected {
-					t.Errorf("GetBaseFileType(%q) = %v, want %v", tt.path, got, tt.expected)
+					t.Errorf("getBaseFileType(%q) = %v, want %v", tt.path, got, tt.expected)
 				}
 			})
 		}
 	})
 
-	t.Run("CreateHandlerForFile", func(t *testing.T) {
+	t.Run("createHandlerForFile", func(t *testing.T) {
 		t.Parallel()
 
 		factory := NewCompressionFactory()
@@ -328,9 +328,12 @@ func TestCompressionFactory(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.path, func(t *testing.T) {
-				handler := factory.CreateHandlerForFile(tt.path)
-				if got := handler.Extension(); got != tt.expectedExtension {
-					t.Errorf("Handler.Extension() for %q = %v, want %v", tt.path, got, tt.expectedExtension)
+				handler, ok := factory.createHandlerForFile(tt.path).(*compressionHandlerImpl)
+				if !ok {
+					t.Fatalf("createHandlerForFile(%q) returned %T, want *compressionHandlerImpl", tt.path, handler)
+				}
+				if got := handler.compressionType.Extension(); got != tt.expectedExtension {
+					t.Errorf("handler for %q has extension %v, want %v", tt.path, got, tt.expectedExtension)
 				}
 			})
 		}

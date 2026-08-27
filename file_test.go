@@ -144,7 +144,7 @@ func TestNewFile(t *testing.T) {
 			file := newFile(tt.path)
 			assert.Equal(t, tt.expected, file.getFileType(), "File type mismatch")
 			assert.Equal(t, tt.path, file.getPath(), "File path mismatch")
-			assert.Equal(t, tt.compression, NewCompressionFactory().DetectCompressionType(tt.path),
+			assert.Equal(t, tt.compression, NewCompressionFactory().detectCompressionType(tt.path),
 				"Compression mismatch")
 		})
 	}

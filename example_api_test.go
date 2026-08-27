@@ -354,17 +354,33 @@ func ExampleNewCompressionHandler() {
 }
 
 func ExampleNewCompressionFactory() {
-	factory := filesql.NewCompressionFactory()
-	fmt.Println(factory.CreateHandlerForFile("orders.csv.zst").Extension())
-	// Output:
-	// .zst
-}
+	dir := createFilesqlExampleDir(map[string]string{
+		"orders.csv": `
+id,total
+1,980
+`,
+	})
+	defer os.RemoveAll(dir)
 
-func ExampleCompressionFactory_DetectCompressionType() {
 	factory := filesql.NewCompressionFactory()
-	fmt.Println(factory.DetectCompressionType("orders.csv.xz"))
+	reader, cleanup, err := factory.CreateReaderForFile(filepath.Join(dir, "orders.csv"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		if err := cleanup(); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Print(string(body))
 	// Output:
-	// xz
+	// id,total
+	// 1,980
 }
 
 func ExampleCompressionFactory_RemoveCompressionExtension() {
@@ -372,13 +388,6 @@ func ExampleCompressionFactory_RemoveCompressionExtension() {
 	fmt.Println(factory.RemoveCompressionExtension("orders.csv.gz"))
 	// Output:
 	// orders.csv
-}
-
-func ExampleCompressionFactory_GetBaseFileType() {
-	factory := filesql.NewCompressionFactory()
-	fmt.Println(factory.GetBaseFileType("orders.csv.gz"))
-	// Output:
-	// CSV
 }
 
 func ExampleNewDumpOptions() {
