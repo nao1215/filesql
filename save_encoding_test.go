@@ -417,7 +417,7 @@ func TestAutoSaveExportIgnoresSourceEncoding(t *testing.T) {
 	require.NoError(t, os.WriteFile(source, utf16Bytes(t, "id,v\n1,a\n", unicode.LittleEndian), 0o600))
 
 	outputDir := t.TempDir()
-	validated, err := NewBuilder().AddPath(source).EnableAutoSave(outputDir).Build(t.Context())
+	validated, err := buildForTest(t.Context(), NewBuilder().AddPath(source).EnableAutoSave(outputDir))
 	require.NoError(t, err)
 	db, err := validated.Open(t.Context())
 	require.NoError(t, err)

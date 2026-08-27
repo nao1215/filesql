@@ -26,6 +26,17 @@ import (
 //go:embed testdata/embed_test/*.csv testdata/embed_test/*.tsv
 var testFS embed.FS
 
+// buildForTest runs the validation that Open, OpenReadOnly, LoadInto and
+// LoadIntoTx run before they load anything, and hands the builder back. The
+// tests below check that validation on its own, which the terminal methods no
+// longer let a caller do separately.
+func buildForTest(ctx context.Context, b *DBBuilder) (*DBBuilder, error) {
+	if err := b.build(ctx); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
 func TestNewBuilder(t *testing.T) {
 	t.Parallel()
 
@@ -126,8 +137,8 @@ func TestDBBuilder_AddFS_Compressed(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			validated, err := NewBuilder().AddFS(mockFS).Build(ctx)
-			require.NoError(t, err, "Build() failed for %s", codec.compression)
+			validated, err := buildForTest(ctx, NewBuilder().AddFS(mockFS))
+			require.NoError(t, err, "build() failed for %s", codec.compression)
 
 			db, err := validated.Open(ctx)
 			require.NoError(t, err, "Open() failed for %s", codec.compression)
@@ -166,8 +177,8 @@ func TestDBBuilder_AddFS_CompressedHeaderOnly(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			validated, err := NewBuilder().AddFS(mockFS).Build(ctx)
-			require.NoError(t, err, "Build() failed for %s", codec)
+			validated, err := buildForTest(ctx, NewBuilder().AddFS(mockFS))
+			require.NoError(t, err, "build() failed for %s", codec)
 
 			db, err := validated.Open(ctx)
 			require.NoError(t, err, "Open() failed for %s", codec)
@@ -277,11 +288,13 @@ func TestDBBuilder_SetDefaultChunkSize(t *testing.T) {
 			want := (rows + size - 1) / size
 
 			counter := &chunkCountingHandler{}
-			validated, err := NewBuilder().
-				AddPath(path).
-				SetDefaultChunkSize(size).
-				WithLogger(slog.New(counter)).
-				Build(ctx)
+			validated, err := buildForTest(
+
+				ctx, NewBuilder().
+					AddPath(path).
+					SetDefaultChunkSize(size).
+					WithLogger(slog.New(counter)))
+
 			require.NoError(t, err)
 			db, err := validated.Open(ctx)
 			require.NoError(t, err)
@@ -291,11 +304,13 @@ func TestDBBuilder_SetDefaultChunkSize(t *testing.T) {
 			// A reader is loaded by the same processor, so it has to chunk the
 			// same way a path does.
 			counter = &chunkCountingHandler{}
-			validated, err = NewBuilder().
-				AddReader(strings.NewReader(body), "counted", FileTypeCSV).
-				SetDefaultChunkSize(size).
-				WithLogger(slog.New(counter)).
-				Build(ctx)
+			validated, err = buildForTest(
+
+				ctx, NewBuilder().
+					AddReader(strings.NewReader(body), "counted", FileTypeCSV).
+					SetDefaultChunkSize(size).
+					WithLogger(slog.New(counter)))
+
 			require.NoError(t, err)
 			db, err = validated.Open(ctx)
 			require.NoError(t, err)
@@ -312,10 +327,12 @@ func TestDBBuilder_SetDefaultChunkSize(t *testing.T) {
 
 		var want string
 		for _, size := range []int{1, 2, 7, 20, defaultChunkSizeRows} {
-			validated, err := NewBuilder().
-				AddReader(strings.NewReader(body), "counted", FileTypeCSV).
-				SetDefaultChunkSize(size).
-				Build(ctx)
+			validated, err := buildForTest(
+
+				ctx, NewBuilder().
+					AddReader(strings.NewReader(body), "counted", FileTypeCSV).
+					SetDefaultChunkSize(size))
+
 			require.NoError(t, err)
 			db, err := validated.Open(ctx)
 			require.NoError(t, err)
@@ -415,7 +432,7 @@ func describeTableForChunkTest(t *testing.T, db *sql.DB, tableName string) strin
 	return out.String()
 }
 
-func TestDBBuilder_Build(t *testing.T) {
+func TestDBBuilder_build(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -423,8 +440,8 @@ func TestDBBuilder_Build(t *testing.T) {
 	t.Run("no inputs error", func(t *testing.T) {
 		t.Parallel()
 		builder := NewBuilder()
-		_, err := builder.Build(ctx)
-		assert.Error(t, err, "Build() should return error for no inputs")
+		_, err := buildForTest(ctx, builder)
+		assert.Error(t, err, "build() should return error for no inputs")
 	})
 
 	t.Run("reader with nil reader error", func(t *testing.T) {
@@ -436,8 +453,8 @@ func TestDBBuilder_Build(t *testing.T) {
 			fileType:  FileTypeCSV,
 		})
 
-		_, err := builder.Build(ctx)
-		assert.Error(t, err, "Build() should return error for nil reader")
+		_, err := buildForTest(ctx, builder)
+		assert.Error(t, err, "build() should return error for nil reader")
 		assert.Contains(t, err.Error(), "reader cannot be nil", "error message should mention nil reader")
 	})
 
@@ -451,8 +468,8 @@ func TestDBBuilder_Build(t *testing.T) {
 			fileType:  FileTypeCSV,
 		})
 
-		_, err := builder.Build(ctx)
-		assert.Error(t, err, "Build() should return error for empty table name")
+		_, err := buildForTest(ctx, builder)
+		assert.Error(t, err, "build() should return error for empty table name")
 		assert.Contains(t, err.Error(), "table name must be specified", "error message should mention table name requirement")
 	})
 
@@ -466,8 +483,8 @@ func TestDBBuilder_Build(t *testing.T) {
 			fileType:  FileTypeUnsupported,
 		})
 
-		_, err := builder.Build(ctx)
-		assert.Error(t, err, "Build() should return error for unsupported file type")
+		_, err := buildForTest(ctx, builder)
+		assert.Error(t, err, "build() should return error for unsupported file type")
 		assert.Contains(t, err.Error(), "file type must be specified", "error message should mention file type requirement")
 	})
 
@@ -477,11 +494,11 @@ func TestDBBuilder_Build(t *testing.T) {
 		reader := bytes.NewReader([]byte(data))
 		builder := NewBuilder().AddReader(reader, "users", FileTypeCSV)
 
-		validatedBuilder, err := builder.Build(ctx)
-		assert.NoError(t, err, "Build() should succeed with valid CSV data")
-		require.NotNil(t, validatedBuilder, "Build() should not return nil builder")
+		validatedBuilder, err := buildForTest(ctx, builder)
+		assert.NoError(t, err, "build() should succeed with valid CSV data")
+		require.NotNil(t, validatedBuilder, "build() should not return nil builder")
 		// Readers don't create temp files anymore - they use direct streaming
-		assert.Len(t, validatedBuilder.readers, 1, "Build() should have 1 reader input")
+		assert.Len(t, validatedBuilder.readers, 1, "build() should have 1 reader input")
 
 		// Clean up temp files
 	})
@@ -493,9 +510,9 @@ func TestDBBuilder_Build(t *testing.T) {
 		reader := bytes.NewReader(data)
 		builder := NewBuilder().AddReader(reader, "logs", FileTypeCSV)
 
-		validatedBuilder, err := builder.Build(ctx)
-		assert.NoError(t, err, "Build() should succeed with compressed type")
-		assert.NotNil(t, validatedBuilder, "Build() should not return nil builder")
+		validatedBuilder, err := buildForTest(ctx, builder)
+		assert.NoError(t, err, "build() should succeed with compressed type")
+		assert.NotNil(t, validatedBuilder, "build() should not return nil builder")
 
 		// Clean up temp files
 	})
@@ -509,11 +526,11 @@ func TestDBBuilder_Build(t *testing.T) {
 			AddReader(reader1, "table1", FileTypeCSV).
 			AddReader(reader2, "table2", FileTypeTSV)
 
-		validatedBuilder, err := builder.Build(ctx)
-		assert.NoError(t, err, "Build() should succeed with multiple readers")
-		require.NotNil(t, validatedBuilder, "Build() should not return nil builder")
+		validatedBuilder, err := buildForTest(ctx, builder)
+		assert.NoError(t, err, "build() should succeed with multiple readers")
+		require.NotNil(t, validatedBuilder, "build() should not return nil builder")
 		// Readers don't create temp files anymore - they use direct streaming
-		assert.Len(t, validatedBuilder.readers, 2, "Build() should have 2 reader inputs")
+		assert.Len(t, validatedBuilder.readers, 2, "build() should have 2 reader inputs")
 
 		// Clean up temp files
 	})
@@ -521,8 +538,8 @@ func TestDBBuilder_Build(t *testing.T) {
 	t.Run("invalid path error", func(t *testing.T) {
 		t.Parallel()
 		builder := NewBuilder().AddPath(filepath.Join("nonexistent", "file.csv"))
-		_, err := builder.Build(ctx)
-		assert.Error(t, err, "Build() should return error for nonexistent path")
+		_, err := buildForTest(ctx, builder)
+		assert.Error(t, err, "build() should return error for nonexistent path")
 	})
 
 	t.Run("unsupported file type error", func(t *testing.T) {
@@ -534,8 +551,8 @@ func TestDBBuilder_Build(t *testing.T) {
 		require.NoError(t, err, "should create test file")
 
 		builder := NewBuilder().AddPath(unsupportedFile)
-		_, err = builder.Build(ctx)
-		assert.Error(t, err, "Build() should return error for unsupported file type")
+		_, err = buildForTest(ctx, builder)
+		assert.Error(t, err, "build() should return error for unsupported file type")
 	})
 
 	t.Run("valid CSV file", func(t *testing.T) {
@@ -548,9 +565,9 @@ func TestDBBuilder_Build(t *testing.T) {
 		require.NoError(t, err, "should create CSV file")
 
 		builder := NewBuilder().AddPath(csvFile)
-		validatedBuilder, err := builder.Build(ctx)
-		assert.NoError(t, err, "Build() should succeed with valid CSV file")
-		assert.NotNil(t, validatedBuilder, "Build() should not return nil builder")
+		validatedBuilder, err := buildForTest(ctx, builder)
+		assert.NoError(t, err, "build() should succeed with valid CSV file")
+		assert.NotNil(t, validatedBuilder, "build() should not return nil builder")
 	})
 
 	t.Run("valid directory", func(t *testing.T) {
@@ -564,9 +581,9 @@ func TestDBBuilder_Build(t *testing.T) {
 		require.NoError(t, err, "Failed to create test CSV file")
 
 		builder := NewBuilder().AddPath(tempDir)
-		validatedBuilder, err := builder.Build(ctx)
-		assert.NoError(t, err, "Build() should succeed with valid directory")
-		assert.NotNil(t, validatedBuilder, "Build() should not return nil builder")
+		validatedBuilder, err := buildForTest(ctx, builder)
+		assert.NoError(t, err, "build() should succeed with valid directory")
+		assert.NotNil(t, validatedBuilder, "build() should not return nil builder")
 	})
 
 	t.Run("FS with valid files", func(t *testing.T) {
@@ -579,12 +596,12 @@ func TestDBBuilder_Build(t *testing.T) {
 		}
 
 		builder := NewBuilder().AddFS(mockFS)
-		validatedBuilder, err := builder.Build(ctx)
-		assert.NoError(t, err, "Build() should succeed with FS containing valid files")
-		require.NotNil(t, validatedBuilder, "Build() should not return nil builder")
+		validatedBuilder, err := buildForTest(ctx, builder)
+		assert.NoError(t, err, "build() should succeed with FS containing valid files")
+		require.NotNil(t, validatedBuilder, "build() should not return nil builder")
 		// Should have found 3 files (csv, tsv, ltsv) and ignored txt
 		// fs.FS files are now stored as readers instead of collectedPaths
-		assert.Len(t, validatedBuilder.readers, 3, "Build() should have 3 readers from fs.FS")
+		assert.Len(t, validatedBuilder.readers, 3, "build() should have 3 readers from fs.FS")
 	})
 
 	t.Run("FS with nil filesystem error", func(t *testing.T) {
@@ -592,8 +609,8 @@ func TestDBBuilder_Build(t *testing.T) {
 		builder := NewBuilder()
 		builder.filesystems = append(builder.filesystems, nil)
 
-		_, err := builder.Build(ctx)
-		assert.Error(t, err, "Build() should return error for nil FS")
+		_, err := buildForTest(ctx, builder)
+		assert.Error(t, err, "build() should return error for nil FS")
 	})
 
 	t.Run("FS with no supported files error", func(t *testing.T) {
@@ -604,8 +621,8 @@ func TestDBBuilder_Build(t *testing.T) {
 		}
 
 		builder := NewBuilder().AddFS(mockFS)
-		_, err := builder.Build(ctx)
-		assert.Error(t, err, "Build() should return error for FS with no supported files")
+		_, err := buildForTest(ctx, builder)
+		assert.Error(t, err, "build() should return error for FS with no supported files")
 	})
 }
 
@@ -634,8 +651,8 @@ func TestDBBuilder_ChunkedReading(t *testing.T) {
 			AddReader(reader, "large_table", FileTypeCSV)
 
 		ctx := context.Background()
-		validatedBuilder, err := builder.Build(ctx)
-		require.NoError(t, err, "Build() should succeed")
+		validatedBuilder, err := buildForTest(ctx, builder)
+		require.NoError(t, err, "build() should succeed")
 
 		db, err := validatedBuilder.Open(ctx)
 		assert.NoError(t, err, "Open() should succeed")
@@ -659,8 +676,8 @@ func TestDBBuilder_Open_WithReader(t *testing.T) {
 		reader := bytes.NewReader([]byte(data))
 		builder := NewBuilder().AddReader(reader, "users", FileTypeCSV)
 
-		validatedBuilder, err := builder.Build(ctx)
-		require.NoError(t, err, "Build() should succeed")
+		validatedBuilder, err := buildForTest(ctx, builder)
+		require.NoError(t, err, "build() should succeed")
 
 		db, err := validatedBuilder.Open(ctx)
 		assert.NoError(t, err, "Open() should succeed")
@@ -691,8 +708,8 @@ func TestDBBuilder_Open_WithReader(t *testing.T) {
 			AddPath(csvFile).
 			AddReader(reader, "products", FileTypeCSV)
 
-		validatedBuilder, err := builder.Build(ctx)
-		require.NoError(t, err, "Build() should succeed with mixed inputs")
+		validatedBuilder, err := buildForTest(ctx, builder)
+		require.NoError(t, err, "build() should succeed with mixed inputs")
 
 		db, err := validatedBuilder.Open(ctx)
 		assert.NoError(t, err, "Open() should succeed")
@@ -735,23 +752,23 @@ func TestDBBuilder_Open(t *testing.T) {
 		assert.True(t, errors.Is(err, ErrNoFiles), "error should be ErrNoFiles, got %v", err)
 	})
 
-	t.Run("build then open loads an added filesystem once", func(t *testing.T) {
-		// build appends the readers it derives from a filesystem, so running
-		// it twice would register every file of that filesystem twice.
+	t.Run("validating then opening loads an added filesystem once", func(t *testing.T) {
+		// The validation derives a reader per file of the filesystem, so
+		// running it twice would register every one of them twice.
 		fsys := fstest.MapFS{
 			"users.csv": &fstest.MapFile{Data: []byte("id,name\n1,Alice\n")},
 		}
 
-		validated, err := NewBuilder().AddFS(fsys).Build(ctx)
-		require.NoError(t, err, "Build() should succeed")
+		validated, err := buildForTest(ctx, NewBuilder().AddFS(fsys))
+		require.NoError(t, err, "build() should succeed")
 
 		db, err := validated.Open(ctx)
-		require.NoError(t, err, "Open() after Build() should succeed")
+		require.NoError(t, err, "Open() after the validation should succeed")
 		defer func() { _ = db.Close() }()
 
 		var rows int
 		require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&rows))
-		assert.Equal(t, 1, rows, "the file must be loaded once, not once per build")
+		assert.Equal(t, 1, rows, "the file must be loaded once, not once per validation")
 	})
 
 	t.Run("open after a failed open loads an added filesystem once", func(t *testing.T) {
@@ -794,8 +811,8 @@ func TestDBBuilder_Open(t *testing.T) {
 		require.NoError(t, err, "should create CSV file")
 
 		builder := NewBuilder().AddPath(csvFile)
-		validatedBuilder, err := builder.Build(ctx)
-		require.NoError(t, err, "Build() should succeed")
+		validatedBuilder, err := buildForTest(ctx, builder)
+		require.NoError(t, err, "build() should succeed")
 
 		db, err := validatedBuilder.Open(ctx)
 		assert.NoError(t, err, "Open() should succeed")
@@ -811,8 +828,8 @@ func TestDBBuilder_Open(t *testing.T) {
 		}
 
 		builder := NewBuilder().AddFS(mockFS)
-		validatedBuilder, err := builder.Build(ctx)
-		require.NoError(t, err, "Build() should succeed")
+		validatedBuilder, err := buildForTest(ctx, builder)
+		require.NoError(t, err, "build() should succeed")
 
 		db, err := validatedBuilder.Open(ctx)
 		assert.NoError(t, err, "Open() should succeed")
@@ -830,8 +847,8 @@ func TestDBBuilder_Open(t *testing.T) {
 		}
 
 		builder := NewBuilder().AddFS(mockFS)
-		validatedBuilder, err := builder.Build(ctx)
-		require.NoError(t, err, "Build() should succeed")
+		validatedBuilder, err := buildForTest(ctx, builder)
+		require.NoError(t, err, "build() should succeed")
 
 		db, err := validatedBuilder.Open(ctx)
 		assert.NoError(t, err, "Open() should succeed")
@@ -903,8 +920,8 @@ func TestIntegrationWithEmbedFS(t *testing.T) {
 	// Test loading all supported files from embedded FS
 	builder := NewBuilder().AddFS(subFS)
 
-	validatedBuilder, err := builder.Build(ctx)
-	require.NoError(t, err, "Build() should succeed with embedded FS")
+	validatedBuilder, err := buildForTest(ctx, builder)
+	require.NoError(t, err, "build() should succeed with embedded FS")
 
 	db, err := validatedBuilder.Open(ctx)
 	assert.NoError(t, err, "Open() with embed.FS should succeed")
@@ -942,7 +959,7 @@ func TestAutoSave_OnClose(t *testing.T) {
 		AddPath(csvPath).
 		EnableAutoSave(outputDir)
 
-	validatedBuilder, err := builder.Build(ctx)
+	validatedBuilder, err := buildForTest(ctx, builder)
 	require.NoError(t, err, "Build should succeed")
 
 	db, err := validatedBuilder.Open(ctx)
@@ -991,7 +1008,7 @@ func TestAutoSave_OnCommit(t *testing.T) {
 		AddPath(csvPath).
 		EnableAutoSaveOnCommit(outputDir)
 
-	validatedBuilder, err := builder.Build(ctx)
+	validatedBuilder, err := buildForTest(ctx, builder)
 	if err != nil {
 		require.NoError(t, err, "Build should succeed")
 	}
@@ -1056,7 +1073,7 @@ func TestAutoSave_OffByDefault(t *testing.T) {
 		AddPath(csvPath)
 	// Note: No EnableAutoSave() call
 
-	validatedBuilder, err := builder.Build(ctx)
+	validatedBuilder, err := buildForTest(ctx, builder)
 	if err != nil {
 		require.NoError(t, err, "Build should succeed")
 	}
@@ -1109,7 +1126,7 @@ func TestAutoSave_MultipleCommitsOverwrite(t *testing.T) {
 		AddPath(csvPath).
 		EnableAutoSaveOnCommit(outputDir)
 
-	validatedBuilder, err := builder.Build(ctx)
+	validatedBuilder, err := buildForTest(ctx, builder)
 	if err != nil {
 		require.NoError(t, err, "Build should succeed")
 	}
@@ -1225,27 +1242,27 @@ func TestBuilder_ErrorCases(t *testing.T) {
 	t.Run("build with no inputs", func(t *testing.T) {
 		t.Parallel()
 		builder := NewBuilder()
-		_, err := builder.Build(ctx)
+		_, err := buildForTest(ctx, builder)
 		if err == nil {
-			assert.Error(t, err, "Build() with no inputs should return error")
+			assert.Error(t, err, "build() with no inputs should return error")
 		}
 	})
 
 	t.Run("build with empty path", func(t *testing.T) {
 		t.Parallel()
 		builder := NewBuilder().AddPath("")
-		_, err := builder.Build(ctx)
+		_, err := buildForTest(ctx, builder)
 		if err == nil {
-			assert.Error(t, err, "Build() with empty path should return error")
+			assert.Error(t, err, "build() with empty path should return error")
 		}
 	})
 
 	t.Run("build with non-existent path", func(t *testing.T) {
 		t.Parallel()
 		builder := NewBuilder().AddPath(filepath.Join("non", "existent", "file.csv"))
-		_, err := builder.Build(ctx)
+		_, err := buildForTest(ctx, builder)
 		if err == nil {
-			assert.Error(t, err, "Build() with non-existent path should return error")
+			assert.Error(t, err, "build() with non-existent path should return error")
 		}
 	})
 
@@ -1262,9 +1279,9 @@ func TestBuilder_ErrorCases(t *testing.T) {
 			AddPath(csvPath).
 			EnableAutoSave("") // Empty string should work for overwrite mode
 
-		_, err := builder.Build(ctx)
+		_, err := buildForTest(ctx, builder)
 		if err != nil {
-			t.Errorf("Build() with empty output directory should not error, got: %v", err)
+			t.Errorf("build() with empty output directory should not error, got: %v", err)
 		}
 	})
 
@@ -1281,9 +1298,9 @@ func TestBuilder_ErrorCases(t *testing.T) {
 			AddPath(csvPath).
 			EnableAutoSaveOnCommit("") // Empty string should work for overwrite mode
 
-		_, err := builder.Build(ctx)
+		_, err := buildForTest(ctx, builder)
 		if err != nil {
-			t.Errorf("Build() with empty output directory for auto-save on commit should not error, got: %v", err)
+			t.Errorf("build() with empty output directory for auto-save on commit should not error, got: %v", err)
 		}
 	})
 
@@ -1295,7 +1312,7 @@ func TestBuilder_ErrorCases(t *testing.T) {
 		reader := strings.NewReader(invalidCSV)
 
 		builder := NewBuilder().AddReader(reader, "invalid", FileTypeCSV)
-		_, err := builder.Build(ctx)
+		_, err := buildForTest(ctx, builder)
 
 		// Should handle malformed CSV gracefully or return meaningful error
 		if err == nil {
@@ -1308,7 +1325,7 @@ func TestBuilder_ErrorCases(t *testing.T) {
 
 		reader := strings.NewReader("")
 		builder := NewBuilder().AddReader(reader, "empty", FileTypeCSV)
-		_, err := builder.Build(ctx)
+		_, err := buildForTest(ctx, builder)
 
 		// Build should fail with empty CSV data
 		if err == nil {
@@ -1327,7 +1344,7 @@ func TestBuilder_ErrorCases(t *testing.T) {
 			AddReader(reader, "test", FileTypeCSV).
 			SetDefaultChunkSize(1) // Very small chunk size
 
-		_, err := builder.Build(ctx)
+		_, err := buildForTest(ctx, builder)
 		if err != nil {
 			assert.NoError(t, err, "Build should handle small chunk size")
 		}
@@ -1510,10 +1527,12 @@ func TestTransactionMethods(t *testing.T) {
 			require.NoError(t, err, "operation should succeed")
 		}
 
-		validatedBuilder, err := NewBuilder().
-			AddPath(testCsvFile).
-			EnableAutoSaveOnCommit(testTempDir).
-			Build(context.Background())
+		validatedBuilder, err := buildForTest(
+
+			context.Background(), NewBuilder().
+				AddPath(testCsvFile).
+				EnableAutoSaveOnCommit(testTempDir))
+
 		if err != nil {
 			require.NoError(t, err, "operation should succeed")
 		}
@@ -1552,10 +1571,12 @@ func TestTransactionMethods(t *testing.T) {
 			require.NoError(t, err, "operation should succeed")
 		}
 
-		validatedBuilder, err := NewBuilder().
-			AddPath(testCsvFile).
-			EnableAutoSaveOnCommit(testTempDir).
-			Build(context.Background())
+		validatedBuilder, err := buildForTest(
+
+			context.Background(), NewBuilder().
+				AddPath(testCsvFile).
+				EnableAutoSaveOnCommit(testTempDir))
+
 		if err != nil {
 			require.NoError(t, err, "operation should succeed")
 		}
@@ -1586,10 +1607,12 @@ func TestTransactionMethods(t *testing.T) {
 			require.NoError(t, err, "operation should succeed")
 		}
 
-		validatedBuilder, err := NewBuilder().
-			AddPath(testCsvFile).
-			EnableAutoSaveOnCommit(""). // Empty string triggers overwrite
-			Build(context.Background())
+		validatedBuilder, err := buildForTest(
+
+			context.Background(), NewBuilder().
+				AddPath(testCsvFile).
+				EnableAutoSaveOnCommit(""))
+
 		if err != nil {
 			require.NoError(t, err, "operation should succeed")
 		}
@@ -1635,10 +1658,12 @@ func TestAutoSavePaths(t *testing.T) {
 			require.NoError(t, err, "operation should succeed")
 		}
 
-		validatedBuilder, err := NewBuilder().
-			AddPath(testCsvFile).
-			EnableAutoSave(testTempDir).
-			Build(context.Background())
+		validatedBuilder, err := buildForTest(
+
+			context.Background(), NewBuilder().
+				AddPath(testCsvFile).
+				EnableAutoSave(testTempDir))
+
 		if err != nil {
 			require.NoError(t, err, "operation should succeed")
 		}
@@ -1665,9 +1690,11 @@ func TestAutoSavePaths(t *testing.T) {
 		t.Parallel()
 
 		// Test with header-only reader to trigger createEmptyTable path
-		validatedBuilder, err := NewBuilder().
-			AddReader(strings.NewReader("col1,col2\n"), "empty_test", FileTypeCSV).
-			Build(context.Background())
+		validatedBuilder, err := buildForTest(
+
+			context.Background(), NewBuilder().
+				AddReader(strings.NewReader("col1,col2\n"), "empty_test", FileTypeCSV))
+
 		if err != nil {
 			require.NoError(t, err, "operation should succeed")
 		}
@@ -1699,10 +1726,12 @@ func TestAutoSavePaths(t *testing.T) {
 
 		// Create a custom reader input that forces empty table creation
 		// We'll simulate this by creating a very small chunk size that reads only headers
-		validatedBuilder, err := NewBuilder().
-			AddReader(reader, "parsed_empty", FileTypeCSV).
-			SetDefaultChunkSize(1). // Very small chunk to simulate header-only parsing
-			Build(context.Background())
+		validatedBuilder, err := buildForTest(
+
+			context.Background(), NewBuilder().
+				AddReader(reader, "parsed_empty", FileTypeCSV).
+				SetDefaultChunkSize(1))
+
 		if err != nil {
 			require.NoError(t, err, "operation should succeed")
 		}
@@ -1738,9 +1767,11 @@ func TestAutoSavePaths(t *testing.T) {
 
 		// Test with duplicate column names
 		duplicateCSV := "id,name,id\n"
-		validatedBuilder, err := NewBuilder().
-			AddReader(strings.NewReader(duplicateCSV), "duplicate_cols", FileTypeCSV).
-			Build(context.Background())
+		validatedBuilder, err := buildForTest(
+
+			context.Background(), NewBuilder().
+				AddReader(strings.NewReader(duplicateCSV), "duplicate_cols", FileTypeCSV))
+
 		if err != nil {
 			require.NoError(t, err, "operation should succeed")
 		}
@@ -1760,9 +1791,11 @@ func TestAutoSavePaths(t *testing.T) {
 		// Test the fallback path when parseFromReader fails
 		// Use a reader that would cause parsing to fail but still have readable content
 		brokenCSV := "id,name,email\n" // Header only, no data, should trigger fallback
-		validatedBuilder, err := NewBuilder().
-			AddReader(strings.NewReader(brokenCSV), "fallback_test", FileTypeCSV).
-			Build(context.Background())
+		validatedBuilder, err := buildForTest(
+
+			context.Background(), NewBuilder().
+				AddReader(strings.NewReader(brokenCSV), "fallback_test", FileTypeCSV))
+
 		if err != nil {
 			require.NoError(t, err, "operation should succeed")
 		}
@@ -1818,7 +1851,7 @@ func canceledContext(t *testing.T) context.Context {
 func builtBuilder(t *testing.T, path string) *DBBuilder {
 	t.Helper()
 
-	builder, err := NewBuilder().AddPath(path).Build(context.Background())
+	builder, err := buildForTest(context.Background(), NewBuilder().AddPath(path))
 	require.NoError(t, err)
 	return builder
 }

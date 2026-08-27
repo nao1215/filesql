@@ -460,7 +460,7 @@ func TestAddFS_ReadsAFileAgainWhenAColumnWidens(t *testing.T) {
 
 	ctx := context.Background()
 	mockFS := fstest.MapFS{"t.csv": &fstest.MapFile{Data: []byte("v\n1\n2.50\nabc\n")}}
-	built, err := NewBuilder().AddFS(mockFS).SetDefaultChunkSize(1).Build(ctx)
+	built, err := buildForTest(ctx, NewBuilder().AddFS(mockFS).SetDefaultChunkSize(1))
 	require.NoError(t, err)
 	db, err := built.Open(ctx)
 	require.NoError(t, err)

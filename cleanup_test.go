@@ -159,7 +159,7 @@ func TestLoadIntoTxStagingFailureRollsBackEverything(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	goodBuilder, err := NewBuilder().AddPath(good).Build(t.Context())
+	goodBuilder, err := buildForTest(t.Context(), NewBuilder().AddPath(good))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestLoadIntoTxStagingFailureRollsBackEverything(t *testing.T) {
 		t.Fatalf("staging the good input: %v", err)
 	}
 
-	brokenBuilder, err := NewBuilder().AddPath(broken).Build(t.Context())
+	brokenBuilder, err := buildForTest(t.Context(), NewBuilder().AddPath(broken))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestLoadIntoTxACHMetadataStaysInTheTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	builder, err := NewBuilder().AddPath(achPath).Build(t.Context())
+	builder, err := buildForTest(t.Context(), NewBuilder().AddPath(achPath))
 	if err != nil {
 		t.Fatal(err)
 	}

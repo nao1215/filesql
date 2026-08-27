@@ -708,8 +708,10 @@ func TestDamagedParquetIsAnErrorNotAPanic(t *testing.T) {
 		t.Parallel()
 
 		require.NotPanics(t, func() {
-			built, err := NewBuilder().
-				AddReader(bytes.NewReader(data), "t", FileTypeParquet).Build(ctx)
+			built, err := buildForTest(
+				ctx, NewBuilder().
+					AddReader(bytes.NewReader(data), "t", FileTypeParquet))
+
 			if err != nil {
 				return
 			}

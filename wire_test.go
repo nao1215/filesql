@@ -164,7 +164,7 @@ func TestBuilderAddPathFedWire(t *testing.T) {
 	ctx := context.Background()
 
 	builder := NewBuilder().AddPath(testFile)
-	builder, err := builder.Build(ctx)
+	builder, err := buildForTest(ctx, builder)
 	require.NoError(t, err)
 
 	db, err := builder.Open(ctx)
@@ -281,7 +281,7 @@ func TestAddFS_FedWireFile(t *testing.T) {
 
 	fsys := os.DirFS(tmpDir)
 	builder := NewBuilder().AddFS(fsys)
-	builder, err = builder.Build(ctx)
+	builder, err = buildForTest(ctx, builder)
 	require.NoError(t, err, "Build should succeed with .fed file in AddFS")
 
 	db, err := builder.Open(ctx)

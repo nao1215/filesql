@@ -39,10 +39,12 @@ func queryColumn(t *testing.T, db *sql.DB, query string) []string {
 
 func openWithPolicy(t *testing.T, content string, ft FileType, policy MalformedRowPolicy) (*sql.DB, error) {
 	t.Helper()
-	b, err := NewBuilder().
-		AddReader(strings.NewReader(content), "t", ft).
-		WithMalformedRowPolicy(policy).
-		Build(context.Background())
+	b, err := buildForTest(
+
+		context.Background(), NewBuilder().
+			AddReader(strings.NewReader(content), "t", ft).
+			WithMalformedRowPolicy(policy))
+
 	if err != nil {
 		return nil, err
 	}
@@ -60,10 +62,12 @@ func TestSkippedRowsReportsWhatWasDropped(t *testing.T) {
 	t.Run("a skipping import counts the rows it dropped", func(t *testing.T) {
 		t.Parallel()
 
-		b, err := NewBuilder().
-			AddReader(strings.NewReader("a,b\n1,2\n3\n5,6\n7\n"), "t", FileTypeCSV).
-			WithMalformedRowPolicy(MalformedRowSkip).
-			Build(context.Background())
+		b, err := buildForTest(
+
+			context.Background(), NewBuilder().
+				AddReader(strings.NewReader("a,b\n1,2\n3\n5,6\n7\n"), "t", FileTypeCSV).
+				WithMalformedRowPolicy(MalformedRowSkip))
+
 		if err != nil {
 			t.Fatalf("build failed: %v", err)
 		}
@@ -91,10 +95,12 @@ func TestSkippedRowsReportsWhatWasDropped(t *testing.T) {
 	t.Run("an import that dropped nothing reports nothing", func(t *testing.T) {
 		t.Parallel()
 
-		b, err := NewBuilder().
-			AddReader(strings.NewReader("a,b\n1,2\n3,4\n"), "t", FileTypeCSV).
-			WithMalformedRowPolicy(MalformedRowSkip).
-			Build(context.Background())
+		b, err := buildForTest(
+
+			context.Background(), NewBuilder().
+				AddReader(strings.NewReader("a,b\n1,2\n3,4\n"), "t", FileTypeCSV).
+				WithMalformedRowPolicy(MalformedRowSkip))
+
 		if err != nil {
 			t.Fatalf("build failed: %v", err)
 		}
@@ -146,7 +152,7 @@ func TestMalformedRowPolicy_Stop(t *testing.T) {
 		t.Parallel()
 		const csv = "id,name,zip\n1,alice,01234\n3,caro\n"
 		// No WithMalformedRowPolicy call: the zero value must behave as stop.
-		b, err := NewBuilder().AddReader(strings.NewReader(csv), "t", FileTypeCSV).Build(context.Background())
+		b, err := buildForTest(context.Background(), NewBuilder().AddReader(strings.NewReader(csv), "t", FileTypeCSV))
 		if err != nil {
 			t.Fatalf("build failed: %v", err)
 		}
@@ -301,7 +307,7 @@ func TestXLSXIgnoresTheMalformedRowPolicy(t *testing.T) {
 		t.Run(policy.String(), func(t *testing.T) {
 			t.Parallel()
 
-			built, err := NewBuilder().AddPath(path).WithMalformedRowPolicy(policy).Build(ctx)
+			built, err := buildForTest(ctx, NewBuilder().AddPath(path).WithMalformedRowPolicy(policy))
 			require.NoError(t, err)
 			db, err := built.Open(ctx)
 			if db != nil {
@@ -321,9 +327,12 @@ func TestMalformedRowFillRefusesALongRecord(t *testing.T) {
 
 	ctx := context.Background()
 
-	built, err := NewBuilder().
-		AddReader(strings.NewReader("a,b,c\n1,2\n"), "short", FileTypeCSV).
-		WithMalformedRowPolicy(MalformedRowFill).Build(ctx)
+	built, err := buildForTest(
+
+		ctx, NewBuilder().
+			AddReader(strings.NewReader("a,b,c\n1,2\n"), "short", FileTypeCSV).
+			WithMalformedRowPolicy(MalformedRowFill))
+
 	require.NoError(t, err)
 	db, err := built.Open(ctx)
 	require.NoError(t, err, "a short record is padded")
@@ -332,9 +341,12 @@ func TestMalformedRowFillRefusesALongRecord(t *testing.T) {
 	assert.Equal(t, "", c, "the missing cell is the empty string")
 	require.NoError(t, db.Close())
 
-	built, err = NewBuilder().
-		AddReader(strings.NewReader("a\n1,2\n"), "long", FileTypeCSV).
-		WithMalformedRowPolicy(MalformedRowFill).Build(ctx)
+	built, err = buildForTest(
+
+		ctx, NewBuilder().
+			AddReader(strings.NewReader("a\n1,2\n"), "long", FileTypeCSV).
+			WithMalformedRowPolicy(MalformedRowFill))
+
 	require.NoError(t, err)
 	db, err = built.Open(ctx)
 	if db != nil {

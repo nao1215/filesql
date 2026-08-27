@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Breaking Changes
+
+- `DBBuilder.Build` is removed ([#694](https://github.com/nao1215/filesql/issues/694)). v0.49.0 deprecated it, because `Open`, `OpenReadOnly`, `LoadInto` and `LoadIntoTx` validate the builder themselves; this release drops it. Migration: delete the `Build` call and the error check that followed it, and call the terminal method on the builder -- `filesql.NewBuilder().AddPath("users.csv").Open(ctx)` in place of `Build` then `Open`. The errors are the same ones `Build` reported, from the method that now reports them, and `SkippedRows` is read from the builder, which is what `Build` was handing back. A caller who wants the validation without loading anything has `OpenReadOnly` followed by a close, which validates the same inputs and reads nothing until a query asks for it.
+
 ## [0.49.0] - 2026-08-27
 
 ### Breaking Changes

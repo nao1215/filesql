@@ -72,10 +72,12 @@ func TestDBBuilderWithLogger(t *testing.T) {
 		require.NoError(t, os.WriteFile(csvFile, []byte("a,b\n1,2\n3,4"), 0o600))
 
 		ctx := context.Background()
-		validated, err := NewBuilder().
-			WithLogger(debugLogger(buf)).
-			AddPath(csvFile).
-			Build(ctx)
+		validated, err := buildForTest(
+
+			ctx, NewBuilder().
+				WithLogger(debugLogger(buf)).
+				AddPath(csvFile))
+
 		require.NoError(t, err)
 
 		db, err := validated.Open(ctx)
@@ -94,10 +96,12 @@ func TestDBBuilderWithLogger(t *testing.T) {
 
 		buf := &bytes.Buffer{}
 		ctx := context.Background()
-		validated, err := NewBuilder().
-			WithLogger(debugLogger(buf)).
-			AddReader(strings.NewReader("a,b\n1,2"), "test_table", FileTypeCSV).
-			Build(ctx)
+		validated, err := buildForTest(
+
+			ctx, NewBuilder().
+				WithLogger(debugLogger(buf)).
+				AddReader(strings.NewReader("a,b\n1,2"), "test_table", FileTypeCSV))
+
 		require.NoError(t, err)
 
 		db, err := validated.Open(ctx)
@@ -119,10 +123,12 @@ func TestDBBuilderWithLogger(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 		ctx := context.Background()
-		validated, err := NewBuilder().
-			WithLogger(logger).
-			AddReader(strings.NewReader("a,b\n1,2"), "quiet", FileTypeCSV).
-			Build(ctx)
+		validated, err := buildForTest(
+
+			ctx, NewBuilder().
+				WithLogger(logger).
+				AddReader(strings.NewReader("a,b\n1,2"), "quiet", FileTypeCSV))
+
 		require.NoError(t, err)
 
 		db, err := validated.Open(ctx)

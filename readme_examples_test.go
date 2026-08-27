@@ -52,14 +52,9 @@ Bob,bob@example.com,user
 	}
 
 	ctx := context.Background()
-	validatedBuilder, err := filesql.NewBuilder().
+	db, err := filesql.NewBuilder().
 		AddReader(strings.NewReader(string(cleaned)), "users", filesql.FileTypeCSV).
-		Build(ctx)
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
-
-	db, err := validatedBuilder.Open(ctx)
+		Open(ctx)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}

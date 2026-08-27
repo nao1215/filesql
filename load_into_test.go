@@ -78,7 +78,7 @@ func TestDBBuilder_LoadIntoTxUsesCallerTransaction(t *testing.T) {
 	tx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
 
-	builder, err := NewBuilder().AddPath(path).Build(context.Background())
+	builder, err := buildForTest(context.Background(), NewBuilder().AddPath(path))
 	require.NoError(t, err)
 	require.NoError(t, builder.LoadIntoTx(context.Background(), tx))
 
@@ -93,7 +93,7 @@ func TestDBBuilder_LoadIntoTxUsesCallerTransaction(t *testing.T) {
 
 func TestDBBuilder_LoadIntoTxACHIsDumpableOnlyAfterCommit(t *testing.T) {
 	db := newCallerDB(t)
-	builder, err := NewBuilder().AddPath(filepath.Join("testdata", "ppd-debit.ach")).Build(context.Background())
+	builder, err := buildForTest(context.Background(), NewBuilder().AddPath(filepath.Join("testdata", "ppd-debit.ach")))
 	require.NoError(t, err)
 	tx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
@@ -109,10 +109,12 @@ func TestDBBuilder_LoadIntoTxDiscardsACHMetadataOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	bad := writeTempCSV(t, dir, "broken.json", "[")
 	db := newCallerDB(t)
-	builder, err := NewBuilder().
-		AddPath(filepath.Join("testdata", "ppd-debit.ach")).
-		AddPath(bad).
-		Build(context.Background())
+	builder, err := buildForTest(
+
+		context.Background(), NewBuilder().
+			AddPath(filepath.Join("testdata", "ppd-debit.ach")).
+			AddPath(bad))
+
 	require.NoError(t, err)
 	tx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
@@ -125,10 +127,12 @@ func TestDBBuilder_LoadIntoTxDiscardsFedwireMetadataOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	bad := writeTempCSV(t, dir, "broken.json", "[")
 	db := newCallerDB(t)
-	builder, err := NewBuilder().
-		AddPath(filepath.Join("testdata", "customer-transfer.fed")).
-		AddPath(bad).
-		Build(context.Background())
+	builder, err := buildForTest(
+
+		context.Background(), NewBuilder().
+			AddPath(filepath.Join("testdata", "customer-transfer.fed")).
+			AddPath(bad))
+
 	require.NoError(t, err)
 	tx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
@@ -287,9 +291,11 @@ func TestLoadInto_PreservesTypeInference(t *testing.T) {
 
 func TestLoadInto_BuilderReaders(t *testing.T) {
 	db := newCallerDB(t)
-	builder, err := NewBuilder().
-		AddReader(strings.NewReader("id,v\n1,x\n2,y\n"), "from_reader", FileTypeCSV).
-		Build(context.Background())
+	builder, err := buildForTest(
+
+		context.Background(), NewBuilder().
+			AddReader(strings.NewReader("id,v\n1,x\n2,y\n"), "from_reader", FileTypeCSV))
+
 	require.NoError(t, err)
 	require.NoError(t, builder.LoadInto(context.Background(), db))
 
@@ -328,10 +334,12 @@ func TestLoadInto_Errors(t *testing.T) {
 
 	t.Run("auto-save configured is rejected", func(t *testing.T) {
 		db := newCallerDB(t)
-		builder, err := NewBuilder().
-			AddPath(filepath.Join("testdata", "sample.csv")).
-			EnableAutoSave(t.TempDir()).
-			Build(context.Background())
+		builder, err := buildForTest(
+
+			context.Background(), NewBuilder().
+				AddPath(filepath.Join("testdata", "sample.csv")).
+				EnableAutoSave(t.TempDir()))
+
 		require.NoError(t, err)
 		err = builder.LoadInto(context.Background(), db)
 		require.Error(t, err)
@@ -340,9 +348,11 @@ func TestLoadInto_Errors(t *testing.T) {
 
 func TestLoadInto_DoesNotLeakReplaceModeToBuilder(t *testing.T) {
 	db := newCallerDB(t)
-	builder, err := NewBuilder().
-		AddPath(filepath.Join("testdata", "sample.csv")).
-		Build(context.Background())
+	builder, err := buildForTest(
+
+		context.Background(), NewBuilder().
+			AddPath(filepath.Join("testdata", "sample.csv")))
+
 	require.NoError(t, err)
 	require.NoError(t, builder.LoadInto(context.Background(), db))
 
@@ -495,7 +505,7 @@ func TestLoadInto_FailedXLSXLeavesTheDatabaseAsItWas(t *testing.T) {
 	t.Run("no prior table", func(t *testing.T) {
 		t.Parallel()
 		db := newCallerDB(t)
-		builder, err := NewBuilder().AddPath(path).Build(context.Background())
+		builder, err := buildForTest(context.Background(), NewBuilder().AddPath(path))
 		require.NoError(t, err)
 		require.Error(t, builder.LoadInto(context.Background(), db))
 		assert.Empty(t, listTables(t, db), "a workbook that failed partway left a sheet's table behind")
@@ -508,7 +518,7 @@ func TestLoadInto_FailedXLSXLeavesTheDatabaseAsItWas(t *testing.T) {
 		require.NoError(t, err)
 		_, err = db.ExecContext(context.Background(), `INSERT INTO book_good VALUES ('precious')`)
 		require.NoError(t, err)
-		builder, err := NewBuilder().AddPath(path).Build(context.Background())
+		builder, err := buildForTest(context.Background(), NewBuilder().AddPath(path))
 		require.NoError(t, err)
 		require.Error(t, builder.LoadInto(context.Background(), db))
 		var kept string
@@ -524,7 +534,7 @@ func TestLoadInto_FailedXLSXLeavesTheDatabaseAsItWas(t *testing.T) {
 		require.NoError(t, err)
 		_, err = db.ExecContext(context.Background(), `INSERT INTO book_good VALUES ('precious')`)
 		require.NoError(t, err)
-		builder, err := NewBuilder().AddPath(path).Build(context.Background())
+		builder, err := buildForTest(context.Background(), NewBuilder().AddPath(path))
 		require.NoError(t, err)
 		tx, err := db.BeginTx(context.Background(), nil)
 		require.NoError(t, err)
@@ -578,7 +588,7 @@ func TestLoadIntoTx_FailedInputLeavesCallersTable(t *testing.T) {
 			} else {
 				builder = builder.AddPath(writeTempCSV(t, t.TempDir(), "tbl.csv", content))
 			}
-			built, err := builder.Build(context.Background())
+			built, err := buildForTest(context.Background(), builder)
 			require.NoError(t, err)
 
 			tx, err := db.BeginTx(context.Background(), nil)
@@ -621,7 +631,7 @@ func TestLoadIntoTx_CanceledLoadLeavesCallersTable(t *testing.T) {
 	_, err = db.ExecContext(context.Background(), `INSERT INTO tbl VALUES ('keep-me')`)
 	require.NoError(t, err)
 
-	builder, err := NewBuilder().AddPath(path).SetDefaultChunkSize(100).Build(context.Background())
+	builder, err := buildForTest(context.Background(), NewBuilder().AddPath(path).SetDefaultChunkSize(100))
 	require.NoError(t, err)
 
 	tx, err := db.BeginTx(context.Background(), nil)
@@ -661,7 +671,7 @@ func TestLoadIntoTx_CanceledContextTheTransactionWasBuiltOn(t *testing.T) {
 	path := writeTempCSV(t, t.TempDir(), "tbl.csv", body.String())
 
 	db := newCallerDB(t)
-	builder, err := NewBuilder().AddPath(path).SetDefaultChunkSize(100).Build(context.Background())
+	builder, err := buildForTest(context.Background(), NewBuilder().AddPath(path).SetDefaultChunkSize(100))
 	require.NoError(t, err)
 
 	// The context is cancelled after the transaction has begun rather than by a

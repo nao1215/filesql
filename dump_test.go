@@ -1311,7 +1311,7 @@ func TestDumpDatabaseFollowsASymlink(t *testing.T) {
 		t.Skipf("this platform does not allow a symlink to be created: %v", err)
 	}
 
-	validated, err := NewBuilder().AddPath(src).Build(t.Context())
+	validated, err := buildForTest(t.Context(), NewBuilder().AddPath(src))
 	require.NoError(t, err)
 	db, err := validated.Open(t.Context())
 	require.NoError(t, err)
@@ -1473,9 +1473,11 @@ func TestUsableAsFileNameRejectsWhatTheDumpCannotReach(t *testing.T) {
 func loadOneTable(t *testing.T, table string) (*sql.DB, string) {
 	t.Helper()
 
-	validated, err := NewBuilder().
-		AddReader(strings.NewReader("v\n1\n"), table, FileTypeCSV).
-		Build(t.Context())
+	validated, err := buildForTest(
+
+		t.Context(), NewBuilder().
+			AddReader(strings.NewReader("v\n1\n"), table, FileTypeCSV))
+
 	require.NoError(t, err)
 	db, err := validated.Open(t.Context())
 	require.NoError(t, err)

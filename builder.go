@@ -434,20 +434,6 @@ func (b *DBBuilder) usesDialectTranslation() bool {
 	return b.sqlDialect != "" && b.sqlDialect != dialect.SQLite
 }
 
-// Build validates all configured inputs and prepares the builder for opening a
-// database.
-//
-// Deprecated: Open, OpenReadOnly, LoadInto and LoadIntoTx validate the inputs
-// themselves, so call one of those directly. Build is kept so existing
-// two-step callers keep working, and validating twice costs nothing but the
-// validation.
-func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
-	if err := b.build(ctx); err != nil {
-		return nil, err
-	}
-	return b, nil
-}
-
 // build validates all configured inputs and prepares the builder for opening a
 // database. It performs the following operations:
 //

@@ -331,7 +331,7 @@ id:3	product:Keyboard	price:75`
 			AddReader(strings.NewReader(tsvData), "departments", FileTypeTSV).
 			AddReader(strings.NewReader(ltsvData), "products", FileTypeLTSV)
 
-		validatedBuilder, err := builder.Build(context.Background())
+		validatedBuilder, err := buildForTest(context.Background(), builder)
 		require.NoError(t, err, "Build failed")
 
 		db, err := validatedBuilder.Open(context.Background())
@@ -382,7 +382,7 @@ id:3	product:Keyboard	price:75`
 		testFS := os.DirFS(filepath.Join("testdata", "embed_test"))
 
 		builder := NewBuilder().AddFS(testFS)
-		validatedBuilder, err := builder.Build(context.Background())
+		validatedBuilder, err := buildForTest(context.Background(), builder)
 		require.NoError(t, err, "Build with FS failed")
 
 		db, err := validatedBuilder.Open(context.Background())
@@ -445,7 +445,7 @@ id:3	product:Keyboard	price:75`
 			AddPath(filepath.Join("testdata", "benchmark", "customers100000.csv")).
 			SetDefaultChunkSize(500) // 500 rows per chunk for testing
 
-		validatedBuilder, err := builder.Build(context.Background())
+		validatedBuilder, err := buildForTest(context.Background(), builder)
 		require.NoError(t, err, "Build with large file failed")
 
 		db, err := validatedBuilder.Open(context.Background())
@@ -523,7 +523,7 @@ id:3	product:Keyboard	price:75`
 		}
 
 		builder := NewBuilder().AddPaths(compressedFiles...)
-		validatedBuilder, err := builder.Build(context.Background())
+		validatedBuilder, err := buildForTest(context.Background(), builder)
 		require.NoError(t, err, "Build with compressed files failed")
 
 		db, err := validatedBuilder.Open(context.Background())
@@ -595,7 +595,7 @@ id:3	product:Keyboard	price:75`
 			AddPath(filepath.Join("testdata", "users.csv")).
 			EnableAutoSave(tempDir, NewDumpOptions().WithFormat(OutputFormatCSV))
 
-		validatedBuilder, err := builder.Build(context.Background())
+		validatedBuilder, err := buildForTest(context.Background(), builder)
 		require.NoError(t, err, "Build with auto-save failed")
 
 		db, err := validatedBuilder.Open(context.Background())
@@ -655,7 +655,7 @@ id:3	product:Keyboard	price:75`
 			AddFS(testFS).                                                       // embed.FS
 			AddPath(filepath.Join("testdata", "sample2.csv"))                    // Different file to avoid table name conflict
 
-		validatedBuilder, err := builder.Build(context.Background())
+		validatedBuilder, err := buildForTest(context.Background(), builder)
 		require.NoError(t, err, "Build with mixed sources failed")
 
 		db, err := validatedBuilder.Open(context.Background())
@@ -3670,7 +3670,7 @@ func TestEdgeCasesReaderInput(t *testing.T) {
 			builder := NewBuilder().AddReader(reader, "test_table", tt.fileType)
 
 			ctx := context.Background()
-			validatedBuilder, err := builder.Build(ctx)
+			validatedBuilder, err := buildForTest(ctx, builder)
 
 			if tt.expectedErr {
 				if err == nil {
@@ -4223,9 +4223,11 @@ func TestTableNameHoldingAQuotingCharacter(t *testing.T) {
 			t.Parallel()
 
 			ctx := t.Context()
-			validated, err := NewBuilder().
-				AddReader(strings.NewReader("v\n1\n2\n"), tt.table, FileTypeCSV).
-				Build(ctx)
+			validated, err := buildForTest(
+
+				ctx, NewBuilder().
+					AddReader(strings.NewReader("v\n1\n2\n"), tt.table, FileTypeCSV))
+
 			require.NoError(t, err)
 			db, err := validated.Open(ctx)
 			require.NoError(t, err, "a name SQLite accepts must load")

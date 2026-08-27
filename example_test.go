@@ -1721,9 +1721,7 @@ func ExampleNewBuilder() {
 
 	// In real usage, you would continue with:
 	// ctx := context.Background()
-	// validatedBuilder, err := builder.Build(ctx)
-	// if err != nil { return err }
-	// db, err := validatedBuilder.Open(ctx)
+	// db, err := builder.Open(ctx)
 	// if err != nil { return err }
 	// defer db.Close()
 
@@ -1757,9 +1755,7 @@ func ExampleDBBuilder_EnableAutoSave() {
 		AddPath(csvPath).
 		EnableAutoSave(outputDir, filesql.NewDumpOptions()) // Save to backup directory on close
 
-	validatedBuilder, _ := builder.Build(ctx)
-
-	db, _ := validatedBuilder.Open(ctx)
+	db, _ := builder.Open(ctx)
 
 	// Modify data - this will be automatically saved when db.Close() is called
 	_, _ = db.ExecContext(ctx, "INSERT INTO employees (name, department, salary) VALUES ('Charlie', 'Sales', 70000)")
@@ -1800,9 +1796,7 @@ func ExampleDBBuilder_EnableAutoSaveOnCommit() {
 		AddPath(csvPath).
 		EnableAutoSaveOnCommit(tempDir, filesql.NewDumpOptions()) // Save to temp directory on each commit
 
-	validatedBuilder, _ := builder.Build(ctx)
-
-	db, _ := validatedBuilder.Open(ctx)
+	db, _ := builder.Open(ctx)
 	defer func() { _ = db.Close() }()
 
 	// Start transaction
@@ -1835,12 +1829,8 @@ func ExampleDBBuilder_AddPath() {
 
 	// Build and open database
 	ctx := context.Background()
-	validatedBuilder, err := builder.Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
 
-	db, err := validatedBuilder.Open(ctx)
+	db, err := builder.Open(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1884,12 +1874,8 @@ func ExampleDBBuilder_AddPaths() {
 	builder := filesql.NewBuilder().AddPaths(usersFile, productsFile)
 
 	ctx := context.Background()
-	validatedBuilder, err := builder.Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
 
-	db, err := validatedBuilder.Open(ctx)
+	db, err := builder.Open(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1932,12 +1918,8 @@ func ExampleDBBuilder_AddFS() {
 	builder := filesql.NewBuilder().AddFS(mockFS)
 
 	ctx := context.Background()
-	validatedBuilder, err := builder.Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
 
-	db, err := validatedBuilder.Open(ctx)
+	db, err := builder.Open(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1978,12 +1960,8 @@ func ExampleDBBuilder_AddFS_embedFS() {
 	builder := filesql.NewBuilder().AddFS(subFS)
 
 	ctx := context.Background()
-	validatedBuilder, err := builder.Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
 
-	db, err := validatedBuilder.Open(ctx)
+	db, err := builder.Open(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -2011,29 +1989,6 @@ func ExampleDBBuilder_AddFS_embedFS() {
 }
 
 //nolint:errcheck // Examples don't need full error handling
-func ExampleDBBuilder_Build() {
-	// Create temporary CSV file
-	tempDir, _ := os.MkdirTemp("", "filesql-example")
-	defer os.RemoveAll(tempDir)
-
-	csvFile := filepath.Join(tempDir, "data.csv")
-	content := "name,value\ntest,123\n"
-	os.WriteFile(csvFile, []byte(content), 0644)
-
-	// Build validates inputs and prepares for opening
-	builder := filesql.NewBuilder().AddPath(csvFile)
-
-	ctx := context.Background()
-	validatedBuilder, err := builder.Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Printf("Builder validated successfully: %t\n", validatedBuilder != nil)
-	// Output: Builder validated successfully: true
-}
-
-//nolint:errcheck // Examples don't need full error handling
 func ExampleDBBuilder_Open() {
 	// Create temporary CSV file
 	tempDir, _ := os.MkdirTemp("", "filesql-example")
@@ -2047,12 +2002,8 @@ func ExampleDBBuilder_Open() {
 	builder := filesql.NewBuilder().AddPath(csvFile)
 
 	ctx := context.Background()
-	validatedBuilder, err := builder.Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
 
-	db, err := validatedBuilder.Open(ctx)
+	db, err := builder.Open(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -2104,14 +2055,10 @@ func ExampleDBBuilder_chaining() {
 
 	// Demonstrate method chaining
 	ctx := context.Background()
-	db, err := filesql.NewBuilder().
+	db := filesql.NewBuilder().
 		AddPath(csvFile).
 		AddPaths(tsvFile).
-		AddFS(mockFS).
-		Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
+		AddFS(mockFS)
 
 	connection, err := db.Open(ctx)
 	if err != nil {
@@ -2142,25 +2089,24 @@ func ExampleDBBuilder_chaining() {
 
 //nolint:errcheck // Examples don't need full error handling
 func ExampleDBBuilder_errorHandling() {
-	// Example 1: Build without inputs should fail
-	builder := filesql.NewBuilder()
 	ctx := context.Background()
 
-	_, err := builder.Build(ctx)
+	// Example 1: a builder with no input at all
+	_, err := filesql.NewBuilder().Open(ctx)
 	if err != nil {
 		fmt.Printf("Expected error for no inputs: %v\n", err)
 	}
 
-	// Example 2: Open without Build should fail
-	builder2 := filesql.NewBuilder().AddPath("nonexistent.csv")
-	_, err = builder2.Open(ctx)
+	// Example 2: a file that does not exist
+	_, err = filesql.NewBuilder().AddPath("nonexistent.csv").Open(ctx)
 	if err != nil {
-		fmt.Println("Expected error for Open without Build")
+		fmt.Println("Expected error for a file that does not exist")
 	}
 
-	// Example 3: Non-existent file should fail during Build
-	builder3 := filesql.NewBuilder().AddPath(filepath.Join("nonexistent", "file.csv"))
-	_, err = builder3.Build(ctx)
+	// Example 3: a directory that does not exist
+	_, err = filesql.NewBuilder().
+		AddPath(filepath.Join("nonexistent", "file.csv")).
+		Open(ctx)
 	if err != nil {
 		fmt.Println("Expected error for non-existent file")
 	}
@@ -2172,13 +2118,7 @@ func ExampleDBBuilder_errorHandling() {
 	csvFile := filepath.Join(tempDir, "valid.csv")
 	os.WriteFile(csvFile, []byte("id,name\n1,test\n"), 0644)
 
-	builder4 := filesql.NewBuilder().AddPath(csvFile)
-	validatedBuilder, err := builder4.Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	db, err := validatedBuilder.Open(ctx)
+	db, err := filesql.NewBuilder().AddPath(csvFile).Open(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -2187,7 +2127,7 @@ func ExampleDBBuilder_errorHandling() {
 	fmt.Println("Success: Valid file loaded correctly")
 
 	// Output: Expected error for no inputs: filesql: no supported files found: at least one path must be provided
-	// Expected error for Open without Build
+	// Expected error for a file that does not exist
 	// Expected error for non-existent file
 	// Success: Valid file loaded correctly
 }
@@ -2211,13 +2151,9 @@ func ExampleDBBuilder_AddReader() {
 		SetDefaultChunkSize(5000)                            // Set 5000 rows per chunk for large data
 
 	// Build validates the input
-	validatedBuilder, err := builder.Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	// Open creates the database connection
-	db, err := validatedBuilder.Open(ctx)
+	db, err := builder.Open(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -2280,12 +2216,7 @@ func ExampleDBBuilder_AddReader_compressed() {
 	builder := filesql.NewBuilder().
 		AddReader(reader, "products", filesql.FileTypeTSV, filesql.WithCompression(filesql.CompressionGZ))
 
-	validatedBuilder, err := builder.Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	db, err := validatedBuilder.Open(ctx)
+	db, err := builder.Open(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -2322,12 +2253,7 @@ func ExampleDBBuilder_AddReader_multiple() {
 		AddReader(strings.NewReader(ordersCSV), "orders", filesql.FileTypeCSV).
 		SetDefaultChunkSize(2500) // 2500 rows per chunk
 
-	validatedBuilder, err := builder.Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	db, err := validatedBuilder.Open(ctx)
+	db, err := builder.Open(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}

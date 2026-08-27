@@ -705,9 +705,11 @@ func TestUTF16RoundTripKeepsAstralCharacters(t *testing.T) {
 		t.Run(enc.String(), func(t *testing.T) {
 			t.Parallel()
 
-			built, err := NewBuilder().
-				AddReader(strings.NewReader("v\n"+want+"\n"), "t", FileTypeCSV).
-				Build(ctx)
+			built, err := buildForTest(
+
+				ctx, NewBuilder().
+					AddReader(strings.NewReader("v\n"+want+"\n"), "t", FileTypeCSV))
+
 			require.NoError(t, err)
 			db, err := built.Open(ctx)
 			require.NoError(t, err)
