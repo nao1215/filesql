@@ -184,6 +184,39 @@ const inputSavepoint = `"_filesql_input"`
 // leaves it exactly as the input found it, which is what lets the caller keep
 // using it after a failure.
 func (sp *streamProcessor) runInputScope(ctx context.Context, db dbtx, kind inputKind, load func(*sql.Tx) error) error {
+	return withContextError(ctx, sp.runInput(ctx, db, kind, load))
+}
+
+// withContextError attaches the caller's context error to a load that failed
+// while that context was done, so what the caller branches on is there every
+// time the same thing happened.
+//
+// A load runs its statements under the caller's context, and when the context
+// ends database/sql tears the transaction down from a goroutine of its own.
+// Which of the two a statement meets is a race: reach it first and the driver
+// answers the context error, reach it after and database/sql answers "sql:
+// statement is closed" about a statement the caller never held, or "sql:
+// transaction has already been committed or rolled back". All of them mean the
+// caller's context ended. The cause is kept rather than replaced, because it is
+// what the load was doing and the only thing that says where it stopped, and it
+// is wrapped rather than joined so the message stays one line for a log.
+//
+// A failure that is not about the context, under a context that is still alive,
+// gains nothing: that is what the ctx.Err() check is for.
+func withContextError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	ctxErr := ctx.Err()
+	if ctxErr == nil || errors.Is(err, ctxErr) {
+		return err
+	}
+	return fmt.Errorf("%w (%w)", err, ctxErr)
+}
+
+// runInput runs one input under a transaction of its own or under a savepoint
+// of the caller's, depending on what it was handed.
+func (sp *streamProcessor) runInput(ctx context.Context, db dbtx, kind inputKind, load func(*sql.Tx) error) error {
 	switch d := db.(type) {
 	case *sql.DB:
 		if kind == spentInput {
@@ -322,12 +355,8 @@ func retryWhileLockedFor(ctx context.Context, budget, wallBudget time.Duration, 
 		// What ended the wait is asked here rather than in the select, because
 		// both of its cases can be ready at once and it picks either: asking
 		// there let a canceled load pay for one more attempt before it answered.
-		// The load stopped because the caller's context stopped, and that is what
-		// the caller branches on. The lock is joined rather than replaced,
-		// because it is what the load was waiting for and the only thing that
-		// says why the context ran out.
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return errors.Join(err, ctxErr)
+		if ctx.Err() != nil {
+			return withContextError(ctx, err)
 		}
 		if wait *= 2; wait > loadLockCeiling {
 			wait = loadLockCeiling
