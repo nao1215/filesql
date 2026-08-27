@@ -1719,6 +1719,52 @@ func TestBlankCellInNumericColumnIsNull(t *testing.T) {
 			wantNull: false,
 			wantMax:  "2024-03-04",
 		},
+		{
+			// A cell of whitespace says nothing about the column's type, which
+			// is why the column is still INTEGER, so it says nothing about its
+			// value either. It used to reach the column as the spaces, where
+			// MAX answered them rather than the largest number.
+			name:     "an integer column with a cell of one space",
+			body:     "region,amount\nnorth,10\nsouth, \neast,30\n",
+			declared: sqlTypeInteger,
+			wantNull: true,
+			wantMax:  int64(30),
+		},
+		{
+			name:     "an integer column with a cell of several spaces",
+			body:     "region,amount\nnorth,10\nsouth,   \neast,30\n",
+			declared: sqlTypeInteger,
+			wantNull: true,
+			wantMax:  int64(30),
+		},
+		{
+			name:     "an integer column with a cell of a tab",
+			body:     "region,amount\nnorth,10\nsouth,\"\t\"\neast,30\n",
+			declared: sqlTypeInteger,
+			wantNull: true,
+			wantMax:  int64(30),
+		},
+		{
+			name:     "a real column with a cell of whitespace",
+			body:     "region,amount\nnorth,10.5\nsouth,  \neast,30.5\n",
+			declared: sqlTypeReal,
+			wantNull: true,
+			wantMax:  30.5,
+		},
+		{
+			name:     "a text column keeps a cell of whitespace",
+			body:     "region,label\nnorth,x\nsouth,  \neast,z\n",
+			declared: sqlTypeText,
+			wantNull: false,
+			wantMax:  "z",
+		},
+		{
+			name:     "a datetime column keeps a cell of whitespace",
+			body:     "region,seen\nnorth,2024-01-02\nsouth, \neast,2024-03-04\n",
+			declared: sqlTypeText,
+			wantNull: false,
+			wantMax:  "2024-03-04",
+		},
 	}
 
 	for _, tt := range tests {

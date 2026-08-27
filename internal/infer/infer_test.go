@@ -165,6 +165,54 @@ func TestColumn_TypeHoldsEveryValue(t *testing.T) {
 	}
 }
 
+// TestIsBlank pins what a cell holding no value is. The load asks the same
+// question when it decides whether a cell binds as NULL, so a cell this calls
+// blank and the load does not would sit in a number column as text, where
+// SQLite orders it above every number.
+func TestIsBlank(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "an empty cell", value: "", want: true},
+		{name: "one space", value: " ", want: true},
+		{name: "several spaces", value: "   ", want: true},
+		{name: "a tab", value: "\t", want: true},
+		{name: "a newline", value: "\n", want: true},
+		{name: "mixed whitespace", value: " \t\r\n ", want: true},
+		{name: "a number", value: "5", want: false},
+		{name: "a padded number", value: " 5 ", want: false},
+		{name: "a word", value: "abc", want: false},
+		{name: "a zero", value: "0", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, IsBlank(tt.value), "IsBlank(%q)", tt.value)
+		})
+	}
+}
+
+// TestColumnIgnoresBlankCells pins that a blank cell says nothing about the
+// column it sits in, whichever spelling of blank it is: a column of numbers
+// with one cell of spaces is a number column, which is why the load has to
+// store that cell as NULL rather than as the spaces.
+func TestColumnIgnoresBlankCells(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, Integer, Column([]string{"1", " ", "3"}))
+	assert.Equal(t, Integer, Column([]string{"1", "", "3"}))
+	assert.Equal(t, Real, Column([]string{"1.5", "\t", "3.5"}))
+	// A padded number is not blank and is not a number either: the padding is
+	// data, so the column stays text.
+	assert.Equal(t, Text, Column([]string{"1", " 5 ", "3"}))
+}
+
 func TestEvidence_OrderDoesNotMatter(t *testing.T) {
 	t.Parallel()
 
