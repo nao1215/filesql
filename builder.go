@@ -18,16 +18,13 @@ import (
 //
 // Basic usage:
 //
-//	builder := filesql.NewBuilder().
+//	db, err := filesql.NewBuilder().
 //		AddPath("data.csv").
-//		AddPath("users.tsv")
-//
-//	validatedBuilder, err := builder.Build(ctx)
+//		AddPath("users.tsv").
+//		Open(ctx)
 //	if err != nil {
 //		return err
 //	}
-//
-//	db, err := validatedBuilder.Open(ctx)
 //	defer db.Close()
 //
 // Supports:
@@ -65,6 +62,12 @@ type DBBuilder struct {
 	excelSheetPolicy ExcelSheetPolicy
 	// logger is the logger instance for internal logging
 	logger *slog.Logger
+	// built records that build has run and succeeded, so the terminal methods
+	// can validate on their own without a second build repeating the work
+	// build does that is not idempotent: it appends the readers derived from
+	// every AddFS filesystem to readers, which done twice loads every file of
+	// that filesystem twice.
+	built bool
 
 	// Internal processors for handling different responsibilities
 	validator       *validator
@@ -398,13 +401,6 @@ func (b *DBBuilder) EnableAutoSaveOnCommit(outputDir string, options ...DumpOpti
 	return b
 }
 
-// DisableAutoSave disables automatic saving (default behavior).
-// Returns the builder for method chaining.
-func (b *DBBuilder) DisableAutoSave() *DBBuilder {
-	b.autoSaveConfig = nil
-	return b
-}
-
 // WithDialect sets the SQL dialect accepted by the database returned from Open
 // and OpenReadOnly. Queries are translated from the given dialect to SQLite
 // before execution; see the dialect package for the supported translations and
@@ -414,7 +410,7 @@ func (b *DBBuilder) DisableAutoSave() *DBBuilder {
 // regardless of this setting, so only the queries a caller runs are affected.
 // The default is dialect.SQLite, which performs no translation.
 //
-// Constraints (enforced by Build):
+// Constraints (enforced when the database is opened or loaded):
 //   - The dialect must be one of the built-in dialects; see dialect.Dialects.
 //   - A non-SQLite dialect cannot be combined with auto-save; the two connector
 //     wrappers are not composed in this version.
@@ -424,7 +420,7 @@ func (b *DBBuilder) DisableAutoSave() *DBBuilder {
 //	db, err := filesql.NewBuilder().
 //		AddPath("users.csv").
 //		WithDialect(dialect.PostgreSQL).
-//		Build(ctx)
+//		Open(ctx)
 //	// ... db.Query("SELECT name::text FROM users WHERE name ILIKE 'a%'")
 //
 // Returns the builder for method chaining.
@@ -438,64 +434,86 @@ func (b *DBBuilder) usesDialectTranslation() bool {
 	return b.sqlDialect != "" && b.sqlDialect != dialect.SQLite
 }
 
-// Build validates all configured inputs and prepares the builder for opening a database.
-// This method must be called before Open(). It performs the following operations:
+// Build validates all configured inputs and prepares the builder for opening a
+// database.
+//
+// Deprecated: Open, OpenReadOnly, LoadInto and LoadIntoTx validate the inputs
+// themselves, so call one of those directly. Build is kept so existing
+// two-step callers keep working, and validating twice costs nothing but the
+// validation.
+func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
+	if err := b.build(ctx); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// build validates all configured inputs and prepares the builder for opening a
+// database. It performs the following operations:
 //
 // 1. Validates that at least one input source is configured
 // 2. Checks existence and format of all file paths
 // 3. Processes embedded filesystems by converting files to streaming readers
 // 4. Validates that all files have supported extensions
 //
-// After successful validation, the builder is ready to create database connections
-// with Open(). The context is used for file operations and can be used for cancellation.
-//
-// Returns the same builder instance for method chaining, or an error if validation fails.
-func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
+// It runs once per builder: the second call returns immediately, because the
+// third step adds to readers and repeating it would load every file of an
+// added filesystem a second time. Nothing it derives reaches the builder until
+// every check has passed, so a build that failed and is tried again -- after
+// the caller created the file that was missing, say -- starts from the inputs
+// the caller registered rather than from what the failed attempt left behind.
+// The context is used for file operations and can be used for cancellation.
+func (b *DBBuilder) build(ctx context.Context) error {
+	if b.built {
+		return nil
+	}
+
 	b.logger.Debug("starting build", "paths", len(b.paths), "filesystems", len(b.filesystems), "readers", len(b.readers))
 
 	// Validate that we have at least one input
 	if len(b.paths) == 0 && len(b.filesystems) == 0 && len(b.readers) == 0 {
-		return nil, fmt.Errorf("%w: at least one path must be provided", ErrNoFiles)
+		return fmt.Errorf("%w: at least one path must be provided", ErrNoFiles)
 	}
 
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Use validator to validate auto-save config
 	if err := b.validator.validateAutoSaveConfig(b.autoSaveConfig); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Validate the SQL dialect and its constraints.
 	if err := b.validateDialect(); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Use file processor to collect paths
 	collectedPaths, err := b.fileProcessor.collectFilesFromPaths(b.paths)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	b.collectedPaths = collectedPaths
 
 	// Use file processor to handle filesystems
 	fsReaders, err := b.fileProcessor.processFilesystemsToReaders(ctx, b.filesystems)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	b.readers = append(b.readers, fsReaders...)
+	readers := make([]readerInput, 0, len(b.readers)+len(fsReaders))
+	readers = append(readers, b.readers...)
+	readers = append(readers, fsReaders...)
 
 	// Use validator to validate reader inputs
-	for _, readerInput := range b.readers {
+	for _, readerInput := range readers {
 		if err := b.validator.validateReader(readerInput.reader, readerInput.tableName, readerInput.fileType); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	// Use validator to validate final state
-	if err := b.validator.validateFinalState(b.collectedPaths, b.readers, b.paths); err != nil {
-		return nil, err
+	if err := b.validator.validateFinalState(collectedPaths, readers, b.paths); err != nil {
+		return err
 	}
 
 	// Overwrite mode writes every source back to itself, and a source in a
@@ -503,8 +521,8 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 	// fail. The file's name is the whole of the answer, so the caller hears it
 	// here rather than from Close, after a session's work has been done.
 	if b.autoSaveEnabled() && b.autoSaveConfig.outputDir == "" {
-		if err := checkOverwriteTargets(b.fileProcessor.deduplicateCompressedFiles(b.collectedPaths)); err != nil {
-			return nil, err
+		if err := checkOverwriteTargets(b.fileProcessor.deduplicateCompressedFiles(collectedPaths)); err != nil {
+			return err
 		}
 	}
 
@@ -512,8 +530,12 @@ func (b *DBBuilder) Build(ctx context.Context) (*DBBuilder, error) {
 	b.streamProcessor.setLogger(b.logger)
 	b.fileProcessor.setLogger(b.logger)
 
+	// Everything has passed, so what the build derived becomes the builder's.
+	b.collectedPaths = collectedPaths
+	b.readers = readers
+	b.built = true
 	b.logger.Info("build completed", "collected_paths", len(b.collectedPaths), "readers", len(b.readers))
-	return b, nil
+	return nil
 }
 
 // SkippedRows reports what WithMalformedRowPolicy(MalformedRowSkip) discarded
@@ -531,9 +553,10 @@ func (b *DBBuilder) SkippedRows() []SkippedRows {
 	return b.streamProcessor.skippedRows()
 }
 
-// Open creates and returns a database connection using the configured and validated inputs.
-// This method can only be called after Build() has been successfully executed.
-// It creates an in-memory SQLite database and loads all configured files as tables using streaming.
+// Open creates and returns a database connection using the configured inputs.
+// It validates them first, so it can be called directly on the builder, and it
+// creates an in-memory SQLite database and loads all configured files as tables
+// using streaming.
 //
 // Table names are derived from file names without extensions:
 // - "users.csv" becomes table "users"
@@ -558,8 +581,7 @@ func (b *DBBuilder) Open(ctx context.Context) (*sql.DB, error) {
 func (b *DBBuilder) open(ctx context.Context, readOnly bool) (*sql.DB, error) {
 	b.logger.Debug("opening database")
 
-	// Use validator to validate inputs availability
-	if err := b.validator.validateInputsAvailable(b.collectedPaths, b.readers); err != nil {
+	if err := b.build(ctx); err != nil {
 		return nil, err
 	}
 
@@ -655,12 +677,7 @@ func (b *DBBuilder) validateDialect() error {
 //
 // Example:
 //
-//	validated, err := filesql.NewBuilder().AddPath("payment.ach").Build(ctx)
-//	if err != nil {
-//		return err
-//	}
-//
-//	db, err := validated.OpenReadOnly(ctx)
+//	db, err := filesql.NewBuilder().AddPath("payment.ach").OpenReadOnly(ctx)
 //	if err != nil {
 //		return err
 //	}
@@ -707,11 +724,7 @@ func (b *DBBuilder) OpenReadOnly(ctx context.Context) (*sql.DB, error) {
 //
 //	db, _ := sql.Open("sqlite", ":memory:")
 //	db.SetMaxOpenConns(1)
-//	builder, err := filesql.NewBuilder().AddPath("users.csv").Build(ctx)
-//	if err != nil {
-//		return err
-//	}
-//	if err := builder.LoadInto(ctx, db); err != nil {
+//	if err := filesql.NewBuilder().AddPath("users.csv").LoadInto(ctx, db); err != nil {
 //		return err
 //	}
 //	// db now has a "users" table alongside any tables it already had.
@@ -723,7 +736,7 @@ func (b *DBBuilder) LoadInto(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("%w: auto-save is not supported by LoadInto; the caller owns the database lifecycle", ErrDatabaseOperation)
 	}
 
-	if err := b.validator.validateInputsAvailable(b.collectedPaths, b.readers); err != nil {
+	if err := b.build(ctx); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -761,7 +774,7 @@ func (b *DBBuilder) LoadIntoTx(ctx context.Context, tx *sql.Tx) error {
 	if b.autoSaveConfig != nil && b.autoSaveConfig.enabled {
 		return fmt.Errorf("%w: auto-save is not supported by LoadIntoTx", ErrDatabaseOperation)
 	}
-	if err := b.validator.validateInputsAvailable(b.collectedPaths, b.readers); err != nil {
+	if err := b.build(ctx); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {

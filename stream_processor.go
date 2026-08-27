@@ -1063,7 +1063,7 @@ func cellValue(cell string, types columnInfoList, i int) any {
 // createDecompressedReader creates a reader that handles compression
 func (sp *streamProcessor) createDecompressedReader(file *os.File, filePath string) (io.Reader, func() error, error) {
 	factory := NewCompressionFactory()
-	handler := factory.CreateHandlerForFile(filePath)
+	handler := factory.createHandlerForFile(filePath)
 
 	reader, cleanup, err := handler.CreateReader(file)
 	if err != nil {

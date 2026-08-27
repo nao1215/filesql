@@ -159,48 +159,28 @@ func parseACHFile(reader io.Reader, baseTableName string) ([]*table, *achconv.Ta
 		return nil, nil, fmt.Errorf("%w: failed to convert ACH file to tables", ErrACH)
 	}
 
-	var tables []*table
-
-	// Convert file header table
-	if tableSet.FileHeader != nil && len(tableSet.FileHeader.Records) > 0 {
-		t := fileParserTableDataToTable(tableSet.FileHeader, baseTableName+"_file_header")
-		tables = append(tables, t)
+	// One table per ACH record kind, in the order a file lays them out. A
+	// kind that carried no record is left out rather than loaded empty, so a
+	// file with no IAT batch does not grow three empty tables.
+	sources := []struct {
+		suffix string
+		data   *parser.TableData
+	}{
+		{"_file_header", tableSet.GetFileHeaderTable()},
+		{"_batches", tableSet.GetBatchesTable()},
+		{"_entries", tableSet.GetEntriesTable()},
+		{"_addenda", tableSet.GetAddendaTable()},
+		{"_iat_batches", tableSet.GetIATBatchesTable()},
+		{"_iat_entries", tableSet.GetIATEntriesTable()},
+		{"_iat_addenda", tableSet.GetIATAddendaTable()},
 	}
 
-	// Convert batches table
-	if tableSet.Batches != nil && len(tableSet.Batches.Records) > 0 {
-		t := fileParserTableDataToTable(tableSet.Batches, baseTableName+"_batches")
-		tables = append(tables, t)
-	}
-
-	// Convert entries table
-	if tableSet.Entries != nil && len(tableSet.Entries.Records) > 0 {
-		t := fileParserTableDataToTable(tableSet.Entries, baseTableName+"_entries")
-		tables = append(tables, t)
-	}
-
-	// Convert addenda table
-	if tableSet.Addenda != nil && len(tableSet.Addenda.Records) > 0 {
-		t := fileParserTableDataToTable(tableSet.Addenda, baseTableName+"_addenda")
-		tables = append(tables, t)
-	}
-
-	// Convert IAT batches table (International ACH Transactions)
-	if tableSet.IATBatches != nil && len(tableSet.IATBatches.Records) > 0 {
-		t := fileParserTableDataToTable(tableSet.IATBatches, baseTableName+"_iat_batches")
-		tables = append(tables, t)
-	}
-
-	// Convert IAT entries table
-	if tableSet.IATEntries != nil && len(tableSet.IATEntries.Records) > 0 {
-		t := fileParserTableDataToTable(tableSet.IATEntries, baseTableName+"_iat_entries")
-		tables = append(tables, t)
-	}
-
-	// Convert IAT addenda table (types 10-18, 98, 99)
-	if tableSet.IATAddenda != nil && len(tableSet.IATAddenda.Records) > 0 {
-		t := fileParserTableDataToTable(tableSet.IATAddenda, baseTableName+"_iat_addenda")
-		tables = append(tables, t)
+	tables := make([]*table, 0, len(sources))
+	for _, src := range sources {
+		if src.data == nil || len(src.data.Records) == 0 {
+			continue
+		}
+		tables = append(tables, fileParserTableDataToTable(src.data, baseTableName+src.suffix))
 	}
 
 	if len(tables) == 0 {

@@ -52,15 +52,15 @@ func TestFromFile_CustomerTransfer(t *testing.T) {
 	ts := fromFile(file)
 
 	require.NotNil(t, ts)
-	require.NotNil(t, ts.Message)
-	assert.Len(t, ts.Message.Records, 1, "should have exactly 1 row")
+	require.NotNil(t, ts.message)
+	assert.Len(t, ts.message.Records, 1, "should have exactly 1 row")
 
-	headers := ts.Message.Headers
-	record := ts.Message.Records[0]
+	headers := ts.message.Headers
+	record := ts.message.Records[0]
 	assert.Equal(t, len(headers), len(record), "header count should match record column count")
 
 	// Verify all column types are TEXT
-	for i, ct := range ts.Message.ColumnTypes {
+	for i, ct := range ts.message.ColumnTypes {
 		assert.Equal(t, parser.TypeText, ct, "column %d (%s) should be TypeText", i, headers[i])
 	}
 
@@ -103,10 +103,10 @@ func TestFromFile_BankTransfer(t *testing.T) {
 	ts := fromFile(file)
 
 	require.NotNil(t, ts)
-	require.NotNil(t, ts.Message)
+	require.NotNil(t, ts.message)
 
-	headerIndex := buildHeaderIndex(ts.Message.Headers)
-	record := ts.Message.Records[0]
+	headerIndex := buildHeaderIndex(ts.message.Headers)
+	record := ts.message.Records[0]
 
 	assertField(t, record, headerIndex, "business_function_code", "BTR")
 }
@@ -118,10 +118,10 @@ func TestFromFile_CustomerTransferPlusCOVS(t *testing.T) {
 	ts := fromFile(file)
 
 	require.NotNil(t, ts)
-	require.NotNil(t, ts.Message)
+	require.NotNil(t, ts.message)
 
-	headerIndex := buildHeaderIndex(ts.Message.Headers)
-	record := ts.Message.Records[0]
+	headerIndex := buildHeaderIndex(ts.message.Headers)
+	record := ts.message.Records[0]
 
 	assertField(t, record, headerIndex, "business_function_code", "CTP")
 
@@ -222,13 +222,13 @@ func TestRoundTrip_Modification(t *testing.T) {
 	require.NotNil(t, ts)
 
 	// Modify the amount via TableData
-	headerIndex := buildHeaderIndex(ts.Message.Headers)
+	headerIndex := buildHeaderIndex(ts.message.Headers)
 	amountIdx, ok := headerIndex["amount"]
 	require.True(t, ok)
 
-	originalAmount := ts.Message.Records[0][amountIdx]
+	originalAmount := ts.message.Records[0][amountIdx]
 	newAmount := "000009999999"
-	ts.Message.Records[0][amountIdx] = newAmount
+	ts.message.Records[0][amountIdx] = newAmount
 
 	// Convert back
 	result, err := ts.toFile()
@@ -251,11 +251,11 @@ func TestParseReader(t *testing.T) {
 	ts, err := ParseReader(bytes.NewReader(data))
 	require.NoError(t, err)
 	require.NotNil(t, ts)
-	require.NotNil(t, ts.Message)
-	assert.Len(t, ts.Message.Records, 1)
+	require.NotNil(t, ts.message)
+	assert.Len(t, ts.message.Records, 1)
 
-	headerIndex := buildHeaderIndex(ts.Message.Headers)
-	assertField(t, ts.Message.Records[0], headerIndex, "business_function_code", "CTR")
+	headerIndex := buildHeaderIndex(ts.message.Headers)
+	assertField(t, ts.message.Records[0], headerIndex, "business_function_code", "CTR")
 }
 
 func TestParseReader_InvalidData(t *testing.T) {
@@ -282,9 +282,9 @@ func TestWriteToWriter(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ts2)
 
-	headerIndex := buildHeaderIndex(ts2.Message.Headers)
-	assertField(t, ts2.Message.Records[0], headerIndex, "business_function_code", "CTR")
-	assertField(t, ts2.Message.Records[0], headerIndex, "amount", "000001234567")
+	headerIndex := buildHeaderIndex(ts2.message.Headers)
+	assertField(t, ts2.message.Records[0], headerIndex, "business_function_code", "CTR")
+	assertField(t, ts2.message.Records[0], headerIndex, "amount", "000001234567")
 }
 
 func TestGetMessageTable(t *testing.T) {
@@ -299,7 +299,7 @@ func TestGetMessageTable(t *testing.T) {
 	ts = fromFile(file)
 	table := ts.GetMessageTable()
 	require.NotNil(t, table)
-	assert.Equal(t, ts.Message, table)
+	assert.Equal(t, ts.message, table)
 }
 
 func TestUpdateMessageFromTableData(t *testing.T) {
@@ -314,7 +314,7 @@ func TestUpdateMessageFromTableData(t *testing.T) {
 		Records: [][]string{{"000000000001"}},
 	}
 	ts.UpdateMessageFromTableData(newTD)
-	assert.Equal(t, newTD, ts.Message)
+	assert.Equal(t, newTD, ts.message)
 }
 
 func TestDeepCopyFile(t *testing.T) {
@@ -456,8 +456,8 @@ func TestRoundTrip_WriteAndReparse(t *testing.T) {
 	require.NoError(t, err)
 
 	// Compare key fields
-	h1 := buildHeaderIndex(ts1.Message.Headers)
-	h2 := buildHeaderIndex(ts2.Message.Headers)
+	h1 := buildHeaderIndex(ts1.message.Headers)
+	h2 := buildHeaderIndex(ts2.message.Headers)
 
 	fieldsToCheck := []string{
 		"amount",
@@ -473,7 +473,7 @@ func TestRoundTrip_WriteAndReparse(t *testing.T) {
 		idx2, ok2 := h2[field]
 		require.True(t, ok1, "field %s not found in ts1", field)
 		require.True(t, ok2, "field %s not found in ts2", field)
-		assert.Equal(t, ts1.Message.Records[0][idx1], ts2.Message.Records[0][idx2],
+		assert.Equal(t, ts1.message.Records[0][idx1], ts2.message.Records[0][idx2],
 			"field %s differs after round-trip", field)
 	}
 }
@@ -485,8 +485,8 @@ func TestFromFile_StructuredRemittance(t *testing.T) {
 	ts := fromFile(file)
 	require.NotNil(t, ts)
 
-	headerIndex := buildHeaderIndex(ts.Message.Headers)
-	record := ts.Message.Records[0]
+	headerIndex := buildHeaderIndex(ts.message.Headers)
+	record := ts.message.Records[0]
 
 	assertField(t, record, headerIndex, "business_function_code", "CTP")
 
@@ -535,8 +535,8 @@ func TestFromFile_RelatedRemittance(t *testing.T) {
 	ts := fromFile(file)
 	require.NotNil(t, ts)
 
-	headerIndex := buildHeaderIndex(ts.Message.Headers)
-	record := ts.Message.Records[0]
+	headerIndex := buildHeaderIndex(ts.message.Headers)
+	record := ts.message.Records[0]
 	assertField(t, record, headerIndex, "related_remittance_identification", "RelRemitID")
 	assertField(t, record, headerIndex, "related_remittance_location_method", "EDIC")
 	assertField(t, record, headerIndex, "related_remittance_location_electronic_address", "http://example.com")
@@ -584,9 +584,9 @@ func TestRoundTrip_COVSModification(t *testing.T) {
 	require.NotNil(t, ts)
 
 	// Modify a CoverPayment field
-	headerIndex := buildHeaderIndex(ts.Message.Headers)
+	headerIndex := buildHeaderIndex(ts.message.Headers)
 	if idx, ok := headerIndex["ordering_customer_swift_line_one"]; ok {
-		ts.Message.Records[0][idx] = "MODIFIED LINE ONE"
+		ts.message.Records[0][idx] = "MODIFIED LINE ONE"
 	}
 
 	result, err := ts.toFile()
@@ -1028,9 +1028,9 @@ func TestToFile_RoundTripWithNewSections(t *testing.T) {
 	require.NotNil(t, ts)
 
 	// Simulate SQL edit: set charges in the TableData
-	headerIndex := buildHeaderIndex(ts.Message.Headers)
+	headerIndex := buildHeaderIndex(ts.message.Headers)
 	if idx, ok := headerIndex["charges_details"]; ok {
-		ts.Message.Records[0][idx] = "B"
+		ts.message.Records[0][idx] = "B"
 	}
 
 	// Round-trip back to wire.File
@@ -1136,10 +1136,10 @@ func TestWriteToWriter_RefusesAMessageItCannotWriteFaithfully(t *testing.T) {
 	require.NoError(t, err)
 
 	cell := func(ts *TableSet, column string) string {
-		idx := buildHeaderIndex(ts.Message.Headers)
+		idx := buildHeaderIndex(ts.message.Headers)
 		i, ok := idx[column]
 		require.True(t, ok, "no such column: %s", column)
-		return ts.Message.Records[0][i]
+		return ts.message.Records[0][i]
 	}
 
 	// Reading is unaffected: every line comes back in its own column.
@@ -1196,9 +1196,9 @@ func TestWriteToWriter_KeepsEveryFieldOfEveryFixture(t *testing.T) {
 
 			back, err := ParseReader(bytes.NewReader(buf.Bytes()))
 			require.NoError(t, err)
-			require.Equal(t, ts.Message.Headers, back.Message.Headers)
-			for i, column := range ts.Message.Headers {
-				assert.Equal(t, ts.Message.Records[0][i], back.Message.Records[0][i],
+			require.Equal(t, ts.message.Headers, back.message.Headers)
+			for i, column := range ts.message.Headers {
+				assert.Equal(t, ts.message.Records[0][i], back.message.Records[0][i],
 					"%s did not survive a write with no edits", column)
 			}
 		})

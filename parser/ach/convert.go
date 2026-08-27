@@ -25,21 +25,21 @@ const (
 // This structure preserves the hierarchical nature of ACH files while enabling
 // flat table-based queries.
 type TableSet struct {
-	// FileHeader contains file-level header information (1 row per file)
-	FileHeader *parser.TableData
-	// Batches contains batch header information
-	Batches *parser.TableData
-	// Entries contains entry detail records (the main transaction data)
-	Entries *parser.TableData
-	// Addenda contains addenda records associated with entries
-	Addenda *parser.TableData
+	// fileHeader contains file-level header information (1 row per file)
+	fileHeader *parser.TableData
+	// batches contains batch header information
+	batches *parser.TableData
+	// entries contains entry detail records (the main transaction data)
+	entries *parser.TableData
+	// addenda contains addenda records associated with entries
+	addenda *parser.TableData
 
-	// IATBatches contains IAT batch header information (International ACH Transactions)
-	IATBatches *parser.TableData
-	// IATEntries contains IAT entry detail records
-	IATEntries *parser.TableData
-	// IATAddenda contains IAT addenda records (types 10-18, 98, 99)
-	IATAddenda *parser.TableData
+	// iatBatches contains IAT batch header information (International ACH Transactions)
+	iatBatches *parser.TableData
+	// iatEntries contains IAT entry detail records
+	iatEntries *parser.TableData
+	// iatAddenda contains IAT addenda records (types 10-18, 98, 99)
+	iatAddenda *parser.TableData
 
 	// originalFile stores the original ACH file for reconstruction
 	originalFile *ach.File
@@ -77,25 +77,25 @@ func fromFile(file *ach.File) *TableSet {
 		originalFile: file,
 	}
 
-	ts.FileHeader = convertFileHeader(file)
-	ts.Batches = convertBatches(file)
-	ts.Entries = convertEntries(file)
-	ts.Addenda = convertAddenda(file)
+	ts.fileHeader = convertFileHeader(file)
+	ts.batches = convertBatches(file)
+	ts.entries = convertEntries(file)
+	ts.addenda = convertAddenda(file)
 
 	// Handle IAT batches if present
 	if len(file.IATBatches) > 0 {
-		ts.IATBatches = convertIATBatches(file)
-		ts.IATEntries = convertIATEntries(file)
-		ts.IATAddenda = convertIATAddenda(file)
+		ts.iatBatches = convertIATBatches(file)
+		ts.iatEntries = convertIATEntries(file)
+		ts.iatAddenda = convertIATAddenda(file)
 	}
 
 	ts.parsedCoords = map[string][]string{
-		"batches":     coordinateKeys(ts.Batches, "batch_index"),
-		"entries":     coordinateKeys(ts.Entries, "batch_index", "entry_index"),
-		"addenda":     coordinateKeys(ts.Addenda, "batch_index", "entry_index", "addenda_index"),
-		"iat_batches": coordinateKeys(ts.IATBatches, "batch_index"),
-		"iat_entries": coordinateKeys(ts.IATEntries, "batch_index", "entry_index"),
-		"iat_addenda": coordinateKeys(ts.IATAddenda, "batch_index", "entry_index", "addenda_index"),
+		"batches":     coordinateKeys(ts.batches, "batch_index"),
+		"entries":     coordinateKeys(ts.entries, "batch_index", "entry_index"),
+		"addenda":     coordinateKeys(ts.addenda, "batch_index", "entry_index", "addenda_index"),
+		"iat_batches": coordinateKeys(ts.iatBatches, "batch_index"),
+		"iat_entries": coordinateKeys(ts.iatEntries, "batch_index", "entry_index"),
+		"iat_addenda": coordinateKeys(ts.iatAddenda, "batch_index", "entry_index", "addenda_index"),
 	}
 
 	return ts
@@ -683,47 +683,47 @@ func (ts *TableSet) toFile() (*ach.File, error) {
 	}
 
 	// Apply modifications from FileHeader TableData
-	if ts.FileHeader != nil && len(ts.FileHeader.Records) > 0 {
+	if ts.fileHeader != nil && len(ts.fileHeader.Records) > 0 {
 		ts.applyFileHeaderModifications(&newFile)
 	}
 
 	// Apply modifications from Batches TableData
-	if ts.Batches != nil && len(ts.Batches.Records) > 0 {
+	if ts.batches != nil && len(ts.batches.Records) > 0 {
 		if err := ts.applyBatchModifications(&newFile); err != nil {
 			return nil, fmt.Errorf("failed to apply batch modifications: %w", err)
 		}
 	}
 
 	// Apply modifications from Entries TableData
-	if ts.Entries != nil && len(ts.Entries.Records) > 0 {
+	if ts.entries != nil && len(ts.entries.Records) > 0 {
 		if err := ts.applyEntryModifications(&newFile); err != nil {
 			return nil, fmt.Errorf("failed to apply entry modifications: %w", err)
 		}
 	}
 
 	// Apply modifications from Addenda TableData
-	if ts.Addenda != nil && len(ts.Addenda.Records) > 0 {
+	if ts.addenda != nil && len(ts.addenda.Records) > 0 {
 		if err := ts.applyAddendaModifications(&newFile); err != nil {
 			return nil, fmt.Errorf("failed to apply addenda modifications: %w", err)
 		}
 	}
 
 	// Apply modifications from IATBatches TableData
-	if ts.IATBatches != nil && len(ts.IATBatches.Records) > 0 {
+	if ts.iatBatches != nil && len(ts.iatBatches.Records) > 0 {
 		if err := ts.applyIATBatchModifications(&newFile); err != nil {
 			return nil, fmt.Errorf("failed to apply IAT batch modifications: %w", err)
 		}
 	}
 
 	// Apply modifications from IATEntries TableData
-	if ts.IATEntries != nil && len(ts.IATEntries.Records) > 0 {
+	if ts.iatEntries != nil && len(ts.iatEntries.Records) > 0 {
 		if err := ts.applyIATEntryModifications(&newFile); err != nil {
 			return nil, fmt.Errorf("failed to apply IAT entry modifications: %w", err)
 		}
 	}
 
 	// Apply modifications from IATAddenda TableData
-	if ts.IATAddenda != nil && len(ts.IATAddenda.Records) > 0 {
+	if ts.iatAddenda != nil && len(ts.iatAddenda.Records) > 0 {
 		if err := ts.applyIATAddendaModifications(&newFile); err != nil {
 			return nil, fmt.Errorf("failed to apply IAT addenda modifications: %w", err)
 		}
@@ -895,12 +895,12 @@ func (c *coordinateTracker) claim(columns []string, values []int) error {
 func (ts *TableSet) applyEntryModifications(file *ach.File) error {
 	// Build index mapping for quick lookup
 	headerIndex := make(map[string]int)
-	for i, h := range ts.Entries.Headers {
+	for i, h := range ts.entries.Headers {
 		headerIndex[h] = i
 	}
 
 	coords := ts.newCoordinateTracker("entries")
-	for _, record := range ts.Entries.Records {
+	for _, record := range ts.entries.Records {
 		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
 		if err != nil {
 			return fmt.Errorf("invalid batch_index: %w", err)
@@ -972,16 +972,16 @@ func (ts *TableSet) applyEntryModifications(file *ach.File) error {
 
 // applyFileHeaderModifications updates file header fields from TableData.
 func (ts *TableSet) applyFileHeaderModifications(file *ach.File) {
-	if len(ts.FileHeader.Records) == 0 {
+	if len(ts.fileHeader.Records) == 0 {
 		return
 	}
 
 	headerIndex := make(map[string]int)
-	for i, h := range ts.FileHeader.Headers {
+	for i, h := range ts.fileHeader.Headers {
 		headerIndex[h] = i
 	}
 
-	record := ts.FileHeader.Records[0]
+	record := ts.fileHeader.Records[0]
 
 	if idx, ok := headerIndex["immediate_destination"]; ok && idx < len(record) {
 		file.Header.ImmediateDestination = record[idx]
@@ -1012,12 +1012,12 @@ func (ts *TableSet) applyFileHeaderModifications(file *ach.File) {
 // applyBatchModifications updates batch header fields from TableData.
 func (ts *TableSet) applyBatchModifications(file *ach.File) error {
 	headerIndex := make(map[string]int)
-	for i, h := range ts.Batches.Headers {
+	for i, h := range ts.batches.Headers {
 		headerIndex[h] = i
 	}
 
 	coords := ts.newCoordinateTracker("batches")
-	for _, record := range ts.Batches.Records {
+	for _, record := range ts.batches.Records {
 		batchIdxVal, ok := headerIndex["batch_index"]
 		if !ok {
 			continue
@@ -1083,12 +1083,12 @@ func (ts *TableSet) applyBatchModifications(file *ach.File) error {
 // applyAddendaModifications updates addenda records from TableData.
 func (ts *TableSet) applyAddendaModifications(file *ach.File) error {
 	headerIndex := make(map[string]int)
-	for i, h := range ts.Addenda.Headers {
+	for i, h := range ts.addenda.Headers {
 		headerIndex[h] = i
 	}
 
 	coords := ts.newCoordinateTracker("addenda")
-	for _, record := range ts.Addenda.Records {
+	for _, record := range ts.addenda.Records {
 		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
 		if err != nil {
 			return fmt.Errorf("invalid batch_index: %w", err)
@@ -1340,7 +1340,7 @@ func (ts *TableSet) GetEntriesTable() *parser.TableData {
 	if ts == nil {
 		return nil
 	}
-	return ts.Entries
+	return ts.entries
 }
 
 // GetBatchesTable returns the batches TableData for use with filesql.
@@ -1348,7 +1348,7 @@ func (ts *TableSet) GetBatchesTable() *parser.TableData {
 	if ts == nil {
 		return nil
 	}
-	return ts.Batches
+	return ts.batches
 }
 
 // GetFileHeaderTable returns the file header TableData for use with filesql.
@@ -1356,7 +1356,7 @@ func (ts *TableSet) GetFileHeaderTable() *parser.TableData {
 	if ts == nil {
 		return nil
 	}
-	return ts.FileHeader
+	return ts.fileHeader
 }
 
 // GetAddendaTable returns the addenda TableData for use with filesql.
@@ -1364,35 +1364,59 @@ func (ts *TableSet) GetAddendaTable() *parser.TableData {
 	if ts == nil {
 		return nil
 	}
-	return ts.Addenda
+	return ts.addenda
+}
+
+// GetIATBatchesTable returns the IAT batches TableData for use with filesql.
+func (ts *TableSet) GetIATBatchesTable() *parser.TableData {
+	if ts == nil {
+		return nil
+	}
+	return ts.iatBatches
+}
+
+// GetIATEntriesTable returns the IAT entries TableData for use with filesql.
+func (ts *TableSet) GetIATEntriesTable() *parser.TableData {
+	if ts == nil {
+		return nil
+	}
+	return ts.iatEntries
+}
+
+// GetIATAddendaTable returns the IAT addenda TableData for use with filesql.
+func (ts *TableSet) GetIATAddendaTable() *parser.TableData {
+	if ts == nil {
+		return nil
+	}
+	return ts.iatAddenda
 }
 
 // UpdateEntriesFromTableData updates the internal entries data from modified TableData.
 // Call this after making SQL modifications to prepare for WriteToWriter.
 func (ts *TableSet) UpdateEntriesFromTableData(entries *parser.TableData) {
 	if ts != nil {
-		ts.Entries = entries
+		ts.entries = entries
 	}
 }
 
 // UpdateFileHeaderFromTableData updates the internal file header data from modified TableData.
 func (ts *TableSet) UpdateFileHeaderFromTableData(fileHeader *parser.TableData) {
 	if ts != nil {
-		ts.FileHeader = fileHeader
+		ts.fileHeader = fileHeader
 	}
 }
 
 // UpdateBatchesFromTableData updates the internal batches data from modified TableData.
 func (ts *TableSet) UpdateBatchesFromTableData(batches *parser.TableData) {
 	if ts != nil {
-		ts.Batches = batches
+		ts.batches = batches
 	}
 }
 
 // UpdateAddendaFromTableData updates the internal addenda data from modified TableData.
 func (ts *TableSet) UpdateAddendaFromTableData(addenda *parser.TableData) {
 	if ts != nil {
-		ts.Addenda = addenda
+		ts.addenda = addenda
 	}
 }
 
@@ -1797,12 +1821,12 @@ func convertIATAddenda(file *ach.File) *parser.TableData {
 // applyIATBatchModifications updates IAT batches in the ACH file from TableData.
 func (ts *TableSet) applyIATBatchModifications(file *ach.File) error {
 	headerIndex := make(map[string]int)
-	for i, h := range ts.IATBatches.Headers {
+	for i, h := range ts.iatBatches.Headers {
 		headerIndex[h] = i
 	}
 
 	coords := ts.newCoordinateTracker("iat_batches")
-	for _, record := range ts.IATBatches.Records {
+	for _, record := range ts.iatBatches.Records {
 		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
 		if err != nil {
 			return fmt.Errorf("invalid batch_index: %w", err)
@@ -1873,12 +1897,12 @@ func (ts *TableSet) applyIATBatchModifications(file *ach.File) error {
 // applyIATEntryModifications updates IAT entries in the ACH file from TableData.
 func (ts *TableSet) applyIATEntryModifications(file *ach.File) error {
 	headerIndex := make(map[string]int)
-	for i, h := range ts.IATEntries.Headers {
+	for i, h := range ts.iatEntries.Headers {
 		headerIndex[h] = i
 	}
 
 	coords := ts.newCoordinateTracker("iat_entries")
-	for _, record := range ts.IATEntries.Records {
+	for _, record := range ts.iatEntries.Records {
 		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
 		if err != nil {
 			return fmt.Errorf("invalid batch_index: %w", err)
@@ -1949,12 +1973,12 @@ func (ts *TableSet) applyIATEntryModifications(file *ach.File) error {
 // applyIATAddendaModifications updates IAT addenda in the ACH file from TableData.
 func (ts *TableSet) applyIATAddendaModifications(file *ach.File) error {
 	headerIndex := make(map[string]int)
-	for i, h := range ts.IATAddenda.Headers {
+	for i, h := range ts.iatAddenda.Headers {
 		headerIndex[h] = i
 	}
 
 	coords := ts.newCoordinateTracker("iat_addenda")
-	for _, record := range ts.IATAddenda.Records {
+	for _, record := range ts.iatAddenda.Records {
 		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
 		if err != nil {
 			return fmt.Errorf("invalid batch_index: %w", err)
@@ -2213,20 +2237,20 @@ func (ts *TableSet) findAddenda18Index(entry *ach.IATEntryDetail, addendaIdx int
 // UpdateIATBatchesFromTableData updates the internal IAT batches data from modified TableData.
 func (ts *TableSet) UpdateIATBatchesFromTableData(iatBatches *parser.TableData) {
 	if ts != nil {
-		ts.IATBatches = iatBatches
+		ts.iatBatches = iatBatches
 	}
 }
 
 // UpdateIATEntriesFromTableData updates the internal IAT entries data from modified TableData.
 func (ts *TableSet) UpdateIATEntriesFromTableData(iatEntries *parser.TableData) {
 	if ts != nil {
-		ts.IATEntries = iatEntries
+		ts.iatEntries = iatEntries
 	}
 }
 
 // UpdateIATAddendaFromTableData updates the internal IAT addenda data from modified TableData.
 func (ts *TableSet) UpdateIATAddendaFromTableData(iatAddenda *parser.TableData) {
 	if ts != nil {
-		ts.IATAddenda = iatAddenda
+		ts.iatAddenda = iatAddenda
 	}
 }

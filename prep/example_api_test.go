@@ -200,29 +200,7 @@ func ExampleProcessResult_PrepErrors() {
 	// empty_json_data 1
 }
 
-func ExampleStream_Format() {
-	type user struct {
-		Name string
-	}
-
-	processor := prep.NewProcessor(prep.FileTypeCSV)
-	var users []user
-
-	reader, _, err := processor.Process(strings.NewReader("name\nAlice\n"), &users)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	stream, ok := reader.(prep.Stream)
-	if !ok {
-		log.Fatalf("reader has type %T, want prep.Stream", reader)
-	}
-	fmt.Println(stream.Format())
-	// Output:
-	// CSV
-}
-
-func ExampleStream_OriginalFormat() {
+func ExampleProcessResult_OutputFormat() {
 	type record struct {
 		Data string `name:"data"`
 	}
@@ -230,43 +208,14 @@ func ExampleStream_OriginalFormat() {
 	processor := prep.NewProcessor(prep.FileTypeJSON)
 	var records []record
 
-	reader, _, err := processor.Process(strings.NewReader(`[{"id":1}]`), &records)
+	_, result, err := processor.Process(strings.NewReader(`[{"id":1}]`), &records)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	stream, ok := reader.(prep.Stream)
-	if !ok {
-		log.Fatalf("reader has type %T, want prep.Stream", reader)
-	}
-	fmt.Printf("output=%s original=%s\n", stream.Format(), stream.OriginalFormat())
+	fmt.Printf("output=%s original=%s\n", result.OutputFormat, result.OriginalFormat)
 	// Output:
 	// output=JSONL original=JSON
-}
-
-func Example_streamLen() {
-	type user struct {
-		Name string
-	}
-
-	processor := prep.NewProcessor(prep.FileTypeCSV)
-	var users []user
-
-	reader, _, err := processor.Process(strings.NewReader("name\nAlice\n"), &users)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	stream, ok := reader.(interface {
-		prep.Stream
-		Len() int
-	})
-	if !ok {
-		log.Fatalf("reader has type %T, want prep.Stream with Len", reader)
-	}
-	fmt.Println(stream.Len() > 0)
-	// Output:
-	// true
 }
 
 func Example_streamSeek() {
@@ -282,15 +231,12 @@ func Example_streamSeek() {
 		log.Fatal(err)
 	}
 
-	stream, ok := reader.(interface {
-		prep.Stream
-		io.Seeker
-	})
+	stream, ok := reader.(io.Seeker)
 	if !ok {
-		log.Fatalf("reader has type %T, want prep.Stream with io.Seeker", reader)
+		log.Fatalf("reader has type %T, want an io.Seeker", reader)
 	}
 	buf := make([]byte, 4)
-	if _, err := io.ReadFull(stream, buf); err != nil {
+	if _, err := io.ReadFull(reader, buf); err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println(string(buf))
@@ -298,7 +244,7 @@ func Example_streamSeek() {
 	if _, err := stream.Seek(0, io.SeekStart); err != nil {
 		log.Fatal(err)
 	}
-	if _, err := io.ReadFull(stream, buf); err != nil {
+	if _, err := io.ReadFull(reader, buf); err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println(string(buf))

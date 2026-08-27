@@ -254,29 +254,3 @@ func TestValidator_validateFinalState(t *testing.T) {
 		assert.Contains(t, err.Error(), "no valid input files found")
 	})
 }
-
-func TestValidator_validateInputsAvailable(t *testing.T) {
-	t.Parallel()
-
-	v := newValidator()
-
-	t.Run("both empty returns ErrNoFiles", func(t *testing.T) {
-		t.Parallel()
-		err := v.validateInputsAvailable(nil, nil)
-		assert.True(t, errors.Is(err, ErrNoFiles))
-		assert.Contains(t, err.Error(), "did you call Build()?")
-	})
-
-	t.Run("collectedPaths not empty succeeds", func(t *testing.T) {
-		t.Parallel()
-		err := v.validateInputsAvailable([]string{"/path/to/file.csv"}, nil)
-		assert.NoError(t, err)
-	})
-
-	t.Run("readers not empty succeeds", func(t *testing.T) {
-		t.Parallel()
-		readers := []readerInput{{tableName: "test"}}
-		err := v.validateInputsAvailable(nil, readers)
-		assert.NoError(t, err)
-	})
-}

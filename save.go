@@ -719,7 +719,7 @@ func (c *autoSaveConnector) overwriteOriginalFile(ctx context.Context, db *sql.D
 	// been edited, and writing UTF-8 over a UTF-16 file changed every byte.
 	options := DumpOptions{
 		Format:      format,
-		Compression: factory.DetectCompressionType(path),
+		Compression: factory.detectCompressionType(path),
 		Encoding:    detectSourceEncoding(path),
 		LineEnding:  detectLineEnding(path, format),
 	}
@@ -767,7 +767,7 @@ func checkOverwriteTargets(paths []string) error {
 		if _, err := overwriteFormatFor(path); err != nil {
 			return err
 		}
-		if err := codec.Codec(factory.DetectCompressionType(path)).CannotWrite(); err != nil {
+		if err := codec.Codec(factory.detectCompressionType(path)).CannotWrite(); err != nil {
 			return fmt.Errorf("%w: %s cannot be written back: %w", ErrUnsupportedFormat, path, err)
 		}
 	}
@@ -780,7 +780,7 @@ func checkOverwriteTargets(paths []string) error {
 // caller's file untouched and the change in a file they never named.
 func overwriteFormatFor(path string) (OutputFormat, error) {
 	factory := NewCompressionFactory()
-	switch factory.GetBaseFileType(path) {
+	switch factory.getBaseFileType(path) {
 	case FileTypeCSV:
 		return OutputFormatCSV, nil
 	case FileTypeTSV:

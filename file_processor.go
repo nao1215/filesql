@@ -228,7 +228,7 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 		// still compressed, so the codec has to travel with it.
 		fileInfo := newFile(match)
 		fileType := fileInfo.getFileType()
-		compression := NewCompressionFactory().DetectCompressionType(match)
+		compression := NewCompressionFactory().detectCompressionType(match)
 
 		// Generate table name from file path (remove extension and clean up)
 		tableName := sanitizeTableName(tableFromFilePath(match))

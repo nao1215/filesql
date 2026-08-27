@@ -51,17 +51,8 @@ func Open(paths ...string) (*sql.DB, error) {
 //
 //	db, err := filesql.OpenContext(ctx, "large-dataset.csv")
 func OpenContext(ctx context.Context, paths ...string) (*sql.DB, error) {
-	// Use builder pattern internally for backward compatibility
-	builder := NewBuilder().AddPaths(paths...)
-
-	// Build validates the paths
-	validatedBuilder, err := builder.Build(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// Open creates the database connection
-	return validatedBuilder.Open(ctx)
+	// Open validates the paths before it loads them.
+	return NewBuilder().AddPaths(paths...).Open(ctx)
 }
 
 // LoadInto loads the given file or directory paths into an existing database
@@ -85,14 +76,7 @@ func OpenContext(ctx context.Context, paths ...string) (*sql.DB, error) {
 //		return err
 //	}
 func LoadInto(ctx context.Context, db *sql.DB, paths ...string) error {
-	builder := NewBuilder().AddPaths(paths...)
-
-	validatedBuilder, err := builder.Build(ctx)
-	if err != nil {
-		return err
-	}
-
-	return validatedBuilder.LoadInto(ctx, db)
+	return NewBuilder().AddPaths(paths...).LoadInto(ctx, db)
 }
 
 // DumpDatabase saves all database tables to files in the specified directory.

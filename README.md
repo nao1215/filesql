@@ -164,14 +164,10 @@ import (
 func main() {
 	ctx := context.Background()
 
-	builder, err := filesql.NewBuilder().
+	db, err := filesql.NewBuilder().
 		AddPath("users.csv").
 		WithDialect(dialect.PostgreSQL).
-		Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-	db, err := builder.Open(ctx)
+		Open(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -286,14 +282,9 @@ Bob,bob@example.com,user
 	fmt.Print(string(cleaned))
 
 	ctx := context.Background()
-	validatedBuilder, err := filesql.NewBuilder().
+	db, err := filesql.NewBuilder().
 		AddReader(strings.NewReader(string(cleaned)), "users", filesql.FileTypeCSV).
-		Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	db, err := validatedBuilder.Open(ctx)
+		Open(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -379,11 +370,11 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Check a workbook's sheets for table names that collide | `ExampleExcelSheetTableNames` | [example_api_test.go](./example_api_test.go) |
 | Attach a slog logger | `ExampleDBBuilder_WithLogger` | [example_api_test.go](./example_api_test.go) |
 | Open a database that refuses writes | `ExampleDBBuilder_OpenReadOnly` | [example_api_test.go](./example_api_test.go) |
-| Save on close or commit | `ExampleDBBuilder_EnableAutoSave`, `ExampleDBBuilder_EnableAutoSaveOnCommit`, `ExampleDBBuilder_DisableAutoSave` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
+| Save on close or commit | `ExampleDBBuilder_EnableAutoSave`, `ExampleDBBuilder_EnableAutoSaveOnCommit` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
 | Export under a deadline | `ExampleDumpDatabaseContext` | [example_api_test.go](./example_api_test.go) |
 | Export tables with format/compression/encoding/line-ending options | `ExampleDumpDatabase`, `ExampleNewDumpOptions`, `ExampleDumpOptions_WithFormat`, `ExampleDumpOptions_WithCompression`, `ExampleDumpOptions_WithEncoding`, `ExampleDumpOptions_WithLineEnding` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
-| Work with compression helpers directly | `ExampleNewCompressionHandler`, `ExampleNewCompressionFactory`, `ExampleCompressionFactory_DetectCompressionType` | [example_api_test.go](./example_api_test.go) |
-| Strip compression suffixes and inspect file types | `ExampleCompressionFactory_RemoveCompressionExtension`, `ExampleCompressionFactory_GetBaseFileType` | [example_api_test.go](./example_api_test.go) |
+| Work with compression helpers directly | `ExampleNewCompressionHandler`, `ExampleNewCompressionFactory` | [example_api_test.go](./example_api_test.go) |
+| Strip compression suffixes | `ExampleCompressionFactory_RemoveCompressionExtension` | [example_api_test.go](./example_api_test.go) |
 | Write an ACH or Fedwire file back after editing it | `ExampleDumpACH`, `ExampleDumpFedWire` | [example_api_test.go](./example_api_test.go) |
 | Write one back when the database came from an `io.Reader` | `ExampleDumpACHWithTableSet`, `ExampleDumpFedWireWithTableSet` | [example_api_test.go](./example_api_test.go) |
 | Inspect enum names | `ExampleMalformedRowPolicy_String`, `ExampleFileType_String`, `ExampleCompressionType_String`, `ExampleEncoding_String`, `ExampleLineEnding_String`, `ExampleOutputFormat_String` | [example_api_test.go](./example_api_test.go) |
@@ -411,8 +402,8 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Refuse a duplicate in a key column | `ExampleProcessor_Process_uniqueColumn` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Validate DNS label, color and numeric currency columns | `ExampleProcessor_Process_labelColorAndNumericCode` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Read preprocessing error details | `ExampleProcessResult_PrepErrors` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Check output and original formats | `ExampleStream_Format`, `ExampleStream_OriginalFormat` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Rewind and reread the processed stream | `Example_streamLen`, `Example_streamSeek` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Check output and original formats | `ExampleProcessResult_OutputFormat` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Rewind and reread the processed stream | `Example_streamSeek` | [prep/example_api_test.go](./prep/example_api_test.go) |
 
 #### parser
 

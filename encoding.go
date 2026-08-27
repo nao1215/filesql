@@ -366,7 +366,7 @@ var (
 // alone: nothing in it is text this package encodes.
 func detectSourceEncoding(path string) Encoding {
 	factory := NewCompressionFactory()
-	if !isTextBaseType(factory.GetBaseFileType(path)) {
+	if !isTextBaseType(factory.getBaseFileType(path)) {
 		return EncodingUTF8
 	}
 

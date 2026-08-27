@@ -135,11 +135,3 @@ func (v *validator) validateFinalState(collectedPaths []string, readers []reader
 
 	return nil
 }
-
-// validateInputsAvailable checks if any valid inputs are available for database creation
-func (v *validator) validateInputsAvailable(collectedPaths []string, readers []readerInput) error {
-	if len(collectedPaths) == 0 && len(readers) == 0 {
-		return fmt.Errorf("%w: no valid input files found, did you call Build()?", ErrNoFiles)
-	}
-	return nil
-}

@@ -96,10 +96,10 @@ func NewProcessor(fileType parser.FileType, opts ...Option) *Processor {
 //	reader, result, err := processor.Process(input, &records)
 //	db.AddReader(reader, "table", parser.CSV)
 //
-// For format information, use ProcessResult.OriginalFormat or cast to Stream:
-//
-//	stream := reader.(prep.Stream)
-//	fmt.Println(stream.Format()) // CSV, TSV, etc.
+// ProcessResult.OriginalFormat is the format that was read and
+// ProcessResult.OutputFormat is the format of the bytes the reader serves.
+// The reader also satisfies io.Seeker, so it can be rewound with
+// Seek(0, io.SeekStart) and read again.
 //
 // Example:
 //
@@ -289,6 +289,7 @@ func (p *Processor) processRecords(input io.Reader, structSlicePointer any) (
 	result := &ProcessResult{
 		Columns:        headers,
 		OriginalFormat: p.fileType,
+		OutputFormat:   p.outputFormat(),
 		Errors:         make([]error, 0, estimatedErrors),
 	}
 	structSliceValue := reflect.ValueOf(structSlicePointer).Elem()
@@ -617,7 +618,7 @@ func (p *Processor) buildOutput(headers []string, outputRecords [][]string, isJS
 		return nil, ErrEmptyJSONOutput
 	}
 
-	return newStream(outputBuf.Bytes(), p.outputFormat(), p.fileType), nil
+	return newStream(outputBuf.Bytes()), nil
 }
 
 // outputFormat returns the actual output format for the stream.

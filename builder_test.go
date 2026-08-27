@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -712,16 +713,76 @@ func TestDBBuilder_Open_WithReader(t *testing.T) {
 func TestDBBuilder_Open(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("open without build should fail", func(t *testing.T) {
+	t.Run("open without build reports what is wrong with the input", func(t *testing.T) {
 		builder := NewBuilder().AddPath("test.csv")
-		// Call Open without calling Build first
+		// Open validates on its own, so the caller hears about the missing
+		// file rather than about a step they did not take.
 		db, err := builder.Open(ctx)
 		if db != nil {
 			_ = db.Close()
 		}
-		assert.Error(t, err, "Open() without Build() should return error")
-		expectedErrMsg := "no valid input files found, did you call Build()?"
-		assert.Contains(t, err.Error(), expectedErrMsg, "error message should mention Build() requirement")
+		require.Error(t, err, "Open() should refuse a path that does not exist")
+		assert.True(t, errors.Is(err, ErrFileNotFound), "error should be ErrFileNotFound, got %v", err)
+		assert.Contains(t, err.Error(), "test.csv", "error should name the file")
+	})
+
+	t.Run("open without build refuses a builder with no input", func(t *testing.T) {
+		db, err := NewBuilder().Open(ctx)
+		if db != nil {
+			_ = db.Close()
+		}
+		require.Error(t, err, "Open() should refuse a builder with nothing added")
+		assert.True(t, errors.Is(err, ErrNoFiles), "error should be ErrNoFiles, got %v", err)
+	})
+
+	t.Run("build then open loads an added filesystem once", func(t *testing.T) {
+		// build appends the readers it derives from a filesystem, so running
+		// it twice would register every file of that filesystem twice.
+		fsys := fstest.MapFS{
+			"users.csv": &fstest.MapFile{Data: []byte("id,name\n1,Alice\n")},
+		}
+
+		validated, err := NewBuilder().AddFS(fsys).Build(ctx)
+		require.NoError(t, err, "Build() should succeed")
+
+		db, err := validated.Open(ctx)
+		require.NoError(t, err, "Open() after Build() should succeed")
+		defer func() { _ = db.Close() }()
+
+		var rows int
+		require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&rows))
+		assert.Equal(t, 1, rows, "the file must be loaded once, not once per build")
+	})
+
+	t.Run("open after a failed open loads an added filesystem once", func(t *testing.T) {
+		// The first open fails on the auto-save target, which is a check that
+		// runs after the build has derived its readers from the filesystem.
+		// Those readers must not stay behind: registering them a second time
+		// loads the file twice.
+		dir := t.TempDir()
+		jsonPath := filepath.Join(dir, "orders.json")
+		require.NoError(t, os.WriteFile(jsonPath, []byte(`[{"id":1}]`), 0600))
+
+		fsys := fstest.MapFS{
+			"users.csv": &fstest.MapFile{Data: []byte("id,name\n1,Alice\n")},
+		}
+		// Overwrite mode cannot write a JSON source back to itself.
+		builder := NewBuilder().AddFS(fsys).AddPath(jsonPath).EnableAutoSave("")
+
+		db, err := builder.Open(ctx)
+		if db != nil {
+			_ = db.Close()
+		}
+		require.Error(t, err, "Open() should refuse to overwrite a source it cannot write")
+
+		// Correct the configuration and try again.
+		db, err = builder.EnableAutoSave(filepath.Join(dir, "out")).Open(ctx)
+		require.NoError(t, err, "Open() should succeed once auto-save has an output directory")
+		defer func() { _ = db.Close() }()
+
+		var rows int
+		require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&rows))
+		assert.Equal(t, 1, rows, "the filesystem's file must be loaded once, not once per attempt")
 	})
 
 	t.Run("successful open with CSV file", func(t *testing.T) {
@@ -972,7 +1033,7 @@ func TestAutoSave_OnCommit(t *testing.T) {
 	assert.Contains(t, string(content), "David", "Auto-saved file should contain committed data")
 }
 
-func TestAutoSave_DisableAutoSave(t *testing.T) {
+func TestAutoSave_OffByDefault(t *testing.T) {
 	// Create temporary directory
 	tmpDir := t.TempDir()
 
@@ -987,7 +1048,7 @@ func TestAutoSave_DisableAutoSave(t *testing.T) {
 	err = os.MkdirAll(outputDir, 0750)
 	require.NoError(t, err, "Failed to create output dir")
 
-	// Build database without auto-save (default behavior)
+	// Build database without auto-save (the default)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -1019,7 +1080,7 @@ func TestAutoSave_DisableAutoSave(t *testing.T) {
 	// Check that no output file was created
 	outputFile := filepath.Join(outputDir, "test.csv")
 	if _, err := os.Stat(outputFile); !os.IsNotExist(err) {
-		assert.NoFileExists(t, outputFile, "Auto-save file should not have been created when auto-save is disabled")
+		assert.NoFileExists(t, outputFile, "Auto-save file should not have been created when auto-save was never enabled")
 	}
 }
 
@@ -1154,60 +1215,6 @@ func TestAutoSave_MultipleCommitsOverwrite(t *testing.T) {
 
 	// Verify original count (1) was overwritten
 	assert.NotContains(t, string(content3), "Initial,1", "File should not contain old count (1) after update")
-}
-
-func TestAutoSave_ExplicitDisable(t *testing.T) {
-	// Test the DisableAutoSave method explicitly
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-
-	// Create test CSV file
-	csvPath := filepath.Join(tmpDir, "test.csv")
-	csvContent := "name,age\nAlice,25\n"
-	err := os.WriteFile(csvPath, []byte(csvContent), 0600)
-	require.NoError(t, err, "Failed to write test CSV")
-
-	// Create output directory
-	outputDir := filepath.Join(tmpDir, "output")
-	err = os.MkdirAll(outputDir, 0750)
-	require.NoError(t, err, "Failed to create output dir")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// First enable auto-save, then explicitly disable it
-	builder := NewBuilder().
-		AddPath(csvPath).
-		EnableAutoSave(outputDir).
-		DisableAutoSave() // This should override the previous EnableAutoSave
-
-	validatedBuilder, err := builder.Build(ctx)
-	if err != nil {
-		require.NoError(t, err, "Build should succeed")
-	}
-
-	db, err := validatedBuilder.Open(ctx)
-	if err != nil {
-		require.NoError(t, err, "Open should succeed")
-	}
-
-	// Modify data
-	_, err = db.ExecContext(ctx, "INSERT INTO test (name, age) VALUES ('Disabled', 99)")
-	if err != nil {
-		require.NoError(t, err, "Insert should succeed")
-	}
-
-	// Close database (should NOT trigger auto-save due to DisableAutoSave)
-	if err := db.Close(); err != nil {
-		require.NoError(t, err, "Close should succeed")
-	}
-
-	// Check that no output file was created
-	outputFile := filepath.Join(outputDir, "test.csv")
-	if _, err := os.Stat(outputFile); !os.IsNotExist(err) {
-		assert.NoFileExists(t, outputFile, "Auto-save file should not have been created when explicitly disabled")
-	}
 }
 
 func TestBuilder_ErrorCases(t *testing.T) {

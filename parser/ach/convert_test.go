@@ -44,14 +44,14 @@ func TestFromFile_EmptyFile(t *testing.T) {
 	require.NotNil(t, ts)
 
 	// File header should have 1 row
-	assert.Len(t, ts.FileHeader.Records, 1)
-	assert.Equal(t, "231380104", ts.FileHeader.Records[0][0])
+	assert.Len(t, ts.fileHeader.Records, 1)
+	assert.Equal(t, "231380104", ts.fileHeader.Records[0][0])
 
 	// Batches should be empty
-	assert.Len(t, ts.Batches.Records, 0)
+	assert.Len(t, ts.batches.Records, 0)
 
 	// Entries should be empty
-	assert.Len(t, ts.Entries.Records, 0)
+	assert.Len(t, ts.entries.Records, 0)
 }
 
 func TestFromFile_WithBatchAndEntry(t *testing.T) {
@@ -61,20 +61,20 @@ func TestFromFile_WithBatchAndEntry(t *testing.T) {
 	require.NotNil(t, ts)
 
 	// Check file header
-	assert.Len(t, ts.FileHeader.Records, 1)
-	assert.Equal(t, "231380104", ts.FileHeader.Records[0][0])
+	assert.Len(t, ts.fileHeader.Records, 1)
+	assert.Equal(t, "231380104", ts.fileHeader.Records[0][0])
 
 	// Check batches
-	assert.Len(t, ts.Batches.Records, 1)
-	batchRecord := ts.Batches.Records[0]
+	assert.Len(t, ts.batches.Records, 1)
+	batchRecord := ts.batches.Records[0]
 	assert.Equal(t, "0", batchRecord[0])               // batch_index
 	assert.Equal(t, "225", batchRecord[1])             // service_class_code (DebitsOnly)
 	assert.Equal(t, "Name on Account", batchRecord[2]) // company_name
 	assert.Equal(t, "PPD", batchRecord[5])             // standard_entry_class_code
 
 	// Check entries
-	assert.Len(t, ts.Entries.Records, 1)
-	entryRecord := ts.Entries.Records[0]
+	assert.Len(t, ts.entries.Records, 1)
+	entryRecord := ts.entries.Records[0]
 	assert.Equal(t, "0", entryRecord[0])                     // batch_index
 	assert.Equal(t, "0", entryRecord[1])                     // entry_index
 	assert.Equal(t, "27", entryRecord[2])                    // transaction_code (CheckingDebit)
@@ -117,10 +117,10 @@ func TestToFile_ModifyAmount(t *testing.T) {
 	require.NotNil(t, ts)
 
 	// Modify amount in entries
-	require.Len(t, ts.Entries.Records, 1)
+	require.Len(t, ts.entries.Records, 1)
 	// Find amount column index
 	amountIdx := -1
-	for i, h := range ts.Entries.Headers {
+	for i, h := range ts.entries.Headers {
 		if h == "amount" {
 			amountIdx = i
 			break
@@ -129,7 +129,7 @@ func TestToFile_ModifyAmount(t *testing.T) {
 	require.NotEqual(t, -1, amountIdx, "amount column not found")
 
 	// Change amount from 100000000 to 50000000
-	ts.Entries.Records[0][amountIdx] = "50000000"
+	ts.entries.Records[0][amountIdx] = "50000000"
 
 	// Convert back to file
 	newFile, err := ts.toFile()
@@ -153,10 +153,10 @@ func TestToFile_ModifiedAmountIsWritable(t *testing.T) {
 	ts := fromFile(original)
 	require.NotNil(t, ts)
 
-	amountIdx := findHeaderIndex(t, ts.Entries.Headers, "amount")
+	amountIdx := findHeaderIndex(t, ts.entries.Headers, "amount")
 
 	const newAmount = 50000000
-	ts.Entries.Records[0][amountIdx] = strconv.Itoa(newAmount)
+	ts.entries.Records[0][amountIdx] = strconv.Itoa(newAmount)
 
 	var buf bytes.Buffer
 	require.NoError(t, ts.WriteToWriter(&buf))
@@ -187,12 +187,12 @@ func TestToFile_ModifiedIATAmountIsWritable(t *testing.T) {
 
 	ts := fromFile(file)
 	require.NotNil(t, ts)
-	require.NotNil(t, ts.IATEntries)
-	require.NotEmpty(t, ts.IATEntries.Records)
+	require.NotNil(t, ts.iatEntries)
+	require.NotEmpty(t, ts.iatEntries.Records)
 
-	amountIdx := findHeaderIndex(t, ts.IATEntries.Headers, "amount")
+	amountIdx := findHeaderIndex(t, ts.iatEntries.Headers, "amount")
 	const newAmount = 50000
-	ts.IATEntries.Records[0][amountIdx] = strconv.Itoa(newAmount)
+	ts.iatEntries.Records[0][amountIdx] = strconv.Itoa(newAmount)
 
 	var buf bytes.Buffer
 	require.NoError(t, ts.WriteToWriter(&buf))
@@ -208,10 +208,10 @@ func TestToFile_RejectsNegativeBatchIndexInBatches(t *testing.T) {
 	file := createTestACHFile(t)
 	ts := fromFile(file)
 	require.NotNil(t, ts)
-	require.Len(t, ts.Batches.Records, 1)
+	require.Len(t, ts.batches.Records, 1)
 
-	batchIdx := findHeaderIndex(t, ts.Batches.Headers, "batch_index")
-	ts.Batches.Records[0][batchIdx] = "-1"
+	batchIdx := findHeaderIndex(t, ts.batches.Headers, "batch_index")
+	ts.batches.Records[0][batchIdx] = "-1"
 
 	newFile, err := ts.toFile()
 
@@ -224,10 +224,10 @@ func TestToFile_RejectsNegativeBatchIndexInEntries(t *testing.T) {
 	file := createTestACHFile(t)
 	ts := fromFile(file)
 	require.NotNil(t, ts)
-	require.Len(t, ts.Entries.Records, 1)
+	require.Len(t, ts.entries.Records, 1)
 
-	batchIdx := findHeaderIndex(t, ts.Entries.Headers, "batch_index")
-	ts.Entries.Records[0][batchIdx] = "-1"
+	batchIdx := findHeaderIndex(t, ts.entries.Headers, "batch_index")
+	ts.entries.Records[0][batchIdx] = "-1"
 
 	newFile, err := ts.toFile()
 
@@ -252,6 +252,9 @@ func TestGetters(t *testing.T) {
 	assert.Nil(t, nilTs.GetBatchesTable())
 	assert.Nil(t, nilTs.GetFileHeaderTable())
 	assert.Nil(t, nilTs.GetAddendaTable())
+	assert.Nil(t, nilTs.GetIATBatchesTable())
+	assert.Nil(t, nilTs.GetIATEntriesTable())
+	assert.Nil(t, nilTs.GetIATAddendaTable())
 }
 
 func TestToFile_DeepCopy(t *testing.T) {
@@ -265,7 +268,7 @@ func TestToFile_DeepCopy(t *testing.T) {
 
 	// Modify amount in entries TableData
 	amountIdx := -1
-	for i, h := range ts.Entries.Headers {
+	for i, h := range ts.entries.Headers {
 		if h == "amount" {
 			amountIdx = i
 			break
@@ -275,7 +278,7 @@ func TestToFile_DeepCopy(t *testing.T) {
 
 	// Change amount to a different value
 	newAmount := originalAmount + 1000000
-	ts.Entries.Records[0][amountIdx] = strconv.Itoa(newAmount)
+	ts.entries.Records[0][amountIdx] = strconv.Itoa(newAmount)
 
 	// Convert to new file
 	newFile, err := ts.toFile()
@@ -303,12 +306,12 @@ func TestFromFile_RealACHFile(t *testing.T) {
 	require.NotNil(t, ts)
 
 	// Basic structure checks
-	assert.NotEmpty(t, ts.FileHeader.Headers)
-	assert.Len(t, ts.FileHeader.Records, 1)
+	assert.NotEmpty(t, ts.fileHeader.Headers)
+	assert.Len(t, ts.fileHeader.Records, 1)
 
-	t.Logf("Batches: %d", len(ts.Batches.Records))
-	t.Logf("Entries: %d", len(ts.Entries.Records))
-	t.Logf("Addenda: %d", len(ts.Addenda.Records))
+	t.Logf("Batches: %d", len(ts.batches.Records))
+	t.Logf("Entries: %d", len(ts.entries.Records))
+	t.Logf("Addenda: %d", len(ts.addenda.Records))
 }
 
 // TestFromFile_WithAddenda99Return tests Addenda99 return entries
@@ -325,10 +328,10 @@ func TestFromFile_WithAddenda99Return(t *testing.T) {
 	require.NotNil(t, ts)
 
 	// Should have addenda records
-	assert.NotEmpty(t, ts.Addenda.Records, "expected addenda records for return file")
+	assert.NotEmpty(t, ts.addenda.Records, "expected addenda records for return file")
 
 	// Check addenda type
-	for _, record := range ts.Addenda.Records {
+	for _, record := range ts.addenda.Records {
 		addendaType := record[3] // addenda_type column
 		assert.Equal(t, "99", addendaType, "expected Addenda99 type for return")
 	}
@@ -348,10 +351,10 @@ func TestFromFile_WithAddenda98COR(t *testing.T) {
 	require.NotNil(t, ts)
 
 	// Should have addenda records
-	assert.NotEmpty(t, ts.Addenda.Records, "expected addenda records for COR file")
+	assert.NotEmpty(t, ts.addenda.Records, "expected addenda records for COR file")
 
 	// Check addenda type is 98
-	for _, record := range ts.Addenda.Records {
+	for _, record := range ts.addenda.Records {
 		addendaType := record[3] // addenda_type column
 		assert.Equal(t, "98", addendaType, "expected Addenda98 type for COR")
 	}
@@ -371,20 +374,20 @@ func TestFromFile_WithIATBatch(t *testing.T) {
 	require.NotNil(t, ts)
 
 	// IAT batches should be present
-	assert.NotNil(t, ts.IATBatches, "IATBatches should not be nil")
-	assert.NotEmpty(t, ts.IATBatches.Records, "expected IAT batch records")
+	require.NotNil(t, ts.GetIATBatchesTable(), "GetIATBatchesTable should not be nil")
+	assert.NotEmpty(t, ts.GetIATBatchesTable().Records, "expected IAT batch records")
 
 	// IAT entries should be present
-	assert.NotNil(t, ts.IATEntries, "IATEntries should not be nil")
-	assert.NotEmpty(t, ts.IATEntries.Records, "expected IAT entry records")
+	require.NotNil(t, ts.GetIATEntriesTable(), "GetIATEntriesTable should not be nil")
+	assert.NotEmpty(t, ts.GetIATEntriesTable().Records, "expected IAT entry records")
 
 	// IAT addenda should be present (types 10-18)
-	assert.NotNil(t, ts.IATAddenda, "IATAddenda should not be nil")
-	assert.NotEmpty(t, ts.IATAddenda.Records, "expected IAT addenda records")
+	require.NotNil(t, ts.GetIATAddendaTable(), "GetIATAddendaTable should not be nil")
+	assert.NotEmpty(t, ts.GetIATAddendaTable().Records, "expected IAT addenda records")
 
 	// Verify we have different addenda types (10, 11, 12, 13, 14, 15, 16, 17, 18)
 	addendaTypes := make(map[string]bool)
-	for _, record := range ts.IATAddenda.Records {
+	for _, record := range ts.GetIATAddendaTable().Records {
 		addendaType := record[3] // addenda_type column
 		addendaTypes[addendaType] = true
 	}
@@ -432,9 +435,9 @@ func TestParseReader(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ts)
 
-	assert.NotEmpty(t, ts.FileHeader.Records)
-	assert.NotEmpty(t, ts.Batches.Records)
-	assert.NotEmpty(t, ts.Entries.Records)
+	assert.NotEmpty(t, ts.fileHeader.Records)
+	assert.NotEmpty(t, ts.batches.Records)
+	assert.NotEmpty(t, ts.entries.Records)
 }
 
 // TestWriteToWriter tests writing ACH to io.Writer
@@ -467,20 +470,20 @@ func TestUpdateFromTableData(t *testing.T) {
 
 	// Create modified TableData
 	newEntries := &parser.TableData{
-		Headers: ts.Entries.Headers,
-		Records: ts.Entries.Records,
+		Headers: ts.entries.Headers,
+		Records: ts.entries.Records,
 	}
 	newBatches := &parser.TableData{
-		Headers: ts.Batches.Headers,
-		Records: ts.Batches.Records,
+		Headers: ts.batches.Headers,
+		Records: ts.batches.Records,
 	}
 	newFileHeader := &parser.TableData{
-		Headers: ts.FileHeader.Headers,
-		Records: ts.FileHeader.Records,
+		Headers: ts.fileHeader.Headers,
+		Records: ts.fileHeader.Records,
 	}
 	newAddenda := &parser.TableData{
-		Headers: ts.Addenda.Headers,
-		Records: ts.Addenda.Records,
+		Headers: ts.addenda.Headers,
+		Records: ts.addenda.Records,
 	}
 
 	// Update TableData
@@ -490,10 +493,10 @@ func TestUpdateFromTableData(t *testing.T) {
 	ts.UpdateAddendaFromTableData(newAddenda)
 
 	// Verify updates
-	assert.Equal(t, newEntries, ts.Entries)
-	assert.Equal(t, newBatches, ts.Batches)
-	assert.Equal(t, newFileHeader, ts.FileHeader)
-	assert.Equal(t, newAddenda, ts.Addenda)
+	assert.Equal(t, newEntries, ts.entries)
+	assert.Equal(t, newBatches, ts.batches)
+	assert.Equal(t, newFileHeader, ts.fileHeader)
+	assert.Equal(t, newAddenda, ts.addenda)
 }
 
 // TestUpdateIATFromTableData tests updating IAT TableData
@@ -508,20 +511,20 @@ func TestUpdateIATFromTableData(t *testing.T) {
 
 	ts := fromFile(file)
 	require.NotNil(t, ts)
-	require.NotNil(t, ts.IATBatches)
+	require.NotNil(t, ts.iatBatches)
 
 	// Create modified TableData
 	newIATBatches := &parser.TableData{
-		Headers: ts.IATBatches.Headers,
-		Records: ts.IATBatches.Records,
+		Headers: ts.iatBatches.Headers,
+		Records: ts.iatBatches.Records,
 	}
 	newIATEntries := &parser.TableData{
-		Headers: ts.IATEntries.Headers,
-		Records: ts.IATEntries.Records,
+		Headers: ts.iatEntries.Headers,
+		Records: ts.iatEntries.Records,
 	}
 	newIATAddenda := &parser.TableData{
-		Headers: ts.IATAddenda.Headers,
-		Records: ts.IATAddenda.Records,
+		Headers: ts.iatAddenda.Headers,
+		Records: ts.iatAddenda.Records,
 	}
 
 	// Update TableData
@@ -530,9 +533,9 @@ func TestUpdateIATFromTableData(t *testing.T) {
 	ts.UpdateIATAddendaFromTableData(newIATAddenda)
 
 	// Verify updates
-	assert.Equal(t, newIATBatches, ts.IATBatches)
-	assert.Equal(t, newIATEntries, ts.IATEntries)
-	assert.Equal(t, newIATAddenda, ts.IATAddenda)
+	assert.Equal(t, newIATBatches, ts.iatBatches)
+	assert.Equal(t, newIATEntries, ts.iatEntries)
+	assert.Equal(t, newIATAddenda, ts.iatAddenda)
 }
 
 // TestModifyBatchHeader tests modifying batch header fields
@@ -540,11 +543,11 @@ func TestModifyBatchHeader(t *testing.T) {
 	file := createTestACHFile(t)
 	ts := fromFile(file)
 	require.NotNil(t, ts)
-	require.NotEmpty(t, ts.Batches.Records)
+	require.NotEmpty(t, ts.batches.Records)
 
 	// Find company_name column
 	companyNameIdx := -1
-	for i, h := range ts.Batches.Headers {
+	for i, h := range ts.batches.Headers {
 		if h == "company_name" {
 			companyNameIdx = i
 			break
@@ -553,9 +556,9 @@ func TestModifyBatchHeader(t *testing.T) {
 	require.NotEqual(t, -1, companyNameIdx)
 
 	// Modify company name
-	originalName := ts.Batches.Records[0][companyNameIdx]
+	originalName := ts.batches.Records[0][companyNameIdx]
 	newName := "Modified Company"
-	ts.Batches.Records[0][companyNameIdx] = newName
+	ts.batches.Records[0][companyNameIdx] = newName
 
 	// Convert back
 	newFile, err := ts.toFile()
@@ -572,11 +575,11 @@ func TestModifyFileHeader(t *testing.T) {
 	file := createTestACHFile(t)
 	ts := fromFile(file)
 	require.NotNil(t, ts)
-	require.Len(t, ts.FileHeader.Records, 1)
+	require.Len(t, ts.fileHeader.Records, 1)
 
 	// Find immediate_destination_name column
 	destNameIdx := -1
-	for i, h := range ts.FileHeader.Headers {
+	for i, h := range ts.fileHeader.Headers {
 		if h == "immediate_destination_name" {
 			destNameIdx = i
 			break
@@ -586,7 +589,7 @@ func TestModifyFileHeader(t *testing.T) {
 
 	// Modify destination name
 	newName := "New Destination"
-	ts.FileHeader.Records[0][destNameIdx] = newName
+	ts.fileHeader.Records[0][destNameIdx] = newName
 
 	// Convert back
 	newFile, err := ts.toFile()
@@ -642,11 +645,11 @@ func TestModifyAddenda05(t *testing.T) {
 	// Convert to TableSet
 	ts := fromFile(file)
 	require.NotNil(t, ts)
-	require.NotEmpty(t, ts.Addenda.Records)
+	require.NotEmpty(t, ts.addenda.Records)
 
 	// Find payment_related_information column
 	paymentInfoIdx := -1
-	for i, h := range ts.Addenda.Headers {
+	for i, h := range ts.addenda.Headers {
 		if h == "payment_related_information" {
 			paymentInfoIdx = i
 			break
@@ -656,7 +659,7 @@ func TestModifyAddenda05(t *testing.T) {
 
 	// Modify payment info
 	newPaymentInfo := "Modified Payment Info"
-	ts.Addenda.Records[0][paymentInfoIdx] = newPaymentInfo
+	ts.addenda.Records[0][paymentInfoIdx] = newPaymentInfo
 
 	// Convert back
 	newFile, err := ts.toFile()
@@ -709,13 +712,13 @@ func TestApplyAddendaModifications_AdjustsAddenda05IndexAfterAddenda02(t *testin
 
 	ts := fromFile(file)
 	require.NotNil(t, ts)
-	require.Len(t, ts.Addenda.Records, 2)
+	require.Len(t, ts.addenda.Records, 2)
 
-	paymentInfoIdx := findHeaderIndex(t, ts.Addenda.Headers, "payment_related_information")
-	require.Equal(t, "02", ts.Addenda.Records[0][3])
-	require.Equal(t, "05", ts.Addenda.Records[1][3])
+	paymentInfoIdx := findHeaderIndex(t, ts.addenda.Headers, "payment_related_information")
+	require.Equal(t, "02", ts.addenda.Records[0][3])
+	require.Equal(t, "05", ts.addenda.Records[1][3])
 
-	ts.Addenda.Records[1][paymentInfoIdx] = "Updated Payment Info"
+	ts.addenda.Records[1][paymentInfoIdx] = "Updated Payment Info"
 
 	err = ts.applyAddendaModifications(file)
 	require.NoError(t, err)
@@ -733,29 +736,29 @@ func TestColumnTypes(t *testing.T) {
 	require.NotNil(t, ts)
 
 	// Check entries column types
-	assert.NotEmpty(t, ts.Entries.ColumnTypes)
+	assert.NotEmpty(t, ts.entries.ColumnTypes)
 
 	// Amount should be integer
 	amountIdx := -1
-	for i, h := range ts.Entries.Headers {
+	for i, h := range ts.entries.Headers {
 		if h == "amount" {
 			amountIdx = i
 			break
 		}
 	}
 	require.NotEqual(t, -1, amountIdx)
-	assert.Equal(t, parser.TypeInteger, ts.Entries.ColumnTypes[amountIdx])
+	assert.Equal(t, parser.TypeInteger, ts.entries.ColumnTypes[amountIdx])
 
 	// individual_name should be text
 	nameIdx := -1
-	for i, h := range ts.Entries.Headers {
+	for i, h := range ts.entries.Headers {
 		if h == "individual_name" {
 			nameIdx = i
 			break
 		}
 	}
 	require.NotEqual(t, -1, nameIdx)
-	assert.Equal(t, parser.TypeText, ts.Entries.ColumnTypes[nameIdx])
+	assert.Equal(t, parser.TypeText, ts.entries.ColumnTypes[nameIdx])
 }
 
 // TestFileHeaderColumnTypes tests file header column types
@@ -764,11 +767,11 @@ func TestFileHeaderColumnTypes(t *testing.T) {
 	ts := fromFile(file)
 	require.NotNil(t, ts)
 
-	assert.NotEmpty(t, ts.FileHeader.ColumnTypes)
-	assert.Len(t, ts.FileHeader.ColumnTypes, len(ts.FileHeader.Headers))
+	assert.NotEmpty(t, ts.fileHeader.ColumnTypes)
+	assert.Len(t, ts.fileHeader.ColumnTypes, len(ts.fileHeader.Headers))
 
 	// All file header fields should be text
-	for _, ct := range ts.FileHeader.ColumnTypes {
+	for _, ct := range ts.fileHeader.ColumnTypes {
 		assert.Equal(t, parser.TypeText, ct)
 	}
 }
@@ -779,19 +782,19 @@ func TestBatchColumnTypes(t *testing.T) {
 	ts := fromFile(file)
 	require.NotNil(t, ts)
 
-	assert.NotEmpty(t, ts.Batches.ColumnTypes)
-	assert.Len(t, ts.Batches.ColumnTypes, len(ts.Batches.Headers))
+	assert.NotEmpty(t, ts.batches.ColumnTypes)
+	assert.Len(t, ts.batches.ColumnTypes, len(ts.batches.Headers))
 
 	// batch_index should be integer
 	batchIdxCol := -1
-	for i, h := range ts.Batches.Headers {
+	for i, h := range ts.batches.Headers {
 		if h == "batch_index" {
 			batchIdxCol = i
 			break
 		}
 	}
 	require.NotEqual(t, -1, batchIdxCol)
-	assert.Equal(t, parser.TypeInteger, ts.Batches.ColumnTypes[batchIdxCol])
+	assert.Equal(t, parser.TypeInteger, ts.batches.ColumnTypes[batchIdxCol])
 }
 
 // TestEmptyAddenda tests file with no addenda records
@@ -801,10 +804,10 @@ func TestEmptyAddenda(t *testing.T) {
 	require.NotNil(t, ts)
 
 	// Addenda should be initialized but may be empty
-	assert.NotNil(t, ts.Addenda)
-	assert.NotNil(t, ts.Addenda.Headers)
+	assert.NotNil(t, ts.addenda)
+	assert.NotNil(t, ts.addenda.Headers)
 	// Empty records should be an empty slice, not nil
-	assert.NotNil(t, ts.Addenda.Records)
+	assert.NotNil(t, ts.addenda.Records)
 }
 
 // TestMultipleBatches tests file with multiple batches
@@ -851,14 +854,14 @@ func TestMultipleBatches(t *testing.T) {
 	require.NotNil(t, ts)
 
 	// Should have 2 batch records
-	assert.Len(t, ts.Batches.Records, 2)
+	assert.Len(t, ts.batches.Records, 2)
 
 	// Should have 2 entry records
-	assert.Len(t, ts.Entries.Records, 2)
+	assert.Len(t, ts.entries.Records, 2)
 
 	// Verify batch indices
-	assert.Equal(t, "0", ts.Entries.Records[0][0]) // First entry in batch 0
-	assert.Equal(t, "1", ts.Entries.Records[1][0]) // Second entry in batch 1
+	assert.Equal(t, "0", ts.entries.Records[0][0]) // First entry in batch 0
+	assert.Equal(t, "1", ts.entries.Records[1][0]) // Second entry in batch 1
 }
 
 // TestToFile_NilOriginalFile tests toFile with nil original file
@@ -885,11 +888,11 @@ func TestModifyIATBatchHeader(t *testing.T) {
 
 	ts := fromFile(file)
 	require.NotNil(t, ts)
-	require.NotEmpty(t, ts.IATBatches.Records)
+	require.NotEmpty(t, ts.iatBatches.Records)
 
 	// Find company_entry_description column
 	descIdx := -1
-	for i, h := range ts.IATBatches.Headers {
+	for i, h := range ts.iatBatches.Headers {
 		if h == "company_entry_description" {
 			descIdx = i
 			break
@@ -899,7 +902,7 @@ func TestModifyIATBatchHeader(t *testing.T) {
 
 	// Modify description
 	newDesc := "NEWPAYMENT"
-	ts.IATBatches.Records[0][descIdx] = newDesc
+	ts.iatBatches.Records[0][descIdx] = newDesc
 
 	// Convert back
 	newFile, err := ts.toFile()
@@ -921,11 +924,11 @@ func TestModifyIATEntry(t *testing.T) {
 
 	ts := fromFile(file)
 	require.NotNil(t, ts)
-	require.NotEmpty(t, ts.IATEntries.Records)
+	require.NotEmpty(t, ts.iatEntries.Records)
 
 	// Find amount column
 	amountIdx := -1
-	for i, h := range ts.IATEntries.Headers {
+	for i, h := range ts.iatEntries.Headers {
 		if h == "amount" {
 			amountIdx = i
 			break
@@ -935,7 +938,7 @@ func TestModifyIATEntry(t *testing.T) {
 
 	// Modify amount
 	newAmount := 200000
-	ts.IATEntries.Records[0][amountIdx] = strconv.Itoa(newAmount)
+	ts.iatEntries.Records[0][amountIdx] = strconv.Itoa(newAmount)
 
 	// Convert back
 	newFile, err := ts.toFile()
@@ -957,12 +960,12 @@ func TestModifyIATAddenda(t *testing.T) {
 
 	ts := fromFile(file)
 	require.NotNil(t, ts)
-	require.NotEmpty(t, ts.IATAddenda.Records)
+	require.NotEmpty(t, ts.iatAddenda.Records)
 
 	// Find a record with addenda_type "11" (Addenda11 - Originator Name)
 	var addenda11RecordIdx = -1
 	addendaTypeIdx := -1
-	for i, h := range ts.IATAddenda.Headers {
+	for i, h := range ts.iatAddenda.Headers {
 		if h == "addenda_type" {
 			addendaTypeIdx = i
 			break
@@ -970,7 +973,7 @@ func TestModifyIATAddenda(t *testing.T) {
 	}
 	require.NotEqual(t, -1, addendaTypeIdx)
 
-	for i, record := range ts.IATAddenda.Records {
+	for i, record := range ts.iatAddenda.Records {
 		if record[addendaTypeIdx] == "11" {
 			addenda11RecordIdx = i
 			break
@@ -980,7 +983,7 @@ func TestModifyIATAddenda(t *testing.T) {
 
 	// Find originator_name column
 	originatorNameIdx := -1
-	for i, h := range ts.IATAddenda.Headers {
+	for i, h := range ts.iatAddenda.Headers {
 		if h == "originator_name" {
 			originatorNameIdx = i
 			break
@@ -990,7 +993,7 @@ func TestModifyIATAddenda(t *testing.T) {
 
 	// Modify originator name
 	newName := "Modified Originator"
-	ts.IATAddenda.Records[addenda11RecordIdx][originatorNameIdx] = newName
+	ts.iatAddenda.Records[addenda11RecordIdx][originatorNameIdx] = newName
 
 	// Convert back
 	newFile, err := ts.toFile()
@@ -1016,7 +1019,7 @@ func TestAddenda02Handling(t *testing.T) {
 
 	// Check if there are Addenda02 records
 	addenda02Found := false
-	for _, record := range ts.Addenda.Records {
+	for _, record := range ts.addenda.Records {
 		if record[3] == "02" { // addenda_type column
 			addenda02Found = true
 			break
@@ -1040,7 +1043,7 @@ func TestEmptyFileHeaderRecords(t *testing.T) {
 	require.NotNil(t, ts)
 
 	// Clear file header records
-	ts.FileHeader.Records = [][]string{}
+	ts.fileHeader.Records = [][]string{}
 
 	// Convert back - should not panic
 	newFile, err := ts.toFile()
@@ -1088,12 +1091,12 @@ func TestModifyAddenda98(t *testing.T) {
 
 	ts := fromFile(file)
 	require.NotNil(t, ts)
-	require.NotEmpty(t, ts.Addenda.Records)
+	require.NotEmpty(t, ts.addenda.Records)
 
 	// Find Addenda98 record
 	var addenda98RecordIdx = -1
 	addendaTypeIdx := -1
-	for i, h := range ts.Addenda.Headers {
+	for i, h := range ts.addenda.Headers {
 		if h == "addenda_type" {
 			addendaTypeIdx = i
 			break
@@ -1101,7 +1104,7 @@ func TestModifyAddenda98(t *testing.T) {
 	}
 	require.NotEqual(t, -1, addendaTypeIdx)
 
-	for i, record := range ts.Addenda.Records {
+	for i, record := range ts.addenda.Records {
 		if record[addendaTypeIdx] == "98" {
 			addenda98RecordIdx = i
 			break
@@ -1111,7 +1114,7 @@ func TestModifyAddenda98(t *testing.T) {
 
 	// Find change_code column
 	changeCodeIdx := -1
-	for i, h := range ts.Addenda.Headers {
+	for i, h := range ts.addenda.Headers {
 		if h == "change_code" {
 			changeCodeIdx = i
 			break
@@ -1121,7 +1124,7 @@ func TestModifyAddenda98(t *testing.T) {
 
 	// Find corrected_data column
 	correctedDataIdx := -1
-	for i, h := range ts.Addenda.Headers {
+	for i, h := range ts.addenda.Headers {
 		if h == "corrected_data" {
 			correctedDataIdx = i
 			break
@@ -1132,8 +1135,8 @@ func TestModifyAddenda98(t *testing.T) {
 	// Modify change code and corrected data
 	newChangeCode := "C02"
 	newCorrectedData := "999999999"
-	ts.Addenda.Records[addenda98RecordIdx][changeCodeIdx] = newChangeCode
-	ts.Addenda.Records[addenda98RecordIdx][correctedDataIdx] = newCorrectedData
+	ts.addenda.Records[addenda98RecordIdx][changeCodeIdx] = newChangeCode
+	ts.addenda.Records[addenda98RecordIdx][correctedDataIdx] = newCorrectedData
 
 	// Convert back
 	newFile, err := ts.toFile()
@@ -1167,12 +1170,12 @@ func TestModifyAddenda99(t *testing.T) {
 
 	ts := fromFile(file)
 	require.NotNil(t, ts)
-	require.NotEmpty(t, ts.Addenda.Records)
+	require.NotEmpty(t, ts.addenda.Records)
 
 	// Find Addenda99 record
 	var addenda99RecordIdx = -1
 	addendaTypeIdx := -1
-	for i, h := range ts.Addenda.Headers {
+	for i, h := range ts.addenda.Headers {
 		if h == "addenda_type" {
 			addendaTypeIdx = i
 			break
@@ -1180,7 +1183,7 @@ func TestModifyAddenda99(t *testing.T) {
 	}
 	require.NotEqual(t, -1, addendaTypeIdx)
 
-	for i, record := range ts.Addenda.Records {
+	for i, record := range ts.addenda.Records {
 		if record[addendaTypeIdx] == "99" {
 			addenda99RecordIdx = i
 			break
@@ -1190,7 +1193,7 @@ func TestModifyAddenda99(t *testing.T) {
 
 	// Find return_code column
 	returnCodeIdx := -1
-	for i, h := range ts.Addenda.Headers {
+	for i, h := range ts.addenda.Headers {
 		if h == "return_code" {
 			returnCodeIdx = i
 			break
@@ -1200,7 +1203,7 @@ func TestModifyAddenda99(t *testing.T) {
 
 	// Find addenda_information column
 	addendaInfoIdx := -1
-	for i, h := range ts.Addenda.Headers {
+	for i, h := range ts.addenda.Headers {
 		if h == "addenda_information" {
 			addendaInfoIdx = i
 			break
@@ -1211,8 +1214,8 @@ func TestModifyAddenda99(t *testing.T) {
 	// Modify return code and addenda information
 	newReturnCode := "R02"
 	newAddendaInfo := "MODIFIED INFO"
-	ts.Addenda.Records[addenda99RecordIdx][returnCodeIdx] = newReturnCode
-	ts.Addenda.Records[addenda99RecordIdx][addendaInfoIdx] = newAddendaInfo
+	ts.addenda.Records[addenda99RecordIdx][returnCodeIdx] = newReturnCode
+	ts.addenda.Records[addenda99RecordIdx][addendaInfoIdx] = newAddendaInfo
 
 	// Convert back
 	newFile, err := ts.toFile()
@@ -1287,12 +1290,12 @@ func TestModifyAddenda98Refused(t *testing.T) {
 	// Convert to TableSet
 	ts := fromFile(file)
 	require.NotNil(t, ts)
-	require.NotEmpty(t, ts.Addenda.Records)
+	require.NotEmpty(t, ts.addenda.Records)
 
 	// Find Addenda98Refused record
 	var addenda98RefusedRecordIdx = -1
 	addendaTypeIdx := -1
-	for i, h := range ts.Addenda.Headers {
+	for i, h := range ts.addenda.Headers {
 		if h == "addenda_type" {
 			addendaTypeIdx = i
 			break
@@ -1300,7 +1303,7 @@ func TestModifyAddenda98Refused(t *testing.T) {
 	}
 	require.NotEqual(t, -1, addendaTypeIdx)
 
-	for i, record := range ts.Addenda.Records {
+	for i, record := range ts.addenda.Records {
 		if record[addendaTypeIdx] == "98_refused" {
 			addenda98RefusedRecordIdx = i
 			break
@@ -1310,7 +1313,7 @@ func TestModifyAddenda98Refused(t *testing.T) {
 
 	// Find refused_change_code column
 	refusedChangeCodeIdx := -1
-	for i, h := range ts.Addenda.Headers {
+	for i, h := range ts.addenda.Headers {
 		if h == "refused_change_code" {
 			refusedChangeCodeIdx = i
 			break
@@ -1320,7 +1323,7 @@ func TestModifyAddenda98Refused(t *testing.T) {
 
 	// Find corrected_data column
 	correctedDataIdx := -1
-	for i, h := range ts.Addenda.Headers {
+	for i, h := range ts.addenda.Headers {
 		if h == "corrected_data" {
 			correctedDataIdx = i
 			break
@@ -1331,8 +1334,8 @@ func TestModifyAddenda98Refused(t *testing.T) {
 	// Modify refused change code and corrected data
 	newRefusedChangeCode := "C02"
 	newCorrectedData := "987654321"
-	ts.Addenda.Records[addenda98RefusedRecordIdx][refusedChangeCodeIdx] = newRefusedChangeCode
-	ts.Addenda.Records[addenda98RefusedRecordIdx][correctedDataIdx] = newCorrectedData
+	ts.addenda.Records[addenda98RefusedRecordIdx][refusedChangeCodeIdx] = newRefusedChangeCode
+	ts.addenda.Records[addenda98RefusedRecordIdx][correctedDataIdx] = newCorrectedData
 
 	// Convert back
 	newFile, err := ts.toFile()
@@ -1406,12 +1409,12 @@ func TestModifyAddenda99Dishonored(t *testing.T) {
 	// Convert to TableSet
 	ts := fromFile(file)
 	require.NotNil(t, ts)
-	require.NotEmpty(t, ts.Addenda.Records)
+	require.NotEmpty(t, ts.addenda.Records)
 
 	// Find Addenda99Dishonored record
 	var addenda99DishonoredRecordIdx = -1
 	addendaTypeIdx := -1
-	for i, h := range ts.Addenda.Headers {
+	for i, h := range ts.addenda.Headers {
 		if h == "addenda_type" {
 			addendaTypeIdx = i
 			break
@@ -1419,7 +1422,7 @@ func TestModifyAddenda99Dishonored(t *testing.T) {
 	}
 	require.NotEqual(t, -1, addendaTypeIdx)
 
-	for i, record := range ts.Addenda.Records {
+	for i, record := range ts.addenda.Records {
 		if record[addendaTypeIdx] == "99_dishonored" {
 			addenda99DishonoredRecordIdx = i
 			break
@@ -1429,7 +1432,7 @@ func TestModifyAddenda99Dishonored(t *testing.T) {
 
 	// Find return_reason_code column (unique to Addenda99Dishonored)
 	returnReasonCodeIdx := -1
-	for i, h := range ts.Addenda.Headers {
+	for i, h := range ts.addenda.Headers {
 		if h == "return_reason_code" {
 			returnReasonCodeIdx = i
 			break
@@ -1439,7 +1442,7 @@ func TestModifyAddenda99Dishonored(t *testing.T) {
 
 	// Find addenda_information column
 	addendaInfoIdx := -1
-	for i, h := range ts.Addenda.Headers {
+	for i, h := range ts.addenda.Headers {
 		if h == "addenda_information" {
 			addendaInfoIdx = i
 			break
@@ -1450,8 +1453,8 @@ func TestModifyAddenda99Dishonored(t *testing.T) {
 	// Modify return reason code and addenda information
 	newReturnReasonCode := "R02"
 	newAddendaInfo := "MODIFIED DISHONORED INFO"
-	ts.Addenda.Records[addenda99DishonoredRecordIdx][returnReasonCodeIdx] = newReturnReasonCode
-	ts.Addenda.Records[addenda99DishonoredRecordIdx][addendaInfoIdx] = newAddendaInfo
+	ts.addenda.Records[addenda99DishonoredRecordIdx][returnReasonCodeIdx] = newReturnReasonCode
+	ts.addenda.Records[addenda99DishonoredRecordIdx][addendaInfoIdx] = newAddendaInfo
 
 	// Convert back
 	newFile, err := ts.toFile()
@@ -1529,12 +1532,12 @@ func TestModifyAddenda99Contested(t *testing.T) {
 	// Convert to TableSet
 	ts := fromFile(file)
 	require.NotNil(t, ts)
-	require.NotEmpty(t, ts.Addenda.Records)
+	require.NotEmpty(t, ts.addenda.Records)
 
 	// Find Addenda99Contested record
 	var addenda99ContestedRecordIdx = -1
 	addendaTypeIdx := -1
-	for i, h := range ts.Addenda.Headers {
+	for i, h := range ts.addenda.Headers {
 		if h == "addenda_type" {
 			addendaTypeIdx = i
 			break
@@ -1542,7 +1545,7 @@ func TestModifyAddenda99Contested(t *testing.T) {
 	}
 	require.NotEqual(t, -1, addendaTypeIdx)
 
-	for i, record := range ts.Addenda.Records {
+	for i, record := range ts.addenda.Records {
 		if record[addendaTypeIdx] == "99_contested" {
 			addenda99ContestedRecordIdx = i
 			break
@@ -1552,7 +1555,7 @@ func TestModifyAddenda99Contested(t *testing.T) {
 
 	// Find contested_return_code column
 	contestedReturnCodeIdx := -1
-	for i, h := range ts.Addenda.Headers {
+	for i, h := range ts.addenda.Headers {
 		if h == "contested_return_code" {
 			contestedReturnCodeIdx = i
 			break
@@ -1562,7 +1565,7 @@ func TestModifyAddenda99Contested(t *testing.T) {
 
 	// Find original_settlement_date column (unique to Addenda99Contested)
 	originalSettlementDateIdx := -1
-	for i, h := range ts.Addenda.Headers {
+	for i, h := range ts.addenda.Headers {
 		if h == "original_settlement_date" {
 			originalSettlementDateIdx = i
 			break
@@ -1573,8 +1576,8 @@ func TestModifyAddenda99Contested(t *testing.T) {
 	// Modify contested return code and original settlement date
 	newContestedReturnCode := "R72"
 	newOriginalSettlementDate := "200"
-	ts.Addenda.Records[addenda99ContestedRecordIdx][contestedReturnCodeIdx] = newContestedReturnCode
-	ts.Addenda.Records[addenda99ContestedRecordIdx][originalSettlementDateIdx] = newOriginalSettlementDate
+	ts.addenda.Records[addenda99ContestedRecordIdx][contestedReturnCodeIdx] = newContestedReturnCode
+	ts.addenda.Records[addenda99ContestedRecordIdx][originalSettlementDateIdx] = newOriginalSettlementDate
 
 	// Convert back
 	newFile, err := ts.toFile()
@@ -1635,16 +1638,16 @@ func TestApplyModifications_RefusesAMovedCoordinate(t *testing.T) {
 		t.Parallel()
 
 		_, ts := load(t)
-		require.GreaterOrEqual(t, len(ts.Entries.Records), 2, "the fixture must have two entries")
+		require.GreaterOrEqual(t, len(ts.entries.Records), 2, "the fixture must have two entries")
 
-		batchIdx := column(ts.Entries, "batch_index")
-		entryIdx := column(ts.Entries, "entry_index")
-		before := append([]string(nil), ts.Entries.Records[0]...)
+		batchIdx := column(ts.entries, "batch_index")
+		entryIdx := column(ts.entries, "entry_index")
+		before := append([]string(nil), ts.entries.Records[0]...)
 
 		// No value column is touched. Only the coordinates move.
-		ts.Entries.Records[1][batchIdx] = ts.Entries.Records[0][batchIdx]
-		ts.Entries.Records[1][entryIdx] = ts.Entries.Records[0][entryIdx]
-		ts.UpdateEntriesFromTableData(ts.Entries)
+		ts.entries.Records[1][batchIdx] = ts.entries.Records[0][batchIdx]
+		ts.entries.Records[1][entryIdx] = ts.entries.Records[0][entryIdx]
+		ts.UpdateEntriesFromTableData(ts.entries)
 
 		var buf bytes.Buffer
 		err := ts.WriteToWriter(&buf)
@@ -1656,7 +1659,7 @@ func TestApplyModifications_RefusesAMovedCoordinate(t *testing.T) {
 		if buf.Len() > 0 {
 			back, parseErr := ParseReader(bytes.NewReader(buf.Bytes()))
 			require.NoError(t, parseErr)
-			assert.Equal(t, before, back.Entries.Records[0],
+			assert.Equal(t, before, back.entries.Records[0],
 				"the entry nobody edited must not be overwritten")
 		}
 	})
@@ -1665,9 +1668,9 @@ func TestApplyModifications_RefusesAMovedCoordinate(t *testing.T) {
 		t.Parallel()
 
 		_, ts := load(t)
-		batchIdx := column(ts.Entries, "batch_index")
-		ts.Entries.Records[0][batchIdx] = "99"
-		ts.UpdateEntriesFromTableData(ts.Entries)
+		batchIdx := column(ts.entries, "batch_index")
+		ts.entries.Records[0][batchIdx] = "99"
+		ts.UpdateEntriesFromTableData(ts.entries)
 
 		var buf bytes.Buffer
 		err := ts.WriteToWriter(&buf)
@@ -1679,17 +1682,17 @@ func TestApplyModifications_RefusesAMovedCoordinate(t *testing.T) {
 		t.Parallel()
 
 		_, ts := load(t)
-		nameIdx := column(ts.Entries, "individual_name")
+		nameIdx := column(ts.entries, "individual_name")
 		require.GreaterOrEqual(t, nameIdx, 0)
-		ts.Entries.Records[0][nameIdx] = "EDITED NAME"
-		ts.UpdateEntriesFromTableData(ts.Entries)
+		ts.entries.Records[0][nameIdx] = "EDITED NAME"
+		ts.UpdateEntriesFromTableData(ts.entries)
 
 		var buf bytes.Buffer
 		require.NoError(t, ts.WriteToWriter(&buf), "the ordinary edit must keep working")
 
 		back, err := ParseReader(bytes.NewReader(buf.Bytes()))
 		require.NoError(t, err)
-		assert.Equal(t, "EDITED NAME", back.Entries.Records[0][nameIdx])
+		assert.Equal(t, "EDITED NAME", back.entries.Records[0][nameIdx])
 	})
 
 	t.Run("two rows that exchange coordinates are refused", func(t *testing.T) {
@@ -1700,16 +1703,16 @@ func TestApplyModifications_RefusesAMovedCoordinate(t *testing.T) {
 		// The damage is real: each row's values land on the other's record, so
 		// two payments trade account numbers and amounts.
 		_, ts := load(t)
-		require.GreaterOrEqual(t, len(ts.Entries.Records), 2)
+		require.GreaterOrEqual(t, len(ts.entries.Records), 2)
 
-		batchIdx := column(ts.Entries, "batch_index")
-		entryIdx := column(ts.Entries, "entry_index")
-		first := []string{ts.Entries.Records[0][batchIdx], ts.Entries.Records[0][entryIdx]}
-		ts.Entries.Records[0][batchIdx] = ts.Entries.Records[1][batchIdx]
-		ts.Entries.Records[0][entryIdx] = ts.Entries.Records[1][entryIdx]
-		ts.Entries.Records[1][batchIdx] = first[0]
-		ts.Entries.Records[1][entryIdx] = first[1]
-		ts.UpdateEntriesFromTableData(ts.Entries)
+		batchIdx := column(ts.entries, "batch_index")
+		entryIdx := column(ts.entries, "entry_index")
+		first := []string{ts.entries.Records[0][batchIdx], ts.entries.Records[0][entryIdx]}
+		ts.entries.Records[0][batchIdx] = ts.entries.Records[1][batchIdx]
+		ts.entries.Records[0][entryIdx] = ts.entries.Records[1][entryIdx]
+		ts.entries.Records[1][batchIdx] = first[0]
+		ts.entries.Records[1][entryIdx] = first[1]
+		ts.UpdateEntriesFromTableData(ts.entries)
 
 		var buf bytes.Buffer
 		err := ts.WriteToWriter(&buf)
@@ -1728,12 +1731,12 @@ func TestApplyModifications_RefusesAMovedCoordinate(t *testing.T) {
 		require.NoError(t, err)
 		ts, err := ParseReader(bytes.NewReader(raw))
 		require.NoError(t, err)
-		require.NotEmpty(t, ts.Addenda.Records)
+		require.NotEmpty(t, ts.addenda.Records)
 
-		at := column(ts.Addenda, "addenda_index")
+		at := column(ts.addenda, "addenda_index")
 		require.GreaterOrEqual(t, at, 0)
-		ts.Addenda.Records[0][at] = "9"
-		ts.UpdateAddendaFromTableData(ts.Addenda)
+		ts.addenda.Records[0][at] = "9"
+		ts.UpdateAddendaFromTableData(ts.addenda)
 
 		var buf bytes.Buffer
 		writeErr := ts.WriteToWriter(&buf)
@@ -1747,8 +1750,8 @@ func TestApplyModifications_RefusesAMovedCoordinate(t *testing.T) {
 		// Adding rows was never supported; it used to be applied anyway, to
 		// whatever record the new row's coordinates named.
 		_, ts := load(t)
-		ts.Entries.Records = append(ts.Entries.Records, append([]string(nil), ts.Entries.Records[0]...))
-		ts.UpdateEntriesFromTableData(ts.Entries)
+		ts.entries.Records = append(ts.entries.Records, append([]string(nil), ts.entries.Records[0]...))
+		ts.UpdateEntriesFromTableData(ts.entries)
 
 		var buf bytes.Buffer
 		assert.Error(t, ts.WriteToWriter(&buf), "a row the file did not have must be refused")
@@ -1767,13 +1770,13 @@ func TestApplyModifications_RefusesAMovedCoordinate(t *testing.T) {
 			coord string
 			bogus string
 		}{
-			{"Batches", func(ts *TableSet) *parser.TableData { return ts.Batches },
+			{"Batches", func(ts *TableSet) *parser.TableData { return ts.batches },
 				func(ts *TableSet, td *parser.TableData) { ts.UpdateBatchesFromTableData(td) }, "batch_index", "7"},
-			{"IATBatches", func(ts *TableSet) *parser.TableData { return ts.IATBatches },
+			{"IATBatches", func(ts *TableSet) *parser.TableData { return ts.iatBatches },
 				func(ts *TableSet, td *parser.TableData) { ts.UpdateIATBatchesFromTableData(td) }, "batch_index", "7"},
-			{"IATEntries", func(ts *TableSet) *parser.TableData { return ts.IATEntries },
+			{"IATEntries", func(ts *TableSet) *parser.TableData { return ts.iatEntries },
 				func(ts *TableSet, td *parser.TableData) { ts.UpdateIATEntriesFromTableData(td) }, "entry_index", "7"},
-			{"IATAddenda", func(ts *TableSet) *parser.TableData { return ts.IATAddenda },
+			{"IATAddenda", func(ts *TableSet) *parser.TableData { return ts.iatAddenda },
 				func(ts *TableSet, td *parser.TableData) { ts.UpdateIATAddendaFromTableData(td) }, "addenda_index", "7"},
 		} {
 			t.Run(tt.name, func(t *testing.T) {
@@ -1812,12 +1815,12 @@ func TestCoordinateKey_ComparesThePositionNotTheSpelling(t *testing.T) {
 	require.NoError(t, err)
 	ts, err := ParseReader(bytes.NewReader(raw))
 	require.NoError(t, err)
-	require.NotEmpty(t, ts.Entries.Records)
+	require.NotEmpty(t, ts.entries.Records)
 
-	at := findHeaderIndex(t, ts.Entries.Headers, "batch_index")
-	require.Equal(t, "0", ts.Entries.Records[0][at], "the fixture must start at batch 0")
-	ts.Entries.Records[0][at] = "00"
-	ts.UpdateEntriesFromTableData(ts.Entries)
+	at := findHeaderIndex(t, ts.entries.Headers, "batch_index")
+	require.Equal(t, "0", ts.entries.Records[0][at], "the fixture must start at batch 0")
+	ts.entries.Records[0][at] = "00"
+	ts.UpdateEntriesFromTableData(ts.entries)
 
 	var buf bytes.Buffer
 	assert.NoError(t, ts.WriteToWriter(&buf),

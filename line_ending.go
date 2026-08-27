@@ -92,7 +92,7 @@ func detectLineEnding(path string, format OutputFormat) LineEnding {
 	// as an LF one — which is how a UTF-16 file kept its terminators on the read
 	// side and lost them on the write side.
 	counted := reader
-	if isTextBaseType(factory.GetBaseFileType(path)) {
+	if isTextBaseType(factory.getBaseFileType(path)) {
 		counted = decodeTextReader(reader)
 	}
 
