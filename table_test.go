@@ -283,6 +283,21 @@ func TestXLSXSheetTableName(t *testing.T) {
 		{"the comparison is made after sanitizing", "my_data", "my-data", "my_data"},
 		{"a sheet name that only differs in case is still appended", "people", "People", "people_People"},
 		{"an unusable sheet name falls back and is appended", "sample", "!!!", "sample_" + sheetFallbackName},
+		// Excel caps a sheet name at 31 characters and forbids seven of them,
+		// so a dump of a table named beyond either writes a sheet spelled the
+		// way Excel allows. That sheet is still named after the file.
+		{
+			name:     "a sheet named after a file too long for Excel is not repeated",
+			base:     "quarterly_revenue_by_region_2026",
+			sheet:    "quarterly_revenue_by_region_202",
+			expected: "quarterly_revenue_by_region_2026",
+		},
+		{
+			name:     "a shorter sheet name that is not the file's is still appended",
+			base:     "quarterly_revenue_by_region_2026",
+			sheet:    "summary",
+			expected: "quarterly_revenue_by_region_2026_summary",
+		},
 	}
 
 	for _, tt := range tests {
