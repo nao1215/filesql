@@ -2634,9 +2634,9 @@ func TestLengthComparisonValidators(t *testing.T) {
 	}
 }
 
-// TestSentinelValidatorsAnswerDirectly covers the two validators whose Validate
+// TestSentinelValidatorsAnswerDirectly covers the validators whose Validate
 // never runs through the pipeline: omitempty is a marker, and an unspecialized
-// eq must fail loudly rather than validate nothing.
+// eq or an unrecorded unique must fail loudly rather than validate nothing.
 func TestSentinelValidatorsAnswerDirectly(t *testing.T) {
 	t.Parallel()
 
@@ -2646,6 +2646,13 @@ func TestSentinelValidatorsAnswerDirectly(t *testing.T) {
 	pending := &pendingEqualityValidator{tag: equalTagValue, param: "x"}
 	if msg := pending.Validate("x"); msg == "" {
 		t.Error("an unspecialized eq must report itself instead of validating nothing")
+	}
+	marker := &uniqueMarkerValidator{}
+	if msg := marker.Validate("x"); msg == "" {
+		t.Error("an unrecorded unique must report itself instead of validating nothing")
+	}
+	if got := marker.Name(); got != uniqueTagValue {
+		t.Errorf("Name() = %q, want %q", got, uniqueTagValue)
 	}
 }
 

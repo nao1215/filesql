@@ -520,6 +520,33 @@ func ExampleProcessor_Process_codeColumns() {
 	// row 2: currency value must be an active ISO 4217 currency code
 }
 
+func ExampleProcessor_Process_uniqueColumn() {
+	type member struct {
+		// prep runs before validation, so uniqueness is decided on the
+		// trimmed, folded value.
+		Email string `prep:"trim,lowercase" validate:"unique"`
+		Name  string
+	}
+
+	var rows []member
+	_, result, err := prep.NewProcessor(prep.FileTypeCSV).Process(strings.NewReader(
+		"email,name\n"+
+			"a@example.com,Ada\n"+
+			"b@example.com,Bob\n"+
+			" A@Example.com ,Ada again\n"), &rows)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(result.ValidRowCount)
+	for _, e := range result.ValidationErrors() {
+		fmt.Printf("row %d: %s %s\n", e.Row, e.Column, e.Message)
+	}
+	// Output:
+	// 2
+	// row 3: email value "a@example.com" already appeared in row 1
+}
+
 func ExampleProcessor_Process_crossField() {
 	type shipment struct {
 		ShippedOn string `validate:"ltfield=DueOn"`

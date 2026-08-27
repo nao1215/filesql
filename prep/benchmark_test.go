@@ -557,3 +557,52 @@ func BenchmarkProcessCrossFieldCSV(b *testing.B) {
 		}
 	}
 }
+
+// uniqueRecord measures what a unique column costs: one map lookup and one
+// insert per row, and a map that grows with the number of distinct values.
+type uniqueRecord struct {
+	ID    string `validate:"unique"`
+	Name  string
+	Email string
+}
+
+// generateUniqueCSV builds a CSV whose id column holds distinct values, which
+// is the case the seen map grows in.
+func generateUniqueCSV(rows int) string {
+	var buf bytes.Buffer
+	writer := csv.NewWriter(&buf)
+	if err := writer.Write([]string{"id", "name", "email"}); err != nil {
+		panic(err)
+	}
+	for i := range rows {
+		if err := writer.Write([]string{
+			fmt.Sprintf("ID-%08d", i),
+			fmt.Sprintf("Name %d", i),
+			fmt.Sprintf("user%d@example.com", i),
+		}); err != nil {
+			panic(err)
+		}
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		panic(err)
+	}
+	return buf.String()
+}
+
+// BenchmarkProcessUniqueCSV benchmarks a unique column over 10,000 rows
+func BenchmarkProcessUniqueCSV(b *testing.B) {
+	csvData := generateUniqueCSV(10000)
+	processor := NewProcessor(FileTypeCSV)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for range b.N {
+		var records []uniqueRecord
+		_, _, err := processor.Process(strings.NewReader(csvData), &records)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
