@@ -143,6 +143,117 @@ func TestCastSemantics(t *testing.T) {
 // TestCastRejectsInvalidValues covers the casts that must fail. PostgreSQL and
 // GoogleSQL raise for a value the target type cannot represent; letting it
 // through is what made a validating query report success on bad rows.
+// TestCastTargetsMatchTheEngine pins the three cast targets that used to hand
+// the value back or answer a plausible wrong one, and the two MySQL spellings
+// of the cast that reached SQLite raw. Every MySQL value was read from
+// mysql:8.4 and every PostgreSQL one from postgres:17-alpine.
+func TestCastTargetsMatchTheEngine(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		dialect Dialect
+		query   string
+		want    string
+		null    bool
+	}{
+		// YEAR used to map onto the text conversion, so the cast handed its
+		// argument straight back.
+		{MySQL, `SELECT CAST('2024-03-05' AS YEAR)`, "2024", false},
+		{MySQL, `SELECT CAST(1.9 AS YEAR)`, "2002", false},
+		{MySQL, `SELECT CAST('12abc' AS YEAR)`, "2012", false},
+		{MySQL, `SELECT CAST(70 AS YEAR)`, "1970", false},
+		{MySQL, `SELECT CAST(69 AS YEAR)`, "2069", false},
+		{MySQL, `SELECT CAST(1901 AS YEAR)`, "1901", false},
+		{MySQL, `SELECT CAST(2155 AS YEAR)`, "2155", false},
+		{MySQL, `SELECT CAST(100 AS YEAR)`, "", true},
+		{MySQL, `SELECT CAST(1900 AS YEAR)`, "", true},
+		{MySQL, `SELECT CAST(2156 AS YEAR)`, "", true},
+		{MySQL, `SELECT CAST('1900-01-01' AS YEAR)`, "", true},
+		{MySQL, `SELECT CAST(0 AS YEAR)`, "0", false},
+		{MySQL, `SELECT CAST('abc' AS YEAR)`, "", true},
+		{MySQL, `SELECT CAST('' AS YEAR)`, "", true},
+		{MySQL, `SELECT CAST(-5 AS YEAR)`, "", true},
+		{MySQL, `SELECT CAST(10000 AS YEAR)`, "", true},
+
+		// A TIME with no clock in it is a number read right to left under MySQL
+		// and a refusal under PostgreSQL, where formatting a date as a time
+		// answered a midnight a caller cannot tell from a real one.
+		{MySQL, `SELECT CAST('13:45:56' AS TIME)`, "13:45:56", false},
+		{MySQL, `SELECT CAST('2024-03-05 13:45:56' AS TIME)`, "13:45:56", false},
+		{MySQL, `SELECT CAST('2024-03-05' AS TIME)`, "00:20:24", false},
+		{MySQL, `SELECT CAST(123456 AS TIME)`, "12:34:56", false},
+		{MySQL, `SELECT CAST('12abc' AS TIME)`, "00:00:12", false},
+		{MySQL, `SELECT CAST(' 7 ' AS TIME)`, "00:00:07", false},
+		{MySQL, `SELECT CAST('-5' AS TIME)`, "-00:00:05", false},
+		{MySQL, `SELECT CAST(-1.9 AS TIME)`, "-00:00:02", false},
+		{MySQL, `SELECT CAST(9999999 AS TIME)`, "", true},
+		{MySQL, `SELECT CAST('abc' AS TIME)`, "", true},
+
+		// The precision of DECIMAL(p,s) bounds the magnitude. Applying the
+		// scale and ignoring the precision let a value the type cannot hold
+		// through unchanged.
+		{MySQL, `SELECT CAST(12345 AS DECIMAL(3,0))`, "999", false},
+		{MySQL, `SELECT CAST(-12345 AS DECIMAL(3,0))`, "-999", false},
+		{MySQL, `SELECT CAST('2024-03-05' AS DECIMAL(4,1))`, "999.9", false},
+		{MySQL, `SELECT CAST(1.5 AS DECIMAL(10,2))`, "1.5", false},
+
+		// CONVERT and the BINARY prefix are the cast by MySQL's other two
+		// spellings, and reach the same helper.
+		{MySQL, `SELECT CONVERT('12abc', SIGNED)`, "12", false},
+		{MySQL, `SELECT CONVERT('12abc', CHAR(3))`, "12a", false},
+		{MySQL, `SELECT CONVERT('12abc', TIME)`, "00:00:12", false},
+		{MySQL, `SELECT CONVERT('abc' USING utf8mb4)`, "abc", false},
+		{MySQL, `SELECT HEX(BINARY 'abc')`, "616263", false},
+		{MySQL, `SELECT HEX(CHAR(65, 66 USING utf8mb4))`, "4142", false},
+	}
+
+	for _, tt := range tests {
+		got, err := runDialect(t, db, tt.dialect, tt.query)
+		if err != nil {
+			t.Errorf("%v: %s: %v", tt.dialect, tt.query, err)
+			continue
+		}
+		if tt.null {
+			if got.Valid {
+				t.Errorf("%v: %s = %q, want NULL", tt.dialect, tt.query, got.String)
+			}
+			continue
+		}
+		if !got.Valid || got.String != tt.want {
+			t.Errorf("%v: %s = %v, want %q", tt.dialect, tt.query, got, tt.want)
+		}
+	}
+
+	refused := []struct {
+		dialect Dialect
+		query   string
+	}{
+		{PostgreSQL, `SELECT CAST('2024-03-05' AS time)`},
+		{PostgreSQL, `SELECT CAST(12345 AS numeric(3,0))`},
+		{PostgreSQL, `SELECT CAST('{1,2}' AS int[])`},
+		{PostgreSQL, `SELECT '{1,2,3}'::int[]`},
+		{MySQL, `SELECT CONVERT('abc' USING latin1)`},
+	}
+	for _, tt := range refused {
+		if _, err := runDialect(t, db, tt.dialect, tt.query); err == nil {
+			t.Errorf("%v: %s: want a refusal, got none", tt.dialect, tt.query)
+		}
+	}
+
+	// A column named binary, and the type name inside a cast, are not the
+	// prefix operator.
+	kept := []string{
+		"SELECT CAST('abc' AS BINARY)",
+		"SELECT `binary` FROM t",
+	}
+	for _, query := range kept {
+		if _, err := Translate(MySQL, query); err != nil {
+			t.Errorf("Translate(mysql, %q): %v", query, err)
+		}
+	}
+}
+
 func TestCastRejectsInvalidValues(t *testing.T) {
 	// Not parallel: castDB touches the process-global driver registration.
 	db := castDB(t)

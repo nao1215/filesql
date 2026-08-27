@@ -56,6 +56,7 @@ const (
 	castUUID
 	castJSON
 	castBlob
+	castYear
 )
 
 // commonCastKinds holds the type names shared by the dialects. Each dialect map
@@ -91,7 +92,7 @@ var mysqlCastKinds = map[string]castKind{
 	"NCHAR":     castText,
 	"NVARCHAR":  castText,
 	"DEC":       castDecimal,
-	"YEAR":      castText,
+	"YEAR":      castYear,
 	"BINARY":    castBlob,
 	"VARBINARY": castBlob,
 }
@@ -206,9 +207,11 @@ func castValue(d Dialect, target string, v driver.Value) (driver.Value, error) {
 	case castDate:
 		return castToTimeString(v, layoutDateOnly, strict)
 	case castTime:
-		return castToTimeString(v, layoutTimeOnly, strict)
+		return castToTimeValue(v, strict)
+	case castYear:
+		return castToYear(v)
 	case castTimestamp:
-		return castToTimeString(v, layoutDateTime, strict)
+		return castToTimestampValue(v, strict)
 	case castUUID:
 		return castToUUID(v)
 	case castJSON:
@@ -416,6 +419,16 @@ func outOfRangeInt(negative, strict bool, shown string) (driver.Value, error) {
 // character past the last position that forms a number, which is what makes a
 // broken tail ("1e", "1.2.3") end the number instead of voiding it.
 func numericPrefix(s string) float64 {
+	f, _ := numericPrefixFound(s)
+	return f
+}
+
+// numericPrefixFound is numericPrefix with a report of whether a number was
+// found at all, which the conversions that answer NULL for a value spelling no
+// number need: MySQL's CAST('abc' AS TIME) and CAST('abc' AS YEAR) are both
+// NULL, and the zero numericPrefix answers for them would be midnight and the
+// year 2000.
+func numericPrefixFound(s string) (float64, bool) {
 	s = strings.TrimSpace(s)
 	i := 0
 	if i < len(s) && (s[i] == '+' || s[i] == '-') {
@@ -451,7 +464,7 @@ func numericPrefix(s string) float64 {
 		}
 	}
 	if end == 0 {
-		return 0
+		return 0, false
 	}
 	f, err := strconv.ParseFloat(s[:end], 64)
 	// A run too large for a float64 is a number all the same, and ParseFloat
@@ -460,12 +473,12 @@ func numericPrefix(s string) float64 {
 	// keeps an integer cast on the same path as a well-formed number too large
 	// to hold, which castToInt already clamps.
 	if errors.Is(err, strconv.ErrRange) {
-		return math.Copysign(math.MaxFloat64, f)
+		return math.Copysign(math.MaxFloat64, f), true
 	}
 	if err != nil {
-		return 0
+		return 0, false
 	}
-	return f
+	return f, true
 }
 
 // isASCIIDigit reports whether c is one of the digits a number is written with.
@@ -506,7 +519,147 @@ func castToDecimal(d Dialect, v driver.Value, params []int, strict bool) (driver
 		return value, nil
 	}
 	factor := math.Pow(10, float64(scale))
-	return math.Round(value*factor) / factor, nil
+	rounded := math.Round(value*factor) / factor
+	// The precision bounds the magnitude: DECIMAL(4,1) holds 999.9 at most, and
+	// a value past it is clamped by MySQL and refused by the other two. Applying
+	// the scale and ignoring the precision let CAST('2024-03-05' AS
+	// DECIMAL(4,1)) answer 2024, which the type cannot hold.
+	if len(params) == 0 {
+		return rounded, nil
+	}
+	limit := decimalLimit(params[0], scale)
+	if limit <= 0 || math.Abs(rounded) <= limit {
+		return rounded, nil
+	}
+	if strict {
+		return nil, fmt.Errorf("%w: %v does not fit a numeric with precision %d and scale %d",
+			ErrInvalidCast, value, params[0], scale)
+	}
+	return math.Copysign(limit, rounded), nil
+}
+
+// decimalLimit is the largest magnitude a DECIMAL(precision, scale) holds, which
+// is every one of its digits set to nine. A precision that cannot hold the scale
+// bounds nothing and answers zero, so the caller leaves the value alone.
+func decimalLimit(precision, scale int) float64 {
+	if precision <= 0 || scale < 0 || scale > precision {
+		return 0
+	}
+	return math.Pow(10, float64(precision-scale)) - math.Pow(10, float64(-scale))
+}
+
+// castToTimeValue converts to a TIME. The dialects part company over a value
+// carrying no time of day at all: MySQL reads it as a number and spells it
+// right to left as seconds, minutes and hours, so CAST('2024-03-05' AS TIME) is
+// 00:20:24, while PostgreSQL refuses it. Formatting a date as a time answered
+// 00:00:00 for both, which is a value a caller cannot tell from a real midnight.
+func castToTimeValue(v driver.Value, strict bool) (driver.Value, error) {
+	if tm, ok := toStringTime(v); ok && hasTimeOfDay(v) {
+		return formatTimeOfDayValue(tm), nil
+	}
+	if strict {
+		s, _ := toString(v)
+		return nil, fmt.Errorf("%w: %q is not a valid time value", ErrInvalidCast, s)
+	}
+	return mysqlTimeFromNumber(v), nil
+}
+
+// castToTimestampValue converts to a timestamp, keeping the fractional seconds
+// the value carried. Formatting at second resolution dropped digits the caller
+// had written, which every EXTRACT and every to_char template that reads a
+// sub-second field then answered zero for.
+func castToTimestampValue(v driver.Value, strict bool) (driver.Value, error) {
+	if tm, ok := toStringTime(v); ok {
+		return formatDateTimeValue(tm), nil
+	}
+	s, _ := toString(v)
+	if strict {
+		return nil, fmt.Errorf("%w: %q is not a valid timestamp value", ErrInvalidCast, s)
+	}
+	return nil, nil
+}
+
+// hasTimeOfDay reports whether the value carries a time rather than only a date.
+// A time.Time from the driver always does; a string has to hold a ":" for one of
+// the layouts with a clock in it to have matched.
+func hasTimeOfDay(v driver.Value) bool {
+	if _, ok := v.(time.Time); ok {
+		return true
+	}
+	s, ok := toString(v)
+	return ok && strings.Contains(s, ":")
+}
+
+// mysqlTimeFromNumber is MySQL's reading of a value with no clock in it: the
+// number at the front of it, rounded, taken right to left as seconds, then
+// minutes, then hours. CAST(123456 AS TIME) is 12:34:56 and CAST('12abc' AS
+// TIME) is 00:00:12. A magnitude past the TIME range answers NULL, as MySQL
+// does.
+func mysqlTimeFromNumber(v driver.Value) driver.Value {
+	s, ok := toString(v)
+	if !ok {
+		return nil
+	}
+	f, found := numericPrefixFound(s)
+	if !found {
+		// A value with no number in it is not a time at all, and MySQL answers
+		// NULL rather than the midnight a zero would spell.
+		return nil
+	}
+	n := int64(math.Round(f))
+	negative := n < 0
+	if negative {
+		n = -n
+	}
+	seconds, minutes, hours := n%100, (n/100)%100, n/10000
+	if seconds > 59 || minutes > 59 || hours > 838 {
+		return nil
+	}
+	total := (hours*3600 + minutes*60 + seconds) * microsPerSecond
+	if negative {
+		total = -total
+	}
+	return formatMySQLTime(total)
+}
+
+// castToYear implements MySQL's YEAR type: a date or datetime gives its year, a
+// number in 1..69 is 2001..2069 and one in 70..99 is 1970..1999, a four-digit
+// year has to fall in the type's own range of 1901..2155, and zero is zero. A
+// value outside all of that is not a year and answers NULL, which is what MySQL
+// answers. The name used to map onto the text conversion, so the cast handed its
+// argument straight back.
+func castToYear(v driver.Value) (driver.Value, error) {
+	if tm, ok := toStringTime(v); ok {
+		return yearInRange(int64(tm.Year())), nil
+	}
+	s, ok := toString(v)
+	if !ok {
+		return nil, nil
+	}
+	f, found := numericPrefixFound(s)
+	if !found {
+		return nil, nil
+	}
+	n := int64(math.Round(f))
+	switch {
+	case n == 0:
+		return int64(0), nil
+	case n >= 1 && n <= 69:
+		return 2000 + n, nil
+	case n >= 70 && n <= 99:
+		return 1900 + n, nil
+	default:
+		return yearInRange(n), nil
+	}
+}
+
+// yearInRange is the year itself when the YEAR type can hold it, and NULL when
+// it cannot. MySQL stores 1901 through 2155 and nothing else.
+func yearInRange(n int64) driver.Value {
+	if n < 1901 || n > 2155 {
+		return nil
+	}
+	return n
 }
 
 // castToText applies the length of CHAR(n) / VARCHAR(n), which every dialect

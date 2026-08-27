@@ -72,6 +72,35 @@ func init() {
 // layoutDateTime is the canonical datetime string the helpers emit.
 const layoutDateTime = "2006-01-02 15:04:05"
 
+// layoutDateTimeFraction is layoutDateTime with the fractional seconds a value
+// carries. The nines drop the trailing zeros, so a value with none is written
+// exactly as layoutDateTime writes it.
+const layoutDateTimeFraction = "2006-01-02 15:04:05.999999"
+
+// formatDateTimeValue writes a datetime that came from the caller's own data,
+// keeping whatever fraction of a second it carried. A clock reading is written
+// with layoutDateTime instead, since a fraction there is this package's own
+// invention rather than something the caller wrote.
+//
+// Formatting every value at second resolution dropped a fraction that was in
+// the input: TIME('2024-03-05 01:02:03.123456') answered 01:02:03 and
+// DATE_ADD on the same value moved the date and lost the microseconds with it.
+func formatDateTimeValue(tm time.Time) string {
+	if tm.Nanosecond() == 0 {
+		return tm.Format(layoutDateTime)
+	}
+	return tm.Format(layoutDateTimeFraction)
+}
+
+// formatTimeOfDayValue is formatDateTimeValue for a value written as a time of
+// day alone.
+func formatTimeOfDayValue(tm time.Time) string {
+	if tm.Nanosecond() == 0 {
+		return tm.Format(layoutTimeOnly)
+	}
+	return tm.Format(layoutTimeOnly + ".999999")
+}
+
 // Go reference-time fragments for month and weekday names, shared by the MySQL
 // and PostgreSQL format mappings.
 const (
@@ -237,6 +266,8 @@ func registerAll() error {
 		"postgresql_regexp_replace": {-1, fnPostgresRegexpReplace},
 		"postgresql_divide":         {2, divideSQLite},
 		"postgresql_mod":            {2, moduloDialect(true)},
+		fnNamePostgresDateAdd:       {2, fnPostgresDateAdd},
+		"postgresql_date_diff":      {2, fnPostgresDateDiff},
 		"googlesql_cast":            {2, dialectCast(GoogleSQL, false)},
 		"googlesql_divide":          {2, divideFloat(true)},
 		"googlesql_mod":             {2, moduloDialect(true)},
@@ -299,11 +330,13 @@ func registerAll() error {
 		// the next time the statement runs. UNIX_TIMESTAMP is variadic and only
 		// its no-argument form reads the clock; the form that takes a datetime
 		// is pure, so both belong here.
-		"now":              {0, fnNow},
-		"curdate":          {0, fnCurdate},
-		"curtime":          {0, fnCurtime},
-		"unix_timestamp":   {-1, fnUnixTimestamp},
-		"current_datetime": {-1, fnCurrentDatetime},
+		"now":                     {0, fnNow},
+		"curdate":                 {0, fnCurdate},
+		"curtime":                 {0, fnCurtime},
+		"unix_timestamp":          {-1, fnUnixTimestamp},
+		"mysql_time_of_day":       {1, fnMySQLTimeOfDay},
+		"mysql_interval_compound": {4, fnMySQLIntervalCompound},
+		"current_datetime":        {-1, fnCurrentDatetime},
 	}
 	// The MySQL-only helpers live in their own file, because there are enough of
 	// them that listing them here would bury the ones every dialect shares.
@@ -1091,7 +1124,7 @@ func datePartValue(unit string, tm time.Time) (driver.Value, error) {
 		return int64(millenniumOf(tm.Year())), nil
 	case "milliseconds", unitMillisecond:
 		return secondsWithFraction(tm) * 1000, nil
-	case "microseconds", unitMicrosecond:
+	case unitMicrosecondsPlural, unitMicrosecond:
 		// A microsecond is the finest a PostgreSQL timestamp holds, so the
 		// count is always whole; answering it as an integer also keeps SQLite
 		// from spelling a large REAL in exponent form.
@@ -1215,9 +1248,20 @@ func fnMySQLDatePart(args []driver.Value) (driver.Value, error) {
 		return nil, nil
 	}
 	unit = strings.ToLower(strings.TrimSpace(unit))
-	if unit == unitWeek {
+	switch unit {
+	case unitWeek:
 		week, _ := mysqlWeek(tm, 0)
 		return int64(week), nil
+	case unitMicrosecondsPlural, unitMicrosecond:
+		// MySQL's MICROSECOND is the fractional part alone, where PostgreSQL's
+		// MICROSECONDS is the seconds field multiplied out and so carries the
+		// whole seconds with it. The shared helper answers PostgreSQL's, which
+		// made EXTRACT(MICROSECOND FROM ...) answer MySQL's SECOND_MICROSECOND
+		// value -- a plausible number a million times too large.
+		return int64(tm.Nanosecond() / 1000), nil
+	}
+	if value, composite, err := mysqlCompositePart(unit, tm); composite {
+		return value, err
 	}
 	return datePartValue(unit, tm)
 }
@@ -2153,6 +2197,23 @@ func fnLastDay(args []driver.Value) (driver.Value, error) {
 	return firstOfNext.AddDate(0, 0, -1).Format(layoutDateOnly), nil
 }
 
+// fnMySQLTimeOfDay implements MySQL's one-argument TIME(x): the time part of a
+// datetime, with whatever fraction of a second the value carried. SQLite has a
+// time() of its own that takes modifiers and answers at second resolution, so
+// the fraction written in the value was dropped.
+func fnMySQLTimeOfDay(args []driver.Value) (driver.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("dialect: TIME expects 1 argument, got %d", len(args))
+	}
+	if tm, ok := toStringTime(args[0]); ok && hasTimeOfDay(args[0]) {
+		return formatTimeOfDayValue(tm), nil
+	}
+	// A value with no clock in it is read as a number the way the cast to TIME
+	// reads one, so TIME('2024-03-05') is 00:20:24 as MySQL answers rather than
+	// the midnight a date formatted as a time would give.
+	return mysqlTimeFromNumber(args[0]), nil
+}
+
 // fnUnixTimestamp implements MySQL UNIX_TIMESTAMP([date]): the current epoch
 // second with no argument, or the epoch second of the given datetime. Values are
 // read as UTC, as everywhere else in this package.
@@ -2166,6 +2227,11 @@ func fnUnixTimestamp(args []driver.Value) (driver.Value, error) {
 	tm, ok := toStringTime(args[0])
 	if !ok {
 		return nil, nil
+	}
+	if nanos := tm.Nanosecond(); nanos != 0 {
+		// MySQL answers a real when the value carries a fraction, so a
+		// microsecond-resolution timestamp does not lose it here.
+		return float64(tm.Unix()) + float64(nanos)/1e9, nil
 	}
 	return tm.Unix(), nil
 }
@@ -2295,8 +2361,15 @@ func fnDateTrunc(args []driver.Value) (driver.Value, error) {
 		return time.Date((millenniumOf(y)-1)*1000+1, 1, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
 	case "milliseconds", unitMillisecond:
 		return truncatedFraction(tm, time.Millisecond), nil
-	case "microseconds", unitMicrosecond:
+	case unitMicrosecondsPlural, unitMicrosecond:
 		return truncatedFraction(tm, time.Microsecond), nil
+	case unitISOYear:
+		// The ISO year begins on the Monday of the week holding its first
+		// Thursday, which is not January 1 in most years.
+		isoYear, _ := tm.ISOWeek()
+		jan4 := time.Date(isoYear, time.January, 4, 0, 0, 0, 0, loc)
+		offset := (int(jan4.Weekday()) + 6) % 7
+		return jan4.AddDate(0, 0, -offset).Format(layoutDateTime), nil
 	default:
 		return nil, fmt.Errorf("dialect: unsupported DATE_TRUNC unit %q", unit)
 	}
@@ -2904,6 +2977,10 @@ func fnDateDiff3(args []driver.Value) (driver.Value, error) {
 		return secondsBetween(a, b) / 60, nil
 	case unitSecond:
 		return secondsBetween(a, b), nil
+	case unitMillisecond:
+		return a.Sub(b).Milliseconds(), nil
+	case unitMicrosecond:
+		return a.Sub(b).Microseconds(), nil
 	default:
 		if start, ok := weekStartDay(part); ok {
 			return int64(weekBoundariesBetween(a, b, start)), nil
@@ -2980,6 +3057,8 @@ func fnMySQLDateDiff(args []driver.Value) (driver.Value, error) {
 		return nil, nil
 	}
 	switch strings.ToLower(strings.TrimSpace(unit)) {
+	case unitMicrosecond:
+		return end.Sub(start).Microseconds(), nil
 	case unitSecond:
 		return wholeUnits(end, start, 1), nil
 	case unitMinute:

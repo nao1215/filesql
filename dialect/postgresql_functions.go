@@ -119,6 +119,41 @@ func postgresqlNonDeterministicFunctions() map[string]scalarSpec {
 
 // --- quoting ---
 
+// fnPostgresDateAdd implements PostgreSQL's "date + integer": the date moved by
+// that many days. A timestamp keeps its time of day, which is what PostgreSQL
+// answers for a timestamp on the left.
+func fnPostgresDateAdd(args []driver.Value) (driver.Value, error) {
+	tm, ok := toStringTime(args[0])
+	if !ok {
+		return nil, nil
+	}
+	days, ok := toFloat(args[1])
+	if !ok {
+		return nil, nil
+	}
+	moved := tm.AddDate(0, 0, int(days))
+	// A fractional day is hours, which is what PostgreSQL answers for a
+	// timestamp plus a non-integer count; the whole part is already in AddDate.
+	if frac := days - math.Trunc(days); frac != 0 {
+		moved = moved.Add(time.Duration(frac * float64(24*time.Hour)))
+	}
+	if hasTimePart(args[0]) || moved.Hour() != 0 || moved.Minute() != 0 || moved.Second() != 0 {
+		return formatDateTimeValue(moved), nil
+	}
+	return moved.Format(layoutDateOnly), nil
+}
+
+// fnPostgresDateDiff implements PostgreSQL's "date - date": the whole days
+// between them, which is an integer rather than an interval.
+func fnPostgresDateDiff(args []driver.Value) (driver.Value, error) {
+	left, ok1 := toStringTime(args[0])
+	right, ok2 := toStringTime(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	return int64(left.Sub(right) / (24 * time.Hour)), nil
+}
+
 // fnQuoteIdent quotes a string as a SQL identifier, doubling any quote inside
 // it. A name that needs no quoting -- one that starts with a lower-case letter
 // or an underscore and holds nothing but lower-case letters, digits, underscores

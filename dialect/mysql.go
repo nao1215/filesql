@@ -61,6 +61,13 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
+	// M-8: BINARY is a cast written as a prefix operator. It runs after the call
+	// pass so the BINARY that names a type inside CAST or CONVERT is already
+	// part of a helper call and cannot be read as the operator.
+	out, err = prefixCastPass(out, "BINARY", "mysql_cast")
+	if err != nil {
+		return nil, err
+	}
 	// M-21: "!" is MySQL's NOT, and it binds tighter than every operator the
 	// passes below rewrite, so it is resolved before them: "!a ^ b" is
 	// "(!a) ^ b", and a "^" pass that ran first would take "a" for its left
@@ -206,8 +213,19 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		// at the replacement, so a NULL replacement did not reach the result.
 		return rewriteRenameCall(tokens, open, closeIdx, "dialect_replace", mysqlCallPass)
 	case "CHAR":
-		// MySQL CHAR builds bytes where SQLite's char() builds code points.
+		// MySQL CHAR builds bytes where SQLite's char() builds code points, and
+		// takes a charset clause SQLite cannot parse.
+		if repl, handled, err := rewriteCharUsingCall(tokens, open, closeIdx, "mysql_char", mysqlCallPass); handled || err != nil {
+			return repl, handled, err
+		}
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_char", mysqlCallPass)
+	case "TIME":
+		// MySQL's TIME(x) takes the time part of a datetime and keeps its
+		// fraction; SQLite's time() takes modifiers and answers whole seconds.
+		if callArity(tokens, open, closeIdx) != 1 {
+			return nil, false, nil
+		}
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_time_of_day", mysqlCallPass)
 	case "SOUNDEX":
 		// SQLite has a soundex() of its own that answers a placeholder for a
 		// value holding no letter and cuts the code to four characters.
@@ -301,6 +319,9 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		// A negative length and an empty pad are answered differently by each
 		// dialect, so each names its own helper rather than sharing one.
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_"+strings.ToLower(tokens[nameIdx].text), mysqlCallPass)
+	case "CONVERT":
+		// MySQL's other cast spelling, and its charset clause.
+		return rewriteConvertCall(tokens, open, closeIdx, MySQL, "mysql_cast", mysqlCallPass)
 	case fnNameCast:
 		return rewriteCastCall(tokens, open, closeIdx, MySQL, "mysql_cast", mysqlCallPass)
 	default:

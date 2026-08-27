@@ -23,6 +23,7 @@ import (
 //	P-11 a ^ b                     -> power(a, b)
 //	P-12 x +/- INTERVAL 'text'     -> interval_text_add(x, 'text', ±1)
 //	P-13 DATE 'lit' / TIMESTAMP 'lit' -> 'lit'
+//	P-25 date + n / date - n / d1 - d2 -> postgresql_date_add / postgresql_date_diff
 //	P-14 x SIMILAR TO p            -> similar_to(p, x)
 //	P-15 BOOL_AND / STDDEV / ...   -> SQLite aggregate expressions
 //	P-16 TRIM(BOTH x FROM s), OVERLAY, BTRIM, JSONB_ARRAY_LENGTH
@@ -77,6 +78,12 @@ func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
+	// P-25: "date + 1" moves the date by a day and "date - date" counts the days
+	// between them. Neither reaches SQLite as anything but arithmetic on the
+	// number the date text spells, so '2024-03-05'::date + 1 answered 2025. The
+	// pass runs after the cast and typed-literal passes so a date operand is
+	// visible as the helper call or the plain literal they leave behind.
+	out = pgDateArithmeticPass(out)
 	// Whatever INTERVAL the pass above did not consume has no SQLite form at
 	// all, so it is refused here rather than left to SQLite's parser.
 	if err := checkLeftoverInterval(out); err != nil {
@@ -461,6 +468,101 @@ func pgCastOperatorPass(tokens []token) ([]token, error) {
 		i++
 	}
 	return out, nil
+}
+
+// fnNamePostgresDateAdd is the helper both directions of "date + n" reach.
+const fnNamePostgresDateAdd = "postgresql_date_add"
+
+// pgDateArithmeticPass rewrites PostgreSQL's date arithmetic with a plain
+// number and its date difference, neither of which SQLite has: it reads both
+// sides as numbers, so "'2024-03-05'::date + 1" answered 2025 and
+// "'2024-03-05'::date - '2024-01-01'::date" answered 0 where PostgreSQL answers
+// 2024-03-06 and 64.
+//
+// Only an operand this pass can see is a date is rewritten: a cast whose target
+// is a date or a timestamp, or a string literal spelling one. A column has no
+// type here to read, and PostgreSQL itself needs the column to be a date for the
+// expression to compile at all, so the cast a caller already has to write is the
+// signal. Leaving every other "+" alone keeps ordinary arithmetic out of a
+// helper call.
+func pgDateArithmeticPass(tokens []token) []token {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		if !isOpEq(tokens[i], "+") && !isOpEq(tokens[i], "-") {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		start, ok := primaryStartBack(out)
+		if !ok {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		rightStart := nextSig(tokens, i+1)
+		rightEnd, rightOK := primaryEndForward(tokens, i+1)
+		if rightStart < 0 || !rightOK {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		left := trimSpaceTokens(out[start:])
+		right := trimSpaceTokens(tokens[rightStart : rightEnd+1])
+		leftIsDate, rightIsDate := isDateOperand(left), isDateOperand(right)
+		helper := ""
+		switch {
+		case isOpEq(tokens[i], "-") && leftIsDate && rightIsDate:
+			helper = "postgresql_date_diff"
+		case leftIsDate && !rightIsDate:
+			helper = fnNamePostgresDateAdd
+		case isOpEq(tokens[i], "+") && rightIsDate && !leftIsDate:
+			// "1 + date" is the same sum written the other way round.
+			left, right = right, left
+			helper = fnNamePostgresDateAdd
+		}
+		if helper == "" {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		if isOpEq(tokens[i], "-") && helper == fnNamePostgresDateAdd {
+			right = append([]token{opToken("-"), opToken("(")}, append(right, opToken(")"))...)
+		}
+		out = append(out[:start], callTokens(helper, left, right)...)
+		i = rightEnd + 1
+	}
+	return out
+}
+
+// isDateOperand reports whether the tokens spell something this package can see
+// is a date: a cast to a date or timestamp type, or a string literal in one of
+// the date layouts. A bare column reference is not one, because there is no type
+// to read it from.
+func isDateOperand(operand []token) bool {
+	sig := make([]token, 0, len(operand))
+	for _, t := range operand {
+		if isSignificant(t) {
+			sig = append(sig, t)
+		}
+	}
+	if len(sig) == 0 {
+		return false
+	}
+	if len(sig) == 1 && sig[0].kind == tokString {
+		_, ok := parseTime(sig[0].text)
+		return ok
+	}
+	if !isWordEq(sig[0], "postgresql_cast") || len(sig) < 4 {
+		return false
+	}
+	target := sig[len(sig)-2]
+	if target.kind != tokString {
+		return false
+	}
+	name, _ := parseCastTarget(target.text)
+	kind, ok := lookupCastKind(PostgreSQL, name)
+	return ok && (kind == castDate || kind == castTimestamp)
 }
 
 // pgRegexOperatorPass implements P-3: the "~" family of regex-match operators.

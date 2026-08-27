@@ -144,3 +144,37 @@ func TestGoogleSQLTranslateUnsupported(t *testing.T) {
 		})
 	}
 }
+
+// TestGoogleSQLDatePartsBigQueryDefines pins the three part names that were
+// rejected while their siblings were accepted: DATE_TRUNC took ISOWEEK and not
+// ISOYEAR, and MICROSECOND and MILLISECOND were units for neither the INTERVAL
+// literal nor the DIFF functions.
+func TestGoogleSQLDatePartsBigQueryDefines(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		query string
+		want  string
+	}{
+		{`SELECT DATE_TRUNC(DATE '2024-03-05', ISOWEEK)`, "2024-03-04"},
+		{`SELECT DATE_TRUNC(DATE '2024-03-05', ISOYEAR)`, "2024-01-01"},
+		// 2021 begins on a Friday, so its ISO year starts in the December before.
+		{`SELECT DATE_TRUNC(DATE '2021-01-01', ISOYEAR)`, "2019-12-30"},
+		{`SELECT DATETIME_ADD(DATETIME '2024-01-31 10:00:00', INTERVAL 1 MICROSECOND)`, "2024-01-31 10:00:00.000001"},
+		{`SELECT DATETIME_ADD(DATETIME '2024-01-31 10:00:00', INTERVAL 1 MILLISECOND)`, "2024-01-31 10:00:00.001"},
+		{`SELECT TIMESTAMP_DIFF(TIMESTAMP '2025-03-05', TIMESTAMP '2024-01-01', MILLISECOND)`, "37065600000"},
+		{`SELECT TIMESTAMP_DIFF(TIMESTAMP '2025-03-05', TIMESTAMP '2024-01-01', MICROSECOND)`, "37065600000000"},
+	}
+
+	for _, tt := range tests {
+		got, err := runDialect(t, db, GoogleSQL, tt.query)
+		if err != nil {
+			t.Errorf("%s: %v", tt.query, err)
+			continue
+		}
+		if !got.Valid || got.String != tt.want {
+			t.Errorf("%s = %v, want %q", tt.query, got, tt.want)
+		}
+	}
+}
