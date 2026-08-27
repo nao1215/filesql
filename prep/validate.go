@@ -2779,3 +2779,85 @@ func (v *hexDigestValidator) Validate(value string) string {
 func (v *hexDigestValidator) Name() string {
 	return v.tag
 }
+
+// =============================================================================
+// Country and Currency Code Validators
+// =============================================================================
+
+// codeSetValidator validates that a value is one of a published set of codes.
+// The lookup is exact, as it is in the dialect, so a lowercase spelling of an
+// assigned code is not one.
+type codeSetValidator struct {
+	tag    string
+	codes  map[string]struct{}
+	errMsg string
+}
+
+// newCodeSetValidator creates a validator over one published code set
+func newCodeSetValidator(tag string, codes map[string]struct{}, errMsg string) *codeSetValidator {
+	return &codeSetValidator{tag: tag, codes: codes, errMsg: errMsg}
+}
+
+// Validate checks if the value is one of the codes
+func (v *codeSetValidator) Validate(value string) string {
+	if _, ok := v.codes[value]; !ok {
+		return v.errMsg
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *codeSetValidator) Name() string {
+	return v.tag
+}
+
+// newISO3166Alpha2Validator creates a validator for ISO 3166-1 alpha-2 codes
+func newISO3166Alpha2Validator() *codeSetValidator {
+	return newCodeSetValidator(iso3166Alpha2TagValue, iso3166Alpha2Set,
+		"value must be an ISO 3166-1 alpha-2 country code")
+}
+
+// newISO3166Alpha3Validator creates a validator for ISO 3166-1 alpha-3 codes
+func newISO3166Alpha3Validator() *codeSetValidator {
+	return newCodeSetValidator(iso3166Alpha3TagValue, iso3166Alpha3Set,
+		"value must be an ISO 3166-1 alpha-3 country code")
+}
+
+// newISO3166NumericValidator creates a validator for ISO 3166-1 numeric codes.
+// The set holds them as the standard prints them, three digits with their
+// leading zeros, so "032" is Argentina and "32" is not a code.
+func newISO3166NumericValidator() *codeSetValidator {
+	return newCodeSetValidator(iso3166NumericTagValue, iso3166NumericSet,
+		"value must be an ISO 3166-1 numeric country code")
+}
+
+// newISO4217Validator creates a validator for ISO 4217 currency codes
+func newISO4217Validator() *codeSetValidator {
+	return newCodeSetValidator(iso4217TagValue, iso4217Set,
+		"value must be an active ISO 4217 currency code")
+}
+
+// countryCodeValidator validates that a value is a country code in any of the
+// three forms ISO 3166-1 publishes, which is what the dialect's country_code
+// alias means.
+type countryCodeValidator struct{}
+
+// newCountryCodeValidator creates a new country code validator
+func newCountryCodeValidator() *countryCodeValidator {
+	return &countryCodeValidator{}
+}
+
+// Validate checks if the value is an alpha-2, alpha-3 or numeric country code
+func (v *countryCodeValidator) Validate(value string) string {
+	for _, set := range []map[string]struct{}{iso3166Alpha2Set, iso3166Alpha3Set, iso3166NumericSet} {
+		if _, ok := set[value]; ok {
+			return ""
+		}
+	}
+	return "value must be an ISO 3166-1 country code"
+}
+
+// Name returns the validator name
+func (v *countryCodeValidator) Name() string {
+	return countryCodeTagValue
+}

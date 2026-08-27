@@ -245,6 +245,18 @@ const (
 	// issnTagValue is the tag value for ISSN validation
 	issnTagValue = "issn"
 
+	// Country and currency code validators
+	// iso3166Alpha2TagValue is the tag value for ISO 3166-1 alpha-2 validation
+	iso3166Alpha2TagValue = "iso3166_1_alpha2"
+	// iso3166Alpha3TagValue is the tag value for ISO 3166-1 alpha-3 validation
+	iso3166Alpha3TagValue = "iso3166_1_alpha3"
+	// iso3166NumericTagValue is the tag value for ISO 3166-1 numeric validation
+	iso3166NumericTagValue = "iso3166_1_alpha_numeric"
+	// countryCodeTagValue is the tag value for a country code in any of the three forms
+	countryCodeTagValue = "country_code"
+	// iso4217TagValue is the tag value for ISO 4217 currency code validation
+	iso4217TagValue = "iso4217"
+
 	// Message digest validators
 	// md5TagValue is the tag value for MD5 digest validation
 	md5TagValue = "md5"
