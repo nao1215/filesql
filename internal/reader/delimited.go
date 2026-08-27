@@ -2,6 +2,7 @@ package reader
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 )
@@ -11,6 +12,41 @@ const (
 	csvDelimiter = ','
 	tsvDelimiter = '\t'
 )
+
+// maxRecordSize bounds one record of a delimited file.
+//
+// A record is held whole while it is split into fields, so its size is what the
+// read costs however the rows are chunked. That is the file's own business when
+// the source is a file: it cannot be longer than itself. A source that is a
+// stream has no such size, and a record with no terminator asks for everything
+// the sender chooses to send, so the bound is what stops a body arriving as one
+// record from costing the whole of it. Both readers hold to it, because it is
+// one rule about one danger and two copies of it drifted once already.
+const maxRecordSize = 64 << 20
+
+// ErrRecordTooLong reports a record past maxRecordSize. It is separate from the
+// syntax errors because the file may be perfectly well formed and simply larger
+// than this reader will hold.
+var ErrRecordTooLong = errors.New("record too long")
+
+// recordTooLongError words the refusal, naming the line the record starts on and
+// the limit it passed, which are what a caller holding the file can act on.
+func recordTooLongError(line, limit int) error {
+	return fmt.Errorf("%w: line %d is longer than the %s a record may be", ErrRecordTooLong, line, byteSize(limit))
+}
+
+// byteSize spells a limit the way it is written down, so a message quotes the
+// constant rather than its expansion.
+func byteSize(n int) string {
+	switch {
+	case n >= 1<<20 && n%(1<<20) == 0:
+		return fmt.Sprintf("%d MiB", n>>20)
+	case n >= 1<<10 && n%(1<<10) == 0:
+		return fmt.Sprintf("%d KiB", n>>10)
+	default:
+		return fmt.Sprintf("%d bytes", n)
+	}
+}
 
 // recordReader reads the records of a delimited file. CSV and TSV need
 // different readers because the formats differ on what a quote means: CSV

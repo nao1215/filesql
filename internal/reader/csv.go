@@ -25,6 +25,9 @@ var ErrCSVSyntax = errors.New("invalid CSV syntax")
 // treats it as such.
 type CSVReader struct {
 	r *bufio.Reader
+	// maxRecord bounds one record. Zero reads maxRecordSize; a test lowers it
+	// to reach the bound without producing the whole of it.
+	maxRecord int
 	// Comma separates fields. The zero value reads ',' and only a single-byte
 	// delimiter is supported, which is what the callers use.
 	Comma rune
@@ -134,13 +137,29 @@ func (c *CSVReader) validateComma() error {
 	}
 }
 
+// recordLimit is the largest record this reader will hold.
+func (c *CSVReader) recordLimit() int {
+	if c.maxRecord > 0 {
+		return c.maxRecord
+	}
+	return maxRecordSize
+}
+
 // appendLine reads one line, terminator included, onto buf. It reports whether
 // anything was read.
+//
+// A record past the limit is refused here rather than at the end of it, since
+// the point of the limit is not to hold the rest. A field whose quote is never
+// closed comes back through this function for the rest of the record, so it is
+// bounded by the same check.
 func (c *CSVReader) appendLine() (bool, error) {
 	before := len(c.buf)
 	for {
 		chunk, err := c.r.ReadSlice('\n')
 		c.buf = append(c.buf, chunk...)
+		if limit := c.recordLimit(); len(c.buf) > limit {
+			return false, recordTooLongError(c.line+1, limit)
+		}
 		switch {
 		case err == nil:
 			c.line++

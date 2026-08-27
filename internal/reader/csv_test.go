@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestCSVReader_ReadsWhatTheFileHolds covers the shapes a CSV reader has to get
@@ -192,5 +193,78 @@ func FuzzCSVReader(f *testing.F) {
 			t.Fatalf("unexpected error kind: %v", err)
 		}
 		_ = records
+	})
+}
+
+// TestDelimitedRecordIsBounded pins the bound both delimited readers hold a
+// record to. It lives beside the CSV reader because the limit is one rule
+// shared by the two, stated once in delimited.go, and the point of the test is
+// that they answer alike.
+//
+// TSV had a bound and CSV had none, so a CSV record with no terminator was
+// buffered whole: reading CSV from an io.Reader had no memory bound at all, and
+// a body arriving as one record cost the process the whole of it. A file on
+// disk was bounded by its own size either way; a stream is bounded by whoever
+// is sending it.
+func TestDelimitedRecordIsBounded(t *testing.T) {
+	t.Parallel()
+
+	// A limit small enough to reach in a test, standing in for the real one.
+	const limit = 1 << 10
+
+	// readAll reads every record of body as format, under the lowered limit.
+	readAll := func(t *testing.T, format Format, body string) error {
+		t.Helper()
+		if format == FormatTSV {
+			reader := NewTSVReader(strings.NewReader(body))
+			reader.maxRecord = limit
+			_, err := reader.ReadAll()
+			return err
+		}
+		reader := NewCSVReader(strings.NewReader(body))
+		reader.maxRecord = limit
+		_, err := reader.ReadAll()
+		return err
+	}
+
+	// record builds a file of one header line and one record of size bytes.
+	record := func(size int) string {
+		return "v\n" + strings.Repeat("x", size) + "\n"
+	}
+
+	for _, format := range []Format{FormatCSV, FormatTSV} {
+		t.Run(format.String()+" accepts a record under the limit", func(t *testing.T) {
+			t.Parallel()
+
+			assert.NoError(t, readAll(t, format, record(limit/2)))
+		})
+
+		t.Run(format.String()+" refuses a record past the limit", func(t *testing.T) {
+			t.Parallel()
+
+			err := readAll(t, format, record(limit*4))
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrRecordTooLong)
+			assert.Contains(t, err.Error(), "line 2", "the message names the line the record starts on")
+			assert.Contains(t, err.Error(), "1 KiB", "and the limit it passed")
+		})
+	}
+
+	t.Run("a CSV quote that is never closed is bounded too", func(t *testing.T) {
+		t.Parallel()
+
+		// Without a bound this is the case that costs most: the reader keeps
+		// asking for the rest of the field until the stream ends.
+		err := readAll(t, FormatCSV, "v\n\""+strings.Repeat("x", limit*4))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrRecordTooLong)
+	})
+
+	t.Run("many ordinary records are unaffected by the bound", func(t *testing.T) {
+		t.Parallel()
+
+		body := "v\n" + strings.Repeat("short\n", limit)
+		assert.NoError(t, readAll(t, FormatCSV, body))
+		assert.NoError(t, readAll(t, FormatTSV, body))
 	})
 }
