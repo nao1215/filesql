@@ -469,3 +469,62 @@ func TestCotIsTheReciprocalOfTheTangent(t *testing.T) {
 		})
 	}
 }
+
+// TestMySQLComparisonFoldsCaseLikeItsCollation pins GREATEST and LEAST against
+// STRCMP, which already folds case because MySQL's default collation does. The
+// three used to disagree about which of two strings is larger. JSON_TYPE is
+// here for the same reason: SQLite spells its answer in lower case and MySQL in
+// upper, so a query comparing it against the name MySQL's documentation prints
+// matched nothing. Every value was read from mysql:8.4.
+func TestMySQLComparisonFoldsCaseLikeItsCollation(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		query    string
+		want     string
+		wantNull bool
+	}{
+		{query: `SELECT GREATEST('a', 'B')`, want: "B"},
+		{query: `SELECT LEAST('a', 'B')`, want: "a"},
+		{query: `SELECT GREATEST('A', 'b')`, want: "b"},
+		{query: `SELECT LEAST('A', 'b')`, want: "A"},
+		{query: `SELECT STRCMP('a', 'B')`, want: "-1"},
+		{query: `SELECT GREATEST(1, 2, 3)`, want: "3"},
+		{query: `SELECT LEAST('a', 'a')`, want: "a"},
+		{query: `SELECT GREATEST('a', NULL)`, wantNull: true},
+
+		{query: `SELECT JSON_TYPE('{}')`, want: "OBJECT"},
+		{query: `SELECT JSON_TYPE('[]')`, want: "ARRAY"},
+		{query: `SELECT JSON_TYPE('1')`, want: "INTEGER"},
+		{query: `SELECT JSON_TYPE('1.5')`, want: "DOUBLE"},
+		{query: `SELECT JSON_TYPE('"s"')`, want: "STRING"},
+		{query: `SELECT JSON_TYPE('true')`, want: "BOOLEAN"},
+		{query: `SELECT JSON_TYPE('null')`, want: "NULL"},
+		// A document built here still nests, which is what a renderer that
+		// re-rendered the text at every level would have broken.
+		{query: `SELECT JSON_ARRAY(1, JSON_OBJECT('b', 2))`, want: `[1,{"b":2}]`},
+	}
+
+	for _, tt := range tests {
+		got, err := runDialect(t, db, MySQL, tt.query)
+		if err != nil {
+			t.Errorf("%s: %v", tt.query, err)
+			continue
+		}
+		if tt.wantNull {
+			if got.Valid {
+				t.Errorf("%s = %q, want NULL", tt.query, got.String)
+			}
+			continue
+		}
+		if !got.Valid || got.String != tt.want {
+			t.Errorf("%s = %v, want %q", tt.query, got, tt.want)
+		}
+	}
+
+	// A value that is not a document is refused rather than answered.
+	if _, err := runDialect(t, db, MySQL, `SELECT JSON_TYPE('bad')`); err == nil {
+		t.Error("JSON_TYPE('bad'): want an error, got none")
+	}
+}

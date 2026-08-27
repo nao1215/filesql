@@ -25,6 +25,14 @@ const (
 	fnNameSubstr    = "SUBSTR"
 	fnNameMod       = "MOD"
 	kwAll           = "ALL"
+	kwUnion         = "UNION"
+	kwOffset        = "OFFSET"
+	fnNameFormat    = "FORMAT"
+	typeNameString  = "STRING"
+	patTZH          = "TZH"
+	patTZM          = "TZM"
+	kwIntersect     = "INTERSECT"
+	kwExcept        = "EXCEPT"
 	typeNameBinary  = "BINARY"
 	fnNameReplace   = "REPLACE"
 	fnNameLpad      = "LPAD"
@@ -1576,9 +1584,9 @@ const (
 // standing past one of them belongs to something else.
 var intervalScanStopWords = map[string]bool{ //nolint:gochecknoglobals // a fixed table read by the interval scan
 	"FROM": true, kwWhere: true, "GROUP": true, "ORDER": true, kwHaving: true,
-	kwLimit: true, "OFFSET": true, "AS": true, "AND": true, "OR": true,
+	kwLimit: true, kwOffset: true, "AS": true, "AND": true, "OR": true,
 	"NOT": true, "WHEN": true, "THEN": true, "ELSE": true, "END": true,
-	"ON": true, "USING": true, "JOIN": true, "UNION": true, "INTO": true,
+	"ON": true, "USING": true, "JOIN": true, kwUnion: true, "INTO": true,
 	"SELECT": true, "IS": true, "IN": true, "LIKE": true, "BETWEEN": true,
 }
 

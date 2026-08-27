@@ -261,7 +261,7 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 		return rewriteSafeCast(tokens, open, closeIdx)
 	case fnNameUpper, fnNameLower:
 		return rewriteRenameCall(tokens, open, closeIdx, unicodeCaseHelper(tokens[nameIdx].text), googlesqlCallPass)
-	case "FORMAT":
+	case fnNameFormat:
 		// The verbs GoogleSQL shares with printf are printed the same way, but %t
 		// and %T are its own and SQLite's printf answers NULL for a format string
 		// holding a verb it does not know.
@@ -301,7 +301,7 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 	// which answer NULL for the field arguments BigQuery builds a value from.
 	case typeDate, typeDatetime, typeTime, typeTimestamp:
 		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_"+strings.ToLower(tokens[nameIdx].text), googlesqlCallPass)
-	case "STRING":
+	case typeNameString:
 		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_string", googlesqlCallPass)
 	case "LAST_DAY":
 		return rewriteDatePartArgCall(tokens, open, closeIdx, "googlesql_last_day", googlesqlCallPass)

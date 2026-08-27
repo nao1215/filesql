@@ -25,6 +25,7 @@ import (
 //	P-27 a # b                     -> postgresql_bit_xor(a, b)
 //	P-12 x +/- INTERVAL 'text'     -> interval_text_add(x, 'text', ±1)
 //	P-13 DATE 'lit' / TIMESTAMP 'lit' -> 'lit'
+//	P-28 ORDER BY x [DESC]          -> ORDER BY x [DESC] NULLS LAST|FIRST
 //	P-25 date + n / date - n / d1 - d2 -> postgresql_date_add / postgresql_date_diff
 //	P-14 x SIMILAR TO p            -> similar_to(p, x)
 //	P-15 BOOL_AND / STDDEV / ...   -> SQLite aggregate expressions
@@ -133,6 +134,10 @@ func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
+	// P-28: PostgreSQL sorts NULLs at the opposite end from SQLite, which
+	// changes the rows a window function reads as well as the order they come
+	// back in.
+	out = pgNullsOrderPass(out)
 	out = isUnknownPass(out)
 	out, err = quantifiedComparisonPass(out)
 	if err != nil {
@@ -227,6 +232,14 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 		return rewritePosition(tokens, open, closeIdx, pgCallPass)
 	case fnNameSubstring, fnNameSubstr:
 		return rewritePostgresSubstringCall(tokens, open, closeIdx, pgCallPass)
+	case fnNameFormat:
+		// PostgreSQL's format() has its own verbs; SQLite's is printf and
+		// answered NULL for the whole call when it met one it did not know.
+		return rewriteRenameCall(tokens, open, closeIdx, "postgresql_format", pgCallPass)
+	case "RANDOM":
+		// SQLite's random() answers a pseudo-random 64-bit integer where
+		// PostgreSQL's answers a double in [0, 1).
+		return rewriteRenameCall(tokens, open, closeIdx, "postgresql_random", pgCallPass)
 	case fnNameReplace:
 		// SQLite answers the subject for an empty search string without looking
 		// at the replacement, so a NULL replacement did not reach the result.
@@ -344,11 +357,31 @@ func rewriteSubstringCall(tokens []token, open, closeIdx int, target string, rec
 // An operand that is anything else -- a number, a column, an expression --
 // keeps the positional reading.
 func rewritePostgresSubstringCall(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
+	// SUBSTRING(x SIMILAR p ESCAPE e) and the older SUBSTRING(x FROM p FOR e)
+	// are the SQL-standard escaped-pattern form, where the pattern's two escaped
+	// double quotes mark the part to return. The FROM/FOR spelling is told from
+	// the position-and-length one by the kind of its first operand.
 	if similar := topLevelWord(tokens, open, closeIdx, "SIMILAR"); similar >= 0 {
-		return nil, false, fmt.Errorf("%w: SUBSTRING(x SIMILAR p ESCAPE e) is not supported", ErrUnsupportedSyntax)
+		escape := topLevelWord(tokens, open, closeIdx, "ESCAPE")
+		if escape <= similar {
+			// topLevelWord finds each keyword on its own, so an ESCAPE written
+			// before the SIMILAR would leave the pattern slice inverted and
+			// panic rather than report the syntax.
+			return nil, false, fmt.Errorf("%w: SUBSTRING(x SIMILAR p ESCAPE e) needs an ESCAPE clause after the pattern", ErrUnsupportedSyntax)
+		}
+		return rewriteSimilarSubstring(tokens, open, closeIdx, similar, escape, recurse)
 	}
 	from := topLevelWord(tokens, open, closeIdx, "FROM")
 	forKw := topLevelWord(tokens, open, closeIdx, "FOR")
+	if from >= 0 && forKw > from &&
+		loneLiteralKind(tokens, from+1, forKw) == tokString &&
+		loneLiteralKind(tokens, forKw+1, closeIdx) == tokString {
+		// Both operands are strings, so the second is an escape character and
+		// the first a pattern. A numeric FOR is a length however the FROM
+		// operand is written: PostgreSQL answers "ell" for
+		// substring('hello' from '2' for 3).
+		return rewriteSimilarSubstring(tokens, open, closeIdx, from, forKw, recurse)
+	}
 	if from < 0 || forKw >= 0 {
 		return rewriteSubstringCall(tokens, open, closeIdx, "postgresql_substr", recurse)
 	}
@@ -374,6 +407,33 @@ func rewritePostgresSubstringCall(tokens []token, open, closeIdx int, recurse ca
 		// integer column and every text column that does not hold digits.
 		return callTokens("postgresql_substring_from", subject, operand), true, nil
 	}
+}
+
+// rewriteSimilarSubstring builds the three-argument call behind the
+// SQL-standard SUBSTRING: the subject, the pattern and the escape character,
+// which stand before patternKw, between patternKw and escapeKw, and after
+// escapeKw.
+func rewriteSimilarSubstring(tokens []token, open, closeIdx, patternKw, escapeKw int, recurse callRecurser) ([]token, bool, error) {
+	subject, err := recurse(tokens[open+1 : patternKw])
+	if err != nil {
+		return nil, false, err
+	}
+	pattern, err := recurse(tokens[patternKw+1 : escapeKw])
+	if err != nil {
+		return nil, false, err
+	}
+	escape, err := recurse(tokens[escapeKw+1 : closeIdx])
+	if err != nil {
+		return nil, false, err
+	}
+	repl := make([]token, 0, len(subject)+len(pattern)+len(escape)+8)
+	repl = append(repl, wordToken("similar_substring"), opToken("("))
+	repl = append(repl, trimSpaceTokens(subject)...)
+	repl = append(repl, opToken(","), spaceToken())
+	repl = append(repl, trimSpaceTokens(pattern)...)
+	repl = append(repl, opToken(","), spaceToken())
+	repl = append(repl, trimSpaceTokens(escape)...)
+	return append(repl, opToken(")")), true, nil
 }
 
 // loneLiteralKind reports the kind of the single literal that fills the tokens
@@ -591,6 +651,137 @@ func isDateOperand(operand []token) bool {
 	name, _ := parseCastTarget(target.text)
 	kind, ok := lookupCastKind(PostgreSQL, name)
 	return ok && (kind == castDate || kind == castTimestamp)
+}
+
+// pgNullsOrderPass appends the NULLS keyword PostgreSQL defaults to, which is
+// the opposite of SQLite's: PostgreSQL sorts NULLs last for an ascending order
+// and first for a descending one, and SQLite does the reverse.
+//
+// The difference is not only the order of the rows a caller reads. A window
+// function reads position, so first_value, last_value, nth_value, lag and lead
+// all answer about a different row, and those answers travel into the rest of
+// the query where nothing marks them as ordering-dependent.
+//
+// A term that already names NULLS FIRST or NULLS LAST is left alone, and so is
+// an ORDER BY inside a string literal or a quoted identifier, which never
+// reaches this pass as words.
+func pgNullsOrderPass(tokens []token) []token {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		if !isWordEq(tokens[i], "ORDER") {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		by := nextSig(tokens, i+1)
+		if by < 0 || !isWordEq(tokens[by], "BY") {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		out = append(out, tokens[i:by+1]...)
+		i = by + 1
+		end := orderByEnd(tokens, i)
+		out = append(out, orderTermsWithNulls(tokens[i:end])...)
+		i = end
+	}
+	return out
+}
+
+// orderByEnd is the index just past the ordering terms that begin at start: the
+// list runs to the end of the statement or to the first word that begins the
+// clause after it, at parenthesis depth zero.
+func orderByEnd(tokens []token, start int) int {
+	depth := 0
+	for i := start; i < len(tokens); i++ {
+		switch {
+		case isOpEq(tokens[i], "("):
+			depth++
+		case isOpEq(tokens[i], ")"):
+			if depth == 0 {
+				return i
+			}
+			depth--
+		case depth == 0 && isOpEq(tokens[i], ";"):
+			// The statement terminator ends the ordering list; a NULLS keyword
+			// appended after it would not parse.
+			return i
+		case depth == 0 && tokens[i].kind == tokWord && orderByEndKeywords[strings.ToUpper(tokens[i].text)]:
+			return i
+		}
+	}
+	return len(tokens)
+}
+
+// orderByEndKeywords are the words that can follow an ORDER BY list.
+var orderByEndKeywords = map[string]bool{ //nolint:gochecknoglobals // a fixed table read by the pass above
+	kwLimit: true, kwOffset: true, "FETCH": true, "FOR": true,
+	kwUnion: true, kwIntersect: true, kwExcept: true, "WINDOW": true, "ROWS": true, "RANGE": true, "GROUPS": true,
+}
+
+// orderTermsWithNulls appends the NULLS keyword to each ordering term of the
+// list that does not already carry one.
+func orderTermsWithNulls(terms []token) []token {
+	out := make([]token, 0, len(terms)+4)
+	start := 0
+	depth := 0
+	flush := func(term []token) {
+		if len(term) == 0 || termNamesNulls(term) {
+			out = append(out, term...)
+			return
+		}
+		// The keyword goes before the term's trailing whitespace rather than
+		// after it, so the rendered clause has one space in each place.
+		body := term
+		for len(body) > 0 && !isSignificant(body[len(body)-1]) {
+			body = body[:len(body)-1]
+		}
+		keyword := "LAST"
+		if termIsDescending(term) {
+			keyword = "FIRST"
+		}
+		out = append(out, body...)
+		out = append(out, spaceToken(), wordToken("NULLS"), spaceToken(), wordToken(keyword))
+		out = append(out, term[len(body):]...)
+	}
+	for i := range terms {
+		switch {
+		case isOpEq(terms[i], "("):
+			depth++
+		case isOpEq(terms[i], ")"):
+			depth--
+		case depth == 0 && isOpEq(terms[i], ","):
+			flush(terms[start:i])
+			out = append(out, terms[i])
+			start = i + 1
+		}
+	}
+	flush(terms[start:])
+	return out
+}
+
+// termNamesNulls reports whether an ordering term already says where its NULLs
+// go, in which case the caller has decided and nothing is appended.
+func termNamesNulls(term []token) bool {
+	for _, t := range term {
+		if isWordEq(t, "NULLS") {
+			return true
+		}
+	}
+	return false
+}
+
+// termIsDescending reports whether an ordering term sorts downward, which is
+// where PostgreSQL puts its NULLs first.
+func termIsDescending(term []token) bool {
+	for i := len(term) - 1; i >= 0; i-- {
+		if !isSignificant(term[i]) {
+			continue
+		}
+		return isWordEq(term[i], "DESC")
+	}
+	return false
 }
 
 // pgUnicodeEscapeStringPass decodes PostgreSQL's U&'...' literal, whose escape

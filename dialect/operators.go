@@ -797,7 +797,7 @@ func isUnarySign(tokens []token, i int) bool {
 // "+" or "-" can follow as a sign rather than as the binary operator.
 var clauseKeywords = map[string]bool{ //nolint:gochecknoglobals // a fixed table read by the sign rule
 	"SELECT": true, kwWhere: true, kwHaving: true, "ON": true, "BY": true,
-	kwLimit: true, "OFFSET": true, "VALUES": true, "SET": true,
+	kwLimit: true, kwOffset: true, "VALUES": true, "SET": true,
 	"RETURNING": true, "USING": true, "XOR": true,
 }
 
@@ -1064,6 +1064,94 @@ func similarToRegexp(pattern string) string {
 	}
 	b.WriteString("$")
 	return b.String()
+}
+
+// fnSimilarSubstring implements the SQL-standard SUBSTRING(x SIMILAR p ESCAPE
+// e) and its older spelling SUBSTRING(x FROM p FOR e): the pattern is a SIMILAR
+// TO pattern in which two occurrences of the escape character followed by a
+// double quote delimit the part to return.
+//
+// It used to be refused in one spelling and read as a position and a length in
+// the other, which answered NULL for every row.
+func fnSimilarSubstring(args []driver.Value) (driver.Value, error) {
+	subject, ok1 := toString(args[0])
+	pattern, ok2 := toString(args[1])
+	escape, ok3 := toString(args[2])
+	if !ok1 || !ok2 || !ok3 {
+		return nil, nil
+	}
+	if len([]rune(escape)) != 1 {
+		return nil, fmt.Errorf("%w: the SUBSTRING escape must be one character, got %q", ErrInvalidCast, escape)
+	}
+	marker := escape + `"`
+	before, rest, found := strings.Cut(pattern, marker)
+	if !found {
+		// No marker pair at all: the whole match is the result, which is what
+		// PostgreSQL answers there.
+		re, err := compileRegexp(similarToRegexp(unescapeSimilar(pattern, escape)))
+		if err != nil {
+			return nil, err
+		}
+		if m := re.FindString(subject); m != "" || re.MatchString(subject) {
+			return m, nil
+		}
+		return nil, nil
+	}
+	middle, after, closed := strings.Cut(rest, marker)
+	if !closed {
+		return nil, fmt.Errorf("%w: the SUBSTRING pattern has one %s marker and needs two", ErrInvalidCast, marker)
+	}
+	// Each portion is wrapped in its own group before the three are joined, so
+	// an alternation inside one of them cannot reach across into the next.
+	re, err := compileRegexp(
+		"^(?:" + trimAnchors(similarToRegexp(unescapeSimilar(before, escape)), true, true) + ")" +
+			"(" + trimAnchors(similarToRegexp(unescapeSimilar(middle, escape)), true, true) + ")" +
+			"(?:" + trimAnchors(similarToRegexp(unescapeSimilar(after, escape)), true, true) + ")$")
+	if err != nil {
+		return nil, err
+	}
+	groups := re.FindStringSubmatch(subject)
+	if groups == nil {
+		return nil, nil
+	}
+	return groups[1], nil
+}
+
+// unescapeSimilar drops the escape character in front of a character it made
+// literal, leaving the pattern in the form similarToRegexp reads. The marker
+// pair has already been taken out by the caller.
+func unescapeSimilar(pattern, escape string) string {
+	if escape == `\` {
+		return pattern
+	}
+	var b strings.Builder
+	runes := []rune(pattern)
+	esc := []rune(escape)[0]
+	for i := 0; i < len(runes); i++ {
+		if runes[i] != esc || i+1 >= len(runes) {
+			b.WriteRune(runes[i])
+			continue
+		}
+		i++
+		if strings.ContainsRune(`%_|*+?{}()[].^$\`, runes[i]) {
+			b.WriteRune('\\')
+		}
+		b.WriteRune(runes[i])
+	}
+	return b.String()
+}
+
+// trimAnchors removes the ^ and $ similarToRegexp puts around a whole pattern,
+// so the three parts of a marked pattern can be stitched into one expression
+// that is anchored only at its own ends.
+func trimAnchors(expr string, dropStart, dropEnd bool) string {
+	if dropEnd {
+		expr = strings.TrimSuffix(expr, "$")
+	}
+	if dropStart {
+		expr = strings.TrimPrefix(expr, "^")
+	}
+	return expr
 }
 
 // fnSimilarTo implements PostgreSQL's "x SIMILAR TO p".

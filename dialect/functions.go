@@ -6,8 +6,10 @@ import (
 	"database/sql/driver"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"math"
 	"math/big"
@@ -215,8 +217,10 @@ func registerAll() error {
 
 		// Shared by every dialect; SQLite spells them min/max with several
 		// arguments, which collides with the aggregate forms.
-		"least":    {-1, fnLeast},
-		"greatest": {-1, fnGreatest},
+		"least":          {-1, fnLeast},
+		"greatest":       {-1, fnGreatest},
+		"mysql_least":    {-1, fnMySQLLeast},
+		"mysql_greatest": {-1, fnMySQLGreatest},
 
 		// PostgreSQL's pair skips NULL arguments where the two above answer
 		// NULL for the whole call.
@@ -244,6 +248,7 @@ func registerAll() error {
 		"googlesql_soundex":    {1, fnGoogleSQLSoundex},
 		"dialect_replace":      {3, fnDialectReplace},
 		"mysql_char":           {-1, fnMySQLChar},
+		"mysql_json_type":      {1, fnMySQLJSONType},
 		"mysql_quote":          {1, fnMySQLQuote},
 		"mysql_ascii":          {1, fnMySQLASCII},
 		"mysql_shift_left":     {2, mysqlShift(true)},
@@ -255,6 +260,7 @@ func registerAll() error {
 		"like_sensitive":            {2, likeCompare(true)},
 		"like_insensitive":          {2, likeCompare(false)},
 		"similar_to":                {2, fnSimilarTo},
+		"similar_substring":         {3, fnSimilarSubstring},
 		"mysql_ord":                 {1, fnMySQLOrd},
 		"json_unquote":              {1, fnJSONUnquote},
 		"overlay":                   {-1, fnOverlay},
@@ -267,6 +273,7 @@ func registerAll() error {
 		"postgresql_regexp_replace": {-1, fnPostgresRegexpReplace},
 		"postgresql_divide":         {2, divideSQLite},
 		"postgresql_mod":            {2, moduloDialect(true)},
+		"postgresql_format":         {-1, fnPostgresFormat},
 		fnNamePostgresDateAdd:       {2, fnPostgresDateAdd},
 		"postgresql_date_diff":      {2, fnPostgresDateDiff},
 		"googlesql_cast":            {2, dialectCast(GoogleSQL, false)},
@@ -2008,6 +2015,47 @@ func fnMySQLChar(args []driver.Value) (driver.Value, error) {
 	return out, nil
 }
 
+// fnMySQLJSONType implements MySQL's JSON_TYPE, which names the type in upper
+// case where SQLite's json_type answers lower case, so a query comparing the
+// result against the name MySQL's documentation prints matched nothing.
+func fnMySQLJSONType(args []driver.Value) (driver.Value, error) {
+	s, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	var value any
+	decoder := json.NewDecoder(strings.NewReader(s))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return nil, fmt.Errorf("dialect: JSON_TYPE: %q is not valid JSON", s)
+	}
+	// A document is the whole of the value, so anything after the first one
+	// makes the input invalid: "1 2" is not the integer 1 with something
+	// ignored after it.
+	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("dialect: JSON_TYPE: %q is not valid JSON", s)
+	}
+	switch v := value.(type) {
+	case nil:
+		return "NULL", nil
+	case bool:
+		return "BOOLEAN", nil
+	case string:
+		return typeNameString, nil
+	case []any:
+		return "ARRAY", nil
+	case map[string]any:
+		return "OBJECT", nil
+	case json.Number:
+		if _, err := v.Int64(); err == nil {
+			return "INTEGER", nil
+		}
+		return "DOUBLE", nil
+	default:
+		return nil, fmt.Errorf("dialect: JSON_TYPE: %q is not valid JSON", s)
+	}
+}
+
 // fnSpace implements MySQL SPACE(n).
 func fnSpace(args []driver.Value) (driver.Value, error) {
 	n, ok := toCount(args[0])
@@ -2040,6 +2088,14 @@ func fnTruncate(args []driver.Value) (driver.Value, error) {
 // instead.
 func fnLeast(args []driver.Value) (driver.Value, error) { return extremum(args, true, false) }
 
+func fnMySQLLeast(args []driver.Value) (driver.Value, error) {
+	return extremumWith(args, true, false, true)
+}
+
+func fnMySQLGreatest(args []driver.Value) (driver.Value, error) {
+	return extremumWith(args, false, false, true)
+}
+
 func fnGreatest(args []driver.Value) (driver.Value, error) { return extremum(args, false, false) }
 
 // fnPostgresLeast and fnPostgresGreatest implement PostgreSQL's LEAST and
@@ -2053,6 +2109,15 @@ func fnPostgresGreatest(args []driver.Value) (driver.Value, error) {
 }
 
 func extremum(args []driver.Value, wantSmaller, skipNulls bool) (driver.Value, error) {
+	return extremumWith(args, wantSmaller, skipNulls, false)
+}
+
+// extremumWith is extremum with the collation named: MySQL's default collation
+// folds case, so GREATEST('a', 'B') is 'B' there and 'a' under a byte-order
+// comparison. STRCMP and the LIKE and REGEXP helpers already fold for the same
+// reason, so leaving these two alone had one dialect disagreeing with itself
+// about which of two strings is larger.
+func extremumWith(args []driver.Value, wantSmaller, skipNulls, foldCaseCompare bool) (driver.Value, error) {
 	if len(args) == 0 {
 		return nil, errors.New("dialect: LEAST/GREATEST expects at least one argument")
 	}
@@ -2089,9 +2154,12 @@ func extremum(args []driver.Value, wantSmaller, skipNulls bool) (driver.Value, e
 	best := 0
 	for i := 1; i < len(args); i++ {
 		var smaller bool
-		if allNumeric {
+		switch {
+		case allNumeric:
 			smaller = nums[i] < nums[best]
-		} else {
+		case foldCaseCompare:
+			smaller = foldCase(strs[i]) < foldCase(strs[best])
+		default:
 			smaller = strs[i] < strs[best]
 		}
 		if smaller == wantSmaller {
@@ -2795,7 +2863,11 @@ func fnChr(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
-	if n < 0 || n > utf8.MaxRune {
+	if n <= 0 || n > utf8.MaxRune {
+		// PostgreSQL refuses zero as well as a negative code point: a zero byte
+		// cannot be stored in a text value there. Answering the space that
+		// SQLite's char() leaves behind for it is the one result a caller
+		// cannot tell from a real character.
 		return nil, fmt.Errorf("dialect: CHR: code point %d is out of range", n)
 	}
 	return string(rune(n)), nil

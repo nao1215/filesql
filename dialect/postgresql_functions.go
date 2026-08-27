@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 )
 
 // This file holds the PostgreSQL-only scalar functions, the ones with no SQLite
@@ -111,13 +110,109 @@ func postgresqlScalarFunctions() map[string]scalarSpec {
 // here.
 func postgresqlNonDeterministicFunctions() map[string]scalarSpec {
 	return map[string]scalarSpec{
-		"clock_timestamp": {0, fnClockTimestamp},
-		"timeofday":       {0, fnTimeOfDay},
-		"gen_random_uuid": {0, fnGenerateUUID},
+		"clock_timestamp":   {0, fnClockTimestamp},
+		"timeofday":         {0, fnTimeOfDay},
+		"gen_random_uuid":   {0, fnGenerateUUID},
+		"postgresql_random": {0, fnPostgresRandom},
 	}
 }
 
 // --- quoting ---
+
+// fnPostgresFormat implements PostgreSQL's format(fmt, ...), whose verbs are
+// not printf's: %s writes the value, %I quotes it as an identifier, %L quotes it
+// as a literal, %% is a percent sign, and a verb may name its argument by
+// position as %n$s. SQLite's own format() is printf and answered NULL for the
+// whole call whenever the string held a verb it did not know, so %I, %L and the
+// positional form all came back as a NULL indistinguishable from a NULL
+// argument.
+func fnPostgresFormat(args []driver.Value) (driver.Value, error) {
+	if len(args) == 0 {
+		return nil, errors.New("dialect: format expects a format string")
+	}
+	spec, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	rest := args[1:]
+	var b strings.Builder
+	next := 0
+	runes := []rune(spec)
+	for i := 0; i < len(runes); i++ {
+		if runes[i] != '%' {
+			b.WriteRune(runes[i])
+			continue
+		}
+		i++
+		if i >= len(runes) {
+			return nil, errors.New("dialect: format: the format string ends in an unfinished verb")
+		}
+		// An argument may name its position, as "%1$s".
+		position := -1
+		start := i
+		for i < len(runes) && runes[i] >= '0' && runes[i] <= '9' {
+			i++
+		}
+		if i > start && i < len(runes) && runes[i] == '$' {
+			n, err := strconv.Atoi(string(runes[start:i]))
+			if err != nil || n < 1 {
+				return nil, fmt.Errorf("dialect: format: %q is not an argument position", string(runes[start:i]))
+			}
+			position = n - 1
+			i++
+		} else {
+			i = start
+		}
+		if i >= len(runes) {
+			return nil, errors.New("dialect: format: the format string ends in an unfinished verb")
+		}
+		verb := runes[i]
+		if verb == '%' {
+			b.WriteByte('%')
+			continue
+		}
+		index := position
+		if index < 0 {
+			index = next
+			next++
+		}
+		if index >= len(rest) {
+			return nil, fmt.Errorf("dialect: format: too few arguments for %%%c", verb)
+		}
+		text, hasValue := toString(rest[index])
+		switch verb {
+		case 's':
+			b.WriteString(text)
+		case 'I':
+			if !hasValue {
+				return nil, errors.New("dialect: format: NULL cannot be an identifier")
+			}
+			quoted, err := fnQuoteIdent([]driver.Value{rest[index]})
+			if err != nil {
+				return nil, err
+			}
+			out, _ := toString(quoted)
+			b.WriteString(out)
+		case 'L':
+			if !hasValue {
+				b.WriteString("NULL")
+				continue
+			}
+			b.WriteString("'" + strings.ReplaceAll(text, "'", "''") + "'")
+		default:
+			return nil, fmt.Errorf("dialect: format: unrecognized verb %%%c", verb)
+		}
+	}
+	return b.String(), nil
+}
+
+// fnPostgresRandom implements PostgreSQL's random(), which answers a double in
+// [0, 1). SQLite's own random() answers a pseudo-random signed 64-bit integer,
+// so every idiom built on the PostgreSQL meaning broke silently: "WHERE
+// random() < 0.1" selected about half the rows rather than a tenth.
+func fnPostgresRandom(_ []driver.Value) (driver.Value, error) {
+	return randFloat(), nil
+}
 
 // fnPostgresDateAdd implements PostgreSQL's "date + integer": the date moved by
 // that many days. A timestamp keeps its time of day, which is what PostgreSQL
@@ -175,7 +270,12 @@ func identifierNeedsQuoting(s string) bool {
 	}
 	for i, r := range s {
 		switch {
-		case r == '_' || unicode.IsLower(r):
+		// Only ASCII lowercase may stand unquoted. unicode.IsLower is wider
+		// than that and let a non-ASCII letter through unquoted, so
+		// quote_ident('éèê') answered the name itself where PostgreSQL quotes
+		// it -- and an unquoted name is the one answer that is not safe to
+		// paste back into SQL, which is the whole point of the function.
+		case r == '_' || (r >= 'a' && r <= 'z'):
 		case r == '$' || (r >= '0' && r <= '9'):
 			if i == 0 {
 				return true
