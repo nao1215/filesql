@@ -341,6 +341,27 @@ func TestDumpLoneEmptyField(t *testing.T) {
 				"INSERT INTO t VALUES ('bob')")
 
 			assert.Equal(t, tt.want, dumpToString(t, db, NewDumpOptions().WithFormat(tt.format)))
+
+			// The two spellings have to read back as the same three values, or
+			// one of the formats is losing the row rather than writing it
+			// differently.
+			outDir := t.TempDir()
+			require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(tt.format)))
+			reloaded, err := OpenContext(t.Context(), filepath.Join(outDir, "t"+tt.format.Extension()))
+			require.NoError(t, err)
+			defer reloaded.Close()
+
+			rows, err := reloaded.QueryContext(t.Context(), `SELECT v FROM t`)
+			require.NoError(t, err)
+			defer rows.Close()
+			var got []string
+			for rows.Next() {
+				var value string
+				require.NoError(t, rows.Scan(&value))
+				got = append(got, value)
+			}
+			require.NoError(t, rows.Err())
+			assert.Equal(t, []string{"alice", "", "bob"}, got)
 		})
 	}
 

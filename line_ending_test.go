@@ -3,6 +3,7 @@ package filesql
 import (
 	"compress/gzip"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -274,4 +275,122 @@ func TestQuotedLineBreakSurvivesLoad(t *testing.T) {
 	var got string
 	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT address FROM a WHERE id=1`).Scan(&got))
 	assert.Equal(t, "line1\r\nline2", got, "the bytes between the quotes are what the file holds")
+}
+
+// TestCarriageReturnTerminatedFileIgnoresQuotesWhereTheFormatHasNone pins that
+// only CSV has a quote that changes where a record ends.
+//
+// A file whose lines end with a lone carriage return is read as lines, and
+// which carriage returns are terminators was decided with CSV's quoting for
+// every format. TSV and LTSV have none -- this module says so in the TSV
+// reader, in the LTSV reader and in countLineEndings below -- so a single `"`
+// in a value made every carriage return after it data: a three-row one-column
+// file loaded as one row holding the other two, with no error, and a wider one
+// failed about a column count that named neither the quote nor the line ending.
+func TestCarriageReturnTerminatedFileIgnoresQuotesWhereTheFormatHasNone(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		file string
+		body string
+		// column is the one to read the rows out of.
+		column string
+		want   []string
+	}{
+		{
+			name: "tsv without a quote", file: "t.tsv",
+			body: "v\r1\r2\r3\r", column: "v", want: []string{"1", "2", "3"},
+		},
+		{
+			name: "tsv with one quote in a value", file: "t.tsv",
+			body: "v\r1\"\r2\r3\r", column: "v", want: []string{`1"`, "2", "3"},
+		},
+		{
+			name: "tsv with two quotes in two values", file: "t.tsv",
+			body: "v\r1\"\r2\"\r3\r", column: "v", want: []string{`1"`, `2"`, "3"},
+		},
+		{
+			name: "tsv with three quotes in one value", file: "t.tsv",
+			body: "v\r1\r\"\"\"\r3\r", column: "v", want: []string{"1", `"""`, "3"},
+		},
+		{
+			name: "ltsv with one quote in a value", file: "t.ltsv",
+			body: "a:1\ra:\"\ra:3\r", column: "a", want: []string{"1", `"`, "3"},
+		},
+		{
+			// CSV is the format the quote belongs to: a carriage return inside a
+			// quoted field is data and stays one.
+			name: "csv keeps a carriage return inside a quoted field", file: "t.csv",
+			body: "v\r1\r\"a\rb\"\r3\r", column: "v", want: []string{"1", "a\rb", "3"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), tt.file)
+			require.NoError(t, os.WriteFile(path, []byte(tt.body), 0o600))
+
+			db, err := OpenContext(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = db.Close() })
+
+			query := fmt.Sprintf(`SELECT %q FROM t`, tt.column) //nolint:gosec // The column name is this test's own literal.
+			rows, err := db.QueryContext(t.Context(), query)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = rows.Close() })
+
+			var got []string
+			for rows.Next() {
+				var value string
+				require.NoError(t, rows.Scan(&value))
+				got = append(got, value)
+			}
+			require.NoError(t, rows.Err())
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestTheTwoLineEndingReadingsAgree holds the read side against the save side.
+// One decides how to split a file into records and the other decides what
+// terminator to write back over it, so a file the loader read as
+// carriage-return terminated has to be one the save writes carriage returns to.
+func TestTheTwoLineEndingReadingsAgree(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		file   string
+		format OutputFormat
+		body   string
+	}{
+		{name: "csv", file: "t.csv", format: OutputFormatCSV, body: "v\r1\r2\r"},
+		{name: "csv with a quote", file: "t.csv", format: OutputFormatCSV, body: "v\r1\r\"a\rb\"\r"},
+		{name: "tsv", file: "t.tsv", format: OutputFormatTSV, body: "v\r1\r2\r"},
+		{name: "tsv with a quote", file: "t.tsv", format: OutputFormatTSV, body: "v\r1\"\r2\r"},
+		{name: "ltsv with a quote", file: "t.ltsv", format: OutputFormatLTSV, body: "a:1\ra:\"\r"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), tt.file)
+			require.NoError(t, os.WriteFile(path, []byte(tt.body), 0o600))
+
+			assert.Equal(t, lineEndingCR, detectLineEnding(path, tt.format),
+				"the save side reads this file as carriage-return terminated")
+
+			db, err := OpenContext(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = db.Close() })
+
+			var rows int
+			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM t`).Scan(&rows))
+			assert.Equal(t, 2, rows, "and the read side split it into the records that terminator names")
+		})
+	}
 }

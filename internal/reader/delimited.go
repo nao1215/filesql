@@ -19,16 +19,27 @@ type recordReader interface {
 	Read() ([]string, error)
 }
 
-// newRecordReader picks the reader the delimiter names, over normalized line
-// endings so a carriage-return terminated file is read as lines.
-func newRecordReader(src io.Reader, delimiter rune) recordReader {
-	normalized := NormalizeLineEndings(src)
-	if delimiter == tsvDelimiter {
+// delimiterOf is the byte that separates one field from the next in a delimited
+// format. It is what the format is, so the two travel together rather than
+// being passed side by side and able to disagree.
+func delimiterOf(format Format) rune {
+	if format == FormatTSV {
+		return tsvDelimiter
+	}
+	return csvDelimiter
+}
+
+// newRecordReader picks the reader the format names, over line endings
+// normalized as that format spells them, so a carriage-return terminated file
+// is read as lines.
+func newRecordReader(src io.Reader, format Format) recordReader {
+	normalized := NormalizeLineEndings(src, format)
+	if format == FormatTSV {
 		return NewTSVReader(normalized)
 	}
 
 	csvReader := NewCSVReader(normalized)
-	csvReader.Comma = delimiter
+	csvReader.Comma = delimiterOf(format)
 	// Accept a variable field count so a ragged record reaches Reconcile, which
 	// is where the caller's policy for one lives, instead of aborting the read.
 	csvReader.FieldsPerRecord = -1
@@ -36,8 +47,8 @@ func newRecordReader(src io.Reader, delimiter rune) recordReader {
 }
 
 // readDelimited reads CSV or TSV rows in chunks.
-func readDelimited(src io.Reader, delimiter rune, format Format, opts Options, emit Emit) (Result, error) {
-	records := newRecordReader(src, delimiter)
+func readDelimited(src io.Reader, format Format, opts Options, emit Emit) (Result, error) {
+	records := newRecordReader(src, format)
 
 	headerRecord, err := records.Read()
 	if err != nil {
