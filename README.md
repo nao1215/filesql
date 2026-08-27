@@ -164,14 +164,10 @@ import (
 func main() {
 	ctx := context.Background()
 
-	builder, err := filesql.NewBuilder().
+	db, err := filesql.NewBuilder().
 		AddPath("users.csv").
 		WithDialect(dialect.PostgreSQL).
-		Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-	db, err := builder.Open(ctx)
+		Open(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -286,14 +282,9 @@ Bob,bob@example.com,user
 	fmt.Print(string(cleaned))
 
 	ctx := context.Background()
-	validatedBuilder, err := filesql.NewBuilder().
+	db, err := filesql.NewBuilder().
 		AddReader(strings.NewReader(string(cleaned)), "users", filesql.FileTypeCSV).
-		Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	db, err := validatedBuilder.Open(ctx)
+		Open(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -712,16 +713,45 @@ func TestDBBuilder_Open_WithReader(t *testing.T) {
 func TestDBBuilder_Open(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("open without build should fail", func(t *testing.T) {
+	t.Run("open without build reports what is wrong with the input", func(t *testing.T) {
 		builder := NewBuilder().AddPath("test.csv")
-		// Call Open without calling Build first
+		// Open validates on its own, so the caller hears about the missing
+		// file rather than about a step they did not take.
 		db, err := builder.Open(ctx)
 		if db != nil {
 			_ = db.Close()
 		}
-		assert.Error(t, err, "Open() without Build() should return error")
-		expectedErrMsg := "no valid input files found, did you call Build()?"
-		assert.Contains(t, err.Error(), expectedErrMsg, "error message should mention Build() requirement")
+		require.Error(t, err, "Open() should refuse a path that does not exist")
+		assert.True(t, errors.Is(err, ErrFileNotFound), "error should be ErrFileNotFound, got %v", err)
+		assert.Contains(t, err.Error(), "test.csv", "error should name the file")
+	})
+
+	t.Run("open without build refuses a builder with no input", func(t *testing.T) {
+		db, err := NewBuilder().Open(ctx)
+		if db != nil {
+			_ = db.Close()
+		}
+		require.Error(t, err, "Open() should refuse a builder with nothing added")
+		assert.True(t, errors.Is(err, ErrNoFiles), "error should be ErrNoFiles, got %v", err)
+	})
+
+	t.Run("build then open loads an added filesystem once", func(t *testing.T) {
+		// build appends the readers it derives from a filesystem, so running
+		// it twice would register every file of that filesystem twice.
+		fsys := fstest.MapFS{
+			"users.csv": &fstest.MapFile{Data: []byte("id,name\n1,Alice\n")},
+		}
+
+		validated, err := NewBuilder().AddFS(fsys).Build(ctx)
+		require.NoError(t, err, "Build() should succeed")
+
+		db, err := validated.Open(ctx)
+		require.NoError(t, err, "Open() after Build() should succeed")
+		defer func() { _ = db.Close() }()
+
+		var rows int
+		require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&rows))
+		assert.Equal(t, 1, rows, "the file must be loaded once, not once per build")
 	})
 
 	t.Run("successful open with CSV file", func(t *testing.T) {

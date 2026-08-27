@@ -44,17 +44,11 @@
 //
 // For more complex scenarios, use the Builder pattern:
 //
-//	builder := filesql.NewBuilder().
+//	db, err := filesql.NewBuilder().
 //	    AddPath("users.csv").
 //	    AddPath("orders.tsv").
-//	    EnableAutoSave("./output")
-//
-//	validatedBuilder, err := builder.Build(ctx)
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
-//
-//	db, err := validatedBuilder.Open(ctx)
+//	    EnableAutoSave("./output").
+//	    Open(ctx)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
@@ -331,7 +325,7 @@
 //	db, err := filesql.NewBuilder().
 //	    AddPath("users.csv").
 //	    WithDialect(dialect.PostgreSQL).
-//	    Build(ctx)
+//	    Open(ctx)
 //	// db.Query("SELECT name::text FROM users WHERE name ILIKE 'a%'")
 //
 // The supported dialects are MySQL, PostgreSQL, and GoogleSQL (BigQuery / Cloud
