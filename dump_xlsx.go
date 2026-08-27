@@ -292,6 +292,18 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, before [][]string) (xlsxE
 		}
 	}
 
+	// A worksheet stores cells rather than a rectangle, and the library writing
+	// one does not store a trailing empty value, so a header whose last column
+	// has no name comes back one cell short of the rows under it -- and the
+	// read refuses a row wider than its header, which is a workbook this
+	// package wrote and cannot load. A column with no name anywhere else is
+	// kept, since a cell that has a cell after it is stored.
+	if last := len(columns) - 1; last >= 0 && columns[last] == "" {
+		return xlsxExtent{}, fmt.Errorf(
+			"%w: XLSX cannot hold a table whose last column has no name, since a worksheet does not store the empty cell that would name it; dump this table as CSV instead",
+			ErrUnsupportedFormat)
+	}
+
 	// Set headers
 	for i, col := range columns {
 		if r, found := xmlControlRune(col); found {

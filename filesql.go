@@ -122,7 +122,12 @@ func LoadInto(ctx context.Context, db *sql.DB, paths ...string) error {
 // ErrUnsupportedFormat and the advice to dump the table as CSV: a tab or a line
 // break in TSV, those and a colon in an LTSV label, and in XLSX a control
 // character other than tab, line feed and carriage return, which is what an XML
-// 1.0 document has no way to spell.
+// 1.0 document has no way to spell, or a last column with no name, which a
+// worksheet does not store.
+//
+// A table whose column names a load would refuse is refused too, with
+// ErrDuplicateColumn: this package reads " a", "a" and "a " as one name, and
+// SQLite does not, so a table holding two of them is one only SQLite can hold.
 //
 // It exports without a deadline. DumpDatabaseContext takes one.
 func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
@@ -279,6 +284,15 @@ func dumpSQLiteTable(ctx context.Context, db *sql.DB, tableName, outputDir strin
 	columns, declTypes, err := getSQLiteTableColumns(ctx, db, tableName)
 	if err != nil {
 		return fmt.Errorf("%w: failed to get columns for table %s: %w", ErrDatabaseOperation, tableName, err)
+	}
+
+	// SQLite tells "a" from "a " and this package does not, so a table holding
+	// both is one the load refuses -- and the dump wrote the two names into one
+	// header and said nothing, leaving the caller to find out when they read
+	// their own dump. The question the load asks is asked here, of the same
+	// names, so the two cannot drift apart.
+	if err := reader.ValidateColumnNames(columns); err != nil {
+		return fmt.Errorf("%w in table %s", wrapReadError(err), quoteIdentifier(tableName))
 	}
 
 	// Query all data from table

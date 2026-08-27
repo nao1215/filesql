@@ -1761,3 +1761,131 @@ func TestDumpDatabaseContext_StopsWhenTheContextEnds(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
+
+// TestDumpRefusesColumnsTheLoadWouldRefuse is the column half of the rule that
+// a dump is a file this package can read again. SQLite tells "a" from "a " and
+// this package does not: a table built from both would answer a query about "a"
+// with a column the caller did not mean, so the load refuses it. The dump wrote
+// the two names into one header and said nothing, and the caller found out when
+// they tried to read their own dump.
+func TestDumpRefusesColumnsTheLoadWouldRefuse(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	colliding := []struct {
+		name    string
+		columns string
+	}{
+		{name: "a trailing space", columns: `"a" TEXT, "a " TEXT`},
+		{name: "a leading space", columns: `"a" TEXT, " a" TEXT`},
+		{name: "a trailing tab", columns: "\"a\" TEXT, \"a\t\" TEXT"},
+	}
+
+	formats := []struct {
+		name string
+		f    OutputFormat
+	}{
+		{name: "csv", f: OutputFormatCSV},
+		{name: "parquet", f: OutputFormatParquet},
+	}
+
+	for _, tt := range colliding {
+		for _, format := range formats {
+			t.Run(tt.name+"/"+format.name, func(t *testing.T) {
+				t.Parallel()
+
+				db := openWithTable(t, `CREATE TABLE t (`+tt.columns+`)`, `INSERT INTO t VALUES ('p', 'q')`)
+
+				outDir := filepath.Join(t.TempDir(), "out")
+				err := DumpDatabase(db, outDir, NewDumpOptions().WithFormat(format.f))
+
+				require.Error(t, err, "a table the load would refuse must not be dumped in silence")
+				assert.ErrorIs(t, err, ErrDuplicateColumn)
+				assert.Contains(t, err.Error(), "t", "the error must name the table")
+			})
+		}
+	}
+
+	t.Run("ordinary column names still dump and load", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, `CREATE TABLE t (a TEXT, b TEXT)`, `INSERT INTO t VALUES ('p', 'q')`)
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions()))
+		require.NoError(t, db.Close())
+
+		back, err := OpenContext(ctx, filepath.Join(outDir, "t.csv"))
+		require.NoError(t, err)
+		defer func() { _ = back.Close() }()
+
+		var a, b string
+		require.NoError(t, back.QueryRowContext(ctx, "SELECT a, b FROM t").Scan(&a, &b))
+		assert.Equal(t, "p", a)
+		assert.Equal(t, "q", b)
+	})
+}
+
+// TestDumpXLSXRefusesAnUnnamedLastColumn pins that a workbook this package
+// writes is one it can read. A worksheet does not store a trailing empty cell,
+// so a header ending in a column with no name came back one cell short of the
+// rows under it, and the load refused the workbook the dump had just written.
+func TestDumpXLSXRefusesAnUnnamedLastColumn(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("the last column has no name", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, `CREATE TABLE t ("a" TEXT, "" TEXT)`, `INSERT INTO t VALUES ('p', 'q')`)
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		err := DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		assert.Contains(t, err.Error(), "CSV", "the error must say what to dump instead")
+	})
+
+	t.Run("an unnamed column that is not the last still round-trips", func(t *testing.T) {
+		t.Parallel()
+
+		// A worksheet stores an empty cell that has a cell after it, so this
+		// header comes back whole.
+		db := openWithTable(t, `CREATE TABLE t ("a" TEXT, "" TEXT, "b" TEXT)`, `INSERT INTO t VALUES ('p', 'q', 'r')`)
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+		require.NoError(t, db.Close())
+
+		back, err := OpenContext(ctx, filepath.Join(outDir, "t.xlsx"))
+		require.NoError(t, err)
+		defer func() { _ = back.Close() }()
+
+		var middle string
+		require.NoError(t, back.QueryRowContext(ctx, `SELECT "" FROM t`).Scan(&middle))
+		assert.Equal(t, "q", middle)
+	})
+
+	t.Run("a last column named with a space still round-trips", func(t *testing.T) {
+		t.Parallel()
+
+		// That cell is not empty, so the workbook stores it. This is the
+		// boundary between what looks blank and what a worksheet drops.
+		db := openWithTable(t, `CREATE TABLE t ("a" TEXT, " " TEXT)`, `INSERT INTO t VALUES ('p', 'q')`)
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+		require.NoError(t, db.Close())
+
+		back, err := OpenContext(ctx, filepath.Join(outDir, "t.xlsx"))
+		require.NoError(t, err)
+		defer func() { _ = back.Close() }()
+
+		var last string
+		require.NoError(t, back.QueryRowContext(ctx, `SELECT " " FROM t`).Scan(&last))
+		assert.Equal(t, "q", last)
+	})
+}
