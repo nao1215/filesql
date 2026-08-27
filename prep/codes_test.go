@@ -19,6 +19,7 @@ func TestPublishedCodeTablesAreWhole(t *testing.T) {
 		// ISO 4217 assigns fewer codes than ISO 3166-1 does, so its bound is
 		// its own rather than the one the country tables share.
 		{"iso4217", len(iso4217Set), 150},
+		{"iso4217 numeric", len(iso4217NumericSet), 150},
 	}
 
 	for _, tt := range tests {
@@ -39,6 +40,11 @@ func TestPublishedCodeTablesAreWhole(t *testing.T) {
 	}
 	if got := len(iso4217Set); got != len(iso4217Currencies) {
 		t.Errorf("iso4217Set holds %d codes, want %d", got, len(iso4217Currencies))
+	}
+	// Every active currency the source lists carries a numeric code, so the
+	// two currency forms name the same number of codes.
+	if got := len(iso4217NumericSet); got != len(iso4217Currencies) {
+		t.Errorf("iso4217NumericSet holds %d codes, want %d", got, len(iso4217Currencies))
 	}
 }
 
@@ -83,6 +89,13 @@ func TestCountryAndCurrencyCodeValidators(t *testing.T) {
 			validator: newISO4217Validator(),
 			pass:      []string{"JPY", "USD", "EUR", "XAU"},
 			fail:      []string{"jpy", "YEN", "JP", "ZWL"},
+		},
+		{
+			tag:       iso4217NumericTagValue,
+			validator: newISO4217NumericValidator(),
+			// XXX, the no-currency code the alphabetic set includes, is 999.
+			pass: []string{"392", "008", "840", "999"},
+			fail: []string{"8", "3920", "000", "JPY"},
 		},
 	}
 
