@@ -337,6 +337,15 @@ type TableData struct {
 	// ColumnTypes contains the inferred types for each column.
 	// The length matches Headers.
 	ColumnTypes []ColumnType
+	// Nulls marks which cells hold nothing rather than an empty value
+	// (Nulls[row][column]), parallel to Records when it is not nil.
+	//
+	// It is nil for every format but Parquet, which is the only one here with a
+	// null of its own; the rest spell a missing value as an empty field, which
+	// is a value. A nil mask therefore says the format has no nulls rather than
+	// that this file has none, and a caller that ignores the field reads what it
+	// always read: a null renders as the empty string in Records either way.
+	Nulls [][]bool
 }
 
 // ParseOption adjusts how Parse reads a source. Options only affect the formats
@@ -351,8 +360,11 @@ type parseConfig struct {
 	excelSheetPolicy ExcelSheetPolicy
 }
 
-// WithExcelSheetPolicy decides which sheets of a workbook Parse may take its
-// table from. It has no effect on other formats.
+// WithExcelSheetPolicy decides which sheets of a workbook Parse may choose its
+// one table from. It has no effect on other formats.
+//
+// Parse takes the first sheet the policy admits and does not read the rest, so
+// this narrows the choice rather than widening what comes back.
 //
 // Example:
 //
@@ -406,6 +418,17 @@ var readerFormats = map[FileType]reader.Format{ //nolint:gochecknoglobals // con
 // Parse reads data from an io.Reader and returns parsed results.
 // The fileType parameter specifies the format and compression of the data.
 //
+// A TableData is one table, so a workbook contributes one sheet: the first the
+// sheet policy admits, in the workbook's own order. The others are not read and
+// nothing here reports them. filesql.OpenContext makes a table per sheet, and
+// filesql.ExcelSheetsInReader says what a workbook holds without loading it.
+//
+// Values are spelled the way the format reads them rather than the way SQLite
+// stores them, which shows in Parquet: a whole float comes back as "2" and a
+// boolean as "true". A load spells the same cells for SQLite's affinity, so
+// feeding Records into a CSV and loading that is not the same as loading the
+// Parquet file.
+//
 // Example:
 //
 //	f, _ := os.Open("data.csv.gz")
@@ -446,12 +469,23 @@ func Parse(input io.Reader, fileType FileType, opts ...ParseOption) (result *Tab
 	// reverse: a whole-table read cannot be handed out a chunk at a time.
 	var headers []string
 	records := [][]string{}
+	var nulls [][]bool
 	read, readErr := reader.Read(decompressed, format, reader.Options{
 		Reconcile:        strictFieldCount(baseType),
 		ExcelSheetPolicy: cfg.excelSheetPolicy,
 	}, func(chunk *reader.Chunk) error {
 		headers = chunk.Header
 		records = append(records, chunk.Records...)
+		// A chunk carries a mask only for a format that has a null, and the
+		// mask has to stay parallel to the records it belongs to: a chunk
+		// without one contributes as many unmarked rows as it holds, so the
+		// two do not slide apart across a chunk boundary.
+		if chunk.Nulls != nil {
+			for len(nulls) < len(records)-len(chunk.Records) {
+				nulls = append(nulls, nil)
+			}
+			nulls = append(nulls, chunk.Nulls...)
+		}
 		return nil
 	})
 	if readErr != nil {
@@ -467,6 +501,7 @@ func Parse(input io.Reader, fileType FileType, opts ...ParseOption) (result *Tab
 		Headers:     headers,
 		Records:     records,
 		ColumnTypes: columnTypesOf(read.Types),
+		Nulls:       nulls,
 	}, nil
 }
 
