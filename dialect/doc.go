@@ -54,7 +54,7 @@
 // reach one helper so they cannot disagree.
 //
 // Rounding is the other arithmetic that differs. MySQL and PostgreSQL break a
-// tie toward the even neighbour for a floating-point argument, so ROUND(2.5) is
+// tie toward the even neighbor for a floating-point argument, so ROUND(2.5) is
 // 2 and ROUND(3.5) is 4, where SQLite and BigQuery round away from zero. Every
 // non-integer SQLite holds is a floating-point value, so the even rule is the
 // one a REAL column loaded from a file gets in either engine; what it cannot

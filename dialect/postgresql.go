@@ -192,7 +192,7 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 		return rewritePosition(tokens, open, closeIdx, pgCallPass)
 	case fnNameSubstring, fnNameSubstr:
 		return rewritePostgresSubstringCall(tokens, open, closeIdx, pgCallPass)
-	case "REPLACE":
+	case fnNameReplace:
 		// SQLite answers the subject for an empty search string without looking
 		// at the replacement, so a NULL replacement did not reach the result.
 		return rewriteRenameCall(tokens, open, closeIdx, "dialect_replace", pgCallPass)
@@ -225,7 +225,7 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 		return rewriteRenameCall(tokens, open, closeIdx, "json_array_length", pgCallPass)
 	case fnNameCharLen, fnNameCharLen2:
 		return rewriteRenameCall(tokens, open, closeIdx, "length", pgCallPass)
-	case "LPAD", "RPAD":
+	case fnNameLpad, fnNameRpad:
 		// A negative length and an empty pad are answered differently by each
 		// dialect, so each names its own helper rather than sharing one.
 		return rewriteRenameCall(tokens, open, closeIdx, "postgresql_"+strings.ToLower(tokens[nameIdx].text), pgCallPass)

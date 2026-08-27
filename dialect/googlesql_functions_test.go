@@ -354,6 +354,58 @@ func TestGoogleSQLScalarFunctions(t *testing.T) {
 
 // TestGoogleSQLFunctionsAnswerNullForNull covers the rule every SQL function
 // follows: a NULL argument makes the answer NULL.
+// TestGoogleSQLSoundexIsNotMySQLs pins the three places BigQuery's SOUNDEX
+// differs from MySQL's, all of them read off the BigQuery emulator: it stops at
+// three digits, it keeps the first letter's case, and it sees no letter outside
+// ASCII. The coding rule itself is the same, so the two share one
+// implementation and differ only by their rules table.
+func TestGoogleSQLSoundexIsNotMySQLs(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		dialect Dialect
+		query   string
+		want    string
+		null    bool
+	}{
+		{GoogleSQL, `SELECT SOUNDEX('Ashcraft')`, "A261", false},
+		{GoogleSQL, `SELECT SOUNDEX('Hello World')`, "H464", false},
+		{GoogleSQL, `SELECT SOUNDEX('abcdefghijklmnopqrstuvwxyz')`, "a123", false},
+		{GoogleSQL, `SELECT SOUNDEX('hello')`, "h400", false},
+		{GoogleSQL, `SELECT SOUNDEX('Tymczak')`, "T520", false},
+		{GoogleSQL, `SELECT SOUNDEX('Pfister')`, "P236", false},
+		{GoogleSQL, `SELECT SOUNDEX('Honeyman')`, "H500", false},
+		{GoogleSQL, `SELECT SOUNDEX('')`, "", false},
+		{GoogleSQL, `SELECT SOUNDEX('123')`, "", false},
+		{GoogleSQL, `SELECT SOUNDEX('éèê')`, "", false},
+		{GoogleSQL, `SELECT SOUNDEX(NULL)`, "", true},
+
+		// The same three inputs under MySQL, so the two cannot be given one
+		// rule by a later change.
+		{MySQL, `SELECT SOUNDEX('Hello World')`, "H4643", false},
+		{MySQL, `SELECT SOUNDEX('hello')`, "H400", false},
+		{MySQL, `SELECT SOUNDEX('éèê')`, "é000", false},
+	}
+
+	for _, tt := range tests {
+		got, err := runDialect(t, db, tt.dialect, tt.query)
+		if err != nil {
+			t.Errorf("%v: %s: %v", tt.dialect, tt.query, err)
+			continue
+		}
+		if tt.null {
+			if got.Valid {
+				t.Errorf("%v: %s = %q, want NULL", tt.dialect, tt.query, got.String)
+			}
+			continue
+		}
+		if !got.Valid || got.String != tt.want {
+			t.Errorf("%v: %s = %v, want %q", tt.dialect, tt.query, got, tt.want)
+		}
+	}
+}
+
 // TestGoogleSQLRefusesANegativeLength pins one rule across the five functions
 // that take a length. BigQuery refuses a negative one in every one of them, and
 // this package used to answer an error from two, the empty string from two and

@@ -1369,7 +1369,7 @@ func TestRoundIsRewrittenOnlyWhereADialectDisagrees(t *testing.T) {
 		input   string
 		want    string
 	}{
-		// MySQL and PostgreSQL break a tie toward the even neighbour for a
+		// MySQL and PostgreSQL break a tie toward the even neighbor for a
 		// floating-point argument, which SQLite's round() does not, so both
 		// forms of the call go to a helper. BigQuery rounds away from zero the
 		// way SQLite does, so only its scaled form needs one.
@@ -1396,7 +1396,7 @@ func TestRoundIsRewrittenOnlyWhereADialectDisagrees(t *testing.T) {
 
 // TestRoundBreaksATieTheWayEachDialectDoes pins the tie rule of ROUND per
 // dialect. MySQL and PostgreSQL both round a floating-point argument to the
-// even neighbour and BigQuery rounds away from zero, so the three cannot be
+// even neighbor and BigQuery rounds away from zero, so the three cannot be
 // given one rule. Every MySQL value here was read from mysql:8.4 and every
 // PostgreSQL one from postgres:17-alpine, in both cases with the argument
 // spelled as a double.

@@ -201,7 +201,7 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		return rewritePosition(tokens, open, closeIdx, mysqlCallPass)
 	case fnNameSubstring, fnNameSubstr:
 		return rewriteSubstringCall(tokens, open, closeIdx, "mysql_substr", mysqlCallPass)
-	case "REPLACE":
+	case fnNameReplace:
 		// SQLite answers the subject for an empty search string without looking
 		// at the replacement, so a NULL replacement did not reach the result.
 		return rewriteRenameCall(tokens, open, closeIdx, "dialect_replace", mysqlCallPass)
@@ -211,7 +211,7 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 	case "SOUNDEX":
 		// SQLite has a soundex() of its own that answers a placeholder for a
 		// value holding no letter and cuts the code to four characters.
-		return rewriteRenameCall(tokens, open, closeIdx, "dialect_soundex", mysqlCallPass)
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_soundex", mysqlCallPass)
 	case fnNameRound:
 		return rewriteRoundEvenCall(tokens, open, closeIdx, mysqlCallPass)
 	case fnNameMod:
@@ -297,7 +297,7 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_ascii", mysqlCallPass)
 	case "UNHEX":
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_unhex", mysqlCallPass)
-	case "LPAD", "RPAD":
+	case fnNameLpad, fnNameRpad:
 		// A negative length and an empty pad are answered differently by each
 		// dialect, so each names its own helper rather than sharing one.
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_"+strings.ToLower(tokens[nameIdx].text), mysqlCallPass)

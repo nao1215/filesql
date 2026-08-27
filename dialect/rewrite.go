@@ -24,6 +24,9 @@ const (
 	fnNameSubstring = "SUBSTRING"
 	fnNameSubstr    = "SUBSTR"
 	fnNameMod       = "MOD"
+	fnNameReplace   = "REPLACE"
+	fnNameLpad      = "LPAD"
+	fnNameRpad      = "RPAD"
 	fnNameTrunc     = "TRUNC"
 )
 
@@ -587,7 +590,7 @@ func rewriteRoundCall(tokens []token, open, closeIdx int, recurse callRecurser) 
 }
 
 // rewriteRoundEvenCall routes both ROUND forms onto the helper that breaks a
-// tie toward the even neighbour, which is what MySQL and PostgreSQL answer for
+// tie toward the even neighbor, which is what MySQL and PostgreSQL answer for
 // a floating-point argument and what SQLite's own round() does not do. Unlike
 // rewriteRoundCall it takes the one-argument form too, since that is where the
 // tie shows: ROUND(2.5) is the whole question.

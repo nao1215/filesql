@@ -164,25 +164,25 @@ func registerAll() error {
 		// SUBSTRING at position 0 and at a negative position is answered
 		// differently by each dialect, and by SQLite's own substr(), so each
 		// dialect's rewrite names its own helper.
-		"mysql_substr":      {-1, fnMySQLSubstr},
-		"postgresql_substr": {-1, fnPostgreSQLSubstr},
-		"googlesql_substr":  {-1, fnGoogleSQLSubstr},
+		"mysql_substr":       {-1, fnMySQLSubstr},
+		"postgresql_substr":  {-1, fnPostgreSQLSubstr},
+		"googlesql_substr":   {-1, fnGoogleSQLSubstr},
 		"dialect_round":      {2, fnDialectRound},
 		"dialect_round_even": {-1, fnDialectRoundEven},
-		"repeat":            {2, fnRepeat},
-		"googlesql_repeat":  {2, fnGoogleSQLRepeat},
-		"googlesql_lpad":    {-1, padFor(googlesqlPadRules, true)},
-		"googlesql_rpad":    {-1, padFor(googlesqlPadRules, false)},
-		"space":             {1, fnSpace},
-		"truncate":          {2, fnTruncate},
-		"reverse":           {1, fnReverse},
-		"find_in_set":       {2, fnFindInSet},
-		"field":             {-1, fnField},
-		"elt":               {-1, fnElt},
-		"monthname":         {1, fnMonthName},
-		"dayname":           {1, fnDayName},
-		"last_day":          {1, fnLastDay},
-		"from_unixtime":     {-1, fnFromUnixtime},
+		"repeat":             {2, fnRepeat},
+		"googlesql_repeat":   {2, fnGoogleSQLRepeat},
+		"googlesql_lpad":     {-1, padFor(googlesqlPadRules, true)},
+		"googlesql_rpad":     {-1, padFor(googlesqlPadRules, false)},
+		"space":              {1, fnSpace},
+		"truncate":           {2, fnTruncate},
+		"reverse":            {1, fnReverse},
+		"find_in_set":        {2, fnFindInSet},
+		"field":              {-1, fnField},
+		"elt":                {-1, fnElt},
+		"monthname":          {1, fnMonthName},
+		"dayname":            {1, fnDayName},
+		"last_day":           {1, fnLastDay},
+		"from_unixtime":      {-1, fnFromUnixtime},
 
 		// Shared by every dialect; SQLite spells them min/max with several
 		// arguments, which collides with the aggregate forms.
@@ -210,7 +210,8 @@ func registerAll() error {
 		"date_trunc_part":      {2, fnDateTruncPart},
 		"mysql_hex":            {1, fnMySQLHex},
 		"mysql_unhex":          {1, fnMySQLUnhex},
-		"dialect_soundex":      {1, fnDialectSoundex},
+		"mysql_soundex":        {1, fnMySQLSoundex},
+		"googlesql_soundex":    {1, fnGoogleSQLSoundex},
 		"dialect_replace":      {3, fnDialectReplace},
 		"mysql_char":           {-1, fnMySQLChar},
 		"mysql_quote":          {1, fnMySQLQuote},
@@ -1631,7 +1632,7 @@ func fnDialectRound(args []driver.Value) (driver.Value, error) {
 const float64MaxDecimalExponent = 308
 
 // fnDialectRoundEven is fnDialectRound with MySQL's and PostgreSQL's tie rule.
-// Both round a floating-point argument to the even neighbour: ROUND(2.5) is 2
+// Both round a floating-point argument to the even neighbor: ROUND(2.5) is 2
 // and ROUND(3.5) is 4, where SQLite's own round() and BigQuery both answer 3
 // and 4. Every non-integer value SQLite holds is a float, so this is the rule
 // that matches what a REAL column loaded from a file does in either engine.
@@ -1641,6 +1642,9 @@ const float64MaxDecimalExponent = 308
 // tell that from the double 2.5e0, which MySQL answers 2 for. The column is the
 // case worth getting right.
 func fnDialectRoundEven(args []driver.Value) (driver.Value, error) {
+	if len(args) < 1 || len(args) > 2 {
+		return nil, fmt.Errorf("dialect: ROUND expects 1 or 2 arguments, got %d", len(args))
+	}
 	value, ok := toFloat(args[0])
 	if !ok {
 		return nil, nil
@@ -1674,7 +1678,7 @@ func fnDialectRoundEven(args []driver.Value) (driver.Value, error) {
 }
 
 // roundHalfToEven rounds value to digits decimal places, breaking an exact tie
-// toward the even neighbour.
+// toward the even neighbor.
 //
 // It rounds the shortest decimal that reads back as value rather than the
 // binary value itself, which is what makes 2.675 round to 2.68 the way MySQL
@@ -1709,7 +1713,7 @@ func roundHalfToEven(value float64, digits int64) (float64, bool) {
 }
 
 // ratRoundHalfToEven is r rounded to an integer, with an exact half going to
-// whichever neighbour is even.
+// whichever neighbor is even.
 func ratRoundHalfToEven(r *big.Rat) *big.Int {
 	quo, rem := new(big.Int).QuoRem(r.Num(), r.Denom(), new(big.Int))
 	twice := new(big.Int).Abs(rem)
@@ -1794,39 +1798,70 @@ func repeatWith(args []driver.Value, raiseOnNegative bool) (driver.Value, error)
 	return strings.Repeat(s, int(count)), nil
 }
 
-// fnDialectSoundex implements MySQL's SOUNDEX, which SQLite's own soundex()
-// does not match in three ways: SQLite answers "?000" for a value holding no
-// letter at all and for NULL, and it cuts the code to four characters where
-// MySQL emits one digit per coded consonant however many there are.
+// soundexRules are the three things the dialects differ on, all of them read
+// off mysql:8.4 and the BigQuery emulator rather than assumed.
 //
-// The coding rule was read off mysql:8.4 rather than from the textbook
-// algorithm, which differs: no letter resets the run, so SOUNDEX('Tymczak') is
-// T520 rather than the T522 a vowel reset would give, and the first letter's
-// own code counts as the previous one, so SOUNDEX('Pfister') is P236 rather
-// than P1236. The first letter is kept as it is written, which is how a
-// multi-byte letter survives: MySQL answers "é000" where SQLite answers "?000".
-func fnDialectSoundex(args []driver.Value) (driver.Value, error) {
+//   - MySQL emits one digit per coded consonant however many there are, so
+//     SOUNDEX('Hello World') is H4643; BigQuery stops at three, giving H464.
+//   - MySQL upper-cases an ASCII first letter, so SOUNDEX('hello') is H400;
+//     BigQuery keeps it as written and answers h400.
+//   - MySQL treats any Unicode letter as the first letter and writes it back
+//     unchanged, so SOUNDEX('éèê') is é000; BigQuery sees no letter at all
+//     there and answers the empty string.
+//
+// What they agree on is the coding rule, which is not the textbook one: no
+// letter resets the run, so SOUNDEX('Tymczak') is T520 rather than the T522 a
+// vowel reset would give, and the first letter's own code counts as the
+// previous one, so SOUNDEX('Pfister') is P236 rather than P1236.
+type soundexRules struct {
+	maxDigits  int
+	upperFirst bool
+	asciiOnly  bool
+}
+
+var (
+	mysqlSoundexRules     = soundexRules{upperFirst: true}              //nolint:gochecknoglobals // constant-like
+	googlesqlSoundexRules = soundexRules{maxDigits: 3, asciiOnly: true} //nolint:gochecknoglobals // constant-like
+)
+
+func fnMySQLSoundex(args []driver.Value) (driver.Value, error) {
+	return soundexWith(args, mysqlSoundexRules)
+}
+
+func fnGoogleSQLSoundex(args []driver.Value) (driver.Value, error) {
+	return soundexWith(args, googlesqlSoundexRules)
+}
+
+// soundexWith implements SOUNDEX under one dialect's rules. SQLite's own
+// soundex() matches neither: it answers "?000" for NULL and for a value holding
+// no letter at all, and it cuts the code to four characters whatever the dialect
+// asks for.
+func soundexWith(args []driver.Value, rules soundexRules) (driver.Value, error) {
 	s, ok := toString(args[0])
 	if !ok {
 		return nil, nil
 	}
 	runes := []rune(s)
+	isLetter := func(r rune) bool {
+		if rules.asciiOnly {
+			return r < utf8.RuneSelf && unicode.IsLetter(r)
+		}
+		return unicode.IsLetter(r)
+	}
 	first := -1
 	for i, r := range runes {
-		if unicode.IsLetter(r) {
+		if isLetter(r) {
 			first = i
 			break
 		}
 	}
 	if first < 0 {
-		// No letter to build a code from. MySQL answers the empty string, where
-		// SQLite answers its "?000" placeholder.
+		// No letter to build a code from. Both dialects answer the empty
+		// string, where SQLite answers its "?000" placeholder.
 		return "", nil
 	}
 	var b strings.Builder
-	// Only an ASCII letter is upper-cased. MySQL answers "é000" rather than
-	// "É000", so a letter it has no code for is written back as it arrived.
-	if lead := runes[first]; lead < utf8.RuneSelf {
+	if lead := runes[first]; rules.upperFirst && lead < utf8.RuneSelf {
 		b.WriteRune(unicode.ToUpper(lead))
 	} else {
 		b.WriteRune(lead)
@@ -1834,8 +1869,11 @@ func fnDialectSoundex(args []driver.Value) (driver.Value, error) {
 	previous := soundexCode(runes[first])
 	digits := 0
 	for _, r := range runes[first+1:] {
-		if !unicode.IsLetter(r) {
+		if !isLetter(r) {
 			continue
+		}
+		if rules.maxDigits > 0 && digits >= rules.maxDigits {
+			break
 		}
 		code := soundexCode(r)
 		if code == 0 || code == previous {
@@ -1843,7 +1881,7 @@ func fnDialectSoundex(args []driver.Value) (driver.Value, error) {
 			// which is what makes SOUNDEX('Honeyman') H500 rather than H555.
 			continue
 		}
-		b.WriteByte('0' + byte(code))
+		b.WriteByte(byte('0' + code)) //nolint:gosec // code is 1..6 from soundexCode
 		digits++
 		previous = code
 	}
@@ -1877,8 +1915,8 @@ func soundexCode(r rune) int {
 // fnDialectReplace implements REPLACE(subject, search, replacement) with the
 // NULL rule every dialect here has and SQLite does not: SQLite short-circuits on
 // an empty search string and answers the subject without looking at the
-// replacement, so REPLACE('hello', '', NULL) answered 'hello' where MySQL and
-// PostgreSQL answer NULL. A NULL that should have travelled through the
+// replacement, so REPLACE('hello', ”, NULL) answered 'hello' where MySQL and
+// PostgreSQL answer NULL. A NULL that should have traveled through the
 // expression disappeared and the row read as unchanged rather than as unknown.
 func fnDialectReplace(args []driver.Value) (driver.Value, error) {
 	subject, ok1 := toString(args[0])
