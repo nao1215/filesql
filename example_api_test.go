@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/nao1215/filesql"
 	"github.com/nao1215/filesql/dialect"
@@ -908,4 +909,51 @@ func ExampleDumpFedWireWithTableSet() {
 	fmt.Println(amount)
 	// Output:
 	// 000000012500
+}
+
+// ExampleDumpDatabaseContext exports under a deadline, which is what a handler
+// serving a download wants: the export stops when the request it belongs to
+// does.
+func ExampleDumpDatabaseContext() {
+	dir, err := os.MkdirTemp("", "filesql-dump-context")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	source := filepath.Join(dir, "orders.csv")
+	if err := os.WriteFile(source, []byte("id,total\n1,120\n2,340\n"), 0o600); err != nil {
+		log.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	db, err := filesql.OpenContext(ctx, source)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	out := filepath.Join(dir, "out")
+	if err := filesql.DumpDatabaseContext(ctx, db, out); err != nil {
+		log.Fatal(err)
+	}
+
+	exported, err := os.ReadFile(filepath.Join(out, "orders.csv")) //nolint:gosec // Path built from this example's own temporary directory.
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Print(string(exported))
+
+	// A context that is already done stops the export before it writes anything.
+	done, stop := context.WithCancel(context.Background())
+	stop()
+	fmt.Println(errors.Is(filesql.DumpDatabaseContext(done, db, filepath.Join(dir, "none")), context.Canceled))
+
+	// Output:
+	// id,total
+	// 1,120
+	// 2,340
+	// true
 }

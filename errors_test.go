@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -333,6 +334,16 @@ func TestParseFailure_NamesTheInputOnce(t *testing.T) {
 			content:      "a,b\n\"unclosed,2\n",
 			wantSentinel: ErrParsing,
 		},
+		{
+			// The decoder reports this one with a sentinel of this package's
+			// own from inside the chain the reader reads through, and the
+			// reader framed it as a parse failure on top, so the package
+			// announced itself twice about one byte.
+			name:         "a byte that is not part of a UTF-8 character",
+			file:         "utf8.csv",
+			content:      "a,b\n\xff\xfe,2\n",
+			wantSentinel: ErrInvalidUTF8,
+		},
 	}
 
 	for _, tt := range tests {
@@ -411,4 +422,47 @@ func TestCancelledLoadReportsContextError(t *testing.T) {
 	_, err := OpenContext(ctx, path)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
+}
+
+// TestCanceledLoadNamesThePackageOnce pins that the load path frames a failed
+// insert once, the way a failed read is framed once.
+//
+// The insert wrapped ErrDatabaseOperation and its caller wrapped the same
+// sentinel again to add the table name, so one failure read as
+// "filesql: database operation failed: failed to insert chunk data into table
+// "t": filesql: database operation failed: failed to insert record: ...".
+func TestCanceledLoadNamesThePackageOnce(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "big.csv")
+	var body strings.Builder
+	body.WriteString("id,name\n")
+	for i := range 200000 {
+		fmt.Fprintf(&body, "%d,customer%d\n", i, i)
+	}
+	require.NoError(t, os.WriteFile(path, []byte(body.String()), 0o600))
+
+	interrupted := 0
+	for attempt := range 20 {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(1+attempt)*time.Millisecond)
+		db, err := OpenContext(ctx, path)
+		if db != nil {
+			_ = db.Close()
+		}
+		cancel()
+		if err == nil {
+			continue
+		}
+		interrupted++
+		// At most once rather than exactly once: a deadline that expires before
+		// the load has begun is answered with the context's own error and
+		// nothing else, which names the package no times and is right.
+		msg := err.Error()
+		require.LessOrEqual(t, strings.Count(msg, "filesql: "), 1, "the package names itself at most once: %s", msg)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+	}
+	// Without this the test passes by never having tested anything: a machine
+	// that loads the file inside one millisecond would take every attempt to
+	// the end and assert nothing.
+	require.Positive(t, interrupted, "no attempt was interrupted, so the framing was never checked")
 }

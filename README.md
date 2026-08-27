@@ -389,7 +389,7 @@ A `DBBuilder` is not safe to share across goroutines; the database is. Build one
 
 Changes live in memory until you save them.
 
-- `DumpDatabase` writes the current database out to files when you want an explicit export step.
+- `DumpDatabase` writes the current database out to files when you want an explicit export step. `DumpDatabaseContext` is the same export under a context, so a server can stop one when the request it belongs to ends.
 - `EnableAutoSave` saves when `db.Close()` runs.
 - `EnableAutoSaveOnCommit` saves after each committed transaction, and again when `db.Close()` runs, so a statement executed outside a transaction is not lost.
 
@@ -482,6 +482,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Attach a slog logger | `ExampleDBBuilder_WithLogger` | [example_api_test.go](./example_api_test.go) |
 | Open a database that refuses writes | `ExampleDBBuilder_OpenReadOnly` | [example_api_test.go](./example_api_test.go) |
 | Save on close or commit | `ExampleDBBuilder_EnableAutoSave`, `ExampleDBBuilder_EnableAutoSaveOnCommit`, `ExampleDBBuilder_DisableAutoSave` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
+| Export under a deadline | `ExampleDumpDatabaseContext` | [example_api_test.go](./example_api_test.go) |
 | Export tables with format/compression/encoding/line-ending options | `ExampleDumpDatabase`, `ExampleNewDumpOptions`, `ExampleDumpOptions_WithFormat`, `ExampleDumpOptions_WithCompression`, `ExampleDumpOptions_WithEncoding`, `ExampleDumpOptions_WithLineEnding` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
 | Work with compression helpers directly | `ExampleNewCompressionHandler`, `ExampleNewCompressionFactory`, `ExampleCompressionFactory_DetectCompressionType` | [example_api_test.go](./example_api_test.go) |
 | Strip compression suffixes and inspect file types | `ExampleCompressionFactory_RemoveCompressionExtension`, `ExampleCompressionFactory_GetBaseFileType` | [example_api_test.go](./example_api_test.go) |

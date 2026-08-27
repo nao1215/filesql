@@ -184,6 +184,39 @@ const inputSavepoint = `"_filesql_input"`
 // leaves it exactly as the input found it, which is what lets the caller keep
 // using it after a failure.
 func (sp *streamProcessor) runInputScope(ctx context.Context, db dbtx, kind inputKind, load func(*sql.Tx) error) error {
+	return withContextError(ctx, sp.runInput(ctx, db, kind, load))
+}
+
+// withContextError attaches the caller's context error to a load that failed
+// while that context was done, so what the caller branches on is there every
+// time the same thing happened.
+//
+// A load runs its statements under the caller's context, and when the context
+// ends database/sql tears the transaction down from a goroutine of its own.
+// Which of the two a statement meets is a race: reach it first and the driver
+// answers the context error, reach it after and database/sql answers "sql:
+// statement is closed" about a statement the caller never held, or "sql:
+// transaction has already been committed or rolled back". All of them mean the
+// caller's context ended. The cause is kept rather than replaced, because it is
+// what the load was doing and the only thing that says where it stopped, and it
+// is wrapped rather than joined so the message stays one line for a log.
+//
+// A failure that is not about the context, under a context that is still alive,
+// gains nothing: that is what the ctx.Err() check is for.
+func withContextError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	ctxErr := ctx.Err()
+	if ctxErr == nil || errors.Is(err, ctxErr) {
+		return err
+	}
+	return fmt.Errorf("%w (%w)", err, ctxErr)
+}
+
+// runInput runs one input under a transaction of its own or under a savepoint
+// of the caller's, depending on what it was handed.
+func (sp *streamProcessor) runInput(ctx context.Context, db dbtx, kind inputKind, load func(*sql.Tx) error) error {
 	switch d := db.(type) {
 	case *sql.DB:
 		if kind == spentInput {
@@ -218,12 +251,15 @@ func (sp *streamProcessor) runInputTx(ctx context.Context, db *sql.DB, load func
 		return fmt.Errorf("%w: failed to begin transaction: %w", ErrDatabaseOperation, err)
 	}
 	if err := load(tx); err != nil {
-		// When the context is done, database/sql has already rolled the
-		// transaction back itself, so this call loses the race and reports
-		// sql.ErrTxDone. That is cancellation working as documented, and the
-		// cause is already in err.
+		// When the context is done, the transaction has already been rolled
+		// back: database/sql does it from a goroutine of its own, and the
+		// driver does it underneath. This call therefore loses a race it was
+		// never going to win, and what it loses to is not one error but two --
+		// sql.ErrTxDone when database/sql got there first, and SQLite's "cannot
+		// rollback - no transaction is active" when the driver did. Neither is
+		// news, and the cause is already in err.
 		rollbackErr := tx.Rollback()
-		if errors.Is(rollbackErr, sql.ErrTxDone) && ctx.Err() != nil {
+		if rollbackErr != nil && ctx.Err() != nil {
 			return err
 		}
 		return joinCleanup(err, rollbackErr, "rollback import transaction")
@@ -322,12 +358,8 @@ func retryWhileLockedFor(ctx context.Context, budget, wallBudget time.Duration, 
 		// What ended the wait is asked here rather than in the select, because
 		// both of its cases can be ready at once and it picks either: asking
 		// there let a canceled load pay for one more attempt before it answered.
-		// The load stopped because the caller's context stopped, and that is what
-		// the caller branches on. The lock is joined rather than replaced,
-		// because it is what the load was waiting for and the only thing that
-		// says why the context ran out.
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return errors.Join(err, ctxErr)
+		if ctx.Err() != nil {
+			return withContextError(ctx, err)
 		}
 		if wait *= 2; wait > loadLockCeiling {
 			wait = loadLockCeiling
@@ -366,19 +398,64 @@ func isLockCode(code int) bool {
 // The two statements run under a context that cannot be canceled. A canceled
 // context is one of the reasons a load fails, and it is no reason to leave the
 // caller holding half an input: the undo is what has to happen either way. When
-// the caller opened their transaction with that same context, database/sql has
-// already rolled the whole transaction back and reports sql.ErrTxDone here,
-// which is this undo having happened by a larger one.
+// the caller opened their transaction with that same context, the transaction
+// has already been rolled back whole, so this undo has happened by a larger
+// one: database/sql says so with sql.ErrTxDone when it got there first, and the
+// driver says so in its own words when it did, so under a context that is done
+// any failure here is that and not a failure to undo.
 func undoInput(ctx context.Context, tx *sql.Tx) error {
+	canceled := ctx.Err() != nil
 	ctx = context.WithoutCancel(ctx)
 	if _, err := tx.ExecContext(ctx, `ROLLBACK TO `+inputSavepoint); err != nil {
-		if errors.Is(err, sql.ErrTxDone) {
-			return nil
+		if canceled || errors.Is(err, sql.ErrTxDone) {
+			// The error says the transaction is already gone, which is the
+			// outcome this undo wanted.
+			return nil //nolint:nilerr // Reporting it would name a rollback that has already happened.
 		}
 		return err
 	}
 	_, err := tx.ExecContext(ctx, `RELEASE `+inputSavepoint)
 	return err
+}
+
+// readWithContext stops a load from asking its source for more bytes once the
+// caller's context is done.
+//
+// Nothing under this point reads the context: the reader package takes none, so
+// the first thing that noticed a canceled load was the database call after the
+// read. For a file that is a moment away, but for a source that is a stream it
+// is however long the sender takes, and a body smaller than the window the
+// line-ending sniff peeks was read to its end whatever the caller's context
+// said. A request body is the source AddReader exists for, so the sender was
+// deciding how long a canceled load ran.
+//
+// A source that is an open file is left as it is. Its length is its own and the
+// operating system serves it, so there is nothing here for a sender to hold
+// open; and Parquet reads a file at both ends and by column chunk, so a wrapper
+// would hide that it is a file and turn a read where it lies into a copy of the
+// whole of it.
+//
+// Only the next Read is refused. A Read already blocked inside the source cannot
+// be interrupted from here, which is what a connection deadline is for.
+func readWithContext(ctx context.Context, src io.Reader) io.Reader {
+	if _, isFile := src.(*os.File); isFile {
+		return src
+	}
+	return &contextReader{ctx: ctx, src: src}
+}
+
+// contextReader is the reader readWithContext returns.
+type contextReader struct {
+	//nolint:containedctx // The context bounds the reads this wrapper performs, which is the whole of what it is.
+	ctx context.Context
+	src io.Reader
+}
+
+func (r *contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.src.Read(p)
 }
 
 // closeReaderInput closes the underlying resource of a reader input if it was opened internally (e.g. from AddFS).
@@ -535,6 +612,8 @@ func (sp *streamProcessor) streamFedWireFileToDatabase(ctx context.Context, tx *
 
 // streamReaderToDatabase loads one reader into the table named for it.
 func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, tx *sql.Tx, input readerInput) error {
+	input.reader = readWithContext(ctx, input.reader)
+
 	// Route ACH/Fedwire readers to dedicated handlers. No source path is
 	// recorded: a reader has no file to read again at dump time, so these tables
 	// can only be written back through DumpACHWithTableSet or
@@ -948,7 +1027,9 @@ func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, 
 		}
 
 		if _, err := stmt.ExecContext(ctx, values...); err != nil {
-			return fmt.Errorf("%w: failed to insert record: %w", ErrDatabaseOperation, err)
+			// The caller names the sentinel and the table; naming it here too
+			// announced the package twice about one failed insert.
+			return fmt.Errorf("failed to insert record: %w", err)
 		}
 	}
 

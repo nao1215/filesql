@@ -21,7 +21,7 @@ func TestSourceTableIsHiddenFromCallers(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	names, err := getSQLiteTableNames(db)
+	names, err := getSQLiteTableNames(context.Background(), db)
 	require.NoError(t, err)
 	assert.NotContains(t, names, sourceTableName, "the reserved table must not be listed as a user table")
 
@@ -99,7 +99,7 @@ func TestReservedTableNameIsRefused(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	names, err := getSQLiteTableNames(db)
+	names, err := getSQLiteTableNames(context.Background(), db)
 	require.NoError(t, err)
 	assert.Contains(t, names, "filesql_report")
 }
@@ -148,7 +148,7 @@ func TestSQLitePrefixIsRefusedTheSameWay(t *testing.T) {
 	require.NoError(t, err)
 	defer ok.Close()
 
-	names, err := getSQLiteTableNames(ok)
+	names, err := getSQLiteTableNames(context.Background(), ok)
 	require.NoError(t, err)
 	assert.Contains(t, names, "sqliteish")
 }

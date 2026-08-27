@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -526,5 +527,127 @@ func TestParseFromReader_UnparsableInput(t *testing.T) {
 			_, err := parser.parseFromReader(strings.NewReader("id,name\n1,Alice\n"))
 			assert.Error(t, err, "bytes that are not the format must not load as a table")
 		})
+	}
+}
+
+// TestLoadFailureCarriesTheContextError pins that a load that ends because its
+// context ended reports an error carrying that context's error, whatever the
+// database said on the way out.
+//
+// It did not always: the insert runs on a statement prepared inside the load's
+// transaction, and when the context ends database/sql tears that transaction
+// down from a goroutine of its own. Reaching the insert after the teardown gave
+// "sql: statement is closed", about a statement the caller never held and with
+// nothing of the context in the chain, so errors.Is(err, context.Canceled) was
+// true most of the time and false the rest for the same cancellation.
+func TestLoadFailureCarriesTheContextError(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a load that failed under a dead context reports it", func(t *testing.T) {
+		t.Parallel()
+
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = db.Close() }()
+		db.SetMaxOpenConns(1)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		sp := newStreamProcessor(defaultChunkSizeRows)
+		// The load reports what database/sql reports once it has torn the
+		// transaction down, which says nothing about the context. Canceling
+		// inside the load puts the two in the order the race produces, without
+		// racing.
+		torn := errors.New("sql: statement is closed")
+		err = sp.runInputScope(ctx, db, spentInput, func(*sql.Tx) error {
+			cancel()
+			return torn
+		})
+
+		if err == nil {
+			t.Fatal("a load under a canceled context returned no error")
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("error = %v, want it to match context.Canceled", err)
+		}
+		if !errors.Is(err, torn) {
+			t.Errorf("error = %v, want it to keep what the database said", err)
+		}
+	})
+
+	t.Run("a failure under a live context gains no context error", func(t *testing.T) {
+		t.Parallel()
+
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = db.Close() }()
+		db.SetMaxOpenConns(1)
+
+		own := errors.New("the file was not readable")
+		err = sp2RunInput(t, db, own)
+
+		if !errors.Is(err, own) {
+			t.Fatalf("error = %v, want it to be the load's own", err)
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("error = %v, want no context error attached to a failure the context had nothing to do with", err)
+		}
+	})
+}
+
+// sp2RunInput runs one input under a context that stays alive, so the test above
+// can compare the two answers without repeating the setup.
+func sp2RunInput(t *testing.T, db *sql.DB, fail error) error {
+	t.Helper()
+	sp := newStreamProcessor(defaultChunkSizeRows)
+	return sp.runInputScope(context.Background(), db, spentInput, func(*sql.Tx) error { return fail })
+}
+
+// TestCancelingALoadAlwaysReportsTheContextError is the property the test above
+// pins one case of, run over the real load so the race it comes from is the one
+// being exercised.
+func TestCancelingALoadAlwaysReportsTheContextError(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "big.csv")
+	var body strings.Builder
+	body.WriteString("id,name,amount\n")
+	for i := range 200000 {
+		fmt.Fprintf(&body, "%d,customer%d,%d.5\n", i, i, i)
+	}
+	if err := os.WriteFile(path, []byte(body.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	interrupted := 0
+	for attempt := range 30 {
+		// A spread of deadlines so the cancellation lands at a different point
+		// of the load each time, which is what makes the race happen at all.
+		deadline := time.Duration(1+attempt) * time.Millisecond
+		ctx, cancel := context.WithTimeout(context.Background(), deadline)
+		db, err := OpenContext(ctx, path)
+		if db != nil {
+			_ = db.Close()
+		}
+		cancel()
+
+		if err == nil {
+			continue // the load beat the deadline, which is not this test's case
+		}
+		interrupted++
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("deadline %v: error = %v, want it to match context.DeadlineExceeded", deadline, err)
+		}
+	}
+	// Without this the test passes by never having tested anything: a machine
+	// that loads the file inside one millisecond would take every attempt to
+	// the end and assert nothing.
+	if interrupted == 0 {
+		t.Fatal("no attempt was interrupted, so no cancellation was checked")
 	}
 }

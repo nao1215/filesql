@@ -6,6 +6,8 @@ import (
 	"compress/zlib"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -2154,4 +2156,136 @@ func TestReadTableToTableData(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrTableNotFound)
 	})
+}
+
+// dripReader delivers one byte per call, the way a slow sender delivers a
+// request body, and counts what was asked of it.
+type dripReader struct {
+	body []byte
+	pos  int
+	// cancelAt is how many bytes are delivered before the load's context is
+	// ended, which is what a client going away partway through looks like. It
+	// is done from here so the moment is exact rather than raced.
+	cancelAt int
+	cancel   func()
+}
+
+func (d *dripReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if d.cancel != nil && d.pos == d.cancelAt {
+		d.cancel()
+	}
+	if d.pos >= len(d.body) {
+		return 0, io.EOF
+	}
+	p[0] = d.body[d.pos]
+	d.pos++
+	return 1, nil
+}
+
+// TestACanceledLoadStopsReadingItsSource pins that a load stops asking its
+// source for bytes once its context is done.
+//
+// Nothing between the caller's context and the source used to read that
+// context: the first thing that observed it was the database call after the
+// read, so a load canceled while reading went on reading. For a path that is
+// the file's own speed, but for a reader handed to AddReader it is the sender's,
+// and a body smaller than the 64 KiB the line-ending sniff peeks was read to its
+// end whatever the caller's context said.
+func TestACanceledLoadStopsReadingItsSource(t *testing.T) {
+	t.Parallel()
+
+	body := func(rows int, format string) []byte {
+		var b strings.Builder
+		switch format {
+		case "ltsv":
+			for i := range rows {
+				fmt.Fprintf(&b, "id:%d\tname:customer%d\n", i, i)
+			}
+		case "jsonl":
+			for i := range rows {
+				fmt.Fprintf(&b, "{\"id\":%d}\n", i)
+			}
+		case "tsv":
+			b.WriteString("id\tname\n")
+			for i := range rows {
+				fmt.Fprintf(&b, "%d\tcustomer%d\n", i, i)
+			}
+		default:
+			b.WriteString("id,name\n")
+			for i := range rows {
+				fmt.Fprintf(&b, "%d,customer%d\n", i, i)
+			}
+		}
+		return []byte(b.String())
+	}
+
+	for _, format := range []struct {
+		name string
+		typ  FileType
+	}{
+		{"csv", FileTypeCSV},
+		{"tsv", FileTypeTSV},
+		{"ltsv", FileTypeLTSV},
+		{"jsonl", FileTypeJSONL},
+	} {
+		t.Run(format.name+" stops when the context is done", func(t *testing.T) {
+			t.Parallel()
+
+			const deliverBeforeCancel = 100
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			src := &dripReader{body: body(2000, format.name), cancelAt: deliverBeforeCancel, cancel: cancel}
+			builder, err := NewBuilder().AddReader(src, "slow", format.typ).Build(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			db, err := builder.Open(ctx)
+			if db != nil {
+				_ = db.Close()
+			}
+			if err == nil {
+				t.Fatal("a load under a canceled context succeeded")
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("error = %v, want it to match context.Canceled", err)
+			}
+			// A little past the cancellation is the read already in flight and
+			// whatever a buffer had asked for; the whole body is the defect.
+			if src.pos > deliverBeforeCancel+1024 {
+				t.Errorf("the load read %d of %d bytes although its context ended after %d",
+					src.pos, len(src.body), deliverBeforeCancel)
+			}
+		})
+
+		t.Run(format.name+" reads everything when the context is alive", func(t *testing.T) {
+			t.Parallel()
+
+			src := &dripReader{body: body(50, format.name)}
+			builder, err := NewBuilder().AddReader(src, "slow", format.typ).Build(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			db, err := builder.Open(context.Background())
+			if err != nil {
+				t.Fatalf("a load with a live context failed: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			var rows int
+			if err := db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM slow").Scan(&rows); err != nil {
+				t.Fatal(err)
+			}
+			if rows != 50 {
+				t.Errorf("rows = %d, want 50", rows)
+			}
+			if src.pos != len(src.body) {
+				t.Errorf("the load read %d of %d bytes", src.pos, len(src.body))
+			}
+		})
+	}
 }

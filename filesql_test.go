@@ -2888,7 +2888,7 @@ func TestSQLiteDumpFunctions(t *testing.T) {
 		}
 
 		// Test getSQLiteTableNames
-		tableNames, err := getSQLiteTableNames(db)
+		tableNames, err := getSQLiteTableNames(context.Background(), db)
 		require.NoError(t, err, "getSQLiteTableNames failed")
 
 		expectedTables := []string{"test1", "test2"}
@@ -2928,7 +2928,7 @@ func TestSQLiteDumpFunctions(t *testing.T) {
 		}
 
 		// Test getSQLiteTableColumns
-		columns, _, err := getSQLiteTableColumns(db, "test_table")
+		columns, _, err := getSQLiteTableColumns(context.Background(), db, "test_table")
 		require.NoError(t, err, "getSQLiteTableColumns failed")
 
 		expectedColumns := []string{"id", "name", "age", "salary"}
@@ -2969,7 +2969,7 @@ func TestSQLiteDumpFunctions(t *testing.T) {
 		tempDir := t.TempDir()
 		options := NewDumpOptions()
 
-		err = dumpSQLiteDatabase(db, tempDir, options)
+		err = dumpSQLiteDatabase(context.Background(), db, tempDir, options)
 		require.NoError(t, err, "dumpSQLiteDatabase failed")
 
 		// Verify file was created
