@@ -259,9 +259,111 @@ func rewriteCastCall(tokens []token, open, closeIdx int, d Dialect, helper strin
 	return castHelperCall(helper, trimSpaceTokens(expr), target), true, nil
 }
 
+// rewriteConvertCall rewrites MySQL's other two cast spellings, which reach the
+// same helper as CAST(x AS type) so the three cannot answer differently.
+//
+// CONVERT(expr, type) is the cast. CONVERT(expr USING charset) is a different
+// construct -- it re-encodes rather than converts a type -- and since every
+// value here is already UTF-8 it becomes the expression itself for a charset
+// that spells UTF-8, and is refused for one whose bytes would genuinely differ.
+// The two are told apart by whether a top-level comma or the USING keyword
+// follows the first argument.
+func rewriteConvertCall(tokens []token, open, closeIdx int, d Dialect, helper string, recurse callRecurser) ([]token, bool, error) {
+	if using := topLevelWord(tokens, open, closeIdx, "USING"); using >= 0 {
+		charset := nextSig(tokens, using+1)
+		if charset < 0 {
+			return nil, false, fmt.Errorf("%w: CONVERT ... USING names no character set", ErrUnsupportedSyntax)
+		}
+		if !isUTF8CharsetName(tokens[charset].text) {
+			return nil, false, fmt.Errorf("%w: CONVERT ... USING %s: every value here is UTF-8 and cannot be re-encoded",
+				ErrUnsupportedSyntax, tokens[charset].text)
+		}
+		expr, err := recurse(tokens[open+1 : using])
+		if err != nil {
+			return nil, false, err
+		}
+		return parenthesize(trimSpaceTokens(expr)), true, nil
+	}
+	commas := topLevelCommas(tokens, open, closeIdx)
+	if len(commas) != 1 {
+		return nil, false, nil
+	}
+	typeName := nextSig(tokens, commas[0]+1)
+	if typeName < 0 || tokens[typeName].kind != tokWord {
+		return nil, false, nil
+	}
+	if _, ok := lookupCastKind(d, tokens[typeName].text); !ok {
+		return nil, false, nil
+	}
+	target, _, err := castTargetText(tokens, typeName)
+	if err != nil {
+		return nil, false, err
+	}
+	expr, err := recurse(tokens[open+1 : commas[0]])
+	if err != nil {
+		return nil, false, err
+	}
+	return castHelperCall(helper, trimSpaceTokens(expr), target), true, nil
+}
+
+// rewriteCharUsingCall drops the charset clause MySQL's CHAR(n USING cs) takes.
+// SQLite has no such syntax, so the keyword reached its parser and the caller
+// read a syntax error naming a word their own dialect defines.
+func rewriteCharUsingCall(tokens []token, open, closeIdx int, helper string, recurse callRecurser) ([]token, bool, error) {
+	using := topLevelWord(tokens, open, closeIdx, "USING")
+	if using < 0 {
+		return nil, false, nil
+	}
+	charset := nextSig(tokens, using+1)
+	if charset < 0 || !isUTF8CharsetName(tokens[charset].text) {
+		name := "none"
+		if charset >= 0 {
+			name = tokens[charset].text
+		}
+		return nil, false, fmt.Errorf("%w: CHAR ... USING %s: every value here is UTF-8 and cannot be re-encoded",
+			ErrUnsupportedSyntax, name)
+	}
+	args, err := recurse(tokens[open+1 : using])
+	if err != nil {
+		return nil, false, err
+	}
+	repl := make([]token, 0, len(args)+3)
+	repl = append(repl, wordToken(helper), opToken("("))
+	repl = append(repl, trimSpaceTokens(args)...)
+	return append(repl, opToken(")")), true, nil
+}
+
+// isUTF8CharsetName reports whether a MySQL character set name spells UTF-8, the
+// encoding every value this package holds is already in. Anything else would
+// change the bytes and is refused rather than dropped.
+func isUTF8CharsetName(name string) bool {
+	switch strings.ToLower(strings.Trim(name, "`'\"")) {
+	case "utf8", "utf8mb3", "utf8mb4":
+		return true
+	default:
+		return false
+	}
+}
+
+// parenthesize wraps tokens in parentheses so a rewrite that replaces a call
+// with its own argument keeps the precedence the call gave it.
+func parenthesize(inner []token) []token {
+	out := make([]token, 0, len(inner)+2)
+	out = append(out, opToken("("))
+	out = append(out, inner...)
+	return append(out, opToken(")"))
+}
+
 // castTargetText renders the target type that starts at typeName, keeping any
 // parameter list so CHAR(3) and DECIMAL(10,2) reach the helper intact. It also
 // returns the index of the type's last token.
+//
+// A type name followed by "[]" names an array, which SQLite has no form for. It
+// is refused here, where both cast spellings pass, rather than left to be
+// emitted: the "::" form wrote the brackets into the SQLite text and failed to
+// parse, and the CAST form dropped them and converted to the element type
+// instead, so one unsupported construct failed two different ways and neither
+// message said the word array.
 func castTargetText(tokens []token, typeName int) (string, int, error) {
 	end := typeName
 	if e, ok := adjacentCallEnd(tokens, typeName); ok {
@@ -269,6 +371,12 @@ func castTargetText(tokens []token, typeName int) (string, int, error) {
 			return "", 0, fmt.Errorf("%w: unbalanced type parameters in a cast", ErrInvalidSyntax)
 		}
 		end = e
+	}
+	if open := nextSig(tokens, end+1); open >= 0 && isOpEq(tokens[open], "[") {
+		if closeIdx := nextSig(tokens, open+1); closeIdx >= 0 && isOpEq(tokens[closeIdx], "]") {
+			return "", 0, fmt.Errorf("%w: a cast to the array type %s[] is not supported; SQLite has no array type",
+				ErrUnsupportedSyntax, render(tokens[typeName:end+1]))
+		}
 	}
 	return render(tokens[typeName : end+1]), end, nil
 }

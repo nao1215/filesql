@@ -881,6 +881,65 @@ func toUint64Bits(v driver.Value) (uint64, bool) {
 	return uint64(n), true //nolint:gosec // a negative operand is its two's complement, which is what MySQL uses
 }
 
+// prefixCastPass rewrites MySQL's "BINARY expr" -- a cast written as a prefix
+// operator -- into the same helper call CAST(expr AS BINARY) reaches. SQLite has
+// no such operator, so the word arrived as a column reference and the caller
+// read "no such column: BINARY" about a keyword their own dialect defines.
+//
+// The word is the operator only where an operand is expected. Anywhere else it
+// is a name: a column called binary, or the type in a cast, which the call pass
+// has already consumed by the time this runs.
+func prefixCastPass(tokens []token, word, helper string) ([]token, error) {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		if !isWordEq(tokens[i], word) || !operandPositionBack(out) {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		start := nextSig(tokens, i+1)
+		if start < 0 {
+			return nil, fmt.Errorf("%w: operand of %s is not a primary expression", ErrUnsupportedSyntax, word)
+		}
+		end, ok := primaryEndForward(tokens, i+1)
+		if !ok {
+			return nil, fmt.Errorf("%w: operand of %s is not a primary expression", ErrUnsupportedSyntax, word)
+		}
+		operand, err := prefixCastPass(tokens[start:end+1], word, helper)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, castHelperCall(helper, trimSpaceTokens(operand), word)...)
+		i = end + 1
+	}
+	return out, nil
+}
+
+// operandPositionBack reports whether what has been emitted so far leaves an
+// operand expected next, which is where a prefix operator can stand. Nothing at
+// all, an operator other than a closing parenthesis, or a keyword that demands
+// an operand all do; a name, a literal or a closing parenthesis does not.
+func operandPositionBack(out []token) bool {
+	last := -1
+	for i := len(out) - 1; i >= 0; i-- {
+		if isSignificant(out[i]) {
+			last = i
+			break
+		}
+	}
+	if last < 0 {
+		return true
+	}
+	if out[last].kind == tokOp {
+		return !isOpEq(out[last], ")")
+	}
+	if out[last].kind == tokWord {
+		return operandExpectingKeywords[strings.ToUpper(out[last].text)] || clauseKeywords[strings.ToUpper(out[last].text)]
+	}
+	return false
+}
+
 // unaryNotPass rewrites MySQL's "!" into a parenthesized NOT over the primary it
 // applies to.
 //
