@@ -14,8 +14,8 @@ import (
 )
 
 // TestWrite_ZeroOptions covers the wording a caller with no sentinel of its own
-// gets. frame passes a zero Options, so these are the errors ToCSV and ToTSV
-// report, and nothing else in this module exercises the defaults.
+// gets. The only caller in this module passes one, so nothing else exercises
+// the defaults and this is what keeps them working for the next caller.
 func TestWrite_ZeroOptions(t *testing.T) {
 	t.Parallel()
 
@@ -101,7 +101,7 @@ func TestWrite_ZeroOptions(t *testing.T) {
 
 // TestWrite_OptionsAreUsed pins that a caller's own wording reaches the error,
 // which is what keeps filesql's ErrIOOperation and ErrCleanup on the errors
-// DumpDatabase reports while frame gets plain ones.
+// DumpDatabase reports.
 func TestWrite_OptionsAreUsed(t *testing.T) {
 	t.Parallel()
 

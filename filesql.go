@@ -566,8 +566,8 @@ func writeTextData(w io.Writer, columns []string, rows *sql.Rows, text textDumpF
 // dumpFormatError gives a value the output format cannot hold this package's
 // sentinel and the advice that goes with it.
 //
-// The writer package names no sentinel, because the three callers of it have
-// three different ones for this. What a dump has to say is that the table is
+// The writer package names no sentinel, because its callers have different
+// ones for this. What a dump has to say is that the table is
 // fine and the format is not, which is what ErrUnsupportedFormat means here,
 // and which format to ask for instead.
 //

@@ -1663,8 +1663,8 @@ func TestWriteOutput_ErrorPath(t *testing.T) {
 // Written plainly it is a blank line, and a blank line is not a CSV record: the
 // reader skips it, so every empty row of a one-column file disappeared on the
 // way back in and the write reported success. The root package's dump wrote the
-// quoted empty field for this shape, and so did frame; prep did not, and prep is
-// where a one-column file of free text is most likely to arrive.
+// quoted empty field for this shape; prep did not, and prep is where a
+// one-column file of free text is most likely to arrive.
 func TestWriteOutput_LoneEmptyFieldSurvivesAReload(t *testing.T) {
 	t.Parallel()
 

@@ -26,7 +26,8 @@ const DefaultFileMode os.FileMode = 0o644
 
 // Options say how the calling package words a failure of the staging itself.
 // Both fields are optional: a zero Options reports plain errors, which is what
-// a package with no sentinel of its own wants.
+// a caller with no sentinel of its own would get. No caller takes that path
+// today.
 type Options struct {
 	// FailIO words a failure of the staging machinery. what is a formatted
 	// phrase naming the step ("failed to replace /tmp/out.csv"); err is what

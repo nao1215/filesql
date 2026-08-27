@@ -2,7 +2,7 @@
 // It supports CSV, TSV, LTSV, XLSX, Parquet, JSON, and JSONL files, with optional compression
 // (gzip, bzip2, xz, zstd, zlib, snappy, s2, lz4).
 //
-// This package can be used by filesql, prep, frame, or any application
+// This package can be used by filesql, prep, or any application
 // that needs to parse tabular data files.
 //
 // # Memory Considerations
