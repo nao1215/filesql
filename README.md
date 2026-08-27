@@ -43,7 +43,7 @@ filesql is for cases where the data is already in a file and the fastest useful 
 | `.json` | JSON | Query nested data with `json_extract()` |
 | `.jsonl` | JSONL | One JSON value per line |
 | `.parquet` | Parquet | Columnar format |
-| `.xlsx` | Excel XLSX | One sheet becomes one table, named `file_sheet` (just `file` when the sheet repeats it). A workbook handed to `AddReader` hangs its sheets off the table name given there instead of off a file name. Every sheet is loaded by default; see [Excel sheet visibility](#excel-sheet-visibility) |
+| `.xlsx` | Excel XLSX | One sheet becomes one table, named `file_sheet` (just `file` when the sheet repeats it). A workbook handed to `AddReader` hangs its sheets off the table name given there instead of off a file name. Every sheet that names a column is loaded by default, a blank scratch sheet being passed over; see [Excel sheet visibility](#excel-sheet-visibility) |
 | `.ach` | ACH (NACHA) | One table per record kind; see [ACH and Fedwire](#ach-and-fedwire) |
 | `.fed` | Fedwire | One message becomes one row 326 columns wide; see [ACH and Fedwire](#ach-and-fedwire) |
 
@@ -360,7 +360,7 @@ The multiplier belongs to the format rather than to the library. The same 200,00
 
 A Parquet file can cost more than its size whatever the table above says. A page header states how large the page's statistics are and the reader allocates that before reading them, so a damaged 473-byte file costs 98 MB before it is refused; the number sits inside a column chunk, where filesql cannot check it first. Do not point a memory-constrained process at Parquet files you did not write.
 
-A workbook is the one to plan around, and it costs the same whether or not it holds dates. Its rows are read as a stream, and the date cells are found by reading the sheet's own XML, so nothing in a load asks the library about one cell at a time: doing that once makes it build the whole sheet as objects, which was another 1470 MB. XLSX is a compressed container, so the multiplier is against a smaller file than the same table as CSV. `go test -tags benchmark -run TestLoadMemoryFootprintByFormat -v .` prints this table.
+A workbook is the one to plan around, and it costs the same whether or not it holds dates. Its rows arrive as one slice covering the sheet's used range, and the date cells are found by reading the sheet's own XML, so nothing in a load asks the library about one cell at a time: doing that once makes it build the whole sheet as objects, which was another 1470 MB. XLSX is a compressed container, so the multiplier is against a smaller file than the same table as CSV. `go test -tags benchmark -run TestLoadMemoryFootprintByFormat -v .` prints this table.
 
 Use `SetDefaultChunkSize` on the builder when you need to tune chunked loading:
 
