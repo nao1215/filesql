@@ -39,7 +39,7 @@ func (l *labelOrder) add(name string) {
 // records carry, and the last record can still name one the earlier ones did
 // not.
 func readLTSV(src io.Reader, opts Options, emit Emit) (Result, error) {
-	content, err := io.ReadAll(NormalizeLineEndings(src))
+	content, err := io.ReadAll(NormalizeLineEndings(src, FormatLTSV))
 	if err != nil {
 		return Result{}, parseError(err, "failed to read LTSV")
 	}

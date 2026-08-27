@@ -69,7 +69,62 @@ func TestNormalizeLineEndings(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := io.ReadAll(NormalizeLineEndings(strings.NewReader(tt.input)))
+			got, err := io.ReadAll(NormalizeLineEndings(strings.NewReader(tt.input), FormatCSV))
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, string(got))
+		})
+	}
+}
+
+// TestNormalizeLineEndingsQuotesOnlyForCSV pins where the quote counts. CSV has
+// one, so a carriage return between two quotes is data; TSV takes a field as
+// the bytes between two tabs and LTSV as the bytes up to the next tab, so a
+// double quote in either is an ordinary character and changes nothing about
+// where a record ends. Honoring it there let one quote swallow every terminator
+// after it.
+func TestNormalizeLineEndingsQuotesOnlyForCSV(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		format Format
+		input  string
+		want   string
+	}{
+		{
+			name:   "CSV keeps a carriage return between two quotes",
+			format: FormatCSV, input: "a,b\rx,\"y\rz\"\r", want: "a,b\nx,\"y\rz\"\n",
+		},
+		{
+			name:   "TSV translates every carriage return, one quote or not",
+			format: FormatTSV, input: "v\r1\"\r2\r3\r", want: "v\n1\"\n2\n3\n",
+		},
+		{
+			name:   "TSV with two quotes, which an odd count would have hidden",
+			format: FormatTSV, input: "v\r1\"\r2\"\r3\r", want: "v\n1\"\n2\"\n3\n",
+		},
+		{
+			name:   "TSV with three quotes in one value",
+			format: FormatTSV, input: "v\r1\r\"\"\"\r3\r", want: "v\n1\n\"\"\"\n3\n",
+		},
+		{
+			name:   "LTSV translates every carriage return",
+			format: FormatLTSV, input: "a:1\ra:\"\ra:3\r", want: "a:1\na:\"\na:3\n",
+		},
+		{
+			// The quote decides the sniff as well as the translation: with the
+			// quote honored this window holds no unquoted carriage return at all.
+			name:   "TSV whose only carriage returns follow a quote",
+			format: FormatTSV, input: "v\"\r1\r2\r", want: "v\"\n1\n2\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := io.ReadAll(NormalizeLineEndings(strings.NewReader(tt.input), tt.format))
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, string(got))
@@ -83,7 +138,7 @@ func TestNormalizeLineEndings_KeepsSourceError(t *testing.T) {
 	t.Parallel()
 
 	sentinel := errors.New("source rejected its input")
-	reader := NormalizeLineEndings(&failingReader{data: "name,age\n", err: sentinel})
+	reader := NormalizeLineEndings(&failingReader{data: "name,age\n", err: sentinel}, FormatCSV)
 
 	_, err := io.ReadAll(reader)
 
@@ -121,7 +176,7 @@ func TestNormalizeLineEndings_OversizedFirstRecord(t *testing.T) {
 		// carriage return before it. Translating that one would rewrite the value.
 		input := "name,note\nbig,\"a\rb" + strings.Repeat("x", lineEndingSniffLimit) + "\"\nlast,1\n"
 
-		got, err := io.ReadAll(NormalizeLineEndings(strings.NewReader(input)))
+		got, err := io.ReadAll(NormalizeLineEndings(strings.NewReader(input), FormatCSV))
 
 		require.NoError(t, err)
 		assert.Equal(t, input, string(got))
@@ -134,7 +189,7 @@ func TestNormalizeLineEndings_OversizedFirstRecord(t *testing.T) {
 		// that says this file ends its lines with one.
 		input := "\"a\rb" + strings.Repeat("x", lineEndingSniffLimit) + "\"\n"
 
-		got, err := io.ReadAll(NormalizeLineEndings(strings.NewReader(input)))
+		got, err := io.ReadAll(NormalizeLineEndings(strings.NewReader(input), FormatCSV))
 
 		require.NoError(t, err)
 		assert.Equal(t, input, string(got))

@@ -28,14 +28,27 @@ const lineEndingSniffLimit = 64 * 1024
 // carriage returns outside quotes are translated. A first record longer than
 // that window is left alone rather than guessed at: reading it as one line is
 // what happens today, while a wrong guess would rewrite data.
-func NormalizeLineEndings(reader io.Reader) io.Reader {
-	return &lineEndingReader{buffered: bufio.NewReaderSize(reader, lineEndingSniffLimit)}
+//
+// Which is why the format is needed: only CSV has a quote. TSV takes a field as
+// the bytes between two tabs and LTSV as the bytes up to the next tab, so a
+// double quote in either is an ordinary character, and honoring it let one of
+// them swallow every terminator after it -- a three-row one-column file loaded
+// as one row. The save side asks the same question of a file it is about to
+// overwrite and draws the line in the same place.
+func NormalizeLineEndings(reader io.Reader, format Format) io.Reader {
+	return &lineEndingReader{
+		buffered: bufio.NewReaderSize(reader, lineEndingSniffLimit),
+		quoted:   format == FormatCSV,
+	}
 }
 
 // lineEndingReader translates lone carriage returns to line feeds for a source
 // that uses them as its line terminator.
 type lineEndingReader struct {
-	buffered  *bufio.Reader
+	buffered *bufio.Reader
+	// quoted says the format this source is read as has a quote that makes a
+	// carriage return between two of them data rather than a terminator.
+	quoted    bool
 	sniffed   bool
 	translate bool
 	// inQuotes tracks whether the byte about to be read sits inside a quoted
@@ -61,7 +74,9 @@ func (l *lineEndingReader) Read(p []byte) (int, error) {
 		for i := range n {
 			switch p[i] {
 			case '"':
-				l.inQuotes = !l.inQuotes
+				if l.quoted {
+					l.inQuotes = !l.inQuotes
+				}
 			case '\r':
 				if !l.inQuotes {
 					p[i] = '\n'
@@ -88,7 +103,7 @@ func (l *lineEndingReader) sniff() {
 	if err != nil && !errors.Is(err, io.EOF) {
 		l.sniffErr = err
 	}
-	l.translate = usesCarriageReturnTerminator(window)
+	l.translate = usesCarriageReturnTerminator(window, l.quoted)
 }
 
 // usesCarriageReturnTerminator reports whether window comes from a file that
@@ -97,20 +112,24 @@ func (l *lineEndingReader) sniff() {
 // Only what sits outside quotes is a terminator; inside them both bytes are
 // data, and a record long enough to fill the window can hold either one. So a
 // quoted line feed does not disqualify a carriage-return file, and a quoted
-// carriage return does not qualify one.
+// carriage return does not qualify one. quoted is false for a format with no
+// quote, where a double quote is an ordinary byte and neither opens nor closes
+// anything.
 //
 // Two conditions, because either alone accepts a file it should not. An
 // unquoted line feed says the file already has a terminator this stack
 // understands, which leaves an unquoted carriage return beside it as the stray
 // byte of a malformed row rather than a row boundary. An unquoted carriage
 // return is what says the file has no other terminator to be read by.
-func usesCarriageReturnTerminator(window []byte) bool {
+func usesCarriageReturnTerminator(window []byte, quoted bool) bool {
 	inQuotes := false
 	sawCarriageReturn := false
 	for _, c := range window {
 		switch c {
 		case '"':
-			inQuotes = !inQuotes
+			if quoted {
+				inQuotes = !inQuotes
+			}
 		case '\n':
 			if !inQuotes {
 				return false
