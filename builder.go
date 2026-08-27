@@ -430,7 +430,8 @@ func (b *DBBuilder) WithDialect(d dialect.Dialect) *DBBuilder {
 }
 
 // refuseDialectForCallerDatabase refuses a load into a database this package
-// did not open while a dialect is configured.
+// did not open while a dialect that asks for translation is configured. SQLite,
+// and the zero value that means it, ask for none and are let through.
 //
 // A dialect is a connector wrapping the database Open returns, so it cannot
 // reach one the caller opened -- the same reason auto-save cannot, and auto-save
@@ -721,9 +722,10 @@ func (b *DBBuilder) OpenReadOnly(ctx context.Context) (*sql.DB, error) {
 //     reading is tried again.
 //
 // Auto-save is not supported because the caller owns the database lifecycle;
-// configuring it returns an error. WithDialect is refused for the same reason:
-// the dialect is a connector wrapping the database Open returns, so it cannot
-// reach one the caller opened.
+// configuring it returns an error. WithDialect is refused for the same reason
+// when it asks for a translation -- the dialect is a connector wrapping the
+// database Open returns, so it cannot reach one the caller opened. SQLite asks
+// for no translation and is accepted.
 //
 // Example:
 //
@@ -776,8 +778,9 @@ func (b *DBBuilder) LoadInto(ctx context.Context, db *sql.DB) error {
 // keep it usable after such a failure, since canceling the context it was begun
 // with ends the whole transaction.
 //
-// Auto-save and WithDialect are refused, as they are by LoadInto: both apply to
-// the database Open returns, and the caller owns this one.
+// Auto-save is refused, as it is by LoadInto, and so is a WithDialect that asks
+// for a translation: both apply to the database Open returns, and the caller
+// owns this one. SQLite asks for none and is accepted.
 func (b *DBBuilder) LoadIntoTx(ctx context.Context, tx *sql.Tx) error {
 	if tx == nil {
 		return fmt.Errorf("%w: target transaction is nil", ErrDatabaseOperation)
