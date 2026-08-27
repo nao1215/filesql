@@ -2,7 +2,9 @@
 package prep
 
 import (
+	"encoding/base32"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
@@ -12,6 +14,11 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	// The timezone validator asks time.LoadLocation for a zone, and Windows
+	// ships no system zone database, so the database travels with the program.
+	// It costs a few hundred KB and lands only on a program that imports prep.
+	_ "time/tzdata"
 )
 
 // Regex patterns for validation
@@ -68,6 +75,19 @@ const (
 	hslRegexPattern = `^hsl\(\s*` + hueComponentRegexPattern + `\s*,\s*` + hslPercentComponentRegexPattern + `\s*,\s*` + hslPercentComponentRegexPattern + `\s*\)$`
 	// HSLA color pattern
 	hslaRegexPattern = `^hsla\(\s*` + hueComponentRegexPattern + `\s*,\s*` + hslPercentComponentRegexPattern + `\s*,\s*` + hslPercentComponentRegexPattern + `\s*,\s*` + alphaComponentRegexPattern + `\s*\)$`
+	// Semantic Versioning 2.0.0 pattern, the one published at https://semver.org
+	// under "Is there a suggested regular expression (RegEx) to check a SemVer
+	// string?", with its named capture groups written as plain groups.
+	semverRegexPattern = `^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)` +
+		`(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?` +
+		`(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$`
+	// ISBN-10 shape: ten characters, the last of which may be X for ten.
+	isbn10RegexPattern = `^(?:[0-9]{9}X|[0-9]{10})$`
+	// ISBN-13 shape: a 978 or 979 prefix and thirteen digits.
+	isbn13RegexPattern = `^97[89][0-9]{10}$`
+	// ISSN shape: two groups of four separated by a hyphen, the last of which
+	// may be X for ten.
+	issnRegexPattern = `^[0-9]{4}-[0-9]{3}[0-9X]$`
 )
 
 // The dialect admits these Unicode ranges on both sides of the @, which is what
@@ -127,6 +147,10 @@ var (
 	rgbaRegex        = regexp.MustCompile(rgbaRegexPattern)
 	hslRegex         = regexp.MustCompile(hslRegexPattern)
 	hslaRegex        = regexp.MustCompile(hslaRegexPattern)
+	semverRegex      = regexp.MustCompile(semverRegexPattern)
+	isbn10Regex      = regexp.MustCompile(isbn10RegexPattern)
+	isbn13Regex      = regexp.MustCompile(isbn13RegexPattern)
+	issnRegex        = regexp.MustCompile(issnRegexPattern)
 )
 
 // validator defines the interface for validating values
@@ -1305,10 +1329,8 @@ func newPortValidator() *portValidator {
 // Validate checks if the value is a valid port number
 func (v *portValidator) Validate(value string) string {
 	const errMsg = "value must be a valid port number"
-	for _, r := range value {
-		if !isNumeric(r) {
-			return errMsg
-		}
+	if !isASCIIDigits(value) {
+		return errMsg
 	}
 	port, err := strconv.ParseUint(value, 10, 16)
 	if err != nil || port == 0 {
@@ -2269,4 +2291,491 @@ func (v *macValidator) Validate(value string) string {
 // Name returns the validator name
 func (v *macValidator) Name() string {
 	return macTagValue
+}
+
+// =============================================================================
+// Structured Format Validators
+// =============================================================================
+
+// jsonValidator validates that a value is a JSON document.
+type jsonValidator struct{}
+
+// newJSONValidator creates a new JSON validator
+func newJSONValidator() *jsonValidator {
+	return &jsonValidator{}
+}
+
+// Validate checks if the value is a JSON document. Any JSON value counts, so a
+// bare number or string is one, which is what encoding/json reads.
+func (v *jsonValidator) Validate(value string) string {
+	if !json.Valid([]byte(value)) {
+		return "value must be a valid JSON document"
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *jsonValidator) Name() string {
+	return jsonTagValue
+}
+
+// timezoneValidator validates that a value names an IANA time zone.
+type timezoneValidator struct{}
+
+// newTimezoneValidator creates a new timezone validator
+func newTimezoneValidator() *timezoneValidator {
+	return &timezoneValidator{}
+}
+
+// Validate checks if the value names a time zone the zone database holds.
+// "Local" is refused in every casing: time.LoadLocation reads it as the host's
+// own zone, so accepting it would make the same cell mean a different offset on
+// a different machine.
+func (v *timezoneValidator) Validate(value string) string {
+	const errMsg = "value must be a valid IANA time zone name"
+	if strings.EqualFold(value, "local") {
+		return errMsg
+	}
+	if _, err := time.LoadLocation(value); err != nil {
+		return errMsg
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *timezoneValidator) Name() string {
+	return timezoneTagValue
+}
+
+// semverValidator validates that a value is a Semantic Versioning 2.0.0
+// version.
+type semverValidator struct{}
+
+// newSemverValidator creates a new semver validator
+func newSemverValidator() *semverValidator {
+	return &semverValidator{}
+}
+
+// Validate checks if the value is a semantic version
+func (v *semverValidator) Validate(value string) string {
+	if !semverRegex.MatchString(value) {
+		return "value must be a valid semantic version"
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *semverValidator) Name() string {
+	return semverTagValue
+}
+
+// =============================================================================
+// RFC 4648 Encoding Validators
+// =============================================================================
+
+// The RFC 4648 alphabets. Padding is judged separately, since the raw variant
+// has none.
+const (
+	base32Alphabet    = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+	base64StdAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	base64URLAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+)
+
+// baseEncodedValidator validates a value against one RFC 4648 encoding: the
+// character set first, then a decode.
+//
+// The order matters. Go's decoders skip carriage returns and line feeds, so
+// "Zm9v\nYmFy" decodes and is still not a base64 value; checking the alphabet
+// first is what refuses it.
+type baseEncodedValidator struct {
+	tag      string
+	alphabet string
+	padded   bool
+	decode   func(string) ([]byte, error)
+	errMsg   string
+}
+
+// newBaseEncodedValidator creates a validator for one RFC 4648 encoding
+func newBaseEncodedValidator(tag, alphabet string, padded bool, decode func(string) ([]byte, error)) *baseEncodedValidator {
+	return &baseEncodedValidator{
+		tag:      tag,
+		alphabet: alphabet,
+		padded:   padded,
+		decode:   decode,
+		errMsg:   "value must be a valid " + tag + " string",
+	}
+}
+
+// Validate checks if the value is encoded the way this variant encodes
+func (v *baseEncodedValidator) Validate(value string) string {
+	for i := range len(value) {
+		c := value[i]
+		if c == '=' {
+			if !v.padded {
+				return v.errMsg
+			}
+			continue
+		}
+		if strings.IndexByte(v.alphabet, c) < 0 {
+			return v.errMsg
+		}
+	}
+	if _, err := v.decode(value); err != nil {
+		return v.errMsg
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *baseEncodedValidator) Name() string {
+	return v.tag
+}
+
+// newBase32Validator creates a validator for the RFC 4648 base32 alphabet with
+// padding to a multiple of eight characters.
+func newBase32Validator() *baseEncodedValidator {
+	return newBaseEncodedValidator(base32TagValue, base32Alphabet, true, base32.StdEncoding.DecodeString)
+}
+
+// newBase64Validator creates a validator for the RFC 4648 base64 alphabet with
+// padding to a multiple of four characters.
+func newBase64Validator() *baseEncodedValidator {
+	return newBaseEncodedValidator(base64TagValue, base64StdAlphabet, true, base64.StdEncoding.Strict().DecodeString)
+}
+
+// newBase64URLValidator creates a validator for the URL-and-filename-safe
+// alphabet with padding.
+func newBase64URLValidator() *baseEncodedValidator {
+	return newBaseEncodedValidator(base64URLTagValue, base64URLAlphabet, true, base64.URLEncoding.Strict().DecodeString)
+}
+
+// newBase64RawURLValidator creates a validator for the URL-and-filename-safe
+// alphabet without padding.
+func newBase64RawURLValidator() *baseEncodedValidator {
+	return newBaseEncodedValidator(base64RawURLTagValue, base64URLAlphabet, false, base64.RawURLEncoding.Strict().DecodeString)
+}
+
+// =============================================================================
+// Case-insensitive membership validator
+// =============================================================================
+
+// oneOfCIValidator validates that a value is one of the allowed values,
+// compared without regard to case. It reads its candidates the way oneOf does,
+// quoting included, since the two tags share the tag parameter grammar.
+type oneOfCIValidator struct {
+	allowed []string
+	errMsg  string
+}
+
+// newOneOfCIValidator creates a new case-insensitive oneOf validator
+func newOneOfCIValidator(allowed []string) *oneOfCIValidator {
+	return &oneOfCIValidator{
+		allowed: allowed,
+		errMsg:  "value must be one of: " + strings.Join(allowed, ", "),
+	}
+}
+
+// Validate checks if the value matches one of the allowed values, ignoring case
+func (v *oneOfCIValidator) Validate(value string) string {
+	for _, candidate := range v.allowed {
+		if strings.EqualFold(value, candidate) {
+			return ""
+		}
+	}
+	return v.errMsg
+}
+
+// Name returns the validator name
+func (v *oneOfCIValidator) Name() string {
+	return oneOfCITagValue
+}
+
+// =============================================================================
+// Checksummed Identifier Validators
+// =============================================================================
+
+// isASCIIDigits reports whether the value is one or more ASCII digits and
+// nothing else.
+func isASCIIDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i := range len(value) {
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// luhnValid reports whether the digits satisfy the Luhn checksum: every second
+// digit counted from the right is doubled, a doubled value above nine has nine
+// subtracted from it, and the total is a multiple of ten. The value must
+// already be digits alone.
+func luhnValid(digits string) bool {
+	sum := 0
+	double := false
+	for i := len(digits) - 1; i >= 0; i-- {
+		d := int(digits[i] - '0')
+		if double {
+			d *= 2
+			if d > 9 {
+				d -= 9
+			}
+		}
+		sum += d
+		double = !double
+	}
+	return sum%10 == 0
+}
+
+// luhnChecksumValidator validates that a value is digits carrying a valid Luhn
+// checksum.
+type luhnChecksumValidator struct{}
+
+// newLuhnChecksumValidator creates a new Luhn checksum validator
+func newLuhnChecksumValidator() *luhnChecksumValidator {
+	return &luhnChecksumValidator{}
+}
+
+// Validate checks the Luhn checksum. Separator characters are not removed: the
+// tag says the cell is the number, so a cell that is written with hyphens is a
+// column for prep:"keep_digits" rather than for this tag.
+func (v *luhnChecksumValidator) Validate(value string) string {
+	const errMsg = "value must carry a valid Luhn checksum"
+	if len(value) < 2 || !isASCIIDigits(value) || !luhnValid(value) {
+		return errMsg
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *luhnChecksumValidator) Name() string {
+	return luhnChecksumTagValue
+}
+
+// creditCardValidator validates that a value is a credit card number.
+type creditCardValidator struct{}
+
+// newCreditCardValidator creates a new credit card validator
+func newCreditCardValidator() *creditCardValidator {
+	return &creditCardValidator{}
+}
+
+// Validate checks the value's grouping, length and Luhn checksum. A single
+// space groups the digits, which is how a card is printed and typed; a hyphen
+// does not, matching the dialect.
+func (v *creditCardValidator) Validate(value string) string {
+	const errMsg = "value must be a valid credit card number"
+	var digits strings.Builder
+	for _, segment := range strings.Split(value, " ") {
+		if len(segment) < 3 {
+			return errMsg
+		}
+		digits.WriteString(segment)
+	}
+	number := digits.String()
+	if len(number) < 12 || len(number) > 19 || !isASCIIDigits(number) || !luhnValid(number) {
+		return errMsg
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *creditCardValidator) Name() string {
+	return creditCardTagValue
+}
+
+// The number of separators each ISBN width is printed with: an ISBN-10 is
+// four groups and an ISBN-13 is five, so one carries three and the other four.
+const (
+	isbn10Separators = 3
+	isbn13Separators = 4
+)
+
+// stripISBNSeparators removes the hyphens and spaces an ISBN is grouped with,
+// at most limit of each. The bound is what refuses a spelling that is not
+// grouped at all: removing every separator would read 0--13-110362-8 as an
+// ISBN-10, since what is left of it has the right shape and check digit.
+func stripISBNSeparators(value string, limit int) string {
+	return strings.Replace(strings.Replace(value, "-", "", limit), " ", "", limit)
+}
+
+// isbn10Valid reports whether the value is an ISBN-10: ten characters whose
+// last may be X, weighted by their positions one through ten, summing to a
+// multiple of eleven.
+func isbn10Valid(value string) bool {
+	digits := stripISBNSeparators(value, isbn10Separators)
+	if !isbn10Regex.MatchString(digits) {
+		return false
+	}
+	sum := 0
+	for i := range len(digits) {
+		d := int(digits[i] - '0')
+		if digits[i] == 'X' {
+			d = 10
+		}
+		sum += d * (i + 1)
+	}
+	return sum%11 == 0
+}
+
+// isbn13Valid reports whether the value is an ISBN-13: a 978 or 979 prefix and
+// thirteen digits whose last is the alternating 1,3-weighted check digit of the
+// first twelve.
+func isbn13Valid(value string) bool {
+	digits := stripISBNSeparators(value, isbn13Separators)
+	if !isbn13Regex.MatchString(digits) {
+		return false
+	}
+	sum := 0
+	for i := range 12 {
+		weight := 1
+		if i%2 == 1 {
+			weight = 3
+		}
+		sum += int(digits[i]-'0') * weight
+	}
+	return (10-sum%10)%10 == int(digits[12]-'0')
+}
+
+// isbn10Validator validates that a value is an ISBN-10.
+type isbn10Validator struct{}
+
+// newISBN10Validator creates a new ISBN-10 validator
+func newISBN10Validator() *isbn10Validator {
+	return &isbn10Validator{}
+}
+
+// Validate checks if the value is an ISBN-10
+func (v *isbn10Validator) Validate(value string) string {
+	if !isbn10Valid(value) {
+		return "value must be a valid ISBN-10"
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *isbn10Validator) Name() string {
+	return isbn10TagValue
+}
+
+// isbn13Validator validates that a value is an ISBN-13.
+type isbn13Validator struct{}
+
+// newISBN13Validator creates a new ISBN-13 validator
+func newISBN13Validator() *isbn13Validator {
+	return &isbn13Validator{}
+}
+
+// Validate checks if the value is an ISBN-13
+func (v *isbn13Validator) Validate(value string) string {
+	if !isbn13Valid(value) {
+		return "value must be a valid ISBN-13"
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *isbn13Validator) Name() string {
+	return isbn13TagValue
+}
+
+// isbnValidator validates that a value is an ISBN of either width.
+type isbnValidator struct{}
+
+// newISBNValidator creates a new ISBN validator
+func newISBNValidator() *isbnValidator {
+	return &isbnValidator{}
+}
+
+// Validate checks if the value is an ISBN-10 or an ISBN-13
+func (v *isbnValidator) Validate(value string) string {
+	if !isbn10Valid(value) && !isbn13Valid(value) {
+		return "value must be a valid ISBN"
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *isbnValidator) Name() string {
+	return isbnTagValue
+}
+
+// issnValidator validates that a value is an ISSN.
+type issnValidator struct{}
+
+// newISSNValidator creates a new ISSN validator
+func newISSNValidator() *issnValidator {
+	return &issnValidator{}
+}
+
+// Validate checks the value's shape and check digit. The hyphen is required,
+// as it is in the dialect: an ISSN is printed in two groups of four and the
+// unhyphenated spelling is not one.
+func (v *issnValidator) Validate(value string) string {
+	const errMsg = "value must be a valid ISSN"
+	if !issnRegex.MatchString(value) {
+		return errMsg
+	}
+	digits := strings.Replace(value, "-", "", 1)
+	sum := 0
+	for i := range 7 {
+		sum += int(digits[i]-'0') * (8 - i)
+	}
+	check := int(digits[7] - '0')
+	if digits[7] == 'X' {
+		check = 10
+	}
+	if (sum+check)%11 != 0 {
+		return errMsg
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *issnValidator) Name() string {
+	return issnTagValue
+}
+
+// =============================================================================
+// Message Digest Validators
+// =============================================================================
+
+// hexDigestValidator validates that a value is lowercase hexadecimal of one
+// digest's width. It carries the tag and the width, since md5, sha256, sha384
+// and sha512 differ in nothing else.
+type hexDigestValidator struct {
+	tag    string
+	length int
+	errMsg string
+}
+
+// newHexDigestValidator creates a validator for a digest of the given width
+func newHexDigestValidator(tag string, length int) *hexDigestValidator {
+	return &hexDigestValidator{
+		tag:    tag,
+		length: length,
+		errMsg: "value must be a valid " + tag + " hash",
+	}
+}
+
+// Validate checks the value's width and character set. Uppercase hexadecimal
+// is refused, as it is in the dialect, so one column spells a digest one way.
+func (v *hexDigestValidator) Validate(value string) string {
+	if len(value) != v.length {
+		return v.errMsg
+	}
+	for i := range len(value) {
+		c := value[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return v.errMsg
+		}
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *hexDigestValidator) Name() string {
+	return v.tag
 }

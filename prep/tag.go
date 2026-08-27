@@ -210,6 +210,51 @@ const (
 	// hslaTagValue is the tag value for HSLA color validation
 	hslaTagValue = "hsla"
 
+	// Structured format validators
+	// jsonTagValue is the tag value for JSON document validation
+	jsonTagValue = "json"
+	// timezoneTagValue is the tag value for IANA time zone name validation
+	timezoneTagValue = "timezone"
+	// semverTagValue is the tag value for Semantic Versioning 2.0.0 validation
+	semverTagValue = "semver"
+
+	// RFC 4648 encoding validators
+	// base32TagValue is the tag value for base32 validation
+	base32TagValue = "base32"
+	// base64TagValue is the tag value for base64 validation
+	base64TagValue = "base64"
+	// base64URLTagValue is the tag value for URL-safe base64 validation
+	base64URLTagValue = "base64url"
+	// base64RawURLTagValue is the tag value for unpadded URL-safe base64 validation
+	base64RawURLTagValue = "base64rawurl"
+
+	// oneOfCITagValue is the tag value for case-insensitive one of validation
+	oneOfCITagValue = "oneofci"
+
+	// Checksummed identifier validators
+	// creditCardTagValue is the tag value for credit card number validation
+	creditCardTagValue = "credit_card"
+	// luhnChecksumTagValue is the tag value for Luhn checksum validation
+	luhnChecksumTagValue = "luhn_checksum"
+	// isbnTagValue is the tag value for ISBN-10 or ISBN-13 validation
+	isbnTagValue = "isbn"
+	// isbn10TagValue is the tag value for ISBN-10 validation
+	isbn10TagValue = "isbn10"
+	// isbn13TagValue is the tag value for ISBN-13 validation
+	isbn13TagValue = "isbn13"
+	// issnTagValue is the tag value for ISSN validation
+	issnTagValue = "issn"
+
+	// Message digest validators
+	// md5TagValue is the tag value for MD5 digest validation
+	md5TagValue = "md5"
+	// sha256TagValue is the tag value for SHA-256 digest validation
+	sha256TagValue = "sha256"
+	// sha384TagValue is the tag value for SHA-384 digest validation
+	sha384TagValue = "sha384"
+	// sha512TagValue is the tag value for SHA-512 digest validation
+	sha512TagValue = "sha512"
+
 	// Network validators
 	// macTagValue is the tag value for MAC address validation
 	macTagValue = "mac"

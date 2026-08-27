@@ -608,6 +608,46 @@ var validatorRegistry = map[string]validatorBuilder{
 	rgbaTagValue:        func(_ string, _ bool) (validator, error) { return newRGBAValidator(), nil },
 	hslTagValue:         func(_ string, _ bool) (validator, error) { return newHSLValidator(), nil },
 	hslaTagValue:        func(_ string, _ bool) (validator, error) { return newHSLAValidator(), nil },
+
+	// Structured format validators
+	jsonTagValue:     func(_ string, _ bool) (validator, error) { return newJSONValidator(), nil },
+	timezoneTagValue: func(_ string, _ bool) (validator, error) { return newTimezoneValidator(), nil },
+	semverTagValue:   func(_ string, _ bool) (validator, error) { return newSemverValidator(), nil },
+
+	// RFC 4648 encoding validators
+	base32TagValue:       func(_ string, _ bool) (validator, error) { return newBase32Validator(), nil },
+	base64TagValue:       func(_ string, _ bool) (validator, error) { return newBase64Validator(), nil },
+	base64URLTagValue:    func(_ string, _ bool) (validator, error) { return newBase64URLValidator(), nil },
+	base64RawURLTagValue: func(_ string, _ bool) (validator, error) { return newBase64RawURLValidator(), nil },
+
+	// oneofci reads its candidates the way oneof does, quoting included.
+	oneOfCITagValue: func(value string, _ bool) (validator, error) {
+		if values := splitTagParams(value); len(values) > 0 {
+			return newOneOfCIValidator(values), nil
+		}
+		return nil, nil //nolint:nilnil // empty value produces no validator
+	},
+
+	// Checksummed identifier validators
+	creditCardTagValue:   func(_ string, _ bool) (validator, error) { return newCreditCardValidator(), nil },
+	luhnChecksumTagValue: func(_ string, _ bool) (validator, error) { return newLuhnChecksumValidator(), nil },
+	isbnTagValue:         func(_ string, _ bool) (validator, error) { return newISBNValidator(), nil },
+	isbn10TagValue:       func(_ string, _ bool) (validator, error) { return newISBN10Validator(), nil },
+	isbn13TagValue:       func(_ string, _ bool) (validator, error) { return newISBN13Validator(), nil },
+	issnTagValue:         func(_ string, _ bool) (validator, error) { return newISSNValidator(), nil },
+
+	// Message digest validators, which differ in nothing but their width
+	md5TagValue:    hexDigest(md5TagValue, 32),
+	sha256TagValue: hexDigest(sha256TagValue, 64),
+	sha384TagValue: hexDigest(sha384TagValue, 96),
+	sha512TagValue: hexDigest(sha512TagValue, 128),
+}
+
+// hexDigest is a builder for one of the message digest tags.
+func hexDigest(tag string, length int) validatorBuilder {
+	return func(_ string, _ bool) (validator, error) {
+		return newHexDigestValidator(tag, length), nil
+	}
 }
 
 // crossFieldValidatorRegistry maps tag names to their builder functions.

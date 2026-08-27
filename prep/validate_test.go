@@ -2669,6 +2669,7 @@ func TestAnEmptyValueSkipsEveryValidatorExceptRequired(t *testing.T) {
 		maxTagValue:                "1",
 		lengthTagValue:             "1",
 		oneOfTagValue:              "a b",
+		oneOfCITagValue:            "a b",
 		startsWithTagValue:         "a",
 		startsNotWithTagValue:      "a",
 		endsWithTagValue:           "a",
@@ -2804,7 +2805,285 @@ func TestPortValidator(t *testing.T) {
 		})
 	}
 
+	// The shared digit check answers for a value with no digits at all, which
+	// every caller guards against by length before asking.
+	if isASCIIDigits("") {
+		t.Error("isASCIIDigits(\"\") = true, want false")
+	}
+
 	if got := newPortValidator().Name(); got != portTagValue {
 		t.Errorf("Name() = %q, want %q", got, portTagValue)
+	}
+}
+
+// The structured-format tags the dialect defines: a JSON document, an IANA
+// time zone name, and a Semantic Versioning 2.0.0 version.
+func TestStructuredFormatValidators(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		tag       string
+		validator validator
+		pass      []string
+		fail      []string
+	}{
+		{
+			tag:       jsonTagValue,
+			validator: newJSONValidator(),
+			pass:      []string{"{}", "[1,2]", "null", `"a"`, `{"a":1}`, "1.5"},
+			fail:      []string{"{", `{'a':1}`, "[1,]", "undefined"},
+		},
+		{
+			tag:       timezoneTagValue,
+			validator: newTimezoneValidator(),
+			pass:      []string{"UTC", "Asia/Tokyo", "America/New_York"},
+			// Local names the host's zone rather than a fixed one, and JST is
+			// an abbreviation rather than a zone name.
+			fail: []string{"Local", "local", "lOcAl", "JST", "Mars/Olympus", "+09:00"},
+		},
+		{
+			tag:       semverTagValue,
+			validator: newSemverValidator(),
+			pass:      []string{"1.2.3", "0.0.4", "1.0.0-alpha.1", "1.0.0+build.5", "1.0.0-rc.1+exp.sha.5114f85"},
+			// A numeric pre-release identifier may not carry a leading zero,
+			// a version needs all three numbers, and the v prefix is not part
+			// of the format.
+			fail: []string{"1.2", "v1.2.3", "01.2.3", "1.0.0-01", "1.0.0-"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tag, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.validator.Name(); got != tt.tag {
+				t.Errorf("Name() = %q, want %q", got, tt.tag)
+			}
+			vs := validators{tt.validator}
+			for _, value := range tt.pass {
+				if _, msg := vs.Validate(value); msg != "" {
+					t.Errorf("%s.Validate(%q) = %q, want a pass", tt.tag, value, msg)
+				}
+			}
+			for _, value := range tt.fail {
+				if _, msg := vs.Validate(value); msg == "" {
+					t.Errorf("%s.Validate(%q) passed, want a failure", tt.tag, value)
+				}
+			}
+			// An empty cell passes every validator but required.
+			if _, msg := vs.Validate(""); msg != "" {
+				t.Errorf("%s.Validate(\"\") = %q, want a pass", tt.tag, msg)
+			}
+		})
+	}
+}
+
+// The RFC 4648 encodings. The character set is checked before the decode
+// because Go's decoders skip carriage returns and line feeds, so a value
+// carrying one decodes there and is still not a base64 value.
+func TestBaseEncodedValidators(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		tag       string
+		validator validator
+		pass      []string
+		fail      []string
+	}{
+		{
+			tag:       base32TagValue,
+			validator: newBase32Validator(),
+			pass:      []string{"MZXW6===", "MZXW6YTB", "MZXW6YTBOI======"},
+			fail:      []string{"MZXW6", "mzxw6===", "MZXW61==", "MZXW\n6===", "MZXW6YT!"},
+		},
+		{
+			tag:       base64TagValue,
+			validator: newBase64Validator(),
+			pass:      []string{"Zm9v", "Zm9vYg==", "Zm9vYmE=", "+/8="},
+			fail:      []string{"Zm9vYg", "Zm9v\nYmFy", "Zm9vYg=", "Zm-vYg==", "Zm9v Yg=="},
+		},
+		{
+			tag:       base64URLTagValue,
+			validator: newBase64URLValidator(),
+			pass:      []string{"Zm9v", "Zm9vYg==", "-_8="},
+			fail:      []string{"Zm9vYg", "+/8=", "Zm9v\nYmFy"},
+		},
+		{
+			tag:       base64RawURLTagValue,
+			validator: newBase64RawURLValidator(),
+			pass:      []string{"Zm9v", "Zm9vYg", "-_8"},
+			fail:      []string{"Zm9vYg==", "+/8", "Zm9v\nYmFy"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tag, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.validator.Name(); got != tt.tag {
+				t.Errorf("Name() = %q, want %q", got, tt.tag)
+			}
+			vs := validators{tt.validator}
+			for _, value := range tt.pass {
+				if _, msg := vs.Validate(value); msg != "" {
+					t.Errorf("%s.Validate(%q) = %q, want a pass", tt.tag, value, msg)
+				}
+			}
+			for _, value := range tt.fail {
+				if _, msg := vs.Validate(value); msg == "" {
+					t.Errorf("%s.Validate(%q) passed, want a failure", tt.tag, value)
+				}
+			}
+			if _, msg := vs.Validate(""); msg != "" {
+				t.Errorf("%s.Validate(\"\") = %q, want a pass", tt.tag, msg)
+			}
+		})
+	}
+}
+
+// oneofci reads its candidates the way oneof does, quoting included, and
+// compares them without regard to case.
+func TestOneOfCIValidator(t *testing.T) {
+	t.Parallel()
+
+	v := newOneOfCIValidator(splitTagParams("red green"))
+	if got := v.Name(); got != oneOfCITagValue {
+		t.Errorf("Name() = %q, want %q", got, oneOfCITagValue)
+	}
+	for _, value := range []string{"red", "RED", "Green", "gReEn"} {
+		if msg := v.Validate(value); msg != "" {
+			t.Errorf("Validate(%q) = %q, want a pass", value, msg)
+		}
+	}
+	for _, value := range []string{"blue", "re", "redgreen"} {
+		if msg := v.Validate(value); msg == "" {
+			t.Errorf("Validate(%q) passed, want a failure", value)
+		}
+	}
+
+	quoted := newOneOfCIValidator(splitTagParams("'gold member' silver"))
+	if msg := quoted.Validate("GOLD MEMBER"); msg != "" {
+		t.Errorf("Validate(\"GOLD MEMBER\") = %q, want a pass", msg)
+	}
+	if msg := quoted.Validate("gold"); msg == "" {
+		t.Error("Validate(\"gold\") passed, want a failure")
+	}
+}
+
+// The checksummed identifiers. Each keeps one case that is well formed and
+// carries the wrong check digit, since that is the failure these exist for.
+func TestChecksummedIdentifierValidators(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		tag       string
+		validator validator
+		pass      []string
+		fail      []string
+	}{
+		{
+			tag:       luhnChecksumTagValue,
+			validator: newLuhnChecksumValidator(),
+			pass:      []string{"79927398713", "18"},
+			fail:      []string{"79927398710", "7992-7398-713", "7", "abc", "7992 7398 713"},
+		},
+		{
+			tag:       creditCardTagValue,
+			validator: newCreditCardValidator(),
+			pass:      []string{"4242424242424242", "4242 4242 4242 4242", "378282246310005"},
+			fail:      []string{"4242-4242-4242-4242", "1234567812345678", "4242  4242 4242 4242", "42 42424242424242", "42424242424", "42424242424242424242"},
+		},
+		{
+			tag:       isbn10TagValue,
+			validator: newISBN10Validator(),
+			pass:      []string{"0-13-110362-8", "0131103628", "0 13 110362 8", "080442957X"},
+			// Only the separators an ISBN-10 is grouped with are removed, so a
+			// value carrying more of them is not one however its digits read.
+			fail: []string{"0-13-110362-9", "013110362", "0131103628X", "X131103628", "0--13-110362-8", "0-13-110362-8-"},
+		},
+		{
+			tag:       isbn13TagValue,
+			validator: newISBN13Validator(),
+			pass:      []string{"978-0-13-110362-7", "9780131103627", "979-0-13-110362-6"},
+			fail:      []string{"9780131103628", "9770131103627", "978013110362", "978--0-13-110362-7", "978-0-13-110362-7-"},
+		},
+		{
+			tag:       isbnTagValue,
+			validator: newISBNValidator(),
+			pass:      []string{"0131103628", "9780131103627"},
+			fail:      []string{"012345678901", "0131103629", "9780131103628"},
+		},
+		{
+			tag:       issnTagValue,
+			validator: newISSNValidator(),
+			pass:      []string{"0317-8471", "0000-0019"},
+			fail:      []string{"0317-8472", "03178471", "0317-847X", "0317-84712"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tag, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.validator.Name(); got != tt.tag {
+				t.Errorf("Name() = %q, want %q", got, tt.tag)
+			}
+			vs := validators{tt.validator}
+			for _, value := range tt.pass {
+				if _, msg := vs.Validate(value); msg != "" {
+					t.Errorf("%s.Validate(%q) = %q, want a pass", tt.tag, value, msg)
+				}
+			}
+			for _, value := range tt.fail {
+				if _, msg := vs.Validate(value); msg == "" {
+					t.Errorf("%s.Validate(%q) passed, want a failure", tt.tag, value)
+				}
+			}
+			if _, msg := vs.Validate(""); msg != "" {
+				t.Errorf("%s.Validate(\"\") = %q, want a pass", tt.tag, msg)
+			}
+		})
+	}
+}
+
+// The digest tags are a length and a character set: lowercase hex of exactly
+// the digest's width, so an uppercase spelling is not one.
+func TestMessageDigestValidators(t *testing.T) {
+	t.Parallel()
+
+	hex := strings.Repeat("0123456789abcdef", 8) // 128 characters
+
+	tests := []struct {
+		tag    string
+		length int
+	}{
+		{md5TagValue, 32},
+		{sha256TagValue, 64},
+		{sha384TagValue, 96},
+		{sha512TagValue, 128},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tag, func(t *testing.T) {
+			t.Parallel()
+			v := newHexDigestValidator(tt.tag, tt.length)
+			if got := v.Name(); got != tt.tag {
+				t.Errorf("Name() = %q, want %q", got, tt.tag)
+			}
+			vs := validators{v}
+			if _, msg := vs.Validate(hex[:tt.length]); msg != "" {
+				t.Errorf("%s.Validate(a %d-character digest) = %q, want a pass", tt.tag, tt.length, msg)
+			}
+			for _, value := range []string{
+				hex[:tt.length-1],
+				hex[:tt.length] + "0",
+				strings.ToUpper(hex[:tt.length]),
+				strings.Repeat("g", tt.length),
+			} {
+				if _, msg := vs.Validate(value); msg == "" {
+					t.Errorf("%s.Validate(%q) passed, want a failure", tt.tag, value)
+				}
+			}
+			if _, msg := vs.Validate(""); msg != "" {
+				t.Errorf("%s.Validate(\"\") = %q, want a pass", tt.tag, msg)
+			}
+		})
 	}
 }
