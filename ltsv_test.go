@@ -332,3 +332,45 @@ func TestLTSVValueKeepsSurroundingWhitespace(t *testing.T) {
 		assert.Equal(t, fromCSV, fromLTSV)
 	})
 }
+
+// TestLTSVLabelIsTrimmed pins that a label is the name without the whitespace
+// around it, which is what makes the writer refuse a column name carrying any:
+// the file would name a column this reader does not return.
+//
+// LTSV restricts a label to letters, digits, underscore, dot and hyphen, so a
+// space around one is malformed however it got there, and a file that has one
+// is read rather than refused.
+func TestLTSVLabelIsTrimmed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{name: "a leading space", content: " v:1\n", want: "v"},
+		{name: "a trailing space", content: "v :1\n", want: "v"},
+		{name: "both sides", content: "  v  :1\n", want: "v"},
+		{name: "an ideographic space", content: "\u3000v:1\n", want: "v"},
+		{name: "no whitespace at all", content: "v:1\n", want: "v"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			src := filepath.Join(t.TempDir(), "t.ltsv")
+			require.NoError(t, os.WriteFile(src, []byte(tt.content), 0o600))
+
+			db, err := OpenContext(ctx, src)
+			require.NoError(t, err)
+			defer db.Close()
+
+			var got string
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT name FROM pragma_table_info('t')`).Scan(&got))
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

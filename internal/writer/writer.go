@@ -309,7 +309,20 @@ func checkLTSVValue(column, value string) error {
 // checkLTSVLabel refuses a column name that would not read back as a label. A
 // colon is what separates a label from its value, so it is forbidden here on
 // top of the characters no field may carry.
+//
+// Whitespace around a name is refused for the same reason, although it ends
+// nothing: LTSV restricts a label to letters, digits, underscore, dot and
+// hyphen, so a reader trims one and the column comes back under a different
+// name. Writing it anyway renamed the column on a reload with nothing to say
+// so -- a table with the column " a" was written as " a:1" and read back as
+// "a", which is the outcome the refusals here exist to replace.
 func checkLTSVLabel(column string) error {
+	if trimmed := strings.TrimSpace(column); trimmed != column {
+		return &Error{
+			Kind: KindUnrepresentable,
+			Msg:  fmt.Sprintf("an LTSV label cannot begin or end with whitespace, and column %q would be read back as %q", column, trimmed),
+		}
+	}
 	if strings.ContainsRune(column, ':') {
 		return &Error{
 			Kind: KindUnrepresentable,
