@@ -20,6 +20,12 @@
 //   - Pre-filtering or splitting large files before processing
 //   - Increasing available memory for the process
 //
+// # One table per parse
+//
+// A TableData is one table. A workbook of several sheets therefore contributes
+// one of them -- the first the sheet policy admits -- and the rest are not read.
+// Use filesql to load a workbook as one table per sheet.
+//
 // # Example usage
 //
 //	f, _ := os.Open("data.csv")
