@@ -30,6 +30,9 @@ import (
 func TestDumpEmptyTable(t *testing.T) {
 	t.Parallel()
 
+	// LTSV is not here: it has no header to carry the columns, so a table with
+	// no rows has nothing to write, and TestDumpLTSVRefusesATableWithNoRows
+	// holds what happens instead.
 	tests := []struct {
 		name        string
 		format      OutputFormat
@@ -38,7 +41,6 @@ func TestDumpEmptyTable(t *testing.T) {
 		{name: "csv", format: OutputFormatCSV, compression: CompressionNone},
 		{name: "csv gz", format: OutputFormatCSV, compression: CompressionGZ},
 		{name: "tsv", format: OutputFormatTSV, compression: CompressionNone},
-		{name: "ltsv", format: OutputFormatLTSV, compression: CompressionNone},
 		{name: "parquet", format: OutputFormatParquet, compression: CompressionNone},
 		{name: "xlsx", format: OutputFormatXLSX, compression: CompressionNone},
 	}
@@ -74,8 +76,9 @@ func TestDumpEmptyTable(t *testing.T) {
 // as the same table with no rows.
 //
 // LTSV is the exception and is covered separately: it carries a label on every
-// row and so has no header, which leaves an emptied table nothing to write and
-// nothing to read back.
+// row and so has no header, which leaves an emptied table nothing to write --
+// and the empty file that came of it blocked the load of every file beside it,
+// so the dump refuses the table.
 func TestDumpEmptyTableRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -126,7 +129,11 @@ func TestDumpEmptyTableRoundTrip(t *testing.T) {
 		})
 	}
 
-	t.Run("ltsv has no header, so an emptied table cannot be read back", func(t *testing.T) {
+	// LTSV has no header to carry the columns, so an emptied table has nothing
+	// to write. The empty file that came out did not only lose its own columns:
+	// an empty file is not a table, so loading the directory failed on it and
+	// took every file beside it down. The dump refuses instead.
+	t.Run("ltsv has no header, so an emptied table is refused", func(t *testing.T) {
 		t.Parallel()
 
 		ctx := t.Context()
@@ -141,20 +148,18 @@ func TestDumpEmptyTableRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 
 		outDir := t.TempDir()
-		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatLTSV)))
+		err = DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatLTSV))
 
-		// The empty file is a correct empty LTSV; there is simply no column list in
-		// it to rebuild the table from.
-		_, err = OpenContext(ctx, filepath.Join(outDir, "people.ltsv"))
 		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrEmptyData)
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		assert.Contains(t, err.Error(), "CSV")
 	})
 }
 
 // TestDumpEmptyTableColumnsSurvive pins that a dump of an emptied table still
 // carries its columns, for the formats that have somewhere to put them. LTSV
-// writes one label per row and so has nowhere; an empty LTSV file is all it can
-// be.
+// writes one label per row and so has nowhere, which is why it refuses the
+// table rather than writing a file nothing can read.
 func TestDumpEmptyTableColumnsSurvive(t *testing.T) {
 	t.Parallel()
 
@@ -162,10 +167,12 @@ func TestDumpEmptyTableColumnsSurvive(t *testing.T) {
 		name   string
 		format OutputFormat
 		want   string
+		// refused is set for a format that cannot say what an empty table is.
+		refused bool
 	}{
 		{name: "csv keeps its header", format: OutputFormatCSV, want: "id,name\n"},
 		{name: "tsv keeps its header", format: OutputFormatTSV, want: "id\tname\n"},
-		{name: "ltsv has nowhere to put one", format: OutputFormatLTSV, want: ""},
+		{name: "ltsv has nowhere to put one", format: OutputFormatLTSV, refused: true},
 	}
 
 	for _, tt := range tests {
@@ -185,7 +192,14 @@ func TestDumpEmptyTableColumnsSurvive(t *testing.T) {
 
 			opts := NewDumpOptions().WithFormat(tt.format)
 			outDir := t.TempDir()
-			require.NoError(t, DumpDatabase(db, outDir, opts))
+			err = DumpDatabase(db, outDir, opts)
+			if tt.refused {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, ErrUnsupportedFormat)
+				assert.Empty(t, dirEntriesOrNone(t, outDir), "nothing may be written for a refused table")
+				return
+			}
+			require.NoError(t, err)
 
 			got, err := os.ReadFile(filepath.Join(outDir, "people"+opts.FileExtension())) //nolint:gosec // Test path from t.TempDir()
 			require.NoError(t, err)
@@ -1887,5 +1901,78 @@ func TestDumpXLSXRefusesAnUnnamedLastColumn(t *testing.T) {
 		var last string
 		require.NoError(t, back.QueryRowContext(ctx, `SELECT " " FROM t`).Scan(&last))
 		assert.Equal(t, "q", last)
+	})
+}
+
+// TestDumpLTSVRefusesATableWithNoRows holds the rule that a dump is a file this
+// package can read again, on the one format that cannot say what a table with
+// no rows is. LTSV carries its labels on every record rather than in a header,
+// so an empty table wrote an empty file, and the load of an empty file is
+// refused -- a dump nobody can read back. Every other format keeps the columns.
+func TestDumpLTSVRefusesATableWithNoRows(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("LTSV is refused", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, "CREATE TABLE t (id INTEGER, name TEXT)", "")
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		err := DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatLTSV))
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		assert.Contains(t, err.Error(), "CSV", "the error must say what to dump instead")
+		assert.Empty(t, dirEntriesOrNone(t, outDir), "nothing may be written for a refused table")
+	})
+
+	t.Run("every other format keeps the columns", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tc := range []struct {
+			format OutputFormat
+			ext    string
+		}{
+			{format: OutputFormatCSV, ext: ".csv"},
+			{format: OutputFormatTSV, ext: ".tsv"},
+			{format: OutputFormatParquet, ext: ".parquet"},
+			{format: OutputFormatXLSX, ext: ".xlsx"},
+		} {
+			db := openWithTable(t, "CREATE TABLE t (id INTEGER, name TEXT)", "")
+
+			outDir := filepath.Join(t.TempDir(), "out")
+			require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(tc.format)))
+			require.NoError(t, db.Close())
+
+			back, err := OpenContext(ctx, filepath.Join(outDir, "t"+tc.ext))
+			require.NoError(t, err, "a dump of an empty table must load")
+
+			var columns, rows int
+			require.NoError(t, back.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info('t')").Scan(&columns))
+			require.NoError(t, back.QueryRowContext(ctx, "SELECT COUNT(*) FROM t").Scan(&rows))
+			assert.Equal(t, 2, columns, "%s must keep the columns", tc.ext)
+			assert.Equal(t, 0, rows)
+			require.NoError(t, back.Close())
+		}
+	})
+
+	t.Run("LTSV with a row is unaffected", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, "CREATE TABLE t (id INTEGER, name TEXT)", "INSERT INTO t VALUES (1, 'Alice')")
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatLTSV)))
+		require.NoError(t, db.Close())
+
+		back, err := OpenContext(ctx, filepath.Join(outDir, "t.ltsv"))
+		require.NoError(t, err)
+		defer func() { _ = back.Close() }()
+
+		var name string
+		require.NoError(t, back.QueryRowContext(ctx, "SELECT name FROM t").Scan(&name))
+		assert.Equal(t, "Alice", name)
 	})
 }

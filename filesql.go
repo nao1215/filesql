@@ -123,7 +123,10 @@ func LoadInto(ctx context.Context, db *sql.DB, paths ...string) error {
 // break in TSV, those and a colon in an LTSV label, and in XLSX a control
 // character other than tab, line feed and carriage return, which is what an XML
 // 1.0 document has no way to spell, or a last column with no name, which a
-// worksheet does not store.
+// worksheet does not store. A table with no rows is refused for LTSV alone,
+// which has no header to carry the columns and would leave an empty file --
+// and an empty file is not a table, so it blocks the load of every file beside
+// it. The other formats keep the columns of an empty table.
 //
 // A table whose column names a load would refuse is refused too, with
 // ErrDuplicateColumn: this package reads " a", "a" and "a " as one name, and
@@ -591,6 +594,7 @@ func writeTextData(w io.Writer, columns []string, rows *sql.Rows, text textDumpF
 	// Record returns, so it keeps no reference to the strings in it.
 	record := make([]string, len(columns))
 
+	written := 0
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
 			return err
@@ -601,10 +605,24 @@ func writeTextData(w io.Writer, columns []string, rows *sql.Rows, text textDumpF
 		if err := out.Record(record); err != nil {
 			return dumpFormatError(err, text)
 		}
+		written++
 	}
 
 	if err := rows.Err(); err != nil {
 		return err
+	}
+
+	// LTSV carries its labels on every record rather than in a header, so a
+	// table with no rows has nothing to write and the columns go with it: the
+	// file came out empty, and an empty file is not a table, so the dump wrote
+	// something this package refuses to read. The other formats keep the
+	// columns -- a header line, a Parquet schema, a header row -- so this is
+	// the one place a table with no rows cannot be said. Writing a line of bare
+	// labels instead would load as one row of empty values, which is a row the
+	// table did not have.
+	if written == 0 && text.format == writer.FormatLTSV {
+		return fmt.Errorf("%w: LTSV cannot hold a table with no rows, since it has no header to carry the columns; dump this table as CSV instead",
+			ErrUnsupportedFormat)
 	}
 	// The writer buffers, so this is where a destination that could not take the
 	// bytes — an encoder refusing a value it cannot write, for instance —

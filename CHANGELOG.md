@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- An LTSV dump of a table with no rows is refused rather than writing an empty file ([#716](https://github.com/nao1215/filesql/issues/716)). LTSV carries its labels on every record rather than in a header, so a table with no rows has nothing to write; the empty file that came of it did not only lose its own columns, it blocked the load of every file beside it, since an empty file is not a table. A database of two tables, one of them empty, dumped to LTSV wrote `empty.ltsv` at zero bytes beside a `full.ltsv` that held its rows, and `OpenContext` on that directory failed naming the empty file, so neither table could be read. The refusal carries `ErrUnsupportedFormat` and says to dump the table as CSV, which is the shape the other LTSV refusals have. CSV and TSV keep the header, Parquet keeps its schema and XLSX keeps the header row, so a table with no rows round-trips in every other format. Migration: dump such a table as CSV, or drop it before dumping. This overturns a decision recorded in a test -- that an empty file was a correct empty LTSV -- which was made without the directory load in view.
+
 ### Fixed
 
 - `LoadInto` and `LoadIntoTx` refuse a dialect rather than dropping it ([#714](https://github.com/nao1215/filesql/issues/714)). `WithDialect` was accepted by both and then did nothing, because a dialect is a connector wrapping the database `Open` returns and cannot reach one the caller opened -- so a caller who configured PostgreSQL and loaded into their own database met SQLite's tokenizer error on their first `::` cast, about a token they had not written, with no sentinel of this package's to match and no mention of the option that had been dropped. Auto-save cannot reach that database either and has always been refused by name; the dialect is now refused the same way, carrying `ErrDatabaseOperation` and naming the dialect and the method. A builder configured with `dialect.SQLite`, or with no dialect at all, asks for no translation and is unaffected.
