@@ -276,6 +276,10 @@ func TestPostgreSQLSemanticsMatchTheEngine(t *testing.T) {
 		{`SELECT to_char(0.0001, '9.9EEEE')`, " 1.0e-04"},
 		{`SELECT to_char(12, '9.9EEEE')`, " 1.2e+01"},
 		{`SELECT to_char(1234.5, 'C999')`, " ###"},
+
+		// The whole-pattern form of SUBSTRING is anchored, which is what makes
+		// a pattern matching only part of the subject answer NULL.
+		{`SELECT substring('foobar' similar 'f%r' escape '#')`, "foobar"},
 	}
 	for _, tt := range tests {
 		got, err := runDialect(t, db, PostgreSQL, tt.query)
@@ -290,6 +294,29 @@ func TestPostgreSQLSemanticsMatchTheEngine(t *testing.T) {
 
 	// chr refuses a code point PostgreSQL refuses rather than answering the
 	// space SQLite's char() leaves behind.
+	// A pattern that does not match the whole subject, and an ESCAPE written
+	// before the pattern, both answer rather than panic.
+	for _, tt := range []struct {
+		query string
+		null  bool
+	}{
+		{`SELECT substring('foobar' similar 'o_b' escape '#')`, true},
+		{`SELECT substring('foobar' similar '#"oo#"' escape '#')`, true},
+		{`SELECT substring('abc' similar '#"a|b#"c' escape '#')`, true},
+	} {
+		got, err := runDialect(t, db, PostgreSQL, tt.query)
+		if err != nil {
+			t.Errorf("%s: %v", tt.query, err)
+			continue
+		}
+		if got.Valid != !tt.null {
+			t.Errorf("%s = %v, want NULL=%v", tt.query, got, tt.null)
+		}
+	}
+	if _, err := Translate(PostgreSQL, `SELECT SUBSTRING(b ESCAPE '#' SIMILAR 'p') FROM t`); !errors.Is(err, ErrUnsupportedSyntax) {
+		t.Errorf("SUBSTRING with ESCAPE before SIMILAR: error = %v, want ErrUnsupportedSyntax", err)
+	}
+
 	for _, query := range []string{`SELECT chr(0)`, `SELECT chr(-1)`} {
 		if _, err := runDialect(t, db, PostgreSQL, query); err == nil {
 			t.Errorf("%s: want an error, got none", query)
@@ -332,6 +359,9 @@ func TestPostgreSQLNullsSortAtItsOwnEnd(t *testing.T) {
 		{`SELECT lag(a, 1, -1) OVER (ORDER BY a) FROM nulls_order LIMIT 1`, "-1"},
 		// An explicit NULLS clause is the caller's decision and is left alone.
 		{`SELECT group_concat(coalesce(cast(a AS text),'N')) FROM (SELECT a FROM nulls_order ORDER BY a NULLS FIRST)`, "N,1,2,2,3"},
+		// A statement terminator ends the ordering list, so no keyword is
+		// appended after it.
+		{`SELECT group_concat(coalesce(cast(a AS text),'N')) FROM (SELECT a FROM nulls_order ORDER BY a);`, "1,2,2,3,N"},
 	}
 	for _, tt := range tests {
 		got, err := runDialect(t, db, PostgreSQL, tt.query)

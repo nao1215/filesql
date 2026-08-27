@@ -1101,10 +1101,12 @@ func fnSimilarSubstring(args []driver.Value) (driver.Value, error) {
 	if !closed {
 		return nil, fmt.Errorf("%w: the SUBSTRING pattern has one %s marker and needs two", ErrInvalidCast, marker)
 	}
+	// Each portion is wrapped in its own group before the three are joined, so
+	// an alternation inside one of them cannot reach across into the next.
 	re, err := compileRegexp(
-		trimAnchors(similarToRegexp(unescapeSimilar(before, escape)), false, true) +
+		"^(?:" + trimAnchors(similarToRegexp(unescapeSimilar(before, escape)), true, true) + ")" +
 			"(" + trimAnchors(similarToRegexp(unescapeSimilar(middle, escape)), true, true) + ")" +
-			trimAnchors(similarToRegexp(unescapeSimilar(after, escape)), true, false))
+			"(?:" + trimAnchors(similarToRegexp(unescapeSimilar(after, escape)), true, true) + ")$")
 	if err != nil {
 		return nil, err
 	}

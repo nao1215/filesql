@@ -110,9 +110,10 @@ func postgresqlScalarFunctions() map[string]scalarSpec {
 // here.
 func postgresqlNonDeterministicFunctions() map[string]scalarSpec {
 	return map[string]scalarSpec{
-		"clock_timestamp": {0, fnClockTimestamp},
-		"timeofday":       {0, fnTimeOfDay},
-		"gen_random_uuid": {0, fnGenerateUUID},
+		"clock_timestamp":   {0, fnClockTimestamp},
+		"timeofday":         {0, fnTimeOfDay},
+		"gen_random_uuid":   {0, fnGenerateUUID},
+		"postgresql_random": {0, fnPostgresRandom},
 	}
 }
 

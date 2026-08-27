@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"math"
 	"math/big"
@@ -272,7 +273,6 @@ func registerAll() error {
 		"postgresql_regexp_replace": {-1, fnPostgresRegexpReplace},
 		"postgresql_divide":         {2, divideSQLite},
 		"postgresql_mod":            {2, moduloDialect(true)},
-		"postgresql_random":         {0, fnPostgresRandom},
 		"postgresql_format":         {-1, fnPostgresFormat},
 		fnNamePostgresDateAdd:       {2, fnPostgresDateAdd},
 		"postgresql_date_diff":      {2, fnPostgresDateDiff},
@@ -2027,6 +2027,12 @@ func fnMySQLJSONType(args []driver.Value) (driver.Value, error) {
 	decoder := json.NewDecoder(strings.NewReader(s))
 	decoder.UseNumber()
 	if err := decoder.Decode(&value); err != nil {
+		return nil, fmt.Errorf("dialect: JSON_TYPE: %q is not valid JSON", s)
+	}
+	// A document is the whole of the value, so anything after the first one
+	// makes the input invalid: "1 2" is not the integer 1 with something
+	// ignored after it.
+	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("dialect: JSON_TYPE: %q is not valid JSON", s)
 	}
 	switch v := value.(type) {

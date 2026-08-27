@@ -363,8 +363,11 @@ func rewritePostgresSubstringCall(tokens []token, open, closeIdx int, recurse ca
 	// the position-and-length one by the kind of its first operand.
 	if similar := topLevelWord(tokens, open, closeIdx, "SIMILAR"); similar >= 0 {
 		escape := topLevelWord(tokens, open, closeIdx, "ESCAPE")
-		if escape < 0 {
-			return nil, false, fmt.Errorf("%w: SUBSTRING(x SIMILAR p) needs an ESCAPE clause", ErrUnsupportedSyntax)
+		if escape <= similar {
+			// topLevelWord finds each keyword on its own, so an ESCAPE written
+			// before the SIMILAR would leave the pattern slice inverted and
+			// panic rather than report the syntax.
+			return nil, false, fmt.Errorf("%w: SUBSTRING(x SIMILAR p ESCAPE e) needs an ESCAPE clause after the pattern", ErrUnsupportedSyntax)
 		}
 		return rewriteSimilarSubstring(tokens, open, closeIdx, similar, escape, recurse)
 	}
@@ -700,6 +703,10 @@ func orderByEnd(tokens []token, start int) int {
 				return i
 			}
 			depth--
+		case depth == 0 && isOpEq(tokens[i], ";"):
+			// The statement terminator ends the ordering list; a NULLS keyword
+			// appended after it would not parse.
+			return i
 		case depth == 0 && tokens[i].kind == tokWord && orderByEndKeywords[strings.ToUpper(tokens[i].text)]:
 			return i
 		}

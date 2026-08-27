@@ -2461,6 +2461,9 @@ func TestOnlyTheChangingHelpersAreNonDeterministic(t *testing.T) {
 		"clock_timestamp",
 		"gen_random_uuid",
 		"generate_uuid",
+		// PostgreSQL's random() answers a different double every call, so
+		// SQLite must not reuse one row's result for the next.
+		"postgresql_random",
 		"rand",
 		"timeofday",
 	}
