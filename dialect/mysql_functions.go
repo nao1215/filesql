@@ -7,8 +7,11 @@ import (
 	"database/sql/driver"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"math"
 	"math/bits"
 	"net"
@@ -48,6 +51,19 @@ func mysqlScalarFunctions() map[string]scalarSpec {
 		"to_base64":    {1, fnMySQLToBase64},
 		"from_base64":  {1, fnMySQLFromBase64},
 
+		// Numbers. Each reads a string the way MySQL reads one in a numeric
+		// context -- the number at the front of it, or zero -- where SQLite's
+		// own answers NULL, and each refuses a result MySQL refuses rather than
+		// answering an infinity that no file format can carry.
+		"mysql_ceil":  {1, mysqlMath(math.Ceil)},
+		"mysql_floor": {1, mysqlMath(math.Floor)},
+		"mysql_sign":  {1, mysqlMath(func(f float64) float64 { return float64(sign(f)) })},
+		"mysql_sqrt":  {1, mysqlMath(math.Sqrt)},
+		"mysql_exp":   {1, mysqlMath(math.Exp)},
+		"mysql_ln":    {1, mysqlLogarithm(math.Log)},
+		"mysql_log2":  {1, mysqlLogarithm(math.Log2)},
+		"mysql_log10": {1, mysqlLogarithm(math.Log10)},
+
 		// Numbers and bits.
 		"conv":      {3, fnMySQLConv},
 		"bin":       {1, convTo(2)},
@@ -68,11 +84,340 @@ func mysqlScalarFunctions() map[string]scalarSpec {
 		"sha2": {2, fnMySQLSHA2},
 
 		// Addresses, for the log files this package exists to query.
+		// Sets and JSON.
+		"make_set":       {-1, fnMySQLMakeSet},
+		"export_set":     {-1, fnMySQLExportSet},
+		"mysql_interval": {-1, fnMySQLIntervalPosition},
+		"json_length":    {-1, fnMySQLJSONLength},
+		"json_contains":  {-1, fnMySQLJSONContains},
+
+		// Addresses, for the log files this package exists to query.
 		"inet_aton": {1, fnInetAton},
 		"inet_ntoa": {1, fnInetNtoa},
 		"is_ipv4":   {1, fnIsIPv4},
 		"is_ipv6":   {1, fnIsIPv6},
 	}
+}
+
+// mysqlMath wraps a one-argument computation with MySQL's two rules for it: a
+// string argument is the number at the front of it rather than nothing, and a
+// result the type cannot hold is an error rather than an infinity.
+//
+// SQLite's own ceil, floor, sign, sqrt, exp, ln, log2 and log10 answer NULL for
+// a string, which made every one of them answer NULL for a column loaded from a
+// file -- where every cell is text. They also answer an infinity for an
+// overflow, and an infinity is a value no dump format here can write.
+func mysqlMath(compute func(float64) float64) scalarFn {
+	return func(args []driver.Value) (driver.Value, error) {
+		if args[0] == nil {
+			return nil, nil
+		}
+		x, ok := mysqlNumericArgument(args[0])
+		if !ok {
+			return nil, nil
+		}
+		out := compute(x)
+		if math.IsInf(out, 0) {
+			return nil, fmt.Errorf("dialect: the result of this operation on %v is out of range", x)
+		}
+		if math.IsNaN(out) {
+			// MySQL answers NULL where the operation is undefined, as SQRT(-1)
+			// and LN(0) are.
+			return nil, nil
+		}
+		return out, nil
+	}
+}
+
+// mysqlLogarithm is mysqlMath for a logarithm, where an argument of zero or
+// less is not an overflow but a value the function is undefined for: MySQL
+// answers NULL for LN(0) and LN(-1) rather than reporting a range error.
+func mysqlLogarithm(compute func(float64) float64) scalarFn {
+	inner := mysqlMath(compute)
+	return func(args []driver.Value) (driver.Value, error) {
+		if x, ok := mysqlNumericArgument(args[0]); ok && x <= 0 {
+			return nil, nil
+		}
+		return inner(args)
+	}
+}
+
+// mysqlNumericArgument reads a value the way MySQL reads one where a number is
+// wanted: a number is itself, and a string is the number its leading run
+// spells, or zero.
+func mysqlNumericArgument(v driver.Value) (float64, bool) {
+	switch x := v.(type) {
+	case nil:
+		return 0, false
+	case string:
+		return numericPrefix(x), true
+	case []byte:
+		return numericPrefix(string(x)), true
+	}
+	return toFloat(v)
+}
+
+// sign is the -1, 0 or 1 every dialect answers for SIGN.
+func sign(f float64) int {
+	switch {
+	case f < 0:
+		return -1
+	case f > 0:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// fnMySQLMakeSet implements MAKE_SET(bits, s1, s2, ...): the strings whose
+// position matches a set bit, joined by commas. A NULL string is skipped and a
+// NULL bit mask makes the whole call NULL.
+func fnMySQLMakeSet(args []driver.Value) (driver.Value, error) {
+	if len(args) < 1 {
+		return nil, errors.New("dialect: MAKE_SET expects at least one argument")
+	}
+	bits, ok := toCount(args[0])
+	if !ok {
+		return nil, nil
+	}
+	parts := make([]string, 0, len(args)-1)
+	for i, arg := range args[1:] {
+		if i >= 64 || bits&(1<<uint(i)) == 0 {
+			continue
+		}
+		s, ok := toString(arg)
+		if !ok {
+			// MySQL leaves a NULL member out rather than answering NULL.
+			continue
+		}
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, ","), nil
+}
+
+// fnMySQLExportSet implements EXPORT_SET(bits, on, off[, separator[, count]]):
+// one string per bit, least significant first, joined by the separator. The
+// separator defaults to a comma and the count to 64, which is the width MySQL
+// uses when it is not told one.
+func fnMySQLExportSet(args []driver.Value) (driver.Value, error) {
+	if len(args) < 3 || len(args) > 5 {
+		return nil, fmt.Errorf("dialect: EXPORT_SET expects 3 to 5 arguments, got %d", len(args))
+	}
+	bits, ok1 := toCount(args[0])
+	on, ok2 := toString(args[1])
+	off, ok3 := toString(args[2])
+	if !ok1 || !ok2 || !ok3 {
+		return nil, nil
+	}
+	separator := ","
+	if len(args) >= 4 {
+		if separator, ok1 = toString(args[3]); !ok1 {
+			return nil, nil
+		}
+	}
+	count := int64(64)
+	if len(args) == 5 {
+		if count, ok1 = toCount(args[4]); !ok1 {
+			return nil, nil
+		}
+	}
+	if count < 0 {
+		count = 0
+	}
+	if count > 64 {
+		count = 64
+	}
+	parts := make([]string, 0, count)
+	for i := range count {
+		if bits&(1<<uint(i)) != 0 {
+			parts = append(parts, on)
+		} else {
+			parts = append(parts, off)
+		}
+	}
+	return strings.Join(parts, separator), nil
+}
+
+// fnMySQLIntervalPosition implements INTERVAL(n, v1, v2, ...): the index of the
+// last value not greater than n, counting from 1, with 0 when n comes before
+// them all and -1 when n is NULL. The values are assumed to be in order, which
+// is what MySQL documents and what makes the function a bucket lookup.
+func fnMySQLIntervalPosition(args []driver.Value) (driver.Value, error) {
+	if len(args) < 2 {
+		return nil, errors.New("dialect: INTERVAL expects at least two arguments")
+	}
+	n, ok := toFloat(args[0])
+	if !ok {
+		// MySQL answers -1 for a NULL first argument rather than NULL.
+		return int64(-1), nil
+	}
+	position := int64(0)
+	for i, arg := range args[1:] {
+		bound, ok := toFloat(arg)
+		if !ok || n < bound {
+			break
+		}
+		position = int64(i) + 1
+	}
+	return position, nil
+}
+
+// fnMySQLJSONLength implements JSON_LENGTH(doc[, path]): the number of members
+// of an object, the number of elements of an array, and 1 for a scalar.
+func fnMySQLJSONLength(args []driver.Value) (driver.Value, error) {
+	if len(args) < 1 || len(args) > 2 {
+		return nil, fmt.Errorf("dialect: JSON_LENGTH expects 1 or 2 arguments, got %d", len(args))
+	}
+	value, ok, err := mysqlJSONAt(args)
+	if err != nil || !ok {
+		return nil, err
+	}
+	switch v := value.(type) {
+	case []any:
+		return int64(len(v)), nil
+	case map[string]any:
+		return int64(len(v)), nil
+	default:
+		return int64(1), nil
+	}
+}
+
+// fnMySQLJSONContains implements JSON_CONTAINS(doc, candidate[, path]): whether
+// the candidate document is contained in the target, which for an array means
+// membership and for an object means every member matching.
+func fnMySQLJSONContains(args []driver.Value) (driver.Value, error) {
+	if len(args) < 2 || len(args) > 3 {
+		return nil, fmt.Errorf("dialect: JSON_CONTAINS expects 2 or 3 arguments, got %d", len(args))
+	}
+	target := []driver.Value{args[0]}
+	if len(args) == 3 {
+		target = append(target, args[2])
+	}
+	haystack, ok, err := mysqlJSONAt(target)
+	if err != nil || !ok {
+		return nil, err
+	}
+	needle, ok, err := mysqlJSONAt([]driver.Value{args[1]})
+	if err != nil || !ok {
+		return nil, err
+	}
+	return boolToInt(jsonContains(haystack, needle)), nil
+}
+
+// mysqlJSONAt decodes the document in args[0] and, when a path is given in
+// args[1], follows it. It reports false when either is NULL.
+func mysqlJSONAt(args []driver.Value) (any, bool, error) {
+	text, ok := toString(args[0])
+	if !ok {
+		return nil, false, nil
+	}
+	var value any
+	decoder := json.NewDecoder(strings.NewReader(text))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return nil, false, fmt.Errorf("dialect: %q is not valid JSON", text)
+	}
+	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return nil, false, fmt.Errorf("dialect: %q is not valid JSON", text)
+	}
+	if len(args) < 2 {
+		return value, true, nil
+	}
+	path, ok := toString(args[1])
+	if !ok {
+		return nil, false, nil
+	}
+	found, ok := jsonAtPath(value, path)
+	return found, ok, nil
+}
+
+// jsonAtPath follows a MySQL JSON path of the plain "$.a.b[0]" shape, which is
+// what the length and containment functions take. A path this does not
+// understand finds nothing, which is the NULL MySQL answers for a path that
+// matches no value.
+func jsonAtPath(value any, path string) (any, bool) {
+	rest, found := strings.CutPrefix(strings.TrimSpace(path), "$")
+	if !found {
+		return nil, false
+	}
+	for rest != "" {
+		switch {
+		case strings.HasPrefix(rest, "."):
+			rest = rest[1:]
+			end := strings.IndexAny(rest, ".[")
+			if end < 0 {
+				end = len(rest)
+			}
+			object, isObject := value.(map[string]any)
+			if !isObject {
+				return nil, false
+			}
+			member, has := object[rest[:end]]
+			if !has {
+				return nil, false
+			}
+			value, rest = member, rest[end:]
+		case strings.HasPrefix(rest, "["):
+			end := strings.Index(rest, "]")
+			if end < 0 {
+				return nil, false
+			}
+			index, err := strconv.Atoi(rest[1:end])
+			array, isArray := value.([]any)
+			if err != nil || !isArray || index < 0 || index >= len(array) {
+				return nil, false
+			}
+			value, rest = array[index], rest[end+1:]
+		default:
+			return nil, false
+		}
+	}
+	return value, true
+}
+
+// jsonContains reports whether needle is contained in haystack the way MySQL's
+// JSON_CONTAINS defines it: a scalar equals a scalar, an array holds each
+// element of an array candidate, and an object holds every member of an object
+// candidate.
+func jsonContains(haystack, needle any) bool {
+	switch want := needle.(type) {
+	case []any:
+		for _, item := range want {
+			if !jsonContains(haystack, item) {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		have, ok := haystack.(map[string]any)
+		if !ok {
+			return false
+		}
+		for k, v := range want {
+			member, has := have[k]
+			if !has || !jsonEqual(member, v) {
+				return false
+			}
+		}
+		return true
+	}
+	if items, ok := haystack.([]any); ok {
+		for _, item := range items {
+			if jsonEqual(item, needle) {
+				return true
+			}
+		}
+		return false
+	}
+	return jsonEqual(haystack, needle)
+}
+
+// jsonEqual compares two decoded documents by their written form, which is
+// enough for the containment question and keeps a number's spelling out of it.
+func jsonEqual(a, b any) bool {
+	left, err1 := json.Marshal(a)
+	right, err2 := json.Marshal(b)
+	return err1 == nil && err2 == nil && string(left) == string(right)
 }
 
 // fnMySQLStrcmp implements STRCMP(a, b): -1, 0 or 1 as a sorts before, with or

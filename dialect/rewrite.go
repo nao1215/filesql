@@ -27,6 +27,8 @@ const (
 	kwAll           = "ALL"
 	kwUnion         = "UNION"
 	kwOffset        = "OFFSET"
+	kwInterval      = "INTERVAL"
+	sqliteJSONArray = "json_group_array"
 	fnNameFormat    = "FORMAT"
 	typeNameString  = "STRING"
 	patTZH          = "TZH"
@@ -1069,6 +1071,33 @@ func sqliteCollationFor(name string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// singleArgumentCoalescePass unwraps COALESCE(x), which MySQL and PostgreSQL
+// both accept and SQLite refuses: its own COALESCE needs two arguments, so a
+// call with one failed with "wrong number of arguments" for a value that is
+// simply x. A list of fallbacks built by a client is the shape that reaches
+// this, and it fails only on the one-element case.
+func singleArgumentCoalescePass(tokens []token) []token {
+	return walkCallsSimple(tokens, func(toks []token, nameIdx, open, closeIdx int) ([]token, bool) {
+		if !isWordEq(toks[nameIdx], "COALESCE") || callArity(toks, open, closeIdx) != 1 {
+			return nil, false
+		}
+		return parenthesize(trimSpaceTokens(toks[open+1 : closeIdx])), true
+	})
+}
+
+// walkCallsSimple is walkCalls for a rewrite that cannot fail, so a caller does
+// not have to thread an error it never returns.
+func walkCallsSimple(tokens []token, rewrite func([]token, int, int, int) ([]token, bool)) []token {
+	out, err := walkCalls(tokens, func(toks []token, nameIdx, open, closeIdx int) ([]token, bool, error) {
+		repl, handled := rewrite(toks, nameIdx, open, closeIdx)
+		return repl, handled, nil
+	})
+	if err != nil {
+		return tokens
+	}
+	return out
 }
 
 // isUnknownPass rewrites the SQL-standard truth-value predicate "x IS UNKNOWN"

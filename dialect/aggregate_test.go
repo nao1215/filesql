@@ -374,3 +374,72 @@ func TestExpandedAggregatesRefuseAWindow(t *testing.T) {
 		}
 	}
 }
+
+// TestPostgreSQLAggregatesAddedForTheEngine covers the aggregates that had no
+// translation at all. The three numbers were read from PostgreSQL 17.10 over
+// the same three rows.
+func TestPostgreSQLAggregatesAddedForTheEngine(t *testing.T) {
+	db := castDB(t)
+
+	const rows = ` FROM (SELECT 1 AS a, 2 AS b UNION ALL SELECT 2, 4 UNION ALL SELECT 3, 7) t`
+
+	for _, tt := range []struct{ query, want string }{
+		{query: `SELECT corr(a, b)` + rows, want: "0.9933992677987828"},
+		{query: `SELECT covar_pop(a, b)` + rows, want: "1.6666666666666667"},
+		{query: `SELECT covar_samp(a, b)` + rows, want: "2.5"},
+		// SQLite writes the same array without the spaces PostgreSQL puts
+		// after its commas.
+		{query: `SELECT json_agg(a)` + rows, want: "[1,2,3]"},
+		{query: `SELECT jsonb_agg(a)` + rows, want: "[1,2,3]"},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			got, err := runDialect(t, db, PostgreSQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if !got.Valid || got.String != tt.want {
+				t.Errorf("%s = %v, want %q", tt.query, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestAggregatesWithoutASQLiteFormAreRejected keeps the aggregates that SQLite
+// cannot express refused by name. Reaching SQLite they were reported as unknown
+// functions, which tells the caller a name they did write does not exist rather
+// than that the aggregate has no SQLite form.
+func TestAggregatesWithoutASQLiteFormAreRejected(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		dialect Dialect
+		query   string
+	}{
+		{dialect: MySQL, query: "SELECT JSON_OBJECTAGG(b, a) FROM t"},
+		{dialect: MySQL, query: "SELECT BIT_AND(a) FROM t"},
+		{dialect: MySQL, query: "SELECT BIT_OR(a) FROM t"},
+		{dialect: MySQL, query: "SELECT BIT_XOR(a) FROM t"},
+		{dialect: PostgreSQL, query: "SELECT json_object_agg(b, a) FROM t"},
+		{dialect: PostgreSQL, query: "SELECT jsonb_object_agg(b, a) FROM t"},
+		{dialect: PostgreSQL, query: "SELECT array_agg(a) FROM t"},
+		{dialect: PostgreSQL, query: "SELECT bit_and(a) FROM t"},
+		{dialect: PostgreSQL, query: "SELECT regr_slope(a, b) FROM t"},
+		{dialect: PostgreSQL, query: "SELECT regr_r2(a, b) FROM t"},
+		{dialect: PostgreSQL, query: "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY a) FROM t"},
+		{dialect: PostgreSQL, query: "SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY a) FROM t"},
+		{dialect: PostgreSQL, query: "SELECT mode() WITHIN GROUP (ORDER BY a) FROM t"},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := Translate(tt.dialect, tt.query); !errors.Is(err, ErrUnsupportedSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.query, err)
+			}
+		})
+	}
+
+	// A column of one of those names is not the aggregate.
+	if _, err := Translate(PostgreSQL, "SELECT mode FROM t"); err != nil {
+		t.Errorf("a column named mode must translate: %v", err)
+	}
+}

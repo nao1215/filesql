@@ -178,3 +178,38 @@ func TestGoogleSQLDatePartsBigQueryDefines(t *testing.T) {
 		}
 	}
 }
+
+// TestGoogleSQLArrayFunctionsAreRejected puts the scalar functions whose result
+// is an array on the same footing as the array literal and the array
+// aggregates: refused by name rather than reported as an unknown function.
+// FARM_FINGERPRINT is refused for a different reason, that the exact bits of
+// the hash are the point of calling it.
+func TestGoogleSQLArrayFunctionsAreRejected(t *testing.T) {
+	t.Parallel()
+
+	for _, query := range []string{
+		"SELECT SPLIT('a,b', ',')",
+		"SELECT ARRAY_LENGTH(SPLIT('a,b', ','))",
+		"SELECT TO_CODE_POINTS('abc')",
+		"SELECT REGEXP_EXTRACT_ALL('a1b2', '[0-9]')",
+		"SELECT GENERATE_ARRAY(1, 5)",
+		"SELECT GENERATE_DATE_ARRAY('2024-01-01', '2024-01-05')",
+		"SELECT ARRAY_CONCAT([1], [2])",
+		"SELECT ARRAY_REVERSE([1, 2])",
+		"SELECT JSON_EXTRACT_ARRAY('[1,2]')",
+		"SELECT FARM_FINGERPRINT('x')",
+	} {
+		t.Run(query, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := Translate(GoogleSQL, query); !errors.Is(err, ErrUnsupportedSyntax) {
+				t.Errorf("Translate(GoogleSQL, %q) error = %v, want ErrUnsupportedSyntax", query, err)
+			}
+		})
+	}
+
+	// A column of one of those names is not the call.
+	if _, err := Translate(GoogleSQL, "SELECT split, farm_fingerprint FROM t"); err != nil {
+		t.Errorf("columns named split and farm_fingerprint must translate: %v", err)
+	}
+}

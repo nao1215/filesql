@@ -29,7 +29,7 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-5_interval_operator_expression_amount", "SELECT d + INTERVAL n + 1 DAY FROM t", "SELECT interval_add(d, n + 1, 'day') FROM t"},
 		// INTERVAL(n, a, b) is an ordinary MySQL function that has nothing to do
 		// with dates; a "(" after the word is what tells the two apart.
-		{"M-5_interval_function_is_left_alone", "SELECT INTERVAL(3, 1, 2, 5)", "SELECT INTERVAL(3, 1, 2, 5)"},
+		{"M-5_interval_function_is_a_call", "SELECT INTERVAL(3, 1, 2, 5)", `SELECT mysql_interval(3, 1, 2, 5) AS "INTERVAL(3, 1, 2, 5)"`},
 
 		// MySQL CONCAT is NULL-propagating: any NULL argument makes the whole
 		// result NULL. SQLite's own concat() treats NULL as an empty string, so the

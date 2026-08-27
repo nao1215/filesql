@@ -132,6 +132,8 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
+	// COALESCE(x) is x. SQLite's own needs two arguments and refused the call.
+	out = singleArgumentCoalescePass(out)
 	out = isUnknownPass(out)
 	out, err = quantifiedComparisonPass(out)
 	if err != nil {
@@ -235,6 +237,21 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 	case "JSON_TYPE":
 		// SQLite's json_type answers in lower case; MySQL's in upper.
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_json_type", mysqlCallPass)
+	case "TIMESTAMP":
+		// SQLite has no TIMESTAMP function, so the call failed by name.
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_timestamp", mysqlCallPass)
+	case "CEIL", "CEILING", "FLOOR", "SIGN", "SQRT", "EXP", "LN", "LOG2", "LOG10":
+		// SQLite's own answer NULL for a string, where MySQL reads the number
+		// at the front of it, and answer an infinity for an overflow.
+		return rewriteRenameCall(tokens, open, closeIdx, mysqlMathHelper(tokens[nameIdx].text), mysqlCallPass)
+	case kwInterval:
+		// INTERVAL(n, ...) is a bucket lookup, told from the INTERVAL keyword
+		// of a date literal the way MOD the call is told from MOD the operator:
+		// by the parenthesis following the name with nothing between.
+		if open != nameIdx+1 {
+			return nil, false, nil
+		}
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_interval", mysqlCallPass)
 	case fnNameReplace:
 		// SQLite answers the subject for an empty search string without looking
 		// at the replacement, so a NULL replacement did not reach the result.
@@ -548,6 +565,16 @@ func rejectHexLiteralPass(tokens []token) error {
 		}
 	}
 	return nil
+}
+
+// mysqlMathHelper is the helper name for a one-argument numeric function.
+// CEILING is MySQL's other spelling of CEIL and reaches the same one.
+func mysqlMathHelper(name string) string {
+	lower := strings.ToLower(name)
+	if lower == "ceiling" {
+		lower = "ceil"
+	}
+	return "mysql_" + lower
 }
 
 // mysqlLiteralPrefixPass handles the words MySQL allows immediately before a

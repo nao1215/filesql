@@ -274,6 +274,12 @@ func registerAll() error {
 		"postgresql_divide":         {2, divideSQLite},
 		"postgresql_mod":            {2, moduloDialect(true)},
 		"postgresql_format":         {-1, fnPostgresFormat},
+		"scale":                     {1, fnPostgresScale},
+		"min_scale":                 {1, fnPostgresMinScale},
+		"trim_scale":                {1, fnPostgresTrimScale},
+		"age":                       {2, fnPostgresAge},
+		"pg_typeof":                 {1, fnPostgresTypeOf},
+		"postgresql_json_typeof":    {1, fnPostgresJSONTypeOf},
 		fnNamePostgresDateAdd:       {2, fnPostgresDateAdd},
 		"postgresql_date_diff":      {2, fnPostgresDateDiff},
 		"googlesql_cast":            {2, dialectCast(GoogleSQL, false)},
@@ -343,6 +349,9 @@ func registerAll() error {
 		"curtime":                 {0, fnCurtime},
 		"unix_timestamp":          {-1, fnUnixTimestamp},
 		"mysql_time_of_day":       {1, fnMySQLTimeOfDay},
+		"to_seconds":              {1, fnMySQLToSeconds},
+		"mysql_timestamp":         {-1, fnMySQLTimestamp},
+		"convert_tz":              {3, fnMySQLConvertTZ},
 		"mysql_interval_compound": {4, fnMySQLIntervalCompound},
 		"current_datetime":        {-1, fnCurrentDatetime},
 	}
@@ -453,7 +462,7 @@ func toString(v driver.Value) (string, bool) {
 	case int64:
 		return strconv.FormatInt(x, 10), true
 	case float64:
-		return strconv.FormatFloat(x, 'g', -1, 64), true
+		return formatFloatText(x), true
 	case bool:
 		if x {
 			return "1", true
@@ -1137,6 +1146,16 @@ func datePartValue(unit string, tm time.Time) (driver.Value, error) {
 		// count is always whole; answering it as an integer also keeps SQLite
 		// from spelling a large REAL in exponent form.
 		return int64(math.Round(secondsWithFraction(tm) * 1000000)), nil
+	case "julian":
+		// The Julian date, which is a fixed offset from the day count SQLite
+		// already computes: 2440588 is 1970-01-01. A timestamp away from
+		// midnight carries the fraction of the day with it, so noon on a day is
+		// that day's number and a half.
+		day := dayNumber(tm) + 2440588
+		if fraction := secondsWithFraction(tm) + float64(tm.Hour()*3600+tm.Minute()*60); fraction != 0 {
+			return float64(day) + fraction/86400, nil
+		}
+		return day, nil
 	case "epoch":
 		return tm.Unix(), nil
 	case "date":
@@ -2015,6 +2034,35 @@ func fnMySQLChar(args []driver.Value) (driver.Value, error) {
 	return out, nil
 }
 
+// fnPostgresJSONTypeOf implements json_typeof and jsonb_typeof. SQLite's
+// json_type is the same walk over the document, but it answers with SQLite's
+// own type names -- text, integer, real, true, false -- where PostgreSQL
+// answers with the names JSON itself defines.
+func fnPostgresJSONTypeOf(args []driver.Value) (driver.Value, error) {
+	s, ok := toString(args[0])
+	if !ok {
+		return nil, nil //nolint:nilnil // a NULL document has no type
+	}
+	value, err := decodeWholeJSON(s)
+	if err != nil {
+		return nil, err
+	}
+	switch value.(type) {
+	case nil:
+		return "null", nil
+	case bool:
+		return "boolean", nil
+	case json.Number:
+		return "number", nil
+	case string:
+		return "string", nil
+	case []any:
+		return "array", nil
+	default:
+		return "object", nil
+	}
+}
+
 // fnMySQLJSONType implements MySQL's JSON_TYPE, which names the type in upper
 // case where SQLite's json_type answers lower case, so a query comparing the
 // result against the name MySQL's documentation prints matched nothing.
@@ -2023,17 +2071,9 @@ func fnMySQLJSONType(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
-	var value any
-	decoder := json.NewDecoder(strings.NewReader(s))
-	decoder.UseNumber()
-	if err := decoder.Decode(&value); err != nil {
-		return nil, fmt.Errorf("dialect: JSON_TYPE: %q is not valid JSON", s)
-	}
-	// A document is the whole of the value, so anything after the first one
-	// makes the input invalid: "1 2" is not the integer 1 with something
-	// ignored after it.
-	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("dialect: JSON_TYPE: %q is not valid JSON", s)
+	value, err := decodeWholeJSON(s)
+	if err != nil {
+		return nil, err
 	}
 	switch v := value.(type) {
 	case nil:
@@ -2052,8 +2092,24 @@ func fnMySQLJSONType(args []driver.Value) (driver.Value, error) {
 		}
 		return "DOUBLE", nil
 	default:
-		return nil, fmt.Errorf("dialect: JSON_TYPE: %q is not valid JSON", s)
+		return nil, fmt.Errorf("dialect: %q is not valid JSON", s)
 	}
+}
+
+// decodeWholeJSON decodes one JSON document, with the whole of the text having
+// to be that document: "1 2" is not the integer 1 with something ignored after
+// it. Numbers stay json.Number so the caller can tell an integer from a double.
+func decodeWholeJSON(text string) (any, error) {
+	var value any
+	decoder := json.NewDecoder(strings.NewReader(text))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return nil, fmt.Errorf("dialect: %q is not valid JSON", text)
+	}
+	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("dialect: %q is not valid JSON", text)
+	}
+	return value, nil
 }
 
 // fnSpace implements MySQL SPACE(n).
@@ -3892,6 +3948,20 @@ func parseTime(s string) (time.Time, bool) {
 }
 
 // toStringTime coerces a value to a time, accepting both strings and time.Time.
+// formatFloatText renders a REAL as text the way the engines do. Go's shortest
+// 'g' switches to exponent notation once the decimal exponent reaches 6, so a
+// plain 1234567.5 came out of every function that reads its argument as text as
+// "1.2345675e+06", where SQLite's own concatenation, MySQL and PostgreSQL all
+// write 1234567.5. Between 1e-4 and 1e15 the three agree on plain notation and
+// the value is written plainly; outside that band they disagree with each other
+// and the shortest form is kept.
+func formatFloatText(f float64) string {
+	if abs := math.Abs(f); abs != 0 && (abs < 1e-4 || abs >= 1e15) {
+		return strconv.FormatFloat(f, 'g', -1, 64)
+	}
+	return strconv.FormatFloat(f, 'f', -1, 64)
+}
+
 func toStringTime(v driver.Value) (time.Time, bool) {
 	if tm, ok := v.(time.Time); ok {
 		return tm, true

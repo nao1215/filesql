@@ -35,6 +35,10 @@ type aggregateRule struct {
 	// distinctCount marks an approximate distinct count, which SQLite answers
 	// exactly.
 	distinctCount bool
+	// reject names why the aggregate has no SQLite form. A rule that carries
+	// one refuses the call rather than rewriting it, so the caller reads about
+	// the aggregate they wrote instead of about a missing function.
+	reject string
 }
 
 // The aggregate names shared by more than one dialect's table.
@@ -53,30 +57,78 @@ const (
 	sqliteMax = "MAX"
 )
 
+// The reasons the aggregates without a SQLite form are refused. Each says what
+// SQLite would do differently rather than only that it cannot, so a caller can
+// see whether the difference matters to them.
+const (
+	objectAggReject = "SQLite's json_group_object keeps a repeated key where this dialect keeps the last value for it; " +
+		"write json_group_object with a grouped subquery if the repetition is not possible in your data"
+	bitAggregateReject = "SQLite has no bitwise aggregate; " +
+		"write the fold with a recursive CTE, or compute it outside the query"
+	regressionReject = "SQLite has no regression aggregate; " +
+		"write it from sum(x), sum(y), sum(x*y), sum(x*x) and count(*), which it does have"
+	orderedSetReject = "an ordered-set aggregate takes a WITHIN GROUP clause, which SQLite has no form for; " +
+		"a median can be written with LIMIT and OFFSET over an ordered subquery"
+)
+
 // aggregateRules maps every spelling to its rule. The defaults differ by
 // dialect: a bare STDDEV or VARIANCE is the sample estimator in PostgreSQL and
 // GoogleSQL but the population one in MySQL, where STD is the usual spelling.
 var aggregateRules = map[Dialect]map[string]aggregateRule{
 	MySQL: {
-		aggAnyValue:   {rename: sqliteMin},
-		"STD":         {stat: true, root: true},
-		aggStddev:     {stat: true, root: true},
-		aggStddevPop:  {stat: true, root: true},
-		aggStddevSamp: {stat: true, root: true, sample: true},
-		aggVariance:   {stat: true},
-		aggVarPop:     {stat: true},
-		aggVarSamp:    {stat: true, sample: true},
+		aggAnyValue: {rename: sqliteMin},
+		// SQLite builds the same documents under its own names.
+		"JSON_ARRAYAGG":  {rename: sqliteJSONArray},
+		"JSON_OBJECTAGG": {reject: objectAggReject},
+		"BIT_AND":        {reject: bitAggregateReject},
+		"BIT_OR":         {reject: bitAggregateReject},
+		"BIT_XOR":        {reject: bitAggregateReject},
+		"STD":            {stat: true, root: true},
+		aggStddev:        {stat: true, root: true},
+		aggStddevPop:     {stat: true, root: true},
+		aggStddevSamp:    {stat: true, root: true, sample: true},
+		aggVariance:      {stat: true},
+		aggVarPop:        {stat: true},
+		aggVarSamp:       {stat: true, sample: true},
 	},
 	PostgreSQL: {
-		"BOOL_AND":    {rename: sqliteMin},
-		"BOOL_OR":     {rename: sqliteMax},
-		"EVERY":       {rename: sqliteMin},
-		aggStddev:     {stat: true, root: true, sample: true},
-		aggStddevPop:  {stat: true, root: true},
-		aggStddevSamp: {stat: true, root: true, sample: true},
-		aggVariance:   {stat: true, sample: true},
-		aggVarPop:     {stat: true},
-		aggVarSamp:    {stat: true, sample: true},
+		"BOOL_AND": {rename: sqliteMin},
+		"BOOL_OR":  {rename: sqliteMax},
+		"EVERY":    {rename: sqliteMin},
+		// SQLite builds the same documents under its own names.
+		"JSON_AGG":         {rename: sqliteJSONArray},
+		"JSONB_AGG":        {rename: sqliteJSONArray},
+		"JSON_OBJECT_AGG":  {reject: objectAggReject},
+		"JSONB_OBJECT_AGG": {reject: objectAggReject},
+		"ARRAY_AGG":        {reject: "its result is an array and SQLite has no array type"},
+		"BIT_AND":          {reject: bitAggregateReject},
+		"BIT_OR":           {reject: bitAggregateReject},
+		"BIT_XOR":          {reject: bitAggregateReject},
+		// The correlation family, which GoogleSQL already reaches by the same
+		// rules.
+		// The regression family and the ordered-set aggregates, neither of
+		// which SQLite can express.
+		"REGR_SLOPE":      {reject: regressionReject},
+		"REGR_INTERCEPT":  {reject: regressionReject},
+		"REGR_R2":         {reject: regressionReject},
+		"REGR_COUNT":      {reject: regressionReject},
+		"REGR_AVGX":       {reject: regressionReject},
+		"REGR_AVGY":       {reject: regressionReject},
+		"REGR_SXX":        {reject: regressionReject},
+		"REGR_SYY":        {reject: regressionReject},
+		"REGR_SXY":        {reject: regressionReject},
+		"PERCENTILE_CONT": {reject: orderedSetReject},
+		"PERCENTILE_DISC": {reject: orderedSetReject},
+		"MODE":            {reject: orderedSetReject},
+		"CORR":            {pair: true, correlation: true},
+		"COVAR_POP":       {pair: true},
+		"COVAR_SAMP":      {pair: true, sample: true},
+		aggStddev:         {stat: true, root: true, sample: true},
+		aggStddevPop:      {stat: true, root: true},
+		aggStddevSamp:     {stat: true, root: true, sample: true},
+		aggVariance:       {stat: true, sample: true},
+		aggVarPop:         {stat: true},
+		aggVarSamp:        {stat: true, sample: true},
 	},
 	GoogleSQL: {
 		"LOGICAL_AND": {rename: sqliteMin},
@@ -125,6 +177,9 @@ func aggregatePass(tokens []token, d Dialect) ([]token, error) {
 		closeIdx := matchParen(tokens, open)
 		if closeIdx < 0 {
 			return nil, fmt.Errorf("%w: unbalanced parentheses after %s", ErrInvalidSyntax, t.text)
+		}
+		if rule.reject != "" {
+			return nil, fmt.Errorf("%w: %s is not supported: %s", ErrUnsupportedSyntax, strings.ToUpper(t.text), rule.reject)
 		}
 		// A rule that expands into an expression rather than a rename cannot
 		// carry a window: the result is several aggregates inside arithmetic,
