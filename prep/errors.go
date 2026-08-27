@@ -128,6 +128,10 @@ type ProcessResult struct {
 	Columns []string
 	// OriginalFormat is the file type that was processed
 	OriginalFormat parser.FileType
+	// OutputFormat is the format of the bytes the returned reader serves.
+	// CSV, TSV and LTSV keep their format; JSON becomes JSONL; XLSX and
+	// Parquet become CSV.
+	OutputFormat parser.FileType
 
 	// validRecords holds rows that passed validation when validRowsOnly is
 	// enabled. This is an internal field used between processRecords and

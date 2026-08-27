@@ -655,15 +655,11 @@ func TestProcessor_Process_JSON(t *testing.T) {
 	}
 
 	// Verify output format is JSONL
-	s, ok := reader.(Stream)
-	if !ok {
-		t.Fatal("reader does not implement Stream")
+	if result.OutputFormat != parser.JSONL {
+		t.Errorf("OutputFormat = %v, want JSONL", result.OutputFormat)
 	}
-	if s.Format() != parser.JSONL {
-		t.Errorf("Format() = %v, want JSONL", s.Format())
-	}
-	if s.OriginalFormat() != parser.JSON {
-		t.Errorf("OriginalFormat() = %v, want JSON", s.OriginalFormat())
+	if result.OriginalFormat != parser.JSON {
+		t.Errorf("OriginalFormat = %v, want JSON", result.OriginalFormat)
 	}
 }
 
@@ -697,12 +693,8 @@ func TestProcessor_Process_JSONL(t *testing.T) {
 	}
 
 	// Verify output format is JSONL
-	s, ok := reader.(Stream)
-	if !ok {
-		t.Fatal("reader does not implement Stream")
-	}
-	if s.Format() != parser.JSONL {
-		t.Errorf("Format() = %v, want JSONL", s.Format())
+	if result.OutputFormat != parser.JSONL {
+		t.Errorf("OutputFormat = %v, want JSONL", result.OutputFormat)
 	}
 }
 
@@ -3054,4 +3046,36 @@ func TestUniqueColumn(t *testing.T) {
 			t.Errorf("Column = %q, want %q", ve.Column, "email")
 		}
 	})
+}
+
+func TestProcessor_outputFormat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		fileType   parser.FileType
+		wantFormat parser.FileType
+	}{
+		{"CSV", parser.CSV, parser.CSV},
+		{"CSV gzip returns CSV", parser.CSVGZ, parser.CSV},
+		{"TSV bzip2 returns TSV", parser.TSVBZ2, parser.TSV},
+		{"LTSV", parser.LTSV, parser.LTSV},
+		{"XLSX outputs as CSV", parser.XLSXZSTD, parser.CSV},
+		{"Parquet outputs as CSV", parser.Parquet, parser.CSV},
+		{"JSON outputs as JSONL", parser.JSON, parser.JSONL},
+		{"JSONL", parser.JSONL, parser.JSONL},
+		{"JSON gzip outputs as JSONL", parser.JSONGZ, parser.JSONL},
+		{"JSONL zstd outputs as JSONL", parser.JSONLZSTD, parser.JSONL},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := NewProcessor(tt.fileType).outputFormat()
+			if got != tt.wantFormat {
+				t.Errorf("outputFormat() = %v, want %v", got, tt.wantFormat)
+			}
+		})
+	}
 }

@@ -411,8 +411,8 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Refuse a duplicate in a key column | `ExampleProcessor_Process_uniqueColumn` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Validate DNS label, color and numeric currency columns | `ExampleProcessor_Process_labelColorAndNumericCode` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Read preprocessing error details | `ExampleProcessResult_PrepErrors` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Check output and original formats | `ExampleStream_Format`, `ExampleStream_OriginalFormat` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Rewind and reread the processed stream | `Example_streamLen`, `Example_streamSeek` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Check output and original formats | `ExampleProcessResult_OutputFormat` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Rewind and reread the processed stream | `Example_streamSeek` | [prep/example_api_test.go](./prep/example_api_test.go) |
 
 #### parser
 
