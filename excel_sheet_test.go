@@ -1756,3 +1756,152 @@ func TestBlankSheetCellInNumericColumnIsNull(t *testing.T) {
 		t.Errorf("missing=%d present=%d max=%d, want 1, 2 and 30", missing, present, largest)
 	}
 }
+
+// TestSaveKeepsACellsStorageType pins the last thing a save that changed
+// nothing could take from a workbook: what the cell is, as opposed to what it
+// shows.
+//
+// A cell holds a number, a boolean or a string, and a sheet is worth more as
+// numbers than as the text of them -- a spreadsheet sums a number column and
+// leaves a text one alone. Every cell here is written back as text, so what
+// keeps the sheet's types is the check that a cell whose value did not change
+// is not written at all. That check compared two spellings: the loaded value of
+// a REAL column carries a decimal point the sheet never showed, so every whole
+// number in such a column was rewritten as text, and a large one was rewritten
+// as the exponent spelling of itself.
+func TestSaveKeepsACellsStorageType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// values are the cells of the sheet's one column, below its header.
+		values []any
+		// styled says the cells wear a number format that renders a date, which
+		// is what a boolean or a string has to survive being formatted as.
+		styled bool
+	}{
+		{name: "whole numbers", values: []any{1.0, 2.0, 3.0}},
+		{name: "one decimal makes the column REAL", values: []any{1.5, 2.0, 3.0}},
+		{name: "a large integer beside a decimal", values: []any{1.5, 1e15}},
+		{name: "text", values: []any{"a", "b"}},
+		{name: "booleans", values: []any{true, false}},
+		{name: "booleans formatted as dates", values: []any{true, false}, styled: true},
+		{name: "text formatted as dates", values: []any{"45001", "45002"}, styled: true},
+		{name: "numbers formatted as dates", values: []any{45000.0, 45001.0}, styled: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "book.xlsx")
+			book := excelize.NewFile()
+			require.NoError(t, book.SetCellValue(defaultSheetName, "A1", "v"))
+			for i, value := range tt.values {
+				cell, err := excelize.CoordinatesToCellName(1, i+2)
+				require.NoError(t, err)
+				require.NoError(t, book.SetCellValue(defaultSheetName, cell, value))
+			}
+			if tt.styled {
+				style, err := book.NewStyle(&excelize.Style{NumFmt: 14}) // m/d/yy
+				require.NoError(t, err)
+				last, err := excelize.CoordinatesToCellName(1, len(tt.values)+1)
+				require.NoError(t, err)
+				require.NoError(t, book.SetCellStyle(defaultSheetName, "A2", last, style))
+			}
+			require.NoError(t, book.SaveAs(path))
+			require.NoError(t, book.Close())
+
+			before := storedCells(t, path, len(tt.values))
+
+			// Nothing is edited: the database is opened and closed, and the
+			// close is what saves.
+			require.NoError(t, autoSaveOverwrite(t, []string{path}))
+
+			assert.Equal(t, before, storedCells(t, path, len(tt.values)),
+				"a save that changed nothing leaves every cell as it found it")
+		})
+	}
+
+	t.Run("an edited number is written", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "book.xlsx")
+		book := excelize.NewFile()
+		require.NoError(t, book.SetCellValue(defaultSheetName, "A1", "v"))
+		require.NoError(t, book.SetCellValue(defaultSheetName, "A2", 1.5))
+		require.NoError(t, book.SetCellValue(defaultSheetName, "A3", 2.0))
+		require.NoError(t, book.SaveAs(path))
+		require.NoError(t, book.Close())
+
+		require.NoError(t, autoSaveOverwrite(t, []string{path},
+			"UPDATE book_Sheet1 SET v = 7 WHERE v = 2.0"))
+
+		after, err := excelize.OpenFile(path)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, after.Close()) }()
+
+		shown, err := after.GetCellValue(defaultSheetName, "A3")
+		require.NoError(t, err)
+		assert.Equal(t, "7.0", shown, "a cell whose value the caller changed holds what they set")
+	})
+}
+
+// TestSameCellValue covers where the line between the two comparisons falls.
+// Two spellings of one number are one value, so a cell holding it is untouched;
+// text is compared as text, because a value this package keeps as text is not a
+// number here either.
+func TestSameCellValue(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		held  string
+		value string
+		want  bool
+	}{
+		{name: "the same text", held: "abc", value: "abc", want: true},
+		{name: "a whole number a REAL column spells with a point", held: "2", value: "2.0", want: true},
+		{name: "a large integer against its exponent spelling", held: "1000000000000000", value: "1e+15", want: true},
+		{name: "zero against a signed zero", held: "0", value: "-0.0", want: true},
+		{name: "trailing zeros of a decimal", held: "1.50", value: "1.5", want: true},
+		{name: "a different number", held: "2", value: "3", want: false},
+		{name: "a zero-padded code is text, and not the number", held: "007", value: "7", want: false},
+		{name: "a literal past int64 is text, and not the number", held: "11040320260000000000", value: "1.104032026e+19", want: false},
+		{name: "a padded number is text", held: " 5 ", value: "5", want: false},
+		{name: "an empty cell against a number", held: "", value: "0", want: false},
+		{name: "text against a number", held: "TRUE", value: "1", want: false},
+		{name: "both empty", held: "", value: "", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, sameCellValue(tt.held, tt.value))
+		})
+	}
+}
+
+// storedCells is what each cell of the sheet's one column holds: its storage
+// type and the value stored under it, which is what a rewrite would change even
+// when the cell goes on showing the same thing.
+func storedCells(t *testing.T, path string, rows int) []string {
+	t.Helper()
+
+	book, err := excelize.OpenFile(path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, book.Close()) }()
+
+	held := make([]string, 0, rows)
+	for i := range rows {
+		cell, err := excelize.CoordinatesToCellName(1, i+2)
+		require.NoError(t, err)
+		kind, err := book.GetCellType(defaultSheetName, cell)
+		require.NoError(t, err)
+		stored, err := book.GetCellValue(defaultSheetName, cell, excelize.Options{RawCellValue: true})
+		require.NoError(t, err)
+		held = append(held, fmt.Sprintf("%s=%v/%s", cell, kind, stored))
+	}
+	return held
+}
