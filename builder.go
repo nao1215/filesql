@@ -429,6 +429,23 @@ func (b *DBBuilder) WithDialect(d dialect.Dialect) *DBBuilder {
 	return b
 }
 
+// refuseDialectForCallerDatabase refuses a load into a database this package
+// did not open while a dialect is configured.
+//
+// A dialect is a connector wrapping the database Open returns, so it cannot
+// reach one the caller opened -- the same reason auto-save cannot, and auto-save
+// has always been refused here by name. Accepting it and doing nothing left the
+// caller's first dialect query answering SQLite's tokenizer error about a token
+// they had not written, with no sentinel to match and no mention of the option
+// that was dropped.
+func (b *DBBuilder) refuseDialectForCallerDatabase(method string) error {
+	if !b.usesDialectTranslation() {
+		return nil
+	}
+	return fmt.Errorf("%w: WithDialect(%s) is not supported by %s; the dialect applies to the database Open and OpenReadOnly return, and the caller owns this one",
+		ErrDatabaseOperation, b.sqlDialect, method)
+}
+
 // usesDialectTranslation reports whether a non-SQLite dialect is configured.
 func (b *DBBuilder) usesDialectTranslation() bool {
 	return b.sqlDialect != "" && b.sqlDialect != dialect.SQLite
@@ -704,7 +721,9 @@ func (b *DBBuilder) OpenReadOnly(ctx context.Context) (*sql.DB, error) {
 //     reading is tried again.
 //
 // Auto-save is not supported because the caller owns the database lifecycle;
-// configuring it returns an error.
+// configuring it returns an error. WithDialect is refused for the same reason:
+// the dialect is a connector wrapping the database Open returns, so it cannot
+// reach one the caller opened.
 //
 // Example:
 //
@@ -720,6 +739,9 @@ func (b *DBBuilder) LoadInto(ctx context.Context, db *sql.DB) error {
 	}
 	if b.autoSaveConfig != nil && b.autoSaveConfig.enabled {
 		return fmt.Errorf("%w: auto-save is not supported by LoadInto; the caller owns the database lifecycle", ErrDatabaseOperation)
+	}
+	if err := b.refuseDialectForCallerDatabase("LoadInto"); err != nil {
+		return err
 	}
 
 	if err := b.build(ctx); err != nil {
@@ -753,12 +775,18 @@ func (b *DBBuilder) LoadInto(ctx context.Context, db *sql.DB) error {
 // nothing of the failed input remains. Begin tx with a context of its own to
 // keep it usable after such a failure, since canceling the context it was begun
 // with ends the whole transaction.
+//
+// Auto-save and WithDialect are refused, as they are by LoadInto: both apply to
+// the database Open returns, and the caller owns this one.
 func (b *DBBuilder) LoadIntoTx(ctx context.Context, tx *sql.Tx) error {
 	if tx == nil {
 		return fmt.Errorf("%w: target transaction is nil", ErrDatabaseOperation)
 	}
 	if b.autoSaveConfig != nil && b.autoSaveConfig.enabled {
 		return fmt.Errorf("%w: auto-save is not supported by LoadIntoTx", ErrDatabaseOperation)
+	}
+	if err := b.refuseDialectForCallerDatabase("LoadIntoTx"); err != nil {
+		return err
 	}
 	if err := b.build(ctx); err != nil {
 		return err

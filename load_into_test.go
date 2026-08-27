@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nao1215/filesql/dialect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xuri/excelize/v2"
@@ -343,6 +344,59 @@ func TestLoadInto_Errors(t *testing.T) {
 		require.NoError(t, err)
 		err = builder.LoadInto(context.Background(), db)
 		require.Error(t, err)
+	})
+}
+
+// TestLoadIntoRefusesADialect holds the rule that an option which cannot reach
+// the caller's database is refused rather than dropped. The dialect is a
+// connector wrapping the database this package returns, so it cannot wrap one
+// the caller opened -- the same reason auto-save cannot, and auto-save has
+// always been refused by name. The dialect was accepted and then did nothing,
+// and the caller's first dialect query answered SQLite's tokenizer error about a
+// token they had not written.
+func TestLoadIntoRefusesADialect(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	src := filepath.Join("testdata", "sample.csv")
+
+	for _, d := range []dialect.Dialect{dialect.MySQL, dialect.PostgreSQL, dialect.GoogleSQL} {
+		t.Run(string(d), func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("LoadInto", func(t *testing.T) {
+				db := newCallerDB(t)
+				err := NewBuilder().AddPath(src).WithDialect(d).LoadInto(ctx, db)
+
+				require.Error(t, err)
+				assert.ErrorIs(t, err, ErrDatabaseOperation)
+				assert.Contains(t, err.Error(), string(d), "the error must name the dialect")
+				assert.Empty(t, listTables(t, db), "nothing may be loaded into the caller's database")
+			})
+
+			t.Run("LoadIntoTx", func(t *testing.T) {
+				db := newCallerDB(t)
+				tx, err := db.BeginTx(ctx, nil)
+				require.NoError(t, err)
+				defer func() { _ = tx.Rollback() }()
+
+				err = NewBuilder().AddPath(src).WithDialect(d).LoadIntoTx(ctx, tx)
+
+				require.Error(t, err)
+				assert.ErrorIs(t, err, ErrDatabaseOperation)
+				assert.Contains(t, err.Error(), string(d))
+			})
+		})
+	}
+
+	t.Run("SQLite asks for no translation and loads", func(t *testing.T) {
+		t.Parallel()
+
+		for _, d := range []dialect.Dialect{"", dialect.SQLite} {
+			db := newCallerDB(t)
+			require.NoError(t, NewBuilder().AddPath(src).WithDialect(d).LoadInto(ctx, db))
+			assert.NotEmpty(t, listTables(t, db))
+		}
 	})
 }
 

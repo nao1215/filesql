@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `LoadInto` and `LoadIntoTx` refuse a dialect rather than dropping it ([#714](https://github.com/nao1215/filesql/issues/714)). `WithDialect` was accepted by both and then did nothing, because a dialect is a connector wrapping the database `Open` returns and cannot reach one the caller opened -- so a caller who configured PostgreSQL and loaded into their own database met SQLite's tokenizer error on their first `::` cast, about a token they had not written, with no sentinel of this package's to match and no mention of the option that had been dropped. Auto-save cannot reach that database either and has always been refused by name; the dialect is now refused the same way, carrying `ErrDatabaseOperation` and naming the dialect and the method. A builder configured with `dialect.SQLite`, or with no dialect at all, asks for no translation and is unaffected.
+
 ### Documentation
 
 - The Memory and Streaming section says what an XLSX load costs and what the number depends on ([#712](https://github.com/nao1215/filesql/issues/712)). It read "Budget from the file size" and gave XLSX as "about 24 times the file", which is one workbook measured at one size: a workbook is read whole, so what it costs follows the cells it holds rather than the size of the file, which is a zip and shrinks with how well the sheet compressed. The same 200,000 rows cost about 26 times the file as a wide workbook and about 37 times as a workbook of one column, and against the file alone the ratio reaches 135 times for a small one-column workbook -- so a caller sizing a server for uploads from the old figure was wrong by more than a factor of four on a shape that is not unusual. The section now says to budget an XLSX load from the cells, and to bound the decompressed size before loading a workbook that came from somewhere else, since nothing here does. `TestLoadMemoryFootprintByFormat` grew a one-column workbook beside the wide one, so both shapes are printed by the command the section names and neither can drift alone.
