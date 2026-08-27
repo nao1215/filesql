@@ -13,8 +13,8 @@ import (
 // TableSet contains a flat TableData representing all fields of a Fedwire message.
 // This structure preserves the complete message while enabling flat table-based queries.
 type TableSet struct {
-	// Message contains all flattened fields of the FEDWireMessage (1 row)
-	Message *parser.TableData
+	// message contains all flattened fields of the FEDWireMessage (1 row)
+	message *parser.TableData
 
 	// original stores the original wire file for reconstruction
 	original *wire.File
@@ -42,7 +42,7 @@ func fromFile(file *wire.File) *TableSet {
 		columnTypes[i] = parser.TypeText
 	}
 
-	ts.Message = &parser.TableData{
+	ts.message = &parser.TableData{
 		Headers:     headers,
 		Records:     [][]string{record},
 		ColumnTypes: columnTypes,
@@ -65,8 +65,8 @@ func (ts *TableSet) toFile() (*wire.File, error) {
 
 	newFile := deepCopyFile(ts.original)
 
-	if ts.Message != nil && len(ts.Message.Records) > 0 {
-		applyModifications(&newFile.FEDWireMessage, ts.Message)
+	if ts.message != nil && len(ts.message.Records) > 0 {
+		applyModifications(&newFile.FEDWireMessage, ts.message)
 		// Every edit is in place, so this is where a value too wide for the
 		// record it goes into can be caught — before anything is written.
 		if err := validateFieldWidths(&newFile.FEDWireMessage); err != nil {
@@ -125,7 +125,7 @@ func (ts *TableSet) WriteToWriter(writer io.Writer) error {
 	if err := w.Write(wireFile); err != nil {
 		return err
 	}
-	if err := verifyWritten(ts.Message, staged.Bytes()); err != nil {
+	if err := verifyWritten(ts.message, staged.Bytes()); err != nil {
 		return err
 	}
 	_, err = writer.Write(staged.Bytes())
@@ -146,7 +146,7 @@ func verifyWritten(want *parser.TableData, staged []byte) error {
 	if err != nil {
 		return fmt.Errorf("the written message cannot be read back: %w", err)
 	}
-	got := back.Message
+	got := back.message
 	if got == nil || len(got.Records) == 0 {
 		return errors.New("the written message came back with no rows")
 	}
@@ -168,14 +168,14 @@ func (ts *TableSet) GetMessageTable() *parser.TableData {
 	if ts == nil {
 		return nil
 	}
-	return ts.Message
+	return ts.message
 }
 
 // UpdateMessageFromTableData updates the internal message data from modified TableData.
 // Call this after making SQL modifications to prepare for WriteToWriter.
 func (ts *TableSet) UpdateMessageFromTableData(td *parser.TableData) {
 	if ts != nil {
-		ts.Message = td
+		ts.message = td
 	}
 }
 
