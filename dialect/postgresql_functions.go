@@ -206,6 +206,173 @@ func fnPostgresFormat(args []driver.Value) (driver.Value, error) {
 	return b.String(), nil
 }
 
+// fnPostgresScale implements scale(numeric): the number of digits after the
+// decimal point. SQLite has no numeric type to read a declared scale from, so
+// this reads the value as it is written, which is what a column loaded from a
+// file holds. A decimal literal in the query has already lost its trailing
+// zeros by the time it arrives -- scale(1.230) answers 2 here and 3 in
+// PostgreSQL -- which is the same ceiling the README states for column types.
+func fnPostgresScale(args []driver.Value) (driver.Value, error) {
+	s, ok := decimalText(args[0])
+	if !ok {
+		return nil, nil
+	}
+	_, fraction, found := strings.Cut(s, ".")
+	if !found {
+		return int64(0), nil
+	}
+	return int64(len(fraction)), nil
+}
+
+// fnPostgresMinScale implements min_scale(numeric): the scale left after the
+// trailing zeros are dropped.
+func fnPostgresMinScale(args []driver.Value) (driver.Value, error) {
+	s, ok := decimalText(args[0])
+	if !ok {
+		return nil, nil
+	}
+	_, fraction, found := strings.Cut(s, ".")
+	if !found {
+		return int64(0), nil
+	}
+	return int64(len(strings.TrimRight(fraction, "0"))), nil
+}
+
+// fnPostgresTrimScale implements trim_scale(numeric): the value with its
+// trailing zeros dropped.
+func fnPostgresTrimScale(args []driver.Value) (driver.Value, error) {
+	s, ok := decimalText(args[0])
+	if !ok {
+		return nil, nil
+	}
+	if !strings.Contains(s, ".") {
+		return s, nil
+	}
+	trimmed := strings.TrimRight(s, "0")
+	return strings.TrimSuffix(trimmed, "."), nil
+}
+
+// decimalText is the value written as a decimal, which is what the scale
+// functions measure. A float is written without an exponent so its digits can
+// be counted; a value that is not a number at all reports false.
+func decimalText(v driver.Value) (string, bool) {
+	switch x := v.(type) {
+	case nil:
+		return "", false
+	case int64:
+		return strconv.FormatInt(x, 10), true
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64), true
+	}
+	s, ok := toString(v)
+	if !ok {
+		return "", false
+	}
+	if _, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(s), true
+}
+
+// fnPostgresAge implements age(a, b): the interval between two timestamps,
+// written the way PostgreSQL writes one -- whole years, months and days, with a
+// time of day when there is one.
+func fnPostgresAge(args []driver.Value) (driver.Value, error) {
+	later, ok1 := toStringTime(args[0])
+	earlier, ok2 := toStringTime(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	negative := later.Before(earlier)
+	if negative {
+		later, earlier = earlier, later
+	}
+	years, months, days, seconds := calendarDifference(earlier, later)
+	out := formatPostgresInterval(years, months, days, seconds, negative)
+	return out, nil
+}
+
+// calendarDifference is the years, months, days and seconds from earlier to
+// later, borrowing from the next field up the way a calendar subtraction does.
+func calendarDifference(earlier, later time.Time) (years, months, days, seconds int) {
+	years = later.Year() - earlier.Year()
+	months = int(later.Month()) - int(earlier.Month())
+	days = later.Day() - earlier.Day()
+	seconds = later.Hour()*3600 + later.Minute()*60 + later.Second() -
+		(earlier.Hour()*3600 + earlier.Minute()*60 + earlier.Second())
+	if seconds < 0 {
+		seconds += 86400
+		days--
+	}
+	for days < 0 {
+		months--
+		// The borrowed days come from the earlier timestamp's own month, not
+		// from the month before the later one. PostgreSQL borrows that way, and
+		// the two differ whenever the months have different lengths: from
+		// 2024-01-31 to 2024-03-01 it is a month and a day, because January has
+		// 31 days, while borrowing February's 29 leaves a negative day count.
+		days += daysInMonth(earlier.Year(), earlier.Month())
+	}
+	if months < 0 {
+		months += 12
+		years--
+	}
+	return years, months, days, seconds
+}
+
+// formatPostgresInterval writes an interval the way PostgreSQL prints one.
+func formatPostgresInterval(years, months, days, seconds int, negative bool) string {
+	sign := ""
+	signed := func(n int) int { return n }
+	if negative {
+		sign = "-"
+		signed = func(n int) int { return -n }
+	}
+	parts := make([]string, 0, 4)
+	if years != 0 {
+		parts = append(parts, fmt.Sprintf("%s%d year%s", sign, years, plural(signed(years))))
+	}
+	if months != 0 {
+		parts = append(parts, fmt.Sprintf("%s%d mon%s", sign, months, plural(signed(months))))
+	}
+	if days != 0 {
+		parts = append(parts, fmt.Sprintf("%s%d day%s", sign, days, plural(signed(days))))
+	}
+	if seconds != 0 {
+		parts = append(parts, fmt.Sprintf("%s%02d:%02d:%02d", sign, seconds/3600, seconds%3600/60, seconds%60))
+	}
+	if len(parts) == 0 {
+		return "00:00:00"
+	}
+	return strings.Join(parts, " ")
+}
+
+// plural follows PostgreSQL, which pluralizes on the signed value: a lone year
+// prints as "1 year" and its negation as "-1 years".
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// fnPostgresTypeOf implements pg_typeof(x) over the storage classes SQLite has,
+// named the way PostgreSQL names the type it would have used.
+func fnPostgresTypeOf(args []driver.Value) (driver.Value, error) {
+	switch args[0].(type) {
+	case nil:
+		return "unknown", nil
+	case int64:
+		return "bigint", nil
+	case float64:
+		return "double precision", nil
+	case []byte:
+		return "bytea", nil
+	default:
+		return "text", nil
+	}
+}
+
 // fnPostgresRandom implements PostgreSQL's random(), which answers a double in
 // [0, 1). SQLite's own random() answers a pseudo-random signed 64-bit integer,
 // so every idiom built on the PostgreSQL meaning broke silently: "WHERE

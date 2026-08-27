@@ -321,3 +321,71 @@ func TestQuoteIdentQuotesAReservedWord(t *testing.T) {
 		})
 	}
 }
+
+// TestPostgreSQLFunctionsAddedForTheEngine covers the functions that had no
+// translation at all and reached SQLite as "no such function". Every want was
+// read from PostgreSQL 17.10. The edges are the point: age borrows the days of
+// the earlier timestamp's month rather than of the month before the later one,
+// and the two differ whenever those months have different lengths.
+func TestPostgreSQLFunctionsAddedForTheEngine(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	for _, tt := range []struct {
+		query string
+		want  string
+	}{
+		{query: `SELECT min_scale(1.230)`, want: "2"},
+		{query: `SELECT min_scale(1.000)`, want: "0"},
+		{query: `SELECT min_scale(0.00)`, want: "0"},
+		{query: `SELECT trim_scale(1.230)`, want: "1.23"},
+		{query: `SELECT trim_scale(1.000)`, want: "1"},
+		{query: `SELECT scale(1)`, want: "0"},
+
+		{query: `SELECT age(timestamp '2024-03-05', timestamp '2023-01-31')`, want: "1 year 1 mon 5 days"},
+		{query: `SELECT age(timestamp '2024-03-05', timestamp '2024-03-05')`, want: "00:00:00"},
+		{query: `SELECT age(timestamp '2023-01-31', timestamp '2024-03-05')`, want: "-1 years -1 mons -5 days"},
+		{query: `SELECT age(timestamp '2024-03-05 12:30:00', timestamp '2024-03-04 13:45:10')`, want: "22:44:50"},
+		{query: `SELECT age(timestamp '2024-03-04 13:45:10', timestamp '2024-03-05 12:30:00')`, want: "-22:44:50"},
+		{query: `SELECT age(timestamp '2024-03-31', timestamp '2024-02-29')`, want: "1 mon 2 days"},
+		{query: `SELECT age(timestamp '2024-01-31', timestamp '2023-12-31')`, want: "1 mon"},
+		{query: `SELECT age(timestamp '2025-01-01', timestamp '2024-01-01')`, want: "1 year"},
+		{query: `SELECT age(timestamp '2024-03-01', timestamp '2024-01-31')`, want: "1 mon 1 day"},
+
+		// json_typeof answers with the names JSON defines, not with SQLite's
+		// storage class names.
+		{query: `SELECT jsonb_typeof('{"a":1}')`, want: "object"},
+		{query: `SELECT jsonb_typeof('[1]')`, want: "array"},
+		{query: `SELECT jsonb_typeof('null')`, want: "null"},
+		{query: `SELECT json_typeof('"x"')`, want: "string"},
+		{query: `SELECT json_typeof('1')`, want: "number"},
+		{query: `SELECT json_typeof('1.5')`, want: "number"},
+		{query: `SELECT json_typeof('true')`, want: "boolean"},
+		{query: `SELECT json_typeof('false')`, want: "boolean"},
+
+		{query: `SELECT pg_typeof('a')`, want: "text"},
+		{query: `SELECT pg_typeof(1.5)`, want: "double precision"},
+		{query: `SELECT pg_typeof(NULL)`, want: "unknown"},
+
+		// A julian date carries the fraction of the day with it.
+		{query: `SELECT extract(julian from timestamp '2024-03-05')`, want: "2460375"},
+		{query: `SELECT extract(julian from date '1970-01-01')`, want: "2440588"},
+		{query: `SELECT extract(julian from date '2000-01-01')`, want: "2451545"},
+		// Cast to text so the assertion reads the value the way SQLite writes
+		// it rather than the way database/sql prints a float64.
+		{query: `SELECT CAST(extract(julian from timestamp '2024-03-05 12:00:00') AS TEXT)`, want: "2460375.5"},
+		{query: `SELECT CAST(extract(julian from timestamp '2024-03-05 06:00:00') AS TEXT)`, want: "2460375.25"},
+
+		{query: `SELECT COALESCE('a')`, want: "a"},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			got, err := runDialect(t, db, PostgreSQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if !got.Valid || got.String != tt.want {
+				t.Errorf("%s = %v, want %q", tt.query, got, tt.want)
+			}
+		})
+	}
+}

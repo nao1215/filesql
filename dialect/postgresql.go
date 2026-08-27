@@ -138,6 +138,8 @@ func rewritePostgreSQL(tokens []token) ([]token, error) {
 	// changes the rows a window function reads as well as the order they come
 	// back in.
 	out = pgNullsOrderPass(out)
+	// COALESCE(x) is x. SQLite's own needs two arguments and refused the call.
+	out = singleArgumentCoalescePass(out)
 	out = isUnknownPass(out)
 	out, err = quantifiedComparisonPass(out)
 	if err != nil {
@@ -240,6 +242,11 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 		// SQLite's random() answers a pseudo-random 64-bit integer where
 		// PostgreSQL's answers a double in [0, 1).
 		return rewriteRenameCall(tokens, open, closeIdx, "postgresql_random", pgCallPass)
+	case "JSONB_TYPEOF", "JSON_TYPEOF":
+		// SQLite's json_type answers with SQLite's own type names -- text,
+		// integer, real, true, false -- where PostgreSQL answers with the names
+		// JSON itself defines: string, number, boolean.
+		return rewriteRenameCall(tokens, open, closeIdx, "postgresql_json_typeof", pgCallPass)
 	case fnNameReplace:
 		// SQLite answers the subject for an empty search string without looking
 		// at the replacement, so a NULL replacement did not reach the result.

@@ -528,3 +528,96 @@ func TestMySQLComparisonFoldsCaseLikeItsCollation(t *testing.T) {
 		t.Error("JSON_TYPE('bad'): want an error, got none")
 	}
 }
+
+// TestMySQLFunctionsAddedForTheEngine covers the functions that had no
+// translation at all and reached SQLite as "no such function", together with
+// the text a REAL is written as. Every want was read from MySQL 8.4.11.
+func TestMySQLFunctionsAddedForTheEngine(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	for _, tt := range []struct {
+		query    string
+		want     string
+		wantNull bool
+		wantErr  bool
+	}{
+		// MAKE_SET reads the bits of the first argument from the low end and
+		// keeps the strings they select, skipping a NULL among them.
+		{query: `SELECT MAKE_SET(1|4,'a','b','c')`, want: "a,c"},
+		{query: `SELECT MAKE_SET(0,'a','b')`, want: ""},
+		{query: `SELECT MAKE_SET(NULL,'a')`, wantNull: true},
+		{query: `SELECT MAKE_SET(7,'a',NULL,'c')`, want: "a,c"},
+		{query: `SELECT MAKE_SET(-1,'a','b')`, want: "a,b"},
+
+		// EXPORT_SET writes 64 bits when it is not told how many.
+		{query: `SELECT EXPORT_SET(5,'Y','N',',',4)`, want: "Y,N,Y,N"},
+		{query: `SELECT EXPORT_SET(6,'1','0','',10)`, want: "0110000000"},
+		{query: `SELECT EXPORT_SET(5,'Y','N',',',0)`, want: ""},
+		{query: `SELECT LENGTH(EXPORT_SET(5,'Y','N',''))`, want: "64"},
+
+		// INTERVAL answers the position of the first argument among the rest,
+		// which are read as an ascending list.
+		{query: `SELECT INTERVAL(23,1,15,17,30,44,200)`, want: "3"},
+		{query: `SELECT INTERVAL(10,1,10,100,1000)`, want: "2"},
+		{query: `SELECT INTERVAL(NULL,1,2)`, want: "-1"},
+		{query: `SELECT INTERVAL(-1,1,2)`, want: "0"},
+
+		{query: `SELECT JSON_LENGTH('[1,2,3]')`, want: "3"},
+		{query: `SELECT JSON_LENGTH('{"a":1,"b":2}')`, want: "2"},
+		{query: `SELECT JSON_LENGTH('{"a":{"b":1,"c":2}}','$.a')`, want: "2"},
+		{query: `SELECT JSON_LENGTH('"x"')`, want: "1"},
+		{query: `SELECT JSON_LENGTH('not json')`, wantErr: true},
+		{query: `SELECT JSON_CONTAINS('[1,2,3]','2')`, want: "1"},
+		{query: `SELECT JSON_CONTAINS('{"a":1}','1','$.a')`, want: "1"},
+		{query: `SELECT JSON_CONTAINS('[1,2]','[1,2,3]')`, want: "0"},
+		{query: `SELECT JSON_CONTAINS('{"a":1,"b":2}','{"a":1}')`, want: "1"},
+
+		// The numeric functions read the leading number of a string rather than
+		// answering NULL, and raise nothing for a value out of range.
+		{query: `SELECT CEIL('2024-02-29')`, want: "2024"},
+		{query: `SELECT CEILING(-1.5)`, want: "-1"},
+		{query: `SELECT FLOOR('2.9abc')`, want: "2"},
+		{query: `SELECT SIGN('-3x')`, want: "-1"},
+		{query: `SELECT SQRT('4a')`, want: "2"},
+		{query: `SELECT EXP(1)`, want: "2.718281828459045"},
+		{query: `SELECT LN(0)`, wantNull: true},
+		{query: `SELECT LN(-1)`, wantNull: true},
+		{query: `SELECT LOG2(8)`, want: "3"},
+		{query: `SELECT LOG10('100')`, want: "2"},
+
+		{query: `SELECT COALESCE('a')`, want: "a"},
+
+		// A REAL is written plainly, not in exponent notation. The failures
+		// differ in kind, so each family is here: padding truncated the wrong
+		// string, a position moved, and a substring returned characters the
+		// number does not contain.
+		{query: `SELECT CONCAT(1234567.5,'x')`, want: "1234567.5x"},
+		{query: `SELECT UPPER(1234567.5)`, want: "1234567.5"},
+		{query: `SELECT LPAD(1234567.5,12,'0')`, want: "0001234567.5"},
+		{query: `SELECT REVERSE(1234567.5)`, want: "5.7654321"},
+		{query: `SELECT SUBSTRING(1234567.5,1,3)`, want: "123"},
+		{query: `SELECT REPLACE(1234567.5,'5','9')`, want: "1234967.9"},
+		{query: `SELECT LOCATE('5',1234567.5)`, want: "5"},
+		{query: `SELECT CAST(1234567.5 AS CHAR)`, want: "1234567.5"},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			got, err := runDialect(t, db, MySQL, tt.query)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("%s: expected an error, got %q", tt.query, got.String)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.Valid == tt.wantNull {
+				t.Fatalf("%s returned valid=%v (%q), want null=%v", tt.query, got.Valid, got.String, tt.wantNull)
+			}
+			if !tt.wantNull && got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}

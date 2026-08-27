@@ -302,6 +302,91 @@ func padMicroseconds(digits string) string {
 	return digits + strings.Repeat("0", microsecondDigits-len(digits))
 }
 
+// fnMySQLToSeconds implements TO_SECONDS(d): the seconds from year 0 to the
+// given datetime, which is the seconds counterpart of TO_DAYS.
+func fnMySQLToSeconds(args []driver.Value) (driver.Value, error) {
+	tm, ok := toStringTime(args[0])
+	if !ok {
+		return nil, nil
+	}
+	// MySQL counts from the start of year 0, which puts the Unix epoch at day
+	// 719528 -- the number TO_DAYS answers for it. The two disagree by one day
+	// for a date in year 0 itself, where MySQL's own documentation says
+	// TO_DAYS is unreliable: it warns against any date before 1582, when the
+	// Gregorian calendar began.
+	const daysToUnixEpoch = 719528
+	days := dayNumber(tm) + daysToUnixEpoch
+	return days*86400 + int64(tm.Hour())*3600 + int64(tm.Minute())*60 + int64(tm.Second()), nil
+}
+
+// fnMySQLTimestamp implements TIMESTAMP(expr[, time]): the value read as a
+// datetime, with the second argument added to it as a time of day when there is
+// one. SQLite has no function of that name, so the call failed by name.
+func fnMySQLTimestamp(args []driver.Value) (driver.Value, error) {
+	if len(args) < 1 || len(args) > 2 {
+		return nil, fmt.Errorf("dialect: TIMESTAMP expects 1 or 2 arguments, got %d", len(args))
+	}
+	tm, ok := toStringTime(args[0])
+	if !ok {
+		return nil, nil
+	}
+	if len(args) == 1 {
+		return formatDateTimeValue(tm), nil
+	}
+	micros, ok := toMySQLTime(args[1])
+	if !ok {
+		return nil, nil
+	}
+	return formatDateTimeValue(tm.Add(time.Duration(micros) * time.Microsecond)), nil
+}
+
+// fnMySQLConvertTZ implements CONVERT_TZ(dt, from, to) for the fixed offsets
+// this package can read. A named zone needs a zone database, which nothing here
+// carries, and answers NULL as MySQL itself does when its zone tables are not
+// loaded.
+func fnMySQLConvertTZ(args []driver.Value) (driver.Value, error) {
+	tm, ok := toStringTime(args[0])
+	if !ok {
+		return nil, nil
+	}
+	from, ok1 := toString(args[1])
+	to, ok2 := toString(args[2])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	fromOffset, ok1 := fixedZoneOffset(from)
+	toOffset, ok2 := fixedZoneOffset(to)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	return formatDateTimeValue(tm.Add(time.Duration(toOffset-fromOffset) * time.Second)), nil
+}
+
+// fixedZoneOffset reads a "+09:00" or "-05:30" zone as seconds east of UTC,
+// reporting false for a named zone.
+func fixedZoneOffset(zone string) (int, bool) {
+	zone = strings.TrimSpace(zone)
+	// The one named zone this package can answer for, since every value it
+	// holds is read as UTC already.
+	switch strings.ToUpper(zone) {
+	case "UTC", "GMT", "Z", "+00:00", "-00:00":
+		return 0, true
+	}
+	if len(zone) != 6 || (zone[0] != '+' && zone[0] != '-') || zone[3] != ':' {
+		return 0, false
+	}
+	hours, err1 := strconv.Atoi(zone[1:3])
+	minutes, err2 := strconv.Atoi(zone[4:6])
+	if err1 != nil || err2 != nil || minutes > 59 {
+		return 0, false
+	}
+	seconds := hours*3600 + minutes*60
+	if zone[0] == '-' {
+		seconds = -seconds
+	}
+	return seconds, true
+}
+
 // mysqlCompositeParts maps each of MySQL's compound date-part names to the
 // single fields it runs together, most significant first. EXTRACT of one
 // answers those fields concatenated as a number: EXTRACT(HOUR_MINUTE FROM

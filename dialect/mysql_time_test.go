@@ -461,3 +461,48 @@ func TestMySQLTimeValuesKeepTheirFraction(t *testing.T) {
 		}
 	}
 }
+
+// TestMySQLTimeFunctionsAddedForTheEngine covers the time functions that had no
+// translation at all. Every want was read from MySQL 8.4.11. CONVERT_TZ is
+// limited to fixed offsets because a named zone needs the zone tables MySQL
+// loads, which SQLite has no equivalent of; a named zone answers NULL, which is
+// also what MySQL answers when those tables are not loaded.
+func TestMySQLTimeFunctionsAddedForTheEngine(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	for _, tt := range []struct {
+		query    string
+		want     string
+		wantNull bool
+	}{
+		// TO_SECONDS counts from year 0, so 1970-01-01 is not zero.
+		{query: `SELECT TO_SECONDS('2024-03-05')`, want: "63876816000"},
+		{query: `SELECT TO_SECONDS('1970-01-01 00:00:00')`, want: "62167219200"},
+		{query: `SELECT TO_SECONDS('2024-03-05 01:02:03')`, want: "63876819723"},
+		{query: `SELECT TO_SECONDS('bad')`, wantNull: true},
+
+		{query: `SELECT TIMESTAMP('2024-03-05')`, want: "2024-03-05 00:00:00"},
+		{query: `SELECT TIMESTAMP('2024-03-05 01:02:03.5')`, want: "2024-03-05 01:02:03.5"},
+		{query: `SELECT TIMESTAMP('2024-03-05','01:02:03')`, want: "2024-03-05 01:02:03"},
+
+		{query: `SELECT CONVERT_TZ('2024-03-05 12:00:00','+00:00','+09:00')`, want: "2024-03-05 21:00:00"},
+		{query: `SELECT CONVERT_TZ('2024-03-05 12:00:00','+09:00','+00:00')`, want: "2024-03-05 03:00:00"},
+		{query: `SELECT CONVERT_TZ('2024-03-05 12:00:00','UTC','+05:30')`, want: "2024-03-05 17:30:00"},
+		{query: `SELECT CONVERT_TZ('bad','+00:00','+09:00')`, wantNull: true},
+		{query: `SELECT CONVERT_TZ('2024-03-05 12:00:00','Asia/Tokyo','+00:00')`, wantNull: true},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			got, err := runDialect(t, db, MySQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.Valid == tt.wantNull {
+				t.Fatalf("%s returned valid=%v (%q), want null=%v", tt.query, got.Valid, got.String, tt.wantNull)
+			}
+			if !tt.wantNull && got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}

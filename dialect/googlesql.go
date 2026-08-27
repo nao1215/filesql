@@ -88,6 +88,8 @@ func rewriteGoogleSQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
+	// COALESCE(x) is x. SQLite's own needs two arguments and refused the call.
+	out = singleArgumentCoalescePass(out)
 	return aggregatePass(out, GoogleSQL)
 }
 
@@ -184,6 +186,19 @@ var arrayAggregates = map[string]bool{ //nolint:gochecknoglobals // a fixed tabl
 	"APPROX_TOP_COUNT": true, "APPROX_TOP_SUM": true,
 }
 
+// arrayFunctions are the scalar functions whose result is an array. They were
+// left to reach SQLite, where they failed as "no such function" -- telling the
+// caller a name they did write does not exist, rather than that the construct
+// has no SQLite form, which is what the array literal and the array aggregates
+// already say.
+var arrayFunctions = map[string]bool{ //nolint:gochecknoglobals // a fixed table read by the unsupported check
+	"SPLIT": true, "TO_CODE_POINTS": true, "REGEXP_EXTRACT_ALL": true,
+	"GENERATE_ARRAY": true, "GENERATE_DATE_ARRAY": true, "GENERATE_TIMESTAMP_ARRAY": true,
+	"ARRAY_CONCAT": true, "ARRAY_REVERSE": true, "JSON_EXTRACT_ARRAY": true,
+	"JSON_QUERY_ARRAY": true, "JSON_VALUE_ARRAY": true, "ARRAY_TRANSFORM": true,
+	"ARRAY_FILTER": true, "ARRAY_ZIP": true, "ARRAY_SLICE": true,
+}
+
 // checkUnsupportedGoogleSQL rejects the G-9 constructs that have no SQLite
 // equivalent.
 func checkUnsupportedGoogleSQL(tokens []token) error {
@@ -207,10 +222,21 @@ func checkUnsupportedGoogleSQL(tokens []token) error {
 		// SQLite as "no such function", telling the caller a name they did
 		// write does not exist rather than that the construct has no SQLite
 		// form -- which is what every other array-shaped construct here says.
-		if arrayAggregates[strings.ToUpper(t.text)] && t.kind == tokWord {
+		if t.kind == tokWord && (arrayAggregates[strings.ToUpper(t.text)] || arrayFunctions[strings.ToUpper(t.text)]) {
 			if open := nextSig(tokens, i+1); open >= 0 && isOpEq(tokens[open], "(") {
 				return fmt.Errorf("%w: %s is not supported; its result is an array and SQLite has no array type",
 					ErrUnsupportedSyntax, strings.ToUpper(t.text))
+			}
+		}
+		// FARM_FINGERPRINT answers a hash whose exact bits are the point of
+		// using it -- a bucket assignment computed here has to agree with one
+		// computed in BigQuery -- and reproducing FarmHash's Fingerprint64 is
+		// not something this package carries, so the name is refused rather
+		// than answered with a different number.
+		if isWordEq(t, "FARM_FINGERPRINT") {
+			if open := nextSig(tokens, i+1); open >= 0 && isOpEq(tokens[open], "(") {
+				return fmt.Errorf("%w: FARM_FINGERPRINT is not supported; its value is a FarmHash fingerprint, and a different hash would not agree with the one BigQuery computes",
+					ErrUnsupportedSyntax)
 			}
 		}
 		// The type parameters spell these out — ARRAY<INT64>, STRUCT<a INT64> —
