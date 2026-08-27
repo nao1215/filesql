@@ -1294,7 +1294,7 @@ func TestAutoSaveOverwriteKeepsTheFileItWasGiven(t *testing.T) {
 			db, err := validated.Open(ctx)
 			require.NoError(t, err)
 
-			tables, err := getSQLiteTableNames(db)
+			tables, err := getSQLiteTableNames(context.Background(), db)
 			require.NoError(t, err)
 			require.Len(t, tables, 1)
 

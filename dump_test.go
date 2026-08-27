@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nao1215/filesql/parser"
 	"github.com/stretchr/testify/assert"
@@ -226,7 +227,7 @@ func TestDumpSQLiteDatabase_Failures(t *testing.T) {
 		_, err := db.ExecContext(context.Background(), `CREATE TABLE t (a TEXT)`)
 		require.NoError(t, err)
 
-		err = dumpSQLiteDatabase(db, filepath.Join(blocked, "out"), NewDumpOptions())
+		err = dumpSQLiteDatabase(context.Background(), db, filepath.Join(blocked, "out"), NewDumpOptions())
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrIOOperation)
 	})
@@ -235,7 +236,7 @@ func TestDumpSQLiteDatabase_Failures(t *testing.T) {
 		t.Parallel()
 
 		outputDir := filepath.Join(t.TempDir(), "out")
-		err := dumpSQLiteDatabase(openTestDB(t), outputDir, NewDumpOptions())
+		err := dumpSQLiteDatabase(context.Background(), openTestDB(t), outputDir, NewDumpOptions())
 		require.ErrorIs(t, err, ErrNoTables)
 		assert.NoDirExists(t, outputDir, "a dump with nothing to write must not leave a directory behind")
 	})
@@ -246,7 +247,7 @@ func TestDumpSQLiteDatabase_Failures(t *testing.T) {
 		db := openTestDB(t)
 		require.NoError(t, db.Close())
 
-		err := dumpSQLiteDatabase(db, filepath.Join(t.TempDir(), "out"), NewDumpOptions())
+		err := dumpSQLiteDatabase(context.Background(), db, filepath.Join(t.TempDir(), "out"), NewDumpOptions())
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrDatabaseOperation)
 	})
@@ -254,7 +255,7 @@ func TestDumpSQLiteDatabase_Failures(t *testing.T) {
 	t.Run("a database with no table", func(t *testing.T) {
 		t.Parallel()
 
-		err := dumpSQLiteDatabase(openTestDB(t), filepath.Join(t.TempDir(), "out"), NewDumpOptions())
+		err := dumpSQLiteDatabase(context.Background(), openTestDB(t), filepath.Join(t.TempDir(), "out"), NewDumpOptions())
 		assert.ErrorIs(t, err, ErrNoTables)
 	})
 }
@@ -286,7 +287,7 @@ func TestDumpSQLiteDatabase_WriteBackSourceIsGone(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, recordFileSource(ctx, db, "payment", filepath.Join(t.TempDir(), tt.source), tt.format))
 
-			err = dumpSQLiteDatabase(db, filepath.Join(t.TempDir(), "out"), NewDumpOptions())
+			err = dumpSQLiteDatabase(context.Background(), db, filepath.Join(t.TempDir(), "out"), NewDumpOptions())
 			require.Error(t, err)
 			assert.ErrorIs(t, err, tt.want)
 		})
@@ -300,7 +301,7 @@ func TestDumpSQLiteTable_UnreadableTable(t *testing.T) {
 	db := openTestDB(t)
 	require.NoError(t, db.Close())
 
-	err := dumpSQLiteTable(db, "users", t.TempDir(), NewDumpOptions())
+	err := dumpSQLiteTable(context.Background(), db, "users", t.TempDir(), NewDumpOptions())
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrDatabaseOperation)
 }
@@ -762,7 +763,7 @@ func TestDumpKeepsTablesThatOnlyLookReserved(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	names, err := getSQLiteTableNames(db)
+	names, err := getSQLiteTableNames(context.Background(), db)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"plain", "sqlite", "sqlite2024", "sqliteish"}, names)
 
@@ -770,7 +771,7 @@ func TestDumpKeepsTablesThatOnlyLookReserved(t *testing.T) {
 	// the filter to the names the database reserves rather than removing it.
 	_, err = db.ExecContext(ctx, `ANALYZE`)
 	require.NoError(t, err)
-	names, err = getSQLiteTableNames(db)
+	names, err = getSQLiteTableNames(context.Background(), db)
 	require.NoError(t, err)
 	assert.NotContains(t, names, "sqlite_stat1")
 
@@ -1497,4 +1498,97 @@ func dirEntriesOrNone(t *testing.T, dir string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// TestDumpDatabaseContext_StopsWhenTheContextEnds pins that an export can be
+// canceled, which is what a download endpoint needs when its client goes away.
+//
+// DumpDatabase takes no context and builds context.Background() for the calls
+// underneath that do take one, so an export ran to completion however long ago
+// the request behind it was abandoned.
+func TestDumpDatabaseContext_StopsWhenTheContextEnds(t *testing.T) {
+	t.Parallel()
+
+	newDB := func(t *testing.T, rows int) *sql.DB {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "big.csv")
+		var body strings.Builder
+		body.WriteString("id,name\n")
+		for i := range rows {
+			fmt.Fprintf(&body, "%d,customer%d\n", i, i)
+		}
+		if err := os.WriteFile(path, []byte(body.String()), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		db, err := OpenContext(context.Background(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		return db
+	}
+
+	t.Run("a context that is already done writes nothing", func(t *testing.T) {
+		t.Parallel()
+
+		db := newDB(t, 100)
+		out := filepath.Join(t.TempDir(), "out")
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := DumpDatabaseContext(ctx, db, out)
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.Canceled)
+		entries, readErr := os.ReadDir(out)
+		if readErr == nil {
+			assert.Empty(t, entries, "a dump that never started left files behind")
+		}
+	})
+
+	t.Run("a deadline that expires during the export leaves no partial file", func(t *testing.T) {
+		t.Parallel()
+
+		db := newDB(t, 200000)
+		out := filepath.Join(t.TempDir(), "out")
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		defer cancel()
+
+		err := DumpDatabaseContext(ctx, db, out)
+		if err == nil {
+			t.Skip("the export beat the deadline on this machine")
+		}
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+		entries, readErr := os.ReadDir(out)
+		if readErr == nil {
+			for _, e := range entries {
+				t.Errorf("a canceled export left %s behind", e.Name())
+			}
+		}
+	})
+
+	t.Run("a live context exports everything", func(t *testing.T) {
+		t.Parallel()
+
+		db := newDB(t, 100)
+		out := filepath.Join(t.TempDir(), "out")
+
+		require.NoError(t, DumpDatabaseContext(context.Background(), db, out))
+
+		body, err := os.ReadFile(filepath.Join(out, "big.csv")) //nolint:gosec // Path built from the test's own temporary directory.
+		require.NoError(t, err)
+		assert.Equal(t, 101, strings.Count(string(body), "\n"))
+	})
+
+	t.Run("DumpDatabase still exports without a context", func(t *testing.T) {
+		t.Parallel()
+
+		db := newDB(t, 100)
+		out := filepath.Join(t.TempDir(), "out")
+
+		require.NoError(t, DumpDatabase(db, out))
+
+		_, err := os.Stat(filepath.Join(out, "big.csv"))
+		assert.NoError(t, err)
+	})
 }

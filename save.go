@@ -834,7 +834,9 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBase
 		sheets = append(sheets, xlsxSheet{
 			name: sheetName,
 			open: func() ([]string, *sql.Rows, error) {
-				columns, declTypes, err := getSQLiteTableColumns(db, tableName)
+				// A save at close has no caller context to honor: Close takes
+				// none, and the rows have to be written before the database goes.
+				columns, declTypes, err := getSQLiteTableColumns(context.Background(), db, tableName)
 				if err != nil {
 					return nil, nil, fmt.Errorf("%w: failed to get columns for table %s: %w", ErrDatabaseOperation, tableName, err)
 				}
@@ -933,7 +935,7 @@ func openWorkbookForOverwrite(path string) (*excelize.File, error) {
 // name another source claims more specifically is that source's, so it is left
 // out here.
 func tablesFromWorkbook(db *sql.DB, baseTableName string, siblingBases []string) ([]string, error) {
-	names, err := getSQLiteTableNames(db)
+	names, err := getSQLiteTableNames(context.Background(), db)
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to get table names: %w", ErrDatabaseOperation, err)
 	}
@@ -974,7 +976,7 @@ func claimedBySibling(tableName, baseTableName string, siblingBases []string) bo
 // DumpDatabase's per-table loop, without the directory and the name derived from
 // it: the destination here is the file the table came from.
 func overwriteTableAtPath(db *sql.DB, path, tableName string, options DumpOptions) error {
-	columns, declTypes, err := getSQLiteTableColumns(db, tableName)
+	columns, declTypes, err := getSQLiteTableColumns(context.Background(), db, tableName)
 	if err != nil {
 		return fmt.Errorf("%w: failed to get columns for table %s: %w", ErrDatabaseOperation, tableName, err)
 	}

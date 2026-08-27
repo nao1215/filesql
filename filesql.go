@@ -116,7 +116,21 @@ func LoadInto(ctx context.Context, db *sql.DB, paths ...string) error {
 //
 // A destination that already exists as a symbolic link is followed: the file it
 // names receives the rows and the link stays a link.
+//
+// It exports without a deadline. DumpDatabaseContext takes one.
 func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
+	return DumpDatabaseContext(context.Background(), db, outputDir, opts...)
+}
+
+// DumpDatabaseContext is DumpDatabase with a context, so an export can be
+// canceled or given a deadline.
+//
+// The export stops at the next table, row or write after the context ends. A
+// table already written stays written, since the tables are separate files and
+// nothing undoes one: what a canceled export leaves is the tables it had
+// finished. The table it was in the middle of leaves nothing, because each file
+// is staged and put in place only once it is whole.
+func DumpDatabaseContext(ctx context.Context, db *sql.DB, outputDir string, opts ...DumpOptions) error {
 	// A nil database is what a caller holds after an error they did not check,
 	// and reaching into it here would take their process down over a mistake this
 	// package answers with an error everywhere else.
@@ -138,21 +152,21 @@ func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
 	// single open connection — which is what LoadInto asks the caller for, since
 	// SQLite's ":memory:" is private per connection. Every query below then waited
 	// for the connection the dump itself was holding, with no error and no timeout.
-	if err := db.PingContext(context.Background()); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		return fmt.Errorf("%w: failed to get connection: %w", ErrDatabaseOperation, err)
 	}
 
 	// Use generic dump functionality for all connections
-	return dumpSQLiteDatabase(db, outputDir, options)
+	return dumpSQLiteDatabase(ctx, db, outputDir, options)
 }
 
 // dumpSQLiteDatabase implements generic dump functionality for SQLite databases
-func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error {
+func dumpSQLiteDatabase(ctx context.Context, db *sql.DB, outputDir string, options DumpOptions) error {
 	// What there is to write is settled before the destination is touched, for
 	// the reason the ping above exists: a dump that writes nothing should leave
 	// nothing, and a database with no tables used to leave an empty directory
 	// behind along with its error.
-	tableNames, err := getSQLiteTableNames(db)
+	tableNames, err := getSQLiteTableNames(ctx, db)
 	if err != nil {
 		return fmt.Errorf("%w: failed to get table names: %w", ErrDatabaseOperation, err)
 	}
@@ -165,8 +179,6 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 	if err := os.MkdirAll(outputDir, 0750); err != nil {
 		return fmt.Errorf("%w: failed to create output directory: %w", ErrIOOperation, err)
 	}
-
-	ctx := context.Background()
 
 	// A table only belongs to an ACH or Fedwire file when the database says it
 	// was loaded from one. The suffix alone is not enough: a caller's own table
@@ -211,7 +223,10 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 		if writeBackTables[tableName] {
 			continue
 		}
-		if err := dumpSQLiteTable(db, tableName, outputDir, options); err != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := dumpSQLiteTable(ctx, db, tableName, outputDir, options); err != nil {
 			return fmt.Errorf("%w: failed to export table %s: %w", ErrIOOperation, tableName, err)
 		}
 	}
@@ -222,8 +237,7 @@ func dumpSQLiteDatabase(db *sql.DB, outputDir string, options DumpOptions) error
 // getSQLiteTableNames retrieves all user-defined table names from SQLite database.
 // Tables this package keeps for its own bookkeeping are excluded, so they appear
 // neither in a dump nor in a listing shown to a caller.
-func getSQLiteTableNames(db *sql.DB) ([]string, error) {
-	ctx := context.Background()
+func getSQLiteTableNames(ctx context.Context, db *sql.DB) ([]string, error) {
 	// Both underscores are escaped: LIKE reads a bare one as a wildcard, so
 	// 'sqlite_%' hid a caller's sqliteish table as readily as SQLite's own
 	// sqlite_stat1, and a dump written from this list left that table out.
@@ -253,15 +267,14 @@ func getSQLiteTableNames(db *sql.DB) ([]string, error) {
 }
 
 // dumpSQLiteTable exports a single table from SQLite database
-func dumpSQLiteTable(db *sql.DB, tableName, outputDir string, options DumpOptions) error {
+func dumpSQLiteTable(ctx context.Context, db *sql.DB, tableName, outputDir string, options DumpOptions) error {
 	// Get table columns
-	columns, declTypes, err := getSQLiteTableColumns(db, tableName)
+	columns, declTypes, err := getSQLiteTableColumns(ctx, db, tableName)
 	if err != nil {
 		return fmt.Errorf("%w: failed to get columns for table %s: %w", ErrDatabaseOperation, tableName, err)
 	}
 
 	// Query all data from table
-	ctx := context.Background()
 	query := fmt.Sprintf("SELECT %s FROM %s", dumpSelectList(columns, declTypes), quoteIdentifier(tableName)) //nolint:gosec // Table and column names are quoted
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
@@ -385,8 +398,7 @@ func dumpSelectList(columns, declTypes []string) string {
 // getSQLiteTableColumns retrieves the column names of a table and the type each
 // was declared with. The declared type is what decides whether the driver hands
 // a value back converted; see dumpSelectList.
-func getSQLiteTableColumns(db *sql.DB, tableName string) (columns, declTypes []string, err error) {
-	ctx := context.Background()
+func getSQLiteTableColumns(ctx context.Context, db *sql.DB, tableName string) (columns, declTypes []string, err error) {
 	query := fmt.Sprintf("PRAGMA table_info(%s)", quoteIdentifier(tableName))
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
