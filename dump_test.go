@@ -488,6 +488,42 @@ func TestDumpLTSVUnrepresentableValues(t *testing.T) {
 		assert.Contains(t, err.Error(), `column "a:b" holds a colon`)
 	})
 
+	t.Run("a column name the reader would trim is refused", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, `CREATE TABLE t (" a" TEXT)`, "INSERT INTO t VALUES ('v')")
+
+		err := DumpDatabase(db, t.TempDir(), ltsv)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		assert.Contains(t, err.Error(), `column " a" would be read back as "a"`)
+	})
+
+	t.Run("a column name LTSV can hold round-trips unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, `CREATE TABLE t ("a b" TEXT, "日付" TEXT, "" TEXT)`, "INSERT INTO t VALUES ('x', 'y', 'z')")
+
+		outDir := t.TempDir()
+		require.NoError(t, DumpDatabase(db, outDir, ltsv))
+
+		reloaded, err := OpenContext(t.Context(), filepath.Join(outDir, "t.ltsv"))
+		require.NoError(t, err)
+		defer reloaded.Close()
+
+		var columns []string
+		rows, err := reloaded.QueryContext(t.Context(), `SELECT name FROM pragma_table_info('t')`)
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var name string
+			require.NoError(t, rows.Scan(&name))
+			columns = append(columns, name)
+		}
+		require.NoError(t, rows.Err())
+		assert.Equal(t, []string{"a b", "日付", ""}, columns)
+	})
+
 	t.Run("a value that survives LTSV round-trips unchanged", func(t *testing.T) {
 		t.Parallel()
 

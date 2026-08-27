@@ -221,6 +221,26 @@ func TestUnrepresentableLabels(t *testing.T) {
 			column:  "a\rb",
 			wantMsg: `an LTSV label cannot contain a carriage return, and column "a\rb" holds a carriage return`,
 		},
+		{
+			name:    "a leading space is not part of the label a reader returns",
+			column:  " a",
+			wantMsg: `an LTSV label cannot begin or end with whitespace, and column " a" would be read back as "a"`,
+		},
+		{
+			name:    "a trailing space is not part of it either",
+			column:  "a ",
+			wantMsg: `an LTSV label cannot begin or end with whitespace, and column "a " would be read back as "a"`,
+		},
+		{
+			name:    "whitespace on both sides",
+			column:  "  a b  ",
+			wantMsg: `an LTSV label cannot begin or end with whitespace, and column "  a b  " would be read back as "a b"`,
+		},
+		{
+			name:    "an ideographic space is whitespace too",
+			column:  "\u3000a",
+			wantMsg: `an LTSV label cannot begin or end with whitespace, and column "\u3000a" would be read back as "a"`,
+		},
 	}
 
 	for _, tt := range tests {

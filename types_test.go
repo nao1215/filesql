@@ -2,6 +2,7 @@ package filesql
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/nao1215/filesql/internal/infer"
 	"github.com/stretchr/testify/assert"
@@ -1841,6 +1843,276 @@ func TestBlankCellInNumericColumnAtEveryChunkSize(t *testing.T) {
 			assert.Equal(t, 2, missing)
 			assert.Equal(t, 3, present)
 			assert.Equal(t, int64(50), largest)
+		})
+	}
+}
+
+// blankCellSource is the same three rows in one file: a numeric column with a
+// blank cell, a text column with one, and a column recognized as a datetime
+// with one. The three together say what the rule applies to and what it must
+// leave alone, so a fix that emptied every blank cell fails here.
+const blankCellSource = "region,amount,label,seen\n" +
+	"north,10,x,2024-01-02\n" +
+	"south,,,\n" +
+	"east,30,z,2024-03-04\n"
+
+// assertBlankCellRule holds the rule over a loaded table: the blank cell in the
+// numeric column is NULL and the blank cells in the two text columns are the
+// empty string.
+func assertBlankCellRule(t *testing.T, db *sql.DB, table string) {
+	t.Helper()
+
+	ctx := t.Context()
+	var missing, present int
+	var largest int64
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT SUM(amount IS NULL), COUNT(amount), MAX(amount) FROM "`+table+`"`).Scan(&missing, &present, &largest))
+	assert.Equal(t, 1, missing, "a blank cell in a numeric column is a missing number")
+	assert.Equal(t, 2, present, "counting a numeric column counts the values it holds")
+	assert.Equal(t, int64(30), largest, "MAX answers the largest value, not the blank")
+
+	for _, column := range []string{"label", "seen"} {
+		var textMissing, textPresent int
+		require.NoError(t, db.QueryRowContext(ctx,
+			`SELECT SUM("`+column+`" IS NULL), COUNT("`+column+`") FROM "`+table+`"`).Scan(&textMissing, &textPresent))
+		assert.Equal(t, 0, textMissing, "a blank cell in %s is the empty string, which is a value", column)
+		assert.Equal(t, 3, textPresent)
+	}
+}
+
+// TestBlankCellInNumericColumnOnEveryLoadRoute pins that how a caller hands
+// filesql its bytes does not change what the file means.
+//
+// An input that can be read again is loaded under the types its first chunk
+// requires; one that cannot -- an io.Reader -- is staged as text and typed once
+// it has all been read. The blank-cell rule was applied where a row is bound to
+// a statement, which the staged path reaches with every column still TEXT, so
+// the rule was left out of it: the same CSV loaded through AddReader held the
+// empty string in a column declared INTEGER, and MAX answered it.
+func TestBlankCellInNumericColumnOnEveryLoadRoute(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	routes := []struct {
+		name string
+		open func(t *testing.T) *sql.DB
+	}{
+		{
+			name: "AddPath",
+			open: func(t *testing.T) *sql.DB {
+				t.Helper()
+				src := filepath.Join(t.TempDir(), "rows.csv")
+				require.NoError(t, os.WriteFile(src, []byte(blankCellSource), 0o600))
+				db, err := OpenContext(ctx, src)
+				require.NoError(t, err)
+				return db
+			},
+		},
+		{
+			name: "AddFS",
+			open: func(t *testing.T) *sql.DB {
+				t.Helper()
+				validated, err := NewBuilder().
+					AddFS(fstest.MapFS{"rows.csv": &fstest.MapFile{Data: []byte(blankCellSource)}}).
+					Build(ctx)
+				require.NoError(t, err)
+				db, err := validated.Open(ctx)
+				require.NoError(t, err)
+				return db
+			},
+		},
+		{
+			name: "AddReader",
+			open: func(t *testing.T) *sql.DB {
+				t.Helper()
+				db, err := openReaderTable(ctx, blankCellSource, FileTypeCSV)
+				require.NoError(t, err)
+				return db
+			},
+		},
+		{
+			name: "AddReader into a caller's database",
+			open: func(t *testing.T) *sql.DB {
+				t.Helper()
+				db, err := sql.Open("sqlite", ":memory:")
+				require.NoError(t, err)
+				validated, err := NewBuilder().
+					AddReader(strings.NewReader(blankCellSource), "rows", FileTypeCSV).
+					Build(ctx)
+				require.NoError(t, err)
+				require.NoError(t, validated.LoadInto(ctx, db))
+				return db
+			},
+		},
+	}
+
+	for _, route := range routes {
+		t.Run(route.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := route.open(t)
+			defer db.Close()
+
+			var declared string
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT type FROM pragma_table_info('rows') WHERE name = 'amount'`).Scan(&declared))
+			assert.Equal(t, sqlTypeInteger, declared)
+
+			assertBlankCellRule(t, db, "rows")
+		})
+	}
+}
+
+// TestBlankCellInNumericColumnFromAReaderInEveryFormat pins the rule over every
+// format a reader can carry, since all of them are staged as text and typed at
+// the end. Parquet is here as the one that already held: it carries a null of
+// its own, so its blank arrives marked rather than as an empty cell, and a fix
+// that rewrote the staged copy for every format had to leave that alone.
+func TestBlankCellInNumericColumnFromAReaderInEveryFormat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		kind FileType
+		// text is the body of a format written as text, and is empty for one
+		// this package writes from a database instead.
+		text string
+		// format and extension name a binary format, written from the same rows.
+		format    OutputFormat
+		extension string
+	}{
+		{name: "csv", kind: FileTypeCSV, text: blankCellSource},
+		{name: "tsv", kind: FileTypeTSV, text: strings.ReplaceAll(blankCellSource, ",", "\t")},
+		{
+			name: "ltsv",
+			kind: FileTypeLTSV,
+			text: "region:north\tamount:10\tlabel:x\tseen:2024-01-02\n" +
+				"region:south\tamount:\tlabel:\tseen:\n" +
+				"region:east\tamount:30\tlabel:z\tseen:2024-03-04\n",
+		},
+		{name: "xlsx", kind: FileTypeXLSX, format: OutputFormatXLSX, extension: ".xlsx"},
+		{name: "parquet", kind: FileTypeParquet, format: OutputFormatParquet, extension: ".parquet"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			body := tt.text
+			if body == "" {
+				body = string(blankCellSourceAs(t, tt.format, tt.extension))
+			}
+
+			db, err := openReaderTable(t.Context(), body, tt.kind)
+			require.NoError(t, err)
+			defer db.Close()
+
+			assertBlankCellRule(t, db, tableOf(t, db))
+		})
+	}
+}
+
+// openReaderTable loads body as one table named "rows" through AddReader, which
+// is the route an input that cannot be read twice takes.
+func openReaderTable(ctx context.Context, body string, kind FileType) (*sql.DB, error) {
+	validated, err := NewBuilder().AddReader(strings.NewReader(body), "rows", kind).Build(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return validated.Open(ctx)
+}
+
+// blankCellSourceAs is blankCellSource written in one of the binary formats, as
+// the bytes a caller would hand to AddReader. Writing it with this package's own
+// dump keeps the fixture out of testdata and out of any one library's API.
+func blankCellSourceAs(t *testing.T, format OutputFormat, extension string) []byte {
+	t.Helper()
+
+	src := filepath.Join(t.TempDir(), "rows.csv")
+	require.NoError(t, os.WriteFile(src, []byte(blankCellSource), 0o600))
+	db, err := OpenContext(t.Context(), src)
+	require.NoError(t, err)
+	defer db.Close()
+
+	out := t.TempDir()
+	require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(format)))
+	body, err := os.ReadFile(filepath.Join(out, "rows"+extension)) //nolint:gosec // Test path from t.TempDir()
+	require.NoError(t, err)
+	return body
+}
+
+// tableOf names the one table a load made, since a workbook names its table
+// after the sheet rather than after the reader.
+func tableOf(t *testing.T, db *sql.DB) string {
+	t.Helper()
+
+	var name string
+	require.NoError(t, db.QueryRowContext(t.Context(),
+		`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '_filesql_%'`).Scan(&name))
+	return name
+}
+
+// TestDatetimeColumnIsStoredAsTheFileWroteIt pins that recognizing a column as
+// a datetime does not rewrite its cells, and says which layouts SQLite's date
+// functions can read.
+//
+// A text cell is stored as the file wrote it here, whatever type the column is
+// recognized as, the way infer.MustStayText keeps a zero-padded code out of a
+// numeric column. That means a column written in a layout SQLite does not read
+// -- 1/2/2024, 2024/01/02, 02.01.2024 -- is recognized as a datetime and is
+// still not something date(d) can answer about, which is what the README has to
+// say rather than promising ISO 8601 for every format. An XLSX date cell is the
+// other half of the same rule and is covered where the workbook reader is
+// tested: it holds a serial number and a number format, so there is no original
+// text to keep and the reader renders it in ISO 8601.
+func TestDatetimeColumnIsStoredAsTheFileWroteIt(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// values are the cells of one column, all of them recognized datetimes.
+		values []string
+		// readableBySQLite is whether date() answers about the stored value.
+		readableBySQLite bool
+	}{
+		{name: "ISO 8601 date", values: []string{"2024-01-02", "2024-03-04"}, readableBySQLite: true},
+		{name: "ISO 8601 date and time with a space", values: []string{"2024-01-02 03:04:05", "2024-03-04 05:06:07"}, readableBySQLite: true},
+		{name: "RFC 3339", values: []string{"2024-01-02T03:04:05Z", "2024-03-04T05:06:07Z"}, readableBySQLite: true},
+		{name: "year first with slashes", values: []string{"2024/01/02", "2024/03/04"}, readableBySQLite: false},
+		{name: "US month first", values: []string{"01/02/2024", "03/04/2024"}, readableBySQLite: false},
+		{name: "US with a 12-hour time", values: []string{"1/2/2024 3:04:05 PM", "3/4/2024 5:06:07 PM"}, readableBySQLite: false},
+		{name: "European day first", values: []string{"02.01.2024", "04.03.2024"}, readableBySQLite: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			body := "d\n" + strings.Join(tt.values, "\n") + "\n"
+			src := filepath.Join(t.TempDir(), "rows.csv")
+			require.NoError(t, os.WriteFile(src, []byte(body), 0o600))
+
+			assert.Equal(t, infer.Datetime, infer.Column(tt.values), "every value here is a recognized datetime")
+
+			db, err := OpenContext(ctx, src)
+			require.NoError(t, err)
+			defer db.Close()
+
+			var declared string
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT type FROM pragma_table_info('rows') WHERE name = 'd'`).Scan(&declared))
+			assert.Equal(t, sqlTypeText, declared, "a datetime column is stored as text")
+
+			var stored string
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT d FROM rows LIMIT 1`).Scan(&stored))
+			assert.Equal(t, tt.values[0], stored, "the cell is the text the file held")
+
+			var readable bool
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT date(d) IS NOT NULL FROM rows LIMIT 1`).Scan(&readable))
+			assert.Equal(t, tt.readableBySQLite, readable,
+				"whether SQLite's date functions read this column follows from the layout the file used")
 		})
 	}
 }

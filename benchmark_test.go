@@ -4,6 +4,7 @@ package filesql
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -53,6 +54,36 @@ func BenchmarkOpenContextParallel(b *testing.B) {
 			}
 		}
 	})
+}
+
+// BenchmarkOpenReader benchmarks loading the same rows through AddReader, which
+// is the path BenchmarkOpenContext does not cover: a reader cannot be read
+// twice, so its rows are staged as text and copied into the typed table once
+// the last one has been read. The copy is where that path's extra cost is, and
+// where the blank-cell rule is applied, so this is what measures both.
+func BenchmarkOpenReader(b *testing.B) {
+	csvPath := filepath.Join("testdata", "benchmark", "customers100000.csv")
+	body, err := os.ReadFile(csvPath) //nolint:gosec // Benchmark fixture in the repository.
+	if err != nil {
+		b.Fatalf("read fixture failed: %v", err)
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		validated, err := NewBuilder().
+			AddReader(bytes.NewReader(body), "customers", FileTypeCSV).
+			Build(context.Background())
+		if err != nil {
+			b.Fatalf("Build failed: %v", err)
+		}
+		db, err := validated.Open(context.Background())
+		if err != nil {
+			b.Fatalf("Open failed: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			b.Fatalf("db.Close failed: %v", err)
+		}
+	}
 }
 
 // BenchmarkOpenWithAutoSave benchmarks opening the same file with auto-save

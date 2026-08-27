@@ -128,7 +128,10 @@ const (
 	columnTypeInteger
 	// columnTypeReal represents REAL column type
 	columnTypeReal
-	// columnTypeDatetime represents datetime stored as TEXT in ISO8601 format
+	// columnTypeDatetime represents a column recognized as a datetime. SQLite
+	// has no such storage class, so it is declared TEXT and holds the cell as
+	// the file wrote it; only an XLSX date cell, which is a serial number
+	// rather than text, is rendered into ISO 8601 on the way in.
 	columnTypeDatetime
 )
 
@@ -151,7 +154,7 @@ func (ct columnType) string() string {
 	case columnTypeReal:
 		return sqlTypeReal
 	case columnTypeDatetime:
-		return sqlTypeText // SQLite stores datetime as TEXT in ISO8601 format
+		return sqlTypeText // SQLite has no datetime storage class
 	default:
 		return sqlTypeText
 	}
