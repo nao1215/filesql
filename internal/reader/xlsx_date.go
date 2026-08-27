@@ -74,6 +74,9 @@ func NormalizeXLSXDates(f *excelize.File, sheet string, rows [][]string) [][]str
 			if !holdsDate {
 				continue
 			}
+			if !storesASerial(f, sheet, axis) {
+				continue
+			}
 			if iso, ok := isoFromSerial(f, sheet, axis, date1904); ok {
 				rows[r][c] = iso
 			}
@@ -151,6 +154,25 @@ func styleHoldsDate(f *excelize.File, styleID int) bool {
 		return true
 	}
 	return style.CustomNumFmt != nil && isDateNumberFormat(*style.CustomNumFmt)
+}
+
+// storesASerial reports whether a cell holds the number a date is stored as,
+// rather than something a date format merely renders.
+//
+// A serial carries no type attribute, or carries "n"; a boolean, a shared or
+// inline string, a formula's string result and an error all say what they are.
+// Reading one of those as a serial invents a date out of whatever its stored
+// text parses as: a boolean is stored as 1, so a TRUE wearing a date format
+// became 1900-01-01, and a text cell spelling 45001 became the day that serial
+// names. The style says a cell would be drawn as a date if it held one, which
+// is not the same as its holding one, and this is the second half of that
+// question. The XML reading of the same sheet has always asked it.
+func storesASerial(f *excelize.File, sheet, axis string) bool {
+	kind, err := f.GetCellType(sheet, axis)
+	if err != nil {
+		return false
+	}
+	return kind == excelize.CellTypeUnset || kind == excelize.CellTypeNumber
 }
 
 // isDateNumberFormat reports whether a custom number format names a calendar
