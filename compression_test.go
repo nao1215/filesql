@@ -933,3 +933,67 @@ func TestCompressionHandler_UnknownType(t *testing.T) {
 		assert.Nil(t, cleanup)
 	})
 }
+
+// TestCompressionFailureSaysItOnce pins what a codec's failure reports.
+//
+// Two layers wrapped a read failure and both added the same sentinel, so a
+// broken compressed file said "compression operation failed" twice and named
+// the path twice in one line. The write side did worse than repeat itself: the
+// handler separates a codec that has no writer from a compressor that failed to
+// start, and the caller wrapped whatever came back in ErrCompression regardless,
+// so asking for an output this build cannot write reported a compression
+// failure and matched both sentinels at once.
+func TestCompressionFailureSaysItOnce(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a broken compressed file names the sentinel and the path once", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "a.csv.gz")
+		require.NoError(t, os.WriteFile(path, []byte("not gzip at all"), 0o600))
+
+		_, err := OpenContext(t.Context(), path)
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrCompression)
+		assert.Equal(t, 1, strings.Count(err.Error(), ErrCompression.Error()),
+			"one failure names its sentinel once")
+		assert.Equal(t, 1, strings.Count(err.Error(), path),
+			"and names the file once, the load having already put it in front")
+	})
+
+	t.Run("a codec with no writer is an unsupported format, not a compression failure", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, "CREATE TABLE t (v TEXT)", "INSERT INTO t VALUES ('x')")
+
+		err := DumpDatabase(db, t.TempDir(), NewDumpOptions().WithCompression(CompressionBZ2))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		assert.NotErrorIs(t, err, ErrCompression,
+			"the handler classified this and the caller must not relabel it")
+	})
+
+	// Which sentinel a broken stream carries is the codec's own business: gzip
+	// and zlib read their header when the reader is made and fail there, while
+	// the rest decode lazily and fail as a parse. What none of them may do is
+	// say one sentinel twice, and there are two layers that could.
+	t.Run("no codec names its sentinel twice", func(t *testing.T) {
+		t.Parallel()
+
+		for _, extension := range []string{".gz", ".bz2", ".xz", ".zst", ".z", ".snappy", ".s2", ".lz4"} {
+			t.Run(extension, func(t *testing.T) {
+				t.Parallel()
+
+				path := filepath.Join(t.TempDir(), "a.csv"+extension)
+				require.NoError(t, os.WriteFile(path, []byte("this is not compressed at all"), 0o600))
+
+				_, err := OpenContext(t.Context(), path)
+				require.Error(t, err)
+				assert.LessOrEqual(t, strings.Count(err.Error(), ErrCompression.Error()), 1,
+					"one failure names its sentinel at most once")
+				assert.LessOrEqual(t, strings.Count(err.Error(), path), 1,
+					"and names the file at most once")
+			})
+		}
+	})
+}

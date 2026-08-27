@@ -445,7 +445,11 @@ func writeSQLiteTableDataTo(w io.Writer, tableName string, columns []string, row
 
 	compressed, closeWriter, err := createCompressedWriter(w, options.Compression)
 	if err != nil {
-		return fmt.Errorf("%w: failed to create writer: %w", ErrCompression, err)
+		// The handler separates a codec with no writer from a compressor that
+		// failed to start, and wrapping both in ErrCompression here undid that:
+		// an output this build cannot write reported a compression failure and
+		// matched both sentinels at once.
+		return err
 	}
 	defer func() {
 		// Closing a compressing writer is what flushes it, so a failure here can

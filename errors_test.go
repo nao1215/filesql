@@ -220,7 +220,10 @@ func TestErrorSentinelsAreReachable(t *testing.T) {
 				defer db.Close()
 				return DumpDatabase(db, filepath.Join(dir, "out"), NewDumpOptions().WithCompression(CompressionBZ2))
 			},
-			wants: []error{ErrIOOperation, ErrCompression, ErrUnsupportedFormat},
+			// Not ErrCompression: a codec with no writer is an unsupported
+			// format, and matching both would leave a caller unable to tell it
+			// from a compressor that failed to start.
+			wants: []error{ErrIOOperation, ErrUnsupportedFormat},
 		},
 		{
 			name: "data that is not the codec it was declared to be",

@@ -440,7 +440,10 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, tx *sql.Tx,
 	reader, closer, err := sp.createDecompressedReader(file, filePath)
 	if err != nil {
 		sp.logger.Error("failed to create decompressed reader", "path", filePath, "error", err)
-		return fmt.Errorf("%w: failed to create decompressed reader for %s: %w", ErrCompression, filePath, err)
+		// The handler has already said which sentinel this is, and the load puts
+		// the path in front of whatever comes back, so adding either here said
+		// both twice in one line.
+		return err
 	}
 	if closer != nil {
 		sp.logger.Debug("compression detected, created decompressed reader", "path", filePath)

@@ -74,7 +74,9 @@ func (p *streamingParser) ProcessInChunks(source io.Reader, processor chunkProce
 
 	decompressed, closeFunc, err := p.createDecompressedReader(source)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to create decompressed reader: %w", ErrCompression, err)
+		// The handler has already said which sentinel this is; adding it again
+		// named one failure twice.
+		return nil, err
 	}
 	defer closeQuietly(closeFunc)
 
