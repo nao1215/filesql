@@ -346,6 +346,8 @@ A blank line is not a record in CSV, in LTSV or in a sheet. In TSV it is one in 
 
 One record is held whole while it is read, so a delimited record, a JSONL line or one element of a JSON array longer than 64 MiB is refused rather than buffered. A file cannot cost more than its own size either way; what the bound is for is a source that is a stream, where a record with no terminator would otherwise ask for everything the sender chooses to send. The JSON refusal lands within one of the decoder's own reads of the bound rather than on it, so an unterminated element reads about twice the bound and not the whole of the stream.
 
+A load stops at the next read after its context ends, and whatever the database said on the way out, the error it returns matches `context.Canceled` or `context.DeadlineExceeded`. A read already blocked inside the source cannot be interrupted from here, so a sender that stops mid-body without closing needs a deadline on the connection instead. `DumpDatabaseContext` stops an export the same way, leaving the tables it had already written and nothing of the one it was in the middle of.
+
 Because the rows end up in that database rather than on the Go heap, the heap is not where the cost is. Loading CSVs of 16 MB through 131 MB, the Go heap stayed flat at about 24 MB — chunked loading holds roughly a chunk, not the file — while resident memory grew by about **2x the file's size**. Budget from the file size, and expect the database, not the parser, to be what occupies it.
 
 Measured on Linux with `go test -tags benchmark -run TestLoadMemoryFootprint -v .`, which prints the table it is drawn from so the figure can be re-derived rather than taken on trust. Note that `B/op` from `go test -benchmem` answers a different question: it counts every byte a load ever allocated, garbage included, so it runs several times higher than the memory actually held.
@@ -389,7 +391,7 @@ A `DBBuilder` is not safe to share across goroutines; the database is. Build one
 
 Changes live in memory until you save them.
 
-- `DumpDatabase` writes the current database out to files when you want an explicit export step.
+- `DumpDatabase` writes the current database out to files when you want an explicit export step. `DumpDatabaseContext` is the same export under a context, so a server can stop one when the request it belongs to ends.
 - `EnableAutoSave` saves when `db.Close()` runs.
 - `EnableAutoSaveOnCommit` saves after each committed transaction, and again when `db.Close()` runs, so a statement executed outside a transaction is not lost.
 
@@ -482,6 +484,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Attach a slog logger | `ExampleDBBuilder_WithLogger` | [example_api_test.go](./example_api_test.go) |
 | Open a database that refuses writes | `ExampleDBBuilder_OpenReadOnly` | [example_api_test.go](./example_api_test.go) |
 | Save on close or commit | `ExampleDBBuilder_EnableAutoSave`, `ExampleDBBuilder_EnableAutoSaveOnCommit`, `ExampleDBBuilder_DisableAutoSave` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
+| Export under a deadline | `ExampleDumpDatabaseContext` | [example_api_test.go](./example_api_test.go) |
 | Export tables with format/compression/encoding/line-ending options | `ExampleDumpDatabase`, `ExampleNewDumpOptions`, `ExampleDumpOptions_WithFormat`, `ExampleDumpOptions_WithCompression`, `ExampleDumpOptions_WithEncoding`, `ExampleDumpOptions_WithLineEnding` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
 | Work with compression helpers directly | `ExampleNewCompressionHandler`, `ExampleNewCompressionFactory`, `ExampleCompressionFactory_DetectCompressionType` | [example_api_test.go](./example_api_test.go) |
 | Strip compression suffixes and inspect file types | `ExampleCompressionFactory_RemoveCompressionExtension`, `ExampleCompressionFactory_GetBaseFileType` | [example_api_test.go](./example_api_test.go) |
