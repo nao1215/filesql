@@ -1546,3 +1546,159 @@ func TestCrossFieldValidatorsWithoutTargets(t *testing.T) {
 		}
 	})
 }
+
+// The excluded_* family is the negation of the required_* family: each rule
+// only ever complains about a cell that carries a value where its condition
+// says there must be none.
+func TestExcludedCrossFieldValidators(t *testing.T) {
+	t.Parallel()
+
+	conditions := []fieldCondition{{field: "Kind", expected: "paid"}, {field: "Tier", expected: "gold"}}
+
+	tests := []struct {
+		name      string
+		validator crossFieldValidator
+		srcValue  string
+		targets   []string
+		wantErr   bool
+	}{
+		{"excluded_if fires when every pair matches", newExcludedIfValidator(conditions), "x", []string{"paid", "gold"}, true},
+		{"excluded_if allows an empty cell", newExcludedIfValidator(conditions), "", []string{"paid", "gold"}, false},
+		{"excluded_if says nothing when a pair differs", newExcludedIfValidator(conditions), "x", []string{"paid", "silver"}, false},
+
+		{"excluded_unless fires when a pair differs", newExcludedUnlessValidator(conditions), "x", []string{"paid", "silver"}, true},
+		{"excluded_unless allows an empty cell", newExcludedUnlessValidator(conditions), "", []string{"paid", "silver"}, false},
+		{"excluded_unless says nothing when every pair matches", newExcludedUnlessValidator(conditions), "x", []string{"paid", "gold"}, false},
+
+		{"excluded_with fires when any field is present", newExcludedWithValidator([]string{"A", "B"}, false), "x", []string{"", "b"}, true},
+		{"excluded_with allows an empty cell", newExcludedWithValidator([]string{"A", "B"}, false), "", []string{"", "b"}, false},
+		{"excluded_with says nothing when every field is empty", newExcludedWithValidator([]string{"A", "B"}, false), "x", []string{"", ""}, false},
+
+		{"excluded_with_all fires when every field is present", newExcludedWithValidator([]string{"A", "B"}, true), "x", []string{"a", "b"}, true},
+		{"excluded_with_all allows an empty cell", newExcludedWithValidator([]string{"A", "B"}, true), "", []string{"a", "b"}, false},
+		{"excluded_with_all says nothing when one field is empty", newExcludedWithValidator([]string{"A", "B"}, true), "x", []string{"a", ""}, false},
+
+		{"excluded_without fires when any field is empty", newExcludedWithoutValidator([]string{"A", "B"}, false), "x", []string{"a", ""}, true},
+		{"excluded_without allows an empty cell", newExcludedWithoutValidator([]string{"A", "B"}, false), "", []string{"a", ""}, false},
+		{"excluded_without says nothing when every field is present", newExcludedWithoutValidator([]string{"A", "B"}, false), "x", []string{"a", "b"}, false},
+
+		{"excluded_without_all fires when every field is empty", newExcludedWithoutValidator([]string{"A", "B"}, true), "x", []string{"", ""}, true},
+		{"excluded_without_all allows an empty cell", newExcludedWithoutValidator([]string{"A", "B"}, true), "", []string{"", ""}, false},
+		{"excluded_without_all says nothing when one field is present", newExcludedWithoutValidator([]string{"A", "B"}, true), "x", []string{"", "b"}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			msg := tt.validator.Validate(tt.srcValue, tt.targets)
+			if (msg != "") != tt.wantErr {
+				t.Errorf("%s.Validate(%q, %v) = %q, wantErr %v", tt.validator.Name(), tt.srcValue, tt.targets, msg, tt.wantErr)
+			}
+		})
+	}
+}
+
+// Each excluded_* tag names itself, so an error reports the spelling the caller
+// wrote rather than the family.
+func TestExcludedValidatorNames(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		validator crossFieldValidator
+		want      string
+	}{
+		{newExcludedIfValidator(nil), excludedIfTagValue},
+		{newExcludedUnlessValidator(nil), excludedUnlessTagValue},
+		{newExcludedWithValidator(nil, false), excludedWithTagValue},
+		{newExcludedWithValidator(nil, true), excludedWithAllTagValue},
+		{newExcludedWithoutValidator(nil, false), excludedWithoutTagValue},
+		{newExcludedWithoutValidator(nil, true), excludedWithoutAllTagValue},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.validator.Name(); got != tt.want {
+				t.Errorf("Name() = %q, want %q", got, tt.want)
+			}
+			// A tag naming no field asks for nothing.
+			if msg := tt.validator.Validate("x", nil); msg != "" {
+				t.Errorf("Validate(\"x\", nil) = %q, want no message", msg)
+			}
+		})
+	}
+}
+
+// The excluded_* family decides presence, so it has to run on the rows a
+// comparison would be skipped on. excluded_without is where getting that wrong
+// shows: its condition is that the named field is empty, which is exactly the
+// row skipCrossField would drop.
+func TestExcludedWithoutFiresWhenItsTargetIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	type record struct {
+		Code string `validate:"excluded_without=Name"`
+		Name string
+	}
+
+	input := "code,name\nA1,\nA2,given\n,\n"
+	processor := NewProcessor(FileTypeCSV)
+
+	var records []record
+	_, result, err := processor.Process(strings.NewReader(input), &records)
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if len(result.Errors) != 1 {
+		t.Fatalf("Errors = %v, want exactly the first row reported", result.Errors)
+	}
+	if !strings.Contains(result.Errors[0].Error(), "row 1") {
+		t.Errorf("Errors[0] = %v, want the report to name row 1", result.Errors[0])
+	}
+}
+
+// The whole family runs through a Processor, so the wiring from tag to row is
+// pinned as well as the validators themselves.
+func TestExcludedCrossFieldValidation_Processor(t *testing.T) {
+	t.Parallel()
+
+	t.Run("excluded_if refuses a cell the condition forbids", func(t *testing.T) {
+		t.Parallel()
+		type record struct {
+			Kind   string
+			Coupon string `validate:"excluded_if=Kind free"`
+		}
+
+		input := "kind,coupon\nfree,SAVE10\nfree,\npaid,SAVE10\n"
+		var records []record
+		_, result, err := NewProcessor(FileTypeCSV).Process(strings.NewReader(input), &records)
+		if err != nil {
+			t.Fatalf("Process() error = %v", err)
+		}
+		if len(result.Errors) != 1 {
+			t.Fatalf("Errors = %v, want exactly the first row reported", result.Errors)
+		}
+		if result.ValidRowCount != 2 {
+			t.Errorf("ValidRowCount = %d, want 2", result.ValidRowCount)
+		}
+	})
+
+	t.Run("excluded_with_all refuses a cell only when every named field is present", func(t *testing.T) {
+		t.Parallel()
+		type record struct {
+			Email string
+			Phone string
+			Fax   string `validate:"excluded_with_all=Email Phone"`
+		}
+
+		input := "email,phone,fax\na@example.com,0312345678,0398765432\na@example.com,,0398765432\n"
+		var records []record
+		_, result, err := NewProcessor(FileTypeCSV).Process(strings.NewReader(input), &records)
+		if err != nil {
+			t.Fatalf("Process() error = %v", err)
+		}
+		if len(result.Errors) != 1 {
+			t.Fatalf("Errors = %v, want exactly the first row reported", result.Errors)
+		}
+	})
+}

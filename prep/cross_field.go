@@ -547,6 +547,165 @@ func (v *requiredWithoutValidator) Name() string {
 	return requiredWithoutTagValue
 }
 
+// =====================================
+// Conditional excluded validators
+// =====================================
+
+// The excluded family is the negation of the required family: each tag only
+// ever complains about a cell that carries a value where its condition says
+// there must be none, and says nothing on every other row. They decide
+// presence, so like the required family they run on a row whose cell is empty
+// -- which for excluded_without is the very row its condition is about.
+
+// excludedIfValidator validates that a field is empty when every named field
+// holds the value paired with it.
+type excludedIfValidator struct {
+	presenceCrossFieldValidator
+	conditions []fieldCondition
+}
+
+// newExcludedIfValidator creates a new excluded_if validator from the field and
+// value pairs the tag names.
+func newExcludedIfValidator(conditions []fieldCondition) *excludedIfValidator {
+	return &excludedIfValidator{
+		presenceCrossFieldValidator: presenceCrossFieldValidator{
+			baseCrossFieldValidator{targetFields: fieldNames(conditions)},
+		},
+		conditions: conditions,
+	}
+}
+
+// Validate checks if the source value is absent when every condition holds
+func (v *excludedIfValidator) Validate(srcValue string, targetValues []string) string {
+	if !conditionsMet(v.conditions, targetValues, true) {
+		return ""
+	}
+	if srcValue != "" {
+		return "value must be empty when " + describeConditions(v.conditions, joinerAnd)
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *excludedIfValidator) Name() string {
+	return excludedIfTagValue
+}
+
+// excludedUnlessValidator validates that a field is empty unless every named
+// field holds the value paired with it.
+type excludedUnlessValidator struct {
+	presenceCrossFieldValidator
+	conditions []fieldCondition
+}
+
+// newExcludedUnlessValidator creates a new excluded_unless validator from the
+// field and value pairs the tag names.
+func newExcludedUnlessValidator(conditions []fieldCondition) *excludedUnlessValidator {
+	return &excludedUnlessValidator{
+		presenceCrossFieldValidator: presenceCrossFieldValidator{
+			baseCrossFieldValidator{targetFields: fieldNames(conditions)},
+		},
+		conditions: conditions,
+	}
+}
+
+// Validate checks if the source value is absent unless every condition holds.
+// A tag naming no field asks for nothing, so the degenerate case says nothing
+// rather than forbidding every value.
+func (v *excludedUnlessValidator) Validate(srcValue string, targetValues []string) string {
+	if len(v.conditions) == 0 || len(targetValues) != len(v.conditions) {
+		return ""
+	}
+	if conditionsMet(v.conditions, targetValues, true) {
+		return ""
+	}
+	if srcValue != "" {
+		return "value must be empty unless " + describeConditions(v.conditions, joinerAnd)
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *excludedUnlessValidator) Name() string {
+	return excludedUnlessTagValue
+}
+
+// excludedWithValidator validates that a field is empty when the named fields
+// carry values. all decides whether every named field must carry one or whether
+// any of them is enough.
+type excludedWithValidator struct {
+	presenceCrossFieldValidator
+	all bool
+}
+
+// newExcludedWithValidator creates a new excluded_with validator
+func newExcludedWithValidator(targetFields []string, all bool) *excludedWithValidator {
+	return &excludedWithValidator{
+		presenceCrossFieldValidator: presenceCrossFieldValidator{
+			baseCrossFieldValidator{targetFields: targetFields},
+		},
+		all: all,
+	}
+}
+
+// Validate checks if the source value is absent when the named fields are present
+func (v *excludedWithValidator) Validate(srcValue string, targetValues []string) string {
+	if !fires(targetValues, v.all, func(value string) bool { return value != "" }) {
+		return ""
+	}
+	if srcValue != "" {
+		names, verb := describeFields(v.targetFields, joinerFor(v.all))
+		return "value must be empty when " + names + " " + verb + " present"
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *excludedWithValidator) Name() string {
+	if v.all {
+		return excludedWithAllTagValue
+	}
+	return excludedWithTagValue
+}
+
+// excludedWithoutValidator validates that a field is empty when the named
+// fields are empty. all decides whether every named field must be empty or
+// whether any of them is enough.
+type excludedWithoutValidator struct {
+	presenceCrossFieldValidator
+	all bool
+}
+
+// newExcludedWithoutValidator creates a new excluded_without validator
+func newExcludedWithoutValidator(targetFields []string, all bool) *excludedWithoutValidator {
+	return &excludedWithoutValidator{
+		presenceCrossFieldValidator: presenceCrossFieldValidator{
+			baseCrossFieldValidator{targetFields: targetFields},
+		},
+		all: all,
+	}
+}
+
+// Validate checks if the source value is absent when the named fields are absent
+func (v *excludedWithoutValidator) Validate(srcValue string, targetValues []string) string {
+	if !fires(targetValues, v.all, func(value string) bool { return value == "" }) {
+		return ""
+	}
+	if srcValue != "" {
+		names, verb := describeFields(v.targetFields, joinerFor(v.all))
+		return "value must be empty when " + names + " " + verb + " absent"
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *excludedWithoutValidator) Name() string {
+	if v.all {
+		return excludedWithoutAllTagValue
+	}
+	return excludedWithoutTagValue
+}
+
 // fires reports whether the values satisfy holds, either all of them or any of
 // them. An empty list never fires, since a tag that names no field asks for
 // nothing.

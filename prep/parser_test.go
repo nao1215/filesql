@@ -130,6 +130,10 @@ func TestParseValidateTag_AllValidatorTypes(t *testing.T) {
 		{"e164", "e164", 1, 0, false},
 
 		// Network validators
+		{"ip", "ip", 1, 0, false},
+		{"ipv4", "ipv4", 1, 0, false},
+		{"ipv6", "ipv6", 1, 0, false},
+		{"port", "port", 1, 0, false},
 		{"ip_addr", "ip_addr", 1, 0, false},
 		{"ip4_addr", "ip4_addr", 1, 0, false},
 		{"ip6_addr", "ip6_addr", 1, 0, false},
@@ -193,6 +197,14 @@ func TestParseValidateTag_AllValidatorTypes(t *testing.T) {
 		{"required_unless=Type guest", "required_unless=Type guest", 0, 1, false},
 		{"required_with=Email", "required_with=Email", 0, 1, false},
 		{"required_without=Phone", "required_without=Phone", 0, 1, false},
+
+		// Conditional excluded validators
+		{"excluded_if=Status active", "excluded_if=Status active", 0, 1, false},
+		{"excluded_unless=Type guest", "excluded_unless=Type guest", 0, 1, false},
+		{"excluded_with=Email", "excluded_with=Email", 0, 1, false},
+		{"excluded_with_all=Email Phone", "excluded_with_all=Email Phone", 0, 1, false},
+		{"excluded_without=Phone", "excluded_without=Phone", 0, 1, false},
+		{"excluded_without_all=Email Phone", "excluded_without_all=Email Phone", 0, 1, false},
 
 		// Empty value parameters are silently skipped
 		{"startswith= (empty)", "startswith=", 0, 0, false},
@@ -826,6 +838,11 @@ func TestStrictTagParsing_ValidateTag(t *testing.T) {
 		{"required_unless without expected value", "required_unless=OtherField", true},
 		{"required_if with an odd number of tokens", "required_if=A yes B", true},
 		{"required_unless with an odd number of tokens", "required_unless=A yes B", true},
+		{"excluded_if without expected value", "excluded_if=OtherField", true},
+		{"excluded_if with an odd number of tokens", "excluded_if=A yes B", true},
+		{"excluded_unless with an odd number of tokens", "excluded_unless=A yes B", true},
+		{"excluded_if with two pairs", "excluded_if=A yes B no", false},
+		{"excluded_with with no field", "excluded_with=", true},
 		{"required_if with two pairs", "required_if=A yes B no", false},
 		{"required_with naming two fields", "required_with=A B", false},
 		{"required_with_all naming two fields", "required_with_all=A B", false},
@@ -1010,6 +1027,47 @@ func TestStrictTagParsing_NonStrictIgnoresInvalidArgs(t *testing.T) {
 			t.Errorf("expected 0 cross-field validators (invalid arg ignored), got %d", len(crossVals))
 		}
 	})
+
+	t.Run("excluded_if with an odd number of tokens is silently ignored in non-strict mode", func(t *testing.T) {
+		t.Parallel()
+		_, crossVals, err := parseValidateTag("excluded_if=A yes B", false)
+		if err != nil {
+			t.Errorf("expected no error in non-strict mode, got %v", err)
+		}
+		if len(crossVals) != 0 {
+			t.Errorf("expected 0 cross-field validators (invalid arg ignored), got %d", len(crossVals))
+		}
+	})
+}
+
+// The four network spellings the dialect documents parse on their own and
+// beside required, and required keeps its meaning: an empty cell passes the
+// format tag and is still reported by required.
+func TestNetworkTagsParseAloneAndWithRequired(t *testing.T) {
+	t.Parallel()
+
+	for _, tag := range []string{ipTagValue, ipv4TagValue, ipv6TagValue, portTagValue} {
+		t.Run(tag, func(t *testing.T) {
+			t.Parallel()
+			alone, _, err := parseValidateTag(tag, true)
+			if err != nil {
+				t.Fatalf("parseValidateTag(%q) error = %v", tag, err)
+			}
+			if len(alone) != 1 {
+				t.Fatalf("parseValidateTag(%q) validators = %d, want 1", tag, len(alone))
+			}
+			combined, _, err := parseValidateTag("required,"+tag, true)
+			if err != nil {
+				t.Fatalf("parseValidateTag(%q) error = %v", "required,"+tag, err)
+			}
+			if len(combined) != 2 {
+				t.Fatalf("parseValidateTag(%q) validators = %d, want 2", "required,"+tag, len(combined))
+			}
+			if tag, msg := combined.Validate(""); msg == "" || tag != requiredTagValue {
+				t.Errorf("Validate(\"\") reported %q/%q, want the required tag to fail", tag, msg)
+			}
+		})
+	}
 }
 
 func TestWithStrictTagParsing_Processor(t *testing.T) {
