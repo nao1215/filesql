@@ -1008,8 +1008,11 @@ func TestExcelSheetName(t *testing.T) {
 	}
 }
 
-// TestDumpXLSXAdaptsSheetName pins that a dump of such a table succeeds and can
-// be read back.
+// TestDumpXLSXAdaptsSheetName pins that a dump of a table Excel cannot name as
+// a sheet succeeds and comes back under the table's own name. The sheet is
+// spelled the way Excel allows -- at most 31 characters, without the seven it
+// forbids -- and a sheet named after the file is not repeated in the table
+// name, so a 32-character table used to come back as 64.
 func TestDumpXLSXAdaptsSheetName(t *testing.T) {
 	t.Parallel()
 
@@ -1019,7 +1022,7 @@ func TestDumpXLSXAdaptsSheetName(t *testing.T) {
 		wantSheet string
 	}{
 		{name: "a long name", table: "monthly_sales_report_2026_q3_final", wantSheet: "monthly_sales_report_2026_q3_fi"},
-		{name: "a punctuated name", table: "sales[2026]", wantSheet: "sales_2026_"},
+		{name: "a name at the limit", table: "quarterly_revenue_by_region_202", wantSheet: "quarterly_revenue_by_region_202"},
 	}
 
 	for _, tt := range tests {
@@ -1032,6 +1035,8 @@ func TestDumpXLSXAdaptsSheetName(t *testing.T) {
 
 			outDir := t.TempDir()
 			require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+
+			assert.Equal(t, tt.wantSheet, excelSheetName(tt.table), "the sheet is spelled the way Excel allows")
 
 			reloaded, err := OpenContext(t.Context(), filepath.Join(outDir, tt.table+".xlsx"))
 			require.NoError(t, err)
@@ -1048,12 +1053,29 @@ func TestDumpXLSXAdaptsSheetName(t *testing.T) {
 			}
 			require.NoError(t, rows.Err())
 
-			// The sheet name is what a reader turns into a table name, and Excel
-			// cannot hold the original, so the reloaded name is the adapted one.
+			// The sheet is named after the file, in the spelling Excel allows,
+			// so the table keeps the name it was dumped from.
 			require.Len(t, names, 1)
-			assert.Contains(t, names[0], sanitizeTableName(tt.wantSheet))
+			assert.Equal(t, tt.table, names[0])
+
+			var kept string
+			require.NoError(t, reloaded.QueryRowContext(t.Context(),
+				"SELECT x FROM "+quoteIdentifier(names[0])).Scan(&kept))
+			assert.Equal(t, "kept", kept)
 		})
 	}
+
+	t.Run("a name a load would spell differently is refused", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, `CREATE TABLE "sales[2026]" (x TEXT)`, `INSERT INTO "sales[2026]" VALUES ('kept')`)
+
+		err := DumpDatabase(db, t.TempDir(), NewDumpOptions().WithFormat(OutputFormatXLSX))
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidData)
+		assert.Contains(t, err.Error(), "sales2026", "the error must name what a load would call the table")
+	})
 }
 
 // TestXLSXDateCellsImportAsISO pins what a date cell holds against how it is

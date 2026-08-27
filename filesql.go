@@ -112,6 +112,18 @@ func LoadInto(ctx context.Context, db *sql.DB, paths ...string) error {
 // letters, digits, marks and underscore survive; a name given to
 // DBBuilder.AddReader or to CREATE TABLE can.
 //
+// A table whose name a load would spell differently is refused for the same
+// reason: a load names a table after the file and spells a space, a hyphen and
+// a dot as an underscore, so "with space" would come back as with_space, and
+// "a b" beside "a-b" would be two files and one table name. Rename the table
+// before dumping it.
+//
+// A value the output format cannot hold is refused rather than rewritten, with
+// ErrUnsupportedFormat and the advice to dump the table as CSV: a tab or a line
+// break in TSV, those and a colon in an LTSV label, and in XLSX a control
+// character other than tab, line feed and carriage return, which is what an XML
+// 1.0 document has no way to spell.
+//
 // It exports without a deadline. DumpDatabaseContext takes one.
 func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
 	return DumpDatabaseContext(context.Background(), db, outputDir, opts...)
@@ -305,6 +317,18 @@ func dumpFilePath(outputDir, tableName, ext string) (string, error) {
 	if !usableAsFileName(name) || filepath.Dir(path) != filepath.Clean(outputDir) {
 		return "", fmt.Errorf("%w: table %q cannot be dumped because its name is not usable as a file name inside %s",
 			ErrInvalidData, tableName, outputDir)
+	}
+	// A table name is an arbitrary SQL identifier and a table name derived from
+	// a file is not: the load spells a space, a hyphen and a dot as an
+	// underscore and drops what neither is. So a name a load would spell
+	// differently is refused here, rather than written into a file that comes
+	// back under another name -- which is silent, and which two such tables
+	// turn into a dump this package will not load at all: "a b" and "a-b" are
+	// two files and one table name. Refusing is the same answer as above and
+	// for the same reason, and the way out is the same: rename the table.
+	if loaded := sanitizeTableName(tableFromFilePath(name)); loaded != tableName {
+		return "", fmt.Errorf("%w: table %q cannot be dumped because a load of %q would name it %q; rename the table first",
+			ErrInvalidData, tableName, name, loaded)
 	}
 	return path, nil
 }

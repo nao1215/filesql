@@ -4242,12 +4242,14 @@ func TestTableNameHoldingAQuotingCharacter(t *testing.T) {
 			// where the backtick failed after the load had succeeded.
 			out := filepath.Join(t.TempDir(), "out")
 			err = DumpDatabase(db, out)
-			if usableAsFileName(tt.table + ".csv") {
-				require.NoError(t, err, "a name that can be a file name must be dumped")
+			fileName := tt.table + ".csv"
+			if usableAsFileName(fileName) && sanitizeTableName(tableFromFilePath(fileName)) == tt.table {
+				require.NoError(t, err, "a name a load would give back must be dumped")
 				return
 			}
-			// A name the file system cannot hold is refused by this package,
-			// with its own error rather than the driver's.
+			// A name the file system cannot hold, or one a load would spell
+			// differently, is refused by this package, with its own error
+			// rather than the driver's.
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrInvalidData)
 		})

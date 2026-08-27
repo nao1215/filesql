@@ -692,17 +692,159 @@ func TestDumpDatabaseStaysInOutputDir(t *testing.T) {
 		assert.Contains(t, string(got), "kept")
 	})
 
-	t.Run("a table name with a dot is still a file name", func(t *testing.T) {
+	// A dot is a file name every platform holds, so this is refused for the
+	// other reason: a load of "a.b.csv" names the table a_b, and a dump nobody
+	// can read back under the name they dumped is not a dump.
+	t.Run("a table name a load would spell differently is refused", func(t *testing.T) {
 		t.Parallel()
 
 		db := openWithTable(t, `CREATE TABLE "a.b" (x TEXT)`, `INSERT INTO "a.b" VALUES ('kept')`)
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions()))
+		err := DumpDatabase(db, outDir, NewDumpOptions())
 
-		got, err := os.ReadFile(filepath.Join(outDir, "a.b.csv")) //nolint:gosec // Test path from t.TempDir()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidData)
+		assert.Contains(t, err.Error(), "a.b")
+		assert.Contains(t, err.Error(), "a_b", "the error must name what a load would call the table")
+	})
+}
+
+// TestDumpWritesWhatItCanReadBack holds the rule that a dump is a file this
+// package can load again under the name it was dumped from. A table name is an
+// arbitrary SQL identifier and a table name derived from a file is not: the
+// load spells a space, a hyphen and a dot as an underscore and drops what is
+// left, so a table named "with space" was written to "with space.csv" and came
+// back as with_space, and two tables named "a b" and "a-b" were written to two
+// files that could not be loaded together at all.
+func TestDumpWritesWhatItCanReadBack(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("a table a load would rename is refused", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, `CREATE TABLE "with space" (id INTEGER)`, `INSERT INTO "with space" VALUES (1)`)
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		err := DumpDatabase(db, outDir, NewDumpOptions())
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidData)
+		assert.Contains(t, err.Error(), "with space")
+		assert.Contains(t, err.Error(), "with_space")
+	})
+
+	t.Run("two tables a load would give one name are refused", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, `CREATE TABLE "a b" (id INTEGER)`, `INSERT INTO "a b" VALUES (1)`)
+		_, err := db.ExecContext(ctx, `CREATE TABLE "a-b" (id INTEGER)`)
 		require.NoError(t, err)
-		assert.Contains(t, string(got), "kept")
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		require.Error(t, DumpDatabase(db, outDir, NewDumpOptions()),
+			"a dump whose files cannot be loaded together must be refused")
+	})
+
+	t.Run("an ordinary table dumps and loads under its own name", func(t *testing.T) {
+		t.Parallel()
+
+		for _, name := range []string{"orders", "sales_2026", "売上"} {
+			db := openWithTable(t, "CREATE TABLE "+quoteIdentifier(name)+" (id INTEGER)",
+				"INSERT INTO "+quoteIdentifier(name)+" VALUES (7)")
+
+			outDir := filepath.Join(t.TempDir(), "out")
+			require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions()))
+			require.NoError(t, db.Close())
+
+			back, err := OpenContext(ctx, filepath.Join(outDir, name+".csv"))
+			require.NoError(t, err)
+
+			var got int
+			require.NoError(t, back.QueryRowContext(ctx, "SELECT id FROM "+quoteIdentifier(name)).Scan(&got))
+			assert.Equal(t, 7, got)
+			require.NoError(t, back.Close())
+		}
+	})
+}
+
+// TestDumpXLSXRefusesWhatXMLCannotHold holds the rule that a dump does not
+// change a value it cannot write. A worksheet is XML, and XML 1.0 has no way to
+// spell most of the control characters, so the library writing the workbook
+// replaced each of them with U+FFFD: a cell holding a NUL was dumped and read
+// back as "a�b" under a dump that reported success.
+func TestDumpXLSXRefusesWhatXMLCannotHold(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name  string
+		value string
+	}{
+		{name: "a NUL", value: "a\x00b"},
+		{name: "a start of heading", value: "a\x01b"},
+		{name: "a vertical tab", value: "a\x0bb"},
+		{name: "an escape", value: "a\x1bb"},
+		{name: "a unit separator", value: "a\x1fb"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := openWithTable(t, "CREATE TABLE t (value TEXT)", "")
+			_, err := db.ExecContext(ctx, "INSERT INTO t VALUES (?)", tc.value)
+			require.NoError(t, err)
+
+			outDir := filepath.Join(t.TempDir(), "out")
+			err = DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
+
+			require.Error(t, err, "a value XML cannot hold must be refused, not rewritten")
+			assert.ErrorIs(t, err, ErrUnsupportedFormat)
+			assert.Contains(t, err.Error(), "value", "the error must name the column")
+		})
+	}
+
+	t.Run("the three control characters XML admits still round-trip", func(t *testing.T) {
+		t.Parallel()
+
+		const value = "a\tb\nc\rd"
+		db := openWithTable(t, "CREATE TABLE t (value TEXT)", "")
+		_, err := db.ExecContext(ctx, "INSERT INTO t VALUES (?)", value)
+		require.NoError(t, err)
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+		require.NoError(t, db.Close())
+
+		back, err := OpenContext(ctx, filepath.Join(outDir, "t.xlsx"))
+		require.NoError(t, err)
+		defer func() { _ = back.Close() }()
+
+		var got string
+		require.NoError(t, back.QueryRowContext(ctx, "SELECT value FROM t").Scan(&got))
+		assert.Equal(t, value, got)
+	})
+
+	t.Run("the same value dumps as CSV, which is what the error says to do", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, "CREATE TABLE t (value TEXT)", "")
+		_, err := db.ExecContext(ctx, "INSERT INTO t VALUES (?)", "a\x00b")
+		require.NoError(t, err)
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions()))
+		require.NoError(t, db.Close())
+
+		back, err := OpenContext(ctx, filepath.Join(outDir, "t.csv"))
+		require.NoError(t, err)
+		defer func() { _ = back.Close() }()
+
+		var got string
+		require.NoError(t, back.QueryRowContext(ctx, "SELECT value FROM t").Scan(&got))
+		assert.Equal(t, "a\x00b", got)
 	})
 }
 
@@ -720,7 +862,11 @@ func TestDumpFilePath(t *testing.T) {
 		{name: "a plain name", outputDir: "out", table: "people", ext: ".csv", want: filepath.Join("out", "people.csv")},
 		{name: "a trailing separator on the directory", outputDir: "out" + string(filepath.Separator), table: "people", ext: ".csv", want: filepath.Join("out", "people.csv")},
 		{name: "a relative directory", outputDir: filepath.Join(".", "out"), table: "people", ext: ".csv", want: filepath.Join("out", "people.csv")},
-		{name: "a dot inside the name", outputDir: "out", table: "a.b", ext: ".csv", want: filepath.Join("out", "a.b.csv")},
+		{name: "a compressed extension", outputDir: "out", table: "people", ext: ".csv.gz", want: filepath.Join("out", "people.csv.gz")},
+		{name: "a dot inside the name", outputDir: "out", table: "a.b", ext: ".csv", wantErr: true},
+		{name: "a name a load would spell with an underscore", outputDir: "out", table: "with space", ext: ".csv", wantErr: true},
+		{name: "a name holding a bracket", outputDir: "out", table: "a[b]", ext: ".csv", wantErr: true},
+		{name: "a name that is a file name of its own", outputDir: "out", table: "people.csv", ext: ".csv", wantErr: true},
 		{name: "a non-Latin name", outputDir: "out", table: "売上", ext: ".csv", want: filepath.Join("out", "売上.csv")},
 		{name: "a parent reference", outputDir: "out", table: "../escaped", ext: ".csv", wantErr: true},
 		{name: "a separator", outputDir: "out", table: "sub/x", ext: ".csv", wantErr: true},
@@ -1430,15 +1576,9 @@ func TestDumpRefusesNamesNoPlatformCanHold(t *testing.T) {
 		table string
 		file  string
 	}{
-		{name: "a dot inside the name", table: "a.b", file: "a.b.csv"},
-		{name: "a space inside the name", table: "a b", file: "a b.csv"},
 		{name: "a name that is not ASCII", table: "日本語", file: "日本語.csv"},
 		{name: "a word that contains a device name", table: "console", file: "console.csv"},
 		{name: "another word that contains one", table: "nullable", file: "nullable.csv"},
-		// The dump appends its own extension, so a table name ending in a dot
-		// or a space does not make a file name that ends in one.
-		{name: "a trailing dot", table: "a.", file: "a..csv"},
-		{name: "a trailing space", table: "a ", file: "a .csv"},
 	}
 
 	for _, tt := range kept {
@@ -1448,6 +1588,36 @@ func TestDumpRefusesNamesNoPlatformCanHold(t *testing.T) {
 			db, out := loadOneTable(t, tt.table)
 			require.NoError(t, DumpDatabase(db, out))
 			assert.Equal(t, []string{tt.file}, dirEntriesOrNone(t, out))
+		})
+	}
+
+	// These are file names every platform holds -- the dump appends its own
+	// extension, so a name ending in a dot or a space does not make a file name
+	// that ends in one -- and they are refused for the other reason: a load
+	// spells a dot and a space as an underscore, so none of them would come
+	// back under the name it was dumped from.
+	renamed := []struct {
+		name   string
+		table  string
+		loaded string
+	}{
+		{name: "a dot inside the name", table: "a.b", loaded: "a_b"},
+		{name: "a space inside the name", table: "a b", loaded: "a_b"},
+		{name: "a trailing dot", table: "a.", loaded: "a_"},
+		{name: "a trailing space", table: "a ", loaded: "a_"},
+	}
+
+	for _, tt := range renamed {
+		t.Run("a load would rename: "+tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, out := loadOneTable(t, tt.table)
+			err := DumpDatabase(db, out)
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrInvalidData)
+			assert.Contains(t, err.Error(), tt.loaded)
+			assert.Empty(t, dirEntriesOrNone(t, out), "nothing may be written for a refused table")
 		})
 	}
 }

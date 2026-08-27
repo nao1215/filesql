@@ -240,6 +240,40 @@ func trimXLSXSheet(f *excelize.File, sheetName string, had xlsxExtent, wrote xls
 
 // writeXLSXSheet adds one sheet to f and fills it. A cell whose value matches
 // what before already holds is left alone.
+// xmlControlRune finds the first character in s that an XML 1.0 document has no
+// way to spell: a control character other than tab, line feed and carriage
+// return, which are the three XML admits. A worksheet is XML, and the library
+// writing one replaces each of the others with U+FFFD, so a cell holding a NUL
+// or an ASCII escape used to come back changed under a dump that reported
+// success. Refusing is what every other format here does with a value it cannot
+// hold. U+007F and the characters above it are left alone, because XML 1.0
+// admits them and the workbook carries them unchanged.
+//
+// This comes out if excelize grows a way to report or refuse the substitution
+// itself.
+// The scan is over bytes rather than runes: every character it looks for is
+// below 0x20, and no byte of a multi-byte UTF-8 sequence is, so a byte scan
+// answers the same question without decoding the string. This runs on every
+// cell of a workbook being written.
+func xmlControlRune(s string) (rune, bool) {
+	for i := range len(s) {
+		c := s[i]
+		if c >= 0x20 || c == '\t' || c == '\n' || c == '\r' {
+			continue
+		}
+		return rune(c), true
+	}
+	return 0, false
+}
+
+// xlsxUnrepresentableError reports a value an XLSX cell cannot carry, in the
+// shape the TSV and LTSV refusals already have: the table is fine, the format
+// is not, and CSV can hold what this cannot.
+func xlsxUnrepresentableError(column string, r rune) error {
+	return fmt.Errorf("%w: XLSX cannot hold a value that contains %q, and column %q holds one; dump this table as CSV instead",
+		ErrUnsupportedFormat, r, column)
+}
+
 func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, before [][]string) (xlsxExtent, error) {
 	columns, rows, err := sheet.open()
 	if err != nil {
@@ -260,6 +294,9 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, before [][]string) (xlsxE
 
 	// Set headers
 	for i, col := range columns {
+		if r, found := xmlControlRune(col); found {
+			return xlsxExtent{}, xlsxUnrepresentableError(col, r)
+		}
 		if unchangedXLSXCell(before, 1, i+1, col) {
 			continue
 		}
@@ -290,6 +327,9 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, before [][]string) (xlsxE
 			// Every cell is written as text, the same string the text formats
 			// produce, so one table dumped twice does not disagree with itself.
 			cellValue := formatDumpValue(val)
+			if r, found := xmlControlRune(cellValue); found {
+				return xlsxExtent{}, xlsxUnrepresentableError(columns[i], r)
+			}
 			if unchangedXLSXCell(before, rowIndex, i+1, cellValue) {
 				continue
 			}

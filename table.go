@@ -191,9 +191,16 @@ func sanitizeTableName(name string) string {
 // without this a dumped table read back gained a suffix ("people" became
 // "people_people") and a save that overwrote its own source stopped matching it.
 // A workbook whose sheet name differs from its file name is unaffected.
+//
+// A sheet named after the file is recognized in the spelling Excel allows as
+// well as in the file's own: Excel caps a worksheet name at 31 characters and
+// forbids seven of them, so a dump of a table named beyond either writes the
+// sheet through excelSheetName, and comparing against the unadapted name alone
+// left every such table gaining a suffix of its own truncated self — a
+// 32-character name came back as 64.
 func xlsxSheetTableName(baseTableName, sheetName string) string {
 	sanitized := sanitizeTableName(sheetName)
-	if sanitized == baseTableName {
+	if sanitized == baseTableName || sanitized == sanitizeTableName(excelSheetName(baseTableName)) {
 		return baseTableName
 	}
 	return baseTableName + "_" + sanitized
