@@ -126,11 +126,18 @@
 //
 // The rows end up in SQLite rather than on the Go heap, so the heap is not where
 // the cost is: loading CSVs of 16 MB through 131 MB kept the Go heap flat at
-// about 24 MB while resident memory grew by about twice the file's size. Budget
-// from the file size. The multiplier belongs to the format rather than to this
-// package: over the same 200,000 rows, CSV and Parquet each cost about 2.1 times
-// the file and XLSX about 24 times, because a workbook's rows arrive as one
-// slice covering the sheet's used range. Both figures are printed by
+// about 24 MB while resident memory grew by about twice the file's size. For a
+// chunked format, budget from the file size: over 200,000 rows, CSV and Parquet
+// each cost about 2.1 times the file.
+//
+// A workbook is read whole, so what it costs follows the cells it holds rather
+// than the size of the file, which is a zip and shrinks with how well the sheet
+// compressed. The same 200,000 rows cost about 26 times the file as a wide
+// workbook and about 37 times as a workbook of one column, and against the file
+// alone the ratio reaches 135 times for a small one-column workbook. Budget an
+// XLSX load from the cells rather than from the file, and bound the decompressed
+// size before loading a workbook that came from somewhere else, since nothing
+// here does. Every figure is printed by
 // "go test -tags benchmark -run TestLoadMemoryFootprint -v ." and
 // "go test -tags benchmark -run TestLoadMemoryFootprintByFormat -v .", which
 // print the tables they are drawn from so they can be re-derived rather than

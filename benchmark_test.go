@@ -650,6 +650,14 @@ func TestLoadMemoryFootprintByFormat(t *testing.T) {
 			return convertCSV(t, csvPath, OutputFormatParquet, ".parquet")
 		}},
 		{name: "xlsx", write: func(t *testing.T, csvPath string) string { return convertCSV(t, csvPath, OutputFormatXLSX, ".xlsx") }},
+		// The same rows in one column. A workbook is read whole, so what it
+		// costs follows the cells it holds rather than the size of the file --
+		// which is a zip, and shrinks when every row is short. Without this
+		// shape beside the one above, the table reads as if the format had one
+		// multiplier.
+		{name: "xlsx/1col", write: func(t *testing.T, csvPath string) string {
+			return convertCSV(t, oneColumnCSV(t, csvPath), OutputFormatXLSX, ".xlsx")
+		}},
 	} {
 		var prevFileMB, prevPeakMB float64
 		for _, rows := range []int{50000, 100000, 200000} {
@@ -677,6 +685,47 @@ func TestLoadMemoryFootprintByFormat(t *testing.T) {
 			prevFileMB, prevPeakMB = fileMB, peakMB
 		}
 	}
+}
+
+// oneColumnCSV rewrites a CSV as its first column alone, keeping the row count.
+// It is what puts a second shape of workbook in the footprint table.
+func oneColumnCSV(t *testing.T, csvPath string) string {
+	t.Helper()
+
+	in, err := os.Open(csvPath) //nolint:gosec // path is under t.TempDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = in.Close() }()
+
+	// Named the way convertCSV expects, which takes the dumped file by name.
+	path := filepath.Join(t.TempDir(), "data.csv")
+	out, err := os.Create(path) //nolint:gosec // path is under t.TempDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := bufio.NewWriter(out)
+	sc := bufio.NewScanner(in)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		line := sc.Text()
+		if i := strings.IndexByte(line, ','); i >= 0 {
+			line = line[:i]
+		}
+		if _, err := fmt.Fprintln(w, line); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 // footprintPathEnv names the file the child process loads. Its presence is also
