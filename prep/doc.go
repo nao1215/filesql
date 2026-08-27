@@ -183,12 +183,16 @@
 // and all three accept upper case, as uuid does; the uuid_rfc4122,
 // uuid3_rfc4122, uuid4_rfc4122 and uuid5_rfc4122 spellings name the same four
 // checks, so uuid3_rfc4122 requires the variant nibble too, where the dialect
-// leaves it unconstrained. dns_rfc1035_label is one DNS label as RFC 1035
-// states it -- a lowercase letter, then lowercase letters, digits and hyphens,
-// not ending in a hyphen -- and at most 63 characters, which is the RFC's own
-// limit on a label and which the dialect's pattern leaves out. iscolor passes
-// when hexcolor, rgb, rgba, hsl or hsla does, as the dialect's alias defines
-// it. hostname_port takes a
+// leaves it unconstrained. dns_rfc1035_label is the dialect's
+// reading of an RFC 1035 label -- a lowercase letter, then lowercase letters,
+// digits and hyphens, not ending in a hyphen -- capped at 63 characters, which
+// is the RFC's own limit on a label and which the dialect's pattern leaves out.
+// The RFC's grammar admits upper case and DNS compares labels without regard to
+// it; the lowercase reading is the dialect's and is also what Kubernetes
+// enforces on resource names, which is where such columns come from, so a
+// column holding mixed case wants prep:"lowercase" before this tag. iscolor
+// passes when hexcolor, rgb, rgba, hsl or hsla does, as the dialect's alias
+// defines it. hostname_port takes a
 // bracketed IPv6 address and refuses a bare port. ip, ipv4 and ipv6 are the
 // dialect's spellings of ip_addr, ip4_addr and ip6_addr and build the same
 // checks, so an IPv4-mapped address such as ::ffff:192.0.2.1 satisfies ipv4 and

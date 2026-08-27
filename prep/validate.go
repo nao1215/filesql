@@ -90,10 +90,13 @@ const (
 	// ISSN shape: two groups of four separated by a hyphen, the last of which
 	// may be X for ten.
 	issnRegexPattern = `^[0-9]{4}-[0-9]{3}[0-9X]$`
-	// RFC 1035 label grammar: a lowercase letter, then lowercase letters,
-	// digits and hyphens, not ending in a hyphen. The RFC's 63-octet cap on a
-	// label is checked separately, since a repetition bound inside the pattern
-	// would have to be written twice for the one-character case.
+	// The dialect's reading of an RFC 1035 label: a lowercase letter, then
+	// lowercase letters, digits and hyphens, not ending in a hyphen. The RFC's
+	// own grammar admits upper case, but the dialect's tag is lowercase-only
+	// and so is the Kubernetes name rule it is used for, so a column holding
+	// mixed case is one for prep:"lowercase". The RFC's 63-octet cap on a label
+	// is checked separately, since a repetition bound inside the pattern would
+	// have to be written twice for the one-character case.
 	dnsRFC1035LabelRegexPattern = `^[a-z]([a-z0-9-]*[a-z0-9])?$`
 )
 

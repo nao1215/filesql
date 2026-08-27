@@ -3212,6 +3212,9 @@ func TestDNSRFC1035LabelValidator(t *testing.T) {
 		}
 	}
 	for _, value := range []string{
+		// The dialect's tag is lowercase-only, as is the Kubernetes name rule
+		// it is used for, although RFC 1035's own grammar admits upper case.
+		// A column holding mixed case is one for prep:"lowercase".
 		"Web", "1web", "web-", "-web", "web_1", "web.1", "1",
 		// The cap is the RFC's own limit on a label, and the reference
 		// dialect's regex has none.
