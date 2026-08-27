@@ -977,7 +977,9 @@ func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, 
 		}
 
 		if _, err := stmt.ExecContext(ctx, values...); err != nil {
-			return fmt.Errorf("%w: failed to insert record: %w", ErrDatabaseOperation, err)
+			// The caller names the sentinel and the table; naming it here too
+			// announced the package twice about one failed insert.
+			return fmt.Errorf("failed to insert record: %w", err)
 		}
 	}
 

@@ -152,6 +152,15 @@ func wrapReadError(err error) error {
 	if err == nil || !errors.As(err, &readErr) {
 		return err
 	}
+	// A cause that already carries one of this package's sentinels is already
+	// framed. The text decoder sits in front of the reader and reports a byte
+	// that is not UTF-8 with filesql's own error, so framing it again named the
+	// package twice about one byte. ErrParsing still reaches a caller through
+	// the ParseError the load wraps this in. Any other sentinel of this
+	// package's that comes to be produced below the reader belongs here too.
+	if errors.Is(err, ErrInvalidUTF8) {
+		return err
+	}
 	switch readErr.Kind {
 	case reader.KindEmpty:
 		return fmt.Errorf("%w: %w", ErrEmptyData, err)
