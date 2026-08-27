@@ -1,6 +1,7 @@
 package reader
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
@@ -65,6 +66,373 @@ func parquetFooterFits(at io.ReaderAt, size int64) error {
 		return parseError(nil, "parquet footer declares %d bytes in a file of %d", declared, size)
 	}
 	return nil
+}
+
+// parquetPagesFit refuses a file whose column chunks or page headers reach
+// past the bytes the file holds.
+//
+// A page header is a thrift compact structure inside a column chunk, and the
+// library decodes it by allocating what the structure declares before checking
+// those bytes are there: a 473-byte file whose page header declared a 98 MiB
+// statistic allocated 98 MiB and then failed with "unexpected EOF", and paid
+// it again on every open of the same file. A file costs no more than its own
+// size, which is the rule this reader was chosen for, so the declared lengths
+// are read here first, against the bytes the chunk actually holds.
+//
+// Nothing is allocated for what a field declares. A field is walked past by
+// arithmetic where the format allows it and read only where its own length has
+// to be read, so the walk costs the header bytes and nothing else.
+//
+// This comes out if parquet-go grows an option bounding what a decoded page
+// header may declare, the way the check above the footer would.
+func parquetPagesFit(at io.ReaderAt, size int64, meta *format.FileMetaData) error {
+	if meta == nil {
+		return nil
+	}
+	for g := range meta.RowGroups {
+		group := &meta.RowGroups[g]
+		for c := range group.Columns {
+			column := &group.Columns[c].MetaData
+			// A chunk stored in another file is not this file's to check, and
+			// this reader does not follow one.
+			if group.Columns[c].FilePath != "" {
+				continue
+			}
+			start := column.DataPageOffset
+			if column.DictionaryPageOffset > 0 && column.DictionaryPageOffset < start {
+				start = column.DictionaryPageOffset
+			}
+			length := column.TotalCompressedSize
+			if start < 0 || length < 0 || start > size || length > size-start {
+				return parseError(nil, "parquet column chunk %d of row group %d claims %d bytes at offset %d in a file of %d",
+					c, g, length, start, size)
+			}
+			if err := parquetChunkPagesFit(at, start, start+length, g, c); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// parquetChunkPagesFit walks the page headers of one column chunk, refusing
+// the first one that declares more than the chunk holds.
+func parquetChunkPagesFit(at io.ReaderAt, start, end int64, group, column int) error {
+	// A chunk records no page count, so the walk ends where the chunk does. A
+	// header that declares a page reaching past that end is the failure this
+	// looks for; a chunk of no bytes has no page to walk.
+	cursor := &thriftCursor{at: at}
+	for off := start; off < end; {
+		cursor.reset(off, end)
+		compressed, err := cursor.pageHeader()
+		if err != nil {
+			return parseError(nil, "parquet page header at offset %d of column chunk %d in row group %d is damaged: %v",
+				off, column, group, err)
+		}
+		next := off + cursor.read() + compressed
+		if next <= off || next > end {
+			return parseError(nil, "parquet page at offset %d of column chunk %d in row group %d claims %d bytes, past the chunk's end at %d",
+				off, column, group, compressed, end)
+		}
+		off = next
+	}
+	return nil
+}
+
+// thriftCursor reads one thrift compact structure out of a bounded window of
+// the file. It exists to answer how much a structure declares without
+// allocating what it declares, which is the whole reason this walk is here.
+type thriftCursor struct {
+	at     io.ReaderAt
+	reader *bufio.Reader
+	base   int64
+	limit  int64
+	n      int64
+}
+
+// pageHeaderReadAhead is what the cursor buffers. A page header is a few dozen
+// bytes plus whatever statistics the writer put in it, and the bytes after it
+// are the page's own, so reading far past the header would be reading the data
+// this walk exists to avoid touching.
+const pageHeaderReadAhead = 512
+
+// thrift compact field types, as the protocol writes them in the low nibble of
+// a field header byte.
+const (
+	thriftStop         byte = 0x0
+	thriftBooleanTrue  byte = 0x1
+	thriftBooleanFalse byte = 0x2
+	thriftByte         byte = 0x3
+	thriftI16          byte = 0x4
+	thriftI32          byte = 0x5
+	thriftI64          byte = 0x6
+	thriftDouble       byte = 0x7
+	thriftBinary       byte = 0x8
+	thriftList         byte = 0x9
+	thriftSet          byte = 0xA
+	thriftMap          byte = 0xB
+	thriftStruct       byte = 0xC
+)
+
+// thriftMaxDepth bounds how deeply a structure may nest. A page header nests
+// three deep; anything past this is damaged input, and a walk that followed it
+// would grow the stack on a file that declares it.
+const thriftMaxDepth = 32
+
+// reset points the cursor at the window beginning at off and ending at limit.
+func (c *thriftCursor) reset(off, limit int64) {
+	c.base = off
+	c.limit = limit
+	c.n = 0
+	section := io.NewSectionReader(c.at, off, limit-off)
+	if c.reader == nil {
+		c.reader = bufio.NewReaderSize(section, pageHeaderReadAhead)
+		return
+	}
+	c.reader.Reset(section)
+}
+
+// read reports how many bytes of the window the cursor has consumed.
+func (c *thriftCursor) read() int64 { return c.n }
+
+// remaining reports how many bytes of the window are left.
+func (c *thriftCursor) remaining() int64 { return c.limit - c.base - c.n }
+
+// pageHeader walks one PageHeader structure and answers its
+// compressed_page_size, which is field 3 and the only one the walk needs: it
+// says where the next header begins.
+func (c *thriftCursor) pageHeader() (int64, error) {
+	compressed := int64(-1)
+	var id int16
+	for {
+		typ, next, err := c.field(id)
+		if err != nil {
+			return 0, err
+		}
+		if typ == thriftStop {
+			break
+		}
+		id = next
+		if id == 3 && typ == thriftI32 {
+			value, err := c.zigzag()
+			if err != nil {
+				return 0, err
+			}
+			compressed = value
+			continue
+		}
+		if err := c.skip(typ, 0); err != nil {
+			return 0, err
+		}
+	}
+	if compressed < 0 {
+		return 0, errors.New("it states no compressed page size")
+	}
+	return compressed, nil
+}
+
+// field reads one field header, answering the field's type and id. The type is
+// thriftStop at the end of a structure, where no id follows.
+func (c *thriftCursor) field(prev int16) (byte, int16, error) {
+	head, err := c.byteAt()
+	if err != nil {
+		return 0, 0, err
+	}
+	typ := head & 0x0F
+	if typ == thriftStop {
+		return thriftStop, 0, nil
+	}
+	delta := int16(head >> 4)
+	if delta != 0 {
+		return typ, prev + delta, nil
+	}
+	// A field whose id does not follow the previous one writes the id itself,
+	// as a zigzag varint.
+	id, err := c.zigzag()
+	if err != nil {
+		return 0, 0, err
+	}
+	if id < math.MinInt16 || id > math.MaxInt16 {
+		return 0, 0, errors.New("it names a field id no thrift structure has")
+	}
+	return typ, int16(id), nil
+}
+
+// skip walks past one value of the given type without allocating what the
+// value declares.
+func (c *thriftCursor) skip(typ byte, depth int) error {
+	if depth > thriftMaxDepth {
+		return errors.New("it nests deeper than any page header does")
+	}
+	switch typ {
+	case thriftBooleanTrue, thriftBooleanFalse:
+		// The value is the type itself, so there is nothing to walk past.
+		return nil
+	case thriftByte:
+		return c.discard(1)
+	case thriftI16, thriftI32, thriftI64:
+		_, err := c.zigzag()
+		return err
+	case thriftDouble:
+		return c.discard(8)
+	case thriftBinary:
+		n, err := c.length()
+		if err != nil {
+			return err
+		}
+		return c.discard(n)
+	case thriftList, thriftSet:
+		return c.skipList(depth)
+	case thriftMap:
+		return c.skipMap(depth)
+	case thriftStruct:
+		return c.skipStruct(depth)
+	default:
+		return fmt.Errorf("it names a field type thrift has no value for: %#x", typ)
+	}
+}
+
+// skipStruct walks past one nested structure.
+func (c *thriftCursor) skipStruct(depth int) error {
+	var id int16
+	for {
+		typ, next, err := c.field(id)
+		if err != nil {
+			return err
+		}
+		if typ == thriftStop {
+			return nil
+		}
+		id = next
+		if err := c.skip(typ, depth+1); err != nil {
+			return err
+		}
+	}
+}
+
+// skipList walks past one list or set.
+func (c *thriftCursor) skipList(depth int) error {
+	head, err := c.byteAt()
+	if err != nil {
+		return err
+	}
+	typ := head & 0x0F
+	size := int64(head >> 4)
+	if size == 0x0F {
+		// A list of fifteen elements or more writes its length separately.
+		if size, err = c.length(); err != nil {
+			return err
+		}
+	}
+	// Every element takes at least a byte, so a list longer than the window
+	// has declared more than the file holds, and saying so here is what keeps
+	// the walk from running the length of a number the file made up.
+	if size > c.remaining() {
+		return fmt.Errorf("it declares a list of %d elements in %d bytes", size, c.remaining())
+	}
+	for range size {
+		// A boolean in a list is written as a byte of its own, unlike a
+		// boolean field, whose value is its type.
+		if typ == thriftBooleanTrue || typ == thriftBooleanFalse {
+			if err := c.discard(1); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := c.skip(typ, depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// skipMap walks past one map.
+func (c *thriftCursor) skipMap(depth int) error {
+	size, err := c.length()
+	if err != nil {
+		return err
+	}
+	if size == 0 {
+		return nil
+	}
+	types, err := c.byteAt()
+	if err != nil {
+		return err
+	}
+	if size > c.remaining() {
+		return fmt.Errorf("it declares a map of %d entries in %d bytes", size, c.remaining())
+	}
+	keyType, valueType := types>>4, types&0x0F
+	for range size {
+		if err := c.skip(keyType, depth+1); err != nil {
+			return err
+		}
+		if err := c.skip(valueType, depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// byteAt reads one byte of the window.
+func (c *thriftCursor) byteAt() (byte, error) {
+	b, err := c.reader.ReadByte()
+	if err != nil {
+		return 0, err
+	}
+	c.n++
+	return b, nil
+}
+
+// discard walks past n bytes of the window, refusing a count the window cannot
+// hold before any of it is read.
+func (c *thriftCursor) discard(n int64) error {
+	if n < 0 || n > c.remaining() {
+		return fmt.Errorf("it declares %d bytes in %d", n, c.remaining())
+	}
+	skipped, err := c.reader.Discard(int(n))
+	c.n += int64(skipped)
+	return err
+}
+
+// length reads a length or a collection size, which the protocol writes as an
+// unsigned varint.
+func (c *thriftCursor) length() (int64, error) {
+	value, err := c.uvarint()
+	if err != nil {
+		return 0, err
+	}
+	if value > math.MaxInt32 {
+		return 0, fmt.Errorf("it declares a length of %d, past what thrift writes", value)
+	}
+	return int64(value), nil
+}
+
+// uvarint reads one unsigned varint.
+func (c *thriftCursor) uvarint() (uint64, error) {
+	var value uint64
+	for shift := uint(0); ; shift += 7 {
+		if shift >= 64 {
+			return 0, errors.New("it writes a number longer than a varint holds")
+		}
+		b, err := c.byteAt()
+		if err != nil {
+			return 0, err
+		}
+		value |= uint64(b&0x7F) << shift
+		if b < 0x80 {
+			return value, nil
+		}
+	}
+}
+
+// zigzag reads one signed varint, which the protocol writes zigzag-encoded.
+func (c *thriftCursor) zigzag() (int64, error) {
+	value, err := c.uvarint()
+	if err != nil {
+		return 0, err
+	}
+	return int64(value>>1) ^ -int64(value&1), nil
 }
 
 // parquetBytes gives the reader something it can read at both ends and then by
@@ -149,6 +517,9 @@ func readParquet(src io.Reader, opts Options, emit Emit) (Result, error) {
 
 	file, err := openParquet(at, size)
 	if err != nil {
+		return Result{}, err
+	}
+	if err := parquetPagesFit(at, size, file.Metadata()); err != nil {
 		return Result{}, err
 	}
 
