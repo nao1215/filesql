@@ -810,7 +810,7 @@ func (sp *streamProcessor) declareTable(ctx context.Context, tx *sql.Tx, staging
 		return fmt.Errorf("%w: failed to create table: %w", ErrDatabaseOperation, err)
 	}
 	statements := []string{
-		fmt.Sprintf(`INSERT INTO %s SELECT * FROM %s`, quoteIdentifier(tableName), quoteIdentifier(staging)),
+		fmt.Sprintf(`INSERT INTO %s SELECT %s FROM %s`, quoteIdentifier(tableName), stagedColumns(columns), quoteIdentifier(staging)),
 		`DROP TABLE ` + quoteIdentifier(staging),
 	}
 	for _, statement := range statements {
@@ -819,6 +819,30 @@ func (sp *streamProcessor) declareTable(ctx context.Context, tx *sql.Tx, staging
 		}
 	}
 	return nil
+}
+
+// stagedColumns is the select list that copies the staged rows into the table
+// their types were decided for.
+//
+// A blank cell in a column that turns out to be INTEGER or REAL is a missing
+// number, which the path that types as it reads applies in cellValue. This path
+// has every column as TEXT while it reads, so cellValue sees a text column for
+// every cell and the rule has to be applied here instead. Leaving the copy as
+// SELECT * left it out: SQLite's affinity converts text that spells a number
+// and leaves text that does not, and the empty string does not, so the blank
+// stayed in the numeric column as text -- MAX answered it, COUNT counted it and
+// IS NULL found none of them. Naming the columns rather than copying them by
+// position also stops the copy depending on the staging table's column order.
+func stagedColumns(columns columnInfoList) string {
+	selected := make([]string, len(columns))
+	for i, col := range columns {
+		name := quoteIdentifier(col.Name)
+		if col.Type == columnTypeInteger || col.Type == columnTypeReal {
+			name = "NULLIF(" + name + ", '')"
+		}
+		selected[i] = name
+	}
+	return strings.Join(selected, ", ")
 }
 
 // stagingTableName names the table a load's rows wait in. It is under the
