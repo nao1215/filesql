@@ -495,6 +495,31 @@ func ExampleProcessor_Process_checksummedIdentifiers() {
 	// row 2: card value must be a valid credit card number
 }
 
+func ExampleProcessor_Process_codeColumns() {
+	type sale struct {
+		Country  string `validate:"iso3166_1_alpha2"`
+		Currency string `validate:"iso4217"`
+	}
+
+	var rows []sale
+	_, result, err := prep.NewProcessor(prep.FileTypeCSV).Process(strings.NewReader(
+		"country,currency\n"+
+			"JP,JPY\n"+
+			"jp,YEN\n"), &rows)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(result.ValidRowCount)
+	for _, e := range result.ValidationErrors() {
+		fmt.Printf("row %d: %s %s\n", e.Row, e.Column, e.Message)
+	}
+	// Output:
+	// 1
+	// row 2: country value must be an ISO 3166-1 alpha-2 country code
+	// row 2: currency value must be an active ISO 4217 currency code
+}
+
 func ExampleProcessor_Process_crossField() {
 	type shipment struct {
 		ShippedOn string `validate:"ltfield=DueOn"`

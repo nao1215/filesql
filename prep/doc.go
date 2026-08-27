@@ -205,6 +205,15 @@
 // sha256, sha384 and sha512 are lowercase hexadecimal of exactly 32, 64, 96 and
 // 128 characters, so an uppercase spelling is refused.
 //
+// iso3166_1_alpha2, iso3166_1_alpha3 and iso3166_1_alpha_numeric look a cell
+// up in the officially assigned ISO 3166-1 codes, and country_code passes when
+// any of the three does. iso4217 looks it up in the active ISO 4217 currency
+// codes. Every lookup is exact, as it is in the dialect, so JP is a country
+// code and jp is not, and a numeric code keeps the leading zeros the standard
+// prints, so 032 is Argentina and 32 is nothing. The user-assigned range is not
+// included, so XK, widely used for Kosovo and never assigned, is not a country
+// code here.
+//
 // Importing prep embeds the IANA time zone database through time/tzdata, which
 // the timezone tag needs on a platform that ships none, and which costs a few
 // hundred KB of binary size. filesql itself does not import prep.
