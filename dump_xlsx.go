@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/nao1215/filesql/internal/infer"
 	"github.com/nao1215/filesql/internal/reader"
 	"github.com/xuri/excelize/v2"
 )
@@ -125,7 +126,48 @@ func unchangedXLSXCell(before [][]string, row, column int, value string) bool {
 		// value would write.
 		return value == ""
 	}
-	return cells[column-1] == value
+	return sameCellValue(cells[column-1], value)
+}
+
+// sameCellValue reports whether a cell already says what a save is about to
+// write, comparing two numbers as numbers and everything else as text.
+//
+// The two sides are spellings from different places. The sheet renders the
+// number it stores, so a cell holding 2 shows "2"; the loaded value is rendered
+// so that a text dump reloads with the same column type, so a REAL column
+// spells the same number "2.0" and a large integer "1e+15". Compared as text
+// those differ, so every whole number of a REAL column looked edited and was
+// written back as a string -- a save that changed nothing turned a column a
+// spreadsheet was summing into text. What decides whether a cell changed is the
+// value it holds, and two spellings of one number are one value.
+//
+// Text is still compared as text. A zero-padded code stays in a text column
+// under this package's own rule, so "007" and "7" reach here as text and are
+// two different cells, which is what a comparison by number would deny.
+func sameCellValue(held, value string) bool {
+	if held == value {
+		return true
+	}
+	heldNumber, ok := numericCellValue(held)
+	if !ok {
+		return false
+	}
+	newNumber, ok := numericCellValue(value)
+	if !ok {
+		return false
+	}
+	return heldNumber == newNumber
+}
+
+// numericCellValue is the number a cell's text spells, for the spellings this
+// package calls numbers. A value it would keep as text -- a zero-padded code, a
+// literal past int64, a number with padding around it -- is not one of them, so
+// it stays a string here as it does in a column.
+func numericCellValue(text string) (float64, bool) {
+	if !infer.IsInteger(text) && !infer.IsFloat(text) {
+		return 0, false
+	}
+	return infer.Float64(text)
 }
 
 // xlsxExtent is how far a sheet's values reached before it was rewritten.

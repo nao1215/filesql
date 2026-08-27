@@ -1,6 +1,7 @@
 package reader
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -138,4 +139,73 @@ func TestDefinesADateStyle(t *testing.T) {
 
 		assert.Equal(t, rows, NormalizeXLSXDates(f, "Sheet1", rows))
 	})
+}
+
+// TestTheTwoDateReadingsAgree holds the sentence this package's date
+// normalization rests on: the two ways of finding a sheet's date cells "differ
+// only in how they reach a cell's style".
+//
+// One reads the sheet's own XML, which the loader uses because it costs what
+// the date cells cost; the other asks the library cell by cell, which is what
+// NormalizeXLSXDates does and what the XLSX save reads a sheet with. They have
+// to answer the same, or the same workbook read for loading and read for
+// saving disagrees about which cells are dates, and the save rewrites a cell
+// nothing edited.
+func TestTheTwoDateReadingsAgree(t *testing.T) {
+	t.Parallel()
+
+	const sheet = "Sheet1"
+	f := excelize.NewFile()
+	style, err := f.NewStyle(&excelize.Style{NumFmt: 14}) // m/d/yy, a builtin date format
+	require.NoError(t, err)
+
+	// One row of cells, every one of them wearing the same date format, each
+	// stored as a different type. Only the number is a serial.
+	require.NoError(t, f.SetCellValue(sheet, "A1", "number"))
+	require.NoError(t, f.SetCellValue(sheet, "B1", "boolean"))
+	require.NoError(t, f.SetCellValue(sheet, "C1", "string spelling a number"))
+	require.NoError(t, f.SetCellValue(sheet, "D1", "text"))
+	require.NoError(t, f.SetCellValue(sheet, "A2", 45000.0))
+	require.NoError(t, f.SetCellBool(sheet, "B2", true))
+	require.NoError(t, f.SetCellStr(sheet, "C2", "45001"))
+	require.NoError(t, f.SetCellStr(sheet, "D2", "not a date"))
+	require.NoError(t, f.SetCellStyle(sheet, "A2", "D2", style))
+
+	var buffer bytes.Buffer
+	require.NoError(t, f.Write(&buffer))
+	require.NoError(t, f.Close())
+
+	data := buffer.Bytes()
+	book, err := excelize.OpenReader(bytes.NewReader(data))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, book.Close()) })
+
+	rows, err := book.GetRows(sheet)
+	require.NoError(t, err)
+
+	styles, complete := dateStyleIDs(book)
+	require.True(t, complete, "the style table is short enough to walk")
+	dates, ok := dateCellsFromXML(data, sheet, styles, false)
+	require.True(t, ok, "the workbook's parts say where the sheet is")
+
+	fromXML := copyRows(rows)
+	for cell, iso := range dates {
+		fromXML[cell.row-1][cell.col-1] = iso
+	}
+	fromLibrary := NormalizeXLSXDates(book, sheet, copyRows(rows))
+
+	assert.Equal(t, fromXML, fromLibrary,
+		"the two readings of the same sheet have to name the same date cells")
+	assert.Equal(t, []string{"2023-03-15", "TRUE", "45001", "not a date"}, fromLibrary[1],
+		"only the cell stored as a number is a serial; a boolean and a string are not, whatever their format renders")
+}
+
+// copyRows is rows with each row copied, so a normalization that writes in
+// place leaves the caller's rows alone.
+func copyRows(rows [][]string) [][]string {
+	out := make([][]string, len(rows))
+	for i, row := range rows {
+		out[i] = append([]string(nil), row...)
+	}
+	return out
 }
