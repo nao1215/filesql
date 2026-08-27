@@ -410,6 +410,46 @@ func undoInput(ctx context.Context, tx *sql.Tx) error {
 	return err
 }
 
+// readWithContext stops a load from asking its source for more bytes once the
+// caller's context is done.
+//
+// Nothing under this point reads the context: the reader package takes none, so
+// the first thing that noticed a canceled load was the database call after the
+// read. For a file that is a moment away, but for a source that is a stream it
+// is however long the sender takes, and a body smaller than the window the
+// line-ending sniff peeks was read to its end whatever the caller's context
+// said. A request body is the source AddReader exists for, so the sender was
+// deciding how long a canceled load ran.
+//
+// A source that is an open file is left as it is. Its length is its own and the
+// operating system serves it, so there is nothing here for a sender to hold
+// open; and Parquet reads a file at both ends and by column chunk, so a wrapper
+// would hide that it is a file and turn a read where it lies into a copy of the
+// whole of it.
+//
+// Only the next Read is refused. A Read already blocked inside the source cannot
+// be interrupted from here, which is what a connection deadline is for.
+func readWithContext(ctx context.Context, src io.Reader) io.Reader {
+	if _, isFile := src.(*os.File); isFile {
+		return src
+	}
+	return &contextReader{ctx: ctx, src: src}
+}
+
+// contextReader is the reader readWithContext returns.
+type contextReader struct {
+	//nolint:containedctx // The context bounds the reads this wrapper performs, which is the whole of what it is.
+	ctx context.Context
+	src io.Reader
+}
+
+func (r *contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.src.Read(p)
+}
+
 // closeReaderInput closes the underlying resource of a reader input if it was opened internally (e.g. from AddFS).
 func (sp *streamProcessor) closeReaderInput(ri readerInput) {
 	if ri.closer != nil {
@@ -564,6 +604,8 @@ func (sp *streamProcessor) streamFedWireFileToDatabase(ctx context.Context, tx *
 
 // streamReaderToDatabase loads one reader into the table named for it.
 func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, tx *sql.Tx, input readerInput) error {
+	input.reader = readWithContext(ctx, input.reader)
+
 	// Route ACH/Fedwire readers to dedicated handlers. No source path is
 	// recorded: a reader has no file to read again at dump time, so these tables
 	// can only be written back through DumpACHWithTableSet or
