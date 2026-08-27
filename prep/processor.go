@@ -321,6 +321,13 @@ func (p *Processor) processRecords(input io.Reader, structSlicePointer any) (
 	// validator per row.
 	targetScratch := make([]string, 0, maxCrossFieldTargets(sInfo))
 
+	// The values each unique column has already seen, allocated per run. It
+	// cannot live anywhere longer-lived: sInfo comes from a process-wide cache
+	// keyed by (type, strict), so a seen set parked there would carry values
+	// from one file into the next and race between concurrent processors
+	// sharing one struct type.
+	uniqueSeen := newUniqueColumns(sInfo)
+
 	// Process records in-place to avoid unnecessary allocations
 	for rowIdx := range records {
 		record := records[rowIdx]
@@ -341,7 +348,7 @@ func (p *Processor) processRecords(input io.Reader, structSlicePointer any) (
 		// processRow returns fieldValues mapping each field name to its
 		// preprocessed string value (used for cross-field validation).
 		fieldValues := make(map[string]string, len(sInfo.Fields))
-		rowHasError, err := p.processRow(record, rowNum, sInfo, structValue, result, isJSONFormat, jsonDataColumn, fieldValues)
+		rowHasError, err := p.processRow(record, rowNum, sInfo, structValue, result, isJSONFormat, jsonDataColumn, fieldValues, uniqueSeen)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -380,10 +387,12 @@ func (p *Processor) processRow(
 	isJSONFormat bool,
 	jsonDataColumn string,
 	fieldValues map[string]string,
+	uniqueSeen []map[string]int,
 ) (bool, error) {
 	rowHasError := false
 
-	for _, fieldInfo := range structInfo.Fields {
+	for fieldIdx := range structInfo.Fields {
+		fieldInfo := &structInfo.Fields[fieldIdx]
 		colIdx := fieldInfo.ColumnIndex
 
 		// Get value: empty string if column not found or out of range
@@ -436,6 +445,21 @@ func (p *Processor) processRow(
 			rowHasError = true
 		}
 
+		// A unique column refuses a value an earlier row already carried. An
+		// empty cell is a missing value rather than a value, so two of them are
+		// two absences and neither is a duplicate.
+		if seen := uniqueColumn(uniqueSeen, fieldIdx); seen != nil && processedValue != "" {
+			if firstRow, duplicate := seen[processedValue]; duplicate {
+				result.Errors = append(result.Errors, newValidationError(
+					rowNum, colName, fieldInfo.Name, processedValue, uniqueTagValue,
+					fmt.Sprintf("value %q already appeared in row %d", processedValue, firstRow),
+				))
+				rowHasError = true
+			} else {
+				seen[processedValue] = rowNum
+			}
+		}
+
 		// Set struct field value (use field index, not column index)
 		if err := setFieldValue(structValue.Field(fieldInfo.Index), processedValue); err != nil {
 			result.Errors = append(result.Errors, newPrepError(
@@ -447,6 +471,37 @@ func (p *Processor) processRow(
 	}
 
 	return rowHasError, nil
+}
+
+// newUniqueColumns allocates one seen set per column tagged unique, indexed the
+// way structInfo.Fields is, with nil for every other column. It is called once
+// per Process call, which is what keeps one run's values out of the next.
+//
+// The map needs no lock because a run walks its rows in order on one goroutine.
+// If that ever changes, this map is the first thing it breaks.
+func newUniqueColumns(structInfo *structInfo) []map[string]int {
+	var columns []map[string]int
+	for i := range structInfo.Fields {
+		if !structInfo.Fields[i].Unique {
+			continue
+		}
+		if columns == nil {
+			columns = make([]map[string]int, len(structInfo.Fields))
+		}
+		columns[i] = make(map[string]int)
+	}
+	// A struct with no unique column gets no slice, so it pays nothing for the
+	// tag it does not use.
+	return columns
+}
+
+// uniqueColumn returns the seen set of one column, or nil when the struct has
+// no unique column at all and newUniqueColumns therefore built no slice.
+func uniqueColumn(columns []map[string]int, fieldIdx int) map[string]int {
+	if columns == nil {
+		return nil
+	}
+	return columns[fieldIdx]
 }
 
 // applyCrossFieldValidation runs cross-field validators for one row.

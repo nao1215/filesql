@@ -2952,3 +2952,106 @@ func TestProcessorIsSafeForConcurrentUse(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// unique means uniqueness of a column across the rows of one processing run,
+// which is a reinterpretation: the reference dialect defines the tag for a
+// slice field, and a row here is a flat struct.
+func TestUniqueColumn(t *testing.T) {
+	t.Parallel()
+
+	type record struct {
+		Code string `validate:"unique"`
+		Name string
+	}
+
+	t.Run("the second occurrence fails and names the row the first was on", func(t *testing.T) {
+		t.Parallel()
+		input := "code,name\nA1,first\nA2,second\nA1,third\n"
+		var records []record
+		_, result, err := NewProcessor(FileTypeCSV).Process(strings.NewReader(input), &records)
+		if err != nil {
+			t.Fatalf("Process() error = %v", err)
+		}
+		if len(result.Errors) != 1 {
+			t.Fatalf("Errors = %v, want exactly the third row reported", result.Errors)
+		}
+		msg := result.Errors[0].Error()
+		for _, want := range []string{"row 3", "A1", "row 1"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("Errors[0] = %q, want it to name %q", msg, want)
+			}
+		}
+		if result.ValidRowCount != 2 {
+			t.Errorf("ValidRowCount = %d, want 2", result.ValidRowCount)
+		}
+	})
+
+	t.Run("two empty cells are two absences rather than two equal values", func(t *testing.T) {
+		t.Parallel()
+		input := "code,name\n,first\n,second\nA1,third\n"
+		var records []record
+		_, result, err := NewProcessor(FileTypeCSV).Process(strings.NewReader(input), &records)
+		if err != nil {
+			t.Fatalf("Process() error = %v", err)
+		}
+		if len(result.Errors) != 0 {
+			t.Fatalf("Errors = %v, want none", result.Errors)
+		}
+	})
+
+	t.Run("a second Process call does not see the first call's values", func(t *testing.T) {
+		t.Parallel()
+		processor := NewProcessor(FileTypeCSV)
+		input := "code,name\nA1,first\n"
+		for run := range 2 {
+			var records []record
+			_, result, err := processor.Process(strings.NewReader(input), &records)
+			if err != nil {
+				t.Fatalf("run %d: Process() error = %v", run, err)
+			}
+			if len(result.Errors) != 0 {
+				t.Fatalf("run %d: Errors = %v, want none; the seen set must not outlive one run", run, result.Errors)
+			}
+		}
+	})
+
+	t.Run("uniqueness applies to the value preprocessing produced", func(t *testing.T) {
+		t.Parallel()
+		type trimmed struct {
+			Code string `prep:"trim" validate:"unique"`
+		}
+		input := "code\n a\na\n"
+		var records []trimmed
+		_, result, err := NewProcessor(FileTypeCSV).Process(strings.NewReader(input), &records)
+		if err != nil {
+			t.Fatalf("Process() error = %v", err)
+		}
+		if len(result.Errors) != 1 {
+			t.Fatalf("Errors = %v, want the second row reported once trim has run", result.Errors)
+		}
+	})
+
+	t.Run("two unique columns are tracked apart", func(t *testing.T) {
+		t.Parallel()
+		type pair struct {
+			Code  string `validate:"unique"`
+			Email string `validate:"unique"`
+		}
+		input := "code,email\nA1,a@example.com\nA2,a@example.com\n"
+		var records []pair
+		_, result, err := NewProcessor(FileTypeCSV).Process(strings.NewReader(input), &records)
+		if err != nil {
+			t.Fatalf("Process() error = %v", err)
+		}
+		if len(result.Errors) != 1 {
+			t.Fatalf("Errors = %v, want only the email column reported", result.Errors)
+		}
+		var ve *ValidationError
+		if !errors.As(result.Errors[0], &ve) {
+			t.Fatalf("Errors[0] = %T, want a ValidationError", result.Errors[0])
+		}
+		if ve.Column != "email" {
+			t.Errorf("Column = %q, want %q", ve.Column, "email")
+		}
+	})
+}
