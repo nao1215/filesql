@@ -586,6 +586,18 @@ func rewriteRoundCall(tokens []token, open, closeIdx int, recurse callRecurser) 
 	return rewriteRenameCall(tokens, open, closeIdx, "dialect_round", recurse)
 }
 
+// rewriteRoundEvenCall routes both ROUND forms onto the helper that breaks a
+// tie toward the even neighbour, which is what MySQL and PostgreSQL answer for
+// a floating-point argument and what SQLite's own round() does not do. Unlike
+// rewriteRoundCall it takes the one-argument form too, since that is where the
+// tie shows: ROUND(2.5) is the whole question.
+func rewriteRoundEvenCall(tokens []token, open, closeIdx int, recurse callRecurser) ([]token, bool, error) {
+	if arity := callArity(tokens, open, closeIdx); arity != 1 && arity != 2 {
+		return nil, false, nil
+	}
+	return rewriteRenameCall(tokens, open, closeIdx, "dialect_round_even", recurse)
+}
+
 // rewriteTruncScaleCall renames the two-argument TRUNC, which truncates at a
 // scale the way PostgreSQL's trunc(x, n) and GoogleSQL's TRUNC(x, n) do. The
 // one-argument form is SQLite's own trunc and is left alone, so the two live

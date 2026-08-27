@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"math/big"
 	"regexp"
 	"strconv"
 	"strings"
@@ -166,7 +167,8 @@ func registerAll() error {
 		"mysql_substr":      {-1, fnMySQLSubstr},
 		"postgresql_substr": {-1, fnPostgreSQLSubstr},
 		"googlesql_substr":  {-1, fnGoogleSQLSubstr},
-		"dialect_round":     {2, fnDialectRound},
+		"dialect_round":      {2, fnDialectRound},
+		"dialect_round_even": {-1, fnDialectRoundEven},
 		"repeat":            {2, fnRepeat},
 		"space":             {1, fnSpace},
 		"truncate":          {2, fnTruncate},
@@ -198,6 +200,7 @@ func registerAll() error {
 		"mysql_right":          {2, fnMySQLRight},
 		"mysql_regexp_replace": {-1, fnMySQLRegexpReplace},
 		"mysql_divide":         {2, divideFloat(false)},
+		"mysql_mod":            {2, moduloDialect(false)},
 		"mysql_bit_xor":        {2, fnBitXor},
 		"interval_add":         {3, fnDateIntervalAdd},
 		"interval_text_add":    {3, fnIntervalTextAdd},
@@ -226,10 +229,10 @@ func registerAll() error {
 		"postgresql_to_hex":         {1, fnPostgresToHex},
 		"postgresql_regexp_replace": {-1, fnPostgresRegexpReplace},
 		"postgresql_divide":         {2, divideSQLite},
-		"postgresql_mod":            {2, moduloRaising},
+		"postgresql_mod":            {2, moduloDialect(true)},
 		"googlesql_cast":            {2, dialectCast(GoogleSQL, false)},
 		"googlesql_divide":          {2, divideFloat(true)},
-		"googlesql_mod":             {2, moduloRaising},
+		"googlesql_mod":             {2, moduloDialect(true)},
 		"googlesql_safe_cast":       {2, dialectCast(GoogleSQL, true)},
 
 		// PostgreSQL helpers.
@@ -1582,6 +1585,102 @@ func fnDialectRound(args []driver.Value) (driver.Value, error) {
 // anything beyond it is infinite, and an infinite scale turns a finite value
 // into a NaN rather than into the answer every engine gives.
 const float64MaxDecimalExponent = 308
+
+// fnDialectRoundEven is fnDialectRound with MySQL's and PostgreSQL's tie rule.
+// Both round a floating-point argument to the even neighbour: ROUND(2.5) is 2
+// and ROUND(3.5) is 4, where SQLite's own round() and BigQuery both answer 3
+// and 4. Every non-integer value SQLite holds is a float, so this is the rule
+// that matches what a REAL column loaded from a file does in either engine.
+//
+// The one case it cannot match is a decimal literal written in the query:
+// MySQL reads 2.5 as an exact decimal and answers 3, and SQLite has no type to
+// tell that from the double 2.5e0, which MySQL answers 2 for. The column is the
+// case worth getting right.
+func fnDialectRoundEven(args []driver.Value) (driver.Value, error) {
+	value, ok := toFloat(args[0])
+	if !ok {
+		return nil, nil
+	}
+	digits := int64(0)
+	if len(args) > 1 {
+		if digits, ok = toCount(args[1]); !ok {
+			return nil, nil
+		}
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return value, nil
+	}
+	if digits < -float64MaxDecimalExponent {
+		return int64(0), nil
+	}
+	if digits > float64MaxDecimalExponent {
+		return value, nil
+	}
+	rounded, ok := roundHalfToEven(value, digits)
+	if !ok {
+		return value, nil
+	}
+	if math.IsInf(rounded, 0) {
+		return nil, fmt.Errorf("dialect: ROUND: rounding %v to %d digits overflows", value, digits)
+	}
+	if rounded == math.Trunc(rounded) && math.Abs(rounded) < 1e15 {
+		return int64(rounded), nil
+	}
+	return rounded, nil
+}
+
+// roundHalfToEven rounds value to digits decimal places, breaking an exact tie
+// toward the even neighbour.
+//
+// It rounds the shortest decimal that reads back as value rather than the
+// binary value itself, which is what makes 2.675 round to 2.68 the way MySQL
+// answers: the nearest double to 2.675 is a shade below it, so scaling by 100
+// in binary lands on 267.49999999999997 and rounds down. Reading the value as
+// the decimal a person wrote is the only way the tie is a tie at all.
+func roundHalfToEven(value float64, digits int64) (float64, bool) {
+	exact, ok := new(big.Rat).SetString(strconv.FormatFloat(value, 'f', -1, 64))
+	if !ok {
+		return 0, false
+	}
+	shift := digits
+	if shift < 0 {
+		shift = -shift
+	}
+	pow := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(shift), nil))
+	scaled := new(big.Rat)
+	if digits >= 0 {
+		scaled.Mul(exact, pow)
+	} else {
+		scaled.Quo(exact, pow)
+	}
+	whole := ratRoundHalfToEven(scaled)
+	result := new(big.Rat).SetInt(whole)
+	if digits >= 0 {
+		result.Quo(result, pow)
+	} else {
+		result.Mul(result, pow)
+	}
+	f, _ := result.Float64()
+	return f, true
+}
+
+// ratRoundHalfToEven is r rounded to an integer, with an exact half going to
+// whichever neighbour is even.
+func ratRoundHalfToEven(r *big.Rat) *big.Int {
+	quo, rem := new(big.Int).QuoRem(r.Num(), r.Denom(), new(big.Int))
+	twice := new(big.Int).Abs(rem)
+	twice.Lsh(twice, 1)
+	switch cmp := twice.Cmp(r.Denom()); {
+	case cmp < 0:
+		return quo
+	case cmp == 0 && quo.Bit(0) == 0:
+		return quo
+	}
+	if r.Sign() < 0 {
+		return quo.Sub(quo, big.NewInt(1))
+	}
+	return quo.Add(quo, big.NewInt(1))
+}
 
 // roundHalfAwayFromZero is value rounded to digits places after the decimal
 // point, with a half rounded away from zero, which is what all three engines do

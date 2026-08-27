@@ -54,12 +54,12 @@ func TestMySQLTranslate(t *testing.T) {
 		// the primary beside the DIV: MySQL reads "a * b DIV c" as "(a * b) DIV c".
 		{"M-7_div_of_a_product", "SELECT a * b DIV c", `SELECT CAST(mysql_divide((a * b), c) AS INTEGER) AS "a * b DIV c"`},
 		{"M-7_div_of_a_quotient", "SELECT a / b DIV c", `SELECT CAST(mysql_divide((mysql_divide(a, b)), c) AS INTEGER) AS "a / b DIV c"`},
-		{"M-7_div_of_a_remainder", "SELECT a % b DIV c", `SELECT CAST(mysql_divide((a % b), c) AS INTEGER) AS "a % b DIV c"`},
+		{"M-7_div_of_a_remainder", "SELECT a % b DIV c", `SELECT CAST(mysql_divide((mysql_mod(a, b)), c) AS INTEGER) AS "a % b DIV c"`},
 		{"M-7_div_stops_at_lower_precedence", "SELECT a + b DIV c", `SELECT a + CAST(mysql_divide(b, c) AS INTEGER) AS "a + b DIV c"`},
 
 		// M-11: "/" takes its left operand the same way, so a remainder to its
 		// left is divided rather than dividing.
-		{"M-11_divide_of_a_remainder", "SELECT a % b / c", `SELECT mysql_divide((a % b), c) AS "a % b / c"`},
+		{"M-11_divide_of_a_remainder", "SELECT a % b / c", `SELECT mysql_divide((mysql_mod(a, b)), c) AS "a % b / c"`},
 		{"M-11_divide_of_a_product", "SELECT a * b / c", `SELECT mysql_divide((a * b), c) AS "a * b / c"`},
 		{"M-11_divide_stops_at_lower_precedence", "SELECT a + b / c", `SELECT a + mysql_divide(b, c) AS "a + b / c"`},
 		{"M-21_xor_operand_is_one_primary", "SELECT a * b ^ c", `SELECT a * mysql_bit_xor(b, c) AS "a * b ^ c"`},
@@ -67,10 +67,10 @@ func TestMySQLTranslate(t *testing.T) {
 		// M-24: MOD is MySQL's spelling of the remainder operator, and SQLite's
 		// "%" is the same operation at the same precedence. The function
 		// spelling already works and is left alone.
-		{"M-24_mod", "SELECT a MOD b FROM t", `SELECT a % b AS "a MOD b" FROM t`},
-		{"M-24_mod_literals", "SELECT 7 MOD 2", `SELECT 7 % 2 AS "7 MOD 2"`},
-		{"M-24_mod_in_where", "SELECT * FROM t WHERE a MOD b = 1", "SELECT * FROM t WHERE a % b = 1"},
-		{"M-24_mod_call_untouched", "SELECT MOD(7, 2)", "SELECT MOD(7, 2)"},
+		{"M-24_mod", "SELECT a MOD b FROM t", `SELECT mysql_mod(a, b) AS "a MOD b" FROM t`},
+		{"M-24_mod_literals", "SELECT 7 MOD 2", `SELECT mysql_mod(7, 2) AS "7 MOD 2"`},
+		{"M-24_mod_in_where", "SELECT * FROM t WHERE a MOD b = 1", "SELECT * FROM t WHERE mysql_mod(a, b) = 1"},
+		{"M-24_mod_call_renamed", "SELECT MOD(7, 2)", `SELECT mysql_mod(7, 2) AS "MOD(7, 2)"`},
 
 		// UPPER and LOWER go to helpers that fold the whole of Unicode; SQLite's
 		// own fold only ASCII.
@@ -79,9 +79,9 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-25_upper_nested", "SELECT UPPER(TRIM(name))", `SELECT unicode_upper(TRIM(name)) AS "UPPER(TRIM(name))"`},
 		{"M-24_mod_quoted_name_untouched", "SELECT `mod` FROM t", `SELECT "mod" FROM t`},
 		{"M-24_mod_alias_untouched", "SELECT a AS `mod` FROM t", `SELECT a AS "mod" FROM t`},
-		{"M-24_mod_parenthesized_right", "SELECT a MOD (b + 1) FROM t", `SELECT a % (b + 1) AS "a MOD (b + 1)" FROM t`},
-		{"M-24_mod_parenthesized_left", "SELECT (a + 1) MOD b FROM t", `SELECT (a + 1) % b AS "(a + 1) MOD b" FROM t`},
-		{"M-24_mod_call_arguments_untouched", "SELECT MOD(a MOD b, 2) FROM t", `SELECT MOD(a % b, 2) AS "MOD(a MOD b, 2)" FROM t`},
+		{"M-24_mod_parenthesized_right", "SELECT a MOD (b + 1) FROM t", `SELECT mysql_mod(a, (b + 1)) AS "a MOD (b + 1)" FROM t`},
+		{"M-24_mod_parenthesized_left", "SELECT (a + 1) MOD b FROM t", `SELECT mysql_mod((a + 1), b) AS "(a + 1) MOD b" FROM t`},
+		{"M-24_mod_call_arguments_rewritten", "SELECT MOD(a MOD b, 2) FROM t", `SELECT mysql_mod(mysql_mod(a, b), 2) AS "MOD(a MOD b, 2)" FROM t`},
 		{"M-24_mod_without_a_right_operand_is_left_alone", "SELECT a MOD", "SELECT a MOD"},
 
 		{"M-8_cast_signed", "SELECT CAST(x AS SIGNED) FROM t", "SELECT mysql_cast(x, 'SIGNED') AS \"CAST(x AS SIGNED)\" FROM t"},
@@ -150,7 +150,7 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-24_log", "SELECT LOG(x) FROM t", `SELECT ln(x) AS "LOG(x)" FROM t`},
 		{"M-24_log_with_base_untouched", "SELECT LOG(2, x) FROM t", "SELECT LOG(2, x) FROM t"},
 		{"M-24_log_without_arguments_untouched", "SELECT LOG() FROM t", "SELECT LOG() FROM t"},
-		{"M-24_log_nested", "SELECT ROUND(LOG(x), 2) FROM t", `SELECT dialect_round(ln(x), 2) AS "ROUND(LOG(x), 2)" FROM t`},
+		{"M-24_log_nested", "SELECT ROUND(LOG(x), 2) FROM t", `SELECT dialect_round_even(ln(x), 2) AS "ROUND(LOG(x), 2)" FROM t`},
 		{"M-24_format", "SELECT FORMAT(x, 2) FROM t", `SELECT mysql_format(x, 2) AS "FORMAT(x, 2)" FROM t`},
 		{"M-24_left", "SELECT LEFT(name, 3) FROM t", `SELECT mysql_left(name, 3) AS "LEFT(name, 3)" FROM t`},
 		{"M-24_right", "SELECT RIGHT(name, 3) FROM t", `SELECT mysql_right(name, 3) AS "RIGHT(name, 3)" FROM t`},
