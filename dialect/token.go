@@ -654,6 +654,12 @@ var multiCharOperators = []string{
 	// The LIKE aliases are listed before the regex operators they start with,
 	// so "~~" is one token rather than two "~" that each become a REGEXP.
 	"!~~*", "~~*", "!~~", "~~",
+	// PostgreSQL's JSON path operators, listed before "#" so the bitwise XOR
+	// does not take the "#" and leave the ">" behind.
+	"#>>", "#>",
+	// Its JSON containment operators, which are single tokens rather than a
+	// comparison beside an "@".
+	"@>", "<@", "@?", "@@",
 	"<=>", "!~*", "->>", "!~", "~*", "->", "<=", ">=", "<>", "!=", "||", "&&", "<<", ">>", "::", ":=", "=>",
 }
 

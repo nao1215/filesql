@@ -657,6 +657,9 @@ func TestPredicatesAndOperatorsWithoutASQLiteSpelling(t *testing.T) {
 		{PostgreSQL, `SELECT 1 # 2 # 3`, "0"},
 		{PostgreSQL, `SELECT ~5`, "-6"},
 		{PostgreSQL, `SELECT ~0`, "-1"},
+		// The JSON operators that start with the same characters are one token
+		// each, so the XOR pass does not take the "#" of "#>" and leave the ">".
+		{PostgreSQL, `SELECT '{"a":1}'::json -> 'a'`, "1"},
 
 		// A COLLATE clause reaches the SQLite collation that means the same.
 		{PostgreSQL, `SELECT ('a' COLLATE "C" < 'B')`, "0"},
@@ -689,6 +692,18 @@ func TestPredicatesAndOperatorsWithoutASQLiteSpelling(t *testing.T) {
 	for _, tt := range refused {
 		if _, err := Translate(tt.dialect, tt.query); !errors.Is(err, ErrUnsupportedSyntax) {
 			t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.query, err)
+		}
+	}
+
+	// "#>" and "@>" are single tokens rather than an operator beside a
+	// comparison, so they reach SQLite whole and fail there as the one
+	// unsupported operator they are rather than as a mangled expression.
+	for _, query := range []string{
+		`SELECT '{"a":{"b":1}}'::jsonb #> '{a,b}'`,
+		`SELECT '{"a":1}'::jsonb @> '{"a":1}'`,
+	} {
+		if _, err := Translate(PostgreSQL, query); err != nil {
+			t.Errorf("Translate(postgresql, %q): %v", query, err)
 		}
 	}
 
