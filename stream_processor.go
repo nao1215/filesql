@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -547,6 +549,20 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, tx *sql.T
 	if err := validateTableName(input.tableName); err != nil {
 		return err
 	}
+
+	// A workbook holds sheets rather than one table, whichever way it arrived,
+	// so it goes to the same loader a path does with the caller's table name as
+	// the base its sheets hang off. The codec is unwrapped here because the
+	// chunked read this skips is where it would otherwise have been.
+	if input.fileType == FileTypeXLSX {
+		source, closeCodec, err := NewCompressionHandler(input.compression).CreateReader(input.reader)
+		if err != nil {
+			return err
+		}
+		defer closeQuietly(closeCodec)
+		return sp.streamWorkbookToDatabase(ctx, tx, source, input.tableName, input.tableName)
+	}
+
 	if err := sp.refuseExistingTable(ctx, tx, input.tableName); err != nil {
 		return err
 	}
@@ -979,11 +995,24 @@ func (sp *streamProcessor) createDecompressedReader(file *os.File, filePath stri
 
 // streamXLSXFileToDatabase handles XLSX files by creating separate tables for each sheet
 func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, tx *sql.Tx, source io.Reader, filePath string) error {
-	sp.logger.Debug("reading XLSX data into memory", "path", filePath)
+	return sp.streamWorkbookToDatabase(ctx, tx, source, sanitizeTableName(tableFromFilePath(filePath)), filePath)
+}
+
+// streamWorkbookToDatabase loads every sheet a workbook holds, one table each,
+// under base.
+//
+// base is where the table names hang off: the file's name for a workbook named
+// by a path, and the table name the caller gave for one handed over as a reader.
+// Which of the two a workbook arrived as says nothing about what it holds, so
+// the sheet policy, the check that refuses two sheets mapping to one table, and
+// the naming all run here rather than on one route. label names the workbook in
+// what is logged and reported.
+func (sp *streamProcessor) streamWorkbookToDatabase(ctx context.Context, tx *sql.Tx, source io.Reader, base, label string) error {
+	sp.logger.Debug("reading XLSX data into memory", "path", label)
 
 	workbook, err := reader.OpenWorkbook(source)
 	if err != nil {
-		sp.logger.Error("failed to open XLSX file", "path", filePath, "error", err)
+		sp.logger.Error("failed to open XLSX file", "path", label, "error", err)
 		return wrapReadError(err)
 	}
 	defer func() {
@@ -995,24 +1024,24 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, tx *sql
 	// will become tables.
 	sheetNames, skipped, err := selectExcelSheets(workbook.Source(), sp.excelSheetPolicy)
 	if err != nil {
-		sp.logger.Error("failed to read sheet visibility", "path", filePath, "error", err)
+		sp.logger.Error("failed to read sheet visibility", "path", label, "error", err)
 		return err
 	}
 	if len(skipped) > 0 {
-		sp.logger.Info("skipping sheets the workbook hides", "path", filePath, "skipped_count", len(skipped))
+		sp.logger.Info("skipping sheets the workbook hides", "path", label, "skipped_count", len(skipped))
 	}
 	if len(sheetNames) == 0 {
-		sp.logger.Warn("no sheets to load from XLSX file", "path", filePath)
+		sp.logger.Warn("no sheets to load from XLSX file", "path", label)
 		return noExcelSheetsError(workbook.Source(), sp.excelSheetPolicy)
 	}
-	sp.logger.Info("processing XLSX file", "path", filePath, "sheet_count", len(sheetNames))
+	sp.logger.Info("processing XLSX file", "path", label, "sheet_count", len(sheetNames))
 
 	// Every sheet's table name is worked out before any of them is created, so a
 	// workbook whose sheets would share a table is refused instead of loading the
 	// last one over the others.
-	sheetTables, err := ExcelSheetTableNames(filePath, sheetNames)
+	sheetTables, err := excelSheetTableNames(base, workbookLabel(label), sheetNames)
 	if err != nil {
-		sp.logger.Error("sheet names collide", "path", filePath, "error", err)
+		sp.logger.Error("sheet names collide", "path", label, "error", err)
 		return err
 	}
 	for _, tableName := range sheetTables {
@@ -1023,13 +1052,23 @@ func (sp *streamProcessor) streamXLSXFileToDatabase(ctx context.Context, tx *sql
 
 	// Process each sheet as a separate table
 	for i, sheetName := range sheetNames {
-		sp.logger.Debug("processing sheet", "path", filePath, logKeySheet, sheetName, "index", i+1, "total", len(sheetNames))
-		if err := sp.streamXLSXSheetToDatabase(ctx, tx, workbook, sheetName, sheetTables[i], filePath); err != nil {
+		sp.logger.Debug("processing sheet", "path", label, logKeySheet, sheetName, "index", i+1, "total", len(sheetNames))
+		if err := sp.streamXLSXSheetToDatabase(ctx, tx, workbook, sheetName, sheetTables[i], label); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// workbookLabel is how a workbook is named in what a failure reports: the file
+// name for one named by a path, and the table name for one handed over as a
+// reader, which has no file name to give.
+func workbookLabel(label string) string {
+	if base := path.Base(filepath.ToSlash(label)); base != label {
+		return base
+	}
+	return label
 }
 
 // streamXLSXSheetToDatabase loads one sheet of an open workbook into its table.

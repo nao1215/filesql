@@ -217,7 +217,15 @@ func xlsxSheetTableName(baseTableName, sheetName string) string {
 // tables is parallel to sheetNames. err is non-nil when any two sheets collide,
 // and names both the sheets and the table they would share.
 func ExcelSheetTableNames(filePath string, sheetNames []string) (tables []string, err error) {
-	base := sanitizeTableName(tableFromFilePath(filePath))
+	return excelSheetTableNames(sanitizeTableName(tableFromFilePath(filePath)), filepath.Base(filePath), sheetNames)
+}
+
+// excelSheetTableNames is ExcelSheetTableNames over a base worked out by the
+// caller, which is what a reader needs: it has no path to take a base from, so
+// the table name it was given is the base its sheets hang off. source names the
+// workbook in the error and is the file name for a path and the table name for
+// a reader.
+func excelSheetTableNames(base, source string, sheetNames []string) (tables []string, err error) {
 	tables = make([]string, len(sheetNames))
 	// SQLite folds ASCII case when it compares identifiers, so the key does too:
 	// "Data" and "data" are one table there, whatever the sanitizer preserved.
@@ -228,7 +236,7 @@ func ExcelSheetTableNames(filePath string, sheetNames []string) (tables []string
 		key := strings.ToLower(table)
 		if first, taken := claimed[key]; taken {
 			return nil, fmt.Errorf("%w: sheets %q and %q of %s both map to table %q; rename one of them",
-				ErrDuplicateTable, first, sheet, filepath.Base(filePath), table)
+				ErrDuplicateTable, first, sheet, source, table)
 		}
 		claimed[key] = sheet
 	}

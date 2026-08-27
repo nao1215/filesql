@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -313,17 +314,17 @@ func TestBuilderSheetPolicyFromReader(t *testing.T) {
 	tests := []struct {
 		name   string
 		policy ExcelSheetPolicy
-		want   string
+		want   []string
 	}{
 		{
-			name:   "the all policy takes the first stored sheet even when it is hidden",
+			name:   "the all policy takes every sheet, hidden ones included",
 			policy: ExcelSheetPolicyAll,
-			want:   "Buried",
+			want:   []string{"book_Buried", "book_Shown"},
 		},
 		{
-			name:   "the visible-only policy takes the first shown sheet",
+			name:   "the visible-only policy leaves the hidden sheet out",
 			policy: ExcelSheetPolicyVisibleOnly,
-			want:   "Shown",
+			want:   []string{"book_Shown"},
 		},
 	}
 
@@ -331,7 +332,7 @@ func TestBuilderSheetPolicyFromReader(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			// The hidden sheet is stored first on purpose: the two policies then
-			// disagree about which sheet the reader load takes.
+			// disagree about which sheets the reader load takes.
 			path := visibilityWorkbook(t, filepath.Join(t.TempDir(), "book.xlsx"),
 				sheetSpec{"Buried", sheetHidden},
 				sheetSpec{"Shown", sheetVisible},
@@ -354,13 +355,7 @@ func TestBuilderSheetPolicyFromReader(t *testing.T) {
 			}
 			defer func() { _ = db.Close() }()
 
-			var got string
-			if err := db.QueryRowContext(context.Background(), "SELECT v FROM book").Scan(&got); err != nil {
-				t.Fatalf("query book: %v", err)
-			}
-			if got != tt.want {
-				t.Errorf("the reader load took sheet %q, want %q", got, tt.want)
-			}
+			assert.Equal(t, tt.want, loadedTables(t, db), "the policy decides which sheets a reader load takes")
 		})
 	}
 }
@@ -388,13 +383,8 @@ func TestBuilderSheetPolicyFromFS(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	var got string
-	if err := db.QueryRowContext(context.Background(), "SELECT v FROM book").Scan(&got); err != nil {
-		t.Fatalf("query book: %v", err)
-	}
-	if got != "Shown" {
-		t.Errorf("the filesystem load took sheet %q, want %q", got, "Shown")
-	}
+	assert.Equal(t, []string{"book_Shown"}, loadedTables(t, db),
+		"the policy decides which sheets a filesystem load takes")
 }
 
 // TestSheetPolicyKeepsWorkbookOrder pins that filtering removes sheets without
@@ -1455,7 +1445,7 @@ func TestXLSXDateCellsImportAsISOThroughAddReader(t *testing.T) {
 	defer func() { _ = sqlDB.Close() }()
 
 	var date string
-	require.NoError(t, sqlDB.QueryRowContext(ctx, `SELECT "date" FROM book`).Scan(&date))
+	require.NoError(t, sqlDB.QueryRowContext(ctx, `SELECT "date" FROM book_Sheet1`).Scan(&date))
 	assert.Equal(t, "2023-03-15", date, "a date cell holds a day whether the workbook came by path or by reader")
 }
 
@@ -1904,4 +1894,133 @@ func storedCells(t *testing.T, path string, rows int) []string {
 		held = append(held, fmt.Sprintf("%s=%v/%s", cell, kind, stored))
 	}
 	return held
+}
+
+// TestEverySheetIsLoadedByEveryRoute holds what README says twice: every sheet
+// of a workbook becomes a table, and the sheet policy "applies to every source
+// -- a path, a directory, an embedded filesystem, a reader, and a compressed
+// workbook alike".
+//
+// It did not. A path loaded one table per sheet and a reader loaded the first
+// sheet alone, so a workbook of four sheets came back as one table with the
+// other three neither loaded nor mentioned. `ExcelSheetsInReader` on the same
+// bytes reported all four, so the package would say the workbook had four and
+// then load one.
+func TestEverySheetIsLoadedByEveryRoute(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	data := multiSheetWorkbook(t, "Sheet1", "Orders", "Customers")
+	path := filepath.Join(t.TempDir(), "book.xlsx")
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+
+	want := []string{"book_Customers", "book_Orders", "book_Sheet1"}
+
+	t.Run("a path", func(t *testing.T) {
+		t.Parallel()
+
+		db, err := OpenContext(ctx, path)
+		require.NoError(t, err)
+		defer db.Close()
+		assert.Equal(t, want, loadedTables(t, db))
+	})
+
+	t.Run("a reader", func(t *testing.T) {
+		t.Parallel()
+
+		validated, err := NewBuilder().
+			AddReader(bytes.NewReader(data), "book", FileTypeXLSX).Build(ctx)
+		require.NoError(t, err)
+		db, err := validated.Open(ctx)
+		require.NoError(t, err)
+		defer db.Close()
+		assert.Equal(t, want, loadedTables(t, db))
+	})
+
+	t.Run("an embedded filesystem", func(t *testing.T) {
+		t.Parallel()
+
+		validated, err := NewBuilder().
+			AddFS(fstest.MapFS{"book.xlsx": &fstest.MapFile{Data: data}}).Build(ctx)
+		require.NoError(t, err)
+		db, err := validated.Open(ctx)
+		require.NoError(t, err)
+		defer db.Close()
+		assert.Equal(t, want, loadedTables(t, db))
+	})
+
+	t.Run("a compressed reader", func(t *testing.T) {
+		t.Parallel()
+
+		var squeezed bytes.Buffer
+		zw := gzip.NewWriter(&squeezed)
+		_, err := zw.Write(data)
+		require.NoError(t, err)
+		require.NoError(t, zw.Close())
+
+		// A reader carries no path, so the codec is named through the option
+		// rather than guessed from bytes.
+		compressed, err := NewBuilder().
+			AddReader(bytes.NewReader(squeezed.Bytes()), "book", FileTypeXLSX, WithCompression(CompressionGZ)).
+			Build(ctx)
+		require.NoError(t, err)
+		db, err := compressed.Open(ctx)
+		require.NoError(t, err)
+		defer db.Close()
+		assert.Equal(t, want, loadedTables(t, db))
+	})
+
+	t.Run("a reader refuses two sheets that map to one table", func(t *testing.T) {
+		t.Parallel()
+
+		colliding := multiSheetWorkbook(t, "Q1 sales", "Q1.sales")
+		validated, err := NewBuilder().
+			AddReader(bytes.NewReader(colliding), "book", FileTypeXLSX).Build(ctx)
+		require.NoError(t, err)
+		_, err = validated.Open(ctx)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrDuplicateTable,
+			"the check that stops one sheet loading over another belongs to the workbook, not to how its bytes arrived")
+	})
+}
+
+// multiSheetWorkbook builds a workbook of the named sheets, each holding one
+// column and one row.
+func multiSheetWorkbook(t *testing.T, sheets ...string) []byte {
+	t.Helper()
+
+	book := excelize.NewFile()
+	for i, sheet := range sheets {
+		if i == 0 {
+			require.NoError(t, book.SetSheetName(defaultSheetName, sheet))
+		} else {
+			_, err := book.NewSheet(sheet)
+			require.NoError(t, err)
+		}
+		require.NoError(t, book.SetCellValue(sheet, "A1", "v"))
+		require.NoError(t, book.SetCellValue(sheet, "A2", sheet))
+	}
+	var out bytes.Buffer
+	require.NoError(t, book.Write(&out))
+	require.NoError(t, book.Close())
+	return out.Bytes()
+}
+
+// loadedTables names the tables a load made, in order.
+func loadedTables(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+
+	rows, err := db.QueryContext(t.Context(),
+		`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '_filesql_%' ORDER BY name`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		names = append(names, name)
+	}
+	require.NoError(t, rows.Err())
+	return names
 }
