@@ -3,6 +3,7 @@ package reader
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -178,4 +179,83 @@ func TestReadJSONAcceptsWhatEncodingJSONAccepts(t *testing.T) {
 				"encoding/json and this reader disagree about %q", document)
 		})
 	}
+}
+
+// TestJSONArrayElementIsBounded pins that one element of a JSON array is held to
+// the same bound a delimited record and a JSONL line are held to.
+//
+// An element is held whole while it is decoded, so its length is what the read
+// costs, and one element with no terminator made that the whole stream. The
+// array is the JSON shape that arrives in chunks, so the rule that covers the
+// other chunked formats covers it.
+func TestJSONArrayElementIsBounded(t *testing.T) {
+	t.Parallel()
+
+	// A limit small enough to reach in a test, standing in for the real one.
+	const limit = 1 << 10
+
+	readAll := func(t *testing.T, body string) (int, error) {
+		t.Helper()
+		counter := &countingReader{src: strings.NewReader(body)}
+		opts := Options{ChunkSize: 8, maxRecord: limit}
+		_, err := Read(counter, FormatJSON, opts, func(*Chunk) error { return nil })
+		return counter.read, err
+	}
+
+	t.Run("an element under the limit loads", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := readAll(t, `[{"a":"`+strings.Repeat("x", limit/2)+`"}]`)
+		assert.NoError(t, err)
+	})
+
+	t.Run("an element past the limit is refused", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := readAll(t, `[{"a":"`+strings.Repeat("x", limit*4)+`"}]`)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrRecordTooLong)
+		assert.Contains(t, err.Error(), "1 KiB")
+	})
+
+	t.Run("an element with no terminator at all is refused without reading the rest", func(t *testing.T) {
+		t.Parallel()
+
+		read, err := readAll(t, `[{"a":"`+strings.Repeat("x", limit*40))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrRecordTooLong)
+		// The decoder reads ahead into a buffer that doubles, so the refusal
+		// lands within a few reads of the bound rather than on it. What matters
+		// is that it lands: the body is forty times the bound.
+		assert.Less(t, read, limit*8, "the read consumed %d bytes for a %d byte bound", read, limit)
+	})
+
+	t.Run("many small elements are unaffected", func(t *testing.T) {
+		t.Parallel()
+
+		body := `[` + strings.TrimSuffix(strings.Repeat(`{"a":1},`, limit), ",") + `]`
+		_, err := readAll(t, body)
+		assert.NoError(t, err)
+	})
+
+	t.Run("a document that is not an array is read whole", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := readAll(t, `{"a":"`+strings.Repeat("x", limit*4)+`"}`)
+		assert.NoError(t, err)
+	})
+}
+
+// countingReader reports how much of its source a read consumed, which is what
+// a bound can be asserted on: a memory figure moves with the Go version, while
+// how many bytes were asked for does not.
+type countingReader struct {
+	src  io.Reader
+	read int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.src.Read(p)
+	c.read += n
+	return n, err
 }
