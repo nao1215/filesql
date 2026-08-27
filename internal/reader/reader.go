@@ -116,6 +116,10 @@ type Options struct {
 	ExcelSheetPolicy ExcelSheetPolicy
 	// Rendering says how a value that is not already text is spelled.
 	Rendering Rendering
+	// maxRecord bounds one record, for a format whose records are lines. Zero
+	// reads maxRecordSize; a test lowers it to reach the bound without
+	// producing the whole of it.
+	maxRecord int
 }
 
 // DefaultChunkSize is how many rows a chunk holds when the caller names no size.

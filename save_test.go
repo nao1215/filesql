@@ -901,11 +901,12 @@ func TestOverwriteTableAtPath_Failures(t *testing.T) {
 	})
 }
 
-// TestDumpDatabase_RefusesACodecItCannotWrite pins the whole error chain a dump
-// asking for bzip2 reports. Every sentinel it passed through stays reachable, so
-// a caller can tell "this codec cannot be written" from "the compressor failed"
-// without matching on the message; ErrUnsupportedFormat used to be text only,
-// because the writer flattened the inner error with %s.
+// TestDumpDatabase_RefusesACodecItCannotWrite pins the error chain a dump asking
+// for bzip2 reports, so a caller can tell "this codec cannot be written" from
+// "the compressor failed" without matching on the message. ErrUnsupportedFormat
+// used to be text only, because the writer flattened the inner error with %s;
+// then both sentinels matched at once, which told the two apart no better, since
+// the caller wrapped whatever the handler classified in ErrCompression anyway.
 func TestDumpDatabase_RefusesACodecItCannotWrite(t *testing.T) {
 	t.Parallel()
 
@@ -923,8 +924,8 @@ func TestDumpDatabase_RefusesACodecItCannotWrite(t *testing.T) {
 	err = DumpDatabase(db, out, NewDumpOptions().WithCompression(CompressionBZ2))
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUnsupportedFormat)
-	assert.ErrorIs(t, err, ErrCompression)
 	assert.ErrorIs(t, err, ErrIOOperation)
+	assert.NotErrorIs(t, err, ErrCompression, "nothing failed to compress; there is no bzip2 compressor")
 	assert.Contains(t, err.Error(), "bzip2")
 }
 

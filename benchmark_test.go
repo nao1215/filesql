@@ -56,6 +56,36 @@ func BenchmarkOpenContextParallel(b *testing.B) {
 	})
 }
 
+// BenchmarkOpenJSONL benchmarks the line-oriented JSON read, which is the third
+// format whose records are lines and the one with no benchmark of its own. Its
+// cost is a line at a time, so this is where the bound on a line shows.
+func BenchmarkOpenJSONL(b *testing.B) {
+	const rows = 100000
+
+	var body bytes.Buffer
+	for i := range rows {
+		fmt.Fprintf(&body, `{"id":%d,"name":"customer%d","amount":%d.5}`+"\n", i, i, i)
+	}
+	lines := body.Bytes()
+
+	b.ResetTimer()
+	for b.Loop() {
+		validated, err := NewBuilder().
+			AddReader(bytes.NewReader(lines), "events", FileTypeJSONL).
+			Build(context.Background())
+		if err != nil {
+			b.Fatalf("Build failed: %v", err)
+		}
+		db, err := validated.Open(context.Background())
+		if err != nil {
+			b.Fatalf("Open failed: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			b.Fatalf("db.Close failed: %v", err)
+		}
+	}
+}
+
 // BenchmarkOpenReader benchmarks loading the same rows through AddReader, which
 // is the path BenchmarkOpenContext does not cover: a reader cannot be read
 // twice, so its rows are staged as text and copied into the typed table once
