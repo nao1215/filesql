@@ -636,6 +636,13 @@ var validatorRegistry = map[string]validatorBuilder{
 	isbn13TagValue:       func(_ string, _ bool) (validator, error) { return newISBN13Validator(), nil },
 	issnTagValue:         func(_ string, _ bool) (validator, error) { return newISSNValidator(), nil },
 
+	// Country and currency code validators
+	iso3166Alpha2TagValue:  func(_ string, _ bool) (validator, error) { return newISO3166Alpha2Validator(), nil },
+	iso3166Alpha3TagValue:  func(_ string, _ bool) (validator, error) { return newISO3166Alpha3Validator(), nil },
+	iso3166NumericTagValue: func(_ string, _ bool) (validator, error) { return newISO3166NumericValidator(), nil },
+	countryCodeTagValue:    func(_ string, _ bool) (validator, error) { return newCountryCodeValidator(), nil },
+	iso4217TagValue:        func(_ string, _ bool) (validator, error) { return newISO4217Validator(), nil },
+
 	// Message digest validators, which differ in nothing but their width
 	md5TagValue:    hexDigest(md5TagValue, 32),
 	sha256TagValue: hexDigest(sha256TagValue, 64),

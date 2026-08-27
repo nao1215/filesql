@@ -197,6 +197,13 @@ func TestParseValidateTag_AllValidatorTypes(t *testing.T) {
 		{"isbn13", "isbn13", 1, 0, false},
 		{"issn", "issn", 1, 0, false},
 
+		// Country and currency code validators
+		{"iso3166_1_alpha2", "iso3166_1_alpha2", 1, 0, false},
+		{"iso3166_1_alpha3", "iso3166_1_alpha3", 1, 0, false},
+		{"iso3166_1_alpha_numeric", "iso3166_1_alpha_numeric", 1, 0, false},
+		{"country_code", "country_code", 1, 0, false},
+		{"iso4217", "iso4217", 1, 0, false},
+
 		// Message digest validators
 		{"md5", "md5", 1, 0, false},
 		{"sha256", "sha256", 1, 0, false},
@@ -1088,6 +1095,16 @@ func TestFormatAndChecksumTagsParseAloneAndWithRequired(t *testing.T) {
 		creditCardTagValue, luhnChecksumTagValue,
 		isbnTagValue, isbn10TagValue, isbn13TagValue, issnTagValue,
 		md5TagValue, sha256TagValue, sha384TagValue, sha512TagValue,
+	)
+}
+
+// The country and currency code tags parse the same way.
+func TestCodeTagsParseAloneAndWithRequired(t *testing.T) {
+	t.Parallel()
+
+	tagsParseAloneAndWithRequired(t,
+		iso3166Alpha2TagValue, iso3166Alpha3TagValue, iso3166NumericTagValue,
+		countryCodeTagValue, iso4217TagValue,
 	)
 }
 
