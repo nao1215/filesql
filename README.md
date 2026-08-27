@@ -563,6 +563,8 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Give a field a default when the column is absent | `ExampleProcessor_Process_defaultForAbsentColumn` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Compare one column against another | `ExampleProcessor_Process_crossField` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Require a column only when other columns say so | `ExampleProcessor_Process_conditionalRequired` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Forbid a column when other columns say so | `ExampleProcessor_Process_conditionalExcluded` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Validate IP address and port columns | `ExampleProcessor_Process_networkColumns` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Read preprocessing error details | `ExampleProcessResult_PrepErrors` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Check output and original formats | `ExampleStream_Format`, `ExampleStream_OriginalFormat` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Rewind and reread the processed stream | `Example_streamLen`, `Example_streamSeek` | [prep/example_api_test.go](./prep/example_api_test.go) |

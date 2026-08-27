@@ -385,6 +385,63 @@ func ExampleProcessor_Process_conditionalRequired() {
 	// row 2: address value is required when City or Zip is present
 }
 
+func ExampleProcessor_Process_conditionalExcluded() {
+	type account struct {
+		// Forbidden as soon as the named column holds a value.
+		PersonalTaxID string `validate:"excluded_with=CompanyTaxID"`
+		CompanyTaxID  string
+		// Forbidden unless the named column holds the value beside it.
+		Coupon string `validate:"excluded_unless=Kind promo"`
+		Kind   string
+	}
+
+	var rows []account
+	_, result, err := prep.NewProcessor(prep.FileTypeCSV).Process(strings.NewReader(
+		"personal_tax_id,company_tax_id,coupon,kind\n"+
+			"P-1,C-1,,promo\n"+
+			",C-1,SAVE10,regular\n"+
+			",C-1,SAVE10,promo\n"), &rows)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(result.ValidRowCount)
+	for _, e := range result.ValidationErrors() {
+		fmt.Printf("row %d: %s %s\n", e.Row, e.Column, e.Message)
+	}
+	// Output:
+	// 1
+	// row 1: personal_tax_id value must be empty when CompanyTaxID is present
+	// row 2: coupon value must be empty unless Kind is promo
+}
+
+func ExampleProcessor_Process_networkColumns() {
+	type endpoint struct {
+		Host string `validate:"ip"`
+		Port string `validate:"port"`
+	}
+
+	var rows []endpoint
+	_, result, err := prep.NewProcessor(prep.FileTypeCSV).Process(strings.NewReader(
+		"host,port\n"+
+			"192.0.2.1,0080\n"+
+			"2001:db8::1,65535\n"+
+			"example.com,80\n"+
+			"192.0.2.1,65536\n"), &rows)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(result.ValidRowCount)
+	for _, e := range result.ValidationErrors() {
+		fmt.Printf("row %d: %s %s\n", e.Row, e.Column, e.Message)
+	}
+	// Output:
+	// 2
+	// row 3: host value must be a valid IP address
+	// row 4: port value must be a valid port number
+}
+
 func ExampleProcessor_Process_crossField() {
 	type shipment struct {
 		ShippedOn string `validate:"ltfield=DueOn"`

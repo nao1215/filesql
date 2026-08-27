@@ -134,7 +134,9 @@
 // required_if, required_unless, required_with, required_with_all,
 // required_without and required_without_all — is the exception: each of those
 // tags runs on an empty cell and reports it when its condition holds, since
-// deciding whether an empty cell is allowed is what they are for.
+// deciding whether an empty cell is allowed is what they are for. The excluded
+// family runs on every row for the same reason, but reads the rule the other
+// way: it only ever reports a cell that carries a value.
 //
 // The comparison tags follow the field they land on, as the dialect defines
 // them: on a string field, eq and ne compare the string itself and gt, gte,
@@ -151,7 +153,18 @@
 // cells match. required_with and its three siblings take a list of field names
 // instead: required_with fires when any of them carries a value and
 // required_with_all when all of them do, while required_without fires when any
-// of them is empty and required_without_all when all of them are. boolean accepts what strconv.ParseBool accepts, which is also how a
+// of them is empty and required_without_all when all of them are.
+//
+// excluded_if, excluded_unless, excluded_with, excluded_with_all,
+// excluded_without and excluded_without_all negate that family: each names the
+// condition under which the cell must be empty, and reads its parameter the way
+// the required tag it mirrors does. excluded_if=Kind free forbids a value when
+// every pair matches, excluded_unless=Kind paid forbids one unless they all do,
+// excluded_with=Email forbids one when any named field carries a value and
+// excluded_without=Email when any of them is empty, with the _all spellings
+// asking for every named field rather than any.
+//
+// boolean accepts what strconv.ParseBool accepts, which is also how a
 // bool struct field is filled. numeric accepts an optionally signed decimal
 // and number accepts digits alone, as the dialect defines them. The dialect
 // spells the letters-and-digits tag alphanum; alphanumeric names the same
@@ -163,7 +176,12 @@
 // though its hostname patterns do not. ulid requires a timestamp the format
 // can hold. uuid3 requires the variant nibble that uuid4 and uuid5 require,
 // and all three accept upper case, as uuid does. hostname_port takes a
-// bracketed IPv6 address and refuses a bare port.
+// bracketed IPv6 address and refuses a bare port. ip, ipv4 and ipv6 are the
+// dialect's spellings of ip_addr, ip4_addr and ip6_addr and build the same
+// checks, so an IPv4-mapped address such as ::ffff:192.0.2.1 satisfies ipv4 and
+// not ipv6. port is defined on a numeric field in the dialect; on a cell it is
+// ASCII digits alone naming a port from 1 to 65535, so 0080 is port 80 while
+// +80 and 0x50 are not ports.
 //
 // See https://pkg.go.dev/github.com/nao1215/filesql/prep for the complete list of supported validators.
 package prep
