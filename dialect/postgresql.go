@@ -2,6 +2,7 @@ package dialect
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -21,6 +22,7 @@ import (
 //	P-8  CAST(x AS pg_type)        -> postgresql_cast(x, 'pg_type')
 //	P-10 DISTINCT ON (...), LATERAL -> ErrUnsupportedSyntax
 //	P-11 a ^ b                     -> power(a, b)
+//	P-27 a # b                     -> postgresql_bit_xor(a, b)
 //	P-12 x +/- INTERVAL 'text'     -> interval_text_add(x, 'text', ±1)
 //	P-13 DATE 'lit' / TIMESTAMP 'lit' -> 'lit'
 //	P-25 date + n / date - n / d1 - d2 -> postgresql_date_add / postgresql_date_diff
@@ -107,9 +109,35 @@ func rewritePostgreSQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
+	// P-27: "#" is PostgreSQL's bitwise XOR, which SQLite has no operator for.
+	// It reached SQLite's lexer as an unknown token.
+	out, err = binaryOperatorPass(out, "#", "postgresql_bit_xor")
+	if err != nil {
+		return nil, err
+	}
 	// P-24: LOCALTIMESTAMP and LOCALTIME are keywords rather than calls in
 	// PostgreSQL, so SQLite read them as column names and reported no such
 	// column. They name the same clock the corresponding functions read.
+	// The SQL-standard truth-value predicate and the quantified comparisons,
+	// neither of which SQLite spells: IS UNKNOWN reached its parser as a column
+	// name and "= ANY (...)" as a syntax error naming the subquery's SELECT.
+	// P-26: the Unicode escape literal, whose leading U reached SQLite as a
+	// column name.
+	out, err = pgUnicodeEscapeStringPass(out)
+	if err != nil {
+		return nil, err
+	}
+	// A COLLATE clause names an ordering SQLite does not have, so it is mapped
+	// onto the SQLite collation that means the same or refused by name.
+	out, err = collatePass(out)
+	if err != nil {
+		return nil, err
+	}
+	out = isUnknownPass(out)
+	out, err = quantifiedComparisonPass(out)
+	if err != nil {
+		return nil, err
+	}
 	out = wordToCallPass(out, "LOCALTIMESTAMP", "now")
 	out = wordToCallPass(out, "LOCALTIME", "curtime")
 	// P-23: BETWEEN SYMMETRIC has no SQLite form. It runs after the call pass
@@ -565,6 +593,83 @@ func isDateOperand(operand []token) bool {
 	return ok && (kind == castDate || kind == castTimestamp)
 }
 
+// pgUnicodeEscapeStringPass decodes PostgreSQL's U&'...' literal, whose escape
+// sequences name a code point, and its U&"..." identifier form. Neither is
+// SQLite syntax, so the "U" arrived as a bare word and the caller read "no such
+// column: U" about a literal they had written. An optional UESCAPE clause names
+// a different escape character.
+//
+// The literal is three tokens here -- the word U, the "&" operator and the
+// string -- because the lexer has no rule joining them; the pass reads that
+// shape rather than the lexer being taught a fourth string form.
+func pgUnicodeEscapeStringPass(tokens []token) ([]token, error) {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		amp := i + 1
+		lit := i + 2
+		if !isWordEq(tokens[i], "U") || lit >= len(tokens) || !isOpEq(tokens[amp], "&") ||
+			(tokens[lit].kind != tokString && tokens[lit].kind != tokQuotedIdent) {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		escape := '\\'
+		next := lit
+		if uescape := nextSig(tokens, lit+1); uescape >= 0 && isWordEq(tokens[uescape], "UESCAPE") {
+			spec := nextSig(tokens, uescape+1)
+			if spec < 0 || tokens[spec].kind != tokString || len([]rune(tokens[spec].text)) != 1 {
+				return nil, fmt.Errorf("%w: UESCAPE takes a one-character string", ErrUnsupportedSyntax)
+			}
+			escape = []rune(tokens[spec].text)[0]
+			next = spec
+		}
+		decoded, err := decodeUnicodeEscapes(tokens[lit].text, escape)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, token{kind: tokens[lit].kind, text: decoded})
+		i = next + 1
+	}
+	return out, nil
+}
+
+// decodeUnicodeEscapes reads the code-point escapes of a U&'...' literal, with
+// escape standing in for the backslash. Two escape characters in a row are the
+// character itself.
+func decodeUnicodeEscapes(s string, escape rune) (string, error) {
+	runes := []rune(s)
+	var b strings.Builder
+	for i := 0; i < len(runes); i++ {
+		if runes[i] != escape {
+			b.WriteRune(runes[i])
+			continue
+		}
+		switch {
+		case i+1 < len(runes) && runes[i+1] == escape:
+			b.WriteRune(escape)
+			i++
+		case i+1 < len(runes) && runes[i+1] == '+' && i+7 < len(runes):
+			r, err := strconv.ParseUint(string(runes[i+2:i+8]), 16, 21)
+			if err != nil {
+				return "", fmt.Errorf("%w: %s is not a Unicode escape", ErrUnsupportedSyntax, string(runes[i:i+8]))
+			}
+			b.WriteRune(rune(r))
+			i += 7
+		case i+4 < len(runes):
+			r, err := strconv.ParseUint(string(runes[i+1:i+5]), 16, 21)
+			if err != nil {
+				return "", fmt.Errorf("%w: %s is not a Unicode escape", ErrUnsupportedSyntax, string(runes[i:i+5]))
+			}
+			b.WriteRune(rune(r))
+			i += 4
+		default:
+			return "", fmt.Errorf("%w: a Unicode escape needs four hexadecimal digits", ErrUnsupportedSyntax)
+		}
+	}
+	return b.String(), nil
+}
+
 // pgRegexOperatorPass implements P-3: the "~" family of regex-match operators.
 //
 //	x ~ p    -> x REGEXP p
@@ -585,7 +690,21 @@ func pgRegexOperatorPass(tokens []token) ([]token, error) {
 			continue
 		}
 		if t.kind == tokOp {
+			if t.text == "~" && operandPositionBack(out) {
+				// A "~" with no left operand is PostgreSQL's bitwise NOT, which
+				// SQLite spells the same way. Reading it as the regex match
+				// operator made "~5" a comparison missing its left side.
+				out = append(out, t)
+				continue
+			}
 			switch t.text {
+			case "~~", "!~~", "~~*", "!~~*":
+				// PostgreSQL's operator spellings of LIKE, NOT LIKE, ILIKE and
+				// NOT ILIKE. They are not the regex operators they start with:
+				// the pattern is written with LIKE wildcards, and reading it as
+				// a regular expression matched something else.
+				out = appendLikeOperator(out, tokens, i, t.text)
+				continue
 			case "~":
 				out = appendRegexOperator(out, tokens, i, false)
 				continue
@@ -608,6 +727,26 @@ func pgRegexOperatorPass(tokens []token) ([]token, error) {
 		return nil, fmt.Errorf("%w: case-insensitive regex operator requires a string-literal pattern", ErrUnsupportedSyntax)
 	}
 	return out, nil
+}
+
+// appendLikeOperator appends the keyword spelling of one of PostgreSQL's LIKE
+// operator aliases, so the later LIKE pass sees the form it already handles.
+func appendLikeOperator(out, tokens []token, i int, op string) []token {
+	if n := len(out); n > 0 && out[n-1].kind != tokWhitespace {
+		out = append(out, spaceToken())
+	}
+	if strings.HasPrefix(op, "!") {
+		out = append(out, wordToken("NOT"), spaceToken())
+	}
+	if strings.HasSuffix(op, "*") {
+		out = append(out, wordToken("ILIKE"))
+	} else {
+		out = append(out, wordToken("LIKE"))
+	}
+	if i+1 < len(tokens) && tokens[i+1].kind != tokWhitespace {
+		out = append(out, spaceToken())
+	}
+	return out
 }
 
 // appendRegexOperator appends "REGEXP" (or "NOT REGEXP" when negated) in place of

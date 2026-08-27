@@ -24,6 +24,8 @@ const (
 	fnNameSubstring = "SUBSTRING"
 	fnNameSubstr    = "SUBSTR"
 	fnNameMod       = "MOD"
+	kwAll           = "ALL"
+	typeNameBinary  = "BINARY"
 	fnNameReplace   = "REPLACE"
 	fnNameLpad      = "LPAD"
 	fnNameRpad      = "RPAD"
@@ -1002,6 +1004,159 @@ var datePrefixTypes = map[string]bool{
 	"DATETIME":  true,
 	"TIMESTAMP": true,
 	"TIME":      true,
+}
+
+// collatePass rewrites a COLLATE clause onto the SQLite collation that means
+// the same thing, and refuses a name that means something else.
+//
+// SQLite has three collations -- BINARY, NOCASE and RTRIM -- and none of the
+// names the dialects use. Passing the clause through left the meaning to
+// chance: SQLite raised "no such collation sequence: C" for one name, naming a
+// concept the caller never wrote, and accepted the syntax while quietly not
+// applying anything for others, which only shows in the order of the rows.
+//
+// A name is matched by what it says: the byte-order collations become BINARY
+// and the case-insensitive ones NOCASE. Anything else -- a locale collation,
+// whose order this package cannot reproduce -- is refused by name.
+func collatePass(tokens []token) ([]token, error) {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		if !isWordEq(tokens[i], "COLLATE") {
+			out = append(out, tokens[i])
+			i++
+			continue
+		}
+		name := nextSig(tokens, i+1)
+		if name < 0 || (tokens[name].kind != tokWord && tokens[name].kind != tokQuotedIdent && tokens[name].kind != tokString) {
+			return nil, fmt.Errorf("%w: COLLATE names no collation", ErrUnsupportedSyntax)
+		}
+		sqliteName, ok := sqliteCollationFor(tokens[name].text)
+		if !ok {
+			return nil, fmt.Errorf("%w: the collation %s has no SQLite equivalent; SQLite orders by BINARY, NOCASE or RTRIM",
+				ErrUnsupportedSyntax, tokens[name].text)
+		}
+		out = append(out, wordToken("COLLATE"), spaceToken(), wordToken(sqliteName))
+		i = name + 1
+	}
+	return out, nil
+}
+
+// sqliteCollationFor maps a dialect collation name onto the SQLite collation
+// with the same ordering, reporting false for a name with none.
+func sqliteCollationFor(name string) (string, bool) {
+	lower := strings.ToLower(name)
+	switch lower {
+	case "c", "posix", "ucs_basic", "binary", "default":
+		return typeNameBinary, true
+	case "nocase", "rtrim":
+		// SQLite's own names, which a caller may already have written.
+		return strings.ToUpper(lower), true
+	}
+	switch {
+	case strings.HasSuffix(lower, "_bin"):
+		return typeNameBinary, true
+	case strings.HasSuffix(lower, "_ci"), strings.HasSuffix(lower, "_ai_ci"), strings.HasSuffix(lower, "_as_ci"):
+		return "NOCASE", true
+	default:
+		return "", false
+	}
+}
+
+// isUnknownPass rewrites the SQL-standard truth-value predicate "x IS UNKNOWN"
+// and "x IS NOT UNKNOWN" into the IS NULL and IS NOT NULL they mean. SQLite has
+// no UNKNOWN keyword, so the word reached its parser as a column name and the
+// caller read "no such column: UNKNOWN" about a word their own dialect defines.
+// IS TRUE and IS FALSE, the rest of the family, SQLite accepts as they are.
+//
+// The word is only the keyword when IS or IS NOT stands before it, so a column
+// named unknown is untouched.
+func isUnknownPass(tokens []token) []token {
+	out := make([]token, 0, len(tokens))
+	for i := range tokens {
+		if !isWordEq(tokens[i], "UNKNOWN") || !followsIsPredicate(out) {
+			out = append(out, tokens[i])
+			continue
+		}
+		out = append(out, wordToken("NULL"))
+	}
+	return out
+}
+
+// followsIsPredicate reports whether what has been emitted ends in IS or IS NOT,
+// which is where the UNKNOWN keyword can stand.
+func followsIsPredicate(out []token) bool {
+	last := lastSignificantToken(out)
+	if last < 0 {
+		return false
+	}
+	if isWordEq(out[last], "IS") {
+		return true
+	}
+	if !isWordEq(out[last], "NOT") {
+		return false
+	}
+	prev := lastSignificantToken(out[:last])
+	return prev >= 0 && isWordEq(out[prev], "IS")
+}
+
+// lastSignificantToken is the index of the last token that participates in the
+// grammar, or -1 when there is none.
+func lastSignificantToken(out []token) int {
+	for i := len(out) - 1; i >= 0; i-- {
+		if isSignificant(out[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+// quantifiedComparisonPass rewrites the quantified comparisons that have a
+// SQLite spelling and refuses the rest by name. "x = ANY (s)" and "x = SOME (s)"
+// are "x IN (s)", and "x <> ALL (s)" is "x NOT IN (s)". Everything else -- a
+// comparison other than equality with ANY, or other than inequality with ALL --
+// has no short SQLite form, and reached SQLite as a parse error naming the
+// subquery's SELECT rather than the quantifier the caller wrote.
+func quantifiedComparisonPass(tokens []token) ([]token, error) {
+	out := make([]token, 0, len(tokens))
+	for i := range tokens {
+		if tokens[i].kind != tokWord {
+			out = append(out, tokens[i])
+			continue
+		}
+		quantifier := strings.ToUpper(tokens[i].text)
+		if quantifier != "ANY" && quantifier != kwAll && quantifier != "SOME" {
+			out = append(out, tokens[i])
+			continue
+		}
+		open := nextSig(tokens, i+1)
+		if open < 0 || !isOpEq(tokens[open], "(") {
+			out = append(out, tokens[i])
+			continue
+		}
+		cmp := lastSignificantToken(out)
+		if cmp < 0 || out[cmp].kind != tokOp {
+			// SELECT ALL x and COUNT(ALL x) are a different ALL, and a bare ANY
+			// is a column name.
+			out = append(out, tokens[i])
+			continue
+		}
+		switch {
+		case isOpEq(out[cmp], "=") && quantifier != kwAll:
+			out = out[:cmp]
+			out = append(out, wordToken("IN"))
+		case (isOpEq(out[cmp], "<>") || isOpEq(out[cmp], "!=")) && quantifier == kwAll:
+			out = out[:cmp]
+			out = append(out, wordToken("NOT"), spaceToken(), wordToken("IN"))
+		case isOpEq(out[cmp], "=") || isOpEq(out[cmp], "<>") || isOpEq(out[cmp], "!=") ||
+			isOpEq(out[cmp], "<") || isOpEq(out[cmp], ">") || isOpEq(out[cmp], "<=") || isOpEq(out[cmp], ">="):
+			return nil, fmt.Errorf("%w: %s %s (...) has no SQLite form; write an EXISTS subquery",
+				ErrUnsupportedSyntax, out[cmp].text, quantifier)
+		default:
+			out = append(out, tokens[i])
+		}
+	}
+	return out, nil
 }
 
 // typePrefixedLiteralPass drops a DATE/DATETIME/TIMESTAMP/TIME keyword that sits

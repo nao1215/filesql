@@ -86,15 +86,15 @@ var commonCastKinds = map[string]castKind{
 }
 
 var mysqlCastKinds = map[string]castKind{
-	"SIGNED":    castInt,
-	"UNSIGNED":  castInt,
-	"MEDIUMINT": castInt,
-	"NCHAR":     castText,
-	"NVARCHAR":  castText,
-	"DEC":       castDecimal,
-	"YEAR":      castYear,
-	"BINARY":    castBlob,
-	"VARBINARY": castBlob,
+	"SIGNED":       castInt,
+	"UNSIGNED":     castInt,
+	"MEDIUMINT":    castInt,
+	"NCHAR":        castText,
+	"NVARCHAR":     castText,
+	"DEC":          castDecimal,
+	"YEAR":         castYear,
+	typeNameBinary: castBlob,
+	"VARBINARY":    castBlob,
 }
 
 var pgCastKinds = map[string]castKind{

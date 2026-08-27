@@ -3,6 +3,7 @@ package dialect
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 
@@ -611,5 +612,100 @@ func TestSimilarToRegexpEscapes(t *testing.T) {
 				t.Fatalf("similarToRegexp(%q) = %q, want %q", tt.pattern, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestPredicatesAndOperatorsWithoutASQLiteSpelling pins the constructs that
+// reached SQLite unchanged and failed there naming something the caller had not
+// written: the truth-value predicate, the quantified comparisons, PostgreSQL's
+// LIKE operator aliases and its two remaining bit operators, and the COLLATE
+// clause. Every expected value was read from mysql:8.4 or postgres:17-alpine.
+func TestPredicatesAndOperatorsWithoutASQLiteSpelling(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		dialect Dialect
+		query   string
+		want    string
+	}{
+		// IS UNKNOWN is IS NULL; IS TRUE and IS FALSE SQLite already takes.
+		{PostgreSQL, `SELECT NULL IS UNKNOWN`, "1"},
+		{PostgreSQL, `SELECT 1 IS NOT UNKNOWN`, "1"},
+		{MySQL, `SELECT NULL IS UNKNOWN`, "1"},
+		{MySQL, `SELECT 1 IS TRUE`, "1"},
+		{MySQL, `SELECT 0 IS FALSE`, "1"},
+
+		// "= ANY" and "= SOME" are IN, and "<> ALL" is NOT IN.
+		{PostgreSQL, `SELECT 1 = ANY (SELECT 1)`, "1"},
+		{PostgreSQL, `SELECT 1 = SOME (SELECT 1)`, "1"},
+		{PostgreSQL, `SELECT 1 <> ALL (SELECT 2)`, "1"},
+		{MySQL, `SELECT 1 = ANY (SELECT 1)`, "1"},
+
+		// The LIKE operator aliases are LIKE, not the regex operators they
+		// start with: the pattern is written with LIKE wildcards.
+		{PostgreSQL, `SELECT 'abc' ~~ 'a%'`, "1"},
+		{PostgreSQL, `SELECT 'abc' !~~ 'a%'`, "0"},
+		{PostgreSQL, `SELECT 'abc' ~~* 'A%'`, "1"},
+		{PostgreSQL, `SELECT 'abc' !~~* 'A%'`, "0"},
+		{PostgreSQL, `SELECT 'abc' ~ 'a.c'`, "1"},
+		{PostgreSQL, `SELECT 'ABC' ~* 'a.c'`, "1"},
+		{PostgreSQL, `SELECT 'abc' !~ '^z'`, "1"},
+
+		// "#" is the bitwise XOR and a leading "~" the bitwise NOT.
+		{PostgreSQL, `SELECT 5 # 3`, "6"},
+		{PostgreSQL, `SELECT 1 # 2 # 3`, "0"},
+		{PostgreSQL, `SELECT ~5`, "-6"},
+		{PostgreSQL, `SELECT ~0`, "-1"},
+
+		// A COLLATE clause reaches the SQLite collation that means the same.
+		{PostgreSQL, `SELECT ('a' COLLATE "C" < 'B')`, "0"},
+		{MySQL, `SELECT ('a' COLLATE utf8mb4_bin < 'B')`, "0"},
+		{MySQL, `SELECT ('a' COLLATE utf8mb4_general_ci = 'A')`, "1"},
+	}
+	for _, tt := range tests {
+		got, err := runDialect(t, db, tt.dialect, tt.query)
+		if err != nil {
+			t.Errorf("%v: %s: %v", tt.dialect, tt.query, err)
+			continue
+		}
+		if !got.Valid || got.String != tt.want {
+			t.Errorf("%v: %s = %v, want %q", tt.dialect, tt.query, got, tt.want)
+		}
+	}
+
+	// A quantified comparison with no short SQLite form, and a collation whose
+	// order this package cannot reproduce, are refused by name rather than
+	// left to SQLite's parser.
+	refused := []struct {
+		dialect Dialect
+		query   string
+	}{
+		{PostgreSQL, `SELECT 1 = ALL (SELECT 1)`},
+		{PostgreSQL, `SELECT 1 > ALL (SELECT 2)`},
+		{PostgreSQL, `SELECT 'a' COLLATE "en_US"`},
+		{MySQL, `SELECT 'a' COLLATE nosuch`},
+	}
+	for _, tt := range refused {
+		if _, err := Translate(tt.dialect, tt.query); !errors.Is(err, ErrUnsupportedSyntax) {
+			t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.query, err)
+		}
+	}
+
+	// The words these passes look for are not always keywords.
+	kept := []struct {
+		dialect Dialect
+		query   string
+	}{
+		{PostgreSQL, "SELECT ALL a FROM t"},
+		{PostgreSQL, "SELECT COUNT(ALL a) FROM t"},
+		{MySQL, "SELECT unknown FROM t"},
+		{MySQL, "SELECT `any` FROM t"},
+		{MySQL, "SELECT 'IS UNKNOWN' FROM t"},
+	}
+	for _, tt := range kept {
+		if _, err := Translate(tt.dialect, tt.query); err != nil {
+			t.Errorf("Translate(%v, %q): %v", tt.dialect, tt.query, err)
+		}
 	}
 }

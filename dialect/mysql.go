@@ -1,6 +1,7 @@
 package dialect
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strings"
 )
@@ -117,6 +118,25 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	// M-12/M-13/M-21: MySQL reads "||" as a logical OR under its default
 	// sql_mode, "&&" as AND, and "<=>" as null-safe equality, which SQLite
 	// spells IS.
+	// The SQL-standard truth-value predicate and the quantified comparisons,
+	// neither of which SQLite spells: IS UNKNOWN reached its parser as a column
+	// name and "= ANY (...)" as a syntax error naming the subquery's SELECT.
+	// M-32: a charset introducer or a bit literal written as a prefixed string.
+	out, err = mysqlLiteralPrefixPass(out)
+	if err != nil {
+		return nil, err
+	}
+	// A COLLATE clause names an ordering SQLite does not have, so it is mapped
+	// onto the SQLite collation that means the same or refused by name.
+	out, err = collatePass(out)
+	if err != nil {
+		return nil, err
+	}
+	out = isUnknownPass(out)
+	out, err = quantifiedComparisonPass(out)
+	if err != nil {
+		return nil, err
+	}
 	out = replaceOperatorWithWord(out, "||", "OR")
 	out = replaceOperatorWithWord(out, "&&", "AND")
 	out = replaceOperatorWithWord(out, "<=>", "IS")
@@ -504,15 +524,72 @@ func renameWordPass(tokens []token, from, to string) []token {
 // number, and gets what they asked for either way.
 func rejectHexLiteralPass(tokens []token) error {
 	for _, t := range tokens {
-		if t.kind != tokNumber || len(t.text) < 3 {
+		if t.kind != tokNumber || len(t.text) < 3 || t.text[0] != '0' {
 			continue
 		}
-		if t.text[0] == '0' && (t.text[1] == 'x' || t.text[1] == 'X') {
+		switch t.text[1] {
+		case 'x', 'X':
 			return fmt.Errorf("%w: MySQL reads %s as a string in one place and as a number in another, and SQLite has only the number; write x'%s' for the string or the decimal for the number",
 				ErrUnsupportedSyntax, t.text, t.text[2:])
+		case 'b', 'B':
+			// The bit literal has the same two readings as the hexadecimal one
+			// and is refused for the same reason. Before it was scanned as one
+			// token, "SELECT 0b1010" split into a zero and an alias and
+			// answered 0.
+			return fmt.Errorf("%w: MySQL reads %s as a bit string in one place and as a number in another, and SQLite has only the number; write the decimal for the number",
+				ErrUnsupportedSyntax, t.text)
 		}
 	}
 	return nil
+}
+
+// mysqlLiteralPrefixPass handles the words MySQL allows immediately before a
+// string literal.
+//
+// A charset introducer says which character set the literal is written in:
+// "_utf8mb4'abc'" and "N'abc'", which MySQL defines as "_utf8'abc'". Every value
+// this package holds is already UTF-8, so an introducer naming a UTF-8 spelling
+// is dropped and the literal kept. One naming a charset whose bytes would
+// genuinely differ is refused rather than dropped, since dropping it would
+// answer about bytes the caller did not write.
+//
+// "b'1010'" is the bit literal in its other spelling and is refused for the
+// same reason "0b1010" is: MySQL reads it as a bit string in one place and as a
+// number in another. All of these used to reach SQLite as a bare word and fail
+// with "no such column" naming a keyword the caller's own dialect defines.
+func mysqlLiteralPrefixPass(tokens []token) ([]token, error) {
+	out := make([]token, 0, len(tokens))
+	i := 0
+	for i < len(tokens) {
+		t := tokens[i]
+		if t.kind != tokWord || i+1 >= len(tokens) || tokens[i+1].kind != tokString {
+			out = append(out, t)
+			i++
+			continue
+		}
+		word := strings.ToUpper(t.text)
+		switch {
+		case word == "B":
+			return nil, fmt.Errorf("%w: MySQL reads b'%s' as a bit string in one place and as a number in another, and SQLite has only the number; write the decimal for the number",
+				ErrUnsupportedSyntax, tokens[i+1].text)
+		case word == "_BINARY":
+			// The literal's own bytes, which SQLite spells as a blob literal.
+			out = append(out, token{kind: tokBlob, text: strings.ToUpper(hex.EncodeToString([]byte(tokens[i+1].text)))})
+			i += 2
+			continue
+		case word == "N" || strings.HasPrefix(word, "_"):
+			if word != "N" && !isUTF8CharsetName(strings.TrimPrefix(t.text, "_")) {
+				return nil, fmt.Errorf("%w: the character set introducer %s: every value here is UTF-8 and cannot be re-encoded",
+					ErrUnsupportedSyntax, t.text)
+			}
+			out = append(out, tokens[i+1])
+			i += 2
+			continue
+		}
+		out = append(out, t)
+		i++
+	}
+	return out, nil
 }
 
 // rewriteIsNull implements the ISNULL part of M-31: ISNULL(x) -> (x IS NULL).

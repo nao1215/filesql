@@ -611,6 +611,18 @@ func scanNumber(s string, i int) int {
 		}
 		return j
 	}
+	// MySQL's binary literal. Without this the "0" ended the number and "b1010"
+	// began a word, so "SELECT 0b1010" reached SQLite as a zero with an alias
+	// and answered 0.
+	if s[i] == '0' && i+1 < len(s) && (s[i+1] == 'b' || s[i+1] == 'B') {
+		j := i + 2
+		for j < len(s) && (s[j] == '0' || s[j] == '1') {
+			j++
+		}
+		if j > i+2 {
+			return j
+		}
+	}
 	j := i
 	for j < len(s) && isDigit(s[j]) {
 		j++
@@ -639,6 +651,9 @@ func scanNumber(s string, i int) int {
 // multiCharOperators lists the multi-byte operators to recognize as one token,
 // longest first so matchOperator prefers the longest match.
 var multiCharOperators = []string{
+	// The LIKE aliases are listed before the regex operators they start with,
+	// so "~~" is one token rather than two "~" that each become a REGEXP.
+	"!~~*", "~~*", "!~~", "~~",
 	"<=>", "!~*", "->>", "!~", "~*", "->", "<=", ">=", "<>", "!=", "||", "&&", "<<", ">>", "::", ":=", "=>",
 }
 

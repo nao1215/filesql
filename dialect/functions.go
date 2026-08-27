@@ -234,6 +234,7 @@ func registerAll() error {
 		"mysql_divide":         {2, divideFloat(false)},
 		"mysql_mod":            {2, moduloDialect(false)},
 		"mysql_bit_xor":        {2, fnBitXor},
+		"postgresql_bit_xor":   {2, fnBitXor},
 		"interval_add":         {3, fnDateIntervalAdd},
 		"interval_text_add":    {3, fnIntervalTextAdd},
 		"date_trunc_part":      {2, fnDateTruncPart},

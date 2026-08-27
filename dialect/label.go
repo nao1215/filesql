@@ -100,7 +100,7 @@ var operandExpectingKeywords = map[string]bool{
 	"DIV": true, "MOD": true, "AND": true, "OR": true, "NOT": true, "IS": true,
 	"LIKE": true, "GLOB": true, "REGEXP": true, "MATCH": true, "BETWEEN": true,
 	"IN": true, "ESCAPE": true, "COLLATE": true, "WHEN": true, "THEN": true,
-	"ELSE": true, "CASE": true, "DISTINCT": true, "ALL": true, "INTERVAL": true,
+	"ELSE": true, "CASE": true, "DISTINCT": true, kwAll: true, "INTERVAL": true,
 }
 
 // hasAlias reports whether a select item already names its column.
