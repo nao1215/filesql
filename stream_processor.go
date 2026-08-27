@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nao1215/filesql/internal/infer"
 	"github.com/nao1215/filesql/internal/reader"
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
@@ -1041,17 +1042,21 @@ func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, 
 // binds as NULL.
 //
 // SQLite converts text that spells a number to the column's type and leaves
-// text that does not, and the empty string does not, so a blank cell used to
-// sit in an INTEGER or REAL column as text. Text orders above every number
-// there, which made MAX answer the empty string rather than the largest value,
-// AVG divide by the rows holding nothing, ORDER BY DESC put those rows first
-// and a numeric filter pass them, while IS NULL matched none of them. A blank
-// cell in a text column stays the empty string: there it is a value the file
-// holds, and telling it from a missing one is a distinction worth keeping. A
-// column recognized as datetime is stored as text and is left alone for the
-// same reason.
+// text that does not, and a blank cell does not, so a blank cell used to sit in
+// an INTEGER or REAL column as text. Text orders above every number there,
+// which made MAX answer the blank rather than the largest value, AVG divide by
+// the rows holding nothing, ORDER BY DESC put those rows first and a numeric
+// filter pass them, while IS NULL matched none of them. A blank cell in a text
+// column stays what it is: there it is a value the file holds, and telling it
+// from a missing one is a distinction worth keeping. A column recognized as
+// datetime is stored as text and is left alone for the same reason.
+//
+// Blank is what infer.IsBlank says it is, which is the question the typing asks
+// of the same cell: a cell of spaces is invisible to the typing, so a column
+// holding one is still a number column, and keeping the spaces there put the
+// whole defect back for every file whose blanks are padded rather than empty.
 func cellValue(cell string, types columnInfoList, i int) any {
-	if cell != "" || i >= len(types) {
+	if !infer.IsBlank(cell) || i >= len(types) {
 		return cell
 	}
 	if types[i].Type == columnTypeInteger || types[i].Type == columnTypeReal {

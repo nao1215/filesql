@@ -68,6 +68,17 @@ type Evidence struct {
 	nonEmpty bool
 }
 
+// IsBlank reports whether a cell holds no value: it is empty, or it is nothing
+// but whitespace. Both say the same thing about the column they sit in, which
+// is nothing, and the load stores both as NULL where the column is a number.
+//
+// It is here rather than beside the load because the two have to agree: a cell
+// this ignores while the type is decided and the load then keeps would sit in
+// an INTEGER column as text, where SQLite orders it above every number.
+func IsBlank(value string) bool {
+	return strings.TrimSpace(value) == ""
+}
+
 // Add folds one value into the evidence.
 func (e *Evidence) Add(value string) {
 	if e.forcedText || e.text {
@@ -79,11 +90,11 @@ func (e *Evidence) Add(value string) {
 		e.nonEmpty = true
 		return
 	}
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		// An empty cell says nothing about the type it belongs to.
+	if IsBlank(value) {
+		// A blank cell says nothing about the type it belongs to.
 		return
 	}
+	trimmed := strings.TrimSpace(value)
 	e.nonEmpty = true
 	switch Classify(trimmed) {
 	case Datetime:

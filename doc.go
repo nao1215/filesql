@@ -95,12 +95,15 @@
 // An XLSX date cell is the one that is rewritten, into ISO 8601, because it
 // holds a serial number and a number format rather than text.
 //
-// A blank cell in an INTEGER or REAL column is a missing number and is stored as
-// NULL, which is what makes MAX answer the largest value rather than the blank,
-// AVG divide by the values that are there, COUNT(column) count them, and WHERE
-// column IS NULL find the rows that have none. A blank cell in a TEXT column is
-// the empty string, which is a value the file holds; a column recognized as
-// DATETIME is stored as TEXT and follows that rule.
+// A blank cell -- empty, or nothing but whitespace -- in an INTEGER or REAL
+// column is a missing number and is stored as NULL, which is what makes MAX
+// answer the largest value rather than the blank, AVG divide by the values that
+// are there, COUNT(column) count them, and WHERE column IS NULL find the rows
+// that have none. A blank cell in a TEXT column is what it is, which is a value
+// the file holds; a column recognized as DATETIME is stored as TEXT and follows
+// that rule. A number written with spaces around it is not blank and is not a
+// number either: the padding is data a fixed-width code column depends on, so
+// one keeps the column TEXT.
 //
 // # Memory and Streaming
 //
