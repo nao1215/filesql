@@ -204,6 +204,11 @@ func TestParseValidateTag_AllValidatorTypes(t *testing.T) {
 		{"country_code", "country_code", 1, 0, false},
 		{"iso4217", "iso4217", 1, 0, false},
 
+		// unique builds a sentinel here that parseStructType records on the
+		// field and drops; see TestUniqueMarksTheField.
+		{"unique", "unique", 1, 0, false},
+		{"unique with a parameter is dropped in non-strict mode", "unique=x", 0, 0, false},
+
 		// Message digest validators
 		{"md5", "md5", 1, 0, false},
 		{"sha256", "sha256", 1, 0, false},
@@ -879,6 +884,8 @@ func TestStrictTagParsing_ValidateTag(t *testing.T) {
 		{"excluded_unless with an odd number of tokens", "excluded_unless=A yes B", true},
 		{"excluded_if with two pairs", "excluded_if=A yes B no", false},
 		{"excluded_with with no field", "excluded_with=", true},
+		{"unique takes no parameter", "unique=x", true},
+		{"unique alone", "unique", false},
 		{"required_if with two pairs", "required_if=A yes B no", false},
 		{"required_with naming two fields", "required_with=A B", false},
 		{"required_with_all naming two fields", "required_with_all=A B", false},
@@ -1096,6 +1103,31 @@ func TestFormatAndChecksumTagsParseAloneAndWithRequired(t *testing.T) {
 		isbnTagValue, isbn10TagValue, isbn13TagValue, issnTagValue,
 		md5TagValue, sha256TagValue, sha384TagValue, sha512TagValue,
 	)
+}
+
+// unique marks the field rather than building a validator, so the mark has to
+// reach fieldInfo and the tag has to be readable beside the ordinary ones.
+func TestUniqueMarksTheField(t *testing.T) {
+	t.Parallel()
+
+	type record struct {
+		Code  string `validate:"required,unique,len=2"`
+		Plain string
+	}
+
+	info, err := parseStructType(reflect.TypeOf(record{}), true)
+	if err != nil {
+		t.Fatalf("parseStructType() error = %v", err)
+	}
+	if !info.Fields[0].Unique {
+		t.Error("Fields[0].Unique = false, want the unique tag to mark the field")
+	}
+	if got := len(info.Fields[0].Validators); got != 2 {
+		t.Errorf("Fields[0].Validators = %d, want 2; unique must leave no validator behind", got)
+	}
+	if info.Fields[1].Unique {
+		t.Error("Fields[1].Unique = true, want an untagged field to be unmarked")
+	}
 }
 
 // The country and currency code tags parse the same way.

@@ -38,6 +38,7 @@ type fieldInfo struct {
 	Preprocessors        preprocessors        // Preprocessing rules
 	Validators           validators           // Validation rules
 	CrossFieldValidators crossFieldValidators // Cross-field validation rules
+	Unique               bool                 // The column's non-empty values must not repeat
 }
 
 // structInfo contains parsed information about a struct type
@@ -121,6 +122,12 @@ func parseStructType(structType reflect.Type, strict bool) (*structInfo, error) 
 			isString := field.Type.Kind() == reflect.String
 			specialized := make(validators, 0, len(vals))
 			for _, v := range vals {
+				// unique marks the field and builds no validator; the seen set
+				// it needs lives per processing run, not in this cached struct.
+				if _, ok := v.(*uniqueMarkerValidator); ok {
+					info.Unique = true
+					continue
+				}
 				sv, err := specializeValidator(v, isString, strict)
 				if err != nil {
 					return nil, fmt.Errorf("field %s: %w", field.Name, err)
@@ -635,6 +642,16 @@ var validatorRegistry = map[string]validatorBuilder{
 	isbn10TagValue:       func(_ string, _ bool) (validator, error) { return newISBN10Validator(), nil },
 	isbn13TagValue:       func(_ string, _ bool) (validator, error) { return newISBN13Validator(), nil },
 	issnTagValue:         func(_ string, _ bool) (validator, error) { return newISSNValidator(), nil },
+
+	// unique is read at parse time; the sentinel carries the tag no further
+	// than parseStructType. A parameter is the reference's form for addressing
+	// a struct field inside a slice element, which has no counterpart here.
+	uniqueTagValue: func(value string, strict bool) (validator, error) {
+		if value != "" {
+			return nil, invalidValidateParam(strict, "unique takes no parameter, got "+strconv.Quote(value))
+		}
+		return &uniqueMarkerValidator{}, nil
+	},
 
 	// Country and currency code validators
 	iso3166Alpha2TagValue:  func(_ string, _ bool) (validator, error) { return newISO3166Alpha2Validator(), nil },

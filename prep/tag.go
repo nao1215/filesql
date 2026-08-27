@@ -245,6 +245,10 @@ const (
 	// issnTagValue is the tag value for ISSN validation
 	issnTagValue = "issn"
 
+	// uniqueTagValue is the tag value for column-wide uniqueness. It is read
+	// at parse time and builds no validator; see uniqueMarkerValidator.
+	uniqueTagValue = "unique"
+
 	// Country and currency code validators
 	// iso3166Alpha2TagValue is the tag value for ISO 3166-1 alpha-2 validation
 	iso3166Alpha2TagValue = "iso3166_1_alpha2"

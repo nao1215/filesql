@@ -196,6 +196,26 @@ func (vs validators) Validate(value string) (string, string) {
 	return "", ""
 }
 
+// uniqueMarkerValidator is a sentinel that carries the unique tag from the
+// registry to parseStructType, which records it on the field and drops the
+// sentinel. It never validates: uniqueness is decided over a column rather than
+// over one value, and the seen set that needs cannot live in a validator, since
+// parsed validators are cached process-wide and shared between concurrent
+// processors. See Processor.processRecords, which allocates the seen set per
+// run.
+type uniqueMarkerValidator struct{}
+
+// Validate reports the bug of running unmarked, so a path that forgets to
+// record the mark fails loudly instead of validating nothing.
+func (v *uniqueMarkerValidator) Validate(_ string) string {
+	return "unique was not recorded on its field"
+}
+
+// Name returns the validator name
+func (v *uniqueMarkerValidator) Name() string {
+	return uniqueTagValue
+}
+
 // omitemptyValidator is a sentinel validator that signals empty values should be skipped.
 // It does not perform validation itself; its presence is detected by validators.Validate().
 type omitemptyValidator struct{}
