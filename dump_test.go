@@ -1976,3 +1976,152 @@ func TestDumpLTSVRefusesATableWithNoRows(t *testing.T) {
 		assert.Equal(t, "Alice", name)
 	})
 }
+
+// TestDumpReachesAFixedPoint holds the two rules a dump has to keep, over
+// tables generated here rather than written by hand: the file it writes is one
+// this package can load, and dumping what that load produced writes the same
+// file again. The first dump may reformat what the load read -- a value's type
+// decides how it is spelled -- but the second must not, or a table loses
+// something every time it makes the trip.
+//
+// The generator is seeded, so the tables are the same on every run and a failure
+// names a round that can be reproduced. Its alphabet is the cells that have cost
+// this package defects: a blank, a blank written as spaces, a number with a
+// leading zero, a whole float, both signs of zero, a value holding the
+// delimiter, a quote, a line break, a date, and an integer past what float64
+// holds exactly. A round whose input the load refuses, or whose dump the format
+// refuses, is not a failure: those refusals are the subject of the tests above.
+func TestDumpReachesAFixedPoint(t *testing.T) {
+	t.Parallel()
+
+	rng := rand.New(rand.NewPCG(1, 2)) //nolint:gosec // A fixed seed makes a failure reproducible; this is not cryptography.
+
+	alphabet := []string{
+		"a", "B", "1", "0", "007", "1.5", "1.0", "-0.0", "1e3", "", " ", "  ", "\t",
+		"x,y", `x"y`, "x\ny", "日本", "😀", "true", "false", "NULL",
+		"2026-01-02", "2026-01-02 03:04:05", "+1", "0x10", "9223372036854775808",
+		"1_000", "-", ".", "Inf", "NaN",
+	}
+	formats := []struct {
+		format OutputFormat
+		ext    string
+		text   bool
+	}{
+		{format: OutputFormatCSV, ext: ".csv", text: true},
+		{format: OutputFormatTSV, ext: ".tsv", text: true},
+		{format: OutputFormatLTSV, ext: ".ltsv", text: true},
+		{format: OutputFormatParquet, ext: ".parquet"},
+		{format: OutputFormatXLSX, ext: ".xlsx"},
+	}
+
+	const rounds = 200
+	compared := 0
+	for round := range rounds {
+		var body strings.Builder
+		columns := 1 + rng.IntN(4)
+		for i := range columns {
+			if i > 0 {
+				body.WriteByte(',')
+			}
+			fmt.Fprintf(&body, "c%d", i)
+		}
+		body.WriteByte('\n')
+		for range rng.IntN(6) {
+			for i := range columns {
+				if i > 0 {
+					body.WriteByte(',')
+				}
+				body.WriteString(csvQuoted(alphabet[rng.IntN(len(alphabet))]))
+			}
+			body.WriteByte('\n')
+		}
+		format := formats[rng.IntN(len(formats))]
+
+		dir := t.TempDir()
+		src := filepath.Join(dir, "t.csv")
+		require.NoError(t, os.WriteFile(src, []byte(body.String()), 0o600))
+
+		first, ok := dumpOnce(t, src, dir, "one", format.format, format.ext)
+		if !ok {
+			continue
+		}
+		second, ok := dumpOnce(t, first, dir, "two", format.format, format.ext)
+		require.True(t, ok, "round %d: a dump of a dump was refused, so the first dump wrote what the second cannot: %q", round, body.String())
+
+		compared++
+		if format.text {
+			assert.Equal(t, readFileString(t, first), readFileString(t, second),
+				"round %d is not a fixed point for %s: %q", round, format.ext, body.String())
+			continue
+		}
+		// A binary format is compared by what it loads as, since two writes of
+		// one table need not be byte-identical.
+		assert.Equal(t, loadedTableText(t, first), loadedTableText(t, second),
+			"round %d is not a fixed point for %s: %q", round, format.ext, body.String())
+	}
+	assert.Positive(t, compared, "no round got as far as comparing two dumps")
+}
+
+// dumpOnce loads src, dumps it into a directory named by step, and answers the
+// file that came out. It reports false when the load or the dump was refused,
+// which is a round the fixed-point property says nothing about.
+func dumpOnce(t *testing.T, src, dir, step string, format OutputFormat, ext string) (string, bool) {
+	t.Helper()
+
+	db, err := OpenContext(context.Background(), src)
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = db.Close() }()
+
+	out := filepath.Join(dir, step)
+	require.NoError(t, os.MkdirAll(out, 0o750))
+	if err := DumpDatabase(db, out, NewDumpOptions().WithFormat(format)); err != nil {
+		return "", false
+	}
+	return filepath.Join(out, "t"+ext), true
+}
+
+// csvQuoted writes one cell as CSV, quoting it where the format requires.
+func csvQuoted(cell string) string {
+	if !strings.ContainsAny(cell, ",\"\n\r") {
+		return cell
+	}
+	return `"` + strings.ReplaceAll(cell, `"`, `""`) + `"`
+}
+
+// loadedTableText is what a file loads as, rendered so two of them compare:
+// the column names, then every cell with the type SQLite gave it.
+func loadedTableText(t *testing.T, path string) string {
+	t.Helper()
+
+	ctx := context.Background()
+	db, err := OpenContext(ctx, path)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	var table string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT name FROM sqlite_master WHERE type = 'table' LIMIT 1`).Scan(&table))
+
+	rows, err := db.QueryContext(ctx, "SELECT * FROM "+quoteIdentifier(table)) //nolint:gosec // The name comes from sqlite_master and is quoted.
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+
+	names, err := rows.Columns()
+	require.NoError(t, err)
+	var out strings.Builder
+	fmt.Fprintf(&out, "%v", names)
+
+	values := make([]any, len(names))
+	scanArgs := make([]any, len(names))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+	for rows.Next() {
+		require.NoError(t, rows.Scan(scanArgs...))
+		fmt.Fprintf(&out, "|%v", values)
+	}
+	require.NoError(t, rows.Err())
+	return out.String()
+}
