@@ -162,10 +162,8 @@ type Result struct {
 // one to create it from.
 func Read(src io.Reader, format Format, opts Options, emit Emit) (Result, error) {
 	switch format {
-	case FormatCSV:
-		return readDelimited(src, csvDelimiter, format, opts, emit)
-	case FormatTSV:
-		return readDelimited(src, tsvDelimiter, format, opts, emit)
+	case FormatCSV, FormatTSV:
+		return readDelimited(src, format, opts, emit)
 	case FormatLTSV:
 		return readLTSV(src, opts, emit)
 	case FormatParquet:
