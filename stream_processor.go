@@ -251,12 +251,15 @@ func (sp *streamProcessor) runInputTx(ctx context.Context, db *sql.DB, load func
 		return fmt.Errorf("%w: failed to begin transaction: %w", ErrDatabaseOperation, err)
 	}
 	if err := load(tx); err != nil {
-		// When the context is done, database/sql has already rolled the
-		// transaction back itself, so this call loses the race and reports
-		// sql.ErrTxDone. That is cancellation working as documented, and the
-		// cause is already in err.
+		// When the context is done, the transaction has already been rolled
+		// back: database/sql does it from a goroutine of its own, and the
+		// driver does it underneath. This call therefore loses a race it was
+		// never going to win, and what it loses to is not one error but two --
+		// sql.ErrTxDone when database/sql got there first, and SQLite's "cannot
+		// rollback - no transaction is active" when the driver did. Neither is
+		// news, and the cause is already in err.
 		rollbackErr := tx.Rollback()
-		if errors.Is(rollbackErr, sql.ErrTxDone) && ctx.Err() != nil {
+		if rollbackErr != nil && ctx.Err() != nil {
 			return err
 		}
 		return joinCleanup(err, rollbackErr, "rollback import transaction")
@@ -395,14 +398,19 @@ func isLockCode(code int) bool {
 // The two statements run under a context that cannot be canceled. A canceled
 // context is one of the reasons a load fails, and it is no reason to leave the
 // caller holding half an input: the undo is what has to happen either way. When
-// the caller opened their transaction with that same context, database/sql has
-// already rolled the whole transaction back and reports sql.ErrTxDone here,
-// which is this undo having happened by a larger one.
+// the caller opened their transaction with that same context, the transaction
+// has already been rolled back whole, so this undo has happened by a larger
+// one: database/sql says so with sql.ErrTxDone when it got there first, and the
+// driver says so in its own words when it did, so under a context that is done
+// any failure here is that and not a failure to undo.
 func undoInput(ctx context.Context, tx *sql.Tx) error {
+	canceled := ctx.Err() != nil
 	ctx = context.WithoutCancel(ctx)
 	if _, err := tx.ExecContext(ctx, `ROLLBACK TO `+inputSavepoint); err != nil {
-		if errors.Is(err, sql.ErrTxDone) {
-			return nil
+		if canceled || errors.Is(err, sql.ErrTxDone) {
+			// The error says the transaction is already gone, which is the
+			// outcome this undo wanted.
+			return nil //nolint:nilerr // Reporting it would name a rollback that has already happened.
 		}
 		return err
 	}
