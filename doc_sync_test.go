@@ -40,7 +40,7 @@ func TestEnglishReadmeHasRequiredSections(t *testing.T) {
 		"## Features",
 		"## Supported File Formats",
 		"## Installation",
-		"## Quick Start",
+		"## Recipes",
 		"## Behavior and limits",
 		"## Examples",
 		"## Contributing",

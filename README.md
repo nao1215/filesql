@@ -13,6 +13,41 @@ The same module also includes [`prep`](https://pkg.go.dev/github.com/nao1215/fil
 
 [sqly](https://github.com/nao1215/sqly) is the shell built on the same core.
 
+Documentation: https://pkg.go.dev/github.com/nao1215/filesql
+
+## Try it in 30 seconds
+
+```go
+package main
+
+import (
+	"fmt"
+	"log"
+
+	"github.com/nao1215/filesql"
+)
+
+func main() {
+	db, err := filesql.Open("users.csv")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	var n int
+	if err := db.QueryRow("SELECT COUNT(*) FROM users WHERE age > 25").Scan(&n); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(n)
+}
+```
+
+The table is named after the file, so `users.csv` is `users`. Join across formats by opening more of them:
+
+```go
+db, err := filesql.Open("users.csv", "orders.jsonl", "returns.parquet")
+```
+
 ## Why filesql?
 
 filesql is for cases where the data is already in a file and the fastest useful tool is SQL.
@@ -33,55 +68,6 @@ filesql is for cases where the data is already in a file and the fastest useful 
 - Save changes with `DumpDatabase`, `EnableAutoSave`, or `EnableAutoSaveOnCommit`.
 - Stay in one module for loading (`filesql`) and cleanup (`prep`).
 
-## Supported File Formats
-
-| Extension | Format | Notes |
-|-----------|--------|-------|
-| `.csv` | CSV | Header row becomes column names |
-| `.tsv` | TSV | Tab-separated text |
-| `.ltsv` | LTSV | Labeled tab-separated text |
-| `.json` | JSON | Query nested data with `json_extract()` |
-| `.jsonl` | JSONL | One JSON value per line |
-| `.parquet` | Parquet | Columnar format |
-| `.xlsx` | Excel XLSX | One sheet becomes one table, named `file_sheet` (just `file` when the sheet repeats it). A workbook handed to `AddReader` hangs its sheets off the table name given there instead of off a file name, so a workbook added as `book` loads as `book_Sheet1` and as plain `book` when the sheet is itself named `book`. `ExcelSheetTableNames` works out the same names when it is given that table name in place of a path, and `sqlite_master` has them after a load. Every sheet that names a column is loaded by default, a blank scratch sheet being passed over; see [Excel sheet visibility](#excel-sheet-visibility) |
-| `.ach` | ACH (NACHA) | One table per record kind; see [ACH and Fedwire](#ach-and-fedwire) |
-| `.fed` | Fedwire | One message becomes one row 326 columns wide; see [ACH and Fedwire](#ach-and-fedwire) |
-
-Two inputs are the same source only when they are in the same place. `dir/users.csv` and `dir/users.csv.gz` are one dataset offered twice, and the plain one is read; `a/users.csv` and `b/users.csv` are two files, and both are loaded. What happens when both then want the table `users` is the loading API's business: `Open` and `OpenContext` build a fresh database and refuse it with `ErrDuplicateTable`, while `LoadInto` and `LoadIntoTx` load into a database you own and keep their last-wins rule, so the later input replaces the table. Neither one silently drops a file. Table names are compared the way SQLite compares identifiers, with ASCII case folded, so `Users.csv` and `users.csv` want the same table too.
-
-Column names inside a file follow two separate rules, and a header that breaks either is refused with `ErrDuplicateColumn` before it reaches SQLite. Two names differing only in ASCII letter case are one column, because SQLite is what holds them — `ID` and `id` are a duplicate — and the folding stops at ASCII as SQLite's does, so `ä` and `Ä` stay two columns. Two names identical after their surrounding whitespace is trimmed are one column too: `name` and `" name "` are one name typed twice. The rules are applied one at a time and never combined, so `" A"` beside `a` is accepted, which is what SQLite does with it as well. LTSV carries its labels on every record rather than in a header, so the same check runs per record.
-
-Compressed wrappers are supported for CSV, TSV, LTSV, JSON, JSONL, Parquet, and XLSX:
-`.gz`, `.bz2`, `.xz`, `.zst`, `.z`, `.snappy`, `.s2`, `.lz4`.
-
-ACH and Fedwire do not use external compression wrappers.
-
-An xz or zstd stream states in its header how much working memory its decoder
-must hold, and a decoder allocates it before reading any data. filesql caps that
-at a 256 MiB xz dictionary, four times what `xz -9` declares, and a 128 MiB zstd
-window, which is the largest the `zstd` CLI reaches on its own. A damaged file
-therefore costs a fixed ceiling rather than whatever its header names. The zstd
-cap holds for every frame; the xz one is read from the first block of the first
-stream, so a later block or a concatenated second stream is not covered.
-
-Format and compression are separate. `FileType` names the format only —
-`FileTypeCSV` is a CSV whether or not a codec wraps it — and a path says which
-codec that is. A reader has no path, so `AddReader` takes the codec as an
-option:
-
-```go
-gz, err := os.Open("users.csv.gz")
-if err != nil {
-	return err
-}
-defer gz.Close()
-
-builder.AddReader(gz, "users", filesql.FileTypeCSV, filesql.WithCompression(filesql.CompressionGZ))
-```
-
-Without `WithCompression` the reader's bytes are read as the format directly,
-so the ordinary three-argument call is unchanged.
-
 ## Installation
 
 ```bash
@@ -99,7 +85,7 @@ standard library fixes for [GO-2026-6088](https://pkg.go.dev/vuln/GO-2026-6088)
 (`encoding/asn1`), and filesql reaches `encoding/xml` on every XLSX it reads. An
 earlier 1.26 is not supported, even though it is a later release than 1.25.13.
 
-## Quick Start
+## Recipes
 
 For a one-off load, `filesql.Open` is fine. `OpenContext` is the better default when you already have a context or want a timeout.
 
@@ -314,6 +300,55 @@ Bob,bob@example.com,user
 	defer db.Close()
 }
 ```
+
+## Supported File Formats
+
+| Extension | Format | Notes |
+|-----------|--------|-------|
+| `.csv` | CSV | Header row becomes column names |
+| `.tsv` | TSV | Tab-separated text |
+| `.ltsv` | LTSV | Labeled tab-separated text |
+| `.json` | JSON | Query nested data with `json_extract()` |
+| `.jsonl` | JSONL | One JSON value per line |
+| `.parquet` | Parquet | Columnar format |
+| `.xlsx` | Excel XLSX | One sheet becomes one table, named `file_sheet` (just `file` when the sheet repeats it). A workbook handed to `AddReader` hangs its sheets off the table name given there instead of off a file name, so a workbook added as `book` loads as `book_Sheet1` and as plain `book` when the sheet is itself named `book`. `ExcelSheetTableNames` works out the same names when it is given that table name in place of a path, and `sqlite_master` has them after a load. Every sheet that names a column is loaded by default, a blank scratch sheet being passed over; see [Excel sheet visibility](#excel-sheet-visibility) |
+| `.ach` | ACH (NACHA) | One table per record kind; see [ACH and Fedwire](#ach-and-fedwire) |
+| `.fed` | Fedwire | One message becomes one row 326 columns wide; see [ACH and Fedwire](#ach-and-fedwire) |
+
+Two inputs are the same source only when they are in the same place. `dir/users.csv` and `dir/users.csv.gz` are one dataset offered twice, and the plain one is read; `a/users.csv` and `b/users.csv` are two files, and both are loaded. What happens when both then want the table `users` is the loading API's business: `Open` and `OpenContext` build a fresh database and refuse it with `ErrDuplicateTable`, while `LoadInto` and `LoadIntoTx` load into a database you own and keep their last-wins rule, so the later input replaces the table. Neither one silently drops a file. Table names are compared the way SQLite compares identifiers, with ASCII case folded, so `Users.csv` and `users.csv` want the same table too.
+
+Column names inside a file follow two separate rules, and a header that breaks either is refused with `ErrDuplicateColumn` before it reaches SQLite. Two names differing only in ASCII letter case are one column, because SQLite is what holds them — `ID` and `id` are a duplicate — and the folding stops at ASCII as SQLite's does, so `ä` and `Ä` stay two columns. Two names identical after their surrounding whitespace is trimmed are one column too: `name` and `" name "` are one name typed twice. The rules are applied one at a time and never combined, so `" A"` beside `a` is accepted, which is what SQLite does with it as well. LTSV carries its labels on every record rather than in a header, so the same check runs per record.
+
+Compressed wrappers are supported for CSV, TSV, LTSV, JSON, JSONL, Parquet, and XLSX:
+`.gz`, `.bz2`, `.xz`, `.zst`, `.z`, `.snappy`, `.s2`, `.lz4`.
+
+ACH and Fedwire do not use external compression wrappers.
+
+An xz or zstd stream states in its header how much working memory its decoder
+must hold, and a decoder allocates it before reading any data. filesql caps that
+at a 256 MiB xz dictionary, four times what `xz -9` declares, and a 128 MiB zstd
+window, which is the largest the `zstd` CLI reaches on its own. A damaged file
+therefore costs a fixed ceiling rather than whatever its header names. The zstd
+cap holds for every frame; the xz one is read from the first block of the first
+stream, so a later block or a concatenated second stream is not covered.
+
+Format and compression are separate. `FileType` names the format only —
+`FileTypeCSV` is a CSV whether or not a codec wraps it — and a path says which
+codec that is. A reader has no path, so `AddReader` takes the codec as an
+option:
+
+```go
+gz, err := os.Open("users.csv.gz")
+if err != nil {
+	return err
+}
+defer gz.Close()
+
+builder.AddReader(gz, "users", filesql.FileTypeCSV, filesql.WithCompression(filesql.CompressionGZ))
+```
+
+Without `WithCompression` the reader's bytes are read as the format directly,
+so the ordinary three-argument call is unchanged.
 
 ## Behavior and limits
 
