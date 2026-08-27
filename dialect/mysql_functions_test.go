@@ -262,6 +262,110 @@ func TestMySQLOnlyFunctions(t *testing.T) {
 // for, and a pair that inverts each other round-trips. A fixed case pins the
 // answer that was measured; a relation catches the alias that drifts away from
 // the function beside it.
+// TestMySQLValueRulesMatchTheEngine pins the helpers whose answer used to be
+// SQLite's rather than MySQL's for a value at the edge of what they take. Every
+// expected value here was read from mysql:8.4.
+func TestMySQLValueRulesMatchTheEngine(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		query    string
+		want     string
+		wantNull bool
+	}{
+		// A count reads a string as the number its leading run spells and
+		// truncates it, so a value from a text column counts rather than
+		// making the whole call NULL.
+		{query: `SELECT LENGTH(SPACE('12.5'))`, want: "12"},
+		{query: `SELECT LENGTH(SPACE(12.5))`, want: "13"},
+		{query: `SELECT LENGTH(SPACE('hello'))`, want: "0"},
+		{query: `SELECT LENGTH(SPACE(3.7))`, want: "4"},
+		{query: `SELECT SPACE(NULL)`, wantNull: true},
+		{query: `SELECT REPEAT('ab', '2.5')`, want: "abab"},
+		{query: `SELECT REPEAT('ab', 'x')`, want: ""},
+		{query: `SELECT LEFT('hello', '2.7')`, want: "he"},
+		{query: `SELECT RIGHT('hello', '2.7')`, want: "lo"},
+		{query: `SELECT LEFT('hello', 2.7)`, want: "hel"},
+		{query: `SELECT LPAD('a', '3.7', '-')`, want: "--a"},
+		{query: `SELECT SUBSTRING('hello', '2', '2.7')`, want: "el"},
+
+		// SOUNDEX propagates NULL, answers the empty string for a value with no
+		// letter in it, emits a digit per coded consonant however many there
+		// are, and keeps a first letter it has no code for as it was written.
+		{query: `SELECT SOUNDEX(NULL)`, wantNull: true},
+		{query: `SELECT SOUNDEX('')`, want: ""},
+		{query: `SELECT SOUNDEX('0')`, want: ""},
+		{query: `SELECT SOUNDEX('Hello World')`, want: "H4643"},
+		{query: `SELECT SOUNDEX('Robert')`, want: "R163"},
+		{query: `SELECT SOUNDEX('Rupert')`, want: "R163"},
+		{query: `SELECT SOUNDEX('Ashcraft')`, want: "A2613"},
+		{query: `SELECT SOUNDEX('Tymczak')`, want: "T520"},
+		{query: `SELECT SOUNDEX('Pfister')`, want: "P236"},
+		{query: `SELECT SOUNDEX('Honeyman')`, want: "H500"},
+		{query: `SELECT SOUNDEX('Wright')`, want: "W623"},
+		{query: `SELECT SOUNDEX('  bob')`, want: "B000"},
+		{query: `SELECT SOUNDEX('123abc')`, want: "A120"},
+		{query: `SELECT SOUNDEX('éèê')`, want: "é000"},
+		{query: `SELECT SOUNDEX('abcdefghijklmnopqrstuvwxyz')`, want: "A12312451262312"},
+
+		// UNHEX reads an odd digit count as having a leading zero, and answers
+		// bytes rather than text so a zero byte in them survives.
+		{query: `SELECT HEX(UNHEX('ABC'))`, want: "0ABC"},
+		{query: `SELECT HEX(UNHEX('0'))`, want: "00"},
+		{query: `SELECT HEX(UNHEX('41'))`, want: "41"},
+		{query: `SELECT HEX(UNHEX('0041'))`, want: "0041"},
+		{query: `SELECT HEX(UNHEX('4100'))`, want: "4100"},
+		{query: `SELECT UNHEX('zz')`, wantNull: true},
+
+		// A NULL length makes the call NULL even where the position already put
+		// the range outside the string.
+		{query: `SELECT SUBSTRING('hello', 10, NULL)`, wantNull: true},
+		{query: `SELECT SUBSTRING('hello', 0, NULL)`, wantNull: true},
+		{query: `SELECT SUBSTRING('hello', -10, NULL)`, wantNull: true},
+		{query: `SELECT SUBSTRING('hello', 2, NULL)`, wantNull: true},
+
+		// REPLACE looks at every argument even when the search string is empty.
+		{query: `SELECT REPLACE('hello', '', NULL)`, wantNull: true},
+		{query: `SELECT REPLACE('hello', 'l', 'L')`, want: "heLLo"},
+
+		// CHAR builds bytes, so a zero argument is one zero byte and an
+		// argument past 255 is written big-endian rather than as UTF-8.
+		{query: `SELECT HEX(CHAR(0))`, want: "00"},
+		{query: `SELECT HEX(CHAR(65))`, want: "41"},
+		{query: `SELECT HEX(CHAR(256))`, want: "0100"},
+		{query: `SELECT HEX(CHAR(65536))`, want: "010000"},
+		{query: `SELECT HEX(CHAR(65, 66, 67))`, want: "414243"},
+		{query: `SELECT HEX(CHAR(65, NULL, 66))`, want: "4142"},
+
+		// FORMAT groups an integer from its own digits rather than through a
+		// float64, which lost the last digits of anything past 2^53.
+		{query: `SELECT FORMAT(9223372036854775807, 0)`, want: "9,223,372,036,854,775,807"},
+		{query: `SELECT FORMAT(9223372036854775807, 2)`, want: "9,223,372,036,854,775,807.00"},
+		{query: `SELECT FORMAT(9007199254740993, 0)`, want: "9,007,199,254,740,993"},
+		{query: `SELECT FORMAT(-9223372036854775808, 0)`, want: "-9,223,372,036,854,775,808"},
+		{query: `SELECT FORMAT(1234.5678, 2)`, want: "1,234.57"},
+		{query: `SELECT FORMAT(-1234567, 3)`, want: "-1,234,567.000"},
+	}
+
+	for _, tt := range tests {
+		got, err := runDialect(t, db, MySQL, tt.query)
+		if err != nil {
+			t.Errorf("%s: %v", tt.query, err)
+			continue
+		}
+		if tt.wantNull {
+			if got.Valid {
+				t.Errorf("%s = %q, want NULL", tt.query, got.String)
+			}
+			continue
+		}
+		if !got.Valid || got.String != tt.want {
+			t.Errorf("%s = %v, want %q", tt.query, got, tt.want)
+		}
+	}
+}
+
 func TestMySQLOnlyFunctionRelations(t *testing.T) {
 	// Not parallel: castDB touches the process-global driver registration.
 	db := castDB(t)

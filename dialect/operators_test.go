@@ -272,23 +272,37 @@ func TestZeroDivisorLeavesTheArithmeticAlone(t *testing.T) {
 		{MySQL, `SELECT 7/2`, "3.5"},
 		{MySQL, `SELECT 7 % 2`, "1"},
 
-		// The operand kinds a helper standing in for an operator has to read the
-		// way SQLite reads them: a float truncates for the remainder, text takes
-		// the number it spells, and text that spells none is zero.
-		{PostgreSQL, `SELECT 7.5 % 2`, "1"},
-		{PostgreSQL, `SELECT -7.5 % 2`, "-1"},
+		// The remainder is taken on the operands as written rather than on the
+		// integers SQLite truncates them to, which is what every dialect here
+		// answers: 7.5 % 2 is 1.5 and not the 1 SQLite's own "%" gives. Text
+		// still takes the number it spells, and text that spells none is zero.
+		{PostgreSQL, `SELECT 7.5 % 2`, "1.5"},
+		{PostgreSQL, `SELECT -7.5 % 2`, "-1.5"},
+		{PostgreSQL, `SELECT 7 % 2.5`, "2"},
+		{PostgreSQL, `SELECT typeof(7 % 2.5)`, "real"},
+		{MySQL, `SELECT 7.5 % 2`, "1.5"},
+		{MySQL, `SELECT 7 % 2.5`, "2"},
+		{MySQL, `SELECT 7 MOD 2.5`, "2"},
+		{MySQL, `SELECT MOD(7, 2.5)`, "2"},
+		{GoogleSQL, `SELECT MOD(7, 2.5)`, "2"},
 		{PostgreSQL, `SELECT '7' % 2`, "1"},
 		{PostgreSQL, `SELECT 'abc' % 2`, "0"},
 		{PostgreSQL, `SELECT '7' / 2`, "3"},
 		{PostgreSQL, `SELECT 'abc' / 2`, "0"},
 		{GoogleSQL, `SELECT 'abc' % 2`, "0"},
 
-		// A float past the int64 range stops at the end of it, the way SQLite
-		// stops: a bare conversion is implementation-defined in Go and answered
-		// -1 here. The remainder keeps SQLite's storage class too, so a real
-		// operand gives a real back.
-		{PostgreSQL, `SELECT 1e300 % 7`, "0"},
-		{PostgreSQL, `SELECT 9223372036854775807.0 % 7`, "0"},
+		// A divisor is zero as a value rather than as the integer it truncates
+		// to, so a fractional divisor that divides evenly answers zero instead
+		// of being refused.
+		{PostgreSQL, `SELECT 7 % 0.5`, "0"},
+		{MySQL, `SELECT 7 % 0.5`, "0"},
+
+		// A magnitude past what a float64 holds exactly is the ceiling this
+		// package has and PostgreSQL does not: its numeric is arbitrary
+		// precision, so it answers 0 for the second of these where the nearest
+		// float64 to that integer is 2^63 and leaves 1. The first agrees.
+		{PostgreSQL, `SELECT 1e300 % 7`, "1"},
+		{PostgreSQL, `SELECT 9223372036854775807.0 % 7`, "1"},
 		{PostgreSQL, `SELECT typeof(7.5 % 2)`, "real"},
 		{PostgreSQL, `SELECT typeof(7 % 2)`, "integer"},
 		{PostgreSQL, `SELECT typeof('7' / 2)`, "integer"},
@@ -328,6 +342,15 @@ func TestArithmeticFunctionsAreTranslated(t *testing.T) {
 		{PostgreSQL, `SELECT div(7, -2)`, "-3"},
 		{GoogleSQL, `SELECT DIV(7, 2)`, "3"},
 		{GoogleSQL, `SELECT DIV(-7, 2)`, "-3"},
+		// The quotient is what truncates, not the operands: 7 / 2.5 is 2.8 and
+		// truncates to 2, where truncating the divisor to 2 first answered 3.
+		{PostgreSQL, `SELECT div(7, 2.5)`, "2"},
+		{PostgreSQL, `SELECT div(-7, 2.5)`, "-2"},
+		{PostgreSQL, `SELECT div(7.5, 2)`, "3"},
+		{PostgreSQL, `SELECT div(-7.5, 2.5)`, "-3"},
+		{GoogleSQL, `SELECT DIV(7, 2.5)`, "2"},
+		// A divisor that is zero only after truncation still divides.
+		{PostgreSQL, `SELECT div(7, 0.5)`, "14"},
 
 		// A truncation at a scale cuts toward zero, and a negative scale
 		// truncates to a power of ten.

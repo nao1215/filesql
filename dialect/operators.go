@@ -88,32 +88,42 @@ func divideSQLite(args []driver.Value) (driver.Value, error) {
 	return a.float() / b.float(), nil
 }
 
-// moduloRaising implements "%" and mod() for a dialect that raises on a zero
-// divisor. SQLite answers NULL there, which reads as missing data rather than
-// as arithmetic the engine refused.
+// remainder is the remainder every dialect here computes: an integer one when
+// both operands are integers, and math.Mod otherwise. SQLite's own "%"
+// truncates both operands to integers first, so it answers 1 for 7.5 % 2 where
+// every dialect this package translates answers 1.5, and 1 for 7 % 2.5 where
+// they answer 2.0.
 //
-// SQLite's "%" is integer modulo whatever the operands look like — 7.5 % 2 is
-// 1, where PostgreSQL itself answers 1.5 — and this keeps SQLite's answer
-// rather than the dialect's, so a query that ran before this helper existed
-// keeps the number it had and only the zero divisor moves. Making the whole
-// operator follow PostgreSQL is a larger change than a zero divisor needs.
-func moduloRaising(args []driver.Value) (driver.Value, error) {
-	a, aok := sqliteOperand(args[0])
-	b, bok := sqliteOperand(args[1])
-	if !aok || !bok {
-		return nil, nil
+// The sign follows the dividend in all of them, which is what both Go's "%" and
+// math.Mod already do.
+func remainder(a, b numOperand) driver.Value {
+	if a.isInt && b.isInt {
+		return a.i % b.i
 	}
-	if b.integer() == 0 {
-		return nil, ErrDivideByZero
+	return math.Mod(a.float(), b.float())
+}
+
+// moduloDialect implements "%" and mod() with the dialect's arithmetic rather
+// than SQLite's. raiseOnZero says what a zero divisor does: PostgreSQL and
+// GoogleSQL raise, MySQL answers NULL, and SQLite answers NULL, which is why
+// only the raising pair used to need a helper at all.
+func moduloDialect(raiseOnZero bool) scalarFn {
+	return func(args []driver.Value) (driver.Value, error) {
+		a, aok := sqliteOperand(args[0])
+		b, bok := sqliteOperand(args[1])
+		if !aok || !bok {
+			return nil, nil
+		}
+		// A divisor is zero as a value, not as the integer it truncates to:
+		// 7 % 0.5 divides evenly in every dialect here and must not be refused.
+		if b.float() == 0 {
+			if raiseOnZero {
+				return nil, ErrDivideByZero
+			}
+			return nil, nil
+		}
+		return remainder(a, b), nil
 	}
-	remainder := a.integer() % b.integer()
-	// SQLite hands back a real when either operand is one, even though the
-	// arithmetic was integer, and the storage class follows the value into the
-	// column it lands in.
-	if !a.isInt || !b.isInt {
-		return float64(remainder), nil
-	}
-	return remainder, nil
 }
 
 // integerDivide implements PostgreSQL's div(x, y) and GoogleSQL's DIV(x, y):
@@ -126,10 +136,15 @@ func integerDivide(args []driver.Value) (driver.Value, error) {
 	if !aok || !bok {
 		return nil, nil
 	}
-	if b.integer() == 0 {
+	if b.float() == 0 {
 		return nil, ErrDivideByZero
 	}
-	return a.integer() / b.integer(), nil
+	if a.isInt && b.isInt {
+		return a.i / b.i, nil
+	}
+	// The quotient is truncated, not the operands: div(7, 2.5) is 2 because
+	// 2.8 truncates, where truncating 2.5 to 2 first would answer 3.
+	return numOperand{f: math.Trunc(a.float() / b.float())}.integer(), nil
 }
 
 // truncateScale implements PostgreSQL's trunc(x, n) and GoogleSQL's
@@ -499,12 +514,21 @@ func fnMySQLUnhex(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
+	if len(s)%2 == 1 {
+		// MySQL reads an odd digit count as having a leading zero, so
+		// UNHEX('ABC') decodes '0ABC' and UNHEX('0') decodes '00'. Refusing it
+		// dropped every value whose digit count happened to be odd.
+		s = "0" + s
+	}
 	raw, decodeErr := hex.DecodeString(s)
 	if decodeErr != nil {
 		// MySQL answers NULL rather than raising for a non-hexadecimal argument.
 		return nil, nil //nolint:nilerr // NULL is MySQL's documented result here
 	}
-	return string(raw), nil
+	// The bytes are handed back as a blob rather than as text, which is what
+	// MySQL's UNHEX answers and what keeps a zero byte in them: a text value
+	// carrying one is cut there on its way into the next function's arguments.
+	return raw, nil
 }
 
 // binaryOperatorPass rewrites "a <op> b" into helper(a, b) for every operator

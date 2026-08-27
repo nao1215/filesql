@@ -51,10 +51,11 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	if err != nil {
 		return nil, err
 	}
-	// M-24: MOD is DIV's sibling, and SQLite's "%" is the same operation at the
-	// same precedence, so this one is a token replacement rather than a call. It
-	// runs before DIV so that a MOD standing to the left of a DIV is already an
-	// operator token when DIV goes looking for its left operand.
+	// M-24: MOD the operator is the same operation as "%" at the same
+	// precedence, so it becomes that token here and the "%" pass below turns
+	// both into the helper. It runs before DIV so that a MOD standing to the
+	// left of a DIV is already an operator token when DIV goes looking for its
+	// left operand.
 	out = modPass(out)
 	out, err = divPass(out)
 	if err != nil {
@@ -71,6 +72,14 @@ func rewriteMySQL(tokens []token) ([]token, error) {
 	// M-11: MySQL's "/" is floating-point division, so 5/2 is 2.5 rather than
 	// the 2 SQLite gives for two integers.
 	out, err = binaryChainOperatorPass(out, "/", "mysql_divide")
+	if err != nil {
+		return nil, err
+	}
+	// M-24: SQLite's "%" truncates both operands to integers before taking the
+	// remainder, so "7 % 2.5" answered 1 where MySQL answers 2.0. The helper
+	// keeps the operands as written, and MOD the operator and MOD the call both
+	// reach it, so the three spellings cannot disagree.
+	out, err = binaryChainOperatorPass(out, "%", "mysql_mod")
 	if err != nil {
 		return nil, err
 	}
@@ -192,8 +201,32 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		return rewritePosition(tokens, open, closeIdx, mysqlCallPass)
 	case fnNameSubstring, fnNameSubstr:
 		return rewriteSubstringCall(tokens, open, closeIdx, "mysql_substr", mysqlCallPass)
+	case fnNameReplace:
+		// SQLite answers the subject for an empty search string without looking
+		// at the replacement, so a NULL replacement did not reach the result.
+		return rewriteRenameCall(tokens, open, closeIdx, "dialect_replace", mysqlCallPass)
+	case "CHAR":
+		// MySQL CHAR builds bytes where SQLite's char() builds code points.
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_char", mysqlCallPass)
+	case "SOUNDEX":
+		// SQLite has a soundex() of its own that answers a placeholder for a
+		// value holding no letter and cuts the code to four characters.
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_soundex", mysqlCallPass)
 	case fnNameRound:
-		return rewriteRoundCall(tokens, open, closeIdx, mysqlCallPass)
+		return rewriteRoundEvenCall(tokens, open, closeIdx, mysqlCallPass)
+	case fnNameMod:
+		// SQLite's own mod() happens to answer what MySQL answers, but the
+		// operator spellings reach mysql_mod and the three have to agree.
+		//
+		// Only the call is renamed. MySQL tells MOD the function from MOD the
+		// operator by whether the parenthesis follows the name with nothing
+		// between, so "a MOD (b + 1)" is the operator and belongs to modPass,
+		// which runs later; renaming it here would take "(b + 1)" for the whole
+		// argument list and leave "a" stranded beside the call.
+		if open != nameIdx+1 {
+			return nil, false, nil
+		}
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_mod", mysqlCallPass)
 	case "LENGTH", "OCTET_LENGTH":
 		// MySQL LENGTH counts bytes; SQLite's counts characters.
 		return rewriteRenameCall(tokens, open, closeIdx, "octet_length", mysqlCallPass)
@@ -264,7 +297,7 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_ascii", mysqlCallPass)
 	case "UNHEX":
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_unhex", mysqlCallPass)
-	case "LPAD", "RPAD":
+	case fnNameLpad, fnNameRpad:
 		// A negative length and an empty pad are answered differently by each
 		// dialect, so each names its own helper rather than sharing one.
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_"+strings.ToLower(tokens[nameIdx].text), mysqlCallPass)

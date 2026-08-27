@@ -46,8 +46,20 @@
 // Division disagrees twice over: MySQL and GoogleSQL divide two integers into a
 // real where SQLite and PostgreSQL answer an integer, and a zero divisor raises
 // in PostgreSQL and GoogleSQL where SQLite and MySQL answer NULL. So "/" is
-// rewritten for all three dialects and the remainder for the two that raise,
-// with GoogleSQL's SAFE_DIVIDE left as the way to ask for the NULL.
+// rewritten for all three dialects, with GoogleSQL's SAFE_DIVIDE left as the
+// way to ask for the NULL. The remainder is rewritten for all three as well,
+// because SQLite truncates both operands to integers before taking it and
+// answers 1 for 7.5 % 2 where every dialect here answers 1.5. MySQL spells the
+// same operation three ways -- "%", the MOD operator and MOD() -- and all three
+// reach one helper so they cannot disagree.
+//
+// Rounding is the other arithmetic that differs. MySQL and PostgreSQL break a
+// tie toward the even neighbor for a floating-point argument, so ROUND(2.5) is
+// 2 and ROUND(3.5) is 4, where SQLite and BigQuery round away from zero. Every
+// non-integer SQLite holds is a floating-point value, so the even rule is the
+// one a REAL column loaded from a file gets in either engine; what it cannot
+// reproduce is a decimal literal written in the query, which MySQL reads as an
+// exact decimal and rounds away from zero.
 //
 // Casts go through the same mechanism for a different reason. SQLite's own CAST
 // applies type affinity, which is close enough to look right and different

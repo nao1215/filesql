@@ -1369,10 +1369,15 @@ func TestRoundIsRewrittenOnlyWhereADialectDisagrees(t *testing.T) {
 		input   string
 		want    string
 	}{
-		{MySQL, "SELECT ROUND(a, -2) FROM t", `SELECT dialect_round(a, -2) AS "ROUND(a, -2)" FROM t`},
-		{PostgreSQL, "SELECT ROUND(a, -2) FROM t", `SELECT dialect_round(a, -2) AS "ROUND(a, -2)" FROM t`},
+		// MySQL and PostgreSQL break a tie toward the even neighbor for a
+		// floating-point argument, which SQLite's round() does not, so both
+		// forms of the call go to a helper. BigQuery rounds away from zero the
+		// way SQLite does, so only its scaled form needs one.
+		{MySQL, "SELECT ROUND(a, -2) FROM t", `SELECT dialect_round_even(a, -2) AS "ROUND(a, -2)" FROM t`},
+		{PostgreSQL, "SELECT ROUND(a, -2) FROM t", `SELECT dialect_round_even(a, -2) AS "ROUND(a, -2)" FROM t`},
 		{GoogleSQL, "SELECT ROUND(a, -2) FROM t", `SELECT dialect_round(a, -2) AS "ROUND(a, -2)" FROM t`},
-		{MySQL, "SELECT ROUND(a) FROM t", "SELECT ROUND(a) FROM t"},
+		{MySQL, "SELECT ROUND(a) FROM t", `SELECT dialect_round_even(a) AS "ROUND(a)" FROM t`},
+		{PostgreSQL, "SELECT ROUND(a) FROM t", `SELECT dialect_round_even(a) AS "ROUND(a)" FROM t`},
 		{GoogleSQL, "SELECT ROUND(a) FROM t", "SELECT ROUND(a) FROM t"},
 		{SQLite, "SELECT ROUND(a, -2) FROM t", "SELECT ROUND(a, -2) FROM t"},
 	}
@@ -1385,6 +1390,61 @@ func TestRoundIsRewrittenOnlyWhereADialectDisagrees(t *testing.T) {
 		}
 		if got != tt.want {
 			t.Errorf("Translate(%v, %q)\n  = %q\nwant %q", tt.dialect, tt.input, got, tt.want)
+		}
+	}
+}
+
+// TestRoundBreaksATieTheWayEachDialectDoes pins the tie rule of ROUND per
+// dialect. MySQL and PostgreSQL both round a floating-point argument to the
+// even neighbor and BigQuery rounds away from zero, so the three cannot be
+// given one rule. Every MySQL value here was read from mysql:8.4 and every
+// PostgreSQL one from postgres:17-alpine, in both cases with the argument
+// spelled as a double.
+func TestRoundBreaksATieTheWayEachDialectDoes(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		dialect Dialect
+		query   string
+		want    string
+	}{
+		{MySQL, `SELECT ROUND(2.5)`, "2"},
+		{MySQL, `SELECT ROUND(3.5)`, "4"},
+		{MySQL, `SELECT ROUND(-2.5)`, "-2"},
+		{MySQL, `SELECT ROUND(0.5)`, "0"},
+		{MySQL, `SELECT ROUND(1.5)`, "2"},
+		{PostgreSQL, `SELECT round(2.5)`, "2"},
+		{PostgreSQL, `SELECT round(3.5)`, "4"},
+		{PostgreSQL, `SELECT round(-2.5)`, "-2"},
+		{GoogleSQL, `SELECT ROUND(2.5)`, "3"},
+		{GoogleSQL, `SELECT ROUND(-2.5)`, "-3"},
+
+		// The scaled form breaks its tie the same way, and reads the value as
+		// the shortest decimal that spells it: 2.675 is a shade below 2.675 as
+		// a double, and MySQL answers 2.68 rather than the 2.67 a binary scale
+		// would give.
+		{MySQL, `SELECT ROUND(0.125, 2)`, "0.12"},
+		{MySQL, `SELECT ROUND(0.375, 2)`, "0.38"},
+		{MySQL, `SELECT ROUND(2.675, 2)`, "2.68"},
+		{MySQL, `SELECT ROUND(12.5, -1)`, "10"},
+		{MySQL, `SELECT ROUND(17.5, -1)`, "20"},
+
+		// An integer has no tie to break, text takes the number it spells, and
+		// NULL stays NULL.
+		{MySQL, `SELECT ROUND(5)`, "5"},
+		{MySQL, `SELECT ROUND('12.5')`, "12"},
+		{MySQL, `SELECT ROUND(NULL) IS NULL`, "1"},
+	}
+
+	for _, tt := range tests {
+		got, err := runDialect(t, db, tt.dialect, tt.query)
+		if err != nil {
+			t.Errorf("%v: %s: %v", tt.dialect, tt.query, err)
+			continue
+		}
+		if !got.Valid || got.String != tt.want {
+			t.Errorf("%v: %s = %v, want %q", tt.dialect, tt.query, got, tt.want)
 		}
 	}
 }
