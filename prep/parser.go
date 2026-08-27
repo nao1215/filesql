@@ -547,10 +547,15 @@ var validatorRegistry = map[string]validatorBuilder{
 	urlEncodedTagValue: func(_ string, _ bool) (validator, error) { return newURLEncodedValidator(), nil },
 	dataURITagValue:    func(_ string, _ bool) (validator, error) { return newDataURIValidator(), nil },
 
-	// Network validators
-	ipAddrTagValue:  func(_ string, _ bool) (validator, error) { return newIPAddrValidator(), nil },
-	ip4AddrTagValue: func(_ string, _ bool) (validator, error) { return newIP4AddrValidator(), nil },
-	ip6AddrTagValue: func(_ string, _ bool) (validator, error) { return newIP6AddrValidator(), nil },
+	// Network validators. ip, ipv4 and ipv6 are the dialect's spellings of
+	// ip_addr, ip4_addr and ip6_addr and build the same validators.
+	ipTagValue:      func(_ string, _ bool) (validator, error) { return newIPAddrValidator(ipTagValue), nil },
+	ipv4TagValue:    func(_ string, _ bool) (validator, error) { return newIP4AddrValidator(ipv4TagValue), nil },
+	ipv6TagValue:    func(_ string, _ bool) (validator, error) { return newIP6AddrValidator(ipv6TagValue), nil },
+	portTagValue:    func(_ string, _ bool) (validator, error) { return newPortValidator(), nil },
+	ipAddrTagValue:  func(_ string, _ bool) (validator, error) { return newIPAddrValidator(ipAddrTagValue), nil },
+	ip4AddrTagValue: func(_ string, _ bool) (validator, error) { return newIP4AddrValidator(ip4AddrTagValue), nil },
+	ip6AddrTagValue: func(_ string, _ bool) (validator, error) { return newIP6AddrValidator(ip6AddrTagValue), nil },
 	cidrTagValue:    func(_ string, _ bool) (validator, error) { return newCIDRValidator(), nil },
 	cidrv4TagValue:  func(_ string, _ bool) (validator, error) { return newCIDRv4Validator(), nil },
 	cidrv6TagValue:  func(_ string, _ bool) (validator, error) { return newCIDRv6Validator(), nil },
@@ -636,6 +641,38 @@ var fieldListValidatorRegistry = map[string]fieldListValidatorBuilder{
 	requiredWithoutAllTagValue: func(f []string) crossFieldValidator {
 		return newRequiredWithoutValidator(f, true)
 	},
+	excludedWithTagValue: func(f []string) crossFieldValidator {
+		return newExcludedWithValidator(f, false)
+	},
+	excludedWithAllTagValue: func(f []string) crossFieldValidator {
+		return newExcludedWithValidator(f, true)
+	},
+	excludedWithoutTagValue: func(f []string) crossFieldValidator {
+		return newExcludedWithoutValidator(f, false)
+	},
+	excludedWithoutAllTagValue: func(f []string) crossFieldValidator {
+		return newExcludedWithoutValidator(f, true)
+	},
+}
+
+// pairTakingCrossFieldRegistry maps the tags whose parameter is field and value
+// pairs to their builder functions. They are separate from the list-taking
+// registry because their parameter is tokenized into pairs rather than names.
+//
+//nolint:gochecknoglobals // registry pattern requires package-level map for O(1) lookup
+var pairTakingCrossFieldRegistry = map[string]func(conditions []fieldCondition) crossFieldValidator{
+	requiredIfTagValue: func(c []fieldCondition) crossFieldValidator {
+		return newRequiredIfValidator(c)
+	},
+	requiredUnlessTagValue: func(c []fieldCondition) crossFieldValidator {
+		return newRequiredUnlessValidator(c)
+	},
+	excludedIfTagValue: func(c []fieldCondition) crossFieldValidator {
+		return newExcludedIfValidator(c)
+	},
+	excludedUnlessTagValue: func(c []fieldCondition) crossFieldValidator {
+		return newExcludedUnlessValidator(c)
+	},
 }
 
 // parseValidateTag parses the validate tag string and returns validators and cross-field validators.
@@ -700,41 +737,19 @@ func parseValidateTag(tag string, strict bool) (validators, crossFieldValidators
 			continue
 		}
 
-		// Conditional required validators need special parsing (field and value pairs)
-		switch key {
-		case requiredIfTagValue:
-			cv, err := buildConditionalCrossFieldValidator(
-				key,
-				value,
-				strict,
-				func(conditions []fieldCondition) crossFieldValidator {
-					return newRequiredIfValidator(conditions)
-				},
-			)
+		// Tags whose parameter is field and value pairs need their own parsing
+		if builder, ok := pairTakingCrossFieldRegistry[key]; ok {
+			cv, err := buildConditionalCrossFieldValidator(key, value, strict, builder)
 			if err != nil {
 				return nil, nil, err
 			}
 			if cv != nil {
 				crossVals = append(crossVals, cv)
 			}
-		case requiredUnlessTagValue:
-			cv, err := buildConditionalCrossFieldValidator(
-				key,
-				value,
-				strict,
-				func(conditions []fieldCondition) crossFieldValidator {
-					return newRequiredUnlessValidator(conditions)
-				},
-			)
-			if err != nil {
-				return nil, nil, err
-			}
-			if cv != nil {
-				crossVals = append(crossVals, cv)
-			}
-		default:
-			return nil, nil, fmt.Errorf("%w: unknown validate tag %q", ErrInvalidTagFormat, part)
+			continue
 		}
+
+		return nil, nil, fmt.Errorf("%w: unknown validate tag %q", ErrInvalidTagFormat, part)
 	}
 
 	return vals, crossVals, nil
