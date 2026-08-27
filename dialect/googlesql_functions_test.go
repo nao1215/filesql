@@ -406,7 +406,7 @@ func TestGoogleSQLSoundexIsNotMySQLs(t *testing.T) {
 	}
 }
 
-// TestGoogleSQLRefusesANegativeLength pins one rule across the five functions
+// TestGoogleSQLRefusesANegativeLength pins one rule across the six functions
 // that take a length. BigQuery refuses a negative one in every one of them, and
 // this package used to answer an error from two, the empty string from two and
 // NULL from one, so a computed length that came out negative meant something
