@@ -7,11 +7,8 @@
 // database engine, providing full SQL capabilities including JOINs, aggregations,
 // window functions, and CTEs.
 //
-// ACH (NACHA) and Fedwire files are also loaded. Both are written back by
-// rebuilding the file from the parsed structure rather than by patching it, so
-// a write normalizes formatting and recalculates the records the format derives.
-// See the ACH and Fedwire section of README for what that means for control
-// columns and for the columns that name a record's position.
+// ACH (NACHA) and Fedwire files are also loaded; see the ACH and Fedwire section
+// below.
 //
 // # Features
 //
@@ -63,6 +60,125 @@
 //	}
 //	defer db.Close()
 //
+// # Column Types
+//
+// CSV, TSV, LTSV and XLSX carry no types, so the values decide whether a column
+// is INTEGER, REAL or TEXT. Parquet, ACH and Fedwire bring their own schema and
+// are not inferred; a Parquet UINT64 column loads as TEXT, since the upper half
+// of its range is past what SQLite's INTEGER holds exactly.
+//
+// The type follows from every value in the column, wherever the value sits and
+// however large the file is. One value of these four kinds anywhere in the file
+// makes the column TEXT, because a numeric column would damage it:
+//   - a leading zero, such as 007, which INTEGER drops
+//   - an integer past int64, such as 11040320260000000000, which float64 renders
+//     as 1.104032026e+19
+//   - a spelling Go parses and SQLite's affinity does not convert, such as 1_000
+//     or 0x1p4
+//   - the padding a fixed-width code carries, such as "  42"
+//
+// One decimal makes a numeric column REAL. An INTEGER column turns the column's
+// arithmetic into integer division, so 5 / 2 answers 2 rather than 2.5. The
+// exception is a column where a decimal meets an integer past 2^53 that REAL
+// would round to a neighboring double: that column is TEXT, while the same
+// integers with no decimal beside them stay INTEGER and exact.
+//
+// Decimal formatting is not preserved: 2.50 loads as the REAL 2.5, 1.00 as 1,
+// and 1e3 as 1000. The quantity is kept and the spelling is not, because a TEXT
+// column is compared against a number as text, so WHERE amount > 9.5 over "9.00"
+// and "10.00" would return nothing at all. Keep the source file when the
+// original spelling matters. A dump keeps the type rather than the spelling: a
+// REAL column is written with a decimal point, so 1.00 comes back as 1.0 and
+// loads as REAL again, and an infinity is written as 9e999 and loads back as the
+// infinity.
+//
+// A column whose values are all datetimes is recognized as one and stored as
+// TEXT; the parser package names that column DATETIME, since it reports what was
+// recognized rather than what SQLite stores. A text cell is stored as the file
+// wrote it, so a column written as 1/2/2024, 2024/01/02 or 02.01.2024 is
+// recognized as a datetime and still needs converting before date() or
+// strftime() can answer about it: those read ISO 8601 and "YYYY-MM-DD HH:MM:SS".
+// An XLSX date cell is the one that is rewritten, into ISO 8601, because it
+// holds a serial number and a number format rather than text.
+//
+// A blank cell in an INTEGER or REAL column is a missing number and is stored as
+// NULL, which is what makes MAX answer the largest value rather than the blank,
+// AVG divide by the values that are there, COUNT(column) count them, and WHERE
+// column IS NULL find the rows that have none. A blank cell in a TEXT column is
+// the empty string, which is a value the file holds; a column recognized as
+// DATETIME is stored as TEXT and follows that rule.
+//
+// # Memory and Streaming
+//
+// Data is loaded into an in-memory SQLite database. CSV, TSV, JSONL, JSON arrays
+// and Parquet arrive in chunks while loading; LTSV, a JSON document that is not
+// an array, XLSX, ACH and Fedwire are read in full before they are turned into
+// rows. A chunked format still holds one record at a time, since a record has to
+// be complete before it can be read. A Parquet file named by path is read where
+// it lies, since the format reads at an offset and a file already serves that; a
+// Parquet reader passed to DBBuilder.AddReader is buffered whole instead,
+// because a stream cannot go back and the format is read back to front.
+//
+// One record is held whole while it is read, so a delimited record, a JSONL line
+// or one element of a JSON array longer than 64 MiB is refused rather than
+// buffered. A file cannot cost more than its own size either way; what the bound
+// is for is a source that is a stream, where a record with no terminator would
+// otherwise ask for everything the sender chooses to send. The JSON refusal
+// lands within one of the decoder's own reads of the bound rather than on it, so
+// an unterminated element reads about twice the bound and not the whole stream.
+//
+// The rows end up in SQLite rather than on the Go heap, so the heap is not where
+// the cost is: loading CSVs of 16 MB through 131 MB kept the Go heap flat at
+// about 24 MB while resident memory grew by about twice the file's size. Budget
+// from the file size. The multiplier belongs to the format rather than to this
+// package: over the same 200,000 rows, CSV and Parquet each cost about 2.1 times
+// the file and XLSX about 24 times, because a workbook's rows arrive as one
+// slice covering the sheet's used range. Both figures are printed by
+// "go test -tags benchmark -run TestLoadMemoryFootprint -v ." and
+// "go test -tags benchmark -run TestLoadMemoryFootprintByFormat -v .", which
+// print the tables they are drawn from so they can be re-derived rather than
+// taken on trust.
+//
+// A damaged Parquet file can cost more than any of that. A page header states
+// how large the page's statistics are and the reader allocates that before
+// reading them, so a damaged 473-byte file costs 98 MB before it is refused; the
+// number sits inside a column chunk, where this package cannot check it first.
+// Do not point a memory-constrained process at Parquet files you did not write.
+//
+// DBBuilder.SetDefaultChunkSize tunes chunked loading. It changes when rows
+// reach the database, not what reaches it: a column's type and the text of every
+// cell are the same at any chunk size, because a file whose later chunk needs a
+// wider type is read again under the types the whole file calls for. A reader
+// passed to DBBuilder.AddReader cannot be read twice, so it is staged as text
+// and typed once it has all been read, at the cost of one copy of the table
+// inside SQLite. The final cost is still dominated by the size of the database:
+// chunking reduces loader overhead, it does not make a large dataset free.
+//
+// A blank line is not a record in CSV, in LTSV or in a sheet. In TSV it is one
+// in a one-column file, where it is that column's empty value: TSV has no quote
+// to write an empty field with, so an empty line is the only spelling left and a
+// reader that skipped it would drop the row. An XLSX row holding no cell at all
+// is skipped, so a workbook whose used range reaches far down the sheet holds no
+// record for the rows between its header and a stray cell near the bottom.
+//
+// # Concurrency
+//
+// The *sql.DB returned by Open and OpenContext is safe to share across
+// goroutines: a shared-cache in-memory database is used so pooled connections
+// see the same tables. Auto-save does not change that, since EnableAutoSave
+// saves once when Close returns and EnableAutoSaveOnCommit saves one at a time.
+// A DBBuilder is not safe to share; build one per goroutine.
+//
+// Loading into one database from several goroutines works. Creating a table
+// takes a write lock and SQLite refuses a second holder rather than queueing it,
+// so a load that meets another load's lock waits it out and starts over, for up
+// to five seconds, before it returns the database's own error. Paths and
+// directories are covered whatever database they load into. A reader passed to
+// DBBuilder.AddReader is not fully covered, because starting over would have
+// nothing left to read: only the steps before the reading are tried again.
+// LoadIntoTx is not retried at all, since the transaction belongs to the caller
+// and one transaction belongs to one goroutine.
+//
 // # Table Naming
 //
 // Table names are automatically derived from file paths:
@@ -78,11 +194,88 @@
 // to load only the shown ones, and ExcelSheetsInFile to report what a workbook
 // holds without loading it.
 //
+// The policy applies to every source alike: a path, a directory, an embedded
+// filesystem, a reader, and a compressed workbook. Table names are worked out
+// after it has run, so a hidden sheet that would sanitize to the same table as a
+// visible one is not a collision when it is not loaded.
+//
+// Excel separates "hidden", which a reader can undo from the sheet tabs, from
+// "very hidden", which only the VBA editor can. The library this package reads
+// workbooks with reports one boolean covering both, so the two are not told
+// apart and ExcelSheetPolicyVisibleOnly leaves out either kind.
+//
 // # Data Modifications
 //
 // INSERT, UPDATE, and DELETE operations affect only the in-memory database.
-// Original files remain unchanged unless auto-save is enabled. To persist
-// changes manually, use the DumpDatabase function.
+// Original files remain unchanged unless auto-save is enabled.
+//
+// # Saving Changes
+//
+// There are three ways to write the database out. DumpDatabase and
+// DumpDatabaseContext export it to files when an explicit step is wanted;
+// DBBuilder.EnableAutoSave writes when Close runs; DBBuilder.EnableAutoSaveOnCommit
+// writes after each committed transaction and again at close, so a statement run
+// outside a transaction is not lost. A transaction still open when Close runs has
+// been neither committed nor rolled back, so the save is skipped and Close says so.
+//
+// DumpOptions decides the format, the compression, the text encoding and the
+// line terminator of csv, tsv and ltsv output. Output is UTF-8 unless
+// DumpOptions.WithEncoding says otherwise; this package reads UTF-8 only, so a
+// file written in another encoding is for other tools, and transcoding it is the
+// caller's step before loading it back. A value the encoding has no way to write
+// fails the save with ErrEncoding and leaves the destination as it was, rather
+// than writing a substitute character.
+//
+// Records end with "\n" unless DumpOptions.WithLineEnding says otherwise, with
+// one exception: EnableAutoSave("") writes a table back to the file it was
+// loaded from and keeps that file's own terminator, so a CRLF file edited in
+// place stays CRLF and the rows nobody touched keep the ending they had. A file
+// with mixed terminators keeps whichever one the majority of its lines use.
+// Every other save is an export and writes what the options say whatever sits in
+// the destination, EnableAutoSave("./dir") included. Parquet and XLSX carry
+// their own encoding and are not line-based, so they ignore both options.
+//
+// # ACH and Fedwire
+//
+// ACH (.ach) and Fedwire (.fed) files are loaded, queried and written back like
+// any other format, but an exported file still needs domain knowledge from the
+// caller: both formats carry rules about what a valid file is, and this package
+// checks only the ones the format itself defines.
+//
+// Control records are derived rather than stored. Writing an ACH file rebuilds
+// each batch control and the file control from the entries, so an edit to
+// total_debit, total_credit, entry_hash or entry_addenda_count is overwritten by
+// the recalculation. The batch_index, entry_index and addenda_index columns say
+// which record a row updates rather than holding a value of their own, and a
+// write refuses a row whose coordinates name a record that is not there or one
+// another row has already named.
+//
+// A Fedwire write is verified before it reaches the caller's file: the message
+// is written to a buffer, read back, and compared column by column with the
+// table it was written from, and a field that did not survive refuses the write
+// by name, leaving the file as it was. One field reaches this today,
+// remittance_originator_address_line_four, which the underlying library writes
+// from line one. Fedwire files must be the delimiter-separated form; a
+// fixed-width file is refused, naming every record it could not read.
+//
+// A write-back rewrites the whole file, since both formats are written from the
+// parsed structure rather than patched, so records the caller did not edit can
+// come back formatted differently while holding the same values. Writing needs
+// the source file, because fields no table exposes exist only in the original:
+// DumpACH and DumpFedWire read the file the tables were loaded from and fail
+// with ErrSourceUnavailable, naming it, when it is gone or unreadable. A
+// database loaded from an io.Reader has no such file; parse the reader with the
+// parser/ach or parser/wire package and use DumpACHWithTableSet or
+// DumpFedWireWithTableSet.
+//
+// Each database records its own source, so two databases loaded from files that
+// share a name in different directories each export their own data. The record
+// lives in a reserved table named _filesql_sources. Table names beginning with
+// _filesql_ belong to this package: they are hidden from a dump and from the
+// table listings filesql returns, and an input that would load into one is
+// refused with ErrReservedTableName. A name beginning with sqlite_ is refused
+// the same way, because SQLite keeps that prefix for its own tables. Both
+// comparisons ignore ASCII case, as SQLite does.
 //
 // # Cancellation
 //

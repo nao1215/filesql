@@ -117,6 +117,17 @@ func LoadInto(ctx context.Context, db *sql.DB, paths ...string) error {
 // A destination that already exists as a symbolic link is followed: the file it
 // names receives the rows and the link stays a link.
 //
+// A table is written to a file named after it, so a table whose name cannot be a
+// file name is refused rather than written: the two path separators, the
+// characters < > : " | ? *, a control character, a name ending in a dot or a
+// space, and the names Windows reserves for devices -- CON, PRN, AUX, NUL, COM1
+// to COM9 and LPT1 to LPT9, with or without an extension. The same set is
+// refused on every platform, so a database dumped on Linux and on Windows agrees
+// about which tables it can write. Rename the table before dumping it. A name
+// derived from a file cannot reach that set except as a device name, since only
+// letters, digits, marks and underscore survive; a name given to
+// DBBuilder.AddReader or to CREATE TABLE can.
+//
 // It exports without a deadline. DumpDatabaseContext takes one.
 func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
 	return DumpDatabaseContext(context.Background(), db, outputDir, opts...)

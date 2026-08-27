@@ -40,8 +40,9 @@ func TestEnglishReadmeHasRequiredSections(t *testing.T) {
 		"## Features",
 		"## Supported File Formats",
 		"## Installation",
-		"## Quick Start",
-		"## Important Notes",
+		"## Recipes",
+		"## Behavior and limits",
+		"## Examples",
 		"## Contributing",
 		"## License",
 	}
@@ -61,26 +62,91 @@ func TestEnglishReadmeHasStableMarkers(t *testing.T) {
 		"https://github.com/sponsors/nao1215",
 		"filesql-logo.png",
 		"filesql.Open",
-		"OpenContext",
-		"DumpDatabase",
-		"EnableAutoSave",
-		"SetDefaultChunkSize",
-		"SetMaxOpenConns",
-		// Which save keeps a source's line terminator is a distinction a caller
-		// acts on: the in-place mode reads it from the file, every other save
-		// writes "\n" unless told otherwise, and WithLineEnding is how the
-		// second is asked for the first. A README that keeps only the name of
-		// the mode still lets the other two halves of the rule go missing, so
-		// all three are pinned.
-		`EnableAutoSave("")`,
-		`EnableAutoSave("./dir")`,
-		"WithLineEnding(LineEndingCRLF)",
+		"pkg.go.dev/github.com/nao1215/filesql",
 	}
 
 	content := readReadme(t, englishReadmePath)
 	for _, marker := range markers {
 		if !strings.Contains(content, marker) {
 			t.Errorf("%s is missing marker %q", englishReadmePath, marker)
+		}
+	}
+}
+
+// TestReadmeLeavesTheRulesToGodoc holds README to being about use rather than
+// about behavior.
+//
+// It grew the other way: every change that altered behavior added its
+// explanation to README, because the previous explanation was there, and this
+// file's own required sections and markers pinned it. The section that started
+// as notes became four times the size of Quick Start, and two of its rules had a
+// second copy in doc.go free to drift from it. A rule belongs where a caller
+// meets it while writing the call.
+func TestReadmeLeavesTheRulesToGodoc(t *testing.T) {
+	t.Parallel()
+
+	content := readReadme(t, englishReadmePath)
+
+	// Phrases that only a statement of behavior would carry. Each one was in
+	// README before the rules moved to godoc.
+	for _, rule := range []string{
+		"Column types",
+		"Important Notes",
+		"peak RSS",
+		"integer division",
+		"is safe to share across goroutines",
+		"Control records are derived",
+	} {
+		if strings.Contains(content, rule) {
+			t.Errorf("%s states a rule that belongs in godoc: %q", englishReadmePath, rule)
+		}
+	}
+}
+
+// TestPackageDocStatesTheRulesReadmeGaveUp names what doc.go has to keep now
+// that README does not: the sections the rules moved into, and the phrases a
+// caller would search for. Without this the move could be undone by deletion
+// rather than by a decision.
+func TestPackageDocStatesTheRules(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile("doc.go")
+	if err != nil {
+		t.Fatalf("failed to read doc.go: %v", err)
+	}
+	doc := string(raw)
+
+	for _, section := range []string{
+		"# Column Types",
+		"# Memory and Streaming",
+		"# Concurrency",
+		"# Saving Changes",
+		"# Excel Sheet Visibility",
+		"# ACH and Fedwire",
+		"# Cancellation",
+	} {
+		if !strings.Contains(doc, section) {
+			t.Errorf("doc.go is missing section %q", section)
+		}
+	}
+
+	// Which save keeps a source's line terminator is a distinction a caller acts
+	// on: the in-place mode reads it from the file, every other save writes "\n"
+	// unless told otherwise, and WithLineEnding is how the second is asked for
+	// the first. Keeping only the name of the mode lets the other two halves of
+	// the rule go missing, so all three are pinned.
+	for _, marker := range []string{
+		`EnableAutoSave("")`,
+		`EnableAutoSave("./dir")`,
+		"WithLineEnding",
+		"SetDefaultChunkSize",
+		"ErrEncoding",
+		"ErrSourceUnavailable",
+		"ErrReservedTableName",
+		"_filesql_sources",
+	} {
+		if !strings.Contains(doc, marker) {
+			t.Errorf("doc.go is missing marker %q", marker)
 		}
 	}
 }
