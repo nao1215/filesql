@@ -442,6 +442,59 @@ func ExampleProcessor_Process_networkColumns() {
 	// row 4: port value must be a valid port number
 }
 
+func ExampleProcessor_Process_encodedColumns() {
+	type payload struct {
+		Config   string `validate:"json"`
+		Zone     string `validate:"timezone"`
+		Version  string `validate:"semver"`
+		Checksum string `validate:"sha256"`
+	}
+
+	var rows []payload
+	_, result, err := prep.NewProcessor(prep.FileTypeCSV).Process(strings.NewReader(
+		"config,zone,version,checksum\n"+
+			`"{""retries"":3}",Asia/Tokyo,1.4.0,`+strings.Repeat("ab", 32)+"\n"+
+			`"{""retries"":3}",JST,1.4,`+strings.ToUpper(strings.Repeat("ab", 32))+"\n"), &rows)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(result.ValidRowCount)
+	for _, e := range result.ValidationErrors() {
+		fmt.Printf("row %d: %s %s\n", e.Row, e.Column, e.Message)
+	}
+	// Output:
+	// 1
+	// row 2: zone value must be a valid IANA time zone name
+	// row 2: version value must be a valid semantic version
+	// row 2: checksum value must be a valid sha256 hash
+}
+
+func ExampleProcessor_Process_checksummedIdentifiers() {
+	type item struct {
+		ISBN string `validate:"isbn"`
+		Card string `validate:"credit_card"`
+	}
+
+	var rows []item
+	_, result, err := prep.NewProcessor(prep.FileTypeCSV).Process(strings.NewReader(
+		"isbn,card\n"+
+			"978-0-13-110362-7,4242 4242 4242 4242\n"+
+			"978-0-13-110362-8,4242 4242 4242 4243\n"), &rows)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(result.ValidRowCount)
+	for _, e := range result.ValidationErrors() {
+		fmt.Printf("row %d: %s %s\n", e.Row, e.Column, e.Message)
+	}
+	// Output:
+	// 1
+	// row 2: isbn value must be a valid ISBN
+	// row 2: card value must be a valid credit card number
+}
+
 func ExampleProcessor_Process_crossField() {
 	type shipment struct {
 		ShippedOn string `validate:"ltfield=DueOn"`

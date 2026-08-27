@@ -183,5 +183,29 @@
 // ASCII digits alone naming a port from 1 to 65535, so 0080 is port 80 while
 // +80 and 0x50 are not ports.
 //
+// json accepts any JSON value, so a bare number is one. timezone names an IANA
+// zone that time.LoadLocation loads, and Local is refused in every casing,
+// since it names the host's own zone rather than a fixed one. semver is
+// Semantic Versioning 2.0.0, so 1.2.3 is a version and v1.2.3 is not. base32,
+// base64, base64url and base64rawurl check the RFC 4648 alphabet before
+// decoding, because Go's decoders skip carriage returns and line feeds, which
+// would otherwise let a value carrying a newline through. oneofci is oneof
+// compared without regard to case, and reads its candidates the same way,
+// single quotes included.
+//
+// credit_card, luhn_checksum, isbn, isbn10, isbn13 and issn verify a check
+// digit as well as a shape, which is the whole point of them: a mistyped
+// identifier still looks plausible and only the check digit says otherwise.
+// credit_card groups its digits with single spaces, as the dialect does, so a
+// number written with hyphens is a column for prep:"keep_digits" first;
+// luhn_checksum takes the digits alone; isbn10 and isbn13 remove hyphens and
+// spaces themselves; and issn requires the hyphen the standard prints. md5,
+// sha256, sha384 and sha512 are lowercase hexadecimal of exactly 32, 64, 96 and
+// 128 characters, so an uppercase spelling is refused.
+//
+// Importing prep embeds the IANA time zone database through time/tzdata, which
+// the timezone tag needs on a platform that ships none, and which costs a few
+// hundred KB of binary size. filesql itself does not import prep.
+//
 // See https://pkg.go.dev/github.com/nao1215/filesql/prep for the complete list of supported validators.
 package prep
