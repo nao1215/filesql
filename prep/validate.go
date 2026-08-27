@@ -1205,12 +1205,17 @@ func (v *dataURIValidator) Name() string {
 // Network Validators
 // =============================================================================
 
-// ipAddrValidator validates that a value is a valid IP address (IPv4 or IPv6)
-type ipAddrValidator struct{}
+// ipAddrValidator validates that a value is a valid IP address (IPv4 or IPv6).
+// It carries the tag because the dialect's ip and this package's older ip_addr
+// both name it, and a reported error should name the spelling the caller wrote.
+type ipAddrValidator struct {
+	tag string
+}
 
-// newIPAddrValidator creates a new IP address validator
-func newIPAddrValidator() *ipAddrValidator {
-	return &ipAddrValidator{}
+// newIPAddrValidator creates a new IP address validator under the given
+// spelling
+func newIPAddrValidator(tag string) *ipAddrValidator {
+	return &ipAddrValidator{tag: tag}
 }
 
 // Validate checks if the value is a valid IP address
@@ -1223,18 +1228,23 @@ func (v *ipAddrValidator) Validate(value string) string {
 
 // Name returns the validator name
 func (v *ipAddrValidator) Name() string {
-	return ipAddrTagValue
+	return v.tag
 }
 
-// ip4AddrValidator validates that a value is a valid IPv4 address
-type ip4AddrValidator struct{}
-
-// newIP4AddrValidator creates a new IPv4 address validator
-func newIP4AddrValidator() *ip4AddrValidator {
-	return &ip4AddrValidator{}
+// ip4AddrValidator validates that a value is a valid IPv4 address. It carries
+// the tag for the reason ipAddrValidator does.
+type ip4AddrValidator struct {
+	tag string
 }
 
-// Validate checks if the value is a valid IPv4 address
+// newIP4AddrValidator creates a new IPv4 address validator under the given
+// spelling
+func newIP4AddrValidator(tag string) *ip4AddrValidator {
+	return &ip4AddrValidator{tag: tag}
+}
+
+// Validate checks if the value is a valid IPv4 address. An IPv4-mapped address
+// such as ::ffff:192.0.2.1 is one, since net.IP carries it as four bytes.
 func (v *ip4AddrValidator) Validate(value string) string {
 	if value == "" {
 		return "value must be a valid IPv4 address"
@@ -1248,15 +1258,19 @@ func (v *ip4AddrValidator) Validate(value string) string {
 
 // Name returns the validator name
 func (v *ip4AddrValidator) Name() string {
-	return ip4AddrTagValue
+	return v.tag
 }
 
-// ip6AddrValidator validates that a value is a valid IPv6 address
-type ip6AddrValidator struct{}
+// ip6AddrValidator validates that a value is a valid IPv6 address. It carries
+// the tag for the reason ipAddrValidator does.
+type ip6AddrValidator struct {
+	tag string
+}
 
-// newIP6AddrValidator creates a new IPv6 address validator
-func newIP6AddrValidator() *ip6AddrValidator {
-	return &ip6AddrValidator{}
+// newIP6AddrValidator creates a new IPv6 address validator under the given
+// spelling
+func newIP6AddrValidator(tag string) *ip6AddrValidator {
+	return &ip6AddrValidator{tag: tag}
 }
 
 // Validate checks if the value is a valid IPv6 address
@@ -1273,7 +1287,39 @@ func (v *ip6AddrValidator) Validate(value string) string {
 
 // Name returns the validator name
 func (v *ip6AddrValidator) Name() string {
-	return ip6AddrTagValue
+	return v.tag
+}
+
+// portValidator validates that a value names a TCP or UDP port. The dialect
+// defines port on a numeric field as a number from 1 to 65535, so the form a
+// cell may take is pinned here: ASCII digits alone, which rules out a sign, a
+// hexadecimal spelling and surrounding spaces. Leading zeros are digits, so
+// "0080" is port 80.
+type portValidator struct{}
+
+// newPortValidator creates a new port validator
+func newPortValidator() *portValidator {
+	return &portValidator{}
+}
+
+// Validate checks if the value is a valid port number
+func (v *portValidator) Validate(value string) string {
+	const errMsg = "value must be a valid port number"
+	for _, r := range value {
+		if !isNumeric(r) {
+			return errMsg
+		}
+	}
+	port, err := strconv.ParseUint(value, 10, 16)
+	if err != nil || port == 0 {
+		return errMsg
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *portValidator) Name() string {
+	return portTagValue
 }
 
 // cidrValidator validates that a value is a valid CIDR notation

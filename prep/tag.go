@@ -84,6 +84,17 @@ const (
 	urlEncodedTagValue = "url_encoded"
 	// dataURITagValue is the tag value for data URI validation
 	dataURITagValue = "datauri"
+	// ipTagValue is the tag value for IP address validation, the spelling the
+	// go-playground dialect documents first.
+	ipTagValue = "ip"
+	// ipv4TagValue is the tag value for IPv4 address validation, the dialect's
+	// spelling of ip4_addr.
+	ipv4TagValue = "ipv4"
+	// ipv6TagValue is the tag value for IPv6 address validation, the dialect's
+	// spelling of ip6_addr.
+	ipv6TagValue = "ipv6"
+	// portTagValue is the tag value for TCP/UDP port number validation
+	portTagValue = "port"
 	// ipAddrTagValue is the tag value for IP address validation
 	ipAddrTagValue = "ip_addr"
 	// ip4AddrTagValue is the tag value for IPv4 address validation
@@ -146,6 +157,20 @@ const (
 	requiredWithAllTagValue = "required_with_all"
 	// requiredWithoutAllTagValue is the tag value for required if every named field is absent
 	requiredWithoutAllTagValue = "required_without_all"
+
+	// Conditional excluded validators, the negations of the required family
+	// excludedIfTagValue is the tag value for forbidden if every named field equals the value paired with it
+	excludedIfTagValue = "excluded_if"
+	// excludedUnlessTagValue is the tag value for forbidden unless every named field equals the value paired with it
+	excludedUnlessTagValue = "excluded_unless"
+	// excludedWithTagValue is the tag value for forbidden if any named field is present
+	excludedWithTagValue = "excluded_with"
+	// excludedWithAllTagValue is the tag value for forbidden if every named field is present
+	excludedWithAllTagValue = "excluded_with_all"
+	// excludedWithoutTagValue is the tag value for forbidden if any named field is absent
+	excludedWithoutTagValue = "excluded_without"
+	// excludedWithoutAllTagValue is the tag value for forbidden if every named field is absent
+	excludedWithoutAllTagValue = "excluded_without_all"
 
 	// Date/time validator
 	// datetimeTagValue is the tag value for datetime format validation

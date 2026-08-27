@@ -368,7 +368,7 @@ func BenchmarkUUIDValidation(b *testing.B) {
 
 // BenchmarkIPAddressValidation benchmarks IP address validation
 func BenchmarkIPAddressValidation(b *testing.B) {
-	validator := newIPAddrValidator()
+	validator := newIPAddrValidator(ipAddrTagValue)
 	ips := []string{
 		"192.168.1.1",
 		"10.0.0.1",

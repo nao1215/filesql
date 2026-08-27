@@ -1224,7 +1224,7 @@ func TestIPAddrValidator(t *testing.T) {
 		{"", true},
 	}
 
-	v := newIPAddrValidator()
+	v := newIPAddrValidator(ipAddrTagValue)
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -1253,7 +1253,7 @@ func TestIP4AddrValidator(t *testing.T) {
 		{"", true},
 	}
 
-	v := newIP4AddrValidator()
+	v := newIP4AddrValidator(ip4AddrTagValue)
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -1281,7 +1281,7 @@ func TestIP6AddrValidator(t *testing.T) {
 		{"", true},
 	}
 
-	v := newIP6AddrValidator()
+	v := newIP6AddrValidator(ip6AddrTagValue)
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -2024,9 +2024,9 @@ func TestValidatorNames(t *testing.T) {
 		{"datauri", func() validator { return newDataURIValidator() }, "datauri"},
 
 		// Network validators
-		{"ip_addr", func() validator { return newIPAddrValidator() }, "ip_addr"},
-		{"ip4_addr", func() validator { return newIP4AddrValidator() }, "ip4_addr"},
-		{"ip6_addr", func() validator { return newIP6AddrValidator() }, "ip6_addr"},
+		{"ip_addr", func() validator { return newIPAddrValidator(ipAddrTagValue) }, "ip_addr"},
+		{"ip4_addr", func() validator { return newIP4AddrValidator(ip4AddrTagValue) }, "ip4_addr"},
+		{"ip6_addr", func() validator { return newIP6AddrValidator(ip6AddrTagValue) }, "ip6_addr"},
 		{"cidr", func() validator { return newCIDRValidator() }, "cidr"},
 		{"cidrv4", func() validator { return newCIDRv4Validator() }, "cidrv4"},
 		{"cidrv6", func() validator { return newCIDRv6Validator() }, "cidrv6"},
@@ -2707,5 +2707,104 @@ func TestAnEmptyValueSkipsEveryValidatorExceptRequired(t *testing.T) {
 				t.Errorf("an empty value must pass %q, got tag=%q msg=%q", tag, gotTag, msg)
 			}
 		})
+	}
+}
+
+// ip, ipv4, ipv6 and port are the spellings the go-playground dialect
+// documents; prep answered only to ip_addr, ip4_addr and ip6_addr, and to no
+// spelling of port at all.
+func TestIPValidatorsUnderTheDialectSpellings(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input  string
+		wantIP bool
+		wantV4 bool
+		wantV6 bool
+	}{
+		{"192.0.2.1", true, true, false},
+		{"2001:db8::1", true, false, true},
+		// An IPv4-mapped address is an IPv4 address to net.IP, so it satisfies
+		// ipv4 and fails ipv6, which is what the dialect answers too.
+		{"::ffff:192.0.2.1", true, true, false},
+		{"256.1.1.1", false, false, false},
+		{"example.com", false, false, false},
+		// An empty cell passes every validator but required.
+		{"", true, true, true},
+	}
+
+	ip := newIPAddrValidator(ipTagValue)
+	ipv4 := newIP4AddrValidator(ipv4TagValue)
+	ipv6 := newIP6AddrValidator(ipv6TagValue)
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+			for _, c := range []struct {
+				tag  string
+				vs   validators
+				want bool
+			}{
+				{ipTagValue, validators{ip}, tt.wantIP},
+				{ipv4TagValue, validators{ipv4}, tt.wantV4},
+				{ipv6TagValue, validators{ipv6}, tt.wantV6},
+			} {
+				_, msg := c.vs.Validate(tt.input)
+				if (msg == "") != c.want {
+					t.Errorf("%s.Validate(%q) = %q, want pass = %v", c.tag, tt.input, msg, c.want)
+				}
+			}
+		})
+	}
+
+	if got := ip.Name(); got != ipTagValue {
+		t.Errorf("Name() = %q, want %q", got, ipTagValue)
+	}
+	if got := ipv4.Name(); got != ipv4TagValue {
+		t.Errorf("Name() = %q, want %q", got, ipv4TagValue)
+	}
+	if got := ipv6.Name(); got != ipv6TagValue {
+		t.Errorf("Name() = %q, want %q", got, ipv6TagValue)
+	}
+}
+
+// port is defined on a numeric field in the dialect, so the form a cell may
+// take is pinned here: ASCII digits alone that name a port from 1 to 65535.
+func TestPortValidator(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"1", true},
+		{"80", true},
+		{"65535", true},
+		// Leading zeros are digits, so this is port 80.
+		{"0080", true},
+		{"0", false},
+		{"65536", false},
+		{"-1", false},
+		{"+80", false},
+		{"8080a", false},
+		{"0x50", false},
+		{"80 ", false},
+		{"", true},
+	}
+
+	vs := validators{newPortValidator()}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+			_, msg := vs.Validate(tt.input)
+			if (msg == "") != tt.want {
+				t.Errorf("port.Validate(%q) = %q, want pass = %v", tt.input, msg, tt.want)
+			}
+		})
+	}
+
+	if got := newPortValidator().Name(); got != portTagValue {
+		t.Errorf("Name() = %q, want %q", got, portTagValue)
 	}
 }
