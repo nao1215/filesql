@@ -183,9 +183,7 @@ func TestMySQLTranslateUnsupported(t *testing.T) {
 		name  string
 		input string
 	}{
-		{"M-5_unsupported_unit", "SELECT DATE_ADD(d, INTERVAL 1 DAY_HOUR)"},
 		{"M-5_missing_interval_value", "SELECT DATE_ADD(d, INTERVAL DAY)"},
-		{"M-5_compound_interval", "SELECT DATE_ADD(d, INTERVAL '1:1' MINUTE_SECOND)"},
 		{"M-5_missing_unit", "SELECT DATE_ADD(d, INTERVAL 3)"},
 		{"M-7_div_left_not_primary", "SELECT a, DIV b"},
 		{"M-7_div_right_missing", "SELECT a DIV"},

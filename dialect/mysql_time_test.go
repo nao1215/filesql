@@ -393,3 +393,71 @@ func TestMySQLTimeDivergences(t *testing.T) {
 		})
 	}
 }
+
+// TestMySQLTimeValuesKeepTheirFraction pins the sub-second digits that used to
+// be dropped on the way out, and the compound date parts and interval units
+// that used to be refused. Every expected value was read from mysql:8.4.
+func TestMySQLTimeValuesKeepTheirFraction(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		query string
+		want  string
+	}{
+		// The fraction written in the value survives the helpers that move or
+		// take apart the value.
+		{`SELECT TIME('2024-03-05 01:02:03.123456')`, "01:02:03.123456"},
+		{`SELECT TIME('13:45:56')`, "13:45:56"},
+		{`SELECT TIME('2024-03-05')`, "00:20:24"},
+		{`SELECT DATE_ADD('2024-03-05 13:45:56.123456', INTERVAL 1 DAY)`, "2024-03-06 13:45:56.123456"},
+		{`SELECT DATE_SUB('2024-03-05 13:45:56.123456', INTERVAL 1 HOUR)`, "2024-03-05 12:45:56.123456"},
+		{`SELECT ADDTIME('2024-03-05 13:45:56.123456', '01:00:00')`, "2024-03-05 14:45:56.123456"},
+		{`SELECT TIMESTAMPADD(SECOND, 1, '2024-03-05 13:45:56.123456')`, "2024-03-05 13:45:57.123456"},
+		{`SELECT MICROSECOND(DATE_ADD('2024-03-05 13:45:56.123456', INTERVAL 1 DAY))`, "123456"},
+
+		// EXTRACT of MICROSECOND is the fraction alone, not the seconds field
+		// multiplied out, which is PostgreSQL's rule and was answered for both.
+		{`SELECT EXTRACT(MICROSECOND FROM '2024-03-05 13:45:56.123456')`, "123456"},
+		{`SELECT EXTRACT(SECOND FROM '2024-03-05 13:45:56.123456')`, "56"},
+
+		// The compound part names run their fields together as one number.
+		{`SELECT EXTRACT(SECOND_MICROSECOND FROM '2024-03-05 13:45:56.123456')`, "56123456"},
+		{`SELECT EXTRACT(MINUTE_MICROSECOND FROM '2024-03-05 13:45:56.123456')`, "4556123456"},
+		{`SELECT EXTRACT(MINUTE_SECOND FROM '2024-03-05 13:45:56.123456')`, "4556"},
+		{`SELECT EXTRACT(HOUR_MICROSECOND FROM '2024-03-05 13:45:56.123456')`, "134556123456"},
+		{`SELECT EXTRACT(HOUR_SECOND FROM '2024-03-05 13:45:56.123456')`, "134556"},
+		{`SELECT EXTRACT(HOUR_MINUTE FROM '2024-03-05 13:45:56.123456')`, "1345"},
+		{`SELECT EXTRACT(DAY_MICROSECOND FROM '2024-03-05 13:45:56.123456')`, "5134556123456"},
+		{`SELECT EXTRACT(DAY_SECOND FROM '2024-03-05 13:45:56.123456')`, "5134556"},
+		{`SELECT EXTRACT(DAY_MINUTE FROM '2024-03-05 13:45:56.123456')`, "51345"},
+		{`SELECT EXTRACT(DAY_HOUR FROM '2024-03-05 13:45:56.123456')`, "513"},
+		{`SELECT EXTRACT(YEAR_MONTH FROM '2024-03-05 13:45:56.123456')`, "202403"},
+
+		// A compound INTERVAL unit carries its fields in one value, and a value
+		// shorter than the unit names is read from the right.
+		{`SELECT DATE_ADD('2024-01-31', INTERVAL '1:30' HOUR_MINUTE)`, "2024-01-31 01:30:00"},
+		{`SELECT DATE_ADD('2024-01-31', INTERVAL '2-3' YEAR_MONTH)`, "2026-04-30"},
+		{`SELECT DATE_ADD('2024-01-31', INTERVAL '1 2' DAY_HOUR)`, "2024-02-01 02:00:00"},
+		{`SELECT DATE_ADD('2024-01-31 10:00:00', INTERVAL '1:10' DAY_SECOND)`, "2024-01-31 10:01:10"},
+		{`SELECT DATE_ADD('2024-01-31 10:00:00', INTERVAL '1 2:3:4' DAY_SECOND)`, "2024-02-01 12:03:04"},
+		{`SELECT DATE_SUB('2024-03-31', INTERVAL '1:30' HOUR_MINUTE)`, "2024-03-30 22:30:00"},
+		{`SELECT DATE_ADD('2024-01-31 10:00:00', INTERVAL '5.123456' SECOND_MICROSECOND)`, "2024-01-31 10:00:05.123456"},
+
+		// MICROSECOND is a unit of its own everywhere a unit is taken.
+		{`SELECT DATE_ADD('2024-01-31', INTERVAL 1 MICROSECOND)`, "2024-01-31 00:00:00.000001"},
+		{`SELECT TIMESTAMPADD(MICROSECOND, 1, '2024-01-31 10:00:00')`, "2024-01-31 10:00:00.000001"},
+		{`SELECT TIMESTAMPDIFF(MICROSECOND, '2024-01-01', '2025-03-05')`, "37065600000000"},
+	}
+
+	for _, tt := range tests {
+		got, err := runDialect(t, db, MySQL, tt.query)
+		if err != nil {
+			t.Errorf("%s: %v", tt.query, err)
+			continue
+		}
+		if !got.Valid || got.String != tt.want {
+			t.Errorf("%s = %v, want %q", tt.query, got, tt.want)
+		}
+	}
+}

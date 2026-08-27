@@ -172,3 +172,50 @@ func TestPostgreSQLTranslateUnsupported(t *testing.T) {
 		})
 	}
 }
+
+// TestPostgreSQLDateArithmetic pins "date + integer" and "date - date", which
+// reached SQLite as arithmetic on the number the date text spells: adding one to
+// a date answered 2025 and subtracting two dates answered 0. Every expected
+// value was read from postgres:17-alpine.
+func TestPostgreSQLDateArithmetic(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		query string
+		want  string
+	}{
+		{`SELECT '2024-03-05'::date + 1`, "2024-03-06"},
+		{`SELECT '2024-03-05'::date - 1`, "2024-03-04"},
+		{`SELECT '2024-03-05'::date - '2024-01-01'::date`, "64"},
+		{`SELECT DATE '2024-03-05' + 1`, "2024-03-06"},
+		{`SELECT 1 + DATE '2024-03-05'`, "2024-03-06"},
+		{`SELECT '2024-02-28'::date + 1`, "2024-02-29"},
+		{`SELECT '2024-12-31'::date + 1`, "2025-01-01"},
+		{`SELECT '2024-01-01'::date - '2024-03-05'::date`, "-64"},
+
+		// The interval form was already right and stays so, and ordinary
+		// arithmetic is not routed through the date helpers.
+		{`SELECT '2024-03-05'::date + interval '1 month'`, "2024-04-05 00:00:00"},
+		{`SELECT 1 + 2`, "3"},
+		{`SELECT 5 - 3`, "2"},
+		{`SELECT '5' - 3`, "2"},
+
+		// The fraction of a second a value carries survives the cast and every
+		// field read from it.
+		{`SELECT extract(microseconds from '2024-03-05 13:45:56.123456'::timestamp)`, "56123456"},
+		{`SELECT to_char('2024-03-05 13:45:56.123456'::timestamp, 'US')`, "123456"},
+		{`SELECT to_char('2024-03-05 13:45:56.123456'::timestamp, 'MS')`, "123"},
+	}
+
+	for _, tt := range tests {
+		got, err := runDialect(t, db, PostgreSQL, tt.query)
+		if err != nil {
+			t.Errorf("%s: %v", tt.query, err)
+			continue
+		}
+		if !got.Valid || got.String != tt.want {
+			t.Errorf("%s = %v, want %q", tt.query, got, tt.want)
+		}
+	}
+}

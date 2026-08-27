@@ -219,6 +219,13 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 			return repl, handled, err
 		}
 		return rewriteRenameCall(tokens, open, closeIdx, "mysql_char", mysqlCallPass)
+	case "TIME":
+		// MySQL's TIME(x) takes the time part of a datetime and keeps its
+		// fraction; SQLite's time() takes modifiers and answers whole seconds.
+		if callArity(tokens, open, closeIdx) != 1 {
+			return nil, false, nil
+		}
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_time_of_day", mysqlCallPass)
 	case "SOUNDEX":
 		// SQLite has a soundex() of its own that answers a placeholder for a
 		// value holding no letter and cuts the code to four characters.

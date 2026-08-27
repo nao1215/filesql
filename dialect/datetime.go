@@ -48,6 +48,10 @@ func addInterval(tm time.Time, n int64, unit string) (time.Time, error) {
 		return tm.Add(time.Duration(n) * time.Minute), nil
 	case unitSecond:
 		return tm.Add(time.Duration(n) * time.Second), nil
+	case unitMillisecond:
+		return tm.Add(time.Duration(n) * time.Millisecond), nil
+	case unitMicrosecond:
+		return tm.Add(time.Duration(n) * time.Microsecond), nil
 	default:
 		return time.Time{}, fmt.Errorf("%w: unsupported interval unit %q", ErrUnsupportedSyntax, unit)
 	}
@@ -81,9 +85,11 @@ func daysInMonth(year int, month time.Month) int {
 // source dialects type it; adding an hour or a minute promotes it to a datetime.
 var dateGrainedUnits = map[string]bool{
 	unitYear:    true,
+	unitISOYear: true,
 	unitQuarter: true,
 	unitMonth:   true,
 	unitWeek:    true,
+	unitISOWeek: true,
 	unitDay:     true,
 }
 
@@ -106,7 +112,7 @@ func formatInterval(tm time.Time, sourceHadTime bool, unit string) string {
 	if !sourceHadTime && dateGrainedUnits[unit] {
 		return tm.Format(layoutDateOnly)
 	}
-	return tm.Format(layoutDateTime)
+	return formatDateTimeValue(tm)
 }
 
 // fnDateIntervalAdd implements the helper behind MySQL's and GoogleSQL's
@@ -211,7 +217,7 @@ func fnIntervalTextAdd(args []driver.Value) (driver.Value, error) {
 	// and the value carries the 00:00:00. That is the opposite of MySQL and
 	// GoogleSQL, whose DATE_ADD on a date answers a date, which is why the two
 	// helpers render their results differently rather than sharing one rule.
-	return tm.Format(layoutDateTime), nil
+	return formatDateTimeValue(tm), nil
 }
 
 // fnDateTruncPart implements GoogleSQL's DATE_TRUNC(value, PART) argument order,

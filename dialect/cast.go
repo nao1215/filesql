@@ -207,11 +207,11 @@ func castValue(d Dialect, target string, v driver.Value) (driver.Value, error) {
 	case castDate:
 		return castToTimeString(v, layoutDateOnly, strict)
 	case castTime:
-		return castToTimeValue(d, v, strict)
+		return castToTimeValue(v, strict)
 	case castYear:
 		return castToYear(v)
 	case castTimestamp:
-		return castToTimeString(v, layoutDateTime, strict)
+		return castToTimestampValue(v, strict)
 	case castUUID:
 		return castToUUID(v)
 	case castJSON:
@@ -553,15 +553,30 @@ func decimalLimit(precision, scale int) float64 {
 // right to left as seconds, minutes and hours, so CAST('2024-03-05' AS TIME) is
 // 00:20:24, while PostgreSQL refuses it. Formatting a date as a time answered
 // 00:00:00 for both, which is a value a caller cannot tell from a real midnight.
-func castToTimeValue(d Dialect, v driver.Value, strict bool) (driver.Value, error) {
+func castToTimeValue(v driver.Value, strict bool) (driver.Value, error) {
 	if tm, ok := toStringTime(v); ok && hasTimeOfDay(v) {
-		return tm.Format(layoutTimeOnly), nil
+		return formatTimeOfDayValue(tm), nil
 	}
 	if strict {
 		s, _ := toString(v)
 		return nil, fmt.Errorf("%w: %q is not a valid time value", ErrInvalidCast, s)
 	}
 	return mysqlTimeFromNumber(v), nil
+}
+
+// castToTimestampValue converts to a timestamp, keeping the fractional seconds
+// the value carried. Formatting at second resolution dropped digits the caller
+// had written, which every EXTRACT and every to_char template that reads a
+// sub-second field then answered zero for.
+func castToTimestampValue(v driver.Value, strict bool) (driver.Value, error) {
+	if tm, ok := toStringTime(v); ok {
+		return formatDateTimeValue(tm), nil
+	}
+	s, _ := toString(v)
+	if strict {
+		return nil, fmt.Errorf("%w: %q is not a valid timestamp value", ErrInvalidCast, s)
+	}
+	return nil, nil
 }
 
 // hasTimeOfDay reports whether the value carries a time rather than only a date.

@@ -390,17 +390,20 @@ func castHelperCall(helper string, expr []token, target string) []token {
 	return repl
 }
 
-// intervalUnits maps the INTERVAL units the interval helper implements. Compound
-// units (DAY_HOUR and friends) are rejected.
+// intervalUnits maps the INTERVAL units the interval helper implements. MySQL's
+// compound units (DAY_HOUR and friends) are not here: their amount is a string
+// holding several components, which intervalTerms reads instead.
 var intervalUnits = map[string]string{
-	"SECOND":  unitSecond,
-	"MINUTE":  unitMinute,
-	"HOUR":    unitHour,
-	"DAY":     unitDay,
-	"WEEK":    unitWeek,
-	"MONTH":   unitMonth,
-	"QUARTER": unitQuarter,
-	"YEAR":    unitYear,
+	"MICROSECOND": unitMicrosecond,
+	"MILLISECOND": unitMillisecond,
+	"SECOND":      unitSecond,
+	"MINUTE":      unitMinute,
+	"HOUR":        unitHour,
+	"DAY":         unitDay,
+	"WEEK":        unitWeek,
+	"MONTH":       unitMonth,
+	"QUARTER":     unitQuarter,
+	"YEAR":        unitYear,
 }
 
 // intervalAddCall builds the interval_add(expr, amount, 'unit') call the date
@@ -482,9 +485,16 @@ func rewriteDateArithNamed(tokens []token, open, closeIdx int, sign, helper stri
 	if unitTok < 0 || unitTok <= interval || tokens[unitTok].kind != tokWord {
 		return nil, false, fmt.Errorf("%w: INTERVAL is missing a unit", ErrUnsupportedSyntax)
 	}
-	unit, ok := intervalUnits[strings.ToUpper(tokens[unitTok].text)]
+	unitName := strings.ToUpper(tokens[unitTok].text)
+	unit, ok := intervalUnits[unitName]
+	composite := false
 	if !ok {
-		return nil, false, fmt.Errorf("%w: unsupported INTERVAL unit %q", ErrUnsupportedSyntax, tokens[unitTok].text)
+		if _, isComposite := mysqlCompositeParts[strings.ToLower(unitName)]; !isComposite {
+			return nil, false, fmt.Errorf("%w: unsupported INTERVAL unit %q", ErrUnsupportedSyntax, tokens[unitTok].text)
+		}
+		// A compound unit carries several fields in one value, so the amount
+		// stays whole and the helper splits it rather than the rewrite.
+		unit, composite = strings.ToLower(unitName), true
 	}
 	amount, err := recurse(tokens[interval+1 : unitTok])
 	if err != nil {
@@ -493,6 +503,24 @@ func rewriteDateArithNamed(tokens []token, open, closeIdx int, sign, helper stri
 	amount = trimSpaceTokens(amount)
 	if len(amount) == 0 {
 		return nil, false, fmt.Errorf("%w: INTERVAL is missing a value", ErrUnsupportedSyntax)
+	}
+	if composite {
+		expr, err := recurse(tokens[open+1 : comma])
+		if err != nil {
+			return nil, false, err
+		}
+		signValue := "1"
+		if sign == "-" {
+			signValue = "-1"
+		}
+		repl := make([]token, 0, len(expr)+len(amount)+12)
+		repl = append(repl, wordToken("mysql_interval_compound"), opToken("("))
+		repl = append(repl, trimSpaceTokens(expr)...)
+		repl = append(repl, opToken(","), spaceToken())
+		repl = append(repl, amount...)
+		repl = append(repl, opToken(","), spaceToken(), stringToken(unit),
+			opToken(","), spaceToken(), wordToken(signValue), opToken(")"))
+		return repl, true, nil
 	}
 
 	expr, err := recurse(tokens[open+1 : comma])
@@ -1380,6 +1408,8 @@ const (
 
 	unitMillisecond = "millisecond"
 	unitMicrosecond = "microsecond"
+	// unitMicrosecondsPlural is PostgreSQL's spelling of the same part.
+	unitMicrosecondsPlural = "microseconds"
 
 	kwHaving = "HAVING"
 	kwLimit  = "LIMIT"

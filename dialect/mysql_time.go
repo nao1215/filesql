@@ -202,6 +202,174 @@ func parseFractionDigits(fraction string) (int64, bool) {
 	return n, true
 }
 
+// fnMySQLIntervalCompound implements DATE_ADD and DATE_SUB with one of MySQL's
+// compound INTERVAL units, whose value carries several fields in one string:
+// INTERVAL '1:30' HOUR_MINUTE is an hour and a half, and INTERVAL '2-3'
+// YEAR_MONTH is two years and three months.
+//
+// MySQL separates the fields on any run of punctuation, and a value shorter
+// than the unit names is read from the right, so INTERVAL '1:10' DAY_SECOND is
+// a minute and ten seconds rather than a day and ten hours.
+func fnMySQLIntervalCompound(args []driver.Value) (driver.Value, error) {
+	if len(args) != 4 {
+		return nil, fmt.Errorf("dialect: compound interval helper expects 4 arguments, got %d", len(args))
+	}
+	tm, ok := toStringTime(args[0])
+	if !ok {
+		return nil, nil
+	}
+	value, ok := toString(args[1])
+	if !ok {
+		return nil, nil
+	}
+	unit, ok := toString(args[2])
+	if !ok {
+		return nil, nil
+	}
+	sign, ok := toInt(args[3])
+	if !ok {
+		return nil, nil
+	}
+	fields, ok := mysqlCompositeParts[strings.ToLower(strings.TrimSpace(unit))]
+	if !ok {
+		return nil, fmt.Errorf("%w: unsupported INTERVAL unit %q", ErrUnsupportedSyntax, unit)
+	}
+	components := splitIntervalComponents(value)
+	if len(components) == 0 {
+		return nil, nil
+	}
+	if len(components) > len(fields) {
+		components = components[len(components)-len(fields):]
+	}
+	// A short value names the rightmost fields, which is MySQL's rule.
+	fields = fields[len(fields)-len(components):]
+	dateGrained := true
+	var err error
+	for i, field := range fields {
+		if !dateGrainedUnits[field] {
+			dateGrained = false
+		}
+		amount := components[i]
+		if field == unitMicrosecond {
+			// The fraction is written after a point, so "5.1" is a tenth of a
+			// second rather than one microsecond.
+			amount = padMicroseconds(amount)
+		}
+		n, convErr := strconv.ParseInt(amount, 10, 64)
+		if convErr != nil {
+			return nil, nil //nolint:nilerr // MySQL answers NULL for a value it cannot read
+		}
+		if tm, err = addInterval(tm, sign*n, field); err != nil {
+			return nil, err
+		}
+	}
+	// A date moved only by date-grained fields is still a date, which is the
+	// same rule the single-unit arithmetic follows.
+	if dateGrained && !hasTimePart(args[0]) {
+		return tm.Format(layoutDateOnly), nil
+	}
+	return formatDateTimeValue(tm), nil
+}
+
+// splitIntervalComponents cuts an interval value on every run of characters that
+// is not a digit, which is the delimiter rule MySQL states: any punctuation may
+// separate the fields.
+func splitIntervalComponents(value string) []string {
+	var out []string
+	current := strings.Builder{}
+	for _, r := range strings.TrimSpace(value) {
+		if r >= '0' && r <= '9' {
+			current.WriteRune(r)
+			continue
+		}
+		if current.Len() > 0 {
+			out = append(out, current.String())
+			current.Reset()
+		}
+	}
+	if current.Len() > 0 {
+		out = append(out, current.String())
+	}
+	return out
+}
+
+// padMicroseconds reads a fractional-second field written with fewer than six
+// digits as the fraction it spells, so ".1" is 100000 microseconds.
+func padMicroseconds(digits string) string {
+	if len(digits) >= microsecondDigits {
+		return digits[:microsecondDigits]
+	}
+	return digits + strings.Repeat("0", microsecondDigits-len(digits))
+}
+
+// mysqlCompositeParts maps each of MySQL's compound date-part names to the
+// single fields it runs together, most significant first. EXTRACT of one
+// answers those fields concatenated as a number: EXTRACT(HOUR_MINUTE FROM
+// '13:45:56') is 1345 and EXTRACT(YEAR_MONTH FROM '2024-03-05') is 202403.
+//
+//nolint:gochecknoglobals // a fixed table of MySQL's own part names
+var mysqlCompositeParts = map[string][]string{
+	"second_microsecond": {unitSecond, unitMicrosecond},
+	"minute_microsecond": {unitMinute, unitSecond, unitMicrosecond},
+	"minute_second":      {unitMinute, unitSecond},
+	"hour_microsecond":   {unitHour, unitMinute, unitSecond, unitMicrosecond},
+	"hour_second":        {unitHour, unitMinute, unitSecond},
+	"hour_minute":        {unitHour, unitMinute},
+	"day_microsecond":    {unitDay, unitHour, unitMinute, unitSecond, unitMicrosecond},
+	"day_second":         {unitDay, unitHour, unitMinute, unitSecond},
+	"day_minute":         {unitDay, unitHour, unitMinute},
+	"day_hour":           {unitDay, unitHour},
+	"year_month":         {unitYear, unitMonth},
+}
+
+// mysqlCompositeWidths is how many digits each field takes when it is not the
+// leading one, so the fields concatenate the way MySQL concatenates them.
+//
+//nolint:gochecknoglobals // a fixed table beside the one above
+var mysqlCompositeWidths = map[string]int{
+	unitMonth: 2, unitDay: 2, unitHour: 2, unitMinute: 2, unitSecond: 2, unitMicrosecond: 6,
+}
+
+// mysqlCompositePart answers EXTRACT for one of the compound part names, and
+// reports whether the name is one of them.
+func mysqlCompositePart(part string, tm time.Time) (driver.Value, bool, error) {
+	fields, ok := mysqlCompositeParts[part]
+	if !ok {
+		return nil, false, nil
+	}
+	var out int64
+	for i, field := range fields {
+		value, err := mysqlSinglePart(field, tm)
+		if err != nil {
+			return nil, true, err
+		}
+		if i == 0 {
+			out = value
+			continue
+		}
+		width := mysqlCompositeWidths[field]
+		out = out*int64(math.Pow10(width)) + value
+	}
+	return out, true, nil
+}
+
+// mysqlSinglePart is the value of one plain date part, which the compound names
+// are built from.
+func mysqlSinglePart(field string, tm time.Time) (int64, error) {
+	if field == unitMicrosecond {
+		return int64(tm.Nanosecond() / 1000), nil
+	}
+	value, err := datePartValue(field, tm)
+	if err != nil {
+		return 0, err
+	}
+	n, ok := toInt(value)
+	if !ok {
+		return 0, fmt.Errorf("dialect: date part %q is not a number", field)
+	}
+	return n, nil
+}
+
 // formatMySQLTime writes a TIME the way MySQL prints one: a sign when it is
 // negative, at least two digits of hours, and a fraction only when there is
 // one, with its trailing zeros removed.
@@ -317,7 +485,7 @@ func addTime(sign int64) scalarFn {
 			if !parsed {
 				return nil, nil
 			}
-			return base.Add(time.Duration(delta) * time.Microsecond).Format(layoutDateTime), nil
+			return formatDateTimeValue(base.Add(time.Duration(delta) * time.Microsecond)), nil
 		}
 		base, parsed := toMySQLTime(args[0])
 		if !parsed {
