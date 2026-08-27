@@ -2051,3 +2051,68 @@ func tableOf(t *testing.T, db *sql.DB) string {
 		`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '_filesql_%'`).Scan(&name))
 	return name
 }
+
+// TestDatetimeColumnIsStoredAsTheFileWroteIt pins that recognizing a column as
+// a datetime does not rewrite its cells, and says which layouts SQLite's date
+// functions can read.
+//
+// A text cell is stored as the file wrote it here, whatever type the column is
+// recognized as, the way infer.MustStayText keeps a zero-padded code out of a
+// numeric column. That means a column written in a layout SQLite does not read
+// -- 1/2/2024, 2024/01/02, 02.01.2024 -- is recognized as a datetime and is
+// still not something date(d) can answer about, which is what the README has to
+// say rather than promising ISO 8601 for every format. An XLSX date cell is the
+// other half of the same rule and is covered where the workbook reader is
+// tested: it holds a serial number and a number format, so there is no original
+// text to keep and the reader renders it in ISO 8601.
+func TestDatetimeColumnIsStoredAsTheFileWroteIt(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// values are the cells of one column, all of them recognized datetimes.
+		values []string
+		// readableBySQLite is whether date() answers about the stored value.
+		readableBySQLite bool
+	}{
+		{name: "ISO 8601 date", values: []string{"2024-01-02", "2024-03-04"}, readableBySQLite: true},
+		{name: "ISO 8601 date and time with a space", values: []string{"2024-01-02 03:04:05", "2024-03-04 05:06:07"}, readableBySQLite: true},
+		{name: "RFC 3339", values: []string{"2024-01-02T03:04:05Z", "2024-03-04T05:06:07Z"}, readableBySQLite: true},
+		{name: "year first with slashes", values: []string{"2024/01/02", "2024/03/04"}, readableBySQLite: false},
+		{name: "US month first", values: []string{"01/02/2024", "03/04/2024"}, readableBySQLite: false},
+		{name: "US with a 12-hour time", values: []string{"1/2/2024 3:04:05 PM", "3/4/2024 5:06:07 PM"}, readableBySQLite: false},
+		{name: "European day first", values: []string{"02.01.2024", "04.03.2024"}, readableBySQLite: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			body := "d\n" + strings.Join(tt.values, "\n") + "\n"
+			src := filepath.Join(t.TempDir(), "rows.csv")
+			require.NoError(t, os.WriteFile(src, []byte(body), 0o600))
+
+			assert.Equal(t, infer.Datetime, infer.Column(tt.values), "every value here is a recognized datetime")
+
+			db, err := OpenContext(ctx, src)
+			require.NoError(t, err)
+			defer db.Close()
+
+			var declared string
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT type FROM pragma_table_info('rows') WHERE name = 'd'`).Scan(&declared))
+			assert.Equal(t, sqlTypeText, declared, "a datetime column is stored as text")
+
+			var stored string
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT d FROM rows LIMIT 1`).Scan(&stored))
+			assert.Equal(t, tt.values[0], stored, "the cell is the text the file held")
+
+			var readable bool
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT date(d) IS NOT NULL FROM rows LIMIT 1`).Scan(&readable))
+			assert.Equal(t, tt.readableBySQLite, readable,
+				"whether SQLite's date functions read this column follows from the layout the file used")
+		})
+	}
+}
