@@ -84,6 +84,17 @@
 // Original files remain unchanged unless auto-save is enabled. To persist
 // changes manually, use the DumpDatabase function.
 //
+// # Cancellation
+//
+// Every load and DumpDatabaseContext take a context. A load stops soon after
+// its context ends, and whatever the database said on the way out, the error it
+// returns matches context.Canceled or context.DeadlineExceeded. Soon is the next
+// read for a source that is a stream, and the next chunk for one that is an open
+// file, which is left unwrapped so that a Parquet file is still read where it
+// lies rather than copied whole. A read already blocked inside the source cannot
+// be interrupted, so a sender that stops mid-body without closing needs a
+// deadline on the connection instead.
+//
 // # SQL Syntax
 //
 // Since filesql uses SQLite3 as its underlying engine, all SQL syntax follows
