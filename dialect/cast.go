@@ -117,13 +117,13 @@ var pgCastKinds = map[string]castKind{
 }
 
 var googlesqlCastKinds = map[string]castKind{
-	"INT64":      castInt,
-	"BYTEINT":    castInt,
-	"FLOAT64":    castFloat,
-	"BIGNUMERIC": castDecimal,
-	"BIGDECIMAL": castDecimal,
-	"STRING":     castText,
-	"BYTES":      castBlob,
+	"INT64":        castInt,
+	"BYTEINT":      castInt,
+	"FLOAT64":      castFloat,
+	"BIGNUMERIC":   castDecimal,
+	"BIGDECIMAL":   castDecimal,
+	typeNameString: castText,
+	"BYTES":        castBlob,
 }
 
 // castKindsFor returns the dialect-specific type table.

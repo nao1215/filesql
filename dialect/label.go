@@ -221,7 +221,7 @@ func selectListItems(tokens []token) []tokenSpan {
 var selectListEnd = map[string]bool{
 	"FROM": true, "INTO": true, kwWhere: true, "GROUP": true, kwHaving: true,
 	"ORDER": true, kwLimit: true, "WINDOW": true,
-	"UNION": true, "INTERSECT": true, "EXCEPT": true,
+	kwUnion: true, kwIntersect: true, kwExcept: true,
 }
 
 // parseSelectList splits the select list starting at from into its top-level

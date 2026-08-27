@@ -228,6 +228,13 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		return rewritePosition(tokens, open, closeIdx, mysqlCallPass)
 	case fnNameSubstring, fnNameSubstr:
 		return rewriteSubstringCall(tokens, open, closeIdx, "mysql_substr", mysqlCallPass)
+	case "GREATEST", "LEAST":
+		// MySQL's default collation folds case, which its STRCMP, LIKE and
+		// REGEXP helpers already do and these two did not.
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_"+strings.ToLower(tokens[nameIdx].text), mysqlCallPass)
+	case "JSON_TYPE":
+		// SQLite's json_type answers in lower case; MySQL's in upper.
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_json_type", mysqlCallPass)
 	case fnNameReplace:
 		// SQLite answers the subject for an empty search string without looking
 		// at the replacement, so a NULL replacement did not reach the result.
@@ -278,7 +285,7 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 			return rewriteRenameCall(tokens, open, closeIdx, "ln", mysqlCallPass)
 		}
 		return nil, false, nil
-	case "FORMAT":
+	case fnNameFormat:
 		// MySQL FORMAT(x, d) rounds and groups a number. SQLite's format() is an
 		// alias of printf, which reads the first argument as a format string and
 		// answered the number unchanged.

@@ -1,6 +1,7 @@
 package dialect
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -56,8 +57,9 @@ var pgTemplatePatterns = []string{ //nolint:gochecknoglobals // a fixed table re
 	patMon, patDay, "RM",
 	patYYYY, "YYY", "YY",
 	"HH", "MI", "SS", "MS", "US", "MM", "DD", "DY", "ID", "IW", "WW", "CC", "TH",
+	patTZH, patTZM, "OF",
 	"AM", "PM", "BC", "AD", "IY", "PR", "SG", "PL", "RN", "TZ",
-	"Y", "I", "D", "W", "Q", "J", "V", "S", "L", "G",
+	"Y", "I", "D", "W", "Q", "J", "V", "S", "L", "G", "C",
 }
 
 // scanPGTemplate splits a template into patterns and literal text, marking each
@@ -106,6 +108,17 @@ func scanPGTemplateUncached(format string) (items []pgTemplateItem, fillMode boo
 	pendingFill := false
 	for i := 0; i < len(format); {
 		if strings.HasPrefix(format[i:], "FM") || strings.HasPrefix(format[i:], "fm") {
+			fillMode, pendingFill = true, true
+			i += 2
+			continue
+		}
+		// TM asks for the localized spelling of the pattern that follows and
+		// suppresses its padding. This package has one locale, so the localized
+		// name is the plain one and TM is the fill prefix by another name.
+		// Copied through instead, its "T" landed in the result as literal text
+		// and the scan resumed at "MMonth", where MM matched the month number:
+		// to_char(ts, 'TMMonth') answered "T03onrd".
+		if strings.HasPrefix(format[i:], "TM") || strings.HasPrefix(format[i:], "tm") {
 			fillMode, pendingFill = true, true
 			i += 2
 			continue
@@ -305,6 +318,12 @@ func pgTimePattern(it pgTemplateItem, tm time.Time, fillMode bool) (string, int)
 		return frac[:digits], 0
 	case "AM", "PM", "A.M.", "P.M.":
 		return pgMeridiem(it, tm), 0
+	case "TZ", patTZH, patTZM, "OF":
+		// Every value this package holds is read as UTC, which is what the
+		// datetime helpers document, so the offset is zero and the zone has no
+		// abbreviation to print. Copied through instead, the pattern's own
+		// letters landed in the result where the offset belonged.
+		return pgTimeZoneField(it.pattern), 0
 	case "Y,YYY":
 		return strconv.Itoa(year/1000) + "," + padNumber(year%1000, 3, false), year
 	case patYYYY:
@@ -370,6 +389,19 @@ func pgTimePattern(it pgTemplateItem, tm time.Time, fillMode bool) (string, int)
 		// A pattern with no date meaning -- a numeric one, or TZ, which needs a
 		// zone SQLite does not carry -- prints as the template wrote it.
 		return it.text, 0
+	}
+}
+
+// pgTimeZoneField is the value of a timezone pattern for the UTC every value
+// here is read as: no abbreviation, a zero offset, and no minutes.
+func pgTimeZoneField(pattern string) string {
+	switch pattern {
+	case patTZH, "OF":
+		return "+00"
+	case patTZM:
+		return "00"
+	default:
+		return ""
 	}
 }
 
@@ -458,6 +490,7 @@ type pgNumericTemplate struct {
 	signAhead     bool
 	shift         int
 	roman         bool
+	scientific    bool
 	romanSpelling string
 	ordinal       string
 	prefix        string
@@ -558,8 +591,16 @@ func parseNumericTemplate(items []pgTemplateItem) *pgNumericTemplate {
 			t.roman, t.romanSpelling = true, it.text
 		case it.pattern == "TH":
 			t.ordinal = it.text
-		case it.pattern == "L":
-			// The currency symbol of the C locale, which is empty.
+		case it.pattern == "EEEE":
+			// The whole template is scientific notation; the digit positions
+			// before it set the mantissa. Falling through to the default copied
+			// the four letters into the result, where a caller could not tell
+			// them from data.
+			t.scientific = true
+		case it.pattern == "L", it.pattern == "C":
+			// The currency symbol and the currency code of the C locale, both
+			// of which are empty. C used to reach the default and put its own
+			// letter in front of the number.
 		default:
 			if len(t.intCells) == 0 && t.fracCells == 0 {
 				t.prefix += it.text
@@ -586,11 +627,43 @@ func pgSignOf(pattern string) pgNumericSign {
 	}
 }
 
+// pgFormatScientific renders a value the way an EEEE template does: one digit
+// before the point, fracCells after it, and an exponent of at least two digits
+// with its sign. The sign position in front is a space for a value that is not
+// negative, which is what every PostgreSQL numeric template does.
+func pgFormatScientific(value float64, fracCells int) string {
+	sign := " "
+	if math.Signbit(value) {
+		sign = "-"
+		value = -value
+	}
+	exponent := 0
+	if value != 0 && !math.IsInf(value, 0) && !math.IsNaN(value) {
+		exponent = int(math.Floor(math.Log10(value)))
+		value /= math.Pow(10, float64(exponent))
+		// Rounding the mantissa can carry it to ten, which belongs to the next
+		// exponent: 9.99 at two places is 10.0, and PostgreSQL prints 1.0e+01.
+		if rounded := roundHalfAway(value * math.Pow(10, float64(fracCells))); rounded >= math.Pow(10, float64(fracCells+1)) {
+			value /= 10
+			exponent++
+		}
+	}
+	expSign := "+"
+	if exponent < 0 {
+		expSign = "-"
+		exponent = -exponent
+	}
+	return fmt.Sprintf("%s%.*fe%s%02d", sign, fracCells, value, expSign, exponent)
+}
+
 // pgFormatNumber renders a value against a PostgreSQL numeric template.
 func pgFormatNumber(value float64, format string) string {
 	t, fillMode := numericTemplateFor(format)
 	if t.roman {
 		return applyCase("RN", t.romanSpelling, padRoman(int(roundHalfAway(value)), fillMode))
+	}
+	if t.scientific {
+		return pgFormatScientific(value, t.fracCells)
 	}
 	for range t.shift {
 		value *= 10

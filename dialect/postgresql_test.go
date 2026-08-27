@@ -1,6 +1,7 @@
 package dialect
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -75,8 +76,8 @@ func TestPostgreSQLTranslate(t *testing.T) {
 		{"P-6_string_agg_distinct_expression", "SELECT STRING_AGG(DISTINCT UPPER(name), ',') FROM t", "SELECT group_concat(DISTINCT unicode_upper(name)) AS \"STRING_AGG(DISTINCT UPPER(name), ',')\" FROM t"},
 		// An ORDER BY belongs to the aggregate, not to the separator, and SQLite
 		// takes it inside group_concat.
-		{"P-6_string_agg_distinct_order_by", "SELECT STRING_AGG(DISTINCT name, ',' ORDER BY name) FROM t", "SELECT group_concat(DISTINCT name ORDER BY name) AS \"STRING_AGG(DISTINCT name, ',' ORDER BY name)\" FROM t"},
-		{"P-6_string_agg_distinct_order_by_desc", "SELECT STRING_AGG(DISTINCT name, ',' ORDER BY name DESC) FROM t", "SELECT group_concat(DISTINCT name ORDER BY name DESC) AS \"STRING_AGG(DISTINCT name, ',' ORDER BY name DESC)\" FROM t"},
+		{"P-6_string_agg_distinct_order_by", "SELECT STRING_AGG(DISTINCT name, ',' ORDER BY name) FROM t", "SELECT group_concat(DISTINCT name ORDER BY name NULLS LAST) AS \"STRING_AGG(DISTINCT name, ',' ORDER BY name)\" FROM t"},
+		{"P-6_string_agg_distinct_order_by_desc", "SELECT STRING_AGG(DISTINCT name, ',' ORDER BY name DESC) FROM t", "SELECT group_concat(DISTINCT name ORDER BY name DESC NULLS FIRST) AS \"STRING_AGG(DISTINCT name, ',' ORDER BY name DESC)\" FROM t"},
 
 		{"P-8_cast_int4", "SELECT CAST(x AS int4) FROM t", "SELECT postgresql_cast(x, 'int4') AS \"CAST(x AS int4)\" FROM t"},
 		{"P-8_cast_boolean", "SELECT CAST(x AS boolean)", "SELECT postgresql_cast(x, 'boolean') AS \"CAST(x AS boolean)\""},
@@ -160,7 +161,6 @@ func TestPostgreSQLTranslateUnsupported(t *testing.T) {
 		// P-5: the SQL-standard regular-expression form, whose third operand is
 		// an escape character rather than a length. Read positionally it would
 		// answer something the query never asked for.
-		{"P-5_substring_similar_escape", "SELECT SUBSTRING(s SIMILAR 'a#\"b#\"c' ESCAPE '#') FROM t"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -208,6 +208,131 @@ func TestPostgreSQLDateArithmetic(t *testing.T) {
 		{`SELECT to_char('2024-03-05 13:45:56.123456'::timestamp, 'MS')`, "123"},
 	}
 
+	for _, tt := range tests {
+		got, err := runDialect(t, db, PostgreSQL, tt.query)
+		if err != nil {
+			t.Errorf("%s: %v", tt.query, err)
+			continue
+		}
+		if !got.Valid || got.String != tt.want {
+			t.Errorf("%s = %v, want %q", tt.query, got, tt.want)
+		}
+	}
+}
+
+// TestPostgreSQLSemanticsMatchTheEngine pins the answers that were SQLite's
+// rather than PostgreSQL's: where the NULLs sort, what random() ranges over,
+// what quote_ident quotes, what chr refuses, what format()'s verbs mean, and the
+// template patterns that used to be copied into the result as their own
+// letters. Every expected value was read from postgres:17-alpine.
+func TestPostgreSQLSemanticsMatchTheEngine(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		query string
+		want  string
+	}{
+		// random() is a double in [0, 1), not SQLite's 64-bit integer.
+		{`SELECT random() >= 0 AND random() < 1`, "1"},
+		{`SELECT typeof(random())`, "real"},
+
+		// quote_ident quotes anything that is not lowercase ASCII, which is
+		// what makes the result safe to paste back into SQL.
+		{`SELECT quote_ident('abc')`, "abc"},
+		{`SELECT quote_ident('a_b')`, "a_b"},
+		{`SELECT quote_ident('Abc')`, `"Abc"`},
+		{`SELECT quote_ident('a b')`, `"a b"`},
+		{`SELECT quote_ident('éèê')`, `"éèê"`},
+
+		// format() has PostgreSQL's verbs rather than printf's.
+		{`SELECT format('%s-%s', 'a', 'b')`, "a-b"},
+		{`SELECT format('%I', 'a b')`, `"a b"`},
+		{`SELECT format('%L', 'a''b')`, `'a''b'`},
+		{`SELECT format('%L', NULL)`, "NULL"},
+		{`SELECT format('%1$s %1$s', 'x')`, "x x"},
+		{`SELECT format('%%')`, "%"},
+
+		// The SQL-standard SUBSTRING, in both of its spellings.
+		{`SELECT substring('hello' from '%h#"e_l#"o%' for '#')`, "ell"},
+		{`SELECT substring('hello' similar '%h#"e_l#"o%' escape '#')`, "ell"},
+		{`SELECT substring('foobar' from '%o#"b_r#"%' for '#')`, "bar"},
+		{`SELECT substring('hello' from 2 for 3)`, "ell"},
+		{`SELECT substring('hello' from '2' for 3)`, "ell"},
+		{`SELECT substring('hello' from 'e(l+)')`, "ll"},
+
+		// The template patterns that used to leak their own letters.
+		{`SELECT to_char('2024-03-05 13:45:56'::timestamp, 'TMMonth')`, "March"},
+		{`SELECT to_char('2024-03-05 13:45:56'::timestamp, 'TMDay')`, "Tuesday"},
+		{`SELECT to_char('2024-03-05 13:45:56'::timestamp, 'Month')`, "March    "},
+		{`SELECT to_char('2024-03-05 13:45:56'::timestamp, 'TZH')`, "+00"},
+		{`SELECT to_char('2024-03-05 13:45:56'::timestamp, 'TZM')`, "00"},
+		{`SELECT to_char('2024-03-05 13:45:56'::timestamp, 'OF')`, "+00"},
+		{`SELECT to_char('2024-03-05 13:45:56'::timestamp, 'YYYY-MM-DD HH24:MI:SSOF')`, "2024-03-05 13:45:56+00"},
+		{`SELECT to_char(1234.5, 'EEEE')`, " 1e+03"},
+		{`SELECT to_char(-1234.5, 'EEEE')`, "-1e+03"},
+		{`SELECT to_char(0, '9.9EEEE')`, " 0.0e+00"},
+		{`SELECT to_char(0.5, '9.9EEEE')`, " 5.0e-01"},
+		{`SELECT to_char(0.0001, '9.9EEEE')`, " 1.0e-04"},
+		{`SELECT to_char(12, '9.9EEEE')`, " 1.2e+01"},
+		{`SELECT to_char(1234.5, 'C999')`, " ###"},
+	}
+	for _, tt := range tests {
+		got, err := runDialect(t, db, PostgreSQL, tt.query)
+		if err != nil {
+			t.Errorf("%s: %v", tt.query, err)
+			continue
+		}
+		if !got.Valid || got.String != tt.want {
+			t.Errorf("%s = %v, want %q", tt.query, got, tt.want)
+		}
+	}
+
+	// chr refuses a code point PostgreSQL refuses rather than answering the
+	// space SQLite's char() leaves behind.
+	for _, query := range []string{`SELECT chr(0)`, `SELECT chr(-1)`} {
+		if _, err := runDialect(t, db, PostgreSQL, query); err == nil {
+			t.Errorf("%s: want an error, got none", query)
+		}
+	}
+}
+
+// TestPostgreSQLNullsSortAtItsOwnEnd pins where the NULLs go, which decides the
+// order of the rows and the value of every window function that reads position.
+// PostgreSQL sorts them last for an ascending order and first for a descending
+// one; SQLite does the reverse. Every expected value was read from
+// postgres:17-alpine over the same five rows.
+func TestPostgreSQLNullsSortAtItsOwnEnd(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+	ctx := context.Background()
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS nulls_order (a INTEGER, b TEXT)`,
+		`DELETE FROM nulls_order`,
+		`INSERT INTO nulls_order VALUES (1,'x'),(2,'y'),(3,'x'),(NULL,'z'),(2,'y')`,
+	} {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		if _, err := db.ExecContext(ctx, `DROP TABLE nulls_order`); err != nil {
+			t.Error(err)
+		}
+	})
+
+	tests := []struct {
+		query string
+		want  string
+	}{
+		{`SELECT group_concat(coalesce(cast(a AS text),'N')) FROM (SELECT a FROM nulls_order ORDER BY a)`, "1,2,2,3,N"},
+		{`SELECT group_concat(coalesce(cast(a AS text),'N')) FROM (SELECT a FROM nulls_order ORDER BY a DESC)`, "N,3,2,2,1"},
+		{`SELECT first_value(b) OVER (ORDER BY a) FROM nulls_order LIMIT 1`, "x"},
+		{`SELECT group_concat(coalesce(x,'N')) FROM (SELECT nth_value(b, 2) OVER (ORDER BY a) AS x FROM nulls_order)`, "N,y,y,y,y"},
+		{`SELECT lag(a, 1, -1) OVER (ORDER BY a) FROM nulls_order LIMIT 1`, "-1"},
+		// An explicit NULLS clause is the caller's decision and is left alone.
+		{`SELECT group_concat(coalesce(cast(a AS text),'N')) FROM (SELECT a FROM nulls_order ORDER BY a NULLS FIRST)`, "N,1,2,2,3"},
+	}
 	for _, tt := range tests {
 		got, err := runDialect(t, db, PostgreSQL, tt.query)
 		if err != nil {

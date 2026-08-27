@@ -1950,7 +1950,14 @@ func TestFunctionsFollowTheSourceDialect(t *testing.T) {
 		{name: "mysql format of null", dialect: MySQL, query: `SELECT FORMAT(NULL, 2)`, wantNull: true},
 		{name: "mysql format refuses a locale", dialect: MySQL, query: `SELECT FORMAT(1234.5, 2, 'de_DE')`, wantErr: true},
 		{name: "googlesql format still expands printf verbs", dialect: GoogleSQL, query: `SELECT FORMAT('%d items', 3)`, want: "3 items"},
-		{name: "postgresql format still expands printf verbs", dialect: PostgreSQL, query: `SELECT format('%d items', 3)`, want: "3 items"},
+		// PostgreSQL's format() is not printf: its verbs are %s, %I, %L and %%,
+		// and it raises for anything else. Answering "3 items" here was SQLite's
+		// printf standing in for it, which is what made %I and %L answer NULL.
+		{name: "postgresql format refuses a printf verb", dialect: PostgreSQL, query: `SELECT format('%d items', 3)`, wantErr: true},
+		{name: "postgresql format quotes an identifier", dialect: PostgreSQL, query: `SELECT format('%I', 'a b')`, want: `"a b"`},
+		{name: "postgresql format quotes a literal", dialect: PostgreSQL, query: `SELECT format('%L', 'a''b')`, want: `'a''b'`},
+		{name: "postgresql format writes NULL as a literal", dialect: PostgreSQL, query: `SELECT format('%L', NULL)`, want: "NULL"},
+		{name: "postgresql format takes an argument by position", dialect: PostgreSQL, query: `SELECT format('%1$s %1$s', 'x')`, want: "x x"},
 
 		// LEFT and RIGHT with a negative length.
 		{name: "mysql left of a negative length is empty", dialect: MySQL, query: `SELECT LEFT('abcd', -1)`, want: ""},
