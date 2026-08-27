@@ -1800,7 +1800,7 @@ func TestChunkSizeDoesNotChangeTheColumnType(t *testing.T) {
 				if chunkSize > 0 {
 					builder = builder.SetDefaultChunkSize(chunkSize)
 				}
-				built, err := builder.Build(context.Background())
+				built, err := buildForTest(context.Background(), builder)
 				if err != nil {
 					t.Fatalf("chunk size %d: build: %v", chunkSize, err)
 				}
@@ -1867,7 +1867,7 @@ func TestChunkSizeDoesNotChangeStoredValues(t *testing.T) {
 			t.Parallel()
 			for _, chunk := range []int{1, 2, 3, 4, 5, defaultChunkSizeRows} {
 				b := NewBuilder().AddReader(strings.NewReader(tt.body), "t", FileTypeCSV).SetDefaultChunkSize(chunk)
-				built, err := b.Build(context.Background())
+				built, err := buildForTest(context.Background(), b)
 				require.NoError(t, err)
 				db, err := built.Open(context.Background())
 				require.NoError(t, err)
@@ -1901,7 +1901,7 @@ func TestChunkSizeDoesNotChangeStoredValues_File(t *testing.T) {
 	want := []string{"1/text", "2.50/text", "abc/text"}
 
 	for _, chunk := range []int{1, 2, 3, 4, defaultChunkSizeRows} {
-		built, err := NewBuilder().AddPath(path).SetDefaultChunkSize(chunk).Build(context.Background())
+		built, err := buildForTest(context.Background(), NewBuilder().AddPath(path).SetDefaultChunkSize(chunk))
 		require.NoError(t, err)
 		db, err := built.Open(context.Background())
 		require.NoError(t, err)
@@ -2239,7 +2239,7 @@ func TestACanceledLoadStopsReadingItsSource(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			src := &dripReader{body: body(2000, format.name), cancelAt: deliverBeforeCancel, cancel: cancel}
-			builder, err := NewBuilder().AddReader(src, "slow", format.typ).Build(context.Background())
+			builder, err := buildForTest(context.Background(), NewBuilder().AddReader(src, "slow", format.typ))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2266,7 +2266,7 @@ func TestACanceledLoadStopsReadingItsSource(t *testing.T) {
 			t.Parallel()
 
 			src := &dripReader{body: body(50, format.name)}
-			builder, err := NewBuilder().AddReader(src, "slow", format.typ).Build(context.Background())
+			builder, err := buildForTest(context.Background(), NewBuilder().AddReader(src, "slow", format.typ))
 			if err != nil {
 				t.Fatal(err)
 			}

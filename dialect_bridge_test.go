@@ -22,7 +22,7 @@ import (
 func TestOpenWithDialectMySQL(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	builder, err := NewBuilder().AddPath("testdata/sample.csv").WithDialect(dialect.MySQL).Build(ctx)
+	builder, err := buildForTest(ctx, NewBuilder().AddPath("testdata/sample.csv").WithDialect(dialect.MySQL))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestOpenWithDialectMySQL(t *testing.T) {
 func TestOpenWithDialectPostgreSQL(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	builder, err := NewBuilder().AddPath("testdata/sample.csv").WithDialect(dialect.PostgreSQL).Build(ctx)
+	builder, err := buildForTest(ctx, NewBuilder().AddPath("testdata/sample.csv").WithDialect(dialect.PostgreSQL))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestOpenWithDialectPostgreSQL(t *testing.T) {
 func TestOpenWithDialectGoogleSQL(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	builder, err := NewBuilder().AddPath("testdata/sample.csv").WithDialect(dialect.GoogleSQL).Build(ctx)
+	builder, err := buildForTest(ctx, NewBuilder().AddPath("testdata/sample.csv").WithDialect(dialect.GoogleSQL))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestStringAggDistinctExecutes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			builder, err := NewBuilder().AddPath("testdata/sample.csv").WithDialect(tt.dialect).Build(ctx)
+			builder, err := buildForTest(ctx, NewBuilder().AddPath("testdata/sample.csv").WithDialect(tt.dialect))
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}
@@ -172,7 +172,7 @@ func TestOpenWithDialectDefaultIsSQLite(t *testing.T) {
 	ctx := context.Background()
 	// Without WithDialect, the database is plain SQLite: a MySQL-only construct
 	// like backtick strings is not translated, but standard SQL still works.
-	builder, err := NewBuilder().AddPath("testdata/sample.csv").Build(ctx)
+	builder, err := buildForTest(ctx, NewBuilder().AddPath("testdata/sample.csv"))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestOpenWithDialectDefaultIsSQLite(t *testing.T) {
 func TestWithDialectLoadIsSQLite(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	builder, err := NewBuilder().AddPath("testdata/sample.csv").WithDialect(dialect.MySQL).Build(ctx)
+	builder, err := buildForTest(ctx, NewBuilder().AddPath("testdata/sample.csv").WithDialect(dialect.MySQL))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestWithDialectLoadIsSQLite(t *testing.T) {
 func TestOpenReadOnlyWithDialect(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	builder, err := NewBuilder().AddPath("testdata/sample.csv").WithDialect(dialect.PostgreSQL).Build(ctx)
+	builder, err := buildForTest(ctx, NewBuilder().AddPath("testdata/sample.csv").WithDialect(dialect.PostgreSQL))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -247,11 +247,13 @@ func TestOpenReadOnlyWithDialect(t *testing.T) {
 func TestWithDialectAutoSaveConflict(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, err := NewBuilder().
-		AddPath("testdata/sample.csv").
-		WithDialect(dialect.MySQL).
-		EnableAutoSave(t.TempDir()).
-		Build(ctx)
+	_, err := buildForTest(
+
+		ctx, NewBuilder().
+			AddPath("testdata/sample.csv").
+			WithDialect(dialect.MySQL).
+			EnableAutoSave(t.TempDir()))
+
 	if err == nil {
 		t.Fatal("Build should reject WithDialect + auto-save")
 	}
@@ -263,10 +265,12 @@ func TestWithDialectAutoSaveConflict(t *testing.T) {
 func TestWithDialectUnknown(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, err := NewBuilder().
-		AddPath("testdata/sample.csv").
-		WithDialect(dialect.Dialect("oracle")).
-		Build(ctx)
+	_, err := buildForTest(
+
+		ctx, NewBuilder().
+			AddPath("testdata/sample.csv").
+			WithDialect(dialect.Dialect("oracle")))
+
 	if err == nil {
 		t.Fatal("Build should reject an unknown dialect")
 	}
@@ -280,7 +284,7 @@ func TestWithDialectUnknown(t *testing.T) {
 func TestWithDialectTranslationError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	builder, err := NewBuilder().AddPath("testdata/sample.csv").WithDialect(dialect.PostgreSQL).Build(ctx)
+	builder, err := buildForTest(ctx, NewBuilder().AddPath("testdata/sample.csv").WithDialect(dialect.PostgreSQL))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -302,7 +306,7 @@ func TestWithDialectTranslationError(t *testing.T) {
 func TestWithDialectTransaction(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	builder, err := NewBuilder().AddPath("testdata/sample.csv").WithDialect(dialect.MySQL).Build(ctx)
+	builder, err := buildForTest(ctx, NewBuilder().AddPath("testdata/sample.csv").WithDialect(dialect.MySQL))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -447,7 +451,7 @@ func TestDialectQueryKeepsResultColumnNames(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			builder, err := NewBuilder().AddPath("testdata/sample.csv").WithDialect(tt.dialect).Build(ctx)
+			builder, err := buildForTest(ctx, NewBuilder().AddPath("testdata/sample.csv").WithDialect(tt.dialect))
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}
@@ -551,7 +555,7 @@ func TestDialectLiteralsMeanWhatTheySay(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 
-			builder, err := NewBuilder().AddPath("testdata/sample.csv").WithDialect(tt.dialect).Build(ctx)
+			builder, err := buildForTest(ctx, NewBuilder().AddPath("testdata/sample.csv").WithDialect(tt.dialect))
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}
@@ -725,7 +729,7 @@ func TestLikeEscapesWildcard(t *testing.T) {
 			t.Parallel()
 
 			ctx := context.Background()
-			validated, err := NewBuilder().AddPath(path).WithDialect(d).Build(ctx)
+			validated, err := buildForTest(ctx, NewBuilder().AddPath(path).WithDialect(d))
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}

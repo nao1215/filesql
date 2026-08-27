@@ -121,7 +121,7 @@ func TestAutoSaveConcurrentQueries(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.csv")
 	require.NoError(t, os.WriteFile(path, []byte("id,name\n1,alice\n"), 0o600))
 
-	validated, err := NewBuilder().AddPath(path).EnableAutoSave("").Build(ctx)
+	validated, err := buildForTest(ctx, NewBuilder().AddPath(path).EnableAutoSave(""))
 	require.NoError(t, err)
 	db, err := validated.Open(ctx)
 	require.NoError(t, err)
@@ -171,7 +171,7 @@ func TestAutoSaveOnCommitConcurrentCommits(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("id,name\n1,alice\n"), 0o600))
 
 	outputDir := t.TempDir()
-	validated, err := NewBuilder().AddPath(path).EnableAutoSaveOnCommit(outputDir).Build(ctx)
+	validated, err := buildForTest(ctx, NewBuilder().AddPath(path).EnableAutoSaveOnCommit(outputDir))
 	require.NoError(t, err)
 	db, err := validated.Open(ctx)
 	require.NoError(t, err)
@@ -227,7 +227,7 @@ func TestAutoSaveOnCommitConcurrentQueriesAndCommits(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.csv")
 	require.NoError(t, os.WriteFile(path, []byte("id,name\n1,alice\n"), 0o600))
 
-	validated, err := NewBuilder().AddPath(path).EnableAutoSaveOnCommit(t.TempDir()).Build(ctx)
+	validated, err := buildForTest(ctx, NewBuilder().AddPath(path).EnableAutoSaveOnCommit(t.TempDir()))
 	require.NoError(t, err)
 	db, err := validated.Open(ctx)
 	require.NoError(t, err)
@@ -330,7 +330,7 @@ func TestAutoSaveSavesOnceUnderConcurrentClose(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.csv")
 	require.NoError(t, os.WriteFile(path, []byte("id,name\n1,alice\n"), 0o600))
 
-	validated, err := NewBuilder().AddPath(path).EnableAutoSave("").Build(ctx)
+	validated, err := buildForTest(ctx, NewBuilder().AddPath(path).EnableAutoSave(""))
 	require.NoError(t, err)
 	db, err := validated.Open(ctx)
 	require.NoError(t, err)
@@ -468,9 +468,11 @@ func TestConcurrentLoadIntoFromReaders(t *testing.T) {
 	errs := make([]error, goroutines)
 	for i := range goroutines {
 		wg.Go(func() {
-			builder, buildErr := NewBuilder().
-				AddReader(strings.NewReader("id,name\n1,alice\n"), fmt.Sprintf("r%d", i), FileTypeCSV).
-				Build(t.Context())
+			builder, buildErr := buildForTest(
+
+				t.Context(), NewBuilder().
+					AddReader(strings.NewReader("id,name\n1,alice\n"), fmt.Sprintf("r%d", i), FileTypeCSV))
+
 			if buildErr != nil {
 				errs[i] = buildErr
 				return

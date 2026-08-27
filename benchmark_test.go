@@ -70,9 +70,11 @@ func BenchmarkOpenJSONL(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		validated, err := NewBuilder().
-			AddReader(bytes.NewReader(lines), "events", FileTypeJSONL).
-			Build(context.Background())
+		validated, err := buildForTest(
+
+			context.Background(), NewBuilder().
+				AddReader(bytes.NewReader(lines), "events", FileTypeJSONL))
+
 		if err != nil {
 			b.Fatalf("Build failed: %v", err)
 		}
@@ -107,9 +109,11 @@ func BenchmarkOpenJSON(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		validated, err := NewBuilder().
-			AddReader(bytes.NewReader(document), "events", FileTypeJSON).
-			Build(context.Background())
+		validated, err := buildForTest(
+
+			context.Background(), NewBuilder().
+				AddReader(bytes.NewReader(document), "events", FileTypeJSON))
+
 		if err != nil {
 			b.Fatalf("Build failed: %v", err)
 		}
@@ -137,9 +141,11 @@ func BenchmarkOpenReader(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		validated, err := NewBuilder().
-			AddReader(bytes.NewReader(body), "customers", FileTypeCSV).
-			Build(context.Background())
+		validated, err := buildForTest(
+
+			context.Background(), NewBuilder().
+				AddReader(bytes.NewReader(body), "customers", FileTypeCSV))
+
 		if err != nil {
 			b.Fatalf("Build failed: %v", err)
 		}
@@ -166,7 +172,7 @@ func BenchmarkOpenWithAutoSave(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		validated, err := NewBuilder().AddPath(csvPath).EnableAutoSave(outputDir).Build(context.Background())
+		validated, err := buildForTest(context.Background(), NewBuilder().AddPath(csvPath).EnableAutoSave(outputDir))
 		if err != nil {
 			b.Fatalf("Build failed: %v", err)
 		}
@@ -224,7 +230,7 @@ func BenchmarkOverwriteWorkbookOfNumbers(b *testing.B) {
 		write()
 		b.StartTimer()
 
-		validated, err := NewBuilder().AddPath(path).EnableAutoSave("").Build(context.Background())
+		validated, err := buildForTest(context.Background(), NewBuilder().AddPath(path).EnableAutoSave(""))
 		if err != nil {
 			b.Fatalf("Build failed: %v", err)
 		}
@@ -282,7 +288,7 @@ func BenchmarkOverwriteWorkbook(b *testing.B) {
 		write()
 		b.StartTimer()
 
-		validated, err := NewBuilder().AddPath(path).EnableAutoSave("").Build(context.Background())
+		validated, err := buildForTest(context.Background(), NewBuilder().AddPath(path).EnableAutoSave(""))
 		if err != nil {
 			b.Fatalf("Build failed: %v", err)
 		}

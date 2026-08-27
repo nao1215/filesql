@@ -75,9 +75,11 @@ func TestReservedTableNameIsRefused(t *testing.T) {
 	assert.Contains(t, err.Error(), "_filesql_")
 
 	// A reader names its own table, so it can reach the namespace too.
-	builder, err := NewBuilder().
-		AddReader(strings.NewReader("id\n1\n"), "_filesql_sources", FileTypeCSV).
-		Build(ctx)
+	builder, err := buildForTest(
+
+		ctx, NewBuilder().
+			AddReader(strings.NewReader("id\n1\n"), "_filesql_sources", FileTypeCSV))
+
 	require.NoError(t, err)
 	_, err = builder.Open(ctx)
 	require.Error(t, err)
@@ -129,9 +131,11 @@ func TestSQLitePrefixIsRefusedTheSameWay(t *testing.T) {
 	}
 
 	// A reader names its own table, so it can reach that namespace too.
-	builder, err := NewBuilder().
-		AddReader(strings.NewReader("id\n1\n"), "sqlite_x", FileTypeCSV).
-		Build(ctx)
+	builder, err := buildForTest(
+
+		ctx, NewBuilder().
+			AddReader(strings.NewReader("id\n1\n"), "sqlite_x", FileTypeCSV))
+
 	require.NoError(t, err)
 	db, err := builder.Open(ctx)
 	if db != nil {
@@ -164,7 +168,7 @@ func TestSourceMetadataRolledBackWithTransaction(t *testing.T) {
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 
-	builder, err := NewBuilder().AddPath(copyACHFixture(t, "ppd-debit.ach")).Build(ctx)
+	builder, err := buildForTest(ctx, NewBuilder().AddPath(copyACHFixture(t, "ppd-debit.ach")))
 	require.NoError(t, err)
 
 	tx, err := db.BeginTx(ctx, nil)
@@ -189,7 +193,7 @@ func TestSourceMetadataSurvivesCommit(t *testing.T) {
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 
-	builder, err := NewBuilder().AddPath(copyACHFixture(t, "ppd-debit.ach")).Build(ctx)
+	builder, err := buildForTest(ctx, NewBuilder().AddPath(copyACHFixture(t, "ppd-debit.ach")))
 	require.NoError(t, err)
 
 	tx, err := db.BeginTx(ctx, nil)
@@ -209,10 +213,12 @@ func TestAutoSaveWritesACHFromSourceMetadata(t *testing.T) {
 	ctx := context.Background()
 
 	outputDir := t.TempDir()
-	builder, err := NewBuilder().
-		AddPath(copyACHFixture(t, "ppd-debit.ach")).
-		EnableAutoSave(outputDir, NewDumpOptions().WithFormat(OutputFormatACH)).
-		Build(ctx)
+	builder, err := buildForTest(
+
+		ctx, NewBuilder().
+			AddPath(copyACHFixture(t, "ppd-debit.ach")).
+			EnableAutoSave(outputDir, NewDumpOptions().WithFormat(OutputFormatACH)))
+
 	require.NoError(t, err)
 
 	db, err := builder.Open(ctx)
@@ -236,9 +242,11 @@ func TestReaderLoadedACHCannotBeDumped(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join("testdata", "ppd-debit.ach"))
 	require.NoError(t, err)
 
-	builder, err := NewBuilder().
-		AddReader(strings.NewReader(string(content)), "payment", FileTypeACH).
-		Build(ctx)
+	builder, err := buildForTest(
+
+		ctx, NewBuilder().
+			AddReader(strings.NewReader(string(content)), "payment", FileTypeACH))
+
 	require.NoError(t, err)
 
 	db, err := builder.Open(ctx)

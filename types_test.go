@@ -1078,10 +1078,12 @@ func loadColumnForTypeTest(t *testing.T, values []string, chunkSize int) (string
 
 	body := "v\n" + strings.Join(values, "\n") + "\n"
 	ctx := context.Background()
-	validated, err := NewBuilder().
-		AddReader(strings.NewReader(body), "t", FileTypeCSV).
-		SetDefaultChunkSize(chunkSize).
-		Build(ctx)
+	validated, err := buildForTest(
+
+		ctx, NewBuilder().
+			AddReader(strings.NewReader(body), "t", FileTypeCSV).
+			SetDefaultChunkSize(chunkSize))
+
 	require.NoError(t, err)
 	db, err := validated.Open(ctx)
 	require.NoError(t, err)
@@ -1248,9 +1250,11 @@ func TestColumnType_ADecimalMakesTheColumnReal(t *testing.T) {
 
 		ctx := context.Background()
 		body := "v\n" + strings.Join(append(append([]string{}, integers...), "4.0"), "\n") + "\n"
-		validated, err := NewBuilder().
-			AddReader(strings.NewReader(body), "t", FileTypeCSV).
-			Build(ctx)
+		validated, err := buildForTest(
+
+			ctx, NewBuilder().
+				AddReader(strings.NewReader(body), "t", FileTypeCSV))
+
 		require.NoError(t, err)
 		db, err := validated.Open(ctx)
 		require.NoError(t, err)
@@ -1281,9 +1285,11 @@ func TestColumnType_DeclaredTypeAgreesWithStoredType(t *testing.T) {
 			t.Parallel()
 
 			ctx := context.Background()
-			validated, err := NewBuilder().
-				AddReader(strings.NewReader(body), "t", FileTypeCSV).
-				Build(ctx)
+			validated, err := buildForTest(
+
+				ctx, NewBuilder().
+					AddReader(strings.NewReader(body), "t", FileTypeCSV))
+
 			require.NoError(t, err)
 			db, err := validated.Open(ctx)
 			require.NoError(t, err)
@@ -1830,7 +1836,7 @@ func TestBlankCellInNumericColumnAtEveryChunkSize(t *testing.T) {
 			src := filepath.Join(t.TempDir(), "rows.csv")
 			require.NoError(t, os.WriteFile(src, []byte(body), 0o600))
 
-			validated, err := NewBuilder().AddPath(src).SetDefaultChunkSize(chunk).Build(ctx)
+			validated, err := buildForTest(ctx, NewBuilder().AddPath(src).SetDefaultChunkSize(chunk))
 			require.NoError(t, err)
 			db, err := validated.Open(ctx)
 			require.NoError(t, err)
@@ -1912,9 +1918,11 @@ func TestBlankCellInNumericColumnOnEveryLoadRoute(t *testing.T) {
 			name: "AddFS",
 			open: func(t *testing.T) *sql.DB {
 				t.Helper()
-				validated, err := NewBuilder().
-					AddFS(fstest.MapFS{"rows.csv": &fstest.MapFile{Data: []byte(blankCellSource)}}).
-					Build(ctx)
+				validated, err := buildForTest(
+
+					ctx, NewBuilder().
+						AddFS(fstest.MapFS{"rows.csv": &fstest.MapFile{Data: []byte(blankCellSource)}}))
+
 				require.NoError(t, err)
 				db, err := validated.Open(ctx)
 				require.NoError(t, err)
@@ -1936,9 +1944,11 @@ func TestBlankCellInNumericColumnOnEveryLoadRoute(t *testing.T) {
 				t.Helper()
 				db, err := sql.Open("sqlite", ":memory:")
 				require.NoError(t, err)
-				validated, err := NewBuilder().
-					AddReader(strings.NewReader(blankCellSource), "rows", FileTypeCSV).
-					Build(ctx)
+				validated, err := buildForTest(
+
+					ctx, NewBuilder().
+						AddReader(strings.NewReader(blankCellSource), "rows", FileTypeCSV))
+
 				require.NoError(t, err)
 				require.NoError(t, validated.LoadInto(ctx, db))
 				return db
@@ -2015,7 +2025,7 @@ func TestBlankCellInNumericColumnFromAReaderInEveryFormat(t *testing.T) {
 // openReaderTable loads body as one table named "rows" through AddReader, which
 // is the route an input that cannot be read twice takes.
 func openReaderTable(ctx context.Context, body string, kind FileType) (*sql.DB, error) {
-	validated, err := NewBuilder().AddReader(strings.NewReader(body), "rows", kind).Build(ctx)
+	validated, err := buildForTest(ctx, NewBuilder().AddReader(strings.NewReader(body), "rows", kind))
 	if err != nil {
 		return nil, err
 	}

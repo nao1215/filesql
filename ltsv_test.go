@@ -102,7 +102,7 @@ func TestLTSVColumnOrderSurvivesChunking(t *testing.T) {
 		src := filepath.Join(t.TempDir(), "logs.ltsv")
 		require.NoError(t, os.WriteFile(src, []byte(content), 0o600))
 
-		validated, err := NewBuilder().AddPath(src).SetDefaultChunkSize(10).Build(ctx)
+		validated, err := buildForTest(ctx, NewBuilder().AddPath(src).SetDefaultChunkSize(10))
 		require.NoError(t, err)
 		db, err := validated.Open(ctx)
 		require.NoError(t, err)
@@ -527,7 +527,7 @@ func loadLTSVWithPolicy(t *testing.T, content string, policy MalformedRowPolicy)
 	}
 
 	ctx := context.Background()
-	builder, err := NewBuilder().AddPath(path).WithMalformedRowPolicy(policy).Build(ctx)
+	builder, err := buildForTest(ctx, NewBuilder().AddPath(path).WithMalformedRowPolicy(policy))
 	if err != nil {
 		return 0, 0, err
 	}

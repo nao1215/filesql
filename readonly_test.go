@@ -16,9 +16,11 @@ import (
 func openReadOnlyUsers(t *testing.T) *sql.DB {
 	t.Helper()
 
-	validated, err := NewBuilder().
-		AddReader(strings.NewReader("id,name\n1,Alice\n2,Bob\n"), "users", FileTypeCSV).
-		Build(context.Background())
+	validated, err := buildForTest(
+
+		context.Background(), NewBuilder().
+			AddReader(strings.NewReader("id,name\n1,Alice\n2,Bob\n"), "users", FileTypeCSV))
+
 	require.NoError(t, err)
 
 	db, err := validated.OpenReadOnly(context.Background())
@@ -166,9 +168,11 @@ func TestOpenReadOnly_LeavesOpenWritable(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	validated, err := NewBuilder().
-		AddReader(strings.NewReader("id,name\n1,Alice\n"), "users", FileTypeCSV).
-		Build(ctx)
+	validated, err := buildForTest(
+
+		ctx, NewBuilder().
+			AddReader(strings.NewReader("id,name\n1,Alice\n"), "users", FileTypeCSV))
+
 	require.NoError(t, err)
 
 	db, err := validated.Open(ctx)
@@ -192,9 +196,11 @@ func TestOpenReadOnly_ClosingOrder(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	validated, err := NewBuilder().
-		AddReader(strings.NewReader("id,name\n1,Alice\n2,Bob\n"), "users", FileTypeCSV).
-		Build(ctx)
+	validated, err := buildForTest(
+
+		ctx, NewBuilder().
+			AddReader(strings.NewReader("id,name\n1,Alice\n2,Bob\n"), "users", FileTypeCSV))
+
 	require.NoError(t, err)
 
 	db, err := validated.OpenReadOnly(ctx)
@@ -216,10 +222,12 @@ func TestOpenReadOnly_WithAutoSave(t *testing.T) {
 	ctx := context.Background()
 	outDir := t.TempDir()
 
-	validated, err := NewBuilder().
-		AddPath("testdata/sample.csv").
-		EnableAutoSave(outDir).
-		Build(ctx)
+	validated, err := buildForTest(
+
+		ctx, NewBuilder().
+			AddPath("testdata/sample.csv").
+			EnableAutoSave(outDir))
+
 	require.NoError(t, err)
 
 	db, err := validated.OpenReadOnly(ctx)

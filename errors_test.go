@@ -214,7 +214,7 @@ func TestErrorSentinelsAreReachable(t *testing.T) {
 				dir := t.TempDir()
 				src := filepath.Join(dir, "users.csv")
 				require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
-				validated, err := NewBuilder().AddPath(src).Build(t.Context())
+				validated, err := buildForTest(t.Context(), NewBuilder().AddPath(src))
 				require.NoError(t, err)
 				db, err := validated.Open(t.Context())
 				require.NoError(t, err)

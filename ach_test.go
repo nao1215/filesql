@@ -171,7 +171,7 @@ func TestBuilderAddPathACH(t *testing.T) {
 
 	ctx := context.Background()
 	builder := NewBuilder().AddPath(testFile)
-	builder, err := builder.Build(ctx)
+	builder, err := buildForTest(ctx, builder)
 	require.NoError(t, err)
 
 	db, err := builder.Open(ctx)

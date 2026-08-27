@@ -512,7 +512,7 @@ func TestAutoSaveConnection_Begin(t *testing.T) {
 
 	// Use Builder to create a database with auto-save config
 	builder := NewBuilder().AddPath(filepath.Join("testdata", "test.csv"))
-	validatedBuilder, err := builder.Build(ctx)
+	validatedBuilder, err := buildForTest(ctx, builder)
 	require.NoError(t, err)
 
 	db, err := validatedBuilder.Open(ctx)
@@ -914,7 +914,7 @@ func TestDumpDatabase_RefusesACodecItCannotWrite(t *testing.T) {
 	src := filepath.Join(dir, "users.csv")
 	require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
 
-	validated, err := NewBuilder().AddPath(src).Build(t.Context())
+	validated, err := buildForTest(t.Context(), NewBuilder().AddPath(src))
 	require.NoError(t, err)
 	db, err := validated.Open(t.Context())
 	require.NoError(t, err)

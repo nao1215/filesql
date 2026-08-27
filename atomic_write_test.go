@@ -259,9 +259,11 @@ func TestDumpDatabase_LongOutputFileName(t *testing.T) {
 
 	ctx := t.Context()
 	tableName := strings.Repeat("t", 246)
-	validated, err := NewBuilder().
-		AddReader(strings.NewReader("id,name\n1,alice\n"), tableName, FileTypeCSV).
-		Build(ctx)
+	validated, err := buildForTest(
+
+		ctx, NewBuilder().
+			AddReader(strings.NewReader("id,name\n1,alice\n"), tableName, FileTypeCSV))
+
 	require.NoError(t, err)
 	db, err := validated.Open(ctx)
 	require.NoError(t, err)

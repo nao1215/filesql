@@ -342,10 +342,12 @@ func TestBuilderSheetPolicyFromReader(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			builder, err := NewBuilder().
-				AddReader(bytes.NewReader(data), "book", FileTypeXLSX).
-				WithExcelSheetPolicy(tt.policy).
-				Build(context.Background())
+			builder, err := buildForTest(
+
+				context.Background(), NewBuilder().
+					AddReader(bytes.NewReader(data), "book", FileTypeXLSX).
+					WithExcelSheetPolicy(tt.policy))
+
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}
@@ -370,10 +372,12 @@ func TestBuilderSheetPolicyFromFS(t *testing.T) {
 		sheetSpec{"Shown", sheetVisible},
 	)
 
-	builder, err := NewBuilder().
-		AddFS(os.DirFS(dir)).
-		WithExcelSheetPolicy(ExcelSheetPolicyVisibleOnly).
-		Build(context.Background())
+	builder, err := buildForTest(
+
+		context.Background(), NewBuilder().
+			AddFS(os.DirFS(dir)).
+			WithExcelSheetPolicy(ExcelSheetPolicyVisibleOnly))
+
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -612,10 +616,12 @@ func openWithSheetPolicy(t *testing.T, policy ExcelSheetPolicy, paths ...string)
 
 func openWithSheetPolicyErr(policy ExcelSheetPolicy, paths ...string) (*sql.DB, error) {
 	ctx := context.Background()
-	builder, err := NewBuilder().
-		AddPaths(paths...).
-		WithExcelSheetPolicy(policy).
-		Build(ctx)
+	builder, err := buildForTest(
+
+		ctx, NewBuilder().
+			AddPaths(paths...).
+			WithExcelSheetPolicy(policy))
+
 	if err != nil {
 		return nil, err
 	}
@@ -659,10 +665,12 @@ func TestLoadIntoAppliesSheetPolicy(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
-	builder, err := NewBuilder().
-		AddPath(path).
-		WithExcelSheetPolicy(ExcelSheetPolicyVisibleOnly).
-		Build(ctx)
+	builder, err := buildForTest(
+
+		ctx, NewBuilder().
+			AddPath(path).
+			WithExcelSheetPolicy(ExcelSheetPolicyVisibleOnly))
+
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -702,9 +710,12 @@ func TestSaveKeepsTheSheetsThePolicyDidNotLoad(t *testing.T) {
 				sheetSpec{name: "Secret", visibility: hidden},
 			)
 
-			validated, err := NewBuilder().AddPath(path).
-				WithExcelSheetPolicy(ExcelSheetPolicyVisibleOnly).
-				EnableAutoSave("").Build(ctx)
+			validated, err := buildForTest(
+
+				ctx, NewBuilder().AddPath(path).
+					WithExcelSheetPolicy(ExcelSheetPolicyVisibleOnly).
+					EnableAutoSave(""))
+
 			require.NoError(t, err)
 			db, err := validated.Open(ctx)
 			require.NoError(t, err)
@@ -748,7 +759,7 @@ func TestSaveKeepsWhatItDidNotWrite(t *testing.T) {
 	require.NoError(t, book.SaveAs(path))
 	require.NoError(t, book.Close())
 
-	validated, err := NewBuilder().AddPath(path).EnableAutoSave("").Build(ctx)
+	validated, err := buildForTest(ctx, NewBuilder().AddPath(path).EnableAutoSave(""))
 	require.NoError(t, err)
 	db, err := validated.Open(ctx)
 	require.NoError(t, err)
@@ -843,7 +854,7 @@ func TestSaveAndAFormulaCell(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "calc.xlsx")
 			writeWorkbook(t, path)
 
-			validated, err := NewBuilder().AddPath(path).EnableAutoSave("").Build(ctx)
+			validated, err := buildForTest(ctx, NewBuilder().AddPath(path).EnableAutoSave(""))
 			require.NoError(t, err)
 			db, err := validated.Open(ctx)
 			require.NoError(t, err)
@@ -899,7 +910,7 @@ func TestSaveKeepsADateCellADate(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, before.Close())
 
-	validated, err := NewBuilder().AddPath(path).EnableAutoSave("").Build(ctx)
+	validated, err := buildForTest(ctx, NewBuilder().AddPath(path).EnableAutoSave(""))
 	require.NoError(t, err)
 	db, err := validated.Open(ctx)
 	require.NoError(t, err)
@@ -941,7 +952,7 @@ func TestSaveShrinksASheetTheTableNoLongerFills(t *testing.T) {
 	require.NoError(t, book.SaveAs(path))
 	require.NoError(t, book.Close())
 
-	validated, err := NewBuilder().AddPath(path).EnableAutoSave("").Build(ctx)
+	validated, err := buildForTest(ctx, NewBuilder().AddPath(path).EnableAutoSave(""))
 	require.NoError(t, err)
 	db, err := validated.Open(ctx)
 	require.NoError(t, err)
@@ -1436,9 +1447,11 @@ func TestXLSXDateCellsImportAsISOThroughAddReader(t *testing.T) {
 	var book bytes.Buffer
 	require.NoError(t, f.Write(&book))
 
-	db, err := NewBuilder().
-		AddReader(bytes.NewReader(book.Bytes()), "book", FileTypeXLSX).
-		Build(ctx)
+	db, err := buildForTest(
+
+		ctx, NewBuilder().
+			AddReader(bytes.NewReader(book.Bytes()), "book", FileTypeXLSX))
+
 	require.NoError(t, err)
 	sqlDB, err := db.Open(ctx)
 	require.NoError(t, err)
@@ -1928,8 +1941,10 @@ func TestEverySheetIsLoadedByEveryRoute(t *testing.T) {
 	t.Run("a reader", func(t *testing.T) {
 		t.Parallel()
 
-		validated, err := NewBuilder().
-			AddReader(bytes.NewReader(data), "book", FileTypeXLSX).Build(ctx)
+		validated, err := buildForTest(
+			ctx, NewBuilder().
+				AddReader(bytes.NewReader(data), "book", FileTypeXLSX))
+
 		require.NoError(t, err)
 		db, err := validated.Open(ctx)
 		require.NoError(t, err)
@@ -1940,8 +1955,10 @@ func TestEverySheetIsLoadedByEveryRoute(t *testing.T) {
 	t.Run("an embedded filesystem", func(t *testing.T) {
 		t.Parallel()
 
-		validated, err := NewBuilder().
-			AddFS(fstest.MapFS{"book.xlsx": &fstest.MapFile{Data: data}}).Build(ctx)
+		validated, err := buildForTest(
+			ctx, NewBuilder().
+				AddFS(fstest.MapFS{"book.xlsx": &fstest.MapFile{Data: data}}))
+
 		require.NoError(t, err)
 		db, err := validated.Open(ctx)
 		require.NoError(t, err)
@@ -1960,9 +1977,11 @@ func TestEverySheetIsLoadedByEveryRoute(t *testing.T) {
 
 		// A reader carries no path, so the codec is named through the option
 		// rather than guessed from bytes.
-		compressed, err := NewBuilder().
-			AddReader(bytes.NewReader(squeezed.Bytes()), "book", FileTypeXLSX, WithCompression(CompressionGZ)).
-			Build(ctx)
+		compressed, err := buildForTest(
+
+			ctx, NewBuilder().
+				AddReader(bytes.NewReader(squeezed.Bytes()), "book", FileTypeXLSX, WithCompression(CompressionGZ)))
+
 		require.NoError(t, err)
 		db, err := compressed.Open(ctx)
 		require.NoError(t, err)
@@ -1974,8 +1993,10 @@ func TestEverySheetIsLoadedByEveryRoute(t *testing.T) {
 		t.Parallel()
 
 		colliding := multiSheetWorkbook(t, "Q1 sales", "Q1.sales")
-		validated, err := NewBuilder().
-			AddReader(bytes.NewReader(colliding), "book", FileTypeXLSX).Build(ctx)
+		validated, err := buildForTest(
+			ctx, NewBuilder().
+				AddReader(bytes.NewReader(colliding), "book", FileTypeXLSX))
+
 		require.NoError(t, err)
 		_, err = validated.Open(ctx)
 		require.Error(t, err)

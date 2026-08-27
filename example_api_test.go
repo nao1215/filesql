@@ -102,12 +102,7 @@ func ExampleDBBuilder_SetDefaultChunkSize() {
 		AddReader(strings.NewReader("id,name\n1,Alice\n2,Bob\n3,Cora\n"), "users", filesql.FileTypeCSV).
 		SetDefaultChunkSize(2)
 
-	validated, err := builder.Build(context.Background())
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	db, err := validated.Open(context.Background())
+	db, err := builder.Open(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -127,15 +122,11 @@ func ExampleDBBuilder_SetDefaultChunkSize() {
 func ExampleDBBuilder_WithMalformedRowPolicy() {
 	csvData := "id,name\n1,Alice\n2\n3,Cora,extra\n4,Dave\n"
 
-	validated, err := filesql.NewBuilder().
+	builder := filesql.NewBuilder().
 		AddReader(strings.NewReader(csvData), "users", filesql.FileTypeCSV).
-		WithMalformedRowPolicy(filesql.MalformedRowSkip).
-		Build(context.Background())
-	if err != nil {
-		log.Fatal(err)
-	}
+		WithMalformedRowPolicy(filesql.MalformedRowSkip)
 
-	db, err := validated.Open(context.Background())
+	db, err := builder.Open(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -153,15 +144,11 @@ func ExampleDBBuilder_WithMalformedRowPolicy() {
 }
 
 func ExampleDBBuilder_WithDialect() {
-	validated, err := filesql.NewBuilder().
+	builder := filesql.NewBuilder().
 		AddReader(strings.NewReader("id,shipped_at\n1,2024-12-31 09:07:00\n"), "orders", filesql.FileTypeCSV).
-		WithDialect(dialect.MySQL).
-		Build(context.Background())
-	if err != nil {
-		log.Fatal(err)
-	}
+		WithDialect(dialect.MySQL)
 
-	db, err := validated.Open(context.Background())
+	db, err := builder.Open(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -197,15 +184,11 @@ func ExampleDBBuilder_WithLogger() {
 		},
 	}))
 
-	validated, err := filesql.NewBuilder().
+	builder := filesql.NewBuilder().
 		WithLogger(logger).
-		AddReader(strings.NewReader("id,name\n1,Alice\n"), "users", filesql.FileTypeCSV).
-		Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
+		AddReader(strings.NewReader("id,name\n1,Alice\n"), "users", filesql.FileTypeCSV)
 
-	db, err := validated.Open(ctx)
+	db, err := builder.Open(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -222,17 +205,13 @@ func ExampleDBBuilder_WithLogger() {
 func ExampleDBBuilder_OpenReadOnly() {
 	ctx := context.Background()
 
-	validated, err := filesql.NewBuilder().
-		AddReader(strings.NewReader("id,name\n1,Alice\n2,Bob\n"), "users", filesql.FileTypeCSV).
-		Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
+	builder := filesql.NewBuilder().
+		AddReader(strings.NewReader("id,name\n1,Alice\n2,Bob\n"), "users", filesql.FileTypeCSV)
 
 	// The result is an ordinary *sql.DB whose connections carry SQLite's
 	// query_only pragma, so a write is refused by the engine rather than by
 	// this package.
-	db, err := validated.OpenReadOnly(ctx)
+	db, err := builder.OpenReadOnly(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -262,14 +241,10 @@ func ExampleDBBuilder_LoadInto() {
 		log.Fatal(err)
 	}
 
-	validated, err := filesql.NewBuilder().
-		AddReader(strings.NewReader("id,name\n1,Alice\n2,Bob\n"), "users", filesql.FileTypeCSV).
-		Build(context.Background())
-	if err != nil {
-		log.Fatal(err)
-	}
+	builder := filesql.NewBuilder().
+		AddReader(strings.NewReader("id,name\n1,Alice\n2,Bob\n"), "users", filesql.FileTypeCSV)
 
-	if err := validated.LoadInto(ctx, db); err != nil {
+	if err := builder.LoadInto(ctx, db); err != nil {
 		log.Fatal(err)
 	}
 
@@ -292,12 +267,8 @@ func ExampleDBBuilder_LoadIntoTx() {
 
 	ctx := context.Background()
 
-	validated, err := filesql.NewBuilder().
-		AddReader(strings.NewReader("id,name\n1,Alice\n2,Bob\n"), "users", filesql.FileTypeCSV).
-		Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
+	builder := filesql.NewBuilder().
+		AddReader(strings.NewReader("id,name\n1,Alice\n2,Bob\n"), "users", filesql.FileTypeCSV)
 
 	// The caller owns the transaction: the load lands only on Commit, and a
 	// Rollback discards it.
@@ -305,7 +276,7 @@ func ExampleDBBuilder_LoadIntoTx() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := validated.LoadIntoTx(ctx, tx); err != nil {
+	if err := builder.LoadIntoTx(ctx, tx); err != nil {
 		log.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -491,15 +462,11 @@ func ExampleDBBuilder_WithExcelSheetPolicy() {
 
 	path := exampleWorkbook(dir)
 
-	validated, err := filesql.NewBuilder().
+	builder := filesql.NewBuilder().
 		AddPath(path).
-		WithExcelSheetPolicy(filesql.ExcelSheetPolicyVisibleOnly).
-		Build(context.Background())
-	if err != nil {
-		log.Fatal(err)
-	}
+		WithExcelSheetPolicy(filesql.ExcelSheetPolicyVisibleOnly)
 
-	db, err := validated.Open(context.Background())
+	db, err := builder.Open(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -638,21 +605,17 @@ func ExampleExcelSheetTableNames() {
 func ExampleDBBuilder_SkippedRows() {
 	csvData := "id,name\n1,Alice\n2\n3,Cora,extra\n4,Dave\n"
 
-	validated, err := filesql.NewBuilder().
+	builder := filesql.NewBuilder().
 		AddReader(strings.NewReader(csvData), "users", filesql.FileTypeCSV).
-		WithMalformedRowPolicy(filesql.MalformedRowSkip).
-		Build(context.Background())
-	if err != nil {
-		log.Fatal(err)
-	}
+		WithMalformedRowPolicy(filesql.MalformedRowSkip)
 
-	db, err := validated.Open(context.Background())
+	db, err := builder.Open(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 
-	for _, skipped := range validated.SkippedRows() {
+	for _, skipped := range builder.SkippedRows() {
 		fmt.Printf("%s: %d of %d rows skipped\n", skipped.Table, skipped.Count, skipped.Total)
 	}
 	// Output:
@@ -783,13 +746,10 @@ func ExampleDumpACHWithTableSet() {
 	}
 
 	ctx := context.Background()
-	validated, err := filesql.NewBuilder().
-		AddReader(bytes.NewReader(body), "payment", filesql.FileTypeACH).
-		Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-	db, err := validated.Open(ctx)
+	builder := filesql.NewBuilder().
+		AddReader(bytes.NewReader(body), "payment", filesql.FileTypeACH)
+
+	db, err := builder.Open(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -841,13 +801,10 @@ func ExampleDumpFedWireWithTableSet() {
 	}
 
 	ctx := context.Background()
-	validated, err := filesql.NewBuilder().
-		AddReader(bytes.NewReader(body), "transfer", filesql.FileTypeFedWire).
-		Build(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-	db, err := validated.Open(ctx)
+	builder := filesql.NewBuilder().
+		AddReader(bytes.NewReader(body), "transfer", filesql.FileTypeFedWire)
+
+	db, err := builder.Open(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}

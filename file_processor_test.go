@@ -548,7 +548,7 @@ func TestLoadIntoTxKeepsInputOrder(t *testing.T) {
 			db := newMemoryDB(t)
 			ctx := context.Background()
 
-			builder, err := NewBuilder().AddPaths(tt.paths...).Build(ctx)
+			builder, err := buildForTest(ctx, NewBuilder().AddPaths(tt.paths...))
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}
@@ -707,10 +707,12 @@ func TestBuilderRefusesTwoReadersWhoseNamesDifferOnlyInCase(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	validated, err := NewBuilder().
-		AddReader(strings.NewReader("a,b\n1,2\n"), "Users", FileTypeCSV).
-		AddReader(strings.NewReader("c,d\n3,4\n"), "users", FileTypeCSV).
-		Build(ctx)
+	validated, err := buildForTest(
+
+		ctx, NewBuilder().
+			AddReader(strings.NewReader("a,b\n1,2\n"), "Users", FileTypeCSV).
+			AddReader(strings.NewReader("c,d\n3,4\n"), "users", FileTypeCSV))
+
 	if err != nil {
 		if !errors.Is(err, ErrDuplicateTable) {
 			t.Errorf("Build error = %v, want ErrDuplicateTable", err)

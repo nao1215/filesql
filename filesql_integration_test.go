@@ -1189,7 +1189,7 @@ func TestEveryRouteBuildsTheSameTable(t *testing.T) {
 			require.NoError(t, err)
 			// ":memory:" is private per connection, so the pool has to be one.
 			db.SetMaxOpenConns(1)
-			builder, err := NewBuilder().AddPath(src).Build(ctx)
+			builder, err := buildForTest(ctx, NewBuilder().AddPath(src))
 			require.NoError(t, err)
 			require.NoError(t, builder.LoadInto(ctx, db))
 			return db, func() { _ = db.Close() }
@@ -1202,7 +1202,7 @@ func TestEveryRouteBuildsTheSameTable(t *testing.T) {
 func openBuilt(ctx context.Context, t *testing.T, b *DBBuilder) *sql.DB {
 	t.Helper()
 
-	built, err := b.Build(ctx)
+	built, err := buildForTest(ctx, b)
 	require.NoError(t, err)
 	db, err := built.Open(ctx)
 	require.NoError(t, err)

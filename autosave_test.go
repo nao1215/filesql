@@ -310,7 +310,7 @@ func autoSaveSource(t *testing.T, body string) string {
 func openAutoSave(t *testing.T, path string, configure func(*DBBuilder) *DBBuilder) *sql.DB {
 	t.Helper()
 
-	validated, err := configure(NewBuilder().AddPath(path)).Build(t.Context())
+	validated, err := buildForTest(t.Context(), configure(NewBuilder().AddPath(path)))
 	require.NoError(t, err)
 	db, err := validated.Open(t.Context())
 	require.NoError(t, err)
@@ -655,7 +655,7 @@ func TestSaveLineEndingByDestination(t *testing.T) {
 
 		path := newSource(t)
 		ctx := t.Context()
-		validated, err := NewBuilder().AddPath(path).EnableAutoSave(filepath.Dir(path)).Build(ctx)
+		validated, err := buildForTest(ctx, NewBuilder().AddPath(path).EnableAutoSave(filepath.Dir(path)))
 		require.NoError(t, err)
 		db, err := validated.Open(ctx)
 		require.NoError(t, err)
@@ -690,10 +690,12 @@ func TestSaveLineEndingByDestination(t *testing.T) {
 
 		path := newSource(t)
 		ctx := t.Context()
-		validated, err := NewBuilder().
-			AddPath(path).
-			EnableAutoSave(filepath.Dir(path), NewDumpOptions().WithLineEnding(LineEndingCRLF)).
-			Build(ctx)
+		validated, err := buildForTest(
+
+			ctx, NewBuilder().
+				AddPath(path).
+				EnableAutoSave(filepath.Dir(path), NewDumpOptions().WithLineEnding(LineEndingCRLF)))
+
 		require.NoError(t, err)
 		db, err := validated.Open(ctx)
 		require.NoError(t, err)
@@ -767,7 +769,7 @@ func autoSaveOverwrite(t *testing.T, paths []string, stmts ...string) error {
 	for _, p := range paths {
 		builder = builder.AddPath(p)
 	}
-	validated, err := builder.EnableAutoSave("").Build(ctx)
+	validated, err := buildForTest(ctx, builder.EnableAutoSave(""))
 	require.NoError(t, err)
 
 	db, err := validated.Open(ctx)
@@ -946,7 +948,7 @@ func TestAutoSaveOverwriteRefusesFormatItCannotWrite(t *testing.T) {
 
 			// The extension is the whole of the answer, so Build is where the
 			// caller hears it: no database is opened and no file is touched.
-			_, err := NewBuilder().AddPath(src).EnableAutoSave("").Build(t.Context())
+			_, err := buildForTest(t.Context(), NewBuilder().AddPath(src).EnableAutoSave(""))
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrUnsupportedFormat)
 			assert.Contains(t, err.Error(), tt.file)
@@ -1158,7 +1160,7 @@ func TestAutoSaveOverwriteXLSX(t *testing.T) {
 		before, err := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
 		require.NoError(t, err)
 
-		validated, err := NewBuilder().AddPath(src).EnableAutoSave("").Build(ctx)
+		validated, err := buildForTest(ctx, NewBuilder().AddPath(src).EnableAutoSave(""))
 		require.NoError(t, err)
 		db, err := validated.Open(ctx)
 		require.NoError(t, err)
@@ -1289,7 +1291,7 @@ func TestAutoSaveOverwriteKeepsTheFileItWasGiven(t *testing.T) {
 			src := filepath.Join(dir, name)
 			require.NoError(t, os.WriteFile(src, []byte("id,v\n1,a\n"), 0o600))
 
-			validated, err := NewBuilder().AddPath(src).EnableAutoSave("").Build(ctx)
+			validated, err := buildForTest(ctx, NewBuilder().AddPath(src).EnableAutoSave(""))
 			require.NoError(t, err)
 			db, err := validated.Open(ctx)
 			require.NoError(t, err)
@@ -1326,7 +1328,7 @@ func TestAutoSaveOverwriteRefusesCodecItCannotWrite(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(src, fixture, 0o600)) //nolint:gosec // src is under t.TempDir()
 
-	_, err = NewBuilder().AddPath(src).EnableAutoSave("").Build(t.Context())
+	_, err = buildForTest(t.Context(), NewBuilder().AddPath(src).EnableAutoSave(""))
 	require.Error(t, err, "a codec this package cannot write must not report a successful save")
 	assert.Contains(t, err.Error(), "bzip2")
 	// The codec is read off the name, so the refusal comes from Build, before
@@ -1399,7 +1401,7 @@ func TestAutoSaveCloseWithAnOpenTransaction(t *testing.T) {
 		src := filepath.Join(dir, "users.csv")
 		require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
 
-		validated, err := enable(NewBuilder().AddPath(src)).Build(t.Context())
+		validated, err := buildForTest(t.Context(), enable(NewBuilder().AddPath(src)))
 		require.NoError(t, err)
 		db, err := validated.Open(t.Context())
 		require.NoError(t, err)
@@ -1562,7 +1564,7 @@ func TestAutoSaveOverwriteRefusesASourceItCannotWriteBeforeOpening(t *testing.T)
 	jsonPath := filepath.Join(dir, "zzz.json")
 	require.NoError(t, os.WriteFile(jsonPath, []byte(`[{"id":1}]`), 0o600))
 
-	_, err := NewBuilder().AddPath(csvPath).AddPath(jsonPath).EnableAutoSave("").Build(t.Context())
+	_, err := buildForTest(t.Context(), NewBuilder().AddPath(csvPath).AddPath(jsonPath).EnableAutoSave(""))
 	require.Error(t, err, "a set that cannot be saved must be refused before it is loaded")
 	assert.ErrorIs(t, err, ErrUnsupportedFormat)
 	assert.Contains(t, err.Error(), "zzz.json")
@@ -1578,7 +1580,7 @@ func TestAutoSaveOverwriteRefusesASourceItCannotWriteBeforeOpening(t *testing.T)
 		// so a source with no writer is read and written out as CSV and no
 		// source file is replaced. The refusal is about overwrite mode only.
 		out := filepath.Join(t.TempDir(), "out")
-		validated, buildErr := NewBuilder().AddPath(csvPath).AddPath(jsonPath).EnableAutoSave(out).Build(t.Context())
+		validated, buildErr := buildForTest(t.Context(), NewBuilder().AddPath(csvPath).AddPath(jsonPath).EnableAutoSave(out))
 		require.NoError(t, buildErr)
 		db, openErr := validated.Open(t.Context())
 		require.NoError(t, openErr)
