@@ -473,7 +473,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Build from readers, paths, or embedded FS | `ExampleNewBuilder`, `ExampleDBBuilder_AddReader`, `ExampleDBBuilder_AddPath`, `ExampleDBBuilder_AddFS` | [example_test.go](./example_test.go) |
 | Read a compressed reader | `ExampleDBBuilder_AddReader_compressed` | [example_test.go](./example_test.go) |
 | Tune chunked loading | `ExampleDBBuilder_SetDefaultChunkSize` | [example_api_test.go](./example_api_test.go) |
-| Handle malformed CSV/TSV rows | `ExampleDBBuilder_WithMalformedRowPolicy` | [example_api_test.go](./example_api_test.go) |
+| Handle malformed rows | `ExampleDBBuilder_WithMalformedRowPolicy` | [example_api_test.go](./example_api_test.go) |
 | Count the rows a skip policy discarded | `ExampleDBBuilder_SkippedRows` | [example_api_test.go](./example_api_test.go) |
 | Query with MySQL, PostgreSQL, or GoogleSQL syntax | `ExampleDBBuilder_WithDialect` | [example_api_test.go](./example_api_test.go) |
 | Load only the sheets a workbook shows | `ExampleDBBuilder_WithExcelSheetPolicy` | [example_api_test.go](./example_api_test.go) |

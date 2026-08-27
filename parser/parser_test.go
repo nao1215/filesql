@@ -1321,3 +1321,42 @@ func TestParserSurfaceEdges(t *testing.T) {
 		assert.Equal(t, ".lz4", extLZ4)
 	})
 }
+
+// TestParseLTSV_FieldThatNamesNoLabelIsRefused pins that this package refuses an
+// LTSV record carrying a field that is not a label and a value.
+//
+// Parse applies no malformed-row policy -- it has none to apply -- and is strict
+// about a delimited record of the wrong width for that reason. A field with no
+// label is the same event in the format that has no width: the record carries
+// something no column can hold, and keeping it would drop that field in silence.
+func TestParseLTSV_FieldThatNamesNoLabelIsRefused(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a line holding no pair at all", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := Parse(strings.NewReader("a:1\tb:2\nGARBAGE\na:3\tb:4\n"), LTSV)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "row 2")
+		assert.Contains(t, err.Error(), "GARBAGE")
+	})
+
+	t.Run("one unlabeled field among pairs", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := Parse(strings.NewReader("a:1\tJUNK\tb:2\n"), LTSV)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "JUNK")
+	})
+
+	t.Run("a record naming only some of the columns is kept", func(t *testing.T) {
+		t.Parallel()
+
+		result, err := Parse(strings.NewReader("a:1\tb:2\na:3\n"), LTSV)
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"1", "2"}, {"3", ""}}, result.Records)
+	})
+}

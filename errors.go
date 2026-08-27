@@ -50,7 +50,9 @@ var (
 	// ErrTableNotFound indicates the specified table does not exist.
 	ErrTableNotFound = errors.New("filesql: table not found")
 
-	// ErrColumnMismatch indicates record column count doesn't match header.
+	// ErrColumnMismatch indicates a record that does not fit the columns of its
+	// table: a delimited record whose field count differs from the header, or an
+	// LTSV record holding a field that names no label.
 	ErrColumnMismatch = errors.New("filesql: column count mismatch")
 
 	// ErrDatabaseOperation indicates a database operation failed.

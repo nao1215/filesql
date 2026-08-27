@@ -102,6 +102,18 @@ type Emit func(*Chunk) error
 // leaves a short one short and a long one long.
 type Reconcile func(record []string, want, rowNum int) (out []string, skip bool, err error)
 
+// Unlabeled decides what becomes of an LTSV record holding a field that is not
+// a label and a value: whether to drop the record, or the error that ends the
+// read. fields are the offending fields as the file wrote them, so the answer
+// can quote them.
+//
+// LTSV names its columns on every record, so a field with no label is not a
+// record of the wrong width, since there is no width to be wrong. It is the
+// same event: the record carries something the table has no column for. It gets
+// its own hook because the two are told apart by different questions, and
+// because one answer has to be able to quote a field rather than count them.
+type Unlabeled func(fields []string, rowNum int) (skip bool, err error)
+
 // Options are the settings a read honors. The zero value reads with the
 // default chunk size, keeps every record as it comes, and takes any sheet of a
 // workbook.
@@ -111,6 +123,11 @@ type Options struct {
 	ChunkSize int
 	// Reconcile handles a delimited record of the wrong width.
 	Reconcile Reconcile
+	// Unlabeled handles an LTSV record holding a field that names no label. A
+	// nil Unlabeled refuses such a record, since a read with no policy of its
+	// own has only the strict answer available: the field is data the table has
+	// no column for, and keeping the record would drop it without a word.
+	Unlabeled Unlabeled
 	// ExcelSheetPolicy decides which sheets of a workbook a read may take its
 	// table from.
 	ExcelSheetPolicy ExcelSheetPolicy

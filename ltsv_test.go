@@ -374,3 +374,174 @@ func TestLTSVLabelIsTrimmed(t *testing.T) {
 		})
 	}
 }
+
+// TestLTSVFieldThatNamesNoLabelFollowsTheMalformedRowPolicy pins that a field
+// with no label is handled by the policy the caller chose rather than dropped.
+//
+// It was dropped: a line holding no pair at all vanished from the table with no
+// error, no count and no way to tell the result apart from a file that really
+// held one row fewer, and the default policy is the one that exists to say a
+// file looks misaligned. A field with no label inside a line that has pairs went
+// the same silent way.
+func TestLTSVFieldThatNamesNoLabelFollowsTheMalformedRowPolicy(t *testing.T) {
+	t.Parallel()
+
+	const oneLineIsGarbage = "a:1\tb:2\nGARBAGE\na:3\tb:4\n"
+	const oneFieldIsGarbage = "a:1\tJUNK\tb:2\n"
+
+	tests := []struct {
+		name    string
+		content string
+		policy  MalformedRowPolicy
+		rows    int
+		skipped int
+		wantErr []string
+	}{
+		{
+			name:    "stop refuses a line that names no label",
+			content: oneLineIsGarbage,
+			policy:  MalformedRowStop,
+			wantErr: []string{"row 2", "GARBAGE"},
+		},
+		{
+			name:    "skip drops that line and counts it",
+			content: oneLineIsGarbage,
+			policy:  MalformedRowSkip,
+			rows:    2,
+			skipped: 1,
+		},
+		{
+			name:    "fill refuses it, because filling would discard the field",
+			content: oneLineIsGarbage,
+			policy:  MalformedRowFill,
+			wantErr: []string{"row 2", "GARBAGE"},
+		},
+		{
+			name:    "stop refuses one unlabeled field among pairs",
+			content: oneFieldIsGarbage,
+			policy:  MalformedRowStop,
+			wantErr: []string{"row 1", "JUNK"},
+		},
+		{
+			name:    "skip drops the record that field belonged to",
+			content: oneFieldIsGarbage,
+			policy:  MalformedRowSkip,
+			rows:    0,
+			skipped: 1,
+		},
+		{
+			name:    "the refusal quotes the first fields and counts the rest",
+			content: "a:1\tb:2\nw\tx\ty\tz\n",
+			policy:  MalformedRowStop,
+			wantErr: []string{"row 2", `"w", "x", "y" and 1 more`},
+		},
+		{
+			name:    "the refusal quotes a field that is only spaces",
+			content: "a:1\tb:2\n   \n",
+			policy:  MalformedRowStop,
+			wantErr: []string{"row 2", `"   "`},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rows, skipped, err := loadLTSVWithPolicy(t, tt.content, tt.policy)
+			if len(tt.wantErr) > 0 {
+				if err == nil {
+					t.Fatalf("the load accepted a field that names no label: rows=%d", rows)
+				}
+				if !errors.Is(err, ErrColumnMismatch) {
+					t.Errorf("error = %v, want it to match ErrColumnMismatch", err)
+				}
+				for _, want := range tt.wantErr {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("error = %v, want it to name %q", err, want)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("the load refused a record the policy keeps: %v", err)
+			}
+			if rows != tt.rows {
+				t.Errorf("rows = %d, want %d", rows, tt.rows)
+			}
+			if skipped != tt.skipped {
+				t.Errorf("skipped = %d, want %d", skipped, tt.skipped)
+			}
+		})
+	}
+}
+
+// TestLTSVRecordsEveryPolicyKeeps pins the lines the policy has nothing to say
+// about, which is what a refusal of an unlabeled field must not reach: a line
+// that names some of the columns is padded, and a line that is not a record at
+// all is skipped in silence.
+func TestLTSVRecordsEveryPolicyKeeps(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		rows    int
+	}{
+		{name: "a line naming only some labels is padded", content: "a:1\tb:2\na:3\n", rows: 2},
+		{name: "a blank line between records", content: "a:1\tb:2\n\na:3\tb:4\n", rows: 2},
+		{name: "a line of only tabs", content: "a:1\tb:2\n\t\t\na:3\tb:4\n", rows: 2},
+		{name: "a record ending in a tab", content: "a:1\tb:2\t\na:3\tb:4\n", rows: 2},
+		{name: "no terminator on the last record", content: "a:1\tb:2\na:3\tb:4", rows: 2},
+		{name: "a value holding a colon", content: "a:http://x\tb:2\n", rows: 1},
+		{name: "an empty value", content: "a:\tb:2\n", rows: 1},
+	}
+
+	for _, tt := range tests {
+		for _, policy := range []MalformedRowPolicy{MalformedRowStop, MalformedRowSkip, MalformedRowFill} {
+			t.Run(tt.name+" under "+policy.String(), func(t *testing.T) {
+				t.Parallel()
+
+				rows, skipped, err := loadLTSVWithPolicy(t, tt.content, policy)
+				if err != nil {
+					t.Fatalf("the load refused a record every policy keeps: %v", err)
+				}
+				if rows != tt.rows {
+					t.Errorf("rows = %d, want %d", rows, tt.rows)
+				}
+				if skipped != 0 {
+					t.Errorf("skipped = %d, want 0", skipped)
+				}
+			})
+		}
+	}
+}
+
+// loadLTSVWithPolicy loads content as an LTSV file under policy and reports how
+// many rows the table holds and how many records the load says it dropped.
+func loadLTSVWithPolicy(t *testing.T, content string, policy MalformedRowPolicy) (rows, skipped int, err error) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "policy.ltsv")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	builder, err := NewBuilder().AddPath(path).WithMalformedRowPolicy(policy).Build(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	db, err := builder.Open(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM policy").Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range builder.SkippedRows() {
+		skipped += s.Count
+	}
+	return rows, skipped, nil
+}

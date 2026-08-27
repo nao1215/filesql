@@ -103,6 +103,7 @@ func (p *streamingParser) readOptions() reader.Options {
 	return reader.Options{
 		ChunkSize:        p.chunkSize.Int(),
 		Reconcile:        p.reconcile(),
+		Unlabeled:        p.unlabeled(),
 		ExcelSheetPolicy: p.excelSheetPolicy,
 		// A load spells its values for the column they are stored in, so SQLite's
 		// affinity converts each one back to what the file holds.
@@ -116,6 +117,15 @@ func (p *streamingParser) reconcile() reader.Reconcile {
 	policy := p.malformedRowPolicy
 	return func(record []string, want, rowNum int) ([]string, bool, error) {
 		return reconcileFieldCount(record, want, rowNum, policy)
+	}
+}
+
+// unlabeled applies the malformed-row policy to an LTSV record holding a field
+// that names no label.
+func (p *streamingParser) unlabeled() reader.Unlabeled {
+	policy := p.malformedRowPolicy
+	return func(fields []string, rowNum int) (bool, error) {
+		return reconcileUnlabeledFields(fields, rowNum, policy)
 	}
 }
 
