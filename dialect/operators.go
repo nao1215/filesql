@@ -514,12 +514,21 @@ func fnMySQLUnhex(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
+	if len(s)%2 == 1 {
+		// MySQL reads an odd digit count as having a leading zero, so
+		// UNHEX('ABC') decodes '0ABC' and UNHEX('0') decodes '00'. Refusing it
+		// dropped every value whose digit count happened to be odd.
+		s = "0" + s
+	}
 	raw, decodeErr := hex.DecodeString(s)
 	if decodeErr != nil {
 		// MySQL answers NULL rather than raising for a non-hexadecimal argument.
 		return nil, nil //nolint:nilerr // NULL is MySQL's documented result here
 	}
-	return string(raw), nil
+	// The bytes are handed back as a blob rather than as text, which is what
+	// MySQL's UNHEX answers and what keeps a zero byte in them: a text value
+	// carrying one is cut there on its way into the next function's arguments.
+	return raw, nil
 }
 
 // binaryOperatorPass rewrites "a <op> b" into helper(a, b) for every operator

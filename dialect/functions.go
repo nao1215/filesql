@@ -170,6 +170,9 @@ func registerAll() error {
 		"dialect_round":      {2, fnDialectRound},
 		"dialect_round_even": {-1, fnDialectRoundEven},
 		"repeat":            {2, fnRepeat},
+		"googlesql_repeat":  {2, fnGoogleSQLRepeat},
+		"googlesql_lpad":    {-1, padFor(googlesqlPadRules, true)},
+		"googlesql_rpad":    {-1, padFor(googlesqlPadRules, false)},
 		"space":             {1, fnSpace},
 		"truncate":          {2, fnTruncate},
 		"reverse":           {1, fnReverse},
@@ -207,6 +210,9 @@ func registerAll() error {
 		"date_trunc_part":      {2, fnDateTruncPart},
 		"mysql_hex":            {1, fnMySQLHex},
 		"mysql_unhex":          {1, fnMySQLUnhex},
+		"dialect_soundex":      {1, fnDialectSoundex},
+		"dialect_replace":      {3, fnDialectReplace},
+		"mysql_char":           {-1, fnMySQLChar},
 		"mysql_quote":          {1, fnMySQLQuote},
 		"mysql_ascii":          {1, fnMySQLASCII},
 		"mysql_shift_left":     {2, mysqlShift(true)},
@@ -448,11 +454,22 @@ func toInt(v driver.Value) (int64, bool) {
 // where the argument counts things rather than being a numeric result: how many
 // times to repeat, how many spaces, which element of a list. MySQL rounds such a
 // value half away from zero, so REPEAT('ab', 2.7) repeats three times, where
-// truncating toward zero left it one short. A value that is already an integer,
-// or a string, goes through toInt unchanged.
+// truncating toward zero left it one short.
+//
+// A string takes the number its leading run spells and truncates it, which is
+// the other rule MySQL has here: REPEAT('ab', '2.5') repeats twice where
+// REPEAT('ab', 2.5) repeats three times, and a string spelling no number counts
+// zero. Requiring the whole string to parse as an integer made every count read
+// from a text column -- which is what a cell loaded from a CSV file is -- answer
+// NULL for the whole call.
 func toCount(v driver.Value) (int64, bool) {
-	if f, ok := v.(float64); ok {
-		return int64(math.Round(f)), true
+	switch x := v.(type) {
+	case float64:
+		return int64(math.Round(x)), true
+	case string:
+		return int64(leadingNumber(x)), true
+	case []byte:
+		return int64(leadingNumber(string(x))), true
 	}
 	return toInt(v)
 }
@@ -1315,7 +1332,8 @@ func fnRpad(args []driver.Value) (driver.Value, error) { return pad(args, false,
 // padRules holds the two boundary answers LPAD and RPAD differ on between the
 // dialects, checked against MySQL 8.4 and PostgreSQL 17.
 //
-//   - A negative length: MySQL answers NULL, PostgreSQL an empty string.
+//   - A negative length: MySQL answers NULL, PostgreSQL an empty string, and
+//     BigQuery refuses the call.
 //   - An empty pad with a length past the input: MySQL cannot reach the length
 //     with nothing to pad with and answers an empty string, PostgreSQL returns
 //     the input unpadded.
@@ -1324,12 +1342,14 @@ func fnRpad(args []driver.Value) (driver.Value, error) { return pad(args, false,
 // what the dialects without a verified rule keep.
 type padRules struct {
 	emptyOnNegativeLength bool
+	raiseOnNegativeLength bool
 	emptyOnEmptyPad       bool
 }
 
 var (
 	mysqlPadRules      = padRules{emptyOnEmptyPad: true}       //nolint:gochecknoglobals // constant-like
 	postgresqlPadRules = padRules{emptyOnNegativeLength: true} //nolint:gochecknoglobals // constant-like
+	googlesqlPadRules  = padRules{raiseOnNegativeLength: true} //nolint:gochecknoglobals // constant-like
 )
 
 func padFor(rules padRules, left bool) scalarFn {
@@ -1354,8 +1374,11 @@ func pad(args []driver.Value, left bool, rules padRules) (driver.Value, error) {
 		return nil, nil
 	}
 	if n < 0 {
-		if rules.emptyOnNegativeLength {
+		switch {
+		case rules.emptyOnNegativeLength:
 			return "", nil
+		case rules.raiseOnNegativeLength:
+			return nil, fmt.Errorf("dialect: LPAD/RPAD length must not be negative, got %d", n)
 		}
 		return nil, nil
 	}
@@ -1401,6 +1424,17 @@ func fnMySQLSubstr(args []driver.Value) (driver.Value, error) {
 	if !ok1 || !ok2 {
 		return nil, nil
 	}
+	// Every argument is read before the range is worked out, so a NULL length
+	// makes the call NULL even when the position already put the range outside
+	// the string. Answering the empty string there hid the NULL from a caller
+	// filtering on IS NULL.
+	var count int64
+	if len(args) == 3 {
+		var ok bool
+		if count, ok = toCount(args[2]); !ok {
+			return nil, nil
+		}
+	}
 	runes := []rune(s)
 	length := int64(len(runes))
 	var start int64
@@ -1420,10 +1454,6 @@ func fnMySQLSubstr(args []driver.Value) (driver.Value, error) {
 	}
 	end := length
 	if len(args) == 3 {
-		count, ok := toCount(args[2])
-		if !ok {
-			return nil, nil
-		}
 		if count <= 0 {
 			return "", nil
 		}
@@ -1449,16 +1479,21 @@ func fnPostgreSQLSubstr(args []driver.Value) (driver.Value, error) {
 	if !ok1 || !ok2 {
 		return nil, nil
 	}
+	// The length is read before the range is worked out, so a NULL there makes
+	// the call NULL rather than being reached only for a range that survives.
+	var count int64
+	if len(args) == 3 {
+		var ok bool
+		if count, ok = toCount(args[2]); !ok {
+			return nil, nil
+		}
+	}
 	runes := []rune(s)
 	length := int64(len(runes))
 	// Positions are 1-based and the end is exclusive, so the whole string is
 	// positions 1 through length+1.
 	end := length + 1
 	if len(args) == 3 {
-		count, ok := toCount(args[2])
-		if !ok {
-			return nil, nil
-		}
 		if count < 0 {
 			return nil, errors.New("dialect: SUBSTRING: negative substring length not allowed")
 		}
@@ -1502,6 +1537,19 @@ func fnGoogleSQLSubstr(args []driver.Value) (driver.Value, error) {
 	if !ok1 || !ok2 {
 		return nil, nil
 	}
+	// Every argument is read before the range is worked out, so a NULL length
+	// makes the call NULL even when the position already put the range outside
+	// the string.
+	var count int64
+	if len(args) == 3 {
+		var ok bool
+		if count, ok = toCount(args[2]); !ok {
+			return nil, nil
+		}
+		if count < 0 {
+			return nil, errors.New("dialect: SUBSTR: length must not be negative")
+		}
+	}
 	runes := []rune(s)
 	length := int64(len(runes))
 
@@ -1519,11 +1567,7 @@ func fnGoogleSQLSubstr(args []driver.Value) (driver.Value, error) {
 
 	end := length
 	if len(args) == 3 {
-		count, ok := toCount(args[2])
-		if !ok {
-			return nil, nil
-		}
-		if count <= 0 {
+		if count == 0 {
 			return "", nil
 		}
 		if count < length-start {
@@ -1728,17 +1772,157 @@ func fnSubstringIndex(args []driver.Value) (driver.Value, error) {
 	return strings.Join(parts[len(parts)-c:], delim), nil
 }
 
-// fnRepeat implements MySQL REPEAT(str, count).
-func fnRepeat(args []driver.Value) (driver.Value, error) {
+// fnRepeat implements MySQL REPEAT(str, count), which answers the empty string
+// for a count of zero or less. fnGoogleSQLRepeat is the same call under
+// BigQuery's rule, where a negative count is refused rather than answered.
+func fnRepeat(args []driver.Value) (driver.Value, error) { return repeatWith(args, false) }
+
+func fnGoogleSQLRepeat(args []driver.Value) (driver.Value, error) { return repeatWith(args, true) }
+
+func repeatWith(args []driver.Value, raiseOnNegative bool) (driver.Value, error) {
 	s, ok1 := toString(args[0])
 	count, ok2 := toCount(args[1])
 	if !ok1 || !ok2 {
 		return nil, nil
 	}
+	if count < 0 && raiseOnNegative {
+		return nil, fmt.Errorf("dialect: REPEAT count must not be negative, got %d", count)
+	}
 	if count <= 0 {
 		return "", nil
 	}
 	return strings.Repeat(s, int(count)), nil
+}
+
+// fnDialectSoundex implements MySQL's SOUNDEX, which SQLite's own soundex()
+// does not match in three ways: SQLite answers "?000" for a value holding no
+// letter at all and for NULL, and it cuts the code to four characters where
+// MySQL emits one digit per coded consonant however many there are.
+//
+// The coding rule was read off mysql:8.4 rather than from the textbook
+// algorithm, which differs: no letter resets the run, so SOUNDEX('Tymczak') is
+// T520 rather than the T522 a vowel reset would give, and the first letter's
+// own code counts as the previous one, so SOUNDEX('Pfister') is P236 rather
+// than P1236. The first letter is kept as it is written, which is how a
+// multi-byte letter survives: MySQL answers "é000" where SQLite answers "?000".
+func fnDialectSoundex(args []driver.Value) (driver.Value, error) {
+	s, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	runes := []rune(s)
+	first := -1
+	for i, r := range runes {
+		if unicode.IsLetter(r) {
+			first = i
+			break
+		}
+	}
+	if first < 0 {
+		// No letter to build a code from. MySQL answers the empty string, where
+		// SQLite answers its "?000" placeholder.
+		return "", nil
+	}
+	var b strings.Builder
+	// Only an ASCII letter is upper-cased. MySQL answers "é000" rather than
+	// "É000", so a letter it has no code for is written back as it arrived.
+	if lead := runes[first]; lead < utf8.RuneSelf {
+		b.WriteRune(unicode.ToUpper(lead))
+	} else {
+		b.WriteRune(lead)
+	}
+	previous := soundexCode(runes[first])
+	digits := 0
+	for _, r := range runes[first+1:] {
+		if !unicode.IsLetter(r) {
+			continue
+		}
+		code := soundexCode(r)
+		if code == 0 || code == previous {
+			// A letter with no code is passed over without resetting the run,
+			// which is what makes SOUNDEX('Honeyman') H500 rather than H555.
+			continue
+		}
+		b.WriteByte('0' + byte(code))
+		digits++
+		previous = code
+	}
+	for ; digits < 3; digits++ {
+		b.WriteByte('0')
+	}
+	return b.String(), nil
+}
+
+// soundexCode is the digit MySQL gives a letter, or zero for a letter it does
+// not code and for any letter outside ASCII.
+func soundexCode(r rune) int {
+	switch unicode.ToUpper(r) {
+	case 'B', 'F', 'P', 'V':
+		return 1
+	case 'C', 'G', 'J', 'K', 'Q', 'S', 'X', 'Z':
+		return 2
+	case 'D', 'T':
+		return 3
+	case 'L':
+		return 4
+	case 'M', 'N':
+		return 5
+	case 'R':
+		return 6
+	default:
+		return 0
+	}
+}
+
+// fnDialectReplace implements REPLACE(subject, search, replacement) with the
+// NULL rule every dialect here has and SQLite does not: SQLite short-circuits on
+// an empty search string and answers the subject without looking at the
+// replacement, so REPLACE('hello', '', NULL) answered 'hello' where MySQL and
+// PostgreSQL answer NULL. A NULL that should have travelled through the
+// expression disappeared and the row read as unchanged rather than as unknown.
+func fnDialectReplace(args []driver.Value) (driver.Value, error) {
+	subject, ok1 := toString(args[0])
+	search, ok2 := toString(args[1])
+	replacement, ok3 := toString(args[2])
+	if !ok1 || !ok2 || !ok3 {
+		return nil, nil
+	}
+	if search == "" {
+		return subject, nil
+	}
+	return strings.ReplaceAll(subject, search, replacement), nil
+}
+
+// fnMySQLChar implements MySQL CHAR(n, ...), which builds bytes where SQLite's
+// char() builds code points: MySQL answers the single zero byte for CHAR(0),
+// which SQLite drops entirely, and the two bytes 0x01 0x00 for CHAR(256), which
+// SQLite encodes as the UTF-8 of U+0100. A NULL argument is skipped rather than
+// making the call NULL, which is MySQL's rule for this one function.
+func fnMySQLChar(args []driver.Value) (driver.Value, error) {
+	out := make([]byte, 0, len(args)*4)
+	for _, arg := range args {
+		if arg == nil {
+			continue
+		}
+		n, ok := toCount(arg)
+		if !ok {
+			continue
+		}
+		// MySQL takes each argument modulo 2^32 and writes its bytes
+		// big-endian, dropping the leading zero bytes but keeping one byte for
+		// an argument of zero.
+		u := uint32(n) //nolint:gosec // reinterpreting the bits is MySQL's rule here
+		var word [4]byte
+		binary.BigEndian.PutUint32(word[:], u)
+		first := 0
+		for first < 3 && word[first] == 0 {
+			first++
+		}
+		out = append(out, word[first:]...)
+	}
+	// The result is a blob so a zero byte in it survives into whatever reads it
+	// next; a text value carrying one is cut there.
+	return out, nil
 }
 
 // fnSpace implements MySQL SPACE(n).
@@ -2258,7 +2442,7 @@ func googlesqlLeftRight(args []driver.Value, left bool) (driver.Value, error) {
 // leftRightArgs coerces the shared (string, count) arguments of LEFT and RIGHT.
 func leftRightArgs(args []driver.Value) (string, int64, bool) {
 	s, ok1 := toString(args[0])
-	n, ok2 := toInt(args[1])
+	n, ok2 := toCount(args[1])
 	return s, n, ok1 && ok2
 }
 
@@ -3201,12 +3385,8 @@ func postgresHexArgument(v driver.Value) (int64, bool, error) {
 // alias of printf, so an untranslated call answered the first argument expanded
 // as a format string instead.
 func fnMySQLFormat(args []driver.Value) (driver.Value, error) {
-	x, ok1 := toFloat(args[0])
 	d, ok2 := toInt(args[1])
-	if !ok1 || !ok2 {
-		return nil, nil
-	}
-	if math.IsNaN(x) || math.IsInf(x, 0) {
+	if !ok2 {
 		return nil, nil
 	}
 	// MySQL reads a negative number of decimal places as none, and caps the
@@ -3216,6 +3396,19 @@ func fnMySQLFormat(args []driver.Value) (driver.Value, error) {
 	}
 	if d > mysqlFormatMaxDecimals {
 		d = mysqlFormatMaxDecimals
+	}
+	// An integer is grouped from its own digits. Widening it to a float64 first
+	// lost the last digits of anything past 2^53, so FORMAT on a large id column
+	// printed a number one or two away from the one stored.
+	if n, isInt := args[0].(int64); isInt {
+		return formatGrouped(strconv.FormatInt(n, 10), int(d)), nil
+	}
+	x, ok1 := toFloat(args[0])
+	if !ok1 {
+		return nil, nil
+	}
+	if math.IsNaN(x) || math.IsInf(x, 0) {
+		return nil, nil
 	}
 	text := strconv.FormatFloat(roundHalfAwayFromZero(x, d), 'f', int(d), 64)
 	sign := ""
@@ -3228,6 +3421,21 @@ func fnMySQLFormat(args []driver.Value) (driver.Value, error) {
 		out += "." + fraction
 	}
 	return out, nil
+}
+
+// formatGrouped writes an integer already spelled in decimal the way MySQL's
+// FORMAT writes it: grouped in threes, with decimals decimal places of zeros
+// after it.
+func formatGrouped(digits string, decimals int) string {
+	sign := ""
+	if strings.HasPrefix(digits, "-") {
+		sign, digits = "-", digits[1:]
+	}
+	out := sign + groupThousands(digits)
+	if decimals > 0 {
+		out += "." + strings.Repeat("0", decimals)
+	}
+	return out
 }
 
 // mysqlFormatMaxDecimals is the number of decimal places MySQL FORMAT keeps at

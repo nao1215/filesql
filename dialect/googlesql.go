@@ -312,6 +312,22 @@ func googlesqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token,
 		return rewriteJSONQuery(tokens, open, closeIdx, googlesqlCallPass)
 	case fnNameSubstring, fnNameSubstr:
 		return rewriteSubstringCall(tokens, open, closeIdx, "googlesql_substr", googlesqlCallPass)
+	case "REPEAT":
+		// BigQuery refuses a negative repetition count where SQLite and the
+		// other two dialects answer the empty string.
+		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_repeat", googlesqlCallPass)
+	case "LPAD", "RPAD":
+		// BigQuery refuses a negative return_length, which is the same rule its
+		// SUBSTR, LEFT and RIGHT already follow here.
+		return rewriteRenameCall(tokens, open, closeIdx, "googlesql_"+strings.ToLower(tokens[nameIdx].text), googlesqlCallPass)
+	case "REPLACE":
+		// SQLite answers the subject for an empty search string without looking
+		// at the replacement, so a NULL replacement did not reach the result.
+		return rewriteRenameCall(tokens, open, closeIdx, "dialect_replace", googlesqlCallPass)
+	case "SOUNDEX":
+		// SQLite has a soundex() of its own that answers a placeholder for a
+		// value holding no letter and cuts the code to four characters.
+		return rewriteRenameCall(tokens, open, closeIdx, "dialect_soundex", googlesqlCallPass)
 	case fnNameRound:
 		return rewriteRoundCall(tokens, open, closeIdx, googlesqlCallPass)
 	case "BYTE_LENGTH":

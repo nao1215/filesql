@@ -354,6 +354,62 @@ func TestGoogleSQLScalarFunctions(t *testing.T) {
 
 // TestGoogleSQLFunctionsAnswerNullForNull covers the rule every SQL function
 // follows: a NULL argument makes the answer NULL.
+// TestGoogleSQLRefusesANegativeLength pins one rule across the five functions
+// that take a length. BigQuery refuses a negative one in every one of them, and
+// this package used to answer an error from two, the empty string from two and
+// NULL from one, so a computed length that came out negative meant something
+// different depending on which function read it.
+func TestGoogleSQLRefusesANegativeLength(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	refused := []string{
+		`SELECT LEFT('hello', -1)`,
+		`SELECT RIGHT('hello', -1)`,
+		`SELECT SUBSTR('hello', 2, -1)`,
+		`SELECT REPEAT('hello', -1)`,
+		`SELECT LPAD('hello', -1, 'xy')`,
+		`SELECT RPAD('hello', -1, 'xy')`,
+	}
+	for _, query := range refused {
+		if _, err := runDialect(t, db, GoogleSQL, query); err == nil {
+			t.Errorf("%s: want an error for the negative length, got none", query)
+		}
+	}
+
+	// A length of zero is not negative and keeps each function's own answer,
+	// and the same calls under MySQL keep MySQL's rules rather than BigQuery's.
+	kept := []struct {
+		dialect Dialect
+		query   string
+		want    string
+	}{
+		{GoogleSQL, `SELECT REPEAT('hello', 0)`, ""},
+		{GoogleSQL, `SELECT SUBSTR('hello', 2, 0)`, ""},
+		{GoogleSQL, `SELECT LPAD('hello', 8, 'xy')`, "xyxhello"},
+		{MySQL, `SELECT REPEAT('hello', -1)`, ""},
+	}
+	for _, tt := range kept {
+		got, err := runDialect(t, db, tt.dialect, tt.query)
+		if err != nil {
+			t.Errorf("%v: %s: %v", tt.dialect, tt.query, err)
+			continue
+		}
+		if !got.Valid || got.String != tt.want {
+			t.Errorf("%v: %s = %v, want %q", tt.dialect, tt.query, got, tt.want)
+		}
+	}
+
+	// MySQL answers NULL for a negative pad length, which is its own rule.
+	got, err := runDialect(t, db, MySQL, `SELECT LPAD('hello', -1, 'xy')`)
+	if err != nil {
+		t.Fatalf("mysql LPAD with a negative length: %v", err)
+	}
+	if got.Valid {
+		t.Errorf("mysql LPAD('hello', -1, 'xy') = %q, want NULL", got.String)
+	}
+}
+
 func TestGoogleSQLFunctionsAnswerNullForNull(t *testing.T) {
 	db := castDB(t)
 

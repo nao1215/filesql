@@ -201,6 +201,17 @@ func mysqlRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, boo
 		return rewritePosition(tokens, open, closeIdx, mysqlCallPass)
 	case fnNameSubstring, fnNameSubstr:
 		return rewriteSubstringCall(tokens, open, closeIdx, "mysql_substr", mysqlCallPass)
+	case "REPLACE":
+		// SQLite answers the subject for an empty search string without looking
+		// at the replacement, so a NULL replacement did not reach the result.
+		return rewriteRenameCall(tokens, open, closeIdx, "dialect_replace", mysqlCallPass)
+	case "CHAR":
+		// MySQL CHAR builds bytes where SQLite's char() builds code points.
+		return rewriteRenameCall(tokens, open, closeIdx, "mysql_char", mysqlCallPass)
+	case "SOUNDEX":
+		// SQLite has a soundex() of its own that answers a placeholder for a
+		// value holding no letter and cuts the code to four characters.
+		return rewriteRenameCall(tokens, open, closeIdx, "dialect_soundex", mysqlCallPass)
 	case fnNameRound:
 		return rewriteRoundEvenCall(tokens, open, closeIdx, mysqlCallPass)
 	case fnNameMod:

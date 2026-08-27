@@ -192,6 +192,10 @@ func pgRewriteCall(tokens []token, nameIdx, open, closeIdx int) ([]token, bool, 
 		return rewritePosition(tokens, open, closeIdx, pgCallPass)
 	case fnNameSubstring, fnNameSubstr:
 		return rewritePostgresSubstringCall(tokens, open, closeIdx, pgCallPass)
+	case "REPLACE":
+		// SQLite answers the subject for an empty search string without looking
+		// at the replacement, so a NULL replacement did not reach the result.
+		return rewriteRenameCall(tokens, open, closeIdx, "dialect_replace", pgCallPass)
 	case fnNameRound:
 		return rewriteRoundEvenCall(tokens, open, closeIdx, pgCallPass)
 	case fnNameTrim:
