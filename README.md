@@ -568,6 +568,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Validate JSON, time zone, version and digest columns | `ExampleProcessor_Process_encodedColumns` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Verify a check digit on an ISBN or a card number | `ExampleProcessor_Process_checksummedIdentifiers` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Validate country and currency code columns | `ExampleProcessor_Process_codeColumns` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Refuse a duplicate in a key column | `ExampleProcessor_Process_uniqueColumn` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Read preprocessing error details | `ExampleProcessResult_PrepErrors` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Check output and original formats | `ExampleStream_Format`, `ExampleStream_OriginalFormat` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Rewind and reread the processed stream | `Example_streamLen`, `Example_streamSeek` | [prep/example_api_test.go](./prep/example_api_test.go) |

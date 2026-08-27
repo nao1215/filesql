@@ -214,6 +214,19 @@
 // included, so XK, widely used for Kosovo and never assigned, is not a country
 // code here.
 //
+// unique means something different here than it does in the dialect, and
+// deliberately: there it describes one slice, array or map field, and a row
+// here is a flat struct, so it is read as uniqueness of a column across the
+// rows of one processing run. The first occurrence of a value is valid and
+// every later one is reported, naming the value and the row it first appeared
+// on. An empty cell never counts as a duplicate, since an empty cell is a
+// missing value and two of them are two absences rather than two equal values.
+// The comparison is exact string equality on the value preprocessing produced,
+// so prep:"trim,lowercase" beside it gives case-insensitive deduplication
+// without unique needing options of its own. The seen values are held for the
+// length of one Process call and no longer, so two calls never see each
+// other's rows; memory grows with the number of distinct values in the column.
+//
 // Importing prep embeds the IANA time zone database through time/tzdata, which
 // the timezone tag needs on a platform that ships none, and which costs a few
 // hundred KB of binary size. filesql itself does not import prep.
