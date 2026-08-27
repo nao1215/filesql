@@ -195,6 +195,18 @@ const (
 	uuid5TagValue = "uuid5"
 	// ulidTagValue is the tag value for ULID validation
 	ulidTagValue = "ulid"
+	// The _rfc4122 spellings the dialect defines beside the plain ones. They
+	// name the same checks and build the same validators.
+	// uuidRFC4122TagValue is the tag value for UUID validation
+	uuidRFC4122TagValue = "uuid_rfc4122"
+	// uuid3RFC4122TagValue is the tag value for UUID version 3 validation
+	uuid3RFC4122TagValue = "uuid3_rfc4122"
+	// uuid4RFC4122TagValue is the tag value for UUID version 4 validation
+	uuid4RFC4122TagValue = "uuid4_rfc4122"
+	// uuid5RFC4122TagValue is the tag value for UUID version 5 validation
+	uuid5RFC4122TagValue = "uuid5_rfc4122"
+	// dnsRFC1035LabelTagValue is the tag value for a single DNS label
+	dnsRFC1035LabelTagValue = "dns_rfc1035_label"
 
 	// Hexadecimal and color validators
 	// hexadecimalTagValue is the tag value for hexadecimal validation
@@ -209,6 +221,9 @@ const (
 	hslTagValue = "hsl"
 	// hslaTagValue is the tag value for HSLA color validation
 	hslaTagValue = "hsla"
+	// isColorTagValue is the tag value for a color in any of the five
+	// notations, which is how the go-playground dialect defines its alias.
+	isColorTagValue = "iscolor"
 
 	// Structured format validators
 	// jsonTagValue is the tag value for JSON document validation
@@ -260,6 +275,8 @@ const (
 	countryCodeTagValue = "country_code"
 	// iso4217TagValue is the tag value for ISO 4217 currency code validation
 	iso4217TagValue = "iso4217"
+	// iso4217NumericTagValue is the tag value for ISO 4217 numeric currency code validation
+	iso4217NumericTagValue = "iso4217_numeric"
 
 	// Message digest validators
 	// md5TagValue is the tag value for MD5 digest validation

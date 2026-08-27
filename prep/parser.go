@@ -569,7 +569,7 @@ var validatorRegistry = map[string]validatorBuilder{
 	macTagValue:     func(_ string, _ bool) (validator, error) { return newMACValidator(), nil },
 
 	// Identifier validators
-	uuidTagValue:            func(_ string, _ bool) (validator, error) { return newUUIDValidator(), nil },
+	uuidTagValue:            func(_ string, _ bool) (validator, error) { return newUUIDValidator(uuidTagValue), nil },
 	fqdnTagValue:            func(_ string, _ bool) (validator, error) { return newFQDNValidator(), nil },
 	hostnameTagValue:        func(_ string, _ bool) (validator, error) { return newHostnameValidator(), nil },
 	hostnameRFC1123TagValue: func(_ string, _ bool) (validator, error) { return newHostnameRFC1123Validator(), nil },
@@ -602,11 +602,16 @@ var validatorRegistry = map[string]validatorBuilder{
 	latitudeTagValue:  func(_ string, _ bool) (validator, error) { return newLatitudeValidator(), nil },
 	longitudeTagValue: func(_ string, _ bool) (validator, error) { return newLongitudeValidator(), nil },
 
-	// UUID variant validators
-	uuid3TagValue: func(_ string, _ bool) (validator, error) { return newUUID3Validator(), nil },
-	uuid4TagValue: func(_ string, _ bool) (validator, error) { return newUUID4Validator(), nil },
-	uuid5TagValue: func(_ string, _ bool) (validator, error) { return newUUID5Validator(), nil },
-	ulidTagValue:  func(_ string, _ bool) (validator, error) { return newULIDValidator(), nil },
+	// UUID variant validators. The _rfc4122 spellings the dialect defines name
+	// the same checks and build the same validators.
+	uuid3TagValue:        func(_ string, _ bool) (validator, error) { return newUUID3Validator(uuid3TagValue), nil },
+	uuid4TagValue:        func(_ string, _ bool) (validator, error) { return newUUID4Validator(uuid4TagValue), nil },
+	uuid5TagValue:        func(_ string, _ bool) (validator, error) { return newUUID5Validator(uuid5TagValue), nil },
+	uuidRFC4122TagValue:  func(_ string, _ bool) (validator, error) { return newUUIDValidator(uuidRFC4122TagValue), nil },
+	uuid3RFC4122TagValue: func(_ string, _ bool) (validator, error) { return newUUID3Validator(uuid3RFC4122TagValue), nil },
+	uuid4RFC4122TagValue: func(_ string, _ bool) (validator, error) { return newUUID4Validator(uuid4RFC4122TagValue), nil },
+	uuid5RFC4122TagValue: func(_ string, _ bool) (validator, error) { return newUUID5Validator(uuid5RFC4122TagValue), nil },
+	ulidTagValue:         func(_ string, _ bool) (validator, error) { return newULIDValidator(), nil },
 
 	// Hexadecimal and color validators
 	hexadecimalTagValue: func(_ string, _ bool) (validator, error) { return newHexadecimalValidator(), nil },
@@ -615,6 +620,10 @@ var validatorRegistry = map[string]validatorBuilder{
 	rgbaTagValue:        func(_ string, _ bool) (validator, error) { return newRGBAValidator(), nil },
 	hslTagValue:         func(_ string, _ bool) (validator, error) { return newHSLValidator(), nil },
 	hslaTagValue:        func(_ string, _ bool) (validator, error) { return newHSLAValidator(), nil },
+	isColorTagValue:     func(_ string, _ bool) (validator, error) { return newISColorValidator(), nil },
+
+	// Single DNS label
+	dnsRFC1035LabelTagValue: func(_ string, _ bool) (validator, error) { return newDNSRFC1035LabelValidator(), nil },
 
 	// Structured format validators
 	jsonTagValue:     func(_ string, _ bool) (validator, error) { return newJSONValidator(), nil },
@@ -659,6 +668,7 @@ var validatorRegistry = map[string]validatorBuilder{
 	iso3166NumericTagValue: func(_ string, _ bool) (validator, error) { return newISO3166NumericValidator(), nil },
 	countryCodeTagValue:    func(_ string, _ bool) (validator, error) { return newCountryCodeValidator(), nil },
 	iso4217TagValue:        func(_ string, _ bool) (validator, error) { return newISO4217Validator(), nil },
+	iso4217NumericTagValue: func(_ string, _ bool) (validator, error) { return newISO4217NumericValidator(), nil },
 
 	// Message digest validators, which differ in nothing but their width
 	md5TagValue:    hexDigest(md5TagValue, 32),
