@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -379,6 +380,56 @@ func TestLoadStaged_TypesTheTableOnce(t *testing.T) {
 			}
 			require.NoError(t, rows.Err())
 			assert.Equal(t, tt.wantRows, got)
+		})
+	}
+}
+
+// TestLoadStaged_NamesTheCallersTable holds that a failure on the staged path
+// says which table the caller asked for.
+//
+// The rows of an input that cannot be read twice wait in a table under this
+// package's reserved prefix, and a failure there was reported under that name:
+// a table the caller never wrote, hidden from every listing and dropped before
+// the transaction ends, so the message named nothing they could look for. The
+// same input from a path reported its own table, so what an operator read
+// depended on how the bytes arrived. What the database says underneath is still
+// the database's own: SQLite names the table the statement ran against, which on
+// this path is where the rows were staged.
+func TestLoadStaged_NamesTheCallersTable(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	// A header of more columns than SQLite holds fails the create, which is the
+	// first statement either path runs.
+	columns := make([]string, 2001)
+	values := make([]string, len(columns))
+	for i := range columns {
+		columns[i] = fmt.Sprintf("c%d", i)
+		values[i] = "1"
+	}
+	body := strings.Join(columns, ",") + "\n" + strings.Join(values, ",") + "\n"
+
+	read := func(emit chunkProcessor) (columnInfoList, error) {
+		return newStreamingParser(FileTypeCSV, CompressionNone, "orders", 1).
+			ProcessInChunks(strings.NewReader(body), emit)
+	}
+
+	tests := []struct {
+		name   string
+		source tableSource
+	}{
+		{name: "staged, for an input that cannot be read twice", source: tableSource{read: read}},
+		{name: "typed, for one that can", source: tableSource{read: read, reread: read}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := newStreamProcessor(1).loadTable(ctx, openTestTx(t), "orders", tt.source)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `failed to create table "orders"`,
+				"the wording this package adds names the table the caller asked for")
 		})
 	}
 }

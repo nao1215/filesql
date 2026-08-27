@@ -646,6 +646,13 @@ type tableWriter struct {
 	sp        *streamProcessor
 	tx        *sql.Tx
 	tableName string
+	// reportName is the table the caller asked for, which is tableName except
+	// on the staged path, where the rows wait in a table under this package's
+	// reserved prefix. A failure there used to be reported under that name --
+	// a table the caller never wrote, that is hidden from every listing and
+	// that is dropped before the transaction ends -- so the message named
+	// nothing the caller could look for. Empty means the two are the same.
+	reportName string
 	// types are the columns the table was created with, nil until it was.
 	types  columnInfoList
 	stmt   *sql.Stmt
@@ -653,15 +660,23 @@ type tableWriter struct {
 	rows   int
 }
 
+// reported is the table name a failure of this writer names.
+func (w *tableWriter) reported() string {
+	if w.reportName != "" {
+		return w.reportName
+	}
+	return w.tableName
+}
+
 // create makes the table with the given columns and prepares its insert.
 func (w *tableWriter) create(ctx context.Context, headers header, types columnInfoList) error {
 	w.sp.logger.Debug("creating table", logKeyTable, w.tableName, "columns", len(headers))
 	if err := createTable(ctx, w.tx, w.tableName, types); err != nil {
-		return fmt.Errorf("%w: failed to create table: %w", ErrDatabaseOperation, err)
+		return fmt.Errorf("%w: failed to create table %s: %w", ErrDatabaseOperation, quoteIdentifier(w.reported()), err)
 	}
 	stmt, err := w.tx.PrepareContext(ctx, insertQuery(w.tableName, len(headers))) //nolint:sqlclosecheck // Closed by close once the load has ended.
 	if err != nil {
-		return fmt.Errorf("%w: failed to prepare insert statement: %w", ErrDatabaseOperation, err)
+		return fmt.Errorf("%w: failed to prepare insert statement for table %s: %w", ErrDatabaseOperation, quoteIdentifier(w.reported()), err)
 	}
 	w.types = types
 	w.stmt = stmt
@@ -674,7 +689,7 @@ func (w *tableWriter) insert(ctx context.Context, chunk *tableChunk) error {
 	w.rows += len(chunk.getRecords())
 	w.sp.logger.Debug("inserting chunk", logKeyTable, w.tableName, "chunk", w.chunks, "rows", len(chunk.getRecords()))
 	if err := w.sp.insertChunkData(ctx, w.stmt, chunk, w.types); err != nil {
-		return fmt.Errorf("%w: failed to insert chunk data: %w", ErrDatabaseOperation, err)
+		return fmt.Errorf("%w: failed to insert chunk data into table %s: %w", ErrDatabaseOperation, quoteIdentifier(w.reported()), err)
 	}
 	return nil
 }
@@ -764,7 +779,7 @@ func (sp *streamProcessor) loadTyped(ctx context.Context, tx *sql.Tx, tableName 
 // the end, which an input that can be read again does not pay.
 func (sp *streamProcessor) loadStaged(ctx context.Context, tx *sql.Tx, tableName string, read func(emit chunkProcessor) (columnInfoList, error)) (err error) {
 	staging := stagingTableName(tableName)
-	w := &tableWriter{sp: sp, tx: tx, tableName: staging}
+	w := &tableWriter{sp: sp, tx: tx, tableName: staging, reportName: tableName}
 	defer func() { err = w.close(err) }()
 
 	columns, err := read(func(chunk *tableChunk) error {
@@ -802,7 +817,7 @@ func (sp *streamProcessor) declareTable(ctx context.Context, tx *sql.Tx, staging
 	}
 	if columns.allText() {
 		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s RENAME TO %s`, quoteIdentifier(staging), quoteIdentifier(tableName))); err != nil {
-			return fmt.Errorf("%w: failed to name table: %w", ErrDatabaseOperation, err)
+			return fmt.Errorf("%w: failed to name table %s: %w", ErrDatabaseOperation, quoteIdentifier(tableName), err)
 		}
 		return nil
 	}
@@ -815,7 +830,7 @@ func (sp *streamProcessor) declareTable(ctx context.Context, tx *sql.Tx, staging
 	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("%w: failed to type table: %w", ErrDatabaseOperation, err)
+			return fmt.Errorf("%w: failed to type table %s: %w", ErrDatabaseOperation, quoteIdentifier(tableName), err)
 		}
 	}
 	return nil
