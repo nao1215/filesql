@@ -171,11 +171,28 @@
 // validator, because this package answered only to that spelling before.
 //
 // Some validators are deliberately stricter or wider than the dialect. uri
-// requires a scheme, so a relative reference such as /a/b is not a URI. fqdn
-// refuses a label ending in a hyphen, which the dialect's fqdn pattern allows
-// though its hostname patterns do not. ulid requires a timestamp the format
+// requires a scheme and something after it, so neither a relative reference
+// such as /a/b nor a bare http:// is a URI. fqdn, hostname and
+// hostname_rfc1123 all refuse a label ending in a hyphen, which none of the
+// dialect's three patterns does, and all three cap a label at 63 characters and
+// a whole name at 253, as the RFCs do and as the dialect's patterns do not.
+// hostname reads RFC 952, so a one-character label such as a is a hostname,
+// which the dialect's pattern refuses, and every label must begin with a
+// letter, so 2.example is not one. ulid requires a timestamp the format
 // can hold. uuid3 requires the variant nibble that uuid4 and uuid5 require,
-// and all three accept upper case, as uuid does. hostname_port takes a
+// and all three accept upper case, as uuid does; the uuid_rfc4122,
+// uuid3_rfc4122, uuid4_rfc4122 and uuid5_rfc4122 spellings name the same four
+// checks, so uuid3_rfc4122 requires the variant nibble too, where the dialect
+// leaves it unconstrained. dns_rfc1035_label is the dialect's
+// reading of an RFC 1035 label -- a lowercase letter, then lowercase letters,
+// digits and hyphens, not ending in a hyphen -- capped at 63 characters, which
+// is the RFC's own limit on a label and which the dialect's pattern leaves out.
+// The RFC's grammar admits upper case and DNS compares labels without regard to
+// it; the lowercase reading is the dialect's and is also what Kubernetes
+// enforces on resource names, which is where such columns come from, so a
+// column holding mixed case wants prep:"lowercase" before this tag. iscolor
+// passes when hexcolor, rgb, rgba, hsl or hsla does, as the dialect's alias
+// defines it. hostname_port takes a
 // bracketed IPv6 address and refuses a bare port. ip, ipv4 and ipv6 are the
 // dialect's spellings of ip_addr, ip4_addr and ip6_addr and build the same
 // checks, so an IPv4-mapped address such as ::ffff:192.0.2.1 satisfies ipv4 and
@@ -183,13 +200,21 @@
 // ASCII digits alone naming a port from 1 to 65535, so 0080 is port 80 while
 // +80 and 0x50 are not ports.
 //
+// e164 takes the number with or without the leading plus, since the plus is a
+// notation prefix rather than part of the number and a spreadsheet export
+// strips it, where the dialect requires it; the first digit must be 1 through
+// 9, so +0123456789, which the dialect accepts, is not an E.164 number.
+//
 // json accepts any JSON value, so a bare number is one. timezone names an IANA
 // zone that time.LoadLocation loads, and Local is refused in every casing,
 // since it names the host's own zone rather than a fixed one. semver is
 // Semantic Versioning 2.0.0, so 1.2.3 is a version and v1.2.3 is not. base32,
 // base64, base64url and base64rawurl check the RFC 4648 alphabet before
 // decoding, because Go's decoders skip carriage returns and line feeds, which
-// would otherwise let a value carrying a newline through. oneofci is oneof
+// would otherwise let a value carrying a newline through. They then decode
+// strictly, so a value whose trailing pad bits are not zero is refused although
+// the dialect's patterns accept it: RFC 4648 lets a decoder reject one, and no
+// conformant encoder produces one. oneofci is oneof
 // compared without regard to case, and reads its candidates the same way,
 // single quotes included.
 //
@@ -207,10 +232,11 @@
 //
 // iso3166_1_alpha2, iso3166_1_alpha3 and iso3166_1_alpha_numeric look a cell
 // up in the officially assigned ISO 3166-1 codes, and country_code passes when
-// any of the three does. iso4217 looks it up in the active ISO 4217 currency
-// codes. Every lookup is exact, as it is in the dialect, so JP is a country
-// code and jp is not, and a numeric code keeps the leading zeros the standard
-// prints, so 032 is Argentina and 32 is nothing. The user-assigned range is not
+// any of the three does. iso4217 and iso4217_numeric look it up in the active
+// ISO 4217 currency codes, alphabetic and numeric. Every lookup is exact, as it
+// is in the dialect, so JP is a country code and jp is not, and a numeric code
+// keeps the leading zeros the standard prints, so 032 is Argentina, 008 is the
+// lek, and 32 and 8 are nothing. The user-assigned range is not
 // included, so XK, widely used for Kosovo and never assigned, is not a country
 // code here.
 //

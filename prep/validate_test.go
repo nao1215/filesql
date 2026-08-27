@@ -1,6 +1,8 @@
 package prep
 
 import (
+	"encoding/base32"
+	"encoding/base64"
 	"strings"
 	"testing"
 )
@@ -1400,7 +1402,7 @@ func TestUUIDValidator(t *testing.T) {
 		{"", true},
 	}
 
-	v := newUUIDValidator()
+	v := newUUIDValidator(uuidTagValue)
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -2032,7 +2034,7 @@ func TestValidatorNames(t *testing.T) {
 		{"cidrv6", func() validator { return newCIDRv6Validator() }, "cidrv6"},
 
 		// Identifier validators
-		{"uuid", func() validator { return newUUIDValidator() }, "uuid"},
+		{"uuid", func() validator { return newUUIDValidator(uuidTagValue) }, "uuid"},
 		{"fqdn", func() validator { return newFQDNValidator() }, "fqdn"},
 		{"hostname", func() validator { return newHostnameValidator() }, "hostname"},
 		{"hostname_rfc1123", func() validator { return newHostnameRFC1123Validator() }, "hostname_rfc1123"},
@@ -2238,7 +2240,7 @@ func TestUUID3Validator(t *testing.T) {
 		{"", true},
 	}
 
-	v := newUUID3Validator()
+	v := newUUID3Validator(uuid3TagValue)
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -2273,7 +2275,7 @@ func TestUUID4Validator(t *testing.T) {
 		{"", true},
 	}
 
-	v := newUUID4Validator()
+	v := newUUID4Validator(uuid4TagValue)
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -2305,7 +2307,7 @@ func TestUUID5Validator(t *testing.T) {
 		{"", true},
 	}
 
-	v := newUUID5Validator()
+	v := newUUID5Validator(uuid5TagValue)
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -3090,6 +3092,261 @@ func TestMessageDigestValidators(t *testing.T) {
 			}
 			if _, msg := vs.Validate(""); msg != "" {
 				t.Errorf("%s.Validate(\"\") = %q, want a pass", tt.tag, msg)
+			}
+		})
+	}
+}
+
+// iscolor is the dialect's alias over the five color spellings, so anything
+// one of them accepts is a color.
+func TestISColorValidator(t *testing.T) {
+	t.Parallel()
+
+	v := newISColorValidator()
+	if got := v.Name(); got != isColorTagValue {
+		t.Errorf("Name() = %q, want %q", got, isColorTagValue)
+	}
+
+	vs := validators{v}
+	for _, value := range []string{
+		"#ff0000", "#f00", "#ff0000ff",
+		"rgb(0,0,0)", "rgb(100%,0%,0%)",
+		"rgba(0,0,0,1)",
+		"hsl(0,0%,0%)",
+		"hsla(0,0%,0%,1)",
+	} {
+		if _, msg := vs.Validate(value); msg != "" {
+			t.Errorf("iscolor.Validate(%q) = %q, want a pass", value, msg)
+		}
+	}
+	// "#ff00" is deliberately absent from this list: it is the four-digit
+	// #RGBA form, which hexcolor accepts and which is a color.
+	for _, value := range []string{"red", "#ff000", "rgb(256,0,0)", "hsl(0,0,0)", "ff0000"} {
+		if _, msg := vs.Validate(value); msg == "" {
+			t.Errorf("iscolor.Validate(%q) passed, want a failure", value)
+		}
+	}
+	if _, msg := vs.Validate(""); msg != "" {
+		t.Errorf("iscolor.Validate(\"\") = %q, want a pass", msg)
+	}
+}
+
+// The _rfc4122 spellings name the checks the unsuffixed tags already perform,
+// so the two halves of each pair must answer alike on every value while each
+// reports under the spelling the caller wrote.
+func TestUUIDRFC4122SpellingsAnswerLikeTheirSiblings(t *testing.T) {
+	t.Parallel()
+
+	values := []string{
+		"6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+		"6BA7B810-9DAD-11D1-80B4-00C04FD430C8",
+		"a3bb189e-8bf9-3888-9912-ace4e6543002",
+		// Version 3 with a variant nibble of c. prep's uuid3 requires the
+		// variant nibble and doc.go says so, so both uuid3 spellings refuse it
+		// where the reference dialect would accept it.
+		"a3bb189e-8bf9-3888-c912-ace4e6543002",
+		"9c858901-8a57-4791-81fe-4c455b099bc9",
+		"987fbc97-4bed-5078-af07-9141ba07c9f3",
+		"not-a-uuid",
+		"6ba7b810-9dad-11d1-80b4-00c04fd430c",
+		"",
+	}
+
+	pairs := []struct {
+		plainTag  string
+		plain     validator
+		suffixTag string
+		suffix    validator
+	}{
+		{uuidTagValue, newUUIDValidator(uuidTagValue), uuidRFC4122TagValue, newUUIDValidator(uuidRFC4122TagValue)},
+		{uuid3TagValue, newUUID3Validator(uuid3TagValue), uuid3RFC4122TagValue, newUUID3Validator(uuid3RFC4122TagValue)},
+		{uuid4TagValue, newUUID4Validator(uuid4TagValue), uuid4RFC4122TagValue, newUUID4Validator(uuid4RFC4122TagValue)},
+		{uuid5TagValue, newUUID5Validator(uuid5TagValue), uuid5RFC4122TagValue, newUUID5Validator(uuid5RFC4122TagValue)},
+	}
+
+	for _, pair := range pairs {
+		t.Run(pair.suffixTag, func(t *testing.T) {
+			t.Parallel()
+			if got := pair.plain.Name(); got != pair.plainTag {
+				t.Errorf("Name() = %q, want %q", got, pair.plainTag)
+			}
+			if got := pair.suffix.Name(); got != pair.suffixTag {
+				t.Errorf("Name() = %q, want %q", got, pair.suffixTag)
+			}
+			for _, value := range values {
+				_, plainMsg := validators{pair.plain}.Validate(value)
+				_, suffixMsg := validators{pair.suffix}.Validate(value)
+				if (plainMsg == "") != (suffixMsg == "") {
+					t.Errorf("Validate(%q): %s = %q but %s = %q, want them to answer alike",
+						value, pair.plainTag, plainMsg, pair.suffixTag, suffixMsg)
+				}
+			}
+		})
+	}
+
+	// The two halves of the uuid3 pair agree on refusing the loose variant
+	// nibble, which is the divergence from the reference dialect worth pinning
+	// rather than inferring from the table above.
+	loose := "a3bb189e-8bf9-3888-c912-ace4e6543002"
+	for _, tag := range []string{uuid3TagValue, uuid3RFC4122TagValue} {
+		if msg := newUUID3Validator(tag).Validate(loose); msg == "" {
+			t.Errorf("%s.Validate(%q) passed, want the variant nibble to be required", tag, loose)
+		}
+	}
+}
+
+// dns_rfc1035_label is the label grammar RFC 1035 states, including the
+// 63-character cap the reference dialect's regex leaves out.
+func TestDNSRFC1035LabelValidator(t *testing.T) {
+	t.Parallel()
+
+	v := newDNSRFC1035LabelValidator()
+	if got := v.Name(); got != dnsRFC1035LabelTagValue {
+		t.Errorf("Name() = %q, want %q", got, dnsRFC1035LabelTagValue)
+	}
+
+	vs := validators{v}
+	for _, value := range []string{"a", "web-1", "web-server-1", "a1", strings.Repeat("a", 63)} {
+		if _, msg := vs.Validate(value); msg != "" {
+			t.Errorf("dns_rfc1035_label.Validate(%q) = %q, want a pass", value, msg)
+		}
+	}
+	for _, value := range []string{
+		// The dialect's tag is lowercase-only, as is the Kubernetes name rule
+		// it is used for, although RFC 1035's own grammar admits upper case.
+		// A column holding mixed case is one for prep:"lowercase".
+		"Web", "1web", "web-", "-web", "web_1", "web.1", "1",
+		// The cap is the RFC's own limit on a label, and the reference
+		// dialect's regex has none.
+		strings.Repeat("a", 64),
+	} {
+		if _, msg := vs.Validate(value); msg == "" {
+			t.Errorf("dns_rfc1035_label.Validate(%q) passed, want a failure", value)
+		}
+	}
+	if _, msg := vs.Validate(""); msg != "" {
+		t.Errorf("dns_rfc1035_label.Validate(\"\") = %q, want a pass", msg)
+	}
+}
+
+// The differential sweep against go-playground/validator turned up no defect
+// but several places where this package is deliberately stricter or wider than
+// that dialect. doc.go states each of them; this pins them, so a future change
+// that quietly adopts the dialect's answer fails here rather than in a caller's
+// data.
+func TestDocumentedDivergencesFromTheDialect(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		validator validator
+		pass      []string
+		fail      []string
+	}{
+		{
+			// The dialect's regexes stop at the alphabet, so they accept a
+			// value whose trailing pad bits are not zero. RFC 4648 lets a
+			// decoder reject one and no conformant encoder produces one.
+			name:      "base64 decodes strictly",
+			validator: newBase64Validator(),
+			pass:      []string{"Zm9v", "Zm9vYg=="},
+			fail:      []string{"MZXW61=="},
+		},
+		{
+			name:      "base64rawurl decodes strictly",
+			validator: newBase64RawURLValidator(),
+			pass:      []string{"Zm9v", "Zm9vYg"},
+			fail:      []string{"ab", "ABC"},
+		},
+		{
+			// The dialect requires the plus and does not require the first
+			// digit to be non-zero; both are the wrong way round for a cell.
+			name:      "e164 takes the number with or without its plus",
+			validator: newE164Validator(),
+			pass:      []string{"+819012345678", "819012345678"},
+			fail:      []string{"+0123456789", "0123456789"},
+		},
+		{
+			// RFC 952 allows a one-character label and requires a label to
+			// begin with a letter; the dialect's pattern does neither, and
+			// bounds no length.
+			name:      "hostname reads RFC 952",
+			validator: newHostnameValidator(),
+			pass:      []string{"a", "a.b", "example.com", strings.Repeat("a", 63)},
+			fail: []string{
+				"host-.com", "v1.2.3", "2.example",
+				strings.Repeat("a", 64),
+				strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." +
+					strings.Repeat("c", 63) + "." + strings.Repeat("d", 63),
+			},
+		},
+		{
+			// RFC 1123 relaxes the letter-first rule and nothing else; the
+			// dialect's pattern also lets a label end in a hyphen.
+			name:      "hostname_rfc1123 still refuses a trailing hyphen",
+			validator: newHostnameRFC1123Validator(),
+			pass:      []string{"2.example", "a1", "example.com"},
+			fail:      []string{"ab-", "web-", "host-.com", strings.Repeat("a", 64)},
+		},
+		{
+			// A scheme with nothing after it identifies nothing, so it is not
+			// a URI here although the dialect accepts it.
+			name:      "uri requires something after the scheme",
+			validator: newURIValidator(),
+			pass:      []string{"http://example.com", "mailto:a@example.com", "urn:isbn:0131103628"},
+			fail:      []string{"http://", "/a/b", "//example.com"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			vs := validators{tt.validator}
+			for _, value := range tt.pass {
+				if _, msg := vs.Validate(value); msg != "" {
+					t.Errorf("%s.Validate(%q) = %q, want a pass", tt.validator.Name(), value, msg)
+				}
+			}
+			for _, value := range tt.fail {
+				if _, msg := vs.Validate(value); msg == "" {
+					t.Errorf("%s.Validate(%q) passed, want a failure", tt.validator.Name(), value)
+				}
+			}
+		})
+	}
+}
+
+// The other half of the strictness question: whatever the encoding validators
+// refuse, they must never refuse a value one of Go's own encoders produced.
+func TestEncodingValidatorsAcceptEveryEncoderOutput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		validator validator
+		encode    func([]byte) string
+	}{
+		{newBase32Validator(), base32.StdEncoding.EncodeToString},
+		{newBase64Validator(), base64.StdEncoding.EncodeToString},
+		{newBase64URLValidator(), base64.URLEncoding.EncodeToString},
+		{newBase64RawURLValidator(), base64.RawURLEncoding.EncodeToString},
+	}
+
+	// A fixed sequence rather than a random one, so a failure names the same
+	// input on the next run.
+	payload := make([]byte, 96)
+	for i := range payload {
+		payload[i] = byte(i*7 + 3)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.validator.Name(), func(t *testing.T) {
+			t.Parallel()
+			for size := 1; size <= len(payload); size++ {
+				value := tt.encode(payload[:size])
+				if msg := tt.validator.Validate(value); msg != "" {
+					t.Errorf("Validate(%q) = %q, but its own encoder produced it from %d bytes",
+						value, msg, size)
+				}
 			}
 		})
 	}

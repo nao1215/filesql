@@ -547,6 +547,34 @@ func ExampleProcessor_Process_uniqueColumn() {
 	// row 3: email value "a@example.com" already appeared in row 1
 }
 
+func ExampleProcessor_Process_labelColorAndNumericCode() {
+	type service struct {
+		Name     string `validate:"dns_rfc1035_label"`
+		Badge    string `validate:"iscolor"`
+		Currency string `validate:"iso4217_numeric"`
+	}
+
+	var rows []service
+	_, result, err := prep.NewProcessor(prep.FileTypeCSV).Process(strings.NewReader(
+		"name,badge,currency\n"+
+			"web-1,#ff0000,392\n"+
+			`api,"hsl(120,50%,50%)",008`+"\n"+
+			"Web_1,red,32\n"), &rows)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(result.ValidRowCount)
+	for _, e := range result.ValidationErrors() {
+		fmt.Printf("row %d: %s %s\n", e.Row, e.Column, e.Message)
+	}
+	// Output:
+	// 2
+	// row 3: name value must be a valid RFC 1035 DNS label
+	// row 3: badge value must be a valid color
+	// row 3: currency value must be an active ISO 4217 numeric currency code
+}
+
 func ExampleProcessor_Process_crossField() {
 	type shipment struct {
 		ShippedOn string `validate:"ltfield=DueOn"`

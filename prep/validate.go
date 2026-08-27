@@ -36,8 +36,10 @@ const (
 	fileScheme          = "file"
 
 	// E.164 phone number pattern. The leading plus is a notation convention
-	// rather than part of the number, and a spreadsheet export strips it, so
-	// the dialect makes it optional and so does this.
+	// rather than part of the number, and a spreadsheet export strips it, so it
+	// is optional here; the dialect requires it. The first digit is 1 through 9
+	// because no country code begins with a zero, which the dialect's pattern
+	// does not enforce.
 	e164RegexPattern = `^\+?[1-9][0-9]{7,14}$`
 	// Latitude pattern: -90 to 90
 	latitudeRegexPattern = `^[-+]?([1-8]?\d(\.\d+)?|90(\.0+)?)$`
@@ -88,7 +90,19 @@ const (
 	// ISSN shape: two groups of four separated by a hyphen, the last of which
 	// may be X for ten.
 	issnRegexPattern = `^[0-9]{4}-[0-9]{3}[0-9X]$`
+	// The dialect's reading of an RFC 1035 label: a lowercase letter, then
+	// lowercase letters, digits and hyphens, not ending in a hyphen. The RFC's
+	// own grammar admits upper case, but the dialect's tag is lowercase-only
+	// and so is the Kubernetes name rule it is used for, so a column holding
+	// mixed case is one for prep:"lowercase". The RFC's 63-octet cap on a label
+	// is checked separately, since a repetition bound inside the pattern would
+	// have to be written twice for the one-character case.
+	dnsRFC1035LabelRegexPattern = `^[a-z]([a-z0-9-]*[a-z0-9])?$`
 )
+
+// dnsRFC1035LabelMaxLength is the longest label RFC 1035 allows. The dialect's
+// own pattern has no bound and accepts a label no DNS server does.
+const dnsRFC1035LabelMaxLength = 63
 
 // The dialect admits these Unicode ranges on both sides of the @, which is what
 // lets an internationalized address through. They stop at the BMP, so a
@@ -151,6 +165,8 @@ var (
 	isbn10Regex      = regexp.MustCompile(isbn10RegexPattern)
 	isbn13Regex      = regexp.MustCompile(isbn13RegexPattern)
 	issnRegex        = regexp.MustCompile(issnRegexPattern)
+
+	dnsRFC1035LabelRegex = regexp.MustCompile(dnsRFC1035LabelRegexPattern)
 )
 
 // validator defines the interface for validating values
@@ -1446,25 +1462,38 @@ func (v *cidrv6Validator) Name() string {
 // Identifier Validators
 // =============================================================================
 
-// uuidValidator validates that a value is a valid UUID
-type uuidValidator struct{}
-
-// newUUIDValidator creates a new UUID validator
-func newUUIDValidator() *uuidValidator {
-	return &uuidValidator{}
+// uuidValidator validates that a value is a UUID of one version, or of any
+// version when its pattern constrains none. It carries the tag because the
+// dialect spells each check two ways, plain and _rfc4122, and a reported error
+// should name the spelling the caller wrote.
+type uuidValidator struct {
+	tag    string
+	regex  *regexp.Regexp
+	errMsg string
 }
 
-// Validate checks if the value is a valid UUID
+// newUUIDVariantValidator creates a UUID validator under the given spelling
+func newUUIDVariantValidator(tag string, regex *regexp.Regexp, errMsg string) *uuidValidator {
+	return &uuidValidator{tag: tag, regex: regex, errMsg: errMsg}
+}
+
+// Validate checks if the value is a UUID of the version this validator wants
 func (v *uuidValidator) Validate(value string) string {
-	if !uuidRegex.MatchString(value) {
-		return "value must be a valid UUID"
+	if !v.regex.MatchString(value) {
+		return v.errMsg
 	}
 	return ""
 }
 
 // Name returns the validator name
 func (v *uuidValidator) Name() string {
-	return uuidTagValue
+	return v.tag
+}
+
+// newUUIDValidator creates a UUID validator of any version under the given
+// spelling
+func newUUIDValidator(tag string) *uuidValidator {
+	return newUUIDVariantValidator(tag, uuidRegex, "value must be a valid UUID")
 }
 
 // fqdnValidator validates that a value is a valid fully qualified domain name
@@ -2053,67 +2082,21 @@ func (v *longitudeValidator) Name() string {
 // UUID Variant Validators
 // =============================================================================
 
-// uuid3Validator validates that a value is a valid UUID version 3
-type uuid3Validator struct{}
-
-// newUUID3Validator creates a new UUID v3 validator
-func newUUID3Validator() *uuid3Validator {
-	return &uuid3Validator{}
+// newUUID3Validator creates a UUID version 3 validator under the given
+// spelling. Both spellings require the variant nibble, which is where this
+// package is stricter than the dialect; see the uuid3 note in doc.go.
+func newUUID3Validator(tag string) *uuidValidator {
+	return newUUIDVariantValidator(tag, uuid3Regex, "value must be a valid UUID version 3")
 }
 
-// Validate checks if the value is a valid UUID version 3
-func (v *uuid3Validator) Validate(value string) string {
-	if !uuid3Regex.MatchString(value) {
-		return "value must be a valid UUID version 3"
-	}
-	return ""
+// newUUID4Validator creates a UUID version 4 validator under the given spelling
+func newUUID4Validator(tag string) *uuidValidator {
+	return newUUIDVariantValidator(tag, uuid4Regex, "value must be a valid UUID version 4")
 }
 
-// Name returns the validator name
-func (v *uuid3Validator) Name() string {
-	return uuid3TagValue
-}
-
-// uuid4Validator validates that a value is a valid UUID version 4
-type uuid4Validator struct{}
-
-// newUUID4Validator creates a new UUID v4 validator
-func newUUID4Validator() *uuid4Validator {
-	return &uuid4Validator{}
-}
-
-// Validate checks if the value is a valid UUID version 4
-func (v *uuid4Validator) Validate(value string) string {
-	if !uuid4Regex.MatchString(value) {
-		return "value must be a valid UUID version 4"
-	}
-	return ""
-}
-
-// Name returns the validator name
-func (v *uuid4Validator) Name() string {
-	return uuid4TagValue
-}
-
-// uuid5Validator validates that a value is a valid UUID version 5
-type uuid5Validator struct{}
-
-// newUUID5Validator creates a new UUID v5 validator
-func newUUID5Validator() *uuid5Validator {
-	return &uuid5Validator{}
-}
-
-// Validate checks if the value is a valid UUID version 5
-func (v *uuid5Validator) Validate(value string) string {
-	if !uuid5Regex.MatchString(value) {
-		return "value must be a valid UUID version 5"
-	}
-	return ""
-}
-
-// Name returns the validator name
-func (v *uuid5Validator) Name() string {
-	return uuid5TagValue
+// newUUID5Validator creates a UUID version 5 validator under the given spelling
+func newUUID5Validator(tag string) *uuidValidator {
+	return newUUIDVariantValidator(tag, uuid5Regex, "value must be a valid UUID version 5")
 }
 
 // ulidValidator validates that a value is a valid ULID
@@ -2880,4 +2863,74 @@ func (v *countryCodeValidator) Validate(value string) string {
 // Name returns the validator name
 func (v *countryCodeValidator) Name() string {
 	return countryCodeTagValue
+}
+
+// isColorValidator validates that a value is a color in any of the five
+// notations, which is what the dialect's iscolor alias means: hexcolor, rgb,
+// rgba, hsl or hsla.
+type isColorValidator struct {
+	notations validators
+}
+
+// newISColorValidator creates a new color validator
+func newISColorValidator() *isColorValidator {
+	return &isColorValidator{
+		notations: validators{
+			newHexColorValidator(),
+			newRGBValidator(),
+			newRGBAValidator(),
+			newHSLValidator(),
+			newHSLAValidator(),
+		},
+	}
+}
+
+// Validate checks if the value is written in one of the five color notations.
+// The message names a color rather than the five spellings, since a cell that
+// is none of them is not close to any one in particular.
+func (v *isColorValidator) Validate(value string) string {
+	for _, notation := range v.notations {
+		if notation.Validate(value) == "" {
+			return ""
+		}
+	}
+	return "value must be a valid color"
+}
+
+// Name returns the validator name
+func (v *isColorValidator) Name() string {
+	return isColorTagValue
+}
+
+// dnsRFC1035LabelValidator validates that a value is one DNS label as RFC 1035
+// states it, which is also the grammar Kubernetes enforces on resource names.
+type dnsRFC1035LabelValidator struct{}
+
+// newDNSRFC1035LabelValidator creates a new DNS label validator
+func newDNSRFC1035LabelValidator() *dnsRFC1035LabelValidator {
+	return &dnsRFC1035LabelValidator{}
+}
+
+// Validate checks the label's grammar and its length. The length is the RFC's
+// own limit on a label and is where this package is stricter than the dialect,
+// whose pattern has no bound.
+func (v *dnsRFC1035LabelValidator) Validate(value string) string {
+	const errMsg = "value must be a valid RFC 1035 DNS label"
+	if len(value) > dnsRFC1035LabelMaxLength || !dnsRFC1035LabelRegex.MatchString(value) {
+		return errMsg
+	}
+	return ""
+}
+
+// Name returns the validator name
+func (v *dnsRFC1035LabelValidator) Name() string {
+	return dnsRFC1035LabelTagValue
+}
+
+// newISO4217NumericValidator creates a validator for ISO 4217 numeric currency
+// codes. The set holds them as the standard prints them, three digits with
+// their leading zeros, so "008" is the lek and "8" is not a code.
+func newISO4217NumericValidator() *codeSetValidator {
+	return newCodeSetValidator(iso4217NumericTagValue, iso4217NumericSet,
+		"value must be an active ISO 4217 numeric currency code")
 }

@@ -147,6 +147,11 @@ func TestParseValidateTag_AllValidatorTypes(t *testing.T) {
 		{"uuid3", "uuid3", 1, 0, false},
 		{"uuid4", "uuid4", 1, 0, false},
 		{"uuid5", "uuid5", 1, 0, false},
+		{"uuid_rfc4122", "uuid_rfc4122", 1, 0, false},
+		{"uuid3_rfc4122", "uuid3_rfc4122", 1, 0, false},
+		{"uuid4_rfc4122", "uuid4_rfc4122", 1, 0, false},
+		{"uuid5_rfc4122", "uuid5_rfc4122", 1, 0, false},
+		{"dns_rfc1035_label", "dns_rfc1035_label", 1, 0, false},
 		{"ulid", "ulid", 1, 0, false},
 		{"fqdn", "fqdn", 1, 0, false},
 		{"hostname", "hostname", 1, 0, false},
@@ -203,6 +208,7 @@ func TestParseValidateTag_AllValidatorTypes(t *testing.T) {
 		{"iso3166_1_alpha_numeric", "iso3166_1_alpha_numeric", 1, 0, false},
 		{"country_code", "country_code", 1, 0, false},
 		{"iso4217", "iso4217", 1, 0, false},
+		{"iso4217_numeric", "iso4217_numeric", 1, 0, false},
 
 		// unique builds a sentinel here that parseStructType records on the
 		// field and drops; see TestUniqueMarksTheField.
@@ -218,6 +224,7 @@ func TestParseValidateTag_AllValidatorTypes(t *testing.T) {
 		// Hexadecimal and color validators
 		{"hexadecimal", "hexadecimal", 1, 0, false},
 		{"hexcolor", "hexcolor", 1, 0, false},
+		{"iscolor", "iscolor", 1, 0, false},
 		{"rgb", "rgb", 1, 0, false},
 		{"rgba", "rgba", 1, 0, false},
 		{"hsl", "hsl", 1, 0, false},
@@ -1136,7 +1143,17 @@ func TestCodeTagsParseAloneAndWithRequired(t *testing.T) {
 
 	tagsParseAloneAndWithRequired(t,
 		iso3166Alpha2TagValue, iso3166Alpha3TagValue, iso3166NumericTagValue,
-		countryCodeTagValue, iso4217TagValue,
+		countryCodeTagValue, iso4217TagValue, iso4217NumericTagValue,
+	)
+}
+
+// The last dialect spellings parse the same way.
+func TestAliasAndLabelTagsParseAloneAndWithRequired(t *testing.T) {
+	t.Parallel()
+
+	tagsParseAloneAndWithRequired(t,
+		isColorTagValue, dnsRFC1035LabelTagValue,
+		uuidRFC4122TagValue, uuid3RFC4122TagValue, uuid4RFC4122TagValue, uuid5RFC4122TagValue,
 	)
 }
 

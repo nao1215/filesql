@@ -278,10 +278,18 @@ var iso3166Countries = [...]iso3166Country{
 	{"ZW", "ZWE", "716"},
 }
 
-// iso4217Currencies is every active ISO 4217 alphabetic currency code, which
-// includes the codes for the precious metals, the fund and testing codes, and
-// XXX for a transaction in no currency, all of which the standard assigns.
-// Codes the standard has withdrawn are absent.
+// iso4217Currency is one active ISO 4217 assignment in the two forms the
+// standard publishes: the three-letter alphabetic code and the three-digit
+// numeric code, which carries the leading zeros the standard itself prints.
+type iso4217Currency struct {
+	alpha   string
+	numeric string
+}
+
+// iso4217Currencies is every active ISO 4217 currency, 178 of them, which
+// includes the precious metals, the fund and testing codes, and XXX for a
+// transaction in no currency, all of which the standard assigns. Codes the
+// standard has withdrawn are absent.
 //
 // Source: the ISO 4217 currency code list published by SIX Financial
 // Information as list-one.xml, read on 2026-08-27 from the machine-readable
@@ -289,21 +297,37 @@ var iso3166Countries = [...]iso3166Country{
 // withdrawal date.
 //
 //nolint:gochecknoglobals // a published code table, read-only
-var iso4217Currencies = [...]string{
-	"AED", "AFN", "ALL", "AMD", "AOA", "ARS", "AUD", "AWG", "AZN", "BAM", "BBD", "BDT", "BHD",
-	"BIF", "BMD", "BND", "BOB", "BOV", "BRL", "BSD", "BTN", "BWP", "BYN", "BZD", "CAD", "CDF",
-	"CHE", "CHF", "CHW", "CLF", "CLP", "CNY", "COP", "COU", "CRC", "CUP", "CVE", "CZK", "DJF",
-	"DKK", "DOP", "DZD", "EGP", "ERN", "ETB", "EUR", "FJD", "FKP", "GBP", "GEL", "GHS", "GIP",
-	"GMD", "GNF", "GTQ", "GYD", "HKD", "HNL", "HTG", "HUF", "IDR", "ILS", "INR", "IQD", "IRR",
-	"ISK", "JMD", "JOD", "JPY", "KES", "KGS", "KHR", "KMF", "KPW", "KRW", "KWD", "KYD", "KZT",
-	"LAK", "LBP", "LKR", "LRD", "LSL", "LYD", "MAD", "MDL", "MGA", "MKD", "MMK", "MNT", "MOP",
-	"MRU", "MUR", "MVR", "MWK", "MXN", "MXV", "MYR", "MZN", "NAD", "NGN", "NIO", "NOK", "NPR",
-	"NZD", "OMR", "PAB", "PEN", "PGK", "PHP", "PKR", "PLN", "PYG", "QAR", "RON", "RSD", "RUB",
-	"RWF", "SAR", "SBD", "SCR", "SDG", "SEK", "SGD", "SHP", "SLE", "SOS", "SRD", "SSP", "STN",
-	"SVC", "SYP", "SZL", "THB", "TJS", "TMT", "TND", "TOP", "TRY", "TTD", "TWD", "TZS", "UAH",
-	"UGX", "USD", "USN", "UYI", "UYU", "UYW", "UZS", "VED", "VES", "VND", "VUV", "WST", "XAD",
-	"XAF", "XAG", "XAU", "XBA", "XBB", "XBC", "XBD", "XCD", "XCG", "XDR", "XOF", "XPD", "XPF",
-	"XPT", "XSU", "XTS", "XUA", "XXX", "YER", "ZAR", "ZMW", "ZWG",
+var iso4217Currencies = [...]iso4217Currency{
+	{"AED", "784"}, {"AFN", "971"}, {"ALL", "008"}, {"AMD", "051"}, {"AOA", "973"}, {"ARS", "032"},
+	{"AUD", "036"}, {"AWG", "533"}, {"AZN", "944"}, {"BAM", "977"}, {"BBD", "052"}, {"BDT", "050"},
+	{"BHD", "048"}, {"BIF", "108"}, {"BMD", "060"}, {"BND", "096"}, {"BOB", "068"}, {"BOV", "984"},
+	{"BRL", "986"}, {"BSD", "044"}, {"BTN", "064"}, {"BWP", "072"}, {"BYN", "933"}, {"BZD", "084"},
+	{"CAD", "124"}, {"CDF", "976"}, {"CHE", "947"}, {"CHF", "756"}, {"CHW", "948"}, {"CLF", "990"},
+	{"CLP", "152"}, {"CNY", "156"}, {"COP", "170"}, {"COU", "970"}, {"CRC", "188"}, {"CUP", "192"},
+	{"CVE", "132"}, {"CZK", "203"}, {"DJF", "262"}, {"DKK", "208"}, {"DOP", "214"}, {"DZD", "012"},
+	{"EGP", "818"}, {"ERN", "232"}, {"ETB", "230"}, {"EUR", "978"}, {"FJD", "242"}, {"FKP", "238"},
+	{"GBP", "826"}, {"GEL", "981"}, {"GHS", "936"}, {"GIP", "292"}, {"GMD", "270"}, {"GNF", "324"},
+	{"GTQ", "320"}, {"GYD", "328"}, {"HKD", "344"}, {"HNL", "340"}, {"HTG", "332"}, {"HUF", "348"},
+	{"IDR", "360"}, {"ILS", "376"}, {"INR", "356"}, {"IQD", "368"}, {"IRR", "364"}, {"ISK", "352"},
+	{"JMD", "388"}, {"JOD", "400"}, {"JPY", "392"}, {"KES", "404"}, {"KGS", "417"}, {"KHR", "116"},
+	{"KMF", "174"}, {"KPW", "408"}, {"KRW", "410"}, {"KWD", "414"}, {"KYD", "136"}, {"KZT", "398"},
+	{"LAK", "418"}, {"LBP", "422"}, {"LKR", "144"}, {"LRD", "430"}, {"LSL", "426"}, {"LYD", "434"},
+	{"MAD", "504"}, {"MDL", "498"}, {"MGA", "969"}, {"MKD", "807"}, {"MMK", "104"}, {"MNT", "496"},
+	{"MOP", "446"}, {"MRU", "929"}, {"MUR", "480"}, {"MVR", "462"}, {"MWK", "454"}, {"MXN", "484"},
+	{"MXV", "979"}, {"MYR", "458"}, {"MZN", "943"}, {"NAD", "516"}, {"NGN", "566"}, {"NIO", "558"},
+	{"NOK", "578"}, {"NPR", "524"}, {"NZD", "554"}, {"OMR", "512"}, {"PAB", "590"}, {"PEN", "604"},
+	{"PGK", "598"}, {"PHP", "608"}, {"PKR", "586"}, {"PLN", "985"}, {"PYG", "600"}, {"QAR", "634"},
+	{"RON", "946"}, {"RSD", "941"}, {"RUB", "643"}, {"RWF", "646"}, {"SAR", "682"}, {"SBD", "090"},
+	{"SCR", "690"}, {"SDG", "938"}, {"SEK", "752"}, {"SGD", "702"}, {"SHP", "654"}, {"SLE", "925"},
+	{"SOS", "706"}, {"SRD", "968"}, {"SSP", "728"}, {"STN", "930"}, {"SVC", "222"}, {"SYP", "760"},
+	{"SZL", "748"}, {"THB", "764"}, {"TJS", "972"}, {"TMT", "934"}, {"TND", "788"}, {"TOP", "776"},
+	{"TRY", "949"}, {"TTD", "780"}, {"TWD", "901"}, {"TZS", "834"}, {"UAH", "980"}, {"UGX", "800"},
+	{"USD", "840"}, {"USN", "997"}, {"UYI", "940"}, {"UYU", "858"}, {"UYW", "927"}, {"UZS", "860"},
+	{"VED", "926"}, {"VES", "928"}, {"VND", "704"}, {"VUV", "548"}, {"WST", "882"}, {"XAD", "396"},
+	{"XAF", "950"}, {"XAG", "961"}, {"XAU", "959"}, {"XBA", "955"}, {"XBB", "956"}, {"XBC", "957"},
+	{"XBD", "958"}, {"XCD", "951"}, {"XCG", "532"}, {"XDR", "960"}, {"XOF", "952"}, {"XPD", "964"},
+	{"XPF", "953"}, {"XPT", "962"}, {"XSU", "994"}, {"XTS", "963"}, {"XUA", "965"}, {"XXX", "999"},
+	{"YER", "886"}, {"ZAR", "710"}, {"ZMW", "967"}, {"ZWG", "924"},
 }
 
 // The three ISO 3166-1 lookups and the ISO 4217 one, built once from the
@@ -314,7 +338,8 @@ var (
 	iso3166Alpha2Set  = newCodeSet(func(c iso3166Country) string { return c.alpha2 })
 	iso3166Alpha3Set  = newCodeSet(func(c iso3166Country) string { return c.alpha3 })
 	iso3166NumericSet = newCodeSet(func(c iso3166Country) string { return c.numeric })
-	iso4217Set        = newISO4217Set()
+	iso4217Set        = newCurrencySet(func(c iso4217Currency) string { return c.alpha })
+	iso4217NumericSet = newCurrencySet(func(c iso4217Currency) string { return c.numeric })
 )
 
 // newCodeSet collects one of the three forms of every ISO 3166-1 assignment.
@@ -326,11 +351,12 @@ func newCodeSet(form func(iso3166Country) string) map[string]struct{} {
 	return set
 }
 
-// newISO4217Set collects the active currency codes.
-func newISO4217Set() map[string]struct{} {
+// newCurrencySet collects one of the two forms of every active ISO 4217
+// assignment.
+func newCurrencySet(form func(iso4217Currency) string) map[string]struct{} {
 	set := make(map[string]struct{}, len(iso4217Currencies))
-	for _, code := range iso4217Currencies {
-		set[code] = struct{}{}
+	for _, currency := range iso4217Currencies {
+		set[form(currency)] = struct{}{}
 	}
 	return set
 }
