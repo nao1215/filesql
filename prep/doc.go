@@ -199,7 +199,9 @@
 // credit_card groups its digits with single spaces, as the dialect does, so a
 // number written with hyphens is a column for prep:"keep_digits" first;
 // luhn_checksum takes the digits alone; isbn10 and isbn13 remove hyphens and
-// spaces themselves; and issn requires the hyphen the standard prints. md5,
+// spaces themselves, at most as many as the width is printed with, so a value
+// carrying more of them is not an ISBN however its digits read; and issn
+// requires the hyphen the standard prints. md5,
 // sha256, sha384 and sha512 are lowercase hexadecimal of exactly 32, 64, 96 and
 // 128 characters, so an uppercase spelling is refused.
 //

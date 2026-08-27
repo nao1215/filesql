@@ -2586,19 +2586,26 @@ func (v *creditCardValidator) Name() string {
 	return creditCardTagValue
 }
 
-// stripISBNSeparators removes the hyphens and spaces an ISBN is grouped with.
-// A well-formed ISBN carries at most three of them, so removing every one
-// leaves any correct spelling unchanged and lets a malformed one fail on the
-// shape check that follows.
-func stripISBNSeparators(value string) string {
-	return strings.NewReplacer("-", "", " ", "").Replace(value)
+// The number of separators each ISBN width is printed with: an ISBN-10 is
+// four groups and an ISBN-13 is five, so one carries three and the other four.
+const (
+	isbn10Separators = 3
+	isbn13Separators = 4
+)
+
+// stripISBNSeparators removes the hyphens and spaces an ISBN is grouped with,
+// at most limit of each. The bound is what refuses a spelling that is not
+// grouped at all: removing every separator would read 0--13-110362-8 as an
+// ISBN-10, since what is left of it has the right shape and check digit.
+func stripISBNSeparators(value string, limit int) string {
+	return strings.Replace(strings.Replace(value, "-", "", limit), " ", "", limit)
 }
 
 // isbn10Valid reports whether the value is an ISBN-10: ten characters whose
 // last may be X, weighted by their positions one through ten, summing to a
 // multiple of eleven.
 func isbn10Valid(value string) bool {
-	digits := stripISBNSeparators(value)
+	digits := stripISBNSeparators(value, isbn10Separators)
 	if !isbn10Regex.MatchString(digits) {
 		return false
 	}
@@ -2617,7 +2624,7 @@ func isbn10Valid(value string) bool {
 // thirteen digits whose last is the alternating 1,3-weighted check digit of the
 // first twelve.
 func isbn13Valid(value string) bool {
-	digits := stripISBNSeparators(value)
+	digits := stripISBNSeparators(value, isbn13Separators)
 	if !isbn13Regex.MatchString(digits) {
 		return false
 	}

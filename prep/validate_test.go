@@ -2995,13 +2995,15 @@ func TestChecksummedIdentifierValidators(t *testing.T) {
 			tag:       isbn10TagValue,
 			validator: newISBN10Validator(),
 			pass:      []string{"0-13-110362-8", "0131103628", "0 13 110362 8", "080442957X"},
-			fail:      []string{"0-13-110362-9", "013110362", "0131103628X", "X131103628"},
+			// Only the separators an ISBN-10 is grouped with are removed, so a
+			// value carrying more of them is not one however its digits read.
+			fail: []string{"0-13-110362-9", "013110362", "0131103628X", "X131103628", "0--13-110362-8", "0-13-110362-8-"},
 		},
 		{
 			tag:       isbn13TagValue,
 			validator: newISBN13Validator(),
 			pass:      []string{"978-0-13-110362-7", "9780131103627", "979-0-13-110362-6"},
-			fail:      []string{"9780131103628", "9770131103627", "978013110362"},
+			fail:      []string{"9780131103628", "9770131103627", "978013110362", "978--0-13-110362-7", "978-0-13-110362-7-"},
 		},
 		{
 			tag:       isbnTagValue,
