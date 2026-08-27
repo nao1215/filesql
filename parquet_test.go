@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nao1215/filesql/internal/reader"
+	"github.com/nao1215/filesql/parser"
 	"github.com/parquet-go/parquet-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1092,4 +1093,59 @@ func TestParquetRoundTripPreservesNullInLaterColumn(t *testing.T) {
 	if b.Valid {
 		t.Errorf("b = %q, want SQL NULL", b.String)
 	}
+}
+
+// TestParquetNullsAgreeBetweenTheParserAndTheLoader holds the two readings of
+// one file against each other. The parser reports which cells hold nothing and
+// the loader stores those cells as SQL NULL, so they have to be the same cells:
+// the mask is what the loader binds as nil, and a caller comparing a parsed
+// table against a loaded one would otherwise find them disagreeing about a
+// column of nulls.
+func TestParquetNullsAgreeBetweenTheParserAndTheLoader(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	src := filepath.Join(t.TempDir(), "t.csv")
+	require.NoError(t, os.WriteFile(src, []byte("label,amount\nx,1\ny,2\n"), 0o600))
+
+	db, err := OpenContext(ctx, src)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO t (label, amount) VALUES (NULL, 3), ('', 4)`)
+	require.NoError(t, err)
+
+	out := t.TempDir()
+	require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatParquet)))
+	require.NoError(t, db.Close())
+
+	written := filepath.Join(out, "t.parquet")
+	raw, err := os.ReadFile(written) //nolint:gosec // a file this test just wrote
+	require.NoError(t, err)
+	parsed, err := parser.Parse(bytes.NewReader(raw), parser.Parquet)
+	require.NoError(t, err)
+	require.NotNil(t, parsed.Nulls)
+
+	reloaded, err := OpenContext(ctx, written)
+	require.NoError(t, err)
+	defer reloaded.Close()
+
+	rows, err := reloaded.QueryContext(ctx, `SELECT typeof(label) FROM t ORDER BY amount`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var stored []bool
+	for rows.Next() {
+		var kind string
+		require.NoError(t, rows.Scan(&kind))
+		stored = append(stored, kind == "null")
+	}
+	require.NoError(t, rows.Err())
+
+	parsedNulls := make([]bool, len(parsed.Nulls))
+	for i, row := range parsed.Nulls {
+		parsedNulls[i] = row[0]
+	}
+	assert.Equal(t, stored, parsedNulls,
+		"the cells the parser marks are the cells the loader stores as NULL")
+	assert.Equal(t, []bool{false, false, true, false}, stored,
+		"one null and one empty string, in that order")
 }

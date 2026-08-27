@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
@@ -247,4 +248,104 @@ func FuzzParseBinary(f *testing.F) {
 			}
 		}
 	})
+}
+
+// TestParseParquetReportsNulls pins that a caller can tell a null from an empty
+// string.
+//
+// Parquet is the one format this package reads that has a null of its own, and
+// every spelling of "nothing" in a Go string is also a value a file can hold, so
+// the rendered text cannot carry the distinction. The reader underneath knows it
+// -- it is how a load stores a Parquet null as SQL NULL -- and Parse used to
+// drop it, so a column of nulls and a column of empty strings came back the same
+// and nothing said which was which.
+func TestParseParquetReportsNulls(t *testing.T) {
+	t.Parallel()
+
+	type row struct {
+		Label  *string `parquet:"label,optional"`
+		Amount int64   `parquet:"amount"`
+	}
+	empty := ""
+	present := "x"
+
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[row](&buf)
+	_, err := w.Write([]row{
+		{Label: &present, Amount: 1},
+		{Label: nil, Amount: 2},
+		{Label: &empty, Amount: 3},
+	})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	result, err := Parse(bytes.NewReader(buf.Bytes()), Parquet)
+	require.NoError(t, err)
+
+	assert.Equal(t, [][]string{{"x", "1"}, {"", "2"}, {"", "3"}}, result.Records,
+		"the rendered text is what it always was; a null renders empty")
+	require.NotNil(t, result.Nulls, "a format with a null of its own reports which cells hold one")
+	assert.Equal(t, [][]bool{{false, false}, {true, false}, {false, false}}, result.Nulls,
+		"the second row's label is missing and the third row's is an empty string")
+	require.Len(t, result.Nulls, len(result.Records), "the mask is parallel to the records")
+	for i := range result.Nulls {
+		assert.Len(t, result.Nulls[i], len(result.Records[i]), "row %d", i)
+	}
+}
+
+// TestParseReportsNoNullsForAFormatWithout pins the other half: a caller can
+// tell "this format has no nulls" from "this file has none". Every format here
+// but Parquet spells a missing value as an empty field, which is a value, so the
+// mask is nil rather than all false.
+func TestParseReportsNoNullsForAFormatWithout(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		kind  FileType
+		input string
+	}{
+		{name: "csv", kind: CSV, input: "a,b\n1,\n"},
+		{name: "tsv", kind: TSV, input: "a\tb\n1\t\n"},
+		{name: "ltsv", kind: LTSV, input: "a:1\tb:\n"},
+		{name: "json", kind: JSON, input: `[{"a":null}]`},
+		{name: "jsonl", kind: JSONL, input: "{\"a\":null}\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, err := Parse(strings.NewReader(tt.input), tt.kind)
+			require.NoError(t, err)
+			assert.Nil(t, result.Nulls, "a format with no null of its own reports none")
+		})
+	}
+}
+
+// TestParseParquetSpellsValuesTheFormatsWay pins the other half of what a
+// caller has to know: values come back spelled the way the format reads them
+// rather than the way SQLite stores them.
+//
+// A whole float is "2" here and the real 2 after a load, and a boolean is
+// "true" here and 1 there. Feeding Records into a CSV and loading that is
+// therefore not the same as loading the Parquet file, which is worth pinning
+// because nothing about a [][]string says which spelling it holds.
+func TestParseParquetSpellsValuesTheFormatsWay(t *testing.T) {
+	t.Parallel()
+
+	type row struct {
+		Whole float64 `parquet:"whole"`
+		Part  float64 `parquet:"part"`
+		Flag  bool    `parquet:"flag"`
+	}
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[row](&buf)
+	_, err := w.Write([]row{{Whole: 2, Part: 1.5, Flag: true}})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	result, err := Parse(bytes.NewReader(buf.Bytes()), Parquet)
+	require.NoError(t, err)
+	assert.Equal(t, [][]string{{"2", "1.5", "true"}}, result.Records)
 }
