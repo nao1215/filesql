@@ -24,6 +24,15 @@ const (
 // one rule about one danger and two copies of it drifted once already.
 const maxRecordSize = 64 << 20
 
+// recordLimitOf is the largest record a read holds, which is maxRecordSize
+// unless the caller lowered it.
+func recordLimitOf(opts Options) int {
+	if opts.maxRecord > 0 {
+		return opts.maxRecord
+	}
+	return maxRecordSize
+}
+
 // ErrRecordTooLong reports a record past maxRecordSize. It is separate from the
 // syntax errors because the file may be perfectly well formed and simply larger
 // than this reader will hold.
@@ -68,13 +77,16 @@ func delimiterOf(format Format) rune {
 // newRecordReader picks the reader the format names, over line endings
 // normalized as that format spells them, so a carriage-return terminated file
 // is read as lines.
-func newRecordReader(src io.Reader, format Format) recordReader {
+func newRecordReader(src io.Reader, format Format, limit int) recordReader {
 	normalized := NormalizeLineEndings(src, format)
 	if format == FormatTSV {
-		return NewTSVReader(normalized)
+		tsvReader := NewTSVReader(normalized)
+		tsvReader.maxRecord = limit
+		return tsvReader
 	}
 
 	csvReader := NewCSVReader(normalized)
+	csvReader.maxRecord = limit
 	csvReader.Comma = delimiterOf(format)
 	// Accept a variable field count so a ragged record reaches Reconcile, which
 	// is where the caller's policy for one lives, instead of aborting the read.
@@ -84,7 +96,7 @@ func newRecordReader(src io.Reader, format Format) recordReader {
 
 // readDelimited reads CSV or TSV rows in chunks.
 func readDelimited(src io.Reader, format Format, opts Options, emit Emit) (Result, error) {
-	records := newRecordReader(src, format)
+	records := newRecordReader(src, format, recordLimitOf(opts))
 
 	headerRecord, err := records.Read()
 	if err != nil {

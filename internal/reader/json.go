@@ -156,9 +156,13 @@ func readJSONL(src io.Reader, opts Options, emit Emit) (Result, error) {
 	header, types := jsonHeader()
 	result := Result{Header: header, Types: types}
 	values := newTypedChunker(header, types, opts, emit)
+	limit := recordLimitOf(opts)
 	lineNum := 0
 	for {
-		raw, err := buffered.ReadBytes('\n')
+		raw, err := readLine(buffered, limit, lineNum+1)
+		if errors.Is(err, ErrRecordTooLong) {
+			return Result{}, err
+		}
 		// Whatever arrived is processed before the error is checked: ReadBytes
 		// returns the last line together with io.EOF.
 		lineNum++
@@ -188,6 +192,26 @@ func readJSONL(src io.Reader, opts Options, emit Emit) (Result, error) {
 	result.Total = result.Rows
 	result.EmptyInput = result.Rows == 0
 	return result, nil
+}
+
+// readLine reads one line, bounded the way a delimited record is: a line has to
+// be complete before it can be parsed, so its length is what the read costs, and
+// one line with no terminator would otherwise make that the whole stream.
+//
+// Whatever was read before the bound was passed is returned with the error, the
+// way bufio does, so a caller that reports the line has something to report.
+func readLine(src *bufio.Reader, limit, number int) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := src.ReadSlice('\n')
+		line = append(line, chunk...)
+		if len(line) > limit {
+			return line, recordTooLongError(number, limit)
+		}
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return line, err
+		}
+	}
 }
 
 // truncateLine shortens a line for an error message.

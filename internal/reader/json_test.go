@@ -91,3 +91,54 @@ func TestReadJSONReportsAFailedReaderAsAParseError(t *testing.T) {
 // require that the cause reached the caller rather than being replaced by a
 // decoder message.
 var errReaderFailed = errors.New("the disk went away")
+
+// TestJSONLLineIsBounded pins that a JSONL line is held to the same bound a
+// delimited record is.
+//
+// A line has to be complete before it can be parsed, so its length is what the
+// read costs, and one line with no terminator made that the whole stream. CSV
+// and TSV were bounded and this reader, which is line-oriented in the same way,
+// was not.
+func TestJSONLLineIsBounded(t *testing.T) {
+	t.Parallel()
+
+	// A limit small enough to reach in a test, standing in for the real one.
+	const limit = 1 << 10
+
+	readAll := func(t *testing.T, body string) error {
+		t.Helper()
+		opts := Options{ChunkSize: 8, maxRecord: limit}
+		_, err := Read(strings.NewReader(body), FormatJSONL, opts, func(*Chunk) error { return nil })
+		return err
+	}
+
+	t.Run("a line under the limit loads", func(t *testing.T) {
+		t.Parallel()
+
+		assert.NoError(t, readAll(t, `{"a":"`+strings.Repeat("x", limit/2)+`"}`+"\n"))
+	})
+
+	t.Run("a line past the limit is refused", func(t *testing.T) {
+		t.Parallel()
+
+		err := readAll(t, `{"a":"`+strings.Repeat("x", limit*4)+`"}`+"\n")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrRecordTooLong)
+		assert.Contains(t, err.Error(), "line 1")
+		assert.Contains(t, err.Error(), "1 KiB")
+	})
+
+	t.Run("many ordinary lines are unaffected", func(t *testing.T) {
+		t.Parallel()
+
+		assert.NoError(t, readAll(t, strings.Repeat(`{"a":1}`+"\n", limit)))
+	})
+
+	t.Run("a line past the limit with no terminator at all is refused", func(t *testing.T) {
+		t.Parallel()
+
+		err := readAll(t, `{"a":"`+strings.Repeat("x", limit*4))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrRecordTooLong)
+	})
+}
