@@ -1908,6 +1908,15 @@ const blankCellSource = "region,amount,label,seen\n" +
 	"south,,,\n" +
 	"east,30,z,2024-03-04\n"
 
+// paddedBlankCellSource is blankCellSource with each blank cell written as a
+// space rather than as nothing, which is what a fixed-width export and a
+// spreadsheet column produce. It says the same thing about the columns it sits
+// in, so the rule over it is the same.
+const paddedBlankCellSource = "region,amount,label,seen\n" +
+	"north,10,x,2024-01-02\n" +
+	"south, , , \n" +
+	"east,30,z,2024-03-04\n"
+
 // assertBlankCellRule holds the rule over a loaded table: the blank cell in the
 // numeric column is NULL and the blank cells in the two text columns are the
 // empty string.
@@ -1947,14 +1956,14 @@ func TestBlankCellInNumericColumnOnEveryLoadRoute(t *testing.T) {
 	ctx := context.Background()
 	routes := []struct {
 		name string
-		open func(t *testing.T) *sql.DB
+		open func(t *testing.T, source string) *sql.DB
 	}{
 		{
 			name: "AddPath",
-			open: func(t *testing.T) *sql.DB {
+			open: func(t *testing.T, source string) *sql.DB {
 				t.Helper()
 				src := filepath.Join(t.TempDir(), "rows.csv")
-				require.NoError(t, os.WriteFile(src, []byte(blankCellSource), 0o600))
+				require.NoError(t, os.WriteFile(src, []byte(source), 0o600))
 				db, err := OpenContext(ctx, src)
 				require.NoError(t, err)
 				return db
@@ -1962,13 +1971,10 @@ func TestBlankCellInNumericColumnOnEveryLoadRoute(t *testing.T) {
 		},
 		{
 			name: "AddFS",
-			open: func(t *testing.T) *sql.DB {
+			open: func(t *testing.T, source string) *sql.DB {
 				t.Helper()
-				validated, err := buildForTest(
-
-					ctx, NewBuilder().
-						AddFS(fstest.MapFS{"rows.csv": &fstest.MapFile{Data: []byte(blankCellSource)}}))
-
+				validated, err := buildForTest(ctx, NewBuilder().
+					AddFS(fstest.MapFS{"rows.csv": &fstest.MapFile{Data: []byte(source)}}))
 				require.NoError(t, err)
 				db, err := validated.Open(ctx)
 				require.NoError(t, err)
@@ -1977,24 +1983,21 @@ func TestBlankCellInNumericColumnOnEveryLoadRoute(t *testing.T) {
 		},
 		{
 			name: "AddReader",
-			open: func(t *testing.T) *sql.DB {
+			open: func(t *testing.T, source string) *sql.DB {
 				t.Helper()
-				db, err := openReaderTable(ctx, blankCellSource, FileTypeCSV)
+				db, err := openReaderTable(ctx, source, FileTypeCSV)
 				require.NoError(t, err)
 				return db
 			},
 		},
 		{
 			name: "AddReader into a caller's database",
-			open: func(t *testing.T) *sql.DB {
+			open: func(t *testing.T, source string) *sql.DB {
 				t.Helper()
 				db, err := sql.Open("sqlite", ":memory:")
 				require.NoError(t, err)
-				validated, err := buildForTest(
-
-					ctx, NewBuilder().
-						AddReader(strings.NewReader(blankCellSource), "rows", FileTypeCSV))
-
+				validated, err := buildForTest(ctx, NewBuilder().
+					AddReader(strings.NewReader(source), "rows", FileTypeCSV))
 				require.NoError(t, err)
 				require.NoError(t, validated.LoadInto(ctx, db))
 				return db
@@ -2002,20 +2005,33 @@ func TestBlankCellInNumericColumnOnEveryLoadRoute(t *testing.T) {
 		},
 	}
 
+	// The two spellings of a blank cell. The staged path decides between them
+	// in SQL rather than in Go, so a spelling one path reads as blank and the
+	// other does not is how they come apart.
+	sources := []struct {
+		name   string
+		source string
+	}{
+		{name: "an empty cell", source: blankCellSource},
+		{name: "a cell of whitespace", source: paddedBlankCellSource},
+	}
+
 	for _, route := range routes {
-		t.Run(route.name, func(t *testing.T) {
-			t.Parallel()
+		for _, src := range sources {
+			t.Run(route.name+"/"+src.name, func(t *testing.T) {
+				t.Parallel()
 
-			db := route.open(t)
-			defer db.Close()
+				db := route.open(t, src.source)
+				defer db.Close()
 
-			var declared string
-			require.NoError(t, db.QueryRowContext(ctx,
-				`SELECT type FROM pragma_table_info('rows') WHERE name = 'amount'`).Scan(&declared))
-			assert.Equal(t, sqlTypeInteger, declared)
+				var declared string
+				require.NoError(t, db.QueryRowContext(ctx,
+					`SELECT type FROM pragma_table_info('rows') WHERE name = 'amount'`).Scan(&declared))
+				assert.Equal(t, sqlTypeInteger, declared)
 
-			assertBlankCellRule(t, db, "rows")
-		})
+				assertBlankCellRule(t, db, "rows")
+			})
+		}
 	}
 }
 
