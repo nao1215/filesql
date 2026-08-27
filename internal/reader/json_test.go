@@ -1,6 +1,7 @@
 package reader
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -46,13 +47,19 @@ func TestReadJSONClassifiesMalformedDocumentsAsInvalidData(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]string{
-		"unterminated object":               `{"a":`,
-		"unterminated array":                `[`,
-		"array holding a broken object":     `[{"a":`,
-		"array missing its close bracket":   `[1, 2`,
-		"array element that is not JSON":    `[1, tru]`,
-		"trailing bytes after a full array": `[1] garbage`,
-		"bytes that are not JSON at all":    `not json`,
+		"unterminated object":                      `{"a":`,
+		"unterminated array":                       `[`,
+		"array holding a broken object":            `[{"a":`,
+		"array missing its close bracket":          `[1, 2`,
+		"array element that is not JSON":           `[1, tru]`,
+		"trailing bytes after a full array":        `[1] garbage`,
+		"bytes that are not JSON at all":           `not json`,
+		"a second close bracket after an array":    `[1]]`,
+		"a close brace after an array":             `[1]}`,
+		"a close bracket after an empty array":     `[]]`,
+		"a close brace after an empty array":       `[]}`,
+		"a close bracket on a line of its own":     "[1]\n]",
+		"a whole second array after a close brace": `[{"a":1}]}[{"a":2}]`,
 	}
 
 	for name, document := range tests {
@@ -141,4 +148,34 @@ func TestJSONLLineIsBounded(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrRecordTooLong)
 	})
+}
+
+// TestReadJSONAcceptsWhatEncodingJSONAccepts is the oracle this reader is held
+// to: filesql reads JSON with encoding/json, so a document that library calls
+// invalid has no business loading here, and one it calls valid has no business
+// being refused.
+//
+// The one deliberate divergence is an input holding no value at all, which is
+// an empty table rather than an error, because only the caller knows whether a
+// file with nothing in it is a failure.
+func TestReadJSONAcceptsWhatEncodingJSONAccepts(t *testing.T) {
+	t.Parallel()
+
+	documents := []string{
+		`[1]`, `[1] `, "[1]\n", `[]`, `[[1]]`, `[{"a":1}]`, `[{"a":1},{"a":2}]`,
+		`{"a":1}`, `1`, `null`, `"x"`,
+		`[1]]`, `[1]}`, `[]]`, `[]}`, "[1]\n]", `[{"a":1}]}[{"a":2}]`,
+		`[1] 2`, `[1],`, `[1]x`, `[1`, `{"a":`, `not json`,
+	}
+
+	for _, document := range documents {
+		t.Run(document, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := Read(strings.NewReader(document), FormatJSON, Options{}, func(*Chunk) error { return nil })
+
+			assert.Equal(t, json.Valid([]byte(document)), err == nil,
+				"encoding/json and this reader disagree about %q", document)
+		})
+	}
 }

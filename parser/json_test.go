@@ -461,3 +461,46 @@ func TestParse_JSONL_LargeLines(t *testing.T) {
 		assert.True(t, json.Valid([]byte(result.Records[1][0])))
 	})
 }
+
+// TestParse_JSONDocumentEndingAfterTheArray pins that the public parser refuses
+// a document with bytes after the array it holds.
+//
+// A closing bracket or brace was passed over rather than refused, so a document
+// this package's own JSON decoder calls invalid parsed as a table, and whatever
+// followed that byte -- a second array, in the case that loses rows -- was
+// dropped without a word.
+func TestParse_JSONDocumentEndingAfterTheArray(t *testing.T) {
+	t.Parallel()
+
+	refused := []string{
+		`[1]]`,
+		`[1]}`,
+		`[]]`,
+		`[]}`,
+		"[1]\n]",
+		`[{"a":1}]}[{"a":2}]`,
+		`[1] 2`,
+		`[1] garbage`,
+	}
+	for _, document := range refused {
+		t.Run("refuses "+document, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := Parse(strings.NewReader(document), JSON)
+
+			require.Error(t, err, "%q is not a JSON document", document)
+			assert.False(t, json.Valid([]byte(document)), "the document should be invalid JSON to begin with")
+		})
+	}
+
+	accepted := []string{`[1]`, "[1]\n", `[1] `, `[[1]]`, `[{"a":1}]`, `[]`}
+	for _, document := range accepted {
+		t.Run("accepts "+document, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := Parse(strings.NewReader(document), JSON)
+
+			require.NoError(t, err, "%q is a JSON document", document)
+		})
+	}
+}

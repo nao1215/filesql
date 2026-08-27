@@ -85,12 +85,12 @@ func readJSON(src io.Reader, opts Options, emit Emit) (Result, error) {
 // is not a document that is not JSON. A syntax error, or an input that ended in
 // the middle of a value, is the format's fault; anything else came from
 // underneath and stays a parse failure.
-func jsonError(cause error, format string, args ...any) error {
+func jsonError(cause error, message string) error {
 	var syntax *json.SyntaxError
 	if errors.As(cause, &syntax) || errors.Is(cause, io.EOF) || errors.Is(cause, io.ErrUnexpectedEOF) {
-		return invalidError(cause, format, args...)
+		return invalidError(cause, "%s", message)
 	}
-	return parseError(cause, format, args...)
+	return parseError(cause, "%s", message)
 }
 
 // peekJSONIsArray reports whether the document opens with '[', and whether it
@@ -135,11 +135,19 @@ func readJSONArray(decoder *json.Decoder, opts Options, emit Emit) (int, error) 
 		}
 	}
 
-	// Consume the closing bracket, then refuse anything after it ("[1] garbage").
+	// Consume the closing bracket, then refuse anything after it.
 	if _, err := decoder.Token(); err != nil {
 		return 0, jsonError(err, "failed to read JSON array end")
 	}
-	if decoder.More() {
+	// A complete document has no token left, and the decoder says so with
+	// io.EOF. More() cannot answer this: it reports whether the container being
+	// iterated holds another element, so it answers false for ']' and '}',
+	// which are exactly the two bytes a stray container close is written with
+	// and were the two this read passed over rather than refused.
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return 0, jsonError(err, "unexpected data after JSON array")
+		}
 		return 0, invalidError(nil, "unexpected data after JSON array")
 	}
 
