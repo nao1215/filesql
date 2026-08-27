@@ -344,7 +344,7 @@ filesql loads data into an in-memory SQLite database. CSV, TSV, JSONL, JSON arra
 
 A blank line is not a record in CSV, in LTSV or in a sheet. In TSV it is one in a one-column file, where it is that column's empty value: TSV has no quote to write an empty field with, so an empty line is the only spelling left and a reader that skipped it would drop the row. A one-column TSV that ends with an extra newline therefore loads with a trailing row holding nothing, the file having no way to say whether that line was a record or a stray terminator. An XLSX row holding no cell at all is skipped, so a workbook whose used range reaches far down the sheet — a header in row 1 and one stray cell near the bottom — holds no record for the rows between them, and none of them is padded out to the header's width. What such a range does cost is a slice header per row, about 25 MiB for one reaching the bottom of the grid, because the library hands a sheet's rows over as one slice covering the range before any of them is read.
 
-One record is held whole while it is read, so a delimited record or a JSONL line longer than 64 MiB is refused rather than buffered. A file cannot cost more than its own size either way; what the bound is for is a source that is a stream, where a record with no terminator would otherwise ask for everything the sender chooses to send.
+One record is held whole while it is read, so a delimited record, a JSONL line or one element of a JSON array longer than 64 MiB is refused rather than buffered. A file cannot cost more than its own size either way; what the bound is for is a source that is a stream, where a record with no terminator would otherwise ask for everything the sender chooses to send. The JSON refusal lands within one of the decoder's own reads of the bound rather than on it, so an unterminated element reads about twice the bound and not the whole of the stream.
 
 Because the rows end up in that database rather than on the Go heap, the heap is not where the cost is. Loading CSVs of 16 MB through 131 MB, the Go heap stayed flat at about 24 MB — chunked loading holds roughly a chunk, not the file — while resident memory grew by about **2x the file's size**. Budget from the file size, and expect the database, not the parser, to be what occupies it.
 
@@ -473,7 +473,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Build from readers, paths, or embedded FS | `ExampleNewBuilder`, `ExampleDBBuilder_AddReader`, `ExampleDBBuilder_AddPath`, `ExampleDBBuilder_AddFS` | [example_test.go](./example_test.go) |
 | Read a compressed reader | `ExampleDBBuilder_AddReader_compressed` | [example_test.go](./example_test.go) |
 | Tune chunked loading | `ExampleDBBuilder_SetDefaultChunkSize` | [example_api_test.go](./example_api_test.go) |
-| Handle malformed CSV/TSV rows | `ExampleDBBuilder_WithMalformedRowPolicy` | [example_api_test.go](./example_api_test.go) |
+| Handle malformed rows | `ExampleDBBuilder_WithMalformedRowPolicy` | [example_api_test.go](./example_api_test.go) |
 | Count the rows a skip policy discarded | `ExampleDBBuilder_SkippedRows` | [example_api_test.go](./example_api_test.go) |
 | Query with MySQL, PostgreSQL, or GoogleSQL syntax | `ExampleDBBuilder_WithDialect` | [example_api_test.go](./example_api_test.go) |
 | Load only the sheets a workbook shows | `ExampleDBBuilder_WithExcelSheetPolicy` | [example_api_test.go](./example_api_test.go) |

@@ -86,6 +86,43 @@ func BenchmarkOpenJSONL(b *testing.B) {
 	}
 }
 
+// BenchmarkOpenJSON benchmarks loading the same rows as a JSON array, which is
+// the shape JSONL does not cover: an array is decoded element by element by
+// encoding/json rather than read a line at a time, and each element is read
+// through the bound that stops one element from asking for the whole of a
+// stream. This is where that bound's cost shows.
+func BenchmarkOpenJSON(b *testing.B) {
+	const rows = 100000
+
+	var body bytes.Buffer
+	body.WriteByte('[')
+	for i := range rows {
+		if i > 0 {
+			body.WriteByte(',')
+		}
+		fmt.Fprintf(&body, `{"id":%d,"name":"customer%d","amount":%d.5}`, i, i, i)
+	}
+	body.WriteByte(']')
+	document := body.Bytes()
+
+	b.ResetTimer()
+	for b.Loop() {
+		validated, err := NewBuilder().
+			AddReader(bytes.NewReader(document), "events", FileTypeJSON).
+			Build(context.Background())
+		if err != nil {
+			b.Fatalf("Build failed: %v", err)
+		}
+		db, err := validated.Open(context.Background())
+		if err != nil {
+			b.Fatalf("Open failed: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			b.Fatalf("db.Close failed: %v", err)
+		}
+	}
+}
+
 // BenchmarkOpenReader benchmarks loading the same rows through AddReader, which
 // is the path BenchmarkOpenContext does not cover: a reader cannot be read
 // twice, so its rows are staged as text and copied into the typed table once

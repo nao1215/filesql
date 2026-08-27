@@ -1,16 +1,26 @@
 package filesql
 
-import "fmt"
+import (
+	"fmt"
 
-// MalformedRowPolicy controls how a delimited (CSV/TSV) record whose field count
-// differs from the header row is handled during import.
+	"github.com/nao1215/filesql/internal/reader"
+)
+
+// MalformedRowPolicy controls how a record that does not fit the columns of its
+// table is handled during import: a delimited (CSV/TSV) record whose field count
+// differs from the header row, or an LTSV record holding a field that is not a
+// label and a value.
 //
-// The policy applies to delimited text alone, where a record's field count is
-// the only thing that says how wide it is. The other formats settle it
-// themselves: a workbook's rows are checked by the XLSX reader, which pads a
-// short one and refuses one wider than its header whatever this policy says;
-// LTSV pads a missing label; and Parquet and JSON/JSONL carry no per-row field
-// count to disagree about.
+// A workbook's rows are checked by the XLSX reader instead, which pads a short
+// one and refuses one wider than its header whatever this policy says, and
+// Parquet and JSON/JSONL carry nothing per row to disagree about.
+//
+// What LTSV settles itself is the missing half of the question: a record naming
+// only some of the columns is padded, since LTSV writes its labels on every
+// record and leaving one out is how the format says a value is absent. A field
+// with no label is the other half, and it is this policy's: the field is data
+// the table has no column for, so the record carrying it is one the policy
+// decides about.
 type MalformedRowPolicy int
 
 const (
@@ -65,6 +75,21 @@ func reconcileFieldCount(record []string, want, rowNum int, policy MalformedRowP
 	default: // MalformedRowStop
 		return nil, false, fmt.Errorf("%w: row %d has %d fields, want %d", ErrColumnMismatch, rowNum, len(record), want)
 	}
+}
+
+// reconcileUnlabeledFields applies the policy to an LTSV record holding fields
+// that name no label. It returns whether the caller should skip the record, or
+// the error that ends the read.
+//
+// Filling refuses it for the reason filling refuses a long delimited record:
+// there is no column to pad that would hold what the field says, so keeping the
+// record would be discarding the field.
+func reconcileUnlabeledFields(fields []string, rowNum int, policy MalformedRowPolicy) (skip bool, err error) {
+	if policy == MalformedRowSkip {
+		return true, nil
+	}
+	return false, fmt.Errorf("%w: row %d holds a field that names no label: %s",
+		ErrColumnMismatch, rowNum, reader.QuoteFields(fields))
 }
 
 // fitRecord returns a copy of a short record resized to exactly want fields by

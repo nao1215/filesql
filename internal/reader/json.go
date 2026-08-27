@@ -45,11 +45,17 @@ func readJSON(src io.Reader, opts Options, emit Emit) (Result, error) {
 	}
 
 	if isArray {
-		decoder := json.NewDecoder(buffered)
+		// An element is held whole while it is decoded, so its length is what
+		// the read costs, and one element with no terminator would otherwise
+		// make that the whole stream. The array is the JSON shape that arrives
+		// in chunks, so it is bounded the way a delimited record and a JSONL
+		// line are.
+		bounded := &elementReader{src: buffered, limit: recordLimitOf(opts)}
+		decoder := json.NewDecoder(bounded)
 		if _, err := decoder.Token(); err != nil {
 			return Result{}, jsonError(err, "failed to parse JSON array")
 		}
-		rows, err := readJSONArray(decoder, opts, emit)
+		rows, err := readJSONArray(decoder, bounded, opts, emit)
 		if err != nil {
 			return Result{}, err
 		}
@@ -85,12 +91,12 @@ func readJSON(src io.Reader, opts Options, emit Emit) (Result, error) {
 // is not a document that is not JSON. A syntax error, or an input that ended in
 // the middle of a value, is the format's fault; anything else came from
 // underneath and stays a parse failure.
-func jsonError(cause error, format string, args ...any) error {
+func jsonError(cause error, message string) error {
 	var syntax *json.SyntaxError
 	if errors.As(cause, &syntax) || errors.Is(cause, io.EOF) || errors.Is(cause, io.ErrUnexpectedEOF) {
-		return invalidError(cause, format, args...)
+		return invalidError(cause, "%s", message)
 	}
-	return parseError(cause, format, args...)
+	return parseError(cause, "%s", message)
 }
 
 // peekJSONIsArray reports whether the document opens with '[', and whether it
@@ -122,12 +128,18 @@ func peekJSONIsArray(buffered *bufio.Reader) (isArray, empty bool, err error) {
 
 // readJSONArray streams the elements of an array whose opening bracket the
 // decoder has already consumed, and returns how many rows it emitted.
-func readJSONArray(decoder *json.Decoder, opts Options, emit Emit) (int, error) {
+func readJSONArray(decoder *json.Decoder, bounded *elementReader, opts Options, emit Emit) (int, error) {
 	header, types := jsonHeader()
 	elements := newTypedChunker(header, types, opts, emit)
+	index := 0
 	for decoder.More() {
+		index++
+		bounded.begin(index)
 		var element json.RawMessage
 		if err := decoder.Decode(&element); err != nil {
+			if errors.Is(err, ErrRecordTooLong) {
+				return 0, err
+			}
 			return 0, jsonError(err, "failed to decode JSON array element")
 		}
 		if err := elements.add([]string{string(element)}); err != nil {
@@ -135,11 +147,23 @@ func readJSONArray(decoder *json.Decoder, opts Options, emit Emit) (int, error) 
 		}
 	}
 
-	// Consume the closing bracket, then refuse anything after it ("[1] garbage").
+	// Consume the closing bracket, then refuse anything after it.
+	bounded.begin(index + 1)
 	if _, err := decoder.Token(); err != nil {
 		return 0, jsonError(err, "failed to read JSON array end")
 	}
-	if decoder.More() {
+	// A complete document has no token left, and the decoder says so with
+	// io.EOF. More() cannot answer this: it reports whether the container being
+	// iterated holds another element, so it answers false for ']' and '}',
+	// which are exactly the two bytes a stray container close is written with
+	// and were the two this read passed over rather than refused.
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		if errors.Is(err, ErrRecordTooLong) {
+			return 0, err
+		}
+		if err != nil {
+			return 0, jsonError(err, "unexpected data after JSON array")
+		}
 		return 0, invalidError(nil, "unexpected data after JSON array")
 	}
 
@@ -147,6 +171,35 @@ func readJSONArray(decoder *json.Decoder, opts Options, emit Emit) (int, error) 
 		return 0, err
 	}
 	return elements.rows, nil
+}
+
+// elementReader bounds how much of a stream the decode of one array element may
+// consume. The decoder reads ahead into a buffer of its own, so the count is
+// what was handed to it since the element began rather than the element's own
+// length, which overshoots by at most one of its reads.
+type elementReader struct {
+	src   io.Reader
+	limit int
+	read  int
+	index int
+}
+
+// begin starts counting afresh for the element at index.
+func (e *elementReader) begin(index int) {
+	e.read = 0
+	e.index = index
+}
+
+// Read implements io.Reader, refusing once one element has asked for more than
+// the limit. The bytes read before the refusal are returned with it, the way
+// bufio does, so nothing already handed over is lost on the way to the error.
+func (e *elementReader) Read(p []byte) (int, error) {
+	n, err := e.src.Read(p)
+	e.read += n
+	if e.read > e.limit {
+		return n, elementTooLongError(e.index, e.limit)
+	}
+	return n, err
 }
 
 // readJSONL reads one JSON value per line into the "data" column. A blank line

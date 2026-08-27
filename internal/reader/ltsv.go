@@ -1,7 +1,9 @@
 package reader
 
 import (
+	"fmt"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -62,15 +64,24 @@ func readLTSV(src io.Reader, opts Options, emit Emit) (Result, error) {
 	header := labels.order
 	result := Result{Header: header}
 	rows := newChunker(header, opts, emit)
+	rowNum := 0
 	for _, line := range lines {
 		values := make(map[string]string)
 		// Labels are compared folded; see LTSVLabelKey. The map is keyed that way
 		// so a record finds its value under the column the first record named,
 		// whatever case this one wrote it in.
 		seen := make(map[string]struct{})
+		var unlabeled []string
 		for pair := range ltsvPairs(line) {
 			key, value, ok := ltsvPair(pair)
 			if !ok {
+				// A field with nothing to name it is data no column can hold.
+				// An empty one is not a field at all: a line ending in a tab,
+				// and a line of nothing but tabs, are how a file separates its
+				// records rather than how it writes one.
+				if pair != "" {
+					unlabeled = append(unlabeled, pair)
+				}
 				continue
 			}
 			// A label repeated within the same record cannot be two distinct
@@ -83,8 +94,21 @@ func readLTSV(src io.Reader, opts Options, emit Emit) (Result, error) {
 			seen[folded] = struct{}{}
 			values[folded] = value
 		}
-		if len(values) == 0 {
+		if len(values) == 0 && len(unlabeled) == 0 {
 			continue
+		}
+		rowNum++
+
+		if len(unlabeled) > 0 {
+			skip, err := refuseUnlabeled(opts.Unlabeled, unlabeled, rowNum)
+			if err != nil {
+				return Result{}, err
+			}
+			if skip {
+				result.Total++
+				result.Skipped++
+				continue
+			}
 		}
 
 		record := make([]string, len(header))
@@ -103,6 +127,33 @@ func readLTSV(src io.Reader, opts Options, emit Emit) (Result, error) {
 	result.Rows = rows.rows
 	result.Types = rows.types()
 	return result, nil
+}
+
+// refuseUnlabeled asks the caller what becomes of a record holding fields that
+// name no label. A caller that named no answer gets the strict one, since a
+// read with no policy of its own has nothing to weigh the alternative against.
+func refuseUnlabeled(unlabeled Unlabeled, fields []string, rowNum int) (bool, error) {
+	if unlabeled == nil {
+		return false, invalidError(nil, "row %d holds a field that names no label: %s", rowNum, QuoteFields(fields))
+	}
+	return unlabeled(fields, rowNum)
+}
+
+// QuoteFields spells the fields of a record for a message, quoted so a field
+// that is empty or only spaces is visible and shortened so a long line does not
+// become the whole error. It is exported because the caller that decides what
+// becomes of such a record words its own refusal, and one wording of the same
+// list is better than two.
+func QuoteFields(fields []string) string {
+	const shown = 3
+	quoted := make([]string, 0, shown)
+	for _, field := range fields[:min(len(fields), shown)] {
+		quoted = append(quoted, strconv.Quote(truncateLine(field, 40)))
+	}
+	if len(fields) > shown {
+		return strings.Join(quoted, ", ") + fmt.Sprintf(" and %d more", len(fields)-shown)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // ltsvPairs is the label-value pairs one line holds. Only the line terminator is

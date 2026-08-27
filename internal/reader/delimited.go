@@ -44,6 +44,12 @@ func recordTooLongError(line, limit int) error {
 	return fmt.Errorf("%w: line %d is longer than the %s a record may be", ErrRecordTooLong, line, byteSize(limit))
 }
 
+// elementTooLongError words the refusal for a record that is not a line, naming
+// which element of the array passed the limit.
+func elementTooLongError(index, limit int) error {
+	return fmt.Errorf("%w: element %d is longer than the %s a record may be", ErrRecordTooLong, index, byteSize(limit))
+}
+
 // byteSize spells a limit the way it is written down, so a message quotes the
 // constant rather than its expansion.
 func byteSize(n int) string {
