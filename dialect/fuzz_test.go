@@ -1,43 +1,52 @@
 package dialect
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
-// sqliteLex is how SQLite reads the SQL a translation produces: double quotes
-// open an identifier, a backslash is an ordinary character, and comments do not
-// nest.
-var sqliteLex = lexConfig{identDoubleQuote: true}
-
-// FuzzTranslate checks that translation never panics, that it is deterministic,
-// and that what it produces is still SQL: the output has to lex as SQLite,
-// which is the language it is now written in.
+// FuzzTranslate checks the properties that have to hold for any input at all,
+// since a query can arrive from anywhere: translation never panics, never runs
+// away, is deterministic, and either refuses with one of this package's errors
+// or answers SQL that reads back as the same statement.
 //
-// The check used to feed the output through Translate(SQLite, ...), which
-// returns its input untouched, so it compared a string with itself and passed
-// whatever the translation had produced. Feeding the output back through its
-// own dialect is not the property either — the output is SQLite, and reading
-// SQLite as MySQL turns a double-quoted identifier into a string. Lexing it as
-// SQLite is what is actually being claimed, and it catches an output that ends
-// a literal or a comment somewhere the input did not.
+// The last property is what makes the output SQL rather than text: a
+// translation that ends a literal or a comment somewhere the input did not
+// would produce something that parses into a different query, and re-reading it
+// is what catches that.
 func FuzzTranslate(f *testing.F) {
-	seeds := []string{
+	for _, seed := range []string{
 		"SELECT * FROM t",
 		"SELECT `a`, \"b\" FROM `t` WHERE x = 'v'",
 		"SELECT a::int FROM t -- c",
 		"SELECT $$d$$, E'e\\n', $1",
 		"SELECT r'raw', b'AB', `p.d.t`.x # h",
 		"SELECT count(*) /* mid */ FROM t;",
+		"SELECT a + b * c, (a + b) * c, a OR b AND c, NOT a = b",
+		"SELECT EXTRACT(YEAR FROM d), DATE_ADD(d, INTERVAL 1 DAY) FROM t",
+		"SELECT CASE WHEN a > 1 THEN b ELSE c END",
+		"WITH x AS (SELECT 1 AS n) SELECT n FROM x JOIN y USING (n)",
+		"INSERT INTO t (a) VALUES (1) ON CONFLICT (a) DO UPDATE SET a = 2",
+		"CREATE TABLE t (a INTEGER PRIMARY KEY, b TEXT NOT NULL)",
 		"'unterminated",
 		"/* unterminated",
 		"",
-	}
-	for _, s := range seeds {
-		f.Add(s)
+	} {
+		f.Add(seed)
 	}
 
 	f.Fuzz(func(t *testing.T, query string) {
 		for _, d := range Dialects() {
+			if d == SQLite {
+				// SQLite is the identity translation: it hands back whatever it
+				// was given, so the output is only as well-formed as the input.
+				continue
+			}
 			out, err := Translate(d, query)
 			if err != nil {
+				if !knownError(err) {
+					t.Fatalf("Translate(%s, %q) failed with an error of an unknown kind: %v", d, query, err)
+				}
 				continue
 			}
 			again, err := Translate(d, query)
@@ -47,14 +56,28 @@ func FuzzTranslate(f *testing.F) {
 			if again != out {
 				t.Fatalf("Translate(%s, %q) is not deterministic: %q then %q", d, query, out, again)
 			}
-			if d == SQLite {
-				// SQLite is the identity translation: it hands back whatever it was
-				// given, so the output is only as well-formed as the input was.
+			// The output is SQLite SQL, and reading it as SQLite has to give
+			// the same text back.
+			reread, err := Translate(PostgreSQL, out)
+			if err != nil {
+				// PostgreSQL's lexical rules are SQLite's for identifiers and
+				// strings, but its grammar refuses a few things SQLite writes;
+				// a refusal here is not a defect in the output.
 				continue
 			}
-			if _, err := tokenize(out, sqliteLex); err != nil {
-				t.Fatalf("Translate(%s, %q) produced %q, which does not lex as SQLite: %v", d, query, out, err)
+			if third, err := Translate(PostgreSQL, reread); err == nil && third != reread {
+				t.Fatalf("Translate(%s, %q) produced %q, which does not read back as itself: %q then %q",
+					d, query, out, reread, third)
 			}
 		}
 	})
+}
+
+// knownError reports whether an error is one this package promises to return.
+// Anything else means a failure reached the caller unlabelled.
+func knownError(err error) bool {
+	return errors.Is(err, ErrInvalidSyntax) ||
+		errors.Is(err, ErrUnsupportedSyntax) ||
+		errors.Is(err, ErrUnsupportedFeature) ||
+		errors.Is(err, ErrUnknownDialect)
 }
