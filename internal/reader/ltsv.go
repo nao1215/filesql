@@ -1,6 +1,7 @@
 package reader
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -41,8 +42,17 @@ func (l *labelOrder) add(name string) {
 // records carry, and the last record can still name one the earlier ones did
 // not.
 func readLTSV(src io.Reader, opts Options, emit Emit) (Result, error) {
-	content, err := io.ReadAll(NormalizeLineEndings(src, FormatLTSV))
+	// A record is held whole while its pairs are read, so one record with no
+	// terminator would otherwise make the read cost the whole stream. The file
+	// is still read whole -- the columns are whatever labels the records carry
+	// -- but a single record is bounded the way a delimited record and a JSONL
+	// line are.
+	bounded := newLineBoundedReader(NormalizeLineEndings(src, FormatLTSV), recordLimitOf(opts))
+	content, err := io.ReadAll(bounded)
 	if err != nil {
+		if errors.Is(err, ErrRecordTooLong) {
+			return Result{}, err
+		}
 		return Result{}, parseError(err, "failed to read LTSV")
 	}
 	lines := strings.Split(string(content), "\n")

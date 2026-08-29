@@ -122,6 +122,7 @@ import (
 	"io"
 	"strings"
 
+	filereader "github.com/nao1215/filesql/internal/reader"
 	"github.com/nao1215/filesql/parser"
 	achconv "github.com/nao1215/filesql/parser/ach"
 )
@@ -150,8 +151,11 @@ func isACHFile(path string) bool {
 //
 // The returned TableSet can be used later for DumpACH to reconstruct the ACH file.
 func parseACHFile(reader io.Reader, baseTableName string) ([]*table, *achconv.TableSet, error) {
-	// Read ACH file using parser/ach (which encapsulates moov-io/ach)
-	tableSet, err := achconv.ParseReader(reader)
+	// A record is 94 characters, and the library that reads them holds the file
+	// whole, so a stream sending a record with no terminator would be read
+	// however long it is. The bound is the one every other record here is read
+	// against.
+	tableSet, err := achconv.ParseReader(filereader.BoundRecords(reader))
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: failed to parse ACH file: %w", ErrACH, err)
 	}
