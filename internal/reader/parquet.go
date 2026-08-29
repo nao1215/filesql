@@ -1045,7 +1045,7 @@ func floatText(f float64, bitSize int, rendering Rendering) string {
 	case math.IsNaN(f):
 		return ""
 	}
-	text := strconv.FormatFloat(f, 'g', -1, bitSize)
+	text := formatFloatDigits(f, bitSize)
 	// A whole number renders with neither a point nor an exponent, and read back
 	// that spelling is an integer. The suffix is what keeps a loaded column REAL;
 	// a caller that only renders the value has no column to keep.
@@ -1053,6 +1053,26 @@ func floatText(f float64, bitSize int, rendering Rendering) string {
 		text += ".0"
 	}
 	return text
+}
+
+// formatFloatDigits writes a finite float the way SQLite writes it, which is
+// the plain form from a ten-thousandth up to a hundred quadrillion and the
+// shortest exponent form outside that.
+//
+// Go's shortest 'g' leaves the plain form as soon as the decimal exponent
+// reaches six, so a load and a dump with nothing in between rewrote 2500000 as
+// 2.5e+06 -- a notation the source file never used, in a range that is ordinary
+// for the files this library is for. The same database disagreed with itself
+// about the value, since CAST(c AS TEXT) answers SQLite's own rendering.
+func formatFloatDigits(f float64, bitSize int) string {
+	const (
+		plainLow  = 1e-4
+		plainHigh = 1e17
+	)
+	if abs := math.Abs(f); abs == 0 || (abs >= plainLow && abs < plainHigh) {
+		return strconv.FormatFloat(f, 'f', -1, bitSize)
+	}
+	return strconv.FormatFloat(f, 'g', -1, bitSize)
 }
 
 // boolText spells a boolean the way its column is declared: 1 and 0 for the

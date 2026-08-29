@@ -55,13 +55,19 @@ func TestIsFloat(t *testing.T) {
 		{"0x1p4", false},
 		{"abc", false},
 		{"", false},
-		// A spelling whose parse saturates is still a float: SQLite's affinity
-		// stores the same saturated value for the same text, so refusing it
-		// turned a dumped REAL column holding an infinity into TEXT.
+		// The infinity a dump writes is a float, because it is the only text
+		// SQLite's REAL affinity reads back as one and refusing it turned a
+		// dumped REAL column holding an infinity into TEXT.
 		{"9e999", true},
 		{"-9e999", true},
-		{"1e309", true},
-		{"1e-400", true},
+		// Any other spelling a float64 cannot hold is not, for the same reason
+		// an integer past int64 is not an integer: the value does not survive
+		// the column. 1e400 would be stored as +Inf and 1e-400 as an exact
+		// zero, neither of which the file said.
+		{"1e309", false},
+		{"1e400", false},
+		{"-1e400", false},
+		{"1e-400", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {

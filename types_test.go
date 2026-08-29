@@ -1270,6 +1270,56 @@ func TestColumnType_ADecimalMakesTheColumnReal(t *testing.T) {
 // of the above: SQLite stores a value the declared type cannot hold under its
 // own storage class, so a schema that disagrees with typeof() is a column whose
 // type was inferred from less than the whole column.
+// TestColumnType_ANumberTooLargeForAFloatStaysText covers the decimal a float64
+// cannot hold, which used to load as an infinity with the number in the file
+// gone. It is the same situation as an integer past int64, which already stays
+// TEXT: the value does not survive a numeric column, and no later inspection
+// recovers what the file said. Underflow goes the same way, since a stored zero
+// cannot be told from a measured one.
+//
+// The infinity a dump writes is the one out-of-range spelling that stays REAL.
+// It is the only text SQLite's REAL affinity reads back as an infinity, so
+// refusing it would turn a dumped REAL column holding one into TEXT.
+func TestColumnType_ANumberTooLargeForAFloatStaysText(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name     string
+		body     string
+		declared string
+		first    string
+	}{
+		{name: "past the largest double", body: "v\n1e400\n2.5\n", declared: "TEXT", first: "1e400"},
+		{name: "past the smallest", body: "v\n-1e400\n2.5\n", declared: "TEXT", first: "-1e400"},
+		{name: "below the smallest nonzero", body: "v\n1e-400\n2.5\n", declared: "TEXT", first: "1e-400"},
+		{name: "a zero written as one is not an underflow", body: "v\n0.0\n2.5\n", declared: "REAL", first: "0.0"},
+		{name: "the infinity a dump writes stays a number", body: "v\n9e999\n2.5\n", declared: "REAL", first: "Inf"},
+		{name: "an integer past int64 already stayed text", body: "v\n9223372036854775808\n2\n", declared: "TEXT", first: "9223372036854775808"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			validated, err := buildForTest(ctx, NewBuilder().
+				AddReader(strings.NewReader(tt.body), "t", FileTypeCSV))
+			require.NoError(t, err)
+			db, err := validated.Open(ctx)
+			require.NoError(t, err)
+			defer db.Close()
+
+			var declared string
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT type FROM pragma_table_info('t') WHERE name = 'v'`).Scan(&declared))
+			assert.Equal(t, tt.declared, declared)
+
+			var first string
+			require.NoError(t, db.QueryRowContext(ctx,
+				`SELECT CAST(v AS TEXT) FROM t LIMIT 1`).Scan(&first))
+			assert.Equal(t, tt.first, first)
+		})
+	}
+}
+
 func TestColumnType_DeclaredTypeAgreesWithStoredType(t *testing.T) {
 	t.Parallel()
 

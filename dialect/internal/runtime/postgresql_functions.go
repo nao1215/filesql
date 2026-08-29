@@ -764,6 +764,14 @@ func fnToNumber(args []driver.Value) (driver.Value, error) {
 	}
 	items, _ := scanPGTemplate(format)
 	t := parseNumericTemplate(items)
+	if t.digitCount() == 0 {
+		// An empty template names no digit positions, so PostgreSQL reads
+		// nothing and answers NULL. Scraping the digits out of the value
+		// instead answered a number that is not in it in any recognizable
+		// form: to_number('2024-02-29', '') was -20240229, the digits of a
+		// date run together with the hyphens read as a sign.
+		return nil, nil
+	}
 	var digits strings.Builder
 	negative := false
 	for _, r := range s {
@@ -778,10 +786,11 @@ func fnToNumber(args []driver.Value) (driver.Value, error) {
 	}
 	value, parsed := parseFloatOrNothing(digits.String())
 	if !parsed {
-		// A string the template cannot read is NULL rather than an error,
-		// which is how the other conversion helpers in this package answer
-		// data they cannot make sense of.
-		return nil, nil
+		// PostgreSQL raises for a value it cannot read rather than answering
+		// NULL, and NULL is also its answer for a value that is absent, so the
+		// two were indistinguishable: a query written to reject a bad number
+		// reported success on exactly the rows it was written to reject.
+		return nil, fmt.Errorf("dialect: invalid input syntax for type numeric: %q", s)
 	}
 	for range t.shift {
 		value /= 10
@@ -809,11 +818,11 @@ func fnToTimestamp(args []driver.Value) (driver.Value, error) {
 		if !ok1 || !ok2 {
 			return nil, nil
 		}
-		tm, ok := parseLayout(pgParseLayout(format), s)
-		if !ok {
-			return nil, nil
+		tm, err := pgReadTemplate(format, s)
+		if err != nil {
+			return nil, err
 		}
-		return tm.Format(layoutDateTime), nil
+		return formatDateTimeValue(tm), nil
 	default:
 		return nil, fmt.Errorf("dialect: TO_TIMESTAMP expects 1 or 2 arguments, got %d", len(args))
 	}

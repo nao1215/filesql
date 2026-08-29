@@ -1310,6 +1310,28 @@ func TestDumpValueFormatting(t *testing.T) {
 		assert.Equal(t, "v\n1\n-10\n", dumpToString(t, db, NewDumpOptions()))
 	})
 
+	// A value around a million is ordinary in the files this library is for, and
+	// Go's shortest 'g' leaves the plain form as soon as the decimal exponent
+	// reaches six, so a load and a dump with nothing in between rewrote the
+	// number in a notation the source never used. The bytes are read rather
+	// than reloaded because reloading hides it: the exponent form parses back
+	// to the same number.
+	t.Run("a value around a million is written the way SQLite renders it", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t,
+			"CREATE TABLE t (v REAL)",
+			"INSERT INTO t VALUES (999999.5)",
+			"INSERT INTO t VALUES (1000000.5)",
+			"INSERT INTO t VALUES (2500000)",
+			"INSERT INTO t VALUES (123456789.5)")
+
+		outDir := t.TempDir()
+		require.NoError(t, DumpDatabase(db, outDir))
+		assert.Equal(t, "v\n999999.5\n1000000.5\n2500000.0\n123456789.5\n",
+			readFileString(t, filepath.Join(outDir, "t.csv")))
+	})
+
 	// SQLite has no spelling of infinity that its own REAL affinity accepts, so
 	// a literal that overflows to one is what the file carries. Written "+Inf",
 	// the value reloaded as the text of that word inside a REAL column.
@@ -2000,7 +2022,7 @@ func TestDumpReachesAFixedPoint(t *testing.T) {
 		"a", "B", "1", "0", "007", "1.5", "1.0", "-0.0", "1e3", "", " ", "  ", "\t",
 		"x,y", `x"y`, "x\ny", "日本", "😀", "true", "false", "NULL",
 		"2026-01-02", "2026-01-02 03:04:05", "+1", "0x10", "9223372036854775808",
-		"1_000", "-", ".", "Inf", "NaN",
+		"1_000", "-", ".", "Inf", "NaN", "1e400", "1e-400", "2500000",
 	}
 	formats := []struct {
 		format OutputFormat

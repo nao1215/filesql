@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -25,13 +26,26 @@ import (
 // The template patterns whose spelling is repeated between the scanner's table
 // and the renderers that read it.
 const (
-	patYYYY  = "YYYY"
-	patIYY   = "IYY"
-	patMonth = "MONTH"
-	patMon   = "MON"
-	patDay   = "DAY"
-	patHH24  = "HH24"
-	patHH12  = "HH12"
+	patYYYY      = "YYYY"
+	patIYY       = "IYY"
+	patMonth     = "MONTH"
+	patMon       = "MON"
+	patDay       = "DAY"
+	patHH24      = "HH24"
+	patHH12      = "HH12"
+	patYYY       = "YYY"
+	patDDD       = "DDD"
+	patEEEE      = "EEEE"
+	patAD        = "A.D."
+	patAMDot     = "A.M."
+	patIDDD      = "IDDD"
+	patIYYY      = "IYYY"
+	patBC        = "B.C."
+	patPMDot     = "P.M."
+	patSSSS      = "SSSS"
+	patSSSSS     = "SSSSS"
+	patYcommaYYY = "Y,YYY"
+	patFF        = "FF"
 )
 
 // pgTemplateItem is one element of a scanned template: either a pattern, whose
@@ -51,11 +65,11 @@ type pgTemplateItem struct {
 // prefers the longest match: DDD has to be tried before DD and before D, and
 // IYYY before IY and I, or the tail of a pattern is copied out as literal text.
 var pgTemplatePatterns = []string{ //nolint:gochecknoglobals // a fixed table read by the scanner
-	"Y,YYY", "A.M.", "P.M.", "B.C.", "A.D.",
-	"IDDD", "IYYY", patHH24, patHH12, "SSSSS", "SSSS", "EEEE",
-	patMonth, patIYY, "DDD", "FF1", "FF2", "FF3", "FF4", "FF5", "FF6",
+	patYcommaYYY, patAMDot, patPMDot, patBC, patAD,
+	patIDDD, patIYYY, patHH24, patHH12, patSSSSS, patSSSS, patEEEE,
+	patMonth, patIYY, patDDD, "FF1", "FF2", "FF3", "FF4", "FF5", "FF6",
 	patMon, patDay, "RM",
-	patYYYY, "YYY", "YY",
+	patYYYY, patYYY, "YY",
 	"HH", "MI", "SS", "MS", "US", "MM", "DD", "DY", "ID", "IW", "WW", "CC", "TH",
 	patTZH, patTZM, "OF",
 	"AM", "PM", "BC", "AD", "IY", "PR", "SG", "PL", "RN", "TZ",
@@ -303,7 +317,7 @@ func pgTimePattern(it pgTemplateItem, tm time.Time, fillMode bool) (string, int)
 		return padNumber(h, 2, fillMode), h
 	case "MI":
 		return padNumber(tm.Minute(), 2, fillMode), tm.Minute()
-	case "SSSSS", "SSSS":
+	case patSSSSS, patSSSS:
 		secs := tm.Hour()*3600 + tm.Minute()*60 + tm.Second()
 		return strconv.Itoa(secs), secs
 	case "SS":
@@ -316,7 +330,7 @@ func pgTimePattern(it pgTemplateItem, tm time.Time, fillMode bool) (string, int)
 		digits := int(it.pattern[2] - '0')
 		frac := padNumber(tm.Nanosecond(), 9, false)
 		return frac[:digits], 0
-	case "AM", "PM", "A.M.", "P.M.":
+	case "AM", "PM", patAMDot, patPMDot:
 		return pgMeridiem(it, tm), 0
 	case "TZ", patTZH, patTZM, "OF":
 		// Every value this package holds is read as UTC, which is what the
@@ -328,13 +342,13 @@ func pgTimePattern(it pgTemplateItem, tm time.Time, fillMode bool) (string, int)
 		return strconv.Itoa(year/1000) + "," + padNumber(year%1000, 3, false), year
 	case patYYYY:
 		return padNumber(year, 4, fillMode), year
-	case "YYY":
+	case patYYY:
 		return padNumber(year%1000, 3, fillMode), year % 1000
 	case "YY":
 		return padNumber(year%100, 2, fillMode), year % 100
 	case "Y":
 		return strconv.Itoa(year % 10), year % 10
-	case "IYYY":
+	case patIYYY:
 		return padNumber(isoYear, 4, fillMode), isoYear
 	case patIYY:
 		return padNumber(isoYear%1000, 3, fillMode), isoYear % 1000
@@ -342,7 +356,7 @@ func pgTimePattern(it pgTemplateItem, tm time.Time, fillMode bool) (string, int)
 		return padNumber(isoYear%100, 2, fillMode), isoYear % 100
 	case "I":
 		return strconv.Itoa(isoYear % 10), isoYear % 10
-	case "BC", "AD", "B.C.", "A.D.":
+	case "BC", "AD", patBC, patAD:
 		return pgEra(it, calendarYear), 0
 	case patMonth:
 		return applyCase(it.pattern, it.text, padName(month.String(), 9, fillMode)), int(month)
@@ -356,9 +370,9 @@ func pgTimePattern(it pgTemplateItem, tm time.Time, fillMode bool) (string, int)
 		return applyCase(it.pattern, it.text, padName(tm.Weekday().String(), 9, fillMode)), 0
 	case "DY":
 		return applyCase(it.pattern, it.text, tm.Weekday().String()[:3]), 0
-	case "DDD":
+	case patDDD:
 		return padNumber(tm.YearDay(), 3, fillMode), tm.YearDay()
-	case "IDDD":
+	case patIDDD:
 		n := (isoWeek-1)*7 + isoWeekday(tm)
 		return padNumber(n, 3, fillMode), n
 	case "DD":
@@ -556,7 +570,20 @@ var (
 
 // parseNumericTemplate reads the scanned items of a numeric template.
 //
+// digitCount is the number of digit positions the template names. A template
+// with none reads nothing.
+//
 //nolint:cyclop,gocyclo // one arm per template element
+func (t *pgNumericTemplate) digitCount() int {
+	digits := t.fracCells
+	for _, cell := range t.intCells {
+		if cell != "," {
+			digits++
+		}
+	}
+	return digits
+}
+
 func parseNumericTemplate(items []pgTemplateItem) *pgNumericTemplate {
 	t := &pgNumericTemplate{sign: pgSignDefault}
 	afterV := false
@@ -591,7 +618,7 @@ func parseNumericTemplate(items []pgTemplateItem) *pgNumericTemplate {
 			t.roman, t.romanSpelling = true, it.text
 		case it.pattern == "TH":
 			t.ordinal = it.text
-		case it.pattern == "EEEE":
+		case it.pattern == patEEEE:
 			// The whole template is scientific notation; the digit positions
 			// before it set the mantissa. Falling through to the default copied
 			// the four letters into the result, where a caller could not tell
@@ -879,60 +906,600 @@ func padLeftSpaces(s string, width int) string {
 	return s
 }
 
-// pgParseLayout turns a template into a Go layout, for TO_DATE and
-// TO_TIMESTAMP, which read a value rather than write one. Only the patterns Go
-// has a layout fragment for can be parsed; the rest are matched as the literal
-// text they are, which is what a template holding one asks for anyway.
-func pgParseLayout(format string) string {
-	items, _ := scanPGTemplate(format)
-	var b strings.Builder
-	for _, it := range items {
-		if it.pattern == "" {
-			b.WriteString(it.text)
-			continue
-		}
-		if fragment, ok := pgParseFragment(it); ok {
-			b.WriteString(fragment)
-			continue
-		}
-		b.WriteString(it.text)
-	}
-	return b.String()
+// pgDateFields collects what a template read out of a value. The fields stay
+// separate until the end because they are not independent: a Julian day names a
+// whole date on its own, an ISO year needs its week and weekday, and a
+// twelve-hour clock needs its meridiem.
+type pgDateFields struct {
+	year, month, day             int
+	isoYear, isoWeek, isoDay     int
+	isoDayOfYear                 int
+	dayOfYear, julian            int
+	hour, hour12, minute, second int
+	secondOfDay                  int
+	nanosecond                   int
+	offsetHours, offsetMinutes   int
+	haveOffset                   bool
+	pm, hasPM                    bool
+	bc                           bool
+	haveYear, haveISOYear        bool
+	haveJulian, haveDayOfYear    bool
+	haveISODayOfYear             bool
+	haveTime                     bool
 }
 
-// pgParseFragment is the Go layout fragment that reads one template pattern.
-func pgParseFragment(it pgTemplateItem) (string, bool) {
-	switch it.pattern {
-	case patYYYY:
-		return "2006", true
-	case "YY":
-		return "06", true
-	case patMonth:
-		return layoutMonthLong, true
-	case patMon:
-		return layoutMonthShort, true
-	case "MM":
-		return "01", true
-	case patDay:
-		return layoutWeekdayLong, true
-	case "DY":
-		return layoutWeekdayShort, true
-	case "DD":
-		return "02", true
-	case patHH24:
-		return "15", true
-	case patHH12, "HH":
-		return "03", true
-	case "MI":
-		return "04", true
-	case "SS":
-		return "05", true
-	case "AM", "PM":
-		if strings.ToUpper(it.text) == it.text {
-			return "PM", true
-		}
-		return "pm", true
-	default:
-		return "", false
+// pgTemplateError is what a template reader answers for a value it cannot read.
+// PostgreSQL raises there rather than answering NULL, and NULL is also its
+// answer for a row whose value is simply absent, so the two were
+// indistinguishable: a query written to reject a bad date reported success on
+// exactly the rows it was written to reject.
+func pgTemplateError(pattern, value string) error {
+	return fmt.Errorf("dialect: invalid value %q for %q", value, pattern)
+}
+
+// pgReadTemplate reads a value against a to_char template and answers the
+// instant it names.
+//
+// The reader walks the template and the value together rather than translating
+// the template into a Go layout, because a Go layout cannot spell a day of the
+// year beside a year, an ISO week date, a Julian day or a number written
+// without its padding -- and PostgreSQL reads all four. Translating dropped
+// them and the value came back NULL, which is also the answer for data that
+// does not match, so a caller could not tell an unimplemented pattern from a
+// bad row.
+func pgReadTemplate(format, value string) (time.Time, error) {
+	items, _ := scanPGTemplate(format)
+	var (
+		fields pgDateFields
+		at     int
+	)
+	if err := pgOneDateConvention(items); err != nil {
+		return time.Time{}, err
 	}
+	for _, it := range items {
+		if it.pattern == "" {
+			at = pgSkipLiteral(value, at, it.text)
+			continue
+		}
+		next, err := pgReadPattern(&fields, it.pattern, value, at)
+		if err != nil {
+			return time.Time{}, err
+		}
+		at = next
+	}
+	return pgBuildTime(&fields)
+}
+
+// pgOneDateConvention refuses a template naming a field of each calendar. An
+// ISO week date is built from an ISO year, its week and its weekday, and a
+// Gregorian date from a year, a month and a day; PostgreSQL refuses a template
+// holding both rather than deciding which one the value is written in.
+func pgOneDateConvention(items []pgTemplateItem) error {
+	var iso, gregorian bool
+	for _, it := range items {
+		switch it.pattern {
+		case patIYYY, patIYY, "IY", "I", "IW", "ID", patIDDD:
+			iso = true
+		case patYcommaYYY, patYYYY, patYYY, "YY", "Y", "MM", "DD", patDDD, patMonth, patMon, "RM":
+			gregorian = true
+		}
+	}
+	if iso && gregorian {
+		return errors.New("dialect: a template cannot mix the Gregorian and ISO week date conventions")
+	}
+	return nil
+}
+
+// pgSkipLiteral steps over the literal text between two patterns. PostgreSQL
+// does not insist that the separators match -- to_date('2024/03/05',
+// 'YYYY-MM-DD') is the fifth of March there -- so a separator in the template
+// stands for one in the value whatever the two are. Text the template quoted is
+// there to be found, though, so an exact match is taken first: that is how
+// 'IYYY "W"IW' reads the W in 2024 W10 without spending the I of a following
+// pattern on it.
+func pgSkipLiteral(value string, at int, text string) int {
+	for at < len(value) && pgIsSpace(value[at]) {
+		at++
+	}
+	if text != "" && len(value)-at >= len(text) && strings.EqualFold(value[at:at+len(text)], text) {
+		return at + len(text)
+	}
+	for i := range len(text) {
+		if pgIsSpace(text[i]) {
+			// A blank in the template stands for the blanks in the value,
+			// which were already stepped over. Letting it stand for any
+			// separator ate the sign of a "-05" zone offset behind it.
+			for at < len(value) && pgIsSpace(value[at]) {
+				at++
+			}
+			continue
+		}
+		if at < len(value) && !pgIsDigit(value[at]) && !pgIsLetter(value[at]) {
+			at++
+		}
+	}
+	return at
+}
+
+// pgIsSpace reports whether a byte is one of the blanks a template steps over.
+func pgIsSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
+
+// pgIsDigit reports whether a byte is an ASCII digit.
+func pgIsDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+// pgReadNumber reads up to width digits, which is how PostgreSQL reads a number
+// written without its padding: it stops at the separator rather than insisting
+// on the full width.
+func pgReadNumber(value string, at, width int) (n, next int, ok bool) {
+	for at < len(value) && pgIsSpace(value[at]) {
+		at++
+	}
+	negative := false
+	if at < len(value) && (value[at] == '-' || value[at] == '+') {
+		negative, at = value[at] == '-', at+1
+	}
+	start := at
+	for at < len(value) && at-start < width && pgIsDigit(value[at]) {
+		n = n*10 + int(value[at]-'0')
+		at++
+	}
+	if at == start {
+		return 0, at, false
+	}
+	if negative {
+		n = -n
+	}
+	return n, at, true
+}
+
+// pgReadWord reads the run of letters a name pattern stands for.
+func pgReadWord(value string, at int) (word string, next int) {
+	for at < len(value) && pgIsSpace(value[at]) {
+		at++
+	}
+	start := at
+	for at < len(value) && pgIsLetter(value[at]) {
+		at++
+	}
+	return value[start:at], at
+}
+
+// pgIsLetter reports whether a byte is an ASCII letter.
+func pgIsLetter(c byte) bool { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
+
+// pgReadPattern reads one template pattern out of the value.
+func pgReadPattern(f *pgDateFields, pattern, value string, at int) (int, error) {
+	if width, ok := pgNumericPatternWidth(pattern); ok {
+		n, next, ok := pgReadNumber(value, at, width)
+		if !ok {
+			return 0, pgTemplateError(pattern, pgRemainder(value, at))
+		}
+		pgAssignNumber(f, pattern, n)
+		return next, nil
+	}
+	return pgReadNamePattern(f, pattern, value, at)
+}
+
+// pgRemainder is what is left of the value at a position, for an error message.
+func pgRemainder(value string, at int) string {
+	if at >= len(value) {
+		return ""
+	}
+	return value[at:]
+}
+
+// pgNumericPatternWidth is the number of digits a pattern reads at most, for
+// the patterns that read digits.
+func pgNumericPatternWidth(pattern string) (int, bool) {
+	switch pattern {
+	case "Y", "I", "D", "W", "Q", "ID":
+		return 1, true
+	case "YY", "IY", "MM", "DD", "HH", patHH12, patHH24, "MI", "SS", "WW", "CC", "IW":
+		return 2, true
+	case patYYY, patIYY, patDDD, patIDDD, "MS":
+		return 3, true
+	case patYYYY, patIYYY:
+		return 4, true
+	case patSSSS, patSSSSS:
+		return 5, true
+	case "US":
+		return 6, true
+	case "J":
+		return 7, true
+	}
+	if len(pattern) == 3 && strings.HasPrefix(pattern, patFF) && pgIsDigit(pattern[2]) {
+		return int(pattern[2] - '0'), true
+	}
+	return 0, false
+}
+
+// pgAssignNumber files a number the template read under the field it names.
+func pgAssignNumber(f *pgDateFields, pattern string, n int) {
+	switch pattern {
+	case patYYYY, patYYY, "YY", "Y":
+		f.year, f.haveYear = pgExpandYear(pattern, n), true
+	case patIYYY, patIYY, "IY", "I":
+		f.isoYear, f.haveISOYear = pgExpandYear(pattern, n), true
+	case "MM":
+		f.month = n
+	case "DD":
+		f.day = n
+	case patDDD:
+		f.dayOfYear, f.haveDayOfYear = n, true
+	case patIDDD:
+		// The day of the ISO year, counted from the Monday its first week
+		// begins on rather than from its first of January.
+		f.isoDayOfYear, f.haveISODayOfYear = n, true
+	case "IW":
+		f.isoWeek = n
+	case "ID":
+		f.isoDay = n
+	case "J":
+		f.julian, f.haveJulian = n, true
+	case patHH24:
+		f.hour, f.haveTime = n, true
+	case patHH12, "HH":
+		f.hour12, f.haveTime = n, true
+	case "MI":
+		f.minute, f.haveTime = n, true
+	case "SS":
+		f.second, f.haveTime = n, true
+	case patSSSS, patSSSSS:
+		f.secondOfDay, f.haveTime = n, true
+	case "MS":
+		f.nanosecond, f.haveTime = n*1e6, true
+	case "US":
+		f.nanosecond, f.haveTime = n*1e3, true
+	default:
+		if len(pattern) == 3 && strings.HasPrefix(pattern, patFF) && pgIsDigit(pattern[2]) {
+			scale := 1
+			for range 9 - int(pattern[2]-'0') {
+				scale *= 10
+			}
+			f.nanosecond, f.haveTime = n*scale, true
+		}
+		// The remaining numeric patterns -- the century and the week of the
+		// month -- say nothing a date is built from.
+	}
+}
+
+// pgExpandYear fills in the digits a short year leaves out. PostgreSQL reads
+// two digits below seventy as the two thousands and the rest as the nineteen
+// hundreds, and fills a one- or three-digit year out from two thousand.
+func pgExpandYear(pattern string, n int) int {
+	// The two families spell the same widths, so the pattern's own length is
+	// the number of digits: Y and I are one, YYYY and IYYY are four.
+	switch len(pattern) {
+	case 1, 3:
+		return 2000 + n
+	case 2:
+		if n < 70 {
+			return 2000 + n
+		}
+		return 1900 + n
+	default:
+		return n
+	}
+}
+
+// pgReadNamePattern reads the patterns written as words.
+func pgReadNamePattern(f *pgDateFields, pattern, value string, at int) (int, error) {
+	switch pattern {
+	case patMonth, patMon:
+		word, next := pgReadWord(value, at)
+		month, ok := pgMonthNamed(word)
+		if !ok {
+			return 0, pgTemplateError(pattern, word)
+		}
+		f.month = month
+		return next, nil
+	case patDay, "DY":
+		// The weekday name says nothing the date is built from, and
+		// PostgreSQL ignores it too.
+		_, next := pgReadWord(value, at)
+		return next, nil
+	case "RM":
+		word, next := pgReadWord(value, at)
+		month, ok := pgRomanMonth(word)
+		if !ok {
+			return 0, pgTemplateError(pattern, word)
+		}
+		f.month = month
+		return next, nil
+	case "AM", "PM", patAMDot, patPMDot:
+		return pgReadMeridiem(f, pattern, value, at)
+	case "BC", "AD", patBC, patAD:
+		word, next := pgReadWord(value, at)
+		f.bc = strings.EqualFold(strings.ReplaceAll(word, ".", ""), "BC")
+		return next, nil
+	case "TH", "PR", "SG", "PL", "RN", "V", "S", "L", "G", "C", patEEEE:
+		// The patterns that decorate a number rather than name a field.
+		// PostgreSQL steps over them on input and so does this.
+		_, next := pgReadWord(value, at)
+		return next, nil
+	case "TZ":
+		// A zone name, which PostgreSQL reads and ignores: the value it
+		// answers is the one the clock fields spell.
+		_, next := pgReadWord(value, at)
+		return next, nil
+	case patTZH, patTZM, "OF":
+		return pgReadZoneOffset(f, pattern, value, at)
+	case patYcommaYYY:
+		// A year with its thousands separated, which to_char writes as
+		// "2,024". The comma is part of the pattern rather than between two of
+		// them, so the digits on either side are one number.
+		return pgReadSeparatedYear(f, value, at)
+	}
+	return 0, fmt.Errorf("dialect: the template pattern %q is not supported", pattern)
+}
+
+// pgReadSeparatedYear reads a year written with its thousands separated. The
+// leading group is as long as the year needs, so 12,024 is a year too.
+func pgReadSeparatedYear(f *pgDateFields, value string, at int) (int, error) {
+	const groupWidth = 3
+	lead, next, ok := pgReadNumber(value, at, maxYearDigits)
+	if !ok {
+		return 0, pgTemplateError(patYcommaYYY, pgRemainder(value, at))
+	}
+	year := lead
+	for next < len(value) && value[next] == ',' {
+		// The bound is on the year rather than on the number of groups, so a
+		// run of them cannot carry the multiplication past what an int holds
+		// and answer a different date.
+		if year > (maxTemplateYear-999)/1000 {
+			return 0, pgTemplateError(patYcommaYYY, pgRemainder(value, at))
+		}
+		group, after, ok := pgReadNumber(value, next+1, groupWidth)
+		if !ok {
+			return 0, pgTemplateError(patYcommaYYY, pgRemainder(value, next))
+		}
+		year = year*1000 + group
+		next = after
+	}
+	f.year, f.haveYear = year, true
+	return next, nil
+}
+
+// The bounds on a year read from a template, which are what keep a run of
+// digits from being read as one number no calendar has.
+const (
+	maxYearDigits   = 7
+	maxTemplateYear = 9999999
+)
+
+// pgReadZoneOffset reads the offset from UTC a template names, which
+// PostgreSQL applies to the fields it read: 13:45 at +05 is 08:45 UTC.
+func pgReadZoneOffset(f *pgDateFields, pattern, value string, at int) (int, error) {
+	if pattern == patTZM {
+		minutes, next, ok := pgReadNumber(value, at, 2)
+		if !ok {
+			return 0, pgTemplateError(pattern, pgRemainder(value, at))
+		}
+		f.offsetMinutes, f.haveOffset = minutes, true
+		return next, nil
+	}
+	hours, next, ok := pgReadNumber(value, at, 3)
+	if !ok {
+		return 0, pgTemplateError(pattern, pgRemainder(value, at))
+	}
+	f.offsetHours, f.haveOffset = hours, true
+	if pattern != "OF" || next >= len(value) || value[next] != ':' {
+		return next, nil
+	}
+	// OF writes the minutes after a colon when the offset has them.
+	minutes, after, ok := pgReadNumber(value, next+1, 2)
+	if !ok {
+		return next, nil
+	}
+	f.offsetMinutes = minutes
+	return after, nil
+}
+
+// pgReadMeridiem reads AM or PM, in either of the two spellings.
+func pgReadMeridiem(f *pgDateFields, pattern, value string, at int) (int, error) {
+	for at < len(value) && pgIsSpace(value[at]) {
+		at++
+	}
+	width := 2
+	if strings.Contains(pattern, ".") {
+		width = 4
+	}
+	if at+width > len(value) {
+		return 0, pgTemplateError(pattern, pgRemainder(value, at))
+	}
+	word := strings.ToUpper(strings.ReplaceAll(value[at:at+width], ".", ""))
+	switch word {
+	case "AM":
+		f.pm, f.hasPM = false, true
+	case "PM":
+		f.pm, f.hasPM = true, true
+	default:
+		return 0, pgTemplateError(pattern, value[at:at+width])
+	}
+	return at + width, nil
+}
+
+// pgMonthNamed reads a month written out or abbreviated.
+func pgMonthNamed(word string) (int, bool) {
+	if word == "" {
+		return 0, false
+	}
+	for m := time.January; m <= time.December; m++ {
+		name := m.String()
+		if strings.EqualFold(word, name) || strings.EqualFold(word, name[:3]) {
+			return int(m), true
+		}
+	}
+	return 0, false
+}
+
+// pgRomanMonth reads a month written in Roman numerals, which is what RM writes.
+func pgRomanMonth(word string) (int, bool) {
+	numerals := []string{"I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"}
+	for i, numeral := range numerals {
+		if strings.EqualFold(word, numeral) {
+			return i + 1, true
+		}
+	}
+	return 0, false
+}
+
+// pgBuildTime turns the fields a template read into the instant they name,
+// refusing a date that does not exist. PostgreSQL raises for the thirtieth of
+// February and for a thirteenth month, and answering the first of March for the
+// former is the silent wrong answer a validating query is written to catch.
+func pgBuildTime(f *pgDateFields) (time.Time, error) {
+	hour, err := pgClockHour(f)
+	if err != nil {
+		return time.Time{}, err
+	}
+	minute, second := f.minute, f.second
+	if f.secondOfDay > 0 {
+		hour, minute, second = f.secondOfDay/3600, f.secondOfDay/60%60, f.secondOfDay%60
+	}
+	if minute > 59 || second > 59 {
+		return time.Time{}, fmt.Errorf("dialect: date/time field value out of range: %02d:%02d:%02d", hour, minute, second)
+	}
+	clock := time.Duration(hour)*time.Hour + time.Duration(minute)*time.Minute +
+		time.Duration(second)*time.Second + time.Duration(f.nanosecond)*time.Nanosecond
+	day, err := pgCalendarDay(f)
+	if err != nil {
+		return time.Time{}, err
+	}
+	built := day.Add(clock)
+	if f.haveOffset {
+		// The fields were written at that offset, so the instant is that many
+		// hours earlier in UTC, which is the zone this package reads every
+		// value in.
+		minutes := f.offsetMinutes
+		if f.offsetHours < 0 {
+			minutes = -minutes
+		}
+		built = built.Add(-(time.Duration(f.offsetHours)*time.Hour + time.Duration(minutes)*time.Minute))
+	}
+	return built, nil
+}
+
+// pgClockHour resolves the two clocks a template can name into one.
+func pgClockHour(f *pgDateFields) (int, error) {
+	hour := f.hour
+	if f.hour12 != 0 || f.hasPM {
+		if f.hour12 < 1 || f.hour12 > 12 {
+			return 0, fmt.Errorf("dialect: hour %d is out of range for a twelve-hour clock", f.hour12)
+		}
+		hour = f.hour12 % 12
+		if f.pm {
+			hour += 12
+		}
+	}
+	if hour > 23 {
+		return 0, fmt.Errorf("dialect: date/time field value out of range: hour %d", hour)
+	}
+	return hour, nil
+}
+
+// pgCalendarDay is the day the fields name, by whichever of the four ways the
+// template spelled it.
+func pgCalendarDay(f *pgDateFields) (time.Time, error) {
+	// A day of the year says nothing without the year it counts from, and the
+	// two conventions do not mix: an ISO week date is built from an ISO year
+	// and a Gregorian date from a Gregorian one, and PostgreSQL refuses a
+	// template holding both.
+	if (f.haveDayOfYear && !f.haveYear) || (f.haveISODayOfYear && !f.haveISOYear) {
+		return time.Time{}, errors.New("dialect: the day of the year cannot be read without the year it counts from")
+	}
+	switch {
+	case f.haveJulian:
+		// Day zero of the Julian period, from which PostgreSQL counts.
+		return time.Date(-4713, time.November, 24, 0, 0, 0, 0, time.UTC).
+			AddDate(0, 0, f.julian), nil
+	case f.haveISOYear && f.haveISODayOfYear:
+		if f.isoDayOfYear < 1 || f.isoDayOfYear > 371 {
+			return time.Time{}, fmt.Errorf("dialect: date/time field value out of range: ISO day %d",
+				f.isoDayOfYear)
+		}
+		return pgISOWeekDate(f.isoYear, 1, 1).AddDate(0, 0, f.isoDayOfYear-1), nil
+	case f.haveISOYear:
+		// An ISO year on its own is its first week's Monday, which is what
+		// PostgreSQL answers for it.
+		isoWeek := f.isoWeek
+		if isoWeek == 0 {
+			isoWeek = 1
+		}
+		if isoWeek > 53 {
+			return time.Time{}, fmt.Errorf("dialect: date/time field value out of range: ISO week %d", isoWeek)
+		}
+		isoDay := f.isoDay
+		if isoDay == 0 {
+			isoDay = 1
+		}
+		if isoDay > 7 {
+			return time.Time{}, fmt.Errorf("dialect: date/time field value out of range: ISO day %d", isoDay)
+		}
+		return pgISOWeekDate(f.isoYear, isoWeek, isoDay), nil
+	case f.haveDayOfYear:
+		year := f.year
+		if !f.haveYear {
+			year = 1
+		}
+		if f.dayOfYear < 1 || f.dayOfYear > pgDaysInYear(year) {
+			return time.Time{}, fmt.Errorf("dialect: date/time field value out of range: day %d of %d",
+				f.dayOfYear, year)
+		}
+		return time.Date(pgSignedYear(f, year), time.January, f.dayOfYear, 0, 0, 0, 0, time.UTC), nil
+	default:
+		return pgCalendarDate(f)
+	}
+}
+
+// pgCalendarDate is the day a year, a month and a day of the month name.
+func pgCalendarDate(f *pgDateFields) (time.Time, error) {
+	year, month, day := f.year, f.month, f.day
+	if !f.haveYear {
+		year = 1
+	}
+	if month == 0 {
+		month = 1
+	}
+	if day == 0 {
+		day = 1
+	}
+	if month > 12 {
+		return time.Time{}, fmt.Errorf("dialect: date/time field value out of range: month %d", month)
+	}
+	built := time.Date(pgSignedYear(f, year), time.Month(month), day, 0, 0, 0, 0, time.UTC)
+	if int(built.Month()) != month || built.Day() != day {
+		return time.Time{}, fmt.Errorf("dialect: date/time field value out of range: %04d-%02d-%02d",
+			year, month, day)
+	}
+	return built, nil
+}
+
+// pgSignedYear turns a year read with BC into the negative year Go counts in.
+func pgSignedYear(f *pgDateFields, year int) int {
+	if f.bc {
+		return -year + 1
+	}
+	return year
+}
+
+// pgDaysInYear is 365, or 366 when the year is a leap year.
+func pgDaysInYear(year int) int {
+	if time.Date(year, time.December, 31, 0, 0, 0, 0, time.UTC).YearDay() == 366 {
+		return 366
+	}
+	return 365
+}
+
+// pgISOWeekDate is the day an ISO year, week and weekday name. The fourth of
+// January is in the first ISO week of every year, which is what fixes the
+// week's Monday.
+func pgISOWeekDate(isoYear, isoWeek, isoDay int) time.Time {
+	fourth := time.Date(isoYear, time.January, 4, 0, 0, 0, 0, time.UTC)
+	weekday := int(fourth.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	monday := fourth.AddDate(0, 0, 1-weekday)
+	return monday.AddDate(0, 0, (isoWeek-1)*7+isoDay-1)
 }

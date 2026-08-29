@@ -106,7 +106,10 @@
 //   - keep_digits, keep_alpha: keep only digits, or only letters
 //   - remove_digits, remove_alpha: remove digits, or letters
 //   - coerce=int|float|bool: normalize the written form of a number or a
-//     boolean
+//     boolean. It rewrites how the value is written and not what it says, so a
+//     spelling the loader keeps as text -- a leading zero, a literal past
+//     int64, Go's own number syntax, a decimal a float64 cannot hold -- is left
+//     alone
 //   - fix_scheme=scheme: add scheme:// to a URL that has no scheme
 //
 // A tag that needs a parameter and is given none is an invalid tag argument:

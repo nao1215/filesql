@@ -370,8 +370,8 @@ func registerAll() error {
 	maps.Copy(det, postgresqlScalarFunctions())
 	maps.Copy(det, googlesqlScalarFunctions())
 	for name, spec := range det {
-		if err := sqlite.RegisterDeterministicScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
-			return fmt.Errorf("dialect: register %s: %w", name, err)
+		if err := registerScalar(name, spec, true); err != nil {
+			return err
 		}
 	}
 	registeredFunctions = det
@@ -383,8 +383,8 @@ func registerAll() error {
 	// non-deterministic because the helper it is given may be clock_timestamp.
 	nondet["safe_call"] = scalarSpec{nArg: -1, fn: fnSafeCall}
 	for name, spec := range nondet {
-		if err := sqlite.RegisterScalarFunction(name, spec.nArg, wrapScalar(spec.fn)); err != nil {
-			return fmt.Errorf("dialect: register %s: %w", name, err)
+		if err := registerScalar(name, spec, false); err != nil {
+			return err
 		}
 	}
 	maps.Copy(registeredFunctions, nondet)
@@ -459,8 +459,50 @@ func fnSafeCall(args []driver.Value) (driver.Value, error) {
 
 func wrapScalar(fn scalarFn) func(ctx *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
 	return func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
-		return fn(args)
+		return fn(copyArgs(args))
 	}
+}
+
+// registerScalar registers one helper with the driver.
+//
+// The registration asks for volatile arguments, which is the driver's only way
+// to hand over a text value whole: with them off it reads a TEXT argument as a
+// C string, which ends at the first zero byte, so a value SQLite holds as
+// "a\x00b" reached a helper as "a". A zero byte is a character MySQL,
+// PostgreSQL and SQLite all store inside a string and a CSV cell can carry, and
+// a helper that answered about a shorter value than the one in the database
+// disagreed with SQLite's own built-ins about the same cell.
+//
+// The driver's own contract for a volatile argument is that it is a view into
+// memory SQLite reuses after the call, so copyArgs takes a copy of every string
+// and byte slice before the helper sees it. That is the allocation the driver
+// would have made itself with volatile arguments off, so the cost is the same
+// and the bytes are all there.
+func registerScalar(name string, spec scalarSpec, deterministic bool) error {
+	impl := &sqlite.FunctionImpl{
+		NArgs:         spec.nArg,
+		Deterministic: deterministic,
+		Scalar:        wrapScalar(spec.fn),
+		VolatileArgs:  true,
+	}
+	if err := sqlite.RegisterFunction(name, impl); err != nil {
+		return fmt.Errorf("dialect: register %s: %w", name, err)
+	}
+	return nil
+}
+
+// copyArgs moves a call's text and blob arguments into memory this package
+// owns. See registerScalar for why the driver hands over memory it does not.
+func copyArgs(args []driver.Value) []driver.Value {
+	for i, arg := range args {
+		switch v := arg.(type) {
+		case string:
+			args[i] = string(append([]byte(nil), v...))
+		case []byte:
+			args[i] = append([]byte(nil), v...)
+		}
+	}
+	return args
 }
 
 // --- value coercion helpers ---
@@ -823,6 +865,13 @@ func fnDateFormat(args []driver.Value) (driver.Value, error) {
 	if !ok || !ok2 {
 		return nil, nil
 	}
+	if format == "" {
+		// MySQL answers NULL for an empty format rather than the empty string.
+		// Nothing it can write is empty, so the two are distinguishable, and
+		// the empty string here was indistinguishable from a format that
+		// produced one.
+		return nil, nil
+	}
 	tm, ok := parseTime(s)
 	if !ok {
 		return nil, nil
@@ -1017,26 +1066,46 @@ func fnStrToDate(args []driver.Value) (driver.Value, error) {
 		return nil, nil
 	}
 	var layout strings.Builder
-	var sawYear, sawMonth, sawDay, sawWeekday, sawTime bool
+	var sawYear, sawMonth, sawDay, sawWeekday, sawTime, sawFraction bool
 	for i := 0; i < len(format); i++ {
 		if format[i] == '%' && i+1 < len(format) {
 			spec := format[i+1]
-			if l, found := mysqlLayoutFor(spec, true); found {
-				layout.WriteString(l)
-				switch spec {
-				case 'Y', 'y':
-					sawYear = true
-				case 'm', 'c', 'M', 'b':
-					sawMonth = true
-				case 'd', 'e':
-					sawDay = true
-				case 'W', 'a':
-					sawWeekday = true
-				default:
-					sawTime = true
+			switch {
+			case spec == 'j':
+				// The day of the year, which Go's layout spells 002 and
+				// no MySQL-to-Go table entry could, because the formatting
+				// direction writes it from a computed field. Together with a
+				// year it is a whole date, so it stands for the month and the
+				// day the completeness check below asks for.
+				layout.WriteString("002")
+				sawMonth, sawDay = true, true
+			case spec == 'f' && strings.HasSuffix(layout.String(), "."):
+				// The microseconds, which Go reads as part of the seconds and
+				// so takes the point with them. MySQL pads a short fraction on
+				// the right, and so does Go: ".1" is a tenth of a second.
+				current := layout.String()
+				layout.Reset()
+				layout.WriteString(current[:len(current)-1])
+				layout.WriteString(".999999")
+				sawTime, sawFraction = true, true
+			default:
+				if l, found := mysqlLayoutFor(spec, true); found {
+					layout.WriteString(l)
+					switch spec {
+					case 'Y', 'y':
+						sawYear = true
+					case 'm', 'c', 'M', 'b':
+						sawMonth = true
+					case 'd', 'e':
+						sawDay = true
+					case 'W', 'a':
+						sawWeekday = true
+					default:
+						sawTime = true
+					}
+				} else {
+					layout.WriteByte(spec)
 				}
-			} else {
-				layout.WriteByte(spec)
 			}
 			i++
 			continue
@@ -1055,13 +1124,18 @@ func fnStrToDate(args []driver.Value) (driver.Value, error) {
 	if hasDate && (!sawYear || !sawMonth || !sawDay) {
 		return nil, nil
 	}
+	clock := layoutTimeOnly
+	if sawFraction {
+		// MySQL writes the six digits, so a fraction of a tenth is .100000.
+		clock += ".000000"
+	}
 	switch {
 	case hasDate && sawTime:
-		return tm.Format(layoutDateTime), nil
+		return tm.Format(layoutDateOnly + " " + clock), nil
 	case hasDate:
 		return tm.Format(layoutDateOnly), nil
 	case sawTime:
-		return tm.Format(layoutTimeOnly), nil
+		return tm.Format(clock), nil
 	default:
 		return nil, nil
 	}
@@ -2453,9 +2527,9 @@ func fnToDate(args []driver.Value) (driver.Value, error) {
 	if !ok || !ok2 {
 		return nil, nil
 	}
-	tm, ok := parseLayout(pgParseLayout(format), s)
-	if !ok {
-		return nil, nil
+	tm, err := pgReadTemplate(format, s)
+	if err != nil {
+		return nil, err
 	}
 	return tm.Format(layoutDateOnly), nil
 }
@@ -2851,6 +2925,13 @@ func fnMySQLRegexpReplace(args []driver.Value) (driver.Value, error) {
 // (multi-line) and n (a dot matches a newline); u, which selects Unix line
 // endings, has no Go equivalent and is refused rather than ignored.
 func mysqlRegexpPattern(pattern, matchType string) (string, error) {
+	// MySQL refuses an empty pattern rather than matching everywhere with it,
+	// which is what Go's regexp does and what this answered: REGEXP_LIKE(x, '')
+	// was true for every row, including the rows a caller wrote the query to
+	// find.
+	if pattern == "" {
+		return "", errors.New("dialect: the regular expression is empty, which MySQL refuses")
+	}
 	fold := true
 	var flags string
 	for _, c := range matchType {

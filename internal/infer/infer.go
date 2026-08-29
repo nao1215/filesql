@@ -235,19 +235,55 @@ func HasDigit(value string) bool {
 }
 
 // Float64 reports the float64 a numeric spelling converts to, the way SQLite's
-// REAL affinity converts the same text. A spelling whose parse saturates is a
-// number too: strconv answers the saturated value beside ErrRange, and SQLite
-// stores that same value — "9e999" is the infinity to both — which is why the
-// dump spells an infinity that way. Refusing it here turned a dumped REAL
-// column holding one into TEXT. Vocabulary guards (a leading zero, Go-only
-// syntax, an integer past int64) are the caller's, run before this.
+// REAL affinity converts the same text. Vocabulary guards (a leading zero,
+// Go-only syntax, an integer past int64) are the caller's, run before this.
+//
+// A spelling a float64 cannot hold is not a float, for the same reason an
+// integer past int64 is not an integer: the value in the file does not survive
+// the column. "1e400" parses to an infinity and "1e-400" to a zero, and both
+// were stored, so a measurement in a file became +Inf or an exact zero that
+// reads like a real reading. TEXT keeps the digits and the caller can cast.
+// Overflow is reported by strconv as ErrRange; underflow is not reported at
+// all, so it is read off the answer instead -- a zero from a spelling that
+// holds a nonzero digit is a value too small to hold.
+//
+// The one spelling that is kept is the infinity this package writes itself. A
+// REAL column holding an infinity is dumped as "9e999", which is the only text
+// SQLite's REAL affinity reads back as one, and refusing it here turned that
+// column into TEXT on the next load. Nothing is lost by keeping it: the value
+// it spells is the value it came from.
 func Float64(value string) (float64, bool) {
 	f, err := strconv.ParseFloat(value, 64)
-	if err == nil || errors.Is(err, strconv.ErrRange) {
+	switch {
+	case err == nil:
+		return f, !UnderflowsFloat64(value, f)
+	case errors.Is(err, strconv.ErrRange) && IsInfinityLiteral(value):
 		return f, true
+	default:
+		return 0, false
 	}
-	return 0, false
 }
+
+// UnderflowsFloat64 reports whether a spelling naming a nonzero quantity was
+// answered as an exact zero, which is the loss strconv does not report.
+func UnderflowsFloat64(value string, f float64) bool {
+	if f != 0 {
+		return false
+	}
+	mantissa, _, _ := strings.Cut(strings.ToLower(value), "e")
+	return strings.ContainsAny(mantissa, "123456789")
+}
+
+// IsInfinityLiteral reports whether value is the spelling a dump writes for an
+// infinity. See [Float64] for why it is the one out-of-range spelling a REAL
+// column accepts.
+func IsInfinityLiteral(value string) bool {
+	return value == infinityLiteral || value == "-"+infinityLiteral
+}
+
+// infinityLiteral is what a dump writes for an infinite REAL, and the only text
+// SQLite's REAL affinity reads back as one.
+const infinityLiteral = "9e999"
 
 // MustStayText reports whether a numeric column would damage this value, so
 // the column holding it has to be TEXT.

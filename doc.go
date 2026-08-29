@@ -67,6 +67,8 @@
 //   - a leading zero, such as 007, which INTEGER drops
 //   - an integer past int64, such as 11040320260000000000, which float64 renders
 //     as 1.104032026e+19
+//   - a decimal a float64 cannot hold, such as 1e400 or 1e-400, which would be
+//     stored as an infinity or as an exact zero
 //   - a spelling Go parses and SQLite's affinity does not convert, such as 1_000
 //     or 0x1p4
 //   - the padding a fixed-width code carries, such as "  42"
