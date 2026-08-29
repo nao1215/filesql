@@ -118,9 +118,11 @@
 // Parquet reader passed to DBBuilder.AddReader is buffered whole instead,
 // because a stream cannot go back and the format is read back to front.
 //
-// One record is held whole while it is read, so a delimited record, a JSONL line
-// or one element of a JSON array longer than 64 MiB is refused rather than
-// buffered. A file cannot cost more than its own size either way; what the bound
+// One record is held whole while it is read, so a record longer than 64 MiB is
+// refused rather than buffered: a delimited record, an LTSV record, a JSONL
+// line, one element of a JSON array, a JSON document that is not an array --
+// which is one record, since it becomes one row holding the whole of it -- and
+// an ACH record. A file cannot cost more than its own size either way; what the bound
 // is for is a source that is a stream, where a record with no terminator would
 // otherwise ask for everything the sender chooses to send. The JSON refusal
 // lands within one of the decoder's own reads of the bound rather than on it, so

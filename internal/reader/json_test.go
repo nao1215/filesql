@@ -238,10 +238,21 @@ func TestJSONArrayElementIsBounded(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	t.Run("a document that is not an array is read whole", func(t *testing.T) {
+	t.Run("a document that is not an array is one record and is bounded too", func(t *testing.T) {
 		t.Parallel()
 
+		// Such a document becomes one row holding the whole of it, so the
+		// record bound is the bound on it. Without one, a stream sending a
+		// document that never ends was read however long it was.
 		_, err := readAll(t, `{"a":"`+strings.Repeat("x", limit*4)+`"}`)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrRecordTooLong)
+	})
+
+	t.Run("a document under the bound is read whole", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := readAll(t, `{"a":"`+strings.Repeat("x", limit/2)+`"}`)
 		assert.NoError(t, err)
 	})
 }

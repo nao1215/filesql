@@ -50,6 +50,63 @@ func elementTooLongError(index, limit int) error {
 	return fmt.Errorf("%w: element %d is longer than the %s a record may be", ErrRecordTooLong, index, byteSize(limit))
 }
 
+// lineBoundedReader refuses a source that sends one line longer than the bound,
+// counting from one terminator to the next.
+//
+// It is for the formats that are read whole. A file cannot be longer than
+// itself, so reading one whole costs what it costs; a stream has no such size,
+// and a record with no terminator asks for everything the sender chooses to
+// send. Bounding the file would refuse a large one that is perfectly ordinary,
+// so what is bounded is the record, which is the same rule the delimited readers
+// hold to and the same refusal.
+type lineBoundedReader struct {
+	src   io.Reader
+	limit int
+	// run is the bytes read since the last terminator, and line is the number
+	// of the record they belong to.
+	run  int
+	line int
+}
+
+// BoundRecords wraps src so one record past the bound every reader here holds
+// to is refused. It is for a format read by a library of its own, which has no
+// bound of its own to hold to.
+func BoundRecords(src io.Reader) io.Reader {
+	return newLineBoundedReader(src, maxRecordSize)
+}
+
+// newLineBoundedReader wraps src so one line past limit is refused.
+func newLineBoundedReader(src io.Reader, limit int) *lineBoundedReader {
+	return &lineBoundedReader{src: src, limit: limit, line: 1}
+}
+
+// Read implements io.Reader. The bytes read before the refusal are returned with
+// it, the way bufio does, so nothing already handed over is lost on the way to
+// the error.
+func (r *lineBoundedReader) Read(p []byte) (int, error) {
+	n, err := r.src.Read(p)
+	// The record is measured as the bytes go past rather than after they have,
+	// because a whole record and its terminator can arrive in one read: the
+	// terminator would reset the count and the record would be accepted having
+	// never been measured.
+	long := 0
+	for _, c := range p[:n] {
+		if c == '\n' {
+			r.run = 0
+			r.line++
+			continue
+		}
+		r.run++
+		if r.run > r.limit && long == 0 {
+			long = r.line
+		}
+	}
+	if long != 0 {
+		return n, recordTooLongError(long, r.limit)
+	}
+	return n, err
+}
+
 // byteSize spells a limit the way it is written down, so a message quotes the
 // constant rather than its expansion.
 func byteSize(n int) string {

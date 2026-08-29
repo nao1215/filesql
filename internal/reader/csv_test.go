@@ -268,3 +268,96 @@ func TestDelimitedRecordIsBounded(t *testing.T) {
 		assert.NoError(t, readAll(t, FormatTSV, body))
 	})
 }
+
+// TestReadInFullFormatsAreBoundedToo pins the same bound for the formats that
+// are read whole. It lives beside the delimited test because it is that rule,
+// stated once in delimited.go: a file cannot be longer than itself, but a stream
+// can, and a record with no terminator asks for everything the sender chooses to
+// send.
+//
+// LTSV held to no bound at all, so a 200 MiB record with no terminator loaded
+// and answered a table -- the one format that gave a caller no way to know. A
+// JSON document that is not an array becomes one row holding the whole of it,
+// which is one record and had no bound either.
+func TestReadInFullFormatsAreBoundedToo(t *testing.T) {
+	t.Parallel()
+
+	const limit = 1 << 10
+
+	readLTSVBounded := func(body string) error {
+		_, err := readLTSV(strings.NewReader(body), Options{maxRecord: limit}, func(*Chunk) error { return nil })
+		return err
+	}
+
+	t.Run("LTSV refuses a record past the limit", func(t *testing.T) {
+		t.Parallel()
+
+		err := readLTSVBounded("v:" + strings.Repeat("x", limit*4) + "\n")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrRecordTooLong)
+		assert.Contains(t, err.Error(), "line 1", "the message names the record")
+		assert.Contains(t, err.Error(), "1 KiB", "and the limit it passed")
+	})
+
+	t.Run("LTSV accepts a record under the limit", func(t *testing.T) {
+		t.Parallel()
+
+		assert.NoError(t, readLTSVBounded("v:"+strings.Repeat("x", limit/2)+"\n"))
+	})
+
+	t.Run("a large LTSV file of short records is unaffected", func(t *testing.T) {
+		t.Parallel()
+
+		// The bound is on the record and not on the file, so a file many times
+		// the limit still loads. Refusing it would refuse an ordinary log.
+		assert.NoError(t, readLTSVBounded(strings.Repeat("v:short\n", limit)))
+	})
+
+	t.Run("a record with no terminator at all is bounded", func(t *testing.T) {
+		t.Parallel()
+
+		err := readLTSVBounded("v:" + strings.Repeat("x", limit*4))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrRecordTooLong)
+	})
+}
+
+// TestLineBoundedReaderCountsFromEachTerminator covers the wrapper directly: it
+// answers how long the current line is rather than how much has been read, so a
+// long file of short lines passes and one long line does not.
+func TestLineBoundedReaderCountsFromEachTerminator(t *testing.T) {
+	t.Parallel()
+
+	const limit = 16
+
+	read := func(body string) error {
+		_, err := io.ReadAll(newLineBoundedReader(strings.NewReader(body), limit))
+		return err
+	}
+
+	assert.NoError(t, read(strings.Repeat("short\n", 1000)), "many short lines are under the bound")
+	assert.NoError(t, read(strings.Repeat("x", limit)+"\n"), "a line of exactly the bound passes")
+
+	err := read(strings.Repeat("x", limit+1))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrRecordTooLong)
+	assert.Contains(t, err.Error(), "line 1")
+
+	err = read("a\nb\n" + strings.Repeat("x", limit+1))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrRecordTooLong)
+	assert.Contains(t, err.Error(), "line 3", "the message names the record the bytes belong to")
+
+	// A record and its terminator arriving in one read is the case a check made
+	// after the bytes had gone past would miss: the terminator resets the count,
+	// so the record would be accepted having never been measured.
+	err = read(strings.Repeat("x", limit+1) + "\nshort\n")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrRecordTooLong)
+	assert.Contains(t, err.Error(), "line 1", "the message names the record, not the one after it")
+
+	err = read("short\n" + strings.Repeat("x", limit+1) + "\n" + strings.Repeat("y", limit+1) + "\n")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrRecordTooLong)
+	assert.Contains(t, err.Error(), "line 2", "the first record past the bound is the one named")
+}

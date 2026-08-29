@@ -64,8 +64,15 @@ func readJSON(src io.Reader, opts Options, emit Emit) (Result, error) {
 		return result, nil
 	}
 
-	content, err := io.ReadAll(buffered)
+	// A document that is not an array is one record, and one record is held
+	// whole, so the same bound applies to it: without one, a stream sending a
+	// document that never ends is read however long it is.
+	bounded := &elementReader{src: buffered, limit: recordLimitOf(opts), index: 1}
+	content, err := io.ReadAll(bounded)
 	if err != nil {
+		if errors.Is(err, ErrRecordTooLong) {
+			return Result{}, err
+		}
 		return Result{}, parseError(err, "failed to read JSON")
 	}
 	var value json.RawMessage
