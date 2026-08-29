@@ -1243,6 +1243,12 @@ func pgReadSeparatedYear(f *pgDateFields, value string, at int) (int, error) {
 	}
 	year := lead
 	for next < len(value) && value[next] == ',' {
+		// The bound is on the year rather than on the number of groups, so a
+		// run of them cannot carry the multiplication past what an int holds
+		// and answer a different date.
+		if year > (maxTemplateYear-999)/1000 {
+			return 0, pgTemplateError(patYcommaYYY, pgRemainder(value, at))
+		}
 		group, after, ok := pgReadNumber(value, next+1, groupWidth)
 		if !ok {
 			return 0, pgTemplateError(patYcommaYYY, pgRemainder(value, next))
@@ -1254,9 +1260,12 @@ func pgReadSeparatedYear(f *pgDateFields, value string, at int) (int, error) {
 	return next, nil
 }
 
-// maxYearDigits bounds the digits read for a year, which is what keeps a run of
-// them from being read as one number no calendar has.
-const maxYearDigits = 7
+// The bounds on a year read from a template, which are what keep a run of
+// digits from being read as one number no calendar has.
+const (
+	maxYearDigits   = 7
+	maxTemplateYear = 9999999
+)
 
 // pgReadZoneOffset reads the offset from UTC a template names, which
 // PostgreSQL applies to the fields it read: 13:45 at +05 is 08:45 UTC.
