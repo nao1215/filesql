@@ -350,3 +350,68 @@ func TestQueriesThatStopInTheMiddle(t *testing.T) {
 		})
 	}
 }
+
+// TestTheClauseSpellingsTheGrammarAccepts covers the alternatives inside a
+// clause: the join words, the ordering words, the frame units, and the table
+// options each dialect writes.
+func TestTheClauseSpellingsTheGrammarAccepts(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		dialect dialects.Dialect
+		query   string
+	}{
+		// Every join spelling, including the ones with OUTER written out.
+		{dialects.PostgreSQL, "SELECT a FROM t INNER JOIN u ON t.a = u.a"},
+		{dialects.PostgreSQL, "SELECT a FROM t LEFT OUTER JOIN u ON t.a = u.a"},
+		{dialects.PostgreSQL, "SELECT a FROM t RIGHT OUTER JOIN u ON t.a = u.a"},
+		{dialects.PostgreSQL, "SELECT a FROM t FULL OUTER JOIN u ON t.a = u.a"},
+		{dialects.PostgreSQL, "SELECT a FROM t NATURAL LEFT JOIN u"},
+		{dialects.MySQL, "SELECT a FROM t STRAIGHT_JOIN u ON t.a = u.a"},
+		{dialects.PostgreSQL, "SELECT a FROM t, u, v"},
+
+		// The ordering words, on both sides of the default.
+		{dialects.PostgreSQL, "SELECT a FROM t ORDER BY a ASC, b DESC"},
+		{dialects.PostgreSQL, "SELECT a FROM t ORDER BY a NULLS FIRST, b NULLS LAST"},
+		{dialects.PostgreSQL, `SELECT a FROM t ORDER BY a COLLATE "C" DESC`},
+
+		// Every frame unit and both bound forms.
+		{dialects.PostgreSQL, "SELECT sum(a) OVER (ORDER BY b ROWS 1 PRECEDING) FROM t"},
+		{dialects.PostgreSQL, "SELECT sum(a) OVER (ORDER BY b RANGE CURRENT ROW) FROM t"},
+		{dialects.PostgreSQL, "SELECT sum(a) OVER (ORDER BY b GROUPS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM t"},
+		{dialects.PostgreSQL, "SELECT sum(a) OVER (ORDER BY b ROWS BETWEEN 1 FOLLOWING AND 2 FOLLOWING) FROM t"},
+		{dialects.PostgreSQL, "SELECT sum(a) OVER (ORDER BY b ROWS CURRENT ROW EXCLUDE NO OTHERS) FROM t"},
+
+		// The limit spellings.
+		{dialects.MySQL, "SELECT a FROM t LIMIT 1, 2"},
+		{dialects.PostgreSQL, "SELECT a FROM t OFFSET 2 ROWS"},
+		{dialects.PostgreSQL, "SELECT a FROM t FETCH NEXT 2 ROWS ONLY"},
+
+		// The table options each dialect writes after a column list.
+		{dialects.PostgreSQL, "CREATE TABLE t (a INT) WITHOUT ROWID"},
+		{dialects.PostgreSQL, "CREATE TABLE t (a INT) STRICT"},
+		{dialects.MySQL, "CREATE TABLE t (a INT) AUTO_INCREMENT=1 COMMENT='x'"},
+		{dialects.MySQL, "CREATE TEMPORARY TABLE IF NOT EXISTS t (a INT)"},
+		{dialects.GoogleSQL, "CREATE TABLE t (a INT64) PARTITION BY a"},
+
+		// The insert and conflict spellings.
+		{dialects.PostgreSQL, "INSERT OR REPLACE INTO t (a) VALUES (1)"},
+		{dialects.MySQL, "REPLACE INTO t (a) VALUES (1)"},
+		{dialects.MySQL, "INSERT LOW_PRIORITY IGNORE INTO t (a) VALUES (1)"},
+		{dialects.PostgreSQL, "INSERT INTO t (a) VALUES (1) ON CONFLICT DO NOTHING"},
+		{dialects.PostgreSQL, "INSERT INTO t (a) VALUES (1) ON CONFLICT (a) DO UPDATE SET a = 2 WHERE a > 0"},
+		{dialects.MySQL, "INSERT INTO t VALUE (1)"},
+
+		// The delete and update modifiers MySQL writes.
+		{dialects.MySQL, "DELETE LOW_PRIORITY QUICK IGNORE FROM t WHERE a = 1"},
+		{dialects.MySQL, "UPDATE LOW_PRIORITY IGNORE t SET a = 1"},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := Parse(tt.dialect, tt.query); err != nil {
+				t.Errorf("Parse(%s, %q): %v", tt.dialect, tt.query, err)
+			}
+		})
+	}
+}

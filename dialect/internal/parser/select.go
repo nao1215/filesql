@@ -367,7 +367,7 @@ var clauseKeywords = map[string]bool{ //nolint:gochecknoglobals // a fixed table
 	"IS": true, "NOT": true, "IN": true, "LIKE": true, "BETWEEN": true,
 	// A query cannot be an alias, and one of these after a table name opens the
 	// statement's own body.
-	"SELECT": true, "TABLE": true, "USE": true, "FORCE": true,
+	"SELECT": true, "TABLE": true, "USE": true, "FORCE": true, "VALUE": true,
 	kwDefault: true, "DUPLICATE": true, "KEY": true,
 }
 
