@@ -165,7 +165,9 @@
 // to write an empty field with, so an empty line is the only spelling left and a
 // reader that skipped it would drop the row. An XLSX row holding no cell at all
 // is skipped, so a workbook whose used range reaches far down the sheet holds no
-// record for the rows between its header and a stray cell near the bottom.
+// record for the rows between its header and a stray cell near the bottom. A row
+// whose cells are there and empty is a record, which is what a sheet's own XML
+// separates from the space under its data.
 //
 // # Concurrency
 //
@@ -307,6 +309,11 @@
 //   - And all other SQLite3 features
 //
 // # Column Name Handling
+//
+// A header cell that is empty names nothing, so the column takes the name of its
+// position: "a,,c" loads as a, column_2 and c. The generated name is moved along
+// -- column_2_2, column_2_3 -- when the file wrote a column of that name itself.
+// A header cell holding a space is a name the file wrote and is kept as it is.
 //
 // A header that names one column twice is refused with ErrDuplicateColumn. Two
 // names are the same column if either of two separate rules says so, and the

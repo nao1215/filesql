@@ -2,6 +2,8 @@ package reader
 
 import (
 	"bytes"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -180,4 +182,123 @@ func TestDateCellsFromXML(t *testing.T) {
 
 		assert.False(t, ok)
 	})
+}
+
+// TestScanSheetRowsReadsTheRowsThatHoldCells covers the byte scanner that says
+// which rows of a sheet hold a cell. The question cannot be asked of the library:
+// it drops a cell whose value is the empty string, so a row of empty cells and a
+// row that is not in the file both come back with no cells, and the two mean
+// opposite things.
+func TestScanSheetRowsReadsTheRowsThatHoldCells(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name  string
+		sheet string
+		want  []int
+	}{
+		{
+			name:  "a row element carries its number",
+			sheet: `<sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="3"><c r="A3"/></row></sheetData>`,
+			want:  []int{1, 3},
+		},
+		{
+			name:  "a row without a number follows the one before",
+			sheet: `<sheetData><row><c/></row><row><c/></row></sheetData>`,
+			want:  []int{1, 2},
+		},
+		{
+			name:  "a cell reference says which row it is in",
+			sheet: `<sheetData><row><c r="A7"/></row></sheetData>`,
+			want:  []int{7},
+		},
+		{
+			name:  "a row holding no cell is not held",
+			sheet: `<sheetData><row r="1"><c r="A1"/></row><row r="2"/><row r="3"><c r="A3"/></row></sheetData>`,
+			want:  []int{1, 3},
+		},
+		{
+			name:  "a tag whose name begins with one of these is not one of these",
+			sheet: `<rowBreaks count="1"/><sheetData><row r="2"><c r="A2"/></row></sheetData><cols><col min="1"/></cols>`,
+			want:  []int{2},
+		},
+		{
+			name:  "a reference that is not one is passed over",
+			sheet: `<sheetData><row r="zzz"><c r="!!"/></row></sheetData>`,
+			want:  []int{1},
+		},
+		{
+			name:  "a sheet with no rows holds none",
+			sheet: `<sheetData/>`,
+			want:  nil,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rows := &rowSet{}
+			if err := scanSheetRows(strings.NewReader(tt.sheet), rows); err != nil {
+				t.Fatalf("scanSheetRows: %v", err)
+			}
+			var got []int
+			for row := 1; row <= rows.lastRow(); row++ {
+				if rows.has(row) {
+					got = append(got, row)
+				}
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("rows holding cells = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestScanSheetRowsCrossesTheWindow covers a sheet longer than the scanner's
+// buffer, where a tag lands on the boundary between two reads. Reading it as two
+// halves would lose the row it names.
+func TestScanSheetRowsCrossesTheWindow(t *testing.T) {
+	t.Parallel()
+
+	// Every cell carries a comment long enough that the rows land at every
+	// offset within the buffer rather than at a repeating one.
+	var sheet strings.Builder
+	sheet.WriteString("<sheetData>")
+	const rows = 4000
+	for row := 1; row <= rows; row++ {
+		fmt.Fprintf(&sheet, `<row r="%d"><c r="A%d" t="s"><v>%d</v></c></row>`, row, row, row%7)
+	}
+	sheet.WriteString("</sheetData>")
+
+	held := &rowSet{}
+	if err := scanSheetRows(strings.NewReader(sheet.String()), held); err != nil {
+		t.Fatalf("scanSheetRows: %v", err)
+	}
+	if held.lastRow() != rows {
+		t.Fatalf("last row = %d, want %d", held.lastRow(), rows)
+	}
+	for row := 1; row <= rows; row++ {
+		if !held.has(row) {
+			t.Fatalf("row %d is not held, and every row here holds a cell", row)
+		}
+	}
+	if held.has(rows + 1) {
+		t.Error("a row past the last one is held")
+	}
+}
+
+// TestRowSetIsEmptyWhenNil covers the set a workbook whose bytes are not there
+// answers with, which is the reading that came before it could be asked.
+func TestRowSetIsEmptyWhenNil(t *testing.T) {
+	t.Parallel()
+
+	var rows *rowSet
+	if rows.has(1) || rows.has(0) || rows.lastRow() != 0 {
+		t.Error("a nil set holds a row")
+	}
+	held := &rowSet{}
+	held.add(0)
+	held.add(-1)
+	if held.lastRow() != 0 {
+		t.Error("a row number below one was recorded")
+	}
 }

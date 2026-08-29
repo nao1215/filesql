@@ -114,6 +114,218 @@ func scanSheetDates(src io.Reader, dateStyles map[int]bool, date1904 bool, into 
 	}
 }
 
+// rowsHoldingCellsFromXML returns the numbers of the rows of a sheet that hold
+// at least one cell, read from the sheet's own XML.
+//
+// It exists because the library drops a cell whose value is the empty string,
+// so a row whose cells are all empty arrives with no cells at all and cannot be
+// told from a row that is not in the file. The two mean opposite things: the
+// first is a record whose values are empty, and the second is the space under a
+// sheet's data, which a workbook with a stray cell near the bottom has by the
+// million. The file says which is which, so the file is asked.
+//
+// It reports false when the workbook's parts do not say where the sheet is,
+// which is the signal to fall back to the reading that cannot tell them apart
+// rather than to answer with a sheet that is missing rows.
+func rowsHoldingCellsFromXML(data []byte, sheet string) (*rowSet, bool) {
+	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, false
+	}
+	part, ok := sheetPart(archive, sheet)
+	if !ok {
+		return nil, false
+	}
+	file, err := part.Open()
+	if err != nil {
+		return nil, false
+	}
+	defer file.Close()
+
+	rows := &rowSet{}
+	if err := scanSheetRows(file, rows); err != nil {
+		return nil, false
+	}
+	return rows, true
+}
+
+// rowSet is the set of row numbers a sheet holds a cell in. It is a bitmap
+// rather than a map because a dense sheet holds every row from one to its last:
+// a workbook of 200,000 rows costs 25 KB here and a map of the same rows costs
+// several megabytes, against the 267 MB such a workbook costs to read.
+type rowSet struct {
+	words []uint64
+	last  int
+}
+
+// add records that a row holds a cell.
+func (s *rowSet) add(row int) {
+	if row < 1 {
+		return
+	}
+	word := (row - 1) / 64
+	for len(s.words) <= word {
+		s.words = append(s.words, 0)
+	}
+	s.words[word] |= 1 << uint((row-1)%64)
+	if row > s.last {
+		s.last = row
+	}
+}
+
+// has reports whether a row holds a cell. A nil set answers false for every
+// row, which is the reading that came before this could be asked.
+func (s *rowSet) has(row int) bool {
+	if s == nil || row < 1 {
+		return false
+	}
+	word := (row - 1) / 64
+	if word >= len(s.words) {
+		return false
+	}
+	return s.words[word]&(1<<uint((row-1)%64)) != 0
+}
+
+// lastRow is the highest row the sheet holds a cell in, or zero for a nil set.
+func (s *rowSet) lastRow() int {
+	if s == nil {
+		return 0
+	}
+	return s.last
+}
+
+// scanSheetRows fills into with the number of every row of a sheet that holds a
+// cell.
+//
+// The scan reads bytes rather than XML tokens because it asks one question --
+// which rows have a cell -- and asking it through encoding/xml costs about as
+// much again as reading the sheet did in the first place. A cell carries its own
+// reference, "A3", which names its row, and a row element carries its number for
+// the cells that leave theirs out.
+func scanSheetRows(src io.Reader, into *rowSet) error {
+	// The window carries the tail of one read into the next, so a tag split
+	// across the boundary is still seen whole. A tag of this kind is far
+	// shorter than the carry.
+	const (
+		bufferSize = 64 << 10
+		carrySize  = 256
+	)
+	buf := make([]byte, bufferSize+carrySize)
+	carried := 0
+	row := 0
+	for {
+		n, err := src.Read(buf[carried : carried+bufferSize])
+		if n > 0 {
+			window := buf[:carried+n]
+			consumed := scanRowWindow(window, &row, into, true)
+			carried = copy(buf, window[consumed:])
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if carried > 0 {
+					scanRowWindow(buf[:carried], &row, into, false)
+				}
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+// scanRowWindow records the rows the cells in one window belong to and answers
+// how much of the window it consumed. When more is coming, a tag that runs past
+// the end is left for the next window.
+func scanRowWindow(window []byte, row *int, into *rowSet, more bool) int {
+	at := 0
+	for {
+		next := bytes.IndexByte(window[at:], '<')
+		if next < 0 {
+			return len(window)
+		}
+		start := at + next
+		tag := window[start:]
+		end := bytes.IndexByte(tag, '>')
+		if end < 0 {
+			if more {
+				return start
+			}
+			return len(window)
+		}
+		tag = tag[:end]
+		switch {
+		case bytes.HasPrefix(tag, []byte("<row")) && isTagBoundary(tag, len("<row")):
+			// A row carries its number, and one without follows the row before,
+			// which is what a writer that omits them means.
+			if n, ok := rowNumberAttr(tag); ok {
+				*row = n
+			} else {
+				*row++
+			}
+		case bytes.HasPrefix(tag, []byte("<c")) && isTagBoundary(tag, len("<c")):
+			// A cell carries the row it is in, which is what says where it is
+			// when its row left its own number out.
+			if n, ok := rowNumberAttr(tag); ok {
+				*row = n
+			}
+			into.add(*row)
+		}
+		at = start + end + 1
+	}
+}
+
+// isTagBoundary reports whether a tag name ends at n, rather than the name being
+// the start of a longer one: "<row" is a row and "<rowBreaks" is not.
+func isTagBoundary(tag []byte, n int) bool {
+	if len(tag) == n {
+		return true
+	}
+	switch tag[n] {
+	case ' ', '\t', '\r', '\n', '/':
+		return true
+	}
+	return false
+}
+
+// rowNumberAttr reads the row a tag's r attribute names: the number itself on a
+// row element, and the digits of a reference such as "A3" on a cell.
+func rowNumberAttr(tag []byte) (int, bool) {
+	at := bytes.Index(tag, []byte(` r="`))
+	if at < 0 {
+		return 0, false
+	}
+	value := tag[at+len(` r="`):]
+	if end := bytes.IndexByte(value, '"'); end >= 0 {
+		value = value[:end]
+	} else {
+		return 0, false
+	}
+	digits := value
+	for len(digits) > 0 && digits[0] >= 'A' && digits[0] <= 'Z' {
+		digits = digits[1:]
+	}
+	if len(digits) == 0 {
+		return 0, false
+	}
+	n := 0
+	for _, c := range digits {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + int(c-'0')
+		if n > maxSheetRow {
+			return 0, false
+		}
+	}
+	if n == 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// maxSheetRow bounds a row number read out of a sheet, which is what keeps a
+// damaged file from asking for a bitmap the size of its own digits.
+const maxSheetRow = 1 << 24
+
 // sheetPart finds the worksheet part a sheet name belongs to, following the
 // workbook's relationships rather than guessing at a file name: a workbook
 // whose sheets were reordered or deleted does not name its parts in order.

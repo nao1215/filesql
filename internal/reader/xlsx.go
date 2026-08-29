@@ -69,6 +69,51 @@ func NoExcelSheetsError(f ExcelSheetSource, policy ExcelSheetPolicy) error {
 	return emptyError("no sheets found in XLSX file")
 }
 
+// extendToHeldRows appends the rows a sheet holds past the last one the library
+// returned. The library stops at the last row whose cells are not all empty, so
+// a sheet ending in rows of empty cells comes back short by exactly those rows,
+// which are records.
+func extendToHeldRows(rows [][]string, holdsCells *rowSet) [][]string {
+	for last := holdsCells.lastRow(); len(rows) < last; {
+		rows = append(rows, nil)
+	}
+	return rows
+}
+
+// heldRows answers which rows of a sheet hold a cell, reading the sheet's own
+// XML the first time it is asked. Most sheets are never asked: the question
+// comes up only for a row the library returned empty and for a sheet whose
+// declared extent reaches past what it returned, and a sheet of ordinary rows
+// has neither.
+type heldRows struct {
+	workbook *Workbook
+	sheet    string
+	rows     *rowSet
+	read     bool
+}
+
+// set is the rows the sheet holds a cell in, or nil when the workbook's bytes
+// do not say. A nil set keeps the reading that came before, where a row of
+// empty cells is passed over with the space under the sheet's data.
+func (h *heldRows) set() *rowSet {
+	if h.read {
+		return h.rows
+	}
+	h.read = true
+	if len(h.workbook.data) == 0 {
+		return nil
+	}
+	if rows, ok := rowsHoldingCellsFromXML(h.workbook.data, h.sheet); ok {
+		h.rows = rows
+	}
+	return h.rows
+}
+
+// has reports whether a sheet holds a cell in a row.
+func (h *heldRows) has(row int) bool {
+	return h.set().has(row)
+}
+
 // ReadSheet reads one sheet of the workbook in chunks.
 //
 // A sheet holding nothing a table can be made from -- no rows, or no row that
@@ -89,19 +134,30 @@ func (w *Workbook) ReadSheet(name string, opts Options, emit Emit) (Result, erro
 		return Result{}, emptyError("empty XLSX sheet")
 	}
 
+	// The library stops at the last row whose cells are not all empty, so a
+	// sheet ending in rows of empty cells arrives without them. They are records
+	// and the sheet says so, which is what holdsCells reads out of it.
+	holdsCells := &heldRows{workbook: w, sheet: name}
+	rows = extendToHeldRows(rows, holdsCells.set())
+
 	// A sheet may begin with rows holding no cell at all, which name no column.
-	for len(rows) > 0 && len(rows[0]) == 0 {
+	dropped := 0
+	for len(rows) > 0 && len(rows[0]) == 0 && !holdsCells.has(dropped+1) {
 		rows = rows[1:]
+		dropped++
 	}
 	if len(rows) == 0 || len(rows[0]) == 0 {
 		return Result{}, emptyError("no headers found in XLSX")
 	}
 
-	header := rows[0]
+	header := NameBlankColumns(rows[0])
 	if err := ValidateColumnNames(header); err != nil {
 		return Result{}, err
 	}
 
+	// headerRow is the sheet's own number for the row the header came from, so
+	// a data row's number is that plus its index here and one more.
+	headerRow := dropped + 1
 	result := Result{Header: header}
 	records := newChunker(header, opts, emit)
 	for i, row := range rows[1:] {
@@ -111,8 +167,11 @@ func (w *Workbook) ReadSheet(name string, opts Options, emit Emit) (Result, erro
 		// rows arrive by the million from a file of a few kilobytes, and padding
 		// each one to the header's width was the whole cost of loading such a
 		// workbook. A row whose cells are present and empty is a different thing
-		// and stays a record, the way a CSV line reading "," is one.
-		if len(row) == 0 {
+		// and stays a record, the way a CSV line reading "," is one -- and the
+		// library cannot tell the two apart, because it drops a cell whose value
+		// is the empty string, so the sheet's own XML is what says which is
+		// which.
+		if len(row) == 0 && !holdsCells.has(headerRow+i+1) {
 			continue
 		}
 		// A workbook stores no cell for a trailing empty one, so a row ending in
@@ -121,7 +180,8 @@ func (w *Workbook) ReadSheet(name string, opts Options, emit Emit) (Result, erro
 		// header does not name -- and truncating it dropped that data with no
 		// error and no count to say it had happened.
 		if len(row) > len(header) {
-			return Result{}, parseError(nil, "row %d has %d cells where the header has %d", i+2, len(row), len(header))
+			return Result{}, parseError(nil, "row %d has %d cells where the header has %d",
+				headerRow+i+1, len(row), len(header))
 		}
 		record := make([]string, len(header))
 		copy(record, row)
