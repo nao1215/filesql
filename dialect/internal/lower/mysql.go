@@ -382,12 +382,15 @@ func typeArgumentText(e ast.Expr) (string, bool) {
 }
 
 // utf8CharsetName reports whether a charset names the encoding a string in
-// SQLite already is. Only the UTF-8 spellings do: a conversion to ucs2, utf16
-// or utf32 changes the bytes, and one to binary changes how the value compares
-// and sorts, neither of which dropping the conversion would reproduce.
+// SQLite already is, which is the only case where dropping the conversion
+// answers what the conversion would have. utf8mb4 is that encoding. MySQL's
+// utf8 and utf8mb3 are three bytes at most and cannot hold a character outside
+// the basic plane, so converting an emoji to one of them is a different value
+// or an error; ucs2, utf16 and utf32 change the bytes; and binary changes how
+// the value compares and sorts.
 func utf8CharsetName(name string) bool {
 	switch strings.ToLower(name) {
-	case "utf8", "utf8mb3", "utf8mb4", "":
+	case "utf8mb4", "":
 		return true
 	default:
 		return false

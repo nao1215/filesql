@@ -364,3 +364,58 @@ func TestRecursionIsBoundedEverywhere(t *testing.T) {
 		})
 	}
 }
+
+// TestTheUnicodeEscapeFormsPostgresReads covers the U&'...' literal: a code
+// point in the basic plane, one outside it, a surrogate pair written as its two
+// halves, the doubled escape, and a UESCAPE clause naming another character.
+// The halves have to be read together, since each on its own is not a character.
+func TestTheUnicodeEscapeFormsPostgresReads(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct{ query, want string }{
+		{`SELECT U&'\0041'`, "'A'"},
+		{`SELECT U&'\+000041'`, "'A'"},
+		{`SELECT U&'\0041\0042'`, "'AB'"},
+		{`SELECT U&'x\0041y'`, "'xAy'"},
+		{`SELECT U&'\\'`, `'\'`},
+		{`SELECT U&'\+01F600'`, "'😀'"},
+		// The same character written as the two halves of a surrogate pair.
+		{`SELECT U&'\D83D\DE00'`, "'😀'"},
+		{`SELECT U&'d!0061t!+000061' UESCAPE '!'`, "'data'"},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			t.Parallel()
+
+			stmt, err := Parse(dialects.PostgreSQL, tt.query)
+			if err != nil {
+				t.Fatalf("Parse(%q): %v", tt.query, err)
+			}
+			sel, ok := stmt.(*ast.SelectStmt)
+			if !ok {
+				t.Fatalf("statement is %T, want a SELECT", stmt)
+			}
+			core, ok := sel.Body.(*ast.SelectCore)
+			if !ok {
+				t.Fatalf("body is %T, want a SELECT core", sel.Body)
+			}
+			if got := sketch(core.Items[0].Expr); got != tt.want {
+				t.Errorf("Parse(%q) = %s, want %s", tt.query, got, tt.want)
+			}
+		})
+	}
+
+	// A half with no partner names no character, and the zero character is not
+	// one a string can hold; PostgreSQL refuses both.
+	for _, query := range []string{
+		`SELECT U&'\D83D'`, `SELECT U&'\DE00'`, `SELECT U&'\D83D\0041'`,
+		`SELECT U&'\0000'`, `SELECT U&'\+000000'`, `SELECT U&'x' UESCAPE 'ab'`,
+	} {
+		t.Run(query, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := Parse(dialects.PostgreSQL, query); err == nil {
+				t.Errorf("Parse(%q) succeeded, want a refusal", query)
+			}
+		})
+	}
+}

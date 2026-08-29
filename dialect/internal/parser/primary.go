@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf16"
 
 	"github.com/nao1215/filesql/dialect/internal/ast"
 	"github.com/nao1215/filesql/dialect/internal/dialects"
@@ -249,6 +250,12 @@ func (p *Parser) parseUnicodeEscapeLiteral() (ast.Expr, bool, error) {
 // decodeUnicodeEscapes replaces the escape sequences of a U&'...' literal with
 // the characters they name: XXXX for a code point in the basic plane, +XXXXXX
 // for one outside it, and a doubled escape character for the character itself.
+//
+// A character outside the basic plane may also be written as the two halves of
+// a surrogate pair, which have to be read together: written out one at a time
+// each half is an invalid rune and becomes U+FFFD, so the pair would answer a
+// character the caller did not write. A half with no partner, and U+0000, are
+// refused the way PostgreSQL refuses them.
 func decodeUnicodeEscapes(s string, escape byte) (string, error) {
 	var b strings.Builder
 	for i := 0; i < len(s); {
@@ -257,29 +264,57 @@ func decodeUnicodeEscapes(s string, escape byte) (string, error) {
 			i++
 			continue
 		}
-		switch {
-		case i+1 < len(s) && s[i+1] == escape:
+		if i+1 < len(s) && s[i+1] == escape {
 			b.WriteByte(escape)
 			i += 2
-		case i+7 < len(s) && s[i+1] == '+':
-			r, err := strconv.ParseUint(s[i+2:i+8], 16, 32)
-			if err != nil || r > unicode.MaxRune {
-				return "", errors.New("a Unicode escape names no character")
-			}
-			b.WriteRune(rune(r))
-			i += 8
-		case i+4 < len(s):
-			r, err := strconv.ParseUint(s[i+1:i+5], 16, 32)
-			if err != nil || r > unicode.MaxRune {
-				return "", errors.New("a Unicode escape names no character")
-			}
-			b.WriteRune(rune(r))
-			i += 5
-		default:
-			return "", errors.New("a Unicode escape is cut short")
+			continue
 		}
+		r, width, err := unicodeEscapeAt(s, i, escape)
+		if err != nil {
+			return "", err
+		}
+		i += width
+		if utf16.IsSurrogate(r) {
+			// The first half has to be followed by the second, and only a high
+			// half may lead.
+			next, nextWidth, nextErr := unicodeEscapeAt(s, i, escape)
+			if nextErr != nil || !utf16.IsSurrogate(next) {
+				return "", errors.New("a Unicode escape names half of a surrogate pair")
+			}
+			pair := utf16.DecodeRune(r, next)
+			if pair == unicode.ReplacementChar {
+				return "", errors.New("a Unicode escape names half of a surrogate pair")
+			}
+			i += nextWidth
+			r = pair
+		}
+		if r == 0 {
+			return "", errors.New("a Unicode escape names the zero character, which a string cannot hold")
+		}
+		b.WriteRune(r)
 	}
 	return b.String(), nil
+}
+
+// unicodeEscapeAt reads the escape at s[i], which must be the escape character
+// followed by four hexadecimal digits or by a plus and six.
+func unicodeEscapeAt(s string, i int, escape byte) (rune, int, error) {
+	if i >= len(s) || s[i] != escape {
+		return 0, 0, errors.New("a Unicode escape is cut short")
+	}
+	digits, width := 4, 5
+	if i+1 < len(s) && s[i+1] == '+' {
+		digits, width = 6, 8
+	}
+	from := i + width - digits
+	if from+digits > len(s) {
+		return 0, 0, errors.New("a Unicode escape is cut short")
+	}
+	value, err := strconv.ParseUint(s[from:from+digits], 16, 32)
+	if err != nil || value > unicode.MaxRune {
+		return 0, 0, errors.New("a Unicode escape names no character")
+	}
+	return rune(value), width, nil
 }
 
 // charsetIntroducer reports whether a charset introducer names an encoding the
@@ -288,7 +323,7 @@ func decodeUnicodeEscapes(s string, escape byte) (string, error) {
 // that cannot be reproduced.
 func charsetIntroducer(name string, t token.Token) error {
 	switch strings.ToLower(name) {
-	case "utf8", "utf8mb3", "utf8mb4":
+	case "utf8mb4":
 		return nil
 	default:
 		return unsupportedAt(t, "the character set introducer _%s is not supported; SQLite holds text as UTF-8", name)

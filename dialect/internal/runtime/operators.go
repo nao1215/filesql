@@ -306,7 +306,11 @@ const noEscape = rune(-1)
 // "_" matches exactly one. dialects.SQLite's own LIKE folds ASCII case; this one folds
 // only when asked, so dialects.PostgreSQL and dialects.GoogleSQL keep their case-sensitive LIKE
 // and dialects.PostgreSQL's ILIKE folds every character rather than just the ASCII ones.
-func likeCompare(caseSensitive bool) scalarFn {
+// likeCompare implements one dialect's LIKE. caseSensitive follows the
+// dialect's collation, and strictEscape follows its reading of a pattern that
+// ends in the escape character: PostgreSQL raises for one, and MySQL reads the
+// character as itself.
+func likeCompare(caseSensitive, strictEscape bool) scalarFn {
 	return func(args []driver.Value) (driver.Value, error) {
 		if len(args) < 2 || len(args) > 3 {
 			return nil, fmt.Errorf("dialect: LIKE takes a pattern, a subject and an optional escape character, got %d arguments", len(args))
@@ -341,7 +345,11 @@ func likeCompare(caseSensitive bool) scalarFn {
 				escape = unicode.ToLower(escape)
 			}
 		}
-		return boolToInt(likeMatch([]rune(pattern), []rune(subject), escape)), nil
+		matched, err := likeMatch([]rune(pattern), []rune(subject), escape, strictEscape)
+		if err != nil {
+			return nil, err
+		}
+		return boolToInt(matched), nil
 	}
 }
 
@@ -354,16 +362,22 @@ func foldCase(s string) string {
 // pattern full of wildcards from backtracking exponentially.
 //
 // An escape makes the character after it literal, so "a\\%b" matches the three
-// characters "a%b" and nothing else. A trailing escape stands for itself rather
-// than being an error, which is the same answer the SIMILAR TO translation
-// gives; erroring would turn a questionable pattern into a failed query.
-func likeMatch(pattern, subject []rune, escape rune) bool {
+// characters "a%b" and nothing else. An escape at the very end of the pattern
+// escapes nothing, and the dialects read it differently: MySQL takes it for
+// itself, so "!" LIKE "!" ESCAPE "!" is true there, and PostgreSQL raises. The
+// error is reported where the walk reaches it, which is where PostgreSQL
+// reports it too: "ab" LIKE "ab!" runs out of subject first and answers false
+// rather than raising.
+func likeMatch(pattern, subject []rune, escape rune, strictEscape bool) (bool, error) {
 	var (
 		p, s          int
 		star          = -1
 		afterStarSubj int
 	)
 	for s < len(subject) {
+		if strictEscape && p == len(pattern)-1 && pattern[p] == escape {
+			return false, errors.New("dialect: the LIKE pattern ends with its escape character, which escapes nothing")
+		}
 		switch {
 		case p < len(pattern) && pattern[p] == escape && literalAt(pattern, p, escape) == subject[s]:
 			p += escapedWidth(pattern, p)
@@ -381,13 +395,13 @@ func likeMatch(pattern, subject []rune, escape rune) bool {
 			afterStarSubj++
 			s = afterStarSubj
 		default:
-			return false
+			return false, nil
 		}
 	}
 	for p < len(pattern) && pattern[p] == '%' {
 		p++
 	}
-	return p == len(pattern)
+	return p == len(pattern), nil
 }
 
 // literalAt is the character an escape at p stands for: the one after it, or

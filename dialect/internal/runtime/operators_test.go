@@ -479,7 +479,11 @@ func TestLikeMatch(t *testing.T) {
 		{"%%%%%%b", "aaaaaaaaac", false},
 	}
 	for _, tt := range tests {
-		if got := likeMatch([]rune(tt.pattern), []rune(tt.subject), likeEscape); got != tt.want {
+		got, err := likeMatch([]rune(tt.pattern), []rune(tt.subject), likeEscape, false)
+		if err != nil {
+			t.Fatalf("likeMatch(%q, %q): %v", tt.pattern, tt.subject, err)
+		}
+		if got != tt.want {
 			t.Fatalf("likeMatch(%q, %q) = %v, want %v", tt.pattern, tt.subject, got, tt.want)
 		}
 	}
@@ -814,5 +818,53 @@ func TestOverlayBoundaries(t *testing.T) {
 	// error PostgreSQL raises rather than an answer it gives.
 	if _, err := fnOverlay([]driver.Value{"abc", "X", int64(0)}); err == nil {
 		t.Fatal("fnOverlay at position 0 should fail, as PostgreSQL does")
+	}
+}
+
+// TestATrailingEscapeFollowsTheDialect covers the pattern that ends in its own
+// escape character, which escapes nothing. PostgreSQL raises for it and MySQL
+// reads the character as itself, and the two helpers answer accordingly.
+func TestATrailingEscapeFollowsTheDialect(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	// Every want was read from postgres:17.10 and mysql:8.4.11. The error is
+	// reported where the walk reaches the escape, which is where PostgreSQL
+	// reports it: a pattern that runs out of subject first answers false.
+	for _, query := range []string{
+		`SELECT '!' LIKE '!' ESCAPE '!'`,
+		`SELECT 'a!' LIKE 'a!' ESCAPE '!'`,
+		`SELECT 'a' LIKE '!' ESCAPE '!'`,
+	} {
+		if _, err := runDialect(t, db, dialects.PostgreSQL, query); err == nil {
+			t.Errorf("%s should raise under PostgreSQL", query)
+		}
+	}
+	for _, tt := range []struct{ query, want string }{
+		{`SELECT 'ab' LIKE 'ab!' ESCAPE '!'`, "0"},
+		{`SELECT 'x' LIKE 'x!!' ESCAPE '!'`, "0"},
+	} {
+		got, err := runDialect(t, db, dialects.PostgreSQL, tt.query)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.query, err)
+		}
+		if got.String != tt.want {
+			t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+		}
+	}
+	// MySQL reads a trailing escape as itself.
+	for _, tt := range []struct{ query, want string }{
+		{`SELECT '!' LIKE '!' ESCAPE '!'`, "1"},
+		{`SELECT 'a!' LIKE 'a!' ESCAPE '!'`, "1"},
+		{`SELECT 'ab' LIKE 'ab!' ESCAPE '!'`, "0"},
+		{`SELECT 'a' LIKE '!' ESCAPE '!'`, "0"},
+	} {
+		got, err := runDialect(t, db, dialects.MySQL, tt.query)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.query, err)
+		}
+		if got.String != tt.want {
+			t.Errorf("mysql %s = %q, want %q", tt.query, got.String, tt.want)
+		}
 	}
 }

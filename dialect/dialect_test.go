@@ -359,7 +359,7 @@ func TestLiteralFormsAreOneToken(t *testing.T) {
 		// The label keeps a space between the introducer and the literal,
 		// because render puts one between two atoms that a quote used to
 		// separate; the value is what matters and it is the literal's.
-		{MySQL, "SELECT _utf8mb4'abc'", `SELECT 'abc' AS "_utf8mb4'abc'"`},
+		{MySQL, `SELECT _utf8mb4'abc'`, `SELECT 'abc' AS "_utf8mb4'abc'"`},
 		{MySQL, "SELECT N'abc'", `SELECT 'abc' AS "N'abc'"`},
 		{MySQL, "SELECT _binary'abc'", `SELECT x'616263' AS "_binary'abc'"`},
 		{MySQL, "SELECT 0 b1010 FROM t", "SELECT 0 AS b1010 FROM t"},

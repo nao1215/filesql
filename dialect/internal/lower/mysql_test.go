@@ -250,7 +250,6 @@ func TestCharacterSetConversionsThatChangeTheBytes(t *testing.T) {
 		want  string
 	}{
 		{"SELECT CONVERT(a USING utf8mb4) FROM t", `SELECT a AS "CONVERT(a USING utf8mb4)" FROM t`},
-		{"SELECT CONVERT(a USING utf8) FROM t", `SELECT a AS "CONVERT(a USING utf8)" FROM t`},
 	} {
 		t.Run(tt.query, func(t *testing.T) {
 			t.Parallel()
@@ -266,6 +265,12 @@ func TestCharacterSetConversionsThatChangeTheBytes(t *testing.T) {
 	}
 
 	for _, query := range []string{
+		// MySQL's utf8 is utf8mb3, which holds three bytes at most and cannot
+		// carry a character outside the basic plane, so the conversion is not
+		// the no-op that utf8mb4 is.
+		"SELECT CONVERT(a USING utf8) FROM t",
+		"SELECT CONVERT(a USING utf8mb3) FROM t",
+		"SELECT _utf8'abc'",
 		"SELECT CONVERT(a USING binary) FROM t",
 		"SELECT CONVERT(a USING utf16) FROM t",
 		"SELECT CONVERT(a USING ucs2) FROM t",

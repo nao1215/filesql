@@ -265,8 +265,8 @@ func registerAll() error {
 		// operands, and its default collation folds case; the shared regexp()
 		// is right for dialects.PostgreSQL and BigQuery, which do not.
 		"mysql_regexp":              {2, fnMySQLRegexp},
-		"like_sensitive":            {-1, likeCompare(true)},
-		"like_insensitive":          {-1, likeCompare(false)},
+		"like_sensitive":            {-1, likeCompare(true, true)},
+		"like_insensitive":          {-1, likeCompare(false, false)},
 		"similar_to":                {2, fnSimilarTo},
 		"similar_substring":         {3, fnSimilarSubstring},
 		"mysql_ord":                 {1, fnMySQLOrd},
