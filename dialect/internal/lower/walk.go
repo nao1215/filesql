@@ -338,13 +338,9 @@ func (l *lowerer) expr(e ast.Expr) (ast.Expr, error) {
 		return nil, err
 	}
 	if handled {
-		return l.lowerChildren(replaced)
+		// What a Pre rule built is lowered without being offered to Pre again.
+		return l.lowerNode(replaced)
 	}
-	return l.lowerNode(e)
-}
-
-// lowerChildren lowers what a Pre rule built, without offering it to Pre again.
-func (l *lowerer) lowerChildren(e ast.Expr) (ast.Expr, error) {
 	return l.lowerNode(e)
 }
 
@@ -636,6 +632,13 @@ func (l *lowerer) insert(n *ast.InsertStmt) (ast.Stmt, error) {
 	if n.OnConflict != nil {
 		if err := l.assignments(n.OnConflict.Set); err != nil {
 			return nil, err
+		}
+		if n.OnConflict.TargetWhere != nil {
+			where, err := l.expr(n.OnConflict.TargetWhere)
+			if err != nil {
+				return nil, err
+			}
+			n.OnConflict.TargetWhere = where
 		}
 		if n.OnConflict.Where != nil {
 			where, err := l.expr(n.OnConflict.Where)

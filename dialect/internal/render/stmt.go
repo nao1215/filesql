@@ -108,7 +108,7 @@ func (w *writer) queryBody(body ast.QueryBody) error {
 }
 
 func (w *writer) setOp(n *ast.SetOp) error {
-	if err := w.queryBody(n.Left); err != nil {
+	if err := w.setOperand(n.Left, false); err != nil {
 		return err
 	}
 	switch n.Op {
@@ -122,7 +122,25 @@ func (w *writer) setOp(n *ast.SetOp) error {
 	if n.All {
 		w.word("ALL")
 	}
-	return w.queryBody(n.Right)
+	return w.setOperand(n.Right, true)
+}
+
+// setOperand writes one side of a set operation. SQLite evaluates a compound
+// SELECT left to right and has no precedence among the operators, where the
+// source dialects bind INTERSECT tighter than UNION and EXCEPT. A set operation
+// on the right therefore has to be written as a subquery, or SQLite would
+// regroup it: "1 UNION (2 INTERSECT 3)" would become "(1 UNION 2) INTERSECT 3".
+func (w *writer) setOperand(body ast.QueryBody, right bool) error {
+	if _, nested := body.(*ast.SetOp); !nested || !right {
+		return w.queryBody(body)
+	}
+	w.word("SELECT * FROM")
+	w.word("(")
+	if err := w.queryBody(body); err != nil {
+		return err
+	}
+	w.word(")")
+	return nil
 }
 
 func (w *writer) selectCore(n *ast.SelectCore) error {

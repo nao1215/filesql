@@ -8,7 +8,7 @@ import (
 
 // parseStatement reads one statement. Every statement kind this package models
 // is listed here; a word that opens none of them is refused by name, which is
-// what keeps an unmodelled statement from reaching SQLite.
+// what keeps an unmodeled statement from reaching SQLite.
 func (p *Parser) parseStatement() (ast.Stmt, error) {
 	p.skipSemicolons()
 	t := p.cur()
@@ -210,9 +210,14 @@ func (p *Parser) parseInsertConflict(stmt *ast.InsertStmt) error {
 			}
 			clause.Target = cols
 			if p.eatWord("WHERE") {
-				if _, err := p.parseExpr(precLowest); err != nil {
+				// The predicate selects which partial unique index the upsert
+				// applies to, so dropping it would resolve the conflict against
+				// a different index.
+				where, err := p.parseExpr(precLowest)
+				if err != nil {
 					return err
 				}
+				clause.TargetWhere = where
 			}
 		}
 		if err := p.expectWord("DO"); err != nil {
@@ -497,6 +502,11 @@ func (p *Parser) parseSimpleName() (string, error) {
 
 // parseExplain reads EXPLAIN, with or without QUERY PLAN.
 func (p *Parser) parseExplain() (ast.Stmt, error) {
+	if err := p.enter(); err != nil {
+		return nil, err
+	}
+	defer p.leave()
+
 	span := p.span()
 	p.pos++ // EXPLAIN
 	stmt := &ast.ExplainStmt{Span: span}

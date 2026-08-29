@@ -172,6 +172,19 @@ func (l *lowerer) aggregate(call *ast.FuncCall) (ast.Expr, bool, error) {
 		return nil, false, unsupported(call.Span,
 			"%s cannot be used as a window function; SQLite has no aggregate to attach the window to", name)
 	}
+	// The same reasoning holds for the clauses that narrow which rows an
+	// aggregate sees. The expansion is several aggregates inside arithmetic,
+	// and a FILTER or a DISTINCT written once would have to be repeated on each
+	// of them to mean the same thing; dropped, it answers over rows the caller
+	// excluded and says nothing about it.
+	if call.Filter != nil {
+		return nil, false, unsupported(call.Span,
+			"%s cannot take a FILTER clause; it becomes several aggregates, and the filter belongs to none of them", name)
+	}
+	if call.Distinct {
+		return nil, false, unsupported(call.Span,
+			"%s cannot take DISTINCT; it becomes several aggregates, and the distinctness belongs to none of them", name)
+	}
 	switch {
 	case rule.distinctCount:
 		call.Distinct = true

@@ -122,7 +122,7 @@ func intervalAdd(value ast.Expr, iv *ast.IntervalExpr, sign string, span ast.Spa
 		// A compound value carries its fields in one string, so the sign is a
 		// separate argument rather than a negation of the amount.
 		sign := int64(1)
-		if strings.HasPrefix(sign2Text(amount), "-") {
+		if negated(amount) {
 			sign = -1
 		}
 		return helper("mysql_interval_compound", span, value, iv.Value,
@@ -265,13 +265,12 @@ func (r *mysqlRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 	return call, nil
 }
 
-// sign2Text spells whether an amount was negated, which is how a compound
-// interval carries its direction.
-func sign2Text(e ast.Expr) string {
-	if u, ok := e.(*ast.UnaryExpr); ok && u.Op == ast.UnaryMinus {
-		return "-"
-	}
-	return "+"
+// negated reports whether an amount was turned round, which is how a compound
+// interval carries its direction: its fields are in one string, so the sign is
+// a separate argument rather than a negation of the value.
+func negated(e ast.Expr) bool {
+	u, ok := e.(*ast.UnaryExpr)
+	return ok && u.Op == ast.UnaryMinus
 }
 
 // mysqlMathHelper names the helper for a numeric function whose MySQL reading
@@ -382,11 +381,13 @@ func typeArgumentText(e ast.Expr) (string, bool) {
 	return "", false
 }
 
-// utf8CharsetName reports whether a charset names an encoding a UTF-8 string
-// already is.
+// utf8CharsetName reports whether a charset names the encoding a string in
+// SQLite already is. Only the UTF-8 spellings do: a conversion to ucs2, utf16
+// or utf32 changes the bytes, and one to binary changes how the value compares
+// and sorts, neither of which dropping the conversion would reproduce.
 func utf8CharsetName(name string) bool {
 	switch strings.ToLower(name) {
-	case "utf8", "utf8mb3", "utf8mb4", "ucs2", "utf16", "utf32", "binary", "":
+	case "utf8", "utf8mb3", "utf8mb4", "":
 		return true
 	default:
 		return false

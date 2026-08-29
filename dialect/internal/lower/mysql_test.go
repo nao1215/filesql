@@ -103,7 +103,13 @@ func TestMySQLTranslate(t *testing.T) {
 		// default collation does and reads a trailing escape as itself. SQLite's
 		// own LIKE ... ESCAPE did neither.
 		{"M-22_like", "SELECT * FROM t WHERE name LIKE 'a%'", "SELECT * FROM t WHERE like_insensitive('a%', name)"},
-		{"M-22_like_with_escape_clause_is_left_alone", "SELECT * FROM t WHERE name LIKE 'a!%' ESCAPE '!'", "SELECT * FROM t WHERE name LIKE 'a!%' ESCAPE '!'"},
+		// An escaped pattern reaches the helper with its escape character, so
+		// the match follows MySQL's collation rather than SQLite's.
+		{
+			"M-22_like_with_escape_clause",
+			"SELECT * FROM t WHERE name LIKE 'a!%' ESCAPE '!'",
+			"SELECT * FROM t WHERE like_insensitive('a!%', name, '!')",
+		},
 
 		{"M-10_limit_offset", "SELECT * FROM t LIMIT 10 OFFSET 5", "SELECT * FROM t LIMIT 10 OFFSET 5"},
 
@@ -226,6 +232,53 @@ func TestMySQLTranslateUnsupported(t *testing.T) {
 			// on either the same way.
 			if !errors.Is(err, dialect.ErrUnsupportedSyntax) && !errors.Is(err, dialect.ErrInvalidSyntax) {
 				t.Fatalf("Translate(MySQL, %q) error = %v, want a refusal", tt.input, err)
+			}
+		})
+	}
+}
+
+// TestCharacterSetConversionsThatChangeTheBytes covers CONVERT ... USING and the
+// charset introducer. A conversion to a UTF-8 spelling asks for the encoding the
+// value already has and is dropped; every other name changes the bytes, or how
+// the value compares and sorts, and dropping it would answer as though the
+// caller had not asked.
+func TestCharacterSetConversionsThatChangeTheBytes(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		query string
+		want  string
+	}{
+		{"SELECT CONVERT(a USING utf8mb4) FROM t", `SELECT a AS "CONVERT(a USING utf8mb4)" FROM t`},
+		{"SELECT CONVERT(a USING utf8) FROM t", `SELECT a AS "CONVERT(a USING utf8)" FROM t`},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := dialect.Translate(dialect.MySQL, tt.query)
+			if err != nil {
+				t.Fatalf("Translate(%q): %v", tt.query, err)
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%q) = %q, want %q", tt.query, got, tt.want)
+			}
+		})
+	}
+
+	for _, query := range []string{
+		"SELECT CONVERT(a USING binary) FROM t",
+		"SELECT CONVERT(a USING utf16) FROM t",
+		"SELECT CONVERT(a USING ucs2) FROM t",
+		"SELECT CONVERT(a USING latin1) FROM t",
+		"SELECT CHAR(65 USING utf16)",
+		"SELECT _ucs2'abc'",
+		"SELECT _latin1'abc'",
+	} {
+		t.Run(query, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := dialect.Translate(dialect.MySQL, query); !errors.Is(err, dialect.ErrUnsupportedSyntax) {
+				t.Errorf("Translate(%q) error = %v, want ErrUnsupportedSyntax", query, err)
 			}
 		})
 	}

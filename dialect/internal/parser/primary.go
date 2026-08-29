@@ -261,7 +261,7 @@ func decodeUnicodeEscapes(s string, escape byte) (string, error) {
 		case i+1 < len(s) && s[i+1] == escape:
 			b.WriteByte(escape)
 			i += 2
-		case i+6 < len(s) && s[i+1] == '+':
+		case i+7 < len(s) && s[i+1] == '+':
 			r, err := strconv.ParseUint(s[i+2:i+8], 16, 32)
 			if err != nil || r > unicode.MaxRune {
 				return "", errors.New("a Unicode escape names no character")
@@ -288,7 +288,7 @@ func decodeUnicodeEscapes(s string, escape byte) (string, error) {
 // that cannot be reproduced.
 func charsetIntroducer(name string, t token.Token) error {
 	switch strings.ToLower(name) {
-	case "utf8", "utf8mb3", "utf8mb4", "ucs2", "utf16", "utf32", "binary":
+	case "utf8", "utf8mb3", "utf8mb4":
 		return nil
 	default:
 		return unsupportedAt(t, "the character set introducer _%s is not supported; SQLite holds text as UTF-8", name)

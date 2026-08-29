@@ -99,6 +99,11 @@ func (p *Parser) setOperatorAt() (ast.SetOperator, bool) {
 
 // parseQueryPrimary reads one SELECT, a VALUES, or a parenthesized query.
 func (p *Parser) parseQueryPrimary() (ast.QueryBody, error) {
+	if err := p.enter(); err != nil {
+		return nil, err
+	}
+	defer p.leave()
+
 	switch {
 	case p.atOp("("):
 		p.pos++
@@ -524,7 +529,11 @@ func (p *Parser) parseFetch() (*ast.LimitClause, error) {
 		return nil, p.unexpected("FIRST or NEXT")
 	}
 	clause := &ast.LimitClause{Span: span}
-	if !p.atWord("ROW") && !p.atWord("ROWS") {
+	if p.atWord("ROW") || p.atWord("ROWS") {
+		// "FETCH FIRST ROW ONLY" asks for one row; the number is what may be
+		// left out, not the limit.
+		clause.Count = &ast.Literal{Kind: ast.LitNumber, Value: "1", Span: span}
+	} else {
 		count, err := p.parseExpr(precLowest)
 		if err != nil {
 			return nil, err

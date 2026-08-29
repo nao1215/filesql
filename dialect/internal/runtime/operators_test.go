@@ -413,17 +413,46 @@ func TestArithmeticFunctionsAreTranslated(t *testing.T) {
 	}
 }
 
-// TestLikeEscapeClauseIsLeftToSQLite keeps a pattern with a custom escape
-// character on SQLite's own LIKE, which the helpers do not model.
-func TestLikeEscapeClauseIsLeftToSQLite(t *testing.T) {
-	t.Parallel()
+// TestLikeEscapeClauseReachesTheHelper keeps a pattern with a custom escape
+// character on the dialect's own matching rules. Left on SQLite's LIKE it would
+// have matched with SQLite's: its folding stops at ASCII and it folds by
+// default, so under PostgreSQL, whose LIKE is case sensitive, 'A' would have
+// matched the pattern 'a'.
+func TestLikeEscapeClauseReachesTheHelper(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
 
 	got, err := Translate(dialects.PostgreSQL, `SELECT * FROM t WHERE a LIKE 'x!%' ESCAPE '!'`)
 	if err != nil {
 		t.Fatalf("Translate: %v", err)
 	}
-	if !strings.Contains(got, "LIKE") || strings.Contains(got, "like_sensitive") {
-		t.Fatalf("Translate = %q, want the native LIKE kept", got)
+	if !strings.Contains(got, "like_sensitive('x!%', a, '!')") {
+		t.Fatalf("Translate = %q, want the escape carried into the helper", got)
+	}
+
+	for _, tt := range []struct {
+		query string
+		want  string
+	}{
+		// The escape character makes the next character a literal, so the
+		// pattern asks for a percent sign rather than for anything at all.
+		{`SELECT 'x%' LIKE 'x!%' ESCAPE '!'`, "1"},
+		{`SELECT 'xy' LIKE 'x!%' ESCAPE '!'`, "0"},
+		// Without the clause the same pattern reads the "!" as itself.
+		{`SELECT 'x!y' LIKE 'x!%'`, "1"},
+		// An empty ESCAPE clause turns escaping off, which is PostgreSQL's own
+		// reading of it.
+		{`SELECT 'x!y' LIKE 'x!%' ESCAPE ''`, "1"},
+		// The match is case sensitive under this dialect, escape or no escape.
+		{`SELECT 'A' LIKE 'a' ESCAPE '!'`, "0"},
+	} {
+		got, err := runDialect(t, db, dialects.PostgreSQL, tt.query)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.query, err)
+		}
+		if got.String != tt.want {
+			t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+		}
 	}
 }
 
@@ -450,7 +479,7 @@ func TestLikeMatch(t *testing.T) {
 		{"%%%%%%b", "aaaaaaaaac", false},
 	}
 	for _, tt := range tests {
-		if got := likeMatch([]rune(tt.pattern), []rune(tt.subject)); got != tt.want {
+		if got := likeMatch([]rune(tt.pattern), []rune(tt.subject), likeEscape); got != tt.want {
 			t.Fatalf("likeMatch(%q, %q) = %v, want %v", tt.pattern, tt.subject, got, tt.want)
 		}
 	}

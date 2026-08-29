@@ -20,23 +20,19 @@ import (
 // translation that guessed per dialect would be three rules that still all
 // disagree with SQLite.
 func preservedLabel(item ast.SelectItem, written string) string {
-	if item.Source == "" || keepsItsName(item.Expr) {
+	if item.Source == "" {
 		return ""
 	}
-	if strings.TrimSpace(written) == item.Source {
+	if sameName(item.Source, strings.TrimSpace(written)) {
 		return ""
 	}
 	return item.Source
 }
 
-// keepsItsName reports whether an item already names itself: a column, a star,
-// a bare name or a placeholder. SQLite names such a column after the column,
-// and no lowering changes that.
-func keepsItsName(e ast.Expr) bool {
-	switch e.(type) {
-	case *ast.ColumnRef, *ast.Star, *ast.Ident, *ast.Placeholder, *ast.Keyword:
-		return true
-	default:
-		return false
-	}
+// sameName reports whether two spellings name the same thing. They do when they
+// differ only by identifier quoting: writing "col" back as col does not rename
+// the column, and labeling it would only repeat the name.
+func sameName(source, written string) bool {
+	return source == written ||
+		strings.ReplaceAll(source, `"`, "") == strings.ReplaceAll(written, `"`, "")
 }

@@ -263,3 +263,104 @@ func TestNestingIsBounded(t *testing.T) {
 		t.Errorf("a deeply nested expression error = %v, want ErrInvalidSyntax", err)
 	}
 }
+
+// TestPostgresOtherOperatorPrecedence pins the level PostgreSQL's grammar calls
+// "any other operator": below addition, above the pattern predicates, and one
+// level for all of them. Read at the level the other two dialects give these
+// operators, "a || b * c" would have concatenated first and multiplied the
+// result.
+func TestPostgresOtherOperatorPrecedence(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct{ input, want string }{
+		{"a || b * c", "concat(a, mul(b, c))"},
+		{"a || b + c", "concat(a, add(b, c))"},
+		{"a # b + c", "bitxor(a, add(b, c))"},
+		{"a | b & c", "bitand(bitor(a, b), c)"},
+		{"a << b + c", "shl(a, add(b, c))"},
+		{"a -> b || c", "concat(jsonget(a, b), c)"},
+		{"a || b = c", "eq(concat(a, b), c)"},
+		{"a || b LIKE c", "like(concat(a, b), c)"},
+	} {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseExpr(dialects.PostgreSQL, tt.input)
+			if err != nil {
+				t.Fatalf("ParseExpr(%q): %v", tt.input, err)
+			}
+			if sketch(got) != tt.want {
+				t.Errorf("ParseExpr(%q) = %s, want %s", tt.input, sketch(got), tt.want)
+			}
+		})
+	}
+
+	// BigQuery concatenates at the level it multiplies at, so the two group
+	// left to right.
+	got, err := ParseExpr(dialects.GoogleSQL, "a || b * c")
+	if err != nil {
+		t.Fatalf("ParseExpr: %v", err)
+	}
+	if sketch(got) != "mul(concat(a, b), c)" {
+		t.Errorf("ParseExpr(googlesql, %q) = %s, want mul(concat(a, b), c)", "a || b * c", sketch(got))
+	}
+}
+
+// TestAShortUnicodeEscapeIsRefused covers the literal that used to read past the
+// end of the string and crash the parser. A query is untrusted text, so a
+// malformed escape has to be an error rather than a panic.
+func TestAShortUnicodeEscapeIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, query := range []string{
+		`SELECT U&'\+41424'`, `SELECT U&'\+4142'`, `SELECT U&'\+'`, `SELECT U&'\41'`, `SELECT U&'\'`,
+	} {
+		t.Run(query, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := Parse(dialects.PostgreSQL, query); err == nil {
+				t.Errorf("Parse(%q) succeeded, want a refusal", query)
+			}
+		})
+	}
+
+	// The well-formed spellings still read.
+	for _, tt := range []struct{ query, want string }{
+		{`SELECT U&'\0041'`, "'A'"},
+		{`SELECT U&'\+000041'`, "'A'"},
+	} {
+		stmt := mustParse(t, tt.query)
+		sel, ok := stmt.(*ast.SelectStmt)
+		if !ok {
+			t.Fatalf("statement is %T, want a SELECT", stmt)
+		}
+		core, ok := sel.Body.(*ast.SelectCore)
+		if !ok {
+			t.Fatalf("body is %T, want a SELECT core", sel.Body)
+		}
+		if got := sketch(core.Items[0].Expr); got != tt.want {
+			t.Errorf("Parse(%q) = %s, want %s", tt.query, got, tt.want)
+		}
+	}
+}
+
+// TestRecursionIsBoundedEverywhere covers the two recursive paths that had no
+// depth guard. A stack overflow is fatal and cannot be recovered from, so every
+// path that recurses once per token has to stop.
+func TestRecursionIsBoundedEverywhere(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct{ name, query string }{
+		{"nested parenthesized queries", strings.Repeat("(", 5000) + "SELECT 1" + strings.Repeat(")", 5000)},
+		{"repeated EXPLAIN", strings.Repeat("EXPLAIN ", 5000) + "SELECT 1"},
+		{"nested subqueries", strings.Repeat("SELECT (", 2000) + "1" + strings.Repeat(")", 2000)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := Parse(dialects.PostgreSQL, tt.query); err == nil {
+				t.Error("a query that nests without end should be refused")
+			}
+		})
+	}
+}

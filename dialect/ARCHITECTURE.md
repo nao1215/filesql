@@ -25,7 +25,7 @@ constraints were recorded only in comments.
 An operand boundary found by scanning is a guess, and a guess is wrong at the
 edges. `SOUNDS LIKE`, `LIKE ANY`, the PostgreSQL bit-string literal and the
 `#-` operator each produced SQL that could not parse, because a pass took a
-neighbouring token for an operand that was not one.
+neighboring token for an operand that was not one.
 
 Anything no pass recognized was handed to SQLite unchanged. That made the
 supported language accidental: a construct "worked" whenever SQLite happened to

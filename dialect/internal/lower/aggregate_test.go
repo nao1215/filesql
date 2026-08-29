@@ -370,3 +370,48 @@ func TestAggregatesWithoutASQLiteFormAreRejected(t *testing.T) {
 		t.Errorf("a column named mode must translate: %v", err)
 	}
 }
+
+// TestAnExpandedAggregateRefusesClausesItWouldDrop covers the aggregates that
+// become an expression rather than a call. A FILTER or a DISTINCT written on
+// one of those has nowhere to go: the result is several aggregates inside
+// arithmetic, and a clause repeated on some of them and not others would answer
+// over a different set of rows than the caller asked about.
+func TestAnExpandedAggregateRefusesClausesItWouldDrop(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		dialect dialect.Dialect
+		query   string
+		mention string
+	}{
+		{dialect.PostgreSQL, "SELECT VAR_POP(a) FILTER (WHERE b > 0) FROM t", "FILTER"},
+		{dialect.PostgreSQL, "SELECT STDDEV(a) FILTER (WHERE b > 0) FROM t", "FILTER"},
+		{dialect.PostgreSQL, "SELECT CORR(a, b) FILTER (WHERE b > 0) FROM t", "FILTER"},
+		{dialect.GoogleSQL, "SELECT COUNTIF(a) FILTER (WHERE b > 0) FROM t", "FILTER"},
+		{dialect.PostgreSQL, "SELECT VAR_POP(DISTINCT a) FROM t", "DISTINCT"},
+		{dialect.MySQL, "SELECT STDDEV(DISTINCT a) FROM t", "DISTINCT"},
+		{dialect.GoogleSQL, "SELECT COUNTIF(DISTINCT a) FROM t", "DISTINCT"},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := dialect.Translate(tt.dialect, tt.query)
+			if !errors.Is(err, dialect.ErrUnsupportedSyntax) {
+				t.Fatalf("Translate(%s, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.query, err)
+			}
+			if !strings.Contains(err.Error(), tt.mention) {
+				t.Errorf("Translate(%s, %q) error = %q, want it to name %s", tt.dialect, tt.query, err, tt.mention)
+			}
+		})
+	}
+
+	// An aggregate that is only renamed keeps both clauses, because the call it
+	// becomes is still one call.
+	got, err := dialect.Translate(dialect.GoogleSQL, "SELECT LOGICAL_AND(a) FILTER (WHERE b > 0) FROM t")
+	if err != nil {
+		t.Fatalf("Translate: %v", err)
+	}
+	if !strings.Contains(got, "FILTER (WHERE b > 0)") {
+		t.Errorf("Translate = %q, want the filter kept on the renamed aggregate", got)
+	}
+}

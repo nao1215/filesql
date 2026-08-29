@@ -238,6 +238,9 @@ type InsertStmt struct {
 type OnConflictClause struct {
 	// Target is the conflicting column list, empty for a bare ON CONFLICT.
 	Target []string
+	// TargetWhere is the predicate of a partial unique index, which decides
+	// which index the conflict is resolved against.
+	TargetWhere Expr
 	// DoNothing marks DO NOTHING; otherwise Set holds the assignments.
 	DoNothing bool
 	Set       []Assignment
@@ -428,7 +431,7 @@ const (
 )
 
 // AlterTableStmt is an ALTER TABLE, restricted to the four things SQLite can
-// do. Anything else is refused by the parser rather than modelled here.
+// do. Anything else is refused by the parser rather than modeled here.
 type AlterTableStmt struct {
 	Kind    AlterKind
 	Table   *TableName

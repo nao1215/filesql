@@ -64,6 +64,12 @@ func (w *writer) onConflict(n *ast.OnConflictClause) error {
 			w.word(quoteIfNeeded(col))
 		}
 		w.word(")")
+		if n.TargetWhere != nil {
+			w.word("WHERE")
+			if err := w.expr(n.TargetWhere, precLowest); err != nil {
+				return err
+			}
+		}
 	}
 	w.word("DO")
 	if n.DoNothing {

@@ -36,7 +36,9 @@ func sqlitePrec(op ast.BinaryOp) int {
 		return precAddSub
 	case ast.Mul, ast.Div, ast.Mod:
 		return precMulDiv
-	case ast.Concat:
+	case ast.Concat, ast.JSONGet, ast.JSONGetText:
+		// SQLite binds these three tighter than anything else, so an operand
+		// that is a sum needs its parentheses back.
 		return precConcat
 	default:
 		return precCompare

@@ -289,7 +289,7 @@ func upper(s string) string { return strings.ToUpper(s) }
 // literals in SQLite's own spelling. It becomes the name of a result column
 // whose expression translation changed, so it has to be comparable with what
 // the renderer writes: a literal that only changed its quoting must come out
-// the same both ways, or every string literal would be labelled.
+// the same both ways, or every string literal would be labeled.
 //
 // The layout follows the source: two tokens the caller wrote apart stay apart
 // and two written together stay together, which is what keeps

@@ -532,3 +532,88 @@ func TestQuantifiedComparisonsWithoutAForm(t *testing.T) {
 		})
 	}
 }
+
+// TestTheFindingsFromReview covers the constructs a review of this rewrite
+// found: each was translated into SQL that ran and answered something the
+// caller had not asked for, or that crashed the parser.
+func TestTheFindingsFromReview(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name    string
+		dialect dialect.Dialect
+		input   string
+		want    string
+	}{
+		{
+			// SQLite has no precedence among the compound operators and reads
+			// them left to right, where every source dialect binds INTERSECT
+			// tighter. Written flat, "1 UNION 2 INTERSECT 3" would have asked
+			// for (1 UNION 2) INTERSECT 3.
+			name:    "intersect binds tighter than union",
+			dialect: dialect.PostgreSQL,
+			input:   "SELECT 1 UNION SELECT 2 INTERSECT SELECT 3",
+			want:    "SELECT 1 UNION SELECT * FROM (SELECT 2 INTERSECT SELECT 3)",
+		},
+		{
+			name:    "a left-nested set operation needs no subquery",
+			dialect: dialect.PostgreSQL,
+			input:   "SELECT 1 UNION SELECT 2 UNION SELECT 3",
+			want:    "SELECT 1 UNION SELECT 2 UNION SELECT 3",
+		},
+		{
+			// PostgreSQL reads concatenation below multiplication and SQLite
+			// reads it above, so the product needs parentheses to stay the
+			// thing being concatenated.
+			name:    "concatenation binds looser than multiplication",
+			dialect: dialect.PostgreSQL,
+			input:   "SELECT a || b * c FROM t",
+			want:    `SELECT a || (b * c) AS "a || b * c" FROM t`,
+		},
+		{
+			name:    "a referential action that ends in a keyword",
+			dialect: dialect.PostgreSQL,
+			input:   "CREATE TABLE t (a INT REFERENCES u (id) ON DELETE SET NULL)",
+			want:    "CREATE TABLE t (a INTEGER REFERENCES u (id) ON DELETE SET NULL)",
+		},
+		{
+			name:    "a referential action of SET DEFAULT",
+			dialect: dialect.PostgreSQL,
+			input:   "CREATE TABLE t (a INT REFERENCES u (id) ON UPDATE SET DEFAULT ON DELETE CASCADE)",
+			want:    "CREATE TABLE t (a INTEGER REFERENCES u (id) ON UPDATE SET DEFAULT ON DELETE CASCADE)",
+		},
+		{
+			name:    "a deferrable foreign key",
+			dialect: dialect.PostgreSQL,
+			input:   "CREATE TABLE t (a INT REFERENCES u (id) DEFERRABLE INITIALLY DEFERRED)",
+			want:    "CREATE TABLE t (a INTEGER REFERENCES u (id) DEFERRABLE INITIALLY DEFERRED)",
+		},
+		{
+			// The standard spelling with no number asks for one row.
+			name:    "fetch first row only",
+			dialect: dialect.PostgreSQL,
+			input:   "SELECT a FROM t FETCH FIRST ROW ONLY",
+			want:    "SELECT a FROM t LIMIT 1",
+		},
+		{
+			// The predicate picks which partial unique index the upsert
+			// resolves against, so dropping it changes what the statement does.
+			name:    "an upsert against a partial index",
+			dialect: dialect.PostgreSQL,
+			input:   "INSERT INTO t (a) VALUES (1) ON CONFLICT (a) WHERE a > 0 DO NOTHING",
+			want:    "INSERT INTO t (a) VALUES (1) ON CONFLICT (a) WHERE a > 0 DO NOTHING",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := dialect.Translate(tt.dialect, tt.input)
+			if err != nil {
+				t.Fatalf("Translate(%s, %q): %v", tt.dialect, tt.input, err)
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%s, %q)\n  = %q\nwant %q", tt.dialect, tt.input, got, tt.want)
+			}
+		})
+	}
+}

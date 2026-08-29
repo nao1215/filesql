@@ -8,7 +8,7 @@ package lower
 // The list is here rather than read from the runtime package because the
 // dependency runs the other way. A test in lower_test holds the two together,
 // so a helper added there and not here is a failure rather than a silent
-// change of behaviour.
+// change of behavior.
 var helperNames = map[string]bool{ //nolint:gochecknoglobals // a generated table
 	"acosd": true, "addtime": true, "age": true, "ascii": true, "asind": true, "atan2d": true,
 	"atand": true, "bin": true, "bit_count": true, "bit_length": true, "cbrt": true,

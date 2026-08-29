@@ -162,15 +162,16 @@ func safeCastName(name string) string {
 // dialect matches. SQLite's LIKE folds only ASCII and matches nothing at all
 // for a pattern ending in the escape character.
 func likeHelper(b *ast.BinaryExpr, name string) (ast.Expr, error) {
+	// The helper takes the pattern first, the way SQLite's own like() does, and
+	// the escape character last. Leaving an escaped pattern on SQLite's own
+	// LIKE would answer with SQLite's rules instead of the dialect's: its
+	// folding stops at ASCII, so under PostgreSQL, whose LIKE is case
+	// sensitive, 'A' LIKE 'a' ESCAPE '!' would have been true.
+	args := []ast.Expr{b.Right, b.Left}
 	if b.Escape != nil {
-		// SQLite's own LIKE takes an ESCAPE clause and the helpers do not, so a
-		// pattern with a custom escape character stays on SQLite's LIKE. What
-		// the helpers add -- folding beyond ASCII, and reading a trailing
-		// escape as itself -- is what is given up for it.
-		return b, nil
+		args = append(args, b.Escape)
 	}
-	// The helper takes the pattern first, the way SQLite's own like() does.
-	call := helper(name, b.Span, b.Right, b.Left)
+	call := helper(name, b.Span, args...)
 	if b.Op == ast.NotLike || b.Op == ast.NotILike {
 		return notExpr(call, b.Span), nil
 	}
@@ -318,7 +319,7 @@ func groupConcat(call *ast.FuncCall) (ast.Expr, error) {
 }
 
 // roundEven turns ROUND into the helper that breaks a tie toward the even
-// neighbour, which is what MySQL and PostgreSQL do for a floating-point
+// neighbor, which is what MySQL and PostgreSQL do for a floating-point
 // argument and SQLite does not.
 func roundEven(call *ast.FuncCall) (ast.Expr, error) {
 	if len(call.Args) < 1 || len(call.Args) > 2 {

@@ -298,22 +298,50 @@ func textOperand(s string) numOperand {
 // clause has already lost the chance to be given one.
 const likeEscape = '\\'
 
+// noEscape is the escape character of a pattern that has none, which is what an
+// empty ESCAPE clause asks for. It is a code point no text can hold.
+const noEscape = rune(-1)
+
 // likeCompare implements SQL LIKE, where "%" matches any run of characters and
 // "_" matches exactly one. dialects.SQLite's own LIKE folds ASCII case; this one folds
 // only when asked, so dialects.PostgreSQL and dialects.GoogleSQL keep their case-sensitive LIKE
 // and dialects.PostgreSQL's ILIKE folds every character rather than just the ASCII ones.
 func likeCompare(caseSensitive bool) scalarFn {
 	return func(args []driver.Value) (driver.Value, error) {
+		if len(args) < 2 || len(args) > 3 {
+			return nil, fmt.Errorf("dialect: LIKE takes a pattern, a subject and an optional escape character, got %d arguments", len(args))
+		}
 		pattern, ok1 := toString(args[0])
 		subject, ok2 := toString(args[1])
 		if !ok1 || !ok2 {
 			return nil, nil
 		}
+		escape := likeEscape
+		if len(args) == 3 {
+			text, ok := toString(args[2])
+			if !ok {
+				return nil, nil
+			}
+			chars := []rune(text)
+			switch len(chars) {
+			case 0:
+				// An empty ESCAPE clause turns escaping off, which is what
+				// PostgreSQL means by it.
+				escape = noEscape
+			case 1:
+				escape = chars[0]
+			default:
+				return nil, fmt.Errorf("dialect: the ESCAPE clause takes one character, got %q", text)
+			}
+		}
 		if !caseSensitive {
 			pattern = foldCase(pattern)
 			subject = foldCase(subject)
+			if escape != noEscape {
+				escape = unicode.ToLower(escape)
+			}
 		}
-		return boolToInt(likeMatch([]rune(pattern), []rune(subject))), nil
+		return boolToInt(likeMatch([]rune(pattern), []rune(subject), escape)), nil
 	}
 }
 
@@ -329,7 +357,7 @@ func foldCase(s string) string {
 // characters "a%b" and nothing else. A trailing escape stands for itself rather
 // than being an error, which is the same answer the SIMILAR TO translation
 // gives; erroring would turn a questionable pattern into a failed query.
-func likeMatch(pattern, subject []rune) bool {
+func likeMatch(pattern, subject []rune, escape rune) bool {
 	var (
 		p, s          int
 		star          = -1
@@ -337,10 +365,10 @@ func likeMatch(pattern, subject []rune) bool {
 	)
 	for s < len(subject) {
 		switch {
-		case p < len(pattern) && pattern[p] == likeEscape && literalAt(pattern, p) == subject[s]:
+		case p < len(pattern) && pattern[p] == escape && literalAt(pattern, p, escape) == subject[s]:
 			p += escapedWidth(pattern, p)
 			s++
-		case p < len(pattern) && pattern[p] != likeEscape && (pattern[p] == '_' || pattern[p] == subject[s]):
+		case p < len(pattern) && pattern[p] != escape && (pattern[p] == '_' || pattern[p] == subject[s]):
 			p++
 			s++
 		case p < len(pattern) && pattern[p] == '%':
@@ -364,11 +392,11 @@ func likeMatch(pattern, subject []rune) bool {
 
 // literalAt is the character an escape at p stands for: the one after it, or
 // the escape itself when it ends the pattern.
-func literalAt(pattern []rune, p int) rune {
+func literalAt(pattern []rune, p int, escape rune) rune {
 	if p+1 < len(pattern) {
 		return pattern[p+1]
 	}
-	return likeEscape
+	return escape
 }
 
 // escapedWidth is how much of the pattern an escape at p consumes.

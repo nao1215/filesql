@@ -6,7 +6,7 @@ import (
 	"github.com/nao1215/filesql/dialect/internal/token"
 )
 
-// parseCreate reads a CREATE. Only the three objects SQLite has are modelled;
+// parseCreate reads a CREATE. Only the three objects SQLite has are modeled;
 // everything else is refused by name rather than handed to SQLite, which used
 // to answer with a syntax error about a word the caller had written.
 func (p *Parser) parseCreate() (ast.Stmt, error) {
@@ -339,13 +339,37 @@ func (p *Parser) parseReferencesClause() (string, error) {
 			return "", err
 		}
 	}
-	for p.atWord("ON") || p.atWord("MATCH") || p.atWord("DEFERRABLE") || p.atWords("NOT", "DEFERRABLE") {
-		p.pos++
-		for p.cur().Kind == token.Word && !p.startsColumnConstraint() && !p.atWord("ON") {
-			p.pos++
+	for {
+		switch {
+		case p.eatWord("ON"):
+			// The referential action. SET NULL and SET DEFAULT end in words
+			// that also open a column constraint, so the action is read by
+			// name rather than by scanning to the first word that could be
+			// one: reading it that way stopped at the NULL and left it to be
+			// taken for a constraint the caller never wrote.
+			if !p.eatWord("DELETE") && !p.eatWord("UPDATE") {
+				return "", p.unexpected("DELETE or UPDATE")
+			}
+			switch {
+			case p.eatWords("SET", "NULL"), p.eatWords("SET", kwDefault),
+				p.eatWord("CASCADE"), p.eatWord("RESTRICT"), p.eatWords("NO", "ACTION"):
+			default:
+				return "", p.unexpected("a referential action")
+			}
+		case p.eatWord("MATCH"):
+			if !p.eatWord("SIMPLE") && !p.eatWord("FULL") && !p.eatWord("PARTIAL") {
+				return "", p.unexpected("SIMPLE, FULL or PARTIAL")
+			}
+		case p.eatWords("NOT", "DEFERRABLE"), p.eatWord("DEFERRABLE"):
+			if p.eatWord("INITIALLY") {
+				if !p.eatWord("DEFERRED") && !p.eatWord("IMMEDIATE") {
+					return "", p.unexpected("DEFERRED or IMMEDIATE")
+				}
+			}
+		default:
+			return p.sourceText(start, p.pos), nil
 		}
 	}
-	return p.sourceText(start, p.pos), nil
 }
 
 // parseTableConstraint reads one table-level constraint.

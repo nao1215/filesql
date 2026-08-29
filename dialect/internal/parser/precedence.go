@@ -24,6 +24,9 @@ const (
 	precIs
 	precCompare
 	precBetween
+	// precOther is PostgreSQL's "any other operator": one level for the
+	// bitwise, concatenation and JSON operators, below addition.
+	precOther
 	precBitOr
 	precBitAnd
 	precShift
@@ -238,6 +241,13 @@ func symbolOperator(d dialects.Dialect, text string) (ast.BinaryOp, bool) {
 
 // binaryPrec is the binding power of an operator in a dialect.
 func binaryPrec(d dialects.Dialect, op ast.BinaryOp) int {
+	// PostgreSQL gives one level to everything its grammar calls "any other
+	// operator", and puts that level below addition: "a || b * c" concatenates
+	// the product, and "a # b + c" takes the XOR of the sum. The other two
+	// dialects give each of these operators a level of its own.
+	if d == dialects.PostgreSQL && postgresOtherOperator(op) {
+		return precOther
+	}
 	switch op {
 	case ast.Or:
 		return precOr
@@ -273,6 +283,11 @@ func binaryPrec(d dialects.Dialect, op ast.BinaryOp) int {
 		// multiplication.
 		return precBitXor
 	case ast.Concat:
+		// BigQuery concatenates at the level it multiplies at; MySQL reads
+		// "||" as OR and never reaches here.
+		if d == dialects.GoogleSQL {
+			return precMulDiv
+		}
 		return precConcat
 	case ast.JSONGet, ast.JSONGetText, ast.JSONPathGet, ast.JSONPathGetText,
 		ast.JSONContains, ast.JSONContainedBy, ast.JSONExists, ast.JSONPathExists,
@@ -280,5 +295,20 @@ func binaryPrec(d dialects.Dialect, op ast.BinaryOp) int {
 		return precConcat
 	default:
 		return precCompare
+	}
+}
+
+// postgresOtherOperator reports whether PostgreSQL's grammar reads an operator
+// at its "any other operator" level, which sits below addition and above the
+// pattern predicates.
+func postgresOtherOperator(op ast.BinaryOp) bool {
+	switch op {
+	case ast.Concat, ast.BitXor, ast.BitAnd, ast.BitOr, ast.ShiftLeft, ast.ShiftRight,
+		ast.JSONGet, ast.JSONGetText, ast.JSONPathGet, ast.JSONPathGetText,
+		ast.JSONContains, ast.JSONContainedBy, ast.JSONExists, ast.JSONPathExists,
+		ast.JSONPathMatch, ast.JSONPathDelete:
+		return true
+	default:
+		return false
 	}
 }

@@ -74,7 +74,7 @@ func FuzzTranslate(f *testing.F) {
 }
 
 // knownError reports whether an error is one this package promises to return.
-// Anything else means a failure reached the caller unlabelled.
+// Anything else means a failure reached the caller unlabeled.
 func knownError(err error) bool {
 	return errors.Is(err, ErrInvalidSyntax) ||
 		errors.Is(err, ErrUnsupportedSyntax) ||

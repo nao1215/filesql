@@ -2,7 +2,6 @@ package parser
 
 import (
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/nao1215/filesql/dialect/internal/ast"
@@ -33,6 +32,12 @@ func FuzzParse(f *testing.F) {
 		"'unterminated",
 		"/* unterminated",
 		"((((((((((1))))))))))",
+		"((((((((((SELECT 1))))))))))",
+		"EXPLAIN EXPLAIN EXPLAIN SELECT 1",
+		"SELECT U&'\\+41424'",
+		"SELECT 1 UNION SELECT 2 INTERSECT SELECT 3 EXCEPT SELECT 4",
+		"CREATE TABLE t (a INT REFERENCES u (id) ON DELETE SET NULL)",
+		"SELECT a FROM t WHERE a LIKE 'x!%' ESCAPE '!'",
 		"",
 	} {
 		f.Add(seed)
@@ -63,7 +68,7 @@ func FuzzParse(f *testing.F) {
 }
 
 // knownError reports whether an error is one this package promises to return.
-// Anything else means a failure reached the caller unlabelled.
+// Anything else means a failure reached the caller unlabeled.
 func knownError(err error) bool {
 	return errors.Is(err, sqlerr.ErrInvalidSyntax) ||
 		errors.Is(err, sqlerr.ErrUnsupportedSyntax) ||
@@ -89,7 +94,10 @@ func checkInvariants(t *testing.T, d dialects.Dialect, query string, stmt ast.St
 			if item.Span.Line <= 0 {
 				fail("a result column has no source position")
 			}
-			if strings.TrimSpace(item.Source) == "" {
+			// The text is not trimmed: a name made of a Unicode space is a
+			// name, since the lexer separates tokens on ASCII whitespace the
+			// way the source engines do.
+			if item.Source == "" {
 				fail("a result column has no source text")
 			}
 		}
