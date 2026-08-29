@@ -413,6 +413,13 @@ func TestToDateTemplate(t *testing.T) {
 		{`SELECT to_timestamp('2024-03-05 13:45 -05 30','YYYY-MM-DD HH24:MI TZH TZM')`, "2024-03-05 19:15:00"},
 		{`SELECT to_date('2024 W10 7','IYYY "W"IW ID')`, "2024-03-10"},
 		{`SELECT to_date('2023-060','YYYY-DDD')`, "2023-03-01"},
+		// A year with its thousands separated, which to_char writes and the
+		// reader could not read back.
+		{`SELECT to_date('2,024-03-05','Y,YYY-MM-DD')`, "2024-03-05"},
+		{`SELECT to_date('12,024-03-05','Y,YYY-MM-DD')`, "12024-03-05"},
+		// An ISO year on its own is its first week's Monday.
+		{`SELECT to_date('2024','IYYY')`, "2024-01-01"},
+		{`SELECT to_date('4','I')`, "2003-12-29"},
 	} {
 		t.Run(tt.query, func(t *testing.T) {
 			got, err := runDialect(t, db, dialects.PostgreSQL, tt.query)
@@ -438,6 +445,14 @@ func TestToDateTemplate(t *testing.T) {
 		`SELECT to_date('2024 Smarch 05','YYYY Month DD')`,
 		`SELECT to_timestamp('2024-03-05 01:45 XM','YYYY-MM-DD HH12:MI AM')`,
 		`SELECT to_date('2024 XIV 05','YYYY RM DD')`,
+		// A day of the year says nothing without the year it counts from, and
+		// the two date conventions do not mix.
+		`SELECT to_date('065','DDD')`,
+		`SELECT to_date('065','IDDD')`,
+		`SELECT to_date('2024 065','YYYY IDDD')`,
+		`SELECT to_date('2024 10 2','YYYY IW ID')`,
+		// A twelve-hour clock with no hour beside it.
+		`SELECT to_timestamp('PM','PM')`,
 	} {
 		t.Run(query, func(t *testing.T) {
 			if _, err := runDialect(t, db, dialects.PostgreSQL, query); err == nil {

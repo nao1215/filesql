@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -25,25 +26,26 @@ import (
 // The template patterns whose spelling is repeated between the scanner's table
 // and the renderers that read it.
 const (
-	patYYYY  = "YYYY"
-	patIYY   = "IYY"
-	patMonth = "MONTH"
-	patMon   = "MON"
-	patDay   = "DAY"
-	patHH24  = "HH24"
-	patHH12  = "HH12"
-	patYYY   = "YYY"
-	patDDD   = "DDD"
-	patEEEE  = "EEEE"
-	patAD    = "A.D."
-	patAMDot = "A.M."
-	patIDDD  = "IDDD"
-	patIYYY  = "IYYY"
-	patBC    = "B.C."
-	patPMDot = "P.M."
-	patSSSS  = "SSSS"
-	patSSSSS = "SSSSS"
-	patFF    = "FF"
+	patYYYY      = "YYYY"
+	patIYY       = "IYY"
+	patMonth     = "MONTH"
+	patMon       = "MON"
+	patDay       = "DAY"
+	patHH24      = "HH24"
+	patHH12      = "HH12"
+	patYYY       = "YYY"
+	patDDD       = "DDD"
+	patEEEE      = "EEEE"
+	patAD        = "A.D."
+	patAMDot     = "A.M."
+	patIDDD      = "IDDD"
+	patIYYY      = "IYYY"
+	patBC        = "B.C."
+	patPMDot     = "P.M."
+	patSSSS      = "SSSS"
+	patSSSSS     = "SSSSS"
+	patYcommaYYY = "Y,YYY"
+	patFF        = "FF"
 )
 
 // pgTemplateItem is one element of a scanned template: either a pattern, whose
@@ -63,7 +65,7 @@ type pgTemplateItem struct {
 // prefers the longest match: DDD has to be tried before DD and before D, and
 // IYYY before IY and I, or the tail of a pattern is copied out as literal text.
 var pgTemplatePatterns = []string{ //nolint:gochecknoglobals // a fixed table read by the scanner
-	"Y,YYY", patAMDot, patPMDot, patBC, patAD,
+	patYcommaYYY, patAMDot, patPMDot, patBC, patAD,
 	patIDDD, patIYYY, patHH24, patHH12, patSSSSS, patSSSS, patEEEE,
 	patMonth, patIYY, patDDD, "FF1", "FF2", "FF3", "FF4", "FF5", "FF6",
 	patMon, patDay, "RM",
@@ -951,6 +953,9 @@ func pgReadTemplate(format, value string) (time.Time, error) {
 		fields pgDateFields
 		at     int
 	)
+	if err := pgOneDateConvention(items); err != nil {
+		return time.Time{}, err
+	}
 	for _, it := range items {
 		if it.pattern == "" {
 			at = pgSkipLiteral(value, at, it.text)
@@ -963,6 +968,26 @@ func pgReadTemplate(format, value string) (time.Time, error) {
 		at = next
 	}
 	return pgBuildTime(&fields)
+}
+
+// pgOneDateConvention refuses a template naming a field of each calendar. An
+// ISO week date is built from an ISO year, its week and its weekday, and a
+// Gregorian date from a year, a month and a day; PostgreSQL refuses a template
+// holding both rather than deciding which one the value is written in.
+func pgOneDateConvention(items []pgTemplateItem) error {
+	var iso, gregorian bool
+	for _, it := range items {
+		switch it.pattern {
+		case patIYYY, patIYY, "IY", "I", "IW", "ID", patIDDD:
+			iso = true
+		case patYcommaYYY, patYYYY, patYYY, "YY", "Y", "MM", "DD", patDDD, patMonth, patMon, "RM":
+			gregorian = true
+		}
+	}
+	if iso && gregorian {
+		return errors.New("dialect: a template cannot mix the Gregorian and ISO week date conventions")
+	}
+	return nil
 }
 
 // pgSkipLiteral steps over the literal text between two patterns. PostgreSQL
@@ -1199,9 +1224,39 @@ func pgReadNamePattern(f *pgDateFields, pattern, value string, at int) (int, err
 		return next, nil
 	case patTZH, patTZM, "OF":
 		return pgReadZoneOffset(f, pattern, value, at)
+	case patYcommaYYY:
+		// A year with its thousands separated, which to_char writes as
+		// "2,024". The comma is part of the pattern rather than between two of
+		// them, so the digits on either side are one number.
+		return pgReadSeparatedYear(f, value, at)
 	}
 	return 0, fmt.Errorf("dialect: the template pattern %q is not supported", pattern)
 }
+
+// pgReadSeparatedYear reads a year written with its thousands separated. The
+// leading group is as long as the year needs, so 12,024 is a year too.
+func pgReadSeparatedYear(f *pgDateFields, value string, at int) (int, error) {
+	const groupWidth = 3
+	lead, next, ok := pgReadNumber(value, at, maxYearDigits)
+	if !ok {
+		return 0, pgTemplateError(patYcommaYYY, pgRemainder(value, at))
+	}
+	year := lead
+	for next < len(value) && value[next] == ',' {
+		group, after, ok := pgReadNumber(value, next+1, groupWidth)
+		if !ok {
+			return 0, pgTemplateError(patYcommaYYY, pgRemainder(value, next))
+		}
+		year = year*1000 + group
+		next = after
+	}
+	f.year, f.haveYear = year, true
+	return next, nil
+}
+
+// maxYearDigits bounds the digits read for a year, which is what keeps a run of
+// them from being read as one number no calendar has.
+const maxYearDigits = 7
 
 // pgReadZoneOffset reads the offset from UTC a template names, which
 // PostgreSQL applies to the fields it read: 13:45 at +05 is 08:45 UTC.
@@ -1337,6 +1392,13 @@ func pgClockHour(f *pgDateFields) (int, error) {
 // pgCalendarDay is the day the fields name, by whichever of the four ways the
 // template spelled it.
 func pgCalendarDay(f *pgDateFields) (time.Time, error) {
+	// A day of the year says nothing without the year it counts from, and the
+	// two conventions do not mix: an ISO week date is built from an ISO year
+	// and a Gregorian date from a Gregorian one, and PostgreSQL refuses a
+	// template holding both.
+	if (f.haveDayOfYear && !f.haveYear) || (f.haveISODayOfYear && !f.haveISOYear) {
+		return time.Time{}, errors.New("dialect: the day of the year cannot be read without the year it counts from")
+	}
 	switch {
 	case f.haveJulian:
 		// Day zero of the Julian period, from which PostgreSQL counts.
@@ -1349,8 +1411,14 @@ func pgCalendarDay(f *pgDateFields) (time.Time, error) {
 		}
 		return pgISOWeekDate(f.isoYear, 1, 1).AddDate(0, 0, f.isoDayOfYear-1), nil
 	case f.haveISOYear:
-		if f.isoWeek < 1 || f.isoWeek > 53 {
-			return time.Time{}, fmt.Errorf("dialect: date/time field value out of range: ISO week %d", f.isoWeek)
+		// An ISO year on its own is its first week's Monday, which is what
+		// PostgreSQL answers for it.
+		isoWeek := f.isoWeek
+		if isoWeek == 0 {
+			isoWeek = 1
+		}
+		if isoWeek > 53 {
+			return time.Time{}, fmt.Errorf("dialect: date/time field value out of range: ISO week %d", isoWeek)
 		}
 		isoDay := f.isoDay
 		if isoDay == 0 {
@@ -1359,7 +1427,7 @@ func pgCalendarDay(f *pgDateFields) (time.Time, error) {
 		if isoDay > 7 {
 			return time.Time{}, fmt.Errorf("dialect: date/time field value out of range: ISO day %d", isoDay)
 		}
-		return pgISOWeekDate(f.isoYear, f.isoWeek, isoDay), nil
+		return pgISOWeekDate(f.isoYear, isoWeek, isoDay), nil
 	case f.haveDayOfYear:
 		year := f.year
 		if !f.haveYear {
