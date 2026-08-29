@@ -230,6 +230,24 @@ func TestJSONArrayElementIsBounded(t *testing.T) {
 		assert.Less(t, read, limit*8, "the read consumed %d bytes for a %d byte bound", read, limit)
 	})
 
+	t.Run("a refused element stops the reading rather than slowing it", func(t *testing.T) {
+		t.Parallel()
+
+		// The bound has to cost the same however the decoder happens to ask for
+		// bytes. json.Decoder does not stop at the first error it is handed --
+		// it calls Read again -- so a reader that keeps serving after the
+		// refusal lets it walk the rest of the stream, which is exactly the
+		// read the bound exists to prevent. Through Go 1.26 the decoder's
+		// buffer growth hid this; on 1.27 it consumed a forty-times-oversized
+		// body whole. Asserting on the source reads keeps the property pinned
+		// to behavior rather than to a toolchain.
+		body := `[{"a":"` + strings.Repeat("x", limit*40)
+		read, err := readAll(t, body)
+		require.ErrorIs(t, err, ErrRecordTooLong)
+		assert.Less(t, read, len(body)/2,
+			"a %d byte body was read %d bytes deep for a %d byte bound", len(body), read, limit)
+	})
+
 	t.Run("many small elements are unaffected", func(t *testing.T) {
 		t.Parallel()
 
