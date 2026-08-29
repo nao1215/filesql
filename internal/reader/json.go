@@ -189,22 +189,56 @@ type elementReader struct {
 	limit int
 	read  int
 	index int
+	// refused is the error this reader has already returned. It is sticky: a
+	// decoder that keeps calling Read after being told the element is too long
+	// must not be able to walk the rest of the stream one byte at a time.
+	refused error
 }
 
 // begin starts counting afresh for the element at index.
 func (e *elementReader) begin(index int) {
 	e.read = 0
 	e.index = index
+	e.refused = nil
 }
 
 // Read implements io.Reader, refusing once one element has asked for more than
 // the limit. The bytes read before the refusal are returned with it, the way
 // bufio does, so nothing already handed over is lost on the way to the error.
+//
+// The buffer handed to the source is capped at what the element is still
+// allowed, plus the one byte that proves the limit was passed. Counting after
+// an uncapped read would bound the record but not the reading: json.Decoder
+// sizes its own read-ahead buffer, and a source that fills whatever it is given
+// -- a file, a bytes.Reader -- would hand over the whole remainder in a single
+// call before the count was even consulted. How much that was depended on the
+// decoder's buffer growth, which is to say on the Go release: through 1.26 it
+// stayed near the bound, and on 1.27 it swallowed a forty-times-oversized body
+// whole. Capping the slice makes the refusal cost the same on any of them.
 func (e *elementReader) Read(p []byte) (int, error) {
+	// Once refused, stay refused without touching the source. json.Decoder does
+	// not stop at the first error it is handed -- it asks again -- so a reader
+	// that keeps serving would let it walk the whole stream a byte at a time,
+	// which is the read this bound exists to prevent.
+	if e.refused != nil {
+		return 0, e.refused
+	}
+	// Cap the slice at what the element is still allowed, plus the one byte
+	// that proves the limit was passed. Counting after an uncapped read bounds
+	// the record but not the reading: json.Decoder sizes its own read-ahead
+	// buffer, and a source that fills whatever it is given hands over the whole
+	// remainder in one call before the count is consulted.
+	if allowed := e.limit - e.read + 1; allowed < len(p) {
+		if allowed < 1 {
+			allowed = 1
+		}
+		p = p[:allowed]
+	}
 	n, err := e.src.Read(p)
 	e.read += n
 	if e.read > e.limit {
-		return n, elementTooLongError(e.index, e.limit)
+		e.refused = elementTooLongError(e.index, e.limit)
+		return n, e.refused
 	}
 	return n, err
 }
