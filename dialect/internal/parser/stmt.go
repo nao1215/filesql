@@ -124,7 +124,7 @@ func (p *Parser) parseInsert(with *ast.WithClause) (ast.Stmt, error) {
 	}
 	p.eatWord("INTO")
 
-	name, err := p.parseTableNameRef()
+	name, err := p.parseTargetName()
 	if err != nil {
 		return nil, err
 	}
@@ -271,7 +271,7 @@ func (p *Parser) parseUpdate(with *ast.WithClause) (ast.Stmt, error) {
 		p.eatWord("LOW_PRIORITY")
 		p.eatWord("IGNORE")
 	}
-	name, err := p.parseTableNameRef()
+	name, err := p.parseTargetName()
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +335,7 @@ func (p *Parser) parseDelete(with *ast.WithClause) (ast.Stmt, error) {
 		return nil, p.unsupportedf("a DELETE naming more than one table is not supported; SQLite deletes from one table")
 	}
 	p.pos++ // FROM
-	name, err := p.parseTableNameRef()
+	name, err := p.parseTargetName()
 	if err != nil {
 		return nil, err
 	}
@@ -430,6 +430,26 @@ func (p *Parser) parseTableNameRef() (*ast.TableName, error) {
 	name := &ast.TableName{Parts: parts, Span: span}
 	if err := p.parseTableAlias(&name.Alias, &name.Columns); err != nil {
 		return nil, err
+	}
+	return name, nil
+}
+
+// parseTargetName reads the table a data statement writes to: a name and an
+// alias, and no column list. The parentheses after it belong to the statement --
+// they are the columns an INSERT names -- rather than to the table reference.
+func (p *Parser) parseTargetName() (*ast.TableName, error) {
+	span := p.span()
+	parts, err := p.parseQualifiedName()
+	if err != nil {
+		return nil, err
+	}
+	name := &ast.TableName{Parts: parts, Span: span}
+	alias, _, ok, err := p.parseAlias()
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		name.Alias = alias
 	}
 	return name, nil
 }

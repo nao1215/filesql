@@ -124,9 +124,14 @@ func (w *writer) returning(items []ast.SelectItem) error {
 		if err := w.expr(item.Expr, precLowest); err != nil {
 			return err
 		}
-		if item.Alias != "" {
-			w.word("AS")
+		if item.Alias == "" {
+			continue
+		}
+		w.word("AS")
+		if item.AliasQuoted {
 			w.word(QuoteIdent(item.Alias))
+		} else {
+			w.word(quoteIfNeeded(item.Alias))
 		}
 	}
 	return nil
