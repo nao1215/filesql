@@ -1,6 +1,10 @@
 package prep
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/nao1215/filesql/internal/infer"
+)
 
 func TestTrimPreprocessor(t *testing.T) {
 	t.Parallel()
@@ -918,6 +922,108 @@ func TestParsePrepTag_NewPreprocessors(t *testing.T) {
 			}
 			if !tt.wantErr && len(preps) != tt.wantLen {
 				t.Errorf("parsePrepTag() got %d preprocessors, want %d", len(preps), tt.wantLen)
+			}
+		})
+	}
+}
+
+// TestCoerceNormalizesTheSpellingAndNotTheValue pins what a coercion may
+// rewrite. A coercion normalizes how a number is written; it does not decide
+// that a string of digits is a number. The three spellings the loader keeps as
+// text -- a zero-padded code, a literal past int64, and Go's own number syntax
+// -- were being read as numbers here, so a postal code became a smaller number
+// and a column the loader would have typed TEXT became an INTEGER one under the
+// caller.
+//
+// The boolean half is the same rule from the other side: t and f are exactly
+// what strconv.ParseBool accepts, which is what the boolean validator accepts
+// and how a bool struct field is filled, and they were the spellings left
+// alone while on, yes, off and no were normalized.
+func TestCoerceNormalizesTheSpellingAndNotTheValue(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		target string
+		value  string
+		want   string
+	}{
+		// The spelling is normalized and the quantity is unchanged.
+		{"int", "1e3", "1000"},
+		{"int", "1.50", "1"},
+		{"int", "+1", "1"},
+		{"int", " 1 ", "1"},
+		{"int", "-0", "0"},
+		{"float", "1.50", "1.5"},
+		{"float", "1e3", "1000"},
+		{"float", "+1", "1"},
+		// A leading zero is a code, not a number written badly.
+		{"int", "0777", "0777"},
+		{"int", "007", "007"},
+		{"int", "00", "00"},
+		{"float", "0777", "0777"},
+		{"int", "0", "0"},
+		// Go's number syntax is not the file's, and SQLite's affinity does not
+		// convert any of it.
+		{"int", "1_000", "1_000"},
+		{"int", "0x10", "0x10"},
+		{"int", "0b11", "0b11"},
+		{"int", "0o17", "0o17"},
+		{"float", "1_000", "1_000"},
+		// A literal a float64 cannot hold exactly, and one it cannot hold at
+		// all. Reading the first as a float and converting back answered a
+		// different number, and the second answered the smallest integer there
+		// is.
+		{"int", "9223372036854775808", "9223372036854775808"},
+		{"int", "1e400", "1e400"},
+		{"float", "1e400", "1e400"},
+		{"int", "abc", "abc"},
+		// The booleans strconv.ParseBool accepts, in both cases, beside the
+		// four words a spreadsheet writes.
+		{"bool", "t", "true"},
+		{"bool", "T", "true"},
+		{"bool", "f", "false"},
+		{"bool", "F", "false"},
+		{"bool", "1", "true"},
+		{"bool", "0", "false"},
+		{"bool", "TRUE", "true"},
+		{"bool", "on", "true"},
+		{"bool", "off", "false"},
+		{"bool", "yes", "true"},
+		{"bool", "no", "false"},
+		{"bool", "maybe", "maybe"},
+	} {
+		t.Run(tt.target+" "+tt.value, func(t *testing.T) {
+			t.Parallel()
+
+			if got := newCoercePreprocessor(tt.target).Process(tt.value); got != tt.want {
+				t.Errorf("coerce=%s over %q = %q, want %q", tt.target, tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCoerceAgreesWithTheLoader is the invariant that ties the two halves
+// together: a value the loader keeps as text must not come out of a coercion as
+// something the loader would type as a number. Without it the column type
+// changes depending on whether the caller ran prep first.
+func TestCoerceAgreesWithTheLoader(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []string{
+		"0777", "007", "00", "1_000", "0x10", "0b11", "0o17",
+		"9223372036854775808", "1e400", "1e-400",
+	} {
+		t.Run(value, func(t *testing.T) {
+			t.Parallel()
+
+			if !infer.MustStayText(value) && infer.IsFloat(value) {
+				t.Skipf("%q is a number to the loader, so the coercion may rewrite it", value)
+			}
+			for _, target := range []string{"int", "float"} {
+				got := newCoercePreprocessor(target).Process(value)
+				if infer.IsInteger(got) || infer.IsFloat(got) {
+					t.Errorf("coerce=%s turned %q into %q, which the loader types as a number", target, value, got)
+				}
 			}
 		})
 	}

@@ -256,7 +256,7 @@ func Float64(value string) (float64, bool) {
 	f, err := strconv.ParseFloat(value, 64)
 	switch {
 	case err == nil:
-		return f, !underflowsFloat64(value, f)
+		return f, !UnderflowsFloat64(value, f)
 	case errors.Is(err, strconv.ErrRange) && IsInfinityLiteral(value):
 		return f, true
 	default:
@@ -264,9 +264,9 @@ func Float64(value string) (float64, bool) {
 	}
 }
 
-// underflowsFloat64 reports whether a spelling naming a nonzero quantity was
+// UnderflowsFloat64 reports whether a spelling naming a nonzero quantity was
 // answered as an exact zero, which is the loss strconv does not report.
-func underflowsFloat64(value string, f float64) bool {
+func UnderflowsFloat64(value string, f float64) bool {
 	if f != 0 {
 		return false
 	}

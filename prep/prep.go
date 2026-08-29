@@ -1,12 +1,15 @@
 package prep
 
 import (
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
 
 	"golang.org/x/text/unicode/norm"
+
+	"github.com/nao1215/filesql/internal/infer"
 )
 
 // String constants for coercion results and URL schemes
@@ -599,24 +602,62 @@ func (p *coercePreprocessor) Process(value string) string {
 
 	switch p.targetType {
 	case "int":
-		// Try to parse as float first to handle "123.0" -> "123"
-		if f, err := strconv.ParseFloat(trimmed, 64); err == nil {
-			return strconv.FormatInt(int64(f), 10)
+		// Read as a float first so "123.0" comes out as "123".
+		f, ok := numberToRewrite(trimmed)
+		if !ok || !fitsInt64(f) {
+			return value
 		}
+		return strconv.FormatInt(int64(f), 10)
 	case "float":
-		if f, err := strconv.ParseFloat(trimmed, 64); err == nil {
+		if f, ok := numberToRewrite(trimmed); ok {
 			return strconv.FormatFloat(f, 'f', -1, 64)
 		}
 	case "bool":
-		lower := strings.ToLower(trimmed)
-		switch lower {
-		case boolTrueValue, "1", "yes", "on":
+		// The spellings are the ones strconv.ParseBool accepts, which is what
+		// the boolean validator accepts and how a bool struct field is filled,
+		// plus the four words a spreadsheet writes.
+		switch strings.ToLower(trimmed) {
+		case boolTrueValue, "1", "t", "yes", "on":
 			return boolTrueValue
-		case boolFalseValue, "0", "no", "off":
+		case boolFalseValue, "0", "f", "no", "off":
 			return boolFalseValue
 		}
 	}
 	return value
+}
+
+// numberToRewrite reports the number a coercion may rewrite a value into, and
+// whether there is one.
+//
+// A coercion normalizes how a number is written; it does not decide that a
+// string of digits is a number. The spellings refused here are the ones the
+// loader keeps as text for that reason: a zero-padded code, whose zeros a
+// number drops, a literal past int64, whose digits a float64 loses, and Go's
+// own number syntax, which SQLite's affinity does not convert. Coercing them
+// rewrote a postal code as a smaller number and turned a column the loader
+// would have typed TEXT into an INTEGER one under the caller. A value a
+// float64 cannot hold at all is refused for the same reason: it would come
+// back as an infinity or as an exact zero, neither of which the file said.
+func numberToRewrite(trimmed string) (float64, bool) {
+	if infer.IsZeroPaddedIntegerLiteral(trimmed) ||
+		infer.IsIntegerLiteralOverflowingInt64(trimmed) ||
+		infer.HasGoOnlyNumericSyntax(trimmed) {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(trimmed, 64)
+	if err != nil || math.IsInf(f, 0) || math.IsNaN(f) || infer.UnderflowsFloat64(trimmed, f) {
+		return 0, false
+	}
+	return f, true
+}
+
+// fitsInt64 reports whether a float can be converted to an int64 at all. The
+// conversion is undefined for a value outside the range, and on amd64 it
+// answers the smallest integer, so a number far above the range came out far
+// below it.
+func fitsInt64(f float64) bool {
+	const limit = 1 << 63 // the first float64 above math.MaxInt64
+	return f >= -limit && f < limit
 }
 
 // Name returns the preprocessor name
