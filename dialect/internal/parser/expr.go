@@ -110,8 +110,7 @@ func (p *Parser) parsePrefix(minPrec int) (ast.Expr, error) {
 			Span: span,
 		}, nil
 
-	case t.IsWord("INTERVAL") && p.dialect != dialects.PostgreSQL &&
-		!(p.peek(1).IsOp("(") && p.adjacent(1)):
+	case t.IsWord("INTERVAL") && p.dialect != dialects.PostgreSQL && !p.callParenFollows():
 		return p.parseUnitInterval()
 
 	case t.IsWord("EXISTS") && p.peek(1).IsOp("("):
