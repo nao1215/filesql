@@ -163,3 +163,100 @@ func TestTokenizeOffsets(t *testing.T) {
 		prev = tok.Offset
 	}
 }
+
+// TestOperatorsThatAreOneToken pins the multi-character operators to being read
+// whole. Split, each half reaches the grammar as a different operator: "#-"
+// became a bitwise XOR of a negation, which SQLite ran and answered a number
+// for, and "|/" became a bitwise OR beside a division, whose error named a "/"
+// the caller had not written.
+func TestOperatorsThatAreOneToken(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := ConfigFor(dialects.PostgreSQL)
+	for _, tt := range []struct {
+		input string
+		want  []string
+	}{
+		{"a #- b", []string{"a", "#-", "b"}},
+		{"a #> b", []string{"a", "#>", "b"}},
+		{"a #>> b", []string{"a", "#>>", "b"}},
+		{"a # b", []string{"a", "#", "b"}},
+		{"|/ a", []string{"|/", "a"}},
+		{"||/ a", []string{"||/", "a"}},
+		{"a || b", []string{"a", "||", "b"}},
+		{"a | b", []string{"a", "|", "b"}},
+		{"@ a", []string{"@", "a"}},
+		{"a @> b", []string{"a", "@>", "b"}},
+		{"a @? b", []string{"a", "@?", "b"}},
+		{"a @@ b", []string{"a", "@@", "b"}},
+		{"a <@ b", []string{"a", "<@", "b"}},
+		{"1 / 2", []string{"1", "/", "2"}},
+	} {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+
+			toks, err := Lex(tt.input, cfg)
+			if err != nil {
+				t.Fatalf("Lex(%q): %v", tt.input, err)
+			}
+			var got []string
+			for _, tok := range toks {
+				if tok.Significant() {
+					got = append(got, tok.Text)
+				}
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("Lex(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("Lex(%q) token %d = %q, want %q", tt.input, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestPlaceholderNamesFollowSQLite pins the characters a bound parameter's name
+// may hold. SQLite reads a dollar sign and a digit as name characters, so
+// splitting the name there produced two tokens where the caller wrote one, and
+// the space between them made SQL that no longer parses.
+func TestPlaceholderNamesFollowSQLite(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		dialect dialects.Dialect
+		input   string
+		want    string
+	}{
+		{dialects.MySQL, "@a$b", "@a$b"},
+		{dialects.MySQL, ":1abc", ":1abc"},
+		{dialects.MySQL, "@0$0", "@0$0"},
+		{dialects.PostgreSQL, "$1", "$1"},
+		{dialects.PostgreSQL, ":name", ":name"},
+		{dialects.MySQL, "?1", "?1"},
+		{dialects.MySQL, "@name", "@name"},
+	} {
+		t.Run(tt.dialect.DisplayName()+" "+tt.input, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, _ := ConfigFor(tt.dialect)
+			toks, err := Lex(tt.input, cfg)
+			if err != nil {
+				t.Fatalf("Lex(%q): %v", tt.input, err)
+			}
+			var got []Token
+			for _, tok := range toks {
+				if tok.Significant() {
+					got = append(got, tok)
+				}
+			}
+			if len(got) != 1 {
+				t.Fatalf("Lex(%q) produced %d tokens, want one", tt.input, len(got))
+			}
+			if got[0].Kind != Placeholder || got[0].Text != tt.want {
+				t.Errorf("Lex(%q) = %v %q, want a placeholder %q", tt.input, got[0].Kind, got[0].Text, tt.want)
+			}
+		})
+	}
+}
