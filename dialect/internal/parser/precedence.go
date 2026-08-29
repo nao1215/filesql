@@ -72,7 +72,7 @@ func (p *Parser) binaryOpFor() (op ast.BinaryOp, prec int, tokens int, ok bool) 
 		// MOD is the operator unless a parenthesis follows the word with
 		// nothing between them, which is how MySQL itself tells "MOD(a, b)"
 		// from "a MOD (b + 1)".
-		if p.dialect == dialects.MySQL && !(p.peek(1).IsOp("(") && p.adjacent(1)) {
+		if p.dialect == dialects.MySQL && !p.callParenFollows() {
 			return ast.Mod, precMulDiv, 1, true
 		}
 	case "LIKE":

@@ -191,6 +191,14 @@ func (p *Parser) adjacent(n int) bool {
 	return p.peek(n).Offset == cur.Offset+len(cur.Text)
 }
 
+// callParenFollows reports whether an opening parenthesis stands against the
+// word at the cursor with nothing between them, which is how MySQL tells the
+// function "MOD(a, b)" from the operator in "a MOD (b + 1)", and "INTERVAL(...)"
+// from the "INTERVAL 1 DAY" unit.
+func (p *Parser) callParenFollows() bool {
+	return p.peek(1).IsOp("(") && p.adjacent(1)
+}
+
 // atOp reports whether the cursor is on the operator op.
 func (p *Parser) atOp(op string) bool { return p.cur().IsOp(op) }
 
