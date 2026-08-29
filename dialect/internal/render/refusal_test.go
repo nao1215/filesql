@@ -127,3 +127,127 @@ func TestTheRendererRefusesUnrenderableStatements(t *testing.T) {
 		})
 	}
 }
+
+// TestRenderingTheSpellingsEachNodeHas covers the branches a translation test
+// reaches only one side of: every frame bound and exclusion, every join, the
+// literal kinds, and the names that need quoting.
+func TestRenderingTheSpellingsEachNodeHas(t *testing.T) {
+	t.Parallel()
+
+	span := ast.Span{Line: 1, Col: 1}
+	one := &ast.Literal{Kind: ast.LitNumber, Value: "1", Span: span}
+
+	t.Run("every frame bound", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			bound ast.FrameBound
+			want  string
+		}{
+			{ast.FrameBound{Kind: ast.BoundUnboundedPreceding, Span: span}, "UNBOUNDED PRECEDING"},
+			{ast.FrameBound{Kind: ast.BoundUnboundedFollowing, Span: span}, "UNBOUNDED FOLLOWING"},
+			{ast.FrameBound{Kind: ast.BoundCurrentRow, Span: span}, "CURRENT ROW"},
+			{ast.FrameBound{Kind: ast.BoundPreceding, Offset: one, Span: span}, "1 PRECEDING"},
+			{ast.FrameBound{Kind: ast.BoundFollowing, Offset: one, Span: span}, "1 FOLLOWING"},
+		} {
+			w := &writer{}
+			if err := w.frameBound(tt.bound); err != nil {
+				t.Fatalf("frameBound: %v", err)
+			}
+			if w.b.String() != tt.want {
+				t.Errorf("frameBound = %q, want %q", w.b.String(), tt.want)
+			}
+		}
+	})
+
+	t.Run("every frame exclusion", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			exclude ast.FrameExclusion
+			want    string
+		}{
+			{ast.ExcludeNone, "ROWS CURRENT ROW"},
+			{ast.ExcludeCurrentRow, "ROWS CURRENT ROW EXCLUDE CURRENT ROW"},
+			{ast.ExcludeGroup, "ROWS CURRENT ROW EXCLUDE GROUP"},
+			{ast.ExcludeTies, "ROWS CURRENT ROW EXCLUDE TIES"},
+			{ast.ExcludeNoOthers, "ROWS CURRENT ROW EXCLUDE NO OTHERS"},
+		} {
+			w := &writer{}
+			frame := &ast.WindowFrame{
+				Unit:    ast.FrameRows,
+				Start:   ast.FrameBound{Kind: ast.BoundCurrentRow, Span: span},
+				Exclude: tt.exclude,
+				Span:    span,
+			}
+			if err := w.frame(frame); err != nil {
+				t.Fatalf("frame: %v", err)
+			}
+			if w.b.String() != tt.want {
+				t.Errorf("frame = %q, want %q", w.b.String(), tt.want)
+			}
+		}
+	})
+
+	t.Run("every literal kind", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			lit  *ast.Literal
+			want string
+		}{
+			{&ast.Literal{Kind: ast.LitNumber, Value: "1.5", Span: span}, "1.5"},
+			{&ast.Literal{Kind: ast.LitString, Value: "it's", Span: span}, "'it''s'"},
+			{&ast.Literal{Kind: ast.LitBlob, Value: "4142", Span: span}, "x'4142'"},
+			{&ast.Literal{Kind: ast.LitNull, Span: span}, "NULL"},
+			{&ast.Literal{Kind: ast.LitBool, Value: "TRUE", Span: span}, "TRUE"},
+			{&ast.Literal{Kind: ast.LitHex, Value: "0x41", Span: span}, "0x41"},
+		} {
+			w := &writer{}
+			if err := w.expr(tt.lit, precLowest); err != nil {
+				t.Fatalf("literal: %v", err)
+			}
+			if w.b.String() != tt.want {
+				t.Errorf("literal = %q, want %q", w.b.String(), tt.want)
+			}
+		}
+	})
+
+	t.Run("a name is quoted only when it has to be", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct{ name, want string }{
+			{"a", "a"},
+			{"_a1", "_a1"},
+			{"select", `"select"`},
+			{"a b", `"a b"`},
+			{"1a", `"1a"`},
+			{"", `""`},
+			{`a"b`, `"a""b"`},
+		} {
+			if got := quoteIfNeeded(tt.name); got != tt.want {
+				t.Errorf("quoteIfNeeded(%q) = %q, want %q", tt.name, got, tt.want)
+			}
+		}
+	})
+
+	t.Run("a star and a qualified star", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			star *ast.Star
+			want string
+		}{
+			{&ast.Star{Span: span}, "*"},
+			{&ast.Star{Qualifier: []ast.Ident{{Name: "t", Span: span}}, Span: span}, "t.*"},
+		} {
+			w := &writer{}
+			if err := w.expr(tt.star, precLowest); err != nil {
+				t.Fatalf("star: %v", err)
+			}
+			if w.b.String() != tt.want {
+				t.Errorf("star = %q, want %q", w.b.String(), tt.want)
+			}
+		}
+	})
+}
