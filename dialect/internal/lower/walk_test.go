@@ -859,3 +859,87 @@ func TestTheSpellingsEachClauseAccepts(t *testing.T) {
 		})
 	}
 }
+
+// TestEveryCallShapeThatIsRefused covers the calls whose arguments are wrong for
+// what they name. Each is refused where it was written rather than passed on to
+// a helper that would answer NULL, which a caller cannot tell from a NULL in
+// their data.
+func TestEveryCallShapeThatIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		dialect dialect.Dialect
+		input   string
+	}{
+		{dialect.MySQL, "SELECT ROUND(a, 1, 2) FROM t"},
+		{dialect.PostgreSQL, "SELECT ROUND() FROM t"},
+		{dialect.MySQL, "SELECT FORMAT(a, 2, 'de_DE') FROM t"},
+		{dialect.MySQL, "SELECT DATE_ADD(d, INTERVAL 1 DAY, 2) FROM t"},
+		{dialect.GoogleSQL, "SELECT EDIT_DISTANCE('a', 'b', unknown_option => 1)"},
+		{dialect.PostgreSQL, "SELECT STRING_AGG(DISTINCT a, '|') FROM t"},
+		{dialect.MySQL, "SELECT GROUP_CONCAT(DISTINCT a SEPARATOR '|') FROM t"},
+		{dialect.PostgreSQL, "SELECT VARIANCE(a, b) FROM t"},
+		{dialect.PostgreSQL, "SELECT CORR(a) FROM t"},
+		{dialect.GoogleSQL, "SELECT COUNTIF(a, b) FROM t"},
+	} {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := dialect.Translate(tt.dialect, tt.input); !errors.Is(err, dialect.ErrUnsupportedSyntax) {
+				t.Errorf("Translate(%s, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.input, err)
+			}
+		})
+	}
+}
+
+// TestAggregateRenamesAndExpansions runs the aggregates each dialect has and
+// SQLite does not, checking the answer rather than the text: an expansion built
+// from the sums SQLite does have is only right if it computes the same number.
+func TestAggregateRenamesAndExpansions(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	const rows = ` FROM (SELECT 1 AS a, 2 AS b UNION ALL SELECT 2, 4 UNION ALL SELECT 4, 7) t`
+
+	for _, tt := range []struct {
+		dialect dialect.Dialect
+		query   string
+		want    string
+	}{
+		{dialect.MySQL, "SELECT ANY_VALUE(a)" + rows, "1"},
+		{dialect.PostgreSQL, "SELECT BOOL_AND(a > 0)" + rows, "1"},
+		{dialect.PostgreSQL, "SELECT BOOL_OR(a > 3)" + rows, "1"},
+		{dialect.PostgreSQL, "SELECT EVERY(a > 3)" + rows, "0"},
+		{dialect.GoogleSQL, "SELECT LOGICAL_AND(a > 0)" + rows, "1"},
+		{dialect.GoogleSQL, "SELECT LOGICAL_OR(a > 3)" + rows, "1"},
+		{dialect.GoogleSQL, "SELECT COUNTIF(a > 1)" + rows, "2"},
+		{dialect.GoogleSQL, "SELECT APPROX_COUNT_DISTINCT(a)" + rows, "3"},
+		// The population variance of 1, 2 and 4 is 14/9; the sample variance is
+		// 7/3. MySQL's bare VARIANCE is the population one and PostgreSQL's is
+		// the sample one, which is the difference these two rows are for.
+		{dialect.MySQL, "SELECT ROUND(VARIANCE(a), 4)" + rows, "1.5556"},
+		{dialect.PostgreSQL, "SELECT ROUND(VARIANCE(a), 4)" + rows, "2.3333"},
+		{dialect.MySQL, "SELECT ROUND(STDDEV(a), 4)" + rows, "1.2472"},
+		{dialect.PostgreSQL, "SELECT ROUND(STDDEV_POP(a), 4)" + rows, "1.2472"},
+		{dialect.GoogleSQL, "SELECT ROUND(VAR_SAMP(a), 4)" + rows, "2.3333"},
+		// The covariance of the two columns, and their correlation.
+		{dialect.PostgreSQL, "SELECT ROUND(COVAR_POP(a, b), 4)" + rows, "2.5556"},
+		{dialect.PostgreSQL, "SELECT ROUND(COVAR_SAMP(a, b), 4)" + rows, "3.8333"},
+		{dialect.PostgreSQL, "SELECT ROUND(CORR(a, b), 4)" + rows, "0.9972"},
+		{dialect.PostgreSQL, "SELECT JSON_AGG(a)" + rows, "[1,2,4]"},
+		{dialect.MySQL, "SELECT JSON_ARRAYAGG(a)" + rows, "[1,2,4]"},
+		// A sample estimator over one row divides by zero rows and answers
+		// NULL, which is what every source dialect answers.
+		{dialect.PostgreSQL, "SELECT VAR_SAMP(a) FROM (SELECT 1 AS a) t", ""},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			got, err := runDialect(t, db, tt.dialect, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
