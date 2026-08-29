@@ -312,6 +312,10 @@
 //
 // # Column Name Handling
 //
+// A table holds at most 2000 columns, which is SQLite's own limit and is fixed
+// when SQLite is compiled. A wider file is refused with ErrUnsupportedFormat,
+// naming the limit and the width the file has.
+//
 // A header cell that is empty names nothing, so the column takes the name of its
 // position: "a,,c" loads as a, column_2 and c. The generated name is moved along
 // -- column_2_2, column_2_3 -- when the file wrote a column of that name itself.

@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/quick"
@@ -19,6 +20,8 @@ import (
 	"github.com/xuri/excelize/v2"
 	"golang.org/x/text/encoding/japanese"
 	"golang.org/x/text/encoding/unicode"
+
+	"github.com/nao1215/filesql/internal/reader"
 )
 
 // TestOpenHonorsUnicodeBOM verifies that a leading Unicode byte-order mark on a
@@ -299,6 +302,76 @@ func (r *chunkedReader) Read(p []byte) (int, error) {
 	copy(p, r.data[r.pos:r.pos+n])
 	r.pos += n
 	return n, nil
+}
+
+// TestAFileWiderThanATableIsRefusedInThisPackagesWords covers the width SQLite
+// cannot hold.
+//
+// SQLITE_MAX_COLUMN is fixed when SQLite is compiled, so a wider file cannot be
+// loaded whatever this package does; what it can do is say so in its own words.
+// It used to let the CREATE TABLE fail instead, which answered "SQL logic error:
+// too many columns on _filesql_stage_t" -- a driver message naming the staging
+// table this package builds for a reader, with no limit, no count and no
+// sentinel to match. That is the outcome the duplicate-column check exists to
+// replace, reached by a different route.
+func TestAFileWiderThanATableIsRefusedInThisPackagesWords(t *testing.T) {
+	t.Parallel()
+
+	wide := func(columns int) string {
+		names := make([]string, columns)
+		values := make([]string, columns)
+		for i := range names {
+			names[i] = fmt.Sprintf("c%d", i)
+			values[i] = "1"
+		}
+		return strings.Join(names, ",") + "\n" + strings.Join(values, ",") + "\n"
+	}
+
+	t.Run("a file at the limit loads", func(t *testing.T) {
+		t.Parallel()
+
+		db, err := NewBuilder().
+			AddReader(strings.NewReader(wide(reader.MaxColumns)), "t", FileTypeCSV).
+			Open(context.Background())
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+	})
+
+	for _, tt := range []struct {
+		name string
+		body string
+		kind FileType
+	}{
+		{name: "csv", body: wide(reader.MaxColumns + 1), kind: FileTypeCSV},
+		{name: "tsv", body: strings.ReplaceAll(wide(reader.MaxColumns+1), ",", "\t"), kind: FileTypeTSV},
+		{name: "ltsv", body: ltsvRecordOfWidth(reader.MaxColumns + 1), kind: FileTypeLTSV},
+	} {
+		t.Run(tt.name+" one column past it is refused", func(t *testing.T) {
+			t.Parallel()
+
+			db, err := NewBuilder().
+				AddReader(strings.NewReader(tt.body), "t", tt.kind).
+				Open(context.Background())
+			if db != nil {
+				_ = db.Close()
+			}
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrUnsupportedFormat)
+			assert.Contains(t, err.Error(), strconv.Itoa(reader.MaxColumns), "the message names the limit")
+			assert.Contains(t, err.Error(), strconv.Itoa(reader.MaxColumns+1), "and the width the file has")
+			assert.NotContains(t, err.Error(), "_filesql_", "and nothing this package built for itself")
+		})
+	}
+}
+
+// ltsvRecordOfWidth builds one LTSV record naming the given number of labels,
+// which is where an LTSV table's columns come from.
+func ltsvRecordOfWidth(labels int) string {
+	pairs := make([]string, labels)
+	for i := range pairs {
+		pairs[i] = fmt.Sprintf("l%d:1", i)
+	}
+	return strings.Join(pairs, "\t") + "\n"
 }
 
 // TestBlankHeadersAreNamedByPosition covers a header row holding blank cells.

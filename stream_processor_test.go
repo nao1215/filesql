@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/nao1215/filesql/internal/reader"
 )
 
 // plainExecutor is a dbtx that is neither *sql.DB nor *sql.Tx. A load needs one
@@ -401,18 +403,28 @@ func TestLoadStaged_NamesTheCallersTable(t *testing.T) {
 
 	ctx := context.Background()
 	// A header of more columns than SQLite holds fails the create, which is the
-	// first statement either path runs.
-	columns := make([]string, 2001)
-	values := make([]string, len(columns))
+	// first statement either path runs. The columns are handed straight to the
+	// loader rather than read out of a file, because a file that wide is refused
+	// by the reader before a statement is written -- and the subject here is
+	// what the loader says when a statement fails, not which layer refuses.
+	columns := make(columnInfoList, reader.MaxColumns+1)
 	for i := range columns {
-		columns[i] = fmt.Sprintf("c%d", i)
+		columns[i] = columnInfo{Name: fmt.Sprintf("c%d", i), Type: columnTypeText}
+	}
+
+	names := make(header, len(columns))
+	values := make(record, len(columns))
+	for i, column := range columns {
+		names[i] = column.Name
 		values[i] = "1"
 	}
-	body := strings.Join(columns, ",") + "\n" + strings.Join(values, ",") + "\n"
-
 	read := func(emit chunkProcessor) (columnInfoList, error) {
-		return newStreamingParser(FileTypeCSV, CompressionNone, "orders", 1).
-			ProcessInChunks(strings.NewReader(body), emit)
+		return columns, emit(&tableChunk{
+			tableName: "orders",
+			headers:   names,
+			records:   []record{values},
+			types:     columns,
+		})
 	}
 
 	tests := []struct {

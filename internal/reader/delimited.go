@@ -265,7 +265,29 @@ func blankColumnName(position int, taken map[string]bool) string {
 	return name
 }
 
-// ValidateColumnNames reports a header that names one column twice.
+// MaxColumns is how many columns a table can hold, which is SQLite's
+// SQLITE_MAX_COLUMN in the build this package uses. It is fixed when SQLite is
+// compiled, so a wider file cannot be loaded whatever this package does; what it
+// can do is say so in its own words, with the two numbers a caller needs, rather
+// than letting a failed CREATE TABLE reach them -- which named the staging table
+// this package builds for a reader and no limit at all.
+const MaxColumns = 2000
+
+// ValidateColumnCount reports a header wider than a table can hold. It is
+// separate from the names because LTSV builds its header out of the labels its
+// records carry rather than out of a header row, and the two arrive at the same
+// CREATE TABLE.
+func ValidateColumnCount(columns int) error {
+	if columns <= MaxColumns {
+		return nil
+	}
+	return unsupportedError(
+		"a table holds at most %d columns and this one has %d; SQLite is the engine here and %d is the most its build allows",
+		MaxColumns, columns, MaxColumns)
+}
+
+// ValidateColumnNames reports a header this backend cannot hold: one wider than
+// MaxColumns, or one that names a column twice.
 //
 // The message quotes the name and gives its 1-based position, because a header
 // can duplicate the empty name -- two unnamed columns -- and an unquoted empty
@@ -278,6 +300,9 @@ func blankColumnName(position int, taken map[string]bool) string {
 // trimmed name would apply both at once and refuse " A" beside "a", which
 // neither rule refuses on its own and which SQLite keeps as two columns.
 func ValidateColumnNames(columns []string) error {
+	if err := ValidateColumnCount(len(columns)); err != nil {
+		return err
+	}
 	trimmed := make(map[string]bool, len(columns))
 	folded := make(map[string]bool, len(columns))
 	for i, col := range columns {
