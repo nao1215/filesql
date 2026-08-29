@@ -617,3 +617,127 @@ func TestTheFindingsFromReview(t *testing.T) {
 		})
 	}
 }
+
+// TestTheCallsWithAUnitOrAPartWrittenAsAWord covers the calls whose argument is
+// a keyword rather than a value, on both the paths that read one: the unit is
+// refused when it is not a word, and normalized when it is.
+func TestTheCallsWithAUnitOrAPartWrittenAsAWord(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		dialect dialect.Dialect
+		input   string
+		want    string
+	}{
+		{dialect.MySQL, "SELECT TIMESTAMPADD(MINUTE, 5, d) FROM t",
+			`SELECT interval_add(d, 5, 'minute') AS "TIMESTAMPADD(MINUTE, 5, d)" FROM t`},
+		{dialect.MySQL, "SELECT TIMESTAMPDIFF(HOUR, a, b) FROM t",
+			`SELECT mysql_date_diff(b, a, 'hour') AS "TIMESTAMPDIFF(HOUR, a, b)" FROM t`},
+		{dialect.GoogleSQL, "SELECT TIME_TRUNC(t, HOUR) FROM u",
+			`SELECT time_trunc(t, 'hour') AS "TIME_TRUNC(t, HOUR)" FROM u`},
+		{dialect.GoogleSQL, "SELECT NORMALIZE(s, NFKC) FROM t",
+			`SELECT normalize(s, 'NFKC') AS "NORMALIZE(s, NFKC)" FROM t`},
+		{dialect.GoogleSQL, "SELECT LAST_DAY(d, WEEK(MONDAY)) FROM t",
+			`SELECT googlesql_last_day(d, 'week_monday') AS "LAST_DAY(d, WEEK(MONDAY))" FROM t`},
+		{dialect.GoogleSQL, "SELECT DATE_DIFF(a, b, ISOWEEK) FROM t",
+			`SELECT date_diff(a, b, 'isoweek') AS "DATE_DIFF(a, b, ISOWEEK)" FROM t`},
+		{dialect.GoogleSQL, "SELECT TIME_ADD(t, INTERVAL 5 MINUTE) FROM u",
+			`SELECT time_add(t, 5, 'MINUTE') AS "TIME_ADD(t, INTERVAL 5 MINUTE)" FROM u`},
+		{dialect.GoogleSQL, "SELECT TIME_SUB(t, INTERVAL 5 MINUTE) FROM u",
+			`SELECT time_add(t, -5, 'MINUTE') AS "TIME_SUB(t, INTERVAL 5 MINUTE)" FROM u`},
+	} {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := dialect.Translate(tt.dialect, tt.input)
+			if err != nil {
+				t.Fatalf("Translate(%s, %q): %v", tt.dialect, tt.input, err)
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%s, %q)\n  = %q\nwant %q", tt.dialect, tt.input, got, tt.want)
+			}
+		})
+	}
+
+	// A unit written as anything but a word, and a unit no helper knows, are
+	// refused rather than passed on to answer NULL.
+	for _, tt := range []struct {
+		dialect dialect.Dialect
+		input   string
+	}{
+		{dialect.MySQL, "SELECT TIMESTAMPADD(5, 5, d) FROM t"},
+		{dialect.MySQL, "SELECT TIMESTAMPADD(FORTNIGHT, 5, d) FROM t"},
+		{dialect.MySQL, "SELECT TIMESTAMPDIFF(5, a, b) FROM t"},
+		{dialect.MySQL, "SELECT TIMESTAMPDIFF(FORTNIGHT, a, b) FROM t"},
+		{dialect.MySQL, "SELECT TIMESTAMPADD(MINUTE, 5) FROM t"},
+		{dialect.GoogleSQL, "SELECT TIME_TRUNC(t, 5) FROM u"},
+		{dialect.GoogleSQL, "SELECT DATE_DIFF(a, b) FROM t"},
+		{dialect.GoogleSQL, "SELECT TIME_ADD(t, 5) FROM u"},
+		{dialect.GoogleSQL, "SELECT LAST_DAY(d, 5) FROM t"},
+		{dialect.MySQL, "SELECT DATE_ADD(d) FROM t"},
+	} {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := dialect.Translate(tt.dialect, tt.input); !errors.Is(err, dialect.ErrUnsupportedSyntax) {
+				t.Errorf("Translate(%s, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.input, err)
+			}
+		})
+	}
+}
+
+// TestTheLiteralFormsEachDialectRefuses covers the constants whose meaning
+// depends on where they are written, which no translation can see.
+func TestTheLiteralFormsEachDialectRefuses(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		dialect dialect.Dialect
+		input   string
+		mention string
+	}{
+		{dialect.MySQL, "SELECT 0x41", "hexadecimal"},
+		{dialect.MySQL, "SELECT 0b1010", "bit literal"},
+		{dialect.MySQL, "SELECT b'1010'", "bit literal"},
+		{dialect.GoogleSQL, "SELECT 0b1010", "binary literal"},
+	} {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := dialect.Translate(tt.dialect, tt.input)
+			if !errors.Is(err, dialect.ErrUnsupportedSyntax) {
+				t.Fatalf("Translate(%s, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.input, err)
+			}
+			if !strings.Contains(err.Error(), tt.mention) {
+				t.Errorf("Translate(%s, %q) error = %q, want it to mention %s", tt.dialect, tt.input, err, tt.mention)
+			}
+		})
+	}
+
+	// The forms each dialect does read. GoogleSQL takes 0x as an integer, and
+	// PostgreSQL's B'..' and X'..' are bit strings it compares as text.
+	for _, tt := range []struct {
+		dialect dialect.Dialect
+		input   string
+		want    string
+	}{
+		{dialect.GoogleSQL, "SELECT 0x41", "SELECT 0x41"},
+		{dialect.PostgreSQL, "SELECT 0xFF", "SELECT 0xFF"},
+		{dialect.PostgreSQL, "SELECT B'1010'", `SELECT '1010' AS "B'1010'"`},
+		// The lexer reads X'..' as SQLite spells a blob, for every dialect, and
+		// the bytes are the same ones PostgreSQL's bit string holds.
+		{dialect.PostgreSQL, "SELECT X'41'", "SELECT x'41'"},
+	} {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := dialect.Translate(tt.dialect, tt.input)
+			if err != nil {
+				t.Fatalf("Translate(%s, %q): %v", tt.dialect, tt.input, err)
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%s, %q) = %q, want %q", tt.dialect, tt.input, got, tt.want)
+			}
+		})
+	}
+}

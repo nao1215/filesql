@@ -293,9 +293,8 @@ func upper(s string) string { return strings.ToUpper(s) }
 //
 // The layout follows the source: two tokens the caller wrote apart stay apart
 // and two written together stay together, which is what keeps
-// "EXTRACT(YEAR FROM d)" from becoming "EXTRACT (YEAR FROM d)". Two names
-// written together are separated anyway, since a quote is what divided them
-// there and is no longer what divides them here.
+// "EXTRACT(YEAR FROM d)" from becoming "EXTRACT (YEAR FROM d)" and "B'1010'"
+// from becoming "B '1010'".
 func (p *Parser) sourceText(from, to int) string {
 	if from >= to || to > len(p.toks) {
 		return ""
@@ -311,23 +310,11 @@ func (p *Parser) sourceText(from, to int) string {
 	return b.String()
 }
 
-// separated reports whether two adjacent tokens need a space between them.
+// separated reports whether two adjacent tokens need a space between them: the
+// caller's own layout decides, since this text becomes a name rather than SQL
+// and nothing re-reads it.
 func separated(prev, next token.Token) bool {
-	if next.Offset > prev.End {
-		return true
-	}
-	return atomToken(prev) && atomToken(next)
-}
-
-// atomToken reports whether a token is a value or a name: the kinds that two of,
-// written next to each other, would read as one.
-func atomToken(t token.Token) bool {
-	switch t.Kind {
-	case token.Word, token.Number, token.String, token.Blob, token.QuotedIdent, token.Placeholder:
-		return true
-	default:
-		return false
-	}
+	return next.Offset > prev.End
 }
 
 // spell writes one token in SQLite's spelling.
