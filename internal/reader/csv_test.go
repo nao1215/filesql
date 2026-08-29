@@ -347,4 +347,17 @@ func TestLineBoundedReaderCountsFromEachTerminator(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrRecordTooLong)
 	assert.Contains(t, err.Error(), "line 3", "the message names the record the bytes belong to")
+
+	// A record and its terminator arriving in one read is the case a check made
+	// after the bytes had gone past would miss: the terminator resets the count,
+	// so the record would be accepted having never been measured.
+	err = read(strings.Repeat("x", limit+1) + "\nshort\n")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrRecordTooLong)
+	assert.Contains(t, err.Error(), "line 1", "the message names the record, not the one after it")
+
+	err = read("short\n" + strings.Repeat("x", limit+1) + "\n" + strings.Repeat("y", limit+1) + "\n")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrRecordTooLong)
+	assert.Contains(t, err.Error(), "line 2", "the first record past the bound is the one named")
 }

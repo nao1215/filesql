@@ -85,6 +85,11 @@ func newLineBoundedReader(src io.Reader, limit int) *lineBoundedReader {
 // the error.
 func (r *lineBoundedReader) Read(p []byte) (int, error) {
 	n, err := r.src.Read(p)
+	// The record is measured as the bytes go past rather than after they have,
+	// because a whole record and its terminator can arrive in one read: the
+	// terminator would reset the count and the record would be accepted having
+	// never been measured.
+	long := 0
 	for _, c := range p[:n] {
 		if c == '\n' {
 			r.run = 0
@@ -92,9 +97,12 @@ func (r *lineBoundedReader) Read(p []byte) (int, error) {
 			continue
 		}
 		r.run++
+		if r.run > r.limit && long == 0 {
+			long = r.line
+		}
 	}
-	if r.run > r.limit {
-		return n, recordTooLongError(r.line, r.limit)
+	if long != 0 {
+		return n, recordTooLongError(long, r.limit)
 	}
 	return n, err
 }
