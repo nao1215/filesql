@@ -127,35 +127,142 @@ func jsonMemberPath(e ast.Expr) (string, bool) {
 }
 
 // jsonTextArrayPath turns the text array a "#-" takes -- written {a,b} -- into
-// the $ path SQLite removes by. A path element that is a number addresses an
-// array, which is how PostgreSQL reads it too.
+// the $ path SQLite removes by.
+//
+// An element that is a number is refused rather than converted, because
+// PostgreSQL reads it against the container it lands on: it is a key when that
+// is an object and an index when it is an array, and one $ path cannot be both.
 func jsonTextArrayPath(e ast.Expr) (string, bool) {
 	lit, ok := e.(*ast.Literal)
 	if !ok || lit.Kind != ast.LitString {
 		return "", false
 	}
-	body := strings.TrimSpace(lit.Value)
-	if !strings.HasPrefix(body, "{") || !strings.HasSuffix(body, "}") {
-		return "", false
-	}
-	body = strings.TrimSuffix(strings.TrimPrefix(body, "{"), "}")
-	if body == "" {
+	elements, ok := textArrayElements(lit.Value)
+	if !ok || len(elements) == 0 {
 		return "", false
 	}
 	var path strings.Builder
 	path.WriteByte('$')
-	for _, element := range strings.Split(body, ",") {
-		element = strings.TrimSpace(element)
-		if element == "" {
-			return "", false
-		}
+	for _, element := range elements {
 		if _, err := strconv.Atoi(element); err == nil {
-			path.WriteString("[" + element + "]")
-			continue
+			return "", false
 		}
 		path.WriteString("." + quoteJSONMember(element))
 	}
 	return path.String(), true
+}
+
+// textArrayElements reads PostgreSQL's one-dimensional array literal. An
+// element may be written bare or in double quotes, and a quoted one carries the
+// characters the syntax otherwise reads as punctuation: a comma, a brace, a
+// quote of its own behind a backslash, and the whitespace a bare element loses.
+// Splitting on the comma alone turned the single key "a,b" into two path
+// members and removed nothing.
+func textArrayElements(literal string) ([]string, bool) {
+	body := strings.TrimSpace(literal)
+	if !strings.HasPrefix(body, "{") || !strings.HasSuffix(body, "}") {
+		return nil, false
+	}
+	body = body[1 : len(body)-1]
+	if strings.TrimSpace(body) == "" {
+		return nil, false
+	}
+	var (
+		elements []string
+		element  arrayElement
+		quoted   bool
+	)
+	for i := 0; i < len(body); i++ {
+		switch c := body[i]; {
+		case quoted && c == '\\':
+			if i+1 >= len(body) {
+				return nil, false
+			}
+			i++
+			element.write(body[i])
+		case c == '"':
+			quoted = !quoted
+			element.openQuote()
+		case quoted:
+			element.write(c)
+		case c == ',':
+			text, ok := element.close()
+			if !ok {
+				return nil, false
+			}
+			elements = append(elements, text)
+			element = arrayElement{}
+		case c == '{' || c == '}':
+			// A nested array is not a path.
+			return nil, false
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+			element.space(c)
+		default:
+			element.write(c)
+		}
+	}
+	if quoted {
+		return nil, false
+	}
+	text, ok := element.close()
+	if !ok {
+		return nil, false
+	}
+	return append(elements, text), true
+}
+
+// arrayElement accumulates one element of an array literal. Whitespace outside
+// the quotes is not part of the element and whitespace inside them is, so a run
+// of spaces is held back until something that is part of the element follows
+// it.
+type arrayElement struct {
+	text    strings.Builder
+	spaces  strings.Builder
+	quoted  bool
+	written bool
+}
+
+// write adds a byte that is part of the element, along with any whitespace that
+// stood between it and what came before.
+func (a *arrayElement) write(c byte) {
+	if a.spaces.Len() > 0 {
+		a.text.WriteString(a.spaces.String())
+		a.spaces.Reset()
+	}
+	a.text.WriteByte(c)
+	a.written = true
+}
+
+// space holds back a whitespace byte read outside the quotes.
+func (a *arrayElement) space(c byte) {
+	if a.written {
+		a.spaces.WriteByte(c)
+	}
+}
+
+// openQuote records that the element carries a quoted part, which makes it a
+// value even when that part is empty.
+func (a *arrayElement) openQuote() {
+	if a.spaces.Len() > 0 {
+		a.text.WriteString(a.spaces.String())
+		a.spaces.Reset()
+	}
+	a.quoted = true
+	a.written = true
+}
+
+// close finishes the element. The whitespace still held back was trailing and
+// is dropped. An element written as nothing at all is not a value, and the bare
+// word NULL is the array's null rather than a path member.
+func (a *arrayElement) close() (string, bool) {
+	if !a.written {
+		return "", false
+	}
+	text := a.text.String()
+	if !a.quoted && strings.EqualFold(text, "NULL") {
+		return "", false
+	}
+	return text, true
 }
 
 // quoteJSONMember writes an object key into a $ path, quoting it when it holds
@@ -214,8 +321,9 @@ func (r *postgresRules) Binary(b *ast.BinaryExpr) (ast.Expr, error) {
 		// Reached only when the path is not a literal; the Pre rule handles the
 		// rest.
 		return nil, unsupported(b.Span,
-			"the #- operator needs a path written as a literal; SQLite removes by a $ path, "+
-				"and the text array this takes is only readable here when it is written out")
+			"the #- operator takes a path written as a literal array of names; SQLite removes by a $ path, "+
+				"and a path element that is a number is a key on an object and an index on an array, "+
+				"which one $ path cannot be both of")
 	}
 	return b, nil
 }

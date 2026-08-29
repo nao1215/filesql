@@ -1,6 +1,7 @@
 package token
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/nao1215/filesql/dialect/internal/dialects"
@@ -221,6 +222,42 @@ func TestOperatorsThatAreOneToken(t *testing.T) {
 // may hold. SQLite reads a dollar sign and a digit as name characters, so
 // splitting the name there produced two tokens where the caller wrote one, and
 // the space between them made SQL that no longer parses.
+// TestPostgreSQLReadsAtAsAnOperator pins the one dialect where "@" is not a
+// parameter prefix. PostgreSQL writes its parameters as $1 and spells the
+// absolute value with "@", so reading "@0" there as a name would take the
+// operator and its operand for one token.
+func TestPostgreSQLReadsAtAsAnOperator(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := ConfigFor(dialects.PostgreSQL)
+	for _, tt := range []struct {
+		input string
+		want  []string
+	}{
+		{"@0", []string{"@", "0"}},
+		{"@a", []string{"@", "a"}},
+		{"$1", []string{"$1"}},
+	} {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+
+			toks, err := Lex(tt.input, cfg)
+			if err != nil {
+				t.Fatalf("Lex(%q): %v", tt.input, err)
+			}
+			var got []string
+			for _, tok := range toks {
+				if tok.Significant() {
+					got = append(got, tok.Text)
+				}
+			}
+			if strings.Join(got, " ") != strings.Join(tt.want, " ") {
+				t.Errorf("Lex(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPlaceholderNamesFollowSQLite(t *testing.T) {
 	t.Parallel()
 
@@ -236,6 +273,8 @@ func TestPlaceholderNamesFollowSQLite(t *testing.T) {
 		{dialects.PostgreSQL, ":name", ":name"},
 		{dialects.MySQL, "?1", "?1"},
 		{dialects.MySQL, "@name", "@name"},
+		{dialects.GoogleSQL, "@0", "@0"},
+		{dialects.GoogleSQL, "@0a", "@0a"},
 	} {
 		t.Run(tt.dialect.DisplayName()+" "+tt.input, func(t *testing.T) {
 			t.Parallel()

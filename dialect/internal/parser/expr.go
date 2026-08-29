@@ -69,9 +69,11 @@ func (p *Parser) parsePrefix(minPrec int) (ast.Expr, error) {
 
 	case (t.IsOp("|/") || t.IsOp("||/") || t.IsOp("@")) && p.dialect == dialects.PostgreSQL:
 		// PostgreSQL's three prefix arithmetic operators: the square root, the
-		// cube root and the absolute value.
+		// cube root and the absolute value. Each is one of its "any other
+		// operators", which bind below addition, so "@ -3 + 1" is the absolute
+		// value of -2 rather than 3 plus 1.
 		p.pos++
-		operand, err := p.parseExpr(precUnary)
+		operand, err := p.parseExpr(precOther)
 		if err != nil {
 			return nil, err
 		}

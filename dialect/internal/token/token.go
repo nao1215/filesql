@@ -70,6 +70,7 @@ type Config struct {
 	TripleQuoteString bool // '''...''' and """...""" strings (GoogleSQL)
 	NestedComment     bool // /* */ block comments nest (PostgreSQL)
 	NumericEscapes    bool // \xHH, \ooo, \uXXXX and \UXXXXXXXX name a character (GoogleSQL)
+	AtOperator        bool // @ is the absolute-value operator rather than a parameter prefix (PostgreSQL)
 }
 
 // escapeRules says how a backslash behaves inside a quoted literal. The two
@@ -99,6 +100,7 @@ func ConfigFor(d dialects.Dialect) (Config, bool) {
 			EPrefixString:    true,
 			DollarQuote:      true,
 			NestedComment:    true,
+			AtOperator:       true,
 		}, true
 	case dialects.GoogleSQL:
 		return Config{
@@ -266,11 +268,13 @@ func Lex(query string, cfg Config) ([]Token, error) {
 			tokens = append(tokens, Token{Kind: Placeholder, Text: query[i:j], Offset: start})
 			i = j
 
-		case (c == '@' || c == ':' || c == '$') && isPlaceholderName(next(query, i)):
+		case (c == ':' || c == '$' || (c == '@' && !cfg.AtOperator)) && isPlaceholderName(next(query, i)):
 			// A bound parameter's name holds the characters SQLite reads as
 			// name characters, which include a digit in the first position and
 			// a dollar sign anywhere. Stopping short of either split the name
-			// the caller wrote into two tokens.
+			// the caller wrote into two tokens. PostgreSQL is the exception:
+			// it writes a parameter as $1 and spells the absolute value with
+			// "@", so "@0" there is the operator on a number.
 			j := i + 1
 			for j < len(query) && isPlaceholderName(query[j]) {
 				j++

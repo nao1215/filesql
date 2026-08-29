@@ -413,9 +413,20 @@ func TestTheJSONAndRootOperators(t *testing.T) {
 		// addresses an array, and a key holding path punctuation is quoted into
 		// the path rather than read as one.
 		{`SELECT '[1,2,3]'::jsonb - -1`, "[1,2]"},
-		{`SELECT '{"a":[1,2]}'::jsonb #- '{a,0}'`, `{"a":[2]}`},
 		{`SELECT '{"a.b":1,"c":2}'::jsonb - 'a.b'`, `{"c":2}`},
 		{`SELECT ('{"a":1}'::jsonb) - 'a'`, "{}"},
+		// A quoted element of the path array carries the comma, the brace and
+		// the space a bare one cannot; splitting on the comma alone made two
+		// path members out of the single key a,b and removed nothing.
+		{`SELECT '{"a,b":1}'::jsonb #- '{"a,b"}'`, "{}"},
+		{`SELECT '{" a ":1,"b":2}'::jsonb #- '{" a "}'`, `{"b":2}`},
+		{`SELECT '{"a":1,"b":2}'::jsonb #- '{ a }'`, `{"b":2}`},
+		// PostgreSQL spells the absolute value "@" and its parameters "$1", so
+		// "@0" there is the operator on a number rather than a parameter name.
+		{`SELECT @0`, "0"},
+		{`SELECT @ -3 + 1`, "2"},
+		{`SELECT |/ 4 + 5`, "3"},
+		{`SELECT |/ 25.0 * 2`, "7.0710678118654755"},
 		// The arithmetic and the text concatenation these must not touch.
 		{`SELECT 5 - 3`, "2"},
 		{`SELECT 'a' || 'b'`, "ab"},
@@ -450,6 +461,13 @@ func TestTheJSONAndRootOperators(t *testing.T) {
 		{`SELECT '{"a":1}'::jsonb #- '{a,}'`, "#-"},
 		{`SELECT '[1,2]'::jsonb - 1.5`, "-"},
 		{`SELECT '[1,2]'::jsonb - -x FROM t`, "-"},
+		// A path element that is a number is a key on an object and an index on
+		// an array, and one $ path cannot be both.
+		{`SELECT '{"a":[1,2]}'::jsonb #- '{a,0}'`, "#-"},
+		{`SELECT '{"0":1}'::jsonb #- '{"0"}'`, "#-"},
+		{`SELECT '{"a":1}'::jsonb #- '{a,{b}}'`, "#-"},
+		{`SELECT '{"a":1}'::jsonb #- '{a,NULL}'`, "#-"},
+		{`SELECT '{"a":1}'::jsonb #- '{"a}'`, "#-"},
 	} {
 		t.Run(tt.query, func(t *testing.T) {
 			_, err := dialect.Translate(dialect.PostgreSQL, tt.query)
