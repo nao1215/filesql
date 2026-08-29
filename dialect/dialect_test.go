@@ -380,3 +380,38 @@ func TestLiteralFormsAreOneToken(t *testing.T) {
 		}
 	}
 }
+
+// TestPlaceholderNamesReachSQLiteWhole covers the bound-parameter names the
+// translation used to split. SQLite reads a dollar sign and a leading digit as
+// name characters, so the space the renderer puts between two tokens made SQL
+// that no longer parses, and only under a dialect: the same query with no
+// dialect ran.
+func TestPlaceholderNamesReachSQLiteWhole(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		dialect Dialect
+		input   string
+		want    string
+	}{
+		{MySQL, "SELECT @0$0", "SELECT @0$0"},
+		{MySQL, "SELECT @a$b + 1", "SELECT @a$b + 1"},
+		{MySQL, "SELECT :1abc", "SELECT :1abc"},
+		{PostgreSQL, "SELECT $1 + $2", "SELECT $1 + $2"},
+		{PostgreSQL, "SELECT :name", "SELECT :name"},
+		{GoogleSQL, "SELECT @param", "SELECT @param"},
+		{MySQL, "SELECT ?1, ?", "SELECT ?1, ?"},
+	} {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := Translate(tt.dialect, tt.input)
+			if err != nil {
+				t.Fatalf("Translate(%s, %q): %v", tt.dialect, tt.input, err)
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%s, %q) = %q, want %q", tt.dialect, tt.input, got, tt.want)
+			}
+		})
+	}
+}

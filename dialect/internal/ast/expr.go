@@ -84,6 +84,12 @@ const (
 	// not an operator at all; it is here so the parser can name it in a
 	// diagnostic rather than mis-parse it.
 	UnaryRegexpMatch
+	// UnarySquareRoot is PostgreSQL's prefix "|/".
+	UnarySquareRoot
+	// UnaryCubeRoot is PostgreSQL's prefix "||/".
+	UnaryCubeRoot
+	// UnaryAbsolute is PostgreSQL's prefix "@".
+	UnaryAbsolute
 )
 
 // UnaryExpr applies a prefix operator to one operand.

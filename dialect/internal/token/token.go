@@ -70,6 +70,7 @@ type Config struct {
 	TripleQuoteString bool // '''...''' and """...""" strings (GoogleSQL)
 	NestedComment     bool // /* */ block comments nest (PostgreSQL)
 	NumericEscapes    bool // \xHH, \ooo, \uXXXX and \UXXXXXXXX name a character (GoogleSQL)
+	AtOperator        bool // @ is the absolute-value operator rather than a parameter prefix (PostgreSQL)
 }
 
 // escapeRules says how a backslash behaves inside a quoted literal. The two
@@ -99,6 +100,7 @@ func ConfigFor(d dialects.Dialect) (Config, bool) {
 			EPrefixString:    true,
 			DollarQuote:      true,
 			NestedComment:    true,
+			AtOperator:       true,
 		}, true
 	case dialects.GoogleSQL:
 		return Config{
@@ -266,17 +268,15 @@ func Lex(query string, cfg Config) ([]Token, error) {
 			tokens = append(tokens, Token{Kind: Placeholder, Text: query[i:j], Offset: start})
 			i = j
 
-		case c == '$' && isDigit(next(query, i)):
+		case (c == ':' || c == '$' || (c == '@' && !cfg.AtOperator)) && isPlaceholderName(next(query, i)):
+			// A bound parameter's name holds the characters SQLite reads as
+			// name characters, which include a digit in the first position and
+			// a dollar sign anywhere. Stopping short of either split the name
+			// the caller wrote into two tokens. PostgreSQL is the exception:
+			// it writes a parameter as $1 and spells the absolute value with
+			// "@", so "@0" there is the operator on a number.
 			j := i + 1
-			for j < len(query) && isDigit(query[j]) {
-				j++
-			}
-			tokens = append(tokens, Token{Kind: Placeholder, Text: query[i:j], Offset: start})
-			i = j
-
-		case (c == '@' || c == ':') && isIdentStart(next(query, i)):
-			j := i + 1
-			for j < len(query) && isIdentPart(query[j]) {
+			for j < len(query) && isPlaceholderName(query[j]) {
 				j++
 			}
 			tokens = append(tokens, Token{Kind: Placeholder, Text: query[i:j], Offset: start})
@@ -717,8 +717,11 @@ var multiCharOperators = []string{ //nolint:gochecknoglobals // a fixed table
 	// so "~~" is one token rather than two "~" that each become a REGEXP.
 	"!~~*", "~~*", "!~~", "~~",
 	// PostgreSQL's JSON path operators, listed before "#" so the bitwise XOR
-	// does not take the "#" and leave the ">" behind.
-	"#>>", "#>",
+	// does not take the "#" and leave the rest behind.
+	"#>>", "#>", "#-",
+	// Its cube and square roots, listed before "||" and "|" for the same
+	// reason: split, "|/" is a bitwise OR beside a division.
+	"||/", "|/",
 	// Its JSON containment operators, which are single tokens rather than a
 	// comparison beside an "@".
 	"@>", "<@", "@?", "@@",
@@ -755,6 +758,13 @@ func isIdentStart(c byte) bool {
 
 func isIdentPart(c byte) bool {
 	return isIdentStart(c) || isDigit(c)
+}
+
+// isPlaceholderName reports whether a byte may appear in a bound parameter's
+// name. SQLite takes the identifier characters and the dollar sign, and takes
+// them in the first position too, so ":1abc" and "@a$b" are each one name.
+func isPlaceholderName(c byte) bool {
+	return isIdentPart(c) || c == '$'
 }
 
 // Significant reports whether the token carries meaning for the grammar.

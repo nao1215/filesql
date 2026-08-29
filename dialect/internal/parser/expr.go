@@ -67,6 +67,25 @@ func (p *Parser) parsePrefix(minPrec int) (ast.Expr, error) {
 		}
 		return &ast.UnaryExpr{Op: ast.UnaryPlus, Expr: operand, Span: span}, nil
 
+	case (t.IsOp("|/") || t.IsOp("||/") || t.IsOp("@")) && p.dialect == dialects.PostgreSQL:
+		// PostgreSQL's three prefix arithmetic operators: the square root, the
+		// cube root and the absolute value. Each is one of its "any other
+		// operators", which bind below addition, so "@ -3 + 1" is the absolute
+		// value of -2 rather than 3 plus 1.
+		p.pos++
+		operand, err := p.parseExpr(precOther)
+		if err != nil {
+			return nil, err
+		}
+		op := ast.UnarySquareRoot
+		switch t.Text {
+		case "||/":
+			op = ast.UnaryCubeRoot
+		case "@":
+			op = ast.UnaryAbsolute
+		}
+		return &ast.UnaryExpr{Op: op, Expr: operand, Span: span}, nil
+
 	case t.IsOp("~"):
 		p.pos++
 		operand, err := p.parseExpr(precUnary)
