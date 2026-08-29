@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/nao1215/filesql/dialect/internal/dialects"
 )
 
 // TestToCharDateTemplate pins TO_CHAR's date/time template against PostgreSQL
@@ -345,6 +347,101 @@ func TestIsDateTemplateTellsTheTwoApart(t *testing.T) {
 
 			if got := isDateTemplate(tt.format); got != tt.want {
 				t.Errorf("isDateTemplate(%q) = %v, want %v", tt.format, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestToDateTemplate pins what to_date and to_timestamp read, against
+// PostgreSQL 17.10. Every want was read from that engine rather than derived.
+//
+// The template used to be translated into a Go layout and handed to time.Parse,
+// which cannot express a day of the year beside a year, an ISO week date, a
+// Julian day or a number written without its padding. Each of those answered
+// NULL, which is also the answer for a value that does not match, so a caller
+// could not tell an unimplemented pattern from a bad row -- and to_char
+// formatted every one of them, so a value this package wrote could not be read
+// back by it.
+func TestToDateTemplate(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	for _, tt := range []struct {
+		query string
+		want  string
+	}{
+		{`SELECT to_date('2024-03-05','YYYY-MM-DD')`, "2024-03-05"},
+		{`SELECT to_date('March 5, 2024','Month DD, YYYY')`, "2024-03-05"},
+		{`SELECT to_date('mar 5 2024','Mon DD YYYY')`, "2024-03-05"},
+		{`SELECT to_date('2024-065','YYYY-DDD')`, "2024-03-05"},
+		{`SELECT to_date('2024 W10 2','IYYY "W"IW ID')`, "2024-03-05"},
+		{`SELECT to_date('2460375','J')`, "2024-03-05"},
+		{`SELECT to_date('2024 III 05','YYYY RM DD')`, "2024-03-05"},
+		// A number written without its padding, and a separator that is not
+		// the one the template spelled. PostgreSQL reads both.
+		{`SELECT to_date('2024-3-5','YYYY-MM-DD')`, "2024-03-05"},
+		{`SELECT to_date('2024/03/05','YYYY-MM-DD')`, "2024-03-05"},
+		{`SELECT to_date('20240305','YYYYMMDD')`, "2024-03-05"},
+		{`SELECT to_date('24-03-05','YY-MM-DD')`, "2024-03-05"},
+		{`SELECT to_timestamp('2024-03-05 13:45:56.123','YYYY-MM-DD HH24:MI:SS.MS')`, "2024-03-05 13:45:56.123"},
+		{`SELECT to_timestamp('2024-03-05 13:45:56.123456','YYYY-MM-DD HH24:MI:SS.US')`, "2024-03-05 13:45:56.123456"},
+		{`SELECT to_timestamp('2024-03-05 01:45 PM','YYYY-MM-DD HH12:MI AM')`, "2024-03-05 13:45:00"},
+		{`SELECT to_timestamp('2024-03-05 49500','YYYY-MM-DD SSSSS')`, "2024-03-05 13:45:00"},
+		{`SELECT to_timestamp('2024-03-05 01:45 P.M.','YYYY-MM-DD HH12:MI P.M.')`, "2024-03-05 13:45:00"},
+		{`SELECT to_timestamp('2024-03-05 13:45:56.123','YYYY-MM-DD HH24:MI:SS.FF3')`, "2024-03-05 13:45:56.123"},
+		// The day of the ISO year counts from the Monday its first week begins
+		// on, which is not its first of January: ISO 2020 begins on the
+		// thirtieth of December 2019.
+		{`SELECT to_date('2024 065','IYYY IDDD')`, "2024-03-05"},
+		{`SELECT to_date('2020 001','IYYY IDDD')`, "2019-12-30"},
+		// A short year is filled out from two thousand, except that two digits
+		// from seventy up are the nineteen hundreds.
+		{`SELECT to_date('4-03-05','Y-MM-DD')`, "2004-03-05"},
+		{`SELECT to_date('024-03-05','YYY-MM-DD')`, "2024-03-05"},
+		{`SELECT to_date('99-03-05','YY-MM-DD')`, "1999-03-05"},
+		// The weekday name says nothing the date is built from, and PostgreSQL
+		// reads past it too.
+		{`SELECT to_date('Tuesday 2024-03-05','Day YYYY-MM-DD')`, "2024-03-05"},
+		{`SELECT to_date('Tue 2024-03-05','DY YYYY-MM-DD')`, "2024-03-05"},
+		// An offset moves the fields to UTC, which is the zone every value is
+		// read in here; a zone name is read and ignored, as PostgreSQL does.
+		{`SELECT to_timestamp('2024-03-05 13:45 +05','YYYY-MM-DD HH24:MI TZH')`, "2024-03-05 08:45:00"},
+		{`SELECT to_timestamp('2024-03-05 13:45 -05','YYYY-MM-DD HH24:MI TZH')`, "2024-03-05 18:45:00"},
+		{`SELECT to_timestamp('2024-03-05 13:45 UTC','YYYY-MM-DD HH24:MI TZ')`, "2024-03-05 13:45:00"},
+		{`SELECT to_timestamp('2024-03-05 13:45 +05:30','YYYY-MM-DD HH24:MI OF')`, "2024-03-05 08:15:00"},
+		{`SELECT to_timestamp('2024-03-05 13:45 05 30','YYYY-MM-DD HH24:MI TZH TZM')`, "2024-03-05 08:15:00"},
+		{`SELECT to_timestamp('2024-03-05 13:45 -05 30','YYYY-MM-DD HH24:MI TZH TZM')`, "2024-03-05 19:15:00"},
+		{`SELECT to_date('2024 W10 7','IYYY "W"IW ID')`, "2024-03-10"},
+		{`SELECT to_date('2023-060','YYYY-DDD')`, "2023-03-01"},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.PostgreSQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+
+	// A value PostgreSQL refuses is an error here rather than NULL. NULL is
+	// also the answer for a value that is absent, so a query reading a column
+	// through to_date to validate it reported success on exactly the rows it
+	// was written to reject.
+	for _, query := range []string{
+		`SELECT to_date('bad','YYYY-MM-DD')`,
+		`SELECT to_date('2024-13-05','YYYY-MM-DD')`,
+		`SELECT to_date('2024-02-30','YYYY-MM-DD')`,
+		`SELECT to_date('2024-400','YYYY-DDD')`,
+		`SELECT to_timestamp('2024-03-05 25:00:00','YYYY-MM-DD HH24:MI:SS')`,
+		`SELECT to_date('2024 Smarch 05','YYYY Month DD')`,
+		`SELECT to_timestamp('2024-03-05 01:45 XM','YYYY-MM-DD HH12:MI AM')`,
+		`SELECT to_date('2024 XIV 05','YYYY RM DD')`,
+	} {
+		t.Run(query, func(t *testing.T) {
+			if _, err := runDialect(t, db, dialects.PostgreSQL, query); err == nil {
+				t.Errorf("%s answered a value, want an error", query)
 			}
 		})
 	}

@@ -393,3 +393,54 @@ func TestPostgreSQLFunctionsAddedForTheEngine(t *testing.T) {
 		})
 	}
 }
+
+// TestToNumberReadsOnlyWhatTheTemplateNames covers to_number's two answers that
+// were not PostgreSQL's, read from postgres:17.10.
+//
+// An empty template names no digit positions, so PostgreSQL reads nothing and
+// answers NULL; scraping the digits out of the value instead answered a number
+// that is not in it in any recognizable form. And a value it cannot read is an
+// error there rather than NULL, which is also the answer for a value that is
+// absent.
+func TestToNumberReadsOnlyWhatTheTemplateNames(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	for _, tt := range []struct {
+		query string
+		want  string
+	}{
+		{`SELECT to_number('1234','9999')`, "1234"},
+		{`SELECT to_number('1,234.5','9,999.9')`, "1234.5"},
+		{`SELECT to_number('-12','S99')`, "-12"},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.PostgreSQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+
+	for _, query := range []string{
+		`SELECT to_number('2024-02-29','')`,
+		`SELECT to_number('1234','')`,
+	} {
+		t.Run(query, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.PostgreSQL, query)
+			if err != nil {
+				t.Fatalf("%s: %v", query, err)
+			}
+			if got.Valid {
+				t.Errorf("%s = %q, want NULL", query, got.String)
+			}
+		})
+	}
+
+	if _, err := runDialect(t, db, dialects.PostgreSQL, `SELECT to_number('abc','999')`); err == nil {
+		t.Error("to_number('abc','999') answered a value, want an error")
+	}
+}

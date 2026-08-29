@@ -2494,3 +2494,129 @@ func TestGroupThousands(t *testing.T) {
 		}
 	}
 }
+
+// TestAZeroByteReachesTheHelpersWhole covers a text value carrying a zero byte.
+// The driver reads a TEXT argument as a C string unless the registration asks
+// for volatile arguments, so a helper saw the value cut at the first zero and
+// answered about a shorter string than the one SQLite holds: HEX of a value
+// beginning with a zero byte was the empty string where SQLite's own hex()
+// answered 00. MySQL stores a zero byte inside a string and a CSV cell can
+// carry one, so the two answers were about the same cell.
+func TestAZeroByteReachesTheHelpersWhole(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	// The value is 'a', a zero byte and 'b', built by SQLite itself so that the
+	// zero is in the database rather than in the query text.
+	for _, tt := range []struct {
+		dialect dialects.Dialect
+		query   string
+		want    string
+	}{
+		{dialects.MySQL, `SELECT HEX(CONCAT('a', CHAR(0), 'b'))`, "610062"},
+		{dialects.MySQL, `SELECT LENGTH(CONCAT('a', CHAR(0), 'b'))`, "3"},
+		{dialects.MySQL, `SELECT HEX(UPPER(CONCAT('a', CHAR(0), 'b')))`, "410042"},
+		{dialects.MySQL, `SELECT HEX(REVERSE(CONCAT('a', CHAR(0), 'b')))`, "620061"},
+		{dialects.MySQL, `SELECT HEX(SUBSTRING(CONCAT('a', CHAR(0), 'b'), 2, 2))`, "0062"},
+		{dialects.MySQL, `SELECT HEX(REPLACE(CONCAT('a', CHAR(0), 'b'), 'b', 'c'))`, "610063"},
+		{dialects.PostgreSQL, `SELECT upper('a' || chr(1) || 'b')`, "A\x01B"},
+		// The blob half: a helper that answers bytes hands them back as a blob,
+		// which was never read as a C string and must stay that way.
+		{dialects.MySQL, `SELECT HEX(UNHEX('0041'))`, "0041"},
+		{dialects.MySQL, `SELECT HEX(UNHEX('4100'))`, "4100"},
+	} {
+		t.Run(tt.dialect.DisplayName()+" "+tt.query, func(t *testing.T) {
+			got, err := runDialect(t, db, tt.dialect, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
+
+// TestStrToDateReadsWhatDateFormatWrites covers the two MySQL specifiers the
+// parser did not read, and DATE_FORMAT's answer for an empty format.
+//
+// Every want was read from mysql:8.4.11 rather than derived. %j is the day of
+// the year and %f the microseconds; DATE_FORMAT writes both, so a value this
+// package formatted could not be read back by it, and NULL is also STR_TO_DATE's
+// answer for a value that does not match the format, so the caller could not
+// tell an unimplemented specifier from bad data.
+func TestStrToDateReadsWhatDateFormatWrites(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	for _, tt := range []struct {
+		query string
+		want  string
+	}{
+		{`SELECT STR_TO_DATE('2024 065','%Y %j')`, "2024-03-05"},
+		{`SELECT STR_TO_DATE('2024-03-05 13:45:56.123456','%Y-%m-%d %H:%i:%s.%f')`, "2024-03-05 13:45:56.123456"},
+		// MySQL pads a short fraction on the right, so a tenth of a second is
+		// .100000 rather than .000001.
+		{`SELECT STR_TO_DATE('2024-03-05 13:45:56.1','%Y-%m-%d %H:%i:%s.%f')`, "2024-03-05 13:45:56.100000"},
+		{`SELECT STR_TO_DATE('13:45:56.1','%H:%i:%s.%f')`, "13:45:56.100000"},
+		{`SELECT DATE_FORMAT('2024-03-05 13:45:56.123456','%j')`, "065"},
+		{`SELECT DATE_FORMAT('2024-03-05 13:45:56.123456','%f')`, "123456"},
+		// The formats that already worked, so the two new specifiers are not
+		// read into a format that does not name them.
+		{`SELECT STR_TO_DATE('2024-03-05','%Y-%m-%d')`, "2024-03-05"},
+		{`SELECT STR_TO_DATE('2024-03-05 13:45:56','%Y-%m-%d %H:%i:%s')`, "2024-03-05 13:45:56"},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.MySQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+
+	// An empty format is NULL in MySQL rather than the empty string. Nothing
+	// DATE_FORMAT writes is empty, so the two are distinguishable.
+	got, err := runDialect(t, db, dialects.MySQL, `SELECT DATE_FORMAT('2024-02-29','')`)
+	if err != nil {
+		t.Fatalf("DATE_FORMAT with an empty format: %v", err)
+	}
+	if got.Valid {
+		t.Errorf("DATE_FORMAT('2024-02-29','') = %q, want NULL", got.String)
+	}
+}
+
+// TestAnEmptyRegularExpressionIsRefused covers MySQL's answer for an empty
+// pattern, which is an error rather than a match. Go's regexp matches
+// everywhere with one, so REGEXP_LIKE(x, ”) was true for every row, including
+// the rows the query was written to find. Read from mysql:8.4.11, which raises
+// "Illegal argument to a regular expression" for each of these.
+func TestAnEmptyRegularExpressionIsRefused(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	for _, query := range []string{
+		`SELECT REGEXP_LIKE('abc','')`,
+		`SELECT REGEXP_SUBSTR('abc','')`,
+		`SELECT REGEXP_INSTR('abc','')`,
+		`SELECT REGEXP_REPLACE('abc','','x')`,
+		`SELECT 'abc' REGEXP ''`,
+	} {
+		t.Run(query, func(t *testing.T) {
+			if _, err := runDialect(t, db, dialects.MySQL, query); err == nil {
+				t.Errorf("%s answered a value, want an error", query)
+			}
+		})
+	}
+
+	// A NULL pattern stays NULL, which is what MySQL answers for it.
+	got, err := runDialect(t, db, dialects.MySQL, `SELECT REGEXP_LIKE('abc', NULL)`)
+	if err != nil {
+		t.Fatalf("REGEXP_LIKE with a NULL pattern: %v", err)
+	}
+	if got.Valid {
+		t.Errorf("REGEXP_LIKE('abc', NULL) = %q, want NULL", got.String)
+	}
+}
