@@ -620,6 +620,18 @@ func TestSQLiteFloatText(t *testing.T) {
 		{name: "a finite double is unchanged", value: 1.5, bitSize: 64, want: "1.5"},
 		{name: "a float32 renders at its own width", value: float64(float32(3.14159)), bitSize: 32, want: "3.14159"},
 		{name: "a float32 infinity is the same literal", value: float64(float32(math.Inf(1))), bitSize: 32, want: "9e999"},
+		// The plain form runs from a ten-thousandth up to a hundred
+		// quadrillion, which is where SQLite's own rendering leaves it. Go's
+		// shortest 'g' leaves it at a million, so a load and a dump with
+		// nothing in between rewrote 2500000 as 2.5e+06.
+		{name: "just below the million Go leaves plain form at", value: 999999.5, bitSize: 64, want: "999999.5"},
+		{name: "just above it", value: 1000000.5, bitSize: 64, want: "1000000.5"},
+		{name: "a whole number keeps the suffix that keeps its column REAL", value: 2500000, bitSize: 64, want: "2500000.0"},
+		{name: "a hundred million", value: 123456789.5, bitSize: 64, want: "123456789.5"},
+		{name: "a ten-thousandth is the lower edge", value: 0.0001, bitSize: 64, want: "0.0001"},
+		{name: "below it the exponent form is what SQLite writes", value: 0.00001, bitSize: 64, want: "1e-05"},
+		{name: "the upper edge is plain", value: 1e16, bitSize: 64, want: "10000000000000000.0"},
+		{name: "past it the exponent form again", value: 1e20, bitSize: 64, want: "1e+20"},
 	}
 
 	for _, tt := range tests {
