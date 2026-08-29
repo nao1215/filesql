@@ -3,6 +3,7 @@ package lower_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nao1215/filesql/dialect"
@@ -381,5 +382,83 @@ func TestPostgreSQLNullsSortAtItsOwnEnd(t *testing.T) {
 		if !got.Valid || got.String != tt.want {
 			t.Errorf("%s = %v, want %q", tt.query, got, tt.want)
 		}
+	}
+}
+
+// TestTheJSONAndRootOperators covers the PostgreSQL operators that reached
+// SQLite as an operator of its own and answered from the wrong operation. Every
+// want was read from postgres:17.10.
+func TestTheJSONAndRootOperators(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	for _, tt := range []struct {
+		query string
+		want  string
+	}{
+		// The prefix operators, which reached SQLite as a bitwise OR beside a
+		// division and as an unknown token.
+		{`SELECT |/ 25.0`, "5"},
+		{`SELECT ||/ 27.0`, "3"},
+		{`SELECT @ -5`, "5"},
+		{`SELECT @ 5`, "5"},
+		// Deleting a key, an array element and a path. The first two answered
+		// a number, because SQLite subtracted the operands.
+		{`SELECT '{"a":1}'::jsonb - 'a'`, "{}"},
+		{`SELECT '{"a":1}'::jsonb - 'z'`, `{"a":1}`},
+		{`SELECT '[1,2,3]'::jsonb - 0`, "[2,3]"},
+		{`SELECT '{"a":1,"b":2}'::jsonb #- '{a}'`, `{"b":2}`},
+		{`SELECT '{"a":{"b":1}}'::jsonb #- '{a,b}'`, `{"a":{}}`},
+		// A negative index counts from the end, a path element that is a number
+		// addresses an array, and a key holding path punctuation is quoted into
+		// the path rather than read as one.
+		{`SELECT '[1,2,3]'::jsonb - -1`, "[1,2]"},
+		{`SELECT '{"a":[1,2]}'::jsonb #- '{a,0}'`, `{"a":[2]}`},
+		{`SELECT '{"a.b":1,"c":2}'::jsonb - 'a.b'`, `{"c":2}`},
+		{`SELECT ('{"a":1}'::jsonb) - 'a'`, "{}"},
+		// The arithmetic and the text concatenation these must not touch.
+		{`SELECT 5 - 3`, "2"},
+		{`SELECT 'a' || 'b'`, "ab"},
+		{`SELECT 5 # 3`, "6"},
+		{`SELECT 1 / 2`, "0"},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			got, err := runDialect(t, db, dialect.PostgreSQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+
+	// What has no SQLite form is refused by name. Concatenating two documents
+	// merges objects, concatenates arrays and wraps a scalar, and SQLite's
+	// json_patch does none of the three; a key that is not a literal cannot be
+	// turned into a path here.
+	for _, tt := range []struct {
+		query   string
+		mention string
+	}{
+		{`SELECT '[1,2]'::jsonb || '[3]'::jsonb`, "||"},
+		{`SELECT '{"a":1}'::jsonb || '{"b":2}'::jsonb`, "||"},
+		{`SELECT '{"a":1}'::jsonb - k FROM t`, "-"},
+		{`SELECT '{"a":1}'::jsonb #- p FROM t`, "#-"},
+		{`SELECT '{"a":1}'::jsonb #- 'a'`, "#-"},
+		{`SELECT '{"a":1}'::jsonb #- '{}'`, "#-"},
+		{`SELECT '{"a":1}'::jsonb #- '{a,}'`, "#-"},
+		{`SELECT '[1,2]'::jsonb - 1.5`, "-"},
+		{`SELECT '[1,2]'::jsonb - -x FROM t`, "-"},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			_, err := dialect.Translate(dialect.PostgreSQL, tt.query)
+			if !errors.Is(err, dialect.ErrUnsupportedSyntax) {
+				t.Fatalf("Translate(%q) error = %v, want ErrUnsupportedSyntax", tt.query, err)
+			}
+			if !strings.Contains(err.Error(), tt.mention) {
+				t.Errorf("Translate(%q) error = %q, want it to name %s", tt.query, err, tt.mention)
+			}
+		})
 	}
 }

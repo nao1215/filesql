@@ -1,6 +1,8 @@
 package lower
 
 import (
+	"strconv"
+
 	"strings"
 
 	"github.com/nao1215/filesql/dialect/internal/ast"
@@ -13,15 +15,156 @@ type postgresRules struct{ baseRules }
 func (*postgresRules) Dialect() dialects.Dialect { return dialects.PostgreSQL }
 
 // Pre catches the arithmetic that has to be read before its operands are
-// lowered: a date literal is a date here and an ordinary string afterwards, and
-// PostgreSQL's own rule for what "date + 1" means depends on exactly that.
+// lowered: a date literal is a date here and an ordinary string afterwards, a
+// cast to jsonb is a document here and a call afterwards, and PostgreSQL's own
+// rule for what "x - 1" means depends on which of the two the left side is.
 func (r *postgresRules) Pre(e ast.Expr) (ast.Expr, bool, error) {
 	b, ok := e.(*ast.BinaryExpr)
-	if !ok || (b.Op != ast.Add && b.Op != ast.Sub) {
+	if !ok {
+		return e, false, nil
+	}
+	if replaced, handled, err := pgJSONOperator(b); handled || err != nil {
+		return replaced, handled, err
+	}
+	if b.Op != ast.Add && b.Op != ast.Sub {
 		return e, false, nil
 	}
 	replaced := pgDateArithmetic(b)
 	return replaced, replaced != ast.Expr(b), nil
+}
+
+// pgJSONOperator lowers the operators that mean one thing beside a document and
+// another beside a number or a string. SQLite runs its own "||" and "-" over
+// the same operands and answers from the wrong operation: two documents
+// concatenated as text, and a key subtracted as a number.
+//
+// A document is recognized the way the date arithmetic recognizes a date: a
+// cast to json or jsonb, or a literal written as one. That is the form
+// PostgreSQL itself requires for these operators to resolve, so nothing is
+// missed by asking for it.
+func pgJSONOperator(b *ast.BinaryExpr) (ast.Expr, bool, error) {
+	switch b.Op {
+	case ast.JSONPathDelete:
+		path, ok := jsonTextArrayPath(b.Right)
+		if !ok {
+			return nil, false, nil
+		}
+		return helper("json_remove", b.Span, b.Left, text(path, b.Span)), true, nil
+	case ast.Concat:
+		if !isJSONValued(b.Left) && !isJSONValued(b.Right) {
+			return b, false, nil
+		}
+		return nil, false, unsupported(b.Span,
+			"the || operator on a JSON document is not supported; it merges two objects, concatenates two "+
+				"arrays and wraps a scalar, and SQLite's json_patch does none of the three")
+	case ast.Sub:
+		if !isJSONValued(b.Left) {
+			return b, false, nil
+		}
+		path, ok := jsonMemberPath(b.Right)
+		if !ok {
+			return nil, false, unsupported(b.Span,
+				"the - operator on a JSON document needs the key or index written as a literal; "+
+					"SQLite removes by a $ path, which is built from it here")
+		}
+		return helper("json_remove", b.Span, b.Left, text(path, b.Span)), true, nil
+	default:
+		return b, false, nil
+	}
+}
+
+// The types a cast or a typed literal names when its value is a document.
+const (
+	jsonTypeName       = "JSON"
+	jsonBinaryTypeName = "JSONB"
+)
+
+// isJSONValued reports whether an expression can be seen to be a document
+// without knowing the schema.
+func isJSONValued(e ast.Expr) bool {
+	switch n := e.(type) {
+	case *ast.CastExpr:
+		switch strings.ToUpper(n.Type.Name) {
+		case jsonTypeName, jsonBinaryTypeName:
+			return true
+		}
+	case *ast.TypedLiteral:
+		return strings.EqualFold(n.Type, jsonTypeName)
+	case *ast.ParenExpr:
+		return isJSONValued(n.Expr)
+	}
+	return false
+}
+
+// jsonMemberPath turns the key or index a "-" removes into the $ path SQLite's
+// json_remove takes.
+func jsonMemberPath(e ast.Expr) (string, bool) {
+	switch n := e.(type) {
+	case *ast.Literal:
+		switch n.Kind {
+		case ast.LitString:
+			return "$." + quoteJSONMember(n.Value), true
+		case ast.LitNumber:
+			if _, err := strconv.Atoi(n.Value); err == nil {
+				return "$[" + n.Value + "]", true
+			}
+		}
+	case *ast.UnaryExpr:
+		// A negative index counts from the end, which SQLite spells "#-n".
+		if n.Op != ast.UnaryMinus {
+			return "", false
+		}
+		lit, ok := n.Expr.(*ast.Literal)
+		if !ok || lit.Kind != ast.LitNumber {
+			return "", false
+		}
+		if _, err := strconv.Atoi(lit.Value); err != nil {
+			return "", false
+		}
+		return "$[#-" + lit.Value + "]", true
+	}
+	return "", false
+}
+
+// jsonTextArrayPath turns the text array a "#-" takes -- written {a,b} -- into
+// the $ path SQLite removes by. A path element that is a number addresses an
+// array, which is how PostgreSQL reads it too.
+func jsonTextArrayPath(e ast.Expr) (string, bool) {
+	lit, ok := e.(*ast.Literal)
+	if !ok || lit.Kind != ast.LitString {
+		return "", false
+	}
+	body := strings.TrimSpace(lit.Value)
+	if !strings.HasPrefix(body, "{") || !strings.HasSuffix(body, "}") {
+		return "", false
+	}
+	body = strings.TrimSuffix(strings.TrimPrefix(body, "{"), "}")
+	if body == "" {
+		return "", false
+	}
+	var path strings.Builder
+	path.WriteByte('$')
+	for _, element := range strings.Split(body, ",") {
+		element = strings.TrimSpace(element)
+		if element == "" {
+			return "", false
+		}
+		if _, err := strconv.Atoi(element); err == nil {
+			path.WriteString("[" + element + "]")
+			continue
+		}
+		path.WriteString("." + quoteJSONMember(element))
+	}
+	return path.String(), true
+}
+
+// quoteJSONMember writes an object key into a $ path, quoting it when it holds
+// a character the path syntax reads as punctuation.
+func quoteJSONMember(name string) string {
+	if name != "" && !strings.ContainsAny(name, `.[]"$ `) {
+		return name
+	}
+	return `"` + strings.ReplaceAll(name, `"`, `\"`) + `"`
 }
 
 func (r *postgresRules) Binary(b *ast.BinaryExpr) (ast.Expr, error) {
@@ -68,8 +211,11 @@ func (r *postgresRules) Binary(b *ast.BinaryExpr) (ast.Expr, error) {
 		return nil, unsupported(b.Span,
 			"the JSON path predicates @? and @@ are not supported; SQLite has no jsonpath")
 	case ast.JSONPathDelete:
+		// Reached only when the path is not a literal; the Pre rule handles the
+		// rest.
 		return nil, unsupported(b.Span,
-			"the JSON path delete operator #- is not supported; write json_remove")
+			"the #- operator needs a path written as a literal; SQLite removes by a $ path, "+
+				"and the text array this takes is only readable here when it is written out")
 	}
 	return b, nil
 }
@@ -158,6 +304,15 @@ func similarTo(b *ast.BinaryExpr) (ast.Expr, error) {
 }
 
 func (r *postgresRules) Unary(u *ast.UnaryExpr) (ast.Expr, error) {
+	// The three prefix arithmetic operators are functions SQLite already has.
+	switch u.Op {
+	case ast.UnarySquareRoot:
+		return helper("sqrt", u.Span, u.Expr), nil
+	case ast.UnaryCubeRoot:
+		return helper("cbrt", u.Span, u.Expr), nil
+	case ast.UnaryAbsolute:
+		return helper("abs", u.Span, u.Expr), nil
+	}
 	return u, nil
 }
 
