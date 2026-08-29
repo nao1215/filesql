@@ -301,11 +301,109 @@ func (r *chunkedReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+// TestBlankHeadersAreNamedByPosition covers a header row holding blank cells.
+//
+// A blank header names nothing, so a header with two of them has no name typed
+// twice -- but two empty names are equal, and the duplicate check refused the
+// whole file with a message about a name it never wrote. A spreadsheet exported
+// with spacer columns, and a CSV whose header row ends in two commas, both
+// arrive that way. A blank header now takes the name of its position, which is
+// distinct on its own and is something a caller can write in a query.
+func TestBlankHeadersAreNamedByPosition(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name    string
+		file    string
+		content string
+		want    []string
+	}{
+		{
+			name:    "one blank header in the middle",
+			file:    "one.csv",
+			content: "a,,c\n1,2,3\n",
+			want:    []string{"a", "column_2", "c"},
+		},
+		{
+			name:    "two blank headers",
+			file:    "two.csv",
+			content: "a,,c,,e\n1,2,3,4,5\n",
+			want:    []string{"a", "column_2", "c", "column_4", "e"},
+		},
+		{
+			name:    "a header row ending in two commas",
+			file:    "trailing.csv",
+			content: "a,b,,\n1,2,3,4\n",
+			want:    []string{"a", "b", "column_3", "column_4"},
+		},
+		{
+			name:    "the blank is first",
+			file:    "first.csv",
+			content: ",a\n1,2\n",
+			want:    []string{"column_1", "a"},
+		},
+		{
+			name:    "every header is blank",
+			file:    "all.csv",
+			content: ",,\n1,2,3\n",
+			want:    []string{"column_1", "column_2", "column_3"},
+		},
+		{
+			name:    "the generated name is already taken",
+			file:    "taken.csv",
+			content: "column_2,,c\n1,2,3\n",
+			want:    []string{"column_2", "column_2_2", "c"},
+		},
+		{
+			name:    "a header of one space is a name the file wrote",
+			file:    "space.csv",
+			content: "a, ,c\n1,2,3\n",
+			want:    []string{"a", " ", "c"},
+		},
+		{
+			name:    "tab-separated files follow the same rule",
+			file:    "two.tsv",
+			content: "a\t\tc\t\te\n1\t2\t3\t4\t5\n",
+			want:    []string{"a", "column_2", "c", "column_4", "e"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), tt.file)
+			require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o600))
+
+			db, err := OpenContext(context.Background(), path)
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+
+			table := strings.TrimSuffix(strings.TrimSuffix(tt.file, ".csv"), ".tsv")
+			rows, err := db.QueryContext(context.Background(), "SELECT * FROM "+quoteIdentifier(table)) //nolint:gosec // the name is this test's own and is quoted
+			require.NoError(t, err)
+			defer func() { _ = rows.Close() }()
+
+			got, err := rows.Columns()
+			require.NoError(t, err)
+			require.NoError(t, rows.Err())
+			assert.Equal(t, tt.want, got)
+
+			// Every column can be named in a query, which is the point of
+			// giving it a name at all.
+			for _, name := range got {
+				var value string
+				require.NoError(t, db.QueryRowContext(context.Background(),
+					"SELECT "+quoteIdentifier(name)+" FROM "+quoteIdentifier(table)).Scan(&value))
+			}
+		})
+	}
+}
+
 // TestDuplicateColumnErrorNamesTheColumn covers the message a caller acts on.
-// A header with two unnamed columns is a duplicate of the empty name, and the
-// message said so by printing nothing after the colon: "duplicate column name: ".
-// Which column, out of a header the user cannot see the parse of, was left to
-// guess.
+// A header that names one column twice is refused, and the message says which
+// column out of a header the user cannot see the parse of.
+//
+// A blank header is not a name typed twice and is not refused: it is given the
+// name of its position, which TestBlankHeadersAreNamedByPosition covers.
 func TestDuplicateColumnErrorNamesTheColumn(t *testing.T) {
 	t.Parallel()
 
@@ -316,10 +414,10 @@ func TestDuplicateColumnErrorNamesTheColumn(t *testing.T) {
 		want    []string
 	}{
 		{
-			name:    "two unnamed columns",
+			name:    "a name repeated after a blank one",
 			file:    "unnamed.csv",
-			content: "a,,\n1,2,3\n",
-			want:    []string{`""`, "column 3"},
+			content: "a,,a\n1,2,3\n",
+			want:    []string{`"a"`, "column 3"},
 		},
 		{
 			name:    "two columns with the same name",

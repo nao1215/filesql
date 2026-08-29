@@ -17,6 +17,7 @@ import (
 	"github.com/nao1215/filesql/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xuri/excelize/v2"
 )
 
 // TestDumpEmptyTable pins what a table with no rows dumps to, and what reading
@@ -1310,6 +1311,95 @@ func TestDumpValueFormatting(t *testing.T) {
 		assert.Equal(t, "v\n1\n-10\n", dumpToString(t, db, NewDumpOptions()))
 	})
 
+	// A workbook stores no cell for an empty value, so a row whose values are
+	// all empty holds no cell and the reader passed it over with the space under
+	// a sheet's data. The row is in the file -- the sheet's own XML has a row
+	// element with cells in it -- and the reader reads that rather than asking
+	// the library, which drops a cell whose value is the empty string.
+	t.Run("a row whose values are all empty survives a dump and a load", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			name  string
+			setup []string
+			want  [][]any
+		}{
+			{
+				name:  "the empty row is last",
+				setup: []string{`CREATE TABLE t (v TEXT)`, `INSERT INTO t VALUES ('x'), ('')`},
+				want:  [][]any{{"x"}, {""}},
+			},
+			{
+				name:  "the empty row is first",
+				setup: []string{`CREATE TABLE t (v TEXT)`, `INSERT INTO t VALUES (''), ('x')`},
+				want:  [][]any{{""}, {"x"}},
+			},
+			{
+				name:  "two empty rows in a row",
+				setup: []string{`CREATE TABLE t (v TEXT)`, `INSERT INTO t VALUES (''), (''), ('x')`},
+				want:  [][]any{{""}, {""}, {"x"}},
+			},
+			{
+				name:  "every column of the row is NULL",
+				setup: []string{`CREATE TABLE t (a TEXT, b TEXT)`, `INSERT INTO t VALUES ('1', '2'), (NULL, NULL)`},
+				want:  [][]any{{int64(1), int64(2)}, {nil, nil}},
+			},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				db := openWithTable(t, tt.setup[0], tt.setup[1:]...)
+				outDir := filepath.Join(t.TempDir(), "out")
+				require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+				require.NoError(t, db.Close())
+
+				back, err := OpenContext(context.Background(), filepath.Join(outDir, "t.xlsx"))
+				require.NoError(t, err)
+				defer func() { _ = back.Close() }()
+
+				rows, err := back.QueryContext(context.Background(), `SELECT * FROM t`)
+				require.NoError(t, err)
+				defer func() { _ = rows.Close() }()
+
+				var got [][]any
+				for rows.Next() {
+					cells := make([]any, len(tt.want[0]))
+					into := make([]any, len(cells))
+					for i := range cells {
+						into[i] = &cells[i]
+					}
+					require.NoError(t, rows.Scan(into...))
+					got = append(got, cells)
+				}
+				require.NoError(t, rows.Err())
+				assert.Equal(t, tt.want, got)
+			})
+		}
+	})
+
+	// The rule the fix above must not undo: a sheet whose used range reaches far
+	// down because of one stray cell holds no record for the space between.
+	t.Run("a sheet with a stray cell far below holds no record for the space", func(t *testing.T) {
+		t.Parallel()
+
+		book := excelize.NewFile()
+		require.NoError(t, book.SetCellValue("Sheet1", "A1", "v"))
+		require.NoError(t, book.SetCellValue("Sheet1", "A2", "x"))
+		require.NoError(t, book.SetCellValue("Sheet1", "A100000", "far"))
+		path := filepath.Join(t.TempDir(), "gap.xlsx")
+		require.NoError(t, book.SaveAs(path))
+		require.NoError(t, book.Close())
+
+		db, err := OpenContext(context.Background(), path)
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		var rows int
+		require.NoError(t, db.QueryRowContext(context.Background(),
+			`SELECT COUNT(*) FROM gap_Sheet1`).Scan(&rows))
+		assert.Equal(t, 2, rows)
+	})
+
 	// A value around a million is ordinary in the files this library is for, and
 	// Go's shortest 'g' leaves the plain form as soon as the decimal exponent
 	// reaches six, so a load and a dump with nothing in between rewrote the
@@ -1885,11 +1975,12 @@ func TestDumpXLSXRefusesAnUnnamedLastColumn(t *testing.T) {
 		assert.Contains(t, err.Error(), "CSV", "the error must say what to dump instead")
 	})
 
-	t.Run("an unnamed column that is not the last still round-trips", func(t *testing.T) {
+	t.Run("an unnamed column that is not the last keeps its values", func(t *testing.T) {
 		t.Parallel()
 
-		// A worksheet stores an empty cell that has a cell after it, so this
-		// header comes back whole.
+		// A worksheet stores an empty cell that has a cell after it, so the
+		// column comes back. Its name does not: a header cell holding nothing
+		// names nothing, and a load names such a column by its position.
 		db := openWithTable(t, `CREATE TABLE t ("a" TEXT, "" TEXT, "b" TEXT)`, `INSERT INTO t VALUES ('p', 'q', 'r')`)
 
 		outDir := filepath.Join(t.TempDir(), "out")
@@ -1901,7 +1992,7 @@ func TestDumpXLSXRefusesAnUnnamedLastColumn(t *testing.T) {
 		defer func() { _ = back.Close() }()
 
 		var middle string
-		require.NoError(t, back.QueryRowContext(ctx, `SELECT "" FROM t`).Scan(&middle))
+		require.NoError(t, back.QueryRowContext(ctx, `SELECT column_2 FROM t`).Scan(&middle))
 		assert.Equal(t, "q", middle)
 	})
 

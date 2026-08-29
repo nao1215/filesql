@@ -111,6 +111,7 @@ func readDelimited(src io.Reader, format Format, opts Options, emit Emit) (Resul
 		}
 		return Result{}, parseError(err, "failed to read %s header", format)
 	}
+	headerRecord = NameBlankColumns(headerRecord)
 	if err := ValidateColumnNames(headerRecord); err != nil {
 		return Result{}, err
 	}
@@ -153,6 +154,58 @@ func readDelimited(src io.Reader, format Format, opts Options, emit Emit) (Resul
 	result.Rows = rows.rows
 	result.Types = rows.types()
 	return result, nil
+}
+
+// NameBlankColumns gives a name to every column whose header cell is empty.
+//
+// A blank header names nothing, so there is no name typed twice in a header
+// with two of them -- but two empty names are equal, and the duplicate check
+// refused the file with a message about a name it never wrote. A spreadsheet
+// exported with spacer columns, and a CSV whose header ends in two commas, both
+// arrive that way.
+//
+// The name is the column's position, which is distinct on its own and is
+// something the caller can write in a query. It is checked against the names the
+// file did write, so a header saying both "column_3" and nothing in the third
+// position does not end up with two columns of one name.
+func NameBlankColumns(columns []string) []string {
+	blank := false
+	for _, column := range columns {
+		if column == "" {
+			blank = true
+			break
+		}
+	}
+	if !blank {
+		return columns
+	}
+	taken := make(map[string]bool, len(columns))
+	for _, column := range columns {
+		if column != "" {
+			taken[LTSVLabelKey(column)] = true
+		}
+	}
+	named := make([]string, len(columns))
+	copy(named, columns)
+	for i, column := range columns {
+		if column != "" {
+			continue
+		}
+		name := blankColumnName(i+1, taken)
+		named[i] = name
+		taken[LTSVLabelKey(name)] = true
+	}
+	return named
+}
+
+// blankColumnName is the name a blank header at a position takes, moved along
+// until it is one no other column has.
+func blankColumnName(position int, taken map[string]bool) string {
+	name := fmt.Sprintf("column_%d", position)
+	for attempt := 2; taken[LTSVLabelKey(name)]; attempt++ {
+		name = fmt.Sprintf("column_%d_%d", position, attempt)
+	}
+	return name
 }
 
 // ValidateColumnNames reports a header that names one column twice.
