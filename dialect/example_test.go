@@ -30,6 +30,20 @@ func ExampleTranslate() {
 	// true
 }
 
+// ExampleTranslate_unsupportedFeature shows the second kind of refusal. A
+// construct SQLite cannot express is ErrUnsupportedSyntax; one this package does
+// not model is ErrUnsupportedFeature. Neither reaches SQLite, so a query outside
+// the supported subset fails here with the construct named rather than there
+// with a message about SQLite's parser.
+func ExampleTranslate_unsupportedFeature() {
+	_, err := dialect.Translate(dialect.MySQL, "SHOW TABLES")
+	fmt.Println(errors.Is(err, dialect.ErrUnsupportedFeature))
+	fmt.Println(err)
+	// Output:
+	// true
+	// dialect: SQL feature not implemented by this package: the SHOW statement is not implemented at line 1, column 1
+}
+
 func ExampleParse() {
 	// Matching ignores case and surrounding space, and the aliases each
 	// project is also known by are accepted.

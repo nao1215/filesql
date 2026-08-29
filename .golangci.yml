@@ -86,6 +86,20 @@ linters:
       - linters:
           - goconst
         path: .*_test\.go
+      # The dialect tables are data: a SQL type or helper name spelled in three
+      # of them is three entries in three tables, not a constant the package is
+      # missing, and a map whose keys are constants cannot be read.
+      - linters:
+          - goconst
+        path: dialect/internal/lower/(cast_targets|helper_names|type_names)\.go
+      # The syntax tree's marker and position methods are one line each and
+      # mechanical: a doc comment on every one of them would be a hundred
+      # repetitions of one sentence, and the sentence is written once above the
+      # run.
+      - linters:
+          - revive
+        path: dialect/internal/ast/.*\.go
+        text: should have comment or be unexported
       - linters:
           - errcheck
         source: defer

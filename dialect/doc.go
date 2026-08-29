@@ -3,21 +3,85 @@
 // engine that backs filesql. Storage is always SQLite; only the query text a
 // caller supplies is translated.
 //
-// The translation is best-effort compatibility, not a full emulator. It handles
-// three classes of input:
+// # Translation model
 //
-//   - Known incompatibilities that have a SQLite equivalent are rewritten (for
-//     example MySQL's backtick identifiers become double-quoted identifiers, and
-//     PostgreSQL's "expr::type" becomes "CAST(expr AS type)").
-//   - Known constructs with no SQLite equivalent (QUALIFY, arrays, STRUCT
-//     types, LATERAL, DISTINCT ON, PostgreSQL's set-returning functions,
-//     MySQL's XOR, ...) are rejected with ErrUnsupportedSyntax so the caller
-//     sees a clear error instead of a confusing engine message: an array
-//     literal reached SQLite as identifier quoting and came back as "no such
-//     column: 1,2,3", and generate_series as "no such table", each naming
-//     something the query never wrote.
-//   - Anything else is passed through unchanged and left to SQLite to accept or
-//     reject.
+// A query is read into a syntax tree, the tree is rewritten into one SQLite can
+// execute, and the result is written back out:
+//
+//	source SQL -> lexer -> parser -> syntax tree
+//	           -> dialect lowering -> SQLite syntax tree
+//	           -> renderer -> SQLite SQL
+//
+// Operator precedence is decided once, in the parser, from one table per
+// dialect. The lowering rules work on the tree rather than on text, so no rule
+// depends on another having run first, and every diagnostic carries the line
+// and column of the construct it is about.
+//
+// A construct becomes one of three things:
+//
+//   - What SQLite spells differently is rewritten into SQLite's spelling:
+//     MySQL's backtick identifiers become double-quoted identifiers, and
+//     PostgreSQL's "expr::type" becomes a call to a conversion helper.
+//   - What SQLite cannot spell but a function can compute becomes a call to a
+//     helper this package registers with the driver through RegisterFunctions.
+//   - What is neither is refused. ErrUnsupportedSyntax says the construct has
+//     no SQLite form; ErrUnsupportedFeature says it is outside the subset below;
+//     ErrInvalidSyntax says the query could not be read at all.
+//
+// Nothing is forwarded to SQLite untranslated. What this package accepts is
+// what it has been taught, not what SQLite happens to tolerate: a construct
+// outside the subset is refused with a message naming it, rather than reaching
+// the engine to fail there under a name the caller never wrote.
+//
+// # Supported SQL
+//
+// The subset is the whole of the contract. Queries:
+//
+//   - SELECT with DISTINCT, a select list with aliases, FROM, WHERE, GROUP BY,
+//     HAVING, WINDOW, ORDER BY (with ASC, DESC, NULLS FIRST and NULLS LAST) and
+//     LIMIT with OFFSET, in either the LIMIT or the FETCH FIRST spelling.
+//   - WITH and WITH RECURSIVE, and VALUES standing as a query.
+//   - UNION, INTERSECT and EXCEPT, with or without ALL.
+//   - Table references: a name, a subquery, a table-valued call, and the joins
+//     -- inner, left, right, full, cross and natural -- with ON or USING.
+//
+// Expressions: literals, qualified names, bind parameters, the arithmetic,
+// comparison, logical, bitwise, string and pattern operators of each dialect,
+// IS and IS NOT, IS DISTINCT FROM, BETWEEN, IN, EXISTS, scalar subqueries, row
+// constructors, CASE, CAST and each dialect's own cast spelling, COLLATE,
+// INTERVAL, typed literals such as DATE '2024-01-01', function and aggregate
+// calls with DISTINCT, ORDER BY, FILTER and OVER, and the SQL-standard calls
+// whose arguments keywords separate: EXTRACT, SUBSTRING, POSITION, TRIM and
+// OVERLAY.
+//
+// Statements: INSERT (with VALUES, a query, DEFAULT VALUES, ON CONFLICT and
+// RETURNING), UPDATE, DELETE, CREATE TABLE, CREATE VIEW, CREATE INDEX, DROP,
+// the four ALTER TABLE forms SQLite has (RENAME TO, RENAME COLUMN, ADD COLUMN
+// and DROP COLUMN), BEGIN, COMMIT, ROLLBACK, SAVEPOINT, RELEASE, EXPLAIN,
+// PRAGMA and ANALYZE.
+//
+// Everything else is refused: the statements that address a server rather than
+// a database (GRANT, LOCK TABLES, SHOW, USE, SET, FLUSH), the objects SQLite
+// does not have (sequences, materialized views, functions, procedures,
+// triggers, databases), and the DDL that changes a column's type.
+//
+// # What is dropped
+//
+// Comments do not reach the output. They carry nothing SQLite acts on, and the
+// tree does not model them, so a translated query is the statement without
+// them. The clauses that ask for a physical layout rather than an answer are
+// dropped the same way: MySQL's ENGINE, CHARSET and COMMENT table options and
+// its index hints, GoogleSQL's OPTIONS and CLUSTER BY, PostgreSQL's UNLOGGED
+// and CONCURRENTLY, and the CASCADE or RESTRICT of a DROP. The rows are the
+// same without them.
+//
+// # Column names
+//
+// SQLite names an unaliased result column after the text of the expression that
+// produced it, so lowering an expression would rename the caller's column. A
+// select item whose text changed therefore carries its original text as an
+// alias: "SELECT amt::text" answers a column called "amt::text", not one called
+// "postgresql_cast(amt, 'text')".
 //
 // Function gaps (NOW, DATE_FORMAT, TO_CHAR, SPLIT_PART, SAFE_DIVIDE, DIV,
 // WIDTH_BUCKET, ...) are
@@ -32,7 +96,7 @@
 // approximation rather than a match: it folds case, which MySQL's default
 // collation does, and not accents, which that collation also does.
 //
-// The TIME functions have a file of their own because a MySQL TIME is not a
+// The TIME functions need rules of their own because a MySQL TIME is not a
 // point on a clock. It is a signed span running from -838:59:59 to 838:59:59,
 // so SEC_TO_TIME answers 100:00:00 for 360000 and TIME_FORMAT prints an hour
 // field of three digits with a sign in front of the whole result, none of which
@@ -107,7 +171,7 @@
 // translation succeeds and the query answers from a value the caller never
 // wrote, so each of those rules is configured rather than assumed.
 //
-// GoogleSQL's own file holds the two kinds of name it needs. Some are BigQuery
+// GoogleSQL needs two kinds of name. Some are BigQuery
 // functions SQLite has nothing like -- CONTAINS_SUBSTR, EDIT_DISTANCE,
 // IEEE_DIVIDE, the base32 pair. The rest are names another dialect here already
 // means something else by: BigQuery's MD5 and SHA1 answer bytes where
@@ -130,14 +194,14 @@
 // function, so the prefix is dropped there and the call runs as written --
 // those are the ones that do not raise in the first place.
 //
-// TO_CHAR has a file of its own for the same kind of reason: its template is a
-// language rather than a set of names, and it cannot be translated into a Go
+// TO_CHAR needs a scanner of its own for the same kind of reason: its template
+// is a language rather than a set of names, and it cannot be translated into a Go
 // layout string. A Go layout has one spelling per field, so MONTH, Month and
 // month would be one answer where PostgreSQL gives three, it has no fixed-width
 // form for the nine columns PostgreSQL pads a day or a month name to, and a
 // pattern with no Go equivalent has to be copied out as literal text, which is
-// how TO_CHAR(d, 'DDD') answered "05D". postgresql_template.go scans the
-// template into its elements and renders one at a time, for the numeric
+// how TO_CHAR(d, 'DDD') answered "05D". The template is scanned into its
+// elements and rendered one at a time, for the numeric
 // templates as well as the date ones, and TO_DATE and TO_TIMESTAMP read their
 // templates through the same scanner.
 //
@@ -146,8 +210,7 @@
 // no interval, no array and no arbitrary-precision numeric, and a construct
 // whose answer is one of those has nowhere to land. A comparison answers 1 or 0 rather than true or false; an
 // INTERVAL literal is translatable only as the right operand of date
-// arithmetic, and anywhere else it is refused with ErrUnsupportedSyntax rather
-// than passed on to fail as a syntax error naming something else; an array
+// arithmetic, and anywhere else it is refused with ErrUnsupportedSyntax; an array
 // literal and the set-returning functions are refused for the same reason; and
 // the functions whose answer is one of those types -- PostgreSQL's AGE,
 // JUSTIFY_DAYS, REGEXP_MATCH, SCALE and TRIM_SCALE, and BigQuery's ARRAY_AGG,
@@ -170,7 +233,7 @@
 // from another is an interval in PostgreSQL and an ordinary subtraction to
 // SQLite, so "ts2 - ts1" answers a number rather than a span, and for two
 // dates in the same year it answers 0. The operands are columns as often as
-// literals and a token rewrite cannot see their types, so there is no shape to
+// literals and nothing in the query text says what type a column holds, so
 // match on; DATE_PART and DATE_DIFF are the ways to ask this question here.
 //
 // Comparison is the other place the engine has the last word. "=", IN, BETWEEN,

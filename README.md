@@ -188,12 +188,14 @@ func main() {
 }
 ```
 
-Translation is best-effort compatibility, not a full emulator: common
-incompatibilities (identifier quoting, `DATE_ADD`, `SPLIT_PART`, `SAFE_DIVIDE`,
-`EXTRACT`, casts, …) are rewritten or backed by helper functions, constructs
-with no SQLite equivalent (for example `QUALIFY`, `DISTINCT ON`, MySQL's `XOR`,
-or MySQL's `0x` literal, which is a string in one place and a number in another)
-return a clear error, and anything else is passed through to SQLite.
+Translation implements a stated subset of SQL rather than a full emulator: the
+query is parsed, rewritten and written back out, so common incompatibilities
+(identifier quoting, `DATE_ADD`, `SPLIT_PART`, `SAFE_DIVIDE`, `EXTRACT`, casts,
+…) are rewritten or backed by helper functions, and a construct with no SQLite
+equivalent (for example `QUALIFY`, `DISTINCT ON`, MySQL's `XOR`, or MySQL's `0x`
+literal, which is a string in one place and a number in another) returns a clear
+error. Nothing is passed to SQLite untranslated: a query outside the subset is
+refused with the line and column of the construct.
 What the translation cannot reach is SQLite's type system: there is no boolean,
 no interval and no array, so a comparison answers `1` or `0`, an `INTERVAL`
 literal works only in date arithmetic, and a construct whose result would be one
@@ -422,6 +424,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Translate a query into SQLite SQL and recognize what has no equivalent | `ExampleTranslate` | [dialect/example_test.go](./dialect/example_test.go) |
 | Run PostgreSQL constructs SQLite has no form for | `ExampleTranslate_postgreSQL` | [dialect/example_test.go](./dialect/example_test.go) |
 | Run BigQuery constructs SQLite has no form for | `ExampleTranslate_googleSQL` | [dialect/example_test.go](./dialect/example_test.go) |
+| Tell a construct SQLite cannot express from one outside the supported subset | `ExampleTranslate_unsupportedFeature` | [dialect/example_test.go](./dialect/example_test.go) |
 | Turn a user-supplied dialect name into a `Dialect` | `ExampleParse` | [dialect/example_test.go](./dialect/example_test.go) |
 | List the built-in dialects and spell one for a person | `ExampleDialects`, `ExampleDialect_DisplayName` | [dialect/example_test.go](./dialect/example_test.go) |
 
