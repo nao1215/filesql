@@ -257,6 +257,12 @@ func invalidError(cause error, format string, args ...any) error {
 }
 
 // duplicateColumnError reports a header naming one column twice.
+// unsupportedError reports input this backend cannot hold, as against input it
+// cannot read.
+func unsupportedError(format string, args ...any) error {
+	return &Error{Kind: KindUnsupported, Msg: fmt.Sprintf(format, args...)}
+}
+
 func duplicateColumnError(format string, args ...any) error {
 	return &Error{Kind: KindDuplicateColumn, Msg: fmt.Sprintf(format, args...)}
 }

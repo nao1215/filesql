@@ -72,6 +72,11 @@ func readLTSV(src io.Reader, opts Options, emit Emit) (Result, error) {
 	}
 
 	header := labels.order
+	// The labels are the columns, so a file naming more of them than a table
+	// holds is refused here rather than by the CREATE TABLE that follows.
+	if err := ValidateColumnCount(len(header)); err != nil {
+		return Result{}, err
+	}
 	result := Result{Header: header}
 	rows := newChunker(header, opts, emit)
 	rowNum := 0
