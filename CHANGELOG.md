@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A JSON array element past the record bound is refused without reading the rest of the stream ([#836](https://github.com/nao1215/filesql/issues/836)). The reader counted the bytes after handing the source whatever slice the decoder asked for, and it kept serving the source after it had returned the refusal once, so the count bounded the record rather than the reading -- which is what the bound is for. `encoding/json`'s decoder sizes its own read-ahead buffer and does not stop at the first error a reader hands it, so a source that fills whatever it is given could hand over the whole remainder before the count was consulted, and how much that was belonged to the decoder's buffer growth rather than to this package: through Go 1.26 it stayed near the bound and the existing test passed, and on Go 1.27 a body forty times the bound was read to its end. The slice handed to the source is now capped at what the element is still allowed, plus the one byte that proves the limit was passed, and the refusal is sticky, so a decoder that asks again is told no without another byte leaving the source. The element's length is also measured from where the element begins -- the decoder's input offset at the boundary -- rather than from the last read, so the read-ahead that belongs to the elements after it is not charged to the one being decoded and a file of short records is not refused for the length of its neighbours. Go 1.27.0 joins the unit test matrix, since it is what surfaced this.
+
 ## [0.52.0] - 2026-08-29
 
 ### Breaking Changes
