@@ -497,3 +497,54 @@ func TestTSVRecordWritesOneRecord(t *testing.T) {
 		}
 	})
 }
+
+// TestAMarkLedFirstColumnIsRefused holds that a first column name beginning
+// with U+FEFF is refused by the text formats. That name is written at the front
+// of the file, where a reader takes the mark for the encoding mark and drops
+// it, so the file comes back naming its first column differently -- the outcome
+// the refusals here exist to replace. A mark on any later name is written in
+// the middle of a line and reads back as it was.
+func TestAMarkLedFirstColumnIsRefused(t *testing.T) {
+	t.Parallel()
+
+	const mark = "\ufeff"
+
+	for _, format := range []struct {
+		name string
+		f    Format
+	}{{"csv", FormatCSV}, {"tsv", FormatTSV}, {"ltsv", FormatLTSV}} {
+		t.Run(format.name, func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("the first name is refused", func(t *testing.T) {
+				t.Parallel()
+
+				var out bytes.Buffer
+				w := New(&out, format.f, Options{})
+
+				err := w.Header([]string{mark + "a", "b"})
+				var werr *Error
+				if !errors.As(err, &werr) {
+					t.Fatalf("Header = %v, want a *writer.Error", err)
+				}
+				if werr.Kind != KindUnrepresentableAsText {
+					t.Errorf("Kind = %v, want KindUnrepresentableAsText", werr.Kind)
+				}
+				if out.Len() != 0 {
+					t.Errorf("wrote %q before refusing the header", out.String())
+				}
+			})
+
+			t.Run("a later name is written", func(t *testing.T) {
+				t.Parallel()
+
+				var out bytes.Buffer
+				w := New(&out, format.f, Options{})
+
+				if err := w.Header([]string{"a", mark + "b"}); err != nil {
+					t.Fatalf("Header = %v, want the mark on a later name to be written", err)
+				}
+			})
+		})
+	}
+}

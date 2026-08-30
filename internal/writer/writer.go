@@ -129,6 +129,9 @@ func New(dst io.Writer, format Format, opts Options) *Writer {
 // LTSV keeps the slice rather than a copy of it, so a caller that writes over
 // its column names writes over the labels.
 func (w *Writer) Header(columns []string) error {
+	if err := checkFirstColumn(w.format, columns); err != nil {
+		return err
+	}
 	switch w.format {
 	case FormatLTSV:
 		for _, col := range columns {
@@ -304,6 +307,37 @@ func checkLTSVValue(column, value string) error {
 		}
 	}
 	return nil
+}
+
+// byteOrderMark is U+FEFF, which a text file carries at its front to say how it
+// is encoded rather than to say anything about the text.
+const byteOrderMark = "\ufeff"
+
+// checkFirstColumn refuses a first column name that begins with a byte-order
+// mark, in the formats that write it at the front of the file.
+//
+// A reader takes a mark there for the encoding mark and drops it, so the file
+// comes back naming its first column differently -- the same failure the
+// whitespace rule in checkLTSVLabel exists to replace. None of the three text
+// formats can escape it: TSV and LTSV have no quoting, and Go's CSV writer does
+// not quote a field for a mark. XLSX and Parquet are not written here and keep
+// such a name, since it travels inside a container rather than at offset 0.
+//
+// Only the first name is at the front. A mark on any later one is written in
+// the middle of a line and reads back as it was.
+func checkFirstColumn(format Format, columns []string) error {
+	if format == FormatJSONL || len(columns) == 0 {
+		return nil
+	}
+	if !strings.HasPrefix(columns[0], byteOrderMark) {
+		return nil
+	}
+	return &Error{
+		Kind: KindUnrepresentableAsText,
+		Msg: fmt.Sprintf(
+			"a column name cannot begin with a byte-order mark where it is written at the front of the file, and column %q does",
+			columns[0]),
+	}
 }
 
 // checkLTSVLabel refuses a column name that would not read back as a label. A

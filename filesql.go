@@ -646,13 +646,25 @@ func writeTextData(w io.Writer, columns []string, rows *sql.Rows, text textDumpF
 // being no value it cannot write.
 func dumpFormatError(err error, text textDumpFormat) error {
 	var writeErr *writer.Error
-	if !errors.As(err, &writeErr) || writeErr.Kind != writer.KindUnrepresentable {
+	if !errors.As(err, &writeErr) {
+		return err
+	}
+	// Where to go instead follows from what could not be written: a value one
+	// text format cannot hold is a value another can, and one whose place in the
+	// file is the problem has to leave text altogether.
+	var instead string
+	switch writeErr.Kind {
+	case writer.KindUnrepresentable:
+		instead = "; dump this table as CSV instead"
+	case writer.KindUnrepresentableAsText:
+		instead = "; dump this table as XLSX or Parquet instead"
+	default:
 		return err
 	}
 	if text.sentinel != nil {
-		return fmt.Errorf("%w: %w: %s; dump this table as CSV instead", ErrUnsupportedFormat, text.sentinel, writeErr.Error())
+		return fmt.Errorf("%w: %w: %s%s", ErrUnsupportedFormat, text.sentinel, writeErr.Error(), instead)
 	}
-	return fmt.Errorf("%w: %w; dump this table as CSV instead", ErrUnsupportedFormat, err)
+	return fmt.Errorf("%w: %w%s", ErrUnsupportedFormat, err, instead)
 }
 
 // formatDumpValue renders one cell for a text-based dump.
