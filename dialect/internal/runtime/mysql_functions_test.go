@@ -630,9 +630,9 @@ func TestMySQLFunctionsAddedForTheEngine(t *testing.T) {
 // was read from a DOUBLE column on mysql:8.4 rather than derived.
 //
 // The functions here are the ones this dialect answers with a helper of its
-// own. The five that still reach SQLite's built-ins -- TRIM, LTRIM, RTRIM,
-// LOCATE and CONCAT_WS, along with LENGTH and CHAR_LENGTH -- write SQLite's
-// spelling instead and are not in this table.
+// own. Those that still reach SQLite's built-ins -- TRIM, LTRIM, RTRIM, LOCATE,
+// INSTR, CONCAT_WS, LENGTH and CHAR_LENGTH -- write SQLite's spelling instead
+// and are not in this table.
 func TestMySQLStringFunctionsReadARealTheWayTheEngineDoes(t *testing.T) {
 	// Not parallel: castDB touches the process-global driver registration.
 	db := castDB(t)

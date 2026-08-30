@@ -4044,7 +4044,6 @@ func parseTime(s string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// toStringTime coerces a value to a time, accepting both strings and time.Time.
 // formatFloatText renders a REAL as text the way the engines do. Go's shortest
 // 'g' switches to exponent notation once the decimal exponent reaches 6, so a
 // plain 1234567.5 came out of every function that reads its argument as text as
@@ -4061,20 +4060,15 @@ func formatFloatText(f float64) string {
 
 // formatFloatTextMySQL renders a REAL the way MySQL writes one in a string
 // context, which is not how formatFloatText writes it: MySQL has no plus sign
-// and no padding in an exponent, and it keeps the plain spelling further out in
-// both directions, so 1e308 is "1e308" rather than "1e+308", 1e-5 is "0.00001"
-// rather than "1e-05" and 1e15 is "1e15" rather than "1e+15". The digits are
-// the shortest that read back as the same double, which is what MySQL writes
-// too: 0.1 + 0.2 is "0.30000000000000004" there as it is here.
+// and no padding in an exponent, and it keeps the plain spelling out to 1e14
+// and down to 1e-15, so 1e308 is "1e308" rather than "1e+308" and 1e-5 is
+// "0.00001" rather than "1e-05".
 //
-// The rule for choosing between the two spellings is MySQL's own, read off
-// mysql:8.4 rather than derived, and it turns on where the decimal point sits
-// relative to the digits rather than on the length alone. A value of 1e16 or
-// more whose digits all sit left of the point is written with an exponent,
-// which is why 1234567890123456 is "1.234567890123456e15" while
-// 1234567890123456.8, one digit longer and with a fraction, is written plainly.
-// A value below 1e-15 is written with an exponent whatever its length, and so
-// is one whose plain spelling would run past 24 characters.
+// Which of the two a value takes turns on where the decimal point sits relative
+// to the digits rather than on the length alone, which is why 1234567890123456
+// is written with an exponent and 1234567890123456.8, one digit longer, is
+// written plainly. TestMySQLWritesARealTheWayTheEngineDoes holds the values
+// this was read from.
 func formatFloatTextMySQL(f float64) string {
 	if math.IsInf(f, 0) || math.IsNaN(f) {
 		// Neither is a value SQLite can hold in a column loaded from a file,
@@ -4136,8 +4130,7 @@ func exponentTextMySQL(f float64, digits string, point int) string {
 func mysqlTextAll(fn scalarFn) scalarFn { return mysqlTextArgs(fn) }
 
 // mysqlTextFrom is mysqlTextArgs over every argument from first onward, for the
-// helpers whose text arguments are a tail of any length: ELT and MAKE_SET take
-// a number and then however many strings the call was written with.
+// helpers whose text arguments are a tail of any length.
 func mysqlTextFrom(fn scalarFn, first int) scalarFn {
 	return func(args []driver.Value) (driver.Value, error) {
 		for i := first; i < len(args); i++ {
@@ -4154,12 +4147,9 @@ func mysqlTextFrom(fn scalarFn, first int) scalarFn {
 // function reads. Only a REAL is rewritten: MySQL spells an integer, a string
 // and a blob the way this package already does.
 //
-// The conversion is here rather than inside each helper because the helpers are
-// shared. A string function reached under the PostgreSQL or the GoogleSQL
-// dialect with a REAL argument has no answer to diverge from -- PostgreSQL's
-// upper(), reverse() and md5() and BigQuery's CONCAT() all refuse a float
-// outright -- so the shared helper writes MySQL's spelling for all three rather
-// than carrying two, and only the calls a dialect defines are affected.
+// The helper it wraps stays shared rather than gaining a MySQL twin, because
+// PostgreSQL and GoogleSQL refuse a float to these functions outright: there is
+// no second answer to keep.
 func mysqlTextArgs(fn scalarFn, positions ...int) scalarFn {
 	return func(args []driver.Value) (driver.Value, error) {
 		if len(positions) == 0 {
@@ -4182,6 +4172,7 @@ func mysqlTextArgs(fn scalarFn, positions ...int) scalarFn {
 	}
 }
 
+// toStringTime coerces a value to a time, accepting both strings and time.Time.
 func toStringTime(v driver.Value) (time.Time, bool) {
 	if tm, ok := v.(time.Time); ok {
 		return tm, true
