@@ -13,6 +13,8 @@
 package reader
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 
@@ -184,19 +186,51 @@ type Result struct {
 func Read(src io.Reader, format Format, opts Options, emit Emit) (Result, error) {
 	switch format {
 	case FormatCSV, FormatTSV:
-		return readDelimited(src, format, opts, emit)
+		return readDelimited(skipByteOrderMarks(src), format, opts, emit)
 	case FormatLTSV:
-		return readLTSV(src, opts, emit)
+		return readLTSV(skipByteOrderMarks(src), opts, emit)
 	case FormatParquet:
 		return readParquet(src, opts, emit)
 	case FormatXLSX:
 		return readXLSX(src, opts, emit)
 	case FormatJSON:
-		return readJSON(src, opts, emit)
+		return readJSON(skipByteOrderMarks(src), opts, emit)
 	case FormatJSONL:
-		return readJSONL(src, opts, emit)
+		return readJSONL(skipByteOrderMarks(src), opts, emit)
 	default:
 		return Result{}, &Error{Kind: KindUnsupported, Msg: "unsupported file type"}
+	}
+}
+
+// byteOrderMark is U+FEFF written as UTF-8, which is what a text source opens
+// with once its encoding has been decided.
+var byteOrderMark = []byte{0xEF, 0xBB, 0xBF} //nolint:gochecknoglobals // constant-like
+
+// skipByteOrderMarks drops the byte-order marks a text source opens with.
+//
+// A mark belongs to the encoding rather than to the text, and the caller has
+// already read one to decide the encoding. A file can carry more than one: a
+// program that marks text already carrying a mark writes it twice, and a UTF-16
+// file whose first header cell opens with U+FEFF decodes into a second one.
+// Leaving those in place named the first column with a mark attached, which is
+// the failure stripping the first one exists to prevent -- a caller matching
+// that column by name found nothing, and the name printed the same as the one
+// they asked for. Writing such a table put the mark back at the front of the
+// file, where the next read took it for the encoding mark and dropped it, so
+// the same data named its first column two ways.
+//
+// A source with no mark passes through byte for byte, and a mark anywhere but
+// the front is a character the source wrote.
+func skipByteOrderMarks(src io.Reader) io.Reader {
+	buffered := bufio.NewReader(src)
+	for {
+		mark, err := buffered.Peek(len(byteOrderMark))
+		if err != nil || !bytes.Equal(mark, byteOrderMark) {
+			return buffered
+		}
+		if _, err := buffered.Discard(len(byteOrderMark)); err != nil {
+			return buffered
+		}
 	}
 }
 

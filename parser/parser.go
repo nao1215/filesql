@@ -1,8 +1,6 @@
 package parser
 
 import (
-	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -12,11 +10,6 @@ import (
 	"github.com/nao1215/filesql/internal/codec"
 	"github.com/nao1215/filesql/internal/reader"
 )
-
-// utf8BOM is the byte-order mark a UTF-8 file may begin with.
-//
-//nolint:gochecknoglobals // A byte slice cannot be a constant.
-var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
 // FileType represents supported file types including compression variants.
 type FileType int
@@ -375,35 +368,6 @@ func WithExcelSheetPolicy(policy ExcelSheetPolicy) ParseOption {
 	}
 }
 
-// isTextBaseType reports whether a format is read as text, which is where a
-// byte-order mark can appear. Parquet and XLSX carry their own container.
-func isTextBaseType(baseType FileType) bool {
-	switch baseType {
-	case CSV, TSV, LTSV, JSON, JSONL:
-		return true
-	default:
-		return false
-	}
-}
-
-// skipUTF8BOM drops a leading UTF-8 byte-order mark, which a spreadsheet writes
-// in front of a CSV it exports. The mark belongs to the encoding rather than to
-// the text, and leaving it in place named the first column with it attached: a
-// caller matching that column by name found nothing, and the name printed the
-// same as the one they asked for.
-//
-// Input with no mark passes through byte for byte.
-func skipUTF8BOM(reader io.Reader) io.Reader {
-	buffered := bufio.NewReader(reader)
-	mark, err := buffered.Peek(3)
-	if err == nil && bytes.Equal(mark, utf8BOM) {
-		if _, discardErr := buffered.Discard(len(utf8BOM)); discardErr != nil {
-			return buffered
-		}
-	}
-	return buffered
-}
-
 // readerFormat is the reader package's name for a base file type.
 var readerFormats = map[FileType]reader.Format{ //nolint:gochecknoglobals // constant-like lookup table
 	CSV:     reader.FormatCSV,
@@ -459,10 +423,6 @@ func Parse(input io.Reader, fileType FileType, opts ...ParseOption) (result *Tab
 			err = fmt.Errorf("failed to close decompressor: %w", closeErr)
 		}
 	}()
-
-	if isTextBaseType(baseType) {
-		decompressed = skipUTF8BOM(decompressed)
-	}
 
 	// Every chunk is collected, because a TableData is the whole table. Reading
 	// in chunks is what a load needs, and collecting them is cheaper than the

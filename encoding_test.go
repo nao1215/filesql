@@ -92,6 +92,50 @@ func TestOpenHonorsUnicodeBOM(t *testing.T) {
 			query:   "SELECT name FROM utf16 WHERE age = 30",
 			want:    "alice",
 		},
+		{
+			// A program that marks text already carrying a mark writes two, and
+			// re-exporting a CSV a spreadsheet marked is how a file gets there.
+			// Stripping one left the second in the first column's name, which
+			// is the failure stripping exists to prevent.
+			name:    "two utf-8 BOMs leave the first column name plain",
+			file:    "bom2.csv",
+			content: append(append(append([]byte{}, utf8BOM...), utf8BOM...), []byte("name,age\nalice,30\n")...),
+			query:   "SELECT name FROM bom2 WHERE age = 30",
+			want:    "alice",
+		},
+		{
+			name:    "three utf-8 BOMs leave the first column name plain",
+			file:    "bom3.csv",
+			content: append(append(append(append([]byte{}, utf8BOM...), utf8BOM...), utf8BOM...), []byte("name,age\nalice,30\n")...),
+			query:   "SELECT name FROM bom3 WHERE age = 30",
+			want:    "alice",
+		},
+		{
+			// The mark and the character are the same code point, so a UTF-16
+			// file whose first header cell opens with U+FEFF reaches the same
+			// place by another route.
+			name:    "utf-16 LE CSV opening with a second mark leaves the name plain",
+			file:    "utf16bom.csv",
+			content: utf16LE("\ufeffname,age\nalice,30\n"),
+			query:   "SELECT name FROM utf16bom WHERE age = 30",
+			want:    "alice",
+		},
+		{
+			// A mark that is not at the front of the file is a character. It
+			// names the column it was written in, and a value keeps it.
+			name:    "a mark on a later column is part of that name",
+			file:    "latebom.csv",
+			content: append(append([]byte{}, utf8BOM...), []byte("name,\ufeffage\nalice,30\n")...),
+			query:   "SELECT name FROM latebom WHERE \"\ufeffage\" = 30",
+			want:    "alice",
+		},
+		{
+			name:    "a mark inside a value is part of that value",
+			file:    "valuebom.csv",
+			content: append(append([]byte{}, utf8BOM...), []byte("name,age\n\ufeffalice,30\n")...),
+			query:   "SELECT name FROM valuebom WHERE age = 30",
+			want:    "\ufeffalice",
+		},
 	}
 
 	for _, tt := range tests {
@@ -108,6 +152,28 @@ func TestOpenHonorsUnicodeBOM(t *testing.T) {
 			var got string
 			require.NoError(t, db.QueryRowContext(context.Background(), tt.query).Scan(&got))
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestAFileOfMarksHoldsNoTable pins that however many byte-order marks a file
+// opens with, what is left is what decides whether it holds a table. A file of
+// one mark and a newline was empty and a file of two was a table with a column
+// named by the second mark, which is the same file to anyone reading it.
+func TestAFileOfMarksHoldsNoTable(t *testing.T) {
+	t.Parallel()
+
+	const mark = "\ufeff"
+	for _, content := range []string{"\n", mark + "\n", mark + mark + "\n", mark + mark + mark + "\n"} {
+		t.Run(fmt.Sprintf("%q", content), func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "t.csv")
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+			_, err := OpenContext(context.Background(), path)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrEmptyData)
 		})
 	}
 }
