@@ -256,6 +256,21 @@ func TestJSONArrayElementIsBounded(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
+	t.Run("an element near the limit does not spend what the elements after it are allowed", func(t *testing.T) {
+		t.Parallel()
+
+		// The decoder reads ahead, so the bytes handed over while one element
+		// is being decoded are partly the elements after it. Counting them
+		// against the element being decoded would refuse a file of short
+		// records for the length of its neighbours: here one element just
+		// under the bound is followed by enough small ones to pass it again.
+		// The bound is on one element, so this file loads.
+		body := `[{"a":"` + strings.Repeat("x", limit-16) + `"},` +
+			strings.TrimSuffix(strings.Repeat(`{"a":1},`, limit/2), ",") + `]`
+		_, err := readAll(t, body)
+		assert.NoError(t, err)
+	})
+
 	t.Run("a document that is not an array is one record and is bounded too", func(t *testing.T) {
 		t.Parallel()
 
