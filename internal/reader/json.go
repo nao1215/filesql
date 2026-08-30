@@ -187,7 +187,7 @@ func readJSONArray(decoder *json.Decoder, bounded *elementReader, opts Options, 
 // over while one element is being decoded is partly the elements after it. The
 // element's own length is therefore the difference between the decoder's input
 // offset when the element began and the bytes handed over since, which
-// overshoots by at most one read of read-ahead and never by a neighbour's
+// overshoots by at most one read of read-ahead and never by a neighbor's
 // length.
 type elementReader struct {
 	src   io.Reader

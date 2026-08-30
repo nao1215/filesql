@@ -262,7 +262,7 @@ func TestJSONArrayElementIsBounded(t *testing.T) {
 		// The decoder reads ahead, so the bytes handed over while one element
 		// is being decoded are partly the elements after it. Counting them
 		// against the element being decoded would refuse a file of short
-		// records for the length of its neighbours: here one element just
+		// records for the length of its neighbors: here one element just
 		// under the bound is followed by enough small ones to pass it again.
 		// The bound is on one element, so this file loads.
 		body := `[{"a":"` + strings.Repeat("x", limit-16) + `"},` +
