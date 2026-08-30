@@ -141,7 +141,7 @@ func readJSONArray(decoder *json.Decoder, bounded *elementReader, opts Options, 
 	index := 0
 	for decoder.More() {
 		index++
-		bounded.begin(index)
+		bounded.begin(index, decoder.InputOffset())
 		var element json.RawMessage
 		if err := decoder.Decode(&element); err != nil {
 			if errors.Is(err, ErrRecordTooLong) {
@@ -155,7 +155,7 @@ func readJSONArray(decoder *json.Decoder, bounded *elementReader, opts Options, 
 	}
 
 	// Consume the closing bracket, then refuse anything after it.
-	bounded.begin(index + 1)
+	bounded.begin(index+1, decoder.InputOffset())
 	if _, err := decoder.Token(); err != nil {
 		return 0, jsonError(err, "failed to read JSON array end")
 	}
@@ -181,13 +181,22 @@ func readJSONArray(decoder *json.Decoder, bounded *elementReader, opts Options, 
 }
 
 // elementReader bounds how much of a stream the decode of one array element may
-// consume. The decoder reads ahead into a buffer of its own, so the count is
-// what was handed to it since the element began rather than the element's own
-// length, which overshoots by at most one of its reads.
+// consume.
+//
+// The decoder reads ahead into a buffer of its own, so what this reader hands
+// over while one element is being decoded is partly the elements after it. The
+// element's own length is therefore the difference between the decoder's input
+// offset when the element began and the bytes handed over since, which
+// overshoots by at most one read of read-ahead and never by a neighbor's
+// length.
 type elementReader struct {
 	src   io.Reader
 	limit int
-	read  int
+	// total is every byte handed to the decoder, and base is where the decoder
+	// had read up to when the current element began. Their difference is what
+	// this element may have consumed.
+	total int
+	base  int
 	index int
 	// refused is the error this reader has already returned. It is sticky: a
 	// decoder that keeps calling Read after being told the element is too long
@@ -195,9 +204,10 @@ type elementReader struct {
 	refused error
 }
 
-// begin starts counting afresh for the element at index.
-func (e *elementReader) begin(index int) {
-	e.read = 0
+// begin starts the element at index, which begins at consumed: the offset the
+// decoder has read up to, which is the end of the element before it.
+func (e *elementReader) begin(index int, consumed int64) {
+	e.base = int(consumed)
 	e.index = index
 	e.refused = nil
 }
@@ -223,24 +233,27 @@ func (e *elementReader) Read(p []byte) (int, error) {
 	if e.refused != nil {
 		return 0, e.refused
 	}
-	// Cap the slice at what the element is still allowed, plus the one byte
-	// that proves the limit was passed. Counting after an uncapped read bounds
-	// the record but not the reading: json.Decoder sizes its own read-ahead
-	// buffer, and a source that fills whatever it is given hands over the whole
-	// remainder in one call before the count is consulted.
-	if allowed := e.limit - e.read + 1; allowed < len(p) {
+	if allowed := e.limit - e.held() + 1; allowed < len(p) {
 		if allowed < 1 {
 			allowed = 1
 		}
 		p = p[:allowed]
 	}
 	n, err := e.src.Read(p)
-	e.read += n
-	if e.read > e.limit {
+	e.total += n
+	if e.held() > e.limit {
 		e.refused = elementTooLongError(e.index, e.limit)
 		return n, e.refused
 	}
 	return n, err
+}
+
+// held is how much of the stream the current element may have taken: everything
+// handed over since it began. The decoder asks for more only once it has used
+// what it holds, so a read past this is a read for this element and not
+// read-ahead for the next one.
+func (e *elementReader) held() int {
+	return e.total - e.base
 }
 
 // readJSONL reads one JSON value per line into the "data" column. A blank line
