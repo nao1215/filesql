@@ -13,8 +13,7 @@ const (
 	KindUnrepresentable Kind = iota
 	// KindUnrepresentableAsText is one no text format can hold, because what
 	// makes it unrepresentable is where it is written rather than which
-	// delimiter the format uses. A caller pointing at another format has to
-	// point at a typed container rather than at CSV.
+	// delimiter the format uses.
 	KindUnrepresentableAsText
 	// KindEncode is a record that is not what the format needs.
 	KindEncode

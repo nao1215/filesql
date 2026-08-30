@@ -2241,9 +2241,8 @@ func loadedTableText(t *testing.T, path string) string {
 
 // TestDumpAndLoadKeepsTheFirstColumnName pins that a load, a dump and a second
 // load answer the same columns for a file that carries more than one byte-order
-// mark. Stripping one mark left the second in the first column's name, and
-// dumping wrote it back at the front of the file where the next load read it as
-// the encoding mark, so the same data named its first column two ways.
+// mark. It is the property a fuzzer over this round trip was checking when it
+// found that they did not.
 func TestDumpAndLoadKeepsTheFirstColumnName(t *testing.T) {
 	t.Parallel()
 
@@ -2303,9 +2302,9 @@ func columnNamesOf(t *testing.T, path string) []string {
 
 // TestDumpRefusesAMarkLedFirstColumn holds that a table whose first column name
 // begins with a byte-order mark is refused by the text formats rather than
-// written to a file that loads under a different name. Such a table is what a
-// file with a blank first line before a marked header loads as: the mark is not
-// at the front of the file there, so it is a character the file wrote.
+// written to a file that loads under a different name. The source below is how
+// such a table arrives: a blank line in front of a marked header puts the mark
+// somewhere other than the front of the file, where it is a character.
 func TestDumpRefusesAMarkLedFirstColumn(t *testing.T) {
 	t.Parallel()
 
@@ -2345,8 +2344,6 @@ func TestDumpRefusesAMarkLedFirstColumn(t *testing.T) {
 			}
 			require.NoError(t, err)
 
-			// A container carries the name rather than writing it at the front
-			// of the file, so it comes back as it was.
 			written := dirEntryNames(t, out)
 			require.Len(t, written, 1)
 			assert.Equal(t, []string{mark + "name", "age"},

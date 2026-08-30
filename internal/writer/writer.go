@@ -314,17 +314,12 @@ func checkLTSVValue(column, value string) error {
 const byteOrderMark = "\ufeff"
 
 // checkFirstColumn refuses a first column name that begins with a byte-order
-// mark, in the formats that write it at the front of the file.
+// mark, in the formats that write it at the front of the file, where a reader
+// takes it for the encoding mark and drops it. None of them can escape it:
+// there is no quoting in TSV or LTSV, and Go's CSV writer does not quote a
+// field for a mark.
 //
-// A reader takes a mark there for the encoding mark and drops it, so the file
-// comes back naming its first column differently -- the same failure the
-// whitespace rule in checkLTSVLabel exists to replace. None of the three text
-// formats can escape it: TSV and LTSV have no quoting, and Go's CSV writer does
-// not quote a field for a mark. XLSX and Parquet are not written here and keep
-// such a name, since it travels inside a container rather than at offset 0.
-//
-// Only the first name is at the front. A mark on any later one is written in
-// the middle of a line and reads back as it was.
+// Only the first name is at the front, so a mark on any later one is written.
 func checkFirstColumn(format Format, columns []string) error {
 	if format == FormatJSONL || len(columns) == 0 {
 		return nil

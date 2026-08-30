@@ -499,11 +499,8 @@ func TestTSVRecordWritesOneRecord(t *testing.T) {
 }
 
 // TestAMarkLedFirstColumnIsRefused holds that a first column name beginning
-// with U+FEFF is refused by the text formats. That name is written at the front
-// of the file, where a reader takes the mark for the encoding mark and drops
-// it, so the file comes back naming its first column differently -- the outcome
-// the refusals here exist to replace. A mark on any later name is written in
-// the middle of a line and reads back as it was.
+// with U+FEFF is refused by the text formats, and that a mark on any later name
+// is written.
 func TestAMarkLedFirstColumnIsRefused(t *testing.T) {
 	t.Parallel()
 

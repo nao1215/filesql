@@ -202,22 +202,12 @@ func Read(src io.Reader, format Format, opts Options, emit Emit) (Result, error)
 	}
 }
 
-// byteOrderMark is U+FEFF written as UTF-8, which is what a text source opens
-// with once its encoding has been decided.
+// byteOrderMark is U+FEFF written as UTF-8.
 var byteOrderMark = []byte{0xEF, 0xBB, 0xBF} //nolint:gochecknoglobals // constant-like
 
-// skipByteOrderMarks drops the byte-order marks a text source opens with.
-//
-// A mark belongs to the encoding rather than to the text, and the caller has
-// already read one to decide the encoding. A file can carry more than one: a
-// program that marks text already carrying a mark writes it twice, and a UTF-16
-// file whose first header cell opens with U+FEFF decodes into a second one.
-// Leaving those in place named the first column with a mark attached, which is
-// the failure stripping the first one exists to prevent -- a caller matching
-// that column by name found nothing, and the name printed the same as the one
-// they asked for. Writing such a table put the mark back at the front of the
-// file, where the next read took it for the encoding mark and dropped it, so
-// the same data named its first column two ways.
+// skipByteOrderMarks drops the byte-order marks a text source opens with, so
+// none of them reaches the first column's name. A file can carry more than one,
+// and the caller has read only the first, which is what told it the encoding.
 //
 // A source with no mark passes through byte for byte, and a mark anywhere but
 // the front is a character the source wrote.

@@ -93,10 +93,8 @@ func TestOpenHonorsUnicodeBOM(t *testing.T) {
 			want:    "alice",
 		},
 		{
-			// A program that marks text already carrying a mark writes two, and
-			// re-exporting a CSV a spreadsheet marked is how a file gets there.
-			// Stripping one left the second in the first column's name, which
-			// is the failure stripping exists to prevent.
+			// Two marks is what a program that marks already marked text
+			// writes, and what re-exporting a marked CSV produces.
 			name:    "two utf-8 BOMs leave the first column name plain",
 			file:    "bom2.csv",
 			content: append(append(append([]byte{}, utf8BOM...), utf8BOM...), []byte("name,age\nalice,30\n")...),
@@ -112,8 +110,7 @@ func TestOpenHonorsUnicodeBOM(t *testing.T) {
 		},
 		{
 			// The mark and the character are the same code point, so a UTF-16
-			// file whose first header cell opens with U+FEFF reaches the same
-			// place by another route.
+			// header opening with U+FEFF arrives here by another route.
 			name:    "utf-16 LE CSV opening with a second mark leaves the name plain",
 			file:    "utf16bom.csv",
 			content: utf16LE("\ufeffname,age\nalice,30\n"),
@@ -121,8 +118,6 @@ func TestOpenHonorsUnicodeBOM(t *testing.T) {
 			want:    "alice",
 		},
 		{
-			// A mark that is not at the front of the file is a character. It
-			// names the column it was written in, and a value keeps it.
 			name:    "a mark on a later column is part of that name",
 			file:    "latebom.csv",
 			content: append(append([]byte{}, utf8BOM...), []byte("name,\ufeffage\nalice,30\n")...),

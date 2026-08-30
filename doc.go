@@ -316,6 +316,15 @@
 // when SQLite is compiled. A wider file is refused with ErrUnsupportedFormat,
 // naming the limit and the width the file has.
 //
+// A byte-order mark at the front of a text file belongs to the encoding rather
+// than to the first column name, however many the file carries: a file marked
+// twice names its first column the same as a file marked once. A U+FEFF
+// anywhere else is a character the file wrote and is kept, in a later column's
+// name and inside a value alike. Dumping a table whose first column name begins
+// with one is refused with ErrUnsupportedFormat for CSV, TSV and LTSV, which
+// write that name where a reader takes it for the encoding mark; XLSX and
+// Parquet keep it.
+//
 // A header cell that is empty names nothing, so the column takes the name of its
 // position: "a,,c" loads as a, column_2 and c. The generated name is moved along
 // -- column_2_2, column_2_3 -- when the file wrote a column of that name itself.

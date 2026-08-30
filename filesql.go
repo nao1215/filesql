@@ -638,20 +638,18 @@ func writeTextData(w io.Writer, columns []string, rows *sql.Rows, text textDumpF
 // fine and the format is not, which is what ErrUnsupportedFormat means here,
 // and which format to ask for instead.
 //
-// That advice is always CSV, because CSV is the only text format here that can
-// hold what the others cannot: it quotes a field, so a tab, a line break and a
-// carriage return are ordinary characters inside one. LTSV used to answer "CSV
-// or TSV", which is wrong for all three of the characters it forbids in a
-// value, since TSV forbids the same three. CSV itself never reaches this, there
-// being no value it cannot write.
+// Which format to ask for follows from what could not be written. A value one
+// text format cannot hold is CSV's to hold, because CSV quotes a field, so a
+// tab, a line break and a carriage return are ordinary characters inside one.
+// LTSV used to answer "CSV or TSV", which is wrong for all three of the
+// characters it forbids in a value, since TSV forbids the same three. A value
+// whose place in the file is the problem is nobody's to hold as text, CSV
+// included, so that one asks for a typed container instead.
 func dumpFormatError(err error, text textDumpFormat) error {
 	var writeErr *writer.Error
 	if !errors.As(err, &writeErr) {
 		return err
 	}
-	// Where to go instead follows from what could not be written: a value one
-	// text format cannot hold is a value another can, and one whose place in the
-	// file is the problem has to leave text altogether.
 	var instead string
 	switch writeErr.Kind {
 	case writer.KindUnrepresentable:
