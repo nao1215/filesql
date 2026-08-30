@@ -457,7 +457,7 @@ func TestEdgeCaseUDFs(t *testing.T) {
 		{`SELECT GREATEST('10', '9')`, "10"},        // numeric strings compare numerically
 		{`SELECT GREATEST('b10', 'b9')`, "b9"},      // mixed content falls back to text order
 		{`SELECT FIND_IN_SET('', 'a,,b')`, "2"},     // an empty field is still a field
-		{`SELECT FIELD(1, '1', 'x')`, "1"},          // arguments are compared as text
+		{`SELECT FIELD(1, '1', 'x')`, "1"},          // a number among them makes it numeric
 		{`SELECT TRANSLATE('abc', '', 'x')`, "abc"}, // an empty from-set changes nothing
 		{`SELECT REVERSE('')`, ""},
 		{`SELECT ASCII('あ')`, "12354"},
@@ -2761,6 +2761,127 @@ func TestTheSharedRealSpellingIsUnchanged(t *testing.T) {
 
 			if got := formatFloatText(tt.value); got != tt.want {
 				t.Errorf("formatFloatText(%v) = %q, want %q", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFieldComparesTheWayMySQLDoes pins which comparison FIELD makes. MySQL
+// compares as strings when every argument it was given is one and numerically
+// otherwise, where a string that does not spell a number reads as zero, so
+// FIELD(0, 'x') answers 1 rather than 0. Comparing as text whatever the
+// arguments were gave a different order to ORDER BY FIELD(col, 'a', 'b') over a
+// numeric column, and 0 for a miss is what a genuine miss looks like, so
+// nothing said the answer had changed. Every want below was read from
+// mysql:8.4 rather than derived.
+func TestFieldComparesTheWayMySQLDoes(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		query string
+		want  string
+	}{
+		{query: `SELECT FIELD(0, 'x')`, want: "1"},
+		{query: `SELECT FIELD(0, 'x', 'y')`, want: "1"},
+		{query: `SELECT FIELD(1, '1', 'x')`, want: "1"},
+		{query: `SELECT FIELD('x', 0)`, want: "1"},
+		{query: `SELECT FIELD(0.0, 'x')`, want: "1"},
+		{query: `SELECT FIELD('a', 'a', 'b')`, want: "1"},
+		{query: `SELECT FIELD(2, 'x', '2')`, want: "2"},
+		{query: `SELECT FIELD('c', 'a', 'b')`, want: "0"},
+		{query: `SELECT FIELD(NULL, 'a')`, want: "0"},
+		{query: `SELECT FIELD('2', 2)`, want: "1"},
+		{query: `SELECT FIELD(2, '2')`, want: "1"},
+		{query: `SELECT FIELD('x', 'y')`, want: "0"},
+		{query: `SELECT FIELD('a', NULL, 'a')`, want: "2"},
+		{query: `SELECT FIELD('a', 'a', NULL)`, want: "1"},
+		{query: `SELECT FIELD(1, NULL, 1)`, want: "2"},
+		{query: `SELECT FIELD(1e308, '1e308')`, want: "1"},
+		{query: `SELECT FIELD(0, '')`, want: "1"},
+		{query: `SELECT FIELD('', 'x')`, want: "0"},
+		{query: `SELECT FIELD('', '')`, want: "1"},
+		{query: `SELECT FIELD(10, '9', '10')`, want: "2"},
+		{query: `SELECT FIELD('10', 9, 10)`, want: "2"},
+		{query: `SELECT FIELD(2, '2.0')`, want: "1"},
+		{query: `SELECT FIELD('abc', 'abc', 0)`, want: "1"},
+		{query: `SELECT FIELD(9223372036854775807, 9223372036854775806, 9223372036854775807)`, want: "2"},
+		{query: `SELECT FIELD('a', 1, 'a')`, want: "2"},
+		{query: `SELECT FIELD('', NULL, 'x')`, want: "0"},
+		{query: `SELECT FIELD('', 'x', NULL, '')`, want: "3"},
+		{query: `SELECT FIELD(1.0, 1)`, want: "1"},
+		{query: `SELECT FIELD(0, 'x', '0')`, want: "1"},
+		{query: `SELECT FIELD('a', 'A')`, want: "1"},
+		{query: `SELECT FIELD('a', 'b', 'A')`, want: "2"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.MySQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if !got.Valid {
+				t.Fatalf("%s = NULL, want %q", tt.query, tt.want)
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
+
+// TestFormatWritesTheDecimalMySQLWrites pins the number FORMAT groups. It is
+// the shortest decimal that reads back as the same double rather than the exact
+// value of the binary one, so FORMAT(1e100, 2) is 1 followed by 100 zeros
+// rather than the hundred digits the double actually holds, and a half goes to
+// the even neighbor, so FORMAT(2.5e0, 0) is 2 and FORMAT(3.5e0, 0) is 4. Every
+// want below was read from mysql:8.4 rather than derived.
+func TestFormatWritesTheDecimalMySQLWrites(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		query string
+		want  string
+	}{
+		{query: `SELECT FORMAT(1e100, 2)`, want: "10,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000,000.00"},
+		{query: `SELECT FORMAT(1e17, 0)`, want: "100,000,000,000,000,000"},
+		{query: `SELECT FORMAT(1e16 + 2, 0)`, want: "10,000,000,000,000,002"},
+		{query: `SELECT FORMAT(0.1e0 + 0.2e0, 17)`, want: "0.30000000000000004"},
+		{query: `SELECT FORMAT(0.1e0 + 0.2e0, 20)`, want: "0.30000000000000004000"},
+		{query: `SELECT FORMAT(123456789012345678e0, 0)`, want: "123,456,789,012,345,680"},
+		{query: `SELECT FORMAT(1e-20, 25)`, want: "0.0000000000000000000100000"},
+		{query: `SELECT FORMAT(1234567.891, 2)`, want: "1,234,567.89"},
+		{query: `SELECT FORMAT(0.5e0, 0)`, want: "0"},
+		{query: `SELECT FORMAT(1.5e0, 0)`, want: "2"},
+		{query: `SELECT FORMAT(2.5e0, 0)`, want: "2"},
+		{query: `SELECT FORMAT(3.5e0, 0)`, want: "4"},
+		{query: `SELECT FORMAT(-2.5e0, 0)`, want: "-2"},
+		{query: `SELECT FORMAT(-1.5e0, 0)`, want: "-2"},
+		{query: `SELECT FORMAT(0.125e0, 2)`, want: "0.12"},
+		{query: `SELECT FORMAT(0.375e0, 2)`, want: "0.38"},
+		{query: `SELECT FORMAT(2.675e0, 2)`, want: "2.68"},
+		{query: `SELECT FORMAT(1234.5e0, 0)`, want: "1,234"},
+		{query: `SELECT FORMAT(1.0000000000000002e0, 17)`, want: "1.00000000000000020"},
+		{query: `SELECT FORMAT(1e20 + 65536, 0)`, want: "100,000,000,000,000,070,000"},
+		{query: `SELECT FORMAT(1234.5678, 2)`, want: "1,234.57"},
+		{query: `SELECT FORMAT(-1234.5, 1)`, want: "-1,234.5"},
+		{query: `SELECT FORMAT(12.3, 4)`, want: "12.3000"},
+		{query: `SELECT FORMAT(999, 0)`, want: "999"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.MySQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if !got.Valid {
+				t.Fatalf("%s = NULL, want %q", tt.query, tt.want)
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
 			}
 		})
 	}

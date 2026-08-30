@@ -215,7 +215,7 @@ func registerAll() error {
 		"truncate":           {2, fnTruncate},
 		"reverse":            {1, mysqlTextArgs(fnReverse, 0)},
 		"find_in_set":        {2, mysqlTextArgs(fnFindInSet, 0, 1)},
-		"field":              {-1, mysqlTextAll(fnField)},
+		"field":              {-1, fnField},
 		"elt":                {-1, mysqlTextFrom(fnElt, 1)},
 		"monthname":          {1, fnMonthName},
 		"dayname":            {1, fnDayName},
@@ -2363,16 +2363,52 @@ func fnField(args []driver.Value) (driver.Value, error) {
 	if len(args) < 2 {
 		return nil, fmt.Errorf("dialect: FIELD expects at least 2 arguments, got %d", len(args))
 	}
-	needle, ok := toString(args[0])
-	if !ok {
+	if args[0] == nil {
 		return int64(0), nil
 	}
+	asText := fieldComparesAsText(args)
 	for i, a := range args[1:] {
-		if s, ok := toString(a); ok && s == needle {
+		if a != nil && fieldEqual(args[0], a, asText) {
 			return int64(i + 1), nil
 		}
 	}
 	return int64(0), nil
+}
+
+// fieldComparesAsText reports whether FIELD compares its arguments as strings,
+// which MySQL does when every argument it was given is one. With a number among
+// them the comparison is numeric, and a string that does not spell a number
+// reads as zero there, which is what makes FIELD(0, 'x') answer 1. A NULL never
+// matches and does not decide which comparison the others get.
+func fieldComparesAsText(args []driver.Value) bool {
+	for _, a := range args {
+		switch a.(type) {
+		case nil, string, []byte:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// fieldEqual is one comparison of a FIELD call, under whichever of the two
+// readings the arguments asked for. Two integers are compared as integers, so a
+// pair past what a float64 holds exactly does not match itself into the wrong
+// position.
+func fieldEqual(needle, candidate driver.Value, asText bool) bool {
+	if asText {
+		a, aok := toString(needle)
+		b, bok := toString(candidate)
+		return aok && bok && fnFoldCase(a) == fnFoldCase(b)
+	}
+	if a, ok := needle.(int64); ok {
+		if b, ok := candidate.(int64); ok {
+			return a == b
+		}
+	}
+	a, aok := mysqlNumericArgument(needle)
+	b, bok := mysqlNumericArgument(candidate)
+	return aok && bok && a == b
 }
 
 // fnElt implements dialects.MySQL ELT(n, a, b, ...): the nth argument, or NULL when n is
@@ -3758,7 +3794,7 @@ func fnMySQLFormat(args []driver.Value) (driver.Value, error) {
 	if math.IsNaN(x) || math.IsInf(x, 0) {
 		return nil, nil
 	}
-	text := strconv.FormatFloat(roundHalfAwayFromZero(x, d), 'f', int(d), 64)
+	text := mysqlFormatDecimal(x, int(d))
 	sign := ""
 	if strings.HasPrefix(text, "-") {
 		sign, text = "-", text[1:]
@@ -3788,6 +3824,83 @@ func formatGrouped(digits string, decimals int) string {
 
 // mysqlFormatMaxDecimals is the number of decimal places dialects.MySQL FORMAT keeps at
 // most, which is the scale of its DECIMAL type.
+// mysqlFormatDecimal is the number MySQL's FORMAT groups: the shortest decimal
+// that reads back as the same double, rounded to decimals places with a half
+// going to the even neighbor.
+//
+// Both halves of that are the engine's. Formatting the double itself printed
+// the exact value of the binary number, so FORMAT(1e100, 2) came out as
+// 10000000000000000159028911097599180468360808563945281389781327557747838772170381060813469985856815104.00
+// where MySQL prints 1 followed by 100 zeros: the shortest decimal is the one
+// the caller wrote, so what fills the places past it is zeros rather than the
+// double's own digits. And a half goes to the even neighbor for a
+// floating-point argument, the rule ROUND is on in MySQL and PostgreSQL, so
+// FORMAT(2.5e0, 0) is 2 and FORMAT(3.5e0, 0) is 4.
+//
+// The rounding runs on the digits rather than on the value, because scaling a
+// double by a power of ten is what loses the tie: 2.675 is a shade below itself
+// in binary, so 2.675 * 100 is 267.49999999999997 and rounds down, where MySQL
+// answers 2.68.
+func mysqlFormatDecimal(x float64, decimals int) string {
+	text := strconv.FormatFloat(x, 'f', -1, 64)
+	sign := ""
+	if strings.HasPrefix(text, "-") {
+		sign, text = "-", text[1:]
+	}
+	whole, fraction, _ := strings.Cut(text, ".")
+	if len(fraction) < decimals {
+		fraction += strings.Repeat("0", decimals-len(fraction))
+	}
+	digits := whole + fraction[:decimals]
+	if stepsUpHalfToEven(digits, fraction[decimals:]) {
+		digits = incrementDecimal(digits)
+	}
+	if len(digits) <= decimals {
+		digits = strings.Repeat("0", decimals+1-len(digits)) + digits
+	}
+	out := sign + digits[:len(digits)-decimals]
+	if decimals > 0 {
+		out += "." + digits[len(digits)-decimals:]
+	}
+	return out
+}
+
+// stepsUpHalfToEven reports whether the digits being cut off ask the kept ones
+// to be stepped up: more than a half does, and exactly a half does only when
+// the last kept digit is odd.
+func stepsUpHalfToEven(kept, cut string) bool {
+	if cut == "" || cut[0] < '5' {
+		return false
+	}
+	if cut[0] > '5' {
+		return true
+	}
+	for i := 1; i < len(cut); i++ {
+		if cut[i] != '0' {
+			return true
+		}
+	}
+	last := byte('0')
+	if kept != "" {
+		last = kept[len(kept)-1]
+	}
+	return (last-'0')%2 == 1
+}
+
+// incrementDecimal adds one to a run of decimal digits, growing it by a place
+// when every digit was a nine.
+func incrementDecimal(digits string) string {
+	out := []byte(digits)
+	for i := len(out) - 1; i >= 0; i-- {
+		if out[i] != '9' {
+			out[i]++
+			return string(out)
+		}
+		out[i] = '0'
+	}
+	return "1" + string(out)
+}
+
 const mysqlFormatMaxDecimals = 30
 
 // fnGoogleSQLFormat implements dialects.GoogleSQL FORMAT(format, ...). The verbs it
