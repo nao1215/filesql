@@ -13,6 +13,8 @@
 package reader
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 
@@ -184,19 +186,41 @@ type Result struct {
 func Read(src io.Reader, format Format, opts Options, emit Emit) (Result, error) {
 	switch format {
 	case FormatCSV, FormatTSV:
-		return readDelimited(src, format, opts, emit)
+		return readDelimited(skipByteOrderMarks(src), format, opts, emit)
 	case FormatLTSV:
-		return readLTSV(src, opts, emit)
+		return readLTSV(skipByteOrderMarks(src), opts, emit)
 	case FormatParquet:
 		return readParquet(src, opts, emit)
 	case FormatXLSX:
 		return readXLSX(src, opts, emit)
 	case FormatJSON:
-		return readJSON(src, opts, emit)
+		return readJSON(skipByteOrderMarks(src), opts, emit)
 	case FormatJSONL:
-		return readJSONL(src, opts, emit)
+		return readJSONL(skipByteOrderMarks(src), opts, emit)
 	default:
 		return Result{}, &Error{Kind: KindUnsupported, Msg: "unsupported file type"}
+	}
+}
+
+// byteOrderMark is U+FEFF written as UTF-8.
+var byteOrderMark = []byte{0xEF, 0xBB, 0xBF} //nolint:gochecknoglobals // constant-like
+
+// skipByteOrderMarks drops the byte-order marks a text source opens with, so
+// none of them reaches the first column's name. A file can carry more than one,
+// and the caller has read only the first, which is what told it the encoding.
+//
+// A source with no mark passes through byte for byte, and a mark anywhere but
+// the front is a character the source wrote.
+func skipByteOrderMarks(src io.Reader) io.Reader {
+	buffered := bufio.NewReader(src)
+	for {
+		mark, err := buffered.Peek(len(byteOrderMark))
+		if err != nil || !bytes.Equal(mark, byteOrderMark) {
+			return buffered
+		}
+		if _, err := buffered.Discard(len(byteOrderMark)); err != nil {
+			return buffered
+		}
 	}
 }
 

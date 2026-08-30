@@ -497,3 +497,51 @@ func TestTSVRecordWritesOneRecord(t *testing.T) {
 		}
 	})
 }
+
+// TestAMarkLedFirstColumnIsRefused holds that a first column name beginning
+// with U+FEFF is refused by the text formats, and that a mark on any later name
+// is written.
+func TestAMarkLedFirstColumnIsRefused(t *testing.T) {
+	t.Parallel()
+
+	const mark = "\ufeff"
+
+	for _, format := range []struct {
+		name string
+		f    Format
+	}{{"csv", FormatCSV}, {"tsv", FormatTSV}, {"ltsv", FormatLTSV}} {
+		t.Run(format.name, func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("the first name is refused", func(t *testing.T) {
+				t.Parallel()
+
+				var out bytes.Buffer
+				w := New(&out, format.f, Options{})
+
+				err := w.Header([]string{mark + "a", "b"})
+				var werr *Error
+				if !errors.As(err, &werr) {
+					t.Fatalf("Header = %v, want a *writer.Error", err)
+				}
+				if werr.Kind != KindUnrepresentableAsText {
+					t.Errorf("Kind = %v, want KindUnrepresentableAsText", werr.Kind)
+				}
+				if out.Len() != 0 {
+					t.Errorf("wrote %q before refusing the header", out.String())
+				}
+			})
+
+			t.Run("a later name is written", func(t *testing.T) {
+				t.Parallel()
+
+				var out bytes.Buffer
+				w := New(&out, format.f, Options{})
+
+				if err := w.Header([]string{"a", mark + "b"}); err != nil {
+					t.Fatalf("Header = %v, want the mark on a later name to be written", err)
+				}
+			})
+		})
+	}
+}

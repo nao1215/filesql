@@ -2238,3 +2238,129 @@ func loadedTableText(t *testing.T, path string) string {
 	require.NoError(t, rows.Err())
 	return out.String()
 }
+
+// TestDumpAndLoadKeepsTheFirstColumnName pins that a load, a dump and a second
+// load answer the same columns for a file that carries more than one byte-order
+// mark. It is the property a fuzzer over this round trip was checking when it
+// found that they did not.
+func TestDumpAndLoadKeepsTheFirstColumnName(t *testing.T) {
+	t.Parallel()
+
+	const mark = "\ufeff"
+	tests := []struct {
+		name    string
+		content string
+		want    []string
+	}{
+		{name: "one mark", content: mark + "a,b\n1,2\n", want: []string{"a", "b"}},
+		{name: "two marks", content: mark + mark + "a,b\n1,2\n", want: []string{"a", "b"}},
+		{name: "three marks", content: mark + mark + mark + "a,b\n1,2\n", want: []string{"a", "b"}},
+		{name: "two marks and a blank name", content: mark + mark + ",b\n1,2\n", want: []string{"column_1", "b"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			src := filepath.Join(dir, "t.csv")
+			require.NoError(t, os.WriteFile(src, []byte(tt.content), 0o600))
+
+			first := columnNamesOf(t, src)
+			assert.Equal(t, tt.want, first)
+
+			out := filepath.Join(dir, "out")
+			require.NoError(t, os.MkdirAll(out, 0o750))
+			db, err := OpenContext(context.Background(), src)
+			require.NoError(t, err)
+			require.NoError(t, DumpDatabase(db, out))
+			require.NoError(t, db.Close())
+
+			assert.Equal(t, first, columnNamesOf(t, filepath.Join(out, "t.csv")),
+				"the dump of %q names its columns differently than the file it came from", tt.content)
+		})
+	}
+}
+
+// columnNamesOf loads path and answers the column names of its one table.
+func columnNamesOf(t *testing.T, path string) []string {
+	t.Helper()
+
+	db, err := OpenContext(context.Background(), path)
+	require.NoError(t, err)
+	defer db.Close()
+
+	rows, err := db.QueryContext(context.Background(), `SELECT * FROM "t"`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	names, err := rows.Columns()
+	require.NoError(t, err)
+	require.NoError(t, rows.Err())
+	return names
+}
+
+// TestDumpRefusesAMarkLedFirstColumn holds that a table whose first column name
+// begins with a byte-order mark is refused by the text formats rather than
+// written to a file that loads under a different name. The source below is how
+// such a table arrives: a blank line in front of a marked header puts the mark
+// somewhere other than the front of the file, where it is a character.
+func TestDumpRefusesAMarkLedFirstColumn(t *testing.T) {
+	t.Parallel()
+
+	const mark = "\ufeff"
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "t.csv")
+	require.NoError(t, os.WriteFile(src, []byte("\n"+mark+"name,age\nalice,30\n"), 0o600))
+	require.Equal(t, []string{mark + "name", "age"}, columnNamesOf(t, src))
+
+	for _, format := range []struct {
+		name    string
+		format  OutputFormat
+		refused bool
+	}{
+		{name: "csv", format: OutputFormatCSV, refused: true},
+		{name: "tsv", format: OutputFormatTSV, refused: true},
+		{name: "ltsv", format: OutputFormatLTSV, refused: true},
+		{name: "xlsx", format: OutputFormatXLSX},
+		{name: "parquet", format: OutputFormatParquet},
+	} {
+		t.Run(format.name, func(t *testing.T) {
+			t.Parallel()
+
+			out := filepath.Join(dir, format.name)
+			require.NoError(t, os.MkdirAll(out, 0o750))
+
+			db, err := OpenContext(context.Background(), src)
+			require.NoError(t, err)
+			defer db.Close()
+
+			err = DumpDatabase(db, out, NewDumpOptions().WithFormat(format.format))
+			if format.refused {
+				require.ErrorIs(t, err, ErrUnsupportedFormat)
+				assert.Empty(t, dirEntryNames(t, out), "wrote a file it refused to write")
+				return
+			}
+			require.NoError(t, err)
+
+			written := dirEntryNames(t, out)
+			require.Len(t, written, 1)
+			assert.Equal(t, []string{mark + "name", "age"},
+				columnNamesOf(t, filepath.Join(out, written[0])))
+		})
+	}
+}
+
+// dirEntryNames is the names of the files in dir.
+func dirEntryNames(t *testing.T, dir string) []string {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
+}

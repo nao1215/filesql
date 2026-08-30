@@ -638,21 +638,31 @@ func writeTextData(w io.Writer, columns []string, rows *sql.Rows, text textDumpF
 // fine and the format is not, which is what ErrUnsupportedFormat means here,
 // and which format to ask for instead.
 //
-// That advice is always CSV, because CSV is the only text format here that can
-// hold what the others cannot: it quotes a field, so a tab, a line break and a
-// carriage return are ordinary characters inside one. LTSV used to answer "CSV
-// or TSV", which is wrong for all three of the characters it forbids in a
-// value, since TSV forbids the same three. CSV itself never reaches this, there
-// being no value it cannot write.
+// Which format to ask for follows from what could not be written. A value one
+// text format cannot hold is CSV's to hold, because CSV quotes a field, so a
+// tab, a line break and a carriage return are ordinary characters inside one.
+// LTSV used to answer "CSV or TSV", which is wrong for all three of the
+// characters it forbids in a value, since TSV forbids the same three. A value
+// whose place in the file is the problem is nobody's to hold as text, CSV
+// included, so that one asks for a typed container instead.
 func dumpFormatError(err error, text textDumpFormat) error {
 	var writeErr *writer.Error
-	if !errors.As(err, &writeErr) || writeErr.Kind != writer.KindUnrepresentable {
+	if !errors.As(err, &writeErr) {
+		return err
+	}
+	var instead string
+	switch writeErr.Kind {
+	case writer.KindUnrepresentable:
+		instead = "; dump this table as CSV instead"
+	case writer.KindUnrepresentableAsText:
+		instead = "; dump this table as XLSX or Parquet instead"
+	default:
 		return err
 	}
 	if text.sentinel != nil {
-		return fmt.Errorf("%w: %w: %s; dump this table as CSV instead", ErrUnsupportedFormat, text.sentinel, writeErr.Error())
+		return fmt.Errorf("%w: %w: %s%s", ErrUnsupportedFormat, text.sentinel, writeErr.Error(), instead)
 	}
-	return fmt.Errorf("%w: %w; dump this table as CSV instead", ErrUnsupportedFormat, err)
+	return fmt.Errorf("%w: %w%s", ErrUnsupportedFormat, err, instead)
 }
 
 // formatDumpValue renders one cell for a text-based dump.

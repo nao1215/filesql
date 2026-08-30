@@ -92,6 +92,45 @@ func TestOpenHonorsUnicodeBOM(t *testing.T) {
 			query:   "SELECT name FROM utf16 WHERE age = 30",
 			want:    "alice",
 		},
+		{
+			// Two marks is what a program that marks already marked text
+			// writes, and what re-exporting a marked CSV produces.
+			name:    "two utf-8 BOMs leave the first column name plain",
+			file:    "bom2.csv",
+			content: append(append(append([]byte{}, utf8BOM...), utf8BOM...), []byte("name,age\nalice,30\n")...),
+			query:   "SELECT name FROM bom2 WHERE age = 30",
+			want:    "alice",
+		},
+		{
+			name:    "three utf-8 BOMs leave the first column name plain",
+			file:    "bom3.csv",
+			content: append(append(append(append([]byte{}, utf8BOM...), utf8BOM...), utf8BOM...), []byte("name,age\nalice,30\n")...),
+			query:   "SELECT name FROM bom3 WHERE age = 30",
+			want:    "alice",
+		},
+		{
+			// The mark and the character are the same code point, so a UTF-16
+			// header opening with U+FEFF arrives here by another route.
+			name:    "utf-16 LE CSV opening with a second mark leaves the name plain",
+			file:    "utf16bom.csv",
+			content: utf16LE("\ufeffname,age\nalice,30\n"),
+			query:   "SELECT name FROM utf16bom WHERE age = 30",
+			want:    "alice",
+		},
+		{
+			name:    "a mark on a later column is part of that name",
+			file:    "latebom.csv",
+			content: append(append([]byte{}, utf8BOM...), []byte("name,\ufeffage\nalice,30\n")...),
+			query:   "SELECT name FROM latebom WHERE \"\ufeffage\" = 30",
+			want:    "alice",
+		},
+		{
+			name:    "a mark inside a value is part of that value",
+			file:    "valuebom.csv",
+			content: append(append([]byte{}, utf8BOM...), []byte("name,age\n\ufeffalice,30\n")...),
+			query:   "SELECT name FROM valuebom WHERE age = 30",
+			want:    "\ufeffalice",
+		},
 	}
 
 	for _, tt := range tests {
@@ -108,6 +147,28 @@ func TestOpenHonorsUnicodeBOM(t *testing.T) {
 			var got string
 			require.NoError(t, db.QueryRowContext(context.Background(), tt.query).Scan(&got))
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestAFileOfMarksHoldsNoTable pins that however many byte-order marks a file
+// opens with, what is left is what decides whether it holds a table. A file of
+// one mark and a newline was empty and a file of two was a table with a column
+// named by the second mark, which is the same file to anyone reading it.
+func TestAFileOfMarksHoldsNoTable(t *testing.T) {
+	t.Parallel()
+
+	const mark = "\ufeff"
+	for _, content := range []string{"\n", mark + "\n", mark + mark + "\n", mark + mark + mark + "\n"} {
+		t.Run(fmt.Sprintf("%q", content), func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "t.csv")
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+			_, err := OpenContext(context.Background(), path)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrEmptyData)
 		})
 	}
 }

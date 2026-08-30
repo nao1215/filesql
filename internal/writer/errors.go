@@ -7,8 +7,14 @@ package writer
 type Kind int
 
 const (
-	// KindUnrepresentable is a value or a label the format has no way to hold.
+	// KindUnrepresentable is a value or a label the format has no way to hold,
+	// where another text format can: a tab in a TSV value, a colon in an LTSV
+	// label.
 	KindUnrepresentable Kind = iota
+	// KindUnrepresentableAsText is one no text format can hold, because what
+	// makes it unrepresentable is where it is written rather than which
+	// delimiter the format uses.
+	KindUnrepresentableAsText
 	// KindEncode is a record that is not what the format needs.
 	KindEncode
 )
