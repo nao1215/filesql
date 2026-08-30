@@ -2620,3 +2620,148 @@ func TestAnEmptyRegularExpressionIsRefused(t *testing.T) {
 		t.Errorf("REGEXP_LIKE('abc', NULL) = %q, want NULL", got.String)
 	}
 }
+
+// TestMySQLWritesARealTheWayTheEngineDoes pins the spelling MySQL gives a REAL
+// in a string context, which is not the one the other dialects give it. Every
+// want below was read from a DOUBLE column on mysql:8.4 rather than derived,
+// because the rule turns on where the decimal point sits relative to the digits
+// and the two boundaries are not the ones a reader would guess: 1e15 is written
+// with an exponent and 1e14 plainly, 1e-15 is written plainly and 1e-16 with an
+// exponent, and a value whose plain spelling would run past 24 characters takes
+// the exponent whatever its size.
+//
+// The literal spelling MySQL gives a value written straight into a query
+// differs from this in a few places, because the literal carries the number of
+// decimals it was written with. A value here always arrives from a column, so
+// the column is the oracle.
+func TestMySQLWritesARealTheWayTheEngineDoes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		value float64
+		want  string
+	}{
+		{value: 0, want: "0"},
+		{value: 1, want: "1"},
+		{value: -1, want: "-1"},
+		{value: 0.1, want: "0.1"},
+		{value: 1.5, want: "1.5"},
+		{value: 100000, want: "100000"},
+		{value: 1234567.5, want: "1234567.5"},
+		{value: 3.14159265358979, want: "3.14159265358979"},
+		{value: 1e14, want: "100000000000000"},
+		{value: 1e15, want: "1e15"},
+		{value: 1e16, want: "1e16"},
+		{value: 1e17, want: "1e17"},
+		{value: 1e100, want: "1e100"},
+		{value: 1e308, want: "1e308"},
+		{value: -1e308, want: "-1e308"},
+		{value: 1.5e15, want: "1.5e15"},
+		{value: 2e15, want: "2e15"},
+		{value: 1.5e20, want: "1.5e20"},
+		{value: 999999999999999, want: "999999999999999"},
+		{value: 1000000000000001, want: "1.000000000000001e15"},
+		{value: 1234567890123456, want: "1.234567890123456e15"},
+		{value: 123456789012345.6, want: "123456789012345.6"},
+		{value: 1234567890123456.8, want: "1234567890123456.8"},
+		{value: 100000000000000.5, want: "100000000000000.5"},
+		{value: 12345678901.234568, want: "12345678901.234568"},
+		{value: 1e-4, want: "0.0001"},
+		{value: 1e-5, want: "0.00001"},
+		{value: 1e-6, want: "0.000001"},
+		{value: 1e-13, want: "0.0000000000001"},
+		{value: 1e-14, want: "0.00000000000001"},
+		{value: 1e-15, want: "0.000000000000001"},
+		{value: 1e-16, want: "1e-16"},
+		{value: 1e-17, want: "1e-17"},
+		{value: 1e-300, want: "1e-300"},
+		{value: 5e-324, want: "5e-324"},
+		{value: 1.5e-14, want: "0.000000000000015"},
+		{value: 1.5e-15, want: "0.0000000000000015"},
+		{value: 1.5e-16, want: "1.5e-16"},
+		{value: 1.5e-17, want: "1.5e-17"},
+		{value: 1.25e-15, want: "0.00000000000000125"},
+		{value: 9.8765432e-15, want: "0.0000000000000098765432"},
+		{value: 9.87654321e-15, want: "9.87654321e-15"},
+		{value: 9.8765432e-14, want: "0.000000000000098765432"},
+		{value: 1.23456789012e-14, want: "1.23456789012e-14"},
+		{value: 1.2345678901234e-14, want: "1.2345678901234e-14"},
+		{value: 1.234567890123456e-14, want: "1.234567890123456e-14"},
+		{value: 1.2345678901234567e-14, want: "1.2345678901234567e-14"},
+		{value: 1.2345678901234567e-16, want: "1.2345678901234568e-16"},
+		{value: 1.2345678901234567e-10, want: "1.2345678901234568e-10"},
+		{value: 1.2345678901234567e-7, want: "1.2345678901234566e-7"},
+		{value: 1.2345678901234567e-6, want: "0.0000012345678901234567"},
+		{value: 1.234567890123456e-6, want: "0.000001234567890123456"},
+		{value: 1.2345678901234567e-5, want: "0.000012345678901234568"},
+		{value: 0.00001234567890123, want: "0.00001234567890123"},
+		{value: 0.000123456789012345678, want: "0.00012345678901234567"},
+		{value: 0.12345678901234567, want: "0.12345678901234566"},
+		{value: 0.3333333333333333, want: "0.3333333333333333"},
+		{value: 0.30000000000000004, want: "0.30000000000000004"},
+		{value: 1.2345678901234567e15, want: "1234567890123456.8"},
+		{value: 1.2345678901234567e16, want: "1.2345678901234568e16"},
+		{value: 1.2345678901234567e17, want: "1.2345678901234566e17"},
+		{value: 1.7976931348623157e308, want: "1.7976931348623157e308"},
+		{value: 2.2250738585072014e-308, want: "2.2250738585072014e-308"},
+		{value: 1e-1, want: "0.1"},
+		{value: 1e5, want: "100000"},
+		{value: 0.0001, want: "0.0001"},
+		{value: 123456.789012345, want: "123456.789012345"},
+		{value: 1234567890.12345678, want: "1234567890.1234567"},
+		{value: 1.0000000000000002, want: "1.0000000000000002"},
+		{value: 1e-30, want: "1e-30"},
+		{value: 1e-40, want: "1e-40"},
+
+		// Neither infinity nor NaN is a value MySQL has a spelling for, and
+		// neither can be loaded from a file; they fall back to the shared
+		// conversion rather than to a spelling this package invented.
+		{value: math.Inf(1), want: "+Inf"},
+		{value: math.Inf(-1), want: "-Inf"},
+		{value: math.NaN(), want: "NaN"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			t.Parallel()
+
+			if got := formatFloatTextMySQL(tt.value); got != tt.want {
+				t.Errorf("formatFloatTextMySQL(%v) = %q, want %q", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestTheSharedRealSpellingIsUnchanged is the other half of the pair: the
+// conversion the PostgreSQL and GoogleSQL helpers go through keeps writing what
+// it wrote, so giving MySQL its own spelling did not move theirs. PostgreSQL
+// writes 1e+308 and 1e-05 where MySQL writes 1e308 and 0.00001, and postgres:17
+// was read for these.
+func TestTheSharedRealSpellingIsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		value float64
+		want  string
+	}{
+		{value: 1e308, want: "1e+308"},
+		{value: -1e308, want: "-1e+308"},
+		{value: 1e15, want: "1e+15"},
+		{value: 1e14, want: "100000000000000"},
+		{value: 1e-5, want: "1e-05"},
+		{value: 1e-15, want: "1e-15"},
+		{value: 1.5, want: "1.5"},
+		{value: 1234567.5, want: "1234567.5"},
+		{value: 0, want: "0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			t.Parallel()
+
+			if got := formatFloatText(tt.value); got != tt.want {
+				t.Errorf("formatFloatText(%v) = %q, want %q", tt.value, got, tt.want)
+			}
+		})
+	}
+}

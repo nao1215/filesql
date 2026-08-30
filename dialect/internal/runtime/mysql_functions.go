@@ -39,16 +39,16 @@ func mysqlScalarFunctions() map[string]scalarSpec {
 		// Spellings of functions this package already has. They are registered
 		// rather than rewritten so the result column keeps the name the query
 		// wrote, which a rewrite would have to put back as an alias.
-		"lcase":      {1, fnUnicodeLower},
-		"ucase":      {1, fnUnicodeUpper},
-		"mid":        {-1, fnMySQLSubstr},
+		"lcase":      {1, mysqlTextArgs(fnUnicodeLower, 0)},
+		"ucase":      {1, mysqlTextArgs(fnUnicodeUpper, 0)},
+		"mid":        {-1, mysqlTextArgs(fnMySQLSubstr, 0)},
 		"dayofmonth": {1, unaryDatePart(unitDay)},
 
 		// Strings and bytes.
-		"strcmp":       {2, fnMySQLStrcmp},
-		"bit_length":   {1, fnMySQLBitLength},
-		"mysql_insert": {4, fnMySQLInsert},
-		"to_base64":    {1, fnMySQLToBase64},
+		"strcmp":       {2, mysqlTextArgs(fnMySQLStrcmp, 0, 1)},
+		"bit_length":   {1, mysqlTextArgs(fnMySQLBitLength, 0)},
+		"mysql_insert": {4, mysqlTextArgs(fnMySQLInsert, 0, 3)},
+		"to_base64":    {1, mysqlTextArgs(fnMySQLToBase64, 0)},
 		"from_base64":  {1, fnMySQLFromBase64},
 
 		// Numbers. Each reads a string the way dialects.MySQL reads one in a numeric
@@ -74,19 +74,19 @@ func mysqlScalarFunctions() map[string]scalarSpec {
 
 		// Regular expressions. They fold case by default for the same reason
 		// the REGEXP operator does, and take the same match_type argument.
-		"regexp_like":   {-1, fnMySQLRegexpLike},
-		"regexp_substr": {-1, fnMySQLRegexpSubstr},
-		"regexp_instr":  {-1, fnMySQLRegexpInstr},
+		"regexp_like":   {-1, mysqlTextArgs(fnMySQLRegexpLike, 0, 1)},
+		"regexp_substr": {-1, mysqlTextArgs(fnMySQLRegexpSubstr, 0, 1)},
+		"regexp_instr":  {-1, mysqlTextArgs(fnMySQLRegexpInstr, 0, 1)},
 
 		// Digests. dialects.MySQL answers the hexadecimal text where BigQuery answers
 		// bytes, so if dialects.GoogleSQL ever gains these they will need their own.
-		"sha1": {1, fnMySQLSHA1},
-		"sha2": {2, fnMySQLSHA2},
+		"sha1": {1, mysqlTextArgs(fnMySQLSHA1, 0)},
+		"sha2": {2, mysqlTextArgs(fnMySQLSHA2, 0)},
 
 		// Addresses, for the log files this package exists to query.
 		// Sets and JSON.
-		"make_set":       {-1, fnMySQLMakeSet},
-		"export_set":     {-1, fnMySQLExportSet},
+		"make_set":       {-1, mysqlTextFrom(fnMySQLMakeSet, 1)},
+		"export_set":     {-1, mysqlTextArgs(fnMySQLExportSet, 1, 2, 3)},
 		"mysql_interval": {-1, fnMySQLIntervalPosition},
 		"json_length":    {-1, fnMySQLJSONLength},
 		"json_contains":  {-1, fnMySQLJSONContains},

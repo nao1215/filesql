@@ -186,37 +186,37 @@ func registerAll() error {
 		"mysql_week":       {-1, fnMySQLWeek},
 		"mysql_weekofyear": {1, fnMySQLWeekOfYear},
 		"mysql_yearweek":   {-1, fnMySQLYearWeek},
-		"locate":           {-1, fnLocate},
+		"locate":           {-1, mysqlTextArgs(fnLocate, 0, 1)},
 		"lpad":             {-1, fnLpad},
 		"rpad":             {-1, fnRpad},
 
 		// LPAD and RPAD answer a negative length and an empty pad differently
 		// per dialect, so each dialect's rewrite names its own helper; see
 		// padRules.
-		"mysql_lpad":      {-1, padFor(mysqlPadRules, true)},
-		"mysql_rpad":      {-1, padFor(mysqlPadRules, false)},
+		"mysql_lpad":      {-1, mysqlTextArgs(padFor(mysqlPadRules, true), 0, 2)},
+		"mysql_rpad":      {-1, mysqlTextArgs(padFor(mysqlPadRules, false), 0, 2)},
 		"postgresql_lpad": {-1, padFor(postgresqlPadRules, true)},
 		"postgresql_rpad": {-1, padFor(postgresqlPadRules, false)},
-		"substring_index": {3, fnSubstringIndex},
+		"substring_index": {3, mysqlTextArgs(fnSubstringIndex, 0, 1)},
 
 		// SUBSTRING at position 0 and at a negative position is answered
 		// differently by each dialect, and by dialects.SQLite's own substr(), so each
 		// dialect's rewrite names its own helper.
-		"mysql_substr":       {-1, fnMySQLSubstr},
+		"mysql_substr":       {-1, mysqlTextArgs(fnMySQLSubstr, 0)},
 		"postgresql_substr":  {-1, fnPostgreSQLSubstr},
 		"googlesql_substr":   {-1, fnGoogleSQLSubstr},
 		"dialect_round":      {2, fnDialectRound},
 		"dialect_round_even": {-1, fnDialectRoundEven},
-		"repeat":             {2, fnRepeat},
+		"repeat":             {2, mysqlTextArgs(fnRepeat, 0)},
 		"googlesql_repeat":   {2, fnGoogleSQLRepeat},
 		"googlesql_lpad":     {-1, padFor(googlesqlPadRules, true)},
 		"googlesql_rpad":     {-1, padFor(googlesqlPadRules, false)},
 		"space":              {1, fnSpace},
 		"truncate":           {2, fnTruncate},
-		"reverse":            {1, fnReverse},
-		"find_in_set":        {2, fnFindInSet},
-		"field":              {-1, fnField},
-		"elt":                {-1, fnElt},
+		"reverse":            {1, mysqlTextArgs(fnReverse, 0)},
+		"find_in_set":        {2, mysqlTextArgs(fnFindInSet, 0, 1)},
+		"field":              {-1, mysqlTextAll(fnField)},
+		"elt":                {-1, mysqlTextFrom(fnElt, 1)},
 		"monthname":          {1, fnMonthName},
 		"dayname":            {1, fnDayName},
 		"last_day":           {1, fnLastDay},
@@ -239,9 +239,9 @@ func registerAll() error {
 		// dialects.SQLite's affinity; see cast.go.
 		"mysql_cast":           {2, dialectCast(dialects.MySQL, false)},
 		"mysql_format":         {2, fnMySQLFormat},
-		"mysql_left":           {2, fnMySQLLeft},
-		"mysql_right":          {2, fnMySQLRight},
-		"mysql_regexp_replace": {-1, fnMySQLRegexpReplace},
+		"mysql_left":           {2, mysqlTextArgs(fnMySQLLeft, 0)},
+		"mysql_right":          {2, mysqlTextArgs(fnMySQLRight, 0)},
+		"mysql_regexp_replace": {-1, mysqlTextArgs(fnMySQLRegexpReplace, 0, 1)},
 		"mysql_divide":         {2, divideFloat(false)},
 		"mysql_mod":            {2, moduloDialect(false)},
 		"mysql_bit_xor":        {2, fnBitXor},
@@ -252,27 +252,27 @@ func registerAll() error {
 		"date_trunc_part":      {2, fnDateTruncPart},
 		"mysql_hex":            {1, fnMySQLHex},
 		"mysql_unhex":          {1, fnMySQLUnhex},
-		"mysql_soundex":        {1, fnMySQLSoundex},
+		"mysql_soundex":        {1, mysqlTextArgs(fnMySQLSoundex, 0)},
 		"googlesql_soundex":    {1, fnGoogleSQLSoundex},
-		"dialect_replace":      {3, fnDialectReplace},
+		"dialect_replace":      {3, mysqlTextAll(fnDialectReplace)},
 		"mysql_char":           {-1, fnMySQLChar},
 		"mysql_json_type":      {1, fnMySQLJSONType},
-		"mysql_quote":          {1, fnMySQLQuote},
-		"mysql_ascii":          {1, fnMySQLASCII},
+		"mysql_quote":          {1, mysqlTextArgs(fnMySQLQuote, 0)},
+		"mysql_ascii":          {1, mysqlTextArgs(fnMySQLASCII, 0)},
 		"mysql_shift_left":     {2, mysqlShift(true)},
 		"mysql_shift_right":    {2, mysqlShift(false)},
 		// dialects.MySQL matches a regular expression under the collation of its
 		// operands, and its default collation folds case; the shared regexp()
 		// is right for dialects.PostgreSQL and BigQuery, which do not.
-		"mysql_regexp":              {2, fnMySQLRegexp},
-		"like_sensitive":            {-1, likeCompare(true, true)},
-		"like_insensitive":          {-1, likeCompare(false, false)},
+		"mysql_regexp":              {2, mysqlTextArgs(fnMySQLRegexp, 0, 1)},
+		"like_sensitive":            {-1, mysqlTextArgs(likeCompare(true, true), 0, 1)},
+		"like_insensitive":          {-1, mysqlTextArgs(likeCompare(false, false), 0, 1)},
 		"similar_to":                {2, fnSimilarTo},
 		"similar_substring":         {3, fnSimilarSubstring},
-		"mysql_ord":                 {1, fnMySQLOrd},
-		"json_unquote":              {1, fnJSONUnquote},
+		"mysql_ord":                 {1, mysqlTextArgs(fnMySQLOrd, 0)},
+		"json_unquote":              {1, mysqlTextArgs(fnJSONUnquote, 0)},
 		"overlay":                   {-1, fnOverlay},
-		"strict_concat":             {-1, fnStrictConcat},
+		"strict_concat":             {-1, mysqlTextAll(fnStrictConcat)},
 		"div":                       {2, integerDivide},
 		"trunc_scale":               {2, truncateScale},
 		"width_bucket":              {4, widthBucket},
@@ -303,13 +303,13 @@ func registerAll() error {
 		"initcap":    {1, fnInitcap},
 		// dialects.SQLite's own upper() and lower() fold ASCII alone, which is not what
 		// any of these dialects does; their calls are rewritten onto these.
-		"unicode_upper":  {1, fnUnicodeUpper},
-		"unicode_lower":  {1, fnUnicodeLower},
+		"unicode_upper":  {1, mysqlTextArgs(fnUnicodeUpper, 0)},
+		"unicode_lower":  {1, mysqlTextArgs(fnUnicodeLower, 0)},
 		"strpos":         {2, fnStrpos},
 		"left":           {2, fnLeft},
 		"right":          {2, fnRight},
 		"regexp_replace": {-1, fnRegexpReplace},
-		"md5":            {1, fnMD5},
+		"md5":            {1, mysqlTextArgs(fnMD5, 0)},
 		"ascii":          {1, fnASCII},
 		"chr":            {1, fnChr},
 		"translate":      {3, fnTranslate},
@@ -4057,6 +4057,129 @@ func formatFloatText(f float64) string {
 		return strconv.FormatFloat(f, 'g', -1, 64)
 	}
 	return strconv.FormatFloat(f, 'f', -1, 64)
+}
+
+// formatFloatTextMySQL renders a REAL the way MySQL writes one in a string
+// context, which is not how formatFloatText writes it: MySQL has no plus sign
+// and no padding in an exponent, and it keeps the plain spelling further out in
+// both directions, so 1e308 is "1e308" rather than "1e+308", 1e-5 is "0.00001"
+// rather than "1e-05" and 1e15 is "1e15" rather than "1e+15". The digits are
+// the shortest that read back as the same double, which is what MySQL writes
+// too: 0.1 + 0.2 is "0.30000000000000004" there as it is here.
+//
+// The rule for choosing between the two spellings is MySQL's own, read off
+// mysql:8.4 rather than derived, and it turns on where the decimal point sits
+// relative to the digits rather than on the length alone. A value of 1e16 or
+// more whose digits all sit left of the point is written with an exponent,
+// which is why 1234567890123456 is "1.234567890123456e15" while
+// 1234567890123456.8, one digit longer and with a fraction, is written plainly.
+// A value below 1e-15 is written with an exponent whatever its length, and so
+// is one whose plain spelling would run past 24 characters.
+func formatFloatTextMySQL(f float64) string {
+	if math.IsInf(f, 0) || math.IsNaN(f) {
+		// Neither is a value SQLite can hold in a column loaded from a file,
+		// and MySQL has no spelling for them; the shared one applies.
+		return formatFloatText(f)
+	}
+	digits, point := shortestDecimal(f)
+	if point <= -15 || (point >= 16 && point >= len(digits)) || plainTextWidth(len(digits), point) > 24 {
+		return exponentTextMySQL(f, digits, point)
+	}
+	return strconv.FormatFloat(f, 'f', -1, 64)
+}
+
+// shortestDecimal is the shortest run of digits that reads back as f, and where
+// the decimal point sits in it: f is 0.<digits> times ten to the point.
+func shortestDecimal(f float64) (digits string, point int) {
+	written := strconv.FormatFloat(math.Abs(f), 'e', -1, 64)
+	mantissa, exponent, _ := strings.Cut(written, "e")
+	e, err := strconv.Atoi(exponent)
+	if err != nil {
+		// FormatFloat with 'e' always writes an exponent, so this cannot
+		// happen; answering the mantissa alone keeps a caller from a panic.
+		return strings.Replace(mantissa, ".", "", 1), 1
+	}
+	return strings.Replace(mantissa, ".", "", 1), e + 1
+}
+
+// plainTextWidth is how many characters the plain spelling of a value takes,
+// counting the "0." a value below one opens with and the point a fraction needs.
+func plainTextWidth(length, point int) int {
+	if point <= 0 {
+		return length - point + 2
+	}
+	if point < length {
+		return length + 1
+	}
+	return point
+}
+
+// exponentTextMySQL writes a value in MySQL's exponent spelling: one digit, the
+// rest after a point, then "e" and the exponent with a sign only when it is
+// negative.
+func exponentTextMySQL(f float64, digits string, point int) string {
+	var b strings.Builder
+	if math.Signbit(f) {
+		b.WriteByte('-')
+	}
+	b.WriteByte(digits[0])
+	if len(digits) > 1 {
+		b.WriteByte('.')
+		b.WriteString(digits[1:])
+	}
+	b.WriteByte('e')
+	b.WriteString(strconv.Itoa(point - 1))
+	return b.String()
+}
+
+// mysqlTextAll is mysqlTextArgs over every argument.
+func mysqlTextAll(fn scalarFn) scalarFn { return mysqlTextArgs(fn) }
+
+// mysqlTextFrom is mysqlTextArgs over every argument from first onward, for the
+// helpers whose text arguments are a tail of any length: ELT and MAKE_SET take
+// a number and then however many strings the call was written with.
+func mysqlTextFrom(fn scalarFn, first int) scalarFn {
+	return func(args []driver.Value) (driver.Value, error) {
+		for i := first; i < len(args); i++ {
+			if f, ok := args[i].(float64); ok {
+				args[i] = formatFloatTextMySQL(f)
+			}
+		}
+		return fn(args)
+	}
+}
+
+// mysqlTextArgs returns fn with the arguments at the given positions -- every
+// argument when none are named -- written the way MySQL writes a value a string
+// function reads. Only a REAL is rewritten: MySQL spells an integer, a string
+// and a blob the way this package already does.
+//
+// The conversion is here rather than inside each helper because the helpers are
+// shared. A string function reached under the PostgreSQL or the GoogleSQL
+// dialect with a REAL argument has no answer to diverge from -- PostgreSQL's
+// upper(), reverse() and md5() and BigQuery's CONCAT() all refuse a float
+// outright -- so the shared helper writes MySQL's spelling for all three rather
+// than carrying two, and only the calls a dialect defines are affected.
+func mysqlTextArgs(fn scalarFn, positions ...int) scalarFn {
+	return func(args []driver.Value) (driver.Value, error) {
+		if len(positions) == 0 {
+			for i, arg := range args {
+				if f, ok := arg.(float64); ok {
+					args[i] = formatFloatTextMySQL(f)
+				}
+			}
+			return fn(args)
+		}
+		for _, i := range positions {
+			if i < 0 || i >= len(args) {
+				continue
+			}
+			if f, ok := args[i].(float64); ok {
+				args[i] = formatFloatTextMySQL(f)
+			}
+		}
+		return fn(args)
+	}
 }
 
 func toStringTime(v driver.Value) (time.Time, bool) {

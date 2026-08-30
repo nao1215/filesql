@@ -623,3 +623,137 @@ func TestMySQLFunctionsAddedForTheEngine(t *testing.T) {
 		})
 	}
 }
+
+// TestMySQLStringFunctionsReadARealTheWayTheEngineDoes is the end of the same
+// thread as TestMySQLWritesARealTheWayTheEngineDoes: the spelling is only worth
+// having if the functions that write a value go through it. Every want below
+// was read from a DOUBLE column on mysql:8.4 rather than derived.
+//
+// The functions here are the ones this dialect answers with a helper of its
+// own. The five that still reach SQLite's built-ins -- TRIM, LTRIM, RTRIM,
+// LOCATE and CONCAT_WS, along with LENGTH and CHAR_LENGTH -- write SQLite's
+// spelling instead and are not in this table.
+func TestMySQLStringFunctionsReadARealTheWayTheEngineDoes(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		query string
+		want  string
+	}{
+		{query: `SELECT CONCAT(1e308, '')`, want: "1e308"},
+		{query: `SELECT CONCAT(-1e308, '')`, want: "-1e308"},
+		{query: `SELECT CONCAT(1e15, '')`, want: "1e15"},
+		{query: `SELECT CONCAT(1e14, '')`, want: "100000000000000"},
+		{query: `SELECT CONCAT(1e-5, '')`, want: "0.00001"},
+		{query: `SELECT CONCAT(1e-15, '')`, want: "0.000000000000001"},
+		{query: `SELECT CONCAT(1e-16, '')`, want: "1e-16"},
+		{query: `SELECT CONCAT(1234567.5, '')`, want: "1234567.5"},
+		{query: `SELECT CONCAT(0.1, '')`, want: "0.1"},
+		{query: `SELECT CONCAT(0, '')`, want: "0"},
+		{query: `SELECT QUOTE(1e308)`, want: "'1e308'"},
+		{query: `SELECT QUOTE(1e15)`, want: "'1e15'"},
+		{query: `SELECT QUOTE(1e-5)`, want: "'0.00001'"},
+		{query: `SELECT QUOTE(0)`, want: "'0'"},
+		{query: `SELECT REVERSE(1e308)`, want: "803e1"},
+		{query: `SELECT REVERSE(1e15)`, want: "51e1"},
+		{query: `SELECT REVERSE(1e-5)`, want: "10000.0"},
+		{query: `SELECT REVERSE(0)`, want: "0"},
+		{query: `SELECT TO_BASE64(1e308)`, want: "MWUzMDg="},
+		{query: `SELECT TO_BASE64(1e15)`, want: "MWUxNQ=="},
+		{query: `SELECT TO_BASE64(1e-5)`, want: "MC4wMDAwMQ=="},
+		{query: `SELECT TO_BASE64(0)`, want: "MA=="},
+		{query: `SELECT UPPER(1e308)`, want: "1E308"},
+		{query: `SELECT UPPER(1e15)`, want: "1E15"},
+		{query: `SELECT UPPER(1e-5)`, want: "0.00001"},
+		{query: `SELECT UPPER(0)`, want: "0"},
+		{query: `SELECT LPAD(1e308, 10, '-')`, want: "-----1e308"},
+		{query: `SELECT LPAD(1e15, 10, '-')`, want: "------1e15"},
+		{query: `SELECT LPAD(1e-5, 10, '-')`, want: "---0.00001"},
+		{query: `SELECT LPAD(0, 10, '-')`, want: "---------0"},
+		{query: `SELECT REPEAT(1e308, 2)`, want: "1e3081e308"},
+		{query: `SELECT REPEAT(1e15, 2)`, want: "1e151e15"},
+		{query: `SELECT REPEAT(1e-5, 2)`, want: "0.000010.00001"},
+		{query: `SELECT REPEAT(0, 2)`, want: "00"},
+		{query: `SELECT LEFT(1e308, 4)`, want: "1e30"},
+		{query: `SELECT LEFT(1e15, 4)`, want: "1e15"},
+		{query: `SELECT LEFT(1e-5, 4)`, want: "0.00"},
+		{query: `SELECT LEFT(0, 4)`, want: "0"},
+		{query: `SELECT SUBSTRING(1e308, 2, 3)`, want: "e30"},
+		{query: `SELECT SUBSTRING(1e15, 2, 3)`, want: "e15"},
+		{query: `SELECT SUBSTRING(1e-5, 2, 3)`, want: ".00"},
+		{query: `SELECT SUBSTRING(0, 2, 3)`, want: ""},
+		{query: `SELECT REPLACE(1e308, 'e', 'E')`, want: "1E308"},
+		{query: `SELECT REPLACE(1e15, 'e', 'E')`, want: "1E15"},
+		{query: `SELECT REPLACE(1e-5, 'e', 'E')`, want: "0.00001"},
+		{query: `SELECT REPLACE(0, 'e', 'E')`, want: "0"},
+		{query: `SELECT ELT(1, 1e308)`, want: "1e308"},
+		{query: `SELECT ELT(1, 1e15)`, want: "1e15"},
+		{query: `SELECT ELT(1, 1e-5)`, want: "0.00001"},
+		{query: `SELECT ELT(1, 0)`, want: "0"},
+		{query: `SELECT ASCII(1e308)`, want: "49"},
+		{query: `SELECT ASCII(1e15)`, want: "49"},
+		{query: `SELECT ASCII(1e-5)`, want: "48"},
+		{query: `SELECT ASCII(0)`, want: "48"},
+		{query: `SELECT SOUNDEX(1e308)`, want: "E000"},
+		{query: `SELECT SOUNDEX(1e15)`, want: "E000"},
+		{query: `SELECT SOUNDEX(1e-5)`, want: ""},
+		{query: `SELECT SOUNDEX(0)`, want: ""},
+		{query: `SELECT INSERT(1e308, 1, 1, 'Z')`, want: "Ze308"},
+		{query: `SELECT INSERT(1e15, 1, 1, 'Z')`, want: "Ze15"},
+		{query: `SELECT INSERT(1e-5, 1, 1, 'Z')`, want: "Z.00001"},
+		{query: `SELECT INSERT(0, 1, 1, 'Z')`, want: "Z"},
+		{query: `SELECT MD5(1e308)`, want: "a977d76bc2191e46d753b000b372e6ca"},
+		{query: `SELECT MD5(1e15)`, want: "28b015ce9d58b0bc683ebdf4fe4e2a10"},
+		{query: `SELECT MD5(1e-5)`, want: "4d349a3d6db9dac94357eff8a4273d7e"},
+		{query: `SELECT MD5(0)`, want: "cfcd208495d565ef66e7dff9f98764da"},
+		{query: `SELECT STRCMP(1e308, '1e15')`, want: "1"},
+		{query: `SELECT STRCMP(1e15, '1e15')`, want: "0"},
+		{query: `SELECT STRCMP(1e-5, '1e15')`, want: "-1"},
+		{query: `SELECT STRCMP(0, '1e15')`, want: "-1"},
+		{query: `SELECT BIT_LENGTH(1e308)`, want: "40"},
+		{query: `SELECT BIT_LENGTH(1e15)`, want: "32"},
+		{query: `SELECT BIT_LENGTH(1e-5)`, want: "56"},
+		{query: `SELECT BIT_LENGTH(0)`, want: "8"},
+		{query: `SELECT SUBSTRING_INDEX(1e308, 'e', 1)`, want: "1"},
+		{query: `SELECT SUBSTRING_INDEX(1e15, 'e', 1)`, want: "1"},
+		{query: `SELECT SUBSTRING_INDEX(1e-5, 'e', 1)`, want: "0.00001"},
+		{query: `SELECT SUBSTRING_INDEX(0, 'e', 1)`, want: "0"},
+		{query: `SELECT FIND_IN_SET(1e308, '1e15,0.1')`, want: "0"},
+		{query: `SELECT FIND_IN_SET(1e15, '1e15,0.1')`, want: "1"},
+		{query: `SELECT FIND_IN_SET(1e-5, '1e15,0.1')`, want: "0"},
+		{query: `SELECT FIND_IN_SET(0, '1e15,0.1')`, want: "0"},
+		{query: `SELECT REGEXP_LIKE(1e308, '^1e')`, want: "1"},
+		{query: `SELECT REGEXP_LIKE(1e15, '^1e')`, want: "1"},
+		{query: `SELECT REGEXP_LIKE(1e-5, '^1e')`, want: "0"},
+		{query: `SELECT REGEXP_LIKE(0, '^1e')`, want: "0"},
+
+		// LIKE and the three-argument LOCATE read the same value as text, and
+		// 1e-5 is the case that tells the two spellings apart: MySQL matches
+		// "0.00001" against '1e%' and does not, where the shared spelling
+		// would offer it "1e-05" and match.
+		{query: `SELECT IF(1e308 LIKE '1e%', 1, 0)`, want: "1"},
+		{query: `SELECT IF(1e15 LIKE '1e%', 1, 0)`, want: "1"},
+		{query: `SELECT IF(1e-5 LIKE '1e%', 1, 0)`, want: "0"},
+		{query: `SELECT IF(1e-16 LIKE '1e%', 1, 0)`, want: "1"},
+		{query: `SELECT LOCATE('e', 1e308, 2)`, want: "2"},
+		{query: `SELECT LOCATE('e', 1e15, 2)`, want: "2"},
+		{query: `SELECT LOCATE('e', 1e-5, 2)`, want: "0"},
+		{query: `SELECT LOCATE('e', 1e-16, 2)`, want: "2"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.MySQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if !got.Valid {
+				t.Fatalf("%s = NULL, want %q", tt.query, tt.want)
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
