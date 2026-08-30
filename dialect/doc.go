@@ -153,6 +153,14 @@
 // rewrite cannot reach every one of them, so under the MySQL dialect they
 // compare the way SQLite does and 'abc' = 'ABC' is false here and true in MySQL.
 //
+// How a REAL is written as text belongs to a dialect too, because every
+// non-integer SQLite holds is a double and the engines do not spell one the
+// same way. Under the MySQL dialect a string function writes MySQL's spelling,
+// so CONCAT of a column holding 1e308 with an empty string answers 1e308 where
+// PostgreSQL writes 1e+308. The calls left to SQLite's own built-ins are the
+// exception -- TRIM, LTRIM, RTRIM, LOCATE, INSTR, CONCAT_WS, LENGTH and
+// CHAR_LENGTH -- and they write SQLite's.
+//
 // Bit operations have a ceiling this package cannot lift. MySQL computes them on
 // an unsigned 64-bit value, and SQLite has no unsigned 64-bit integer to answer
 // with. The shifts are rewritten because their bits genuinely differ: SQLite's
