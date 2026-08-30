@@ -630,9 +630,8 @@ func TestMySQLFunctionsAddedForTheEngine(t *testing.T) {
 // was read from a DOUBLE column on mysql:8.4 rather than derived.
 //
 // The functions here are the ones this dialect answers with a helper of its
-// own. Those that still reach SQLite's built-ins -- TRIM, LTRIM, RTRIM, LOCATE,
-// INSTR, CONCAT_WS, LENGTH and CHAR_LENGTH -- write SQLite's spelling instead
-// and are not in this table.
+// own; the ones that stay on SQLite's built-ins are in
+// TestMySQLBuiltinsReadARealTheWayTheEngineDoes.
 func TestMySQLStringFunctionsReadARealTheWayTheEngineDoes(t *testing.T) {
 	// Not parallel: castDB touches the process-global driver registration.
 	db := castDB(t)
@@ -740,6 +739,74 @@ func TestMySQLStringFunctionsReadARealTheWayTheEngineDoes(t *testing.T) {
 		{query: `SELECT LOCATE('e', 1e15, 2)`, want: "2"},
 		{query: `SELECT LOCATE('e', 1e-5, 2)`, want: "0"},
 		{query: `SELECT LOCATE('e', 1e-16, 2)`, want: "2"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.MySQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if !got.Valid {
+				t.Fatalf("%s = NULL, want %q", tt.query, tt.want)
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
+
+// TestMySQLBuiltinsReadARealTheWayTheEngineDoes is the same property for the
+// calls this dialect leaves on a function SQLite answers itself, where the
+// argument is wrapped rather than the call renamed. SQLite converts a REAL to
+// text with its own rules, so before the wrap TRIM over a column holding 1e15
+// answered "1000000000000000.0" and LENGTH of it was 18. Every want below was
+// read from a DOUBLE column on mysql:8.4 rather than derived.
+func TestMySQLBuiltinsReadARealTheWayTheEngineDoes(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		query string
+		want  string
+	}{
+		{query: `SELECT TRIM(1e308)`, want: "1e308"},
+		{query: `SELECT TRIM(1e15)`, want: "1e15"},
+		{query: `SELECT TRIM(1e-5)`, want: "0.00001"},
+		{query: `SELECT TRIM(0)`, want: "0"},
+		{query: `SELECT LTRIM(1e308)`, want: "1e308"},
+		{query: `SELECT LTRIM(1e15)`, want: "1e15"},
+		{query: `SELECT LTRIM(1e-5)`, want: "0.00001"},
+		{query: `SELECT LTRIM(0)`, want: "0"},
+		{query: `SELECT RTRIM(1e308)`, want: "1e308"},
+		{query: `SELECT RTRIM(1e15)`, want: "1e15"},
+		{query: `SELECT RTRIM(1e-5)`, want: "0.00001"},
+		{query: `SELECT RTRIM(0)`, want: "0"},
+		{query: `SELECT LENGTH(1e308)`, want: "5"},
+		{query: `SELECT LENGTH(1e15)`, want: "4"},
+		{query: `SELECT LENGTH(1e-5)`, want: "7"},
+		{query: `SELECT LENGTH(0)`, want: "1"},
+		{query: `SELECT CHAR_LENGTH(1e308)`, want: "5"},
+		{query: `SELECT CHAR_LENGTH(1e15)`, want: "4"},
+		{query: `SELECT CHAR_LENGTH(1e-5)`, want: "7"},
+		{query: `SELECT CHAR_LENGTH(0)`, want: "1"},
+		{query: `SELECT OCTET_LENGTH(1e308)`, want: "5"},
+		{query: `SELECT OCTET_LENGTH(1e15)`, want: "4"},
+		{query: `SELECT OCTET_LENGTH(1e-5)`, want: "7"},
+		{query: `SELECT OCTET_LENGTH(0)`, want: "1"},
+		{query: `SELECT LOCATE('e', 1e308)`, want: "2"},
+		{query: `SELECT LOCATE('e', 1e15)`, want: "2"},
+		{query: `SELECT LOCATE('e', 1e-5)`, want: "0"},
+		{query: `SELECT LOCATE('e', 0)`, want: "0"},
+		{query: `SELECT INSTR(1e308, 'e')`, want: "2"},
+		{query: `SELECT INSTR(1e15, 'e')`, want: "2"},
+		{query: `SELECT INSTR(1e-5, 'e')`, want: "0"},
+		{query: `SELECT INSTR(0, 'e')`, want: "0"},
+		{query: `SELECT CONCAT_WS('-', 1e308, 1e308)`, want: "1e308-1e308"},
+		{query: `SELECT CONCAT_WS('-', 1e15, 1e15)`, want: "1e15-1e15"},
+		{query: `SELECT CONCAT_WS('-', 1e-5, 1e-5)`, want: "0.00001-0.00001"},
+		{query: `SELECT CONCAT_WS('-', 0, 0)`, want: "0-0"},
 	}
 
 	for _, tt := range tests {

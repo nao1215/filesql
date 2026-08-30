@@ -39,12 +39,26 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-x_concat", "SELECT CONCAT(a, b) FROM t", "SELECT strict_concat(a, b) AS \"CONCAT(a, b)\" FROM t"},
 		{"M-x_concat_one_arg", "SELECT CONCAT(a)", "SELECT strict_concat(a) AS \"CONCAT(a)\""},
 		{"M-x_concat_nested", "SELECT CONCAT(a, CONCAT(b, c))", "SELECT strict_concat(a, strict_concat(b, c)) AS \"CONCAT(a, CONCAT(b, c))\""},
-		{"M-x_concat_ws_untouched", "SELECT CONCAT_WS(',', a, b)", "SELECT CONCAT_WS(',', a, b)"},
-		{"M-x_group_concat_untouched", "SELECT GROUP_CONCAT(a) FROM t", "SELECT GROUP_CONCAT(a) FROM t"},
+		{"M-x_concat_ws_reads_its_arguments_as_text", "SELECT CONCAT_WS(',', a, b)", `SELECT CONCAT_WS(',', mysql_text(a), mysql_text(b)) AS "CONCAT_WS(',', a, b)"`},
+		{"M-x_group_concat_reads_its_argument_as_text", "SELECT GROUP_CONCAT(a) FROM t", `SELECT GROUP_CONCAT(mysql_text(a)) AS "GROUP_CONCAT(a)" FROM t`},
 
-		{"M-6_group_concat_separator", "SELECT GROUP_CONCAT(name SEPARATOR ', ') FROM t", "SELECT GROUP_CONCAT(name, ', ') AS \"GROUP_CONCAT(name SEPARATOR ', ')\" FROM t"},
-		{"M-6_group_concat_plain", "SELECT GROUP_CONCAT(name) FROM t", "SELECT GROUP_CONCAT(name) FROM t"},
-		{"M-6_group_concat_distinct", "SELECT GROUP_CONCAT(DISTINCT name) FROM t", "SELECT GROUP_CONCAT(DISTINCT name) FROM t"},
+		// The calls that stay on a function SQLite answers itself still have to
+		// read their argument the way MySQL does, because SQLite converts a
+		// REAL to text with its own rules. The wrap goes on the argument that
+		// could be a number; a string literal is already text and is left as
+		// the caller wrote it.
+		{"M-x_trim_reads_its_argument_as_text", "SELECT TRIM(a) FROM t", `SELECT TRIM(mysql_text(a)) AS "TRIM(a)" FROM t`},
+		{"M-x_ltrim_reads_its_argument_as_text", "SELECT LTRIM(a) FROM t", `SELECT LTRIM(mysql_text(a)) AS "LTRIM(a)" FROM t`},
+		{"M-x_rtrim_reads_its_argument_as_text", "SELECT RTRIM(a) FROM t", `SELECT RTRIM(mysql_text(a)) AS "RTRIM(a)" FROM t`},
+		{"M-x_length_reads_its_argument_as_text", "SELECT LENGTH(a) FROM t", `SELECT octet_length(mysql_text(a)) AS "LENGTH(a)" FROM t`},
+		{"M-x_char_length_reads_its_argument_as_text", "SELECT CHAR_LENGTH(a) FROM t", `SELECT length(mysql_text(a)) AS "CHAR_LENGTH(a)" FROM t`},
+		{"M-x_instr_reads_both_arguments_as_text", "SELECT INSTR(a, b) FROM t", `SELECT INSTR(mysql_text(a), mysql_text(b)) AS "INSTR(a, b)" FROM t`},
+		{"M-x_locate_reads_both_arguments_as_text", "SELECT LOCATE(a, b) FROM t", `SELECT INSTR(mysql_text(b), mysql_text(a)) AS "LOCATE(a, b)" FROM t`},
+		{"M-x_a_string_literal_is_left_alone", "SELECT INSTR(a, 'e') FROM t", `SELECT INSTR(mysql_text(a), 'e') AS "INSTR(a, 'e')" FROM t`},
+
+		{"M-6_group_concat_separator", "SELECT GROUP_CONCAT(name SEPARATOR ', ') FROM t", `SELECT GROUP_CONCAT(mysql_text(name), ', ') AS "GROUP_CONCAT(name SEPARATOR ', ')" FROM t`},
+		{"M-6_group_concat_plain", "SELECT GROUP_CONCAT(name) FROM t", `SELECT GROUP_CONCAT(mysql_text(name)) AS "GROUP_CONCAT(name)" FROM t`},
+		{"M-6_group_concat_distinct", "SELECT GROUP_CONCAT(DISTINCT name) FROM t", `SELECT GROUP_CONCAT(DISTINCT mysql_text(name)) AS "GROUP_CONCAT(DISTINCT name)" FROM t`},
 
 		{"M-7_div", "SELECT a DIV b FROM t", `SELECT CAST(mysql_divide(a, b) AS INTEGER) AS "a DIV b" FROM t`},
 		{"M-7_div_literals", "SELECT 7 DIV 2", "SELECT CAST(mysql_divide(7, 2) AS INTEGER) AS \"7 DIV 2\""},
@@ -78,7 +92,7 @@ func TestMySQLTranslate(t *testing.T) {
 		// own fold only ASCII.
 		{"M-25_upper", "SELECT UPPER(name) FROM t", `SELECT unicode_upper(name) AS "UPPER(name)" FROM t`},
 		{"M-25_lower", "SELECT LOWER(name) FROM t", `SELECT unicode_lower(name) AS "LOWER(name)" FROM t`},
-		{"M-25_upper_nested", "SELECT UPPER(TRIM(name))", `SELECT unicode_upper(TRIM(name)) AS "UPPER(TRIM(name))"`},
+		{"M-25_upper_nested", "SELECT UPPER(TRIM(name))", `SELECT unicode_upper(TRIM(mysql_text(name))) AS "UPPER(TRIM(name))"`},
 		{"M-24_mod_quoted_name_untouched", "SELECT `mod` FROM t", `SELECT "mod" FROM t`},
 		{"M-24_mod_alias_untouched", "SELECT a AS `mod` FROM t", `SELECT a AS "mod" FROM t`},
 		{"M-24_mod_parenthesized_right", "SELECT a MOD (b + 1) FROM t", `SELECT mysql_mod(a, (b + 1)) AS "a MOD (b + 1)" FROM t`},

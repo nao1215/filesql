@@ -55,6 +55,10 @@ func BenchmarkDialectFunctions(b *testing.B) {
 		{"mysql_left", MySQL, `SELECT LEFT('abcdef', 3)`},
 		{"mysql_format", MySQL, `SELECT FORMAT(1234.5678, 2)`},
 		{"mysql_regexp_replace", MySQL, `SELECT REGEXP_REPLACE('aaa', 'a', 'X', 2)`},
+		// The MySQL calls that stay on a SQLite built-in carry a conversion on
+		// the argument, so the cost of that wrap is per row.
+		{"mysql_trim_real", MySQL, `SELECT TRIM(1e15)`},
+		{"mysql_length_real", MySQL, `SELECT LENGTH(1e15)`},
 		{"postgresql_to_hex", PostgreSQL, `SELECT to_hex(255)`},
 		{"postgresql_regexp_replace", PostgreSQL, `SELECT regexp_replace('aaa', 'a', 'X')`},
 		{"googlesql_format", GoogleSQL, `SELECT FORMAT('%s=%t', 'a', 'b')`},

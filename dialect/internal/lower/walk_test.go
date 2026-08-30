@@ -478,7 +478,7 @@ func TestTheRemainingLoweringBranches(t *testing.T) {
 		{dialect.PostgreSQL, "SELECT TRIM(TRAILING 'x' FROM a) FROM t",
 			`SELECT rtrim(a, 'x') AS "TRIM(TRAILING 'x' FROM a)" FROM t`},
 		{dialect.MySQL, "SELECT TRIM(BOTH 'x' FROM a) FROM t",
-			`SELECT trim(a, 'x') AS "TRIM(BOTH 'x' FROM a)" FROM t`},
+			`SELECT trim(mysql_text(a), 'x') AS "TRIM(BOTH 'x' FROM a)" FROM t`},
 		{dialect.PostgreSQL, "SELECT sum(a) OVER (ORDER BY b ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) FROM t",
 			`SELECT sum(a) OVER (ORDER BY b NULLS LAST ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) ` +
 				`AS "sum(a) OVER (ORDER BY b ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)" FROM t`},

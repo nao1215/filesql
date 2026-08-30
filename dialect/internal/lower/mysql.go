@@ -183,7 +183,7 @@ func (r *mysqlRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 	case "TIMESTAMPDIFF":
 		return timestampDiff(call)
 	case "GROUP_CONCAT":
-		return groupConcat(call)
+		return groupConcat(mysqlTextArgs(call))
 	case "TIMEDIFF":
 		// SQLite has its own timediff() since 3.43, which answers in SQLite's
 		// interval spelling; MySQL's answers a TIME.
@@ -223,9 +223,13 @@ func (r *mysqlRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 	case fnNameMod:
 		return rename(call, "mysql_mod"), nil
 	case "LENGTH", "OCTET_LENGTH":
-		return rename(call, "octet_length"), nil
+		return rename(mysqlTextArgs(call, 0), "octet_length"), nil
 	case fnNameCharLength, fnNameCharLen:
-		return rename(call, "length"), nil
+		return rename(mysqlTextArgs(call, 0), "length"), nil
+	case "CONCAT_WS", "LTRIM", "RTRIM":
+		// SQLite spells these the same way and answers the same thing, so only
+		// the conversion in front of them differs.
+		return mysqlTextArgs(call), nil
 	case "LOG":
 		if len(call.Args) == 1 {
 			return rename(call, "ln"), nil
@@ -288,19 +292,53 @@ func mysqlMathHelper(name string) string {
 func mysqlPosition(call *ast.FuncCall) (ast.Expr, error) {
 	switch callName(call) {
 	case fnNamePosition:
-		return position(call)
+		return position(mysqlTextArgs(call, 0, 1))
 	case "LOCATE":
 		// LOCATE writes the needle first, which is the order POSITION writes;
 		// with a third argument it starts from a position SQLite's instr has no
 		// room for.
 		if len(call.Args) == 2 {
 			call.Args[0], call.Args[1] = call.Args[1], call.Args[0]
-			return rename(call, "INSTR"), nil
+			return rename(mysqlTextArgs(call, 0, 1), "INSTR"), nil
 		}
+		// The three-argument form reaches this package's own locate(), which
+		// reads its arguments the way MySQL does already.
 		return rename(call, "locate"), nil
 	default:
-		return call, nil
+		// INSTR stays on SQLite's own, which reads a REAL its own way.
+		return mysqlTextArgs(call, 0, 1), nil
 	}
+}
+
+// mysqlText wraps an argument this dialect reads as text in the conversion that
+// writes a REAL the way MySQL writes one. It is needed only where the call
+// stays on a function SQLite answers itself: SQLite converts a REAL to text
+// with its own rules, so trim() over a column holding 1e15 would answer
+// "1000000000000000.0" where MySQL answers "1e15". A string literal is already
+// text and is left alone, so the translated SQL carries the call only where the
+// value could be a number.
+func mysqlText(e ast.Expr) ast.Expr {
+	if _, ok := literalText(e); ok {
+		return e
+	}
+	return helper("mysql_text", e.At(), e)
+}
+
+// mysqlTextArgs wraps the arguments at the given positions, or every argument
+// when none are named.
+func mysqlTextArgs(call *ast.FuncCall, positions ...int) *ast.FuncCall {
+	if len(positions) == 0 {
+		for i, arg := range call.Args {
+			call.Args[i] = mysqlText(arg)
+		}
+		return call
+	}
+	for _, i := range positions {
+		if i >= 0 && i < len(call.Args) {
+			call.Args[i] = mysqlText(call.Args[i])
+		}
+	}
+	return call
 }
 
 // mysqlTrim reads the SQL-standard TRIM into the SQLite function that trims the
@@ -308,13 +346,13 @@ func mysqlPosition(call *ast.FuncCall) (ast.Expr, error) {
 func mysqlTrim(call *ast.FuncCall) (ast.Expr, error) {
 	switch call.Syntax {
 	case ast.CallTrimLeading:
-		return rename(call, "ltrim"), nil
+		return rename(mysqlTextArgs(call), "ltrim"), nil
 	case ast.CallTrimTrailing:
-		return rename(call, "rtrim"), nil
+		return rename(mysqlTextArgs(call), "rtrim"), nil
 	case ast.CallTrimBoth:
-		return rename(call, "trim"), nil
+		return rename(mysqlTextArgs(call), "trim"), nil
 	default:
-		return call, nil
+		return mysqlTextArgs(call), nil
 	}
 }
 
