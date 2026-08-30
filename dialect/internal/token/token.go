@@ -59,6 +59,8 @@ type Token struct {
 // placeholders, /* */ and -- comments) is common to every dialect.
 type Config struct {
 	IdentBacktick     bool // ` opens a quoted identifier (MySQL, GoogleSQL)
+	IdentBacktickEsc  bool // a backslash escapes inside a backtick-quoted identifier (GoogleSQL)
+	DashNeedsBlank    bool // -- opens a line comment only when a blank follows it (MySQL)
 	IdentDoubleQuote  bool // " opens a quoted identifier (PostgreSQL)
 	StringDoubleQuote bool // " opens a string literal (MySQL, GoogleSQL)
 	HashComment       bool // # starts a line comment (MySQL, GoogleSQL)
@@ -93,6 +95,7 @@ func ConfigFor(d dialects.Dialect) (Config, bool) {
 			StringDoubleQuote: true,
 			HashComment:       true,
 			BackslashEscapes:  true,
+			DashNeedsBlank:    true,
 		}, true
 	case dialects.PostgreSQL:
 		return Config{
@@ -105,6 +108,7 @@ func ConfigFor(d dialects.Dialect) (Config, bool) {
 	case dialects.GoogleSQL:
 		return Config{
 			IdentBacktick:     true,
+			IdentBacktickEsc:  true,
 			StringDoubleQuote: true,
 			HashComment:       true,
 			BackslashEscapes:  true,
@@ -116,6 +120,32 @@ func ConfigFor(d dialects.Dialect) (Config, bool) {
 	default:
 		return Config{}, false
 	}
+}
+
+// identEscapes is how a backslash behaves inside a backtick-quoted identifier.
+// BigQuery lists the string escapes among what one accepts, an escaped backtick
+// with them, so a name written with one closed early when they were not read.
+// MySQL has no escapes there: a backtick is doubled and a backslash is a
+// backslash.
+func (cfg Config) identEscapes() escapeRules {
+	if !cfg.IdentBacktickEsc {
+		return escapeRules{}
+	}
+	return escapeRules{backslash: true, numeric: cfg.NumericEscapes}
+}
+
+// dashOpensComment reports whether the double dash at s[i] opens a line
+// comment. It does in every dialect but MySQL, which asks for a blank or a
+// control character after the dashes: "SELECT 1--1" there is one minus negative
+// one and not a statement with its tail commented out. Reading it as a comment
+// dropped the rest of the line and answered the left operand, which is the kind
+// of answer that reads as correct.
+func dashOpensComment(s string, i int, cfg Config) bool {
+	if !cfg.DashNeedsBlank || i+2 >= len(s) {
+		return true
+	}
+	c := s[i+2]
+	return c <= ' ' || c == 0x7f
 }
 
 // stringEscapes is how a backslash behaves inside an ordinary quoted string of
@@ -143,7 +173,7 @@ func Lex(query string, cfg Config) ([]Token, error) {
 			tokens = append(tokens, Token{Kind: Whitespace, Text: query[i:j], Offset: start})
 			i = j
 
-		case c == '-' && next(query, i) == '-':
+		case c == '-' && next(query, i) == '-' && dashOpensComment(query, i, cfg):
 			j := i + 2
 			for j < len(query) && query[j] != '\n' {
 				j++
@@ -200,7 +230,7 @@ func Lex(query string, cfg Config) ([]Token, error) {
 			i = ni
 
 		case c == '`' && cfg.IdentBacktick:
-			content, ni, ok := scanQuoted(query, i, '`', escapeRules{})
+			content, ni, ok := scanQuoted(query, i, '`', cfg.identEscapes())
 			if !ok {
 				return nil, lexError(query, start, "unterminated quoted identifier")
 			}
