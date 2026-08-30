@@ -56,6 +56,14 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-x_locate_reads_both_arguments_as_text", "SELECT LOCATE(a, b) FROM t", `SELECT INSTR(mysql_text(b), mysql_text(a)) AS "LOCATE(a, b)" FROM t`},
 		{"M-x_a_string_literal_is_left_alone", "SELECT INSTR(a, 'e') FROM t", `SELECT INSTR(mysql_text(a), 'e') AS "INSTR(a, 'e')" FROM t`},
 
+		// A double dash opens a comment in MySQL only when a blank follows it,
+		// so the tail of the line is arithmetic rather than something dropped.
+		// The values were read from mysql:8.4.
+		{"M-x_double_dash_without_a_blank_is_arithmetic", "SELECT 1--1", `SELECT 1 - -1 AS "1--1"`},
+		{"M-x_double_dash_with_a_tail", "SELECT 1--1+5", `SELECT 1 - -1 + 5 AS "1--1+5"`},
+		{"M-x_three_dashes", "SELECT 5---3", `SELECT 5 - - -3 AS "5---3"`},
+		{"M-x_double_dash_with_a_blank_is_a_comment", "SELECT 1-- 1", "SELECT 1"},
+
 		{"M-6_group_concat_separator", "SELECT GROUP_CONCAT(name SEPARATOR ', ') FROM t", `SELECT GROUP_CONCAT(mysql_text(name), ', ') AS "GROUP_CONCAT(name SEPARATOR ', ')" FROM t`},
 		{"M-6_group_concat_plain", "SELECT GROUP_CONCAT(name) FROM t", `SELECT GROUP_CONCAT(mysql_text(name)) AS "GROUP_CONCAT(name)" FROM t`},
 		{"M-6_group_concat_distinct", "SELECT GROUP_CONCAT(DISTINCT name) FROM t", `SELECT GROUP_CONCAT(DISTINCT mysql_text(name)) AS "GROUP_CONCAT(DISTINCT name)" FROM t`},

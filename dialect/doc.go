@@ -178,7 +178,13 @@
 // names a character by its number. Reading a literal by the wrong dialect's
 // rules is the worst kind of failure this package can have, because the
 // translation succeeds and the query answers from a value the caller never
-// wrote, so each of those rules is configured rather than assumed.
+// wrote, so each of those rules is configured rather than assumed. Two of them
+// are easy to read as shared and are not: MySQL opens a line comment on a
+// double dash only when a blank or a control character follows it, so SELECT
+// 1--1 there is one minus negative one rather than a statement with its tail
+// dropped, and a backtick-quoted identifier takes the string escape sequences
+// in GoogleSQL, an escaped backtick among them, where MySQL has none and
+// doubles the backtick instead.
 //
 // GoogleSQL needs two kinds of name. Some are BigQuery
 // functions SQLite has nothing like -- CONTAINS_SUBSTR, EDIT_DISTANCE,
