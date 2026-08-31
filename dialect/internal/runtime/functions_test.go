@@ -2333,10 +2333,23 @@ func TestClockFunctionsReadUTC(t *testing.T) {
 func TestClockSharesOneReadingWithinItsWindow(t *testing.T) {
 	t.Parallel()
 
-	first := clockUTC()
-	if again := clockUTC(); !again.Equal(first) {
-		t.Errorf("two readings inside the window differ: %v and %v", first, again)
+	// Two calls share a reading only when they fall inside one window, and the
+	// window is a millisecond: a pair that straddles the boundary is the
+	// mechanism working, not failing, so the pair is taken again rather than
+	// reported. A run where every attempt straddles it is what a broken window
+	// would look like.
+	shared := false
+	for range 100 {
+		if first := clockUTC(); clockUTC().Equal(first) {
+			shared = true
+			break
+		}
 	}
+	if !shared {
+		t.Error("no two readings in a hundred attempts shared a window")
+	}
+
+	first := clockUTC()
 
 	time.Sleep(20 * statementClockWindow)
 	later := clockUTC()
