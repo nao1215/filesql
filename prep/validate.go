@@ -2,6 +2,7 @@
 package prep
 
 import (
+	"cmp"
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/json"
@@ -512,6 +513,95 @@ func (v *alphanumericUnicodeValidator) Name() string {
 // compare the numeric value and len means the value equals the parameter.
 // parseStructType specializes each validator once the field's kind is known.
 
+// number is a number a cell or a tag parameter spells: the double it names,
+// and the integer it names when it names one exactly. Both are kept because a
+// double cannot tell 9007199254740993 from 9007199254740992 -- comparing two
+// int64 values that far out through doubles answers "equal" for two numbers
+// that are not, and spelling a threshold back through one quotes a number the
+// caller did not write. One type answers for both places this package compares
+// numbers: the comparison tags here and the cross-field comparisons in
+// cross_field.go.
+type number struct {
+	// text is the number as it was written, which is how a message quotes a
+	// tag parameter back: normalizing it would answer eq=+001 with "1".
+	text    string
+	float   float64
+	integer int64
+	isInt   bool
+}
+
+// parseNumber reads the number a cell or a tag parameter spells, and reports
+// whether it spells one at all.
+func parseNumber(text string) (number, bool) {
+	if spellsInteger(text) {
+		if integer, err := strconv.ParseInt(text, 10, 64); err == nil {
+			return number{text: text, float: float64(integer), integer: integer, isInt: true}, true
+		}
+	}
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return number{}, false
+	}
+	return number{text: text, float: f}, true
+}
+
+// spellsInteger reports whether the text is an optionally signed run of
+// decimal digits, which is the only shape ParseInt reads. Asking first keeps a
+// cell that is not a number from paying for a failed parse: the error a failed
+// parse returns escapes to the heap, and a validation chain runs on every cell
+// of every row.
+func spellsInteger(text string) bool {
+	digits := text
+	if len(digits) > 0 && (digits[0] == '+' || digits[0] == '-') {
+		digits = digits[1:]
+	}
+	if digits == "" {
+		return false
+	}
+	for i := range len(digits) {
+		if digits[i] < '0' || digits[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// integerNumber is the number an int names, for the tags that carry a count
+// rather than a parameter read from text.
+func integerNumber(integer int64) number {
+	return number{
+		text:    strconv.FormatInt(integer, 10),
+		float:   float64(integer),
+		integer: integer,
+		isInt:   true,
+	}
+}
+
+// compare orders two numbers: negative when n sorts first, zero when the two
+// are the same, positive when n sorts last. Two integers are ordered as
+// integers, whatever their size; anything else goes through the doubles.
+func (n number) compare(other number) int {
+	if n.isInt && other.isInt {
+		return cmp.Compare(n.integer, other.integer)
+	}
+	return cmp.Compare(n.float, other.float)
+}
+
+// compareText orders a number against the number a cell spells, and reports
+// whether the cell spells one.
+func (n number) compareText(text string) (int, bool) {
+	cell, ok := parseNumber(text)
+	if !ok {
+		return 0, false
+	}
+	return cell.compare(n), true
+}
+
+// String spells the number the way it was written.
+func (n number) String() string {
+	return n.text
+}
+
 // pendingEqualityValidator carries an eq or ne tag whose meaning depends on
 // the field it lands on: a string field compares the string itself, any other
 // field compares the number, so the parameter cannot be judged before the
@@ -582,22 +672,22 @@ func (v *textNotEqualValidator) Name() string {
 
 // equalValidator validates that a value equals the threshold
 type equalValidator struct {
-	threshold float64
+	threshold number
 }
 
 // newEqualValidator creates a new equal validator
-func newEqualValidator(threshold float64) *equalValidator {
+func newEqualValidator(threshold number) *equalValidator {
 	return &equalValidator{threshold: threshold}
 }
 
 // Validate checks if the value equals the threshold
 func (v *equalValidator) Validate(value string) string {
-	f, err := strconv.ParseFloat(value, 64)
-	if err != nil {
+	order, ok := v.threshold.compareText(value)
+	if !ok {
 		return errMsgValidNumber
 	}
-	if f != v.threshold {
-		return "value must equal " + strconv.FormatFloat(v.threshold, 'f', -1, 64)
+	if order != 0 {
+		return "value must equal " + v.threshold.String()
 	}
 	return ""
 }
@@ -609,22 +699,22 @@ func (v *equalValidator) Name() string {
 
 // notEqualValidator validates that a value does not equal the threshold
 type notEqualValidator struct {
-	threshold float64
+	threshold number
 }
 
 // newNotEqualValidator creates a new not equal validator
-func newNotEqualValidator(threshold float64) *notEqualValidator {
+func newNotEqualValidator(threshold number) *notEqualValidator {
 	return &notEqualValidator{threshold: threshold}
 }
 
 // Validate checks if the value does not equal the threshold
 func (v *notEqualValidator) Validate(value string) string {
-	f, err := strconv.ParseFloat(value, 64)
-	if err != nil {
+	order, ok := v.threshold.compareText(value)
+	if !ok {
 		return errMsgValidNumber
 	}
-	if f == v.threshold {
-		return "value must not equal " + strconv.FormatFloat(v.threshold, 'f', -1, 64)
+	if order == 0 {
+		return "value must not equal " + v.threshold.String()
 	}
 	return ""
 }
@@ -637,29 +727,29 @@ func (v *notEqualValidator) Name() string {
 // greaterThanValidator validates that a value is greater than the threshold.
 // It measures what minValidator measures; see there.
 type greaterThanValidator struct {
-	threshold      float64
+	threshold      number
 	measuresLength bool
 }
 
 // newGreaterThanValidator creates a new greater than validator
-func newGreaterThanValidator(threshold float64) *greaterThanValidator {
+func newGreaterThanValidator(threshold number) *greaterThanValidator {
 	return &greaterThanValidator{threshold: threshold}
 }
 
 // Validate checks if the value is greater than the threshold
 func (v *greaterThanValidator) Validate(value string) string {
 	if v.measuresLength {
-		if float64(utf8.RuneCountInString(value)) <= v.threshold {
-			return "value must have more than " + strconv.FormatFloat(v.threshold, 'f', -1, 64) + " characters"
+		if float64(utf8.RuneCountInString(value)) <= v.threshold.float {
+			return "value must have more than " + v.threshold.String() + " characters"
 		}
 		return ""
 	}
-	f, err := strconv.ParseFloat(value, 64)
-	if err != nil {
+	order, ok := v.threshold.compareText(value)
+	if !ok {
 		return errMsgValidNumber
 	}
-	if f <= v.threshold {
-		return "value must be greater than " + strconv.FormatFloat(v.threshold, 'f', -1, 64)
+	if order <= 0 {
+		return "value must be greater than " + v.threshold.String()
 	}
 	return ""
 }
@@ -672,29 +762,29 @@ func (v *greaterThanValidator) Name() string {
 // greaterThanEqualValidator validates that a value is greater than or equal to
 // the threshold. It measures what minValidator measures; see there.
 type greaterThanEqualValidator struct {
-	threshold      float64
+	threshold      number
 	measuresLength bool
 }
 
 // newGreaterThanEqualValidator creates a new greater than or equal validator
-func newGreaterThanEqualValidator(threshold float64) *greaterThanEqualValidator {
+func newGreaterThanEqualValidator(threshold number) *greaterThanEqualValidator {
 	return &greaterThanEqualValidator{threshold: threshold}
 }
 
 // Validate checks if the value is greater than or equal to the threshold
 func (v *greaterThanEqualValidator) Validate(value string) string {
 	if v.measuresLength {
-		if float64(utf8.RuneCountInString(value)) < v.threshold {
-			return "value must have at least " + strconv.FormatFloat(v.threshold, 'f', -1, 64) + " characters"
+		if float64(utf8.RuneCountInString(value)) < v.threshold.float {
+			return "value must have at least " + v.threshold.String() + " characters"
 		}
 		return ""
 	}
-	f, err := strconv.ParseFloat(value, 64)
-	if err != nil {
+	order, ok := v.threshold.compareText(value)
+	if !ok {
 		return errMsgValidNumber
 	}
-	if f < v.threshold {
-		return "value must be greater than or equal to " + strconv.FormatFloat(v.threshold, 'f', -1, 64)
+	if order < 0 {
+		return "value must be greater than or equal to " + v.threshold.String()
 	}
 	return ""
 }
@@ -707,29 +797,29 @@ func (v *greaterThanEqualValidator) Name() string {
 // lessThanValidator validates that a value is less than the threshold.
 // It measures what minValidator measures; see there.
 type lessThanValidator struct {
-	threshold      float64
+	threshold      number
 	measuresLength bool
 }
 
 // newLessThanValidator creates a new less than validator
-func newLessThanValidator(threshold float64) *lessThanValidator {
+func newLessThanValidator(threshold number) *lessThanValidator {
 	return &lessThanValidator{threshold: threshold}
 }
 
 // Validate checks if the value is less than the threshold
 func (v *lessThanValidator) Validate(value string) string {
 	if v.measuresLength {
-		if float64(utf8.RuneCountInString(value)) >= v.threshold {
-			return "value must have fewer than " + strconv.FormatFloat(v.threshold, 'f', -1, 64) + " characters"
+		if float64(utf8.RuneCountInString(value)) >= v.threshold.float {
+			return "value must have fewer than " + v.threshold.String() + " characters"
 		}
 		return ""
 	}
-	f, err := strconv.ParseFloat(value, 64)
-	if err != nil {
+	order, ok := v.threshold.compareText(value)
+	if !ok {
 		return errMsgValidNumber
 	}
-	if f >= v.threshold {
-		return "value must be less than " + strconv.FormatFloat(v.threshold, 'f', -1, 64)
+	if order >= 0 {
+		return "value must be less than " + v.threshold.String()
 	}
 	return ""
 }
@@ -742,29 +832,29 @@ func (v *lessThanValidator) Name() string {
 // lessThanEqualValidator validates that a value is less than or equal to the
 // threshold. It measures what minValidator measures; see there.
 type lessThanEqualValidator struct {
-	threshold      float64
+	threshold      number
 	measuresLength bool
 }
 
 // newLessThanEqualValidator creates a new less than or equal validator
-func newLessThanEqualValidator(threshold float64) *lessThanEqualValidator {
+func newLessThanEqualValidator(threshold number) *lessThanEqualValidator {
 	return &lessThanEqualValidator{threshold: threshold}
 }
 
 // Validate checks if the value is less than or equal to the threshold
 func (v *lessThanEqualValidator) Validate(value string) string {
 	if v.measuresLength {
-		if float64(utf8.RuneCountInString(value)) > v.threshold {
-			return "value must have at most " + strconv.FormatFloat(v.threshold, 'f', -1, 64) + " characters"
+		if float64(utf8.RuneCountInString(value)) > v.threshold.float {
+			return "value must have at most " + v.threshold.String() + " characters"
 		}
 		return ""
 	}
-	f, err := strconv.ParseFloat(value, 64)
-	if err != nil {
+	order, ok := v.threshold.compareText(value)
+	if !ok {
 		return errMsgValidNumber
 	}
-	if f > v.threshold {
-		return "value must be less than or equal to " + strconv.FormatFloat(v.threshold, 'f', -1, 64)
+	if order > 0 {
+		return "value must be less than or equal to " + v.threshold.String()
 	}
 	return ""
 }
@@ -782,29 +872,29 @@ func (v *lessThanEqualValidator) Name() string {
 // every name as "not a valid number", and disagreed with len, which counts
 // characters in the same struct.
 type minValidator struct {
-	threshold      float64
+	threshold      number
 	measuresLength bool
 }
 
 // newMinValidator creates a new min validator
-func newMinValidator(threshold float64) *minValidator {
+func newMinValidator(threshold number) *minValidator {
 	return &minValidator{threshold: threshold}
 }
 
 // Validate checks if the value is at least the minimum
 func (v *minValidator) Validate(value string) string {
 	if v.measuresLength {
-		if float64(utf8.RuneCountInString(value)) < v.threshold {
-			return "value must have at least " + strconv.FormatFloat(v.threshold, 'f', -1, 64) + " characters"
+		if float64(utf8.RuneCountInString(value)) < v.threshold.float {
+			return "value must have at least " + v.threshold.String() + " characters"
 		}
 		return ""
 	}
-	f, err := strconv.ParseFloat(value, 64)
-	if err != nil {
+	order, ok := v.threshold.compareText(value)
+	if !ok {
 		return errMsgValidNumber
 	}
-	if f < v.threshold {
-		return "value must be at least " + strconv.FormatFloat(v.threshold, 'f', -1, 64)
+	if order < 0 {
+		return "value must be at least " + v.threshold.String()
 	}
 	return ""
 }
@@ -817,29 +907,29 @@ func (v *minValidator) Name() string {
 // maxValidator validates that a value is at most the maximum. It measures what
 // minValidator measures; see there.
 type maxValidator struct {
-	threshold      float64
+	threshold      number
 	measuresLength bool
 }
 
 // newMaxValidator creates a new max validator
-func newMaxValidator(threshold float64) *maxValidator {
+func newMaxValidator(threshold number) *maxValidator {
 	return &maxValidator{threshold: threshold}
 }
 
 // Validate checks if the value is at most the maximum
 func (v *maxValidator) Validate(value string) string {
 	if v.measuresLength {
-		if float64(utf8.RuneCountInString(value)) > v.threshold {
-			return "value must have at most " + strconv.FormatFloat(v.threshold, 'f', -1, 64) + " characters"
+		if float64(utf8.RuneCountInString(value)) > v.threshold.float {
+			return "value must have at most " + v.threshold.String() + " characters"
 		}
 		return ""
 	}
-	f, err := strconv.ParseFloat(value, 64)
-	if err != nil {
+	order, ok := v.threshold.compareText(value)
+	if !ok {
 		return errMsgValidNumber
 	}
-	if f > v.threshold {
-		return "value must be at most " + strconv.FormatFloat(v.threshold, 'f', -1, 64)
+	if order > 0 {
+		return "value must be at most " + v.threshold.String()
 	}
 	return ""
 }
@@ -865,8 +955,8 @@ func specializeValidator(v validator, isString bool, strict bool) (validator, er
 			}
 			return newTextNotEqualValidator(typed.param), nil
 		}
-		threshold, err := strconv.ParseFloat(typed.param, 64)
-		if err != nil {
+		threshold, ok := parseNumber(typed.param)
+		if !ok {
 			if strict {
 				return nil, fmt.Errorf("%w: %s requires a numeric value on a numeric field, got %q",
 					ErrInvalidTagFormat, typed.tag, typed.param)
@@ -926,11 +1016,11 @@ func newLengthValidator(length int) *lengthValidator {
 // Validate checks the length of a string, or the value of a number.
 func (v *lengthValidator) Validate(value string) string {
 	if v.measuresValue {
-		f, err := strconv.ParseFloat(value, 64)
-		if err != nil {
+		order, ok := integerNumber(int64(v.length)).compareText(value)
+		if !ok {
 			return errMsgValidNumber
 		}
-		if f != float64(v.length) {
+		if order != 0 {
 			return "value must be the number " + strconv.Itoa(v.length)
 		}
 		return ""

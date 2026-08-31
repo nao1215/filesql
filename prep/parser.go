@@ -457,10 +457,10 @@ type crossFieldValidatorBuilder func(value string) crossFieldValidator
 // a tag parameter lists.
 type fieldListValidatorBuilder func(fields []string) crossFieldValidator
 
-// buildFloatValidator is a helper for validators that require a numeric threshold parameter.
-func buildFloatValidator(tagName string, value string, strict bool, factory func(float64) validator) (validator, error) {
-	threshold, err := strconv.ParseFloat(value, 64)
-	if err != nil {
+// buildNumberValidator is a helper for validators that require a numeric threshold parameter.
+func buildNumberValidator(tagName string, value string, strict bool, factory func(number) validator) (validator, error) {
+	threshold, ok := parseNumber(value)
+	if !ok {
 		if strict {
 			return nil, fmt.Errorf("%w: %s requires a numeric value, got %q", ErrInvalidTagFormat, tagName, value)
 		}
@@ -505,22 +505,22 @@ var validatorRegistry = map[string]validatorBuilder{
 		return &pendingEqualityValidator{tag: notEqualTagValue, param: v}, nil
 	},
 	greaterThanTagValue: func(v string, s bool) (validator, error) {
-		return buildFloatValidator("gt", v, s, func(t float64) validator { return newGreaterThanValidator(t) })
+		return buildNumberValidator("gt", v, s, func(t number) validator { return newGreaterThanValidator(t) })
 	},
 	greaterThanEqualTagValue: func(v string, s bool) (validator, error) {
-		return buildFloatValidator("gte", v, s, func(t float64) validator { return newGreaterThanEqualValidator(t) })
+		return buildNumberValidator("gte", v, s, func(t number) validator { return newGreaterThanEqualValidator(t) })
 	},
 	lessThanTagValue: func(v string, s bool) (validator, error) {
-		return buildFloatValidator("lt", v, s, func(t float64) validator { return newLessThanValidator(t) })
+		return buildNumberValidator("lt", v, s, func(t number) validator { return newLessThanValidator(t) })
 	},
 	lessThanEqualTagValue: func(v string, s bool) (validator, error) {
-		return buildFloatValidator("lte", v, s, func(t float64) validator { return newLessThanEqualValidator(t) })
+		return buildNumberValidator("lte", v, s, func(t number) validator { return newLessThanEqualValidator(t) })
 	},
 	minTagValue: func(v string, s bool) (validator, error) {
-		return buildFloatValidator("min", v, s, func(t float64) validator { return newMinValidator(t) })
+		return buildNumberValidator("min", v, s, func(t number) validator { return newMinValidator(t) })
 	},
 	maxTagValue: func(v string, s bool) (validator, error) {
-		return buildFloatValidator("max", v, s, func(t float64) validator { return newMaxValidator(t) })
+		return buildNumberValidator("max", v, s, func(t number) validator { return newMaxValidator(t) })
 	},
 	lengthTagValue: func(value string, strict bool) (validator, error) {
 		length, err := strconv.Atoi(value)

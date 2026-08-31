@@ -218,8 +218,8 @@ func BenchmarkValidatorsOnly(b *testing.B) {
 	vals := validators{
 		newRequiredValidator(),
 		newAlphaValidator(),
-		newMinValidator(2),
-		newMaxValidator(50),
+		newMinValidator(integerNumber(2)),
+		newMaxValidator(integerNumber(50)),
 	}
 
 	testValues := []string{
@@ -391,8 +391,8 @@ func BenchmarkIPAddressValidation(b *testing.B) {
 func BenchmarkNumericValidation(b *testing.B) {
 	validators := validators{
 		newNumericValidator(),
-		newMinValidator(0),
-		newMaxValidator(100),
+		newMinValidator(integerNumber(0)),
+		newMaxValidator(integerNumber(100)),
 	}
 
 	values := []string{
@@ -448,8 +448,8 @@ func BenchmarkComplexValidatorChain(b *testing.B) {
 		newRequiredValidator(),
 		newASCIIValidator(),
 		newPrintASCIIValidator(),
-		newMinValidator(5),
-		newMaxValidator(100),
+		newMinValidator(integerNumber(5)),
+		newMaxValidator(integerNumber(100)),
 		newStartsWithValidator("user"),
 		newEndsWithValidator(".com"),
 		newContainsValidator("@"),

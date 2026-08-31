@@ -3,6 +3,7 @@ package prep
 import (
 	"encoding/base32"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -443,7 +444,7 @@ func TestAlphanumericUnicodeValidator(t *testing.T) {
 func TestEqualValidator(t *testing.T) {
 	t.Parallel()
 
-	v := newEqualValidator(10)
+	v := newEqualValidator(integerNumber(10))
 
 	tests := []struct {
 		input   string
@@ -471,7 +472,7 @@ func TestEqualValidator(t *testing.T) {
 func TestNotEqualValidator(t *testing.T) {
 	t.Parallel()
 
-	v := newNotEqualValidator(10)
+	v := newNotEqualValidator(integerNumber(10))
 
 	tests := []struct {
 		input   string
@@ -499,7 +500,7 @@ func TestNotEqualValidator(t *testing.T) {
 func TestGreaterThanValidator(t *testing.T) {
 	t.Parallel()
 
-	v := newGreaterThanValidator(10)
+	v := newGreaterThanValidator(integerNumber(10))
 
 	tests := []struct {
 		input   string
@@ -527,7 +528,7 @@ func TestGreaterThanValidator(t *testing.T) {
 func TestGreaterThanEqualValidator(t *testing.T) {
 	t.Parallel()
 
-	v := newGreaterThanEqualValidator(10)
+	v := newGreaterThanEqualValidator(integerNumber(10))
 
 	tests := []struct {
 		input   string
@@ -555,7 +556,7 @@ func TestGreaterThanEqualValidator(t *testing.T) {
 func TestLessThanValidator(t *testing.T) {
 	t.Parallel()
 
-	v := newLessThanValidator(10)
+	v := newLessThanValidator(integerNumber(10))
 
 	tests := []struct {
 		input   string
@@ -583,7 +584,7 @@ func TestLessThanValidator(t *testing.T) {
 func TestLessThanEqualValidator(t *testing.T) {
 	t.Parallel()
 
-	v := newLessThanEqualValidator(10)
+	v := newLessThanEqualValidator(integerNumber(10))
 
 	tests := []struct {
 		input   string
@@ -611,7 +612,7 @@ func TestLessThanEqualValidator(t *testing.T) {
 func TestMinValidator(t *testing.T) {
 	t.Parallel()
 
-	v := newMinValidator(10)
+	v := newMinValidator(integerNumber(10))
 
 	tests := []struct {
 		input   string
@@ -638,7 +639,7 @@ func TestMinValidator(t *testing.T) {
 func TestMaxValidator(t *testing.T) {
 	t.Parallel()
 
-	v := newMaxValidator(10)
+	v := newMaxValidator(integerNumber(10))
 
 	tests := []struct {
 		input   string
@@ -1999,14 +2000,14 @@ func TestValidatorNames(t *testing.T) {
 		{"alphanumunicode", func() validator { return newAlphanumericUnicodeValidator() }, "alphanumunicode"},
 
 		// Comparison validators (take float64)
-		{"eq", func() validator { return newEqualValidator(5.0) }, "eq"},
-		{"ne", func() validator { return newNotEqualValidator(5.0) }, "ne"},
-		{"gt", func() validator { return newGreaterThanValidator(5.0) }, "gt"},
-		{"gte", func() validator { return newGreaterThanEqualValidator(5.0) }, "gte"},
-		{"lt", func() validator { return newLessThanValidator(5.0) }, "lt"},
-		{"lte", func() validator { return newLessThanEqualValidator(5.0) }, "lte"},
-		{"min", func() validator { return newMinValidator(1.0) }, "min"},
-		{"max", func() validator { return newMaxValidator(10.0) }, "max"},
+		{"eq", func() validator { return newEqualValidator(integerNumber(5)) }, "eq"},
+		{"ne", func() validator { return newNotEqualValidator(integerNumber(5)) }, "ne"},
+		{"gt", func() validator { return newGreaterThanValidator(integerNumber(5)) }, "gt"},
+		{"gte", func() validator { return newGreaterThanEqualValidator(integerNumber(5)) }, "gte"},
+		{"lt", func() validator { return newLessThanValidator(integerNumber(5)) }, "lt"},
+		{"lte", func() validator { return newLessThanEqualValidator(integerNumber(5)) }, "lte"},
+		{"min", func() validator { return newMinValidator(integerNumber(1)) }, "min"},
+		{"max", func() validator { return newMaxValidator(integerNumber(10)) }, "max"},
 		{"len", func() validator { return newLengthValidator(5) }, "len"},
 
 		// String validators
@@ -2614,15 +2615,15 @@ func TestLengthComparisonValidators(t *testing.T) {
 		input   string
 		wantErr bool
 	}{
-		{"gt=3 passes four runes", &greaterThanValidator{threshold: 3, measuresLength: true}, "abcd", false},
-		{"gt=3 refuses three runes", &greaterThanValidator{threshold: 3, measuresLength: true}, "abc", true},
-		{"gte=3 passes three runes", &greaterThanEqualValidator{threshold: 3, measuresLength: true}, "abc", false},
-		{"gte=3 refuses two runes", &greaterThanEqualValidator{threshold: 3, measuresLength: true}, "ab", true},
-		{"lt=3 passes two runes", &lessThanValidator{threshold: 3, measuresLength: true}, "ab", false},
-		{"lt=3 refuses three runes", &lessThanValidator{threshold: 3, measuresLength: true}, "abc", true},
-		{"lte=3 passes three runes", &lessThanEqualValidator{threshold: 3, measuresLength: true}, "abc", false},
-		{"lte=3 refuses four runes", &lessThanEqualValidator{threshold: 3, measuresLength: true}, "abcd", true},
-		{"gte=3 counts runes, not bytes", &greaterThanEqualValidator{threshold: 3, measuresLength: true}, "日本語", false},
+		{"gt=3 passes four runes", &greaterThanValidator{threshold: integerNumber(3), measuresLength: true}, "abcd", false},
+		{"gt=3 refuses three runes", &greaterThanValidator{threshold: integerNumber(3), measuresLength: true}, "abc", true},
+		{"gte=3 passes three runes", &greaterThanEqualValidator{threshold: integerNumber(3), measuresLength: true}, "abc", false},
+		{"gte=3 refuses two runes", &greaterThanEqualValidator{threshold: integerNumber(3), measuresLength: true}, "ab", true},
+		{"lt=3 passes two runes", &lessThanValidator{threshold: integerNumber(3), measuresLength: true}, "ab", false},
+		{"lt=3 refuses three runes", &lessThanValidator{threshold: integerNumber(3), measuresLength: true}, "abc", true},
+		{"lte=3 passes three runes", &lessThanEqualValidator{threshold: integerNumber(3), measuresLength: true}, "abc", false},
+		{"lte=3 refuses four runes", &lessThanEqualValidator{threshold: integerNumber(3), measuresLength: true}, "abcd", true},
+		{"gte=3 counts runes, not bytes", &greaterThanEqualValidator{threshold: integerNumber(3), measuresLength: true}, "日本語", false},
 	}
 
 	for _, tt := range tests {
@@ -3347,6 +3348,192 @@ func TestEncodingValidatorsAcceptEveryEncoderOutput(t *testing.T) {
 					t.Errorf("Validate(%q) = %q, but its own encoder produced it from %d bytes",
 						value, msg, size)
 				}
+			}
+		})
+	}
+}
+
+// TestComparisonTagsOrderIntegersPastDoublePrecision holds the comparison tags
+// on an integer field to the integers the cells and the parameters spell.
+// 9007199254740993 and 9007199254740992 are two int64 values that round to the
+// same float64, so a comparison decided by the doubles answers as if they were
+// one number.
+func TestComparisonTagsOrderIntegersPastDoublePrecision(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		rows       any
+		value      string
+		wantReject bool
+	}{
+		{
+			name: "eq refuses the neighbor of its parameter",
+			rows: &[]struct {
+				V int64 `name:"v" validate:"eq=9007199254740993"`
+			}{},
+			value:      "9007199254740992",
+			wantReject: true,
+		},
+		{
+			name: "ne accepts the neighbor of its parameter",
+			rows: &[]struct {
+				V int64 `name:"v" validate:"ne=9007199254740993"`
+			}{},
+			value:      "9007199254740992",
+			wantReject: false,
+		},
+		{
+			name: "gt accepts the integer above its parameter",
+			rows: &[]struct {
+				V int64 `name:"v" validate:"gt=9007199254740992"`
+			}{},
+			value:      "9007199254740993",
+			wantReject: false,
+		},
+		{
+			name: "gte refuses the integer below its parameter",
+			rows: &[]struct {
+				V int64 `name:"v" validate:"gte=9007199254740993"`
+			}{},
+			value:      "9007199254740992",
+			wantReject: true,
+		},
+		{
+			name: "lt accepts the integer below its parameter",
+			rows: &[]struct {
+				V int64 `name:"v" validate:"lt=9007199254740993"`
+			}{},
+			value:      "9007199254740992",
+			wantReject: false,
+		},
+		{
+			name: "lte refuses the integer above its parameter",
+			rows: &[]struct {
+				V int64 `name:"v" validate:"lte=9007199254740992"`
+			}{},
+			value:      "9007199254740993",
+			wantReject: true,
+		},
+		{
+			name: "min refuses the integer below its parameter",
+			rows: &[]struct {
+				V int64 `name:"v" validate:"min=9007199254740993"`
+			}{},
+			value:      "9007199254740992",
+			wantReject: true,
+		},
+		{
+			name: "max refuses the integer above its parameter",
+			rows: &[]struct {
+				V int64 `name:"v" validate:"max=9007199254740992"`
+			}{},
+			value:      "9007199254740993",
+			wantReject: true,
+		},
+		{
+			name: "len refuses the neighbor of its parameter",
+			rows: &[]struct {
+				V int64 `name:"v" validate:"len=9007199254740993"`
+			}{},
+			value:      "9007199254740992",
+			wantReject: true,
+		},
+		{
+			name: "min refuses the integer below its parameter at the negative end",
+			rows: &[]struct {
+				V int64 `name:"v" validate:"min=-9223372036854775807"`
+			}{},
+			value:      "-9223372036854775808",
+			wantReject: true,
+		},
+		{
+			name: "gt still reads a fractional parameter as a fraction",
+			rows: &[]struct {
+				V float64 `name:"v" validate:"gt=1.5"`
+			}{},
+			value:      "1.4",
+			wantReject: true,
+		},
+		{
+			name: "eq still reads a parameter written as an exponent",
+			rows: &[]struct {
+				V float64 `name:"v" validate:"eq=1e3"`
+			}{},
+			value:      "1000",
+			wantReject: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, result, err := NewProcessor(FileTypeCSV).Process(strings.NewReader("v\n"+tt.value+"\n"), tt.rows)
+			if err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+			rejected := result.InvalidRowCount() == 1
+			if rejected != tt.wantReject {
+				t.Errorf("row %q rejected = %v, want %v (%v)", tt.value, rejected, tt.wantReject, result.Errors)
+			}
+		})
+	}
+}
+
+// TestComparisonTagMessageSpellsItsParameter holds the message a comparison
+// carries to the parameter the caller wrote, which a double cannot spell back
+// once the parameter is past the range it counts in.
+func TestComparisonTagMessageSpellsItsParameter(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		rows  any
+		want  string
+		value string
+	}{
+		{
+			name: "a parameter no double can spell",
+			rows: &[]struct {
+				V int64 `name:"v" validate:"eq=9007199254740993"`
+			}{},
+			want:  "9007199254740993",
+			value: "5",
+		},
+		{
+			name: "a parameter written as an exponent",
+			rows: &[]struct {
+				V float64 `name:"v" validate:"eq=1e3"`
+			}{},
+			want:  "1e3",
+			value: "5",
+		},
+		{
+			name: "a parameter written with leading zeros",
+			rows: &[]struct {
+				V int64 `name:"v" validate:"min=0010"`
+			}{},
+			want:  "0010",
+			value: "5",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, result, err := NewProcessor(FileTypeCSV).Process(strings.NewReader("v\n"+tt.value+"\n"), tt.rows)
+			if err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+			if len(result.Errors) != 1 {
+				t.Fatalf("got %d errors, want 1: %v", len(result.Errors), result.Errors)
+			}
+			var validationErr *ValidationError
+			if !errors.As(result.Errors[0], &validationErr) {
+				t.Fatalf("error is not a *ValidationError: %v", result.Errors[0])
+			}
+			if !strings.Contains(validationErr.Message, tt.want) {
+				t.Errorf("message = %q, want it to name the parameter %s", validationErr.Message, tt.want)
 			}
 		})
 	}

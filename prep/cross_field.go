@@ -1,8 +1,6 @@
 package prep
 
 import (
-	"cmp"
-	"strconv"
 	"strings"
 )
 
@@ -84,13 +82,14 @@ func singleTarget(targetValues []string) string {
 // neither greater, nor equal, nor less. A comparison on a string field now
 // reads the strings, one on any other field reads the numbers the cells spell,
 // and a cell that spells no number falls back to its text so the fallback is
-// the same for all six.
+// the same for all six. The numbers are read by the same type the comparison
+// tags read theirs with, so two integers are ordered as integers here too.
 func (b *baseCrossFieldValidator) compare(srcValue, targetValue string) int {
 	if !b.comparesText {
-		srcFloat, srcErr := strconv.ParseFloat(srcValue, 64)
-		targetFloat, targetErr := strconv.ParseFloat(targetValue, 64)
-		if srcErr == nil && targetErr == nil {
-			return cmp.Compare(srcFloat, targetFloat)
+		src, srcOK := parseNumber(srcValue)
+		target, targetOK := parseNumber(targetValue)
+		if srcOK && targetOK {
+			return src.compare(target)
 		}
 	}
 	return strings.Compare(srcValue, targetValue)
@@ -591,8 +590,8 @@ func (v *excludedIfValidator) Name() string {
 	return excludedIfTagValue
 }
 
-// excludedUnlessValidator validates that a field is empty unless every named
-// field holds the value paired with it.
+// excludedUnlessValidator validates that a field is empty unless at least one
+// named field holds the value paired with it.
 type excludedUnlessValidator struct {
 	presenceCrossFieldValidator
 	conditions []fieldCondition
@@ -609,18 +608,17 @@ func newExcludedUnlessValidator(conditions []fieldCondition) *excludedUnlessVali
 	}
 }
 
-// Validate checks if the source value is absent unless every condition holds.
-// A tag naming no field asks for nothing, so the degenerate case says nothing
-// rather than forbidding every value.
+// Validate checks if the source value is absent unless one condition holds.
+// It is the negation of requiredUnless and reads its pairs the same way, so
+// one pair matching is enough to allow a value. A tag naming no field asks for
+// nothing, so the degenerate case says nothing rather than forbidding every
+// value.
 func (v *excludedUnlessValidator) Validate(srcValue string, targetValues []string) string {
-	if len(v.conditions) == 0 || len(targetValues) != len(v.conditions) {
-		return ""
-	}
-	if conditionsMet(v.conditions, targetValues, true) {
+	if len(v.conditions) == 0 || conditionsMet(v.conditions, targetValues, false) {
 		return ""
 	}
 	if srcValue != "" {
-		return "value must be empty unless " + describeConditions(v.conditions, joinerAnd)
+		return "value must be empty unless " + describeConditions(v.conditions, joinerOr)
 	}
 	return ""
 }

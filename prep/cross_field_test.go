@@ -1566,8 +1566,9 @@ func TestExcludedCrossFieldValidators(t *testing.T) {
 		{"excluded_if allows an empty cell", newExcludedIfValidator(conditions), "", []string{"paid", "gold"}, false},
 		{"excluded_if says nothing when a pair differs", newExcludedIfValidator(conditions), "x", []string{"paid", "silver"}, false},
 
-		{"excluded_unless fires when a pair differs", newExcludedUnlessValidator(conditions), "x", []string{"paid", "silver"}, true},
-		{"excluded_unless allows an empty cell", newExcludedUnlessValidator(conditions), "", []string{"paid", "silver"}, false},
+		{"excluded_unless fires when no pair matches", newExcludedUnlessValidator(conditions), "x", []string{"free", "silver"}, true},
+		{"excluded_unless allows an empty cell", newExcludedUnlessValidator(conditions), "", []string{"free", "silver"}, false},
+		{"excluded_unless says nothing when one pair matches", newExcludedUnlessValidator(conditions), "x", []string{"paid", "silver"}, false},
 		{"excluded_unless says nothing when every pair matches", newExcludedUnlessValidator(conditions), "x", []string{"paid", "gold"}, false},
 
 		{"excluded_with fires when any field is present", newExcludedWithValidator([]string{"A", "B"}, false), "x", []string{"", "b"}, true},
@@ -1701,4 +1702,241 @@ func TestExcludedCrossFieldValidation_Processor(t *testing.T) {
 			t.Fatalf("Errors = %v, want exactly the first row reported", result.Errors)
 		}
 	})
+}
+
+// TestCrossFieldComparisonOrdersIntegersPastDoublePrecision holds the
+// cross-field comparisons on an integer field to the integers the two cells
+// spell. 9007199254740993 and 9007199254740992 round to the same float64, so a
+// comparison decided by the doubles calls two different numbers one number.
+func TestCrossFieldComparisonOrdersIntegersPastDoublePrecision(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		rows       any
+		row        string
+		wantReject bool
+	}{
+		{
+			name: "eqfield refuses two integers that differ",
+			rows: &[]struct {
+				A int64 `name:"a"`
+				B int64 `name:"b" validate:"eqfield=A"`
+			}{},
+			row:        "9007199254740992,9007199254740993",
+			wantReject: true,
+		},
+		{
+			name: "nefield accepts two integers that differ",
+			rows: &[]struct {
+				A int64 `name:"a"`
+				B int64 `name:"b" validate:"nefield=A"`
+			}{},
+			row:        "9007199254740992,9007199254740993",
+			wantReject: false,
+		},
+		{
+			name: "gtfield accepts the integer above",
+			rows: &[]struct {
+				A int64 `name:"a"`
+				B int64 `name:"b" validate:"gtfield=A"`
+			}{},
+			row:        "9007199254740992,9007199254740993",
+			wantReject: false,
+		},
+		{
+			name: "gtefield refuses the integer below",
+			rows: &[]struct {
+				A int64 `name:"a"`
+				B int64 `name:"b" validate:"gtefield=A"`
+			}{},
+			row:        "9007199254740993,9007199254740992",
+			wantReject: true,
+		},
+		{
+			name: "ltfield accepts the integer below",
+			rows: &[]struct {
+				A int64 `name:"a"`
+				B int64 `name:"b" validate:"ltfield=A"`
+			}{},
+			row:        "9007199254740993,9007199254740992",
+			wantReject: false,
+		},
+		{
+			name: "ltefield refuses the integer above",
+			rows: &[]struct {
+				A int64 `name:"a"`
+				B int64 `name:"b" validate:"ltefield=A"`
+			}{},
+			row:        "9007199254740992,9007199254740993",
+			wantReject: true,
+		},
+		{
+			name: "gtfield accepts the integer above at the negative end",
+			rows: &[]struct {
+				A int64 `name:"a"`
+				B int64 `name:"b" validate:"gtfield=A"`
+			}{},
+			row:        "-9223372036854775808,-9223372036854775807",
+			wantReject: false,
+		},
+		{
+			name: "gtfield still orders two fractions",
+			rows: &[]struct {
+				A float64 `name:"a"`
+				B float64 `name:"b" validate:"gtfield=A"`
+			}{},
+			row:        "1.5,1.4",
+			wantReject: true,
+		},
+		{
+			name: "ltfield still orders two strings as strings",
+			rows: &[]struct {
+				A string `name:"a"`
+				B string `name:"b" validate:"ltfield=A"`
+			}{},
+			row:        "2026-01-01,2025-12-31",
+			wantReject: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, result, err := NewProcessor(FileTypeCSV).Process(strings.NewReader("a,b\n"+tt.row+"\n"), tt.rows)
+			if err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+			rejected := result.InvalidRowCount() == 1
+			if rejected != tt.wantReject {
+				t.Errorf("row %q rejected = %v, want %v (%v)", tt.row, rejected, tt.wantReject, result.Errors)
+			}
+		})
+	}
+}
+
+// TestComparisonAgreesAcrossTagAndField runs the same pair of values through a
+// comparison against a parameter and against another field, and holds the two
+// answers together. The two comparisons live in different files and have
+// drifted apart before.
+func TestComparisonAgreesAcrossTagAndField(t *testing.T) {
+	t.Parallel()
+
+	values := []string{"9007199254740992", "9007199254740993", "-9223372036854775808", "5", "5.0", "1e3", "1000"}
+
+	for _, value := range values {
+		t.Run(value, func(t *testing.T) {
+			t.Parallel()
+
+			againstParameter := &[]struct {
+				V int64 `name:"v" validate:"gt=9007199254740992"`
+			}{}
+			_, parameterResult, err := NewProcessor(FileTypeCSV).Process(
+				strings.NewReader("v\n"+value+"\n"), againstParameter)
+			if err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+
+			againstField := &[]struct {
+				A int64 `name:"a"`
+				B int64 `name:"b" validate:"gtfield=A"`
+			}{}
+			_, fieldResult, err := NewProcessor(FileTypeCSV).Process(
+				strings.NewReader("a,b\n9007199254740992,"+value+"\n"), againstField)
+			if err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+
+			if parameterResult.InvalidRowCount() != fieldResult.InvalidRowCount() {
+				t.Errorf("gt= rejected %d rows and gtfield= rejected %d for value %q: %v / %v",
+					parameterResult.InvalidRowCount(), fieldResult.InvalidRowCount(), value,
+					parameterResult.Errors, fieldResult.Errors)
+			}
+		})
+	}
+}
+
+// TestExcludedUnlessNegatesRequiredUnless holds the two tags together: they
+// name the same condition and read it the same way, so on any row exactly one
+// of them has something to say about the cell they guard.
+func TestExcludedUnlessNegatesRequiredUnless(t *testing.T) {
+	t.Parallel()
+
+	rows := []string{"paid,gold", "paid,silver", "free,gold", "free,silver"}
+
+	for _, row := range rows {
+		t.Run(row, func(t *testing.T) {
+			t.Parallel()
+
+			excluded := &[]struct {
+				Kind string `name:"kind"`
+				Tier string `name:"tier"`
+				Note string `name:"note" validate:"excluded_unless=Kind paid Tier gold"`
+			}{}
+			_, excludedResult, err := NewProcessor(FileTypeCSV).Process(
+				strings.NewReader("kind,tier,note\n"+row+",x\n"), excluded)
+			if err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+
+			required := &[]struct {
+				Kind string `name:"kind"`
+				Tier string `name:"tier"`
+				Note string `name:"note" validate:"required_unless=Kind paid Tier gold"`
+			}{}
+			_, requiredResult, err := NewProcessor(FileTypeCSV).Process(
+				strings.NewReader("kind,tier,note\n"+row+",\n"), required)
+			if err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+
+			if excludedResult.InvalidRowCount() != requiredResult.InvalidRowCount() {
+				t.Errorf("row %q: excluded_unless rejected %d and required_unless rejected %d: %v / %v",
+					row, excludedResult.InvalidRowCount(), requiredResult.InvalidRowCount(),
+					excludedResult.Errors, requiredResult.Errors)
+			}
+		})
+	}
+}
+
+// TestExcludedIfNegatesRequiredIf holds the other conditional pair to the same
+// rule, so the sibling of the tag that drifted is covered too.
+func TestExcludedIfNegatesRequiredIf(t *testing.T) {
+	t.Parallel()
+
+	rows := []string{"free,low", "free,high", "paid,low", "paid,high"}
+
+	for _, row := range rows {
+		t.Run(row, func(t *testing.T) {
+			t.Parallel()
+
+			excluded := &[]struct {
+				Kind string `name:"kind"`
+				Tier string `name:"tier"`
+				Note string `name:"note" validate:"excluded_if=Kind free Tier low"`
+			}{}
+			_, excludedResult, err := NewProcessor(FileTypeCSV).Process(
+				strings.NewReader("kind,tier,note\n"+row+",x\n"), excluded)
+			if err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+
+			required := &[]struct {
+				Kind string `name:"kind"`
+				Tier string `name:"tier"`
+				Note string `name:"note" validate:"required_if=Kind free Tier low"`
+			}{}
+			_, requiredResult, err := NewProcessor(FileTypeCSV).Process(
+				strings.NewReader("kind,tier,note\n"+row+",\n"), required)
+			if err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+
+			if excludedResult.InvalidRowCount() != requiredResult.InvalidRowCount() {
+				t.Errorf("row %q: excluded_if rejected %d and required_if rejected %d: %v / %v",
+					row, excludedResult.InvalidRowCount(), requiredResult.InvalidRowCount(),
+					excludedResult.Errors, requiredResult.Errors)
+			}
+		})
+	}
 }
