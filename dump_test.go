@@ -2364,3 +2364,41 @@ func dirEntryNames(t *testing.T, dir string) []string {
 	}
 	return names
 }
+
+// TestXLSXSheetBeforeMissingSheet pins how a save learns that a sheet is not in
+// the workbook it is writing onto.
+//
+// excelize reports a missing sheet as index -1 with a nil error, and errors only
+// on a name no sheet could carry. A check that branched on the error alone
+// therefore never saw a missing sheet, fell through to GetRows, and failed the
+// whole save with "sheet X does not exist" where it meant to create one.
+func TestXLSXSheetBeforeMissingSheet(t *testing.T) {
+	t.Parallel()
+
+	src := filepath.Join(t.TempDir(), "book.xlsx")
+	writeWorkbook(t, src, map[string][][]string{
+		"Orders": {{"id", "name"}, {"1", "alice"}},
+	})
+
+	book, err := openWorkbookForOverwrite(src)
+	require.NoError(t, err)
+	require.NotNil(t, book)
+
+	t.Run("a sheet the workbook does not hold reads as nothing", func(t *testing.T) {
+		prior, err := xlsxSheetBefore(book, "NoSuchSheet")
+		require.NoError(t, err)
+		assert.Equal(t, xlsxSheetPrior{}, prior)
+	})
+
+	t.Run("a sheet the workbook holds reads as its rows", func(t *testing.T) {
+		prior, err := xlsxSheetBefore(book, "Orders")
+		require.NoError(t, err)
+		assert.Equal(t, 2, prior.extent.rows)
+		assert.Equal(t, 2, prior.extent.columns)
+	})
+
+	t.Run("a name no sheet could carry is an error", func(t *testing.T) {
+		_, err := xlsxSheetBefore(book, strings.Repeat("a", excelSheetNameMaxLen+1))
+		assert.Error(t, err, "an unusable name must not pass as a sheet to create")
+	})
+}

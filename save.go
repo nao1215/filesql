@@ -705,6 +705,17 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBase
 	// happens to list, so the same workbook saved twice is the same file.
 	sort.Strings(tables)
 
+	// The save writes onto the workbook it is replacing rather than onto a new
+	// one, so what this package does not hold survives: a sheet the sheet policy
+	// chose not to load, and the widths, merges and comments of the sheets it
+	// did. A workbook that cannot be reopened is written fresh, which is what
+	// every save did before this.
+	base, err := openWorkbookForOverwrite(path)
+	if err != nil {
+		return err
+	}
+	held := sheetsByTable(base, baseTableName)
+
 	// Excel caps a sheet name at 31 runes and forbids some characters, so two
 	// table names can arrive at the same sheet. excelize's NewSheet answers with
 	// the existing sheet's index rather than an error, so the second table would
@@ -714,7 +725,10 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBase
 	bySheet := make(map[string]string, len(tables))
 	sheets := make([]xlsxSheet, 0, len(tables))
 	for _, tableName := range tables {
-		sheetName := xlsxSheetNameForTable(baseTableName, tableName)
+		sheetName, ok := held[strings.ToLower(tableName)]
+		if !ok {
+			sheetName = xlsxSheetNameForTable(baseTableName, tableName)
+		}
 		if first, clash := bySheet[sheetName]; clash {
 			return fmt.Errorf("%w: tables %s and %s both become the sheet %q in %s, and Excel holds one sheet per name; rename one, or save to a directory instead",
 				ErrUnsupportedFormat, first, tableName, sheetName, path)
@@ -741,16 +755,6 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBase
 				return columns, rows, nil
 			},
 		})
-	}
-
-	// The save writes onto the workbook it is replacing rather than onto a new
-	// one, so what this package does not hold survives: a sheet the sheet policy
-	// chose not to load, and the widths, merges and comments of the sheets it
-	// did. A workbook that cannot be reopened is written fresh, which is what
-	// every save did before this.
-	base, err := openWorkbookForOverwrite(path)
-	if err != nil {
-		return err
 	}
 
 	if err := writeFileAtomically(path, func(w io.Writer) error {
@@ -785,6 +789,39 @@ func writeXLSXWorkbookCompressed(w io.Writer, path string, base *reader.Workbook
 	}()
 
 	return writeXLSXWorkbookOnto(writer, base, sheets)
+}
+
+// sheetsByTable maps each sheet of the workbook a save is replacing to the table
+// it was loaded as, keyed by that table's name folded to lower case because
+// SQLite folds ASCII case when it compares identifiers.
+//
+// This is how a save learns which sheet a table belongs in. Deriving the sheet
+// from the table name instead could not work: a table name is its sheet's name
+// run through sanitizeTableName, which turns spaces, hyphens and dots into
+// underscores, prefixes a leading digit, and drops what is left over, so a sheet
+// named "Q1 Sales" or "2024" cannot be spelled back out of it. The save looked
+// for a sheet the workbook never had and failed there, discarding the session's
+// edits to every other sheet along with it. Asking the workbook the same
+// question the loader asked -- what table does this sheet become -- agrees with
+// the loader by construction, and needs no reverse mapping.
+//
+// Two sheets cannot claim one table here, because a workbook whose sheets
+// collide that way is refused when it is loaded. A workbook changed on disk
+// since could still do it, and the first sheet in the file wins; the reverse
+// collision, two tables arriving at one sheet, is what the caller checks.
+func sheetsByTable(base *reader.Workbook, baseTableName string) map[string]string {
+	if base == nil {
+		return nil
+	}
+	names := base.File().GetSheetList()
+	held := make(map[string]string, len(names))
+	for _, sheet := range names {
+		key := strings.ToLower(xlsxSheetTableName(baseTableName, sheet))
+		if _, taken := held[key]; !taken {
+			held[key] = sheet
+		}
+	}
+	return held
 }
 
 // openWorkbookForOverwrite reads the workbook a save is about to replace, so the
