@@ -61,6 +61,10 @@ func (fp *fileProcessor) collectFilesFromPaths(paths []string) ([]string, error)
 			fp.logger.Debug("collected files from directory", "path", path, "file_count", len(dirFiles))
 			collectedPaths = append(collectedPaths, dirFiles...)
 		} else {
+			if err := refuseIrregularSource(path, info.Mode()); err != nil {
+				fp.logger.Error("source is not a regular file", "path", path, "error", err)
+				return nil, err
+			}
 			if err := fp.addSingleFile(path, processedFiles, &collectedPaths); err != nil {
 				return nil, err
 			}
@@ -69,6 +73,52 @@ func (fp *fileProcessor) collectFilesFromPaths(paths []string) ([]string, error)
 
 	fp.logger.Info("file collection completed", "total_files", len(collectedPaths))
 	return collectedPaths, nil
+}
+
+// refuseIrregularSource reports an error when a source carrying a supported
+// extension is not a regular file.
+//
+// A load opens what it is given, and opening a named pipe for reading blocks
+// until a writer opens the other end -- inside the os.Open syscall, where no
+// context reaches it, so a caller with a deadline waited for the life of the
+// process rather than getting an error. One entry called "pipe.csv" anywhere
+// under a scanned directory was enough. A character device did not block, but
+// only because it reports a size of zero and the emptiness check ran first,
+// which is an answer that depends on what a device happens to say about itself.
+//
+// Refusing rather than passing over such an entry is what the rest of this
+// package does with a file it cannot read, and a name ending in ".csv" is one a
+// caller may well have meant to load. A caller passes the mode a link resolves
+// to rather than the link's own, so a regular file reached through one still
+// loads, which auto-save writes back through.
+func refuseIrregularSource(path string, mode os.FileMode) error {
+	if mode.IsRegular() {
+		return nil
+	}
+	return fmt.Errorf("%w: %s is %s rather than a regular file, and this package reads files",
+		ErrUnsupportedFormat, path, describeFileMode(mode))
+}
+
+// describeFileMode names the kind of file a mode says it is, for an error a
+// caller reads without knowing Go's mode bits.
+func describeFileMode(mode os.FileMode) string {
+	switch {
+	case mode&os.ModeDir != 0:
+		return "a directory"
+	case mode&os.ModeNamedPipe != 0:
+		return "a named pipe"
+	case mode&os.ModeSocket != 0:
+		return "a socket"
+	case mode&os.ModeCharDevice != 0:
+		return "a character device"
+	case mode&os.ModeDevice != 0:
+		return "a block device"
+	default:
+		// A caller passes a mode a symbolic link resolves to, never a link's
+		// own, so what is left is os.ModeIrregular: a file the operating system
+		// says is not a regular one without saying what it is instead.
+		return "not a regular file"
+	}
 }
 
 // collectFilesFromDirectory recursively collects all supported files from a directory
@@ -95,6 +145,24 @@ func (fp *fileProcessor) collectFilesFromDirectory(dirPath string, processedFile
 
 		if d.IsDir() || !isSupportedFile(filePath) {
 			return nil
+		}
+
+		// The walk entry carries the kind of file it is, read from the
+		// directory rather than from a stat of its own, so the check costs
+		// nothing for every entry that is not a link. A link says only that it
+		// is one, and what it resolves to is what a load opens, so that is the
+		// one kind worth a stat -- which is also what keeps a link to a regular
+		// file loading.
+		mode := d.Type()
+		if mode&os.ModeSymlink != 0 {
+			info, statErr := os.Stat(filePath)
+			if statErr != nil {
+				return fmt.Errorf("%w: failed to stat %s: %w", ErrIOOperation, filePath, statErr)
+			}
+			mode = info.Mode()
+		}
+		if err := refuseIrregularSource(filePath, mode); err != nil {
+			return err
 		}
 
 		if walkRoot != dirPath {

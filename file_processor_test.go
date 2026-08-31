@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -761,5 +762,120 @@ func TestReplacingKeepsTheLaterSpellingsColumns(t *testing.T) {
 	}
 	if columns != "c,d" {
 		t.Errorf("the surviving table has columns %q, want %q; the later file's rows are stored under the earlier file's headers", columns, "c,d")
+	}
+}
+
+// makeFIFO creates a named pipe at path, or skips the test where the platform
+// has none. syscall.Mkfifo is not on every platform this package builds for, so
+// the pipe is made with the tool that is, and a platform without that one skips.
+func makeFIFO(t *testing.T, path string) {
+	t.Helper()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("windows has no named pipes in the filesystem")
+	}
+	if err := exec.CommandContext(t.Context(), "mkfifo", path).Run(); err != nil { //nolint:gosec // the command is fixed and the path is under t.TempDir()
+		t.Skipf("this platform cannot make a named pipe here: %v", err)
+	}
+}
+
+// TestCollectFilesFromPaths_RefusesASourceThatIsNotAFile pins that a path
+// carrying a supported extension is refused unless it is a regular file.
+//
+// It was not checked, and opening a named pipe for reading blocks until a
+// writer opens the other end: a directory holding one entry called "pipe.csv"
+// made Open block inside the os.Open syscall, where the context cannot reach it,
+// so a caller with a deadline waited for the life of the process rather than
+// getting an error. One such entry anywhere under a scanned directory was
+// enough. A character device did not block, but only because it reports a size
+// of zero and the emptiness check ran first.
+func TestCollectFilesFromPaths_RefusesASourceThatIsNotAFile(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a pipe found in a directory", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(root, "real.csv"), []byte("id\n1\n"), 0o600))
+		makeFIFO(t, filepath.Join(root, "pipe.csv"))
+
+		_, err := newFileProcessor().collectFilesFromPaths([]string{root})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		assert.Contains(t, err.Error(), "pipe.csv", "the refusal has to name the entry that caused it")
+	})
+
+	t.Run("a pipe named by the caller", func(t *testing.T) {
+		t.Parallel()
+
+		pipe := filepath.Join(t.TempDir(), "pipe.csv")
+		makeFIFO(t, pipe)
+
+		_, err := newFileProcessor().collectFilesFromPaths([]string{pipe})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		assert.Contains(t, err.Error(), "pipe.csv")
+	})
+
+	t.Run("a load of a directory holding a pipe returns", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(root, "real.csv"), []byte("id\n1\n"), 0o600))
+		makeFIFO(t, filepath.Join(root, "pipe.csv"))
+
+		// Open on a goroutine: a block here has no deadline of its own, so a
+		// test that waited for it inline would take the package timeout rather
+		// than fail.
+		done := make(chan error, 1)
+		go func() {
+			db, err := OpenContext(t.Context(), root)
+			if db != nil {
+				_ = db.Close()
+			}
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		case <-time.After(30 * time.Second):
+			t.Fatal("Open did not return: it is waiting for a writer on the pipe, which no context ends")
+		}
+	})
+}
+
+// TestRefuseIrregularSource covers the reading on its own, for the kinds a
+// platform may not let a test create.
+func TestRefuseIrregularSource(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name    string
+		mode    os.FileMode
+		refused bool
+		says    string
+	}{
+		{name: "a regular file", mode: 0o644},
+		{name: "a named pipe", mode: os.ModeNamedPipe | 0o644, refused: true, says: "named pipe"},
+		{name: "a character device", mode: os.ModeDevice | os.ModeCharDevice | 0o644, refused: true, says: "device"},
+		{name: "a block device", mode: os.ModeDevice | 0o644, refused: true, says: "device"},
+		{name: "a socket", mode: os.ModeSocket | 0o644, refused: true, says: "socket"},
+		{name: "a kind the system does not name", mode: os.ModeIrregular | 0o644, refused: true, says: "not a regular file"},
+		{name: "a directory", mode: os.ModeDir | 0o755, refused: true, says: "directory"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := refuseIrregularSource("users.csv", tt.mode)
+			if !tt.refused {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrUnsupportedFormat)
+			assert.Contains(t, err.Error(), "users.csv")
+			assert.Contains(t, err.Error(), tt.says)
+		})
 	}
 }

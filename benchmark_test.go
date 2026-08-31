@@ -912,3 +912,28 @@ func BenchmarkOverwriteParquetOfTypedColumns(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkCollectFilesFromDirectory measures the scan that finds a directory's
+// files, which is what a load of a directory spends before it opens anything.
+// Each candidate is stat-ed to see whether it is a regular file, so the cost of
+// that check is what this measures.
+func BenchmarkCollectFilesFromDirectory(b *testing.B) {
+	dir := b.TempDir()
+	for i := range 500 {
+		path := filepath.Join(dir, fmt.Sprintf("table%03d.csv", i))
+		if err := os.WriteFile(path, []byte("id,name\n1,alice\n"), 0o600); err != nil {
+			b.Fatalf("failed to write %s: %v", path, err)
+		}
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		collected, err := newFileProcessor().collectFilesFromPaths([]string{dir})
+		if err != nil {
+			b.Fatalf("collectFilesFromPaths failed: %v", err)
+		}
+		if len(collected) != 500 {
+			b.Fatalf("collected %d files, want 500", len(collected))
+		}
+	}
+}
