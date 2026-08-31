@@ -3368,7 +3368,7 @@ func TestComparisonTagsOrderIntegersPastDoublePrecision(t *testing.T) {
 		wantReject bool
 	}{
 		{
-			name: "eq refuses the neighbour of its parameter",
+			name: "eq refuses the neighbor of its parameter",
 			rows: &[]struct {
 				V int64 `name:"v" validate:"eq=9007199254740993"`
 			}{},
@@ -3376,7 +3376,7 @@ func TestComparisonTagsOrderIntegersPastDoublePrecision(t *testing.T) {
 			wantReject: true,
 		},
 		{
-			name: "ne accepts the neighbour of its parameter",
+			name: "ne accepts the neighbor of its parameter",
 			rows: &[]struct {
 				V int64 `name:"v" validate:"ne=9007199254740993"`
 			}{},
@@ -3432,7 +3432,7 @@ func TestComparisonTagsOrderIntegersPastDoublePrecision(t *testing.T) {
 			wantReject: true,
 		},
 		{
-			name: "len refuses the neighbour of its parameter",
+			name: "len refuses the neighbor of its parameter",
 			rows: &[]struct {
 				V int64 `name:"v" validate:"len=9007199254740993"`
 			}{},
@@ -3486,21 +3486,55 @@ func TestComparisonTagsOrderIntegersPastDoublePrecision(t *testing.T) {
 func TestComparisonTagMessageSpellsItsParameter(t *testing.T) {
 	t.Parallel()
 
-	rows := &[]struct {
-		V int64 `name:"v" validate:"eq=9007199254740993"`
-	}{}
-	_, result, err := NewProcessor(FileTypeCSV).Process(strings.NewReader("v\n5\n"), rows)
-	if err != nil {
-		t.Fatalf("Process() error = %v", err)
+	tests := []struct {
+		name  string
+		rows  any
+		want  string
+		value string
+	}{
+		{
+			name: "a parameter no double can spell",
+			rows: &[]struct {
+				V int64 `name:"v" validate:"eq=9007199254740993"`
+			}{},
+			want:  "9007199254740993",
+			value: "5",
+		},
+		{
+			name: "a parameter written as an exponent",
+			rows: &[]struct {
+				V float64 `name:"v" validate:"eq=1e3"`
+			}{},
+			want:  "1e3",
+			value: "5",
+		},
+		{
+			name: "a parameter written with leading zeros",
+			rows: &[]struct {
+				V int64 `name:"v" validate:"min=0010"`
+			}{},
+			want:  "0010",
+			value: "5",
+		},
 	}
-	if len(result.Errors) != 1 {
-		t.Fatalf("got %d errors, want 1: %v", len(result.Errors), result.Errors)
-	}
-	var validationErr *ValidationError
-	if !errors.As(result.Errors[0], &validationErr) {
-		t.Fatalf("error is not a *ValidationError: %v", result.Errors[0])
-	}
-	if !strings.Contains(validationErr.Message, "9007199254740993") {
-		t.Errorf("message = %q, want it to name the parameter 9007199254740993", validationErr.Message)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, result, err := NewProcessor(FileTypeCSV).Process(strings.NewReader("v\n"+tt.value+"\n"), tt.rows)
+			if err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+			if len(result.Errors) != 1 {
+				t.Fatalf("got %d errors, want 1: %v", len(result.Errors), result.Errors)
+			}
+			var validationErr *ValidationError
+			if !errors.As(result.Errors[0], &validationErr) {
+				t.Fatalf("error is not a *ValidationError: %v", result.Errors[0])
+			}
+			if !strings.Contains(validationErr.Message, tt.want) {
+				t.Errorf("message = %q, want it to name the parameter %s", validationErr.Message, tt.want)
+			}
+		})
 	}
 }

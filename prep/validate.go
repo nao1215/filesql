@@ -522,6 +522,9 @@ func (v *alphanumericUnicodeValidator) Name() string {
 // numbers: the comparison tags here and the cross-field comparisons in
 // cross_field.go.
 type number struct {
+	// text is the number as it was written, which is how a message quotes a
+	// tag parameter back: normalizing it would answer eq=+001 with "1".
+	text    string
 	float   float64
 	integer int64
 	isInt   bool
@@ -532,14 +535,14 @@ type number struct {
 func parseNumber(text string) (number, bool) {
 	if spellsInteger(text) {
 		if integer, err := strconv.ParseInt(text, 10, 64); err == nil {
-			return number{float: float64(integer), integer: integer, isInt: true}, true
+			return number{text: text, float: float64(integer), integer: integer, isInt: true}, true
 		}
 	}
 	f, err := strconv.ParseFloat(text, 64)
 	if err != nil {
 		return number{}, false
 	}
-	return number{float: f}, true
+	return number{text: text, float: f}, true
 }
 
 // spellsInteger reports whether the text is an optionally signed run of
@@ -566,7 +569,12 @@ func spellsInteger(text string) bool {
 // integerNumber is the number an int names, for the tags that carry a count
 // rather than a parameter read from text.
 func integerNumber(integer int64) number {
-	return number{float: float64(integer), integer: integer, isInt: true}
+	return number{
+		text:    strconv.FormatInt(integer, 10),
+		float:   float64(integer),
+		integer: integer,
+		isInt:   true,
+	}
 }
 
 // compare orders two numbers: negative when n sorts first, zero when the two
@@ -591,10 +599,7 @@ func (n number) compareText(text string) (int, bool) {
 
 // String spells the number the way it was written.
 func (n number) String() string {
-	if n.isInt {
-		return strconv.FormatInt(n.integer, 10)
-	}
-	return strconv.FormatFloat(n.float, 'f', -1, 64)
+	return n.text
 }
 
 // pendingEqualityValidator carries an eq or ne tag whose meaning depends on

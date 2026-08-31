@@ -146,8 +146,9 @@
 // lt, lte, min and max compare the character count, while on any other field
 // all of them compare the numeric value and len means the value equals the
 // parameter. Two numbers that both spell integers are compared as integers, so
-// a value past the range a float64 counts in is ordered against its neighbour
-// rather than rounded onto it; anything else is compared as a float64. The cross-field tags eqfield, nefield, gtfield, gtefield, ltfield
+// a pair past the point where a float64 stops spelling every integer exactly
+// is ordered rather than rounded onto one number; anything else is compared as
+// a float64. The cross-field tags eqfield, nefield, gtfield, gtefield, ltfield
 // and ltefield follow the field the same way, except that on a string field
 // they order the strings rather than measure them, so ltfield says a date range
 // runs forwards. That is the second place this package leaves the dialect,
