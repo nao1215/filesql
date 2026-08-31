@@ -299,3 +299,83 @@ func TestPlaceholderNamesFollowSQLite(t *testing.T) {
 		})
 	}
 }
+
+// TestAStringPrefixTouchesItsQuote pins where a GoogleSQL raw or bytes prefix
+// ends. The prefix letters have to run into the quote, and reading one letter
+// plus whatever character came next as a two-letter prefix took a column named
+// b or r, the operator after it, and the string after that for one literal: the
+// query "SELECT a FROM t WHERE b='x'" lost its whole comparison and answered no
+// rows, while the same query with spaces around the operator answered.
+func TestAStringPrefixTouchesItsQuote(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := ConfigFor(dialects.GoogleSQL)
+	// Every operator a prefix letter can stand in front of, against both quotes.
+	for _, letter := range []string{"b", "B", "r", "R"} {
+		for _, op := range []string{",", "=", "<", ">", "+", "-", "*", "/", "|", "&", "(", "!"} {
+			for _, quote := range []string{"'x'", `"x"`} {
+				input := letter + op + quote
+				t.Run(input, func(t *testing.T) {
+					t.Parallel()
+
+					toks, err := Lex(input, cfg)
+					if err != nil {
+						t.Fatalf("Lex(%q): %v", input, err)
+					}
+					var got []string
+					for _, tok := range toks {
+						if tok.Significant() {
+							got = append(got, tok.Text)
+						}
+					}
+					if len(got) != 3 || got[0] != letter || got[1] != op {
+						t.Errorf("Lex(%q) = %q, want the identifier, the operator and the string", input, got)
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestAStringPrefixLexesWhenItTouchesTheQuote is the other half: the prefixes
+// GoogleSQL does write have to keep lexing as one literal, so the fix above
+// cannot be had by dropping the prefixes altogether.
+func TestAStringPrefixLexesWhenItTouchesTheQuote(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := ConfigFor(dialects.GoogleSQL)
+	for _, tt := range []struct {
+		input string
+		kind  Kind
+		text  string
+	}{
+		{`b'x'`, Blob, "78"},
+		{`B"x"`, Blob, "78"},
+		{`rb'x\n'`, Blob, "785c6e"},
+		{`br'x\n'`, Blob, "785c6e"},
+		{`BR"x"`, Blob, "78"},
+		{`r'x\n'`, String, `x\n`},
+		{`R"x"`, String, "x"},
+	} {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+
+			toks, err := Lex(tt.input, cfg)
+			if err != nil {
+				t.Fatalf("Lex(%q): %v", tt.input, err)
+			}
+			var got []Token
+			for _, tok := range toks {
+				if tok.Significant() {
+					got = append(got, tok)
+				}
+			}
+			if len(got) != 1 {
+				t.Fatalf("Lex(%q) = %v, want one literal", tt.input, got)
+			}
+			if got[0].Kind != tt.kind || got[0].Text != tt.text {
+				t.Errorf("Lex(%q) = %v %q, want %v %q", tt.input, got[0].Kind, got[0].Text, tt.kind, tt.text)
+			}
+		})
+	}
+}

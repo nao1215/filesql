@@ -373,6 +373,18 @@ func TestLiteralFormsAreOneToken(t *testing.T) {
 		{PostgreSQL, `SELECT U&'d!0061t!+000061' UESCAPE '!'`, `SELECT 'data' AS "U&'d!0061t!+000061' UESCAPE '!'"`},
 		// A column named u, and an ordinary bitwise AND, are not the literal.
 		{PostgreSQL, "SELECT u & 1 FROM t", "SELECT u & 1 FROM t"},
+		// GoogleSQL's raw and bytes prefixes run into the quote, so a column
+		// named after one of their letters is a column and not the start of a
+		// literal, whatever operator stands between it and a string.
+		{GoogleSQL, "SELECT a FROM t WHERE b='x'", "SELECT a FROM t WHERE b = 'x'"},
+		{GoogleSQL, "SELECT b,'x' FROM t", "SELECT b, 'x' FROM t"},
+		{GoogleSQL, "SELECT a,b,'x' FROM t", "SELECT a, b, 'x' FROM t"},
+		{GoogleSQL, "SELECT r,'x' FROM t", "SELECT r, 'x' FROM t"},
+		{GoogleSQL, "SELECT CONCAT(b,'#') FROM t", `SELECT strict_concat(b, '#') AS "CONCAT(b,'#')" FROM t`},
+		// The prefixes themselves, which touching the quote is what makes.
+		{GoogleSQL, `SELECT b'x'`, `SELECT x'78'`},
+		{GoogleSQL, `SELECT rb'x\n'`, `SELECT x'785c6e'`},
+		{GoogleSQL, `SELECT r'x\n'`, `SELECT 'x\n'`},
 	}
 	for _, tt := range translated {
 		got, err := Translate(tt.dialect, tt.query)
