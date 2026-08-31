@@ -191,6 +191,20 @@
 //
 // # Transactions
 //
+// One transaction runs at a time. SQLite serializes them itself and the driver
+// waits for its turn inside itself, with no context in that wait, so a second
+// transaction used to park until the first ended whatever deadline its caller
+// had put on the work. It now queues here instead: BeginTx waits for the
+// transaction before it and returns the context's error if the wait outlives the
+// context. Statements outside a transaction are not queued, since a query beside
+// an open transaction is an ordinary thing to write; what that leaves is the
+// wait this package cannot reach. While a transaction that has written is open,
+// and while a rows iterator is still open, a statement touching the same table
+// waits inside SQLite for it, and no context ends that wait -- so close a rows
+// iterator when you are done with it, and do not leave a writing transaction
+// open across work that queries the same tables. DumpDatabase reads every table
+// and is subject to the same rule.
+//
 // SQLite runs serializable transactions and has no other level, so a sql.TxOptions
 // naming one of the weaker levels is refused when the transaction begins rather
 // than taken and quietly downgraded; sql.LevelDefault and sql.LevelSerializable

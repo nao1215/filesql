@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/nao1215/filesql/dialect"
 
@@ -211,7 +212,7 @@ func TestGuardedTx_CommitThatFailedStopsCountingAsOpen(t *testing.T) {
 		autoSaveConfig: &autoSaveConfig{enabled: true, timing: autoSaveOnClose},
 	}
 	conn := &guardedConn{conn: &plainConn{}, tracker: connector}
-	connector.transactionBegan()
+	require.NoError(t, conn.openTx(context.Background()))
 	tx := &guardedTx{tx: failingCommitTx{}, conn: conn}
 
 	require.ErrorIs(t, tx.Commit(), errStub)
@@ -436,4 +437,178 @@ func TestCheckIsolation(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrDatabaseOperation)
 	assert.Contains(t, err.Error(), "99")
+}
+
+// TestTransactionsQueueForEachOther covers the wait a second transaction used to
+// spend inside the driver. SQLite runs one write transaction at a time and the
+// driver waits for its turn on a mutex of its own, with no context in the path,
+// so a caller with a deadline could not fail the work and the goroutine stayed
+// there until the first transaction ended.
+func TestTransactionsQueueForEachOther(t *testing.T) {
+	t.Parallel()
+
+	setup := func(t *testing.T) *sql.DB {
+		t.Helper()
+
+		dir := t.TempDir()
+		src := filepath.Join(dir, "users.csv")
+		require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n2,bob\n"), 0o600))
+		db, err := NewBuilder().AddPath(src).Open(t.Context())
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = db.Close() })
+		return db
+	}
+
+	t.Run("a second transaction ends at its deadline", func(t *testing.T) {
+		t.Parallel()
+
+		db := setup(t)
+		held, err := db.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+		_, err = held.ExecContext(t.Context(), "UPDATE users SET name='held' WHERE id=1")
+		require.NoError(t, err)
+
+		done := make(chan error, 1)
+		go func() {
+			ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+			defer cancel()
+			_, err := db.BeginTx(ctx, nil)
+			done <- err
+		}()
+
+		select {
+		case err := <-done:
+			require.Error(t, err, "the second transaction must not begin while the first is open")
+			assert.ErrorIs(t, err, context.DeadlineExceeded, "the wait has to end at the caller's deadline")
+		case <-time.After(30 * time.Second):
+			t.Fatal("the second transaction never returned: its wait is outside the caller's reach")
+		}
+		require.NoError(t, held.Rollback())
+	})
+
+	t.Run("the second transaction runs once the first is over", func(t *testing.T) {
+		t.Parallel()
+
+		db := setup(t)
+		first, err := db.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+		_, err = first.ExecContext(t.Context(), "UPDATE users SET name='first' WHERE id=1")
+		require.NoError(t, err)
+
+		done := make(chan error, 1)
+		go func() {
+			tx, err := db.BeginTx(t.Context(), nil)
+			if err != nil {
+				done <- err
+				return
+			}
+			if _, err := tx.ExecContext(t.Context(), "UPDATE users SET name='second' WHERE id=2"); err != nil {
+				done <- errors.Join(err, tx.Rollback())
+				return
+			}
+			done <- tx.Commit()
+		}()
+
+		require.NoError(t, first.Commit())
+		select {
+		case err := <-done:
+			require.NoError(t, err, "the queued transaction has to run once the gate is free")
+		case <-time.After(30 * time.Second):
+			t.Fatal("the queued transaction never ran after the first committed")
+		}
+
+		var name string
+		require.NoError(t, db.QueryRowContext(t.Context(), "SELECT name FROM users WHERE id=2").Scan(&name))
+		assert.Equal(t, "second", name)
+	})
+
+	t.Run("a statement beside an open transaction still runs", func(t *testing.T) {
+		t.Parallel()
+
+		// Only transactions queue. This package cannot tell a transaction that
+		// has written from one that has only read, so making statements wait
+		// would deadlock the ordinary shape of holding a transaction open and
+		// querying the same database beside it.
+		db := setup(t)
+		tx, err := db.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+		defer func() { _ = tx.Rollback() }()
+
+		done := make(chan error, 1)
+		go func() {
+			var n int
+			done <- db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM users").Scan(&n)
+		}()
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(30 * time.Second):
+			t.Fatal("a query beside an open transaction must not wait for it")
+		}
+	})
+}
+
+// TestGuardedConn_TransactionKeywordAsAQuery covers a transaction keyword sent
+// through Query rather than Exec, which is legal and reaches a different path.
+func TestGuardedConn_TransactionKeywordAsAQuery(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "users.csv")
+	require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
+	db, err := NewBuilder().AddPath(src).EnableAutoSave("").Open(t.Context())
+	require.NoError(t, err)
+
+	rows, err := db.QueryContext(t.Context(), "BEGIN")
+	require.NoError(t, err)
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	_, err = db.ExecContext(t.Context(), "INSERT INTO users VALUES (2,'bob')")
+	require.NoError(t, err)
+
+	err = db.Close()
+	require.Error(t, err, "a BEGIN counts however it was sent")
+	assert.ErrorIs(t, err, ErrDatabaseOperation)
+
+	got, readErr := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+	require.NoError(t, readErr)
+	assert.Equal(t, "id,name\n1,alice\n", string(got))
+}
+
+// TestTxGate covers the gate on its own, including the states a database is
+// awkward to drive into.
+func TestTxGate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("one holder at a time, and the next one after a release", func(t *testing.T) {
+		t.Parallel()
+
+		g := newTxGate()
+		require.NoError(t, g.acquire(t.Context()))
+
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		defer cancel()
+		assert.ErrorIs(t, g.acquire(ctx), context.DeadlineExceeded)
+
+		g.release()
+		require.NoError(t, g.acquire(t.Context()))
+	})
+
+	t.Run("a canceled context is refused before the wait", func(t *testing.T) {
+		t.Parallel()
+
+		g := newTxGate()
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		assert.ErrorIs(t, g.acquire(ctx), context.Canceled)
+	})
+
+	t.Run("releasing a gate nobody holds is a no-op", func(t *testing.T) {
+		t.Parallel()
+
+		g := newTxGate()
+		g.release()
+		g.release()
+		require.NoError(t, g.acquire(t.Context()))
+	})
 }
