@@ -83,10 +83,13 @@ type guardedConn struct {
 	// keeps a statement inside a transaction from queueing behind the
 	// transaction it belongs to, and what lets the tracker see both spellings.
 	inTx bool
-	// savepoint names the savepoint that opened the transaction, empty when a
-	// BEGIN or BeginTx opened it. Releasing that savepoint is what ends the
-	// transaction; releasing one taken inside it leaves the transaction open.
-	savepoint string
+	// savepoints is the savepoints of a transaction this connection opened by
+	// taking one, outermost first, and is empty for a transaction begun with
+	// BEGIN or BeginTx, where releasing a savepoint ends nothing. Releasing the
+	// outermost one ends the transaction, and SQLite lets a name be taken more
+	// than once, so it takes the stack rather than the one name to know which
+	// release that is.
+	savepoints []string
 	// spent reports that this connection could not be put back the way it was
 	// found, which is what takes it out of the pool rather than handing it to
 	// the next caller in a state they did not ask for.
@@ -241,7 +244,7 @@ func (c *guardedConn) closeTx() {
 		return
 	}
 	c.inTx = false
-	c.savepoint = ""
+	c.savepoints = nil
 	if c.gate != nil {
 		c.gate.release()
 	}
@@ -266,7 +269,7 @@ func (c *guardedConn) runExec(ctx context.Context, query string, run func(contex
 	switch stmt.effect {
 	case txEffectBegin:
 		if c.inTx {
-			break
+			return c.runInnerSavepoint(ctx, stmt, run)
 		}
 		if err := c.openTx(ctx); err != nil {
 			return nil, err
@@ -276,11 +279,24 @@ func (c *guardedConn) runExec(ctx context.Context, query string, run func(contex
 			c.closeTx()
 			return res, err
 		}
-		c.savepoint = stmt.savepoint
+		if stmt.savepoint != "" {
+			c.savepoints = []string{stmt.savepoint}
+		}
 		return res, nil
 	case txEffectCommit, txEffectRollback:
-		if !c.endsTransaction(stmt) {
+		if !c.inTx {
 			break
+		}
+		if stmt.savepoint != "" {
+			held := c.innermostSavepoint(stmt.savepoint)
+			if held < 0 {
+				// A name the stack does not hold. SQLite refuses it, or the
+				// transaction was begun with BEGIN and no release ends it.
+				break
+			}
+			if held > 0 {
+				return c.runInnerRelease(ctx, held, run)
+			}
 		}
 		res, err := run(ctx)
 		if err != nil {
@@ -298,20 +314,49 @@ func (c *guardedConn) runExec(ctx context.Context, query string, run func(contex
 	return run(ctx)
 }
 
-// endsTransaction reports whether a statement that closes a transaction closes
-// the one this connection is in. A COMMIT, END or ROLLBACK closes whatever is
-// open; a RELEASE closes it only when it names the savepoint that opened it,
-// since releasing a savepoint taken inside a transaction leaves that
-// transaction open. SQLite compares savepoint names without regard to case, so
-// this does too.
-func (c *guardedConn) endsTransaction(stmt txStatement) bool {
-	if !c.inTx {
-		return false
+// runInnerSavepoint runs a statement that opens something inside a transaction
+// that is already open. A BEGIN there is a mistake SQLite refuses and is left to
+// say so; a savepoint is real, and one taken inside a transaction this
+// connection is tracking by its savepoints joins that stack.
+func (c *guardedConn) runInnerSavepoint(ctx context.Context, stmt txStatement, run func(context.Context) (driver.Result, error)) (driver.Result, error) {
+	res, err := run(ctx)
+	if err == nil && stmt.savepoint != "" && len(c.savepoints) > 0 {
+		c.savepoints = append(c.savepoints, stmt.savepoint)
 	}
-	if stmt.savepoint == "" {
-		return true
+	return res, err
+}
+
+// runInnerRelease runs a RELEASE of a savepoint that is not the one that opened
+// the transaction. SQLite releases that savepoint and every one above it and
+// leaves the transaction open, so the stack loses the same entries and the
+// count and the gate are untouched.
+func (c *guardedConn) runInnerRelease(ctx context.Context, held int, run func(context.Context) (driver.Result, error)) (driver.Result, error) {
+	res, err := run(ctx)
+	if err == nil {
+		c.savepoints = c.savepoints[:held]
 	}
-	return c.savepoint != "" && strings.EqualFold(c.savepoint, stmt.savepoint)
+	return res, err
+}
+
+// innermostSavepoint is where the stack holds the savepoint a RELEASE of this
+// name releases -- the innermost one, which is the last of the name -- or -1
+// when it holds none. SQLite compares savepoint names without regard to case,
+// so this does too.
+//
+// The stack can hold more than SQLite does, because ROLLBACK TO cancels the
+// savepoints above the one it names and this does not follow it there. What
+// that costs is a release read as inner when SQLite read it as the outermost,
+// which leaves a transaction counted open after it ended: the save is refused
+// rather than run, which is the direction this count is deliberately biased in,
+// since a skipped save is recoverable with DumpDatabase and rows written over
+// the caller's own are not.
+func (c *guardedConn) innermostSavepoint(name string) int {
+	for i := len(c.savepoints) - 1; i >= 0; i-- {
+		if strings.EqualFold(c.savepoints[i], name) {
+			return i
+		}
+	}
+	return -1
 }
 
 // runQuery runs one query. A transaction keyword run as a query is odd but

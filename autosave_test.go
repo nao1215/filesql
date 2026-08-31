@@ -1421,6 +1421,11 @@ func TestAutoSaveCloseWithAnOpenTransaction(t *testing.T) {
 		{name: "releasing a nested savepoint leaves the transaction open", stmts: []string{"SAVEPOINT outer", "SAVEPOINT inner", "INSERT INTO users VALUES (2,'bob')", "RELEASE inner"}, want: "id,name\n1,alice\n"},
 		{name: "releasing the outer savepoint after a nested one releases it", stmts: []string{"SAVEPOINT outer", "SAVEPOINT inner", "INSERT INTO users VALUES (2,'bob')", "RELEASE inner", "RELEASE outer"}, want: "id,name\n1,alice\n2,bob\n", saved: true},
 		{name: "a savepoint inside a BEGIN does not end it when released", stmts: []string{"BEGIN", "SAVEPOINT s", "INSERT INTO users VALUES (2,'bob')", "RELEASE s"}, want: "id,name\n1,alice\n"},
+		// SQLite lets one name be taken more than once, and a RELEASE then
+		// releases the innermost of them, so the transaction stays open.
+		{name: "one savepoint name taken twice needs two releases", stmts: []string{"SAVEPOINT s", "SAVEPOINT s", "INSERT INTO users VALUES (2,'bob')", "RELEASE s"}, want: "id,name\n1,alice\n"},
+		{name: "the second release of a reused name ends it", stmts: []string{"SAVEPOINT s", "SAVEPOINT s", "INSERT INTO users VALUES (2,'bob')", "RELEASE s", "RELEASE s"}, want: "id,name\n1,alice\n2,bob\n", saved: true},
+		{name: "releasing a savepoint above the outermost keeps it open", stmts: []string{"SAVEPOINT outer", "SAVEPOINT middle", "SAVEPOINT inner", "INSERT INTO users VALUES (2,'bob')", "RELEASE middle"}, want: "id,name\n1,alice\n"},
 		{name: "a comment inside a string literal is not one", stmts: []string{"BEGIN", "INSERT INTO users VALUES (2,'/* done */ COMMIT')"}, want: "id,name\n1,alice\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

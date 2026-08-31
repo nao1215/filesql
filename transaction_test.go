@@ -641,6 +641,35 @@ func TestTransactionsQueueForEachOther(t *testing.T) {
 		require.NoError(t, tx.Rollback())
 	})
 
+	t.Run("a reused savepoint name holds the gate until the outermost is released", func(t *testing.T) {
+		t.Parallel()
+
+		// SQLite lets one name be taken twice and releases the innermost, so
+		// matching the name alone read the first RELEASE as the end of the
+		// transaction and gave the gate away while it was still open.
+		db := setup(t)
+		conn, err := db.Conn(t.Context())
+		require.NoError(t, err)
+		defer func() { _ = conn.Close() }()
+
+		for _, stmt := range []string{"SAVEPOINT s", "SAVEPOINT s", "UPDATE users SET name='held' WHERE id=1", "RELEASE s"} {
+			_, err = conn.ExecContext(t.Context(), stmt)
+			require.NoError(t, err, stmt)
+		}
+
+		ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+		defer cancel()
+		_, err = db.BeginTx(ctx, nil)
+		require.Error(t, err, "the outer savepoint still holds the transaction open")
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+
+		_, err = conn.ExecContext(t.Context(), "RELEASE s")
+		require.NoError(t, err)
+		tx, err := db.BeginTx(t.Context(), nil)
+		require.NoError(t, err, "releasing the outermost savepoint ends the transaction")
+		require.NoError(t, tx.Rollback())
+	})
+
 	t.Run("a COMMIT with nothing open leaves the next transaction alone", func(t *testing.T) {
 		t.Parallel()
 
