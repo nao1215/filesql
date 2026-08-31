@@ -71,7 +71,16 @@ func (sp *streamProcessor) recordSkippedRows(table string, count, total int) {
 	sp.skipped = append(sp.skipped, SkippedRows{Table: table, Count: count, Total: total})
 }
 
-// skippedRows returns what the loads so far discarded.
+// forgetSkippedRows drops the record of what was skipped, so the next load
+// reports what that load discarded rather than the sum of every load a reused
+// builder has run.
+func (sp *streamProcessor) forgetSkippedRows() {
+	sp.skippedMu.Lock()
+	defer sp.skippedMu.Unlock()
+	sp.skipped = nil
+}
+
+// skippedRows returns what the last load discarded.
 func (sp *streamProcessor) skippedRows() []SkippedRows {
 	sp.skippedMu.Lock()
 	defer sp.skippedMu.Unlock()

@@ -18,6 +18,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/nao1215/filesql/dialect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"modernc.org/sqlite"
@@ -600,8 +601,9 @@ func TestDBBuilder_build(t *testing.T) {
 		assert.NoError(t, err, "build() should succeed with FS containing valid files")
 		require.NotNil(t, validatedBuilder, "build() should not return nil builder")
 		// Should have found 3 files (csv, tsv, ltsv) and ignored txt
-		// fs.FS files are now stored as readers instead of collectedPaths
-		assert.Len(t, validatedBuilder.readers, 3, "build() should have 3 readers from fs.FS")
+		// fs.FS files become readers of the build's own rather than paths.
+		assert.Len(t, validatedBuilder.derivedReaders, 3, "build() should have 3 readers from fs.FS")
+		assert.Empty(t, validatedBuilder.readers, "a filesystem adds nothing to the caller's own readers")
 	})
 
 	t.Run("FS with nil filesystem error", func(t *testing.T) {
@@ -1963,5 +1965,199 @@ func TestValidateDatabaseConnection(t *testing.T) {
 		require.NoError(t, db.Close())
 
 		assert.Error(t, builder.validateDatabaseConnection(ctx, db))
+	})
+}
+
+// tableNamesOf reports the tables a database holds, so a test can say which
+// sources reached it.
+func tableNamesOf(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+
+	rows, err := db.QueryContext(context.Background(), "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+	require.NoError(t, err)
+	defer rows.Close()
+
+	names := make([]string, 0, 2)
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		names = append(names, name)
+	}
+	require.NoError(t, rows.Err())
+	return names
+}
+
+// TestBuilderHonorsWhatItIsGivenAfterABuild covers the order two calls are made
+// in. A builder caches what its build derived, and everything it was given
+// afterwards used to fall into one of two halves: a path or a filesystem was
+// dropped without a word while a reader was loaded, and the checks that live in
+// the build did not run at all, so the pair the builder refuses -- a dialect
+// together with auto-save -- was accepted when the dialect came second.
+func TestBuilderHonorsWhatItIsGivenAfterABuild(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	newCSV := func(t *testing.T, dir, name string) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(path, []byte("id\n1\n"), 0o600))
+		return path
+	}
+
+	// openedOnce hands back a builder whose build has run and succeeded, which
+	// is the state every case below starts from.
+	openedOnce := func(t *testing.T, b *DBBuilder) *DBBuilder {
+		t.Helper()
+		db, err := b.Open(ctx)
+		require.NoError(t, err)
+		require.NoError(t, db.Close())
+		return b
+	}
+
+	t.Run("a path added afterwards is loaded", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		first := newCSV(t, dir, "aaa.csv")
+		second := newCSV(t, dir, "bbb.csv")
+
+		builder := openedOnce(t, NewBuilder().AddPath(first))
+		builder.AddPath(second)
+
+		db, err := builder.Open(ctx)
+		require.NoError(t, err)
+		defer db.Close()
+
+		assert.Equal(t, []string{"aaa", "bbb"}, tableNamesOf(t, db))
+	})
+
+	t.Run("paths added afterwards are loaded", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		first := newCSV(t, dir, "aaa.csv")
+		second := newCSV(t, dir, "bbb.csv")
+
+		builder := openedOnce(t, NewBuilder().AddPath(first))
+		builder.AddPaths(second)
+
+		db, err := builder.Open(ctx)
+		require.NoError(t, err)
+		defer db.Close()
+
+		assert.Equal(t, []string{"aaa", "bbb"}, tableNamesOf(t, db))
+	})
+
+	t.Run("a filesystem added afterwards is loaded", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		builder := openedOnce(t, NewBuilder().AddPath(newCSV(t, dir, "aaa.csv")))
+		builder.AddFS(fstest.MapFS{"fromfs.csv": &fstest.MapFile{Data: []byte("id\n2\n")}})
+
+		db, err := builder.Open(ctx)
+		require.NoError(t, err)
+		defer db.Close()
+
+		assert.Equal(t, []string{"aaa", "fromfs"}, tableNamesOf(t, db))
+	})
+
+	t.Run("a reader added afterwards is loaded", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		builder := openedOnce(t, NewBuilder().AddPath(newCSV(t, dir, "aaa.csv")))
+		builder.AddReader(strings.NewReader("id\n3\n"), "later", FileTypeCSV)
+
+		db, err := builder.Open(ctx)
+		require.NoError(t, err)
+		defer db.Close()
+
+		assert.Equal(t, []string{"aaa", "later"}, tableNamesOf(t, db))
+	})
+
+	t.Run("a path that does not exist is refused", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		builder := openedOnce(t, NewBuilder().AddPath(newCSV(t, dir, "aaa.csv")))
+		builder.AddPath(filepath.Join(dir, "no-such-file.csv"))
+
+		db, err := builder.Open(ctx)
+		if db != nil {
+			defer db.Close()
+		}
+		assert.Error(t, err, "a path that does not exist is refused whenever it was added")
+	})
+
+	t.Run("a dialect added afterwards cannot be combined with auto-save", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		out := filepath.Join(dir, "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+
+		builder := openedOnce(t, NewBuilder().AddPath(newCSV(t, dir, "aaa.csv")).EnableAutoSave(out))
+		builder.WithDialect(dialect.MySQL)
+
+		db, err := builder.Open(ctx)
+		if db != nil {
+			defer db.Close()
+		}
+		assert.Error(t, err, "the pair the builder refuses is refused in either order")
+	})
+
+	t.Run("an auto-save directory added afterwards is checked", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		notADir := filepath.Join(dir, "not-a-dir")
+		require.NoError(t, os.WriteFile(notADir, []byte("x"), 0o600))
+
+		builder := openedOnce(t, NewBuilder().AddPath(newCSV(t, dir, "aaa.csv")))
+		builder.EnableAutoSave(notADir)
+
+		db, err := builder.Open(ctx)
+		if db != nil {
+			defer db.Close()
+		}
+		assert.Error(t, err, "a destination that cannot be written is reported by Open, not by Close")
+	})
+
+	t.Run("every option clears the cached build", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := newCSV(t, dir, "aaa.csv")
+
+		// Naming each mutator here is what keeps the next one added to the
+		// builder from quietly joining the half that is dropped.
+		mutators := map[string]func(*DBBuilder){
+			"AddPath":                func(b *DBBuilder) { b.AddPath(path) },
+			"AddPaths":               func(b *DBBuilder) { b.AddPaths(path) },
+			"AddReader":              func(b *DBBuilder) { b.AddReader(strings.NewReader("id\n1\n"), "r", FileTypeCSV) },
+			"AddFS":                  func(b *DBBuilder) { b.AddFS(fstest.MapFS{}) },
+			"SetDefaultChunkSize":    func(b *DBBuilder) { b.SetDefaultChunkSize(7) },
+			"WithMalformedRowPolicy": func(b *DBBuilder) { b.WithMalformedRowPolicy(MalformedRowSkip) },
+			"WithExcelSheetPolicy":   func(b *DBBuilder) { b.WithExcelSheetPolicy(ExcelSheetPolicyVisibleOnly) },
+			"WithLogger":             func(b *DBBuilder) { b.WithLogger(slog.New(slog.DiscardHandler)) },
+			"EnableAutoSave":         func(b *DBBuilder) { b.EnableAutoSave(dir) },
+			"EnableAutoSaveOnCommit": func(b *DBBuilder) { b.EnableAutoSaveOnCommit(dir) },
+			"WithDialect":            func(b *DBBuilder) { b.WithDialect(dialect.MySQL) },
+		}
+
+		for name, mutate := range mutators {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+
+				builder := NewBuilder().AddPath(path)
+				require.NoError(t, builder.build(ctx))
+				require.True(t, builder.built)
+
+				mutate(builder)
+				assert.False(t, builder.built, "%s left the build cached, so what it said is dropped", name)
+			})
+		}
 	})
 }
