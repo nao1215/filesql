@@ -630,8 +630,11 @@ func TestNewReaderRefusesGarbage(t *testing.T) {
 			defer func() { _ = closeReader() }()
 
 			got, err := io.ReadAll(r)
-			if err == nil && string(got) == garbage {
-				t.Errorf("%s handed back the undecompressed bytes as if they had been read", c)
+			if err == nil {
+				// Not only "did it hand the bytes back": a codec that answered
+				// with nothing, or with a truncated prefix, and no error would
+				// also be letting garbage through unreported.
+				t.Errorf("%s read garbage without an error and answered %q", c, got)
 			}
 		})
 	}
