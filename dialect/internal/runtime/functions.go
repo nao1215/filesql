@@ -429,6 +429,20 @@ func RegisteredNames() []string {
 	return names
 }
 
+// RegisteredArity is how many arguments a helper takes, with -1 for one that
+// takes any number. It is what the driver refuses a call by, so the lowering
+// layer reads it to refuse the same call under the name the caller wrote.
+func RegisteredArity(name string) (int, bool) {
+	if err := RegisterFunctions(); err != nil {
+		return 0, false
+	}
+	spec, found := registeredFunctions[name]
+	if !found {
+		return 0, false
+	}
+	return int(spec.nArg), true
+}
+
 // registeredFunctions is every scalar function this package computes itself,
 // which is what the SAFE prefix can promise a NULL for: a function SQLite
 // computes is out of reach from here. It is written once, during registration,

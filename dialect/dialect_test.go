@@ -3,6 +3,7 @@ package dialect
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -530,6 +531,85 @@ func TestTranslateRefusesTextSQLiteCannotSpell(t *testing.T) {
 	for _, query := range []string{`SELECT '\Z'`, `SELECT '\b'`} {
 		if _, err := Translate(MySQL, query); err != nil {
 			t.Errorf("Translate(MySQL, %q) error = %v, want it to translate", query, err)
+		}
+	}
+}
+
+// TestTranslateRefusesACallUnderTheCallersOwnName pins that a call with an
+// argument count no form of the function accepts is refused here, naming the
+// function as the caller wrote it.
+//
+// A lowering renames a function to the helper that computes it without counting
+// the arguments, so such a call used to translate, reach the driver, and fail
+// there with "wrong number of arguments to function mysql_time_of_day" -- a
+// name the caller never wrote, arriving from their next Query rather than from
+// Translate. Every helper's count matches the source dialect's own, so no
+// correct call is refused; the second half of this holds that.
+func TestTranslateRefusesACallUnderTheCallersOwnName(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		dialect Dialect
+		query   string
+		names   string
+	}{
+		{MySQL, "SELECT TIME()", "TIME"},
+		{MySQL, "SELECT LEFT('abc')", "LEFT"},
+		{MySQL, "SELECT TIMEDIFF('1')", "TIMEDIFF"},
+		{MySQL, "SELECT WEEKOFYEAR()", "WEEKOFYEAR"},
+		{MySQL, "SELECT CONVERT_TZ('a')", "CONVERT_TZ"},
+		{PostgreSQL, "SELECT split_part('a', ',')", "SPLIT_PART"},
+		{GoogleSQL, "SELECT IEEE_DIVIDE(1)", "IEEE_DIVIDE"},
+	} {
+		_, err := Translate(tt.dialect, tt.query)
+		if !errors.Is(err, ErrUnsupportedSyntax) {
+			t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.query, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), tt.names) {
+			t.Errorf("Translate(%v, %q) error = %q, want it to name %s", tt.dialect, tt.query, err, tt.names)
+		}
+		// The helper's own name is this package's business and not the
+		// caller's, so it does not appear in what they are told.
+		if strings.Contains(err.Error(), "mysql_") || strings.Contains(err.Error(), "googlesql_") {
+			t.Errorf("Translate(%v, %q) error = %q, want it to name no helper", tt.dialect, tt.query, err)
+		}
+	}
+
+	// The arities the same functions do accept still translate.
+	for _, tt := range []struct {
+		dialect Dialect
+		query   string
+	}{
+		{MySQL, "SELECT TIME('12:00:00')"},
+		{MySQL, "SELECT LEFT('abc', 2)"},
+		{MySQL, "SELECT TIMEDIFF('1', '2')"},
+		{MySQL, "SELECT WEEKOFYEAR('2024-01-01')"},
+		{MySQL, "SELECT CONVERT_TZ('2024-01-01', '+00:00', '+09:00')"},
+		{MySQL, "SELECT GREATEST(1, 2, 3)"},
+		{MySQL, "SELECT GREATEST(1, 2)"},
+		{PostgreSQL, "SELECT split_part('a,b', ',', 1)"},
+		{GoogleSQL, "SELECT IEEE_DIVIDE(1, 2)"},
+		{GoogleSQL, "SELECT EDIT_DISTANCE('a', 'b', 3)"},
+		// A function whose count varies is registered as taking any number, so
+		// every arity it accepts still translates. These are the ones a caller
+		// meets most.
+		{MySQL, "SELECT ROUND(1.5)"},
+		{MySQL, "SELECT ROUND(1.55, 1)"},
+		{MySQL, "SELECT SUBSTRING('abc', 2)"},
+		{MySQL, "SELECT SUBSTRING('abc', 2, 1)"},
+		{MySQL, "SELECT LOG(2)"},
+		{MySQL, "SELECT LOG(2, 8)"},
+		{MySQL, "SELECT LOCATE('a', 'abc')"},
+		{MySQL, "SELECT LOCATE('a', 'abc', 2)"},
+		{MySQL, "SELECT WEEK('2024-01-01')"},
+		{MySQL, "SELECT WEEK('2024-01-01', 1)"},
+		{MySQL, "SELECT CHAR(65)"},
+		{MySQL, "SELECT CHAR(65, 66)"},
+		{MySQL, "SELECT FORMAT(1234.5, 2)"},
+	} {
+		if _, err := Translate(tt.dialect, tt.query); err != nil {
+			t.Errorf("Translate(%v, %q) error = %v, want it to translate", tt.dialect, tt.query, err)
 		}
 	}
 }

@@ -31,7 +31,9 @@
 // Nothing is forwarded to SQLite untranslated. What this package accepts is
 // what it has been taught, not what SQLite happens to tolerate: a construct
 // outside the subset is refused with a message naming it, rather than reaching
-// the engine to fail there under a name the caller never wrote.
+// the engine to fail there under a name the caller never wrote. A call whose
+// argument count no form of the function accepts is refused here too, since it
+// would otherwise fail under the helper's name.
 //
 // # Supported SQL
 //
