@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -90,16 +89,11 @@ func (f *CompressionFactory) createHandlerForFile(path string) CompressionHandle
 // CompressionHandler.CreateReader or to DBBuilder.AddReader, where the blocking
 // is their own.
 func (f *CompressionFactory) CreateReaderForFile(path string) (io.Reader, func() error, error) {
-	info, err := os.Stat(path)
+	file, err := openRegularFile(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: failed to open file: %w", ErrIOOperation, err)
-	}
-	if err := refuseIrregularSource(path, info.Mode()); err != nil {
-		return nil, nil, err
-	}
-
-	file, err := os.Open(path) //nolint:gosec // User-provided path is necessary for file operations
-	if err != nil {
+		if errors.Is(err, ErrUnsupportedFormat) {
+			return nil, nil, err
+		}
 		return nil, nil, fmt.Errorf("%w: failed to open file: %w", ErrIOOperation, err)
 	}
 

@@ -7,7 +7,6 @@ import (
 	"io"
 	"math"
 	"math/big"
-	"os"
 	"strconv"
 	"strings"
 
@@ -82,7 +81,7 @@ func readParquetPrior(path string) (prior parquetPrior) {
 			prior = nil
 		}
 	}()
-	file, err := os.Open(path) //nolint:gosec // the path is the caller's own source file
+	file, err := openRegularFile(path)
 	if err != nil {
 		return nil
 	}
