@@ -160,28 +160,8 @@ func (w *writer) selectCore(n *ast.SelectCore) error {
 	if n.Distinct {
 		w.word("DISTINCT")
 	}
-	for i, item := range n.Items {
-		if i > 0 {
-			w.word(",")
-		}
-		mark := w.b.Len()
-		if err := w.expr(item.Expr, precLowest); err != nil {
-			return err
-		}
-		alias, quoted := item.Alias, item.AliasQuoted
-		if alias == "" {
-			if label := preservedLabel(item, w.b.String()[mark:]); label != "" {
-				alias, quoted = label, true
-			}
-		}
-		switch {
-		case alias != "" && quoted:
-			w.word("AS")
-			w.word(QuoteIdent(alias))
-		case alias != "":
-			w.word("AS")
-			w.word(quoteIfNeeded(alias))
-		}
+	if err := w.selectItems(n.Items); err != nil {
+		return err
 	}
 	if len(n.From) > 0 {
 		w.word("FROM")
@@ -404,6 +384,9 @@ func (w *writer) values(rows [][]ast.Expr) error {
 func (w *writer) tableExpr(t ast.TableExpr) error {
 	switch n := t.(type) {
 	case *ast.TableName:
+		if len(n.Columns) > 0 {
+			return unsupported(n.At(), "a column list on a table reference")
+		}
 		if err := w.tableName(n); err != nil {
 			return err
 		}
@@ -413,6 +396,9 @@ func (w *writer) tableExpr(t ast.TableExpr) error {
 		}
 		return nil
 	case *ast.SubqueryTable:
+		if len(n.Columns) > 0 {
+			return unsupported(n.At(), "a column list on a table reference")
+		}
 		w.word("(")
 		if err := w.selectStmt(n.Sub); err != nil {
 			return err
@@ -424,6 +410,9 @@ func (w *writer) tableExpr(t ast.TableExpr) error {
 		}
 		return nil
 	case *ast.FuncTable:
+		if len(n.Columns) > 0 {
+			return unsupported(n.At(), "a column list on a table reference")
+		}
 		if err := w.call(n.Call); err != nil {
 			return err
 		}

@@ -430,7 +430,9 @@ func TestTheRestOfTheStatementForms(t *testing.T) {
 		{dialect.PostgreSQL, "SELECT * FROM t RIGHT JOIN u ON t.a = u.a", "SELECT * FROM t RIGHT JOIN u ON t.a = u.a"},
 		{dialect.PostgreSQL, "SELECT * FROM t FULL OUTER JOIN u ON t.a = u.a", "SELECT * FROM t FULL JOIN u ON t.a = u.a"},
 		{dialect.PostgreSQL, "SELECT * FROM generate(1) AS g", "SELECT * FROM generate(1) AS g"},
-		{dialect.PostgreSQL, "SELECT * FROM (SELECT 1 AS n) AS s (m)", "SELECT * FROM (SELECT 1 AS n) AS s"},
+		// A derived table's column list renames the columns it stands in front
+		// of, so the names move onto the select list SQLite takes them from.
+		{dialect.PostgreSQL, "SELECT * FROM (SELECT 1 AS n) AS s (m)", `SELECT * FROM (SELECT 1 AS "m") AS s`},
 		{dialect.PostgreSQL, "UPDATE t SET (a, b) = (1, 2)", "UPDATE t SET (a, b) = (1, 2)"},
 		{dialect.PostgreSQL, "SELECT a FROM t ORDER BY a COLLATE \"C\"", "SELECT a FROM t ORDER BY a COLLATE BINARY NULLS LAST"},
 		{dialect.PostgreSQL, "SELECT a FROM t ORDER BY a ASC NULLS FIRST", "SELECT a FROM t ORDER BY a NULLS FIRST"},

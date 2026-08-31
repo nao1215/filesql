@@ -245,6 +245,9 @@ func (l *lowerer) orderTerm(term *ast.OrderTerm) error {
 func (l *lowerer) tableExpr(t ast.TableExpr) (ast.TableExpr, error) {
 	switch n := t.(type) {
 	case *ast.TableName:
+		if len(n.Columns) > 0 {
+			return nil, unsupported(n.Span, renameTableColumns)
+		}
 		return n, nil
 	case *ast.SubqueryTable:
 		if n.Lateral {
@@ -256,11 +259,17 @@ func (l *lowerer) tableExpr(t ast.TableExpr) (ast.TableExpr, error) {
 			return nil, err
 		}
 		n.Sub = sub
+		if err := renameSubqueryColumns(n); err != nil {
+			return nil, err
+		}
 		return n, nil
 	case *ast.FuncTable:
 		if n.Lateral {
 			return nil, unsupported(n.Span,
 				"LATERAL is not supported; SQLite has no way for a FROM item to see the columns of an earlier one")
+		}
+		if len(n.Columns) > 0 {
+			return nil, unsupported(n.Span, renameTableColumns)
 		}
 		call, err := l.expr(n.Call)
 		if err != nil {
@@ -814,4 +823,49 @@ func (l *lowerer) columnDef(col *ast.ColumnDef) error {
 		col.Constraints[i].Expr = e
 	}
 	return nil
+}
+
+// renameTableColumns is the refusal for a column list SQLite cannot be given.
+// A FROM item takes only a name in SQLite, so the rename has to be carried by
+// the columns themselves, which is possible only when translation can see them.
+const renameTableColumns = "a column list on a table reference is not supported; " +
+	"give the columns their names in a select list, or write WITH name (columns) AS (...)"
+
+// renameSubqueryColumns moves a derived table's column list onto the select
+// list it renames, which is where SQLite takes a result column's name from. A
+// compound query takes its names from the first SELECT, so that is the one the
+// names go on. What the list cannot be moved onto -- a VALUES body, a select
+// list that ends in a star, a count that does not match -- is refused rather
+// than dropped, since dropping it answers the old names in silence.
+func renameSubqueryColumns(n *ast.SubqueryTable) error {
+	if len(n.Columns) == 0 {
+		return nil
+	}
+	items := firstSelectItems(n.Sub.Body)
+	if items == nil || len(*items) != len(n.Columns) {
+		return unsupported(n.Span, renameTableColumns)
+	}
+	for i := range *items {
+		if _, ok := (*items)[i].Expr.(*ast.Star); ok {
+			return unsupported(n.Span, renameTableColumns)
+		}
+	}
+	for i, name := range n.Columns {
+		(*items)[i].Alias, (*items)[i].AliasQuoted = name, true
+	}
+	n.Columns = nil
+	return nil
+}
+
+// firstSelectItems reports the select list a query body's result columns are
+// named after, or nil when the body has none to name.
+func firstSelectItems(body ast.QueryBody) *[]ast.SelectItem {
+	switch b := body.(type) {
+	case *ast.SelectCore:
+		return &b.Items
+	case *ast.SetOp:
+		return firstSelectItems(b.Left)
+	default:
+		return nil
+	}
 }

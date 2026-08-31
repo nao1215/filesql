@@ -43,3 +43,34 @@ func sameName(source, written string) bool {
 	return source == written ||
 		strings.ReplaceAll(source, `"`, "") == strings.ReplaceAll(written, `"`, "")
 }
+
+// selectItems writes a list of result columns: each item, then the alias that
+// names the column it answers. A list of result columns is written the same way
+// wherever it stands, so a select list and a RETURNING list name their columns
+// alike.
+func (w *writer) selectItems(items []ast.SelectItem) error {
+	for i, item := range items {
+		if i > 0 {
+			w.word(",")
+		}
+		mark := w.b.Len()
+		if err := w.expr(item.Expr, precLowest); err != nil {
+			return err
+		}
+		alias, quoted := item.Alias, item.AliasQuoted
+		if alias == "" {
+			if label := preservedLabel(item, w.b.String()[mark:]); label != "" {
+				alias, quoted = label, true
+			}
+		}
+		switch {
+		case alias != "" && quoted:
+			w.word("AS")
+			w.word(QuoteIdent(alias))
+		case alias != "":
+			w.word("AS")
+			w.word(quoteIfNeeded(alias))
+		}
+	}
+	return nil
+}
