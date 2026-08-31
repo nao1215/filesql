@@ -126,13 +126,14 @@ func keptParquetColumn(node parquet.Node, rows [][]any, col int) (parquet.Node, 
 	// written: they were built here to be checked, and building them twice
 	// would read every cell of the table twice.
 	rebuilt := make([]parquet.Value, len(rows))
+	emptyIsAValue := node.Type().Kind() == parquet.ByteArray
 	holdsNull := false
 	for r, row := range rows {
 		var value any
 		if col < len(row) {
 			value = row[col]
 		}
-		text, held := parquetCellText(value)
+		text, held := parquetCellText(value, emptyIsAValue)
 		if !held {
 			holdsNull = true
 			rebuilt[r] = parquet.NullValue()
@@ -167,13 +168,18 @@ func presentLevel(present bool) int {
 }
 
 // parquetCellText is the text a value of the table holds, and whether the cell
-// holds anything at all. It is the same reading parquetCellValue does of a null,
-// so the two agree about which cells are written.
-func parquetCellText(value any) (string, bool) {
+// holds anything at all.
+//
+// Empty text is a value in a byte array and nothing anywhere else, which is the
+// reading parquetCellValue already takes of it: a column of numbers spells a
+// missing cell with it, and a column of bytes spells an empty one. Reading it as
+// missing everywhere wrote a null over a string column's empty string, and made
+// a required column optional to hold the null it had invented.
+func parquetCellText(value any, emptyIsAValue bool) (string, bool) {
 	if value == nil {
 		return "", false
 	}
-	if text, isText := value.(string); isText && text == "" {
+	if text, isText := value.(string); isText && text == "" && !emptyIsAValue {
 		return "", false
 	}
 	return formatDumpValue(value), true
@@ -186,8 +192,10 @@ func parquetCellText(value any) (string, bool) {
 // text such as "[1 2 3]", which says nothing about the levels underneath it. An
 // INT96 is rendered as nanoseconds since the Unix epoch rather than as the
 // Julian day and offset it stores. A FLOAT16 is widened to 32 bits to be
-// rendered, and this package has no way to write the half-precision bytes back.
-// A column of one of those is written the way an export writes it.
+// rendered, and this package has no way to write the half-precision bytes back;
+// the library underneath cannot write that annotation either, so the guard is
+// for a file another writer produced. A column of one of those is written the
+// way an export writes it.
 func reproducibleParquetType(typ parquet.Type) bool {
 	if annotation, ok := parquetAnnotation(typ); ok {
 		switch annotation.(type) {

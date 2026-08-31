@@ -1233,6 +1233,24 @@ func TestParquetOverwriteKeepsTheSchema(t *testing.T) {
 		})
 	}
 
+	t.Run("a required column of text holding an empty string stays required", func(t *testing.T) {
+		t.Parallel()
+
+		// Empty text is a value in a column of bytes and a missing cell
+		// everywhere else. Reading it as missing wrote a null over the empty
+		// string, and made the column optional to hold the null it invented.
+		path := filepath.Join(t.TempDir(), "t.parquet")
+		writeOneFieldParquet(t, path, parquet.String(), []parquet.Value{
+			parquet.ByteArrayValue([]byte("")), parquet.ByteArrayValue([]byte("x"))})
+
+		require.NoError(t, autoSaveOverwrite(t, []string{path}))
+
+		assert.Equal(t, []string{"v STRING optional=false"}, parquetSchemaText(t, path))
+		assert.Equal(t, []string{"", "x"}, parquetColumnText(t, path))
+		assert.Equal(t, []string{`""`, `"x"`}, parquetStoredCells(t, path),
+			"the empty string is a value the file holds, not a null")
+	})
+
 	t.Run("a required column stays required", func(t *testing.T) {
 		t.Parallel()
 
@@ -1418,23 +1436,28 @@ func TestParquetOverwriteLeavesWhatItCannotRebuild(t *testing.T) {
 		assert.Equal(t, "[1 2 3]", tags)
 	})
 
-	t.Run("a half-precision float", func(t *testing.T) {
-		t.Parallel()
+	// An INT96 and a FLOAT16 are the other two, and neither is reachable from
+	// here: the library underneath writes no INT96 column and has no way to put
+	// a FLOAT16 annotation on one, so the guard against them is for a file
+	// another writer produced.
+}
 
-		path := filepath.Join(t.TempDir(), "t.parquet")
-		// 1.5 as an IEEE 754 half, little-endian per the format.
-		writeOneFieldParquet(t, path, parquet.Leaf(parquet.FixedLenByteArrayType(2)),
-			[]parquet.Value{parquet.FixedLenByteArrayValue([]byte{0x00, 0x3e})})
+// TestParquetOverwriteKeepsFixedBytes covers the fixed-length bytes a file may
+// hold with no annotation at all, which a load renders as the bytes themselves
+// and a save can therefore write back as what they were.
+func TestParquetOverwriteKeepsFixedBytes(t *testing.T) {
+	t.Parallel()
 
-		require.NoError(t, autoSaveOverwrite(t, []string{path}))
+	path := filepath.Join(t.TempDir(), "t.parquet")
+	writeOneFieldParquet(t, path, parquet.Leaf(parquet.FixedLenByteArrayType(2)),
+		[]parquet.Value{parquet.FixedLenByteArrayValue([]byte{0x00, 0x3e})})
 
-		db, err := OpenContext(t.Context(), path)
-		require.NoError(t, err)
-		defer db.Close()
-		var v string
-		require.NoError(t, db.QueryRowContext(t.Context(), `SELECT v FROM t`).Scan(&v))
-		assert.NotEmpty(t, v, "the value is still there whatever the column became")
-	})
+	want := parquetSchemaText(t, path)
+	before := parquetColumnText(t, path)
+	require.NoError(t, autoSaveOverwrite(t, []string{path}))
+
+	assert.Equal(t, want, parquetSchemaText(t, path))
+	assert.Equal(t, before, parquetColumnText(t, path))
 }
 
 // TestParquetOverwriteKeepsAnInfinity covers the one spelling of a number this
@@ -1589,6 +1612,33 @@ func fixedDecimal(t *testing.T, digits string) parquet.Value {
 	packed, ok := twosComplementBytes(n, width)
 	require.True(t, ok)
 	return parquet.FixedLenByteArrayValue(packed)
+}
+
+// parquetStoredCells is the column v as the file itself holds it, which is the
+// only place a null and an empty string look different.
+func parquetStoredCells(t *testing.T, path string) []string {
+	t.Helper()
+
+	f, err := os.Open(path) //nolint:gosec // the path is the test's own temporary directory
+	require.NoError(t, err)
+	defer func() { require.NoError(t, f.Close()) }()
+	info, err := f.Stat()
+	require.NoError(t, err)
+
+	rows, err := parquet.Read[any](f, info.Size())
+	require.NoError(t, err)
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		fields, ok := row.(map[string]any)
+		require.True(t, ok, "a row reads back as its fields")
+		value := fields["v"]
+		if value == nil {
+			out = append(out, "<null>")
+			continue
+		}
+		out = append(out, fmt.Sprintf("%q", value))
+	}
+	return out
 }
 
 // parquetColumnText is the column v of a file, as a load reads it.
