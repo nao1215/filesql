@@ -1502,7 +1502,9 @@ func TestAutoSaveOverwriteXLSXWritesTheTableBackWhereItSat(t *testing.T) {
 		writeDatedWorkbook(t, path, 2, []int{3, 4, 5})
 
 		want := workbookCells(t, path)
-		want["A6"] = xlsxCell{raw: "4", kind: excelize.CellTypeSharedString}
+		// The id column is a number and the note column is text, so each new
+		// cell is written as what its column holds.
+		want["A6"] = xlsxCell{raw: "4", kind: excelize.CellTypeUnset}
 		want["C6"] = xlsxCell{raw: "row4", kind: excelize.CellTypeSharedString}
 
 		require.NoError(t, autoSaveOverwrite(t, []string{path},
@@ -1633,4 +1635,141 @@ func cellAt(t *testing.T, col, row int) string {
 	name, err := excelize.CoordinatesToCellName(col, row)
 	require.NoError(t, err)
 	return name
+}
+
+// TestAutoSaveOverwriteXLSXKeepsANumberANumber pins that a cell the save
+// changes is written as what the column holds rather than always as text.
+//
+// A workbook stores a number as a number, and a spreadsheet sums, charts and
+// sorts by that; writing an edited value as a string left one cell of a numeric
+// column out of all of them, and the reload through this package was unaffected,
+// so nothing said so.
+func TestAutoSaveOverwriteXLSXKeepsANumberANumber(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		// held is what the sheet holds before the save, one column under a
+		// header. A float is written as a number and a string as a string,
+		// which is how a workbook tells the two apart.
+		held []any
+		stmt string
+		// want is the cell each row holds afterwards.
+		want []xlsxCell
+	}{
+		{
+			name: "a number stays a number",
+			held: []any{10.0, 20.0, 30.0},
+			stmt: "UPDATE book SET v = 40 WHERE v = 10",
+			want: []xlsxCell{
+				{raw: "40", kind: excelize.CellTypeUnset},
+				{raw: "20", kind: excelize.CellTypeUnset},
+				{raw: "30", kind: excelize.CellTypeUnset},
+			},
+		},
+		{
+			name: "a fraction stays a number",
+			held: []any{1.5, 2.5},
+			stmt: "UPDATE book SET v = 3.25 WHERE v = 1.5",
+			want: []xlsxCell{
+				{raw: "3.25", kind: excelize.CellTypeUnset},
+				{raw: "2.5", kind: excelize.CellTypeUnset},
+			},
+		},
+		{
+			name: "text stays text",
+			held: []any{"alice", "bob"},
+			stmt: "UPDATE book SET v = 'carol' WHERE v = 'alice'",
+			want: []xlsxCell{
+				{raw: "carol", kind: excelize.CellTypeSharedString},
+				{raw: "bob", kind: excelize.CellTypeSharedString},
+			},
+		},
+		{
+			// A zero-padded code is a text column under this package's own
+			// rule, so writing it as a number would lose the padding the
+			// column exists to keep.
+			name: "a zero-padded code stays text",
+			held: []any{"007", "042"},
+			stmt: "UPDATE book SET v = '008' WHERE v = '007'",
+			want: []xlsxCell{
+				{raw: "008", kind: excelize.CellTypeSharedString},
+				{raw: "042", kind: excelize.CellTypeSharedString},
+			},
+		},
+		{
+			// An integer past what a float64 spells exactly is written
+			// through an int64, so the digits the column holds are the
+			// digits the cell holds.
+			name: "an integer past what a float64 holds keeps its digits",
+			held: []any{1, 2},
+			stmt: "UPDATE book SET v = 9223372036854775807 WHERE v = 1",
+			want: []xlsxCell{
+				{raw: "9223372036854775807", kind: excelize.CellTypeUnset},
+				{raw: "2", kind: excelize.CellTypeUnset},
+			},
+		},
+		{
+			// A literal past int64 is text for the same reason: a number
+			// cannot hold its digits.
+			name: "a literal past int64 stays text",
+			held: []any{"11040320260000000000", "1"},
+			stmt: "UPDATE book SET v = '11040320260000000001' WHERE v = '1'",
+			want: []xlsxCell{
+				{raw: "11040320260000000000", kind: excelize.CellTypeSharedString},
+				{raw: "11040320260000000001", kind: excelize.CellTypeSharedString},
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			path := filepath.Join(dir, "book.xlsx")
+			writeOneColumnWorkbook(t, path, tt.held)
+
+			require.NoError(t, autoSaveOverwrite(t, []string{path}, tt.stmt))
+
+			cells := workbookCells(t, path)
+			for i, want := range tt.want {
+				axis := cellAt(t, 1, i+2)
+				assert.Equal(t, want, cells[axis], "cell %s", axis)
+			}
+		})
+	}
+
+	t.Run("a date cell keeps its serial when its row is edited elsewhere", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "book.xlsx")
+		writeDatedWorkbook(t, path, 1, []int{2, 3, 4})
+
+		before := workbookCells(t, path)
+		require.NoError(t, autoSaveOverwrite(t, []string{path}, "UPDATE book SET note = 'edited' WHERE id = 2"))
+
+		cells := workbookCells(t, path)
+		assert.Equal(t, before["B3"], cells["B3"], "the date beside the edited cell is untouched")
+		assert.Equal(t, xlsxCell{raw: "2", kind: excelize.CellTypeUnset}, cells["A3"],
+			"the number beside the edited cell is written as a number if it is written at all")
+	})
+}
+
+// writeOneColumnWorkbook writes a sheet with a single column named v, holding
+// values under a header. A float lands as a number and a string as a string,
+// which is how a workbook tells a number from text.
+func writeOneColumnWorkbook(t *testing.T, path string, held []any) {
+	t.Helper()
+
+	const sheet = "book"
+	f := excelize.NewFile()
+	defer func() {
+		_ = f.Close()
+	}()
+	require.NoError(t, f.SetSheetName(defaultSheetName, sheet))
+	require.NoError(t, f.SetCellValue(sheet, "A1", "v"))
+	for i, value := range held {
+		require.NoError(t, f.SetCellValue(sheet, cellAt(t, 1, i+2), value))
+	}
+	require.NoError(t, f.SaveAs(path))
 }

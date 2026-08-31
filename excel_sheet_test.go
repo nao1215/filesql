@@ -1848,7 +1848,7 @@ func TestSaveKeepsACellsStorageType(t *testing.T) {
 		})
 	}
 
-	t.Run("an edited number is written", func(t *testing.T) {
+	t.Run("an edited number is written as a number", func(t *testing.T) {
 		t.Parallel()
 
 		path := filepath.Join(t.TempDir(), "book.xlsx")
@@ -1862,13 +1862,11 @@ func TestSaveKeepsACellsStorageType(t *testing.T) {
 		require.NoError(t, autoSaveOverwrite(t, []string{path},
 			"UPDATE book_Sheet1 SET v = 7 WHERE v = 2.0"))
 
-		after, err := excelize.OpenFile(path)
-		require.NoError(t, err)
-		defer func() { require.NoError(t, after.Close()) }()
-
-		shown, err := after.GetCellValue(defaultSheetName, "A3")
-		require.NoError(t, err)
-		assert.Equal(t, "7.0", shown, "a cell whose value the caller changed holds what they set")
+		// The cell holds the number the caller set, stored the way the cell
+		// beside it is: a spreadsheet sums a column whose one edited cell is
+		// text one row short, and this package's own spelling of a REAL, "7.0",
+		// is what that text would have been.
+		assert.Equal(t, []string{"A2=0/1.5", "A3=0/7"}, storedCells(t, path, 2))
 	})
 }
 
