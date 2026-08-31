@@ -58,6 +58,12 @@ func (w *Workbook) Source() ExcelSheetSource {
 	return w.file
 }
 
+// File is the open workbook itself, for a save writing onto the file it is
+// replacing.
+func (w *Workbook) File() *excelize.File {
+	return w.file
+}
+
 // NoExcelSheetsError explains a workbook that contributed nothing. It separates
 // one with no sheets at all from one whose sheets were all left out by the
 // policy, because the two need different things done about them: the first file
@@ -114,6 +120,64 @@ func (h *heldRows) has(row int) bool {
 	return h.set().has(row)
 }
 
+// SheetLayout is where on a sheet the table this package reads from it sits:
+// the sheet's own number for the row the header came from, and for the row each
+// record came from, in the order the records are read.
+//
+// A save writing that table back needs it. The rows a table is made of are not
+// the rows from the top of the sheet whenever the sheet holds a row with no cell
+// in it, so a save that writes the header at row 1 and the records under it
+// lands every cell on a row belonging to a different record.
+type SheetLayout struct {
+	// HeaderRow is zero for a sheet holding no table.
+	HeaderRow  int
+	RecordRows []int
+}
+
+// LayoutOf answers where on a sheet the table sits, given the rows the library
+// returned for that sheet. It takes them rather than reading them because
+// reading a sheet is the expensive part of a save, and the caller that asks
+// this has read it already.
+func (w *Workbook) LayoutOf(name string, rows [][]string) SheetLayout {
+	holdsCells := &heldRows{workbook: w, sheet: name}
+	rows = extendToHeldRows(rows, holdsCells.set())
+	headerRow, recordRows := tableRows(rows, holdsCells)
+	return SheetLayout{HeaderRow: headerRow, RecordRows: recordRows}
+}
+
+// tableRows picks the rows of a sheet the table on it is made of, answering the
+// sheet's own number for the header and for each record.
+//
+// A row holding no cell at all is not a record, the way a blank line is not one
+// in any other format read here. It is also what a sheet is made of between its
+// last written row and a stray cell further down: those rows arrive by the
+// million from a file of a few kilobytes, and padding each one to the header's
+// width was the whole cost of loading such a workbook. A row whose cells are
+// present and empty is a different thing and stays a record, the way a CSV line
+// reading "," is one -- and the library cannot tell the two apart, because it
+// drops a cell whose value is the empty string, so the sheet's own XML is what
+// says which is which.
+//
+// The same rule decides where the header is: a sheet may begin with rows holding
+// no cell at all, which name no column.
+func tableRows(rows [][]string, holdsCells *heldRows) (headerRow int, recordRows []int) {
+	at := 0
+	for at < len(rows) && len(rows[at]) == 0 && !holdsCells.has(at+1) {
+		at++
+	}
+	if at >= len(rows) {
+		return 0, nil
+	}
+	headerRow = at + 1
+	for i := at + 1; i < len(rows); i++ {
+		if len(rows[i]) == 0 && !holdsCells.has(i+1) {
+			continue
+		}
+		recordRows = append(recordRows, i+1)
+	}
+	return headerRow, recordRows
+}
+
 // ReadSheet reads one sheet of the workbook in chunks.
 //
 // A sheet holding nothing a table can be made from -- no rows, or no row that
@@ -140,40 +204,20 @@ func (w *Workbook) ReadSheet(name string, opts Options, emit Emit) (Result, erro
 	holdsCells := &heldRows{workbook: w, sheet: name}
 	rows = extendToHeldRows(rows, holdsCells.set())
 
-	// A sheet may begin with rows holding no cell at all, which name no column.
-	dropped := 0
-	for len(rows) > 0 && len(rows[0]) == 0 && !holdsCells.has(dropped+1) {
-		rows = rows[1:]
-		dropped++
-	}
-	if len(rows) == 0 || len(rows[0]) == 0 {
+	headerRow, recordRows := tableRows(rows, holdsCells)
+	if headerRow == 0 || len(rows[headerRow-1]) == 0 {
 		return Result{}, emptyError("no headers found in XLSX")
 	}
 
-	header := NameBlankColumns(rows[0])
+	header := NameBlankColumns(rows[headerRow-1])
 	if err := ValidateColumnNames(header); err != nil {
 		return Result{}, err
 	}
 
-	// headerRow is the sheet's own number for the row the header came from, so
-	// a data row's number is that plus its index here and one more.
-	headerRow := dropped + 1
 	result := Result{Header: header}
 	records := newChunker(header, opts, emit)
-	for i, row := range rows[1:] {
-		// A row holding no cell at all is not a record, the way a blank line is
-		// not one in any other format read here. It is also what a sheet is made
-		// of between its last written row and a stray cell further down: those
-		// rows arrive by the million from a file of a few kilobytes, and padding
-		// each one to the header's width was the whole cost of loading such a
-		// workbook. A row whose cells are present and empty is a different thing
-		// and stays a record, the way a CSV line reading "," is one -- and the
-		// library cannot tell the two apart, because it drops a cell whose value
-		// is the empty string, so the sheet's own XML is what says which is
-		// which.
-		if len(row) == 0 && !holdsCells.has(headerRow+i+1) {
-			continue
-		}
+	for _, sheetRow := range recordRows {
+		row := rows[sheetRow-1]
 		// A workbook stores no cell for a trailing empty one, so a row ending in
 		// blanks arrives short and means what the padding says. More cells than
 		// the header has means the opposite -- there is data in a column the
@@ -181,7 +225,7 @@ func (w *Workbook) ReadSheet(name string, opts Options, emit Emit) (Result, erro
 		// error and no count to say it had happened.
 		if len(row) > len(header) {
 			return Result{}, parseError(nil, "row %d has %d cells where the header has %d",
-				headerRow+i+1, len(row), len(header))
+				sheetRow, len(row), len(header))
 		}
 		record := make([]string, len(header))
 		copy(record, row)
