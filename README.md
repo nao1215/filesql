@@ -405,6 +405,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Validate DNS label, color and numeric currency columns | `ExampleProcessor_Process_labelColorAndNumericCode` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Read preprocessing error details | `ExampleProcessResult_PrepErrors` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Check output and original formats | `ExampleProcessResult_OutputFormat` | [prep/example_api_test.go](./prep/example_api_test.go) |
+| Load a processed reader into filesql | `ExampleProcessor_Process_intoFilesql` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Rewind and reread the processed stream | `Example_streamSeek` | [prep/example_api_test.go](./prep/example_api_test.go) |
 
 #### parser
