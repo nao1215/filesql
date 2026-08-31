@@ -264,6 +264,23 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 	// Remove compressed duplicates when uncompressed versions exist
 	allMatches = fp.deduplicateCompressedFiles(allMatches)
 
+	// What kind of file each one is, once the two routes above have joined:
+	// fs.Glob returns names with no entry to ask, so there is nothing to read a
+	// type from until here. fs.Stat follows a symbolic link on an os.DirFS,
+	// which is what keeps a link to a regular file loading. An embedded
+	// filesystem holds only regular files, so this costs it a lookup and
+	// nothing else.
+	for _, match := range allMatches {
+		info, err := fs.Stat(filesystem, match)
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to stat %s in filesystem: %w", ErrIOOperation, match, err)
+		}
+		if err := refuseIrregularSource(match, info.Mode()); err != nil {
+			fp.logger.Error("source is not a regular file", "path", match, "error", err)
+			return nil, err
+		}
+	}
+
 	// Create ReaderInput for each matched file
 	for _, match := range allMatches {
 		// Open the file from FS
