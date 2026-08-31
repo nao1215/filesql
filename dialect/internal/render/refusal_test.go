@@ -251,3 +251,54 @@ func TestRenderingTheSpellingsEachNodeHas(t *testing.T) {
 		}
 	})
 }
+
+// TestTheRendererRefusesTextSQLiteCannotSpell holds the renderer to refusing a
+// NUL byte inside a string literal or a name. SQLite reads a statement as a C
+// string and ends it at the first NUL, so no SQL text can carry one; the MySQL
+// and GoogleSQL escape \0 decodes to exactly that byte, and writing it out
+// produced SQL that reported success here and failed later with an error about
+// the opening quote. Every other control character those escapes produce goes
+// through SQLite's tokenizer unchanged, which is the boundary the last two
+// cases hold.
+func TestTheRendererRefusesTextSQLiteCannotSpell(t *testing.T) {
+	t.Parallel()
+
+	span := ast.Span{Line: 1, Col: 1}
+	item := func(e ast.Expr) *ast.SelectStmt {
+		return &ast.SelectStmt{
+			Body: &ast.SelectCore{Items: []ast.SelectItem{{Expr: e, Span: span}}, Span: span},
+			Span: span,
+		}
+	}
+	str := func(v string) ast.Expr { return &ast.Literal{Kind: ast.LitString, Value: v, Span: span} }
+	ident := func(v string) ast.Expr {
+		return &ast.ColumnRef{Parts: []ast.Ident{{Name: v, Span: span}}, Span: span}
+	}
+
+	for _, tt := range []struct {
+		name    string
+		stmt    ast.Stmt
+		refused bool
+	}{
+		{"a string literal holding a NUL", item(str("a\x00b")), true},
+		{"a string literal that is only a NUL", item(str("\x00")), true},
+		{"a name holding a NUL", item(ident("a\x00b")), true},
+		{"a string literal holding the substitute character", item(str("a\x1ab")), false},
+		{"a string literal holding a backspace", item(str("a\bb")), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := Render(tt.stmt)
+			if tt.refused {
+				if !errors.Is(err, sqlerr.ErrUnsupportedSyntax) {
+					t.Errorf("rendering %s: error = %v, want ErrUnsupportedSyntax", tt.name, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("rendering %s: error = %v, want it to render", tt.name, err)
+			}
+		})
+	}
+}

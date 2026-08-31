@@ -186,6 +186,14 @@
 // in GoogleSQL, an escaped backtick among them, where MySQL has none and
 // doubles the backtick instead.
 //
+// One byte a literal may hold cannot appear in SQL text. SQLite reads a
+// statement up to the first NUL, so a statement carrying one ends there, and
+// the MySQL and GoogleSQL escape \0 decodes to that byte; a string literal or
+// a quoted name holding it is refused with ErrUnsupportedSyntax. The one
+// construct that would parse, a cast from a blob, does not answer the same
+// thing, since SQLite's length stops at a NUL where MySQL's does not. Every
+// other control character those escapes produce is written out unchanged.
+//
 // GoogleSQL needs two kinds of name. Some are BigQuery
 // functions SQLite has nothing like -- CONTAINS_SUBSTR, EDIT_DISTANCE,
 // IEEE_DIVIDE, the base32 pair. The rest are names another dialect here already
