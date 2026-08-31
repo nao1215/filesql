@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 
 	"github.com/nao1215/filesql/internal/infer"
 	"github.com/nao1215/filesql/internal/reader"
@@ -269,8 +271,45 @@ func trimXLSXSheet(f *excelize.File, sheetName string, had xlsxExtent, wrote xls
 	return nil
 }
 
-// writeXLSXSheet adds one sheet to f and fills it. A cell whose value matches
-// what before already holds is left alone.
+// numericColumns reports, per column, whether SQLite declares it a number. A
+// column this package inferred as text is not one, whatever its values spell.
+// A read that cannot answer leaves every column text, which is what every cell
+// was written as before this.
+func numericColumns(rows *sql.Rows) []bool {
+	types, err := rows.ColumnTypes()
+	if err != nil {
+		return nil
+	}
+	numeric := make([]bool, len(types))
+	for i, t := range types {
+		switch strings.ToUpper(t.DatabaseTypeName()) {
+		case sqlTypeInteger, sqlTypeReal:
+			numeric[i] = true
+		}
+	}
+	return numeric
+}
+
+// xlsxCellValue is what a cell is written with: the number a numeric column's
+// value spells, or the text every other value is written as.
+//
+// An integer is written as an integer rather than through a float64, which
+// holds only the first fifteen or so digits of one: a column may hold an int64
+// past what a float64 spells exactly, and rounding it here would change the
+// value the save was asked to write.
+func xlsxCellValue(text string, numeric bool) any {
+	if !numeric {
+		return text
+	}
+	if n, err := strconv.ParseInt(text, 10, 64); err == nil {
+		return n
+	}
+	if f, ok := numericCellValue(text); ok {
+		return f
+	}
+	return text
+}
+
 // xmlControlRune finds the first character in s that an XML 1.0 document has no
 // way to spell: a control character other than tab, line feed and carriage
 // return, which are the three XML admits. A worksheet is XML, and the library
@@ -305,6 +344,8 @@ func xlsxUnrepresentableError(column string, r rune) error {
 		ErrUnsupportedFormat, r, column)
 }
 
+// writeXLSXSheet adds one sheet to f and fills it. A cell whose value matches
+// what before already holds is left alone.
 func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior) (xlsxExtent, error) {
 	before := prior.values
 	columns, rows, err := sheet.open()
@@ -357,6 +398,8 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior) (xl
 		}
 	}
 
+	numeric := numericColumns(rows)
+
 	// Prepare for scanning rows
 	values := make([]interface{}, len(columns))
 	scanArgs := make([]interface{}, len(columns))
@@ -375,8 +418,9 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior) (xl
 		record++
 
 		for i, val := range values {
-			// Every cell is written as text, the same string the text formats
-			// produce, so one table dumped twice does not disagree with itself.
+			// Every cell is formatted as the text the text formats produce, so
+			// one table dumped twice does not disagree with itself; a numeric
+			// column's cell then goes in as the number that text spells.
 			cellValue := formatDumpValue(val)
 			if r, found := xmlControlRune(cellValue); found {
 				return xlsxExtent{}, xlsxUnrepresentableError(columns[i], r)
@@ -388,7 +432,7 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior) (xl
 			if err != nil {
 				return xlsxExtent{}, fmt.Errorf("failed to generate cell name for column %d, row %d: %w", i+1, rowIndex, err)
 			}
-			if err := f.SetCellValue(sheet.name, cell, cellValue); err != nil {
+			if err := f.SetCellValue(sheet.name, cell, xlsxCellValue(cellValue, i < len(numeric) && numeric[i])); err != nil {
 				return xlsxExtent{}, fmt.Errorf("failed to set cell value at %s: %w", cell, err)
 			}
 		}

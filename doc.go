@@ -283,7 +283,11 @@
 // sheet holding a row with no cell in it -- under a title, or between two blocks
 // of records -- are not the rows from the top. A cell already holding the value
 // the save would write is left as it is, so a date cell nothing edited keeps the
-// serial and the number format that make a spreadsheet read it as a day.
+// serial and the number format that make a spreadsheet read it as a day. A cell
+// the save does write takes the type its column has: a value of an INTEGER or
+// REAL column is written as a number, so the column stays one a spreadsheet
+// sums, while a value this package keeps as text -- a zero-padded code, a
+// literal past int64 -- is written as text.
 //
 // # ACH and Fedwire
 //
