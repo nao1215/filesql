@@ -1773,3 +1773,116 @@ func writeOneColumnWorkbook(t *testing.T, path string, held []any) {
 	}
 	require.NoError(t, f.SaveAs(path))
 }
+
+// TestAutoSaveOverwriteXLSXFindsTheSheetItRead pins which sheet of a workbook a
+// table is written back into.
+//
+// A table's name is its sheet's name run through sanitizeTableName, which turns
+// spaces, hyphens and dots into underscores, prefixes a leading digit, and drops
+// whatever is left over. None of that is reversible, so a sheet cannot be
+// spelled back out of the table it was loaded as: deriving the destination from
+// the table name sent "Q1 Sales" to a sheet named "Q1_Sales" that the workbook
+// never had, and the save failed there with every edit in the session discarded,
+// including the edits to sheets whose names were fine.
+func TestAutoSaveOverwriteXLSXFindsTheSheetItRead(t *testing.T) {
+	t.Parallel()
+
+	// One sheet name per way sanitizeTableName rewrites a name.
+	sheets := []struct {
+		sheet string
+		table string
+	}{
+		{sheet: "Q1 Sales", table: "book_Q1_Sales"},
+		{sheet: "Q1-Sales", table: "book_Q1_Sales"},
+		{sheet: "Rev.1", table: "book_Rev_1"},
+		{sheet: "2024", table: "book_sheet_2024"},
+		{sheet: "(draft)", table: "book_draft"},
+	}
+
+	for _, tt := range sheets {
+		t.Run(tt.sheet, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			src := filepath.Join(t.TempDir(), "book.xlsx")
+			writeWorkbook(t, src, map[string][][]string{
+				tt.sheet: {{"id", "name"}, {"1", "alice"}},
+			})
+
+			require.NoError(t, autoSaveOverwrite(t, []string{src},
+				"UPDATE "+quoteIdentifier(tt.table)+" SET name = 'bob'"))
+
+			// The sheet list, not only the value: a save that added a sheet
+			// named after the table would leave the original sheet holding the
+			// old rows, and the next load would refuse the workbook because two
+			// sheets now map to one table.
+			assert.Equal(t, []string{tt.sheet}, workbookSheets(t, src),
+				"the rows belong in the sheet they were read from")
+
+			reloaded, err := OpenContext(ctx, src)
+			require.NoError(t, err)
+			defer reloaded.Close()
+
+			var name string
+			require.NoError(t, reloaded.QueryRowContext(ctx,
+				"SELECT name FROM "+quoteIdentifier(tt.table)).Scan(&name))
+			assert.Equal(t, "bob", name)
+		})
+	}
+
+	t.Run("one sheet that cannot be spelled back does not discard the others", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := t.Context()
+		src := filepath.Join(t.TempDir(), "book.xlsx")
+		writeWorkbook(t, src, map[string][][]string{
+			"Orders":   {{"id", "name"}, {"1", "alice"}},
+			"Q1 Sales": {{"id", "name"}, {"1", "carol"}},
+		})
+
+		require.NoError(t, autoSaveOverwrite(t, []string{src},
+			"UPDATE book_Orders SET name = 'bob'",
+			"UPDATE book_Q1_Sales SET name = 'dave'"))
+
+		assert.Equal(t, []string{"Orders", "Q1 Sales"}, workbookSheets(t, src))
+
+		reloaded, err := OpenContext(ctx, src)
+		require.NoError(t, err)
+		defer reloaded.Close()
+
+		for table, want := range map[string]string{"book_Orders": "bob", "book_Q1_Sales": "dave"} {
+			var name string
+			require.NoError(t, reloaded.QueryRowContext(ctx,
+				"SELECT name FROM "+quoteIdentifier(table)).Scan(&name))
+			assert.Equal(t, want, name, "table %s", table)
+		}
+	})
+
+	t.Run("a table created during the session becomes a sheet", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := t.Context()
+		src := filepath.Join(t.TempDir(), "book.xlsx")
+		writeWorkbook(t, src, map[string][][]string{
+			"Orders": {{"id", "name"}, {"1", "alice"}},
+		})
+
+		require.NoError(t, autoSaveOverwrite(t, []string{src},
+			"CREATE TABLE book_Extra (id TEXT, name TEXT)",
+			"INSERT INTO book_Extra VALUES ('9', 'new')",
+			"UPDATE book_Orders SET name = 'bob'"))
+
+		assert.Equal(t, []string{"Extra", "Orders"}, workbookSheets(t, src),
+			"a table of this workbook with no sheet of its own is written as a new one")
+
+		reloaded, err := OpenContext(ctx, src)
+		require.NoError(t, err)
+		defer reloaded.Close()
+
+		var name string
+		require.NoError(t, reloaded.QueryRowContext(ctx, "SELECT name FROM book_Orders").Scan(&name))
+		assert.Equal(t, "bob", name, "the edit to the sheet that already existed survives")
+		require.NoError(t, reloaded.QueryRowContext(ctx, "SELECT name FROM book_Extra").Scan(&name))
+		assert.Equal(t, "new", name)
+	})
+}
