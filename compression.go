@@ -74,8 +74,30 @@ func (f *CompressionFactory) createHandlerForFile(path string) CompressionHandle
 	return NewCompressionHandler(compressionType)
 }
 
-// CreateReaderForFile opens a file and returns a reader that handles decompression
+// CreateReaderForFile opens a file and returns a reader that handles
+// decompression.
+//
+// A path that is not a regular file is refused rather than opened. Opening a
+// named pipe for reading blocks until a writer opens the other end, inside the
+// syscall where no deadline and no cancellation reach it, and this is the one
+// place every read of a path in this package goes through: a load of a
+// compressed source, the read an in-place save does for the source's
+// compression, encoding and line terminator, and ExcelSheetsInFile. A load
+// refuses such a path earlier still, while collecting, where it can name the
+// entry before anything is opened; this is the floor under that, for the calls
+// that reach a path without going through a collection. A caller who means to
+// read a pipe opens it themselves and passes the reader to
+// CompressionHandler.CreateReader or to DBBuilder.AddReader, where the blocking
+// is their own.
 func (f *CompressionFactory) CreateReaderForFile(path string) (io.Reader, func() error, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: failed to open file: %w", ErrIOOperation, err)
+	}
+	if err := refuseIrregularSource(path, info.Mode()); err != nil {
+		return nil, nil, err
+	}
+
 	file, err := os.Open(path) //nolint:gosec // User-provided path is necessary for file operations
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: failed to open file: %w", ErrIOOperation, err)
