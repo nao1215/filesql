@@ -802,7 +802,9 @@ func TestCollectFilesFromPaths_RefusesASourceThatIsNotAFile(t *testing.T) {
 		_, err := newFileProcessor().collectFilesFromPaths([]string{root})
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		assert.NotErrorIs(t, err, ErrIOOperation, "the walk did not break; a kind was refused")
 		assert.Contains(t, err.Error(), "pipe.csv", "the refusal has to name the entry that caused it")
+		assert.NotContains(t, err.Error(), "failed to walk", "a refusal this package raised is already worded")
 	})
 
 	t.Run("a pipe named by the caller", func(t *testing.T) {
@@ -841,6 +843,141 @@ func TestCollectFilesFromPaths_RefusesASourceThatIsNotAFile(t *testing.T) {
 			assert.ErrorIs(t, err, ErrUnsupportedFormat)
 		case <-time.After(30 * time.Second):
 			t.Fatal("Open did not return: it is waiting for a writer on the pipe, which no context ends")
+		}
+	})
+}
+
+// TestProcessFSToReaders_RefusesASourceThatIsNotAFile pins that a filesystem is
+// held to the same rule a path is.
+//
+// It was not: the fix that stopped a path opening a named pipe covered the two
+// routes a path takes and missed the third. A directory reached through
+// os.DirFS still blocked in Open until a writer opened the other end, so the
+// same directory answered one way as a path and hung as a filesystem.
+func TestProcessFSToReaders_RefusesASourceThatIsNotAFile(t *testing.T) {
+	t.Parallel()
+
+	// The two routes that collect names are separate, so a pipe is placed once
+	// where the globs reach it and once where only the walk does.
+	for _, tt := range []struct {
+		name string
+		at   func(root string) string
+	}{
+		{name: "at the root, where the globs reach it", at: func(root string) string { return root }},
+		{name: "in a subdirectory, where only the walk does", at: func(root string) string {
+			sub := filepath.Join(root, "sub")
+			if err := os.Mkdir(sub, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			return sub
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(root, "real.csv"), []byte("id\n1\n"), 0o600))
+			makeFIFO(t, filepath.Join(tt.at(root), "pipe.csv"))
+
+			// A path and a filesystem name the same directory, so they have to
+			// answer the same way.
+			_, pathErr := newFileProcessor().collectFilesFromPaths([]string{root})
+			require.Error(t, pathErr)
+
+			done := make(chan error, 1)
+			go func() {
+				_, err := newFileProcessor().processFSToReaders(t.Context(), os.DirFS(root))
+				done <- err
+			}()
+			select {
+			case fsErr := <-done:
+				require.Error(t, fsErr, "a filesystem holding a pipe is refused, not opened")
+				assert.ErrorIs(t, fsErr, ErrUnsupportedFormat)
+				assert.Contains(t, fsErr.Error(), "pipe.csv")
+				assert.Contains(t, fsErr.Error(), "a named pipe")
+			case <-time.After(30 * time.Second):
+				t.Fatal("processFSToReaders did not return: it is waiting for a writer on the pipe")
+			}
+		})
+	}
+
+	t.Run("a filesystem of ordinary files still loads every one", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(root, "a.csv"), []byte("id\n1\n"), 0o600))
+		sub := filepath.Join(root, "sub")
+		require.NoError(t, os.Mkdir(sub, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(sub, "b.csv"), []byte("id\n2\n"), 0o600))
+
+		readers, err := newFileProcessor().processFSToReaders(t.Context(), os.DirFS(root))
+		require.NoError(t, err)
+		closeReaders(t, readers)
+		assert.Len(t, readers, 2)
+	})
+
+	t.Run("a symlink to a regular file still loads", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		target := filepath.Join(root, "target.csv")
+		require.NoError(t, os.WriteFile(target, []byte("id\n1\n"), 0o600))
+		if err := os.Symlink(target, filepath.Join(root, "link.csv")); err != nil {
+			t.Skipf("this process cannot create a symlink here: %v", err)
+		}
+
+		readers, err := newFileProcessor().processFSToReaders(t.Context(), os.DirFS(root))
+		require.NoError(t, err)
+		closeReaders(t, readers)
+		assert.Len(t, readers, 2, "the link and its target are both regular files")
+	})
+
+	t.Run("a directory named like a file is gone into, not refused", func(t *testing.T) {
+		t.Parallel()
+
+		// fs.Glob matches a directory too, and a directory named "exports.csv"
+		// is one the walk has already collected the contents of. Refusing it
+		// would make a filesystem answer differently from the path naming the
+		// same directory, which loads what is under it.
+		root := t.TempDir()
+		inner := filepath.Join(root, "exports.csv")
+		require.NoError(t, os.Mkdir(inner, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(inner, "data.csv"), []byte("id\n1\n"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "real.csv"), []byte("id\n9\n"), 0o600))
+
+		collected, pathErr := newFileProcessor().collectFilesFromPaths([]string{root})
+		require.NoError(t, pathErr)
+		require.Len(t, collected, 2, "a path goes into it")
+
+		readers, err := newFileProcessor().processFSToReaders(t.Context(), os.DirFS(root))
+		require.NoError(t, err)
+		closeReaders(t, readers)
+		assert.Len(t, readers, 2, "and so does a filesystem")
+	})
+
+	t.Run("a filesystem whose only match is such a directory has no files", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(root, "exports.csv"), 0o750))
+
+		_, err := newFileProcessor().processFSToReaders(t.Context(), os.DirFS(root))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrNoFiles)
+	})
+}
+
+// closeReaders closes the file handles processFSToReaders opened, which the
+// consumer normally does. Leaving them open keeps t.TempDir from being cleaned
+// up on a platform that will not remove an open file.
+func closeReaders(t *testing.T, inputs []readerInput) {
+	t.Helper()
+
+	t.Cleanup(func() {
+		for _, input := range inputs {
+			if input.closer != nil {
+				_ = input.closer.Close()
+			}
 		}
 	})
 }

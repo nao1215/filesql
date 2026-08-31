@@ -2,6 +2,7 @@ package filesql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -165,6 +166,13 @@ func (fp *fileProcessor) collectFilesFromDirectory(dirPath string, processedFile
 	})
 
 	if err != nil {
+		// An error this package raised on the way -- a source that is not a
+		// file, say -- is already worded and already carries its own sentinel,
+		// so wrapping it as an I/O failure would say the walk broke and would
+		// match ErrIOOperation for something that is not one.
+		if errors.Is(err, ErrUnsupportedFormat) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("%w: failed to walk directory %s: %w", ErrIOOperation, dirPath, err)
 	}
 
@@ -263,6 +271,38 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 
 	// Remove compressed duplicates when uncompressed versions exist
 	allMatches = fp.deduplicateCompressedFiles(allMatches)
+
+	// What kind of file each one is, once the two routes above have joined:
+	// fs.Glob returns names with no entry to ask, so there is nothing to read a
+	// type from until here. fs.Stat follows a symbolic link on an os.DirFS,
+	// which is what keeps a link to a regular file loading. An embedded
+	// filesystem holds only regular files, so this costs it a lookup and
+	// nothing else.
+	//
+	// A glob matches a directory too, and a directory named "exports.csv" is
+	// one a walk goes into rather than one to refuse: the walk has already
+	// collected what is under it, so the name of the directory itself goes.
+	// That is what a path does with the same directory.
+	kept := allMatches[:0]
+	for _, match := range allMatches {
+		info, err := fs.Stat(filesystem, match)
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to stat %s in filesystem: %w", ErrIOOperation, match, err)
+		}
+		if info.IsDir() {
+			continue
+		}
+		if err := refuseIrregularSource(match, info.Mode()); err != nil {
+			fp.logger.Error("source is not a regular file", "path", match, "error", err)
+			return nil, err
+		}
+		kept = append(kept, match)
+	}
+	allMatches = kept
+	if len(allMatches) == 0 {
+		// A filesystem whose only match was a directory named like a file.
+		return nil, fmt.Errorf("%w: no supported files found in filesystem", ErrNoFiles)
+	}
 
 	// Create ReaderInput for each matched file
 	for _, match := range allMatches {
