@@ -430,9 +430,10 @@ func prefixLen(s string, i int, cfg Config) int {
 			}
 			sawBytes = true
 		default:
-			// Not a prefix letter: what follows has to be the quote.
-		}
-		if !sawRaw && !sawBytes {
+			// Not a prefix letter, so the prefix ended before it. A letter
+			// already read is an identifier rather than a prefix, since a
+			// prefix runs into the quote: "b,'x'" is a column, a comma and a
+			// string, not one bytes literal.
 			return 0
 		}
 		n++
