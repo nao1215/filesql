@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/s2"
 	"github.com/klauspost/compress/snappy"
@@ -440,6 +441,102 @@ func TestCompressionEndToEnd(t *testing.T) {
 }
 
 // TestCompressionFactoryErrors tests error handling in the compression factory
+// TestCreateReaderForFile_RefusesWhatIsNotAFile pins that the one place every
+// read of a path goes through knows what it is opening.
+//
+// It did not: opening a named pipe for reading blocks until a writer opens the
+// other end, inside the syscall where no context reaches, so ExcelSheetsInFile
+// on a pipe never returned and neither did an in-place save whose source had
+// been replaced by one -- and Close takes no context at all. A load refuses
+// such a path in its collection; this is the floor under that, for the calls
+// that reach a path without going through one.
+func TestCreateReaderForFile_RefusesWhatIsNotAFile(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a named pipe", func(t *testing.T) {
+		t.Parallel()
+
+		pipe := filepath.Join(t.TempDir(), "data.csv")
+		makeFIFO(t, pipe)
+
+		done := make(chan error, 1)
+		go func() {
+			_, cleanup, err := NewCompressionFactory().CreateReaderForFile(pipe)
+			if cleanup != nil {
+				_ = cleanup()
+			}
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrUnsupportedFormat)
+			assert.Contains(t, err.Error(), "a named pipe")
+		case <-time.After(30 * time.Second):
+			t.Fatal("CreateReaderForFile did not return: it is waiting for a writer on the pipe")
+		}
+	})
+
+	t.Run("a directory", func(t *testing.T) {
+		t.Parallel()
+
+		dir := filepath.Join(t.TempDir(), "data.csv")
+		require.NoError(t, os.Mkdir(dir, 0o750))
+
+		_, cleanup, err := NewCompressionFactory().CreateReaderForFile(dir)
+		if cleanup != nil {
+			_ = cleanup()
+		}
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		assert.Contains(t, err.Error(), "a directory")
+	})
+
+	t.Run("a regular file, plain and compressed, still opens", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		plain := filepath.Join(dir, "plain.csv")
+		require.NoError(t, os.WriteFile(plain, []byte("id\n1\n"), 0o600))
+
+		zipped := filepath.Join(dir, "zipped.csv.gz")
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		_, writeErr := gz.Write([]byte("id\n1\n"))
+		require.NoError(t, writeErr)
+		require.NoError(t, gz.Close())
+		require.NoError(t, os.WriteFile(zipped, buf.Bytes(), 0o600))
+
+		for _, path := range []string{plain, zipped} {
+			reader, cleanup, err := NewCompressionFactory().CreateReaderForFile(path)
+			require.NoError(t, err, path)
+			body, readErr := io.ReadAll(reader)
+			require.NoError(t, readErr)
+			assert.Equal(t, "id\n1\n", string(body))
+			require.NoError(t, cleanup())
+		}
+	})
+
+	t.Run("a symlink to a regular file still opens", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		target := filepath.Join(dir, "target.csv")
+		require.NoError(t, os.WriteFile(target, []byte("id\n1\n"), 0o600))
+		link := filepath.Join(dir, "link.csv")
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("this process cannot create a symlink here: %v", err)
+		}
+
+		reader, cleanup, err := NewCompressionFactory().CreateReaderForFile(link)
+		require.NoError(t, err)
+		body, readErr := io.ReadAll(reader)
+		require.NoError(t, readErr)
+		assert.Equal(t, "id\n1\n", string(body))
+		require.NoError(t, cleanup())
+	})
+}
+
 func TestCompressionFactoryErrors(t *testing.T) {
 	t.Parallel()
 

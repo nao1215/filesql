@@ -1478,6 +1478,43 @@ func TestAutoSaveCloseWithAnOpenTransaction(t *testing.T) {
 	})
 }
 
+// TestAutoSaveOverwriteRefusesASourceReplacedByAPipe pins that a save reports
+// rather than blocks when the file it loaded from is no longer a file.
+//
+// A save reads the source before it writes -- for its compression, its text
+// encoding and its line terminator -- and that read opened whatever was there.
+// A source replaced by a named pipe therefore blocked inside Close, which takes
+// no context, so the caller waited for the life of the process.
+func TestAutoSaveOverwriteRefusesASourceReplacedByAPipe(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "users.csv")
+	require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
+
+	db := openAutoSave(t, src, func(b *DBBuilder) *DBBuilder { return b.EnableAutoSave("") })
+	_, err := db.ExecContext(t.Context(), "UPDATE users SET name = 'bob'")
+	require.NoError(t, err)
+
+	require.NoError(t, os.Remove(src))
+	makeFIFO(t, src)
+
+	done := make(chan error, 1)
+	go func() { done <- db.Close() }()
+	select {
+	case closeErr := <-done:
+		// Which layer refuses is not the point and is not pinned: the read of
+		// the source no longer blocks, so the save reaches the write, which
+		// refuses a destination that is not a file. What matters is that Close
+		// returns and says what is wrong.
+		require.Error(t, closeErr, "a save that could not run must be reported")
+		assert.Contains(t, closeErr.Error(), "a named pipe")
+		assert.Contains(t, closeErr.Error(), src)
+	case <-time.After(30 * time.Second):
+		t.Fatal("Close did not return: the save is waiting for a writer on the pipe")
+	}
+}
+
 // TestAutoSaveOverwriteFollowsASymlink pins that a source reached through a
 // symbolic link is written back through it. The staged file was renamed onto
 // the link itself, so the link became a regular file holding the change and the
