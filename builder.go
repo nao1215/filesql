@@ -33,6 +33,11 @@ import (
 //   - io.Reader streams (AddReader)
 //   - Auto-save functionality (EnableAutoSave)
 //   - Read-only mode (OpenReadOnly)
+//
+// A builder can be added to and opened again: the next load reads what it holds
+// then, including the sources and the options given since the last one. The
+// exception is a reader handed to AddReader: a stream is read once, so a second
+// load meets it exhausted and fails. A path and a filesystem are read again.
 type DBBuilder struct {
 	// paths contains regular file paths
 	paths []string
@@ -40,10 +45,13 @@ type DBBuilder struct {
 	filesystems []fs.FS
 	// readers contains reader configurations
 	readers []readerInput
+	// derivedReaders holds the readers a build opened for every AddFS
+	// filesystem. They are kept apart from readers, which is the caller's own
+	// list, so a second build derives them again rather than adding a second
+	// copy to what the first one left behind.
+	derivedReaders []readerInput
 	// collectedPaths contains all paths after Build validation
 	collectedPaths []string
-	// parsedTables contains tables parsed from streaming readers
-	parsedTables []*table
 	// autoSaveConfig contains auto-save settings
 	autoSaveConfig *autoSaveConfig
 	// sqlDialect is the SQL dialect accepted for queries against the opened
@@ -66,10 +74,9 @@ type DBBuilder struct {
 	// logger is the logger instance for internal logging
 	logger *slog.Logger
 	// built records that build has run and succeeded, so the terminal methods
-	// can validate on their own without a second build repeating the work
-	// build does that is not idempotent: it appends the readers derived from
-	// every AddFS filesystem to readers, which done twice loads every file of
-	// that filesystem twice.
+	// can validate on their own without repeating work already done. Every
+	// method that changes what the builder holds clears it, since what a build
+	// derived describes the builder as it was.
 	built bool
 
 	// Internal processors for handling different responsibilities
@@ -141,7 +148,6 @@ func NewBuilder() *DBBuilder {
 		filesystems:      make([]fs.FS, 0),
 		readers:          make([]readerInput, 0),
 		collectedPaths:   make([]string, 0),
-		parsedTables:     make([]*table, 0),
 		autoSaveConfig:   nil, // Default: no auto-save
 		defaultChunkSize: defaultChunkSizeRows,
 		logger:           newNopLogger(), // Default: no-op logger
@@ -151,6 +157,15 @@ func NewBuilder() *DBBuilder {
 		fileProcessor:   newFileProcessor(),
 		streamProcessor: newStreamProcessor(defaultChunkSizeRows),
 	}
+}
+
+// changed records that the builder no longer matches the build it last ran,
+// so the next one derives its paths and its filesystem readers again and puts
+// what the caller has just said through the same checks as the rest. Every
+// method that changes what the builder holds ends with it.
+func (b *DBBuilder) changed() *DBBuilder {
+	b.built = false
+	return b
 }
 
 // AddPath adds a file or directory to load.
@@ -163,7 +178,7 @@ func NewBuilder() *DBBuilder {
 // Returns self for chaining.
 func (b *DBBuilder) AddPath(path string) *DBBuilder {
 	b.paths = append(b.paths, path)
-	return b
+	return b.changed()
 }
 
 // AddPaths adds multiple files or directories at once.
@@ -175,7 +190,7 @@ func (b *DBBuilder) AddPath(path string) *DBBuilder {
 // Returns self for chaining.
 func (b *DBBuilder) AddPaths(paths ...string) *DBBuilder {
 	b.paths = append(b.paths, paths...)
-	return b
+	return b.changed()
 }
 
 // AddReader adds data from an io.Reader (file, network stream, etc.).
@@ -209,7 +224,7 @@ func (b *DBBuilder) AddReader(reader io.Reader, tableName string, fileType FileT
 		opt(&input)
 	}
 	b.readers = append(b.readers, input)
-	return b
+	return b.changed()
 }
 
 // SetDefaultChunkSize sets chunk size (number of rows) for large file processing.
@@ -230,7 +245,7 @@ func (b *DBBuilder) SetDefaultChunkSize(size int) *DBBuilder {
 		// depend on being set before the build, which no other option does.
 		b.streamProcessor.setChunkSize(size)
 	}
-	return b
+	return b.changed()
 }
 
 // WithMalformedRowPolicy sets how a CSV/TSV record whose field count differs
@@ -255,7 +270,7 @@ func (b *DBBuilder) SetDefaultChunkSize(size int) *DBBuilder {
 // Returns self for chaining.
 func (b *DBBuilder) WithMalformedRowPolicy(policy MalformedRowPolicy) *DBBuilder {
 	b.streamProcessor.malformedRowPolicy = policy
-	return b
+	return b.changed()
 }
 
 // WithExcelSheetPolicy decides which sheets of an Excel workbook this builder
@@ -281,7 +296,7 @@ func (b *DBBuilder) WithMalformedRowPolicy(policy MalformedRowPolicy) *DBBuilder
 func (b *DBBuilder) WithExcelSheetPolicy(policy ExcelSheetPolicy) *DBBuilder {
 	b.excelSheetPolicy = policy
 	b.streamProcessor.excelSheetPolicy = policy
-	return b
+	return b.changed()
 }
 
 // WithLogger sets the logger this package reports its progress to: which files
@@ -302,7 +317,7 @@ func (b *DBBuilder) WithLogger(logger *slog.Logger) *DBBuilder {
 	if logger != nil {
 		b.logger = logger
 	}
-	return b
+	return b.changed()
 }
 
 // AddFS adds files from an embedded filesystem (go:embed).
@@ -319,7 +334,7 @@ func (b *DBBuilder) WithLogger(logger *slog.Logger) *DBBuilder {
 // Returns self for chaining.
 func (b *DBBuilder) AddFS(filesystem fs.FS) *DBBuilder {
 	b.filesystems = append(b.filesystems, filesystem)
-	return b
+	return b.changed()
 }
 
 // EnableAutoSave automatically saves changes when the database is closed.
@@ -372,7 +387,7 @@ func (b *DBBuilder) EnableAutoSave(outputDir string, options ...DumpOptions) *DB
 		outputDir: outputDir,
 		options:   opts,
 	}
-	return b
+	return b.changed()
 }
 
 // EnableAutoSaveOnCommit automatically saves changes after each transaction
@@ -403,7 +418,7 @@ func (b *DBBuilder) EnableAutoSaveOnCommit(outputDir string, options ...DumpOpti
 		outputDir: outputDir,
 		options:   opts,
 	}
-	return b
+	return b.changed()
 }
 
 // WithDialect sets the SQL dialect accepted by the database returned from Open
@@ -431,7 +446,7 @@ func (b *DBBuilder) EnableAutoSaveOnCommit(outputDir string, options ...DumpOpti
 // Returns the builder for method chaining.
 func (b *DBBuilder) WithDialect(d dialect.Dialect) *DBBuilder {
 	b.sqlDialect = d
-	return b
+	return b.changed()
 }
 
 // refuseDialectForCallerDatabase refuses a load into a database this package
@@ -541,21 +556,25 @@ func (b *DBBuilder) build(ctx context.Context) error {
 
 	// Everything has passed, so what the build derived becomes the builder's.
 	b.collectedPaths = collectedPaths
-	b.readers = readers
+	b.derivedReaders = fsReaders
 	b.built = true
-	b.logger.Info("build completed", "collected_paths", len(b.collectedPaths), "readers", len(b.readers))
+	b.logger.Info("build completed", "collected_paths", len(b.collectedPaths), "readers", len(readers))
 	return nil
 }
 
 // SkippedRows reports what WithMalformedRowPolicy(MalformedRowSkip) discarded
-// during the loads this builder has performed, one entry per table that lost
-// rows. A load that dropped nothing is not listed, so a non-empty result is
-// always something worth telling a user about.
+// during the most recent load, one entry per table that lost rows. A load that
+// dropped nothing is not listed, so a non-empty result is always something
+// worth telling a user about.
 //
 // Skipping is an instruction from the caller, but an instruction that reports
 // nothing leaves one dropped row and most of the file dropped looking exactly
 // alike — and a write-back afterwards makes either one permanent. The counts
 // are what lets a caller say which of the two happened before that.
+//
+// A builder used again reports what that load dropped rather than the sum of
+// every load it has run, so the counts stay counts of the file in front of the
+// caller.
 //
 // It is valid after Open, OpenContext, LoadInto, or LoadIntoTx have run.
 func (b *DBBuilder) SkippedRows() []SkippedRows {
@@ -609,14 +628,8 @@ func (b *DBBuilder) open(ctx context.Context, readOnly bool) (*sql.DB, error) {
 	}
 
 	// Use stream processor for all streaming operations (now includes XLSX support)
-	if err := b.streamProcessor.streamAllFilesToDatabase(ctx, db, b.collectedPaths); err != nil {
-		b.logger.Error("failed to stream files", "error", err)
-		_ = db.Close() // Ignore close error during error handling
-		return nil, err
-	}
-
-	if err := b.streamProcessor.streamAllReadersToDatabase(ctx, db, b.readers); err != nil {
-		b.logger.Error("failed to stream readers", "error", err)
+	if err := b.loadIntoExecutor(ctx, db); err != nil {
+		b.logger.Error("failed to load the configured sources", "error", err)
 		_ = db.Close() // Ignore close error during error handling
 		return nil, err
 	}
@@ -808,11 +821,19 @@ func (b *DBBuilder) LoadIntoTx(ctx context.Context, tx *sql.Tx) error {
 	return b.loadIntoExecutor(ctx, tx)
 }
 
+// loadIntoExecutor reads every configured source into db. It is the one place
+// a load begins, which is what lets the record of the rows a load skipped
+// describe that load rather than every load the builder has ever run.
 func (b *DBBuilder) loadIntoExecutor(ctx context.Context, db dbtx) error {
+	b.streamProcessor.forgetSkippedRows()
+
 	if err := b.streamProcessor.streamAllFilesToDatabase(ctx, db, b.collectedPaths); err != nil {
 		return err
 	}
-	return b.streamProcessor.streamAllReadersToDatabase(ctx, db, b.readers)
+	readers := make([]readerInput, 0, len(b.readers)+len(b.derivedReaders))
+	readers = append(readers, b.readers...)
+	readers = append(readers, b.derivedReaders...)
+	return b.streamProcessor.streamAllReadersToDatabase(ctx, db, readers)
 }
 
 // deduplicateCompressedFiles removes compressed duplicates when uncompressed versions exist.

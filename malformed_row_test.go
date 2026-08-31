@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -89,6 +90,38 @@ func TestSkippedRowsReportsWhatWasDropped(t *testing.T) {
 		}
 		if got[0].Total != 4 {
 			t.Errorf("Total = %d, want 4 data rows seen", got[0].Total)
+		}
+	})
+
+	t.Run("a builder that loads twice lists its table once", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "ragged.csv")
+		if err := os.WriteFile(path, []byte("a,b\n1,2\n3\n5,6\n"), 0o600); err != nil {
+			t.Fatalf("writing the input failed: %v", err)
+		}
+
+		b := NewBuilder().AddPath(path).WithMalformedRowPolicy(MalformedRowSkip)
+		for i := range 2 {
+			db, err := b.Open(context.Background())
+			if err != nil {
+				t.Fatalf("open %d failed: %v", i+1, err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatalf("close %d failed: %v", i+1, err)
+			}
+		}
+
+		got := b.SkippedRows()
+		if len(got) != 1 {
+			t.Fatalf("SkippedRows() = %v, want one entry: the file has one table and one short row", got)
+		}
+		if got[0].Count != 1 {
+			t.Errorf("Count = %d, want 1: a second load reports what that load dropped, not the sum", got[0].Count)
+		}
+		if got[0].Total != 3 {
+			t.Errorf("Total = %d, want 3 data rows seen", got[0].Total)
 		}
 	})
 
