@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -934,6 +935,37 @@ func BenchmarkCollectFilesFromDirectory(b *testing.B) {
 		}
 		if len(collected) != 500 {
 			b.Fatalf("collected %d files, want 500", len(collected))
+		}
+	}
+}
+
+// BenchmarkProcessFSToReaders measures the collection that finds a filesystem's
+// files, which is the fs.FS counterpart of BenchmarkCollectFilesFromDirectory.
+// Each matched name is stat-ed to see whether it is a regular file, so the cost
+// of that check is what this measures.
+func BenchmarkProcessFSToReaders(b *testing.B) {
+	dir := b.TempDir()
+	for i := range 500 {
+		path := filepath.Join(dir, fmt.Sprintf("table%03d.csv", i))
+		if err := os.WriteFile(path, []byte("id,name\n1,alice\n"), 0o600); err != nil {
+			b.Fatalf("failed to write %s: %v", path, err)
+		}
+	}
+	filesystem := os.DirFS(dir)
+
+	b.ResetTimer()
+	for b.Loop() {
+		readers, err := newFileProcessor().processFSToReaders(b.Context(), filesystem)
+		if err != nil {
+			b.Fatalf("processFSToReaders failed: %v", err)
+		}
+		if len(readers) != 500 {
+			b.Fatalf("collected %d readers, want 500", len(readers))
+		}
+		for _, r := range readers {
+			if closer, ok := r.reader.(io.Closer); ok {
+				_ = closer.Close()
+			}
 		}
 	}
 }
