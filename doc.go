@@ -289,6 +289,21 @@
 // sums, while a value this package keeps as text -- a zero-padded code, a
 // literal past int64 -- is written as text.
 //
+// A Parquet file written back to itself keeps the schema it declared. Nothing
+// in the database remembers it -- a BOOLEAN column loads as the integers 1 and
+// 0, a DATE and a TIMESTAMP as the integer they store, a DECIMAL and a UUID as
+// their text -- so the file is read for its types before it is replaced, and
+// each value is rebuilt from the text the column holds. A column keeps its type
+// only when every one of its values comes back as itself; one that does not is
+// a value the caller set that the type cannot hold, and it is written the way
+// an export writes it rather than narrowed into a different number. A required
+// column holding a null the caller set becomes optional, which is the one thing
+// the data demands. Some types are rendered by a load in a form that says less
+// than the value they store, and those keep what an export writes. A list or a
+// map is rendered as text. An INT96 is rendered as nanoseconds since the Unix
+// epoch rather than the Julian day it holds, and a FLOAT16 is widened to 32
+// bits.
+//
 // # ACH and Fedwire
 //
 // ACH (.ach) and Fedwire (.fed) files are loaded, queried and written back like

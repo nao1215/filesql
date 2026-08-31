@@ -687,39 +687,90 @@ func parquetColumns(file *parquet.File) []parquetColumn {
 	leafIndex := 0
 	for i, field := range fields {
 		leaves := countParquetLeaves(field)
-		col := parquetColumn{leaf: field.Leaf() && !field.Repeated()}
+		col := columnOfNode(field)
 		if col.leaf {
-			typ := field.Type()
-			if lt := typ.LogicalType(); lt != nil {
-				switch v := lt.Value.(type) {
-				case *format.IntType:
-					col.unsigned = !v.IsSigned
-				case *format.DecimalType:
-					col.decimal = true
-					col.scale = v.Scale
-				case *format.UUIDType:
-					col.uuid = true
-				case *format.Float16Type:
-					// The format allows FLOAT16 on two fixed bytes alone; on
-					// any other shape the annotation is inconsistent metadata
-					// and the bytes are left as they are.
-					col.float16 = typ.Kind() == parquet.FixedLenByteArray && typ.Length() == 2
-				case *format.MapType, *format.ListType:
-					// A group annotation on a node with a physical type is
-					// inconsistent metadata; asking such a type its kind
-					// panics. The values still render, by their own kind.
-					col.leaf = false
-				}
-			}
-		}
-		if col.leaf {
-			col.kind = field.Type().Kind()
 			col.float16 = col.float16 || halfFloats[leafIndex]
 		}
 		columns[i] = col
 		leafIndex += leaves
 	}
 	return columns
+}
+
+// columnOfNode reads what a node's own type says about how its values render.
+// The file's metadata can say more -- a FLOAT16 annotation the schema carries
+// where the node does not -- which is why the caller with a file in hand adds
+// to this rather than replacing it.
+func columnOfNode(node parquet.Node) parquetColumn {
+	col := parquetColumn{leaf: node.Leaf() && !node.Repeated()}
+	if !col.leaf {
+		return col
+	}
+	typ := node.Type()
+	if lt := typ.LogicalType(); lt != nil {
+		switch v := lt.Value.(type) {
+		case *format.IntType:
+			col.unsigned = !v.IsSigned
+		case *format.DecimalType:
+			col.decimal = true
+			col.scale = v.Scale
+		case *format.UUIDType:
+			col.uuid = true
+		case *format.Float16Type:
+			// The format allows FLOAT16 on two fixed bytes alone; on any other
+			// shape the annotation is inconsistent metadata and the bytes are
+			// left as they are.
+			col.float16 = typ.Kind() == parquet.FixedLenByteArray && typ.Length() == 2
+		case *format.MapType, *format.ListType:
+			// A group annotation on a node with a physical type is inconsistent
+			// metadata; asking such a type its kind panics. The values still
+			// render, by their own kind.
+			col.leaf = false
+		}
+	}
+	if col.leaf {
+		col.kind = typ.Kind()
+	}
+	return col
+}
+
+// ParquetRenderer renders values of one field the way a load of that field
+// renders them.
+//
+// A save writing a Parquet file back to itself checks its work against this:
+// the text it starts from came out of a load, so a value it rebuilds from that
+// text has to render as the same text again.
+//
+// It is built once per field rather than once per value: what a field renders
+// as follows from its type alone, and a field of a million values would
+// otherwise answer the same question a million times.
+type ParquetRenderer struct {
+	column parquetColumn
+}
+
+// NewParquetRenderer reads what a field renders as, reporting false for a field
+// it cannot render: a group, a repeated field, or one whose metadata is
+// inconsistent enough that asking its type panics.
+func NewParquetRenderer(node parquet.Node) (renderer ParquetRenderer, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			renderer, ok = ParquetRenderer{}, false
+		}
+	}()
+	column := columnOfNode(node)
+	if !column.leaf {
+		return ParquetRenderer{}, false
+	}
+	return ParquetRenderer{column: column}, true
+}
+
+// Text is what a load renders for a value of the field, and whether the load
+// holds it at all: a Parquet null and a NaN are both cells a load leaves empty.
+func (r ParquetRenderer) Text(value parquet.Value) (string, bool) {
+	if parquetCellIsNull(value, r.column, RenderSQLite) {
+		return "", false
+	}
+	return renderParquetValue(value, r.column, RenderSQLite), true
 }
 
 // float16Leaves reports which leaf columns a file's own metadata annotates as

@@ -2,16 +2,23 @@ package filesql
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
+	"math"
+	"math/big"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/nao1215/filesql/internal/infer"
+	"github.com/nao1215/filesql/internal/reader"
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 // writeParquetTableData writes SQLite table data to Parquet format
-func writeParquetTableData(w io.Writer, columns []string, rows *sql.Rows) error {
+func writeParquetTableData(w io.Writer, columns []string, rows *sql.Rows, prior parquetPrior) error {
 	if len(columns) == 0 {
 		return fmt.Errorf("%w: no columns defined", ErrEmptyData)
 	}
@@ -53,7 +60,340 @@ func writeParquetTableData(w io.Writer, columns []string, rows *sql.Rows) error 
 		return fmt.Errorf("%w: error iterating rows: %w", ErrDatabaseOperation, err)
 	}
 
-	return writeParquetData(w, columns, allRows, declared)
+	return writeParquetData(w, columns, allRows, declared, prior)
+}
+
+// parquetPrior is the schema of the Parquet file a save is replacing, by column
+// name. It is nil for an export, which has no file to keep faith with.
+type parquetPrior map[string]parquet.Node
+
+// readParquetPrior reads the schema of the file a save is about to replace.
+//
+// A Parquet file's types are the reason it is one, and nothing in the database
+// remembers them, so the file is asked before it is replaced. Only the footer is
+// read, straight from the file on disk.
+//
+// A file that cannot be read is not an error here: the save replaces it either
+// way, and the columns are then written the way an export writes them.
+func readParquetPrior(path string) (prior parquetPrior) {
+	defer func() {
+		// A damaged schema panics when its nodes are asked about themselves.
+		if r := recover(); r != nil {
+			prior = nil
+		}
+	}()
+	file, err := os.Open(path) //nolint:gosec // the path is the caller's own source file
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil
+	}
+	parquetFile, err := parquet.OpenFile(file, info.Size())
+	if err != nil {
+		return nil
+	}
+	fields := parquetFile.Schema().Fields()
+	prior = make(parquetPrior, len(fields))
+	for _, field := range fields {
+		prior[field.Name()] = field
+	}
+	return prior
+}
+
+// keptParquetColumn returns the node a column is written with, the values
+// rebuilt for it, and whether the file being replaced declared a type this
+// package can write again.
+//
+// The type has to survive the round trip the values already made: each value is
+// rebuilt from the text the load produced and rendered back the way the load
+// renders it, and the column keeps its type only when every row comes back as
+// itself. A row that does not is a value the caller set that the type cannot
+// hold, and narrowing it would write a different number into their file --
+// worse than writing the file with a plainer schema, which is what happens
+// instead.
+func keptParquetColumn(node parquet.Node, rows [][]any, col int) (parquet.Node, []parquet.Value, bool) {
+	if node == nil || !node.Leaf() || node.Repeated() || !reproducibleParquetType(node.Type()) {
+		return nil, nil, false
+	}
+	renderer, ok := reader.NewParquetRenderer(node)
+	if !ok {
+		return nil, nil, false
+	}
+	// The rebuilt values are kept rather than built again when the rows are
+	// written: they were built here to be checked, and building them twice
+	// would read every cell of the table twice.
+	rebuilt := make([]parquet.Value, len(rows))
+	emptyIsAValue := node.Type().Kind() == parquet.ByteArray
+	holdsNull := false
+	for r, row := range rows {
+		var value any
+		if col < len(row) {
+			value = row[col]
+		}
+		text, held := parquetCellText(value, emptyIsAValue)
+		if !held {
+			holdsNull = true
+			rebuilt[r] = parquet.NullValue()
+			continue
+		}
+		cell, ok := parquetValueOf(node, text)
+		if !ok {
+			return nil, nil, false
+		}
+		back, held := renderer.Text(cell)
+		if !held || back != text {
+			return nil, nil, false
+		}
+		rebuilt[r] = cell
+	}
+	leaf := parquet.Leaf(node.Type())
+	// A required column cannot hold a null the caller put in it, so the one
+	// thing the data demands is the one thing that changes.
+	if node.Optional() || holdsNull {
+		return parquet.Optional(leaf), rebuilt, true
+	}
+	return parquet.Required(leaf), rebuilt, true
+}
+
+// presentLevel is the definition level a cell is written at: one for a value
+// the column holds, zero for a null.
+func presentLevel(present bool) int {
+	if present {
+		return 1
+	}
+	return 0
+}
+
+// parquetCellText is the text a value of the table holds, and whether the cell
+// holds anything at all.
+//
+// Empty text is a value in a byte array and nothing anywhere else, which is the
+// reading parquetCellValue already takes of it: a column of numbers spells a
+// missing cell with it, and a column of bytes spells an empty one. Reading it as
+// missing everywhere wrote a null over a string column's empty string, and made
+// a required column optional to hold the null it had invented.
+func parquetCellText(value any, emptyIsAValue bool) (string, bool) {
+	if value == nil {
+		return "", false
+	}
+	if text, isText := value.(string); isText && text == "" && !emptyIsAValue {
+		return "", false
+	}
+	return formatDumpValue(value), true
+}
+
+// reproducibleParquetType reports whether a value of this type can be rebuilt
+// from the text a load renders for it.
+//
+// A list or a map, an INT96 and a FLOAT16 cannot. A list or a map is rendered as
+// text such as "[1 2 3]", which says nothing about the levels underneath it. An
+// INT96 is rendered as nanoseconds since the Unix epoch rather than as the
+// Julian day and offset it stores. A FLOAT16 is widened to 32 bits to be
+// rendered, and this package has no way to write the half-precision bytes back;
+// the library underneath cannot write that annotation either, so the guard is
+// for a file another writer produced. A column of one of those is written the
+// way an export writes it.
+func reproducibleParquetType(typ parquet.Type) bool {
+	if annotation, ok := parquetAnnotation(typ); ok {
+		switch annotation.(type) {
+		case *format.Float16Type, *format.MapType, *format.ListType:
+			return false
+		}
+	}
+	switch typ.Kind() {
+	case parquet.Boolean, parquet.Int32, parquet.Int64, parquet.Float, parquet.Double, parquet.ByteArray:
+		return true
+	case parquet.FixedLenByteArray:
+		// Fixed bytes carry a value this can rebuild only when the annotation
+		// says how to read them, or when the text is the bytes themselves.
+		return true
+	default: // parquet.Int96
+		return false
+	}
+}
+
+// parquetAnnotation is the logical type a node carries, if it carries one.
+func parquetAnnotation(typ parquet.Type) (format.LogicalTypeValue, bool) {
+	logical := typ.LogicalType()
+	if logical == nil || logical.Value == nil {
+		return nil, false
+	}
+	return logical.Value, true
+}
+
+// parquetValueOf rebuilds the value a field stores from the text a load of that
+// field produced, reporting false for a text the field cannot hold.
+func parquetValueOf(node parquet.Node, text string) (parquet.Value, bool) {
+	typ := node.Type()
+	if annotation, ok := parquetAnnotation(typ); ok {
+		switch a := annotation.(type) {
+		case *format.DecimalType:
+			return parquetDecimalValue(typ, a, text)
+		case *format.UUIDType:
+			return parquetUUIDValue(text)
+		case *format.IntType:
+			return parquetIntValue(typ, int(a.BitWidth), a.IsSigned, text)
+		}
+	}
+	switch typ.Kind() {
+	case parquet.Boolean:
+		switch text {
+		case "1":
+			return parquet.BooleanValue(true), true
+		case "0":
+			return parquet.BooleanValue(false), true
+		}
+		return parquet.Value{}, false
+	case parquet.Int32:
+		return parquetIntValue(typ, 32, true, text)
+	case parquet.Int64:
+		return parquetIntValue(typ, 64, true, text)
+	case parquet.Float:
+		f, ok := parquetFloatOf(text, 32)
+		return parquet.FloatValue(float32(f)), ok
+	case parquet.Double:
+		f, ok := parquetFloatOf(text, 64)
+		return parquet.DoubleValue(f), ok
+	case parquet.ByteArray:
+		return parquet.ByteArrayValue([]byte(text)), true
+	case parquet.FixedLenByteArray:
+		if len(text) != typ.Length() {
+			return parquet.Value{}, false
+		}
+		return parquet.FixedLenByteArrayValue([]byte(text)), true
+	}
+	return parquet.Value{}, false
+}
+
+// parquetIntValue reads an integer, holding it to the width its annotation
+// names. The width matters because nothing downstream enforces it: an INT8
+// column takes a 300 without complaint and hands it back as 300, so a check
+// that wrote and read again would not see it.
+func parquetIntValue(typ parquet.Type, bits int, signed bool, text string) (parquet.Value, bool) {
+	if signed {
+		n, err := strconv.ParseInt(text, 10, bits)
+		if err != nil {
+			return parquet.Value{}, false
+		}
+		if typ.Kind() == parquet.Int32 {
+			return parquet.Int32Value(int32(n)), true //nolint:gosec // ParseInt held it to 32 bits or fewer
+		}
+		return parquet.Int64Value(n), true
+	}
+	n, err := strconv.ParseUint(text, 10, bits)
+	if err != nil {
+		return parquet.Value{}, false
+	}
+	// An unsigned value is stored in the physical integer's bits, which is how
+	// the reader reads it back.
+	if typ.Kind() == parquet.Int32 {
+		return parquet.Int32Value(int32(uint32(n))), true //nolint:gosec // the unsigned value rides in the signed int's bits
+	}
+	return parquet.Int64Value(int64(n)), true //nolint:gosec // the unsigned value rides in the signed int's bits
+}
+
+// parquetFloatOf reads a float, the infinity this package spells as a literal
+// among them: ParseFloat answers the infinity and reports the range it left.
+func parquetFloatOf(text string, bits int) (float64, bool) {
+	f, err := strconv.ParseFloat(text, bits)
+	if err == nil {
+		return f, true
+	}
+	if errors.Is(err, strconv.ErrRange) && math.IsInf(f, 0) {
+		return f, true
+	}
+	return 0, false
+}
+
+// parquetDecimalValue reads a decimal back into the unscaled integer its column
+// stores, at the scale the column names.
+func parquetDecimalValue(typ parquet.Type, annotation *format.DecimalType, text string) (parquet.Value, bool) {
+	scale := int(annotation.Scale)
+	if scale < 0 {
+		return parquet.Value{}, false
+	}
+	negative := strings.HasPrefix(text, "-")
+	digits := strings.TrimPrefix(text, "-")
+	whole, fraction, _ := strings.Cut(digits, ".")
+	if len(fraction) > scale {
+		return parquet.Value{}, false
+	}
+	fraction += strings.Repeat("0", scale-len(fraction))
+	unscaled, ok := new(big.Int).SetString(whole+fraction, 10)
+	if !ok {
+		return parquet.Value{}, false
+	}
+	// The precision is how many digits the column is declared to hold, and
+	// nothing downstream enforces it either.
+	if annotation.Precision > 0 && len(strings.TrimLeft(unscaled.String(), "0")) > int(annotation.Precision) {
+		return parquet.Value{}, false
+	}
+	if negative {
+		unscaled.Neg(unscaled)
+	}
+	switch typ.Kind() {
+	case parquet.Int32:
+		if !unscaled.IsInt64() || unscaled.Int64() < math.MinInt32 || unscaled.Int64() > math.MaxInt32 {
+			return parquet.Value{}, false
+		}
+		return parquet.Int32Value(int32(unscaled.Int64())), true //nolint:gosec // the bound above holds it to 32 bits
+	case parquet.Int64:
+		if !unscaled.IsInt64() {
+			return parquet.Value{}, false
+		}
+		return parquet.Int64Value(unscaled.Int64()), true
+	case parquet.FixedLenByteArray:
+		bytes, ok := twosComplementBytes(unscaled, typ.Length())
+		if !ok {
+			return parquet.Value{}, false
+		}
+		return parquet.FixedLenByteArrayValue(bytes), true
+	}
+	return parquet.Value{}, false
+}
+
+// twosComplementBytes writes an integer big-endian in two's complement across
+// width bytes, which is how DECIMAL stores its unscaled value in fixed bytes.
+// It reports false for a value the width cannot hold.
+func twosComplementBytes(n *big.Int, width int) ([]byte, bool) {
+	if width <= 0 {
+		return nil, false
+	}
+	limit := new(big.Int).Lsh(big.NewInt(1), uint(width*8-1))
+	if n.Sign() >= 0 && n.Cmp(limit) >= 0 {
+		return nil, false
+	}
+	if n.Sign() < 0 && new(big.Int).Neg(n).Cmp(limit) > 0 {
+		return nil, false
+	}
+	value := n
+	if n.Sign() < 0 {
+		value = new(big.Int).Add(n, new(big.Int).Lsh(big.NewInt(1), uint(width*8)))
+	}
+	out := make([]byte, width)
+	value.FillBytes(out)
+	return out, true
+}
+
+// parquetUUIDValue reads the canonical form back into the sixteen bytes a UUID
+// column stores.
+func parquetUUIDValue(text string) (parquet.Value, bool) {
+	hex := strings.ReplaceAll(text, "-", "")
+	if len(hex) != 32 {
+		return parquet.Value{}, false
+	}
+	out := make([]byte, 16)
+	for i := range out {
+		octet, err := strconv.ParseUint(hex[i*2:i*2+2], 16, 8)
+		if err != nil {
+			return parquet.Value{}, false
+		}
+		out[i] = byte(octet)
+	}
+	return parquet.FixedLenByteArrayValue(out), true
 }
 
 // parquetKind is the Parquet type one column is written as.
@@ -208,14 +548,25 @@ func parquetCellValue(kind parquetKind, value any) (parquet.Value, bool, error) 
 // valid Parquet file: the other formats write their header and nothing else, and
 // a dump that refused to write an emptied table let an auto-save keep the rows
 // the caller had deleted.
-func writeParquetData(w io.Writer, columns []string, rows [][]any, declared []string) error {
+func writeParquetData(w io.Writer, columns []string, rows [][]any, declared []string, prior parquetPrior) error {
 	if len(columns) == 0 {
 		return fmt.Errorf("%w: no columns defined", ErrEmptyData)
 	}
 
 	kinds := make([]parquetKind, len(columns))
+	// kept[i] is the node the file being replaced declared, for a column this
+	// can write again. A column with none is written the way every column was
+	// written before this.
+	kept := make([]parquet.Node, len(columns))
+	keptValues := make([][]parquet.Value, len(columns))
 	group := orderedGroup{Group: make(parquet.Group, len(columns)), names: columns}
 	for i, col := range columns {
+		if node, values, ok := keptParquetColumn(prior[col], rows, i); ok {
+			kept[i] = node
+			keptValues[i] = values
+			group.Group[col] = node
+			continue
+		}
 		declaredType := ""
 		if i < len(declared) {
 			declaredType = declared[i]
@@ -243,9 +594,15 @@ func writeParquetData(w io.Writer, columns []string, rows [][]any, declared []st
 		buf = buf[:0]
 		return nil
 	}
-	for _, row := range rows {
+	for r, row := range rows {
 		out := make(parquet.Row, len(columns))
 		for i := range columns {
+			if kept[i] != nil {
+				// The value was rebuilt and checked when the schema was chosen.
+				cell := keptValues[i][r]
+				out[i] = cell.Level(0, presentLevel(!cell.IsNull()), i)
+				continue
+			}
 			var value any
 			if i < len(row) {
 				value = row[i]

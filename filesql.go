@@ -312,7 +312,8 @@ func dumpSQLiteTable(ctx context.Context, db *sql.DB, tableName, outputDir strin
 		return err
 	}
 
-	return writeSQLiteTableData(outputPath, tableName, columns, rows, options)
+	// An export writes a new file, so there is no schema to keep faith with.
+	return writeSQLiteTableData(outputPath, tableName, columns, rows, options, nil)
 }
 
 // dumpFilePath is the path a table's dump is written to, or an error when the
@@ -465,9 +466,9 @@ func getSQLiteTableColumns(ctx context.Context, db *sql.DB, tableName string) (c
 // write is staged and moved into place, so a format or I/O error partway through
 // leaves an existing destination — which for a write-back is the caller's source
 // file — exactly as it was.
-func writeSQLiteTableData(outputPath, tableName string, columns []string, rows *sql.Rows, options DumpOptions) error {
+func writeSQLiteTableData(outputPath, tableName string, columns []string, rows *sql.Rows, options DumpOptions, prior parquetPrior) error {
 	return writeFileAtomically(outputPath, func(w io.Writer) error {
-		return writeSQLiteTableDataTo(w, tableName, columns, rows, options)
+		return writeSQLiteTableDataTo(w, tableName, columns, rows, options, prior)
 	})
 }
 
@@ -484,7 +485,7 @@ func writeSQLiteTableData(outputPath, tableName string, columns []string, rows *
 // writes its trailer on Close, so a compressed output that failed to finish is
 // only detectable there; dropping that error would commit a truncated archive
 // over the destination as if it had been written.
-func writeSQLiteTableDataTo(w io.Writer, tableName string, columns []string, rows *sql.Rows, options DumpOptions) (err error) {
+func writeSQLiteTableDataTo(w io.Writer, tableName string, columns []string, rows *sql.Rows, options DumpOptions, prior parquetPrior) (err error) {
 	// Parquet compresses per column internally, so an outer compressor would only
 	// bloat the file and hide it behind a second extension.
 	if options.Format == OutputFormatParquet && options.Compression != CompressionNone {
@@ -511,7 +512,7 @@ func writeSQLiteTableDataTo(w io.Writer, tableName string, columns []string, row
 	// text formats below are encoded.
 	switch options.Format {
 	case OutputFormatParquet:
-		return writeParquetTableData(compressed, columns, rows)
+		return writeParquetTableData(compressed, columns, rows, prior)
 	case OutputFormatXLSX:
 		return writeXLSXTableData(compressed, tableName, columns, rows)
 	}
