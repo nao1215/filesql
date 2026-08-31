@@ -687,6 +687,9 @@ func (p *Parser) parseAlter() (ast.Stmt, error) {
 		stmt.Kind, stmt.Name, stmt.NewName = ast.AlterRenameColumn, from, to
 		return stmt, nil
 	case p.eatWord("ADD"):
+		if err := p.refuseAlterTableElement(true); err != nil {
+			return nil, err
+		}
 		p.eatWord("COLUMN")
 		column, err := p.parseColumnDef()
 		if err != nil {
@@ -695,6 +698,9 @@ func (p *Parser) parseAlter() (ast.Stmt, error) {
 		stmt.Kind, stmt.Column = ast.AlterAddColumn, &column
 		return stmt, nil
 	case p.eatWord("DROP"):
+		if err := p.refuseAlterTableElement(false); err != nil {
+			return nil, err
+		}
 		p.eatWord("COLUMN")
 		name, err := p.parseSimpleName()
 		if err != nil {
@@ -710,4 +716,65 @@ func (p *Parser) parseAlter() (ast.Stmt, error) {
 	default:
 		return nil, p.unimplementedf("this ALTER TABLE is not implemented")
 	}
+}
+
+// refuseAlterTableElement refuses what follows ADD or DROP in an ALTER TABLE
+// when it declares something other than a column. SQLite can only add, drop and
+// rename columns, so a constraint or an index has to be refused; without this
+// the words that open one are read as a column name and the refusal describes a
+// column definition the caller did not write -- "ADD CONSTRAINT ck CHECK (a >
+// 0)" reported the constraint's name as a column type.
+//
+// The keywords a column could also be called are told apart by what follows
+// them. A constraint or an index takes a parenthesized column list where a
+// column takes a type, and the one being dropped is named where a column being
+// dropped is not, so "ADD COLUMN check INT" and "DROP unique" stay columns. A
+// quoted name is not a keyword at all, which is how a column named INDEX or KEY
+// is written in the dialects that reserve those words -- and every keyword read
+// here is reserved in at least one of them, so a column carrying one as a bare
+// name is not valid in the query's own dialect either.
+func (p *Parser) refuseAlterTableElement(adding bool) error {
+	constraint := func() error {
+		verb := "adding"
+		if !adding {
+			verb = "dropping"
+		}
+		return p.unsupportedf(
+			"%s a constraint is not supported; SQLite can only add, drop and rename columns", verb)
+	}
+	index := func() error {
+		verb, statement := "adding", "CREATE INDEX"
+		if !adding {
+			verb, statement = "dropping", "DROP INDEX"
+		}
+		return p.unsupportedf(
+			"%s an index inside ALTER TABLE is not supported; write a separate %s", verb, statement)
+	}
+	switch {
+	case p.atAnyWord("CONSTRAINT", "PRIMARY", "FOREIGN", "EXCLUDE"):
+		return constraint()
+	case p.atAnyWord("UNIQUE", "CHECK") && p.declaresAnObject(adding):
+		return constraint()
+	case p.atAnyWord("INDEX", "KEY") && p.declaresAnObject(adding):
+		return index()
+	case p.atAnyWord("FULLTEXT", "SPATIAL") && (p.peek(1).IsWord("INDEX") || p.peek(1).IsWord("KEY")):
+		return index()
+	}
+	return nil
+}
+
+// declaresAnObject reports whether the word the cursor is on opens a constraint
+// or an index rather than naming a column. One being added carries a column
+// list, with or without a name of its own in front of it; one being dropped
+// carries the name of what to drop, where a column of the same name carries
+// nothing.
+func (p *Parser) declaresAnObject(adding bool) bool {
+	if !adding {
+		return p.peek(1).Kind == token.Word || p.peek(1).Kind == token.QuotedIdent
+	}
+	if p.peek(1).IsOp("(") {
+		return true
+	}
+	named := p.peek(1).Kind == token.Word || p.peek(1).Kind == token.QuotedIdent
+	return named && p.peek(2).IsOp("(")
 }
