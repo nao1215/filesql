@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nao1215/filesql/internal/codec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -364,29 +365,25 @@ func TestParse_JSON_Compressed(t *testing.T) {
 		t.Skip("testdata directory not found")
 	}
 
-	testCases := []struct {
-		file     string
-		fileType FileType
-	}{
-		{"sample.json.gz", JSONGZ},
-		{"sample.json.bz2", JSONBZ2},
-		{"sample.json.xz", JSONXZ},
-		{"sample.json.zst", JSONZSTD},
-		{"sample.json.z", JSONZLIB},
-		{"sample.json.snappy", JSONSNAPPY},
-		{"sample.json.s2", JSONS2},
-		{"sample.json.lz4", JSONLZ4},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.file, func(t *testing.T) {
+	// The codec comes off the name, because Parse reads the bytes it is given
+	// and a compressed stream is the caller's to unwrap.
+	for _, file := range []string{
+		"sample.json.gz", "sample.json.bz2", "sample.json.xz", "sample.json.zst",
+		"sample.json.z", "sample.json.snappy", "sample.json.s2", "sample.json.lz4",
+	} {
+		t.Run(file, func(t *testing.T) {
 			t.Parallel()
 
-			f, err := os.Open(filepath.Join(testdataDir, tc.file))
+			f, err := os.Open(filepath.Join(testdataDir, file)) //nolint:gosec // fixed, in-repo fixture name
 			require.NoError(t, err)
 			defer f.Close()
 
-			result, err := Parse(f, tc.fileType)
+			found, _ := codec.FromPath(file)
+			decompressed, closeCodec, err := found.NewReader(f)
+			require.NoError(t, err)
+			defer closeCodec()
+
+			result, err := Parse(decompressed, DetectFileType(file))
 
 			require.NoError(t, err)
 			assert.Equal(t, []string{"data"}, result.Headers)
@@ -406,29 +403,23 @@ func TestParse_JSONL_Compressed(t *testing.T) {
 		t.Skip("testdata directory not found")
 	}
 
-	testCases := []struct {
-		file     string
-		fileType FileType
-	}{
-		{"sample.jsonl.gz", JSONLGZ},
-		{"sample.jsonl.bz2", JSONLBZ2},
-		{"sample.jsonl.xz", JSONLXZ},
-		{"sample.jsonl.zst", JSONLZSTD},
-		{"sample.jsonl.z", JSONLZLIB},
-		{"sample.jsonl.snappy", JSONLSNAPPY},
-		{"sample.jsonl.s2", JSONLS2},
-		{"sample.jsonl.lz4", JSONLLZ4},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.file, func(t *testing.T) {
+	for _, file := range []string{
+		"sample.jsonl.gz", "sample.jsonl.bz2", "sample.jsonl.xz", "sample.jsonl.zst",
+		"sample.jsonl.z", "sample.jsonl.snappy", "sample.jsonl.s2", "sample.jsonl.lz4",
+	} {
+		t.Run(file, func(t *testing.T) {
 			t.Parallel()
 
-			f, err := os.Open(filepath.Join(testdataDir, tc.file))
+			f, err := os.Open(filepath.Join(testdataDir, file)) //nolint:gosec // fixed, in-repo fixture name
 			require.NoError(t, err)
 			defer f.Close()
 
-			result, err := Parse(f, tc.fileType)
+			found, _ := codec.FromPath(file)
+			decompressed, closeCodec, err := found.NewReader(f)
+			require.NoError(t, err)
+			defer closeCodec()
+
+			result, err := Parse(decompressed, DetectFileType(file))
 
 			require.NoError(t, err)
 			assert.Equal(t, []string{"data"}, result.Headers)

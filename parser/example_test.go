@@ -77,49 +77,14 @@ func ExampleDetectFileType() {
 		ft := parser.DetectFileType(path)
 		fmt.Printf("%s -> %s\n", path, ft)
 	}
+	// A compression extension is looked through: the codec says how to read the
+	// bytes, not what they spell.
 	// Output:
 	// data.csv -> CSV
-	// data.csv.gz -> CSV (gzip)
+	// data.csv.gz -> CSV
 	// report.xlsx -> XLSX
-	// logs.ltsv.zst -> LTSV (zstd)
+	// logs.ltsv.zst -> LTSV
 	// analytics.parquet -> Parquet
-}
-
-func ExampleIsCompressed() {
-	types := []parser.FileType{
-		parser.CSV,
-		parser.CSVGZ,
-		parser.Parquet,
-		parser.ParquetZSTD,
-	}
-
-	for _, ft := range types {
-		fmt.Printf("%s compressed: %v\n", ft, parser.IsCompressed(ft))
-	}
-	// Output:
-	// CSV compressed: false
-	// CSV (gzip) compressed: true
-	// Parquet compressed: false
-	// Parquet (zstd) compressed: true
-}
-
-func ExampleBaseFileType() {
-	types := []parser.FileType{
-		parser.CSV,
-		parser.CSVGZ,
-		parser.TSVBZ2,
-		parser.ParquetZSTD,
-	}
-
-	for _, ft := range types {
-		base := parser.BaseFileType(ft)
-		fmt.Printf("%s -> %s\n", ft, base)
-	}
-	// Output:
-	// CSV -> CSV
-	// CSV (gzip) -> CSV
-	// TSV (bzip2) -> TSV
-	// Parquet (zstd) -> Parquet
 }
 
 func ExampleTableData_columnTypes() {

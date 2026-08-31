@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nao1215/filesql/internal/codec"
 	"github.com/nao1215/filesql/parser"
 	"github.com/parquet-go/parquet-go"
 	"github.com/stretchr/testify/assert"
@@ -983,10 +984,17 @@ func TestProcessor_JSON_PrettyPrintedGzip(t *testing.T) {
 		t.Fatalf("gzip close error: %v", err)
 	}
 
-	processor := NewProcessor(parser.JSONGZ)
+	// The codec comes off before the processor sees the stream.
+	decompressed, closeCodec, err := codec.GZ.NewReader(bytes.NewReader(compressed.Bytes()))
+	if err != nil {
+		t.Fatalf("NewReader() error = %v", err)
+	}
+	defer closeCodec()
+
+	processor := NewProcessor(parser.JSON)
 	var records []JSONRecord
 
-	reader, result, err := processor.Process(bytes.NewReader(compressed.Bytes()), &records)
+	reader, result, err := processor.Process(decompressed, &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
@@ -3057,15 +3065,13 @@ func TestProcessor_outputFormat(t *testing.T) {
 		wantFormat parser.FileType
 	}{
 		{"CSV", parser.CSV, parser.CSV},
-		{"CSV gzip returns CSV", parser.CSVGZ, parser.CSV},
-		{"TSV bzip2 returns TSV", parser.TSVBZ2, parser.TSV},
+		{"TSV", parser.TSV, parser.TSV},
 		{"LTSV", parser.LTSV, parser.LTSV},
-		{"XLSX outputs as CSV", parser.XLSXZSTD, parser.CSV},
+		{"XLSX outputs as CSV", parser.XLSX, parser.CSV},
 		{"Parquet outputs as CSV", parser.Parquet, parser.CSV},
 		{"JSON outputs as JSONL", parser.JSON, parser.JSONL},
 		{"JSONL", parser.JSONL, parser.JSONL},
-		{"JSON gzip outputs as JSONL", parser.JSONGZ, parser.JSONL},
-		{"JSONL zstd outputs as JSONL", parser.JSONLZSTD, parser.JSONL},
+		{"an unsupported input still writes CSV", parser.Unsupported, parser.CSV},
 	}
 
 	for _, tt := range tests {

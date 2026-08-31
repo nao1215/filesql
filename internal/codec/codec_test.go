@@ -599,3 +599,66 @@ func TestFromPath(t *testing.T) {
 		}
 	})
 }
+
+// TestNewReaderRefusesGarbage pins that a stream that is not what the codec
+// expects is refused, and that a caller learns of it either when the
+// decompressor is built or on the first read, never by getting the raw bytes
+// back as if they had been decompressed.
+//
+// Which of the two it is differs by codec and is the library's business rather
+// than this package's: gzip, xz and zlib read a header and refuse there, while
+// bzip2, zstd, snappy, s2 and lz4 hand back a reader that fails when it is
+// read. The contract that holds for all of them is that the garbage does not
+// come through, and that the close function is never nil so a caller can defer
+// it without asking whether this codec has anything to release.
+func TestNewReaderRefusesGarbage(t *testing.T) {
+	t.Parallel()
+
+	const garbage = "this is not a compressed stream, it is a sentence"
+
+	for _, c := range All {
+		t.Run(c.String(), func(t *testing.T) {
+			t.Parallel()
+
+			r, closeReader, err := c.NewReader(strings.NewReader(garbage))
+			if err != nil {
+				return // Refused when the decompressor was built.
+			}
+			if closeReader == nil {
+				t.Fatal("the close function must never be nil")
+			}
+			defer func() { _ = closeReader() }()
+
+			got, err := io.ReadAll(r)
+			if err == nil && string(got) == garbage {
+				t.Errorf("%s handed back the undecompressed bytes as if they had been read", c)
+			}
+		})
+	}
+}
+
+// TestNoneReadsWhatItIsGiven pins that the absence of a codec passes the stream
+// through unchanged and still answers with a close function to defer.
+func TestNoneReadsWhatItIsGiven(t *testing.T) {
+	t.Parallel()
+
+	const body = "id,name\n1,alice\n"
+
+	r, closeReader, err := None.NewReader(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("None.NewReader: %v", err)
+	}
+	if closeReader == nil {
+		t.Fatal("the close function must never be nil")
+	}
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != body {
+		t.Errorf("read %q, want %q", got, body)
+	}
+	if err := closeReader(); err != nil {
+		t.Errorf("close: %v", err)
+	}
+}
