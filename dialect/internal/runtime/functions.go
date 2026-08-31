@@ -270,6 +270,7 @@ func registerAll() error {
 		"similar_to":        {2, fnSimilarTo},
 		"similar_substring": {3, fnSimilarSubstring},
 		"mysql_ord":         {1, mysqlTextArgs(fnMySQLOrd, 0)},
+		"mysql_nullif":      {2, fnMySQLNullif},
 		"json_unquote":      {1, mysqlTextArgs(fnJSONUnquote, 0)},
 		// mysql_text is the conversion on its own, for the calls the MySQL
 		// lowering leaves on a function SQLite answers itself. There is nothing
