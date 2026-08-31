@@ -83,6 +83,13 @@ type guardedConn struct {
 	// keeps a statement inside a transaction from queueing behind the
 	// transaction it belongs to, and what lets the tracker see both spellings.
 	inTx bool
+	// savepoints is the savepoints of a transaction this connection opened by
+	// taking one, outermost first, and is empty for a transaction begun with
+	// BEGIN or BeginTx, where releasing a savepoint ends nothing. Releasing the
+	// outermost one ends the transaction, and SQLite lets a name be taken more
+	// than once, so it takes the stack rather than the one name to know which
+	// release that is.
+	savepoints []string
 	// spent reports that this connection could not be put back the way it was
 	// found, which is what takes it out of the pool rather than handing it to
 	// the next caller in a state they did not ask for.
@@ -237,6 +244,7 @@ func (c *guardedConn) closeTx() {
 		return
 	}
 	c.inTx = false
+	c.savepoints = nil
 	if c.gate != nil {
 		c.gate.release()
 	}
@@ -250,32 +258,111 @@ func (c *guardedConn) closeTx() {
 // without touching the gate: a statement outside a transaction is not what the
 // gate queues, and making it wait would deadlock the ordinary shape of holding
 // a transaction open while querying the same database beside it.
+//
+// Only the statement that opened the transaction may close it. A BEGIN run
+// inside a transaction is a mistake SQLite refuses, and a savepoint taken
+// inside one is not a transaction of its own; treating either as an opener made
+// the failure of the first drop the count of the transaction still running
+// underneath it.
 func (c *guardedConn) runExec(ctx context.Context, query string, run func(context.Context) (driver.Result, error)) (driver.Result, error) {
-	switch c.effectOf(query) {
+	stmt := c.effectOf(query)
+	switch stmt.effect {
 	case txEffectBegin:
+		if c.inTx {
+			return c.runInnerSavepoint(ctx, stmt, run)
+		}
 		if err := c.openTx(ctx); err != nil {
 			return nil, err
 		}
 		res, err := run(ctx)
 		if err != nil {
 			c.closeTx()
+			return res, err
 		}
-		return res, err
-	case txEffectEnd:
+		if stmt.savepoint != "" {
+			c.savepoints = []string{stmt.savepoint}
+		}
+		return res, nil
+	case txEffectCommit, txEffectRollback:
+		if !c.inTx {
+			break
+		}
+		if stmt.savepoint != "" {
+			held := c.innermostSavepoint(stmt.savepoint)
+			if held < 0 {
+				// A name the stack does not hold. SQLite refuses it, or the
+				// transaction was begun with BEGIN and no release ends it.
+				break
+			}
+			if held > 0 {
+				return c.runInnerRelease(ctx, held, run)
+			}
+		}
 		res, err := run(ctx)
-		if err == nil {
-			c.closeTx()
+		if err != nil {
+			return res, err
 		}
-		return res, err
+		c.closeTx()
+		if stmt.effect == txEffectCommit && c.tracker != nil {
+			if saveErr := c.tracker.transactionCommitted(); saveErr != nil {
+				return res, saveErr
+			}
+		}
+		return res, nil
 	case txEffectNone:
 	}
 	return run(ctx)
 }
 
+// runInnerSavepoint runs a statement that opens something inside a transaction
+// that is already open. A BEGIN there is a mistake SQLite refuses and is left to
+// say so; a savepoint is real, and one taken inside a transaction this
+// connection is tracking by its savepoints joins that stack.
+func (c *guardedConn) runInnerSavepoint(ctx context.Context, stmt txStatement, run func(context.Context) (driver.Result, error)) (driver.Result, error) {
+	res, err := run(ctx)
+	if err == nil && stmt.savepoint != "" && len(c.savepoints) > 0 {
+		c.savepoints = append(c.savepoints, stmt.savepoint)
+	}
+	return res, err
+}
+
+// runInnerRelease runs a RELEASE of a savepoint that is not the one that opened
+// the transaction. SQLite releases that savepoint and every one above it and
+// leaves the transaction open, so the stack loses the same entries and the
+// count and the gate are untouched.
+func (c *guardedConn) runInnerRelease(ctx context.Context, held int, run func(context.Context) (driver.Result, error)) (driver.Result, error) {
+	res, err := run(ctx)
+	if err == nil {
+		c.savepoints = c.savepoints[:held]
+	}
+	return res, err
+}
+
+// innermostSavepoint is where the stack holds the savepoint a RELEASE of this
+// name releases -- the innermost one, which is the last of the name -- or -1
+// when it holds none. SQLite compares savepoint names without regard to case,
+// so this does too.
+//
+// The stack can hold more than SQLite does, because ROLLBACK TO cancels the
+// savepoints above the one it names and this does not follow it there. What
+// that costs is a release read as inner when SQLite read it as the outermost,
+// which leaves a transaction counted open after it ended: the save is refused
+// rather than run, which is the direction this count is deliberately biased in,
+// since a skipped save is recoverable with DumpDatabase and rows written over
+// the caller's own are not.
+func (c *guardedConn) innermostSavepoint(name string) int {
+	for i := len(c.savepoints) - 1; i >= 0; i-- {
+		if strings.EqualFold(c.savepoints[i], name) {
+			return i
+		}
+	}
+	return -1
+}
+
 // runQuery runs one query. A transaction keyword run as a query is odd but
 // legal, so it is read the same way a statement is.
 func (c *guardedConn) runQuery(ctx context.Context, query string, run func(context.Context) (driver.Rows, error)) (driver.Rows, error) {
-	if c.effectOf(query) == txEffectNone {
+	if c.effectOf(query).effect == txEffectNone {
 		return run(ctx)
 	}
 	var rows driver.Rows
@@ -288,11 +375,11 @@ func (c *guardedConn) runQuery(ctx context.Context, query string, run func(conte
 }
 
 // effectOf reads a statement only when something depends on the answer.
-func (c *guardedConn) effectOf(query string) txEffect {
+func (c *guardedConn) effectOf(query string) txStatement {
 	if c.gate == nil && c.tracker == nil {
-		return txEffectNone
+		return txStatement{}
 	}
-	return statementTxEffect(query)
+	return readTxStatement(query)
 }
 
 // begin starts the transaction on the wrapped connection, through whichever of
@@ -442,22 +529,38 @@ const (
 	txEffectNone txEffect = iota
 	// txEffectBegin is a statement that opens a transaction.
 	txEffectBegin
-	// txEffectEnd is a statement that closes the transaction around it.
-	txEffectEnd
+	// txEffectCommit is a statement that closes the transaction around it and
+	// keeps what it wrote.
+	txEffectCommit
+	// txEffectRollback is a statement that closes the transaction around it and
+	// discards what it wrote.
+	txEffectRollback
 )
 
-// statementTxEffect reads the leading keywords of a statement to see whether it
-// opens or closes a transaction. Only the spellings SQLite gives an explicit
-// transaction are read: BEGIN with any of its qualifiers opens one, and COMMIT,
-// END and a bare ROLLBACK close one. ROLLBACK TO a savepoint keeps the
-// transaction around it open and so counts as neither.
-func statementTxEffect(query string) txEffect {
+// txStatement is a statement read for what it does to a transaction.
+type txStatement struct {
+	// effect is what the statement does.
+	effect txEffect
+	// savepoint is the savepoint a SAVEPOINT takes or a RELEASE releases, and
+	// is empty for BEGIN, COMMIT, END and ROLLBACK. A savepoint bounds a
+	// transaction only when it is the outermost one, which the connection
+	// running the statement knows and this reading does not.
+	savepoint string
+}
+
+// readTxStatement reads the leading keywords of a statement to see whether it
+// opens or closes a transaction. The spellings SQLite gives an explicit
+// transaction are all read: BEGIN with any of its qualifiers opens one, COMMIT
+// and END keep one, a bare ROLLBACK discards one, and SAVEPOINT and RELEASE do
+// the same for the savepoint they name. ROLLBACK TO a savepoint keeps the
+// transaction around it open and so counts as none of them.
+func readTxStatement(query string) txStatement {
 	first, rest := leadingWord(query)
 	switch strings.ToUpper(first) {
 	case "BEGIN":
-		return txEffectBegin
+		return txStatement{effect: txEffectBegin}
 	case "COMMIT", "END":
-		return txEffectEnd
+		return txStatement{effect: txEffectCommit}
 	case "ROLLBACK":
 		// SQLite writes the keyword as ROLLBACK [TRANSACTION] TO [SAVEPOINT]
 		// name, so the optional TRANSACTION stands between the two words that
@@ -467,19 +570,37 @@ func statementTxEffect(query string) txEffect {
 			next, _ = leadingWord(after)
 		}
 		if strings.EqualFold(next, "TO") {
-			return txEffectNone
+			return txStatement{}
 		}
-		return txEffectEnd
-	default:
-		return txEffectNone
+		return txStatement{effect: txEffectRollback}
+	case "SAVEPOINT":
+		if name := leadingIdentifier(rest); name != "" {
+			return txStatement{effect: txEffectBegin, savepoint: name}
+		}
+	case "RELEASE":
+		if name := leadingIdentifier(releaseTarget(rest)); name != "" {
+			return txStatement{effect: txEffectCommit, savepoint: name}
+		}
 	}
+	return txStatement{}
+}
+
+// releaseTarget drops the optional SAVEPOINT keyword of RELEASE [SAVEPOINT]
+// name. It is dropped only when a name follows it, because "savepoint" is
+// itself a name a caller may have taken: RELEASE savepoint releases that one.
+func releaseTarget(rest string) string {
+	next, after := leadingWord(rest)
+	if strings.EqualFold(next, "SAVEPOINT") && leadingIdentifier(after) != "" {
+		return after
+	}
+	return rest
 }
 
 // leadingWord returns the first run of letters in s and what follows it. A
-// statement that starts with anything else -- a comment, a parenthesis, a
-// number -- has no leading word, which is what makes it none of the three.
+// statement whose first thing is not a letter -- a parenthesis, a number, a
+// string -- has no leading word, which is what makes it none of the effects.
 func leadingWord(s string) (string, string) {
-	s = strings.TrimLeft(s, " \t\r\n")
+	s = skipToStatement(s)
 	end := 0
 	for end < len(s) && isASCIILetter(s[end]) {
 		end++
@@ -487,8 +608,94 @@ func leadingWord(s string) (string, string) {
 	return s[:end], s[end:]
 }
 
+// leadingIdentifier returns the identifier at the front of s, in the spelling a
+// comparison uses rather than the one it was written in, or "" when there is
+// none. SQLite writes an identifier bare or wrapped in double quotes,
+// backticks, or brackets, and a savepoint name is an identifier like any other,
+// so the name in RELEASE "the batch" has to be read back as the one SAVEPOINT
+// "the batch" took.
+func leadingIdentifier(s string) string {
+	s = skipToStatement(s)
+	if s == "" {
+		return ""
+	}
+	if closing, quoted := identifierQuotes[s[0]]; quoted {
+		return quotedIdentifier(s[1:], s[0], closing)
+	}
+	end := 0
+	for end < len(s) && isIdentifierByte(s[end]) {
+		end++
+	}
+	return s[:end]
+}
+
+// identifierQuotes maps the character that opens a quoted identifier to the one
+// that closes it.
+//
+//nolint:gochecknoglobals // constant-like lookup table
+var identifierQuotes = map[byte]byte{'"': '"', '`': '`', '[': ']'}
+
+// quotedIdentifier reads the body of a quoted identifier, stopping at the
+// closing quote and reading a doubled one as a single character of the name.
+// Brackets have no doubled form, and opening and closing differ there, so the
+// first closing bracket ends the name.
+func quotedIdentifier(s string, opening, closing byte) string {
+	var name strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != closing {
+			name.WriteByte(s[i])
+			continue
+		}
+		if opening == closing && i+1 < len(s) && s[i+1] == closing {
+			name.WriteByte(closing)
+			i++
+			continue
+		}
+		return name.String()
+	}
+	// An identifier that is never closed is not one.
+	return ""
+}
+
+// skipToStatement drops the whitespace and the comments at the front of s, so
+// what is left begins with the first thing the statement says. A comment is not
+// part of the statement: reading from the first non-space character alone left
+// a commented BEGIN looking like no transaction at all, and a commented COMMIT
+// leaving one counted open that SQLite had already ended.
+func skipToStatement(s string) string {
+	for {
+		s = strings.TrimLeft(s, " \t\r\n\v\f")
+		switch {
+		case strings.HasPrefix(s, "--"):
+			end := strings.IndexByte(s, '\n')
+			if end < 0 {
+				// A line comment with no line after it is the whole statement.
+				return ""
+			}
+			s = s[end+1:]
+		case strings.HasPrefix(s, "/*"):
+			end := strings.Index(s[2:], "*/")
+			if end < 0 {
+				// SQLite reads an unterminated block comment to the end.
+				return ""
+			}
+			s = s[2+end+2:]
+		default:
+			return s
+		}
+	}
+}
+
 func isASCIILetter(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+// isIdentifierByte reports whether b may appear in an identifier written
+// without quotes. SQLite takes a letter, a digit, an underscore, a dollar sign,
+// and any byte outside ASCII, which is what lets a name be written in another
+// script.
+func isIdentifierByte(b byte) bool {
+	return isASCIILetter(b) || (b >= '0' && b <= '9') || b == '_' || b == '$' || b >= 0x80
 }
 
 // guardedStmt is a prepared statement running under the same rules as one run

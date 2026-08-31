@@ -199,6 +199,30 @@ func TestGuardedTx_CommitReportsAFailedSave(t *testing.T) {
 	assert.Contains(t, err.Error(), "transaction committed successfully")
 }
 
+// TestGuardedConn_StatementCommitReportsAFailedSave covers the same failure on
+// the other spelling. A commit-time save that failed after a COMMIT run as a
+// statement leaves the rows in the database and the file behind them, which is
+// only something the caller can act on if the statement says so.
+func TestGuardedConn_StatementCommitReportsAFailedSave(t *testing.T) {
+	t.Parallel()
+
+	conn := &guardedConn{
+		conn: &plainConn{},
+		tracker: &autoSaveConnector{
+			autoSaveConfig: &autoSaveConfig{enabled: true, timing: autoSaveOnCommit},
+			anchor:         &plainConn{},
+		},
+	}
+	require.NoError(t, conn.openTx(context.Background()))
+
+	_, err := conn.runExec(context.Background(), "COMMIT", func(context.Context) (driver.Result, error) {
+		return driver.RowsAffected(0), nil
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "transaction committed successfully")
+	assert.False(t, conn.inTx, "the transaction is over whether or not the save worked")
+}
+
 // TestGuardedTx_CommitThatFailedStopsCountingAsOpen covers the
 // transaction a caller has no way to finish. database/sql does not call
 // Rollback after a Commit that returned an error, and the driver has already
@@ -360,41 +384,78 @@ func TestGuardedConn_TransactionOptions(t *testing.T) {
 	})
 }
 
-// TestStatementTxEffect covers the reading that tells a statement which opens a
+// TestReadTxStatement covers the reading that tells a statement which opens a
 // transaction from one which closes it. ROLLBACK TO a savepoint is the case
 // worth naming: it leaves the transaction around it open, so reading it as an
-// end would drop the count while work is still uncommitted.
-func TestStatementTxEffect(t *testing.T) {
+// end would drop the count while work is still uncommitted. A savepoint is read
+// with the name it takes or releases, because whether a RELEASE ends the
+// transaction depends on which savepoint opened it, which only the connection
+// knows.
+func TestReadTxStatement(t *testing.T) {
 	t.Parallel()
 
 	for _, tt := range []struct {
 		query string
-		want  txEffect
+		want  txStatement
 	}{
-		{query: "BEGIN", want: txEffectBegin},
-		{query: "begin", want: txEffectBegin},
-		{query: "  \n\tBEGIN TRANSACTION", want: txEffectBegin},
-		{query: "BEGIN IMMEDIATE", want: txEffectBegin},
-		{query: "BEGIN DEFERRED", want: txEffectBegin},
-		{query: "BEGIN EXCLUSIVE", want: txEffectBegin},
-		{query: "COMMIT", want: txEffectEnd},
-		{query: "commit transaction", want: txEffectEnd},
-		{query: "END", want: txEffectEnd},
-		{query: "END TRANSACTION", want: txEffectEnd},
-		{query: "ROLLBACK", want: txEffectEnd},
-		{query: "rollback transaction", want: txEffectEnd},
-		{query: "ROLLBACK TO SAVEPOINT s", want: txEffectNone},
-		{query: "rollback to s", want: txEffectNone},
-		{query: "ROLLBACK TRANSACTION TO SAVEPOINT s", want: txEffectNone},
-		{query: "rollback transaction to s", want: txEffectNone},
-		{query: "SELECT 1", want: txEffectNone},
-		{query: "SELECT 1 AS beginning", want: txEffectNone},
-		{query: "UPDATE t SET commits = 1", want: txEffectNone},
-		{query: "", want: txEffectNone},
-		{query: "-- BEGIN", want: txEffectNone},
-		{query: "CREATE TRIGGER t AFTER INSERT ON u BEGIN SELECT 1; END", want: txEffectNone},
+		{query: "BEGIN", want: txStatement{effect: txEffectBegin}},
+		{query: "begin", want: txStatement{effect: txEffectBegin}},
+		{query: "  \n\tBEGIN TRANSACTION", want: txStatement{effect: txEffectBegin}},
+		{query: "BEGIN IMMEDIATE", want: txStatement{effect: txEffectBegin}},
+		{query: "BEGIN DEFERRED", want: txStatement{effect: txEffectBegin}},
+		{query: "BEGIN EXCLUSIVE", want: txStatement{effect: txEffectBegin}},
+		{query: "COMMIT", want: txStatement{effect: txEffectCommit}},
+		{query: "commit transaction", want: txStatement{effect: txEffectCommit}},
+		{query: "END", want: txStatement{effect: txEffectCommit}},
+		{query: "END TRANSACTION", want: txStatement{effect: txEffectCommit}},
+		{query: "ROLLBACK", want: txStatement{effect: txEffectRollback}},
+		{query: "rollback transaction", want: txStatement{effect: txEffectRollback}},
+		{query: "ROLLBACK TO SAVEPOINT s", want: txStatement{}},
+		{query: "rollback to s", want: txStatement{}},
+		{query: "ROLLBACK TRANSACTION TO SAVEPOINT s", want: txStatement{}},
+		{query: "rollback transaction to s", want: txStatement{}},
+		{query: "SELECT 1", want: txStatement{}},
+		{query: "SELECT 1 AS beginning", want: txStatement{}},
+		{query: "UPDATE t SET commits = 1", want: txStatement{}},
+		{query: "", want: txStatement{}},
+		{query: "-- BEGIN", want: txStatement{}},
+		{query: "CREATE TRIGGER t AFTER INSERT ON u BEGIN SELECT 1; END", want: txStatement{}},
+
+		// A comment is not part of the statement, so what follows one is read
+		// as though it were written alone. Everything a caller can put in front
+		// of the keyword has to be skipped, including several comments in a row
+		// and one that never ends.
+		{query: "/* batch */ BEGIN", want: txStatement{effect: txEffectBegin}},
+		{query: "-- batch\nBEGIN", want: txStatement{effect: txEffectBegin}},
+		{query: "-- one\n /* two */\tCOMMIT", want: txStatement{effect: txEffectCommit}},
+		{query: "/* a */-- b\n/* c */ROLLBACK", want: txStatement{effect: txEffectRollback}},
+		{query: "/* c */ ROLLBACK TO s", want: txStatement{}},
+		{query: "/* never closed BEGIN", want: txStatement{}},
+		{query: "--", want: txStatement{}},
+		{query: "/**/COMMIT", want: txStatement{effect: txEffectCommit}},
+		{query: "SELECT '/* not a comment */ COMMIT'", want: txStatement{}},
+
+		// A savepoint taken outside a transaction opens one and releasing it
+		// closes one, so both are read, with the name that says which.
+		{query: "SAVEPOINT batch", want: txStatement{effect: txEffectBegin, savepoint: "batch"}},
+		{query: "savepoint BATCH", want: txStatement{effect: txEffectBegin, savepoint: "BATCH"}},
+		{query: "SAVEPOINT", want: txStatement{}},
+		{query: `SAVEPOINT "the batch"`, want: txStatement{effect: txEffectBegin, savepoint: "the batch"}},
+		{query: "SAVEPOINT `the batch`", want: txStatement{effect: txEffectBegin, savepoint: "the batch"}},
+		{query: `SAVEPOINT [the batch]`, want: txStatement{effect: txEffectBegin, savepoint: "the batch"}},
+		{query: `SAVEPOINT "say ""hi"""`, want: txStatement{effect: txEffectBegin, savepoint: `say "hi"`}},
+		{query: `SAVEPOINT "never closed`, want: txStatement{}},
+		{query: "RELEASE batch", want: txStatement{effect: txEffectCommit, savepoint: "batch"}},
+		{query: "RELEASE SAVEPOINT batch", want: txStatement{effect: txEffectCommit, savepoint: "batch"}},
+		{query: "release savepoint BATCH", want: txStatement{effect: txEffectCommit, savepoint: "BATCH"}},
+		// "savepoint" is a name a caller may have taken, so the keyword is only
+		// dropped when another name follows it.
+		{query: "RELEASE savepoint", want: txStatement{effect: txEffectCommit, savepoint: "savepoint"}},
+		{query: "RELEASE", want: txStatement{}},
+		{query: "SAVEPOINTS", want: txStatement{}},
+		{query: "RELEASED batch", want: txStatement{}},
 	} {
-		assert.Equal(t, tt.want, statementTxEffect(tt.query), tt.query)
+		assert.Equal(t, tt.want, readTxStatement(tt.query), tt.query)
 	}
 }
 
@@ -520,6 +581,114 @@ func TestTransactionsQueueForEachOther(t *testing.T) {
 		var name string
 		require.NoError(t, db.QueryRowContext(t.Context(), "SELECT name FROM users WHERE id=2").Scan(&name))
 		assert.Equal(t, "second", name)
+	})
+
+	t.Run("a refused nested BEGIN keeps the first transaction queued", func(t *testing.T) {
+		t.Parallel()
+
+		// A BEGIN inside a transaction is a mistake SQLite refuses, and the
+		// transaction underneath it is untouched. Reading the refusal as the
+		// end of a transaction gave the gate away while the first was still
+		// open, so a second transaction ran beside it.
+		db := setup(t)
+		conn, err := db.Conn(t.Context())
+		require.NoError(t, err)
+		defer func() { _ = conn.Close() }()
+
+		_, err = conn.ExecContext(t.Context(), "BEGIN")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(t.Context(), "UPDATE users SET name='held' WHERE id=1")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(t.Context(), "BEGIN")
+		require.Error(t, err, "SQLite has no nested transaction")
+
+		ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+		defer cancel()
+		_, err = db.BeginTx(ctx, nil)
+		require.Error(t, err, "the first transaction is still open, so the second must wait for it")
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+
+		_, err = conn.ExecContext(t.Context(), "ROLLBACK")
+		require.NoError(t, err)
+		tx, err := db.BeginTx(t.Context(), nil)
+		require.NoError(t, err, "the gate has to be free once the first transaction ends")
+		require.NoError(t, tx.Rollback())
+	})
+
+	t.Run("a savepoint releases the gate only when the outermost one is released", func(t *testing.T) {
+		t.Parallel()
+
+		db := setup(t)
+		conn, err := db.Conn(t.Context())
+		require.NoError(t, err)
+		defer func() { _ = conn.Close() }()
+
+		for _, stmt := range []string{"SAVEPOINT outer", "SAVEPOINT inner", "UPDATE users SET name='held' WHERE id=1", "RELEASE inner"} {
+			_, err = conn.ExecContext(t.Context(), stmt)
+			require.NoError(t, err, stmt)
+		}
+
+		ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+		defer cancel()
+		_, err = db.BeginTx(ctx, nil)
+		require.Error(t, err, "releasing a nested savepoint leaves the transaction around it open")
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+
+		_, err = conn.ExecContext(t.Context(), "RELEASE outer")
+		require.NoError(t, err)
+		tx, err := db.BeginTx(t.Context(), nil)
+		require.NoError(t, err, "releasing the savepoint that opened the transaction ends it")
+		require.NoError(t, tx.Rollback())
+	})
+
+	t.Run("a reused savepoint name holds the gate until the outermost is released", func(t *testing.T) {
+		t.Parallel()
+
+		// SQLite lets one name be taken twice and releases the innermost, so
+		// matching the name alone read the first RELEASE as the end of the
+		// transaction and gave the gate away while it was still open.
+		db := setup(t)
+		conn, err := db.Conn(t.Context())
+		require.NoError(t, err)
+		defer func() { _ = conn.Close() }()
+
+		for _, stmt := range []string{"SAVEPOINT s", "SAVEPOINT s", "UPDATE users SET name='held' WHERE id=1", "RELEASE s"} {
+			_, err = conn.ExecContext(t.Context(), stmt)
+			require.NoError(t, err, stmt)
+		}
+
+		ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+		defer cancel()
+		_, err = db.BeginTx(ctx, nil)
+		require.Error(t, err, "the outer savepoint still holds the transaction open")
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+
+		_, err = conn.ExecContext(t.Context(), "RELEASE s")
+		require.NoError(t, err)
+		tx, err := db.BeginTx(t.Context(), nil)
+		require.NoError(t, err, "releasing the outermost savepoint ends the transaction")
+		require.NoError(t, tx.Rollback())
+	})
+
+	t.Run("a COMMIT with nothing open leaves the next transaction alone", func(t *testing.T) {
+		t.Parallel()
+
+		db := setup(t)
+		conn, err := db.Conn(t.Context())
+		require.NoError(t, err)
+		defer func() { _ = conn.Close() }()
+
+		_, err = conn.ExecContext(t.Context(), "COMMIT")
+		require.Error(t, err, "there is no transaction to commit")
+
+		_, err = conn.ExecContext(t.Context(), "BEGIN")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(t.Context(), "COMMIT")
+		require.NoError(t, err, "the refused COMMIT must not have left the count out of step")
+
+		tx, err := db.BeginTx(t.Context(), nil)
+		require.NoError(t, err, "the gate has to be free")
+		require.NoError(t, tx.Rollback())
 	})
 
 	t.Run("a statement beside an open transaction still runs", func(t *testing.T) {

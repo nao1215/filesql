@@ -217,8 +217,11 @@
 // statement may reach a different one, so the rows are not where the caller
 // expects and are discarded when that connection closes. Auto-save counts such a
 // transaction as open and refuses to save while it is, the same as one begun
-// with BeginTx. Savepoints are not counted: releasing a nested one does not end
-// the transaction around it.
+// with BeginTx, and saves at a COMMIT run as a statement just as it does at
+// tx.Commit. A savepoint taken while no transaction is open begins one, so it
+// counts the same way and the RELEASE naming it ends it; a savepoint taken
+// inside a transaction is not one of its own, so releasing that one leaves the
+// transaction around it open. A comment before the keyword does not hide it.
 //
 // # Table Naming
 //
