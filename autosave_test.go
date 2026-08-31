@@ -1488,31 +1488,92 @@ func TestAutoSaveCloseWithAnOpenTransaction(t *testing.T) {
 func TestAutoSaveOverwriteRefusesASourceReplacedByAPipe(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	src := filepath.Join(dir, "users.csv")
-	require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
+	// Each format reads its source through a different call -- a text format
+	// through the compression factory, Parquet through its own open for the
+	// schema, ACH and Fedwire through the recorded source path -- so each is
+	// its own way into the same block.
+	for _, tt := range []struct {
+		name   string
+		file   string
+		seed   func(t *testing.T) []byte
+		update string
+	}{
+		{
+			name:   "csv",
+			file:   "users.csv",
+			seed:   func(*testing.T) []byte { return []byte("id,name\n1,alice\n") },
+			update: "UPDATE users SET name = 'bob'",
+		},
+		{
+			name:   "parquet",
+			file:   "users.parquet",
+			seed:   parquetSeed,
+			update: "UPDATE users SET name = 'bob'",
+		},
+		{
+			name: "ach",
+			file: "payment.ach",
+			seed: func(t *testing.T) []byte {
+				t.Helper()
 
-	db := openAutoSave(t, src, func(b *DBBuilder) *DBBuilder { return b.EnableAutoSave("") })
-	_, err := db.ExecContext(t.Context(), "UPDATE users SET name = 'bob'")
-	require.NoError(t, err)
+				body, err := os.ReadFile(filepath.Join("testdata", "ppd-debit.ach"))
+				require.NoError(t, err)
+				return body
+			},
+			update: "UPDATE payment_entries SET individual_name = 'x' WHERE entry_index = 0",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	require.NoError(t, os.Remove(src))
-	makeFIFO(t, src)
+			src := filepath.Join(t.TempDir(), tt.file)
+			require.NoError(t, os.WriteFile(src, tt.seed(t), 0o600))
 
-	done := make(chan error, 1)
-	go func() { done <- db.Close() }()
-	select {
-	case closeErr := <-done:
-		// Which layer refuses is not the point and is not pinned: the read of
-		// the source no longer blocks, so the save reaches the write, which
-		// refuses a destination that is not a file. What matters is that Close
-		// returns and says what is wrong.
-		require.Error(t, closeErr, "a save that could not run must be reported")
-		assert.Contains(t, closeErr.Error(), "a named pipe")
-		assert.Contains(t, closeErr.Error(), src)
-	case <-time.After(30 * time.Second):
-		t.Fatal("Close did not return: the save is waiting for a writer on the pipe")
+			db := openAutoSave(t, src, func(b *DBBuilder) *DBBuilder { return b.EnableAutoSave("") })
+			_, err := db.ExecContext(t.Context(), tt.update)
+			require.NoError(t, err)
+
+			require.NoError(t, os.Remove(src))
+			makeFIFO(t, src)
+
+			done := make(chan error, 1)
+			go func() { done <- db.Close() }()
+			select {
+			case closeErr := <-done:
+				// Which layer refuses is not pinned: the read of the source no
+				// longer blocks, so a save may get as far as the write, which
+				// refuses a destination that is not a file. What matters is
+				// that Close returns and says what is wrong.
+				require.Error(t, closeErr, "a save that could not run must be reported")
+				assert.Contains(t, closeErr.Error(), src)
+				assert.Contains(t, closeErr.Error(), "a named pipe")
+			case <-time.After(30 * time.Second):
+				t.Fatal("Close did not return: the save is waiting for a writer on the pipe")
+			}
+		})
 	}
+}
+
+// parquetSeed is a small Parquet file, made by dumping one rather than by
+// keeping bytes in testdata.
+func parquetSeed(t *testing.T) []byte {
+	t.Helper()
+
+	dir := t.TempDir()
+	csv := filepath.Join(dir, "users.csv")
+	require.NoError(t, os.WriteFile(csv, []byte("id,name\n1,alice\n"), 0o600))
+
+	db, err := OpenContext(t.Context(), csv)
+	require.NoError(t, err)
+	defer db.Close()
+
+	out := filepath.Join(dir, "out")
+	require.NoError(t, os.MkdirAll(out, 0o750))
+	require.NoError(t, DumpDatabaseContext(t.Context(), db, out, NewDumpOptions().WithFormat(OutputFormatParquet)))
+
+	body, err := os.ReadFile(filepath.Join(out, "users.parquet")) //nolint:gosec // out is under t.TempDir()
+	require.NoError(t, err)
+	return body
 }
 
 // TestAutoSaveOverwriteFollowsASymlink pins that a source reached through a
