@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -136,7 +135,7 @@ func achTableSetForDump(ctx context.Context, db *sql.DB, baseTableName string) (
 		return nil, fmt.Errorf("%w: no ACH source recorded for base table name %q; load the file with Open() or Builder from a path, or pass the structure to DumpACHWithTableSet", ErrSourceUnavailable, baseTableName)
 	}
 
-	file, err := os.Open(path) //nolint:gosec // Path was recorded by this package when the file was loaded
+	file, err := openRegularFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("%w: cannot read the ACH file %s that %q was loaded from: %w", ErrSourceUnavailable, path, baseTableName, err)
 	}
@@ -157,7 +156,7 @@ func wireTableSetForDump(ctx context.Context, db *sql.DB, baseTableName string) 
 		return nil, fmt.Errorf("%w: no Fedwire source recorded for base table name %q; load the file with Open() or Builder from a path, or pass the structure to DumpFedWireWithTableSet", ErrSourceUnavailable, baseTableName)
 	}
 
-	file, err := os.Open(path) //nolint:gosec // Path was recorded by this package when the file was loaded
+	file, err := openRegularFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("%w: cannot read the Fedwire file %s that %q was loaded from: %w", ErrSourceUnavailable, path, baseTableName, err)
 	}

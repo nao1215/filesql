@@ -377,7 +377,7 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, tx *sql.Tx,
 	}
 
 	// Open the file and create a reader
-	file, err := os.Open(filePath) //nolint:gosec // File path is validated and comes from user input
+	file, err := openRegularFile(filePath)
 	if err != nil {
 		sp.logger.Error("failed to open file", "path", filePath, "error", err)
 		return fmt.Errorf("%w: failed to open file %s: %w", ErrIOOperation, filePath, err)
@@ -450,7 +450,7 @@ func (sp *streamProcessor) streamACHFileToDatabase(ctx context.Context, tx *sql.
 	sp.logger.Debug("processing ACH file", "path", filePath)
 
 	// Open the file
-	file, err := os.Open(filePath) //nolint:gosec // File path is validated and comes from user input
+	file, err := openRegularFile(filePath)
 	if err != nil {
 		sp.logger.Error("failed to open ACH file", "path", filePath, "error", err)
 		return fmt.Errorf("%w: failed to open ACH file %s: %w", ErrIOOperation, filePath, err)
@@ -477,7 +477,7 @@ func (sp *streamProcessor) streamFedWireFileToDatabase(ctx context.Context, tx *
 	sp.logger.Debug("processing Fedwire file", "path", filePath)
 
 	// Open the file
-	file, err := os.Open(filePath) //nolint:gosec // File path is validated and comes from user input
+	file, err := openRegularFile(filePath)
 	if err != nil {
 		sp.logger.Error("failed to open Fedwire file", "path", filePath, "error", err)
 		return fmt.Errorf("%w: failed to open Fedwire file %s: %w", ErrIOOperation, filePath, err)

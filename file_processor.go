@@ -77,6 +77,21 @@ func (fp *fileProcessor) collectFilesFromPaths(paths []string) ([]string, error)
 	return collectedPaths, nil
 }
 
+// openRegularFile opens path for reading, refusing one that is not a regular
+// file. Every place this package opens a path it was given rather than one it
+// created goes through here, so a named pipe is refused rather than blocking
+// the caller inside the open syscall; see refuseIrregularSource.
+func openRegularFile(path string) (*os.File, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := refuseIrregularSource(path, info.Mode()); err != nil {
+		return nil, err
+	}
+	return os.Open(path) //nolint:gosec // the path is the caller's own
+}
+
 // refuseIrregularSource reports an error when a source carrying a supported
 // extension is not a regular file.
 //

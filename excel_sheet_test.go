@@ -244,6 +244,30 @@ func TestExcelSheetsInFileRejectsUnreadableWorkbook(t *testing.T) {
 // TestOpenAppliesTheDefaultSheetPolicy is the compatibility guard: a caller
 // that names no policy still gets every sheet, exactly as before the policy
 // existed. Changing this silently would drop tables out of existing programs.
+// TestExcelSheetsInFileRefusesWhatIsNotAFile pins the exported call a caller
+// reaches first, before they have decided to load anything: it opens the path
+// it is given, so a named pipe made it block for the life of the process.
+func TestExcelSheetsInFileRefusesWhatIsNotAFile(t *testing.T) {
+	t.Parallel()
+
+	pipe := filepath.Join(t.TempDir(), "book.xlsx")
+	makeFIFO(t, pipe)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := ExcelSheetsInFile(pipe)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		assert.Contains(t, err.Error(), "a named pipe")
+	case <-time.After(30 * time.Second):
+		t.Fatal("ExcelSheetsInFile did not return: it is waiting for a writer on the pipe")
+	}
+}
+
 func TestOpenAppliesTheDefaultSheetPolicy(t *testing.T) {
 	t.Parallel()
 	path := mixedVisibilityWorkbook(t, t.TempDir())
