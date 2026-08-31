@@ -95,15 +95,40 @@ func (c *guardedConn) Close() error {
 
 // Prepare implements driver.Conn.
 func (c *guardedConn) Prepare(query string) (driver.Stmt, error) {
-	return c.conn.Prepare(query)
+	stmt, err := c.conn.Prepare(query)
+	if err != nil {
+		return nil, err
+	}
+	return c.wrapStmt(stmt, query), nil
 }
 
 // PrepareContext implements driver.ConnPrepareContext.
 func (c *guardedConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
+	stmt, err := c.prepare(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return c.wrapStmt(stmt, query), nil
+}
+
+func (c *guardedConn) prepare(ctx context.Context, query string) (driver.Stmt, error) {
 	if p, ok := c.conn.(driver.ConnPrepareContext); ok {
 		return p.PrepareContext(ctx, query)
 	}
 	return c.conn.Prepare(query)
+}
+
+// wrapStmt keeps a prepared statement under the same reading as one run
+// directly. database/sql runs a prepared statement against the driver statement
+// rather than against the connection, so a prepared BEGIN would otherwise open
+// a transaction nothing here knows about. A statement is left unwrapped when
+// there is no tracker to tell and when it is not one of the three keywords,
+// which is every statement in a query.
+func (c *guardedConn) wrapStmt(stmt driver.Stmt, query string) driver.Stmt {
+	if c.tracker == nil || statementTxEffect(query) == txEffectNone {
+		return stmt
+	}
+	return &guardedStmt{stmt: stmt, conn: c, sql: query}
 }
 
 // Ping implements driver.Pinger.
@@ -371,7 +396,14 @@ func statementTxEffect(query string) txEffect {
 	case "COMMIT", "END":
 		return txEffectEnd
 	case "ROLLBACK":
-		if next, _ := leadingWord(rest); strings.EqualFold(next, "TO") {
+		// SQLite writes the keyword as ROLLBACK [TRANSACTION] TO [SAVEPOINT]
+		// name, so the optional TRANSACTION stands between the two words that
+		// decide this.
+		next, after := leadingWord(rest)
+		if strings.EqualFold(next, "TRANSACTION") {
+			next, _ = leadingWord(after)
+		}
+		if strings.EqualFold(next, "TO") {
 			return txEffectNone
 		}
 		return txEffectEnd
@@ -394,4 +426,74 @@ func leadingWord(s string) (string, string) {
 
 func isASCIILetter(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+// guardedStmt is a prepared statement whose keyword opens or closes a
+// transaction. Everything else is the driver's own statement, unwrapped.
+type guardedStmt struct {
+	stmt driver.Stmt
+	conn *guardedConn
+	sql  string
+}
+
+// Close implements driver.Stmt.
+func (s *guardedStmt) Close() error { return s.stmt.Close() }
+
+// NumInput implements driver.Stmt.
+func (s *guardedStmt) NumInput() int { return s.stmt.NumInput() }
+
+// Exec implements driver.Stmt.
+//
+//nolint:staticcheck // database/sql calls ExecContext; this is here for the interface.
+func (s *guardedStmt) Exec(args []driver.Value) (driver.Result, error) {
+	res, err := s.stmt.Exec(args)
+	if err == nil {
+		s.conn.noteStatement(s.sql)
+	}
+	return res, err
+}
+
+// Query implements driver.Stmt.
+//
+//nolint:staticcheck // database/sql calls QueryContext; this is here for the interface.
+func (s *guardedStmt) Query(args []driver.Value) (driver.Rows, error) {
+	rows, err := s.stmt.Query(args)
+	if err == nil {
+		s.conn.noteStatement(s.sql)
+	}
+	return rows, err
+}
+
+// ExecContext implements driver.StmtExecContext.
+func (s *guardedStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	res, err := s.exec(ctx, args)
+	if err == nil {
+		s.conn.noteStatement(s.sql)
+	}
+	return res, err
+}
+
+func (s *guardedStmt) exec(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	if e, ok := s.stmt.(driver.StmtExecContext); ok {
+		return e.ExecContext(ctx, args)
+	}
+	//nolint:staticcheck // Backward compatibility with statements that only implement the legacy interface.
+	return s.stmt.Exec(plainValues(args))
+}
+
+// QueryContext implements driver.StmtQueryContext.
+func (s *guardedStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+	rows, err := s.runQuery(ctx, args)
+	if err == nil {
+		s.conn.noteStatement(s.sql)
+	}
+	return rows, err
+}
+
+func (s *guardedStmt) runQuery(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+	if q, ok := s.stmt.(driver.StmtQueryContext); ok {
+		return q.QueryContext(ctx, args)
+	}
+	//nolint:staticcheck // Backward compatibility with statements that only implement the legacy interface.
+	return s.stmt.Query(plainValues(args))
 }

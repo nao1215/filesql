@@ -1270,6 +1270,49 @@ func TestAutoSaveCloseWithAnOpenTransaction(t *testing.T) {
 		assert.Equal(t, "id,name\n1,alice\n2,bob\n", string(got))
 	})
 
+	t.Run("a BEGIN run from a prepared statement stops the save", func(t *testing.T) {
+		t.Parallel()
+
+		// database/sql runs a prepared statement against the driver statement
+		// rather than against the connection, so this reaches the tracker only
+		// if the statement itself carries the reading.
+		db, src := setup(t, onClose)
+		stmt, err := db.PrepareContext(t.Context(), "BEGIN")
+		require.NoError(t, err)
+		_, err = stmt.ExecContext(t.Context())
+		require.NoError(t, err)
+		require.NoError(t, stmt.Close())
+		_, err = db.ExecContext(t.Context(), "INSERT INTO users VALUES (2,'bob')")
+		require.NoError(t, err)
+
+		err = closeWithin(t, db)
+		require.Error(t, err, "a save that was skipped must be reported, not passed off as done")
+		assert.ErrorIs(t, err, ErrDatabaseOperation)
+
+		got, readErr := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+		require.NoError(t, readErr)
+		assert.Equal(t, "id,name\n1,alice\n", string(got))
+	})
+
+	t.Run("a prepared BEGIN and COMMIT pair still saves", func(t *testing.T) {
+		t.Parallel()
+
+		db, src := setup(t, onClose)
+		for _, q := range []string{"BEGIN", "INSERT INTO users VALUES (2,'bob')", "COMMIT"} {
+			stmt, err := db.PrepareContext(t.Context(), q)
+			require.NoError(t, err)
+			_, err = stmt.ExecContext(t.Context())
+			require.NoError(t, err, q)
+			require.NoError(t, stmt.Close())
+		}
+
+		require.NoError(t, closeWithin(t, db))
+
+		got, readErr := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+		require.NoError(t, readErr)
+		assert.Equal(t, "id,name\n1,alice\n2,bob\n", string(got))
+	})
+
 	t.Run("an unclosed rows iterator still saves", func(t *testing.T) {
 		t.Parallel()
 
@@ -1309,6 +1352,7 @@ func TestAutoSaveCloseWithAnOpenTransaction(t *testing.T) {
 		{name: "an END releases it", stmts: []string{"BEGIN TRANSACTION", "INSERT INTO users VALUES (2,'bob')", "END"}, want: "id,name\n1,alice\n2,bob\n", saved: true},
 		{name: "a ROLLBACK releases it", stmts: []string{"BEGIN", "INSERT INTO users VALUES (2,'bob')", "ROLLBACK"}, want: "id,name\n1,alice\n", saved: true},
 		{name: "a statement that only starts with the letters is not one", stmts: []string{"UPDATE users SET name='beginning' WHERE id=1"}, want: "id,name\n1,beginning\n", saved: true},
+		{name: "a rollback to a savepoint does not release it", stmts: []string{"BEGIN", "SAVEPOINT s", "INSERT INTO users VALUES (2,'bob')", "ROLLBACK TRANSACTION TO SAVEPOINT s"}, want: "id,name\n1,alice\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()

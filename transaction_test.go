@@ -384,6 +384,8 @@ func TestStatementTxEffect(t *testing.T) {
 		{query: "rollback transaction", want: txEffectEnd},
 		{query: "ROLLBACK TO SAVEPOINT s", want: txEffectNone},
 		{query: "rollback to s", want: txEffectNone},
+		{query: "ROLLBACK TRANSACTION TO SAVEPOINT s", want: txEffectNone},
+		{query: "rollback transaction to s", want: txEffectNone},
 		{query: "SELECT 1", want: txEffectNone},
 		{query: "SELECT 1 AS beginning", want: txEffectNone},
 		{query: "UPDATE t SET commits = 1", want: txEffectNone},
