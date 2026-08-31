@@ -375,6 +375,75 @@ func TestLTSVLabelIsTrimmed(t *testing.T) {
 	}
 }
 
+// TestLTSVLabelRulesDifferFromAHeaderCells pins the two places where a label
+// and a header cell holding the same characters name different columns, and
+// pins them side by side, since either one read alone looks like a mistake.
+//
+// A label is trimmed as it is read, so the trimming rule has already run when
+// the case fold runs and the two are not the separate rules a header gets: " A"
+// beside "a" is two columns of a CSV header and one label typed twice. And a
+// label that is empty names the empty string rather than taking the name of its
+// position, because a position names a column of a header and an LTSV record
+// does not have to carry the labels the record before it carried.
+func TestLTSVLabelRulesDifferFromAHeaderCells(t *testing.T) {
+	t.Parallel()
+
+	columns := func(t *testing.T, name, content string) ([]string, error) {
+		t.Helper()
+
+		src := filepath.Join(t.TempDir(), name)
+		require.NoError(t, os.WriteFile(src, []byte(content), 0o600))
+
+		db, err := OpenContext(t.Context(), src)
+		if err != nil {
+			return nil, err
+		}
+		defer db.Close()
+		rows, err := db.QueryContext(t.Context(), `SELECT * FROM t LIMIT 0`)
+		require.NoError(t, err)
+		defer rows.Close()
+		names, err := rows.Columns()
+		require.NoError(t, err)
+		return names, rows.Err()
+	}
+
+	t.Run("trimming and folding are one rule for a label and two for a header", func(t *testing.T) {
+		t.Parallel()
+
+		header, err := columns(t, "t.csv", " A,a\n1,2\n")
+		require.NoError(t, err, "a header keeps the two apart")
+		assert.Equal(t, []string{" A", "a"}, header)
+
+		_, err = columns(t, "t.ltsv", " A:1\ta:2\n")
+		require.Error(t, err, "the label is trimmed first, so the fold makes them one")
+		assert.ErrorIs(t, err, ErrDuplicateColumn)
+	})
+
+	t.Run("an empty label names the empty string and an empty header cell its position", func(t *testing.T) {
+		t.Parallel()
+
+		header, err := columns(t, "t.csv", ",b\n1,2\n")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"column_1", "b"}, header)
+
+		label, err := columns(t, "t.ltsv", ":1\tb:2\n")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"", "b"}, label)
+	})
+
+	t.Run("a space inside a name is kept by both", func(t *testing.T) {
+		t.Parallel()
+
+		header, err := columns(t, "t.csv", "a b,c\n1,2\n")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"a b", "c"}, header)
+
+		label, err := columns(t, "t.ltsv", "a b:1\tc:2\n")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"a b", "c"}, label)
+	})
+}
+
 // TestLTSVFieldThatNamesNoLabelFollowsTheMalformedRowPolicy pins that a field
 // with no label is handled by the policy the caller chose rather than dropped.
 //
