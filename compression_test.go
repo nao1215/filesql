@@ -17,6 +17,7 @@ import (
 	"github.com/klauspost/compress/s2"
 	"github.com/klauspost/compress/snappy"
 	"github.com/klauspost/compress/zstd"
+	"github.com/nao1215/filesql/internal/codec"
 	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -486,6 +487,42 @@ func TestCompressionTypeConstants(t *testing.T) {
 				t.Errorf("Extension() = %v, want %v", got, tt.extension)
 			}
 		})
+	}
+}
+
+// TestCompressionTypeCoversEveryCodec pins the bridge between this package's
+// CompressionType and the codec package's Codec.
+//
+// The two are separate iota enums, and the bridge between them is the bare
+// conversion codec.Codec(c), written at five call sites. That conversion is
+// correct only while both declare the same codecs in the same order, and
+// nothing said so: a codec inserted into the middle of either list would leave
+// every conversion naming a different codec, with no build error and no failing
+// test. The table above pins each value this package declares; this pins that
+// there are no others on either side.
+func TestCompressionTypeCoversEveryCodec(t *testing.T) {
+	t.Parallel()
+
+	// CompressionNone is the absence of a codec, which codec.All leaves out.
+	if got, want := int(CompressionLZ4), len(codec.All); got != want {
+		t.Fatalf("the last CompressionType is %d but the codec package knows %d codecs; the two enums have drifted", got, want)
+	}
+
+	for i, c := range codec.All {
+		// The conversion is the one the package makes, so this fails wherever
+		// the package would silently use the wrong codec.
+		ct := CompressionType(i + 1)
+		if codec.Codec(ct) != c {
+			t.Errorf("CompressionType(%d) converts to codec %s, want %s", i+1, codec.Codec(ct), c)
+		}
+		if ct.String() != c.String() || ct.Extension() != c.Extension() {
+			t.Errorf("CompressionType(%d) reads as (%q, %q), want (%q, %q)",
+				i+1, ct.String(), ct.Extension(), c.String(), c.Extension())
+		}
+	}
+
+	if codec.Codec(CompressionNone) != codec.None {
+		t.Errorf("CompressionNone converts to codec %s, want none", codec.Codec(CompressionNone))
 	}
 }
 
