@@ -594,7 +594,7 @@ func TestTxGate(t *testing.T) {
 		require.NoError(t, g.acquire(t.Context()))
 	})
 
-	t.Run("a cancelled context is refused before the wait", func(t *testing.T) {
+	t.Run("a canceled context is refused before the wait", func(t *testing.T) {
 		t.Parallel()
 
 		g := newTxGate()
