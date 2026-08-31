@@ -1953,54 +1953,88 @@ func TestDumpRefusesColumnsTheLoadWouldRefuse(t *testing.T) {
 	})
 }
 
-// TestDumpXLSXRefusesAnUnnamedLastColumn pins that a workbook this package
-// writes is one it can read. A worksheet does not store a trailing empty cell,
-// so a header ending in a column with no name came back one cell short of the
-// rows under it, and the load refused the workbook the dump had just written.
-func TestDumpXLSXRefusesAnUnnamedLastColumn(t *testing.T) {
+// TestDumpRefusesAColumnWithNoName holds one rule across the formats: a name a
+// dump writes in a way that reads back as another name is refused rather than
+// written. CSV, TSV and XLSX carry their names in a header row, so a column with
+// no name is written as an empty cell there and comes back under a name taken
+// from its position -- the column was silently renamed by a round trip through
+// its own dump. XLSX had a second fault on top of that, since a worksheet does
+// not store a trailing empty cell, so a header ending in an unnamed column came
+// back one cell short of the rows under it and the load refused the workbook the
+// dump had just written.
+//
+// LTSV and Parquet do carry the name, LTSV because it writes a label beside
+// every value and Parquet because it holds a schema, so both keep working: a
+// fix that refused the name everywhere would take away the two formats that can
+// say what such a table is.
+func TestDumpRefusesAColumnWithNoName(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 
-	t.Run("the last column has no name", func(t *testing.T) {
+	refused := []struct {
+		format OutputFormat
+		table  string
+	}{
+		{OutputFormatCSV, `CREATE TABLE t ("a" TEXT, "" TEXT)`},
+		{OutputFormatTSV, `CREATE TABLE t ("a" TEXT, "" TEXT)`},
+		{OutputFormatXLSX, `CREATE TABLE t ("a" TEXT, "" TEXT)`},
+		// Not the last column either, where the values used to survive and the
+		// name did not.
+		{OutputFormatCSV, `CREATE TABLE t ("a" TEXT, "" TEXT, "b" TEXT)`},
+		{OutputFormatXLSX, `CREATE TABLE t ("a" TEXT, "" TEXT, "b" TEXT)`},
+		// And not the first, which is where a header row begins.
+		{OutputFormatCSV, `CREATE TABLE t ("" TEXT, "b" TEXT)`},
+	}
+	for _, tt := range refused {
+		t.Run(fmt.Sprintf("%v refuses %s", tt.format, tt.table), func(t *testing.T) {
+			t.Parallel()
+
+			values := strings.Repeat(", 'q'", strings.Count(tt.table, "TEXT")-1)
+			db := openWithTable(t, tt.table, `INSERT INTO t VALUES ('p'`+values+`)`)
+
+			outDir := filepath.Join(t.TempDir(), "out")
+			err := DumpDatabase(db, outDir, NewDumpOptions().WithFormat(tt.format))
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrUnsupportedFormat)
+			assert.Contains(t, err.Error(), "LTSV or Parquet", "the error must say what to dump instead")
+		})
+	}
+
+	kept := []struct {
+		format OutputFormat
+		ext    string
+	}{
+		{OutputFormatLTSV, ".ltsv"},
+		{OutputFormatParquet, ".parquet"},
+	}
+	for _, tt := range kept {
+		t.Run(fmt.Sprintf("%v keeps the name", tt.format), func(t *testing.T) {
+			t.Parallel()
+
+			db := openWithTable(t, `CREATE TABLE t ("" TEXT, "b" TEXT)`, `INSERT INTO t VALUES ('p', 'q')`)
+
+			outDir := filepath.Join(t.TempDir(), "out")
+			require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(tt.format)))
+			require.NoError(t, db.Close())
+
+			back, err := OpenContext(ctx, filepath.Join(outDir, "t"+tt.ext))
+			require.NoError(t, err)
+			defer func() { _ = back.Close() }()
+
+			var first string
+			require.NoError(t, back.QueryRowContext(ctx, `SELECT "" FROM t`).Scan(&first))
+			assert.Equal(t, "p", first)
+		})
+	}
+
+	t.Run("a column named with a space still round-trips", func(t *testing.T) {
 		t.Parallel()
 
-		db := openWithTable(t, `CREATE TABLE t ("a" TEXT, "" TEXT)`, `INSERT INTO t VALUES ('p', 'q')`)
-
-		outDir := filepath.Join(t.TempDir(), "out")
-		err := DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
-
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrUnsupportedFormat)
-		assert.Contains(t, err.Error(), "CSV", "the error must say what to dump instead")
-	})
-
-	t.Run("an unnamed column that is not the last keeps its values", func(t *testing.T) {
-		t.Parallel()
-
-		// A worksheet stores an empty cell that has a cell after it, so the
-		// column comes back. Its name does not: a header cell holding nothing
-		// names nothing, and a load names such a column by its position.
-		db := openWithTable(t, `CREATE TABLE t ("a" TEXT, "" TEXT, "b" TEXT)`, `INSERT INTO t VALUES ('p', 'q', 'r')`)
-
-		outDir := filepath.Join(t.TempDir(), "out")
-		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
-		require.NoError(t, db.Close())
-
-		back, err := OpenContext(ctx, filepath.Join(outDir, "t.xlsx"))
-		require.NoError(t, err)
-		defer func() { _ = back.Close() }()
-
-		var middle string
-		require.NoError(t, back.QueryRowContext(ctx, `SELECT column_2 FROM t`).Scan(&middle))
-		assert.Equal(t, "q", middle)
-	})
-
-	t.Run("a last column named with a space still round-trips", func(t *testing.T) {
-		t.Parallel()
-
-		// That cell is not empty, so the workbook stores it. This is the
-		// boundary between what looks blank and what a worksheet drops.
+		// That cell is not empty, so the workbook stores it and the header
+		// names it. This is the boundary between what looks blank and what has
+		// no name at all.
 		db := openWithTable(t, `CREATE TABLE t ("a" TEXT, " " TEXT)`, `INSERT INTO t VALUES ('p', 'q')`)
 
 		outDir := filepath.Join(t.TempDir(), "out")

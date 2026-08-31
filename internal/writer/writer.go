@@ -132,6 +132,9 @@ func (w *Writer) Header(columns []string) error {
 	if err := checkFirstColumn(w.format, columns); err != nil {
 		return err
 	}
+	if err := checkNamedColumns(w.format, columns); err != nil {
+		return err
+	}
 	switch w.format {
 	case FormatLTSV:
 		for _, col := range columns {
@@ -333,6 +336,32 @@ func checkFirstColumn(format Format, columns []string) error {
 			"a column name cannot begin with a byte-order mark where it is written at the front of the file, and column %q does",
 			columns[0]),
 	}
+}
+
+// checkNamedColumns refuses a column with no name in the formats that carry
+// their names in a header row, where an empty cell is what an unnamed column is
+// written as and where a reader names such a column after its position. Writing
+// it anyway renamed the column on a reload with nothing to say so, which is what
+// the refusals here exist to replace.
+//
+// LTSV is not among them: it writes a label beside every value, so the empty
+// name is written as an empty label and read back as the empty name. JSONL
+// carries one column of its own.
+func checkNamedColumns(format Format, columns []string) error {
+	if format == FormatLTSV || format == FormatJSONL {
+		return nil
+	}
+	for i, column := range columns {
+		if column == "" {
+			return &Error{
+				Kind: KindUnrepresentableUnnamed,
+				Msg: fmt.Sprintf(
+					"a column with no name is written as an empty header cell, which reads back under a name taken from its position, and column %d has no name",
+					i+1),
+			}
+		}
+	}
+	return nil
 }
 
 // checkLTSVLabel refuses a column name that would not read back as a label. A
