@@ -28,10 +28,13 @@ func TestCastTargetsMatchTheHelpers(t *testing.T) {
 	}
 }
 
-// TestHelperNamesMatchTheRuntime holds the list of helper names lowering reads
+// TestHelperNamesMatchTheRuntime holds the table of helpers lowering reads
 // against the ones the runtime registers. The two are separate because the
-// dependency runs one way, and a name in one and not the other would change
-// what the SAFE prefix does without anything saying so.
+// dependency runs one way, and a difference between them changes behavior with
+// nothing saying so: a name in one and not the other changes what the SAFE
+// prefix does, and an argument count in one and not the other decides whether a
+// call is refused here under the caller's own function name or reaches the
+// driver and fails there under the helper's.
 func TestHelperNamesMatchTheRuntime(t *testing.T) {
 	t.Parallel()
 
@@ -44,6 +47,12 @@ func TestHelperNamesMatchTheRuntime(t *testing.T) {
 		known[name] = true
 		if !registered[name] {
 			t.Errorf("lowering knows %q, which the runtime does not register", name)
+			continue
+		}
+		want, _ := runtime.RegisteredArity(name)
+		got, _ := lower.HelperArity(name)
+		if got != want {
+			t.Errorf("lowering has %q taking %d arguments, the runtime registers it taking %d", name, got, want)
 		}
 	}
 	for name := range registered {

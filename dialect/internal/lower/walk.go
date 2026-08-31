@@ -1,6 +1,8 @@
 package lower
 
 import (
+	"strings"
+
 	"github.com/nao1215/filesql/dialect/internal/ast"
 )
 
@@ -611,7 +613,40 @@ func (l *lowerer) call(n *ast.FuncCall) (ast.Expr, error) {
 	if lowered, ok, err := l.aggregate(n); err != nil || ok {
 		return lowered, err
 	}
-	return l.rules.Call(n)
+	// The name as the caller wrote it, taken before the rules rename the call:
+	// the refusal below uses this name and not the helper's.
+	written := callName(n)
+	span := n.Span
+	lowered, err := l.rules.Call(n)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkHelperArity(lowered, written, span); err != nil {
+		return nil, err
+	}
+	return lowered, nil
+}
+
+// checkHelperArity refuses a lowered call whose helper does not take that many
+// arguments.
+//
+// A lowering renames a function to the helper that computes it without counting
+// the arguments, so the count is checked here, where the caller's own spelling
+// is still at hand.
+func checkHelperArity(e ast.Expr, written string, span ast.Span) error {
+	call, ok := e.(*ast.FuncCall)
+	if !ok || len(call.Name) != 1 {
+		return nil
+	}
+	// The helper is named in lower case in the table and a call carries whatever
+	// case it was written in, the more so for the helpers registered under the
+	// source function's own name.
+	name := strings.ToLower(call.Name[0].Name)
+	if helperTakesArgumentCount(name, len(call.Args)) {
+		return nil
+	}
+	want, _ := HelperArity(name)
+	return unsupported(span, "%s takes %s and the call has %d", written, plural(want, "argument"), len(call.Args))
 }
 
 func (l *lowerer) insert(n *ast.InsertStmt) (ast.Stmt, error) {
