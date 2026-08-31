@@ -189,6 +189,23 @@
 // LoadIntoTx is not retried at all, since the transaction belongs to the caller
 // and one transaction belongs to one goroutine.
 //
+// # Transactions
+//
+// SQLite runs serializable transactions and has no other level, so a sql.TxOptions
+// naming one of the weaker levels is refused when the transaction begins rather
+// than taken and quietly downgraded; sql.LevelDefault and sql.LevelSerializable
+// are the two a transaction can ask for. A transaction begun with ReadOnly set
+// is held under SQLite's query_only pragma for as long as it runs, so a write
+// inside it fails and the permission comes back when it commits or rolls back.
+//
+// A transaction begun by running BEGIN as a statement rather than through
+// database/sql belongs to whichever pooled connection ran it, and the next
+// statement may reach a different one, so the rows are not where the caller
+// expects and are discarded when that connection closes. Auto-save counts such a
+// transaction as open and refuses to save while it is, the same as one begun
+// with BeginTx. Savepoints are not counted: releasing a nested one does not end
+// the transaction around it.
+//
 // # Table Naming
 //
 // Table names are automatically derived from file paths:

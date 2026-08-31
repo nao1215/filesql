@@ -348,6 +348,35 @@ func TestMySQLValueRulesMatchTheEngine(t *testing.T) {
 		{query: `SELECT FORMAT(-9223372036854775808, 0)`, want: "-9,223,372,036,854,775,808"},
 		{query: `SELECT FORMAT(1234.5678, 2)`, want: "1,234.57"},
 		{query: `SELECT FORMAT(-1234567, 3)`, want: "-1,234,567.000"},
+
+		// NULLIF compares the way MySQL's "=" does rather than the way SQLite
+		// does: numerically as soon as either side is a number, where a string
+		// that spells no number reads as zero, and by a case-folding collation
+		// when both sides are strings.
+		{query: `SELECT NULLIF('abc', 0)`, wantNull: true},
+		{query: `SELECT NULLIF('', 0)`, wantNull: true},
+		{query: `SELECT NULLIF(0, '')`, wantNull: true},
+		{query: `SELECT NULLIF('abc', 0.0)`, wantNull: true},
+		{query: `SELECT NULLIF('0x10', 0)`, wantNull: true},
+		{query: `SELECT NULLIF('  1', 1)`, wantNull: true},
+		{query: `SELECT NULLIF('1', 1)`, wantNull: true},
+		{query: `SELECT NULLIF(1, '1')`, wantNull: true},
+		{query: `SELECT NULLIF('1.0', 1)`, wantNull: true},
+		{query: `SELECT NULLIF('1e3', 1000)`, wantNull: true},
+		{query: `SELECT NULLIF(1.0, 1)`, wantNull: true},
+		{query: `SELECT NULLIF(-0.0, 0)`, wantNull: true},
+		{query: `SELECT NULLIF(0, 0)`, wantNull: true},
+		{query: `SELECT NULLIF('abc', 'abc')`, wantNull: true},
+		{query: `SELECT NULLIF('abc', 'ABC')`, wantNull: true},
+		{query: `SELECT NULLIF('日本', '日本')`, wantNull: true},
+		{query: `SELECT NULLIF('', '')`, wantNull: true},
+		{query: `SELECT NULLIF(NULL, 1)`, wantNull: true},
+		{query: `SELECT NULLIF('abc', 'abd')`, want: "abc"},
+		{query: `SELECT NULLIF('00', '0')`, want: "00"},
+		{query: `SELECT NULLIF('abc ', 'abc')`, want: "abc "},
+		{query: `SELECT NULLIF('abc', NULL)`, want: "abc"},
+		{query: `SELECT NULLIF(2, 10)`, want: "2"},
+		{query: `SELECT NULLIF(9223372036854775807, 9223372036854775806)`, want: "9223372036854775807"},
 	}
 
 	for _, tt := range tests {

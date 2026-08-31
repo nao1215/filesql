@@ -218,6 +218,11 @@ func (r *mysqlRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		return mysqlConvert(call)
 	case "SOUNDEX":
 		return rename(call, "mysql_soundex"), nil
+	case "NULLIF":
+		// SQLite's own compares by storage class, so a string is never equal to
+		// a number there and NULLIF('abc', 0) answers the string where MySQL
+		// answers NULL.
+		return rename(call, "mysql_nullif"), nil
 	case fnNameRound:
 		return roundEven(call)
 	case fnNameMod:

@@ -437,6 +437,27 @@ func fnMySQLStrcmp(args []driver.Value) (driver.Value, error) {
 	return int64(strings.Compare(fnFoldCase(a), fnFoldCase(b))), nil
 }
 
+// fnMySQLNullif implements NULLIF(a, b): NULL when the two are equal under
+// MySQL's "=", and a otherwise.
+//
+// SQLite's own nullif() compares by storage class, so a string never equals a
+// number there and NULLIF('abc', 0) answered 'abc'. MySQL reads both sides as
+// numbers as soon as either is one, where a string that spells no number reads
+// as zero, which makes that call NULL. Two strings compare under a collation
+// that folds case, the same reading FIELD is on.
+func fnMySQLNullif(args []driver.Value) (driver.Value, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+	if args[1] == nil {
+		return args[0], nil
+	}
+	if fieldEqual(args[0], args[1], fieldComparesAsText(args)) {
+		return nil, nil
+	}
+	return args[0], nil
+}
+
 // fnFoldCase folds a string for a case-insensitive comparison.
 func fnFoldCase(s string) string {
 	return strings.ToLower(s)

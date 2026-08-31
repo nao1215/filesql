@@ -21,6 +21,7 @@ type dialectConnector struct {
 	drv        driver.Driver
 	dsn        string
 	sqlDialect dialect.Dialect
+	readOnly   bool
 }
 
 // Connect opens a new connection to the shared-cache database and wraps it with
@@ -30,7 +31,7 @@ func (c *dialectConnector) Connect(_ context.Context) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &dialectConnection{conn: conn, sqlDialect: c.sqlDialect}, nil
+	return &dialectConnection{conn: &guardedConn{conn: conn, readOnly: c.readOnly}, sqlDialect: c.sqlDialect}, nil
 }
 
 // Driver returns the underlying SQLite driver.

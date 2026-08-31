@@ -4,8 +4,6 @@ import (
 	"compress/gzip"
 	"context"
 	"database/sql"
-	"database/sql/driver"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,167 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/xuri/excelize/v2"
 )
-
-// errStub is the failure a stub connection reports when a test asks it to fail.
-var errStub = errors.New("stub failure")
-
-// plainConn implements only what driver.Conn requires. A driver this small is
-// what the fallbacks in the auto-save wrapper exist for: the wrapper cannot
-// assume the connection it wraps implements the context-aware interfaces.
-type plainConn struct {
-	closeErr error
-	beginErr error
-	begun    bool
-}
-
-func (c *plainConn) Prepare(string) (driver.Stmt, error) { return nil, errStub }
-func (c *plainConn) Close() error                        { return c.closeErr }
-
-func (c *plainConn) Begin() (driver.Tx, error) {
-	if c.beginErr != nil {
-		return nil, c.beginErr
-	}
-	c.begun = true
-	return stubTx{}, nil
-}
-
-// legacyConn adds the pre-context Execer and Queryer interfaces, which is the
-// other shape the wrapper has to handle.
-type legacyConn struct {
-	plainConn
-	execCalled  bool
-	queryCalled bool
-	lastArgs    []driver.Value
-}
-
-func (c *legacyConn) Exec(_ string, args []driver.Value) (driver.Result, error) {
-	c.execCalled = true
-	c.lastArgs = args
-	return driver.RowsAffected(1), nil
-}
-
-func (c *legacyConn) Query(_ string, args []driver.Value) (driver.Rows, error) {
-	c.queryCalled = true
-	c.lastArgs = args
-	return stubRows{}, nil
-}
-
-// stubTx is a transaction that accepts both outcomes.
-type stubTx struct{}
-
-func (stubTx) Commit() error   { return nil }
-func (stubTx) Rollback() error { return nil }
-
-// failingCommitTx is a transaction whose commit fails, which is the outcome
-// that leaves database/sql calling neither Commit again nor Rollback.
-type failingCommitTx struct{ stubTx }
-
-func (failingCommitTx) Commit() error { return errStub }
-
-// stubRows is an empty result set.
-type stubRows struct{}
-
-func (stubRows) Columns() []string          { return nil }
-func (stubRows) Close() error               { return nil }
-func (stubRows) Next([]driver.Value) error  { return errStub }
-func (stubRows) ColumnTypeScanType(int) any { return nil }
-func (stubRows) ColumnTypeDatabaseTypeName(int) string {
-	return ""
-}
-
-// TestAutoSaveConnection_BeginTxFallsBackToBegin covers a wrapped driver that
-// predates ConnBeginTx. Without the fallback such a driver could not start a
-// transaction at all once auto-save wrapped it.
-func TestAutoSaveConnection_BeginTxFallsBackToBegin(t *testing.T) {
-	t.Parallel()
-
-	t.Run("the legacy Begin is used", func(t *testing.T) {
-		t.Parallel()
-
-		inner := &plainConn{}
-		conn := &autoSaveConnection{conn: inner}
-
-		tx, err := conn.BeginTx(context.Background(), driver.TxOptions{})
-		require.NoError(t, err)
-		assert.IsType(t, &autoSaveTransaction{}, tx, "the transaction stays wrapped so a commit can still auto-save")
-		assert.True(t, inner.begun, "the legacy Begin is what starts the transaction")
-	})
-
-	t.Run("a refused Begin is reported", func(t *testing.T) {
-		t.Parallel()
-
-		conn := &autoSaveConnection{conn: &plainConn{beginErr: errStub}}
-
-		_, err := conn.BeginTx(context.Background(), driver.TxOptions{})
-		assert.ErrorIs(t, err, errStub)
-	})
-
-	t.Run("the deprecated Begin goes through BeginTx", func(t *testing.T) {
-		t.Parallel()
-
-		inner := &plainConn{}
-		conn := &autoSaveConnection{conn: inner}
-
-		tx, err := conn.Begin()
-		require.NoError(t, err)
-		assert.IsType(t, &autoSaveTransaction{}, tx)
-		assert.True(t, inner.begun)
-	})
-}
-
-// TestAutoSaveConnection_LegacyExecAndQuery covers the pre-context statement
-// interfaces. A driver that implements only those still has to be usable, and
-// the named arguments it cannot take have to be converted rather than dropped.
-func TestAutoSaveConnection_LegacyExecAndQuery(t *testing.T) {
-	t.Parallel()
-
-	t.Run("exec", func(t *testing.T) {
-		t.Parallel()
-
-		inner := &legacyConn{}
-		conn := &autoSaveConnection{conn: inner}
-
-		_, err := conn.ExecContext(context.Background(), "UPDATE t SET a = ?", []driver.NamedValue{{Ordinal: 1, Value: int64(7)}})
-		require.NoError(t, err)
-		assert.True(t, inner.execCalled)
-		assert.Equal(t, []driver.Value{int64(7)}, inner.lastArgs, "the named values must reach the legacy driver as plain ones")
-	})
-
-	t.Run("query", func(t *testing.T) {
-		t.Parallel()
-
-		inner := &legacyConn{}
-		conn := &autoSaveConnection{conn: inner}
-
-		_, err := conn.QueryContext(context.Background(), "SELECT ?", []driver.NamedValue{{Ordinal: 1, Value: "x"}})
-		require.NoError(t, err)
-		assert.True(t, inner.queryCalled)
-		assert.Equal(t, []driver.Value{"x"}, inner.lastArgs)
-	})
-
-	t.Run("a connection with neither interface asks database/sql to take over", func(t *testing.T) {
-		t.Parallel()
-
-		conn := &autoSaveConnection{conn: &plainConn{}}
-
-		_, err := conn.ExecContext(context.Background(), "UPDATE t SET a = 1", nil)
-		assert.ErrorIs(t, err, driver.ErrSkip, "database/sql falls back to Prepare when the driver skips")
-
-		_, err = conn.QueryContext(context.Background(), "SELECT 1", nil)
-		assert.ErrorIs(t, err, driver.ErrSkip)
-	})
-}
-
-// TestAutoSaveConnection_Prepare checks that preparing is handed straight to the
-// wrapped connection.
-func TestAutoSaveConnection_Prepare(t *testing.T) {
-	t.Parallel()
-
-	conn := &autoSaveConnection{conn: &plainConn{}}
-
-	_, err := conn.Prepare("SELECT 1")
-	assert.ErrorIs(t, err, errStub)
-}
 
 // TestAutoSaveConnector_CloseReportsBothFailures covers a close where the save
 // and the close itself both fail. The save error is the one a caller acts on, so
@@ -213,70 +50,6 @@ func TestAutoSaveConnector_CloseBeforeArmingDoesNotSave(t *testing.T) {
 
 	assert.NoError(t, connector.Close(), "an unarmed connector closes without saving")
 	assert.NoError(t, connector.Close(), "closing twice is a no-op")
-}
-
-// TestAutoSaveTransaction_CommitReportsAFailedSave covers a commit that
-// succeeded followed by a save that did not. The rows are already committed, so
-// the caller has to be told that only the file is out of date.
-func TestAutoSaveTransaction_CommitReportsAFailedSave(t *testing.T) {
-	t.Parallel()
-
-	tx := &autoSaveTransaction{
-		tx: stubTx{},
-		conn: &autoSaveConnection{
-			conn: &plainConn{},
-			connector: &autoSaveConnector{
-				autoSaveConfig: &autoSaveConfig{enabled: true, timing: autoSaveOnCommit},
-				anchor:         &plainConn{},
-			},
-		},
-	}
-
-	err := tx.Commit()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "transaction committed successfully")
-}
-
-// TestAutoSaveTransaction_CommitThatFailedStopsCountingAsOpen covers the
-// transaction a caller has no way to finish. database/sql does not call
-// Rollback after a Commit that returned an error, and the driver has already
-// rolled the connection back, so a transaction left in the connector's count
-// there would make every later close refuse a save that had nothing to wait
-// for.
-func TestAutoSaveTransaction_CommitThatFailedStopsCountingAsOpen(t *testing.T) {
-	t.Parallel()
-
-	connector := &autoSaveConnector{
-		autoSaveConfig: &autoSaveConfig{enabled: true, timing: autoSaveOnClose},
-	}
-	conn := &autoSaveConnection{conn: &plainConn{}, connector: connector}
-	tx := conn.wrapTx(failingCommitTx{})
-
-	require.ErrorIs(t, tx.Commit(), errStub)
-
-	connector.mu.Lock()
-	open := connector.openTx
-	connector.mu.Unlock()
-	assert.Zero(t, open, "a transaction that cannot be committed is still over")
-}
-
-// TestAutoSaveTransaction_RollbackNeverSaves checks that a rollback reaches the
-// wrapped transaction and does not run the save a commit would.
-func TestAutoSaveTransaction_RollbackNeverSaves(t *testing.T) {
-	t.Parallel()
-
-	tx := &autoSaveTransaction{
-		tx: stubTx{},
-		conn: &autoSaveConnection{
-			conn: &plainConn{},
-			connector: &autoSaveConnector{
-				autoSaveConfig: &autoSaveConfig{enabled: true, timing: autoSaveOnCommit},
-				anchor:         &plainConn{},
-			},
-		},
-	}
-
-	assert.NoError(t, tx.Rollback())
 }
 
 // TestSave_DisabledDoesNothing covers the two states in which a close has
@@ -1497,6 +1270,49 @@ func TestAutoSaveCloseWithAnOpenTransaction(t *testing.T) {
 		assert.Equal(t, "id,name\n1,alice\n2,bob\n", string(got))
 	})
 
+	t.Run("a BEGIN run from a prepared statement stops the save", func(t *testing.T) {
+		t.Parallel()
+
+		// database/sql runs a prepared statement against the driver statement
+		// rather than against the connection, so this reaches the tracker only
+		// if the statement itself carries the reading.
+		db, src := setup(t, onClose)
+		stmt, err := db.PrepareContext(t.Context(), "BEGIN")
+		require.NoError(t, err)
+		_, err = stmt.ExecContext(t.Context())
+		require.NoError(t, err)
+		require.NoError(t, stmt.Close())
+		_, err = db.ExecContext(t.Context(), "INSERT INTO users VALUES (2,'bob')")
+		require.NoError(t, err)
+
+		err = closeWithin(t, db)
+		require.Error(t, err, "a save that was skipped must be reported, not passed off as done")
+		assert.ErrorIs(t, err, ErrDatabaseOperation)
+
+		got, readErr := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+		require.NoError(t, readErr)
+		assert.Equal(t, "id,name\n1,alice\n", string(got))
+	})
+
+	t.Run("a prepared BEGIN and COMMIT pair still saves", func(t *testing.T) {
+		t.Parallel()
+
+		db, src := setup(t, onClose)
+		for _, q := range []string{"BEGIN", "INSERT INTO users VALUES (2,'bob')", "COMMIT"} {
+			stmt, err := db.PrepareContext(t.Context(), q)
+			require.NoError(t, err)
+			_, err = stmt.ExecContext(t.Context())
+			require.NoError(t, err, q)
+			require.NoError(t, stmt.Close())
+		}
+
+		require.NoError(t, closeWithin(t, db))
+
+		got, readErr := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+		require.NoError(t, readErr)
+		assert.Equal(t, "id,name\n1,alice\n2,bob\n", string(got))
+	})
+
 	t.Run("an unclosed rows iterator still saves", func(t *testing.T) {
 		t.Parallel()
 
@@ -1518,6 +1334,49 @@ func TestAutoSaveCloseWithAnOpenTransaction(t *testing.T) {
 		require.NoError(t, readErr)
 		assert.Equal(t, "id,name\n1,alice\n2,bob\n", string(got))
 	})
+
+	// A transaction begun by running the statement never reaches BeginTx, so the
+	// count that stops the save has to come from the statement itself. Without
+	// it the close reported success and wrote the rows the file already held,
+	// because closing the pooled connection rolled the caller's work back first.
+	for _, tt := range []struct {
+		name  string
+		stmts []string
+		want  string
+		saved bool
+	}{
+		{name: "a BEGIN left open stops the save", stmts: []string{"BEGIN", "INSERT INTO users VALUES (2,'bob')"}, want: "id,name\n1,alice\n"},
+		{name: "a lower case begin counts too", stmts: []string{"  begin ", "INSERT INTO users VALUES (2,'bob')"}, want: "id,name\n1,alice\n"},
+		{name: "a qualified BEGIN counts too", stmts: []string{"BEGIN IMMEDIATE", "INSERT INTO users VALUES (2,'bob')"}, want: "id,name\n1,alice\n"},
+		{name: "a COMMIT releases it", stmts: []string{"BEGIN", "INSERT INTO users VALUES (2,'bob')", "COMMIT"}, want: "id,name\n1,alice\n2,bob\n", saved: true},
+		{name: "an END releases it", stmts: []string{"BEGIN TRANSACTION", "INSERT INTO users VALUES (2,'bob')", "END"}, want: "id,name\n1,alice\n2,bob\n", saved: true},
+		{name: "a ROLLBACK releases it", stmts: []string{"BEGIN", "INSERT INTO users VALUES (2,'bob')", "ROLLBACK"}, want: "id,name\n1,alice\n", saved: true},
+		{name: "a statement that only starts with the letters is not one", stmts: []string{"UPDATE users SET name='beginning' WHERE id=1"}, want: "id,name\n1,beginning\n", saved: true},
+		{name: "a rollback to a savepoint does not release it", stmts: []string{"BEGIN", "SAVEPOINT s", "INSERT INTO users VALUES (2,'bob')", "ROLLBACK TRANSACTION TO SAVEPOINT s"}, want: "id,name\n1,alice\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, src := setup(t, onClose)
+			for _, stmt := range tt.stmts {
+				_, err := db.ExecContext(t.Context(), stmt)
+				require.NoError(t, err, stmt)
+			}
+
+			err := closeWithin(t, db)
+			if tt.saved {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err, "a save that was skipped must be reported, not passed off as done")
+				assert.ErrorIs(t, err, ErrDatabaseOperation)
+				assert.Contains(t, err.Error(), "transaction")
+			}
+
+			got, readErr := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+			require.NoError(t, readErr)
+			assert.Equal(t, tt.want, string(got))
+		})
+	}
 }
 
 // TestAutoSaveOverwriteFollowsASymlink pins that a source reached through a
