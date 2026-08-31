@@ -81,7 +81,11 @@ func writeXLSXWorkbookOnto(w io.Writer, base *reader.Workbook, sheets []xlsxShee
 	// excelize starts a workbook with a default sheet. It is only ours to remove
 	// once a sheet of our own exists, and not at all if a sheet reused its name,
 	// and never when the workbook came from the caller rather than from here.
-	if _, err := f.GetSheetIndex(defaultSheetName); err == nil && base == nil {
+	//
+	// Whether the sheet is there is the index, not the error: GetSheetIndex
+	// answers -1 with no error for a sheet a workbook does not hold, so testing
+	// the error asked nothing.
+	if index, err := f.GetSheetIndex(defaultSheetName); err == nil && index >= 0 && base == nil {
 		hasOwn := false
 		for _, sheet := range sheets {
 			if sheet.name == defaultSheetName {
@@ -231,8 +235,17 @@ func xlsxSheetBefore(base *reader.Workbook, sheetName string) (xlsxSheetPrior, e
 		return xlsxSheetPrior{}, nil
 	}
 	f := base.File()
-	if _, err := f.GetSheetIndex(sheetName); err != nil {
-		return xlsxSheetPrior{}, nil //nolint:nilerr // A sheet that is not there yet; writeXLSXSheet creates it.
+	// A missing sheet is an index of -1 and no error; an error means a name no
+	// sheet could carry, which is worth reporting rather than treating as a
+	// sheet to create. Branching on the error alone answered "not there yet"
+	// for both, so the absent sheet fell through to GetRows below and failed
+	// the save with the message this branch exists to avoid.
+	index, err := f.GetSheetIndex(sheetName)
+	if err != nil {
+		return xlsxSheetPrior{}, fmt.Errorf("failed to look up sheet %s: %w", sheetName, err)
+	}
+	if index < 0 {
+		return xlsxSheetPrior{}, nil // A sheet that is not there yet; writeXLSXSheet creates it.
 	}
 	rows, err := f.GetRows(sheetName)
 	if err != nil {
