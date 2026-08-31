@@ -884,7 +884,13 @@ func overwriteTableAtPath(db *sql.DB, path, tableName string, options DumpOption
 	}
 	defer rows.Close()
 
-	if err := writeSQLiteTableData(path, tableName, columns, rows, options); err != nil {
+	// The save writes onto the file it loaded, so the types that file declares
+	// are read before it is replaced: nothing in the database remembers them.
+	var prior parquetPrior
+	if options.Format == OutputFormatParquet {
+		prior = readParquetPrior(path)
+	}
+	if err := writeSQLiteTableData(path, tableName, columns, rows, options, prior); err != nil {
 		return fmt.Errorf("%w: failed to overwrite %s: %w", ErrIOOperation, path, err)
 	}
 	return nil
