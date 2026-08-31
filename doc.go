@@ -97,6 +97,14 @@
 // An XLSX date cell is the one that is rewritten, into ISO 8601, because it
 // holds a serial number and a number format rather than text.
 //
+// A workbook draws a number the way its format says, and the drawing is not the
+// value: a number of more than fifteen significant digits is drawn rounded to
+// fifteen, and a whole-number format draws 1234.5 as 1235. A cell a sheet draws
+// as a plain number loads the number the file stores, so an 18-digit identifier
+// keeps its digits. A cell drawn as something else -- a percentage, a
+// thousands-separated amount, an accounting figure, a fraction -- loads as the
+// text the sheet shows, since that is what the cell means to a reader.
+//
 // A blank cell -- empty, or nothing but whitespace -- in an INTEGER or REAL
 // column is a missing number and is stored as NULL, which is what makes MAX
 // answer the largest value rather than the blank, AVG divide by the values that

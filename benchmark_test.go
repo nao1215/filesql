@@ -188,6 +188,62 @@ func BenchmarkOpenWithAutoSave(b *testing.B) {
 	}
 }
 
+// BenchmarkOpenFormattedWorkbook benchmarks loading a workbook whose cells wear
+// a number format, which is the load that reads the sheet twice: once for the
+// drawing and once for the numbers the file stores, since a format is what makes
+// the two differ. A workbook with no format is the common case and pays a scan
+// of the strings already read, which BenchmarkOverwriteWorkbookOfNumbers covers.
+func BenchmarkOpenFormattedWorkbook(b *testing.B) {
+	const rows, columns = 5000, 8
+
+	path := filepath.Join(b.TempDir(), "book.xlsx")
+	book := excelize.NewFile()
+	style, err := book.NewStyle(&excelize.Style{NumFmt: 2}) // two decimals
+	if err != nil {
+		b.Fatalf("NewStyle failed: %v", err)
+	}
+	header := make([]any, columns)
+	for c := range columns {
+		header[c] = fmt.Sprintf("col%d", c)
+	}
+	if err := book.SetSheetRow("Sheet1", "A1", &header); err != nil {
+		b.Fatalf("SetSheetRow failed: %v", err)
+	}
+	cells := make([]any, columns)
+	for r := range rows {
+		for c := range columns {
+			cells[c] = float64(r*columns+c) + 0.5
+		}
+		if err := book.SetSheetRow("Sheet1", fmt.Sprintf("A%d", r+2), &cells); err != nil {
+			b.Fatalf("SetSheetRow failed: %v", err)
+		}
+	}
+	last, err := excelize.ColumnNumberToName(columns)
+	if err != nil {
+		b.Fatalf("ColumnNumberToName failed: %v", err)
+	}
+	if err := book.SetCellStyle("Sheet1", "A2", fmt.Sprintf("%s%d", last, rows+1), style); err != nil {
+		b.Fatalf("SetCellStyle failed: %v", err)
+	}
+	if err := book.SaveAs(path); err != nil {
+		b.Fatalf("SaveAs failed: %v", err)
+	}
+	if err := book.Close(); err != nil {
+		b.Fatalf("Close failed: %v", err)
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		db, err := OpenContext(context.Background(), path)
+		if err != nil {
+			b.Fatalf("Open failed: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			b.Fatalf("db.Close failed: %v", err)
+		}
+	}
+}
+
 // BenchmarkOverwriteWorkbookOfNumbers benchmarks the same in-place save over a
 // workbook of numbers, which is where deciding whether a cell changed costs
 // something: two text cells settle on the first comparison, while two numbers

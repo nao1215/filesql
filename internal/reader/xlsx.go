@@ -188,6 +188,10 @@ func (w *Workbook) ReadSheet(name string, opts Options, emit Emit) (Result, erro
 	if err != nil {
 		return Result{}, parseError(err, "failed to read sheet %s", name)
 	}
+	// A sheet draws a number the way its format says, and the drawing carries
+	// fifteen significant digits, so the cells drawn as plain numbers are
+	// rewritten into the numbers the file stores.
+	rows = NormalizeXLSXNumbers(w.file, name, rows)
 	// A workbook stores a date as a serial number and a number format, so the
 	// cells that hold one are rewritten into the ISO 8601 the datetime inference
 	// recognizes. Without this a column of dates is text in whatever shape the

@@ -2402,3 +2402,62 @@ func TestXLSXSheetBeforeMissingSheet(t *testing.T) {
 		assert.Error(t, err, "an unusable name must not pass as a sheet to create")
 	})
 }
+
+// TestAnIdentifierSurvivesADumpAndLoad holds every format to the same rule about
+// a number too long for fifteen significant digits: an order number, an account
+// number, a national ID. A workbook draws such a number rounded, and reading the
+// drawing rather than the cell collapsed two identifiers that differ by one into
+// one value, so a count of distinct rows was wrong and an export wrote a number
+// that was in no file.
+func TestAnIdentifierSurvivesADumpAndLoad(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name   string
+		format OutputFormat
+		ext    string
+	}{
+		{name: "csv", format: OutputFormatCSV, ext: ".csv"},
+		{name: "tsv", format: OutputFormatTSV, ext: ".tsv"},
+		{name: "ltsv", format: OutputFormatLTSV, ext: ".ltsv"},
+		{name: "xlsx", format: OutputFormatXLSX, ext: ".xlsx"},
+		{name: "parquet", format: OutputFormatParquet, ext: ".parquet"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			src := filepath.Join(t.TempDir(), "orders.csv")
+			require.NoError(t, os.WriteFile(src,
+				[]byte("order_id\n1234567890123456789\n1234567890123456788\n9223372036854775807\n"), 0o600))
+
+			db, err := OpenContext(ctx, src)
+			require.NoError(t, err)
+			out := filepath.Join(t.TempDir(), "out")
+			require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(tt.format)))
+			require.NoError(t, db.Close())
+
+			back, err := OpenContext(ctx, filepath.Join(out, "orders"+tt.ext))
+			require.NoError(t, err)
+			defer back.Close()
+
+			rows, err := back.QueryContext(ctx, `SELECT CAST(order_id AS TEXT) FROM orders ORDER BY order_id`)
+			require.NoError(t, err)
+			defer rows.Close()
+			var got []string
+			for rows.Next() {
+				var id string
+				require.NoError(t, rows.Scan(&id))
+				got = append(got, id)
+			}
+			require.NoError(t, rows.Err())
+			assert.Equal(t, []string{"1234567890123456788", "1234567890123456789", "9223372036854775807"}, got,
+				"the identifiers the file holds")
+
+			var declared string
+			require.NoError(t, back.QueryRowContext(ctx,
+				`SELECT type FROM pragma_table_info('orders') WHERE name = 'order_id'`).Scan(&declared))
+			assert.Equal(t, "INTEGER", declared, "a column of identifiers is still a column of integers")
+		})
+	}
+}
