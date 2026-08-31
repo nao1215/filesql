@@ -1,8 +1,6 @@
 package prep
 
 import (
-	"cmp"
-	"strconv"
 	"strings"
 )
 
@@ -84,13 +82,14 @@ func singleTarget(targetValues []string) string {
 // neither greater, nor equal, nor less. A comparison on a string field now
 // reads the strings, one on any other field reads the numbers the cells spell,
 // and a cell that spells no number falls back to its text so the fallback is
-// the same for all six.
+// the same for all six. The numbers are read by the same type the comparison
+// tags read theirs with, so two integers are ordered as integers here too.
 func (b *baseCrossFieldValidator) compare(srcValue, targetValue string) int {
 	if !b.comparesText {
-		srcFloat, srcErr := strconv.ParseFloat(srcValue, 64)
-		targetFloat, targetErr := strconv.ParseFloat(targetValue, 64)
-		if srcErr == nil && targetErr == nil {
-			return cmp.Compare(srcFloat, targetFloat)
+		src, srcOK := parseNumber(srcValue)
+		target, targetOK := parseNumber(targetValue)
+		if srcOK && targetOK {
+			return src.compare(target)
 		}
 	}
 	return strings.Compare(srcValue, targetValue)
