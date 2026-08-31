@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/klauspost/compress/s2"
 	"github.com/klauspost/compress/snappy"
@@ -145,6 +146,42 @@ func (c Codec) Extension() string {
 	default:
 		return ""
 	}
+}
+
+// All is every codec that compresses, in the order they are declared.
+//
+// None is not in it. It is the absence of a codec rather than one of them: it
+// has no extension to find in a path and nothing to write. A caller that wants
+// to mean "no compression" names None directly.
+//
+// This exists so a caller can range over the codecs instead of writing the list
+// again. Every place that had its own copy of it -- the switch that reads a
+// codec out of a path, the loop that strips the extension, the glob patterns a
+// directory scan matches -- fell out of step as codecs were added, which is the
+// same drift this package was made to end for readers and writers.
+var All = []Codec{GZ, BZ2, XZ, ZSTD, ZLIB, SNAPPY, S2, LZ4}
+
+// FromPath reports the codec a path's extension names, and the path with that
+// extension taken off. A path naming no codec answers None and itself.
+//
+// The comparison folds case, because DATA.CSV.GZ is a gzipped file. The longest
+// matching extension wins, so the answer does not depend on the order All
+// happens to be in: ".gz" ends with ZLIB's ".z", and a list that tried ZLIB
+// first read every gzipped file as a zlib one named "...csv.g".
+//
+// Only one extension is taken off, so "data.csv.gz.gz" answers GZ and
+// "data.csv.gz". A path is not searched for a second codec, because a file
+// compressed twice is not something this package reads.
+func FromPath(path string) (Codec, string) {
+	found, longest := None, 0
+	lower := strings.ToLower(path)
+	for _, c := range All {
+		ext := c.Extension()
+		if len(ext) > longest && strings.HasSuffix(lower, ext) {
+			found, longest = c, len(ext)
+		}
+	}
+	return found, path[:len(path)-longest]
 }
 
 // NewReader wraps reader so it reads the decompressed bytes, and returns the
