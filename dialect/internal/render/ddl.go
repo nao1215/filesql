@@ -117,24 +117,7 @@ func (w *writer) returning(items []ast.SelectItem) error {
 		return nil
 	}
 	w.word("RETURNING")
-	for i, item := range items {
-		if i > 0 {
-			w.word(",")
-		}
-		if err := w.expr(item.Expr, precLowest); err != nil {
-			return err
-		}
-		if item.Alias == "" {
-			continue
-		}
-		w.word("AS")
-		if item.AliasQuoted {
-			w.word(QuoteIdent(item.Alias))
-		} else {
-			w.word(quoteIfNeeded(item.Alias))
-		}
-	}
-	return nil
+	return w.selectItems(items)
 }
 
 func (w *writer) update(n *ast.UpdateStmt) error {

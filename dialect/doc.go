@@ -83,7 +83,17 @@
 // produced it, so lowering an expression would rename the caller's column. A
 // select item whose text changed therefore carries its original text as an
 // alias: "SELECT amt::text" answers a column called "amt::text", not one called
-// "postgresql_cast(amt, 'text')".
+// "postgresql_cast(amt, 'text')". A RETURNING list is a list of result columns
+// too and is named the same way.
+//
+// A column list on a table reference names the columns the reference answers.
+// SQLite takes those names from a select list, so a derived table's list is
+// moved onto the query it stands in front of: "(SELECT a, b FROM t) s(x, y)"
+// becomes "(SELECT a AS x, b AS y FROM t) AS s". Where there is no select list
+// to move it onto -- a base table, a table-valued call, a VALUES list, a select
+// list that ends in a star, or a count that does not match -- it is refused,
+// since dropping it would answer the old names in silence. WITH name (columns)
+// AS (...) is the spelling SQLite takes for all of them.
 //
 // Function gaps (NOW, DATE_FORMAT, TO_CHAR, SPLIT_PART, SAFE_DIVIDE, DIV,
 // WIDTH_BUCKET, ...) are

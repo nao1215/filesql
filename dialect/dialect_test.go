@@ -3,6 +3,7 @@ package dialect
 import (
 	"database/sql"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -612,4 +613,266 @@ func TestTranslateRefusesACallUnderTheCallersOwnName(t *testing.T) {
 			t.Errorf("Translate(%v, %q) error = %v, want it to translate", tt.dialect, tt.query, err)
 		}
 	}
+}
+
+// TestARewrittenItemKeepsItsNameWhereverItStands holds every list of result
+// columns to one rule. SQLite names an unaliased column after the text of the
+// expression that produced it, so an item lowering rewrote would answer under
+// the helper's name; the select list carries the caller's text back as an alias
+// to stop that, and RETURNING answers the same columns from the same items.
+func TestARewrittenItemKeepsItsNameWhereverItStands(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	db.SetMaxOpenConns(1)
+	if _, err := db.ExecContext(ctx, "CREATE TABLE t (a INTEGER, b TEXT)"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	for _, tt := range []struct {
+		dialect Dialect
+		item    string
+	}{
+		{PostgreSQL, "a::text"},
+		{PostgreSQL, "a / 2"},
+		{PostgreSQL, "a % 2"},
+		{PostgreSQL, "a::text || 'y'"},
+		{MySQL, "a / 2"},
+		{MySQL, "a DIV 2"},
+		{MySQL, "a MOD 2"},
+		{MySQL, "CONCAT(b, 'x')"},
+		{GoogleSQL, "a / 2"},
+		{GoogleSQL, "CAST(a AS STRING)"},
+	} {
+		t.Run(tt.dialect.DisplayName()+" "+tt.item, func(t *testing.T) {
+			t.Parallel()
+
+			selected := columnNames(t, db, tt.dialect, "SELECT "+tt.item+" FROM t")
+			for _, statement := range []string{
+				"INSERT INTO t (a) VALUES (1) RETURNING " + tt.item,
+				"UPDATE t SET b = b WHERE a = 0 RETURNING " + tt.item,
+				"DELETE FROM t WHERE a = 0 RETURNING " + tt.item,
+			} {
+				if got := columnNames(t, db, tt.dialect, statement); !slices.Equal(got, selected) {
+					t.Errorf("Translate(%v, %q) answers columns %q, want %q as the select list does",
+						tt.dialect, statement, got, selected)
+				}
+			}
+		})
+	}
+}
+
+// TestAnExplicitAliasStillWinsOverThePreservedName pins the other half: the
+// label is what an item falls back to, not something written over the name the
+// caller chose, and an item lowering left alone takes no label at all.
+func TestAnExplicitAliasStillWinsOverThePreservedName(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		query string
+		want  string
+	}{
+		{"INSERT INTO t (a) VALUES (1) RETURNING a::text AS x", `RETURNING postgresql_cast(a, 'text') AS x`},
+		{"INSERT INTO t (a) VALUES (1) RETURNING a", "RETURNING a"},
+		{"SELECT a::text AS x FROM t", `SELECT postgresql_cast(a, 'text') AS x FROM t`},
+	} {
+		got, err := Translate(PostgreSQL, tt.query)
+		if err != nil {
+			t.Fatalf("Translate(%v, %q): %v", PostgreSQL, tt.query, err)
+		}
+		if !strings.Contains(got, tt.want) {
+			t.Errorf("Translate(%v, %q) = %q, want it to contain %q", PostgreSQL, tt.query, got, tt.want)
+		}
+	}
+}
+
+// columnNames translates a statement, runs it, and reports the names of the
+// columns it answers.
+func columnNames(t *testing.T, db *sql.DB, d Dialect, query string) []string {
+	t.Helper()
+	out, err := Translate(d, query)
+	if err != nil {
+		t.Fatalf("Translate(%v, %q): %v", d, query, err)
+	}
+	rows, err := db.QueryContext(t.Context(), out)
+	if err != nil {
+		t.Fatalf("Translate(%v, %q) = %q, which SQLite refuses: %v", d, query, out, err)
+	}
+	defer func() { _ = rows.Close() }()
+	names, err := rows.Columns()
+	if err != nil {
+		t.Fatalf("columns of %q: %v", out, err)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows of %q: %v", out, err)
+	}
+	return names
+}
+
+// TestATableAliasColumnListRenamesOrIsRefused holds the alias list on a table
+// reference to the same rule the rest of translation follows: what SQLite
+// spells differently is rewritten, and what it cannot spell is refused. A
+// derived table's names can be moved onto its select list; a base table's
+// cannot, since translation does not know what columns the table has.
+func TestATableAliasColumnListRenamesOrIsRefused(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	db.SetMaxOpenConns(1)
+	if _, err := db.ExecContext(ctx, "CREATE TABLE t (a INTEGER, b TEXT)"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	t.Run("renamed", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+			want    []string
+		}{
+			{PostgreSQL, "SELECT * FROM (SELECT a, b FROM t) s(x, y)", []string{"x", "y"}},
+			{PostgreSQL, "SELECT s.x FROM (SELECT a FROM t) s(x)", []string{"x"}},
+			{PostgreSQL, "SELECT * FROM (SELECT a FROM t UNION ALL SELECT a FROM t) s(x)", []string{"x"}},
+			{PostgreSQL, "SELECT * FROM t JOIN (SELECT a FROM t) s(x) ON s.x = t.a", []string{"a", "b", "x"}},
+			{PostgreSQL, "WITH s(x, y) AS (SELECT a, b FROM t) SELECT * FROM s", []string{"x", "y"}},
+			{MySQL, "SELECT * FROM (SELECT a, b FROM t) s(x, y)", []string{"x", "y"}},
+			{GoogleSQL, "SELECT * FROM (SELECT a, b FROM t) s(x, y)", []string{"x", "y"}},
+		} {
+			if got := columnNames(t, db, tt.dialect, tt.query); !slices.Equal(got, tt.want) {
+				t.Errorf("Translate(%v, %q) answers columns %q, want %q", tt.dialect, tt.query, got, tt.want)
+			}
+		}
+	})
+
+	t.Run("refused", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+		}{
+			{PostgreSQL, "SELECT * FROM t AS s(x, y)"},
+			{PostgreSQL, "SELECT * FROM (SELECT * FROM t) s(x, y)"},
+			// One name against one item is refused too when the item is a star,
+			// which stands for however many columns the table has.
+			{PostgreSQL, "SELECT * FROM (SELECT * FROM t) s(x)"},
+			{PostgreSQL, "SELECT * FROM (SELECT a, b FROM t) s(x)"},
+			{PostgreSQL, "SELECT * FROM (VALUES (1, 2)) v(x, y)"},
+			{MySQL, "SELECT * FROM t AS s(x)"},
+			{GoogleSQL, "SELECT * FROM t AS s(x)"},
+		} {
+			_, err := Translate(tt.dialect, tt.query)
+			if !errors.Is(err, ErrUnsupportedSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.query, err)
+			}
+			if err != nil && !strings.Contains(err.Error(), "column") {
+				t.Errorf("Translate(%v, %q) error = %v, want it to name the column list", tt.dialect, tt.query, err)
+			}
+		}
+	})
+}
+
+// TestAlterTableNamesTheConstraintItCannotAdd covers the statements that read
+// as ADD COLUMN if nothing looks for the constraint keywords first. SQLite can
+// only add, drop and rename columns, so these are refused; what matters is that
+// the refusal names the constraint rather than reporting the constraint's name
+// as a column type.
+func TestAlterTableNamesTheConstraintItCannotAdd(t *testing.T) {
+	t.Parallel()
+
+	t.Run("refused", func(t *testing.T) {
+		t.Parallel()
+
+		for _, query := range []string{
+			"ALTER TABLE t ADD CONSTRAINT ck CHECK (a > 0)",
+			"ALTER TABLE t ADD CONSTRAINT fk FOREIGN KEY (a) REFERENCES u(id)",
+			"ALTER TABLE t ADD CONSTRAINT uq UNIQUE (a)",
+			"ALTER TABLE t ADD PRIMARY KEY (a)",
+			"ALTER TABLE t ADD UNIQUE (a)",
+			"ALTER TABLE t ADD UNIQUE KEY uq (a)",
+			"ALTER TABLE t ADD UNIQUE INDEX i (a)",
+			"ALTER TABLE t ADD CHECK (a > 0)",
+			"ALTER TABLE t ADD FOREIGN KEY (a) REFERENCES u(id)",
+			"ALTER TABLE t DROP CONSTRAINT ck",
+		} {
+			for _, d := range []Dialect{MySQL, PostgreSQL, GoogleSQL} {
+				_, err := Translate(d, query)
+				if !errors.Is(err, ErrUnsupportedSyntax) {
+					t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", d, query, err)
+					continue
+				}
+				if !strings.Contains(err.Error(), "constraint") {
+					t.Errorf("Translate(%v, %q) error = %v, want it to name the constraint", d, query, err)
+				}
+			}
+		}
+	})
+
+	t.Run("an index says which statement declares one", func(t *testing.T) {
+		t.Parallel()
+
+		for _, query := range []string{
+			"ALTER TABLE t ADD INDEX i (a)",
+			"ALTER TABLE t ADD KEY (a)",
+			"ALTER TABLE t ADD FULLTEXT INDEX i (a)",
+			"ALTER TABLE t DROP INDEX i",
+		} {
+			_, err := Translate(MySQL, query)
+			if !errors.Is(err, ErrUnsupportedSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", MySQL, query, err)
+				continue
+			}
+			if !strings.Contains(err.Error(), "INDEX") {
+				t.Errorf("Translate(%v, %q) error = %v, want it to name the statement that declares an index", MySQL, query, err)
+			}
+		}
+	})
+
+	t.Run("still translated", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+			want    string
+		}{
+			{MySQL, "ALTER TABLE t ADD COLUMN a INT", "ALTER TABLE t ADD COLUMN a INTEGER"},
+			{MySQL, "ALTER TABLE t ADD a INT", "ALTER TABLE t ADD COLUMN a INTEGER"},
+			{MySQL, "ALTER TABLE t DROP a", "ALTER TABLE t DROP COLUMN a"},
+			{MySQL, "ALTER TABLE t DROP COLUMN a", "ALTER TABLE t DROP COLUMN a"},
+			{MySQL, "ALTER TABLE t RENAME TO u", "ALTER TABLE t RENAME TO u"},
+			{MySQL, "ALTER TABLE t RENAME COLUMN a TO b", "ALTER TABLE t RENAME COLUMN a TO b"},
+			// A column whose name is one of the keywords the refusal looks for
+			// is still a column.
+			{PostgreSQL, `ALTER TABLE t ADD COLUMN "constraint" INT`, `ALTER TABLE t ADD COLUMN "constraint" INTEGER`},
+			{PostgreSQL, `ALTER TABLE t ADD COLUMN "check" INT`, `ALTER TABLE t ADD COLUMN "check" INTEGER`},
+			{PostgreSQL, `ALTER TABLE t DROP COLUMN "unique"`, `ALTER TABLE t DROP COLUMN "unique"`},
+			{MySQL, "ALTER TABLE t ADD COLUMN `key` INT", `ALTER TABLE t ADD COLUMN "key" INTEGER`},
+			{MySQL, "ALTER TABLE t DROP COLUMN `index`", `ALTER TABLE t DROP COLUMN "index"`},
+			// The constraint parser the refusal routes around still reads the
+			// constraints a CREATE TABLE declares.
+			{PostgreSQL, "CREATE TABLE t (a INT, CONSTRAINT uq UNIQUE (a))", "CREATE TABLE t (a INTEGER, CONSTRAINT uq UNIQUE (a))"},
+			{PostgreSQL, "CREATE TABLE t (a INT, PRIMARY KEY (a))", "CREATE TABLE t (a INTEGER, PRIMARY KEY (a))"},
+		} {
+			got, err := Translate(tt.dialect, tt.query)
+			if err != nil {
+				t.Errorf("Translate(%v, %q) error = %v, want it to translate", tt.dialect, tt.query, err)
+				continue
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%v, %q) = %q, want %q", tt.dialect, tt.query, got, tt.want)
+			}
+		}
+	})
 }

@@ -139,10 +139,10 @@ type CTE struct {
 	Name    string
 	Columns []string
 	// Stmt is the query the name stands for. A data-modifying CTE, which
-	// PostgreSQL allows, parses into Modify instead.
-	Stmt   *SelectStmt
-	Modify Stmt
-	Span   Span
+	// PostgreSQL allows and SQLite has no form for, is refused while it is read
+	// rather than modeled here.
+	Stmt *SelectStmt
+	Span Span
 }
 
 // TableExpr is something a FROM clause can name.
