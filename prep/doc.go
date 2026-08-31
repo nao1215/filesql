@@ -155,19 +155,20 @@
 // all. required_if and required_unless take field and value pairs, as many as
 // the tag names, and a value holding a space is written in single quotes:
 // required_if=Kind paid Tier 'gold member' asks for a value only when both
-// cells match. required_with and its three siblings take a list of field names
-// instead: required_with fires when any of them carries a value and
-// required_with_all when all of them do, while required_without fires when any
-// of them is empty and required_without_all when all of them are.
+// cells match, while required_unless=Kind paid Tier gold asks for one unless
+// either cell matches. required_with and its three siblings take a list of
+// field names instead: required_with fires when any of them carries a value
+// and required_with_all when all of them do, while required_without fires when
+// any of them is empty and required_without_all when all of them are.
 //
 // excluded_if, excluded_unless, excluded_with, excluded_with_all,
 // excluded_without and excluded_without_all negate that family: each names the
 // condition under which the cell must be empty, and reads its parameter the way
 // the required tag it mirrors does. excluded_if=Kind free forbids a value when
-// every pair matches, excluded_unless=Kind paid forbids one unless they all do,
-// excluded_with=Email forbids one when any named field carries a value and
-// excluded_without=Email when any of them is empty, with the _all spellings
-// asking for every named field rather than any.
+// every pair matches, excluded_unless=Kind paid Tier gold forbids one unless
+// either pair matches, excluded_with=Email forbids one when any named field
+// carries a value and excluded_without=Email when any of them is empty, with
+// the _all spellings asking for every named field rather than any.
 //
 // boolean accepts what strconv.ParseBool accepts, which is also how a
 // bool struct field is filled. numeric accepts an optionally signed decimal

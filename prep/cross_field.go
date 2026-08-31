@@ -590,8 +590,8 @@ func (v *excludedIfValidator) Name() string {
 	return excludedIfTagValue
 }
 
-// excludedUnlessValidator validates that a field is empty unless every named
-// field holds the value paired with it.
+// excludedUnlessValidator validates that a field is empty unless at least one
+// named field holds the value paired with it.
 type excludedUnlessValidator struct {
 	presenceCrossFieldValidator
 	conditions []fieldCondition
@@ -608,18 +608,17 @@ func newExcludedUnlessValidator(conditions []fieldCondition) *excludedUnlessVali
 	}
 }
 
-// Validate checks if the source value is absent unless every condition holds.
-// A tag naming no field asks for nothing, so the degenerate case says nothing
-// rather than forbidding every value.
+// Validate checks if the source value is absent unless one condition holds.
+// It is the negation of requiredUnless and reads its pairs the same way, so
+// one pair matching is enough to allow a value. A tag naming no field asks for
+// nothing, so the degenerate case says nothing rather than forbidding every
+// value.
 func (v *excludedUnlessValidator) Validate(srcValue string, targetValues []string) string {
-	if len(v.conditions) == 0 || len(targetValues) != len(v.conditions) {
-		return ""
-	}
-	if conditionsMet(v.conditions, targetValues, true) {
+	if len(v.conditions) == 0 || conditionsMet(v.conditions, targetValues, false) {
 		return ""
 	}
 	if srcValue != "" {
-		return "value must be empty unless " + describeConditions(v.conditions, joinerAnd)
+		return "value must be empty unless " + describeConditions(v.conditions, joinerOr)
 	}
 	return ""
 }
