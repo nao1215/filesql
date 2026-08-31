@@ -347,7 +347,9 @@ func (b *DBBuilder) AddFS(filesystem fs.FS) *DBBuilder {
 //
 // A workbook is written onto the file it replaces: only the cells whose value
 // changed are rewritten, so formulas, dates, styles and the sheets no table was
-// loaded from stay as they were.
+// loaded from stay as they were. Each table goes back to the sheet it was read
+// from, under the name that sheet already had, and a table created during the
+// session becomes a new sheet.
 //
 // The save runs once, when Close returns, so a database with auto-save is as
 // safe to share across goroutines as one without it. A transaction still open

@@ -254,8 +254,10 @@ func excelSheetTableNames(base, source string, sheetNames []string) (tables []st
 	return tables, nil
 }
 
-// xlsxSheetNameForTable undoes xlsxSheetTableName: it is the sheet a table of
-// this workbook goes back into when the workbook is overwritten in place.
+// xlsxSheetNameForTable names the sheet a table of this workbook is written to
+// when the workbook holds no sheet for it yet, which is a table created during
+// the session. A table read from a sheet goes back to that sheet, found by
+// asking the workbook rather than by spelling a name out of the table.
 //
 // Naming the sheet after the table instead prefixed the file's name onto it on
 // every save. A workbook "book.xlsx" holding a sheet "Orders" loads as the table
@@ -263,11 +265,13 @@ func excelSheetTableNames(base, source string, sheetNames []string) (tables []st
 // loading again gave "book_book_Orders", and the prefix accumulated on each round
 // until Excel's 31-rune sheet name limit truncated it away.
 //
-// The reverse is not exact, because sanitizeTableName is not injective — a sheet
-// named "Q1 Sales" and one named "Q1-Sales" both load as "Q1_Sales", and only the
-// sanitized form can be recovered. What it does guarantee is that the mapping is
-// stable: the name a save writes is the one the next load reads back to the same
-// table, so nothing accumulates and no sheet is lost.
+// This is not the reverse of xlsxSheetTableName and cannot be, because
+// sanitizeTableName is not injective — a sheet named "Q1 Sales" and one named
+// "Q1-Sales" both load as "Q1_Sales", and only the sanitized form can be
+// recovered. Using it to find a sheet that already exists therefore asked for
+// sheets no workbook held. What it does guarantee is that the name it gives a
+// new sheet is stable: the next load reads that sheet back to the table it was
+// written for, so nothing accumulates over repeated saves.
 func xlsxSheetNameForTable(baseTableName, tableName string) string {
 	if tableName == baseTableName {
 		return excelSheetName(baseTableName)
