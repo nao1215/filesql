@@ -827,10 +827,11 @@ func (b *DBBuilder) createInMemoryDatabase() (*sql.DB, error) {
 		return nil, fmt.Errorf("%w: failed to name in-memory database: %w", ErrDatabaseOperation, err)
 	}
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", name)
-	db, err := sql.Open("sqlite", dsn)
+	drv, err := sqliteDriver()
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to create in-memory database: %w", ErrDatabaseOperation, err)
+		return nil, err
 	}
+	db := sql.OpenDB(&guardedConnector{drv: drv, dsn: dsn})
 	// Remember the DSN so a dialect-translating connector can open its own
 	// connections to the same shared-cache in-memory database (see
 	// setupDialectIfNeeded).
@@ -892,6 +893,7 @@ func (b *DBBuilder) setupAutoSaveIfNeeded(ctx context.Context, db *sql.DB, readO
 		dsn:            b.handleDSN(readOnly),
 		autoSaveConfig: b.autoSaveConfig,
 		originalPaths:  b.collectOriginalPaths(),
+		readOnly:       readOnly,
 	}
 	// The connector's own connection is what keeps the shared-cache database
 	// alive between pooled connections, so it has to exist before the loader
@@ -945,7 +947,7 @@ func (b *DBBuilder) setupDialectIfNeeded(ctx context.Context, db *sql.DB, readOn
 
 	// Open translated connections through the same driver instance the loader
 	// used, so the dialect helper functions registered above are visible.
-	tdb := sql.OpenDB(&dialectConnector{drv: db.Driver(), dsn: b.handleDSN(readOnly), sqlDialect: b.sqlDialect})
+	tdb := sql.OpenDB(&dialectConnector{drv: db.Driver(), dsn: b.handleDSN(readOnly), sqlDialect: b.sqlDialect, readOnly: readOnly})
 	tdb.SetConnMaxIdleTime(0)
 	tdb.SetConnMaxLifetime(0)
 
@@ -975,11 +977,7 @@ func (b *DBBuilder) setupReadOnlyIfNeeded(ctx context.Context, db *sql.DB, readO
 		return nil, fmt.Errorf("%w: read-only mode requires the in-memory database DSN", ErrDatabaseOperation)
 	}
 
-	rodb, err := sql.Open("sqlite", b.handleDSN(true))
-	if err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("%w: failed to open read-only database: %w", ErrDatabaseOperation, err)
-	}
+	rodb := sql.OpenDB(&guardedConnector{drv: db.Driver(), dsn: b.handleDSN(true), readOnly: true})
 	rodb.SetConnMaxIdleTime(0)
 	rodb.SetConnMaxLifetime(0)
 

@@ -296,6 +296,9 @@ type autoSaveConnector struct {
 	dsn            string
 	autoSaveConfig *autoSaveConfig
 	originalPaths  []string
+	// readOnly reports whether the handle these connections belong to refuses
+	// writes already, which is what a read-only transaction would otherwise set.
+	readOnly bool
 
 	mu sync.Mutex
 	// anchor is a connection of the connector's own. A shared-cache in-memory
@@ -329,7 +332,7 @@ func (c *autoSaveConnector) Connect(_ context.Context) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &autoSaveConnection{conn: conn, connector: c}, nil
+	return &guardedConn{conn: conn, readOnly: c.readOnly, tracker: c}, nil
 }
 
 // Driver implements driver.Connector interface
@@ -397,9 +400,10 @@ func (c *autoSaveConnector) Close() error {
 
 // transactionBegan and transactionEnded keep the count Close reads. A
 // transaction the caller started through database/sql always reaches one of
-// Commit and Rollback, so the count returns to zero on its own; one started by
-// running BEGIN through Exec is invisible here, and a close during one of those
-// still waits forever.
+// Commit and Rollback, so the count returns to zero on its own; one begun by
+// running BEGIN as a statement is counted by the connection that ran it, and
+// stays counted, because closing that connection rolls it back rather than
+// finishing it.
 func (c *autoSaveConnector) transactionBegan() {
 	c.mu.Lock()
 	c.openTx++
@@ -414,136 +418,18 @@ func (c *autoSaveConnector) transactionEnded() {
 	c.mu.Unlock()
 }
 
-// autoSaveConnection wraps one pooled connection. Saving belongs to the
-// connector, which outlives every connection the pool opens and closes.
-type autoSaveConnection struct {
-	conn      driver.Conn
-	connector *autoSaveConnector
-}
-
-// Close implements driver.Conn interface
-func (c *autoSaveConnection) Close() error {
-	return c.conn.Close()
-}
-
-// Begin implements driver.Conn interface (deprecated, use BeginTx instead)
-func (c *autoSaveConnection) Begin() (driver.Tx, error) {
-	return c.BeginTx(context.Background(), driver.TxOptions{})
-}
-
-// BeginTx implements driver.ConnBeginTx interface
-func (c *autoSaveConnection) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
-	if connBeginTx, ok := c.conn.(driver.ConnBeginTx); ok {
-		tx, err := connBeginTx.BeginTx(ctx, opts)
-		if err != nil {
-			return nil, err
-		}
-		return c.wrapTx(tx), nil
+// transactionCommitted runs the save a committed transaction owes when the
+// timing asks for one.
+func (c *autoSaveConnector) transactionCommitted() error {
+	if !c.savesOnCommit() {
+		return nil
 	}
-
-	// Fallback for connections that don't support BeginTx
-	//nolint:staticcheck // Backward compatibility with drivers that only implement the legacy interface.
-	tx, err := c.conn.Begin()
-	if err != nil {
-		return nil, err
+	if err := c.saveNow(); err != nil {
+		// The transaction is already committed, so the rows are kept and only
+		// the file is out of date; saying which is what lets a caller decide.
+		return fmt.Errorf("transaction committed successfully, but auto-save failed: %w", err)
 	}
-	return c.wrapTx(tx), nil
-}
-
-// wrapTx counts the transaction as open and hands back the wrapper that counts
-// it as finished.
-func (c *autoSaveConnection) wrapTx(tx driver.Tx) driver.Tx {
-	if c.connector != nil {
-		c.connector.transactionBegan()
-	}
-	return &autoSaveTransaction{tx: tx, conn: c}
-}
-
-// Prepare implements driver.Conn interface
-func (c *autoSaveConnection) Prepare(query string) (driver.Stmt, error) {
-	return c.conn.Prepare(query)
-}
-
-// ExecContext implements driver.ExecerContext interface
-func (c *autoSaveConnection) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	if execer, ok := c.conn.(driver.ExecerContext); ok {
-		return execer.ExecContext(ctx, query, args)
-	}
-	// Fallback to deprecated Execer for backward compatibility
-	//nolint:staticcheck // Backward compatibility with drivers that only implement the legacy interface.
-	if execer, ok := c.conn.(driver.Execer); ok {
-		dArgs := make([]driver.Value, len(args))
-		for i, arg := range args {
-			dArgs[i] = arg.Value
-		}
-		return execer.Exec(query, dArgs)
-	}
-	return nil, driver.ErrSkip
-}
-
-// QueryContext implements driver.QueryerContext interface
-func (c *autoSaveConnection) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
-	if queryer, ok := c.conn.(driver.QueryerContext); ok {
-		return queryer.QueryContext(ctx, query, args)
-	}
-	// Fallback to deprecated Queryer for backward compatibility
-	//nolint:staticcheck // Backward compatibility with drivers that only implement the legacy interface.
-	if queryer, ok := c.conn.(driver.Queryer); ok {
-		dArgs := make([]driver.Value, len(args))
-		for i, arg := range args {
-			dArgs[i] = arg.Value
-		}
-		return queryer.Query(query, dArgs)
-	}
-	return nil, driver.ErrSkip
-}
-
-// autoSaveTransaction wraps a transaction with auto-save functionality
-type autoSaveTransaction struct {
-	tx   driver.Tx
-	conn *autoSaveConnection
-	// finished keeps the connector's count right if a driver ever calls both
-	// Commit and Rollback on the same transaction.
-	finished sync.Once
-}
-
-// finish takes this transaction out of the count of open ones.
-func (t *autoSaveTransaction) finish() {
-	if c := t.conn.connector; c != nil {
-		t.finished.Do(c.transactionEnded)
-	}
-}
-
-// Commit implements driver.Tx interface with auto-save on commit
-func (t *autoSaveTransaction) Commit() error {
-	// First commit the underlying transaction
-	commitErr := t.tx.Commit()
-	// Whether it committed or not, this transaction is over: database/sql does
-	// not call Rollback after a failed Commit, and the driver already rolled
-	// the connection back itself, so leaving it in the count would make every
-	// later close refuse a save it should have run. Dropping it comes before
-	// the save below, which reads the same database.
-	t.finish()
-	if commitErr != nil {
-		return commitErr
-	}
-
-	// Perform auto-save if configured for commit timing
-	if c := t.conn.connector; c != nil && c.savesOnCommit() {
-		if err := c.saveNow(); err != nil {
-			// Auto-save failed, but the transaction was already committed
-			// Return the auto-save error to notify the user
-			return fmt.Errorf("transaction committed successfully, but auto-save failed: %w", err)
-		}
-	}
-
 	return nil
-}
-
-// Rollback implements driver.Tx interface
-func (t *autoSaveTransaction) Rollback() error {
-	defer t.finish()
-	return t.tx.Rollback()
 }
 
 // savesOnCommit reports whether a committed transaction has to save.
