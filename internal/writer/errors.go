@@ -15,6 +15,12 @@ const (
 	// makes it unrepresentable is where it is written rather than which
 	// delimiter the format uses.
 	KindUnrepresentableAsText
+	// KindUnrepresentableUnnamed is a column with no name, in a format whose
+	// reader gives an unnamed column the name of its position. The formats that
+	// carry it are the opposite set from the one KindUnrepresentableAsText
+	// leaves, since what holds an empty name is a format that writes the name
+	// beside each value rather than in a header.
+	KindUnrepresentableUnnamed
 	// KindEncode is a record that is not what the format needs.
 	KindEncode
 )

@@ -657,6 +657,8 @@ func dumpFormatError(err error, text textDumpFormat) error {
 		instead = "; dump this table as CSV instead"
 	case writer.KindUnrepresentableAsText:
 		instead = "; dump this table as XLSX or Parquet instead"
+	case writer.KindUnrepresentableUnnamed:
+		instead = "; dump this table as LTSV or Parquet instead"
 	default:
 		return err
 	}

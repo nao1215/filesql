@@ -399,6 +399,11 @@
 // position: "a,,c" loads as a, column_2 and c. The generated name is moved along
 // -- column_2_2, column_2_3 -- when the file wrote a column of that name itself.
 // A header cell holding a space is a name the file wrote and is kept as it is.
+// Dumping a table that holds a column with no name is refused with
+// ErrUnsupportedFormat for CSV, TSV and XLSX, which write their names in a
+// header row where an empty cell reads back as a positional name; LTSV writes
+// the empty label beside each value and Parquet holds the name in its schema, so
+// both carry it.
 //
 // A header that names one column twice is refused with ErrDuplicateColumn. Two
 // names are the same column if either of two separate rules says so, and the

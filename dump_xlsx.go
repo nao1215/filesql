@@ -378,16 +378,19 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior) (xl
 		}
 	}
 
-	// A worksheet stores cells rather than a rectangle, and the library writing
-	// one does not store a trailing empty value, so a header whose last column
-	// has no name comes back one cell short of the rows under it -- and the
-	// read refuses a row wider than its header, which is a workbook this
-	// package wrote and cannot load. A column with no name anywhere else is
-	// kept, since a cell that has a cell after it is stored.
-	if last := len(columns) - 1; last >= 0 && columns[last] == "" {
-		return xlsxExtent{}, fmt.Errorf(
-			"%w: XLSX cannot hold a table whose last column has no name, since a worksheet does not store the empty cell that would name it; dump this table as CSV instead",
-			ErrUnsupportedFormat)
+	// A sheet carries its names in a header row, so a column with no name is
+	// written as an empty cell and read back under a name taken from its
+	// position -- and where that column is the last one it is worse, because a
+	// worksheet stores cells rather than a rectangle and the library writing one
+	// does not store a trailing empty value, so the header comes back one cell
+	// short of the rows under it and the read refuses a workbook this package
+	// wrote. Either way the table does not come back as it went out.
+	for i, column := range columns {
+		if column == "" {
+			return xlsxExtent{}, fmt.Errorf(
+				"%w: XLSX cannot hold a table with an unnamed column, since a sheet names its columns in a header row and reads an empty cell there as a name taken from its position, and column %d has no name; dump this table as LTSV or Parquet instead",
+				ErrUnsupportedFormat, i+1)
+		}
 	}
 
 	// The table goes back to the rows it came from, which are the rows from the
