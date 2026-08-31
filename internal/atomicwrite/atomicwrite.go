@@ -107,6 +107,16 @@ func Write(dest string, write func(io.Writer) error, opt Options) (err error) {
 
 	mode := DefaultFileMode
 	if info, statErr := os.Stat(target); statErr == nil {
+		// A write replaces a file and nothing else. Renaming onto a named pipe,
+		// a socket or a device turns it into a regular file with nothing said,
+		// which is not what a caller asking for a file at that path meant and
+		// cannot be undone; a directory in the way fails from inside the backup
+		// step instead, reporting the name of a file this package invented. The
+		// stat is here anyway, for the permissions to carry over.
+		if !info.Mode().IsRegular() {
+			return opt.failIO("cannot write "+dest,
+				fmt.Errorf("it is %s and a write replaces a file", DescribeFileMode(info.Mode())))
+		}
 		mode = info.Mode().Perm()
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return opt.failIO("failed to inspect "+dest, statErr)
@@ -119,6 +129,29 @@ func Write(dest string, write func(io.Writer) error, opt Options) (err error) {
 		return opt.failIO("failed to replace "+dest, err)
 	}
 	return nil
+}
+
+// DescribeFileMode names the kind of file a mode says it is, for an error a
+// caller reads without knowing Go's mode bits. It is exported so that a write
+// refusing a destination and a load refusing a source name a kind the same way.
+func DescribeFileMode(mode os.FileMode) string {
+	switch {
+	case mode&os.ModeDir != 0:
+		return "a directory"
+	case mode&os.ModeNamedPipe != 0:
+		return "a named pipe"
+	case mode&os.ModeSocket != 0:
+		return "a socket"
+	case mode&os.ModeCharDevice != 0:
+		return "a character device"
+	case mode&os.ModeDevice != 0:
+		return "a block device"
+	default:
+		// A caller passes a mode a symbolic link resolves to, never a link's
+		// own, so what is left is os.ModeIrregular: a file the operating system
+		// says is not a regular one without saying what it is instead.
+		return "not a regular file"
+	}
 }
 
 // resolveLinks returns the file a write to path has to replace: the file path

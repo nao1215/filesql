@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -311,4 +312,113 @@ func readFile(t *testing.T, path string) string {
 	got, err := os.ReadFile(path) //nolint:gosec // path from t.TempDir()
 	require.NoError(t, err)
 	return string(got)
+}
+
+// makeFIFO creates a named pipe at path, or skips the test where the platform
+// has none. syscall.Mkfifo is not on every platform this package builds for, so
+// the pipe is made with the tool that is.
+func makeFIFO(t *testing.T, path string) {
+	t.Helper()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("windows has no named pipes in the filesystem")
+	}
+	if err := exec.CommandContext(t.Context(), "mkfifo", path).Run(); err != nil { //nolint:gosec // the command is fixed and the path is under t.TempDir()
+		t.Skipf("this platform cannot make a named pipe here: %v", err)
+	}
+}
+
+// TestWrite_RefusesADestinationThatIsNotAFile pins that a write replaces a file
+// and nothing else.
+//
+// It replaced whatever was there. A named pipe became a regular file with no
+// error, so a dump into a directory someone else had set up destroyed the pipe
+// that was in it and reported success; and a directory in the way failed from
+// inside the backup step, reporting the name of a file this package invented
+// ("write /out/.users.csv.bak264152240: copy_file_range: is a directory")
+// rather than saying that the destination is a directory.
+func TestWrite_RefusesADestinationThatIsNotAFile(t *testing.T) {
+	t.Parallel()
+
+	newContents := func(w io.Writer) error {
+		_, err := w.Write([]byte("new"))
+		return err
+	}
+
+	t.Run("a directory in the way is named as one", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		dest := filepath.Join(dir, "users.csv")
+		require.NoError(t, os.Mkdir(dest, 0o750))
+
+		err := Write(dest, newContents, Options{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), dest)
+		assert.Contains(t, err.Error(), "a directory")
+		assert.NotContains(t, err.Error(), backupSuffix, "a caller never named the backup file")
+		assert.Equal(t, []string{"users.csv"}, dirEntries(t, dir), "nothing may be left beside it")
+	})
+
+	t.Run("a named pipe is left where it was", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		dest := filepath.Join(dir, "users.csv")
+		makeFIFO(t, dest)
+
+		err := Write(dest, newContents, Options{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), dest)
+		assert.Contains(t, err.Error(), "a named pipe")
+
+		info, statErr := os.Lstat(dest)
+		require.NoError(t, statErr)
+		assert.NotZero(t, info.Mode()&os.ModeNamedPipe, "the pipe has to still be a pipe")
+	})
+
+	t.Run("a regular file is still replaced", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		dest := filepath.Join(dir, "users.csv")
+		require.NoError(t, os.WriteFile(dest, []byte("old"), 0o600))
+
+		require.NoError(t, Write(dest, newContents, Options{}))
+		assert.Equal(t, "new", readFile(t, dest))
+	})
+
+	t.Run("a destination that is not there yet is still written", func(t *testing.T) {
+		t.Parallel()
+
+		dest := filepath.Join(t.TempDir(), "users.csv")
+		require.NoError(t, Write(dest, newContents, Options{}))
+		assert.Equal(t, "new", readFile(t, dest))
+	})
+}
+
+// TestDescribeFileMode covers the naming on its own, for the kinds a platform
+// may not let a test create. It is what both the load side and the write side
+// call, so a kind is named one way wherever it is refused.
+func TestDescribeFileMode(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		mode os.FileMode
+		want string
+	}{
+		{name: "a directory", mode: os.ModeDir | 0o755, want: "a directory"},
+		{name: "a named pipe", mode: os.ModeNamedPipe | 0o644, want: "a named pipe"},
+		{name: "a socket", mode: os.ModeSocket | 0o644, want: "a socket"},
+		{name: "a character device", mode: os.ModeDevice | os.ModeCharDevice | 0o644, want: "a character device"},
+		{name: "a block device", mode: os.ModeDevice | 0o644, want: "a block device"},
+		{name: "a kind the system does not name", mode: os.ModeIrregular | 0o644, want: "not a regular file"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, DescribeFileMode(tt.mode))
+		})
+	}
 }

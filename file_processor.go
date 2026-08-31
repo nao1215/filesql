@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 
+	"github.com/nao1215/filesql/internal/atomicwrite"
 	"github.com/nao1215/filesql/internal/codec"
 )
 
@@ -96,29 +97,7 @@ func refuseIrregularSource(path string, mode os.FileMode) error {
 		return nil
 	}
 	return fmt.Errorf("%w: %s is %s rather than a regular file, and this package reads files",
-		ErrUnsupportedFormat, path, describeFileMode(mode))
-}
-
-// describeFileMode names the kind of file a mode says it is, for an error a
-// caller reads without knowing Go's mode bits.
-func describeFileMode(mode os.FileMode) string {
-	switch {
-	case mode&os.ModeDir != 0:
-		return "a directory"
-	case mode&os.ModeNamedPipe != 0:
-		return "a named pipe"
-	case mode&os.ModeSocket != 0:
-		return "a socket"
-	case mode&os.ModeCharDevice != 0:
-		return "a character device"
-	case mode&os.ModeDevice != 0:
-		return "a block device"
-	default:
-		// A caller passes a mode a symbolic link resolves to, never a link's
-		// own, so what is left is os.ModeIrregular: a file the operating system
-		// says is not a regular one without saying what it is instead.
-		return "not a regular file"
-	}
+		ErrUnsupportedFormat, path, atomicwrite.DescribeFileMode(mode))
 }
 
 // collectFilesFromDirectory recursively collects all supported files from a directory
