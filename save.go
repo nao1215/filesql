@@ -299,6 +299,10 @@ type autoSaveConnector struct {
 	// readOnly reports whether the handle these connections belong to refuses
 	// writes already, which is what a read-only transaction would otherwise set.
 	readOnly bool
+	// gate is the queue this handle's transactions and statements wait in. The
+	// anchor connection is deliberately not in it: a save reads, and a read
+	// runs beside the other reads rather than behind them.
+	gate *txGate
 
 	mu sync.Mutex
 	// anchor is a connection of the connector's own. A shared-cache in-memory
@@ -332,7 +336,7 @@ func (c *autoSaveConnector) Connect(_ context.Context) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &guardedConn{conn: conn, readOnly: c.readOnly, tracker: c}, nil
+	return &guardedConn{conn: conn, readOnly: c.readOnly, tracker: c, gate: c.gate}, nil
 }
 
 // Driver implements driver.Connector interface

@@ -29,6 +29,7 @@ type guardedConnector struct {
 	dsn      string
 	readOnly bool
 	tracker  txTracker
+	gate     *txGate
 }
 
 // Connect implements driver.Connector.
@@ -37,7 +38,7 @@ func (c *guardedConnector) Connect(_ context.Context) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &guardedConn{conn: conn, readOnly: c.readOnly, tracker: c.tracker}, nil
+	return &guardedConn{conn: conn, readOnly: c.readOnly, tracker: c.tracker, gate: c.gate}, nil
 }
 
 // Driver implements driver.Connector.
@@ -75,10 +76,13 @@ type guardedConn struct {
 	// case a read-only transaction has nothing left to set.
 	readOnly bool
 	tracker  txTracker
-	// rawTx reports whether a BEGIN this connection ran as a statement is still
-	// open. A transaction begun that way never reaches BeginTx, so without this
-	// the tracker would not know it exists.
-	rawTx bool
+	// gate is the queue this connection's statements and transactions wait in.
+	gate *txGate
+	// inTx reports whether a transaction of this connection is open, whether it
+	// was begun through BeginTx or by running BEGIN as a statement. It is what
+	// keeps a statement inside a transaction from queueing behind the
+	// transaction it belongs to, and what lets the tracker see both spellings.
+	inTx bool
 	// spent reports that this connection could not be put back the way it was
 	// found, which is what takes it out of the pool rather than handing it to
 	// the next caller in a state they did not ask for.
@@ -118,14 +122,11 @@ func (c *guardedConn) prepare(ctx context.Context, query string) (driver.Stmt, e
 	return c.conn.Prepare(query)
 }
 
-// wrapStmt keeps a prepared statement under the same reading as one run
-// directly. database/sql runs a prepared statement against the driver statement
-// rather than against the connection, so a prepared BEGIN would otherwise open
-// a transaction nothing here knows about. A statement is left unwrapped when
-// there is no tracker to tell and when it is not one of the three keywords,
-// which is every statement in a query.
+// wrapStmt puts a prepared statement under the same rules as one run directly.
+// A statement is left as the driver's own only when there is nothing to apply:
+// no gate to queue in and no tracker to tell.
 func (c *guardedConn) wrapStmt(stmt driver.Stmt, query string) driver.Stmt {
-	if c.tracker == nil || statementTxEffect(query) == txEffectNone {
+	if c.gate == nil && c.tracker == nil {
 		return stmt
 	}
 	return &guardedStmt{stmt: stmt, conn: c, sql: query}
@@ -189,17 +190,109 @@ func (c *guardedConn) BeginTx(ctx context.Context, opts driver.TxOptions) (drive
 		}
 		restore = true
 	}
-	tx, err := c.begin(ctx, opts)
-	if err != nil {
+	if err := c.openTx(ctx); err != nil {
 		if restore {
 			c.allowWrites(ctx)
 		}
 		return nil, err
 	}
+	tx, err := c.begin(ctx, opts)
+	if err != nil {
+		c.closeTx()
+		if restore {
+			c.allowWrites(ctx)
+		}
+		return nil, err
+	}
+	return &guardedTx{tx: tx, conn: c, restoreWrites: restore}, nil
+}
+
+// openTx takes the gate for a transaction of this connection and tells the
+// tracker about it. Both spellings of BEGIN come through here, so a transaction
+// counts the same however it was begun.
+func (c *guardedConn) openTx(ctx context.Context) error {
+	if c.inTx {
+		// SQLite has no nested transaction; let the driver say so rather than
+		// taking the gate a second time.
+		return nil
+	}
+	if c.gate != nil {
+		if err := c.gate.acquire(ctx); err != nil {
+			return err
+		}
+	}
+	c.inTx = true
 	if c.tracker != nil {
 		c.tracker.transactionBegan()
 	}
-	return &guardedTx{tx: tx, conn: c, restoreWrites: restore}, nil
+	return nil
+}
+
+// closeTx gives back what openTx took. A connection closed with a transaction
+// still open does not come through here: the driver rolls that transaction back
+// rather than finishing it, so the tracker keeps counting it and a save is
+// refused rather than writing rows the caller lost.
+func (c *guardedConn) closeTx() {
+	if !c.inTx {
+		return
+	}
+	c.inTx = false
+	if c.gate != nil {
+		c.gate.release()
+	}
+	if c.tracker != nil {
+		c.tracker.transactionEnded()
+	}
+}
+
+// runExec runs one statement, taking the gate when its keyword opens a
+// transaction and giving it back when one closes it. Everything else runs
+// without touching the gate: a statement outside a transaction is not what the
+// gate queues, and making it wait would deadlock the ordinary shape of holding
+// a transaction open while querying the same database beside it.
+func (c *guardedConn) runExec(ctx context.Context, query string, run func(context.Context) (driver.Result, error)) (driver.Result, error) {
+	switch c.effectOf(query) {
+	case txEffectBegin:
+		if err := c.openTx(ctx); err != nil {
+			return nil, err
+		}
+		res, err := run(ctx)
+		if err != nil {
+			c.closeTx()
+		}
+		return res, err
+	case txEffectEnd:
+		res, err := run(ctx)
+		if err == nil {
+			c.closeTx()
+		}
+		return res, err
+	case txEffectNone:
+	}
+	return run(ctx)
+}
+
+// runQuery runs one query. A transaction keyword run as a query is odd but
+// legal, so it is read the same way a statement is.
+func (c *guardedConn) runQuery(ctx context.Context, query string, run func(context.Context) (driver.Rows, error)) (driver.Rows, error) {
+	if c.effectOf(query) == txEffectNone {
+		return run(ctx)
+	}
+	var rows driver.Rows
+	_, err := c.runExec(ctx, query, func(ctx context.Context) (driver.Result, error) {
+		var runErr error
+		rows, runErr = run(ctx)
+		return driver.RowsAffected(0), runErr
+	})
+	return rows, err
+}
+
+// effectOf reads a statement only when something depends on the answer.
+func (c *guardedConn) effectOf(query string) txEffect {
+	if c.gate == nil && c.tracker == nil {
+		return txEffectNone
+	}
+	return statementTxEffect(query)
 }
 
 // begin starts the transaction on the wrapped connection, through whichever of
@@ -216,11 +309,9 @@ func (c *guardedConn) begin(ctx context.Context, opts driver.TxOptions) (driver.
 
 // ExecContext implements driver.ExecerContext.
 func (c *guardedConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	res, err := c.exec(ctx, query, args)
-	if err == nil {
-		c.noteStatement(query)
-	}
-	return res, err
+	return c.runExec(ctx, query, func(ctx context.Context) (driver.Result, error) {
+		return c.exec(ctx, query, args)
+	})
 }
 
 func (c *guardedConn) exec(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
@@ -237,11 +328,9 @@ func (c *guardedConn) exec(ctx context.Context, query string, args []driver.Name
 
 // QueryContext implements driver.QueryerContext.
 func (c *guardedConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
-	rows, err := c.query(ctx, query, args)
-	if err == nil {
-		c.noteStatement(query)
-	}
-	return rows, err
+	return c.runQuery(ctx, query, func(ctx context.Context) (driver.Rows, error) {
+		return c.query(ctx, query, args)
+	})
 }
 
 func (c *guardedConn) query(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
@@ -264,30 +353,6 @@ func plainValues(args []driver.NamedValue) []driver.Value {
 		out[i] = arg.Value
 	}
 	return out
-}
-
-// noteStatement keeps the tracker's count right for a transaction the caller
-// began by running BEGIN rather than by asking database/sql for one. Savepoints
-// are not counted: a RELEASE of a nested one does not end the transaction
-// around it, so reading it as an end would clear the count while work is still
-// open, which is the direction that loses rows.
-func (c *guardedConn) noteStatement(query string) {
-	if c.tracker == nil {
-		return
-	}
-	switch statementTxEffect(query) {
-	case txEffectBegin:
-		if !c.rawTx {
-			c.rawTx = true
-			c.tracker.transactionBegan()
-		}
-	case txEffectEnd:
-		if c.rawTx {
-			c.rawTx = false
-			c.tracker.transactionEnded()
-		}
-	case txEffectNone:
-	}
 }
 
 // setQueryOnly turns SQLite's query_only pragma on or off for this connection.
@@ -341,9 +406,7 @@ func (t *guardedTx) finish() {
 		if t.restoreWrites {
 			t.conn.allowWrites(context.Background())
 		}
-		if t.conn.tracker != nil {
-			t.conn.tracker.transactionEnded()
-		}
+		t.conn.closeTx()
 	})
 }
 
@@ -428,8 +491,11 @@ func isASCIILetter(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
-// guardedStmt is a prepared statement whose keyword opens or closes a
-// transaction. Everything else is the driver's own statement, unwrapped.
+// guardedStmt is a prepared statement running under the same rules as one run
+// directly. database/sql runs a prepared statement against the driver statement
+// rather than against the connection, so without this a prepared BEGIN would
+// open a transaction the connection knows nothing about and a prepared query
+// would hold a cursor the gate never queued behind.
 type guardedStmt struct {
 	stmt driver.Stmt
 	conn *guardedConn
@@ -446,31 +512,25 @@ func (s *guardedStmt) NumInput() int { return s.stmt.NumInput() }
 //
 //nolint:staticcheck // database/sql calls ExecContext; this is here for the interface.
 func (s *guardedStmt) Exec(args []driver.Value) (driver.Result, error) {
-	res, err := s.stmt.Exec(args)
-	if err == nil {
-		s.conn.noteStatement(s.sql)
-	}
-	return res, err
+	return s.conn.runExec(context.Background(), s.sql, func(context.Context) (driver.Result, error) {
+		return s.stmt.Exec(args)
+	})
 }
 
 // Query implements driver.Stmt.
 //
 //nolint:staticcheck // database/sql calls QueryContext; this is here for the interface.
 func (s *guardedStmt) Query(args []driver.Value) (driver.Rows, error) {
-	rows, err := s.stmt.Query(args)
-	if err == nil {
-		s.conn.noteStatement(s.sql)
-	}
-	return rows, err
+	return s.conn.runQuery(context.Background(), s.sql, func(context.Context) (driver.Rows, error) {
+		return s.stmt.Query(args)
+	})
 }
 
 // ExecContext implements driver.StmtExecContext.
 func (s *guardedStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
-	res, err := s.exec(ctx, args)
-	if err == nil {
-		s.conn.noteStatement(s.sql)
-	}
-	return res, err
+	return s.conn.runExec(ctx, s.sql, func(ctx context.Context) (driver.Result, error) {
+		return s.exec(ctx, args)
+	})
 }
 
 func (s *guardedStmt) exec(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
@@ -483,17 +543,71 @@ func (s *guardedStmt) exec(ctx context.Context, args []driver.NamedValue) (drive
 
 // QueryContext implements driver.StmtQueryContext.
 func (s *guardedStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
-	rows, err := s.runQuery(ctx, args)
-	if err == nil {
-		s.conn.noteStatement(s.sql)
-	}
-	return rows, err
+	return s.conn.runQuery(ctx, s.sql, func(ctx context.Context) (driver.Rows, error) {
+		return s.query(ctx, args)
+	})
 }
 
-func (s *guardedStmt) runQuery(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+func (s *guardedStmt) query(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
 	if q, ok := s.stmt.(driver.StmtQueryContext); ok {
 		return q.QueryContext(ctx, args)
 	}
 	//nolint:staticcheck // Backward compatibility with statements that only implement the legacy interface.
 	return s.stmt.Query(plainValues(args))
+}
+
+// txGate is the queue a database's transactions wait in.
+//
+// SQLite runs one write transaction at a time, and the driver waits for its turn
+// inside itself: it registers an sqlite3_unlock_notify callback and blocks on a
+// mutex of its own, with no deadline and no context in the path. A second
+// transaction therefore waited without a bound, and a caller who had put a
+// deadline on the work could not fail it -- the goroutine simply stayed there
+// until whatever held the lock let go.
+//
+// The gate is how this package stays out of that wait. A transaction takes it
+// for as long as it runs, so the second transaction queues here, where waiting
+// is a channel receive and the caller's context ends it.
+//
+// Only transactions queue. A statement outside one is left alone on purpose:
+// this package cannot tell a transaction that has written from one that has only
+// read, so making statements wait would block the ordinary shape of holding a
+// transaction open and querying the same database beside it, which works today.
+type txGate struct {
+	// held carries one token. Taking it is taking the gate.
+	held chan struct{}
+}
+
+func newTxGate() *txGate {
+	return &txGate{held: make(chan struct{}, 1)}
+}
+
+// acquire takes the gate, or returns the context's error if the wait outlives
+// the context. It returns nothing else: a wait this long is a wait on another
+// caller's transaction, not a failure of the database.
+func (g *txGate) acquire(ctx context.Context) error {
+	// A caller who has already given up does not get the gate, even a free one:
+	// taking it would open a transaction nobody is waiting for the result of.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case g.held <- struct{}{}:
+		return nil
+	default:
+	}
+	select {
+	case g.held <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// release gives the gate back.
+func (g *txGate) release() {
+	select {
+	case <-g.held:
+	default:
+	}
 }
