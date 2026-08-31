@@ -410,6 +410,19 @@
 //
 // LTSV carries its labels on every record rather than in a header, so the check
 // runs per record; a record holding "A:1\ta:2" is refused for the same reason.
+// Two rules above read differently there, because a label is trimmed as it is
+// read: a space around one is malformed either way, and a value is not trimmed,
+// so the same data written as LTSV and as CSV agrees on the values whatever the
+// labels carry. So the trimming is not a rule applied beside the folding but
+// something that has already happened when the folding runs, and " A:1\ta:2" is
+// one label typed twice where " A" beside "a" in a CSV header is two columns.
+// And a label that is empty names a column the empty string rather than taking
+// the name of its position: a position names a column of a header, and an LTSV
+// record does not have to carry the labels the record before it carried, so
+// there is no position for a name to come from. Dumping to LTSV refuses a column
+// name either rule would change -- one holding a colon, a tab or a newline, and
+// one beginning or ending in whitespace -- rather than writing a label that
+// reads back as a different name.
 //
 // For complete SQL syntax documentation, see: https://www.sqlite.org/lang.html
 //
