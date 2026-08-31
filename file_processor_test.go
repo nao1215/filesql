@@ -912,6 +912,7 @@ func TestProcessFSToReaders_RefusesASourceThatIsNotAFile(t *testing.T) {
 
 		readers, err := newFileProcessor().processFSToReaders(t.Context(), os.DirFS(root))
 		require.NoError(t, err)
+		closeReaders(t, readers)
 		assert.Len(t, readers, 2)
 	})
 
@@ -927,7 +928,57 @@ func TestProcessFSToReaders_RefusesASourceThatIsNotAFile(t *testing.T) {
 
 		readers, err := newFileProcessor().processFSToReaders(t.Context(), os.DirFS(root))
 		require.NoError(t, err)
+		closeReaders(t, readers)
 		assert.Len(t, readers, 2, "the link and its target are both regular files")
+	})
+
+	t.Run("a directory named like a file is gone into, not refused", func(t *testing.T) {
+		t.Parallel()
+
+		// fs.Glob matches a directory too, and a directory named "exports.csv"
+		// is one the walk has already collected the contents of. Refusing it
+		// would make a filesystem answer differently from the path naming the
+		// same directory, which loads what is under it.
+		root := t.TempDir()
+		inner := filepath.Join(root, "exports.csv")
+		require.NoError(t, os.Mkdir(inner, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(inner, "data.csv"), []byte("id\n1\n"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "real.csv"), []byte("id\n9\n"), 0o600))
+
+		collected, pathErr := newFileProcessor().collectFilesFromPaths([]string{root})
+		require.NoError(t, pathErr)
+		require.Len(t, collected, 2, "a path goes into it")
+
+		readers, err := newFileProcessor().processFSToReaders(t.Context(), os.DirFS(root))
+		require.NoError(t, err)
+		closeReaders(t, readers)
+		assert.Len(t, readers, 2, "and so does a filesystem")
+	})
+
+	t.Run("a filesystem whose only match is such a directory has no files", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(root, "exports.csv"), 0o750))
+
+		_, err := newFileProcessor().processFSToReaders(t.Context(), os.DirFS(root))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrNoFiles)
+	})
+}
+
+// closeReaders closes the file handles processFSToReaders opened, which the
+// consumer normally does. Leaving them open keeps t.TempDir from being cleaned
+// up on a platform that will not remove an open file.
+func closeReaders(t *testing.T, inputs []readerInput) {
+	t.Helper()
+
+	t.Cleanup(func() {
+		for _, input := range inputs {
+			if input.closer != nil {
+				_ = input.closer.Close()
+			}
+		}
 	})
 }
 
