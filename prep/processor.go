@@ -82,7 +82,8 @@ func NewProcessor(fileType parser.FileType, opts ...Option) *Processor {
 // Process reads from the input reader, applies preprocessing and validation,
 // populates the struct slice, and returns an io.Reader with preprocessed data.
 //
-// The returned io.Reader preserves the original file format:
+// The format the reader serves follows the format that was read, and is not
+// always the same one:
 //   - CSV input → CSV output
 //   - TSV input → TSV output (tab-delimited)
 //   - LTSV input → LTSV output (label:value format)
@@ -91,13 +92,30 @@ func NewProcessor(fileType parser.FileType, opts ...Option) *Processor {
 //   - XLSX input → CSV output (tabular data)
 //   - Parquet input → CSV output (tabular data)
 //
-// The returned io.Reader can be passed directly to filesql.AddReader:
+// ProcessResult.OriginalFormat is the format that was read and
+// ProcessResult.OutputFormat is the format of the bytes the reader serves. The
+// returned io.Reader can be passed directly to filesql.AddReader, under the
+// format the result reports rather than the format that was read:
 //
 //	reader, result, err := processor.Process(input, &records)
-//	db.AddReader(reader, "table", parser.CSV)
+//	var format filesql.FileType
+//	switch result.OutputFormat {
+//	case prep.FileTypeTSV:
+//		format = filesql.FileTypeTSV
+//	case prep.FileTypeLTSV:
+//		format = filesql.FileTypeLTSV
+//	case prep.FileTypeJSONL:
+//		format = filesql.FileTypeJSONL
+//	default:
+//		format = filesql.FileTypeCSV
+//	}
+//	db.AddReader(reader, "table", format)
 //
-// ProcessResult.OriginalFormat is the format that was read and
-// ProcessResult.OutputFormat is the format of the bytes the reader serves.
+// Those four are all OutputFormat can be. Naming the input format instead reads
+// a JSON file as one JSON document rather than as the JSONL the reader serves,
+// and an XLSX or Parquet file as a workbook or a Parquet file rather than as
+// the CSV it serves, so the load fails with an error about the bytes rather
+// than about the format.
 // The reader also satisfies io.Seeker, so it can be rewound with
 // Seek(0, io.SeekStart) and read again.
 //
