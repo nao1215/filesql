@@ -2,12 +2,14 @@ package prep_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"strings"
 
+	"github.com/nao1215/filesql"
 	"github.com/nao1215/filesql/prep"
 )
 
@@ -216,6 +218,49 @@ func ExampleProcessResult_OutputFormat() {
 	fmt.Printf("output=%s original=%s\n", result.OutputFormat, result.OriginalFormat)
 	// Output:
 	// output=JSONL original=JSON
+}
+
+// ExampleProcessor_Process_intoFilesql shows the handoff between the two
+// packages. The format to declare is the one the result reports, which is not
+// always the one that was read: JSON is served as JSONL here, so declaring JSON
+// would fail on the second record.
+func ExampleProcessor_Process_intoFilesql() {
+	type record struct {
+		Data string `name:"data"`
+	}
+
+	processor := prep.NewProcessor(prep.FileTypeJSON)
+	var records []record
+	reader, result, err := processor.Process(strings.NewReader(`[{"id":1},{"id":2}]`), &records)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var format filesql.FileType
+	switch result.OutputFormat {
+	case prep.FileTypeTSV:
+		format = filesql.FileTypeTSV
+	case prep.FileTypeLTSV:
+		format = filesql.FileTypeLTSV
+	case prep.FileTypeJSONL:
+		format = filesql.FileTypeJSONL
+	default:
+		format = filesql.FileTypeCSV
+	}
+
+	db, err := filesql.NewBuilder().AddReader(reader, "events", format).Open(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	var ids string
+	if err := db.QueryRow(`SELECT group_concat(json_extract(data, '$.id'), ',') FROM events`).Scan(&ids); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("read %s, served %s, loaded ids %s\n", result.OriginalFormat, result.OutputFormat, ids)
+	// Output:
+	// read JSON, served JSONL, loaded ids 1,2
 }
 
 func Example_streamSeek() {
