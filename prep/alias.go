@@ -8,12 +8,10 @@ type FileType = parser.FileType
 
 // File type constants re-exported from parser for backward compatibility.
 //
-// Only formats are re-exported. The parser's own enum keeps a constant for
-// every format-and-codec combination — it is the lower level, and that is the
-// honest name for what it dispatches on — but mirroring all 56 of them here
-// exposed the cross product a second time under a second spelling. A caller
-// that needs one names it through the parser package directly, and
-// parser.BaseFileType folds it back to a format.
+// These are every file type there is. The parser's enum used to keep a constant
+// for each format-and-codec combination as well, which this package
+// deliberately did not mirror; it names formats only now, so there is nothing
+// left to leave out.
 const (
 	FileTypeCSV     = parser.CSV
 	FileTypeTSV     = parser.TSV

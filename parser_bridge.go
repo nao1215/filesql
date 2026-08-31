@@ -36,11 +36,10 @@ func parserFileType(ft FileType) parser.FileType {
 	return parser.Unsupported
 }
 
-// filesqlFileType converts parser.FileType to filesql.FileType, folding any
-// compression the parser's constant carries away: parser.CSVGZ answers
-// FileTypeCSV, because FileType names the format only.
+// filesqlFileType converts parser.FileType to filesql.FileType. Both name a
+// format and nothing else, so this is a rename rather than a conversion.
 func filesqlFileType(ft parser.FileType) FileType {
-	if filesqlType, ok := parserToFilesqlFileTypes[parser.BaseFileType(ft)]; ok {
+	if filesqlType, ok := parserToFilesqlFileTypes[ft]; ok {
 		return filesqlType
 	}
 

@@ -123,8 +123,7 @@ func (p *Processor) Process(input io.Reader, structSlicePointer any) (io.Reader,
 		return nil, nil, err
 	}
 
-	baseType := parser.BaseFileType(p.fileType)
-	isJSONFormat := baseType == parser.JSON || baseType == parser.JSONL
+	isJSONFormat := p.fileType == parser.JSON || p.fileType == parser.JSONL
 
 	// Select output records
 	outputRecords := records
@@ -159,8 +158,7 @@ func (p *Processor) ProcessToWriter(input io.Reader, structSlicePointer any, w i
 		return nil, err
 	}
 
-	baseType := parser.BaseFileType(p.fileType)
-	isJSONFormat := baseType == parser.JSON || baseType == parser.JSONL
+	isJSONFormat := p.fileType == parser.JSON || p.fileType == parser.JSONL
 
 	outputRecords := records
 	if p.validRowsOnly {
@@ -305,8 +303,7 @@ func (p *Processor) processRecords(input io.Reader, structSlicePointer any) (
 	}
 
 	headerLen := len(headers)
-	baseType := parser.BaseFileType(p.fileType)
-	isJSONFormat := baseType == parser.JSON || baseType == parser.JSONL
+	isJSONFormat := p.fileType == parser.JSON || p.fileType == parser.JSONL
 
 	// jsonDataColumn is the column name the parser package uses for JSON/JSONL data.
 	// Each JSON element is stored as a raw JSON string in this single column.
@@ -626,9 +623,9 @@ func (p *Processor) buildOutput(headers []string, outputRecords [][]string, isJS
 // JSON and JSONL are output as JSONL (one JSON value per line).
 // XLSX and Parquet are converted to CSV.
 func (p *Processor) outputFormat() parser.FileType {
-	switch parser.BaseFileType(p.fileType) {
+	switch p.fileType {
 	case parser.CSV, parser.TSV, parser.LTSV:
-		return parser.BaseFileType(p.fileType)
+		return p.fileType
 	case parser.JSON, parser.JSONL:
 		return parser.JSONL
 	default:
@@ -661,7 +658,7 @@ func (p *Processor) estimateOutputSize(headers []string, records [][]string) int
 //   - XLSX → CSV (tabular data as comma-delimited)
 //   - Parquet → CSV (tabular data as comma-delimited)
 func (p *Processor) writeOutput(w io.Writer, headers []string, records [][]string) error {
-	format, ok := outputFormats[parser.BaseFileType(p.fileType)]
+	format, ok := outputFormats[p.fileType]
 	if !ok {
 		// CSV, XLSX and Parquet all come out as CSV: the two that are not text
 		// have no text form of their own, and a tabular one is what they hold.
