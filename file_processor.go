@@ -2,6 +2,7 @@ package filesql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -165,6 +166,13 @@ func (fp *fileProcessor) collectFilesFromDirectory(dirPath string, processedFile
 	})
 
 	if err != nil {
+		// An error this package raised on the way -- a source that is not a
+		// file, say -- is already worded and already carries its own sentinel,
+		// so wrapping it as an I/O failure would say the walk broke and would
+		// match ErrIOOperation for something that is not one.
+		if errors.Is(err, ErrUnsupportedFormat) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("%w: failed to walk directory %s: %w", ErrIOOperation, dirPath, err)
 	}
 

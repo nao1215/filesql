@@ -802,7 +802,9 @@ func TestCollectFilesFromPaths_RefusesASourceThatIsNotAFile(t *testing.T) {
 		_, err := newFileProcessor().collectFilesFromPaths([]string{root})
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		assert.NotErrorIs(t, err, ErrIOOperation, "the walk did not break; a kind was refused")
 		assert.Contains(t, err.Error(), "pipe.csv", "the refusal has to name the entry that caused it")
+		assert.NotContains(t, err.Error(), "failed to walk", "a refusal this package raised is already worded")
 	})
 
 	t.Run("a pipe named by the caller", func(t *testing.T) {
