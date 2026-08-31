@@ -205,7 +205,7 @@ var prepBuilders = map[string]func(value string, strict bool) (preprocessor, err
 	// missing and its cells stay empty, which is how a struct covers a column
 	// the input does not have.
 	defaultTagValue: func(value string, _ bool) (preprocessor, error) {
-		return newDefaultPreprocessor(value), nil
+		return newDefaultPreprocessor(unescapeTagText(value)), nil
 	},
 
 	// String transformation preprocessors.
@@ -277,7 +277,7 @@ func valuePrep[T preprocessor](build func(string) T, message string) func(string
 		if value == "" {
 			return nil, invalidPrepParam(strict, "%s", message)
 		}
-		return build(value), nil
+		return build(unescapeTagText(value)), nil
 	}
 }
 
@@ -315,13 +315,14 @@ func prepTagNames() []string {
 }
 
 // parsePrepTag builds the preprocessors one field's prep tag asks for. The tag
-// is a comma-separated list, so a tag's own parameters cannot use a comma.
+// is a comma-separated list, and a comma a backslash precedes is a comma in a
+// parameter rather than the end of a tag.
 func parsePrepTag(tag string, strict bool) (preprocessors, error) {
 	if tag == "" {
 		return nil, nil
 	}
 
-	parts := strings.Split(tag, ",")
+	parts := splitUnescaped(tag, ',')
 	preps := make(preprocessors, 0, len(parts))
 
 	for _, part := range parts {
@@ -347,32 +348,87 @@ func parsePrepTag(tag string, strict bool) (preprocessors, error) {
 	return preps, nil
 }
 
-// parseColonSeparatedValue parses "old:new" format values
-// Returns old, new, and true if the format is valid
+// parseColonSeparatedValue parses "old:new" format values. The colon that
+// separates them is the first one a backslash does not precede, so a parameter
+// that needs a colon of its own -- a regular expression naming a URL scheme or
+// a non-capturing group -- writes it as "\:".
+//
+// Returns old, new, and true if the format is valid.
 func parseColonSeparatedValue(value string) (string, string, bool) {
-	idx := strings.Index(value, ":")
-	if idx < 0 {
+	first, second, found := cutUnescaped(value, ':')
+	if !found {
 		return "", "", false
 	}
-	return value[:idx], value[idx+1:], true
+	return unescapeTagText(first), unescapeTagText(second), true
+}
+
+// splitUnescaped splits s at every sep a backslash does not precede.
+func splitUnescaped(s string, sep byte) []string {
+	parts := make([]string, 0, strings.Count(s, string(sep))+1)
+	start := 0
+	for i := range len(s) {
+		if s[i] == sep && !escapedAt(s, i) {
+			parts = append(parts, s[start:i])
+			start = i + 1
+		}
+	}
+	return append(parts, s[start:])
+}
+
+// cutUnescaped cuts s at the first sep a backslash does not precede.
+func cutUnescaped(s string, sep byte) (before, after string, found bool) {
+	for i := range len(s) {
+		if s[i] == sep && !escapedAt(s, i) {
+			return s[:i], s[i+1:], true
+		}
+	}
+	return "", "", false
+}
+
+// escapedAt reports whether the byte at i is preceded by a backslash.
+func escapedAt(s string, i int) bool {
+	return i > 0 && s[i-1] == '\\'
+}
+
+// unescapeTagText drops the backslash in front of a comma or a colon, which is
+// how a parameter spells one of the two characters that separate tags and their
+// parameters. A backslash anywhere else is itself, so a regular expression keeps
+// its \d and its \\ -- and "\:" already meant a plain colon to the regular
+// expression engine, so a pattern that spelled one that way means what it did.
+func unescapeTagText(s string) string {
+	if !strings.Contains(s, "\\") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) && (s[i+1] == ',' || s[i+1] == ':') {
+			b.WriteByte(s[i+1])
+			i++
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 // parsePadParams parses "N:char" format for padding preprocessors
 // Returns length and pad character (defaults to space if not specified)
 func parsePadParams(value string) (int, rune) {
-	parts := strings.SplitN(value, ":", 2)
-	if len(parts) == 0 {
-		return 0, ' '
+	count, pad, found := cutUnescaped(value, ':')
+	if !found {
+		count = value
 	}
+	pad = unescapeTagText(pad)
 
-	length, err := strconv.Atoi(parts[0])
+	length, err := strconv.Atoi(count)
 	if err != nil || length <= 0 {
 		return 0, ' '
 	}
 
 	padChar := ' '
-	if len(parts) == 2 && len(parts[1]) > 0 {
-		runes := []rune(parts[1])
+	if len(pad) > 0 {
+		runes := []rune(pad)
 		padChar = runes[0]
 	}
 

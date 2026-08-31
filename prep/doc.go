@@ -112,6 +112,11 @@
 //     alone
 //   - fix_scheme=scheme: add scheme:// to a URL that has no scheme
 //
+// A parameter that needs a comma or a colon of its own writes a backslash in
+// front of it, which the parser drops: regex_replace=https?\://:scheme- reads
+// the pattern as https?:// and the replacement as scheme-. A backslash anywhere
+// else is itself, so a regular expression keeps its \d.
+//
 // A tag that needs a parameter and is given none is an invalid tag argument:
 // WithStrictTagParsing reports it, and without that option it is ignored.
 //

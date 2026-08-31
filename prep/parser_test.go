@@ -2,6 +2,7 @@ package prep
 
 import (
 	"errors"
+	"io"
 	"os"
 	"reflect"
 	"strings"
@@ -1319,4 +1320,127 @@ func TestPrepTagsAreDocumented(t *testing.T) {
 			t.Errorf("prep tag %q is accepted by the parser but not named in doc.go", tag)
 		}
 	}
+}
+
+// TestATagParameterCanHoldAColon covers the two characters that separate one
+// tag from the next and a tag's parameters from each other. A colon is ordinary
+// inside a regular expression -- a non-capturing group, an inline flag, a URL
+// scheme, a clock time -- and splitting at the first one left a pattern the
+// caller never wrote: "regex_replace=https?://:scheme-" read the pattern as
+// "https?" and the replacement as "//:scheme-", and turned a URL into nonsense
+// with no error anywhere.
+func TestATagParameterCanHoldAColon(t *testing.T) {
+	t.Parallel()
+
+	type urlRow struct {
+		V string `name:"v" prep:"regex_replace=https?\\://:scheme-"`
+	}
+	type groupRow struct {
+		V string `name:"v" prep:"regex_replace=(?\\:foo|bar)+:X"`
+	}
+	type replacementRow struct {
+		V string `name:"v" prep:"regex_replace=(\\d)(\\d):$1\\:$2"`
+	}
+	type replaceRow struct {
+		V string `name:"v" prep:"replace=a\\:b:c"`
+	}
+	type commaRow struct {
+		V string `name:"v" prep:"prefix=a\\,b"`
+	}
+	type defaultRow struct {
+		V string `name:"v" prep:"default=x\\,y"`
+	}
+	type padRow struct {
+		V string `name:"v" prep:"pad_left=3:\\:"`
+	}
+	// The separators still separate when no backslash stands in front of them.
+	type unescapedRow struct {
+		V string `name:"v" prep:"replace=a:b,uppercase"`
+	}
+	// A backslash before anything else is itself, so a pattern keeps its \d.
+	type digitRow struct {
+		V string `name:"v" prep:"regex_replace=\\d+:N"`
+	}
+
+	tests := []struct {
+		name string
+		rows any
+		in   string
+		want string
+	}{
+		{"a URL scheme in a pattern", &[]urlRow{}, "https://x.example", "scheme-x.example"},
+		{"a non-capturing group in a pattern", &[]groupRow{}, "foobar", "X"},
+		{"a colon in a replacement", &[]replacementRow{}, "12", "1:2"},
+		{"a colon in the text replace looks for", &[]replaceRow{}, "a:b", "c"},
+		{"a comma in a prefix", &[]commaRow{}, "z", `"a,bz"`},
+		{"a comma in a default", &[]defaultRow{}, `""`, `"x,y"`},
+		{"a colon as the padding character", &[]padRow{}, "7", "::7"},
+		{"an unescaped separator still separates", &[]unescapedRow{}, "a", "B"},
+		{"a backslash before anything else is itself", &[]digitRow{}, "12ab", "Nab"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			processor := NewProcessor(FileTypeCSV, WithStrictTagParsing())
+			reader, result, err := processor.Process(strings.NewReader("v\n"+tt.in+"\n"), tt.rows)
+			if err != nil {
+				t.Fatalf("Process: %v", err)
+			}
+			if len(result.Errors) != 0 {
+				t.Fatalf("Process reported %v", result.Errors)
+			}
+			out, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatalf("reading the output: %v", err)
+			}
+			if got := strings.TrimSpace(string(out)); got != "v\n"+tt.want {
+				t.Errorf("output = %q, want %q", got, "v\n"+tt.want)
+			}
+		})
+	}
+}
+
+func TestSplitUnescapedAndUnescapeTagText(t *testing.T) {
+	t.Parallel()
+
+	t.Run("splitting", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			in   string
+			want []string
+		}{
+			{"a,b", []string{"a", "b"}},
+			{`a\,b`, []string{`a\,b`}},
+			{`a\,b,c`, []string{`a\,b`, "c"}},
+			{",", []string{"", ""}},
+			{`a\`, []string{`a\`}},
+			{"", []string{""}},
+		} {
+			if got := splitUnescaped(tt.in, ','); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("splitUnescaped(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		}
+	})
+
+	t.Run("unescaping", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			in   string
+			want string
+		}{
+			{`a\:b`, "a:b"},
+			{`a\,b`, "a,b"},
+			{`\d+`, `\d+`},
+			{`a\\b`, `a\\b`},
+			{`a\`, `a\`},
+			{"plain", "plain"},
+		} {
+			if got := unescapeTagText(tt.in); got != tt.want {
+				t.Errorf("unescapeTagText(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		}
+	})
 }
