@@ -237,6 +237,54 @@ func TestAutoSaveOnCommitSavesWhatNoTransactionWrapped(t *testing.T) {
 		assert.Equal(t, "id,name\n1,bob\n2,dave\n", string(saved))
 	})
 
+	t.Run("a transaction spelled as statements saves at its commit", func(t *testing.T) {
+		t.Parallel()
+
+		// The commit-time save hung off the transaction wrapper alone, so a
+		// transaction run as BEGIN and COMMIT statements -- which the guard
+		// already reads well enough to count as open and closed -- committed
+		// without saving, and the rows waited for the close-time save. The
+		// timing is the whole of what this option offers, so both spellings
+		// have to reach the file at the same moment.
+		path := autoSaveSource(t, "id,name\n1,alice\n")
+		db := openAutoSave(t, path, func(b *DBBuilder) *DBBuilder { return b.EnableAutoSaveOnCommit("") })
+
+		conn, err := db.Conn(t.Context())
+		require.NoError(t, err)
+		for _, stmt := range []string{"BEGIN", "UPDATE users SET name = 'bob'", "COMMIT"} {
+			_, err = conn.ExecContext(t.Context(), stmt)
+			require.NoError(t, err, stmt)
+		}
+
+		committed, err := os.ReadFile(path) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		assert.Equal(t, "id,name\n1,bob\n", string(committed), "a statement COMMIT saves when it commits")
+
+		require.NoError(t, conn.Close())
+		require.NoError(t, db.Close())
+	})
+
+	t.Run("a transaction rolled back as a statement saves nothing", func(t *testing.T) {
+		t.Parallel()
+
+		path := autoSaveSource(t, "id,name\n1,alice\n")
+		db := openAutoSave(t, path, func(b *DBBuilder) *DBBuilder { return b.EnableAutoSaveOnCommit("") })
+
+		conn, err := db.Conn(t.Context())
+		require.NoError(t, err)
+		for _, stmt := range []string{"BEGIN", "UPDATE users SET name = 'bob'", "ROLLBACK"} {
+			_, err = conn.ExecContext(t.Context(), stmt)
+			require.NoError(t, err, stmt)
+		}
+
+		rolled, err := os.ReadFile(path) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		assert.Equal(t, "id,name\n1,alice\n", string(rolled), "a statement ROLLBACK is not a commit")
+
+		require.NoError(t, conn.Close())
+		require.NoError(t, db.Close())
+	})
+
 	t.Run("a rolled back transaction stays out", func(t *testing.T) {
 		t.Parallel()
 
@@ -1364,6 +1412,15 @@ func TestAutoSaveCloseWithAnOpenTransaction(t *testing.T) {
 		{name: "a COMMIT behind a block comment releases it", stmts: []string{"BEGIN", "INSERT INTO users VALUES (2,'bob')", "/* done */ COMMIT"}, want: "id,name\n1,alice\n2,bob\n", saved: true},
 		{name: "a COMMIT behind a line comment releases it", stmts: []string{"BEGIN", "INSERT INTO users VALUES (2,'bob')", "-- done\nCOMMIT"}, want: "id,name\n1,alice\n2,bob\n", saved: true},
 		{name: "a ROLLBACK behind stacked comments releases it", stmts: []string{"BEGIN", "INSERT INTO users VALUES (2,'bob')", "-- one\n /* two */\tROLLBACK"}, want: "id,name\n1,alice\n", saved: true},
+		// A savepoint taken outside a transaction opens one in SQLite, and
+		// releasing that outermost savepoint commits it, so both count.
+		{name: "a SAVEPOINT left open stops the save", stmts: []string{"SAVEPOINT batch", "INSERT INTO users VALUES (2,'bob')"}, want: "id,name\n1,alice\n"},
+		{name: "a RELEASE of the outermost savepoint releases it", stmts: []string{"SAVEPOINT batch", "INSERT INTO users VALUES (2,'bob')", "RELEASE batch"}, want: "id,name\n1,alice\n2,bob\n", saved: true},
+		{name: "a RELEASE SAVEPOINT spelling releases it too", stmts: []string{"SAVEPOINT batch", "INSERT INTO users VALUES (2,'bob')", "RELEASE SAVEPOINT BATCH"}, want: "id,name\n1,alice\n2,bob\n", saved: true},
+		{name: "a quoted savepoint name is matched by its own spelling", stmts: []string{`SAVEPOINT "the batch"`, "INSERT INTO users VALUES (2,'bob')", `RELEASE "the batch"`}, want: "id,name\n1,alice\n2,bob\n", saved: true},
+		{name: "releasing a nested savepoint leaves the transaction open", stmts: []string{"SAVEPOINT outer", "SAVEPOINT inner", "INSERT INTO users VALUES (2,'bob')", "RELEASE inner"}, want: "id,name\n1,alice\n"},
+		{name: "releasing the outer savepoint after a nested one releases it", stmts: []string{"SAVEPOINT outer", "SAVEPOINT inner", "INSERT INTO users VALUES (2,'bob')", "RELEASE inner", "RELEASE outer"}, want: "id,name\n1,alice\n2,bob\n", saved: true},
+		{name: "a savepoint inside a BEGIN does not end it when released", stmts: []string{"BEGIN", "SAVEPOINT s", "INSERT INTO users VALUES (2,'bob')", "RELEASE s"}, want: "id,name\n1,alice\n"},
 		{name: "a comment inside a string literal is not one", stmts: []string{"BEGIN", "INSERT INTO users VALUES (2,'/* done */ COMMIT')"}, want: "id,name\n1,alice\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1389,6 +1446,31 @@ func TestAutoSaveCloseWithAnOpenTransaction(t *testing.T) {
 			assert.Equal(t, tt.want, string(got))
 		})
 	}
+
+	t.Run("a refused nested BEGIN leaves the first transaction counted", func(t *testing.T) {
+		t.Parallel()
+
+		// The statements above all succeed. This one does not: a BEGIN inside a
+		// transaction is refused, and reading the refusal as the end of a
+		// transaction took the caller's still-open one out of the count, so the
+		// close saved and said nothing.
+		db, src := setup(t, onClose)
+		for _, stmt := range []string{"BEGIN", "INSERT INTO users VALUES (2,'bob')"} {
+			_, err := db.ExecContext(t.Context(), stmt)
+			require.NoError(t, err, stmt)
+		}
+		_, err := db.ExecContext(t.Context(), "BEGIN")
+		require.Error(t, err, "SQLite has no nested transaction")
+
+		err = closeWithin(t, db)
+		require.Error(t, err, "the first transaction is still open, so the save must be skipped")
+		assert.ErrorIs(t, err, ErrDatabaseOperation)
+		assert.Contains(t, err.Error(), "transaction")
+
+		got, readErr := os.ReadFile(src) //nolint:gosec // src is under t.TempDir()
+		require.NoError(t, readErr)
+		assert.Equal(t, "id,name\n1,alice\n", string(got))
+	})
 }
 
 // TestAutoSaveOverwriteFollowsASymlink pins that a source reached through a
