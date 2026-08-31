@@ -276,6 +276,15 @@
 // the destination, EnableAutoSave("./dir") included. Parquet and XLSX carry
 // their own encoding and are not line-based, so they ignore both options.
 //
+// A workbook written back to itself keeps what a table does not hold. The save
+// writes onto the workbook it is replacing, so a sheet ExcelSheetPolicyVisibleOnly
+// left out stays, and so do the column widths, merged ranges and comments of the
+// sheets it did load. Each table goes back to the rows it came from, which for a
+// sheet holding a row with no cell in it -- under a title, or between two blocks
+// of records -- are not the rows from the top. A cell already holding the value
+// the save would write is left as it is, so a date cell nothing edited keeps the
+// serial and the number format that make a spreadsheet read it as a day.
+//
 // # ACH and Fedwire
 //
 // ACH (.ach) and Fedwire (.fed) files are loaded, queried and written back like

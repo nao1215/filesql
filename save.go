@@ -14,7 +14,7 @@ import (
 	"sync"
 
 	"github.com/nao1215/filesql/internal/codec"
-	"github.com/xuri/excelize/v2"
+	"github.com/nao1215/filesql/internal/reader"
 	"modernc.org/sqlite"
 )
 
@@ -768,7 +768,7 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBase
 // detectable there; dropping that error would commit a truncated file over the
 // caller's workbook. A write error already in flight wins, because it is the one
 // that explains the failure.
-func writeXLSXWorkbookCompressed(w io.Writer, path string, base *excelize.File, sheets []xlsxSheet, compression CompressionType) (err error) {
+func writeXLSXWorkbookCompressed(w io.Writer, path string, base *reader.Workbook, sheets []xlsxSheet, compression CompressionType) (err error) {
 	writer, closeWriter, err := createCompressedWriter(w, compression)
 	if err != nil {
 		// The handler separates a codec with no writer from a compressor that
@@ -795,8 +795,8 @@ func writeXLSXWorkbookCompressed(w io.Writer, path string, base *excelize.File, 
 // replaces it either way, and a fresh workbook is what every save wrote before
 // this. Only a file that cannot be read at all stops the save, since that is the
 // file about to be overwritten.
-func openWorkbookForOverwrite(path string) (*excelize.File, error) {
-	reader, closeReader, err := NewCompressionFactory().CreateReaderForFile(path)
+func openWorkbookForOverwrite(path string) (*reader.Workbook, error) {
+	src, closeReader, err := NewCompressionFactory().CreateReaderForFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil //nolint:nilnil // No file to write onto is not a failure; the save creates one.
@@ -805,7 +805,10 @@ func openWorkbookForOverwrite(path string) (*excelize.File, error) {
 	}
 	defer func() { _ = closeReader() }()
 
-	book, err := excelize.OpenReader(reader)
+	// The workbook is opened through the reader rather than through excelize
+	// directly, because the save needs what the load knew: which rows of a sheet
+	// the table came from, which the reader answers from the file's own bytes.
+	book, err := reader.OpenWorkbook(src)
 	if err != nil {
 		return nil, nil //nolint:nilnil // Unreadable as a workbook; the save writes a fresh one.
 	}

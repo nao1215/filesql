@@ -47,13 +47,15 @@ func writeXLSXWorkbook(w io.Writer, sheets []xlsxSheet) error {
 // width, a merged range and a comment were gone from the sheets it did load.
 // Only the rows of a sheet a table was loaded from are rewritten, since those
 // rows are what the table is.
-func writeXLSXWorkbookOnto(w io.Writer, base *excelize.File, sheets []xlsxSheet) error {
+func writeXLSXWorkbookOnto(w io.Writer, base *reader.Workbook, sheets []xlsxSheet) error {
 	if len(sheets) == 0 {
 		return fmt.Errorf("%w: no sheets to write", ErrEmptyData)
 	}
 
-	f := base
-	if f == nil {
+	var f *excelize.File
+	if base != nil {
+		f = base.File()
+	} else {
 		f = excelize.NewFile()
 	}
 	defer func() {
@@ -61,11 +63,11 @@ func writeXLSXWorkbookOnto(w io.Writer, base *excelize.File, sheets []xlsxSheet)
 	}()
 
 	for _, sheet := range sheets {
-		had, err := xlsxSheetBefore(f, sheet.name, base != nil)
+		had, err := xlsxSheetBefore(base, sheet.name)
 		if err != nil {
 			return err
 		}
-		written, err := writeXLSXSheet(f, sheet, had.values)
+		written, err := writeXLSXSheet(f, sheet, had)
 		if err != nil {
 			return err
 		}
@@ -170,7 +172,9 @@ func numericCellValue(text string) (float64, bool) {
 	return infer.Float64(text)
 }
 
-// xlsxExtent is how far a sheet's values reached before it was rewritten.
+// xlsxExtent is how far a sheet's values reached before it was rewritten: the
+// last row and the last column they occupied, rather than how many of each
+// there were, since a sheet may hold a row the table is not made of.
 type xlsxExtent struct {
 	rows    int
 	columns int
@@ -185,6 +189,31 @@ type xlsxSheetPrior struct {
 	// compared against to tell an edit from a value that came out of the file
 	// unchanged. It is nil for a workbook being built from nothing.
 	values [][]string
+	// layout is where on the sheet the table sat, so the save writes it back to
+	// the rows it came from. It is zero for a workbook being built from nothing,
+	// which puts the header on row one.
+	layout reader.SheetLayout
+}
+
+// headerRow is the sheet row a save writes the header to.
+func (p xlsxSheetPrior) headerRow() int {
+	if p.layout.HeaderRow == 0 {
+		return 1
+	}
+	return p.layout.HeaderRow
+}
+
+// recordRow is the sheet row a save writes record i to, numbering records from
+// zero. A record the sheet did not have goes under the last one it did.
+func (p xlsxSheetPrior) recordRow(i int) int {
+	if i < len(p.layout.RecordRows) {
+		return p.layout.RecordRows[i]
+	}
+	last := p.headerRow()
+	if n := len(p.layout.RecordRows); n > 0 {
+		last = p.layout.RecordRows[n-1]
+	}
+	return last + 1 + (i - len(p.layout.RecordRows))
 }
 
 // xlsxSheetBefore reads a sheet about to be rewritten. Nothing is removed up
@@ -195,10 +224,11 @@ type xlsxSheetPrior struct {
 //
 // The values are read the way the loader read them, dates included, so a cell
 // that comes back the same string it went in as is recognizable as untouched.
-func xlsxSheetBefore(f *excelize.File, sheetName string, ontoExisting bool) (xlsxSheetPrior, error) {
-	if !ontoExisting {
+func xlsxSheetBefore(base *reader.Workbook, sheetName string) (xlsxSheetPrior, error) {
+	if base == nil {
 		return xlsxSheetPrior{}, nil
 	}
+	f := base.File()
 	if _, err := f.GetSheetIndex(sheetName); err != nil {
 		return xlsxSheetPrior{}, nil //nolint:nilerr // A sheet that is not there yet; writeXLSXSheet creates it.
 	}
@@ -208,6 +238,7 @@ func xlsxSheetBefore(f *excelize.File, sheetName string, ontoExisting bool) (xls
 	}
 	prior := xlsxSheetPrior{
 		extent: xlsxExtent{rows: len(rows)},
+		layout: base.LayoutOf(sheetName, rows),
 		values: reader.NormalizeXLSXDates(f, sheetName, rows),
 	}
 	for _, row := range rows {
@@ -274,7 +305,8 @@ func xlsxUnrepresentableError(column string, r rune) error {
 		ErrUnsupportedFormat, r, column)
 }
 
-func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, before [][]string) (xlsxExtent, error) {
+func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior) (xlsxExtent, error) {
+	before := prior.values
 	columns, rows, err := sheet.open()
 	if err != nil {
 		return xlsxExtent{}, err
@@ -304,15 +336,19 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, before [][]string) (xlsxE
 			ErrUnsupportedFormat)
 	}
 
+	// The table goes back to the rows it came from, which are the rows from the
+	// top only for a sheet holding no row without a cell in it.
+	headerRow := prior.headerRow()
+
 	// Set headers
 	for i, col := range columns {
 		if r, found := xmlControlRune(col); found {
 			return xlsxExtent{}, xlsxUnrepresentableError(col, r)
 		}
-		if unchangedXLSXCell(before, 1, i+1, col) {
+		if unchangedXLSXCell(before, headerRow, i+1, col) {
 			continue
 		}
-		cell, err := excelize.CoordinatesToCellName(i+1, 1)
+		cell, err := excelize.CoordinatesToCellName(i+1, headerRow)
 		if err != nil {
 			return xlsxExtent{}, fmt.Errorf("failed to generate cell name for column %d: %w", i+1, err)
 		}
@@ -329,11 +365,14 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, before [][]string) (xlsxE
 	}
 
 	// Write data rows
-	rowIndex := 2 // Start from row 2 (after header)
+	record := 0
+	rowIndex := headerRow
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
 			return xlsxExtent{}, fmt.Errorf("failed to scan row: %w", err)
 		}
+		rowIndex = prior.recordRow(record)
+		record++
 
 		for i, val := range values {
 			// Every cell is written as text, the same string the text formats
@@ -353,12 +392,13 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, before [][]string) (xlsxE
 				return xlsxExtent{}, fmt.Errorf("failed to set cell value at %s: %w", cell, err)
 			}
 		}
-		rowIndex++
 	}
 
 	if err := rows.Err(); err != nil {
 		return xlsxExtent{}, fmt.Errorf("error reading rows: %w", err)
 	}
 
-	return xlsxExtent{rows: rowIndex - 1, columns: len(columns)}, nil
+	// The extent is the last row the table reaches rather than how many rows it
+	// has, since the two differ by whatever the sheet holds between them.
+	return xlsxExtent{rows: rowIndex, columns: len(columns)}, nil
 }

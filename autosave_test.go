@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -1447,4 +1448,189 @@ func TestAutoSaveOverwriteRefusesASourceItCannotWriteBeforeOpening(t *testing.T)
 
 		assert.Equal(t, []string{"aaa.csv", "zzz.csv"}, dirEntries(t, out))
 	})
+}
+
+// TestAutoSaveOverwriteXLSXWritesTheTableBackWhereItSat pins that a save writes
+// a table back to the rows it was read from.
+//
+// A sheet may hold a row with no cell in it -- above the header, which is a
+// spreadsheet with a gap under its title, or between two records, which is one
+// with its rows in blocks. Such a row is not a record and the load passes over
+// it, so the table's row N is not the sheet's row N+1. A save that writes the
+// header at row 1 and the records under it lands every cell on a row belonging
+// to a different record: the comparison that recognizes an untouched cell never
+// matches, so every cell is written -- as a string, which is what this writer
+// writes -- and a date cell that nothing edited stops being a date and starts
+// wearing whichever format the cell it landed on carried. Nothing reports it,
+// and a save with no edit at all is enough to do it.
+func TestAutoSaveOverwriteXLSXWritesTheTableBackWhereItSat(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		// dataRows is the sheet row each record sits on, in order. The header
+		// sits on the row before the first of them.
+		headerRow int
+		dataRows  []int
+	}{
+		{name: "no blank row at all", headerRow: 1, dataRows: []int{2, 3, 4}},
+		{name: "a blank row above the header", headerRow: 2, dataRows: []int{3, 4, 5}},
+		{name: "two blank rows above the header", headerRow: 3, dataRows: []int{4, 5, 6}},
+		{name: "a blank row between two records", headerRow: 1, dataRows: []int{2, 3, 5}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			path := filepath.Join(dir, "book.xlsx")
+			writeDatedWorkbook(t, path, tt.headerRow, tt.dataRows)
+
+			before := workbookCells(t, path)
+			// Nothing is edited: the save still rewrites the sheet.
+			require.NoError(t, autoSaveOverwrite(t, []string{path}, "UPDATE book SET id = id"))
+
+			assert.Equal(t, before, workbookCells(t, path),
+				"a save that changed nothing leaves every cell where and as it was")
+		})
+	}
+
+	t.Run("a record added to the table goes under the last one", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "book.xlsx")
+		writeDatedWorkbook(t, path, 2, []int{3, 4, 5})
+
+		want := workbookCells(t, path)
+		want["A6"] = xlsxCell{raw: "4", kind: excelize.CellTypeSharedString}
+		want["C6"] = xlsxCell{raw: "row4", kind: excelize.CellTypeSharedString}
+
+		require.NoError(t, autoSaveOverwrite(t, []string{path},
+			"INSERT INTO book (id, \"when\", note) VALUES (4, NULL, 'row4')"))
+		assert.Equal(t, want, workbookCells(t, path))
+	})
+
+	t.Run("a record removed leaves the sheet no longer than the table", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "book.xlsx")
+		writeDatedWorkbook(t, path, 2, []int{3, 4, 5})
+
+		before := workbookCells(t, path)
+		require.NoError(t, autoSaveOverwrite(t, []string{path}, "DELETE FROM book WHERE id = 3"))
+
+		// The rows the two remaining records came from keep what they held, and
+		// the row the third came from is gone.
+		cells := workbookCells(t, path)
+		assert.Equal(t, before["B3"], cells["B3"])
+		assert.Equal(t, before["B4"], cells["B4"])
+		assert.NotContains(t, cells, "B5")
+	})
+
+	t.Run("an edited cell is the only one that changes", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "book.xlsx")
+		writeDatedWorkbook(t, path, 2, []int{3, 4, 5})
+
+		want := workbookCells(t, path)
+		want["C4"] = xlsxCell{raw: "edited", kind: excelize.CellTypeSharedString}
+
+		require.NoError(t, autoSaveOverwrite(t, []string{path}, "UPDATE book SET note = 'edited' WHERE id = 2"))
+		assert.Equal(t, want, workbookCells(t, path))
+	})
+}
+
+// xlsxCell is what a cell holds, apart from where it is: the value the file
+// stores rather than the one a format renders, the type that says how to read
+// it, and the number format that decides whether a spreadsheet calls it a date.
+type xlsxCell struct {
+	raw    string
+	kind   excelize.CellType
+	numFmt int
+}
+
+// writeDatedWorkbook writes a sheet whose header sits on headerRow and whose
+// records sit on dataRows, with a date column stored the way a workbook stores
+// one: a serial wearing a date format.
+func writeDatedWorkbook(t *testing.T, path string, headerRow int, dataRows []int) {
+	t.Helper()
+
+	// The sheet is named after the file, so the workbook loads as one table and
+	// the save writes back onto it.
+	const sheet = "book"
+	// The serial of the first date, which the records count up from, and the
+	// format that makes a spreadsheet read the serials as days. A date column
+	// is stored this way, and it is what the save must not turn into text.
+	const (
+		firstSerial = 45000
+		dateNumFmt  = 14
+	)
+
+	f := excelize.NewFile()
+	defer func() {
+		_ = f.Close()
+	}()
+	require.NoError(t, f.SetSheetName(defaultSheetName, sheet))
+
+	style, err := f.NewStyle(&excelize.Style{NumFmt: dateNumFmt})
+	require.NoError(t, err)
+
+	for c, name := range []string{"id", "when", "note"} {
+		require.NoError(t, f.SetCellValue(sheet, cellAt(t, c+1, headerRow), name))
+	}
+	for i, row := range dataRows {
+		require.NoError(t, f.SetCellValue(sheet, cellAt(t, 1, row), i+1))
+		require.NoError(t, f.SetCellValue(sheet, cellAt(t, 2, row), float64(firstSerial+i)))
+		require.NoError(t, f.SetCellStyle(sheet, cellAt(t, 2, row), cellAt(t, 2, row), style))
+		require.NoError(t, f.SetCellValue(sheet, cellAt(t, 3, row), fmt.Sprintf("row%d", i+1)))
+	}
+	require.NoError(t, f.SaveAs(path))
+}
+
+// workbookCells is every cell a sheet holds, by its reference.
+func workbookCells(t *testing.T, path string) map[string]xlsxCell {
+	t.Helper()
+
+	const sheet = "book"
+
+	f, err := excelize.OpenFile(path)
+	require.NoError(t, err)
+	defer func() {
+		_ = f.Close()
+	}()
+
+	rows, err := f.GetRows(sheet)
+	require.NoError(t, err)
+
+	cells := make(map[string]xlsxCell)
+	for r := range rows {
+		for c := range 3 {
+			axis := cellAt(t, c+1, r+1)
+			raw, err := f.GetCellValue(sheet, axis, excelize.Options{RawCellValue: true})
+			require.NoError(t, err)
+			if raw == "" {
+				continue
+			}
+			kind, err := f.GetCellType(sheet, axis)
+			require.NoError(t, err)
+			styleID, err := f.GetCellStyle(sheet, axis)
+			require.NoError(t, err)
+			style, err := f.GetStyle(styleID)
+			require.NoError(t, err)
+			cells[axis] = xlsxCell{raw: raw, kind: kind, numFmt: style.NumFmt}
+		}
+	}
+	return cells
+}
+
+// cellAt names a cell by its column and row, both numbered from one.
+func cellAt(t *testing.T, col, row int) string {
+	t.Helper()
+
+	name, err := excelize.CoordinatesToCellName(col, row)
+	require.NoError(t, err)
+	return name
 }
