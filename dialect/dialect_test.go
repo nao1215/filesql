@@ -800,6 +800,8 @@ func TestAlterTableNamesTheConstraintItCannotAdd(t *testing.T) {
 			"ALTER TABLE t ADD CONSTRAINT uq UNIQUE (a)",
 			"ALTER TABLE t ADD PRIMARY KEY (a)",
 			"ALTER TABLE t ADD UNIQUE (a)",
+			"ALTER TABLE t ADD UNIQUE KEY uq (a)",
+			"ALTER TABLE t ADD UNIQUE INDEX i (a)",
 			"ALTER TABLE t ADD CHECK (a > 0)",
 			"ALTER TABLE t ADD FOREIGN KEY (a) REFERENCES u(id)",
 			"ALTER TABLE t DROP CONSTRAINT ck",

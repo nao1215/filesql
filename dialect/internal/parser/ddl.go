@@ -765,16 +765,26 @@ func (p *Parser) refuseAlterTableElement(adding bool) error {
 
 // declaresAnObject reports whether the word the cursor is on opens a constraint
 // or an index rather than naming a column. One being added carries a column
-// list, with or without a name of its own in front of it; one being dropped
-// carries the name of what to drop, where a column of the same name carries
-// nothing.
+// list, behind an optional INDEX or KEY of MySQL's spelling and an optional
+// name of its own -- "ADD UNIQUE KEY uq (a)" is the same constraint as "ADD
+// UNIQUE (a)". One being dropped carries the name of what to drop, where a
+// column of the same name carries nothing.
 func (p *Parser) declaresAnObject(adding bool) bool {
 	if !adding {
-		return p.peek(1).Kind == token.Word || p.peek(1).Kind == token.QuotedIdent
+		return p.namesSomething(1)
 	}
-	if p.peek(1).IsOp("(") {
-		return true
+	at := 1
+	if p.peek(at).IsWord("INDEX") || p.peek(at).IsWord("KEY") {
+		at++
 	}
-	named := p.peek(1).Kind == token.Word || p.peek(1).Kind == token.QuotedIdent
-	return named && p.peek(2).IsOp("(")
+	if p.namesSomething(at) {
+		at++
+	}
+	return p.peek(at).IsOp("(")
+}
+
+// namesSomething reports whether the token n places ahead is a name.
+func (p *Parser) namesSomething(n int) bool {
+	kind := p.peek(n).Kind
+	return kind == token.Word || kind == token.QuotedIdent
 }
