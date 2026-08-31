@@ -393,6 +393,20 @@ func TestStatementTxEffect(t *testing.T) {
 		{query: "", want: txEffectNone},
 		{query: "-- BEGIN", want: txEffectNone},
 		{query: "CREATE TRIGGER t AFTER INSERT ON u BEGIN SELECT 1; END", want: txEffectNone},
+
+		// A comment is not part of the statement, so what follows one is read
+		// as though it were written alone. Everything a caller can put in front
+		// of the keyword has to be skipped, including several comments in a row
+		// and one that never ends.
+		{query: "/* batch */ BEGIN", want: txEffectBegin},
+		{query: "-- batch\nBEGIN", want: txEffectBegin},
+		{query: "-- one\n /* two */\tCOMMIT", want: txEffectEnd},
+		{query: "/* a */-- b\n/* c */ROLLBACK", want: txEffectEnd},
+		{query: "/* c */ ROLLBACK TO s", want: txEffectNone},
+		{query: "/* never closed BEGIN", want: txEffectNone},
+		{query: "--", want: txEffectNone},
+		{query: "/**/COMMIT", want: txEffectEnd},
+		{query: "SELECT '/* not a comment */ COMMIT'", want: txEffectNone},
 	} {
 		assert.Equal(t, tt.want, statementTxEffect(tt.query), tt.query)
 	}

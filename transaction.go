@@ -476,15 +476,44 @@ func statementTxEffect(query string) txEffect {
 }
 
 // leadingWord returns the first run of letters in s and what follows it. A
-// statement that starts with anything else -- a comment, a parenthesis, a
-// number -- has no leading word, which is what makes it none of the three.
+// statement whose first thing is not a letter -- a parenthesis, a number, a
+// string -- has no leading word, which is what makes it none of the three.
 func leadingWord(s string) (string, string) {
-	s = strings.TrimLeft(s, " \t\r\n")
+	s = skipToStatement(s)
 	end := 0
 	for end < len(s) && isASCIILetter(s[end]) {
 		end++
 	}
 	return s[:end], s[end:]
+}
+
+// skipToStatement drops the whitespace and the comments at the front of s, so
+// what is left begins with the first thing the statement says. A comment is not
+// part of the statement: reading from the first non-space character alone left
+// a commented BEGIN looking like no transaction at all, and a commented COMMIT
+// leaving one counted open that SQLite had already ended.
+func skipToStatement(s string) string {
+	for {
+		s = strings.TrimLeft(s, " \t\r\n\v\f")
+		switch {
+		case strings.HasPrefix(s, "--"):
+			end := strings.IndexByte(s, '\n')
+			if end < 0 {
+				// A line comment with no line after it is the whole statement.
+				return ""
+			}
+			s = s[end+1:]
+		case strings.HasPrefix(s, "/*"):
+			end := strings.Index(s[2:], "*/")
+			if end < 0 {
+				// SQLite reads an unterminated block comment to the end.
+				return ""
+			}
+			s = s[2+end+2:]
+		default:
+			return s
+		}
+	}
 }
 
 func isASCIILetter(b byte) bool {

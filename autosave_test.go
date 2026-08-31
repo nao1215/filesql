@@ -1354,6 +1354,17 @@ func TestAutoSaveCloseWithAnOpenTransaction(t *testing.T) {
 		{name: "a ROLLBACK releases it", stmts: []string{"BEGIN", "INSERT INTO users VALUES (2,'bob')", "ROLLBACK"}, want: "id,name\n1,alice\n", saved: true},
 		{name: "a statement that only starts with the letters is not one", stmts: []string{"UPDATE users SET name='beginning' WHERE id=1"}, want: "id,name\n1,beginning\n", saved: true},
 		{name: "a rollback to a savepoint does not release it", stmts: []string{"BEGIN", "SAVEPOINT s", "INSERT INTO users VALUES (2,'bob')", "ROLLBACK TRANSACTION TO SAVEPOINT s"}, want: "id,name\n1,alice\n"},
+		// A comment is not part of the statement, so the keyword behind one
+		// counts as the same keyword. Reading only from the first non-space
+		// character made a commented BEGIN invisible and a commented COMMIT
+		// leave a transaction counted open that SQLite had already ended, so
+		// the save a caller had committed for was refused.
+		{name: "a BEGIN behind a block comment counts", stmts: []string{"/* batch */ BEGIN", "INSERT INTO users VALUES (2,'bob')"}, want: "id,name\n1,alice\n"},
+		{name: "a BEGIN behind a line comment counts", stmts: []string{"-- batch\nBEGIN", "INSERT INTO users VALUES (2,'bob')"}, want: "id,name\n1,alice\n"},
+		{name: "a COMMIT behind a block comment releases it", stmts: []string{"BEGIN", "INSERT INTO users VALUES (2,'bob')", "/* done */ COMMIT"}, want: "id,name\n1,alice\n2,bob\n", saved: true},
+		{name: "a COMMIT behind a line comment releases it", stmts: []string{"BEGIN", "INSERT INTO users VALUES (2,'bob')", "-- done\nCOMMIT"}, want: "id,name\n1,alice\n2,bob\n", saved: true},
+		{name: "a ROLLBACK behind stacked comments releases it", stmts: []string{"BEGIN", "INSERT INTO users VALUES (2,'bob')", "-- one\n /* two */\tROLLBACK"}, want: "id,name\n1,alice\n", saved: true},
+		{name: "a comment inside a string literal is not one", stmts: []string{"BEGIN", "INSERT INTO users VALUES (2,'/* done */ COMMIT')"}, want: "id,name\n1,alice\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
