@@ -9,7 +9,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strings"
+
+	"github.com/nao1215/filesql/internal/codec"
 )
 
 // fileProcessor handles file-specific processing operations
@@ -322,13 +323,6 @@ func (fp *fileProcessor) deduplicateCompressedFiles(files []string) []string {
 
 // isCompressedFile checks if a file path represents a compressed file
 func (fp *fileProcessor) isCompressedFile(filePath string) bool {
-	p := strings.ToLower(filePath)
-	return strings.HasSuffix(p, extGZ) ||
-		strings.HasSuffix(p, extBZ2) ||
-		strings.HasSuffix(p, extXZ) ||
-		strings.HasSuffix(p, extZSTD) ||
-		strings.HasSuffix(p, extZLIB) ||
-		strings.HasSuffix(p, extSNAPPY) ||
-		strings.HasSuffix(p, extS2) ||
-		strings.HasSuffix(p, extLZ4)
+	found, _ := codec.FromPath(filePath)
+	return found != codec.None
 }

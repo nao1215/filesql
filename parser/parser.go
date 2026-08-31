@@ -514,211 +514,157 @@ const (
 	extJSONL   = ".jsonl"
 )
 
-// Compression extensions: ".gz", ".bz2", ".xz", ".zst", ".z", ".snappy", ".s2"
-// and ".lz4". Each is named by the codec that reads and writes it, so the two
-// spellings cannot drift apart.
-const (
-	extGZ     = codec.ExtGZ
-	extBZ2    = codec.ExtBZ2
-	extXZ     = codec.ExtXZ
-	extZSTD   = codec.ExtZSTD
-	extZLIB   = codec.ExtZLIB
-	extSNAPPY = codec.ExtSNAPPY
-	extS2     = codec.ExtS2
-	extLZ4    = codec.ExtLZ4
-)
-
-// Compression type identifiers
-const (
-	compGZ     = "gz"
-	compBZ2    = "bz2"
-	compXZ     = "xz"
-	compZSTD   = "zstd"
-	compZLIB   = "zlib"
-	compSNAPPY = "snappy"
-	compS2     = "s2"
-	compLZ4    = "lz4"
-)
-
 // DetectFileType detects file type from path extension, including compression variants.
 func DetectFileType(path string) FileType {
-	basePath := path
-	var compressionType string
-
-	// Remove compression extensions
-	lowerPath := strings.ToLower(path)
-	switch {
-	case strings.HasSuffix(lowerPath, extGZ):
-		basePath = path[:len(path)-len(extGZ)]
-		compressionType = compGZ
-	case strings.HasSuffix(lowerPath, extBZ2):
-		basePath = path[:len(path)-len(extBZ2)]
-		compressionType = compBZ2
-	case strings.HasSuffix(lowerPath, extXZ):
-		basePath = path[:len(path)-len(extXZ)]
-		compressionType = compXZ
-	case strings.HasSuffix(lowerPath, extZSTD):
-		basePath = path[:len(path)-len(extZSTD)]
-		compressionType = compZSTD
-	case strings.HasSuffix(lowerPath, extZLIB):
-		basePath = path[:len(path)-len(extZLIB)]
-		compressionType = compZLIB
-	case strings.HasSuffix(lowerPath, extSNAPPY):
-		basePath = path[:len(path)-len(extSNAPPY)]
-		compressionType = compSNAPPY
-	case strings.HasSuffix(lowerPath, extS2):
-		basePath = path[:len(path)-len(extS2)]
-		compressionType = compS2
-	case strings.HasSuffix(lowerPath, extLZ4):
-		basePath = path[:len(path)-len(extLZ4)]
-		compressionType = compLZ4
-	}
+	// The codec a path names is the codec package's to say; this function's job
+	// is the format under it.
+	compressionType, basePath := codec.FromPath(path)
 
 	ext := strings.ToLower(filepath.Ext(basePath))
 	switch ext {
 	case extCSV:
 		switch compressionType {
-		case compGZ:
+		case codec.GZ:
 			return CSVGZ
-		case compBZ2:
+		case codec.BZ2:
 			return CSVBZ2
-		case compXZ:
+		case codec.XZ:
 			return CSVXZ
-		case compZSTD:
+		case codec.ZSTD:
 			return CSVZSTD
-		case compZLIB:
+		case codec.ZLIB:
 			return CSVZLIB
-		case compSNAPPY:
+		case codec.SNAPPY:
 			return CSVSNAPPY
-		case compS2:
+		case codec.S2:
 			return CSVS2
-		case compLZ4:
+		case codec.LZ4:
 			return CSVLZ4
 		default:
 			return CSV
 		}
 	case extTSV:
 		switch compressionType {
-		case compGZ:
+		case codec.GZ:
 			return TSVGZ
-		case compBZ2:
+		case codec.BZ2:
 			return TSVBZ2
-		case compXZ:
+		case codec.XZ:
 			return TSVXZ
-		case compZSTD:
+		case codec.ZSTD:
 			return TSVZSTD
-		case compZLIB:
+		case codec.ZLIB:
 			return TSVZLIB
-		case compSNAPPY:
+		case codec.SNAPPY:
 			return TSVSNAPPY
-		case compS2:
+		case codec.S2:
 			return TSVS2
-		case compLZ4:
+		case codec.LZ4:
 			return TSVLZ4
 		default:
 			return TSV
 		}
 	case extLTSV:
 		switch compressionType {
-		case compGZ:
+		case codec.GZ:
 			return LTSVGZ
-		case compBZ2:
+		case codec.BZ2:
 			return LTSVBZ2
-		case compXZ:
+		case codec.XZ:
 			return LTSVXZ
-		case compZSTD:
+		case codec.ZSTD:
 			return LTSVZSTD
-		case compZLIB:
+		case codec.ZLIB:
 			return LTSVZLIB
-		case compSNAPPY:
+		case codec.SNAPPY:
 			return LTSVSNAPPY
-		case compS2:
+		case codec.S2:
 			return LTSVS2
-		case compLZ4:
+		case codec.LZ4:
 			return LTSVLZ4
 		default:
 			return LTSV
 		}
 	case extParquet:
 		switch compressionType {
-		case compGZ:
+		case codec.GZ:
 			return ParquetGZ
-		case compBZ2:
+		case codec.BZ2:
 			return ParquetBZ2
-		case compXZ:
+		case codec.XZ:
 			return ParquetXZ
-		case compZSTD:
+		case codec.ZSTD:
 			return ParquetZSTD
-		case compZLIB:
+		case codec.ZLIB:
 			return ParquetZLIB
-		case compSNAPPY:
+		case codec.SNAPPY:
 			return ParquetSNAPPY
-		case compS2:
+		case codec.S2:
 			return ParquetS2
-		case compLZ4:
+		case codec.LZ4:
 			return ParquetLZ4
 		default:
 			return Parquet
 		}
 	case extXLSX:
 		switch compressionType {
-		case compGZ:
+		case codec.GZ:
 			return XLSXGZ
-		case compBZ2:
+		case codec.BZ2:
 			return XLSXBZ2
-		case compXZ:
+		case codec.XZ:
 			return XLSXXZ
-		case compZSTD:
+		case codec.ZSTD:
 			return XLSXZSTD
-		case compZLIB:
+		case codec.ZLIB:
 			return XLSXZLIB
-		case compSNAPPY:
+		case codec.SNAPPY:
 			return XLSXSNAPPY
-		case compS2:
+		case codec.S2:
 			return XLSXS2
-		case compLZ4:
+		case codec.LZ4:
 			return XLSXLZ4
 		default:
 			return XLSX
 		}
 	case extJSON:
 		switch compressionType {
-		case compGZ:
+		case codec.GZ:
 			return JSONGZ
-		case compBZ2:
+		case codec.BZ2:
 			return JSONBZ2
-		case compXZ:
+		case codec.XZ:
 			return JSONXZ
-		case compZSTD:
+		case codec.ZSTD:
 			return JSONZSTD
-		case compZLIB:
+		case codec.ZLIB:
 			return JSONZLIB
-		case compSNAPPY:
+		case codec.SNAPPY:
 			return JSONSNAPPY
-		case compS2:
+		case codec.S2:
 			return JSONS2
-		case compLZ4:
+		case codec.LZ4:
 			return JSONLZ4
 		default:
 			return JSON
 		}
 	case extJSONL:
 		switch compressionType {
-		case compGZ:
+		case codec.GZ:
 			return JSONLGZ
-		case compBZ2:
+		case codec.BZ2:
 			return JSONLBZ2
-		case compXZ:
+		case codec.XZ:
 			return JSONLXZ
-		case compZSTD:
+		case codec.ZSTD:
 			return JSONLZSTD
-		case compZLIB:
+		case codec.ZLIB:
 			return JSONLZLIB
-		case compSNAPPY:
+		case codec.SNAPPY:
 			return JSONLSNAPPY
-		case compS2:
+		case codec.S2:
 			return JSONLS2
-		case compLZ4:
+		case codec.LZ4:
 			return JSONLLZ4
 		default:
 			return JSONL

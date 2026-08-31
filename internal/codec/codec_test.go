@@ -494,3 +494,108 @@ func decodeAll(t *testing.T, c Codec, data []byte) (string, error) {
 	}
 	return string(out), err
 }
+
+// TestAllHoldsEveryCodecThatCompresses pins the list against the codecs
+// themselves, so a codec added to the type but not to the list, or the other
+// way round, fails here rather than quietly dropping out of everything that
+// ranges over it.
+func TestAllHoldsEveryCodecThatCompresses(t *testing.T) {
+	t.Parallel()
+
+	// Every codec from None upward, walked by value rather than by the list, so
+	// the walk cannot inherit the list's own omissions. LZ4 is the last one.
+	for c := None; c <= LZ4; c++ {
+		wantListed := c != None
+		listed := false
+		for _, in := range All {
+			if in == c {
+				listed = true
+				break
+			}
+		}
+		if listed != wantListed {
+			t.Errorf("codec %s: in All = %v, want %v", c, listed, wantListed)
+		}
+		if wantListed && c.Extension() == "" {
+			t.Errorf("codec %s: a codec in All must have an extension to be found by", c)
+		}
+	}
+
+	if got := len(All); got != int(LZ4) {
+		t.Errorf("len(All) = %d, want %d, one per codec but None", got, int(LZ4))
+	}
+
+	seen := make(map[string]Codec, len(All))
+	for _, c := range All {
+		if first, taken := seen[c.Extension()]; taken {
+			t.Errorf("codecs %s and %s share the extension %q, so a path cannot name one of them", first, c, c.Extension())
+		}
+		seen[c.Extension()] = c
+	}
+}
+
+// TestFromPath pins what a path says about its codec.
+func TestFromPath(t *testing.T) {
+	t.Parallel()
+
+	t.Run("every codec is found by its own extension", func(t *testing.T) {
+		t.Parallel()
+
+		for _, c := range All {
+			got, rest := FromPath("dir/data.csv" + c.Extension())
+			if got != c || rest != "dir/data.csv" {
+				t.Errorf("FromPath for %s = (%s, %q), want (%s, %q)", c, got, rest, c, "dir/data.csv")
+			}
+		}
+	})
+
+	t.Run("the longest extension wins", func(t *testing.T) {
+		t.Parallel()
+
+		// ".gz" ends with ZLIB's ".z", so a lookup that took the first match in
+		// declaration order would read a gzipped file as a zlib one whenever
+		// ZLIB came first.
+		if got, rest := FromPath("data.csv.gz"); got != GZ || rest != "data.csv" {
+			t.Errorf("FromPath(\"data.csv.gz\") = (%s, %q), want (gz, \"data.csv\")", got, rest)
+		}
+		if got, rest := FromPath("data.csv.z"); got != ZLIB || rest != "data.csv" {
+			t.Errorf("FromPath(\"data.csv.z\") = (%s, %q), want (zlib, \"data.csv\")", got, rest)
+		}
+	})
+
+	t.Run("case is folded and the path keeps its own", func(t *testing.T) {
+		t.Parallel()
+
+		got, rest := FromPath("DATA.CSV.GZ")
+		if got != GZ || rest != "DATA.CSV" {
+			t.Errorf("FromPath(\"DATA.CSV.GZ\") = (%s, %q), want (gz, \"DATA.CSV\")", got, rest)
+		}
+	})
+
+	t.Run("a path naming no codec is answered whole", func(t *testing.T) {
+		t.Parallel()
+
+		for _, path := range []string{"data.csv", "data", "", "data.gzip", ".z2"} {
+			got, rest := FromPath(path)
+			if got != None || rest != path {
+				t.Errorf("FromPath(%q) = (%s, %q), want (none, %q)", path, got, rest, path)
+			}
+		}
+	})
+
+	t.Run("only one extension comes off", func(t *testing.T) {
+		t.Parallel()
+
+		if got, rest := FromPath("data.csv.gz.gz"); got != GZ || rest != "data.csv.gz" {
+			t.Errorf("FromPath(\"data.csv.gz.gz\") = (%s, %q), want (gz, \"data.csv.gz\")", got, rest)
+		}
+	})
+
+	t.Run("a path that is only an extension keeps nothing", func(t *testing.T) {
+		t.Parallel()
+
+		if got, rest := FromPath(".gz"); got != GZ || rest != "" {
+			t.Errorf("FromPath(\".gz\") = (%s, %q), want (gz, \"\")", got, rest)
+		}
+	})
+}

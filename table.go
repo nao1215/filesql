@@ -6,6 +6,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/nao1215/filesql/internal/codec"
 )
 
 // sheetFallbackName is the table name used when a sheet name sanitizes to empty.
@@ -119,16 +121,9 @@ func (t *table) equal(t2 *table) bool {
 
 // tableFromFilePath creates table name from file path
 func tableFromFilePath(filePath string) string {
-	fileName := filepath.Base(filePath)
-	lowerFileName := strings.ToLower(fileName)
-	// Remove compression extensions first (case-insensitive)
-	for _, ext := range []string{extGZ, extBZ2, extXZ, extZSTD, extZLIB, extSNAPPY, extS2, extLZ4} {
-		if strings.HasSuffix(lowerFileName, ext) {
-			fileName = fileName[:len(fileName)-len(ext)]
-			break
-		}
-	}
-	// Then remove the file type extension
+	// The codec comes off first, so "users.csv.gz" is left as "users.csv" for
+	// the format extension to come off in turn.
+	_, fileName := codec.FromPath(filepath.Base(filePath))
 	return strings.TrimSuffix(fileName, filepath.Ext(fileName))
 }
 

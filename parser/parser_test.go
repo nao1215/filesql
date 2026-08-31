@@ -1301,9 +1301,6 @@ func TestParserSurfaceEdges(t *testing.T) {
 	t.Run("the extension constants spell what a file is named", func(t *testing.T) {
 		t.Parallel()
 
-		// The compression ones are the codecs' own constants, so this holds the
-		// value the detection compares against rather than the spelling of the
-		// expression.
 		assert.Equal(t, ".csv", extCSV)
 		assert.Equal(t, ".tsv", extTSV)
 		assert.Equal(t, ".ltsv", extLTSV)
@@ -1311,14 +1308,6 @@ func TestParserSurfaceEdges(t *testing.T) {
 		assert.Equal(t, ".xlsx", extXLSX)
 		assert.Equal(t, ".json", extJSON)
 		assert.Equal(t, ".jsonl", extJSONL)
-		assert.Equal(t, ".gz", extGZ)
-		assert.Equal(t, ".bz2", extBZ2)
-		assert.Equal(t, ".xz", extXZ)
-		assert.Equal(t, ".zst", extZSTD)
-		assert.Equal(t, ".z", extZLIB)
-		assert.Equal(t, ".snappy", extSNAPPY)
-		assert.Equal(t, ".s2", extS2)
-		assert.Equal(t, ".lz4", extLZ4)
 	})
 }
 
