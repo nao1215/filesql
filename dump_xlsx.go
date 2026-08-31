@@ -254,7 +254,7 @@ func xlsxSheetBefore(base *reader.Workbook, sheetName string) (xlsxSheetPrior, e
 	prior := xlsxSheetPrior{
 		extent: xlsxExtent{rows: len(rows)},
 		layout: base.LayoutOf(sheetName, rows),
-		values: reader.NormalizeXLSXDates(f, sheetName, rows),
+		values: reader.NormalizeXLSXDates(f, sheetName, reader.NormalizeXLSXNumbers(f, sheetName, rows)),
 	}
 	for _, row := range rows {
 		prior.extent.columns = max(prior.extent.columns, len(row))
