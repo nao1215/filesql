@@ -78,6 +78,15 @@ func TestRenderSeparatesTokensThatWouldFuse(t *testing.T) {
 		{"SELECT a - -1 FROM t", "- -1"},
 		// "a--1" is a column and a comment, which is what SQLite reads too.
 		{"SELECT 1 - -2", "- -2"},
+		// A number may end in its decimal point, and the word after it is a
+		// word: "1.FROM" is one token to SQLite and not one it knows.
+		{"SELECT 1. FROM t", "1. FROM"},
+		{"SELECT a FROM t WHERE c > 1. AND a = 1", "1. AND"},
+		{"SELECT 1. AS n", "1. AS"},
+		// The dot that qualifies a name still binds to what follows it, which
+		// is the rule the one above must not be fixed by loosening.
+		{"SELECT t.a FROM t", "t.a"},
+		{"SELECT t.* FROM t", "t.*"},
 	} {
 		t.Run(tt.query, func(t *testing.T) {
 			t.Parallel()
@@ -87,5 +96,45 @@ func TestRenderSeparatesTokensThatWouldFuse(t *testing.T) {
 				t.Errorf("Render(%q) = %q, want it to contain %q", tt.query, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestRenderNeverLabelsAStar holds the label rule to what it is for. An
+// unaliased select item carries its source text as an alias when lowering
+// rewrote it, so the caller's column keeps its name; a star names no single
+// column and cannot take an alias at all, so writing one produces SQL no
+// engine reads. Whitespace around the qualifying dot is what makes the source
+// text differ from the rendering, and it is legal everywhere.
+func TestRenderNeverLabelsAStar(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct{ query, want string }{
+		{"SELECT t. * FROM t", "SELECT t.* FROM t"},
+		{"SELECT t .* FROM t", "SELECT t.* FROM t"},
+		{"SELECT t.\n* FROM t", "SELECT t.* FROM t"},
+		{"SELECT  * FROM t", "SELECT * FROM t"},
+		{"SELECT t. *, a FROM t", "SELECT t.*, a FROM t"},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			t.Parallel()
+
+			if got := mustRender(t, tt.query); got != tt.want {
+				t.Errorf("Render(%q) = %q, want %q", tt.query, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRenderLabelsAnItemItRewrote is the other half of the rule above: an
+// item the renderer spells differently from the caller keeps its original
+// text as a label, so a star can be exempted without exempting everything. A
+// qualified column written with a space around its dot is the same shape as
+// the star cases and does name one column, so it keeps the label.
+func TestRenderLabelsAnItemItRewrote(t *testing.T) {
+	t.Parallel()
+
+	got := mustRender(t, "SELECT t. a FROM t")
+	if !strings.Contains(got, `AS "t. a"`) {
+		t.Errorf("Render() = %q, want it to label the item with its own text", got)
 	}
 }

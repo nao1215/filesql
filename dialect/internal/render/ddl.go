@@ -511,9 +511,7 @@ func (w *writer) pragma(n *ast.PragmaStmt) error {
 	w.word("PRAGMA")
 	for i, part := range n.Name {
 		if i > 0 {
-			w.b.WriteByte('.')
-			w.name(part)
-			continue
+			w.dot()
 		}
 		w.name(part)
 	}

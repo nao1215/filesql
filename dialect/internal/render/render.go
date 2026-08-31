@@ -5,7 +5,6 @@
 package render
 
 import (
-	"strconv"
 	"strings"
 
 	"github.com/nao1215/filesql/dialect/internal/ast"
@@ -18,6 +17,9 @@ func Render(stmt ast.Stmt) (string, error) {
 	if err := w.stmt(stmt); err != nil {
 		return "", err
 	}
+	if w.err != nil {
+		return "", w.err
+	}
 	return w.b.String(), nil
 }
 
@@ -25,8 +27,13 @@ type writer struct {
 	b strings.Builder
 	// tight suppresses the separator before the next token, for the places
 	// where a token belongs to the one before it: a sign and its operand, a
-	// function name and its parenthesis.
+	// function name and its parenthesis, a qualifying dot and the name after
+	// it.
 	tight bool
+	// err holds a refusal raised while writing a token, for the checks that
+	// belong to every token rather than to one node. word cannot return an
+	// error, so Render reads this instead.
+	err error
 }
 
 // word writes a token, separating it from what is already written unless the
@@ -39,12 +46,24 @@ func (w *writer) word(s string) {
 	if s == "" {
 		return
 	}
+	if strings.IndexByte(s, 0) >= 0 && w.err == nil {
+		w.err = sqlerr.Unsupportedf(
+			"a NUL byte in a string or a name is not supported: SQLite ends a statement at the first NUL, so no SQL text can carry one")
+	}
 	tight := w.tight
 	w.tight = false
 	if w.b.Len() > 0 && (!tight || w.wouldFuse(s[0])) && w.separate(s[0]) {
 		w.b.WriteByte(' ')
 	}
 	w.b.WriteString(s)
+}
+
+// dot writes the dot that qualifies a name. The name after it belongs to it, so
+// nothing separates the two. It is written here rather than through word
+// because a dot is not a token of its own.
+func (w *writer) dot() {
+	w.b.WriteByte('.')
+	w.tight = true
 }
 
 // wouldFuse reports whether writing c straight after what is already written
@@ -66,6 +85,11 @@ func operatorByte(c byte) bool {
 
 // separate reports whether a space belongs between what has been written and a
 // token starting with c.
+//
+// The question is about the tokens and not about the bytes they end in: a
+// number may end in its decimal point, and reading the last byte written as a
+// qualifying dot wrote "1.FROM", which SQLite reads as one token it does not
+// know. What follows a qualifying dot is held to it by tight instead.
 func (w *writer) separate(c byte) bool {
 	// A leading dot is a number such as ".25"; a qualification dot is written
 	// straight into the buffer rather than through here, so it never arrives.
@@ -73,11 +97,7 @@ func (w *writer) separate(c byte) bool {
 	case ')', ',':
 		return false
 	}
-	switch w.lastByte() {
-	case '(', '.':
-		return false
-	}
-	return true
+	return w.lastByte() != '('
 }
 
 func (w *writer) lastByte() byte {
@@ -172,16 +192,6 @@ func QuoteString(value string) string {
 // one means lowering left something behind, so the message names the node.
 func unsupported(span ast.Span, what string) error {
 	return sqlerr.At(sqlerr.ErrUnsupportedSyntax, span.Line, span.Col, "%s has no SQLite form", what)
-}
-
-// quoteNumber writes a numeric literal. A literal that SQLite's own lexer would
-// read differently -- a hexadecimal or a bit string -- never reaches here,
-// because lowering turns it into a decimal.
-func quoteNumber(v string) string {
-	if _, err := strconv.ParseFloat(v, 64); err == nil {
-		return v
-	}
-	return v
 }
 
 // quoteIfNeeded writes a name that came from the tree as a plain string rather

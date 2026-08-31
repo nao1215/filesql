@@ -224,7 +224,10 @@ func (w *writer) expr(e ast.Expr, minPrec int) error {
 func (w *writer) literal(n *ast.Literal) error {
 	switch n.Kind {
 	case ast.LitNumber:
-		w.word(quoteNumber(n.Value))
+		// A literal SQLite's own lexer would read differently -- a hexadecimal
+		// or a bit string -- never reaches here, because lowering turns it into
+		// a decimal.
+		w.word(n.Value)
 	case ast.LitString:
 		w.word(QuoteString(n.Value))
 	case ast.LitBlob:
@@ -246,9 +249,7 @@ func (w *writer) literal(n *ast.Literal) error {
 func (w *writer) columnRef(n *ast.ColumnRef) error {
 	for i, part := range n.Parts {
 		if i > 0 {
-			w.b.WriteByte('.')
-			w.name(part)
-			continue
+			w.dot()
 		}
 		w.name(part)
 	}
@@ -258,13 +259,9 @@ func (w *writer) columnRef(n *ast.ColumnRef) error {
 func (w *writer) star(n *ast.Star) error {
 	for _, part := range n.Qualifier {
 		w.name(part)
-		w.b.WriteByte('.')
+		w.dot()
 	}
-	if len(n.Qualifier) == 0 {
-		w.word("*")
-		return nil
-	}
-	w.b.WriteByte('*')
+	w.word("*")
 	return nil
 }
 

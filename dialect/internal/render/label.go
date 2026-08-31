@@ -23,6 +23,13 @@ func preservedLabel(item ast.SelectItem, written string) string {
 	if item.Source == "" {
 		return ""
 	}
+	// A star stands for however many columns the table has and names none of
+	// them, so no engine lets one take an alias. Its source text differs from
+	// the rendering whenever the caller wrote whitespace around the qualifying
+	// dot, and labeling it wrote SQL nothing can read.
+	if _, ok := item.Expr.(*ast.Star); ok {
+		return ""
+	}
 	if sameName(item.Source, strings.TrimSpace(written)) {
 		return ""
 	}

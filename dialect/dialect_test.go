@@ -1,8 +1,11 @@
 package dialect
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestParse(t *testing.T) {
@@ -198,7 +201,7 @@ func TestTranslateLexical(t *testing.T) {
 		{"mysql hash comment", MySQL, "SELECT 1 # note", "SELECT 1"},
 		{"mysql backslash escape", MySQL, `SELECT 'It\'s'`, `SELECT 'It''s'`},
 		{"mysql doubled quote", MySQL, `SELECT 'a''b'`, `SELECT 'a''b'`},
-		{"mysql backslash escapes", MySQL, `SELECT 'a\nb\tc\\d\0e'`, "SELECT 'a\nb\tc\\d\x00e'"},
+		{"mysql backslash escapes", MySQL, `SELECT 'a\nb\tc\\d\Ze'`, "SELECT 'a\nb\tc\\d\x1ae'"},
 		{"mysql backslash unknown", MySQL, `SELECT 'a\qb'`, `SELECT 'aqb'`},
 		{"mysql blob passthrough", MySQL, `SELECT x'4142'`, `SELECT x'4142'`},
 		{"mysql empty blob", MySQL, `SELECT x''`, `SELECT x''`},
@@ -413,5 +416,120 @@ func TestPlaceholderNamesReachSQLiteWhole(t *testing.T) {
 				t.Errorf("Translate(%s, %q) = %q, want %q", tt.dialect, tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestATranslatedQueryIsOneSQLiteCanPrepare holds translation to the property
+// that makes its output SQL rather than text: SQLite has to be able to read
+// what comes back. Reporting success and answering a statement SQLite refuses
+// moves the failure to the caller's next Query, where the message is about a
+// token the caller never wrote.
+//
+// The queries are ones every dialect here spells the same way, apart from the
+// quoting each one owns, so the only thing that varies is the translation. The
+// shapes that motivated this are a number ending in its decimal point, which
+// used to fuse with the word after it, and a qualified star written with
+// whitespace around the dot, which used to come back with an alias.
+func TestATranslatedQueryIsOneSQLiteCanPrepare(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	// Every connection to ":memory:" opens its own database, so the schema and
+	// the prepares have to share one.
+	db.SetMaxOpenConns(1)
+	for _, ddl := range []string{
+		"CREATE TABLE t (a INTEGER, b TEXT, c REAL)",
+		"CREATE TABLE y (n INTEGER, m TEXT)",
+	} {
+		if _, err := db.ExecContext(ctx, ddl); err != nil {
+			t.Fatalf("exec %q: %v", ddl, err)
+		}
+	}
+
+	shared := []string{
+		"SELECT 1. FROM t",
+		"SELECT c * 1. FROM t",
+		"SELECT a FROM t WHERE c > 1. AND a = 1",
+		"SELECT 1. AS n FROM t",
+		"SELECT 1., 2. FROM t",
+		"SELECT t. * FROM t",
+		"SELECT t .* FROM t",
+		"SELECT t.\n* FROM t",
+		"SELECT t. *, a FROM t",
+		"SELECT t.* FROM t",
+		"SELECT  * FROM t",
+		"SELECT t.a FROM t",
+		"SELECT a FROM t JOIN y ON t.a = y.n",
+		"SELECT count(*) FROM t GROUP BY b HAVING count(*) > 0",
+		"SELECT a FROM t ORDER BY a DESC LIMIT 1 OFFSET 1",
+		"SELECT a FROM t UNION SELECT n FROM y",
+	}
+	type translation struct {
+		dialect Dialect
+		query   string
+	}
+	dialectsUnderTest := []Dialect{MySQL, PostgreSQL, GoogleSQL}
+	cases := make([]translation, 0, len(shared)*len(dialectsUnderTest)+1)
+	for _, d := range dialectsUnderTest {
+		for _, q := range shared {
+			cases = append(cases, translation{d, q})
+		}
+	}
+	cases = append(cases, translation{MySQL, "SELECT `t` . * FROM `t`"})
+
+	for _, tt := range cases {
+		t.Run(tt.dialect.DisplayName()+" "+tt.query, func(t *testing.T) {
+			t.Parallel()
+
+			out, err := Translate(tt.dialect, tt.query)
+			if err != nil {
+				t.Fatalf("Translate(%v, %q): %v", tt.dialect, tt.query, err)
+			}
+			stmt, err := db.PrepareContext(t.Context(), out)
+			if err != nil {
+				t.Fatalf("Translate(%v, %q) = %q, which SQLite refuses: %v", tt.dialect, tt.query, out, err)
+			}
+			_ = stmt.Close()
+		})
+	}
+}
+
+// TestTranslateRefusesTextSQLiteCannotSpell pins the refusal for a NUL byte.
+// The MySQL and GoogleSQL escape \0 decodes to one, and SQLite reads a
+// statement up to the first NUL, so the byte cannot be written into SQL at all.
+// Answering it produced a statement that failed later with an error about the
+// opening quote; rendering it as a cast from a blob would parse and then answer
+// a different length, since SQLite's length() stops at a NUL where MySQL's does
+// not, so a refusal is what this returns.
+func TestTranslateRefusesTextSQLiteCannotSpell(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		dialect Dialect
+		query   string
+	}{
+		{MySQL, `SELECT '\0'`},
+		{MySQL, `SELECT 'a\0b'`},
+		{MySQL, `SELECT '\0' = b FROM t`},
+		{MySQL, "SELECT `a\x00b` FROM t"},
+		{GoogleSQL, `SELECT '\0'`},
+	} {
+		if _, err := Translate(tt.dialect, tt.query); !errors.Is(err, ErrUnsupportedSyntax) {
+			t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.query, err)
+		}
+	}
+
+	// Every other control character those escapes produce goes through
+	// SQLite's tokenizer unchanged, which is the boundary that keeps the
+	// refusal from widening.
+	for _, query := range []string{`SELECT '\Z'`, `SELECT '\b'`} {
+		if _, err := Translate(MySQL, query); err != nil {
+			t.Errorf("Translate(MySQL, %q) error = %v, want it to translate", query, err)
+		}
 	}
 }

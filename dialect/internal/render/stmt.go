@@ -489,9 +489,7 @@ func (w *writer) join(n *ast.JoinTable) error {
 func (w *writer) tableName(n *ast.TableName) error {
 	for i, part := range n.Parts {
 		if i > 0 {
-			w.b.WriteByte('.')
-			w.name(part)
-			continue
+			w.dot()
 		}
 		w.name(part)
 	}
