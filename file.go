@@ -59,19 +59,6 @@ const (
 	extJSONL   = ".jsonl"
 )
 
-// Compression extensions, named by the codec that reads and writes each one so
-// the suffix a path carries and the codec chosen for it cannot drift apart.
-const (
-	extGZ     = codec.ExtGZ
-	extBZ2    = codec.ExtBZ2
-	extXZ     = codec.ExtXZ
-	extZSTD   = codec.ExtZSTD
-	extZLIB   = codec.ExtZLIB
-	extSNAPPY = codec.ExtSNAPPY
-	extS2     = codec.ExtS2
-	extLZ4    = codec.ExtLZ4
-)
-
 // file represents a file that can be converted to table
 type file struct {
 	path     string
@@ -148,13 +135,13 @@ func newFile(path string) *file {
 // supportedFileExtPatterns returns all supported file patterns for glob matching
 func supportedFileExtPatterns() []string {
 	baseExts := []string{extCSV, extTSV, extLTSV, extParquet, extXLSX, extJSON, extJSONL}
-	compressionExts := []string{"", extGZ, extBZ2, extXZ, extZSTD, extZLIB, extSNAPPY, extS2, extLZ4}
 
-	patterns := make([]string, 0, len(compressionExts)*len(baseExts)+2)
+	patterns := make([]string, 0, (len(codec.All)+1)*len(baseExts)+2)
 	for _, baseExt := range baseExts {
-		for _, compressionExt := range compressionExts {
-			pattern := "*" + baseExt + compressionExt
-			patterns = append(patterns, pattern)
+		// The uncompressed form first, then one per codec.
+		patterns = append(patterns, "*"+baseExt)
+		for _, c := range codec.All {
+			patterns = append(patterns, "*"+baseExt+c.Extension())
 		}
 	}
 

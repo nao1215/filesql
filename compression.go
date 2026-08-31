@@ -64,28 +64,8 @@ func NewCompressionFactory() *CompressionFactory {
 
 // detectCompressionType detects the compression type from a file path
 func (f *CompressionFactory) detectCompressionType(path string) CompressionType {
-	path = strings.ToLower(path)
-
-	switch {
-	case strings.HasSuffix(path, extGZ):
-		return CompressionGZ
-	case strings.HasSuffix(path, extBZ2):
-		return CompressionBZ2
-	case strings.HasSuffix(path, extXZ):
-		return CompressionXZ
-	case strings.HasSuffix(path, extZSTD):
-		return CompressionZSTD
-	case strings.HasSuffix(path, extZLIB):
-		return CompressionZLIB
-	case strings.HasSuffix(path, extSNAPPY):
-		return CompressionSNAPPY
-	case strings.HasSuffix(path, extS2):
-		return CompressionS2
-	case strings.HasSuffix(path, extLZ4):
-		return CompressionLZ4
-	default:
-		return CompressionNone
-	}
+	found, _ := codec.FromPath(path)
+	return CompressionType(found)
 }
 
 // createHandlerForFile creates an appropriate compression handler for a given file path
@@ -125,12 +105,8 @@ func (f *CompressionFactory) CreateReaderForFile(path string) (io.Reader, func()
 
 // RemoveCompressionExtension removes the compression extension from a file path if present
 func (f *CompressionFactory) RemoveCompressionExtension(path string) string {
-	for _, ext := range []string{extGZ, extBZ2, extXZ, extZSTD, extZLIB, extSNAPPY, extS2, extLZ4} {
-		if strings.HasSuffix(strings.ToLower(path), ext) {
-			return path[:len(path)-len(ext)]
-		}
-	}
-	return path
+	_, base := codec.FromPath(path)
+	return base
 }
 
 // getBaseFileType determines the base file type after removing compression extensions
