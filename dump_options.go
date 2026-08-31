@@ -6,7 +6,7 @@ import (
 
 // This file holds the vocabulary a dump is described in: OutputFormat,
 // CompressionType and DumpOptions say what a dump writes and in what shape.
-// They are values with no behaviour beyond reading themselves back, and they
+// They are values with no behavior beyond reading themselves back, and they
 // are what DumpDatabase and the auto-save options take; they lived in save.go
 // only because that is where the first of them was written.
 
