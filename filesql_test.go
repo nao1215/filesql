@@ -3380,7 +3380,7 @@ func TestWriteXLSXTableData(t *testing.T) {
 		require.NoError(t, err)
 
 		outputPath := filepath.Join(t.TempDir(), table+opts.FileExtension())
-		require.NoError(t, writeSQLiteTableData(outputPath, table, columns, rows, opts))
+		require.NoError(t, writeSQLiteTableData(outputPath, table, columns, rows, opts, nil))
 		return outputPath
 	}
 
@@ -3472,7 +3472,7 @@ func TestWriteXLSXTableData(t *testing.T) {
 
 		opts := NewDumpOptions().WithFormat(OutputFormatXLSX).WithCompression(CompressionBZ2)
 		outputPath := filepath.Join(t.TempDir(), "people"+opts.FileExtension())
-		err = writeSQLiteTableData(outputPath, "people", columns, rows, opts)
+		err = writeSQLiteTableData(outputPath, "people", columns, rows, opts, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "bzip2 compression is not supported")
 		assert.NoFileExists(t, outputPath, "a rejected dump leaves nothing behind")

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/parquet-go/parquet-go"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -827,4 +828,87 @@ func convertCSV(t *testing.T, csvPath string, format OutputFormat, ext string) s
 		t.Fatal(err)
 	}
 	return filepath.Join(dir, "data"+ext)
+}
+
+// BenchmarkOverwriteParquetOfTypedColumns benchmarks an in-place save of a
+// Parquet file whose columns carry logical types, which is where keeping the
+// file's schema costs something: every value of such a column is rebuilt from
+// its text and rendered back before the schema is chosen, so that a value the
+// type cannot hold sends the column to the plainer shape rather than being
+// narrowed into a different number.
+func BenchmarkOverwriteParquetOfTypedColumns(b *testing.B) {
+	const rows = 50000
+
+	dir := b.TempDir()
+	path := filepath.Join(dir, "t.parquet")
+
+	write := func() {
+		schema := parquet.NewSchema("t", parquet.Group{
+			"id":    parquet.Required(parquet.Leaf(parquet.Int64Type)),
+			"cost":  parquet.Required(parquet.Decimal(2, 12, parquet.Int64Type)),
+			"when":  parquet.Required(parquet.Timestamp(parquet.Millisecond)),
+			"day":   parquet.Required(parquet.Date()),
+			"ok":    parquet.Required(parquet.Leaf(parquet.BooleanType)),
+			"name":  parquet.Required(parquet.String()),
+			"ratio": parquet.Required(parquet.Leaf(parquet.DoubleType)),
+		})
+		file, err := os.Create(path) //nolint:gosec // the path is the benchmark's own temporary directory
+		if err != nil {
+			b.Fatalf("Create failed: %v", err)
+		}
+		writer := parquet.NewGenericWriter[any](file, schema)
+		byName := func(r int) map[string]parquet.Value {
+			return map[string]parquet.Value{
+				"id":    parquet.Int64Value(int64(r)),
+				"cost":  parquet.Int64Value(int64(r) * 7),
+				"when":  parquet.Int64Value(1710460800000 + int64(r)),
+				"day":   parquet.Int32Value(int32(19797 + r%1000)), //nolint:gosec // the modulus holds it to 32 bits
+				"ok":    parquet.BooleanValue(r%2 == 0),
+				"name":  parquet.ByteArrayValue(fmt.Appendf(nil, "row%d", r)),
+				"ratio": parquet.DoubleValue(float64(r) + 0.5),
+			}
+		}
+		batch := make([]parquet.Row, 0, 1024)
+		for r := range rows {
+			values := byName(r)
+			row := make(parquet.Row, 0, len(values))
+			for i, field := range schema.Fields() {
+				row = append(row, values[field.Name()].Level(0, 0, i))
+			}
+			batch = append(batch, row)
+			if len(batch) == cap(batch) {
+				if _, err := writer.WriteRows(batch); err != nil {
+					b.Fatalf("WriteRows failed: %v", err)
+				}
+				batch = batch[:0]
+			}
+		}
+		if _, err := writer.WriteRows(batch); err != nil {
+			b.Fatalf("WriteRows failed: %v", err)
+		}
+		if err := writer.Close(); err != nil {
+			b.Fatalf("Close failed: %v", err)
+		}
+		if err := file.Close(); err != nil {
+			b.Fatalf("Close failed: %v", err)
+		}
+	}
+
+	for b.Loop() {
+		b.StopTimer()
+		write()
+		b.StartTimer()
+
+		validated, err := buildForTest(context.Background(), NewBuilder().AddPath(path).EnableAutoSave(""))
+		if err != nil {
+			b.Fatalf("Build failed: %v", err)
+		}
+		db, err := validated.Open(context.Background())
+		if err != nil {
+			b.Fatalf("Open failed: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			b.Fatalf("db.Close failed: %v", err)
+		}
+	}
 }

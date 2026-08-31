@@ -6,7 +6,9 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"math"
+	"math/big"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1162,4 +1164,451 @@ func TestParquetNullsAgreeBetweenTheParserAndTheLoader(t *testing.T) {
 		"the cells the parser marks are the cells the loader stores as NULL")
 	assert.Equal(t, []bool{false, false, true, false}, stored,
 		"one null and one empty string, in that order")
+}
+
+// TestParquetOverwriteKeepsTheSchema pins that a save writing a Parquet file
+// back to itself leaves the schema it found.
+//
+// A Parquet file's types are the reason it is a Parquet file. The save wrote
+// every column as one of three shapes -- int64, double, string, all optional --
+// so a DECIMAL came back a string, a TIMESTAMP, a DATE and a BOOLEAN came back
+// integers, and a required column came back nullable, with no edit needed to
+// cause it. The values were unaffected, so a reload through this package said
+// nothing was wrong; the damage was to what every other reader of the file sees.
+func TestParquetOverwriteKeepsTheSchema(t *testing.T) {
+	t.Parallel()
+
+	var uuid [16]byte
+	for i := range uuid {
+		uuid[i] = byte(i * 17)
+	}
+
+	for _, tt := range []struct {
+		name   string
+		node   parquet.Node
+		values []parquet.Value
+		// stmt is run before the save; an empty one saves with nothing edited.
+		stmt string
+	}{
+		{"a boolean", parquet.Leaf(parquet.BooleanType), []parquet.Value{
+			parquet.BooleanValue(true), parquet.BooleanValue(false)}, ""},
+		{"a date", parquet.Date(), []parquet.Value{
+			parquet.Int32Value(19797), parquet.Int32Value(0)}, ""},
+		{"a timestamp", parquet.Timestamp(parquet.Millisecond), []parquet.Value{
+			parquet.Int64Value(1710460800000), parquet.Int64Value(0)}, ""},
+		{"a decimal on an int64", parquet.Decimal(2, 12, parquet.Int64Type), []parquet.Value{
+			parquet.Int64Value(12345), parquet.Int64Value(-5)}, ""},
+		{"a decimal on an int32", parquet.Decimal(2, 9, parquet.Int32Type), []parquet.Value{
+			parquet.Int32Value(12345), parquet.Int32Value(0)}, ""},
+		{"a uuid", parquet.UUID(), []parquet.Value{
+			parquet.FixedLenByteArrayValue(uuid[:])}, ""},
+		{"an unsigned integer", parquet.Uint(32), []parquet.Value{
+			parquet.Int32Value(-1), parquet.Int32Value(0)}, ""},
+		{"a narrow integer", parquet.Int(16), []parquet.Value{
+			parquet.Int32Value(-32768), parquet.Int32Value(32767)}, ""},
+		{"a 32-bit float", parquet.Leaf(parquet.FloatType), []parquet.Value{
+			parquet.FloatValue(1.5), parquet.FloatValue(0.1)}, ""},
+		{"an enum", parquet.Enum(), []parquet.Value{
+			parquet.ByteArrayValue([]byte("RED"))}, ""},
+		{"a time", parquet.Time(parquet.Millisecond), []parquet.Value{
+			parquet.Int32Value(86399999)}, ""},
+		// The same, with the caller having changed a value: the column keeps
+		// its type and holds what they set.
+		{"a boolean the caller changed", parquet.Leaf(parquet.BooleanType), []parquet.Value{
+			parquet.BooleanValue(true), parquet.BooleanValue(false)}, "UPDATE t SET v = 0 WHERE v = 1"},
+		{"a decimal the caller changed", parquet.Decimal(2, 12, parquet.Int64Type), []parquet.Value{
+			parquet.Int64Value(12345), parquet.Int64Value(-5)}, "UPDATE t SET v = '999.99' WHERE v = '123.45'"},
+		{"a date the caller changed", parquet.Date(), []parquet.Value{
+			parquet.Int32Value(19797), parquet.Int32Value(0)}, "UPDATE t SET v = 20000 WHERE v = 19797"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "t.parquet")
+			writeOneFieldParquet(t, path, tt.node, tt.values)
+
+			want := parquetSchemaText(t, path)
+			require.NoError(t, autoSaveOverwrite(t, []string{path}, statements(tt.stmt)...))
+			assert.Equal(t, want, parquetSchemaText(t, path))
+		})
+	}
+
+	t.Run("a required column stays required", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "t.parquet")
+		writeOneFieldParquet(t, path, parquet.Leaf(parquet.Int64Type), []parquet.Value{parquet.Int64Value(1)})
+
+		want := parquetSchemaText(t, path)
+		require.Contains(t, want[0], "optional=false")
+		require.NoError(t, autoSaveOverwrite(t, []string{path}))
+		assert.Equal(t, want, parquetSchemaText(t, path))
+	})
+
+	t.Run("a required column holding a null the caller set becomes optional", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "t.parquet")
+		writeOneFieldParquet(t, path, parquet.Date(), []parquet.Value{parquet.Int32Value(19797)})
+
+		require.NoError(t, autoSaveOverwrite(t, []string{path}, "UPDATE t SET v = NULL"))
+
+		// The type is what the file said; only what the data now demands
+		// changes, since a required column cannot hold the null the caller put
+		// in it.
+		assert.Equal(t, []string{"v DATE optional=true"}, parquetSchemaText(t, path))
+	})
+}
+
+// TestParquetOverwriteFallsBackRatherThanWriteAWrongValue pins the boundary
+// that makes the schema worth keeping at all: a value the caller set that the
+// file's type cannot hold sends the column back to the plainer shape rather
+// than being narrowed into a different number.
+func TestParquetOverwriteFallsBackRatherThanWriteAWrongValue(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		node parquet.Node
+		seed []parquet.Value
+		stmt string
+		// want is the value the column holds afterwards, whatever type it
+		// ended up written as. The value is what must not change.
+		want string
+	}{
+		{
+			// 999999999999.99 unscaled is past int32, and narrowing it wrote
+			// 276447231, which reads back as 2764472.31.
+			name: "a decimal past what its physical type holds",
+			node: parquet.Decimal(2, 9, parquet.Int32Type),
+			seed: []parquet.Value{parquet.Int32Value(12345)},
+			stmt: "UPDATE t SET v = '999999999999.99'",
+			want: "999999999999.99",
+		},
+		{
+			name: "a decimal with more places than its scale",
+			node: parquet.Decimal(2, 9, parquet.Int32Type),
+			seed: []parquet.Value{parquet.Int32Value(12345)},
+			stmt: "UPDATE t SET v = '1.234'",
+			want: "1.234",
+		},
+		{
+			// parquet-go does not enforce an annotation's range, so this is
+			// the one an explicit check has to catch.
+			name: "an integer past the width its annotation names",
+			node: parquet.Int(8),
+			seed: []parquet.Value{parquet.Int32Value(12)},
+			stmt: "UPDATE t SET v = 300",
+			want: "300",
+		},
+		{
+			name: "a boolean set to something that is not one",
+			node: parquet.Leaf(parquet.BooleanType),
+			seed: []parquet.Value{parquet.BooleanValue(true)},
+			stmt: "UPDATE t SET v = 2",
+			want: "2",
+		},
+		{
+			name: "a uuid set to text that is not one",
+			node: parquet.UUID(),
+			seed: []parquet.Value{parquet.FixedLenByteArrayValue(make([]byte, 16))},
+			stmt: "UPDATE t SET v = 'not a uuid'",
+			want: "not a uuid",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "t.parquet")
+			writeOneFieldParquet(t, path, tt.node, tt.seed)
+			require.NoError(t, autoSaveOverwrite(t, []string{path}, tt.stmt))
+
+			db, err := OpenContext(t.Context(), path)
+			require.NoError(t, err)
+			defer db.Close()
+
+			var got string
+			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT v FROM t`).Scan(&got))
+			assert.Equal(t, tt.want, got, "the value the caller set is what the file holds")
+		})
+	}
+}
+
+// statements drops an empty statement, so a case that edits nothing runs none.
+func statements(stmt string) []string {
+	if stmt == "" {
+		return nil
+	}
+	return []string{stmt}
+}
+
+// writeOneFieldParquet writes a file of a single required column named v.
+func writeOneFieldParquet(t *testing.T, path string, node parquet.Node, values []parquet.Value) {
+	t.Helper()
+
+	schema := parquet.NewSchema("t", parquet.Group{"v": parquet.Required(node)})
+	f, err := os.Create(path) //nolint:gosec // the path is the test's own temporary directory
+	require.NoError(t, err)
+	defer func() { require.NoError(t, f.Close()) }()
+
+	writer := parquet.NewGenericWriter[any](f, schema)
+	rows := make([]parquet.Row, 0, len(values))
+	for _, value := range values {
+		rows = append(rows, parquet.Row{value.Level(0, 0, 0)})
+	}
+	_, err = writer.WriteRows(rows)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+}
+
+// parquetSchemaText is a file's schema as one line per field, which is what a
+// reader of the file sees and what a save must not change.
+func parquetSchemaText(t *testing.T, path string) []string {
+	t.Helper()
+
+	f, err := os.Open(path) //nolint:gosec // the path is the test's own temporary directory
+	require.NoError(t, err)
+	defer func() { require.NoError(t, f.Close()) }()
+	info, err := f.Stat()
+	require.NoError(t, err)
+	file, err := parquet.OpenFile(f, info.Size())
+	require.NoError(t, err)
+
+	out := make([]string, 0, len(file.Schema().Fields()))
+	for _, field := range file.Schema().Fields() {
+		out = append(out, fmt.Sprintf("%s %v optional=%v", field.Name(), field.Type(), field.Optional()))
+	}
+	return out
+}
+
+// TestParquetOverwriteLeavesWhatItCannotRebuild pins the boundary of keeping a
+// file's schema. Three types are rendered by a load in a form that says less
+// than the value they store, so nothing can rebuild them: a list or a map
+// becomes text such as "[1 2 3]", an INT96 becomes nanoseconds since the Unix
+// epoch rather than the Julian day and offset it holds, and a FLOAT16 is
+// widened to 32 bits. A column of one of those is written the way every column
+// was written before the schema was kept at all.
+func TestParquetOverwriteLeavesWhatItCannotRebuild(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a list", func(t *testing.T) {
+		t.Parallel()
+
+		type listRow struct {
+			ID   int64   `parquet:"id"`
+			Tags []int32 `parquet:"tags,list"`
+		}
+		path := filepath.Join(t.TempDir(), "t.parquet")
+		writeTypedParquet(t, path, []listRow{{ID: 1, Tags: []int32{1, 2, 3}}})
+
+		require.NoError(t, autoSaveOverwrite(t, []string{path}))
+
+		// The flat column beside it keeps its type; the list does not, and the
+		// values still read back.
+		schema := parquetSchemaText(t, path)
+		assert.Equal(t, "id INT(64,true) optional=false", schema[0])
+
+		db, err := OpenContext(t.Context(), path)
+		require.NoError(t, err)
+		defer db.Close()
+		var id int64
+		var tags string
+		require.NoError(t, db.QueryRowContext(t.Context(), `SELECT id, tags FROM t`).Scan(&id, &tags))
+		assert.Equal(t, int64(1), id)
+		assert.Equal(t, "[1 2 3]", tags)
+	})
+
+	t.Run("a half-precision float", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "t.parquet")
+		// 1.5 as an IEEE 754 half, little-endian per the format.
+		writeOneFieldParquet(t, path, parquet.Leaf(parquet.FixedLenByteArrayType(2)),
+			[]parquet.Value{parquet.FixedLenByteArrayValue([]byte{0x00, 0x3e})})
+
+		require.NoError(t, autoSaveOverwrite(t, []string{path}))
+
+		db, err := OpenContext(t.Context(), path)
+		require.NoError(t, err)
+		defer db.Close()
+		var v string
+		require.NoError(t, db.QueryRowContext(t.Context(), `SELECT v FROM t`).Scan(&v))
+		assert.NotEmpty(t, v, "the value is still there whatever the column became")
+	})
+}
+
+// TestParquetOverwriteKeepsAnInfinity covers the one spelling of a number this
+// package writes that is not a number: a REAL column holding an infinity is
+// stored as a literal SQLite overflows while reading it, and rebuilding the
+// value has to read that spelling back.
+func TestParquetOverwriteKeepsAnInfinity(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "t.parquet")
+	writeOneFieldParquet(t, path, parquet.Leaf(parquet.DoubleType), []parquet.Value{
+		parquet.DoubleValue(math.Inf(1)), parquet.DoubleValue(math.Inf(-1)), parquet.DoubleValue(1.5)})
+
+	want := parquetSchemaText(t, path)
+	require.NoError(t, autoSaveOverwrite(t, []string{path}))
+	assert.Equal(t, want, parquetSchemaText(t, path))
+
+	db, err := OpenContext(t.Context(), path)
+	require.NoError(t, err)
+	defer db.Close()
+	rows, err := db.QueryContext(t.Context(), `SELECT v FROM t`)
+	require.NoError(t, err)
+	defer rows.Close()
+	got := make([]float64, 0, 3)
+	for rows.Next() {
+		var v float64
+		require.NoError(t, rows.Scan(&v))
+		got = append(got, v)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []float64{math.Inf(1), math.Inf(-1), 1.5}, got)
+}
+
+// TestParquetExportIgnoresAnyFileAlreadyThere pins that only a save writing
+// back to the file it loaded keeps a schema. An export names its own
+// destination, and a file that happens to sit there is not one it read.
+func TestParquetExportIgnoresAnyFileAlreadyThere(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "t.parquet")
+	writeOneFieldParquet(t, path, parquet.Date(), []parquet.Value{parquet.Int32Value(19797)})
+
+	db := openWithTable(t, "CREATE TABLE t (v INTEGER)", "INSERT INTO t VALUES (19797)")
+	require.NoError(t, DumpDatabase(db, dir, NewDumpOptions().WithFormat(OutputFormatParquet)))
+
+	assert.Equal(t, []string{"v INT(64,true) optional=true"}, parquetSchemaText(t, path),
+		"an export writes the table it was given, not the file that was there")
+}
+
+// writeTypedParquet writes a file from a Go value, for a shape a hand-built
+// schema cannot express as easily.
+func writeTypedParquet[T any](t *testing.T, path string, rows []T) {
+	t.Helper()
+
+	f, err := os.Create(path) //nolint:gosec // the path is the test's own temporary directory
+	require.NoError(t, err)
+	defer func() { require.NoError(t, f.Close()) }()
+
+	writer := parquet.NewGenericWriter[T](f)
+	_, err = writer.Write(rows)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+}
+
+// TestParquetOverwriteKeepsADecimalOnFixedBytes covers the decimal a column
+// stores across fixed bytes rather than in an integer, which is how a decimal
+// wider than eighteen digits is held. The unscaled value goes back big-endian
+// in two's complement, so the sign is the part worth pinning: a negative value
+// written as if it were positive reads back as an enormous positive one.
+func TestParquetOverwriteKeepsADecimalOnFixedBytes(t *testing.T) {
+	t.Parallel()
+
+	node := parquet.Decimal(4, 38, parquet.FixedLenByteArrayType(16))
+
+	t.Run("the values come back as themselves", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "t.parquet")
+		writeOneFieldParquet(t, path, node, []parquet.Value{
+			fixedDecimal(t, "-123456789012345678901234"),
+			fixedDecimal(t, "1"),
+			fixedDecimal(t, "0"),
+			fixedDecimal(t, "-1"),
+		})
+
+		want := parquetSchemaText(t, path)
+		before := parquetColumnText(t, path)
+		require.NoError(t, autoSaveOverwrite(t, []string{path}))
+
+		assert.Equal(t, want, parquetSchemaText(t, path))
+		assert.Equal(t, before, parquetColumnText(t, path))
+		assert.Equal(t, []string{"-12345678901234567890.1234", "0.0001", "0.0000", "-0.0001"}, before)
+	})
+
+	t.Run("a value the fixed width cannot hold falls back", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "t.parquet")
+		writeOneFieldParquet(t, path, node, []parquet.Value{fixedDecimal(t, "1")})
+
+		// Thirty-nine digits is past the precision the column declares, so the
+		// value is what must survive rather than the type.
+		require.NoError(t, autoSaveOverwrite(t, []string{path},
+			"UPDATE t SET v = '99999999999999999999999999999999999.9999'"))
+		assert.Equal(t, []string{"99999999999999999999999999999999999.9999"}, parquetColumnText(t, path))
+	})
+}
+
+// TestTwosComplementBytes covers the packing directly, including the widths
+// that cannot hold a value, which a file is unlikely to produce but a caller's
+// edit can ask for.
+func TestTwosComplementBytes(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name  string
+		value string
+		width int
+		want  []byte
+		ok    bool
+	}{
+		{"zero", "0", 2, []byte{0x00, 0x00}, true},
+		{"one", "1", 2, []byte{0x00, 0x01}, true},
+		{"minus one", "-1", 2, []byte{0xff, 0xff}, true},
+		{"the most negative the width holds", "-32768", 2, []byte{0x80, 0x00}, true},
+		{"the most positive the width holds", "32767", 2, []byte{0x7f, 0xff}, true},
+		{"one past the positive end", "32768", 2, nil, false},
+		{"one past the negative end", "-32769", 2, nil, false},
+		{"no width at all", "1", 0, nil, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			n, ok := new(big.Int).SetString(tt.value, 10)
+			require.True(t, ok)
+			got, ok := twosComplementBytes(n, tt.width)
+			assert.Equal(t, tt.ok, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// fixedDecimal packs an unscaled integer the way a decimal on sixteen fixed
+// bytes stores it, for building the file a test starts from.
+func fixedDecimal(t *testing.T, digits string) parquet.Value {
+	t.Helper()
+
+	const width = 16
+	n, ok := new(big.Int).SetString(digits, 10)
+	require.True(t, ok)
+	packed, ok := twosComplementBytes(n, width)
+	require.True(t, ok)
+	return parquet.FixedLenByteArrayValue(packed)
+}
+
+// parquetColumnText is the column v of a file, as a load reads it.
+func parquetColumnText(t *testing.T, path string) []string {
+	t.Helper()
+
+	db, err := OpenContext(t.Context(), path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, db.Close()) }()
+
+	rows, err := db.QueryContext(t.Context(), `SELECT v FROM t`)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+
+	var out []string
+	for rows.Next() {
+		var v sql.NullString
+		require.NoError(t, rows.Scan(&v))
+		out = append(out, v.String)
+	}
+	require.NoError(t, rows.Err())
+	return out
 }
