@@ -682,34 +682,91 @@ func (p *fixSchemePreprocessor) Process(value string) string {
 		return value
 	}
 
-	if scheme, rest, found := strings.Cut(trimmed, "://"); found {
-		if strings.EqualFold(scheme, "http") {
-			if p.scheme == httpsSchemeType {
-				return httpsSchemeType + "://" + rest
-			}
-			return trimmed
-		}
-		if strings.EqualFold(scheme, httpsSchemeType) {
-			return trimmed
-		}
-
-		// Preserve non-HTTP schemes instead of prepending another scheme.
-		return trimmed
-	}
-
-	// Check if URL already has a scheme
-	if strings.HasPrefix(trimmed, "http://") {
-		if p.scheme == httpsSchemeType {
-			return httpsSchemeType + "://" + strings.TrimPrefix(trimmed, "http://")
+	if scheme, rest, found := schemeOf(trimmed); found {
+		// A value that already names a scheme keeps it. Upgrading http to
+		// https is the one rewrite this tag makes to a scheme that is there,
+		// and it is what fix_scheme=https is asked for.
+		if p.scheme == httpsSchemeType && strings.EqualFold(scheme, "http") {
+			return httpsSchemeType + rest
 		}
 		return trimmed
 	}
-	if strings.HasPrefix(trimmed, "https://") {
-		return trimmed
+
+	// A protocol-relative reference has an authority already, so it needs the
+	// scheme and its colon and not a second pair of slashes.
+	if strings.HasPrefix(trimmed, "//") {
+		return p.scheme + ":" + trimmed
 	}
 
-	// Add scheme if missing
 	return p.scheme + "://" + trimmed
+}
+
+// schemeOf splits a URL that names a scheme into that scheme and everything
+// from the colon on, and reports whether it found one. RFC 3986 spells a scheme
+// as a letter followed by letters, digits, "+", "-" or ".", ending at a colon
+// that comes before any of "/", "?" or "#", which is a shape a host and its
+// port also have: the text before the colon in "example.com:8080" is a valid
+// scheme by that grammar. What tells them apart is what follows the colon,
+// since a port is digits and nothing else up to the end of the authority, so a
+// colon followed by a bare port belongs to a host that still needs a scheme.
+func schemeOf(value string) (scheme string, rest string, found bool) {
+	colon := -1
+	for i, r := range value {
+		if r == ':' {
+			colon = i
+			break
+		}
+		if r == '/' || r == '?' || r == '#' {
+			return "", "", false
+		}
+		if i == 0 {
+			if !isASCIILetter(r) {
+				return "", "", false
+			}
+			continue
+		}
+		if !isASCIILetter(r) && !isASCIIDigit(r) && r != '+' && r != '-' && r != '.' {
+			return "", "", false
+		}
+	}
+	if colon <= 0 {
+		return "", "", false
+	}
+	if isPort(value[colon+1:]) {
+		return "", "", false
+	}
+	return value[:colon], value[colon:], true
+}
+
+// isPort reports whether what follows a colon is a port number and nothing
+// else, which makes the text before the colon a host rather than a scheme.
+func isPort(rest string) bool {
+	end := strings.IndexAny(rest, "/?#")
+	if end >= 0 {
+		rest = rest[:end]
+	}
+	if rest == "" {
+		return false
+	}
+	for _, r := range rest {
+		if !isASCIIDigit(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// isASCIILetter reports whether r is one of the letters a scheme is written
+// with. A scheme is ASCII, so unicode.IsLetter would admit more than the
+// grammar does, and so would unicode.IsDigit for isASCIIDigit.
+func isASCIILetter(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+}
+
+// isASCIIDigit reports whether r is one of the digits a scheme or a port is
+// written with.
+func isASCIIDigit(r rune) bool {
+	return r >= '0' && r <= '9'
 }
 
 // Name returns the preprocessor name

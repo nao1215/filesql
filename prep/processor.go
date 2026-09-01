@@ -141,15 +141,13 @@ func (p *Processor) Process(input io.Reader, structSlicePointer any) (io.Reader,
 		return nil, nil, err
 	}
 
-	isJSONFormat := p.fileType == parser.JSON || p.fileType == parser.JSONL
-
 	// Select output records
 	outputRecords := records
 	if p.validRowsOnly {
 		outputRecords = result.validRecords
 	}
 
-	reader, err := p.buildOutput(headers, outputRecords, isJSONFormat)
+	reader, err := p.buildOutput(headers, outputRecords)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -176,22 +174,20 @@ func (p *Processor) ProcessToWriter(input io.Reader, structSlicePointer any, w i
 		return nil, err
 	}
 
-	isJSONFormat := p.fileType == parser.JSON || p.fileType == parser.JSONL
-
 	outputRecords := records
 	if p.validRowsOnly {
 		outputRecords = result.validRecords
 	}
 
-	// Wrap w with a countingWriter so we can detect whether writeJSONL
-	// actually emitted any bytes (it skips empty records).
+	// Wrap w with a countingWriter so we can detect whether the output format
+	// wrote any bytes at all (writeJSONL skips empty records).
 	cw := &countingWriter{w: w}
 	if err := p.writeOutput(cw, headers, outputRecords); err != nil {
 		return nil, fmt.Errorf("failed to write output: %w", err)
 	}
 
-	if isJSONFormat && cw.n == 0 {
-		return nil, ErrEmptyJSONOutput
+	if err := p.refuseEmptyOutput(cw.n == 0); err != nil {
+		return nil, err
 	}
 
 	result.validRecords = nil
@@ -618,7 +614,7 @@ func skipCrossField(cv crossFieldValidator, srcValue string, targetValues []stri
 }
 
 // buildOutput generates the output io.Reader from the given records.
-func (p *Processor) buildOutput(headers []string, outputRecords [][]string, isJSONFormat bool) (io.Reader, error) {
+func (p *Processor) buildOutput(headers []string, outputRecords [][]string) (io.Reader, error) {
 	// Pre-allocate buffer capacity based on estimated output size to reduce allocations
 	var outputBuf bytes.Buffer
 	estimatedSize := p.estimateOutputSize(headers, outputRecords)
@@ -627,13 +623,25 @@ func (p *Processor) buildOutput(headers []string, outputRecords [][]string, isJS
 		return nil, fmt.Errorf("failed to write output: %w", err)
 	}
 
-	// For JSON/JSONL, an empty output means all rows were empty after preprocessing.
-	// This is a hard error because an empty JSONL stream is unparseable by downstream consumers.
-	if isJSONFormat && outputBuf.Len() == 0 {
-		return nil, ErrEmptyJSONOutput
+	if err := p.refuseEmptyOutput(outputBuf.Len() == 0); err != nil {
+		return nil, err
 	}
 
 	return newStream(outputBuf.Bytes()), nil
+}
+
+// refuseEmptyOutput turns an output with no bytes into an error, for the
+// formats where that leaves nothing to read. JSONL and LTSV write no header
+// line, so every row is written entirely within itself and a file with no rows
+// is an empty stream: whatever reads it next has no columns to make a table
+// from. CSV and TSV write a header, so the same drop leaves a stream that still
+// names the columns, and that is a table with no rows rather than nothing.
+func (p *Processor) refuseEmptyOutput(empty bool) error {
+	format := p.outputFormat()
+	if !empty || (format != parser.JSONL && format != parser.LTSV) {
+		return nil
+	}
+	return fmt.Errorf("%s %w", format, ErrEmptyOutput)
 }
 
 // outputFormat returns the actual output format for the stream.

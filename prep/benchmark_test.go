@@ -345,6 +345,30 @@ func BenchmarkPadLeft(b *testing.B) {
 	}
 }
 
+// BenchmarkFixScheme benchmarks URL scheme completion over the value shapes
+// that take different paths through it: one that needs a scheme, one that is
+// upgraded, one that is left alone, a host with a port, and a scheme written
+// without an authority.
+func BenchmarkFixScheme(b *testing.B) {
+	prep := newFixSchemePreprocessor("https")
+	values := []string{
+		"example.com/path",
+		"http://example.com/path",
+		"https://example.com/path",
+		"example.com:8080/path",
+		"mailto:user@example.com",
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for range b.N {
+		for _, v := range values {
+			_ = prep.Process(v)
+		}
+	}
+}
+
 // BenchmarkUUIDValidation benchmarks UUID validation
 func BenchmarkUUIDValidation(b *testing.B) {
 	validator := newUUIDValidator(uuidTagValue)

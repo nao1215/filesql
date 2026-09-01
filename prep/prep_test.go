@@ -1,6 +1,7 @@
 package prep
 
 import (
+	"net/url"
 	"testing"
 
 	"github.com/nao1215/filesql/internal/infer"
@@ -800,6 +801,46 @@ func TestFixSchemePreprocessor(t *testing.T) {
 		{"preserve non-http scheme", "https", "ftp://example.com", "ftp://example.com"},
 		{"empty input", "https", "", ""},
 		{"with path", "https", "example.com/path", "https://example.com/path"},
+
+		// A scheme written without an authority is still a scheme, so the
+		// value already has one and nothing is added.
+		{"preserve mailto", "https", "mailto:user@example.com", "mailto:user@example.com"},
+		{"preserve uppercase mailto", "https", "MAILTO:user@example.com", "MAILTO:user@example.com"},
+		{"preserve tel", "https", "tel:+81-3-1234-5678", "tel:+81-3-1234-5678"},
+		{"preserve urn", "https", "urn:isbn:0451450523", "urn:isbn:0451450523"},
+		{"preserve data", "https", "data:text/plain,hello", "data:text/plain,hello"},
+		{"preserve magnet", "https", "magnet:?xt=urn:btih:abc", "magnet:?xt=urn:btih:abc"},
+
+		// A protocol-relative reference has an authority but no scheme, so it
+		// needs the scheme and the colon and not a second pair of slashes.
+		{"protocol relative", "https", "//cdn.example.com/a.png", "https://cdn.example.com/a.png"},
+		{"protocol relative with query", "https", "//cdn.example.com/a?b=1", "https://cdn.example.com/a?b=1"},
+		{"protocol relative with fragment", "https", "//cdn.example.com/a#top", "https://cdn.example.com/a#top"},
+
+		// A colon followed by a bare port separates a host from its port, so
+		// the text before it is a host and still needs a scheme.
+		{"host with port", "https", "example.com:8080", "https://example.com:8080"},
+		{"host with port and path", "https", "example.com:8080/x", "https://example.com:8080/x"},
+		{"localhost with port", "https", "localhost:3000", "https://localhost:3000"},
+		{"host with port and fragment", "https", "example.com:8080#top", "https://example.com:8080#top"},
+
+		// A colon that comes after the path is part of the path.
+		{"colon in path", "https", "example.com/a:b", "https://example.com/a:b"},
+
+		// A scheme starts with a letter and holds letters, digits, "+", "-"
+		// and "."; text before a colon that breaks that is not one.
+		{"leading digit is not a scheme", "https", "1abc:x", "https://1abc:x"},
+		{"space is not in a scheme", "https", "a b:c", "https://a b:c"},
+		{"underscore is not in a scheme", "https", "a_b:c", "https://a_b:c"},
+		{"leading colon", "https", ":8080", "https://:8080"},
+		{"scheme with digits and signs", "https", "a1+b-c.d:x", "a1+b-c.d:x"},
+
+		// An http scheme is upgraded however it is written, and only under
+		// fix_scheme=https.
+		{"upgrade opaque http", "https", "http:opaque", "https:opaque"},
+		{"upgrade uppercase opaque http", "https", "HTTP:opaque", "https:opaque"},
+		{"keep opaque http under fix_scheme=http", "http", "http:opaque", "http:opaque"},
+		{"keep opaque https", "https", "https:opaque", "https:opaque"},
 	}
 
 	for _, tt := range tests {
@@ -815,6 +856,43 @@ func TestFixSchemePreprocessor(t *testing.T) {
 	prep := newFixSchemePreprocessor("https")
 	if prep.Name() != "fix_scheme" {
 		t.Errorf("Name() = %q, want %q", prep.Name(), "fix_scheme")
+	}
+}
+
+// TestFixSchemePreprocessorAlwaysParses states the property the table above
+// spells out case by case: whatever the tag returns is a URL with a scheme.
+// Both of the values that came back unparseable were caught by this alone.
+func TestFixSchemePreprocessorAlwaysParses(t *testing.T) {
+	t.Parallel()
+
+	inputs := []string{
+		"example.com",
+		"example.com/path",
+		"example.com:8080/x",
+		"//cdn.example.com/a.png",
+		"http://example.com",
+		"https://example.com",
+		"ftp://example.com",
+		"mailto:user@example.com",
+		"tel:+81-3-1234-5678",
+		"urn:isbn:0451450523",
+		"data:text/plain,hello",
+		"magnet:?xt=urn:btih:abc",
+	}
+
+	for _, scheme := range []string{"http", "https"} {
+		prep := newFixSchemePreprocessor(scheme)
+		for _, input := range inputs {
+			got := prep.Process(input)
+			u, err := url.Parse(got)
+			if err != nil {
+				t.Errorf("fix_scheme=%s on %q produced %q, which does not parse: %v", scheme, input, got, err)
+				continue
+			}
+			if u.Scheme == "" {
+				t.Errorf("fix_scheme=%s on %q produced %q, which has no scheme", scheme, input, got)
+			}
+		}
 	}
 }
 
