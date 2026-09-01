@@ -2864,3 +2864,34 @@ func TestDumpRefusesATableNameBeforeTouchingTheDestination(t *testing.T) {
 		assert.Equal(t, before, dirEntriesOrNone(t, out), "a refused dump adds nothing to a directory it already wrote")
 	})
 }
+
+// TestDumpRefusesAValueItHasNoNameFor pins what a caller reads when they pass a
+// format or a codec this package has no name for -- a number out of a
+// configuration file, or one from an older version. Both refusals used to name
+// something supported: "unsupported output format: csv" and "unsupported
+// compression type for writing: none".
+func TestDumpRefusesAValueItHasNoNameFor(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		options DumpOptions
+		absent  string
+	}{
+		{name: "a format", options: NewDumpOptions().WithFormat(OutputFormat(99)), absent: "csv"},
+		{name: "a codec", options: NewDumpOptions().WithCompression(CompressionType(99)), absent: "none"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := openWithTable(t, "CREATE TABLE t (v TEXT)", "INSERT INTO t VALUES ('a')")
+			out := filepath.Join(t.TempDir(), "out")
+
+			err := DumpDatabase(db, out, tc.options)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "unknown", "the refusal says the value has no name here")
+			assert.NotContains(t, err.Error(), tc.absent, "the refusal must not name something this package supports")
+		})
+	}
+}
