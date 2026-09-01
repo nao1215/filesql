@@ -7,6 +7,7 @@ import (
 
 	"github.com/nao1215/filesql/internal/codec"
 	"github.com/nao1215/filesql/internal/reader"
+	"github.com/nao1215/filesql/internal/textin"
 )
 
 // closeQuietly closes what a decompression reader handed back, dropping the
@@ -85,7 +86,7 @@ func (p *streamingParser) ProcessInChunks(source io.Reader, processor chunkProce
 	// UTF-16 file has to be transcoded before anything splits it into fields.
 	// Parquet and XLSX carry their own container and are read as bytes.
 	if isTextBaseType(p.fileType) {
-		decompressed = decodeTextReader(decompressed)
+		decompressed = textin.Decode(decompressed)
 	}
 
 	read, err := reader.Read(decompressed, format, p.readOptions(), func(chunk *reader.Chunk) error {

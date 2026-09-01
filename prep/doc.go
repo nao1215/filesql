@@ -89,6 +89,12 @@
 // filesql.NewCompressionFactory().CreateReaderForFile takes the codec from the
 // name of a path instead, for a caller that has one.
 //
+// A text encoding is not the caller's, since prep reads through parser.Parse: a
+// byte-order mark decides it, a UTF-16 file is transcoded, and a file that is
+// not UTF-8 is refused when it is read, with an error matching
+// filesql.ErrInvalidUTF8 that names the byte and its offset. What prep writes
+// is UTF-8 whatever went in.
+//
 // # Prep Tags
 //
 // The "prep" tag specifies preprocessing operations applied before validation.
