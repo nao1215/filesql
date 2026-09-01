@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -682,15 +683,10 @@ func TestDumpDatabaseStaysInOutputDir(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.table)
 
 			// Nothing may exist above the output directory, and the output
-			// directory itself may hold no staged leftovers.
-			entries, readErr := os.ReadDir(root)
-			require.NoError(t, readErr)
-			for _, e := range entries {
-				assert.Equal(t, "out", e.Name(), "the dump wrote outside its output directory")
-			}
-			outEntries, readErr := os.ReadDir(outDir)
-			require.NoError(t, readErr)
-			assert.Empty(t, outEntries, "no staged file may be left behind: %v", outEntries)
+			// directory is not created at all: the name is refused before the
+			// dump touches the destination.
+			assert.Empty(t, dirEntriesOrNone(t, root), "the dump wrote outside its output directory")
+			assert.NoDirExists(t, outDir, "a dump that writes nothing leaves nothing")
 		})
 	}
 
@@ -1692,8 +1688,8 @@ func TestDumpRefusesNamesNoPlatformCanHold(t *testing.T) {
 			err := DumpDatabase(db, out)
 			require.Error(t, err, "a name no platform can hold must not be written")
 			assert.ErrorIs(t, err, ErrInvalidData)
-			assert.Contains(t, err.Error(), tt.table)
-			assert.Empty(t, dirEntriesOrNone(t, out), "nothing may be written for a refused table")
+			assert.Contains(t, err.Error(), strconv.Quote(tt.table), "the name the caller gave is the name the refusal carries")
+			assert.NoDirExists(t, out, "nothing may be written for a refused table")
 		})
 	}
 
@@ -2746,4 +2742,67 @@ func TestDumpDatabaseContext_EndedContext(t *testing.T) {
 			assert.Empty(t, dirEntries(t, out), "a dump that stopped must leave nothing behind")
 		})
 	}
+}
+
+// TestDumpRefusesATableNameBeforeTouchingTheDestination pins that a refusal
+// decided by a table's name alone is decided before the export writes anything.
+//
+// It was decided inside the per-table loop, after the output directory had been
+// created and after whatever tables came first were already files. A database
+// whose only refused table was the first one left an empty directory behind
+// along with the error, which is the state dumpSQLiteDatabase settles its table
+// list early to avoid.
+func TestDumpRefusesATableNameBeforeTouchingTheDestination(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a refused name leaves no output directory", func(t *testing.T) {
+		t.Parallel()
+
+		db, out := loadOneTable(t, "with space")
+		err := DumpDatabase(db, out)
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidData)
+		assert.NoDirExists(t, out, "a dump that writes nothing leaves nothing")
+	})
+
+	t.Run("a writable table is not written ahead of a refused one", func(t *testing.T) {
+		t.Parallel()
+
+		validated, err := buildForTest(t.Context(), NewBuilder().
+			AddReader(strings.NewReader("v\n1\n"), "writable", FileTypeCSV))
+		require.NoError(t, err)
+		db, err := validated.Open(t.Context())
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = db.Close() })
+		_, err = db.ExecContext(t.Context(), `CREATE TABLE "with space" (v INTEGER)`)
+		require.NoError(t, err)
+
+		out := filepath.Join(t.TempDir(), "out")
+		err = DumpDatabase(db, out)
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidData)
+		assert.NoDirExists(t, out, "no table is written while another one is refused")
+	})
+
+	t.Run("an earlier dump is left as it was", func(t *testing.T) {
+		t.Parallel()
+
+		validated, err := buildForTest(t.Context(), NewBuilder().
+			AddReader(strings.NewReader("v\n1\n"), "writable", FileTypeCSV))
+		require.NoError(t, err)
+		db, err := validated.Open(t.Context())
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = db.Close() })
+
+		out := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, DumpDatabase(db, out))
+		before := dirEntriesOrNone(t, out)
+
+		_, err = db.ExecContext(t.Context(), `CREATE TABLE "with space" (v INTEGER)`)
+		require.NoError(t, err)
+		require.Error(t, DumpDatabase(db, out))
+		assert.Equal(t, before, dirEntriesOrNone(t, out), "a refused dump adds nothing to a directory it already wrote")
+	})
 }
