@@ -86,7 +86,9 @@
 // original spelling matters. A dump keeps the type rather than the spelling: a
 // REAL column is written with a decimal point, so 1.00 comes back as 1.0 and
 // loads as REAL again, and an infinity is written as 9e999 and loads back as the
-// infinity.
+// infinity. A workbook keeps it the same way: a REAL column's cells hold the
+// decimal point and wear a number format, since a cell drawn as a whole number
+// would load as INTEGER and divide as one.
 //
 // A column whose values are all datetimes is recognized as one and stored as
 // TEXT; the parser package names that column DATETIME, since it reports what was
@@ -308,7 +310,9 @@
 // the save does write takes the type its column has: a value of an INTEGER or
 // REAL column is written as a number, so the column stays one a spreadsheet
 // sums, while a value this package keeps as text -- a zero-padded code, a
-// literal past int64 -- is written as text.
+// literal past int64 -- is written as text. A REAL column's cell keeps its
+// decimal point and takes a number format that shows one, which is what a load
+// reads the column's type back from.
 //
 // A Parquet file written back to itself keeps the schema it declared. Nothing
 // in the database remembers it -- a BOOLEAN column loads as the integers 1 and
