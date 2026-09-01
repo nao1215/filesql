@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -2144,4 +2145,116 @@ func loadedTables(t *testing.T, db *sql.DB) []string {
 	}
 	require.NoError(t, rows.Err())
 	return names
+}
+
+// TestASheetWhoseFirstRowIsBlankKeepsItsRows pins that a workbook holding data
+// loads it. A sheet whose first row held cells that were all empty -- which is
+// what a cleared or formatted top row leaves -- was taken for an empty sheet
+// and passed over, so the workbook opened as a database with no tables and no
+// error at all, and every row in it was lost in silence.
+func TestASheetWhoseFirstRowIsBlankKeepsItsRows(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "book.xlsx")
+	f := excelize.NewFile()
+	// Cells that exist and hold nothing, which is not the same as no cells.
+	if err := f.SetCellStr("Sheet1", "A1", ""); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := f.SetCellStr("Sheet1", "B1", ""); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	for row, values := range map[int][2]any{2: {"a", "b"}, 3: {"1", "2"}} {
+		for col, value := range values {
+			cell, err := excelize.CoordinatesToCellName(col+1, row)
+			if err != nil {
+				t.Fatalf("cell: %v", err)
+			}
+			if err := f.SetCellValue("Sheet1", cell, value); err != nil {
+				t.Fatalf("set: %v", err)
+			}
+		}
+	}
+	if err := f.SaveAs(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	db, err := OpenContext(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(t.Context(), "SELECT a, b FROM book_Sheet1")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	defer rows.Close()
+	var got [][2]string
+	for rows.Next() {
+		var a, b string
+		if err := rows.Scan(&a, &b); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got = append(got, [2]string{a, b})
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	if want := [][2]string{{"1", "2"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("rows = %v, want %v", got, want)
+	}
+}
+
+// TestASheetWithNothingInItStillMakesNoTable pins the rule the skip must not
+// take with it.
+func TestASheetWithNothingInItStillMakesNoTable(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "book.xlsx")
+	f := excelize.NewFile()
+	if _, err := f.NewSheet("Empty"); err != nil {
+		t.Fatalf("new sheet: %v", err)
+	}
+	if err := f.SetCellValue("Sheet1", "A1", "a"); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := f.SetCellValue("Sheet1", "A2", 1); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := f.SaveAs(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	db, err := OpenContext(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(t.Context(), "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	defer rows.Close()
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		tables = append(tables, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	if want := []string{"book_Sheet1"}; !reflect.DeepEqual(tables, want) {
+		t.Errorf("tables = %q, want %q", tables, want)
+	}
 }

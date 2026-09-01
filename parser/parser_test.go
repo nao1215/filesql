@@ -204,7 +204,6 @@ func TestParse_TSVRowShape(t *testing.T) {
 	}{
 		{name: "a row longer than the header", input: "a\n1\t2\n"},
 		{name: "a row shorter than the header", input: "a\tb\n1\n"},
-		{name: "an empty header and a row of two cells", input: "\n\t"},
 		{name: "a long row after a good one", input: "a\tb\n1\t2\n3\t4\t5\n"},
 	}
 	for _, tt := range refused {
@@ -240,6 +239,22 @@ func TestParse_TSVRowShape(t *testing.T) {
 			name:    "a header alone",
 			input:   "a\tb\n",
 			headers: []string{"a", "b"},
+			records: [][]string{},
+		},
+		{
+			// A line with nothing on it is not a header, here as in a CSV,
+			// where encoding/csv has always passed over one. The header is the
+			// first line that holds something, and a line holding empty cells
+			// holds that many columns.
+			name:    "a blank line before the header",
+			input:   "\n1\t2\n",
+			headers: []string{"1", "2"},
+			records: [][]string{},
+		},
+		{
+			name:    "a blank line before a header of empty cells",
+			input:   "\n\t",
+			headers: []string{"column_1", "column_2"},
 			records: [][]string{},
 		},
 	}

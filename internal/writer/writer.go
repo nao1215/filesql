@@ -47,6 +47,15 @@ type Options struct {
 	// file it is replacing already used, and that includes the lone carriage
 	// return of a classic Mac OS file.
 	LineEnding string
+	// Unwritable reports a character the destination cannot hold, and names
+	// what the destination is. It is nil where every character can be written,
+	// which is every destination that takes UTF-8.
+	//
+	// The check belongs here rather than around the encoder the bytes pass
+	// through next, because a stream encoder fails with the whole file in hand
+	// and cannot say which value the character came from, where this runs on
+	// the field and names its column.
+	Unwritable func(rune) (name string, ok bool)
 }
 
 // terminator is the line ending to write, with the zero value spelled out.
@@ -89,6 +98,9 @@ type Writer struct {
 
 	// compact holds one JSONL value on its way to a single line.
 	compact bytes.Buffer
+
+	// opts are the caller's, kept for the checks a record runs through.
+	opts Options
 }
 
 // New returns a writer that writes records of format to dst.
@@ -102,6 +114,7 @@ func New(dst io.Writer, format Format, opts Options) *Writer {
 		dst:    dst,
 		format: format,
 		term:   opts.terminator(),
+		opts:   opts,
 	}
 
 	// encoding/csv terminates a record with "\n" and offers only UseCRLF for an
@@ -141,6 +154,11 @@ func (w *Writer) Header(columns []string) error {
 	}
 	if err := checkColumnNamesAreUTF8(columns); err != nil {
 		return err
+	}
+	for i, column := range columns {
+		if r, ok := w.unwritableIn(column); !ok {
+			return w.unwritableError(fmt.Sprintf("the name of column %d holds", i+1), r)
+		}
 	}
 	w.columns = columns
 	switch w.format {
@@ -358,17 +376,53 @@ func checkFirstColumn(format Format, columns []string) error {
 // given no header.
 func (w *Writer) checkValuesAreUTF8(record []string) error {
 	for i, field := range record {
-		if utf8.ValidString(field) {
-			continue
+		if !utf8.ValidString(field) {
+			return &Error{
+				Kind: KindNotUTF8,
+				Msg: fmt.Sprintf(
+					"a text format holds characters rather than bytes, and column %s holds a value that is not valid UTF-8",
+					w.columnName(i)),
+			}
 		}
-		return &Error{
-			Kind: KindNotUTF8,
-			Msg: fmt.Sprintf(
-				"a text format holds characters rather than bytes, and column %s holds a value that is not valid UTF-8",
-				w.columnName(i)),
+		if r, ok := w.unwritableIn(field); !ok {
+			return w.unwritableError("column "+w.columnName(i)+" holds", r)
 		}
 	}
 	return nil
+}
+
+// unwritableIn reports the first character of text the destination cannot hold.
+// It answers before looking at anything where the destination takes every
+// character, which is every destination that writes UTF-8, and passes over what
+// is ASCII, which every encoding here writes.
+//
+// The message is built by unwritableError rather than here, because the words
+// naming where the text sits cost an allocation each and this runs on every
+// field of every row.
+func (w *Writer) unwritableIn(text string) (rune, bool) {
+	if w.opts.Unwritable == nil {
+		return 0, true
+	}
+	for _, r := range text {
+		if r < utf8.RuneSelf {
+			continue
+		}
+		if _, ok := w.opts.Unwritable(r); !ok {
+			return r, false
+		}
+	}
+	return 0, true
+}
+
+// unwritableError names the character and what refuses it. The subject is the
+// caller's words for where the text sits, so a value and a column name read
+// alike.
+func (w *Writer) unwritableError(subject string, r rune) error {
+	name, _ := w.opts.Unwritable(r)
+	return &Error{
+		Kind: KindUnwritableInEncoding,
+		Msg:  fmt.Sprintf("%s %U, which %s cannot write", subject, r, name),
+	}
 }
 
 // columnName is how a refusal names the column at i: the name the header gave

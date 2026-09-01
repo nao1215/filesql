@@ -537,7 +537,7 @@ func writeSQLiteTableDataTo(w io.Writer, tableName string, columns []string, row
 	if !ok {
 		return fmt.Errorf("%w: unsupported output format: %v", ErrUnsupportedFormat, options.Format)
 	}
-	writeErr := writeTextData(encoded, columns, rows, text, options.LineEnding)
+	writeErr := writeTextData(encoded, columns, rows, text, options.LineEnding, options.Encoding.unwritableRune())
 	if writeErr != nil && encoder.encoderFailed() {
 		return encodingError(options.Encoding, writeErr)
 	}
@@ -577,8 +577,18 @@ var textDumpFormats = map[OutputFormat]textDumpFormat{
 // The encoding is the writer package's; what is here is the part that is this
 // package's own: reading a row out of the driver and rendering each value as
 // the text a reader turns back into the same cell.
-func writeTextData(w io.Writer, columns []string, rows *sql.Rows, text textDumpFormat, lineEnding LineEnding) error {
-	out := writer.New(w, text.format, writer.Options{LineEnding: lineEnding.terminator()})
+func writeTextData(
+	w io.Writer,
+	columns []string,
+	rows *sql.Rows,
+	text textDumpFormat,
+	lineEnding LineEnding,
+	unwritable func(rune) (string, bool),
+) error {
+	out := writer.New(w, text.format, writer.Options{
+		LineEnding: lineEnding.terminator(),
+		Unwritable: unwritable,
+	})
 
 	// The header is written — or, for LTSV, checked and kept as the label of
 	// each field — before the rows, so a table whose column name the format
@@ -664,6 +674,11 @@ func dumpFormatError(err error, text textDumpFormat) error {
 		// carries such a table, and the format's own sentinel names a value
 		// this format cannot hold rather than one no text format can.
 		return fmt.Errorf("%w: %s; dump this table as Parquet instead", ErrUnsupportedFormat, writeErr.Error())
+	case writer.KindUnwritableInEncoding:
+		// The encoding the caller asked for is what refuses this, not the
+		// format, so it carries the sentinel a failed encoder carries and
+		// points at the formats that hold text without one.
+		return fmt.Errorf("%w: %s; dump this table as XLSX or Parquet, or in UTF-8", ErrEncoding, writeErr.Error())
 	case writer.KindUnrepresentableUnnamed:
 		// The format's own sentinel names a value the format cannot hold, and
 		// this is a column name, so the refusal stands under ErrUnsupportedFormat

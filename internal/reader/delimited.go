@@ -161,12 +161,9 @@ func newRecordReader(src io.Reader, format Format, limit int) recordReader {
 func readDelimited(src io.Reader, format Format, opts Options, emit Emit) (Result, error) {
 	records := newRecordReader(src, format, recordLimitOf(opts))
 
-	headerRecord, err := records.Read()
+	headerRecord, err := readHeaderRecord(records, format)
 	if err != nil {
-		if errors.Is(err, io.EOF) {
-			return Result{}, emptyError("empty %s data", format)
-		}
-		return Result{}, parseError(err, "failed to read %s header", format)
+		return Result{}, err
 	}
 	headerRecord = NameBlankColumns(headerRecord)
 	if err := ValidateColumnNames(headerRecord); err != nil {
@@ -211,6 +208,32 @@ func readDelimited(src io.Reader, format Format, opts Options, emit Emit) (Resul
 	result.Rows = rows.rows
 	result.Types = rows.types()
 	return result, nil
+}
+
+// readHeaderRecord reads the record the columns are named after, which is the
+// first line that holds anything. A line with nothing on it is not a header:
+// encoding/csv passes over such a line wherever it stands, and every loader
+// here passes over one in the middle of a file, so one at the top is passed
+// over too. Without this a TSV beginning with a blank line read that line as a
+// header of one empty column and refused every row after it, where the same
+// bytes as a CSV loaded.
+//
+// A line holding empty fields is a different thing and stays a header: ",," is
+// three columns that name themselves after their positions.
+func readHeaderRecord(records recordReader, format Format) ([]string, error) {
+	for {
+		record, err := records.Read()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil, emptyError("empty %s data", format)
+			}
+			return nil, parseError(err, "failed to read %s header", format)
+		}
+		if len(record) == 1 && record[0] == "" {
+			continue
+		}
+		return record, nil
+	}
 }
 
 // NameBlankColumns gives a name to every column whose header cell is empty.

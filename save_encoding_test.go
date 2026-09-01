@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -700,3 +701,100 @@ func TestEncodedWriter_RecordsItsOwnFailures(t *testing.T) {
 type writerFunc func(p []byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+// TestADumpRefusedByItsEncodingNamesTheColumnAndTheCharacter pins what a caller
+// is told when the encoding they asked for cannot write something the table
+// holds. The refusal used to say only that the table held such a value --
+// "shift-jis cannot write a value in this table" -- so a caller with forty
+// columns had to go looking, where the refusal beside it, for a value that is
+// not valid UTF-8, has named its column since it was written.
+func TestADumpRefusedByItsEncodingNamesTheColumnAndTheCharacter(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "t.csv")
+	if err := os.WriteFile(src, []byte("id,name,note\n1,ok,x\n2,\"smile 🙂\",x\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	db, err := OpenContext(t.Context(), src)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	for _, encoding := range []Encoding{EncodingShiftJIS, EncodingEUCJP, EncodingISO2022JP} {
+		err := DumpDatabase(db, t.TempDir(), NewDumpOptions().WithEncoding(encoding))
+		if err == nil {
+			t.Errorf("a dump into %s of a table holding an emoji succeeded, want a refusal", encoding)
+			continue
+		}
+		if !errors.Is(err, ErrEncoding) {
+			t.Errorf("dump into %s = %v, want ErrEncoding", encoding, err)
+		}
+		for _, want := range []string{`column "name"`, "U+1F642", encoding.String()} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("dump into %s = %v, want the message to hold %q", encoding, err, want)
+			}
+		}
+	}
+}
+
+// TestADumpRefusedByItsEncodingNamesAColumnName pins the other place the
+// character can sit.
+func TestADumpRefusedByItsEncodingNamesAColumnName(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "t.csv")
+	if err := os.WriteFile(src, []byte("id,smile🙂\n1,2\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	db, err := OpenContext(t.Context(), src)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	err = DumpDatabase(db, t.TempDir(), NewDumpOptions().WithEncoding(EncodingShiftJIS))
+	if !errors.Is(err, ErrEncoding) {
+		t.Fatalf("dump = %v, want ErrEncoding", err)
+	}
+	for _, want := range []string{"column 2", "U+1F642", "shift-jis"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("dump = %v, want the message to hold %q", err, want)
+		}
+	}
+}
+
+// TestADumpInAnEncodingThatHoldsTheTableStillWrites pins the sibling: an
+// encoding that can write what the table holds is untouched by the check.
+func TestADumpInAnEncodingThatHoldsTheTableStillWrites(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "t.csv")
+	if err := os.WriteFile(src, []byte("id,name\n1,日本語\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	db, err := OpenContext(t.Context(), src)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	for _, encoding := range []Encoding{EncodingUTF8, EncodingShiftJIS, EncodingEUCJP, EncodingUTF16LE} {
+		out := t.TempDir()
+		if err := DumpDatabase(db, out, NewDumpOptions().WithEncoding(encoding)); err != nil {
+			t.Errorf("dump into %s = %v, want it to write", encoding, err)
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(out, "t.csv")) //nolint:gosec // Test path from t.TempDir()
+		if err != nil {
+			t.Errorf("read the dump: %v", err)
+			continue
+		}
+		if len(body) == 0 {
+			t.Errorf("dump into %s wrote nothing", encoding)
+		}
+	}
+}

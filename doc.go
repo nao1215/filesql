@@ -286,7 +286,8 @@
 // file written in another encoding is for other tools, and transcoding it is the
 // caller's step before loading it back. A value the encoding has no way to write
 // fails the save with ErrEncoding and leaves the destination as it was, rather
-// than writing a substitute character. ISO-2022-JP additionally refuses an
+// than writing a substitute character; the refusal names the column the value
+// sits in, or the column whose name holds it, and the character itself. ISO-2022-JP additionally refuses an
 // escape, U+001B, which it reads as the start of a character-set designator
 // rather than as data.
 //
@@ -416,6 +417,13 @@
 // with one is refused with ErrUnsupportedFormat for CSV, TSV and LTSV, which
 // write that name where a reader takes it for the encoding mark; XLSX and
 // Parquet keep it.
+//
+// A line with nothing on it is not a header: the columns are named by the first
+// line that holds something, so a file that begins with a blank line -- what a
+// hand-edited export or a rotated log leaves -- loads the same as one that does
+// not. A blank line in the middle of a file was already passed over, and a sheet
+// whose first row holds only empty cells is read the same way. A line holding
+// empty fields is a different thing and is a header of that many columns.
 //
 // A header cell that is empty names nothing, so the column takes the name of its
 // position: "a,,c" loads as a, column_2 and c. The generated name is moved along
