@@ -398,6 +398,25 @@ func TestStripHTMLPreprocessor(t *testing.T) {
 		{"no tags", "hello world", "hello world"},
 		{"empty input", "", ""},
 		{"mixed content", "Hello <b>bold</b> world", "Hello bold world"},
+		// A "<" begins markup only when what follows can begin it, so a
+		// comparison in free text is text.
+		{"a comparison", "price < 10 > shipping", "price < 10 > shipping"},
+		{"two comparisons", "5 < 6 and 7 > 8", "5 < 6 and 7 > 8"},
+		{"a less-than before a space", "a < b", "a < b"},
+		{"a less-than before a digit", "1 <2 and 3> 4", "1 <2 and 3> 4"},
+		// Inside markup a ">" ends it only outside a quoted attribute value.
+		{"a tag whose attribute holds a bracket", `<img alt="a > b" src="s">caption`, "caption"},
+		{"the same attribute in single quotes", `<a href='x>y'>link</a>`, "link"},
+		{"a value that is a bracket", `<input value=">">tail`, "tail"},
+		// A comment ends at its own terminator.
+		{"a comment holding a bracket", "<!-- a > b -->text", "text"},
+		{"a plain comment", "<!-- note -->text", "text"},
+		// Markup with no terminator is text, so a truncated value loses
+		// nothing.
+		{"an unterminated tag", "text <b", "text <b"},
+		{"an unterminated comment", "<!-- a > b", "<!-- a > b"},
+		{"an end tag", "a</p>b", "ab"},
+		{"a doctype", "<!DOCTYPE html>text", "text"},
 	}
 
 	prep := newStripHTMLPreprocessor()

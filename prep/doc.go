@@ -98,7 +98,11 @@
 //   - trim, ltrim, rtrim: remove whitespace from both ends, the left, the right
 //   - collapse_space: replace each run of whitespace with one space
 //   - strip_newline: remove carriage returns and line feeds
-//   - strip_html: remove HTML tags
+//   - strip_html: remove HTML tags. A "<" begins one only when what follows can
+//     begin it -- a letter, a slash and a letter, a "!" or a "?" -- so a
+//     comparison written in free text is text, and a ">" ends one only outside
+//     a quoted attribute value. Markup the value ends in the middle of is text
+//     as well
 //   - lowercase, uppercase: fold case
 //   - normalize_unicode: normalize to NFC
 //   - default=value: use value when the cell is empty
