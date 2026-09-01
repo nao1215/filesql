@@ -116,8 +116,8 @@
 //     alone
 //   - fix_scheme=scheme: add scheme:// to a URL that has no scheme. A value
 //     that names one already keeps it, however it is written, so mailto: and
-//     tel: are left alone; fix_scheme=https is the one that rewrites, and it
-//     rewrites http:// only
+//     tel: are left alone; the one exception is fix_scheme=https, which
+//     rewrites an http scheme to https however that scheme is written
 //
 // A parameter that needs a comma or a colon of its own writes a backslash in
 // front of it, which the parser drops: regex_replace=https?\://:scheme- reads

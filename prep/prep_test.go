@@ -834,6 +834,13 @@ func TestFixSchemePreprocessor(t *testing.T) {
 		{"underscore is not in a scheme", "https", "a_b:c", "https://a_b:c"},
 		{"leading colon", "https", ":8080", "https://:8080"},
 		{"scheme with digits and signs", "https", "a1+b-c.d:x", "a1+b-c.d:x"},
+
+		// An http scheme is upgraded however it is written, and only under
+		// fix_scheme=https.
+		{"upgrade opaque http", "https", "http:opaque", "https:opaque"},
+		{"upgrade uppercase opaque http", "https", "HTTP:opaque", "https:opaque"},
+		{"keep opaque http under fix_scheme=http", "http", "http:opaque", "http:opaque"},
+		{"keep opaque https", "https", "https:opaque", "https:opaque"},
 	}
 
 	for _, tt := range tests {
