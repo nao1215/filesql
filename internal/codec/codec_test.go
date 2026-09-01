@@ -689,8 +689,15 @@ func TestCodecNamesOnlyWhatItHas(t *testing.T) {
 			t.Errorf("Codec(%d).String() = %q, want %q", int(codec), got, want)
 		}
 	}
-	if len(known) != int(LZ4)+1 {
-		t.Errorf("the table covers %d codecs and there are %d", len(known), int(LZ4)+1)
+	// A codec added later names itself, so it has to appear above. Asking the
+	// enumeration rather than counting to its current last member is what makes
+	// this fail for one appended after it.
+	for i := range 64 {
+		if codec := Codec(i); codec.String() != "unknown" {
+			if _, ok := known[codec]; !ok {
+				t.Errorf("Codec(%d) is named %q and is missing from this table", i, codec.String())
+			}
+		}
 	}
 
 	for _, unknown := range []Codec{Codec(99), Codec(-1)} {
