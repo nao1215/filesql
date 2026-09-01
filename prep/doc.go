@@ -118,7 +118,8 @@
 //   - regex_replace=pattern:replacement: replace every match of pattern
 //   - truncate=N: keep the first N characters
 //   - pad_left=N:char, pad_right=N:char: pad to N characters, with char or a
-//     space
+//     space. N is at most a billion, which is the length SQLite refuses a
+//     string at and so the longest a padded value could be loaded
 //   - trim_set=chars: remove any of chars from both ends
 //   - keep_digits, keep_alpha: keep only digits, or only letters
 //   - remove_digits, remove_alpha: remove digits, or letters

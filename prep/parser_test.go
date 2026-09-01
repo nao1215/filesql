@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -1443,4 +1444,92 @@ func TestSplitUnescapedAndUnescapeTagText(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestNoPreprocessorPanics builds every prep tag with a matrix of the
+// parameters that break things -- both int64 bounds, a length past what a
+// string can hold, an empty parameter, a lone separator -- and runs each over
+// values of the same shape.
+//
+// It ranges over the registry rather than a list, so a tag added later is
+// covered without anyone remembering to add it. The assertion is only that
+// nothing panics: a preprocessor runs inside the caller's Process call, and
+// pad_left with a length of 9223372036854775807 ended their process rather than
+// telling them the length was impossible.
+func TestNoPreprocessorPanics(t *testing.T) {
+	t.Parallel()
+
+	if len(prepBuilders) < 20 {
+		t.Fatalf("the registry holds %d builders, which is too few to be the whole of it", len(prepBuilders))
+	}
+
+	params := []string{
+		"", "0", "-1", "9223372036854775807", "-9223372036854775808",
+		"1000000001", "x", ":", "x:y", "0:x", "9223372036854775807:x",
+		"1.5", "int", "https", "abc",
+	}
+	values := []string{"", "a", "  a  ", strings.Repeat("a", 100), "1", "-1", "<b>x</b>", "a,b", "true"}
+
+	for name, build := range prepBuilders {
+		for _, param := range params {
+			for _, strict := range []bool{false, true} {
+				runPreprocessorWithoutPanic(t, name, build, param, strict, values)
+			}
+		}
+	}
+}
+
+// runPreprocessorWithoutPanic builds one tag and runs it over values, reporting
+// a panic as a failure rather than letting it end the run.
+func runPreprocessorWithoutPanic(t *testing.T, name string, build func(string, bool) (preprocessor, error), param string, strict bool, values []string) {
+	t.Helper()
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("%s=%s (strict %v) panicked: %v", name, param, strict, r)
+		}
+	}()
+	p, err := build(param, strict)
+	if err != nil || p == nil {
+		return
+	}
+	for _, value := range values {
+		_ = p.Process(value)
+	}
+}
+
+// TestPadRefusesALengthThatCannotBeHeld pins the boundary either side of the
+// length a padded value can be. The tag is checked when it is parsed, so the
+// test asks the builder rather than padding a value: at the limit that would be
+// a gigabyte of memory to prove a number.
+func TestPadRefusesALengthThatCannotBeHeld(t *testing.T) {
+	t.Parallel()
+
+	for _, tag := range []string{"pad_left", "pad_right"} {
+		build, ok := prepBuilders[tag]
+		if !ok {
+			t.Fatalf("%s is not a tag", tag)
+		}
+		if _, err := build(strconv.Itoa(maxPaddedLength)+":x", true); err != nil {
+			t.Errorf("%s at the limit must be accepted: %v", tag, err)
+		}
+		err := func() error {
+			p, buildErr := build(strconv.Itoa(maxPaddedLength+1)+":x", true)
+			if buildErr == nil && p != nil {
+				return errors.New("a length past the limit was accepted")
+			}
+			return buildErr
+		}()
+		if err == nil {
+			t.Errorf("%s past the limit must be refused", tag)
+		} else if !errors.Is(err, ErrInvalidTagFormat) {
+			t.Errorf("%s past the limit: err = %v, want ErrInvalidTagFormat", tag, err)
+		}
+
+		// Without WithStrictTagParsing an unusable parameter is ignored, which
+		// is what the documented behaviour says and what the other tags do.
+		if p, lax := build(strconv.Itoa(maxPaddedLength+1)+":x", false); lax != nil || p != nil {
+			t.Errorf("%s past the limit without strict parsing: p = %v, err = %v, want both nil", tag, p, lax)
+		}
+	}
 }
