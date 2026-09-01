@@ -256,21 +256,89 @@ func (p *truncatePreprocessor) Name() string {
 	return truncateTagValue
 }
 
-// stripHTMLPreprocessor removes HTML tags from the value
-type stripHTMLPreprocessor struct {
-	re *regexp.Regexp
-}
+// stripHTMLPreprocessor removes the markup in a value and leaves the text.
+//
+// It used to be the pattern `<[^>]*>`, which is neither what a tag is nor all
+// of what a tag is. Free text lost a span between any two of the characters it
+// looks for -- "price < 10 > shipping" came back as "price  shipping" -- and a
+// tag whose attribute held a ">" ended early, so `<img alt="a > b" src="s">`
+// left `a > b" src="s">` in the data it was called on to clean.
+//
+// Two rules cover both, and neither needs a parser: a "<" begins markup only
+// when what follows can begin it, which is how an HTML tokenizer decides, and a
+// ">" ends markup only outside a quoted attribute value. Markup with no
+// terminator stays text, so a truncated value loses nothing.
+type stripHTMLPreprocessor struct{}
 
 // newStripHTMLPreprocessor creates a new strip HTML preprocessor
 func newStripHTMLPreprocessor() *stripHTMLPreprocessor {
-	return &stripHTMLPreprocessor{
-		re: regexp.MustCompile(`<[^>]*>`),
-	}
+	return &stripHTMLPreprocessor{}
 }
 
-// Process removes HTML tags from the value
+// Process removes the markup in value.
 func (p *stripHTMLPreprocessor) Process(value string) string {
-	return p.re.ReplaceAllString(value, "")
+	var b strings.Builder
+	for i := 0; i < len(value); {
+		if value[i] != '<' {
+			b.WriteByte(value[i])
+			i++
+			continue
+		}
+		end, ok := markupEnd(value, i)
+		if !ok {
+			b.WriteByte(value[i])
+			i++
+			continue
+		}
+		i = end
+	}
+	return b.String()
+}
+
+// markupEnd is the index just past the markup beginning at s[i], which is a
+// "<", or false when what stands there is text: a "<" that begins nothing, or
+// markup the value ends in the middle of.
+//
+// The scan is over bytes, which answers the same question as one over runes:
+// every character it looks at is ASCII, and no byte of a multi-byte UTF-8
+// sequence is.
+func markupEnd(s string, i int) (int, bool) {
+	rest := s[i+1:]
+	switch {
+	case strings.HasPrefix(rest, "!--"):
+		// A comment ends at its own terminator rather than at the first ">".
+		if j := strings.Index(s[i+4:], "-->"); j >= 0 {
+			return i + 4 + j + len("-->"), true
+		}
+		return 0, false
+	case rest == "":
+		return 0, false
+	case rest[0] == '!' || rest[0] == '?':
+		// A doctype or a processing instruction.
+	case isASCIILetter(rune(rest[0])):
+		// A start tag.
+	case rest[0] == '/' && len(rest) > 1 && isASCIILetter(rune(rest[1])):
+		// An end tag.
+	default:
+		// A "<" before a space, a digit or a bracket is text, which is what
+		// makes a comparison in free text survive.
+		return 0, false
+	}
+
+	var quote byte
+	for j := i + 1; j < len(s); j++ {
+		switch c := s[j]; {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '>':
+			return j + 1, true
+		}
+	}
+	return 0, false
 }
 
 // Name returns the preprocessor name
@@ -780,8 +848,9 @@ func isPort(rest string) bool {
 }
 
 // isASCIILetter reports whether r is one of the letters a scheme is written
-// with. A scheme is ASCII, so unicode.IsLetter would admit more than the
-// grammar does, and so would unicode.IsDigit for isASCIIDigit.
+// with, and one of those a tag name begins with, which are the same set. Both
+// are ASCII, so unicode.IsLetter would admit more than either grammar does, and
+// so would unicode.IsDigit for isASCIIDigit.
 func isASCIILetter(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }
