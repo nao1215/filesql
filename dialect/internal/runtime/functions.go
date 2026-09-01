@@ -645,28 +645,20 @@ func toFloat(v driver.Value) (float64, bool) {
 
 // --- common / dialects.MySQL scalar functions ---
 
-var (
-	regexpCacheMu sync.RWMutex
-	regexpCache   = map[string]*regexp.Regexp{}
-)
+// regexpCache remembers compiled patterns. It is bounded because a pattern can
+// be a column: SELECT ... WHERE v REGEXP p compiles one per distinct value of
+// p, and an unbounded map keyed by data kept them for the life of the process,
+// long after the database they came from was closed.
+//
+//nolint:gochecknoglobals // a process-wide cache, bounded; see boundedCache
+var regexpCache boundedCache[*regexp.Regexp]
 
-// compileRegexp compiles pattern, caching the result. Compilation errors are
-// returned so the caller can surface them.
+// compileRegexp compiles pattern, caching the result up to the cache's bound.
+// Compilation errors are returned so the caller can surface them.
 func compileRegexp(pattern string) (*regexp.Regexp, error) {
-	regexpCacheMu.RLock()
-	re, ok := regexpCache[pattern]
-	regexpCacheMu.RUnlock()
-	if ok {
-		return re, nil
-	}
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return nil, err
-	}
-	regexpCacheMu.Lock()
-	regexpCache[pattern] = re
-	regexpCacheMu.Unlock()
-	return re, nil
+	return regexpCache.get(pattern, func() (*regexp.Regexp, error) {
+		return regexp.Compile(pattern)
+	})
 }
 
 // fnRegexp implements REGEXP(pattern, subject), the function dialects.SQLite invokes for
