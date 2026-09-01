@@ -276,7 +276,17 @@
 // file written in another encoding is for other tools, and transcoding it is the
 // caller's step before loading it back. A value the encoding has no way to write
 // fails the save with ErrEncoding and leaves the destination as it was, rather
-// than writing a substitute character.
+// than writing a substitute character. ISO-2022-JP additionally refuses an
+// escape, U+001B, which it reads as the start of a character-set designator
+// rather than as data.
+//
+// A text format holds characters rather than bytes, so a value or a column name
+// the database holds that is not valid UTF-8 fails the save with
+// ErrUnsupportedFormat for CSV, TSV, LTSV and XLSX, naming the field and
+// pointing at Parquet, which stores bytes and reads them back unchanged. Such a
+// value reaches a table by being bound as a Go []byte, or through a CAST or a
+// blob literal in a statement run during the session; a value read from a file
+// is checked when it is loaded.
 //
 // Records end with "\n" unless DumpOptions.WithLineEnding says otherwise, with
 // one exception: EnableAutoSave("") writes a table back to the file it was
