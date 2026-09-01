@@ -4276,6 +4276,12 @@ func TestAFileThatBeginsWithABlankLineReadsAlike(t *testing.T) {
 		{"tsv", "t.tsv", "\n1\t2\n3\t4\n"},
 		{"csv with two blank lines", "t.csv", "\n\n1,2\n3,4\n"},
 		{"tsv with two blank lines", "t.tsv", "\n\n1\t2\n3\t4\n"},
+		// A line of whitespace is what a hand-edited export leaves as readily
+		// as an empty one, and it carries nothing a column can be named after.
+		{"csv with a line of spaces", "t.csv", "   \n1,2\n3,4\n"},
+		{"tsv with a line of spaces", "t.tsv", "   \n1\t2\n3\t4\n"},
+		{"csv with a line of one ideographic space", "t.csv", "\u3000\n1,2\n3,4\n"},
+		{"csv with a blank line and a line of spaces", "t.csv", "\n   \n1,2\n3,4\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -4380,4 +4386,101 @@ func TestOpenContext_EndedContext(t *testing.T) {
 			assert.ErrorIs(t, err, tc.want)
 		})
 	}
+}
+
+// TestAFileThatBeginsWithALineOfWhitespace pins the cases the class above
+// cannot reach: a file of one column, where taking the whitespace line as the
+// header neither fails nor reports anything, and the rows that follow a file
+// whose first line was skipped.
+//
+// LTSV is not here because it has no header: a line of whitespace there is a
+// record holding a field that names no label, which the malformed-row policy
+// decides on and whose refusal quotes the field, so a caller can see what it
+// was. That answer is pinned in the LTSV tests.
+func TestAFileThatBeginsWithALineOfWhitespace(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a one-column file keeps its header", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "t.csv")
+		require.NoError(t, os.WriteFile(path, []byte("   \nid\n1\n2\n"), 0o600))
+
+		db, err := OpenContext(t.Context(), path)
+		require.NoError(t, err)
+		defer db.Close()
+
+		assert.Equal(t, []string{"id"}, tableColumns(t, db, "t"), "the header is the first line that holds something")
+		var count int
+		require.NoError(t, db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM t").Scan(&count))
+		assert.Equal(t, 2, count, "the header did not become a row")
+	})
+
+	t.Run("a later blank line is still skipped", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "t.tsv")
+		require.NoError(t, os.WriteFile(path, []byte("   \nid\tname\n1\talice\n\n2\tbob\n"), 0o600))
+
+		db, err := OpenContext(t.Context(), path)
+		require.NoError(t, err)
+		defer db.Close()
+
+		var count int
+		require.NoError(t, db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM t").Scan(&count))
+		assert.Equal(t, 2, count, "the width comes from the header, not from the line before it")
+	})
+
+	t.Run("nothing is skipped, so the header was found", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "t.csv")
+		require.NoError(t, os.WriteFile(path, []byte("   \nid,name\n1,alice\n2,bob\n"), 0o600))
+
+		builder := NewBuilder().AddPath(path).WithMalformedRowPolicy(MalformedRowSkip)
+		db, err := builder.Open(t.Context())
+		require.NoError(t, err)
+		defer db.Close()
+
+		assert.Empty(t, builder.SkippedRows(), "a file with a stray line of whitespace loses no rows")
+		var count int
+		require.NoError(t, db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM t").Scan(&count))
+		assert.Equal(t, 2, count)
+	})
+
+	t.Run("a line of two whitespace fields is still a header", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "t.csv")
+		require.NoError(t, os.WriteFile(path, []byte(" , \n1,2\n"), 0o600))
+
+		_, err := OpenContext(t.Context(), path)
+		require.Error(t, err, "a comma makes the line a header of two columns, which name one column twice")
+		assert.ErrorIs(t, err, ErrDuplicateColumn)
+	})
+
+	t.Run("a line of whitespace further down is a row of one field", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "t.csv")
+		require.NoError(t, os.WriteFile(path, []byte("id,name\n1,alice\n   \n2,bob\n"), 0o600))
+
+		_, err := OpenContext(t.Context(), path)
+		require.Error(t, err, "only the header search passes over a line of whitespace")
+		assert.ErrorIs(t, err, ErrColumnMismatch)
+	})
+}
+
+// tableColumns is the column names of a table, in order.
+func tableColumns(t *testing.T, db *sql.DB, table string) []string {
+	t.Helper()
+
+	query := "SELECT * FROM " + quoteIdentifier(table) + " LIMIT 0" //nolint:gosec // Table name is quoted and comes from the test
+	rows, err := db.QueryContext(t.Context(), query)
+	require.NoError(t, err)
+	defer rows.Close()
+	columns, err := rows.Columns()
+	require.NoError(t, err)
+	require.NoError(t, rows.Err())
+	return columns
 }
