@@ -1025,3 +1025,51 @@ func BenchmarkProcessFSToReaders(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkOpenFedWire measures a Fedwire load, which reads its file through
+// the record bound the other formats already held to. The bound walks every
+// byte, so this is where paying for it would show.
+func BenchmarkOpenFedWire(b *testing.B) {
+	path := filepath.Join("testdata", "customer-transfer.fed")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for range b.N {
+		db, err := NewBuilder().
+			AddReader(bytes.NewReader(data), "payment", FileTypeFedWire).
+			Open(ctx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkSanitizeTableName measures the derivation every loaded file goes
+// through to get its table name.
+func BenchmarkSanitizeTableName(b *testing.B) {
+	names := []string{
+		"users",
+		"quarterly sales-report.2026",
+		"売上 レポート",
+		"2024",
+		"@#$%",
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for range b.N {
+		for _, n := range names {
+			_ = sanitizeTableName(n)
+		}
+	}
+}
