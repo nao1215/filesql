@@ -5,10 +5,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/nao1215/filesql/internal/reader"
+	"github.com/xuri/excelize/v2"
 )
 
 func TestAutoSaveConnection_PerformACHAutoSave(t *testing.T) {
@@ -632,4 +636,127 @@ func TestDumpDatabase_RefusesADestinationThatIsNotADirectory(t *testing.T) {
 	assert.Contains(t, err.Error(), "not a directory")
 	assert.Contains(t, err.Error(), occupied)
 	assert.NotContains(t, err.Error(), "mkdir", "the refusal is this package's own, not the one mkdir writes")
+}
+
+// TestSheetKeyFoldsTheWayExcelDoes pins which of the two folds this package
+// uses answers here. A table name compared against another table name folds
+// ASCII case, because SQLite's does. A table matched to the sheet it lives in
+// folds the way the library writing the workbook matches sheet names, which is
+// strings.EqualFold: folding only ASCII would miss the sheet and ask for a new
+// one, and asking for a sheet that is already there hands back the existing
+// one, whose rows the save then overwrites.
+func TestSheetKeyFoldsTheWayExcelDoes(t *testing.T) {
+	t.Parallel()
+
+	// Every pair strings.EqualFold calls equal has to reach one key, including
+	// the pairs strings.ToLower keys apart: sigma has three forms in one fold
+	// orbit, and the long s folds to an ordinary one.
+	equal := []struct{ a, b string }{
+		{"book_xÄy", "book_xäy"},
+		{"book_Data", "book_data"},
+		{"book_xΣy", "book_xςy"},
+		{"book_xΣy", "book_xσy"},
+		{"book_xſy", "book_xsy"},
+		{"book_xKy", "book_x\u212ay"},
+	}
+	for _, tc := range equal {
+		if !strings.EqualFold(tc.a, tc.b) {
+			t.Fatalf("test is wrong: %q and %q are not EqualFold", tc.a, tc.b)
+		}
+		if sheetKey(tc.a) != sheetKey(tc.b) {
+			t.Errorf("sheetKey(%q) = %q and sheetKey(%q) = %q, but the workbook writer calls them one sheet",
+				tc.a, sheetKey(tc.a), tc.b, sheetKey(tc.b))
+		}
+	}
+
+	// And nothing else: two names the writer keeps apart must keep two keys.
+	different := []struct{ a, b string }{
+		{"book_orders", "book_invoices"},
+		{"book_a", "book_ab"},
+		{"book_xäy", "book_xay"},
+	}
+	for _, tc := range different {
+		if sheetKey(tc.a) == sheetKey(tc.b) {
+			t.Errorf("sheetKey collapsed %q and %q, which are two sheets", tc.a, tc.b)
+		}
+	}
+
+	// The other fold, which this one is not: SQLite holds these as two tables.
+	if reader.ASCIIFold("book_xÄy") == reader.ASCIIFold("book_xäy") {
+		t.Error("ASCIIFold matched two names SQLite holds as two tables, which is the fold this is not")
+	}
+}
+
+// TestOverwriteWorkbookRefusesTwoTablesForOneSheet drives the guard that keeps
+// an in-place save from writing two tables into one sheet. The workbook writer
+// matches sheet names without regard to case, so two tables whose sheets it
+// calls one sheet have to be refused here; comparing the names as written let
+// them past, and the second table's rows overwrote the first's while Close
+// reported success.
+func TestOverwriteWorkbookRefusesTwoTablesForOneSheet(t *testing.T) {
+	t.Parallel()
+
+	newBook := func(t *testing.T) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "book.xlsx")
+		f := excelize.NewFile()
+		require.NoError(t, f.SetSheetName("Sheet1", "s"))
+		require.NoError(t, f.SetCellValue("s", "A1", "name"))
+		require.NoError(t, f.SetCellValue("s", "A2", "s-value"))
+		require.NoError(t, f.SaveAs(path))
+		require.NoError(t, f.Close())
+		return path
+	}
+
+	saveWith := func(t *testing.T, path string, statements ...string) error {
+		t.Helper()
+		ctx := context.Background()
+		db, err := NewBuilder().AddPath(path).EnableAutoSave("").Open(ctx)
+		require.NoError(t, err)
+		for _, s := range statements {
+			_, err := db.ExecContext(ctx, s)
+			require.NoError(t, err)
+		}
+		return db.Close()
+	}
+
+	t.Run("names differing only outside ASCII are one sheet", func(t *testing.T) {
+		t.Parallel()
+		err := saveWith(t, newBook(t),
+			`CREATE TABLE "book_xäy" (name TEXT)`,
+			`INSERT INTO "book_xäy" VALUES ('lower')`,
+			`CREATE TABLE "book_xÄy" (name TEXT)`,
+			`INSERT INTO "book_xÄy" VALUES ('upper')`,
+		)
+		require.Error(t, err, "two tables that become one sheet must be refused")
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+	})
+
+	t.Run("names in one fold orbit are one sheet", func(t *testing.T) {
+		t.Parallel()
+		// Sigma has three forms in one orbit, so the workbook writer calls
+		// these one sheet where lowercasing would have keyed them apart.
+		err := saveWith(t, newBook(t),
+			`CREATE TABLE "book_xΣy" (name TEXT)`,
+			`INSERT INTO "book_xΣy" VALUES ('capital sigma')`,
+			`CREATE TABLE "book_xςy" (name TEXT)`,
+			`INSERT INTO "book_xςy" VALUES ('final sigma')`,
+		)
+		require.Error(t, err, "two tables that become one sheet must be refused")
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+	})
+
+	t.Run("two ordinary tables reach two sheets", func(t *testing.T) {
+		t.Parallel()
+		path := newBook(t)
+		require.NoError(t, saveWith(t, path,
+			`CREATE TABLE "book_orders" (name TEXT)`,
+			`INSERT INTO "book_orders" VALUES ('an order')`,
+		))
+
+		f, err := excelize.OpenFile(path)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, f.Close()) }()
+		assert.ElementsMatch(t, []string{"s", "orders"}, f.GetSheetList())
+	})
 }

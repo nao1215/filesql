@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nao1215/filesql/internal/codec"
+	"github.com/nao1215/filesql/internal/reader"
 )
 
 // sheetFallbackName is the table name used when a sheet name sanitizes to empty.
@@ -235,11 +236,13 @@ func excelSheetTableNames(base, source string, sheetNames []string) (tables []st
 	tables = make([]string, len(sheetNames))
 	// SQLite folds ASCII case when it compares identifiers, so the key does too:
 	// "Data" and "data" are one table there, whatever the sanitizer preserved.
+	// It stops at ASCII the way SQLite's does, so two sheets whose names differ
+	// only outside it are two tables and not a collision.
 	claimed := make(map[string]string, len(sheetNames))
 	for i, sheet := range sheetNames {
 		table := xlsxSheetTableName(base, sheet)
 		tables[i] = table
-		key := strings.ToLower(table)
+		key := reader.ASCIIFold(table)
 		if first, taken := claimed[key]; taken {
 			return nil, fmt.Errorf("%w: sheets %q and %q of %s both map to table %q; rename one of them",
 				ErrDuplicateTable, first, sheet, source, table)

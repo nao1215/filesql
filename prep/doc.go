@@ -59,7 +59,10 @@
 // A struct may cover a subset of the columns. A field naming a column the input
 // does not have is refused with ErrUnknownColumn, since a zero-filled field
 // cannot be told apart from a cell that is really empty; give such a field
-// prep:"default=..." if it is meant to work without a column.
+// prep:"default=..." if it is meant to work without a column. A field and a
+// header name the same column when they differ only in ASCII letter case, which
+// is how filesql compares the column names it makes from those headers; the
+// folding stops at ASCII there, so "ä" and "Ä" are two columns here as well.
 //
 // # Supported File Formats
 //
@@ -118,6 +121,11 @@
 //     that names one already keeps it, however it is written, so mailto: and
 //     tel: are left alone; the one exception is fix_scheme=https, which
 //     rewrites an http scheme to https however that scheme is written
+//
+// The whitespace trim, ltrim, rtrim and collapse_space act on is what
+// unicode.IsSpace names, so a no-break space and the ideographic space U+3000
+// are padding like an ordinary space. strip_newline is narrower on purpose and
+// removes carriage returns and line feeds alone.
 //
 // A parameter that needs a comma or a colon of its own writes a backslash in
 // front of it, which the parser drops: regex_replace=https?\://:scheme- reads

@@ -3,6 +3,7 @@ package prep
 import (
 	"net/url"
 	"testing"
+	"unicode"
 
 	"github.com/nao1215/filesql/internal/infer"
 )
@@ -50,6 +51,15 @@ func TestLtrimPreprocessor(t *testing.T) {
 		{"ltrim spaces", "  hello  ", "hello  "},
 		{"ltrim tabs", "\thello\t", "hello\t"},
 		{"no trim needed", "hello", "hello"},
+		// Whitespace is what trim calls whitespace, so the three tags answer
+		// the one sentence that documents them the same way.
+		{"ltrim vertical tab", "\vhello\v", "hello\v"},
+		{"ltrim form feed", "\fhello\f", "hello\f"},
+		{"ltrim no-break space", "\u00a0hello\u00a0", "hello\u00a0"},
+		{"ltrim next line", "\u0085hello\u0085", "hello\u0085"},
+		{"ltrim em space", "\u2003hello\u2003", "hello\u2003"},
+		{"ltrim ideographic space", "\u3000hello\u3000", "hello\u3000"},
+		{"ltrim a mixed run", " \u3000\thello", "hello"},
 	}
 
 	prep := newLtrimPreprocessor()
@@ -79,6 +89,13 @@ func TestRtrimPreprocessor(t *testing.T) {
 		{"rtrim spaces", "  hello  ", "  hello"},
 		{"rtrim tabs", "\thello\t", "\thello"},
 		{"no trim needed", "hello", "hello"},
+		{"rtrim vertical tab", "\vhello\v", "\vhello"},
+		{"rtrim form feed", "\fhello\f", "\fhello"},
+		{"rtrim no-break space", "\u00a0hello\u00a0", "\u00a0hello"},
+		{"rtrim next line", "\u0085hello\u0085", "\u0085hello"},
+		{"rtrim em space", "\u2003hello\u2003", "\u2003hello"},
+		{"rtrim ideographic space", "\u3000hello\u3000", "\u3000hello"},
+		{"rtrim a mixed run", "hello\t\u3000 ", "hello"},
 	}
 
 	prep := newRtrimPreprocessor()
@@ -94,6 +111,37 @@ func TestRtrimPreprocessor(t *testing.T) {
 
 	if prep.Name() != "rtrim" {
 		t.Errorf("Name() = %q, want %q", prep.Name(), "rtrim")
+	}
+}
+
+// TestTrimTagsAgreeOnWhitespace states the property the three tables above
+// spell out case by case: doc.go documents trim, ltrim and rtrim with one
+// sentence, so they have to agree about which characters are padding.
+func TestTrimTagsAgreeOnWhitespace(t *testing.T) {
+	t.Parallel()
+
+	trim := newTrimPreprocessor()
+	ltrim := newLtrimPreprocessor()
+	rtrim := newRtrimPreprocessor()
+	collapse := newCollapseSpacePreprocessor()
+
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if !unicode.IsSpace(r) {
+			continue
+		}
+		pad := string(r)
+		if got := trim.Process(pad + "x" + pad); got != "x" {
+			t.Errorf("trim on %U padding = %q, want %q", r, got, "x")
+		}
+		if got := ltrim.Process(pad + "x" + pad); got != "x"+pad {
+			t.Errorf("ltrim on %U padding = %q, want %q", r, got, "x"+pad)
+		}
+		if got := rtrim.Process(pad + "x" + pad); got != pad+"x" {
+			t.Errorf("rtrim on %U padding = %q, want %q", r, got, pad+"x")
+		}
+		if got := collapse.Process("a" + pad + pad + "b"); got != "a b" {
+			t.Errorf("collapse_space on %U run = %q, want %q", r, got, "a b")
+		}
 	}
 }
 
@@ -414,6 +462,10 @@ func TestCollapseSpacePreprocessor(t *testing.T) {
 		{"single spaces", "hello world", "hello world"},
 		{"leading trailing", "  hello  ", " hello "},
 		{"empty input", "", ""},
+		{"no-break space is a run", "hello\u00a0\u00a0world", "hello world"},
+		{"ideographic space is a run", "hello\u3000world", "hello world"},
+		{"a run mixing spaces is one", "hello \u00a0\t\u3000world", "hello world"},
+		{"vertical tab and form feed", "hello\v\fworld", "hello world"},
 	}
 
 	prep := newCollapseSpacePreprocessor()
