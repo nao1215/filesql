@@ -245,6 +245,124 @@ func TestDumpDatabase_ISO2022JPStaysValidCSV(t *testing.T) {
 	}
 }
 
+// TestDumpDatabase_ISO2022JPRefusesAnEscape pins the one byte this encoding
+// reads rather than writes. ISO-2022-JP switches character sets with an escape
+// sequence, so an ESC held in a value or a column name went into the file as a
+// designator: "x\x1b$By" came back as "x絈", the y eaten as half of a double-byte
+// character, and a column named that way took the row after it into the same
+// word. The dump said nothing and the decoder said nothing -- the bytes are a
+// valid stream, they just say something else.
+func TestDumpDatabase_ISO2022JPRefusesAnEscape(t *testing.T) {
+	t.Parallel()
+
+	t.Run("an escape in a value", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, `CREATE TABLE t (a TEXT)`, `INSERT INTO t VALUES ('x'||CAST(x'1b2442' AS TEXT)||'y')`)
+
+		out := filepath.Join(t.TempDir(), "out")
+		err := DumpDatabase(db, out, NewDumpOptions().WithEncoding(EncodingISO2022JP))
+
+		require.Error(t, err, "the file would decode as different text")
+		assert.ErrorIs(t, err, ErrEncoding)
+	})
+
+	t.Run("an escape in a column name", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, "CREATE TABLE t (\"x\x1b$By\" TEXT)", `INSERT INTO t VALUES ('1')`)
+
+		out := filepath.Join(t.TempDir(), "out")
+		err := DumpDatabase(db, out, NewDumpOptions().WithEncoding(EncodingISO2022JP))
+
+		require.Error(t, err, "the header and the row would decode as one word")
+		assert.ErrorIs(t, err, ErrEncoding)
+	})
+
+	t.Run("a control byte the encoding does not read is written", func(t *testing.T) {
+		t.Parallel()
+
+		// Shift out is not a designator in ISO-2022-JP, so it is data like any
+		// other byte and has to keep being written.
+		db := openWithTable(t, `CREATE TABLE t (a TEXT)`, `INSERT INTO t VALUES ('p'||CAST(x'0e' AS TEXT)||'q')`)
+
+		out := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithEncoding(EncodingISO2022JP)))
+
+		raw, err := os.ReadFile(filepath.Join(out, "t.csv")) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		decoded, err := io.ReadAll(transform.NewReader(bytes.NewReader(raw), japanese.ISO2022JP.NewDecoder()))
+		require.NoError(t, err)
+		assert.Contains(t, string(decoded), "p\x0eq")
+	})
+
+	t.Run("another encoding writes an escape", func(t *testing.T) {
+		t.Parallel()
+
+		// Shift-JIS and the rest read ESC as an ordinary control character, so
+		// the refusal belongs to this one encoding rather than to the writer.
+		db := openWithTable(t, `CREATE TABLE t (a TEXT)`, `INSERT INTO t VALUES ('p'||CAST(x'1b' AS TEXT)||'q')`)
+
+		out := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithEncoding(EncodingShiftJIS)))
+
+		raw, err := os.ReadFile(filepath.Join(out, "t.csv")) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		decoded, err := io.ReadAll(transform.NewReader(bytes.NewReader(raw), japanese.ShiftJIS.NewDecoder()))
+		require.NoError(t, err)
+		assert.Contains(t, string(decoded), "p\x1bq")
+	})
+}
+
+// TestRefuseEscapeTransform covers the transformer on its own, including the
+// short-destination path a dump does not reach: a transformer that mishandles
+// it drops bytes instead of asking to be called again, which shows up as a
+// truncated file rather than as an error.
+func TestRefuseEscapeTransform(t *testing.T) {
+	t.Parallel()
+
+	t.Run("text with no escape passes through", func(t *testing.T) {
+		t.Parallel()
+
+		dst := make([]byte, 8)
+		nDst, nSrc, err := refuseEscape{}.Transform(dst, []byte("abc"), true)
+		require.NoError(t, err)
+		assert.Equal(t, 3, nDst)
+		assert.Equal(t, 3, nSrc)
+		assert.Equal(t, "abc", string(dst[:nDst]))
+	})
+
+	t.Run("an escape fails after what precedes it", func(t *testing.T) {
+		t.Parallel()
+
+		dst := make([]byte, 8)
+		nDst, nSrc, err := refuseEscape{}.Transform(dst, []byte("abcd"), true)
+		require.ErrorIs(t, err, errEscapeUnwritable)
+		assert.Equal(t, 2, nDst)
+		assert.Equal(t, 2, nSrc)
+		assert.Equal(t, "ab", string(dst[:nDst]))
+	})
+
+	t.Run("a destination too small asks to be called again", func(t *testing.T) {
+		t.Parallel()
+
+		dst := make([]byte, 2)
+		nDst, nSrc, err := refuseEscape{}.Transform(dst, []byte("abcdef"), true)
+		require.ErrorIs(t, err, transform.ErrShortDst)
+		assert.Equal(t, 2, nDst)
+		assert.Equal(t, 2, nSrc)
+	})
+
+	t.Run("an escape at the front fails at once", func(t *testing.T) {
+		t.Parallel()
+
+		dst := make([]byte, 8)
+		nDst, _, err := refuseEscape{}.Transform(dst, []byte(""), true)
+		require.ErrorIs(t, err, errEscapeUnwritable)
+		assert.Equal(t, 0, nDst)
+	})
+}
+
 // TestOpen_NamesAnEscapeEncodedInput pins that a file filesql cannot read says
 // why.
 //

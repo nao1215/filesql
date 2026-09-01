@@ -1,6 +1,8 @@
 package filesql
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 
@@ -84,7 +86,9 @@ func (e Encoding) encoder() (transform.Transformer, bool) {
 	case EncodingEUCJP:
 		enc = japanese.EUCJP
 	case EncodingISO2022JP:
-		enc = japanese.ISO2022JP
+		// The escape is refused in front of the encoder rather than by it: see
+		// refuseEscape.
+		return transform.Chain(refuseEscape{}, japanese.ISO2022JP.NewEncoder()), true
 	case EncodingUTF16LE:
 		enc = unicode.UTF16(unicode.LittleEndian, unicode.UseBOM)
 	case EncodingUTF16BE:
@@ -95,6 +99,45 @@ func (e Encoding) encoder() (transform.Transformer, bool) {
 		return nil, false
 	}
 	return enc.NewEncoder(), true
+}
+
+// escapeByte is U+001B, which ISO-2022-JP reads as the first byte of a
+// character-set designator rather than as data.
+const escapeByte = 0x1b
+
+// errEscapeUnwritable is what refuseEscape fails with. It is worded as the
+// x/text repertoire errors are, since it arrives where they do.
+var errEscapeUnwritable = errors.New("encoding: an escape begins a character-set designator and cannot be written as data")
+
+// refuseEscape fails on an escape byte, and passes everything else through.
+//
+// ISO-2022-JP switches character sets with an escape sequence, so an escape held
+// in a value or a column name goes into the file as a designator: "x\x1b$By" was
+// written whole and read back as "x絈", the y taken for half of a double-byte
+// character, and a column named that way took the row after it into the same
+// word. Neither the dump nor the decoder said anything, because the bytes are a
+// valid stream that says something else.
+//
+// It stands in front of the encoder because x/text writes the byte through
+// rather than refusing it. If that changes upstream this becomes redundant and
+// can go. The other encodings need none of it: all of them write an escape as
+// the control character it is and read it back as itself.
+type refuseEscape struct{ transform.NopResetter }
+
+// Transform copies src up to the first escape, and fails there.
+func (refuseEscape) Transform(dst, src []byte, _ bool) (nDst, nSrc int, err error) {
+	end := len(src)
+	if i := bytes.IndexByte(src, escapeByte); i >= 0 {
+		end = i
+	}
+	n := copy(dst, src[:end])
+	if n < end {
+		return n, n, transform.ErrShortDst
+	}
+	if end < len(src) {
+		return n, n, errEscapeUnwritable
+	}
+	return n, n, nil
 }
 
 // encodedWriter is the text writer for one save, and remembers whether the
