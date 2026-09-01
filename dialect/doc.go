@@ -65,7 +65,13 @@
 // Everything else is refused: the statements that address a server rather than
 // a database (GRANT, LOCK TABLES, SHOW, USE, SET, FLUSH), the objects SQLite
 // does not have (sequences, materialized views, functions, procedures,
-// triggers, databases), and the DDL that changes a column's type. An ALTER
+// triggers, databases), and the DDL that changes a column's type. A value or a
+// clause SQLite has no form for is refused the same way and by name: DEFAULT
+// standing where a value goes, since SQLite has no way to write a column's own
+// default into a row; AT TIME ZONE and a timestamp typed WITH TIME ZONE, since
+// SQLite keeps no zone with a timestamp; AND CHAIN on a COMMIT or a ROLLBACK;
+// INHERITS on a CREATE TABLE; and the LIKE that copies a table, in either
+// dialect's spelling of it. An ALTER
 // TABLE is refused the same way when it asks for what SQLite cannot make: more
 // than one change in one statement, a column placed with FIRST or AFTER, a
 // change skipped with IF EXISTS or IF NOT EXISTS. Each is refused by name and
@@ -81,6 +87,18 @@
 // its index hints, GoogleSQL's OPTIONS and CLUSTER BY, PostgreSQL's UNLOGGED
 // and CONCURRENTLY, and the CASCADE or RESTRICT of a dropped table or column.
 // The rows are the same without them.
+//
+// PostgreSQL's OVERRIDING SYSTEM VALUE and OVERRIDING USER VALUE are dropped,
+// since a table here has no identity column for a given value to override, as
+// are the ALL and DISTINCT that stand in front of PostgreSQL's grouping
+// elements, which choose between grouping sets a plain list produces one of
+// either way, and the AND NO CHAIN that says what a COMMIT already does.
+//
+// Two spellings are moved rather than dropped: Cloud Spanner writes a returning
+// clause as THEN RETURN and its primary key after the table body, and both
+// become the form SQLite takes, RETURNING and a table constraint. PostgreSQL's
+// IS JSON becomes json_valid, which asks what the predicate asks; the forms
+// that narrow it to a kind of value, or ask about repeated keys, are refused.
 //
 // PostgreSQL's ONLY in front of a table name, and the star after one, say
 // whether the tables inheriting from that one are reached as well. Nothing

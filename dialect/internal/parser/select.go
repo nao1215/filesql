@@ -264,6 +264,14 @@ func (p *Parser) parseGroupBy(core *ast.SelectCore) error {
 		core.GroupByAll = true
 		return nil
 	}
+	// PostgreSQL writes ALL or DISTINCT in front of the grouping elements to
+	// say whether the grouping sets they produce are deduplicated. A plain list
+	// of expressions produces one set either way, and the lists that produce
+	// more -- GROUPING SETS, ROLLUP, CUBE -- are refused below, so the word is
+	// read and dropped.
+	if p.dialect == dialects.PostgreSQL && p.atAnyWord("ALL", "DISTINCT") {
+		p.pos++
+	}
 	switch {
 	case p.atWords("GROUPING", "SETS"):
 		return p.parseGroupingClause(core, ast.GroupingSets, 2)

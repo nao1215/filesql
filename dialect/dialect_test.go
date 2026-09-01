@@ -1172,3 +1172,336 @@ func TestARowLockingClauseIsRefusedInEverySpelling(t *testing.T) {
 		}
 	})
 }
+
+// TestAValueKeywordIsNotAName pins DEFAULT written where a value goes. It was
+// read as a column name and rendered as a quoted identifier, and SQLite reads a
+// quoted name that matches no column as a string, so "SET a = DEFAULT" filled
+// the column with the word DEFAULT and reported nothing.
+func TestAValueKeywordIsNotAName(t *testing.T) {
+	t.Parallel()
+
+	t.Run("refused where a value goes", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+		}{
+			{PostgreSQL, "UPDATE t SET a = DEFAULT"},
+			{MySQL, "UPDATE t SET a = DEFAULT"},
+			{PostgreSQL, "UPDATE t SET a = DEFAULT WHERE b = 1"},
+			{PostgreSQL, "INSERT INTO t (a) VALUES (DEFAULT)"},
+			{MySQL, "INSERT INTO t (a) VALUES (DEFAULT)"},
+			{PostgreSQL, "INSERT INTO t (a, b) VALUES (DEFAULT, 1)"},
+			{PostgreSQL, "SELECT DEFAULT"},
+		} {
+			_, err := Translate(tt.dialect, tt.query)
+			if !errors.Is(err, ErrUnsupportedSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.query, err)
+				continue
+			}
+			if !strings.Contains(err.Error(), "DEFAULT") {
+				t.Errorf("Translate(%v, %q) error = %v, want it to name DEFAULT", tt.dialect, tt.query, err)
+			}
+		}
+	})
+
+	t.Run("the spellings that are not a value", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+			want    string
+		}{
+			{PostgreSQL, "INSERT INTO t DEFAULT VALUES", "INSERT INTO t DEFAULT VALUES"},
+			{PostgreSQL, "CREATE TABLE t (a INT DEFAULT 1)", "CREATE TABLE t (a INTEGER DEFAULT (1))"},
+			{PostgreSQL, `UPDATE t SET a = "default"`, `UPDATE t SET a = "default"`},
+		} {
+			got, err := Translate(tt.dialect, tt.query)
+			if err != nil {
+				t.Errorf("Translate(%v, %q) error = %v, want it to translate", tt.dialect, tt.query, err)
+				continue
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%v, %q) = %q, want %q", tt.dialect, tt.query, got, tt.want)
+			}
+		}
+	})
+}
+
+// TestAReturningClauseIsReadInEverySpelling pins Cloud Spanner's THEN RETURN,
+// which is the returning clause this package already translates written the way
+// GoogleSQL writes it, and PostgreSQL's OVERRIDING clause, which says what to do
+// about an identity column a table here does not have.
+func TestAReturningClauseIsReadInEverySpelling(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		dialect Dialect
+		query   string
+		want    string
+	}{
+		{GoogleSQL, "INSERT INTO t (a) VALUES (1) THEN RETURN a", "INSERT INTO t (a) VALUES (1) RETURNING a"},
+		{GoogleSQL, "DELETE FROM t WHERE a = 1 THEN RETURN a", "DELETE FROM t WHERE a = 1 RETURNING a"},
+		{GoogleSQL, "UPDATE t SET a = 1 WHERE b = 2 THEN RETURN *", "UPDATE t SET a = 1 WHERE b = 2 RETURNING *"},
+		{PostgreSQL, "INSERT INTO t (a) OVERRIDING SYSTEM VALUE VALUES (1)", "INSERT INTO t (a) VALUES (1)"},
+		{PostgreSQL, "INSERT INTO t (a) OVERRIDING USER VALUE VALUES (1)", "INSERT INTO t (a) VALUES (1)"},
+		// A grouping element is an expression, not only a name.
+		{PostgreSQL, "SELECT a FROM t GROUP BY DISTINCT 1", "SELECT a FROM t GROUP BY 1"},
+		{PostgreSQL, "SELECT a FROM t GROUP BY ALL (a + b)", "SELECT a FROM t GROUP BY (a + b)"},
+	} {
+		got, err := Translate(tt.dialect, tt.query)
+		if err != nil {
+			t.Errorf("Translate(%v, %q) error = %v, want it to translate", tt.dialect, tt.query, err)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("Translate(%v, %q) = %q, want %q", tt.dialect, tt.query, got, tt.want)
+		}
+	}
+}
+
+// TestStatementSpellingsAreAnsweredByName pins the statements that read in
+// their dialect and ask for what SQLite does not do. Each was reported as a
+// query that could not be read, and one was reported as a column type the
+// caller never wrote.
+func TestStatementSpellingsAreAnsweredByName(t *testing.T) {
+	t.Parallel()
+
+	t.Run("refused by name", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+			names   string
+		}{
+			{PostgreSQL, "COMMIT AND CHAIN", "CHAIN"},
+			{PostgreSQL, "ROLLBACK AND CHAIN", "CHAIN"},
+			{MySQL, "COMMIT AND CHAIN", "CHAIN"},
+			{PostgreSQL, "CREATE TABLE t (a INT) INHERITS (u)", "INHERITS"},
+			{PostgreSQL, "CREATE TABLE t (LIKE u)", "LIKE"},
+			{MySQL, "CREATE TABLE t LIKE u", "LIKE"},
+		} {
+			_, err := Translate(tt.dialect, tt.query)
+			if !errors.Is(err, ErrUnsupportedSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.query, err)
+				continue
+			}
+			if !strings.Contains(err.Error(), tt.names) {
+				t.Errorf("Translate(%v, %q) error = %v, want it to name %q", tt.dialect, tt.query, err, tt.names)
+			}
+		}
+	})
+
+	t.Run("a word that belongs to one dialect stays there", func(t *testing.T) {
+		t.Parallel()
+
+		// OVERRIDING is PostgreSQL's, and a statement writing it elsewhere is
+		// not one those dialects take.
+		for _, d := range []Dialect{MySQL, GoogleSQL} {
+			query := "INSERT INTO t (a) OVERRIDING SYSTEM VALUE VALUES (1)"
+			if _, err := Translate(d, query); err == nil {
+				t.Errorf("Translate(%v, %q) translated, want it refused", d, query)
+			}
+		}
+	})
+
+	t.Run("the two spellings of a copied table read alike", func(t *testing.T) {
+		t.Parallel()
+
+		_, pgErr := Translate(PostgreSQL, "CREATE TABLE t (LIKE u)")
+		_, myErr := Translate(MySQL, "CREATE TABLE t LIKE u")
+		if pgErr == nil || myErr == nil {
+			t.Fatalf("both spellings must be refused: postgresql=%v mysql=%v", pgErr, myErr)
+		}
+		if !strings.Contains(pgErr.Error(), "copies a table") || !strings.Contains(myErr.Error(), "copies a table") {
+			t.Errorf("the two spellings answer differently:\n  postgresql: %v\n  mysql:      %v", pgErr, myErr)
+		}
+	})
+
+	t.Run("read and dropped, or moved where SQLite takes it", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+			want    string
+		}{
+			{PostgreSQL, "COMMIT AND NO CHAIN", "COMMIT"},
+			{PostgreSQL, "ROLLBACK AND NO CHAIN", "ROLLBACK"},
+			{PostgreSQL, "SELECT a FROM t GROUP BY DISTINCT a", "SELECT a FROM t GROUP BY a"},
+			{PostgreSQL, "SELECT a FROM t GROUP BY ALL a", "SELECT a FROM t GROUP BY a"},
+			{GoogleSQL, "CREATE TABLE t (a INT64) PRIMARY KEY (a)", "CREATE TABLE t (a INTEGER, PRIMARY KEY (a))"},
+			{GoogleSQL, "CREATE TABLE t (a INT64, b BOOL) PRIMARY KEY (a, b)", "CREATE TABLE t (a INTEGER, b BOOLEAN, PRIMARY KEY (a, b))"},
+		} {
+			got, err := Translate(tt.dialect, tt.query)
+			if err != nil {
+				t.Errorf("Translate(%v, %q) error = %v, want it to translate", tt.dialect, tt.query, err)
+				continue
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%v, %q) = %q, want %q", tt.dialect, tt.query, got, tt.want)
+			}
+		}
+	})
+}
+
+// TestAJSONPredicateAsksWhatItSays pins PostgreSQL's IS JSON, which reached
+// SQLite untranslated: SQLite reads IS as its null-safe comparison and JSON as a
+// name, so the predicate became a comparison against a column called JSON.
+func TestAJSONPredicateAsksWhatItSays(t *testing.T) {
+	t.Parallel()
+
+	t.Run("translated", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			query string
+			want  string
+		}{
+			{"SELECT a FROM t WHERE a IS JSON", "SELECT a FROM t WHERE json_valid(a)"},
+			{"SELECT a FROM t WHERE a IS NOT JSON", "SELECT a FROM t WHERE NOT json_valid(a)"},
+			{"SELECT a FROM t WHERE a IS JSON VALUE", "SELECT a FROM t WHERE json_valid(a)"},
+		} {
+			got, err := Translate(PostgreSQL, tt.query)
+			if err != nil {
+				t.Errorf("Translate(%v, %q) error = %v, want it to translate", PostgreSQL, tt.query, err)
+				continue
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%v, %q) = %q, want %q", PostgreSQL, tt.query, got, tt.want)
+			}
+		}
+	})
+
+	t.Run("the narrowed forms are refused by name", func(t *testing.T) {
+		t.Parallel()
+
+		for _, query := range []string{
+			"SELECT a FROM t WHERE a IS JSON OBJECT",
+			"SELECT a FROM t WHERE a IS JSON ARRAY",
+			"SELECT a FROM t WHERE a IS JSON SCALAR",
+			"SELECT a FROM t WHERE a IS JSON WITH UNIQUE KEYS",
+		} {
+			_, err := Translate(PostgreSQL, query)
+			if !errors.Is(err, ErrUnsupportedSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", PostgreSQL, query, err)
+				continue
+			}
+			if !strings.Contains(err.Error(), "JSON") {
+				t.Errorf("Translate(%v, %q) error = %v, want it to name the predicate", PostgreSQL, query, err)
+			}
+		}
+	})
+
+	t.Run("a column named json is still a column", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			query string
+			want  string
+		}{
+			{"SELECT json FROM t", "SELECT json FROM t"},
+			{`SELECT a FROM t WHERE a IS "json"`, `SELECT a FROM t WHERE a IS "json"`},
+		} {
+			got, err := Translate(PostgreSQL, tt.query)
+			if err != nil {
+				t.Errorf("Translate(%v, %q) error = %v, want it to translate", PostgreSQL, tt.query, err)
+				continue
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%v, %q) = %q, want %q", PostgreSQL, tt.query, got, tt.want)
+			}
+		}
+	})
+
+	t.Run("the translation answers the rows that hold JSON", func(t *testing.T) {
+		t.Parallel()
+
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		db.SetMaxOpenConns(1)
+		for _, ddl := range []string{
+			"CREATE TABLE t (a TEXT, json TEXT)",
+			`INSERT INTO t VALUES ('{"a":1}', 'x'), ('nope', 'x')`,
+		} {
+			if _, err := db.ExecContext(t.Context(), ddl); err != nil {
+				t.Fatalf("exec %q: %v", ddl, err)
+			}
+		}
+		out, err := Translate(PostgreSQL, "SELECT count(*) FROM t WHERE a IS JSON")
+		if err != nil {
+			t.Fatalf("Translate: %v", err)
+		}
+		var n int
+		if err := db.QueryRowContext(t.Context(), out).Scan(&n); err != nil {
+			t.Fatalf("query %q: %v", out, err)
+		}
+		if n != 1 {
+			t.Errorf("%q answered %d rows, want the one row that holds JSON", out, n)
+		}
+	})
+}
+
+// TestATimeZoneClauseIsAnsweredByName pins the time-zone spellings, which read
+// in their dialect and were reported as queries that could not be read.
+func TestATimeZoneClauseIsAnsweredByName(t *testing.T) {
+	t.Parallel()
+
+	t.Run("refused by name", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+			names   string
+		}{
+			{PostgreSQL, "SELECT a AT TIME ZONE 'UTC' FROM t", "time zone"},
+			{PostgreSQL, "SELECT to_timestamp(0) AT TIME ZONE 'UTC'", "time zone"},
+			{GoogleSQL, "SELECT EXTRACT(DAY FROM a AT TIME ZONE 'UTC') FROM t", "time zone"},
+			{PostgreSQL, "SELECT TIMESTAMP WITH TIME ZONE '2024-01-01 00:00:00+00'", "time zone"},
+			{PostgreSQL, "SELECT a OPERATOR(pg_catalog.+) b FROM t", "OPERATOR"},
+		} {
+			_, err := Translate(tt.dialect, tt.query)
+			if !errors.Is(err, ErrUnsupportedSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.query, err)
+				continue
+			}
+			if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tt.names)) {
+				t.Errorf("Translate(%v, %q) error = %v, want it to name %q", tt.dialect, tt.query, err, tt.names)
+			}
+		}
+	})
+
+	t.Run("the timestamp without a zone still translates", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			query string
+			want  string
+		}{
+			{
+				"SELECT TIMESTAMP '2024-01-01 00:00:00'",
+				`SELECT '2024-01-01 00:00:00' AS "TIMESTAMP '2024-01-01 00:00:00'"`,
+			},
+			{
+				"SELECT TIMESTAMP WITHOUT TIME ZONE '2024-01-01 00:00:00'",
+				`SELECT '2024-01-01 00:00:00' AS "TIMESTAMP WITHOUT TIME ZONE '2024-01-01 00:00:00'"`,
+			},
+		} {
+			got, err := Translate(PostgreSQL, tt.query)
+			if err != nil {
+				t.Errorf("Translate(%v, %q) error = %v, want it to translate", PostgreSQL, tt.query, err)
+				continue
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%v, %q) = %q, want %q", PostgreSQL, tt.query, got, tt.want)
+			}
+		}
+	})
+}

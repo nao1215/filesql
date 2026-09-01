@@ -191,6 +191,27 @@ func (p *Parser) parseInfixOnce(left ast.Expr, minPrec int) (ast.Expr, error) {
 		// that are not expressions.
 		return nil, p.unsupportedf("a subscript is not supported; SQLite has no array type")
 
+	case p.atWords("AT", "TIME", "ZONE"), p.atWords("AT", "LOCAL"):
+		if precPostfix < minPrec {
+			return nil, nil
+		}
+		// AT TIME ZONE moves a timestamp between zones. SQLite keeps no zone
+		// with a timestamp and carries no zone table, so the only conversions
+		// it can make are the ones its datetime modifiers name, and reading the
+		// clause as anything else would answer a different instant.
+		return nil, p.unsupportedf(
+			"AT TIME ZONE is not supported; SQLite keeps no time zone with a timestamp")
+
+	case p.atWord("OPERATOR") && p.peek(1).IsOp("(") && p.dialect == dialects.PostgreSQL:
+		if precPostfix < minPrec {
+			return nil, nil
+		}
+		// OPERATOR names an operator by the schema it lives in. Which operator
+		// that is depends on the catalog, which this package does not read, so
+		// the spelling is refused rather than guessed at.
+		return nil, p.unsupportedf(
+			"OPERATOR(...) is not supported; write the operator itself")
+
 	case p.atWord("COLLATE"):
 		if precCollate < minPrec {
 			return nil, nil
@@ -394,6 +415,9 @@ func (p *Parser) parseIs(left ast.Expr) (ast.Expr, error) {
 	span := p.span()
 	p.pos++ // IS
 	negated := p.eatWord("NOT")
+	if p.dialect == dialects.PostgreSQL && p.atWord("JSON") {
+		return p.parseIsJSON(left, negated, span)
+	}
 	if p.eatWords("DISTINCT", "FROM") {
 		right, err := p.parseExpr(precIs + 1)
 		if err != nil {
@@ -406,6 +430,38 @@ func (p *Parser) parseIs(left ast.Expr) (ast.Expr, error) {
 		return nil, err
 	}
 	return &ast.IsExpr{Expr: left, Right: right, Negated: negated, Span: span}, nil
+}
+
+// parseIsJSON reads PostgreSQL's JSON predicate, which asks whether a value is
+// well-formed JSON. SQLite answers the same question with json_valid, so the
+// predicate becomes that call rather than reaching SQLite as written, where IS
+// is a null-safe comparison and JSON is a name: the query then compared the
+// value with a column called JSON, and answered a comparison in silence
+// wherever a table carried one.
+//
+// The forms that narrow the question to a kind of JSON value, and the one that
+// asks about duplicate keys, are refused by name: SQLite's json_type fails on
+// text that is not JSON rather than answering, so the narrowing cannot be
+// written as one expression the way the plain predicate can.
+func (p *Parser) parseIsJSON(left ast.Expr, negated bool, span ast.Span) (ast.Expr, error) {
+	p.pos++ // JSON
+	switch {
+	case p.eatWord("VALUE"):
+		// Any well-formed JSON, which is what the plain predicate asks.
+	case p.atAnyWord("OBJECT", "ARRAY", "SCALAR"):
+		return nil, p.unsupportedf(
+			"IS JSON %s is not supported; SQLite answers whether a value is JSON and not which kind it is",
+			upper(p.cur().Text))
+	}
+	if p.atWords("WITH", "UNIQUE") || p.atWords("WITHOUT", "UNIQUE") {
+		return nil, p.unsupportedf(
+			"IS JSON WITH UNIQUE KEYS is not supported; SQLite has no way to ask whether an object's keys repeat")
+	}
+	call := &ast.FuncCall{Name: []ast.Ident{{Name: "json_valid", Span: span}}, Args: []ast.Expr{left}, Span: span}
+	if negated {
+		return &ast.UnaryExpr{Op: ast.UnaryNot, Expr: call, Span: span}, nil
+	}
+	return call, nil
 }
 
 // parseBetween reads "BETWEEN lo AND hi" after any NOT has been consumed.

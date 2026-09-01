@@ -81,10 +81,32 @@ func (p *Parser) parseCreateTable(start token.Token, temporary bool) (ast.Stmt, 
 		if err := p.parseTableBody(stmt); err != nil {
 			return nil, err
 		}
+		if err := p.parseTrailingPrimaryKey(stmt); err != nil {
+			return nil, err
+		}
 		return stmt, p.parseTableOptions(stmt)
 	default:
 		return nil, p.unexpected("a column list")
 	}
+}
+
+// parseTrailingPrimaryKey reads the primary key Cloud Spanner writes after the
+// table body rather than inside it. It is the key SQLite writes as a table
+// constraint, so it is moved there.
+func (p *Parser) parseTrailingPrimaryKey(stmt *ast.CreateTableStmt) error {
+	if p.dialect != dialects.GoogleSQL || !p.atWords("PRIMARY", "KEY") {
+		return nil
+	}
+	span := p.span()
+	p.pos += 2
+	columns, err := p.parseIndexedColumnNames()
+	if err != nil {
+		return err
+	}
+	stmt.Constraints = append(stmt.Constraints, ast.TableConstraint{
+		Kind: ast.TableConstraintPrimaryKey, Columns: columns, Span: span,
+	})
+	return nil
 }
 
 // parseTableBody reads the parenthesized column and constraint list.
@@ -114,6 +136,13 @@ func (p *Parser) parseTableElement(stmt *ast.CreateTableStmt) error {
 		}
 		stmt.Constraints = append(stmt.Constraints, constraint)
 		return nil
+	case p.atWord("LIKE") && p.namesSomething(1):
+		// PostgreSQL copies a table's structure from inside the body, where
+		// MySQL writes LIKE after the name. The column-definition grammar is
+		// loose enough to read "LIKE u" as a column named LIKE of type u, and
+		// the refusal then reported a column type the caller never wrote.
+		return p.unsupportedf(
+			"CREATE TABLE ... LIKE is not supported; SQLite has no statement that copies a table's structure")
 	case p.dialect == dialects.MySQL && p.atAnyWord("INDEX", "KEY", "FULLTEXT", "SPATIAL"):
 		// A secondary index written inside the table. SQLite creates an index
 		// with its own statement, and there is nothing here to attach it to
@@ -473,6 +502,12 @@ func (p *Parser) parseTableOptions(stmt *ast.CreateTableStmt) error {
 			stmt.Strict = true
 		case p.atOp(","):
 			p.pos++
+		case p.atWord("INHERITS"):
+			// The table takes its parent's columns and its rows answer the
+			// parent's queries. SQLite has no table hierarchy, and dropping the
+			// word would build a table missing the columns it inherits.
+			return p.unsupportedf(
+				"INHERITS is not supported; SQLite has no table that inherits from another")
 		case p.cur().Kind == token.Word && p.dialect != dialects.SQLite:
 			// A storage option: ENGINE=InnoDB, DEFAULT CHARSET=utf8mb4,
 			// COMMENT='...', AUTO_INCREMENT=1, and the GoogleSQL OPTIONS and

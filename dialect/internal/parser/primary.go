@@ -104,8 +104,13 @@ func (p *Parser) parseWordPrimary() (ast.Expr, error) {
 		p.pos++
 		return &ast.Literal{Kind: ast.LitNull, Span: span}, nil
 	case kwDefault:
-		p.pos++
-		return &ast.Ident{Name: kwDefault, Span: span}, nil
+		// DEFAULT where a value goes stands for the column's own default, and
+		// SQLite has no way to write one into a row. Reading it as a name
+		// rendered it as the quoted identifier "DEFAULT", which SQLite reads as
+		// a string when no column carries that name, so "SET a = DEFAULT"
+		// filled the column with the word.
+		return nil, p.unsupportedf(
+			"DEFAULT is not supported where a value goes; SQLite has no way to write a column's default into a row")
 	}
 
 	// A clause keyword cannot begin a value. Reading one as a column name made
@@ -123,10 +128,17 @@ func (p *Parser) parseWordPrimary() (ast.Expr, error) {
 		return nil, p.unexpected("an expression")
 	}
 
-	// A type word in front of a string is a typed literal.
-	if typedLiteralTypes[word] && p.peek(1).Kind == token.String {
-		p.pos += 2
-		return &ast.TypedLiteral{Type: word, Value: p.toks[p.pos-1].Text, Span: span}, nil
+	// A type word in front of a string is a typed literal, and a timestamp
+	// carries the zone in its own spelling: "TIMESTAMP WITH TIME ZONE 'text'"
+	// and its WITHOUT twin stand where "TIMESTAMP 'text'" does.
+	if typedLiteralTypes[word] {
+		if lit, ok, err := p.parseZonedLiteral(word, span); ok || err != nil {
+			return lit, err
+		}
+		if p.peek(1).Kind == token.String {
+			p.pos += 2
+			return &ast.TypedLiteral{Type: word, Value: p.toks[p.pos-1].Text, Span: span}, nil
+		}
 	}
 
 	// MySQL's charset introducer and PostgreSQL's bit-string literal, both of
@@ -136,6 +148,27 @@ func (p *Parser) parseWordPrimary() (ast.Expr, error) {
 	}
 
 	return p.parseNameOrCall()
+}
+
+// parseZonedLiteral reads the time-zone spelling of a typed literal. A
+// timestamp written WITHOUT TIME ZONE is the timestamp this package already
+// carries, so the words are read and dropped; one written WITH TIME ZONE keeps
+// an offset SQLite has nowhere to put, so it is refused by name rather than
+// read as a timestamp that means a different instant.
+func (p *Parser) parseZonedLiteral(word string, span ast.Span) (ast.Expr, bool, error) {
+	if !p.peek(1).IsWord("WITH") && !p.peek(1).IsWord("WITHOUT") {
+		return nil, false, nil
+	}
+	zoned := p.peek(1).IsWord("WITH")
+	if !p.peek(2).IsWord(kwTime) || !p.peek(3).IsWord("ZONE") || p.peek(4).Kind != token.String {
+		return nil, false, nil
+	}
+	if zoned {
+		return nil, false, p.unsupportedf(
+			"a %s WITH TIME ZONE is not supported; SQLite keeps no time zone with a timestamp", word)
+	}
+	p.pos += 5
+	return &ast.TypedLiteral{Type: word, Value: p.toks[p.pos-1].Text, Span: span}, true, nil
 }
 
 // clauseOnlyWords are the words that open a clause and can never begin a value.
