@@ -1505,3 +1505,147 @@ func TestATimeZoneClauseIsAnsweredByName(t *testing.T) {
 		}
 	})
 }
+
+// TestAnalyzeNamesWhatTheCallerNamed pins the words each dialect writes between
+// ANALYZE and the object's name. They were read as the name: "ANALYZE VERBOSE
+// t" analyzed something called VERBOSE and dropped t, and MySQL's "ANALYZE
+// TABLE t" analyzed one called TABLE.
+func TestAnalyzeNamesWhatTheCallerNamed(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the name survives the options", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+			want    string
+		}{
+			{PostgreSQL, "ANALYZE t", "ANALYZE t"},
+			{PostgreSQL, "ANALYZE VERBOSE t", "ANALYZE t"},
+			{PostgreSQL, "ANALYZE (VERBOSE) t", "ANALYZE t"},
+			{PostgreSQL, "ANALYZE (VERBOSE, SKIP_LOCKED) t", "ANALYZE t"},
+			{MySQL, "ANALYZE TABLE t", "ANALYZE t"},
+			{MySQL, "ANALYZE NO_WRITE_TO_BINLOG TABLE t", "ANALYZE t"},
+			{MySQL, "ANALYZE LOCAL TABLE t", "ANALYZE t"},
+			{PostgreSQL, "ANALYZE", "ANALYZE"},
+			{PostgreSQL, "ANALYZE VERBOSE", "ANALYZE"},
+			{PostgreSQL, `ANALYZE "verbose"`, `ANALYZE "verbose"`},
+		} {
+			got, err := Translate(tt.dialect, tt.query)
+			if err != nil {
+				t.Errorf("Translate(%v, %q) error = %v, want it to translate", tt.dialect, tt.query, err)
+				continue
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%v, %q) = %q, want %q", tt.dialect, tt.query, got, tt.want)
+			}
+		}
+	})
+
+	t.Run("what SQLite analyzes one of", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+		}{
+			{MySQL, "ANALYZE TABLE t, u"},
+			{PostgreSQL, "ANALYZE t (a, b)"},
+		} {
+			if _, err := Translate(tt.dialect, tt.query); !errors.Is(err, ErrUnsupportedSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.query, err)
+			}
+		}
+	})
+}
+
+// TestAClauseAroundAStatementIsRead pins the clauses that stand around a
+// statement this package already carries. Each was reported as a query that
+// could not be read.
+func TestAClauseAroundAStatementIsRead(t *testing.T) {
+	t.Parallel()
+
+	t.Run("read and dropped", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			query string
+			want  string
+		}{
+			{"CREATE INDEX i ON t (a) INCLUDE (b)", "CREATE INDEX i ON t (a)"},
+			{"CREATE INDEX i ON t (a) INCLUDE (b, c) WHERE a > 1", "CREATE INDEX i ON t (a) WHERE a > 1"},
+			{"CREATE VIEW v AS SELECT 1 WITH CHECK OPTION", "CREATE VIEW v AS SELECT 1"},
+			{"CREATE VIEW v AS SELECT 1 WITH CASCADED CHECK OPTION", "CREATE VIEW v AS SELECT 1"},
+			{"CREATE VIEW v AS SELECT 1 WITH LOCAL CHECK OPTION", "CREATE VIEW v AS SELECT 1"},
+		} {
+			got, err := Translate(PostgreSQL, tt.query)
+			if err != nil {
+				t.Errorf("Translate(%v, %q) error = %v, want it to translate", PostgreSQL, tt.query, err)
+				continue
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%v, %q) = %q, want %q", PostgreSQL, tt.query, got, tt.want)
+			}
+		}
+	})
+
+	t.Run("a select that makes a table", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			query string
+			want  string
+		}{
+			{"SELECT a INTO newt FROM t", "CREATE TABLE newt AS SELECT a FROM t"},
+			{"SELECT a INTO TABLE newt FROM t", "CREATE TABLE newt AS SELECT a FROM t"},
+			{"SELECT a INTO TEMP newt FROM t WHERE a > 1", "CREATE TEMPORARY TABLE newt AS SELECT a FROM t WHERE a > 1"},
+			// PostgreSQL takes the INTO of a compound query from its first
+			// select, which is where its column names come from too.
+			{"SELECT a INTO newt FROM t UNION SELECT b FROM u", "CREATE TABLE newt AS SELECT a FROM t UNION SELECT b FROM u"},
+		} {
+			got, err := Translate(PostgreSQL, tt.query)
+			if err != nil {
+				t.Errorf("Translate(%v, %q) error = %v, want it to translate", PostgreSQL, tt.query, err)
+				continue
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%v, %q) = %q, want %q", PostgreSQL, tt.query, got, tt.want)
+			}
+		}
+	})
+
+	t.Run("a select that writes elsewhere is refused by name", func(t *testing.T) {
+		t.Parallel()
+
+		for _, query := range []string{
+			"SELECT a INTO OUTFILE '/tmp/x' FROM t",
+			"SELECT a INTO DUMPFILE '/tmp/x' FROM t",
+			"SELECT a INTO @v FROM t",
+			"SELECT a FROM t INTO @v",
+		} {
+			_, err := Translate(MySQL, query)
+			if !errors.Is(err, ErrUnsupportedSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", MySQL, query, err)
+				continue
+			}
+			if !strings.Contains(err.Error(), "INTO") {
+				t.Errorf("Translate(%v, %q) error = %v, want it to name the clause", MySQL, query, err)
+			}
+		}
+	})
+
+	t.Run("an INTO inside a subquery is not a statement", func(t *testing.T) {
+		t.Parallel()
+
+		for _, query := range []string{
+			"SELECT * FROM (SELECT a INTO newt FROM t) s",
+			"SELECT * FROM t WHERE a IN (SELECT b INTO newt FROM u)",
+			"WITH w AS (SELECT a INTO newt FROM t) SELECT * FROM w",
+		} {
+			if _, err := Translate(PostgreSQL, query); err == nil {
+				t.Errorf("Translate(%v, %q) translated, want it refused", PostgreSQL, query)
+			}
+		}
+	})
+}

@@ -598,6 +598,14 @@ func (p *Parser) parseCreateView(start token.Token, temporary bool) (ast.Stmt, e
 		return nil, err
 	}
 	stmt.Select = query
+	// WITH CHECK OPTION constrains the writes made through a view. SQLite
+	// refuses every write through a view that carries no INSTEAD OF trigger, so
+	// the clause can never bind and is read and dropped.
+	if p.atWord("WITH") {
+		p.eatWords("WITH", "CASCADED", "CHECK", "OPTION")
+		p.eatWords("WITH", "LOCAL", "CHECK", "OPTION")
+		p.eatWords("WITH", "CHECK", "OPTION")
+	}
 	return stmt, nil
 }
 
@@ -636,6 +644,15 @@ func (p *Parser) parseCreateIndex(start token.Token, unique bool) (ast.Stmt, err
 	stmt.Columns = terms
 	if err := p.expectOp(")"); err != nil {
 		return nil, err
+	}
+	// INCLUDE names columns the index carries without keying on them, which
+	// changes how the index is stored and not what a query answers, so it is
+	// read and dropped as CONCURRENTLY and the index method already are.
+	if p.atWord("INCLUDE") && p.peek(1).IsOp("(") {
+		p.pos++
+		if err := p.skipBalancedParens(); err != nil {
+			return nil, err
+		}
 	}
 	if p.eatWord("WHERE") {
 		cond, err := p.parseExpr(precLowest)

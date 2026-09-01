@@ -179,6 +179,11 @@ func (p *Parser) parseSelectCore() (ast.QueryBody, error) {
 	core := &ast.SelectCore{Span: p.span()}
 	p.pos++ // SELECT
 
+	// Only the statement's first select list can be followed by an INTO, so the
+	// mark is spent here: every core read after this one is inside something.
+	intoAllowed := p.intoAllowed
+	p.intoAllowed = false
+
 	if p.dialect == dialects.MySQL {
 		for p.cur().Kind == token.Word && selectModifiers[upper(p.cur().Text)] {
 			core.Modifiers = append(core.Modifiers, upper(p.advance().Text))
@@ -214,6 +219,9 @@ func (p *Parser) parseSelectCore() (ast.QueryBody, error) {
 	}
 	core.Items = items
 
+	if err := p.parseSelectInto(core, intoAllowed); err != nil {
+		return nil, err
+	}
 	if p.eatWord("FROM") {
 		from, err := p.parseFrom()
 		if err != nil {
@@ -357,6 +365,41 @@ func (p *Parser) parseSelectItems() ([]ast.SelectItem, error) {
 			return items, nil
 		}
 	}
+}
+
+// parseSelectInto reads the INTO that can follow a select list. PostgreSQL
+// writes one to create a table from the query, which SQLite spells CREATE TABLE
+// ... AS SELECT, so the target is carried up to the statement parser; it is
+// read only where the query is the whole statement, since that is the only
+// place the rewrite can happen and a silently dropped INTO would answer without
+// creating anything. MySQL writes one to fill a file or a session variable,
+// neither of which SQLite has.
+func (p *Parser) parseSelectInto(core *ast.SelectCore, allowed bool) error {
+	if !p.atWord("INTO") {
+		return nil
+	}
+	if p.dialect == dialects.MySQL {
+		return p.refuseSelectIntoTarget()
+	}
+	if p.dialect != dialects.PostgreSQL || !allowed {
+		return nil
+	}
+	p.pos++ // INTO
+	core.IntoTemporary = p.eatWord("TEMPORARY") || p.eatWord("TEMP")
+	p.eatWord("UNLOGGED")
+	p.eatWord("TABLE")
+	name, err := p.parseTableNameOnly()
+	if err != nil {
+		return err
+	}
+	core.Into = name
+	return nil
+}
+
+// refuseSelectIntoTarget refuses MySQL's INTO by name.
+func (p *Parser) refuseSelectIntoTarget() error {
+	return p.unsupportedf(
+		"SELECT ... INTO is not supported; SQLite writes no file and holds no session variable")
 }
 
 // clauseKeywords are the words that end a select item or a table reference, so

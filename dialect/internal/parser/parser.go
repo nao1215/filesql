@@ -43,6 +43,10 @@ type Parser struct {
 	pos     int
 	src     string
 	depth   int
+	// intoAllowed marks that the next select core read is the statement's own,
+	// which is the only place PostgreSQL's SELECT ... INTO can be rewritten
+	// into the CREATE TABLE ... AS SELECT that SQLite spells.
+	intoAllowed bool
 }
 
 // Parse reads one statement, which must be the whole of the query apart from a

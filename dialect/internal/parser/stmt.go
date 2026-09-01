@@ -20,6 +20,7 @@ func (p *Parser) parseStatement() (ast.Stmt, error) {
 	}
 	switch {
 	case p.startsSelect():
+		p.intoAllowed = true
 		stmt, err := p.parseSelectStmt()
 		if err != nil {
 			return nil, err
@@ -27,7 +28,11 @@ func (p *Parser) parseStatement() (ast.Stmt, error) {
 		if err := p.parseRowLock(); err != nil {
 			return nil, err
 		}
-		return stmt, nil
+		// MySQL also writes its INTO after the query's clauses.
+		if p.dialect == dialects.MySQL && p.atWord("INTO") {
+			return nil, p.refuseSelectIntoTarget()
+		}
+		return selectIntoTable(stmt), nil
 	case p.atWord("INSERT"), p.atWord("REPLACE"):
 		return p.parseInsert(nil)
 	case p.atWord("UPDATE"):
@@ -654,11 +659,47 @@ func (p *Parser) parsePragma() (ast.Stmt, error) {
 	return stmt, nil
 }
 
-// parseAnalyze reads ANALYZE.
+// selectIntoTable turns PostgreSQL's "SELECT ... INTO name" into the CREATE
+// TABLE ... AS SELECT that SQLite spells, which is the same statement.
+func selectIntoTable(stmt *ast.SelectStmt) ast.Stmt {
+	core := firstSelectCore(stmt.Body)
+	if core == nil || core.Into == nil {
+		return stmt
+	}
+	name, temporary := core.Into, core.IntoTemporary
+	core.Into, core.IntoTemporary = nil, false
+	return &ast.CreateTableStmt{
+		Temporary: temporary,
+		Name:      name,
+		AsSelect:  stmt,
+		Span:      stmt.Span,
+	}
+}
+
+// firstSelectCore reads the select the query takes its INTO from, which for a
+// compound query is the leftmost one, the same one its column names come from.
+func firstSelectCore(body ast.QueryBody) *ast.SelectCore {
+	switch b := body.(type) {
+	case *ast.SelectCore:
+		return b
+	case *ast.SetOp:
+		return firstSelectCore(b.Left)
+	default:
+		return nil
+	}
+}
+
+// parseAnalyze reads ANALYZE. The words each dialect writes between it and the
+// object's name say how to run the statement rather than what to run it on, and
+// SQLite has none of them, so they are read and dropped: reading them as the
+// name analyzed a table called VERBOSE and left the caller's table alone.
 func (p *Parser) parseAnalyze() (ast.Stmt, error) {
 	span := p.span()
 	p.pos++ // ANALYZE
 	stmt := &ast.AnalyzeStmt{Span: span}
+	if err := p.skipAnalyzeOptions(); err != nil {
+		return nil, err
+	}
 	if p.cur().Kind == token.Word || p.cur().Kind == token.QuotedIdent {
 		name, err := p.parseTableNameRef()
 		if err != nil {
@@ -666,5 +707,31 @@ func (p *Parser) parseAnalyze() (ast.Stmt, error) {
 		}
 		stmt.Name = name
 	}
+	// SQLite analyzes one table, one index or everything, and it takes no
+	// column list, so a statement naming more is refused rather than narrowed
+	// to the part this package can carry.
+	if p.atOp(",") {
+		return nil, p.unsupportedf("an ANALYZE of more than one table is not supported; SQLite analyzes one")
+	}
+	if p.atOp("(") {
+		return nil, p.unsupportedf("a column list on ANALYZE is not supported; SQLite analyzes a whole table")
+	}
 	return stmt, nil
+}
+
+// skipAnalyzeOptions reads the words that stand between ANALYZE and the name.
+func (p *Parser) skipAnalyzeOptions() error {
+	switch p.dialect {
+	case dialects.PostgreSQL:
+		p.eatWord("VERBOSE")
+		if p.atOp("(") {
+			return p.skipBalancedParens()
+		}
+	case dialects.MySQL:
+		p.eatWord("NO_WRITE_TO_BINLOG")
+		p.eatWord("LOCAL")
+		p.eatWord("TABLE")
+	case dialects.SQLite, dialects.GoogleSQL:
+	}
+	return nil
 }

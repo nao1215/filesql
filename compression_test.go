@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"io"
 	"os"
@@ -1133,4 +1134,71 @@ func TestCompressionFailureSaysItOnce(t *testing.T) {
 			})
 		}
 	})
+}
+
+// TestALoadOfAFileThatIsNotItsCompressionAnswersAlike pins one answer for one
+// fault across the codecs. A file whose suffix claims a compression its bytes
+// do not carry used to answer ErrCompression for gzip, xz and zlib, which read
+// their header when the reader is built, and ErrParsing with a sentence about a
+// CSV header for the rest, which fail on the first read -- inside the format
+// reader, where the CSV had not been reached at all.
+func TestALoadOfAFileThatIsNotItsCompressionAnswersAlike(t *testing.T) {
+	t.Parallel()
+
+	for i, c := range codec.All {
+		t.Run(c.String(), func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			path := filepath.Join(dir, "users.csv"+CompressionType(i+1).Extension())
+			// Plain text, which is not any of the compressions the suffix can
+			// claim.
+			if err := os.WriteFile(path, []byte("id,name\n1,alice\n"), 0o600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+
+			_, err := OpenContext(t.Context(), path)
+			if err == nil {
+				t.Fatalf("a %s file holding plain text loaded, want a refusal", c)
+			}
+			if !errors.Is(err, ErrCompression) {
+				t.Errorf("loading a %s file holding plain text = %v, want ErrCompression", c, err)
+			}
+			if !strings.Contains(err.Error(), "compression") {
+				t.Errorf("loading a %s file holding plain text = %v, want the message to name the compression", c, err)
+			}
+		})
+	}
+}
+
+// TestALoadOfCompressedTextThatIsNotItsFormatStaysAParseError pins the sibling:
+// a file that decompresses and then is not the format its name claims is a
+// fault in the format, and answers as one.
+func TestALoadOfCompressedTextThatIsNotItsFormatStaysAParseError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "users.json.gz")
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write([]byte("this is not JSON")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	_, err := OpenContext(t.Context(), path)
+	if err == nil {
+		t.Fatal("a gzip file holding text that is not JSON loaded, want a refusal")
+	}
+	if errors.Is(err, ErrCompression) {
+		t.Errorf("loading it = %v, want the fault named as the format rather than the compression", err)
+	}
+	if !errors.Is(err, ErrInvalidData) && !errors.Is(err, ErrParsing) {
+		t.Errorf("loading it = %v, want ErrParsing or ErrInvalidData", err)
+	}
 }

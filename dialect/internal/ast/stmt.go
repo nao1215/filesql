@@ -38,6 +38,13 @@ type SelectCore struct {
 	GroupBy   []Expr
 	// GroupByAll marks GoogleSQL's GROUP BY ALL.
 	GroupByAll bool
+	// Into is the table PostgreSQL's SELECT ... INTO creates. It is read only
+	// where a statement stands on its own, and the statement parser turns the
+	// query into the CREATE TABLE ... AS SELECT that SQLite spells, so nothing
+	// below ever renders it.
+	Into *TableName
+	// IntoTemporary marks the TEMP or TEMPORARY of that spelling.
+	IntoTemporary bool
 	// GroupingSets, Rollup and Cube carry the grouping-set spellings.
 	Grouping *GroupingClause
 	Having   Expr
