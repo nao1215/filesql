@@ -75,6 +75,44 @@ func TestIsDateNumberFormat(t *testing.T) {
 // table is a part of the file on its own and costs nothing to read, while
 // asking about one cell's style makes the library build the whole sheet as
 // objects -- 24 MB against 1470 MB for an 18.5 MB workbook of 200,000 rows.
+// TestIsClockNumberFormat covers what makes a custom number format draw a
+// moment rather than a quantity. An hour or a second token says so, and so does
+// an elapsed unit in a bracket; a minute on its own does not, since "m" is a
+// month as often as a minute and a format holding only months is a date.
+func TestIsClockNumberFormat(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name   string
+		format string
+		want   bool
+	}{
+		{name: "a time of day", format: "hh:mm:ss", want: true},
+		{name: "minutes and seconds", format: "mm:ss", want: true},
+		{name: "an elapsed hour", format: "[h]:mm", want: true},
+		{name: "an elapsed minute", format: "[mm]:ss", want: true},
+		{name: "a date and a time", format: "yyyy-mm-dd hh:mm", want: true},
+		{name: "a plain number", format: "#,##0.00", want: false},
+		{name: "a percentage", format: "0.0%", want: false},
+		{name: "a thousands separator", format: "#,##0", want: false},
+		{name: "an accounting figure", format: `_-"$"* #,##0.00_-`, want: false},
+		{name: "a date", format: "yyyy-mm-dd", want: false},
+		{name: "a month and year", format: "mmm yyyy", want: false},
+		{name: "a colored number", format: "[Red]#,##0", want: false},
+		{name: "a quoted word holding clock letters", format: `#,##0" hours"`, want: false},
+		{name: "an escaped clock letter", format: `0 \s`, want: false},
+		{name: "an underscore-escaped clock letter", format: "0_h", want: false},
+		{name: "an asterisk-escaped clock letter", format: "0*s", want: false},
+		{name: "nothing at all", format: "", want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, isClockNumberFormat(tt.format), "format %q", tt.format)
+		})
+	}
+}
+
 func TestDefinesADateStyle(t *testing.T) {
 	t.Parallel()
 
@@ -137,7 +175,7 @@ func TestDefinesADateStyle(t *testing.T) {
 
 		rows := [][]string{{"when"}, {"45000"}}
 
-		assert.Equal(t, rows, NormalizeXLSXDates(f, "Sheet1", rows))
+		assert.Equal(t, rows, normalizeXLSXDates(f, "Sheet1", rows))
 	})
 }
 
@@ -151,12 +189,16 @@ func TestDefinesADateStyle(t *testing.T) {
 // to answer the same, or the same workbook read for loading and read for
 // saving disagrees about which cells are dates, and the save rewrites a cell
 // nothing edited.
-func TestTheTwoDateReadingsAgree(t *testing.T) {
+func TestTheTwoCellReadingsAgree(t *testing.T) {
 	t.Parallel()
 
 	const sheet = "Sheet1"
 	f := excelize.NewFile()
 	style, err := f.NewStyle(&excelize.Style{NumFmt: 14}) // m/d/yy, a builtin date format
+	require.NoError(t, err)
+	percent, err := f.NewStyle(&excelize.Style{NumFmt: 10}) // 0.00%
+	require.NoError(t, err)
+	clock, err := f.NewStyle(&excelize.Style{NumFmt: 46}) // [h]:mm:ss
 	require.NoError(t, err)
 
 	// One row of cells, every one of them wearing the same date format, each
@@ -171,6 +213,18 @@ func TestTheTwoDateReadingsAgree(t *testing.T) {
 	require.NoError(t, f.SetCellStr(sheet, "D2", "not a date"))
 	require.NoError(t, f.SetCellStyle(sheet, "A2", "D2", style))
 
+	// And a second row of the formats that are not dates: a quantity the sheet
+	// redraws, a moment it draws instead of the serial, and a number nothing
+	// formats.
+	require.NoError(t, f.SetCellValue(sheet, "E1", "percentage"))
+	require.NoError(t, f.SetCellValue(sheet, "F1", "elapsed"))
+	require.NoError(t, f.SetCellValue(sheet, "G1", "plain"))
+	require.NoError(t, f.SetCellValue(sheet, "E2", 0.5))
+	require.NoError(t, f.SetCellValue(sheet, "F2", 1.5))
+	require.NoError(t, f.SetCellValue(sheet, "G2", 2.25))
+	require.NoError(t, f.SetCellStyle(sheet, "E2", "E2", percent))
+	require.NoError(t, f.SetCellStyle(sheet, "F2", "F2", clock))
+
 	var buffer bytes.Buffer
 	require.NoError(t, f.Write(&buffer))
 	require.NoError(t, f.Close())
@@ -183,21 +237,22 @@ func TestTheTwoDateReadingsAgree(t *testing.T) {
 	rows, err := book.GetRows(sheet)
 	require.NoError(t, err)
 
-	styles, complete := dateStyleIDs(book)
+	styles, _, complete := numberFormatStyleIDs(book)
 	require.True(t, complete, "the style table is short enough to walk")
-	dates, ok := dateCellsFromXML(data, sheet, styles, false)
+	require.NotEmpty(t, styles.dates)
+	values, ok := cellValuesFromXML(data, sheet, styles, false)
 	require.True(t, ok, "the workbook's parts say where the sheet is")
 
 	fromXML := copyRows(rows)
-	for cell, iso := range dates {
-		fromXML[cell.row-1][cell.col-1] = iso
+	for cell, text := range values {
+		fromXML[cell.row-1][cell.col-1] = text
 	}
-	fromLibrary := NormalizeXLSXDates(book, sheet, copyRows(rows))
+	fromLibrary := normalizeXLSXDates(book, sheet, normalizeXLSXNumbers(book, sheet, copyRows(rows)))
 
 	assert.Equal(t, fromXML, fromLibrary,
-		"the two readings of the same sheet have to name the same date cells")
-	assert.Equal(t, []string{"2023-03-15", "TRUE", "45001", "not a date"}, fromLibrary[1],
-		"only the cell stored as a number is a serial; a boolean and a string are not, whatever their format renders")
+		"the two readings of the same sheet have to answer the same for every cell")
+	assert.Equal(t, []string{"2023-03-15", "TRUE", "45001", "not a date", "0.5", "36:00:00", "2.25"}, fromLibrary[1],
+		"only the cell stored as a number is a serial; a percentage is the number behind it; an elapsed duration is what the sheet drew")
 }
 
 // copyRows is rows with each row copied, so a normalization that writes in

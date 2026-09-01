@@ -53,10 +53,10 @@ func TestCellRef(t *testing.T) {
 // TestScanSheetDates covers the walk over a sheet's XML on its own, including
 // the shapes a writer other than excelize produces: a row or a cell without its
 // reference, which follows the one before it.
-func TestScanSheetDates(t *testing.T) {
+func TestScanSheetValues(t *testing.T) {
 	t.Parallel()
 
-	dateStyles := map[int]bool{3: true}
+	styles := numberFormatStyles{dates: map[int]bool{3: true}, clocks: map[int]bool{4: true}}
 
 	t.Run("a styled numeric cell is a date", func(t *testing.T) {
 		t.Parallel()
@@ -65,32 +65,45 @@ func TestScanSheetDates(t *testing.T) {
 			<row r="2"><c r="A2" s="3"><v>45000</v></c></row>
 		</sheetData></worksheet>`
 
-		dates := map[datedCell]string{}
-		require.NoError(t, scanSheetDates(strings.NewReader(sheet), dateStyles, false, dates))
-		assert.Equal(t, map[datedCell]string{{row: 2, col: 1}: "2023-03-15"}, dates)
+		dates := map[sheetCell]string{}
+		require.NoError(t, scanSheetValues(strings.NewReader(sheet), styles, false, dates))
+		assert.Equal(t, map[sheetCell]string{{row: 2, col: 1}: "2023-03-15"}, dates)
 	})
 
-	t.Run("a cell wearing another style is not", func(t *testing.T) {
+	t.Run("a cell wearing another style keeps its number", func(t *testing.T) {
 		t.Parallel()
 
 		sheet := `<worksheet><sheetData>
 			<row r="2"><c r="A2" s="1"><v>45000</v></c></row>
 		</sheetData></worksheet>`
 
-		dates := map[datedCell]string{}
-		require.NoError(t, scanSheetDates(strings.NewReader(sheet), dateStyles, false, dates))
-		assert.Empty(t, dates)
+		dates := map[sheetCell]string{}
+		require.NoError(t, scanSheetValues(strings.NewReader(sheet), styles, false, dates))
+		assert.Equal(t, map[sheetCell]string{{row: 2, col: 1}: "45000"}, dates)
 	})
 
-	t.Run("a shared or inline string is text whatever its style", func(t *testing.T) {
+	t.Run("a cell wearing a clock style keeps what the sheet drew", func(t *testing.T) {
 		t.Parallel()
 
 		sheet := `<worksheet><sheetData>
-			<row r="2"><c r="A2" s="3" t="s"><v>0</v></c><c r="B2" s="3" t="str"><v>45000</v></c></row>
+			<row r="2"><c r="A2" s="4"><v>0.5</v></c></row>
 		</sheetData></worksheet>`
 
-		dates := map[datedCell]string{}
-		require.NoError(t, scanSheetDates(strings.NewReader(sheet), dateStyles, false, dates))
+		dates := map[sheetCell]string{}
+		require.NoError(t, scanSheetValues(strings.NewReader(sheet), styles, false, dates))
+		assert.Empty(t, dates)
+	})
+
+	t.Run("a cell that does not store a number keeps what it is", func(t *testing.T) {
+		t.Parallel()
+
+		sheet := `<worksheet><sheetData>
+			<row r="2"><c r="A2" s="3" t="s"><v>0</v></c><c r="B2" s="3" t="str"><v>45000</v></c>` +
+			`<c r="C2" s="3" t="inlineStr"><is><t>45000</t></is></c><c r="D2" s="1" t="b"><v>1</v></c></row>
+		</sheetData></worksheet>`
+
+		dates := map[sheetCell]string{}
+		require.NoError(t, scanSheetValues(strings.NewReader(sheet), styles, false, dates))
 		assert.Empty(t, dates)
 	})
 
@@ -102,9 +115,13 @@ func TestScanSheetDates(t *testing.T) {
 			<row><c s="0"><v>2</v></c><c s="3"><v>45000</v></c></row>
 		</sheetData></worksheet>`
 
-		dates := map[datedCell]string{}
-		require.NoError(t, scanSheetDates(strings.NewReader(sheet), dateStyles, false, dates))
-		assert.Equal(t, map[datedCell]string{{row: 2, col: 2}: "2023-03-15"}, dates)
+		dates := map[sheetCell]string{}
+		require.NoError(t, scanSheetValues(strings.NewReader(sheet), styles, false, dates))
+		assert.Equal(t, map[sheetCell]string{
+			{row: 1, col: 1}: "1",
+			{row: 2, col: 1}: "2",
+			{row: 2, col: 2}: "2023-03-15",
+		}, dates)
 	})
 
 	t.Run("a serial the 1900 system does not turn into a day is left alone", func(t *testing.T) {
@@ -116,16 +133,16 @@ func TestScanSheetDates(t *testing.T) {
 			<row r="2"><c r="A2" s="3"><v>60</v></c><c r="B2" s="3"><v>0</v></c><c r="C2" s="3"><v>abc</v></c></row>
 		</sheetData></worksheet>`
 
-		dates := map[datedCell]string{}
-		require.NoError(t, scanSheetDates(strings.NewReader(sheet), dateStyles, false, dates))
+		dates := map[sheetCell]string{}
+		require.NoError(t, scanSheetValues(strings.NewReader(sheet), styles, false, dates))
 		assert.Empty(t, dates)
 	})
 
 	t.Run("XML that ends in the middle is an error", func(t *testing.T) {
 		t.Parallel()
 
-		dates := map[datedCell]string{}
-		err := scanSheetDates(strings.NewReader(`<worksheet><sheetData><row r="2"><c r="A2" s="3">`), dateStyles, false, dates)
+		dates := map[sheetCell]string{}
+		err := scanSheetValues(strings.NewReader(`<worksheet><sheetData><row r="2"><c r="A2" s="3">`), styles, false, dates)
 		require.Error(t, err)
 	})
 }
@@ -154,23 +171,24 @@ func TestDateCellsFromXML(t *testing.T) {
 	require.NoError(t, f.Write(&buf))
 	data := buf.Bytes()
 
-	dated, complete := dateStyleIDs(f)
+	styles, formats, complete := numberFormatStyleIDs(f)
 	require.True(t, complete)
-	require.NotEmpty(t, dated)
+	require.True(t, formats)
+	require.NotEmpty(t, styles.dates)
 
 	t.Run("the sheet is found through the workbook's relationships", func(t *testing.T) {
 		t.Parallel()
 
-		dates, ok := dateCellsFromXML(data, sheet, dated, false)
+		dates, ok := cellValuesFromXML(data, sheet, styles, false)
 
 		require.True(t, ok)
-		assert.Equal(t, map[datedCell]string{{row: 2, col: 1}: "2023-03-15"}, dates)
+		assert.Equal(t, map[sheetCell]string{{row: 2, col: 1}: "2023-03-15"}, dates)
 	})
 
 	t.Run("a sheet the workbook does not have is not found", func(t *testing.T) {
 		t.Parallel()
 
-		_, ok := dateCellsFromXML(data, "no such sheet", dated, false)
+		_, ok := cellValuesFromXML(data, "no such sheet", styles, false)
 
 		assert.False(t, ok)
 	})
@@ -178,7 +196,7 @@ func TestDateCellsFromXML(t *testing.T) {
 	t.Run("bytes that are not an archive are not found", func(t *testing.T) {
 		t.Parallel()
 
-		_, ok := dateCellsFromXML([]byte("not a zip"), sheet, dated, false)
+		_, ok := cellValuesFromXML([]byte("not a zip"), sheet, styles, false)
 
 		assert.False(t, ok)
 	})

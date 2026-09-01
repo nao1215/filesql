@@ -6,51 +6,62 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
-// NormalizeXLSXNumbers rewrites the cells a sheet draws as a plain number into
-// the number the file stores, leaving every other cell as GetRows rendered it.
+// normalizeXLSXNumbers rewrites the numeric cells of a sheet's rows into the
+// numbers the file stores, leaving every other cell as GetRows rendered it.
 //
 // A sheet draws a number the way its format says, and the drawing is not the
-// value: a number of more than fifteen significant digits is drawn rounded to
+// value. A number of more than fifteen significant digits is drawn rounded to
 // fifteen, so an 18-digit order number came back as 1.23456789012346E+18 and two
 // such numbers that differ by one loaded as one value; a whole-number format
-// draws 1234.5 as 1235; a scientific format draws it as 1.23E+03, which reads
-// back as 1230. The digits are in the file either way -- the cell's stored text
-// is what excelize answers with RawCellValue -- so the value is taken from
-// there.
+// draws 1234.5 as 1235 and a scientific one draws it as 1.23E+03, which reads
+// back as 1230; a percentage of 0.5 is drawn "50%", a thousands-separated amount
+// "1,235" and a fraction "1234 1/2", none of which is a number at all, so the
+// column came back as text and SUM over it answered 0. A format is how a
+// spreadsheet paints a number, and the number is what a query is about.
 //
-// Only a cell whose drawing is itself a plain number is rewritten. A percentage,
-// a thousands-separated amount, an accounting figure, a fraction, a boolean and
-// a date are drawn as something a reader means to see, and the stored number
-// behind one says nothing on its own, so those keep their drawing. A date is the
-// exception that is handled elsewhere, by rewriting it into ISO 8601.
-func NormalizeXLSXNumbers(f *excelize.File, sheet string, rows [][]string) [][]string {
+// Two kinds of cell keep what the sheet says. One is a cell that does not store
+// a number: a boolean is stored as 1 and drawn TRUE, and a string is text
+// whatever its format says. The other is a number whose format draws a moment
+// rather than a quantity: a time of day, an elapsed duration, and a date, which
+// is rewritten into ISO 8601 by the pass that follows rather than left as the
+// serial behind it.
+//
+// This is the reading that asks the library for each cell's style. The loader
+// reads the sheet's own XML instead, which answers the same and costs less; the
+// two are held to that in the reader's tests.
+func normalizeXLSXNumbers(f *excelize.File, sheet string, rows [][]string) [][]string {
 	if !mayRedrawANumber(f, rows) {
 		return rows
 	}
-	// The stored text is read a row at a time rather than as a second sheet, so
-	// what the pass costs is the reading and not another copy of the sheet.
-	stored, err := f.Rows(sheet)
-	if err != nil {
-		// The drawing is what there is, which is what this returned before.
-		return rows
-	}
-	defer func() { _ = stored.Close() }()
-	for r := range rows {
-		if !stored.Next() {
-			break
-		}
-		raw, err := stored.Columns(excelize.Options{RawCellValue: true})
-		if err != nil {
-			return rows
-		}
-		for c := range rows[r] {
-			if c >= len(raw) {
-				break
-			}
-			if rows[r][c] == raw[c] || !isPlainNumber(rows[r][c]) || !isPlainNumber(raw[c]) {
+	// A column of one kind of number shares a style, so what a style draws is
+	// worked out once per style rather than once per cell.
+	redraws := make(map[int]bool)
+	for r, row := range rows {
+		for c := range row {
+			if row[c] == "" {
 				continue
 			}
-			rows[r][c] = raw[c]
+			axis, err := excelize.CoordinatesToCellName(c+1, r+1)
+			if err != nil {
+				continue
+			}
+			styleID, err := f.GetCellStyle(sheet, axis)
+			if err != nil {
+				continue
+			}
+			moment, seen := redraws[styleID]
+			if !seen {
+				moment = styleHoldsDate(f, styleID) || styleDrawsAClock(f, styleID)
+				redraws[styleID] = moment
+			}
+			if moment || !storesASerial(f, sheet, axis) {
+				continue
+			}
+			raw, err := f.GetCellValue(sheet, axis, excelize.Options{RawCellValue: true})
+			if err != nil || !isPlainNumber(raw) {
+				continue
+			}
+			rows[r][c] = raw
 		}
 	}
 	return rows
@@ -65,12 +76,19 @@ func NormalizeXLSXNumbers(f *excelize.File, sheet string, rows [][]string) [][]s
 // drawing itself carries the mark of. The style table is a part of the file on
 // its own and cheap to read; the mark is found in the strings already in hand.
 func mayRedrawANumber(f *excelize.File, rows [][]string) bool {
+	return anyDrawnShort(rows) || workbookFormatsNumbers(f)
+}
+
+// anyDrawnShort reports whether any drawing carries the mark of a number that
+// did not fit fifteen significant digits, which a sheet with no number format
+// at all is the case for.
+func anyDrawnShort(rows [][]string) bool {
 	for _, row := range rows {
 		if slices.ContainsFunc(row, drawnShort) {
 			return true
 		}
 	}
-	return workbookFormatsNumbers(f)
+	return false
 }
 
 // drawnShort reports whether a drawing carries the mark of a number that did

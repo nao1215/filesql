@@ -1818,6 +1818,61 @@ func TestBlankSheetCellInNumericColumnIsNull(t *testing.T) {
 // a REAL column carries a decimal point the sheet never showed, so every whole
 // number in such a column was rewritten as text, and a large one was rewritten
 // as the exponent spelling of itself.
+// TestAFormattedNumberColumnIsANumber covers the symptom a caller meets. A
+// sheet of percentages, of thousands-separated amounts, of accounting figures
+// or of fractions came back as text, so SUM answered 0, AVG answered nothing
+// and ORDER BY sorted lexically -- a format says how a spreadsheet paints a
+// number, and the number is what a query is about.
+func TestAFormattedNumberColumnIsANumber(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	for _, tt := range []struct {
+		name   string
+		numFmt int
+		values []float64
+		want   float64
+	}{
+		{"percentages", 9, []float64{0.5, 0.25}, 0.75},
+		{"thousands separators", 3, []float64{1234.5, 1000}, 2234.5},
+		{"accounting figures", 44, []float64{1234.5, 1000}, 2234.5},
+		{"fractions", 12, []float64{1234.5, 0.5}, 1235},
+		{"a whole-number format", 1, []float64{1234.5, 1000}, 2234.5},
+		{"a scientific format", 11, []float64{1234.5, 1000}, 2234.5},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "rates.xlsx")
+			book := excelize.NewFile()
+			require.NoError(t, book.SetCellStr(defaultSheetName, "A1", "rate"))
+			style, err := book.NewStyle(&excelize.Style{NumFmt: tt.numFmt})
+			require.NoError(t, err)
+			for i, value := range tt.values {
+				axis, err := excelize.CoordinatesToCellName(1, i+2)
+				require.NoError(t, err)
+				require.NoError(t, book.SetCellValue(defaultSheetName, axis, value))
+				require.NoError(t, book.SetCellStyle(defaultSheetName, axis, axis, style))
+			}
+			require.NoError(t, book.SaveAs(path))
+			require.NoError(t, book.Close())
+
+			db, err := OpenContext(ctx, path)
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+
+			var kind string
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT typeof(rate) FROM rates_Sheet1 LIMIT 1`).Scan(&kind))
+			assert.Equal(t, "real", kind, "a column of numbers is a number column")
+
+			var total float64
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT SUM(rate) FROM rates_Sheet1`).Scan(&total))
+			assert.InDelta(t, tt.want, total, 1e-9, "SUM over a text column answers 0")
+		})
+	}
+}
+
 func TestSaveKeepsACellsStorageType(t *testing.T) {
 	t.Parallel()
 

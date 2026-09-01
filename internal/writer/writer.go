@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -76,8 +77,10 @@ type Writer struct {
 	csv    *csv.Writer
 	staged *bytes.Buffer
 
-	// labels are the LTSV labels, checked once when the header arrives.
-	labels []string
+	// columns are the names the header gave, kept so a refusal can name the
+	// column a bad value sits in rather than counting to it. They are also the
+	// labels an LTSV record is written with.
+	columns []string
 
 	// line builds one LTSV record. It is kept between records because a
 	// strings.Builder cannot be: its Reset drops the buffer rather than
@@ -136,9 +139,10 @@ func (w *Writer) Header(columns []string) error {
 	if err := checkNamedColumns(w.format, columns); err != nil {
 		return err
 	}
-	if err := checkUTF8("column name", columns); err != nil {
+	if err := checkColumnNamesAreUTF8(columns); err != nil {
 		return err
 	}
+	w.columns = columns
 	switch w.format {
 	case FormatLTSV:
 		for _, col := range columns {
@@ -146,7 +150,6 @@ func (w *Writer) Header(columns []string) error {
 				return err
 			}
 		}
-		w.labels = columns
 		return nil
 	case FormatJSONL:
 		return nil
@@ -157,7 +160,7 @@ func (w *Writer) Header(columns []string) error {
 
 // Record writes one record.
 func (w *Writer) Record(record []string) error {
-	if err := checkUTF8("value", record); err != nil {
+	if err := w.checkValuesAreUTF8(record); err != nil {
 		return err
 	}
 	switch w.format {
@@ -243,7 +246,7 @@ func (w *Writer) flushCSV() error {
 // the field LTSV has for one.
 func (w *Writer) ltsvRecord(record []string) error {
 	w.line = w.line[:0]
-	for i, label := range w.labels {
+	for i, label := range w.columns {
 		var value string
 		if i < len(record) {
 			value = record[i]
@@ -345,21 +348,50 @@ func checkFirstColumn(format Format, columns []string) error {
 	}
 }
 
-// checkUTF8 refuses text that is not valid UTF-8. Every format here writes text,
-// so bytes that are not a character have no spelling in any of them: they went
-// out as themselves and the file no longer read back, or an encoder put U+FFFD
-// where they had been. what names the kind of field in the refusal -- a value, a
-// column name -- since the bytes alone do not say which.
-func checkUTF8(what string, fields []string) error {
-	for i, field := range fields {
+// checkValuesAreUTF8 refuses a value that is not valid UTF-8. Every format here
+// writes text, so bytes that are not a character have no spelling in any of
+// them: they went out as themselves and the file no longer read back, or an
+// encoder put U+FFFD where they had been.
+//
+// The refusal names the column the way the other ones do, by the name the
+// header gave it, and falls back to its position for a writer that has been
+// given no header.
+func (w *Writer) checkValuesAreUTF8(record []string) error {
+	for i, field := range record {
 		if utf8.ValidString(field) {
 			continue
 		}
 		return &Error{
 			Kind: KindNotUTF8,
 			Msg: fmt.Sprintf(
-				"a text format holds characters rather than bytes, and %s %d is not valid UTF-8",
-				what, i+1),
+				"a text format holds characters rather than bytes, and column %s holds a value that is not valid UTF-8",
+				w.columnName(i)),
+		}
+	}
+	return nil
+}
+
+// columnName is how a refusal names the column at i: the name the header gave
+// it, quoted, or its position when the header had none.
+func (w *Writer) columnName(i int) string {
+	if i < len(w.columns) && w.columns[i] != "" {
+		return strconv.Quote(w.columns[i])
+	}
+	return strconv.Itoa(i + 1)
+}
+
+// checkColumnNamesAreUTF8 refuses a column name that is not valid UTF-8. It
+// names the column by position, since the name is what is not readable.
+func checkColumnNamesAreUTF8(columns []string) error {
+	for i, column := range columns {
+		if utf8.ValidString(column) {
+			continue
+		}
+		return &Error{
+			Kind: KindNotUTF8,
+			Msg: fmt.Sprintf(
+				"a text format holds characters rather than bytes, and the name of column %d is not valid UTF-8",
+				i+1),
 		}
 	}
 	return nil

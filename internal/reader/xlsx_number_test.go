@@ -59,6 +59,16 @@ func TestReadXLSXKeepsTheStoredNumber(t *testing.T) {
 		{"a scientific format shortens the drawing", 11, 1234.5, "1234.5"},
 		{"a small integer is drawn as it is stored", 0, int64(42), "42"},
 		{"a small double is drawn as it is stored", 0, 1.5, "1.5"},
+		// A format that draws the number as something other than digits is
+		// presentation too: the cell holds one number whatever the sheet paints.
+		{"a percentage", 9, 0.5, "0.5"},
+		{"a percentage with decimals", 10, 0.5, "0.5"},
+		{"a thousands separator", 3, 1234.5, "1234.5"},
+		{"a thousands separator with decimals", 4, 1234.5, "1234.5"},
+		{"a currency", 7, 1234.5, "1234.5"},
+		{"an accounting figure", 44, 1234.5, "1234.5"},
+		{"a fraction", 12, 1234.5, "1234.5"},
+		{"a fraction of two digits", 13, 1234.5, "1234.5"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -71,11 +81,12 @@ func TestReadXLSXKeepsTheStoredNumber(t *testing.T) {
 	}
 }
 
-// TestReadXLSXKeepsWhatIsNotAPlainNumber pins the other half of the rule. A
-// cell a sheet draws as something other than a plain number -- a percentage, a
-// thousands-separated amount, a fraction, a date, a boolean -- keeps the
-// drawing, since the drawing is what such a cell means to a reader.
-func TestReadXLSXKeepsWhatIsNotAPlainNumber(t *testing.T) {
+// TestReadXLSXKeepsWhatIsNotAStoredNumber pins the other half of the rule. A
+// cell that does not store a number, and a number whose format draws a moment
+// rather than a quantity, keep what the sheet says: a boolean is TRUE, a time
+// of day is a clock reading, and an elapsed duration is the hours it counts,
+// none of which the serial behind it means on its own.
+func TestReadXLSXKeepsWhatIsNotAStoredNumber(t *testing.T) {
 	t.Parallel()
 
 	for _, tt := range []struct {
@@ -84,10 +95,10 @@ func TestReadXLSXKeepsWhatIsNotAPlainNumber(t *testing.T) {
 		value  any
 		want   string
 	}{
-		{"a percentage", 9, 0.5, "50%"},
-		{"a thousands separator", 3, 1234.5, "1,235"},
-		{"a fraction", 12, 1234.5, "1234 1/2"},
 		{"a boolean", 0, true, "TRUE"},
+		{"a boolean under a number format", 9, false, "FALSE"},
+		{"a time of day", 21, 0.5, "12:00:00"},
+		{"an elapsed duration", 46, 1.5, "36:00:00"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()

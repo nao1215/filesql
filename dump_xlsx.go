@@ -256,7 +256,7 @@ func xlsxSheetBefore(base *reader.Workbook, sheetName string) (xlsxSheetPrior, e
 	prior := xlsxSheetPrior{
 		extent: xlsxExtent{rows: len(rows)},
 		layout: base.LayoutOf(sheetName, rows),
-		values: reader.NormalizeXLSXDates(f, sheetName, reader.NormalizeXLSXNumbers(f, sheetName, rows)),
+		values: base.NormalizeCells(sheetName, rows),
 	}
 	for _, row := range rows {
 		prior.extent.columns = max(prior.extent.columns, len(row))
@@ -450,12 +450,12 @@ func xlsxUnrepresentableError(column string, r rune) error {
 		ErrUnsupportedFormat, r, column)
 }
 
-// xlsxNotUTF8Error reports text a worksheet cannot carry because it is not
+// xlsxNotUTF8Error reports a value a worksheet cannot carry because it is not
 // characters. A workbook is XML and holds text, so bytes that are not valid
 // UTF-8 went in as U+FFFD and the table came back changed with nothing said.
-func xlsxNotUTF8Error(what string, position int) error {
-	return fmt.Errorf("%w: XLSX holds characters rather than bytes, and %s %d is not valid UTF-8; dump this table as Parquet instead",
-		ErrUnsupportedFormat, what, position)
+func xlsxNotUTF8Error(column string) error {
+	return fmt.Errorf("%w: XLSX holds characters rather than bytes, and column %q holds a value that is not valid UTF-8; dump this table as Parquet instead",
+		ErrUnsupportedFormat, column)
 }
 
 // writeXLSXSheet adds one sheet to f and fills it. A cell whose value matches
@@ -504,7 +504,9 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior, sty
 			return xlsxExtent{}, xlsxUnrepresentableError(col, r)
 		}
 		if !utf8.ValidString(col) {
-			return xlsxExtent{}, xlsxNotUTF8Error("column name", i+1)
+			return xlsxExtent{}, fmt.Errorf(
+				"%w: XLSX holds characters rather than bytes, and the name of column %d is not valid UTF-8; dump this table as Parquet instead",
+				ErrUnsupportedFormat, i+1)
 		}
 		if unchangedXLSXCell(before, headerRow, i+1, col) {
 			continue
@@ -546,7 +548,7 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior, sty
 				return xlsxExtent{}, xlsxUnrepresentableError(columns[i], r)
 			}
 			if !utf8.ValidString(cellValue) {
-				return xlsxExtent{}, xlsxNotUTF8Error("value", i+1)
+				return xlsxExtent{}, xlsxNotUTF8Error(columns[i])
 			}
 			if unchangedXLSXCell(before, rowIndex, i+1, cellValue) {
 				continue
