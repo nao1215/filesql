@@ -463,10 +463,18 @@ func TestDumpACH_MissingSourceFileIsNamed(t *testing.T) {
 func copyACHFixture(t *testing.T, fixture string) string {
 	t.Helper()
 
+	return copyFixtureAs(t, fixture, "payment.ach")
+}
+
+// copyFixtureAs copies a fixture from testdata into a fresh directory under
+// name, which is what a table's name is derived from.
+func copyFixtureAs(t *testing.T, fixture, name string) string {
+	t.Helper()
+
 	content, err := os.ReadFile(filepath.Join("testdata", fixture)) //nolint:gosec // Test fixture path
 	require.NoError(t, err)
 
-	path := filepath.Join(t.TempDir(), "payment.ach")
+	path := filepath.Join(t.TempDir(), name)
 	require.NoError(t, os.WriteFile(path, content, 0o600)) //nolint:gosec // Test path is constructed from t.TempDir()
 	return path
 }

@@ -2299,3 +2299,61 @@ func assertFileContent(t *testing.T, path, want, msg string) {
 	require.NoError(t, err)
 	assert.Equal(t, want, string(got), msg)
 }
+
+// TestAutoSaveIntoADirectoryRefusesANameADumpRefuses pins that the three paths
+// that write a table to a file ask one question about its name.
+//
+// The ACH and Fedwire auto-saves built their output path from the base name and
+// filepath.Join, so a source named for a device -- con.ach, nul.fed -- was
+// written where a dump of the same database refuses it. The refusal is made on
+// every platform so that a database saved on Linux and on Windows agrees about
+// which tables it can write, and on Windows such a name is the device: the rows
+// go to the console and Close returns nil.
+func TestAutoSaveIntoADirectoryRefusesANameADumpRefuses(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		fixture string
+		refused string
+		kept    string
+		format  OutputFormat
+	}{
+		{name: "ACH", fixture: "ppd-debit.ach", refused: "con.ach", kept: "payment.ach", format: OutputFormatACH},
+		{name: "Fedwire", fixture: "customer-transfer.fed", refused: "nul.fed", kept: "payment.fed", format: OutputFormatFedWire},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+" refuses a device name", func(t *testing.T) {
+			t.Parallel()
+
+			src := copyFixtureAs(t, tt.fixture, tt.refused)
+			out := filepath.Join(t.TempDir(), "out")
+
+			db, err := NewBuilder().AddPath(src).
+				EnableAutoSave(out, DumpOptions{Format: tt.format}).
+				Open(t.Context())
+			require.NoError(t, err)
+
+			closeErr := db.Close()
+			require.Error(t, closeErr, "a name a dump refuses is refused here too")
+			assert.ErrorIs(t, closeErr, ErrInvalidData)
+			assert.Empty(t, dirEntriesOrNone(t, out), "nothing may be written for a refused name")
+		})
+
+		t.Run(tt.name+" writes a name a dump writes", func(t *testing.T) {
+			t.Parallel()
+
+			src := copyFixtureAs(t, tt.fixture, tt.kept)
+			out := filepath.Join(t.TempDir(), "out")
+
+			db, err := NewBuilder().AddPath(src).
+				EnableAutoSave(out, DumpOptions{Format: tt.format}).
+				Open(t.Context())
+			require.NoError(t, err)
+			require.NoError(t, db.Close())
+
+			assert.Equal(t, []string{tt.kept}, dirEntriesOrNone(t, out))
+		})
+	}
+}

@@ -375,12 +375,7 @@ func TestDumpFedWire_MissingSourceFileIsNamed(t *testing.T) {
 func copyWireFixture(t *testing.T, fixture string) string {
 	t.Helper()
 
-	content, err := os.ReadFile(filepath.Join("testdata", fixture)) //nolint:gosec // Test fixture path
-	require.NoError(t, err)
-
-	path := filepath.Join(t.TempDir(), "payment.fed")
-	require.NoError(t, os.WriteFile(path, content, 0o600)) //nolint:gosec // Test path is constructed from t.TempDir()
-	return path
+	return copyFixtureAs(t, fixture, "payment.fed")
 }
 
 func readFileString(t *testing.T, path string) string {
