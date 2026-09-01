@@ -381,7 +381,11 @@ func (b *DBBuilder) AddFS(filesystem fs.FS) *DBBuilder {
 // writing out rows the caller has neither committed nor rolled back.
 //
 // A path that is a symbolic link is followed: the file it names receives the
-// rows and the link stays a link.
+// rows and the link stays a link. A hard link is not, because a save is staged
+// beside its destination and renamed over it, and a rename replaces the
+// directory entry rather than the file: the path named receives the rows, and
+// every other name for that file keeps the ones it had and becomes a file of
+// its own.
 //
 // Returns self for chaining.
 func (b *DBBuilder) EnableAutoSave(outputDir string, options ...DumpOptions) *DBBuilder {
