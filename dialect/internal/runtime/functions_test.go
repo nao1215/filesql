@@ -2171,6 +2171,11 @@ func TestToInt(t *testing.T) {
 		{name: "numeric bytes", value: []byte("42"), want: 42, ok: true},
 		{name: "bytes that are not a number", value: []byte("abc")},
 		{name: "a value of another type", value: time.Time{}},
+		// Converting a float outside int64's range is implementation-defined in
+		// Go, and a helper taking a count reached the minimum through it.
+		{name: "a float past the largest integer", value: 1e308, want: math.MaxInt64, ok: true},
+		{name: "a float below the smallest", value: -1e308, want: math.MinInt64, ok: true},
+		{name: "not a number at all", value: math.NaN(), want: 0, ok: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2898,4 +2903,207 @@ func TestFormatWritesTheDecimalMySQLWrites(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestHelpersAnswerRatherThanPanic pins that no argument a caller can write
+// ends the process. A helper runs inside a SQLite user function, so a panic
+// goes up through the driver into the caller's goroutine, and a caller does not
+// wrap every query in a recover.
+//
+// Three helpers did: REPEAT and SPACE allocated the result before asking
+// whether it could exist, and SUBSTRING_INDEX negated a count without asking
+// whether it could be negated. All three are ordinary MySQL functions, so a
+// query in the dialect this package accepts was enough.
+func TestHelpersAnswerRatherThanPanic(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		call func() (driver.Value, error)
+	}{
+		{"REPEAT with the largest count", func() (driver.Value, error) {
+			return fnRepeat([]driver.Value{"a", int64(math.MaxInt64)})
+		}},
+		{"REPEAT under GoogleSQL with the largest count", func() (driver.Value, error) {
+			return fnGoogleSQLRepeat([]driver.Value{"a", int64(math.MaxInt64)})
+		}},
+		{"REPEAT with a float past int64", func() (driver.Value, error) {
+			return fnRepeat([]driver.Value{"a", 1e308})
+		}},
+		{"SPACE with the largest count", func() (driver.Value, error) {
+			return fnSpace([]driver.Value{int64(math.MaxInt64)})
+		}},
+		{"SUBSTRING_INDEX with the smallest count", func() (driver.Value, error) {
+			return fnSubstringIndex([]driver.Value{"a,b", ",", int64(math.MinInt64)})
+		}},
+		{"SUBSTRING_INDEX with a float past int64", func() (driver.Value, error) {
+			return fnSubstringIndex([]driver.Value{"a,b", ",", 1e308})
+		}},
+		{"SUBSTRING_INDEX with a float below int64", func() (driver.Value, error) {
+			return fnSubstringIndex([]driver.Value{"a,b", ",", -1e308})
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := tt.call()
+			t.Logf("= %v, %v", got, err)
+		})
+	}
+}
+
+// TestRepeatAndSpaceRefuseWhatCannotBeHeld pins the boundary either side of the
+// length a string can be, so a later change to the limit is deliberate.
+func TestRepeatAndSpaceRefuseWhatCannotBeHeld(t *testing.T) {
+	t.Parallel()
+
+	t.Run("REPEAT answers at the limit and refuses past it", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := fnRepeat([]driver.Value{strings.Repeat("a", 1000), int64(maxStringLength / 1000)})
+		if err != nil {
+			t.Fatalf("a result exactly the limit must be answered: %v", err)
+		}
+		s, ok := got.(string)
+		if !ok || len(s) != maxStringLength {
+			t.Fatalf("got %T of length %d, want a string of %d", got, len(s), maxStringLength)
+		}
+
+		if _, err := fnRepeat([]driver.Value{strings.Repeat("a", 1000), int64(maxStringLength/1000 + 1)}); err == nil {
+			t.Fatal("a result past the limit must be refused")
+		}
+	})
+
+	t.Run("SPACE answers at the limit and refuses past it", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := fnSpace([]driver.Value{int64(maxStringLength)})
+		if err != nil {
+			t.Fatalf("a result exactly the limit must be answered: %v", err)
+		}
+		if s, ok := got.(string); !ok || len(s) != maxStringLength {
+			t.Fatalf("got %T, want a string of %d", got, maxStringLength)
+		}
+
+		if _, err := fnSpace([]driver.Value{int64(maxStringLength) + 1}); err == nil {
+			t.Fatal("a result past the limit must be refused")
+		}
+	})
+}
+
+// TestSubstringIndexCountsThatAlreadyHadAnswers pins what the fix must not
+// change: a count whose magnitude reaches the number of parts answers with the
+// whole string, and the smallest count is such a count.
+func TestSubstringIndexCountsThatAlreadyHadAnswers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		count driver.Value
+		want  string
+	}{
+		{name: "one from the left", count: int64(1), want: "a"},
+		{name: "one from the right", count: int64(-1), want: "c"},
+		{name: "two from the right", count: int64(-2), want: "b,c"},
+		{name: "as many as there are", count: int64(3), want: "a,b,c"},
+		{name: "one more than there are", count: int64(4), want: "a,b,c"},
+		{name: "as many as there are, from the right", count: int64(-3), want: "a,b,c"},
+		{name: "one more than there are, from the right", count: int64(-4), want: "a,b,c"},
+		{name: "the largest count", count: int64(math.MaxInt64), want: "a,b,c"},
+		{name: "the smallest count", count: int64(math.MinInt64), want: "a,b,c"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := fnSubstringIndex([]driver.Value{"a,b,c", ",", tt.count})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("= %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestNoRegisteredHelperPanics calls every helper this package registers with
+// the driver, over a matrix of the arguments that break things: both int64
+// bounds, floats past them, NaN, the empty string, bytes, and strings that mean
+// something to one helper and nothing to the rest.
+//
+// It ranges over the registry rather than a list, so a helper added later is
+// covered without anyone remembering to add it. The assertion is only that
+// nothing panics: a helper runs inside a SQLite user function, so a panic goes
+// up through the driver into the caller's goroutine and ends their process,
+// where an error becomes an error on their query. Three helpers panicked when
+// this was written.
+func TestNoRegisteredHelperPanics(t *testing.T) {
+	t.Parallel()
+
+	if err := RegisterFunctions(); err != nil {
+		t.Fatalf("registering the helpers: %v", err)
+	}
+	// The registry is what this ranges over, so an empty one would pass without
+	// calling anything.
+	if len(registeredFunctions) < 100 {
+		t.Fatalf("the registry holds %d helpers, which is too few to be the whole of it", len(registeredFunctions))
+	}
+
+	values := []driver.Value{
+		nil, int64(0), int64(-1), int64(math.MaxInt64), int64(math.MinInt64),
+		1.5, 1e308, -1e308, math.NaN(),
+		"", "x", "not a date", "9999-99-99", "%", "[", "-",
+		[]byte{0}, true,
+	}
+	// A wide matrix on a helper of three or four arguments is more calls than it
+	// is coverage, so the later positions draw from fewer values.
+	narrow := values[:8]
+
+	for name, spec := range registeredFunctions {
+		arities := []int{int(spec.nArg)}
+		if spec.nArg < 0 {
+			// A helper that accepts any count is called with each of the first
+			// few, since there is no one count to try.
+			arities = []int{0, 1, 2, 3}
+		}
+		for _, arity := range arities {
+			pool := values
+			if arity >= 3 {
+				pool = narrow
+			}
+			for _, args := range valueCombinations(pool, arity) {
+				callWithoutPanic(t, name, spec.fn, args)
+			}
+		}
+	}
+}
+
+// callWithoutPanic calls one helper and reports a panic as a failure rather
+// than letting it end the run.
+func callWithoutPanic(t *testing.T, name string, fn scalarFn, args []driver.Value) {
+	t.Helper()
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("%s(%v) panicked: %v", name, args, r)
+		}
+	}()
+	_, _ = fn(args) //nolint:errcheck // an error is an answer; a panic is not
+}
+
+// valueCombinations is every ordered selection of arity values from pool.
+func valueCombinations(pool []driver.Value, arity int) [][]driver.Value {
+	if arity <= 0 {
+		return [][]driver.Value{{}}
+	}
+	rest := valueCombinations(pool, arity-1)
+	out := make([][]driver.Value, 0, len(rest)*len(pool))
+	for _, v := range pool {
+		for _, r := range rest {
+			out = append(out, append([]driver.Value{v}, r...))
+		}
+	}
+	return out
 }
