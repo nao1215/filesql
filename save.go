@@ -496,7 +496,7 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBase
 	bySheet := make(map[string]string, len(tables))
 	sheets := make([]xlsxSheet, 0, len(tables))
 	for _, tableName := range tables {
-		sheetName, ok := held[strings.ToLower(tableName)]
+		sheetName, ok := held[reader.ASCIIFold(tableName)]
 		if !ok {
 			sheetName = xlsxSheetNameForTable(baseTableName, tableName)
 		}
@@ -587,7 +587,7 @@ func sheetsByTable(base *reader.Workbook, baseTableName string) map[string]strin
 	names := base.File().GetSheetList()
 	held := make(map[string]string, len(names))
 	for _, sheet := range names {
-		key := strings.ToLower(xlsxSheetTableName(baseTableName, sheet))
+		key := reader.ASCIIFold(xlsxSheetTableName(baseTableName, sheet))
 		if _, taken := held[key]; !taken {
 			held[key] = sheet
 		}

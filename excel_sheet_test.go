@@ -1604,6 +1604,20 @@ func TestExcelSheetTableNames(t *testing.T) {
 		}
 	})
 
+	t.Run("the fold stops at ASCII, the way SQLite's does", func(t *testing.T) {
+		t.Parallel()
+		// SQLite's default folding does not reach past ASCII, so book_xäy and
+		// book_xÄy are two tables there and this is not a collision. Folding the
+		// whole of Unicode refused a workbook that loads.
+		got, err := ExcelSheetTableNames("book.xlsx", []string{"xäy", "xÄy"})
+		if err != nil {
+			t.Fatalf("ExcelSheetTableNames: %v", err)
+		}
+		if got[0] == got[1] {
+			t.Errorf("tables = %v, want two different names", got)
+		}
+	})
+
 	t.Run("keeps a sheet named after its file on the base table", func(t *testing.T) {
 		t.Parallel()
 		got, err := ExcelSheetTableNames("people.xlsx", []string{"people"})
