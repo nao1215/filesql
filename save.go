@@ -492,7 +492,7 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBase
 	if err != nil {
 		return err
 	}
-	held, err := sheetsByTable(base, baseTableName, policy)
+	held, skipped, err := sheetsByTable(base, baseTableName, policy)
 	if err != nil {
 		return err
 	}
@@ -510,10 +510,22 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBase
 	// overwrite it exists to stop.
 	bySheet := make(map[string]string, len(tables))
 	sheets := make([]xlsxSheet, 0, len(tables))
+	// A sheet the policy skipped is not loaded and not written, and its name is
+	// still taken: the workbook writer answers a request for a sheet that
+	// exists with that sheet, so a table whose name derives to it would replace
+	// rows this save never read.
+	reserved := make(map[string]string, len(skipped))
+	for _, sheet := range skipped {
+		reserved[sheetKey(sheet)] = sheet
+	}
 	for _, tableName := range tables {
 		sheetName, ok := held[sheetKey(tableName)]
 		if !ok {
 			sheetName = xlsxSheetNameForTable(baseTableName, tableName)
+			if held, taken := reserved[sheetKey(sheetName)]; taken {
+				return fmt.Errorf("%w: table %s becomes the sheet %q of %s, which the sheet policy left out and this save would write over; rename the table, or save to a directory instead",
+					ErrUnsupportedFormat, tableName, held, path)
+			}
 		}
 		if first, clash := bySheet[sheetKey(sheetName)]; clash {
 			return fmt.Errorf("%w: tables %s and %s both become the sheet %q in %s, and Excel holds one sheet per name; rename one, or save to a directory instead",
@@ -673,26 +685,26 @@ func foldRune(r rune) rune {
 	return smallest
 }
 
-func sheetsByTable(base *reader.Workbook, baseTableName string, policy ExcelSheetPolicy) (map[string]string, error) {
+func sheetsByTable(base *reader.Workbook, baseTableName string, policy ExcelSheetPolicy) (held map[string]string, skipped []string, err error) {
 	if base == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	// The sheets a save answers for are the sheets the load read, which is the
 	// question SelectExcelSheets exists to have one answer to. Reading the whole
 	// sheet list here instead made a sheet the policy skipped look like a table
 	// the session had removed.
-	names, _, err := reader.SelectExcelSheets(base.File(), policy)
+	names, skipped, err := reader.SelectExcelSheets(base.File(), policy)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	held := make(map[string]string, len(names))
+	held = make(map[string]string, len(names))
 	for _, sheet := range names {
 		key := sheetKey(xlsxSheetTableName(baseTableName, sheet))
 		if _, taken := held[key]; !taken {
 			held[key] = sheet
 		}
 	}
-	return held, nil
+	return held, skipped, nil
 }
 
 // openWorkbookForOverwrite reads the workbook a save is about to replace, so the

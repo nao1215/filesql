@@ -369,9 +369,11 @@ func (b *DBBuilder) AddFS(filesystem fs.FS) *DBBuilder {
 // changed are rewritten, so formulas, dates, styles and the sheets no table was
 // loaded from stay as they were. Each table goes back to the sheet it was read
 // from, under the name that sheet already had, and a table created during the
-// session becomes a new sheet. A sheet the load read and no table remains for,
-// which is what dropping or renaming a table leaves, refuses the save with
-// ErrTableNotFound rather than keeping the rows it had beside the new sheet.
+// session becomes a new sheet, unless its name is one a sheet already has that
+// the sheet policy left out, which is refused rather than written over. A sheet
+// the load read and no table remains for, which is what dropping or renaming a
+// table leaves, refuses the save with ErrTableNotFound rather than keeping the
+// rows it had beside the new sheet.
 //
 // The save runs once, when Close returns, so a database with auto-save is as
 // safe to share across goroutines as one without it. A transaction still open

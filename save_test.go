@@ -916,6 +916,57 @@ func TestOverwriteWorkbookRefusesASheetWhoseTableIsGone(t *testing.T) {
 		assert.ElementsMatch(t, []string{"data", "extra"}, f.GetSheetList())
 	})
 
+	t.Run("a session table cannot take the name of a sheet the policy left out", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := book(t, dir, "data", "hidden")
+		f, err := excelize.OpenFile(path)
+		require.NoError(t, err)
+		require.NoError(t, f.SetSheetVisible("hidden", false))
+		require.NoError(t, f.Save())
+		require.NoError(t, f.Close())
+
+		// The hidden sheet is not loaded, so nothing holds its name; the
+		// workbook writer would answer a request for it with that sheet and the
+		// rows it holds would be gone.
+		err = saveAfter(t, path, []func(*DBBuilder) *DBBuilder{
+			func(b *DBBuilder) *DBBuilder { return b.WithExcelSheetPolicy(ExcelSheetPolicyVisibleOnly) },
+		}, `CREATE TABLE book_hidden (n TEXT)`, `INSERT INTO book_hidden VALUES ('from the session')`)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		assert.Contains(t, err.Error(), "hidden")
+
+		out, err := excelize.OpenFile(path)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, out.Close()) }()
+		rows, err := out.GetRows("hidden")
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"n"}, {"hidden-first"}, {"hidden-second"}}, rows,
+			"a refused save must not have written the sheet already")
+	})
+
+	t.Run("a session table whose name collides with nothing is still a new sheet", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := book(t, dir, "data", "hidden")
+		f, err := excelize.OpenFile(path)
+		require.NoError(t, err)
+		require.NoError(t, f.SetSheetVisible("hidden", false))
+		require.NoError(t, f.Save())
+		require.NoError(t, f.Close())
+
+		require.NoError(t, saveAfter(t, path, []func(*DBBuilder) *DBBuilder{
+			func(b *DBBuilder) *DBBuilder { return b.WithExcelSheetPolicy(ExcelSheetPolicyVisibleOnly) },
+		}, `CREATE TABLE book_extra (n TEXT)`, `INSERT INTO book_extra VALUES ('new')`))
+
+		out, err := excelize.OpenFile(path)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, out.Close()) }()
+		assert.ElementsMatch(t, []string{"data", "hidden", "extra"}, out.GetSheetList())
+	})
+
 	t.Run("a sheet the policy did not load is not a missing table", func(t *testing.T) {
 		t.Parallel()
 
