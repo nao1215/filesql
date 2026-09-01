@@ -1446,35 +1446,108 @@ func TestSplitUnescapedAndUnescapeTagText(t *testing.T) {
 	})
 }
 
-// TestNoPreprocessorPanics builds every prep tag with a matrix of the
-// parameters that break things -- both int64 bounds, a length past what a
-// string can hold, an empty parameter, a lone separator -- and runs each over
-// values of the same shape.
+// TestNoTagInAnyRegistryPanics builds every tag this package accepts, from all
+// four of the registries it keeps them in, with a matrix of the parameters that
+// break things -- both int64 bounds, a length past what a string can hold, an
+// empty parameter, a lone separator -- and runs each over values and target
+// fields of the same shape.
 //
-// It ranges over the registry rather than a list, so a tag added later is
+// It ranges over the registries rather than a list, so a tag added later is
 // covered without anyone remembering to add it. The assertion is only that
-// nothing panics: a preprocessor runs inside the caller's Process call, and
-// pad_left with a length of 9223372036854775807 ended their process rather than
-// telling them the length was impossible.
-func TestNoPreprocessorPanics(t *testing.T) {
+// nothing panics: a tag runs inside the caller's Process call, and pad_left
+// with a length of 9223372036854775807 ended their process rather than telling
+// them the length was impossible.
+func TestNoTagInAnyRegistryPanics(t *testing.T) {
 	t.Parallel()
 
-	if len(prepBuilders) < 20 {
-		t.Fatalf("the registry holds %d builders, which is too few to be the whole of it", len(prepBuilders))
+	if len(prepBuilders) < 20 || len(validatorRegistry) < 20 {
+		t.Fatalf("the registries hold %d preprocessors and %d validators, which is too few to be the whole of them",
+			len(prepBuilders), len(validatorRegistry))
 	}
 
 	params := []string{
 		"", "0", "-1", "9223372036854775807", "-9223372036854775808",
-		"1000000001", "x", ":", "x:y", "0:x", "9223372036854775807:x",
-		"1.5", "int", "https", "abc",
+		"1000000001", "99999999999999999999999", "1.5", "-1.5",
+		"x", "x y", "'x y'", ":", "x:y", "0:x", "9223372036854775807:x",
+		"int", "https", "abc", "[", "%", "\\",
 	}
-	values := []string{"", "a", "  a  ", strings.Repeat("a", 100), "1", "-1", "<b>x</b>", "a,b", "true"}
+	values := []string{
+		"", " ", "a", "  a  ", strings.Repeat("a", 100), "0", "1", "-1",
+		"9223372036854775807", "-9223372036854775808", "1.5", "1e308", "NaN",
+		"true", "TRUE", "a@b.c", "http://x", "<b>x</b>", "a,b", "\x00", "あ",
+	}
+	targets := [][]string{nil, {}, {""}, {"a"}, {"1", "2"}, {"", "", ""}}
 
 	for name, build := range prepBuilders {
 		for _, param := range params {
 			for _, strict := range []bool{false, true} {
 				runPreprocessorWithoutPanic(t, name, build, param, strict, values)
 			}
+		}
+	}
+	for name, build := range validatorRegistry {
+		for _, param := range params {
+			for _, strict := range []bool{false, true} {
+				runValidatorWithoutPanic(t, name, build, param, strict, values)
+			}
+		}
+	}
+	// The three cross-field registries differ only in what their parameter is
+	// tokenized into, so each is given the shapes its own builder takes.
+	for name, build := range crossFieldValidatorRegistry {
+		for _, param := range params {
+			runCrossFieldWithoutPanic(t, name, param, build(param), values, targets)
+		}
+	}
+	for name, build := range fieldListValidatorRegistry {
+		for _, fields := range [][]string{nil, {}, {""}, {"a"}, {"a", "b"}} {
+			runCrossFieldWithoutPanic(t, name, strings.Join(fields, ","), build(fields), values, targets)
+		}
+	}
+	for name, build := range pairTakingCrossFieldRegistry {
+		for _, conditions := range [][]fieldCondition{nil, {}, {{}}, {{field: "a", expected: "1"}}} {
+			runCrossFieldWithoutPanic(t, name, "conditions", build(conditions), values, targets)
+		}
+	}
+}
+
+// runValidatorWithoutPanic builds one validator and runs it over values.
+func runValidatorWithoutPanic(t *testing.T, name string, build validatorBuilder, param string, strict bool, values []string) {
+	t.Helper()
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("%s=%s (strict %v) panicked: %v", name, param, strict, r)
+		}
+	}()
+	v, err := build(param, strict)
+	if err != nil || v == nil {
+		return
+	}
+	_ = v.Name()
+	for _, value := range values {
+		_ = v.Validate(value)
+	}
+}
+
+// runCrossFieldWithoutPanic runs one cross-field validator over values and the
+// target values it compares them against.
+func runCrossFieldWithoutPanic(t *testing.T, name, param string, v crossFieldValidator, values []string, targets [][]string) {
+	t.Helper()
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("%s=%s panicked: %v", name, param, r)
+		}
+	}()
+	if v == nil {
+		return
+	}
+	_ = v.Name()
+	_ = v.TargetFields()
+	for _, value := range values {
+		for _, target := range targets {
+			_ = v.Validate(value, target)
 		}
 	}
 }
