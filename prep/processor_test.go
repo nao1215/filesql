@@ -888,7 +888,7 @@ func TestProcessor_JSON_AllRowsEmptied(t *testing.T) {
 	t.Parallel()
 
 	// When all JSON rows become empty after preprocessing, Process returns
-	// ErrEmptyJSONOutput because an empty JSONL stream is unparseable.
+	// ErrEmptyOutput because an empty JSONL stream is unparseable.
 	type NullifyAllRecord struct {
 		Data string `name:"data" prep:"nullify={}"`
 	}
@@ -903,8 +903,96 @@ func TestProcessor_JSON_AllRowsEmptied(t *testing.T) {
 		t.Fatal("Expected error for all-empty JSON output, got nil")
 	}
 
-	if !errors.Is(err, ErrEmptyJSONOutput) {
-		t.Errorf("err = %v, want ErrEmptyJSONOutput", err)
+	if !errors.Is(err, ErrEmptyOutput) {
+		t.Errorf("err = %v, want ErrEmptyOutput", err)
+	}
+}
+
+// requiredARow drops a row whose column a is empty; emailDataRow drops a JSON
+// row, whose one column holds the whole element, by asking it to be an address.
+type requiredARow struct {
+	A string `validate:"required"`
+}
+
+type emailDataRow struct {
+	Data string `validate:"email"`
+}
+
+// TestProcessor_HeaderlessFormat_AllRowsDropped pins where an empty output is
+// reported. A format that writes no header line has nothing left when every row
+// is dropped, so the reader would carry zero bytes and the failure would only
+// appear once it reached a loader. A format with a header still describes its
+// columns, so it keeps succeeding.
+func TestProcessor_HeaderlessFormat_AllRowsDropped(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		fileType parser.FileType
+		input    string
+		rows     any
+		wantErr  bool
+	}{
+		{"LTSV writes no header", parser.LTSV, "a:\tb:x\n", &[]requiredARow{}, true},
+		{"JSONL writes no header", parser.JSONL, "{\"a\":1}\n", &[]emailDataRow{}, true},
+		{"JSON is written as JSONL", parser.JSON, "[{\"a\":1}]", &[]emailDataRow{}, true},
+		{"CSV keeps its header", parser.CSV, "a,b\n,x\n", &[]requiredARow{}, false},
+		{"TSV keeps its header", parser.TSV, "a\tb\n\tx\n", &[]requiredARow{}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			reader, result, err := NewProcessor(tt.fileType, WithValidRowsOnly()).
+				Process(strings.NewReader(tt.input), tt.rows)
+			if tt.wantErr {
+				if !errors.Is(err, ErrEmptyOutput) {
+					t.Fatalf("Process() error = %v, want ErrEmptyOutput", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Process() error = %v, want nil", err)
+			}
+			if result.ValidRowCount != 0 {
+				t.Errorf("ValidRowCount = %d, want 0", result.ValidRowCount)
+			}
+			out, readErr := io.ReadAll(reader)
+			if readErr != nil {
+				t.Fatalf("ReadAll() error = %v", readErr)
+			}
+			if len(out) == 0 {
+				t.Error("output is empty; a format with a header should still describe its columns")
+			}
+		})
+	}
+}
+
+// TestProcessorToWriter_HeaderlessFormat_AllRowsDropped is the same rule for
+// the other entry point, which carries its own copy of the guard.
+func TestProcessorToWriter_HeaderlessFormat_AllRowsDropped(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name     string
+		fileType parser.FileType
+		input    string
+		rows     any
+	}{
+		{"LTSV", parser.LTSV, "a:\tb:x\n", &[]requiredARow{}},
+		{"JSONL", parser.JSONL, "{\"a\":1}\n", &[]emailDataRow{}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			_, err := NewProcessor(tt.fileType, WithValidRowsOnly()).
+				ProcessToWriter(strings.NewReader(tt.input), tt.rows, &buf)
+			if !errors.Is(err, ErrEmptyOutput) {
+				t.Fatalf("ProcessToWriter() error = %v, want ErrEmptyOutput", err)
+			}
+		})
 	}
 }
 
@@ -963,12 +1051,35 @@ func TestProcessor_JSON_PrettyPrinted(t *testing.T) {
 	}
 }
 
+// TestProcessor_CompressedStreamIsNotUnwrapped states the arrangement the
+// package documents: a codec comes off before Process sees the stream. Handing
+// a compressed stream over unchanged reads the container as text, so it has to
+// fail rather than produce a table.
+func TestProcessor_CompressedStreamIsNotUnwrapped(t *testing.T) {
+	t.Parallel()
+
+	var compressed bytes.Buffer
+	gw := gzip.NewWriter(&compressed)
+	if _, err := gw.Write([]byte("name,age\nAlice,30\n")); err != nil {
+		t.Fatalf("gzip write error: %v", err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatalf("gzip close error: %v", err)
+	}
+
+	var records []struct{}
+	_, _, err := NewProcessor(parser.CSV).Process(bytes.NewReader(compressed.Bytes()), &records)
+	if err == nil {
+		t.Fatal("Process() error = nil, want an error: prep does not unwrap a codec")
+	}
+}
+
 func TestProcessor_JSON_PrettyPrintedGzip(t *testing.T) {
 	t.Parallel()
 
 	// Verify that compressed pretty-printed JSON also produces compact JSONL.
-	// Decompression is handled by the parser package, but the full pipeline
-	// (decompress → parse → prep → compact → JSONL) should be exercised.
+	// The caller takes the codec off, so the pipeline exercised here is
+	// decompress → parse → prep → compact → JSONL.
 	prettyJSON := `[
   {"name": "Alice", "age": 30},
   {"name": "Bob", "age": 25}
@@ -2003,7 +2114,7 @@ func TestProcessToWriter_WithValidRowsOnly(t *testing.T) {
 }
 
 // TestProcessToWriter_JSONEmptyOutput verifies that ProcessToWriter returns
-// ErrEmptyJSONOutput when all JSON rows are empty after preprocessing.
+// ErrEmptyOutput when all JSON rows are empty after preprocessing.
 func TestProcessToWriter_JSONEmptyOutput(t *testing.T) {
 	t.Parallel()
 
@@ -2018,10 +2129,10 @@ func TestProcessToWriter_JSONEmptyOutput(t *testing.T) {
 
 	_, err := processor.ProcessToWriter(strings.NewReader(jsonlData), &records, &buf)
 	if err == nil {
-		t.Fatal("expected ErrEmptyJSONOutput")
+		t.Fatal("expected ErrEmptyOutput")
 	}
-	if !errors.Is(err, ErrEmptyJSONOutput) {
-		t.Errorf("expected errors.Is(err, ErrEmptyJSONOutput), got: %v", err)
+	if !errors.Is(err, ErrEmptyOutput) {
+		t.Errorf("expected errors.Is(err, ErrEmptyOutput), got: %v", err)
 	}
 }
 

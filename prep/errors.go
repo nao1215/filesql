@@ -21,10 +21,12 @@ var (
 	// in the "data" column of a JSON/JSONL file. This is a hard error because
 	// invalid JSON lines in JSONL output cause downstream parsers to fail.
 	ErrInvalidJSONAfterPrep = errors.New("preprocessing produced invalid JSON")
-	// ErrEmptyJSONOutput is returned when all JSON/JSONL rows are empty or invalid
-	// after preprocessing, resulting in no output lines. An empty JSONL output is
-	// unparseable by downstream consumers.
-	ErrEmptyJSONOutput = errors.New("JSON/JSONL output has no valid rows after preprocessing")
+	// ErrEmptyOutput is returned when preprocessing leaves no rows in a format
+	// that writes no header line. JSONL and LTSV both describe a row entirely
+	// within that row, so a file with no rows is an empty stream that whatever
+	// reads it next cannot make a table from. A format with a header still names
+	// its columns with no rows under them, and is not refused.
+	ErrEmptyOutput = errors.New("output has no valid rows after preprocessing")
 	// ErrNilWriter is returned when a nil io.Writer is passed to ProcessToWriter.
 	ErrNilWriter = errors.New("writer must not be nil")
 	// ErrNilReader is returned when a nil io.Reader is passed to Process or ProcessToWriter.
