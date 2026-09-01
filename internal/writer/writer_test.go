@@ -598,6 +598,22 @@ func TestTextIsRefusedWhenItIsNotUTF8(t *testing.T) {
 				}
 			})
 
+			t.Run("a writer given no header counts to the column", func(t *testing.T) {
+				t.Parallel()
+
+				var out bytes.Buffer
+				w := New(&out, format.f, Options{})
+
+				err := w.Record([]string{"1", "\xff\xfe"})
+				var werr *Error
+				if !errors.As(err, &werr) {
+					t.Fatalf("Record = %v, want a *writer.Error", err)
+				}
+				if !strings.Contains(werr.Msg, "column 2") {
+					t.Errorf("Msg = %q, want it to name the column by its position", werr.Msg)
+				}
+			})
+
 			t.Run("valid text is written", func(t *testing.T) {
 				t.Parallel()
 
