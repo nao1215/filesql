@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -4253,5 +4254,108 @@ func TestTableNameHoldingAQuotingCharacter(t *testing.T) {
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrInvalidData)
 		})
+	}
+}
+
+// TestAFileThatBeginsWithABlankLineReadsAlike pins one answer for a file whose
+// first line holds nothing. A blank line in the middle of a file is skipped by
+// every loader, and the first line was not: a CSV skipped it and took the next
+// row as its header, a TSV read it as a header of one empty column and refused
+// the rows that followed, and a sheet whose first row was blank loaded as no
+// table at all with no error, so a workbook holding rows opened as an empty
+// database.
+func TestAFileThatBeginsWithABlankLineReadsAlike(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		file string
+		body string
+	}{
+		{"csv", "t.csv", "\n1,2\n3,4\n"},
+		{"tsv", "t.tsv", "\n1\t2\n3\t4\n"},
+		{"csv with two blank lines", "t.csv", "\n\n1,2\n3,4\n"},
+		{"tsv with two blank lines", "t.tsv", "\n\n1\t2\n3\t4\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), tt.file)
+			if err := os.WriteFile(path, []byte(tt.body), 0o600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			db, err := OpenContext(t.Context(), path)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer db.Close()
+
+			rows, err := db.QueryContext(t.Context(), "SELECT * FROM t")
+			if err != nil {
+				t.Fatalf("query: %v", err)
+			}
+			defer rows.Close()
+			columns, err := rows.Columns()
+			if err != nil {
+				t.Fatalf("columns: %v", err)
+			}
+			if want := []string{"1", "2"}; !reflect.DeepEqual(columns, want) {
+				t.Errorf("columns = %q, want %q: the first row that holds something is the header", columns, want)
+			}
+			count := 0
+			for rows.Next() {
+				count++
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatalf("rows: %v", err)
+			}
+			if count != 1 {
+				t.Errorf("rows = %d, want 1", count)
+			}
+		})
+	}
+}
+
+// TestAHeaderOfEmptyCellsIsStillAHeader pins the sibling the skip must not take
+// with it: a line that holds empty cells is a header of that many columns,
+// which is what names them after their positions.
+func TestAHeaderOfEmptyCellsIsStillAHeader(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		file string
+		body string
+	}{
+		{"t.csv", ",\n1,2\n"},
+		{"t.tsv", "\t\n1\t2\n"},
+	} {
+		path := filepath.Join(t.TempDir(), tt.file)
+		if err := os.WriteFile(path, []byte(tt.body), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		db, err := OpenContext(t.Context(), path)
+		if err != nil {
+			t.Fatalf("open %q: %v", tt.body, err)
+		}
+		rows, err := db.QueryContext(t.Context(), "SELECT * FROM t")
+		if err != nil {
+			t.Fatalf("query: %v", err)
+		}
+		columns, err := rows.Columns()
+		if err != nil {
+			t.Fatalf("columns: %v", err)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("rows: %v", err)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatalf("close rows: %v", err)
+		}
+		if want := []string{"column_1", "column_2"}; !reflect.DeepEqual(columns, want) {
+			t.Errorf("%q loads with columns %q, want %q", tt.body, columns, want)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
 	}
 }

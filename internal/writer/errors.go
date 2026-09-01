@@ -25,6 +25,11 @@ const (
 	// the bytes go out and the file no longer reads back as the table it came
 	// from. Only a format that carries bytes rather than text can say it.
 	KindNotUTF8
+	// KindUnwritableInEncoding is a character the destination's text encoding
+	// has no way to write. Every text format holds it and every encoding that
+	// takes all of Unicode writes it, so what refuses it is the encoding the
+	// caller asked for rather than the format.
+	KindUnwritableInEncoding
 	// KindEncode is a record that is not what the format needs.
 	KindEncode
 )

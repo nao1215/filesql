@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"unicode/utf8"
 
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/japanese"
@@ -193,6 +194,34 @@ func (e Encoding) encodingWriter(w io.Writer) (io.Writer, *encodedWriter) {
 	tw := transform.NewWriter(w, transformer)
 	wrapped := &encodedWriter{w: tw, closer: tw.Close}
 	return wrapped, wrapped
+}
+
+// unwritableRune reports whether e can write a rune, and names e for a refusal.
+// It is nil for the encodings that can write every character, which is UTF-8
+// and both UTF-16 forms, so a dump into one pays nothing for the check.
+//
+// The answers are remembered because a column tends to hold the same characters
+// over and over: a table of Japanese text asks about a few hundred runes across
+// however many rows it has. Only what is not ASCII reaches here, since the
+// caller passes over those.
+func (e Encoding) unwritableRune() func(rune) (string, bool) {
+	transformer, ok := e.encoder()
+	if !ok {
+		return nil
+	}
+	name := e.String()
+	known := make(map[rune]bool)
+	buf := make([]byte, utf8.UTFMax)
+	return func(r rune) (string, bool) {
+		writable, seen := known[r]
+		if !seen {
+			n := utf8.EncodeRune(buf, r)
+			_, _, err := transform.Bytes(transformer, buf[:n])
+			writable = err == nil
+			known[r] = writable
+		}
+		return name, writable
+	}
 }
 
 // encodingError wraps a failure from the encoder so a caller can match it with

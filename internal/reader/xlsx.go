@@ -161,8 +161,14 @@ func (w *Workbook) LayoutOf(name string, rows [][]string) SheetLayout {
 // The same rule decides where the header is: a sheet may begin with rows holding
 // no cell at all, which name no column.
 func tableRows(rows [][]string, holdsCells *heldRows) (headerRow int, recordRows []int) {
+	// A row with no cell holding anything names no column, whether the sheet
+	// stores those cells or not: a cleared or formatted top row leaves cells
+	// that hold the empty string, and reading one as the header made a sheet
+	// full of rows load as no table at all. The header is the first row that
+	// holds something, which is what a blank line at the top of a text file
+	// already means.
 	at := 0
-	for at < len(rows) && len(rows[at]) == 0 && !holdsCells.has(at+1) {
+	for at < len(rows) && len(rows[at]) == 0 {
 		at++
 	}
 	if at >= len(rows) {
