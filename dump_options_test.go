@@ -134,9 +134,24 @@ func TestDumpOptions_ChainedMethods(t *testing.T) {
 // It named CSV, so a dump given a format from a configuration file that had
 // drifted refused with "unsupported output format: csv" -- a format this
 // package writes every day -- and computed a ".csv" path for it on the way.
-// enumProbeLimit is how far past an enumeration's members these tests look for
-// one they were not told about. It is well past any of them and costs nothing.
-const enumProbeLimit = 64
+// assertWholeEnum says that a table covers the whole of an iota enumeration:
+// its members run from zero without a gap, and the value after the last one has
+// no name. A member added the only way these enumerations grow -- appended, so
+// iota gives it the next value -- is named by String and fails the second half,
+// whatever the table's length happens to be.
+func assertWholeEnum[T ~int](t *testing.T, known map[T]bool, name func(T) string) {
+	t.Helper()
+
+	highest := T(0)
+	for value := range known {
+		if value > highest {
+			highest = value
+		}
+	}
+	assert.Len(t, known, int(highest)+1, "the table skips a value below %d", int(highest))
+	assert.Equal(t, formatUnknownStr, name(highest+1),
+		"the enumeration has a member past the table: %v", name(highest+1))
+}
 
 func TestOutputFormatNamesOnlyWhatItHas(t *testing.T) {
 	t.Parallel()
@@ -157,14 +172,11 @@ func TestOutputFormatNamesOnlyWhatItHas(t *testing.T) {
 		assert.Equal(t, want.name, format.String())
 		assert.Equal(t, want.ext, format.Extension())
 	}
-	// A format added later names itself, so it has to appear above. Asking the
-	// enumeration rather than counting to its current last member is what makes
-	// this fail for one appended after it.
-	for i := range enumProbeLimit {
-		if format := OutputFormat(i); format.String() != formatUnknownStr {
-			assert.Contains(t, known, format, "a format the enumeration names is missing from this table")
-		}
+	present := make(map[OutputFormat]bool, len(known))
+	for format := range known {
+		present[format] = true
 	}
+	assertWholeEnum(t, present, OutputFormat.String)
 
 	for _, unknown := range []OutputFormat{OutputFormat(99), OutputFormat(-1)} {
 		assert.Equal(t, "unknown", unknown.String())
@@ -198,11 +210,11 @@ func TestCompressionTypeNamesOnlyWhatItHas(t *testing.T) {
 		assert.Equal(t, want.name, codec.String())
 		assert.Equal(t, want.ext, codec.Extension())
 	}
-	for i := range enumProbeLimit {
-		if codec := CompressionType(i); codec.String() != formatUnknownStr {
-			assert.Contains(t, known, codec, "a codec the enumeration names is missing from this table")
-		}
+	present := make(map[CompressionType]bool, len(known))
+	for codec := range known {
+		present[codec] = true
 	}
+	assertWholeEnum(t, present, CompressionType.String)
 
 	for _, unknown := range []CompressionType{CompressionType(99), CompressionType(-1)} {
 		assert.Equal(t, "unknown", unknown.String())

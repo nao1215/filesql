@@ -689,15 +689,21 @@ func TestCodecNamesOnlyWhatItHas(t *testing.T) {
 			t.Errorf("Codec(%d).String() = %q, want %q", int(codec), got, want)
 		}
 	}
-	// A codec added later names itself, so it has to appear above. Asking the
-	// enumeration rather than counting to its current last member is what makes
-	// this fail for one appended after it.
-	for i := range 64 {
-		if codec := Codec(i); codec.String() != "unknown" {
-			if _, ok := known[codec]; !ok {
-				t.Errorf("Codec(%d) is named %q and is missing from this table", i, codec.String())
-			}
+	// The table covers the whole enumeration: its members run from zero without
+	// a gap, and the value after the last one has no name. A codec added the
+	// only way this enumeration grows -- appended, so iota gives it the next
+	// value -- is named by String and fails the second half.
+	highest := Codec(0)
+	for codec := range known {
+		if codec > highest {
+			highest = codec
 		}
+	}
+	if len(known) != int(highest)+1 {
+		t.Errorf("the table holds %d codecs and the highest is %d, so it skips one", len(known), int(highest))
+	}
+	if name := (highest + 1).String(); name != "unknown" {
+		t.Errorf("the enumeration has a member past the table: Codec(%d) is named %q", int(highest)+1, name)
 	}
 
 	for _, unknown := range []Codec{Codec(99), Codec(-1)} {
