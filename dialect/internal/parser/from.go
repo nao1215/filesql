@@ -138,6 +138,10 @@ func (p *Parser) parseTablePrimary() (ast.TableExpr, error) {
 		return nil, p.unexpected("a subquery")
 	}
 
+	if p.atInheritanceOnly() {
+		return p.parseOnlyTable(span)
+	}
+
 	parts, err := p.parseQualifiedName()
 	if err != nil {
 		return nil, err
@@ -157,7 +161,20 @@ func (p *Parser) parseTablePrimary() (ast.TableExpr, error) {
 		}
 		return table, nil
 	}
+	return p.finishTableName(parts, span)
+}
+
+// finishTableName reads what a table name carries after it: the star of
+// PostgreSQL's inheritance spelling, the suffixes a dialect allows, and the
+// alias.
+func (p *Parser) finishTableName(parts []ast.Ident, span ast.Span) (ast.TableExpr, error) {
 	table := &ast.TableName{Parts: parts, Span: span}
+	// A star after the name is PostgreSQL's opposite of ONLY: it reaches the
+	// tables that inherit from this one as well. Nothing inherits here, so it
+	// names the same table and is read and dropped.
+	if p.dialect == dialects.PostgreSQL {
+		p.eatOp("*")
+	}
 	// The suffixes come before the alias in MySQL's grammar for a hint and
 	// after it for the rest, so both sides of the alias are read.
 	if err := p.parseTableSuffixes(table); err != nil {
@@ -170,6 +187,40 @@ func (p *Parser) parseTablePrimary() (ast.TableExpr, error) {
 		return nil, err
 	}
 	return table, nil
+}
+
+// atInheritanceOnly reports whether the cursor is on PostgreSQL's ONLY in front
+// of a table name. ONLY says a statement reaches this table and not the tables
+// inheriting from it, and it is a reserved word there, so what follows it is
+// the name. The other dialects have no such keyword: MySQL answers "Table
+// 'db.ONLY' doesn't exist" for "FROM ONLY t", which is ONLY aliased t, and
+// reading it as a keyword would take a table away from them.
+func (p *Parser) atInheritanceOnly() bool {
+	if p.dialect != dialects.PostgreSQL || !p.atWord("ONLY") {
+		return false
+	}
+	next := p.peek(1)
+	if next.IsOp("(") {
+		return p.namesSomething(2)
+	}
+	return p.namesSomething(1) && !clauseKeywords[upper(next.Text)]
+}
+
+// parseOnlyTable reads a table reference behind PostgreSQL's ONLY, with or
+// without the parentheses that spelling also allows.
+func (p *Parser) parseOnlyTable(span ast.Span) (ast.TableExpr, error) {
+	p.pos++ // ONLY
+	parenthesized := p.eatOp("(")
+	parts, err := p.parseQualifiedName()
+	if err != nil {
+		return nil, err
+	}
+	if parenthesized {
+		if err := p.expectOp(")"); err != nil {
+			return nil, err
+		}
+	}
+	return p.finishTableName(parts, span)
 }
 
 // parseParenTable reads what follows an opening parenthesis in a FROM clause:
@@ -202,6 +253,14 @@ func (p *Parser) parseParenTable(span ast.Span, lateral bool) (ast.TableExpr, er
 
 // parseTableAlias reads the alias and column list of a table reference.
 func (p *Parser) parseTableAlias(alias *string, columns *[]string) error {
+	// LOCK opens MySQL's row-locking clause when IN follows it and is an alias
+	// anywhere else, since MySQL does not reserve the word. Reading it as the
+	// alias left the parser on IN, and the clause a query writes right after a
+	// bare table name was reported as unreadable SQL rather than refused as the
+	// row lock it is.
+	if p.atWord("LOCK") && p.peek(1).IsWord("IN") {
+		return nil
+	}
 	name, _, ok, err := p.parseAlias()
 	if err != nil {
 		return err
@@ -274,7 +333,8 @@ func (p *Parser) skipIndexHint(table *ast.TableName) error {
 // clause to ask for.
 func (p *Parser) parseRowLock() error {
 	if !p.atWords("FOR", "UPDATE") && !p.atWords("FOR", "SHARE") &&
-		!p.atWords("FOR", "NO", "KEY") && !p.atWords("LOCK", "IN") {
+		!p.atWords("FOR", "NO", "KEY") && !p.atWords("FOR", "KEY", "SHARE") &&
+		!p.atWords("LOCK", "IN") {
 		return nil
 	}
 	return p.unsupportedf("a row-locking clause is not supported; SQLite locks the database rather than rows")

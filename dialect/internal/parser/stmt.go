@@ -443,9 +443,27 @@ func (p *Parser) parseTableNameRef() (*ast.TableName, error) {
 // would take the VALUE of "INSERT INTO t VALUE (1)" for the table's alias.
 func (p *Parser) parseTargetName(bareAlias bool) (*ast.TableName, error) {
 	span := p.span()
+	// PostgreSQL writes ONLY in front of the table an UPDATE or a DELETE
+	// reaches, and a star after it, to say whether the tables inheriting from
+	// it are reached too. Nothing inherits here, so both name this table. An
+	// INSERT, which takes no alias without AS, takes neither word either.
+	inheritance := bareAlias && p.atInheritanceOnly()
+	parenthesized := false
+	if inheritance {
+		p.pos++ // ONLY
+		parenthesized = p.eatOp("(")
+	}
 	parts, err := p.parseQualifiedName()
 	if err != nil {
 		return nil, err
+	}
+	if parenthesized {
+		if err := p.expectOp(")"); err != nil {
+			return nil, err
+		}
+	}
+	if bareAlias && p.dialect == dialects.PostgreSQL {
+		p.eatOp("*")
 	}
 	name := &ast.TableName{Parts: parts, Span: span}
 	if !bareAlias {

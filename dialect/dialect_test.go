@@ -888,3 +888,255 @@ func TestAlterTableNamesTheConstraintItCannotAdd(t *testing.T) {
 		}
 	})
 }
+
+// TestATableReferenceNamesTheTableTheCallerWrote pins PostgreSQL's ONLY and its
+// opposite spelling, the trailing star. Both say which of a table and the
+// tables inheriting from it a statement reaches, and a database here has
+// neither inheritance nor a table to inherit from, so both name the one table
+// they stand beside. Reading ONLY as that name made the statement reach a table
+// called ONLY: it answered nothing on a database without one, and on a database
+// holding a file named only.csv it answered, updated or deleted the wrong one.
+func TestATableReferenceNamesTheTableTheCallerWrote(t *testing.T) {
+	t.Parallel()
+
+	t.Run("postgresql reads ONLY as the keyword it is", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			query string
+			want  string
+		}{
+			{"SELECT * FROM ONLY t", "SELECT * FROM t"},
+			{"SELECT * FROM only t", "SELECT * FROM t"},
+			{"SELECT * FROM ONLY t AS x", "SELECT * FROM t AS x"},
+			{"SELECT * FROM ONLY t x", "SELECT * FROM t AS x"},
+			{"SELECT * FROM ONLY (t)", "SELECT * FROM t"},
+			{"SELECT * FROM ONLY (t) AS x", "SELECT * FROM t AS x"},
+			{"SELECT * FROM t *", "SELECT * FROM t"},
+			{"SELECT * FROM ONLY s.t", "SELECT * FROM s.t"},
+			{"SELECT * FROM ONLY t JOIN ONLY u ON t.a = u.a", "SELECT * FROM t JOIN u ON t.a = u.a"},
+			{"SELECT * FROM ONLY t, ONLY u", "SELECT * FROM t, u"},
+			{"UPDATE ONLY t SET a = 1", "UPDATE t SET a = 1"},
+			{"DELETE FROM ONLY t WHERE a = 1", "DELETE FROM t WHERE a = 1"},
+			{"ALTER TABLE ONLY t ADD COLUMN a INT", "ALTER TABLE t ADD COLUMN a INTEGER"},
+			{"ALTER TABLE ONLY t RENAME COLUMN a TO b", "ALTER TABLE t RENAME COLUMN a TO b"},
+			{"ALTER TABLE ONLY t DROP COLUMN a", "ALTER TABLE t DROP COLUMN a"},
+		} {
+			got, err := Translate(PostgreSQL, tt.query)
+			if err != nil {
+				t.Errorf("Translate(%v, %q) error = %v, want it to translate", PostgreSQL, tt.query, err)
+				continue
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%v, %q) = %q, want %q", PostgreSQL, tt.query, got, tt.want)
+			}
+		}
+	})
+
+	t.Run("a quoted name is still a name", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			query string
+			want  string
+		}{
+			{`SELECT * FROM "only"`, `SELECT * FROM "only"`},
+			{`SELECT * FROM "only" AS x`, `SELECT * FROM "only" AS x`},
+			{`SELECT * FROM ONLY "only"`, `SELECT * FROM "only"`},
+		} {
+			got, err := Translate(PostgreSQL, tt.query)
+			if err != nil {
+				t.Errorf("Translate(%v, %q) error = %v, want it to translate", PostgreSQL, tt.query, err)
+				continue
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%v, %q) = %q, want %q", PostgreSQL, tt.query, got, tt.want)
+			}
+		}
+	})
+
+	t.Run("the dialects without the keyword keep reading a name", func(t *testing.T) {
+		t.Parallel()
+
+		// MySQL answers "Table 'probe.ONLY' doesn't exist" for this query and
+		// GoogleSQL has no ONLY either, so the word is the table's name there
+		// and t is its alias.
+		for _, d := range []Dialect{MySQL, GoogleSQL} {
+			got, err := Translate(d, "SELECT * FROM ONLY t")
+			if err != nil {
+				t.Errorf("Translate(%v) error = %v, want it to translate", d, err)
+				continue
+			}
+			if want := "SELECT * FROM ONLY AS t"; got != want {
+				t.Errorf("Translate(%v, %q) = %q, want %q", d, "SELECT * FROM ONLY t", got, want)
+			}
+		}
+	})
+
+	t.Run("a query written with ONLY answers the rows the table holds", func(t *testing.T) {
+		t.Parallel()
+
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		db.SetMaxOpenConns(1)
+		for _, ddl := range []string{
+			"CREATE TABLE t (a INTEGER)",
+			"INSERT INTO t VALUES (1), (2)",
+		} {
+			if _, err := db.ExecContext(t.Context(), ddl); err != nil {
+				t.Fatalf("exec %q: %v", ddl, err)
+			}
+		}
+		out, err := Translate(PostgreSQL, "SELECT sum(a) FROM ONLY t")
+		if err != nil {
+			t.Fatalf("Translate: %v", err)
+		}
+		var sum int
+		if err := db.QueryRowContext(t.Context(), out).Scan(&sum); err != nil {
+			t.Fatalf("query %q: %v", out, err)
+		}
+		if sum != 3 {
+			t.Errorf("sum over ONLY t = %d, want 3", sum)
+		}
+	})
+}
+
+// TestAlterTableRefusesBySpellingWhatItCannotMake pins which sentinel a caller
+// gets for an ALTER TABLE their own engine accepts. ErrInvalidSyntax says the
+// query could not be read, and these read: they ask for changes SQLite does not
+// make. A caller who reports a typing mistake on one sentinel and falls back on
+// the other needs the two told apart.
+func TestAlterTableRefusesBySpellingWhatItCannotMake(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid in its dialect and refused by name", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+			names   string
+		}{
+			{PostgreSQL, "ALTER TABLE t ADD COLUMN a INT, ADD COLUMN b INT", "one change"},
+			{MySQL, "ALTER TABLE t ADD COLUMN a INT, DROP COLUMN b", "one change"},
+			{PostgreSQL, "ALTER TABLE t RENAME COLUMN a TO b, RENAME COLUMN c TO d", "one change"},
+			{PostgreSQL, "ALTER TABLE t ADD COLUMN IF NOT EXISTS a INT", "IF NOT EXISTS"},
+			{MySQL, "ALTER TABLE t ADD COLUMN IF NOT EXISTS a INT", "IF NOT EXISTS"},
+			{GoogleSQL, "ALTER TABLE t ADD COLUMN IF NOT EXISTS a INT64", "IF NOT EXISTS"},
+			{PostgreSQL, "ALTER TABLE t DROP COLUMN IF EXISTS a", "IF EXISTS"},
+			{MySQL, "ALTER TABLE t DROP COLUMN IF EXISTS a", "IF EXISTS"},
+			{GoogleSQL, "ALTER TABLE t DROP COLUMN IF EXISTS a", "IF EXISTS"},
+			{PostgreSQL, "ALTER TABLE IF EXISTS t ADD COLUMN a INT", "IF EXISTS"},
+			{MySQL, "ALTER TABLE t ADD COLUMN a INT FIRST", "FIRST"},
+			{MySQL, "ALTER TABLE t ADD COLUMN a INT AFTER b", "AFTER"},
+		} {
+			_, err := Translate(tt.dialect, tt.query)
+			if !errors.Is(err, ErrUnsupportedSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.query, err)
+				continue
+			}
+			if !strings.Contains(err.Error(), tt.names) {
+				t.Errorf("Translate(%v, %q) error = %v, want it to name %q", tt.dialect, tt.query, err, tt.names)
+			}
+		}
+	})
+
+	t.Run("a word DROP TABLE already drops", func(t *testing.T) {
+		t.Parallel()
+
+		// DROP TABLE reads CASCADE and RESTRICT and drops them, since SQLite
+		// has neither word; a dropped column deserves the same answer.
+		for _, tt := range []struct {
+			query string
+			want  string
+		}{
+			{"ALTER TABLE t DROP COLUMN a CASCADE", "ALTER TABLE t DROP COLUMN a"},
+			{"ALTER TABLE t DROP COLUMN a RESTRICT", "ALTER TABLE t DROP COLUMN a"},
+			{"ALTER TABLE t DROP a CASCADE", "ALTER TABLE t DROP COLUMN a"},
+		} {
+			got, err := Translate(PostgreSQL, tt.query)
+			if err != nil {
+				t.Errorf("Translate(%v, %q) error = %v, want it to translate", PostgreSQL, tt.query, err)
+				continue
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%v, %q) = %q, want %q", PostgreSQL, tt.query, got, tt.want)
+			}
+		}
+	})
+
+	t.Run("a statement that stops in the middle is still unreadable", func(t *testing.T) {
+		t.Parallel()
+
+		for _, query := range []string{
+			"ALTER TABLE t ADD COLUMN a INT,",
+			"ALTER TABLE t ADD COLUMN",
+			"ALTER TABLE t DROP COLUMN",
+			"ALTER TABLE t RENAME COLUMN a TO",
+		} {
+			if _, err := Translate(PostgreSQL, query); !errors.Is(err, ErrInvalidSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrInvalidSyntax", PostgreSQL, query, err)
+			}
+		}
+	})
+}
+
+// TestARowLockingClauseIsRefusedInEverySpelling pins that the clause is refused
+// as unsupported wherever it stands. Two spellings were refused as unreadable
+// SQL instead: MySQL's LOCK IN SHARE MODE when it followed a table name with no
+// alias between them, because LOCK was read as the alias, and PostgreSQL's FOR
+// KEY SHARE, which was missing from the words that open the clause.
+func TestARowLockingClauseIsRefusedInEverySpelling(t *testing.T) {
+	t.Parallel()
+
+	t.Run("refused as unsupported", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+		}{
+			{MySQL, "SELECT * FROM t LOCK IN SHARE MODE"},
+			{MySQL, "SELECT * FROM t AS x LOCK IN SHARE MODE"},
+			{MySQL, "SELECT * FROM t WHERE a = 1 LOCK IN SHARE MODE"},
+			{PostgreSQL, "SELECT * FROM t FOR KEY SHARE"},
+			{PostgreSQL, "SELECT * FROM t FOR NO KEY UPDATE"},
+			{PostgreSQL, "SELECT * FROM t FOR SHARE"},
+			{PostgreSQL, "SELECT * FROM t FOR UPDATE"},
+		} {
+			_, err := Translate(tt.dialect, tt.query)
+			if !errors.Is(err, ErrUnsupportedSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.query, err)
+				continue
+			}
+			if !strings.Contains(err.Error(), "row-locking") {
+				t.Errorf("Translate(%v, %q) error = %v, want it to name the row-locking clause", tt.dialect, tt.query, err)
+			}
+		}
+	})
+
+	t.Run("LOCK is still a name where MySQL allows one", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			query string
+			want  string
+		}{
+			{"SELECT * FROM t lock", "SELECT * FROM t AS lock"},
+			{"SELECT * FROM t AS lock", "SELECT * FROM t AS lock"},
+			{"SELECT * FROM lock", "SELECT * FROM lock"},
+		} {
+			got, err := Translate(MySQL, tt.query)
+			if err != nil {
+				t.Errorf("Translate(%v, %q) error = %v, want it to translate", MySQL, tt.query, err)
+				continue
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%v, %q) = %q, want %q", MySQL, tt.query, got, tt.want)
+			}
+		}
+	})
+}

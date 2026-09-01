@@ -238,6 +238,12 @@ func TestQueryFormsThatAreNotImplemented(t *testing.T) {
 	}{
 		{dialects.PostgreSQL, "TABLE t", sqlerr.ErrUnsupportedFeature},
 		{dialects.PostgreSQL, "SELECT a FROM t WHERE a > 1 FOR UPDATE", sqlerr.ErrUnsupportedSyntax},
+		// A row-locking clause is refused wherever it stands and however it is
+		// spelled. LOCK is a name in MySQL until IN follows it, and FOR KEY
+		// SHARE is one of PostgreSQL's four lock strengths.
+		{dialects.MySQL, "SELECT a FROM t LOCK IN SHARE MODE", sqlerr.ErrUnsupportedSyntax},
+		{dialects.MySQL, "SELECT a FROM t AS x LOCK IN SHARE MODE", sqlerr.ErrUnsupportedSyntax},
+		{dialects.PostgreSQL, "SELECT a FROM t FOR KEY SHARE", sqlerr.ErrUnsupportedSyntax},
 		{dialects.PostgreSQL, "SELECT a FROM t TABLESAMPLE SYSTEM (10)", sqlerr.ErrUnsupportedSyntax},
 		{dialects.MySQL, "SELECT a FROM t PARTITION (p0)", sqlerr.ErrUnsupportedSyntax},
 		{dialects.PostgreSQL, "WITH w AS MATERIALIZED (SELECT 1) SELECT 1", sqlerr.ErrUnsupportedSyntax},
@@ -283,6 +289,12 @@ func TestIndexHintsAndSuffixesAreRead(t *testing.T) {
 		"SELECT a FROM t FORCE INDEX FOR JOIN (i)",
 		"SELECT a FROM t IGNORE KEY FOR ORDER BY (i)",
 		"SELECT a FROM t AS x USE INDEX (i)",
+		// LOCK opens the row-locking clause only when IN follows it. MySQL
+		// leaves the word unreserved, so it is a table's alias and a table's
+		// name everywhere else.
+		"SELECT a FROM t lock",
+		"SELECT a FROM t AS lock",
+		"SELECT a FROM lock",
 	} {
 		t.Run(query, func(t *testing.T) {
 			t.Parallel()

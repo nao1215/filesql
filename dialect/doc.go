@@ -65,7 +65,12 @@
 // Everything else is refused: the statements that address a server rather than
 // a database (GRANT, LOCK TABLES, SHOW, USE, SET, FLUSH), the objects SQLite
 // does not have (sequences, materialized views, functions, procedures,
-// triggers, databases), and the DDL that changes a column's type.
+// triggers, databases), and the DDL that changes a column's type. An ALTER
+// TABLE is refused the same way when it asks for what SQLite cannot make: more
+// than one change in one statement, a column placed with FIRST or AFTER, a
+// change skipped with IF EXISTS or IF NOT EXISTS. Each is refused by name and
+// as unsupported, since the statement was read: ErrInvalidSyntax is for a query
+// that could not be.
 //
 // # What is dropped
 //
@@ -74,8 +79,15 @@
 // them. The clauses that ask for a physical layout rather than an answer are
 // dropped the same way: MySQL's ENGINE, CHARSET and COMMENT table options and
 // its index hints, GoogleSQL's OPTIONS and CLUSTER BY, PostgreSQL's UNLOGGED
-// and CONCURRENTLY, and the CASCADE or RESTRICT of a DROP. The rows are the
-// same without them.
+// and CONCURRENTLY, and the CASCADE or RESTRICT of a dropped table or column.
+// The rows are the same without them.
+//
+// PostgreSQL's ONLY in front of a table name, and the star after one, say
+// whether the tables inheriting from that one are reached as well. Nothing
+// inherits from a table here, so each names the table it stands beside and is
+// dropped: "SELECT * FROM ONLY t" is a query about t. The word is PostgreSQL's
+// alone -- MySQL and GoogleSQL have no ONLY, where "FROM ONLY t" names a table
+// called ONLY with the alias t.
 //
 // # Column names
 //
