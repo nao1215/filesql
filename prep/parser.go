@@ -289,9 +289,23 @@ func padPrep[T preprocessor](build func(int, rune) T, tag string) func(string, b
 		if length <= 0 {
 			return nil, invalidPrepParam(strict, "%s requires a positive length, got %q", tag, value)
 		}
+		// A length is refused here rather than while the padding is built,
+		// where nothing had asked whether the answer could exist: a tag of
+		// pad_left=9223372036854775807 reached make and ended the caller's
+		// process. The tag is written once, so answering once is also cheaper
+		// than answering per value.
+		if length > maxPaddedLength {
+			return nil, invalidPrepParam(strict, "%s length must be at most %d, got %q", tag, maxPaddedLength, value)
+		}
 		return build(length, padChar), nil
 	}
 }
+
+// maxPaddedLength is the longest string a pad will build. It is SQLite's own
+// SQLITE_MAX_LENGTH default, which is where the engine refuses a string, and
+// prep's output is read into SQLite: a value longer than this could not be
+// loaded even if it could be built.
+const maxPaddedLength = 1_000_000_000
 
 // invalidPrepParam is the answer to a parameter a tag cannot work with: the
 // error in strict mode, and nothing at all in non-strict mode, where the
