@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -280,15 +279,23 @@ func (c *autoSaveConnector) performACHAutoSave(db *sql.DB, outputDir string) err
 		return errors.New("no ACH tables found to save")
 	}
 
+	// Where each file goes is settled before the destination is touched, and by
+	// the rule a dump follows: this is an export, so a base name a dump refuses
+	// -- one Windows resolves to a device -- is refused here as well, rather
+	// than written to the console on the platform where it is one.
+	files, err := dumpFilePaths(outputDir, achBaseNames, extACH)
+	if err != nil {
+		return err
+	}
+
 	if err := ensureOutputDirectory(outputDir); err != nil {
 		return err
 	}
 
 	// Export each ACH file
-	for _, baseName := range achBaseNames {
-		outputPath := filepath.Join(outputDir, baseName+".ach")
-		if err := DumpACH(ctx, db, baseName, outputPath); err != nil {
-			return fmt.Errorf("failed to export ACH file %s: %w", baseName, err)
+	for _, file := range files {
+		if err := DumpACH(ctx, db, file.name, file.path); err != nil {
+			return fmt.Errorf("failed to export ACH file %s: %w", file.name, err)
 		}
 	}
 
@@ -304,14 +311,18 @@ func (c *autoSaveConnector) performFedWireAutoSave(db *sql.DB, outputDir string)
 		return errors.New("no Fedwire tables found to save")
 	}
 
+	files, err := dumpFilePaths(outputDir, wireBaseNames, extFED)
+	if err != nil {
+		return err
+	}
+
 	if err := ensureOutputDirectory(outputDir); err != nil {
 		return err
 	}
 
-	for _, baseName := range wireBaseNames {
-		outputPath := filepath.Join(outputDir, baseName+".fed")
-		if err := DumpFedWire(ctx, db, baseName, outputPath); err != nil {
-			return fmt.Errorf("failed to export Fedwire file %s: %w", baseName, err)
+	for _, file := range files {
+		if err := DumpFedWire(ctx, db, file.name, file.path); err != nil {
+			return fmt.Errorf("failed to export Fedwire file %s: %w", file.name, err)
 		}
 	}
 
