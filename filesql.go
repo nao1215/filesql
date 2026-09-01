@@ -241,6 +241,12 @@ func dumpSQLiteDatabase(ctx context.Context, db *sql.DB, outputDir string, optio
 		return err
 	}
 
+	// The destination is not created for an export that is already over. The
+	// ping above answers a context canceled before the call; this answers one
+	// canceled while the paths were being settled.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := ensureOutputDirectory(outputDir); err != nil {
 		return err
 	}

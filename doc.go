@@ -314,15 +314,18 @@
 // blob literal in a statement run during the session; a value read from a file
 // is checked when it is loaded.
 //
-// A save that writes several files replaces all of them or none. Each file is
-// produced beside its destination first, and they are put in place only once
-// every one of them is whole, so a value a format cannot hold costs a set what
-// it costs one file: nothing is replaced, and the sources are left holding one
-// state of the session rather than two. An export into a directory is the
-// exception, because what it writes are files of its own rather than the
-// caller's sources: a table it refuses for its name is refused before the
-// directory is created, and one it refuses for a value partway through leaves
-// the tables it had already finished, as a canceled export does.
+// A save that writes several files produces all of them before it replaces any.
+// A value a format cannot hold therefore costs a set what it costs one file:
+// nothing is replaced, and the sources are left holding one state of the session
+// rather than two. What is left after that is the rename of each finished file
+// over its destination, and an operating system refusing one of those, after an
+// earlier one has gone through, leaves the files before it replaced; the error
+// names the destination it would not replace, and the files the save had not
+// reached are discarded. An export into a directory is the exception, because
+// what it writes are files of its own rather than the caller's sources: a table
+// it refuses for its name is refused before the directory is created, and one it
+// refuses for a value partway through leaves the tables it had already finished,
+// as a canceled export does.
 //
 // Records end with "\n" unless DumpOptions.WithLineEnding says otherwise, with
 // one exception: EnableAutoSave("") writes a table back to the file it was

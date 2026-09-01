@@ -413,6 +413,11 @@ func TestWriteTogether(t *testing.T) {
 		assert.Equal(t, []string{"first.txt"}, dirEntries(t, dir), "no staged file may be left behind")
 	})
 
+	// The commit is the one step this cannot make all-or-nothing: each file is
+	// renamed over its destination, and an operating system that refuses one of
+	// those after an earlier one has gone through leaves the files before it
+	// replaced. What is pinned here is that this is what happens and that the
+	// caller is told which destination it was.
 	t.Run("a commit that fails discards what is left and says so", func(t *testing.T) {
 		t.Parallel()
 
@@ -432,9 +437,33 @@ func TestWriteTogether(t *testing.T) {
 		err := set.commit()
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrIOOperation)
+		assert.Contains(t, err.Error(), first, "the error names the destination it would not replace")
 		assert.DirExists(t, first, "the destination the commit could not replace is left as it was")
 		assert.NoFileExists(t, second, "a file still staged when the commit fails is discarded")
 		assert.Equal(t, []string{"first.txt"}, dirEntries(t, dir), "no staged file may be left behind")
+	})
+
+	t.Run("a commit that fails after one has gone through leaves that one replaced", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		first := filepath.Join(dir, "first.txt")
+		second := filepath.Join(dir, "second.txt")
+		require.NoError(t, os.WriteFile(first, []byte("old"), 0o600))
+
+		set := &writeSet{}
+		require.NoError(t, set.write(first, newFile))
+		require.NoError(t, set.write(second, newFile))
+		require.NoError(t, os.Mkdir(second, 0o750))
+
+		err := set.commit()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), second, "the error names the destination it would not replace")
+
+		body, readErr := os.ReadFile(first) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, readErr)
+		assert.Equal(t, "new", string(body), "a file the commit had already renamed stays renamed")
+		assert.Equal(t, []string{"first.txt", "second.txt"}, dirEntries(t, dir), "no staged file may be left behind")
 	})
 
 	t.Run("a nil set writes one file straight through", func(t *testing.T) {

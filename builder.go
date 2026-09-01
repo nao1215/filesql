@@ -375,11 +375,14 @@ func (b *DBBuilder) AddFS(filesystem fs.FS) *DBBuilder {
 // table leaves, refuses the save with ErrTableNotFound rather than keeping the
 // rows it had beside the new sheet.
 //
-// A save of several sources replaces all of them or none. Each file is produced
-// beside the source it replaces first, and they are put in place only once every
-// one of them is whole, so a save the writer refuses -- a tab in a TSV value, an
-// LTSV table the session emptied -- leaves every source holding the rows it had
-// rather than leaving the caller a directory holding two states of one session.
+// A save of several sources produces all of them before it replaces any, so a
+// save the writer refuses -- a tab in a TSV value, an LTSV table the session
+// emptied -- leaves every source holding the rows it had rather than leaving the
+// caller a directory holding two states of one session. What is left after that
+// is the rename of each finished file over the source it replaces, which the
+// operating system can still refuse: one refused after an earlier one has gone
+// through leaves the sources before it replaced, and the error names the file it
+// would not replace.
 //
 // The save runs once, when Close returns, so a database with auto-save is as
 // safe to share across goroutines as one without it. A transaction still open
