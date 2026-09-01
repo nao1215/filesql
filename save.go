@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -69,6 +70,11 @@ type autoSaveConnector struct {
 	dsn            string
 	autoSaveConfig *autoSaveConfig
 	originalPaths  []string
+	// excelSheetPolicy is the policy the load used, so a save asks the same
+	// question of a workbook that the load asked: a sheet the policy left out
+	// has no table because it was never read, and one it admitted has none
+	// because the session removed it.
+	excelSheetPolicy ExcelSheetPolicy
 	// readOnly reports whether the handle these connections belong to refuses
 	// writes already, which is what a read-only transaction would otherwise set.
 	readOnly bool
@@ -390,7 +396,7 @@ func (c *autoSaveConnector) overwriteOriginalFile(ctx context.Context, db *sql.D
 	// together into the one file. The tables of a workbook are named after it,
 	// which is how the ones belonging to this path are found.
 	if format == OutputFormatXLSX {
-		return overwriteWorkbookAtPath(db, path, baseTableName, c.siblingBaseTableNames(path), options)
+		return overwriteWorkbookAtPath(db, path, baseTableName, c.siblingBaseTableNames(path), options, c.excelSheetPolicy)
 	}
 
 	return overwriteTableAtPath(db, path, baseTableName, options)
@@ -465,13 +471,13 @@ func overwriteFormatFor(path string) (OutputFormat, error) {
 // A workbook of more than one sheet used to be refused here, because the writer
 // wrote one sheet per file and so could not represent the rest. Refusing meant a
 // caller who opened a two-sheet workbook with auto-save could not save at all.
-func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBases []string, options DumpOptions) error {
+func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBases []string, options DumpOptions, policy ExcelSheetPolicy) error {
 	tables, err := tablesFromWorkbook(db, baseTableName, siblingBases)
 	if err != nil {
 		return err
 	}
 	if len(tables) == 0 {
-		return fmt.Errorf("%w: no table for %s remains", ErrEmptyData, path)
+		return fmt.Errorf("%w: no table for %s remains", ErrTableNotFound, path)
 	}
 	// The sheets go back in a fixed order rather than whatever the catalog
 	// happens to list, so the same workbook saved twice is the same file.
@@ -486,7 +492,10 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBase
 	if err != nil {
 		return err
 	}
-	held := sheetsByTable(base, baseTableName)
+	held, skipped, err := sheetsByTable(base, baseTableName, policy)
+	if err != nil {
+		return err
+	}
 
 	// Excel caps a sheet name at 31 runes and forbids some characters, so two
 	// table names can arrive at the same sheet. excelize's NewSheet answers with
@@ -501,16 +510,29 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBase
 	// overwrite it exists to stop.
 	bySheet := make(map[string]string, len(tables))
 	sheets := make([]xlsxSheet, 0, len(tables))
+	// A sheet the policy skipped is not loaded and not written, and its name is
+	// still taken: the workbook writer answers a request for a sheet that
+	// exists with that sheet, so a table whose name derives to it would replace
+	// rows this save never read.
+	reserved := make(map[string]string, len(skipped))
+	for _, sheet := range skipped {
+		reserved[sheetKey(sheet)] = sheet
+	}
 	for _, tableName := range tables {
 		sheetName, ok := held[sheetKey(tableName)]
 		if !ok {
 			sheetName = xlsxSheetNameForTable(baseTableName, tableName)
+			if held, taken := reserved[sheetKey(sheetName)]; taken {
+				return fmt.Errorf("%w: table %s becomes the sheet %q of %s, which the sheet policy left out and this save would write over; rename the table, or save to a directory instead",
+					ErrUnsupportedFormat, tableName, held, path)
+			}
 		}
 		if first, clash := bySheet[sheetKey(sheetName)]; clash {
 			return fmt.Errorf("%w: tables %s and %s both become the sheet %q in %s, and Excel holds one sheet per name; rename one, or save to a directory instead",
 				ErrUnsupportedFormat, first, tableName, sheetName, path)
 		}
 		bySheet[sheetKey(sheetName)] = tableName
+		delete(held, sheetKey(tableName))
 
 		sheets = append(sheets, xlsxSheet{
 			name: sheetName,
@@ -522,7 +544,7 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBase
 					return nil, nil, fmt.Errorf("%w: failed to get columns for table %s: %w", ErrDatabaseOperation, tableName, err)
 				}
 				if len(columns) == 0 {
-					return nil, nil, fmt.Errorf("%w: table %s for %s no longer exists", ErrEmptyData, tableName, path)
+					return nil, nil, fmt.Errorf("%w: table %s for %s no longer exists", ErrTableNotFound, tableName, path)
 				}
 				query := fmt.Sprintf("SELECT %s FROM %s", dumpSelectList(columns, declTypes), quoteIdentifier(tableName)) //nolint:gosec // Table and column names are quoted
 				rows, err := db.QueryContext(context.Background(), query)
@@ -534,12 +556,48 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBase
 		})
 	}
 
+	// A sheet the load read and no table came back for is a table the session
+	// removed. Written out, it would keep every row it had while a rename wrote
+	// the same rows to a second sheet, so the workbook came back holding them
+	// twice and the save said nothing. The file-per-table save already refuses
+	// when the table a file was loaded from is gone, and this is that situation
+	// one sheet at a time.
+	if left := sortedValues(held); len(left) > 0 {
+		noun, verb := "sheet", "remains"
+		if len(left) > 1 {
+			noun, verb = "sheets", "remain"
+		}
+		return fmt.Errorf("%w: no table %s for %s %s of %s; save to a directory instead, or keep the table under the name it was loaded with",
+			ErrTableNotFound, verb, noun, strings.Join(quoteEach(left), ", "), path)
+	}
+
 	if err := writeFileAtomically(path, func(w io.Writer) error {
 		return writeXLSXWorkbookCompressed(w, path, base, sheets, options.Compression)
 	}); err != nil {
 		return fmt.Errorf("%w: failed to overwrite %s: %w", ErrIOOperation, path, err)
 	}
 	return nil
+}
+
+// sortedValues is the values of a map in order, so a message naming several of
+// them reads the same on every run.
+func sortedValues(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for _, v := range m {
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// quoteEach renders names for a message, so one holding a space or nothing at
+// all is still visible as one name.
+func quoteEach(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = strconv.Quote(n)
+	}
+	return out
 }
 
 // writeXLSXWorkbookCompressed writes sheets to w through the requested codec.
@@ -627,19 +685,26 @@ func foldRune(r rune) rune {
 	return smallest
 }
 
-func sheetsByTable(base *reader.Workbook, baseTableName string) map[string]string {
+func sheetsByTable(base *reader.Workbook, baseTableName string, policy ExcelSheetPolicy) (held map[string]string, skipped []string, err error) {
 	if base == nil {
-		return nil
+		return nil, nil, nil
 	}
-	names := base.File().GetSheetList()
-	held := make(map[string]string, len(names))
+	// The sheets a save answers for are the sheets the load read, which is the
+	// question SelectExcelSheets exists to have one answer to. Reading the whole
+	// sheet list here instead made a sheet the policy skipped look like a table
+	// the session had removed.
+	names, skipped, err := reader.SelectExcelSheets(base.File(), policy)
+	if err != nil {
+		return nil, nil, err
+	}
+	held = make(map[string]string, len(names))
 	for _, sheet := range names {
 		key := sheetKey(xlsxSheetTableName(baseTableName, sheet))
 		if _, taken := held[key]; !taken {
 			held[key] = sheet
 		}
 	}
-	return held
+	return held, skipped, nil
 }
 
 // openWorkbookForOverwrite reads the workbook a save is about to replace, so the
@@ -729,7 +794,7 @@ func overwriteTableAtPath(db *sql.DB, path, tableName string, options DumpOption
 		return fmt.Errorf("%w: failed to get columns for table %s: %w", ErrDatabaseOperation, tableName, err)
 	}
 	if len(columns) == 0 {
-		return fmt.Errorf("%w: table %s for %s no longer exists", ErrEmptyData, tableName, path)
+		return fmt.Errorf("%w: table %s for %s no longer exists", ErrTableNotFound, tableName, path)
 	}
 
 	query := fmt.Sprintf("SELECT %s FROM %s", dumpSelectList(columns, declTypes), quoteIdentifier(tableName)) //nolint:gosec // Table and column names are quoted

@@ -427,7 +427,7 @@ func TestOverwriteWorkbookAtPath_Failures(t *testing.T) {
 		db := openTestDB(t)
 		require.NoError(t, db.Close())
 
-		err := overwriteWorkbookAtPath(db, filepath.Join(t.TempDir(), "book.xlsx"), "book", nil, NewDumpOptions())
+		err := overwriteWorkbookAtPath(db, filepath.Join(t.TempDir(), "book.xlsx"), "book", nil, NewDumpOptions(), ExcelSheetPolicyAll)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrDatabaseOperation)
 	})
@@ -437,9 +437,9 @@ func TestOverwriteWorkbookAtPath_Failures(t *testing.T) {
 
 		db := openTestDB(t)
 
-		err := overwriteWorkbookAtPath(db, filepath.Join(t.TempDir(), "book.xlsx"), "book", nil, NewDumpOptions())
+		err := overwriteWorkbookAtPath(db, filepath.Join(t.TempDir(), "book.xlsx"), "book", nil, NewDumpOptions(), ExcelSheetPolicyAll)
 		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrEmptyData)
+		assert.ErrorIs(t, err, ErrTableNotFound)
 	})
 }
 
@@ -491,7 +491,7 @@ func TestOverwriteTableAtPath_Failures(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "data.csv")
 		err := overwriteTableAtPath(db, path, "data", NewDumpOptions())
 		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrEmptyData)
+		assert.ErrorIs(t, err, ErrTableNotFound)
 		assert.NoFileExists(t, path, "a refused save must not create the file it could not write")
 	})
 }
@@ -758,5 +758,239 @@ func TestOverwriteWorkbookRefusesTwoTablesForOneSheet(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { require.NoError(t, f.Close()) }()
 		assert.ElementsMatch(t, []string{"s", "orders"}, f.GetSheetList())
+	})
+}
+
+// TestSaveNamesAMissingTableAsMissing pins which sentinel a save carries when
+// the table a source was loaded from is gone. It is not an empty data source:
+// the source had records and the table was dropped, and a caller who reads
+// ErrEmptyData to mean "the file I named was empty" would take that branch for
+// a table they dropped themselves.
+func TestSaveNamesAMissingTableAsMissing(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a file whose table was dropped", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "a.csv")
+		require.NoError(t, os.WriteFile(path, []byte("n\nfirst\n"), 0o600))
+
+		ctx := context.Background()
+		db, err := NewBuilder().AddPath(path).EnableAutoSave("").Open(ctx)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `DROP TABLE a`)
+		require.NoError(t, err)
+
+		err = db.Close()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrTableNotFound)
+		assert.NotErrorIs(t, err, ErrEmptyData,
+			"a dropped table is not a source with no records; the two sentinels have to stay apart")
+		assert.Contains(t, err.Error(), "a", "the message still names the table")
+	})
+
+	t.Run("a workbook whose only table was dropped", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "book.xlsx")
+		f := excelize.NewFile()
+		require.NoError(t, f.SetSheetName("Sheet1", "data"))
+		require.NoError(t, f.SetCellValue("data", "A1", "n"))
+		require.NoError(t, f.SetCellValue("data", "A2", "first"))
+		require.NoError(t, f.SaveAs(path))
+		require.NoError(t, f.Close())
+
+		ctx := context.Background()
+		db, err := NewBuilder().AddPath(path).EnableAutoSave("").Open(ctx)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `DROP TABLE book_data`)
+		require.NoError(t, err)
+
+		err = db.Close()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrTableNotFound)
+		assert.NotErrorIs(t, err, ErrEmptyData)
+	})
+
+	t.Run("a file that really has no records still answers ErrEmptyData", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "empty.csv")
+		require.NoError(t, os.WriteFile(path, nil, 0o600))
+
+		_, err := Open(path)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrEmptyData)
+	})
+}
+
+// TestOverwriteWorkbookRefusesASheetWhoseTableIsGone pins what a workbook save
+// does with a sheet whose table the session removed.
+//
+// Renaming a table used to write the new name as a new sheet and leave the old
+// sheet with every row it had, so the workbook came back holding the rows twice
+// and Close reported success; loading it again gave two tables where the
+// session had one. The file-per-table save already refuses when the table a
+// file was loaded from is gone, and this is the same situation.
+func TestOverwriteWorkbookRefusesASheetWhoseTableIsGone(t *testing.T) {
+	t.Parallel()
+
+	// book builds a workbook of one column per named sheet and returns its path.
+	book := func(t *testing.T, dir string, sheets ...string) string {
+		t.Helper()
+
+		rows := make(map[string][][]string, len(sheets))
+		for _, name := range sheets {
+			rows[name] = [][]string{{"n"}, {name + "-first"}, {name + "-second"}}
+		}
+		path := filepath.Join(dir, "book.xlsx")
+		writeWorkbook(t, path, rows)
+		return path
+	}
+
+	saveAfter := func(t *testing.T, path string, opts []func(*DBBuilder) *DBBuilder, statements ...string) error {
+		t.Helper()
+		ctx := context.Background()
+		b := NewBuilder().AddPath(path).EnableAutoSave("")
+		for _, o := range opts {
+			b = o(b)
+		}
+		db, err := b.Open(ctx)
+		require.NoError(t, err)
+		for _, s := range statements {
+			_, err := db.ExecContext(ctx, s)
+			require.NoError(t, err)
+		}
+		return db.Close()
+	}
+
+	t.Run("a renamed table", func(t *testing.T) {
+		t.Parallel()
+
+		path := book(t, t.TempDir(), "data")
+		err := saveAfter(t, path, nil, `ALTER TABLE book_data RENAME TO book_renamed`)
+		require.Error(t, err, "the rows would otherwise be in the workbook twice")
+		assert.ErrorIs(t, err, ErrTableNotFound)
+		assert.Contains(t, err.Error(), "data", "the message names the sheet left without a table")
+	})
+
+	t.Run("one table of two dropped", func(t *testing.T) {
+		t.Parallel()
+
+		path := book(t, t.TempDir(), "data", "other")
+		err := saveAfter(t, path, nil, `DROP TABLE book_other`)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrTableNotFound)
+		assert.Contains(t, err.Error(), "other")
+	})
+
+	t.Run("every table still there saves", func(t *testing.T) {
+		t.Parallel()
+
+		path := book(t, t.TempDir(), "data", "other")
+		require.NoError(t, saveAfter(t, path, nil,
+			`UPDATE book_data SET n = 'edited' WHERE n = 'data-first'`))
+
+		f, err := excelize.OpenFile(path)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, f.Close()) }()
+		assert.ElementsMatch(t, []string{"data", "other"}, f.GetSheetList())
+		rows, err := f.GetRows("data")
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"n"}, {"edited"}, {"data-second"}}, rows)
+	})
+
+	t.Run("a table created during the session is still a new sheet", func(t *testing.T) {
+		t.Parallel()
+
+		path := book(t, t.TempDir(), "data")
+		require.NoError(t, saveAfter(t, path, nil,
+			`CREATE TABLE book_extra (x TEXT)`, `INSERT INTO book_extra VALUES ('new')`))
+
+		f, err := excelize.OpenFile(path)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, f.Close()) }()
+		assert.ElementsMatch(t, []string{"data", "extra"}, f.GetSheetList())
+	})
+
+	t.Run("a session table cannot take the name of a sheet the policy left out", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := book(t, dir, "data", "hidden")
+		f, err := excelize.OpenFile(path)
+		require.NoError(t, err)
+		require.NoError(t, f.SetSheetVisible("hidden", false))
+		require.NoError(t, f.Save())
+		require.NoError(t, f.Close())
+
+		// The hidden sheet is not loaded, so nothing holds its name; the
+		// workbook writer would answer a request for it with that sheet and the
+		// rows it holds would be gone.
+		err = saveAfter(t, path, []func(*DBBuilder) *DBBuilder{
+			func(b *DBBuilder) *DBBuilder { return b.WithExcelSheetPolicy(ExcelSheetPolicyVisibleOnly) },
+		}, `CREATE TABLE book_hidden (n TEXT)`, `INSERT INTO book_hidden VALUES ('from the session')`)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		assert.Contains(t, err.Error(), "hidden")
+
+		out, err := excelize.OpenFile(path)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, out.Close()) }()
+		rows, err := out.GetRows("hidden")
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"n"}, {"hidden-first"}, {"hidden-second"}}, rows,
+			"a refused save must not have written the sheet already")
+	})
+
+	t.Run("a session table whose name collides with nothing is still a new sheet", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := book(t, dir, "data", "hidden")
+		f, err := excelize.OpenFile(path)
+		require.NoError(t, err)
+		require.NoError(t, f.SetSheetVisible("hidden", false))
+		require.NoError(t, f.Save())
+		require.NoError(t, f.Close())
+
+		require.NoError(t, saveAfter(t, path, []func(*DBBuilder) *DBBuilder{
+			func(b *DBBuilder) *DBBuilder { return b.WithExcelSheetPolicy(ExcelSheetPolicyVisibleOnly) },
+		}, `CREATE TABLE book_extra (n TEXT)`, `INSERT INTO book_extra VALUES ('new')`))
+
+		out, err := excelize.OpenFile(path)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, out.Close()) }()
+		assert.ElementsMatch(t, []string{"data", "hidden", "extra"}, out.GetSheetList())
+	})
+
+	t.Run("a sheet the policy did not load is not a missing table", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := book(t, dir, "data", "hidden")
+		f, err := excelize.OpenFile(path)
+		require.NoError(t, err)
+		require.NoError(t, f.SetSheetVisible("hidden", false))
+		require.NoError(t, f.Save())
+		require.NoError(t, f.Close())
+
+		// The hidden sheet is never loaded, so no table for it exists and none
+		// went missing; the save has to tell those two apart.
+		err = saveAfter(t, path, []func(*DBBuilder) *DBBuilder{
+			func(b *DBBuilder) *DBBuilder { return b.WithExcelSheetPolicy(ExcelSheetPolicyVisibleOnly) },
+		}, `UPDATE book_data SET n = 'edited' WHERE n = 'data-first'`)
+		require.NoError(t, err)
+
+		out, err := excelize.OpenFile(path)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, out.Close()) }()
+		rows, err := out.GetRows("hidden")
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"n"}, {"hidden-first"}, {"hidden-second"}}, rows,
+			"the sheet the policy skipped keeps its rows")
 	})
 }
