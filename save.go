@@ -347,28 +347,34 @@ func (c *autoSaveConnector) overwriteOriginalFiles(db *sql.DB) error {
 
 	ctx := context.Background()
 
-	for _, path := range c.originalPaths {
-		if err := c.overwriteOriginalFile(ctx, db, path); err != nil {
-			return err
+	// Every source is produced before any of it is put in place. The path tells
+	// only half of what a save can refuse: a tab in a TSV value, an LTSV table
+	// the session emptied, a workbook whose sheet has no table left. Those need
+	// the rows, so they arrive with the earlier files already replaced unless the
+	// whole set is staged first.
+	return writeTogether(func(set *writeSet) error {
+		for _, path := range c.originalPaths {
+			if err := c.overwriteOriginalFile(ctx, db, path, set); err != nil {
+				return err
+			}
 		}
-	}
-
-	return nil
+		return nil
+	})
 }
 
 // overwriteOriginalFile writes the table or tables path was loaded as back to
 // path, keeping the format and compression the file already has.
-func (c *autoSaveConnector) overwriteOriginalFile(ctx context.Context, db *sql.DB, path string) error {
+func (c *autoSaveConnector) overwriteOriginalFile(ctx context.Context, db *sql.DB, path string, set *writeSet) error {
 	baseTableName := sanitizeTableName(tableFromFilePath(path))
 
 	switch {
 	case isACHFile(path):
-		if err := DumpACH(ctx, db, baseTableName, path); err != nil {
+		if err := stageACH(ctx, db, baseTableName, path, set); err != nil {
 			return fmt.Errorf("failed to overwrite ACH file %s: %w", path, err)
 		}
 		return nil
 	case isFedWireFile(path):
-		if err := DumpFedWire(ctx, db, baseTableName, path); err != nil {
+		if err := stageFedWire(ctx, db, baseTableName, path, set); err != nil {
 			return fmt.Errorf("failed to overwrite Fedwire file %s: %w", path, err)
 		}
 		return nil
@@ -396,10 +402,10 @@ func (c *autoSaveConnector) overwriteOriginalFile(ctx context.Context, db *sql.D
 	// together into the one file. The tables of a workbook are named after it,
 	// which is how the ones belonging to this path are found.
 	if format == OutputFormatXLSX {
-		return overwriteWorkbookAtPath(db, path, baseTableName, c.siblingBaseTableNames(path), options, c.excelSheetPolicy)
+		return overwriteWorkbookAtPath(db, path, baseTableName, c.siblingBaseTableNames(path), options, c.excelSheetPolicy, set)
 	}
 
-	return overwriteTableAtPath(db, path, baseTableName, options)
+	return overwriteTableAtPath(db, path, baseTableName, options, set)
 }
 
 // siblingBaseTableNames is the table name every source of this save other than
@@ -471,7 +477,7 @@ func overwriteFormatFor(path string) (OutputFormat, error) {
 // A workbook of more than one sheet used to be refused here, because the writer
 // wrote one sheet per file and so could not represent the rest. Refusing meant a
 // caller who opened a two-sheet workbook with auto-save could not save at all.
-func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBases []string, options DumpOptions, policy ExcelSheetPolicy) error {
+func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBases []string, options DumpOptions, policy ExcelSheetPolicy, set *writeSet) error {
 	tables, err := tablesFromWorkbook(db, baseTableName, siblingBases)
 	if err != nil {
 		return err
@@ -571,7 +577,7 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBase
 			ErrTableNotFound, verb, noun, strings.Join(quoteEach(left), ", "), path)
 	}
 
-	if err := writeFileAtomically(path, func(w io.Writer) error {
+	if err := set.write(path, func(w io.Writer) error {
 		return writeXLSXWorkbookCompressed(w, path, base, sheets, options.Compression)
 	}); err != nil {
 		return fmt.Errorf("%w: failed to overwrite %s: %w", ErrIOOperation, path, err)
@@ -788,7 +794,7 @@ func claimedBySibling(tableName, baseTableName string, siblingBases []string) bo
 // overwriteTableAtPath dumps one table to one path. It is the write half of
 // DumpDatabase's per-table loop, without the directory and the name derived from
 // it: the destination here is the file the table came from.
-func overwriteTableAtPath(db *sql.DB, path, tableName string, options DumpOptions) error {
+func overwriteTableAtPath(db *sql.DB, path, tableName string, options DumpOptions, set *writeSet) error {
 	columns, declTypes, err := getSQLiteTableColumns(context.Background(), db, tableName)
 	if err != nil {
 		return fmt.Errorf("%w: failed to get columns for table %s: %w", ErrDatabaseOperation, tableName, err)
@@ -810,7 +816,7 @@ func overwriteTableAtPath(db *sql.DB, path, tableName string, options DumpOption
 	if options.Format == OutputFormatParquet {
 		prior = readParquetPrior(path)
 	}
-	if err := writeSQLiteTableData(path, tableName, columns, rows, options, prior); err != nil {
+	if err := writeSQLiteTableData(set, path, tableName, columns, rows, options, prior); err != nil {
 		return fmt.Errorf("%w: failed to overwrite %s: %w", ErrIOOperation, path, err)
 	}
 	return nil
