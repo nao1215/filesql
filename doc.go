@@ -314,6 +314,16 @@
 // blob literal in a statement run during the session; a value read from a file
 // is checked when it is loaded.
 //
+// A save that writes several files replaces all of them or none. Each file is
+// produced beside its destination first, and they are put in place only once
+// every one of them is whole, so a value a format cannot hold costs a set what
+// it costs one file: nothing is replaced, and the sources are left holding one
+// state of the session rather than two. An export into a directory is the
+// exception, because what it writes are files of its own rather than the
+// caller's sources: a table it refuses for its name is refused before the
+// directory is created, and one it refuses for a value partway through leaves
+// the tables it had already finished, as a canceled export does.
+//
 // Records end with "\n" unless DumpOptions.WithLineEnding says otherwise, with
 // one exception: EnableAutoSave("") writes a table back to the file it was
 // loaded from and keeps that file's own terminator, so a CRLF file edited in
