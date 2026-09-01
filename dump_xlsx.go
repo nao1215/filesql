@@ -352,11 +352,11 @@ func (s *xlsxStyles) decimalStyle(f *excelize.File) (int, error) {
 
 // writeXLSXCell writes one cell as what its column is.
 //
-// A REAL column takes both halves of one rule. Its cells are written with the
-// decimal point the rendered text carries, because SetCellValue on a float64
-// stores the shortest form and a whole number's shortest form has no point, so
-// 100.0 was stored as 100 and the column loaded back as INTEGER -- which turns
-// the arithmetic over it into integer division. And its cells wear a number
+// A REAL column takes both halves of one rule. Its cells are written with a
+// decimal point, because SetCellValue on a float64 stores the shortest form and
+// a whole number's shortest form has no point, so 100.0 was stored as 100 and
+// the column loaded back as INTEGER -- which turns the arithmetic over it into
+// integer division. And its cells wear a number
 // format, because a load reads the number a cell stores rather than the one it
 // draws only for a workbook that formats numbers; without one, a General cell
 // draws 100.0 as 100 and the drawing is what is read.
