@@ -6,222 +6,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestOutputFormat_String(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		format OutputFormat
-		want   string
-	}{
-		{
-			name:   "CSV format",
-			format: OutputFormatCSV,
-			want:   "csv",
-		},
-		{
-			name:   "TSV format",
-			format: OutputFormatTSV,
-			want:   "tsv",
-		},
-		{
-			name:   "LTSV format",
-			format: OutputFormatLTSV,
-			want:   "ltsv",
-		},
-		{
-			name:   "Parquet format",
-			format: OutputFormatParquet,
-			want:   "parquet",
-		},
-		{
-			name:   "XLSX format",
-			format: OutputFormatXLSX,
-			want:   "xlsx",
-		},
-		{
-			name:   "ACH format",
-			format: OutputFormatACH,
-			want:   "ach",
-		},
-		{
-			name:   "FedWire format",
-			format: OutputFormatFedWire,
-			want:   "fed",
-		},
-		{
-			name:   "Unknown format defaults to csv",
-			format: OutputFormat(999),
-			want:   "csv",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := tt.format.String()
-			assert.Equal(t, tt.want, got, "OutputFormat.String() returned unexpected value")
-		})
-	}
-}
-
-func TestOutputFormat_Extension(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		format OutputFormat
-		want   string
-	}{
-		{
-			name:   "CSV extension",
-			format: OutputFormatCSV,
-			want:   ".csv",
-		},
-		{
-			name:   "TSV extension",
-			format: OutputFormatTSV,
-			want:   ".tsv",
-		},
-		{
-			name:   "LTSV extension",
-			format: OutputFormatLTSV,
-			want:   ".ltsv",
-		},
-		{
-			name:   "Parquet extension",
-			format: OutputFormatParquet,
-			want:   ".parquet",
-		},
-		{
-			name:   "XLSX extension",
-			format: OutputFormatXLSX,
-			want:   ".xlsx",
-		},
-		{
-			name:   "ACH extension",
-			format: OutputFormatACH,
-			want:   ".ach",
-		},
-		{
-			name:   "FedWire extension",
-			format: OutputFormatFedWire,
-			want:   ".fed",
-		},
-		{
-			name:   "Unknown format defaults to csv",
-			format: OutputFormat(999),
-			want:   ".csv",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := tt.format.Extension()
-			assert.Equal(t, tt.want, got, "OutputFormat.Extension() returned unexpected value")
-		})
-	}
-}
-
-func TestCompressionType_String(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		compression CompressionType
-		want        string
-	}{
-		{
-			name:        "No compression",
-			compression: CompressionNone,
-			want:        "none",
-		},
-		{
-			name:        "GZ compression",
-			compression: CompressionGZ,
-			want:        "gz",
-		},
-		{
-			name:        "BZ2 compression",
-			compression: CompressionBZ2,
-			want:        "bz2",
-		},
-		{
-			name:        "XZ compression",
-			compression: CompressionXZ,
-			want:        "xz",
-		},
-		{
-			name:        "ZSTD compression",
-			compression: CompressionZSTD,
-			want:        "zstd",
-		},
-		{
-			name:        "Unknown compression defaults to none",
-			compression: CompressionType(999),
-			want:        "none",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := tt.compression.String()
-			assert.Equal(t, tt.want, got, "CompressionType.String() returned unexpected value")
-		})
-	}
-}
-
-func TestCompressionType_Extension(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		compression CompressionType
-		want        string
-	}{
-		{
-			name:        "No compression",
-			compression: CompressionNone,
-			want:        "",
-		},
-		{
-			name:        "GZ compression",
-			compression: CompressionGZ,
-			want:        ".gz",
-		},
-		{
-			name:        "BZ2 compression",
-			compression: CompressionBZ2,
-			want:        ".bz2",
-		},
-		{
-			name:        "XZ compression",
-			compression: CompressionXZ,
-			want:        ".xz",
-		},
-		{
-			name:        "ZSTD compression",
-			compression: CompressionZSTD,
-			want:        ".zst",
-		},
-		{
-			name:        "Unknown compression defaults to empty",
-			compression: CompressionType(999),
-			want:        "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := tt.compression.Extension()
-			assert.Equal(t, tt.want, got, "CompressionType.Extension() returned unexpected value")
-		})
-	}
-}
-
 func TestNewDumpOptions(t *testing.T) {
 	t.Parallel()
 
@@ -329,31 +113,6 @@ func TestDumpOptions_FileExtension(t *testing.T) {
 	}
 }
 
-// TestOutputFormatStringEdgeCases tests edge cases for OutputFormat.String()
-func TestOutputFormatStringEdgeCases(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		format OutputFormat
-		want   string
-	}{
-		{
-			name:   "Unknown format should default",
-			format: OutputFormat(999), // Invalid format
-			want:   "csv",             // Should default to CSV
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := tt.format.String()
-			assert.Equal(t, tt.want, got, "OutputFormat.String() returned unexpected value")
-		})
-	}
-}
-
 func TestDumpOptions_ChainedMethods(t *testing.T) {
 	t.Parallel()
 
@@ -369,48 +128,96 @@ func TestDumpOptions_ChainedMethods(t *testing.T) {
 	assert.Equal(t, expectedExt, got, "Chained options FileExtension() should work")
 }
 
-func TestCompressionType_StringAllTypes(t *testing.T) {
+// TestOutputFormatNamesOnlyWhatItHas pins that a value this enumeration has no
+// name for says so rather than naming a member.
+//
+// It named CSV, so a dump given a format from a configuration file that had
+// drifted refused with "unsupported output format: csv" -- a format this
+// package writes every day -- and computed a ".csv" path for it on the way.
+// assertWholeEnum says that a table covers the whole of an iota enumeration:
+// its members run from zero without a gap, and the value after the last one has
+// no name. A member added the only way these enumerations grow -- appended, so
+// iota gives it the next value -- is named by String and fails the second half,
+// whatever the table's length happens to be.
+func assertWholeEnum[T ~int](t *testing.T, known map[T]bool, name func(T) string) {
+	t.Helper()
+
+	highest := T(0)
+	for value := range known {
+		if value > highest {
+			highest = value
+		}
+	}
+	assert.Len(t, known, int(highest)+1, "the table skips a value below %d", int(highest))
+	assert.Equal(t, formatUnknownStr, name(highest+1),
+		"the enumeration has a member past the table: %v", name(highest+1))
+}
+
+func TestOutputFormatNamesOnlyWhatItHas(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name        string
-		compression CompressionType
-		want        string
+	known := map[OutputFormat]struct {
+		name string
+		ext  string
 	}{
-		{"ZLIB compression", CompressionZLIB, "zlib"},
-		{"SNAPPY compression", CompressionSNAPPY, "snappy"},
-		{"S2 compression", CompressionS2, "s2"},
-		{"LZ4 compression", CompressionLZ4, "lz4"},
+		OutputFormatCSV:     {name: "csv", ext: ".csv"},
+		OutputFormatTSV:     {name: "tsv", ext: ".tsv"},
+		OutputFormatLTSV:    {name: "ltsv", ext: ".ltsv"},
+		OutputFormatParquet: {name: "parquet", ext: ".parquet"},
+		OutputFormatXLSX:    {name: "xlsx", ext: ".xlsx"},
+		OutputFormatACH:     {name: "ach", ext: ".ach"},
+		OutputFormatFedWire: {name: "fed", ext: ".fed"},
 	}
+	for format, want := range known {
+		assert.Equal(t, want.name, format.String())
+		assert.Equal(t, want.ext, format.Extension())
+	}
+	present := make(map[OutputFormat]bool, len(known))
+	for format := range known {
+		present[format] = true
+	}
+	assertWholeEnum(t, present, OutputFormat.String)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := tt.compression.String()
-			assert.Equal(t, tt.want, got)
-		})
+	for _, unknown := range []OutputFormat{OutputFormat(99), OutputFormat(-1)} {
+		assert.Equal(t, "unknown", unknown.String())
+		assert.Empty(t, unknown.Extension(), "a format with no writer has no extension of its own")
+		for format, want := range known {
+			assert.NotEqual(t, want.name, unknown.String(), "%v must not answer as %v", unknown, format)
+		}
 	}
 }
 
-func TestCompressionType_ExtensionAllTypes(t *testing.T) {
+// TestCompressionTypeNamesOnlyWhatItHas is the same rule for the codec, which
+// answered "none" -- the codec a dump uses when nothing else is asked for.
+func TestCompressionTypeNamesOnlyWhatItHas(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name        string
-		compression CompressionType
-		want        string
+	known := map[CompressionType]struct {
+		name string
+		ext  string
 	}{
-		{"ZLIB extension", CompressionZLIB, ".z"},
-		{"SNAPPY extension", CompressionSNAPPY, ".snappy"},
-		{"S2 extension", CompressionS2, ".s2"},
-		{"LZ4 extension", CompressionLZ4, ".lz4"},
+		CompressionNone:   {name: "none", ext: ""},
+		CompressionGZ:     {name: "gz", ext: ".gz"},
+		CompressionBZ2:    {name: "bz2", ext: ".bz2"},
+		CompressionXZ:     {name: "xz", ext: ".xz"},
+		CompressionZSTD:   {name: "zstd", ext: ".zst"},
+		CompressionZLIB:   {name: "zlib", ext: ".z"},
+		CompressionSNAPPY: {name: "snappy", ext: ".snappy"},
+		CompressionS2:     {name: "s2", ext: ".s2"},
+		CompressionLZ4:    {name: "lz4", ext: ".lz4"},
 	}
+	for codec, want := range known {
+		assert.Equal(t, want.name, codec.String())
+		assert.Equal(t, want.ext, codec.Extension())
+	}
+	present := make(map[CompressionType]bool, len(known))
+	for codec := range known {
+		present[codec] = true
+	}
+	assertWholeEnum(t, present, CompressionType.String)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := tt.compression.Extension()
-			assert.Equal(t, tt.want, got)
-		})
+	for _, unknown := range []CompressionType{CompressionType(99), CompressionType(-1)} {
+		assert.Equal(t, "unknown", unknown.String())
+		assert.Empty(t, unknown.Extension(), "a codec this package has no name for names no extension")
 	}
 }

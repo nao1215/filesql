@@ -142,7 +142,10 @@ func (c Codec) String() string {
 	case LZ4:
 		return "lz4"
 	default:
-		return "none"
+		// A codec this package has no name for says so. It answered "none",
+		// which is the codec a write uses when nothing else is asked for, so a
+		// refusal named something supported.
+		return "unknown"
 	}
 }
 

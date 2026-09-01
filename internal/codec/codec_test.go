@@ -665,3 +665,56 @@ func TestNoneReadsWhatItIsGiven(t *testing.T) {
 		t.Errorf("close: %v", err)
 	}
 }
+
+// TestCodecNamesOnlyWhatItHas pins that a value this enumeration has no name
+// for says so. It answered "none", which is the codec a write uses when nothing
+// else is asked for, so a refusal named something supported: "unsupported
+// compression type for writing: none".
+func TestCodecNamesOnlyWhatItHas(t *testing.T) {
+	t.Parallel()
+
+	known := map[Codec]string{
+		None:   "none",
+		GZ:     "gz",
+		BZ2:    "bz2",
+		XZ:     "xz",
+		ZSTD:   "zstd",
+		ZLIB:   "zlib",
+		SNAPPY: "snappy",
+		S2:     "s2",
+		LZ4:    "lz4",
+	}
+	for codec, want := range known {
+		if got := codec.String(); got != want {
+			t.Errorf("Codec(%d).String() = %q, want %q", int(codec), got, want)
+		}
+	}
+	// The table covers the whole enumeration: its members run from zero without
+	// a gap, and the value after the last one has no name. A codec added the
+	// only way this enumeration grows -- appended, so iota gives it the next
+	// value -- is named by String and fails the second half.
+	highest := Codec(0)
+	for codec := range known {
+		if codec > highest {
+			highest = codec
+		}
+	}
+	if len(known) != int(highest)+1 {
+		t.Errorf("the table holds %d codecs and the highest is %d, so it skips one", len(known), int(highest))
+	}
+	if name := (highest + 1).String(); name != "unknown" {
+		t.Errorf("the enumeration has a member past the table: Codec(%d) is named %q", int(highest)+1, name)
+	}
+
+	for _, unknown := range []Codec{Codec(99), Codec(-1)} {
+		got := unknown.String()
+		if got != "unknown" {
+			t.Errorf("Codec(%d).String() = %q, want %q", int(unknown), got, "unknown")
+		}
+		for codec, name := range known {
+			if got == name {
+				t.Errorf("Codec(%d) answers as %v", int(unknown), codec)
+			}
+		}
+	}
+}

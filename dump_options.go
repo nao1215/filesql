@@ -48,7 +48,10 @@ func (f OutputFormat) String() string {
 	case OutputFormatFedWire:
 		return formatFedWireStr
 	default:
-		return formatCSVStr
+		// A value this enumeration has no name for says so. It named CSV, so a
+		// refusal read "unsupported output format: csv" and sent the caller
+		// looking for a fault in a format this package writes every day.
+		return formatUnknownStr
 	}
 }
 
@@ -70,7 +73,9 @@ func (f OutputFormat) Extension() string {
 	case OutputFormatFedWire:
 		return extFED
 	default:
-		return extCSV
+		// A format with no writer has no extension of its own, and a dump
+		// refuses before the path is used either way.
+		return ""
 	}
 }
 
@@ -107,6 +112,9 @@ const (
 	formatXLSXStr    = "xlsx"
 	formatACHStr     = "ach"
 	formatFedWireStr = "fed"
+	// formatUnknownStr is what a value with no name answers, as Encoding and
+	// LineEnding already do.
+	formatUnknownStr = "unknown"
 )
 
 // String returns the string representation of CompressionType
