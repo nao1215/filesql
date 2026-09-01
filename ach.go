@@ -157,7 +157,9 @@ func parseACHFile(reader io.Reader, baseTableName string) ([]*table, *achconv.Ta
 	// against.
 	tableSet, err := achconv.ParseReader(filereader.BoundRecords(reader))
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: failed to parse ACH file: %w", ErrACH, err)
+		// The parser's own error already says it failed to parse an ACH file,
+		// so repeating it here read as two failures rather than one.
+		return nil, nil, fmt.Errorf("%w: %w", ErrACH, err)
 	}
 	if tableSet == nil {
 		return nil, nil, fmt.Errorf("%w: failed to convert ACH file to tables", ErrACH)
