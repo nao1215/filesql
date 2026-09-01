@@ -800,6 +800,11 @@ func TestDumpXLSXRefusesWhatXMLCannotHold(t *testing.T) {
 		{name: "a vertical tab", value: "a\x0bb"},
 		{name: "an escape", value: "a\x1bb"},
 		{name: "a unit separator", value: "a\x1fb"},
+		// The other end of the same rule: the Char production stops at
+		// U+FFFD, so the two noncharacters above it are as unwritable as a
+		// NUL. They were replaced rather than refused.
+		{name: "U+FFFE", value: "a\ufffeb"},
+		{name: "U+FFFF", value: "a\uffffb"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -821,6 +826,59 @@ func TestDumpXLSXRefusesWhatXMLCannotHold(t *testing.T) {
 		t.Parallel()
 
 		const value = "a\tb\nc\rd"
+		db := openWithTable(t, "CREATE TABLE t (value TEXT)", "")
+		_, err := db.ExecContext(ctx, "INSERT INTO t VALUES (?)", value)
+		require.NoError(t, err)
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+		require.NoError(t, db.Close())
+
+		back, err := OpenContext(ctx, filepath.Join(outDir, "t.xlsx"))
+		require.NoError(t, err)
+		defer func() { _ = back.Close() }()
+
+		var got string
+		require.NoError(t, back.QueryRowContext(ctx, "SELECT value FROM t").Scan(&got))
+		assert.Equal(t, value, got)
+	})
+
+	t.Run("a column name is asked the same question", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, "CREATE TABLE t (\"a\uffffb\" TEXT)", "")
+		outDir := filepath.Join(t.TempDir(), "out")
+		err := DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
+
+		require.Error(t, err, "a column name XML cannot hold must be refused, not rewritten")
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+	})
+
+	t.Run("bytes that are not characters are refused as that, whatever they spell", func(t *testing.T) {
+		t.Parallel()
+
+		// The bytes of U+FFFF inside a value that is not UTF-8. Answering for
+		// the character would point at CSV, which refuses bytes that are not
+		// characters just as XLSX does; Parquet is the format that holds them.
+		db := openWithTable(t, "CREATE TABLE t (value TEXT)", "")
+		_, err := db.ExecContext(ctx, "INSERT INTO t VALUES (CAST(x'efbfbfff' AS TEXT))")
+		require.NoError(t, err)
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		err = DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		assert.Contains(t, err.Error(), "Parquet", "the advice is the one for bytes, not the one for a character")
+	})
+
+	t.Run("the characters XML admits above U+007F still round-trip", func(t *testing.T) {
+		t.Parallel()
+
+		// U+FFFD is the character the substitution produced, and the two
+		// noncharacters beside the forbidden pair are inside the Char
+		// production: the rule is the range, not the word "noncharacter".
+		const value = "a\ufffdb\ufdd0c\U0001ffffd"
 		db := openWithTable(t, "CREATE TABLE t (value TEXT)", "")
 		_, err := db.ExecContext(ctx, "INSERT INTO t VALUES (?)", value)
 		require.NoError(t, err)

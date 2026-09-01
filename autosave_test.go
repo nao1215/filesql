@@ -2357,3 +2357,47 @@ func TestAutoSaveIntoADirectoryRefusesANameADumpRefuses(t *testing.T) {
 		})
 	}
 }
+
+// TestAutoSaveOverwriteXLSXRefusesWhatXMLCannotHold pins that an in-place
+// workbook save asks the question a dump asks: a value XML cannot spell is
+// refused, and the workbook is left as it was rather than coming back with the
+// substitution the library that writes it would have made.
+func TestAutoSaveOverwriteXLSXRefusesWhatXMLCannotHold(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	dir := t.TempDir()
+
+	// Build the workbook through the dump path, which is the only writer here.
+	seed, err := OpenContext(ctx, writeTestFile(t, dir, "t.csv", "v\nplain\n"))
+	require.NoError(t, err)
+	out := filepath.Join(dir, "out")
+	require.NoError(t, DumpDatabase(seed, out, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+	require.NoError(t, seed.Close())
+
+	book := filepath.Join(out, "t.xlsx")
+	before, err := os.ReadFile(book) //nolint:gosec // Test path from t.TempDir()
+	require.NoError(t, err)
+
+	db, err := NewBuilder().AddPath(book).EnableAutoSave("").Open(ctx)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, "UPDATE t SET v = 'x' || char(65535) || 'y'")
+	require.NoError(t, err)
+
+	closeErr := db.Close()
+	require.Error(t, closeErr, "a value XML cannot hold must be refused, not rewritten")
+	assert.ErrorIs(t, closeErr, ErrUnsupportedFormat)
+
+	after, err := os.ReadFile(book) //nolint:gosec // Test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "the workbook is left exactly as it was")
+}
+
+// writeTestFile writes body to dir/name and returns the path.
+func writeTestFile(t *testing.T, dir, name, body string) string {
+	t.Helper()
+
+	path := filepath.Join(dir, name)
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
+}
