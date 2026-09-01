@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nao1215/filesql/internal/atomicwrite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -127,7 +128,7 @@ func TestWriteFileAtomically(t *testing.T) {
 
 		info, err := os.Stat(dest)
 		require.NoError(t, err)
-		assert.Equal(t, defaultOutputFileMode, info.Mode().Perm())
+		assert.Equal(t, atomicwrite.DefaultFileMode, info.Mode().Perm())
 	})
 
 	t.Run("reports a destination directory that does not exist", func(t *testing.T) {
@@ -355,4 +356,98 @@ func TestWriteFileAtomically_ReportsNoCleanupWhenNothingIsLeft(t *testing.T) {
 		return writeErr
 	}))
 	assert.Equal(t, []string{"out.csv"}, dirEntries(t, dir))
+}
+
+// TestWriteTogether pins that a set of files is replaced together: a produce
+// that fails replaces none of them, and a nil set is one file written straight
+// through.
+func TestWriteTogether(t *testing.T) {
+	t.Parallel()
+
+	newFile := func(w io.Writer) error {
+		_, err := io.WriteString(w, "new")
+		return err
+	}
+
+	t.Run("every file is put in place", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		first := filepath.Join(dir, "first.txt")
+		second := filepath.Join(dir, "second.txt")
+
+		require.NoError(t, writeTogether(func(set *writeSet) error {
+			if err := set.write(first, newFile); err != nil {
+				return err
+			}
+			return set.write(second, newFile)
+		}))
+
+		for _, path := range []string{first, second} {
+			body, err := os.ReadFile(path) //nolint:gosec // Test path from t.TempDir()
+			require.NoError(t, err)
+			assert.Equal(t, "new", string(body))
+		}
+		assert.Equal(t, []string{"first.txt", "second.txt"}, dirEntries(t, dir), "no staged file may be left behind")
+	})
+
+	t.Run("a failure after a staged file replaces nothing", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		first := filepath.Join(dir, "first.txt")
+		require.NoError(t, os.WriteFile(first, []byte("old"), 0o600))
+
+		refused := errors.New("the second file could not be produced")
+		err := writeTogether(func(set *writeSet) error {
+			if writeErr := set.write(first, newFile); writeErr != nil {
+				return writeErr
+			}
+			return refused
+		})
+		require.ErrorIs(t, err, refused)
+
+		body, readErr := os.ReadFile(first) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, readErr)
+		assert.Equal(t, "old", string(body), "a file staged before the failure is not put in place")
+		assert.Equal(t, []string{"first.txt"}, dirEntries(t, dir), "no staged file may be left behind")
+	})
+
+	t.Run("a commit that fails discards what is left and says so", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		first := filepath.Join(dir, "first.txt")
+		second := filepath.Join(dir, "second.txt")
+
+		set := &writeSet{}
+		require.NoError(t, set.write(first, newFile))
+		require.NoError(t, set.write(second, newFile))
+
+		// A directory where the first file goes is a destination the commit
+		// cannot replace, which is the operating system refusing a file already
+		// written rather than an encoder refusing a value.
+		require.NoError(t, os.Mkdir(first, 0o750))
+
+		err := set.commit()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrIOOperation)
+		assert.DirExists(t, first, "the destination the commit could not replace is left as it was")
+		assert.NoFileExists(t, second, "a file still staged when the commit fails is discarded")
+		assert.Equal(t, []string{"first.txt"}, dirEntries(t, dir), "no staged file may be left behind")
+	})
+
+	t.Run("a nil set writes one file straight through", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		dest := filepath.Join(dir, "out.txt")
+
+		var set *writeSet
+		require.NoError(t, set.write(dest, newFile))
+
+		body, err := os.ReadFile(dest) //nolint:gosec // Test path from t.TempDir()
+		require.NoError(t, err)
+		assert.Equal(t, "new", string(body))
+	})
 }
