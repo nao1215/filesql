@@ -158,6 +158,20 @@ func DumpFedWire(ctx context.Context, db *sql.DB, baseTableName, outputPath stri
 //
 // Returns an error if the export fails.
 func DumpFedWireWithTableSet(ctx context.Context, db *sql.DB, baseTableName, outputPath string, tableSet *wireconv.TableSet) error {
+	return dumpFedWireWithTableSet(ctx, db, baseTableName, outputPath, tableSet, nil)
+}
+
+// stageFedWire is DumpFedWire writing into a set, which is how an in-place save
+// of several files produces this one without putting it in place yet.
+func stageFedWire(ctx context.Context, db *sql.DB, baseTableName, outputPath string, set *writeSet) error {
+	tableSet, err := wireTableSetForDump(ctx, db, baseTableName)
+	if err != nil {
+		return err
+	}
+	return dumpFedWireWithTableSet(ctx, db, baseTableName, outputPath, tableSet, set)
+}
+
+func dumpFedWireWithTableSet(ctx context.Context, db *sql.DB, baseTableName, outputPath string, tableSet *wireconv.TableSet, set *writeSet) error {
 	if db == nil {
 		return fmt.Errorf("%w: database must be a non-nil *sql.DB", ErrNilInput)
 	}
@@ -175,7 +189,7 @@ func DumpFedWireWithTableSet(ctx context.Context, db *sql.DB, baseTableName, out
 	// Staging the write keeps a rejection from destroying the destination; the
 	// previous failure path removed the output path as a "partial file", which
 	// for an in-place save deleted the source it was saving.
-	return writeFileAtomically(outputPath, func(w io.Writer) error {
+	return set.write(outputPath, func(w io.Writer) error {
 		if err := tableSet.WriteToWriter(w); err != nil {
 			return fmt.Errorf("%w: failed to write Fedwire file: %w", ErrWire, err)
 		}

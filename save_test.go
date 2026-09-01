@@ -365,7 +365,7 @@ func TestOverwriteOriginalFile_WriteBackFormatFailures(t *testing.T) {
 		t.Parallel()
 
 		path := filepath.Join(t.TempDir(), "payment.ach")
-		err := (&autoSaveConnector{}).overwriteOriginalFile(ctx, db, path)
+		err := (&autoSaveConnector{}).overwriteOriginalFile(ctx, db, path, nil)
 		assert.ErrorContains(t, err, "failed to overwrite ACH file")
 	})
 
@@ -373,7 +373,7 @@ func TestOverwriteOriginalFile_WriteBackFormatFailures(t *testing.T) {
 		t.Parallel()
 
 		path := filepath.Join(t.TempDir(), "payment.fed")
-		err := (&autoSaveConnector{}).overwriteOriginalFile(ctx, db, path)
+		err := (&autoSaveConnector{}).overwriteOriginalFile(ctx, db, path, nil)
 		assert.ErrorContains(t, err, "failed to overwrite Fedwire file")
 	})
 }
@@ -427,7 +427,7 @@ func TestOverwriteWorkbookAtPath_Failures(t *testing.T) {
 		db := openTestDB(t)
 		require.NoError(t, db.Close())
 
-		err := overwriteWorkbookAtPath(db, filepath.Join(t.TempDir(), "book.xlsx"), "book", nil, NewDumpOptions(), ExcelSheetPolicyAll)
+		err := overwriteWorkbookAtPath(db, filepath.Join(t.TempDir(), "book.xlsx"), "book", nil, NewDumpOptions(), ExcelSheetPolicyAll, nil)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrDatabaseOperation)
 	})
@@ -437,7 +437,7 @@ func TestOverwriteWorkbookAtPath_Failures(t *testing.T) {
 
 		db := openTestDB(t)
 
-		err := overwriteWorkbookAtPath(db, filepath.Join(t.TempDir(), "book.xlsx"), "book", nil, NewDumpOptions(), ExcelSheetPolicyAll)
+		err := overwriteWorkbookAtPath(db, filepath.Join(t.TempDir(), "book.xlsx"), "book", nil, NewDumpOptions(), ExcelSheetPolicyAll, nil)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrTableNotFound)
 	})
@@ -478,7 +478,7 @@ func TestOverwriteTableAtPath_Failures(t *testing.T) {
 		db := openTestDB(t)
 		require.NoError(t, db.Close())
 
-		err := overwriteTableAtPath(db, filepath.Join(t.TempDir(), "data.csv"), "data", NewDumpOptions())
+		err := overwriteTableAtPath(db, filepath.Join(t.TempDir(), "data.csv"), "data", NewDumpOptions(), nil)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrDatabaseOperation)
 	})
@@ -489,7 +489,7 @@ func TestOverwriteTableAtPath_Failures(t *testing.T) {
 		db := openTestDB(t)
 
 		path := filepath.Join(t.TempDir(), "data.csv")
-		err := overwriteTableAtPath(db, path, "data", NewDumpOptions())
+		err := overwriteTableAtPath(db, path, "data", NewDumpOptions(), nil)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrTableNotFound)
 		assert.NoFileExists(t, path, "a refused save must not create the file it could not write")

@@ -63,6 +63,36 @@ func (o Options) failCleanup(primary error, what string, err error) error {
 // renames it over dest only when write and the close both succeed. When either
 // fails, dest is left exactly as it was and the temporary file is removed.
 //
+// It is Stage followed by Commit, which is the whole of what a single file
+// needs. A caller replacing several files together stages them all first.
+func Write(dest string, write func(io.Writer) error, opt Options) error {
+	staged, err := Stage(dest, write, opt)
+	if err != nil {
+		return err
+	}
+	return staged.Commit()
+}
+
+// Staged is a destination's new contents, written and waiting beside it. It is
+// what lets a group of files be produced before any of them is put in place, so
+// a write refused partway through a set costs what it costs for one file:
+// nothing.
+//
+// Either Commit or Discard has to be called. Until one of them is, the staged
+// file sits in the destination's directory.
+type Staged struct {
+	// dest is the path the caller named, which is what its errors say.
+	dest string
+	// target is the file to replace, which is dest with its links followed.
+	target string
+	// tmp is the staged file beside target.
+	tmp string
+	opt Options
+}
+
+// Stage writes dest's new contents into a temporary file beside it and stops
+// there. Nothing at dest has been touched when Stage returns.
+//
 // Why the writer and not the staged path is what write receives: the staged
 // name carries a temporary suffix, so a format that reads anything out of its
 // file name gets the wrong answer from it. Excel picks both its container
@@ -76,33 +106,30 @@ func (o Options) failCleanup(primary error, what string, err error) error {
 // A dest that is a symbolic link names the file to replace rather than being
 // it, so the staging and the rename both move to the file it points at and the
 // link stays a link.
-func Write(dest string, write func(io.Writer) error, opt Options) (err error) {
+func Stage(dest string, write func(io.Writer) error, opt Options) (_ *Staged, err error) {
 	// The caller's own dest stays in the error wording, which is the path they
 	// named; only the file being replaced follows the link.
 	target := resolveLinks(dest)
 	dir := filepath.Dir(target)
 	tmp, err := createTempBeside(dir, filepath.Base(target), stagedSuffix)
 	if err != nil {
-		return opt.failIO("failed to create a temporary file next to "+dest, err)
+		return nil, opt.failIO("failed to create a temporary file next to "+dest, err)
 	}
-	tmpName := tmp.Name()
-	// Remove the staged file unless the rename below claimed it; a no-op after a
-	// successful rename.
+	staged := &Staged{dest: dest, target: target, tmp: tmp.Name(), opt: opt}
+	// Remove the staged file for any failure below; a caller that gets a *Staged
+	// back owns it from then on.
 	defer func() {
-		// A staged file left behind is a leftover in the user's directory, so
-		// its removal failure is reported rather than dropped. A successful
-		// rename already consumed it, which is not a failure.
-		if removeErr := os.Remove(tmpName); removeErr != nil && !os.IsNotExist(removeErr) {
-			err = opt.failCleanup(err, "remove the staged file "+tmpName, removeErr)
+		if err != nil {
+			err = staged.cleanup(err)
 		}
 	}()
 
 	if err := write(tmp); err != nil {
 		_ = tmp.Close() // The write error is the one to report
-		return err
+		return nil, err
 	}
 	if err := tmp.Close(); err != nil {
-		return opt.failIO("failed to close the staged file for "+dest, err)
+		return nil, opt.failIO("failed to close the staged file for "+dest, err)
 	}
 
 	mode := DefaultFileMode
@@ -114,21 +141,46 @@ func Write(dest string, write func(io.Writer) error, opt Options) (err error) {
 		// step instead, reporting the name of a file this package invented. The
 		// stat is here anyway, for the permissions to carry over.
 		if !info.Mode().IsRegular() {
-			return opt.failIO("cannot write "+dest,
+			return nil, opt.failIO("cannot write "+dest,
 				fmt.Errorf("it is %s and a write replaces a file", DescribeFileMode(info.Mode())))
 		}
 		mode = info.Mode().Perm()
 	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return opt.failIO("failed to inspect "+dest, statErr)
+		return nil, opt.failIO("failed to inspect "+dest, statErr)
 	}
-	if err := os.Chmod(tmpName, mode); err != nil {
-		return opt.failIO("failed to set permissions on the temporary file for "+dest, err)
+	if err := os.Chmod(staged.tmp, mode); err != nil {
+		return nil, opt.failIO("failed to set permissions on the temporary file for "+dest, err)
 	}
+	return staged, nil
+}
 
-	if err := commitStagedFile(tmpName, target); err != nil {
-		return opt.failIO("failed to replace "+dest, err)
+// Commit puts the staged contents at the destination. A failure leaves the
+// destination as it was and removes the staged file.
+func (s *Staged) Commit() (err error) {
+	defer func() { err = s.cleanup(err) }()
+
+	if err := commitStagedFile(s.tmp, s.target); err != nil {
+		return s.opt.failIO("failed to replace "+s.dest, err)
 	}
 	return nil
+}
+
+// Discard throws the staged contents away, leaving the destination as it was.
+func (s *Staged) Discard() error {
+	return s.cleanup(nil)
+}
+
+// cleanup removes the staged file and attaches a failure to remove it to
+// primary. A successful commit already consumed the file, which is not a
+// failure, and so is calling this twice.
+//
+// A staged file left behind is a leftover in the user's directory, so its
+// removal failure is reported rather than dropped.
+func (s *Staged) cleanup(primary error) error {
+	if err := os.Remove(s.tmp); err != nil && !os.IsNotExist(err) {
+		return s.opt.failCleanup(primary, "remove the staged file "+s.tmp, err)
+	}
+	return primary
 }
 
 // DescribeFileMode names the kind of file a mode says it is, for an error a

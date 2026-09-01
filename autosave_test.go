@@ -2175,3 +2175,127 @@ func TestAutoSaveOverwritesOnTheEmptyString(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(body), "bob")
 }
+
+// TestAutoSaveOverwriteLeavesEverySourceAloneWhenOneIsRefused pins that an
+// in-place save over several sources replaces all of them or none of them.
+//
+// It replaced them one at a time, so a refusal that needs the rows -- a tab in
+// a TSV value, an LTSV table the session emptied -- arrived after the earlier
+// files already held the session's rows. What the caller was left with was a
+// directory holding two states of one session and nothing saying which file was
+// which, and on the close path the rows for the rest were gone with the
+// database.
+func TestAutoSaveOverwriteLeavesEverySourceAloneWhenOneIsRefused(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		first    string
+		firstIn  string
+		second   string
+		secondIn string
+		edits    []string
+	}{
+		{
+			name:     "a tab in a TSV value",
+			first:    "a.tsv",
+			firstIn:  "id\tname\n1\talice\n",
+			second:   "b.tsv",
+			secondIn: "id\tname\n1\tbob\n",
+			edits:    []string{`UPDATE a SET name = 'changed'`, "UPDATE b SET name = 'has\ttab'"},
+		},
+		{
+			name:     "an LTSV table with no rows left",
+			first:    "a.csv",
+			firstIn:  "id,name\n1,alice\n",
+			second:   "b.ltsv",
+			secondIn: "id:1\tname:bob\n",
+			edits:    []string{`UPDATE a SET name = 'changed'`, `DELETE FROM b`},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			first := filepath.Join(dir, tt.first)
+			second := filepath.Join(dir, tt.second)
+			require.NoError(t, os.WriteFile(first, []byte(tt.firstIn), 0o600))
+			require.NoError(t, os.WriteFile(second, []byte(tt.secondIn), 0o600))
+
+			db, err := NewBuilder().AddPath(first).AddPath(second).EnableAutoSave("").Open(t.Context())
+			require.NoError(t, err)
+			for _, stmt := range tt.edits {
+				_, execErr := db.ExecContext(t.Context(), stmt)
+				require.NoError(t, execErr)
+			}
+
+			closeErr := db.Close()
+			require.Error(t, closeErr, "the save cannot write the second source")
+			assert.ErrorIs(t, closeErr, ErrUnsupportedFormat)
+
+			assert.Equal(t, []string{tt.first, tt.second}, dirEntries(t, dir), "nothing else may be written")
+			assertFileContent(t, first, tt.firstIn, "a source is not replaced while another one cannot be")
+			assertFileContent(t, second, tt.secondIn, "the refused source keeps what it had")
+		})
+	}
+
+	t.Run("the same holds when the save runs on commit", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		first := filepath.Join(dir, "a.tsv")
+		second := filepath.Join(dir, "b.tsv")
+		require.NoError(t, os.WriteFile(first, []byte("id\tname\n1\talice\n"), 0o600))
+		require.NoError(t, os.WriteFile(second, []byte("id\tname\n1\tbob\n"), 0o600))
+
+		db, err := NewBuilder().AddPath(first).AddPath(second).EnableAutoSaveOnCommit("").Open(t.Context())
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = db.Close() })
+
+		tx, err := db.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+		_, err = tx.ExecContext(t.Context(), `UPDATE a SET name = 'changed'`)
+		require.NoError(t, err)
+		_, err = tx.ExecContext(t.Context(), "UPDATE b SET name = 'has\ttab'")
+		require.NoError(t, err)
+
+		commitErr := tx.Commit()
+		require.Error(t, commitErr)
+		assert.ErrorIs(t, commitErr, ErrUnsupportedFormat)
+
+		assertFileContent(t, first, "id\tname\n1\talice\n", "a commit that could not save leaves every source alone")
+		assertFileContent(t, second, "id\tname\n1\tbob\n", "the refused source keeps what it had")
+	})
+
+	t.Run("a save with nothing to refuse replaces every source", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		first := filepath.Join(dir, "a.tsv")
+		second := filepath.Join(dir, "b.tsv")
+		require.NoError(t, os.WriteFile(first, []byte("id\tname\n1\talice\n"), 0o600))
+		require.NoError(t, os.WriteFile(second, []byte("id\tname\n1\tbob\n"), 0o600))
+
+		db, err := NewBuilder().AddPath(first).AddPath(second).EnableAutoSave("").Open(t.Context())
+		require.NoError(t, err)
+		_, err = db.ExecContext(t.Context(), `UPDATE a SET name = 'changed'`)
+		require.NoError(t, err)
+		_, err = db.ExecContext(t.Context(), `UPDATE b SET name = 'also changed'`)
+		require.NoError(t, err)
+		require.NoError(t, db.Close())
+
+		assertFileContent(t, first, "id\tname\n1\tchanged\n", "every staged file is put in place")
+		assertFileContent(t, second, "id\tname\n1\talso changed\n", "every staged file is put in place")
+	})
+}
+
+// assertFileContent reads path and compares it with want.
+func assertFileContent(t *testing.T, path, want, msg string) {
+	t.Helper()
+
+	got, err := os.ReadFile(path) //nolint:gosec // Test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, want, string(got), msg)
+}

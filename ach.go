@@ -382,6 +382,20 @@ func DumpACH(ctx context.Context, db *sql.DB, baseTableName, outputPath string) 
 //
 // Returns an error if the export fails.
 func DumpACHWithTableSet(ctx context.Context, db *sql.DB, baseTableName, outputPath string, tableSet *achconv.TableSet) error {
+	return dumpACHWithTableSet(ctx, db, baseTableName, outputPath, tableSet, nil)
+}
+
+// stageACH is DumpACH writing into a set, which is how an in-place save of
+// several files produces this one without putting it in place yet.
+func stageACH(ctx context.Context, db *sql.DB, baseTableName, outputPath string, set *writeSet) error {
+	tableSet, err := achTableSetForDump(ctx, db, baseTableName)
+	if err != nil {
+		return err
+	}
+	return dumpACHWithTableSet(ctx, db, baseTableName, outputPath, tableSet, set)
+}
+
+func dumpACHWithTableSet(ctx context.Context, db *sql.DB, baseTableName, outputPath string, tableSet *achconv.TableSet, set *writeSet) error {
 	if db == nil {
 		return fmt.Errorf("%w: database must be a non-nil *sql.DB", ErrNilInput)
 	}
@@ -398,7 +412,7 @@ func DumpACHWithTableSet(ctx context.Context, db *sql.DB, baseTableName, outputP
 	// writer validates while it encodes, so it can reject the data after the
 	// output has been opened; staging the write keeps a rejection from destroying
 	// the destination, which for an in-place save is the source file itself.
-	return writeFileAtomically(outputPath, func(w io.Writer) error {
+	return set.write(outputPath, func(w io.Writer) error {
 		if err := tableSet.WriteToWriter(w); err != nil {
 			return fmt.Errorf("%w: failed to write ACH file: %w", ErrACH, err)
 		}

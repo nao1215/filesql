@@ -135,6 +135,12 @@ func LoadInto(ctx context.Context, db *sql.DB, paths ...string) error {
 // or with nothing but whitespace, is refused with ErrEmptyPath rather than
 // created: a directory of spaces is one this package would refuse to read back.
 //
+// A table it refuses for its name is refused before the destination is touched:
+// where every table goes is settled with the list of them, so a database holding
+// one such table leaves no output directory behind and no table written ahead of
+// the refusal. A value a format cannot hold is found by reading the rows, so
+// that refusal leaves the tables already finished, as a canceled export does.
+//
 // It exports without a deadline. DumpDatabaseContext takes one.
 func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
 	return DumpDatabaseContext(context.Background(), db, outputDir, opts...)
@@ -147,7 +153,9 @@ func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
 // table already written stays written, since the tables are separate files and
 // nothing undoes one: what a canceled export leaves is the tables it had
 // finished. The table it was in the middle of leaves nothing, because each file
-// is staged and put in place only once it is whole.
+// is staged and put in place only once it is whole. A cancellation before the
+// first table leaves no output directory, for the same reason a refused table
+// name does.
 func DumpDatabaseContext(ctx context.Context, db *sql.DB, outputDir string, opts ...DumpOptions) error {
 	// A nil database is what a caller holds after an error they did not check,
 	// and reaching into it here would take their process down over a mistake this
@@ -193,10 +201,6 @@ func dumpSQLiteDatabase(ctx context.Context, db *sql.DB, outputDir string, optio
 		return ErrNoTables
 	}
 
-	if err := ensureOutputDirectory(outputDir); err != nil {
-		return err
-	}
-
 	// A table only belongs to an ACH or Fedwire file when the database says it
 	// was loaded from one. The suffix alone is not enough: a caller's own table
 	// named orders_entries is not part of an ACH file.
@@ -213,42 +217,85 @@ func dumpSQLiteDatabase(ctx context.Context, db *sql.DB, outputDir string, optio
 		}
 	}
 
-	// Export ACH files
-	for _, baseName := range achBaseNames {
-		outputPath, err := dumpFilePath(outputDir, baseName, extACH)
-		if err != nil {
-			return err
+	// Where every table goes is settled before the destination is touched, for
+	// the same reason the table list is: a name a dump refuses is refused by the
+	// name alone, so asking table by table wrote whatever came first and then
+	// stopped, and a database whose one table carried such a name left an empty
+	// directory behind along with its error.
+	achFiles, err := dumpFilePaths(outputDir, achBaseNames, extACH)
+	if err != nil {
+		return err
+	}
+	wireFiles, err := dumpFilePaths(outputDir, wireBaseNames, extFED)
+	if err != nil {
+		return err
+	}
+	tabular := make([]string, 0, len(tableNames))
+	for _, tableName := range tableNames {
+		if !writeBackTables[tableName] {
+			tabular = append(tabular, tableName)
 		}
-		if err := DumpACH(ctx, db, baseName, outputPath); err != nil {
-			return fmt.Errorf("%w: failed to export ACH file %s: %w", ErrACH, baseName, err)
+	}
+	tableFiles, err := dumpFilePaths(outputDir, tabular, options.FileExtension())
+	if err != nil {
+		return err
+	}
+
+	// The destination is not created for an export that is already over. The
+	// ping above answers a context canceled before the call; this answers one
+	// canceled while the paths were being settled.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := ensureOutputDirectory(outputDir); err != nil {
+		return err
+	}
+
+	// Export ACH files
+	for _, file := range achFiles {
+		if err := DumpACH(ctx, db, file.name, file.path); err != nil {
+			return fmt.Errorf("%w: failed to export ACH file %s: %w", ErrACH, file.name, err)
 		}
 	}
 
 	// Export Fedwire files
-	for _, baseName := range wireBaseNames {
-		outputPath, err := dumpFilePath(outputDir, baseName, extFED)
-		if err != nil {
-			return err
-		}
-		if err := DumpFedWire(ctx, db, baseName, outputPath); err != nil {
-			return fmt.Errorf("%w: failed to export Fedwire file %s: %w", ErrWire, baseName, err)
+	for _, file := range wireFiles {
+		if err := DumpFedWire(ctx, db, file.name, file.path); err != nil {
+			return fmt.Errorf("%w: failed to export Fedwire file %s: %w", ErrWire, file.name, err)
 		}
 	}
 
 	// Export remaining tabular tables in the requested format
-	for _, tableName := range tableNames {
-		if writeBackTables[tableName] {
-			continue
-		}
+	for _, file := range tableFiles {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := dumpSQLiteTable(ctx, db, tableName, outputDir, options); err != nil {
-			return fmt.Errorf("%w: failed to export table %s: %w", ErrIOOperation, tableName, err)
+		if err := dumpSQLiteTable(ctx, db, file.name, file.path, options); err != nil {
+			return fmt.Errorf("%w: failed to export table %s: %w", ErrIOOperation, file.name, err)
 		}
 	}
 
 	return nil
+}
+
+// dumpFile is a table or a source file and the path its dump is written to.
+type dumpFile struct {
+	name string
+	path string
+}
+
+// dumpFilePaths is where each of names is written, or the first name that
+// cannot be a file.
+func dumpFilePaths(outputDir string, names []string, ext string) ([]dumpFile, error) {
+	files := make([]dumpFile, 0, len(names))
+	for _, name := range names {
+		path, err := dumpFilePath(outputDir, name, ext)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, dumpFile{name: name, path: path})
+	}
+	return files, nil
 }
 
 // getSQLiteTableNames retrieves all user-defined table names from SQLite database.
@@ -284,7 +331,7 @@ func getSQLiteTableNames(ctx context.Context, db *sql.DB) ([]string, error) {
 }
 
 // dumpSQLiteTable exports a single table from SQLite database
-func dumpSQLiteTable(ctx context.Context, db *sql.DB, tableName, outputDir string, options DumpOptions) error {
+func dumpSQLiteTable(ctx context.Context, db *sql.DB, tableName, outputPath string, options DumpOptions) error {
 	// Get table columns
 	columns, declTypes, err := getSQLiteTableColumns(ctx, db, tableName)
 	if err != nil {
@@ -308,14 +355,8 @@ func dumpSQLiteTable(ctx context.Context, db *sql.DB, tableName, outputDir strin
 	}
 	defer rows.Close()
 
-	// Create output file
-	outputPath, err := dumpFilePath(outputDir, tableName, options.FileExtension())
-	if err != nil {
-		return err
-	}
-
 	// An export writes a new file, so there is no schema to keep faith with.
-	return writeSQLiteTableData(outputPath, tableName, columns, rows, options, nil)
+	return writeSQLiteTableData(nil, outputPath, tableName, columns, rows, options, nil)
 }
 
 // dumpFilePath is the path a table's dump is written to, or an error when the
@@ -467,9 +508,10 @@ func getSQLiteTableColumns(ctx context.Context, db *sql.DB, tableName string) (c
 // writeSQLiteTableData writes table data to file with specified format. The
 // write is staged and moved into place, so a format or I/O error partway through
 // leaves an existing destination — which for a write-back is the caller's source
-// file — exactly as it was.
-func writeSQLiteTableData(outputPath, tableName string, columns []string, rows *sql.Rows, options DumpOptions, prior parquetPrior) error {
-	return writeFileAtomically(outputPath, func(w io.Writer) error {
+// file — exactly as it was. A set holds the staged file back until every file of
+// a save has been produced; a nil one puts it in place at once.
+func writeSQLiteTableData(set *writeSet, outputPath, tableName string, columns []string, rows *sql.Rows, options DumpOptions, prior parquetPrior) error {
+	return set.write(outputPath, func(w io.Writer) error {
 		return writeSQLiteTableDataTo(w, tableName, columns, rows, options, prior)
 	})
 }
