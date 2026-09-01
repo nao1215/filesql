@@ -209,7 +209,7 @@ func Parse(input io.Reader, fileType FileType, opts ...ParseOption) (result *Tab
 	// UTF-16 file was read as single-byte data and refused for a field count,
 	// which blames the caller's data for its encoding. A binary container and a
 	// record format carry their own framing and are read as bytes.
-	if isTextFormat(fileType) {
+	if format.IsText() {
 		input = textin.Decode(input)
 	}
 
@@ -252,17 +252,6 @@ func Parse(input io.Reader, fileType FileType, opts ...ParseOption) (result *Tab
 		ColumnTypes: columnTypesOf(read.Types),
 		Nulls:       nulls,
 	}, nil
-}
-
-// isTextFormat reports whether a file type is one whose bytes are text, and so
-// one a byte-order mark can lead and UTF-8 is the only encoding of.
-func isTextFormat(fileType FileType) bool {
-	switch fileType {
-	case CSV, TSV, LTSV, JSON, JSONL:
-		return true
-	default:
-		return false
-	}
 }
 
 // strictFieldCount refuses a delimited record whose field count differs from
