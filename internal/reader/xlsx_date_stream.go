@@ -10,20 +10,22 @@ import (
 	"strings"
 )
 
-// The date normalization has two ways to find the date cells of a sheet, and
-// they differ only in how they reach a cell's style.
+// The normalization has two ways to find the cells whose drawing is not the
+// value behind them, and they differ only in how they reach a cell's style and
+// type.
 //
-// Asking the library, one cell at a time, is what NormalizeXLSXDates does. It
-// works on any open workbook, and it costs: the first such question makes
-// excelize unmarshal the whole worksheet into its object model, 1470 MB for an
-// 18.5 MB workbook of 200,000 rows, against 267 MB for the streaming row read
-// that produced the rows being normalized.
+// Asking the library, one cell at a time, is what normalizeXLSXDates and
+// normalizeXLSXNumbers do. It works on any open workbook, and it costs: the
+// first such question makes excelize unmarshal the whole worksheet into its
+// object model, 1470 MB for an 18.5 MB workbook of 200,000 rows, against 267 MB
+// for the streaming row read that produced the rows being normalized.
 //
 // Reading the sheet's own XML, which is what this file does, costs what the
-// date cells cost and nothing for the rest. It needs the workbook's bytes,
-// which the loader has because the format is a zip and was buffered to open it
-// at all, and it is used when those bytes are there. The other way stays for
-// the exported function, which is handed an open workbook and nothing else.
+// rewritten cells cost and nothing for the rest, and the style and the type are
+// attributes of the cell it is already looking at. It needs the workbook's
+// bytes, which the loader has because the format is a zip and was buffered to
+// open it at all, and it is used when those bytes are there. The other way
+// stays for a workbook that arrived without them.
 
 // sheetCell is a cell of a sheet, numbered the way the rows a read produces are.
 type sheetCell struct {
