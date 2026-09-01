@@ -367,7 +367,7 @@ func writeXLSXCell(f *excelize.File, styles *xlsxStyles, sheet, cell, text strin
 			if err != nil {
 				return err
 			}
-			if err := f.SetCellFloat(sheet, cell, value, xlsxDecimalPlaces(text), 64); err != nil {
+			if err := f.SetCellFloat(sheet, cell, value, xlsxDecimalPlaces(value), 64); err != nil {
 				return fmt.Errorf("failed to set cell value at %s: %w", cell, err)
 			}
 			if err := f.SetCellStyle(sheet, cell, cell, style); err != nil {
@@ -382,17 +382,16 @@ func writeXLSXCell(f *excelize.File, styles *xlsxStyles, sheet, cell, text strin
 	return nil
 }
 
-// xlsxDecimalPlaces is how many digits a REAL cell keeps after the point: the
-// count the rendered text carries, so a value is stored as it was rendered.
-// A rendering that carries an exponent has no count to take, and one is the
-// least that keeps the column REAL; SetCellFloat writes the exact binary value
-// there, which reads back as the same double.
-func xlsxDecimalPlaces(text string) int {
-	if strings.ContainsAny(text, "eE") {
-		return 1
-	}
-	if i := strings.IndexByte(text, '.'); i >= 0 {
-		return len(text) - i - 1
+// xlsxDecimalPlaces is how many digits a REAL cell keeps after the point: as
+// many as the shortest form that reads back as the same number, so nothing of
+// the value is lost, and one where that form has none, which is the least that
+// keeps the column REAL. Counting from the rendered text instead would drop a
+// value the rendering spells with an exponent -- 1e-05 has no digit after the
+// point to count, and one decimal would store it as 0.0.
+func xlsxDecimalPlaces(value float64) int {
+	shortest := strconv.FormatFloat(value, 'f', -1, 64)
+	if i := strings.IndexByte(shortest, '.'); i >= 0 {
+		return len(shortest) - i - 1
 	}
 	return 1
 }

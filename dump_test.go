@@ -2185,6 +2185,9 @@ func TestADumpKeepsAColumnsType(t *testing.T) {
 		{"whole numbers in a REAL column", "price\n100.00\n250.00\n", "price", "real"},
 		{"a REAL past fifteen digits", "big\n123456789012345678901.0\n", "big", "real"},
 		{"a REAL with a fraction", "rate\n1234567.5678\n", "rate", "real"},
+		{"a REAL smaller than one", "rate\n0.00001\n", "rate", "real"},
+		{"a REAL near the bottom of the range", "rate\n1e-300\n", "rate", "real"},
+		{"a REAL near the top of the range", "rate\n1e300\n", "rate", "real"},
 		{"an INTEGER column", "id\n100\n250\n", "id", "integer"},
 		{"an identifier past fifteen digits", "id\n11040320260000000\n", "id", "integer"},
 		{"a TEXT column", "code\n007\n042\n", "code", "text"},
@@ -2222,6 +2225,38 @@ func TestADumpKeepsAColumnsType(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("a REAL keeps its value through a workbook", func(t *testing.T) {
+		t.Parallel()
+
+		// The type is kept by writing a decimal point, and the value must not
+		// pay for it: a rendering that spells the number with an exponent has no
+		// digit after the point to count, and taking one there stored 1e-05 as
+		// 0.0.
+		for _, value := range []string{"0.00001", "1e-300", "1e300", "1234567.5678", "100.0", "0.1"} {
+			dir := t.TempDir()
+			source := filepath.Join(dir, "t.csv")
+			require.NoError(t, os.WriteFile(source, []byte("rate\n"+value+"\n"), 0o600))
+
+			db, err := OpenContext(ctx, source)
+			require.NoError(t, err)
+
+			var want float64
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT rate FROM t`).Scan(&want))
+
+			out := filepath.Join(dir, "out")
+			require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+			require.NoError(t, db.Close())
+
+			back, err := OpenContext(ctx, filepath.Join(out, "t.xlsx"))
+			require.NoError(t, err)
+
+			var got float64
+			require.NoError(t, back.QueryRowContext(ctx, `SELECT rate FROM t`).Scan(&got))
+			assert.Equal(t, want, got, "%s went through a workbook", value)
+			require.NoError(t, back.Close())
+		}
+	})
 
 	t.Run("a REAL column still divides as one", func(t *testing.T) {
 		t.Parallel()
