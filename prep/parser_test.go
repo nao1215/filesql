@@ -1527,7 +1527,7 @@ func TestPadRefusesALengthThatCannotBeHeld(t *testing.T) {
 		}
 
 		// Without WithStrictTagParsing an unusable parameter is ignored, which
-		// is what the documented behaviour says and what the other tags do.
+		// is what the documented behavior says and what the other tags do.
 		if p, lax := build(strconv.Itoa(maxPaddedLength+1)+":x", false); lax != nil || p != nil {
 			t.Errorf("%s past the limit without strict parsing: p = %v, err = %v, want both nil", tag, p, lax)
 		}
