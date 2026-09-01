@@ -6,6 +6,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/nao1215/filesql/internal/infer"
 	"github.com/nao1215/filesql/internal/reader"
@@ -357,6 +358,14 @@ func xlsxUnrepresentableError(column string, r rune) error {
 		ErrUnsupportedFormat, r, column)
 }
 
+// xlsxNotUTF8Error reports text a worksheet cannot carry because it is not
+// characters. A workbook is XML and holds text, so bytes that are not valid
+// UTF-8 went in as U+FFFD and the table came back changed with nothing said.
+func xlsxNotUTF8Error(what string, position int) error {
+	return fmt.Errorf("%w: XLSX holds characters rather than bytes, and %s %d is not valid UTF-8; dump this table as Parquet instead",
+		ErrUnsupportedFormat, what, position)
+}
+
 // writeXLSXSheet adds one sheet to f and fills it. A cell whose value matches
 // what before already holds is left alone.
 func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior) (xlsxExtent, error) {
@@ -402,6 +411,9 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior) (xl
 		if r, found := xmlControlRune(col); found {
 			return xlsxExtent{}, xlsxUnrepresentableError(col, r)
 		}
+		if !utf8.ValidString(col) {
+			return xlsxExtent{}, xlsxNotUTF8Error("column name", i+1)
+		}
 		if unchangedXLSXCell(before, headerRow, i+1, col) {
 			continue
 		}
@@ -440,6 +452,9 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior) (xl
 			cellValue := formatDumpValue(val)
 			if r, found := xmlControlRune(cellValue); found {
 				return xlsxExtent{}, xlsxUnrepresentableError(columns[i], r)
+			}
+			if !utf8.ValidString(cellValue) {
+				return xlsxExtent{}, xlsxNotUTF8Error("value", i+1)
 			}
 			if unchangedXLSXCell(before, rowIndex, i+1, cellValue) {
 				continue

@@ -196,8 +196,10 @@ func (o DumpOptions) WithCompression(compression CompressionType) DumpOptions {
 //
 // A value the encoding cannot write fails the save with ErrEncoding, naming the
 // encoding, rather than being replaced — a substitution is the silent corruption
-// the read side already refuses. Parquet and XLSX carry their own encoding and
-// are unaffected.
+// the read side already refuses. ISO-2022-JP also refuses an escape, U+001B,
+// which it reads as the start of a character-set designator: written as data it
+// changes what the rest of the file says. Parquet and XLSX carry their own
+// encoding and are unaffected.
 //
 // Options:
 //   - EncodingUTF8: UTF-8 (default)

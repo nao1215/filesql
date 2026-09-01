@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 )
 
 // Format is the text format a table's records are written as.
@@ -135,6 +136,9 @@ func (w *Writer) Header(columns []string) error {
 	if err := checkNamedColumns(w.format, columns); err != nil {
 		return err
 	}
+	if err := checkUTF8("column name", columns); err != nil {
+		return err
+	}
 	switch w.format {
 	case FormatLTSV:
 		for _, col := range columns {
@@ -153,6 +157,9 @@ func (w *Writer) Header(columns []string) error {
 
 // Record writes one record.
 func (w *Writer) Record(record []string) error {
+	if err := checkUTF8("value", record); err != nil {
+		return err
+	}
 	switch w.format {
 	case FormatTSV:
 		return TSVRecord(w.dst, record, w.term)
@@ -336,6 +343,26 @@ func checkFirstColumn(format Format, columns []string) error {
 			"a column name cannot begin with a byte-order mark where it is written at the front of the file, and column %q does",
 			columns[0]),
 	}
+}
+
+// checkUTF8 refuses text that is not valid UTF-8. Every format here writes text,
+// so bytes that are not a character have no spelling in any of them: they went
+// out as themselves and the file no longer read back, or an encoder put U+FFFD
+// where they had been. what names the kind of field in the refusal -- a value, a
+// column name -- since the bytes alone do not say which.
+func checkUTF8(what string, fields []string) error {
+	for i, field := range fields {
+		if utf8.ValidString(field) {
+			continue
+		}
+		return &Error{
+			Kind: KindNotUTF8,
+			Msg: fmt.Sprintf(
+				"a text format holds characters rather than bytes, and %s %d is not valid UTF-8",
+				what, i+1),
+		}
+	}
+	return nil
 }
 
 // checkNamedColumns refuses a column with no name in the formats that carry
