@@ -155,7 +155,25 @@ func (r *googleRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 			return nil, err
 		}
 		return rename(call, "googlesql_last_day"), nil
-	case "LEFT", "RIGHT", "REPEAT", fnNameLpad, fnNameRpad, fnNameSubstr, fnNameSubstring,
+	case fnNameSubstr, fnNameSubstring:
+		// The two spellings are one function, so they name one helper. Deriving
+		// the name from the spelling below gave SUBSTRING a helper the runtime
+		// does not register, and the call reached the driver as an unknown
+		// function named after this package rather than after the query.
+		return rename(call, "googlesql_substr"), nil
+	case fnNamePosition:
+		// BigQuery spells the question INSTR, which reads its arguments the
+		// other way round; position() swaps them, and the helper is the one
+		// INSTR itself lowers to.
+		instr, err := position(call)
+		if err != nil {
+			return nil, err
+		}
+		if lowered, ok := instr.(*ast.FuncCall); ok {
+			return rename(lowered, "googlesql_instr"), nil
+		}
+		return instr, nil
+	case "LEFT", "RIGHT", "REPEAT", fnNameLpad, fnNameRpad,
 		"MOD", "INSTR", "SOUNDEX", "MD5", "SHA1", typeNameDate, typeNameDatetime, typeNameTime,
 		typeNameTimestamp:
 		// Each raises where SQLite answers NULL, or builds a value from fields
