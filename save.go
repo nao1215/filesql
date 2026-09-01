@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/nao1215/filesql/internal/codec"
 	"github.com/nao1215/filesql/internal/reader"
@@ -585,20 +586,45 @@ func writeXLSXWorkbookCompressed(w io.Writer, path string, base *reader.Workbook
 // collide that way is refused when it is loaded. A workbook changed on disk
 // since could still do it, and the first sheet in the file wins; the reverse
 // collision, two tables arriving at one sheet, is what the caller checks.
-// sheetKey folds a table name for the map that answers which sheet of a
-// workbook a table lives in.
+// sheetKey folds a name for the maps that decide which sheet of a workbook a
+// table lives in and whether two tables want the same sheet.
 //
 // The fold is Excel's rather than SQLite's, which is the one place in this
-// package where those two differ and the difference matters. Everywhere a
-// table name is compared against another table name the fold stops at ASCII,
-// because that is where SQLite's stops. A sheet name is compared by the
-// library that writes the workbook, and it matches sheet names with
-// strings.EqualFold, so a table whose sheet is already there has to be found
-// under the same rule: folding only ASCII missed a sheet named "xÄy" for a
-// table named after "xäy", and asking for the sheet that was missed hands back
-// the existing one, whose rows the save then overwrites.
-func sheetKey(tableName string) string {
-	return strings.ToLower(tableName)
+// package where those two differ and the difference matters. Everywhere a table
+// name is compared against another table name the fold stops at ASCII, because
+// that is where SQLite's stops. A sheet name is compared by the library that
+// writes the workbook, which matches with strings.EqualFold, so a table whose
+// sheet is already there has to be found under the same rule: folding only
+// ASCII missed a sheet named "xÄy" for a table named after "xäy", and asking
+// for the sheet that was missed hands back the existing one, whose rows the
+// save then overwrites.
+//
+// The key is built from each rune's fold orbit rather than by lowercasing,
+// because those two are not the same rule either. strings.EqualFold folds case
+// simply, so it calls "Σ" and "ς" one character, while strings.ToLower maps
+// them to "σ" and "ς" and would key them apart -- and "ſ" is the same story
+// against "s". Taking the smallest rune of each orbit gives one key per set of
+// names EqualFold calls equal.
+func sheetKey(name string) string {
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range name {
+		b.WriteRune(foldRune(r))
+	}
+	return b.String()
+}
+
+// foldRune is the smallest rune that folds to r, which is one name for r's
+// whole fold orbit. unicode.SimpleFold walks that orbit and returns to where it
+// started, which is what bounds the loop.
+func foldRune(r rune) rune {
+	smallest := r
+	for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+		if f < smallest {
+			smallest = f
+		}
+	}
+	return smallest
 }
 
 func sheetsByTable(base *reader.Workbook, baseTableName string) map[string]string {

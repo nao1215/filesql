@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -647,15 +648,42 @@ func TestDumpDatabase_RefusesADestinationThatIsNotADirectory(t *testing.T) {
 func TestSheetKeyFoldsTheWayExcelDoes(t *testing.T) {
 	t.Parallel()
 
-	if sheetKey("book_xÄy") != sheetKey("book_xäy") {
-		t.Errorf("sheetKey does not match two names Excel calls one sheet: %q and %q",
-			sheetKey("book_xÄy"), sheetKey("book_xäy"))
+	// Every pair strings.EqualFold calls equal has to reach one key, including
+	// the pairs strings.ToLower keys apart: sigma has three forms in one fold
+	// orbit, and the long s folds to an ordinary one.
+	equal := []struct{ a, b string }{
+		{"book_xÄy", "book_xäy"},
+		{"book_Data", "book_data"},
+		{"book_xΣy", "book_xςy"},
+		{"book_xΣy", "book_xσy"},
+		{"book_xſy", "book_xsy"},
+		{"book_xKy", "book_x\u212ay"},
 	}
+	for _, tc := range equal {
+		if !strings.EqualFold(tc.a, tc.b) {
+			t.Fatalf("test is wrong: %q and %q are not EqualFold", tc.a, tc.b)
+		}
+		if sheetKey(tc.a) != sheetKey(tc.b) {
+			t.Errorf("sheetKey(%q) = %q and sheetKey(%q) = %q, but the workbook writer calls them one sheet",
+				tc.a, sheetKey(tc.a), tc.b, sheetKey(tc.b))
+		}
+	}
+
+	// And nothing else: two names the writer keeps apart must keep two keys.
+	different := []struct{ a, b string }{
+		{"book_orders", "book_invoices"},
+		{"book_a", "book_ab"},
+		{"book_xäy", "book_xay"},
+	}
+	for _, tc := range different {
+		if sheetKey(tc.a) == sheetKey(tc.b) {
+			t.Errorf("sheetKey collapsed %q and %q, which are two sheets", tc.a, tc.b)
+		}
+	}
+
+	// The other fold, which this one is not: SQLite holds these as two tables.
 	if reader.ASCIIFold("book_xÄy") == reader.ASCIIFold("book_xäy") {
 		t.Error("ASCIIFold matched two names SQLite holds as two tables, which is the fold this is not")
-	}
-	if sheetKey("book_Data") != sheetKey("book_data") {
-		t.Error("sheetKey must still fold ASCII case")
 	}
 }
 
@@ -704,11 +732,18 @@ func TestOverwriteWorkbookRefusesTwoTablesForOneSheet(t *testing.T) {
 		assert.ErrorIs(t, err, ErrUnsupportedFormat)
 	})
 
-	t.Run("names differing only in ASCII case are one sheet", func(t *testing.T) {
+	t.Run("names in one fold orbit are one sheet", func(t *testing.T) {
 		t.Parallel()
-		// SQLite holds these as one table, so the pair cannot be built there;
-		// the fold is checked directly instead.
-		assert.Equal(t, sheetKey("Data"), sheetKey("data"))
+		// Sigma has three forms in one orbit, so the workbook writer calls
+		// these one sheet where lowercasing would have keyed them apart.
+		err := saveWith(t, newBook(t),
+			`CREATE TABLE "book_xΣy" (name TEXT)`,
+			`INSERT INTO "book_xΣy" VALUES ('capital sigma')`,
+			`CREATE TABLE "book_xςy" (name TEXT)`,
+			`INSERT INTO "book_xςy" VALUES ('final sigma')`,
+		)
+		require.Error(t, err, "two tables that become one sheet must be refused")
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
 	})
 
 	t.Run("two ordinary tables reach two sheets", func(t *testing.T) {
