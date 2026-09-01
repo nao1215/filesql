@@ -3,6 +3,7 @@ package parser
 import (
 	"github.com/nao1215/filesql/dialect/internal/ast"
 	"github.com/nao1215/filesql/dialect/internal/dialects"
+	"github.com/nao1215/filesql/dialect/internal/token"
 )
 
 // parseFrom reads a FROM clause: one or more table expressions, joined by
@@ -169,12 +170,7 @@ func (p *Parser) parseTablePrimary() (ast.TableExpr, error) {
 // alias.
 func (p *Parser) finishTableName(parts []ast.Ident, span ast.Span) (ast.TableExpr, error) {
 	table := &ast.TableName{Parts: parts, Span: span}
-	// A star after the name is PostgreSQL's opposite of ONLY: it reaches the
-	// tables that inherit from this one as well. Nothing inherits here, so it
-	// names the same table and is read and dropped.
-	if p.dialect == dialects.PostgreSQL {
-		p.eatOp("*")
-	}
+	p.eatInheritanceStar()
 	// The suffixes come before the alias in MySQL's grammar for a hint and
 	// after it for the rest, so both sides of the alias are read.
 	if err := p.parseTableSuffixes(table); err != nil {
@@ -187,6 +183,22 @@ func (p *Parser) finishTableName(parts []ast.Ident, span ast.Span) (ast.TableExp
 		return nil, err
 	}
 	return table, nil
+}
+
+// eatInheritanceStar reads the star PostgreSQL writes after a table name, which
+// is the opposite of ONLY: it reaches the tables that inherit from this one as
+// well. Nothing inherits here, so it names the same table and is dropped. A
+// star straight after a dot is not that star -- "s.*" is a qualified name that
+// stops before its last part, and reading the star here would answer from the
+// schema instead of refusing the name.
+func (p *Parser) eatInheritanceStar() {
+	if p.dialect != dialects.PostgreSQL || !p.atOp("*") {
+		return
+	}
+	if p.pos > 0 && p.toks[p.pos-1].IsOp(".") {
+		return
+	}
+	p.pos++
 }
 
 // atInheritanceOnly reports whether the cursor is on PostgreSQL's ONLY in front
@@ -203,7 +215,12 @@ func (p *Parser) atInheritanceOnly() bool {
 	if next.IsOp("(") {
 		return p.namesSomething(2)
 	}
-	return p.namesSomething(1) && !clauseKeywords[upper(next.Text)]
+	// A quoted identifier is a name whatever it spells, so only a bare word is
+	// weighed against the words that open a clause.
+	if next.Kind == token.QuotedIdent {
+		return true
+	}
+	return next.Kind == token.Word && !clauseKeywords[upper(next.Text)]
 }
 
 // parseOnlyTable reads a table reference behind PostgreSQL's ONLY, with or

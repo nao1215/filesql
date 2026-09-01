@@ -69,8 +69,8 @@
 // TABLE is refused the same way when it asks for what SQLite cannot make: more
 // than one change in one statement, a column placed with FIRST or AFTER, a
 // change skipped with IF EXISTS or IF NOT EXISTS. Each is refused by name and
-// as unsupported, since the statement was read: ErrInvalidSyntax is for a query
-// that could not be.
+// as unsupported, since the statement was read: ErrInvalidSyntax is for one that
+// could not be read.
 //
 // # What is dropped
 //

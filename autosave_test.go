@@ -2108,6 +2108,22 @@ func TestAutoSaveRefusesABlankOutputDirectory(t *testing.T) {
 	assert.Empty(t, entries, "a refused auto-save created something in the working directory")
 }
 
+// TestAutoSaveRefusesAnOutputPathThatIsNotADirectory pins that an auto-save
+// reports an occupied destination the way an export does, with ErrIOOperation:
+// the two write the same files and a caller reads one answer.
+func TestAutoSaveRefusesAnOutputPathThatIsNotADirectory(t *testing.T) {
+	t.Parallel()
+
+	src := autoSaveSource(t, "id,name\n1,alice\n")
+	occupied := filepath.Join(t.TempDir(), "occupied")
+	require.NoError(t, os.WriteFile(occupied, []byte("x"), 0o600))
+
+	_, err := buildForTest(t.Context(), NewBuilder().AddPath(src).EnableAutoSave(occupied))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrIOOperation)
+	assert.Contains(t, err.Error(), "not a directory")
+}
+
 // TestAutoSaveOverwritesOnTheEmptyString pins the sibling the refusal must not
 // take with it: EnableAutoSave("") is documented as overwriting the original
 // files, so the empty string stays a destination.

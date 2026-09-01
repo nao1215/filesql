@@ -642,12 +642,20 @@ func (p *Parser) parseDrop() (ast.Stmt, error) {
 			break
 		}
 	}
-	// CASCADE drops the objects that depend on this one and RESTRICT refuses
-	// when there are any. SQLite has neither word and behaves as RESTRICT does
-	// not: a view over a dropped table simply fails when it is next used.
-	p.eatWord("CASCADE")
-	p.eatWord("RESTRICT")
+	p.eatDropBehavior()
 	return stmt, nil
+}
+
+// eatDropBehavior reads the word that says what to do with what depends on a
+// dropped object. CASCADE drops those objects and RESTRICT refuses when there
+// are any; SQLite has neither word and behaves as RESTRICT does not, since a
+// view over a dropped table simply fails when it is next used. A dialect writes
+// one of them or neither, so one is read: "CASCADE RESTRICT" is a statement no
+// engine takes, and reading both would translate it rather than refuse it.
+func (p *Parser) eatDropBehavior() {
+	if !p.eatWord("CASCADE") {
+		p.eatWord("RESTRICT")
+	}
 }
 
 // parseAlter reads an ALTER TABLE, restricted to the four changes SQLite can
@@ -738,8 +746,7 @@ func (p *Parser) parseAlter() (ast.Stmt, error) {
 		}
 		// CASCADE and RESTRICT are read and dropped here for the reason DROP
 		// TABLE reads them: SQLite has neither word.
-		p.eatWord("CASCADE")
-		p.eatWord("RESTRICT")
+		p.eatDropBehavior()
 		stmt.Kind, stmt.Name = ast.AlterDropColumn, name
 		return p.finishAlter(stmt)
 	case p.atAnyWord("MODIFY", "CHANGE", "ALTER"):

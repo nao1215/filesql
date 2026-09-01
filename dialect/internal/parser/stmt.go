@@ -462,8 +462,8 @@ func (p *Parser) parseTargetName(bareAlias bool) (*ast.TableName, error) {
 			return nil, err
 		}
 	}
-	if bareAlias && p.dialect == dialects.PostgreSQL {
-		p.eatOp("*")
+	if bareAlias {
+		p.eatInheritanceStar()
 	}
 	name := &ast.TableName{Parts: parts, Span: span}
 	if !bareAlias {

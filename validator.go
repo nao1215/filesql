@@ -113,11 +113,13 @@ func (v *validator) validateOutputDirectory(outputDir string) error {
 	// Check if directory already exists
 	if info, err := os.Stat(outputDir); err == nil {
 		if !info.IsDir() {
-			return fmt.Errorf("output path exists but is not a directory: %s", outputDir)
+			// The same condition an export reports, reported with the same
+			// sentinel, so a caller reads one answer whichever writes it.
+			return fmt.Errorf("%w: output path exists but is not a directory: %s", ErrIOOperation, outputDir)
 		}
 		return nil
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("failed to check output directory: %w", err)
+		return fmt.Errorf("%w: failed to check output directory: %w", ErrIOOperation, err)
 	}
 
 	// Directory doesn't exist, that's fine - it will be created later

@@ -933,6 +933,25 @@ func TestATableReferenceNamesTheTableTheCallerWrote(t *testing.T) {
 		}
 	})
 
+	t.Run("a name that stops in the middle is still refused", func(t *testing.T) {
+		t.Parallel()
+
+		// A star straight after a dot is a qualified name missing its last
+		// part, not the inheritance star, and reading it as one would answer
+		// from the schema the caller named.
+		for _, query := range []string{
+			"SELECT * FROM s.*",
+			"SELECT * FROM ONLY s.*",
+			"UPDATE s.* SET a = 1",
+			"DELETE FROM s.*",
+			"SELECT * FROM t * *",
+		} {
+			if _, err := Translate(PostgreSQL, query); !errors.Is(err, ErrInvalidSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrInvalidSyntax", PostgreSQL, query, err)
+			}
+		}
+	})
+
 	t.Run("a quoted name is still a name", func(t *testing.T) {
 		t.Parallel()
 
@@ -943,6 +962,11 @@ func TestATableReferenceNamesTheTableTheCallerWrote(t *testing.T) {
 			{`SELECT * FROM "only"`, `SELECT * FROM "only"`},
 			{`SELECT * FROM "only" AS x`, `SELECT * FROM "only" AS x`},
 			{`SELECT * FROM ONLY "only"`, `SELECT * FROM "only"`},
+			// A quoted identifier names a table whatever word it spells, so it
+			// follows ONLY as any other name does.
+			{`SELECT * FROM ONLY "from"`, `SELECT * FROM "from"`},
+			{`SELECT * FROM ONLY "select" AS x`, `SELECT * FROM "select" AS x`},
+			{`UPDATE ONLY "from" SET a = 1`, `UPDATE "from" SET a = 1`},
 		} {
 			got, err := Translate(PostgreSQL, tt.query)
 			if err != nil {
@@ -1056,6 +1080,8 @@ func TestAlterTableRefusesBySpellingWhatItCannotMake(t *testing.T) {
 			{"ALTER TABLE t DROP COLUMN a CASCADE", "ALTER TABLE t DROP COLUMN a"},
 			{"ALTER TABLE t DROP COLUMN a RESTRICT", "ALTER TABLE t DROP COLUMN a"},
 			{"ALTER TABLE t DROP a CASCADE", "ALTER TABLE t DROP COLUMN a"},
+			{"DROP TABLE t CASCADE", "DROP TABLE t"},
+			{"DROP TABLE t RESTRICT", "DROP TABLE t"},
 		} {
 			got, err := Translate(PostgreSQL, tt.query)
 			if err != nil {
@@ -1076,6 +1102,12 @@ func TestAlterTableRefusesBySpellingWhatItCannotMake(t *testing.T) {
 			"ALTER TABLE t ADD COLUMN",
 			"ALTER TABLE t DROP COLUMN",
 			"ALTER TABLE t RENAME COLUMN a TO",
+			// One word says what depends on the dropped thing, or neither
+			// does. Both together is a statement no engine takes.
+			"ALTER TABLE t DROP COLUMN a CASCADE RESTRICT",
+			"ALTER TABLE t DROP COLUMN a RESTRICT CASCADE",
+			"DROP TABLE t CASCADE RESTRICT",
+			"DROP TABLE t RESTRICT CASCADE",
 		} {
 			if _, err := Translate(PostgreSQL, query); !errors.Is(err, ErrInvalidSyntax) {
 				t.Errorf("Translate(%v, %q) error = %v, want ErrInvalidSyntax", PostgreSQL, query, err)
