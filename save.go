@@ -471,7 +471,7 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBase
 		return err
 	}
 	if len(tables) == 0 {
-		return fmt.Errorf("%w: no table for %s remains", ErrEmptyData, path)
+		return fmt.Errorf("%w: no table for %s remains", ErrTableNotFound, path)
 	}
 	// The sheets go back in a fixed order rather than whatever the catalog
 	// happens to list, so the same workbook saved twice is the same file.
@@ -522,7 +522,7 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBase
 					return nil, nil, fmt.Errorf("%w: failed to get columns for table %s: %w", ErrDatabaseOperation, tableName, err)
 				}
 				if len(columns) == 0 {
-					return nil, nil, fmt.Errorf("%w: table %s for %s no longer exists", ErrEmptyData, tableName, path)
+					return nil, nil, fmt.Errorf("%w: table %s for %s no longer exists", ErrTableNotFound, tableName, path)
 				}
 				query := fmt.Sprintf("SELECT %s FROM %s", dumpSelectList(columns, declTypes), quoteIdentifier(tableName)) //nolint:gosec // Table and column names are quoted
 				rows, err := db.QueryContext(context.Background(), query)
@@ -729,7 +729,7 @@ func overwriteTableAtPath(db *sql.DB, path, tableName string, options DumpOption
 		return fmt.Errorf("%w: failed to get columns for table %s: %w", ErrDatabaseOperation, tableName, err)
 	}
 	if len(columns) == 0 {
-		return fmt.Errorf("%w: table %s for %s no longer exists", ErrEmptyData, tableName, path)
+		return fmt.Errorf("%w: table %s for %s no longer exists", ErrTableNotFound, tableName, path)
 	}
 
 	query := fmt.Sprintf("SELECT %s FROM %s", dumpSelectList(columns, declTypes), quoteIdentifier(tableName)) //nolint:gosec // Table and column names are quoted

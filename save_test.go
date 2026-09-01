@@ -439,7 +439,7 @@ func TestOverwriteWorkbookAtPath_Failures(t *testing.T) {
 
 		err := overwriteWorkbookAtPath(db, filepath.Join(t.TempDir(), "book.xlsx"), "book", nil, NewDumpOptions())
 		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrEmptyData)
+		assert.ErrorIs(t, err, ErrTableNotFound)
 	})
 }
 
@@ -491,7 +491,7 @@ func TestOverwriteTableAtPath_Failures(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "data.csv")
 		err := overwriteTableAtPath(db, path, "data", NewDumpOptions())
 		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrEmptyData)
+		assert.ErrorIs(t, err, ErrTableNotFound)
 		assert.NoFileExists(t, path, "a refused save must not create the file it could not write")
 	})
 }
@@ -758,5 +758,71 @@ func TestOverwriteWorkbookRefusesTwoTablesForOneSheet(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { require.NoError(t, f.Close()) }()
 		assert.ElementsMatch(t, []string{"s", "orders"}, f.GetSheetList())
+	})
+}
+
+// TestSaveNamesAMissingTableAsMissing pins which sentinel a save carries when
+// the table a source was loaded from is gone. It is not an empty data source:
+// the source had records and the table was dropped, and a caller who reads
+// ErrEmptyData to mean "the file I named was empty" would take that branch for
+// a table they dropped themselves.
+func TestSaveNamesAMissingTableAsMissing(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a file whose table was dropped", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "a.csv")
+		require.NoError(t, os.WriteFile(path, []byte("n\nfirst\n"), 0o600))
+
+		ctx := context.Background()
+		db, err := NewBuilder().AddPath(path).EnableAutoSave("").Open(ctx)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `DROP TABLE a`)
+		require.NoError(t, err)
+
+		err = db.Close()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrTableNotFound)
+		assert.NotErrorIs(t, err, ErrEmptyData,
+			"a dropped table is not a source with no records; the two sentinels have to stay apart")
+		assert.Contains(t, err.Error(), "a", "the message still names the table")
+	})
+
+	t.Run("a workbook whose only table was dropped", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "book.xlsx")
+		f := excelize.NewFile()
+		require.NoError(t, f.SetSheetName("Sheet1", "data"))
+		require.NoError(t, f.SetCellValue("data", "A1", "n"))
+		require.NoError(t, f.SetCellValue("data", "A2", "first"))
+		require.NoError(t, f.SaveAs(path))
+		require.NoError(t, f.Close())
+
+		ctx := context.Background()
+		db, err := NewBuilder().AddPath(path).EnableAutoSave("").Open(ctx)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `DROP TABLE book_data`)
+		require.NoError(t, err)
+
+		err = db.Close()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrTableNotFound)
+		assert.NotErrorIs(t, err, ErrEmptyData)
+	})
+
+	t.Run("a file that really has no records still answers ErrEmptyData", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "empty.csv")
+		require.NoError(t, os.WriteFile(path, nil, 0o600))
+
+		_, err := Open(path)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrEmptyData)
 	})
 }

@@ -47,7 +47,9 @@ var (
 	// ErrNoFiles indicates no supported files were found.
 	ErrNoFiles = errors.New("filesql: no supported files found")
 
-	// ErrTableNotFound indicates the specified table does not exist.
+	// ErrTableNotFound indicates the specified table does not exist. A save
+	// returns it for a source whose table the session dropped or renamed, which
+	// is a table that is gone rather than a source with no records.
 	ErrTableNotFound = errors.New("filesql: table not found")
 
 	// ErrColumnMismatch indicates a record that does not fit the columns of its
