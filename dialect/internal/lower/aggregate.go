@@ -52,6 +52,9 @@ const (
 	aggVarPop     = "VAR_POP"
 	aggVarSamp    = "VAR_SAMP"
 	aggAnyValue   = "ANY_VALUE"
+	aggBitAnd     = "BIT_AND"
+	aggBitOr      = "BIT_OR"
+	aggBitXor     = "BIT_XOR"
 
 	sqliteMin       = "MIN"
 	sqliteMax       = "MAX"
@@ -81,9 +84,9 @@ var aggregateRules = map[dialects.Dialect]map[string]aggregateRule{ //nolint:goc
 		aggAnyValue:      {rename: sqliteMin},
 		"JSON_ARRAYAGG":  {rename: sqliteJSONArray},
 		"JSON_OBJECTAGG": {reject: objectAggReject},
-		"BIT_AND":        {reject: bitAggregateReject},
-		"BIT_OR":         {reject: bitAggregateReject},
-		"BIT_XOR":        {reject: bitAggregateReject},
+		aggBitAnd:        {reject: bitAggregateReject},
+		aggBitOr:         {reject: bitAggregateReject},
+		aggBitXor:        {reject: bitAggregateReject},
 		"STD":            {stat: true, root: true},
 		aggStddev:        {stat: true, root: true},
 		aggStddevPop:     {stat: true, root: true},
@@ -101,9 +104,10 @@ var aggregateRules = map[dialects.Dialect]map[string]aggregateRule{ //nolint:goc
 		"JSON_OBJECT_AGG":  {reject: objectAggReject},
 		"JSONB_OBJECT_AGG": {reject: objectAggReject},
 		"ARRAY_AGG":        {reject: arrayAggReject},
-		"BIT_AND":          {reject: bitAggregateReject},
-		"BIT_OR":           {reject: bitAggregateReject},
-		"BIT_XOR":          {reject: bitAggregateReject},
+		aggAnyValue:        {rename: sqliteMin},
+		aggBitAnd:          {reject: bitAggregateReject},
+		aggBitOr:           {reject: bitAggregateReject},
+		aggBitXor:          {reject: bitAggregateReject},
 		"REGR_SLOPE":       {reject: regressionReject},
 		"REGR_INTERCEPT":   {reject: regressionReject},
 		"REGR_R2":          {reject: regressionReject},
@@ -130,6 +134,9 @@ var aggregateRules = map[dialects.Dialect]map[string]aggregateRule{ //nolint:goc
 		"LOGICAL_AND":           {rename: sqliteMin},
 		"LOGICAL_OR":            {rename: sqliteMax},
 		aggAnyValue:             {rename: sqliteMin},
+		aggBitAnd:               {reject: bitAggregateReject},
+		aggBitOr:                {reject: bitAggregateReject},
+		aggBitXor:               {reject: bitAggregateReject},
 		"COUNTIF":               {countif: true},
 		"APPROX_COUNT_DISTINCT": {distinctCount: true},
 		"CORR":                  {pair: true, correlation: true},

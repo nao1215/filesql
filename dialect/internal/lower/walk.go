@@ -696,6 +696,9 @@ func (l *lowerer) insert(n *ast.InsertStmt) (ast.Stmt, error) {
 }
 
 func (l *lowerer) update(n *ast.UpdateStmt) (ast.Stmt, error) {
+	if err := rowLimitedWrite("UPDATE", n.OrderBy, n.Limit, n.Span); err != nil {
+		return nil, err
+	}
 	if err := l.assignments(n.Set); err != nil {
 		return nil, err
 	}
@@ -713,15 +716,13 @@ func (l *lowerer) update(n *ast.UpdateStmt) (ast.Stmt, error) {
 		}
 		n.Where = where
 	}
-	for i := range n.OrderBy {
-		if err := l.orderTerm(&n.OrderBy[i]); err != nil {
-			return nil, err
-		}
-	}
 	return n, l.selectItems(n.Returning)
 }
 
 func (l *lowerer) deleteStmt(n *ast.DeleteStmt) (ast.Stmt, error) {
+	if err := rowLimitedWrite("DELETE", n.OrderBy, n.Limit, n.Span); err != nil {
+		return nil, err
+	}
 	if len(n.Using) > 0 {
 		return nil, unsupported(n.Span,
 			"DELETE ... USING is not supported; write the other tables as a subquery in WHERE")
@@ -733,12 +734,40 @@ func (l *lowerer) deleteStmt(n *ast.DeleteStmt) (ast.Stmt, error) {
 		}
 		n.Where = where
 	}
-	for i := range n.OrderBy {
-		if err := l.orderTerm(&n.OrderBy[i]); err != nil {
-			return nil, err
-		}
-	}
 	return n, l.selectItems(n.Returning)
+}
+
+// rowLimitedWrite refuses an UPDATE or a DELETE that says which rows it touches
+// by order and count. SQLite takes ORDER BY and LIMIT on those statements only
+// in a build compiled with SQLITE_ENABLE_UPDATE_DELETE_LIMIT, and the build
+// behind this package is not one, so the statement can never run however it is
+// written. Passed through it reached the driver as a syntax error naming a
+// keyword that is valid where the caller wrote it, and the clause had been
+// reshaped on the way -- MySQL's "LIMIT 2, 1" rewritten into "LIMIT 1 OFFSET 2"
+// on a statement with nothing to run it.
+func rowLimitedWrite(statement string, order []ast.OrderTerm, limit *ast.LimitClause, span ast.Span) error {
+	var clause string
+	switch {
+	case len(order) > 0:
+		clause = "ORDER BY"
+		// The statement's own span is where UPDATE or DELETE stands, which is
+		// not where the refused clause is; a caller reading the message goes to
+		// the clause it names.
+		if at := order[0].Span; at != (ast.Span{}) {
+			span = at
+		}
+	case limit != nil:
+		clause = "LIMIT"
+		if at := limit.Span; at != (ast.Span{}) {
+			span = at
+		}
+	default:
+		return nil
+	}
+	return unsupported(span,
+		"%s on %s is not supported: SQLite takes it only in a build compiled with SQLITE_ENABLE_UPDATE_DELETE_LIMIT, "+
+			"and this one is not; name the rows in WHERE, with a subquery that orders and limits them if that is how they are chosen",
+		clause, statement)
 }
 
 func (l *lowerer) assignments(assigns []ast.Assignment) error {

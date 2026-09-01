@@ -82,6 +82,17 @@ func TestGoogleSQLTranslate(t *testing.T) {
 		{"G-10_raw_string", `SELECT r'a\nb'`, `SELECT 'a\nb'`},
 		{"G-10_byte_string", `SELECT b'AB'`, `SELECT x'4142'`},
 
+		// SUBSTR and SUBSTRING are two spellings of one function, so they lower
+		// to one helper. Naming the helper after the spelling gave the second
+		// one a name the runtime does not register.
+		{"G-24_substr", "SELECT SUBSTR(v, 1, 2) FROM t", `SELECT googlesql_substr(v, 1, 2) AS "SUBSTR(v, 1, 2)" FROM t`},
+		{"G-24_substring", "SELECT SUBSTRING(v, 1, 2) FROM t", `SELECT googlesql_substr(v, 1, 2) AS "SUBSTRING(v, 1, 2)" FROM t`},
+
+		// POSITION writes the needle first, and BigQuery's own spelling of the
+		// question is INSTR, which reads a value the way this dialect does.
+		{"G-24_position_in", "SELECT POSITION('a' IN v) FROM t", `SELECT googlesql_instr(v, 'a') AS "POSITION('a' IN v)" FROM t`},
+		{"G-24_instr", "SELECT INSTR(v, 'a') FROM t", `SELECT googlesql_instr(v, 'a') AS "INSTR(v, 'a')" FROM t`},
+
 		{"double_quoted_string", `SELECT "hello"`, `SELECT 'hello'`},
 		{"nested_safe_cast_in_extract", "SELECT EXTRACT(YEAR FROM SAFE_CAST(s AS DATETIME))", "SELECT googlesql_date_part('year', googlesql_safe_cast(s, 'DATETIME')) AS \"EXTRACT(YEAR FROM SAFE_CAST(s AS DATETIME))\""},
 	}

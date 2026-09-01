@@ -59,10 +59,10 @@ func TestStatementsTranslate(t *testing.T) {
 			want:    "INSERT INTO t (a) VALUES (1) ON CONFLICT DO UPDATE SET a = 2",
 		},
 		{
-			name:    "update with order and limit",
+			name:    "update with a where",
 			dialect: dialect.MySQL,
-			input:   "UPDATE t SET a = a + 1 WHERE b = 2 ORDER BY a LIMIT 3",
-			want:    "UPDATE t SET a = a + 1 WHERE b = 2 ORDER BY a LIMIT 3",
+			input:   "UPDATE t SET a = a + 1 WHERE b = 2",
+			want:    "UPDATE t SET a = a + 1 WHERE b = 2",
 		},
 		{
 			name:    "delete",
@@ -491,8 +491,7 @@ func TestTheRemainingLoweringBranches(t *testing.T) {
 			`SELECT postgresql_date_add((postgresql_cast(d, 'date')), 1) AS "(d::date) + 1" FROM t`},
 		{dialect.PostgreSQL, "SELECT TIMESTAMP '2024-01-01' - DATE '2023-01-01'",
 			`SELECT postgresql_date_diff('2024-01-01', '2023-01-01') AS "TIMESTAMP '2024-01-01' - DATE '2023-01-01'"`},
-		{dialect.MySQL, "DELETE FROM t WHERE a = 1 ORDER BY a LIMIT 2",
-			"DELETE FROM t WHERE a = 1 ORDER BY a LIMIT 2"},
+		{dialect.MySQL, "DELETE FROM t WHERE a = 1", "DELETE FROM t WHERE a = 1"},
 		{dialect.PostgreSQL, "UPDATE t SET a = 1 FROM u WHERE t.b = u.b",
 			"UPDATE t SET a = 1 FROM u WHERE t.b = u.b"},
 		{dialect.PostgreSQL, "ALTER TABLE t RENAME COLUMN a TO b", "ALTER TABLE t RENAME COLUMN a TO b"},
