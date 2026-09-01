@@ -119,10 +119,10 @@ func LoadInto(ctx context.Context, db *sql.DB, paths ...string) error {
 //
 // A value the output format cannot hold is refused rather than rewritten, with
 // ErrUnsupportedFormat and the advice to dump the table as CSV: a tab or a line
-// break in TSV, those and a colon in an LTSV label, and in XLSX a control
-// character other than tab, line feed and carriage return, which is what an XML
-// 1.0 document has no way to spell, or a last column with no name, which a
-// worksheet does not store. A table with no rows is refused for LTSV alone,
+// break in TSV, those and a colon in an LTSV label, and in XLSX a character an
+// XML 1.0 document has no way to spell -- a control character other than tab,
+// line feed and carriage return, and the two noncharacters U+FFFE and U+FFFF --
+// or a last column with no name, which a worksheet does not store. A table with no rows is refused for LTSV alone,
 // which has no header to carry the columns and would leave an empty file --
 // and an empty file is not a table, so it blocks the load of every file beside
 // it. The other formats keep the columns of an empty table.

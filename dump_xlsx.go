@@ -416,24 +416,42 @@ func xlsxCellValue(text string, numeric bool) any {
 	return text
 }
 
-// xmlControlRune finds the first character in s that an XML 1.0 document has no
-// way to spell: a control character other than tab, line feed and carriage
-// return, which are the three XML admits. A worksheet is XML, and the library
-// writing one replaces each of the others with U+FFFD, so a cell holding a NUL
-// or an ASCII escape used to come back changed under a dump that reported
-// success. Refusing is what every other format here does with a value it cannot
-// hold. U+007F and the characters above it are left alone, because XML 1.0
-// admits them and the workbook carries them unchanged.
+// xmlUnspellableRune finds the first character in s that an XML 1.0 document
+// has no way to spell. Its Char production is #x9 | #xA | #xD | [#x20-#xD7FF] |
+// [#xE000-#xFFFD] | [#x10000-#x10FFFF], so what is left out and can reach here
+// is a control character other than tab, line feed and carriage return, and the
+// two noncharacters U+FFFE and U+FFFF that sit above the range ending at
+// U+FFFD. The surrogates are left out as well and cannot arrive: a value that
+// is not valid UTF-8 is refused before this.
+//
+// A worksheet is XML, and the library writing one replaces each of these with
+// U+FFFD, so a cell holding a NUL, an ASCII escape or a U+FFFF used to come
+// back changed under a dump that reported success. Refusing is what every other
+// format here does with a value it cannot hold. Everything else above U+007F is
+// left alone, U+FDD0 to U+FDEF and U+1FFFE upward included: those are
+// noncharacters too, and XML admits them, so the rule is the range and not the
+// word.
 //
 // This comes out if excelize grows a way to report or refuse the substitution
 // itself.
-// The scan is over bytes rather than runes: every character it looks for is
-// below 0x20, and no byte of a multi-byte UTF-8 sequence is, so a byte scan
-// answers the same question without decoding the string. This runs on every
-// cell of a workbook being written.
-func xmlControlRune(s string) (rune, bool) {
+//
+// The scan is over bytes rather than runes, since decoding is not needed to
+// answer it: the control characters are all below 0x20, no byte of a multi-byte
+// sequence is, and the two noncharacters are the three-byte sequences EF BF BE
+// and EF BF BF, which no other character's encoding contains. This runs on
+// every cell of a workbook being written.
+func xmlUnspellableRune(s string) (rune, bool) {
 	for i := range len(s) {
 		c := s[i]
+		if c == 0xef && i+2 < len(s) && s[i+1] == 0xbf {
+			switch s[i+2] {
+			case 0xbe:
+				return '\ufffe', true
+			case 0xbf:
+				return '\uffff', true
+			}
+			continue
+		}
 		if c >= 0x20 || c == '\t' || c == '\n' || c == '\r' {
 			continue
 		}
@@ -500,7 +518,7 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior, sty
 
 	// Set headers
 	for i, col := range columns {
-		if r, found := xmlControlRune(col); found {
+		if r, found := xmlUnspellableRune(col); found {
 			return xlsxExtent{}, xlsxUnrepresentableError(col, r)
 		}
 		if !utf8.ValidString(col) {
@@ -544,7 +562,7 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior, sty
 			// one table dumped twice does not disagree with itself; a numeric
 			// column's cell then goes in as the number that text spells.
 			cellValue := formatDumpValue(val)
-			if r, found := xmlControlRune(cellValue); found {
+			if r, found := xmlUnspellableRune(cellValue); found {
 				return xlsxExtent{}, xlsxUnrepresentableError(columns[i], r)
 			}
 			if !utf8.ValidString(cellValue) {
