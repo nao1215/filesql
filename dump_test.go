@@ -854,6 +854,24 @@ func TestDumpXLSXRefusesWhatXMLCannotHold(t *testing.T) {
 		assert.ErrorIs(t, err, ErrUnsupportedFormat)
 	})
 
+	t.Run("bytes that are not characters are refused as that, whatever they spell", func(t *testing.T) {
+		t.Parallel()
+
+		// The bytes of U+FFFF inside a value that is not UTF-8. Answering for
+		// the character would point at CSV, which refuses bytes that are not
+		// characters just as XLSX does; Parquet is the format that holds them.
+		db := openWithTable(t, "CREATE TABLE t (value TEXT)", "")
+		_, err := db.ExecContext(ctx, "INSERT INTO t VALUES (CAST(x'efbfbfff' AS TEXT))")
+		require.NoError(t, err)
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		err = DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		assert.Contains(t, err.Error(), "Parquet", "the advice is the one for bytes, not the one for a character")
+	})
+
 	t.Run("the characters XML admits above U+007F still round-trip", func(t *testing.T) {
 		t.Parallel()
 

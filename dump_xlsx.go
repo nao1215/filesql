@@ -518,13 +518,18 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior, sty
 
 	// Set headers
 	for i, col := range columns {
-		if r, found := xmlUnspellableRune(col); found {
-			return xlsxExtent{}, xlsxUnrepresentableError(col, r)
-		}
+		// Whether the name is characters at all is asked first. A string that
+		// is not UTF-8 can still carry the bytes of a character XML refuses,
+		// and answering for that character would send the caller to CSV, which
+		// refuses bytes that are not characters just as this does; Parquet is
+		// the format that holds them.
 		if !utf8.ValidString(col) {
 			return xlsxExtent{}, fmt.Errorf(
 				"%w: XLSX holds characters rather than bytes, and the name of column %d is not valid UTF-8; dump this table as Parquet instead",
 				ErrUnsupportedFormat, i+1)
+		}
+		if r, found := xmlUnspellableRune(col); found {
+			return xlsxExtent{}, xlsxUnrepresentableError(col, r)
 		}
 		if unchangedXLSXCell(before, headerRow, i+1, col) {
 			continue
@@ -562,11 +567,11 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior, sty
 			// one table dumped twice does not disagree with itself; a numeric
 			// column's cell then goes in as the number that text spells.
 			cellValue := formatDumpValue(val)
-			if r, found := xmlUnspellableRune(cellValue); found {
-				return xlsxExtent{}, xlsxUnrepresentableError(columns[i], r)
-			}
 			if !utf8.ValidString(cellValue) {
 				return xlsxExtent{}, xlsxNotUTF8Error(columns[i])
+			}
+			if r, found := xmlUnspellableRune(cellValue); found {
+				return xlsxExtent{}, xlsxUnrepresentableError(columns[i], r)
 			}
 			if unchangedXLSXCell(before, rowIndex, i+1, cellValue) {
 				continue
