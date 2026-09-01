@@ -65,12 +65,13 @@ func writeXLSXWorkbookOnto(w io.Writer, base *reader.Workbook, sheets []xlsxShee
 		_ = f.Close() // Ignore close error
 	}()
 
+	var styles xlsxStyles
 	for _, sheet := range sheets {
 		had, err := xlsxSheetBefore(base, sheet.name)
 		if err != nil {
 			return err
 		}
-		written, err := writeXLSXSheet(f, sheet, had)
+		written, err := writeXLSXSheet(f, sheet, had, &styles)
 		if err != nil {
 			return err
 		}
@@ -285,23 +286,115 @@ func trimXLSXSheet(f *excelize.File, sheetName string, had xlsxExtent, wrote xls
 	return nil
 }
 
-// numericColumns reports, per column, whether SQLite declares it a number. A
-// column this package inferred as text is not one, whatever its values spell.
-// A read that cannot answer leaves every column text, which is what every cell
+// xlsxNumberKind is how a column's cells are written into a sheet.
+type xlsxNumberKind int
+
+const (
+	// xlsxText is a column SQLite does not declare a number, whatever its
+	// values spell.
+	xlsxText xlsxNumberKind = iota
+	// xlsxWholeNumber is an INTEGER column, written as an integer.
+	xlsxWholeNumber
+	// xlsxDecimalNumber is a REAL column, written as a number that keeps its
+	// decimal point so a load reads the column back as REAL.
+	xlsxDecimalNumber
+)
+
+// numericColumns reports, per column, how its cells are written. A column this
+// package inferred as text is written as text, whatever its values spell. A
+// read that cannot answer leaves every column text, which is what every cell
 // was written as before this.
-func numericColumns(rows *sql.Rows) []bool {
+func numericColumns(rows *sql.Rows) []xlsxNumberKind {
 	types, err := rows.ColumnTypes()
 	if err != nil {
 		return nil
 	}
-	numeric := make([]bool, len(types))
+	kinds := make([]xlsxNumberKind, len(types))
 	for i, t := range types {
 		switch strings.ToUpper(t.DatabaseTypeName()) {
-		case sqlTypeInteger, sqlTypeReal:
-			numeric[i] = true
+		case sqlTypeInteger:
+			kinds[i] = xlsxWholeNumber
+		case sqlTypeReal:
+			kinds[i] = xlsxDecimalNumber
 		}
 	}
-	return numeric
+	return kinds
+}
+
+// xlsxStyles is the styles a write defines, kept across the sheets of one
+// workbook so each is defined once.
+type xlsxStyles struct {
+	// decimal is the style a REAL column's cells wear, or 0 before one is asked
+	// for. It is what makes the load read the number the cell stores rather
+	// than the one a General cell draws.
+	decimal int
+}
+
+// xlsxDecimalFormat draws at least one digit after the point and up to ten
+// more, so a REAL cell looks like the number it holds. What it draws matters to
+// a reader; what a load reads is the number the cell stores, which this format
+// being present is what asks for.
+const xlsxDecimalFormat = "0.0##########"
+
+// decimalStyle returns the style a REAL cell wears, defining it on first use.
+func (s *xlsxStyles) decimalStyle(f *excelize.File) (int, error) {
+	if s.decimal != 0 {
+		return s.decimal, nil
+	}
+	format := xlsxDecimalFormat
+	id, err := f.NewStyle(&excelize.Style{CustomNumFmt: &format})
+	if err != nil {
+		return 0, fmt.Errorf("failed to define the number format of a decimal column: %w", err)
+	}
+	s.decimal = id
+	return id, nil
+}
+
+// writeXLSXCell writes one cell as what its column is.
+//
+// A REAL column takes both halves of one rule. Its cells are written with the
+// decimal point the rendered text carries, because SetCellValue on a float64
+// stores the shortest form and a whole number's shortest form has no point, so
+// 100.0 was stored as 100 and the column loaded back as INTEGER -- which turns
+// the arithmetic over it into integer division. And its cells wear a number
+// format, because a load reads the number a cell stores rather than the one it
+// draws only for a workbook that formats numbers; without one, a General cell
+// draws 100.0 as 100 and the drawing is what is read.
+func writeXLSXCell(f *excelize.File, styles *xlsxStyles, sheet, cell, text string, kind xlsxNumberKind) error {
+	if kind == xlsxDecimalNumber {
+		if value, ok := numericCellValue(text); ok {
+			style, err := styles.decimalStyle(f)
+			if err != nil {
+				return err
+			}
+			if err := f.SetCellFloat(sheet, cell, value, xlsxDecimalPlaces(text), 64); err != nil {
+				return fmt.Errorf("failed to set cell value at %s: %w", cell, err)
+			}
+			if err := f.SetCellStyle(sheet, cell, cell, style); err != nil {
+				return fmt.Errorf("failed to set the number format at %s: %w", cell, err)
+			}
+			return nil
+		}
+	}
+	if err := f.SetCellValue(sheet, cell, xlsxCellValue(text, kind == xlsxWholeNumber || kind == xlsxDecimalNumber)); err != nil {
+		return fmt.Errorf("failed to set cell value at %s: %w", cell, err)
+	}
+	return nil
+}
+
+// xlsxDecimalPlaces is how many digits a REAL cell keeps after the point: the
+// count the rendered text carries, so a value is stored as it was rendered.
+// A rendering that carries an exponent has no count to take, and one is the
+// least that keeps the column REAL; SetCellFloat writes the exact binary value
+// there, which reads back as the same double.
+func xlsxDecimalPlaces(text string) int {
+	if strings.ContainsAny(text, "eE") {
+		return 1
+	}
+	if i := strings.IndexByte(text, '.'); i >= 0 {
+		return len(text) - i - 1
+	}
+	return 1
 }
 
 // xlsxCellValue is what a cell is written with: the number a numeric column's
@@ -368,7 +461,7 @@ func xlsxNotUTF8Error(what string, position int) error {
 
 // writeXLSXSheet adds one sheet to f and fills it. A cell whose value matches
 // what before already holds is left alone.
-func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior) (xlsxExtent, error) {
+func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior, styles *xlsxStyles) (xlsxExtent, error) {
 	before := prior.values
 	columns, rows, err := sheet.open()
 	if err != nil {
@@ -426,7 +519,7 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior) (xl
 		}
 	}
 
-	numeric := numericColumns(rows)
+	kinds := numericColumns(rows)
 
 	// Prepare for scanning rows
 	values := make([]interface{}, len(columns))
@@ -463,8 +556,12 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior) (xl
 			if err != nil {
 				return xlsxExtent{}, fmt.Errorf("failed to generate cell name for column %d, row %d: %w", i+1, rowIndex, err)
 			}
-			if err := f.SetCellValue(sheet.name, cell, xlsxCellValue(cellValue, i < len(numeric) && numeric[i])); err != nil {
-				return xlsxExtent{}, fmt.Errorf("failed to set cell value at %s: %w", cell, err)
+			kind := xlsxText
+			if i < len(kinds) {
+				kind = kinds[i]
+			}
+			if err := writeXLSXCell(f, styles, sheet.name, cell, cellValue, kind); err != nil {
+				return xlsxExtent{}, err
 			}
 		}
 	}

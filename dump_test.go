@@ -2154,6 +2154,99 @@ func TestDumpRefusesAValueThatIsNotUTF8(t *testing.T) {
 	})
 }
 
+// TestADumpKeepsAColumnsType covers what the arithmetic over a column depends
+// on. A REAL column of whole numbers came back from its own XLSX dump as an
+// INTEGER column, so a price column divided as integers -- price/3 answered 33
+// where it had answered 33.333333333333336 -- and a REAL too large for fifteen
+// digits came back as TEXT. Every other format kept the column, which is what
+// makes this a defect rather than a limit of the format.
+func TestADumpKeepsAColumnsType(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	formats := []struct {
+		format OutputFormat
+		ext    string
+	}{
+		{OutputFormatCSV, ".csv"},
+		{OutputFormatTSV, ".tsv"},
+		{OutputFormatLTSV, ".ltsv"},
+		{OutputFormatXLSX, ".xlsx"},
+		{OutputFormatParquet, ".parquet"},
+	}
+
+	for _, tt := range []struct {
+		name   string
+		body   string
+		column string
+		want   string
+	}{
+		{"whole numbers in a REAL column", "price\n100.00\n250.00\n", "price", "real"},
+		{"a REAL past fifteen digits", "big\n123456789012345678901.0\n", "big", "real"},
+		{"a REAL with a fraction", "rate\n1234567.5678\n", "rate", "real"},
+		{"an INTEGER column", "id\n100\n250\n", "id", "integer"},
+		{"an identifier past fifteen digits", "id\n11040320260000000\n", "id", "integer"},
+		{"a TEXT column", "code\n007\n042\n", "code", "text"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, "t.csv")
+			require.NoError(t, os.WriteFile(source, []byte(tt.body), 0o600))
+
+			db, err := OpenContext(ctx, source)
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+
+			var before string
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT typeof("`+tt.column+`") FROM t LIMIT 1`).Scan(&before))
+			require.Equal(t, tt.want, before, "the table has to start as the type this is about")
+
+			for _, f := range formats {
+				// Not parallel: the database this dumps from is closed when
+				// this subtest returns, and a parallel child would outlive it.
+				t.Run(f.format.String(), func(t *testing.T) {
+					out := filepath.Join(t.TempDir(), "out")
+					require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(f.format)))
+
+					back, err := OpenContext(ctx, filepath.Join(out, "t"+f.ext))
+					require.NoError(t, err)
+					defer func() { _ = back.Close() }()
+
+					var after string
+					require.NoError(t, back.QueryRowContext(ctx, `SELECT typeof("`+tt.column+`") FROM t LIMIT 1`).Scan(&after))
+					assert.Equal(t, tt.want, after, "a dump keeps the type the column had")
+				})
+			}
+		})
+	}
+
+	t.Run("a REAL column still divides as one", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "t.csv")
+		require.NoError(t, os.WriteFile(source, []byte("price\n100.00\n"), 0o600))
+
+		db, err := OpenContext(ctx, source)
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		out := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+
+		back, err := OpenContext(ctx, filepath.Join(out, "t.xlsx"))
+		require.NoError(t, err)
+		defer func() { _ = back.Close() }()
+
+		var third float64
+		require.NoError(t, back.QueryRowContext(ctx, `SELECT price/3 FROM t`).Scan(&third))
+		assert.InDelta(t, 33.333333333333336, third, 1e-9, "an INTEGER column would answer 33")
+	})
+}
+
 // TestDumpLTSVRefusesATableWithNoRows holds the rule that a dump is a file this
 // package can read again, on the one format that cannot say what a table with
 // no rows is. LTSV carries its labels on every record rather than in a header,

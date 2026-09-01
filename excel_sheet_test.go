@@ -1886,11 +1886,12 @@ func TestSaveKeepsACellsStorageType(t *testing.T) {
 		require.NoError(t, autoSaveOverwrite(t, []string{path},
 			"UPDATE book_Sheet1 SET v = 7 WHERE v = 2.0"))
 
-		// The cell holds the number the caller set, stored the way the cell
-		// beside it is: a spreadsheet sums a column whose one edited cell is
-		// text one row short, and this package's own spelling of a REAL, "7.0",
-		// is what that text would have been.
-		assert.Equal(t, []string{"A2=0/1.5", "A3=0/7"}, storedCells(t, path, 2))
+		// The cell holds the number the caller set, stored as a number rather
+		// than as text: a spreadsheet sums a column whose one edited cell is
+		// text one row short. It is stored with the decimal point this
+		// package's own spelling of a REAL carries, "7.0", which is what makes
+		// a load read the column back as REAL rather than as INTEGER.
+		assert.Equal(t, []string{"A2=0/1.5", "A3=0/7.0"}, storedCells(t, path, 2))
 	})
 }
 
