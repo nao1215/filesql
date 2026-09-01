@@ -549,6 +549,89 @@ func TestATranslatedQueryIsOneSQLiteCanPrepare(t *testing.T) {
 	}
 }
 
+// TestTranslateRefusesACallTheRenameCannotTake holds the other half of the
+// property above. A lowering renames a call onto a function that takes a
+// different number of arguments, and the count has to be answered here, where
+// the caller's own spelling is at hand: reaching SQLite means failing under a
+// name the caller never wrote, so they cannot tell a mistake in their query
+// from a defect in the translation.
+//
+// The names below are the ones a rename lands on that are SQLite's own rather
+// than a helper this package registers, which is what put them outside the
+// check that already covers the helpers.
+func TestTranslateRefusesACallTheRenameCannotTake(t *testing.T) {
+	t.Parallel()
+
+	refused := []struct {
+		dialect Dialect
+		query   string
+		names   string
+	}{
+		{PostgreSQL, "SELECT BTRIM(b, ' ', ' ') FROM t", "BTRIM"},
+		{PostgreSQL, "SELECT BTRIM() FROM t", "BTRIM"},
+		{GoogleSQL, "SELECT BYTE_LENGTH(b, b) FROM t", "BYTE_LENGTH"},
+		{MySQL, "SELECT LENGTH(b, b) FROM t", "LENGTH"},
+		{MySQL, "SELECT OCTET_LENGTH(b, b, b) FROM t", "OCTET_LENGTH"},
+		{PostgreSQL, "SELECT JSONB_ARRAY_LENGTH(b, b, b) FROM t", "JSONB_ARRAY_LENGTH"},
+		{MySQL, "SELECT ANY_VALUE(*) FROM t", "ANY_VALUE"},
+		{PostgreSQL, "SELECT BOOL_AND(*) FROM t", "BOOL_AND"},
+		{PostgreSQL, "SELECT BOOL_OR(*) FROM t", "BOOL_OR"},
+		{PostgreSQL, "SELECT EVERY(*) FROM t", "EVERY"},
+		{GoogleSQL, "SELECT LOGICAL_AND(*) FROM t", "LOGICAL_AND"},
+		{GoogleSQL, "SELECT LOGICAL_OR(*) FROM t", "LOGICAL_OR"},
+		{PostgreSQL, "SELECT JSON_AGG(a, c) FROM t", "JSON_AGG"},
+		{PostgreSQL, "SELECT JSONB_AGG(a, c) FROM t", "JSONB_AGG"},
+		{MySQL, "SELECT JSON_ARRAYAGG(a, c) FROM t", "JSON_ARRAYAGG"},
+		{GoogleSQL, "SELECT APPROX_COUNT_DISTINCT(a, c) FROM t", "APPROX_COUNT_DISTINCT"},
+	}
+	for _, tt := range refused {
+		t.Run(tt.dialect.DisplayName()+" "+tt.query, func(t *testing.T) {
+			t.Parallel()
+
+			out, err := Translate(tt.dialect, tt.query)
+			if err == nil {
+				t.Fatalf("Translate(%v, %q) = %q, want a refusal", tt.dialect, tt.query, out)
+			}
+			if !errors.Is(err, ErrUnsupportedSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.query, err)
+			}
+			if !strings.Contains(err.Error(), tt.names) {
+				t.Errorf("Translate(%v, %q) error = %v, which does not name %s",
+					tt.dialect, tt.query, err, tt.names)
+			}
+		})
+	}
+
+	// The ordinary calls beside them. A fix that refuses by counting is the
+	// kind that refuses one call too many.
+	accepted := []struct {
+		dialect Dialect
+		query   string
+	}{
+		{PostgreSQL, "SELECT BTRIM(b) FROM t"},
+		{PostgreSQL, "SELECT BTRIM(b, ' ') FROM t"},
+		{GoogleSQL, "SELECT BYTE_LENGTH(b) FROM t"},
+		{MySQL, "SELECT LENGTH(b) FROM t"},
+		{MySQL, "SELECT OCTET_LENGTH(b) FROM t"},
+		{PostgreSQL, "SELECT JSONB_ARRAY_LENGTH(b) FROM t"},
+		{MySQL, "SELECT ANY_VALUE(a) FROM t"},
+		{PostgreSQL, "SELECT BOOL_AND(a) FROM t"},
+		{GoogleSQL, "SELECT LOGICAL_OR(a) FROM t"},
+		{PostgreSQL, "SELECT JSON_AGG(a) FROM t"},
+		{MySQL, "SELECT JSON_ARRAYAGG(a) FROM t"},
+		{GoogleSQL, "SELECT APPROX_COUNT_DISTINCT(a) FROM t"},
+	}
+	for _, tt := range accepted {
+		t.Run("accepted "+tt.dialect.DisplayName()+" "+tt.query, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := Translate(tt.dialect, tt.query); err != nil {
+				t.Errorf("Translate(%v, %q): %v", tt.dialect, tt.query, err)
+			}
+		})
+	}
+}
+
 // TestTranslateRefusesTextSQLiteCannotSpell pins the refusal for a NUL byte.
 // The MySQL and GoogleSQL escape \0 decodes to one, and SQLite reads a
 // statement up to the first NUL, so the byte cannot be written into SQL at all.

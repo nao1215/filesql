@@ -24,12 +24,12 @@ func rename(call *ast.FuncCall, name string) ast.Expr {
 	return call
 }
 
-// plural spells a count with its noun, in the number the count calls for.
-func plural(n int, noun string) string {
+// plural spells an argument count, in the number the count calls for.
+func plural(n int) string {
 	if n == 1 {
-		return "1 " + noun
+		return "1 argument"
 	}
-	return strconv.Itoa(n) + " " + noun + "s"
+	return strconv.Itoa(n) + " arguments"
 }
 
 // helper builds a call to a runtime helper.

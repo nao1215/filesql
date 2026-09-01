@@ -167,6 +167,12 @@ func (l *lowerer) aggregate(call *ast.FuncCall) (ast.Expr, bool, error) {
 		return nil, false, unsupported(call.Span, "%s is not supported: %s", name, rule.reject)
 	}
 	if rule.rename != "" {
+		// Every rename here lands on an aggregate of one argument, and SQLite
+		// answers for the count under the name it was renamed to. Counting
+		// first is what keeps the refusal about the aggregate the caller wrote.
+		if err := aggregateTakes(call, name, 1); err != nil {
+			return nil, false, err
+		}
 		return rename(call, rule.rename), true, nil
 	}
 	// A rule that expands into an expression rather than a rename cannot carry
@@ -194,26 +200,46 @@ func (l *lowerer) aggregate(call *ast.FuncCall) (ast.Expr, bool, error) {
 	}
 	switch {
 	case rule.distinctCount:
+		if err := aggregateTakes(call, name, 1); err != nil {
+			return nil, false, err
+		}
 		call.Distinct = true
 		return rename(call, "COUNT"), true, nil
 	case rule.countif:
-		if len(call.Args) != 1 {
-			return nil, false, unsupported(call.Span, "COUNTIF takes one argument")
+		if err := aggregateTakes(call, name, 1); err != nil {
+			return nil, false, err
 		}
 		return countifExpr(call.Args[0], call.Span), true, nil
 	case rule.stat:
-		if len(call.Args) != 1 {
-			return nil, false, unsupported(call.Span, "%s takes one argument", name)
+		if err := aggregateTakes(call, name, 1); err != nil {
+			return nil, false, err
 		}
 		return varianceExpr(call.Args[0], rule.sample, rule.root, call.Span), true, nil
 	case rule.pair:
-		if len(call.Args) != 2 {
-			return nil, false, unsupported(call.Span, "this aggregate takes two arguments")
+		if err := aggregateTakes(call, name, 2); err != nil {
+			return nil, false, err
 		}
 		return pairStatExpr(call.Args[0], call.Args[1], rule.sample, rule.correlation, call.Span), true, nil
 	default:
 		return nil, false, unsupported(call.Span, "no rewrite for this aggregate")
 	}
+}
+
+// aggregateTakes refuses a call of the wrong length, in the words a scalar call
+// of the wrong length is refused in: the aggregate the caller wrote, what it
+// takes, and what they gave it. A query can name several aggregates in one
+// select list, so a message that does not say which one leaves them to work it
+// out.
+func aggregateTakes(call *ast.FuncCall, name string, want int) error {
+	if call.Star {
+		return unsupported(call.Span, "%s takes %s and the call has a star",
+			name, plural(want))
+	}
+	if len(call.Args) == want {
+		return nil
+	}
+	return unsupported(call.Span, "%s takes %s and the call has %d",
+		name, plural(want), len(call.Args))
 }
 
 // The expansions below build trees rather than SQL text, and reuse the argument

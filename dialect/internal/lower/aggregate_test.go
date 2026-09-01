@@ -99,6 +99,67 @@ func TestAggregateTranslation(t *testing.T) {
 // TestSampleEstimatorOverOneRow keeps the sample estimators NULL for a single
 // value, which is what the source dialects return and what dividing by
 // COUNT - 1 produces.
+// TestAggregateArityRefusalNamesTheAggregate holds every refusal here to the
+// standard the rest of the table sets: a message says which aggregate it is
+// about. A query can name several in one select list, and one sentence that
+// fits all of them leaves the caller to work out which.
+func TestAggregateArityRefusalNamesTheAggregate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		dialect dialect.Dialect
+		query   string
+		names   string
+	}{
+		{"postgresql corr", dialect.PostgreSQL, "SELECT CORR(a) FROM t", "CORR"},
+		{"postgresql covar_pop", dialect.PostgreSQL, "SELECT COVAR_POP(a) FROM t", "COVAR_POP"},
+		{"postgresql covar_samp", dialect.PostgreSQL, "SELECT COVAR_SAMP(a) FROM t", "COVAR_SAMP"},
+		{"googlesql corr", dialect.GoogleSQL, "SELECT CORR(a) FROM t", "CORR"},
+		{"googlesql covar_pop", dialect.GoogleSQL, "SELECT COVAR_POP(a) FROM t", "COVAR_POP"},
+		{"googlesql covar_samp", dialect.GoogleSQL, "SELECT COVAR_SAMP(a) FROM t", "COVAR_SAMP"},
+		{"googlesql countif", dialect.GoogleSQL, "SELECT COUNTIF(a, a) FROM t", "COUNTIF"},
+		{"mysql stddev", dialect.MySQL, "SELECT STDDEV(a, a) FROM t", "STDDEV"},
+		// The one that says which of two aggregates is wrong.
+		{"the wrong one of two", dialect.PostgreSQL, "SELECT CORR(a, c), COVAR_SAMP(a) FROM t", "COVAR_SAMP"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := dialect.Translate(tt.dialect, tt.query)
+			if err == nil {
+				t.Fatalf("Translate(%v, %q) = nil error, want a refusal", tt.dialect, tt.query)
+			}
+			if !errors.Is(err, dialect.ErrUnsupportedSyntax) {
+				t.Errorf("error = %v, want ErrUnsupportedSyntax", err)
+			}
+			if !strings.Contains(err.Error(), tt.names) {
+				t.Errorf("error = %v, which does not name %s", err, tt.names)
+			}
+		})
+	}
+
+	// The calls that must keep translating.
+	for _, tt := range []struct {
+		dialect dialect.Dialect
+		query   string
+	}{
+		{dialect.PostgreSQL, "SELECT CORR(a, c) FROM t"},
+		{dialect.PostgreSQL, "SELECT COVAR_POP(a, c) FROM t"},
+		{dialect.GoogleSQL, "SELECT COUNTIF(a) FROM t"},
+		{dialect.MySQL, "SELECT STDDEV(a) FROM t"},
+	} {
+		t.Run("accepted "+tt.query, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := dialect.Translate(tt.dialect, tt.query); err != nil {
+				t.Errorf("Translate(%v, %q): %v", tt.dialect, tt.query, err)
+			}
+		})
+	}
+}
+
 func TestSampleEstimatorOverOneRow(t *testing.T) {
 	// Not parallel: castDB touches the process-global driver registration.
 	db := castDB(t)

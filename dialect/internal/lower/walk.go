@@ -654,8 +654,8 @@ func checkHelperArity(e ast.Expr, written string, span ast.Span) error {
 	if helperTakesArgumentCount(name, len(call.Args)) {
 		return nil
 	}
-	want, _ := HelperArity(name)
-	return unsupported(span, "%s takes %s and the call has %d", written, plural(want, "argument"), len(call.Args))
+	return unsupported(span, "%s takes %s and the call has %d",
+		written, arityDescription(name), len(call.Args))
 }
 
 func (l *lowerer) insert(n *ast.InsertStmt) (ast.Stmt, error) {
