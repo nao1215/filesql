@@ -630,3 +630,35 @@ func BenchmarkProcessUniqueCSV(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkTrimTags benchmarks the three trimming tags over the value shapes a
+// column holds: padded on both sides, padded on one, and not padded at all.
+func BenchmarkTrimTags(b *testing.B) {
+	values := []string{
+		"  hello world  ",
+		"\thello world",
+		"hello world\t",
+		"hello world",
+		"　hello world ",
+	}
+
+	for _, tc := range []struct {
+		name string
+		prep preprocessor
+	}{
+		{"trim", newTrimPreprocessor()},
+		{"ltrim", newLtrimPreprocessor()},
+		{"rtrim", newRtrimPreprocessor()},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ResetTimer()
+			b.ReportAllocs()
+
+			for range b.N {
+				for _, v := range values {
+					_ = tc.prep.Process(v)
+				}
+			}
+		})
+	}
+}

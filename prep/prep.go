@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
 
@@ -53,9 +54,11 @@ func newLtrimPreprocessor() *ltrimPreprocessor {
 	return &ltrimPreprocessor{}
 }
 
-// Process removes leading whitespace
+// Process removes leading whitespace, which is what trim calls whitespace: the
+// one sentence documenting the three tags is true of all of them only if they
+// agree about which characters are padding.
 func (p *ltrimPreprocessor) Process(value string) string {
-	return strings.TrimLeft(value, " \t\n\r")
+	return strings.TrimLeftFunc(value, unicode.IsSpace)
 }
 
 // Name returns the preprocessor name
@@ -71,9 +74,9 @@ func newRtrimPreprocessor() *rtrimPreprocessor {
 	return &rtrimPreprocessor{}
 }
 
-// Process removes trailing whitespace
+// Process removes trailing whitespace, judged the way ltrim judges it.
 func (p *rtrimPreprocessor) Process(value string) string {
-	return strings.TrimRight(value, " \t\n\r")
+	return strings.TrimRightFunc(value, unicode.IsSpace)
 }
 
 // Name returns the preprocessor name
@@ -307,6 +310,16 @@ func (p *stripNewlinePreprocessor) Name() string {
 }
 
 // collapseSpacePreprocessor collapses multiple spaces into one
+// asciiSpace answers for the ASCII half of unicode.IsSpace with one load, which
+// is how strings.TrimSpace reaches the same set. A cell is mostly ASCII and
+// unicode.IsSpace does not inline, so the table is what keeps collapsing a run
+// as cheap as it was when it knew four characters.
+//
+//nolint:gochecknoglobals // constant-like lookup table
+var asciiSpace = [utf8.RuneSelf]bool{
+	'\t': true, '\n': true, '\v': true, '\f': true, '\r': true, ' ': true,
+}
+
 type collapseSpacePreprocessor struct{}
 
 // newCollapseSpacePreprocessor creates a new collapse space preprocessor
@@ -314,7 +327,12 @@ func newCollapseSpacePreprocessor() *collapseSpacePreprocessor {
 	return &collapseSpacePreprocessor{}
 }
 
-// Process collapses multiple whitespace characters into a single space.
+// Process collapses each run of whitespace into a single space. Whitespace is
+// what trim calls whitespace, so a no-break space carried in from a web page and
+// the U+3000 a Japanese file pads with are runs like any other. The run is
+// written back as U+0020 whatever it was written with, which is what collapsing
+// to one space means.
+//
 // This implementation avoids regexp for better performance.
 func (p *collapseSpacePreprocessor) Process(value string) string {
 	if value == "" {
@@ -326,7 +344,12 @@ func (p *collapseSpacePreprocessor) Process(value string) string {
 
 	inSpace := false
 	for _, r := range value {
-		isWhitespace := r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		var isWhitespace bool
+		if r < utf8.RuneSelf {
+			isWhitespace = asciiSpace[r]
+		} else {
+			isWhitespace = unicode.IsSpace(r)
+		}
 		if isWhitespace {
 			if !inSpace {
 				result.WriteByte(' ')
