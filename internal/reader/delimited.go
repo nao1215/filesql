@@ -218,8 +218,20 @@ func readDelimited(src io.Reader, format Format, opts Options, emit Emit) (Resul
 // header of one empty column and refused every row after it, where the same
 // bytes as a CSV loaded.
 //
+// A line of whitespace is passed over for the same reason, and is the same
+// thing to a caller: a hand-edited export or a rotated log leaves one as
+// readily as an empty line, and neither carries anything a column can be named
+// after. Taking it as the header named the columns after it -- a file of
+// several columns then refused every row, and a file of one column took its
+// real header as data with no error and nothing skipped. It is also the
+// definition of blank this package reads a cell by, where a value strings.
+// TrimSpace empties is a blank cell.
+//
 // A line holding empty fields is a different thing and stays a header: ",," is
-// three columns that name themselves after their positions.
+// three columns that name themselves after their positions. That is why this
+// asks about a record of one field, which is what a line of whitespace is: a
+// comma or a tab on the line makes it more than one, and its fields are the
+// columns.
 func readHeaderRecord(records recordReader, format Format) ([]string, error) {
 	for {
 		record, err := records.Read()
@@ -229,11 +241,19 @@ func readHeaderRecord(records recordReader, format Format) ([]string, error) {
 			}
 			return nil, parseError(err, "failed to read %s header", format)
 		}
-		if len(record) == 1 && record[0] == "" {
+		if len(record) == 1 && blankLine(record[0]) {
 			continue
 		}
 		return record, nil
 	}
+}
+
+// blankLine reports whether a line carries nothing a column can be named after:
+// no characters, or none but whitespace. Whitespace is judged by category, as
+// strings.TrimSpace judges it, so an ideographic space and a no-break space
+// count alongside a plain one.
+func blankLine(line string) bool {
+	return strings.TrimSpace(line) == ""
 }
 
 // NameBlankColumns gives a name to every column whose header cell is empty.

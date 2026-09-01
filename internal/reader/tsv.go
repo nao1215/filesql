@@ -73,7 +73,11 @@ func (t *TSVReader) Read() ([]string, error) {
 		}
 
 		record := strings.Split(line, "\t")
-		if !t.read {
+		// The width comes from the first line that holds something. A line of
+		// whitespace is one field and is not a record the header search keeps,
+		// so letting it set the width made every blank line further down a
+		// record of the wrong shape in a file that reads perfectly well.
+		if !t.read && !blankLine(line) {
 			t.fields = len(record)
 			t.read = true
 		}

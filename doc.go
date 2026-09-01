@@ -449,9 +449,16 @@
 // A line with nothing on it is not a header: the columns are named by the first
 // line that holds something, so a file that begins with a blank line -- what a
 // hand-edited export or a rotated log leaves -- loads the same as one that does
-// not. A blank line in the middle of a file was already passed over, and a sheet
-// whose first row holds only empty cells is read the same way. A line holding
-// empty fields is a different thing and is a header of that many columns.
+// not. A line holding nothing but whitespace is the same thing to a caller and
+// is passed over as well, judged the way a blank cell is, by category, so an
+// ideographic space counts alongside a plain one. Only the search for the
+// header reads a line that way: one further down is a record of one field,
+// which the malformed-row policy decides on and SkippedRows reports. A blank
+// line in the middle of a file was already passed over, and a sheet whose first
+// row holds only empty cells is read the same way. A line holding empty fields
+// is a different thing and is a header of that many columns: a comma or a tab
+// on the line makes it more than one field, and its fields are the columns
+// whatever they hold.
 //
 // A header cell that is empty names nothing, so the column takes the name of its
 // position: "a,,c" loads as a, column_2 and c. The generated name is moved along

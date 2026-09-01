@@ -257,6 +257,30 @@ func TestParse_TSVRowShape(t *testing.T) {
 			headers: []string{"column_1", "column_2"},
 			records: [][]string{},
 		},
+		{
+			// A line of whitespace carries nothing to name a column after
+			// either, and it is what a hand-edited file leaves. Taken as the
+			// header it named one column after itself and made every row that
+			// followed the wrong width.
+			name:    "a line of whitespace before the header",
+			input:   "   \n1\t2\n",
+			headers: []string{"1", "2"},
+			records: [][]string{},
+		},
+		{
+			name:    "a line of whitespace before the header of a one-column file",
+			input:   "   \nv\n1\n",
+			headers: []string{"v"},
+			records: [][]string{{"1"}},
+		},
+		{
+			// The width comes from the header, so a blank line further down is
+			// still not a record of a file this wide.
+			name:    "a blank line after a header the whitespace line preceded",
+			input:   "   \na\tb\n1\t2\n\n3\t4\n",
+			headers: []string{"a", "b"},
+			records: [][]string{{"1", "2"}, {"3", "4"}},
+		},
 	}
 	for _, tt := range accepted {
 		t.Run(tt.name, func(t *testing.T) {
