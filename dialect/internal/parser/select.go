@@ -269,7 +269,7 @@ func (p *Parser) parseGroupBy(core *ast.SelectCore) error {
 	// of expressions produces one set either way, and the lists that produce
 	// more -- GROUPING SETS, ROLLUP, CUBE -- are refused below, so the word is
 	// read and dropped.
-	if p.dialect == dialects.PostgreSQL && p.atAnyWord("ALL", "DISTINCT") && p.namesSomething(1) {
+	if p.dialect == dialects.PostgreSQL && p.atAnyWord("ALL", "DISTINCT") {
 		p.pos++
 	}
 	switch {

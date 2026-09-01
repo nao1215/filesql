@@ -140,8 +140,8 @@ func (p *Parser) parseInsert(with *ast.WithClause) (ast.Stmt, error) {
 	// column's generated one. A table here has no identity column, so both
 	// spellings name the same thing this statement already does and are read
 	// and dropped.
-	if p.atWord("OVERRIDING") && (p.peek(1).IsWord("SYSTEM") || p.peek(1).IsWord("USER")) &&
-		p.peek(2).IsWord("VALUE") {
+	if p.dialect == dialects.PostgreSQL && p.atWord("OVERRIDING") &&
+		(p.peek(1).IsWord("SYSTEM") || p.peek(1).IsWord("USER")) && p.peek(2).IsWord("VALUE") {
 		p.pos += 3
 	}
 	if err := p.parseInsertSource(stmt); err != nil {

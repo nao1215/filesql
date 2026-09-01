@@ -1247,6 +1247,9 @@ func TestAReturningClauseIsReadInEverySpelling(t *testing.T) {
 		{GoogleSQL, "UPDATE t SET a = 1 WHERE b = 2 THEN RETURN *", "UPDATE t SET a = 1 WHERE b = 2 RETURNING *"},
 		{PostgreSQL, "INSERT INTO t (a) OVERRIDING SYSTEM VALUE VALUES (1)", "INSERT INTO t (a) VALUES (1)"},
 		{PostgreSQL, "INSERT INTO t (a) OVERRIDING USER VALUE VALUES (1)", "INSERT INTO t (a) VALUES (1)"},
+		// A grouping element is an expression, not only a name.
+		{PostgreSQL, "SELECT a FROM t GROUP BY DISTINCT 1", "SELECT a FROM t GROUP BY 1"},
+		{PostgreSQL, "SELECT a FROM t GROUP BY ALL (a + b)", "SELECT a FROM t GROUP BY (a + b)"},
 	} {
 		got, err := Translate(tt.dialect, tt.query)
 		if err != nil {
@@ -1288,6 +1291,19 @@ func TestStatementSpellingsAreAnsweredByName(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.names) {
 				t.Errorf("Translate(%v, %q) error = %v, want it to name %q", tt.dialect, tt.query, err, tt.names)
+			}
+		}
+	})
+
+	t.Run("a word that belongs to one dialect stays there", func(t *testing.T) {
+		t.Parallel()
+
+		// OVERRIDING is PostgreSQL's, and a statement writing it elsewhere is
+		// not one those dialects take.
+		for _, d := range []Dialect{MySQL, GoogleSQL} {
+			query := "INSERT INTO t (a) OVERRIDING SYSTEM VALUE VALUES (1)"
+			if _, err := Translate(d, query); err == nil {
+				t.Errorf("Translate(%v, %q) translated, want it refused", d, query)
 			}
 		}
 	})
