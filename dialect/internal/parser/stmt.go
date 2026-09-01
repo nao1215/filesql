@@ -74,6 +74,9 @@ func (p *Parser) parseWithStatement() (ast.Stmt, error) {
 	case p.atWord("DELETE"):
 		return p.parseDelete(with)
 	}
+	// The query behind a WITH is the statement's own, so its select list can
+	// carry the INTO that names a table to create, as it can without one.
+	p.intoAllowed = true
 	body, err := p.parseQueryBody(precLowest)
 	if err != nil {
 		return nil, err
@@ -94,7 +97,10 @@ func (p *Parser) parseWithStatement() (ast.Stmt, error) {
 	if err := p.parseRowLock(); err != nil {
 		return nil, err
 	}
-	return stmt, nil
+	if p.dialect == dialects.MySQL && p.atWord("INTO") {
+		return nil, p.refuseSelectIntoTarget()
+	}
+	return selectIntoTable(stmt), nil
 }
 
 // parseInsert reads an INSERT.

@@ -1603,6 +1603,8 @@ func TestAClauseAroundAStatementIsRead(t *testing.T) {
 			// PostgreSQL takes the INTO of a compound query from its first
 			// select, which is where its column names come from too.
 			{"SELECT a INTO newt FROM t UNION SELECT b FROM u", "CREATE TABLE newt AS SELECT a FROM t UNION SELECT b FROM u"},
+			// The query behind a WITH is the statement's own query.
+			{"WITH c AS (SELECT 1 AS a) SELECT a INTO newt FROM c", "CREATE TABLE newt AS WITH c AS (SELECT 1 AS a) SELECT a FROM c"},
 		} {
 			got, err := Translate(PostgreSQL, tt.query)
 			if err != nil {
@@ -1642,6 +1644,7 @@ func TestAClauseAroundAStatementIsRead(t *testing.T) {
 			"SELECT * FROM (SELECT a INTO newt FROM t) s",
 			"SELECT * FROM t WHERE a IN (SELECT b INTO newt FROM u)",
 			"WITH w AS (SELECT a INTO newt FROM t) SELECT * FROM w",
+			"SELECT * FROM t WHERE EXISTS (WITH w AS (SELECT 1) SELECT a INTO newt FROM t)",
 		} {
 			if _, err := Translate(PostgreSQL, query); err == nil {
 				t.Errorf("Translate(%v, %q) translated, want it refused", PostgreSQL, query)
