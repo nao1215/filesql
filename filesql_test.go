@@ -1187,7 +1187,7 @@ func TestOpenContext(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "Context already cancelled",
+			name: "Context already canceled",
 			setupCtx: func() (context.Context, context.CancelFunc) {
 				ctx, cancel := context.WithCancel(t.Context())
 				cancel() // Cancel immediately

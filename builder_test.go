@@ -1861,7 +1861,7 @@ func expiredContext(t *testing.T) context.Context {
 
 // endedContext is one way a caller's context can be done, with the error it has
 // to produce. A load that answered the wrong one would tell a caller their
-// deadline passed when they had cancelled, or the reverse.
+// deadline passed when they had canceled, or the reverse.
 type endedContext struct {
 	name string
 	// make builds the context when the case runs, so a parallel subtest gets
@@ -1873,7 +1873,7 @@ type endedContext struct {
 // endedContexts is every way a caller's context can be done.
 func endedContexts() []endedContext {
 	return []endedContext{
-		{"cancelled", canceledContext, context.Canceled},
+		{"canceled", canceledContext, context.Canceled},
 		{"past a deadline", expiredContext, context.DeadlineExceeded},
 	}
 }
@@ -1893,7 +1893,7 @@ func builtBuilder(t *testing.T, path string) *DBBuilder {
 // answers the sentinel that says which way it ended. A load that ignored
 // cancellation would leave half the tables of an abandoned request behind, and
 // one that answered the wrong sentinel would tell a caller their deadline
-// passed when they had cancelled.
+// passed when they had canceled.
 //
 // The godoc names six entry points that take a context. The four that belong to
 // a builder are here; OpenContext is covered in filesql_test.go and
