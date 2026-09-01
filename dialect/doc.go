@@ -70,10 +70,11 @@
 // standing where a value goes, since SQLite has no way to write a column's own
 // default into a row; AT TIME ZONE and a timestamp typed WITH TIME ZONE, since
 // SQLite keeps no zone with a timestamp; AND CHAIN on a COMMIT or a ROLLBACK;
-// INHERITS on a CREATE TABLE; and the LIKE that copies a table, in either
-// dialect's spelling of it. An ALTER
-// TABLE is refused the same way when it asks for what SQLite cannot make: more
-// than one change in one statement, a column placed with FIRST or AFTER, a
+// INHERITS on a CREATE TABLE; the LIKE that copies a table, in either
+// dialect's spelling of it; and an ORDER BY or a LIMIT on an UPDATE or a
+// DELETE, since the SQLite build behind this package takes neither there. An
+// ALTER TABLE is refused the same way when it asks for what SQLite cannot
+// make: more than one change in one statement, a column placed with FIRST or AFTER, a
 // change skipped with IF EXISTS or IF NOT EXISTS. Each is refused by name and
 // as unsupported, since the statement was read: ErrInvalidSyntax is for one that
 // could not be read.
