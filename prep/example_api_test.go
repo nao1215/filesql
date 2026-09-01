@@ -2,6 +2,7 @@ package prep_test
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -83,6 +84,49 @@ func ExampleProcessor_Process() {
 	// alice@example.com 1
 	// name,email
 	// Alice,alice@example.com
+}
+
+// A codec comes off before Process sees the stream: prep reads the bytes it is
+// given as the format it was constructed with, and never unwraps compression.
+func ExampleProcessor_Process_compressed() {
+	type user struct {
+		Name string `prep:"trim" validate:"required"`
+	}
+
+	var compressed bytes.Buffer
+	gw := gzip.NewWriter(&compressed)
+	if _, err := gw.Write([]byte("name\n Alice \n")); err != nil {
+		log.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		log.Fatal(err)
+	}
+
+	plain, closeCodec, err := filesql.NewCompressionHandler(filesql.CompressionGZ).
+		CreateReader(bytes.NewReader(compressed.Bytes()))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		if err := closeCodec(); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	var users []user
+	reader, result, err := prep.NewProcessor(prep.FileTypeCSV).Process(plain, &users)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("rows=%d output=%q\n", result.ValidRowCount, string(output))
+	// Output:
+	// rows=1 output="name\nAlice\n"
 }
 
 func ExampleProcessor_Process_json() {

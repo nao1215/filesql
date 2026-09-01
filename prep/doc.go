@@ -1,5 +1,5 @@
-// Package prep provides preprocessing and validation for file formats
-// supported by filesql (CSV, TSV, LTSV, JSON, JSONL, Parquet, Excel with gzip, bzip2, xz, zstd support).
+// Package prep provides preprocessing and validation for the file formats
+// filesql reads: CSV, TSV, LTSV, JSON, JSONL, Parquet and Excel.
 //
 // prep complements filesql by providing data preprocessing before loading
 // into SQLite. It uses struct tags for validation ("validate" tag) and
@@ -72,15 +72,19 @@
 //   - Parquet (.parquet)
 //   - Excel (.xlsx)
 //
-// All formats support compression:
-//   - gzip (.gz)
-//   - bzip2 (.bz2)
-//   - xz (.xz)
-//   - zstd (.zst)
-//   - zlib (.z)
-//   - snappy (.snappy)
-//   - s2 (.s2)
-//   - lz4 (.lz4)
+// A compressed stream is the caller's to unwrap, the way it is for
+// parser.Parse. Process reads the bytes it is given as the format it was
+// constructed with, so a codec has to come off first:
+//
+//	f, _ := os.Open("data.csv.gz")
+//	defer f.Close()
+//	r, closeCodec, _ := filesql.NewCompressionHandler(filesql.CompressionGZ).CreateReader(f)
+//	defer closeCodec()
+//
+//	reader, result, err := prep.NewProcessor(parser.CSV).Process(r, &records)
+//
+// filesql.NewCompressionFactory().CreateReaderForFile takes the codec from the
+// name of a path instead, for a caller that has one.
 //
 // # Prep Tags
 //
@@ -110,7 +114,10 @@
 //     spelling the loader keeps as text -- a leading zero, a literal past
 //     int64, Go's own number syntax, a decimal a float64 cannot hold -- is left
 //     alone
-//   - fix_scheme=scheme: add scheme:// to a URL that has no scheme
+//   - fix_scheme=scheme: add scheme:// to a URL that has no scheme. A value
+//     that names one already keeps it, however it is written, so mailto: and
+//     tel: are left alone; fix_scheme=https is the one that rewrites, and it
+//     rewrites http:// only
 //
 // A parameter that needs a comma or a colon of its own writes a backslash in
 // front of it, which the parser drops: regex_replace=https?\://:scheme- reads
