@@ -2082,3 +2082,61 @@ func TestAutoSaveOverwriteXLSXFindsTheSheetItRead(t *testing.T) {
 		assert.Equal(t, "new", name)
 	})
 }
+
+// TestAutoSaveRefusesABlankOutputDirectory pins what an auto-save does with an
+// output directory of spaces. It used to create a directory of spaces in the
+// working directory at close and write every table there, silently: a path the
+// caller did not name and one AddPath refuses to read back. The empty string
+// keeps its documented meaning, which is to overwrite the original files.
+func TestAutoSaveRefusesABlankOutputDirectory(t *testing.T) {
+	src := autoSaveSource(t, "id,name\n1,alice\n")
+	work := t.TempDir()
+	t.Chdir(work)
+
+	for _, dir := range []string{" ", "   ", "\t"} {
+		for name, configure := range map[string]func(*DBBuilder) *DBBuilder{
+			"EnableAutoSave":         func(b *DBBuilder) *DBBuilder { return b.EnableAutoSave(dir) },
+			"EnableAutoSaveOnCommit": func(b *DBBuilder) *DBBuilder { return b.EnableAutoSaveOnCommit(dir) },
+		} {
+			_, err := buildForTest(t.Context(), configure(NewBuilder().AddPath(src)))
+			assert.ErrorIs(t, err, ErrEmptyPath, "%s(%q)", name, dir)
+		}
+	}
+
+	entries, err := os.ReadDir(work)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "a refused auto-save created something in the working directory")
+}
+
+// TestAutoSaveRefusesAnOutputPathThatIsNotADirectory pins that an auto-save
+// reports an occupied destination the way an export does, with ErrIOOperation:
+// the two write the same files and a caller reads one answer.
+func TestAutoSaveRefusesAnOutputPathThatIsNotADirectory(t *testing.T) {
+	t.Parallel()
+
+	src := autoSaveSource(t, "id,name\n1,alice\n")
+	occupied := filepath.Join(t.TempDir(), "occupied")
+	require.NoError(t, os.WriteFile(occupied, []byte("x"), 0o600))
+
+	_, err := buildForTest(t.Context(), NewBuilder().AddPath(src).EnableAutoSave(occupied))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrIOOperation)
+	assert.Contains(t, err.Error(), "not a directory")
+}
+
+// TestAutoSaveOverwritesOnTheEmptyString pins the sibling the refusal must not
+// take with it: EnableAutoSave("") is documented as overwriting the original
+// files, so the empty string stays a destination.
+func TestAutoSaveOverwritesOnTheEmptyString(t *testing.T) {
+	t.Parallel()
+
+	src := autoSaveSource(t, "id,name\n1,alice\n")
+	db := openAutoSave(t, src, func(b *DBBuilder) *DBBuilder { return b.EnableAutoSave("") })
+	_, err := db.ExecContext(t.Context(), "UPDATE users SET name = 'bob'")
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	body, err := os.ReadFile(src) //nolint:gosec // Test path from t.TempDir()
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "bob")
+}

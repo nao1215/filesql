@@ -577,3 +577,59 @@ func TestCheckOverwriteTargets(t *testing.T) {
 		})
 	}
 }
+
+// TestDumpDatabase_RefusesABlankDestination pins what a dump does with a
+// destination that names nothing. A path of spaces used to be a directory name,
+// so the tables were written into a directory of spaces in the working
+// directory -- one this package then refused to read back, since an input path
+// of spaces is ErrEmptyPath. An empty one used to fail with the operating
+// system's own "mkdir : no such file or directory", which carries neither a
+// sentinel nor the name of what went wrong.
+func TestDumpDatabase_RefusesABlankDestination(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "users.csv")
+	require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
+
+	db, err := OpenContext(t.Context(), src)
+	require.NoError(t, err)
+	defer db.Close()
+
+	// The blank destinations are relative, so the dump would write into the
+	// working directory. Watching that directory is what proves nothing was
+	// written rather than written somewhere else.
+	work := t.TempDir()
+	t.Chdir(work)
+
+	for _, path := range []string{"", " ", "   ", "\t", "\n"} {
+		err := DumpDatabase(db, path)
+		assert.ErrorIs(t, err, ErrEmptyPath, "DumpDatabase(db, %q)", path)
+
+		entries, readErr := os.ReadDir(work)
+		require.NoError(t, readErr)
+		assert.Empty(t, entries, "DumpDatabase(db, %q) created something in the working directory", path)
+	}
+}
+
+// TestDumpDatabase_RefusesADestinationThatIsNotADirectory pins that a dump onto
+// an existing file says so in this package's words. It used to answer the raw
+// "mkdir /path/file: not a directory".
+func TestDumpDatabase_RefusesADestinationThatIsNotADirectory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "users.csv")
+	require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
+	occupied := filepath.Join(dir, "occupied")
+	require.NoError(t, os.WriteFile(occupied, []byte("x"), 0o600))
+
+	db, err := OpenContext(t.Context(), src)
+	require.NoError(t, err)
+	defer db.Close()
+
+	err = DumpDatabase(db, occupied)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrIOOperation)
+	assert.Contains(t, err.Error(), "not a directory")
+	assert.Contains(t, err.Error(), occupied)
+	assert.NotContains(t, err.Error(), "mkdir", "the refusal is this package's own, not the one mkdir writes")
+}

@@ -336,7 +336,7 @@ func TestRefuseEscapeTransform(t *testing.T) {
 		t.Parallel()
 
 		dst := make([]byte, 8)
-		nDst, nSrc, err := refuseEscape{}.Transform(dst, []byte("abcd"), true)
+		nDst, nSrc, err := refuseEscape{}.Transform(dst, []byte("ab\x1bcd"), true)
 		require.ErrorIs(t, err, errEscapeUnwritable)
 		assert.Equal(t, 2, nDst)
 		assert.Equal(t, 2, nSrc)
@@ -357,7 +357,7 @@ func TestRefuseEscapeTransform(t *testing.T) {
 		t.Parallel()
 
 		dst := make([]byte, 8)
-		nDst, _, err := refuseEscape{}.Transform(dst, []byte(""), true)
+		nDst, _, err := refuseEscape{}.Transform(dst, []byte("\x1b"), true)
 		require.ErrorIs(t, err, errEscapeUnwritable)
 		assert.Equal(t, 0, nDst)
 	})

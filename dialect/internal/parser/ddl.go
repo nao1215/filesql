@@ -642,12 +642,20 @@ func (p *Parser) parseDrop() (ast.Stmt, error) {
 			break
 		}
 	}
-	// CASCADE drops the objects that depend on this one and RESTRICT refuses
-	// when there are any. SQLite has neither word and behaves as RESTRICT does
-	// not: a view over a dropped table simply fails when it is next used.
-	p.eatWord("CASCADE")
-	p.eatWord("RESTRICT")
+	p.eatDropBehavior()
 	return stmt, nil
+}
+
+// eatDropBehavior reads the word that says what to do with what depends on a
+// dropped object. CASCADE drops those objects and RESTRICT refuses when there
+// are any; SQLite has neither word and behaves as RESTRICT does not, since a
+// view over a dropped table simply fails when it is next used. A dialect writes
+// one of them or neither, so one is read: "CASCADE RESTRICT" is a statement no
+// engine takes, and reading both would translate it rather than refuse it.
+func (p *Parser) eatDropBehavior() {
+	if !p.eatWord("CASCADE") {
+		p.eatWord("RESTRICT")
+	}
 }
 
 // parseAlter reads an ALTER TABLE, restricted to the four changes SQLite can
@@ -658,9 +666,27 @@ func (p *Parser) parseAlter() (ast.Stmt, error) {
 	if !p.eatWord("TABLE") {
 		return nil, unimplementedAt(start, "ALTER %s is not implemented", upper(p.cur().Text))
 	}
+	// IF EXISTS asks for the statement to be skipped when the table is not
+	// there. SQLite takes it on DROP TABLE and nowhere else, and running the
+	// change anyway is the opposite of what was asked, so it is refused by
+	// name; read first, so the refusal is about the words the caller wrote
+	// rather than about a table named IF.
+	if p.atWords("IF", "EXISTS") {
+		return nil, p.unsupportedf(
+			"ALTER TABLE IF EXISTS is not supported; SQLite has no IF EXISTS on ALTER TABLE")
+	}
+	// PostgreSQL's ONLY, and the star that is its opposite, say whether the
+	// tables inheriting from this one are altered too. Nothing inherits here.
+	inheritance := p.dialect == dialects.PostgreSQL && p.atWord("ONLY") && p.namesSomething(1)
+	if inheritance {
+		p.pos++
+	}
 	table, err := p.parseTableNameOnly()
 	if err != nil {
 		return nil, err
+	}
+	if p.dialect == dialects.PostgreSQL {
+		p.eatOp("*")
 	}
 	stmt := &ast.AlterTableStmt{Table: table, Span: ast.SpanOf(start)}
 	switch {
@@ -670,7 +696,7 @@ func (p *Parser) parseAlter() (ast.Stmt, error) {
 			return nil, err
 		}
 		stmt.Kind, stmt.NewName = ast.AlterRenameTable, name
-		return stmt, nil
+		return p.finishAlter(stmt)
 	case p.eatWord("RENAME"):
 		p.eatWord("COLUMN")
 		from, err := p.parseSimpleName()
@@ -685,29 +711,44 @@ func (p *Parser) parseAlter() (ast.Stmt, error) {
 			return nil, err
 		}
 		stmt.Kind, stmt.Name, stmt.NewName = ast.AlterRenameColumn, from, to
-		return stmt, nil
+		return p.finishAlter(stmt)
 	case p.eatWord("ADD"):
 		if err := p.refuseAlterTableElement(true); err != nil {
 			return nil, err
 		}
 		p.eatWord("COLUMN")
+		if err := p.refuseColumnExistenceCheck(true); err != nil {
+			return nil, err
+		}
 		column, err := p.parseColumnDef()
 		if err != nil {
 			return nil, err
 		}
+		// FIRST and AFTER place the new column among the others. SQLite adds a
+		// column after the last one and has no way to say otherwise.
+		if p.atAnyWord("FIRST", "AFTER") {
+			return nil, p.unsupportedf(
+				"placing a column with FIRST or AFTER is not supported; SQLite adds a column after the last one")
+		}
 		stmt.Kind, stmt.Column = ast.AlterAddColumn, &column
-		return stmt, nil
+		return p.finishAlter(stmt)
 	case p.eatWord("DROP"):
 		if err := p.refuseAlterTableElement(false); err != nil {
 			return nil, err
 		}
 		p.eatWord("COLUMN")
+		if err := p.refuseColumnExistenceCheck(false); err != nil {
+			return nil, err
+		}
 		name, err := p.parseSimpleName()
 		if err != nil {
 			return nil, err
 		}
+		// CASCADE and RESTRICT are read and dropped here for the reason DROP
+		// TABLE reads them: SQLite has neither word.
+		p.eatDropBehavior()
 		stmt.Kind, stmt.Name = ast.AlterDropColumn, name
-		return stmt, nil
+		return p.finishAlter(stmt)
 	case p.atAnyWord("MODIFY", "CHANGE", "ALTER"):
 		return nil, p.unsupportedf(
 			"changing a column's type is not supported; SQLite can only add, drop and rename columns")
@@ -716,6 +757,39 @@ func (p *Parser) parseAlter() (ast.Stmt, error) {
 	default:
 		return nil, p.unimplementedf("this ALTER TABLE is not implemented")
 	}
+}
+
+// finishAlter refuses a second change in the same ALTER TABLE. A dialect writes
+// them in a list -- "ADD COLUMN a INT, ADD COLUMN b INT" -- and SQLite makes one
+// change per statement, so the list is a statement it cannot express rather
+// than one this package failed to read.
+func (p *Parser) finishAlter(stmt *ast.AlterTableStmt) (ast.Stmt, error) {
+	if !p.atOp(",") {
+		return stmt, nil
+	}
+	p.pos++
+	// A comma with nothing behind it is a statement that stops in the middle
+	// rather than a second change, and is reported as one.
+	if p.atEnd() {
+		return nil, p.unexpected("another change")
+	}
+	return nil, p.unsupportedf(
+		"an ALTER TABLE with more than one change is not supported; SQLite makes one change per statement")
+}
+
+// refuseColumnExistenceCheck refuses the IF NOT EXISTS of an added column and
+// the IF EXISTS of a dropped one. SQLite has neither, and adding or dropping
+// the column anyway would run the statement the caller asked to skip.
+func (p *Parser) refuseColumnExistenceCheck(adding bool) error {
+	if adding && p.atWords("IF", "NOT", "EXISTS") {
+		return p.unsupportedf(
+			"IF NOT EXISTS on an added column is not supported; SQLite has no such check")
+	}
+	if !adding && p.atWords("IF", "EXISTS") {
+		return p.unsupportedf(
+			"IF EXISTS on a dropped column is not supported; SQLite has no such check")
+	}
+	return nil
 }
 
 // refuseAlterTableElement refuses what follows ADD or DROP in an ALTER TABLE
