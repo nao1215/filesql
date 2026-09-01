@@ -496,6 +496,42 @@ func TestATranslatedQueryIsOneSQLiteCanPrepare(t *testing.T) {
 	}
 	cases = append(cases, translation{MySQL, "SELECT `t` . * FROM `t`"})
 
+	// The calls whose helper this package names after the spelling the caller
+	// used. A helper the runtime does not register reaches the driver as an
+	// unknown function naming something the caller never wrote, which is what
+	// happened to one spelling of SUBSTRING while the other worked, so every
+	// name that derivation can produce is prepared here.
+	named := map[Dialect][]string{
+		MySQL: {
+			"SELECT WEEK(b), WEEKOFYEAR(b), YEARWEEK(b) FROM t",
+			"SELECT GREATEST(a, 1), LEAST(a, 1) FROM t",
+			"SELECT LEFT(b, 1), RIGHT(b, 1), LPAD(b, 3, 'x'), RPAD(b, 3, 'x') FROM t",
+			"SELECT ORD(b), HEX(b), QUOTE(b), ASCII(b), UNHEX(b), INSERT(b, 1, 1, 'x') FROM t",
+			"SELECT SUBSTR(b, 1, 2), SUBSTRING(b, 1, 2), MID(b, 1, 2) FROM t",
+			"SELECT POSITION('a' IN b), LOCATE('a', b), INSTR(b, 'a') FROM t",
+			"SELECT CEIL(c), CEILING(c), FLOOR(c), SIGN(c), SQRT(c), EXP(c), LN(c), LOG2(c), LOG10(c) FROM t",
+		},
+		PostgreSQL: {
+			"SELECT GREATEST(a, 1), LEAST(a, 1), MOD(a, 2) FROM t",
+			"SELECT LPAD(b, 3, 'x'), RPAD(b, 3, 'x') FROM t",
+			"SELECT SUBSTR(b, 1, 2), SUBSTRING(b, 1, 2) FROM t",
+			"SELECT POSITION('a' IN b), STRPOS(b, 'a') FROM t",
+		},
+		GoogleSQL: {
+			"SELECT LEFT(b, 1), RIGHT(b, 1), REPEAT(b, 2) FROM t",
+			"SELECT LPAD(b, 3, 'x'), RPAD(b, 3, 'x'), MOD(a, 2) FROM t",
+			"SELECT SUBSTR(b, 1, 2), SUBSTRING(b, 1, 2) FROM t",
+			"SELECT POSITION('a' IN b), INSTR(b, 'a') FROM t",
+			"SELECT SOUNDEX(b), MD5(b), SHA1(b) FROM t",
+			"SELECT DATE(b), DATETIME(b), TIME(b), TIMESTAMP(b) FROM t",
+		},
+	}
+	for _, d := range dialectsUnderTest {
+		for _, q := range named[d] {
+			cases = append(cases, translation{d, q})
+		}
+	}
+
 	for _, tt := range cases {
 		t.Run(tt.dialect.DisplayName()+" "+tt.query, func(t *testing.T) {
 			t.Parallel()
@@ -1648,6 +1684,75 @@ func TestAClauseAroundAStatementIsRead(t *testing.T) {
 		} {
 			if _, err := Translate(PostgreSQL, query); err == nil {
 				t.Errorf("Translate(%v, %q) translated, want it refused", PostgreSQL, query)
+			}
+		}
+	})
+}
+
+// TestAWriteCarryingOrderByOrLimitIsRefused pins the refusal for an UPDATE or a
+// DELETE that names how many rows it touches. SQLite takes ORDER BY and LIMIT on
+// those statements only in a build compiled with SQLITE_ENABLE_UPDATE_DELETE_LIMIT,
+// and the one behind this package is not, so passing them through gave the
+// caller a syntax error naming a keyword that is valid where they wrote it --
+// after the translation had reshaped the clause, rewriting MySQL's "LIMIT 2, 1"
+// into "LIMIT 1 OFFSET 2" on a statement that could never run.
+func TestAWriteCarryingOrderByOrLimitIsRefused(t *testing.T) {
+	t.Parallel()
+
+	t.Run("refused as unsupported", func(t *testing.T) {
+		t.Parallel()
+
+		for _, query := range []string{
+			"UPDATE t SET b = 'x' LIMIT 1",
+			"UPDATE t SET b = 'x' ORDER BY a",
+			"UPDATE t SET b = 'x' ORDER BY a LIMIT 1",
+			"UPDATE t SET b = 'x' LIMIT 1 OFFSET 2",
+			"DELETE FROM t LIMIT 1",
+			"DELETE FROM t ORDER BY a",
+			"DELETE FROM t ORDER BY a LIMIT 1",
+			"DELETE FROM t WHERE a = 1 ORDER BY a LIMIT 1",
+		} {
+			for _, d := range []Dialect{MySQL, PostgreSQL, GoogleSQL} {
+				_, err := Translate(d, query)
+				if !errors.Is(err, ErrUnsupportedSyntax) {
+					t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", d, query, err)
+					continue
+				}
+				want := "LIMIT"
+				if strings.Contains(query, "ORDER BY") {
+					want = "ORDER BY"
+				}
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Translate(%v, %q) error = %q, want it to name %s", d, query, err, want)
+				}
+			}
+		}
+	})
+
+	// MySQL writes LIMIT after a two-argument form as well, and the refusal has
+	// to reach it before the rewrite that turns it into LIMIT and OFFSET.
+	t.Run("the two-argument limit is refused too", func(t *testing.T) {
+		t.Parallel()
+
+		if _, err := Translate(MySQL, "DELETE FROM t LIMIT 2, 1"); !errors.Is(err, ErrUnsupportedSyntax) {
+			t.Errorf("Translate(MySQL, %q) error = %v, want ErrUnsupportedSyntax", "DELETE FROM t LIMIT 2, 1", err)
+		}
+	})
+
+	// A SELECT is where SQLite does take both, so the refusal must not spread to
+	// it -- including the SELECT inside an INSERT and the one a CTE holds.
+	t.Run("a select still takes both", func(t *testing.T) {
+		t.Parallel()
+
+		for _, query := range []string{
+			"SELECT a FROM t ORDER BY a LIMIT 1",
+			"INSERT INTO y SELECT a, b FROM t ORDER BY a LIMIT 1",
+			"WITH c AS (SELECT a FROM t ORDER BY a LIMIT 1) SELECT a FROM c",
+			"UPDATE t SET b = (SELECT b FROM t ORDER BY a LIMIT 1)",
+			"DELETE FROM t WHERE a IN (SELECT a FROM t ORDER BY a LIMIT 1)",
+		} {
+			if _, err := Translate(MySQL, query); err != nil {
+				t.Errorf("Translate(MySQL, %q) error = %v, want it to translate", query, err)
 			}
 		}
 	})
