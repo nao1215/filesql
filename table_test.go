@@ -257,6 +257,24 @@ func TestSanitizeTableName(t *testing.T) {
 		{"non-ascii digit leads", "١٢", "sheet_١٢"},
 		{"emoji is dropped", "data\U0001F600", "data"},
 		{"quote is dropped", `a"b`, "ab"},
+		// A separator in a name is a separator whichever space writes it. The
+		// no-break space is what a name copied out of a web page or a
+		// spreadsheet cell carries, and U+3000 is ordinary in a Japanese file
+		// name; dropping either joined two words into one and could collide
+		// with a different file.
+		{"tab becomes underscore", "user\tdata", "user_data"},
+		{"vertical tab becomes underscore", "user\vdata", "user_data"},
+		{"form feed becomes underscore", "user\fdata", "user_data"},
+		{"carriage return becomes underscore", "user\rdata", "user_data"},
+		{"newline becomes underscore", "user\ndata", "user_data"},
+		{"no-break space becomes underscore", "user\u00a0data", "user_data"},
+		{"next line becomes underscore", "user\u0085data", "user_data"},
+		{"em space becomes underscore", "user\u2003data", "user_data"},
+		{"ideographic space becomes underscore", "user\u3000data", "user_data"},
+		{"a run of mixed spaces is one underscore each", "a \tb", "a__b"},
+		// A dash that is not the ASCII hyphen is not a separator this rule
+		// names, and is dropped like any other punctuation.
+		{"en dash is dropped", "user\u2013data", "userdata"},
 	}
 
 	for _, tt := range tests {

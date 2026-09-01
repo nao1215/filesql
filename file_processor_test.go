@@ -461,6 +461,48 @@ func sameNamePair(t *testing.T) (first, second string) {
 		writeCSVFile(t, filepath.Join(dir, "b", "book.csv"), "from-b")
 }
 
+// TestOpenContextRefusesTwoNamesThatDifferOnlyInWhichSpace pins the collision a
+// name-derivation rule creates on purpose. A file name carrying a no-break
+// space and one carrying an ordinary space cannot be told apart when they are
+// read, so the tables derived from them cannot be told apart either, and one
+// refusal is a better answer than two tables nobody can name.
+func TestOpenContextRefusesTwoNamesThatDifferOnlyInWhichSpace(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	first := writeCSVFile(t, filepath.Join(dir, "sales report.csv"), "space")
+	second := writeCSVFile(t, filepath.Join(dir, "sales\u00a0report.csv"), "no-break space")
+
+	db, err := OpenContext(context.Background(), first, second)
+	if err == nil {
+		_ = db.Close()
+		t.Fatal("OpenContext succeeded on two names that both derive the table 'sales_report'")
+	}
+	if !errors.Is(err, ErrDuplicateTable) {
+		t.Errorf("error = %v, want ErrDuplicateTable", err)
+	}
+}
+
+// TestOpenContextRefusesTwoNamesThatKeepNoCharacters is the same rule for the
+// other adjustment: a name that keeps no characters takes the fallback, so two
+// such names ask for one table.
+func TestOpenContextRefusesTwoNamesThatKeepNoCharacters(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	first := writeCSVFile(t, filepath.Join(dir, "!!.csv"), "bangs")
+	second := writeCSVFile(t, filepath.Join(dir, "@@.csv"), "ats")
+
+	db, err := OpenContext(context.Background(), first, second)
+	if err == nil {
+		_ = db.Close()
+		t.Fatal("OpenContext succeeded on two names that both derive the fallback table")
+	}
+	if !errors.Is(err, ErrDuplicateTable) {
+		t.Errorf("error = %v, want ErrDuplicateTable", err)
+	}
+}
+
 // TestOpenContextRefusesTwoSourcesWantingOneTable pins Open's side of the
 // contract. Open builds a fresh database, so two files asking for one table
 // cannot both be honored, and the answer is a refusal that names the file —
