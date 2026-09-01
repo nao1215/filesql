@@ -144,7 +144,7 @@ func quoteIdentifier(name string) string {
 // SQL syntax errors caused by special characters like hyphens, spaces, and other symbols.
 //
 // Transformations applied:
-//   - Replaces spaces, hyphens (-), and dots (.) with underscores (_)
+//   - Replaces whitespace, hyphens (-), and dots (.) with underscores (_)
 //   - Removes any character that is not a letter, a digit, a combining mark, or an underscore
 //   - Adds "sheet_" prefix if the name starts with a digit
 //   - Returns "sheet" as fallback for empty names
@@ -279,7 +279,7 @@ func xlsxSheetNameForTable(baseTableName, tableName string) string {
 }
 
 // identifierRunes maps a derived name onto the characters an identifier may
-// carry: spaces, hyphens, and dots become underscores, and every remaining
+// carry: whitespace, hyphens, and dots become underscores, and every remaining
 // character that is not a letter, a digit, a combining mark, or an underscore is
 // dropped. Letters and digits are judged by Unicode category so a name written
 // in any script survives; a combining mark is kept so a decomposed accent stays
@@ -287,14 +287,24 @@ func xlsxSheetNameForTable(baseTableName, tableName string) string {
 // by name. This is the one place both table-name sanitizers agree on the
 // character set, so a name derived from a file path and one built through
 // TableName cannot disagree.
+//
+// Whitespace is judged by category as well, rather than by the space bar's own
+// character, because a separator is a separator whichever space writes it: a
+// name carries a no-break space when it was copied out of a web page or a
+// spreadsheet cell, and U+3000 is ordinary in a Japanese file name. Dropping
+// either joined the words on both sides of it into one. The hyphen and the dot
+// stay the two ASCII characters they name, since a dash-like character that is
+// not the hyphen is not a separator this rule is about.
 func identifierRunes(name string) string {
-	result := strings.ReplaceAll(name, " ", "_")
-	result = strings.ReplaceAll(result, "-", "_")
+	result := strings.ReplaceAll(name, "-", "_")
 	result = strings.ReplaceAll(result, ".", "_")
 
 	var sanitized strings.Builder
 	for _, r := range result {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r) || r == '_' {
+		switch {
+		case unicode.IsSpace(r):
+			sanitized.WriteByte('_')
+		case unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r) || r == '_':
 			sanitized.WriteRune(r)
 		}
 	}

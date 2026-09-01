@@ -2,9 +2,13 @@ package filesql
 
 import (
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -488,4 +492,45 @@ func TestDumpFedWire_WriteBackKeepsEveryValue(t *testing.T) {
 	after := achTableDump(ctx, t, reloaded, "payment")
 
 	assert.Equal(t, before, after, "a write-back with no edit must keep every value")
+}
+
+// TestRecordingReaderKeepsTheFirstRealError pins what the recorder is for: the
+// library that reads a Fedwire file answers with what the message it built is
+// missing rather than with why the read stopped, so the reason has to be kept
+// on the way past. The end of a stream is not a reason and is not kept.
+func TestRecordingReaderKeepsTheFirstRealError(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a read error is kept", func(t *testing.T) {
+		t.Parallel()
+
+		want := errors.New("the read stopped here")
+		r := &recordingReader{src: iotest.ErrReader(want)}
+		_, err := io.ReadAll(r)
+		require.ErrorIs(t, err, want)
+		assert.ErrorIs(t, r.err, want)
+	})
+
+	t.Run("the end of a stream is not", func(t *testing.T) {
+		t.Parallel()
+
+		r := &recordingReader{src: strings.NewReader("abc")}
+		got, err := io.ReadAll(r)
+		require.NoError(t, err)
+		assert.Equal(t, "abc", string(got))
+		assert.NoError(t, r.err)
+	})
+
+	t.Run("the first error is the one kept", func(t *testing.T) {
+		t.Parallel()
+
+		first := errors.New("first")
+		r := &recordingReader{src: iotest.ErrReader(first)}
+		_, err := r.Read(make([]byte, 1))
+		require.ErrorIs(t, err, first)
+		r.src = iotest.ErrReader(errors.New("second"))
+		_, err = r.Read(make([]byte, 1))
+		require.Error(t, err)
+		assert.ErrorIs(t, r.err, first)
+	})
 }

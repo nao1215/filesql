@@ -140,7 +140,7 @@
 // refused rather than buffered: a delimited record, an LTSV record, a JSONL
 // line, one element of a JSON array, a JSON document that is not an array --
 // which is one record, since it becomes one row holding the whole of it -- and
-// an ACH record. A file cannot cost more than its own size either way; what the bound
+// an ACH or a Fedwire record. A file cannot cost more than its own size either way; what the bound
 // is for is a source that is a stream, where a record with no terminator would
 // otherwise ask for everything the sender chooses to send. The JSON refusal
 // lands within one of the decoder's own reads of the bound rather than on it, so
@@ -248,6 +248,21 @@
 //   - "data.tsv.gz" becomes table "data"
 //   - "/path/to/logs.ltsv" becomes table "logs"
 //   - "sales.xlsx" with multiple sheets becomes tables "sales_Sheet1", "sales_Sheet2", etc.
+//
+// The name is made into an identifier first: whitespace, a hyphen and a dot
+// each become an underscore, and every character that is not a letter, a digit,
+// a combining mark or an underscore is dropped. Letters and digits are judged by
+// Unicode category, so a name written in any script survives; "売上 2026.csv"
+// becomes table "売上_2026".
+//
+// Two names cannot be written as an identifier at all and are adjusted rather
+// than carried over. A name beginning with a digit is prefixed, so "2024.csv"
+// becomes table "sheet_2024", because SQLite will not read an unquoted
+// identifier that starts with one. A name that keeps no characters becomes
+// "sheet", so "!!.csv" does. Both words come from workbooks, where every table
+// is a sheet, and they name a table derived from any format. Two files whose
+// names need the same adjustment ask for the same table and are refused with
+// ErrDuplicateTable.
 //
 // # Excel Sheet Visibility
 //

@@ -568,7 +568,7 @@ func writeXLSXWorkbookCompressed(w io.Writer, path string, base *reader.Workbook
 //
 // This is how a save learns which sheet a table belongs in. Deriving the sheet
 // from the table name instead could not work: a table name is its sheet's name
-// run through sanitizeTableName, which turns spaces, hyphens and dots into
+// run through sanitizeTableName, which turns whitespace, hyphens and dots into
 // underscores, prefixes a leading digit, and drops what is left over, so a sheet
 // named "Q1 Sales" or "2024" cannot be spelled back out of it. The save looked
 // for a sheet the workbook never had and failed there, discarding the session's
