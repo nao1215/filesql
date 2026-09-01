@@ -35,6 +35,8 @@ func TestAggregateTranslation(t *testing.T) {
 		{"postgresql bool_and", dialect.PostgreSQL, `SELECT BOOL_AND(x) ` + bools, "0"},
 		{"postgresql bool_or", dialect.PostgreSQL, `SELECT BOOL_OR(x) ` + bools, "1"},
 		{"mysql any_value", dialect.MySQL, `SELECT ANY_VALUE(x) ` + pair, "1"},
+		{"postgresql any_value", dialect.PostgreSQL, `SELECT ANY_VALUE(x) ` + pair, "1"},
+		{"googlesql any_value", dialect.GoogleSQL, `SELECT ANY_VALUE(x) ` + pair, "1"},
 
 		// BigQuery's APPROX_COUNT_DISTINCT estimates what SQLite counts
 		// exactly, which is a correct answer to the question it asks.
@@ -355,6 +357,11 @@ func TestAggregatesWithoutASQLiteFormAreRejected(t *testing.T) {
 		{dialect: dialect.PostgreSQL, query: "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY a) FROM t"},
 		{dialect: dialect.PostgreSQL, query: "SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY a) FROM t"},
 		{dialect: dialect.PostgreSQL, query: "SELECT mode() WITHIN GROUP (ORDER BY a) FROM t"},
+		{dialect: dialect.PostgreSQL, query: "SELECT bit_or(a) FROM t"},
+		{dialect: dialect.PostgreSQL, query: "SELECT bit_xor(a) FROM t"},
+		{dialect: dialect.GoogleSQL, query: "SELECT BIT_AND(a) FROM t"},
+		{dialect: dialect.GoogleSQL, query: "SELECT BIT_OR(a) FROM t"},
+		{dialect: dialect.GoogleSQL, query: "SELECT BIT_XOR(a) FROM t"},
 	} {
 		t.Run(tt.query, func(t *testing.T) {
 			t.Parallel()
