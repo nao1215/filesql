@@ -136,13 +136,21 @@ func (p *Parser) parseInsert(with *ast.WithClause) (ast.Stmt, error) {
 		}
 		stmt.Columns = cols
 	}
+	// OVERRIDING says whether a value the caller gives wins over an identity
+	// column's generated one. A table here has no identity column, so both
+	// spellings name the same thing this statement already does and are read
+	// and dropped.
+	if p.atWord("OVERRIDING") && (p.peek(1).IsWord("SYSTEM") || p.peek(1).IsWord("USER")) &&
+		p.peek(2).IsWord("VALUE") {
+		p.pos += 3
+	}
 	if err := p.parseInsertSource(stmt); err != nil {
 		return nil, err
 	}
 	if err := p.parseInsertConflict(stmt); err != nil {
 		return nil, err
 	}
-	if p.eatWord("RETURNING") {
+	if p.atReturning() {
 		items, err := p.parseSelectItems()
 		if err != nil {
 			return nil, err
@@ -150,6 +158,21 @@ func (p *Parser) parseInsert(with *ast.WithClause) (ast.Stmt, error) {
 		stmt.Returning = items
 	}
 	return stmt, nil
+}
+
+// atReturning reads the word that opens a returning clause, consuming it.
+// GoogleSQL spells the clause THEN RETURN, which Cloud Spanner writes where
+// PostgreSQL writes RETURNING; the clause and its list are the same, so the
+// spelling is read here and the statement carries one returning clause.
+func (p *Parser) atReturning() bool {
+	if p.eatWord("RETURNING") {
+		return true
+	}
+	if p.dialect == dialects.GoogleSQL && p.atWords("THEN", "RETURN") {
+		p.pos += 2
+		return true
+	}
+	return false
 }
 
 // parseInsertSource reads the rows an INSERT adds.
@@ -312,7 +335,7 @@ func (p *Parser) parseUpdate(with *ast.WithClause) (ast.Stmt, error) {
 		return nil, err
 	}
 	stmt.Limit = limit
-	if p.eatWord("RETURNING") {
+	if p.atReturning() {
 		items, err := p.parseSelectItems()
 		if err != nil {
 			return nil, err
@@ -366,7 +389,7 @@ func (p *Parser) parseDelete(with *ast.WithClause) (ast.Stmt, error) {
 		return nil, err
 	}
 	stmt.Limit = limit
-	if p.eatWord("RETURNING") {
+	if p.atReturning() {
 		items, err := p.parseSelectItems()
 		if err != nil {
 			return nil, err
@@ -513,10 +536,16 @@ func (p *Parser) parseTransaction() (ast.Stmt, error) {
 		stmt.Kind = ast.TxCommit
 		p.eatWord("WORK")
 		p.eatWord("TRANSACTION")
+		if err := p.refuseTransactionChain(); err != nil {
+			return nil, err
+		}
 	case "ROLLBACK":
 		stmt.Kind = ast.TxRollback
 		p.eatWord("WORK")
 		p.eatWord("TRANSACTION")
+		if err := p.refuseTransactionChain(); err != nil {
+			return nil, err
+		}
 		if p.eatWord("TO") {
 			p.eatWord("SAVEPOINT")
 			name, err := p.parseSimpleName()
@@ -540,6 +569,24 @@ func (p *Parser) parseTransaction() (ast.Stmt, error) {
 		stmt.Kind, stmt.Name = ast.TxRelease, name
 	}
 	return stmt, nil
+}
+
+// refuseTransactionChain reads the AND CHAIN a COMMIT or a ROLLBACK can carry.
+// AND CHAIN starts the next transaction as this one ends, with the same
+// characteristics, and SQLite has no form that does both; AND NO CHAIN is what
+// a plain COMMIT already does and is read and dropped.
+func (p *Parser) refuseTransactionChain() error {
+	if !p.atWord(kwAnd) {
+		return nil
+	}
+	if p.eatWords(kwAnd, "NO", "CHAIN") {
+		return nil
+	}
+	if p.atWords(kwAnd, "CHAIN") {
+		return p.unsupportedf(
+			"AND CHAIN is not supported; SQLite has no way to end a transaction and begin the next one in one statement")
+	}
+	return nil
 }
 
 // parseSimpleName reads one bare or quoted name.
