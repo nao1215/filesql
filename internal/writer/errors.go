@@ -21,6 +21,10 @@ const (
 	// leaves, since what holds an empty name is a format that writes the name
 	// beside each value rather than in a header.
 	KindUnrepresentableUnnamed
+	// KindNotUTF8 is text that is not valid UTF-8, which no text format holds:
+	// the bytes go out and the file no longer reads back as the table it came
+	// from. Only a format that carries bytes rather than text can say it.
+	KindNotUTF8
 	// KindEncode is a record that is not what the format needs.
 	KindEncode
 )

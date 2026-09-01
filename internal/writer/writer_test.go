@@ -545,3 +545,71 @@ func TestAMarkLedFirstColumnIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// TestTextIsRefusedWhenItIsNotUTF8 pins that a text format holds characters
+// rather than bytes. A value the database held that was not valid UTF-8 went
+// out as itself, and the file it produced no longer loaded: the reader refused
+// it with "invalid UTF-8", on a file this package had just written.
+func TestTextIsRefusedWhenItIsNotUTF8(t *testing.T) {
+	t.Parallel()
+
+	for _, format := range []struct {
+		name string
+		f    Format
+	}{{"csv", FormatCSV}, {"tsv", FormatTSV}, {"ltsv", FormatLTSV}, {"jsonl", FormatJSONL}} {
+		t.Run(format.name, func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("a column name", func(t *testing.T) {
+				t.Parallel()
+
+				var out bytes.Buffer
+				w := New(&out, format.f, Options{})
+
+				err := w.Header([]string{"a", "b\xff"})
+				var werr *Error
+				if !errors.As(err, &werr) {
+					t.Fatalf("Header = %v, want a *writer.Error", err)
+				}
+				if werr.Kind != KindNotUTF8 {
+					t.Errorf("Kind = %v, want KindNotUTF8", werr.Kind)
+				}
+				if out.Len() != 0 {
+					t.Errorf("wrote %q before refusing the header", out.String())
+				}
+			})
+
+			t.Run("a value", func(t *testing.T) {
+				t.Parallel()
+
+				var out bytes.Buffer
+				w := New(&out, format.f, Options{})
+				if err := w.Header([]string{"a", "b"}); err != nil {
+					t.Fatalf("Header = %v", err)
+				}
+
+				err := w.Record([]string{"1", "\xff\xfe"})
+				var werr *Error
+				if !errors.As(err, &werr) {
+					t.Fatalf("Record = %v, want a *writer.Error", err)
+				}
+				if werr.Kind != KindNotUTF8 {
+					t.Errorf("Kind = %v, want KindNotUTF8", werr.Kind)
+				}
+			})
+
+			t.Run("valid text is written", func(t *testing.T) {
+				t.Parallel()
+
+				var out bytes.Buffer
+				w := New(&out, format.f, Options{})
+				if err := w.Header([]string{"a", "b"}); err != nil {
+					t.Fatalf("Header = %v", err)
+				}
+				if err := w.Record([]string{"1", "日本語🍣"}); err != nil {
+					t.Errorf("Record = %v, want every valid character to be written", err)
+				}
+			})
+		})
+	}
+}

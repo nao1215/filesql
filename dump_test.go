@@ -2051,6 +2051,109 @@ func TestDumpRefusesAColumnWithNoName(t *testing.T) {
 	})
 }
 
+// TestDumpRefusesAValueThatIsNotUTF8 holds one rule across the formats: a dump
+// is a file this package can read again, and a cell the database holds that is
+// not valid UTF-8 is not text. CSV, TSV and LTSV wrote the bytes and the load of
+// what they wrote failed with "invalid UTF-8"; XLSX put U+FFFD in its place, and
+// so did the UTF-16 encodings, although WithEncoding says a value an encoding
+// cannot write fails the save rather than being replaced -- which is what
+// Shift-JIS, EUC-JP and ISO-2022-JP did with the very same value.
+//
+// Parquet holds bytes rather than text and reads them back unchanged, so it is
+// the one format that carries such a table and the one the refusals point at.
+func TestDumpRefusesAValueThatIsNotUTF8(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	// The three ways a caller reaches the value. The storage class differs and
+	// the outcome must not.
+	insert := func(t *testing.T, db *sql.DB, how string) {
+		t.Helper()
+		switch how {
+		case "bound bytes":
+			_, err := db.ExecContext(ctx, `INSERT INTO t VALUES (?)`, []byte{0xff, 0xfe})
+			require.NoError(t, err)
+		case "cast to text":
+			_, err := db.ExecContext(ctx, `INSERT INTO t VALUES (CAST(x'fffe' AS TEXT))`)
+			require.NoError(t, err)
+		case "blob literal":
+			_, err := db.ExecContext(ctx, `INSERT INTO t VALUES (x'fffe')`)
+			require.NoError(t, err)
+		}
+	}
+	ways := []string{"bound bytes", "cast to text", "blob literal"}
+
+	for _, format := range []OutputFormat{OutputFormatCSV, OutputFormatTSV, OutputFormatLTSV, OutputFormatXLSX} {
+		for _, way := range ways {
+			t.Run(fmt.Sprintf("%v refuses it (%s)", format, way), func(t *testing.T) {
+				t.Parallel()
+
+				db := openWithTable(t, `CREATE TABLE t (a TEXT)`)
+				insert(t, db, way)
+
+				outDir := filepath.Join(t.TempDir(), "out")
+				err := DumpDatabase(db, outDir, NewDumpOptions().WithFormat(format))
+
+				require.Error(t, err, "the dump would be unreadable or silently changed")
+				assert.ErrorIs(t, err, ErrUnsupportedFormat)
+				assert.Contains(t, err.Error(), "Parquet", "the error must say what to dump instead")
+			})
+		}
+	}
+
+	for _, enc := range []Encoding{EncodingShiftJIS, EncodingEUCJP, EncodingISO2022JP, EncodingUTF16LE, EncodingUTF16BE} {
+		t.Run(fmt.Sprintf("%v refuses it", enc), func(t *testing.T) {
+			t.Parallel()
+
+			db := openWithTable(t, `CREATE TABLE t (a TEXT)`)
+			insert(t, db, "bound bytes")
+
+			outDir := filepath.Join(t.TempDir(), "out")
+			assert.Error(t, DumpDatabase(db, outDir, NewDumpOptions().WithEncoding(enc)),
+				"a substitution is the silent corruption the read side refuses")
+		})
+	}
+
+	t.Run("a column name that is not UTF-8 is refused", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, "CREATE TABLE t (\"a\xff\" TEXT)", `INSERT INTO t VALUES ('1')`)
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		assert.Error(t, DumpDatabase(db, outDir, NewDumpOptions()))
+	})
+
+	t.Run("parquet keeps it", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, `CREATE TABLE t (a TEXT)`)
+		insert(t, db, "bound bytes")
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatParquet)),
+			"parquet holds bytes and has to keep carrying them")
+		require.NoError(t, db.Close())
+
+		back, err := OpenContext(ctx, filepath.Join(outDir, "t.parquet"))
+		require.NoError(t, err)
+		defer func() { _ = back.Close() }()
+
+		var got string
+		require.NoError(t, back.QueryRowContext(ctx, `SELECT a FROM t`).Scan(&got))
+		assert.Equal(t, "\xff\xfe", got)
+	})
+
+	t.Run("valid UTF-8 is written", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, `CREATE TABLE t (a TEXT)`, `INSERT INTO t VALUES ('日本語🍣')`)
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions()))
+	})
+}
+
 // TestDumpLTSVRefusesATableWithNoRows holds the rule that a dump is a file this
 // package can read again, on the one format that cannot say what a table with
 // no rows is. LTSV carries its labels on every record rather than in a header,

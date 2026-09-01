@@ -657,6 +657,11 @@ func dumpFormatError(err error, text textDumpFormat) error {
 		instead = "; dump this table as CSV instead"
 	case writer.KindUnrepresentableAsText:
 		instead = "; dump this table as XLSX or Parquet instead"
+	case writer.KindNotUTF8:
+		// Parquet holds bytes rather than text, so it is the one format that
+		// carries such a table, and the format's own sentinel names a value
+		// this format cannot hold rather than one no text format can.
+		return fmt.Errorf("%w: %s; dump this table as Parquet instead", ErrUnsupportedFormat, writeErr.Error())
 	case writer.KindUnrepresentableUnnamed:
 		// The format's own sentinel names a value the format cannot hold, and
 		// this is a column name, so the refusal stands under ErrUnsupportedFormat
