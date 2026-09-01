@@ -101,11 +101,19 @@
 //
 // A workbook draws a number the way its format says, and the drawing is not the
 // value: a number of more than fifteen significant digits is drawn rounded to
-// fifteen, and a whole-number format draws 1234.5 as 1235. A cell a sheet draws
-// as a plain number loads the number the file stores, so an 18-digit identifier
-// keeps its digits. A cell drawn as something else -- a percentage, a
-// thousands-separated amount, an accounting figure, a fraction -- loads as the
-// text the sheet shows, since that is what the cell means to a reader.
+// fifteen, a whole-number format draws 1234.5 as 1235, a scientific one draws it
+// as 1.23E+03, and a percentage of 0.5 is drawn "50%". A numeric cell loads the
+// number the file stores whatever its format would have drawn, so an 18-digit
+// identifier keeps its digits, and a column of percentages, thousands-separated
+// amounts, accounting figures or fractions is a number column that SUM and AVG
+// answer about. Render the drawing back in SQL when it is the drawing you want.
+//
+// Two kinds of cell keep what the sheet shows instead. One is a cell that does
+// not store a number: a boolean is stored as 1 and drawn TRUE, and text is text
+// whatever its format says. The other is a number whose format draws a moment
+// rather than a quantity -- a time of day, an elapsed duration -- since the
+// serial behind one is not what it means. A date is the third of these and is
+// rewritten into ISO 8601 rather than left as either.
 //
 // A blank cell -- empty, or nothing but whitespace -- in an INTEGER or REAL
 // column is a missing number and is stored as NULL, which is what makes MAX
