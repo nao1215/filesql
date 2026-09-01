@@ -29,6 +29,30 @@ import (
 // unsupported format rather than as a failed compressor.
 var ErrNoBZ2Writer = errors.New("bzip2 compression is not supported for writing")
 
+// ErrDecompress reports a stream that failed to decompress. It is a sentinel so
+// a caller can tell "this file is not the compression its name claims" from
+// "this file is not the format its name claims", which is a difference the
+// decoders themselves blur: gzip, xz and zlib read their header when the reader
+// is built, and bzip2, zstd, lz4, s2 and snappy fail on the first read, which
+// happens inside whatever is parsing the decompressed bytes.
+var ErrDecompress = errors.New("the stream could not be decompressed")
+
+// decompressReader tags what a decoder reports while it is being read, so a
+// failure that surfaces inside the format reader is still a decompression
+// failure and reads as one.
+type decompressReader struct {
+	reader io.Reader
+	codec  string
+}
+
+func (d decompressReader) Read(p []byte) (int, error) {
+	n, err := d.reader.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return n, fmt.Errorf("%w: failed to read the %s stream: %w", ErrDecompress, d.codec, err)
+	}
+	return n, err
+}
+
 // ErrDeclaredSizeTooLarge reports a stream whose header asks for more working
 // memory than this package agrees to hold for it.
 //
@@ -200,11 +224,12 @@ func (c Codec) NewReader(reader io.Reader) (io.Reader, func() error, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create gzip reader: %w", err)
 		}
-		return gzReader, gzReader.Close, nil
+		return decompressReader{gzReader, "gzip"}, gzReader.Close, nil
 
 	case BZ2:
-		// bzip2.NewReader has nothing to release.
-		return bzip2.NewReader(reader), noClose, nil
+		// bzip2.NewReader has nothing to release, and it reads its header on
+		// the first read rather than here.
+		return decompressReader{bzip2.NewReader(reader), "bzip2"}, noClose, nil
 
 	case XZ:
 		streams, err := newXZStreams(reader)
@@ -212,7 +237,7 @@ func (c Codec) NewReader(reader io.Reader) (io.Reader, func() error, error) {
 			return nil, nil, err
 		}
 		// The xz decoder has no Close.
-		return streams, noClose, nil
+		return decompressReader{streams, "xz"}, noClose, nil
 
 	case ZSTD:
 		checked, err := zstdWithinWindowLimit(reader)
@@ -227,7 +252,7 @@ func (c Codec) NewReader(reader io.Reader) (io.Reader, func() error, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create zstd reader: %w", err)
 		}
-		return decoder, func() error {
+		return decompressReader{decoder, "zstd"}, func() error {
 			decoder.Close()
 			return nil
 		}, nil
@@ -237,16 +262,16 @@ func (c Codec) NewReader(reader io.Reader) (io.Reader, func() error, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		return streams, streams.Close, nil
+		return decompressReader{streams, "zlib"}, streams.Close, nil
 
 	case SNAPPY:
-		return snappy.NewReader(reader), noClose, nil
+		return decompressReader{snappy.NewReader(reader), "snappy"}, noClose, nil
 
 	case S2:
-		return s2.NewReader(reader), noClose, nil
+		return decompressReader{s2.NewReader(reader), "s2"}, noClose, nil
 
 	case LZ4:
-		return lz4.NewReader(reader), noClose, nil
+		return decompressReader{lz4.NewReader(reader), "lz4"}, noClose, nil
 
 	default:
 		return nil, nil, fmt.Errorf("unsupported compression type for reading: %v", c)

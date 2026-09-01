@@ -88,6 +88,17 @@
 // and CONCURRENTLY, and the CASCADE or RESTRICT of a dropped table or column.
 // The rows are the same without them.
 //
+// The words that say how to run an ANALYZE rather than what to run it on are
+// dropped -- PostgreSQL's VERBOSE and its parenthesized option list, MySQL's
+// TABLE, LOCAL and NO_WRITE_TO_BINLOG -- so the object the caller named is the
+// one analyzed. So are the INCLUDE columns of an index, which change how it is
+// stored and not what a query answers, and the WITH CHECK OPTION of a view,
+// which constrains writes SQLite refuses through a view anyway.
+//
+// PostgreSQL's "SELECT ... INTO name" is the CREATE TABLE ... AS SELECT SQLite
+// spells and becomes it, where the query is the whole statement; MySQL's INTO,
+// which fills a file or a session variable, is refused.
+//
 // PostgreSQL's OVERRIDING SYSTEM VALUE and OVERRIDING USER VALUE are dropped,
 // since a table here has no identity column for a given value to override, as
 // are the ALL and DISTINCT that stand in front of PostgreSQL's grouping

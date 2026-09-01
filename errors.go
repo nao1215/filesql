@@ -61,7 +61,10 @@ var (
 	// ErrIOOperation indicates an I/O operation failed.
 	ErrIOOperation = errors.New("filesql: I/O operation failed")
 
-	// ErrCompression indicates a compression/decompression operation failed.
+	// ErrCompression indicates a compression/decompression operation failed. A
+	// file whose suffix claims a compression its bytes do not carry answers it
+	// whichever codec the suffix names, whether that codec reads its header
+	// when the stream opens or on the first read.
 	ErrCompression = errors.New("filesql: compression operation failed")
 
 	// ErrEncoding indicates a text encoding operation failed, which for a save

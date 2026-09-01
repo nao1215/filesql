@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/nao1215/filesql/internal/codec"
 	"github.com/nao1215/filesql/internal/reader"
 )
 
@@ -160,6 +161,14 @@ func wrapReadError(err error) error {
 	// package's that comes to be produced below the reader belongs here too.
 	if errors.Is(err, ErrInvalidUTF8) {
 		return err
+	}
+	// A stream that failed to decompress is a fault in the file's compression
+	// rather than in its format, whichever of the two the decoder happened to
+	// notice it in: three of the codecs read their header when the reader is
+	// built and the rest fail on the first read, which lands inside the format
+	// reader and used to be reported as a bad CSV header.
+	if errors.Is(err, codec.ErrDecompress) {
+		return fmt.Errorf("%w: %w", ErrCompression, err)
 	}
 	switch readErr.Kind {
 	case reader.KindEmpty:
