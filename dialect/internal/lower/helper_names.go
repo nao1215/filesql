@@ -1,5 +1,11 @@
 package lower
 
+import (
+	"slices"
+	"strconv"
+	"strings"
+)
+
 // helperArity is every function the runtime registers with the driver, with the
 // number of arguments it takes; -1 is a function that takes any number.
 //
@@ -305,6 +311,27 @@ var helperArity = map[string]int{ //nolint:gochecknoglobals // a generated table
 	"year":                      1,
 }
 
+// builtinArity is the SQLite functions a lowering renames a call onto, with the
+// argument counts SQLite takes for each. They are not in helperArity because
+// the runtime does not register them: SQLite has them already.
+//
+// The counts are here for the same reason the helpers' are. A rename lands on a
+// function of its own arity, and a count SQLite does not take reaches the
+// driver, which reports it under the name it was renamed to -- a name the
+// caller never wrote and cannot find in their query. The table is closed: an
+// entry is needed only where this package writes the rename, so it grows when a
+// lowering starts renaming onto a built-in it did not before.
+//
+// The aggregate renames are not here. SQLite's scalar min and max take any
+// number of arguments while the aggregates of those names take one, so the
+// count is answered where the aggregate rules rename, which is the only place
+// that knows which of the two it is producing.
+var builtinArity = map[string][]int{ //nolint:gochecknoglobals // a fixed table
+	"trim":              {1, 2},
+	"octet_length":      {1},
+	"json_array_length": {1, 2},
+}
+
 // registeredHelper reports whether the runtime registers a function by this
 // name.
 func registeredHelper(name string) bool {
@@ -312,12 +339,37 @@ func registeredHelper(name string) bool {
 	return found
 }
 
-// helperTakesArgumentCount reports whether a helper accepts a call of n
-// arguments. A name this package does not know is left alone, since the driver
-// is what answers for it.
+// helperTakesArgumentCount reports whether the function a call was renamed to
+// accepts a call of n arguments. A name this package neither registers nor
+// renames onto is left alone, since it is a name the caller wrote and the
+// driver answers for it under that name.
 func helperTakesArgumentCount(name string, n int) bool {
-	want, found := helperArity[name]
-	return !found || want < 0 || want == n
+	if want, found := helperArity[name]; found {
+		return want < 0 || want == n
+	}
+	if counts, found := builtinArity[name]; found {
+		return slices.Contains(counts, n)
+	}
+	return true
+}
+
+// arityDescription says how many arguments a function takes, in the words the
+// refusal is written in.
+func arityDescription(name string) string {
+	if want, found := helperArity[name]; found {
+		return plural(want)
+	}
+	// Only a name one of the two tables holds reaches here, since a name in
+	// neither is never refused for its count.
+	counts := builtinArity[name]
+	if len(counts) == 1 {
+		return plural(counts[0])
+	}
+	written := make([]string, len(counts))
+	for i, c := range counts {
+		written[i] = strconv.Itoa(c)
+	}
+	return strings.Join(written, " or ") + " arguments"
 }
 
 // HelperNames lists the names this package believes the runtime registers, for
