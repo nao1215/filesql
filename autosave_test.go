@@ -1604,6 +1604,41 @@ func TestAutoSaveOverwriteFollowsASymlink(t *testing.T) {
 	assert.Equal(t, []string{"real.csv", "users.csv"}, dirEntries(t, dir), "no staged file may be left behind")
 }
 
+// TestAutoSaveOverwriteBreaksAHardLink pins the answer for the other kind of
+// link, which is the opposite of the one above and the one a reader is likely
+// to guess wrong. A save is staged beside its destination and renamed over it,
+// and a rename replaces the directory entry rather than the inode, so the path
+// the caller named receives the rows and every other name for that file keeps
+// the ones it had.
+//
+// It is pinned rather than only documented because a move away from staging
+// would change it silently, and staging is what keeps a failed write from
+// destroying the caller's source.
+func TestAutoSaveOverwriteBreaksAHardLink(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	named := filepath.Join(dir, "users.csv")
+	require.NoError(t, os.WriteFile(named, []byte("id,name\n1,alice\n"), 0o600))
+	other := filepath.Join(dir, "archive.csv")
+	if err := os.Link(named, other); err != nil {
+		t.Skipf("this platform does not allow a hard link to be created: %v", err)
+	}
+
+	require.NoError(t, autoSaveOverwrite(t, []string{named}, "INSERT INTO users VALUES (2,'bob')"))
+
+	got, err := os.ReadFile(named) //nolint:gosec // named is under t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, "id,name\n1,alice\n2,bob\n", string(got), "the path the caller named receives the row")
+
+	stale, err := os.ReadFile(other) //nolint:gosec // other is under t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, "id,name\n1,alice\n", string(stale),
+		"the other name for that file keeps the rows it had and is now a file of its own")
+
+	assert.Equal(t, []string{"archive.csv", "users.csv"}, dirEntries(t, dir), "no staged file may be left behind")
+}
+
 // TestAutoSaveOverwriteRefusesASourceItCannotWriteBeforeOpening pins where a
 // source that overwrite mode can never write back is reported. It was reported
 // from Close, one file at a time, so a set holding such a source had its earlier
