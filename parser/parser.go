@@ -9,6 +9,7 @@ import (
 
 	"github.com/nao1215/filesql/internal/codec"
 	"github.com/nao1215/filesql/internal/reader"
+	"github.com/nao1215/filesql/internal/textin"
 )
 
 // FileType names an input format. It says nothing about compression: a gzipped
@@ -171,6 +172,16 @@ var readerFormats = map[FileType]reader.Format{ //nolint:gochecknoglobals // con
 // filesql.NewCompressionHandler(...).CreateReader for a stream whose codec the
 // caller already knows, and the reader that comes back is what Parse reads.
 //
+// A text encoding is not the caller's, and Parse reads one the way
+// filesql.OpenContext reads one. A leading byte-order mark decides it: a UTF-8
+// mark is stripped rather than left in the first column name, and a UTF-16 file
+// is transcoded. What follows has to be UTF-8, because a TableData holds
+// characters and nothing in a byte stream says which other encoding it might
+// be; a Shift-JIS file, or any stray byte, is refused with an error matching
+// filesql.ErrInvalidUTF8 that names the byte and its offset. Transcode such a
+// file before parsing it. Parquet and XLSX carry their own container and are
+// read as bytes.
+//
 // Example:
 //
 //	f, _ := os.Open("data.csv")
@@ -189,6 +200,17 @@ func Parse(input io.Reader, fileType FileType, opts ...ParseOption) (result *Tab
 	format, supported := readerFormats[fileType]
 	if !supported {
 		return nil, ErrUnsupportedFileType
+	}
+
+	// A text source is read the way filesql.OpenContext reads one: a leading
+	// byte-order mark decides the encoding, and what follows has to be UTF-8.
+	// Without this the two disagreed about the same file -- a Shift-JIS file
+	// parsed here with no error into strings that are not characters, and a
+	// UTF-16 file was read as single-byte data and refused for a field count,
+	// which blames the caller's data for its encoding. A binary container and a
+	// record format carry their own framing and are read as bytes.
+	if isTextFormat(fileType) {
+		input = textin.Decode(input)
 	}
 
 	// Every chunk is collected, because a TableData is the whole table. Reading
@@ -230,6 +252,17 @@ func Parse(input io.Reader, fileType FileType, opts ...ParseOption) (result *Tab
 		ColumnTypes: columnTypesOf(read.Types),
 		Nulls:       nulls,
 	}, nil
+}
+
+// isTextFormat reports whether a file type is one whose bytes are text, and so
+// one a byte-order mark can lead and UTF-8 is the only encoding of.
+func isTextFormat(fileType FileType) bool {
+	switch fileType {
+	case CSV, TSV, LTSV, JSON, JSONL:
+		return true
+	default:
+		return false
+	}
 }
 
 // strictFieldCount refuses a delimited record whose field count differs from

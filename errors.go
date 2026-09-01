@@ -2,6 +2,8 @@ package filesql
 
 import (
 	"errors"
+
+	"github.com/nao1215/filesql/internal/textin"
 )
 
 // Sentinel errors for consistent error handling across the package.
@@ -29,7 +31,7 @@ var (
 	// stores TEXT as UTF-8, so such bytes would be stored verbatim and read back
 	// as mojibake by every consumer; the load fails instead, and the caller
 	// transcodes.
-	ErrInvalidUTF8 = errors.New("filesql: invalid UTF-8")
+	ErrInvalidUTF8 = textin.ErrInvalidUTF8
 
 	// ErrDuplicateTable indicates a table with the same name already exists.
 	ErrDuplicateTable = errors.New("filesql: duplicate table name")
@@ -71,7 +73,7 @@ var (
 
 	// ErrEncoding indicates a text encoding operation failed, which for a save
 	// means the target encoding has no way to write a value the table holds.
-	ErrEncoding = errors.New("filesql: text encoding failed")
+	ErrEncoding = textin.ErrEncoding
 
 	// ErrParsing indicates a file parsing operation failed.
 	ErrParsing = errors.New("filesql: parsing failed")

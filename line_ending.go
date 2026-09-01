@@ -1,6 +1,8 @@
 package filesql
 
 import (
+	"github.com/nao1215/filesql/internal/textin"
+
 	"bufio"
 	"io"
 )
@@ -93,7 +95,7 @@ func detectLineEnding(path string, format OutputFormat) LineEnding {
 	// side and lost them on the write side.
 	counted := reader
 	if isTextBaseType(factory.getBaseFileType(path)) {
-		counted = decodeTextReader(reader)
+		counted = textin.Decode(reader)
 	}
 
 	ending, err := countLineEndings(counted, format)

@@ -1,14 +1,18 @@
 package parser
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nao1215/filesql/internal/codec"
+	"github.com/nao1215/filesql/internal/textin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/text/encoding/unicode"
+	"golang.org/x/text/transform"
 )
 
 func closeFileOnCleanup(t *testing.T, f *os.File, name string) {
@@ -891,4 +895,91 @@ func TestParseLTSV_FieldThatNamesNoLabelIsRefused(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, [][]string{{"1", "2"}, {"3", ""}}, result.Records)
 	})
+}
+
+// TestParse_ReadsTextTheWayALoadDoes pins that this package and
+// filesql.OpenContext agree about what a text file holds. They did not: a
+// Shift-JIS file parsed here with no error at all, into strings that are not
+// characters, and a UTF-16 file was read as single-byte data and refused for a
+// field count -- an error about the caller's data for a fault in its encoding.
+func TestParse_ReadsTextTheWayALoadDoes(t *testing.T) {
+	t.Parallel()
+
+	const text = "a,b\n1,2\n"
+
+	t.Run("a byte-order mark decides the encoding", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			name  string
+			input []byte
+		}{
+			{name: "no mark", input: []byte(text)},
+			{name: "a UTF-8 mark", input: append([]byte{0xEF, 0xBB, 0xBF}, text...)},
+			{name: "a UTF-16LE mark", input: utf16Bytes(true, text)},
+			{name: "a UTF-16BE mark", input: utf16Bytes(false, text)},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				result, err := Parse(bytes.NewReader(tt.input), CSV)
+
+				require.NoError(t, err)
+				assert.Equal(t, []string{"a", "b"}, result.Headers, "the mark belongs to the encoding, not to the first column name")
+				assert.Equal(t, [][]string{{"1", "2"}}, result.Records)
+			})
+		}
+	})
+
+	t.Run("bytes that are not characters are refused", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			name  string
+			input []byte
+		}{
+			// Shift-JIS carries no mark to detect and would otherwise be held
+			// as bytes no consumer can decode.
+			{name: "Shift-JIS", input: []byte("a,b\n\x82\xa0,2\n")},
+			{name: "a stray byte", input: []byte("a,b\n\xff,2\n")},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				_, err := Parse(bytes.NewReader(tt.input), CSV)
+
+				require.Error(t, err, "a text parser hands back characters or nothing")
+				assert.ErrorIs(t, err, textin.ErrInvalidUTF8)
+				assert.Contains(t, err.Error(), "offset", "the refusal says where the input stopped being text")
+			})
+		}
+	})
+
+	t.Run("a binary container is read as bytes", func(t *testing.T) {
+		t.Parallel()
+
+		// A Parquet file holds bytes that are not UTF-8 in its own framing, and
+		// reading it through a text decoder would refuse every one of them.
+		f, err := os.Open(filepath.Join("..", "testdata", "products.parquet"))
+		require.NoError(t, err)
+		closeFileOnCleanup(t, f, "products.parquet")
+
+		result, err := Parse(f, Parquet)
+
+		require.NoError(t, err)
+		assert.NotEmpty(t, result.Records)
+	})
+}
+
+// utf16Bytes writes s as UTF-16 with a leading byte-order mark.
+func utf16Bytes(littleEndian bool, s string) []byte {
+	order := unicode.BigEndian
+	if littleEndian {
+		order = unicode.LittleEndian
+	}
+	out, _, err := transform.Bytes(unicode.UTF16(order, unicode.UseBOM).NewEncoder(), []byte(s))
+	if err != nil {
+		panic(err)
+	}
+	return out
 }

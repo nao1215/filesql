@@ -3276,3 +3276,42 @@ func TestProcessor_outputFormat(t *testing.T) {
 		})
 	}
 }
+
+// TestShiftJISIsRefusedByTheParse pins where a caller hears about an encoding.
+// prep reads through the parser, so a file that is not UTF-8 is refused when it
+// is read rather than when the output is written -- which used to report "the
+// name of column 1 is not valid UTF-8" for a UTF-16 file whose column names
+// were perfectly good text.
+func TestShiftJISIsRefusedByTheParse(t *testing.T) {
+	t.Parallel()
+
+	var rows []struct{}
+	_, _, err := NewProcessor(parser.CSV).Process(bytes.NewReader([]byte("a,b\n\x82\xa0,2\n")), &rows)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid UTF-8")
+	assert.Contains(t, err.Error(), "offset", "the refusal says where the input stopped being text")
+}
+
+// TestUTF16LoadsThroughPrep is the other half: a file a load reads, prep reads.
+func TestUTF16LoadsThroughPrep(t *testing.T) {
+	t.Parallel()
+
+	const text = "a,b\n1,2\n"
+	utf16le := make([]byte, 0, 2+2*len(text))
+	utf16le = append(utf16le, 0xFF, 0xFE)
+	for i := range len(text) {
+		// Every character here is ASCII, which is one code unit whose high byte
+		// is zero.
+		utf16le = append(utf16le, text[i], 0x00)
+	}
+
+	var rows []struct{}
+	reader, result, err := NewProcessor(parser.CSV).Process(bytes.NewReader(utf16le), &rows)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.RowCount)
+	out, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, text, string(out), "what comes out is UTF-8, whatever went in")
+}
