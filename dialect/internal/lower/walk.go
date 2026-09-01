@@ -750,8 +750,17 @@ func rowLimitedWrite(statement string, order []ast.OrderTerm, limit *ast.LimitCl
 	switch {
 	case len(order) > 0:
 		clause = "ORDER BY"
+		// The statement's own span is where UPDATE or DELETE stands, which is
+		// not where the refused clause is; a caller reading the message goes to
+		// the clause it names.
+		if at := order[0].Span; at != (ast.Span{}) {
+			span = at
+		}
 	case limit != nil:
 		clause = "LIMIT"
+		if at := limit.Span; at != (ast.Span{}) {
+			span = at
+		}
 	default:
 		return nil
 	}

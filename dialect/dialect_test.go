@@ -1739,6 +1739,30 @@ func TestAWriteCarryingOrderByOrLimitIsRefused(t *testing.T) {
 		}
 	})
 
+	// The refusal points at the clause rather than at the statement, so a
+	// caller reading the position goes to the words it names.
+	t.Run("the position names the clause", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			query string
+			want  string
+		}{
+			{"UPDATE t SET b = 'x'\n  ORDER BY a\n  LIMIT 1", "line 2"},
+			{"DELETE FROM t\n  LIMIT 1", "line 2"},
+			{"UPDATE t SET b = 'x'\n\n  LIMIT 1", "line 3"},
+		} {
+			_, err := Translate(MySQL, tt.query)
+			if err == nil {
+				t.Errorf("Translate(MySQL, %q) translated, want a refusal", tt.query)
+				continue
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("Translate(MySQL, %q) error = %q, want it to name %s", tt.query, err, tt.want)
+			}
+		}
+	})
+
 	// A SELECT is where SQLite does take both, so the refusal must not spread to
 	// it -- including the SELECT inside an INSERT and the one a CTE holds.
 	t.Run("a select still takes both", func(t *testing.T) {
