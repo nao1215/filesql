@@ -3,10 +3,12 @@ package filesql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
+	filereader "github.com/nao1215/filesql/internal/reader"
 	wireconv "github.com/nao1215/filesql/parser/wire"
 )
 
@@ -26,9 +28,25 @@ func isFedWireFile(path string) bool {
 //
 // The returned TableSet can be used later for DumpFedWire to reconstruct the Fedwire file.
 func parseFedWireFile(reader io.Reader, baseTableName string) ([]*table, *wireconv.TableSet, error) {
-	tableSet, err := wireconv.ParseReader(reader)
+	// The library that reads a Fedwire file holds it whole, so a stream sending
+	// a record with no terminator would be read however long it is. The bound is
+	// the one every other record here is read against, and the one ACH already
+	// holds to.
+	//
+	// It is read through a recorder because that library scans lines and reports
+	// what the message it managed to build is missing rather than why the read
+	// stopped, so a stream refused by the bound came back as a complaint about
+	// an absent field. ACH needs no such wrapper: its library returns the read's
+	// own error.
+	source := &recordingReader{src: filereader.BoundRecords(reader)}
+	tableSet, err := wireconv.ParseReader(source)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: failed to parse Fedwire file: %w", ErrWire, err)
+		if source.err != nil {
+			err = source.err
+		}
+		// The parser's own error already names the file it could not read, so
+		// repeating it here read as two failures rather than one.
+		return nil, nil, fmt.Errorf("%w: %w", ErrWire, err)
 	}
 	if tableSet == nil {
 		return nil, nil, fmt.Errorf("%w: failed to convert Fedwire file to tables", ErrWire)
@@ -41,6 +59,24 @@ func parseFedWireFile(reader io.Reader, baseTableName string) ([]*table, *wireco
 
 	t := fileParserTableDataToTable(msgTable, baseTableName+"_message")
 	return []*table{t}, tableSet, nil
+}
+
+// recordingReader keeps the first error its source returned, so a caller can
+// report why a read stopped after a library that swallowed it has answered with
+// something else.
+type recordingReader struct {
+	src io.Reader
+	err error
+}
+
+// Read implements io.Reader. io.EOF is the ordinary end of a stream rather than
+// a reason a read stopped short, so it is not recorded.
+func (r *recordingReader) Read(p []byte) (int, error) {
+	n, err := r.src.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) && r.err == nil {
+		r.err = err
+	}
+	return n, err
 }
 
 // isWireBaseTableName checks if a table name matches the Fedwire naming convention

@@ -731,3 +731,70 @@ func TestStagedCopyReadsBlankTheWayTheTypingDoes(t *testing.T) {
 		assert.Equal(t, int64(10), amount)
 	})
 }
+
+// endlessReader emits one byte forever with no record terminator, counting what
+// it has handed over and refusing past a cap so a test cannot run away. It is
+// the source the record bound exists for: a stream that never ends a record.
+type endlessReader struct {
+	fill   byte
+	served int64
+	cap    int64
+}
+
+func (e *endlessReader) Read(p []byte) (int, error) {
+	if e.served >= e.cap {
+		return 0, fmt.Errorf("test cap of %d bytes reached without a refusal", e.cap)
+	}
+	for i := range p {
+		p[i] = e.fill
+	}
+	e.served += int64(len(p))
+	return len(p), nil
+}
+
+// TestReaderRecordBoundHoldsForEveryFormat drives one unterminated stream
+// through every format a reader can be loaded as. The bound is what keeps a
+// source that never ends a record from being read for as long as the sender
+// keeps sending, so a format that does not hold to it is the one hole worth
+// having a test across all of them for: each format was correct on its own and
+// the pair of formats read by a library of their own disagreed.
+func TestReaderRecordBoundHoldsForEveryFormat(t *testing.T) {
+	t.Parallel()
+
+	// Past the bound with room to see a refusal, and far short of what an
+	// unbounded read would take.
+	const readCap = 3 * (64 << 20)
+
+	tests := []struct {
+		name     string
+		fileType FileType
+		fill     byte
+	}{
+		{"CSV", FileTypeCSV, 'x'},
+		{"TSV", FileTypeTSV, 'x'},
+		{"LTSV", FileTypeLTSV, 'x'},
+		{"JSON", FileTypeJSON, 'x'},
+		{"JSONL", FileTypeJSONL, 'x'},
+		{"ACH", FileTypeACH, '1'},
+		{"FedWire", FileTypeFedWire, '1'},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			src := &endlessReader{fill: tt.fill, cap: readCap}
+			db, err := NewBuilder().
+				AddReader(src, "t", tt.fileType).
+				Open(context.Background())
+			if db != nil {
+				require.NoError(t, db.Close())
+			}
+			require.Error(t, err, "an unterminated stream must be refused")
+			assert.ErrorIs(t, err, reader.ErrRecordTooLong,
+				"the refusal must be the record bound rather than whatever the format complains about first")
+			assert.Less(t, src.served, int64(readCap),
+				"the stream was read to the test's cap, so nothing bounded it")
+		})
+	}
+}
