@@ -562,7 +562,7 @@ func toInt(v driver.Value) (int64, bool) {
 	case int64:
 		return x, true
 	case float64:
-		return int64(x), true
+		return int64FromFloat(x), true
 	case bool:
 		if x {
 			return 1, true
@@ -594,13 +594,33 @@ func toInt(v driver.Value) (int64, bool) {
 func toCount(v driver.Value) (int64, bool) {
 	switch x := v.(type) {
 	case float64:
-		return int64(math.Round(x)), true
+		return int64FromFloat(math.Round(x)), true
 	case string:
 		return int64(leadingNumber(x)), true
 	case []byte:
 		return int64(leadingNumber(string(x))), true
 	}
 	return toInt(v)
+}
+
+// int64FromFloat is x as an int64, with an answer for the values a conversion
+// does not have one for. Go leaves int64(x) implementation-defined when x is
+// outside the range and for NaN, which on amd64 is the minimum -- so a helper
+// given a count of 1e308 read it as the most negative number there is and
+// indexed a slice with it. A magnitude past the range is the bound it passed,
+// which is what a caller writing such a number means, and NaN is no number at
+// all.
+func int64FromFloat(x float64) int64 {
+	switch {
+	case math.IsNaN(x):
+		return 0
+	case x >= math.MaxInt64:
+		return math.MaxInt64
+	case x <= math.MinInt64:
+		return math.MinInt64
+	default:
+		return int64(x)
+	}
 }
 
 // toFloat converts a driver.Value to a float64, reporting success.
@@ -1564,6 +1584,13 @@ func pad(args []driver.Value, left bool, rules padRules) (driver.Value, error) {
 		}
 		return nil, nil
 	}
+	name := fnNameRpad
+	if left {
+		name = fnNameLpad
+	}
+	if err := checkStringLength(name, 1, n); err != nil {
+		return nil, err
+	}
 	length := int(n)
 	runes := []rune(s)
 	if len(runes) >= length {
@@ -1944,17 +1971,18 @@ func fnSubstringIndex(args []driver.Value) (driver.Value, error) {
 		return "", nil
 	}
 	parts := strings.Split(s, delim)
-	if count > 0 {
-		if int(count) >= len(parts) {
-			return s, nil
-		}
-		return strings.Join(parts[:count], delim), nil
-	}
-	c := int(-count)
-	if c >= len(parts) {
+	// The counts are compared as int64 and the negative one is answered before
+	// it is negated: negating the smallest int64 leaves it where it was, so
+	// "the last -9223372036854775808 parts" indexed the slice from far below
+	// zero and panicked. A magnitude that reaches the number of parts already
+	// answers with the whole string, and the smallest count is such a one.
+	if count >= int64(len(parts)) || count <= -int64(len(parts)) {
 		return s, nil
 	}
-	return strings.Join(parts[len(parts)-c:], delim), nil
+	if count > 0 {
+		return strings.Join(parts[:count], delim), nil
+	}
+	return strings.Join(parts[int64(len(parts))+count:], delim), nil
 }
 
 // fnRepeat implements dialects.MySQL REPEAT(str, count), which answers the empty string
@@ -1976,7 +2004,31 @@ func repeatWith(args []driver.Value, raiseOnNegative bool) (driver.Value, error)
 	if count <= 0 {
 		return "", nil
 	}
+	if err := checkStringLength(fnNameRepeat, int64(len(s)), count); err != nil {
+		return nil, err
+	}
 	return strings.Repeat(s, int(count)), nil
+}
+
+// maxStringLength is the longest string a helper will build. It is SQLite's own
+// SQLITE_MAX_LENGTH default, which is the length past which the engine refuses a
+// string with "string or blob too big", so a helper's answer and SQLite's agree
+// about what can exist.
+const maxStringLength = 1_000_000_000
+
+// checkStringLength refuses a result too long to hold, before it is built. The
+// product is not computed: it is what overflows, and strings.Repeat answers an
+// overflow with a panic, which inside a SQLite user function goes up through the
+// driver and ends the caller's process.
+func checkStringLength(name string, unit, count int64) error {
+	if unit == 0 || count <= 0 {
+		return nil
+	}
+	if count > int64(maxStringLength)/unit {
+		return fmt.Errorf("dialect: %s would build a string of %d x %d bytes, past the %d a string can hold",
+			name, unit, count, maxStringLength)
+	}
+	return nil
 }
 
 // soundexRules are the three things the dialects differ on, all of them read
@@ -2230,6 +2282,9 @@ func fnSpace(args []driver.Value) (driver.Value, error) {
 	}
 	if n <= 0 {
 		return "", nil
+	}
+	if err := checkStringLength(fnNameSpace, 1, n); err != nil {
+		return nil, err
 	}
 	return strings.Repeat(" ", int(n)), nil
 }

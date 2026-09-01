@@ -40,6 +40,8 @@ const (
 	fnNameSubstr    = "SUBSTR"
 	fnNameStringAgg = "STRING_AGG"
 	fnNameCharLen   = "CHAR_LENGTH"
+	fnNameRepeat    = "REPEAT"
+	fnNameSpace     = "SPACE"
 	kwAll           = "ALL"
 	kwUnion         = "UNION"
 	kwIntersect     = "INTERSECT"
