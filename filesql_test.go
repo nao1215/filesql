@@ -4359,3 +4359,25 @@ func TestAHeaderOfEmptyCellsIsStillAHeader(t *testing.T) {
 		}
 	}
 }
+
+// TestOpenContext_EndedContext is OpenContext's share of the contract the
+// godoc states for every entry point that takes a context: the load stops and
+// the error says which way the context ended. Open is the same call with a
+// background context, so it has nothing to stop for.
+func TestOpenContext_EndedContext(t *testing.T) {
+	t.Parallel()
+
+	path := csvFixture(t)
+
+	for _, tc := range endedContexts() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, err := OpenContext(tc.make(t), path)
+			if db != nil {
+				_ = db.Close()
+			}
+			assert.ErrorIs(t, err, tc.want)
+		})
+	}
+}

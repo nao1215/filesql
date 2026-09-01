@@ -1848,6 +1848,36 @@ func canceledContext(t *testing.T) context.Context {
 	return ctx
 }
 
+// expiredContext returns a context whose deadline has passed, which is the
+// other way a caller's context ends and the one that answers a different
+// sentinel.
+func expiredContext(t *testing.T) context.Context {
+	t.Helper()
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Millisecond))
+	t.Cleanup(cancel)
+	return ctx
+}
+
+// endedContext is one way a caller's context can be done, with the error it has
+// to produce. A load that answered the wrong one would tell a caller their
+// deadline passed when they had cancelled, or the reverse.
+type endedContext struct {
+	name string
+	// make builds the context when the case runs, so a parallel subtest gets
+	// one of its own rather than sharing a value built here.
+	make func(*testing.T) context.Context
+	want error
+}
+
+// endedContexts is every way a caller's context can be done.
+func endedContexts() []endedContext {
+	return []endedContext{
+		{"cancelled", canceledContext, context.Canceled},
+		{"past a deadline", expiredContext, context.DeadlineExceeded},
+	}
+}
+
 // builtBuilder returns a builder that has collected path, which is the state a
 // load starts from.
 func builtBuilder(t *testing.T, path string) *DBBuilder {
@@ -1858,39 +1888,64 @@ func builtBuilder(t *testing.T, path string) *DBBuilder {
 	return builder
 }
 
-// TestBuilderEntryPoints_CanceledContext checks that each way of loading stops
-// on a context that is already done, before it opens files or writes tables. A
-// load that ignored cancellation would leave half the tables of an abandoned
-// request behind.
-func TestBuilderEntryPoints_CanceledContext(t *testing.T) {
+// TestBuilderEntryPoints_EndedContext checks that each way of loading stops on a
+// context that is already done, before it opens files or writes tables, and
+// answers the sentinel that says which way it ended. A load that ignored
+// cancellation would leave half the tables of an abandoned request behind, and
+// one that answered the wrong sentinel would tell a caller their deadline
+// passed when they had cancelled.
+//
+// The godoc names six entry points that take a context. The four that belong to
+// a builder are here; OpenContext is covered in filesql_test.go and
+// DumpDatabaseContext in dump_test.go, each beside the code it calls.
+func TestBuilderEntryPoints_EndedContext(t *testing.T) {
 	t.Parallel()
 
 	path := csvFixture(t)
 
-	t.Run("Open", func(t *testing.T) {
-		t.Parallel()
+	for _, tc := range endedContexts() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-		_, err := builtBuilder(t, path).Open(canceledContext(t))
-		assert.ErrorIs(t, err, context.Canceled)
-	})
+			t.Run("Open", func(t *testing.T) {
+				t.Parallel()
 
-	t.Run("LoadInto", func(t *testing.T) {
-		t.Parallel()
+				db, err := builtBuilder(t, path).Open(tc.make(t))
+				if db != nil {
+					_ = db.Close()
+				}
+				assert.ErrorIs(t, err, tc.want)
+			})
 
-		err := builtBuilder(t, path).LoadInto(canceledContext(t), openTestDB(t))
-		assert.ErrorIs(t, err, context.Canceled)
-	})
+			t.Run("OpenReadOnly", func(t *testing.T) {
+				t.Parallel()
 
-	t.Run("LoadIntoTx", func(t *testing.T) {
-		t.Parallel()
+				db, err := builtBuilder(t, path).OpenReadOnly(tc.make(t))
+				if db != nil {
+					_ = db.Close()
+				}
+				assert.ErrorIs(t, err, tc.want)
+			})
 
-		db := openTestDB(t)
-		tx, err := db.BeginTx(context.Background(), nil)
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
+			t.Run("LoadInto", func(t *testing.T) {
+				t.Parallel()
 
-		assert.ErrorIs(t, builtBuilder(t, path).LoadIntoTx(canceledContext(t), tx), context.Canceled)
-	})
+				err := builtBuilder(t, path).LoadInto(tc.make(t), openTestDB(t))
+				assert.ErrorIs(t, err, tc.want)
+			})
+
+			t.Run("LoadIntoTx", func(t *testing.T) {
+				t.Parallel()
+
+				db := openTestDB(t)
+				tx, err := db.BeginTx(context.Background(), nil)
+				require.NoError(t, err)
+				defer func() { _ = tx.Rollback() }()
+
+				assert.ErrorIs(t, builtBuilder(t, path).LoadIntoTx(tc.make(t), tx), tc.want)
+			})
+		})
+	}
 }
 
 // TestLoadIntoTx_Refusals covers what LoadIntoTx cannot do. The caller owns the
