@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nao1215/filesql/internal/reader"
 	"github.com/nao1215/filesql/internal/writer"
 	"github.com/nao1215/filesql/parser"
 )
@@ -257,9 +258,14 @@ func (p *Processor) processRecords(input io.Reader, structSlicePointer any) (
 	// the same reason. Comparing as written meant a struct field "Name", whose
 	// column name is derived as "name", matched no column at all in a file whose
 	// header says "Name" -- which is what a spreadsheet writes.
+	//
+	// It is the loader's fold rather than strings.ToLower, and for the same
+	// reason: SQLite's stops at ASCII, so a file whose headers are "ä" and "Ä"
+	// is two columns there. Folding the whole of Unicode made them one key here,
+	// and a field naming the second one read and wrote the first.
 	headerToColIdx := make(map[string]int, len(headers))
 	for i, h := range headers {
-		key := strings.ToLower(h)
+		key := reader.ASCIIFold(h)
 		if _, exists := headerToColIdx[key]; !exists {
 			headerToColIdx[key] = i
 		}
@@ -278,7 +284,7 @@ func (p *Processor) processRecords(input io.Reader, structSlicePointer any) (
 	var unmatched []string
 	for i := range sInfo.Fields {
 		fi := &sInfo.Fields[i]
-		colIdx, ok := headerToColIdx[strings.ToLower(fi.ColumnName)]
+		colIdx, ok := headerToColIdx[reader.ASCIIFold(fi.ColumnName)]
 		if !ok {
 			// A field carrying prep:"default=..." is meant to work without a
 			// column: the default is where its value comes from. Only a field

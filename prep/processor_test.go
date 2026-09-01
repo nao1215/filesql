@@ -16,6 +16,7 @@ import (
 	"github.com/nao1215/filesql/parser"
 	"github.com/parquet-go/parquet-go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestRecord is a test struct for processing
@@ -906,6 +907,85 @@ func TestProcessor_JSON_AllRowsEmptied(t *testing.T) {
 	if !errors.Is(err, ErrEmptyOutput) {
 		t.Errorf("err = %v, want ErrEmptyOutput", err)
 	}
+}
+
+// TestProcessor_ColumnMatchingFoldsASCIICaseOnly pins prep's column matching
+// against the loader's. SQLite compares identifiers folding ASCII case and no
+// more, so the loader keeps two headers that differ only outside ASCII as two
+// columns; prep has to read the same file as two columns, or a field reads and
+// writes a column the caller did not name.
+func TestProcessor_ColumnMatchingFoldsASCIICaseOnly(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a field finds the column it names", func(t *testing.T) {
+		t.Parallel()
+
+		// The column is named through the tag rather than by the field's own
+		// name, which has to be ASCII.
+		type row struct {
+			Upper string `name:"Ä" prep:"uppercase"`
+		}
+
+		var rows []row
+		reader, _, err := NewProcessor(parser.CSV).
+			Process(strings.NewReader("ä,Ä\nfirst,second\n"), &rows)
+		require.NoError(t, err)
+
+		assert.Equal(t, "SECOND", rows[0].Upper, "the field names the second column")
+
+		out, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		assert.Equal(t, "ä,Ä\nfirst,SECOND\n", string(out),
+			"the tag rewrote the column the field names and left the other one alone")
+	})
+
+	t.Run("the other scripts an all-caps heading is written in", func(t *testing.T) {
+		t.Parallel()
+
+		type cyrillic struct {
+			Upper string `name:"А" prep:"uppercase"`
+		}
+		type accented struct {
+			Upper string `name:"É" prep:"uppercase"`
+		}
+
+		var cyr []cyrillic
+		_, _, err := NewProcessor(parser.CSV).
+			Process(strings.NewReader("а,А\nfirst,second\n"), &cyr)
+		require.NoError(t, err)
+		assert.Equal(t, "SECOND", cyr[0].Upper)
+
+		var acc []accented
+		_, _, err = NewProcessor(parser.CSV).
+			Process(strings.NewReader("é,É\nfirst,second\n"), &acc)
+		require.NoError(t, err)
+		assert.Equal(t, "SECOND", acc[0].Upper)
+	})
+
+	t.Run("ASCII case is still folded", func(t *testing.T) {
+		t.Parallel()
+
+		// A spreadsheet writes "Name" and the field is Name, whose column name
+		// is derived as "name"; folding ASCII case is what matches them.
+		type row struct {
+			Name string `prep:"trim"`
+		}
+
+		var rows []row
+		_, _, err := NewProcessor(parser.CSV).
+			Process(strings.NewReader("Name\n Alice \n"), &rows)
+		require.NoError(t, err)
+		assert.Equal(t, "Alice", rows[0].Name)
+	})
+
+	t.Run("two headers differing only in ASCII case are still refused", func(t *testing.T) {
+		t.Parallel()
+
+		var rows []struct{}
+		_, _, err := NewProcessor(parser.CSV).
+			Process(strings.NewReader("a,A\n1,2\n"), &rows)
+		require.Error(t, err, "the parser refuses the duplicate before prep sees it")
+	})
 }
 
 // requiredARow drops a row whose column a is empty; emailDataRow drops a JSON
