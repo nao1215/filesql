@@ -94,11 +94,12 @@ func TestScanSheetValues(t *testing.T) {
 		assert.Empty(t, dates)
 	})
 
-	t.Run("a shared or inline string is text whatever its style", func(t *testing.T) {
+	t.Run("a cell that does not store a number keeps what it is", func(t *testing.T) {
 		t.Parallel()
 
 		sheet := `<worksheet><sheetData>
-			<row r="2"><c r="A2" s="3" t="s"><v>0</v></c><c r="B2" s="3" t="str"><v>45000</v></c></row>
+			<row r="2"><c r="A2" s="3" t="s"><v>0</v></c><c r="B2" s="3" t="str"><v>45000</v></c>` +
+			`<c r="C2" s="3" t="inlineStr"><is><t>45000</t></is></c><c r="D2" s="1" t="b"><v>1</v></c></row>
 		</sheetData></worksheet>`
 
 		dates := map[sheetCell]string{}
