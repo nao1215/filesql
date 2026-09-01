@@ -42,6 +42,27 @@ const (
 	FormatJSONL
 )
 
+// IsText reports whether a format's bytes are text, which decides two things a
+// caller has to get right before reading: a leading byte-order mark belongs to
+// the encoding rather than to the first column name, and what follows has to be
+// UTF-8. A container carries its own framing and is read as bytes, so putting a
+// text decoder in front of one would refuse every file.
+//
+// It lives on the format rather than in each caller because both doors into
+// this module -- the loader and parser.Parse -- convert their own file type to
+// a Format before reading, and two copies of this list would be one rule with
+// two answers.
+func (f Format) IsText() bool {
+	switch f {
+	case FormatCSV, FormatTSV, FormatLTSV, FormatJSON, FormatJSONL:
+		return true
+	case FormatParquet, FormatXLSX:
+		return false
+	default:
+		return false
+	}
+}
+
 // String names the format the way an error message does.
 func (f Format) String() string {
 	switch f {

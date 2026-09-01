@@ -3,38 +3,33 @@ package filesql
 import (
 	"bytes"
 	"io"
+
+	"github.com/nao1215/filesql/internal/textin"
 )
 
 // isTextBaseType reports whether a base file type is a text format whose byte
-// stream may carry a Unicode byte-order mark. Binary containers (Parquet, XLSX)
-// and record formats with their own framing (ACH, Fedwire) must not be decoded.
+// stream may carry a Unicode byte-order mark. The answer is the reader's, since
+// both this package and parser ask it of the same formats; a type the reader
+// has no name for -- ACH and Fedwire, which carry their own framing -- is not
+// text here either.
 func isTextBaseType(ft FileType) bool {
-	switch ft {
-	case FileTypeCSV, FileTypeTSV, FileTypeLTSV, FileTypeJSON, FileTypeJSONL:
-		return true
-	default:
-		return false
-	}
+	format, supported := readerFormats[ft]
+	return supported && format.IsText()
 }
 
 // bomEncodings maps a leading byte-order mark to the encoding that wrote it.
 // These are exactly the encodings the read side recognizes without being told,
-// which is what makes them the ones an in-place save can put back.
+// which is what makes them the ones an in-place save can put back -- so the
+// marks themselves come from the reader rather than being written out again
+// here, where the two lists would be one rule with two answers.
 var bomEncodings = []struct {
 	mark     []byte
 	encoding Encoding
 }{
-	{mark: bomUTF16LE, encoding: EncodingUTF16LE},
-	{mark: bomUTF16BE, encoding: EncodingUTF16BE},
-	{mark: bomUTF8, encoding: encodingUTF8BOM},
+	{mark: textin.BOMUTF16LE, encoding: EncodingUTF16LE},
+	{mark: textin.BOMUTF16BE, encoding: EncodingUTF16BE},
+	{mark: textin.BOMUTF8, encoding: encodingUTF8BOM},
 }
-
-// The byte-order marks this package recognizes on the read side.
-var (
-	bomUTF16LE = []byte{0xFF, 0xFE}       //nolint:gochecknoglobals // constant-like
-	bomUTF16BE = []byte{0xFE, 0xFF}       //nolint:gochecknoglobals // constant-like
-	bomUTF8    = []byte{0xEF, 0xBB, 0xBF} //nolint:gochecknoglobals // constant-like
-)
 
 // detectSourceEncoding reports the text encoding path is written in, so a save
 // that overwrites it can write the same one. A save that always wrote plain

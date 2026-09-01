@@ -33,11 +33,14 @@ var ErrInvalidUTF8 = errors.New("filesql: invalid UTF-8")
 // filesql.ErrEncoding names.
 var ErrEncoding = errors.New("filesql: text encoding failed")
 
-// The byte-order marks this package recognizes.
+// The byte-order marks a text source can begin with. They are exported because
+// a save that overwrites a file writes the encoding that file had, and the
+// encodings it can put back are exactly the ones the read side recognizes
+// without being told: two lists of these would be one rule with two answers.
 var (
-	bomUTF16LE = []byte{0xFF, 0xFE}       //nolint:gochecknoglobals // constant-like
-	bomUTF16BE = []byte{0xFE, 0xFF}       //nolint:gochecknoglobals // constant-like
-	bomUTF8    = []byte{0xEF, 0xBB, 0xBF} //nolint:gochecknoglobals // constant-like
+	BOMUTF16LE = []byte{0xFF, 0xFE}       //nolint:gochecknoglobals // constant-like
+	BOMUTF16BE = []byte{0xFE, 0xFF}       //nolint:gochecknoglobals // constant-like
+	BOMUTF8    = []byte{0xEF, 0xBB, 0xBF} //nolint:gochecknoglobals // constant-like
 )
 
 // Decode wraps a text reader so a leading Unicode byte-order mark is
@@ -58,13 +61,13 @@ func Decode(reader io.Reader) io.Reader {
 	buffered := bufio.NewReader(reader)
 	// A short input peeks short rather than failing: what came back is still
 	// enough to say which mark, if any, it begins with.
-	head, _ := buffered.Peek(len(bomUTF8)) //nolint:errcheck // A short read is answered by the prefix tests below
+	head, _ := buffered.Peek(len(BOMUTF8)) //nolint:errcheck // A short read is answered by the prefix tests below
 	switch {
-	case bytes.HasPrefix(head, bomUTF16LE):
+	case bytes.HasPrefix(head, BOMUTF16LE):
 		return decodeMark(newUTF16ValidatingReader(buffered, true))
-	case bytes.HasPrefix(head, bomUTF16BE):
+	case bytes.HasPrefix(head, BOMUTF16BE):
 		return decodeMark(newUTF16ValidatingReader(buffered, false))
-	case bytes.HasPrefix(head, bomUTF8):
+	case bytes.HasPrefix(head, BOMUTF8):
 		return decodeMark(buffered)
 	default:
 		// No mark, so there is nothing for the transcoder to strip or convert
