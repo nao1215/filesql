@@ -493,18 +493,23 @@ func overwriteWorkbookAtPath(db *sql.DB, path, baseTableName string, siblingBase
 	// overwrite the first's sheet and one table's rows would be gone while the
 	// save reported success. Losing a table silently is worse than not saving, so
 	// the collision is refused, the same way a format this package cannot write is.
+	//
+	// The names are compared folded, because that is how the workbook writer
+	// compares them: two sheets whose names differ only in case are one sheet
+	// there, and comparing as written let that pair past this check and into the
+	// overwrite it exists to stop.
 	bySheet := make(map[string]string, len(tables))
 	sheets := make([]xlsxSheet, 0, len(tables))
 	for _, tableName := range tables {
-		sheetName, ok := held[reader.ASCIIFold(tableName)]
+		sheetName, ok := held[sheetKey(tableName)]
 		if !ok {
 			sheetName = xlsxSheetNameForTable(baseTableName, tableName)
 		}
-		if first, clash := bySheet[sheetName]; clash {
+		if first, clash := bySheet[sheetKey(sheetName)]; clash {
 			return fmt.Errorf("%w: tables %s and %s both become the sheet %q in %s, and Excel holds one sheet per name; rename one, or save to a directory instead",
 				ErrUnsupportedFormat, first, tableName, sheetName, path)
 		}
-		bySheet[sheetName] = tableName
+		bySheet[sheetKey(sheetName)] = tableName
 
 		sheets = append(sheets, xlsxSheet{
 			name: sheetName,
@@ -580,6 +585,22 @@ func writeXLSXWorkbookCompressed(w io.Writer, path string, base *reader.Workbook
 // collide that way is refused when it is loaded. A workbook changed on disk
 // since could still do it, and the first sheet in the file wins; the reverse
 // collision, two tables arriving at one sheet, is what the caller checks.
+// sheetKey folds a table name for the map that answers which sheet of a
+// workbook a table lives in.
+//
+// The fold is Excel's rather than SQLite's, which is the one place in this
+// package where those two differ and the difference matters. Everywhere a
+// table name is compared against another table name the fold stops at ASCII,
+// because that is where SQLite's stops. A sheet name is compared by the
+// library that writes the workbook, and it matches sheet names with
+// strings.EqualFold, so a table whose sheet is already there has to be found
+// under the same rule: folding only ASCII missed a sheet named "xÄy" for a
+// table named after "xäy", and asking for the sheet that was missed hands back
+// the existing one, whose rows the save then overwrites.
+func sheetKey(tableName string) string {
+	return strings.ToLower(tableName)
+}
+
 func sheetsByTable(base *reader.Workbook, baseTableName string) map[string]string {
 	if base == nil {
 		return nil
@@ -587,7 +608,7 @@ func sheetsByTable(base *reader.Workbook, baseTableName string) map[string]strin
 	names := base.File().GetSheetList()
 	held := make(map[string]string, len(names))
 	for _, sheet := range names {
-		key := reader.ASCIIFold(xlsxSheetTableName(baseTableName, sheet))
+		key := sheetKey(xlsxSheetTableName(baseTableName, sheet))
 		if _, taken := held[key]; !taken {
 			held[key] = sheet
 		}

@@ -9,6 +9,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/nao1215/filesql/internal/reader"
+	"github.com/xuri/excelize/v2"
 )
 
 func TestAutoSaveConnection_PerformACHAutoSave(t *testing.T) {
@@ -632,4 +635,93 @@ func TestDumpDatabase_RefusesADestinationThatIsNotADirectory(t *testing.T) {
 	assert.Contains(t, err.Error(), "not a directory")
 	assert.Contains(t, err.Error(), occupied)
 	assert.NotContains(t, err.Error(), "mkdir", "the refusal is this package's own, not the one mkdir writes")
+}
+
+// TestSheetKeyFoldsTheWayExcelDoes pins which of the two folds this package
+// uses answers here. A table name compared against another table name folds
+// ASCII case, because SQLite's does. A table matched to the sheet it lives in
+// folds the way the library writing the workbook matches sheet names, which is
+// strings.EqualFold: folding only ASCII would miss the sheet and ask for a new
+// one, and asking for a sheet that is already there hands back the existing
+// one, whose rows the save then overwrites.
+func TestSheetKeyFoldsTheWayExcelDoes(t *testing.T) {
+	t.Parallel()
+
+	if sheetKey("book_xÄy") != sheetKey("book_xäy") {
+		t.Errorf("sheetKey does not match two names Excel calls one sheet: %q and %q",
+			sheetKey("book_xÄy"), sheetKey("book_xäy"))
+	}
+	if reader.ASCIIFold("book_xÄy") == reader.ASCIIFold("book_xäy") {
+		t.Error("ASCIIFold matched two names SQLite holds as two tables, which is the fold this is not")
+	}
+	if sheetKey("book_Data") != sheetKey("book_data") {
+		t.Error("sheetKey must still fold ASCII case")
+	}
+}
+
+// TestOverwriteWorkbookRefusesTwoTablesForOneSheet drives the guard that keeps
+// an in-place save from writing two tables into one sheet. The workbook writer
+// matches sheet names without regard to case, so two tables whose sheets it
+// calls one sheet have to be refused here; comparing the names as written let
+// them past, and the second table's rows overwrote the first's while Close
+// reported success.
+func TestOverwriteWorkbookRefusesTwoTablesForOneSheet(t *testing.T) {
+	t.Parallel()
+
+	newBook := func(t *testing.T) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "book.xlsx")
+		f := excelize.NewFile()
+		require.NoError(t, f.SetSheetName("Sheet1", "s"))
+		require.NoError(t, f.SetCellValue("s", "A1", "name"))
+		require.NoError(t, f.SetCellValue("s", "A2", "s-value"))
+		require.NoError(t, f.SaveAs(path))
+		require.NoError(t, f.Close())
+		return path
+	}
+
+	saveWith := func(t *testing.T, path string, statements ...string) error {
+		t.Helper()
+		ctx := context.Background()
+		db, err := NewBuilder().AddPath(path).EnableAutoSave("").Open(ctx)
+		require.NoError(t, err)
+		for _, s := range statements {
+			_, err := db.ExecContext(ctx, s)
+			require.NoError(t, err)
+		}
+		return db.Close()
+	}
+
+	t.Run("names differing only outside ASCII are one sheet", func(t *testing.T) {
+		t.Parallel()
+		err := saveWith(t, newBook(t),
+			`CREATE TABLE "book_xäy" (name TEXT)`,
+			`INSERT INTO "book_xäy" VALUES ('lower')`,
+			`CREATE TABLE "book_xÄy" (name TEXT)`,
+			`INSERT INTO "book_xÄy" VALUES ('upper')`,
+		)
+		require.Error(t, err, "two tables that become one sheet must be refused")
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+	})
+
+	t.Run("names differing only in ASCII case are one sheet", func(t *testing.T) {
+		t.Parallel()
+		// SQLite holds these as one table, so the pair cannot be built there;
+		// the fold is checked directly instead.
+		assert.Equal(t, sheetKey("Data"), sheetKey("data"))
+	})
+
+	t.Run("two ordinary tables reach two sheets", func(t *testing.T) {
+		t.Parallel()
+		path := newBook(t)
+		require.NoError(t, saveWith(t, path,
+			`CREATE TABLE "book_orders" (name TEXT)`,
+			`INSERT INTO "book_orders" VALUES ('an order')`,
+		))
+
+		f, err := excelize.OpenFile(path)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, f.Close()) }()
+		assert.ElementsMatch(t, []string{"s", "orders"}, f.GetSheetList())
+	})
 }
