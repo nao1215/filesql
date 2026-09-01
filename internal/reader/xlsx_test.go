@@ -279,11 +279,13 @@ func TestReadXLSXDates(t *testing.T) {
 		{name: "a Japanese locale date format", numFmt: 27, value: 45000, want: "2023-03-15"},
 		{name: "a custom ISO format", custom: "yyyy-mm-dd", value: 45000, want: "2023-03-15"},
 		{name: "a custom format wearing a color", custom: "[Magenta]yyyy-mm-dd", value: 45000, want: "2023-03-15"},
-		// A cell the workbook does not call a date keeps what the sheet shows.
-		{name: "a plain number", numFmt: 3, value: 45000, want: "45,000"},
+		// A cell the workbook calls a quantity loads the number it stores,
+		// whatever the format would draw; one it draws as a moment keeps the
+		// drawing, since the serial behind a clock is not what it means.
+		{name: "a thousands-separated number", numFmt: 3, value: 45000, want: "45000"},
+		{name: "a percentage", numFmt: 10, value: 0.5, want: "0.5"},
 		{name: "a time of day", numFmt: 18, value: 45000.5, want: "12:00 PM"},
 		{name: "an elapsed duration", numFmt: 46, value: 1.5, want: "36:00:00"},
-		{name: "a percentage", numFmt: 10, value: 0.5, want: "50.00%"},
 		// Serial 60 is a February 29, 1900 no calendar has, kept so files count
 		// days the way Lotus 1-2-3 did. It names no day, so it is not converted.
 		{name: "the phantom day of the 1900 system", numFmt: 14, value: 60, want: "02-29-00"},

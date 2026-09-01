@@ -8,7 +8,7 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
-// NormalizeXLSXDates rewrites the date cells of a sheet's rows into ISO 8601,
+// normalizeXLSXDates rewrites the date cells of a sheet's rows into ISO 8601,
 // leaving every other cell as GetRows rendered it.
 //
 // A workbook stores a date as a serial number and a number format, and GetRows
@@ -25,7 +25,7 @@ import (
 //
 // Only cells the workbook itself calls dates are touched. A number formatted as
 // a number, and text that merely looks like a date, are left alone.
-func NormalizeXLSXDates(f *excelize.File, sheet string, rows [][]string) [][]string {
+func normalizeXLSXDates(f *excelize.File, sheet string, rows [][]string) [][]string {
 	// A cell is a date because of its style, so a workbook whose style table
 	// holds no date format has no date cells and there is nothing here to do.
 	// Finding that out is worth doing first because of what the alternative
@@ -136,6 +136,108 @@ var builtinDateNumberFormats = map[int]struct{}{
 	// reason 18 to 21 are.
 	27: {}, 28: {}, 29: {}, 30: {}, 31: {}, 36: {},
 	50: {}, 51: {}, 52: {}, 53: {}, 54: {}, 57: {}, 58: {},
+}
+
+// builtinClockNumberFormats are the number-format IDs whose rendering names a
+// time of day or an elapsed duration. Both are stored as a number, and neither
+// is that number's meaning: 0.5 under "h:mm:ss" is noon and under "[h]:mm" it
+// is twelve hours, so the cells wearing one keep what the sheet draws where a
+// cell drawn as a quantity gives up its drawing for the number behind it.
+//
+// The calendar formats are absent: those are dates, and a date has its own
+// rewriting into ISO 8601.
+var builtinClockNumberFormats = map[int]struct{}{
+	// Times of day.
+	18: {}, 19: {}, 20: {}, 21: {},
+	// The East Asian locale times of day.
+	32: {}, 33: {}, 34: {}, 35: {}, 55: {}, 56: {},
+	// Elapsed durations, and the minutes and seconds of one.
+	45: {}, 46: {}, 47: {},
+}
+
+// styleDrawsAClock reports whether a number format draws a time of day or an
+// elapsed duration rather than a quantity.
+func styleDrawsAClock(f *excelize.File, styleID int) bool {
+	style, err := f.GetStyle(styleID)
+	if err != nil || style == nil {
+		return false
+	}
+	if _, ok := builtinClockNumberFormats[style.NumFmt]; ok {
+		return true
+	}
+	return style.CustomNumFmt != nil && isClockNumberFormat(*style.CustomNumFmt)
+}
+
+// isClockNumberFormat reports whether a custom number format draws a time of
+// day or an elapsed duration.
+//
+// An hour or a second token says so, and an elapsed unit in a bracket does. A
+// minute token does not on its own, since "m" is both a month and a minute and
+// a format holding only months is a date. The reading of quotes, escapes and
+// brackets is the one isDateNumberFormat does, and for the same reasons: text
+// inside quotes is drawn as itself, and a bracket holds a color or a condition
+// as often as a unit.
+//
+// A format that names a calendar day as well is a date, and a date is asked
+// about first, so "yyyy-mm-dd hh:mm" is rewritten into ISO 8601 rather than
+// left as a clock.
+func isClockNumberFormat(format string) bool {
+	inQuote := false
+	inBracket := false
+	var bracket []byte
+	for i := 0; i < len(format); i++ {
+		c := format[i]
+		switch {
+		case c == '\\' || c == '_' || c == '*':
+			i++
+		case c == '"':
+			inQuote = !inQuote
+		case inQuote:
+		case c == '[':
+			inBracket = true
+			bracket = bracket[:0]
+		case c == ']':
+			inBracket = false
+			if isElapsedUnit(bracket) {
+				return true
+			}
+		case inBracket:
+			bracket = append(bracket, c)
+		case c == 'h' || c == 'H' || c == 's' || c == 'S':
+			return true
+		}
+	}
+	return false
+}
+
+// numberFormatStyleIDs walks the style table once and reports the styles whose
+// number format draws something other than the number a cell stores, along with
+// whether the table names any number format at all and whether it was short
+// enough to walk to its end.
+//
+// One walk rather than three: the date styles, the clock styles and the
+// question of whether anything is formatted are the same pass over the same
+// table, and the table is a part of the file that has to be unmarshalled to
+// read at all.
+func numberFormatStyleIDs(f *excelize.File) (styles numberFormatStyles, formats bool, complete bool) {
+	styles = numberFormatStyles{dates: make(map[int]bool), clocks: make(map[int]bool)}
+	for id := range maxCellFormats {
+		style, err := f.GetStyle(id)
+		if err != nil || style == nil {
+			return styles, formats, true
+		}
+		if style.NumFmt == 0 && style.CustomNumFmt == nil {
+			continue
+		}
+		formats = true
+		switch {
+		case styleHoldsDate(f, id):
+			styles.dates[id] = true
+		case styleDrawsAClock(f, id):
+			styles.clocks[id] = true
+		}
+	}
+	return styles, formats, false
 }
 
 // styleHoldsDate reports whether a number format makes the cells wearing it

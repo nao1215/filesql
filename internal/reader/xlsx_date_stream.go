@@ -25,18 +25,27 @@ import (
 // at all, and it is used when those bytes are there. The other way stays for
 // the exported function, which is handed an open workbook and nothing else.
 
-// datedCell is a cell of a sheet, numbered the way the rows a read produces are.
-type datedCell struct {
+// sheetCell is a cell of a sheet, numbered the way the rows a read produces are.
+type sheetCell struct {
 	row, col int
 }
 
-// dateCellsFromXML returns the ISO 8601 rendering of every cell of a sheet that
-// wears one of the given styles, read from the sheet's own XML.
+// numberFormatStyles are the styles whose number format draws something other
+// than the number a cell stores: a calendar day, which becomes ISO 8601, and a
+// time of day or an elapsed duration, which keep what the sheet drew.
+type numberFormatStyles struct {
+	dates  map[int]bool
+	clocks map[int]bool
+}
+
+// cellValuesFromXML returns what every cell of a sheet loads as, for the cells
+// whose drawing is not the value behind them: a date as ISO 8601 and any other
+// number as the text the file stores. It is read from the sheet's own XML.
 //
 // It reports false when the workbook's parts do not say where the sheet is,
 // which is the signal to fall back to asking the library cell by cell rather
 // than to answer with a sheet that is missing cells.
-func dateCellsFromXML(data []byte, sheet string, dateStyles map[int]bool, date1904 bool) (map[datedCell]string, bool) {
+func cellValuesFromXML(data []byte, sheet string, styles numberFormatStyles, date1904 bool) (map[sheetCell]string, bool) {
 	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, false
@@ -51,21 +60,25 @@ func dateCellsFromXML(data []byte, sheet string, dateStyles map[int]bool, date19
 	}
 	defer file.Close()
 
-	dates := make(map[datedCell]string)
-	if err := scanSheetDates(file, dateStyles, date1904, dates); err != nil {
+	values := make(map[sheetCell]string)
+	if err := scanSheetValues(file, styles, date1904, values); err != nil {
 		return nil, false
 	}
-	return dates, true
+	return values, true
 }
 
-// scanSheetDates walks a worksheet's XML and records the date cells it holds.
-func scanSheetDates(src io.Reader, dateStyles map[int]bool, date1904 bool, into map[datedCell]string) error {
+// scanSheetValues walks a worksheet's XML and records what each cell whose
+// drawing is not its value loads as.
+func scanSheetValues(src io.Reader, styles numberFormatStyles, date1904 bool, into map[sheetCell]string) error {
 	decoder := xml.NewDecoder(src)
 	row, col := 0, 0
 	// dated says the cell now open is one to convert: a number, which is what a
 	// date is stored as, wearing one of the styles that renders a calendar day.
 	// A shared string or an inline string is text whatever its style says.
 	dated := false
+	// stored says the cell now open is a number the sheet draws as a quantity,
+	// so the number it stores is what it loads as.
+	stored := false
 	for {
 		token, err := decoder.Token()
 		if err != nil {
@@ -97,19 +110,26 @@ func scanSheetDates(src io.Reader, dateStyles map[int]bool, date1904 bool, into 
 			}
 			style, _ := attrInt(start.Attr, "s")
 			kind, _ := attr(start.Attr, "t")
-			dated = (kind == "" || kind == "n") && dateStyles[style]
+			number := kind == "" || kind == "n"
+			dated = number && styles.dates[style]
+			stored = number && !dated && !styles.clocks[style]
 		case "v":
-			if !dated {
+			if !dated && !stored {
 				continue
 			}
 			var raw string
 			if err := decoder.DecodeElement(&raw, &start); err != nil {
 				return err
 			}
-			if iso, ok := isoFromRaw(raw, date1904); ok {
-				into[datedCell{row: row, col: col}] = iso
+			switch {
+			case dated:
+				if iso, ok := isoFromRaw(raw, date1904); ok {
+					into[sheetCell{row: row, col: col}] = iso
+				}
+			case isPlainNumber(raw):
+				into[sheetCell{row: row, col: col}] = raw
 			}
-			dated = false
+			dated, stored = false, false
 		}
 	}
 }

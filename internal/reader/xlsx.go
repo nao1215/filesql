@@ -188,15 +188,12 @@ func (w *Workbook) ReadSheet(name string, opts Options, emit Emit) (Result, erro
 	if err != nil {
 		return Result{}, parseError(err, "failed to read sheet %s", name)
 	}
-	// A sheet draws a number the way its format says, and the drawing carries
-	// fifteen significant digits, so the cells drawn as plain numbers are
-	// rewritten into the numbers the file stores.
-	rows = NormalizeXLSXNumbers(w.file, name, rows)
-	// A workbook stores a date as a serial number and a number format, so the
-	// cells that hold one are rewritten into the ISO 8601 the datetime inference
-	// recognizes. Without this a column of dates is text in whatever shape the
-	// sheet was formatted, and ORDER BY sorts it lexically.
-	rows = w.normalizeDates(name, rows)
+	// A sheet draws a number the way its format says, and the drawing is not the
+	// value: the numeric cells are rewritten into the numbers the file stores,
+	// and the ones a date format draws into the ISO 8601 the datetime inference
+	// recognizes. Without the second a column of dates is text in whatever shape
+	// the sheet was formatted, and ORDER BY sorts it lexically.
+	rows = w.NormalizeCells(name, rows)
 
 	if len(rows) == 0 {
 		return Result{}, emptyError("empty XLSX sheet")
@@ -271,25 +268,34 @@ func readXLSX(src io.Reader, opts Options, emit Emit) (result Result, err error)
 	return workbook.ReadSheet(sheets[0], opts, emit)
 }
 
-// normalizeDates rewrites a sheet's date cells into ISO 8601, reading the
-// sheet's own XML for the styles rather than asking the library cell by cell.
+// NormalizeCells rewrites the cells of a sheet whose drawing is not the value
+// behind them, reading the sheet's own XML rather than asking the library cell
+// by cell.
 //
-// The two ways agree on which cells are dates and on what they become; they
-// differ in what finding out costs. Asking the library makes it unmarshal the
-// whole worksheet into its object model, which for an 18.5 MB workbook of
-// 200,000 rows is 1470 MB on top of the 267 MB the rows themselves cost.
-// Reading the XML costs what the date cells cost. The asking way remains for
-// the exported NormalizeXLSXDates, which is handed an open workbook and no
-// bytes, and it is also what this falls back to when the workbook's parts do
-// not say where the sheet is -- a sheet missing its dates would be worse than
-// a slow one.
-func (w *Workbook) normalizeDates(sheet string, rows [][]string) [][]string {
-	dateStyles, complete := dateStyleIDs(w.file)
-	if complete && len(dateStyles) == 0 {
+// A numeric cell becomes the number the file stores, since a number format says
+// how a spreadsheet paints a number and not what the number is, and a cell a
+// date format draws becomes ISO 8601, which is the form the datetime inference
+// recognizes. A number drawn as a time of day or an elapsed duration keeps its
+// drawing, and so does everything that does not store a number.
+//
+// The two ways of reaching a cell's style agree on all of that; they differ in
+// what finding out costs. Asking the library makes it unmarshal the whole
+// worksheet into its object model, which for an 18.5 MB workbook of 200,000
+// rows is 1470 MB on top of the 267 MB the rows themselves cost. Reading the
+// XML costs what the rewritten cells cost. The asking way is what this falls
+// back to when the workbook arrived without its bytes or its parts do not say
+// where the sheet is -- a sheet missing its dates would be worse than a slow
+// one.
+func (w *Workbook) NormalizeCells(sheet string, rows [][]string) [][]string {
+	styles, formats, complete := numberFormatStyleIDs(w.file)
+	// A workbook that formats nothing draws every number as the number it
+	// stores, so there is nothing to rewrite unless a drawing carries the mark
+	// of one that did not fit fifteen digits.
+	if complete && !formats && !anyDrawnShort(rows) {
 		return rows
 	}
 	if len(w.data) == 0 || !complete {
-		return NormalizeXLSXDates(w.file, sheet, rows)
+		return normalizeXLSXDates(w.file, sheet, normalizeXLSXNumbers(w.file, sheet, rows))
 	}
 
 	// A file written on a Mac before 2016 counts from 1904, and reading every
@@ -300,16 +306,16 @@ func (w *Workbook) normalizeDates(sheet string, rows [][]string) [][]string {
 		date1904 = *props.Date1904
 	}
 
-	dates, ok := dateCellsFromXML(w.data, sheet, dateStyles, date1904)
+	values, ok := cellValuesFromXML(w.data, sheet, styles, date1904)
 	if !ok {
-		return NormalizeXLSXDates(w.file, sheet, rows)
+		return normalizeXLSXDates(w.file, sheet, normalizeXLSXNumbers(w.file, sheet, rows))
 	}
-	for cell, iso := range dates {
+	for cell, text := range values {
 		r, c := cell.row-1, cell.col-1
 		if r < 0 || r >= len(rows) || c < 0 || c >= len(rows[r]) {
 			continue
 		}
-		rows[r][c] = iso
+		rows[r][c] = text
 	}
 	return rows
 }
