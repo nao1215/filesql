@@ -2726,3 +2726,24 @@ func TestAnIdentifierSurvivesADumpAndLoad(t *testing.T) {
 		})
 	}
 }
+
+// TestDumpDatabaseContext_EndedContext is the dump's share of the contract the
+// godoc states for every entry point that takes a context. DumpDatabase is the
+// same call with a background context, so it has nothing to stop for.
+func TestDumpDatabaseContext_EndedContext(t *testing.T) {
+	t.Parallel()
+
+	db, err := Open(csvFixture(t))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	for _, tc := range endedContexts() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			out := t.TempDir()
+			assert.ErrorIs(t, DumpDatabaseContext(tc.make(t), db, out), tc.want)
+			assert.Empty(t, dirEntries(t, out), "a dump that stopped must leave nothing behind")
+		})
+	}
+}

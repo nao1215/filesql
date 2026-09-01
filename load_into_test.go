@@ -728,7 +728,7 @@ func TestLoadIntoTx_CanceledContextTheTransactionWasBuiltOn(t *testing.T) {
 	builder, err := buildForTest(context.Background(), NewBuilder().AddPath(path).SetDefaultChunkSize(100))
 	require.NoError(t, err)
 
-	// The context is cancelled after the transaction has begun rather than by a
+	// The context is canceled after the transaction has begun rather than by a
 	// deadline set before it: a deadline short enough to land inside the load
 	// can expire during BeginTx itself on a slow machine, where the driver
 	// reports an interrupted connection and the test fails at its setup.
@@ -745,7 +745,7 @@ func TestLoadIntoTx_CanceledContextTheTransactionWasBuiltOn(t *testing.T) {
 
 	// Ending the transaction here rather than in a defer frees the one pooled
 	// connection the listing below needs. What Rollback reports is the driver's
-	// business: a cancelled context may have ended the transaction already, or
+	// business: a canceled context may have ended the transaction already, or
 	// interrupted the connection it was on.
 	if err := tx.Rollback(); err != nil {
 		t.Logf("rollback after the canceled load: %v", err)
