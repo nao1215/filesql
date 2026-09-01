@@ -102,6 +102,14 @@ func (v *validator) validateOutputDirectory(outputDir string) error {
 		return nil
 	}
 
+	// A directory of spaces is a name the operating system takes, so a save
+	// used to write every table into one in the working directory. Only the
+	// empty string names the original files; a blank one names nothing, and
+	// this package refuses the same string as an input path.
+	if strings.TrimSpace(outputDir) == "" {
+		return ErrEmptyPath
+	}
+
 	// Check if directory already exists
 	if info, err := os.Stat(outputDir); err == nil {
 		if !info.IsDir() {

@@ -349,6 +349,11 @@ func (b *DBBuilder) AddFS(filesystem fs.FS) *DBBuilder {
 //	builder.AddPath("data.csv").
 //		EnableAutoSave("") // Auto-save to original file on db.Close()
 //
+// Only the empty string means the original files. A directory named with
+// nothing but whitespace is refused with ErrEmptyPath when the builder opens,
+// since it would be a directory of spaces in the working directory and this
+// package refuses the same string as an input path.
+//
 // Overwrite mode writes each table back to the file it was loaded from, in that
 // file's own format, compression and line terminator; options is ignored,
 // because all of those are what the file already has. An output directory is an

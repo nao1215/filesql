@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -132,6 +131,10 @@ func LoadInto(ctx context.Context, db *sql.DB, paths ...string) error {
 // ErrDuplicateColumn: this package reads " a", "a" and "a " as one name, and
 // SQLite does not, so a table holding two of them is one only SQLite can hold.
 //
+// The output directory is created when it is not there. One named with nothing,
+// or with nothing but whitespace, is refused with ErrEmptyPath rather than
+// created: a directory of spaces is one this package would refuse to read back.
+//
 // It exports without a deadline. DumpDatabaseContext takes one.
 func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
 	return DumpDatabaseContext(context.Background(), db, outputDir, opts...)
@@ -190,9 +193,8 @@ func dumpSQLiteDatabase(ctx context.Context, db *sql.DB, outputDir string, optio
 		return ErrNoTables
 	}
 
-	// Create output directory if it doesn't exist
-	if err := os.MkdirAll(outputDir, 0750); err != nil {
-		return fmt.Errorf("%w: failed to create output directory: %w", ErrIOOperation, err)
+	if err := ensureOutputDirectory(outputDir); err != nil {
+		return err
 	}
 
 	// A table only belongs to an ACH or Fedwire file when the database says it

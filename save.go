@@ -273,9 +273,8 @@ func (c *autoSaveConnector) performACHAutoSave(db *sql.DB, outputDir string) err
 		return errors.New("no ACH tables found to save")
 	}
 
-	// Create output directory if it doesn't exist
-	if err := os.MkdirAll(outputDir, 0750); err != nil {
-		return fmt.Errorf("failed to create output directory: %w", err)
+	if err := ensureOutputDirectory(outputDir); err != nil {
+		return err
 	}
 
 	// Export each ACH file
@@ -298,8 +297,8 @@ func (c *autoSaveConnector) performFedWireAutoSave(db *sql.DB, outputDir string)
 		return errors.New("no Fedwire tables found to save")
 	}
 
-	if err := os.MkdirAll(outputDir, 0750); err != nil {
-		return fmt.Errorf("failed to create output directory: %w", err)
+	if err := ensureOutputDirectory(outputDir); err != nil {
+		return err
 	}
 
 	for _, baseName := range wireBaseNames {
@@ -701,6 +700,26 @@ func overwriteTableAtPath(db *sql.DB, path, tableName string, options DumpOption
 	}
 	if err := writeSQLiteTableData(path, tableName, columns, rows, options, prior); err != nil {
 		return fmt.Errorf("%w: failed to overwrite %s: %w", ErrIOOperation, path, err)
+	}
+	return nil
+}
+
+// ensureOutputDirectory prepares the directory an export writes into. A
+// destination that names nothing is refused rather than created: a path of
+// spaces is a directory name to the operating system, and an export into it
+// wrote every table into a directory of spaces in the working directory, which
+// this package then refused to read back, since an input path of spaces is
+// ErrEmptyPath. A destination that exists and is not a directory is refused in
+// this package's words rather than with the one mkdir writes.
+func ensureOutputDirectory(outputDir string) error {
+	if strings.TrimSpace(outputDir) == "" {
+		return fmt.Errorf("%w: an export needs a directory to write into", ErrEmptyPath)
+	}
+	if info, err := os.Stat(outputDir); err == nil && !info.IsDir() {
+		return fmt.Errorf("%w: output path exists but is not a directory: %s", ErrIOOperation, outputDir)
+	}
+	if err := os.MkdirAll(outputDir, 0750); err != nil {
+		return fmt.Errorf("%w: failed to create output directory: %w", ErrIOOperation, err)
 	}
 	return nil
 }
