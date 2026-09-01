@@ -6,8 +6,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 	"unicode"
 )
@@ -84,21 +82,14 @@ var pgTemplatePatterns = []string{ //nolint:gochecknoglobals // a fixed table re
 // is how a template asks for a letter that would otherwise be read as a
 // pattern.
 func scanPGTemplate(format string) (items []pgTemplateItem, fillMode bool) {
-	if cached, ok := scannedTemplates.Load(format); ok {
-		scan := cached.(scannedTemplate) //nolint:forcetypeassert,errcheck // the map holds only this type
-		return scan.items, scan.fillMode
-	}
-	items, fillMode = scanPGTemplateUncached(format)
 	// A template is nearly always a literal in the query, so the same string
 	// arrives once per row; scanning it once is most of what TO_CHAR costs. The
-	// cache is bounded because the format can be a column, and an unbounded map
-	// keyed by data is a way to run out of memory on a large file.
-	if scannedTemplateCount.Load() < maxScannedTemplates {
-		if _, loaded := scannedTemplates.LoadOrStore(format, scannedTemplate{items: items, fillMode: fillMode}); !loaded {
-			scannedTemplateCount.Add(1)
-		}
-	}
-	return items, fillMode
+	// cache is bounded because the format can be a column: see boundedCache.
+	scan := scannedTemplates.value(format, func() scannedTemplate {
+		scanned, fill := scanPGTemplateUncached(format)
+		return scannedTemplate{items: scanned, fillMode: fill}
+	})
+	return scan.items, scan.fillMode
 }
 
 // scannedTemplate is one cached scan. Its items are never written after they go
@@ -108,15 +99,8 @@ type scannedTemplate struct {
 	fillMode bool
 }
 
-// maxScannedTemplates bounds the cache. A query holds a handful of distinct
-// templates; a number this size is reached only by a format that comes from the
-// data, and then the cache stops growing and the scan runs as it did before.
-const maxScannedTemplates = 256
-
-var (
-	scannedTemplates     sync.Map     //nolint:gochecknoglobals // a process-wide cache of scanned templates
-	scannedTemplateCount atomic.Int64 //nolint:gochecknoglobals // the bound on the cache above
-)
+//nolint:gochecknoglobals // a process-wide cache of scanned templates, bounded; see boundedCache
+var scannedTemplates boundedCache[scannedTemplate]
 
 func scanPGTemplateUncached(format string) (items []pgTemplateItem, fillMode bool) {
 	pendingFill := false
@@ -543,18 +527,11 @@ func (t *pgNumericTemplate) zeroFrom() int {
 // string arrives once per row and reading it once is most of what TO_CHAR
 // costs; the parsed form is never written after it is stored.
 func numericTemplateFor(format string) (*pgNumericTemplate, bool) {
-	if cached, ok := numericTemplates.Load(format); ok {
-		parsed := cached.(parsedNumericTemplate) //nolint:forcetypeassert,errcheck // the map holds only this type
-		return parsed.template, parsed.fillMode
-	}
-	items, fillMode := scanPGTemplate(format)
-	t := parseNumericTemplate(items)
-	if numericTemplateCount.Load() < maxScannedTemplates {
-		if _, loaded := numericTemplates.LoadOrStore(format, parsedNumericTemplate{template: t, fillMode: fillMode}); !loaded {
-			numericTemplateCount.Add(1)
-		}
-	}
-	return t, fillMode
+	parsed := numericTemplates.value(format, func() parsedNumericTemplate {
+		items, fillMode := scanPGTemplate(format)
+		return parsedNumericTemplate{template: parseNumericTemplate(items), fillMode: fillMode}
+	})
+	return parsed.template, parsed.fillMode
 }
 
 // parsedNumericTemplate is one cached numeric template.
@@ -563,10 +540,8 @@ type parsedNumericTemplate struct {
 	fillMode bool
 }
 
-var (
-	numericTemplates     sync.Map     //nolint:gochecknoglobals // a process-wide cache of parsed numeric templates
-	numericTemplateCount atomic.Int64 //nolint:gochecknoglobals // the bound on the cache above
-)
+//nolint:gochecknoglobals // a process-wide cache of parsed numeric templates, bounded; see boundedCache
+var numericTemplates boundedCache[parsedNumericTemplate]
 
 // parseNumericTemplate reads the scanned items of a numeric template.
 //

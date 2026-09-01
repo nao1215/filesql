@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"fmt"
 	"math"
 	"os"
 	"os/exec"
@@ -3106,4 +3107,40 @@ func valueCombinations(pool []driver.Value, arity int) [][]driver.Value {
 		}
 	}
 	return out
+}
+
+// TestRegexpCacheStopsGrowingOnPatternsFromTheData pins that a pattern taken
+// from a column does not fill a process-wide map. A query can match each row
+// against its own pattern, and the cache kept every one of them for the life of
+// the process -- long after the database they came from was closed.
+func TestRegexpCacheStopsGrowingOnPatternsFromTheData(t *testing.T) {
+	t.Parallel()
+
+	const patterns = maxCachedDerivations * 4
+
+	before := regexpCache.size()
+	for i := range patterns {
+		got, err := fnRegexp([]driver.Value{fmt.Sprintf("^value%d$", i), fmt.Sprintf("value%d", i)})
+		if err != nil {
+			t.Fatalf("pattern %d: %v", i, err)
+		}
+		if got != int64(1) {
+			t.Fatalf("pattern %d did not match its own value: %v", i, got)
+		}
+	}
+	// The bound is on the cache rather than on this test's share of it, since
+	// the cache is one per process and other tests fill it too.
+	if grew := regexpCache.size() - before; grew > maxCachedDerivations {
+		t.Errorf("the cache grew by %d over %d patterns, past the bound of %d", grew, patterns, maxCachedDerivations)
+	}
+
+	// A pattern the cache did not keep still answers, and still answers wrongly
+	// when it should: correctness does not depend on being cached.
+	got, err := fnRegexp([]driver.Value{fmt.Sprintf("^value%d$", patterns-1), "something else"})
+	if err != nil {
+		t.Fatalf("an uncached pattern: %v", err)
+	}
+	if got != int64(0) {
+		t.Errorf("an uncached pattern matched a value it should not: %v", got)
+	}
 }
