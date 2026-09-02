@@ -6,6 +6,30 @@ updates:
       interval: daily
       time: "20:00"
     open-pull-requests-limit: 10
+  # The example modules pin a released filesql and their own drivers and ORMs.
+  # Nothing else watches them: the root scan above does not reach a separate
+  # module, and govulncheck deliberately does not build them, because their
+  # source tracks the released API rather than this checkout. They are grouped
+  # so a week's updates arrive as one pull request per module rather than one
+  # per dependency.
+  - package-ecosystem: gomod
+    directories:
+      - "/examples/basic"
+      - "/examples/bun"
+      - "/examples/ent"
+      - "/examples/gorm"
+      - "/examples/multi-format"
+      - "/examples/sqlc"
+      - "/examples/sqlx"
+      - "/examples/squirrel"
+    schedule:
+      interval: weekly
+      time: "20:00"
+    open-pull-requests-limit: 8
+    groups:
+      examples:
+        patterns:
+          - "*"
   # Maintain dependencies for GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
