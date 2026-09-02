@@ -3362,3 +3362,140 @@ func TestDocDescribesTheFormatsProcessorTakes(t *testing.T) {
 		t.Error("doc.go must state the record bound that is enforced")
 	}
 }
+
+type agreeingUser struct {
+	ID   int    `csv:"id" validate:"required,min=1"`
+	Name string `csv:"name" prep:"trim" validate:"required"`
+	Mail string `csv:"mail" validate:"omitempty,email"`
+}
+
+// TestTheTwoEntryPointsAgree holds Process and ProcessToWriter to one answer.
+// They are two ways to ask the same question -- one hands back a reader over
+// the processed bytes, the other writes them where the caller says -- so a rule
+// implemented twice is a rule that can drift, and what would drift silently is
+// the count a caller reports and the rows a second pass reads.
+func TestTheTwoEntryPointsAgree(t *testing.T) {
+	inputs := []struct {
+		name  string
+		ft    FileType
+		input string
+	}{
+		{name: "csv", ft: FileTypeCSV, input: "id,name,mail\n1, alice ,a@example.com\n2,bob,not-an-email\n0,,c@example.com\n"},
+		{name: "csv with only valid rows", ft: FileTypeCSV, input: "id,name,mail\n1,alice,a@example.com\n"},
+		{name: "csv with only invalid rows", ft: FileTypeCSV, input: "id,name,mail\n0,,x\n"},
+		{name: "csv with no data rows", ft: FileTypeCSV, input: "id,name,mail\n"},
+		{name: "tsv", ft: FileTypeTSV, input: "id\tname\tmail\n1\talice\ta@example.com\n"},
+		{name: "ltsv", ft: FileTypeLTSV, input: "id:1\tname:alice\tmail:a@example.com\n"},
+		{name: "json", ft: FileTypeJSON, input: `[{"id":1,"name":"alice","mail":"a@example.com"}]`},
+		{name: "jsonl", ft: FileTypeJSONL, input: `{"id":1,"name":"alice","mail":"a@example.com"}` + "\n"},
+	}
+
+	for _, in := range inputs {
+		for _, opts := range []struct {
+			name string
+			opts []Option
+		}{
+			{name: "default"},
+			{name: "valid rows only", opts: []Option{WithValidRowsOnly()}},
+			{name: "strict tags", opts: []Option{WithStrictTagParsing()}},
+		} {
+			t.Run(in.name+"/"+opts.name, func(t *testing.T) {
+				var readerRecords, writerRecords []agreeingUser
+
+				reader, readerResult, readerErr := NewProcessor(in.ft, opts.opts...).
+					Process(strings.NewReader(in.input), &readerRecords)
+
+				var buf bytes.Buffer
+				writerResult, writerErr := NewProcessor(in.ft, opts.opts...).
+					ProcessToWriter(strings.NewReader(in.input), &writerRecords, &buf)
+
+				if (readerErr == nil) != (writerErr == nil) {
+					t.Fatalf("Process err = %v, ProcessToWriter err = %v", readerErr, writerErr)
+				}
+				if readerErr != nil {
+					if readerErr.Error() != writerErr.Error() {
+						t.Errorf("Process err = %q, ProcessToWriter err = %q", readerErr, writerErr)
+					}
+					return
+				}
+
+				body, err := io.ReadAll(reader)
+				if err != nil {
+					t.Fatalf("reading what Process returned: %v", err)
+				}
+				if string(body) != buf.String() {
+					t.Errorf("Process wrote %q, ProcessToWriter wrote %q", body, buf.String())
+				}
+
+				if fmt.Sprint(readerRecords) != fmt.Sprint(writerRecords) {
+					t.Errorf("Process decoded %v, ProcessToWriter decoded %v", readerRecords, writerRecords)
+				}
+
+				same := func(name string, a, b any) {
+					t.Helper()
+					if fmt.Sprint(a) != fmt.Sprint(b) {
+						t.Errorf("%s: Process = %v, ProcessToWriter = %v", name, a, b)
+					}
+				}
+				same("RowCount", readerResult.RowCount, writerResult.RowCount)
+				same("ValidRowCount", readerResult.ValidRowCount, writerResult.ValidRowCount)
+				same("Columns", readerResult.Columns, writerResult.Columns)
+				same("OriginalFormat", readerResult.OriginalFormat, writerResult.OriginalFormat)
+				same("OutputFormat", readerResult.OutputFormat, writerResult.OutputFormat)
+				same("HasErrors", readerResult.HasErrors(), writerResult.HasErrors())
+				same("InvalidRowCount", readerResult.InvalidRowCount(), writerResult.InvalidRowCount())
+				same("len(Errors)", len(readerResult.Errors), len(writerResult.Errors))
+				same("len(ValidationErrors)", len(readerResult.ValidationErrors()), len(writerResult.ValidationErrors()))
+				same("len(PrepErrors)", len(readerResult.PrepErrors()), len(writerResult.PrepErrors()))
+			})
+		}
+	}
+}
+
+type agreeingJSON struct {
+	Data string `name:"data"`
+}
+
+// agreeingJSONRoundTrip is the same round trip for the two formats prep flattens
+// into a single "data" column.
+func TestProbeJSONRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ft   FileType
+		in   string
+	}{
+		{name: "csv", ft: FileTypeCSV, in: "data\nplain\n"},
+		{name: "tsv", ft: FileTypeTSV, in: "data\nplain\n"},
+		{name: "ltsv", ft: FileTypeLTSV, in: "data:plain\n"},
+		{name: "json", ft: FileTypeJSON, in: `[{"id":1,"name":"alice"},{"id":2,"name":"bob"}]`},
+		{name: "jsonl", ft: FileTypeJSONL, in: `{"id":1,"name":"alice"}` + "\n" + `{"id":2,"name":"bob"}` + "\n"},
+		{name: "json holding a string with a newline", ft: FileTypeJSON, in: `[{"a":"one\ntwo"}]`},
+		{name: "json holding a nested object", ft: FileTypeJSON, in: `[{"a":{"b":[1,2]}}]`},
+		{name: "json holding non-ascii", ft: FileTypeJSON, in: `[{"名前":"アリス"}]`},
+		{name: "json holding a tab", ft: FileTypeJSON, in: `[{"a":"one\ttwo"}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var first []agreeingJSON
+			reader, result, err := NewProcessor(tc.ft).Process(strings.NewReader(tc.in), &first)
+			if err != nil {
+				t.Fatalf("first pass: %v", err)
+			}
+			body, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var second []agreeingJSON
+			_, again, err := NewProcessor(result.OutputFormat).Process(bytes.NewReader(body), &second)
+			if err != nil {
+				t.Fatalf("reading prep's own %v output: %v (output was %q)", result.OutputFormat, err, body)
+			}
+			if fmt.Sprint(first) != fmt.Sprint(second) {
+				t.Errorf("first pass decoded %v, second decoded %v (output was %q)", first, second, body)
+			}
+			if again.RowCount != result.RowCount {
+				t.Errorf("RowCount %d then %d", result.RowCount, again.RowCount)
+			}
+		})
+	}
+}
