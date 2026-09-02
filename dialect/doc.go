@@ -201,11 +201,19 @@
 // it prints as 0 or 1.
 //
 // Collation is part of what a call means. MySQL's default collation folds case,
-// so its LIKE and its REGEXP both match a letter in either case, and both are
-// routed to helpers that do. The operators are left alone: "=", IN, BETWEEN,
-// ORDER BY, DISTINCT and GROUP BY compare inside the engine, where a token
-// rewrite cannot reach every one of them, so under the MySQL dialect they
-// compare the way SQLite does and 'abc' = 'ABC' is false here and true in MySQL.
+// so its LIKE, its REGEXP and the four spellings of "where does this substring
+// start" -- INSTR, LOCATE, POSITION and FIND_IN_SET -- all match a letter in
+// either case, and each is routed to a helper that does. The operators are left
+// alone: "=", IN, BETWEEN, CASE, IF, ORDER BY, DISTINCT and GROUP BY compare
+// inside the engine, where a token rewrite cannot reach every one of them, so
+// under the MySQL dialect they compare the way SQLite does and 'abc' = 'ABC' is
+// false here and true in MySQL.
+//
+// How a call reads a value is part of what it means too. MySQL reads a string
+// where a number is wanted as the number its leading run spells, or zero, so
+// ROUND('abc') is 0 there and not an absence; the calls that stay on a function
+// SQLite or this package answers for every dialect have their numeric arguments
+// wrapped in mysql_number so they read the same value.
 //
 // How a REAL is written as text belongs to a dialect too, because every
 // non-integer SQLite holds is a double and the engines do not spell one the
@@ -219,11 +227,16 @@
 // Bit operations have a ceiling this package cannot lift. MySQL computes them on
 // an unsigned 64-bit value, and SQLite has no unsigned 64-bit integer to answer
 // with. The shifts are rewritten because their bits genuinely differ: SQLite's
-// ">>" copies the sign bit where MySQL brings in zeros, and SQLite reads a
-// negative shift count as a shift the other way. What stays different is only
-// how a result with its top bit set is spelled: MySQL prints ~0 as
-// 18446744073709551615 and this prints -1, the same bits under the only reading
-// SQLite has for them.
+// ">>" copies the sign bit where MySQL and BigQuery bring in zeros, and SQLite
+// reads a negative shift count as a shift the other way, which MySQL reads as a
+// count past the width and BigQuery refuses. What stays different is only how a
+// result with its top bit set is spelled: MySQL prints ~0 as 18446744073709551615
+// and this prints -1, the same bits under the only reading SQLite has for them.
+//
+// Where "^" binds differs by dialect and is decided in one table. MySQL puts it
+// above multiplication, BigQuery between bitwise AND and bitwise OR, and
+// PostgreSQL spells exponentiation with it and its bitwise XOR with "#", at the
+// level its manual calls "any other operator".
 //
 // Lexing is per dialect, because what counts as a string, an identifier, a
 // comment, or an escape differs between them: a double-quoted literal is a

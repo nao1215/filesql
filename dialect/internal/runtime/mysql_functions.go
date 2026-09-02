@@ -88,6 +88,7 @@ func mysqlScalarFunctions() map[string]scalarSpec {
 		"make_set":       {-1, mysqlTextFrom(fnMySQLMakeSet, 1)},
 		"export_set":     {-1, mysqlTextArgs(fnMySQLExportSet, 1, 2, 3)},
 		"mysql_interval": {-1, fnMySQLIntervalPosition},
+		"mysql_number":   {1, fnMySQLNumber},
 		"json_length":    {-1, fnMySQLJSONLength},
 		"json_contains":  {-1, fnMySQLJSONContains},
 
@@ -155,6 +156,19 @@ func mysqlNumericArgument(v driver.Value) (float64, bool) {
 		return numericPrefix(string(x)), true
 	}
 	return toFloat(v)
+}
+
+// fnMySQLNumber implements mysql_number(x): the value a call reads where a
+// number is wanted. It is the numeric counterpart of mysql_text, and is needed
+// where a call stays on a function SQLite or this package answers for every
+// dialect: those read a string that spells no number as no number at all and
+// answer NULL, where MySQL reads it as zero and answers a number.
+func fnMySQLNumber(args []driver.Value) (driver.Value, error) {
+	x, ok := mysqlNumericArgument(args[0])
+	if !ok {
+		return nil, nil
+	}
+	return x, nil
 }
 
 // sign is the -1, 0 or 1 every dialect answers for SIGN.
@@ -246,14 +260,14 @@ func fnMySQLIntervalPosition(args []driver.Value) (driver.Value, error) {
 	if len(args) < 2 {
 		return nil, errors.New("dialect: INTERVAL expects at least two arguments")
 	}
-	n, ok := toFloat(args[0])
+	n, ok := mysqlNumericArgument(args[0])
 	if !ok {
 		// dialects.MySQL answers -1 for a NULL first argument rather than NULL.
 		return int64(-1), nil
 	}
 	position := int64(0)
 	for i, arg := range args[1:] {
-		bound, ok := toFloat(arg)
+		bound, ok := mysqlNumericArgument(arg)
 		if !ok || n < bound {
 			break
 		}

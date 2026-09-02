@@ -853,3 +853,99 @@ func TestMySQLBuiltinsReadARealTheWayTheEngineDoes(t *testing.T) {
 		})
 	}
 }
+
+// TestMySQLPositionCallsFoldCase pins the four spellings of "where does this
+// substring start" against MySQL's default collation, which folds case. LIKE
+// and REGEXP were routed to helpers that fold and these four were not, so each
+// answered 0 -- "not found" -- for a needle differing only in case, which is a
+// wrong answer in the shape these calls are most often written in.
+func TestMySQLPositionCallsFoldCase(t *testing.T) {
+	db := castDB(t)
+
+	for _, tt := range []struct{ name, query, want string }{
+		{"instr", `SELECT INSTR('ABC', 'b')`, "2"},
+		{"instr the other way round", `SELECT INSTR('abc', 'B')`, "2"},
+		{"locate", `SELECT LOCATE('b', 'ABC')`, "2"},
+		{"locate from a position", `SELECT LOCATE('b', 'ABC', 1)`, "2"},
+		{"locate from a later position", `SELECT LOCATE('B', 'abcabc', 3)`, "5"},
+		{"position", `SELECT POSITION('b' IN 'ABC')`, "2"},
+		{"find_in_set", `SELECT FIND_IN_SET('b', 'a,B,c')`, "2"},
+		{"find_in_set the other way round", `SELECT FIND_IN_SET('B', 'a,b,c')`, "2"},
+		{"like folds too", `SELECT 'a' LIKE 'A'`, "1"},
+		{"a needle that is not there is still not there", `SELECT INSTR('ABC', 'z')`, "0"},
+		{"the position is a character position", `SELECT INSTR('あいABC', 'b')`, "4"},
+		{"an accent is not folded", `SELECT INSTR('abc', 'á')`, "0"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.MySQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+
+	// Neither other dialect folds, so the calls they share must stay
+	// case-sensitive.
+	for _, tt := range []struct {
+		d     dialects.Dialect
+		query string
+	}{
+		{dialects.PostgreSQL, `SELECT POSITION('b' IN 'ABC')`},
+		{dialects.GoogleSQL, `SELECT STRPOS('ABC', 'b')`},
+	} {
+		got, err := runDialect(t, db, tt.d, tt.query)
+		if err != nil {
+			t.Fatalf("%v %s: %v", tt.d, tt.query, err)
+		}
+		if got.String != "0" {
+			t.Errorf("%v %s = %q, want %q", tt.d, tt.query, got.String, "0")
+		}
+	}
+}
+
+// TestMySQLNumericCallsReadAStringAsZero pins MySQL's reading of a string that
+// spells no number, which is zero rather than nothing. Ten calls already read
+// it that way and five answered NULL instead, so an expression that MySQL
+// answers a number for lost its row here with nothing said.
+func TestMySQLNumericCallsReadAStringAsZero(t *testing.T) {
+	db := castDB(t)
+
+	for _, tt := range []struct{ name, query, want string }{
+		{"round", `SELECT ROUND('abc')`, "0"},
+		{"round to decimals", `SELECT ROUND('abc', 2)`, "0"},
+		{"truncate", `SELECT TRUNCATE('abc', 1)`, "0"},
+		{"pow", `SELECT POW('abc', 2)`, "0"},
+		{"power", `SELECT POWER('abc', 2)`, "0"},
+		{"format", `SELECT FORMAT('abc', 2)`, "0.00"},
+		{"interval", `SELECT INTERVAL('abc', 1, 2)`, "0"},
+		{"interval over strings", `SELECT INTERVAL('b', 'A', 'C')`, "2"},
+		{"abs, which already read it this way", `SELECT ABS('abc')`, "0"},
+		{"ceil, which already read it this way", `SELECT CEIL('abc')`, "0"},
+		{"a cast, which already read it this way", `SELECT CAST('abc' AS SIGNED)`, "0"},
+
+		// The rule is a numeric prefix rather than an all-or-nothing parse,
+		// and it is the same rule for a value that does spell a number.
+		{"a numeric prefix", `SELECT ROUND('12abc')`, "12"},
+		{"a number with spaces around it", `SELECT ROUND(' 12 ')`, "12"},
+		{"a number in a string rounds the way a double does", `SELECT ROUND('2.5', 0)`, "2"},
+		{"a number is still a number", `SELECT ROUND(2.4)`, "2"},
+
+		// A NULL is still nothing, and INTERVAL keeps the -1 MySQL reserves
+		// for one.
+		{"a NULL is still NULL", `SELECT ROUND(NULL)`, ""},
+		{"interval of a NULL", `SELECT INTERVAL(NULL, 1, 2)`, "-1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.MySQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
