@@ -349,6 +349,9 @@ func ValidateColumnNames(columns []string) error {
 	trimmed := make(map[string]bool, len(columns))
 	folded := make(map[string]bool, len(columns))
 	for i, col := range columns {
+		if strings.ContainsRune(col, 0) {
+			return columnNameNULError(col, i+1)
+		}
 		trimmedName := strings.TrimSpace(col)
 		foldedName := ASCIIFold(col)
 		if trimmed[trimmedName] || folded[foldedName] {
@@ -358,6 +361,19 @@ func ValidateColumnNames(columns []string) error {
 		folded[foldedName] = true
 	}
 	return nil
+}
+
+// columnNameNULError reports a column name holding a NUL byte.
+//
+// A NUL is valid UTF-8, so the encoding check passes it through, and SQLite
+// reads an identifier as a C string: the name was cut at the NUL and the quote
+// that closed it went with the rest, so a CREATE TABLE that this package built
+// came back as SQLite's own "unrecognized token" about a name the caller never
+// wrote. A value holding a NUL is a different matter and still loads, since a
+// value is bytes SQLite stores rather than a name it parses.
+func columnNameNULError(column string, position int) error {
+	return invalidError(nil,
+		"a column name cannot hold a NUL: column %d, %q", position, column)
 }
 
 // LTSVLabelKey is how two LTSV labels are compared for being one column.
