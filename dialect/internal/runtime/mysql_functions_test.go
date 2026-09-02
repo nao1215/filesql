@@ -913,35 +913,44 @@ func TestMySQLPositionCallsFoldCase(t *testing.T) {
 func TestMySQLNumericCallsReadAStringAsZero(t *testing.T) {
 	db := castDB(t)
 
-	for _, tt := range []struct{ name, query, want string }{
-		{"round", `SELECT ROUND('abc')`, "0"},
-		{"round to decimals", `SELECT ROUND('abc', 2)`, "0"},
-		{"truncate", `SELECT TRUNCATE('abc', 1)`, "0"},
-		{"pow", `SELECT POW('abc', 2)`, "0"},
-		{"power", `SELECT POWER('abc', 2)`, "0"},
-		{"format", `SELECT FORMAT('abc', 2)`, "0.00"},
-		{"interval", `SELECT INTERVAL('abc', 1, 2)`, "0"},
-		{"interval over strings", `SELECT INTERVAL('b', 'A', 'C')`, "2"},
-		{"abs, which already read it this way", `SELECT ABS('abc')`, "0"},
-		{"ceil, which already read it this way", `SELECT CEIL('abc')`, "0"},
-		{"a cast, which already read it this way", `SELECT CAST('abc' AS SIGNED)`, "0"},
+	for _, tt := range []struct {
+		name, query, want string
+		wantNull          bool
+	}{
+		{name: "round", query: `SELECT ROUND('abc')`, want: "0"},
+		{name: "round to decimals", query: `SELECT ROUND('abc', 2)`, want: "0"},
+		{name: "truncate", query: `SELECT TRUNCATE('abc', 1)`, want: "0"},
+		{name: "pow", query: `SELECT POW('abc', 2)`, want: "0"},
+		{name: "power", query: `SELECT POWER('abc', 2)`, want: "0"},
+		{name: "format", query: `SELECT FORMAT('abc', 2)`, want: "0.00"},
+		{name: "interval", query: `SELECT INTERVAL('abc', 1, 2)`, want: "0"},
+		{name: "interval over strings", query: `SELECT INTERVAL('b', 'A', 'C')`, want: "2"},
+		{name: "abs, which already read it this way", query: `SELECT ABS('abc')`, want: "0"},
+		{name: "ceil, which already read it this way", query: `SELECT CEIL('abc')`, want: "0"},
+		{name: "a cast, which already read it this way", query: `SELECT CAST('abc' AS SIGNED)`, want: "0"},
 
 		// The rule is a numeric prefix rather than an all-or-nothing parse,
 		// and it is the same rule for a value that does spell a number.
-		{"a numeric prefix", `SELECT ROUND('12abc')`, "12"},
-		{"a number with spaces around it", `SELECT ROUND(' 12 ')`, "12"},
-		{"a number in a string rounds the way a double does", `SELECT ROUND('2.5', 0)`, "2"},
-		{"a number is still a number", `SELECT ROUND(2.4)`, "2"},
+		{name: "a numeric prefix", query: `SELECT ROUND('12abc')`, want: "12"},
+		{name: "a number with spaces around it", query: `SELECT ROUND(' 12 ')`, want: "12"},
+		{name: "a number in a string rounds the way a double does", query: `SELECT ROUND('2.5', 0)`, want: "2"},
+		{name: "a number is still a number", query: `SELECT ROUND(2.4)`, want: "2"},
 
 		// A NULL is still nothing, and INTERVAL keeps the -1 MySQL reserves
 		// for one.
-		{"a NULL is still NULL", `SELECT ROUND(NULL)`, ""},
-		{"interval of a NULL", `SELECT INTERVAL(NULL, 1, 2)`, "-1"},
+		{name: "a NULL is still NULL", query: `SELECT ROUND(NULL)`, want: "", wantNull: true},
+		{name: "interval of a NULL", query: `SELECT INTERVAL(NULL, 1, 2)`, want: "-1"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := runDialect(t, db, dialects.MySQL, tt.query)
 			if err != nil {
 				t.Fatalf("%s: %v", tt.query, err)
+			}
+			// A NULL and an empty string both read as "" here, and the two mean
+			// opposite things for this rule: the point is that a string with no
+			// number in it is a number and a NULL is still nothing.
+			if got.Valid == tt.wantNull {
+				t.Errorf("%s valid = %v, want %v", tt.query, got.Valid, !tt.wantNull)
 			}
 			if got.String != tt.want {
 				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)

@@ -594,7 +594,7 @@ func TestGoogleSQLShiftsFillWithZeros(t *testing.T) {
 // TestGoogleSQLXorBindsBetweenAndAndOr pins the level ZetaSQL gives "^", which
 // is looser than every arithmetic and shift operator and than bitwise AND, and
 // tighter than bitwise OR. It used to bind at the addition level, which is
-// MySQL's neighbourhood rather than GoogleSQL's, so an expression mixing "^"
+// MySQL's neighborhood rather than GoogleSQL's, so an expression mixing "^"
 // with "&", with "+" or with a shift answered a different number and said
 // nothing.
 func TestGoogleSQLXorBindsBetweenAndAndOr(t *testing.T) {

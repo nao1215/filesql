@@ -975,6 +975,43 @@ func TestDumpXLSXRefusesAValueLongerThanACell(t *testing.T) {
 		assert.ErrorIs(t, err, ErrUnsupportedFormat)
 	})
 
+	t.Run("a character above the basic plane counts twice", func(t *testing.T) {
+		t.Parallel()
+
+		// A worksheet counts in UTF-16 code units, so an emoji is two of them.
+		// Counting runes let 16384 emoji through and they came back cut to
+		// 16383, which is the failure this whole test is about.
+		for _, tc := range []struct {
+			name    string
+			count   int
+			refused bool
+		}{
+			{"just inside the limit", xlsxCellCharacterLimit / 2, false},
+			{"one character past it", xlsxCellCharacterLimit/2 + 1, true},
+		} {
+			value := strings.Repeat("🙂", tc.count)
+			db := openWithTable(t, "CREATE TABLE t (value TEXT)", "")
+			_, err := db.ExecContext(ctx, "INSERT INTO t VALUES (?)", value)
+			require.NoError(t, err)
+
+			outDir := filepath.Join(t.TempDir(), "out")
+			err = DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
+			if tc.refused {
+				require.Error(t, err, tc.name)
+				assert.ErrorIs(t, err, ErrUnsupportedFormat, tc.name)
+				continue
+			}
+			require.NoError(t, err, tc.name)
+
+			back, err := OpenContext(ctx, filepath.Join(outDir, "t.xlsx"))
+			require.NoError(t, err, tc.name)
+			var got string
+			require.NoError(t, back.QueryRowContext(ctx, "SELECT value FROM t").Scan(&got))
+			assert.Equal(t, value, got, "%s: a value the cell holds must come back whole", tc.name)
+			require.NoError(t, back.Close())
+		}
+	})
+
 	t.Run("the formats that can hold it still do", func(t *testing.T) {
 		t.Parallel()
 
