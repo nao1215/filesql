@@ -3444,35 +3444,73 @@ func TestTheTwoEntryPointsAgree(t *testing.T) {
 				same("OutputFormat", readerResult.OutputFormat, writerResult.OutputFormat)
 				same("HasErrors", readerResult.HasErrors(), writerResult.HasErrors())
 				same("InvalidRowCount", readerResult.InvalidRowCount(), writerResult.InvalidRowCount())
-				same("len(Errors)", len(readerResult.Errors), len(writerResult.Errors))
-				same("len(ValidationErrors)", len(readerResult.ValidationErrors()), len(writerResult.ValidationErrors()))
-				same("len(PrepErrors)", len(readerResult.PrepErrors()), len(writerResult.PrepErrors()))
+				// The errors themselves, in order, rather than how many there
+				// are: two paths that report the same number of different
+				// errors have drifted, and that is what a caller reads.
+				same("Errors", messages(readerResult.Errors), messages(writerResult.Errors))
+				same("ValidationErrors", validationMessages(readerResult.ValidationErrors()), validationMessages(writerResult.ValidationErrors()))
+				same("PrepErrors", prepMessages(readerResult.PrepErrors()), prepMessages(writerResult.PrepErrors()))
 			})
 		}
 	}
+}
+
+// messages renders errors as the caller reads them, so two paths that report
+// the same number of different errors are not mistaken for agreeing.
+func messages(errs []error) []string {
+	out := make([]string, 0, len(errs))
+	for _, err := range errs {
+		out = append(out, err.Error())
+	}
+	return out
+}
+
+func validationMessages(errs []*ValidationError) []string {
+	out := make([]string, 0, len(errs))
+	for _, err := range errs {
+		out = append(out, fmt.Sprintf("row %d %s: %s", err.Row, err.Column, err.Error()))
+	}
+	return out
+}
+
+func prepMessages(errs []*PrepError) []string {
+	out := make([]string, 0, len(errs))
+	for _, err := range errs {
+		out = append(out, err.Error())
+	}
+	return out
 }
 
 type agreeingJSON struct {
 	Data string `name:"data"`
 }
 
-// agreeingJSONRoundTrip is the same round trip for the two formats prep flattens
-// into a single "data" column.
-func TestProbeJSONRoundTrip(t *testing.T) {
+// TestProcessOutputReadsBackThroughProcess is the other half of that: what one
+// pass writes is what a second pass reads. CSV, TSV and LTSV keep their format
+// and JSON becomes JSONL, so each case names the format it expects and that is
+// what the second pass is told -- reading back with the OutputFormat the first
+// pass reported would let a change to both go unnoticed.
+//
+// The JSON cases are the ones with something to lose, since prep carries a JSON
+// row as one raw string in a single column: a newline, a tab, a nested object,
+// a key outside ASCII.
+func TestProcessOutputReadsBackThroughProcess(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		ft   FileType
+		out  FileType
 		in   string
 	}{
-		{name: "csv", ft: FileTypeCSV, in: "data\nplain\n"},
-		{name: "tsv", ft: FileTypeTSV, in: "data\nplain\n"},
-		{name: "ltsv", ft: FileTypeLTSV, in: "data:plain\n"},
-		{name: "json", ft: FileTypeJSON, in: `[{"id":1,"name":"alice"},{"id":2,"name":"bob"}]`},
-		{name: "jsonl", ft: FileTypeJSONL, in: `{"id":1,"name":"alice"}` + "\n" + `{"id":2,"name":"bob"}` + "\n"},
-		{name: "json holding a string with a newline", ft: FileTypeJSON, in: `[{"a":"one\ntwo"}]`},
-		{name: "json holding a nested object", ft: FileTypeJSON, in: `[{"a":{"b":[1,2]}}]`},
-		{name: "json holding non-ascii", ft: FileTypeJSON, in: `[{"名前":"アリス"}]`},
-		{name: "json holding a tab", ft: FileTypeJSON, in: `[{"a":"one\ttwo"}]`},
+		// Two columns, so output that is really CSV cannot read back as TSV.
+		{name: "csv", ft: FileTypeCSV, out: FileTypeCSV, in: "data,other\nplain,second\n"},
+		{name: "tsv", ft: FileTypeTSV, out: FileTypeTSV, in: "data\tother\nplain\tsecond\n"},
+		{name: "ltsv", ft: FileTypeLTSV, out: FileTypeLTSV, in: "data:plain\tother:second\n"},
+		{name: "json", ft: FileTypeJSON, out: FileTypeJSONL, in: `[{"id":1,"name":"alice"},{"id":2,"name":"bob"}]`},
+		{name: "jsonl", ft: FileTypeJSONL, out: FileTypeJSONL, in: `{"id":1,"name":"alice"}` + "\n" + `{"id":2,"name":"bob"}` + "\n"},
+		{name: "json holding a string with a newline", ft: FileTypeJSON, out: FileTypeJSONL, in: `[{"a":"one\ntwo"}]`},
+		{name: "json holding a nested object", ft: FileTypeJSON, out: FileTypeJSONL, in: `[{"a":{"b":[1,2]}}]`},
+		{name: "json holding non-ascii", ft: FileTypeJSON, out: FileTypeJSONL, in: `[{"名前":"アリス"}]`},
+		{name: "json holding a tab", ft: FileTypeJSON, out: FileTypeJSONL, in: `[{"a":"one\ttwo"}]`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var first []agreeingJSON
@@ -3480,15 +3518,18 @@ func TestProbeJSONRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("first pass: %v", err)
 			}
+			if result.OutputFormat != tc.out {
+				t.Fatalf("OutputFormat = %v, want %v", result.OutputFormat, tc.out)
+			}
 			body, err := io.ReadAll(reader)
 			if err != nil {
 				t.Fatal(err)
 			}
 
 			var second []agreeingJSON
-			_, again, err := NewProcessor(result.OutputFormat).Process(bytes.NewReader(body), &second)
+			_, again, err := NewProcessor(tc.out).Process(bytes.NewReader(body), &second)
 			if err != nil {
-				t.Fatalf("reading prep's own %v output: %v (output was %q)", result.OutputFormat, err, body)
+				t.Fatalf("reading prep's own %v output: %v (output was %q)", tc.out, err, body)
 			}
 			if fmt.Sprint(first) != fmt.Sprint(second) {
 				t.Errorf("first pass decoded %v, second decoded %v (output was %q)", first, second, body)
