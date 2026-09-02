@@ -1,11 +1,17 @@
 package reader
 
 import (
+	"archive/zip"
 	"bytes"
 	"fmt"
+	"io"
+	"path"
+	"regexp"
 	"runtime"
+	"strings"
 	"testing"
 
+	"github.com/nao1215/filesql/internal/infer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xuri/excelize/v2"
@@ -399,4 +405,253 @@ func datedWorkbook(t *testing.T, numFmt int, custom string, value any, date1904 
 	var buf bytes.Buffer
 	require.NoError(t, f.Write(&buf))
 	return buf.Bytes()
+}
+
+// hiddenWorkbook writes header and records onto a sheet named "data", with the
+// cells of one column wearing ";;;", the format a spreadsheet user picks to hide
+// a cell's content while keeping its value. A column hidden that way draws
+// nothing, and the library that reads the rows drops a cell drawn as nothing.
+func hiddenWorkbook(t *testing.T, header []string, records [][]any, hiddenColumn int) []byte {
+	t.Helper()
+
+	const sheet = "data"
+	f := excelize.NewFile()
+	defer func() { require.NoError(t, f.Close()) }()
+	require.NoError(t, f.SetSheetName("Sheet1", sheet))
+	hidden := ";;;"
+	style, err := f.NewStyle(&excelize.Style{CustomNumFmt: &hidden})
+	require.NoError(t, err)
+
+	for c, name := range header {
+		axis, err := excelize.CoordinatesToCellName(c+1, 1)
+		require.NoError(t, err)
+		require.NoError(t, f.SetCellStr(sheet, axis, name))
+	}
+	for r, record := range records {
+		for c, value := range record {
+			axis, err := excelize.CoordinatesToCellName(c+1, r+2)
+			require.NoError(t, err)
+			require.NoError(t, f.SetCellValue(sheet, axis, value))
+			if c+1 == hiddenColumn || hiddenColumn == 0 {
+				require.NoError(t, f.SetCellStyle(sheet, axis, axis, style))
+			}
+		}
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, f.Write(&buf))
+	return buf.Bytes()
+}
+
+// TestReadXLSXHiddenNumbersLoadWhereverTheySit holds a number whose format
+// draws nothing to the rule every other number format follows: the cell loads
+// as the number the file stores. The rule held in a middle column, where the
+// cells after the hidden one padded it back into the row, and broke in the last
+// column, where the library returned the row one cell short and the value had
+// nowhere to land.
+func TestReadXLSXHiddenNumbersLoadWhereverTheySit(t *testing.T) {
+	t.Parallel()
+
+	t.Run("in the last column", func(t *testing.T) {
+		t.Parallel()
+
+		data := hiddenWorkbook(t, []string{"id", "name", "secret"}, [][]any{{1, "alice", 99}, {2, "bob", 98}}, 3)
+
+		result, records, err := readSheet(t, data)
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"1", "alice", "99"}, {"2", "bob", "98"}}, records)
+		assert.Equal(t, infer.Integer, result.Types[2])
+	})
+
+	t.Run("in a middle column", func(t *testing.T) {
+		t.Parallel()
+
+		data := hiddenWorkbook(t, []string{"id", "secret", "name"}, [][]any{{1, 99, "alice"}, {2, 98, "bob"}}, 2)
+
+		_, records, err := readSheet(t, data)
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"1", "99", "alice"}, {"2", "98", "bob"}}, records)
+	})
+
+	t.Run("in every column of a row", func(t *testing.T) {
+		t.Parallel()
+
+		// The library returns no cell at all for such a row, which is the
+		// shape of a record of empties; the file says what the cells hold.
+		data := hiddenWorkbook(t, []string{"a", "b"}, [][]any{{1, 2}, {3, 4}}, 0)
+
+		_, records, err := readSheet(t, data)
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"1", "2"}, {"3", "4"}}, records)
+	})
+
+	t.Run("a hidden text cell still draws nothing", func(t *testing.T) {
+		t.Parallel()
+
+		// A string is text whatever its format says, and the format says to
+		// draw nothing: the rule that a number loads as the number stored does
+		// not reach a cell that stores no number.
+		data := hiddenWorkbook(t, []string{"id", "secret"}, [][]any{{1, "shh"}}, 2)
+
+		_, records, err := readSheet(t, data)
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"1", ""}}, records)
+	})
+}
+
+// rewritePart returns the workbook with one part of the archive rewritten by fn.
+func rewritePart(t *testing.T, data []byte, part string, fn func(string) string) []byte {
+	t.Helper()
+
+	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	out := zip.NewWriter(&buf)
+	for _, file := range archive.File {
+		body, err := file.Open()
+		require.NoError(t, err)
+		content, err := io.ReadAll(body)
+		require.NoError(t, err)
+		require.NoError(t, body.Close())
+		if file.Name == part {
+			content = []byte(fn(string(content)))
+		}
+		w, err := out.Create(file.Name)
+		require.NoError(t, err)
+		_, err = w.Write(content)
+		require.NoError(t, err)
+	}
+	require.NoError(t, out.Close())
+	return buf.Bytes()
+}
+
+// spellings are the ways a writer other than Excel may spell a worksheet's XML,
+// each a rewrite of the sheet excelize writes: every element behind a namespace
+// prefix, as the Open XML SDK writes them; attributes in single quotes, which
+// XML allows; and each reference attribute on a line of its own behind a tab
+// with spaces around the equals sign, as a pretty-printing writer emits.
+var spellings = map[string]func(string) string{
+	"as excelize writes it": func(s string) string { return s },
+	"elements prefixed": func(s string) string {
+		head, body, _ := strings.Cut(s, "?>")
+		body = regexp.MustCompile(`<(/?)([A-Za-z])`).ReplaceAllString(body, "<${1}x:${2}")
+		return head + "?>" + strings.Replace(body,
+			`xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"`,
+			`xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"`, 1)
+	},
+	"attributes single-quoted": func(s string) string {
+		head, body, _ := strings.Cut(s, "?>")
+		return head + "?>" + regexp.MustCompile(`="([^"]*)"`).ReplaceAllString(body, "='${1}'")
+	},
+	"references on their own lines": func(s string) string {
+		head, body, _ := strings.Cut(s, "?>")
+		return head + "?>" + strings.ReplaceAll(body, ` r="`, "\n\tr = \"")
+	},
+}
+
+// TestReadXLSXSpellingsOfTheSheet holds a sheet to the same table however its
+// XML is spelled. The library that opens the workbook is an XML parser and
+// reads every spelling alike; the byte scan that says which rows hold a cell
+// recognized only Excel's, and a spelling it did not recognize either dropped
+// every record of empty cells or numbered the rows in sequence, which put a
+// record where the sheet holds no row and lost the one at the end.
+func TestReadXLSXSpellingsOfTheSheet(t *testing.T) {
+	t.Parallel()
+
+	// Row 3 and row 7 hold the empty string in every cell and are records; row
+	// 5 is not in the sheet and is not one.
+	const sheet = "data"
+	f := excelize.NewFile()
+	require.NoError(t, f.SetSheetName("Sheet1", sheet))
+	require.NoError(t, f.SetSheetRow(sheet, "A1", &[]any{"id", "name"}))
+	require.NoError(t, f.SetSheetRow(sheet, "A2", &[]any{1, "alice"}))
+	require.NoError(t, f.SetSheetRow(sheet, "A3", &[]any{"", ""}))
+	require.NoError(t, f.SetSheetRow(sheet, "A4", &[]any{2, "bob"}))
+	require.NoError(t, f.SetSheetRow(sheet, "A6", &[]any{3, "carol"}))
+	require.NoError(t, f.SetSheetRow(sheet, "A7", &[]any{"", ""}))
+	var buf bytes.Buffer
+	require.NoError(t, f.Write(&buf))
+	require.NoError(t, f.Close())
+
+	want := [][]string{{"1", "alice"}, {"", ""}, {"2", "bob"}, {"3", "carol"}, {"", ""}}
+	for name, spell := range spellings {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			data := rewritePart(t, buf.Bytes(), "xl/worksheets/sheet1.xml", spell)
+
+			_, records, err := readSheet(t, data)
+
+			require.NoError(t, err)
+			assert.Equal(t, want, records)
+		})
+	}
+}
+
+// relocateWorkbookPart returns the workbook with its main part moved from
+// xl/workbook.xml to another name, and the two references to it -- the content
+// types and the package's root relationships -- pointed at the new name. The
+// package format lets the main part sit anywhere, and the library follows the
+// root relationships to it.
+func relocateWorkbookPart(t *testing.T, data []byte, to string) []byte {
+	t.Helper()
+
+	const from = "xl/workbook.xml"
+	dir, base := path.Split(to)
+	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	out := zip.NewWriter(&buf)
+	for _, file := range archive.File {
+		body, err := file.Open()
+		require.NoError(t, err)
+		content, err := io.ReadAll(body)
+		require.NoError(t, err)
+		require.NoError(t, body.Close())
+		name := file.Name
+		switch name {
+		case from:
+			name = to
+		case "xl/_rels/workbook.xml.rels":
+			// The targets are relative to the main part, which moves; written
+			// from the root they still name the parts that stay where they are.
+			name = dir + "_rels/" + base + ".rels"
+			content = regexp.MustCompile(`Target="([^/"][^"]*)"`).ReplaceAll(content, []byte(`Target="/xl/${1}"`))
+		case "[Content_Types].xml", "_rels/.rels":
+			content = bytes.ReplaceAll(content, []byte(from), []byte(to))
+		}
+		w, err := out.Create(name)
+		require.NoError(t, err)
+		_, err = w.Write(content)
+		require.NoError(t, err)
+	}
+	require.NoError(t, out.Close())
+	return buf.Bytes()
+}
+
+// TestReadXLSXWorkbookPartElsewhere holds a workbook to the same table wherever
+// its main part sits. The sheet's XML was looked for under xl/workbook.xml by
+// name, and a workbook whose main part was elsewhere fell back to the reading
+// that asks the library cell by cell, which loaded a hidden number as nothing
+// and passed over a record of empty cells.
+func TestReadXLSXWorkbookPartElsewhere(t *testing.T) {
+	t.Parallel()
+
+	data := hiddenWorkbook(t, []string{"id", "secret", "name"}, [][]any{{1, 99, "alice"}, {"", "", ""}, {2, 98, "bob"}}, 2)
+	want := [][]string{{"1", "99", "alice"}, {"", "", ""}, {"2", "98", "bob"}}
+
+	for _, to := range []string{"xl/workbook.xml", "xl/book.xml", "book/wb.xml"} {
+		t.Run(to, func(t *testing.T) {
+			t.Parallel()
+
+			_, records, err := readSheet(t, relocateWorkbookPart(t, data, to))
+
+			require.NoError(t, err)
+			assert.Equal(t, want, records)
+		})
+	}
 }

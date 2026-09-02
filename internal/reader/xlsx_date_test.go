@@ -225,6 +225,24 @@ func TestTheTwoCellReadingsAgree(t *testing.T) {
 	require.NoError(t, f.SetCellStyle(sheet, "E2", "E2", percent))
 	require.NoError(t, f.SetCellStyle(sheet, "F2", "F2", clock))
 
+	// A third row whose first and last numbers wear a format that draws
+	// nothing, which is how a sheet hides a column while keeping its values.
+	// The library returns no cell for one, so the row comes back short of it,
+	// and shorter still when it is the last: both readings have to put the
+	// number back.
+	hidden := ";;;"
+	unseen, err := f.NewStyle(&excelize.Style{CustomNumFmt: &hidden})
+	require.NoError(t, err)
+	require.NoError(t, f.SetCellValue(sheet, "A3", 7.0))
+	require.NoError(t, f.SetCellValue(sheet, "B3", 8.0))
+	require.NoError(t, f.SetCellValue(sheet, "C3", 9.0))
+	require.NoError(t, f.SetCellStyle(sheet, "A3", "A3", unseen))
+	require.NoError(t, f.SetCellStyle(sheet, "C3", "C3", unseen))
+	// And a fourth row whose every cell is hidden, which the library returns
+	// as no row at all.
+	require.NoError(t, f.SetCellValue(sheet, "A4", 10.0))
+	require.NoError(t, f.SetCellStyle(sheet, "A4", "A4", unseen))
+
 	var buffer bytes.Buffer
 	require.NoError(t, f.Write(&buffer))
 	require.NoError(t, f.Close())
@@ -236,23 +254,24 @@ func TestTheTwoCellReadingsAgree(t *testing.T) {
 
 	rows, err := book.GetRows(sheet)
 	require.NoError(t, err)
+	require.Len(t, rows, 3, "the library returns nothing for a row whose cells all draw nothing")
+	require.Equal(t, []string{"", "8"}, rows[2], "the library drops a cell that draws nothing, and the row ends at the last one that does not")
 
 	styles, _, complete := numberFormatStyleIDs(book)
 	require.True(t, complete, "the style table is short enough to walk")
 	require.NotEmpty(t, styles.dates)
-	values, ok := cellValuesFromXML(data, sheet, styles, false)
-	require.True(t, ok, "the workbook's parts say where the sheet is")
 
-	fromXML := copyRows(rows)
-	for cell, text := range values {
-		fromXML[cell.row-1][cell.col-1] = text
-	}
-	fromLibrary := normalizeXLSXDates(book, sheet, normalizeXLSXNumbers(book, sheet, copyRows(rows)))
+	fromXML := (&Workbook{file: book, data: data}).NormalizeCells(sheet, copyRows(rows))
+	fromLibrary := (&Workbook{file: book}).NormalizeCells(sheet, copyRows(rows))
 
 	assert.Equal(t, fromXML, fromLibrary,
 		"the two readings of the same sheet have to answer the same for every cell")
 	assert.Equal(t, []string{"2023-03-15", "1", "45001", "not a date", "0.5", "36:00:00", "2.25"}, fromLibrary[1],
 		"a boolean is the number it stores; a percentage is the number behind it; an elapsed duration is what the sheet drew")
+	assert.Equal(t, []string{"7", "8", "9"}, fromLibrary[2],
+		"a number whose format draws nothing is the number, wherever in the row it sits")
+	assert.Equal(t, []string{"10"}, fromLibrary[3],
+		"a row whose every cell draws nothing is its numbers")
 }
 
 // copyRows is rows with each row copied, so a normalization that writes in

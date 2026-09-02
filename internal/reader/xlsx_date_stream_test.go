@@ -1,8 +1,10 @@
 package reader
 
 import (
+	"archive/zip"
 	"bytes"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -265,6 +267,21 @@ func TestScanSheetRowsReadsTheRowsThatHoldCells(t *testing.T) {
 			sheet: `<sheetData/>`,
 			want:  nil,
 		},
+		{
+			name:  "a comment, a declaration and an end tag open nothing",
+			sheet: `<?xml version="1.0"?><!-- <row r="9"><c r="A9"/></row> --><sheetData><row r="2"><c r="A2"/></row></sheetData>`,
+			want:  []int{2},
+		},
+		{
+			name:  "a comment between two rows hides the markup it quotes",
+			sheet: `<sheetData><row r="1"><c r="A1"/></row><!-- <row r="2"><c r="A2"/></row> --><row r="3"><c r="A3"/></row></sheetData>`,
+			want:  []int{1, 3},
+		},
+		{
+			name:  "an attribute the parser would refuse is passed over",
+			sheet: `<sheetData><row r=1><c r="A1/></row><row r="3"><c r="A3"/></row></sheetData>`,
+			want:  []int{1, 3},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -319,6 +336,43 @@ func TestScanSheetRowsCrossesTheWindow(t *testing.T) {
 	}
 }
 
+// TestScanSheetRowsOutlivesATagLongerThanItsBuffer covers a tag that runs past
+// the scanner's buffer without closing: a comment of that length, or a file
+// damaged in the middle of one. The unfinished tag used to be carried whole into
+// the next read, which left the buffer no room for it and made the read panic.
+func TestScanSheetRowsOutlivesATagLongerThanItsBuffer(t *testing.T) {
+	t.Parallel()
+
+	// The comment quotes a row in its middle, which is not one, and is long
+	// enough that the quoted row and the comment's end each land in a window
+	// of their own.
+	var sheet strings.Builder
+	sheet.WriteString(`<sheetData><row r="1"><c r="A1"/></row><!-- `)
+	sheet.WriteString(strings.Repeat("x", 100<<10))
+	sheet.WriteString(`<row r="2"><c r="A2"/></row>`)
+	sheet.WriteString(strings.Repeat("x", 100<<10))
+	sheet.WriteString(` --><row r="3"><c r="A3"/></row></sheetData>`)
+
+	rows := &rowSet{}
+	require.NoError(t, scanSheetRows(strings.NewReader(sheet.String()), rows))
+	assert.True(t, rows.has(1))
+	assert.True(t, rows.has(3))
+	assert.False(t, rows.has(2))
+
+	t.Run("an unfinished tag longer than the carry is let go", func(t *testing.T) {
+		t.Parallel()
+
+		// Not a comment, so the scan carries it until it is too long to
+		// carry, and then reads on. It used to be carried whole, which left
+		// the next read no buffer.
+		damaged := `<sheetData><row r="1"><c r="A1"/></row><row r="2" ` + strings.Repeat("x", 200<<10) + `><c r="A2"/></row></sheetData>`
+
+		rows := &rowSet{}
+		require.NoError(t, scanSheetRows(strings.NewReader(damaged), rows))
+		assert.True(t, rows.has(1))
+	})
+}
+
 // TestRowSetIsEmptyWhenNil covers the set a workbook whose bytes are not there
 // answers with, which is the reading that came before it could be asked.
 func TestRowSetIsEmptyWhenNil(t *testing.T) {
@@ -334,4 +388,274 @@ func TestRowSetIsEmptyWhenNil(t *testing.T) {
 	if held.lastRow() != 0 {
 		t.Error("a row number below one was recorded")
 	}
+}
+
+// TestScanSheetRowsReadsEverySpelling holds the byte scanner to what the XML
+// parser beside it accepts, for the constructs it looks at. A writer other than
+// Excel may put every element behind a namespace prefix, quote an attribute
+// with single quotes, or break a line before an attribute and space out its
+// equals sign; the library that opens the workbook reads all of those, and a
+// scan that stands in for it has to as well, or the rows it answers with are
+// not the rows the sheet holds.
+func TestScanSheetRowsReadsEverySpelling(t *testing.T) {
+	t.Parallel()
+
+	// Rows 1, 3 and 4 hold a cell; row 2 is not in the sheet.
+	want := []int{1, 3, 4}
+	for _, tt := range []struct {
+		name  string
+		sheet string
+	}{
+		{
+			name:  "as Excel writes it",
+			sheet: `<sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="3"><c r="A3"/></row><row r="4"><c r="A4"/></row></sheetData>`,
+		},
+		{
+			name:  "elements behind a namespace prefix",
+			sheet: `<x:sheetData><x:row r="1"><x:c r="A1"><x:v>1</x:v></x:c></x:row><x:row r="3"><x:c r="A3"/></x:row><x:row r="4"><x:c r="A4"/></x:row></x:sheetData>`,
+		},
+		{
+			name:  "attributes in single quotes",
+			sheet: `<sheetData><row r='1'><c r='A1'><v>1</v></c></row><row r='3'><c r='A3'/></row><row r='4'><c r='A4'/></row></sheetData>`,
+		},
+		{
+			name:  "a line break before the attribute and spaces around the equals sign",
+			sheet: "<sheetData><row\n\tr = \"1\"><c\n\tr = \"A1\"><v>1</v></c></row><row\n\tr = \"3\"><c\n\tr = \"A3\"/></row><row\n\tr=\"4\"><c\n\tr=\"A4\"/></row></sheetData>",
+		},
+		{
+			name:  "the reference behind other attributes",
+			sheet: `<sheetData><row spans="1:1" r="1"><c s="1" t="n" r="A1"><v>1</v></c></row><row ht="15" r="3"><c t='s' r='A3'/></row><row r="4"><c r="A4"/></row></sheetData>`,
+		},
+		{
+			name:  "a cell reference in lower case",
+			sheet: `<sheetData><row><c r="a1"/></row><row><c r="a3"/></row><row><c r="a4"/></row></sheetData>`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rows := &rowSet{}
+			require.NoError(t, scanSheetRows(strings.NewReader(tt.sheet), rows))
+			var got []int
+			for row := 1; row <= rows.lastRow(); row++ {
+				if rows.has(row) {
+					got = append(got, row)
+				}
+			}
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
+// TestTheTwoScansAgreeOnTheRows holds the byte scan and the XML scan of one
+// sheet to the same rows. The XML scan visits every cell that stores a number,
+// through encoding/xml, and the byte scan answers which rows hold a cell; over a
+// sheet whose every cell stores a number the two have to name the same rows,
+// whatever spelling the sheet is written in, so the byte scan cannot accept
+// less than the parser does without this saying so.
+func TestTheTwoScansAgreeOnTheRows(t *testing.T) {
+	t.Parallel()
+
+	body := `<row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c></row>` +
+		`<row r="3"><c r="A3"><v>3</v></c></row>` +
+		`<row r="6"><c r="B6"><v>6</v></c></row>` +
+		`<row><c><v>7</v></c></row>`
+	for name, spell := range map[string]func(string) string{
+		"as Excel writes it": func(s string) string { return s },
+		"elements prefixed": func(s string) string {
+			return regexp.MustCompile(`<(/?)([A-Za-z])`).ReplaceAllString(s, "<${1}x:${2}")
+		},
+		"attributes single-quoted": func(s string) string {
+			return regexp.MustCompile(`="([^"]*)"`).ReplaceAllString(s, "='${1}'")
+		},
+		"references on their own lines": func(s string) string {
+			return strings.ReplaceAll(s, ` r="`, "\n\tr = \"")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			sheet := spell(`<worksheet><sheetData>` + body + `</sheetData></worksheet>`)
+
+			held := &rowSet{}
+			require.NoError(t, scanSheetRows(strings.NewReader(sheet), held))
+			values := map[sheetCell]string{}
+			require.NoError(t, scanSheetValues(strings.NewReader(sheet), numberFormatStyles{}, false, values))
+
+			fromValues := map[int]bool{}
+			for cell := range values {
+				fromValues[cell.row] = true
+			}
+			fromBytes := map[int]bool{}
+			for row := 1; row <= held.lastRow(); row++ {
+				if held.has(row) {
+					fromBytes[row] = true
+				}
+			}
+			assert.Equal(t, map[int]bool{1: true, 3: true, 6: true, 7: true}, fromValues)
+			assert.Equal(t, fromValues, fromBytes)
+		})
+	}
+}
+
+// archiveOf returns a zip holding the given parts, which is enough of a
+// workbook for the part lookup to be asked where a sheet is.
+func archiveOf(t *testing.T, parts map[string]string) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	out := zip.NewWriter(&buf)
+	for name, body := range parts {
+		w, err := out.Create(name)
+		require.NoError(t, err)
+		_, err = w.Write([]byte(body))
+		require.NoError(t, err)
+	}
+	require.NoError(t, out.Close())
+	return buf.Bytes()
+}
+
+// TestSheetPartFollowsThePackage covers finding a sheet's part through the
+// package's own bookkeeping: the root relationships say where the main part
+// is, the main part's relationships say where each sheet is, and a sheet's
+// target is written relative to the main part unless it begins at the root.
+// The main part used to be looked for at xl/workbook.xml by name.
+func TestSheetPartFollowsThePackage(t *testing.T) {
+	t.Parallel()
+
+	rootRels := func(target string) string {
+		return `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+			`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="` + target + `"/>` +
+			`</Relationships>`
+	}
+	workbook := `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+		`<sheets><sheet name="data" sheetId="1" r:id="rId1"/></sheets></workbook>`
+	workbookRels := func(target string) string {
+		return `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+			`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="` + target + `"/>` +
+			`</Relationships>`
+	}
+
+	for _, tt := range []struct {
+		name  string
+		parts map[string]string
+		want  string
+	}{
+		{
+			name: "the main part where Excel puts it",
+			parts: map[string]string{
+				"_rels/.rels":                rootRels("xl/workbook.xml"),
+				"xl/workbook.xml":            workbook,
+				"xl/_rels/workbook.xml.rels": workbookRels("worksheets/sheet1.xml"),
+				"xl/worksheets/sheet1.xml":   "<worksheet/>",
+			},
+			want: "xl/worksheets/sheet1.xml",
+		},
+		{
+			name: "the main part under another name",
+			parts: map[string]string{
+				"_rels/.rels":              rootRels("/xl/book.xml"),
+				"xl/book.xml":              workbook,
+				"xl/_rels/book.xml.rels":   workbookRels("worksheets/sheet1.xml"),
+				"xl/worksheets/sheet1.xml": "<worksheet/>",
+			},
+			want: "xl/worksheets/sheet1.xml",
+		},
+		{
+			name: "the main part in another directory",
+			parts: map[string]string{
+				"_rels/.rels":            rootRels("book/wb.xml"),
+				"book/wb.xml":            workbook,
+				"book/_rels/wb.xml.rels": workbookRels("sheets/s.xml"),
+				"book/sheets/s.xml":      "<worksheet/>",
+			},
+			want: "book/sheets/s.xml",
+		},
+		{
+			name: "the main part at the root",
+			parts: map[string]string{
+				"_rels/.rels":       rootRels("wb.xml"),
+				"wb.xml":            workbook,
+				"_rels/wb.xml.rels": workbookRels("sheets/s.xml"),
+				"sheets/s.xml":      "<worksheet/>",
+			},
+			want: "sheets/s.xml",
+		},
+		{
+			name: "a sheet target written from the root",
+			parts: map[string]string{
+				"_rels/.rels":                rootRels("xl/workbook.xml"),
+				"xl/workbook.xml":            workbook,
+				"xl/_rels/workbook.xml.rels": workbookRels("/xl/worksheets/sheet1.xml"),
+				"xl/worksheets/sheet1.xml":   "<worksheet/>",
+			},
+			want: "xl/worksheets/sheet1.xml",
+		},
+		{
+			name: "a sheet target that begins with a dot",
+			parts: map[string]string{
+				"_rels/.rels":                rootRels("xl/workbook.xml"),
+				"xl/workbook.xml":            workbook,
+				"xl/_rels/workbook.xml.rels": workbookRels("./worksheets/sheet1.xml"),
+				"xl/worksheets/sheet1.xml":   "<worksheet/>",
+			},
+			want: "xl/worksheets/sheet1.xml",
+		},
+		{
+			name: "no root relationships at all falls back to where Excel puts it",
+			parts: map[string]string{
+				"xl/workbook.xml":            workbook,
+				"xl/_rels/workbook.xml.rels": workbookRels("worksheets/sheet1.xml"),
+				"xl/worksheets/sheet1.xml":   "<worksheet/>",
+			},
+			want: "xl/worksheets/sheet1.xml",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			data := archiveOf(t, tt.parts)
+			archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+			require.NoError(t, err)
+
+			part, ok := sheetPart(archive, "data")
+
+			require.True(t, ok, "the sheet is found")
+			assert.Equal(t, tt.want, part.Name)
+		})
+	}
+
+	t.Run("root relationships that are not XML fall back to where Excel puts it", func(t *testing.T) {
+		t.Parallel()
+
+		data := archiveOf(t, map[string]string{
+			"_rels/.rels":                "not xml",
+			"xl/workbook.xml":            workbook,
+			"xl/_rels/workbook.xml.rels": workbookRels("worksheets/sheet1.xml"),
+			"xl/worksheets/sheet1.xml":   "<worksheet/>",
+		})
+		archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+		require.NoError(t, err)
+
+		part, ok := sheetPart(archive, "data")
+
+		require.True(t, ok)
+		assert.Equal(t, "xl/worksheets/sheet1.xml", part.Name)
+	})
+
+	t.Run("a main part the root relationships name but the archive lacks is not found", func(t *testing.T) {
+		t.Parallel()
+
+		data := archiveOf(t, map[string]string{
+			"_rels/.rels":              rootRels("xl/book.xml"),
+			"xl/workbook.xml":          workbook,
+			"xl/worksheets/sheet1.xml": "<worksheet/>",
+		})
+		archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+		require.NoError(t, err)
+
+		_, ok := sheetPart(archive, "data")
+
+		assert.False(t, ok)
+	})
 }

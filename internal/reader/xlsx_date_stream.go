@@ -238,17 +238,25 @@ func scanSheetRows(src io.Reader, into *rowSet) error {
 	buf := make([]byte, bufferSize+carrySize)
 	carried := 0
 	row := 0
+	inComment := false
 	for {
 		n, err := src.Read(buf[carried : carried+bufferSize])
 		if n > 0 {
 			window := buf[:carried+n]
-			consumed := scanRowWindow(window, &row, into, true)
+			consumed := scanRowWindow(window, &row, &inComment, into, true)
+			// A tag that has run longer than the carry is not a row or a cell,
+			// which are short; a comment or a damaged file can hold one. It is
+			// let go rather than carried, since carrying it would leave the
+			// next read no room in the buffer.
+			if len(window)-consumed > carrySize {
+				consumed = len(window)
+			}
 			carried = copy(buf, window[consumed:])
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if carried > 0 {
-					scanRowWindow(buf[:carried], &row, into, false)
+					scanRowWindow(buf[:carried], &row, &inComment, into, false)
 				}
 				return nil
 			}
@@ -260,15 +268,38 @@ func scanSheetRows(src io.Reader, into *rowSet) error {
 // scanRowWindow records the rows the cells in one window belong to and answers
 // how much of the window it consumed. When more is coming, a tag that runs past
 // the end is left for the next window.
-func scanRowWindow(window []byte, row *int, into *rowSet, more bool) int {
+//
+// A comment is passed over whole, however many windows it spans, because what
+// it holds is not markup: a comment quoting a row would otherwise count as one.
+// inComment carries that state from one window to the next.
+func scanRowWindow(window []byte, row *int, inComment *bool, into *rowSet, more bool) int {
 	at := 0
 	for {
+		if *inComment {
+			end := bytes.Index(window[at:], []byte("-->"))
+			if end < 0 {
+				// The comment runs on. The last two bytes may be the start of
+				// its end, so they are carried into the next window.
+				if more && len(window)-at >= 2 {
+					return len(window) - 2
+				}
+				return len(window)
+			}
+			*inComment = false
+			at += end + len("-->")
+			continue
+		}
 		next := bytes.IndexByte(window[at:], '<')
 		if next < 0 {
 			return len(window)
 		}
 		start := at + next
 		tag := window[start:]
+		if bytes.HasPrefix(tag, []byte("<!--")) {
+			*inComment = true
+			at = start + len("<!--")
+			continue
+		}
 		end := bytes.IndexByte(tag, '>')
 		if end < 0 {
 			if more {
@@ -277,19 +308,20 @@ func scanRowWindow(window []byte, row *int, into *rowSet, more bool) int {
 			return len(window)
 		}
 		tag = tag[:end]
-		switch {
-		case bytes.HasPrefix(tag, []byte("<row")) && isTagBoundary(tag, len("<row")):
+		name, attrs := startTag(tag)
+		switch string(name) {
+		case "row":
 			// A row carries its number, and one without follows the row before,
 			// which is what a writer that omits them means.
-			if n, ok := rowNumberAttr(tag); ok {
+			if n, ok := rowNumberAttr(attrs); ok {
 				*row = n
 			} else {
 				*row++
 			}
-		case bytes.HasPrefix(tag, []byte("<c")) && isTagBoundary(tag, len("<c")):
+		case "c":
 			// A cell carries the row it is in, which is what says where it is
 			// when its row left its own number out.
-			if n, ok := rowNumberAttr(tag); ok {
+			if n, ok := rowNumberAttr(attrs); ok {
 				*row = n
 			}
 			into.add(*row)
@@ -298,34 +330,92 @@ func scanRowWindow(window []byte, row *int, into *rowSet, more bool) int {
 	}
 }
 
-// isTagBoundary reports whether a tag name ends at n, rather than the name being
-// the start of a longer one: "<row" is a row and "<rowBreaks" is not.
-func isTagBoundary(tag []byte, n int) bool {
-	if len(tag) == n {
-		return true
+// startTag splits a tag into the local name of the element it opens and the
+// attributes after the name. An end tag, a comment and a processing
+// instruction open nothing and are answered with no name.
+//
+// The name is read whole and then compared, rather than matched by prefix, so
+// "<row" is a row and "<rowBreaks" is not; and a namespace prefix on it is
+// dropped, since a writer may put every element behind one -- "<x:row" -- and
+// the parser this scan stands in for compares the local name.
+func startTag(tag []byte) (name, attrs []byte) {
+	if len(tag) < 2 || tag[0] != '<' {
+		return nil, nil
 	}
-	switch tag[n] {
-	case ' ', '\t', '\r', '\n', '/':
-		return true
+	body := tag[1:]
+	end := 0
+	for end < len(body) && !isXMLSpace(body[end]) && body[end] != '/' && body[end] != '>' {
+		end++
 	}
-	return false
+	name = body[:end]
+	if len(name) == 0 || name[0] == '?' || name[0] == '!' {
+		return nil, nil
+	}
+	if colon := bytes.LastIndexByte(name, ':'); colon >= 0 {
+		name = name[colon+1:]
+	}
+	return name, body[end:]
+}
+
+// isXMLSpace reports whether a byte is what XML counts as whitespace.
+func isXMLSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\r' || c == '\n'
+}
+
+// attrValue finds an attribute by name among a start tag's attributes, reading
+// them as the parser accepts them: a name, whitespace or none, an equals sign,
+// whitespace or none, and a value in either kind of quote. A writer that quotes
+// with single quotes, breaks a line before an attribute or spaces out the
+// equals sign is writing XML, and the parser this scan stands in for reads it.
+func attrValue(attrs []byte, name string) ([]byte, bool) {
+	at := 0
+	for {
+		for at < len(attrs) && isXMLSpace(attrs[at]) {
+			at++
+		}
+		if at >= len(attrs) || attrs[at] == '/' || attrs[at] == '>' {
+			return nil, false
+		}
+		start := at
+		for at < len(attrs) && !isXMLSpace(attrs[at]) && attrs[at] != '=' && attrs[at] != '/' {
+			at++
+		}
+		key := attrs[start:at]
+		for at < len(attrs) && isXMLSpace(attrs[at]) {
+			at++
+		}
+		if at >= len(attrs) || attrs[at] != '=' {
+			return nil, false
+		}
+		at++
+		for at < len(attrs) && isXMLSpace(attrs[at]) {
+			at++
+		}
+		if at >= len(attrs) || (attrs[at] != '"' && attrs[at] != '\'') {
+			return nil, false
+		}
+		quote := attrs[at]
+		at++
+		end := bytes.IndexByte(attrs[at:], quote)
+		if end < 0 {
+			return nil, false
+		}
+		if string(key) == name {
+			return attrs[at : at+end], true
+		}
+		at += end + 1
+	}
 }
 
 // rowNumberAttr reads the row a tag's r attribute names: the number itself on a
 // row element, and the digits of a reference such as "A3" on a cell.
-func rowNumberAttr(tag []byte) (int, bool) {
-	at := bytes.Index(tag, []byte(` r="`))
-	if at < 0 {
-		return 0, false
-	}
-	value := tag[at+len(` r="`):]
-	if end := bytes.IndexByte(value, '"'); end >= 0 {
-		value = value[:end]
-	} else {
+func rowNumberAttr(attrs []byte) (int, bool) {
+	value, ok := attrValue(attrs, "r")
+	if !ok {
 		return 0, false
 	}
 	digits := value
-	for len(digits) > 0 && digits[0] >= 'A' && digits[0] <= 'Z' {
+	for len(digits) > 0 && isASCIILetter(digits[0]) {
 		digits = digits[1:]
 	}
 	if len(digits) == 0 {
@@ -347,28 +437,32 @@ func rowNumberAttr(tag []byte) (int, bool) {
 	return n, true
 }
 
+// isASCIILetter reports whether a byte is a column letter of a cell reference,
+// in either case, since "a3" names the same cell as "A3".
+func isASCIILetter(c byte) bool {
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+}
+
 // maxSheetRow bounds a row number read out of a sheet, which is what keeps a
 // damaged file from asking for a bitmap the size of its own digits.
 const maxSheetRow = 1 << 24
 
 // sheetPart finds the worksheet part a sheet name belongs to, following the
-// workbook's relationships rather than guessing at a file name: a workbook
-// whose sheets were reordered or deleted does not name its parts in order.
+// package's own bookkeeping rather than guessing at a file name: the root
+// relationships say where the workbook's main part is, the main part's
+// relationships say where each sheet is, and a workbook whose sheets were
+// reordered or deleted does not name its parts in order.
 func sheetPart(archive *zip.Reader, sheet string) (*zip.File, bool) {
-	relID, ok := sheetRelationshipID(archive, sheet)
+	workbook := workbookPart(archive)
+	relID, ok := sheetRelationshipID(archive, workbook, sheet)
 	if !ok {
 		return nil, false
 	}
-	target, ok := relationshipTarget(archive, relID)
+	target, ok := relationshipTarget(archive, relsPartOf(workbook), relID)
 	if !ok {
 		return nil, false
 	}
-	// A target is relative to the part that names it, which is xl/workbook.xml,
-	// unless it is written from the root.
-	name := path.Join("xl", target)
-	if strings.HasPrefix(target, "/") {
-		name = strings.TrimPrefix(target, "/")
-	}
+	name := resolvePart(path.Dir(workbook), target)
 	for _, file := range archive.File {
 		if file.Name == name {
 			return file, true
@@ -377,9 +471,56 @@ func sheetPart(archive *zip.Reader, sheet string) (*zip.File, bool) {
 	return nil, false
 }
 
-// sheetRelationshipID reads xl/workbook.xml for the relationship id of a sheet.
-func sheetRelationshipID(archive *zip.Reader, sheet string) (string, bool) {
-	body, ok := partOf(archive, "xl/workbook.xml")
+// workbookPart is the name of the workbook's main part. Excel writes it at
+// xl/workbook.xml, and the format lets a writer put it anywhere the package's
+// root relationships name; a package whose root relationships are missing,
+// unreadable or silent is answered with Excel's name, the only one left to
+// guess.
+func workbookPart(archive *zip.Reader) string {
+	const excelWrites = "xl/workbook.xml"
+	body, ok := partOf(archive, "_rels/.rels")
+	if !ok {
+		return excelWrites
+	}
+	var rels struct {
+		Relationship []struct {
+			Type   string `xml:"Type,attr"`
+			Target string `xml:"Target,attr"`
+		} `xml:"Relationship"`
+	}
+	if err := xml.Unmarshal(body, &rels); err != nil {
+		return excelWrites
+	}
+	for _, r := range rels.Relationship {
+		// The transitional and the strict schema name the relationship under
+		// different namespaces and the same last word.
+		if strings.HasSuffix(r.Type, "/officeDocument") && r.Target != "" {
+			return resolvePart("", r.Target)
+		}
+	}
+	return excelWrites
+}
+
+// relsPartOf names the part holding a part's relationships, which sits in a
+// _rels directory beside it under the part's own name with .rels appended.
+func relsPartOf(part string) string {
+	dir, base := path.Split(part)
+	return dir + "_rels/" + base + ".rels"
+}
+
+// resolvePart resolves a relationship target against the directory of the part
+// that names it. A target beginning with a slash is written from the root.
+func resolvePart(dir, target string) string {
+	if strings.HasPrefix(target, "/") {
+		return path.Clean(strings.TrimPrefix(target, "/"))
+	}
+	return path.Join(dir, target)
+}
+
+// sheetRelationshipID reads the workbook's main part for the relationship id
+// of a sheet.
+func sheetRelationshipID(archive *zip.Reader, part, sheet string) (string, bool) {
+	body, ok := partOf(archive, part)
 	if !ok {
 		return "", false
 	}
@@ -402,10 +543,10 @@ func sheetRelationshipID(archive *zip.Reader, sheet string) (string, bool) {
 	return "", false
 }
 
-// relationshipTarget reads xl/_rels/workbook.xml.rels for what a relationship
-// id points at.
-func relationshipTarget(archive *zip.Reader, relID string) (string, bool) {
-	body, ok := partOf(archive, "xl/_rels/workbook.xml.rels")
+// relationshipTarget reads a relationships part for what a relationship id
+// points at.
+func relationshipTarget(archive *zip.Reader, part, relID string) (string, bool) {
+	body, ok := partOf(archive, part)
 	if !ok {
 		return "", false
 	}

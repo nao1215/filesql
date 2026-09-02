@@ -318,11 +318,33 @@ func (w *Workbook) NormalizeCells(sheet string, rows [][]string) [][]string {
 		return normalizeXLSXDates(w.file, sheet, normalizeXLSXNumbers(w.file, sheet, rows))
 	}
 	for cell, text := range values {
-		r, c := cell.row-1, cell.col-1
-		if r < 0 || r >= len(rows) || c < 0 || c >= len(rows[r]) {
-			continue
-		}
-		rows[r][c] = text
+		rows = placeCell(rows, cell, text)
 	}
+	return rows
+}
+
+// placeCell writes what a cell loads as into rows, at the row and column the
+// sheet holds it in.
+//
+// A cell the library returned is overwritten where it is. One the library
+// dropped is put back: it returns no cell for a number whose format draws
+// nothing, which is how a spreadsheet hides a column while keeping its values,
+// so a row ending in such cells arrives short of them and a row made of them
+// arrives as no row at all. Before this, only the cells after a dropped one
+// padded it back into the row, which is why a hidden number loaded in a middle
+// column and vanished in the last. The reach is bounded by what a sheet can
+// hold, so a damaged reference cannot ask for a row of its own digits.
+func placeCell(rows [][]string, cell sheetCell, text string) [][]string {
+	r, c := cell.row-1, cell.col-1
+	if r < 0 || c < 0 || cell.row > excelize.TotalRows || cell.col > excelize.MaxColumns {
+		return rows
+	}
+	for len(rows) <= r {
+		rows = append(rows, nil)
+	}
+	for len(rows[r]) <= c {
+		rows[r] = append(rows[r], "")
+	}
+	rows[r][c] = text
 	return rows
 }
