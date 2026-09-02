@@ -93,43 +93,6 @@ func TestTableName_Equal(t *testing.T) {
 	}
 }
 
-func TestTableName_Sanitize(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{"normal name", "users", "users"},
-		{"with hyphen", "user-data", "user_data"},
-		{"with spaces", "user data", "user_data"},
-		{"with dots", "data.backup", "data_backup"},
-		{"with special chars", "user@#$data", "userdata"}, // special chars are removed, not replaced
-		{"starts with number", "123table", "table_123table"},
-		{"only special chars", "@#$%", "table"},
-		{"empty after sanitize", "", "table"},
-		{"mixed invalid chars", "test-data.v2@new", "test_data_v2new"}, // only -, space, . are replaced with _
-		{"uppercase preserved", "UserData", "UserData"},
-		// The character set matches the file-path sanitizer, so a name in any
-		// script survives here too; only the fallback and prefix differ.
-		{"japanese preserved", "売上", "売上"},
-		{"cyrillic preserved", "Данные", "Данные"},
-		{"accented latin preserved", "café", "café"},
-		{"non-ascii digit leads", "١٢", "table_١٢"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			tn := newTableName(tt.input)
-			sanitized := tn.sanitize()
-			assert.Equal(t, tt.expected, sanitized.String())
-		})
-	}
-}
-
 func TestNewHeader(t *testing.T) {
 	t.Parallel()
 

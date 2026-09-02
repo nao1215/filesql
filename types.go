@@ -3,8 +3,6 @@ package filesql
 import (
 	"strconv"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/nao1215/filesql/internal/infer"
 	"github.com/nao1215/filesql/internal/reader"
@@ -44,31 +42,6 @@ func (tn tableName) String() string {
 // Equal compares two table names
 func (tn tableName) Equal(other tableName) bool {
 	return tn.value == other.value
-}
-
-// sanitize returns a sanitized version of the table name
-func (tn tableName) sanitize() tableName {
-	return tableName{value: tn.sanitizeString()}
-}
-
-// sanitizeString removes invalid characters from table names. It keeps the same
-// characters as the file-path sanitizer (see identifierRunes), so a name written
-// in a non-Latin script survives here too, and differs only in the fallback and
-// prefix it uses when the result is empty or starts with a digit.
-func (tn tableName) sanitizeString() string {
-	finalResult := identifierRunes(tn.value)
-
-	// Ensure it doesn't start with a digit
-	if first, _ := utf8.DecodeRuneInString(finalResult); unicode.IsDigit(first) {
-		finalResult = "table_" + finalResult
-	}
-
-	// Ensure it's not empty
-	if finalResult == "" {
-		finalResult = defaultTableName
-	}
-
-	return finalResult
 }
 
 // header is file header.
