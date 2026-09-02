@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/moov-io/ach"
-	"github.com/nao1215/filesql/parser"
+	"github.com/nao1215/filesql/internal/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

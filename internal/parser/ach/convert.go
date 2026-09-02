@@ -11,7 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/moov-io/ach"
-	"github.com/nao1215/filesql/parser"
+	"github.com/nao1215/filesql/internal/parser"
 )
 
 // Addenda type constants for the addenda_type column

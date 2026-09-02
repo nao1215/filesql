@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nao1215/filesql/parser/wire"
+	"github.com/nao1215/filesql/internal/parser/wire"
 )
 
 func ExampleParseReader() {

@@ -12,18 +12,33 @@ import (
 // Dialect is a SQL dialect accepted at query time. The storage engine is always
 // SQLite; a Dialect only selects how a caller's query text is interpreted before
 // it reaches SQLite.
-type Dialect = dialects.Dialect
+//
+// Its value is the lowercase name Parse reads, so a Dialect survives a round
+// trip through a flag, a config file or a column.
+type Dialect string
 
 const (
 	// SQLite is the native dialect. Translate returns the input unchanged.
-	SQLite = dialects.SQLite
+	SQLite Dialect = "sqlite"
 	// MySQL accepts MySQL query syntax.
-	MySQL = dialects.MySQL
+	MySQL Dialect = "mysql"
 	// PostgreSQL accepts PostgreSQL query syntax.
-	PostgreSQL = dialects.PostgreSQL
+	PostgreSQL Dialect = "postgresql"
 	// GoogleSQL accepts GoogleSQL (BigQuery / Cloud Spanner) query syntax.
-	GoogleSQL = dialects.GoogleSQL
+	GoogleSQL Dialect = "googlesql"
 )
+
+// DisplayName returns the dialect spelled the way its own project spells it,
+// for a message a person reads: "PostgreSQL" rather than "postgresql". A
+// Dialect this package does not name reads back as its own value, and the zero
+// Dialect is "".
+func (d Dialect) DisplayName() string { return d.internal().DisplayName() }
+
+// internal is the identifier the packages under this one pass around. They
+// cannot import this one, which is why the type is declared twice; the
+// conversion is free, and TestDialectMirrorsTheInternalIdentifier holds the
+// two sets of constants equal.
+func (d Dialect) internal() dialects.Dialect { return dialects.Dialect(d) }
 
 // Sentinel errors returned by this package. Use errors.Is to check for them.
 var (
@@ -42,14 +57,24 @@ var (
 )
 
 // Dialects returns every built-in dialect in a stable order.
-func Dialects() []Dialect { return dialects.All() }
+func Dialects() []Dialect {
+	all := dialects.All()
+	out := make([]Dialect, len(all))
+	for i, d := range all {
+		out[i] = Dialect(d)
+	}
+	return out
+}
 
 // Parse maps a user-supplied dialect name to a Dialect. Matching is
 // case-insensitive and ignores surrounding whitespace. Aliases are accepted:
 // "sqlite3" for SQLite; "postgres" and "pg" for PostgreSQL; "bigquery",
 // "spanner", and "zetasql" for GoogleSQL. An unrecognized name returns
 // ErrUnknownDialect.
-func Parse(name string) (Dialect, error) { return dialects.ParseName(name) }
+func Parse(name string) (Dialect, error) {
+	d, err := dialects.ParseName(name)
+	return Dialect(d), err
+}
 
 // RegisterFunctions registers the helper functions the translated SQL calls
 // with the SQLite driver. It runs once at package initialization and is
@@ -68,11 +93,11 @@ func Translate(d Dialect, query string) (string, error) {
 	if d == SQLite {
 		return query, nil
 	}
-	stmt, err := parser.Parse(d, query)
+	stmt, err := parser.Parse(d.internal(), query)
 	if err != nil {
 		return "", err
 	}
-	lowered, err := lower.Lower(d, stmt)
+	lowered, err := lower.Lower(d.internal(), stmt)
 	if err != nil {
 		return "", err
 	}

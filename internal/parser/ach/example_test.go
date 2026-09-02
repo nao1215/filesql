@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nao1215/filesql/parser/ach"
+	"github.com/nao1215/filesql/internal/parser/ach"
 )
 
 func ExampleParseReader() {

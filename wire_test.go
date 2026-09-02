@@ -194,7 +194,7 @@ func TestDumpFedWire_NoTableSet(t *testing.T) {
 	assert.Error(t, err, "should fail when no TableSet is registered")
 }
 
-func TestDumpFedWireWithTableSet_NilTableSet(t *testing.T) {
+func TestDumpFedWireWithSource_NilSource(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -204,8 +204,8 @@ func TestDumpFedWireWithTableSet_NilTableSet(t *testing.T) {
 	defer db.Close()
 
 	tmpFile := filepath.Join(t.TempDir(), "output.fed")
-	err = DumpFedWireWithTableSet(ctx, db, "test", tmpFile, nil)
-	assert.Error(t, err, "should fail with nil TableSet")
+	err = DumpFedWireWithSource(ctx, db, "test", tmpFile, nil)
+	assert.ErrorIs(t, err, ErrNilInput, "a nil source is refused by name")
 }
 
 func TestIsWireBaseTableNameSuffix(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -790,6 +791,52 @@ func TestReaderRecordBoundHoldsForEveryFormat(t *testing.T) {
 			if db != nil {
 				require.NoError(t, db.Close())
 			}
+			require.Error(t, err, "an unterminated stream must be refused")
+			assert.ErrorIs(t, err, reader.ErrRecordTooLong,
+				"the refusal must be the record bound rather than whatever the format complains about first")
+			assert.Less(t, src.served, int64(readCap),
+				"the stream was read to the test's cap, so nothing bounded it")
+		})
+	}
+}
+
+// TestDumpWithSourceHoldsTheRecordBound is
+// TestReaderRecordBoundHoldsForEveryFormat for the other direction. The two
+// exports that take the original file's bytes read them with the same library
+// the load path uses, so they need the same bound: without it a stream that
+// never ends a record is read for as long as the sender keeps sending, and the
+// export is reachable with a reader a caller supplies.
+func TestDumpWithSourceHoldsTheRecordBound(t *testing.T) {
+	t.Parallel()
+
+	const readCap = 3 * (64 << 20)
+
+	tests := []struct {
+		name string
+		dump func(ctx context.Context, db *sql.DB, out string, source io.Reader) error
+	}{
+		{"ACH", func(ctx context.Context, db *sql.DB, out string, source io.Reader) error {
+			return DumpACHWithSource(ctx, db, "payment", out, source)
+		}},
+		{"FedWire", func(ctx context.Context, db *sql.DB, out string, source io.Reader) error {
+			return DumpFedWireWithSource(ctx, db, "payment", out, source)
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, err := NewBuilder().
+				AddReader(strings.NewReader("id\n1\n"), "seed", FileTypeCSV).
+				Open(context.Background())
+			require.NoError(t, err)
+			defer db.Close()
+
+			src := &endlessReader{fill: '1', cap: readCap}
+			out := filepath.Join(t.TempDir(), "out")
+			err = tt.dump(context.Background(), db, out, src)
+
 			require.Error(t, err, "an unterminated stream must be refused")
 			assert.ErrorIs(t, err, reader.ErrRecordTooLong,
 				"the refusal must be the record bound rather than whatever the format complains about first")

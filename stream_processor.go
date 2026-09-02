@@ -514,8 +514,8 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, tx *sql.T
 
 	// Route ACH/Fedwire readers to dedicated handlers. No source path is
 	// recorded: a reader has no file to read again at dump time, so these tables
-	// can only be written back through DumpACHWithTableSet or
-	// DumpFedWireWithTableSet.
+	// can only be written back through DumpACHWithSource or
+	// DumpFedWireWithSource.
 	if input.fileType == FileTypeACH {
 		return streamACHFileToDatabase(ctx, tx, input.reader, input.tableName+extACH, "", sp.replaceExisting)
 	}

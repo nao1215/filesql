@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/nao1215/filesql/internal/codec"
-	"github.com/nao1215/filesql/parser"
+	"github.com/nao1215/filesql/internal/parser"
 	"github.com/parquet-go/parquet-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -57,7 +57,7 @@ Bob Wilson,bob@example.com,35
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			processor := NewProcessor(parser.CSV)
+			processor := NewProcessor(FileTypeCSV)
 			var records []TestRecord
 
 			reader, result, err := processor.Process(strings.NewReader(tt.input), &records)
@@ -99,7 +99,7 @@ func TestProcessor_Process_TSV(t *testing.T) {
 
 	tsvData := "name\temail\tage\n  Alice  \talice@example.com\t28\nBob\tbob@example.com\t32\n"
 
-	processor := NewProcessor(parser.TSV)
+	processor := NewProcessor(FileTypeTSV)
 	var records []TestRecord
 
 	reader, result, err := processor.Process(strings.NewReader(tsvData), &records)
@@ -130,7 +130,7 @@ func TestProcessor_Process_LTSV(t *testing.T) {
 
 	ltsvData := "name:Charlie\temail:charlie@example.com\tage:40\nname:Diana\temail:diana@example.com\tage:35\n"
 
-	processor := NewProcessor(parser.LTSV)
+	processor := NewProcessor(FileTypeLTSV)
 	var records []TestRecord
 
 	reader, result, err := processor.Process(strings.NewReader(ltsvData), &records)
@@ -154,7 +154,7 @@ func TestProcessor_OutputReader(t *testing.T) {
   John  ,john@example.com,30
 `
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	var records []TestRecord
 
 	reader, _, err := processor.Process(strings.NewReader(csvData), &records)
@@ -189,7 +189,7 @@ func TestProcessor_ValidationError(t *testing.T) {
 ,john@example.com,30
 `
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	var records []TestRecord
 
 	_, result, err := processor.Process(strings.NewReader(csvData), &records)
@@ -223,7 +223,7 @@ func TestProcessor_ValidationError(t *testing.T) {
 func TestProcessor_EmptyFile(t *testing.T) {
 	t.Parallel()
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	var records []TestRecord
 
 	_, _, err := processor.Process(strings.NewReader(""), &records)
@@ -235,7 +235,7 @@ func TestProcessor_EmptyFile(t *testing.T) {
 func TestProcessor_InvalidStructSlicePointer(t *testing.T) {
 	t.Parallel()
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 
 	// Test with non-pointer
 	var records []TestRecord
@@ -278,7 +278,7 @@ func TestProcessor_Process_Parquet(t *testing.T) {
 		t.Fatalf("failed to close parquet writer: %v", err)
 	}
 
-	processor := NewProcessor(parser.Parquet)
+	processor := NewProcessor(FileTypeParquet)
 	var records []TestRecord
 
 	reader, result, err := processor.Process(bytes.NewReader(buf.Bytes()), &records)
@@ -325,8 +325,8 @@ func TestProcessor_Process_Parquet(t *testing.T) {
 	}
 
 	// Verify original format
-	if result.OriginalFormat != parser.Parquet {
-		t.Errorf("OriginalFormat = %v, want %v", result.OriginalFormat, parser.Parquet)
+	if result.OriginalFormat != FileTypeParquet {
+		t.Errorf("OriginalFormat = %v, want %v", result.OriginalFormat, FileTypeParquet)
 	}
 }
 
@@ -442,7 +442,7 @@ func TestProcessor_CSV_EdgeCases(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			processor := NewProcessor(parser.CSV)
+			processor := NewProcessor(FileTypeCSV)
 			var records []EdgeCaseRecord
 
 			reader, result, err := processor.Process(strings.NewReader(tt.input), &records)
@@ -492,7 +492,7 @@ func TestProcessor_CSV_WhitespaceValues(t *testing.T) {
 	t.Parallel()
 
 	input := "col1,col2,col3\n   ,\t\t,  \n"
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	var records []EdgeCaseRecord
 
 	_, _, err := processor.Process(strings.NewReader(input), &records)
@@ -514,7 +514,7 @@ func TestProcessor_CSV_EmptyValues(t *testing.T) {
 	t.Parallel()
 
 	input := "col1,col2,col3\n,,\na,,c\n,b,\n"
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	var records []EdgeCaseRecord
 
 	_, _, err := processor.Process(strings.NewReader(input), &records)
@@ -572,7 +572,7 @@ func TestProcessor_CSV_LargeColumnCount(t *testing.T) {
 
 	input := strings.Join(headers, ",") + "\n" + strings.Join(values, ",") + "\n"
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	var records []EdgeCaseRecord
 
 	_, result, err := processor.Process(strings.NewReader(input), &records)
@@ -600,7 +600,7 @@ func TestProcessor_CSV_ManyRows(t *testing.T) {
 		buf.WriteString("a" + string(rune('0'+i%10)) + ",b,c\n")
 	}
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	var records []EdgeCaseRecord
 
 	_, result, err := processor.Process(strings.NewReader(buf.String()), &records)
@@ -628,7 +628,7 @@ func TestProcessor_Process_JSON(t *testing.T) {
 
 	jsonData := `[{"key":"value1"},{"key":"value2"},{"key":"value3"}]`
 
-	processor := NewProcessor(parser.JSON)
+	processor := NewProcessor(FileTypeJSON)
 	var records []JSONRecord
 
 	reader, result, err := processor.Process(strings.NewReader(jsonData), &records)
@@ -658,10 +658,10 @@ func TestProcessor_Process_JSON(t *testing.T) {
 	}
 
 	// Verify output format is JSONL
-	if result.OutputFormat != parser.JSONL {
+	if result.OutputFormat != FileTypeJSONL {
 		t.Errorf("OutputFormat = %v, want JSONL", result.OutputFormat)
 	}
-	if result.OriginalFormat != parser.JSON {
+	if result.OriginalFormat != FileTypeJSON {
 		t.Errorf("OriginalFormat = %v, want JSON", result.OriginalFormat)
 	}
 }
@@ -671,7 +671,7 @@ func TestProcessor_Process_JSONL(t *testing.T) {
 
 	jsonlData := "{\"name\":\"Alice\"}\n{\"name\":\"Bob\"}\n{\"name\":\"Charlie\"}\n"
 
-	processor := NewProcessor(parser.JSONL)
+	processor := NewProcessor(FileTypeJSONL)
 	var records []JSONRecord
 
 	reader, result, err := processor.Process(strings.NewReader(jsonlData), &records)
@@ -696,7 +696,7 @@ func TestProcessor_Process_JSONL(t *testing.T) {
 	}
 
 	// Verify output format is JSONL
-	if result.OutputFormat != parser.JSONL {
+	if result.OutputFormat != FileTypeJSONL {
 		t.Errorf("OutputFormat = %v, want JSONL", result.OutputFormat)
 	}
 }
@@ -706,7 +706,7 @@ func TestProcessor_JSON_OutputReader(t *testing.T) {
 
 	jsonData := `[{"a":1},{"a":2}]`
 
-	processor := NewProcessor(parser.JSON)
+	processor := NewProcessor(FileTypeJSON)
 	var records []JSONRecord
 
 	reader, _, err := processor.Process(strings.NewReader(jsonData), &records)
@@ -744,7 +744,7 @@ func TestProcessor_JSON_Validation(t *testing.T) {
 
 	jsonData := `[{"key":"value"}]`
 
-	processor := NewProcessor(parser.JSON)
+	processor := NewProcessor(FileTypeJSON)
 	var records []NumericRecord
 
 	_, result, err := processor.Process(strings.NewReader(jsonData), &records)
@@ -764,7 +764,7 @@ func TestProcessor_JSON_Validation(t *testing.T) {
 func TestProcessor_JSONL_EmptyFile(t *testing.T) {
 	t.Parallel()
 
-	processor := NewProcessor(parser.JSONL)
+	processor := NewProcessor(FileTypeJSONL)
 	var records []JSONRecord
 
 	_, _, err := processor.Process(strings.NewReader(""), &records)
@@ -778,7 +778,7 @@ func TestProcessor_JSON_SingleObject(t *testing.T) {
 
 	jsonData := `{"key":"value"}`
 
-	processor := NewProcessor(parser.JSON)
+	processor := NewProcessor(FileTypeJSON)
 	var records []JSONRecord
 
 	_, result, err := processor.Process(strings.NewReader(jsonData), &records)
@@ -811,7 +811,7 @@ func TestProcessor_JSON_InvalidJSONAfterPrep(t *testing.T) {
 
 	jsonData := `[{}, {"key":"value"}]`
 
-	processor := NewProcessor(parser.JSON)
+	processor := NewProcessor(FileTypeJSON)
 	var records []NullifyRecord
 
 	reader, result, err := processor.Process(strings.NewReader(jsonData), &records)
@@ -864,7 +864,7 @@ func TestProcessor_JSON_TruncateDestroysJSON(t *testing.T) {
 
 	jsonData := `[{"key":"value"}]`
 
-	processor := NewProcessor(parser.JSON)
+	processor := NewProcessor(FileTypeJSON)
 	var records []TruncateRecord
 
 	_, _, err := processor.Process(strings.NewReader(jsonData), &records)
@@ -897,7 +897,7 @@ func TestProcessor_JSON_AllRowsEmptied(t *testing.T) {
 
 	jsonData := `[{}]`
 
-	processor := NewProcessor(parser.JSON)
+	processor := NewProcessor(FileTypeJSON)
 	var records []NullifyAllRecord
 
 	_, _, err := processor.Process(strings.NewReader(jsonData), &records)
@@ -928,7 +928,7 @@ func TestProcessor_ColumnMatchingFoldsASCIICaseOnly(t *testing.T) {
 		}
 
 		var rows []row
-		reader, _, err := NewProcessor(parser.CSV).
+		reader, _, err := NewProcessor(FileTypeCSV).
 			Process(strings.NewReader("ä,Ä\nfirst,second\n"), &rows)
 		require.NoError(t, err)
 
@@ -951,13 +951,13 @@ func TestProcessor_ColumnMatchingFoldsASCIICaseOnly(t *testing.T) {
 		}
 
 		var cyr []cyrillic
-		_, _, err := NewProcessor(parser.CSV).
+		_, _, err := NewProcessor(FileTypeCSV).
 			Process(strings.NewReader("а,А\nfirst,second\n"), &cyr)
 		require.NoError(t, err)
 		assert.Equal(t, "SECOND", cyr[0].Upper)
 
 		var acc []accented
-		_, _, err = NewProcessor(parser.CSV).
+		_, _, err = NewProcessor(FileTypeCSV).
 			Process(strings.NewReader("é,É\nfirst,second\n"), &acc)
 		require.NoError(t, err)
 		assert.Equal(t, "SECOND", acc[0].Upper)
@@ -973,7 +973,7 @@ func TestProcessor_ColumnMatchingFoldsASCIICaseOnly(t *testing.T) {
 		}
 
 		var rows []row
-		_, _, err := NewProcessor(parser.CSV).
+		_, _, err := NewProcessor(FileTypeCSV).
 			Process(strings.NewReader("Name\n Alice \n"), &rows)
 		require.NoError(t, err)
 		assert.Equal(t, "Alice", rows[0].Name)
@@ -983,7 +983,7 @@ func TestProcessor_ColumnMatchingFoldsASCIICaseOnly(t *testing.T) {
 		t.Parallel()
 
 		var rows []struct{}
-		_, _, err := NewProcessor(parser.CSV).
+		_, _, err := NewProcessor(FileTypeCSV).
 			Process(strings.NewReader("a,A\n1,2\n"), &rows)
 		require.Error(t, err, "the parser refuses the duplicate before prep sees it")
 	})
@@ -1009,16 +1009,16 @@ func TestProcessor_HeaderlessFormat_AllRowsDropped(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		fileType parser.FileType
+		fileType FileType
 		input    string
 		rows     any
 		wantErr  bool
 	}{
-		{"LTSV writes no header", parser.LTSV, "a:\tb:x\n", &[]requiredARow{}, true},
-		{"JSONL writes no header", parser.JSONL, "{\"a\":1}\n", &[]emailDataRow{}, true},
-		{"JSON is written as JSONL", parser.JSON, "[{\"a\":1}]", &[]emailDataRow{}, true},
-		{"CSV keeps its header", parser.CSV, "a,b\n,x\n", &[]requiredARow{}, false},
-		{"TSV keeps its header", parser.TSV, "a\tb\n\tx\n", &[]requiredARow{}, false},
+		{"LTSV writes no header", FileTypeLTSV, "a:\tb:x\n", &[]requiredARow{}, true},
+		{"JSONL writes no header", FileTypeJSONL, "{\"a\":1}\n", &[]emailDataRow{}, true},
+		{"JSON is written as JSONL", FileTypeJSON, "[{\"a\":1}]", &[]emailDataRow{}, true},
+		{"CSV keeps its header", FileTypeCSV, "a,b\n,x\n", &[]requiredARow{}, false},
+		{"TSV keeps its header", FileTypeTSV, "a\tb\n\tx\n", &[]requiredARow{}, false},
 	}
 
 	for _, tt := range tests {
@@ -1057,12 +1057,12 @@ func TestProcessorToWriter_HeaderlessFormat_AllRowsDropped(t *testing.T) {
 
 	for _, tt := range []struct {
 		name     string
-		fileType parser.FileType
+		fileType FileType
 		input    string
 		rows     any
 	}{
-		{"LTSV", parser.LTSV, "a:\tb:x\n", &[]requiredARow{}},
-		{"JSONL", parser.JSONL, "{\"a\":1}\n", &[]emailDataRow{}},
+		{"LTSV", FileTypeLTSV, "a:\tb:x\n", &[]requiredARow{}},
+		{"JSONL", FileTypeJSONL, "{\"a\":1}\n", &[]emailDataRow{}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -1094,7 +1094,7 @@ func TestProcessor_JSON_PrettyPrinted(t *testing.T) {
   }
 ]`
 
-	processor := NewProcessor(parser.JSON)
+	processor := NewProcessor(FileTypeJSON)
 	var records []JSONRecord
 
 	reader, result, err := processor.Process(strings.NewReader(jsonData), &records)
@@ -1149,7 +1149,7 @@ func TestProcessor_CompressedStreamIsNotUnwrapped(t *testing.T) {
 	}
 
 	var records []struct{}
-	_, _, err := NewProcessor(parser.CSV).Process(bytes.NewReader(compressed.Bytes()), &records)
+	_, _, err := NewProcessor(FileTypeCSV).Process(bytes.NewReader(compressed.Bytes()), &records)
 	if err == nil {
 		t.Fatal("Process() error = nil, want an error: prep does not unwrap a codec")
 	}
@@ -1183,7 +1183,7 @@ func TestProcessor_JSON_PrettyPrintedGzip(t *testing.T) {
 	}
 	defer closeCodec()
 
-	processor := NewProcessor(parser.JSON)
+	processor := NewProcessor(FileTypeJSON)
 	var records []JSONRecord
 
 	reader, result, err := processor.Process(decompressed, &records)
@@ -1828,20 +1828,20 @@ func TestWriteOutput_ErrorPath(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		fileType parser.FileType
+		fileType FileType
 		headers  []string
 		records  [][]string
 	}{
-		{name: "CSV", fileType: parser.CSV, headers: []string{"a", "b"}, records: [][]string{{"1", "2"}}},
-		{name: "TSV", fileType: parser.TSV, headers: []string{"a", "b"}, records: [][]string{{"1", "2"}}},
-		{name: "LTSV", fileType: parser.LTSV, headers: []string{"key"}, records: [][]string{{"value"}}},
-		{name: "JSONL", fileType: parser.JSONL, headers: []string{"data"}, records: [][]string{{`{"key":"value"}`}}},
+		{name: "CSV", fileType: FileTypeCSV, headers: []string{"a", "b"}, records: [][]string{{"1", "2"}}},
+		{name: "TSV", fileType: FileTypeTSV, headers: []string{"a", "b"}, records: [][]string{{"1", "2"}}},
+		{name: "LTSV", fileType: FileTypeLTSV, headers: []string{"key"}, records: [][]string{{"value"}}},
+		{name: "JSONL", fileType: FileTypeJSONL, headers: []string{"data"}, records: [][]string{{`{"key":"value"}`}}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			p := &Processor{fileType: tt.fileType}
+			p := &Processor{fileType: tt.fileType.internal()}
 			if err := p.writeOutput(errWriter{}, tt.headers, tt.records); err == nil {
 				t.Error("expected error from errWriter, got nil")
 			}
@@ -1860,7 +1860,7 @@ func TestWriteOutput_ErrorPath(t *testing.T) {
 func TestWriteOutput_LoneEmptyFieldSurvivesAReload(t *testing.T) {
 	t.Parallel()
 
-	p := &Processor{fileType: parser.CSV}
+	p := &Processor{fileType: FileTypeCSV.internal()}
 	var buf bytes.Buffer
 	if err := p.writeOutput(&buf, []string{"note"}, [][]string{{"x"}, {""}, {"y"}}); err != nil {
 		t.Fatalf("writeOutput() = %v", err)
@@ -1869,7 +1869,7 @@ func TestWriteOutput_LoneEmptyFieldSurvivesAReload(t *testing.T) {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
 
-	table, err := parser.Parse(bytes.NewReader(buf.Bytes()), parser.CSV)
+	table, err := parser.Parse(bytes.NewReader(buf.Bytes()), FileTypeCSV.internal())
 	if err != nil {
 		t.Fatalf("reading the output back: %v", err)
 	}
@@ -1915,7 +1915,7 @@ func TestLTSVValueThatTheFormatCannotHoldIsRefused(t *testing.T) {
 func TestWriteOutput_JSONLSkipsEmptyRecords(t *testing.T) {
 	t.Parallel()
 
-	p := &Processor{fileType: parser.JSONL}
+	p := &Processor{fileType: FileTypeJSONL.internal()}
 	var buf bytes.Buffer
 	if err := p.writeOutput(&buf, []string{"data"}, [][]string{{""}, {}, {`{"a":1}`}}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1934,7 +1934,7 @@ func TestProcess_SliceReset(t *testing.T) {
 		Name string `validate:"required"`
 	}
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 
 	// First call: populate the slice with one element
 	records := []Row{{Name: "stale"}}
@@ -1967,7 +1967,7 @@ func TestProcess_SentinelErrorWrapping(t *testing.T) {
 
 	t.Run("empty file wraps ErrEmptyFile", func(t *testing.T) {
 		t.Parallel()
-		processor := NewProcessor(parser.CSV)
+		processor := NewProcessor(FileTypeCSV)
 		var records []Row
 		_, _, err := processor.Process(strings.NewReader(""), &records)
 		if err == nil {
@@ -1980,7 +1980,7 @@ func TestProcess_SentinelErrorWrapping(t *testing.T) {
 
 	t.Run("unsupported file type wraps ErrUnsupportedFileType", func(t *testing.T) {
 		t.Parallel()
-		processor := NewProcessor(parser.FileType(9999))
+		processor := NewProcessor(FileType(9999))
 		var records []Row
 		_, _, err := processor.Process(strings.NewReader("data"), &records)
 		if err == nil {
@@ -2004,7 +2004,7 @@ func TestProcess_CrossFieldValidationWithDefault(t *testing.T) {
 	}
 
 	csvData := "comment\nhello\n"
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	var records []Row
 
 	_, result, err := processor.Process(strings.NewReader(csvData), &records)
@@ -2039,7 +2039,7 @@ func TestProcess_TagCaching(t *testing.T) {
 		Name string `prep:"trim" validate:"required"`
 	}
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 
 	for i := range 3 {
 		var records []Row
@@ -2070,7 +2070,7 @@ func TestProcessToWriter(t *testing.T) {
 	}
 
 	csvData := "name,email\n  John  ,JOHN@EXAMPLE.COM\n"
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 
 	// Use Process for reference
 	var records1 []Row
@@ -2114,7 +2114,7 @@ func TestProcessToWriter_NilWriter(t *testing.T) {
 		Name string
 	}
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	var records []Row
 
 	_, err := processor.ProcessToWriter(strings.NewReader("name\nAlice\n"), &records, nil)
@@ -2146,7 +2146,7 @@ func TestProcessToWriter_WriterError(t *testing.T) {
 		Name string
 	}
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	var records []Row
 
 	_, err := processor.ProcessToWriter(strings.NewReader("name\nAlice\n"), &records, errWriter{})
@@ -2169,7 +2169,7 @@ func TestProcessToWriter_WithValidRowsOnly(t *testing.T) {
 
 	// CSV with 3 rows: Alice (valid), empty name (invalid), Bob (valid)
 	csvData := "name\nAlice\n\"\"\nBob\n"
-	processor := NewProcessor(parser.CSV, WithValidRowsOnly())
+	processor := NewProcessor(FileTypeCSV, WithValidRowsOnly())
 
 	var records []Row
 	var buf bytes.Buffer
@@ -2204,7 +2204,7 @@ func TestProcessToWriter_JSONEmptyOutput(t *testing.T) {
 	}
 
 	jsonlData := "null\n"
-	processor := NewProcessor(parser.JSONL)
+	processor := NewProcessor(FileTypeJSONL)
 	var records []Row
 	var buf bytes.Buffer
 
@@ -2226,7 +2226,7 @@ func TestProcess_NilReader(t *testing.T) {
 		Name string
 	}
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	var records []Row
 
 	_, _, err := processor.Process(nil, &records)
@@ -2252,7 +2252,7 @@ func TestSetFieldValue_UnsupportedTypes(t *testing.T) {
 	}
 
 	csvData := "name,data\nAlice,hello\n"
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	var records []Row
 
 	_, result, err := processor.Process(strings.NewReader(csvData), &records)
@@ -2288,7 +2288,7 @@ func TestCachedParseStructType_Concurrent(t *testing.T) {
 	}
 
 	csvData := "name,email,age\n  Alice  ,ALICE@EXAMPLE.COM,30\n"
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 
 	const goroutines = 50
 	errs := make(chan error, goroutines)
@@ -2332,18 +2332,18 @@ func TestWrapParseError_AllBranches(t *testing.T) {
 		name     string
 		input    []byte
 		nilInput bool
-		fileType parser.FileType
+		fileType FileType
 		sentinel error
 	}{
-		{name: "no reader", nilInput: true, fileType: parser.CSV, sentinel: ErrNilReader},
-		{name: "file type the parser does not read", input: []byte("a,b\n"), fileType: parser.FileType(-1), sentinel: ErrUnsupportedFileType},
-		{name: "empty CSV", fileType: parser.CSV, sentinel: ErrEmptyFile},
-		{name: "empty TSV", fileType: parser.TSV, sentinel: ErrEmptyFile},
-		{name: "empty JSON", fileType: parser.JSON, sentinel: ErrEmptyFile},
-		{name: "empty JSONL", fileType: parser.JSONL, sentinel: ErrEmptyFile},
-		{name: "LTSV holding no record of that shape", input: []byte("not a labeled field\n"), fileType: parser.LTSV, sentinel: ErrEmptyFile},
-		{name: "empty Parquet", fileType: parser.Parquet, sentinel: ErrEmptyFile},
-		{name: "empty XLSX", fileType: parser.XLSX, sentinel: ErrEmptyFile},
+		{name: "no reader", nilInput: true, fileType: FileTypeCSV, sentinel: ErrNilReader},
+		{name: "file type the parser does not read", input: []byte("a,b\n"), fileType: FileType(-1), sentinel: ErrUnsupportedFileType},
+		{name: "empty CSV", fileType: FileTypeCSV, sentinel: ErrEmptyFile},
+		{name: "empty TSV", fileType: FileTypeTSV, sentinel: ErrEmptyFile},
+		{name: "empty JSON", fileType: FileTypeJSON, sentinel: ErrEmptyFile},
+		{name: "empty JSONL", fileType: FileTypeJSONL, sentinel: ErrEmptyFile},
+		{name: "LTSV holding no record of that shape", input: []byte("not a labeled field\n"), fileType: FileTypeLTSV, sentinel: ErrEmptyFile},
+		{name: "empty Parquet", fileType: FileTypeParquet, sentinel: ErrEmptyFile},
+		{name: "empty XLSX", fileType: FileTypeXLSX, sentinel: ErrEmptyFile},
 	}
 
 	for _, tt := range tests {
@@ -2352,12 +2352,12 @@ func TestWrapParseError_AllBranches(t *testing.T) {
 
 			var err error
 			if tt.nilInput {
-				_, err = parser.Parse(nil, tt.fileType)
+				_, err = parser.Parse(nil, tt.fileType.internal())
 			} else {
-				_, err = parser.Parse(bytes.NewReader(tt.input), tt.fileType)
+				_, err = parser.Parse(bytes.NewReader(tt.input), tt.fileType.internal())
 			}
 			if err == nil {
-				t.Fatalf("parser.Parse(%v) returned no error", tt.fileType)
+				t.Fatalf("parser.Parse(%v) returned no error", tt.fileType.internal())
 			}
 
 			wrapped := wrapParseError(err)
@@ -2372,7 +2372,7 @@ func TestWrapParseError_AllBranches(t *testing.T) {
 
 	t.Run("a syntax error keeps its own sentinel and gains none", func(t *testing.T) {
 		t.Parallel()
-		_, err := parser.Parse(strings.NewReader("a,b\n1\n"), parser.CSV)
+		_, err := parser.Parse(strings.NewReader("a,b\n1\n"), FileTypeCSV.internal())
 		if err == nil {
 			t.Fatal("expected an error for a record shorter than the header")
 		}
@@ -2411,7 +2411,7 @@ func TestProcessToWriter_NilReader(t *testing.T) {
 		Name string
 	}
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	var records []Row
 	var buf bytes.Buffer
 
@@ -2558,25 +2558,25 @@ func TestProcessStripsByteOrderMark(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		fileType   parser.FileType
+		fileType   FileType
 		input      string
 		wantOutput string
 	}{
 		{
 			name:       "CSV with a leading BOM",
-			fileType:   parser.CSV,
+			fileType:   FileTypeCSV,
 			input:      "\ufeffname,memo\na,b\n",
 			wantOutput: "name,memo\na,b\n",
 		},
 		{
 			name:       "TSV with a leading BOM",
-			fileType:   parser.TSV,
+			fileType:   FileTypeTSV,
 			input:      "\ufeffname\tmemo\na\tb\n",
 			wantOutput: "name\tmemo\na\tb\n",
 		},
 		{
 			name:       "CSV without a BOM is untouched",
-			fileType:   parser.CSV,
+			fileType:   FileTypeCSV,
 			input:      "name,memo\na,b\n",
 			wantOutput: "name,memo\na,b\n",
 		},
@@ -2666,7 +2666,7 @@ func TestMinAndMaxMeasureAStringByItsLength(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			processor := NewProcessor(parser.CSV)
+			processor := NewProcessor(FileTypeCSV)
 			_, result, err := processor.Process(strings.NewReader(tt.input), tt.records)
 			if err != nil {
 				t.Fatalf("Process() error = %v", err)
@@ -2682,7 +2682,7 @@ func TestMinCountsRunesForAMultibyteString(t *testing.T) {
 	t.Parallel()
 
 	var records []minMaxStringRecord
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	_, result, err := processor.Process(strings.NewReader("name\n日本語\n"), &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -2733,7 +2733,7 @@ func TestMinAndMaxKeepAFractionalLengthThreshold(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			processor := NewProcessor(parser.CSV, WithValidRowsOnly())
+			processor := NewProcessor(FileTypeCSV, WithValidRowsOnly())
 			reader, result, err := processor.Process(strings.NewReader(tt.input), tt.records)
 			if err != nil {
 				t.Fatalf("Process() error = %v", err)
@@ -2855,7 +2855,7 @@ func TestComparisonValidatorsFollowTheFieldType(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			processor := NewProcessor(parser.CSV)
+			processor := NewProcessor(FileTypeCSV)
 			_, result, err := processor.Process(strings.NewReader(tt.input), tt.records)
 			if err != nil {
 				t.Fatalf("Process() error = %v", err)
@@ -2871,7 +2871,7 @@ func TestStrictModeAcceptsAStringParameterForEqOnAStringField(t *testing.T) {
 	t.Parallel()
 
 	var records []comparisonEqStringRecord
-	processor := NewProcessor(parser.CSV, WithStrictTagParsing())
+	processor := NewProcessor(FileTypeCSV, WithStrictTagParsing())
 	_, result, err := processor.Process(strings.NewReader("role\nadmin\n"), &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v: eq=admin is a valid tag on a string field", err)
@@ -2891,7 +2891,7 @@ func TestStrictModeStillRefusesAStringParameterForEqOnANumericField(t *testing.T
 	t.Parallel()
 
 	var records []strictEqNumberRecord
-	processor := NewProcessor(parser.CSV, WithStrictTagParsing())
+	processor := NewProcessor(FileTypeCSV, WithStrictTagParsing())
 	_, _, err := processor.Process(strings.NewReader("age\n1\n"), &records)
 	if err == nil {
 		t.Fatal("Process() should refuse eq=abc on a numeric field in strict mode")
@@ -2908,7 +2908,7 @@ func TestADeclaredEqValidatorIsNeverSilentlyDropped(t *testing.T) {
 	t.Parallel()
 
 	var records []declaredEqStringRecord
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	_, result, err := processor.Process(strings.NewReader("role\nintruder\n"), &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -2932,7 +2932,7 @@ func TestBooleanValidatorAcceptsWhatABoolFieldAccepts(t *testing.T) {
 			t.Parallel()
 
 			var records []boolFieldRecord
-			processor := NewProcessor(parser.CSV)
+			processor := NewProcessor(FileTypeCSV)
 			_, result, err := processor.Process(strings.NewReader("flag\n"+spelling+"\n"), &records)
 			if err != nil {
 				t.Fatalf("Process() error = %v", err)
@@ -2948,7 +2948,7 @@ func TestBooleanValidatorAcceptsWhatABoolFieldAccepts(t *testing.T) {
 		t.Parallel()
 
 		var records []boolFieldRecord
-		processor := NewProcessor(parser.CSV)
+		processor := NewProcessor(FileTypeCSV)
 		_, result, err := processor.Process(strings.NewReader("flag\nyes\n"), &records)
 		if err != nil {
 			t.Fatalf("Process() error = %v", err)
@@ -2983,7 +2983,7 @@ func TestAnEmptyCellPassesEveryValidatorButRequired(t *testing.T) {
 		t.Parallel()
 
 		var records []emptyCellFamilyRecord
-		processor := NewProcessor(parser.CSV)
+		processor := NewProcessor(FileTypeCSV)
 		_, result, err := processor.Process(strings.NewReader("a,b,c,d,e,f\n,,,,,\n"), &records)
 		if err != nil {
 			t.Fatalf("Process() error = %v", err)
@@ -2997,7 +2997,7 @@ func TestAnEmptyCellPassesEveryValidatorButRequired(t *testing.T) {
 		t.Parallel()
 
 		var records []requiredEmptyCellRecord
-		processor := NewProcessor(parser.CSV)
+		processor := NewProcessor(FileTypeCSV)
 		_, result, err := processor.Process(strings.NewReader("a\n\"\"\n"), &records)
 		if err != nil {
 			t.Fatalf("Process() error = %v", err)
@@ -3112,7 +3112,7 @@ func TestProcessorIsSafeForConcurrentUse(t *testing.T) {
 		Amount string `validate:"numeric"`
 	}
 	const body = "id,name,amount\n1,  ALICE ,10\n2,Bob,20\n3,carol,30\n"
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 
 	var wg sync.WaitGroup
 	for range 8 {
@@ -3253,24 +3253,24 @@ func TestProcessor_outputFormat(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		fileType   parser.FileType
-		wantFormat parser.FileType
+		fileType   FileType
+		wantFormat FileType
 	}{
-		{"CSV", parser.CSV, parser.CSV},
-		{"TSV", parser.TSV, parser.TSV},
-		{"LTSV", parser.LTSV, parser.LTSV},
-		{"XLSX outputs as CSV", parser.XLSX, parser.CSV},
-		{"Parquet outputs as CSV", parser.Parquet, parser.CSV},
-		{"JSON outputs as JSONL", parser.JSON, parser.JSONL},
-		{"JSONL", parser.JSONL, parser.JSONL},
-		{"an unsupported input still writes CSV", parser.Unsupported, parser.CSV},
+		{"CSV", FileTypeCSV, FileTypeCSV},
+		{"TSV", FileTypeTSV, FileTypeTSV},
+		{"LTSV", FileTypeLTSV, FileTypeLTSV},
+		{"XLSX outputs as CSV", FileTypeXLSX, FileTypeCSV},
+		{"Parquet outputs as CSV", FileTypeParquet, FileTypeCSV},
+		{"JSON outputs as JSONL", FileTypeJSON, FileTypeJSONL},
+		{"JSONL", FileTypeJSONL, FileTypeJSONL},
+		{"an unsupported input still writes CSV", FileTypeUnsupported, FileTypeCSV},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := NewProcessor(tt.fileType).outputFormat()
+			got := fileTypeOf(NewProcessor(tt.fileType).outputFormat())
 			if got != tt.wantFormat {
 				t.Errorf("outputFormat() = %v, want %v", got, tt.wantFormat)
 			}
@@ -3287,7 +3287,7 @@ func TestShiftJISIsRefusedByTheParse(t *testing.T) {
 	t.Parallel()
 
 	var rows []struct{}
-	_, _, err := NewProcessor(parser.CSV).Process(bytes.NewReader([]byte("a,b\n\x82\xa0,2\n")), &rows)
+	_, _, err := NewProcessor(FileTypeCSV).Process(bytes.NewReader([]byte("a,b\n\x82\xa0,2\n")), &rows)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid UTF-8")
@@ -3308,7 +3308,7 @@ func TestUTF16LoadsThroughPrep(t *testing.T) {
 	}
 
 	var rows []struct{}
-	reader, result, err := NewProcessor(parser.CSV).Process(bytes.NewReader(utf16le), &rows)
+	reader, result, err := NewProcessor(FileTypeCSV).Process(bytes.NewReader(utf16le), &rows)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.RowCount)
@@ -3320,7 +3320,7 @@ func TestUTF16LoadsThroughPrep(t *testing.T) {
 // TestDocDescribesTheFormatsProcessorTakes holds prep's package documentation to
 // what a caller can actually construct a Processor for. The documentation used
 // to claim parity with filesql, which reads ACH and Fedwire as well, and there
-// is no parser.FileType for either, so the sentence promised two formats that
+// is no FileType for either, so the sentence promised two formats that
 // cannot be asked for. It also stated a 10MB LTSV line limit that nothing
 // enforces: a record is bounded at 64 MiB, the same as every other format's.
 func TestDocDescribesTheFormatsProcessorTakes(t *testing.T) {
@@ -3334,8 +3334,8 @@ func TestDocDescribesTheFormatsProcessorTakes(t *testing.T) {
 
 	// Every file type a Processor can be built for is named, and nothing else
 	// is, so a new one cannot be added without a line here.
-	for _, ft := range []parser.FileType{
-		parser.CSV, parser.TSV, parser.LTSV, parser.JSON, parser.JSONL, parser.Parquet, parser.XLSX,
+	for _, ft := range []FileType{
+		FileTypeCSV, FileTypeTSV, FileTypeLTSV, FileTypeJSON, FileTypeJSONL, FileTypeParquet, FileTypeXLSX,
 	} {
 		if _, _, err := NewProcessor(ft).Process(strings.NewReader(""), &[]struct{}{}); errors.Is(err, parser.ErrUnsupportedFileType) {
 			t.Errorf("NewProcessor(%v) refuses the type as unsupported, but doc.go lists it", ft)

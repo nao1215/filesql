@@ -960,7 +960,7 @@ func TestParse_ReadsTextTheWayALoadDoes(t *testing.T) {
 
 		// A Parquet file holds bytes that are not UTF-8 in its own framing, and
 		// reading it through a text decoder would refuse every one of them.
-		f, err := os.Open(filepath.Join("..", "testdata", "products.parquet"))
+		f, err := os.Open(filepath.Join("testdata", "products.parquet"))
 		require.NoError(t, err)
 		closeFileOnCleanup(t, f, "products.parquet")
 

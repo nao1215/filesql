@@ -1,7 +1,7 @@
 package filesql
 
 import (
-	"github.com/nao1215/filesql/parser"
+	"github.com/nao1215/filesql/internal/parser"
 )
 
 // filesqlToParserFileTypes maps a format to the parser's constant for it.

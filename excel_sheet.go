@@ -5,30 +5,58 @@ import (
 	"io"
 
 	"github.com/nao1215/filesql/internal/reader"
-	"github.com/nao1215/filesql/parser"
 )
 
 // ExcelSheetPolicy decides which sheets of a workbook a load reads.
 //
-// It is an alias of the parser package's type, not a second enum wrapping it,
-// so the value a caller builds here is the one every Excel read path applies
-// and the two can never disagree about what a policy means.
-type ExcelSheetPolicy = parser.ExcelSheetPolicy
+// A workbook can hide a sheet, and hiding one is how a spreadsheet keeps
+// scratch calculations, lookup tables and stale drafts out of the way of the
+// sheets it means to present. Whether those belong in a database is the
+// caller's judgment rather than something this package can decide, so which
+// sheets to take is a setting and not a rule.
+type ExcelSheetPolicy int
 
 const (
 	// ExcelSheetPolicyAll loads every sheet of a workbook, hidden or not. It is
 	// the zero value, so a caller that names no policy keeps the behavior
 	// filesql had before the setting existed.
-	ExcelSheetPolicyAll = parser.ExcelSheetPolicyAll
+	ExcelSheetPolicyAll ExcelSheetPolicy = iota
 
 	// ExcelSheetPolicyVisibleOnly loads only the sheets a workbook shows.
-	// Hidden and very hidden sheets are both left out; see the parser package's
-	// constant for why the two are not told apart.
-	ExcelSheetPolicyVisibleOnly = parser.ExcelSheetPolicyVisibleOnly
+	// Hidden and very hidden sheets are both left out: a workbook tells the two
+	// apart, but a caller asking for what it presents means neither.
+	ExcelSheetPolicyVisibleOnly
 )
 
+// String names the policy.
+func (p ExcelSheetPolicy) String() string { return p.internal().String() }
+
+// internal is the reading side's spelling of the same policy. The two enums
+// mirror each other rather than sharing one type, because the reading side is
+// not part of this package's public surface; TestExcelSheetPolicyMirrorsTheReader
+// holds the pairs equal.
+func (p ExcelSheetPolicy) internal() reader.ExcelSheetPolicy {
+	return reader.ExcelSheetPolicy(p)
+}
+
 // ExcelSheet is one sheet of a workbook and whether the workbook shows it.
-type ExcelSheet = parser.ExcelSheet
+type ExcelSheet struct {
+	// Name is the sheet name as the workbook stores it, before any sanitizing a
+	// caller applies to turn it into a table name.
+	Name string
+	// Visible is false for a sheet the workbook does not show, whether it is
+	// hidden or very hidden.
+	Visible bool
+}
+
+// excelSheetsOf is the reading side's sheets in this package's own type.
+func excelSheetsOf(sheets []reader.ExcelSheet) []ExcelSheet {
+	out := make([]ExcelSheet, len(sheets))
+	for i, sheet := range sheets {
+		out[i] = ExcelSheet{Name: sheet.Name, Visible: sheet.Visible}
+	}
+	return out
+}
 
 // ExcelSheetsInFile reports the sheets of the workbook at path, in the order the
 // workbook stores them, and whether it shows each one. The path may carry a
@@ -76,14 +104,14 @@ func excelSheetList(f reader.ExcelSheetSource) ([]ExcelSheet, error) {
 	if err != nil {
 		return nil, wrapReadError(err)
 	}
-	return sheets, nil
+	return excelSheetsOf(sheets), nil
 }
 
 // selectExcelSheets is the reader's sheet selection with filesql's sentinel
 // attached. It is the single point every Excel load path here calls to turn an
 // open workbook into the list of sheets it contributes.
 func selectExcelSheets(f reader.ExcelSheetSource, policy ExcelSheetPolicy) (loaded, skipped []string, err error) {
-	loaded, skipped, err = reader.SelectExcelSheets(f, policy)
+	loaded, skipped, err = reader.SelectExcelSheets(f, policy.internal())
 	if err != nil {
 		return nil, nil, wrapReadError(err)
 	}
@@ -95,5 +123,5 @@ func selectExcelSheets(f reader.ExcelSheetSource, policy ExcelSheetPolicy) (load
 // left out by the policy, because the two need different things done about
 // them: the first file is broken, the second is a setting the caller chose.
 func noExcelSheetsError(f reader.ExcelSheetSource, policy ExcelSheetPolicy) error {
-	return wrapReadError(reader.NoExcelSheetsError(f, policy))
+	return wrapReadError(reader.NoExcelSheetsError(f, policy.internal()))
 }

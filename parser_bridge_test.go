@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nao1215/filesql/parser"
+	"github.com/nao1215/filesql/internal/parser"
 	"github.com/nao1215/filesql/prep"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -168,16 +168,16 @@ func TestPrepReaderLoadsUnderTheFormatItReports(t *testing.T) {
 	for _, tt := range []struct {
 		name  string
 		path  string
-		input parser.FileType
+		input prep.FileType
 		dest  func() any
 	}{
-		{name: "csv", path: seedPath, input: parser.CSV, dest: func() any { return &[]textRow{} }},
-		{name: "tsv", path: write("seed.tsv", "id\tname\tnote\n1\t007\ta comma\n2\t\t9223372036854775807\n"), input: parser.TSV, dest: func() any { return &[]textRow{} }},
-		{name: "ltsv", path: write("seed.ltsv", "id:1\tname:007\tnote:a comma\nid:2\tname:\tnote:\u65e5\u672c\u8a9e\n"), input: parser.LTSV, dest: func() any { return &[]textRow{} }},
-		{name: "json", path: write("seed.json", `[{"id":"1","name":"007"},{"id":"2","name":""}]`), input: parser.JSON, dest: func() any { return &[]jsonRow{} }},
-		{name: "jsonl", path: write("seed.jsonl", "{\"id\":\"1\"}\n{\"id\":\"2\"}\n"), input: parser.JSONL, dest: func() any { return &[]jsonRow{} }},
-		{name: "xlsx", path: tabular(OutputFormatXLSX, ".xlsx"), input: parser.XLSX, dest: func() any { return &[]textRow{} }},
-		{name: "parquet", path: tabular(OutputFormatParquet, ".parquet"), input: parser.Parquet, dest: func() any { return &[]textRow{} }},
+		{name: "csv", path: seedPath, input: prep.FileTypeCSV, dest: func() any { return &[]textRow{} }},
+		{name: "tsv", path: write("seed.tsv", "id\tname\tnote\n1\t007\ta comma\n2\t\t9223372036854775807\n"), input: prep.FileTypeTSV, dest: func() any { return &[]textRow{} }},
+		{name: "ltsv", path: write("seed.ltsv", "id:1\tname:007\tnote:a comma\nid:2\tname:\tnote:\u65e5\u672c\u8a9e\n"), input: prep.FileTypeLTSV, dest: func() any { return &[]textRow{} }},
+		{name: "json", path: write("seed.json", `[{"id":"1","name":"007"},{"id":"2","name":""}]`), input: prep.FileTypeJSON, dest: func() any { return &[]jsonRow{} }},
+		{name: "jsonl", path: write("seed.jsonl", "{\"id\":\"1\"}\n{\"id\":\"2\"}\n"), input: prep.FileTypeJSONL, dest: func() any { return &[]jsonRow{} }},
+		{name: "xlsx", path: tabular(OutputFormatXLSX, ".xlsx"), input: prep.FileTypeXLSX, dest: func() any { return &[]textRow{} }},
+		{name: "parquet", path: tabular(OutputFormatParquet, ".parquet"), input: prep.FileTypeParquet, dest: func() any { return &[]textRow{} }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -198,7 +198,7 @@ func TestPrepReaderLoadsUnderTheFormatItReports(t *testing.T) {
 
 			// The whole of the contract: the reported format is the one that
 			// reads these bytes.
-			declared := filesqlFileType(result.OutputFormat)
+			declared := fileTypeOfPrepFormat(t, result.OutputFormat)
 			require.NotEqual(t, FileTypeUnsupported, declared, "every format prep reports has to have a filesql name")
 
 			throughPrep, err := NewBuilder().AddReader(bytes.NewReader(body), table, declared).Open(t.Context())
@@ -246,4 +246,58 @@ func tableRows(t *testing.T, db *sql.DB, table string) []string {
 	}
 	require.NoError(t, rows.Err())
 	return rendered
+}
+
+// fileTypeOfPrepFormat is the mapping a caller writes to hand prep's output to
+// this package, spelled once here rather than in every test that needs it. It
+// is deliberately a switch rather than a numeric conversion: prep names its own
+// formats, and two enums that happen to count in the same order today are not a
+// contract.
+func fileTypeOfPrepFormat(t *testing.T, format prep.FileType) FileType {
+	t.Helper()
+	switch format {
+	case prep.FileTypeCSV:
+		return FileTypeCSV
+	case prep.FileTypeTSV:
+		return FileTypeTSV
+	case prep.FileTypeLTSV:
+		return FileTypeLTSV
+	case prep.FileTypeJSON:
+		return FileTypeJSON
+	case prep.FileTypeJSONL:
+		return FileTypeJSONL
+	case prep.FileTypeXLSX:
+		return FileTypeXLSX
+	case prep.FileTypeParquet:
+		return FileTypeParquet
+	default:
+		return FileTypeUnsupported
+	}
+}
+
+// TestPrepAndFilesqlNameTheSameFormats holds the two format vocabularies
+// together. prep and this package each declare their own enum, because neither
+// is the other's dependency, and a format one of them can produce that the
+// other cannot name would leave a caller of the prep pipeline with a reader and
+// no way to load it.
+func TestPrepAndFilesqlNameTheSameFormats(t *testing.T) {
+	t.Parallel()
+
+	pairs := map[prep.FileType]FileType{
+		prep.FileTypeCSV:     FileTypeCSV,
+		prep.FileTypeTSV:     FileTypeTSV,
+		prep.FileTypeLTSV:    FileTypeLTSV,
+		prep.FileTypeJSON:    FileTypeJSON,
+		prep.FileTypeJSONL:   FileTypeJSONL,
+		prep.FileTypeXLSX:    FileTypeXLSX,
+		prep.FileTypeParquet: FileTypeParquet,
+	}
+	for prepType, filesqlType := range pairs {
+		assert.Equal(t, prepType.String(), filesqlType.String(),
+			"prep and filesql have to spell the same format the same way")
+	}
+	assert.Equal(t, "Unsupported", prep.FileTypeUnsupported.String())
+	assert.Equal(t, "Unsupported", FileTypeUnsupported.String())
+	assert.Len(t, pairs, int(prep.FileTypeUnsupported),
+		"every prep format below Unsupported needs a filesql name")
 }

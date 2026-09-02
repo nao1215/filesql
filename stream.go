@@ -106,7 +106,7 @@ func (p *streamingParser) readOptions() reader.Options {
 		ChunkSize:        p.chunkSize.Int(),
 		Reconcile:        p.reconcile(),
 		Unlabeled:        p.unlabeled(),
-		ExcelSheetPolicy: p.excelSheetPolicy,
+		ExcelSheetPolicy: p.excelSheetPolicy.internal(),
 		// A load spells its values for the column they are stored in, so SQLite's
 		// affinity converts each one back to what the file holds.
 		Rendering: reader.RenderSQLite,

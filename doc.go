@@ -66,9 +66,9 @@
 // no rows, and a CSV holding only its header is one too.
 //
 // The rule follows the format rather than the kind of source, so a reader and
-// the member of a compressed file answer the way a file does. parser.Parse is
-// the one place that refuses an empty source for every format including the
-// two, since it answers about a document rather than about a load.
+// the member of a compressed file answer the way a file does. The prep package
+// is stricter and refuses an empty source for every format including the two,
+// since it answers about a document rather than about a load.
 //
 // # Column Types
 //
@@ -107,9 +107,9 @@
 // would load as INTEGER and divide as one.
 //
 // A column whose values are all datetimes is recognized as one and stored as
-// TEXT; the parser package names that column DATETIME, since it reports what was
-// recognized rather than what SQLite stores. A text cell is stored as the file
-// wrote it, so a column written as 1/2/2024, 2024/01/02 or 02.01.2024 is
+// TEXT. SQLite has no datetime storage class, and of the three ways it can hold
+// one this package keeps the text, so the cell reads back as the file wrote it. A text cell is stored as the
+// file wrote it, so a column written as 1/2/2024, 2024/01/02 or 02.01.2024 is
 // recognized as a datetime and still needs converting before date() or
 // strftime() can answer about it: those read ISO 8601 and "YYYY-MM-DD HH:MM:SS".
 // An XLSX date cell is the one that is rewritten, into ISO 8601, because it
@@ -140,8 +140,8 @@
 // answer the largest value rather than the blank, AVG divide by the values that
 // are there, COUNT(column) count them, and WHERE column IS NULL find the rows
 // that have none. A blank cell in a TEXT column is what it is, which is a value
-// the file holds; a column recognized as DATETIME is stored as TEXT and follows
-// that rule. A number written with spaces around it is not blank and is not a
+// the file holds, and a column recognized as a datetime is stored as TEXT and
+// follows that rule. A number written with spaces around it is not blank and is not a
 // number either: the padding is data a fixed-width code column depends on, so
 // one keeps the column TEXT.
 //
@@ -415,9 +415,8 @@
 // the source file, because fields no table exposes exist only in the original:
 // DumpACH and DumpFedWire read the file the tables were loaded from and fail
 // with ErrSourceUnavailable, naming it, when it is gone or unreadable. A
-// database loaded from an io.Reader has no such file; parse the reader with the
-// parser/ach or parser/wire package and use DumpACHWithTableSet or
-// DumpFedWireWithTableSet.
+// database loaded from an io.Reader has no such file; hand the file's own bytes
+// to DumpACHWithSource or DumpFedWireWithSource.
 //
 // Each database records its own source, so two databases loaded from files that
 // share a name in different directories each export their own data. The record

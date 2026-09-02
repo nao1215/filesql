@@ -8,8 +8,8 @@ import (
 	"io"
 	"strings"
 
+	wireconv "github.com/nao1215/filesql/internal/parser/wire"
 	filereader "github.com/nao1215/filesql/internal/reader"
-	wireconv "github.com/nao1215/filesql/parser/wire"
 )
 
 // Fedwire file extension
@@ -115,7 +115,7 @@ func streamWireFileToDatabase(ctx context.Context, db dbtx, reader io.Reader, fi
 //
 // The original structure is rebuilt from the file db records as its source, so
 // that file must still exist and be readable. A database loaded from an
-// io.Reader has no such file; pass the structure to DumpFedWireWithTableSet.
+// io.Reader has no such file; hand its bytes to DumpFedWireWithSource.
 //
 // The file is written from that structure rather than patched, so a tag the
 // caller did not edit can come back changed: tags are written in the order the
@@ -138,26 +138,46 @@ func DumpFedWire(ctx context.Context, db *sql.DB, baseTableName, outputPath stri
 	if err != nil {
 		return err
 	}
-	return DumpFedWireWithTableSet(ctx, db, baseTableName, outputPath, tableSet)
+	return dumpFedWireWithTableSet(ctx, db, baseTableName, outputPath, tableSet, nil)
 }
 
-// DumpFedWireWithTableSet exports Fedwire tables from the database back to a Fedwire file
-// using an explicitly provided TableSet.
+// DumpFedWireWithSource exports Fedwire tables from the database back to a
+// Fedwire file, reading the file's original structure from source.
 //
 // Use this function when the database has no source file to read the structure
-// back from, which is the case for one loaded from an io.Reader: parse the
-// reader with parser/wire and pass the TableSet it returns. DumpFedWire is the
-// same export for a database that does know its source.
+// back from, which is the case for one loaded from an io.Reader. source must
+// yield the same Fedwire file the database was loaded from: the file carries
+// fields no table exposes, so the export applies the database's edits to the
+// original rather than building a file out of the tables alone. DumpFedWire is
+// the same export for a database that does know its source.
 //
 // Parameters:
 //   - ctx: Context for cancellation
 //   - db: The database containing Fedwire tables
 //   - baseTableName: The base name used when the Fedwire file was loaded (e.g., "payment" for payment.fed)
 //   - outputPath: The path where the Fedwire file should be written
-//   - tableSet: The TableSet containing the original Fedwire structure
+//   - source: The original Fedwire file's bytes, read from the beginning
 //
 // Returns an error if the export fails.
-func DumpFedWireWithTableSet(ctx context.Context, db *sql.DB, baseTableName, outputPath string, tableSet *wireconv.TableSet) error {
+func DumpFedWireWithSource(ctx context.Context, db *sql.DB, baseTableName, outputPath string, source io.Reader) error {
+	if db == nil {
+		return fmt.Errorf("%w: database must be a non-nil *sql.DB", ErrNilInput)
+	}
+	if source == nil {
+		return fmt.Errorf("%w: source must be a non-nil io.Reader", ErrNilInput)
+	}
+	// The bound and the recorder the load path uses apply here too: the library
+	// reads the whole file, and it reports what the message it built is missing
+	// rather than why the read stopped, so a stream the bound refused came back
+	// as a complaint about an absent field.
+	recorder := &recordingReader{src: filereader.BoundRecords(source)}
+	tableSet, err := wireconv.ParseReader(recorder)
+	if err != nil {
+		if recorder.err != nil {
+			err = recorder.err
+		}
+		return fmt.Errorf("%w: %w", ErrWire, err)
+	}
 	return dumpFedWireWithTableSet(ctx, db, baseTableName, outputPath, tableSet, nil)
 }
 
