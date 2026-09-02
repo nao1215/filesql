@@ -853,3 +853,108 @@ func TestMySQLBuiltinsReadARealTheWayTheEngineDoes(t *testing.T) {
 		})
 	}
 }
+
+// TestMySQLPositionCallsFoldCase pins the four spellings of "where does this
+// substring start" against MySQL's default collation, which folds case. LIKE
+// and REGEXP were routed to helpers that fold and these four were not, so each
+// answered 0 -- "not found" -- for a needle differing only in case, which is a
+// wrong answer in the shape these calls are most often written in.
+func TestMySQLPositionCallsFoldCase(t *testing.T) {
+	db := castDB(t)
+
+	for _, tt := range []struct{ name, query, want string }{
+		{"instr", `SELECT INSTR('ABC', 'b')`, "2"},
+		{"instr the other way round", `SELECT INSTR('abc', 'B')`, "2"},
+		{"locate", `SELECT LOCATE('b', 'ABC')`, "2"},
+		{"locate from a position", `SELECT LOCATE('b', 'ABC', 1)`, "2"},
+		{"locate from a later position", `SELECT LOCATE('B', 'abcabc', 3)`, "5"},
+		{"position", `SELECT POSITION('b' IN 'ABC')`, "2"},
+		{"find_in_set", `SELECT FIND_IN_SET('b', 'a,B,c')`, "2"},
+		{"find_in_set the other way round", `SELECT FIND_IN_SET('B', 'a,b,c')`, "2"},
+		{"like folds too", `SELECT 'a' LIKE 'A'`, "1"},
+		{"a needle that is not there is still not there", `SELECT INSTR('ABC', 'z')`, "0"},
+		{"the position is a character position", `SELECT INSTR('あいABC', 'b')`, "4"},
+		{"an accent is not folded", `SELECT INSTR('abc', 'á')`, "0"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.MySQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+
+	// Neither other dialect folds, so the calls they share must stay
+	// case-sensitive.
+	for _, tt := range []struct {
+		d     dialects.Dialect
+		query string
+	}{
+		{dialects.PostgreSQL, `SELECT POSITION('b' IN 'ABC')`},
+		{dialects.GoogleSQL, `SELECT STRPOS('ABC', 'b')`},
+	} {
+		got, err := runDialect(t, db, tt.d, tt.query)
+		if err != nil {
+			t.Fatalf("%v %s: %v", tt.d, tt.query, err)
+		}
+		if got.String != "0" {
+			t.Errorf("%v %s = %q, want %q", tt.d, tt.query, got.String, "0")
+		}
+	}
+}
+
+// TestMySQLNumericCallsReadAStringAsZero pins MySQL's reading of a string that
+// spells no number, which is zero rather than nothing. Ten calls already read
+// it that way and five answered NULL instead, so an expression that MySQL
+// answers a number for lost its row here with nothing said.
+func TestMySQLNumericCallsReadAStringAsZero(t *testing.T) {
+	db := castDB(t)
+
+	for _, tt := range []struct {
+		name, query, want string
+		wantNull          bool
+	}{
+		{name: "round", query: `SELECT ROUND('abc')`, want: "0"},
+		{name: "round to decimals", query: `SELECT ROUND('abc', 2)`, want: "0"},
+		{name: "truncate", query: `SELECT TRUNCATE('abc', 1)`, want: "0"},
+		{name: "pow", query: `SELECT POW('abc', 2)`, want: "0"},
+		{name: "power", query: `SELECT POWER('abc', 2)`, want: "0"},
+		{name: "format", query: `SELECT FORMAT('abc', 2)`, want: "0.00"},
+		{name: "interval", query: `SELECT INTERVAL('abc', 1, 2)`, want: "0"},
+		{name: "interval over strings", query: `SELECT INTERVAL('b', 'A', 'C')`, want: "2"},
+		{name: "abs, which already read it this way", query: `SELECT ABS('abc')`, want: "0"},
+		{name: "ceil, which already read it this way", query: `SELECT CEIL('abc')`, want: "0"},
+		{name: "a cast, which already read it this way", query: `SELECT CAST('abc' AS SIGNED)`, want: "0"},
+
+		// The rule is a numeric prefix rather than an all-or-nothing parse,
+		// and it is the same rule for a value that does spell a number.
+		{name: "a numeric prefix", query: `SELECT ROUND('12abc')`, want: "12"},
+		{name: "a number with spaces around it", query: `SELECT ROUND(' 12 ')`, want: "12"},
+		{name: "a number in a string rounds the way a double does", query: `SELECT ROUND('2.5', 0)`, want: "2"},
+		{name: "a number is still a number", query: `SELECT ROUND(2.4)`, want: "2"},
+
+		// A NULL is still nothing, and INTERVAL keeps the -1 MySQL reserves
+		// for one.
+		{name: "a NULL is still NULL", query: `SELECT ROUND(NULL)`, want: "", wantNull: true},
+		{name: "interval of a NULL", query: `SELECT INTERVAL(NULL, 1, 2)`, want: "-1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.MySQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			// A NULL and an empty string both read as "" here, and the two mean
+			// opposite things for this rule: the point is that a string with no
+			// number in it is a number and a NULL is still nothing.
+			if got.Valid == tt.wantNull {
+				t.Errorf("%s valid = %v, want %v", tt.query, got.Valid, !tt.wantNull)
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}

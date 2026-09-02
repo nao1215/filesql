@@ -251,8 +251,8 @@ func TestTheTwoCellReadingsAgree(t *testing.T) {
 
 	assert.Equal(t, fromXML, fromLibrary,
 		"the two readings of the same sheet have to answer the same for every cell")
-	assert.Equal(t, []string{"2023-03-15", "TRUE", "45001", "not a date", "0.5", "36:00:00", "2.25"}, fromLibrary[1],
-		"only the cell stored as a number is a serial; a percentage is the number behind it; an elapsed duration is what the sheet drew")
+	assert.Equal(t, []string{"2023-03-15", "1", "45001", "not a date", "0.5", "36:00:00", "2.25"}, fromLibrary[1],
+		"a boolean is the number it stores; a percentage is the number behind it; an elapsed duration is what the sheet drew")
 }
 
 // copyRows is rows with each row copied, so a normalization that writes in

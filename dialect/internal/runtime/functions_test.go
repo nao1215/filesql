@@ -1376,10 +1376,10 @@ func TestRoundIsRewrittenOnlyWhereADialectDisagrees(t *testing.T) {
 		// floating-point argument, which SQLite's round() does not, so both
 		// forms of the call go to a helper. BigQuery rounds away from zero the
 		// way SQLite does, so only its scaled form needs one.
-		{dialects.MySQL, "SELECT ROUND(a, -2) FROM t", `SELECT dialect_round_even(a, -2) AS "ROUND(a, -2)" FROM t`},
+		{dialects.MySQL, "SELECT ROUND(a, -2) FROM t", `SELECT dialect_round_even(mysql_number(a), -2) AS "ROUND(a, -2)" FROM t`},
 		{dialects.PostgreSQL, "SELECT ROUND(a, -2) FROM t", `SELECT dialect_round_even(a, -2) AS "ROUND(a, -2)" FROM t`},
 		{dialects.GoogleSQL, "SELECT ROUND(a, -2) FROM t", `SELECT dialect_round(a, -2) AS "ROUND(a, -2)" FROM t`},
-		{dialects.MySQL, "SELECT ROUND(a) FROM t", `SELECT dialect_round_even(a) AS "ROUND(a)" FROM t`},
+		{dialects.MySQL, "SELECT ROUND(a) FROM t", `SELECT dialect_round_even(mysql_number(a)) AS "ROUND(a)" FROM t`},
 		{dialects.PostgreSQL, "SELECT ROUND(a) FROM t", `SELECT dialect_round_even(a) AS "ROUND(a)" FROM t`},
 		{dialects.GoogleSQL, "SELECT ROUND(a) FROM t", "SELECT ROUND(a) FROM t"},
 		{dialects.SQLite, "SELECT ROUND(a, -2) FROM t", "SELECT ROUND(a, -2) FROM t"},

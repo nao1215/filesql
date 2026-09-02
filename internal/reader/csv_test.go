@@ -361,3 +361,51 @@ func TestLineBoundedReaderCountsFromEachTerminator(t *testing.T) {
 	assert.ErrorIs(t, err, ErrRecordTooLong)
 	assert.Contains(t, err.Error(), "line 2", "the first record past the bound is the one named")
 }
+
+// TestColumnNameHoldingANULIsRefused covers the byte that is valid UTF-8 and is
+// not a name. SQLite reads an identifier as a C string, so a name holding a NUL
+// was cut there and the quote that closed it went with the rest: the caller saw
+// SQLite's own "unrecognized token" about a name they never wrote, from a
+// CREATE TABLE this package built. A value holding one is a different matter and
+// still loads, since a value is bytes SQLite stores rather than a name it
+// parses.
+func TestColumnNameHoldingANULIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name   string
+		format Format
+		input  string
+	}{
+		{"CSV, inside a name", FormatCSV, "a\x00b,c\n1,2\n"},
+		{"CSV, at the start of a name", FormatCSV, "\x00ab,c\n1,2\n"},
+		{"CSV, at the end of a name", FormatCSV, "ab\x00,c\n1,2\n"},
+		{"CSV, a name that is only a NUL", FormatCSV, "\x00,c\n1,2\n"},
+		{"TSV, inside a name", FormatTSV, "a\x00b\tc\n1\t2\n"},
+		{"LTSV, inside a label", FormatLTSV, "a\x00b:1\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := Read(strings.NewReader(tt.input), tt.format, Options{}, func(*Chunk) error { return nil })
+			require.Error(t, err)
+			var readErr *Error
+			require.ErrorAs(t, err, &readErr)
+			assert.Equal(t, KindInvalidData, readErr.Kind)
+			assert.Contains(t, readErr.Error(), "a column name cannot hold a NUL")
+		})
+	}
+
+	t.Run("a value holding a NUL is kept", func(t *testing.T) {
+		t.Parallel()
+
+		var got [][]string
+		_, err := Read(strings.NewReader("a,b\nx\x00y,2\n"), FormatCSV, Options{}, func(c *Chunk) error {
+			got = append(got, c.Records...)
+			return nil
+		})
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, []string{"x\x00y", "2"}, got[0])
+	})
+}

@@ -917,6 +917,116 @@ func TestDumpXLSXRefusesWhatXMLCannotHold(t *testing.T) {
 	})
 }
 
+// TestDumpXLSXRefusesAValueLongerThanACell covers the other thing a worksheet
+// cell cannot hold. The library writing one cuts a value at the cell limit and
+// reports success, so a dump that looked like it worked came back short with
+// nothing said; a save that loses data silently is the one outcome a save must
+// not have, and the refusals above are the shape this takes.
+func TestDumpXLSXRefusesAValueLongerThanACell(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("a value of exactly the limit survives", func(t *testing.T) {
+		t.Parallel()
+
+		value := strings.Repeat("x", xlsxCellCharacterLimit)
+		db := openWithTable(t, "CREATE TABLE t (value TEXT)", "")
+		_, err := db.ExecContext(ctx, "INSERT INTO t VALUES (?)", value)
+		require.NoError(t, err)
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+
+		back, err := OpenContext(ctx, filepath.Join(outDir, "t.xlsx"))
+		require.NoError(t, err)
+		defer back.Close()
+		var got string
+		require.NoError(t, back.QueryRowContext(ctx, "SELECT value FROM t").Scan(&got))
+		assert.Equal(t, value, got, "a value the cell holds must come back whole")
+	})
+
+	t.Run("a value one character past the limit is refused", func(t *testing.T) {
+		t.Parallel()
+
+		db := openWithTable(t, "CREATE TABLE t (value TEXT)", "")
+		_, err := db.ExecContext(ctx, "INSERT INTO t VALUES (?)", strings.Repeat("x", xlsxCellCharacterLimit+1))
+		require.NoError(t, err)
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		err = DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
+
+		require.Error(t, err, "a value the cell cannot hold must be refused, not cut")
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+		assert.Contains(t, err.Error(), "value", "the error must name the column")
+		assert.Contains(t, err.Error(), "32767", "the error must name the limit")
+	})
+
+	t.Run("a column name past the limit is refused too", func(t *testing.T) {
+		t.Parallel()
+
+		name := strings.Repeat("n", xlsxCellCharacterLimit+1)
+		db := openWithTable(t, `CREATE TABLE t ("`+name+`" TEXT)`, "")
+
+		outDir := filepath.Join(t.TempDir(), "out")
+		err := DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
+	})
+
+	t.Run("a character above the basic plane counts twice", func(t *testing.T) {
+		t.Parallel()
+
+		// A worksheet counts in UTF-16 code units, so an emoji is two of them.
+		// Counting runes let 16384 emoji through and they came back cut to
+		// 16383, which is the failure this whole test is about.
+		for _, tc := range []struct {
+			name    string
+			count   int
+			refused bool
+		}{
+			{"just inside the limit", xlsxCellCharacterLimit / 2, false},
+			{"one character past it", xlsxCellCharacterLimit/2 + 1, true},
+		} {
+			value := strings.Repeat("🙂", tc.count)
+			db := openWithTable(t, "CREATE TABLE t (value TEXT)", "")
+			_, err := db.ExecContext(ctx, "INSERT INTO t VALUES (?)", value)
+			require.NoError(t, err)
+
+			outDir := filepath.Join(t.TempDir(), "out")
+			err = DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
+			if tc.refused {
+				require.Error(t, err, tc.name)
+				assert.ErrorIs(t, err, ErrUnsupportedFormat, tc.name)
+				continue
+			}
+			require.NoError(t, err, tc.name)
+
+			back, err := OpenContext(ctx, filepath.Join(outDir, "t.xlsx"))
+			require.NoError(t, err, tc.name)
+			var got string
+			require.NoError(t, back.QueryRowContext(ctx, "SELECT value FROM t").Scan(&got))
+			assert.Equal(t, value, got, "%s: a value the cell holds must come back whole", tc.name)
+			require.NoError(t, back.Close())
+		}
+	})
+
+	t.Run("the formats that can hold it still do", func(t *testing.T) {
+		t.Parallel()
+
+		value := strings.Repeat("x", xlsxCellCharacterLimit+1)
+		for _, format := range []OutputFormat{OutputFormatCSV, OutputFormatTSV, OutputFormatParquet} {
+			db := openWithTable(t, "CREATE TABLE t (value TEXT)", "")
+			_, err := db.ExecContext(ctx, "INSERT INTO t VALUES (?)", value)
+			require.NoError(t, err)
+
+			outDir := filepath.Join(t.TempDir(), "out")
+			require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(format)))
+		}
+	})
+}
+
 func TestDumpFilePath(t *testing.T) {
 	t.Parallel()
 

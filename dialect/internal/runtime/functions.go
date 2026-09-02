@@ -1517,7 +1517,10 @@ func fnLocate(args []driver.Value) (driver.Value, error) {
 		// with the position this returns.
 		start = int(pos) - 1
 	}
-	return int64(characterIndex(str, substr, start)), nil
+	// MySQL's default collation folds case, so a needle finds a letter in the
+	// other case. The folding maps one rune to one rune, so the position the
+	// search reports is a position in the value the caller passed.
+	return int64(characterIndex(foldCase(str), foldCase(substr), start)), nil
 }
 
 func fnLpad(args []driver.Value) (driver.Value, error) { return pad(args, true, padRules{}) }
@@ -2411,8 +2414,11 @@ func fnFindInSet(args []driver.Value) (driver.Value, error) {
 	if set == "" {
 		return int64(0), nil
 	}
+	// The comparison folds case, which is what MySQL's default collation does
+	// for this call as it does for LIKE.
+	needle = foldCase(needle)
 	for i, part := range strings.Split(set, ",") {
-		if part == needle {
+		if foldCase(part) == needle {
 			return int64(i + 1), nil
 		}
 	}
@@ -3849,7 +3855,7 @@ func fnMySQLFormat(args []driver.Value) (driver.Value, error) {
 	if n, isInt := args[0].(int64); isInt {
 		return formatGrouped(strconv.FormatInt(n, 10), int(d)), nil
 	}
-	x, ok1 := toFloat(args[0])
+	x, ok1 := mysqlNumericArgument(args[0])
 	if !ok1 {
 		return nil, nil
 	}

@@ -25,6 +25,13 @@ func (r *googleRules) Binary(b *ast.BinaryExpr) (ast.Expr, error) {
 		return helper("googlesql_mod", b.Span, b.Left, b.Right), nil
 	case ast.BitXor:
 		return helper("googlesql_bit_xor", b.Span, b.Left, b.Right), nil
+	case ast.ShiftLeft:
+		// BigQuery shifts an unsigned value where SQLite shifts a signed one, so
+		// ">>" brought the sign bit down instead of zeros, and it refuses a
+		// negative count where SQLite reads one as a shift the other way.
+		return helper("googlesql_shift_left", b.Span, b.Left, b.Right), nil
+	case ast.ShiftRight:
+		return helper("googlesql_shift_right", b.Span, b.Left, b.Right), nil
 	case ast.Like, ast.NotLike:
 		// BigQuery's LIKE is case sensitive, and SQLite's folds ASCII.
 		return likeHelper(b, "like_sensitive")

@@ -468,6 +468,38 @@ func xlsxUnrepresentableError(column string, r rune) error {
 		ErrUnsupportedFormat, r, column)
 }
 
+// xlsxCellCharacterLimit is the most characters a worksheet cell holds. The
+// library writing one cuts a longer value to this and reports success, so a
+// dump that looked like it worked came back short; a save that loses data
+// silently is the one outcome a save must not have.
+const xlsxCellCharacterLimit = 32767
+
+// xlsxCellLength is how a worksheet counts the characters of a value, which is
+// in UTF-16 code units rather than runes: a character above the basic plane --
+// an emoji, a rare CJK ideograph, a musical symbol -- counts twice. Counting
+// runes let a value of 16384 emoji through, and it came back cut to 16383.
+//
+// The count is taken without encoding the string, since this runs on every cell
+// of a workbook being written.
+func xlsxCellLength(s string) int {
+	units := 0
+	for _, r := range s {
+		units++
+		if r > 0xFFFF {
+			units++
+		}
+	}
+	return units
+}
+
+// xlsxTooLongError reports a value longer than a worksheet cell holds, in the
+// shape the other XLSX refusals have: the table is fine, the format is not, and
+// CSV can hold what this cannot.
+func xlsxTooLongError(column string, length int) error {
+	return fmt.Errorf("%w: an XLSX cell holds %d characters and column %q holds a value of %d; dump this table as CSV instead",
+		ErrUnsupportedFormat, xlsxCellCharacterLimit, column, length)
+}
+
 // xlsxNotUTF8Error reports a value a worksheet cannot carry because it is not
 // characters. A workbook is XML and holds text, so bytes that are not valid
 // UTF-8 went in as U+FFFD and the table came back changed with nothing said.
@@ -531,6 +563,9 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior, sty
 		if r, found := xmlUnspellableRune(col); found {
 			return xlsxExtent{}, xlsxUnrepresentableError(col, r)
 		}
+		if n := xlsxCellLength(col); n > xlsxCellCharacterLimit {
+			return xlsxExtent{}, xlsxTooLongError(col, n)
+		}
 		if unchangedXLSXCell(before, headerRow, i+1, col) {
 			continue
 		}
@@ -572,6 +607,9 @@ func writeXLSXSheet(f *excelize.File, sheet xlsxSheet, prior xlsxSheetPrior, sty
 			}
 			if r, found := xmlUnspellableRune(cellValue); found {
 				return xlsxExtent{}, xlsxUnrepresentableError(columns[i], r)
+			}
+			if n := xlsxCellLength(cellValue); n > xlsxCellCharacterLimit {
+				return xlsxExtent{}, xlsxTooLongError(columns[i], n)
 			}
 			if unchangedXLSXCell(before, rowIndex, i+1, cellValue) {
 				continue

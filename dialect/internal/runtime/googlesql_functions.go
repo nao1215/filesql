@@ -25,6 +25,8 @@ import (
 // googlesqlScalarFunctions are the deterministic dialects.GoogleSQL helpers.
 func googlesqlScalarFunctions() map[string]scalarSpec {
 	return map[string]scalarSpec{
+		"googlesql_shift_left":  {2, googlesqlShift(true)},
+		"googlesql_shift_right": {2, googlesqlShift(false)},
 		// BigQuery's digests answer bytes where dialects.PostgreSQL's MD5 and dialects.MySQL's
 		// SHA1 answer hexadecimal text, so TO_HEX(MD5(x)) -- the spelling
 		// BigQuery's own documentation uses -- hexed the hex.
@@ -756,5 +758,38 @@ func timeUnitDuration(unit string) (time.Duration, error) {
 		return time.Microsecond, nil
 	default:
 		return 0, fmt.Errorf("dialect: %q is not a unit of a time of day", unit)
+	}
+}
+
+// googlesqlShift implements GoogleSQL's "<<" and ">>". Neither is SQLite's:
+// SQLite copies the sign bit down on a right shift where GoogleSQL fills the
+// vacated bits with zeros, SQLite reads a negative count as a shift the other
+// way where GoogleSQL refuses one, and SQLite's right shift of a negative value
+// saturates at -1 where GoogleSQL answers 0 once the count reaches the width.
+// The answer carries the bits, which is the only reading SQLite has for them:
+// GoogleSQL prints -1 >> 0 as -1 as well, since its INT64 is signed too.
+func googlesqlShift(left bool) scalarFn {
+	return func(args []driver.Value) (driver.Value, error) {
+		v, ok := toInt(args[0])
+		if !ok {
+			return nil, nil
+		}
+		n, ok := toInt(args[1])
+		if !ok {
+			return nil, nil
+		}
+		if n < 0 {
+			return nil, fmt.Errorf("dialect: a shift count is negative: %d", n)
+		}
+		if n >= 64 {
+			return int64(0), nil
+		}
+		u := uint64(v) //nolint:gosec // the shift is defined on the bits, which is what the reinterpretation keeps
+		if left {
+			u <<= uint64(n)
+		} else {
+			u >>= uint64(n)
+		}
+		return int64(u), nil //nolint:gosec // SQLite has no unsigned integer to answer with; the bits are the answer
 	}
 }

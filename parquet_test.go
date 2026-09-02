@@ -20,6 +20,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xuri/excelize/v2"
 	_ "modernc.org/sqlite"
 )
 
@@ -197,6 +198,65 @@ func TestParquetAndCSVAgreeOnNumericQueries(t *testing.T) {
 				t.Errorf("%s\n csv     = %q\n parquet = %q", tt.query, fromCSV, fromParquet)
 			}
 		})
+	}
+}
+
+// TestParquetAndXLSXAgreeOnABooleanColumn covers the two typed formats this
+// package reads. A workbook stores a boolean as 1 or 0 and draws it TRUE or
+// FALSE, and loading the drawing made the column text: WHERE flag matched no
+// row, SUM over it answered zero, and a join against the same column read from
+// Parquet found nothing. Neither the values nor the errors said so.
+func TestParquetAndXLSXAgreeOnABooleanColumn(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	type flagRow struct {
+		Flag bool   `parquet:"flag"`
+		Name string `parquet:"name"`
+	}
+	parquetPath := filepath.Join(dir, "flags.parquet")
+	pf, err := os.Create(parquetPath) //nolint:gosec // path from t.TempDir
+	require.NoError(t, err)
+	w := parquet.NewGenericWriter[flagRow](pf)
+	_, err = w.Write([]flagRow{{Flag: true, Name: "yes"}, {Flag: false, Name: "no"}})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	require.NoError(t, pf.Close())
+
+	bookPath := filepath.Join(dir, "flags.xlsx")
+	f := excelize.NewFile()
+	require.NoError(t, f.SetSheetName("Sheet1", "flags"))
+	require.NoError(t, f.SetCellValue("flags", "A1", "flag"))
+	require.NoError(t, f.SetCellValue("flags", "B1", "name"))
+	require.NoError(t, f.SetCellBool("flags", "A2", true))
+	require.NoError(t, f.SetCellValue("flags", "B2", "yes"))
+	require.NoError(t, f.SetCellBool("flags", "A3", false))
+	require.NoError(t, f.SetCellValue("flags", "B3", "no"))
+	require.NoError(t, f.SaveAs(bookPath))
+	require.NoError(t, f.Close())
+
+	for _, path := range []string{parquetPath, bookPath} {
+		db, err := OpenContext(ctx, path)
+		require.NoError(t, err, path)
+
+		var declared, storage, first string
+		require.NoError(t, db.QueryRowContext(ctx,
+			`SELECT type FROM pragma_table_info('flags') WHERE name = 'flag'`).Scan(&declared))
+		require.NoError(t, db.QueryRowContext(ctx,
+			`SELECT typeof(flag), CAST(flag AS TEXT) FROM flags ORDER BY name DESC LIMIT 1`).Scan(&storage, &first))
+
+		var truthy, sum int
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM flags WHERE flag`).Scan(&truthy))
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT COALESCE(SUM(flag), 0) FROM flags`).Scan(&sum))
+
+		assert.Equal(t, "INTEGER", declared, "%s: a boolean column is an integer column", path)
+		assert.Equal(t, "integer", storage, "%s", path)
+		assert.Equal(t, "1", first, "%s: a true loads as 1", path)
+		assert.Equal(t, 1, truthy, "%s: WHERE flag finds the true row", path)
+		assert.Equal(t, 1, sum, "%s: SUM counts the true row", path)
+		require.NoError(t, db.Close())
 	}
 }
 

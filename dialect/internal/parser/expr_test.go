@@ -306,6 +306,46 @@ func TestPostgresOtherOperatorPrecedence(t *testing.T) {
 	}
 }
 
+// TestGoogleSQLXorSitsBetweenAndAndOr pins where "^" binds in GoogleSQL, which
+// is looser than every arithmetic and shift operator and than bitwise AND, and
+// tighter than bitwise OR. It used to bind at the addition level, which is where
+// nothing in the ZetaSQL table puts it, so "6 & 3 ^ 1" grouped the way MySQL
+// groups it and answered a different number.
+//
+// The MySQL shapes are asserted beside it because MySQL really does bind "^"
+// above multiplication, so the two dialects must not be given one level.
+func TestGoogleSQLXorSitsBetweenAndAndOr(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		d           dialects.Dialect
+		input, want string
+	}{
+		{dialects.GoogleSQL, "a & b ^ c", "bitxor(bitand(a, b), c)"},
+		{dialects.GoogleSQL, "a ^ b & c", "bitxor(a, bitand(b, c))"},
+		{dialects.GoogleSQL, "a ^ b | c", "bitor(bitxor(a, b), c)"},
+		{dialects.GoogleSQL, "a | b ^ c", "bitor(a, bitxor(b, c))"},
+		{dialects.GoogleSQL, "a ^ b + c", "bitxor(a, add(b, c))"},
+		{dialects.GoogleSQL, "a ^ b * c", "bitxor(a, mul(b, c))"},
+		{dialects.GoogleSQL, "a ^ b << c", "bitxor(a, shl(b, c))"},
+		{dialects.GoogleSQL, "a ^ b = c", "eq(bitxor(a, b), c)"},
+		{dialects.MySQL, "a & b ^ c", "bitand(a, bitxor(b, c))"},
+		{dialects.MySQL, "a ^ b * c", "mul(bitxor(a, b), c)"},
+	} {
+		t.Run(fmt.Sprintf("%v %s", tt.d, tt.input), func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseExpr(tt.d, tt.input)
+			if err != nil {
+				t.Fatalf("ParseExpr(%v, %q): %v", tt.d, tt.input, err)
+			}
+			if sketch(got) != tt.want {
+				t.Errorf("ParseExpr(%v, %q) = %s, want %s", tt.d, tt.input, sketch(got), tt.want)
+			}
+		})
+	}
+}
+
 // TestAShortUnicodeEscapeIsRefused covers the literal that used to read past the
 // end of the string and crash the parser. A query is untrusted text, so a
 // malformed escape has to be an error rather than a panic.

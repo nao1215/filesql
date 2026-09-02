@@ -95,8 +95,8 @@ func TestReadXLSXKeepsWhatIsNotAStoredNumber(t *testing.T) {
 		value  any
 		want   string
 	}{
-		{"a boolean", 0, true, "TRUE"},
-		{"a boolean under a number format", 9, false, "FALSE"},
+		{"a boolean", 0, true, "1"},
+		{"a boolean under a number format", 9, false, "0"},
 		{"a time of day", 21, 0.5, "12:00:00"},
 		{"an elapsed duration", 46, 1.5, "36:00:00"},
 	} {

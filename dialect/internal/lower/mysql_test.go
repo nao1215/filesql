@@ -52,9 +52,9 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-x_rtrim_reads_its_argument_as_text", "SELECT RTRIM(a) FROM t", `SELECT RTRIM(mysql_text(a)) AS "RTRIM(a)" FROM t`},
 		{"M-x_length_reads_its_argument_as_text", "SELECT LENGTH(a) FROM t", `SELECT octet_length(mysql_text(a)) AS "LENGTH(a)" FROM t`},
 		{"M-x_char_length_reads_its_argument_as_text", "SELECT CHAR_LENGTH(a) FROM t", `SELECT length(mysql_text(a)) AS "CHAR_LENGTH(a)" FROM t`},
-		{"M-x_instr_reads_both_arguments_as_text", "SELECT INSTR(a, b) FROM t", `SELECT INSTR(mysql_text(a), mysql_text(b)) AS "INSTR(a, b)" FROM t`},
-		{"M-x_locate_reads_both_arguments_as_text", "SELECT LOCATE(a, b) FROM t", `SELECT INSTR(mysql_text(b), mysql_text(a)) AS "LOCATE(a, b)" FROM t`},
-		{"M-x_a_string_literal_is_left_alone", "SELECT INSTR(a, 'e') FROM t", `SELECT INSTR(mysql_text(a), 'e') AS "INSTR(a, 'e')" FROM t`},
+		{"M-x_instr_reads_both_arguments_as_text", "SELECT INSTR(a, b) FROM t", `SELECT locate(mysql_text(b), mysql_text(a)) AS "INSTR(a, b)" FROM t`},
+		{"M-x_locate_reads_both_arguments_as_text", "SELECT LOCATE(a, b) FROM t", `SELECT locate(mysql_text(a), mysql_text(b)) AS "LOCATE(a, b)" FROM t`},
+		{"M-x_a_string_literal_is_left_alone", "SELECT INSTR(a, 'e') FROM t", `SELECT locate('e', mysql_text(a)) AS "INSTR(a, 'e')" FROM t`},
 
 		// A double dash opens a comment in MySQL only when a blank follows it,
 		// so the tail of the line is arithmetic rather than something dropped.
@@ -179,7 +179,7 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-24_log", "SELECT LOG(x) FROM t", `SELECT ln(x) AS "LOG(x)" FROM t`},
 		{"M-24_log_with_base_untouched", "SELECT LOG(2, x) FROM t", "SELECT LOG(2, x) FROM t"},
 		{"M-24_log_without_arguments_untouched", "SELECT LOG() FROM t", "SELECT LOG() FROM t"},
-		{"M-24_log_nested", "SELECT ROUND(LOG(x), 2) FROM t", `SELECT dialect_round_even(ln(x), 2) AS "ROUND(LOG(x), 2)" FROM t`},
+		{"M-24_log_nested", "SELECT ROUND(LOG(x), 2) FROM t", `SELECT dialect_round_even(mysql_number(ln(x)), 2) AS "ROUND(LOG(x), 2)" FROM t`},
 		{"M-24_format", "SELECT FORMAT(x, 2) FROM t", `SELECT mysql_format(x, 2) AS "FORMAT(x, 2)" FROM t`},
 		{"M-24_left", "SELECT LEFT(name, 3) FROM t", `SELECT mysql_left(name, 3) AS "LEFT(name, 3)" FROM t`},
 		{"M-24_right", "SELECT RIGHT(name, 3) FROM t", `SELECT mysql_right(name, 3) AS "RIGHT(name, 3)" FROM t`},

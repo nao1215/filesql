@@ -28,6 +28,10 @@ const (
 	// bitwise, concatenation and JSON operators, below addition.
 	precOther
 	precBitOr
+	// precBitXorGoogle is GoogleSQL's level for "^", which its grammar puts
+	// between bitwise OR and bitwise AND. MySQL puts "^" far above, at
+	// precBitXor, and PostgreSQL has no operator here at all.
+	precBitXorGoogle
 	precBitAnd
 	precShift
 	precAddSub
@@ -271,13 +275,14 @@ func binaryPrec(d dialects.Dialect, op ast.BinaryOp) int {
 	case ast.Mul, ast.Div, ast.Mod, ast.IntDiv:
 		return precMulDiv
 	case ast.BitXor:
-		// MySQL's "^" binds tighter than multiplication; PostgreSQL's "#" is an
-		// ordinary operator at the level its manual calls "any other operator",
-		// which sits with addition.
+		// MySQL's "^" binds tighter than multiplication; GoogleSQL's sits
+		// between bitwise AND and bitwise OR; PostgreSQL's "#" is an ordinary
+		// operator at the level its manual calls "any other operator", which is
+		// returned above.
 		if d == dialects.MySQL {
 			return precBitXor
 		}
-		return precAddSub
+		return precBitXorGoogle
 	case ast.Power:
 		// PostgreSQL raises to a power at a level of its own, above
 		// multiplication.

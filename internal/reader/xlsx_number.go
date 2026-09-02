@@ -19,8 +19,12 @@ import (
 // column came back as text and SUM over it answered 0. A format is how a
 // spreadsheet paints a number, and the number is what a query is about.
 //
-// Two kinds of cell keep what the sheet says. One is a cell that does not store
-// a number: a boolean is stored as 1 and drawn TRUE, and a string is text
+// A boolean is the same story told in words: it is stored as 1 or 0 and drawn
+// TRUE or FALSE, and the drawing made the column text, so WHERE flag matched
+// nothing and SUM over it answered zero. It loads as the number it stores, the
+// way the same value read from Parquet does.
+//
+// Two kinds of cell keep what the sheet says. One is a string, which is text
 // whatever its format says. The other is a number whose format draws a moment
 // rather than a quantity: a time of day, an elapsed duration, and a date, which
 // is rewritten into ISO 8601 by the pass that follows rather than left as the
@@ -54,6 +58,16 @@ func normalizeXLSXNumbers(f *excelize.File, sheet string, rows [][]string) [][]s
 				moment = styleHoldsDate(f, styleID) || styleDrawsAClock(f, styleID)
 				redraws[styleID] = moment
 			}
+			if storesABoolean(f, sheet, axis) {
+				// A boolean is stored as 1 or 0 and drawn TRUE or FALSE. The
+				// drawing is a word, so a column of them came back as text and
+				// no query that reads the column as a boolean answered.
+				raw, err := f.GetCellValue(sheet, axis, excelize.Options{RawCellValue: true})
+				if err == nil && isPlainNumber(raw) {
+					rows[r][c] = raw
+				}
+				continue
+			}
 			if moment || !storesASerial(f, sheet, axis) {
 				continue
 			}
@@ -76,7 +90,20 @@ func normalizeXLSXNumbers(f *excelize.File, sheet string, rows [][]string) [][]s
 // drawing itself carries the mark of. The style table is a part of the file on
 // its own and cheap to read; the mark is found in the strings already in hand.
 func mayRedrawANumber(f *excelize.File, rows [][]string) bool {
-	return anyDrawnShort(rows) || workbookFormatsNumbers(f)
+	return anyDrawnShort(rows) || anyDrawnBoolean(rows) || workbookFormatsNumbers(f)
+}
+
+// anyDrawnBoolean reports whether any drawing carries the mark of a boolean,
+// which a sheet draws as one of two words whatever it formats. A text cell
+// holding the same word carries the mark too, and costs the second pass, which
+// then finds it is a string and leaves it alone.
+func anyDrawnBoolean(rows [][]string) bool {
+	for _, row := range rows {
+		if slices.Contains(row, "TRUE") || slices.Contains(row, "FALSE") {
+			return true
+		}
+	}
+	return false
 }
 
 // anyDrawnShort reports whether any drawing carries the mark of a number that

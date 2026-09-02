@@ -99,12 +99,27 @@ func TestScanSheetValues(t *testing.T) {
 
 		sheet := `<worksheet><sheetData>
 			<row r="2"><c r="A2" s="3" t="s"><v>0</v></c><c r="B2" s="3" t="str"><v>45000</v></c>` +
-			`<c r="C2" s="3" t="inlineStr"><is><t>45000</t></is></c><c r="D2" s="1" t="b"><v>1</v></c></row>
+			`<c r="C2" s="3" t="inlineStr"><is><t>45000</t></is></c></row>
 		</sheetData></worksheet>`
 
 		dates := map[sheetCell]string{}
 		require.NoError(t, scanSheetValues(strings.NewReader(sheet), styles, false, dates))
 		assert.Empty(t, dates)
+	})
+
+	t.Run("a boolean loads as the number it stores", func(t *testing.T) {
+		t.Parallel()
+
+		// A boolean is stored as 1 or 0 and drawn TRUE or FALSE, whatever the
+		// style says, so both a plain one and one wearing a date style load as
+		// the number rather than the word.
+		sheet := `<worksheet><sheetData>
+			<row r="2"><c r="A2" s="1" t="b"><v>1</v></c><c r="B2" s="0" t="b"><v>0</v></c></row>
+		</sheetData></worksheet>`
+
+		values := map[sheetCell]string{}
+		require.NoError(t, scanSheetValues(strings.NewReader(sheet), styles, false, values))
+		assert.Equal(t, map[sheetCell]string{{row: 2, col: 1}: "1", {row: 2, col: 2}: "0"}, values)
 	})
 
 	t.Run("rows and cells without a reference follow the ones before", func(t *testing.T) {

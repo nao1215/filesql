@@ -224,7 +224,11 @@ func (r *mysqlRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		// answers NULL.
 		return rename(call, "mysql_nullif"), nil
 	case fnNameRound:
-		return roundEven(call)
+		return roundEven(mysqlNumberArgs(call, 0))
+	case "TRUNCATE", "POW", "POWER":
+		// SQLite spells these the same way and answers the same thing, so only
+		// the conversion in front of them differs.
+		return mysqlNumberArgs(call), nil
 	case fnNameMod:
 		return rename(call, "mysql_mod"), nil
 	case "LENGTH", "OCTET_LENGTH":
@@ -295,23 +299,24 @@ func mysqlMathHelper(name string) string {
 // mysqlPosition normalizes the three spellings of "where does a substring
 // start": POSITION(a IN b), LOCATE(a, b[, n]) and INSTR(b, a).
 func mysqlPosition(call *ast.FuncCall) (ast.Expr, error) {
+	// Every spelling reaches this package's own locate(), which writes the
+	// needle first, reads a REAL the way MySQL does and folds case the way
+	// MySQL's default collation does. SQLite's own instr() does none of the
+	// three, so a needle differing only in case was not found.
 	switch callName(call) {
 	case fnNamePosition:
+		if call.Syntax == ast.CallPositionIn && len(call.Args) == 2 {
+			return rename(mysqlTextArgs(call, 0, 1), "locate"), nil
+		}
 		return position(mysqlTextArgs(call, 0, 1))
 	case "LOCATE":
-		// LOCATE writes the needle first, which is the order POSITION writes;
-		// with a third argument it starts from a position SQLite's instr has no
-		// room for.
+		return rename(mysqlTextArgs(call, 0, 1), "locate"), nil
+	default:
+		// INSTR writes the haystack first, which is the other order.
 		if len(call.Args) == 2 {
 			call.Args[0], call.Args[1] = call.Args[1], call.Args[0]
-			return rename(mysqlTextArgs(call, 0, 1), "INSTR"), nil
 		}
-		// The three-argument form reaches this package's own locate(), which
-		// reads its arguments the way MySQL does already.
-		return rename(call, "locate"), nil
-	default:
-		// INSTR stays on SQLite's own, which reads a REAL its own way.
-		return mysqlTextArgs(call, 0, 1), nil
+		return rename(mysqlTextArgs(call, 0, 1), "locate"), nil
 	}
 }
 
@@ -327,6 +332,37 @@ func mysqlText(e ast.Expr) ast.Expr {
 		return e
 	}
 	return helper("mysql_text", e.At(), e)
+}
+
+// mysqlNumber wraps an argument this dialect reads as a number in the
+// conversion that reads one the way MySQL does. It is the counterpart of
+// mysqlText and is needed for the same reason: where a call stays on a function
+// SQLite or this package answers for every dialect, a string that spells no
+// number reaches it as no number at all and the call answers NULL, where MySQL
+// reads such a string as zero. A numeric literal is already a number and is
+// left alone.
+func mysqlNumber(e ast.Expr) ast.Expr {
+	if lit, ok := e.(*ast.Literal); ok && lit.Kind == ast.LitNumber {
+		return e
+	}
+	return helper("mysql_number", e.At(), e)
+}
+
+// mysqlNumberArgs wraps the arguments at the given positions, or every argument
+// when none are named.
+func mysqlNumberArgs(call *ast.FuncCall, positions ...int) *ast.FuncCall {
+	if len(positions) == 0 {
+		for i, arg := range call.Args {
+			call.Args[i] = mysqlNumber(arg)
+		}
+		return call
+	}
+	for _, i := range positions {
+		if i >= 0 && i < len(call.Args) {
+			call.Args[i] = mysqlNumber(call.Args[i])
+		}
+	}
+	return call
 }
 
 // mysqlTextArgs wraps the arguments at the given positions, or every argument

@@ -99,6 +99,9 @@ func readLTSV(src io.Reader, opts Options, emit Emit) (Result, error) {
 				}
 				continue
 			}
+			if strings.ContainsRune(key, 0) {
+				return Result{}, columnNameNULError(key, len(seen)+1)
+			}
 			// A label repeated within the same record cannot be two distinct
 			// columns; keeping the last value would silently drop the earlier one,
 			// so reject it.

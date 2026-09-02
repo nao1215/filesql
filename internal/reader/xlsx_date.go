@@ -277,6 +277,16 @@ func storesASerial(f *excelize.File, sheet, axis string) bool {
 	return kind == excelize.CellTypeUnset || kind == excelize.CellTypeNumber
 }
 
+// storesABoolean reports whether a cell holds a boolean, which a sheet stores as
+// 1 or 0 and draws as a word.
+func storesABoolean(f *excelize.File, sheet, axis string) bool {
+	kind, err := f.GetCellType(sheet, axis)
+	if err != nil {
+		return false
+	}
+	return kind == excelize.CellTypeBool
+}
+
 // isDateNumberFormat reports whether a custom number format names a calendar
 // day.
 //
