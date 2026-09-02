@@ -45,10 +45,11 @@ func TestOperatorSemantics(t *testing.T) {
 		{"postgresql keeps integer division", dialects.PostgreSQL, `SELECT 5/2`, "2", false},
 
 		// A value with a decimal point is a binary floating-point value here,
-		// where MySQL and PostgreSQL hold an exact decimal: both answer 0.3 for
-		// this and SQLite cannot, since a number loaded from a file is a REAL.
-		// The answer is pinned so a later change to it is a deliberate change
-		// to a documented one.
+		// where MySQL and PostgreSQL hold an exact decimal. The want on each
+		// row is what this package answers; MySQL 8.4 and PostgreSQL 17 both
+		// answer 0.3, and SQLite cannot, since a number loaded from a file is a
+		// REAL. The answers are pinned so a later change to one is a deliberate
+		// change to a documented answer.
 		{"mysql adds two decimals as floats", dialects.MySQL, `SELECT 0.1 + 0.2`, "0.30000000000000004", false},
 		{"postgresql adds two decimals as floats", dialects.PostgreSQL, `SELECT 0.1 + 0.2`, "0.30000000000000004", false},
 		{"googlesql adds two decimals as floats", dialects.GoogleSQL, `SELECT 0.1 + 0.2`, "0.30000000000000004", false},

@@ -52,11 +52,13 @@ func TestCastSemantics(t *testing.T) {
 		{"mysql decimal scale", dialects.MySQL, `SELECT CAST('3.567' AS DECIMAL(10,2))`, "3.57", false},
 		{"mysql bare decimal is scale zero", dialects.MySQL, `SELECT CAST(1.5 AS DECIMAL)`, "2", false},
 		// A scale is applied by rounding rather than carried, since SQLite has
-		// no decimal to carry it: MySQL and PostgreSQL both answer 1.50 here,
-		// and 1.01 for a value whose nearest float falls under the tie.
-		{"mysql does not pad to the scale", dialects.MySQL, `SELECT CAST(1.5 AS DECIMAL(10,2))`, "1.5", false},
-		{"postgresql does not pad to the scale", dialects.PostgreSQL, `SELECT 1.5::numeric(10,2)`, "1.5", false},
-		{"postgresql rounds a tie the float falls under", dialects.PostgreSQL, `SELECT 1.005::numeric(10,2)`, "1", false},
+		// no decimal to carry it. The want on each row is what this package
+		// answers; the engine's own answer is in the comment beside it, and the
+		// difference is the floating-point value SQLite holds.
+		{"mysql does not pad to the scale", dialects.MySQL, `SELECT CAST(1.5 AS DECIMAL(10,2))`, "1.5", false},            // mysql: 1.50
+		{"postgresql does not pad to the scale", dialects.PostgreSQL, `SELECT 1.5::numeric(10,2)`, "1.5", false},          // postgres: 1.50
+		{"mysql rounds a tie the float falls under", dialects.MySQL, `SELECT CAST(1.005 AS DECIMAL(10,2))`, "1", false},   // mysql: 1.01
+		{"postgresql rounds a tie the float falls under", dialects.PostgreSQL, `SELECT 1.005::numeric(10,2)`, "1", false}, // postgres: 1.01
 		{"mysql char length", dialects.MySQL, `SELECT CAST('abcdefghijk' AS CHAR(3))`, "abc", false},
 		{"postgresql varchar length", dialects.PostgreSQL, `SELECT 'abcdef'::varchar(3)`, "abc", false},
 
