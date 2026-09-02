@@ -770,9 +770,14 @@ func timeUnitDuration(unit string) (time.Duration, error) {
 // GoogleSQL prints -1 >> 0 as -1 as well, since its INT64 is signed too.
 func googlesqlShift(left bool) scalarFn {
 	return func(args []driver.Value) (driver.Value, error) {
-		v, ok := toInt(args[0])
-		if !ok {
-			return nil, nil
+		operand, isBytes := bytesOperand(args[0])
+		var v int64
+		if !isBytes {
+			var ok bool
+			v, ok = toInt(args[0])
+			if !ok {
+				return nil, nil
+			}
 		}
 		n, ok := toInt(args[1])
 		if !ok {
@@ -780,6 +785,12 @@ func googlesqlShift(left bool) scalarFn {
 		}
 		if n < 0 {
 			return nil, fmt.Errorf("dialect: a shift count is negative: %d", n)
+		}
+		if isBytes {
+			// A BYTES operand keeps its length: the bits leaving one end are
+			// discarded and zeros come in at the other, so a count at or past
+			// the bit length answers that many zero bytes.
+			return bytesShift(operand, uint64(n), left), nil //nolint:gosec // the count is not negative here
 		}
 		if n >= 64 {
 			return int64(0), nil

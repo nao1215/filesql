@@ -151,8 +151,9 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-21_not_equal_untouched", "SELECT a != b FROM t", `SELECT a != b FROM t`},
 		{"M-21_bitxor", "SELECT a ^ b FROM t", `SELECT mysql_bit_xor(a, b) AS "a ^ b" FROM t`},
 		{"M-21_bitxor_literals", "SELECT 5 ^ 3", `SELECT mysql_bit_xor(5, 3) AS "5 ^ 3"`},
-		{"M-21_bitand_untouched", "SELECT a & b FROM t", "SELECT a & b FROM t"},
-		{"M-21_bitor_untouched", "SELECT a | b FROM t", "SELECT a | b FROM t"},
+		{"M-21_bitand", "SELECT a & b FROM t", `SELECT mysql_bit_and(a, b) AS "a & b" FROM t`},
+		{"M-21_bitor", "SELECT a | b FROM t", `SELECT mysql_bit_or(a, b) AS "a | b" FROM t`},
+		{"M-21_bitnot", "SELECT ~a FROM t", `SELECT mysql_bit_not(a) AS "~a" FROM t`},
 		{"M-29_shifts", "SELECT a << 1, b >> 2 FROM t", `SELECT mysql_shift_left(a, 1) AS "a << 1", mysql_shift_right(b, 2) AS "b >> 2" FROM t`},
 		// The positions a rewrite has to survive: a WHERE clause, a CASE, a
 		// window's PARTITION BY, and a GROUP BY, where an operand that stopped at

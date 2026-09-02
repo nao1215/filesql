@@ -868,3 +868,100 @@ func TestATrailingEscapeFollowsTheDialect(t *testing.T) {
 		}
 	}
 }
+
+// TestBitwiseOperatorsOverBytes pins the six bitwise operators over a byte
+// string, which both GoogleSQL and MySQL define them for and which SQLite reads
+// as the integer 0.
+//
+// The GoogleSQL wants were derived from the ZetaSQL operator documentation
+// rather than read from an engine: every bitwise operator "returns the same
+// type and the same length as the first operand", "|", "&" and "^" "throw an
+// error if X and Y are bytes of different lengths", a shift fills the vacated
+// bits with zeros and answers a byte sequence of zeros once the count reaches
+// the bit length, and a negative count is an error. The MySQL wants were read
+// from mysql:8.4 over a VARBINARY column, where a negative count answers zeros
+// rather than raising because the count is read as unsigned.
+func TestBitwiseOperatorsOverBytes(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	for _, tt := range []struct {
+		name     string
+		dialect  dialects.Dialect
+		query    string
+		want     string
+		wantErr  bool
+		wantNull bool
+	}{
+		// GoogleSQL, where a BYTES value is written b'..'.
+		{name: "googlesql shifts bytes left", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'ab' << 1)`, want: "c2c4"},
+		{name: "googlesql shifts bytes right", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'ab' >> 1)`, want: "30b1"},
+		{name: "googlesql shifts bytes by a whole byte", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'ab' << 8)`, want: "6200"},
+		{name: "googlesql shifts bytes right by a whole byte", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'ab' >> 8)`, want: "0061"},
+		{name: "googlesql shifts bytes past their width", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'ab' << 16)`, want: "0000"},
+		{name: "googlesql shifts bytes right past their width", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'ab' >> 100)`, want: "0000"},
+		{name: "googlesql shifts bytes by nothing", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'ab' << 0)`, want: "6162"},
+		{name: "googlesql refuses a negative shift of bytes", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'ab' << -1)`, wantErr: true},
+		{name: "googlesql ors bytes", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'ab' | b'cd')`, want: "6366"},
+		{name: "googlesql ands bytes", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'ab' & b'cd')`, want: "6160"},
+		{name: "googlesql xors bytes", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'ab' ^ b'cd')`, want: "0206"},
+		{name: "googlesql complements bytes", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(~b'ab')`, want: "9e9d"},
+		{name: "googlesql refuses bytes of different lengths", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'ab' & b'c')`, wantErr: true},
+		{name: "googlesql ors nothing with nothing", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'' | b'')`, want: ""},
+		{name: "googlesql complements nothing", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(~b'')`, want: ""},
+		{name: "googlesql ors bytes with null", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'ab' | NULL)`, wantNull: true},
+		{name: "googlesql shifts bytes by null", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'ab' << NULL)`, wantNull: true},
+
+		// The integer operands the same operators carry, which must keep
+		// answering what they answered before bytes reached them.
+		{name: "googlesql shifts an integer left", dialect: dialects.GoogleSQL, query: `SELECT 1 << 3`, want: "8"},
+		{name: "googlesql shifts an integer right", dialect: dialects.GoogleSQL, query: `SELECT 8 >> 3`, want: "1"},
+		{name: "googlesql refuses a negative integer shift", dialect: dialects.GoogleSQL, query: `SELECT 1 << -1`, wantErr: true},
+		{name: "googlesql xors integers", dialect: dialects.GoogleSQL, query: `SELECT 6 ^ 3`, want: "5"},
+		{name: "googlesql complements an integer", dialect: dialects.GoogleSQL, query: `SELECT ~0`, want: "-1"},
+		{name: "googlesql shifts a numeral written as text", dialect: dialects.GoogleSQL, query: `SELECT '8' >> 3`, want: "1"},
+
+		// MySQL, where UNHEX answers the binary string a BLOB column holds.
+		{name: "mysql ors binary strings", dialect: dialects.MySQL, query: `SELECT HEX(UNHEX('6162') | UNHEX('0100'))`, want: "6162"},
+		{name: "mysql ands binary strings", dialect: dialects.MySQL, query: `SELECT HEX(UNHEX('6162') & UNHEX('ff00'))`, want: "6100"},
+		{name: "mysql xors binary strings", dialect: dialects.MySQL, query: `SELECT HEX(UNHEX('6162') ^ UNHEX('0101'))`, want: "6063"},
+		{name: "mysql shifts a binary string left", dialect: dialects.MySQL, query: `SELECT HEX(UNHEX('6162') << 1)`, want: "C2C4"},
+		{name: "mysql shifts a binary string right", dialect: dialects.MySQL, query: `SELECT HEX(UNHEX('6162') >> 1)`, want: "30B1"},
+		{name: "mysql complements a binary string", dialect: dialects.MySQL, query: `SELECT HEX(~UNHEX('6162'))`, want: "9E9D"},
+		{name: "mysql shifts a binary string past its width", dialect: dialects.MySQL, query: `SELECT HEX(UNHEX('6162') << 100)`, want: "0000"},
+		{name: "mysql shifts a binary string by a negative count", dialect: dialects.MySQL, query: `SELECT HEX(UNHEX('6162') << -1)`, want: "0000"},
+		{name: "mysql refuses binary strings of different lengths", dialect: dialects.MySQL, query: `SELECT HEX(UNHEX('6162') | UNHEX('01'))`, wantErr: true},
+		{name: "mysql ors a binary string with null", dialect: dialects.MySQL, query: `SELECT HEX(UNHEX('6162') | NULL)`, wantNull: true},
+
+		// MySQL's integer operands, unsigned as they were before.
+		{name: "mysql xors integers", dialect: dialects.MySQL, query: `SELECT 6 ^ 3`, want: "5"},
+		{name: "mysql complements an integer", dialect: dialects.MySQL, query: `SELECT ~0`, want: "-1"},
+		{name: "mysql ors integers", dialect: dialects.MySQL, query: `SELECT 6 | 3`, want: "7"},
+		{name: "mysql shifts a numeral written as text", dialect: dialects.MySQL, query: `SELECT '8' >> 3`, want: "1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, tt.dialect, tt.query)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("%s = %v, want an error", tt.query, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if tt.wantNull {
+				if got.Valid {
+					t.Fatalf("%s = %q, want NULL", tt.query, got.String)
+				}
+				return
+			}
+			if !got.Valid {
+				t.Fatalf("%s is NULL, want %q", tt.query, tt.want)
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}

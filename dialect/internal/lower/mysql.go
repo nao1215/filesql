@@ -52,6 +52,12 @@ func (r *mysqlRules) Binary(b *ast.BinaryExpr) (ast.Expr, error) {
 		// A bitwise XOR, which SQLite has no operator for. Writing it as
 		// (a|b)&~(a&b) would evaluate each operand twice.
 		return helper("mysql_bit_xor", b.Span, b.Left, b.Right), nil
+	case ast.BitAnd:
+		// MySQL applies these bytewise to a binary string, where SQLite reads a
+		// BLOB in an arithmetic context as the integer 0.
+		return helper("mysql_bit_and", b.Span, b.Left, b.Right), nil
+	case ast.BitOr:
+		return helper("mysql_bit_or", b.Span, b.Left, b.Right), nil
 	case ast.ShiftLeft:
 		// MySQL shifts an unsigned 64-bit value where SQLite shifts a signed
 		// one, so ">>" brought the sign bit down instead of zeros.
@@ -145,6 +151,11 @@ func intervalAdd(name string, value ast.Expr, iv *ast.IntervalExpr, sign string,
 }
 
 func (r *mysqlRules) Unary(u *ast.UnaryExpr) (ast.Expr, error) {
+	if u.Op == ast.UnaryBitNot {
+		// MySQL complements a binary string byte by byte, where SQLite reads a
+		// BLOB as the integer 0 and answers the complement of that.
+		return helper("mysql_bit_not", u.Span, u.Expr), nil
+	}
 	return u, nil
 }
 
