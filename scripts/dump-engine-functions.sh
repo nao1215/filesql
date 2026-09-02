@@ -26,22 +26,28 @@ out=dialect/testdata
 
 mysql_image=mysql:8.4
 postgres_image=postgres:17-alpine
-# The names carry this run's process id, so a container left by something else
-# is never what gets removed: the trap below force-removes whatever these names
-# point at, and a fixed name would make that somebody else's container the
-# moment one already existed and docker refused the collision.
-mysql_container="filesql-function-dump-mysql-$$"
-postgres_container="filesql-function-dump-postgres-$$"
+# The containers are addressed by the id docker returns rather than by a name
+# this script chose. A name is somebody else's the moment one already exists --
+# docker refuses the collision, and a trap that removes by name then removes
+# their container -- and no name is safe from that, since a chosen one can
+# always have been taken. An id is only ever what this run started.
+mysql_container=
+postgres_container=
 
 cleanup() {
-	docker rm -f "$mysql_container" "$postgres_container" >/dev/null || true
+	for id in "$mysql_container" "$postgres_container"; do
+		if [ -n "$id" ]; then
+			docker rm -f "$id" >/dev/null || true
+		fi
+	done
 }
 trap cleanup EXIT
 
-docker run -d --rm --name "$mysql_container" -e MYSQL_ALLOW_EMPTY_PASSWORD=1 "$mysql_image" >/dev/null
-docker run -d --rm --name "$postgres_container" -e POSTGRES_PASSWORD=probe "$postgres_image" >/dev/null
+mysql_container="$(docker run -d --rm -e MYSQL_ALLOW_EMPTY_PASSWORD=1 "$mysql_image")"
+postgres_container="$(docker run -d --rm -e POSTGRES_PASSWORD=probe "$postgres_image")"
 
 printf 'waiting for the engines'
+ready=
 for _ in $(seq 60); do
 	if docker exec "$mysql_container" mysql -uroot -e 'SELECT 1' >/dev/null &&
 		docker exec "$postgres_container" pg_isready -U postgres >/dev/null; then
@@ -52,7 +58,7 @@ for _ in $(seq 60); do
 	sleep 2
 done
 printf '\n'
-if [ -z "${ready:-}" ]; then
+if [ -z "$ready" ]; then
 	echo "the engines did not come up; nothing was written" >&2
 	exit 1
 fi
