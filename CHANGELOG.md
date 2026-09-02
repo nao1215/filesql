@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Two tests over `prep` that had no counterpart: `Process` and `ProcessToWriter` are two ways to ask the same question, so they are now held to one answer -- the same bytes, the same decoded records and the same counts, over eight inputs and each option -- and what one pass writes is read back through a second pass, which is where a format that loses a character to its own output would show. Both pass as they stand; the value is that a rule implemented twice can no longer drift in silence. The JSON cases carry the things there are to lose: a newline, a tab, a nested object, a key outside ASCII.
+
 - Godoc examples for the five exported names that had none: `CompressionType.NewReader`, `WithCompression`, `ParseError`, `ExcelSheetPolicy.String`, and a `CompressionType.NewWriter` that shows what closing the writer does rather than reading the bytes back through the reader's example. The `ParseError` one is the interesting one: it loads two files, one of them broken, and shows that the error names which file failed and that the cause is still reachable with `errors.Is`.
 
 ### Changed

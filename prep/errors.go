@@ -7,7 +7,8 @@ import (
 	"github.com/nao1215/filesql/internal/parser"
 )
 
-// Sentinel errors for fileprep
+// Sentinel errors this package returns. Each is matched with errors.Is; the
+// message a caller sees names the input as well.
 var (
 	// ErrStructSlicePointer is returned when the value is not a pointer to a struct slice
 	ErrStructSlicePointer = errors.New("value must be a pointer to a struct slice")
