@@ -320,6 +320,13 @@ func TestGoogleSQLScalarFunctions(t *testing.T) {
 		{name: "to_json_string quotes a string", query: `SELECT TO_JSON_STRING('a')`, want: `"a"`},
 		{name: "to_json_string of a number", query: `SELECT TO_JSON_STRING(1)`, want: "1"},
 		{name: "to_json_string of null", query: `SELECT TO_JSON_STRING(NULL)`, want: "null"},
+		// A BOOL literal is the JSON boolean: the encoding table's BOOL row is
+		// "boolean", with TRUE encoding to true.
+		{name: "to_json_string of a true", query: `SELECT TO_JSON_STRING(TRUE)`, want: "true"},
+		{name: "to_json_string of a false", query: `SELECT TO_JSON_STRING(FALSE)`, want: "false"},
+		// The boundary: a boolean that is not a literal is the number SQLite
+		// stores, since nothing downstream can tell the two apart.
+		{name: "to_json_string of a computed boolean", query: `SELECT TO_JSON_STRING(1 = 1)`, want: "1"},
 		// JSON has no bytes, and the encoding GoogleSQL documents for one is
 		// RFC 4648 base64: its own example is b"Google" to "R29vZ2xl".
 		{name: "to_json_string encodes bytes as base64", query: `SELECT TO_JSON_STRING(b'Google')`, want: `"R29vZ2xl"`},

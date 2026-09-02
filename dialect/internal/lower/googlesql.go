@@ -77,6 +77,11 @@ func (r *googleRules) TypedLiteral(lit *ast.TypedLiteral) (ast.Expr, error) {
 }
 
 func (r *googleRules) Cast(c *ast.CastExpr) (ast.Expr, error) {
+	// GoogleSQL casts a BOOL to the word rather than to the number SQLite
+	// stores it as: "true" if it is TRUE, "false" otherwise.
+	if v, ok := boolLiteral(c.Expr); ok && sqliteTypeNames[c.Type.Name] == typeNameText {
+		c.Expr = text(boolWord(v), c.Span)
+	}
 	return castHelper(dialects.GoogleSQL, c, "googlesql_cast")
 }
 
@@ -160,6 +165,7 @@ func (r *googleRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		// The verbs GoogleSQL shares with printf are printed the same way, but
 		// %t and %T are its own and SQLite's printf answers NULL for a format
 		// string holding a verb it does not know.
+		formatBooleanArguments(call)
 		return rename(call, "googlesql_format"), nil
 	case "LOG":
 		switch len(call.Args) {
@@ -248,6 +254,16 @@ func (r *googleRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		// SQLite's -> answers the value as JSON text, which is what JSON_QUERY
 		// answers: a string keeps its quotes and an object keeps its braces.
 		return paren(binary(call.Args[0], ast.JSONGet, call.Args[1], call.Span)), nil
+	case "TO_JSON_STRING":
+		// A BOOL is the JSON boolean, and by the time the helper runs SQLite
+		// has made the literal an integer. The whole call is the value here, so
+		// the answer is written rather than computed.
+		if len(call.Args) == 1 {
+			if v, ok := boolLiteral(call.Args[0]); ok {
+				return text(boolWord(v), call.Span), nil
+			}
+		}
+		return call, nil
 	case "BYTE_LENGTH":
 		return rename(call, "octet_length"), nil
 	case "SAFE_CONVERT_BYTES_TO_STRING":
@@ -334,4 +350,58 @@ func editDistance(call *ast.FuncCall) (ast.Expr, error) {
 		call.ArgNames = nil
 	}
 	return rename(call, "edit_distance"), nil
+}
+
+// formatBooleanArguments rewrites the boolean literals a FORMAT call prints, so
+// %t and %T say the word rather than the 1 SQLite stores a boolean as. Both
+// verbs print a BOOL the same way, and %T of a string would quote it, so the
+// argument becomes the word and its verb becomes %t.
+//
+// It acts only on a literal format string with no argument-supplied width or
+// precision, and leaves the call alone otherwise: which argument a verb prints
+// is then not something this can answer without the whole of the runtime's
+// reading of a format string, and printing one argument wrongly is worse than
+// printing the boolean as a number.
+func formatBooleanArguments(call *ast.FuncCall) {
+	if len(call.Args) == 0 {
+		return
+	}
+	format, ok := call.Args[0].(*ast.Literal)
+	if !ok || format.Kind != ast.LitString || strings.Contains(format.Value, "*") {
+		return
+	}
+	var out strings.Builder
+	arg := 1
+	for i := 0; i < len(format.Value); i++ {
+		if format.Value[i] != '%' {
+			out.WriteByte(format.Value[i])
+			continue
+		}
+		start := i
+		for i+1 < len(format.Value) && strings.IndexByte("+-# 0123456789.'", format.Value[i+1]) >= 0 {
+			i++
+		}
+		if i+1 >= len(format.Value) {
+			out.WriteString(format.Value[start:])
+			break
+		}
+		i++
+		verb := format.Value[i]
+		if verb == '%' {
+			out.WriteString(format.Value[start : i+1])
+			continue
+		}
+		v, isBool := false, false
+		if (verb == 't' || verb == 'T') && arg < len(call.Args) {
+			v, isBool = boolLiteral(call.Args[arg])
+		}
+		if isBool {
+			call.Args[arg] = text(boolWord(v), call.Span)
+			out.WriteString(format.Value[start:i] + "t")
+		} else {
+			out.WriteString(format.Value[start : i+1])
+		}
+		arg++
+	}
+	format.Value = out.String()
 }

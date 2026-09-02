@@ -79,6 +79,22 @@
 // as unsupported, since the statement was read: ErrInvalidSyntax is for one that
 // could not be read.
 //
+// # Booleans
+//
+// SQLite has no boolean, and every dialect here has one. TRUE is the integer 1
+// once it reaches SQLite, so a boolean written as a literal is read while the
+// query is translated and one that is computed is not: a value returned from a
+// registered function reaches the next one as an integer, and a comparison, a
+// column and a nested cast are all computed. What the literal buys is the word
+// where each dialect writes a word. PostgreSQL casts a boolean to text as
+// "true" or "false", GoogleSQL casts a BOOL to STRING the same way and prints
+// it so under FORMAT's %t and %T, and MySQL and GoogleSQL both write the JSON
+// boolean into a document, so JSON_ARRAY(TRUE) is [true] and
+// TO_JSON_STRING(TRUE) is true. MySQL's cast to CHAR is the one that stays a
+// number, which is what MySQL answers. A boolean that is not a literal answers
+// 1 or 0 in all of these, and FORMAT reads a boolean literal only under a
+// literal format string with no argument-supplied width.
+//
 // # Byte strings
 //
 // SQLite tells a BLOB from text, and that storage class is what each dialect's

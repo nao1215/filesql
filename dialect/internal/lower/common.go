@@ -169,3 +169,29 @@ func literalText(e ast.Expr) (string, bool) {
 	}
 	return lit.Value, true
 }
+
+// boolLiteral reports the value of a boolean literal, and whether the
+// expression is one.
+//
+// SQLite has no boolean: TRUE is the integer 1 there, and a Go bool returned
+// from a registered function reaches the next one as int64 because the driver
+// converts it on the way out. So a boolean that is computed -- by a comparison,
+// a column or a nested cast -- cannot be told from the number at the point a
+// helper runs, and the one place the distinction survives is here, where the
+// tree still says the caller wrote the word.
+func boolLiteral(e ast.Expr) (bool, bool) {
+	lit, ok := e.(*ast.Literal)
+	if !ok || lit.Kind != ast.LitBool {
+		return false, false
+	}
+	return strings.EqualFold(lit.Value, "TRUE"), true
+}
+
+// boolWord is the word every dialect here writes a boolean as, and the JSON
+// spelling of one as well.
+func boolWord(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
+}

@@ -513,6 +513,12 @@ func (r *postgresRules) TypedLiteral(lit *ast.TypedLiteral) (ast.Expr, error) {
 }
 
 func (r *postgresRules) Cast(c *ast.CastExpr) (ast.Expr, error) {
+	// PostgreSQL writes a boolean cast to text as the word rather than the
+	// number SQLite stores it as. The length of a char(n) target still applies,
+	// so the word goes through the cast rather than around it.
+	if v, ok := boolLiteral(c.Expr); ok && sqliteTypeNames[c.Type.Name] == typeNameText {
+		c.Expr = text(boolWord(v), c.Span)
+	}
 	if lit, ok := c.Expr.(*ast.Literal); ok && lit.Kind == ast.LitBit {
 		folded, err := bitStringCast(c, lit)
 		if err != nil || folded != nil {
