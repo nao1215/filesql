@@ -650,3 +650,33 @@ func TestAYearMonthIntervalEqualsItsMonths(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryDatetimeHelperStaysInsideTheRange pins the range check on the
+// helpers that add a duration without going through the interval arithmetic.
+// Each of them could put a year of five digits or a year zero into a value
+// nothing here can read back.
+func TestEveryDatetimeHelperStaysInsideTheRange(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	queries := []string{
+		`SELECT TIMESTAMP('9999-12-31 23:59:59', '00:00:01')`,
+		`SELECT ADDTIME('9999-12-31 23:59:59', '00:00:01')`,
+		`SELECT SUBTIME('0001-01-01 00:00:00', '00:00:01')`,
+		`SELECT CONVERT_TZ('9999-12-31 23:59:59', '+00:00', '+09:00')`,
+		`SELECT DATE_ADD('2020-01-01', INTERVAL 9223372036854775807 YEAR)`,
+		`SELECT DATE_ADD('2020-01-01', INTERVAL 9223372036854775807 QUARTER)`,
+		`SELECT DATE_ADD('2020-01-01', INTERVAL 768614336404564650 YEAR)`,
+	}
+	for _, query := range queries {
+		t.Run(query, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.MySQL, query)
+			if err != nil {
+				t.Fatalf("%s: %v", query, err)
+			}
+			if got.Valid {
+				t.Fatalf("%s = %q, want NULL", query, got.String)
+			}
+		})
+	}
+}

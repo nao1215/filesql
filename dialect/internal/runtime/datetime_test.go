@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -160,12 +161,23 @@ func TestAddMonthsClamps(t *testing.T) {
 		{"2026-01-15", 0, "2026-01-15"},
 		{"2026-01-31", -13, "2024-12-31"},
 	}
+	// An amount whose months do not fit, or whose year leaves the range a date
+	// can hold, is refused rather than wrapped into a plausible date.
+	for _, months := range []int64{math.MaxInt64, math.MinInt64, 1 << 40, -(1 << 40)} {
+		if _, err := addMonths(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), months); err == nil {
+			t.Fatalf("addMonths(2026-01-01, %d) should be refused", months)
+		}
+	}
 	for _, tt := range tests {
 		from, err := time.Parse(layoutDateOnly, tt.from)
 		if err != nil {
 			t.Fatalf("parse %q: %v", tt.from, err)
 		}
-		if got := addMonths(from, tt.months).Format(layoutDateOnly); got != tt.want {
+		moved, err := addMonths(from, tt.months)
+		if err != nil {
+			t.Fatalf("addMonths(%s, %d): %v", tt.from, tt.months, err)
+		}
+		if got := moved.Format(layoutDateOnly); got != tt.want {
 			t.Fatalf("addMonths(%s, %d) = %s, want %s", tt.from, tt.months, got, tt.want)
 		}
 	}
@@ -377,6 +389,69 @@ func TestIntervalLiteralTakesEveryUnitTheTruncationTakes(t *testing.T) {
 			}
 			if got.String != tt.want {
 				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
+
+// TestIntervalFieldsAreAppliedInPostgreSQLsOrder pins the order PostgreSQL
+// applies an interval's three fields in: months, then days, then the clock.
+// Applying each term as the literal wrote it gave a different day whenever a
+// month landed on a month end.
+func TestIntervalFieldsAreAppliedInPostgreSQLsOrder(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{name: "days written before the month", query: `SELECT TIMESTAMP '2021-01-30' + INTERVAL '2 days 1 month'`, want: "2021-03-02 00:00:00"},
+		{name: "the month written first", query: `SELECT TIMESTAMP '2021-01-30' + INTERVAL '1 month 2 days'`, want: "2021-03-02 00:00:00"},
+		{name: "subtracting both", query: `SELECT TIMESTAMP '2021-03-31' - INTERVAL '1 day 1 month'`, want: "2021-02-27 00:00:00"},
+		{name: "a fractional day beside a month", query: `SELECT TIMESTAMP '2021-01-31' + INTERVAL '1.5 days 1 month'`, want: "2021-03-01 12:00:00"},
+		{name: "hours beside a month", query: `SELECT TIMESTAMP '2021-01-31' + INTERVAL '3 hours 1 month'`, want: "2021-02-28 03:00:00"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.PostgreSQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
+
+// TestIntervalLiteralTakesPostgreSQLsAbbreviations pins the short spellings
+// PostgreSQL accepts for the coarse units, which are as much a part of the unit
+// vocabulary as the long ones.
+func TestIntervalLiteralTakesPostgreSQLsAbbreviations(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := map[string]string{
+		"1 dec":  "2030-02-28 13:45:59",
+		"1 decs": "2030-02-28 13:45:59",
+		"1 c":    "2120-02-29 13:45:59",
+		"1 cent": "2120-02-29 13:45:59",
+		"1 mil":  "3020-02-29 13:45:59",
+		"1 mils": "3020-02-29 13:45:59",
+		"1 y":    "2021-02-28 13:45:59",
+		"1 mon":  "2020-03-29 13:45:59",
+	}
+	for written, want := range tests {
+		query := "SELECT TIMESTAMP '2020-02-29 13:45:59' + INTERVAL '" + written + "'"
+		t.Run(written, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.PostgreSQL, query)
+			if err != nil {
+				t.Fatalf("%s: %v", query, err)
+			}
+			if got.String != want {
+				t.Fatalf("%s = %q, want %q", query, got.String, want)
 			}
 		})
 	}

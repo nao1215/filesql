@@ -582,3 +582,36 @@ func TestNoPostgreSQLHelperFallsThroughToSQLite(t *testing.T) {
 		})
 	}
 }
+
+// TestAnIntervalCarriesItsSignOnEachField pins how PostgreSQL writes a signed
+// interval. A single sign on the whole value printed a negative field twice
+// over, as "--1 year", and put a minus in front of each number of a clock.
+func TestAnIntervalCarriesItsSignOnEachField(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{name: "a negative year", query: `SELECT MAKE_INTERVAL(-1)`, want: "-1 years"},
+		{name: "every field negative", query: `SELECT MAKE_INTERVAL(-1, -2, 0, -3, -4, -5, -6)`, want: "-1 years -2 mons -3 days -04:05:06"},
+		{name: "mixed signs cancel into months", query: `SELECT MAKE_INTERVAL(1, -2, 0, 3, 0, 0, 0)`, want: "10 mons 3 days"},
+		{name: "a negative second", query: `SELECT MAKE_INTERVAL(0, 0, 0, 0, 0, 0, -1)`, want: "-00:00:01"},
+		{name: "a fraction that rounds up to a second", query: `SELECT MAKE_INTERVAL(0, 0, 0, 0, 0, 0, 0.9999999)`, want: "00:00:01"},
+		{name: "a span longer than nanoseconds hold", query: `SELECT AGE(TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '1720-01-01 00:00:00')`, want: "300 years"},
+		{name: "the end of the day rolls the date", query: `SELECT MAKE_TIMESTAMP(2020, 2, 29, 24, 0, 0)`, want: "2020-03-01 00:00:00"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.PostgreSQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}

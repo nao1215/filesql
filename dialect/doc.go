@@ -316,11 +316,14 @@
 // whose answer is one of those has nowhere to land. A comparison answers 1 or 0 rather than true or false; an
 // INTERVAL literal is translatable only as the right operand of date
 // arithmetic, and anywhere else it is refused with ErrUnsupportedSyntax. There
-// it takes every unit word EXTRACT and DATE_TRUNC take, down to the microsecond
-// and up to the millennium, and an amount with a decimal point for the units
-// whose length is fixed; a fraction of a month or of anything longer is refused
-// rather than spent as thirty-day months, which is a length nothing else here
-// assumes. an array
+// it takes every unit word EXTRACT and DATE_TRUNC take, in PostgreSQL's
+// abbreviations as well as in full, down to the microsecond and up to the
+// millennium, and an amount with a decimal point for the units whose length is
+// fixed; a fraction of a month or of anything longer is refused rather than
+// spent as thirty-day months, which is a length nothing else here assumes. The
+// fields are applied in the order PostgreSQL holds them, months and then days
+// and then the clock, which is not the order the literal wrote them in
+// whenever a month lands on a month end. an array
 // literal and the set-returning functions are refused for the same reason; and
 // the functions whose answer is one of those types -- PostgreSQL's
 // REGEXP_MATCH, SCALE and TRIM_SCALE, and BigQuery's ARRAY_AGG,

@@ -293,7 +293,22 @@ func fnPostgresMakeTimestamp(args []driver.Value) (driver.Value, error) {
 	if err != nil || clock == nil {
 		return clock, err
 	}
-	return fmt.Sprintf("%s %s", date, clock), nil
+	tm, ok := parseTime(fmt.Sprintf("%s 00:00:00", date))
+	if !ok {
+		return nil, nil
+	}
+	// MAKE_TIME reaches 24:00:00, which as a timestamp is the start of the next
+	// day rather than a twenty-fifth hour: PostgreSQL answers
+	// 2020-03-01 00:00:00 for MAKE_TIMESTAMP(2020, 2, 29, 24, 0, 0).
+	offset, ok := toMySQLTime(clock)
+	if !ok {
+		return nil, nil
+	}
+	tm = tm.Add(time.Duration(offset) * time.Microsecond)
+	if !withinDateRange(tm) {
+		return nil, nil
+	}
+	return formatDateTimeValue(tm), nil
 }
 
 // fnPostgresMakeInterval builds an interval out of its seven fields, written the
@@ -315,9 +330,8 @@ func fnPostgresMakeInterval(args []driver.Value) (driver.Value, error) {
 	seconds := fields[4]*3600 + fields[5]*60 + fields[6]
 	months += years * 12
 	days += weeks * 7
-	nanos := int64(math.Round(seconds * float64(time.Second)))
-	negative := months < 0 || (months == 0 && days < 0) || (months == 0 && days == 0 && nanos < 0)
-	return formatPostgresInterval(months/12, months%12, days, nanos, negative), nil
+	micros := int64(math.Round(seconds * 1e6))
+	return formatPostgresInterval(months/12, months%12, days, micros), nil
 }
 
 // fnPostgresAge implements age(a, b): the interval between two timestamps,
@@ -333,25 +347,27 @@ func fnPostgresAge(args []driver.Value) (driver.Value, error) {
 	if negative {
 		later, earlier = earlier, later
 	}
-	years, months, days, nanos := calendarDifference(earlier, later)
-	out := formatPostgresInterval(years, months, days, nanos, negative)
-	return out, nil
+	years, months, days, micros := calendarDifference(earlier, later)
+	if negative {
+		years, months, days, micros = -years, -months, -days, -micros
+	}
+	return formatPostgresInterval(years, months, days, micros), nil
 }
 
 // calendarDifference is the years, months, days and nanoseconds from earlier to
 // later, borrowing from the next field up the way a calendar subtraction does.
 //
-// The clock part is counted in nanoseconds rather than in whole seconds because
+// The clock part is counted in microseconds rather than in whole seconds because
 // a fraction that is dropped is not a small error: from 00:00:00.75 to the next
 // day's 00:00:00.25 is 23:59:59.5, and rounding the two ends down made it a
 // whole day.
-func calendarDifference(earlier, later time.Time) (years, months, days int, nanos int64) {
+func calendarDifference(earlier, later time.Time) (years, months, days int, micros int64) {
 	years = later.Year() - earlier.Year()
 	months = int(later.Month()) - int(earlier.Month())
 	days = later.Day() - earlier.Day()
-	nanos = clockNanos(later) - clockNanos(earlier)
-	if nanos < 0 {
-		nanos += int64(24 * time.Hour)
+	micros = (clockNanos(later) - clockNanos(earlier)) / int64(time.Microsecond)
+	if micros < 0 {
+		micros += int64(24 * time.Hour / time.Microsecond)
 		days--
 	}
 	for days < 0 {
@@ -367,29 +383,26 @@ func calendarDifference(earlier, later time.Time) (years, months, days int, nano
 		months += 12
 		years--
 	}
-	return years, months, days, nanos
+	return years, months, days, micros
 }
 
-// formatPostgresInterval writes an interval the way dialects.PostgreSQL prints one.
-func formatPostgresInterval(years, months, days int, nanos int64, negative bool) string {
-	sign := ""
-	signed := func(n int) int { return n }
-	if negative {
-		sign = "-"
-		signed = func(n int) int { return -n }
-	}
+// formatPostgresInterval writes an interval the way dialects.PostgreSQL prints
+// one. Each field carries its own sign, which is what lets a mixed-sign
+// interval read as "-1 mons +33 days" the way PostgreSQL writes it, and what
+// keeps a negative one from being signed twice.
+func formatPostgresInterval(years, months, days int, micros int64) string {
 	parts := make([]string, 0, 4)
 	if years != 0 {
-		parts = append(parts, fmt.Sprintf("%s%d year%s", sign, years, plural(signed(years))))
+		parts = append(parts, fmt.Sprintf("%d year%s", years, plural(years)))
 	}
 	if months != 0 {
-		parts = append(parts, fmt.Sprintf("%s%d mon%s", sign, months, plural(signed(months))))
+		parts = append(parts, fmt.Sprintf("%d mon%s", months, plural(months)))
 	}
 	if days != 0 {
-		parts = append(parts, fmt.Sprintf("%s%d day%s", sign, days, plural(signed(days))))
+		parts = append(parts, fmt.Sprintf("%d day%s", days, plural(days)))
 	}
-	if nanos != 0 {
-		parts = append(parts, sign+formatPostgresClock(nanos))
+	if micros != 0 {
+		parts = append(parts, formatPostgresClock(micros))
 	}
 	if len(parts) == 0 {
 		return "00:00:00"
@@ -399,15 +412,21 @@ func formatPostgresInterval(years, months, days int, nanos int64, negative bool)
 
 // formatPostgresClock writes the clock part of an interval, with the fraction
 // of a second PostgreSQL keeps and with its trailing zeros trimmed the way
-// PostgreSQL trims them.
-func formatPostgresClock(nanos int64) string {
-	seconds := nanos / int64(time.Second)
-	out := fmt.Sprintf("%02d:%02d:%02d", seconds/3600, seconds%3600/60, seconds%60)
-	micros := nanos % int64(time.Second) / int64(time.Microsecond)
-	if micros == 0 {
+// PostgreSQL trims them. A negative span carries the sign on the whole field
+// rather than on each of its numbers.
+func formatPostgresClock(micros int64) string {
+	sign := ""
+	if micros < 0 {
+		sign = "-"
+		micros = -micros
+	}
+	seconds := micros / 1e6
+	out := fmt.Sprintf("%s%02d:%02d:%02d", sign, seconds/3600, seconds%3600/60, seconds%60)
+	fraction := micros % 1e6
+	if fraction == 0 {
 		return out
 	}
-	return out + "." + strings.TrimRight(fmt.Sprintf("%06d", micros), "0")
+	return out + "." + strings.TrimRight(fmt.Sprintf("%06d", fraction), "0")
 }
 
 // plural follows dialects.PostgreSQL, which pluralizes on the signed value: a lone year

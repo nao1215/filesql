@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -273,12 +274,17 @@ func fnMySQLIntervalCompound(args []driver.Value) (driver.Value, error) {
 			months += n
 		default:
 			if tm, err = addInterval(tm, sign*n, field); err != nil {
+				if errors.Is(err, errDateOutOfRange) {
+					return nil, nil
+				}
 				return nil, err
 			}
 		}
 	}
 	if months != 0 {
-		tm = addMonths(tm, sign*months)
+		if tm, err = addMonths(tm, sign*months); err != nil {
+			return nil, nil //nolint:nilerr // an amount past any date is NULL, as MySQL answers
+		}
 	}
 	if !withinDateRange(tm) {
 		return nil, nil
@@ -377,7 +383,11 @@ func fnMySQLTimestamp(args []driver.Value) (driver.Value, error) {
 	if second := mysqlFractionDigits(args[1]); second > scale {
 		scale = second
 	}
-	return formatDateTimeValueScaled(tm.Add(time.Duration(micros)*time.Microsecond), scale), nil
+	moved := tm.Add(time.Duration(micros) * time.Microsecond)
+	if !withinDateRange(moved) {
+		return nil, nil
+	}
+	return formatDateTimeValueScaled(moved, scale), nil
 }
 
 // fnMySQLConvertTZ implements CONVERT_TZ(dt, from, to) for the fixed offsets
@@ -399,7 +409,11 @@ func fnMySQLConvertTZ(args []driver.Value) (driver.Value, error) {
 	if !ok1 || !ok2 {
 		return nil, nil
 	}
-	return formatDateTimeValueScaled(tm.Add(time.Duration(toOffset-fromOffset)*time.Second), mysqlFractionDigits(args[0])), nil
+	shifted := tm.Add(time.Duration(toOffset-fromOffset) * time.Second)
+	if !withinDateRange(shifted) {
+		return nil, nil
+	}
+	return formatDateTimeValueScaled(shifted, mysqlFractionDigits(args[0])), nil
 }
 
 // fixedZoneOffset reads a "+09:00" or "-05:30" zone as seconds east of UTC,
@@ -632,7 +646,11 @@ func addTime(sign int64) scalarFn {
 			if !parsed {
 				return nil, nil
 			}
-			return formatDateTimeValueMySQL(base.Add(time.Duration(delta) * time.Microsecond)), nil
+			moved := base.Add(time.Duration(delta) * time.Microsecond)
+			if !withinDateRange(moved) {
+				return nil, nil
+			}
+			return formatDateTimeValueMySQL(moved), nil
 		}
 		base, parsed := toMySQLTime(args[0])
 		if !parsed {
