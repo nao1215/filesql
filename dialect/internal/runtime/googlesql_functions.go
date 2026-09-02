@@ -5,6 +5,7 @@ import (
 	"crypto/sha1" //nolint:gosec // BigQuery's SHA1() is the function being implemented, not a security choice
 	"database/sql/driver"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -60,10 +61,11 @@ func googlesqlScalarFunctions() map[string]scalarSpec {
 		"edit_distance":          {-1, fnEditDistance},
 
 		// Bytes.
-		"from_hex":       {1, fnFromHex},
-		"to_base32":      {1, fnToBase32},
-		"from_base32":    {1, fnFromBase32},
-		"to_json_string": {1, fnToJSONString},
+		"from_hex":                     {1, fnFromHex},
+		"to_base32":                    {1, fnToBase32},
+		"from_base32":                  {1, fnFromBase32},
+		"to_json_string":               {1, fnToJSONString},
+		"safe_convert_bytes_to_string": {1, fnSafeConvertBytesToString},
 
 		// Arithmetic.
 		"ieee_divide": {2, fnIEEEDivide},
@@ -584,7 +586,10 @@ func fnToJSONString(args []driver.Value) (driver.Value, error) {
 	var value any
 	switch x := args[0].(type) {
 	case []byte:
-		value = string(x)
+		// JSON has no bytes. The encoding dialects.GoogleSQL documents for one is RFC
+		// 4648 base64, and encoding it as a string of its characters wrote a
+		// document a reader cannot get the bytes back out of.
+		value = base64.StdEncoding.EncodeToString(x)
 	default:
 		value = x
 	}
@@ -593,6 +598,18 @@ func fnToJSONString(args []driver.Value) (driver.Value, error) {
 		return nil, fmt.Errorf("dialect: TO_JSON_STRING: %w", err)
 	}
 	return string(out), nil
+}
+
+// fnSafeConvertBytesToString implements dialects.GoogleSQL
+// SAFE_CONVERT_BYTES_TO_STRING(value): the bytes as text, with every invalid
+// UTF-8 sequence replaced by U+FFFD. It is the one conversion from BYTES to
+// STRING that cannot fail, which is what separates it from a cast.
+func fnSafeConvertBytesToString(args []driver.Value) (driver.Value, error) {
+	s, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	return strings.ToValidUTF8(s, "\uFFFD"), nil
 }
 
 // --- arithmetic ---
@@ -770,9 +787,14 @@ func timeUnitDuration(unit string) (time.Duration, error) {
 // GoogleSQL prints -1 >> 0 as -1 as well, since its INT64 is signed too.
 func googlesqlShift(left bool) scalarFn {
 	return func(args []driver.Value) (driver.Value, error) {
-		v, ok := toInt(args[0])
-		if !ok {
-			return nil, nil
+		operand, isBytes := bytesOperand(args[0])
+		var v int64
+		if !isBytes {
+			var ok bool
+			v, ok = toInt(args[0])
+			if !ok {
+				return nil, nil
+			}
 		}
 		n, ok := toInt(args[1])
 		if !ok {
@@ -781,10 +803,16 @@ func googlesqlShift(left bool) scalarFn {
 		if n < 0 {
 			return nil, fmt.Errorf("dialect: a shift count is negative: %d", n)
 		}
+		if isBytes {
+			// A BYTES operand keeps its length: the bits leaving one end are
+			// discarded and zeros come in at the other, so a count at or past
+			// the bit length answers that many zero bytes.
+			return bytesShift(operand, uint64(n), left), nil
+		}
 		if n >= 64 {
 			return int64(0), nil
 		}
-		u := uint64(v) //nolint:gosec // the shift is defined on the bits, which is what the reinterpretation keeps
+		u := uint64(v)
 		if left {
 			u <<= uint64(n)
 		} else {

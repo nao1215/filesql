@@ -31,7 +31,16 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 	switch t.Kind {
 	case token.Number:
 		p.pos++
-		return &ast.Literal{Kind: numberKind(t.Text), Value: t.Text, Span: span}, nil
+		kind := numberKind(t.Text)
+		if kind == ast.LitHex && p.dialect == dialects.MySQL && strings.HasPrefix(t.Text, "0X") {
+			// MySQL's hexadecimal prefix is lowercase and case sensitive: it
+			// reads 0X41 as an identifier, not as a literal, so answering the
+			// bytes for one would answer for a name the caller may have meant.
+			// The quoted spellings x'41' and X'41' are both literals.
+			return nil, p.unsupportedf(
+				"0X is not a hexadecimal literal in MySQL; its prefix is the lowercase 0x, or write x'..'")
+		}
+		return &ast.Literal{Kind: kind, Value: t.Text, Span: span}, nil
 
 	case token.String:
 		p.pos++
@@ -39,6 +48,24 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 
 	case token.Blob:
 		p.pos++
+		if p.dialect == dialects.MySQL {
+			// MySQL writes one hexadecimal literal three ways -- 0x41, x'41'
+			// and X'41' -- and reads it as a number in an arithmetic context
+			// and as bytes elsewhere. The lexer reads the quoted forms the way
+			// SQLite does, as a blob, so classifying them here as the literal
+			// MySQL means is what keeps the three spellings on one rule: the
+			// third was refused for that ambiguity while the other two were
+			// answered as bytes.
+			if len(t.Text)%2 == 1 {
+				// MySQL reads a quoted hexadecimal literal in whole bytes:
+				// "for X'val', val must contain an even number of digits". The
+				// 0x spelling has no such rule and pads on the left instead.
+				return nil, p.unsupportedf(
+					"a quoted hexadecimal literal takes an even number of digits in MySQL; write 0x%s for the byte",
+					t.Text)
+			}
+			return &ast.Literal{Kind: ast.LitHex, Value: hexLiteralPrefix + t.Text, Span: span}, nil
+		}
 		return &ast.Literal{Kind: ast.LitBlob, Value: t.Text, Span: span}, nil
 
 	case token.Placeholder:
@@ -875,3 +902,7 @@ func (p *Parser) startsSelect() bool {
 	// A parenthesized query expression, as in "((SELECT 1) UNION ...)".
 	return p.atOp("(") && p.peek(1).IsWord("SELECT")
 }
+
+// hexLiteralPrefix is what a hexadecimal literal is spelled with when the
+// quoted form is rewritten into the prefixed one.
+const hexLiteralPrefix = "0x"

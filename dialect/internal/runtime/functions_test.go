@@ -1985,6 +1985,21 @@ func TestFunctionsFollowTheSourceDialect(t *testing.T) {
 		{name: "googlesql format prints an integer literal", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%T', 3)`, want: "3"},
 		{name: "googlesql format prints null", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%t', NULL)`, want: "NULL"},
 		{name: "googlesql format prints a null literal", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%T', NULL)`, want: "NULL"},
+		// A BYTES value and a STRING value spelling the same characters have
+		// different literals, which is what %T exists to tell apart. The wants
+		// were derived from the ZetaSQL documentation of %t and %T, whose row
+		// for BYTES is "unquoted escaped bytes" and "quoted bytes literal".
+		{name: "googlesql format prints a bytes literal", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%T', b'ab')`, want: `b"ab"`},
+		{name: "googlesql format prints bytes bare", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%t', b'ab')`, want: "ab"},
+		{name: "googlesql format escapes a byte that is not printable", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%T', FROM_HEX('0001'))`, want: `b"\x00\x01"`},
+		{name: "googlesql format escapes a byte above ASCII", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%T', FROM_HEX('ff'))`, want: `b"\xff"`},
+		{name: "googlesql format escapes a quote in bytes", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%T', FROM_HEX('612262'))`, want: `b"a\"b"`},
+		{name: "googlesql format escapes a backslash in bytes", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%T', FROM_HEX('5c'))`, want: `b"\\"`},
+		{name: "googlesql format escapes bytes bare", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%t', FROM_HEX('0001'))`, want: `\x00\x01`},
+		{name: "googlesql format prints an empty bytes literal", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%T', b'')`, want: `b""`},
+		{name: "googlesql format escapes a newline in bytes", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%T', FROM_HEX('0a'))`, want: `b"\n"`},
+		{name: "googlesql format escapes a carriage return in bytes", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%T', FROM_HEX('0d'))`, want: `b"\r"`},
+		{name: "googlesql format escapes a tab in bytes", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%T', FROM_HEX('09'))`, want: `b"\t"`},
 		{name: "googlesql format mixes its verbs with printf", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%s=%T', 'a', 'b')`, want: `a="b"`},
 		{name: "googlesql format keeps a literal percent", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('100%% %t', 'x')`, want: "100% x"},
 		{name: "googlesql format keeps the printf verbs", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%05.2f', 3.14159)`, want: "03.14"},

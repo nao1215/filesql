@@ -485,19 +485,29 @@ func roundToInt64(v float64) int64 {
 // only reading dialects.SQLite has for them.
 func mysqlShift(left bool) scalarFn {
 	return func(args []driver.Value) (driver.Value, error) {
-		v, ok := toInt(args[0])
-		if !ok {
-			return nil, nil
+		binary, isBinary := bytesOperand(args[0])
+		var v int64
+		if !isBinary {
+			var ok bool
+			v, ok = toInt(args[0])
+			if !ok {
+				return nil, nil
+			}
 		}
 		n, ok := toInt(args[1])
 		if !ok {
 			return nil, nil
 		}
 		count := uint64(n) //nolint:gosec // dialects.MySQL reads the count as unsigned, so a negative one is a count past the width
+		if isBinary {
+			// A binary string keeps its length, and the count is unsigned here
+			// too, so a negative one shifts past the width and clears it.
+			return bytesShift(binary, count, left), nil
+		}
 		if count >= 64 {
 			return int64(0), nil
 		}
-		u := uint64(v) //nolint:gosec // the shift is defined on the bits, which is what the reinterpretation keeps
+		u := uint64(v)
 		if left {
 			u <<= count
 		} else {
@@ -613,6 +623,10 @@ func toUint64Bits(v driver.Value) (uint64, bool) {
 		if n, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64); err == nil {
 			return n, true
 		}
+		// A binary string beside a number is read as a number the way a string
+		// is, which for bytes that spell no number is zero: MySQL answers 1 for
+		// a binary string "a" ORed with 1.
+		return 0, true
 	}
 	n, ok := toInt(v)
 	if !ok {

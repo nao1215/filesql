@@ -151,8 +151,23 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-21_not_equal_untouched", "SELECT a != b FROM t", `SELECT a != b FROM t`},
 		{"M-21_bitxor", "SELECT a ^ b FROM t", `SELECT mysql_bit_xor(a, b) AS "a ^ b" FROM t`},
 		{"M-21_bitxor_literals", "SELECT 5 ^ 3", `SELECT mysql_bit_xor(5, 3) AS "5 ^ 3"`},
-		{"M-21_bitand_untouched", "SELECT a & b FROM t", "SELECT a & b FROM t"},
-		{"M-21_bitor_untouched", "SELECT a | b FROM t", "SELECT a | b FROM t"},
+		{"M-21_bitand", "SELECT a & b FROM t", `SELECT mysql_bit_and(a, b) AS "a & b" FROM t`},
+		{"M-21_bitor", "SELECT a | b FROM t", `SELECT mysql_bit_or(a, b) AS "a | b" FROM t`},
+		{"M-21_bitnot", "SELECT ~a FROM t", `SELECT mysql_bit_not(a) AS "~a" FROM t`},
+
+		// M-23: a hexadecimal literal is the number its digits spell beside an
+		// arithmetic or a bitwise operator, and the bytes they name everywhere
+		// else. Both of MySQL's spellings are the one literal.
+		{"M-23_hex_literal", "SELECT 0x41", `SELECT x'41' AS "0x41"`},
+		{"M-23_hex_literal_quoted_spelling", "SELECT x'41'", "SELECT x'41'"},
+		{"M-23_hex_literal_odd_digits", "SELECT 0x4", `SELECT x'04' AS "0x4"`},
+		{"M-23_hex_literal_in_arithmetic", "SELECT 1 + 0x10", `SELECT 1 + 16 AS "1 + 0x10"`},
+		{"M-23_hex_literal_quoted_in_arithmetic", "SELECT 1 + x'10'", `SELECT 1 + 16 AS "1 + x'10'"`},
+		{"M-23_hex_literal_negated", "SELECT -0x10", `SELECT -16 AS "-0x10"`},
+		{"M-23_hex_literal_in_a_shift", "SELECT x'10' << 1", `SELECT mysql_shift_left(16, 1) AS "x'10' << 1"`},
+		{"M-23_hex_literal_cast_to_a_number", "SELECT CAST(x'41' AS UNSIGNED)", `SELECT mysql_cast(65, 'UNSIGNED') AS "CAST(x'41' AS UNSIGNED)"`},
+		{"M-23_hex_literal_converted_to_a_number", "SELECT CONVERT(x'41', SIGNED)", `SELECT mysql_cast(65, 'SIGNED') AS "CONVERT(x'41', SIGNED)"`},
+		{"M-23_hex_literal_cast_to_text_is_bytes", "SELECT CAST(x'41' AS CHAR)", `SELECT mysql_cast(x'41', 'CHAR') AS "CAST(x'41' AS CHAR)"`},
 		{"M-29_shifts", "SELECT a << 1, b >> 2 FROM t", `SELECT mysql_shift_left(a, 1) AS "a << 1", mysql_shift_right(b, 2) AS "b >> 2" FROM t`},
 		// The positions a rewrite has to survive: a WHERE clause, a CASE, a
 		// window's PARTITION BY, and a GROUP BY, where an operand that stopped at
@@ -229,14 +244,18 @@ func TestMySQLTranslateUnsupported(t *testing.T) {
 		// saying so.
 		{"M-24_format_with_locale", "SELECT FORMAT(x, 2, 'de_DE') FROM t"},
 
-		// M-23: 0x41 is the string "A" where MySQL prints a value and the number
-		// 65 where it does arithmetic. SQLite has only the number, and which
-		// reading applies is not something the query text says, so the
-		// literal is refused rather than translated into one of the two.
-		{"M-23_hex_literal", "SELECT 0x41"},
+		// M-23: a hexadecimal literal past 64 bits has no number to be read as,
+		// and MySQL answers 0 for one rather than the digits it was written
+		// with, which is not an answer worth reproducing.
+		{"M-23_hex_literal_past_64_bits_in_arithmetic", "SELECT 0xffffffffffffffffff + 0"},
+		// MySQL's 0x prefix is case sensitive: it reads 0X41 as an identifier
+		// rather than as a literal, so answering the bytes for one would answer
+		// for a name the caller may have meant.
 		{"M-23_hex_literal_uppercase_prefix", "SELECT 0X41"},
-		{"M-23_hex_literal_in_arithmetic", "SELECT 1 + 0x10"},
-		{"M-23_hex_literal_in_comparison", "SELECT * FROM t WHERE s = 0x616263"},
+		// MySQL reads a quoted hexadecimal literal in whole bytes, where the
+		// 0x spelling pads an odd digit count on the left.
+		{"M-23_quoted_hex_literal_odd_digits", "SELECT x'4'"},
+		{"M-23_hex_literal_uppercase_prefix_in_arithmetic", "SELECT 0X41 + 0"},
 
 		// M-5: an INTERVAL literal outside date arithmetic has no SQLite form,
 		// and passed through it reported a syntax error naming the amount.

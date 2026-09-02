@@ -62,7 +62,53 @@ func TestCastSemantics(t *testing.T) {
 		{"postgresql valid date", dialects.PostgreSQL, `SELECT '2026-01-15'::date`, "2026-01-15", false},
 		{"postgresql null stays null", dialects.PostgreSQL, `SELECT NULL::integer`, "", true},
 
+		// A cast from BYTES to STRING reads the bytes as UTF-8, and GoogleSQL
+		// raises for a sequence that is not. The other two dialects do not,
+		// which is why the check is asked of one dialect only.
+		{"googlesql casts bytes that are utf-8", dialects.GoogleSQL, `SELECT CAST(FROM_HEX('c2a9') AS STRING)`, "\u00a9", false},
+		{"googlesql casts empty bytes", dialects.GoogleSQL, `SELECT CAST(b'' AS STRING)`, "", false},
+		{"mysql keeps bytes that are not utf-8", dialects.MySQL, `SELECT HEX(CAST(UNHEX('61ff62') AS CHAR))`, "61FF62", false},
+		{"postgresql keeps bytes that are not utf-8", dialects.PostgreSQL, `SELECT length(CAST(decode('61ff62', 'hex') AS text))`, "3", false},
+
+		// A bit-string literal names bits, not the text of the digits a caller
+		// wrote, and PostgreSQL reads those bits as a base-2 number on the way
+		// to an integer. Every want was read from postgres:17.
+		{"postgresql reads a bit string as base two", dialects.PostgreSQL, `SELECT B'1010'::int`, "10", false},
+		{"postgresql reads a hexadecimal bit string", dialects.PostgreSQL, `SELECT X'41'::int`, "65", false},
+		{"postgresql reads a bit string as a bigint", dialects.PostgreSQL, `SELECT B'1010'::bigint`, "10", false},
+		// An integer target holds a fixed width, and a bit string that fills a
+		// signed one is its negative value.
+		{"postgresql reads a full-width integer as negative", dialects.PostgreSQL, `SELECT B'` + "1" + strings.Repeat("0", 31) + `'::int`, "-2147483648", false},
+		{"postgresql reads a full-width bigint as negative", dialects.PostgreSQL, `SELECT B'` + strings.Repeat("1", 64) + `'::bigint`, "-1", false},
+		{"postgresql reads 32 ones as an integer", dialects.PostgreSQL, `SELECT B'` + strings.Repeat("1", 32) + `'::int`, "-1", false},
+		{"postgresql writes a bit string as its digits", dialects.PostgreSQL, `SELECT X'41'::text`, "01000001", false},
+		{"postgresql keeps a binary bit string as its digits", dialects.PostgreSQL, `SELECT B'1010'::text`, "1010", false},
+		{"postgresql counts the bits of a bit string", dialects.PostgreSQL, `SELECT length(X'41')`, "8", false},
+		{"postgresql concatenates two bit strings", dialects.PostgreSQL, `SELECT X'41' || B'1'`, "010000011", false},
+		{"postgresql compares two spellings of one bit string", dialects.PostgreSQL, `SELECT (X'41' = B'01000001')`, "1", false},
+		{"postgresql reads a bit string of nothing", dialects.PostgreSQL, `SELECT B''::text`, "", false},
+		{"postgresql reads a bit string of nothing as zero", dialects.PostgreSQL, `SELECT B''::int`, "0", false},
+		{"postgresql reads a bit string of nothing as a zero bigint", dialects.PostgreSQL, `SELECT B''::bigint`, "0", false},
+		{"postgresql reads a bit string in lower case", dialects.PostgreSQL, `SELECT x'ab'::text`, "10101011", false},
+		{"postgresql reads a bit string written b in lower case", dialects.PostgreSQL, `SELECT b'11'::int`, "3", false},
+
+		// A cast to bytea reads the two input formats PostgreSQL defines for
+		// one, so that building a value from a literal and building it with
+		// decode() answer the same bytes. Every want was read from postgres:17.
+		{"postgresql bytea reads the hex format", dialects.PostgreSQL, `SELECT encode('\x4142'::bytea, 'hex')`, "4142", false},
+		{"postgresql bytea allows space between hex pairs", dialects.PostgreSQL, `SELECT encode('\x41 42'::bytea, 'hex')`, "4142", false},
+		{"postgresql bytea allows more than one space", dialects.PostgreSQL, `SELECT encode('\x4142  4344'::bytea, 'hex')`, "41424344", false},
+		{"postgresql bytea allows space before the first pair", dialects.PostgreSQL, `SELECT encode('\x 41'::bytea, 'hex')`, "41", false},
+		{"postgresql bytea reads hex in either case", dialects.PostgreSQL, `SELECT encode('\xAbCd'::bytea, 'hex')`, "abcd", false},
+		{"postgresql bytea reads an octal escape", dialects.PostgreSQL, `SELECT encode('a\102b'::bytea, 'hex')`, "614262", false},
+		{"postgresql bytea reads a doubled backslash", dialects.PostgreSQL, `SELECT encode('a\\b'::bytea, 'hex')`, "615c62", false},
+		{"postgresql bytea keeps a string with no escape", dialects.PostgreSQL, `SELECT encode('AB'::bytea, 'hex')`, "4142", false},
+		{"postgresql bytea counts the bytes it decoded", dialects.PostgreSQL, `SELECT octet_length('\x4142'::bytea)`, "2", false},
+		{"postgresql bytea reads nothing", dialects.PostgreSQL, `SELECT encode('\x'::bytea, 'hex')`, "", false},
+		{"postgresql bytea agrees with decode", dialects.PostgreSQL, `SELECT ('\x4142'::bytea = decode('4142', 'hex'))`, "1", false},
+
 		// SAFE_CAST answers NULL where CAST would raise, which is its purpose.
+		{"safe_cast bytes that are not utf-8", dialects.GoogleSQL, `SELECT SAFE_CAST(FROM_HEX('61ff62') AS STRING)`, "", true},
 		{"safe_cast invalid int64", dialects.GoogleSQL, `SELECT SAFE_CAST('abc' AS INT64)`, "", true},
 		{"safe_cast valid int64", dialects.GoogleSQL, `SELECT SAFE_CAST('42' AS INT64)`, "42", false},
 		{"safe_cast invalid float64", dialects.GoogleSQL, `SELECT SAFE_CAST('abc' AS FLOAT64)`, "", true},
@@ -206,6 +252,25 @@ func TestCastTargetsMatchTheEngine(t *testing.T) {
 		{dialects.PostgreSQL, `SELECT CAST('{1,2}' AS int[])`},
 		{dialects.PostgreSQL, `SELECT '{1,2,3}'::int[]`},
 		{dialects.MySQL, `SELECT CONVERT('abc' USING latin1)`},
+		{dialects.GoogleSQL, `SELECT CAST(FROM_HEX('61ff62') AS STRING)`},
+		{dialects.GoogleSQL, `SELECT CAST(FROM_HEX('ff') AS STRING)`},
+		{dialects.PostgreSQL, `SELECT '\x414'::bytea`},
+		{dialects.PostgreSQL, `SELECT '\X4142'::bytea`},
+		{dialects.PostgreSQL, `SELECT 'a\x'::bytea`},
+		{dialects.PostgreSQL, `SELECT 'a\9'::bytea`},
+		// PostgreSQL casts a bit string to an integer and to nothing else
+		// numeric, and a bit string past 64 bits does not fit in one.
+		{dialects.PostgreSQL, `SELECT B'1010'::numeric`},
+		{dialects.PostgreSQL, `SELECT B'1010'::smallint`},
+		{dialects.PostgreSQL, `SELECT B'1010'::float8`},
+		{dialects.PostgreSQL, `SELECT B'` + strings.Repeat("1", 65) + `'::int`},
+		{dialects.PostgreSQL, `SELECT B'` + strings.Repeat("1", 33) + `'::int`},
+		{dialects.PostgreSQL, `SELECT B'` + strings.Repeat("1", 65) + `'::bigint`},
+		// Whitespace in the hexadecimal form of a bytea is allowed between
+		// pairs and nowhere else.
+		{dialects.PostgreSQL, `SELECT '\x4 142'::bytea`},
+		{dialects.PostgreSQL, `SELECT '\x412 3'::bytea`},
+		{dialects.PostgreSQL, `SELECT B'1012'`},
 	}
 	for _, tt := range refused {
 		if _, err := runDialect(t, db, tt.dialect, tt.query); err == nil {
@@ -472,29 +537,35 @@ func TestCastStringPastTheFloatRange(t *testing.T) {
 }
 
 // TestCastToBlob covers the BLOB target, which every dialect spells differently
-// but which all of them mean as "the value's bytes".
+// but which all of them mean as "the value's bytes" -- except PostgreSQL, whose
+// bytea has two input formats a string is read in.
 func TestCastToBlob(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name  string
-		value driver.Value
-		want  string
-		null  bool
+		name    string
+		dialect dialects.Dialect
+		value   driver.Value
+		want    string
+		null    bool
 	}{
-		{name: "bytes pass through", value: []byte("abc"), want: "abc"},
-		{name: "a string becomes its bytes", value: "abc", want: "abc"},
-		{name: "a number becomes its digits", value: int64(255), want: "255"},
-		{name: "a time becomes its written form", value: time.Date(2026, 7, 28, 13, 5, 9, 0, time.UTC), want: "2026-07-28 13:05:09"},
-		{name: "a NULL has no bytes", value: nil, null: true},
+		{name: "bytes pass through", dialect: dialects.MySQL, value: []byte("abc"), want: "abc"},
+		{name: "a string becomes its bytes", dialect: dialects.MySQL, value: "abc", want: "abc"},
+		{name: "a number becomes its digits", dialect: dialects.MySQL, value: int64(255), want: "255"},
+		{name: "a time becomes its written form", dialect: dialects.MySQL, value: time.Date(2026, 7, 28, 13, 5, 9, 0, time.UTC), want: "2026-07-28 13:05:09"},
+		{name: "a NULL has no bytes", dialect: dialects.MySQL, value: nil, null: true},
+		{name: "googlesql keeps a backslash", dialect: dialects.GoogleSQL, value: `\x4142`, want: `\x4142`},
+		{name: "postgresql reads the hex format", dialect: dialects.PostgreSQL, value: `\x4142`, want: "AB"},
+		{name: "postgresql reads an octal escape", dialect: dialects.PostgreSQL, value: `a\102b`, want: "aBb"},
+		{name: "postgresql keeps a string with no escape", dialect: dialects.PostgreSQL, value: "abc", want: "abc"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := castToBlob(tt.value)
+			got, err := castToBlob(tt.dialect, tt.value)
 			if err != nil {
-				t.Fatalf("castToBlob(%v) error: %v", tt.value, err)
+				t.Fatalf("castToBlob(%v, %v) error: %v", tt.dialect, tt.value, err)
 			}
 			if tt.null {
 				if got != nil {

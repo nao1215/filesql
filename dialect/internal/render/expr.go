@@ -241,7 +241,11 @@ func (w *writer) literal(n *ast.Literal) error {
 		// write it mean by it.
 		w.word(n.Value)
 	case ast.LitBit:
-		return unsupported(n.Span, "a bit-string literal")
+		// A bit string is written as the text of its digits, which is what
+		// PostgreSQL compares and concatenates. MySQL and GoogleSQL refuse the
+		// literal while lowering -- each reads it as a number in one place and
+		// as bytes in another -- so one that reaches here is PostgreSQL's.
+		w.word(QuoteString(n.Value))
 	}
 	return nil
 }

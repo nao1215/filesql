@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nao1215/filesql/dialect/internal/dialects"
 )
@@ -212,6 +213,15 @@ func castValue(d dialects.Dialect, target string, v driver.Value) (driver.Value,
 	case castDecimal:
 		return castToDecimal(d, v, params, strict)
 	case castText:
+		if d == dialects.GoogleSQL {
+			// GoogleSQL reads the bytes as UTF-8 and raises when they are not,
+			// which is what leaves SAFE_CONVERT_BYTES_TO_STRING -- whose whole
+			// difference from this cast is that it replaces instead -- a
+			// function worth having.
+			if b, isBytes := bytesOperand(v); isBytes && !utf8.Valid(b) {
+				return nil, fmt.Errorf("%w: bytes are not valid UTF-8", ErrInvalidCast)
+			}
+		}
 		return castToText(v, params)
 	case castBool:
 		return castToBool(d, v, strict)
@@ -228,7 +238,7 @@ func castValue(d dialects.Dialect, target string, v driver.Value) (driver.Value,
 	case castJSON:
 		return castToJSON(v)
 	case castBlob:
-		return castToBlob(v)
+		return castToBlob(d, v)
 	default:
 		return v, nil
 	}
@@ -784,7 +794,7 @@ func castToJSON(v driver.Value) (driver.Value, error) {
 	return s, nil
 }
 
-func castToBlob(v driver.Value) (driver.Value, error) {
+func castToBlob(d dialects.Dialect, v driver.Value) (driver.Value, error) {
 	switch x := v.(type) {
 	case []byte:
 		return x, nil
@@ -794,6 +804,13 @@ func castToBlob(v driver.Value) (driver.Value, error) {
 	s, ok := toString(v)
 	if !ok {
 		return nil, nil
+	}
+	if d == dialects.PostgreSQL {
+		// PostgreSQL's bytea has two input formats, and reading the text as
+		// its own bytes made a hexadecimal literal the characters a caller
+		// wrote rather than the bytes they named. The other dialects have no
+		// such syntax: their literal is already the bytes.
+		return decodeBytea(s)
 	}
 	return []byte(s), nil
 }

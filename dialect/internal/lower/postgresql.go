@@ -428,11 +428,80 @@ func (r *postgresRules) Literal(lit *ast.Literal) (ast.Expr, error) {
 	switch lit.Kind {
 	case ast.LitBit:
 		// PostgreSQL's B'1010' is a bit string, which it compares and
-		// concatenates as text rather than as a number.
-		return text(lit.Value, lit.Span), nil
+		// concatenates as the text of its digits rather than as a number.
+		if !onlyBinaryDigits(lit.Value) {
+			return nil, unsupported(lit.Span, `a bit-string literal holds only "0" and "1"`)
+		}
+		return lit, nil
+	case ast.LitBlob:
+		// PostgreSQL has no blob literal: X'41' is the hexadecimal spelling of
+		// a bit string, and it names the same value as B'01000001'. The lexer
+		// reads the form the way SQLite does, for every dialect, so the
+		// expansion happens here rather than there.
+		return &ast.Literal{Kind: ast.LitBit, Value: binaryDigits(lit.Value), Span: lit.Span}, nil
 	default:
 		return lit, nil
 	}
+}
+
+// onlyBinaryDigits reports whether s is written the way a bit string is.
+func onlyBinaryDigits(s string) bool {
+	for i := range len(s) {
+		if s[i] != '0' && s[i] != '1' {
+			return false
+		}
+	}
+	return true
+}
+
+// binaryDigits expands hexadecimal digits into the four bits each of them
+// stands for, which is what PostgreSQL says X'..' means.
+func binaryDigits(hexDigits string) string {
+	var out strings.Builder
+	out.Grow(len(hexDigits) * 4)
+	for i := range len(hexDigits) {
+		n, err := strconv.ParseUint(hexDigits[i:i+1], 16, 8)
+		if err != nil {
+			// The lexer refuses a blob literal holding anything else, so this
+			// is unreachable; writing the digit through keeps the length right
+			// should it ever be reached.
+			out.WriteByte(hexDigits[i])
+			continue
+		}
+		for bit := 3; bit >= 0; bit-- {
+			out.WriteByte('0' + byte((n>>bit)&1))
+		}
+	}
+	return out.String()
+}
+
+// bitStringCast folds a cast whose operand is a bit-string literal. PostgreSQL
+// reads the bits as a base-2 number on the way to an integer and refuses every
+// other numeric type, and nothing downstream can tell a bit string from a
+// string of the same digits, so the reading has to happen while the literal is
+// still one.
+func bitStringCast(c *ast.CastExpr, lit *ast.Literal) (ast.Expr, error) {
+	switch width, isInteger := bitStringIntegerTargets[c.Type.Name]; {
+	case isInteger && lit.Value == "":
+		// A bit string of no bits is zero as an integer, which is what
+		// PostgreSQL answers where ParseUint would have called it out of range.
+		return number(0, c.Span), nil
+	case isInteger:
+		n, err := strconv.ParseUint(lit.Value, 2, width)
+		if err != nil {
+			return nil, unsupported(c.Span,
+				"a bit string of %d bits is out of range for %s", len(lit.Value), c.Type.Written)
+		}
+		if width == 32 {
+			// The target holds 32 bits, and the top one is its sign.
+			return number(int64(int32(n)), c.Span), nil //nolint:gosec // ParseUint has held the value to 32 bits
+		}
+		return number(int64(n), c.Span), nil //nolint:gosec // the bits are the value; a wider one was refused above
+	case bitStringRefusedTargets[c.Type.Name]:
+		return nil, unsupported(c.Span,
+			"PostgreSQL cannot cast a bit string to %s; cast it to an integer first", c.Type.Written)
+	}
+	return nil, nil
 }
 
 func (r *postgresRules) TypedLiteral(lit *ast.TypedLiteral) (ast.Expr, error) {
@@ -444,6 +513,12 @@ func (r *postgresRules) TypedLiteral(lit *ast.TypedLiteral) (ast.Expr, error) {
 }
 
 func (r *postgresRules) Cast(c *ast.CastExpr) (ast.Expr, error) {
+	if lit, ok := c.Expr.(*ast.Literal); ok && lit.Kind == ast.LitBit {
+		folded, err := bitStringCast(c, lit)
+		if err != nil || folded != nil {
+			return folded, err
+		}
+	}
 	return castHelper(dialects.PostgreSQL, c, "postgresql_cast")
 }
 

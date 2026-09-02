@@ -25,6 +25,12 @@ func (r *googleRules) Binary(b *ast.BinaryExpr) (ast.Expr, error) {
 		return helper("googlesql_mod", b.Span, b.Left, b.Right), nil
 	case ast.BitXor:
 		return helper("googlesql_bit_xor", b.Span, b.Left, b.Right), nil
+	case ast.BitAnd:
+		// GoogleSQL applies these bytewise to a BYTES operand, where SQLite
+		// reads a BLOB in an arithmetic context as the integer 0.
+		return helper("googlesql_bit_and", b.Span, b.Left, b.Right), nil
+	case ast.BitOr:
+		return helper("googlesql_bit_or", b.Span, b.Left, b.Right), nil
 	case ast.ShiftLeft:
 		// BigQuery shifts an unsigned value where SQLite shifts a signed one, so
 		// ">>" brought the sign bit down instead of zeros, and it refuses a
@@ -45,6 +51,15 @@ func (r *googleRules) Binary(b *ast.BinaryExpr) (ast.Expr, error) {
 		}
 	}
 	return b, nil
+}
+
+func (r *googleRules) Unary(u *ast.UnaryExpr) (ast.Expr, error) {
+	if u.Op == ast.UnaryBitNot {
+		// GoogleSQL complements a BYTES operand byte by byte, where SQLite
+		// reads a BLOB as the integer 0 and answers the complement of that.
+		return helper("googlesql_bit_not", u.Span, u.Expr), nil
+	}
+	return u, nil
 }
 
 func (r *googleRules) Literal(lit *ast.Literal) (ast.Expr, error) {
@@ -235,6 +250,8 @@ func (r *googleRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		return paren(binary(call.Args[0], ast.JSONGet, call.Args[1], call.Span)), nil
 	case "BYTE_LENGTH":
 		return rename(call, "octet_length"), nil
+	case "SAFE_CONVERT_BYTES_TO_STRING":
+		return rename(call, "safe_convert_bytes_to_string"), nil
 	case fnNameCharLength, fnNameCharLen:
 		return rename(call, "length"), nil
 	case fnNameStringAgg:
