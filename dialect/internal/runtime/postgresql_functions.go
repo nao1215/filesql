@@ -330,8 +330,16 @@ func fnPostgresMakeInterval(args []driver.Value) (driver.Value, error) {
 	seconds := fields[4]*3600 + fields[5]*60 + fields[6]
 	months += years * 12
 	days += weeks * 7
-	micros := int64(math.Round(seconds * 1e6))
-	return formatPostgresInterval(months/12, months%12, days, micros), nil
+	// The clock is held as microseconds, so a seconds field whose product does
+	// not fit is refused rather than converted: int64(float64) is
+	// implementation-defined outside the range and answered MinInt64 here,
+	// which printed as a nonsense span. PostgreSQL raises "interval out of
+	// range" for the same input.
+	scaled := math.Round(seconds * 1e6)
+	if math.IsNaN(scaled) || math.Abs(scaled) > math.MaxInt64 {
+		return nil, errors.New("dialect: MAKE_INTERVAL: the interval is out of range")
+	}
+	return formatPostgresInterval(months/12, months%12, days, int64(scaled)), nil
 }
 
 // fnPostgresAge implements age(a, b): the interval between two timestamps,
@@ -415,14 +423,16 @@ func formatPostgresInterval(years, months, days int, micros int64) string {
 // PostgreSQL trims them. A negative span carries the sign on the whole field
 // rather than on each of its numbers.
 func formatPostgresClock(micros int64) string {
+	// The seconds and the fraction are split before the sign is taken, because
+	// negating the smallest int64 overflows back to itself and printed every
+	// field of the clock negative; neither half of it is that large.
 	sign := ""
+	seconds, fraction := micros/1e6, micros%1e6
 	if micros < 0 {
 		sign = "-"
-		micros = -micros
+		seconds, fraction = -seconds, -fraction
 	}
-	seconds := micros / 1e6
 	out := fmt.Sprintf("%s%02d:%02d:%02d", sign, seconds/3600, seconds%3600/60, seconds%60)
-	fraction := micros % 1e6
 	if fraction == 0 {
 		return out
 	}

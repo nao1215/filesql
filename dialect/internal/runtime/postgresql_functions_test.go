@@ -583,6 +583,27 @@ func TestNoPostgreSQLHelperFallsThroughToSQLite(t *testing.T) {
 	}
 }
 
+// TestAnIntervalOutOfRangeIsRefused pins the seconds field an interval's clock
+// cannot hold. int64(float64) is implementation-defined outside the range and
+// answered the smallest int64 here, which printed as a span with every field
+// negative; PostgreSQL raises "interval out of range" for the same input.
+func TestAnIntervalOutOfRangeIsRefused(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	for _, query := range []string{
+		`SELECT MAKE_INTERVAL(0, 0, 0, 0, 0, 0, 1e300)`,
+		`SELECT MAKE_INTERVAL(0, 0, 0, 0, 0, 0, -1e300)`,
+	} {
+		t.Run(query, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.PostgreSQL, query)
+			if err == nil {
+				t.Fatalf("%s = %q, want an error", query, got.String)
+			}
+		})
+	}
+}
+
 // TestAnIntervalCarriesItsSignOnEachField pins how PostgreSQL writes a signed
 // interval. A single sign on the whole value printed a negative field twice
 // over, as "--1 year", and put a minus in front of each number of a clock.
@@ -602,6 +623,7 @@ func TestAnIntervalCarriesItsSignOnEachField(t *testing.T) {
 		{name: "a fraction that rounds up to a second", query: `SELECT MAKE_INTERVAL(0, 0, 0, 0, 0, 0, 0.9999999)`, want: "00:00:01"},
 		{name: "a span longer than nanoseconds hold", query: `SELECT AGE(TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '1720-01-01 00:00:00')`, want: "300 years"},
 		{name: "the end of the day rolls the date", query: `SELECT MAKE_TIMESTAMP(2020, 2, 29, 24, 0, 0)`, want: "2020-03-01 00:00:00"},
+		{name: "the largest clock a span holds", query: `SELECT MAKE_INTERVAL(0, 0, 0, 0, 0, 0, 1000000000000)`, want: "277777777:46:40"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
