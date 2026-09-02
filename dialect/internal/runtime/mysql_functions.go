@@ -50,6 +50,7 @@ func mysqlScalarFunctions() map[string]scalarSpec {
 		"mysql_insert": {4, mysqlTextArgs(fnMySQLInsert, 0, 3)},
 		"to_base64":    {1, mysqlTextArgs(fnMySQLToBase64, 0)},
 		"from_base64":  {1, fnMySQLFromBase64},
+		"is_uuid":      {1, fnMySQLIsUUID},
 
 		// Numbers. Each reads a string the way dialects.MySQL reads one in a numeric
 		// context -- the number at the front of it, or zero -- where dialects.SQLite's
@@ -984,4 +985,48 @@ func parseOctet(part string) (uint32, bool) {
 		return 0, false
 	}
 	return value, true
+}
+
+// fnMySQLIsUUID implements dialects.MySQL IS_UUID(x): whether the text is a UUID in one
+// of the three spellings dialects.MySQL reads. Every rule below was read from mysql:8.4:
+// the hyphenated form and the same form in braces, both with the hyphens where
+// a UUID puts them, and the thirty-two digits with no hyphen at all. Letter
+// case does not matter and surrounding space is not trimmed, so a value with a
+// leading space is not one.
+func fnMySQLIsUUID(args []driver.Value) (driver.Value, error) {
+	s, ok := toString(args[0])
+	if !ok {
+		return nil, nil
+	}
+	braced := strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")
+	if braced {
+		s = s[1 : len(s)-1]
+	}
+	switch {
+	case hyphenatedUUID(s):
+	case !braced && len(s) == 32 && !strings.Contains(s, "-"):
+	default:
+		return boolToInt(false), nil
+	}
+	for _, r := range strings.ToLower(s) {
+		if r != '-' && !strings.ContainsRune("0123456789abcdef", r) {
+			return boolToInt(false), nil
+		}
+	}
+	return boolToInt(true), nil
+}
+
+// hyphenatedUUID reports whether the hyphens sit where a UUID's do.
+func hyphenatedUUID(s string) bool {
+	groups := strings.Split(s, "-")
+	want := []int{8, 4, 4, 4, 12}
+	if len(groups) != len(want) {
+		return false
+	}
+	for i, g := range groups {
+		if len(g) != want[i] {
+			return false
+		}
+	}
+	return true
 }

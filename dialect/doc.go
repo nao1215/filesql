@@ -79,6 +79,21 @@
 // as unsupported, since the statement was read: ErrInvalidSyntax is for one that
 // could not be read.
 //
+// # Functions a dialect has and SQLite has not
+//
+// A function is translated where SQLite has a form for it and refused by name
+// where it has none, and never handed to SQLite under a name only the source
+// dialect knows: "no such function" tells a caller that a name they did write
+// does not exist, which is a worse answer than saying the construct has no
+// SQLite form. What is refused is a result that is an array or a range, a JSON operation
+// SQLite's own functions have no shape for, an encoding conversion where SQLite
+// holds only UTF-8, a geography, a fact about the connection or the server, a
+// value that is not the same twice, and an effect rather than a value.
+//
+// A name SQLite itself provides still reaches SQLite under every dialect: what
+// is refused is the names one engine has and SQLite has not, rather than every
+// name this package does not rewrite.
+//
 // # Booleans
 //
 // SQLite has no boolean, and every dialect here has one. TRUE is the integer 1

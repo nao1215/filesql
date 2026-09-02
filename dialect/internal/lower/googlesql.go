@@ -142,6 +142,9 @@ func (r *googleRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 	if lowered, ok, err := commonCall(call, "googlesql"); ok || err != nil {
 		return lowered, err
 	}
+	if err := refuseUnsupportedFunction(dialects.GoogleSQL, call); err != nil {
+		return nil, err
+	}
 	name := callName(call)
 	if arrayFunctions[name] {
 		return nil, unsupported(call.Span,
@@ -268,6 +271,10 @@ func (r *googleRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		return rename(call, "octet_length"), nil
 	case "SAFE_CONVERT_BYTES_TO_STRING":
 		return rename(call, "safe_convert_bytes_to_string"), nil
+	case "PARSE_JSON":
+		// SQLite's json() reads the text and answers it in JSON's own spelling,
+		// raising for text that is not JSON, which is what PARSE_JSON does.
+		return rename(call, "json"), nil
 	case fnNameCharLength, fnNameCharLen:
 		return rename(call, "length"), nil
 	case fnNameStringAgg:

@@ -40,6 +40,13 @@ func TestPostgreSQLScalarFunctions(t *testing.T) {
 		// The cube root of a negative number is negative, where a fractional
 		// power of one is not a real number at all.
 		{name: "cbrt", query: `SELECT cbrt(27)`, want: "3"},
+		// The error function and its complement, which reached SQLite as
+		// unknown names. Every want was read from postgres:17.
+		{name: "erf", query: `SELECT erf(1)`, want: "0.8427007929497149"},
+		{name: "erf of zero", query: `SELECT erf(0)`, want: "0"},
+		{name: "erf of a negative", query: `SELECT erf(-1)`, want: "-0.8427007929497149"},
+		{name: "erfc", query: `SELECT erfc(1)`, want: "0.15729920705028513"},
+		{name: "erfc of zero", query: `SELECT erfc(0)`, want: "1"},
 		{name: "cbrt of a negative number", query: `SELECT cbrt(-27)`, want: "-3"},
 
 		{name: "factorial of zero", query: `SELECT factorial(0)`, want: "1"},

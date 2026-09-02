@@ -567,12 +567,28 @@ func (r *postgresRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 	if lowered, ok, err := commonCall(call, "postgresql"); ok || err != nil {
 		return lowered, err
 	}
+	if err := refuseUnsupportedFunction(dialects.PostgreSQL, call); err != nil {
+		return nil, err
+	}
 	name := callName(call)
 	if setReturningFunctions[name] {
 		return nil, unsupported(call.Span,
 			"%s returns a set of rows, which SQLite has no form for outside a table", name)
 	}
 	switch name {
+	case "JSON_BUILD_OBJECT", "JSONB_BUILD_OBJECT":
+		// SQLite's json_object takes the same alternating keys and values.
+		return rename(call, "json_object"), nil
+	case "JSON_BUILD_ARRAY", "JSONB_BUILD_ARRAY":
+		return rename(call, "json_array"), nil
+	case "TO_JSON", "TO_JSONB":
+		// A scalar becomes the JSON that names it, which json_quote writes. A
+		// row or an array has no SQLite form, and neither reaches here as one
+		// value anyway.
+		if len(call.Args) != 1 {
+			return nil, unsupported(call.Span, "%s takes one value", callName(call))
+		}
+		return rename(call, "json_quote"), nil
 	case fnNameExtract, fnNameDatePart:
 		return datePartCall(call, "DATE_PART"), nil
 	case fnNamePosition, "STRPOS":

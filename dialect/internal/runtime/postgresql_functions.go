@@ -40,6 +40,8 @@ func postgresqlScalarFunctions() map[string]scalarSpec {
 
 		// Arithmetic dialects.SQLite has no operator or function for.
 		"cbrt": {1, fnCbrt},
+		"erf":  {1, floatFn(math.Erf)},
+		"erfc": {1, floatFn(math.Erfc)},
 		// TO_TIMESTAMP reads no clock: it turns an epoch second or a formatted
 		// string into a timestamp, so the same arguments always give the same
 		// answer.
@@ -657,6 +659,19 @@ func fnPostgresSubstringFrom(args []driver.Value) (driver.Value, error) {
 }
 
 // --- arithmetic ---
+
+// floatFn builds a helper from a function of one float, for the ones whose
+// whole definition is that function: a NULL argument answers NULL and anything
+// that is not a number does too.
+func floatFn(f func(float64) float64) scalarFn {
+	return func(args []driver.Value) (driver.Value, error) {
+		x, ok := toFloat(args[0])
+		if !ok {
+			return nil, nil
+		}
+		return f(x), nil
+	}
+}
 
 func fnCbrt(args []driver.Value) (driver.Value, error) {
 	x, ok := toFloat(args[0])
