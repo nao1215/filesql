@@ -275,7 +275,7 @@ func Example_jsonProcessing() {
 	// {"name":"Bob","age":25}
 }
 
-// Example_employeePreprocessing demonstrates the full power of fileprep:
+// Example_employeePreprocessing demonstrates what prep does in one pass:
 // combining multiple preprocessors and validators to clean and validate real-world messy data.
 func Example_employeePreprocessing() {
 	// Employee represents employee data with comprehensive preprocessing and validation
