@@ -12,9 +12,15 @@ import (
 	"time"
 )
 
-// This file holds the dialects.GoogleSQL functions the lowering layer reaches under a
-// rewritten name, and the ones shared with no other dialect that grew up here.
-// googlesql_functions.go holds the ones registered under BigQuery's own name.
+// This file holds the dialects.GoogleSQL scalar functions that grew up in
+// functions.go, beside the shared registry, while that file passed four
+// thousand lines.
+//
+// Which of the two GoogleSQL files a function is in says nothing about it: both
+// hold functions this package registers, some named by the shared registry in
+// functions.go and some by googlesqlScalarFunctions, and some are helpers those
+// are built from. registerAll is the index of what is registered; these files
+// are a place to read the code.
 
 // fnSafeDivide implements dialects.GoogleSQL SAFE_DIVIDE(x, y): x/y, or NULL when y is 0
 // or either argument is NULL.

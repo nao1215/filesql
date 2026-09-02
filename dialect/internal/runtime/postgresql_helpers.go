@@ -12,12 +12,15 @@ import (
 	"unicode/utf8"
 )
 
-// This file holds the dialects.PostgreSQL functions whose name SQLite already means
-// something else by, or has no spelling for, and which the lowering layer
-// reaches under a rewritten name rather than the name the query wrote.
-// postgresql_functions.go holds the ones registered under PostgreSQL's own
-// name; both are PostgreSQL's, and which file a function is in says how the
-// lowering layer reaches it.
+// This file holds the dialects.PostgreSQL scalar functions that grew up in
+// functions.go, beside the shared registry, while that file passed four
+// thousand lines.
+//
+// Which of the two PostgreSQL files a function is in says nothing about it:
+// both hold functions this package registers, some named by the shared registry
+// in functions.go and some by postgresqlScalarFunctions, and some are helpers
+// those are built from. registerAll is the index of what is registered; these
+// files are a place to read the code.
 
 // fnToChar implements dialects.PostgreSQL TO_CHAR(value, format) for date/time values and
 // for numbers. The two are told apart by the template: a numeric one is built
