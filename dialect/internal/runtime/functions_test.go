@@ -3362,6 +3362,10 @@ func TestNoDialectFunctionReachesSQLiteAsUnknown(t *testing.T) {
 		{dialects.MySQL, `SLEEP(0)`},
 		{dialects.MySQL, `GET_LOCK('a',0)`},
 		{dialects.MySQL, `RELEASE_LOCK('a')`},
+		{dialects.MySQL, `POINT(1,2)`},
+		{dialects.MySQL, `ST_ASTEXT(1)`},
+		{dialects.MySQL, `GEOMFROMTEXT('a')`},
+		{dialects.MySQL, `ST_DISTANCE(1,2)`},
 
 		{dialects.PostgreSQL, `to_json(1)`},
 		{dialects.PostgreSQL, `to_jsonb(1)`},
@@ -3387,6 +3391,10 @@ func TestNoDialectFunctionReachesSQLiteAsUnknown(t *testing.T) {
 		{dialects.PostgreSQL, `current_setting('a')`},
 		{dialects.PostgreSQL, `erf(1)`},
 		{dialects.PostgreSQL, `erfc(1)`},
+		{dialects.PostgreSQL, `int4range(1,2)`},
+		{dialects.PostgreSQL, `tsrange(now(),now())`},
+		{dialects.PostgreSQL, `point(1,2)`},
+		{dialects.PostgreSQL, `box('a')`},
 
 		{dialects.GoogleSQL, `TO_JSON(1)`},
 		{dialects.GoogleSQL, `PARSE_JSON('1')`},

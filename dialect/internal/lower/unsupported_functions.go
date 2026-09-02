@@ -27,6 +27,7 @@ const (
 	reasonGeo     = "SQLite has no geography type"
 	reasonRandom  = "its value is not the same twice, so a query over the same rows would not answer the same"
 	reasonBinary  = "SQLite has no type for the bytes it answers"
+	reasonRange   = "SQLite has no range type"
 )
 
 // mysqlUnsupportedFunctions are the MySQL functions with no SQLite form.
@@ -56,6 +57,19 @@ var mysqlUnsupportedFunctions = map[string]string{ //nolint:gochecknoglobals // 
 	"FOUND_ROWS":                    reasonSession,
 	"CONNECTION_ID":                 reasonSession,
 	"NAME_CONST":                    reasonSession,
+	"POINT":                         reasonGeo,
+	"LINESTRING":                    reasonGeo,
+	"POLYGON":                       reasonGeo,
+	"GEOMFROMTEXT":                  reasonGeo,
+	"ASTEXT":                        reasonGeo,
+	"ST_ASTEXT":                     reasonGeo,
+	"ST_GEOMFROMTEXT":               reasonGeo,
+	"ST_X":                          reasonGeo,
+	"ST_Y":                          reasonGeo,
+	"ST_DISTANCE":                   reasonGeo,
+	"ST_CONTAINS":                   reasonGeo,
+	"ST_SRID":                       reasonGeo,
+	"MBRCONTAINS":                   reasonGeo,
 	"BENCHMARK":                     reasonEffect,
 	"SLEEP":                         reasonEffect,
 	"GET_LOCK":                      reasonEffect,
@@ -91,6 +105,16 @@ var postgresUnsupportedFunctions = map[string]string{ //nolint:gochecknoglobals 
 	"CONVERT_FROM":           reasonBytes,
 	"CONVERT_TO":             reasonBytes,
 	"RANDOM_NORMAL":          reasonRandom,
+	"INT4RANGE":              reasonRange,
+	"INT8RANGE":              reasonRange,
+	"NUMRANGE":               reasonRange,
+	"TSRANGE":                reasonRange,
+	"TSTZRANGE":              reasonRange,
+	"DATERANGE":              reasonRange,
+	"BOX":                    reasonGeo,
+	"CIRCLE":                 reasonGeo,
+	"POINT":                  reasonGeo,
+	"POLYGON":                reasonGeo,
 	"PG_SLEEP":               reasonEffect,
 	"PG_SLEEP_FOR":           reasonEffect,
 	"PG_SLEEP_UNTIL":         reasonEffect,

@@ -85,7 +85,7 @@
 // where it has none, and never handed to SQLite under a name only the source
 // dialect knows: "no such function" tells a caller that a name they did write
 // does not exist, which is a worse answer than saying the construct has no
-// SQLite form. What is refused is a result that is an array, a JSON operation
+// SQLite form. What is refused is a result that is an array or a range, a JSON operation
 // SQLite's own functions have no shape for, an encoding conversion where SQLite
 // holds only UTF-8, a geography, a fact about the connection or the server, a
 // value that is not the same twice, and an effect rather than a value.
