@@ -291,26 +291,24 @@ func ExampleDBBuilder_LoadIntoTx() {
 	// users=2
 }
 
-func ExampleNewCompressionHandler() {
-	handler := filesql.NewCompressionHandler(filesql.CompressionGZ)
-
+func ExampleCompressionType_NewWriter() {
 	var compressed bytes.Buffer
-	writer, closeWriter, err := handler.CreateWriter(&compressed)
+	writer, err := filesql.CompressionGZ.NewWriter(&compressed)
 	if err != nil {
 		log.Fatal(err)
 	}
 	if _, err := io.WriteString(writer, "hello"); err != nil {
 		log.Fatal(err)
 	}
-	if err := closeWriter(); err != nil {
+	if err := writer.Close(); err != nil {
 		log.Fatal(err)
 	}
 
-	reader, closeReader, err := handler.CreateReader(bytes.NewReader(compressed.Bytes()))
+	reader, err := filesql.CompressionGZ.NewReader(bytes.NewReader(compressed.Bytes()))
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer closeReader()
+	defer reader.Close()
 
 	plain, err := io.ReadAll(reader)
 	if err != nil {
@@ -322,7 +320,7 @@ func ExampleNewCompressionHandler() {
 	// hello
 }
 
-func ExampleNewCompressionFactory() {
+func ExampleOpenReader() {
 	dir := createFilesqlExampleDir(map[string]string{
 		"orders.csv": `
 id,total
@@ -331,13 +329,12 @@ id,total
 	})
 	defer os.RemoveAll(dir)
 
-	factory := filesql.NewCompressionFactory()
-	reader, cleanup, err := factory.CreateReaderForFile(filepath.Join(dir, "orders.csv"))
+	reader, err := filesql.OpenReader(filepath.Join(dir, "orders.csv"))
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer func() {
-		if err := cleanup(); err != nil {
+		if err := reader.Close(); err != nil {
 			log.Fatal(err)
 		}
 	}()
@@ -352,9 +349,8 @@ id,total
 	// 1,980
 }
 
-func ExampleCompressionFactory_RemoveCompressionExtension() {
-	factory := filesql.NewCompressionFactory()
-	fmt.Println(factory.RemoveCompressionExtension("orders.csv.gz"))
+func ExampleRemoveCompressionExtension() {
+	fmt.Println(filesql.RemoveCompressionExtension("orders.csv.gz"))
 	// Output:
 	// orders.csv
 }

@@ -144,7 +144,7 @@ func TestNewFile(t *testing.T) {
 			file := newFile(tt.path)
 			assert.Equal(t, tt.expected, file.getFileType(), "File type mismatch")
 			assert.Equal(t, tt.path, file.getPath(), "File path mismatch")
-			assert.Equal(t, tt.compression, NewCompressionFactory().detectCompressionType(tt.path),
+			assert.Equal(t, tt.compression, detectCompressionType(tt.path),
 				"Compression mismatch")
 		})
 	}
@@ -367,7 +367,7 @@ func TestCreateDecompressedReader(t *testing.T) {
 			t.Error("createDecompressedReader should return original reader for uncompressed data")
 		}
 
-		// CompressionHandler.CreateReader never hands back a nil close function,
+		// newDecompressor never hands back a nil close function,
 		// so an uncompressed source gets a no-op one rather than nil. Callers can
 		// therefore call it unconditionally.
 		if closeFunc == nil {

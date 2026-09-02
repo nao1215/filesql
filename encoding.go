@@ -41,12 +41,11 @@ var bomEncodings = []struct {
 // thing the read side accepts without one, and a binary or record format is left
 // alone: nothing in it is text this package encodes.
 func detectSourceEncoding(path string) Encoding {
-	factory := NewCompressionFactory()
-	if !isTextBaseType(factory.getBaseFileType(path)) {
+	if !isTextBaseType(baseFileType(path)) {
 		return EncodingUTF8
 	}
 
-	reader, cleanup, err := factory.CreateReaderForFile(path)
+	reader, cleanup, err := openDecompressed(path)
 	if err != nil {
 		return EncodingUTF8
 	}

@@ -472,7 +472,7 @@ func benchmarkCompressedCopy(b *testing.B, compression CompressionType) string {
 	if err != nil {
 		b.Fatalf("create %s: %v", path, err)
 	}
-	writer, closeWriter, err := NewCompressionHandler(compression).CreateWriter(file)
+	writer, closeWriter, err := newCompressor(compression, file)
 	if err != nil {
 		b.Fatalf("create the %s writer: %v", compression.Extension(), err)
 	}

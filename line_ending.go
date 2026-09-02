@@ -80,8 +80,7 @@ const lineEndingReadSize = 64 << 10 // 64 KiB
 // not used either, because half a file is not evidence of what the whole one
 // uses.
 func detectLineEnding(path string, format OutputFormat) LineEnding {
-	factory := NewCompressionFactory()
-	reader, cleanup, err := factory.CreateReaderForFile(path)
+	reader, cleanup, err := openDecompressed(path)
 	if err != nil {
 		return LineEndingLF
 	}
@@ -94,7 +93,7 @@ func detectLineEnding(path string, format OutputFormat) LineEnding {
 	// as an LF one — which is how a UTF-16 file kept its terminators on the read
 	// side and lost them on the write side.
 	counted := reader
-	if isTextBaseType(factory.getBaseFileType(path)) {
+	if isTextBaseType(baseFileType(path)) {
 		counted = textin.Decode(reader)
 	}
 

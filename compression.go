@@ -10,28 +10,99 @@ import (
 	"github.com/nao1215/filesql/internal/codec"
 )
 
-// compressionHandler wraps a reader or a writer in one codec. It is what
-// NewCompressionHandler returns.
+// NewReader returns a reader that decompresses reader with this codec.
+// CompressionNone hands the stream back untouched, so a caller that does not
+// know whether a stream is compressed can use the same call either way.
 //
-// It is a type rather than an interface because nothing here takes one as an
-// argument: an interface only a caller can hold, never hand back, gives them
-// nothing to substitute and makes every method added to it a breaking change.
-type compressionHandler struct {
-	compressionType CompressionType
+// Closing the result releases the codec; it does not close reader, which is
+// still the caller's. A stream that declares more working memory than this
+// package will hold for it is refused with ErrCompression before any of that
+// memory is allocated.
+func (c CompressionType) NewReader(reader io.Reader) (io.ReadCloser, error) {
+	decompressed, closeFunc, err := newDecompressor(c, reader)
+	if err != nil {
+		return nil, err
+	}
+	return &codecReader{Reader: decompressed, closeFunc: closeFunc}, nil
 }
 
-// CreateReader creates a decompression reader based on the compression type
-func (h *compressionHandler) CreateReader(reader io.Reader) (io.Reader, func() error, error) {
-	decompressed, closeFunc, err := codec.Codec(h.compressionType).NewReader(reader)
+// NewWriter returns a writer that compresses what is written to it with this
+// codec and writes the result to writer. CompressionNone hands writer back
+// untouched.
+//
+// Closing the result flushes and finalizes the stream; it does not close
+// writer, which is still the caller's. Bzip2 has no writer, and asking for one
+// is refused with ErrUnsupportedFormat.
+func (c CompressionType) NewWriter(writer io.Writer) (io.WriteCloser, error) {
+	compressed, closeFunc, err := newCompressor(c, writer)
+	if err != nil {
+		return nil, err
+	}
+	return &codecWriter{Writer: compressed, closeFunc: closeFunc}, nil
+}
+
+// OpenReader opens the file at path and returns a reader over its
+// decompressed bytes, with the codec taken from the path's extension: "a.csv.gz"
+// is read through gzip and "a.csv" as it is. Closing the result closes the file.
+//
+// A path that is not a regular file is refused with ErrUnsupportedFormat rather
+// than opened. Opening a named pipe for reading blocks until a writer opens the
+// other end, inside the syscall where no deadline and no cancellation reach it,
+// and this is the one place every read of a path in this package goes through:
+// a load of a compressed source, the read an in-place save does for the
+// source's compression, encoding and line terminator, and ExcelSheetsInFile. A
+// caller who means to read a pipe opens it themselves and passes the reader to
+// CompressionType.NewReader or to DBBuilder.AddReader, where the blocking is
+// their own.
+func OpenReader(path string) (io.ReadCloser, error) {
+	reader, closeFunc, err := openDecompressed(path)
+	if err != nil {
+		return nil, err
+	}
+	return &codecReader{Reader: reader, closeFunc: closeFunc}, nil
+}
+
+// RemoveCompressionExtension returns path without its compression extension,
+// so "orders.csv.gz" becomes "orders.csv". A path with no compression extension
+// is returned as it is.
+func RemoveCompressionExtension(path string) string {
+	_, base := codec.FromPath(path)
+	return base
+}
+
+// codecReader is what NewReader and OpenReader hand back: the decompressed
+// stream and the release the codec asked for, under io.ReadCloser so a caller
+// holds one value rather than a reader and a function.
+type codecReader struct {
+	io.Reader
+	closeFunc func() error
+}
+
+// Close releases the codec, and whatever else the reader was opened over.
+func (r *codecReader) Close() error { return r.closeFunc() }
+
+// codecWriter is codecReader's counterpart for NewWriter.
+type codecWriter struct {
+	io.Writer
+	closeFunc func() error
+}
+
+// Close flushes and finalizes the compressed stream.
+func (w *codecWriter) Close() error { return w.closeFunc() }
+
+// newDecompressor is NewReader in the shape this package's own readers use: a
+// reader and a release function that is never nil.
+func newDecompressor(compression CompressionType, reader io.Reader) (io.Reader, func() error, error) {
+	decompressed, closeFunc, err := codec.Codec(compression).NewReader(reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %w", ErrCompression, err)
 	}
 	return decompressed, closeFunc, nil
 }
 
-// CreateWriter creates a compression writer based on the compression type
-func (h *compressionHandler) CreateWriter(writer io.Writer) (io.Writer, func() error, error) {
-	compressed, closeFunc, err := codec.Codec(h.compressionType).NewWriter(writer)
+// newCompressor is NewWriter in the same shape.
+func newCompressor(compression CompressionType, writer io.Writer) (io.Writer, func() error, error) {
+	compressed, closeFunc, err := codec.Codec(compression).NewWriter(writer)
 	if err != nil {
 		// A codec that has no writer at all is an unsupported format, not a
 		// compressor that failed to start.
@@ -43,52 +114,9 @@ func (h *compressionHandler) CreateWriter(writer io.Writer) (io.Writer, func() e
 	return compressed, closeFunc, nil
 }
 
-// NewCompressionHandler returns a handler that wraps a reader or a writer in
-// the given codec. CompressionNone hands the stream back untouched, so a caller
-// that does not know whether a stream is compressed can use one handler either
-// way.
-func NewCompressionHandler(compressionType CompressionType) *compressionHandler { //nolint:revive // the type is deliberately unexported: nothing here accepts one, so only the constructor is API
-	return &compressionHandler{
-		compressionType: compressionType,
-	}
-}
-
-// CompressionFactory provides factory methods for compression handling
-type CompressionFactory struct{}
-
-// NewCompressionFactory creates a new compression factory
-func NewCompressionFactory() *CompressionFactory {
-	return &CompressionFactory{}
-}
-
-// detectCompressionType detects the compression type from a file path
-func (f *CompressionFactory) detectCompressionType(path string) CompressionType {
-	found, _ := codec.FromPath(path)
-	return CompressionType(found)
-}
-
-// createHandlerForFile creates an appropriate compression handler for a given file path
-func (f *CompressionFactory) createHandlerForFile(path string) *compressionHandler {
-	compressionType := f.detectCompressionType(path)
-	return NewCompressionHandler(compressionType)
-}
-
-// CreateReaderForFile opens a file and returns a reader that handles
-// decompression.
-//
-// A path that is not a regular file is refused rather than opened. Opening a
-// named pipe for reading blocks until a writer opens the other end, inside the
-// syscall where no deadline and no cancellation reach it, and this is the one
-// place every read of a path in this package goes through: a load of a
-// compressed source, the read an in-place save does for the source's
-// compression, encoding and line terminator, and ExcelSheetsInFile. A load
-// refuses such a path earlier still, while collecting, where it can name the
-// entry before anything is opened; this is the floor under that, for the calls
-// that reach a path without going through a collection. A caller who means to
-// read a pipe opens it themselves and passes the reader to
-// NewCompressionHandler(...).CreateReader or to DBBuilder.AddReader, where the blocking
-// is their own.
-func (f *CompressionFactory) CreateReaderForFile(path string) (io.Reader, func() error, error) {
+// openDecompressed is OpenReader in the same shape. The release closes the
+// codec and then the file.
+func openDecompressed(path string) (io.Reader, func() error, error) {
 	file, err := openRegularFile(path)
 	if err != nil {
 		if errors.Is(err, ErrUnsupportedFormat) {
@@ -97,38 +125,32 @@ func (f *CompressionFactory) CreateReaderForFile(path string) (io.Reader, func()
 		return nil, nil, fmt.Errorf("%w: failed to open file: %w", ErrIOOperation, err)
 	}
 
-	handler := f.createHandlerForFile(path)
-	reader, cleanup, err := handler.CreateReader(file)
+	reader, closeCodec, err := newDecompressor(detectCompressionType(path), file)
 	if err != nil {
 		_ = file.Close()
 		return nil, nil, err
 	}
 
-	// Create a composite cleanup function
-	compositeCleanup := func() error {
-		var cleanupErr error
-		if cleanup != nil {
-			cleanupErr = cleanup()
+	return reader, func() error {
+		codecErr := closeCodec()
+		if closeErr := file.Close(); closeErr != nil && codecErr == nil {
+			return closeErr
 		}
-		if closeErr := file.Close(); closeErr != nil && cleanupErr == nil {
-			cleanupErr = closeErr
-		}
-		return cleanupErr
-	}
-
-	return reader, compositeCleanup, nil
+		return codecErr
+	}, nil
 }
 
-// RemoveCompressionExtension removes the compression extension from a file path if present
-func (f *CompressionFactory) RemoveCompressionExtension(path string) string {
-	_, base := codec.FromPath(path)
-	return base
+// detectCompressionType is the codec a path's extension names, or
+// CompressionNone when it names none.
+func detectCompressionType(path string) CompressionType {
+	found, _ := codec.FromPath(path)
+	return CompressionType(found)
 }
 
-// getBaseFileType determines the base file type after removing compression extensions
-func (f *CompressionFactory) getBaseFileType(path string) FileType {
-	basePath := f.RemoveCompressionExtension(path)
-	ext := strings.ToLower(filepath.Ext(basePath))
+// baseFileType is the format a path names once its compression extension is
+// looked through.
+func baseFileType(path string) FileType {
+	ext := strings.ToLower(filepath.Ext(RemoveCompressionExtension(path)))
 
 	switch ext {
 	case extCSV:

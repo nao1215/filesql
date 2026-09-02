@@ -55,12 +55,12 @@ func newStreamingParser(fileType FileType, compression CompressionType, tableNam
 
 // createDecompressedReader wraps reader with the codec the source was declared
 // to use. The per-format switch this replaced was a second implementation of
-// NewCompressionHandler(...).CreateReader, reached through the fused FileType.
+// CompressionType.NewReader, reached through the fused FileType.
 //
 // CompressionNone returns the reader unchanged with a no-op close function,
-// following CreateReader's convention that the close function is never nil.
+// following the convention that the close function is never nil.
 func (p *streamingParser) createDecompressedReader(source io.Reader) (io.Reader, func() error, error) {
-	return NewCompressionHandler(p.compression).CreateReader(source)
+	return newDecompressor(p.compression, source)
 }
 
 // ProcessInChunks reads the input in chunks, handing each to processor, and

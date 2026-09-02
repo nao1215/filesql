@@ -102,13 +102,12 @@ func ExampleProcessor_Process_compressed() {
 		log.Fatal(err)
 	}
 
-	plain, closeCodec, err := filesql.NewCompressionHandler(filesql.CompressionGZ).
-		CreateReader(bytes.NewReader(compressed.Bytes()))
+	plain, err := filesql.CompressionGZ.NewReader(bytes.NewReader(compressed.Bytes()))
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer func() {
-		if err := closeCodec(); err != nil {
+		if err := plain.Close(); err != nil {
 			log.Fatal(err)
 		}
 	}()

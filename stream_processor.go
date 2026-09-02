@@ -448,7 +448,7 @@ func (sp *streamProcessor) streamFileToDatabase(ctx context.Context, tx *sql.Tx,
 		fileType:    baseFileType,
 		compression: CompressionNone, // already unwrapped above
 		reopen: func() (io.Reader, func() error, error) {
-			return NewCompressionFactory().CreateReaderForFile(filePath)
+			return openDecompressed(filePath)
 		},
 	}
 	return sp.streamReaderToDatabase(ctx, tx, readerInput)
@@ -532,7 +532,7 @@ func (sp *streamProcessor) streamReaderToDatabase(ctx context.Context, tx *sql.T
 	// the base its sheets hang off. The codec is unwrapped here because the
 	// chunked read this skips is where it would otherwise have been.
 	if input.fileType == FileTypeXLSX {
-		source, closeCodec, err := NewCompressionHandler(input.compression).CreateReader(input.reader)
+		source, closeCodec, err := newDecompressor(input.compression, input.reader)
 		if err != nil {
 			return err
 		}
@@ -996,10 +996,7 @@ func cellValue(cell string, types columnInfoList, i int) any {
 
 // createDecompressedReader creates a reader that handles compression
 func (sp *streamProcessor) createDecompressedReader(file *os.File, filePath string) (io.Reader, func() error, error) {
-	factory := NewCompressionFactory()
-	handler := factory.createHandlerForFile(filePath)
-
-	reader, cleanup, err := handler.CreateReader(file)
+	reader, cleanup, err := newDecompressor(detectCompressionType(filePath), file)
 	if err != nil {
 		return nil, nil, err
 	}

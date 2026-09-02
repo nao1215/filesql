@@ -376,8 +376,8 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Save on close or commit | `ExampleDBBuilder_EnableAutoSave`, `ExampleDBBuilder_EnableAutoSaveOnCommit` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
 | Export under a deadline | `ExampleDumpDatabase_deadline` | [example_api_test.go](./example_api_test.go) |
 | Export tables with format/compression/encoding/line-ending options | `ExampleDumpDatabase`, `ExampleNewDumpOptions`, `ExampleDumpOptions_WithFormat`, `ExampleDumpOptions_WithCompression`, `ExampleDumpOptions_WithEncoding`, `ExampleDumpOptions_WithLineEnding` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
-| Work with compression helpers directly | `ExampleNewCompressionHandler`, `ExampleNewCompressionFactory` | [example_api_test.go](./example_api_test.go) |
-| Strip compression suffixes | `ExampleCompressionFactory_RemoveCompressionExtension` | [example_api_test.go](./example_api_test.go) |
+| Compress a stream, or open a compressed file | `ExampleCompressionType_NewWriter`, `ExampleOpenReader` | [example_api_test.go](./example_api_test.go) |
+| Strip compression suffixes | `ExampleRemoveCompressionExtension` | [example_api_test.go](./example_api_test.go) |
 | Write an ACH or Fedwire file back after editing it | `ExampleDumpACH`, `ExampleDumpFedWire` | [example_api_test.go](./example_api_test.go) |
 | Write one back when the database came from an `io.Reader` | `ExampleDumpACHWithSource`, `ExampleDumpFedWireWithSource` | [example_api_test.go](./example_api_test.go) |
 | Inspect enum names | `ExampleMalformedRowPolicy_String`, `ExampleFileType_String`, `ExampleCompressionType_String`, `ExampleEncoding_String`, `ExampleLineEnding_String`, `ExampleOutputFormat_String` | [example_api_test.go](./example_api_test.go) |

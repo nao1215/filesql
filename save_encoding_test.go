@@ -150,10 +150,9 @@ func TestDumpDatabase_EncodingAndCompressionCombine(t *testing.T) {
 	written := filepath.Join(out, "src.csv.gz")
 	require.FileExists(t, written)
 
-	factory := NewCompressionFactory()
-	reader, cleanup, err := factory.CreateReaderForFile(written)
+	reader, err := OpenReader(written)
 	require.NoError(t, err)
-	defer func() { _ = cleanup() }()
+	defer func() { _ = reader.Close() }()
 
 	decoded, err := io.ReadAll(transform.NewReader(reader, japanese.ShiftJIS.NewDecoder()))
 	require.NoError(t, err)

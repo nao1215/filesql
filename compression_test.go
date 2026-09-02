@@ -27,8 +27,8 @@ import (
 	"github.com/ulikunitz/xz"
 )
 
-// TestCompressionHandlerInterface tests the CompressionHandler interface implementation
-func TestCompressionHandlerInterface(t *testing.T) {
+// TestCompressionTypeCodecs runs every codec through this package's reader and writer
+func TestCompressionTypeCodecs(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -97,14 +97,14 @@ func TestCompressionHandlerInterface(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			handler := NewCompressionHandler(tt.compressionType)
+			handler := tt.compressionType
 
 			// The extension the handler was built for
 			if got := tt.compressionType.Extension(); got != tt.extension {
 				t.Errorf("Extension() = %v, want %v", got, tt.extension)
 			}
 
-			// Test CreateReader with valid data
+			// Decompress what a real compressor wrote
 			testData := []byte("test data for compression")
 			var compressedData bytes.Buffer
 
@@ -152,9 +152,9 @@ func TestCompressionHandlerInterface(t *testing.T) {
 				_ = lz4Writer.Close()
 			}
 
-			reader, cleanup, err := handler.CreateReader(&compressedData)
+			reader, cleanup, err := newDecompressor(handler, &compressedData)
 			if err != nil {
-				t.Fatalf("CreateReader() error = %v", err)
+				t.Fatalf("NewReader() error = %v", err)
 			}
 			defer func() {
 				if cleanup != nil {
@@ -172,13 +172,13 @@ func TestCompressionHandlerInterface(t *testing.T) {
 				t.Errorf("Read data = %v, want %v", readData, testData)
 			}
 
-			// Test CreateWriter
+			// Compress through this package
 			var output bytes.Buffer
-			writer, cleanup, err := handler.CreateWriter(&output)
+			writer, cleanup, err := newCompressor(handler, &output)
 
 			if tt.canWrite {
 				if err != nil {
-					t.Fatalf("CreateWriter() error = %v, want nil", err)
+					t.Fatalf("NewWriter() error = %v, want nil", err)
 				}
 				defer func() {
 					if cleanup != nil {
@@ -206,21 +206,19 @@ func TestCompressionHandlerInterface(t *testing.T) {
 			} else {
 				// Should fail for unsupported compression types
 				if err == nil {
-					t.Errorf("CreateWriter() error = nil, want error for unsupported compression")
+					t.Errorf("NewWriter() error = nil, want error for unsupported compression")
 				}
 			}
 		})
 	}
 }
 
-// TestCompressionFactory tests the CompressionFactory functionality
-func TestCompressionFactory(t *testing.T) {
+// TestCompressionPathHelpers covers what a path says about its codec and format
+func TestCompressionPathHelpers(t *testing.T) {
 	t.Parallel()
 
 	t.Run("detectCompressionType", func(t *testing.T) {
 		t.Parallel()
-
-		factory := NewCompressionFactory()
 
 		tests := []struct {
 			path     string
@@ -242,7 +240,7 @@ func TestCompressionFactory(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.path, func(t *testing.T) {
-				got := factory.detectCompressionType(tt.path)
+				got := detectCompressionType(tt.path)
 				if got != tt.expected {
 					t.Errorf("detectCompressionType(%q) = %v, want %v", tt.path, got, tt.expected)
 				}
@@ -252,8 +250,6 @@ func TestCompressionFactory(t *testing.T) {
 
 	t.Run("RemoveCompressionExtension", func(t *testing.T) {
 		t.Parallel()
-
-		factory := NewCompressionFactory()
 
 		tests := []struct {
 			path     string
@@ -275,7 +271,7 @@ func TestCompressionFactory(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.path, func(t *testing.T) {
-				got := factory.RemoveCompressionExtension(tt.path)
+				got := RemoveCompressionExtension(tt.path)
 				if got != tt.expected {
 					t.Errorf("RemoveCompressionExtension(%q) = %q, want %q", tt.path, got, tt.expected)
 				}
@@ -285,8 +281,6 @@ func TestCompressionFactory(t *testing.T) {
 
 	t.Run("getBaseFileType", func(t *testing.T) {
 		t.Parallel()
-
-		factory := NewCompressionFactory()
 
 		tests := []struct {
 			path     string
@@ -306,35 +300,9 @@ func TestCompressionFactory(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.path, func(t *testing.T) {
-				got := factory.getBaseFileType(tt.path)
+				got := baseFileType(tt.path)
 				if got != tt.expected {
 					t.Errorf("getBaseFileType(%q) = %v, want %v", tt.path, got, tt.expected)
-				}
-			})
-		}
-	})
-
-	t.Run("createHandlerForFile", func(t *testing.T) {
-		t.Parallel()
-
-		factory := NewCompressionFactory()
-
-		tests := []struct {
-			path              string
-			expectedExtension string
-		}{
-			{"data.csv", ""},
-			{"data.csv.gz", ".gz"},
-			{"data.tsv.bz2", ".bz2"},
-			{"data.ltsv.xz", ".xz"},
-			{"data.parquet.zst", ".zst"},
-		}
-
-		for _, tt := range tests {
-			t.Run(tt.path, func(t *testing.T) {
-				handler := factory.createHandlerForFile(tt.path)
-				if got := handler.compressionType.Extension(); got != tt.expectedExtension {
-					t.Errorf("handler for %q has extension %v, want %v", tt.path, got, tt.expectedExtension)
 				}
 			})
 		}
@@ -392,17 +360,15 @@ func TestCompressionEndToEnd(t *testing.T) {
 				testData := []byte("This is test data for compression testing.\nLine 2\nLine 3")
 				fileName := filepath.Join(tempDir, "test.txt"+tt.extension)
 
-				factory := NewCompressionFactory()
-
 				// Write compressed file the way a caller does: create the file,
 				// then wrap it in the codec's writer.
 				file, err := os.Create(fileName) //nolint:gosec // fileName is under t.TempDir()
 				if err != nil {
 					t.Fatalf("os.Create() error = %v", err)
 				}
-				writer, cleanup, err := NewCompressionHandler(tt.compressionType).CreateWriter(file)
+				writer, cleanup, err := newCompressor(tt.compressionType, file)
 				if err != nil {
-					t.Fatalf("CreateWriter() error = %v", err)
+					t.Fatalf("NewWriter() error = %v", err)
 				}
 
 				_, err = writer.Write(testData)
@@ -418,9 +384,9 @@ func TestCompressionEndToEnd(t *testing.T) {
 				}
 
 				// Read compressed file
-				reader, cleanup, err := factory.CreateReaderForFile(fileName)
+				reader, cleanup, err := openDecompressed(fileName)
 				if err != nil {
-					t.Fatalf("CreateReaderForFile() error = %v", err)
+					t.Fatalf("OpenReader() error = %v", err)
 				}
 				defer func() {
 					_ = cleanup()
@@ -439,8 +405,8 @@ func TestCompressionEndToEnd(t *testing.T) {
 	})
 }
 
-// TestCompressionFactoryErrors tests error handling in the compression factory
-// TestCreateReaderForFile_RefusesWhatIsNotAFile pins that the one place every
+// TestOpenDecompressedErrors tests error handling in the compression factory
+// TestOpenReader_RefusesWhatIsNotAFile pins that the one place every
 // read of a path goes through knows what it is opening.
 //
 // It did not: opening a named pipe for reading blocks until a writer opens the
@@ -449,7 +415,7 @@ func TestCompressionEndToEnd(t *testing.T) {
 // been replaced by one -- and Close takes no context at all. A load refuses
 // such a path in its collection; this is the floor under that, for the calls
 // that reach a path without going through one.
-func TestCreateReaderForFile_RefusesWhatIsNotAFile(t *testing.T) {
+func TestOpenReader_RefusesWhatIsNotAFile(t *testing.T) {
 	t.Parallel()
 
 	t.Run("a named pipe", func(t *testing.T) {
@@ -460,7 +426,7 @@ func TestCreateReaderForFile_RefusesWhatIsNotAFile(t *testing.T) {
 
 		done := make(chan error, 1)
 		go func() {
-			_, cleanup, err := NewCompressionFactory().CreateReaderForFile(pipe)
+			_, cleanup, err := openDecompressed(pipe)
 			if cleanup != nil {
 				_ = cleanup()
 			}
@@ -472,7 +438,7 @@ func TestCreateReaderForFile_RefusesWhatIsNotAFile(t *testing.T) {
 			assert.ErrorIs(t, err, ErrUnsupportedFormat)
 			assert.Contains(t, err.Error(), "a named pipe")
 		case <-time.After(30 * time.Second):
-			t.Fatal("CreateReaderForFile did not return: it is waiting for a writer on the pipe")
+			t.Fatal("OpenReader did not return: it is waiting for a writer on the pipe")
 		}
 	})
 
@@ -482,7 +448,7 @@ func TestCreateReaderForFile_RefusesWhatIsNotAFile(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "data.csv")
 		require.NoError(t, os.Mkdir(dir, 0o750))
 
-		_, cleanup, err := NewCompressionFactory().CreateReaderForFile(dir)
+		_, cleanup, err := openDecompressed(dir)
 		if cleanup != nil {
 			_ = cleanup()
 		}
@@ -507,12 +473,12 @@ func TestCreateReaderForFile_RefusesWhatIsNotAFile(t *testing.T) {
 		require.NoError(t, os.WriteFile(zipped, buf.Bytes(), 0o600))
 
 		for _, path := range []string{plain, zipped} {
-			reader, cleanup, err := NewCompressionFactory().CreateReaderForFile(path)
+			reader, err := OpenReader(path)
 			require.NoError(t, err, path)
 			body, readErr := io.ReadAll(reader)
 			require.NoError(t, readErr)
 			assert.Equal(t, "id\n1\n", string(body))
-			require.NoError(t, cleanup())
+			require.NoError(t, reader.Close())
 		}
 	})
 
@@ -527,24 +493,22 @@ func TestCreateReaderForFile_RefusesWhatIsNotAFile(t *testing.T) {
 			t.Skipf("this process cannot create a symlink here: %v", err)
 		}
 
-		reader, cleanup, err := NewCompressionFactory().CreateReaderForFile(link)
+		reader, err := OpenReader(link)
 		require.NoError(t, err)
 		body, readErr := io.ReadAll(reader)
 		require.NoError(t, readErr)
 		assert.Equal(t, "id\n1\n", string(body))
-		require.NoError(t, cleanup())
+		require.NoError(t, reader.Close())
 	})
 }
 
-func TestCompressionFactoryErrors(t *testing.T) {
+func TestOpenDecompressedErrors(t *testing.T) {
 	t.Parallel()
 
-	factory := NewCompressionFactory()
-
-	t.Run("CreateReaderForFile with non-existent file", func(t *testing.T) {
+	t.Run("a file that does not exist", func(t *testing.T) {
 		t.Parallel()
 
-		_, _, err := factory.CreateReaderForFile("/non/existent/file.csv")
+		_, _, err := openDecompressed("/non/existent/file.csv")
 		if err == nil {
 			t.Error("Expected error for non-existent file, got nil")
 		}
@@ -647,10 +611,10 @@ func TestInvalidCompressionReader(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			handler := NewCompressionHandler(tt.compressionType)
+			handler := tt.compressionType
 			reader := bytes.NewReader(tt.data)
 
-			_, _, err := handler.CreateReader(reader)
+			_, _, err := newDecompressor(handler, reader)
 			if err == nil {
 				t.Error("Expected error for invalid compressed data, got nil")
 			}
@@ -661,10 +625,10 @@ func TestInvalidCompressionReader(t *testing.T) {
 	t.Run("Invalid zstd data", func(t *testing.T) {
 		t.Parallel()
 
-		handler := NewCompressionHandler(CompressionZSTD)
+		handler := CompressionZSTD
 		reader := bytes.NewReader([]byte("not zstd data"))
 
-		r, cleanup, err := handler.CreateReader(reader)
+		r, cleanup, err := newDecompressor(handler, reader)
 		// zstd.NewReader may not return an error immediately for invalid data
 		// The error might occur when reading from the reader
 		if err == nil {
@@ -733,10 +697,10 @@ func BenchmarkCompressionReaders(b *testing.B) {
 
 			b.ResetTimer()
 			for range b.N {
-				handler := NewCompressionHandler(ct.compressionType)
+				handler := ct.compressionType
 				reader := bytes.NewReader(compressedBytes)
 
-				r, cleanup, err := handler.CreateReader(reader)
+				r, cleanup, err := newDecompressor(handler, reader)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -758,8 +722,8 @@ func BenchmarkCompressionReaders(b *testing.B) {
 	}
 }
 
-// TestCreateReaderForFileIntegration tests the integration with actual files
-func TestCreateReaderForFileIntegration(t *testing.T) {
+// TestOpenReaderIntegration tests the integration with actual files
+func TestOpenReaderIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -767,7 +731,6 @@ func TestCreateReaderForFileIntegration(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	factory := NewCompressionFactory()
 
 	testData := []byte(strings.Repeat("test data line\n", 100))
 
@@ -800,8 +763,8 @@ func TestCreateReaderForFileIntegration(t *testing.T) {
 				t.Fatalf("Failed to create file: %v", err)
 			}
 
-			handler := NewCompressionHandler(ct.compressionType)
-			writer, cleanup, err := handler.CreateWriter(file)
+			handler := ct.compressionType
+			writer, cleanup, err := newCompressor(handler, file)
 			if err != nil {
 				_ = file.Close()
 				t.Fatalf("Failed to create writer: %v", err)
@@ -818,7 +781,7 @@ func TestCreateReaderForFileIntegration(t *testing.T) {
 			_ = file.Close()
 
 			// Read the file using the factory
-			reader, cleanupReader, err := factory.CreateReaderForFile(fileName)
+			reader, cleanupReader, err := openDecompressed(fileName)
 			if err != nil {
 				t.Fatalf("Failed to create reader: %v", err)
 			}
@@ -904,7 +867,7 @@ func TestCompressionRefusesAnImplausibleDeclaredSize(t *testing.T) {
 			runtime.GC()
 			runtime.ReadMemStats(&before)
 
-			reader, cleanup, err := NewCompressionHandler(tc.ct).CreateReader(bytes.NewReader(tc.data))
+			reader, cleanup, err := newDecompressor(tc.ct, bytes.NewReader(tc.data))
 			if err == nil {
 				_, err = io.Copy(io.Discard, reader)
 				cleanup()
@@ -931,7 +894,7 @@ func TestCompressionAcceptsTheSizesRealFilesDeclare(t *testing.T) {
 		t.Parallel()
 
 		for _, prop := range []byte{20, 22, 28} { // 4 MiB, 8 MiB, 64 MiB
-			reader, cleanup, err := NewCompressionHandler(CompressionXZ).CreateReader(
+			reader, cleanup, err := newDecompressor(CompressionXZ,
 				bytes.NewReader(xzStreamDeclaring(prop)))
 			require.NoError(t, err, "prop %d is a dictionary real files declare", prop)
 			_, err = io.Copy(io.Discard, reader)
@@ -946,7 +909,7 @@ func TestCompressionAcceptsTheSizesRealFilesDeclare(t *testing.T) {
 		t.Parallel()
 
 		for _, exp := range []byte{10, 13, 17} { // 1 MiB, 8 MiB, 128 MiB
-			reader, cleanup, err := NewCompressionHandler(CompressionZSTD).CreateReader(
+			reader, cleanup, err := newDecompressor(CompressionZSTD,
 				bytes.NewReader(zstdFrameDeclaring(exp, []byte("id\n1\n"))))
 			require.NoError(t, err)
 			got, err := io.ReadAll(reader)
@@ -962,13 +925,13 @@ func TestCompressionAcceptsTheSizesRealFilesDeclare(t *testing.T) {
 		payload := []byte("id,name\n1,alice\n2,bob\n")
 		for _, ct := range []CompressionType{CompressionXZ, CompressionZSTD} {
 			var buf bytes.Buffer
-			w, closeWriter, err := NewCompressionHandler(ct).CreateWriter(&buf)
+			w, closeWriter, err := newCompressor(ct, &buf)
 			require.NoError(t, err)
 			_, err = w.Write(payload)
 			require.NoError(t, err)
 			require.NoError(t, closeWriter())
 
-			reader, cleanup, err := NewCompressionHandler(ct).CreateReader(bytes.NewReader(buf.Bytes()))
+			reader, cleanup, err := newDecompressor(ct, bytes.NewReader(buf.Bytes()))
 			require.NoError(t, err)
 			got, err := io.ReadAll(reader)
 			require.NoError(t, err)
@@ -995,7 +958,7 @@ func TestEveryCodecHoldsADamagedStreamToABudget(t *testing.T) {
 	} {
 		t.Run(ct.Extension(), func(t *testing.T) {
 			var buf bytes.Buffer
-			w, closeWriter, err := NewCompressionHandler(ct).CreateWriter(&buf)
+			w, closeWriter, err := newCompressor(ct, &buf)
 			require.NoError(t, err)
 			_, err = w.Write(payload)
 			require.NoError(t, err)
@@ -1021,7 +984,7 @@ func TestEveryCodecHoldsADamagedStreamToABudget(t *testing.T) {
 			for idx, data := range cases {
 				var before, after runtime.MemStats
 				runtime.ReadMemStats(&before)
-				reader, cleanup, err := NewCompressionHandler(ct).CreateReader(bytes.NewReader(data))
+				reader, cleanup, err := newDecompressor(ct, bytes.NewReader(data))
 				if err == nil {
 					_, _ = io.Copy(io.Discard, io.LimitReader(reader, 1<<20))
 					cleanup()
@@ -1042,32 +1005,72 @@ func TestEveryCodecHoldsADamagedStreamToABudget(t *testing.T) {
 // than fall through with a nil reader or writer.
 const unknownCompression CompressionType = 99
 
-// TestCompressionHandler_UnknownType covers the refusal of a compression type
-// this package does not know.
-func TestCompressionHandler_UnknownType(t *testing.T) {
+// TestCompressionType_UnknownType covers the refusal of a compression type
+// this package does not know, through the two methods a caller reaches it by.
+func TestCompressionType_UnknownType(t *testing.T) {
 	t.Parallel()
-
-	handler := NewCompressionHandler(unknownCompression)
 
 	t.Run("reading", func(t *testing.T) {
 		t.Parallel()
 
-		reader, cleanup, err := handler.CreateReader(bytes.NewReader(nil))
+		reader, err := unknownCompression.NewReader(bytes.NewReader(nil))
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrCompression)
 		assert.Nil(t, reader)
-		assert.Nil(t, cleanup)
 	})
 
 	t.Run("writing", func(t *testing.T) {
 		t.Parallel()
 
-		writer, cleanup, err := handler.CreateWriter(&bytes.Buffer{})
+		writer, err := unknownCompression.NewWriter(&bytes.Buffer{})
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrCompression)
 		assert.Nil(t, writer)
-		assert.Nil(t, cleanup)
 	})
+}
+
+// TestCompressionType_CloseReleasesTheCodecAndNotTheStream pins what Close on
+// the two results means: the codec is finished, and the reader or writer it was
+// wrapped around is still the caller's to close. A writer that closed the
+// destination would make os.Create + NewWriter + Close + file.Close fail on the
+// last step, and a reader that did would close a file a caller meant to rewind.
+func TestCompressionType_CloseReleasesTheCodecAndNotTheStream(t *testing.T) {
+	t.Parallel()
+
+	for _, ct := range []CompressionType{CompressionNone, CompressionGZ, CompressionZSTD, CompressionLZ4} {
+		t.Run(ct.String(), func(t *testing.T) {
+			t.Parallel()
+
+			dest := &closeCountingBuffer{}
+			writer, err := ct.NewWriter(dest)
+			require.NoError(t, err)
+			_, err = io.WriteString(writer, "id\n1\n")
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
+			assert.Equal(t, 0, dest.closes, "NewWriter's Close must not close the destination")
+
+			source := &closeCountingBuffer{Buffer: *bytes.NewBuffer(dest.Bytes())}
+			reader, err := ct.NewReader(source)
+			require.NoError(t, err)
+			got, err := io.ReadAll(reader)
+			require.NoError(t, err)
+			assert.Equal(t, "id\n1\n", string(got))
+			require.NoError(t, reader.Close())
+			assert.Equal(t, 0, source.closes, "NewReader's Close must not close the source")
+		})
+	}
+}
+
+// closeCountingBuffer is a bytes.Buffer that counts how often it is closed, so a
+// test can tell a codec's Close from the stream's.
+type closeCountingBuffer struct {
+	bytes.Buffer
+	closes int
+}
+
+func (b *closeCountingBuffer) Close() error {
+	b.closes++
+	return nil
 }
 
 // TestCompressionFailureSaysItOnce pins what a codec's failure reports.

@@ -577,8 +577,7 @@ func writeSQLiteTableDataTo(w io.Writer, tableName string, columns []string, row
 
 // createCompressedWriter creates an appropriate writer based on compression type
 func createCompressedWriter(w io.Writer, compression CompressionType) (io.Writer, func() error, error) {
-	handler := NewCompressionHandler(compression)
-	return handler.CreateWriter(w)
+	return newCompressor(compression, w)
 }
 
 // textDumpFormat is how one text output format is written, and the sentinel a
