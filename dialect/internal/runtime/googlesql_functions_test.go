@@ -319,6 +319,21 @@ func TestGoogleSQLScalarFunctions(t *testing.T) {
 		{name: "to_json_string quotes a string", query: `SELECT TO_JSON_STRING('a')`, want: `"a"`},
 		{name: "to_json_string of a number", query: `SELECT TO_JSON_STRING(1)`, want: "1"},
 		{name: "to_json_string of null", query: `SELECT TO_JSON_STRING(NULL)`, want: "null"},
+		// JSON has no bytes, and the encoding GoogleSQL documents for one is
+		// RFC 4648 base64: its own example is b"Google" to "R29vZ2xl".
+		{name: "to_json_string encodes bytes as base64", query: `SELECT TO_JSON_STRING(b'Google')`, want: `"R29vZ2xl"`},
+		{name: "to_json_string pads the base64 it writes", query: `SELECT TO_JSON_STRING(b'ab')`, want: `"YWI="`},
+		{name: "to_json_string of empty bytes", query: `SELECT TO_JSON_STRING(b'')`, want: `""`},
+		{name: "to_json_string of bytes that are not text", query: `SELECT TO_JSON_STRING(FROM_HEX('ff'))`, want: `"/w=="`},
+
+		// SAFE_CONVERT_BYTES_TO_STRING is the one conversion from BYTES to
+		// STRING that cannot fail: an invalid UTF-8 sequence becomes U+FFFD
+		// rather than raising, which is what separates it from a cast.
+		{name: "safe_convert_bytes_to_string of text", query: `SELECT SAFE_CONVERT_BYTES_TO_STRING(b'ab')`, want: "ab"},
+		{name: "safe_convert_bytes_to_string replaces an invalid sequence", query: `SELECT TO_HEX(CAST(SAFE_CONVERT_BYTES_TO_STRING(FROM_HEX('61ff62')) AS BYTES))`, want: "61efbfbd62"},
+		{name: "safe_convert_bytes_to_string of nothing", query: `SELECT SAFE_CONVERT_BYTES_TO_STRING(b'')`, want: ""},
+		{name: "safe_convert_bytes_to_string of null", query: `SELECT SAFE_CONVERT_BYTES_TO_STRING(NULL)`, want: ""},
+		{name: "a cast refuses what safe_convert replaces", query: `SELECT CAST(FROM_HEX('61ff62') AS STRING)`, wantErr: true},
 
 		// IEEE_DIVIDE answers where "/" raises under this dialect.
 		{name: "ieee_divide by zero", query: `SELECT IEEE_DIVIDE(1, 0)`, want: "+Inf"},

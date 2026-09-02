@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nao1215/filesql/dialect/internal/dialects"
 )
@@ -212,6 +213,15 @@ func castValue(d dialects.Dialect, target string, v driver.Value) (driver.Value,
 	case castDecimal:
 		return castToDecimal(d, v, params, strict)
 	case castText:
+		if d == dialects.GoogleSQL {
+			// GoogleSQL reads the bytes as UTF-8 and raises when they are not,
+			// which is what leaves SAFE_CONVERT_BYTES_TO_STRING -- whose whole
+			// difference from this cast is that it replaces instead -- a
+			// function worth having.
+			if b, isBytes := bytesOperand(v); isBytes && !utf8.Valid(b) {
+				return nil, fmt.Errorf("%w: bytes are not valid UTF-8", ErrInvalidCast)
+			}
+		}
 		return castToText(v, params)
 	case castBool:
 		return castToBool(d, v, strict)

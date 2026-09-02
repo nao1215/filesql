@@ -912,6 +912,15 @@ func googlesqlPrintValue(v driver.Value, literal bool) string {
 		return strconv.FormatFloat(x, 'g', -1, 64)
 	case bool:
 		return strconv.FormatBool(x)
+	case []byte:
+		// A BYTES value has a literal of its own, and printing it as a string
+		// literal named a value that would not compare equal to it. The
+		// documented forms are "unquoted escaped bytes" for %t and a "quoted
+		// bytes literal" for %T.
+		if literal {
+			return `b"` + googlesqlEscapeBytes(x, true) + `"`
+		}
+		return googlesqlEscapeBytes(x, false)
 	}
 	s, ok := toString(v)
 	if !ok {
@@ -921,6 +930,39 @@ func googlesqlPrintValue(v driver.Value, literal bool) string {
 		return strconv.Quote(s)
 	}
 	return s
+}
+
+// googlesqlEscapeBytes writes a byte string the way dialects.GoogleSQL spells one: a byte that
+// is printable ASCII stands for itself, a backslash and the escapes with a
+// letter are written with one, and everything else -- a control byte, a byte
+// above ASCII -- is written as \xHH. quote says whether the double quote that
+// closes a literal has to be escaped too, which it does not when the bytes are
+// printed unquoted.
+func googlesqlEscapeBytes(b []byte, quote bool) string {
+	var out strings.Builder
+	out.Grow(len(b))
+	for _, c := range b {
+		switch {
+		case c == '\\':
+			out.WriteString(`\\`)
+		case c == '"' && quote:
+			out.WriteString(`\"`)
+		case c == '\n':
+			out.WriteString(`\n`)
+		case c == '\r':
+			out.WriteString(`\r`)
+		case c == '\t':
+			out.WriteString(`\t`)
+		case c >= 0x20 && c < 0x7f:
+			out.WriteByte(c)
+		default:
+			out.WriteString(`\x`)
+			const hexDigits = "0123456789abcdef"
+			out.WriteByte(hexDigits[c>>4])
+			out.WriteByte(hexDigits[c&0xf])
+		}
+	}
+	return out.String()
 }
 
 // fnIsNaN implements dialects.GoogleSQL IS_NAN(x).

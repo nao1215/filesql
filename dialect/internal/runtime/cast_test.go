@@ -62,7 +62,16 @@ func TestCastSemantics(t *testing.T) {
 		{"postgresql valid date", dialects.PostgreSQL, `SELECT '2026-01-15'::date`, "2026-01-15", false},
 		{"postgresql null stays null", dialects.PostgreSQL, `SELECT NULL::integer`, "", true},
 
+		// A cast from BYTES to STRING reads the bytes as UTF-8, and GoogleSQL
+		// raises for a sequence that is not. The other two dialects do not,
+		// which is why the check is asked of one dialect only.
+		{"googlesql casts bytes that are utf-8", dialects.GoogleSQL, `SELECT CAST(FROM_HEX('c2a9') AS STRING)`, "\u00a9", false},
+		{"googlesql casts empty bytes", dialects.GoogleSQL, `SELECT CAST(b'' AS STRING)`, "", false},
+		{"mysql keeps bytes that are not utf-8", dialects.MySQL, `SELECT HEX(CAST(UNHEX('61ff62') AS CHAR))`, "61FF62", false},
+		{"postgresql keeps bytes that are not utf-8", dialects.PostgreSQL, `SELECT length(CAST(decode('61ff62', 'hex') AS text))`, "3", false},
+
 		// SAFE_CAST answers NULL where CAST would raise, which is its purpose.
+		{"safe_cast bytes that are not utf-8", dialects.GoogleSQL, `SELECT SAFE_CAST(FROM_HEX('61ff62') AS STRING)`, "", true},
 		{"safe_cast invalid int64", dialects.GoogleSQL, `SELECT SAFE_CAST('abc' AS INT64)`, "", true},
 		{"safe_cast valid int64", dialects.GoogleSQL, `SELECT SAFE_CAST('42' AS INT64)`, "42", false},
 		{"safe_cast invalid float64", dialects.GoogleSQL, `SELECT SAFE_CAST('abc' AS FLOAT64)`, "", true},
@@ -206,6 +215,8 @@ func TestCastTargetsMatchTheEngine(t *testing.T) {
 		{dialects.PostgreSQL, `SELECT CAST('{1,2}' AS int[])`},
 		{dialects.PostgreSQL, `SELECT '{1,2,3}'::int[]`},
 		{dialects.MySQL, `SELECT CONVERT('abc' USING latin1)`},
+		{dialects.GoogleSQL, `SELECT CAST(FROM_HEX('61ff62') AS STRING)`},
+		{dialects.GoogleSQL, `SELECT CAST(FROM_HEX('ff') AS STRING)`},
 	}
 	for _, tt := range refused {
 		if _, err := runDialect(t, db, tt.dialect, tt.query); err == nil {

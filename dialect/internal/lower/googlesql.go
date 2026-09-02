@@ -250,6 +250,8 @@ func (r *googleRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		return paren(binary(call.Args[0], ast.JSONGet, call.Args[1], call.Span)), nil
 	case "BYTE_LENGTH":
 		return rename(call, "octet_length"), nil
+	case "SAFE_CONVERT_BYTES_TO_STRING":
+		return rename(call, "safe_convert_bytes_to_string"), nil
 	case fnNameCharLength, fnNameCharLen:
 		return rename(call, "length"), nil
 	case fnNameStringAgg:
