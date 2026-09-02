@@ -133,7 +133,9 @@ func TestDateArithmeticRejects(t *testing.T) {
 		{dialects.MySQL, `SELECT DATE_ADD(d, INTERVAL 1 DAY_HOUR)`},
 		{dialects.PostgreSQL, `SELECT DATE '2026-01-01' + INTERVAL 'nonsense'`},
 		{dialects.PostgreSQL, `SELECT DATE '2026-01-01' + INTERVAL '1 fortnight'`},
-		{dialects.PostgreSQL, `SELECT DATE '2026-01-01' + INTERVAL '1.5 days'`},
+		// A fraction of a month has no fixed length, so it stays refused where
+		// a fraction of a day is read.
+		{dialects.PostgreSQL, `SELECT DATE '2026-01-01' + INTERVAL '1.5 months'`},
 	}
 	for _, tt := range tests {
 		if _, err := runDialect(t, db, tt.dialect, tt.query); err == nil {
@@ -250,6 +252,131 @@ func TestAddInterval(t *testing.T) {
 			}
 			if !got.Equal(tt.want) {
 				t.Fatalf("addInterval(%d, %q) = %v, want %v", tt.n, tt.unit, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDateArithmeticStaysInsideTheRange pins that arithmetic which leaves the
+// year range a date can hold answers NULL rather than a string this package
+// cannot read back. Adding a day to 9999-12-31 used to answer "10000-01-01",
+// which YEAR() then read as NULL: the row was lost at the second function
+// rather than at the first, where the caller could still see why.
+func TestDateArithmeticStaysInsideTheRange(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name     string
+		dialect  dialects.Dialect
+		query    string
+		want     string
+		wantNull bool
+	}{
+		{name: "mysql past the last day", dialect: dialects.MySQL, query: `SELECT DATE_ADD('9999-12-31', INTERVAL 1 DAY)`, wantNull: true},
+		{name: "mysql past the last second", dialect: dialects.MySQL, query: `SELECT DATE_ADD('9999-12-31 23:59:59', INTERVAL 1 SECOND)`, wantNull: true},
+		{name: "mysql before the first day", dialect: dialects.MySQL, query: `SELECT DATE_SUB('0001-01-01', INTERVAL 1 DAY)`, wantNull: true},
+		{name: "mysql a million years on", dialect: dialects.MySQL, query: `SELECT DATE_ADD('2020-02-29', INTERVAL 1000000 YEAR)`, wantNull: true},
+		{name: "mysql a million years back", dialect: dialects.MySQL, query: `SELECT DATE_SUB('2020-02-29', INTERVAL 1000000 YEAR)`, wantNull: true},
+		{name: "mysql a million months", dialect: dialects.MySQL, query: `SELECT DATE_ADD('2020-02-29', INTERVAL 1000000 MONTH)`, wantNull: true},
+		{name: "mysql a compound unit past the end", dialect: dialects.MySQL, query: `SELECT DATE_ADD('9999-12-31', INTERVAL '1-0' YEAR_MONTH)`, wantNull: true},
+		{name: "googlesql past the last day", dialect: dialects.GoogleSQL, query: `SELECT DATE_ADD(DATE '9999-12-31', INTERVAL 1 DAY)`, wantNull: true},
+		{name: "postgresql past the last day", dialect: dialects.PostgreSQL, query: `SELECT TIMESTAMP '9999-12-31 23:59:59' + INTERVAL '1 day'`, wantNull: true},
+
+		// The last representable day still costs nothing.
+		{name: "mysql reaches the last day", dialect: dialects.MySQL, query: `SELECT DATE_ADD('9999-12-30', INTERVAL 1 DAY)`, want: "9999-12-31"},
+		{name: "mysql reaches the first day", dialect: dialects.MySQL, query: `SELECT DATE_SUB('0001-01-02', INTERVAL 1 DAY)`, want: "0001-01-01"},
+		{name: "googlesql reaches the last day", dialect: dialects.GoogleSQL, query: `SELECT DATE_ADD(DATE '9999-12-30', INTERVAL 1 DAY)`, want: "9999-12-31"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, tt.dialect, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if tt.wantNull {
+				if got.Valid {
+					t.Fatalf("%s = %q, want NULL", tt.query, got.String)
+				}
+				return
+			}
+			if !got.Valid {
+				t.Fatalf("%s answered NULL, want %q", tt.query, tt.want)
+			}
+			if got.String != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
+
+// TestEveryDateArithmeticResultCanBeReadBack is the invariant behind
+// TestDateArithmeticStaysInsideTheRange: whatever DATE_ADD answers, the
+// helpers of this package have to be able to read. A result they cannot read
+// is a row that disappears one function later with nothing said.
+func TestEveryDateArithmeticResultCanBeReadBack(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	units := []string{"MICROSECOND", "SECOND", "MINUTE", "HOUR", "DAY", "WEEK", "MONTH", "QUARTER", "YEAR"}
+	amounts := []string{"1", "-1", "1000000", "-1000000", "999999999"}
+	for _, unit := range units {
+		for _, amount := range amounts {
+			query := "SELECT YEAR(DATE_ADD('2020-02-29 13:45:59', INTERVAL " + amount + " " + unit + "))"
+			inner := "SELECT DATE_ADD('2020-02-29 13:45:59', INTERVAL " + amount + " " + unit + ")"
+			t.Run(unit+" "+amount, func(t *testing.T) {
+				moved, err := runDialect(t, db, dialects.MySQL, inner)
+				if err != nil {
+					t.Fatalf("%s: %v", inner, err)
+				}
+				if !moved.Valid {
+					return // Refusing the arithmetic is the answer this asks for.
+				}
+				read, err := runDialect(t, db, dialects.MySQL, query)
+				if err != nil {
+					t.Fatalf("%s: %v", query, err)
+				}
+				if !read.Valid {
+					t.Fatalf("%s answered %q, which YEAR() then read as NULL", inner, moved.String)
+				}
+			})
+		}
+	}
+}
+
+// TestIntervalLiteralTakesEveryUnitTheTruncationTakes pins that the words a
+// PostgreSQL INTERVAL literal accepts are the words the rest of the package
+// accepts. Four of them used to be missing from the literal alone, two of
+// which addInterval already implemented.
+func TestIntervalLiteralTakesEveryUnitTheTruncationTakes(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{name: "microsecond", query: `SELECT TIMESTAMP '2020-02-29 13:45:59' + INTERVAL '1 microsecond'`, want: "2020-02-29 13:45:59.000001"},
+		{name: "microseconds", query: `SELECT TIMESTAMP '2020-02-29 13:45:59' + INTERVAL '2 microseconds'`, want: "2020-02-29 13:45:59.000002"},
+		{name: "millisecond", query: `SELECT TIMESTAMP '2020-02-29 13:45:59' + INTERVAL '1 millisecond'`, want: "2020-02-29 13:45:59.001"},
+		{name: "decade", query: `SELECT TIMESTAMP '2020-02-29 13:45:59' + INTERVAL '1 decade'`, want: "2030-02-28 13:45:59"},
+		{name: "decades", query: `SELECT TIMESTAMP '2020-02-29 13:45:59' - INTERVAL '1 decades'`, want: "2010-02-28 13:45:59"},
+		{name: "century", query: `SELECT TIMESTAMP '2020-02-29 13:45:59' + INTERVAL '1 century'`, want: "2120-02-29 13:45:59"},
+		{name: "centuries", query: `SELECT TIMESTAMP '2020-02-29 13:45:59' - INTERVAL '1 centuries'`, want: "1920-02-29 13:45:59"},
+		{name: "the units that already worked", query: `SELECT TIMESTAMP '2020-02-29 13:45:59' + INTERVAL '1 day 2 hours'`, want: "2020-03-01 15:45:59"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.PostgreSQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if !got.Valid {
+				t.Fatalf("%s answered NULL, want %q", tt.query, tt.want)
+			}
+			if got.String != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
 			}
 		})
 	}

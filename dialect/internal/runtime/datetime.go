@@ -3,6 +3,7 @@ package runtime
 import (
 	"database/sql/driver"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -34,6 +35,12 @@ const (
 // Go's AddDate does not.
 func addInterval(tm time.Time, n int64, unit string) (time.Time, error) {
 	switch unit {
+	case unitMillennium:
+		return addMonths(tm, n*12*1000), nil
+	case unitCentury:
+		return addMonths(tm, n*12*100), nil
+	case unitDecade:
+		return addMonths(tm, n*12*10), nil
 	case unitYear:
 		return addMonths(tm, n*12), nil
 	case unitQuarter:
@@ -86,13 +93,16 @@ func daysInMonth(year int, month time.Month) int {
 // to a value written without a time keeps the result a plain date, the way the
 // source dialects type it; adding an hour or a minute promotes it to a datetime.
 var dateGrainedUnits = map[string]bool{
-	unitYear:    true,
-	unitISOYear: true,
-	unitQuarter: true,
-	unitMonth:   true,
-	unitWeek:    true,
-	unitISOWeek: true,
-	unitDay:     true,
+	unitMillennium: true,
+	unitCentury:    true,
+	unitDecade:     true,
+	unitYear:       true,
+	unitISOYear:    true,
+	unitQuarter:    true,
+	unitMonth:      true,
+	unitWeek:       true,
+	unitISOWeek:    true,
+	unitDay:        true,
 }
 
 // hasTimePart reports whether a value was written with a time of day, so the
@@ -110,18 +120,31 @@ func hasTimePart(v driver.Value) bool {
 
 // formatInterval renders the result of interval arithmetic, keeping a date a
 // date when nothing in the operation introduced a time.
-func formatInterval(tm time.Time, sourceHadTime bool, unit string) string {
+func formatInterval(tm time.Time, sourceHadTime bool, unit string, format func(time.Time) string) string {
 	if !sourceHadTime && dateGrainedUnits[unit] {
 		return tm.Format(layoutDateOnly)
 	}
-	return formatDateTimeValue(tm)
+	return format(tm)
 }
 
-// fnDateIntervalAdd implements the helper behind dialects.MySQL's and dialects.GoogleSQL's
+// fnDateIntervalAdd implements the helper behind dialects.GoogleSQL's
 // DATE_ADD/DATE_SUB/TIMESTAMP_ADD/TIMESTAMP_SUB: interval_add(value, n, 'unit').
 func fnDateIntervalAdd(args []driver.Value) (driver.Value, error) {
+	return intervalAddWith(args, "interval_add", formatDateTimeValue)
+}
+
+// fnMySQLDateIntervalAdd is fnDateIntervalAdd for dialects.MySQL, which writes
+// all six digits of a fraction where the shared spelling writes the significant
+// ones. The two are one helper with two names rather than one name reading the
+// dialect, because the dialect is known where the call is built and not where
+// it runs.
+func fnMySQLDateIntervalAdd(args []driver.Value) (driver.Value, error) {
+	return intervalAddWith(args, "mysql_interval_add", formatDateTimeValueMySQL)
+}
+
+func intervalAddWith(args []driver.Value, name string, format func(time.Time) string) (driver.Value, error) {
 	if len(args) != 3 {
-		return nil, fmt.Errorf("dialect: interval_add expects 3 arguments, got %d", len(args))
+		return nil, fmt.Errorf("dialect: %s expects 3 arguments, got %d", name, len(args))
 	}
 	tm, ok := toStringTime(args[0])
 	if !ok {
@@ -140,12 +163,27 @@ func fnDateIntervalAdd(args []driver.Value) (driver.Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	return formatInterval(out, hasTimePart(args[0]), unit), nil
+	if !withinDateRange(out) {
+		return nil, nil
+	}
+	return formatInterval(out, hasTimePart(args[0]), unit, format), nil
+}
+
+// withinDateRange reports whether tm is a date this package can write and read
+// back. Arithmetic that leaves the range used to answer a string with a
+// five-digit or negative year, which every helper here then read as NULL: the
+// row disappeared at the next function rather than at the one that could still
+// say why. Both ends are what MySQL and GoogleSQL hold.
+func withinDateRange(tm time.Time) bool {
+	return tm.Year() >= 1 && tm.Year() <= 9999
 }
 
 // intervalTextUnits maps the unit words a dialects.PostgreSQL interval literal may use,
 // singular or plural, to this package's unit names.
 var intervalTextUnits = map[string]string{
+	unitMillennium: unitMillennium, "millenniums": unitMillennium, "millennia": unitMillennium,
+	unitCentury: unitCentury, "centuries": unitCentury,
+	unitDecade: unitDecade, "decades": unitDecade,
 	"year": unitYear, "years": unitYear, "y": unitYear,
 	"quarter": unitQuarter, "quarters": unitQuarter,
 	"month": unitMonth, "months": unitMonth, "mon": unitMonth, "mons": unitMonth,
@@ -154,6 +192,8 @@ var intervalTextUnits = map[string]string{
 	"hour": unitHour, "hours": unitHour, "h": unitHour,
 	"minute": unitMinute, "minutes": unitMinute, "min": unitMinute, "mins": unitMinute,
 	"second": unitSecond, "seconds": unitSecond, "sec": unitSecond, "secs": unitSecond, "s": unitSecond,
+	unitMillisecond: unitMillisecond, unitMillisecondsPlural: unitMillisecond, "msec": unitMillisecond, "msecs": unitMillisecond, "ms": unitMillisecond,
+	unitMicrosecond: unitMicrosecond, unitMicrosecondsPlural: unitMicrosecond, "usec": unitMicrosecond, "usecs": unitMicrosecond, "us": unitMicrosecond,
 }
 
 // intervalTerm is one "amount unit" pair of a dialects.PostgreSQL interval literal.
@@ -171,17 +211,56 @@ func parseIntervalText(text string) ([]intervalTerm, error) {
 	}
 	terms := make([]intervalTerm, 0, len(fields)/2)
 	for i := 0; i < len(fields); i += 2 {
-		amount, err := strconv.ParseInt(fields[i], 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("%w: interval amount %q is not a whole number", sqlerr.ErrUnsupportedSyntax, fields[i])
-		}
 		unit, ok := intervalTextUnits[strings.ToLower(fields[i+1])]
 		if !ok {
 			return nil, fmt.Errorf("%w: unsupported interval unit %q", sqlerr.ErrUnsupportedSyntax, fields[i+1])
 		}
-		terms = append(terms, intervalTerm{amount: amount, unit: unit})
+		amount, err := strconv.ParseInt(fields[i], 10, 64)
+		if err == nil {
+			terms = append(terms, intervalTerm{amount: amount, unit: unit})
+			continue
+		}
+		split, err := splitFractionalTerm(fields[i], unit)
+		if err != nil {
+			return nil, err
+		}
+		terms = append(terms, split...)
 	}
 	return terms, nil
+}
+
+// microsPerUnit is how many microseconds one of a unit lasts, for the units
+// whose length does not depend on where in the calendar they fall. A unit that
+// is not here has no fixed length, which is why a fraction of one is refused.
+var microsPerUnit = map[string]int64{
+	unitWeek:        7 * 24 * 60 * 60 * 1000000,
+	unitDay:         24 * 60 * 60 * 1000000,
+	unitHour:        60 * 60 * 1000000,
+	unitMinute:      60 * 1000000,
+	unitSecond:      1000000,
+	unitMillisecond: 1000,
+	unitMicrosecond: 1,
+}
+
+// splitFractionalTerm reads an amount written with a decimal point into a whole
+// number of its own unit plus the remainder in microseconds, which is how
+// PostgreSQL reads "1.5 hours". A fraction of a month or of anything longer is
+// refused rather than guessed at: PostgreSQL spends it as thirty-day months,
+// a length no other part of this package assumes.
+func splitFractionalTerm(written, unit string) ([]intervalTerm, error) {
+	perUnit, fixed := microsPerUnit[unit]
+	if !fixed {
+		return nil, fmt.Errorf("%w: interval amount %q is not a whole number of %ss", sqlerr.ErrUnsupportedSyntax, written, unit)
+	}
+	amount, err := strconv.ParseFloat(written, 64)
+	if err != nil || math.IsInf(amount, 0) || math.IsNaN(amount) {
+		return nil, fmt.Errorf("%w: interval amount %q is not a number", sqlerr.ErrUnsupportedSyntax, written)
+	}
+	micros := math.Round(amount * float64(perUnit))
+	if math.Abs(micros) > math.MaxInt64 {
+		return nil, fmt.Errorf("%w: interval amount %q is too large", sqlerr.ErrUnsupportedSyntax, written)
+	}
+	return []intervalTerm{{amount: int64(micros), unit: unitMicrosecond}}, nil
 }
 
 // fnIntervalTextAdd implements dialects.PostgreSQL's "value + INTERVAL 'text'" (and the
@@ -213,6 +292,9 @@ func fnIntervalTextAdd(args []driver.Value) (driver.Value, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	if !withinDateRange(tm) {
+		return nil, nil
 	}
 	// A date plus an interval is a timestamp in dialects.PostgreSQL, whatever the
 	// interval was made of: pg_typeof on it says "timestamp without time zone"
