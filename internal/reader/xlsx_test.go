@@ -1,9 +1,13 @@
 package reader
 
 import (
+	"archive/zip"
 	"bytes"
 	"fmt"
+	"io"
+	"regexp"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/nao1215/filesql/internal/infer"
@@ -496,4 +500,93 @@ func TestReadXLSXHiddenNumbersLoadWhereverTheySit(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, [][]string{{"1", ""}}, records)
 	})
+}
+
+// rewritePart returns the workbook with one part of the archive rewritten by fn.
+func rewritePart(t *testing.T, data []byte, part string, fn func(string) string) []byte {
+	t.Helper()
+
+	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	out := zip.NewWriter(&buf)
+	for _, file := range archive.File {
+		body, err := file.Open()
+		require.NoError(t, err)
+		content, err := io.ReadAll(body)
+		require.NoError(t, err)
+		require.NoError(t, body.Close())
+		if file.Name == part {
+			content = []byte(fn(string(content)))
+		}
+		w, err := out.Create(file.Name)
+		require.NoError(t, err)
+		_, err = w.Write(content)
+		require.NoError(t, err)
+	}
+	require.NoError(t, out.Close())
+	return buf.Bytes()
+}
+
+// spellings are the ways a writer other than Excel may spell a worksheet's XML,
+// each a rewrite of the sheet excelize writes: every element behind a namespace
+// prefix, as the Open XML SDK writes them; attributes in single quotes, which
+// XML allows; and each reference attribute on a line of its own behind a tab
+// with spaces around the equals sign, as a pretty-printing writer emits.
+var spellings = map[string]func(string) string{
+	"as excelize writes it": func(s string) string { return s },
+	"elements prefixed": func(s string) string {
+		head, body, _ := strings.Cut(s, "?>")
+		body = regexp.MustCompile(`<(/?)([A-Za-z])`).ReplaceAllString(body, "<${1}x:${2}")
+		return head + "?>" + strings.Replace(body,
+			`xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"`,
+			`xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"`, 1)
+	},
+	"attributes single-quoted": func(s string) string {
+		head, body, _ := strings.Cut(s, "?>")
+		return head + "?>" + regexp.MustCompile(`="([^"]*)"`).ReplaceAllString(body, "='${1}'")
+	},
+	"references on their own lines": func(s string) string {
+		head, body, _ := strings.Cut(s, "?>")
+		return head + "?>" + strings.ReplaceAll(body, ` r="`, "\n\tr = \"")
+	},
+}
+
+// TestReadXLSXSpellingsOfTheSheet holds a sheet to the same table however its
+// XML is spelled. The library that opens the workbook is an XML parser and
+// reads every spelling alike; the byte scan that says which rows hold a cell
+// recognized only Excel's, and a spelling it did not recognize either dropped
+// every record of empty cells or numbered the rows in sequence, which put a
+// record where the sheet holds no row and lost the one at the end.
+func TestReadXLSXSpellingsOfTheSheet(t *testing.T) {
+	t.Parallel()
+
+	// Row 3 and row 7 hold the empty string in every cell and are records; row
+	// 5 is not in the sheet and is not one.
+	const sheet = "data"
+	f := excelize.NewFile()
+	require.NoError(t, f.SetSheetName("Sheet1", sheet))
+	require.NoError(t, f.SetSheetRow(sheet, "A1", &[]any{"id", "name"}))
+	require.NoError(t, f.SetSheetRow(sheet, "A2", &[]any{1, "alice"}))
+	require.NoError(t, f.SetSheetRow(sheet, "A3", &[]any{"", ""}))
+	require.NoError(t, f.SetSheetRow(sheet, "A4", &[]any{2, "bob"}))
+	require.NoError(t, f.SetSheetRow(sheet, "A6", &[]any{3, "carol"}))
+	require.NoError(t, f.SetSheetRow(sheet, "A7", &[]any{"", ""}))
+	var buf bytes.Buffer
+	require.NoError(t, f.Write(&buf))
+	require.NoError(t, f.Close())
+
+	want := [][]string{{"1", "alice"}, {"", ""}, {"2", "bob"}, {"3", "carol"}, {"", ""}}
+	for name, spell := range spellings {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			data := rewritePart(t, buf.Bytes(), "xl/worksheets/sheet1.xml", spell)
+
+			_, records, err := readSheet(t, data)
+
+			require.NoError(t, err)
+			assert.Equal(t, want, records)
+		})
+	}
 }

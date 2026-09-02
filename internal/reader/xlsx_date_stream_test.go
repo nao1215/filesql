@@ -3,6 +3,7 @@ package reader
 import (
 	"bytes"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -265,6 +266,16 @@ func TestScanSheetRowsReadsTheRowsThatHoldCells(t *testing.T) {
 			sheet: `<sheetData/>`,
 			want:  nil,
 		},
+		{
+			name:  "a comment, a declaration and an end tag open nothing",
+			sheet: `<?xml version="1.0"?><!-- <row r="9"> --><sheetData><row r="2"><c r="A2"/></row></sheetData>`,
+			want:  []int{2},
+		},
+		{
+			name:  "an attribute the parser would refuse is passed over",
+			sheet: `<sheetData><row r=1><c r="A1/></row><row r="3"><c r="A3"/></row></sheetData>`,
+			want:  []int{1, 3},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -333,5 +344,113 @@ func TestRowSetIsEmptyWhenNil(t *testing.T) {
 	held.add(-1)
 	if held.lastRow() != 0 {
 		t.Error("a row number below one was recorded")
+	}
+}
+
+// TestScanSheetRowsReadsEverySpelling holds the byte scanner to what the XML
+// parser beside it accepts, for the constructs it looks at. A writer other than
+// Excel may put every element behind a namespace prefix, quote an attribute
+// with single quotes, or break a line before an attribute and space out its
+// equals sign; the library that opens the workbook reads all of those, and a
+// scan that stands in for it has to as well, or the rows it answers with are
+// not the rows the sheet holds.
+func TestScanSheetRowsReadsEverySpelling(t *testing.T) {
+	t.Parallel()
+
+	// Rows 1, 3 and 4 hold a cell; row 2 is not in the sheet.
+	want := []int{1, 3, 4}
+	for _, tt := range []struct {
+		name  string
+		sheet string
+	}{
+		{
+			name:  "as Excel writes it",
+			sheet: `<sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="3"><c r="A3"/></row><row r="4"><c r="A4"/></row></sheetData>`,
+		},
+		{
+			name:  "elements behind a namespace prefix",
+			sheet: `<x:sheetData><x:row r="1"><x:c r="A1"><x:v>1</x:v></x:c></x:row><x:row r="3"><x:c r="A3"/></x:row><x:row r="4"><x:c r="A4"/></x:row></x:sheetData>`,
+		},
+		{
+			name:  "attributes in single quotes",
+			sheet: `<sheetData><row r='1'><c r='A1'><v>1</v></c></row><row r='3'><c r='A3'/></row><row r='4'><c r='A4'/></row></sheetData>`,
+		},
+		{
+			name:  "a line break before the attribute and spaces around the equals sign",
+			sheet: "<sheetData><row\n\tr = \"1\"><c\n\tr = \"A1\"><v>1</v></c></row><row\n\tr = \"3\"><c\n\tr = \"A3\"/></row><row\n\tr=\"4\"><c\n\tr=\"A4\"/></row></sheetData>",
+		},
+		{
+			name:  "the reference behind other attributes",
+			sheet: `<sheetData><row spans="1:1" r="1"><c s="1" t="n" r="A1"><v>1</v></c></row><row ht="15" r="3"><c t='s' r='A3'/></row><row r="4"><c r="A4"/></row></sheetData>`,
+		},
+		{
+			name:  "a cell reference in lower case",
+			sheet: `<sheetData><row><c r="a1"/></row><row><c r="a3"/></row><row><c r="a4"/></row></sheetData>`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rows := &rowSet{}
+			require.NoError(t, scanSheetRows(strings.NewReader(tt.sheet), rows))
+			var got []int
+			for row := 1; row <= rows.lastRow(); row++ {
+				if rows.has(row) {
+					got = append(got, row)
+				}
+			}
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
+// TestTheTwoScansAgreeOnTheRows holds the byte scan and the XML scan of one
+// sheet to the same rows. The XML scan visits every cell that stores a number,
+// through encoding/xml, and the byte scan answers which rows hold a cell; over a
+// sheet whose every cell stores a number the two have to name the same rows,
+// whatever spelling the sheet is written in, so the byte scan cannot accept
+// less than the parser does without this saying so.
+func TestTheTwoScansAgreeOnTheRows(t *testing.T) {
+	t.Parallel()
+
+	body := `<row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c></row>` +
+		`<row r="3"><c r="A3"><v>3</v></c></row>` +
+		`<row r="6"><c r="B6"><v>6</v></c></row>` +
+		`<row><c><v>7</v></c></row>`
+	for name, spell := range map[string]func(string) string{
+		"as Excel writes it": func(s string) string { return s },
+		"elements prefixed": func(s string) string {
+			return regexp.MustCompile(`<(/?)([A-Za-z])`).ReplaceAllString(s, "<${1}x:${2}")
+		},
+		"attributes single-quoted": func(s string) string {
+			return regexp.MustCompile(`="([^"]*)"`).ReplaceAllString(s, "='${1}'")
+		},
+		"references on their own lines": func(s string) string {
+			return strings.ReplaceAll(s, ` r="`, "\n\tr = \"")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			sheet := spell(`<worksheet><sheetData>` + body + `</sheetData></worksheet>`)
+
+			held := &rowSet{}
+			require.NoError(t, scanSheetRows(strings.NewReader(sheet), held))
+			values := map[sheetCell]string{}
+			require.NoError(t, scanSheetValues(strings.NewReader(sheet), numberFormatStyles{}, false, values))
+
+			fromValues := map[int]bool{}
+			for cell := range values {
+				fromValues[cell.row] = true
+			}
+			fromBytes := map[int]bool{}
+			for row := 1; row <= held.lastRow(); row++ {
+				if held.has(row) {
+					fromBytes[row] = true
+				}
+			}
+			assert.Equal(t, map[int]bool{1: true, 3: true, 6: true, 7: true}, fromValues)
+			assert.Equal(t, fromValues, fromBytes)
+		})
 	}
 }

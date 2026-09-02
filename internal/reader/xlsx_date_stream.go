@@ -277,19 +277,20 @@ func scanRowWindow(window []byte, row *int, into *rowSet, more bool) int {
 			return len(window)
 		}
 		tag = tag[:end]
-		switch {
-		case bytes.HasPrefix(tag, []byte("<row")) && isTagBoundary(tag, len("<row")):
+		name, attrs := startTag(tag)
+		switch string(name) {
+		case "row":
 			// A row carries its number, and one without follows the row before,
 			// which is what a writer that omits them means.
-			if n, ok := rowNumberAttr(tag); ok {
+			if n, ok := rowNumberAttr(attrs); ok {
 				*row = n
 			} else {
 				*row++
 			}
-		case bytes.HasPrefix(tag, []byte("<c")) && isTagBoundary(tag, len("<c")):
+		case "c":
 			// A cell carries the row it is in, which is what says where it is
 			// when its row left its own number out.
-			if n, ok := rowNumberAttr(tag); ok {
+			if n, ok := rowNumberAttr(attrs); ok {
 				*row = n
 			}
 			into.add(*row)
@@ -298,34 +299,92 @@ func scanRowWindow(window []byte, row *int, into *rowSet, more bool) int {
 	}
 }
 
-// isTagBoundary reports whether a tag name ends at n, rather than the name being
-// the start of a longer one: "<row" is a row and "<rowBreaks" is not.
-func isTagBoundary(tag []byte, n int) bool {
-	if len(tag) == n {
-		return true
+// startTag splits a tag into the local name of the element it opens and the
+// attributes after the name. An end tag, a comment and a processing
+// instruction open nothing and are answered with no name.
+//
+// The name is read whole and then compared, rather than matched by prefix, so
+// "<row" is a row and "<rowBreaks" is not; and a namespace prefix on it is
+// dropped, since a writer may put every element behind one -- "<x:row" -- and
+// the parser this scan stands in for compares the local name.
+func startTag(tag []byte) (name, attrs []byte) {
+	if len(tag) < 2 || tag[0] != '<' {
+		return nil, nil
 	}
-	switch tag[n] {
-	case ' ', '\t', '\r', '\n', '/':
-		return true
+	body := tag[1:]
+	end := 0
+	for end < len(body) && !isXMLSpace(body[end]) && body[end] != '/' && body[end] != '>' {
+		end++
 	}
-	return false
+	name = body[:end]
+	if len(name) == 0 || name[0] == '?' || name[0] == '!' {
+		return nil, nil
+	}
+	if colon := bytes.LastIndexByte(name, ':'); colon >= 0 {
+		name = name[colon+1:]
+	}
+	return name, body[end:]
+}
+
+// isXMLSpace reports whether a byte is what XML counts as whitespace.
+func isXMLSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\r' || c == '\n'
+}
+
+// attrValue finds an attribute by name among a start tag's attributes, reading
+// them as the parser accepts them: a name, whitespace or none, an equals sign,
+// whitespace or none, and a value in either kind of quote. A writer that quotes
+// with single quotes, breaks a line before an attribute or spaces out the
+// equals sign is writing XML, and the parser this scan stands in for reads it.
+func attrValue(attrs []byte, name string) ([]byte, bool) {
+	at := 0
+	for {
+		for at < len(attrs) && isXMLSpace(attrs[at]) {
+			at++
+		}
+		if at >= len(attrs) || attrs[at] == '/' || attrs[at] == '>' {
+			return nil, false
+		}
+		start := at
+		for at < len(attrs) && !isXMLSpace(attrs[at]) && attrs[at] != '=' && attrs[at] != '/' {
+			at++
+		}
+		key := attrs[start:at]
+		for at < len(attrs) && isXMLSpace(attrs[at]) {
+			at++
+		}
+		if at >= len(attrs) || attrs[at] != '=' {
+			return nil, false
+		}
+		at++
+		for at < len(attrs) && isXMLSpace(attrs[at]) {
+			at++
+		}
+		if at >= len(attrs) || (attrs[at] != '"' && attrs[at] != '\'') {
+			return nil, false
+		}
+		quote := attrs[at]
+		at++
+		end := bytes.IndexByte(attrs[at:], quote)
+		if end < 0 {
+			return nil, false
+		}
+		if string(key) == name {
+			return attrs[at : at+end], true
+		}
+		at += end + 1
+	}
 }
 
 // rowNumberAttr reads the row a tag's r attribute names: the number itself on a
 // row element, and the digits of a reference such as "A3" on a cell.
-func rowNumberAttr(tag []byte) (int, bool) {
-	at := bytes.Index(tag, []byte(` r="`))
-	if at < 0 {
-		return 0, false
-	}
-	value := tag[at+len(` r="`):]
-	if end := bytes.IndexByte(value, '"'); end >= 0 {
-		value = value[:end]
-	} else {
+func rowNumberAttr(attrs []byte) (int, bool) {
+	value, ok := attrValue(attrs, "r")
+	if !ok {
 		return 0, false
 	}
 	digits := value
-	for len(digits) > 0 && digits[0] >= 'A' && digits[0] <= 'Z' {
+	for len(digits) > 0 && isASCIILetter(digits[0]) {
 		digits = digits[1:]
 	}
 	if len(digits) == 0 {
@@ -345,6 +404,12 @@ func rowNumberAttr(tag []byte) (int, bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+// isASCIILetter reports whether a byte is a column letter of a cell reference,
+// in either case, since "a3" names the same cell as "A3".
+func isASCIILetter(c byte) bool {
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }
 
 // maxSheetRow bounds a row number read out of a sheet, which is what keeps a
