@@ -484,13 +484,11 @@ func (p *Parser) parseCallArgs(call *ast.FuncCall) error {
 			break
 		}
 	}
-	if p.eatWords("ORDER", "BY") {
-		terms, err := p.parseOrderTerms()
-		if err != nil {
-			return err
-		}
-		call.OrderBy = terms
+	order, err := p.parseOrderBy()
+	if err != nil {
+		return err
 	}
+	call.OrderBy = order
 	if p.eatWord("SEPARATOR") {
 		sep, err := p.parseExpr(precLowest)
 		if err != nil {

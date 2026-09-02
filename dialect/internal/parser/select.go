@@ -29,18 +29,11 @@ func (p *Parser) parseSelectStmt() (*ast.SelectStmt, error) {
 	}
 	stmt.Body = body
 
-	if p.eatWords("ORDER", "BY") {
-		terms, err := p.parseOrderTerms()
-		if err != nil {
-			return nil, err
-		}
-		stmt.OrderBy = terms
-	}
-	limit, err := p.parseLimit()
+	order, limit, err := p.parseStatementTail()
 	if err != nil {
 		return nil, err
 	}
-	stmt.Limit = limit
+	stmt.OrderBy, stmt.Limit = order, limit
 	return stmt, nil
 }
 
@@ -464,6 +457,31 @@ func (p *Parser) parseAlias() (name string, quoted, ok bool, err error) {
 	}
 }
 
+// parseOrderBy reads an ORDER BY when one is there, and answers nothing when it
+// is not. Six places may be followed by one and each wrote the words, the call
+// and the error check out for itself.
+func (p *Parser) parseOrderBy() ([]ast.OrderTerm, error) {
+	if !p.eatWords("ORDER", "BY") {
+		return nil, nil
+	}
+	return p.parseOrderTerms()
+}
+
+// parseStatementTail reads the ORDER BY and the LIMIT a statement may end with.
+// Four of them may -- the two spellings of SELECT, UPDATE and DELETE -- and
+// they end the same way because SQL says so, not because they happen to.
+func (p *Parser) parseStatementTail() ([]ast.OrderTerm, *ast.LimitClause, error) {
+	order, err := p.parseOrderBy()
+	if err != nil {
+		return nil, nil, err
+	}
+	limit, err := p.parseLimit()
+	if err != nil {
+		return nil, nil, err
+	}
+	return order, limit, nil
+}
+
 // parseOrderTerms reads the terms of an ORDER BY.
 func (p *Parser) parseOrderTerms() ([]ast.OrderTerm, error) {
 	var terms []ast.OrderTerm
@@ -738,13 +756,11 @@ func (p *Parser) parseWindowSpec() (*ast.WindowSpec, error) {
 		}
 		spec.PartitionBy = list
 	}
-	if p.eatWords("ORDER", "BY") {
-		terms, err := p.parseOrderTerms()
-		if err != nil {
-			return nil, err
-		}
-		spec.OrderBy = terms
+	order, err := p.parseOrderBy()
+	if err != nil {
+		return nil, err
 	}
+	spec.OrderBy = order
 	if p.atAnyWord("ROWS", "RANGE", "GROUPS") {
 		frame, err := p.parseWindowFrame()
 		if err != nil {
