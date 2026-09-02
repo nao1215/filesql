@@ -516,3 +516,121 @@ func TestCurrentDatetimeReadsTheClock(t *testing.T) {
 		t.Fatalf("CURRENT_DATETIME() = %q, want a datetime", got.String)
 	}
 }
+
+// TestGoogleSQLShiftsFillWithZeros pins the two shift operators against the
+// ZetaSQL operator documentation, which is the authority here: ">>" does not
+// extend the sign bit, a count of the width or more answers 0, and a negative
+// count is an error. SQLite does none of the three, so each of these used to
+// answer a number BigQuery would never give.
+//
+// The MySQL spellings are asserted beside them because both dialects state the
+// same rule, and only one of them used to implement it.
+func TestGoogleSQLShiftsFillWithZeros(t *testing.T) {
+	db := castDB(t)
+
+	for _, tt := range []struct {
+		name    string
+		query   string
+		want    string
+		wantErr bool
+	}{
+		{name: "a right shift of a negative value brings in zeros", query: `SELECT -8 >> 1`, want: "9223372036854775804"},
+		{name: "a right shift far into a negative value", query: `SELECT -1 >> 60`, want: "15"},
+		{name: "a right shift of the whole width", query: `SELECT -1 >> 64`, want: "0"},
+		{name: "a right shift past the width", query: `SELECT -1 >> 65`, want: "0"},
+		{name: "a left shift past the width", query: `SELECT 1 << 64`, want: "0"},
+		{name: "a left shift within the width", query: `SELECT 1 << 3`, want: "8"},
+		{name: "a right shift within the width", query: `SELECT 8 >> 2`, want: "2"},
+		{name: "a negative left shift count is refused", query: `SELECT 1 << -1`, wantErr: true},
+		{name: "a negative right shift count is refused", query: `SELECT 8 >> -1`, wantErr: true},
+		{name: "a NULL operand is NULL", query: `SELECT NULL >> 1`, want: ""},
+		{name: "a NULL count is NULL", query: `SELECT 1 >> NULL`, want: ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.GoogleSQL, tt.query)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("%s = %v, want an error", tt.query, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+
+	// MySQL reads its count as unsigned, so a negative one is a count past the
+	// width rather than an error, which is the one place the two dialects part.
+	for _, tt := range []struct{ query, want string }{
+		{`SELECT -8 >> 1`, "9223372036854775804"},
+		{`SELECT -1 >> 60`, "15"},
+		{`SELECT -1 >> 64`, "0"},
+		{`SELECT 1 << -1`, "0"},
+	} {
+		got, err := runDialect(t, db, dialects.MySQL, tt.query)
+		if err != nil {
+			t.Fatalf("mysql %s: %v", tt.query, err)
+		}
+		if got.String != tt.want {
+			t.Errorf("mysql %s = %q, want %q", tt.query, got.String, tt.want)
+		}
+	}
+
+	// PostgreSQL shifts a signed value, which is what SQLite does, so its
+	// spelling is left alone and keeps the arithmetic shift.
+	got, err := runDialect(t, db, dialects.PostgreSQL, `SELECT -8 >> 1`)
+	if err != nil {
+		t.Fatalf("postgresql -8 >> 1: %v", err)
+	}
+	if got.String != "-4" {
+		t.Errorf("postgresql -8 >> 1 = %q, want %q", got.String, "-4")
+	}
+}
+
+// TestGoogleSQLXorBindsBetweenAndAndOr pins the level ZetaSQL gives "^", which
+// is looser than every arithmetic and shift operator and than bitwise AND, and
+// tighter than bitwise OR. It used to bind at the addition level, which is
+// MySQL's neighbourhood rather than GoogleSQL's, so an expression mixing "^"
+// with "&", with "+" or with a shift answered a different number and said
+// nothing.
+func TestGoogleSQLXorBindsBetweenAndAndOr(t *testing.T) {
+	db := castDB(t)
+
+	for _, tt := range []struct{ query, want string }{
+		{`SELECT 6 & 3 ^ 1`, "3"},
+		{`SELECT 6 ^ 3 & 1`, "7"},
+		{`SELECT 6 ^ 3 | 1`, "5"},
+		{`SELECT 6 | 3 ^ 1`, "6"},
+		{`SELECT 6 ^ 3 + 1`, "2"},
+		{`SELECT 1 + 2 ^ 1`, "2"},
+		{`SELECT 6 ^ 3 << 1`, "0"},
+		{`SELECT 6 ^ 3 * 2`, "0"},
+	} {
+		got, err := runDialect(t, db, dialects.GoogleSQL, tt.query)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.query, err)
+		}
+		if got.String != tt.want {
+			t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
+		}
+	}
+
+	// MySQL puts "^" above multiplication, so the same spellings group
+	// differently there and the two dialects must not be given one level.
+	for _, tt := range []struct{ query, want string }{
+		{`SELECT 6 & 3 ^ 1`, "2"},
+		{`SELECT 6 ^ 3 * 2`, "10"},
+	} {
+		got, err := runDialect(t, db, dialects.MySQL, tt.query)
+		if err != nil {
+			t.Fatalf("mysql %s: %v", tt.query, err)
+		}
+		if got.String != tt.want {
+			t.Errorf("mysql %s = %q, want %q", tt.query, got.String, tt.want)
+		}
+	}
+}
