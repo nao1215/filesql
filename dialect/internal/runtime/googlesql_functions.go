@@ -807,12 +807,12 @@ func googlesqlShift(left bool) scalarFn {
 			// A BYTES operand keeps its length: the bits leaving one end are
 			// discarded and zeros come in at the other, so a count at or past
 			// the bit length answers that many zero bytes.
-			return bytesShift(operand, uint64(n), left), nil //nolint:gosec // the count is not negative here
+			return bytesShift(operand, uint64(n), left), nil
 		}
 		if n >= 64 {
 			return int64(0), nil
 		}
-		u := uint64(v) //nolint:gosec // the shift is defined on the bits, which is what the reinterpretation keeps
+		u := uint64(v)
 		if left {
 			u <<= uint64(n)
 		} else {

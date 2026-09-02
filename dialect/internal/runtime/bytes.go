@@ -60,7 +60,9 @@ func bytesShift(b []byte, count uint64, left bool) []byte {
 	if count >= uint64(len(b))*8 {
 		return out
 	}
-	whole, bits := int(count/8), count%8
+	// count is below the bit length here, so the whole bytes it moves are an
+	// index into b.
+	whole, bits := int(count/8), count%8 //nolint:gosec // bounded by the check above
 	for i := range out {
 		// from is the byte this one takes its high bits from, and from+1 the
 		// one it takes the rest from once the shift is not a whole number of

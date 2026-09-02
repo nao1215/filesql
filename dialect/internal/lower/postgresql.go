@@ -481,14 +481,14 @@ func binaryDigits(hexDigits string) string {
 // string of the same digits, so the reading has to happen while the literal is
 // still one.
 func bitStringCast(c *ast.CastExpr, lit *ast.Literal) (ast.Expr, error) {
-	switch c.Type.Name {
-	case "INT", typeNameInteger, "INT4", "BIGINT", "INT8":
+	switch {
+	case bitStringIntegerTargets[c.Type.Name]:
 		n, err := strconv.ParseUint(lit.Value, 2, 64)
 		if err != nil {
 			return nil, unsupported(c.Span, "a bit string of %d bits does not fit in an integer", len(lit.Value))
 		}
 		return number(int64(n), c.Span), nil //nolint:gosec // a bit string past int64 does not fit, and ParseUint has refused it
-	case "SMALLINT", "INT2", "NUMERIC", "DECIMAL", "REAL", "FLOAT", "DOUBLE PRECISION", "FLOAT8", "FLOAT4":
+	case bitStringRefusedTargets[c.Type.Name]:
 		return nil, unsupported(c.Span,
 			"PostgreSQL cannot cast a bit string to %s; cast it to an integer first", c.Type.Written)
 	}

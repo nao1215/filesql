@@ -38,3 +38,16 @@ var sqliteTypeNames = map[string]string{ //nolint:gochecknoglobals // a fixed ta
 
 	"BOOL": "BOOLEAN", "BOOLEAN": "BOOLEAN",
 }
+
+// bitStringIntegerTargets are the integer types PostgreSQL casts a bit string
+// to, reading its digits as a base-2 number.
+var bitStringIntegerTargets = map[string]bool{ //nolint:gochecknoglobals // a fixed table
+	"INT": true, "INTEGER": true, "INT4": true, "BIGINT": true, "INT8": true,
+}
+
+// bitStringRefusedTargets are the numeric types PostgreSQL will not cast a bit
+// string to at all, where a caller has to reach an integer first.
+var bitStringRefusedTargets = map[string]bool{ //nolint:gochecknoglobals // a fixed table
+	"SMALLINT": true, "INT2": true, "NUMERIC": true, "DECIMAL": true, "REAL": true,
+	"FLOAT": true, "DOUBLE PRECISION": true, "FLOAT8": true, "FLOAT4": true,
+}

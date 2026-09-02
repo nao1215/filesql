@@ -507,7 +507,7 @@ func mysqlShift(left bool) scalarFn {
 		if count >= 64 {
 			return int64(0), nil
 		}
-		u := uint64(v) //nolint:gosec // the shift is defined on the bits, which is what the reinterpretation keeps
+		u := uint64(v)
 		if left {
 			u <<= count
 		} else {
