@@ -2401,3 +2401,70 @@ func writeTestFile(t *testing.T, dir, name, body string) string {
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	return path
 }
+
+// TestAutoSaveOverwriteXLSXKeepsAHiddenColumn pins what a save does to a column
+// whose number format draws nothing, the ";;;" a spreadsheet user picks to hide
+// a column while keeping its values. The load reads such a column as its
+// numbers, and the save compares what it would write against the same reading,
+// so a save that edits nothing leaves the column's cells and format alone and a
+// save that edits a visible cell writes that cell and nothing else.
+func TestAutoSaveOverwriteXLSXKeepsAHiddenColumn(t *testing.T) {
+	t.Parallel()
+
+	write := func(t *testing.T, path string) {
+		t.Helper()
+
+		const sheet = "book"
+		f := excelize.NewFile()
+		defer func() { _ = f.Close() }()
+		require.NoError(t, f.SetSheetName(defaultSheetName, sheet))
+		hidden := ";;;"
+		style, err := f.NewStyle(&excelize.Style{CustomNumFmt: &hidden})
+		require.NoError(t, err)
+		require.NoError(t, f.SetSheetRow(sheet, "A1", &[]any{"id", "note", "secret"}))
+		require.NoError(t, f.SetSheetRow(sheet, "A2", &[]any{1, "row1", 99}))
+		require.NoError(t, f.SetSheetRow(sheet, "A3", &[]any{2, "row2", 98}))
+		require.NoError(t, f.SetCellStyle(sheet, "C2", "C3", style))
+		require.NoError(t, f.SaveAs(path))
+	}
+
+	t.Run("a save that edits nothing leaves the column as it was", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "book.xlsx")
+		write(t, path)
+		before := workbookCells(t, path)
+		require.Equal(t, "99", before["C2"].raw, "the file stores the number")
+
+		require.NoError(t, autoSaveOverwrite(t, []string{path}, "UPDATE book SET id = id"))
+
+		assert.Equal(t, before, workbookCells(t, path))
+	})
+
+	t.Run("a save that edits a visible cell writes only that cell", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "book.xlsx")
+		write(t, path)
+		want := workbookCells(t, path)
+		want["B3"] = xlsxCell{raw: "edited", kind: excelize.CellTypeSharedString}
+
+		require.NoError(t, autoSaveOverwrite(t, []string{path}, "UPDATE book SET note = 'edited' WHERE id = 2"))
+
+		assert.Equal(t, want, workbookCells(t, path))
+	})
+
+	t.Run("the column loads as its numbers", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "book.xlsx")
+		write(t, path)
+		db, err := Open(t.Context(), path)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, db.Close()) }()
+
+		var sum int
+		require.NoError(t, db.QueryRowContext(t.Context(), "SELECT SUM(secret) FROM book").Scan(&sum))
+		assert.Equal(t, 197, sum)
+	})
+}

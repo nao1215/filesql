@@ -253,12 +253,17 @@ func xlsxSheetBefore(base *reader.Workbook, sheetName string) (xlsxSheetPrior, e
 	if err != nil {
 		return xlsxSheetPrior{}, fmt.Errorf("failed to read sheet %s: %w", sheetName, err)
 	}
+	// The cells are normalized first because the normalization is what says how
+	// far the sheet reaches: the library returns a row that stops before the
+	// cells at its end whose format draws nothing, and the normalization puts
+	// them back.
+	values := base.NormalizeCells(sheetName, rows)
 	prior := xlsxSheetPrior{
-		extent: xlsxExtent{rows: len(rows)},
-		layout: base.LayoutOf(sheetName, rows),
-		values: base.NormalizeCells(sheetName, rows),
+		extent: xlsxExtent{rows: len(values)},
+		layout: base.LayoutOf(sheetName, values),
+		values: values,
 	}
-	for _, row := range rows {
+	for _, row := range values {
 		prior.extent.columns = max(prior.extent.columns, len(row))
 	}
 	return prior, nil

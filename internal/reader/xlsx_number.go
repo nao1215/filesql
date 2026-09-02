@@ -33,20 +33,36 @@ import (
 // This is the reading that asks the library for each cell's style. The loader
 // reads the sheet's own XML instead, which answers the same and costs less; the
 // two are held to that in the reader's tests.
+//
+// The cells are walked as the library stores them rather than as it drew them,
+// because a number whose format draws nothing is drawn as no cell at all;
+// placeCell says what that costs.
 func normalizeXLSXNumbers(f *excelize.File, sheet string, rows [][]string) [][]string {
 	if !mayRedrawANumber(f, rows) {
+		return rows
+	}
+	stored, err := f.GetRows(sheet, excelize.Options{RawCellValue: true})
+	if err != nil {
 		return rows
 	}
 	// A column of one kind of number shares a style, so what a style draws is
 	// worked out once per style rather than once per cell.
 	redraws := make(map[int]bool)
-	for r, row := range rows {
-		for c := range row {
-			if row[c] == "" {
+	for r, row := range stored {
+		for c, raw := range row {
+			if !isPlainNumber(raw) {
 				continue
 			}
 			axis, err := excelize.CoordinatesToCellName(c+1, r+1)
 			if err != nil {
+				continue
+			}
+			cell := sheetCell{row: r + 1, col: c + 1}
+			if storesABoolean(f, sheet, axis) {
+				// A boolean is stored as 1 or 0 and drawn TRUE or FALSE. The
+				// drawing is a word, so a column of them came back as text and
+				// no query that reads the column as a boolean answered.
+				rows = placeCell(rows, cell, raw)
 				continue
 			}
 			styleID, err := f.GetCellStyle(sheet, axis)
@@ -58,24 +74,10 @@ func normalizeXLSXNumbers(f *excelize.File, sheet string, rows [][]string) [][]s
 				moment = styleHoldsDate(f, styleID) || styleDrawsAClock(f, styleID)
 				redraws[styleID] = moment
 			}
-			if storesABoolean(f, sheet, axis) {
-				// A boolean is stored as 1 or 0 and drawn TRUE or FALSE. The
-				// drawing is a word, so a column of them came back as text and
-				// no query that reads the column as a boolean answered.
-				raw, err := f.GetCellValue(sheet, axis, excelize.Options{RawCellValue: true})
-				if err == nil && isPlainNumber(raw) {
-					rows[r][c] = raw
-				}
-				continue
-			}
 			if moment || !storesASerial(f, sheet, axis) {
 				continue
 			}
-			raw, err := f.GetCellValue(sheet, axis, excelize.Options{RawCellValue: true})
-			if err != nil || !isPlainNumber(raw) {
-				continue
-			}
-			rows[r][c] = raw
+			rows = placeCell(rows, cell, raw)
 		}
 	}
 	return rows
