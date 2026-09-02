@@ -1,7 +1,9 @@
 package lower_test
 
 import (
+	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nao1215/filesql/dialect"
@@ -326,5 +328,83 @@ func TestCharacterSetConversionsThatChangeTheBytes(t *testing.T) {
 				t.Errorf("Translate(%q) error = %v, want ErrUnsupportedSyntax", query, err)
 			}
 		})
+	}
+}
+
+// TestMySQLClockNamesAnswerTheClock covers the four names MySQL has for the
+// clock that this package had no answer for. Each reached SQLite, which has no
+// function by any of them, so a caller writing the standard UTC spelling was
+// told their own spelling does not exist.
+//
+// UTC_TIMESTAMP, UTC_DATE and UTC_TIME read the same clock as NOW, CURDATE and
+// CURTIME, because every clock here is UTC; SYSDATE reads the moment the call
+// runs rather than the start of the statement, which is what MySQL means by it.
+func TestMySQLClockNamesAnswerTheClock(t *testing.T) {
+	t.Parallel()
+
+	if err := dialect.RegisterFunctions(); err != nil {
+		t.Fatalf("RegisterFunctions() error = %v", err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+
+	for _, tt := range []struct {
+		call string
+		// like is the shape MySQL answers in, checked by length rather than by
+		// value so the test does not race the clock.
+		length int
+	}{
+		{call: "UTC_TIMESTAMP()", length: len("2006-01-02 15:04:05")},
+		{call: "UTC_DATE()", length: len("2006-01-02")},
+		{call: "UTC_TIME()", length: len("15:04:05")},
+		{call: "SYSDATE()", length: len("2006-01-02 15:04:05")},
+	} {
+		t.Run(tt.call, func(t *testing.T) {
+			t.Parallel()
+
+			out, err := dialect.Translate(dialect.MySQL, "SELECT "+tt.call)
+			if err != nil {
+				t.Fatalf("Translate() error = %v", err)
+			}
+			var got string
+			if err := db.QueryRowContext(t.Context(), out).Scan(&got); err != nil {
+				t.Fatalf("running %q: %v", out, err)
+			}
+			if len(got) != tt.length {
+				t.Errorf("%s answered %q, want a reading %d characters long", tt.call, got, tt.length)
+			}
+		})
+	}
+}
+
+// TestMySQLBinaryTakesBothSpellings covers the cast MySQL writes two ways. Only
+// the operator was lowered, so BINARY(x) -- which MySQL documents and answers --
+// reached a SQLite that has no BINARY.
+func TestMySQLBinaryTakesBothSpellings(t *testing.T) {
+	t.Parallel()
+
+	for _, sql := range []string{"SELECT BINARY 'a'", "SELECT BINARY('a')"} {
+		t.Run(sql, func(t *testing.T) {
+			t.Parallel()
+
+			out, err := dialect.Translate(dialect.MySQL, sql)
+			if err != nil {
+				t.Fatalf("Translate() error = %v", err)
+			}
+			if !strings.Contains(out, "mysql_cast('a', 'BINARY')") {
+				t.Errorf("Translate(%q) = %q, want the cast helper", sql, out)
+			}
+		})
+	}
+
+	if _, err := dialect.Translate(dialect.MySQL, "SELECT BINARY('a', 'b')"); !errors.Is(err, dialect.ErrUnsupportedSyntax) {
+		t.Errorf("a two-argument BINARY error = %v, want ErrUnsupportedSyntax", err)
 	}
 }

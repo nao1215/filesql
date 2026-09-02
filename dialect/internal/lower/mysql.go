@@ -27,7 +27,7 @@ func (r *mysqlRules) Pre(e ast.Expr) (ast.Expr, bool, error) {
 		return nil, false, err
 	}
 	call, ok := e.(*ast.FuncCall)
-	if !ok || callName(call) != "CONVERT" || call.Syntax == ast.CallConvertUsing {
+	if !ok || callName(call) != fnNameConvert || call.Syntax == ast.CallConvertUsing {
 		return e, false, nil
 	}
 	replaced, err := mysqlConvert(call)
@@ -260,8 +260,21 @@ func (r *mysqlRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		return rename(call, "dialect_replace"), nil
 	case typeNameChar:
 		return mysqlChar(call)
-	case "CONVERT":
+	case fnNameConvert:
 		return mysqlConvert(call)
+	case typeNameBinary:
+		// MySQL writes its cast to a byte string two ways, "BINARY x" and
+		// "BINARY(x)", and only the operator was lowered: the call reached
+		// SQLite, which has no BINARY, and the caller was told the spelling
+		// MySQL documents does not exist.
+		if len(call.Args) != 1 {
+			return nil, unsupported(call.Span, "BINARY takes one value, written BINARY x or BINARY(x)")
+		}
+		return castHelper(dialects.MySQL, &ast.CastExpr{
+			Expr: call.Args[0],
+			Type: ast.TypeName{Name: typeNameBinary},
+			Span: call.Span,
+		}, "mysql_cast")
 	case "SOUNDEX":
 		return rename(call, "mysql_soundex"), nil
 	case "NULLIF":
@@ -485,7 +498,11 @@ func mysqlConvert(call *ast.FuncCall) (ast.Expr, error) {
 		return paren(call.Args[0]), nil
 	}
 	if len(call.Args) != 2 {
-		return call, nil
+		// MySQL takes CONVERT(value, type) or CONVERT(value USING charset) and
+		// nothing else, so a call of any other shape is a query MySQL refuses
+		// too. Leaving it alone sent the name to a SQLite that has no CONVERT.
+		return nil, unsupported(call.Span,
+			fnNameConvert+" takes a value and a type, written CONVERT(value, type) or CONVERT(value USING charset)")
 	}
 	// The target is a type written where an argument goes, so the parser read
 	// it as a name, or as a call when it carries a length.

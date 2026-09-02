@@ -326,6 +326,10 @@ var helperArity = map[string]int{ //nolint:gochecknoglobals // a generated table
 	"weekday":                      1,
 	"width_bucket":                 4,
 	"year":                         1,
+	"sysdate":                      0,
+	"utc_date":                     0,
+	"utc_time":                     0,
+	"utc_timestamp":                0,
 }
 
 // builtinArity is the SQLite functions a lowering renames a call onto, with the

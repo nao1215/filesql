@@ -107,6 +107,14 @@
 // is refused is the names one engine has and SQLite has not, rather than every
 // name this package does not rewrite.
 //
+// Which names those are is checked against the engines rather than collected by
+// hand. A test reads what MySQL's help tables and PostgreSQL's pg_proc say each
+// of them defines, and requires that every one of those names is translated
+// here or refused here. The lists were swept by hand once and a sweep is only
+// as complete as the person running it: the one behind these tables walked the
+// scalar functions and never reached the aggregates. BigQuery publishes no such
+// catalog, so GoogleSQL's table is hand-written and nothing checks it this way.
+//
 // # Booleans
 //
 // SQLite has no boolean, and every dialect here has one. TRUE is the integer 1
@@ -435,14 +443,21 @@
 // refused rather than answered unshifted, which would be a different instant.
 //
 // The clock follows from the same absence. NOW, CURDATE, CURTIME,
-// UNIX_TIMESTAMP, PostgreSQL's now and its two fixed siblings, and BigQuery's
+// UNIX_TIMESTAMP, MySQL's UTC_TIMESTAMP, UTC_DATE and UTC_TIME, the bare
+// CURRENT_TIMESTAMP, CURRENT_DATE and CURRENT_TIME, LOCALTIME and
+// LOCALTIMESTAMP, PostgreSQL's now and its two fixed siblings, and BigQuery's
 // CURRENT_DATETIME all read UTC, which is what SQLite's own CURRENT_TIMESTAMP
 // answers and what BigQuery answers when no zone is named; MySQL and
 // PostgreSQL answer a session zone that has no counterpart here. Each of them
 // is fixed at the start of the statement, so every row of one result carries
 // the same reading and so does every place the statement names one of them.
 // PostgreSQL's clock_timestamp and timeofday are the exception and advance
-// while the statement runs, which is what they are for.
+// while the statement runs, which is what they are for, and MySQL's SYSDATE is
+// the same exception under its own name.
+//
+// The reading is whole seconds. MySQL and PostgreSQL let these names take a
+// fractional-seconds precision -- CURRENT_TIMESTAMP(3) -- and a precision this
+// clock cannot answer is refused rather than dropped.
 //
 // One consequence of that has no error to report it: subtracting one timestamp
 // from another is an interval in PostgreSQL and an ordinary subtraction to

@@ -2511,6 +2511,9 @@ func TestOnlyTheChangingHelpersAreNonDeterministic(t *testing.T) {
 		// SQLite must not reuse one row's result for the next.
 		"postgresql_random",
 		"rand",
+		// MySQL's SYSDATE reads the moment the call runs rather than the start
+		// of the statement, which is the whole of what separates it from NOW.
+		"sysdate",
 		"timeofday",
 	}
 	got := make([]string, 0, len(want))

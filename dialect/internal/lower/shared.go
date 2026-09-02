@@ -79,7 +79,7 @@ func commonCall(call *ast.FuncCall, prefix string) (ast.Expr, bool, error) {
 		return qualifiedCall(call, prefix)
 	}
 	switch callName(call) {
-	case "CURRENT_DATE", keywordCurrentTime, keywordCurrentTimestamp, keywordLocalTime, keywordLocalTimestamp:
+	case keywordCurrentDate, keywordCurrentTime, keywordCurrentTimestamp, keywordLocalTime, keywordLocalTimestamp:
 		// The parenthesized spelling, which SQLite's parser does not accept for
 		// these; the bare keyword means the same thing.
 		if len(call.Args) == 0 {
@@ -92,6 +92,14 @@ func commonCall(call *ast.FuncCall, prefix string) (ast.Expr, bool, error) {
 			}
 			return &ast.Keyword{Name: name, Span: call.Span}, true, nil
 		}
+		// MySQL and PostgreSQL let these take a fractional-seconds precision.
+		// The clock here reads whole seconds, so a precision cannot be
+		// answered; saying so is the point, because the alternative was the
+		// name reaching SQLite, which has no function by it, and the caller
+		// being told their own spelling does not exist.
+		return nil, true, unsupported(call.Span,
+			"%s takes no arguments here; the clock this package reads has whole-second precision",
+			callName(call))
 	case "COALESCE":
 		// SQLite's own needs two arguments, where MySQL and PostgreSQL answer
 		// the value itself for one.
@@ -190,12 +198,23 @@ func regexpHelper(b *ast.BinaryExpr, name string) (ast.Expr, error) {
 	return call, nil
 }
 
-// bareValueNames are the words a dialect reads as a value and SQLite does not
-// spell the same way. They reach here as column references, because nothing in
-// the grammar says a bare word is a function.
+// bareValueNames are the words a dialect reads as a value rather than as a
+// column. They reach here as column references, because nothing in the grammar
+// says a bare word is a function.
+//
+// The three SQLite spells the same way are in here too, mapped to themselves,
+// and leaving them out on the grounds that they needed no rewriting is what
+// made a bare CURRENT_TIMESTAMP answer the eleven characters of its own name:
+// a column reference whose name is a SQLite keyword is rendered quoted, and
+// SQLite reads a quoted name that matches no column as a string rather than
+// refusing it. Nothing reported that, so a query stamping rows with the time
+// wrote the same text into every one of them.
 var bareValueNames = map[string]string{ //nolint:gochecknoglobals // a fixed table
-	keywordLocalTime:      keywordCurrentTime,
-	keywordLocalTimestamp: keywordCurrentTimestamp,
+	keywordLocalTime:        keywordCurrentTime,
+	keywordLocalTimestamp:   keywordCurrentTimestamp,
+	keywordCurrentDate:      keywordCurrentDate,
+	keywordCurrentTime:      keywordCurrentTime,
+	keywordCurrentTimestamp: keywordCurrentTimestamp,
 }
 
 // bareValue lowers a name that is a value rather than a column.
@@ -215,7 +234,12 @@ func bareValue(ref *ast.ColumnRef) (ast.Expr, bool) {
 // them the other way round.
 func position(call *ast.FuncCall) (ast.Expr, error) {
 	if len(call.Args) != 2 {
-		return call, nil
+		// Every engine that has POSITION takes two operands, one way round or
+		// the other. Leaving the call alone sent the name to SQLite, which has
+		// no POSITION, so a caller who wrote one operand was told their
+		// spelling does not exist rather than that it takes two.
+		return nil, unsupported(call.Span,
+			"POSITION takes a substring and the string to look in, written POSITION(a IN b) or POSITION(a, b)")
 	}
 	if call.Syntax == ast.CallPositionIn {
 		call.Args[0], call.Args[1] = call.Args[1], call.Args[0]

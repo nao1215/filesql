@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A bare `CURRENT_TIMESTAMP` reads the clock rather than answering its own name ([#1044](https://github.com/nao1215/filesql/issues/1044)). Under every dialect but `sqlite`, `SELECT CURRENT_TIMESTAMP` answered the string `"CURRENT_TIMESTAMP"`, and `CURRENT_DATE` and `CURRENT_TIME` answered theirs, with nothing to say so: a query stamping rows with the current time wrote the same literal text into every row. The three are the standard spelling each of these dialects prefers over `NOW()`. The table of bare words that stand for a value held the two SQLite spells differently and left out the three it spells the same, on the reasoning that those needed no rewriting; what happens to a bare word not in that table is that it stays a column reference, a column reference whose name is a SQLite keyword is rendered quoted, and SQLite reads a quoted name matching no column as a string rather than refusing it. A column really named one of these is still reachable by quoting it, which is what MySQL and PostgreSQL require for a reserved word anyway.
+
+- MySQL's `UTC_TIMESTAMP`, `UTC_DATE`, `UTC_TIME` and `SYSDATE` answer the clock. All four reached SQLite, which has no function by any of them, so a caller writing the standard UTC spelling was told their own spelling does not exist. The first three read the same clock as `NOW`, `CURDATE` and `CURTIME`, because every clock here is UTC; `SYSDATE` reads the moment the call runs rather than the start of the statement, which is what MySQL means by it and the same separation PostgreSQL draws between `clock_timestamp` and `now`.
+
+- MySQL's `BINARY(x)` casts, as `BINARY x` already did. Only the operator spelling was lowered, so the call spelling MySQL documents and answers reached a SQLite that has no `BINARY`.
+
+- A clock keyword written with a fractional-seconds precision is refused with a reason. MySQL and PostgreSQL allow `CURRENT_TIMESTAMP(3)`, `LOCALTIME(3)` and the rest; the clock here reads whole seconds, and the call used to reach SQLite as a name it does not have rather than being told that.
+
+- `POSITION` and `CONVERT` written with the wrong number of arguments are refused by name. Both used to be left alone and sent to a SQLite that has neither, so a caller who wrote one operand was told their spelling does not exist rather than what the function takes.
+
+- A hundred and fifty MySQL names and five hundred PostgreSQL names are refused by name rather than handed to SQLite. They are the spatial functions, the data dictionary, the performance schema, the cryptography, the catalog and administration functions, the sequences, the large objects, XML, text search, ranges, network addresses, the geometric types, the array and record functions, and the names each engine keeps for its own arithmetic. Each is refused with the reason its family gives, and a family large enough that listing it would be a page of one reason is written as a prefix instead.
+
 ### Added
+
+- A test that holds this package to a rule its tables could not state: for every function name an engine defines, a query naming it is translated into something SQLite can run or refused here by name, and never handed to SQLite to fail as a name that does not exist. The names come from the engines -- `dialect/testdata/engine_functions_*.txt` hold what MySQL's help tables and PostgreSQL's `pg_proc` say each of them has, written by `scripts/dump-engine-functions.sh` -- so a name a later engine adds appears when those files are regenerated and the test fails on it then. The lists behind the refusal tables were swept by hand before this, and a sweep is only as complete as the person running it: the one behind them walked the scalar functions and never reached the aggregates, which is how five aggregate names went on reaching SQLite until a second sweep found them. MySQL has no name left without an answer; the twenty-four PostgreSQL names that do are written down in `dialect/testdata/untranslated_postgresql.txt`, and the test fails both when a name not in that file joins them and when a name in it gains an answer, so the debt is visible and can only shrink. BigQuery publishes no catalog of its functions, so GoogleSQL's table stays hand-written and nothing checks it this way.
+
 
 - Two tests over `prep` that had no counterpart: `Process` and `ProcessToWriter` are two ways to ask the same question, so they are now held to one answer -- the same bytes, the same decoded records and the same counts, over eight inputs and each option -- and what one pass writes is read back through a second pass, which is where a format that loses a character to its own output would show. Both pass as they stand; the value is that a rule implemented twice can no longer drift in silence. The JSON cases carry the things there are to lose: a newline, a tab, a nested object, a key outside ASCII.
 

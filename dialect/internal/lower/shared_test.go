@@ -1,6 +1,7 @@
 package lower_test
 
 import (
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
@@ -150,5 +151,81 @@ func TestTranslate_DateSubNegatesTheAmount(t *testing.T) {
 	}
 	if !strings.Contains(got, `interval_add(d, -1, 'month')`) {
 		t.Fatalf("Translate = %q, want the amount negated through interval_add", got)
+	}
+}
+
+// TestBareClockKeywordsReadTheClock covers the three words SQLite spells the
+// same way this package does. That sameness is why they were left out of the
+// table of bare words that stand for a value, and leaving them out is what made
+// them answer their own names: a bare word not in that table stays a column
+// reference, a column reference whose name is a SQLite keyword is rendered
+// quoted, and SQLite reads a quoted name matching no column as a string rather
+// than refusing it. So SELECT CURRENT_TIMESTAMP answered the eleven characters
+// of its own name, under every dialect but sqlite, and nothing said so.
+//
+// The test asserts the answer is not the name, because every right answer is a
+// reading of the clock and no right answer is the word.
+func TestBareClockKeywordsReadTheClock(t *testing.T) {
+	t.Parallel()
+
+	if err := dialect.RegisterFunctions(); err != nil {
+		t.Fatalf("RegisterFunctions() error = %v", err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+
+	for _, d := range dialect.Dialects() {
+		for _, name := range []string{"CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME"} {
+			t.Run(string(d)+"/"+name, func(t *testing.T) {
+				t.Parallel()
+
+				out, err := dialect.Translate(d, "SELECT "+name)
+				if err != nil {
+					t.Fatalf("Translate() error = %v", err)
+				}
+				var got string
+				if err := db.QueryRowContext(t.Context(), out).Scan(&got); err != nil {
+					t.Fatalf("running %q: %v", out, err)
+				}
+				if got == name {
+					t.Errorf("%s answered its own name; translated to %q", name, out)
+				}
+			})
+		}
+	}
+}
+
+// TestClockKeywordsRefuseAPrecision covers the same three words written as a
+// call with the fractional-seconds precision MySQL and PostgreSQL allow. The
+// clock here reads whole seconds, so the precision cannot be answered; saying
+// so is the point, because what happened before was the name reaching a SQLite
+// that has no function by it.
+func TestClockKeywordsRefuseAPrecision(t *testing.T) {
+	t.Parallel()
+
+	for _, sql := range []string{
+		"SELECT CURRENT_TIMESTAMP(3)",
+		"SELECT CURRENT_TIME(3)",
+		"SELECT LOCALTIME(3)",
+		"SELECT LOCALTIMESTAMP(3)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := dialect.Translate(dialect.MySQL, sql)
+			if !errors.Is(err, dialect.ErrUnsupportedSyntax) {
+				t.Fatalf("Translate(%q) error = %v, want ErrUnsupportedSyntax", sql, err)
+			}
+			if !strings.Contains(err.Error(), "whole-second precision") {
+				t.Errorf("error = %v, want it to say why the precision cannot be answered", err)
+			}
+		})
 	}
 }

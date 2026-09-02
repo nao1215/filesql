@@ -1,0 +1,36 @@
+# The PostgreSQL functions this package neither translates nor refuses by name,
+# so a query naming one reaches SQLite and fails with "no such function".
+#
+# This file is the debt, written down. TestEveryEngineFunctionHasAnAnswer reads
+# it and fails when a name that is not here joins them, which is what keeps the
+# list from growing while nobody is looking; a name leaves it by being
+# translated or by being refused with a reason, and the test fails then too,
+# which is what keeps the file honest.
+#
+# Every name here is one PostgreSQL answers, checked against a running
+# PostgreSQL 17. None of them is an internal or an administrative function --
+# those are refused by name already -- so each is a gap rather than a decision.
+DATE_ADD
+DATE_SUBTRACT
+ENUM_FIRST
+ENUM_LAST
+GET_BIT
+IS_NORMALIZED
+JSONB_PATH_EXISTS_TZ
+JSONB_PATH_MATCH_TZ
+JSONB_PATH_QUERY_ARRAY_TZ
+JSONB_PATH_QUERY_FIRST_TZ
+JSONB_PATH_QUERY_TZ
+JSONB_SET_LAX
+MAKE_TIMESTAMPTZ
+OVERLAPS
+REGEXP_MATCH
+REGEXP_MATCHES
+SET_BIT
+TIMEZONE
+TO_BIN
+TO_OCT
+UNICODE_ASSIGNED
+UNICODE_VERSION
+UUID_EXTRACT_TIMESTAMP
+UUID_EXTRACT_VERSION
