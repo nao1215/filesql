@@ -701,7 +701,7 @@ func TestStreamingParser_ParseFromReader_XLSX(t *testing.T) {
 				t.Parallel()
 
 				var compressed bytes.Buffer
-				w, closeWriter, err := NewCompressionHandler(codec).CreateWriter(&compressed)
+				w, closeWriter, err := newCompressor(codec, &compressed)
 				require.NoError(t, err, "failed to create %s writer", codec)
 				_, err = w.Write(workbook)
 				require.NoError(t, err, "failed to write workbook through %s", codec)

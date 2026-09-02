@@ -3,9 +3,8 @@
 //
 // Compression is not this package's concern. Parse reads the bytes it is given
 // as the format it is told, so a compressed file is unwrapped first, by
-// filesql.NewCompressionFactory().CreateReaderForFile for a path or by
-// filesql.NewCompressionHandler(...).CreateReader for a stream whose codec the
-// caller knows. DetectFileType looks through a compression extension for the
+// filesql.OpenReader for a path or by filesql.CompressionType.NewReader for a
+// stream whose codec the caller knows. DetectFileType looks through a compression extension for the
 // same reason: the codec says how to read the bytes, not what they spell.
 //
 // This package can be used by filesql, prep, or any application

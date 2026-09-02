@@ -127,7 +127,7 @@ func TestDBBuilder_AddFS_Compressed(t *testing.T) {
 			t.Parallel()
 
 			var compressed bytes.Buffer
-			w, closeWriter, err := NewCompressionHandler(codec.compression).CreateWriter(&compressed)
+			w, closeWriter, err := newCompressor(codec.compression, &compressed)
 			require.NoError(t, err)
 			_, err = w.Write([]byte(csvData))
 			require.NoError(t, err)
@@ -167,7 +167,7 @@ func TestDBBuilder_AddFS_CompressedHeaderOnly(t *testing.T) {
 			t.Parallel()
 
 			var compressed bytes.Buffer
-			w, closeWriter, err := NewCompressionHandler(codec).CreateWriter(&compressed)
+			w, closeWriter, err := newCompressor(codec, &compressed)
 			require.NoError(t, err)
 			_, err = w.Write([]byte("id,name,email\n"))
 			require.NoError(t, err)

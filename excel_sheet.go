@@ -68,7 +68,7 @@ func excelSheetsOf(sheets []reader.ExcelSheet) []ExcelSheet {
 // be a second implementation of the rule filesql itself applies, free to drift
 // from it.
 func ExcelSheetsInFile(path string) (sheets []ExcelSheet, err error) {
-	source, cleanup, err := NewCompressionFactory().CreateReaderForFile(path)
+	source, cleanup, err := openDecompressed(path)
 	if err != nil {
 		return nil, err
 	}

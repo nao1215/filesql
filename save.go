@@ -396,7 +396,6 @@ func (c *autoSaveConnector) overwriteOriginalFile(ctx context.Context, db *sql.D
 		return err
 	}
 
-	factory := NewCompressionFactory()
 	// The text encoding and the line terminator are read from the file about to
 	// be replaced, for the same reason the compression is read from its name:
 	// what comes back has to be the file the caller had, with their edit in it.
@@ -404,7 +403,7 @@ func (c *autoSaveConnector) overwriteOriginalFile(ctx context.Context, db *sql.D
 	// been edited, and writing UTF-8 over a UTF-16 file changed every byte.
 	options := DumpOptions{
 		Format:      format,
-		Compression: factory.detectCompressionType(path),
+		Compression: detectCompressionType(path),
 		Encoding:    detectSourceEncoding(path),
 		LineEnding:  detectLineEnding(path, format),
 	}
@@ -443,7 +442,6 @@ func (c *autoSaveConnector) siblingBaseTableNames(path string) []string {
 // A workbook holding more than one table is the failure this cannot see: it
 // takes opening the file to know, and it is left to the save.
 func checkOverwriteTargets(paths []string) error {
-	factory := NewCompressionFactory()
 	for _, path := range paths {
 		if isACHFile(path) || isFedWireFile(path) {
 			// Both have writers of their own and take no external compression.
@@ -452,7 +450,7 @@ func checkOverwriteTargets(paths []string) error {
 		if _, err := overwriteFormatFor(path); err != nil {
 			return err
 		}
-		if err := codec.Codec(factory.detectCompressionType(path)).CannotWrite(); err != nil {
+		if err := codec.Codec(detectCompressionType(path)).CannotWrite(); err != nil {
 			return fmt.Errorf("%w: %s cannot be written back: %w", ErrUnsupportedFormat, path, err)
 		}
 	}
@@ -464,8 +462,7 @@ func checkOverwriteTargets(paths []string) error {
 // but have no writer, so a save that quietly turned them into CSV left the
 // caller's file untouched and the change in a file they never named.
 func overwriteFormatFor(path string) (OutputFormat, error) {
-	factory := NewCompressionFactory()
-	switch factory.getBaseFileType(path) {
+	switch baseFileType(path) {
 	case FileTypeCSV:
 		return OutputFormatCSV, nil
 	case FileTypeTSV:
@@ -733,7 +730,7 @@ func sheetsByTable(base *reader.Workbook, baseTableName string, policy ExcelShee
 // this. Only a file that cannot be read at all stops the save, since that is the
 // file about to be overwritten.
 func openWorkbookForOverwrite(path string) (*reader.Workbook, error) {
-	src, closeReader, err := NewCompressionFactory().CreateReaderForFile(path)
+	src, closeReader, err := openDecompressed(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil //nolint:nilnil // No file to write onto is not a failure; the save creates one.

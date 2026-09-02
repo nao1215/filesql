@@ -331,7 +331,7 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 		// still compressed, so the codec has to travel with it.
 		fileInfo := newFile(match)
 		fileType := fileInfo.getFileType()
-		compression := NewCompressionFactory().detectCompressionType(match)
+		compression := detectCompressionType(match)
 
 		// Generate table name from file path (remove extension and clean up)
 		tableName := sanitizeTableName(tableFromFilePath(match))
@@ -377,7 +377,7 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 // vanishing. Losing an input in silence is the failure this function exists to
 // prevent, so the tie is broken away from it.
 func sourceIdentity(filePath string) string {
-	stripped := NewCompressionFactory().RemoveCompressionExtension(filePath)
+	stripped := RemoveCompressionExtension(filePath)
 	return path.Clean(filepath.ToSlash(stripped))
 }
 

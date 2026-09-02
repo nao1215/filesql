@@ -272,7 +272,7 @@ func TestIntegration_CompressedCSV(t *testing.T) {
 
 	// A processor is told the format; the codec is taken off the stream before
 	// it gets there, which is what a caller does with
-	// filesql.NewCompressionFactory().CreateReaderForFile.
+	// filesql.OpenReader.
 	tests := []struct {
 		name     string
 		filePath string

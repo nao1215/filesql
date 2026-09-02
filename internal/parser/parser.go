@@ -168,9 +168,8 @@ var readerFormats = map[FileType]reader.Format{ //nolint:gochecknoglobals // con
 //
 // A compressed stream is the caller's to unwrap. Parse reads the bytes it is
 // given as the format it is told, so a gzipped file is opened through
-// filesql.NewCompressionFactory().CreateReaderForFile, or through
-// filesql.NewCompressionHandler(...).CreateReader for a stream whose codec the
-// caller already knows, and the reader that comes back is what Parse reads.
+// filesql.OpenReader, or through filesql.CompressionType.NewReader for a
+// stream whose codec the caller already knows, and the reader that comes back is what Parse reads.
 //
 // A text encoding is not the caller's, and Parse reads one the way
 // filesql.Open reads one. A leading byte-order mark decides it: a UTF-8

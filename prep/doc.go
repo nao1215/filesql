@@ -87,13 +87,13 @@
 //
 //	f, _ := os.Open("data.csv.gz")
 //	defer f.Close()
-//	r, closeCodec, _ := filesql.NewCompressionHandler(filesql.CompressionGZ).CreateReader(f)
-//	defer closeCodec()
+//	r, _ := filesql.CompressionGZ.NewReader(f)
+//	defer r.Close()
 //
 //	reader, result, err := prep.NewProcessor(parser.CSV).Process(r, &records)
 //
-// filesql.NewCompressionFactory().CreateReaderForFile takes the codec from the
-// name of a path instead, for a caller that has one.
+// filesql.OpenReader takes the codec from the name of a path instead, for a
+// caller that has one.
 //
 // A text encoding is not the caller's, since prep reads through parser.Parse: a
 // byte-order mark decides it, a UTF-16 file is transcoded, and a file that is
