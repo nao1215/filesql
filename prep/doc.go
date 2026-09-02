@@ -53,8 +53,10 @@
 //
 // Format-specific limitations:
 //   - XLSX: Only the first sheet is processed
-//   - LTSV: Maximum line size is 10MB
 //   - JSON/JSONL: Data has a single "data" column containing raw JSON strings
+//
+// One record is bounded at 64 MiB whatever the format, which is the bound
+// filesql reads every format under. There is no smaller limit for any of them.
 //
 // A struct may cover a subset of the columns. A field naming a column the input
 // does not have is refused with ErrUnknownColumn, since a zero-filled field
@@ -66,7 +68,7 @@
 //
 // # Supported File Formats
 //
-// prep supports the same formats as filesql:
+// prep reads the column-oriented formats filesql reads:
 //   - CSV (.csv)
 //   - TSV (.tsv)
 //   - LTSV (.ltsv)
@@ -74,6 +76,10 @@
 //   - JSONL (.jsonl)
 //   - Parquet (.parquet)
 //   - Excel (.xlsx)
+//
+// ACH and Fedwire are not among them. Both are record-oriented rather than
+// tabular, and neither has a parser.FileType to construct a Processor with; load
+// such a file with filesql and query the tables it makes instead.
 //
 // A compressed stream is the caller's to unwrap, the way it is for
 // parser.Parse. Process reads the bytes it is given as the format it was

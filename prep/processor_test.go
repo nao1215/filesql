@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -3314,4 +3315,50 @@ func TestUTF16LoadsThroughPrep(t *testing.T) {
 	out, err := io.ReadAll(reader)
 	require.NoError(t, err)
 	assert.Equal(t, text, string(out), "what comes out is UTF-8, whatever went in")
+}
+
+// TestDocDescribesTheFormatsProcessorTakes holds prep's package documentation to
+// what a caller can actually construct a Processor for. The documentation used
+// to claim parity with filesql, which reads ACH and Fedwire as well, and there
+// is no parser.FileType for either, so the sentence promised two formats that
+// cannot be asked for. It also stated a 10MB LTSV line limit that nothing
+// enforces: a record is bounded at 64 MiB, the same as every other format's.
+func TestDocDescribesTheFormatsProcessorTakes(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile("doc.go")
+	if err != nil {
+		t.Fatalf("failed to read doc.go: %v", err)
+	}
+	doc := string(raw)
+
+	// Every file type a Processor can be built for is named, and nothing else
+	// is, so a new one cannot be added without a line here.
+	for _, ft := range []parser.FileType{
+		parser.CSV, parser.TSV, parser.LTSV, parser.JSON, parser.JSONL, parser.Parquet, parser.XLSX,
+	} {
+		if _, _, err := NewProcessor(ft).Process(strings.NewReader(""), &[]struct{}{}); errors.Is(err, parser.ErrUnsupportedFileType) {
+			t.Errorf("NewProcessor(%v) refuses the type as unsupported, but doc.go lists it", ft)
+		}
+		if !strings.Contains(doc, "//   - "+ft.String()) && !strings.Contains(doc, "("+strings.ToLower("."+ft.String())+")") {
+			t.Errorf("doc.go does not name %v among the formats prep reads", ft)
+		}
+	}
+
+	// The two filesql reads and prep does not, which the documentation has to
+	// say rather than imply parity.
+	if !strings.Contains(doc, "ACH and Fedwire are not among them") {
+		t.Error("doc.go must say that ACH and Fedwire are not formats prep reads")
+	}
+	if strings.Contains(doc, "the same formats as filesql") {
+		t.Error("doc.go claims parity with filesql, which reads two formats prep cannot")
+	}
+
+	// The bound that is enforced, rather than one that is not.
+	if strings.Contains(doc, "10MB") {
+		t.Error("doc.go states a 10MB limit that nothing enforces")
+	}
+	if !strings.Contains(doc, "64 MiB") {
+		t.Error("doc.go must state the record bound that is enforced")
+	}
 }
