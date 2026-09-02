@@ -293,11 +293,19 @@ func TestPostgreSQLByteHelpersAtTheEdges(t *testing.T) {
 // PostgreSQL refuses rather than writes through, since a backslash written
 // through would come back as data the caller never wrote.
 func TestUnescapeBytesRefusesAnEscapeItHasNoMeaningFor(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel: castDB touches the process-global driver registration.
 	for _, in := range []string{`a\x`, `a\9`, `\`, `a\`, `\99`, `\400`} {
 		if got, err := unescapeBytes(in); err == nil {
 			t.Errorf("unescapeBytes(%q) = %q, want a refusal", in, got)
+		}
+	}
+
+	// decode(x, 'escape') reads the same format and refuses the same input,
+	// since the two are one reading rather than two.
+	db := castDB(t)
+	for _, query := range []string{`SELECT decode('a\x', 'escape')`, `SELECT decode('\9', 'escape')`} {
+		if _, err := runDialect(t, db, dialects.PostgreSQL, query); err == nil {
+			t.Errorf("%s: want a refusal, got none", query)
 		}
 	}
 }
