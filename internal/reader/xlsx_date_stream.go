@@ -243,6 +243,13 @@ func scanSheetRows(src io.Reader, into *rowSet) error {
 		if n > 0 {
 			window := buf[:carried+n]
 			consumed := scanRowWindow(window, &row, into, true)
+			// A tag that has run longer than the carry is not a row or a cell,
+			// which are short; a comment or a damaged file can hold one. It is
+			// let go rather than carried, since carrying it would leave the
+			// next read no room in the buffer.
+			if len(window)-consumed > carrySize {
+				consumed = len(window)
+			}
 			carried = copy(buf, window[consumed:])
 		}
 		if err != nil {

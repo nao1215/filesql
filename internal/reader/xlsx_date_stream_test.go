@@ -331,6 +331,25 @@ func TestScanSheetRowsCrossesTheWindow(t *testing.T) {
 	}
 }
 
+// TestScanSheetRowsOutlivesATagLongerThanItsBuffer covers a tag that runs past
+// the scanner's buffer without closing: a comment of that length, or a file
+// damaged in the middle of one. The unfinished tag used to be carried whole into
+// the next read, which left the buffer no room for it and made the read panic.
+func TestScanSheetRowsOutlivesATagLongerThanItsBuffer(t *testing.T) {
+	t.Parallel()
+
+	var sheet strings.Builder
+	sheet.WriteString(`<sheetData><row r="1"><c r="A1"/></row><!-- `)
+	sheet.WriteString(strings.Repeat("x", 200<<10))
+	sheet.WriteString(` --><row r="3"><c r="A3"/></row></sheetData>`)
+
+	rows := &rowSet{}
+	require.NoError(t, scanSheetRows(strings.NewReader(sheet.String()), rows))
+	assert.True(t, rows.has(1))
+	assert.True(t, rows.has(3))
+	assert.False(t, rows.has(2))
+}
+
 // TestRowSetIsEmptyWhenNil covers the set a workbook whose bytes are not there
 // answers with, which is the reading that came before it could be asked.
 func TestRowSetIsEmptyWhenNil(t *testing.T) {
