@@ -278,10 +278,27 @@ func TestPostgreSQLByteHelpersAtTheEdges(t *testing.T) {
 			if got != tt.want {
 				t.Fatalf("escapeBytes(%q) = %q, want %q", tt.bytes, got, tt.want)
 			}
-			if back := unescapeBytes(got); back != string(tt.bytes) {
+			back, err := unescapeBytes(got)
+			if err != nil {
+				t.Fatalf("unescapeBytes(%q): %v", got, err)
+			}
+			if string(back) != string(tt.bytes) {
 				t.Errorf("unescapeBytes(%q) = %q, want %q", got, back, string(tt.bytes))
 			}
 		})
+	}
+}
+
+// TestUnescapeBytesRefusesAnEscapeItHasNoMeaningFor covers the escapes
+// PostgreSQL refuses rather than writes through, since a backslash written
+// through would come back as data the caller never wrote.
+func TestUnescapeBytesRefusesAnEscapeItHasNoMeaningFor(t *testing.T) {
+	t.Parallel()
+
+	for _, in := range []string{`a\x`, `a\9`, `\`, `a\`, `\99`, `\400`} {
+		if got, err := unescapeBytes(in); err == nil {
+			t.Errorf("unescapeBytes(%q) = %q, want a refusal", in, got)
+		}
 	}
 }
 

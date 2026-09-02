@@ -1149,10 +1149,60 @@ func fnDecode(args []driver.Value) (driver.Value, error) {
 		}
 		return b, nil
 	case "escape":
-		return []byte(unescapeBytes(s)), nil
+		b, err := unescapeBytes(s)
+		if err != nil {
+			return nil, fmt.Errorf("dialect: DECODE: %w", err)
+		}
+		return b, nil
 	default:
 		return nil, fmt.Errorf("dialect: DECODE: unrecognized encoding %q", format)
 	}
+}
+
+// decodeBytea reads the text of a bytea value in either of the two input
+// formats dialects.PostgreSQL defines: the hexadecimal one, which the whole string
+// carries after a leading backslash-x and which may hold whitespace between
+// digit pairs, and the escape one, where a byte outside the printable range is
+// written as a backslash and three octal digits. A string holding neither is
+// its own bytes, which is what the escape format says of a string with no
+// backslash in it.
+func decodeBytea(s string) ([]byte, error) {
+	if rest, hexForm := strings.CutPrefix(s, `\x`); hexForm {
+		b, err := hex.DecodeString(strings.Join(strings.Fields(rest), ""))
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid hexadecimal data for bytea: %w", ErrInvalidCast, err)
+		}
+		return b, nil
+	}
+	return unescapeBytes(s)
+}
+
+// unescapeBytes reads dialects.PostgreSQL's escape format for bytea. An escape it has
+// no meaning for is an error rather than a backslash written through: the
+// backslash would come back as data the caller never wrote, and dialects.PostgreSQL
+// refuses the same input.
+func unescapeBytes(s string) ([]byte, error) {
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' {
+			out = append(out, s[i])
+			continue
+		}
+		if i+1 < len(s) && s[i+1] == '\\' {
+			out = append(out, '\\')
+			i++
+			continue
+		}
+		if i+3 < len(s) {
+			if n, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
+				out = append(out, byte(n))
+				i += 3
+				continue
+			}
+		}
+		return nil, fmt.Errorf("%w: invalid input syntax for bytea at offset %d", ErrInvalidCast, i)
+	}
+	return out, nil
 }
 
 // escapeBytes writes the printable bytes as themselves and the rest as an octal
@@ -1168,30 +1218,6 @@ func escapeBytes(b []byte) string {
 		default:
 			out.WriteByte(c)
 		}
-	}
-	return out.String()
-}
-
-func unescapeBytes(s string) string {
-	var out strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] != '\\' || i+1 >= len(s) {
-			out.WriteByte(s[i])
-			continue
-		}
-		if s[i+1] == '\\' {
-			out.WriteByte('\\')
-			i++
-			continue
-		}
-		if i+3 < len(s) {
-			if n, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
-				out.WriteByte(byte(n))
-				i += 3
-				continue
-			}
-		}
-		out.WriteByte(s[i])
 	}
 	return out.String()
 }

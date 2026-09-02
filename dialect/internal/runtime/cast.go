@@ -238,7 +238,7 @@ func castValue(d dialects.Dialect, target string, v driver.Value) (driver.Value,
 	case castJSON:
 		return castToJSON(v)
 	case castBlob:
-		return castToBlob(v)
+		return castToBlob(d, v)
 	default:
 		return v, nil
 	}
@@ -794,7 +794,7 @@ func castToJSON(v driver.Value) (driver.Value, error) {
 	return s, nil
 }
 
-func castToBlob(v driver.Value) (driver.Value, error) {
+func castToBlob(d dialects.Dialect, v driver.Value) (driver.Value, error) {
 	switch x := v.(type) {
 	case []byte:
 		return x, nil
@@ -804,6 +804,13 @@ func castToBlob(v driver.Value) (driver.Value, error) {
 	s, ok := toString(v)
 	if !ok {
 		return nil, nil
+	}
+	if d == dialects.PostgreSQL {
+		// PostgreSQL's bytea has two input formats, and reading the text as
+		// its own bytes made a hexadecimal literal the characters a caller
+		// wrote rather than the bytes they named. The other dialects have no
+		// such syntax: their literal is already the bytes.
+		return decodeBytea(s)
 	}
 	return []byte(s), nil
 }
