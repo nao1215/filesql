@@ -396,6 +396,23 @@ func TestPostgreSQLFunctionsAddedForTheEngine(t *testing.T) {
 		{query: `SELECT jsonb_typeof('null')`, want: "null"},
 		{query: `SELECT json_typeof('"x"')`, want: "string"},
 		{query: `SELECT json_typeof('1')`, want: "number"},
+
+		// The functions whose path is a text array of keys rather than the $
+		// path SQLite takes, and whose value is JSON rather than the text
+		// SQLite would have quoted. Every want was read from postgres:17,
+		// allowing for the space it writes after a colon.
+		{query: `SELECT jsonb_set('{"a":1}', '{a}', '2')`, want: `{"a":2}`},
+		{query: `SELECT json_set('{"a":1}', '{a}', '2')`, want: `{"a":2}`},
+		{query: `SELECT jsonb_set('{"a":{"b":1}}', '{a,b}', '2')`, want: `{"a":{"b":2}}`},
+		{query: `SELECT jsonb_set('{"a":1}', '{a}', '"x"')`, want: `{"a":"x"}`},
+		{query: `SELECT jsonb_insert('{"a":1}', '{b}', '2')`, want: `{"a":1,"b":2}`},
+
+		// The path written as one argument per element. The text spelling
+		// unquotes and the other keeps the JSON.
+		{query: `SELECT json_extract_path('{"a":"x"}', 'a')`, want: `"x"`},
+		{query: `SELECT json_extract_path_text('{"a":"x"}', 'a')`, want: "x"},
+		{query: `SELECT json_extract_path('{"a":{"b":2}}', 'a', 'b')`, want: "2"},
+		{query: `SELECT jsonb_extract_path_text('{"a":1}', 'a')`, want: "1"},
 		{query: `SELECT json_typeof('1.5')`, want: "number"},
 		{query: `SELECT json_typeof('true')`, want: "boolean"},
 		{query: `SELECT json_typeof('false')`, want: "boolean"},

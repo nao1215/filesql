@@ -126,6 +126,61 @@ func jsonMemberPath(e ast.Expr) (string, bool) {
 	return "", false
 }
 
+// pgJSONPathCall lowers the functions that take a path as a text array and a
+// value as JSON. SQLite's json_set and json_insert take a $ path and read a
+// text argument as a string, so the array was handed over as a path -- and
+// refused as one -- and a value that reached them would have been quoted.
+//
+// The blob-returning spellings go to the text ones: SQLite's jsonb_set answers
+// JSONB, which is a blob a caller cannot read, where PostgreSQL's answers a
+// document.
+func pgJSONPathCall(call *ast.FuncCall, name string) (ast.Expr, error) {
+	if len(call.Args) < 3 {
+		return nil, unsupported(call.Span, "%s takes a document, a path and a value", name)
+	}
+	path, ok := jsonTextArrayPath(call.Args[1])
+	if !ok {
+		return nil, unsupported(call.Span,
+			"%s is supported for a path written as a text array of keys, as {a} or {a,b}; "+
+				"an element that is a number is an index into an array or a key in an object and "+
+				"one SQLite path cannot be both", name)
+	}
+	call.Args[1] = text(path, call.Span)
+	// The value is JSON in PostgreSQL and text to SQLite unless it is said to
+	// be JSON, so '2' would have gone in as the string "2".
+	call.Args[2] = helper("json", call.Span, call.Args[2])
+	if strings.HasSuffix(name, "INSERT") {
+		return rename(call, "json_insert"), nil
+	}
+	return rename(call, "json_set"), nil
+}
+
+// pgJSONExtractPath lowers the two functions that take a path as one string
+// argument per element. The text spelling answers the value unquoted, which is
+// what SQLite's json_extract does, and the other answers it as JSON, which is
+// what the "->" operator does.
+func pgJSONExtractPath(call *ast.FuncCall, name string) (ast.Expr, error) {
+	if len(call.Args) < 2 {
+		return nil, unsupported(call.Span, "%s takes a document and at least one path element", name)
+	}
+	var path strings.Builder
+	path.WriteByte('$')
+	for _, arg := range call.Args[1:] {
+		element, ok := literalText(arg)
+		if !ok {
+			return nil, unsupported(call.Span,
+				"%s is supported for path elements written as string literals", name)
+		}
+		path.WriteString("." + quoteJSONMember(element))
+	}
+	document := call.Args[0]
+	pathText := text(path.String(), call.Span)
+	if strings.HasSuffix(name, "_TEXT") {
+		return helper("json_extract", call.Span, document, pathText), nil
+	}
+	return paren(binary(document, ast.JSONGet, pathText, call.Span)), nil
+}
+
 // jsonTextArrayPath turns the text array a "#-" takes -- written {a,b} -- into
 // the $ path SQLite removes by.
 //
@@ -576,6 +631,10 @@ func (r *postgresRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 			"%s returns a set of rows, which SQLite has no form for outside a table", name)
 	}
 	switch name {
+	case "JSON_SET", "JSONB_SET", "JSON_INSERT", "JSONB_INSERT":
+		return pgJSONPathCall(call, name)
+	case "JSON_EXTRACT_PATH", "JSONB_EXTRACT_PATH", "JSON_EXTRACT_PATH_TEXT", "JSONB_EXTRACT_PATH_TEXT":
+		return pgJSONExtractPath(call, name)
 	case "JSON_BUILD_OBJECT", "JSONB_BUILD_OBJECT":
 		// SQLite's json_object takes the same alternating keys and values.
 		return rename(call, "json_object"), nil

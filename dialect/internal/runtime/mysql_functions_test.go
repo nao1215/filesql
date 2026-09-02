@@ -556,6 +556,12 @@ func TestMySQLComparisonFoldsCaseLikeItsCollation(t *testing.T) {
 		{query: `SELECT JSON_VALUE('{"a":1}', '$.b') IS NULL`, want: "1"},
 		{query: `SELECT JSON_MERGE_PATCH('{"a":1}', '{"b":2}')`, want: `{"a":1,"b":2}`},
 		{query: `SELECT JSON_MERGE_PATCH('{"a":1}', '{"a":null}')`, want: "{}"},
+		// JSON_ARRAY_APPEND adds to the end of the array a path names, which
+		// SQLite writes as the index "#" -- one past the last element.
+		{query: `SELECT JSON_ARRAY_APPEND('[1]', '$', 2)`, want: "[1,2]"},
+		{query: `SELECT JSON_ARRAY_APPEND('{"a":[1]}', '$.a', 2)`, want: `{"a":[1,2]}`},
+		{query: `SELECT JSON_ARRAY_APPEND('[1]', '$', 2, '$', 3)`, want: "[1,2,3]"},
+		{query: `SELECT JSON_ARRAY_APPEND('[1]', '$', 'x')`, want: `[1,"x"]`},
 
 		// IS_UUID reads three spellings and nothing else: the hyphenated form,
 		// the same in braces, and the thirty-two digits. Letter case does not

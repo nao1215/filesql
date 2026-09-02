@@ -317,6 +317,16 @@ func TestGoogleSQLScalarFunctions(t *testing.T) {
 		{name: "from_hex refuses text that is not hexadecimal", query: `SELECT FROM_HEX('zz')`, wantErr: true},
 		{name: "from_base32 refuses text that is not base32", query: `SELECT FROM_BASE32('!!')`, wantErr: true},
 
+		// JSON_EXTRACT is the older spelling of JSON_QUERY and keeps the JSON,
+		// where JSON_EXTRACT_SCALAR is the older spelling of JSON_VALUE and
+		// unquotes. The two pairs are asserted together, since the fault was
+		// that all four had become one.
+		{name: "json_extract keeps the json", query: `SELECT JSON_EXTRACT('{"a":"x"}', '$.a')`, want: `"x"`},
+		{name: "json_query keeps the json", query: `SELECT JSON_QUERY('{"a":"x"}', '$.a')`, want: `"x"`},
+		{name: "json_extract_scalar unquotes", query: `SELECT JSON_EXTRACT_SCALAR('{"a":"x"}', '$.a')`, want: "x"},
+		{name: "json_value unquotes", query: `SELECT JSON_VALUE('{"a":"x"}', '$.a')`, want: "x"},
+		{name: "json_extract of a number", query: `SELECT JSON_EXTRACT('{"a":1}', '$.a')`, want: "1"},
+
 		{name: "to_json_string quotes a string", query: `SELECT TO_JSON_STRING('a')`, want: `"a"`},
 		{name: "to_json_string of a number", query: `SELECT TO_JSON_STRING(1)`, want: "1"},
 		{name: "to_json_string of null", query: `SELECT TO_JSON_STRING(NULL)`, want: "null"},

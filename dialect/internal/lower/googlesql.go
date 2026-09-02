@@ -250,7 +250,7 @@ func (r *googleRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		return editDistance(call)
 	case "JSON_VALUE", "JSON_EXTRACT_SCALAR":
 		return rename(call, "json_extract"), nil
-	case "JSON_QUERY":
+	case "JSON_QUERY", "JSON_EXTRACT":
 		if len(call.Args) != 2 {
 			return call, nil
 		}

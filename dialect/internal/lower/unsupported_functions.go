@@ -33,6 +33,7 @@ const (
 // mysqlUnsupportedFunctions are the MySQL functions with no SQLite form.
 var mysqlUnsupportedFunctions = map[string]string{ //nolint:gochecknoglobals // a fixed table
 	"JSON_KEYS":                     reasonArray,
+	"JSON_SEARCH":                   "it answers the path a value sits at, and SQLite has no function that searches for one",
 	"JSON_DEPTH":                    reasonJSONOp,
 	"JSON_MERGE_PRESERVE":           reasonJSONOp,
 	"JSON_OVERLAPS":                 reasonJSONOp,
