@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Godoc examples for the five exported names that had none: `CompressionType.NewReader`, `WithCompression`, `ParseError`, `ExcelSheetPolicy.String`, and a `CompressionType.NewWriter` that shows what closing the writer does rather than reading the bytes back through the reader's example. The `ParseError` one is the interesting one: it loads two files, one of them broken, and shows that the error names which file failed and that the cause is still reachable with `errors.Is`.
+
+### Changed
+
+- The example modules pin filesql v0.55.0. They pinned v0.52.0, three releases back, so the source a reader opens to see how the package is imported showed an API two breaking changes old.
+
+- `baseRules.Unary` is gone. The comment above it says the expression rules are not defaults, "each dialect answers for every one of them, and a default would only hide a rule someone forgot to write" -- and this was such a default. All three dialects override it, so nothing called it; what it hid, had one of them not overridden it, was an operator passed to SQLite untranslated.
+
 ## [0.55.0] - 2026-09-02
 
 ### Changed
