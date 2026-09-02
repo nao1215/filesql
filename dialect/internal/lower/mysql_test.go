@@ -159,13 +159,15 @@ func TestMySQLTranslate(t *testing.T) {
 		// arithmetic or a bitwise operator, and the bytes they name everywhere
 		// else. Both of MySQL's spellings are the one literal.
 		{"M-23_hex_literal", "SELECT 0x41", `SELECT x'41' AS "0x41"`},
-		{"M-23_hex_literal_uppercase_prefix", "SELECT 0X41", `SELECT x'41' AS "0X41"`},
 		{"M-23_hex_literal_quoted_spelling", "SELECT x'41'", "SELECT x'41'"},
 		{"M-23_hex_literal_odd_digits", "SELECT 0x4", `SELECT x'04' AS "0x4"`},
 		{"M-23_hex_literal_in_arithmetic", "SELECT 1 + 0x10", `SELECT 1 + 16 AS "1 + 0x10"`},
 		{"M-23_hex_literal_quoted_in_arithmetic", "SELECT 1 + x'10'", `SELECT 1 + 16 AS "1 + x'10'"`},
 		{"M-23_hex_literal_negated", "SELECT -0x10", `SELECT -16 AS "-0x10"`},
 		{"M-23_hex_literal_in_a_shift", "SELECT x'10' << 1", `SELECT mysql_shift_left(16, 1) AS "x'10' << 1"`},
+		{"M-23_hex_literal_cast_to_a_number", "SELECT CAST(x'41' AS UNSIGNED)", `SELECT mysql_cast(65, 'UNSIGNED') AS "CAST(x'41' AS UNSIGNED)"`},
+		{"M-23_hex_literal_converted_to_a_number", "SELECT CONVERT(x'41', SIGNED)", `SELECT mysql_cast(65, 'SIGNED') AS "CONVERT(x'41', SIGNED)"`},
+		{"M-23_hex_literal_cast_to_text_is_bytes", "SELECT CAST(x'41' AS CHAR)", `SELECT mysql_cast(x'41', 'CHAR') AS "CAST(x'41' AS CHAR)"`},
 		{"M-29_shifts", "SELECT a << 1, b >> 2 FROM t", `SELECT mysql_shift_left(a, 1) AS "a << 1", mysql_shift_right(b, 2) AS "b >> 2" FROM t`},
 		// The positions a rewrite has to survive: a WHERE clause, a CASE, a
 		// window's PARTITION BY, and a GROUP BY, where an operand that stopped at
@@ -246,6 +248,11 @@ func TestMySQLTranslateUnsupported(t *testing.T) {
 		// and MySQL answers 0 for one rather than the digits it was written
 		// with, which is not an answer worth reproducing.
 		{"M-23_hex_literal_past_64_bits_in_arithmetic", "SELECT 0xffffffffffffffffff + 0"},
+		// MySQL's 0x prefix is case sensitive: it reads 0X41 as an identifier
+		// rather than as a literal, so answering the bytes for one would answer
+		// for a name the caller may have meant.
+		{"M-23_hex_literal_uppercase_prefix", "SELECT 0X41"},
+		{"M-23_hex_literal_uppercase_prefix_in_arithmetic", "SELECT 0X41 + 0"},
 
 		// M-5: an INTERVAL literal outside date arithmetic has no SQLite form,
 		// and passed through it reported a syntax error naming the amount.

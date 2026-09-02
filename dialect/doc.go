@@ -94,15 +94,19 @@
 // A literal that names bytes is read the way the dialect that wrote it reads
 // it. MySQL writes one hexadecimal literal three ways -- 0x41, x'41' and X'41'
 // -- and means the number its digits spell where the literal stands beside an
-// arithmetic or a bitwise operator, and the bytes they name everywhere else;
+// arithmetic or a bitwise operator or a cast to a number, and the bytes they
+// name everywhere else;
 // an odd number of digits is padded on the left, so 0x4 is the byte 0x04, and
 // one too long to be an unsigned 64-bit number is refused where a number is
-// wanted. MySQL's bit literal, 0b1010 or b'1010', is refused in all its
+// wanted. The prefix is case sensitive, so 0X41 is refused: MySQL reads that
+// spelling as an identifier rather than as a literal. MySQL's bit literal,
+// 0b1010 or b'1010', is refused in all its
 // spellings: the same two readings apply to it and nothing else here writes
 // one. PostgreSQL has no byte-string literal: B'1010' and X'41' are bit
 // strings, carried as the text of their binary digits -- X'41' is 01000001 --
 // which is what PostgreSQL compares, concatenates and measures, and a cast to
-// int, integer, int4, bigint or int8 reads those digits as a base-2 number.
+// int, integer, int4, bigint or int8 reads those digits as a base-2 number at
+// that target's width.
 // PostgreSQL's bytea is written as text and read in both of its input formats:
 // a leading backslash-x is hexadecimal, with whitespace allowed between digit
 // pairs, and anything else is the escape format, where a backslash and three

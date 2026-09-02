@@ -31,7 +31,16 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 	switch t.Kind {
 	case token.Number:
 		p.pos++
-		return &ast.Literal{Kind: numberKind(t.Text), Value: t.Text, Span: span}, nil
+		kind := numberKind(t.Text)
+		if kind == ast.LitHex && p.dialect == dialects.MySQL && strings.HasPrefix(t.Text, "0X") {
+			// MySQL's hexadecimal prefix is lowercase and case sensitive: it
+			// reads 0X41 as an identifier, not as a literal, so answering the
+			// bytes for one would answer for a name the caller may have meant.
+			// The quoted spellings x'41' and X'41' are both literals.
+			return nil, p.unsupportedf(
+				"0X is not a hexadecimal literal in MySQL; its prefix is the lowercase 0x, or write x'..'")
+		}
+		return &ast.Literal{Kind: kind, Value: t.Text, Span: span}, nil
 
 	case token.String:
 		p.pos++
@@ -47,7 +56,7 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			// MySQL means is what keeps the three spellings on one rule: the
 			// third was refused for that ambiguity while the other two were
 			// answered as bytes.
-			return &ast.Literal{Kind: ast.LitHex, Value: "0x" + t.Text, Span: span}, nil
+			return &ast.Literal{Kind: ast.LitHex, Value: hexLiteralPrefix + t.Text, Span: span}, nil
 		}
 		return &ast.Literal{Kind: ast.LitBlob, Value: t.Text, Span: span}, nil
 
@@ -885,3 +894,7 @@ func (p *Parser) startsSelect() bool {
 	// A parenthesized query expression, as in "((SELECT 1) UNION ...)".
 	return p.atOp("(") && p.peek(1).IsWord("SELECT")
 }
+
+// hexLiteralPrefix is what a hexadecimal literal is spelled with when the
+// quoted form is rewritten into the prefixed one.
+const hexLiteralPrefix = "0x"

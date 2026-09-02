@@ -261,10 +261,11 @@ func TestGoogleSQLScalarFunctions(t *testing.T) {
 	db := castDB(t)
 
 	for _, tt := range []struct {
-		name    string
-		query   string
-		want    string
-		wantErr bool
+		name     string
+		query    string
+		want     string
+		wantErr  bool
+		wantNull bool
 	}{
 		// INSTR takes a position and an occurrence, where SQLite's own takes
 		// two arguments and nothing else.
@@ -332,13 +333,13 @@ func TestGoogleSQLScalarFunctions(t *testing.T) {
 		{name: "safe_convert_bytes_to_string of text", query: `SELECT SAFE_CONVERT_BYTES_TO_STRING(b'ab')`, want: "ab"},
 		{name: "safe_convert_bytes_to_string replaces an invalid sequence", query: `SELECT TO_HEX(CAST(SAFE_CONVERT_BYTES_TO_STRING(FROM_HEX('61ff62')) AS BYTES))`, want: "61efbfbd62"},
 		{name: "safe_convert_bytes_to_string of nothing", query: `SELECT SAFE_CONVERT_BYTES_TO_STRING(b'')`, want: ""},
-		{name: "safe_convert_bytes_to_string of null", query: `SELECT SAFE_CONVERT_BYTES_TO_STRING(NULL)`, want: ""},
+		{name: "safe_convert_bytes_to_string of null", query: `SELECT SAFE_CONVERT_BYTES_TO_STRING(NULL)`, want: "", wantNull: true},
 		{name: "a cast refuses what safe_convert replaces", query: `SELECT CAST(FROM_HEX('61ff62') AS STRING)`, wantErr: true},
 
 		// IEEE_DIVIDE answers where "/" raises under this dialect.
 		{name: "ieee_divide by zero", query: `SELECT IEEE_DIVIDE(1, 0)`, want: "+Inf"},
 		{name: "ieee_divide a negative by zero", query: `SELECT IEEE_DIVIDE(-1, 0)`, want: "-Inf"},
-		{name: "ieee_divide of two zeros", query: `SELECT IEEE_DIVIDE(0, 0)`, want: ""},
+		{name: "ieee_divide of two zeros", query: `SELECT IEEE_DIVIDE(0, 0)`, wantNull: true},
 		{name: "ieee_divide of two numbers", query: `SELECT IEEE_DIVIDE(6, 3)`, want: "2"},
 		{name: "the operator still raises", query: `SELECT 1 / 0`, wantErr: true},
 		{name: "is_inf of an infinity", query: `SELECT IS_INF(IEEE_DIVIDE(1, 0))`, want: "1"},
@@ -363,6 +364,16 @@ func TestGoogleSQLScalarFunctions(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if tt.wantNull {
+				if got.Valid {
+					t.Errorf("%s = %q, want NULL", tt.query, got.String)
+				}
+				return
+			}
+			if !got.Valid {
+				t.Errorf("%s is NULL, want %q", tt.query, tt.want)
+				return
 			}
 			if got.String != tt.want {
 				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)

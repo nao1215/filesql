@@ -76,6 +76,11 @@ func TestCastSemantics(t *testing.T) {
 		{"postgresql reads a bit string as base two", dialects.PostgreSQL, `SELECT B'1010'::int`, "10", false},
 		{"postgresql reads a hexadecimal bit string", dialects.PostgreSQL, `SELECT X'41'::int`, "65", false},
 		{"postgresql reads a bit string as a bigint", dialects.PostgreSQL, `SELECT B'1010'::bigint`, "10", false},
+		// An integer target holds a fixed width, and a bit string that fills a
+		// signed one is its negative value.
+		{"postgresql reads a full-width integer as negative", dialects.PostgreSQL, `SELECT B'` + "1" + strings.Repeat("0", 31) + `'::int`, "-2147483648", false},
+		{"postgresql reads a full-width bigint as negative", dialects.PostgreSQL, `SELECT B'` + strings.Repeat("1", 64) + `'::bigint`, "-1", false},
+		{"postgresql reads 32 ones as an integer", dialects.PostgreSQL, `SELECT B'` + strings.Repeat("1", 32) + `'::int`, "-1", false},
 		{"postgresql writes a bit string as its digits", dialects.PostgreSQL, `SELECT X'41'::text`, "01000001", false},
 		{"postgresql keeps a binary bit string as its digits", dialects.PostgreSQL, `SELECT B'1010'::text`, "1010", false},
 		{"postgresql counts the bits of a bit string", dialects.PostgreSQL, `SELECT length(X'41')`, "8", false},
@@ -90,6 +95,8 @@ func TestCastSemantics(t *testing.T) {
 		// decode() answer the same bytes. Every want was read from postgres:17.
 		{"postgresql bytea reads the hex format", dialects.PostgreSQL, `SELECT encode('\x4142'::bytea, 'hex')`, "4142", false},
 		{"postgresql bytea allows space between hex pairs", dialects.PostgreSQL, `SELECT encode('\x41 42'::bytea, 'hex')`, "4142", false},
+		{"postgresql bytea allows more than one space", dialects.PostgreSQL, `SELECT encode('\x4142  4344'::bytea, 'hex')`, "41424344", false},
+		{"postgresql bytea allows space before the first pair", dialects.PostgreSQL, `SELECT encode('\x 41'::bytea, 'hex')`, "41", false},
 		{"postgresql bytea reads hex in either case", dialects.PostgreSQL, `SELECT encode('\xAbCd'::bytea, 'hex')`, "abcd", false},
 		{"postgresql bytea reads an octal escape", dialects.PostgreSQL, `SELECT encode('a\102b'::bytea, 'hex')`, "614262", false},
 		{"postgresql bytea reads a doubled backslash", dialects.PostgreSQL, `SELECT encode('a\\b'::bytea, 'hex')`, "615c62", false},
@@ -255,6 +262,12 @@ func TestCastTargetsMatchTheEngine(t *testing.T) {
 		{dialects.PostgreSQL, `SELECT B'1010'::smallint`},
 		{dialects.PostgreSQL, `SELECT B'1010'::float8`},
 		{dialects.PostgreSQL, `SELECT B'` + strings.Repeat("1", 65) + `'::int`},
+		{dialects.PostgreSQL, `SELECT B'` + strings.Repeat("1", 33) + `'::int`},
+		{dialects.PostgreSQL, `SELECT B'` + strings.Repeat("1", 65) + `'::bigint`},
+		// Whitespace in the hexadecimal form of a bytea is allowed between
+		// pairs and nowhere else.
+		{dialects.PostgreSQL, `SELECT '\x4 142'::bytea`},
+		{dialects.PostgreSQL, `SELECT '\x412 3'::bytea`},
 		{dialects.PostgreSQL, `SELECT B'1012'`},
 	}
 	for _, tt := range refused {

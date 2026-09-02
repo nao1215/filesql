@@ -1168,13 +1168,33 @@ func fnDecode(args []driver.Value) (driver.Value, error) {
 // backslash in it.
 func decodeBytea(s string) ([]byte, error) {
 	if rest, hexForm := strings.CutPrefix(s, `\x`); hexForm {
-		b, err := hex.DecodeString(strings.Join(strings.Fields(rest), ""))
+		digits, ok := hexDigitPairs(rest)
+		if !ok {
+			return nil, fmt.Errorf("%w: whitespace in bytea is allowed only between hexadecimal pairs", ErrInvalidCast)
+		}
+		b, err := hex.DecodeString(digits)
 		if err != nil {
 			return nil, fmt.Errorf("%w: invalid hexadecimal data for bytea: %w", ErrInvalidCast, err)
 		}
 		return b, nil
 	}
 	return unescapeBytes(s)
+}
+
+// hexDigitPairs joins the runs of hexadecimal digits whitespace separates, and
+// reports false when a run holds half a pair. dialects.PostgreSQL allows whitespace
+// "between digit pairs" and nowhere else, so it reads '\x41 42' and refuses
+// '\x4 142', where dropping every space alike would have taken both.
+func hexDigitPairs(s string) (string, bool) {
+	var out strings.Builder
+	out.Grow(len(s))
+	for _, run := range strings.Fields(s) {
+		if len(run)%2 == 1 {
+			return "", false
+		}
+		out.WriteString(run)
+	}
+	return out.String(), true
 }
 
 // unescapeBytes reads dialects.PostgreSQL's escape format for bytea. An escape it has

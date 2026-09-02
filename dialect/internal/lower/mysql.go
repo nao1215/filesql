@@ -468,6 +468,17 @@ func mysqlConvert(call *ast.FuncCall) (ast.Expr, error) {
 	if !ok {
 		return call, nil
 	}
+	// CONVERT is the cast by another spelling, so a hexadecimal literal
+	// standing where it converts to a number is read as one, as it is under
+	// CAST. The rewrite has already happened by the time Pre is offered the
+	// result, which is why this asks here rather than there.
+	if numericCastTargets[sqliteTypeNames[normalizeCastTarget(ast.TypeName{Name: target}).Name]] {
+		converted, err := hexAsNumber(call.Args[0])
+		if err != nil {
+			return nil, err
+		}
+		call.Args[0] = converted
+	}
 	call.Args[1] = text(target, call.Span)
 	return rename(call, "mysql_cast"), nil
 }
@@ -517,6 +528,14 @@ func (r *mysqlRules) Core(core *ast.SelectCore) error {
 	return coreCommon(core)
 }
 
+// numericCastTargets are the SQLite storage classes a MySQL cast to a number
+// lands on, which is what makes the cast a numeric context for a hexadecimal
+// literal: MySQL answers 65 for CAST(x'41' AS SIGNED), AS DECIMAL and AS
+// DOUBLE alike.
+var numericCastTargets = map[string]bool{ //nolint:gochecknoglobals // a fixed table
+	typeNameInteger: true, typeNameNumeric: true, typeNameReal: true,
+}
+
 // numericContextOps are the operators whose operands MySQL reads as numbers, so
 // a hexadecimal literal standing beside one is the number its digits spell
 // rather than the bytes they name.
@@ -548,6 +567,18 @@ func numericHexOperands(e ast.Expr) error {
 		n.Left, n.Right = left, right
 	case *ast.UnaryExpr:
 		if n.Op != ast.UnaryMinus && n.Op != ast.UnaryPlus && n.Op != ast.UnaryBitNot {
+			return nil
+		}
+		inner, err := hexAsNumber(n.Expr)
+		if err != nil {
+			return err
+		}
+		n.Expr = inner
+	case *ast.CastExpr:
+		// A cast to a number is a numeric context too: MySQL answers 24930 for
+		// CAST(x'6162' AS UNSIGNED), where reading the operand as bytes gave
+		// the 0 its leading-digit rule makes of the text "ab".
+		if !numericCastTargets[sqliteTypeNames[normalizeCastTarget(n.Type).Name]] {
 			return nil
 		}
 		inner, err := hexAsNumber(n.Expr)
