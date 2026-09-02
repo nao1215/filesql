@@ -388,9 +388,19 @@ func TestConcurrentLoadInto(t *testing.T) {
 	// They fail differently: a file database answers SQLITE_BUSY, a shared-cache
 	// one answers SQLITE_LOCKED, and a pinned ":memory:" pool cannot collide at
 	// all because every load goes through the one connection.
+	//
+	// What is asserted is the contract LoadInto's godoc gives, not more. A load
+	// that meets another's lock waits a bounded time and then returns the error
+	// the database gave, so where a collision is possible a load may lose; the
+	// test then requires that a lost load left nothing behind, which is the
+	// atomicity the same godoc promises, and that every load that won left its
+	// table complete. Requiring all eight to win asserted a promise the package
+	// does not make, and a slow runner turned the difference into a flake.
 	for _, tc := range []struct {
 		name string
 		open func(t *testing.T) *sql.DB
+		// mayLoseTheLock is whether two loads can collide at all here.
+		mayLoseTheLock bool
 	}{
 		{
 			name: "a pinned in-memory pool",
@@ -410,6 +420,7 @@ func TestConcurrentLoadInto(t *testing.T) {
 				require.NoError(t, err)
 				return db
 			},
+			mayLoseTheLock: true,
 		},
 		{
 			name: "a database this package opened",
@@ -419,6 +430,7 @@ func TestConcurrentLoadInto(t *testing.T) {
 				require.NoError(t, err)
 				return db
 			},
+			mayLoseTheLock: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -437,16 +449,36 @@ func TestConcurrentLoadInto(t *testing.T) {
 			}
 			wg.Wait()
 
+			won := 0
 			for i, err := range errs {
-				require.NoErrorf(t, err, "load %d", i)
+				if err == nil {
+					won++
+					var count int
+					require.NoError(t, db.QueryRowContext(t.Context(), fmt.Sprintf("SELECT COUNT(*) FROM t%d", i)).Scan(&count))
+					assert.Equal(t, 1, count, "table t%d", i)
+					continue
+				}
+				if !tc.mayLoseTheLock {
+					require.NoErrorf(t, err, "load %d cannot have met a lock here", i)
+				}
+				assert.ErrorIsf(t, err, ErrDatabaseOperation, "load %d lost for a reason other than the lock", i)
+				assert.Truef(t, lockedByAnotherConnection(err), "load %d lost for a reason other than the lock: %v", i, err)
+				assert.Falsef(t, tableExists(t, db, fmt.Sprintf("t%d", i)), "load %d gave up and still left table t%d behind", i, i)
 			}
-			for i := range goroutines {
-				var count int
-				require.NoError(t, db.QueryRowContext(t.Context(), fmt.Sprintf("SELECT COUNT(*) FROM t%d", i)).Scan(&count))
-				assert.Equal(t, 1, count, "table t%d", i)
-			}
+			// Losing needs a winner to lose to: the first load to take the lock
+			// has nothing to wait for, so at least one always lands.
+			assert.Positive(t, won, "no load succeeded, so every one of them waited on a lock nobody held")
 		})
 	}
+}
+
+// tableExists reports whether db holds a table named name.
+func tableExists(t *testing.T, db *sql.DB, name string) bool {
+	t.Helper()
+	var count int
+	require.NoError(t, db.QueryRowContext(t.Context(),
+		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&count))
+	return count > 0
 }
 
 // TestConcurrentLoadIntoFromReaders is the same for inputs that cannot be read
@@ -482,14 +514,24 @@ func TestConcurrentLoadIntoFromReaders(t *testing.T) {
 	}
 	wg.Wait()
 
+	// The same contract as the file case above: a load may lose the lock and
+	// say so, and a lost load leaves nothing behind. Here the retry stops at
+	// the reading, so a loser is one that met the lock before its reader was
+	// spent.
+	won := 0
 	for i, err := range errs {
-		require.NoErrorf(t, err, "load %d", i)
+		if err == nil {
+			won++
+			var count int
+			require.NoError(t, db.QueryRowContext(t.Context(), fmt.Sprintf("SELECT COUNT(*) FROM r%d", i)).Scan(&count))
+			assert.Equal(t, 1, count, "table r%d", i)
+			continue
+		}
+		assert.ErrorIsf(t, err, ErrDatabaseOperation, "load %d lost for a reason other than the lock", i)
+		assert.Truef(t, lockedByAnotherConnection(err), "load %d lost for a reason other than the lock: %v", i, err)
+		assert.Falsef(t, tableExists(t, db, fmt.Sprintf("r%d", i)), "load %d gave up and still left table r%d behind", i, i)
 	}
-	for i := range goroutines {
-		var count int
-		require.NoError(t, db.QueryRowContext(t.Context(), fmt.Sprintf("SELECT COUNT(*) FROM r%d", i)).Scan(&count))
-		assert.Equal(t, 1, count, "table r%d", i)
-	}
+	assert.Positive(t, won, "no load succeeded, so every one of them waited on a lock nobody held")
 }
 
 // lockedStep answers with the error a write meets while another connection
