@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"path"
 	"regexp"
 	"runtime"
 	"strings"
@@ -584,6 +585,70 @@ func TestReadXLSXSpellingsOfTheSheet(t *testing.T) {
 			data := rewritePart(t, buf.Bytes(), "xl/worksheets/sheet1.xml", spell)
 
 			_, records, err := readSheet(t, data)
+
+			require.NoError(t, err)
+			assert.Equal(t, want, records)
+		})
+	}
+}
+
+// relocateWorkbookPart returns the workbook with its main part moved from
+// xl/workbook.xml to another name, and the two references to it -- the content
+// types and the package's root relationships -- pointed at the new name. The
+// package format lets the main part sit anywhere, and the library follows the
+// root relationships to it.
+func relocateWorkbookPart(t *testing.T, data []byte, to string) []byte {
+	t.Helper()
+
+	const from = "xl/workbook.xml"
+	dir, base := path.Split(to)
+	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	out := zip.NewWriter(&buf)
+	for _, file := range archive.File {
+		body, err := file.Open()
+		require.NoError(t, err)
+		content, err := io.ReadAll(body)
+		require.NoError(t, err)
+		require.NoError(t, body.Close())
+		name := file.Name
+		switch name {
+		case from:
+			name = to
+		case "xl/_rels/workbook.xml.rels":
+			// The targets are relative to the main part, which moves; written
+			// from the root they still name the parts that stay where they are.
+			name = dir + "_rels/" + base + ".rels"
+			content = regexp.MustCompile(`Target="([^/"][^"]*)"`).ReplaceAll(content, []byte(`Target="/xl/${1}"`))
+		case "[Content_Types].xml", "_rels/.rels":
+			content = bytes.ReplaceAll(content, []byte(from), []byte(to))
+		}
+		w, err := out.Create(name)
+		require.NoError(t, err)
+		_, err = w.Write(content)
+		require.NoError(t, err)
+	}
+	require.NoError(t, out.Close())
+	return buf.Bytes()
+}
+
+// TestReadXLSXWorkbookPartElsewhere holds a workbook to the same table wherever
+// its main part sits. The sheet's XML was looked for under xl/workbook.xml by
+// name, and a workbook whose main part was elsewhere fell back to the reading
+// that asks the library cell by cell, which loaded a hidden number as nothing
+// and passed over a record of empty cells.
+func TestReadXLSXWorkbookPartElsewhere(t *testing.T) {
+	t.Parallel()
+
+	data := hiddenWorkbook(t, []string{"id", "secret", "name"}, [][]any{{1, 99, "alice"}, {"", "", ""}, {2, 98, "bob"}}, 2)
+	want := [][]string{{"1", "99", "alice"}, {"", "", ""}, {"2", "98", "bob"}}
+
+	for _, to := range []string{"xl/workbook.xml", "xl/book.xml", "book/wb.xml"} {
+		t.Run(to, func(t *testing.T) {
+			t.Parallel()
+
+			_, records, err := readSheet(t, relocateWorkbookPart(t, data, to))
 
 			require.NoError(t, err)
 			assert.Equal(t, want, records)

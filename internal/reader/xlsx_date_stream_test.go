@@ -1,6 +1,7 @@
 package reader
 
 import (
+	"archive/zip"
 	"bytes"
 	"fmt"
 	"regexp"
@@ -453,4 +454,166 @@ func TestTheTwoScansAgreeOnTheRows(t *testing.T) {
 			assert.Equal(t, fromValues, fromBytes)
 		})
 	}
+}
+
+// archiveOf returns a zip holding the given parts, which is enough of a
+// workbook for the part lookup to be asked where a sheet is.
+func archiveOf(t *testing.T, parts map[string]string) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	out := zip.NewWriter(&buf)
+	for name, body := range parts {
+		w, err := out.Create(name)
+		require.NoError(t, err)
+		_, err = w.Write([]byte(body))
+		require.NoError(t, err)
+	}
+	require.NoError(t, out.Close())
+	return buf.Bytes()
+}
+
+// TestSheetPartFollowsThePackage covers finding a sheet's part through the
+// package's own bookkeeping: the root relationships say where the main part
+// is, the main part's relationships say where each sheet is, and a sheet's
+// target is written relative to the main part unless it begins at the root.
+// The main part used to be looked for at xl/workbook.xml by name.
+func TestSheetPartFollowsThePackage(t *testing.T) {
+	t.Parallel()
+
+	rootRels := func(target string) string {
+		return `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+			`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="` + target + `"/>` +
+			`</Relationships>`
+	}
+	workbook := `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+		`<sheets><sheet name="data" sheetId="1" r:id="rId1"/></sheets></workbook>`
+	workbookRels := func(target string) string {
+		return `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+			`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="` + target + `"/>` +
+			`</Relationships>`
+	}
+
+	for _, tt := range []struct {
+		name  string
+		parts map[string]string
+		want  string
+	}{
+		{
+			name: "the main part where Excel puts it",
+			parts: map[string]string{
+				"_rels/.rels":                rootRels("xl/workbook.xml"),
+				"xl/workbook.xml":            workbook,
+				"xl/_rels/workbook.xml.rels": workbookRels("worksheets/sheet1.xml"),
+				"xl/worksheets/sheet1.xml":   "<worksheet/>",
+			},
+			want: "xl/worksheets/sheet1.xml",
+		},
+		{
+			name: "the main part under another name",
+			parts: map[string]string{
+				"_rels/.rels":              rootRels("/xl/book.xml"),
+				"xl/book.xml":              workbook,
+				"xl/_rels/book.xml.rels":   workbookRels("worksheets/sheet1.xml"),
+				"xl/worksheets/sheet1.xml": "<worksheet/>",
+			},
+			want: "xl/worksheets/sheet1.xml",
+		},
+		{
+			name: "the main part in another directory",
+			parts: map[string]string{
+				"_rels/.rels":            rootRels("book/wb.xml"),
+				"book/wb.xml":            workbook,
+				"book/_rels/wb.xml.rels": workbookRels("sheets/s.xml"),
+				"book/sheets/s.xml":      "<worksheet/>",
+			},
+			want: "book/sheets/s.xml",
+		},
+		{
+			name: "the main part at the root",
+			parts: map[string]string{
+				"_rels/.rels":       rootRels("wb.xml"),
+				"wb.xml":            workbook,
+				"_rels/wb.xml.rels": workbookRels("sheets/s.xml"),
+				"sheets/s.xml":      "<worksheet/>",
+			},
+			want: "sheets/s.xml",
+		},
+		{
+			name: "a sheet target written from the root",
+			parts: map[string]string{
+				"_rels/.rels":                rootRels("xl/workbook.xml"),
+				"xl/workbook.xml":            workbook,
+				"xl/_rels/workbook.xml.rels": workbookRels("/xl/worksheets/sheet1.xml"),
+				"xl/worksheets/sheet1.xml":   "<worksheet/>",
+			},
+			want: "xl/worksheets/sheet1.xml",
+		},
+		{
+			name: "a sheet target that begins with a dot",
+			parts: map[string]string{
+				"_rels/.rels":                rootRels("xl/workbook.xml"),
+				"xl/workbook.xml":            workbook,
+				"xl/_rels/workbook.xml.rels": workbookRels("./worksheets/sheet1.xml"),
+				"xl/worksheets/sheet1.xml":   "<worksheet/>",
+			},
+			want: "xl/worksheets/sheet1.xml",
+		},
+		{
+			name: "no root relationships at all falls back to where Excel puts it",
+			parts: map[string]string{
+				"xl/workbook.xml":            workbook,
+				"xl/_rels/workbook.xml.rels": workbookRels("worksheets/sheet1.xml"),
+				"xl/worksheets/sheet1.xml":   "<worksheet/>",
+			},
+			want: "xl/worksheets/sheet1.xml",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			data := archiveOf(t, tt.parts)
+			archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+			require.NoError(t, err)
+
+			part, ok := sheetPart(archive, "data")
+
+			require.True(t, ok, "the sheet is found")
+			assert.Equal(t, tt.want, part.Name)
+		})
+	}
+
+	t.Run("root relationships that are not XML fall back to where Excel puts it", func(t *testing.T) {
+		t.Parallel()
+
+		data := archiveOf(t, map[string]string{
+			"_rels/.rels":                "not xml",
+			"xl/workbook.xml":            workbook,
+			"xl/_rels/workbook.xml.rels": workbookRels("worksheets/sheet1.xml"),
+			"xl/worksheets/sheet1.xml":   "<worksheet/>",
+		})
+		archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+		require.NoError(t, err)
+
+		part, ok := sheetPart(archive, "data")
+
+		require.True(t, ok)
+		assert.Equal(t, "xl/worksheets/sheet1.xml", part.Name)
+	})
+
+	t.Run("a main part the root relationships name but the archive lacks is not found", func(t *testing.T) {
+		t.Parallel()
+
+		data := archiveOf(t, map[string]string{
+			"_rels/.rels":              rootRels("xl/book.xml"),
+			"xl/workbook.xml":          workbook,
+			"xl/worksheets/sheet1.xml": "<worksheet/>",
+		})
+		archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+		require.NoError(t, err)
+
+		_, ok := sheetPart(archive, "data")
+
+		assert.False(t, ok)
+	})
 }

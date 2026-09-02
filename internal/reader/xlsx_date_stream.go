@@ -417,23 +417,21 @@ func isASCIILetter(c byte) bool {
 const maxSheetRow = 1 << 24
 
 // sheetPart finds the worksheet part a sheet name belongs to, following the
-// workbook's relationships rather than guessing at a file name: a workbook
-// whose sheets were reordered or deleted does not name its parts in order.
+// package's own bookkeeping rather than guessing at a file name: the root
+// relationships say where the workbook's main part is, the main part's
+// relationships say where each sheet is, and a workbook whose sheets were
+// reordered or deleted does not name its parts in order.
 func sheetPart(archive *zip.Reader, sheet string) (*zip.File, bool) {
-	relID, ok := sheetRelationshipID(archive, sheet)
+	workbook := workbookPart(archive)
+	relID, ok := sheetRelationshipID(archive, workbook, sheet)
 	if !ok {
 		return nil, false
 	}
-	target, ok := relationshipTarget(archive, relID)
+	target, ok := relationshipTarget(archive, relsPartOf(workbook), relID)
 	if !ok {
 		return nil, false
 	}
-	// A target is relative to the part that names it, which is xl/workbook.xml,
-	// unless it is written from the root.
-	name := path.Join("xl", target)
-	if strings.HasPrefix(target, "/") {
-		name = strings.TrimPrefix(target, "/")
-	}
+	name := resolvePart(path.Dir(workbook), target)
 	for _, file := range archive.File {
 		if file.Name == name {
 			return file, true
@@ -442,9 +440,56 @@ func sheetPart(archive *zip.Reader, sheet string) (*zip.File, bool) {
 	return nil, false
 }
 
-// sheetRelationshipID reads xl/workbook.xml for the relationship id of a sheet.
-func sheetRelationshipID(archive *zip.Reader, sheet string) (string, bool) {
-	body, ok := partOf(archive, "xl/workbook.xml")
+// workbookPart is the name of the workbook's main part. Excel writes it at
+// xl/workbook.xml, and the format lets a writer put it anywhere the package's
+// root relationships name; a package whose root relationships are missing,
+// unreadable or silent is answered with Excel's name, the only one left to
+// guess.
+func workbookPart(archive *zip.Reader) string {
+	const excelWrites = "xl/workbook.xml"
+	body, ok := partOf(archive, "_rels/.rels")
+	if !ok {
+		return excelWrites
+	}
+	var rels struct {
+		Relationship []struct {
+			Type   string `xml:"Type,attr"`
+			Target string `xml:"Target,attr"`
+		} `xml:"Relationship"`
+	}
+	if err := xml.Unmarshal(body, &rels); err != nil {
+		return excelWrites
+	}
+	for _, r := range rels.Relationship {
+		// The transitional and the strict schema name the relationship under
+		// different namespaces and the same last word.
+		if strings.HasSuffix(r.Type, "/officeDocument") && r.Target != "" {
+			return resolvePart("", r.Target)
+		}
+	}
+	return excelWrites
+}
+
+// relsPartOf names the part holding a part's relationships, which sits in a
+// _rels directory beside it under the part's own name with .rels appended.
+func relsPartOf(part string) string {
+	dir, base := path.Split(part)
+	return dir + "_rels/" + base + ".rels"
+}
+
+// resolvePart resolves a relationship target against the directory of the part
+// that names it. A target beginning with a slash is written from the root.
+func resolvePart(dir, target string) string {
+	if strings.HasPrefix(target, "/") {
+		return path.Clean(strings.TrimPrefix(target, "/"))
+	}
+	return path.Join(dir, target)
+}
+
+// sheetRelationshipID reads the workbook's main part for the relationship id
+// of a sheet.
+func sheetRelationshipID(archive *zip.Reader, part, sheet string) (string, bool) {
+	body, ok := partOf(archive, part)
 	if !ok {
 		return "", false
 	}
@@ -467,10 +512,10 @@ func sheetRelationshipID(archive *zip.Reader, sheet string) (string, bool) {
 	return "", false
 }
 
-// relationshipTarget reads xl/_rels/workbook.xml.rels for what a relationship
-// id points at.
-func relationshipTarget(archive *zip.Reader, relID string) (string, bool) {
-	body, ok := partOf(archive, "xl/_rels/workbook.xml.rels")
+// relationshipTarget reads a relationships part for what a relationship id
+// points at.
+func relationshipTarget(archive *zip.Reader, part, relID string) (string, bool) {
+	body, ok := partOf(archive, part)
 	if !ok {
 		return "", false
 	}
