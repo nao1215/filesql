@@ -57,6 +57,8 @@ const (
 
 	keywordCurrentTimestamp = "CURRENT_TIMESTAMP"
 	unitYear                = "YEAR"
+	keywordCurrentDate      = "CURRENT_DATE"
+	fnNameConvert           = "CONVERT"
 	keywordLocalTime        = "LOCALTIME"
 	keywordLocalTimestamp   = "LOCALTIMESTAMP"
 )

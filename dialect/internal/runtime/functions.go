@@ -432,9 +432,16 @@ func registerAll() error {
 		// the next time the statement runs. UNIX_TIMESTAMP is variadic and only
 		// its no-argument form reads the clock; the form that takes a datetime
 		// is pure, so both belong here.
-		"now":                     {0, fnNow},
-		"curdate":                 {0, fnCurdate},
-		"curtime":                 {0, fnCurtime},
+		"now":     {0, fnNow},
+		"curdate": {0, fnCurdate},
+		"curtime": {0, fnCurtime},
+		// MySQL's UTC_ family reads the same clock under a name that says so.
+		// Every clock here is UTC, which is what SQLite's own CURRENT_TIMESTAMP
+		// answers, so these are the same readings as NOW, CURDATE and CURTIME
+		// rather than a second clock.
+		"utc_timestamp":           {0, fnNow},
+		"utc_date":                {0, fnCurdate},
+		"utc_time":                {0, fnCurtime},
 		"unix_timestamp":          {-1, fnUnixTimestamp},
 		"mysql_time_of_day":       {1, fnMySQLTimeOfDay},
 		"to_seconds":              {1, fnMySQLToSeconds},
@@ -484,6 +491,11 @@ func nonDeterministicFunctions() map[string]scalarSpec {
 	nondet := map[string]scalarSpec{
 		"rand":          {0, fnRand},
 		"generate_uuid": {0, fnGenerateUUID},
+		// MySQL's SYSDATE is the one clock it does not fix at the start of the
+		// statement: it reads the moment the call runs, which is what separates
+		// it from NOW. That is the same separation PostgreSQL draws between
+		// clock_timestamp and now, so it reads the same helper.
+		"sysdate": {0, fnClockTimestamp},
 	}
 	// dialects.GoogleSQL has nothing to add: BigQuery fixes CURRENT_DATETIME at the
 	// start of the statement, like the rest of its CURRENT_ family.
