@@ -3540,20 +3540,36 @@ func TestAnEmptySourceIsRefusedExceptWhereADocumentCanSayNothing(t *testing.T) {
 		}
 	})
 
-	t.Run("an empty reader is refused whatever the format", func(t *testing.T) {
+	t.Run("a reader answers the way a file of the same format does", func(t *testing.T) {
 		t.Parallel()
 
-		// A reader carries no name and no size, so the exemption above does not
-		// reach it and every format answers alike here.
-		for _, f := range append(append([]struct {
-			ext      string
-			fileType FileType
-		}{}, refusing...), loading...) {
-			_, err := NewBuilder().
-				AddReader(strings.NewReader(""), "e", f.fileType).
-				Open(t.Context())
-			require.Error(t, err, "an empty %s reader must be refused", f.ext)
-			assert.ErrorIs(t, err, ErrEmptyData, "an empty %s reader must be refused", f.ext)
+		// And the concrete type of the reader does not enter into it. The
+		// builder used to peek when the reader happened to be a
+		// *strings.Reader, so the same empty bytes were refused through one
+		// reader type and loaded through another.
+		readers := []struct {
+			name string
+			make func() io.Reader
+		}{
+			{"strings.Reader", func() io.Reader { return strings.NewReader("") }},
+			{"bytes.Reader", func() io.Reader { return bytes.NewReader(nil) }},
+			{"bytes.Buffer", func() io.Reader { return &bytes.Buffer{} }},
+		}
+		for _, r := range readers {
+			for _, f := range refusing {
+				_, err := NewBuilder().AddReader(r.make(), "e", f.fileType).Open(t.Context())
+				require.Error(t, err, "%s: an empty %s reader must be refused", r.name, f.ext)
+				assert.ErrorIs(t, err, ErrEmptyData, "%s: %s", r.name, f.ext)
+			}
+			for _, f := range loading {
+				db, err := NewBuilder().AddReader(r.make(), "e", f.fileType).Open(t.Context())
+				require.NoError(t, err, "%s: an empty %s reader is a table with no rows", r.name, f.ext)
+
+				var rows int
+				require.NoError(t, db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM e").Scan(&rows))
+				assert.Equal(t, 0, rows, "%s: %s", r.name, f.ext)
+				require.NoError(t, db.Close())
+			}
 		}
 	})
 
@@ -3737,12 +3753,16 @@ func TestEdgeCasesReaderInput(t *testing.T) {
 		content     string
 		fileType    FileType
 		expectedErr bool
+		errOnOpen   bool
 	}{
 		{
+			// The refusal comes from the read rather than from the build: the
+			// build cannot answer it without consuming the stream.
 			name:        "Empty reader",
 			content:     "",
 			fileType:    FileTypeCSV,
-			expectedErr: true,
+			expectedErr: false,
+			errOnOpen:   true,
 		},
 		{
 			name:        "Null bytes in content",
@@ -3782,6 +3802,11 @@ func TestEdgeCasesReaderInput(t *testing.T) {
 			}
 
 			db, err := validatedBuilder.Open(ctx)
+			if tt.errOnOpen {
+				require.Error(t, err, "Expected the read to refuse %s", tt.name)
+				assert.ErrorIs(t, err, ErrEmptyData, tt.name)
+				return
+			}
 			if err != nil {
 				assert.Fail(t, "Failed to open database for %s: %v", tt.name, err)
 				return

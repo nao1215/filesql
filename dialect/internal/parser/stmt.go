@@ -82,18 +82,11 @@ func (p *Parser) parseWithStatement() (ast.Stmt, error) {
 		return nil, err
 	}
 	stmt := &ast.SelectStmt{With: with, Body: body, Span: span}
-	if p.eatWords("ORDER", "BY") {
-		terms, err := p.parseOrderTerms()
-		if err != nil {
-			return nil, err
-		}
-		stmt.OrderBy = terms
-	}
-	limit, err := p.parseLimit()
+	order, limit, err := p.parseStatementTail()
 	if err != nil {
 		return nil, err
 	}
-	stmt.Limit = limit
+	stmt.OrderBy, stmt.Limit = order, limit
 	if err := p.parseRowLock(); err != nil {
 		return nil, err
 	}
@@ -334,18 +327,11 @@ func (p *Parser) parseUpdate(with *ast.WithClause) (ast.Stmt, error) {
 		}
 		stmt.Where = cond
 	}
-	if p.eatWords("ORDER", "BY") {
-		terms, err := p.parseOrderTerms()
-		if err != nil {
-			return nil, err
-		}
-		stmt.OrderBy = terms
-	}
-	limit, err := p.parseLimit()
+	order, limit, err := p.parseStatementTail()
 	if err != nil {
 		return nil, err
 	}
-	stmt.Limit = limit
+	stmt.OrderBy, stmt.Limit = order, limit
 	if p.atReturning() {
 		items, err := p.parseSelectItems()
 		if err != nil {
@@ -388,18 +374,11 @@ func (p *Parser) parseDelete(with *ast.WithClause) (ast.Stmt, error) {
 		}
 		stmt.Where = cond
 	}
-	if p.eatWords("ORDER", "BY") {
-		terms, err := p.parseOrderTerms()
-		if err != nil {
-			return nil, err
-		}
-		stmt.OrderBy = terms
-	}
-	limit, err := p.parseLimit()
+	order, limit, err := p.parseStatementTail()
 	if err != nil {
 		return nil, err
 	}
-	stmt.Limit = limit
+	stmt.OrderBy, stmt.Limit = order, limit
 	if p.atReturning() {
 		items, err := p.parseSelectItems()
 		if err != nil {

@@ -30,53 +30,39 @@ const (
 	OutputFormatFedWire
 )
 
-// String returns the string representation of OutputFormat
-func (f OutputFormat) String() string {
-	switch f {
-	case OutputFormatCSV:
-		return formatCSVStr
-	case OutputFormatTSV:
-		return formatTSVStr
-	case OutputFormatLTSV:
-		return formatLTSVStr
-	case OutputFormatParquet:
-		return formatParquetStr
-	case OutputFormatXLSX:
-		return formatXLSXStr
-	case OutputFormatACH:
-		return formatACHStr
-	case OutputFormatFedWire:
-		return formatFedWireStr
-	default:
-		// A value this enumeration has no name for says so. It named CSV, so a
-		// refusal read "unsupported output format: csv" and sent the caller
-		// looking for a fault in a format this package writes every day.
-		return formatUnknownStr
-	}
+// outputFormatNames is what each format is called and what it is written under.
+// The two used to be separate switches, which let a format be given a name and
+// no extension; on one line they are given together or not at all.
+//
+//nolint:gochecknoglobals // constant-like lookup table
+var outputFormatNames = map[OutputFormat]struct{ name, extension string }{
+	OutputFormatCSV:     {formatCSVStr, extCSV},
+	OutputFormatTSV:     {formatTSVStr, extTSV},
+	OutputFormatLTSV:    {formatLTSVStr, extLTSV},
+	OutputFormatParquet: {formatParquetStr, extParquet},
+	OutputFormatXLSX:    {formatXLSXStr, extXLSX},
+	OutputFormatACH:     {formatACHStr, extACH},
+	OutputFormatFedWire: {formatFedWireStr, extFED},
 }
 
-// Extension returns the file extension for the format
-func (f OutputFormat) Extension() string {
-	switch f {
-	case OutputFormatCSV:
-		return extCSV
-	case OutputFormatTSV:
-		return extTSV
-	case OutputFormatLTSV:
-		return extLTSV
-	case OutputFormatParquet:
-		return extParquet
-	case OutputFormatXLSX:
-		return extXLSX
-	case OutputFormatACH:
-		return extACH
-	case OutputFormatFedWire:
-		return extFED
-	default:
-		// A format with no writer has no extension of its own, and a dump
-		// refuses before the path is used either way.
-		return ""
+// String returns the string representation of OutputFormat.
+//
+// A value this enumeration has no name for says so. It named CSV, so a refusal
+// read "unsupported output format: csv" and sent the caller looking for a fault
+// in a format this package writes every day.
+func (f OutputFormat) String() string {
+	if named, ok := outputFormatNames[f]; ok {
+		return named.name
 	}
+	return formatUnknownStr
+}
+
+// Extension returns the file extension for the format.
+//
+// A format this enumeration has no name for has no extension of its own, and a
+// dump refuses before the path is used either way.
+func (f OutputFormat) Extension() string {
+	return outputFormatNames[f].extension
 }
 
 // CompressionType represents the compression type
