@@ -543,9 +543,11 @@
 //	// db.Query("SELECT name::text FROM users WHERE name ILIKE 'a%'")
 //
 // The supported dialects are MySQL, PostgreSQL, and GoogleSQL (BigQuery / Cloud
-// Spanner). Queries are translated to SQLite before execution on a best-effort
-// basis: common incompatibilities are rewritten, constructs with no SQLite
-// equivalent are rejected with a clear error, and everything else is passed
-// through. Loading files always uses SQLite regardless of the dialect. See the
-// dialect subpackage for the full list of translations and their limitations.
+// Spanner). A query is translated to SQLite before it runs: what SQLite spells
+// differently is rewritten, what a function can compute is computed, and what
+// has no SQLite form is refused with an error naming it. A translated query
+// answers what the dialect's own engine answers, and a release that moves an
+// answer toward that engine's is a fix rather than a breaking change. Loading
+// files always uses SQLite regardless of the dialect. See the dialect
+// subpackage for the subset it accepts and what it promises.
 package filesql

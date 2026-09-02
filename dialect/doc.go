@@ -458,4 +458,18 @@
 //
 // The SQLite dialect is the identity translation: Translate returns the input
 // unchanged.
+//
+// # What a translation promises
+//
+// A translated query answers what the engine the dialect names answers, within
+// the subset above and under the type system SQLite has. That is the contract,
+// and it is a contract about the engine rather than about this package's
+// previous answer: where a translation is found to answer something the engine
+// does not, the translation changes, and the change is a fix rather than a
+// breaking change even for a caller who had pinned the old answer. What this
+// package keeps stable across releases is its exported names and their
+// signatures, the three error sentinels and what each means, and the rules
+// this documentation states -- the clock, the comparison, the floating-point
+// arithmetic, the columns a translation names. A rule it does not state is
+// not a promise, and the fix for one that mattered is to state it.
 package dialect

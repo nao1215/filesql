@@ -50,6 +50,16 @@ your local Go rather than against filesql.
 - If you change a README code sample, keep the sample covered by tests.
 - Do not leave stale docs, stale examples, or dead code behind.
 
+## Compatibility
+
+What a release promises to keep is the exported surface of the three published packages -- `filesql`, `filesql/dialect` and `filesql/prep` -- meaning every exported name, its signature, and the behavior its godoc states. A change to any of those is a breaking change and goes under `### Breaking Changes` in the changelog with a migration note, whatever the version number does.
+
+What a release does not promise to keep is an answer that was wrong. A dialect translation is a promise about the engine the dialect names: a translated query answers what MySQL, PostgreSQL or BigQuery answers, and a change that moves an answer toward that engine's is a fix, even when the old answer was one a caller had pinned in a test. The same holds for a load that stored a value differently from the file, a save that wrote a file differently from the one it read, and an error that named the wrong sentinel. Those go under `### Fixed`, and the entry says what the old answer was so a caller who depended on it can find it.
+
+The line between the two is whether the godoc said so. Behavior the godoc states is the contract; behavior a caller observed and the godoc did not state is not, and the fix for an unstated behavior that mattered is to state it, in the godoc, in the same change.
+
+Do not add to the exported surface to fix a bug. If the fix needs a new name, the pull request says why no existing one could carry it.
+
 ## Validation
 
 Run these before you send a PR:
