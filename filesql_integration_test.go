@@ -22,7 +22,7 @@ func TestCompanyDataIntegration(t *testing.T) {
 	}
 
 	companyDir := filepath.Join("testdata", "company")
-	db, err := Open(companyDir)
+	db, err := Open(context.Background(), companyDir)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -753,7 +753,7 @@ func TestMultipleSequentialQueries(t *testing.T) {
 	}
 
 	companyDir := filepath.Join("testdata", "company")
-	db, err := Open(companyDir)
+	db, err := Open(context.Background(), companyDir)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -1029,7 +1029,7 @@ func TestDataIntegrityValidation(t *testing.T) {
 	}
 
 	companyDir := filepath.Join("testdata", "company")
-	db, err := Open(companyDir)
+	db, err := Open(context.Background(), companyDir)
 	require.NoError(t, err)
 	defer db.Close()
 

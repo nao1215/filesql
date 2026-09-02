@@ -273,7 +273,7 @@ func TestOpenAppliesTheDefaultSheetPolicy(t *testing.T) {
 	t.Parallel()
 	path := mixedVisibilityWorkbook(t, t.TempDir())
 
-	db, err := Open(path)
+	db, err := Open(context.Background(), path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -1059,11 +1059,11 @@ func TestDumpXLSXAdaptsSheetName(t *testing.T) {
 				`INSERT INTO "`+tt.table+`" VALUES ('kept')`)
 
 			outDir := t.TempDir()
-			require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+			require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
 
 			assert.Equal(t, tt.wantSheet, excelSheetName(tt.table), "the sheet is spelled the way Excel allows")
 
-			reloaded, err := OpenContext(t.Context(), filepath.Join(outDir, tt.table+".xlsx"))
+			reloaded, err := Open(t.Context(), filepath.Join(outDir, tt.table+".xlsx"))
 			require.NoError(t, err)
 			defer reloaded.Close()
 
@@ -1095,7 +1095,7 @@ func TestDumpXLSXAdaptsSheetName(t *testing.T) {
 
 		db := openWithTable(t, `CREATE TABLE "sales[2026]" (x TEXT)`, `INSERT INTO "sales[2026]" VALUES ('kept')`)
 
-		err := DumpDatabase(db, t.TempDir(), NewDumpOptions().WithFormat(OutputFormatXLSX))
+		err := DumpDatabase(context.Background(), db, t.TempDir(), NewDumpOptions().WithFormat(OutputFormatXLSX))
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidData)
@@ -1126,7 +1126,7 @@ func TestXLSXDateCellsImportAsISO(t *testing.T) {
 	require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
 	require.NoError(t, f.SaveAs(path))
 
-	db, err := OpenContext(ctx, path)
+	db, err := Open(ctx, path)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -1156,7 +1156,7 @@ func TestXLSXDateTimeCellKeepsItsTime(t *testing.T) {
 	require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
 	require.NoError(t, f.SaveAs(path))
 
-	db, err := OpenContext(ctx, path)
+	db, err := Open(ctx, path)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -1186,7 +1186,7 @@ func TestXLSXDateHonorsTheWorkbookEpoch(t *testing.T) {
 	require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
 	require.NoError(t, f.SaveAs(path))
 
-	db, err := OpenContext(ctx, path)
+	db, err := Open(ctx, path)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -1215,7 +1215,7 @@ func TestXLSXElapsedDurationIsNotADate(t *testing.T) {
 	require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
 	require.NoError(t, f.SaveAs(path))
 
-	db, err := OpenContext(ctx, path)
+	db, err := Open(ctx, path)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -1250,7 +1250,7 @@ func TestXLSXLocalizedDateFormatImportsAsISO(t *testing.T) {
 			require.NoError(t, f.SetCellStyle("Sheet1", "A2", "A2", style))
 			require.NoError(t, f.SaveAs(path))
 
-			db, err := OpenContext(ctx, path)
+			db, err := Open(ctx, path)
 			require.NoError(t, err)
 			defer func() { _ = db.Close() }()
 
@@ -1304,7 +1304,7 @@ func loadDateCell(t *testing.T, path, table string) string {
 	t.Helper()
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, path)
+	db, err := Open(ctx, path)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -1458,7 +1458,7 @@ func TestXLSXColoredDateFormatImportsAsISO(t *testing.T) {
 	}
 	require.NoError(t, f.SaveAs(path))
 
-	db, err := OpenContext(ctx, path)
+	db, err := Open(ctx, path)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -1637,7 +1637,7 @@ func TestOpenXLSXWithCollidingSheetsFails(t *testing.T) {
 	t.Parallel()
 	path := collidingWorkbook(t, filepath.Join(t.TempDir(), "book.xlsx"), "Q1 sales", "Q1.sales")
 
-	db, err := Open(path)
+	db, err := Open(context.Background(), path)
 	if err == nil {
 		_ = db.Close()
 		t.Fatal("Open succeeded on a workbook whose sheets share a table name")
@@ -1658,7 +1658,7 @@ func TestOpenXLSXWithDistinctSheetsStillWorks(t *testing.T) {
 	t.Parallel()
 	path := collidingWorkbook(t, filepath.Join(t.TempDir(), "book.xlsx"), "Alpha", "Beta")
 
-	db, err := Open(path)
+	db, err := Open(context.Background(), path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -1697,12 +1697,12 @@ func TestOpenXLSXRefusesARowWiderThanItsHeader(t *testing.T) {
 			"wide": {{"a", "b"}, {"1", "2", "3"}},
 		})
 
-		db, err := OpenContext(context.Background(), path)
+		db, err := Open(context.Background(), path)
 		if db != nil {
 			defer func() { _ = db.Close() }()
 		}
 		if err == nil {
-			t.Fatal("OpenContext accepted a row whose last cell has no column")
+			t.Fatal("Open accepted a row whose last cell has no column")
 		}
 		if !errors.Is(err, ErrParsing) {
 			t.Errorf("error = %v, want it to match ErrParsing", err)
@@ -1720,9 +1720,9 @@ func TestOpenXLSXRefusesARowWiderThanItsHeader(t *testing.T) {
 			"short": {{"a", "b", "c"}, {"1", "2"}},
 		})
 
-		db, err := OpenContext(context.Background(), path)
+		db, err := Open(context.Background(), path)
 		if err != nil {
-			t.Fatalf("OpenContext: %v", err)
+			t.Fatalf("Open: %v", err)
 		}
 		defer func() { _ = db.Close() }()
 
@@ -1803,7 +1803,7 @@ func TestBlankSheetCellInNumericColumnIsNull(t *testing.T) {
 		t.Fatalf("save workbook: %v", err)
 	}
 
-	db, err := OpenContext(t.Context(), path)
+	db, err := Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -1873,7 +1873,7 @@ func TestAFormattedNumberColumnIsANumber(t *testing.T) {
 			require.NoError(t, book.SaveAs(path))
 			require.NoError(t, book.Close())
 
-			db, err := OpenContext(ctx, path)
+			db, err := Open(ctx, path)
 			require.NoError(t, err)
 			defer func() { _ = db.Close() }()
 
@@ -2047,7 +2047,7 @@ func TestEverySheetIsLoadedByEveryRoute(t *testing.T) {
 	t.Run("a path", func(t *testing.T) {
 		t.Parallel()
 
-		db, err := OpenContext(ctx, path)
+		db, err := Open(ctx, path)
 		require.NoError(t, err)
 		defer db.Close()
 		assert.Equal(t, want, loadedTables(t, db))
@@ -2196,7 +2196,7 @@ func TestASheetWhoseFirstRowIsBlankKeepsItsRows(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	db, err := OpenContext(t.Context(), path)
+	db, err := Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -2246,7 +2246,7 @@ func TestASheetWithNothingInItStillMakesNoTable(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	db, err := OpenContext(t.Context(), path)
+	db, err := Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

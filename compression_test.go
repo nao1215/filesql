@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
+	"context"
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
@@ -331,10 +332,7 @@ func TestCompressionFactory(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.path, func(t *testing.T) {
-				handler, ok := factory.createHandlerForFile(tt.path).(*compressionHandlerImpl)
-				if !ok {
-					t.Fatalf("createHandlerForFile(%q) returned %T, want *compressionHandlerImpl", tt.path, handler)
-				}
+				handler := factory.createHandlerForFile(tt.path)
 				if got := handler.compressionType.Extension(); got != tt.expectedExtension {
 					t.Errorf("handler for %q has extension %v, want %v", tt.path, got, tt.expectedExtension)
 				}
@@ -1090,7 +1088,7 @@ func TestCompressionFailureSaysItOnce(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "a.csv.gz")
 		require.NoError(t, os.WriteFile(path, []byte("not gzip at all"), 0o600))
 
-		_, err := OpenContext(t.Context(), path)
+		_, err := Open(t.Context(), path)
 		require.Error(t, err)
 		require.ErrorIs(t, err, ErrCompression)
 		assert.Equal(t, 1, strings.Count(err.Error(), ErrCompression.Error()),
@@ -1104,7 +1102,7 @@ func TestCompressionFailureSaysItOnce(t *testing.T) {
 
 		db := openWithTable(t, "CREATE TABLE t (v TEXT)", "INSERT INTO t VALUES ('x')")
 
-		err := DumpDatabase(db, t.TempDir(), NewDumpOptions().WithCompression(CompressionBZ2))
+		err := DumpDatabase(context.Background(), db, t.TempDir(), NewDumpOptions().WithCompression(CompressionBZ2))
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrUnsupportedFormat)
 		assert.NotErrorIs(t, err, ErrCompression,
@@ -1125,7 +1123,7 @@ func TestCompressionFailureSaysItOnce(t *testing.T) {
 				path := filepath.Join(t.TempDir(), "a.csv"+extension)
 				require.NoError(t, os.WriteFile(path, []byte("this is not compressed at all"), 0o600))
 
-				_, err := OpenContext(t.Context(), path)
+				_, err := Open(t.Context(), path)
 				require.Error(t, err)
 				assert.LessOrEqual(t, strings.Count(err.Error(), ErrCompression.Error()), 1,
 					"one failure names its sentinel at most once")
@@ -1157,7 +1155,7 @@ func TestALoadOfAFileThatIsNotItsCompressionAnswersAlike(t *testing.T) {
 				t.Fatalf("write: %v", err)
 			}
 
-			_, err := OpenContext(t.Context(), path)
+			_, err := Open(t.Context(), path)
 			if err == nil {
 				t.Fatalf("a %s file holding plain text loaded, want a refusal", c)
 			}
@@ -1191,7 +1189,7 @@ func TestALoadOfCompressedTextThatIsNotItsFormatStaysAParseError(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	_, err := OpenContext(t.Context(), path)
+	_, err := Open(t.Context(), path)
 	if err == nil {
 		t.Fatal("a gzip file holding text that is not JSON loaded, want a refusal")
 	}

@@ -598,7 +598,7 @@ func (b *DBBuilder) build(ctx context.Context) error {
 // every load it has run, so the counts stay counts of the file in front of the
 // caller.
 //
-// It is valid after Open, OpenContext, LoadInto, or LoadIntoTx have run.
+// It is valid after Open, LoadInto, or LoadIntoTx have run.
 func (b *DBBuilder) SkippedRows() []SkippedRows {
 	return b.streamProcessor.skippedRows()
 }

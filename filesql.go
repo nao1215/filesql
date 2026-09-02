@@ -19,7 +19,7 @@ import (
 
 // Open creates an SQL database from the files at the given paths.
 //
-//	db, err := filesql.Open("data.csv")
+//	db, err := filesql.Open(context.Background(), "data.csv")
 //	if err != nil {
 //		return err
 //	}
@@ -35,21 +35,18 @@ import (
 // "users.csv" and "data.tsv.gz" become "users" and "data", "user-data.csv"
 // becomes "user_data", and "my file.csv" becomes "my_file".
 //
-// The files are never modified. Changes live in the database until
-// DumpDatabase writes them out, or until an auto-save configured through
-// NewBuilder does.
-func Open(paths ...string) (*sql.DB, error) {
-	return OpenContext(context.Background(), paths...)
-}
-
-// OpenContext is Open with a context, for a load that has to time out or be
-// canceled: a large file, or a server that abandons the request.
+// The context is for a load that has to time out or be canceled: a large file,
+// or a server that abandons the request.
 //
 //	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 //	defer cancel()
 //
-//	db, err := filesql.OpenContext(ctx, "large-dataset.csv")
-func OpenContext(ctx context.Context, paths ...string) (*sql.DB, error) {
+//	db, err := filesql.Open(ctx, "large-dataset.csv")
+//
+// The files are never modified. Changes live in the database until
+// DumpDatabase writes them out, or until an auto-save configured through
+// NewBuilder does.
+func Open(ctx context.Context, paths ...string) (*sql.DB, error) {
 	// Open validates the paths before it loads them.
 	return NewBuilder().AddPaths(paths...).Open(ctx)
 }
@@ -141,22 +138,14 @@ func LoadInto(ctx context.Context, db *sql.DB, paths ...string) error {
 // the refusal. A value a format cannot hold is found by reading the rows, so
 // that refusal leaves the tables already finished, as a canceled export does.
 //
-// It exports without a deadline. DumpDatabaseContext takes one.
-func DumpDatabase(db *sql.DB, outputDir string, opts ...DumpOptions) error {
-	return DumpDatabaseContext(context.Background(), db, outputDir, opts...)
-}
-
-// DumpDatabaseContext is DumpDatabase with a context, so an export can be
-// canceled or given a deadline.
-//
-// The export stops at the next table, row or write after the context ends. A
-// table already written stays written, since the tables are separate files and
-// nothing undoes one: what a canceled export leaves is the tables it had
-// finished. The table it was in the middle of leaves nothing, because each file
-// is staged and put in place only once it is whole. A cancellation before the
-// first table leaves no output directory, for the same reason a refused table
-// name does.
-func DumpDatabaseContext(ctx context.Context, db *sql.DB, outputDir string, opts ...DumpOptions) error {
+// The context gives the export a deadline or a way to cancel it. The export
+// stops at the next table, row or write after the context ends. A table already
+// written stays written, since the tables are separate files and nothing undoes
+// one: what a canceled export leaves is the tables it had finished. The table it
+// was in the middle of leaves nothing, because each file is staged and put in
+// place only once it is whole. A cancellation before the first table leaves no
+// output directory, for the same reason a refused table name does.
+func DumpDatabase(ctx context.Context, db *sql.DB, outputDir string, opts ...DumpOptions) error {
 	// A nil database is what a caller holds after an error they did not check,
 	// and reaching into it here would take their process down over a mistake this
 	// package answers with an error everywhere else.

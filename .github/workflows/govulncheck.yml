@@ -53,15 +53,13 @@ jobs:
       - name: Scan the module
         run: govulncheck ./...
 
-      # The examples are separate modules pinned to a released filesql, so
-      # `./...` above never reaches them. They are what the README sends people
-      # to copy, so an advisory against a driver or ORM one of them pins is
-      # worth the same report.
-      - name: Scan the examples
-        run: |
-          set -euo pipefail
-          for dir in examples/*/; do
-            [ -f "${dir}go.mod" ] || continue
-            echo "== ${dir}"
-            (cd "${dir}" && govulncheck ./...)
-          done
+      # The examples are not scanned here. They are separate modules pinned to a
+      # released filesql, so their source matches the released API rather than
+      # the working tree's, and between a breaking change and the release that
+      # carries it they do not compile against the version they pin -- which is
+      # a load failure rather than a finding, and one nothing in the pull
+      # request can act on. What the scan was there for, an advisory against a
+      # driver or ORM one of them pins, is dependabot's job instead: every
+      # example module is listed in .github/dependabot.yml. examples/verify.sh,
+      # run by the Examples workflow, is what keeps their source compiling
+      # against this checkout.

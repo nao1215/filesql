@@ -20,18 +20,18 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
-// BenchmarkOpenContext benchmarks the OpenContext function with a large CSV file.
+// BenchmarkOpen benchmarks the Open function with a large CSV file.
 // This benchmark uses testdata/benchmark/customers100000.csv (100,000 rows).
 //
 // Run with: make benchmark
-func BenchmarkOpenContext(b *testing.B) {
+func BenchmarkOpen(b *testing.B) {
 	csvPath := filepath.Join("testdata", "benchmark", "customers100000.csv")
 
 	b.ResetTimer()
 	for b.Loop() {
-		db, err := OpenContext(context.Background(), csvPath)
+		db, err := Open(context.Background(), csvPath)
 		if err != nil {
-			b.Fatalf("OpenContext failed: %v", err)
+			b.Fatalf("Open failed: %v", err)
 		}
 		if err := db.Close(); err != nil {
 			b.Fatalf("db.Close failed: %v", err)
@@ -39,17 +39,17 @@ func BenchmarkOpenContext(b *testing.B) {
 	}
 }
 
-// BenchmarkOpenContextParallel benchmarks the OpenContext function in parallel.
+// BenchmarkOpenParallel benchmarks the Open function in parallel.
 // This benchmark tests concurrent performance with multiple goroutines.
-func BenchmarkOpenContextParallel(b *testing.B) {
+func BenchmarkOpenParallel(b *testing.B) {
 	csvPath := filepath.Join("testdata", "benchmark", "customers100000.csv")
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			db, err := OpenContext(context.Background(), csvPath)
+			db, err := Open(context.Background(), csvPath)
 			if err != nil {
-				b.Fatalf("OpenContext failed: %v", err)
+				b.Fatalf("Open failed: %v", err)
 			}
 			if err := db.Close(); err != nil {
 				b.Fatalf("db.Close failed: %v", err)
@@ -130,7 +130,7 @@ func BenchmarkOpenJSON(b *testing.B) {
 }
 
 // BenchmarkOpenReader benchmarks loading the same rows through AddReader, which
-// is the path BenchmarkOpenContext does not cover: a reader cannot be read
+// is the path BenchmarkOpen does not cover: a reader cannot be read
 // twice, so its rows are staged as text and copied into the typed table once
 // the last one has been read. The copy is where that path's extra cost is, and
 // where the blank-cell rule is applied, so this is what measures both.
@@ -162,7 +162,7 @@ func BenchmarkOpenReader(b *testing.B) {
 }
 
 // BenchmarkOpenWithAutoSave benchmarks opening the same file with auto-save
-// enabled, which is what BenchmarkOpenContext does not cover.
+// enabled, which is what BenchmarkOpen does not cover.
 //
 // The auto-save path used to close the loader database and stream every file a
 // second time into a connection of its own, so opening with auto-save cost two
@@ -234,7 +234,7 @@ func BenchmarkOpenFormattedWorkbook(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		db, err := OpenContext(context.Background(), path)
+		db, err := Open(context.Background(), path)
 		if err != nil {
 			b.Fatalf("Open failed: %v", err)
 		}
@@ -372,9 +372,9 @@ func BenchmarkOpenParquet(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		db, err := OpenContext(context.Background(), path)
+		db, err := Open(context.Background(), path)
 		if err != nil {
-			b.Fatalf("OpenContext failed: %v", err)
+			b.Fatalf("Open failed: %v", err)
 		}
 		if err := db.Close(); err != nil {
 			b.Fatalf("db.Close failed: %v", err)
@@ -385,16 +385,16 @@ func BenchmarkOpenParquet(b *testing.B) {
 // BenchmarkDumpParquet measures the Parquet write path: the 100,000-row
 // benchmark table dumped as one Parquet file per iteration.
 func BenchmarkDumpParquet(b *testing.B) {
-	db, err := OpenContext(context.Background(), filepath.Join("testdata", "benchmark", "customers100000.csv"))
+	db, err := Open(context.Background(), filepath.Join("testdata", "benchmark", "customers100000.csv"))
 	if err != nil {
-		b.Fatalf("OpenContext failed: %v", err)
+		b.Fatalf("Open failed: %v", err)
 	}
 	defer db.Close()
 	dir := b.TempDir()
 
 	b.ResetTimer()
 	for b.Loop() {
-		if err := DumpDatabase(db, dir, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
+		if err := DumpDatabase(context.Background(), db, dir, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
 			b.Fatalf("DumpDatabase failed: %v", err)
 		}
 	}
@@ -408,9 +408,9 @@ func BenchmarkDumpParquet(b *testing.B) {
 // and a save together; this measures the write on its own, and it is the only
 // place the other two formats are measured at all.
 func BenchmarkDumpText(b *testing.B) {
-	db, err := OpenContext(context.Background(), filepath.Join("testdata", "benchmark", "customers100000.csv"))
+	db, err := Open(context.Background(), filepath.Join("testdata", "benchmark", "customers100000.csv"))
 	if err != nil {
-		b.Fatalf("OpenContext failed: %v", err)
+		b.Fatalf("Open failed: %v", err)
 	}
 	defer db.Close()
 
@@ -430,7 +430,7 @@ func BenchmarkDumpText(b *testing.B) {
 
 			b.ResetTimer()
 			for b.Loop() {
-				if err := DumpDatabase(db, dir, options); err != nil {
+				if err := DumpDatabase(context.Background(), db, dir, options); err != nil {
 					b.Fatalf("DumpDatabase failed: %v", err)
 				}
 			}
@@ -442,14 +442,14 @@ func BenchmarkDumpText(b *testing.B) {
 func writeBenchmarkParquet(b *testing.B, path string) {
 	b.Helper()
 
-	db, err := OpenContext(context.Background(), filepath.Join("testdata", "benchmark", "customers100000.csv"))
+	db, err := Open(context.Background(), filepath.Join("testdata", "benchmark", "customers100000.csv"))
 	if err != nil {
-		b.Fatalf("OpenContext failed: %v", err)
+		b.Fatalf("Open failed: %v", err)
 	}
 	defer db.Close()
 
 	dir := filepath.Dir(path)
-	if err := DumpDatabase(db, dir, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
+	if err := DumpDatabase(context.Background(), db, dir, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
 		b.Fatalf("DumpDatabase failed: %v", err)
 	}
 	if err := os.Rename(filepath.Join(dir, "customers100000.parquet"), path); err != nil {
@@ -498,9 +498,9 @@ func BenchmarkOpenCompressed(b *testing.B) {
 
 			b.ResetTimer()
 			for b.Loop() {
-				db, err := OpenContext(context.Background(), path)
+				db, err := Open(context.Background(), path)
 				if err != nil {
-					b.Fatalf("OpenContext failed: %v", err)
+					b.Fatalf("Open failed: %v", err)
 				}
 				if err := db.Close(); err != nil {
 					b.Fatalf("db.Close failed: %v", err)
@@ -551,9 +551,9 @@ func TestLoadMemoryFootprint(t *testing.T) {
 		rssBefore := readRSS()
 
 		ctx := context.Background()
-		db, err := OpenContext(ctx, path)
+		db, err := Open(ctx, path)
 		if err != nil {
-			t.Fatalf("OpenContext(%d rows): %v", rows, err)
+			t.Fatalf("Open(%d rows): %v", rows, err)
 		}
 
 		var got int
@@ -840,9 +840,9 @@ func TestLoadOneFileFootprint(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, path)
+	db, err := Open(ctx, path)
 	if err != nil {
-		t.Fatalf("OpenContext(%s): %v", path, err)
+		t.Fatalf("Open(%s): %v", path, err)
 	}
 	var got int
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM data").Scan(&got); err != nil {
@@ -870,7 +870,7 @@ func convertCSV(t *testing.T, csvPath string, format OutputFormat, ext string) s
 	t.Helper()
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, csvPath)
+	db, err := Open(ctx, csvPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -881,7 +881,7 @@ func convertCSV(t *testing.T, csvPath string, format OutputFormat, ext string) s
 	}()
 
 	dir := t.TempDir()
-	if err := DumpDatabase(db, dir, NewDumpOptions().WithFormat(format)); err != nil {
+	if err := DumpDatabase(context.Background(), db, dir, NewDumpOptions().WithFormat(format)); err != nil {
 		t.Fatal(err)
 	}
 	return filepath.Join(dir, "data"+ext)

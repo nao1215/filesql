@@ -595,9 +595,9 @@ func TestTranslatedQueriesStillExecute(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	plain, err := OpenContext(ctx, path)
+	plain, err := Open(ctx, path)
 	if err != nil {
-		t.Fatalf("OpenContext: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	// t.Cleanup, not defer: the subtests below are parallel, so they run after
 	// this function returns. A deferred Close would shut the database before the

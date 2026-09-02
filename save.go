@@ -266,7 +266,7 @@ func (c *autoSaveConnector) save(conn driver.Conn) error {
 	}
 
 	// Use the existing DumpDatabase method for other formats
-	return DumpDatabase(tempDB, outputDir, dumpOptions)
+	return DumpDatabase(context.Background(), tempDB, outputDir, dumpOptions)
 }
 
 // performACHAutoSave saves all ACH tables back to ACH files

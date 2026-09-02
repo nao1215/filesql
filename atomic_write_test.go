@@ -1,6 +1,7 @@
 package filesql
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -157,7 +158,7 @@ func TestDumpDatabase_FailedWriteLeavesDestinationIntact(t *testing.T) {
 	src := filepath.Join(srcDir, "data.csv")
 	require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
 
-	db, err := OpenContext(ctx, src)
+	db, err := Open(ctx, src)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -170,7 +171,7 @@ func TestDumpDatabase_FailedWriteLeavesDestinationIntact(t *testing.T) {
 	original := []byte("this content must survive\n")
 	require.NoError(t, os.WriteFile(dest, original, 0o600))
 
-	require.Error(t, DumpDatabase(db, outDir, opts))
+	require.Error(t, DumpDatabase(context.Background(), db, outDir, opts))
 
 	after, err := os.ReadFile(dest) //nolint:gosec // Test path from t.TempDir()
 	require.NoError(t, err)
@@ -191,12 +192,12 @@ func TestDumpDatabase_SucceedsThroughStaging(t *testing.T) {
 	src := filepath.Join(srcDir, "data.csv")
 	require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
 
-	db, err := OpenContext(ctx, src)
+	db, err := Open(ctx, src)
 	require.NoError(t, err)
 	defer db.Close()
 
 	outDir := t.TempDir()
-	require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatCSV)))
+	require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatCSV)))
 
 	got, err := os.ReadFile(filepath.Join(outDir, "data.csv")) //nolint:gosec // Test path from t.TempDir()
 	require.NoError(t, err)
@@ -274,9 +275,9 @@ func TestDumpDatabase_LongOutputFileName(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(out, tableName+".csv"), nil, 0o600); err != nil {
 		t.Skipf("this filesystem does not accept a %d-byte name: %v", len(tableName)+4, err)
 	}
-	require.NoError(t, DumpDatabase(db, out, NewDumpOptions()))
+	require.NoError(t, DumpDatabase(context.Background(), db, out, NewDumpOptions()))
 
-	reloaded, err := OpenContext(ctx, filepath.Join(out, tableName+".csv"))
+	reloaded, err := Open(ctx, filepath.Join(out, tableName+".csv"))
 	require.NoError(t, err)
 	defer reloaded.Close()
 

@@ -17,7 +17,7 @@ func main() {
 
 	// Open a CSV file as a database
 	// The table name will be "users" (derived from the filename)
-	db, err := filesql.OpenContext(ctx, "users.csv")
+	db, err := filesql.Open(ctx, "users.csv")
 	if err != nil {
 		log.Fatal(err)
 	}

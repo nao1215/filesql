@@ -157,7 +157,7 @@ var readerFormats = map[FileType]reader.Format{ //nolint:gochecknoglobals // con
 //
 // A TableData is one table, so a workbook contributes one sheet: the first the
 // sheet policy admits, in the workbook's own order. The others are not read and
-// nothing here reports them. filesql.OpenContext makes a table per sheet, and
+// nothing here reports them. filesql.Open makes a table per sheet, and
 // filesql.ExcelSheetsInReader says what a workbook holds without loading it.
 //
 // Values are spelled the way the format reads them rather than the way SQLite
@@ -173,7 +173,7 @@ var readerFormats = map[FileType]reader.Format{ //nolint:gochecknoglobals // con
 // caller already knows, and the reader that comes back is what Parse reads.
 //
 // A text encoding is not the caller's, and Parse reads one the way
-// filesql.OpenContext reads one. A leading byte-order mark decides it: a UTF-8
+// filesql.Open reads one. A leading byte-order mark decides it: a UTF-8
 // mark is stripped rather than left in the first column name, and a UTF-16 file
 // is transcoded. What follows has to be UTF-8, because a TableData holds
 // characters and nothing in a byte stream says which other encoding it might
@@ -202,7 +202,7 @@ func Parse(input io.Reader, fileType FileType, opts ...ParseOption) (result *Tab
 		return nil, ErrUnsupportedFileType
 	}
 
-	// A text source is read the way filesql.OpenContext reads one: a leading
+	// A text source is read the way filesql.Open reads one: a leading
 	// byte-order mark decides the encoding, and what follows has to be UTF-8.
 	// Without this the two disagreed about the same file -- a Shift-JIS file
 	// parsed here with no error into strings that are not characters, and a

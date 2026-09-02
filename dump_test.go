@@ -55,7 +55,7 @@ func TestDumpEmptyTable(t *testing.T) {
 			src := filepath.Join(t.TempDir(), "people.csv")
 			require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
 
-			db, err := OpenContext(ctx, src)
+			db, err := Open(ctx, src)
 			require.NoError(t, err)
 			defer db.Close()
 
@@ -64,7 +64,7 @@ func TestDumpEmptyTable(t *testing.T) {
 
 			opts := NewDumpOptions().WithFormat(tt.format).WithCompression(tt.compression)
 			outDir := t.TempDir()
-			require.NoError(t, DumpDatabase(db, outDir, opts), "an emptied table must be dumpable")
+			require.NoError(t, DumpDatabase(context.Background(), db, outDir, opts), "an emptied table must be dumpable")
 
 			entries, err := os.ReadDir(outDir)
 			require.NoError(t, err)
@@ -102,7 +102,7 @@ func TestDumpEmptyTableRoundTrip(t *testing.T) {
 			src := filepath.Join(t.TempDir(), "people.csv")
 			require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
 
-			db, err := OpenContext(ctx, src)
+			db, err := Open(ctx, src)
 			require.NoError(t, err)
 			defer db.Close()
 
@@ -111,9 +111,9 @@ func TestDumpEmptyTableRoundTrip(t *testing.T) {
 
 			opts := NewDumpOptions().WithFormat(tt.format)
 			outDir := t.TempDir()
-			require.NoError(t, DumpDatabase(db, outDir, opts))
+			require.NoError(t, DumpDatabase(context.Background(), db, outDir, opts))
 
-			reloaded, err := OpenContext(ctx, filepath.Join(outDir, "people"+opts.FileExtension()))
+			reloaded, err := Open(ctx, filepath.Join(outDir, "people"+opts.FileExtension()))
 			require.NoError(t, err)
 			defer reloaded.Close()
 
@@ -142,7 +142,7 @@ func TestDumpEmptyTableRoundTrip(t *testing.T) {
 		src := filepath.Join(t.TempDir(), "people.csv")
 		require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
 
-		db, err := OpenContext(ctx, src)
+		db, err := Open(ctx, src)
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -150,7 +150,7 @@ func TestDumpEmptyTableRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 
 		outDir := t.TempDir()
-		err = DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatLTSV))
+		err = DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatLTSV))
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrUnsupportedFormat)
@@ -185,7 +185,7 @@ func TestDumpEmptyTableColumnsSurvive(t *testing.T) {
 			src := filepath.Join(t.TempDir(), "people.csv")
 			require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
 
-			db, err := OpenContext(ctx, src)
+			db, err := Open(ctx, src)
 			require.NoError(t, err)
 			defer db.Close()
 
@@ -194,7 +194,7 @@ func TestDumpEmptyTableColumnsSurvive(t *testing.T) {
 
 			opts := NewDumpOptions().WithFormat(tt.format)
 			outDir := t.TempDir()
-			err = DumpDatabase(db, outDir, opts)
+			err = DumpDatabase(context.Background(), db, outDir, opts)
 			if tt.refused {
 				require.Error(t, err)
 				assert.ErrorIs(t, err, ErrUnsupportedFormat)
@@ -220,7 +220,7 @@ func TestDumpDatabase_UnusableConnection(t *testing.T) {
 	require.NoError(t, db.Close())
 
 	outputDir := filepath.Join(t.TempDir(), "out")
-	err := DumpDatabase(db, outputDir)
+	err := DumpDatabase(context.Background(), db, outputDir)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrDatabaseOperation)
 	assert.NoDirExists(t, outputDir, "a dump that never started must not leave a directory behind")
@@ -363,8 +363,8 @@ func TestDumpLoneEmptyField(t *testing.T) {
 			// one of the formats is losing the row rather than writing it
 			// differently.
 			outDir := t.TempDir()
-			require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(tt.format)))
-			reloaded, err := OpenContext(t.Context(), filepath.Join(outDir, "t"+tt.format.Extension()))
+			require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(tt.format)))
+			reloaded, err := Open(t.Context(), filepath.Join(outDir, "t"+tt.format.Extension()))
 			require.NoError(t, err)
 			defer reloaded.Close()
 
@@ -391,7 +391,7 @@ func TestDumpLoneEmptyField(t *testing.T) {
 		src := filepath.Join(t.TempDir(), "seed.csv")
 		require.NoError(t, os.WriteFile(src, []byte("a\n1\n"), 0o600))
 
-		db, err := OpenContext(ctx, src)
+		db, err := Open(ctx, src)
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -405,9 +405,9 @@ func TestDumpLoneEmptyField(t *testing.T) {
 		}
 
 		outDir := t.TempDir()
-		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions()))
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions()))
 
-		reloaded, err := OpenContext(ctx, filepath.Join(outDir, "names.csv"))
+		reloaded, err := Open(ctx, filepath.Join(outDir, "names.csv"))
 		require.NoError(t, err)
 		defer reloaded.Close()
 
@@ -497,7 +497,7 @@ func TestDumpLTSVUnrepresentableValues(t *testing.T) {
 			original := []byte("a:untouched\n")
 			require.NoError(t, os.WriteFile(dest, original, 0o600))
 
-			err := DumpDatabase(db, outDir, ltsv)
+			err := DumpDatabase(context.Background(), db, outDir, ltsv)
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrUnsupportedFormat)
 			assert.Contains(t, err.Error(), tt.wantErr)
@@ -520,7 +520,7 @@ func TestDumpLTSVUnrepresentableValues(t *testing.T) {
 
 		db := openWithTable(t, `CREATE TABLE t ("a:b" TEXT)`, "INSERT INTO t VALUES ('v')")
 
-		err := DumpDatabase(db, t.TempDir(), ltsv)
+		err := DumpDatabase(context.Background(), db, t.TempDir(), ltsv)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrUnsupportedFormat)
 		assert.Contains(t, err.Error(), `column "a:b" holds a colon`)
@@ -531,7 +531,7 @@ func TestDumpLTSVUnrepresentableValues(t *testing.T) {
 
 		db := openWithTable(t, `CREATE TABLE t (" a" TEXT)`, "INSERT INTO t VALUES ('v')")
 
-		err := DumpDatabase(db, t.TempDir(), ltsv)
+		err := DumpDatabase(context.Background(), db, t.TempDir(), ltsv)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrUnsupportedFormat)
 		assert.Contains(t, err.Error(), `column " a" would be read back as "a"`)
@@ -543,9 +543,9 @@ func TestDumpLTSVUnrepresentableValues(t *testing.T) {
 		db := openWithTable(t, `CREATE TABLE t ("a b" TEXT, "日付" TEXT, "" TEXT)`, "INSERT INTO t VALUES ('x', 'y', 'z')")
 
 		outDir := t.TempDir()
-		require.NoError(t, DumpDatabase(db, outDir, ltsv))
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir, ltsv))
 
-		reloaded, err := OpenContext(t.Context(), filepath.Join(outDir, "t.ltsv"))
+		reloaded, err := Open(t.Context(), filepath.Join(outDir, "t.ltsv"))
 		require.NoError(t, err)
 		defer reloaded.Close()
 
@@ -570,9 +570,9 @@ func TestDumpLTSVUnrepresentableValues(t *testing.T) {
 			"INSERT INTO t VALUES ('plain', 'with space')")
 
 		outDir := t.TempDir()
-		require.NoError(t, DumpDatabase(db, outDir, ltsv))
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir, ltsv))
 
-		reloaded, err := OpenContext(t.Context(), filepath.Join(outDir, "t.ltsv"))
+		reloaded, err := Open(t.Context(), filepath.Join(outDir, "t.ltsv"))
 		require.NoError(t, err)
 		defer reloaded.Close()
 
@@ -634,7 +634,7 @@ func TestDumpUnrepresentableSentinels(t *testing.T) {
 
 			db := openWithTable(t, "CREATE TABLE t (a TEXT)", tt.insert)
 
-			err := DumpDatabase(db, t.TempDir(), NewDumpOptions().WithFormat(tt.format))
+			err := DumpDatabase(context.Background(), db, t.TempDir(), NewDumpOptions().WithFormat(tt.format))
 
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrUnsupportedFormat)
@@ -677,7 +677,7 @@ func TestDumpDatabaseStaysInOutputDir(t *testing.T) {
 			root := t.TempDir()
 			outDir := filepath.Join(root, "out")
 
-			err := DumpDatabase(db, outDir, NewDumpOptions())
+			err := DumpDatabase(context.Background(), db, outDir, NewDumpOptions())
 			require.Error(t, err, "a table whose name is not a file name must be refused")
 			assert.ErrorIs(t, err, ErrInvalidData)
 			assert.Contains(t, err.Error(), tt.table)
@@ -696,7 +696,7 @@ func TestDumpDatabaseStaysInOutputDir(t *testing.T) {
 		db := openWithTable(t, "CREATE TABLE people (a TEXT)", "INSERT INTO people VALUES ('kept')")
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions()))
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions()))
 
 		got, err := os.ReadFile(filepath.Join(outDir, "people.csv")) //nolint:gosec // Test path from t.TempDir()
 		require.NoError(t, err)
@@ -712,7 +712,7 @@ func TestDumpDatabaseStaysInOutputDir(t *testing.T) {
 		db := openWithTable(t, `CREATE TABLE "a.b" (x TEXT)`, `INSERT INTO "a.b" VALUES ('kept')`)
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		err := DumpDatabase(db, outDir, NewDumpOptions())
+		err := DumpDatabase(context.Background(), db, outDir, NewDumpOptions())
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidData)
@@ -739,7 +739,7 @@ func TestDumpWritesWhatItCanReadBack(t *testing.T) {
 		db := openWithTable(t, `CREATE TABLE "with space" (id INTEGER)`, `INSERT INTO "with space" VALUES (1)`)
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		err := DumpDatabase(db, outDir, NewDumpOptions())
+		err := DumpDatabase(context.Background(), db, outDir, NewDumpOptions())
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidData)
@@ -755,7 +755,7 @@ func TestDumpWritesWhatItCanReadBack(t *testing.T) {
 		require.NoError(t, err)
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		require.Error(t, DumpDatabase(db, outDir, NewDumpOptions()),
+		require.Error(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions()),
 			"a dump whose files cannot be loaded together must be refused")
 	})
 
@@ -767,10 +767,10 @@ func TestDumpWritesWhatItCanReadBack(t *testing.T) {
 				"INSERT INTO "+quoteIdentifier(name)+" VALUES (7)")
 
 			outDir := filepath.Join(t.TempDir(), "out")
-			require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions()))
+			require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions()))
 			require.NoError(t, db.Close())
 
-			back, err := OpenContext(ctx, filepath.Join(outDir, name+".csv"))
+			back, err := Open(ctx, filepath.Join(outDir, name+".csv"))
 			require.NoError(t, err)
 
 			var got int
@@ -814,7 +814,7 @@ func TestDumpXLSXRefusesWhatXMLCannotHold(t *testing.T) {
 			require.NoError(t, err)
 
 			outDir := filepath.Join(t.TempDir(), "out")
-			err = DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
+			err = DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
 
 			require.Error(t, err, "a value XML cannot hold must be refused, not rewritten")
 			assert.ErrorIs(t, err, ErrUnsupportedFormat)
@@ -831,10 +831,10 @@ func TestDumpXLSXRefusesWhatXMLCannotHold(t *testing.T) {
 		require.NoError(t, err)
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
 		require.NoError(t, db.Close())
 
-		back, err := OpenContext(ctx, filepath.Join(outDir, "t.xlsx"))
+		back, err := Open(ctx, filepath.Join(outDir, "t.xlsx"))
 		require.NoError(t, err)
 		defer func() { _ = back.Close() }()
 
@@ -848,7 +848,7 @@ func TestDumpXLSXRefusesWhatXMLCannotHold(t *testing.T) {
 
 		db := openWithTable(t, "CREATE TABLE t (\"a\uffffb\" TEXT)", "")
 		outDir := filepath.Join(t.TempDir(), "out")
-		err := DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
+		err := DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
 
 		require.Error(t, err, "a column name XML cannot hold must be refused, not rewritten")
 		assert.ErrorIs(t, err, ErrUnsupportedFormat)
@@ -865,7 +865,7 @@ func TestDumpXLSXRefusesWhatXMLCannotHold(t *testing.T) {
 		require.NoError(t, err)
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		err = DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
+		err = DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrUnsupportedFormat)
@@ -884,10 +884,10 @@ func TestDumpXLSXRefusesWhatXMLCannotHold(t *testing.T) {
 		require.NoError(t, err)
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
 		require.NoError(t, db.Close())
 
-		back, err := OpenContext(ctx, filepath.Join(outDir, "t.xlsx"))
+		back, err := Open(ctx, filepath.Join(outDir, "t.xlsx"))
 		require.NoError(t, err)
 		defer func() { _ = back.Close() }()
 
@@ -904,10 +904,10 @@ func TestDumpXLSXRefusesWhatXMLCannotHold(t *testing.T) {
 		require.NoError(t, err)
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions()))
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions()))
 		require.NoError(t, db.Close())
 
-		back, err := OpenContext(ctx, filepath.Join(outDir, "t.csv"))
+		back, err := Open(ctx, filepath.Join(outDir, "t.csv"))
 		require.NoError(t, err)
 		defer func() { _ = back.Close() }()
 
@@ -936,9 +936,9 @@ func TestDumpXLSXRefusesAValueLongerThanACell(t *testing.T) {
 		require.NoError(t, err)
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
 
-		back, err := OpenContext(ctx, filepath.Join(outDir, "t.xlsx"))
+		back, err := Open(ctx, filepath.Join(outDir, "t.xlsx"))
 		require.NoError(t, err)
 		defer back.Close()
 		var got string
@@ -954,7 +954,7 @@ func TestDumpXLSXRefusesAValueLongerThanACell(t *testing.T) {
 		require.NoError(t, err)
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		err = DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
+		err = DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
 
 		require.Error(t, err, "a value the cell cannot hold must be refused, not cut")
 		assert.ErrorIs(t, err, ErrUnsupportedFormat)
@@ -969,7 +969,7 @@ func TestDumpXLSXRefusesAValueLongerThanACell(t *testing.T) {
 		db := openWithTable(t, `CREATE TABLE t ("`+name+`" TEXT)`, "")
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		err := DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
+		err := DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrUnsupportedFormat)
@@ -995,7 +995,7 @@ func TestDumpXLSXRefusesAValueLongerThanACell(t *testing.T) {
 			require.NoError(t, err)
 
 			outDir := filepath.Join(t.TempDir(), "out")
-			err = DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
+			err = DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX))
 			if tc.refused {
 				require.Error(t, err, tc.name)
 				assert.ErrorIs(t, err, ErrUnsupportedFormat, tc.name)
@@ -1003,7 +1003,7 @@ func TestDumpXLSXRefusesAValueLongerThanACell(t *testing.T) {
 			}
 			require.NoError(t, err, tc.name)
 
-			back, err := OpenContext(ctx, filepath.Join(outDir, "t.xlsx"))
+			back, err := Open(ctx, filepath.Join(outDir, "t.xlsx"))
 			require.NoError(t, err, tc.name)
 			var got string
 			require.NoError(t, back.QueryRowContext(ctx, "SELECT value FROM t").Scan(&got))
@@ -1022,7 +1022,7 @@ func TestDumpXLSXRefusesAValueLongerThanACell(t *testing.T) {
 			require.NoError(t, err)
 
 			outDir := filepath.Join(t.TempDir(), "out")
-			require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(format)))
+			require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(format)))
 		}
 	})
 }
@@ -1084,7 +1084,7 @@ func TestDumpKeepsTablesThatOnlyLookReserved(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("a,b\n1,2\n"), 0o600))
 	}
 
-	db, err := OpenContext(ctx, dir)
+	db, err := Open(ctx, dir)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -1101,7 +1101,7 @@ func TestDumpKeepsTablesThatOnlyLookReserved(t *testing.T) {
 	assert.NotContains(t, names, "sqlite_stat1")
 
 	out := t.TempDir()
-	require.NoError(t, DumpDatabase(db, out))
+	require.NoError(t, DumpDatabase(context.Background(), db, out))
 	entries, err := os.ReadDir(out)
 	require.NoError(t, err)
 	written := make([]string, 0, len(entries))
@@ -1143,13 +1143,13 @@ func TestDumpDatabase_RoundTripPerFormat(t *testing.T) {
 			src := filepath.Join(srcDir, "people.csv")
 			require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n2,bob\n"), 0o600))
 
-			db, err := OpenContext(ctx, src)
+			db, err := Open(ctx, src)
 			require.NoError(t, err)
 			defer db.Close()
 
 			opts := NewDumpOptions().WithFormat(tt.format).WithCompression(tt.compression)
 			outDir := t.TempDir()
-			require.NoError(t, DumpDatabase(db, outDir, opts))
+			require.NoError(t, DumpDatabase(context.Background(), db, outDir, opts))
 
 			entries, err := os.ReadDir(outDir)
 			require.NoError(t, err)
@@ -1159,7 +1159,7 @@ func TestDumpDatabase_RoundTripPerFormat(t *testing.T) {
 			// Reading the dump back is what catches a file that was written in the
 			// wrong shape: the table name comes from the sheet or file name, and the
 			// rows from the payload.
-			reloaded, err := OpenContext(ctx, filepath.Join(outDir, entries[0].Name()))
+			reloaded, err := Open(ctx, filepath.Join(outDir, entries[0].Name()))
 			require.NoError(t, err)
 			defer reloaded.Close()
 
@@ -1202,9 +1202,9 @@ func TestDumpDatabase_RealColumnWithInfinityRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	out := filepath.Join(dir, "out")
-	require.NoError(t, DumpDatabase(src, out))
+	require.NoError(t, DumpDatabase(context.Background(), src, out))
 
-	reloaded, err := OpenContext(ctx, filepath.Join(out, "m.csv"))
+	reloaded, err := Open(ctx, filepath.Join(out, "m.csv"))
 	require.NoError(t, err)
 	defer reloaded.Close()
 
@@ -1228,7 +1228,7 @@ func TestDumpDatabase_TSVQuoteRoundTrip(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "seed.csv")
 	require.NoError(t, os.WriteFile(src, []byte("a\n1\n"), 0o600))
 
-	db, err := OpenContext(ctx, src)
+	db, err := Open(ctx, src)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -1240,9 +1240,9 @@ func TestDumpDatabase_TSVQuoteRoundTrip(t *testing.T) {
 	}
 
 	outDir := t.TempDir()
-	require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatTSV)))
+	require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatTSV)))
 
-	reloaded, err := OpenContext(ctx, filepath.Join(outDir, "notes.tsv"))
+	reloaded, err := Open(ctx, filepath.Join(outDir, "notes.tsv"))
 	require.NoError(t, err)
 	defer reloaded.Close()
 
@@ -1309,15 +1309,15 @@ func TestDumpAndLoadIsIdentityOverGeneratedTables(t *testing.T) {
 		source := filepath.Join(t.TempDir(), "t.csv")
 		require.NoError(t, os.WriteFile(source, []byte(body), 0o600))
 
-		loaded, err := OpenContext(ctx, source)
+		loaded, err := Open(ctx, source)
 		require.NoErrorf(t, err, "iteration %d: loading %q", iteration, body)
 		before := describeTable(t, loaded, "t")
 
 		outDir := t.TempDir()
-		require.NoErrorf(t, DumpDatabase(loaded, outDir), "iteration %d: dumping %q", iteration, body)
+		require.NoErrorf(t, DumpDatabase(context.Background(), loaded, outDir), "iteration %d: dumping %q", iteration, body)
 		require.NoError(t, loaded.Close())
 
-		reloaded, err := OpenContext(ctx, filepath.Join(outDir, "t.csv"))
+		reloaded, err := Open(ctx, filepath.Join(outDir, "t.csv"))
 		require.NoErrorf(t, err, "iteration %d: reloading the dump of %q", iteration, body)
 		after := describeTable(t, reloaded, "t")
 		require.NoError(t, reloaded.Close())
@@ -1378,7 +1378,7 @@ func openWithTable(t *testing.T, ddl string, inserts ...string) *sql.DB {
 	src := filepath.Join(t.TempDir(), "seed.csv")
 	require.NoError(t, os.WriteFile(src, []byte("a\n1\n"), 0o600))
 
-	db, err := OpenContext(t.Context(), src)
+	db, err := Open(t.Context(), src)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -1398,7 +1398,7 @@ func dumpToString(t *testing.T, db *sql.DB, opts DumpOptions) string {
 	t.Helper()
 
 	outDir := t.TempDir()
-	require.NoError(t, DumpDatabase(db, outDir, opts))
+	require.NoError(t, DumpDatabase(context.Background(), db, outDir, opts))
 	got, err := os.ReadFile(filepath.Join(outDir, "t"+opts.FileExtension())) //nolint:gosec // Test path from t.TempDir()
 	require.NoError(t, err)
 	return string(got)
@@ -1514,10 +1514,10 @@ func TestDumpValueFormatting(t *testing.T) {
 
 				db := openWithTable(t, tt.setup[0], tt.setup[1:]...)
 				outDir := filepath.Join(t.TempDir(), "out")
-				require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+				require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
 				require.NoError(t, db.Close())
 
-				back, err := OpenContext(context.Background(), filepath.Join(outDir, "t.xlsx"))
+				back, err := Open(context.Background(), filepath.Join(outDir, "t.xlsx"))
 				require.NoError(t, err)
 				defer func() { _ = back.Close() }()
 
@@ -1554,7 +1554,7 @@ func TestDumpValueFormatting(t *testing.T) {
 		require.NoError(t, book.SaveAs(path))
 		require.NoError(t, book.Close())
 
-		db, err := OpenContext(context.Background(), path)
+		db, err := Open(context.Background(), path)
 		require.NoError(t, err)
 		defer func() { _ = db.Close() }()
 
@@ -1581,7 +1581,7 @@ func TestDumpValueFormatting(t *testing.T) {
 			"INSERT INTO t VALUES (123456789.5)")
 
 		outDir := t.TempDir()
-		require.NoError(t, DumpDatabase(db, outDir))
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir))
 		assert.Equal(t, "v\n999999.5\n1000000.5\n2500000.0\n123456789.5\n",
 			readFileString(t, filepath.Join(outDir, "t.csv")))
 	})
@@ -1598,7 +1598,7 @@ func TestDumpValueFormatting(t *testing.T) {
 			"INSERT INTO t VALUES (-9e999)")
 
 		outDir := t.TempDir()
-		require.NoError(t, DumpDatabase(db, outDir))
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir))
 		assert.Equal(t, "v\n9e999\n-9e999\n", readFileString(t, filepath.Join(outDir, "t.csv")))
 
 		// Read back through this package the column is REAL again and holds the
@@ -1607,7 +1607,7 @@ func TestDumpValueFormatting(t *testing.T) {
 		// not the overflow-integer rule — there TEXT preserves digits a float64
 		// would lose, while here the value is the infinity, which float64 holds
 		// exactly and a TEXT column would replace with a five-byte word.
-		back, err := OpenContext(t.Context(), filepath.Join(outDir, "t.csv"))
+		back, err := Open(t.Context(), filepath.Join(outDir, "t.csv"))
 		require.NoError(t, err)
 		defer back.Close()
 
@@ -1637,7 +1637,7 @@ func TestDumpValueFormatting(t *testing.T) {
 		require.NoError(t, os.WriteFile(source, []byte("amount\n10.00\n5.00\n"), 0o600))
 		require.NoError(t, autoSaveOverwrite(t, []string{source}, "UPDATE m SET amount = amount WHERE 1"))
 
-		back, err := OpenContext(t.Context(), source)
+		back, err := Open(t.Context(), source)
 		require.NoError(t, err)
 		defer back.Close()
 
@@ -1657,9 +1657,9 @@ func TestDumpValueFormatting(t *testing.T) {
 			"INSERT INTO t VALUES (5.0)")
 
 		outDir := t.TempDir()
-		require.NoError(t, DumpDatabase(db, outDir))
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir))
 
-		back, err := OpenContext(t.Context(), filepath.Join(outDir, "t.csv"))
+		back, err := Open(t.Context(), filepath.Join(outDir, "t.csv"))
 		require.NoError(t, err)
 		defer back.Close()
 
@@ -1688,9 +1688,9 @@ func TestDumpValueFormatting(t *testing.T) {
 			"INSERT INTO t VALUES (CAST('hello' AS BLOB))")
 
 		outDir := t.TempDir()
-		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions()))
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions()))
 
-		reloaded, err := OpenContext(t.Context(), filepath.Join(outDir, "t.csv"))
+		reloaded, err := Open(t.Context(), filepath.Join(outDir, "t.csv"))
 		require.NoError(t, err)
 		defer reloaded.Close()
 
@@ -1753,7 +1753,7 @@ func TestDumpDatabaseFollowsASymlink(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, DumpDatabase(db, out))
+	require.NoError(t, DumpDatabase(context.Background(), db, out))
 
 	info, err := os.Lstat(link)
 	require.NoError(t, err)
@@ -1792,13 +1792,13 @@ func TestBlankCellInNumericColumnSurvivesARoundTrip(t *testing.T) {
 			src := filepath.Join(t.TempDir(), "sales.csv")
 			require.NoError(t, os.WriteFile(src, []byte("region,amount\nnorth,10\nsouth,\neast,30\n"), 0o600))
 
-			db, err := OpenContext(ctx, src)
+			db, err := Open(ctx, src)
 			require.NoError(t, err)
 			out := filepath.Join(t.TempDir(), "out")
-			require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(tt.format)))
+			require.NoError(t, DumpDatabase(context.Background(), db, out, NewDumpOptions().WithFormat(tt.format)))
 			require.NoError(t, db.Close())
 
-			back, err := OpenContext(ctx, filepath.Join(out, "sales"+tt.ext))
+			back, err := Open(ctx, filepath.Join(out, "sales"+tt.ext))
 			require.NoError(t, err)
 			defer back.Close()
 
@@ -1853,7 +1853,7 @@ func TestDumpRefusesNamesNoPlatformCanHold(t *testing.T) {
 			t.Parallel()
 
 			db, out := loadOneTable(t, tt.table)
-			err := DumpDatabase(db, out)
+			err := DumpDatabase(context.Background(), db, out)
 			require.Error(t, err, "a name no platform can hold must not be written")
 			assert.ErrorIs(t, err, ErrInvalidData)
 			assert.Contains(t, err.Error(), strconv.Quote(tt.table), "the name the caller gave is the name the refusal carries")
@@ -1876,7 +1876,7 @@ func TestDumpRefusesNamesNoPlatformCanHold(t *testing.T) {
 			t.Parallel()
 
 			db, out := loadOneTable(t, tt.table)
-			require.NoError(t, DumpDatabase(db, out))
+			require.NoError(t, DumpDatabase(context.Background(), db, out))
 			assert.Equal(t, []string{tt.file}, dirEntriesOrNone(t, out))
 		})
 	}
@@ -1902,7 +1902,7 @@ func TestDumpRefusesNamesNoPlatformCanHold(t *testing.T) {
 			t.Parallel()
 
 			db, out := loadOneTable(t, tt.table)
-			err := DumpDatabase(db, out)
+			err := DumpDatabase(context.Background(), db, out)
 
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrInvalidData)
@@ -1962,13 +1962,13 @@ func dirEntriesOrNone(t *testing.T, dir string) []string {
 	return names
 }
 
-// TestDumpDatabaseContext_StopsWhenTheContextEnds pins that an export can be
+// TestDumpDatabase_StopsWhenTheContextEnds pins that an export can be
 // canceled, which is what a download endpoint needs when its client goes away.
 //
 // DumpDatabase takes no context and builds context.Background() for the calls
 // underneath that do take one, so an export ran to completion however long ago
 // the request behind it was abandoned.
-func TestDumpDatabaseContext_StopsWhenTheContextEnds(t *testing.T) {
+func TestDumpDatabase_StopsWhenTheContextEnds(t *testing.T) {
 	t.Parallel()
 
 	newDB := func(t *testing.T, rows int) *sql.DB {
@@ -1982,7 +1982,7 @@ func TestDumpDatabaseContext_StopsWhenTheContextEnds(t *testing.T) {
 		if err := os.WriteFile(path, []byte(body.String()), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		db, err := OpenContext(context.Background(), path)
+		db, err := Open(context.Background(), path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1998,7 +1998,7 @@ func TestDumpDatabaseContext_StopsWhenTheContextEnds(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := DumpDatabaseContext(ctx, db, out)
+		err := DumpDatabase(ctx, db, out)
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, context.Canceled)
@@ -2013,7 +2013,7 @@ func TestDumpDatabaseContext_StopsWhenTheContextEnds(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 		defer cancel()
 
-		err := DumpDatabaseContext(ctx, db, out)
+		err := DumpDatabase(ctx, db, out)
 		if err == nil {
 			t.Skip("the export beat the deadline on this machine")
 		}
@@ -2032,7 +2032,7 @@ func TestDumpDatabaseContext_StopsWhenTheContextEnds(t *testing.T) {
 		db := newDB(t, 100)
 		out := filepath.Join(t.TempDir(), "out")
 
-		require.NoError(t, DumpDatabaseContext(context.Background(), db, out))
+		require.NoError(t, DumpDatabase(context.Background(), db, out))
 
 		body, err := os.ReadFile(filepath.Join(out, "big.csv")) //nolint:gosec // Path built from the test's own temporary directory.
 		require.NoError(t, err)
@@ -2045,7 +2045,7 @@ func TestDumpDatabaseContext_StopsWhenTheContextEnds(t *testing.T) {
 		db := newDB(t, 100)
 		out := filepath.Join(t.TempDir(), "out")
 
-		require.NoError(t, DumpDatabase(db, out))
+		require.NoError(t, DumpDatabase(context.Background(), db, out))
 
 		_, err := os.Stat(filepath.Join(out, "big.csv"))
 		assert.NoError(t, err)
@@ -2088,7 +2088,7 @@ func TestDumpRefusesColumnsTheLoadWouldRefuse(t *testing.T) {
 				db := openWithTable(t, `CREATE TABLE t (`+tt.columns+`)`, `INSERT INTO t VALUES ('p', 'q')`)
 
 				outDir := filepath.Join(t.TempDir(), "out")
-				err := DumpDatabase(db, outDir, NewDumpOptions().WithFormat(format.f))
+				err := DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(format.f))
 
 				require.Error(t, err, "a table the load would refuse must not be dumped in silence")
 				assert.ErrorIs(t, err, ErrDuplicateColumn)
@@ -2103,10 +2103,10 @@ func TestDumpRefusesColumnsTheLoadWouldRefuse(t *testing.T) {
 		db := openWithTable(t, `CREATE TABLE t (a TEXT, b TEXT)`, `INSERT INTO t VALUES ('p', 'q')`)
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions()))
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions()))
 		require.NoError(t, db.Close())
 
-		back, err := OpenContext(ctx, filepath.Join(outDir, "t.csv"))
+		back, err := Open(ctx, filepath.Join(outDir, "t.csv"))
 		require.NoError(t, err)
 		defer func() { _ = back.Close() }()
 
@@ -2158,7 +2158,7 @@ func TestDumpRefusesAColumnWithNoName(t *testing.T) {
 			db := openWithTable(t, tt.table, `INSERT INTO t VALUES ('p'`+values+`)`)
 
 			outDir := filepath.Join(t.TempDir(), "out")
-			err := DumpDatabase(db, outDir, NewDumpOptions().WithFormat(tt.format))
+			err := DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(tt.format))
 
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrUnsupportedFormat)
@@ -2180,10 +2180,10 @@ func TestDumpRefusesAColumnWithNoName(t *testing.T) {
 			db := openWithTable(t, `CREATE TABLE t ("" TEXT, "b" TEXT)`, `INSERT INTO t VALUES ('p', 'q')`)
 
 			outDir := filepath.Join(t.TempDir(), "out")
-			require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(tt.format)))
+			require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(tt.format)))
 			require.NoError(t, db.Close())
 
-			back, err := OpenContext(ctx, filepath.Join(outDir, "t"+tt.ext))
+			back, err := Open(ctx, filepath.Join(outDir, "t"+tt.ext))
 			require.NoError(t, err)
 			defer func() { _ = back.Close() }()
 
@@ -2202,10 +2202,10 @@ func TestDumpRefusesAColumnWithNoName(t *testing.T) {
 		db := openWithTable(t, `CREATE TABLE t ("a" TEXT, " " TEXT)`, `INSERT INTO t VALUES ('p', 'q')`)
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
 		require.NoError(t, db.Close())
 
-		back, err := OpenContext(ctx, filepath.Join(outDir, "t.xlsx"))
+		back, err := Open(ctx, filepath.Join(outDir, "t.xlsx"))
 		require.NoError(t, err)
 		defer func() { _ = back.Close() }()
 
@@ -2257,7 +2257,7 @@ func TestDumpRefusesAValueThatIsNotUTF8(t *testing.T) {
 				insert(t, db, way)
 
 				outDir := filepath.Join(t.TempDir(), "out")
-				err := DumpDatabase(db, outDir, NewDumpOptions().WithFormat(format))
+				err := DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(format))
 
 				require.Error(t, err, "the dump would be unreadable or silently changed")
 				assert.ErrorIs(t, err, ErrUnsupportedFormat)
@@ -2274,7 +2274,7 @@ func TestDumpRefusesAValueThatIsNotUTF8(t *testing.T) {
 			insert(t, db, "bound bytes")
 
 			outDir := filepath.Join(t.TempDir(), "out")
-			assert.Error(t, DumpDatabase(db, outDir, NewDumpOptions().WithEncoding(enc)),
+			assert.Error(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithEncoding(enc)),
 				"a substitution is the silent corruption the read side refuses")
 		})
 	}
@@ -2285,7 +2285,7 @@ func TestDumpRefusesAValueThatIsNotUTF8(t *testing.T) {
 		db := openWithTable(t, "CREATE TABLE t (\"a\xff\" TEXT)", `INSERT INTO t VALUES ('1')`)
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		assert.Error(t, DumpDatabase(db, outDir, NewDumpOptions()))
+		assert.Error(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions()))
 	})
 
 	t.Run("parquet keeps it", func(t *testing.T) {
@@ -2295,11 +2295,11 @@ func TestDumpRefusesAValueThatIsNotUTF8(t *testing.T) {
 		insert(t, db, "bound bytes")
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatParquet)),
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatParquet)),
 			"parquet holds bytes and has to keep carrying them")
 		require.NoError(t, db.Close())
 
-		back, err := OpenContext(ctx, filepath.Join(outDir, "t.parquet"))
+		back, err := Open(ctx, filepath.Join(outDir, "t.parquet"))
 		require.NoError(t, err)
 		defer func() { _ = back.Close() }()
 
@@ -2314,7 +2314,7 @@ func TestDumpRefusesAValueThatIsNotUTF8(t *testing.T) {
 		db := openWithTable(t, `CREATE TABLE t (a TEXT)`, `INSERT INTO t VALUES ('日本語🍣')`)
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions()))
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions()))
 	})
 }
 
@@ -2363,7 +2363,7 @@ func TestADumpKeepsAColumnsType(t *testing.T) {
 			source := filepath.Join(dir, "t.csv")
 			require.NoError(t, os.WriteFile(source, []byte(tt.body), 0o600))
 
-			db, err := OpenContext(ctx, source)
+			db, err := Open(ctx, source)
 			require.NoError(t, err)
 			defer func() { _ = db.Close() }()
 
@@ -2376,9 +2376,9 @@ func TestADumpKeepsAColumnsType(t *testing.T) {
 				// this subtest returns, and a parallel child would outlive it.
 				t.Run(f.format.String(), func(t *testing.T) {
 					out := filepath.Join(t.TempDir(), "out")
-					require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(f.format)))
+					require.NoError(t, DumpDatabase(context.Background(), db, out, NewDumpOptions().WithFormat(f.format)))
 
-					back, err := OpenContext(ctx, filepath.Join(out, "t"+f.ext))
+					back, err := Open(ctx, filepath.Join(out, "t"+f.ext))
 					require.NoError(t, err)
 					defer func() { _ = back.Close() }()
 
@@ -2402,17 +2402,17 @@ func TestADumpKeepsAColumnsType(t *testing.T) {
 			source := filepath.Join(dir, "t.csv")
 			require.NoError(t, os.WriteFile(source, []byte("rate\n"+value+"\n"), 0o600))
 
-			db, err := OpenContext(ctx, source)
+			db, err := Open(ctx, source)
 			require.NoError(t, err)
 
 			var want float64
 			require.NoError(t, db.QueryRowContext(ctx, `SELECT rate FROM t`).Scan(&want))
 
 			out := filepath.Join(dir, "out")
-			require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+			require.NoError(t, DumpDatabase(context.Background(), db, out, NewDumpOptions().WithFormat(OutputFormatXLSX)))
 			require.NoError(t, db.Close())
 
-			back, err := OpenContext(ctx, filepath.Join(out, "t.xlsx"))
+			back, err := Open(ctx, filepath.Join(out, "t.xlsx"))
 			require.NoError(t, err)
 
 			var got float64
@@ -2429,14 +2429,14 @@ func TestADumpKeepsAColumnsType(t *testing.T) {
 		source := filepath.Join(dir, "t.csv")
 		require.NoError(t, os.WriteFile(source, []byte("price\n100.00\n"), 0o600))
 
-		db, err := OpenContext(ctx, source)
+		db, err := Open(ctx, source)
 		require.NoError(t, err)
 		defer func() { _ = db.Close() }()
 
 		out := filepath.Join(t.TempDir(), "out")
-		require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+		require.NoError(t, DumpDatabase(context.Background(), db, out, NewDumpOptions().WithFormat(OutputFormatXLSX)))
 
-		back, err := OpenContext(ctx, filepath.Join(out, "t.xlsx"))
+		back, err := Open(ctx, filepath.Join(out, "t.xlsx"))
 		require.NoError(t, err)
 		defer func() { _ = back.Close() }()
 
@@ -2462,7 +2462,7 @@ func TestDumpLTSVRefusesATableWithNoRows(t *testing.T) {
 		db := openWithTable(t, "CREATE TABLE t (id INTEGER, name TEXT)", "")
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		err := DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatLTSV))
+		err := DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatLTSV))
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrUnsupportedFormat)
@@ -2485,10 +2485,10 @@ func TestDumpLTSVRefusesATableWithNoRows(t *testing.T) {
 			db := openWithTable(t, "CREATE TABLE t (id INTEGER, name TEXT)", "")
 
 			outDir := filepath.Join(t.TempDir(), "out")
-			require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(tc.format)))
+			require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(tc.format)))
 			require.NoError(t, db.Close())
 
-			back, err := OpenContext(ctx, filepath.Join(outDir, "t"+tc.ext))
+			back, err := Open(ctx, filepath.Join(outDir, "t"+tc.ext))
 			require.NoError(t, err, "a dump of an empty table must load")
 
 			var columns, rows int
@@ -2506,10 +2506,10 @@ func TestDumpLTSVRefusesATableWithNoRows(t *testing.T) {
 		db := openWithTable(t, "CREATE TABLE t (id INTEGER, name TEXT)", "INSERT INTO t VALUES (1, 'Alice')")
 
 		outDir := filepath.Join(t.TempDir(), "out")
-		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatLTSV)))
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatLTSV)))
 		require.NoError(t, db.Close())
 
-		back, err := OpenContext(ctx, filepath.Join(outDir, "t.ltsv"))
+		back, err := Open(ctx, filepath.Join(outDir, "t.ltsv"))
 		require.NoError(t, err)
 		defer func() { _ = back.Close() }()
 
@@ -2610,7 +2610,7 @@ func TestDumpReachesAFixedPoint(t *testing.T) {
 func dumpOnce(t *testing.T, src, dir, step string, format OutputFormat, ext string) (string, bool) {
 	t.Helper()
 
-	db, err := OpenContext(context.Background(), src)
+	db, err := Open(context.Background(), src)
 	if err != nil {
 		return "", false
 	}
@@ -2618,7 +2618,7 @@ func dumpOnce(t *testing.T, src, dir, step string, format OutputFormat, ext stri
 
 	out := filepath.Join(dir, step)
 	require.NoError(t, os.MkdirAll(out, 0o750))
-	if err := DumpDatabase(db, out, NewDumpOptions().WithFormat(format)); err != nil {
+	if err := DumpDatabase(context.Background(), db, out, NewDumpOptions().WithFormat(format)); err != nil {
 		return "", false
 	}
 	return filepath.Join(out, "t"+ext), true
@@ -2638,7 +2638,7 @@ func loadedTableText(t *testing.T, path string) string {
 	t.Helper()
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, path)
+	db, err := Open(ctx, path)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -2700,9 +2700,9 @@ func TestDumpAndLoadKeepsTheFirstColumnName(t *testing.T) {
 
 			out := filepath.Join(dir, "out")
 			require.NoError(t, os.MkdirAll(out, 0o750))
-			db, err := OpenContext(context.Background(), src)
+			db, err := Open(context.Background(), src)
 			require.NoError(t, err)
-			require.NoError(t, DumpDatabase(db, out))
+			require.NoError(t, DumpDatabase(context.Background(), db, out))
 			require.NoError(t, db.Close())
 
 			assert.Equal(t, first, columnNamesOf(t, filepath.Join(out, "t.csv")),
@@ -2715,7 +2715,7 @@ func TestDumpAndLoadKeepsTheFirstColumnName(t *testing.T) {
 func columnNamesOf(t *testing.T, path string) []string {
 	t.Helper()
 
-	db, err := OpenContext(context.Background(), path)
+	db, err := Open(context.Background(), path)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -2761,11 +2761,11 @@ func TestDumpRefusesAMarkLedFirstColumn(t *testing.T) {
 			out := filepath.Join(dir, format.name)
 			require.NoError(t, os.MkdirAll(out, 0o750))
 
-			db, err := OpenContext(context.Background(), src)
+			db, err := Open(context.Background(), src)
 			require.NoError(t, err)
 			defer db.Close()
 
-			err = DumpDatabase(db, out, NewDumpOptions().WithFormat(format.format))
+			err = DumpDatabase(context.Background(), db, out, NewDumpOptions().WithFormat(format.format))
 			if format.refused {
 				require.ErrorIs(t, err, ErrUnsupportedFormat)
 				assert.Empty(t, dirEntryNames(t, out), "wrote a file it refused to write")
@@ -2860,13 +2860,13 @@ func TestAnIdentifierSurvivesADumpAndLoad(t *testing.T) {
 			require.NoError(t, os.WriteFile(src,
 				[]byte("order_id\n1234567890123456789\n1234567890123456788\n9223372036854775807\n"), 0o600))
 
-			db, err := OpenContext(ctx, src)
+			db, err := Open(ctx, src)
 			require.NoError(t, err)
 			out := filepath.Join(t.TempDir(), "out")
-			require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(tt.format)))
+			require.NoError(t, DumpDatabase(context.Background(), db, out, NewDumpOptions().WithFormat(tt.format)))
 			require.NoError(t, db.Close())
 
-			back, err := OpenContext(ctx, filepath.Join(out, "orders"+tt.ext))
+			back, err := Open(ctx, filepath.Join(out, "orders"+tt.ext))
 			require.NoError(t, err)
 			defer back.Close()
 
@@ -2891,13 +2891,13 @@ func TestAnIdentifierSurvivesADumpAndLoad(t *testing.T) {
 	}
 }
 
-// TestDumpDatabaseContext_EndedContext is the dump's share of the contract the
+// TestDumpDatabase_EndedContext is the dump's share of the contract the
 // godoc states for every entry point that takes a context. DumpDatabase is the
 // same call with a background context, so it has nothing to stop for.
-func TestDumpDatabaseContext_EndedContext(t *testing.T) {
+func TestDumpDatabase_EndedContext(t *testing.T) {
 	t.Parallel()
 
-	db, err := Open(csvFixture(t))
+	db, err := Open(context.Background(), csvFixture(t))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -2906,7 +2906,7 @@ func TestDumpDatabaseContext_EndedContext(t *testing.T) {
 			t.Parallel()
 
 			out := t.TempDir()
-			assert.ErrorIs(t, DumpDatabaseContext(tc.make(t), db, out), tc.want)
+			assert.ErrorIs(t, DumpDatabase(tc.make(t), db, out), tc.want)
 			assert.Empty(t, dirEntries(t, out), "a dump that stopped must leave nothing behind")
 		})
 	}
@@ -2927,7 +2927,7 @@ func TestDumpRefusesATableNameBeforeTouchingTheDestination(t *testing.T) {
 		t.Parallel()
 
 		db, out := loadOneTable(t, "with space")
-		err := DumpDatabase(db, out)
+		err := DumpDatabase(context.Background(), db, out)
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidData)
@@ -2947,7 +2947,7 @@ func TestDumpRefusesATableNameBeforeTouchingTheDestination(t *testing.T) {
 		require.NoError(t, err)
 
 		out := filepath.Join(t.TempDir(), "out")
-		err = DumpDatabase(db, out)
+		err = DumpDatabase(context.Background(), db, out)
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidData)
@@ -2965,12 +2965,12 @@ func TestDumpRefusesATableNameBeforeTouchingTheDestination(t *testing.T) {
 		t.Cleanup(func() { _ = db.Close() })
 
 		out := filepath.Join(t.TempDir(), "out")
-		require.NoError(t, DumpDatabase(db, out))
+		require.NoError(t, DumpDatabase(context.Background(), db, out))
 		before := dirEntriesOrNone(t, out)
 
 		_, err = db.ExecContext(t.Context(), `CREATE TABLE "with space" (v INTEGER)`)
 		require.NoError(t, err)
-		require.Error(t, DumpDatabase(db, out))
+		require.Error(t, DumpDatabase(context.Background(), db, out))
 		assert.Equal(t, before, dirEntriesOrNone(t, out), "a refused dump adds nothing to a directory it already wrote")
 	})
 }
@@ -2997,7 +2997,7 @@ func TestDumpRefusesAValueItHasNoNameFor(t *testing.T) {
 			db := openWithTable(t, "CREATE TABLE t (v TEXT)", "INSERT INTO t VALUES ('a')")
 			out := filepath.Join(t.TempDir(), "out")
 
-			err := DumpDatabase(db, out, tc.options)
+			err := DumpDatabase(context.Background(), db, out, tc.options)
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "unknown", "the refusal says the value has no name here")

@@ -47,7 +47,7 @@ func TestOpenFedWireFile(t *testing.T) {
 
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, testFile)
+	db, err := Open(ctx, testFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -76,7 +76,7 @@ func TestOpenFedWireFile_QueryFields(t *testing.T) {
 
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, testFile)
+	db, err := Open(ctx, testFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -101,7 +101,7 @@ func TestOpenFedWireFile_UpdateAndExport(t *testing.T) {
 
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, testFile)
+	db, err := Open(ctx, testFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -120,7 +120,7 @@ func TestOpenFedWireFile_UpdateAndExport(t *testing.T) {
 	assert.Greater(t, info.Size(), int64(0), "output file should not be empty")
 
 	// Re-open the written file and verify the change
-	db2, err := OpenContext(ctx, tmpFile)
+	db2, err := Open(ctx, tmpFile)
 	require.NoError(t, err)
 	defer db2.Close()
 
@@ -141,7 +141,7 @@ func TestOpenFedWireFile_RefusesOverWidthText(t *testing.T) {
 
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, testFile)
+	db, err := Open(ctx, testFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -185,7 +185,7 @@ func TestBuilderAddPathFedWire(t *testing.T) {
 func TestDumpFedWire_NoTableSet(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	db, err := Open(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -199,7 +199,7 @@ func TestDumpFedWireWithSource_NilSource(t *testing.T) {
 
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	db, err := Open(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -246,7 +246,7 @@ func TestWireSourceRecordedPerDatabase(t *testing.T) {
 
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, testFile)
+	db, err := Open(ctx, testFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -262,7 +262,7 @@ func TestWireSourceRecordedPerDatabase(t *testing.T) {
 func TestWireSourceAbsentForOtherDatabases(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	db, err := Open(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -307,7 +307,7 @@ func TestDumpFedWire_DroppedTable(t *testing.T) {
 
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, testFile)
+	db, err := Open(ctx, testFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -335,11 +335,11 @@ func TestDumpFedWire_TwoDatabasesShareABaseName(t *testing.T) {
 	pathA := copyWireFixture(t, "customer-transfer.fed")
 	pathB := copyWireFixture(t, "customer-transfer-minimal.fed")
 
-	dbA, err := OpenContext(ctx, pathA)
+	dbA, err := Open(ctx, pathA)
 	require.NoError(t, err)
 	defer dbA.Close()
 
-	dbB, err := OpenContext(ctx, pathB)
+	dbB, err := Open(ctx, pathB)
 	require.NoError(t, err)
 	defer dbB.Close()
 
@@ -359,7 +359,7 @@ func TestDumpFedWire_MissingSourceFileIsNamed(t *testing.T) {
 	ctx := context.Background()
 
 	source := copyWireFixture(t, "customer-transfer.fed")
-	db, err := OpenContext(ctx, source)
+	db, err := Open(ctx, source)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -416,7 +416,7 @@ func TestDumpFedWire_FailedWriteLeavesDestinationIntact(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(target, original, 0o600)) //nolint:gosec // Test path is constructed from t.TempDir()
 
-	db, err := OpenContext(ctx, target)
+	db, err := Open(ctx, target)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -475,13 +475,13 @@ func TestDumpFedWire_WriteBackKeepsEveryValue(t *testing.T) {
 	ctx := context.Background()
 	source := copyWireFixture(t, "customer-transfer.fed")
 
-	db, err := OpenContext(ctx, source)
+	db, err := Open(ctx, source)
 	require.NoError(t, err)
 	before := achTableDump(ctx, t, db, "payment")
 	require.NoError(t, DumpFedWire(ctx, db, "payment", source))
 	require.NoError(t, db.Close())
 
-	reloaded, err := OpenContext(ctx, source)
+	reloaded, err := Open(ctx, source)
 	require.NoError(t, err)
 	defer reloaded.Close()
 	after := achTableDump(ctx, t, reloaded, "payment")

@@ -64,7 +64,7 @@ func TestLTSVColumnOrderIsTheOrderTheLabelsAppear(t *testing.T) {
 				src := filepath.Join(t.TempDir(), "logs.ltsv")
 				require.NoError(t, os.WriteFile(src, []byte(tt.content), 0o600))
 
-				db, err := OpenContext(ctx, src)
+				db, err := Open(ctx, src)
 				require.NoError(t, err)
 
 				rows, err := db.QueryContext(ctx, "SELECT * FROM logs")
@@ -155,19 +155,19 @@ func TestLTSVCaseOnlyDuplicateLabelIsRefused(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			db, err := OpenContext(context.Background(), path)
+			db, err := Open(context.Background(), path)
 			if db != nil {
 				defer func() { _ = db.Close() }()
 			}
 
 			if !tt.refused {
 				if err != nil {
-					t.Fatalf("OpenContext refused a record it should load: %v", err)
+					t.Fatalf("Open refused a record it should load: %v", err)
 				}
 				return
 			}
 			if err == nil {
-				t.Fatal("OpenContext accepted a record whose labels are one column")
+				t.Fatal("Open accepted a record whose labels are one column")
 			}
 			if !errors.Is(err, ErrDuplicateColumn) {
 				t.Errorf("error = %v, want it to match ErrDuplicateColumn", err)
@@ -193,9 +193,9 @@ func TestLTSVCaseOnlyLabelAcrossRecordsIsOneColumn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := OpenContext(context.Background(), path)
+	db, err := Open(context.Background(), path)
 	if err != nil {
-		t.Fatalf("OpenContext: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
@@ -264,7 +264,7 @@ func TestLTSVValueKeepsSurroundingWhitespace(t *testing.T) {
 			src := filepath.Join(t.TempDir(), "t.ltsv")
 			require.NoError(t, os.WriteFile(src, []byte(tt.content), 0o600))
 
-			db, err := OpenContext(ctx, src)
+			db, err := Open(ctx, src)
 			require.NoError(t, err)
 			defer db.Close()
 
@@ -281,7 +281,7 @@ func TestLTSVValueKeepsSurroundingWhitespace(t *testing.T) {
 		src := filepath.Join(t.TempDir(), "t.ltsv")
 		require.NoError(t, os.WriteFile(src, []byte(" v :x\n"), 0o600))
 
-		db, err := OpenContext(ctx, src)
+		db, err := Open(ctx, src)
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -300,9 +300,9 @@ func TestLTSVValueKeepsSurroundingWhitespace(t *testing.T) {
 		db := openWithTable(t, "CREATE TABLE t (v TEXT)", "INSERT INTO t VALUES ('  padded  ')")
 
 		outDir := t.TempDir()
-		require.NoError(t, DumpDatabase(db, outDir, NewDumpOptions().WithFormat(OutputFormatLTSV)))
+		require.NoError(t, DumpDatabase(context.Background(), db, outDir, NewDumpOptions().WithFormat(OutputFormatLTSV)))
 
-		reloaded, err := OpenContext(t.Context(), filepath.Join(outDir, "t.ltsv"))
+		reloaded, err := Open(t.Context(), filepath.Join(outDir, "t.ltsv"))
 		require.NoError(t, err)
 		defer reloaded.Close()
 
@@ -322,7 +322,7 @@ func TestLTSVValueKeepsSurroundingWhitespace(t *testing.T) {
 		csvPath := filepath.Join(dir, "b.csv")
 		require.NoError(t, os.WriteFile(csvPath, []byte("v\n\"  padded  \"\n"), 0o600))
 
-		db, err := OpenContext(ctx, ltsvPath, csvPath)
+		db, err := Open(ctx, ltsvPath, csvPath)
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -363,7 +363,7 @@ func TestLTSVLabelIsTrimmed(t *testing.T) {
 			src := filepath.Join(t.TempDir(), "t.ltsv")
 			require.NoError(t, os.WriteFile(src, []byte(tt.content), 0o600))
 
-			db, err := OpenContext(ctx, src)
+			db, err := Open(ctx, src)
 			require.NoError(t, err)
 			defer db.Close()
 
@@ -394,7 +394,7 @@ func TestLTSVLabelRulesDifferFromAHeaderCells(t *testing.T) {
 		src := filepath.Join(t.TempDir(), name)
 		require.NoError(t, os.WriteFile(src, []byte(content), 0o600))
 
-		db, err := OpenContext(t.Context(), src)
+		db, err := Open(t.Context(), src)
 		if err != nil {
 			return nil, err
 		}

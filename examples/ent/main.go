@@ -20,7 +20,7 @@ func main() {
 	defer cancel()
 
 	// Open CSV file with filesql
-	sqlDB, err := filesql.OpenContext(ctx, "users.csv")
+	sqlDB, err := filesql.Open(ctx, "users.csv")
 	if err != nil {
 		log.Fatal(err)
 	}

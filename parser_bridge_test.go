@@ -151,12 +151,12 @@ func TestPrepReaderLoadsUnderTheFormatItReports(t *testing.T) {
 	// tabular writes the seed out in format and returns the path, so every
 	// case below is a path and the table needs no callback.
 	tabular := func(format OutputFormat, ext string) string {
-		db, err := OpenContext(t.Context(), seedPath)
+		db, err := Open(t.Context(), seedPath)
 		require.NoError(t, err)
 		defer db.Close()
 		out := filepath.Join(dir, ext[1:])
 		require.NoError(t, os.MkdirAll(out, 0o750))
-		require.NoError(t, DumpDatabaseContext(t.Context(), db, out, NewDumpOptions().WithFormat(format)))
+		require.NoError(t, DumpDatabase(t.Context(), db, out, NewDumpOptions().WithFormat(format)))
 		return filepath.Join(out, "seed"+ext)
 	}
 	write := func(name, body string) string {
@@ -205,7 +205,7 @@ func TestPrepReaderLoadsUnderTheFormatItReports(t *testing.T) {
 			require.NoError(t, err)
 			defer throughPrep.Close()
 
-			direct, err := OpenContext(t.Context(), tt.path)
+			direct, err := Open(t.Context(), tt.path)
 			require.NoError(t, err)
 			defer direct.Close()
 

@@ -219,7 +219,7 @@ func TestErrorSentinelsAreReachable(t *testing.T) {
 				db, err := validated.Open(t.Context())
 				require.NoError(t, err)
 				defer db.Close()
-				return DumpDatabase(db, filepath.Join(dir, "out"), NewDumpOptions().WithCompression(CompressionBZ2))
+				return DumpDatabase(context.Background(), db, filepath.Join(dir, "out"), NewDumpOptions().WithCompression(CompressionBZ2))
 			},
 			// Not ErrCompression: a codec with no writer is an unsupported
 			// format, and matching both would leave a caller unable to tell it
@@ -248,7 +248,7 @@ func TestErrorSentinelsAreReachable(t *testing.T) {
 				dir := t.TempDir()
 				src := filepath.Join(dir, "broken.json")
 				require.NoError(t, os.WriteFile(src, []byte(`[{"a":`), 0o600))
-				_, err := OpenContext(context.Background(), src)
+				_, err := Open(context.Background(), src)
 				return err
 			},
 			wants: []error{ErrParsing, ErrInvalidData},
@@ -260,7 +260,7 @@ func TestErrorSentinelsAreReachable(t *testing.T) {
 				dir := t.TempDir()
 				src := filepath.Join(dir, "notes.txt")
 				require.NoError(t, os.WriteFile(src, []byte("hello"), 0o600))
-				_, err := OpenContext(context.Background(), src)
+				_, err := Open(context.Background(), src)
 				return err
 			},
 			wants: []error{ErrUnsupportedFormat},
@@ -353,7 +353,7 @@ func TestParseFailure_NamesTheInputOnce(t *testing.T) {
 			path := filepath.Join(t.TempDir(), tt.file)
 			require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o600))
 
-			db, err := OpenContext(context.Background(), path)
+			db, err := Open(context.Background(), path)
 			if db != nil {
 				defer func() { _ = db.Close() }()
 			}
@@ -401,7 +401,7 @@ func TestUnreadableFileReportsFsErrPermission(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("id\n1\n"), 0o600))
 	require.NoError(t, os.Chmod(path, 0o000))
 
-	_, err := OpenContext(t.Context(), path)
+	_, err := Open(t.Context(), path)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, fs.ErrPermission, "the caller needs to see a permission problem as one")
 	assert.ErrorIs(t, err, ErrIOOperation, "and it stays inside this package's I/O category")
@@ -419,7 +419,7 @@ func TestCancelledLoadReportsContextError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := OpenContext(ctx, path)
+	_, err := Open(ctx, path)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 }
@@ -445,7 +445,7 @@ func TestCanceledLoadNamesThePackageOnce(t *testing.T) {
 	interrupted := 0
 	for attempt := range 20 {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(1+attempt)*time.Millisecond)
-		db, err := OpenContext(ctx, path)
+		db, err := Open(ctx, path)
 		if db != nil {
 			_ = db.Close()
 		}

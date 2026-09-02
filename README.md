@@ -21,6 +21,7 @@ Documentation: https://pkg.go.dev/github.com/nao1215/filesql
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 
@@ -28,7 +29,7 @@ import (
 )
 
 func main() {
-	db, err := filesql.Open("users.csv")
+	db, err := filesql.Open(context.Background(), "users.csv")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -45,7 +46,7 @@ func main() {
 The table is named after the file, so `users.csv` is `users`. Join across formats by opening more of them:
 
 ```go
-db, err := filesql.Open("users.csv", "orders.jsonl", "returns.parquet")
+db, err := filesql.Open(ctx, "users.csv", "orders.jsonl", "returns.parquet")
 ```
 
 ## Why filesql?
@@ -87,7 +88,7 @@ earlier 1.26 is not supported, even though it is a later release than 1.25.13.
 
 ## Recipes
 
-For a one-off load, `filesql.Open` is fine. `OpenContext` is the better default when you already have a context or want a timeout.
+`filesql.Open` takes a context, so a load can be given a timeout or canceled with the request it belongs to. Pass `context.Background()` when it needs neither.
 
 ### Query files with SQLite
 
@@ -107,7 +108,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	db, err := filesql.OpenContext(ctx, "users.csv", "orders.jsonl")
+	db, err := filesql.Open(ctx, "users.csv", "orders.jsonl")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -308,7 +309,7 @@ Bob,bob@example.com,user
 | `.ach` | ACH (NACHA) | One table per record kind; see [ACH and Fedwire](#ach-and-fedwire) |
 | `.fed` | Fedwire | One message becomes one row 326 columns wide; see [ACH and Fedwire](#ach-and-fedwire) |
 
-Two inputs are the same source only when they are in the same place. `dir/users.csv` and `dir/users.csv.gz` are one dataset offered twice, and the plain one is read; `a/users.csv` and `b/users.csv` are two files, and both are loaded. What happens when both then want the table `users` is the loading API's business: `Open` and `OpenContext` build a fresh database and refuse it with `ErrDuplicateTable`, while `LoadInto` and `LoadIntoTx` load into a database you own and keep their last-wins rule, so the later input replaces the table. Neither one silently drops a file. Table names are compared the way SQLite compares identifiers, with ASCII case folded, so `Users.csv` and `users.csv` want the same table too.
+Two inputs are the same source only when they are in the same place. `dir/users.csv` and `dir/users.csv.gz` are one dataset offered twice, and the plain one is read; `a/users.csv` and `b/users.csv` are two files, and both are loaded. What happens when both then want the table `users` is the loading API's business: `Open` builds a fresh database and refuses it with `ErrDuplicateTable`, while `LoadInto` and `LoadIntoTx` load into a database you own and keep their last-wins rule, so the later input replaces the table. Neither one silently drops a file. Table names are compared the way SQLite compares identifiers, with ASCII case folded, so `Users.csv` and `users.csv` want the same table too.
 
 Column names inside a file follow two separate rules, and a header that breaks either is refused with `ErrDuplicateColumn` before it reaches SQLite. Two names differing only in ASCII letter case are one column, because SQLite is what holds them — `ID` and `id` are a duplicate — and the folding stops at ASCII as SQLite's does, so `ä` and `Ä` stay two columns. Two names identical after their surrounding whitespace is trimmed are one column too: `name` and `" name "` are one name typed twice. The rules are applied one at a time and never combined, so `" A"` beside `a` is accepted, which is what SQLite does with it as well. LTSV carries its labels on every record rather than in a header, so the same check runs per record.
 
@@ -357,7 +358,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 
 | Feature | Example function | Source |
 |---------|------------------|--------|
-| Open files and query them | `ExampleOpen`, `ExampleOpenContext` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
+| Open files and query them | `ExampleOpen`, `ExampleOpen_timeout` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
 | Load files into an existing `*sql.DB` | `ExampleLoadInto`, `ExampleDBBuilder_LoadInto` | [example_api_test.go](./example_api_test.go) |
 | Load into a transaction you own | `ExampleDBBuilder_LoadIntoTx` | [example_api_test.go](./example_api_test.go) |
 | Load into your own database, edit, and save it back | `ExampleLoadInto_dumpDatabase` | [example_api_test.go](./example_api_test.go) |
@@ -373,7 +374,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Attach a slog logger | `ExampleDBBuilder_WithLogger` | [example_api_test.go](./example_api_test.go) |
 | Open a database that refuses writes | `ExampleDBBuilder_OpenReadOnly` | [example_api_test.go](./example_api_test.go) |
 | Save on close or commit | `ExampleDBBuilder_EnableAutoSave`, `ExampleDBBuilder_EnableAutoSaveOnCommit` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
-| Export under a deadline | `ExampleDumpDatabaseContext` | [example_api_test.go](./example_api_test.go) |
+| Export under a deadline | `ExampleDumpDatabase_deadline` | [example_api_test.go](./example_api_test.go) |
 | Export tables with format/compression/encoding/line-ending options | `ExampleDumpDatabase`, `ExampleNewDumpOptions`, `ExampleDumpOptions_WithFormat`, `ExampleDumpOptions_WithCompression`, `ExampleDumpOptions_WithEncoding`, `ExampleDumpOptions_WithLineEnding` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
 | Work with compression helpers directly | `ExampleNewCompressionHandler`, `ExampleNewCompressionFactory` | [example_api_test.go](./example_api_test.go) |
 | Strip compression suffixes | `ExampleCompressionFactory_RemoveCompressionExtension` | [example_api_test.go](./example_api_test.go) |

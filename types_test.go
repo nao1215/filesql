@@ -1375,12 +1375,12 @@ func TestInferColumnTypeInt64Overflow(t *testing.T) {
 	require.Equal(t, columnTypeText, got)
 }
 
-// TestOpenContextPreservesLargeIntegerPastTheFirstChunk is the same rule across
+// TestOpenPreservesLargeIntegerPastTheFirstChunk is the same rule across
 // the boundary that decides the schema. Column types come from the first chunk,
 // so an account number past int64 arriving later met a column that was already
 // INTEGER, and came back as 1.104032026e+19 — the loss the classifier refuses
 // to allow in the first chunk, reached by arriving after it.
-func TestOpenContextPreservesLargeIntegerPastTheFirstChunk(t *testing.T) {
+func TestOpenPreservesLargeIntegerPastTheFirstChunk(t *testing.T) {
 	t.Parallel()
 
 	var b strings.Builder
@@ -1394,7 +1394,7 @@ func TestOpenContextPreservesLargeIntegerPastTheFirstChunk(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(b.String()), 0600))
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, path)
+	db, err := Open(ctx, path)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -1404,13 +1404,13 @@ func TestOpenContextPreservesLargeIntegerPastTheFirstChunk(t *testing.T) {
 	require.Equal(t, "11040320260000000000", got)
 }
 
-// TestOpenContextKeepsAnIntegerPast2p53BesideAFloat pins the column-level form
+// TestOpenKeepsAnIntegerPast2p53BesideAFloat pins the column-level form
 // of the same loss. An integer between 2^53 and int64 max is exact in an
 // INTEGER column, but a float beside it used to make the column REAL, and
 // SQLite's REAL affinity then stored the nearest double: 9007199254740993 came
 // back as 9007199254740992.0. Such a column has to be TEXT, and a dump of it
 // has to read back byte-identical.
-func TestOpenContextKeepsAnIntegerPast2p53BesideAFloat(t *testing.T) {
+func TestOpenKeepsAnIntegerPast2p53BesideAFloat(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -1418,7 +1418,7 @@ func TestOpenContextKeepsAnIntegerPast2p53BesideAFloat(t *testing.T) {
 	require.NoError(t, os.WriteFile(csvPath, []byte("v\n9007199254740993\n0.5\n"), 0600))
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, csvPath)
+	db, err := Open(ctx, csvPath)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -1430,17 +1430,17 @@ func TestOpenContextKeepsAnIntegerPast2p53BesideAFloat(t *testing.T) {
 
 	// The dump writes the exact digits, so loading it lands in the same place.
 	out := filepath.Join(dir, "out")
-	require.NoError(t, DumpDatabase(db, out))
+	require.NoError(t, DumpDatabase(context.Background(), db, out))
 	dumped, err := os.ReadFile(filepath.Join(out, "mixed.csv")) //nolint:gosec // test-owned path
 	require.NoError(t, err)
 	require.Equal(t, "v\n9007199254740993\n0.5\n", string(dumped))
 }
 
-// TestOpenContextPreservesLargeIntegerExactly is the end-to-end regression test
+// TestOpenPreservesLargeIntegerExactly is the end-to-end regression test
 // for nao1215/sqly#218. A CSV value larger than math.MaxInt64 must round-trip
 // through the loaded database as its exact textual value, not a lossy
 // scientific-notation float.
-func TestOpenContextPreservesLargeIntegerExactly(t *testing.T) {
+func TestOpenPreservesLargeIntegerExactly(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -1451,7 +1451,7 @@ func TestOpenContextPreservesLargeIntegerExactly(t *testing.T) {
 	require.NoError(t, os.WriteFile(csvPath, []byte(content), 0600))
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, csvPath)
+	db, err := Open(ctx, csvPath)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -1550,12 +1550,12 @@ func TestInferColumnTypePreservesLateZeroPadded(t *testing.T) {
 	require.Equal(t, columnTypeText, columnTypeOf(infer.Column(column)))
 }
 
-// TestOpenContextPreservesZeroPaddedCodesPastTheFirstChunk is the end-to-end
+// TestOpenPreservesZeroPaddedCodesPastTheFirstChunk is the end-to-end
 // half of the same rule, across the boundary that decides the schema. Types are
 // inferred from the first chunk alone, so a code arriving in a later one met a
 // column that was already INTEGER and was rewritten by SQLite's affinity: 007
 // came back as 7, at no error and no warning.
-func TestOpenContextPreservesZeroPaddedCodesPastTheFirstChunk(t *testing.T) {
+func TestOpenPreservesZeroPaddedCodesPastTheFirstChunk(t *testing.T) {
 	t.Parallel()
 
 	var b strings.Builder
@@ -1569,7 +1569,7 @@ func TestOpenContextPreservesZeroPaddedCodesPastTheFirstChunk(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(b.String()), 0600))
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, path)
+	db, err := Open(ctx, path)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -1590,10 +1590,10 @@ func TestOpenContextPreservesZeroPaddedCodesPastTheFirstChunk(t *testing.T) {
 	require.Equal(t, defaultChunkSizeRows*2+1, rows)
 }
 
-// TestOpenContextPreservesZeroPaddedCodes is the end-to-end regression test: a
+// TestOpenPreservesZeroPaddedCodes is the end-to-end regression test: a
 // column of zero-padded codes must round-trip through the loaded database as its
 // exact textual value, not an integer with the leading zeros stripped.
-func TestOpenContextPreservesZeroPaddedCodes(t *testing.T) {
+func TestOpenPreservesZeroPaddedCodes(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -1602,7 +1602,7 @@ func TestOpenContextPreservesZeroPaddedCodes(t *testing.T) {
 	require.NoError(t, os.WriteFile(csvPath, []byte(content), 0600))
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, csvPath)
+	db, err := Open(ctx, csvPath)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -1660,9 +1660,9 @@ func TestQuotedWhitespaceSurvivesTheLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := OpenContext(ctx, path)
+	db, err := Open(ctx, path)
 	if err != nil {
-		t.Fatalf("OpenContext: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
@@ -1788,7 +1788,7 @@ func TestBlankCellInNumericColumnIsNull(t *testing.T) {
 			src := filepath.Join(t.TempDir(), "rows.csv")
 			require.NoError(t, os.WriteFile(src, []byte(tt.body), 0o600))
 
-			db, err := OpenContext(ctx, src)
+			db, err := Open(ctx, src)
 			require.NoError(t, err)
 			defer db.Close()
 
@@ -1866,7 +1866,7 @@ func TestBlankCellInNumericColumnInEveryDelimitedFormat(t *testing.T) {
 			src := filepath.Join(t.TempDir(), tt.file)
 			require.NoError(t, os.WriteFile(src, []byte(tt.body), 0o600))
 
-			db, err := OpenContext(ctx, src)
+			db, err := Open(ctx, src)
 			require.NoError(t, err)
 			defer db.Close()
 
@@ -1977,7 +1977,7 @@ func TestBlankCellInNumericColumnOnEveryLoadRoute(t *testing.T) {
 				t.Helper()
 				src := filepath.Join(t.TempDir(), "rows.csv")
 				require.NoError(t, os.WriteFile(src, []byte(source), 0o600))
-				db, err := OpenContext(ctx, src)
+				db, err := Open(ctx, src)
 				require.NoError(t, err)
 				return db
 			},
@@ -2115,12 +2115,12 @@ func blankCellSourceAs(t *testing.T, format OutputFormat, extension string) []by
 
 	src := filepath.Join(t.TempDir(), "rows.csv")
 	require.NoError(t, os.WriteFile(src, []byte(blankCellSource), 0o600))
-	db, err := OpenContext(t.Context(), src)
+	db, err := Open(t.Context(), src)
 	require.NoError(t, err)
 	defer db.Close()
 
 	out := t.TempDir()
-	require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(format)))
+	require.NoError(t, DumpDatabase(context.Background(), db, out, NewDumpOptions().WithFormat(format)))
 	body, err := os.ReadFile(filepath.Join(out, "rows"+extension)) //nolint:gosec // Test path from t.TempDir()
 	require.NoError(t, err)
 	return body
@@ -2180,7 +2180,7 @@ func TestDatetimeColumnIsStoredAsTheFileWroteIt(t *testing.T) {
 
 			assert.Equal(t, infer.Datetime, infer.Column(tt.values), "every value here is a recognized datetime")
 
-			db, err := OpenContext(ctx, src)
+			db, err := Open(ctx, src)
 			require.NoError(t, err)
 			defer db.Close()
 

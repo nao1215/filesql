@@ -898,7 +898,7 @@ func TestParseLTSV_FieldThatNamesNoLabelIsRefused(t *testing.T) {
 }
 
 // TestParse_ReadsTextTheWayALoadDoes pins that this package and
-// filesql.OpenContext agree about what a text file holds. They did not: a
+// filesql.Open agree about what a text file holds. They did not: a
 // Shift-JIS file parsed here with no error at all, into strings that are not
 // characters, and a UTF-16 file was read as single-byte data and refused for a
 // field count -- an error about the caller's data for a fault in its encoding.

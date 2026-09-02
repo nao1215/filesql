@@ -251,10 +251,10 @@ func TestStreamProcessorContextCancelLeavesNoTable(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	db, err := OpenContext(ctx, csvPath)
+	db, err := Open(ctx, csvPath)
 	if err == nil {
 		_ = db.Close()
-		t.Fatal("OpenContext with a canceled context = nil error, want a failure")
+		t.Fatal("Open with a canceled context = nil error, want a failure")
 	}
 	if !errors.Is(err, context.Canceled) && !strings.Contains(err.Error(), "context canceled") {
 		t.Errorf("err = %v, want it to report the cancellation", err)

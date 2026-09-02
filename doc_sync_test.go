@@ -214,7 +214,7 @@ func TestPackageDocMatchesTheColumnNameRule(t *testing.T) {
 					t.Fatalf("failed to write the fixture: %v", err)
 				}
 
-				db, err := OpenContext(context.Background(), path)
+				db, err := Open(context.Background(), path)
 				if db != nil {
 					defer db.Close()
 				}

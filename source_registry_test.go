@@ -17,7 +17,7 @@ import (
 func TestSourceTableIsHiddenFromCallers(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, copyACHFixture(t, "ppd-debit.ach"))
+	db, err := Open(ctx, copyACHFixture(t, "ppd-debit.ach"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -26,7 +26,7 @@ func TestSourceTableIsHiddenFromCallers(t *testing.T) {
 	assert.NotContains(t, names, sourceTableName, "the reserved table must not be listed as a user table")
 
 	outputDir := t.TempDir()
-	require.NoError(t, DumpDatabase(db, outputDir))
+	require.NoError(t, DumpDatabase(context.Background(), db, outputDir))
 
 	entries, err := os.ReadDir(outputDir)
 	require.NoError(t, err)
@@ -43,7 +43,7 @@ func TestSourceTableIsHiddenFromCallers(t *testing.T) {
 func TestACHAndFedwireShareABaseNameInOneDatabase(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, copyACHFixture(t, "ppd-debit.ach"), copyWireFixture(t, "customer-transfer.fed"))
+	db, err := Open(ctx, copyACHFixture(t, "ppd-debit.ach"), copyWireFixture(t, "customer-transfer.fed"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -69,7 +69,7 @@ func TestReservedTableNameIsRefused(t *testing.T) {
 	csvPath := filepath.Join(dir, "_filesql_report.csv")
 	require.NoError(t, os.WriteFile(csvPath, []byte("id,v\n1,a\n"), 0o600))
 
-	_, err := OpenContext(ctx, csvPath)
+	_, err := Open(ctx, csvPath)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrReservedTableName)
 	assert.Contains(t, err.Error(), "_filesql_")
@@ -90,14 +90,14 @@ func TestReservedTableNameIsRefused(t *testing.T) {
 	// listing while still answering queries.
 	upperPath := filepath.Join(dir, "_FILESQL_report.csv")
 	require.NoError(t, os.WriteFile(upperPath, []byte("id,v\n1,a\n"), 0o600))
-	_, err = OpenContext(ctx, upperPath)
+	_, err = Open(ctx, upperPath)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrReservedTableName)
 
 	// A name that merely resembles the prefix is a normal table.
 	okPath := filepath.Join(dir, "filesql_report.csv")
 	require.NoError(t, os.WriteFile(okPath, []byte("id,v\n1,a\n"), 0o600))
-	db, err := OpenContext(ctx, okPath)
+	db, err := Open(ctx, okPath)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -121,7 +121,7 @@ func TestSQLitePrefixIsRefusedTheSameWay(t *testing.T) {
 		path := filepath.Join(dir, name)
 		require.NoError(t, os.WriteFile(path, []byte("id,v\n1,a\n"), 0o600))
 
-		db, err := OpenContext(ctx, path)
+		db, err := Open(ctx, path)
 		if db != nil {
 			assert.NoError(t, db.Close())
 		}
@@ -148,7 +148,7 @@ func TestSQLitePrefixIsRefusedTheSameWay(t *testing.T) {
 	// letters is a normal table.
 	okPath := filepath.Join(dir, "sqliteish.csv")
 	require.NoError(t, os.WriteFile(okPath, []byte("id,v\n1,a\n"), 0o600))
-	ok, err := OpenContext(ctx, okPath)
+	ok, err := Open(ctx, okPath)
 	require.NoError(t, err)
 	defer ok.Close()
 

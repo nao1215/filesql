@@ -38,9 +38,9 @@ func TestParquetImportUsesSchemaTypes(t *testing.T) {
 	ctx := context.Background()
 	// products.parquet is written by testdata/generate_parquet.go with an
 	// explicit Arrow schema: id INT64, name STRING, price DOUBLE.
-	db, err := OpenContext(ctx, filepath.Join("testdata", "products.parquet"))
+	db, err := Open(ctx, filepath.Join("testdata", "products.parquet"))
 	if err != nil {
-		t.Fatalf("OpenContext: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
@@ -113,13 +113,13 @@ func TestParquetImportPrefersSchemaOverValueShape(t *testing.T) {
 	}
 
 	out := filepath.Join(dir, "out")
-	if err := DumpDatabase(src, out, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
+	if err := DumpDatabase(context.Background(), src, out, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
 		t.Fatalf("DumpDatabase: %v", err)
 	}
 
-	db, err := OpenContext(ctx, filepath.Join(out, "codes.parquet"))
+	db, err := Open(ctx, filepath.Join(out, "codes.parquet"))
 	if err != nil {
-		t.Fatalf("OpenContext: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
@@ -159,19 +159,19 @@ func TestParquetAndCSVAgreeOnNumericQueries(t *testing.T) {
 
 	// Round-trip the CSV through a Parquet dump so both inputs hold the same
 	// rows, then query each and compare.
-	csvDB, err := OpenContext(ctx, csvPath)
+	csvDB, err := Open(ctx, csvPath)
 	if err != nil {
-		t.Fatalf("OpenContext(csv): %v", err)
+		t.Fatalf("Open(csv): %v", err)
 	}
 	defer func() { _ = csvDB.Close() }()
 
 	out := filepath.Join(dir, "out")
-	if err := DumpDatabase(csvDB, out, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
+	if err := DumpDatabase(context.Background(), csvDB, out, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
 		t.Fatalf("DumpDatabase: %v", err)
 	}
-	parquetDB, err := OpenContext(ctx, filepath.Join(out, "goods.parquet"))
+	parquetDB, err := Open(ctx, filepath.Join(out, "goods.parquet"))
 	if err != nil {
-		t.Fatalf("OpenContext(parquet): %v", err)
+		t.Fatalf("Open(parquet): %v", err)
 	}
 	defer func() { _ = parquetDB.Close() }()
 
@@ -238,7 +238,7 @@ func TestParquetAndXLSXAgreeOnABooleanColumn(t *testing.T) {
 	require.NoError(t, f.Close())
 
 	for _, path := range []string{parquetPath, bookPath} {
-		db, err := OpenContext(ctx, path)
+		db, err := Open(ctx, path)
 		require.NoError(t, err, path)
 
 		var declared, storage, first string
@@ -284,7 +284,7 @@ func TestParquetDumpWritesTypedColumns(t *testing.T) {
 	}
 
 	out := filepath.Join(dir, "out")
-	if err := DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
+	if err := DumpDatabase(context.Background(), db, out, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
 		t.Fatalf("DumpDatabase: %v", err)
 	}
 
@@ -319,7 +319,7 @@ func TestParquetUint64ColumnLoadsExactly(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, buf.Bytes(), 0o600))
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, path)
+	db, err := Open(ctx, path)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -375,10 +375,10 @@ func TestParquetDumpKeepsAMixedColumnExact(t *testing.T) {
 			require.NoError(t, err)
 
 			out := filepath.Join(dir, "out")
-			require.NoError(t, DumpDatabase(src, out, NewDumpOptions().WithFormat(OutputFormatParquet)))
+			require.NoError(t, DumpDatabase(context.Background(), src, out, NewDumpOptions().WithFormat(OutputFormatParquet)))
 			assertParquetSchema(t, filepath.Join(out, "mix.parquet"), map[string]string{"v": tt.wantType})
 
-			back, err := OpenContext(ctx, filepath.Join(out, "mix.parquet"))
+			back, err := Open(ctx, filepath.Join(out, "mix.parquet"))
 			require.NoError(t, err)
 			defer func() { _ = back.Close() }()
 			var got string
@@ -403,17 +403,17 @@ func TestParquetDumpKeepsANumericColumnWithABlank(t *testing.T) {
 	source := filepath.Join(dir, "t.csv")
 	require.NoError(t, os.WriteFile(source, []byte("amount,qty,note\n2.50,7,here\n,,\n"), 0o600))
 
-	db, err := OpenContext(ctx, source)
+	db, err := Open(ctx, source)
 	require.NoError(t, err)
 
 	out := filepath.Join(dir, "out")
-	require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatParquet)))
+	require.NoError(t, DumpDatabase(context.Background(), db, out, NewDumpOptions().WithFormat(OutputFormatParquet)))
 	require.NoError(t, db.Close())
 
 	assertParquetSchema(t, filepath.Join(out, "t.parquet"),
 		map[string]string{"amount": "float64", "qty": "int64", "note": "utf8"})
 
-	back, err := OpenContext(ctx, filepath.Join(out, "t.parquet"))
+	back, err := Open(ctx, filepath.Join(out, "t.parquet"))
 	require.NoError(t, err)
 	defer back.Close()
 
@@ -452,7 +452,7 @@ func TestParquetDumpOfEmptyTableKeepsDeclaredTypes(t *testing.T) {
 	}
 
 	out := filepath.Join(dir, "out")
-	if err := DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
+	if err := DumpDatabase(context.Background(), db, out, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
 		t.Fatalf("DumpDatabase: %v", err)
 	}
 
@@ -528,14 +528,14 @@ func TestParquetNonFiniteRealStaysReal(t *testing.T) {
 	}
 
 	out := filepath.Join(dir, "out")
-	if err := DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
+	if err := DumpDatabase(context.Background(), db, out, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
 		t.Fatalf("DumpDatabase: %v", err)
 	}
 	assertParquetSchema(t, filepath.Join(out, "m.parquet"), map[string]string{"v": "float64"})
 
-	reloaded, err := OpenContext(ctx, filepath.Join(out, "m.parquet"))
+	reloaded, err := Open(ctx, filepath.Join(out, "m.parquet"))
 	if err != nil {
-		t.Fatalf("OpenContext: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = reloaded.Close() }()
 
@@ -587,9 +587,9 @@ func TestParquetNaNBecomesNull(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nan.parquet")
 	writeFloat64Parquet(t, path, "v", []float64{math.NaN(), 1.5})
 
-	db, err := OpenContext(ctx, path)
+	db, err := Open(ctx, path)
 	if err != nil {
-		t.Fatalf("OpenContext: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
@@ -625,9 +625,9 @@ func TestParquetInfinityFromFileStaysReal(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "inf.parquet")
 	writeFloat64Parquet(t, path, "v", []float64{math.Inf(1), math.Inf(-1)})
 
-	db, err := OpenContext(ctx, path)
+	db, err := Open(ctx, path)
 	if err != nil {
-		t.Fatalf("OpenContext: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
@@ -765,12 +765,12 @@ func TestDamagedParquetIsAnErrorNotAPanic(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "damaged.parquet")
 	require.NoError(t, os.WriteFile(path, data, 0o600))
 
-	t.Run("through OpenContext", func(t *testing.T) {
+	t.Run("through Open", func(t *testing.T) {
 		t.Parallel()
 
 		var db *sql.DB
 		var err error
-		require.NotPanics(t, func() { db, err = OpenContext(ctx, path) })
+		require.NotPanics(t, func() { db, err = Open(ctx, path) })
 		if db != nil {
 			defer db.Close()
 		}
@@ -827,7 +827,7 @@ func TestParquetDamageThatWasAlreadyReported(t *testing.T) {
 
 			path := filepath.Join(t.TempDir(), "damaged.parquet")
 			require.NoError(t, os.WriteFile(path, data, 0o600))
-			db, err := OpenContext(context.Background(), path)
+			db, err := Open(context.Background(), path)
 			if db != nil {
 				defer db.Close()
 			}
@@ -840,7 +840,7 @@ func TestParquetDamageThatWasAlreadyReported(t *testing.T) {
 
 		path := filepath.Join(t.TempDir(), "products.parquet")
 		require.NoError(t, os.WriteFile(path, good, 0o600)) //nolint:gosec // Test path is constructed from t.TempDir()
-		db, err := OpenContext(context.Background(), path)
+		db, err := Open(context.Background(), path)
 		require.NoError(t, err)
 		defer db.Close()
 		var n int
@@ -883,7 +883,7 @@ func TestParquetWithoutTheHeaderMarkIsRefused(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "t.parquet")
 			require.NoError(t, os.WriteFile(path, data, 0o600))
 
-			db, err := OpenContext(ctx, path)
+			db, err := Open(ctx, path)
 			if db != nil {
 				assert.NoError(t, db.Close())
 			}
@@ -905,7 +905,7 @@ func TestParquetWithoutTheHeaderMarkIsRefused(t *testing.T) {
 
 		done := make(chan error, 1)
 		go func() {
-			db, err := OpenContext(ctx, path)
+			db, err := Open(ctx, path)
 			if db != nil {
 				_ = db.Close()
 			}
@@ -964,7 +964,7 @@ func TestADamagedParquetFooterIsAnErrorNotAPanic(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			db, err := OpenContext(context.Background(), path)
+			db, err := Open(context.Background(), path)
 			if db != nil {
 				defer db.Close()
 			}
@@ -986,7 +986,7 @@ func TestADamagedParquetFooterIsAnErrorNotAPanic(t *testing.T) {
 	}
 }
 
-// slowParquet is 433 bytes that hold OpenContext for as long as it is left to
+// slowParquet is 433 bytes that hold Open for as long as it is left to
 // run, allocating roughly 350MiB a second while it does. It was found by
 // fuzzing the Parquet reader, and its header was repaired afterwards so that the
 // magic-bytes check does not answer for it: what makes it dangerous is its
@@ -1029,7 +1029,7 @@ func TestADamagedParquetFileFailsQuickly(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		db, openErr := OpenContext(context.Background(), path)
+		db, openErr := Open(context.Background(), path)
 		if db != nil {
 			_ = db.Close()
 		}
@@ -1045,7 +1045,7 @@ func TestADamagedParquetFileFailsQuickly(t *testing.T) {
 			t.Fatalf("the failure is not reportable as a parse error: %v", openErr)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("a 433 byte file has held OpenContext for 10s")
+		t.Fatal("a 433 byte file has held Open for 10s")
 	}
 }
 
@@ -1073,7 +1073,7 @@ func TestParquetRoundTripPreservesNull(t *testing.T) {
 
 	out := filepath.Join(dir, "out")
 	opts := NewDumpOptions().WithFormat(OutputFormatParquet)
-	if err := DumpDatabase(db, out, opts); err != nil {
+	if err := DumpDatabase(context.Background(), db, out, opts); err != nil {
 		t.Fatalf("DumpDatabase: %v", err)
 	}
 
@@ -1082,9 +1082,9 @@ func TestParquetRoundTripPreservesNull(t *testing.T) {
 		t.Fatalf("expected one parquet file, got %v (err %v)", files, err)
 	}
 
-	rdb, err := OpenContext(ctx, files[0])
+	rdb, err := Open(ctx, files[0])
 	if err != nil {
-		t.Fatalf("OpenContext: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = rdb.Close() }()
 
@@ -1144,7 +1144,7 @@ func TestParquetRoundTripPreservesNullInLaterColumn(t *testing.T) {
 	}
 
 	out := filepath.Join(dir, "out")
-	if err := DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
+	if err := DumpDatabase(context.Background(), db, out, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
 		t.Fatalf("DumpDatabase: %v", err)
 	}
 	files, err := filepath.Glob(filepath.Join(out, "*.parquet"))
@@ -1152,9 +1152,9 @@ func TestParquetRoundTripPreservesNullInLaterColumn(t *testing.T) {
 		t.Fatalf("expected one parquet file, got %v (err %v)", files, err)
 	}
 
-	rdb, err := OpenContext(ctx, files[0])
+	rdb, err := Open(ctx, files[0])
 	if err != nil {
-		t.Fatalf("OpenContext: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = rdb.Close() }()
 
@@ -1184,13 +1184,13 @@ func TestParquetNullsAgreeBetweenTheParserAndTheLoader(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "t.csv")
 	require.NoError(t, os.WriteFile(src, []byte("label,amount\nx,1\ny,2\n"), 0o600))
 
-	db, err := OpenContext(ctx, src)
+	db, err := Open(ctx, src)
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `INSERT INTO t (label, amount) VALUES (NULL, 3), ('', 4)`)
 	require.NoError(t, err)
 
 	out := t.TempDir()
-	require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatParquet)))
+	require.NoError(t, DumpDatabase(context.Background(), db, out, NewDumpOptions().WithFormat(OutputFormatParquet)))
 	require.NoError(t, db.Close())
 
 	written := filepath.Join(out, "t.parquet")
@@ -1200,7 +1200,7 @@ func TestParquetNullsAgreeBetweenTheParserAndTheLoader(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, parsed.Nulls)
 
-	reloaded, err := OpenContext(ctx, written)
+	reloaded, err := Open(ctx, written)
 	require.NoError(t, err)
 	defer reloaded.Close()
 
@@ -1401,7 +1401,7 @@ func TestParquetOverwriteFallsBackRatherThanWriteAWrongValue(t *testing.T) {
 			writeOneFieldParquet(t, path, tt.node, tt.seed)
 			require.NoError(t, autoSaveOverwrite(t, []string{path}, tt.stmt))
 
-			db, err := OpenContext(t.Context(), path)
+			db, err := Open(t.Context(), path)
 			require.NoError(t, err)
 			defer db.Close()
 
@@ -1486,7 +1486,7 @@ func TestParquetOverwriteLeavesWhatItCannotRebuild(t *testing.T) {
 		schema := parquetSchemaText(t, path)
 		assert.Equal(t, "id INT(64,true) optional=false", schema[0])
 
-		db, err := OpenContext(t.Context(), path)
+		db, err := Open(t.Context(), path)
 		require.NoError(t, err)
 		defer db.Close()
 		var id int64
@@ -1535,7 +1535,7 @@ func TestParquetOverwriteKeepsAnInfinity(t *testing.T) {
 	require.NoError(t, autoSaveOverwrite(t, []string{path}))
 	assert.Equal(t, want, parquetSchemaText(t, path))
 
-	db, err := OpenContext(t.Context(), path)
+	db, err := Open(t.Context(), path)
 	require.NoError(t, err)
 	defer db.Close()
 	rows, err := db.QueryContext(t.Context(), `SELECT v FROM t`)
@@ -1562,7 +1562,7 @@ func TestParquetExportIgnoresAnyFileAlreadyThere(t *testing.T) {
 	writeOneFieldParquet(t, path, parquet.Date(), []parquet.Value{parquet.Int32Value(19797)})
 
 	db := openWithTable(t, "CREATE TABLE t (v INTEGER)", "INSERT INTO t VALUES (19797)")
-	require.NoError(t, DumpDatabase(db, dir, NewDumpOptions().WithFormat(OutputFormatParquet)))
+	require.NoError(t, DumpDatabase(context.Background(), db, dir, NewDumpOptions().WithFormat(OutputFormatParquet)))
 
 	assert.Equal(t, []string{"v INT(64,true) optional=true"}, parquetSchemaText(t, path),
 		"an export writes the table it was given, not the file that was there")
@@ -1705,7 +1705,7 @@ func parquetStoredCells(t *testing.T, path string) []string {
 func parquetColumnText(t *testing.T, path string) []string {
 	t.Helper()
 
-	db, err := OpenContext(t.Context(), path)
+	db, err := Open(t.Context(), path)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, db.Close()) }()
 

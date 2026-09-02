@@ -77,12 +77,12 @@ func TestOpen(t *testing.T) {
 				t.Skip("Skipping slow directory test in local development")
 			}
 
-			db, err := Open(tt.paths...)
+			db, err := Open(context.Background(), tt.paths...)
 			if tt.wantErr {
-				assert.Error(t, err, "Open() should have failed")
+				assert.Error(t, err, "Open(context.Background(), ) should have failed")
 				return
 			}
-			assert.NoError(t, err, "Open() should have succeeded")
+			assert.NoError(t, err, "Open(context.Background(), ) should have succeeded")
 
 			if !tt.wantErr {
 				defer db.Close()
@@ -124,7 +124,7 @@ func TestOpen(t *testing.T) {
 func TestSQLQueries(t *testing.T) {
 	t.Parallel()
 
-	db, err := Open(filepath.Join("testdata", "sample.csv"))
+	db, err := Open(context.Background(), filepath.Join("testdata", "sample.csv"))
 	require.NoError(t, err, "Failed to open database")
 	defer db.Close()
 
@@ -198,7 +198,7 @@ func TestMultipleFiles(t *testing.T) {
 	// to one table from different directories, which is now a reported
 	// collision rather than a silent drop. See
 	// TestOpenDirectoryWithCollidingBasenamesFails.
-	db, err := Open(filepath.Join("testdata", "tree"))
+	db, err := Open(context.Background(), filepath.Join("testdata", "tree"))
 	require.NoError(t, err, "Failed to open directory")
 	defer db.Close()
 
@@ -261,7 +261,7 @@ func TestJoinMultipleTables(t *testing.T) {
 	}
 
 	// See TestMultipleFiles for why this is testdata/tree.
-	db, err := Open(filepath.Join("testdata", "tree"))
+	db, err := Open(context.Background(), filepath.Join("testdata", "tree"))
 	require.NoError(t, err, "Failed to open directory")
 	defer db.Close()
 
@@ -622,7 +622,7 @@ id:3	product:Keyboard	price:75`
 		}
 
 		// Verify the modifications were saved by opening the auto-saved files
-		newDB, err := Open(tempDir)
+		newDB, err := Open(context.Background(), tempDir)
 		require.NoError(t, err, "Failed to open auto-saved files")
 		defer newDB.Close()
 
@@ -741,7 +741,7 @@ id:3	product:Keyboard	price:75`
 
 		benchmarkFile := filepath.Join("testdata", "benchmark", "customers100000.csv")
 
-		db, err := Open(benchmarkFile)
+		db, err := Open(context.Background(), benchmarkFile)
 		require.NoError(t, err, "Failed to open benchmark file")
 		defer db.Close()
 
@@ -803,7 +803,7 @@ func TestDumpDatabase(t *testing.T) {
 			name: "Single CSV file dump",
 			setupFunc: func(t *testing.T) *sql.DB {
 				t.Helper()
-				db, err := Open(filepath.Join("testdata", "sample.csv"))
+				db, err := Open(context.Background(), filepath.Join("testdata", "sample.csv"))
 				require.NoError(t, err, "Failed to open database")
 				return db
 			},
@@ -814,7 +814,7 @@ func TestDumpDatabase(t *testing.T) {
 			name: "Multiple files dump",
 			setupFunc: func(t *testing.T) *sql.DB {
 				t.Helper()
-				db, err := Open(filepath.Join("testdata", "sample.csv"), filepath.Join("testdata", "users.csv"))
+				db, err := Open(context.Background(), filepath.Join("testdata", "sample.csv"), filepath.Join("testdata", "users.csv"))
 				require.NoError(t, err, "Failed to open database")
 				return db
 			},
@@ -826,7 +826,7 @@ func TestDumpDatabase(t *testing.T) {
 			setupFunc: func(t *testing.T) *sql.DB {
 				t.Helper()
 				// See TestMultipleFiles for why this is testdata/tree.
-				db, err := Open(filepath.Join("testdata", "tree"))
+				db, err := Open(context.Background(), filepath.Join("testdata", "tree"))
 				require.NoError(t, err, "Failed to open database")
 				return db
 			},
@@ -837,7 +837,7 @@ func TestDumpDatabase(t *testing.T) {
 			name: "Modified data dump",
 			setupFunc: func(t *testing.T) *sql.DB {
 				t.Helper()
-				db, err := Open(filepath.Join("testdata", "sample.csv"))
+				db, err := Open(context.Background(), filepath.Join("testdata", "sample.csv"))
 				require.NoError(t, err, "Failed to open database")
 
 				// Modify data to test persistence
@@ -864,11 +864,11 @@ func TestDumpDatabase(t *testing.T) {
 			defer db.Close()
 
 			// Execute DumpDatabase
-			err := DumpDatabase(db, tempDir)
+			err := DumpDatabase(context.Background(), db, tempDir)
 
 			// Check error expectation
 			if (err != nil) != tc.expectError {
-				assert.Fail(t, "DumpDatabase() error = %v, expectError %v", err, tc.expectError)
+				assert.Fail(t, "DumpDatabase(context.Background(), ) error = %v, expectError %v", err, tc.expectError)
 				return
 			}
 
@@ -928,7 +928,7 @@ func TestDumpDatabaseErrors(t *testing.T) {
 		tempDir := t.TempDir()
 
 		// This should return an error since there are no tables in empty database
-		err = DumpDatabase(db, tempDir)
+		err = DumpDatabase(context.Background(), db, tempDir)
 		if err == nil {
 			t.Error("expected error when calling DumpDatabase on empty database")
 		}
@@ -940,7 +940,7 @@ func TestDumpDatabaseErrors(t *testing.T) {
 	t.Run("Permission denied output directory", func(t *testing.T) {
 		t.Parallel()
 
-		db, err := Open(filepath.Join("testdata", "sample.csv"))
+		db, err := Open(context.Background(), filepath.Join("testdata", "sample.csv"))
 		if err != nil {
 			require.NoError(t, err, "Failed to open database")
 		}
@@ -957,7 +957,7 @@ func TestDumpDatabaseErrors(t *testing.T) {
 			invalidDir = "/root/invalid_permissions_dir"
 		}
 
-		err = DumpDatabase(db, invalidDir)
+		err = DumpDatabase(context.Background(), db, invalidDir)
 		if err == nil {
 			t.Error("expected error when writing to invalid directory")
 			return
@@ -982,7 +982,7 @@ func TestDumpDatabaseErrors(t *testing.T) {
 func TestDumpDatabaseCSVFormat(t *testing.T) {
 	t.Parallel()
 
-	db, err := Open(filepath.Join("testdata", "sample.csv"))
+	db, err := Open(context.Background(), filepath.Join("testdata", "sample.csv"))
 	if err != nil {
 		require.NoError(t, err, "Failed to open database")
 	}
@@ -991,9 +991,9 @@ func TestDumpDatabaseCSVFormat(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// Dump the database
-	err = DumpDatabase(db, tempDir)
+	err = DumpDatabase(context.Background(), db, tempDir)
 	if err != nil {
-		require.NoError(t, err, "DumpDatabase() failed")
+		require.NoError(t, err, "DumpDatabase(context.Background(), ) failed")
 	}
 
 	// Read the dumped file
@@ -1030,7 +1030,7 @@ func TestDumpDatabaseCSVFormat(t *testing.T) {
 func TestDumpDatabaseSpecialCharacters(t *testing.T) {
 	t.Parallel()
 
-	db, err := Open(filepath.Join("testdata", "sample.csv"))
+	db, err := Open(context.Background(), filepath.Join("testdata", "sample.csv"))
 	if err != nil {
 		require.NoError(t, err, "Failed to open database")
 	}
@@ -1048,9 +1048,9 @@ func TestDumpDatabaseSpecialCharacters(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// Dump the database
-	err = DumpDatabase(db, tempDir)
+	err = DumpDatabase(context.Background(), db, tempDir)
 	if err != nil {
-		require.NoError(t, err, "DumpDatabase() failed")
+		require.NoError(t, err, "DumpDatabase(context.Background(), ) failed")
 	}
 
 	// Read the dumped file
@@ -1137,16 +1137,16 @@ func TestOpenErrorCases(t *testing.T) {
 				defer os.RemoveAll(emptyDir)
 			}
 
-			db, err := Open(tt.paths...)
+			db, err := Open(context.Background(), tt.paths...)
 			if tt.wantErr {
-				assert.Error(t, err, "Open() should have failed")
+				assert.Error(t, err, "Open(context.Background(), ) should have failed")
 				return
 			}
-			assert.NoError(t, err, "Open() should have succeeded")
+			assert.NoError(t, err, "Open(context.Background(), ) should have succeeded")
 
 			if tt.wantErr && err != nil {
 				if !strings.Contains(err.Error(), tt.errorString) {
-					assert.Fail(t, "Open() error = %v, expected to contain %q", err, tt.errorString)
+					assert.Fail(t, "Open(context.Background(), ) error = %v, expected to contain %q", err, tt.errorString)
 				}
 			}
 
@@ -1157,8 +1157,9 @@ func TestOpenErrorCases(t *testing.T) {
 	}
 }
 
-// TestOpenContext tests the OpenContext function with various scenarios
-func TestOpenContext(t *testing.T) {
+// TestOpenUnderAContext covers what the context Open takes decides: a deadline
+// it finishes inside, one that is already spent, and the paths it is given.
+func TestOpenUnderAContext(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -1226,15 +1227,15 @@ func TestOpenContext(t *testing.T) {
 			ctx, cancel := tt.setupCtx()
 			defer cancel()
 
-			db, err := OpenContext(ctx, tt.paths...)
+			db, err := Open(ctx, tt.paths...)
 			if tt.wantErr {
-				assert.Error(t, err, "OpenContext() should have failed")
+				assert.Error(t, err, "Open() should have failed")
 			} else {
-				assert.NoError(t, err, "OpenContext() should have succeeded")
+				assert.NoError(t, err, "Open() should have succeeded")
 			}
 
 			if tt.wantErr && err != nil && tt.errContains != "" {
-				assert.Contains(t, err.Error(), tt.errContains, "OpenContext() error should contain expected string")
+				assert.Contains(t, err.Error(), tt.errContains, "Open() error should contain expected string")
 			}
 
 			if !tt.wantErr && db != nil {
@@ -1242,15 +1243,15 @@ func TestOpenContext(t *testing.T) {
 
 				// Verify the database is functional
 				if err := db.PingContext(t.Context()); err != nil {
-					assert.NoError(t, err, "Failed to ping database after OpenContext")
+					assert.NoError(t, err, "Failed to ping database after Open")
 				}
 			}
 		})
 	}
 }
 
-// TestOpenContextConcurrent tests concurrent OpenContext calls
-func TestOpenContextConcurrent(t *testing.T) {
+// TestOpenConcurrent tests concurrent Open calls
+func TestOpenConcurrent(t *testing.T) {
 	t.Parallel()
 
 	const numGoroutines = 10
@@ -1266,7 +1267,7 @@ func TestOpenContextConcurrent(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 
-			db, err := OpenContext(ctx, filepath.Join("testdata", "sample.csv"))
+			db, err := Open(ctx, filepath.Join("testdata", "sample.csv"))
 			if err != nil {
 				errors <- fmt.Errorf("goroutine %d: %w", id, err)
 				return
@@ -1287,7 +1288,7 @@ func TestOpenContextConcurrent(t *testing.T) {
 
 	// Check for any errors
 	for err := range errors {
-		assert.NoError(t, err, "Concurrent OpenContext error")
+		assert.NoError(t, err, "Concurrent Open error")
 	}
 }
 
@@ -1416,7 +1417,7 @@ func Test_MalformedCSVHandling(t *testing.T) {
 			_ = tmpFile.Close() // Ignore close error in test cleanup
 
 			// Test opening the file
-			db, err := Open(tmpFile.Name())
+			db, err := Open(context.Background(), tmpFile.Name())
 			if tc.expectError && err == nil {
 				t.Error("Expected error but got none")
 				if db != nil {
@@ -1481,7 +1482,7 @@ func Test_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 
 			for j := range numQueries {
-				db, err := Open(tmpFile.Name())
+				db, err := Open(context.Background(), tmpFile.Name())
 				if err != nil {
 					errors <- fmt.Errorf("goroutine %d: failed to open: %w", goroutineID, err)
 					return
@@ -1543,7 +1544,7 @@ func Test_ResourceExhaustion(t *testing.T) {
 		}
 		_ = tmpFile.Close() // Ignore close error in test cleanup
 
-		db, err := Open(tmpFile.Name())
+		db, err := Open(context.Background(), tmpFile.Name())
 		require.NoError(t, err, "Failed to open file with many columns")
 		defer db.Close()
 
@@ -1587,7 +1588,7 @@ func Test_ResourceExhaustion(t *testing.T) {
 		}
 		_ = tmpFile.Close() // Ignore close error in test cleanup
 
-		db, err := Open(tmpFile.Name())
+		db, err := Open(context.Background(), tmpFile.Name())
 		require.NoError(t, err, "Failed to open file with many rows")
 		defer db.Close()
 
@@ -1617,7 +1618,7 @@ func Test_SQLInjectionProtection(t *testing.T) {
 	}
 	_ = tmpFile.Close() // Ignore close error in test cleanup
 
-	db, err := Open(tmpFile.Name())
+	db, err := Open(context.Background(), tmpFile.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1714,7 +1715,7 @@ func Test_UnicodeAndEncoding(t *testing.T) {
 			}
 			_ = tmpFile.Close() // Ignore close error in test cleanup
 
-			db, err := Open(tmpFile.Name())
+			db, err := Open(context.Background(), tmpFile.Name())
 			require.NoError(t, err, "Failed to open Unicode file")
 			defer db.Close()
 
@@ -1771,7 +1772,7 @@ func Test_ConnectionLifecycle(t *testing.T) {
 
 	t.Run("Multiple open/close cycles", func(t *testing.T) {
 		for i := range 100 {
-			db, err := Open(tmpFile.Name())
+			db, err := Open(context.Background(), tmpFile.Name())
 			if err != nil {
 				require.NoError(t, err, "Failed to open database on iteration %d", i)
 			}
@@ -1791,7 +1792,7 @@ func Test_ConnectionLifecycle(t *testing.T) {
 	})
 
 	t.Run("Connection timeout and context", func(t *testing.T) {
-		db, err := Open(tmpFile.Name())
+		db, err := Open(context.Background(), tmpFile.Name())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1809,7 +1810,7 @@ func Test_ConnectionLifecycle(t *testing.T) {
 	})
 
 	t.Run("Double close safety", func(t *testing.T) {
-		db, err := Open(tmpFile.Name())
+		db, err := Open(context.Background(), tmpFile.Name())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1916,7 +1917,7 @@ func Test_SQLReservedWordsAsFilenames(t *testing.T) {
 			}
 
 			// Test 1: Open file and verify table creation
-			db, err := Open(filePath)
+			db, err := Open(context.Background(), filePath)
 			if err != nil {
 				require.NoError(t, err, "Failed to open file with reserved word filename %s", rw.filename)
 			}
@@ -2013,7 +2014,7 @@ func Test_SQLReservedWordsMultipleFiles(t *testing.T) {
 	}
 
 	// Test 1: Load all files from directory
-	db, err := Open(tmpDir)
+	db, err := Open(context.Background(), tmpDir)
 	require.NoError(t, err, "Failed to open directory with reserved word files")
 	defer db.Close()
 
@@ -2145,7 +2146,7 @@ func Test_SQLReservedWordsEdgeCases(t *testing.T) {
 			}
 
 			// Test opening the file
-			db, err := Open(filePath)
+			db, err := Open(context.Background(), filePath)
 			if tc.expectError && err == nil {
 				assert.Fail(t, "Expected error for %s but got none", tc.description)
 				if db != nil {
@@ -2293,7 +2294,7 @@ func Test_ErrorMessageQuality(t *testing.T) {
 				return
 			}
 
-			_, err := Open(filePath)
+			_, err := Open(context.Background(), filePath)
 			if err == nil {
 				assert.Fail(t, "Expected error but got none for %s", tc.description)
 				return
@@ -2331,7 +2332,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 		}
 		_ = tmpFile.Close() // Ignore close error in test cleanup
 
-		db, err := Open(tmpFile.Name())
+		db, err := Open(context.Background(), tmpFile.Name())
 		require.NoError(t, err, "Failed to open file with reserved keywords")
 		defer db.Close()
 
@@ -2377,7 +2378,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 				}
 				_ = tmpFile.Close() // Ignore close error in test cleanup
 
-				db, err := Open(tmpFile.Name())
+				db, err := Open(context.Background(), tmpFile.Name())
 				if err != nil {
 					assert.Fail(t, "Failed to open file %s: %v", pattern, err)
 					return
@@ -2408,7 +2409,7 @@ func Test_TableCreationEdgeCases(t *testing.T) {
 		}
 		_ = tmpFile.Close() // Ignore close error in test cleanup
 
-		db, err := Open(tmpFile.Name())
+		db, err := Open(context.Background(), tmpFile.Name())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2523,9 +2524,9 @@ func TestComprehensiveFileFormats(t *testing.T) {
 			}
 
 			// Open database with single file
-			db, err := Open(filePath)
+			db, err := Open(context.Background(), filePath)
 			if err != nil {
-				require.NoError(t, err, "Open(%s) failed", filePath)
+				require.NoError(t, err, "Open(context.Background(), %s) failed", filePath)
 			}
 			defer db.Close()
 
@@ -2574,8 +2575,8 @@ func TestDirectoryLoading(t *testing.T) {
 	}
 
 	// See TestMultipleFiles for why this is testdata/tree.
-	db, err := Open(filepath.Join("testdata", "tree"))
-	require.NoError(t, err, "Open(testdata/tree) failed")
+	db, err := Open(context.Background(), filepath.Join("testdata", "tree"))
+	require.NoError(t, err, "Open(context.Background(), testdata/tree) failed")
 	defer db.Close()
 
 	// Get all table names
@@ -2626,7 +2627,7 @@ func TestMultipleFilePaths(t *testing.T) {
 	t.Parallel()
 
 	// Open database with multiple files
-	db, err := Open(filepath.Join("testdata", "sample.csv"), filepath.Join("testdata", "products.tsv"), filepath.Join("testdata", "logs.ltsv"))
+	db, err := Open(context.Background(), filepath.Join("testdata", "sample.csv"), filepath.Join("testdata", "products.tsv"), filepath.Join("testdata", "logs.ltsv"))
 	require.NoError(t, err, "Open with multiple files failed")
 	defer db.Close()
 
@@ -2670,7 +2671,7 @@ func TestMultipleFilePaths(t *testing.T) {
 func TestCTEQueries(t *testing.T) {
 	t.Parallel()
 
-	db, err := Open(filepath.Join("testdata", "sample.csv"), filepath.Join("testdata", "products.tsv"))
+	db, err := Open(context.Background(), filepath.Join("testdata", "sample.csv"), filepath.Join("testdata", "products.tsv"))
 	require.NoError(t, err, "Open failed")
 	defer db.Close()
 
@@ -2787,7 +2788,7 @@ func TestMixedDirectoryAndFiles(t *testing.T) {
 
 	// Open with mixed paths: directory + specific file. See
 	// TestOpenDirectoryWithCollidingBasenamesFails for why this is testdata/tree.
-	db, err := Open(filepath.Join("testdata", "tree"), tempFile)
+	db, err := Open(context.Background(), filepath.Join("testdata", "tree"), tempFile)
 	require.NoError(t, err, "Open with mixed paths failed")
 	defer db.Close()
 
@@ -2847,7 +2848,7 @@ func TestErrorCases(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			db, err := Open(tc.paths...)
+			db, err := Open(context.Background(), tc.paths...)
 			if err == nil {
 				if db != nil {
 					_ = db.Close() // Ignore close error in test cleanup
@@ -3091,14 +3092,14 @@ func TestParquetReadWriteIntegration(t *testing.T) {
 		}
 
 		// Open CSV file and load into database
-		db, err := Open(csvFile)
+		db, err := Open(context.Background(), csvFile)
 		require.NoError(t, err, "Failed to open CSV file")
 		defer db.Close()
 
 		// Export to Parquet format
 		parquetOutputDir := filepath.Join(tempDir, "parquet_output")
 		options := NewDumpOptions().WithFormat(OutputFormatParquet)
-		err = DumpDatabase(db, parquetOutputDir, options)
+		err = DumpDatabase(context.Background(), db, parquetOutputDir, options)
 		require.NoError(t, err, "Failed to dump to Parquet")
 
 		// Verify Parquet file was created
@@ -3108,7 +3109,7 @@ func TestParquetReadWriteIntegration(t *testing.T) {
 		}
 
 		// Read back the Parquet file
-		db2, err := Open(parquetFile)
+		db2, err := Open(context.Background(), parquetFile)
 		require.NoError(t, err, "Failed to open Parquet file")
 		defer db2.Close()
 
@@ -3170,7 +3171,7 @@ Charlie,92.8,true`
 		}
 
 		// Open CSV file
-		db, err := Open(csvFile)
+		db, err := Open(context.Background(), csvFile)
 		require.NoError(t, err, "Failed to open CSV file")
 		defer db.Close()
 
@@ -3182,7 +3183,7 @@ Charlie,92.8,true`
 
 		// Note: Parquet files should not use external compression,
 		// but we test that the system handles this gracefully
-		err = DumpDatabase(db, parquetOutputDir, options)
+		err = DumpDatabase(context.Background(), db, parquetOutputDir, options)
 		if err != nil {
 			// We expect an error for external compression with Parquet
 			expectedErrMsg := "external compression not supported for Parquet format - use Parquet's built-in compression instead"
@@ -3230,17 +3231,17 @@ Charlie,92.8,true`
 				}
 
 				// Open CSV and export to Parquet
-				db, err := Open(csvFile)
+				db, err := Open(context.Background(), csvFile)
 				require.NoError(t, err, "Failed to open CSV")
 				defer db.Close()
 
 				parquetDir := filepath.Join(tempDir, td.name+"_parquet")
-				err = DumpDatabase(db, parquetDir, NewDumpOptions().WithFormat(OutputFormatParquet))
+				err = DumpDatabase(context.Background(), db, parquetDir, NewDumpOptions().WithFormat(OutputFormatParquet))
 				require.NoError(t, err, "Failed to export to Parquet")
 
 				// Read back from Parquet
 				parquetFile := filepath.Join(parquetDir, td.name+".parquet")
-				db2, err := Open(parquetFile)
+				db2, err := Open(context.Background(), parquetFile)
 				require.NoError(t, err, "Failed to open Parquet file")
 				defer db2.Close()
 
@@ -3325,19 +3326,19 @@ func TestParquetPerformance(t *testing.T) {
 
 	// Test CSV to Parquet export performance
 	start := time.Now()
-	db, err := Open(csvFile)
+	db, err := Open(context.Background(), csvFile)
 	require.NoError(t, err, "Failed to open CSV")
 	defer db.Close()
 
 	parquetDir := filepath.Join(tempDir, "perf_parquet")
-	err = DumpDatabase(db, parquetDir, NewDumpOptions().WithFormat(OutputFormatParquet))
+	err = DumpDatabase(context.Background(), db, parquetDir, NewDumpOptions().WithFormat(OutputFormatParquet))
 	require.NoError(t, err, "Failed to export to Parquet")
 	exportTime := time.Since(start)
 
 	// Test Parquet read performance
 	parquetFile := filepath.Join(parquetDir, "large_test.parquet")
 	start = time.Now()
-	db2, err := Open(parquetFile)
+	db2, err := Open(context.Background(), parquetFile)
 	require.NoError(t, err, "Failed to open Parquet")
 	defer db2.Close()
 
@@ -3367,7 +3368,7 @@ func TestWriteXLSXTableData(t *testing.T) {
 	dumpSheet := func(t *testing.T, table, query string, opts DumpOptions) string {
 		t.Helper()
 
-		db, err := Open(filepath.Join("testdata", "excel", "sample.xlsx"))
+		db, err := Open(context.Background(), filepath.Join("testdata", "excel", "sample.xlsx"))
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -3458,7 +3459,7 @@ func TestWriteXLSXTableData(t *testing.T) {
 	t.Run("bz2 is rejected because it has no writer", func(t *testing.T) {
 		t.Parallel()
 
-		db, err := Open(filepath.Join("testdata", "excel", "sample.xlsx"))
+		db, err := Open(context.Background(), filepath.Join("testdata", "excel", "sample.xlsx"))
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -3514,7 +3515,7 @@ func TestAnEmptySourceIsRefusedExceptWhereADocumentCanSayNothing(t *testing.T) {
 			path := filepath.Join(dir, "e"+f.ext)
 			require.NoError(t, os.WriteFile(path, nil, 0o600))
 
-			_, err := OpenContext(t.Context(), path)
+			_, err := Open(t.Context(), path)
 			require.Error(t, err, "an empty %s file must be refused", f.ext)
 			assert.ErrorIs(t, err, ErrEmptyData, "an empty %s file must be refused", f.ext)
 		}
@@ -3528,7 +3529,7 @@ func TestAnEmptySourceIsRefusedExceptWhereADocumentCanSayNothing(t *testing.T) {
 			path := filepath.Join(dir, "e"+f.ext)
 			require.NoError(t, os.WriteFile(path, nil, 0o600))
 
-			db, err := OpenContext(t.Context(), path)
+			db, err := Open(t.Context(), path)
 			require.NoError(t, err, "an empty %s file loads as a table with no rows", f.ext)
 
 			var rows int
@@ -3580,7 +3581,7 @@ func TestAnEmptySourceIsRefusedExceptWhereADocumentCanSayNothing(t *testing.T) {
 		path := filepath.Join(dir, "e.json")
 		require.NoError(t, os.WriteFile(path, []byte("[]"), 0o600))
 
-		db, err := OpenContext(t.Context(), path)
+		db, err := Open(t.Context(), path)
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -3695,7 +3696,7 @@ func TestEdgeCasesEmptyAndMalformedData(t *testing.T) {
 			defer cancel()
 
 			// Attempt to open the file
-			db, err := OpenContext(ctx, tmpFile.Name())
+			db, err := Open(ctx, tmpFile.Name())
 
 			if tt.expectedErr {
 				if err == nil {
@@ -3854,7 +3855,7 @@ func TestEdgeCasesCompression(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			db, err := OpenContext(ctx, tmpFile.Name())
+			db, err := Open(ctx, tmpFile.Name())
 
 			if tt.expectedErr {
 				if err == nil {
@@ -3915,7 +3916,7 @@ func TestEdgeCasesMemoryLimits(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		db, err := OpenContext(ctx, tmpFile.Name())
+		db, err := Open(ctx, tmpFile.Name())
 		assert.NoError(t, err, "Failed to handle wide file")
 		defer db.Close()
 
@@ -3941,7 +3942,7 @@ func TestOpenJSON(t *testing.T) {
 	t.Run("opens JSON file and queries with json_extract", func(t *testing.T) {
 		t.Parallel()
 
-		db, err := Open(filepath.Join("testdata", "sample.json"))
+		db, err := Open(context.Background(), filepath.Join("testdata", "sample.json"))
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -3965,7 +3966,7 @@ func TestOpenJSON(t *testing.T) {
 	t.Run("opens JSON file and queries numeric field", func(t *testing.T) {
 		t.Parallel()
 
-		db, err := Open(filepath.Join("testdata", "sample.json"))
+		db, err := Open(context.Background(), filepath.Join("testdata", "sample.json"))
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -3980,7 +3981,7 @@ func TestOpenJSON(t *testing.T) {
 	t.Run("opens nested JSON file and queries nested fields", func(t *testing.T) {
 		t.Parallel()
 
-		db, err := Open(filepath.Join("testdata", "nested.json"))
+		db, err := Open(context.Background(), filepath.Join("testdata", "nested.json"))
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -3995,7 +3996,7 @@ func TestOpenJSON(t *testing.T) {
 	t.Run("opens JSON file and counts records", func(t *testing.T) {
 		t.Parallel()
 
-		db, err := Open(filepath.Join("testdata", "sample.json"))
+		db, err := Open(context.Background(), filepath.Join("testdata", "sample.json"))
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -4014,7 +4015,7 @@ func TestOpenJSONL(t *testing.T) {
 	t.Run("opens JSONL file and queries with json_extract", func(t *testing.T) {
 		t.Parallel()
 
-		db, err := Open(filepath.Join("testdata", "sample.jsonl"))
+		db, err := Open(context.Background(), filepath.Join("testdata", "sample.jsonl"))
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -4037,7 +4038,7 @@ func TestOpenJSONL(t *testing.T) {
 	t.Run("opens JSONL file and queries with WHERE clause", func(t *testing.T) {
 		t.Parallel()
 
-		db, err := Open(filepath.Join("testdata", "sample.jsonl"))
+		db, err := Open(context.Background(), filepath.Join("testdata", "sample.jsonl"))
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -4069,7 +4070,7 @@ func TestOpenCompressedJSON(t *testing.T) {
 		require.NoError(t, gw.Close())
 		require.NoError(t, f.Close())
 
-		db, err := Open(fp)
+		db, err := Open(context.Background(), fp)
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -4094,7 +4095,7 @@ func TestOpenCompressedJSON(t *testing.T) {
 		require.NoError(t, gw.Close())
 		require.NoError(t, f.Close())
 
-		db, err := Open(fp)
+		db, err := Open(context.Background(), fp)
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -4137,7 +4138,7 @@ func Test_NonLatinFileNameBecomesQueryableTable(t *testing.T) {
 		paths = append(paths, path)
 	}
 
-	db, err := OpenContext(ctx, paths...)
+	db, err := Open(ctx, paths...)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -4181,7 +4182,7 @@ func TestDumpEntryPointsRefuseANilDatabase(t *testing.T) {
 	}{
 		{
 			name: "DumpDatabase",
-			call: func() error { return DumpDatabase(nil, dir) },
+			call: func() error { return DumpDatabase(context.Background(), nil, dir) },
 		},
 		{
 			name: "DumpACH",
@@ -4244,7 +4245,7 @@ func TestLoadColumnNameContainingDoubleQuote(t *testing.T) {
 		path := filepath.Join(dir, "quoted.csv")
 		require.NoError(t, os.WriteFile(path, []byte("\"a\"\"b\"\nvalue\n"), 0o600))
 
-		db, err := OpenContext(ctx, path)
+		db, err := Open(ctx, path)
 		require.NoError(t, err)
 		defer func() { _ = db.Close() }()
 
@@ -4260,7 +4261,7 @@ func TestLoadColumnNameContainingDoubleQuote(t *testing.T) {
 		path := filepath.Join(dir, "onlyquote.csv")
 		require.NoError(t, os.WriteFile(path, []byte("\"\"\"\"\nvalue\n"), 0o600))
 
-		db, err := OpenContext(ctx, path)
+		db, err := Open(ctx, path)
 		require.NoError(t, err)
 		defer func() { _ = db.Close() }()
 
@@ -4279,7 +4280,7 @@ func TestLoadColumnNameContainingDoubleQuote(t *testing.T) {
 		require.NoError(t, f.SaveAs(path))
 		require.NoError(t, f.Close())
 
-		db, err := OpenContext(ctx, path)
+		db, err := Open(ctx, path)
 		require.NoError(t, err)
 		defer func() { _ = db.Close() }()
 
@@ -4295,13 +4296,13 @@ func TestLoadColumnNameContainingDoubleQuote(t *testing.T) {
 		src := filepath.Join(dir, "quoted.csv")
 		require.NoError(t, os.WriteFile(src, []byte("\"a\"\"b\"\n42\n"), 0o600))
 
-		db, err := OpenContext(ctx, src)
+		db, err := Open(ctx, src)
 		require.NoError(t, err)
 		out := filepath.Join(dir, "out")
-		require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithFormat(OutputFormatParquet)))
+		require.NoError(t, DumpDatabase(context.Background(), db, out, NewDumpOptions().WithFormat(OutputFormatParquet)))
 		require.NoError(t, db.Close())
 
-		db2, err := OpenContext(ctx, filepath.Join(out, "quoted.parquet"))
+		db2, err := Open(ctx, filepath.Join(out, "quoted.parquet"))
 		require.NoError(t, err)
 		defer func() { _ = db2.Close() }()
 
@@ -4361,7 +4362,7 @@ func TestTableNameHoldingAQuotingCharacter(t *testing.T) {
 			// The dump reads the table through statements of its own, which is
 			// where the backtick failed after the load had succeeded.
 			out := filepath.Join(t.TempDir(), "out")
-			err = DumpDatabase(db, out)
+			err = DumpDatabase(context.Background(), db, out)
 			fileName := tt.table + ".csv"
 			if usableAsFileName(fileName) && sanitizeTableName(tableFromFilePath(fileName)) == tt.table {
 				require.NoError(t, err, "a name a load would give back must be dumped")
@@ -4409,7 +4410,7 @@ func TestAFileThatBeginsWithABlankLineReadsAlike(t *testing.T) {
 			if err := os.WriteFile(path, []byte(tt.body), 0o600); err != nil {
 				t.Fatalf("write: %v", err)
 			}
-			db, err := OpenContext(t.Context(), path)
+			db, err := Open(t.Context(), path)
 			if err != nil {
 				t.Fatalf("open: %v", err)
 			}
@@ -4458,7 +4459,7 @@ func TestAHeaderOfEmptyCellsIsStillAHeader(t *testing.T) {
 		if err := os.WriteFile(path, []byte(tt.body), 0o600); err != nil {
 			t.Fatalf("write: %v", err)
 		}
-		db, err := OpenContext(t.Context(), path)
+		db, err := Open(t.Context(), path)
 		if err != nil {
 			t.Fatalf("open %q: %v", tt.body, err)
 		}
@@ -4485,11 +4486,11 @@ func TestAHeaderOfEmptyCellsIsStillAHeader(t *testing.T) {
 	}
 }
 
-// TestOpenContext_EndedContext is OpenContext's share of the contract the
+// TestOpen_EndedContext is Open's share of the contract the
 // godoc states for every entry point that takes a context: the load stops and
 // the error says which way the context ended. Open is the same call with a
 // background context, so it has nothing to stop for.
-func TestOpenContext_EndedContext(t *testing.T) {
+func TestOpen_EndedContext(t *testing.T) {
 	t.Parallel()
 
 	path := csvFixture(t)
@@ -4498,7 +4499,7 @@ func TestOpenContext_EndedContext(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			db, err := OpenContext(tc.make(t), path)
+			db, err := Open(tc.make(t), path)
 			if db != nil {
 				_ = db.Close()
 			}
@@ -4525,7 +4526,7 @@ func TestAFileThatBeginsWithALineOfWhitespace(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "t.csv")
 		require.NoError(t, os.WriteFile(path, []byte("   \nid\n1\n2\n"), 0o600))
 
-		db, err := OpenContext(t.Context(), path)
+		db, err := Open(t.Context(), path)
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -4541,7 +4542,7 @@ func TestAFileThatBeginsWithALineOfWhitespace(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "t.tsv")
 		require.NoError(t, os.WriteFile(path, []byte("   \nid\tname\n1\talice\n\n2\tbob\n"), 0o600))
 
-		db, err := OpenContext(t.Context(), path)
+		db, err := Open(t.Context(), path)
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -4573,7 +4574,7 @@ func TestAFileThatBeginsWithALineOfWhitespace(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "t.csv")
 		require.NoError(t, os.WriteFile(path, []byte(" , \n1,2\n"), 0o600))
 
-		_, err := OpenContext(t.Context(), path)
+		_, err := Open(t.Context(), path)
 		require.Error(t, err, "a comma makes the line a header of two columns, which name one column twice")
 		assert.ErrorIs(t, err, ErrDuplicateColumn)
 	})
@@ -4584,7 +4585,7 @@ func TestAFileThatBeginsWithALineOfWhitespace(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "t.csv")
 		require.NoError(t, os.WriteFile(path, []byte("id,name\n1,alice\n   \n2,bob\n"), 0o600))
 
-		_, err := OpenContext(t.Context(), path)
+		_, err := Open(t.Context(), path)
 		require.Error(t, err, "only the header search passes over a line of whitespace")
 		assert.ErrorIs(t, err, ErrColumnMismatch)
 	})

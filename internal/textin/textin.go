@@ -2,7 +2,7 @@
 // leading byte-order mark decides the encoding, and what follows has to be
 // UTF-8.
 //
-// It is a package of its own because two doors lead here. filesql.OpenContext
+// It is a package of its own because two doors lead here. filesql.Open
 // wraps every text source in it, and parser.Parse does the same for the files
 // it is given, so a file that is not UTF-8 is refused by both with one sentence
 // about its encoding rather than by one of them with a sentence about a field
