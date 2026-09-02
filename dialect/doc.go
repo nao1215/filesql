@@ -281,6 +281,17 @@
 // reproduce is a decimal literal written in the query, which MySQL reads as an
 // exact decimal and rounds away from zero.
 //
+// A value with a decimal point is a binary floating-point value here, where
+// MySQL and PostgreSQL hold an exact decimal, so arithmetic over such values
+// can differ from the engine's in the last bits: 0.1 + 0.2 is
+// 0.30000000000000004 rather than 0.3. SQLite has no decimal type and a number
+// loaded from a file is a REAL, so this is the arithmetic there is. A scale
+// written on a type is applied by rounding rather than carried, so a cast to
+// two decimal places answers 1.5 rather than 1.50, and rounding a value whose
+// nearest float falls on the other side of a tie goes with the float: 1.005 to
+// two places is 1 here and 1.01 in PostgreSQL. A caller who needs exact decimal
+// arithmetic should hold the value as an integer count of the smallest unit.
+//
 // Casts go through the same mechanism for a different reason. SQLite's own CAST
 // applies type affinity, which is close enough to look right and different
 // enough to be wrong: it truncates where the dialects round, and it coerces a
