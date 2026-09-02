@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	"github.com/nao1215/filesql/internal/codec"
-	"github.com/nao1215/filesql/parser"
+	"github.com/nao1215/filesql/internal/parser"
 )
 
 // FileType names an input format. It says nothing about compression: a

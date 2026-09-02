@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/nao1215/filesql/internal/codec"
-	"github.com/nao1215/filesql/parser"
 	"github.com/parquet-go/parquet-go"
 	"github.com/stretchr/testify/assert"
 )
@@ -66,7 +65,7 @@ func TestIntegration_AllPrepTags(t *testing.T) {
 	reader := strings.NewReader(csvData)
 	var records []TestRecord
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	pipeReader, result, err := processor.Process(reader, &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -192,7 +191,7 @@ func TestIntegration_CombinedPrepTags(t *testing.T) {
 	reader := strings.NewReader(csvData)
 	var records []TestRecord
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	pipeReader, result, err := processor.Process(reader, &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -231,7 +230,7 @@ invalid_email`
 	reader := strings.NewReader(csvData)
 	var records []TestRecord
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	pipeReader, result, err := processor.Process(reader, &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -277,16 +276,16 @@ func TestIntegration_CompressedCSV(t *testing.T) {
 	tests := []struct {
 		name     string
 		filePath string
-		fileType parser.FileType
+		fileType FileType
 	}{
-		{"gzip CSV", filepath.Join("testdata", "sample.csv.gz"), parser.CSV},
-		{"bzip2 CSV", filepath.Join("testdata", "sample.csv.bz2"), parser.CSV},
-		{"xz CSV", filepath.Join("testdata", "sample.csv.xz"), parser.CSV},
-		{"zstd CSV", filepath.Join("testdata", "sample.csv.zst"), parser.CSV},
-		{"zlib CSV", filepath.Join("testdata", "sample.csv.z"), parser.CSV},
-		{"snappy CSV", filepath.Join("testdata", "sample.csv.snappy"), parser.CSV},
-		{"s2 CSV", filepath.Join("testdata", "sample.csv.s2"), parser.CSV},
-		{"lz4 CSV", filepath.Join("testdata", "sample.csv.lz4"), parser.CSV},
+		{"gzip CSV", filepath.Join("testdata", "sample.csv.gz"), FileTypeCSV},
+		{"bzip2 CSV", filepath.Join("testdata", "sample.csv.bz2"), FileTypeCSV},
+		{"xz CSV", filepath.Join("testdata", "sample.csv.xz"), FileTypeCSV},
+		{"zstd CSV", filepath.Join("testdata", "sample.csv.zst"), FileTypeCSV},
+		{"zlib CSV", filepath.Join("testdata", "sample.csv.z"), FileTypeCSV},
+		{"snappy CSV", filepath.Join("testdata", "sample.csv.snappy"), FileTypeCSV},
+		{"s2 CSV", filepath.Join("testdata", "sample.csv.s2"), FileTypeCSV},
+		{"lz4 CSV", filepath.Join("testdata", "sample.csv.lz4"), FileTypeCSV},
 	}
 
 	for _, tt := range tests {
@@ -348,12 +347,12 @@ func TestIntegration_CompressedTSV(t *testing.T) {
 	tests := []struct {
 		name     string
 		filePath string
-		fileType parser.FileType
+		fileType FileType
 	}{
-		{"zlib TSV", filepath.Join("testdata", "sample.tsv.z"), parser.TSV},
-		{"snappy TSV", filepath.Join("testdata", "sample.tsv.snappy"), parser.TSV},
-		{"s2 TSV", filepath.Join("testdata", "sample.tsv.s2"), parser.TSV},
-		{"lz4 TSV", filepath.Join("testdata", "sample.tsv.lz4"), parser.TSV},
+		{"zlib TSV", filepath.Join("testdata", "sample.tsv.z"), FileTypeTSV},
+		{"snappy TSV", filepath.Join("testdata", "sample.tsv.snappy"), FileTypeTSV},
+		{"s2 TSV", filepath.Join("testdata", "sample.tsv.s2"), FileTypeTSV},
+		{"lz4 TSV", filepath.Join("testdata", "sample.tsv.lz4"), FileTypeTSV},
 	}
 
 	for _, tt := range tests {
@@ -415,12 +414,12 @@ func TestIntegration_CompressedLTSV(t *testing.T) {
 	tests := []struct {
 		name     string
 		filePath string
-		fileType parser.FileType
+		fileType FileType
 	}{
-		{"zlib LTSV", filepath.Join("testdata", "sample.ltsv.z"), parser.LTSV},
-		{"snappy LTSV", filepath.Join("testdata", "sample.ltsv.snappy"), parser.LTSV},
-		{"s2 LTSV", filepath.Join("testdata", "sample.ltsv.s2"), parser.LTSV},
-		{"lz4 LTSV", filepath.Join("testdata", "sample.ltsv.lz4"), parser.LTSV},
+		{"zlib LTSV", filepath.Join("testdata", "sample.ltsv.z"), FileTypeLTSV},
+		{"snappy LTSV", filepath.Join("testdata", "sample.ltsv.snappy"), FileTypeLTSV},
+		{"s2 LTSV", filepath.Join("testdata", "sample.ltsv.s2"), FileTypeLTSV},
+		{"lz4 LTSV", filepath.Join("testdata", "sample.ltsv.lz4"), FileTypeLTSV},
 	}
 
 	for _, tt := range tests {
@@ -487,7 +486,7 @@ func TestIntegration_TSVProcessing(t *testing.T) {
 
 	var records []TestRecord
 
-	processor := NewProcessor(parser.TSV)
+	processor := NewProcessor(FileTypeTSV)
 	pipeReader, result, err := processor.Process(file, &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -497,8 +496,8 @@ func TestIntegration_TSVProcessing(t *testing.T) {
 		_, _ = io.Copy(io.Discard, pipeReader) //nolint:errcheck // discarding output in test
 	}()
 
-	if result.OriginalFormat != parser.TSV {
-		t.Errorf("OriginalFormat = %v, want %v", result.OriginalFormat, parser.TSV)
+	if result.OriginalFormat != FileTypeTSV {
+		t.Errorf("OriginalFormat = %v, want %v", result.OriginalFormat, FileTypeTSV)
 	}
 
 	if len(records) == 0 {
@@ -524,7 +523,7 @@ func TestIntegration_LTSVProcessing(t *testing.T) {
 
 	var records []TestRecord
 
-	processor := NewProcessor(parser.LTSV)
+	processor := NewProcessor(FileTypeLTSV)
 	pipeReader, result, err := processor.Process(file, &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -534,8 +533,8 @@ func TestIntegration_LTSVProcessing(t *testing.T) {
 		_, _ = io.Copy(io.Discard, pipeReader) //nolint:errcheck // discarding output in test
 	}()
 
-	if result.OriginalFormat != parser.LTSV {
-		t.Errorf("OriginalFormat = %v, want %v", result.OriginalFormat, parser.LTSV)
+	if result.OriginalFormat != FileTypeLTSV {
+		t.Errorf("OriginalFormat = %v, want %v", result.OriginalFormat, FileTypeLTSV)
 	}
 
 	if len(records) == 0 {
@@ -560,7 +559,7 @@ John,john@example.com,25`
 	reader := strings.NewReader(csvData)
 	var records []TestRecord
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	pipeReader, result, err := processor.Process(reader, &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -612,7 +611,7 @@ password,different`
 	reader := strings.NewReader(csvData)
 	var records []TestRecord
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	pipeReader, result, err := processor.Process(reader, &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -655,7 +654,7 @@ BOB@EXAMPLE.COM,25,  Bob  `
 	reader := strings.NewReader(csvData)
 	var records []TestRecord
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	_, result, err := processor.Process(reader, &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -709,7 +708,7 @@ func TestIntegration_NameTagOverride(t *testing.T) {
 	reader := strings.NewReader(csvData)
 	var records []TestRecord
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	_, result, err := processor.Process(reader, &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -754,7 +753,7 @@ Jane,Smith,25`
 	reader := strings.NewReader(csvData)
 	var records []TestRecord
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	_, result, err := processor.Process(reader, &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -799,7 +798,7 @@ john,JOHN@EXAMPLE.COM`
 	reader := strings.NewReader(csvData)
 	var records []TestRecord
 
-	processor := NewProcessor(parser.CSV)
+	processor := NewProcessor(FileTypeCSV)
 	pipeReader, _, err := processor.Process(reader, &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -868,14 +867,14 @@ func TestIntegration_JSONProcessing(t *testing.T) {
 
 	var records []JSONRecord
 
-	processor := NewProcessor(parser.JSON)
+	processor := NewProcessor(FileTypeJSON)
 	pipeReader, result, err := processor.Process(file, &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
 
-	if result.OriginalFormat != parser.JSON {
-		t.Errorf("OriginalFormat = %v, want %v", result.OriginalFormat, parser.JSON)
+	if result.OriginalFormat != FileTypeJSON {
+		t.Errorf("OriginalFormat = %v, want %v", result.OriginalFormat, FileTypeJSON)
 	}
 
 	if result.RowCount != 4 {
@@ -906,14 +905,14 @@ func TestIntegration_JSONLProcessing(t *testing.T) {
 
 	var records []JSONRecord
 
-	processor := NewProcessor(parser.JSONL)
+	processor := NewProcessor(FileTypeJSONL)
 	pipeReader, result, err := processor.Process(file, &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
 
-	if result.OriginalFormat != parser.JSONL {
-		t.Errorf("OriginalFormat = %v, want %v", result.OriginalFormat, parser.JSONL)
+	if result.OriginalFormat != FileTypeJSONL {
+		t.Errorf("OriginalFormat = %v, want %v", result.OriginalFormat, FileTypeJSONL)
 	}
 
 	if result.RowCount != 4 {
@@ -939,16 +938,16 @@ func TestIntegration_CompressedJSON(t *testing.T) {
 	tests := []struct {
 		name     string
 		filePath string
-		fileType parser.FileType
+		fileType FileType
 	}{
-		{"gzip JSON", filepath.Join("testdata", "sample.json.gz"), parser.JSON},
-		{"bzip2 JSON", filepath.Join("testdata", "sample.json.bz2"), parser.JSON},
-		{"xz JSON", filepath.Join("testdata", "sample.json.xz"), parser.JSON},
-		{"zstd JSON", filepath.Join("testdata", "sample.json.zst"), parser.JSON},
-		{"zlib JSON", filepath.Join("testdata", "sample.json.z"), parser.JSON},
-		{"snappy JSON", filepath.Join("testdata", "sample.json.snappy"), parser.JSON},
-		{"s2 JSON", filepath.Join("testdata", "sample.json.s2"), parser.JSON},
-		{"lz4 JSON", filepath.Join("testdata", "sample.json.lz4"), parser.JSON},
+		{"gzip JSON", filepath.Join("testdata", "sample.json.gz"), FileTypeJSON},
+		{"bzip2 JSON", filepath.Join("testdata", "sample.json.bz2"), FileTypeJSON},
+		{"xz JSON", filepath.Join("testdata", "sample.json.xz"), FileTypeJSON},
+		{"zstd JSON", filepath.Join("testdata", "sample.json.zst"), FileTypeJSON},
+		{"zlib JSON", filepath.Join("testdata", "sample.json.z"), FileTypeJSON},
+		{"snappy JSON", filepath.Join("testdata", "sample.json.snappy"), FileTypeJSON},
+		{"s2 JSON", filepath.Join("testdata", "sample.json.s2"), FileTypeJSON},
+		{"lz4 JSON", filepath.Join("testdata", "sample.json.lz4"), FileTypeJSON},
 	}
 
 	for _, tt := range tests {
@@ -1005,16 +1004,16 @@ func TestIntegration_CompressedJSONL(t *testing.T) {
 	tests := []struct {
 		name     string
 		filePath string
-		fileType parser.FileType
+		fileType FileType
 	}{
-		{"gzip JSONL", filepath.Join("testdata", "sample.jsonl.gz"), parser.JSONL},
-		{"bzip2 JSONL", filepath.Join("testdata", "sample.jsonl.bz2"), parser.JSONL},
-		{"xz JSONL", filepath.Join("testdata", "sample.jsonl.xz"), parser.JSONL},
-		{"zstd JSONL", filepath.Join("testdata", "sample.jsonl.zst"), parser.JSONL},
-		{"zlib JSONL", filepath.Join("testdata", "sample.jsonl.z"), parser.JSONL},
-		{"snappy JSONL", filepath.Join("testdata", "sample.jsonl.snappy"), parser.JSONL},
-		{"s2 JSONL", filepath.Join("testdata", "sample.jsonl.s2"), parser.JSONL},
-		{"lz4 JSONL", filepath.Join("testdata", "sample.jsonl.lz4"), parser.JSONL},
+		{"gzip JSONL", filepath.Join("testdata", "sample.jsonl.gz"), FileTypeJSONL},
+		{"bzip2 JSONL", filepath.Join("testdata", "sample.jsonl.bz2"), FileTypeJSONL},
+		{"xz JSONL", filepath.Join("testdata", "sample.jsonl.xz"), FileTypeJSONL},
+		{"zstd JSONL", filepath.Join("testdata", "sample.jsonl.zst"), FileTypeJSONL},
+		{"zlib JSONL", filepath.Join("testdata", "sample.jsonl.z"), FileTypeJSONL},
+		{"snappy JSONL", filepath.Join("testdata", "sample.jsonl.snappy"), FileTypeJSONL},
+		{"s2 JSONL", filepath.Join("testdata", "sample.jsonl.s2"), FileTypeJSONL},
+		{"lz4 JSONL", filepath.Join("testdata", "sample.jsonl.lz4"), FileTypeJSONL},
 	}
 
 	for _, tt := range tests {
@@ -1078,7 +1077,7 @@ func TestIntegration_XLSXProcessing(t *testing.T) {
 
 	var records []TestRecord
 
-	processor := NewProcessor(parser.XLSX)
+	processor := NewProcessor(FileTypeXLSX)
 	pipeReader, result, err := processor.Process(file, &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -1089,8 +1088,8 @@ func TestIntegration_XLSXProcessing(t *testing.T) {
 		_, _ = io.Copy(io.Discard, pipeReader) //nolint:errcheck // discarding output in test
 	}()
 
-	if result.OriginalFormat != parser.XLSX {
-		t.Errorf("OriginalFormat = %v, want %v", result.OriginalFormat, parser.XLSX)
+	if result.OriginalFormat != FileTypeXLSX {
+		t.Errorf("OriginalFormat = %v, want %v", result.OriginalFormat, FileTypeXLSX)
 	}
 
 	// Verify exact record contents after preprocessing
@@ -1135,7 +1134,7 @@ func TestIntegration_XLSXWithValidationErrors(t *testing.T) {
 
 	var records []StrictRecord
 
-	processor := NewProcessor(parser.XLSX)
+	processor := NewProcessor(FileTypeXLSX)
 	pipeReader, result, err := processor.Process(file, &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -1211,7 +1210,7 @@ func TestIntegration_Parquet_FullPipeline(t *testing.T) {
 	}
 
 	var records []ResultRecord
-	processor := NewProcessor(parser.Parquet)
+	processor := NewProcessor(FileTypeParquet)
 	pipeReader, result, err := processor.Process(bytes.NewReader(buf.Bytes()), &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -1249,8 +1248,8 @@ func TestIntegration_Parquet_FullPipeline(t *testing.T) {
 	}
 
 	// Verify original format
-	if result.OriginalFormat != parser.Parquet {
-		t.Errorf("OriginalFormat = %v, want %v", result.OriginalFormat, parser.Parquet)
+	if result.OriginalFormat != FileTypeParquet {
+		t.Errorf("OriginalFormat = %v, want %v", result.OriginalFormat, FileTypeParquet)
 	}
 
 	// Verify columns
@@ -1287,7 +1286,7 @@ func TestIntegration_Parquet_OutputAsCSV(t *testing.T) {
 	}
 
 	var records []ResultRecord
-	processor := NewProcessor(parser.Parquet)
+	processor := NewProcessor(FileTypeParquet)
 	pipeReader, _, err := processor.Process(bytes.NewReader(buf.Bytes()), &records)
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)

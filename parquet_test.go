@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nao1215/filesql/internal/parser"
 	"github.com/nao1215/filesql/internal/reader"
-	"github.com/nao1215/filesql/parser"
 	"github.com/parquet-go/parquet-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -2082,18 +2082,18 @@ func TestParseFedWireFile(t *testing.T) {
 	})
 }
 
-// TestDumpWithTableSet_NilTableSet covers the argument neither dump can work
+// TestDumpWithSource_NilSource covers the argument neither dump can work
 // without: the file is rebuilt from the structure, so there is nothing to write
 // without one.
-func TestDumpWithTableSet_NilTableSet(t *testing.T) {
+func TestDumpWithSource_NilSource(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 	db := openTestDB(t)
 	out := filepath.Join(t.TempDir(), "payment")
 
-	assert.ErrorIs(t, DumpACHWithTableSet(ctx, db, "payment", out+extACH, nil), ErrNilInput)
-	assert.ErrorIs(t, DumpFedWireWithTableSet(ctx, db, "payment", out+extFED, nil), ErrNilInput)
+	assert.ErrorIs(t, DumpACHWithSource(ctx, db, "payment", out+extACH, nil), ErrNilInput)
+	assert.ErrorIs(t, DumpFedWireWithSource(ctx, db, "payment", out+extFED, nil), ErrNilInput)
 }
 
 // TestInsertRecordsIntoTable_Failures covers the insert step used by the

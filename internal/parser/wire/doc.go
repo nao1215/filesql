@@ -35,7 +35,7 @@
 // # Usage
 //
 //	import (
-//	    "github.com/nao1215/filesql/parser/wire"
+//	    "github.com/nao1215/filesql/internal/parser/wire"
 //	    moovwire "github.com/moov-io/wire"
 //	)
 //

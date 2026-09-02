@@ -378,7 +378,7 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Work with compression helpers directly | `ExampleNewCompressionHandler`, `ExampleNewCompressionFactory` | [example_api_test.go](./example_api_test.go) |
 | Strip compression suffixes | `ExampleCompressionFactory_RemoveCompressionExtension` | [example_api_test.go](./example_api_test.go) |
 | Write an ACH or Fedwire file back after editing it | `ExampleDumpACH`, `ExampleDumpFedWire` | [example_api_test.go](./example_api_test.go) |
-| Write one back when the database came from an `io.Reader` | `ExampleDumpACHWithTableSet`, `ExampleDumpFedWireWithTableSet` | [example_api_test.go](./example_api_test.go) |
+| Write one back when the database came from an `io.Reader` | `ExampleDumpACHWithSource`, `ExampleDumpFedWireWithSource` | [example_api_test.go](./example_api_test.go) |
 | Inspect enum names | `ExampleMalformedRowPolicy_String`, `ExampleFileType_String`, `ExampleCompressionType_String`, `ExampleEncoding_String`, `ExampleLineEnding_String`, `ExampleOutputFormat_String` | [example_api_test.go](./example_api_test.go) |
 
 #### prep
@@ -408,16 +408,6 @@ The GoDoc examples are fully tested with `go test`. The tables below show the fa
 | Check output and original formats | `ExampleProcessResult_OutputFormat` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Load a processed reader into filesql | `ExampleProcessor_Process_intoFilesql` | [prep/example_api_test.go](./prep/example_api_test.go) |
 | Rewind and reread the processed stream | `Example_streamSeek` | [prep/example_api_test.go](./prep/example_api_test.go) |
-
-#### parser
-
-| Feature | Example function | Source |
-|---------|------------------|--------|
-| Parse a delimited file into headers, records, and column types | `ExampleParse_csv`, `ExampleParse_tsv`, `ExampleParse_ltsv` | [parser/example_test.go](./parser/example_test.go) |
-| Detect the format a path names | `ExampleDetectFileType` | [parser/example_test.go](./parser/example_test.go) |
-| Read the type each column was given | `ExampleTableData_columnTypes` | [parser/example_test.go](./parser/example_test.go) |
-| Turn an ACH file into its tables | `ExampleParseReader` | [parser/ach/example_test.go](./parser/ach/example_test.go) |
-| Turn a Fedwire file into its table | `ExampleParseReader` | [parser/wire/example_test.go](./parser/wire/example_test.go) |
 
 #### dialect
 

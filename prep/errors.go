@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/nao1215/filesql/parser"
+	"github.com/nao1215/filesql/internal/parser"
 )
 
 // Sentinel errors for fileprep
@@ -129,11 +129,11 @@ type ProcessResult struct {
 	// Columns contains the column names from the header
 	Columns []string
 	// OriginalFormat is the file type that was processed
-	OriginalFormat parser.FileType
+	OriginalFormat FileType
 	// OutputFormat is the format of the bytes the returned reader serves.
 	// CSV, TSV and LTSV keep their format; JSON becomes JSONL; XLSX and
 	// Parquet become CSV.
-	OutputFormat parser.FileType
+	OutputFormat FileType
 
 	// validRecords holds rows that passed validation when validRowsOnly is
 	// enabled. This is an internal field used between processRecords and

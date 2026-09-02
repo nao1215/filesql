@@ -523,7 +523,7 @@ func BenchmarkCSVOutput(b *testing.B) {
 		records[i] = []string{"val1", "val2", "val3", "val4", "val5", "val6", "val7", "val8", "val9", "val10"}
 	}
 
-	processor := &Processor{fileType: FileTypeCSV}
+	processor := &Processor{fileType: FileTypeCSV.internal()}
 
 	b.ResetTimer()
 	b.ReportAllocs()

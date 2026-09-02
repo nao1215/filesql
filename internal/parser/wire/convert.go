@@ -7,7 +7,7 @@ import (
 	"io"
 
 	"github.com/moov-io/wire"
-	"github.com/nao1215/filesql/parser"
+	"github.com/nao1215/filesql/internal/parser"
 )
 
 // TableSet contains a flat TableData representing all fields of a Fedwire message.

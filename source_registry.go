@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	achconv "github.com/nao1215/filesql/parser/ach"
-	wireconv "github.com/nao1215/filesql/parser/wire"
+	achconv "github.com/nao1215/filesql/internal/parser/ach"
+	wireconv "github.com/nao1215/filesql/internal/parser/wire"
 )
 
 // sourceTableName is the reserved table recording where a write-back format was
@@ -132,7 +132,7 @@ func fileSourceBaseNames(ctx context.Context, db *sql.DB, format sourceFormat) [
 func achTableSetForDump(ctx context.Context, db *sql.DB, baseTableName string) (*achconv.TableSet, error) {
 	path, ok := fileSourcePath(ctx, db, baseTableName, sourceFormatACH)
 	if !ok {
-		return nil, fmt.Errorf("%w: no ACH source recorded for base table name %q; load the file with Open() or Builder from a path, or pass the structure to DumpACHWithTableSet", ErrSourceUnavailable, baseTableName)
+		return nil, fmt.Errorf("%w: no ACH source recorded for base table name %q; load the file with Open() or Builder from a path, or hand its bytes to DumpACHWithSource", ErrSourceUnavailable, baseTableName)
 	}
 
 	file, err := openRegularFile(path)
@@ -153,7 +153,7 @@ func achTableSetForDump(ctx context.Context, db *sql.DB, baseTableName string) (
 func wireTableSetForDump(ctx context.Context, db *sql.DB, baseTableName string) (*wireconv.TableSet, error) {
 	path, ok := fileSourcePath(ctx, db, baseTableName, sourceFormatFedWire)
 	if !ok {
-		return nil, fmt.Errorf("%w: no Fedwire source recorded for base table name %q; load the file with Open() or Builder from a path, or pass the structure to DumpFedWireWithTableSet", ErrSourceUnavailable, baseTableName)
+		return nil, fmt.Errorf("%w: no Fedwire source recorded for base table name %q; load the file with Open() or Builder from a path, or hand its bytes to DumpFedWireWithSource", ErrSourceUnavailable, baseTableName)
 	}
 
 	file, err := openRegularFile(path)

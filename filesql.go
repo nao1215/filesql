@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nao1215/filesql/internal/parser"
 	"github.com/nao1215/filesql/internal/reader"
 	"github.com/nao1215/filesql/internal/writer"
-	"github.com/nao1215/filesql/parser"
 )
 
 // Open creates an SQL database from the files at the given paths.

@@ -710,7 +710,7 @@ func sheetsByTable(base *reader.Workbook, baseTableName string, policy ExcelShee
 	// question SelectExcelSheets exists to have one answer to. Reading the whole
 	// sheet list here instead made a sheet the policy skipped look like a table
 	// the session had removed.
-	names, skipped, err := reader.SelectExcelSheets(base.File(), policy)
+	names, skipped, err := reader.SelectExcelSheets(base.File(), policy.internal())
 	if err != nil {
 		return nil, nil, err
 	}

@@ -256,7 +256,7 @@ func TestReaderLoadedACHCannotBeDumped(t *testing.T) {
 	err = DumpACH(ctx, db, "payment", filepath.Join(t.TempDir(), "out.ach"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "payment")
-	assert.Contains(t, err.Error(), "DumpACHWithTableSet")
+	assert.Contains(t, err.Error(), "DumpACHWithSource")
 }
 
 // openTestDB opens an empty on-disk database for a test and closes it afterwards.

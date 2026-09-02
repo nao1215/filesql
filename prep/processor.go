@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nao1215/filesql/internal/parser"
 	"github.com/nao1215/filesql/internal/reader"
 	"github.com/nao1215/filesql/internal/writer"
-	"github.com/nao1215/filesql/parser"
 )
 
 // Processor handles preprocessing and validation of file data
@@ -70,9 +70,9 @@ func WithValidRowsOnly() Option {
 //	    prep.WithStrictTagParsing(),
 //	    prep.WithValidRowsOnly(),
 //	)
-func NewProcessor(fileType parser.FileType, opts ...Option) *Processor {
+func NewProcessor(fileType FileType, opts ...Option) *Processor {
 	p := &Processor{
-		fileType: fileType,
+		fileType: fileType.internal(),
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -306,8 +306,8 @@ func (p *Processor) processRecords(input io.Reader, structSlicePointer any) (
 	estimatedErrors := max(len(records)/10, 16)
 	result := &ProcessResult{
 		Columns:        headers,
-		OriginalFormat: p.fileType,
-		OutputFormat:   p.outputFormat(),
+		OriginalFormat: fileTypeOf(p.fileType),
+		OutputFormat:   fileTypeOf(p.outputFormat()),
 		Errors:         make([]error, 0, estimatedErrors),
 	}
 	structSliceValue := reflect.ValueOf(structSlicePointer).Elem()

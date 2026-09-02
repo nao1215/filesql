@@ -16,8 +16,6 @@ import (
 
 	"github.com/nao1215/filesql"
 	"github.com/nao1215/filesql/dialect"
-	achconv "github.com/nao1215/filesql/parser/ach"
-	wireconv "github.com/nao1215/filesql/parser/wire"
 	"github.com/xuri/excelize/v2"
 	_ "modernc.org/sqlite"
 )
@@ -732,11 +730,10 @@ func ExampleDumpFedWire() {
 	// 000000012500
 }
 
-// ExampleDumpACHWithTableSet writes back a database loaded from an io.Reader.
+// ExampleDumpACHWithSource writes back a database loaded from an io.Reader.
 // Such a database has no file to rebuild from, so DumpACH refuses it with
-// ErrSourceUnavailable; parse the same bytes with parser/ach and hand over the
-// structure instead.
-func ExampleDumpACHWithTableSet() {
+// ErrSourceUnavailable; hand the same bytes over instead.
+func ExampleDumpACHWithSource() {
 	dir := exampleTempDir()
 	defer os.RemoveAll(dir)
 
@@ -759,15 +756,11 @@ func ExampleDumpACHWithTableSet() {
 	err = filesql.DumpACH(ctx, db, "payment", out)
 	fmt.Println("without the structure:", errors.Is(err, filesql.ErrSourceUnavailable))
 
-	tableSet, err := achconv.ParseReader(bytes.NewReader(body))
-	if err != nil {
-		log.Fatal(err)
-	}
 	if _, err := db.ExecContext(ctx,
 		`UPDATE payment_entries SET individual_name = 'Alice Smith'`); err != nil {
 		log.Fatal(err)
 	}
-	if err := filesql.DumpACHWithTableSet(ctx, db, "payment", out, tableSet); err != nil {
+	if err := filesql.DumpACHWithSource(ctx, db, "payment", out, bytes.NewReader(body)); err != nil {
 		log.Fatal(err)
 	}
 
@@ -788,10 +781,10 @@ func ExampleDumpACHWithTableSet() {
 	// Alice Smith
 }
 
-// ExampleDumpFedWireWithTableSet is ExampleDumpACHWithTableSet for Fedwire: a
-// database loaded from an io.Reader is written back through the structure
-// parser/wire returns for the same bytes.
-func ExampleDumpFedWireWithTableSet() {
+// ExampleDumpFedWireWithSource is ExampleDumpACHWithSource for Fedwire: a
+// database loaded from an io.Reader is written back by handing the export the
+// same bytes.
+func ExampleDumpFedWireWithSource() {
 	dir := exampleTempDir()
 	defer os.RemoveAll(dir)
 
@@ -810,17 +803,13 @@ func ExampleDumpFedWireWithTableSet() {
 	}
 	defer db.Close()
 
-	tableSet, err := wireconv.ParseReader(bytes.NewReader(body))
-	if err != nil {
-		log.Fatal(err)
-	}
 	if _, err := db.ExecContext(ctx,
 		`UPDATE transfer_message SET amount = '000000012500'`); err != nil {
 		log.Fatal(err)
 	}
 
 	out := filepath.Join(dir, "transfer.fed")
-	if err := filesql.DumpFedWireWithTableSet(ctx, db, "transfer", out, tableSet); err != nil {
+	if err := filesql.DumpFedWireWithSource(ctx, db, "transfer", out, bytes.NewReader(body)); err != nil {
 		log.Fatal(err)
 	}
 

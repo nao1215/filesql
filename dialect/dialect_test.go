@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nao1215/filesql/dialect/internal/dialects"
 	_ "modernc.org/sqlite"
 )
 
@@ -1863,4 +1864,33 @@ func TestAWriteCarryingOrderByOrLimitIsRefused(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestDialectMirrorsTheInternalIdentifier holds the two declarations of a
+// dialect's name together. The packages under this one cannot import it, so
+// they carry the identifier themselves; a value that disagreed here would name
+// one dialect to a caller and another to the parser.
+func TestDialectMirrorsTheInternalIdentifier(t *testing.T) {
+	t.Parallel()
+
+	pairs := []struct {
+		public   Dialect
+		internal dialects.Dialect
+	}{
+		{SQLite, dialects.SQLite},
+		{MySQL, dialects.MySQL},
+		{PostgreSQL, dialects.PostgreSQL},
+		{GoogleSQL, dialects.GoogleSQL},
+	}
+	for _, pair := range pairs {
+		if string(pair.public) != string(pair.internal) {
+			t.Errorf("public %q and internal %q name the same dialect differently", pair.public, pair.internal)
+		}
+		if pair.public.DisplayName() != pair.internal.DisplayName() {
+			t.Errorf("%q: DisplayName %q != %q", pair.public, pair.public.DisplayName(), pair.internal.DisplayName())
+		}
+	}
+	if got := len(Dialects()); got != len(dialects.All()) {
+		t.Errorf("Dialects() has %d entries, the internal list has %d", got, len(dialects.All()))
+	}
 }

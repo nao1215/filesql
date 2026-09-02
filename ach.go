@@ -72,8 +72,7 @@ package filesql
 // refused.
 //
 // A database loaded from an io.Reader has no source file, so DumpACH cannot
-// export it. Parse the reader with parser/ach and pass the result to
-// DumpACHWithTableSet instead.
+// export it. Hand the file's original bytes to DumpACHWithSource instead.
 //
 // # Auto-Save Support
 //
@@ -122,9 +121,9 @@ import (
 	"io"
 	"strings"
 
+	"github.com/nao1215/filesql/internal/parser"
+	achconv "github.com/nao1215/filesql/internal/parser/ach"
 	filereader "github.com/nao1215/filesql/internal/reader"
-	"github.com/nao1215/filesql/parser"
-	achconv "github.com/nao1215/filesql/parser/ach"
 )
 
 // ACH file extension
@@ -340,7 +339,7 @@ func insertRecordsIntoTable(ctx context.Context, db dbtx, tableName string, head
 //
 // The original structure is rebuilt from the file db records as its source, so
 // that file must still exist and be readable. A database loaded from an
-// io.Reader has no such file; pass the structure to DumpACHWithTableSet.
+// io.Reader has no such file; hand its bytes to DumpACHWithSource.
 //
 // The file is written from that structure rather than patched, so a record the
 // caller did not edit can come back formatted differently: field padding is
@@ -362,26 +361,38 @@ func DumpACH(ctx context.Context, db *sql.DB, baseTableName, outputPath string) 
 	if err != nil {
 		return err
 	}
-	return DumpACHWithTableSet(ctx, db, baseTableName, outputPath, tableSet)
+	return dumpACHWithTableSet(ctx, db, baseTableName, outputPath, tableSet, nil)
 }
 
-// DumpACHWithTableSet exports ACH tables from the database back to an ACH file
-// using an explicitly provided TableSet.
+// DumpACHWithSource exports ACH tables from the database back to an ACH file,
+// reading the file's original structure from source.
 //
 // Use this function when the database has no source file to read the structure
-// back from, which is the case for one loaded from an io.Reader: parse the
-// reader with parser/ach and pass the TableSet it returns. DumpACH is the same
-// export for a database that does know its source.
+// back from, which is the case for one loaded from an io.Reader. source must
+// yield the same ACH file the database was loaded from: an ACH file carries
+// fields no table exposes, so the export applies the database's edits to the
+// original rather than building a file out of the tables alone. DumpACH is the
+// same export for a database that does know its source.
 //
 // Parameters:
 //   - ctx: Context for cancellation
 //   - db: The database containing ACH tables
 //   - baseTableName: The base name used when the ACH file was loaded (e.g., "payment" for payment.ach)
 //   - outputPath: The path where the ACH file should be written
-//   - tableSet: The TableSet containing the original ACH structure
+//   - source: The original ACH file's bytes, read from the beginning
 //
 // Returns an error if the export fails.
-func DumpACHWithTableSet(ctx context.Context, db *sql.DB, baseTableName, outputPath string, tableSet *achconv.TableSet) error {
+func DumpACHWithSource(ctx context.Context, db *sql.DB, baseTableName, outputPath string, source io.Reader) error {
+	if db == nil {
+		return fmt.Errorf("%w: database must be a non-nil *sql.DB", ErrNilInput)
+	}
+	if source == nil {
+		return fmt.Errorf("%w: source must be a non-nil io.Reader", ErrNilInput)
+	}
+	tableSet, err := achconv.ParseReader(source)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrACH, err)
+	}
 	return dumpACHWithTableSet(ctx, db, baseTableName, outputPath, tableSet, nil)
 }
 

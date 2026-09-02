@@ -18,8 +18,6 @@ import (
 	"testing"
 	"time"
 
-	achconv "github.com/nao1215/filesql/parser/ach"
-	wireconv "github.com/nao1215/filesql/parser/wire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -4190,9 +4188,9 @@ func TestDumpEntryPointsRefuseANilDatabase(t *testing.T) {
 			call: func() error { return DumpACH(ctx, nil, "t", filepath.Join(dir, "a.ach")) },
 		},
 		{
-			name: "DumpACHWithTableSet",
+			name: "DumpACHWithSource",
 			call: func() error {
-				return DumpACHWithTableSet(ctx, nil, "t", filepath.Join(dir, "b.ach"), &achconv.TableSet{})
+				return DumpACHWithSource(ctx, nil, "t", filepath.Join(dir, "b.ach"), strings.NewReader(""))
 			},
 		},
 		{
@@ -4200,9 +4198,9 @@ func TestDumpEntryPointsRefuseANilDatabase(t *testing.T) {
 			call: func() error { return DumpFedWire(ctx, nil, "t", filepath.Join(dir, "a.fed")) },
 		},
 		{
-			name: "DumpFedWireWithTableSet",
+			name: "DumpFedWireWithSource",
 			call: func() error {
-				return DumpFedWireWithTableSet(ctx, nil, "t", filepath.Join(dir, "b.fed"), &wireconv.TableSet{})
+				return DumpFedWireWithSource(ctx, nil, "t", filepath.Join(dir, "b.fed"), strings.NewReader(""))
 			},
 		},
 	}
