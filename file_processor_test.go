@@ -461,61 +461,61 @@ func sameNamePair(t *testing.T) (first, second string) {
 		writeCSVFile(t, filepath.Join(dir, "b", "book.csv"), "from-b")
 }
 
-// TestOpenContextRefusesTwoNamesThatDifferOnlyInWhichSpace pins the collision a
+// TestOpenRefusesTwoNamesThatDifferOnlyInWhichSpace pins the collision a
 // name-derivation rule creates on purpose. A file name carrying a no-break
 // space and one carrying an ordinary space cannot be told apart when they are
 // read, so the tables derived from them cannot be told apart either, and one
 // refusal is a better answer than two tables nobody can name.
-func TestOpenContextRefusesTwoNamesThatDifferOnlyInWhichSpace(t *testing.T) {
+func TestOpenRefusesTwoNamesThatDifferOnlyInWhichSpace(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	first := writeCSVFile(t, filepath.Join(dir, "sales report.csv"), "space")
 	second := writeCSVFile(t, filepath.Join(dir, "sales\u00a0report.csv"), "no-break space")
 
-	db, err := OpenContext(context.Background(), first, second)
+	db, err := Open(context.Background(), first, second)
 	if err == nil {
 		_ = db.Close()
-		t.Fatal("OpenContext succeeded on two names that both derive the table 'sales_report'")
+		t.Fatal("Open succeeded on two names that both derive the table 'sales_report'")
 	}
 	if !errors.Is(err, ErrDuplicateTable) {
 		t.Errorf("error = %v, want ErrDuplicateTable", err)
 	}
 }
 
-// TestOpenContextRefusesTwoNamesThatKeepNoCharacters is the same rule for the
+// TestOpenRefusesTwoNamesThatKeepNoCharacters is the same rule for the
 // other adjustment: a name that keeps no characters takes the fallback, so two
 // such names ask for one table.
-func TestOpenContextRefusesTwoNamesThatKeepNoCharacters(t *testing.T) {
+func TestOpenRefusesTwoNamesThatKeepNoCharacters(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	first := writeCSVFile(t, filepath.Join(dir, "!!.csv"), "bangs")
 	second := writeCSVFile(t, filepath.Join(dir, "@@.csv"), "ats")
 
-	db, err := OpenContext(context.Background(), first, second)
+	db, err := Open(context.Background(), first, second)
 	if err == nil {
 		_ = db.Close()
-		t.Fatal("OpenContext succeeded on two names that both derive the fallback table")
+		t.Fatal("Open succeeded on two names that both derive the fallback table")
 	}
 	if !errors.Is(err, ErrDuplicateTable) {
 		t.Errorf("error = %v, want ErrDuplicateTable", err)
 	}
 }
 
-// TestOpenContextRefusesTwoSourcesWantingOneTable pins Open's side of the
+// TestOpenRefusesTwoSourcesWantingOneTable pins Open's side of the
 // contract. Open builds a fresh database, so two files asking for one table
 // cannot both be honored, and the answer is a refusal that names the file —
 // deterministically, on every run. What it must never be is one of the two
 // loading and the other disappearing.
-func TestOpenContextRefusesTwoSourcesWantingOneTable(t *testing.T) {
+func TestOpenRefusesTwoSourcesWantingOneTable(t *testing.T) {
 	t.Parallel()
 	first, second := sameNamePair(t)
 
-	db, err := OpenContext(context.Background(), first, second)
+	db, err := Open(context.Background(), first, second)
 	if err == nil {
 		_ = db.Close()
-		t.Fatal("OpenContext succeeded on two files that both want the table 'book'")
+		t.Fatal("Open succeeded on two files that both want the table 'book'")
 	}
 	if !errors.Is(err, ErrDuplicateTable) {
 		t.Errorf("error = %v, want ErrDuplicateTable", err)
@@ -527,10 +527,10 @@ func TestOpenContextRefusesTwoSourcesWantingOneTable(t *testing.T) {
 		t.Errorf("error %q should name the file that collided, %q", err, second)
 	}
 
-	reversed, err := OpenContext(context.Background(), second, first)
+	reversed, err := Open(context.Background(), second, first)
 	if err == nil {
 		_ = reversed.Close()
-		t.Fatal("OpenContext succeeded with the arguments reversed")
+		t.Fatal("Open succeeded with the arguments reversed")
 	}
 	if !strings.Contains(err.Error(), first) {
 		t.Errorf("with the arguments reversed the error %q should name %q", err, first)
@@ -658,7 +658,7 @@ func TestOpenDirectoryWithCollidingBasenamesFails(t *testing.T) {
 	writeCSVFile(t, filepath.Join(dir, "a", "book.csv"), "from-a")
 	writeCSVFile(t, filepath.Join(dir, "b", "book.csv"), "from-b")
 
-	db, err := Open(dir)
+	db, err := Open(context.Background(), dir)
 	if err == nil {
 		_ = db.Close()
 		t.Fatal("Open succeeded on a tree with two files that both want the table 'book'")
@@ -676,7 +676,7 @@ func TestOpenDirectoryStillPrefersThePlainSibling(t *testing.T) {
 	writeCSVFile(t, filepath.Join(dir, "users.csv"), "plain")
 	gzipFile(t, filepath.Join(dir, "users.csv"), filepath.Join(dir, "users.csv.gz"))
 
-	db, err := Open(dir)
+	db, err := Open(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -714,7 +714,7 @@ func TestOpenRefusesTwoSourcesWhoseNamesDifferOnlyInCase(t *testing.T) {
 	t.Parallel()
 	first, second := caseDifferingPair(t)
 
-	db, err := Open(first, second)
+	db, err := Open(context.Background(), first, second)
 	if err == nil {
 		_ = db.Close()
 		t.Fatal("Open succeeded on two files that both want one table, spelled in two cases")
@@ -873,7 +873,7 @@ func TestCollectFilesFromPaths_RefusesASourceThatIsNotAFile(t *testing.T) {
 		// than fail.
 		done := make(chan error, 1)
 		go func() {
-			db, err := OpenContext(t.Context(), root)
+			db, err := Open(t.Context(), root)
 			if db != nil {
 				_ = db.Close()
 			}

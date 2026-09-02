@@ -27,7 +27,7 @@ func TestOpenConcurrentQueries(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 
-	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	db, err := Open(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
@@ -65,7 +65,7 @@ func TestOpenConcurrentNestedQueries(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 
-	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	db, err := Open(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
@@ -286,7 +286,7 @@ func TestOpenConcurrentWrites(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.csv")
 	require.NoError(t, os.WriteFile(path, []byte("id,name\n1,alice\n"), 0o600))
 
-	db, err := OpenContext(ctx, path)
+	db, err := Open(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
@@ -415,7 +415,7 @@ func TestConcurrentLoadInto(t *testing.T) {
 			name: "a database this package opened",
 			open: func(t *testing.T) *sql.DB {
 				t.Helper()
-				db, err := OpenContext(t.Context(), source(t, 1)[0])
+				db, err := Open(t.Context(), source(t, 1)[0])
 				require.NoError(t, err)
 				return db
 			},
@@ -458,7 +458,7 @@ func TestConcurrentLoadIntoFromReaders(t *testing.T) {
 
 	seed := filepath.Join(t.TempDir(), "seed.csv")
 	require.NoError(t, os.WriteFile(seed, []byte("id,name\n1,alice\n"), 0o600))
-	db, err := OpenContext(t.Context(), seed)
+	db, err := Open(t.Context(), seed)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 

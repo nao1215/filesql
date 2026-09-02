@@ -20,7 +20,7 @@ func TestOpenACHFile(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, testFile)
+	db, err := Open(ctx, testFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -50,7 +50,7 @@ func TestOpenACHFile_QueryEntries(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, testFile)
+	db, err := Open(ctx, testFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -80,7 +80,7 @@ func TestOpenACHFile_QueryBatches(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, testFile)
+	db, err := Open(ctx, testFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -109,7 +109,7 @@ func TestOpenACHFile_JoinEntriesAndBatches(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, testFile)
+	db, err := Open(ctx, testFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -192,7 +192,7 @@ func TestOpenACHFile_UpdateAndWrite(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, testFile)
+	db, err := Open(ctx, testFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -213,7 +213,7 @@ func TestOpenACHFile_UpdateAndWrite(t *testing.T) {
 	assert.Greater(t, info.Size(), int64(0), "output file should not be empty")
 
 	// Re-open the written file and verify the change
-	db2, err := OpenContext(ctx, tmpFile)
+	db2, err := Open(ctx, tmpFile)
 	require.NoError(t, err)
 	defer db2.Close()
 
@@ -236,7 +236,7 @@ func TestOpenACHFile_UpdateAmountAndWrite(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, testFile)
+	db, err := Open(ctx, testFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -254,7 +254,7 @@ func TestOpenACHFile_UpdateAmountAndWrite(t *testing.T) {
 
 	// Re-opening runs the reader's own balance check, so a file that opens is a
 	// file whose controls agree with its entries.
-	db2, err := OpenContext(ctx, tmpFile)
+	db2, err := Open(ctx, tmpFile)
 	require.NoError(t, err)
 	defer db2.Close()
 
@@ -302,7 +302,7 @@ func TestOpenACHFile_RefusesOverWidthText(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			db, err := OpenContext(ctx, testFile)
+			db, err := Open(ctx, testFile)
 			require.NoError(t, err)
 			defer db.Close()
 
@@ -328,7 +328,7 @@ func TestOpenACHFile_IATFile(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, testFile)
+	db, err := Open(ctx, testFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -360,7 +360,7 @@ func TestOpenACHFile_ReturnFile(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, testFile)
+	db, err := Open(ctx, testFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -385,7 +385,7 @@ func TestWriteACHFile_InvalidTableSet(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a database without ACH tables
-	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	db, err := Open(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -398,7 +398,7 @@ func TestDumpACH_NilTableSet(t *testing.T) {
 	ctx := context.Background()
 
 	// Open a CSV file (not ACH)
-	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	db, err := Open(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -420,11 +420,11 @@ func TestDumpACH_TwoDatabasesShareABaseName(t *testing.T) {
 	pathA := copyACHFixture(t, "ppd-debit.ach")
 	pathB := copyACHFixture(t, "iat-credit.ach")
 
-	dbA, err := OpenContext(ctx, pathA)
+	dbA, err := Open(ctx, pathA)
 	require.NoError(t, err)
 	defer dbA.Close()
 
-	dbB, err := OpenContext(ctx, pathB)
+	dbB, err := Open(ctx, pathB)
 	require.NoError(t, err)
 	defer dbB.Close()
 
@@ -447,7 +447,7 @@ func TestDumpACH_MissingSourceFileIsNamed(t *testing.T) {
 	ctx := context.Background()
 
 	source := copyACHFixture(t, "ppd-debit.ach")
-	db, err := OpenContext(ctx, source)
+	db, err := Open(ctx, source)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -484,7 +484,7 @@ func copyFixtureAs(t *testing.T, fixture, name string) string {
 func reopen(ctx context.Context, t *testing.T, path string) *sql.DB {
 	t.Helper()
 
-	db, err := OpenContext(ctx, path)
+	db, err := Open(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, db.Close()) })
 	return db
@@ -552,7 +552,7 @@ func TestDumpACH_FailedWriteLeavesDestinationIntact(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(target, original, 0o600)) //nolint:gosec // Test path is constructed from t.TempDir()
 
-	db, err := OpenContext(ctx, target)
+	db, err := Open(ctx, target)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -618,13 +618,13 @@ func TestDumpACH_WriteBackKeepsEveryValue(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(source, original, 0o600)) //nolint:gosec // Test path is constructed from t.TempDir()
 
-	db, err := OpenContext(ctx, source)
+	db, err := Open(ctx, source)
 	require.NoError(t, err)
 	before := achTableDump(ctx, t, db, "ppd_debit")
 	require.NoError(t, DumpACH(ctx, db, "ppd_debit", source))
 	require.NoError(t, db.Close())
 
-	reloaded, err := OpenContext(ctx, source)
+	reloaded, err := Open(ctx, source)
 	require.NoError(t, err)
 	defer reloaded.Close()
 	after := achTableDump(ctx, t, reloaded, "ppd_debit")

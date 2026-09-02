@@ -142,7 +142,7 @@ func TestDBBuilder_AddFS_Compressed(t *testing.T) {
 			require.NoError(t, err, "build() failed for %s", codec.compression)
 
 			db, err := validated.Open(ctx)
-			require.NoError(t, err, "Open() failed for %s", codec.compression)
+			require.NoError(t, err, "Open(context.Background(), ) failed for %s", codec.compression)
 			defer db.Close()
 
 			var name string
@@ -182,7 +182,7 @@ func TestDBBuilder_AddFS_CompressedHeaderOnly(t *testing.T) {
 			require.NoError(t, err, "build() failed for %s", codec)
 
 			db, err := validated.Open(ctx)
-			require.NoError(t, err, "Open() failed for %s", codec)
+			require.NoError(t, err, "Open(context.Background(), ) failed for %s", codec)
 			defer db.Close()
 
 			// The table exists with the header's columns and holds no rows.
@@ -657,8 +657,8 @@ func TestDBBuilder_ChunkedReading(t *testing.T) {
 		require.NoError(t, err, "build() should succeed")
 
 		db, err := validatedBuilder.Open(ctx)
-		assert.NoError(t, err, "Open() should succeed")
-		require.NotNil(t, db, "Open() should not return nil database")
+		assert.NoError(t, err, "Open(context.Background(), ) should succeed")
+		require.NotNil(t, db, "Open(context.Background(), ) should not return nil database")
 		// Verify the data was loaded correctly
 		var count int
 		err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM large_table").Scan(&count)
@@ -682,8 +682,8 @@ func TestDBBuilder_Open_WithReader(t *testing.T) {
 		require.NoError(t, err, "build() should succeed")
 
 		db, err := validatedBuilder.Open(ctx)
-		assert.NoError(t, err, "Open() should succeed")
-		require.NotNil(t, db, "Open() should not return nil database")
+		assert.NoError(t, err, "Open(context.Background(), ) should succeed")
+		require.NotNil(t, db, "Open(context.Background(), ) should not return nil database")
 		// Verify we can query the data
 		rows, err := db.QueryContext(ctx, "SELECT * FROM users")
 		assert.NoError(t, err, "Query should succeed")
@@ -714,8 +714,8 @@ func TestDBBuilder_Open_WithReader(t *testing.T) {
 		require.NoError(t, err, "build() should succeed with mixed inputs")
 
 		db, err := validatedBuilder.Open(ctx)
-		assert.NoError(t, err, "Open() should succeed")
-		require.NotNil(t, db, "Open() should not return nil database")
+		assert.NoError(t, err, "Open(context.Background(), ) should succeed")
+		require.NotNil(t, db, "Open(context.Background(), ) should not return nil database")
 		// Verify both tables exist
 		for _, table := range []string{"orders", "products"} {
 			rows, err := db.QueryContext(ctx, "SELECT * FROM "+table) // #nosec G202 -- table name is safe
@@ -740,7 +740,7 @@ func TestDBBuilder_Open(t *testing.T) {
 		if db != nil {
 			_ = db.Close()
 		}
-		require.Error(t, err, "Open() should refuse a path that does not exist")
+		require.Error(t, err, "Open(context.Background(), ) should refuse a path that does not exist")
 		assert.True(t, errors.Is(err, ErrFileNotFound), "error should be ErrFileNotFound, got %v", err)
 		assert.Contains(t, err.Error(), "test.csv", "error should name the file")
 	})
@@ -750,7 +750,7 @@ func TestDBBuilder_Open(t *testing.T) {
 		if db != nil {
 			_ = db.Close()
 		}
-		require.Error(t, err, "Open() should refuse a builder with nothing added")
+		require.Error(t, err, "Open(context.Background(), ) should refuse a builder with nothing added")
 		assert.True(t, errors.Is(err, ErrNoFiles), "error should be ErrNoFiles, got %v", err)
 	})
 
@@ -765,7 +765,7 @@ func TestDBBuilder_Open(t *testing.T) {
 		require.NoError(t, err, "build() should succeed")
 
 		db, err := validated.Open(ctx)
-		require.NoError(t, err, "Open() after the validation should succeed")
+		require.NoError(t, err, "Open(context.Background(), ) after the validation should succeed")
 		defer func() { _ = db.Close() }()
 
 		var rows int
@@ -792,11 +792,11 @@ func TestDBBuilder_Open(t *testing.T) {
 		if db != nil {
 			_ = db.Close()
 		}
-		require.Error(t, err, "Open() should refuse to overwrite a source it cannot write")
+		require.Error(t, err, "Open(context.Background(), ) should refuse to overwrite a source it cannot write")
 
 		// Correct the configuration and try again.
 		db, err = builder.EnableAutoSave(filepath.Join(dir, "out")).Open(ctx)
-		require.NoError(t, err, "Open() should succeed once auto-save has an output directory")
+		require.NoError(t, err, "Open(context.Background(), ) should succeed once auto-save has an output directory")
 		defer func() { _ = db.Close() }()
 
 		var rows int
@@ -817,8 +817,8 @@ func TestDBBuilder_Open(t *testing.T) {
 		require.NoError(t, err, "build() should succeed")
 
 		db, err := validatedBuilder.Open(ctx)
-		assert.NoError(t, err, "Open() should succeed")
-		assert.NotNil(t, db, "Open() should not return nil database")
+		assert.NoError(t, err, "Open(context.Background(), ) should succeed")
+		assert.NotNil(t, db, "Open(context.Background(), ) should not return nil database")
 		if db != nil {
 			_ = db.Close()
 		}
@@ -834,8 +834,8 @@ func TestDBBuilder_Open(t *testing.T) {
 		require.NoError(t, err, "build() should succeed")
 
 		db, err := validatedBuilder.Open(ctx)
-		assert.NoError(t, err, "Open() should succeed")
-		assert.NotNil(t, db, "Open() should not return nil database")
+		assert.NoError(t, err, "Open(context.Background(), ) should succeed")
+		assert.NotNil(t, db, "Open(context.Background(), ) should not return nil database")
 		if db != nil {
 			_ = db.Close()
 			// Clean up temp files
@@ -853,8 +853,8 @@ func TestDBBuilder_Open(t *testing.T) {
 		require.NoError(t, err, "build() should succeed")
 
 		db, err := validatedBuilder.Open(ctx)
-		assert.NoError(t, err, "Open() should succeed")
-		assert.NotNil(t, db, "Open() should not return nil database")
+		assert.NoError(t, err, "Open(context.Background(), ) should succeed")
+		assert.NotNil(t, db, "Open(context.Background(), ) should not return nil database")
 		if db != nil {
 			_ = db.Close()
 			// Clean up temp files
@@ -926,8 +926,8 @@ func TestIntegrationWithEmbedFS(t *testing.T) {
 	require.NoError(t, err, "build() should succeed with embedded FS")
 
 	db, err := validatedBuilder.Open(ctx)
-	assert.NoError(t, err, "Open() with embed.FS should succeed")
-	require.NotNil(t, db, "Open() with embed.FS should not return nil database")
+	assert.NoError(t, err, "Open(context.Background(), ) with embed.FS should succeed")
+	require.NotNil(t, db, "Open(context.Background(), ) with embed.FS should not return nil database")
 	// Verify we can query the database
 	rows, err := db.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table'")
 	assert.NoError(t, err, "should be able to query database")
@@ -1415,7 +1415,7 @@ func TestDBBuilder_StreamDirectoryToSQLite(t *testing.T) {
 		}
 
 		// Test the streaming directory function
-		db, err := Open(tempDir)
+		db, err := Open(context.Background(), tempDir)
 		if err != nil {
 			t.Fatalf("Failed to open directory: %v", err)
 		}
@@ -1460,7 +1460,7 @@ func TestDBBuilder_StreamDirectoryToSQLite(t *testing.T) {
 		}
 
 		// Test should return error for no supported files
-		_, err = Open(tempDir)
+		_, err = Open(context.Background(), tempDir)
 		if err == nil {
 			t.Error("Expected error for directory with no supported files")
 		}
@@ -1477,7 +1477,7 @@ func TestDBBuilder_StreamDirectoryToSQLite(t *testing.T) {
 		tempDir := t.TempDir()
 
 		// Test should return error for empty directory
-		_, err := Open(tempDir)
+		_, err := Open(context.Background(), tempDir)
 		if err == nil {
 			t.Error("Expected error for empty directory")
 		}
@@ -1896,8 +1896,8 @@ func builtBuilder(t *testing.T, path string) *DBBuilder {
 // passed when they had canceled.
 //
 // The godoc names six entry points that take a context. The four that belong to
-// a builder are here; OpenContext is covered in filesql_test.go and
-// DumpDatabaseContext in dump_test.go, each beside the code it calls.
+// a builder are here; Open is covered in filesql_test.go and
+// DumpDatabase in dump_test.go, each beside the code it calls.
 func TestBuilderEntryPoints_EndedContext(t *testing.T) {
 	t.Parallel()
 

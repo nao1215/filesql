@@ -2,6 +2,7 @@ package filesql
 
 import (
 	"compress/gzip"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -268,7 +269,7 @@ func TestQuotedLineBreakSurvivesLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "a.csv")
 	require.NoError(t, os.WriteFile(path, []byte("id,address\n1,\"line1\r\nline2\"\n"), 0o600))
 
-	db, err := Open(path)
+	db, err := Open(context.Background(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -333,7 +334,7 @@ func TestCarriageReturnTerminatedFileIgnoresQuotesWhereTheFormatHasNone(t *testi
 			path := filepath.Join(t.TempDir(), tt.file)
 			require.NoError(t, os.WriteFile(path, []byte(tt.body), 0o600))
 
-			db, err := OpenContext(t.Context(), path)
+			db, err := Open(t.Context(), path)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = db.Close() })
 
@@ -384,7 +385,7 @@ func TestTheTwoLineEndingReadingsAgree(t *testing.T) {
 			assert.Equal(t, lineEndingCR, detectLineEnding(path, tt.format),
 				"the save side reads this file as carriage-return terminated")
 
-			db, err := OpenContext(t.Context(), path)
+			db, err := Open(t.Context(), path)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = db.Close() })
 

@@ -56,7 +56,7 @@ Bob,bob@example.com,user
 		AddReader(strings.NewReader(string(cleaned)), "users", filesql.FileTypeCSV).
 		Open(ctx)
 	if err != nil {
-		t.Fatalf("Open() error = %v", err)
+		t.Fatalf("Open(context.Background(), ) error = %v", err)
 	}
 	defer db.Close()
 

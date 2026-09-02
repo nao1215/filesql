@@ -272,14 +272,14 @@ Charlie,35,London`
 	}
 
 	// Export to Parquet
-	db, err := Open(csvFile)
+	db, err := Open(context.Background(), csvFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 
 	outputDir := filepath.Join(tempDir, "output")
-	err = DumpDatabase(db, outputDir, NewDumpOptions().WithFormat(OutputFormatParquet))
+	err = DumpDatabase(context.Background(), db, outputDir, NewDumpOptions().WithFormat(OutputFormatParquet))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,14 +350,14 @@ func TestParquetStreamingChunks(t *testing.T) {
 	}
 
 	// Export to Parquet
-	db, err := Open(csvFile)
+	db, err := Open(context.Background(), csvFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 
 	outputDir := filepath.Join(tempDir, "output")
-	err = DumpDatabase(db, outputDir, NewDumpOptions().WithFormat(OutputFormatParquet))
+	err = DumpDatabase(context.Background(), db, outputDir, NewDumpOptions().WithFormat(OutputFormatParquet))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,12 +428,12 @@ func TestParquetStreamingCompressed(t *testing.T) {
 	csvContent := "name,age\nAlice,25\nBob,30\n"
 	require.NoError(t, os.WriteFile(csvFile, []byte(csvContent), 0600))
 
-	db, err := Open(csvFile)
+	db, err := Open(context.Background(), csvFile)
 	require.NoError(t, err)
 	defer db.Close()
 
 	outputDir := filepath.Join(tempDir, "output")
-	require.NoError(t, DumpDatabase(db, outputDir, NewDumpOptions().WithFormat(OutputFormatParquet)))
+	require.NoError(t, DumpDatabase(context.Background(), db, outputDir, NewDumpOptions().WithFormat(OutputFormatParquet)))
 
 	parquetData, err := os.ReadFile(filepath.Join(outputDir, "compressed_test.parquet")) //nolint:gosec
 	require.NoError(t, err)

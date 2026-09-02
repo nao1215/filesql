@@ -134,7 +134,7 @@ func TestOpenHonorsUnicodeBOM(t *testing.T) {
 			path := filepath.Join(t.TempDir(), tt.file)
 			require.NoError(t, os.WriteFile(path, tt.content, 0o600))
 
-			db, err := OpenContext(context.Background(), path)
+			db, err := Open(context.Background(), path)
 			require.NoError(t, err)
 			defer db.Close()
 
@@ -160,7 +160,7 @@ func TestAFileOfMarksHoldsNoTable(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "t.csv")
 			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
-			_, err := OpenContext(context.Background(), path)
+			_, err := Open(context.Background(), path)
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrEmptyData)
 		})
@@ -232,7 +232,7 @@ func TestOpenRejectsInvalidUTF8(t *testing.T) {
 			path := filepath.Join(t.TempDir(), tt.file)
 			require.NoError(t, os.WriteFile(path, tt.content, 0o600))
 
-			db, err := OpenContext(context.Background(), path)
+			db, err := Open(context.Background(), path)
 			if db != nil {
 				defer db.Close()
 			}
@@ -260,7 +260,7 @@ func TestOpenAcceptsValidUTF8(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "utf8.csv")
 	require.NoError(t, os.WriteFile(path, []byte(b.String()), 0o600))
 
-	db, err := OpenContext(context.Background(), path)
+	db, err := Open(context.Background(), path)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -412,7 +412,7 @@ func TestBlankHeadersAreNamedByPosition(t *testing.T) {
 			path := filepath.Join(t.TempDir(), tt.file)
 			require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o600))
 
-			db, err := OpenContext(context.Background(), path)
+			db, err := Open(context.Background(), path)
 			require.NoError(t, err)
 			defer func() { _ = db.Close() }()
 
@@ -473,7 +473,7 @@ func TestDuplicateColumnErrorNamesTheColumn(t *testing.T) {
 			path := filepath.Join(t.TempDir(), tt.file)
 			require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o600))
 
-			db, err := OpenContext(context.Background(), path)
+			db, err := Open(context.Background(), path)
 			if db != nil {
 				defer db.Close()
 			}
@@ -518,7 +518,7 @@ func TestDuplicateColumnCheckIsTheSameEverywhere(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "dup.csv")
 		require.NoError(t, os.WriteFile(path, []byte("name, name \n1,2\n"), 0o600))
 
-		db, err := OpenContext(context.Background(), path)
+		db, err := Open(context.Background(), path)
 		if db != nil {
 			defer db.Close()
 		}
@@ -532,7 +532,7 @@ func TestDuplicateColumnCheckIsTheSameEverywhere(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "book.xlsx")
 		writeXLSXHeaderFixture(t, path, []string{"name", " name "}, []string{"1", "2"})
 
-		db, err := OpenContext(context.Background(), path)
+		db, err := Open(context.Background(), path)
 		if db != nil {
 			defer db.Close()
 		}
@@ -553,7 +553,7 @@ func TestDuplicateColumnCheckIsTheSameEverywhere(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "exact.xlsx")
 		writeXLSXHeaderFixture(t, path, []string{"name", "name"}, []string{"1", "2"})
 
-		db, err := OpenContext(context.Background(), path)
+		db, err := Open(context.Background(), path)
 		if db != nil {
 			defer db.Close()
 		}
@@ -573,7 +573,7 @@ func TestDuplicateColumnCheckIsTheSameEverywhere(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "cased.csv")
 		require.NoError(t, os.WriteFile(path, []byte("ID,id\n1,2\n"), 0o600))
 
-		db, err := OpenContext(context.Background(), path)
+		db, err := Open(context.Background(), path)
 		if db != nil {
 			defer db.Close()
 		}
@@ -586,7 +586,7 @@ func TestDuplicateColumnCheckIsTheSameEverywhere(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "cased.xlsx")
 		writeXLSXHeaderFixture(t, path, []string{"Name", "nAmE"}, []string{"1", "2"})
 
-		db, err := OpenContext(context.Background(), path)
+		db, err := Open(context.Background(), path)
 		if db != nil {
 			defer db.Close()
 		}
@@ -603,7 +603,7 @@ func TestDuplicateColumnCheckIsTheSameEverywhere(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "cased_spaced.csv")
 		require.NoError(t, os.WriteFile(path, []byte("name, NAME \n1,2\n"), 0o600))
 
-		db, err := OpenContext(context.Background(), path)
+		db, err := Open(context.Background(), path)
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -622,7 +622,7 @@ func TestDuplicateColumnCheckIsTheSameEverywhere(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "accents.csv")
 		require.NoError(t, os.WriteFile(path, []byte("ä,Ä\n1,2\n"), 0o600))
 
-		db, err := OpenContext(context.Background(), path)
+		db, err := Open(context.Background(), path)
 		require.NoError(t, err, "SQLite tells these two apart, so the import must too")
 		defer db.Close()
 
@@ -641,7 +641,7 @@ func TestDuplicateColumnCheckIsTheSameEverywhere(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "both.csv")
 		require.NoError(t, os.WriteFile(path, []byte(" A,a\n1,2\n"), 0o600))
 
-		db, err := OpenContext(context.Background(), path)
+		db, err := Open(context.Background(), path)
 		require.NoError(t, err, "neither the whitespace rule nor the case rule matches this pair")
 		defer db.Close()
 
@@ -659,7 +659,7 @@ func TestDuplicateColumnCheckIsTheSameEverywhere(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "ok.xlsx")
 		writeXLSXHeaderFixture(t, path, []string{"name", " other "}, []string{"1", "2"})
 
-		db, err := OpenContext(context.Background(), path)
+		db, err := Open(context.Background(), path)
 		require.NoError(t, err)
 		defer db.Close()
 
@@ -776,7 +776,7 @@ func TestOpenRejectsDamagedUTF16(t *testing.T) {
 				path := filepath.Join(t.TempDir(), "damaged.csv")
 				require.NoError(t, os.WriteFile(path, tt.content, 0o600))
 
-				db, err := OpenContext(context.Background(), path)
+				db, err := Open(context.Background(), path)
 				if db != nil {
 					defer db.Close()
 				}
@@ -818,7 +818,7 @@ func TestOpenAcceptsWellFormedUTF16(t *testing.T) {
 				path := filepath.Join(t.TempDir(), "ok.csv")
 				require.NoError(t, os.WriteFile(path, utf16FromUnits(littleEndian, tt.units), 0o600))
 
-				db, err := OpenContext(context.Background(), path)
+				db, err := Open(context.Background(), path)
 				require.NoError(t, err)
 				defer db.Close()
 
@@ -852,10 +852,10 @@ func TestUTF16RoundTripKeepsAstralCharacters(t *testing.T) {
 			require.NoError(t, err)
 
 			dir := t.TempDir()
-			require.NoError(t, DumpDatabase(db, dir, NewDumpOptions().WithEncoding(enc)))
+			require.NoError(t, DumpDatabase(context.Background(), db, dir, NewDumpOptions().WithEncoding(enc)))
 			require.NoError(t, db.Close())
 
-			reloaded, err := OpenContext(ctx, filepath.Join(dir, "t.csv"))
+			reloaded, err := Open(ctx, filepath.Join(dir, "t.csv"))
 			require.NoError(t, err)
 			defer reloaded.Close()
 

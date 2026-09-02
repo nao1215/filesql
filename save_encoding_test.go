@@ -68,13 +68,13 @@ func TestDumpDatabase_WritesTheRequestedEncoding(t *testing.T) {
 			require.NoError(t, os.WriteFile(source, []byte("name,city\n山田ソ,東京\n"), 0o600))
 
 			ctx := context.Background()
-			db, err := OpenContext(ctx, source)
+			db, err := Open(ctx, source)
 			require.NoError(t, err)
 			defer db.Close()
 
 			out := filepath.Join(dir, "out")
 			require.NoError(t, os.MkdirAll(out, 0o750))
-			require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithEncoding(tt.encoding)))
+			require.NoError(t, DumpDatabase(context.Background(), db, out, NewDumpOptions().WithEncoding(tt.encoding)))
 
 			written, err := os.ReadFile(filepath.Join(out, "src.csv")) //nolint:gosec // path built by the test
 			require.NoError(t, err)
@@ -87,7 +87,7 @@ func TestDumpDatabase_WritesTheRequestedEncoding(t *testing.T) {
 			// Re-opening through filesql is the other half: the reader's BOM
 			// handling has to recognize what the writer produced.
 			if tt.encoding == EncodingUTF16LE || tt.encoding == EncodingUTF16BE {
-				reopened, err := OpenContext(ctx, filepath.Join(out, "src.csv"))
+				reopened, err := Open(ctx, filepath.Join(out, "src.csv"))
 				require.NoError(t, err)
 				defer reopened.Close()
 
@@ -110,14 +110,14 @@ func TestDumpDatabase_RefusesAValueTheEncodingCannotCarry(t *testing.T) {
 	require.NoError(t, os.WriteFile(source, []byte("name\n🎌\n"), 0o600))
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, source)
+	db, err := Open(ctx, source)
 	require.NoError(t, err)
 	defer db.Close()
 
 	out := filepath.Join(dir, "out")
 	require.NoError(t, os.MkdirAll(out, 0o750))
 
-	err = DumpDatabase(db, out, NewDumpOptions().WithEncoding(EncodingShiftJIS))
+	err = DumpDatabase(context.Background(), db, out, NewDumpOptions().WithEncoding(EncodingShiftJIS))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrEncoding), "want ErrEncoding, got %v", err)
 
@@ -138,13 +138,13 @@ func TestDumpDatabase_EncodingAndCompressionCombine(t *testing.T) {
 	require.NoError(t, os.WriteFile(source, []byte("name\n山田\n"), 0o600))
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, source)
+	db, err := Open(ctx, source)
 	require.NoError(t, err)
 	defer db.Close()
 
 	out := filepath.Join(dir, "out")
 	require.NoError(t, os.MkdirAll(out, 0o750))
-	require.NoError(t, DumpDatabase(db, out,
+	require.NoError(t, DumpDatabase(context.Background(), db, out,
 		NewDumpOptions().WithEncoding(EncodingShiftJIS).WithCompression(CompressionGZ)))
 
 	written := filepath.Join(out, "src.csv.gz")
@@ -171,17 +171,17 @@ func TestDumpDatabase_BinaryFormatsIgnoreEncoding(t *testing.T) {
 	require.NoError(t, os.WriteFile(source, []byte("name\n山田\n"), 0o600))
 
 	ctx := context.Background()
-	db, err := OpenContext(ctx, source)
+	db, err := Open(ctx, source)
 	require.NoError(t, err)
 	defer db.Close()
 
 	for _, format := range []OutputFormat{OutputFormatParquet, OutputFormatXLSX} {
 		out := filepath.Join(dir, format.Extension())
 		require.NoError(t, os.MkdirAll(out, 0o750))
-		require.NoError(t, DumpDatabase(db, out,
+		require.NoError(t, DumpDatabase(context.Background(), db, out,
 			NewDumpOptions().WithFormat(format).WithEncoding(EncodingShiftJIS)))
 
-		reopened, err := OpenContext(ctx, filepath.Join(out, "src"+format.Extension()))
+		reopened, err := Open(ctx, filepath.Join(out, "src"+format.Extension()))
 		require.NoError(t, err)
 
 		var name string
@@ -222,14 +222,14 @@ func TestDumpDatabase_ISO2022JPStaysValidCSV(t *testing.T) {
 			source := filepath.Join(dir, "t.csv")
 			require.NoError(t, os.WriteFile(source, []byte("k,v\nrow,seed\n"), 0o600))
 
-			db, err := OpenContext(t.Context(), source)
+			db, err := Open(t.Context(), source)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = db.Close() })
 			_, err = db.ExecContext(t.Context(), `UPDATE t SET v = ?`, value)
 			require.NoError(t, err)
 
 			out := filepath.Join(dir, "out")
-			require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithEncoding(EncodingISO2022JP)))
+			require.NoError(t, DumpDatabase(context.Background(), db, out, NewDumpOptions().WithEncoding(EncodingISO2022JP)))
 
 			raw, err := os.ReadFile(filepath.Join(out, "t.csv")) //nolint:gosec // Test path from t.TempDir()
 			require.NoError(t, err)
@@ -262,7 +262,7 @@ func TestDumpDatabase_ISO2022JPRefusesAnEscape(t *testing.T) {
 		db := openWithTable(t, `CREATE TABLE t (a TEXT)`, `INSERT INTO t VALUES ('x'||CAST(x'1b2442' AS TEXT)||'y')`)
 
 		out := filepath.Join(t.TempDir(), "out")
-		err := DumpDatabase(db, out, NewDumpOptions().WithEncoding(EncodingISO2022JP))
+		err := DumpDatabase(context.Background(), db, out, NewDumpOptions().WithEncoding(EncodingISO2022JP))
 
 		require.Error(t, err, "the file would decode as different text")
 		assert.ErrorIs(t, err, ErrEncoding)
@@ -274,7 +274,7 @@ func TestDumpDatabase_ISO2022JPRefusesAnEscape(t *testing.T) {
 		db := openWithTable(t, "CREATE TABLE t (\"x\x1b$By\" TEXT)", `INSERT INTO t VALUES ('1')`)
 
 		out := filepath.Join(t.TempDir(), "out")
-		err := DumpDatabase(db, out, NewDumpOptions().WithEncoding(EncodingISO2022JP))
+		err := DumpDatabase(context.Background(), db, out, NewDumpOptions().WithEncoding(EncodingISO2022JP))
 
 		require.Error(t, err, "the header and the row would decode as one word")
 		assert.ErrorIs(t, err, ErrEncoding)
@@ -288,7 +288,7 @@ func TestDumpDatabase_ISO2022JPRefusesAnEscape(t *testing.T) {
 		db := openWithTable(t, `CREATE TABLE t (a TEXT)`, `INSERT INTO t VALUES ('p'||CAST(x'0e' AS TEXT)||'q')`)
 
 		out := filepath.Join(t.TempDir(), "out")
-		require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithEncoding(EncodingISO2022JP)))
+		require.NoError(t, DumpDatabase(context.Background(), db, out, NewDumpOptions().WithEncoding(EncodingISO2022JP)))
 
 		raw, err := os.ReadFile(filepath.Join(out, "t.csv")) //nolint:gosec // Test path from t.TempDir()
 		require.NoError(t, err)
@@ -305,7 +305,7 @@ func TestDumpDatabase_ISO2022JPRefusesAnEscape(t *testing.T) {
 		db := openWithTable(t, `CREATE TABLE t (a TEXT)`, `INSERT INTO t VALUES ('p'||CAST(x'1b' AS TEXT)||'q')`)
 
 		out := filepath.Join(t.TempDir(), "out")
-		require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithEncoding(EncodingShiftJIS)))
+		require.NoError(t, DumpDatabase(context.Background(), db, out, NewDumpOptions().WithEncoding(EncodingShiftJIS)))
 
 		raw, err := os.ReadFile(filepath.Join(out, "t.csv")) //nolint:gosec // Test path from t.TempDir()
 		require.NoError(t, err)
@@ -379,16 +379,16 @@ func TestOpen_NamesAnEscapeEncodedInput(t *testing.T) {
 	source := filepath.Join(dir, "t.csv")
 	require.NoError(t, os.WriteFile(source, []byte("k,v\nrow,seed\n"), 0o600))
 
-	db, err := OpenContext(t.Context(), source)
+	db, err := Open(t.Context(), source)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	_, err = db.ExecContext(t.Context(), `UPDATE t SET v = ?`, "が")
 	require.NoError(t, err)
 
 	out := filepath.Join(dir, "out")
-	require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithEncoding(EncodingISO2022JP)))
+	require.NoError(t, DumpDatabase(context.Background(), db, out, NewDumpOptions().WithEncoding(EncodingISO2022JP)))
 
-	_, err = OpenContext(t.Context(), out)
+	_, err = Open(t.Context(), out)
 	require.Error(t, err, "filesql reads UTF-8, so it cannot read what it just wrote")
 	assert.ErrorIs(t, err, ErrEncoding)
 	assert.Contains(t, err.Error(), "ISO-2022-JP")
@@ -408,16 +408,16 @@ func TestOpen_StillNamesInvalidUTF8(t *testing.T) {
 			source := filepath.Join(dir, "t.csv")
 			require.NoError(t, os.WriteFile(source, []byte("k,v\nrow,seed\n"), 0o600))
 
-			db, err := OpenContext(t.Context(), source)
+			db, err := Open(t.Context(), source)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = db.Close() })
 			_, err = db.ExecContext(t.Context(), `UPDATE t SET v = ?`, "日本語")
 			require.NoError(t, err)
 
 			out := filepath.Join(dir, "out")
-			require.NoError(t, DumpDatabase(db, out, NewDumpOptions().WithEncoding(enc)))
+			require.NoError(t, DumpDatabase(context.Background(), db, out, NewDumpOptions().WithEncoding(enc)))
 
-			_, err = OpenContext(t.Context(), out)
+			_, err = Open(t.Context(), out)
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrInvalidUTF8)
 		})
@@ -716,14 +716,14 @@ func TestADumpRefusedByItsEncodingNamesTheColumnAndTheCharacter(t *testing.T) {
 	if err := os.WriteFile(src, []byte("id,name,note\n1,ok,x\n2,\"smile 🙂\",x\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	db, err := OpenContext(t.Context(), src)
+	db, err := Open(t.Context(), src)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	defer db.Close()
 
 	for _, encoding := range []Encoding{EncodingShiftJIS, EncodingEUCJP, EncodingISO2022JP} {
-		err := DumpDatabase(db, t.TempDir(), NewDumpOptions().WithEncoding(encoding))
+		err := DumpDatabase(context.Background(), db, t.TempDir(), NewDumpOptions().WithEncoding(encoding))
 		if err == nil {
 			t.Errorf("a dump into %s of a table holding an emoji succeeded, want a refusal", encoding)
 			continue
@@ -749,13 +749,13 @@ func TestADumpRefusedByItsEncodingNamesAColumnName(t *testing.T) {
 	if err := os.WriteFile(src, []byte("id,smile🙂\n1,2\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	db, err := OpenContext(t.Context(), src)
+	db, err := Open(t.Context(), src)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	defer db.Close()
 
-	err = DumpDatabase(db, t.TempDir(), NewDumpOptions().WithEncoding(EncodingShiftJIS))
+	err = DumpDatabase(context.Background(), db, t.TempDir(), NewDumpOptions().WithEncoding(EncodingShiftJIS))
 	if !errors.Is(err, ErrEncoding) {
 		t.Fatalf("dump = %v, want ErrEncoding", err)
 	}
@@ -776,7 +776,7 @@ func TestADumpInAnEncodingThatHoldsTheTableStillWrites(t *testing.T) {
 	if err := os.WriteFile(src, []byte("id,name\n1,日本語\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	db, err := OpenContext(t.Context(), src)
+	db, err := Open(t.Context(), src)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -784,7 +784,7 @@ func TestADumpInAnEncodingThatHoldsTheTableStillWrites(t *testing.T) {
 
 	for _, encoding := range []Encoding{EncodingUTF8, EncodingShiftJIS, EncodingEUCJP, EncodingUTF16LE} {
 		out := t.TempDir()
-		if err := DumpDatabase(db, out, NewDumpOptions().WithEncoding(encoding)); err != nil {
+		if err := DumpDatabase(context.Background(), db, out, NewDumpOptions().WithEncoding(encoding)); err != nil {
 			t.Errorf("dump into %s = %v, want it to write", encoding, err)
 			continue
 		}

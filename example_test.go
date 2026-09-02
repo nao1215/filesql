@@ -21,7 +21,7 @@ import (
 //go:embed testdata/embed_test/*.csv testdata/embed_test/*.tsv
 var builderExampleFS embed.FS
 
-// ExampleOpen demonstrates how to use filesql.Open() with complex SQL queries.
+// ExampleOpen demonstrates how to use filesql.Open(context.Background(), ) with complex SQL queries.
 // This example shows advanced SQL features including JOINs, window functions,
 // subqueries, and aggregations on CSV data loaded into an in-memory SQLite database.
 func ExampleOpen() {
@@ -30,7 +30,7 @@ func ExampleOpen() {
 	defer os.RemoveAll(tmpDir)
 
 	// Open the database with multiple files
-	db, err := filesql.Open(filepath.Join(tmpDir, "employees.csv"), filepath.Join(tmpDir, "departments.csv"))
+	db, err := filesql.Open(context.Background(), filepath.Join(tmpDir, "employees.csv"), filepath.Join(tmpDir, "departments.csv"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func ExampleOpen_multipleFiles() {
 	defer os.RemoveAll(tmpDir)
 
 	// Open database with multiple paths (files and directories)
-	db, err := filesql.Open(tmpDir)
+	db, err := filesql.Open(context.Background(), tmpDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -230,8 +230,9 @@ func ExampleOpen_multipleFiles() {
 	// - employees
 }
 
-// ExampleOpenContext demonstrates opening files with context support for timeout and cancellation
-func ExampleOpenContext() {
+// ExampleOpen_timeout demonstrates opening files under a deadline, which is
+// what the context Open takes is for.
+func ExampleOpen_timeout() {
 	tmpDir := createTempTestData()
 	defer os.RemoveAll(tmpDir)
 
@@ -240,7 +241,7 @@ func ExampleOpenContext() {
 	defer cancel()
 
 	// Open database with context
-	db, err := filesql.OpenContext(ctx, filepath.Join(tmpDir, "employees.csv"))
+	db, err := filesql.Open(ctx, filepath.Join(tmpDir, "employees.csv"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -284,7 +285,7 @@ func ExampleOpen_constraints() {
 	tmpDir := createTempTestData()
 	defer os.RemoveAll(tmpDir)
 
-	db, err := filesql.Open(filepath.Join(tmpDir, "employees.csv"))
+	db, err := filesql.Open(context.Background(), filepath.Join(tmpDir, "employees.csv"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -313,7 +314,7 @@ func ExampleOpen_constraints() {
 	fmt.Printf("In-memory count after INSERT: %d\n", memoryCount)
 
 	// Verify original file is unchanged by reopening
-	db2, err := filesql.Open(filepath.Join(tmpDir, "employees.csv"))
+	db2, err := filesql.Open(context.Background(), filepath.Join(tmpDir, "employees.csv"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -340,7 +341,7 @@ func ExampleOpen_salesAnalysis() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	db, err := filesql.OpenContext(ctx, tmpDir)
+	db, err := filesql.Open(ctx, tmpDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -409,7 +410,7 @@ func ExampleOpen_customerInsights() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	db, err := filesql.OpenContext(ctx, tmpDir)
+	db, err := filesql.Open(ctx, tmpDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -478,7 +479,7 @@ func ExampleOpen_customerInsights() {
 // ExampleOpen_errorHandling demonstrates proper error handling patterns
 func ExampleOpen_errorHandling() {
 	// Example 1: Handling non-existent files gracefully
-	_, err := filesql.Open("nonexistent.csv")
+	_, err := filesql.Open(context.Background(), "nonexistent.csv")
 	if err != nil {
 		fmt.Printf("Expected error for non-existent file: %v\n", err)
 	}
@@ -491,7 +492,7 @@ func ExampleOpen_errorHandling() {
 	tmpDir := createTempTestData()
 	defer os.RemoveAll(tmpDir)
 
-	_, err = filesql.OpenContext(ctx, tmpDir)
+	_, err = filesql.Open(ctx, tmpDir)
 	if err != nil {
 		// Extract the core error message (context deadline exceeded)
 		errMsg := err.Error()
@@ -506,7 +507,7 @@ func ExampleOpen_errorHandling() {
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel2()
 
-	db, err := filesql.OpenContext(ctx2, tmpDir)
+	db, err := filesql.Open(ctx2, tmpDir)
 	if err != nil {
 		fmt.Printf("Unexpected error: %v\n", err)
 		return
@@ -549,7 +550,7 @@ func ExampleDumpDatabase() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	db, err := filesql.OpenContext(ctx, filepath.Join(tmpDir, "employees.csv"))
+	db, err := filesql.Open(ctx, filepath.Join(tmpDir, "employees.csv"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -582,7 +583,7 @@ func ExampleDumpDatabase() {
 	}
 
 	// Export modified data
-	err = filesql.DumpDatabase(db, outputDir)
+	err = filesql.DumpDatabase(context.Background(), db, outputDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -594,7 +595,7 @@ func ExampleDumpDatabase() {
 	}
 
 	// Count records in exported file
-	db2, err := filesql.OpenContext(ctx, exportedFile)
+	db2, err := filesql.Open(ctx, exportedFile)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -628,7 +629,7 @@ func ExampleOpen_performanceOptimization() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	db, err := filesql.OpenContext(ctx, tmpDir)
+	db, err := filesql.Open(ctx, tmpDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -749,7 +750,7 @@ func ExampleOpen_advancedSQL() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	db, err := filesql.OpenContext(ctx, tmpDir)
+	db, err := filesql.Open(ctx, tmpDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -926,7 +927,7 @@ func ExampleOpen_compressionSupport() {
 	defer cancel()
 
 	// Open compressed files seamlessly
-	db, err := filesql.OpenContext(ctx, tmpDir)
+	db, err := filesql.Open(ctx, tmpDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1030,7 +1031,7 @@ func ExampleOpen_webLogAnalysis() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	db, err := filesql.OpenContext(ctx, tmpDir)
+	db, err := filesql.Open(ctx, tmpDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1164,7 +1165,7 @@ func ExampleOpen_financialDataAnalysis() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	db, err := filesql.OpenContext(ctx, tmpDir)
+	db, err := filesql.Open(ctx, tmpDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1453,7 +1454,7 @@ func ExampleDumpDatabase_withOptions() {
 	defer os.RemoveAll(tempDir)
 
 	// Open CSV file
-	db, err := filesql.Open(filepath.Join("testdata", "sample.csv"))
+	db, err := filesql.Open(context.Background(), filepath.Join("testdata", "sample.csv"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1462,7 +1463,7 @@ func ExampleDumpDatabase_withOptions() {
 	// Example 1: Default CSV output (no options)
 	fmt.Println("Example 1: Default CSV output")
 	csvDir := filepath.Join(tempDir, "csv_output")
-	if err := filesql.DumpDatabase(db, csvDir); err != nil {
+	if err := filesql.DumpDatabase(context.Background(), db, csvDir); err != nil {
 		log.Fatal(err)
 	}
 
@@ -1481,7 +1482,7 @@ func ExampleDumpDatabase_withOptions() {
 	options := filesql.NewDumpOptions().
 		WithFormat(filesql.OutputFormatTSV).
 		WithCompression(filesql.CompressionGZ)
-	if err := filesql.DumpDatabase(db, tsvDir, options); err != nil {
+	if err := filesql.DumpDatabase(context.Background(), db, tsvDir, options); err != nil {
 		log.Fatal(err)
 	}
 
@@ -1499,7 +1500,7 @@ func ExampleDumpDatabase_withOptions() {
 	options3 := filesql.NewDumpOptions().
 		WithFormat(filesql.OutputFormatLTSV).
 		WithCompression(filesql.CompressionZSTD)
-	if err := filesql.DumpDatabase(db, ltsvDir, options3); err != nil {
+	if err := filesql.DumpDatabase(context.Background(), db, ltsvDir, options3); err != nil {
 		log.Fatal(err)
 	}
 
@@ -1530,7 +1531,7 @@ func ExampleDumpDatabase_multipleFormats() {
 	defer os.RemoveAll(tempDir)
 
 	// Open CSV file and modify data
-	db, err := filesql.Open(filepath.Join("testdata", "sample.csv"))
+	db, err := filesql.Open(context.Background(), filepath.Join("testdata", "sample.csv"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1562,7 +1563,7 @@ func ExampleDumpDatabase_multipleFormats() {
 			WithCompression(ct.compression)
 
 		outputDir := filepath.Join(tempDir, "compression_"+ct.compression.String())
-		if err := filesql.DumpDatabase(db, outputDir, options); err != nil {
+		if err := filesql.DumpDatabase(context.Background(), db, outputDir, options); err != nil {
 			log.Fatal(err)
 		}
 
@@ -1626,7 +1627,7 @@ func ExampleDumpDatabase_dataProcessing() {
 	defer os.RemoveAll(tempDir)
 
 	// Open CSV file
-	db, err := filesql.Open(filepath.Join("testdata", "sample.csv"))
+	db, err := filesql.Open(context.Background(), filepath.Join("testdata", "sample.csv"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1658,7 +1659,7 @@ func ExampleDumpDatabase_dataProcessing() {
 	// 1. TSV for spreadsheet import
 	options := filesql.NewDumpOptions().WithFormat(filesql.OutputFormatTSV)
 	spreadsheetDir := filepath.Join(tempDir, "for_spreadsheet")
-	if err := filesql.DumpDatabase(db, spreadsheetDir, options); err != nil {
+	if err := filesql.DumpDatabase(context.Background(), db, spreadsheetDir, options); err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println("Exported TSV for spreadsheet import")
@@ -1668,7 +1669,7 @@ func ExampleDumpDatabase_dataProcessing() {
 		WithFormat(filesql.OutputFormatCSV).
 		WithCompression(filesql.CompressionGZ)
 	archiveDir := filepath.Join(tempDir, "for_archive")
-	if err := filesql.DumpDatabase(db, archiveDir, options); err != nil {
+	if err := filesql.DumpDatabase(context.Background(), db, archiveDir, options); err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println("Exported compressed CSV for archival")
@@ -1676,7 +1677,7 @@ func ExampleDumpDatabase_dataProcessing() {
 	// 3. LTSV for log analysis
 	options = filesql.NewDumpOptions().WithFormat(filesql.OutputFormatLTSV)
 	logDir := filepath.Join(tempDir, "for_logs")
-	if err := filesql.DumpDatabase(db, logDir, options); err != nil {
+	if err := filesql.DumpDatabase(context.Background(), db, logDir, options); err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println("Exported LTSV for log analysis")

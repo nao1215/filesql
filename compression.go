@@ -10,21 +10,18 @@ import (
 	"github.com/nao1215/filesql/internal/codec"
 )
 
-// CompressionHandler defines the interface for handling file compression/decompression
-type CompressionHandler interface {
-	// CreateReader wraps an io.Reader with a decompression reader if needed
-	CreateReader(reader io.Reader) (io.Reader, func() error, error)
-	// CreateWriter wraps an io.Writer with a compression writer if needed
-	CreateWriter(writer io.Writer) (io.Writer, func() error, error)
-}
-
-// compressionHandlerImpl implements the CompressionHandler interface
-type compressionHandlerImpl struct {
+// compressionHandler wraps a reader or a writer in one codec. It is what
+// NewCompressionHandler returns.
+//
+// It is a type rather than an interface because nothing here takes one as an
+// argument: an interface only a caller can hold, never hand back, gives them
+// nothing to substitute and makes every method added to it a breaking change.
+type compressionHandler struct {
 	compressionType CompressionType
 }
 
 // CreateReader creates a decompression reader based on the compression type
-func (h *compressionHandlerImpl) CreateReader(reader io.Reader) (io.Reader, func() error, error) {
+func (h *compressionHandler) CreateReader(reader io.Reader) (io.Reader, func() error, error) {
 	decompressed, closeFunc, err := codec.Codec(h.compressionType).NewReader(reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %w", ErrCompression, err)
@@ -33,7 +30,7 @@ func (h *compressionHandlerImpl) CreateReader(reader io.Reader) (io.Reader, func
 }
 
 // CreateWriter creates a compression writer based on the compression type
-func (h *compressionHandlerImpl) CreateWriter(writer io.Writer) (io.Writer, func() error, error) {
+func (h *compressionHandler) CreateWriter(writer io.Writer) (io.Writer, func() error, error) {
 	compressed, closeFunc, err := codec.Codec(h.compressionType).NewWriter(writer)
 	if err != nil {
 		// A codec that has no writer at all is an unsupported format, not a
@@ -46,9 +43,12 @@ func (h *compressionHandlerImpl) CreateWriter(writer io.Writer) (io.Writer, func
 	return compressed, closeFunc, nil
 }
 
-// NewCompressionHandler creates a new compression handler for the given compression type
-func NewCompressionHandler(compressionType CompressionType) CompressionHandler {
-	return &compressionHandlerImpl{
+// NewCompressionHandler returns a handler that wraps a reader or a writer in
+// the given codec. CompressionNone hands the stream back untouched, so a caller
+// that does not know whether a stream is compressed can use one handler either
+// way.
+func NewCompressionHandler(compressionType CompressionType) *compressionHandler { //nolint:revive // the type is deliberately unexported: nothing here accepts one, so only the constructor is API
+	return &compressionHandler{
 		compressionType: compressionType,
 	}
 }
@@ -68,7 +68,7 @@ func (f *CompressionFactory) detectCompressionType(path string) CompressionType 
 }
 
 // createHandlerForFile creates an appropriate compression handler for a given file path
-func (f *CompressionFactory) createHandlerForFile(path string) CompressionHandler {
+func (f *CompressionFactory) createHandlerForFile(path string) *compressionHandler {
 	compressionType := f.detectCompressionType(path)
 	return NewCompressionHandler(compressionType)
 }
@@ -86,7 +86,7 @@ func (f *CompressionFactory) createHandlerForFile(path string) CompressionHandle
 // entry before anything is opened; this is the floor under that, for the calls
 // that reach a path without going through a collection. A caller who means to
 // read a pipe opens it themselves and passes the reader to
-// CompressionHandler.CreateReader or to DBBuilder.AddReader, where the blocking
+// NewCompressionHandler(...).CreateReader or to DBBuilder.AddReader, where the blocking
 // is their own.
 func (f *CompressionFactory) CreateReaderForFile(path string) (io.Reader, func() error, error) {
 	file, err := openRegularFile(path)

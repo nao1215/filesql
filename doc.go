@@ -26,9 +26,9 @@
 //
 // # Basic Usage
 //
-// The simplest way to use filesql is with the Open or OpenContext functions:
+// The simplest way to use filesql is with the Open function:
 //
-//	db, err := filesql.Open("data.csv")
+//	db, err := filesql.Open(context.Background(), "data.csv")
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
@@ -211,7 +211,7 @@
 //
 // # Concurrency
 //
-// The *sql.DB returned by Open and OpenContext is safe to share across
+// The *sql.DB returned by Open is safe to share across
 // goroutines: a shared-cache in-memory database is used so pooled connections
 // see the same tables. Auto-save does not change that, since EnableAutoSave
 // saves once when Close returns and EnableAutoSaveOnCommit saves one at a time.
@@ -308,8 +308,8 @@
 //
 // # Saving Changes
 //
-// There are three ways to write the database out. DumpDatabase and
-// DumpDatabaseContext export it to files when an explicit step is wanted;
+// There are three ways to write the database out. DumpDatabase exports it to
+// files when an explicit step is wanted;
 // DBBuilder.EnableAutoSave writes when Close runs; DBBuilder.EnableAutoSaveOnCommit
 // writes after each committed transaction and again at close, so a statement run
 // outside a transaction is not lost. A transaction still open when Close runs has
@@ -429,9 +429,10 @@
 //
 // # Cancellation
 //
-// OpenContext, DBBuilder.Open, DBBuilder.OpenReadOnly, LoadInto, LoadIntoTx and
-// DumpDatabaseContext take a context; Open and DumpDatabase are the same calls
-// with a background one, so they cannot be canceled. A load stops soon after
+// Open, DBBuilder.Open, DBBuilder.OpenReadOnly, LoadInto, LoadIntoTx and
+// DumpDatabase all take a context, so any of them can be given a deadline or
+// canceled; pass context.Background to a call that needs neither. A load stops
+// soon after
 // its context ends, and whatever the database said on the way out, the error it
 // returns matches context.Canceled or context.DeadlineExceeded. Soon is the next
 // read for a source that is a stream, and the next chunk for one that is an open

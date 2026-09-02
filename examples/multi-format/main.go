@@ -17,7 +17,7 @@ func main() {
 
 	// Open multiple files of different formats at once
 	// Each file becomes a separate table
-	db, err := filesql.OpenContext(ctx,
+	db, err := filesql.Open(ctx,
 		"products.csv", // CSV format
 		"orders.tsv",   // TSV format
 		"logs.ltsv",    // LTSV format

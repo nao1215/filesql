@@ -24,7 +24,7 @@ func TestAutoSaveConnection_PerformACHAutoSave(t *testing.T) {
 	ctx := context.Background()
 
 	// Open ACH file to register table set
-	db, err := OpenContext(ctx, testFile)
+	db, err := Open(ctx, testFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -65,7 +65,7 @@ func TestAutoSaveConnection_PerformACHAutoSave_NoTables(t *testing.T) {
 	ctx := context.Background()
 
 	// Open a CSV file (not ACH) to ensure no ACH tables are registered
-	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	db, err := Open(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -103,7 +103,7 @@ func TestAutoSaveConnection_OverwriteOriginalFiles_ACH(t *testing.T) {
 	require.NoError(t, err)
 
 	// Open the temp ACH file
-	db, err := OpenContext(ctx, tmpFile)
+	db, err := Open(ctx, tmpFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -131,7 +131,7 @@ func TestAutoSaveConnection_OverwriteOriginalFiles_ACH(t *testing.T) {
 func TestAutoSaveConnection_OverwriteOriginalFiles_NoOriginalPaths(t *testing.T) {
 	ctx := context.Background()
 
-	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	db, err := Open(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -173,7 +173,7 @@ func TestAutoSaveConnection_PerformACHAutoSave_DumpError(t *testing.T) {
 	ctx := context.Background()
 
 	// Open a CSV file to get a valid db connection
-	db, err := OpenContext(ctx, filepath.Join("testdata", "test.csv"))
+	db, err := Open(ctx, filepath.Join("testdata", "test.csv"))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -206,7 +206,7 @@ func TestAutoSaveConnection_ExecContext(t *testing.T) {
 	csvFile := filepath.Join(tempDir, "test.csv")
 	require.NoError(t, os.WriteFile(csvFile, []byte("id,name\n1,Alice\n2,Bob"), 0600))
 
-	db, err := Open(csvFile)
+	db, err := Open(context.Background(), csvFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -229,7 +229,7 @@ func TestAutoSaveConnection_QueryContext(t *testing.T) {
 	csvFile := filepath.Join(tempDir, "test.csv")
 	require.NoError(t, os.WriteFile(csvFile, []byte("id,name\n1,Alice\n2,Bob"), 0600))
 
-	db, err := Open(csvFile)
+	db, err := Open(context.Background(), csvFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -257,7 +257,7 @@ func TestAutoSaveTransaction_Rollback(t *testing.T) {
 	csvFile := filepath.Join(tempDir, "test.csv")
 	require.NoError(t, os.WriteFile(csvFile, []byte("id,name\n1,Alice\n2,Bob"), 0600))
 
-	db, err := Open(csvFile)
+	db, err := Open(context.Background(), csvFile)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -290,7 +290,7 @@ func TestPerformFedWireAutoSave(t *testing.T) {
 	t.Run("writes one file per loaded Fedwire source", func(t *testing.T) {
 		t.Parallel()
 
-		db, err := Open(filepath.Join("testdata", "customer-transfer.fed"))
+		db, err := Open(context.Background(), filepath.Join("testdata", "customer-transfer.fed"))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = db.Close() })
 
@@ -313,7 +313,7 @@ func TestPerformFedWireAutoSave(t *testing.T) {
 	t.Run("reports an output directory it cannot create", func(t *testing.T) {
 		t.Parallel()
 
-		db, err := Open(filepath.Join("testdata", "customer-transfer.fed"))
+		db, err := Open(context.Background(), filepath.Join("testdata", "customer-transfer.fed"))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = db.Close() })
 
@@ -331,7 +331,7 @@ func TestPerformFedWireAutoSave(t *testing.T) {
 func TestPerformACHAutoSave_UncreatableOutputDirectory(t *testing.T) {
 	t.Parallel()
 
-	db, err := Open(filepath.Join("testdata", "ppd-debit.ach"))
+	db, err := Open(context.Background(), filepath.Join("testdata", "ppd-debit.ach"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -516,7 +516,7 @@ func TestDumpDatabase_RefusesACodecItCannotWrite(t *testing.T) {
 	defer db.Close()
 
 	out := filepath.Join(dir, "out")
-	err = DumpDatabase(db, out, NewDumpOptions().WithCompression(CompressionBZ2))
+	err = DumpDatabase(context.Background(), db, out, NewDumpOptions().WithCompression(CompressionBZ2))
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUnsupportedFormat)
 	assert.ErrorIs(t, err, ErrIOOperation)
@@ -594,7 +594,7 @@ func TestDumpDatabase_RefusesABlankDestination(t *testing.T) {
 	src := filepath.Join(dir, "users.csv")
 	require.NoError(t, os.WriteFile(src, []byte("id,name\n1,alice\n"), 0o600))
 
-	db, err := OpenContext(t.Context(), src)
+	db, err := Open(t.Context(), src)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -605,12 +605,12 @@ func TestDumpDatabase_RefusesABlankDestination(t *testing.T) {
 	t.Chdir(work)
 
 	for _, path := range []string{"", " ", "   ", "\t", "\n"} {
-		err := DumpDatabase(db, path)
-		assert.ErrorIs(t, err, ErrEmptyPath, "DumpDatabase(db, %q)", path)
+		err := DumpDatabase(context.Background(), db, path)
+		assert.ErrorIs(t, err, ErrEmptyPath, "DumpDatabase(context.Background(), db, %q)", path)
 
 		entries, readErr := os.ReadDir(work)
 		require.NoError(t, readErr)
-		assert.Empty(t, entries, "DumpDatabase(db, %q) created something in the working directory", path)
+		assert.Empty(t, entries, "DumpDatabase(context.Background(), db, %q) created something in the working directory", path)
 	}
 }
 
@@ -626,11 +626,11 @@ func TestDumpDatabase_RefusesADestinationThatIsNotADirectory(t *testing.T) {
 	occupied := filepath.Join(dir, "occupied")
 	require.NoError(t, os.WriteFile(occupied, []byte("x"), 0o600))
 
-	db, err := OpenContext(t.Context(), src)
+	db, err := Open(t.Context(), src)
 	require.NoError(t, err)
 	defer db.Close()
 
-	err = DumpDatabase(db, occupied)
+	err = DumpDatabase(context.Background(), db, occupied)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrIOOperation)
 	assert.Contains(t, err.Error(), "not a directory")
@@ -821,7 +821,7 @@ func TestSaveNamesAMissingTableAsMissing(t *testing.T) {
 		path := filepath.Join(dir, "empty.csv")
 		require.NoError(t, os.WriteFile(path, nil, 0o600))
 
-		_, err := Open(path)
+		_, err := Open(context.Background(), path)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrEmptyData)
 	})

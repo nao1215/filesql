@@ -643,7 +643,7 @@ func TestCancelingALoadAlwaysReportsTheContextError(t *testing.T) {
 		// of the load each time, which is what makes the race happen at all.
 		deadline := time.Duration(1+attempt) * time.Millisecond
 		ctx, cancel := context.WithTimeout(context.Background(), deadline)
-		db, err := OpenContext(ctx, path)
+		db, err := Open(ctx, path)
 		if db != nil {
 			_ = db.Close()
 		}

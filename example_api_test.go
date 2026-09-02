@@ -537,7 +537,7 @@ id,name
 	}
 
 	out := filepath.Join(dir, "out")
-	if err := filesql.DumpDatabase(db, out); err != nil {
+	if err := filesql.DumpDatabase(context.Background(), db, out); err != nil {
 		log.Fatal(err)
 	}
 
@@ -656,7 +656,7 @@ func ExampleDumpACH() {
 	defer os.RemoveAll(dir)
 
 	ctx := context.Background()
-	db, err := filesql.Open("testdata/ppd-debit.ach")
+	db, err := filesql.Open(context.Background(), "testdata/ppd-debit.ach")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -672,7 +672,7 @@ func ExampleDumpACH() {
 		log.Fatal(err)
 	}
 
-	reloaded, err := filesql.Open(out)
+	reloaded, err := filesql.Open(context.Background(), out)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -698,7 +698,7 @@ func ExampleDumpFedWire() {
 	defer os.RemoveAll(dir)
 
 	ctx := context.Background()
-	db, err := filesql.Open("testdata/customer-transfer.fed")
+	db, err := filesql.Open(context.Background(), "testdata/customer-transfer.fed")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -714,7 +714,7 @@ func ExampleDumpFedWire() {
 		log.Fatal(err)
 	}
 
-	reloaded, err := filesql.Open(out)
+	reloaded, err := filesql.Open(context.Background(), out)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -764,7 +764,7 @@ func ExampleDumpACHWithSource() {
 		log.Fatal(err)
 	}
 
-	reloaded, err := filesql.Open(out)
+	reloaded, err := filesql.Open(context.Background(), out)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -813,7 +813,7 @@ func ExampleDumpFedWireWithSource() {
 		log.Fatal(err)
 	}
 
-	reloaded, err := filesql.Open(out)
+	reloaded, err := filesql.Open(context.Background(), out)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -829,10 +829,10 @@ func ExampleDumpFedWireWithSource() {
 	// 000000012500
 }
 
-// ExampleDumpDatabaseContext exports under a deadline, which is what a handler
-// serving a download wants: the export stops when the request it belongs to
-// does.
-func ExampleDumpDatabaseContext() {
+// ExampleDumpDatabase_deadline exports under a deadline, which is what a
+// handler serving a download wants: the export stops when the request it
+// belongs to does.
+func ExampleDumpDatabase_deadline() {
 	dir, err := os.MkdirTemp("", "filesql-dump-context")
 	if err != nil {
 		log.Fatal(err)
@@ -847,14 +847,14 @@ func ExampleDumpDatabaseContext() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	db, err := filesql.OpenContext(ctx, source)
+	db, err := filesql.Open(ctx, source)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 
 	out := filepath.Join(dir, "out")
-	if err := filesql.DumpDatabaseContext(ctx, db, out); err != nil {
+	if err := filesql.DumpDatabase(ctx, db, out); err != nil {
 		log.Fatal(err)
 	}
 
@@ -867,7 +867,7 @@ func ExampleDumpDatabaseContext() {
 	// A context that is already done stops the export before it writes anything.
 	done, stop := context.WithCancel(context.Background())
 	stop()
-	fmt.Println(errors.Is(filesql.DumpDatabaseContext(done, db, filepath.Join(dir, "none")), context.Canceled))
+	fmt.Println(errors.Is(filesql.DumpDatabase(done, db, filepath.Join(dir, "none")), context.Canceled))
 
 	// Output:
 	// id,total

@@ -451,7 +451,7 @@ func TestLoadInto_DumpDatabaseOnCallerDB(t *testing.T) {
 
 	outputDir := filepath.Join(dir, "out")
 	done := make(chan error, 1)
-	go func() { done <- DumpDatabase(db, outputDir) }()
+	go func() { done <- DumpDatabase(context.Background(), db, outputDir) }()
 
 	select {
 	case err := <-done:

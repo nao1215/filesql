@@ -416,12 +416,12 @@ func TestDumpDatabase_WithLineEnding(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "users.csv")
 	require.NoError(t, os.WriteFile(source, []byte("id,v\n1,a\n"), 0o600))
 
-	db, err := Open(source)
+	db, err := Open(context.Background(), source)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
 	outputDir := t.TempDir()
-	require.NoError(t, DumpDatabase(db, outputDir, NewDumpOptions().WithLineEnding(LineEndingCRLF)))
+	require.NoError(t, DumpDatabase(context.Background(), db, outputDir, NewDumpOptions().WithLineEnding(LineEndingCRLF)))
 
 	got, err := os.ReadFile(filepath.Join(outputDir, "users.csv")) //nolint:gosec // Test path from t.TempDir()
 	require.NoError(t, err)
@@ -495,12 +495,12 @@ func TestSaveLineEndingByDestination(t *testing.T) {
 
 		path := newSource(t)
 		ctx := t.Context()
-		db, err := Open(path)
+		db, err := Open(context.Background(), path)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = db.Close() })
 		_, err = db.ExecContext(ctx, update)
 		require.NoError(t, err)
-		require.NoError(t, DumpDatabase(db, filepath.Dir(path)))
+		require.NoError(t, DumpDatabase(context.Background(), db, filepath.Dir(path)))
 
 		got, err := os.ReadFile(path) //nolint:gosec // Test path from t.TempDir()
 		require.NoError(t, err)
@@ -535,12 +535,12 @@ func TestSaveLineEndingByDestination(t *testing.T) {
 
 		path := newSource(t)
 		ctx := t.Context()
-		db, err := Open(path)
+		db, err := Open(context.Background(), path)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = db.Close() })
 		_, err = db.ExecContext(ctx, update)
 		require.NoError(t, err)
-		require.NoError(t, DumpDatabase(db, filepath.Dir(path), NewDumpOptions().WithLineEnding(LineEndingCRLF)))
+		require.NoError(t, DumpDatabase(context.Background(), db, filepath.Dir(path), NewDumpOptions().WithLineEnding(LineEndingCRLF)))
 
 		got, err := os.ReadFile(path) //nolint:gosec // Test path from t.TempDir()
 		require.NoError(t, err)
@@ -670,10 +670,10 @@ func TestAutoSaveOverwriteKeepsCompression(t *testing.T) {
 	// Build the fixture through the dump path so it is a real archive.
 	plain := filepath.Join(dir, "seed.csv")
 	require.NoError(t, os.WriteFile(plain, []byte("id,name\n1,alice\n"), 0o600))
-	seedDB, err := OpenContext(ctx, plain)
+	seedDB, err := Open(ctx, plain)
 	require.NoError(t, err)
 	gzDir := filepath.Join(dir, "gz")
-	require.NoError(t, DumpDatabase(seedDB, gzDir, NewDumpOptions().WithCompression(CompressionGZ)))
+	require.NoError(t, DumpDatabase(context.Background(), seedDB, gzDir, NewDumpOptions().WithCompression(CompressionGZ)))
 	require.NoError(t, seedDB.Close())
 
 	src := filepath.Join(gzDir, "seed.csv.gz")
@@ -682,7 +682,7 @@ func TestAutoSaveOverwriteKeepsCompression(t *testing.T) {
 	assert.Equal(t, []string{"seed.csv.gz"}, dirEntries(t, gzDir), "the archive is replaced, not sidestepped")
 
 	// Reading it back is what proves it is still a gzip archive holding the change.
-	reloaded, err := OpenContext(ctx, src)
+	reloaded, err := Open(ctx, src)
 	require.NoError(t, err)
 	defer reloaded.Close()
 
@@ -800,10 +800,10 @@ func TestAutoSaveOverwriteXLSX(t *testing.T) {
 		// Build a single-sheet workbook through the dump path.
 		plain := filepath.Join(dir, "book.csv")
 		require.NoError(t, os.WriteFile(plain, []byte("id,name\n1,alice\n"), 0o600))
-		seedDB, err := OpenContext(ctx, plain)
+		seedDB, err := Open(ctx, plain)
 		require.NoError(t, err)
 		bookDir := filepath.Join(dir, "book")
-		require.NoError(t, DumpDatabase(seedDB, bookDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+		require.NoError(t, DumpDatabase(context.Background(), seedDB, bookDir, NewDumpOptions().WithFormat(OutputFormatXLSX)))
 		require.NoError(t, seedDB.Close())
 
 		src := filepath.Join(bookDir, "book.xlsx")
@@ -811,7 +811,7 @@ func TestAutoSaveOverwriteXLSX(t *testing.T) {
 
 		assert.Equal(t, []string{"book.xlsx"}, dirEntries(t, bookDir))
 
-		reloaded, err := OpenContext(ctx, src)
+		reloaded, err := Open(ctx, src)
 		require.NoError(t, err)
 		defer reloaded.Close()
 
@@ -840,7 +840,7 @@ func TestAutoSaveOverwriteXLSX(t *testing.T) {
 		require.NoError(t, autoSaveOverwrite(t, []string{src}, "UPDATE book_Orders SET name = 'carol'"))
 		assert.Equal(t, []string{"Orders"}, workbookSheets(t, src))
 
-		reloaded, err := OpenContext(ctx, src)
+		reloaded, err := Open(ctx, src)
 		require.NoError(t, err)
 		defer reloaded.Close()
 		var name string
@@ -867,7 +867,7 @@ func TestAutoSaveOverwriteXLSX(t *testing.T) {
 			"every sheet has to come back, under its own name")
 		assert.Equal(t, []string{"book.xlsx"}, dirEntries(t, dir), "nothing else may be written")
 
-		reloaded, err := OpenContext(ctx, src)
+		reloaded, err := Open(ctx, src)
 		require.NoError(t, err)
 		defer reloaded.Close()
 		var name, city string
@@ -899,7 +899,7 @@ func TestAutoSaveOverwriteXLSX(t *testing.T) {
 			"book.xlsx holds its own sheet only: book_v2.xlsx's tables are named inside book's prefix space, but they are not book's")
 		assert.Equal(t, []string{"Orders"}, workbookSheets(t, sibling))
 
-		reloaded, err := OpenContext(ctx, book, sibling)
+		reloaded, err := Open(ctx, book, sibling)
 		require.NoError(t, err)
 		defer reloaded.Close()
 
@@ -960,7 +960,7 @@ func TestAutoSaveOverwriteXLSX(t *testing.T) {
 
 		assert.Equal(t, []string{"book.xlsx.gz"}, dirEntries(t, dir), "nothing else may be written")
 
-		reloaded, err := OpenContext(ctx, src)
+		reloaded, err := Open(ctx, src)
 		require.NoError(t, err)
 		defer reloaded.Close()
 		var name, city string
@@ -1029,7 +1029,7 @@ func TestAutoSaveOverwriteXLSX(t *testing.T) {
 		assert.Equal(t, before, workbookSheets(t, src), "the sheets have to come back as they were")
 		assert.Equal(t, []string{"book.xlsx"}, dirEntries(t, dir), "nothing else may be written")
 
-		reloaded, err := OpenContext(ctx, src)
+		reloaded, err := Open(ctx, src)
 		require.NoError(t, err)
 		defer reloaded.Close()
 		var name string
@@ -1563,13 +1563,13 @@ func parquetSeed(t *testing.T) []byte {
 	csv := filepath.Join(dir, "users.csv")
 	require.NoError(t, os.WriteFile(csv, []byte("id,name\n1,alice\n"), 0o600))
 
-	db, err := OpenContext(t.Context(), csv)
+	db, err := Open(t.Context(), csv)
 	require.NoError(t, err)
 	defer db.Close()
 
 	out := filepath.Join(dir, "out")
 	require.NoError(t, os.MkdirAll(out, 0o750))
-	require.NoError(t, DumpDatabaseContext(t.Context(), db, out, NewDumpOptions().WithFormat(OutputFormatParquet)))
+	require.NoError(t, DumpDatabase(t.Context(), db, out, NewDumpOptions().WithFormat(OutputFormatParquet)))
 
 	body, err := os.ReadFile(filepath.Join(out, "users.parquet")) //nolint:gosec // out is under t.TempDir()
 	require.NoError(t, err)
@@ -2050,7 +2050,7 @@ func TestAutoSaveOverwriteXLSXFindsTheSheetItRead(t *testing.T) {
 			assert.Equal(t, []string{tt.sheet}, workbookSheets(t, src),
 				"the rows belong in the sheet they were read from")
 
-			reloaded, err := OpenContext(ctx, src)
+			reloaded, err := Open(ctx, src)
 			require.NoError(t, err)
 			defer reloaded.Close()
 
@@ -2077,7 +2077,7 @@ func TestAutoSaveOverwriteXLSXFindsTheSheetItRead(t *testing.T) {
 
 		assert.Equal(t, []string{"Orders", "Q1 Sales"}, workbookSheets(t, src))
 
-		reloaded, err := OpenContext(ctx, src)
+		reloaded, err := Open(ctx, src)
 		require.NoError(t, err)
 		defer reloaded.Close()
 
@@ -2106,7 +2106,7 @@ func TestAutoSaveOverwriteXLSXFindsTheSheetItRead(t *testing.T) {
 		assert.Equal(t, []string{"Extra", "Orders"}, workbookSheets(t, src),
 			"a table of this workbook with no sheet of its own is written as a new one")
 
-		reloaded, err := OpenContext(ctx, src)
+		reloaded, err := Open(ctx, src)
 		require.NoError(t, err)
 		defer reloaded.Close()
 
@@ -2369,10 +2369,10 @@ func TestAutoSaveOverwriteXLSXRefusesWhatXMLCannotHold(t *testing.T) {
 	dir := t.TempDir()
 
 	// Build the workbook through the dump path, which is the only writer here.
-	seed, err := OpenContext(ctx, writeTestFile(t, dir, "t.csv", "v\nplain\n"))
+	seed, err := Open(ctx, writeTestFile(t, dir, "t.csv", "v\nplain\n"))
 	require.NoError(t, err)
 	out := filepath.Join(dir, "out")
-	require.NoError(t, DumpDatabase(seed, out, NewDumpOptions().WithFormat(OutputFormatXLSX)))
+	require.NoError(t, DumpDatabase(context.Background(), seed, out, NewDumpOptions().WithFormat(OutputFormatXLSX)))
 	require.NoError(t, seed.Close())
 
 	book := filepath.Join(out, "t.xlsx")
