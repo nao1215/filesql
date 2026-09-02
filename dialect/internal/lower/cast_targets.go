@@ -36,7 +36,7 @@ var mysqlCastTargets = map[string]bool{ //nolint:gochecknoglobals // a fixed tab
 var postgresCastTargets = map[string]bool{ //nolint:gochecknoglobals // a fixed table
 	"BIGSERIAL": true, "BPCHAR": true, "BYTEA": true, "CHARACTER": true, "FLOAT4": true,
 	"FLOAT8": true, "INT2": true, "INT4": true, "INT8": true, "INTERVAL": true, "JSONB": true,
-	"MONEY": true, "NAME": true, "SERIAL": true, "TIMESTAMPTZ": true, "UUID": true,
+	"MONEY": true, "NAME": true, "SERIAL": true, "TIMESTAMPTZ": true, "TIMETZ": true, "UUID": true,
 	typeNameSmallserial: true, "INET": true, "CIDR": true, "MACADDR": true, "XML": true,
 	typeNameTimestampWithZone: true, typeNameTimestampWithoutZone: true,
 	"TIME WITH TIME ZONE": true, "TIME WITHOUT TIME ZONE": true,

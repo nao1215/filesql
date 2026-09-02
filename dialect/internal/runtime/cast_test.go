@@ -79,6 +79,7 @@ func TestCastSemantics(t *testing.T) {
 		{"postgresql casts to a timestamp with a zone", dialects.PostgreSQL, `SELECT '2024-01-02 03:04:05'::timestamp with time zone`, "2024-01-02 03:04:05", false},
 		{"postgresql casts to a time spelled in full", dialects.PostgreSQL, `SELECT '03:04:05'::time without time zone`, "03:04:05", false},
 		{"postgresql casts to a time with a zone", dialects.PostgreSQL, `SELECT '03:04:05'::time with time zone`, "03:04:05", false},
+		{"postgresql casts to timetz", dialects.PostgreSQL, `SELECT '03:04:05'::timetz`, "03:04:05", false},
 		{"postgresql casts to character varying", dialects.PostgreSQL, `SELECT 'abc'::character varying`, "abc", false},
 		{"postgresql applies a character varying length", dialects.PostgreSQL, `SELECT CAST('abc' AS character varying(2))`, "ab", false},
 		{"postgresql casts to double precision", dialects.PostgreSQL, `SELECT '1.5'::double precision`, "1.5", false},

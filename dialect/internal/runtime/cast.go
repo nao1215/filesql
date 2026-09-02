@@ -129,6 +129,7 @@ var pgCastKinds = map[string]castKind{
 	"UUID":        castUUID,
 	"JSONB":       castJSON,
 	"TIMESTAMPTZ": castTimestamp,
+	"TIMETZ":      castTime,
 	kwInterval:    castText,
 	"BYTEA":       castBlob,
 	"SMALLSERIAL": castInt,
