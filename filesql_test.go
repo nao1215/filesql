@@ -3480,6 +3480,102 @@ func TestWriteXLSXTableData(t *testing.T) {
 	})
 }
 
+// TestAnEmptySourceIsRefusedExceptWhereADocumentCanSayNothing pins which
+// formats refuse a source with nothing in it and which load one as a table with
+// no rows. The split is deliberate and was undocumented: JSON and JSONL are the
+// two formats whose empty input a caller reads as "the pipeline produced no
+// rows", and sqly relies on opening such a file rather than failing. Every other
+// format refuses it, because nothing in those formats can say "no rows" without
+// saying anything at all.
+func TestAnEmptySourceIsRefusedExceptWhereADocumentCanSayNothing(t *testing.T) {
+	t.Parallel()
+
+	refusing := []struct {
+		ext      string
+		fileType FileType
+	}{
+		{".csv", FileTypeCSV},
+		{".tsv", FileTypeTSV},
+		{".ltsv", FileTypeLTSV},
+		{".parquet", FileTypeParquet},
+		{".xlsx", FileTypeXLSX},
+	}
+	loading := []struct {
+		ext      string
+		fileType FileType
+	}{
+		{".json", FileTypeJSON},
+		{".jsonl", FileTypeJSONL},
+	}
+
+	t.Run("an empty file of a format that cannot say nothing", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		for _, f := range refusing {
+			path := filepath.Join(dir, "e"+f.ext)
+			require.NoError(t, os.WriteFile(path, nil, 0o600))
+
+			_, err := OpenContext(t.Context(), path)
+			require.Error(t, err, "an empty %s file must be refused", f.ext)
+			assert.ErrorIs(t, err, ErrEmptyData, "an empty %s file must be refused", f.ext)
+		}
+	})
+
+	t.Run("an empty JSON or JSONL file is a table with no rows", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		for _, f := range loading {
+			path := filepath.Join(dir, "e"+f.ext)
+			require.NoError(t, os.WriteFile(path, nil, 0o600))
+
+			db, err := OpenContext(t.Context(), path)
+			require.NoError(t, err, "an empty %s file loads as a table with no rows", f.ext)
+
+			var rows int
+			require.NoError(t, db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM e").Scan(&rows))
+			assert.Equal(t, 0, rows, f.ext)
+			require.NoError(t, db.Close())
+		}
+	})
+
+	t.Run("an empty reader is refused whatever the format", func(t *testing.T) {
+		t.Parallel()
+
+		// A reader carries no name and no size, so the exemption above does not
+		// reach it and every format answers alike here.
+		for _, f := range append(append([]struct {
+			ext      string
+			fileType FileType
+		}{}, refusing...), loading...) {
+			_, err := NewBuilder().
+				AddReader(strings.NewReader(""), "e", f.fileType).
+				Open(t.Context())
+			require.Error(t, err, "an empty %s reader must be refused", f.ext)
+			assert.ErrorIs(t, err, ErrEmptyData, "an empty %s reader must be refused", f.ext)
+		}
+	})
+
+	t.Run("a document saying there is nothing is a table", func(t *testing.T) {
+		t.Parallel()
+
+		// The distinction the exemption rests on: "[]" is a document that says
+		// there are no rows, which a CSV holding only its header also is.
+		dir := t.TempDir()
+		path := filepath.Join(dir, "e.json")
+		require.NoError(t, os.WriteFile(path, []byte("[]"), 0o600))
+
+		db, err := OpenContext(t.Context(), path)
+		require.NoError(t, err)
+		defer db.Close()
+
+		var rows int
+		require.NoError(t, db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM e").Scan(&rows))
+		assert.Equal(t, 0, rows)
+	})
+}
+
 func TestEdgeCasesEmptyAndMalformedData(t *testing.T) {
 	t.Parallel()
 
