@@ -1985,6 +1985,16 @@ func TestFunctionsFollowTheSourceDialect(t *testing.T) {
 		{name: "googlesql format prints an integer literal", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%T', 3)`, want: "3"},
 		{name: "googlesql format prints null", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%t', NULL)`, want: "NULL"},
 		{name: "googlesql format prints a null literal", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%T', NULL)`, want: "NULL"},
+		// A BOOL prints as the word under both verbs, where SQLite stores it as
+		// the number 1. Only a literal can be told apart, so a computed boolean
+		// keeps printing the number.
+		{name: "googlesql format prints a boolean bare", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%t', TRUE)`, want: "true"},
+		{name: "googlesql format prints a boolean literal", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%T', TRUE)`, want: "true"},
+		{name: "googlesql format prints a false", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%T', FALSE)`, want: "false"},
+		{name: "googlesql format prints a boolean among others", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%s=%T', 'a', TRUE)`, want: "a=true"},
+		{name: "googlesql format prints a boolean after a percent", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('100%% %T', TRUE)`, want: "100% true"},
+		{name: "googlesql format prints two booleans", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%T %T', TRUE, FALSE)`, want: "true false"},
+		{name: "googlesql format prints a computed boolean as a number", dialect: dialects.GoogleSQL, query: `SELECT FORMAT('%T', 1 = 1)`, want: "1"},
 		// A BYTES value and a STRING value spelling the same characters have
 		// different literals, which is what %T exists to tell apart. The wants
 		// were derived from the ZetaSQL documentation of %t and %T, whose row

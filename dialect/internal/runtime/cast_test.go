@@ -70,6 +70,27 @@ func TestCastSemantics(t *testing.T) {
 		{"mysql keeps bytes that are not utf-8", dialects.MySQL, `SELECT HEX(CAST(UNHEX('61ff62') AS CHAR))`, "61FF62", false},
 		{"postgresql keeps bytes that are not utf-8", dialects.PostgreSQL, `SELECT length(CAST(decode('61ff62', 'hex') AS text))`, "3", false},
 
+		// A boolean written as a literal is a boolean, not the 1 SQLite stores
+		// it as. Only the literal can be told apart: a boolean that is computed
+		// reaches a helper as int64, so the reading is decided while lowering.
+		// The PostgreSQL wants were read from postgres:17, the MySQL ones from
+		// mysql:8.4, and the GoogleSQL ones taken from the ZetaSQL rule that
+		// casting BOOL to STRING "returns \"true\" if x is TRUE, \"false\"
+		// otherwise".
+		{"postgresql writes a true as its word", dialects.PostgreSQL, `SELECT true::text`, "true", false},
+		{"postgresql writes a false as its word", dialects.PostgreSQL, `SELECT false::text`, "false", false},
+		{"postgresql writes a boolean into a varchar", dialects.PostgreSQL, `SELECT CAST(true AS varchar)`, "true", false},
+		{"postgresql truncates the word to the char length", dialects.PostgreSQL, `SELECT CAST(true AS char(2))`, "tr", false},
+		{"postgresql keeps a boolean cast to an integer", dialects.PostgreSQL, `SELECT true::int`, "1", false},
+		{"googlesql writes a boolean as its word", dialects.GoogleSQL, `SELECT CAST(TRUE AS STRING)`, "true", false},
+		{"googlesql writes a false as its word", dialects.GoogleSQL, `SELECT CAST(FALSE AS STRING)`, "false", false},
+		{"googlesql keeps a boolean cast to an integer", dialects.GoogleSQL, `SELECT CAST(TRUE AS INT64)`, "1", false},
+		{"mysql writes a boolean as json", dialects.MySQL, `SELECT CAST(TRUE AS JSON)`, "true", false},
+		{"mysql writes a boolean to char as the number", dialects.MySQL, `SELECT CAST(TRUE AS CHAR)`, "1", false},
+		// The boundary: a boolean that is not a literal is the number SQLite
+		// stores, in every dialect.
+		{"postgresql keeps a computed boolean a number", dialects.PostgreSQL, `SELECT (1 = 1)::text`, "1", false},
+
 		// A bit-string literal names bits, not the text of the digits a caller
 		// wrote, and PostgreSQL reads those bits as a base-2 number on the way
 		// to an integer. Every want was read from postgres:17.

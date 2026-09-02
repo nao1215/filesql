@@ -194,10 +194,16 @@ func (r *mysqlRules) TypedLiteral(lit *ast.TypedLiteral) (ast.Expr, error) {
 }
 
 func (r *mysqlRules) Cast(c *ast.CastExpr) (ast.Expr, error) {
+	// A boolean is the JSON boolean rather than the number SQLite stores it as,
+	// and only in JSON: MySQL casts TRUE to CHAR as "1".
+	if v, ok := boolLiteral(c.Expr); ok && c.Type.Name == jsonTypeName {
+		c.Expr = text(boolWord(v), c.Span)
+	}
 	return castHelper(dialects.MySQL, c, "mysql_cast")
 }
 
 func (r *mysqlRules) Call(call *ast.FuncCall) (ast.Expr, error) {
+	jsonBooleanArguments(call)
 	if lowered, ok, err := commonCall(call, "mysql"); ok || err != nil {
 		return lowered, err
 	}
@@ -607,4 +613,28 @@ func hexAsNumber(e ast.Expr) (ast.Expr, error) {
 				"as an unsigned 64-bit number, and this one does not fit", len(digits))
 	}
 	return number(int64(n), lit.Span), nil //nolint:gosec // the bits are the value; SQLite has no unsigned integer
+}
+
+// jsonValueArguments says which arguments of a JSON constructor are values
+// rather than keys or paths: the first index one stands at, and how far apart
+// they are.
+var jsonValueArguments = map[string][2]int{ //nolint:gochecknoglobals // a fixed table
+	"JSON_ARRAY": {0, 1}, "JSON_OBJECT": {1, 2},
+	"JSON_SET": {2, 2}, "JSON_INSERT": {2, 2}, "JSON_REPLACE": {2, 2},
+}
+
+// jsonBooleanArguments rewrites a boolean literal standing where a JSON
+// constructor takes a value, so the document holds the JSON boolean rather than
+// the 1 SQLite stores a boolean as. SQLite's json() marks the text as JSON,
+// which is what keeps it from being written as the string "true".
+func jsonBooleanArguments(call *ast.FuncCall) {
+	positions, ok := jsonValueArguments[callName(call)]
+	if !ok {
+		return
+	}
+	for i := positions[0]; i < len(call.Args); i += positions[1] {
+		if v, isBool := boolLiteral(call.Args[i]); isBool {
+			call.Args[i] = helper("json", call.Span, text(boolWord(v), call.Span))
+		}
+	}
 }

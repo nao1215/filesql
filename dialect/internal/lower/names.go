@@ -32,6 +32,7 @@ const (
 	typeNameReal     = "REAL"
 	typeNameBlob     = "BLOB"
 	typeNameBoolean  = "BOOLEAN"
+	typeNameText     = "TEXT"
 	typeNameInterval = "INTERVAL"
 
 	keywordCurrentTime = "CURRENT_TIME"

@@ -535,6 +535,18 @@ func TestMySQLComparisonFoldsCaseLikeItsCollation(t *testing.T) {
 		// A document built here still nests, which is what a renderer that
 		// re-rendered the text at every level would have broken.
 		{query: `SELECT JSON_ARRAY(1, JSON_OBJECT('b', 2))`, want: `[1,{"b":2}]`},
+		// A boolean written as a literal is the JSON boolean, not the 1 SQLite
+		// stores it as. Every want was read from mysql:8.4, allowing for the
+		// space MySQL writes after a colon.
+		{query: `SELECT JSON_ARRAY(TRUE)`, want: "[true]"},
+		{query: `SELECT JSON_ARRAY(FALSE)`, want: "[false]"},
+		{query: `SELECT JSON_ARRAY(TRUE, 1, 'a')`, want: `[true,1,"a"]`},
+		{query: `SELECT JSON_OBJECT('a', TRUE)`, want: `{"a":true}`},
+		{query: `SELECT JSON_ARRAY(JSON_OBJECT('a', TRUE))`, want: `[{"a":true}]`},
+		{query: `SELECT JSON_SET('{}', '$.a', TRUE)`, want: `{"a":true}`},
+		// The boundary: a boolean that is not a literal is the number SQLite
+		// stores, since nothing downstream can tell the two apart.
+		{query: `SELECT JSON_ARRAY(1 = 1)`, want: "[1]"},
 	}
 
 	for _, tt := range tests {
