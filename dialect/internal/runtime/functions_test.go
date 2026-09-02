@@ -3474,7 +3474,6 @@ func TestTheWindowAndAggregateSurfaceAnswers(t *testing.T) {
 		{"RANK() OVER (ORDER BY a)", "1"},
 		{"DENSE_RANK() OVER (ORDER BY a)", "1"},
 		{"SUM(a) OVER (ORDER BY a RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)", "3"},
-		{"SUM(a) OVER (ORDER BY a GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW)", "1"},
 		{"SUM(a) OVER (ORDER BY a ROWS UNBOUNDED PRECEDING)", "1"},
 	}
 	for _, d := range []dialects.Dialect{dialects.MySQL, dialects.PostgreSQL, dialects.GoogleSQL} {
@@ -3489,6 +3488,18 @@ func TestTheWindowAndAggregateSurfaceAnswers(t *testing.T) {
 				t.Errorf("%v: %s = %q, want %q", d, query, got.String, tt.want)
 			}
 		}
+		// A GROUPS frame is PostgreSQL's alone among the three: mysql:8.4
+		// answers "This version of MySQL doesn't yet support 'GROUPS'" and
+		// GoogleSQL has only ROWS and RANGE. This package renders it for every
+		// dialect and SQLite takes it, which is a permissiveness rather than a
+		// translation, so only the dialect whose engine agrees is pinned here.
+		if d == dialects.PostgreSQL {
+			groups := "SELECT SUM(a) OVER (ORDER BY a GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM win ORDER BY a LIMIT 1"
+			if got, err := runDialect(t, db, d, groups); err != nil || got.String != "1" {
+				t.Errorf("%v: %s = %v, %v, want 1", d, groups, got, err)
+			}
+		}
+
 		// A window named once and used by name, which is its own syntax rather
 		// than a function.
 		named := "SELECT COUNT(*) OVER w FROM win WINDOW w AS (ORDER BY a) LIMIT 1"
@@ -3525,12 +3536,24 @@ func TestTheWindowAndAggregateSurfaceAnswers(t *testing.T) {
 	}
 
 	// The aggregates SQLite has none of are refused by name, which is the other
-	// right answer and the one this sweep is about.
+	// right answer and the one this sweep is about. Each is refused with a
+	// message naming what to write instead, which is what makes a refusal
+	// useful rather than merely correct.
 	for _, tt := range []struct {
 		dialect dialects.Dialect
 		expr    string
 	}{
+		// The bitwise aggregates are refused in every dialect that has them,
+		// since SQLite has none: all three names, all three dialects.
+		{dialects.MySQL, "BIT_AND(a)"},
+		{dialects.MySQL, "BIT_OR(a)"},
 		{dialects.MySQL, "BIT_XOR(a)"},
+		{dialects.PostgreSQL, "bit_and(a)"},
+		{dialects.PostgreSQL, "bit_or(a)"},
+		{dialects.PostgreSQL, "bit_xor(a)"},
+		{dialects.GoogleSQL, "BIT_AND(a)"},
+		{dialects.GoogleSQL, "BIT_OR(a)"},
+		{dialects.GoogleSQL, "BIT_XOR(a)"},
 		{dialects.PostgreSQL, "regr_slope(b,a)"},
 		{dialects.PostgreSQL, "percentile_cont(0.5) WITHIN GROUP (ORDER BY a)"},
 		{dialects.GoogleSQL, "FIRST_VALUE(a IGNORE NULLS) OVER (ORDER BY a)"},
