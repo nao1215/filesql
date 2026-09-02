@@ -370,7 +370,7 @@ func isDateValued(e ast.Expr) bool {
 	switch n := e.(type) {
 	case *ast.CastExpr:
 		switch strings.ToUpper(n.Type.Name) {
-		case typeNameDate, typeNameTimestamp, typeNameTimestampTZ, "TIMESTAMP WITH TIME ZONE", "TIMESTAMP WITHOUT TIME ZONE":
+		case typeNameDate, typeNameTimestamp, typeNameTimestampTZ, typeNameTimestampWithZone, typeNameTimestampWithoutZone:
 			return true
 		}
 	case *ast.TypedLiteral:

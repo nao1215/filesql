@@ -113,7 +113,6 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-8_cast_decimal", "SELECT CAST(x AS DECIMAL(10,2))", "SELECT mysql_cast(x, 'DECIMAL(10,2)') AS \"CAST(x AS DECIMAL(10,2))\""},
 		{"M-8_cast_datetime", "SELECT CAST(x AS DATETIME)", "SELECT mysql_cast(x, 'DATETIME') AS \"CAST(x AS DATETIME)\""},
 		{"M-8_cast_binary", "SELECT CAST(x AS BINARY)", "SELECT mysql_cast(x, 'BINARY') AS \"CAST(x AS BINARY)\""},
-		{"M-8_cast_unknown_passthrough", "SELECT CAST(x AS GEOMETRY)", "SELECT CAST(x AS GEOMETRY)"},
 
 		{"M-9_rlike", "SELECT * FROM t WHERE name RLIKE '^a'", "SELECT * FROM t WHERE mysql_regexp('^a', name)"},
 		{"M-9_not_rlike", "SELECT * FROM t WHERE name NOT RLIKE '^a'", "SELECT * FROM t WHERE NOT mysql_regexp('^a', name)"},

@@ -21,7 +21,6 @@ func TestGoogleSQLTranslate(t *testing.T) {
 		{"G-1_backtick_path", "SELECT x FROM `proj.dataset.table`", `SELECT x FROM "proj.dataset.table"`},
 
 		{"G-2_safe_cast", "SELECT SAFE_CAST(x AS INT64) FROM t", "SELECT googlesql_safe_cast(x, 'INT64') AS \"SAFE_CAST(x AS INT64)\" FROM t"},
-		{"G-2_safe_cast_unknown_type", "SELECT SAFE_CAST(x AS GEOGRAPHY)", "SELECT CAST(x AS GEOGRAPHY) AS \"SAFE_CAST(x AS GEOGRAPHY)\""},
 
 		// G-20: BigQuery writes the safe functions with a "SAFE." call prefix, and
 		// its own documentation uses that spelling. Only a few of them have an

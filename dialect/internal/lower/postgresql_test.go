@@ -23,7 +23,7 @@ func TestPostgreSQLTranslate(t *testing.T) {
 		{"P-1_cast_text", "SELECT a::text", "SELECT postgresql_cast(a, 'text') AS \"a::text\""},
 		{"P-1_cast_chain", "SELECT a::int::text", "SELECT postgresql_cast(postgresql_cast(a, 'int'), 'text') AS \"a::int::text\""},
 		{"P-1_cast_varchar_param", "SELECT a::varchar(50)", "SELECT postgresql_cast(a, 'varchar(50)') AS \"a::varchar(50)\""},
-		{"P-1_cast_unknown_type", "SELECT a::inet", "SELECT CAST(a AS inet) AS \"a::inet\""},
+		{"P-1_cast_to_an_address", "SELECT a::inet", "SELECT postgresql_cast(a, 'inet') AS \"a::inet\""},
 		{"P-1_cast_paren_operand", "SELECT (a + b)::int", "SELECT postgresql_cast((a + b), 'int') AS \"(a + b)::int\""},
 
 		{"P-2_ilike", "SELECT * FROM t WHERE name ILIKE 'a%'", `SELECT * FROM t WHERE like_insensitive('a%', name)`},

@@ -79,6 +79,19 @@
 // as unsupported, since the statement was read: ErrInvalidSyntax is for one that
 // could not be read.
 //
+// # Casts
+//
+// A cast reaches the helper that converts to its target, and a target this
+// package does not convert to is refused by name. Leaving one to SQLite's own
+// CAST is not leaving it alone: SQLite applies numeric affinity to a type it
+// has never heard of, so the value comes back as the number its leading digits
+// spell, and every engine here raises for a type it does not have. The targets
+// each dialect converts to are its own type names, including the long
+// spellings -- character varying, double precision, timestamp without time
+// zone -- and the types SQLite holds as text, such as PostgreSQL's inet, cidr,
+// macaddr and xml. A length written on the target applies, so a cast to
+// character varying(2) is two characters.
+//
 // # Functions a dialect has and SQLite has not
 //
 // A function is translated where SQLite has a form for it and refused by name
