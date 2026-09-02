@@ -1,6 +1,7 @@
 package lower
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/nao1215/filesql/dialect/internal/ast"
@@ -19,6 +20,12 @@ func (*mysqlRules) Dialect() dialects.Dialect { return dialects.MySQL }
 // lowered. CONVERT writes a type where an argument goes, and lowering it as an
 // expression turns CHAR(3) into a call to the CHAR helper.
 func (r *mysqlRules) Pre(e ast.Expr) (ast.Expr, bool, error) {
+	// A hexadecimal literal is a number where it stands beside an arithmetic
+	// or a bitwise operator and a byte string everywhere else, and only the
+	// unlowered node still says which of the two this one is.
+	if err := numericHexOperands(e); err != nil {
+		return nil, false, err
+	}
 	call, ok := e.(*ast.FuncCall)
 	if !ok || callName(call) != "CONVERT" || call.Syntax == ast.CallConvertUsing {
 		return e, false, nil
@@ -162,11 +169,15 @@ func (r *mysqlRules) Unary(u *ast.UnaryExpr) (ast.Expr, error) {
 func (r *mysqlRules) Literal(lit *ast.Literal) (ast.Expr, error) {
 	switch lit.Kind {
 	case ast.LitHex:
-		// A hexadecimal literal means a number in one place and a byte string
-		// in another, and the translation cannot see which.
-		return nil, unsupported(lit.Span,
-			"a hexadecimal literal is not supported: MySQL reads it as a number in an arithmetic context and as bytes "+
-				"elsewhere; write CAST(x'..' AS ...) or the decimal value")
+		// What is left here stands where MySQL reads a hexadecimal literal as
+		// its bytes; the numeric places were rewritten before the children were
+		// lowered. MySQL pads an odd number of digits on the left, so 0x4 is
+		// the byte 0x04.
+		digits := strings.TrimPrefix(strings.TrimPrefix(lit.Value, "0x"), "0X")
+		if len(digits)%2 == 1 {
+			digits = "0" + digits
+		}
+		return &ast.Literal{Kind: ast.LitBlob, Value: strings.ToLower(digits), Span: lit.Span}, nil
 	case ast.LitBit:
 		return nil, unsupported(lit.Span,
 			"a bit literal is not supported: MySQL reads it as a number in an arithmetic context and as bytes "+
@@ -504,4 +515,65 @@ func utf8CharsetName(name string) bool {
 
 func (r *mysqlRules) Core(core *ast.SelectCore) error {
 	return coreCommon(core)
+}
+
+// numericContextOps are the operators whose operands MySQL reads as numbers, so
+// a hexadecimal literal standing beside one is the number its digits spell
+// rather than the bytes they name.
+var numericContextOps = map[ast.BinaryOp]bool{ //nolint:gochecknoglobals // a fixed table
+	ast.Add: true, ast.Sub: true, ast.Mul: true, ast.Div: true, ast.Mod: true,
+	ast.IntDiv: true, ast.Power: true,
+	ast.BitAnd: true, ast.BitOr: true, ast.BitXor: true,
+	ast.ShiftLeft: true, ast.ShiftRight: true,
+}
+
+// numericHexOperands rewrites the hexadecimal literals of an arithmetic or
+// bitwise node into the numbers MySQL reads them as, in place. It runs before
+// the children are lowered, which is the only moment the literal is still
+// distinguishable from the byte string it becomes.
+func numericHexOperands(e ast.Expr) error {
+	switch n := e.(type) {
+	case *ast.BinaryExpr:
+		if !numericContextOps[n.Op] {
+			return nil
+		}
+		left, err := hexAsNumber(n.Left)
+		if err != nil {
+			return err
+		}
+		right, err := hexAsNumber(n.Right)
+		if err != nil {
+			return err
+		}
+		n.Left, n.Right = left, right
+	case *ast.UnaryExpr:
+		if n.Op != ast.UnaryMinus && n.Op != ast.UnaryPlus && n.Op != ast.UnaryBitNot {
+			return nil
+		}
+		inner, err := hexAsNumber(n.Expr)
+		if err != nil {
+			return err
+		}
+		n.Expr = inner
+	}
+	return nil
+}
+
+// hexAsNumber replaces a hexadecimal literal with the decimal one holding the
+// same 64 bits. MySQL reads such a literal as an unsigned BIGINT and SQLite has
+// no unsigned integer, so a literal with its top bit set becomes the negative
+// number carrying those bits -- the same compromise the bitwise helpers make.
+func hexAsNumber(e ast.Expr) (ast.Expr, error) {
+	lit, ok := e.(*ast.Literal)
+	if !ok || lit.Kind != ast.LitHex {
+		return e, nil
+	}
+	digits := strings.TrimPrefix(strings.TrimPrefix(lit.Value, "0x"), "0X")
+	n, err := strconv.ParseUint(digits, 16, 64)
+	if err != nil {
+		return nil, unsupported(lit.Span,
+			"a hexadecimal literal of %d digits is not supported here; MySQL reads one in an arithmetic context "+
+				"as an unsigned 64-bit number, and this one does not fit", len(digits))
+	}
+	return number(int64(n), lit.Span), nil //nolint:gosec // the bits are the value; SQLite has no unsigned integer
 }

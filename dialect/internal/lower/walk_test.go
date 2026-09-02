@@ -697,7 +697,6 @@ func TestTheLiteralFormsEachDialectRefuses(t *testing.T) {
 		input   string
 		mention string
 	}{
-		{dialect.MySQL, "SELECT 0x41", "hexadecimal"},
 		{dialect.MySQL, "SELECT 0b1010", "bit literal"},
 		{dialect.MySQL, "SELECT b'1010'", "bit literal"},
 		{dialect.GoogleSQL, "SELECT 0b1010", "binary literal"},
@@ -723,6 +722,10 @@ func TestTheLiteralFormsEachDialectRefuses(t *testing.T) {
 		want    string
 	}{
 		{dialect.GoogleSQL, "SELECT 0x41", "SELECT 0x41"},
+		// MySQL writes one hexadecimal literal three ways and reads all three
+		// as bytes outside an arithmetic context.
+		{dialect.MySQL, "SELECT 0x41", `SELECT x'41' AS "0x41"`},
+		{dialect.MySQL, "SELECT x'41'", "SELECT x'41'"},
 		{dialect.PostgreSQL, "SELECT 0xFF", "SELECT 0xFF"},
 		{dialect.PostgreSQL, "SELECT B'1010'", `SELECT '1010' AS "B'1010'"`},
 		// The lexer reads X'..' as SQLite spells a blob, for every dialect, but

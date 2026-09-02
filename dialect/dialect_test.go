@@ -346,7 +346,6 @@ func TestLiteralFormsAreOneToken(t *testing.T) {
 		{MySQL, "SELECT 0b1010 + 0"},
 		{MySQL, "SELECT b'1010'"},
 		{MySQL, "SELECT B'1010'"},
-		{MySQL, "SELECT 0x41"},
 		{MySQL, "SELECT _latin1'abc'"},
 	}
 	for _, tt := range refused {

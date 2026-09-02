@@ -871,7 +871,8 @@ func TestATrailingEscapeFollowsTheDialect(t *testing.T) {
 
 // TestBitwiseOperatorsOverBytes pins the six bitwise operators over a byte
 // string, which both GoogleSQL and MySQL define them for and which SQLite reads
-// as the integer 0.
+// as the integer 0, and MySQL's hexadecimal literal, which is a number beside
+// one of those operators and a byte string everywhere else.
 //
 // The GoogleSQL wants were derived from the ZetaSQL operator documentation
 // rather than read from an engine: every bitwise operator "returns the same
@@ -932,6 +933,26 @@ func TestBitwiseOperatorsOverBytes(t *testing.T) {
 		{name: "mysql shifts a binary string by a negative count", dialect: dialects.MySQL, query: `SELECT HEX(UNHEX('6162') << -1)`, want: "0000"},
 		{name: "mysql refuses binary strings of different lengths", dialect: dialects.MySQL, query: `SELECT HEX(UNHEX('6162') | UNHEX('01'))`, wantErr: true},
 		{name: "mysql ors a binary string with null", dialect: dialects.MySQL, query: `SELECT HEX(UNHEX('6162') | NULL)`, wantNull: true},
+
+		// MySQL's hexadecimal literal, which is the number its digits spell
+		// beside one of these operators and the bytes they name elsewhere.
+		// Every want was read from mysql:8.4 except the unsigned one noted
+		// below.
+		{name: "mysql adds a hexadecimal literal", dialect: dialects.MySQL, query: `SELECT 0x41 + 0`, want: "65"},
+		{name: "mysql adds the quoted spelling", dialect: dialects.MySQL, query: `SELECT x'6162' + 1`, want: "24931"},
+		{name: "mysql multiplies a hexadecimal literal", dialect: dialects.MySQL, query: `SELECT x'6162' * 2`, want: "49860"},
+		{name: "mysql negates a hexadecimal literal", dialect: dialects.MySQL, query: `SELECT -0x10`, want: "-16"},
+		{name: "mysql ors two hexadecimal literals", dialect: dialects.MySQL, query: `SELECT x'6162' | x'0100'`, want: "24930"},
+		{name: "mysql shifts a hexadecimal literal", dialect: dialects.MySQL, query: `SELECT x'6162' << 1`, want: "49860"},
+		{name: "mysql hexes a hexadecimal literal", dialect: dialects.MySQL, query: `SELECT HEX(0x41)`, want: "41"},
+		{name: "mysql pads an odd digit count", dialect: dialects.MySQL, query: `SELECT HEX(0x4)`, want: "04"},
+		{name: "mysql concatenates a hexadecimal literal", dialect: dialects.MySQL, query: `SELECT CONCAT(0x414243)`, want: "ABC"},
+		{name: "mysql hexes the quoted spelling", dialect: dialects.MySQL, query: `SELECT HEX(x'4142')`, want: "4142"},
+		// MySQL prints 18446744073709551615, which is the same 64 bits: it
+		// reads the literal as an unsigned BIGINT and SQLite has no unsigned
+		// integer to answer with.
+		{name: "mysql reads a hexadecimal literal as unsigned", dialect: dialects.MySQL, query: `SELECT 0xffffffffffffffff + 0`, want: "-1"},
+		{name: "mysql refuses a hexadecimal literal past 64 bits", dialect: dialects.MySQL, query: `SELECT 0xffffffffffffffffff + 0`, wantErr: true},
 
 		// MySQL's integer operands, unsigned as they were before.
 		{name: "mysql xors integers", dialect: dialects.MySQL, query: `SELECT 6 ^ 3`, want: "5"},

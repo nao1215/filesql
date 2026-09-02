@@ -39,6 +39,16 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 
 	case token.Blob:
 		p.pos++
+		if p.dialect == dialects.MySQL {
+			// MySQL writes one hexadecimal literal three ways -- 0x41, x'41'
+			// and X'41' -- and reads it as a number in an arithmetic context
+			// and as bytes elsewhere. The lexer reads the quoted forms the way
+			// SQLite does, as a blob, so classifying them here as the literal
+			// MySQL means is what keeps the three spellings on one rule: the
+			// third was refused for that ambiguity while the other two were
+			// answered as bytes.
+			return &ast.Literal{Kind: ast.LitHex, Value: "0x" + t.Text, Span: span}, nil
+		}
 		return &ast.Literal{Kind: ast.LitBlob, Value: t.Text, Span: span}, nil
 
 	case token.Placeholder:
