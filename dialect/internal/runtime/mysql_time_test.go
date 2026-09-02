@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -351,10 +352,11 @@ func TestMySQLTimeDivergences(t *testing.T) {
 	}{
 		// MySQL carries a fractional-seconds precision on the type of each
 		// argument and prints that many digits whether or not there is a
-		// fraction. SQLite has no such type, so the fraction is printed only
-		// when there is one, with its trailing zeros removed.
+		// fraction. SQLite has no such type, so a fraction this package never
+		// saw is not invented. A fraction that is in a value is a different
+		// matter: arithmetic on one answers all six digits, the way MySQL does.
 		{"a whole number of seconds has no fraction", `SELECT SEC_TO_TIME('3661')`, "01:01:01", "01:01:01.000000"},
-		{"a fraction keeps only its digits", `SELECT ADDTIME('12:00:00', '00:00:00.5')`, "12:00:00.5", "12:00:00.500000"},
+		{"a fraction written in a value keeps all six digits", `SELECT ADDTIME('12:00:00', '00:00:00.5')`, "12:00:00.500000", "12:00:00.500000"},
 		{"maketime of three strings", `SELECT MAKETIME('1', '2', '3')`, "01:02:03", "01:02:03.000000"},
 
 		// An ISO timestamp is read as a datetime, where MySQL coerces the whole
@@ -506,5 +508,145 @@ func TestMySQLTimeFunctionsAddedForTheEngine(t *testing.T) {
 				t.Errorf("%s = %q, want %q", tt.query, got.String, tt.want)
 			}
 		})
+	}
+}
+
+// TestMySQLDateIsThisPackagesOwnReading pins that DATE() reads a value the way
+// every other date helper here reads it. The name is SQLite's own too, and left
+// alone it reached SQLite's date(): DATE('2020-02-31') answered 2020-03-02
+// where YEAR() of the same string answered NULL, DATE('now') answered today,
+// and a second argument was taken as a SQLite modifier.
+func TestMySQLDateIsThisPackagesOwnReading(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name     string
+		query    string
+		want     string
+		wantNull bool
+		wantErr  bool
+	}{
+		{name: "an impossible day", query: `SELECT DATE('2020-02-31')`, wantNull: true},
+		{name: "a day past a non-leap february", query: `SELECT DATE('2021-02-29')`, wantNull: true},
+		{name: "the now keyword", query: `SELECT DATE('now')`, wantNull: true},
+		{name: "a modifier argument", query: `SELECT DATE('2020-02-29', '+1 day')`, wantErr: true},
+		{name: "a date", query: `SELECT DATE('2020-02-29')`, want: "2020-02-29"},
+		{name: "a datetime", query: `SELECT DATE('2020-02-29 13:45:59')`, want: "2020-02-29"},
+		{name: "an unpadded date", query: `SELECT DATE('2020-1-2')`, want: "2020-01-02"},
+		{name: "a compact date", query: `SELECT DATE(20200229)`, want: "2020-02-29"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.MySQL, tt.query)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("%s = %q, want an error", tt.query, got.String)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if tt.wantNull {
+				if got.Valid {
+					t.Fatalf("%s = %q, want NULL", tt.query, got.String)
+				}
+				return
+			}
+			if got.String != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
+
+// TestEveryDateHelperAgreesOnAMalformedDate is the invariant behind
+// TestMySQLDateIsThisPackagesOwnReading: one reading of a date string serves
+// every MySQL date function, so a string one of them refuses is a string all of
+// them refuse.
+func TestEveryDateHelperAgreesOnAMalformedDate(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	helpers := []string{"DATE", "YEAR", "MONTH", "DAY", "LAST_DAY", "DAYNAME", "TO_DAYS", "QUARTER"}
+	malformed := []string{"2020-02-31", "2021-02-29", "2020-13-01", "not a date", "now", ""}
+	for _, value := range malformed {
+		for _, fn := range helpers {
+			query := "SELECT " + fn + "('" + value + "')"
+			t.Run(fn+" "+value, func(t *testing.T) {
+				got, err := runDialect(t, db, dialects.MySQL, query)
+				if err != nil {
+					t.Fatalf("%s: %v", query, err)
+				}
+				if got.Valid {
+					t.Fatalf("%s = %q, want NULL as the other helpers answer", query, got.String)
+				}
+			})
+		}
+	}
+}
+
+// TestYearMonthIntervalMovesInOneStep pins that a YEAR_MONTH interval is one
+// amount of months. Moving the years and then the months clamped a month end
+// twice, so 2020-02-29 plus INTERVAL '1-2' YEAR_MONTH landed on 2021-04-28: the
+// year reached 2021-02-28 first and the two months followed from there.
+func TestYearMonthIntervalMovesInOneStep(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{name: "a leap day forward", query: `SELECT DATE_ADD('2020-02-29', INTERVAL '1-2' YEAR_MONTH)`, want: "2021-04-29"},
+		{name: "the same amount in months", query: `SELECT DATE_ADD('2020-02-29', INTERVAL 14 MONTH)`, want: "2021-04-29"},
+		{name: "the same amount with no years", query: `SELECT DATE_ADD('2020-02-29', INTERVAL '0-14' YEAR_MONTH)`, want: "2021-04-29"},
+		{name: "a leap day backward", query: `SELECT DATE_SUB('2020-02-29', INTERVAL '1-2' YEAR_MONTH)`, want: "2018-12-29"},
+		{name: "a month end onto a shorter month", query: `SELECT DATE_ADD('2020-01-31', INTERVAL '1-1' YEAR_MONTH)`, want: "2021-02-28"},
+		{name: "a datetime keeps its clock", query: `SELECT DATE_ADD('2020-02-29 13:45:59', INTERVAL '1-2' YEAR_MONTH)`, want: "2021-04-29 13:45:59"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.MySQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
+
+// TestAYearMonthIntervalEqualsItsMonths is the invariant behind
+// TestYearMonthIntervalMovesInOneStep: the three spellings of one amount are one
+// amount.
+func TestAYearMonthIntervalEqualsItsMonths(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	dates := []string{"2020-01-31", "2020-02-29", "2020-03-31", "2019-11-30", "2020-12-31"}
+	for _, date := range dates {
+		for years := range 3 {
+			for months := range 4 {
+				compound := fmt.Sprintf("SELECT DATE_ADD('%s', INTERVAL '%d-%d' YEAR_MONTH)", date, years, months)
+				plain := fmt.Sprintf("SELECT DATE_ADD('%s', INTERVAL %d MONTH)", date, years*12+months)
+				t.Run(fmt.Sprintf("%s %d-%d", date, years, months), func(t *testing.T) {
+					a, err := runDialect(t, db, dialects.MySQL, compound)
+					if err != nil {
+						t.Fatalf("%s: %v", compound, err)
+					}
+					b, err := runDialect(t, db, dialects.MySQL, plain)
+					if err != nil {
+						t.Fatalf("%s: %v", plain, err)
+					}
+					if a.String != b.String {
+						t.Fatalf("%s = %q but %s = %q", compound, a.String, plain, b.String)
+					}
+				})
+			}
+		}
 	}
 }

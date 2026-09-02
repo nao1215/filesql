@@ -97,21 +97,30 @@ func mysqlDateArithmetic(b *ast.BinaryExpr) (ast.Expr, error) {
 		sign = "-"
 	}
 	if iv, ok := b.Right.(*ast.IntervalExpr); ok {
-		return intervalAdd(b.Left, iv, sign, b.Span)
+		return intervalAdd(fnNameMySQLIntervalAdd, b.Left, iv, sign, b.Span)
 	}
 	// "INTERVAL n unit + x" is the same sum written the other way round, which
 	// MySQL accepts for addition only.
 	if iv, ok := b.Left.(*ast.IntervalExpr); ok && b.Op == ast.Add {
-		return intervalAdd(b.Right, iv, "+", b.Span)
+		return intervalAdd(fnNameMySQLIntervalAdd, b.Right, iv, "+", b.Span)
 	}
 	return b, nil
 }
+
+// The two names the interval helper answers to. They run the same arithmetic
+// and differ in how they write a fraction of a second: MySQL writes all six
+// digits of one and GoogleSQL writes the significant ones, and the dialect is
+// known here rather than where the helper runs.
+const (
+	fnNameIntervalAdd      = "interval_add"
+	fnNameMySQLIntervalAdd = "mysql_interval_add"
+)
 
 // intervalAdd builds the call that adds a duration to a datetime. A compound
 // MySQL unit carries several fields in one value and reaches a helper of its
 // own; a unit no helper knows is refused rather than passed on, because the
 // helper would answer NULL and a NULL cannot be told from one in the data.
-func intervalAdd(value ast.Expr, iv *ast.IntervalExpr, sign string, span ast.Span) (ast.Expr, error) {
+func intervalAdd(name string, value ast.Expr, iv *ast.IntervalExpr, sign string, span ast.Span) (ast.Expr, error) {
 	amount := iv.Value
 	if sign == "-" {
 		// Negate the whole amount, which may be an expression rather than a
@@ -132,7 +141,7 @@ func intervalAdd(value ast.Expr, iv *ast.IntervalExpr, sign string, span ast.Spa
 	if !ok {
 		return nil, unsupported(span, "%s is not an interval unit this package knows", iv.Unit)
 	}
-	return helper("interval_add", span, value, amount, text(unit, span)), nil
+	return helper(name, span, value, amount, text(unit, span)), nil
 }
 
 func (r *mysqlRules) Unary(u *ast.UnaryExpr) (ast.Expr, error) {
@@ -175,11 +184,17 @@ func (r *mysqlRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 	case fnNameExtract, fnNameDatePart:
 		return datePartCall(call, "mysql_date_part"), nil
 	case fnNameDateAdd, "ADDDATE":
-		return dateArith(call, "+")
+		return dateArith(fnNameMySQLIntervalAdd, call, "+")
 	case fnNameDateSub, "SUBDATE":
-		return dateArith(call, "-")
+		return dateArith(fnNameMySQLIntervalAdd, call, "-")
+	case typeNameDate:
+		// SQLite has a date() of its own that means something else by the
+		// name: it rolls an impossible day forward, reads "now" and takes
+		// modifiers. MySQL's takes one value and reads it the way the rest of
+		// the date helpers here read it.
+		return rename(call, "mysql_date"), nil
 	case "TIMESTAMPADD":
-		return timestampAdd(call)
+		return timestampAdd(fnNameMySQLIntervalAdd, call)
 	case "TIMESTAMPDIFF":
 		return timestampDiff(call)
 	case "GROUP_CONCAT":

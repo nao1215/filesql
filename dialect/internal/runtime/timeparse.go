@@ -15,6 +15,9 @@ import (
 // timeLayouts are tried in order by parseTime, covering the common SQL date and
 // datetime shapes. The Z07:00 pair reads a timezone suffix — a trailing Z or an
 // offset like +09:00 — which BigQuery's TIMESTAMP literals carry.
+// The unpadded and compact spellings are here because a file carries them:
+// MySQL reads 2020-1-2 and 20200229 as dates, and a helper that refused them
+// answered NULL for a column the caller had loaded and could see.
 var timeLayouts = []string{
 	"2006-01-02 15:04:05.999999999",
 	"2006-01-02 15:04:05",
@@ -25,6 +28,14 @@ var timeLayouts = []string{
 	"2006-01-02",
 	"2006/01/02 15:04:05",
 	"2006/01/02",
+	"2006-1-2 15:04:05.999999999",
+	"2006-1-2 15:04:05",
+	"2006-1-2 15:04",
+	"2006-1-2",
+	"2006/1/2 15:04:05",
+	"2006/1/2",
+	"20060102150405",
+	"20060102",
 	"15:04:05",
 	"15:04:05.999999999",
 }
