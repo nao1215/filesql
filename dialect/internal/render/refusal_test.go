@@ -44,7 +44,6 @@ func TestTheRendererRefusesWhatLoweringShouldHaveRemoved(t *testing.T) {
 		{"an array", &ast.ArrayExpr{Span: span}},
 		{"a subscript", &ast.SubscriptExpr{Expr: column, Index: other, Span: span}},
 		{"a struct", &ast.StructExpr{Span: span}},
-		{"a bit-string literal", &ast.Literal{Kind: ast.LitBit, Value: "1010", Span: span}},
 		{"a cast that answers NULL", &ast.CastExpr{
 			Expr: column, Type: ast.TypeName{Name: "INTEGER", Span: span}, TryCast: true, Span: span,
 		}},
@@ -300,5 +299,29 @@ func TestTheRendererRefusesTextSQLiteCannotSpell(t *testing.T) {
 				t.Errorf("rendering %s: error = %v, want it to render", tt.name, err)
 			}
 		})
+	}
+}
+
+// TestRenderWritesABitStringAsItsDigits covers the one literal kind whose
+// rendered form is not the form it was written in: PostgreSQL compares and
+// concatenates a bit string as the text of its digits, and that is what the
+// value has to reach SQLite as. The other two dialects refuse the literal while
+// lowering, so one that reaches the renderer is PostgreSQL's.
+func TestRenderWritesABitStringAsItsDigits(t *testing.T) {
+	t.Parallel()
+
+	span := ast.Span{}
+	for _, tt := range []struct{ value, want string }{
+		{"1010", "'1010'"},
+		{"01000001", "'01000001'"},
+		{"", "''"},
+	} {
+		w := &writer{}
+		if err := w.expr(&ast.Literal{Kind: ast.LitBit, Value: tt.value, Span: span}, precLowest); err != nil {
+			t.Fatalf("rendering B'%s': %v", tt.value, err)
+		}
+		if got := w.b.String(); got != tt.want {
+			t.Errorf("rendering B'%s' = %q, want %q", tt.value, got, tt.want)
+		}
 	}
 }

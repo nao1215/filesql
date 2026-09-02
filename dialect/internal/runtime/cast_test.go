@@ -70,6 +70,21 @@ func TestCastSemantics(t *testing.T) {
 		{"mysql keeps bytes that are not utf-8", dialects.MySQL, `SELECT HEX(CAST(UNHEX('61ff62') AS CHAR))`, "61FF62", false},
 		{"postgresql keeps bytes that are not utf-8", dialects.PostgreSQL, `SELECT length(CAST(decode('61ff62', 'hex') AS text))`, "3", false},
 
+		// A bit-string literal names bits, not the text of the digits a caller
+		// wrote, and PostgreSQL reads those bits as a base-2 number on the way
+		// to an integer. Every want was read from postgres:17.
+		{"postgresql reads a bit string as base two", dialects.PostgreSQL, `SELECT B'1010'::int`, "10", false},
+		{"postgresql reads a hexadecimal bit string", dialects.PostgreSQL, `SELECT X'41'::int`, "65", false},
+		{"postgresql reads a bit string as a bigint", dialects.PostgreSQL, `SELECT B'1010'::bigint`, "10", false},
+		{"postgresql writes a bit string as its digits", dialects.PostgreSQL, `SELECT X'41'::text`, "01000001", false},
+		{"postgresql keeps a binary bit string as its digits", dialects.PostgreSQL, `SELECT B'1010'::text`, "1010", false},
+		{"postgresql counts the bits of a bit string", dialects.PostgreSQL, `SELECT length(X'41')`, "8", false},
+		{"postgresql concatenates two bit strings", dialects.PostgreSQL, `SELECT X'41' || B'1'`, "010000011", false},
+		{"postgresql compares two spellings of one bit string", dialects.PostgreSQL, `SELECT (X'41' = B'01000001')`, "1", false},
+		{"postgresql reads a bit string of nothing", dialects.PostgreSQL, `SELECT B''::text`, "", false},
+		{"postgresql reads a bit string in lower case", dialects.PostgreSQL, `SELECT x'ab'::text`, "10101011", false},
+		{"postgresql reads a bit string written b in lower case", dialects.PostgreSQL, `SELECT b'11'::int`, "3", false},
+
 		// A cast to bytea reads the two input formats PostgreSQL defines for
 		// one, so that building a value from a literal and building it with
 		// decode() answer the same bytes. Every want was read from postgres:17.
@@ -234,6 +249,13 @@ func TestCastTargetsMatchTheEngine(t *testing.T) {
 		{dialects.PostgreSQL, `SELECT '\X4142'::bytea`},
 		{dialects.PostgreSQL, `SELECT 'a\x'::bytea`},
 		{dialects.PostgreSQL, `SELECT 'a\9'::bytea`},
+		// PostgreSQL casts a bit string to an integer and to nothing else
+		// numeric, and a bit string past 64 bits does not fit in one.
+		{dialects.PostgreSQL, `SELECT B'1010'::numeric`},
+		{dialects.PostgreSQL, `SELECT B'1010'::smallint`},
+		{dialects.PostgreSQL, `SELECT B'1010'::float8`},
+		{dialects.PostgreSQL, `SELECT B'` + strings.Repeat("1", 65) + `'::int`},
+		{dialects.PostgreSQL, `SELECT B'1012'`},
 	}
 	for _, tt := range refused {
 		if _, err := runDialect(t, db, tt.dialect, tt.query); err == nil {

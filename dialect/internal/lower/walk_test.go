@@ -725,9 +725,10 @@ func TestTheLiteralFormsEachDialectRefuses(t *testing.T) {
 		{dialect.GoogleSQL, "SELECT 0x41", "SELECT 0x41"},
 		{dialect.PostgreSQL, "SELECT 0xFF", "SELECT 0xFF"},
 		{dialect.PostgreSQL, "SELECT B'1010'", `SELECT '1010' AS "B'1010'"`},
-		// The lexer reads X'..' as SQLite spells a blob, for every dialect, and
-		// the bytes are the same ones PostgreSQL's bit string holds.
-		{dialect.PostgreSQL, "SELECT X'41'", "SELECT x'41'"},
+		// The lexer reads X'..' as SQLite spells a blob, for every dialect, but
+		// PostgreSQL has no blob literal: X'41' is a bit string written in
+		// hexadecimal, and it names the same value as B'01000001'.
+		{dialect.PostgreSQL, "SELECT X'41'", `SELECT '01000001' AS "x'41'"`},
 	} {
 		t.Run(tt.input, func(t *testing.T) {
 			t.Parallel()
