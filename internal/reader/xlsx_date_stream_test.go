@@ -269,8 +269,13 @@ func TestScanSheetRowsReadsTheRowsThatHoldCells(t *testing.T) {
 		},
 		{
 			name:  "a comment, a declaration and an end tag open nothing",
-			sheet: `<?xml version="1.0"?><!-- <row r="9"> --><sheetData><row r="2"><c r="A2"/></row></sheetData>`,
+			sheet: `<?xml version="1.0"?><!-- <row r="9"><c r="A9"/></row> --><sheetData><row r="2"><c r="A2"/></row></sheetData>`,
 			want:  []int{2},
+		},
+		{
+			name:  "a comment between two rows hides the markup it quotes",
+			sheet: `<sheetData><row r="1"><c r="A1"/></row><!-- <row r="2"><c r="A2"/></row> --><row r="3"><c r="A3"/></row></sheetData>`,
+			want:  []int{1, 3},
 		},
 		{
 			name:  "an attribute the parser would refuse is passed over",
@@ -338,9 +343,14 @@ func TestScanSheetRowsCrossesTheWindow(t *testing.T) {
 func TestScanSheetRowsOutlivesATagLongerThanItsBuffer(t *testing.T) {
 	t.Parallel()
 
+	// The comment quotes a row in its middle, which is not one, and is long
+	// enough that the quoted row and the comment's end each land in a window
+	// of their own.
 	var sheet strings.Builder
 	sheet.WriteString(`<sheetData><row r="1"><c r="A1"/></row><!-- `)
-	sheet.WriteString(strings.Repeat("x", 200<<10))
+	sheet.WriteString(strings.Repeat("x", 100<<10))
+	sheet.WriteString(`<row r="2"><c r="A2"/></row>`)
+	sheet.WriteString(strings.Repeat("x", 100<<10))
 	sheet.WriteString(` --><row r="3"><c r="A3"/></row></sheetData>`)
 
 	rows := &rowSet{}
@@ -348,6 +358,19 @@ func TestScanSheetRowsOutlivesATagLongerThanItsBuffer(t *testing.T) {
 	assert.True(t, rows.has(1))
 	assert.True(t, rows.has(3))
 	assert.False(t, rows.has(2))
+
+	t.Run("an unfinished tag longer than the carry is let go", func(t *testing.T) {
+		t.Parallel()
+
+		// Not a comment, so the scan carries it until it is too long to
+		// carry, and then reads on. It used to be carried whole, which left
+		// the next read no buffer.
+		damaged := `<sheetData><row r="1"><c r="A1"/></row><row r="2" ` + strings.Repeat("x", 200<<10) + `><c r="A2"/></row></sheetData>`
+
+		rows := &rowSet{}
+		require.NoError(t, scanSheetRows(strings.NewReader(damaged), rows))
+		assert.True(t, rows.has(1))
+	})
 }
 
 // TestRowSetIsEmptyWhenNil covers the set a workbook whose bytes are not there

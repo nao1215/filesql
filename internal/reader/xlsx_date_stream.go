@@ -238,11 +238,12 @@ func scanSheetRows(src io.Reader, into *rowSet) error {
 	buf := make([]byte, bufferSize+carrySize)
 	carried := 0
 	row := 0
+	inComment := false
 	for {
 		n, err := src.Read(buf[carried : carried+bufferSize])
 		if n > 0 {
 			window := buf[:carried+n]
-			consumed := scanRowWindow(window, &row, into, true)
+			consumed := scanRowWindow(window, &row, &inComment, into, true)
 			// A tag that has run longer than the carry is not a row or a cell,
 			// which are short; a comment or a damaged file can hold one. It is
 			// let go rather than carried, since carrying it would leave the
@@ -255,7 +256,7 @@ func scanSheetRows(src io.Reader, into *rowSet) error {
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if carried > 0 {
-					scanRowWindow(buf[:carried], &row, into, false)
+					scanRowWindow(buf[:carried], &row, &inComment, into, false)
 				}
 				return nil
 			}
@@ -267,15 +268,38 @@ func scanSheetRows(src io.Reader, into *rowSet) error {
 // scanRowWindow records the rows the cells in one window belong to and answers
 // how much of the window it consumed. When more is coming, a tag that runs past
 // the end is left for the next window.
-func scanRowWindow(window []byte, row *int, into *rowSet, more bool) int {
+//
+// A comment is passed over whole, however many windows it spans, because what
+// it holds is not markup: a comment quoting a row would otherwise count as one.
+// inComment carries that state from one window to the next.
+func scanRowWindow(window []byte, row *int, inComment *bool, into *rowSet, more bool) int {
 	at := 0
 	for {
+		if *inComment {
+			end := bytes.Index(window[at:], []byte("-->"))
+			if end < 0 {
+				// The comment runs on. The last two bytes may be the start of
+				// its end, so they are carried into the next window.
+				if more && len(window)-at >= 2 {
+					return len(window) - 2
+				}
+				return len(window)
+			}
+			*inComment = false
+			at += end + len("-->")
+			continue
+		}
 		next := bytes.IndexByte(window[at:], '<')
 		if next < 0 {
 			return len(window)
 		}
 		start := at + next
 		tag := window[start:]
+		if bytes.HasPrefix(tag, []byte("<!--")) {
+			*inComment = true
+			at = start + len("<!--")
+			continue
+		}
 		end := bytes.IndexByte(tag, '>')
 		if end < 0 {
 			if more {
