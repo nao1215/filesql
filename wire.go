@@ -166,8 +166,16 @@ func DumpFedWireWithSource(ctx context.Context, db *sql.DB, baseTableName, outpu
 	if source == nil {
 		return fmt.Errorf("%w: source must be a non-nil io.Reader", ErrNilInput)
 	}
-	tableSet, err := wireconv.ParseReader(source)
+	// The bound and the recorder the load path uses apply here too: the library
+	// reads the whole file, and it reports what the message it built is missing
+	// rather than why the read stopped, so a stream the bound refused came back
+	// as a complaint about an absent field.
+	recorder := &recordingReader{src: filereader.BoundRecords(source)}
+	tableSet, err := wireconv.ParseReader(recorder)
 	if err != nil {
+		if recorder.err != nil {
+			err = recorder.err
+		}
 		return fmt.Errorf("%w: %w", ErrWire, err)
 	}
 	return dumpFedWireWithTableSet(ctx, db, baseTableName, outputPath, tableSet, nil)

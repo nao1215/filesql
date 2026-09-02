@@ -107,7 +107,8 @@
 // would load as INTEGER and divide as one.
 //
 // A column whose values are all datetimes is recognized as one and stored as
-// TEXT, which is the only class SQLite has for it. A text cell is stored as the
+// TEXT. SQLite has no datetime storage class, and of the three ways it can hold
+// one this package keeps the text, so the cell reads back as the file wrote it. A text cell is stored as the
 // file wrote it, so a column written as 1/2/2024, 2024/01/02 or 02.01.2024 is
 // recognized as a datetime and still needs converting before date() or
 // strftime() can answer about it: those read ISO 8601 and "YYYY-MM-DD HH:MM:SS".

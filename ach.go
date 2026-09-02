@@ -389,7 +389,10 @@ func DumpACHWithSource(ctx context.Context, db *sql.DB, baseTableName, outputPat
 	if source == nil {
 		return fmt.Errorf("%w: source must be a non-nil io.Reader", ErrNilInput)
 	}
-	tableSet, err := achconv.ParseReader(source)
+	// The bound the load path holds to applies here too: the library reads the
+	// whole file, so a stream sending a record with no terminator would be read
+	// however long it is.
+	tableSet, err := achconv.ParseReader(filereader.BoundRecords(source))
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrACH, err)
 	}
