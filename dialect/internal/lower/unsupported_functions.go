@@ -19,19 +19,22 @@ import (
 
 // Reasons, spelled once so a family of names refuses in one voice.
 const (
-	reasonArray   = "its result is an array and SQLite has no array type"
-	reasonJSONOp  = "SQLite's JSON functions have no operation of that shape"
-	reasonSession = "it answers a fact about the connection or the server, which a database made from files does not have"
-	reasonEffect  = "it has an effect rather than a value"
-	reasonBytes   = "SQLite holds text as UTF-8 and has no encoding to convert between"
-	reasonGeo     = "SQLite has no geography type"
-	reasonRandom  = "its value is not the same twice, so a query over the same rows would not answer the same"
-	reasonBinary  = "SQLite has no type for the bytes it answers"
-	reasonRange   = "SQLite has no range type"
+	reasonArray        = "its result is an array and SQLite has no array type"
+	reasonJSONOp       = "SQLite's JSON functions have no operation of that shape"
+	reasonSession      = "it answers a fact about the connection or the server, which a database made from files does not have"
+	reasonEffect       = "it has an effect rather than a value"
+	reasonBytes        = "SQLite holds text as UTF-8 and has no encoding to convert between"
+	reasonGeo          = "SQLite has no geography type"
+	reasonRandom       = "its value is not the same twice, so a query over the same rows would not answer the same"
+	reasonBinary       = "SQLite has no type for the bytes it answers"
+	reasonRange        = "SQLite has no range type"
+	reasonGroupingSets = "it says whether a column was rolled up, and the grouping sets it reports on are not supported"
+	reasonPercentile   = "it needs the whole partition sorted, and SQLite has no function that answers a percentile"
 )
 
 // mysqlUnsupportedFunctions are the MySQL functions with no SQLite form.
 var mysqlUnsupportedFunctions = map[string]string{ //nolint:gochecknoglobals // a fixed table
+	"GROUPING":                      reasonGroupingSets,
 	"JSON_KEYS":                     reasonArray,
 	"JSON_SEARCH":                   "it answers the path a value sits at, and SQLite has no function that searches for one",
 	"JSON_DEPTH":                    reasonJSONOp,
@@ -82,6 +85,7 @@ var mysqlUnsupportedFunctions = map[string]string{ //nolint:gochecknoglobals // 
 
 // postgresUnsupportedFunctions are the PostgreSQL functions with no SQLite form.
 var postgresUnsupportedFunctions = map[string]string{ //nolint:gochecknoglobals // a fixed table
+	"GROUPING":               reasonGroupingSets,
 	"ARRAY_LENGTH":           reasonArray,
 	"ARRAY_TO_JSON":          reasonArray,
 	"ARRAY_TO_STRING":        reasonArray,
@@ -128,6 +132,11 @@ var postgresUnsupportedFunctions = map[string]string{ //nolint:gochecknoglobals 
 // The ones whose result is an array are in arrayFunctions instead, which the
 // call rules already consult.
 var googlesqlUnsupportedFunctions = map[string]string{ //nolint:gochecknoglobals // a fixed table
+	"GROUPING":           reasonGroupingSets,
+	"PERCENTILE_CONT":    reasonPercentile,
+	"PERCENTILE_DISC":    reasonPercentile,
+	"MAX_BY":             "it answers one column's value at the row where another is extreme, which SQLite can only express by changing the shape of the query",
+	"MIN_BY":             "it answers one column's value at the row where another is extreme, which SQLite can only express by changing the shape of the query",
 	"JSON_KEYS":          reasonArray,
 	"JSON_STRIP_NULLS":   reasonJSONOp,
 	"TO_JSON":            "SQLite has no JSON type; TO_JSON_STRING answers the same value as text",

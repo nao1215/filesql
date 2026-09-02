@@ -3362,6 +3362,7 @@ func TestNoDialectFunctionReachesSQLiteAsUnknown(t *testing.T) {
 		{dialects.MySQL, `SLEEP(0)`},
 		{dialects.MySQL, `GET_LOCK('a',0)`},
 		{dialects.MySQL, `RELEASE_LOCK('a')`},
+		{dialects.MySQL, `GROUPING(1)`},
 		{dialects.MySQL, `JSON_SEARCH('["a"]','one','a')`},
 		{dialects.MySQL, `JSON_ARRAY_APPEND('[1]','$',2)`},
 		{dialects.MySQL, `POINT(1,2)`},
@@ -3393,6 +3394,7 @@ func TestNoDialectFunctionReachesSQLiteAsUnknown(t *testing.T) {
 		{dialects.PostgreSQL, `current_setting('a')`},
 		{dialects.PostgreSQL, `erf(1)`},
 		{dialects.PostgreSQL, `erfc(1)`},
+		{dialects.PostgreSQL, `grouping(1)`},
 		{dialects.PostgreSQL, `json_extract_path('{"a":1}','a')`},
 		{dialects.PostgreSQL, `json_extract_path_text('{"a":1}','a')`},
 		{dialects.PostgreSQL, `jsonb_extract_path('{"a":1}','a')`},
@@ -3401,6 +3403,11 @@ func TestNoDialectFunctionReachesSQLiteAsUnknown(t *testing.T) {
 		{dialects.PostgreSQL, `point(1,2)`},
 		{dialects.PostgreSQL, `box('a')`},
 
+		{dialects.GoogleSQL, `GROUPING(1)`},
+		{dialects.GoogleSQL, `PERCENTILE_CONT(1, 0.5) OVER ()`},
+		{dialects.GoogleSQL, `PERCENTILE_DISC(1, 0.5) OVER ()`},
+		{dialects.GoogleSQL, `MAX_BY(1, 2)`},
+		{dialects.GoogleSQL, `MIN_BY(1, 2)`},
 		{dialects.GoogleSQL, `TO_JSON(1)`},
 		{dialects.GoogleSQL, `PARSE_JSON('1')`},
 		{dialects.GoogleSQL, `JSON_KEYS('{}')`},
@@ -3434,6 +3441,103 @@ func TestNoDialectFunctionReachesSQLiteAsUnknown(t *testing.T) {
 			if _, err := runDialect(t, db, d, "SELECT "+call); err != nil {
 				t.Errorf("%v: %s: %v", d, call, err)
 			}
+		}
+	}
+}
+
+// TestTheWindowAndAggregateSurfaceAnswers is the other half of the sweep that
+// found the five refused names: the part that already worked, pinned so it
+// cannot regress quietly. SQLite has window functions of its own and a query
+// using them reaches SQLite almost unchanged, which is exactly the shape that
+// breaks without anyone noticing when a rewrite is added near it.
+//
+// Every want was read by running the query against the rows below, and agrees
+// with what mysql:8.4 and postgres:17 answer for the same three rows.
+func TestTheWindowAndAggregateSurfaceAnswers(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+	if _, err := db.ExecContext(t.Context(),
+		`CREATE TABLE win (a INTEGER, b INTEGER, g TEXT);
+		 INSERT INTO win VALUES (1,2,'x'),(2,3,'x'),(3,4,'y')`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// The window functions, which every dialect writes the same way.
+	windows := []struct{ expr, want string }{
+		{"ROW_NUMBER() OVER (ORDER BY a)", "1"},
+		{"LAG(a, 1, -1) OVER (ORDER BY a)", "-1"},
+		{"LEAD(a, 1, -1) OVER (ORDER BY a)", "2"},
+		{"NTILE(2) OVER (ORDER BY a)", "1"},
+		{"FIRST_VALUE(a) OVER (PARTITION BY g ORDER BY a)", "1"},
+		{"NTH_VALUE(a, 1) OVER (ORDER BY a)", "1"},
+		{"PERCENT_RANK() OVER (ORDER BY a)", "0"},
+		{"RANK() OVER (ORDER BY a)", "1"},
+		{"DENSE_RANK() OVER (ORDER BY a)", "1"},
+		{"SUM(a) OVER (ORDER BY a RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)", "3"},
+		{"SUM(a) OVER (ORDER BY a GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW)", "1"},
+		{"SUM(a) OVER (ORDER BY a ROWS UNBOUNDED PRECEDING)", "1"},
+	}
+	for _, d := range []dialects.Dialect{dialects.MySQL, dialects.PostgreSQL, dialects.GoogleSQL} {
+		for _, tt := range windows {
+			query := "SELECT " + tt.expr + " FROM win ORDER BY a LIMIT 1"
+			got, err := runDialect(t, db, d, query)
+			if err != nil {
+				t.Errorf("%v: %s: %v", d, query, err)
+				continue
+			}
+			if got.String != tt.want {
+				t.Errorf("%v: %s = %q, want %q", d, query, got.String, tt.want)
+			}
+		}
+		// A window named once and used by name, which is its own syntax rather
+		// than a function.
+		named := "SELECT COUNT(*) OVER w FROM win WINDOW w AS (ORDER BY a) LIMIT 1"
+		if got, err := runDialect(t, db, d, named); err != nil || got.String != "1" {
+			t.Errorf("%v: %s = %v, %v, want 1", d, named, got, err)
+		}
+	}
+
+	// The aggregates each dialect spells its own way.
+	for _, tt := range []struct {
+		dialect dialects.Dialect
+		expr    string
+		want    string
+	}{
+		{dialects.MySQL, "STD(a)", "0.816496580927726"},
+		{dialects.MySQL, "VARIANCE(a)", "0.6666666666666666"},
+		{dialects.MySQL, "ANY_VALUE(g)", "x"},
+		{dialects.PostgreSQL, "corr(a,b)", "1"},
+		{dialects.PostgreSQL, "stddev_samp(a)", "1"},
+		{dialects.PostgreSQL, "bool_and(a > 0)", "1"},
+		{dialects.GoogleSQL, "COUNTIF(a > 1)", "2"},
+		{dialects.GoogleSQL, "LOGICAL_OR(a > 2)", "1"},
+		{dialects.GoogleSQL, "STDDEV_POP(a)", "0.816496580927726"},
+	} {
+		query := "SELECT " + tt.expr + " FROM win"
+		got, err := runDialect(t, db, tt.dialect, query)
+		if err != nil {
+			t.Errorf("%v: %s: %v", tt.dialect, query, err)
+			continue
+		}
+		if got.String != tt.want {
+			t.Errorf("%v: %s = %q, want %q", tt.dialect, query, got.String, tt.want)
+		}
+	}
+
+	// The aggregates SQLite has none of are refused by name, which is the other
+	// right answer and the one this sweep is about.
+	for _, tt := range []struct {
+		dialect dialects.Dialect
+		expr    string
+	}{
+		{dialects.MySQL, "BIT_XOR(a)"},
+		{dialects.PostgreSQL, "regr_slope(b,a)"},
+		{dialects.PostgreSQL, "percentile_cont(0.5) WITHIN GROUP (ORDER BY a)"},
+		{dialects.GoogleSQL, "FIRST_VALUE(a IGNORE NULLS) OVER (ORDER BY a)"},
+	} {
+		query := "SELECT " + tt.expr + " FROM win"
+		if got, err := runDialect(t, db, tt.dialect, query); err == nil {
+			t.Errorf("%v: %s = %v, want a refusal", tt.dialect, query, got)
 		}
 	}
 }
