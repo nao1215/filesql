@@ -207,6 +207,9 @@ func (r *mysqlRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 	if lowered, ok, err := commonCall(call, "mysql"); ok || err != nil {
 		return lowered, err
 	}
+	if err := refuseUnsupportedFunction(dialects.MySQL, call); err != nil {
+		return nil, err
+	}
 	name := callName(call)
 	switch name {
 	case fnNameExtract, fnNameDatePart:
@@ -295,6 +298,20 @@ func (r *mysqlRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		return rename(call, "mysql_format"), nil
 	case "REGEXP_REPLACE":
 		return rename(call, "mysql_regexp_replace"), nil
+	case "IS_UUID":
+		return rename(call, "is_uuid"), nil
+	case "JSON_VALUE":
+		// SQLite's json_extract unquotes a scalar, which is what JSON_VALUE
+		// answers where JSON_EXTRACT keeps the quotes.
+		return rename(call, "json_extract"), nil
+	case "JSON_MERGE_PATCH":
+		// SQLite's json_patch is the same merge and takes two documents, where
+		// MySQL folds any number of them left to right.
+		if len(call.Args) != 2 {
+			return nil, unsupported(call.Span,
+				"JSON_MERGE_PATCH is supported for two documents; SQLite's json_patch merges two at a time")
+		}
+		return rename(call, "json_patch"), nil
 	case "ORD", "HEX", "QUOTE", "ASCII", "UNHEX", "INSERT":
 		return rename(call, "mysql_"+strings.ToLower(name)), nil
 	case "ISNULL":

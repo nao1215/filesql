@@ -91,7 +91,7 @@ linters:
       # missing, and a map whose keys are constants cannot be read.
       - linters:
           - goconst
-        path: dialect/internal/lower/(cast_targets|helper_names|type_names)\.go
+        path: dialect/internal/lower/(cast_targets|helper_names|type_names|unsupported_functions)\.go
       # The syntax tree's marker and position methods are one line each and
       # mechanical: a doc comment on every one of them would be a hundred
       # repetitions of one sentence, and the sentence is written once above the

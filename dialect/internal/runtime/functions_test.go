@@ -3315,3 +3315,112 @@ func TestStrToDateReadsTheShortSpellings(t *testing.T) {
 		})
 	}
 }
+
+// TestNoDialectFunctionReachesSQLiteAsUnknown holds the promise the package
+// documentation makes: a construct outside the supported subset is refused by
+// name, with the line and column it was written at. A function name a dialect
+// defines and this package does not used to reach SQLite unchanged, and SQLite
+// answered "no such function", which tells a caller that a name they did write
+// does not exist.
+//
+// The names below were read from each engine's function reference. A name is
+// allowed to be refused or to be translated into something SQLite answers for;
+// what it may not do is arrive under its own name.
+func TestNoDialectFunctionReachesSQLiteAsUnknown(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	for _, tt := range []struct {
+		dialect dialects.Dialect
+		call    string
+	}{
+		{dialects.MySQL, `JSON_KEYS('{}')`},
+		{dialects.MySQL, `JSON_DEPTH('{}')`},
+		{dialects.MySQL, `JSON_MERGE_PRESERVE('{}','{}')`},
+		{dialects.MySQL, `JSON_OVERLAPS('{}','{}')`},
+		{dialects.MySQL, `JSON_SCHEMA_VALID('{}','{}')`},
+		{dialects.MySQL, `JSON_STORAGE_SIZE('{}')`},
+		{dialects.MySQL, `JSON_VALUE('{"a":1}','$.a')`},
+		{dialects.MySQL, `JSON_MERGE_PATCH('{}','{}')`},
+		{dialects.MySQL, `BIN_TO_UUID('a')`},
+		{dialects.MySQL, `UUID_TO_BIN('a')`},
+		{dialects.MySQL, `IS_UUID('a')`},
+		{dialects.MySQL, `UUID()`},
+		{dialects.MySQL, `RANDOM_BYTES(1)`},
+		{dialects.MySQL, `COMPRESS('a')`},
+		{dialects.MySQL, `UNCOMPRESS('a')`},
+		{dialects.MySQL, `UNCOMPRESSED_LENGTH('a')`},
+		{dialects.MySQL, `INET6_ATON('::1')`},
+		{dialects.MySQL, `INET6_NTOA('a')`},
+		{dialects.MySQL, `STATEMENT_DIGEST('a')`},
+		{dialects.MySQL, `LAST_INSERT_ID()`},
+		{dialects.MySQL, `ROW_COUNT()`},
+		{dialects.MySQL, `FOUND_ROWS()`},
+		{dialects.MySQL, `CONNECTION_ID()`},
+		{dialects.MySQL, `NAME_CONST('a',1)`},
+		{dialects.MySQL, `BENCHMARK(1,1)`},
+		{dialects.MySQL, `SLEEP(0)`},
+		{dialects.MySQL, `GET_LOCK('a',0)`},
+		{dialects.MySQL, `RELEASE_LOCK('a')`},
+
+		{dialects.PostgreSQL, `to_json(1)`},
+		{dialects.PostgreSQL, `to_jsonb(1)`},
+		{dialects.PostgreSQL, `json_build_object('a',1)`},
+		{dialects.PostgreSQL, `json_build_array(1)`},
+		{dialects.PostgreSQL, `row_to_json(1)`},
+		{dialects.PostgreSQL, `array_to_json('{1}')`},
+		{dialects.PostgreSQL, `array_length('{1}',1)`},
+		{dialects.PostgreSQL, `cardinality('{1}')`},
+		{dialects.PostgreSQL, `string_to_array('a',',')`},
+		{dialects.PostgreSQL, `parse_ident('a')`},
+		{dialects.PostgreSQL, `json_strip_nulls('{}')`},
+		{dialects.PostgreSQL, `jsonb_pretty('{}')`},
+		{dialects.PostgreSQL, `jsonb_path_exists('{}','$')`},
+		{dialects.PostgreSQL, `jsonb_path_query_array('{}','$')`},
+		{dialects.PostgreSQL, `justify_days('1 day')`},
+		{dialects.PostgreSQL, `to_ascii('a')`},
+		{dialects.PostgreSQL, `ascii_string('a')`},
+		{dialects.PostgreSQL, `convert_from('a','utf8')`},
+		{dialects.PostgreSQL, `random_normal()`},
+		{dialects.PostgreSQL, `pg_sleep(0)`},
+		{dialects.PostgreSQL, `pg_backend_pid()`},
+		{dialects.PostgreSQL, `current_setting('a')`},
+		{dialects.PostgreSQL, `erf(1)`},
+		{dialects.PostgreSQL, `erfc(1)`},
+
+		{dialects.GoogleSQL, `TO_JSON(1)`},
+		{dialects.GoogleSQL, `PARSE_JSON('1')`},
+		{dialects.GoogleSQL, `JSON_KEYS('{}')`},
+		{dialects.GoogleSQL, `JSON_STRIP_NULLS('{}')`},
+		{dialects.GoogleSQL, `BOOL('true')`},
+		{dialects.GoogleSQL, `INT64('1')`},
+		{dialects.GoogleSQL, `FLOAT64('1')`},
+		{dialects.GoogleSQL, `LAX_BOOL('true')`},
+		{dialects.GoogleSQL, `SESSION_USER()`},
+		{dialects.GoogleSQL, `VECTOR_SEARCH()`},
+		{dialects.GoogleSQL, `COSINE_DISTANCE(1,2)`},
+		{dialects.GoogleSQL, `EUCLIDEAN_DISTANCE(1,2)`},
+		{dialects.GoogleSQL, `ST_GEOGPOINT(1,1)`},
+		{dialects.GoogleSQL, `ST_DISTANCE(1,2)`},
+		{dialects.GoogleSQL, `ST_ASTEXT(1)`},
+		{dialects.GoogleSQL, `S2_CELLIDFROMPOINT(1)`},
+	} {
+		t.Run(string(tt.dialect)+" "+tt.call, func(t *testing.T) {
+			_, err := runDialect(t, db, tt.dialect, "SELECT "+tt.call)
+			if err != nil && strings.Contains(err.Error(), "no such function") {
+				t.Errorf("%s: %v", tt.call, err)
+			}
+		})
+	}
+
+	// A function SQLite has keeps reaching SQLite under every dialect: the
+	// tables refuse the names one engine has and SQLite has not, rather than
+	// every name this package does not rewrite.
+	for _, d := range []dialects.Dialect{dialects.MySQL, dialects.PostgreSQL, dialects.GoogleSQL} {
+		for _, call := range []string{`json_extract('{"a":1}', '$.a')`, `json_array_length('[1,2]')`} {
+			if _, err := runDialect(t, db, d, "SELECT "+call); err != nil {
+				t.Errorf("%v: %s: %v", d, call, err)
+			}
+		}
+	}
+}

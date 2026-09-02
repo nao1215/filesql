@@ -547,6 +547,28 @@ func TestMySQLComparisonFoldsCaseLikeItsCollation(t *testing.T) {
 		// The boundary: a boolean that is not a literal is the number SQLite
 		// stores, since nothing downstream can tell the two apart.
 		{query: `SELECT JSON_ARRAY(1 = 1)`, want: "[1]"},
+
+		// The JSON functions that reached SQLite as unknown names. Every want
+		// was read from mysql:8.4, allowing for the space MySQL writes after a
+		// colon.
+		{query: `SELECT JSON_VALUE('{"a":1}', '$.a')`, want: "1"},
+		{query: `SELECT JSON_VALUE('{"a":"x"}', '$.a')`, want: "x"},
+		{query: `SELECT JSON_VALUE('{"a":1}', '$.b') IS NULL`, want: "1"},
+		{query: `SELECT JSON_MERGE_PATCH('{"a":1}', '{"b":2}')`, want: `{"a":1,"b":2}`},
+		{query: `SELECT JSON_MERGE_PATCH('{"a":1}', '{"a":null}')`, want: "{}"},
+
+		// IS_UUID reads three spellings and nothing else: the hyphenated form,
+		// the same in braces, and the thirty-two digits. Letter case does not
+		// matter and surrounding space is not trimmed.
+		{query: `SELECT IS_UUID('6ccd780c-baba-1026-9564-5b8c656024db')`, want: "1"},
+		{query: `SELECT IS_UUID('6CCD780C-BABA-1026-9564-5B8C656024DB')`, want: "1"},
+		{query: `SELECT IS_UUID('6ccd780cbaba102695645b8c656024db')`, want: "1"},
+		{query: `SELECT IS_UUID('{6ccd780c-baba-1026-9564-5b8c656024db}')`, want: "1"},
+		{query: `SELECT IS_UUID('{6ccd780cbaba102695645b8c656024db}')`, want: "0"},
+		{query: `SELECT IS_UUID('6ccd780cb-aba-1026-9564-5b8c656024db')`, want: "0"},
+		{query: `SELECT IS_UUID(' 6ccd780c-baba-1026-9564-5b8c656024db')`, want: "0"},
+		{query: `SELECT IS_UUID('6ccd780c-baba-1026-9564-5b8c656024dz')`, want: "0"},
+		{query: `SELECT IS_UUID('a')`, want: "0"},
 	}
 
 	for _, tt := range tests {
