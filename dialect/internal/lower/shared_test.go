@@ -42,19 +42,20 @@ func TestTranslateRefusesFormsItCannotRead(t *testing.T) {
 	}
 }
 
-// TestTranslateKeepsACastToATypeItDoesNotKnow leaves a cast whose target no
-// helper converts to on SQLite's own CAST, which is the only other conversion
-// there is.
-func TestTranslateKeepsACastToATypeItDoesNotKnow(t *testing.T) {
+// TestTranslateRefusesACastToATypeItDoesNotKnow covers the target no helper
+// converts to. Leaving it on SQLite's own CAST was not leaving it alone:
+// SQLite applies numeric affinity to a type it has never heard of, so a value
+// came back as the number its leading digits spell.
+func TestTranslateRefusesACastToATypeItDoesNotKnow(t *testing.T) {
 	t.Parallel()
 
 	const query = `SELECT CAST(x AS quux) FROM t`
 	got, err := dialect.Translate(dialect.PostgreSQL, query)
-	if err != nil {
-		t.Fatalf("Translate(%q) error: %v", query, err)
+	if !errors.Is(err, dialect.ErrUnsupportedSyntax) {
+		t.Fatalf("Translate(%q) = %q, error = %v, want ErrUnsupportedSyntax", query, got, err)
 	}
-	if got != query {
-		t.Fatalf("Translate(%q) = %q, want it unchanged", query, got)
+	if !strings.Contains(err.Error(), "quux") {
+		t.Errorf("Translate(%q) error = %q, want it to name the type", query, err)
 	}
 }
 

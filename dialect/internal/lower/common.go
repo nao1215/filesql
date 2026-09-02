@@ -102,7 +102,7 @@ func promoteSerial(col *ast.ColumnDef) error {
 	serial := false
 	if col.Type != nil {
 		switch strings.ToUpper(col.Type.Name) {
-		case typeNameSerial, typeNameBigserial, "SMALLSERIAL":
+		case typeNameSerial, typeNameBigserial, typeNameSmallserial:
 			serial = true
 		}
 	}

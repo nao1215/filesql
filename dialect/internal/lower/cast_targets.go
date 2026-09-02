@@ -19,20 +19,32 @@ var commonCastTargets = map[string]bool{ //nolint:gochecknoglobals // a fixed ta
 	"TIMESTAMP": true, "TINYINT": true, "VARCHAR": true,
 }
 
+var commonCastTargetsExtra = map[string]bool{ //nolint:gochecknoglobals // a fixed table
+	// The spellings every dialect here writes and SQLite does not name: a type
+	// with a length word in it, and the standard's long forms.
+	"CHARACTER VARYING": true, "DOUBLE PRECISION": true,
+}
+
 var mysqlCastTargets = map[string]bool{ //nolint:gochecknoglobals // a fixed table
 	"BINARY": true, "DEC": true, "MEDIUMINT": true, "NCHAR": true, "NVARCHAR": true,
 	"SIGNED": true, "UNSIGNED": true, "VARBINARY": true, "YEAR": true,
+	"CHARACTER": true, "NATIONAL CHAR": true, "NATIONAL VARCHAR": true,
+	"TINYTEXT": true, "MEDIUMTEXT": true, "LONGTEXT": true,
+	"TINYBLOB": true, "MEDIUMBLOB": true, "LONGBLOB": true,
 }
 
 var postgresCastTargets = map[string]bool{ //nolint:gochecknoglobals // a fixed table
 	"BIGSERIAL": true, "BPCHAR": true, "BYTEA": true, "CHARACTER": true, "FLOAT4": true,
 	"FLOAT8": true, "INT2": true, "INT4": true, "INT8": true, "INTERVAL": true, "JSONB": true,
-	"MONEY": true, "NAME": true, "SERIAL": true, "TIMESTAMPTZ": true, "UUID": true,
+	"MONEY": true, "NAME": true, "SERIAL": true, "TIMESTAMPTZ": true, "TIMETZ": true, "UUID": true,
+	typeNameSmallserial: true, "INET": true, "CIDR": true, "MACADDR": true, "XML": true,
+	typeNameTimestampWithZone: true, typeNameTimestampWithoutZone: true,
+	"TIME WITH TIME ZONE": true, "TIME WITHOUT TIME ZONE": true,
 }
 
 var googleCastTargets = map[string]bool{ //nolint:gochecknoglobals // a fixed table
 	"BIGDECIMAL": true, "BIGNUMERIC": true, "BYTEINT": true, "BYTES": true, "FLOAT64": true,
-	"INT64": true, "STRING": true,
+	"INT64": true, "STRING": true, "INTERVAL": true,
 }
 
 // knownCastTarget reports whether a helper converts to the named type in a
@@ -49,7 +61,7 @@ func knownCastTarget(d dialects.Dialect, name string) bool {
 	case dialects.SQLite:
 		return false
 	}
-	return own[name] || commonCastTargets[name]
+	return own[name] || commonCastTargets[name] || commonCastTargetsExtra[name]
 }
 
 // CastTargets lists the targets a dialect's helper converts to, for the test
@@ -66,12 +78,11 @@ func CastTargets(d dialects.Dialect) []string {
 	case dialects.SQLite:
 		return nil
 	}
-	names := make([]string, 0, len(own)+len(commonCastTargets))
-	for name := range own {
-		names = append(names, name)
-	}
-	for name := range commonCastTargets {
-		names = append(names, name)
+	names := make([]string, 0, len(own)+len(commonCastTargets)+len(commonCastTargetsExtra))
+	for _, table := range []map[string]bool{own, commonCastTargets, commonCastTargetsExtra} {
+		for name := range table {
+			names = append(names, name)
+		}
 	}
 	return names
 }

@@ -86,18 +86,32 @@ var commonCastKinds = map[string]castKind{
 	typeTime:      castTime,
 	typeTimestamp: castTimestamp,
 	"BLOB":        castBlob,
+	// The long spellings the standard writes, which SQLite does not name and
+	// which fell through to its affinity rules: a value cast to one of these
+	// came back as the number its leading digits spell.
+	"CHARACTER VARYING": castText,
+	"DOUBLE PRECISION":  castFloat,
 }
 
 var mysqlCastKinds = map[string]castKind{
-	"SIGNED":       castInt,
-	"UNSIGNED":     castInt,
-	"MEDIUMINT":    castInt,
-	"NCHAR":        castText,
-	"NVARCHAR":     castText,
-	"DEC":          castDecimal,
-	"YEAR":         castYear,
-	typeNameBinary: castBlob,
-	"VARBINARY":    castBlob,
+	"CHARACTER":        castText,
+	"NATIONAL CHAR":    castText,
+	"NATIONAL VARCHAR": castText,
+	"TINYTEXT":         castText,
+	"MEDIUMTEXT":       castText,
+	"LONGTEXT":         castText,
+	"TINYBLOB":         castBlob,
+	"MEDIUMBLOB":       castBlob,
+	"LONGBLOB":         castBlob,
+	"SIGNED":           castInt,
+	"UNSIGNED":         castInt,
+	"MEDIUMINT":        castInt,
+	"NCHAR":            castText,
+	"NVARCHAR":         castText,
+	"DEC":              castDecimal,
+	"YEAR":             castYear,
+	typeNameBinary:     castBlob,
+	"VARBINARY":        castBlob,
 }
 
 var pgCastKinds = map[string]castKind{
@@ -115,8 +129,23 @@ var pgCastKinds = map[string]castKind{
 	"UUID":        castUUID,
 	"JSONB":       castJSON,
 	"TIMESTAMPTZ": castTimestamp,
+	"TIMETZ":      castTime,
 	kwInterval:    castText,
 	"BYTEA":       castBlob,
+	"SMALLSERIAL": castInt,
+	// The network and document types PostgreSQL holds as text. SQLite has no
+	// type for an address, and the text it was written as is the value.
+	"INET":    castText,
+	"CIDR":    castText,
+	"MACADDR": castText,
+	"XML":     castText,
+	// The spellings PostgreSQL's own documentation uses for a timestamp and a
+	// time. Neither reached a helper, so the standard spelling of a timestamp
+	// answered the year.
+	"TIMESTAMP WITH TIME ZONE":    castTimestamp,
+	"TIMESTAMP WITHOUT TIME ZONE": castTimestamp,
+	"TIME WITH TIME ZONE":         castTime,
+	"TIME WITHOUT TIME ZONE":      castTime,
 }
 
 var googlesqlCastKinds = map[string]castKind{
@@ -127,6 +156,7 @@ var googlesqlCastKinds = map[string]castKind{
 	"BIGDECIMAL":   castDecimal,
 	typeNameString: castText,
 	"BYTES":        castBlob,
+	kwInterval:     castText,
 }
 
 // castKindsFor returns the dialect-specific type table.
@@ -150,6 +180,21 @@ func castKindsFor(d dialects.Dialect) map[string]castKind {
 func KnowsCastTarget(d dialects.Dialect, name string) bool {
 	_, ok := lookupCastKind(d, name)
 	return ok
+}
+
+// TextCastTargetNames lists the type names a dialect converts to text, for the
+// test that asks whether the text survives each of them.
+func TextCastTargetNames(d dialects.Dialect) []string {
+	own := castKindsFor(d)
+	var names []string
+	for _, table := range []map[string]castKind{own, commonCastKinds} {
+		for name, kind := range table {
+			if kind == castText {
+				names = append(names, name)
+			}
+		}
+	}
+	return names
 }
 
 // lookupCastKind resolves a source-dialect type name to a conversion kind,

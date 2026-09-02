@@ -3,6 +3,7 @@ package runtime
 import (
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -69,6 +70,27 @@ func TestCastSemantics(t *testing.T) {
 		{"googlesql casts empty bytes", dialects.GoogleSQL, `SELECT CAST(b'' AS STRING)`, "", false},
 		{"mysql keeps bytes that are not utf-8", dialects.MySQL, `SELECT HEX(CAST(UNHEX('61ff62') AS CHAR))`, "61FF62", false},
 		{"postgresql keeps bytes that are not utf-8", dialects.PostgreSQL, `SELECT length(CAST(decode('61ff62', 'hex') AS text))`, "3", false},
+
+		// The type names each dialect has that used to fall through to SQLite's
+		// own CAST, where numeric affinity took the leading digits of a value
+		// and answered a number. Every want was read from postgres:17 or
+		// mysql:8.4.
+		{"postgresql casts to a timestamp spelled in full", dialects.PostgreSQL, `SELECT '2024-01-02 03:04:05'::timestamp without time zone`, "2024-01-02 03:04:05", false},
+		{"postgresql casts to a timestamp with a zone", dialects.PostgreSQL, `SELECT '2024-01-02 03:04:05'::timestamp with time zone`, "2024-01-02 03:04:05", false},
+		{"postgresql casts to a time spelled in full", dialects.PostgreSQL, `SELECT '03:04:05'::time without time zone`, "03:04:05", false},
+		{"postgresql casts to a time with a zone", dialects.PostgreSQL, `SELECT '03:04:05'::time with time zone`, "03:04:05", false},
+		{"postgresql casts to timetz", dialects.PostgreSQL, `SELECT '03:04:05'::timetz`, "03:04:05", false},
+		{"postgresql casts to character varying", dialects.PostgreSQL, `SELECT 'abc'::character varying`, "abc", false},
+		{"postgresql applies a character varying length", dialects.PostgreSQL, `SELECT CAST('abc' AS character varying(2))`, "ab", false},
+		{"postgresql casts to double precision", dialects.PostgreSQL, `SELECT '1.5'::double precision`, "1.5", false},
+		{"postgresql keeps an address", dialects.PostgreSQL, `SELECT '192.168.0.1'::inet`, "192.168.0.1", false},
+		{"postgresql keeps a network", dialects.PostgreSQL, `SELECT '192.168.0.0/24'::cidr`, "192.168.0.0/24", false},
+		{"postgresql keeps a hardware address", dialects.PostgreSQL, `SELECT '08:00:2b:01:02:03'::macaddr`, "08:00:2b:01:02:03", false},
+		{"postgresql keeps a document", dialects.PostgreSQL, `SELECT '<a/>'::xml`, "<a/>", false},
+		{"mysql casts to double precision", dialects.MySQL, `SELECT CAST('1.5' AS DOUBLE PRECISION)`, "1.5", false},
+		{"mysql casts to a national char", dialects.MySQL, `SELECT CAST('abc' AS NATIONAL CHAR)`, "abc", false},
+		{"mysql applies a longtext length", dialects.MySQL, `SELECT CAST('abcd' AS CHARACTER(2))`, "ab", false},
+		{"googlesql casts to an interval", dialects.GoogleSQL, `SELECT CAST('1' AS INTERVAL)`, "1", false},
 
 		// A boolean written as a literal is a boolean, not the 1 SQLite stores
 		// it as. Only the literal can be told apart: a boolean that is computed
@@ -279,6 +301,16 @@ func TestCastTargetsMatchTheEngine(t *testing.T) {
 		{dialects.PostgreSQL, `SELECT '\X4142'::bytea`},
 		{dialects.PostgreSQL, `SELECT 'a\x'::bytea`},
 		{dialects.PostgreSQL, `SELECT 'a\9'::bytea`},
+		// A type name no dialect has is refused rather than answered by
+		// SQLite's affinity, which made text the number 0.
+		{dialects.PostgreSQL, `SELECT 'a'::nosuchtype`},
+		{dialects.PostgreSQL, `SELECT '(1,2)'::point`},
+		{dialects.PostgreSQL, `SELECT '[1,2)'::int4range`},
+		{dialects.PostgreSQL, `SELECT 'a'::int64`},
+		{dialects.MySQL, `SELECT CAST('a' AS NOSUCHTYPE)`},
+		{dialects.MySQL, `SELECT CAST('a' AS POINT)`},
+		{dialects.GoogleSQL, `SELECT CAST('a' AS GEOGRAPHY)`},
+		{dialects.GoogleSQL, `SELECT CAST('a' AS NOSUCHTYPE)`},
 		// PostgreSQL casts a bit string to an integer and to nothing else
 		// numeric, and a bit string past 64 bits does not fit in one.
 		{dialects.PostgreSQL, `SELECT B'1010'::numeric`},
@@ -354,30 +386,72 @@ func TestCastRejectsInvalidValues(t *testing.T) {
 	}
 }
 
-// TestCastUnknownTypePassesThrough keeps a type this package does not model
-// running as a plain SQLite CAST rather than failing the whole query.
-func TestCastUnknownTypePassesThrough(t *testing.T) {
+// TestTextSurvivesEveryTextCastTarget is the invariant behind the list rather
+// than the list itself: a cast to a target this package converts to text must
+// answer the text. A target that reaches no helper falls back to SQLite's own
+// CAST, and SQLite reads text as a number for a type it has never heard of,
+// which is how '192.168.0.1' cast to inet became 192.168.
+func TestTextSurvivesEveryTextCastTarget(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	const value = "192.168.0.1"
+	for _, d := range []dialects.Dialect{dialects.MySQL, dialects.PostgreSQL, dialects.GoogleSQL} {
+		for _, name := range TextCastTargetNames(d) {
+			query := fmt.Sprintf("SELECT CAST('%s' AS %s)", value, name)
+			got, err := runDialect(t, db, d, query)
+			if err != nil {
+				t.Errorf("%v: %s: %v", d, query, err)
+				continue
+			}
+			if !got.Valid || got.String != value {
+				t.Errorf("%v: %s = %v, want %q", d, query, got, value)
+			}
+		}
+	}
+}
+
+// TestCastRefusesATypeItDoesNotModel covers the other half of a cast target:
+// SQLite's own CAST is not a conversion to a type it has never heard of. It
+// applies numeric affinity, so a value cast to one came back as the number its
+// leading digits spell -- '192.168.0.1' as 192.168 -- and the value was gone
+// with nothing said. Every engine here raises for a type it does not have.
+func TestCastRefusesATypeItDoesNotModel(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
+	for _, tt := range []struct {
+		dialect dialects.Dialect
+		query   string
+	}{
+		{dialects.PostgreSQL, "SELECT a::nosuchtype"},
+		{dialects.PostgreSQL, "SELECT CAST(a AS point)"},
+		{dialects.PostgreSQL, "SELECT a::int64"},
+		{dialects.MySQL, "SELECT CAST(x AS GEOMETRY)"},
+		{dialects.MySQL, "SELECT CAST(x AS INET)"},
+		{dialects.GoogleSQL, "SELECT SAFE_CAST(x AS GEOGRAPHY)"},
+		{dialects.GoogleSQL, "SELECT CAST(x AS BYTEA)"},
+	} {
+		if got, err := Translate(tt.dialect, tt.query); err == nil {
+			t.Errorf("Translate(%s, %q) = %q, want a refusal", tt.dialect, tt.query, got)
+		}
+	}
+
+	// A type the dialect does have still reaches the helper, with the original
+	// text kept as the column's name where the spelling changed.
+	for _, tt := range []struct {
 		dialect dialects.Dialect
 		query   string
 		want    string
 	}{
-		// A pass-through still renames the column when the spelling changes, so
-		// the original text comes back as an alias.
-		{dialects.PostgreSQL, "SELECT a::inet", `SELECT CAST(a AS inet) AS "a::inet"`},
-		{dialects.PostgreSQL, "SELECT CAST(a AS inet)", "SELECT CAST(a AS inet)"},
-		{dialects.MySQL, "SELECT CAST(x AS GEOMETRY)", "SELECT CAST(x AS GEOMETRY)"},
-		{dialects.GoogleSQL, "SELECT SAFE_CAST(x AS GEOGRAPHY)", `SELECT CAST(x AS GEOGRAPHY) AS "SAFE_CAST(x AS GEOGRAPHY)"`},
-	}
-	for _, tt := range tests {
+		{dialects.PostgreSQL, "SELECT a::inet", `SELECT postgresql_cast(a, 'inet') AS "a::inet"`},
+		{dialects.MySQL, "SELECT CAST(x AS LONGTEXT)", `SELECT mysql_cast(x, 'LONGTEXT') AS "CAST(x AS LONGTEXT)"`},
+	} {
 		got, err := Translate(tt.dialect, tt.query)
 		if err != nil {
 			t.Fatalf("Translate(%s, %q): %v", tt.dialect, tt.query, err)
 		}
 		if got != tt.want {
-			t.Fatalf("Translate(%s, %q) = %q, want %q", tt.dialect, tt.query, got, tt.want)
+			t.Errorf("Translate(%s, %q) = %q, want %q", tt.dialect, tt.query, got, tt.want)
 		}
 	}
 }

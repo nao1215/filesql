@@ -125,11 +125,13 @@ func castHelper(d dialects.Dialect, c *ast.CastExpr, name string) (ast.Expr, err
 	}
 	c.Type = normalizeCastTarget(c.Type)
 	if !knownCastTarget(d, c.Type.Name) {
-		// SQLite's own CAST is the conversion: the helper knows nothing more
-		// about this type than SQLite does, and a cast that cannot fail has
-		// nothing for a safe cast to catch either.
-		c.TryCast = false
-		return c, nil
+		// SQLite's own CAST is not a conversion to a type it has never heard
+		// of: it applies numeric affinity, so text became the number its
+		// leading digits spell and the value was gone with nothing said. Every
+		// engine here raises for a type it does not have, and so does this.
+		return nil, unsupported(c.Span,
+			"a cast to %s is not supported; SQLite has no type it converts to and would answer "+
+				"the number the value begins with", c.Type.Written)
 	}
 	if c.TryCast {
 		// A cast that answers NULL rather than raising has a helper of its own,
