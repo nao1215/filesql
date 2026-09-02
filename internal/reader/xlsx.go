@@ -296,8 +296,9 @@ func (w *Workbook) NormalizeCells(sheet string, rows [][]string) [][]string {
 	styles, formats, complete := numberFormatStyleIDs(w.file)
 	// A workbook that formats nothing draws every number as the number it
 	// stores, so there is nothing to rewrite unless a drawing carries the mark
-	// of one that did not fit fifteen digits.
-	if complete && !formats && !anyDrawnShort(rows) {
+	// of one that did not fit fifteen digits, or the mark of a boolean, which is
+	// drawn as a word whatever the workbook formats.
+	if complete && !formats && !anyDrawnShort(rows) && !anyDrawnBoolean(rows) {
 		return rows
 	}
 	if len(w.data) == 0 || !complete {

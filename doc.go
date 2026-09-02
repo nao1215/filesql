@@ -54,6 +54,22 @@
 //	}
 //	defer db.Close()
 //
+// # Empty Sources
+//
+// A file with nothing in it is refused with ErrEmptyData for CSV, TSV, LTSV,
+// Parquet and XLSX, and loads as a table with no rows for JSON and JSONL. The
+// two are the formats whose empty input a caller reads as "the step before this
+// produced no rows", which is a table with no rows rather than a file that
+// failed to arrive; in the others there is no way to say "no rows" without
+// saying nothing at all, so an empty one is a truncated file. A document that
+// does say there are no rows loads for every format: "[]" is a JSON table with
+// no rows, and a CSV holding only its header is one too.
+//
+// The exemption is about a file. A reader carries no name and no size, so an
+// empty one is refused for every format alike, and parser.Parse refuses an empty
+// source for every format including the two, since it answers about a document
+// rather than about a load.
+//
 // # Column Types
 //
 // CSV, TSV, LTSV and XLSX carry no types, so the values decide whether a column
@@ -108,12 +124,16 @@
 // amounts, accounting figures or fractions is a number column that SUM and AVG
 // answer about. Render the drawing back in SQL when it is the drawing you want.
 //
-// Two kinds of cell keep what the sheet shows instead. One is a cell that does
-// not store a number: a boolean is stored as 1 and drawn TRUE, and text is text
-// whatever its format says. The other is a number whose format draws a moment
-// rather than a quantity -- a time of day, an elapsed duration -- since the
-// serial behind one is not what it means. A date is the third of these and is
-// rewritten into ISO 8601 rather than left as either.
+// A boolean cell is the same rule told in words: it is stored as 1 or 0 and
+// drawn TRUE or FALSE, and it loads as the number it stores, so a boolean column
+// is INTEGER and WHERE flag, SUM(flag) and a join against a Parquet BOOLEAN
+// column all answer. Text holding the word "TRUE" is text and stays text.
+//
+// Two kinds of cell keep what the sheet shows instead. One is text, which is
+// text whatever its format says. The other is a number whose format draws a
+// moment rather than a quantity -- a time of day, an elapsed duration -- since
+// the serial behind one is not what it means. A date is the third of these and
+// is rewritten into ISO 8601 rather than left as either.
 //
 // A blank cell -- empty, or nothing but whitespace -- in an INTEGER or REAL
 // column is a missing number and is stored as NULL, which is what makes MAX
@@ -469,6 +489,13 @@
 // header row where an empty cell reads back as a positional name; LTSV writes
 // the empty label beside each value and Parquet holds the name in its schema, so
 // both carry it.
+//
+// A column name holding a NUL is refused with ErrInvalidData, naming the column
+// and its position. A NUL is valid UTF-8, so the encoding check passes it, and
+// SQLite reads an identifier as a C string: the name would be cut there and the
+// quote closing it would go with the rest. A value holding a NUL is a different
+// matter and loads, since a value is bytes SQLite stores rather than a name it
+// parses.
 //
 // A header that names one column twice is refused with ErrDuplicateColumn. Two
 // names are the same column if either of two separate rules says so, and the

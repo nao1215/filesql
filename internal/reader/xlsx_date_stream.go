@@ -114,7 +114,10 @@ func scanSheetValues(src io.Reader, styles numberFormatStyles, date1904 bool, in
 			kind, _ := attr(start.Attr, "t")
 			number := kind == "" || kind == "n"
 			dated = number && styles.dates[style]
-			stored = number && !dated && !styles.clocks[style]
+			// A boolean is stored as 1 or 0 and drawn as a word, so it loads as
+			// the number it stores, like any other cell whose drawing is not
+			// its value.
+			stored = (number && !dated && !styles.clocks[style]) || kind == "b"
 		case "v":
 			if !dated && !stored {
 				continue
