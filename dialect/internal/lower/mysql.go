@@ -300,6 +300,8 @@ func (r *mysqlRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		return rename(call, "mysql_regexp_replace"), nil
 	case "IS_UUID":
 		return rename(call, "is_uuid"), nil
+	case "JSON_ARRAY_APPEND":
+		return mysqlJSONArrayAppend(call)
 	case "JSON_VALUE":
 		// SQLite's json_extract unquotes a scalar, which is what JSON_VALUE
 		// answers where JSON_EXTRACT keeps the quotes.
@@ -654,4 +656,29 @@ func jsonBooleanArguments(call *ast.FuncCall) {
 			call.Args[i] = helper("json", call.Span, text(boolWord(v), call.Span))
 		}
 	}
+}
+
+// mysqlJSONArrayAppend lowers JSON_ARRAY_APPEND, which adds a value to the end
+// of the array a path names. SQLite has no function of its own for it, but
+// json_insert does it: the index "#" is one past the last element, so a path
+// with "[#]" on the end appends there.
+//
+// The path has to be a string literal, since the "[#]" is written into it. The
+// value is left alone: MySQL converts a SQL value to JSON the way SQLite's own
+// json_insert does, so a string is appended as a JSON string and a number as a
+// number in both.
+func mysqlJSONArrayAppend(call *ast.FuncCall) (ast.Expr, error) {
+	if len(call.Args) < 3 || len(call.Args)%2 == 0 {
+		return nil, unsupported(call.Span,
+			"JSON_ARRAY_APPEND takes a document and then a path and a value for each append")
+	}
+	for i := 1; i+1 < len(call.Args); i += 2 {
+		path, ok := literalText(call.Args[i])
+		if !ok {
+			return nil, unsupported(call.Span,
+				"JSON_ARRAY_APPEND is supported for a path written as a string literal")
+		}
+		call.Args[i] = text(path+"[#]", call.Span)
+	}
+	return rename(call, "json_insert"), nil
 }
