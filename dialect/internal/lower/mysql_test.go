@@ -20,15 +20,15 @@ func TestMySQLTranslate(t *testing.T) {
 		{"C-1_extract", "SELECT EXTRACT(YEAR FROM d) FROM t", "SELECT mysql_date_part('year', d) AS \"EXTRACT(YEAR FROM d)\" FROM t"},
 		{"C-1_extract_expr", "SELECT EXTRACT(MONTH FROM o.created) FROM t", "SELECT mysql_date_part('month', o.created) AS \"EXTRACT(MONTH FROM o.created)\" FROM t"},
 
-		{"M-5_date_add", "SELECT DATE_ADD(d, INTERVAL 3 DAY) FROM t", "SELECT interval_add(d, 3, 'day') AS \"DATE_ADD(d, INTERVAL 3 DAY)\" FROM t"},
-		{"M-5_date_sub", "SELECT DATE_SUB(d, INTERVAL 2 MONTH) FROM t", "SELECT interval_add(d, -2, 'month') AS \"DATE_SUB(d, INTERVAL 2 MONTH)\" FROM t"},
-		{"M-5_date_add_hour", "SELECT DATE_ADD(ts, INTERVAL 5 HOUR)", "SELECT interval_add(ts, 5, 'hour') AS \"DATE_ADD(ts, INTERVAL 5 HOUR)\""},
-		{"M-5_date_add_string_arg", "SELECT DATE_ADD('2020-01-01', INTERVAL 1 YEAR)", "SELECT interval_add('2020-01-01', 1, 'year') AS \"DATE_ADD('2020-01-01', INTERVAL 1 YEAR)\""},
+		{"M-5_date_add", "SELECT DATE_ADD(d, INTERVAL 3 DAY) FROM t", "SELECT mysql_interval_add(d, 3, 'day') AS \"DATE_ADD(d, INTERVAL 3 DAY)\" FROM t"},
+		{"M-5_date_sub", "SELECT DATE_SUB(d, INTERVAL 2 MONTH) FROM t", "SELECT mysql_interval_add(d, -2, 'month') AS \"DATE_SUB(d, INTERVAL 2 MONTH)\" FROM t"},
+		{"M-5_date_add_hour", "SELECT DATE_ADD(ts, INTERVAL 5 HOUR)", "SELECT mysql_interval_add(ts, 5, 'hour') AS \"DATE_ADD(ts, INTERVAL 5 HOUR)\""},
+		{"M-5_date_add_string_arg", "SELECT DATE_ADD('2020-01-01', INTERVAL 1 YEAR)", "SELECT mysql_interval_add('2020-01-01', 1, 'year') AS \"DATE_ADD('2020-01-01', INTERVAL 1 YEAR)\""},
 		// The operator spelling of the same arithmetic has to reach the same
 		// call as the function spelling above.
-		{"M-5_interval_operator_add", "SELECT d + INTERVAL 3 DAY FROM t", "SELECT interval_add(d, 3, 'day') AS \"d + INTERVAL 3 DAY\" FROM t"},
-		{"M-5_interval_operator_sub", "SELECT d - INTERVAL 2 MONTH FROM t", "SELECT interval_add(d, -2, 'month') AS \"d - INTERVAL 2 MONTH\" FROM t"},
-		{"M-5_interval_operator_expression_amount", "SELECT d + INTERVAL n + 1 DAY FROM t", "SELECT interval_add(d, n + 1, 'day') AS \"d + INTERVAL n + 1 DAY\" FROM t"},
+		{"M-5_interval_operator_add", "SELECT d + INTERVAL 3 DAY FROM t", "SELECT mysql_interval_add(d, 3, 'day') AS \"d + INTERVAL 3 DAY\" FROM t"},
+		{"M-5_interval_operator_sub", "SELECT d - INTERVAL 2 MONTH FROM t", "SELECT mysql_interval_add(d, -2, 'month') AS \"d - INTERVAL 2 MONTH\" FROM t"},
+		{"M-5_interval_operator_expression_amount", "SELECT d + INTERVAL n + 1 DAY FROM t", "SELECT mysql_interval_add(d, n + 1, 'day') AS \"d + INTERVAL n + 1 DAY\" FROM t"},
 		// INTERVAL(n, a, b) is an ordinary MySQL function that has nothing to do
 		// with dates; a "(" after the word is what tells the two apart.
 		{"M-5_interval_function_is_a_call", "SELECT INTERVAL(3, 1, 2, 5)", `SELECT mysql_interval(3, 1, 2, 5) AS "INTERVAL(3, 1, 2, 5)"`},
@@ -135,7 +135,7 @@ func TestMySQLTranslate(t *testing.T) {
 
 		{"M-10_limit_offset", "SELECT * FROM t LIMIT 10 OFFSET 5", "SELECT * FROM t LIMIT 10 OFFSET 5"},
 
-		{"nested_date_add_in_extract", "SELECT EXTRACT(DAY FROM DATE_ADD(d, INTERVAL 1 DAY))", "SELECT mysql_date_part('day', interval_add(d, 1, 'day')) AS \"EXTRACT(DAY FROM DATE_ADD(d, INTERVAL 1 DAY))\""},
+		{"nested_date_add_in_extract", "SELECT EXTRACT(DAY FROM DATE_ADD(d, INTERVAL 1 DAY))", "SELECT mysql_date_part('day', mysql_interval_add(d, 1, 'day')) AS \"EXTRACT(DAY FROM DATE_ADD(d, INTERVAL 1 DAY))\""},
 		// M-21: the logical and bitwise operators MySQL spells with punctuation.
 		// "||" was translated and its siblings were not, so they reached SQLite's
 		// tokenizer as unrecognized tokens.

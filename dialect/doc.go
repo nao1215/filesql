@@ -146,18 +146,33 @@
 // gives them: a name
 // that is not a SQLite keyword and that no other dialect means something else
 // by needs no rewrite, and keeping the call text as the query wrote it keeps
-// the result column's name with it. STRCMP is the one whose answer is an
-// approximation rather than a match: it folds case, which MySQL's default
+// the result column's name with it. DATE is where the second half of that test
+// bites: SQLite has a date() of its own that rolls an impossible day forward,
+// reads the word "now" and takes modifier arguments, so each dialect's DATE
+// goes to a helper rather than to SQLite's. STRCMP is the one whose answer is
+// an approximation rather than a match: it folds case, which MySQL's default
 // collation does, and not accents, which that collation also does.
 //
 // The TIME functions need rules of their own because a MySQL TIME is not a
 // point on a clock. It is a signed span running from -838:59:59 to 838:59:59,
 // so SEC_TO_TIME answers 100:00:00 for 360000 and TIME_FORMAT prints an hour
 // field of three digits with a sign in front of the whole result, none of which
-// a time.Time holds. What that file cannot carry is MySQL's fractional-seconds
-// precision, which comes from the type of each argument rather than its value:
-// MySQL prints SEC_TO_TIME('3661') as 01:01:01.000000 and this prints
-// 01:01:01, because SQLite has no type to take the six from.
+// a time.Time holds. What that file cannot carry is a fraction of a second
+// MySQL prints from a type rather than from a value: MySQL prints
+// SEC_TO_TIME('3661') as 01:01:01.000000 and this prints 01:01:01, because
+// SQLite has no type to take the six from. A fraction that is in the value is
+// kept. Arithmetic on one answers all six digits, so DATE_ADD with a zero
+// interval gives back what it was given, and a helper that converts a value
+// rather than moving it keeps the width the value was written with, so
+// TIMESTAMP('...59.1') keeps one digit and TIMESTAMP('...59.100000') keeps six.
+// PostgreSQL trims the trailing zeros of a fraction and its own helpers do the
+// same.
+//
+// A date the arithmetic moves outside the year range 1 to 9999 is answered as
+// NULL rather than as a year of five digits or a negative one. Nothing here can
+// read such a value back, so returning it moved the failure to the next
+// function in the query, where nothing was left to say why the row went
+// missing.
 //
 // Arithmetic reaches the same helpers by the other route, rewriting the
 // operator into a call, where a dialect disagrees with SQLite about the answer.
@@ -300,12 +315,24 @@
 // no interval, no array and no arbitrary-precision numeric, and a construct
 // whose answer is one of those has nowhere to land. A comparison answers 1 or 0 rather than true or false; an
 // INTERVAL literal is translatable only as the right operand of date
-// arithmetic, and anywhere else it is refused with ErrUnsupportedSyntax; an array
+// arithmetic, and anywhere else it is refused with ErrUnsupportedSyntax. There
+// it takes every unit word EXTRACT and DATE_TRUNC take, in PostgreSQL's
+// abbreviations as well as in full, down to the microsecond and up to the
+// millennium, and an amount with a decimal point for the units whose length is
+// fixed; a fraction of a month or of anything longer is refused rather than
+// spent as thirty-day months, which is a length nothing else here assumes. The
+// fields are applied in the order PostgreSQL holds them, months and then days
+// and then the clock, which is not the order the literal wrote them in
+// whenever a month lands on a month end. an array
 // literal and the set-returning functions are refused for the same reason; and
-// the functions whose answer is one of those types -- PostgreSQL's AGE,
-// JUSTIFY_DAYS, REGEXP_MATCH, SCALE and TRIM_SCALE, and BigQuery's ARRAY_AGG,
+// the functions whose answer is one of those types -- PostgreSQL's
+// REGEXP_MATCH, SCALE and TRIM_SCALE, and BigQuery's ARRAY_AGG,
 // APPROX_QUANTILES and the rest of its array-returning aggregates -- are not
-// implemented, since there would be no value to return. A time zone is the
+// implemented, since there would be no value to return. The two that build an
+// interval, AGE and MAKE_INTERVAL, answer the text PostgreSQL prints for one,
+// which is a value a caller can read even though nothing can compute with it;
+// JUSTIFY_DAYS and its siblings take an interval rather than answering one, so
+// there is no argument to give them. A time zone is the
 // other thing there is no type for, so BigQuery's forms that take one are
 // refused rather than answered unshifted, which would be a different instant.
 //

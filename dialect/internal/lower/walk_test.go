@@ -631,7 +631,7 @@ func TestTheCallsWithAUnitOrAPartWrittenAsAWord(t *testing.T) {
 		want    string
 	}{
 		{dialect.MySQL, "SELECT TIMESTAMPADD(MINUTE, 5, d) FROM t",
-			`SELECT interval_add(d, 5, 'minute') AS "TIMESTAMPADD(MINUTE, 5, d)" FROM t`},
+			`SELECT mysql_interval_add(d, 5, 'minute') AS "TIMESTAMPADD(MINUTE, 5, d)" FROM t`},
 		{dialect.MySQL, "SELECT TIMESTAMPDIFF(HOUR, a, b) FROM t",
 			`SELECT mysql_date_diff(b, a, 'hour') AS "TIMESTAMPDIFF(HOUR, a, b)" FROM t`},
 		{dialect.GoogleSQL, "SELECT TIME_TRUNC(t, HOUR) FROM u",

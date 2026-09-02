@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -247,6 +248,11 @@ func fnMySQLIntervalCompound(args []driver.Value) (driver.Value, error) {
 	fields = fields[len(fields)-len(components):]
 	dateGrained := true
 	var err error
+	// YEAR_MONTH is one amount of months rather than two moves. Adding the
+	// years and then the months clamps a month end twice, so 2020-02-29 plus
+	// INTERVAL '1-2' YEAR_MONTH became 2021-04-28: the year landed on
+	// 2021-02-28 first and the two months followed from there.
+	months := int64(0)
 	for i, field := range fields {
 		if !dateGrainedUnits[field] {
 			dateGrained = false
@@ -261,16 +267,34 @@ func fnMySQLIntervalCompound(args []driver.Value) (driver.Value, error) {
 		if convErr != nil {
 			return nil, nil //nolint:nilerr // dialects.MySQL answers NULL for a value it cannot read
 		}
-		if tm, err = addInterval(tm, sign*n, field); err != nil {
-			return nil, err
+		switch field {
+		case unitYear:
+			months += n * 12
+		case unitMonth:
+			months += n
+		default:
+			if tm, err = addInterval(tm, sign*n, field); err != nil {
+				if errors.Is(err, errDateOutOfRange) {
+					return nil, nil
+				}
+				return nil, err
+			}
 		}
+	}
+	if months != 0 {
+		if tm, err = addMonths(tm, sign*months); err != nil {
+			return nil, nil //nolint:nilerr // an amount past any date is NULL, as MySQL answers
+		}
+	}
+	if !withinDateRange(tm) {
+		return nil, nil
 	}
 	// A date moved only by date-grained fields is still a date, which is the
 	// same rule the single-unit arithmetic follows.
 	if dateGrained && !hasTimePart(args[0]) {
 		return tm.Format(layoutDateOnly), nil
 	}
-	return formatDateTimeValue(tm), nil
+	return formatDateTimeValueMySQL(tm), nil
 }
 
 // splitIntervalComponents cuts an interval value on every run of characters that
@@ -304,6 +328,22 @@ func padMicroseconds(digits string) string {
 	return digits + strings.Repeat("0", microsecondDigits-len(digits))
 }
 
+// fnMySQLDate implements MySQL's DATE(expr): the date part of a value, read the
+// way every other date helper here reads it. Left to SQLite, the name reached
+// SQLite's own date(), which normalizes an impossible day forward, understands
+// the "now" keyword and takes modifier arguments -- so DATE('2020-02-31')
+// answered 2020-03-02 where YEAR() of the same string answered NULL.
+func fnMySQLDate(args []driver.Value) (driver.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("dialect: DATE expects 1 argument, got %d", len(args))
+	}
+	tm, ok := toStringTime(args[0])
+	if !ok {
+		return nil, nil
+	}
+	return tm.Format(layoutDateOnly), nil
+}
+
 // fnMySQLToSeconds implements TO_SECONDS(d): the seconds from year 0 to the
 // given datetime, which is the seconds counterpart of TO_DAYS.
 func fnMySQLToSeconds(args []driver.Value) (driver.Value, error) {
@@ -332,14 +372,22 @@ func fnMySQLTimestamp(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
+	scale := mysqlFractionDigits(args[0])
 	if len(args) == 1 {
-		return formatDateTimeValue(tm), nil
+		return formatDateTimeValueScaled(tm, scale), nil
 	}
 	micros, ok := toMySQLTime(args[1])
 	if !ok {
 		return nil, nil
 	}
-	return formatDateTimeValue(tm.Add(time.Duration(micros) * time.Microsecond)), nil
+	if second := mysqlFractionDigits(args[1]); second > scale {
+		scale = second
+	}
+	moved := tm.Add(time.Duration(micros) * time.Microsecond)
+	if !withinDateRange(moved) {
+		return nil, nil
+	}
+	return formatDateTimeValueScaled(moved, scale), nil
 }
 
 // fnMySQLConvertTZ implements CONVERT_TZ(dt, from, to) for the fixed offsets
@@ -361,7 +409,11 @@ func fnMySQLConvertTZ(args []driver.Value) (driver.Value, error) {
 	if !ok1 || !ok2 {
 		return nil, nil
 	}
-	return formatDateTimeValue(tm.Add(time.Duration(toOffset-fromOffset) * time.Second)), nil
+	shifted := tm.Add(time.Duration(toOffset-fromOffset) * time.Second)
+	if !withinDateRange(shifted) {
+		return nil, nil
+	}
+	return formatDateTimeValueScaled(shifted, mysqlFractionDigits(args[0])), nil
 }
 
 // fixedZoneOffset reads a "+09:00" or "-05:30" zone as seconds east of UTC,
@@ -460,6 +512,28 @@ func mysqlSinglePart(field string, tm time.Time) (int64, error) {
 // formatMySQLTime writes a TIME the way dialects.MySQL prints one: a sign when it is
 // negative, at least two digits of hours, and a fraction only when there is
 // one, with its trailing zeros removed.
+// formatMySQLTimeFull writes a TIME with all six digits of a fraction, which is
+// what MySQL answers from TIME arithmetic: ADDTIME('13:45:59.1', '00:00:00') is
+// 13:45:59.100000. SEC_TO_TIME keeps the trimmed spelling, because its
+// precision comes from the type of its argument rather than from its value and
+// SQLite has no type to take it from.
+func formatMySQLTimeFull(micros int64) string {
+	sign := ""
+	if micros < 0 {
+		sign = "-"
+		micros = -micros
+	}
+	hours := micros / microsPerHour
+	minutes := micros % microsPerHour / microsPerMinute
+	seconds := micros % microsPerMinute / microsPerSecond
+	frac := micros % microsPerSecond
+	out := fmt.Sprintf("%s%02d:%02d:%02d", sign, hours, minutes, seconds)
+	if frac == 0 {
+		return out
+	}
+	return out + fmt.Sprintf(".%06d", frac)
+}
+
 func formatMySQLTime(micros int64) string {
 	sign := ""
 	if micros < 0 {
@@ -572,13 +646,17 @@ func addTime(sign int64) scalarFn {
 			if !parsed {
 				return nil, nil
 			}
-			return formatDateTimeValue(base.Add(time.Duration(delta) * time.Microsecond)), nil
+			moved := base.Add(time.Duration(delta) * time.Microsecond)
+			if !withinDateRange(moved) {
+				return nil, nil
+			}
+			return formatDateTimeValueMySQL(moved), nil
 		}
 		base, parsed := toMySQLTime(args[0])
 		if !parsed {
 			return nil, nil
 		}
-		return formatMySQLTime(clampTime(base + delta)), nil
+		return formatMySQLTimeFull(clampTime(base + delta)), nil
 	}
 }
 

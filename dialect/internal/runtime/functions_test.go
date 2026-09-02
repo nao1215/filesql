@@ -3144,3 +3144,149 @@ func TestRegexpCacheStopsGrowingOnPatternsFromTheData(t *testing.T) {
 		t.Errorf("an uncached pattern matched a value it should not: %v", got)
 	}
 }
+
+// TestTheDateReaderTakesTheSpellingsMySQLTakes pins the date spellings a file
+// carries. The unpadded 2020-1-2 and the compact 20200229 used to miss every
+// layout, so YEAR of a column the caller had loaded answered NULL while MySQL
+// read it.
+func TestTheDateReaderTakesTheSpellingsMySQLTakes(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	spellings := []string{"2020-01-02", "2020-1-2", "2020-01-2", "2020-1-02", "2020/01/02", "20200102", " 2020-01-02 "}
+	helpers := map[string]string{
+		"YEAR":       "2020",
+		"MONTH":      "1",
+		"DAY":        "2",
+		"DAYOFYEAR":  "2",
+		"QUARTER":    "1",
+		"TO_DAYS":    "737791",
+		"LAST_DAY":   "2020-01-31",
+		"DAYNAME":    "Thursday",
+		"DATE":       "2020-01-02",
+		"MONTHNAME":  "January",
+		"WEEKOFYEAR": "1",
+		"DAYOFMONTH": "2",
+		"DAYOFWEEK":  "5",
+		"WEEKDAY":    "3",
+		"YEARWEEK":   "201952",
+		"TO_SECONDS": "63745142400",
+	}
+	for _, spelling := range spellings {
+		for fn, want := range helpers {
+			query := "SELECT " + fn + "('" + spelling + "')"
+			t.Run(fn+" "+spelling, func(t *testing.T) {
+				got, err := runDialect(t, db, dialects.MySQL, query)
+				if err != nil {
+					t.Fatalf("%s: %v", query, err)
+				}
+				if !got.Valid {
+					t.Fatalf("%s answered NULL, want %q", query, want)
+				}
+				if got.String != want {
+					t.Fatalf("%s = %q, want %q", query, got.String, want)
+				}
+			})
+		}
+	}
+}
+
+// TestADateTimeKeepsSixFractionDigits pins the fraction MySQL writes. The
+// canonical spelling kept only the significant digits, so a value that arrived
+// as 13:45:59.100000 left as 13:45:59.1 and DATE_ADD with a zero interval was
+// not the identity it reads as. Two helpers in this package already wrote six,
+// which is how the package came to disagree with itself.
+func TestADateTimeKeepsSixFractionDigits(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		// Arithmetic answers all six digits, whatever the value carried.
+		{name: "a zero interval is the identity", query: `SELECT DATE_ADD('2020-02-29 13:45:59.100000', INTERVAL 0 SECOND)`, want: "2020-02-29 13:45:59.100000"},
+		{name: "a short fraction grows to six", query: `SELECT DATE_ADD('2020-02-29 13:45:59.1', INTERVAL 0 SECOND)`, want: "2020-02-29 13:45:59.100000"},
+		{name: "a microsecond interval", query: `SELECT DATE_ADD('2020-02-29 13:45:59', INTERVAL 100 MICROSECOND)`, want: "2020-02-29 13:45:59.000100"},
+		{name: "no fraction stays no fraction", query: `SELECT DATE_ADD('2020-02-29 13:45:59', INTERVAL 1 SECOND)`, want: "2020-02-29 13:46:00"},
+		{name: "addtime on a time", query: `SELECT ADDTIME('13:45:59.100000', '00:00:01')`, want: "13:46:00.100000"},
+		{name: "addtime on a datetime", query: `SELECT ADDTIME('2020-02-29 13:45:59.1', '00:00:01')`, want: "2020-02-29 13:46:00.100000"},
+		{name: "a compound interval", query: `SELECT DATE_ADD('2020-02-29 13:45:59.1', INTERVAL '0-1' YEAR_MONTH)`, want: "2020-03-29 13:45:59.100000"},
+
+		// A helper that converts a value rather than moving it keeps the width
+		// the value was written with, which is where MySQL takes it from.
+		{name: "timestamp keeps six", query: `SELECT TIMESTAMP('2020-02-29 13:45:59.100000')`, want: "2020-02-29 13:45:59.100000"},
+		{name: "timestamp keeps one", query: `SELECT TIMESTAMP('2020-02-29 13:45:59.1')`, want: "2020-02-29 13:45:59.1"},
+		{name: "time keeps six", query: `SELECT TIME('13:45:59.100000')`, want: "13:45:59.100000"},
+		{name: "time keeps one", query: `SELECT TIME('13:45:59.1')`, want: "13:45:59.1"},
+		{name: "convert_tz keeps one", query: `SELECT CONVERT_TZ('2020-02-29 13:45:59.1', '+00:00', '+09:00')`, want: "2020-02-29 22:45:59.1"},
+
+		// The seconds of a Unix timestamp carry a fraction too.
+		{name: "from_unixtime keeps a half second", query: `SELECT FROM_UNIXTIME(1.5)`, want: "1970-01-01 00:00:01.5"},
+		{name: "from_unixtime keeps six", query: `SELECT FROM_UNIXTIME(1234567890.123456)`, want: "2009-02-13 23:31:30.123456"},
+		{name: "from_unixtime with no fraction", query: `SELECT FROM_UNIXTIME(0)`, want: "1970-01-01 00:00:00"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.MySQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
+
+// TestStrToDateReadsTheShortSpellings pins the two specifiers whose Go
+// equivalent is narrower than the MySQL one: a two-digit year, where Go's pivot
+// puts 69 in the 1900s and MySQL puts it in the 2000s, and a day of year, where
+// Go's layout element wants exactly three digits and MySQL takes one to three.
+func TestStrToDateReadsTheShortSpellings(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name     string
+		query    string
+		want     string
+		wantNull bool
+	}{
+		{name: "two digits at the pivot", query: `SELECT STR_TO_DATE('69-01-02', '%y-%m-%d')`, want: "2069-01-02"},
+		{name: "two digits below the pivot", query: `SELECT STR_TO_DATE('68-01-02', '%y-%m-%d')`, want: "2068-01-02"},
+		{name: "two digits above the pivot", query: `SELECT STR_TO_DATE('70-01-02', '%y-%m-%d')`, want: "1970-01-02"},
+		{name: "two digits at zero", query: `SELECT STR_TO_DATE('00-01-02', '%y-%m-%d')`, want: "2000-01-02"},
+		{name: "two digits at ninety-nine", query: `SELECT STR_TO_DATE('99-01-02', '%y-%m-%d')`, want: "1999-01-02"},
+		{name: "four digits are untouched", query: `SELECT STR_TO_DATE('1969-01-02', '%Y-%m-%d')`, want: "1969-01-02"},
+
+		{name: "one digit of day of year", query: `SELECT STR_TO_DATE('2020 1', '%Y %j')`, want: "2020-01-01"},
+		{name: "two digits of day of year", query: `SELECT STR_TO_DATE('2020 60', '%Y %j')`, want: "2020-02-29"},
+		{name: "three digits of day of year", query: `SELECT STR_TO_DATE('2020 060', '%Y %j')`, want: "2020-02-29"},
+		{name: "the last day of a leap year", query: `SELECT STR_TO_DATE('2020 366', '%Y %j')`, want: "2020-12-31"},
+
+		// MySQL rolls a day count past the end of the year into the next one,
+		// answering 2022-01-01 for the first of these. Turning an out-of-range
+		// value into a plausible date silently is worse than refusing it.
+		{name: "past the end of a common year", query: `SELECT STR_TO_DATE('2021 366', '%Y %j')`, wantNull: true},
+		{name: "past the end of a leap year", query: `SELECT STR_TO_DATE('2020 367', '%Y %j')`, wantNull: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.MySQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if tt.wantNull {
+				if got.Valid {
+					t.Fatalf("%s = %q, want NULL", tt.query, got.String)
+				}
+				return
+			}
+			if got.String != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}

@@ -99,6 +99,63 @@ func formatDateTimeValue(tm time.Time) string {
 	return tm.Format(layoutDateTimeFraction)
 }
 
+// mysqlFractionScale is how many digits of a second MySQL holds.
+const mysqlFractionScale = 6
+
+// formatDateTimeValueMySQL writes a datetime the way MySQL writes the result of
+// date arithmetic: a value with a fraction gets all six digits, so a value that
+// arrived as 13:45:59.100000 leaves as 13:45:59.100000 rather than as
+// 13:45:59.1, and DATE_ADD with a zero interval is the identity it reads as.
+//
+// PostgreSQL trims the trailing zeros of a fraction and formatDateTimeValue
+// keeps doing that for it, which is why the two exist side by side.
+func formatDateTimeValueMySQL(tm time.Time) string {
+	if tm.Nanosecond() == 0 {
+		return tm.Format(layoutDateTime)
+	}
+	return formatDateTimeValueScaled(tm, mysqlFractionScale)
+}
+
+// formatDateTimeValueScaled writes a datetime with exactly scale digits of
+// fraction, or none when scale is zero. It is what a helper that converts a
+// value rather than moving it needs: MySQL takes the width from the value it
+// was given, so TIMESTAMP('...59.1') keeps one digit and TIMESTAMP('...59.100000')
+// keeps six.
+func formatDateTimeValueScaled(tm time.Time, scale int) string {
+	if scale <= 0 {
+		return tm.Format(layoutDateTime)
+	}
+	if scale > mysqlFractionScale {
+		scale = mysqlFractionScale
+	}
+	return tm.Format(layoutDateTime + "." + strings.Repeat("0", scale))
+}
+
+// mysqlFractionDigits is how many digits of a fraction of a second a value was
+// written with, capped at the six MySQL holds. A value with no fraction, or one
+// that is not text, is zero.
+func mysqlFractionDigits(v driver.Value) int {
+	s, ok := toString(v)
+	if !ok {
+		return 0
+	}
+	_, fraction, found := strings.Cut(strings.TrimSpace(s), ".")
+	if !found {
+		return 0
+	}
+	digits := 0
+	for _, r := range fraction {
+		if r < '0' || r > '9' {
+			break
+		}
+		digits++
+	}
+	if digits > mysqlFractionScale {
+		return mysqlFractionScale
+	}
+	return digits
+}
+
 // formatTimeOfDayValue is formatDateTimeValue for a value written as a time of
 // day alone.
 func formatTimeOfDayValue(tm time.Time) string {
@@ -106,6 +163,19 @@ func formatTimeOfDayValue(tm time.Time) string {
 		return tm.Format(layoutTimeOnly)
 	}
 	return tm.Format(layoutTimeOnly + ".999999")
+}
+
+// formatTimeOfDayValueScaled writes a time of day with exactly scale digits of
+// fraction. MySQL takes that width from the value it was given, so
+// TIME('13:45:59.100000') keeps six digits and TIME('13:45:59.1') keeps one.
+func formatTimeOfDayValueScaled(tm time.Time, scale int) string {
+	if scale <= 0 {
+		return tm.Format(layoutTimeOnly)
+	}
+	if scale > mysqlFractionScale {
+		scale = mysqlFractionScale
+	}
+	return tm.Format(layoutTimeOnly + "." + strings.Repeat("0", scale))
 }
 
 // Go reference-time fragments for month and weekday names, shared by the dialects.MySQL
@@ -365,6 +435,8 @@ func registerAll() error {
 		"mysql_timestamp":         {-1, fnMySQLTimestamp},
 		"convert_tz":              {3, fnMySQLConvertTZ},
 		"mysql_interval_compound": {4, fnMySQLIntervalCompound},
+		"mysql_interval_add":      {3, fnMySQLDateIntervalAdd},
+		"mysql_date":              {1, fnMySQLDate},
 		"current_datetime":        {-1, fnCurrentDatetime},
 	}
 	// The dialects.MySQL-only helpers live in their own file, because there are enough of
@@ -924,6 +996,50 @@ func fnDateFormat(args []driver.Value) (driver.Value, error) {
 	return b.String(), nil
 }
 
+// mysqlShortYear moves a two-digit year onto MySQL's pivot. Go reads 69 as 1969
+// and MySQL reads it as 2069: MySQL puts 00 to 69 in the 2000s and 70 to 99 in
+// the 1900s, so the two rules differ on that one value and agree on every other.
+func mysqlShortYear(tm time.Time, fromTwoDigits bool) time.Time {
+	if !fromTwoDigits || tm.Year() != 1969 {
+		return tm
+	}
+	return tm.AddDate(100, 0, 0)
+}
+
+// padDayOfYear zero-pads the day of year in s to the three digits Go's layout
+// element for it requires. MySQL reads one to three digits there, so
+// STR_TO_DATE('2020 60', '%Y %j') is the sixtieth day and not a NULL.
+//
+// before is the part of the format that precedes the specifier; its trailing
+// run of literal characters is what locates the number in s. A specifier with
+// no literal in front of it is left alone, since nothing anchors it.
+func padDayOfYear(before, s string) string {
+	anchor := before
+	if at := strings.LastIndexByte(anchor, '%'); at >= 0 {
+		anchor = anchor[at+2:]
+	}
+	start := 0
+	if anchor != "" {
+		at := strings.Index(s, anchor)
+		if at < 0 {
+			return s
+		}
+		start = at + len(anchor)
+	} else if before != "" {
+		// A specifier straight after another one: nothing separates the two
+		// numbers, so padding could only guess where the day of year begins.
+		return s
+	}
+	end := start
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+		end++
+	}
+	if end == start || end-start >= 3 {
+		return s
+	}
+	return s[:start] + strings.Repeat("0", 3-(end-start)) + s[start:]
+}
+
 // dateFormatSpecial handles DATE_FORMAT specifiers that have no direct Go
 // layout: the day of the year, the weekday index, the microseconds, the two
 // unpadded hours, the day with its English suffix, and the four week numberings
@@ -1096,12 +1212,16 @@ func fnStrToDate(args []driver.Value) (driver.Value, error) {
 		return nil, nil
 	}
 	var layout strings.Builder
-	var sawYear, sawMonth, sawDay, sawWeekday, sawTime, sawFraction bool
+	var sawYear, sawMonth, sawDay, sawWeekday, sawTime, sawFraction, sawShortYear bool
 	for i := 0; i < len(format); i++ {
 		if format[i] == '%' && i+1 < len(format) {
 			spec := format[i+1]
+			if spec == 'y' {
+				sawShortYear = true
+			}
 			switch {
 			case spec == 'j':
+				s = padDayOfYear(format[:i], s)
 				// The day of the year, which Go's layout spells 002 and
 				// no MySQL-to-Go table entry could, because the formatting
 				// direction writes it from a computed field. Together with a
@@ -1146,6 +1266,7 @@ func fnStrToDate(args []driver.Value) (driver.Value, error) {
 	if !ok3 {
 		return nil, nil
 	}
+	tm = mysqlShortYear(tm, sawShortYear)
 	// The shape follows the format: a DATE for date specifiers, a TIME for
 	// time specifiers, a DATETIME for both. A format that names part of a date
 	// without completing it is NULL, which is dialects.MySQL's answer under its default
@@ -1253,13 +1374,13 @@ func datePartValue(unit string, tm time.Time) (driver.Value, error) {
 		// of January group together.
 		year, _ := tm.ISOWeek()
 		return int64(year), nil
-	case "decade":
+	case unitDecade:
 		return int64(decadeOf(tm.Year())), nil
-	case "century":
+	case unitCentury:
 		return int64(centuryOf(tm.Year())), nil
-	case "millennium":
+	case unitMillennium:
 		return int64(millenniumOf(tm.Year())), nil
-	case "milliseconds", unitMillisecond:
+	case unitMillisecondsPlural, unitMillisecond:
 		return secondsWithFraction(tm) * 1000, nil
 	case unitMicrosecondsPlural, unitMicrosecond:
 		// A microsecond is the finest a dialects.PostgreSQL timestamp holds, so the
@@ -2528,7 +2649,7 @@ func fnMySQLTimeOfDay(args []driver.Value) (driver.Value, error) {
 		return nil, fmt.Errorf("dialect: TIME expects 1 argument, got %d", len(args))
 	}
 	if tm, ok := toStringTime(args[0]); ok && hasTimeOfDay(args[0]) {
-		return formatTimeOfDayValue(tm), nil
+		return formatTimeOfDayValueScaled(tm, mysqlFractionDigits(args[0])), nil
 	}
 	// A value with no clock in it is read as a number the way the cast to TIME
 	// reads one, so TIME('2024-03-05') is 00:20:24 as dialects.MySQL answers rather than
@@ -2564,18 +2685,22 @@ func fnFromUnixtime(args []driver.Value) (driver.Value, error) {
 	if len(args) < 1 || len(args) > 2 {
 		return nil, fmt.Errorf("dialect: FROM_UNIXTIME expects 1 or 2 arguments, got %d", len(args))
 	}
-	sec, ok := toInt(args[0])
-	if !ok {
+	seconds, ok := toFloat(args[0])
+	if !ok || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
 		return nil, nil
 	}
 	// dialects.MySQL answers NULL outside the range of its TIMESTAMP type, 1970-01-01
 	// 00:00:00 UTC through 3001-01-18 23:59:59 (32536771199 seconds).
-	if sec < 0 || sec > 32536771199 {
+	if seconds < 0 || seconds > 32536771199 {
 		return nil, nil
 	}
-	tm := time.Unix(sec, 0).UTC()
+	// The fraction is part of the answer: MySQL reads FROM_UNIXTIME(1.5) as a
+	// second and a half, and truncating it to a whole second lost it.
+	sec := int64(seconds)
+	micros := int64(math.Round((seconds - float64(sec)) * 1e6))
+	tm := time.Unix(sec, micros*int64(time.Microsecond)).UTC()
 	if len(args) == 1 {
-		return tm.Format(layoutDateTime), nil
+		return formatDateTimeValue(tm), nil
 	}
-	return fnDateFormat([]driver.Value{tm.Format(layoutDateTime), args[1]})
+	return fnDateFormat([]driver.Value{formatDateTimeValue(tm), args[1]})
 }

@@ -113,15 +113,15 @@ func fnDateTrunc(args []driver.Value) (driver.Value, error) {
 		return time.Date(y, mo, d, tm.Hour(), tm.Minute(), 0, 0, loc).Format(layoutDateTime), nil
 	case unitSecond:
 		return time.Date(y, mo, d, tm.Hour(), tm.Minute(), tm.Second(), 0, loc).Format(layoutDateTime), nil
-	case "decade":
+	case unitDecade:
 		return time.Date(decadeOf(y)*10, 1, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
-	case "century":
+	case unitCentury:
 		// A century starts in its first year, which is the year ending in 01:
 		// truncating 2024 to a century gives 2001 rather than 2000.
 		return time.Date((centuryOf(y)-1)*100+1, 1, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
-	case "millennium":
+	case unitMillennium:
 		return time.Date((millenniumOf(y)-1)*1000+1, 1, 1, 0, 0, 0, 0, loc).Format(layoutDateTime), nil
-	case "milliseconds", unitMillisecond:
+	case unitMillisecondsPlural, unitMillisecond:
 		return truncatedFraction(tm, time.Millisecond), nil
 	case unitMicrosecondsPlural, unitMicrosecond:
 		return truncatedFraction(tm, time.Microsecond), nil

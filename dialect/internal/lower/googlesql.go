@@ -41,7 +41,7 @@ func (r *googleRules) Binary(b *ast.BinaryExpr) (ast.Expr, error) {
 			if b.Op == ast.Sub {
 				sign = "-"
 			}
-			return intervalAdd(b.Left, iv, sign, b.Span)
+			return intervalAdd(fnNameIntervalAdd, b.Left, iv, sign, b.Span)
 		}
 	}
 	return b, nil
@@ -205,9 +205,9 @@ func (r *googleRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 	case fnNameReplace:
 		return rename(call, "dialect_replace"), nil
 	case fnNameDateAdd, "TIMESTAMP_ADD", "DATETIME_ADD":
-		return dateArith(call, "+")
+		return dateArith(fnNameIntervalAdd, call, "+")
 	case fnNameDateSub, "TIMESTAMP_SUB", "DATETIME_SUB":
-		return dateArith(call, "-")
+		return dateArith(fnNameIntervalAdd, call, "-")
 	case "TIME_ADD":
 		return timeArith(call, "+")
 	case "TIME_SUB":

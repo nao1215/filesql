@@ -223,12 +223,12 @@ func position(call *ast.FuncCall) (ast.Expr, error) {
 
 // dateArith lowers DATE_ADD, DATE_SUB, ADDDATE and SUBDATE, whose second
 // argument is either an interval or, for the last two, a number of days.
-func dateArith(call *ast.FuncCall, sign string) (ast.Expr, error) {
+func dateArith(name string, call *ast.FuncCall, sign string) (ast.Expr, error) {
 	if len(call.Args) != 2 {
 		return nil, unsupported(call.Span, "%s takes a value and an interval", callName(call))
 	}
 	if iv, ok := call.Args[1].(*ast.IntervalExpr); ok {
-		return intervalAdd(call.Args[0], iv, sign, call.Span)
+		return intervalAdd(name, call.Args[0], iv, sign, call.Span)
 	}
 	if name := callName(call); name == fnNameDateAdd || name == fnNameDateSub {
 		return nil, unsupported(call.Span, "%s takes an INTERVAL", name)
@@ -238,11 +238,11 @@ func dateArith(call *ast.FuncCall, sign string) (ast.Expr, error) {
 	if sign == "-" {
 		amount = &ast.UnaryExpr{Op: ast.UnaryMinus, Expr: paren(amount), Span: call.Span}
 	}
-	return helper("interval_add", call.Span, call.Args[0], amount, text("day", call.Span)), nil
+	return helper(name, call.Span, call.Args[0], amount, text("day", call.Span)), nil
 }
 
 // timestampAdd is the call spelling of adding a duration, with the unit first.
-func timestampAdd(call *ast.FuncCall) (ast.Expr, error) {
+func timestampAdd(name string, call *ast.FuncCall) (ast.Expr, error) {
 	if len(call.Args) != 3 {
 		return nil, unsupported(call.Span, "TIMESTAMPADD takes a unit, an amount and a value")
 	}
@@ -254,7 +254,7 @@ func timestampAdd(call *ast.FuncCall) (ast.Expr, error) {
 	if !known {
 		return nil, unsupported(call.Span, "%s is not an interval unit this package knows", written)
 	}
-	return helper("interval_add", call.Span, call.Args[2], call.Args[1], text(unit, call.Span)), nil
+	return helper(name, call.Span, call.Args[2], call.Args[1], text(unit, call.Span)), nil
 }
 
 // timestampDiff is the difference of two datetimes in a named unit.

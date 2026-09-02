@@ -13,7 +13,11 @@ const (
 	typeNameString = "STRING"
 	typeNameBinary = "BINARY"
 
+	unitMillennium         = "millennium"
+	unitCentury            = "century"
+	unitDecade             = "decade"
 	unitMillisecond        = "millisecond"
+	unitMillisecondsPlural = "milliseconds"
 	unitMicrosecond        = "microsecond"
 	unitMicrosecondsPlural = "microseconds"
 
