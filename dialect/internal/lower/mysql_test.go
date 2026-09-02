@@ -252,6 +252,9 @@ func TestMySQLTranslateUnsupported(t *testing.T) {
 		// rather than as a literal, so answering the bytes for one would answer
 		// for a name the caller may have meant.
 		{"M-23_hex_literal_uppercase_prefix", "SELECT 0X41"},
+		// MySQL reads a quoted hexadecimal literal in whole bytes, where the
+		// 0x spelling pads an odd digit count on the left.
+		{"M-23_quoted_hex_literal_odd_digits", "SELECT x'4'"},
 		{"M-23_hex_literal_uppercase_prefix_in_arithmetic", "SELECT 0X41 + 0"},
 
 		// M-5: an INTERVAL literal outside date arithmetic has no SQLite form,

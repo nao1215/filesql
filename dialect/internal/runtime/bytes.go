@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"database/sql/driver"
+	"errors"
 	"fmt"
 
 	"github.com/nao1215/filesql/dialect/internal/dialects"
@@ -119,18 +120,28 @@ func dialectBitOp(d dialects.Dialect, op bitOp) scalarFn {
 	return func(args []driver.Value) (driver.Value, error) {
 		a, aok := bytesOperand(args[0])
 		b, bok := bytesOperand(args[1])
-		if !aok || !bok {
-			x, ok1 := toUint64Bits(args[0])
-			y, ok2 := toUint64Bits(args[1])
-			if !ok1 || !ok2 {
-				return nil, nil
+		switch {
+		case aok && bok:
+			if len(a) != len(b) {
+				return nil, unequalBytesError(d, len(a), len(b))
 			}
-			return int64(op.onBits(x, y)), nil //nolint:gosec // the bits are the value; SQLite has no unsigned integer
+			return bytewise(a, b, op.onBytes), nil
+		case args[0] == nil || args[1] == nil:
+			// A NULL operand is NULL, as it is for every operator in SQL, and
+			// it is not a type the pair has to agree on.
+			return nil, nil
+		case (aok || bok) && d == dialects.GoogleSQL:
+			// GoogleSQL takes the second operand as the same type as the
+			// first, so a BYTES beside an integer matches no signature.
+			return nil, errors.New(
+				"dialect: a bitwise operator takes two byte strings or two integers, not one of each")
 		}
-		if len(a) != len(b) {
-			return nil, unequalBytesError(d, len(a), len(b))
+		x, ok1 := toUint64Bits(args[0])
+		y, ok2 := toUint64Bits(args[1])
+		if !ok1 || !ok2 {
+			return nil, nil
 		}
-		return bytewise(a, b, op.onBytes), nil
+		return int64(op.onBits(x, y)), nil //nolint:gosec // the bits are the value; SQLite has no unsigned integer
 	}
 }
 

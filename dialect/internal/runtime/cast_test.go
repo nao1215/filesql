@@ -87,6 +87,8 @@ func TestCastSemantics(t *testing.T) {
 		{"postgresql concatenates two bit strings", dialects.PostgreSQL, `SELECT X'41' || B'1'`, "010000011", false},
 		{"postgresql compares two spellings of one bit string", dialects.PostgreSQL, `SELECT (X'41' = B'01000001')`, "1", false},
 		{"postgresql reads a bit string of nothing", dialects.PostgreSQL, `SELECT B''::text`, "", false},
+		{"postgresql reads a bit string of nothing as zero", dialects.PostgreSQL, `SELECT B''::int`, "0", false},
+		{"postgresql reads a bit string of nothing as a zero bigint", dialects.PostgreSQL, `SELECT B''::bigint`, "0", false},
 		{"postgresql reads a bit string in lower case", dialects.PostgreSQL, `SELECT x'ab'::text`, "10101011", false},
 		{"postgresql reads a bit string written b in lower case", dialects.PostgreSQL, `SELECT b'11'::int`, "3", false},
 

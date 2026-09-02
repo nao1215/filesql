@@ -482,6 +482,10 @@ func binaryDigits(hexDigits string) string {
 // still one.
 func bitStringCast(c *ast.CastExpr, lit *ast.Literal) (ast.Expr, error) {
 	switch width, isInteger := bitStringIntegerTargets[c.Type.Name]; {
+	case isInteger && lit.Value == "":
+		// A bit string of no bits is zero as an integer, which is what
+		// PostgreSQL answers where ParseUint would have called it out of range.
+		return number(0, c.Span), nil
 	case isInteger:
 		n, err := strconv.ParseUint(lit.Value, 2, width)
 		if err != nil {

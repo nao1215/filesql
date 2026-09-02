@@ -623,6 +623,10 @@ func toUint64Bits(v driver.Value) (uint64, bool) {
 		if n, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64); err == nil {
 			return n, true
 		}
+		// A binary string beside a number is read as a number the way a string
+		// is, which for bytes that spell no number is zero: MySQL answers 1 for
+		// a binary string "a" ORed with 1.
+		return 0, true
 	}
 	n, ok := toInt(v)
 	if !ok {

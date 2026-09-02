@@ -88,15 +88,18 @@
 // answer one of the operand's length, and both refuse two operands of
 // different lengths; they part company over a negative shift count, which
 // GoogleSQL refuses and MySQL reads as unsigned, shifting past the width and
-// clearing the operand. An operand that is not a byte string takes the
-// unsigned 64-bit reading these operators have always had.
+// clearing the operand. A NULL operand answers NULL; any other pair that is
+// not two byte strings takes the unsigned 64-bit reading, except under
+// GoogleSQL, which refuses a byte string beside an integer because it takes the
+// second operand as the same type as the first.
 //
 // A literal that names bytes is read the way the dialect that wrote it reads
 // it. MySQL writes one hexadecimal literal three ways -- 0x41, x'41' and X'41'
 // -- and means the number its digits spell where the literal stands beside an
 // arithmetic or a bitwise operator or a cast to a number, and the bytes they
 // name everywhere else;
-// an odd number of digits is padded on the left, so 0x4 is the byte 0x04, and
+// an odd number of digits is padded on the left for the 0x spelling, so 0x4 is
+// the byte 0x04, while the quoted spellings take whole bytes as MySQL requires;
 // one too long to be an unsigned 64-bit number is refused where a number is
 // wanted. The prefix is case sensitive, so 0X41 is refused: MySQL reads that
 // spelling as an identifier rather than as a literal. MySQL's bit literal,

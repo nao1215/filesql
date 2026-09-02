@@ -911,6 +911,8 @@ func TestBitwiseOperatorsOverBytes(t *testing.T) {
 		{name: "googlesql ors nothing with nothing", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'' | b'')`, want: ""},
 		{name: "googlesql complements nothing", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(~b'')`, want: ""},
 		{name: "googlesql ors bytes with null", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'ab' | NULL)`, wantNull: true},
+		{name: "googlesql refuses bytes beside an integer", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'ab' | 1)`, wantErr: true},
+		{name: "googlesql refuses an integer beside bytes", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(1 | b'ab')`, wantErr: true},
 		{name: "googlesql shifts bytes by null", dialect: dialects.GoogleSQL, query: `SELECT TO_HEX(b'ab' << NULL)`, wantNull: true},
 
 		// The integer operands the same operators carry, which must keep
@@ -933,6 +935,12 @@ func TestBitwiseOperatorsOverBytes(t *testing.T) {
 		{name: "mysql shifts a binary string by a negative count", dialect: dialects.MySQL, query: `SELECT HEX(UNHEX('6162') << -1)`, want: "0000"},
 		{name: "mysql refuses binary strings of different lengths", dialect: dialects.MySQL, query: `SELECT HEX(UNHEX('6162') | UNHEX('01'))`, wantErr: true},
 		{name: "mysql ors a binary string with null", dialect: dialects.MySQL, query: `SELECT HEX(UNHEX('6162') | NULL)`, wantNull: true},
+		// A binary string beside a number takes the numeric reading of both,
+		// which for bytes that spell no number is zero. Read from mysql:8.4
+		// over a VARBINARY column holding the byte 0x61.
+		{name: "mysql ors a binary string with a number", dialect: dialects.MySQL, query: `SELECT HEX(UNHEX('61') | 1)`, want: "1"},
+		{name: "mysql ors a number with a binary string", dialect: dialects.MySQL, query: `SELECT HEX(1 | UNHEX('61'))`, want: "1"},
+		{name: "mysql ors a binary string with a numeral", dialect: dialects.MySQL, query: `SELECT HEX(UNHEX('61') | '1')`, want: "1"},
 
 		// MySQL's hexadecimal literal, which is the number its digits spell
 		// beside one of these operators and the bytes they name elsewhere.

@@ -56,6 +56,14 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 			// MySQL means is what keeps the three spellings on one rule: the
 			// third was refused for that ambiguity while the other two were
 			// answered as bytes.
+			if len(t.Text)%2 == 1 {
+				// MySQL reads a quoted hexadecimal literal in whole bytes:
+				// "for X'val', val must contain an even number of digits". The
+				// 0x spelling has no such rule and pads on the left instead.
+				return nil, p.unsupportedf(
+					"a quoted hexadecimal literal takes an even number of digits in MySQL; write 0x%s for the byte",
+					t.Text)
+			}
 			return &ast.Literal{Kind: ast.LitHex, Value: hexLiteralPrefix + t.Text, Span: span}, nil
 		}
 		return &ast.Literal{Kind: ast.LitBlob, Value: t.Text, Span: span}, nil
