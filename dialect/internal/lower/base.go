@@ -11,8 +11,6 @@ type baseRules struct{}
 
 func (baseRules) Pre(e ast.Expr) (ast.Expr, bool, error) { return e, false, nil }
 
-func (baseRules) Unary(u *ast.UnaryExpr) (ast.Expr, error) { return u, nil }
-
 func (baseRules) Core(core *ast.SelectCore) error { return coreCommon(core) }
 
 func (baseRules) Order(term *ast.OrderTerm) error { return orderCommon(term) }

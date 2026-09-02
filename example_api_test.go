@@ -300,10 +300,32 @@ func ExampleCompressionType_NewWriter() {
 	if _, err := io.WriteString(writer, "hello"); err != nil {
 		log.Fatal(err)
 	}
+	// Closing finalizes the compressed stream. It does not close the
+	// destination, which is still the caller's.
 	if err := writer.Close(); err != nil {
 		log.Fatal(err)
 	}
 
+	fmt.Println(compressed.Len() > 0)
+	// Output:
+	// true
+}
+
+func ExampleCompressionType_NewReader() {
+	var compressed bytes.Buffer
+	writer, err := filesql.CompressionGZ.NewWriter(&compressed)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if _, err := io.WriteString(writer, "id,total\n1,980\n"); err != nil {
+		log.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		log.Fatal(err)
+	}
+
+	// The codec is named rather than guessed, which is what a caller who
+	// already knows it does; OpenReader takes it from a path instead.
 	reader, err := filesql.CompressionGZ.NewReader(bytes.NewReader(compressed.Bytes()))
 	if err != nil {
 		log.Fatal(err)
@@ -315,9 +337,45 @@ func ExampleCompressionType_NewWriter() {
 		log.Fatal(err)
 	}
 
-	fmt.Println(string(plain))
+	fmt.Print(string(plain))
 	// Output:
-	// hello
+	// id,total
+	// 1,980
+}
+
+func ExampleWithCompression() {
+	var compressed bytes.Buffer
+	writer, err := filesql.CompressionGZ.NewWriter(&compressed)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if _, err := io.WriteString(writer, "id,total\n1,980\n2,1200\n"); err != nil {
+		log.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		log.Fatal(err)
+	}
+
+	// A reader carries no file name, so the codec wrapping it is declared.
+	// A path does carry one, and AddPath reads the codec from it.
+	ctx := context.Background()
+	db, err := filesql.NewBuilder().
+		AddReader(bytes.NewReader(compressed.Bytes()), "orders", filesql.FileTypeCSV,
+			filesql.WithCompression(filesql.CompressionGZ)).
+		Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	var total int
+	if err := db.QueryRowContext(ctx, `SELECT SUM(total) FROM orders`).Scan(&total); err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(total)
+	// Output:
+	// 2180
 }
 
 func ExampleOpenReader() {
@@ -415,6 +473,43 @@ func ExampleMalformedRowPolicy_String() {
 	// stop
 	// skip
 	// fill
+}
+
+func ExampleExcelSheetPolicy_String() {
+	fmt.Println(filesql.ExcelSheetPolicyAll)
+	fmt.Println(filesql.ExcelSheetPolicyVisibleOnly)
+	// Output:
+	// all
+	// visible-only
+}
+
+func ExampleParseError() {
+	dir := createFilesqlExampleDir(map[string]string{
+		"users.csv":  "id,name\n1,alice\n",
+		"orders.csv": "id,total\n1,980,extra\n",
+	})
+	defer os.RemoveAll(dir)
+
+	_, err := filesql.Open(context.Background(),
+		filepath.Join(dir, "users.csv"), filepath.Join(dir, "orders.csv"))
+	if err == nil {
+		log.Fatal("the second file should have failed to load")
+	}
+
+	// A load of several inputs says which one failed, and the cause is
+	// reachable on its own for a caller that has already named the file.
+	var parseErr *filesql.ParseError
+	if !errors.As(err, &parseErr) {
+		log.Fatalf("want a *filesql.ParseError, got %T", err)
+	}
+
+	fmt.Println(filepath.Base(parseErr.Source))
+	fmt.Println(errors.Is(err, filesql.ErrParsing))
+	fmt.Println(errors.Is(err, filesql.ErrColumnMismatch))
+	// Output:
+	// orders.csv
+	// true
+	// true
 }
 
 // exampleWorkbook writes a workbook holding one shown sheet and one hidden
