@@ -78,7 +78,10 @@ func postgresqlScalarFunctions() map[string]scalarSpec {
 		// Building a date or a time out of its fields, and binning a timestamp.
 		"make_date": {3, fnPostgresMakeDate},
 		"make_time": {3, fnPostgresMakeTime},
-		"date_bin":  {3, fnDateBin},
+
+		"make_timestamp": {6, fnPostgresMakeTimestamp},
+		"make_interval":  {-1, fnPostgresMakeInterval},
+		"date_bin":       {3, fnDateBin},
 
 		// Counting the NULLs in an argument list, which no aggregate can do
 		// because the values are columns of one row rather than rows of one
@@ -274,6 +277,49 @@ func decimalText(v driver.Value) (string, bool) {
 	return strings.TrimSpace(s), true
 }
 
+// fnPostgresMakeTimestamp builds a timestamp out of its fields, which is
+// fnPostgresMakeDate and fnPostgresMakeTime joined: the two guards are the ones
+// that already refuse a field out of range, so the three cannot disagree about
+// what a field may hold.
+func fnPostgresMakeTimestamp(args []driver.Value) (driver.Value, error) {
+	if len(args) != 6 {
+		return nil, fmt.Errorf("dialect: MAKE_TIMESTAMP expects 6 arguments, got %d", len(args))
+	}
+	date, err := fnPostgresMakeDate(args[:3])
+	if err != nil || date == nil {
+		return date, err
+	}
+	clock, err := fnPostgresMakeTime(args[3:])
+	if err != nil || clock == nil {
+		return clock, err
+	}
+	return fmt.Sprintf("%s %s", date, clock), nil
+}
+
+// fnPostgresMakeInterval builds an interval out of its seven fields, written the
+// way formatPostgresInterval writes the one AGE answers. A week is seven days,
+// which is how PostgreSQL folds the field it has no unit for.
+func fnPostgresMakeInterval(args []driver.Value) (driver.Value, error) {
+	if len(args) > 7 {
+		return nil, fmt.Errorf("dialect: MAKE_INTERVAL expects at most 7 arguments, got %d", len(args))
+	}
+	fields := make([]float64, 7)
+	for i, arg := range args {
+		n, ok := toFloat(arg)
+		if !ok {
+			return nil, nil
+		}
+		fields[i] = n
+	}
+	years, months, weeks, days := int(fields[0]), int(fields[1]), int(fields[2]), int(fields[3])
+	seconds := fields[4]*3600 + fields[5]*60 + fields[6]
+	months += years * 12
+	days += weeks * 7
+	nanos := int64(math.Round(seconds * float64(time.Second)))
+	negative := months < 0 || (months == 0 && days < 0) || (months == 0 && days == 0 && nanos < 0)
+	return formatPostgresInterval(months/12, months%12, days, nanos, negative), nil
+}
+
 // fnPostgresAge implements age(a, b): the interval between two timestamps,
 // written the way dialects.PostgreSQL writes one -- whole years, months and days, with a
 // time of day when there is one.
@@ -287,21 +333,25 @@ func fnPostgresAge(args []driver.Value) (driver.Value, error) {
 	if negative {
 		later, earlier = earlier, later
 	}
-	years, months, days, seconds := calendarDifference(earlier, later)
-	out := formatPostgresInterval(years, months, days, seconds, negative)
+	years, months, days, nanos := calendarDifference(earlier, later)
+	out := formatPostgresInterval(years, months, days, nanos, negative)
 	return out, nil
 }
 
-// calendarDifference is the years, months, days and seconds from earlier to
+// calendarDifference is the years, months, days and nanoseconds from earlier to
 // later, borrowing from the next field up the way a calendar subtraction does.
-func calendarDifference(earlier, later time.Time) (years, months, days, seconds int) {
+//
+// The clock part is counted in nanoseconds rather than in whole seconds because
+// a fraction that is dropped is not a small error: from 00:00:00.75 to the next
+// day's 00:00:00.25 is 23:59:59.5, and rounding the two ends down made it a
+// whole day.
+func calendarDifference(earlier, later time.Time) (years, months, days int, nanos int64) {
 	years = later.Year() - earlier.Year()
 	months = int(later.Month()) - int(earlier.Month())
 	days = later.Day() - earlier.Day()
-	seconds = later.Hour()*3600 + later.Minute()*60 + later.Second() -
-		(earlier.Hour()*3600 + earlier.Minute()*60 + earlier.Second())
-	if seconds < 0 {
-		seconds += 86400
+	nanos = clockNanos(later) - clockNanos(earlier)
+	if nanos < 0 {
+		nanos += int64(24 * time.Hour)
 		days--
 	}
 	for days < 0 {
@@ -317,11 +367,11 @@ func calendarDifference(earlier, later time.Time) (years, months, days, seconds 
 		months += 12
 		years--
 	}
-	return years, months, days, seconds
+	return years, months, days, nanos
 }
 
 // formatPostgresInterval writes an interval the way dialects.PostgreSQL prints one.
-func formatPostgresInterval(years, months, days, seconds int, negative bool) string {
+func formatPostgresInterval(years, months, days int, nanos int64, negative bool) string {
 	sign := ""
 	signed := func(n int) int { return n }
 	if negative {
@@ -338,13 +388,26 @@ func formatPostgresInterval(years, months, days, seconds int, negative bool) str
 	if days != 0 {
 		parts = append(parts, fmt.Sprintf("%s%d day%s", sign, days, plural(signed(days))))
 	}
-	if seconds != 0 {
-		parts = append(parts, fmt.Sprintf("%s%02d:%02d:%02d", sign, seconds/3600, seconds%3600/60, seconds%60))
+	if nanos != 0 {
+		parts = append(parts, sign+formatPostgresClock(nanos))
 	}
 	if len(parts) == 0 {
 		return "00:00:00"
 	}
 	return strings.Join(parts, " ")
+}
+
+// formatPostgresClock writes the clock part of an interval, with the fraction
+// of a second PostgreSQL keeps and with its trailing zeros trimmed the way
+// PostgreSQL trims them.
+func formatPostgresClock(nanos int64) string {
+	seconds := nanos / int64(time.Second)
+	out := fmt.Sprintf("%02d:%02d:%02d", seconds/3600, seconds%3600/60, seconds%60)
+	micros := nanos % int64(time.Second) / int64(time.Microsecond)
+	if micros == 0 {
+		return out
+	}
+	return out + "." + strings.TrimRight(fmt.Sprintf("%06d", micros), "0")
 }
 
 // plural follows dialects.PostgreSQL, which pluralizes on the signed value: a lone year
@@ -862,7 +925,10 @@ func fnPostgresMakeTime(args []driver.Value) (driver.Value, error) {
 	if !ok1 || !ok2 || !ok3 {
 		return nil, nil
 	}
-	if hour < 0 || hour > 23 {
+	// PostgreSQL's time reaches 24:00:00 exactly, which is the end of the day
+	// rather than the start of the next one; anything past it is refused.
+	endOfDay := hour == 24 && minute == 0 && second == 0
+	if (hour < 0 || hour > 23) && !endOfDay {
 		return nil, fmt.Errorf("dialect: MAKE_TIME: hour %d is out of range", hour)
 	}
 	if minute < 0 || minute > 59 {

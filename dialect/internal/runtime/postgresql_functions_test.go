@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/nao1215/filesql/dialect/internal/dialects"
@@ -442,5 +443,142 @@ func TestToNumberReadsOnlyWhatTheTemplateNames(t *testing.T) {
 
 	if _, err := runDialect(t, db, dialects.PostgreSQL, `SELECT to_number('abc','999')`); err == nil {
 		t.Error("to_number('abc','999') answered a value, want an error")
+	}
+}
+
+// TestAgeKeepsTheFraction pins the sub-second part of an interval. AGE built
+// its clock field out of whole seconds, so a fraction was dropped and the loss
+// was not always small: from 00:00:00.75 to the next day's 00:00:00.25 came out
+// as a whole day, and a difference under a second came out as 00:00:00 with no
+// sign to say which timestamp was the later one.
+func TestAgeKeepsTheFraction(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{name: "a sub-second difference", query: `SELECT AGE(TIMESTAMP '2020-02-29 13:45:59.123456', TIMESTAMP '2020-02-29 13:45:59')`, want: "00:00:00.123456"},
+		{name: "a negative sub-second difference", query: `SELECT AGE(TIMESTAMP '2020-02-29 13:45:59', TIMESTAMP '2020-02-29 13:45:59.123456')`, want: "-00:00:00.123456"},
+		{name: "a fraction beside whole months", query: `SELECT AGE(TIMESTAMP '2020-03-01 00:00:00.5', TIMESTAMP '2020-01-01 00:00:00')`, want: "2 mons 00:00:00.5"},
+		{name: "a fraction borrowing from the day", query: `SELECT AGE(TIMESTAMP '2020-01-02 00:00:00.25', TIMESTAMP '2020-01-01 00:00:00.75')`, want: "23:59:59.5"},
+		{name: "equal timestamps", query: `SELECT AGE(TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00')`, want: "00:00:00"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.PostgreSQL, tt.query)
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
+
+// TestAgeIsZeroOnlyForEqualTimestamps is the invariant behind
+// TestAgeKeepsTheFraction: an interval of zero between two different instants
+// is the shape of a dropped fraction.
+func TestAgeIsZeroOnlyForEqualTimestamps(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	stamps := []string{
+		"2020-01-01 00:00:00",
+		"2020-01-01 00:00:00.000001",
+		"2020-01-01 00:00:00.5",
+		"2020-01-01 00:00:01",
+		"2020-02-29 13:45:59.123456",
+	}
+	for _, a := range stamps {
+		for _, b := range stamps {
+			query := "SELECT AGE(TIMESTAMP '" + a + "', TIMESTAMP '" + b + "')"
+			t.Run(a+" vs "+b, func(t *testing.T) {
+				got, err := runDialect(t, db, dialects.PostgreSQL, query)
+				if err != nil {
+					t.Fatalf("%s: %v", query, err)
+				}
+				if (got.String == "00:00:00") != (a == b) {
+					t.Fatalf("%s = %q", query, got.String)
+				}
+			})
+		}
+	}
+}
+
+// TestTheMakeFamilyIsWholeAndReachable pins the four constructors PostgreSQL
+// has. Two of them were not registered, so a call reached SQLite and came back
+// as "no such function": a message that names the engine underneath rather than
+// the dialect the caller asked for.
+func TestTheMakeFamilyIsWholeAndReachable(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	tests := []struct {
+		name    string
+		query   string
+		want    string
+		wantErr bool
+	}{
+		{name: "make_date", query: `SELECT MAKE_DATE(2020, 2, 29)`, want: "2020-02-29"},
+		{name: "make_time", query: `SELECT MAKE_TIME(13, 45, 59.5)`, want: "13:45:59.5"},
+		{name: "make_time at the end of the day", query: `SELECT MAKE_TIME(24, 0, 0)`, want: "24:00:00"},
+		{name: "make_time past the end of the day", query: `SELECT MAKE_TIME(24, 0, 1)`, wantErr: true},
+		{name: "make_time with a fraction past the end", query: `SELECT MAKE_TIME(24, 0, 0.000001)`, wantErr: true},
+		{name: "make_time at the last moment of the day", query: `SELECT MAKE_TIME(23, 59, 59.999999)`, want: "23:59:59.999999"},
+		{name: "make_time past twenty-four", query: `SELECT MAKE_TIME(25, 0, 0)`, wantErr: true},
+		{name: "make_timestamp", query: `SELECT MAKE_TIMESTAMP(2020, 2, 29, 13, 45, 59.5)`, want: "2020-02-29 13:45:59.5"},
+		{name: "make_timestamp refuses a day its date refuses", query: `SELECT MAKE_TIMESTAMP(2021, 2, 29, 0, 0, 0)`, wantErr: true},
+		{name: "make_interval", query: `SELECT MAKE_INTERVAL(0, 0, 0, 1, 2, 3, 4)`, want: "1 day 02:03:04"},
+		{name: "make_interval folds weeks into days", query: `SELECT MAKE_INTERVAL(1, 2, 3, 4, 5, 6, 7.5)`, want: "1 year 2 mons 25 days 05:06:07.5"},
+		{name: "make_interval with nothing in it", query: `SELECT MAKE_INTERVAL(0, 0, 0, 0, 0, 0, 0)`, want: "00:00:00"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runDialect(t, db, dialects.PostgreSQL, tt.query)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("%s = %q, want an error", tt.query, got.String)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got.String != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
+			}
+		})
+	}
+}
+
+// TestNoPostgreSQLHelperFallsThroughToSQLite is the invariant behind
+// TestTheMakeFamilyIsWholeAndReachable: a name this package claims should never
+// come back as SQLite's "no such function".
+func TestNoPostgreSQLHelperFallsThroughToSQLite(t *testing.T) {
+	// Not parallel: castDB touches the process-global driver registration.
+	db := castDB(t)
+
+	calls := []string{
+		"MAKE_DATE(2020, 1, 1)",
+		"MAKE_TIME(1, 1, 1)",
+		"MAKE_TIMESTAMP(2020, 1, 1, 1, 1, 1)",
+		"MAKE_INTERVAL(1, 1, 1, 1, 1, 1, 1)",
+		"AGE(TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2019-01-01 00:00:00')",
+		"DATE_TRUNC('day', TIMESTAMP '2020-01-01 00:00:00')",
+		"TO_DATE('2020-01-01', 'YYYY-MM-DD')",
+		"TO_TIMESTAMP('2020-01-01', 'YYYY-MM-DD')",
+		"JUSTIFY_DAYS(INTERVAL '1 day')",
+	}
+	for _, call := range calls {
+		t.Run(call, func(t *testing.T) {
+			_, err := runDialect(t, db, dialects.PostgreSQL, "SELECT "+call)
+			if err != nil && strings.Contains(err.Error(), "no such function") {
+				t.Fatalf("SELECT %s: %v", call, err)
+			}
+		})
 	}
 }
