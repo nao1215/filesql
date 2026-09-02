@@ -4,7 +4,7 @@ go 1.25.13
 
 require (
 	github.com/Masterminds/squirrel v1.5.4
-	github.com/nao1215/filesql v0.45.0
+	github.com/nao1215/filesql v0.52.0
 )
 
 require (
@@ -20,7 +20,7 @@ require (
 	github.com/moov-io/base v0.63.0 // indirect
 	github.com/moov-io/iso3166 v0.4.0 // indirect
 	github.com/moov-io/iso4217 v0.4.0 // indirect
-	github.com/moov-io/wire v0.16.0 // indirect
+	github.com/moov-io/wire v0.16.1 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/parquet-go/bitpack v1.0.0 // indirect
 	github.com/parquet-go/jsonlite v1.0.0 // indirect
@@ -46,5 +46,5 @@ require (
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.56.0 // indirect
+	modernc.org/sqlite v1.57.0 // indirect
 )
