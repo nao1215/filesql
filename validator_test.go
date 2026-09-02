@@ -1,6 +1,7 @@
 package filesql
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -87,36 +88,20 @@ func TestValidator_validateReader(t *testing.T) {
 		assert.True(t, errors.Is(err, ErrUnsupportedFormat))
 	})
 
-	t.Run("empty strings.Reader for CSV returns ErrEmptyData", func(t *testing.T) {
+	t.Run("an empty reader is not judged here", func(t *testing.T) {
 		t.Parallel()
-		reader := strings.NewReader("")
-		err := v.validateReader(reader, "table", FileTypeCSV)
-		assert.True(t, errors.Is(err, ErrEmptyData))
-		assert.Contains(t, err.Error(), "empty CSV data")
-	})
 
-	t.Run("empty strings.Reader for TSV returns ErrEmptyData", func(t *testing.T) {
-		t.Parallel()
-		reader := strings.NewReader("")
-		err := v.validateReader(reader, "table", FileTypeTSV)
-		assert.True(t, errors.Is(err, ErrEmptyData))
-		assert.Contains(t, err.Error(), "empty TSV data")
-	})
-
-	t.Run("empty strings.Reader for LTSV returns ErrEmptyData", func(t *testing.T) {
-		t.Parallel()
-		reader := strings.NewReader("")
-		err := v.validateReader(reader, "table", FileTypeLTSV)
-		assert.True(t, errors.Is(err, ErrEmptyData))
-		assert.Contains(t, err.Error(), "empty LTSV data")
-	})
-
-	t.Run("empty strings.Reader for other type returns ErrEmptyData", func(t *testing.T) {
-		t.Parallel()
-		reader := strings.NewReader("")
-		err := v.validateReader(reader, "table", FileTypeParquet)
-		assert.True(t, errors.Is(err, ErrEmptyData))
-		assert.Contains(t, err.Error(), "reader contains no data")
+		// Whether a stream holds anything is the reader's question, not this
+		// one's: reading it here would consume it. This used to peek when the
+		// reader happened to be a *strings.Reader, so the same empty bytes were
+		// refused through one reader type and loaded through another.
+		for _, fileType := range []FileType{
+			FileTypeCSV, FileTypeTSV, FileTypeLTSV, FileTypeJSON, FileTypeJSONL,
+			FileTypeParquet, FileTypeXLSX,
+		} {
+			assert.NoError(t, v.validateReader(strings.NewReader(""), "table", fileType), fileType)
+			assert.NoError(t, v.validateReader(bytes.NewReader(nil), "table", fileType), fileType)
+		}
 	})
 
 	t.Run("valid reader succeeds", func(t *testing.T) {

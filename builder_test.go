@@ -1325,16 +1325,16 @@ func TestBuilder_ErrorCases(t *testing.T) {
 	t.Run("empty reader", func(t *testing.T) {
 		t.Parallel()
 
-		reader := strings.NewReader("")
-		builder := NewBuilder().AddReader(reader, "empty", FileTypeCSV)
-		_, err := buildForTest(ctx, builder)
+		// The build does not read the stream, so the refusal comes from Open,
+		// in the words of the format that read it.
+		builder := NewBuilder().AddReader(strings.NewReader(""), "empty", FileTypeCSV)
+		built, err := buildForTest(ctx, builder)
+		require.NoError(t, err, "the build does not read the stream")
 
-		// Build should fail with empty CSV data
-		if err == nil {
-			assert.Error(t, err, "Build should fail with empty reader")
-		} else if !strings.Contains(err.Error(), "empty CSV data") {
-			assert.Contains(t, err.Error(), "empty CSV data", "Expected 'empty CSV data' error")
-		}
+		_, err = built.Open(ctx)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrEmptyData)
+		assert.Contains(t, err.Error(), "empty CSV data")
 	})
 
 	t.Run("extremely small chunk size", func(t *testing.T) {

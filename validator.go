@@ -52,25 +52,12 @@ func (v *validator) validateReader(reader any, tableName string, fileType FileTy
 		return fmt.Errorf("%w: file type must be specified for reader input", ErrUnsupportedFormat)
 	}
 
-	// For specific readers where we can safely peek without consuming, validate empty content
-	// This provides format-specific error messages at Build time
-	if stringReader, ok := reader.(*strings.Reader); ok && stringReader.Len() == 0 {
-		switch fileType {
-		case FileTypeCSV:
-			return fmt.Errorf("%w: empty CSV data", ErrEmptyData)
-		case FileTypeTSV:
-			return fmt.Errorf("%w: empty TSV data", ErrEmptyData)
-		case FileTypeLTSV:
-			return fmt.Errorf("%w: empty LTSV data", ErrEmptyData)
-		default:
-			return fmt.Errorf("%w: reader contains no data", ErrEmptyData)
-		}
-	}
-
-	// Skip other reader content validation at Build time to avoid consuming reader
-	// Content validation will be done during streaming phase
-	// This prevents issues with readers being consumed before Open()
-
+	// Whether the stream holds anything is not asked here. Reading it would
+	// consume it, and the reader that reads it for real already answers the
+	// question in the words of the format it read: this used to peek when the
+	// reader happened to be a *strings.Reader and say so in its own words, so
+	// the same empty bytes were refused through one reader type and loaded
+	// through another, which is not something a caller can see coming.
 	return nil
 }
 

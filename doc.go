@@ -65,10 +65,10 @@
 // does say there are no rows loads for every format: "[]" is a JSON table with
 // no rows, and a CSV holding only its header is one too.
 //
-// The exemption is about a file. A reader carries no name and no size, so an
-// empty one is refused for every format alike, and parser.Parse refuses an empty
-// source for every format including the two, since it answers about a document
-// rather than about a load.
+// The rule follows the format rather than the kind of source, so a reader and
+// the member of a compressed file answer the way a file does. parser.Parse is
+// the one place that refuses an empty source for every format including the
+// two, since it answers about a document rather than about a load.
 //
 // # Column Types
 //
