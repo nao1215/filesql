@@ -1994,3 +1994,100 @@ func TestSourceArityIsCheckedForNamesLeftOnSQLite(t *testing.T) {
 		})
 	}
 }
+
+// TestGoogleSQLBytesLiteralNamesBytes holds a BYTES literal to the bytes it
+// names. Its escapes name bytes rather than code points, which is the
+// difference between it and a string literal; decoding one into a Go string
+// made b'\xff' the code point U+00FF and stored it as the two UTF-8 bytes
+// c3 bf, so TO_HEX answered c3bf where BigQuery answers ff and a comparison
+// against a hash matched nothing.
+func TestGoogleSQLBytesLiteralNamesBytes(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		literal string
+		hex     string
+	}{
+		{`b'\xff'`, "ff"},
+		{`b'\x00'`, "00"},
+		{`b'\x41'`, "41"},
+		{`b'\x00\x7f\x80\xff'`, "007f80ff"},
+		{`b'A'`, "41"},
+		{`b'\377'`, "ff"},
+		{`b'\101'`, "41"},
+		{`b'\\'`, "5c"},
+		{`b'\n'`, "0a"},
+		{`b''`, ""},
+	} {
+		t.Run(tt.literal, func(t *testing.T) {
+			t.Parallel()
+
+			translated, err := Translate(GoogleSQL, "SELECT "+tt.literal)
+			if err != nil {
+				t.Fatalf("translate: %v", err)
+			}
+			want := "SELECT x'" + tt.hex + "'"
+			if !strings.Contains(translated, want) {
+				t.Errorf("%s became %q, want a blob spelled %q", tt.literal, translated, want)
+			}
+		})
+	}
+
+	t.Run("a string literal's escape names a code point", func(t *testing.T) {
+		t.Parallel()
+
+		// The same escape in a string literal is the character U+00FF, which
+		// SQLite holds as the two bytes of its UTF-8, and that is the
+		// distinction the two kinds of literal are for.
+		translated, err := Translate(GoogleSQL, `SELECT '\xff'`)
+		if err != nil {
+			t.Fatalf("translate: %v", err)
+		}
+		if !strings.Contains(translated, "ÿ") {
+			t.Errorf(`'\xff' became %q, want the character U+00FF`, translated)
+		}
+	})
+}
+
+// TestGoogleSQLBytesLiteralRefusesAnOctalPastAByte holds a BYTES literal to the
+// range an octal escape can name. Three octal digits reach 511 and a byte stops
+// at 255, so \400 names no byte; BigQuery refuses such a literal, and reading it
+// as a code point would put two bytes where the caller wrote one escape.
+func TestGoogleSQLBytesLiteralRefusesAnOctalPastAByte(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		literal string
+		refuse  bool
+	}{
+		{`b'\377'`, false},
+		{`b'\400'`, true},
+		{`b'\777'`, true},
+		{`b'\401\402'`, true},
+		// A backslash written as an escape is a backslash, and the digits
+		// after it are digits.
+		{`b'\\400'`, false},
+		// A string literal names code points, where the same escape is the
+		// character that number names.
+		{`'\400'`, false},
+	} {
+		t.Run(tt.literal, func(t *testing.T) {
+			t.Parallel()
+
+			translated, err := Translate(GoogleSQL, "SELECT "+tt.literal)
+			if tt.refuse {
+				if err == nil {
+					t.Errorf("%s names no byte and became %q", tt.literal, translated)
+					return
+				}
+				if !strings.Contains(err.Error(), "byte") {
+					t.Errorf("%s is refused without saying why: %v", tt.literal, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("%s is a literal the dialect accepts: %v", tt.literal, err)
+			}
+		})
+	}
+}

@@ -6,6 +6,7 @@ package token
 
 import (
 	"encoding/hex"
+	"math"
 	"strconv"
 	"strings"
 	"unicode"
@@ -82,6 +83,14 @@ type Config struct {
 type escapeRules struct {
 	backslash bool
 	numeric   bool
+	// rawBytes says the literal names bytes rather than characters, so an
+	// escape naming a number writes that byte. It is the difference between
+	// GoogleSQL's two kinds of literal: b'\xff' is the one byte 0xFF, and
+	// '\xff' is the character U+00FF, which is two bytes of UTF-8. Decoding
+	// both as characters made a byte above 127 into its own encoding, so a
+	// four-byte literal became six and a comparison against a hash matched
+	// nothing.
+	rawBytes bool
 }
 
 // ConfigFor returns the lexical configuration for a built-in non-SQLite
@@ -266,6 +275,7 @@ func Lex(query string, cfg Config) ([]Token, error) {
 			n := prefixLen(query, i, cfg)
 			raw, isBytes := prefixMeaning(query[i : i+n])
 			esc := cfg.stringEscapes()
+			esc.rawBytes = isBytes
 			if raw {
 				// A raw string keeps its backslashes: that is what it is for.
 				esc = escapeRules{}
@@ -277,6 +287,10 @@ func Lex(query string, cfg Config) ([]Token, error) {
 			}
 			kind, text := String, content
 			if isBytes {
+				if at, bad := octalEscapePastAByte(query[i+n : ni]); bad {
+					return nil, lexError(query, start+n+at,
+						"a byte string escape names a byte, and this one names a number past 255")
+				}
 				kind, text = Blob, hex.EncodeToString([]byte(content))
 			}
 			tokens = append(tokens, Token{Kind: kind, Text: text, Offset: start})
@@ -547,7 +561,7 @@ func decodeBackslash(s string, i int, esc escapeRules) (string, int) {
 		return "\\", 1
 	}
 	if esc.numeric {
-		if decoded, adv, ok := decodeNumericEscape(s, i); ok {
+		if decoded, adv, ok := decodeNumericEscape(s, i, esc.rawBytes); ok {
 			return decoded, adv
 		}
 	}
@@ -600,7 +614,7 @@ func decodeBackslash(s string, i int, esc escapeRules) (string, int) {
 // default does, turned E'\x41' into the three characters x41 rather than the
 // one character A — a literal that compares equal to different rows than the
 // one the caller wrote.
-func decodeNumericEscape(s string, i int) (string, int, bool) {
+func decodeNumericEscape(s string, i int, rawBytes bool) (string, int, bool) {
 	switch s[i+1] {
 	case 'x', 'X':
 		digits := hexRun(s, i+2, 2)
@@ -611,7 +625,7 @@ func decodeNumericEscape(s string, i int) (string, int, bool) {
 		if err != nil {
 			return "", 0, false
 		}
-		return string(rune(v)), 2 + digits, true
+		return numberedChar(v, rawBytes), 2 + digits, true
 	case 'u', 'U':
 		width := 4
 		if s[i+1] == 'U' {
@@ -631,10 +645,56 @@ func decodeNumericEscape(s string, i int) (string, int, bool) {
 		if err != nil {
 			return "", 0, false
 		}
-		return string(rune(v)), 1 + digits, true
+		return numberedChar(v, rawBytes), 1 + digits, true
 	default:
 		return "", 0, false
 	}
+}
+
+// octalEscapePastAByte finds an octal escape naming a number no byte can hold,
+// in the source text of a literal that names bytes. Three octal digits reach
+// 511 and a byte stops at 255, so \400 through \777 name nothing; BigQuery
+// refuses such a literal, and decoding one as a code point would put two bytes
+// where the caller wrote one escape.
+//
+// It reads the source rather than the decoded content because that is where the
+// caller's spelling is, and it steps over an escaped backslash so that the
+// digits after one are digits.
+func octalEscapePastAByte(literal string) (int, bool) {
+	for i := 0; i < len(literal)-1; i++ {
+		if literal[i] != '\\' {
+			continue
+		}
+		if literal[i+1] == '\\' {
+			i++ // An escaped backslash, so what follows it is not an escape.
+			continue
+		}
+		if octalRun(literal, i+1, 3) < 3 {
+			continue
+		}
+		if v, err := strconv.ParseUint(literal[i+1:i+4], 8, 16); err == nil && v > math.MaxUint8 {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// numberedChar is what an escape naming a number stands for: the byte itself
+// in a literal that names bytes, and the code point of that number, encoded as
+// UTF-8, in one that names characters.
+//
+// The number is bounded by what the escape can hold -- two hexadecimal digits
+// or three octal ones, so at most 65535 -- and a value past the last code point
+// cannot arrive; the check is what makes that evident where the conversion is
+// written rather than three calls away.
+func numberedChar(v uint64, rawBytes bool) string {
+	if rawBytes && v <= math.MaxUint8 {
+		return string([]byte{byte(v)})
+	}
+	if v > unicode.MaxRune {
+		return ""
+	}
+	return string(rune(v))
 }
 
 // isHexDigits reports whether s is made only of hexadecimal digits, which is
