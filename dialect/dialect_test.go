@@ -2491,6 +2491,7 @@ func TestPostgreSQLRefusesAResultTooSmallForADouble(t *testing.T) {
 		want string
 	}{
 		{"exp(-1000)", "underflow"},
+		{"exp(-746)", "underflow"},
 		{"power(1e-300, 2)", "underflow"},
 		{"power(-1, 0.5)", "complex result"},
 		{"power(-8, 1.5)", "complex result"},
@@ -2518,6 +2519,8 @@ func TestPostgreSQLRefusesAResultTooSmallForADouble(t *testing.T) {
 		{"power(-8, 3)", -512},
 		{"exp(1e-300)", 1},
 		{"power(2, -1074)", 5e-324},
+		{"exp(-745)", 5e-324},
+		{"exp(-700)", 9.85967654375977e-305},
 	} {
 		translated, err := Translate(PostgreSQL, "SELECT "+tt.expr)
 		require.NoError(t, err)
