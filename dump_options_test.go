@@ -1,6 +1,9 @@
 package filesql
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -220,4 +223,102 @@ func TestCompressionTypeNamesOnlyWhatItHas(t *testing.T) {
 		assert.Equal(t, "unknown", unknown.String())
 		assert.Empty(t, unknown.Extension(), "a codec this package has no name for names no extension")
 	}
+}
+
+// TestDumpOptionsListWhatASaveAccepts holds the option lists in the godoc to
+// what a dump does with each value. The lists are what a caller reads before
+// choosing, and NewDumpOptions offered bzip2, which a save refuses, and named
+// three of the five formats a dump writes.
+func TestDumpOptionsListWhatASaveAccepts(t *testing.T) {
+	t.Parallel()
+
+	source := readSourceFile(t, "dump_options.go")
+
+	t.Run("every format a dump writes is named where the formats are listed", func(t *testing.T) {
+		t.Parallel()
+
+		for format, constant := range map[OutputFormat]string{
+			OutputFormatCSV:     "OutputFormatCSV",
+			OutputFormatTSV:     "OutputFormatTSV",
+			OutputFormatLTSV:    "OutputFormatLTSV",
+			OutputFormatParquet: "OutputFormatParquet",
+			OutputFormatXLSX:    "OutputFormatXLSX",
+			OutputFormatACH:     "OutputFormatACH",
+			OutputFormatFedWire: "OutputFormatFedWire",
+		} {
+			writes := dumpWritesFormat(t, NewDumpOptions().WithFormat(format))
+			named := strings.Contains(source, "//   - "+constant+":")
+			if writes && !named {
+				t.Errorf("a dump writes %s and the format list does not name %s", format, constant)
+			}
+			if !writes && named {
+				t.Errorf("the format list names %s and a dump refuses it", constant)
+			}
+		}
+	})
+
+	t.Run("a compression a save refuses is named only where the refusal is said", func(t *testing.T) {
+		t.Parallel()
+
+		for _, codec := range []CompressionType{
+			CompressionNone, CompressionGZ, CompressionBZ2, CompressionXZ, CompressionZSTD,
+			CompressionZLIB, CompressionSNAPPY, CompressionS2, CompressionLZ4,
+		} {
+			if dumpWritesFormat(t, NewDumpOptions().WithCompression(codec)) {
+				continue
+			}
+			// The read side takes it, so the documentation may name it -- but
+			// only where the same sentence says a save does not.
+			name := strings.ToUpper(codec.String())
+			for line := range strings.Lines(source) {
+				// Only the option lists, which are what a caller reads to
+				// choose; the constants' own comments name what they are.
+				if !strings.HasPrefix(strings.TrimSpace(line), "//   - ") || !strings.Contains(line, name) {
+					continue
+				}
+				if !strings.Contains(line, "read only") {
+					t.Errorf("%q names %s, which a save refuses, without saying so",
+						strings.TrimSpace(line), name)
+				}
+			}
+		}
+	})
+}
+
+// dumpWritesFormat reports whether a dump under opts produced a file.
+func dumpWritesFormat(t *testing.T, opts DumpOptions) bool {
+	t.Helper()
+
+	dir := t.TempDir()
+	source := filepath.Join(dir, "d.csv")
+	if err := os.WriteFile(source, []byte("a,b\n1,x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(t.Context(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	out := filepath.Join(dir, "out")
+	if err := DumpDatabase(t.Context(), db, out, opts); err != nil {
+		return false
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		return false
+	}
+	return len(entries) > 0
+}
+
+// readSourceFile reads a file of this package, for a test that holds the
+// documentation to the behavior rather than restating the documentation.
+func readSourceFile(t *testing.T, name string) string {
+	t.Helper()
+
+	body, err := os.ReadFile(name) //nolint:gosec // fixed, in-repo source path
+	if err != nil {
+		t.Fatalf("failed to read %s: %v", name, err)
+	}
+	return string(body)
 }

@@ -61,4 +61,12 @@ const (
 	fnNameConvert           = "CONVERT"
 	keywordLocalTime        = "LOCALTIME"
 	keywordLocalTimestamp   = "LOCALTIMESTAMP"
+
+	// The niladic functions the standard writes without parentheses.
+	keywordCurrentUser    = "CURRENT_USER"
+	keywordSessionUser    = "SESSION_USER"
+	keywordSystemUser     = "SYSTEM_USER"
+	keywordCurrentCatalog = "CURRENT_CATALOG"
+	keywordCurrentSchema  = "CURRENT_SCHEMA"
+	keywordCurrentRole    = "CURRENT_ROLE"
 )

@@ -1,9 +1,11 @@
 package filesql
 
 import (
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -300,5 +302,123 @@ func TestReleaseWorkflowGatesTheRelease(t *testing.T) {
 		t.Error("the verification job is gone")
 	} else if strings.Contains(workflow[verify:strings.Index(workflow, "release:")], "contents: write") {
 		t.Error("the verification job may not hold a token that can write to the repository")
+	}
+}
+
+// TestWorkflowsNameOnlyPathsThatExist holds the CI workflows to the repository
+// they run against. A workflow names package paths, scripts and config files in
+// strings nothing compiles, so a package that moves leaves a job naming a
+// directory that is gone -- which is what happened to the fuzz workflow when the
+// parser package went under internal/, and what nobody saw for two releases
+// because a scheduled job's failure notifies no pull request.
+func TestWorkflowsNameOnlyPathsThatExist(t *testing.T) {
+	t.Parallel()
+
+	entries, err := os.ReadDir(".github/workflows")
+	if err != nil {
+		t.Fatalf("failed to read the workflows: %v", err)
+	}
+
+	// A path in a workflow is a word beginning "./" or naming a file in the
+	// repository; these are the two shapes the workflows here use.
+	pathWord := regexp.MustCompile(`(?:^|[\s'"=])(\./[A-Za-z0-9._/-]+|\.github/[A-Za-z0-9._/-]+)`)
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yml") {
+			continue
+		}
+		name := entry.Name()
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			body, readErr := os.ReadFile(filepath.Join(".github/workflows", name)) //nolint:gosec // fixed, in-repo path
+			if readErr != nil {
+				t.Fatalf("failed to read %s: %v", name, readErr)
+			}
+			for _, match := range pathWord.FindAllStringSubmatch(string(body), -1) {
+				path := strings.TrimRight(match[1], "/.,")
+				if strings.ContainsAny(path, "*$") || strings.Contains(match[1], "...") {
+					// A glob, a workflow expression, or Go's own "./..."
+					// wildcard, none of which names one path.
+					continue
+				}
+				if _, statErr := os.Stat(path); statErr != nil { //nolint:gosec // a path read out of an in-repo workflow, only stat-ed
+					t.Errorf("%s names %q, which is not in the repository", name, path)
+				}
+			}
+		})
+	}
+}
+
+// TestFuzzWorkflowRunsEveryTarget holds the fuzz workflow's matrix to the fuzz
+// targets the module has. `go test` walks a target's seed corpus and stops, so
+// this workflow is the only thing that searches past the seeds: a target it
+// does not name is a target nothing fuzzes, and an entry naming a package that
+// does not hold its target is a job that fails every night.
+func TestFuzzWorkflowRunsEveryTarget(t *testing.T) {
+	t.Parallel()
+
+	body, err := os.ReadFile(".github/workflows/fuzz.yml")
+	if err != nil {
+		t.Fatalf("failed to read the fuzz workflow: %v", err)
+	}
+
+	// The matrix entries are pairs of lines: "- package: X" then "target: Y".
+	matrix := map[string]string{} // target -> package
+	pkg := ""
+	for line := range strings.Lines(string(body)) {
+		trimmed := strings.TrimSpace(line)
+		if rest, found := strings.CutPrefix(trimmed, "- package:"); found {
+			pkg = strings.TrimSpace(rest)
+			continue
+		}
+		if rest, found := strings.CutPrefix(trimmed, "target:"); found && pkg != "" {
+			matrix[strings.TrimSpace(rest)] = pkg
+		}
+	}
+	if len(matrix) == 0 {
+		t.Fatal("the fuzz workflow's matrix could not be read")
+	}
+
+	// The targets the module holds, and the package directory of each.
+	targets := map[string]string{}
+	fuzzFunc := regexp.MustCompile(`(?m)^func (Fuzz[A-Za-z0-9_]*)\(`)
+	walkErr := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() && (entry.Name() == ".git" || entry.Name() == "testdata" || entry.Name() == "examples") {
+			return filepath.SkipDir
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		body, readErr := os.ReadFile(path) //nolint:gosec // walked, in-repo path
+		if readErr != nil {
+			return readErr
+		}
+		for _, match := range fuzzFunc.FindAllStringSubmatch(string(body), -1) {
+			targets[match[1]] = "./" + filepath.ToSlash(filepath.Dir(path))
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("failed to walk the module: %v", walkErr)
+	}
+
+	for target, dir := range targets {
+		named, found := matrix[target]
+		if !found {
+			t.Errorf("%s is a fuzz target in %s and the workflow does not run it", target, dir)
+			continue
+		}
+		if named != dir {
+			t.Errorf("the workflow runs %s in %s; it is in %s", target, named, dir)
+		}
+	}
+	for target, dir := range matrix {
+		if _, found := targets[target]; !found {
+			t.Errorf("the workflow names %s in %s, and no package holds a target by that name", target, dir)
+		}
 	}
 }

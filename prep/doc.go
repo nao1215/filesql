@@ -3,7 +3,8 @@
 //
 // prep complements filesql by providing data preprocessing before loading
 // into SQLite. It uses struct tags for validation ("validate" tag) and
-// preprocessing ("prep" tag).
+// preprocessing ("prep" tag), and a "name" tag says which column a field is,
+// where the name derived from the field itself is not the one the file wrote.
 //
 // # Basic Usage
 //
@@ -61,10 +62,22 @@
 // A struct may cover a subset of the columns. A field naming a column the input
 // does not have is refused with ErrUnknownColumn, since a zero-filled field
 // cannot be told apart from a cell that is really empty; give such a field
-// prep:"default=..." if it is meant to work without a column. A field and a
-// header name the same column when they differ only in ASCII letter case, which
-// is how filesql compares the column names it makes from those headers; the
-// folding stops at ASCII there, so "ä" and "Ä" are two columns here as well.
+// prep:"default=..." if it is meant to work without a column.
+//
+// Which column a field is comes from the field's own name: it is converted to
+// snake_case, so UserName is the column "user_name", and the result is matched
+// against the header ignoring ASCII letter case, which is how filesql compares
+// the column names it makes from those headers. The folding stops at ASCII, so
+// "ä" and "Ä" are two columns here as well. The conversion is what a header
+// written in snake_case needs and what a header written any other way does not:
+// a field named UserName does not match a header spelled "username" or
+// "UserName", since neither is what the conversion produces. A field whose
+// column is spelled some other way says so with a name tag, which replaces the
+// derived name outright:
+//
+//	type Record struct {
+//	    UserName string `name:"username"`
+//	}
 //
 // # Supported File Formats
 //
@@ -78,26 +91,26 @@
 //   - Excel (.xlsx)
 //
 // ACH and Fedwire are not among them. Both are record-oriented rather than
-// tabular, and neither has a parser.FileType to construct a Processor with; load
+// tabular, and neither has a prep.FileType to construct a Processor with; load
 // such a file with filesql and query the tables it makes instead.
 //
-// A compressed stream is the caller's to unwrap, the way it is for
-// parser.Parse. Process reads the bytes it is given as the format it was
-// constructed with, so a codec has to come off first:
+// A compressed stream is the caller's to unwrap. Process reads the bytes it is
+// given as the format it was constructed with, so a codec has to come off
+// first:
 //
 //	f, _ := os.Open("data.csv.gz")
 //	defer f.Close()
 //	r, _ := filesql.CompressionGZ.NewReader(f)
 //	defer r.Close()
 //
-//	reader, result, err := prep.NewProcessor(parser.CSV).Process(r, &records)
+//	reader, result, err := prep.NewProcessor(prep.FileTypeCSV).Process(r, &records)
 //
 // filesql.OpenReader takes the codec from the name of a path instead, for a
 // caller that has one.
 //
-// A text encoding is not the caller's, since prep reads through parser.Parse: a
-// byte-order mark decides it, a UTF-16 file is transcoded, and a file that is
-// not UTF-8 is refused when it is read, with an error matching
+// A text encoding is not the caller's, since prep reads a text format the way a
+// load does: a byte-order mark decides it, a UTF-16 file is transcoded, and a
+// file that is not UTF-8 is refused when it is read, with an error matching
 // filesql.ErrInvalidUTF8 that names the byte and its offset. What prep writes
 // is UTF-8 whatever went in.
 //
@@ -150,7 +163,10 @@
 // else is itself, so a regular expression keeps its \d.
 //
 // A tag that needs a parameter and is given none is an invalid tag argument:
-// WithStrictTagParsing reports it, and without that option it is ignored.
+// WithStrictTagParsing reports it, and without that option it is ignored. The
+// exception is default, where the empty string is a value: prep:"default" and
+// prep:"default=" both say the column may be missing and its cells stay empty,
+// which is how a struct covers a column the input does not have.
 //
 // # Validate Tags
 //

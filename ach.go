@@ -56,7 +56,7 @@ package filesql
 //
 // 2. Using DumpDatabase (automatically detects and exports ACH files):
 //
-//	filesql.DumpDatabase(db, "./output") // ACH tables → .ach files, others → CSV/etc
+//	filesql.DumpDatabase(ctx, db, "./output") // ACH tables → .ach files, others → CSV/etc
 //
 // DumpDatabase finds ACH files from the sources the database records and
 // exports their tables as combined ACH files.
@@ -98,7 +98,7 @@ package filesql
 // # Example
 //
 //	// Load ACH file
-//	db, _ := filesql.Open("payment.ach")
+//	db, _ := filesql.Open(ctx, "payment.ach")
 //	defer db.Close()
 //
 //	// Query transactions

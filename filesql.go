@@ -30,10 +30,12 @@ import (
 // A path is a file, a compressed file ("data.csv.gz", "archive.tsv.bz2"), or a
 // directory, which is loaded recursively.
 //
-// A file becomes a table named after it, with the extensions dropped and
-// characters SQL cannot hold in a bare identifier replaced by underscores:
+// A file becomes a table named after it, with the extensions dropped:
 // "users.csv" and "data.tsv.gz" become "users" and "data", "user-data.csv"
-// becomes "user_data", and "my file.csv" becomes "my_file".
+// becomes "user_data", and "my file.csv" becomes "my_file". Whitespace, a
+// hyphen and a dot become an underscore and every other character an identifier
+// cannot hold is dropped, so "a!b.csv" becomes "ab"; the package documentation
+// states the rule in full.
 //
 // The context is for a load that has to time out or be canceled: a large file,
 // or a server that abandons the request.
@@ -79,20 +81,20 @@ func LoadInto(ctx context.Context, db *sql.DB, paths ...string) error {
 //
 // Basic usage:
 //
-//	err := filesql.DumpDatabase(db, "./output")
+//	err := filesql.DumpDatabase(ctx, db, "./output")
 //
 // This will save all tables as CSV files in the output directory.
 //
 // Advanced usage with options:
 //
 //	// Default: Export as CSV files
-//	err := DumpDatabase(db, "./output")
+//	err := DumpDatabase(ctx, db, "./output")
 //
 //	// Export as TSV files with gzip compression
 //	options := NewDumpOptions().
 //		WithFormat(OutputFormatTSV).
 //		WithCompression(CompressionGZ)
-//	err := DumpDatabase(db, "./output", options)
+//	err := DumpDatabase(ctx, db, "./output", options)
 //
 // A destination that already exists as a symbolic link is followed: the file it
 // names receives the rows and the link stays a link.

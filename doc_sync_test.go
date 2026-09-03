@@ -3,19 +3,25 @@ package filesql
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 const englishReadmePath = "README.md"
 
-func readReadme(t *testing.T, path string) string {
+func readReadme(t *testing.T) string {
 	t.Helper()
-	raw, err := os.ReadFile(path) //nolint:gosec // fixed, in-repo documentation path
+	raw, err := os.ReadFile(englishReadmePath)
 	if err != nil {
-		t.Fatalf("failed to read %s: %v", path, err)
+		t.Fatalf("failed to read %s: %v", englishReadmePath, err)
 	}
 	return string(raw)
 }
@@ -47,7 +53,7 @@ func TestEnglishReadmeHasRequiredSections(t *testing.T) {
 		"## License",
 	}
 
-	content := readReadme(t, englishReadmePath)
+	content := readReadme(t)
 	for _, section := range requiredSections {
 		if !strings.Contains(content, section) {
 			t.Errorf("%s is missing required section %q", englishReadmePath, section)
@@ -65,7 +71,7 @@ func TestEnglishReadmeHasStableMarkers(t *testing.T) {
 		"pkg.go.dev/github.com/nao1215/filesql",
 	}
 
-	content := readReadme(t, englishReadmePath)
+	content := readReadme(t)
 	for _, marker := range markers {
 		if !strings.Contains(content, marker) {
 			t.Errorf("%s is missing marker %q", englishReadmePath, marker)
@@ -85,7 +91,7 @@ func TestEnglishReadmeHasStableMarkers(t *testing.T) {
 func TestReadmeLeavesTheRulesToGodoc(t *testing.T) {
 	t.Parallel()
 
-	content := readReadme(t, englishReadmePath)
+	content := readReadme(t)
 
 	// Phrases that only a statement of behavior would carry. Each one was in
 	// README before the rules moved to godoc.
@@ -285,4 +291,451 @@ func latestReleasedSeries(changelog string) (string, bool) {
 		return major + "." + minor + ".x", true
 	}
 	return "", false
+}
+
+// moduleSignatures is what every exported function and method of this module
+// takes, keyed by "package.Name" and, for a method, "package.Receiver.Name".
+type moduleSignature struct {
+	params   int
+	variadic bool
+	takesCtx bool
+	// ambiguous marks a method name more than one type has, which a snippet
+	// naming a receiver this test does not resolve cannot be matched against.
+	ambiguous bool
+}
+
+// moduleDocs reads every non-test Go file of the module, returning the
+// signatures its packages export and every comment group in them.
+// moduleDoc is the module as the documentation tests read it.
+type moduleDoc struct {
+	// signatures is every exported function and method, keyed by
+	// "package.Name" and, for a method, "package.Receiver.Name".
+	signatures map[string]moduleSignature
+	// methods is every exported method by its own name, for the snippets that
+	// write a receiver before the dot.
+	methods map[string]moduleSignature
+	// comments is every comment group of each file, by path.
+	comments map[string][]*ast.CommentGroup
+	// exported is every name the module exports.
+	exported map[string]bool
+	// imports is the qualifiers each file's imports bind, by path.
+	imports map[string]map[string]bool
+	fset    *token.FileSet
+}
+
+// moduleDocs reads every non-test Go file of the module.
+func moduleDocs(t *testing.T) moduleDoc {
+	t.Helper()
+
+	signatures := map[string]moduleSignature{}
+	methods := map[string]moduleSignature{}
+	comments := map[string][]*ast.CommentGroup{}
+	imports := map[string]map[string]bool{}
+	exported := map[string]bool{}
+	fset := token.NewFileSet()
+
+	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "testdata", "examples", "doc":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		file, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if parseErr != nil {
+			return parseErr
+		}
+		pkg := file.Name.Name
+		comments[path] = file.Comments
+		imports[path] = importNames(file)
+		for _, decl := range file.Decls {
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if !d.Name.IsExported() {
+					continue
+				}
+				exported[d.Name.Name] = true
+				sig := moduleSignature{}
+				for i, field := range d.Type.Params.List {
+					n := max(len(field.Names), 1)
+					sig.params += n
+					if _, isVariadic := field.Type.(*ast.Ellipsis); isVariadic {
+						sig.variadic = true
+					}
+					if selector, ok := field.Type.(*ast.SelectorExpr); ok && i == 0 && selector.Sel.Name == "Context" {
+						sig.takesCtx = true
+					}
+				}
+				key := pkg + "." + d.Name.Name
+				if d.Recv != nil {
+					key = pkg + "." + receiverName(d.Recv.List[0].Type) + "." + d.Name.Name
+					// A snippet writes a receiver before the dot -- b.AddPath(p)
+					// -- so the method is looked up by its own name. A name two
+					// receivers share is left out rather than guessed at.
+					if _, taken := methods[d.Name.Name]; taken {
+						methods[d.Name.Name] = moduleSignature{ambiguous: true}
+					} else {
+						methods[d.Name.Name] = sig
+					}
+				}
+				signatures[key] = sig
+			case *ast.GenDecl:
+				for _, spec := range d.Specs {
+					switch s := spec.(type) {
+					case *ast.TypeSpec:
+						if s.Name.IsExported() {
+							exported[s.Name.Name] = true
+						}
+					case *ast.ValueSpec:
+						for _, name := range s.Names {
+							if name.IsExported() {
+								exported[name.Name] = true
+							}
+						}
+					}
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("failed to read the module: %v", err)
+	}
+	return moduleDoc{
+		signatures: signatures,
+		methods:    methods,
+		comments:   comments,
+		exported:   exported,
+		imports:    imports,
+		fset:       fset,
+	}
+}
+
+// importNames is the qualifiers a file's imports bind, so a call written
+// os.Open is known to name another package rather than a method on a receiver
+// named os. A doc comment may also name a package the file does not import --
+// the snippets show a caller's code -- so a few common ones are added.
+func importNames(file *ast.File) map[string]bool {
+	names := map[string]bool{
+		"os": true, "sql": true, "http": true, "context": true, "fmt": true,
+		"log": true, "strings": true, "bytes": true, "time": true, "json": true,
+	}
+	for _, spec := range file.Imports {
+		path := strings.Trim(spec.Path.Value, `"`)
+		name := path
+		if at := strings.LastIndex(path, "/"); at >= 0 {
+			name = path[at+1:]
+		}
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		names[name] = true
+	}
+	return names
+}
+
+// receiverName is the type a method hangs off, without the pointer.
+func receiverName(expr ast.Expr) string {
+	if star, ok := expr.(*ast.StarExpr); ok {
+		return receiverName(star.X)
+	}
+	if ident, ok := expr.(*ast.Ident); ok {
+		return ident.Name
+	}
+	return ""
+}
+
+// TestDocCommentSnippetsCompile holds the code inside the documentation to the
+// signatures the module exports. A snippet is what a reader copies out of
+// pkg.go.dev, so one that names fewer arguments than the function takes, or
+// passes something that is not a context where a context goes, is documentation
+// that cannot be run -- and nothing else checks it, which is how six snippets
+// went on calling Open and DumpDatabase without the context they took on.
+func TestDocCommentSnippetsCompile(t *testing.T) {
+	t.Parallel()
+
+	module := moduleDocs(t)
+
+	for path, groups := range module.comments {
+		pkg := filepath.Base(filepath.Dir(path))
+		if pkg == "." || pkg == "filesql" {
+			pkg = "filesql"
+		}
+		for _, group := range groups {
+			for _, comment := range group.List {
+				text, isLine := strings.CutPrefix(comment.Text, "//")
+				if !isLine || !strings.HasPrefix(text, "\t") {
+					continue
+				}
+				line := strings.TrimSpace(text)
+				for _, call := range docCommentCalls(line) {
+					name, qualifier := call.name, ""
+					if at := strings.LastIndex(name, "."); at >= 0 {
+						qualifier, name = name[:at], name[at+1:]
+					}
+					if qualifier != "" && qualifier != pkg && module.imports[path][qualifier] {
+						// Another package's call, whose signature this module
+						// does not have.
+						continue
+					}
+					sig, known := module.signatures[pkg+"."+name]
+					if !known {
+						// A method, which a snippet writes with a receiver
+						// before the dot or with none at all, and which is
+						// looked up by its own name.
+						sig, known = module.methods[name]
+						if sig.ambiguous {
+							continue
+						}
+					}
+					if !known {
+						continue
+					}
+					least := sig.params
+					if sig.variadic {
+						least--
+					}
+					where := module.fset.Position(comment.Pos())
+					if call.args < least {
+						t.Errorf("%s: %q calls %s with %d arguments; it takes %d",
+							where, line, call.name, call.args, sig.params)
+						continue
+					}
+					if sig.takesCtx && call.first != "" && !looksLikeContext(call.first) {
+						t.Errorf("%s: %q passes %s where %s takes a context.Context",
+							where, line, call.first, call.name)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestDocCommentsNameNothingRemoved holds the documentation to the names the
+// module still exports. A doc comment that sends a reader to a symbol removed
+// two releases ago -- EnableAutoSave pointed at Build for years after it went
+// -- costs the reader the search before they conclude it is gone.
+func TestDocCommentsNameNothingRemoved(t *testing.T) {
+	t.Parallel()
+
+	module := moduleDocs(t)
+
+	// The names a doc comment may spell that this module no longer has. Each
+	// was exported once and removed, so a reader meeting one in prose has no
+	// way to tell it from a name they simply have not found yet.
+	removed := []string{
+		"Build", "OpenContext", "DumpDatabaseContext",
+		"DumpACHWithTableSet", "DumpFedWireWithTableSet",
+		"NewCompressionHandler", "CompressionFactory", "NewCompressionFactory",
+		"ErrEmptyJSONOutput", "NewReadOnlyDB",
+	}
+	for _, name := range removed {
+		if module.exported[name] {
+			continue // Still here, so a mention of it is correct.
+		}
+		for path, groups := range module.comments {
+			for _, group := range groups {
+				for _, comment := range group.List {
+					if !mentionsIdentifier(comment.Text, name) {
+						continue
+					}
+					t.Errorf("%s: the documentation names %s, which this module no longer exports: %q",
+						module.fset.Position(comment.Pos()), name, strings.TrimSpace(comment.Text))
+				}
+			}
+			_ = path
+		}
+	}
+}
+
+// mentionsIdentifier reports whether text names an identifier as a word rather
+// than as part of a longer one, so "Build" is found in "refused by Build" and
+// not in "Builder".
+//
+// A comment whose own text opens with the word is using it as a verb -- "Build
+// index mapping for quick lookup" -- rather than naming a symbol, so that one
+// is passed over. The cost is a reference that begins a comment and the gain is
+// that the check can be run over prose at all.
+func mentionsIdentifier(text, name string) bool {
+	body := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(text, "//"), "/*"))
+	if strings.HasPrefix(body, name+" ") {
+		return false
+	}
+	for at := 0; ; {
+		found := strings.Index(text[at:], name)
+		if found < 0 {
+			return false
+		}
+		start := at + found
+		end := start + len(name)
+		beforeOK := start == 0 || !isDocIdentifierByte(text[start-1])
+		afterOK := end == len(text) || !isDocIdentifierByte(text[end])
+		if beforeOK && afterOK {
+			return true
+		}
+		at = start + 1
+	}
+}
+
+func isDocIdentifierByte(c byte) bool {
+	return c == '_' || c == '.' ||
+		(c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// docCommentCall is one call found in a line of a documentation code block.
+type docCommentCall struct {
+	name  string
+	args  int
+	first string
+}
+
+// docCommentCalls finds the calls in one line of a code block, counting the
+// commas that are not inside a nested call, a bracket or a string.
+func docCommentCalls(line string) []docCommentCall {
+	var found []docCommentCall
+	for i := range len(line) {
+		if line[i] != '(' {
+			continue
+		}
+		start := i
+		for start > 0 && isDocIdentifierByte(line[start-1]) {
+			start--
+		}
+		name := line[start:i]
+		if name == "" || (name[0] >= '0' && name[0] <= '9') {
+			continue
+		}
+		args, end := countCallArguments(line[i:])
+		if end < 0 {
+			continue
+		}
+		first := ""
+		if args > 0 {
+			body := line[i+1 : i+end]
+			if comma := strings.IndexByte(body, ','); comma >= 0 {
+				body = body[:comma]
+			}
+			first = strings.TrimSpace(body)
+		}
+		found = append(found, docCommentCall{name: name, args: args, first: first})
+	}
+	return found
+}
+
+// countCallArguments answers how many arguments a call written from s takes and
+// where its closing parenthesis is, or -1 when the line does not hold one.
+func countCallArguments(s string) (int, int) {
+	depth, args := 0, 0
+	holding := false
+	var quote byte
+	for i := range len(s) {
+		c := s[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '"', '\'', '`':
+			quote, holding = c, true
+		case '(', '[', '{':
+			depth++
+			if depth > 1 {
+				holding = true
+			}
+		case ')', ']', '}':
+			depth--
+			if depth == 0 {
+				if holding {
+					args++
+				}
+				return args, i
+			}
+		case ',':
+			if depth == 1 {
+				args++
+				holding = false
+			}
+		default:
+			if c != ' ' && c != '\t' {
+				holding = true
+			}
+		}
+	}
+	return 0, -1
+}
+
+// looksLikeContext reports whether an argument as it is spelled in a snippet is
+// a context.
+func looksLikeContext(arg string) bool {
+	switch arg {
+	case "ctx", "context.Background()", "context.TODO()", "t.Context()":
+		return true
+	}
+	return strings.HasPrefix(arg, "ctx")
+}
+
+// TestReadmeLinksResolve holds README's own links to what the repository has. A
+// link to a heading is checked against the headings the file holds, derived the
+// way GitHub derives an anchor, and a link to a file against the file. Three
+// links in the format table pointed at sections that had moved to the godoc,
+// and nothing said so because a dead anchor scrolls nowhere rather than
+// failing.
+func TestReadmeLinksResolve(t *testing.T) {
+	t.Parallel()
+
+	readme := readReadme(t)
+
+	anchors := map[string]bool{}
+	for line := range strings.Lines(readme) {
+		heading, found := strings.CutPrefix(strings.TrimSpace(line), "#")
+		if !found {
+			continue
+		}
+		heading = strings.TrimLeft(heading, "#")
+		anchors[githubAnchor(strings.TrimSpace(heading))] = true
+	}
+
+	link := regexp.MustCompile(`\[[^\]]*\]\(([^)]+)\)`)
+	for _, match := range link.FindAllStringSubmatch(readme, -1) {
+		target := match[1]
+		switch {
+		case strings.HasPrefix(target, "http://"), strings.HasPrefix(target, "https://"),
+			strings.HasPrefix(target, "mailto:"):
+			// Somewhere else, which this test does not reach for.
+		case strings.HasPrefix(target, "#"):
+			if !anchors[strings.TrimPrefix(target, "#")] {
+				t.Errorf("README links to %q and no heading of the file makes that anchor", target)
+			}
+		default:
+			path, _, _ := strings.Cut(target, "#")
+			if _, err := os.Stat(path); err != nil {
+				t.Errorf("README links to %q, which is not in the repository", target)
+			}
+		}
+	}
+}
+
+// githubAnchor is the anchor GitHub derives from a heading: lower case, spaces
+// as hyphens, and everything that is not a letter, a digit, a hyphen or an
+// underscore dropped.
+func githubAnchor(heading string) string {
+	var anchor strings.Builder
+	for _, r := range strings.ToLower(heading) {
+		switch {
+		case r == ' ':
+			anchor.WriteByte('-')
+		case r == '-' || r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r):
+			anchor.WriteRune(r)
+		}
+	}
+	return anchor.String()
 }

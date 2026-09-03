@@ -68,8 +68,8 @@
 // triggers, databases), and the DDL that changes a column's type. A value or a
 // clause SQLite has no form for is refused the same way and by name: DEFAULT
 // standing where a value goes, since SQLite has no way to write a column's own
-// default into a row; AT TIME ZONE and a timestamp typed WITH TIME ZONE, since
-// SQLite keeps no zone with a timestamp; AND CHAIN on a COMMIT or a ROLLBACK;
+// default into a row; AT TIME ZONE, since it converts between zones and SQLite
+// keeps no zone with a timestamp; AND CHAIN on a COMMIT or a ROLLBACK;
 // INHERITS on a CREATE TABLE; the LIKE that copies a table, in either
 // dialect's spelling of it; and an ORDER BY or a LIMIT on an UPDATE or a
 // DELETE, since the SQLite build behind this package takes neither there. An
@@ -95,13 +95,24 @@
 // # Functions a dialect has and SQLite has not
 //
 // A function is translated where SQLite has a form for it and refused by name
-// where it has none, and never handed to SQLite under a name only the source
+// where it has none, rather than handed to SQLite under a name only the source
 // dialect knows: "no such function" tells a caller that a name they did write
 // does not exist, which is a worse answer than saying the construct has no
-// SQLite form. What is refused is a result that is an array or a range, a JSON operation
-// SQLite's own functions have no shape for, an encoding conversion where SQLite
-// holds only UTF-8, a geography, a fact about the connection or the server, a
-// value that is not the same twice, and an effect rather than a value.
+// SQLite form. What is refused is a result that is an array or a range, a JSON
+// operation SQLite's own functions have no shape for, an encoding conversion
+// where SQLite holds only UTF-8, a geography, a fact about the connection or
+// the server -- in the parenthesized spelling and in the bare one the standard
+// writes without parentheses -- and an effect rather than a value. A value that
+// is not the same twice is answered where SQLite has a form for it -- RAND,
+// random and GENERATE_UUID -- and refused where it has none, as RANDOM_BYTES,
+// UUID, UUID_SHORT and RANDOM_NORMAL are.
+//
+// The names with neither a translation nor a refusal are written down rather
+// than left to be discovered: dialect/testdata/untranslated_postgresql.txt
+// lists the PostgreSQL functions that still reach SQLite, and a test fails both
+// when a name joins them and when a name in it gains an answer, so the list can
+// only shrink. MySQL has no name left without an answer among the names its own
+// help tables report.
 //
 // A name SQLite itself provides still reaches SQLite under every dialect: what
 // is refused is the names one engine has and SQLite has not, rather than every
@@ -432,9 +443,10 @@
 // whenever a month lands on a month end. an array
 // literal and the set-returning functions are refused for the same reason; and
 // the functions whose answer is one of those types -- PostgreSQL's
-// REGEXP_MATCH, SCALE and TRIM_SCALE, and BigQuery's ARRAY_AGG,
-// APPROX_QUANTILES and the rest of its array-returning aggregates -- are not
-// implemented, since there would be no value to return. The two that build an
+// REGEXP_MATCH and REGEXP_MATCHES, and BigQuery's ARRAY_AGG, APPROX_QUANTILES
+// and the rest of its array-returning aggregates -- are not implemented, since
+// there would be no value to return. SCALE and TRIM_SCALE answer a number
+// rather than an array and are implemented. The two that build an
 // interval, AGE and MAKE_INTERVAL, answer the text PostgreSQL prints for one,
 // which is a value a caller can read even though nothing can compute with it;
 // JUSTIFY_DAYS and its siblings take an interval rather than answering one, so

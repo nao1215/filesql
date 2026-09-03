@@ -50,7 +50,7 @@ type DBBuilder struct {
 	// list, so a second build derives them again rather than adding a second
 	// copy to what the first one left behind.
 	derivedReaders []readerInput
-	// collectedPaths contains all paths after Build validation
+	// collectedPaths contains all paths the validation collected
 	collectedPaths []string
 	// autoSaveConfig contains auto-save settings
 	autoSaveConfig *autoSaveConfig
@@ -173,7 +173,7 @@ func (b *DBBuilder) changed() *DBBuilder {
 // Examples:
 //   - Single file: AddPath("users.csv")
 //   - Compressed: AddPath("data.tsv.gz")
-//   - Directory: AddPath("/data/") // loads all CSV/TSV/LTSV files
+//   - Directory: AddPath("/data/") // loads every file it holds this package reads
 //
 // Returns self for chaining.
 func (b *DBBuilder) AddPath(path string) *DBBuilder {
@@ -241,8 +241,8 @@ func (b *DBBuilder) SetDefaultChunkSize(size int) *DBBuilder {
 	if size > 0 {
 		b.defaultChunkSize = size
 		// The processor is what reads in chunks, and it was built with the
-		// default before this call. Leaving it to Build would make the option
-		// depend on being set before the build, which no other option does.
+		// default before this call. Leaving it to the validation would make the
+		// option depend on the order it was set in, which no other option does.
 		b.streamProcessor.setChunkSize(size)
 	}
 	return b.changed()
@@ -322,7 +322,8 @@ func (b *DBBuilder) WithLogger(logger *slog.Logger) *DBBuilder {
 
 // AddFS adds files from an embedded filesystem (go:embed).
 //
-// Automatically finds all CSV, TSV, and LTSV files in the filesystem.
+// Every file the filesystem holds in a format this package reads is found; the
+// package documentation names them.
 //
 // Example:
 //
@@ -362,8 +363,8 @@ func (b *DBBuilder) AddFS(filesystem fs.FS) *DBBuilder {
 // during the session has no file to be written back to and is left unsaved, so
 // pass an output directory when you want everything in the database on disk. A
 // source this package reads but cannot write back, by its format (JSON, JSONL)
-// or by its compression (bzip2), is refused by Build rather than written as
-// something else.
+// or by its compression (bzip2), is refused when the builder opens rather than
+// written as something else.
 //
 // A workbook is written onto the file it replaces: only the cells whose value
 // changed are rewritten, so formulas, dates, styles and the sheets no table was

@@ -3,6 +3,7 @@ package filesql
 import (
 	"errors"
 
+	"github.com/nao1215/filesql/internal/reader"
 	"github.com/nao1215/filesql/internal/textin"
 )
 
@@ -25,7 +26,7 @@ var (
 	ErrFileNotFound = errors.New("filesql: file not found")
 
 	// ErrDuplicateColumn indicates duplicate column names in the data source.
-	ErrDuplicateColumn = errors.New("filesql: duplicate column name")
+	ErrDuplicateColumn = reader.ErrDuplicateColumn
 
 	// ErrInvalidUTF8 indicates a text source that is not valid UTF-8. SQLite
 	// stores TEXT as UTF-8, so such bytes would be stored verbatim and read back

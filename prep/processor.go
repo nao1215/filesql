@@ -31,7 +31,7 @@ type Option func(*Processor)
 //
 // Example:
 //
-//	processor := prep.NewProcessor(parser.CSV, prep.WithStrictTagParsing())
+//	processor := prep.NewProcessor(prep.FileTypeCSV, prep.WithStrictTagParsing())
 func WithStrictTagParsing() Option {
 	return func(p *Processor) {
 		p.strictTagParsing = true
@@ -45,7 +45,7 @@ func WithStrictTagParsing() Option {
 //
 // Example:
 //
-//	processor := prep.NewProcessor(parser.CSV, prep.WithValidRowsOnly())
+//	processor := prep.NewProcessor(prep.FileTypeCSV, prep.WithValidRowsOnly())
 //	reader, result, err := processor.Process(input, &records)
 //	// reader contains only rows that passed all validations
 //	// result.RowCount includes all rows, result.ValidRowCount has valid count
@@ -61,12 +61,12 @@ func WithValidRowsOnly() Option {
 //
 // Example:
 //
-//	processor := prep.NewProcessor(parser.CSV)
+//	processor := prep.NewProcessor(prep.FileTypeCSV)
 //	var records []MyRecord
 //	reader, result, err := processor.Process(input, &records)
 //
 //	// With options:
-//	processor := prep.NewProcessor(parser.CSV,
+//	processor := prep.NewProcessor(prep.FileTypeCSV,
 //	    prep.WithStrictTagParsing(),
 //	    prep.WithValidRowsOnly(),
 //	)
@@ -129,7 +129,7 @@ func NewProcessor(fileType FileType, opts ...Option) *Processor {
 //	}
 //
 //	csvData := "name,email,age\n  John  ,JOHN@EXAMPLE.COM,30\n"
-//	processor := prep.NewProcessor(parser.CSV)
+//	processor := prep.NewProcessor(prep.FileTypeCSV)
 //	var users []User
 //	reader, result, err := processor.Process(strings.NewReader(csvData), &users)
 //	if err != nil {

@@ -71,9 +71,10 @@ never sees it and has nothing to check in front. The footer length, which is the
 other number a Parquet file declares, *is* read and bounded before the bytes are
 handed over.
 
-This is tracked as [#526](https://github.com/nao1215/filesql/issues/526) and is
-open. It is not fixed, and forking the decoder or writing an unvetted one of our
-own would trade a bounded, known cost for an unbounded, unknown one.
+This was investigated as [#526](https://github.com/nao1215/filesql/issues/526).
+It is not fixed: the allocation is inside the decoder this project depends on,
+and forking it or writing an unvetted one of our own would trade a bounded,
+known cost for an unbounded, unknown one.
 
 **Do not point a memory-constrained process at Parquet files you did not
 write.** Where you must, bound the process rather than the file: a memory limit

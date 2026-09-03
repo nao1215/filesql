@@ -1,6 +1,7 @@
 package filesql
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -323,6 +324,59 @@ func TestXLSXSheetTableName(t *testing.T) {
 			t.Parallel()
 
 			assert.Equal(t, tt.expected, xlsxSheetTableName(tt.base, tt.sheet))
+		})
+	}
+}
+
+// TestTableNameFollowsTheDocumentedRule holds the table a file becomes to the
+// rule doc.go states, one case per class of character the rule distinguishes.
+// Open's own godoc said the characters an identifier cannot hold are replaced
+// by underscores, and they are dropped: a caller who believed it wrote FROM a_b
+// for a file named a!b.csv and met "no such table".
+func TestTableNameFollowsTheDocumentedRule(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		file string
+		want string
+	}{
+		{"users.csv", "users"},
+		{"user-data.csv", "user_data"},
+		{"my file.csv", "my_file"},
+		{"a.b.csv", "a_b"},
+		{"売上 2026.csv", "売上_2026"},
+		// Every other character an identifier cannot hold is dropped.
+		{"a!b.csv", "ab"},
+		{"a@b.csv", "ab"},
+		{"a(b).csv", "ab"},
+		{"a+b.csv", "ab"},
+		{"a%b.csv", "ab"},
+		// The two names that cannot be written as an identifier at all.
+		{"2024.csv", "sheet_2024"},
+		{"!!.csv", "sheet"},
+	} {
+		t.Run(tt.file, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			path := filepath.Join(dir, tt.file)
+			if err := os.WriteFile(path, []byte("v\n1\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			db, err := Open(t.Context(), path)
+			if err != nil {
+				t.Fatalf("load %s: %v", tt.file, err)
+			}
+			defer func() { _ = db.Close() }()
+
+			var name string
+			if err := db.QueryRowContext(t.Context(),
+				`SELECT name FROM sqlite_master WHERE type='table' LIMIT 1`).Scan(&name); err != nil {
+				t.Fatal(err)
+			}
+			if name != tt.want {
+				t.Errorf("%s loads as table %q, want %q", tt.file, name, tt.want)
+			}
 		})
 	}
 }
