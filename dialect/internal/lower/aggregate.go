@@ -420,7 +420,7 @@ func checkGroupedSelect(d dialects.Dialect, n *ast.SelectCore) error {
 		if _, isStar := item.Expr.(*ast.Star); isStar {
 			return nil
 		}
-		if call, ok := item.Expr.(*ast.FuncCall); ok && isAggregateCall(d, call) {
+		if holdsAggregate(d, item.Expr) {
 			aggregated = true
 		}
 	}
@@ -448,6 +448,71 @@ func checkGroupedSelect(d dialects.Dialect, n *ast.SelectCore) error {
 			columnText(ref), d)
 	}
 	return nil
+}
+
+// holdsAggregate reports whether e aggregates rows anywhere inside it, which is
+// what makes a select list an aggregate query even when no item is an aggregate
+// on its own: COALESCE(SUM(a), 0) counts. It does not descend into a subquery,
+// whose aggregates belong to that query rather than to this one, and it names
+// the node kinds an expression is built from rather than walking every field of
+// every one -- a kind it does not know answers false, which leaves the query
+// answered as it was before rather than refused.
+func holdsAggregate(d dialects.Dialect, e ast.Expr) bool {
+	switch n := e.(type) {
+	case *ast.FuncCall:
+		if isAggregateCall(d, n) {
+			return true
+		}
+		for _, arg := range n.Args {
+			if holdsAggregate(d, arg) {
+				return true
+			}
+		}
+		return n.Filter != nil && holdsAggregate(d, n.Filter)
+	case *ast.BinaryExpr:
+		return holdsAggregate(d, n.Left) || holdsAggregate(d, n.Right)
+	case *ast.UnaryExpr:
+		return holdsAggregate(d, n.Expr)
+	case *ast.ParenExpr:
+		return holdsAggregate(d, n.Expr)
+	case *ast.CastExpr:
+		return holdsAggregate(d, n.Expr)
+	case *ast.CollateExpr:
+		return holdsAggregate(d, n.Expr)
+	case *ast.IsExpr:
+		return holdsAggregate(d, n.Expr)
+	case *ast.BetweenExpr:
+		return holdsAggregate(d, n.Expr) || holdsAggregate(d, n.Low) || holdsAggregate(d, n.High)
+	case *ast.InExpr:
+		if holdsAggregate(d, n.Expr) {
+			return true
+		}
+		for _, item := range n.List {
+			if holdsAggregate(d, item) {
+				return true
+			}
+		}
+		return false
+	case *ast.CaseExpr:
+		if n.Operand != nil && holdsAggregate(d, n.Operand) {
+			return true
+		}
+		for _, when := range n.Whens {
+			if holdsAggregate(d, when.Cond) || holdsAggregate(d, when.Result) {
+				return true
+			}
+		}
+		return n.Else != nil && holdsAggregate(d, n.Else)
+	case *ast.RowExpr:
+		for _, item := range n.Exprs {
+			if holdsAggregate(d, item) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
 }
 
 // columnKey is what two column references are compared by, which is the column

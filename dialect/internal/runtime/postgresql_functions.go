@@ -706,7 +706,9 @@ var (
 	errLogNegative  = errors.New("dialect: cannot take logarithm of a negative number")
 	errZeroNegPow   = errors.New("dialect: zero raised to a negative power is undefined")
 	errOverflow     = errors.New("dialect: value out of range: overflow")
+	errUnderflow    = errors.New("dialect: value out of range: underflow")
 	errOutOfRange   = errors.New("dialect: input is out of range")
+	errComplexPower = errors.New("dialect: a negative number raised to a non-integer power yields a complex result")
 )
 
 // pgFloatFn builds a helper from a function of one float that may refuse its
@@ -759,6 +761,12 @@ func fnPostgresExp(x float64) (float64, error) {
 	if math.IsInf(out, 0) {
 		return 0, errOverflow
 	}
+	// The exponential of a finite number is never zero, so a zero here is a
+	// result too small for a double. PostgreSQL 17 says so rather than
+	// answering the zero: EXP(-1000) is "value out of range: underflow".
+	if out == 0 && !math.IsInf(x, 0) {
+		return 0, errUnderflow
+	}
 	return out, nil
 }
 
@@ -766,8 +774,10 @@ func fnPostgresExp(x float64) (float64, error) {
 // the logarithm of the second in the base of the first.
 func fnPostgresLog(args []driver.Value) (driver.Value, error) {
 	log10 := pgLogarithm(math.Log10)
-	if len(args) == 0 {
-		return nil, nil
+	// PostgreSQL has LOG(x) and LOG(base, x) and nothing else, and answers
+	// that it has no such function for any other count.
+	if len(args) == 0 || len(args) > 2 {
+		return nil, fmt.Errorf("dialect: LOG takes one argument or two, got %d", len(args))
 	}
 	if len(args) == 1 {
 		x, ok := toFloat(args[0])
@@ -810,9 +820,20 @@ func fnPostgresPower(args []driver.Value) (driver.Value, error) {
 	if base == 0 && exponent < 0 {
 		return nil, errZeroNegPow
 	}
+	// A negative base raised to a fraction has no real answer, and PostgreSQL
+	// says that rather than answering the NaN math.Pow gives.
+	if base < 0 && exponent != math.Trunc(exponent) {
+		return nil, errComplexPower
+	}
 	out := math.Pow(base, exponent)
 	if math.IsInf(out, 0) {
 		return nil, errOverflow
+	}
+	// A zero from a base that is not zero is a result too small for a double.
+	// PostgreSQL 17 refuses that as it refuses the overflow: POWER(1e-300, 2)
+	// is "value out of range: underflow" there and 0 in MySQL.
+	if out == 0 && base != 0 {
+		return nil, errUnderflow
 	}
 	return out, nil
 }

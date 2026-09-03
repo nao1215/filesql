@@ -2427,6 +2427,9 @@ func TestAnAggregateQuerySelectsWhatItGroups(t *testing.T) {
 			"SELECT a, max(b) FROM g",
 			"SELECT g.a, count(*) FROM g GROUP BY b",
 			"SELECT a, count(*) FROM g GROUP BY 2",
+			"SELECT COALESCE(sum(a), 0), b FROM g",
+			"SELECT sum(a) + 1, b FROM g",
+			"SELECT CASE WHEN count(*) > 0 THEN 1 ELSE 0 END, b FROM g",
 		} {
 			t.Run(query, func(t *testing.T) {
 				t.Parallel()
@@ -2470,4 +2473,56 @@ func TestAnAggregateQuerySelectsWhatItGroups(t *testing.T) {
 			})
 		}
 	})
+}
+
+// TestPostgreSQLRefusesAResultTooSmallForADouble holds the PostgreSQL helpers
+// to what PostgreSQL 17 answers at the small end of a double and for a power
+// with no real answer, both of which SQLite answers with a number.
+func TestPostgreSQLRefusesAResultTooSmallForADouble(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, RegisterFunctions())
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	for _, tt := range []struct {
+		expr string
+		want string
+	}{
+		{"exp(-1000)", "underflow"},
+		{"power(1e-300, 2)", "underflow"},
+		{"power(-1, 0.5)", "complex result"},
+		{"power(-8, 1.5)", "complex result"},
+		{"log(1, 2, 3)", "LOG takes one argument or two"},
+	} {
+		t.Run(tt.expr, func(t *testing.T) {
+			t.Parallel()
+
+			translated, err := Translate(PostgreSQL, "SELECT "+tt.expr)
+			require.NoError(t, err)
+			var v any
+			err = db.QueryRowContext(t.Context(), translated).Scan(&v)
+			require.Errorf(t, err, "%s answered %v", tt.expr, v)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+
+	// The values PostgreSQL 17 answers at the same edges.
+	for _, tt := range []struct {
+		expr string
+		want float64
+	}{
+		{"power(0, 5)", 0},
+		{"power(0, 0)", 1},
+		{"power(-8, 3)", -512},
+		{"exp(1e-300)", 1},
+		{"power(2, -1074)", 5e-324},
+	} {
+		translated, err := Translate(PostgreSQL, "SELECT "+tt.expr)
+		require.NoError(t, err)
+		var got float64
+		require.NoErrorf(t, db.QueryRowContext(t.Context(), translated).Scan(&got), "%s", tt.expr)
+		assert.InDeltaf(t, tt.want, got, 1e-9, "%s", tt.expr)
+	}
 }

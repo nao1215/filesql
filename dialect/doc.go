@@ -338,8 +338,7 @@
 // either case, and each is routed to a helper that does. The operators are left
 // alone: "=", IN, BETWEEN, CASE, IF, ORDER BY, DISTINCT and GROUP BY compare
 // inside the engine, so under the MySQL dialect they compare the way SQLite
-// does. 'abc' = 'ABC' is false here and true in MySQL, and so is 'a' = 'a ',
-// since that collation ignores a trailing space as well. Reaching them is not
+// does, and 'abc' = 'ABC' is false here and true in MySQL. Reaching them is not
 // the difficulty -- the tree holds every one of them -- the cost is: a helper
 // call for each row costs about two and a half times the query, measured
 // against SQLite's own operators over two hundred thousand rows, and a
