@@ -119,7 +119,7 @@ func TestMySQLTranslate(t *testing.T) {
 		{"M-9_rlike", "SELECT * FROM t WHERE name RLIKE '^a'", "SELECT * FROM t WHERE mysql_regexp('^a', name)"},
 		{"M-9_not_rlike", "SELECT * FROM t WHERE name NOT RLIKE '^a'", "SELECT * FROM t WHERE NOT mysql_regexp('^a', name)"},
 		{"M-30_regexp", "SELECT * FROM t WHERE name REGEXP '^a'", "SELECT * FROM t WHERE mysql_regexp('^a', name)"},
-		{"M-30_regexp_call_form_untouched", "SELECT REGEXP('^a', name) FROM t", "SELECT REGEXP('^a', name) FROM t"},
+		{"M-30_regexp_call_form_untouched", "SELECT REGEXP('^a', name) FROM t", "SELECT \"REGEXP\"('^a', name) FROM t"},
 		{"M-30_quote", "SELECT QUOTE(a) FROM t", `SELECT mysql_quote(a) AS "QUOTE(a)" FROM t`},
 		{"M-30_ascii", "SELECT ASCII(a) FROM t", `SELECT mysql_ascii(a) AS "ASCII(a)" FROM t`},
 		// M-22: LIKE routes through the helper that folds case the way MySQL's

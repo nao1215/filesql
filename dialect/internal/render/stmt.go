@@ -476,6 +476,13 @@ func (w *writer) join(n *ast.JoinTable) error {
 }
 
 func (w *writer) tableName(n *ast.TableName) error {
+	// SQLite names a table by "schema.table" and no further, so the three
+	// parts BigQuery writes as project.dataset.table are SQL it cannot read.
+	// Rendering them anyway answered with a syntax error about a dot the
+	// caller did write but this package could not carry.
+	if len(n.Parts) > 2 {
+		return unsupported(n.Span, "a table name of more than two parts")
+	}
 	for i, part := range n.Parts {
 		if i > 0 {
 			w.dot()
