@@ -205,7 +205,7 @@ func (r *googleRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		}
 		return instr, nil
 	case "LEFT", "RIGHT", "REPEAT", fnNameLpad, fnNameRpad,
-		"MOD", "INSTR", "SOUNDEX", "MD5", "SHA1", typeNameDate, typeNameDatetime, typeNameTime,
+		"MOD", fnNameInstr, "SOUNDEX", "MD5", "SHA1", typeNameDate, typeNameDatetime, typeNameTime,
 		typeNameTimestamp:
 		// Each raises where SQLite answers NULL, or builds a value from fields
 		// SQLite's own function of that name does not take.

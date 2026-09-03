@@ -3,11 +3,16 @@ package dialect
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/nao1215/filesql/dialect/internal/dialects"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
 
@@ -2090,4 +2095,81 @@ func TestGoogleSQLBytesLiteralRefusesAnOctalPastAByte(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestATranslationPreparesOrNamesWhatTheCallerWrote holds every translation to
+// the one thing SQLite has to be able to do with it, and every failure to
+// naming what the caller wrote.
+//
+// The refusal tables are swept for "translated or refused by name"; this asks
+// the next question. A call renamed onto a SQLite builtin used to reach the
+// engine unchecked, so CHAR_LENGTH() failed as "wrong number of arguments to
+// function length()", about a function nowhere in the caller's query -- the
+// outcome dialect/doc.go says the arity check exists to prevent.
+func TestATranslationPreparesOrNamesWhatTheCallerWrote(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, RegisterFunctions())
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE t (a TEXT, b INTEGER, c REAL)`)
+	require.NoError(t, err)
+
+	// Argument counts a caller might write, including the wrong ones, which is
+	// where the name in the refusal matters.
+	argLists := []string{"", "'x'", "'x', 'y'", "'x', 'y', 'z'", "1", "1, 2", "1, 2, 3"}
+
+	for _, tt := range []struct {
+		dialect Dialect
+		list    string
+	}{
+		{MySQL, filepath.Join("testdata", "engine_functions_mysql.txt")},
+		{PostgreSQL, filepath.Join("testdata", "engine_functions_postgresql.txt")},
+	} {
+		names := engineFunctionNames(t, tt.list)
+		require.NotEmpty(t, names, "the name list is what this runs over")
+		for _, name := range names {
+			for _, args := range argLists {
+				query := fmt.Sprintf("SELECT %s(%s) FROM t", name, args)
+				translated, translateErr := Translate(tt.dialect, query)
+				if translateErr != nil {
+					continue // Refused by name, which the sweep already covers.
+				}
+				stmt, prepErr := db.PrepareContext(t.Context(), translated)
+				if prepErr == nil {
+					_ = stmt.Close()
+					continue
+				}
+				// A name with no answer is written down in the debt file, and
+				// SQLite saying so is what that file records.
+				if strings.Contains(prepErr.Error(), "no such function") {
+					continue
+				}
+				// Anything else has to be about the caller's own spelling.
+				assert.Containsf(t, strings.ToUpper(prepErr.Error()), strings.ToUpper(name),
+					"%s: %s became %q and SQLite refused it without naming %s: %v",
+					tt.dialect, query, translated, name, prepErr)
+			}
+		}
+	}
+}
+
+// engineFunctionNames reads a list of an engine's function names out of the
+// testdata the refusal sweep already keeps.
+func engineFunctionNames(t *testing.T, path string) []string {
+	t.Helper()
+
+	body, err := os.ReadFile(path) //nolint:gosec // fixed, in-repo testdata path
+	require.NoError(t, err)
+
+	var names []string
+	for line := range strings.Lines(string(body)) {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		names = append(names, line)
+	}
+	return names
 }

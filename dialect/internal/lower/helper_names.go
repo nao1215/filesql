@@ -347,10 +347,40 @@ var helperArity = map[string]int{ //nolint:gochecknoglobals // a generated table
 // number of arguments while the aggregates of those names take one, so the
 // count is answered where the aggregate rules rename, which is the only place
 // that knows which of the two it is producing.
+// builtinArity is how many arguments SQLite's own functions take, for the names
+// a lowering renames a call onto. Without an entry the count is unchecked, and
+// SQLite then answers about the name it was given rather than the one the
+// caller wrote: CHAR_LENGTH() became length() and the refusal said "wrong
+// number of arguments to function length()", about a function nowhere in the
+// query. The counts are what SQLite accepts, measured against it rather than
+// read off the documentation.
+//
+// A variadic name is listed with no counts, which says it takes any: the
+// listing is what TestEveryRenameTargetHasAnArity reads, so a name added to a
+// lowering has to be given an answer here even when the answer is "any".
 var builtinArity = map[string][]int{ //nolint:gochecknoglobals // a fixed table
-	"trim":              {1, 2},
-	"octet_length":      {1},
+	"COUNT":             {0, 1},
+	"INSTR":             {2},
+	"atan2":             {2},
+	"group_concat":      {1, 2},
+	"json":              {1},
 	"json_array_length": {1, 2},
+	"json_patch":        {2},
+	"json_quote":        {1},
+	"length":            {1},
+	"ln":                {1},
+	"log":               {1, 2},
+	"ltrim":             {1, 2},
+	"octet_length":      {1},
+	"rtrim":             {1, 2},
+	"trim":              {1, 2},
+
+	// Variadic: SQLite takes any number, so there is nothing to refuse.
+	"json_array":   nil,
+	"json_extract": nil,
+	"json_insert":  nil,
+	"json_object":  nil,
+	"json_set":     nil,
 }
 
 // registeredHelper reports whether the runtime registers a function by this
@@ -364,12 +394,23 @@ func registeredHelper(name string) bool {
 // accepts a call of n arguments. A name this package neither registers nor
 // renames onto is left alone, since it is a name the caller wrote and the
 // driver answers for it under that name.
-func helperTakesArgumentCount(name string, n int) bool {
+//
+// renamed says whether the lowering gave the call a name other than the one the
+// caller wrote, which is what the builtin table is for: SQLite refusing a count
+// under a name this package substituted tells the caller about a function
+// nowhere in their query, while refusing under the name they wrote tells them
+// about their own. A registered helper is checked either way, since a helper is
+// this package's implementation whatever it is called.
+func helperTakesArgumentCount(name string, n int, renamed bool) bool {
 	if want, found := helperArity[name]; found {
 		return want < 0 || want == n
 	}
+	if !renamed {
+		return true
+	}
 	if counts, found := builtinArity[name]; found {
-		return slices.Contains(counts, n)
+		// A name listed with no counts is variadic and takes any.
+		return len(counts) == 0 || slices.Contains(counts, n)
 	}
 	return true
 }

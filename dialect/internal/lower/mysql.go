@@ -238,7 +238,7 @@ func (r *mysqlRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		// MySQL numbers weeks its own way, by a mode that decides which day
 		// starts a week and which week is week 1.
 		return rename(call, "mysql_"+strings.ToLower(name)), nil
-	case fnNamePosition, "LOCATE", "INSTR":
+	case fnNamePosition, "LOCATE", fnNameInstr:
 		return mysqlPosition(call)
 	case fnNameSubstring, fnNameSubstr, "MID":
 		return rename(call, "mysql_substr"), nil
