@@ -2430,7 +2430,20 @@ func fnTruncate(args []driver.Value) (driver.Value, error) {
 		return nil, nil
 	}
 	factor := math.Pow(10, float64(d))
-	return math.Trunc(x*factor) / factor, nil
+	scaled := x * factor
+	if math.IsInf(scaled, 0) || math.IsInf(factor, 0) {
+		// Scaling past the range of a float cannot change the answer: a value
+		// that large has no fractional part left to cut. Truncating anyway
+		// answered an infinity for TRUNCATE(1e308, 1), where MySQL answers
+		// 1e308.
+		return x, nil
+	}
+	if factor == 0 {
+		// A place further left than the value reaches, which is a zero in
+		// MySQL: TRUNCATE(1, -400) is 0.
+		return float64(0), nil
+	}
+	return math.Trunc(scaled) / factor, nil
 }
 
 // fnLeast implements LEAST(a, b, ...) and fnGreatest GREATEST(a, b, ...).

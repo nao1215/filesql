@@ -42,6 +42,7 @@ var helperArity = map[string]int{ //nolint:gochecknoglobals // a generated table
 	"convert_tz":                   3,
 	"cosd":                         1,
 	"cot":                          1,
+	"mysql_pow":                    2,
 	"postgresql_sqrt":              1,
 	"postgresql_ln":                1,
 	"postgresql_log":               -1,

@@ -2382,3 +2382,29 @@ func TestPostgreSQLRaisesWhereItsDomainEnds(t *testing.T) {
 		assert.Nilf(t, v, "%s", expr)
 	}
 }
+
+// TestMySQLRefusesAPowerOutsideADouble holds the MySQL dialect to what MySQL
+// 8.4 answers for a power it cannot hold, which is a refusal rather than the
+// infinity SQLite answers.
+func TestMySQLRefusesAPowerOutsideADouble(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, RegisterFunctions())
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	for _, expr := range []string{"POW(0, -1)", "POW(10, 400)", "POWER(-10, 401)"} {
+		translated, err := Translate(MySQL, "SELECT "+expr)
+		require.NoError(t, err)
+		var v any
+		assert.Errorf(t, db.QueryRowContext(t.Context(), translated).Scan(&v),
+			"%s answered %v", expr, v)
+	}
+
+	var got float64
+	translated, err := Translate(MySQL, "SELECT POW(2, 10)")
+	require.NoError(t, err)
+	require.NoError(t, db.QueryRowContext(t.Context(), translated).Scan(&got))
+	assert.InDelta(t, 1024.0, got, 1e-9)
+}

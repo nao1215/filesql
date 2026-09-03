@@ -292,10 +292,14 @@ func (r *mysqlRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		return rename(call, "mysql_nullif"), nil
 	case fnNameRound:
 		return roundEven(mysqlNumberArgs(call, 0))
-	case "TRUNCATE", "POW", "POWER":
-		// SQLite spells these the same way and answers the same thing, so only
-		// the conversion in front of them differs.
+	case "TRUNCATE":
+		// SQLite spells this the same way and answers the same thing, so only
+		// the conversion in front of it differs.
 		return mysqlNumberArgs(call), nil
+	case "POW", "POWER":
+		// MySQL refuses a result outside the range of a double where SQLite
+		// answers an infinity.
+		return rename(mysqlNumberArgs(call), "mysql_pow"), nil
 	case fnNameMod:
 		return rename(call, "mysql_mod"), nil
 	case "LENGTH", "OCTET_LENGTH":
