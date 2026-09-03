@@ -2293,3 +2293,117 @@ func loadedTableNames(t *testing.T, db *sql.DB) []string {
 	}
 	return names
 }
+
+// TestATableNameAReaderMayCarry holds the names a reader input may be given to
+// what a save can write back out. A name of nothing but whitespace was accepted
+// here and refused by the save -- a load of "   .csv" would name the table
+// "___" -- so a caller built a database they could not dump from a call that
+// looked like any other, while an input path of blanks was already refused.
+func TestATableNameAReaderMayCarry(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name   string
+		table  string
+		refuse bool
+	}{
+		{"a name", "users", false},
+		{"a name outside ASCII", "売上", false},
+		{"the empty string", "", true},
+		{"spaces", "   ", true},
+		{"a tab", "\t", true},
+		{"an ideographic space", "　", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, err := NewBuilder().
+				AddReader(strings.NewReader("a\n1\n"), tt.table, FileTypeCSV).
+				Open(t.Context())
+			if db != nil {
+				defer func() { _ = db.Close() }()
+			}
+			if tt.refuse {
+				require.Error(t, err, "a name a save cannot write back has to be refused here")
+				assert.ErrorIs(t, err, ErrInvalidData)
+				return
+			}
+			require.NoError(t, err)
+
+			// The invariant behind the refusal: a name this door accepted is
+			// one an export can write.
+			out := filepath.Join(t.TempDir(), "out")
+			assert.NoError(t, DumpDatabase(t.Context(), db, out),
+				"a name AddReader accepted has to be one a dump can write")
+		})
+	}
+
+	t.Run("ExcelSheetTableNames answers for the same names", func(t *testing.T) {
+		t.Parallel()
+
+		for _, base := range []string{"", "   ", "\t"} {
+			_, err := ExcelSheetTableNames(base, []string{"Sheet1"})
+			assert.ErrorIsf(t, err, ErrEmptyPath,
+				"a workbook named %q is one no load could have been given", base)
+		}
+		names, err := ExcelSheetTableNames("book.xlsx", []string{"Sheet1"})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"book_Sheet1"}, names)
+	})
+}
+
+// TestInPlaceSaveNeedsASourceWithAFile holds the refusal of an in-place save
+// that cannot happen to the step that can still do something about it. A
+// database loaded only from readers has no file for any table to be written
+// back to, which is knowable when the builder opens; it used to be reported by
+// Close, after the session's work, where the unwritable-format case beside it
+// was reported at open.
+func TestInPlaceSaveNeedsASourceWithAFile(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a reader alone", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewBuilder().
+			AddReader(strings.NewReader("a\n1\n"), "d", FileTypeCSV).
+			EnableAutoSave("").
+			Open(t.Context())
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrNoFiles)
+		assert.Contains(t, err.Error(), "save to a directory instead")
+	})
+
+	t.Run("a filesystem alone", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewBuilder().
+			AddFS(fstest.MapFS{"d.csv": &fstest.MapFile{Data: []byte("a\n1\n")}}).
+			EnableAutoSave("").
+			Open(t.Context())
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrNoFiles)
+	})
+
+	t.Run("a reader beside a file, which is the documented case", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "onfile.csv")
+		require.NoError(t, os.WriteFile(path, []byte("a,b\n1,x\n"), 0o600))
+
+		db, err := NewBuilder().
+			AddPath(path).
+			AddReader(strings.NewReader("a,b\n2,y\n"), "fromreader", FileTypeCSV).
+			EnableAutoSave("").
+			Open(t.Context())
+		require.NoError(t, err, "a table with no file is left unsaved rather than refusing the build")
+
+		_, err = db.ExecContext(t.Context(), `UPDATE onfile SET b = 'edited'`)
+		require.NoError(t, err)
+		require.NoError(t, db.Close())
+
+		after, err := os.ReadFile(path) //nolint:gosec // a path from t.TempDir()
+		require.NoError(t, err)
+		assert.Contains(t, string(after), "edited")
+	})
+}

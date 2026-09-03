@@ -224,6 +224,15 @@ func xlsxSheetTableName(baseTableName, sheetName string) string {
 // arrives through AddReader: pass the table name given there instead, which is
 // what that load uses as the base.
 func ExcelSheetTableNames(filePath string, sheetNames []string) (tables []string, err error) {
+	// The names a load would give have to come from something a load could
+	// have been given. An empty or blank filePath is neither a path nor a
+	// table name a reader may carry -- AddReader refuses that name -- and
+	// answering with the names a nameless workbook would get told a caller
+	// their workbook was fine and left the refusal to the load.
+	if strings.TrimSpace(filePath) == "" {
+		return nil, fmt.Errorf("%w: a workbook has to be named, by its path or by the table name given to AddReader",
+			ErrEmptyPath)
+	}
 	return excelSheetTableNames(sanitizeTableName(tableFromFilePath(filePath)), filepath.Base(filePath), sheetNames)
 }
 

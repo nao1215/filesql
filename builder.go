@@ -568,6 +568,14 @@ func (b *DBBuilder) build(ctx context.Context) error {
 	// fail. The file's name is the whole of the answer, so the caller hears it
 	// here rather than from Close, after a session's work has been done.
 	if b.autoSaveEnabled() && b.autoSaveConfig.outputDir == "" {
+		// A database with no source that has a file has nothing to write back
+		// to, and that is knowable now: no path arrives later. It used to be
+		// reported by the save at Close, after the session's work, where the
+		// unwritable format beside it was reported here.
+		if len(collectedPaths) == 0 {
+			return fmt.Errorf("%w: an in-place save writes each table back to the file it was loaded from,"+
+				" and no source here has one; save to a directory instead", ErrNoFiles)
+		}
 		if err := checkOverwriteTargets(b.fileProcessor.deduplicateCompressedFiles(collectedPaths)); err != nil {
 			return err
 		}
