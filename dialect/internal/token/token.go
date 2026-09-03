@@ -287,6 +287,10 @@ func Lex(query string, cfg Config) ([]Token, error) {
 			}
 			kind, text := String, content
 			if isBytes {
+				if at, bad := octalEscapePastAByte(query[i+n : ni]); bad {
+					return nil, lexError(query, start+n+at,
+						"a byte string escape names a byte, and this one names a number past 255")
+				}
 				kind, text = Blob, hex.EncodeToString([]byte(content))
 			}
 			tokens = append(tokens, Token{Kind: kind, Text: text, Offset: start})
@@ -645,6 +649,34 @@ func decodeNumericEscape(s string, i int, rawBytes bool) (string, int, bool) {
 	default:
 		return "", 0, false
 	}
+}
+
+// octalEscapePastAByte finds an octal escape naming a number no byte can hold,
+// in the source text of a literal that names bytes. Three octal digits reach
+// 511 and a byte stops at 255, so \400 through \777 name nothing; BigQuery
+// refuses such a literal, and decoding one as a code point would put two bytes
+// where the caller wrote one escape.
+//
+// It reads the source rather than the decoded content because that is where the
+// caller's spelling is, and it steps over an escaped backslash so that the
+// digits after one are digits.
+func octalEscapePastAByte(literal string) (int, bool) {
+	for i := 0; i < len(literal)-1; i++ {
+		if literal[i] != '\\' {
+			continue
+		}
+		if literal[i+1] == '\\' {
+			i++ // An escaped backslash, so what follows it is not an escape.
+			continue
+		}
+		if octalRun(literal, i+1, 3) < 3 {
+			continue
+		}
+		if v, err := strconv.ParseUint(literal[i+1:i+4], 8, 16); err == nil && v > math.MaxUint8 {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // numberedChar is what an escape naming a number stands for: the byte itself

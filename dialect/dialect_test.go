@@ -2048,3 +2048,46 @@ func TestGoogleSQLBytesLiteralNamesBytes(t *testing.T) {
 		}
 	})
 }
+
+// TestGoogleSQLBytesLiteralRefusesAnOctalPastAByte holds a BYTES literal to the
+// range an octal escape can name. Three octal digits reach 511 and a byte stops
+// at 255, so \400 names no byte; BigQuery refuses such a literal, and reading it
+// as a code point would put two bytes where the caller wrote one escape.
+func TestGoogleSQLBytesLiteralRefusesAnOctalPastAByte(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		literal string
+		refuse  bool
+	}{
+		{`b'\377'`, false},
+		{`b'\400'`, true},
+		{`b'\777'`, true},
+		{`b'\401\402'`, true},
+		// A backslash written as an escape is a backslash, and the digits
+		// after it are digits.
+		{`b'\\400'`, false},
+		// A string literal names code points, where the same escape is the
+		// character that number names.
+		{`'\400'`, false},
+	} {
+		t.Run(tt.literal, func(t *testing.T) {
+			t.Parallel()
+
+			translated, err := Translate(GoogleSQL, "SELECT "+tt.literal)
+			if tt.refuse {
+				if err == nil {
+					t.Errorf("%s names no byte and became %q", tt.literal, translated)
+					return
+				}
+				if !strings.Contains(err.Error(), "byte") {
+					t.Errorf("%s is refused without saying why: %v", tt.literal, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("%s is a literal the dialect accepts: %v", tt.literal, err)
+			}
+		})
+	}
+}
