@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"database/sql/driver"
+	"math"
 	"strings"
 	"testing"
 
@@ -684,5 +686,46 @@ func TestAnIntervalCarriesItsSignOnEachField(t *testing.T) {
 				t.Fatalf("%s = %q, want %q", tt.query, got.String, tt.want)
 			}
 		})
+	}
+}
+
+// TestPostgreSQLPowerAndExpWithNonFiniteOperands holds the two helpers to what
+// PostgreSQL 17 answers when an operand is not a finite number, which is an
+// answer rather than the out-of-range refusal a finite operand would get.
+func TestPostgreSQLPowerAndExpWithNonFiniteOperands(t *testing.T) {
+	inf := math.Inf(1)
+
+	for _, tt := range []struct {
+		name string
+		args []driver.Value
+		want float64
+		fn   func([]driver.Value) (driver.Value, error)
+	}{
+		{"an infinite base", []driver.Value{inf, 1.0}, inf, fnPostgresPower},
+		{"an infinite exponent", []driver.Value{2.0, inf}, inf, fnPostgresPower},
+		{"a negative infinite exponent", []driver.Value{2.0, -inf}, 0, fnPostgresPower},
+		{"an infinite exponential", []driver.Value{inf}, inf, pgFloatFn(fnPostgresExp)},
+		{"a negative infinite exponential", []driver.Value{-inf}, 0, pgFloatFn(fnPostgresExp)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.fn(tt.args)
+			if err != nil {
+				t.Fatalf("%v: %v", tt.args, err)
+			}
+			if got != any(tt.want) {
+				t.Errorf("%v = %v, want %v", tt.args, got, tt.want)
+			}
+		})
+	}
+
+	// A NaN operand answers a NaN, which PostgreSQL does too rather than
+	// calling a negative base with a fractional exponent complex.
+	got, err := fnPostgresPower([]driver.Value{-1.0, math.NaN()})
+	if err != nil {
+		t.Fatalf("a NaN exponent: %v", err)
+	}
+	value, ok := got.(float64)
+	if !ok || !math.IsNaN(value) {
+		t.Errorf("POWER(-1, NaN) = %v, want NaN", got)
 	}
 }

@@ -757,6 +757,11 @@ func fnPostgresSqrt(x float64) (float64, error) {
 }
 
 func fnPostgresExp(x float64) (float64, error) {
+	if !isFinite(x) {
+		// PostgreSQL answers for these rather than calling them out of range:
+		// EXP(Infinity) is Infinity and EXP(-Infinity) is 0.
+		return math.Exp(x), nil
+	}
 	out := math.Exp(x)
 	if math.IsInf(out, 0) {
 		return 0, errOverflow
@@ -817,6 +822,12 @@ func fnPostgresPower(args []driver.Value) (driver.Value, error) {
 	if !ok1 || !ok2 {
 		return nil, nil
 	}
+	if !isFinite(base) || !isFinite(exponent) {
+		// A range is a question about finite numbers. PostgreSQL answers
+		// POWER(Infinity, 1) with Infinity, POWER(2, -Infinity) with 0 and
+		// POWER(-1, NaN) with NaN, which is what math.Pow answers too.
+		return math.Pow(base, exponent), nil
+	}
 	if base == 0 && exponent < 0 {
 		return nil, errZeroNegPow
 	}
@@ -836,6 +847,11 @@ func fnPostgresPower(args []driver.Value) (driver.Value, error) {
 		return nil, errUnderflow
 	}
 	return out, nil
+}
+
+// isFinite reports whether x is a number a range can be asked about.
+func isFinite(x float64) bool {
+	return !math.IsInf(x, 0) && !math.IsNaN(x)
 }
 
 // fnPostgresCot is COT, which PostgreSQL answers with an infinity at zero where
