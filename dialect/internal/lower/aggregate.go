@@ -401,6 +401,15 @@ func checkGroupedSelect(d dialects.Dialect, n *ast.SelectCore) error {
 	grouped := make(map[string]bool, len(n.GroupBy))
 	ordinals := make(map[int]bool, len(n.GroupBy))
 	for _, group := range n.GroupBy {
+		// Parentheses around a grouping do not change it: both engines read
+		// "GROUP BY (b)" as a grouping by b.
+		for {
+			paren, wrapped := group.(*ast.ParenExpr)
+			if !wrapped {
+				break
+			}
+			group = paren.Expr
+		}
 		switch e := group.(type) {
 		case *ast.ColumnRef:
 			grouped[columnKey(e)] = true

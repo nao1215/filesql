@@ -2426,6 +2426,7 @@ func TestAnAggregateQuerySelectsWhatItGroups(t *testing.T) {
 			"SELECT a, count(*) FROM g GROUP BY b",
 			"SELECT a, max(b) FROM g",
 			"SELECT g.a, count(*) FROM g GROUP BY b",
+			"SELECT a, b FROM g GROUP BY (b)",
 			"SELECT a, count(*) FROM g GROUP BY 2",
 			"SELECT COALESCE(sum(a), 0), b FROM g",
 			"SELECT sum(a) + 1, b FROM g",
@@ -2458,6 +2459,13 @@ func TestAnAggregateQuerySelectsWhatItGroups(t *testing.T) {
 			"SELECT a AS x, g.a FROM g GROUP BY x",
 			"SELECT g.a, a AS x FROM g GROUP BY 1",
 			"SELECT a + 1, count(*) FROM g GROUP BY a + 1",
+			"SELECT a FROM g GROUP BY (a)",
+			"SELECT a, b FROM g GROUP BY a, (b)",
+			// A grouping this package cannot read leaves the query answered:
+			// MySQL takes "GROUP BY +a" and PostgreSQL refuses it, and
+			// neither takes "GROUP BY a + 0".
+			"SELECT a FROM g GROUP BY +a",
+			"SELECT a FROM g GROUP BY a + 0",
 			"SELECT * FROM g GROUP BY b",
 			"SELECT a, count(*) OVER () FROM g",
 			"SELECT max(a), min(b) FROM g",
