@@ -283,7 +283,9 @@ func parseError(err error) error {
 	}
 	switch readErr.Kind {
 	case reader.KindDuplicateColumn:
-		return fmt.Errorf("duplicate column name: %s", readErr.Error())
+		// The sentinel travels with it so that a caller reading through prep
+		// matches the same error a load answers with.
+		return fmt.Errorf("%w: %s", reader.ErrDuplicateColumn, readErr.Error())
 	case reader.KindEmpty:
 		return &emptyInputError{err: err}
 	default:

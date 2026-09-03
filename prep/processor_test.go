@@ -15,6 +15,7 @@ import (
 
 	"github.com/nao1215/filesql/internal/codec"
 	"github.com/nao1215/filesql/internal/parser"
+	"github.com/nao1215/filesql/internal/reader"
 	"github.com/parquet-go/parquet-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -3536,6 +3537,39 @@ func TestProcessOutputReadsBackThroughProcess(t *testing.T) {
 			}
 			if again.RowCount != result.RowCount {
 				t.Errorf("RowCount %d then %d", result.RowCount, again.RowCount)
+			}
+		})
+	}
+}
+
+// TestDuplicateHeaderCarriesTheSentinel holds prep's refusal of a header naming
+// one column twice to the sentinel a load answers with. Both doors read the
+// same document through the same reader, and prep returned a bare error, so a
+// caller branching on the sentinel took the wrong branch through prep.
+func TestDuplicateHeaderCarriesTheSentinel(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name     string
+		fileType FileType
+		input    string
+	}{
+		{"a CSV header naming one column twice", FileTypeCSV, "a,a\nx,y\n"},
+		{"a CSV header naming one column twice in another case", FileTypeCSV, "A,a\nx,y\n"},
+		{"an LTSV record naming one label twice", FileTypeLTSV, "a:1\ta:2\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var rows []struct {
+				A string
+			}
+			_, _, err := NewProcessor(tt.fileType).Process(strings.NewReader(tt.input), &rows)
+			if !errors.Is(err, reader.ErrDuplicateColumn) {
+				t.Errorf("the refusal has to carry the sentinel a load answers with: err=%v", err)
+			}
+			if err == nil || !strings.Contains(err.Error(), "duplicate column name") {
+				t.Errorf("the message still names what is wrong: err=%v", err)
 			}
 		})
 	}

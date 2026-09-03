@@ -15,11 +15,20 @@ package reader
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/nao1215/filesql/internal/infer"
 )
+
+// ErrDuplicateColumn is a header that names one column twice. It lives here
+// rather than in the packages that publish it because both doors into this
+// reader answer for the same input: filesql exports it as
+// filesql.ErrDuplicateColumn, and prep, which parses through the same reader,
+// returns an error carrying it, so errors.Is finds it whichever door a caller
+// came through.
+var ErrDuplicateColumn = errors.New("filesql: duplicate column name")
 
 // Format is the file format a source is read as. Compression is not part of it:
 // a caller unwraps the codec before reading.
