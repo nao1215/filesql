@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.57.0] - 2026-09-03
 
 ### Fixed
 
@@ -2395,6 +2395,7 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
+[0.57.0]: https://github.com/nao1215/filesql/compare/v0.56.0...v0.57.0
 [0.56.0]: https://github.com/nao1215/filesql/compare/v0.55.0...v0.56.0
 [0.55.0]: https://github.com/nao1215/filesql/compare/v0.54.0...v0.55.0
 [0.54.0]: https://github.com/nao1215/filesql/compare/v0.53.0...v0.54.0
