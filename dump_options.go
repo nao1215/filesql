@@ -121,7 +121,7 @@ func (c CompressionType) Extension() string {
 //		WithFormat(OutputFormatTSV).
 //		WithCompression(CompressionGZ)
 //
-//	err := DumpDatabase(db, "./output", options)
+//	err := DumpDatabase(ctx, db, "./output", options)
 type DumpOptions struct {
 	// Format specifies the output file format
 	Format OutputFormat
@@ -137,9 +137,8 @@ type DumpOptions struct {
 
 // NewDumpOptions creates default export options (CSV, no compression).
 //
-// Modify with:
-//   - WithFormat(): Change file format (CSV, TSV, LTSV)
-//   - WithCompression(): Add compression (GZ, BZ2, XZ, ZSTD)
+// Modify with WithFormat, WithCompression, WithEncoding and WithLineEnding,
+// each of which names the values it takes.
 func NewDumpOptions() DumpOptions {
 	return DumpOptions{
 		Format:      OutputFormatCSV,
@@ -156,6 +155,11 @@ func NewDumpOptions() DumpOptions {
 //   - OutputFormatTSV: Tab-separated values
 //   - OutputFormatLTSV: Labeled tab-separated values
 //   - OutputFormatParquet: Apache Parquet columnar format
+//   - OutputFormatXLSX: Excel workbook
+//
+// OutputFormatACH and OutputFormatFedWire are not among them: a dump writes
+// those two for the tables loaded from such a file and refuses a request to
+// write any other table as one.
 func (o DumpOptions) WithFormat(format OutputFormat) DumpOptions {
 	o.Format = format
 	return o
@@ -166,7 +170,8 @@ func (o DumpOptions) WithFormat(format OutputFormat) DumpOptions {
 // Options:
 //   - CompressionNone: No compression (default)
 //   - CompressionGZ: Gzip compression (.gz)
-//   - CompressionBZ2: Bzip2 compression (.bz2) - read only, writing not supported
+//   - CompressionBZ2: Bzip2 compression (.bz2) - read only, so a save asked for
+//     it is refused with ErrUnsupportedFormat
 //   - CompressionXZ: XZ compression (.xz)
 //   - CompressionZSTD: Zstandard compression (.zst)
 //   - CompressionZLIB: Zlib compression (.z)

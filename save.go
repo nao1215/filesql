@@ -435,9 +435,9 @@ func (c *autoSaveConnector) siblingBaseTableNames(path string) []string {
 // checkOverwriteTargets reports the first of paths that overwrite mode could
 // never write back, from the path alone: a format this package reads but does
 // not write, or a compression codec it reads but does not write. Both answers
-// are in the file's name, so this runs from Build as well, where the caller
-// hears about it before the session rather than after the session's work has
-// been discarded.
+// are in the file's name, so this runs from the builder's validation as well,
+// where the caller hears about it before the session rather than after the
+// session's work has been discarded.
 //
 // A workbook holding more than one table is the failure this cannot see: it
 // takes opening the file to know, and it is left to the save.
