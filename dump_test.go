@@ -3007,10 +3007,7 @@ func TestDumpRefusesAValueItHasNoNameFor(t *testing.T) {
 }
 
 // TestDumpRefusesANameTooLongForAFile holds the length of a table's name to
-// this package's own limit. Every other unusable name is refused here, before
-// anything is written, and in the same words on every platform; a name too long
-// reached the operating system, which answered "file name too long" wrapped in
-// a message about a stat, at a length that differs between platforms.
+// this package's own limit, for the reason maxFileNameBytes gives.
 func TestDumpRefusesANameTooLongForAFile(t *testing.T) {
 	t.Parallel()
 

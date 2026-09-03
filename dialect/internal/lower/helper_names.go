@@ -332,21 +332,6 @@ var helperArity = map[string]int{ //nolint:gochecknoglobals // a generated table
 	"utc_timestamp":                0,
 }
 
-// builtinArity is the SQLite functions a lowering renames a call onto, with the
-// argument counts SQLite takes for each. They are not in helperArity because
-// the runtime does not register them: SQLite has them already.
-//
-// The counts are here for the same reason the helpers' are. A rename lands on a
-// function of its own arity, and a count SQLite does not take reaches the
-// driver, which reports it under the name it was renamed to -- a name the
-// caller never wrote and cannot find in their query. The table is closed: an
-// entry is needed only where this package writes the rename, so it grows when a
-// lowering starts renaming onto a built-in it did not before.
-//
-// The aggregate renames are not here. SQLite's scalar min and max take any
-// number of arguments while the aggregates of those names take one, so the
-// count is answered where the aggregate rules rename, which is the only place
-// that knows which of the two it is producing.
 // builtinArity is how many arguments SQLite's own functions take, for the names
 // a lowering renames a call onto. Without an entry the count is unchecked, and
 // SQLite then answers about the name it was given rather than the one the
@@ -355,12 +340,13 @@ var helperArity = map[string]int{ //nolint:gochecknoglobals // a generated table
 // query. The counts are what SQLite accepts, measured against it rather than
 // read off the documentation.
 //
-// A variadic name is listed with no counts, which says it takes any: the
-// listing is what TestEveryRenameTargetHasAnArity reads, so a name added to a
-// lowering has to be given an answer here even when the answer is "any".
+// The keys are lower case because that is how the check spells the name it
+// looks up. A variadic name is listed with no counts, which says it takes any:
+// the listing is what TestEveryRenameTargetHasAnArity reads, so a name added to
+// a lowering has to be given an answer here even when the answer is "any".
 var builtinArity = map[string][]int{ //nolint:gochecknoglobals // a fixed table
-	"COUNT":             {0, 1},
-	"INSTR":             {2},
+	"count":             {0, 1},
+	"instr":             {2},
 	"atan2":             {2},
 	"group_concat":      {1, 2},
 	"json":              {1},

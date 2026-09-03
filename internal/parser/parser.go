@@ -270,7 +270,8 @@ func strictFieldCount(baseType FileType) reader.Reconcile {
 	return func(record []string, want, rowNum int) ([]string, bool, error) {
 		// Both sentinels: the syntax one a caller of this package matches, and
 		// the one a load answers with for the same record, so one document
-		// refused at either door is refused by the same name.
+		// refused at either door is refused by the same name. The message gains
+		// that sentinel's prefix and is otherwise what it was.
 		return nil, false, fmt.Errorf("%w: %w: record on line %d has %d fields, the header has %d",
 			reader.ErrColumnMismatch, syntaxError, rowNum+1, len(record), want)
 	}

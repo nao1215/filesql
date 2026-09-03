@@ -227,8 +227,8 @@ func ExcelSheetTableNames(filePath string, sheetNames []string) (tables []string
 	// The names a load would give have to come from something a load could
 	// have been given. An empty or blank filePath is neither a path nor a
 	// table name a reader may carry -- AddReader refuses that name -- and
-	// answering with the names a nameless workbook would get told a caller
-	// their workbook was fine and left the refusal to the load.
+	// answering with the names a nameless workbook would get tells a caller
+	// their workbook is fine and leaves the refusal to the load.
 	if strings.TrimSpace(filePath) == "" {
 		return nil, fmt.Errorf("%w: a workbook has to be named, by its path or by the table name given to AddReader",
 			ErrEmptyPath)

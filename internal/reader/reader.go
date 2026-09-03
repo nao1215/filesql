@@ -43,7 +43,7 @@ var (
 	// ErrUnsupportedFormat is input this package does not read.
 	ErrUnsupportedFormat = errors.New("filesql: unsupported file format")
 	// ErrParsing is input that does not describe a table of the format it
-	// claims, which is the kind every other kind is a narrowing of.
+	// claims. It is the general kind; every other kind narrows it.
 	ErrParsing = errors.New("filesql: parsing failed")
 	// ErrColumnMismatch is a record that does not fit the columns of its table.
 	// It is not one of the kinds, because a record that does not fit is decided
@@ -54,8 +54,9 @@ var (
 )
 
 // SentinelFor is the sentinel a read failure of this kind carries. Every kind
-// has one: a kind added later has to be given an answer here, which is what the
-// switch with no passing default is for.
+// has one, and TestEverySentinelIsAKindOfItsOwn holds this to that: a kind added
+// later falls to ErrParsing here, which is a defensible answer and not
+// necessarily the right one, so the test asks for the right one to be written.
 func SentinelFor(kind Kind) error {
 	switch kind {
 	case KindEmpty:

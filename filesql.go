@@ -385,14 +385,14 @@ func dumpFilePath(outputDir, tableName, ext string) (string, error) {
 	return path, nil
 }
 
-// maxFileNameBytes is the longest a file's name may be, which is 255 bytes on
-// the filesystems this package is used on and is the smaller of the limits it
-// has to fit. A longer name reached the operating system, which refused it with
-// "file name too long" wrapped in a message about a stat -- the platform's
-// answer rather than this package's, at a length that differs between platforms,
-// where every other unusable name is refused here and refused the same way
-// everywhere. The extension and any compression suffix are part of what has to
-// fit, which is why the check is on the whole name rather than on the table's.
+// maxFileNameBytes is the longest a file's name may be: 255, which is NAME_MAX
+// on the filesystems this package runs on and the shorter of that and the 255
+// UTF-16 units Windows allows a path component. A longer name used to reach the
+// operating system, whose refusal is its own rather than this package's and
+// comes at a length that differs between platforms, where every other unusable
+// name is refused here and by the same rule everywhere. The extension and any
+// compression suffix are part of what has to fit, which is why the check is on
+// the whole file name rather than on the table's.
 const maxFileNameBytes = 255
 
 // reservedDeviceNames are the names Windows resolves to a device rather than to

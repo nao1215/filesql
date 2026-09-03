@@ -659,9 +659,9 @@ func checkHelperArity(e ast.Expr, written string, span ast.Span) error {
 	// case it was written in, the more so for the helpers registered under the
 	// source function's own name.
 	// A lowering that claimed the call gave it the target's own spelling; one
-	// that left it alone kept the caller's, whatever case they wrote it in.
-	// That is what tells "renamed onto SQLite's length" from "the caller wrote
-	// LOG and nothing here understood the shape".
+	// that left it alone kept the caller's, whatever case they wrote it in. So
+	// a call the lowering renamed onto length is told apart from a LOG the
+	// caller wrote and no rule claimed.
 	renamed := call.Name[0].Name != written
 	name := strings.ToLower(call.Name[0].Name)
 	if helperTakesArgumentCount(name, len(call.Args), renamed) {

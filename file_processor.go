@@ -239,10 +239,8 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 	// Which files this package loads is one question with one answer, which is
 	// isSupportedFile, and the walk asks it of every file the filesystem holds.
 	// A pass of glob patterns used to run first and admitted what the walk
-	// refuses: a file named ".ach" matches "*.ach" and is not an ACH file,
-	// since a path that is only the extension names nothing, and the load of
-	// the whole filesystem then failed on it with a message about a reader
-	// input the caller never made.
+	// refuses, which failed the load of the whole filesystem; isACHFile says
+	// what the disagreement was about.
 	allMatches := make([]string, 0)
 	if _, err := fs.Stat(filesystem, "."); err == nil {
 		walkErr := fs.WalkDir(filesystem, ".", func(path string, d fs.DirEntry, err error) error {

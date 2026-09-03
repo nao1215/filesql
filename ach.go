@@ -135,10 +135,9 @@ const extACH = ".ach"
 //
 // A name that is only the extension is not one: ".ach" is a file called ".ach"
 // rather than an ACH file with no name. The test is on the base name, since the
-// directory in front of it says nothing about the format -- reading the whole
-// path made "/data/.ach" an ACH file and the same file called ".ach" inside an
-// fs.FS not one, so a directory and a filesystem holding the same tree loaded
-// differently.
+// directory in front of it says nothing about the format; reading the whole path
+// made "/data/.ach" an ACH file and the same file called ".ach" inside an fs.FS
+// not one.
 func isACHFile(path string) bool {
 	base := filepath.Base(path)
 	return len(base) > len(extACH) && strings.EqualFold(base[len(base)-len(extACH):], extACH)
