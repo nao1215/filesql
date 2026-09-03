@@ -265,53 +265,6 @@ func Test_isSupportedFile(t *testing.T) {
 	}
 }
 
-func TestGetSupportedFilePatterns(t *testing.T) {
-	t.Parallel()
-
-	patterns := supportedFileExtPatterns()
-
-	// Should have 65 patterns: 7 base extensions × 9 compression variants (including none) + 2 (ach, fed)
-	// Base extensions: csv, tsv, ltsv, parquet, xlsx, json, jsonl
-	// Compression variants: none, gz, bz2, xz, zst, z, snappy, s2, lz4
-	// Plus: *.ach, *.fed (no compression variants)
-	expectedCount := 65
-	if len(patterns) != expectedCount {
-		t.Errorf("GetSupportedFilePatterns() returned %d patterns, want %d", len(patterns), expectedCount)
-	}
-
-	// Check that all expected patterns are present
-	expectedPatterns := []string{
-		"*.csv", "*.csv.gz", "*.csv.bz2", "*.csv.xz", "*.csv.zst",
-		"*.csv.z", "*.csv.snappy", "*.csv.s2", "*.csv.lz4",
-		"*.tsv", "*.tsv.gz", "*.tsv.bz2", "*.tsv.xz", "*.tsv.zst",
-		"*.tsv.z", "*.tsv.snappy", "*.tsv.s2", "*.tsv.lz4",
-		"*.ltsv", "*.ltsv.gz", "*.ltsv.bz2", "*.ltsv.xz", "*.ltsv.zst",
-		"*.ltsv.z", "*.ltsv.snappy", "*.ltsv.s2", "*.ltsv.lz4",
-		"*.parquet", "*.parquet.gz", "*.parquet.bz2", "*.parquet.xz", "*.parquet.zst",
-		"*.parquet.z", "*.parquet.snappy", "*.parquet.s2", "*.parquet.lz4",
-		"*.xlsx", "*.xlsx.gz", "*.xlsx.bz2", "*.xlsx.xz", "*.xlsx.zst",
-		"*.xlsx.z", "*.xlsx.snappy", "*.xlsx.s2", "*.xlsx.lz4",
-		"*.json", "*.json.gz", "*.json.bz2", "*.json.xz", "*.json.zst",
-		"*.json.z", "*.json.snappy", "*.json.s2", "*.json.lz4",
-		"*.jsonl", "*.jsonl.gz", "*.jsonl.bz2", "*.jsonl.xz", "*.jsonl.zst",
-		"*.jsonl.z", "*.jsonl.snappy", "*.jsonl.s2", "*.jsonl.lz4",
-		"*.ach", "*.fed",
-	}
-
-	for _, expected := range expectedPatterns {
-		found := false
-		for _, pattern := range patterns {
-			if pattern == expected {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("GetSupportedFilePatterns() missing pattern: %s", expected)
-		}
-	}
-}
-
 func TestIsSupportedExtension(t *testing.T) {
 	t.Parallel()
 

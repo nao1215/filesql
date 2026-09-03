@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
 	wireconv "github.com/nao1215/filesql/internal/parser/wire"
@@ -15,11 +16,12 @@ import (
 // Fedwire file extension
 const extFED = ".fed"
 
-// isFedWireFile checks if the file path has Fedwire extension (case-insensitive).
-// Returns false for paths that are only the extension (e.g., ".fed").
-// Supports both ".fed" and ".FED" extensions.
+// isFedWireFile reports whether a path names a Fedwire file, by its extension
+// and ignoring case. A name that is only the extension is not one, read from
+// the base name for the reason isACHFile gives.
 func isFedWireFile(path string) bool {
-	return len(path) > len(extFED) && strings.EqualFold(path[len(path)-len(extFED):], extFED)
+	base := filepath.Base(path)
+	return len(base) > len(extFED) && strings.EqualFold(base[len(base)-len(extFED):], extFED)
 }
 
 // parseFedWireFile parses a Fedwire file and returns a single table along with the TableSet.

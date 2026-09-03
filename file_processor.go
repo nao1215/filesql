@@ -236,43 +236,23 @@ func (fp *fileProcessor) processFilesystemsToReaders(ctx context.Context, filesy
 func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS) ([]readerInput, error) {
 	readers := make([]readerInput, 0)
 
-	// Search for all supported file patterns
-	supportedPatterns := supportedFileExtPatterns()
-
-	// Collect all matching files
+	// Which files this package loads is one question with one answer, which is
+	// isSupportedFile, and the walk asks it of every file the filesystem holds.
+	// A pass of glob patterns used to run first and admitted what the walk
+	// refuses: a file named ".ach" matches "*.ach" and is not an ACH file,
+	// since a path that is only the extension names nothing, and the load of
+	// the whole filesystem then failed on it with a message about a reader
+	// input the caller never made.
 	allMatches := make([]string, 0)
-	for _, pattern := range supportedPatterns {
-		matches, err := fs.Glob(filesystem, pattern)
-		if err != nil {
-			return nil, fmt.Errorf("%w: failed to search pattern %s: %w", ErrIOOperation, pattern, err)
-		}
-		allMatches = append(allMatches, matches...)
-	}
-
-	// Also search recursively in subdirectories
 	if _, err := fs.Stat(filesystem, "."); err == nil {
 		walkErr := fs.WalkDir(filesystem, ".", func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-			if d.IsDir() {
+			if d.IsDir() || !isSupportedFile(path) {
 				return nil
 			}
-			if isSupportedFile(path) {
-				// Check if already found by glob patterns
-				normalizedPath := filepath.ToSlash(path)
-				found := false
-				for _, existing := range allMatches {
-					normalizedExisting := filepath.ToSlash(existing)
-					if normalizedExisting == normalizedPath {
-						found = true
-						break
-					}
-				}
-				if !found {
-					allMatches = append(allMatches, path)
-				}
-			}
+			allMatches = append(allMatches, path)
 			return nil
 		})
 		if walkErr != nil {

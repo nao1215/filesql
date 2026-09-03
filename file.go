@@ -3,7 +3,6 @@ package filesql
 import (
 	"strings"
 
-	"github.com/nao1215/filesql/internal/codec"
 	"github.com/nao1215/filesql/internal/parser"
 )
 
@@ -130,25 +129,6 @@ func newFile(path string) *file {
 		path:     path,
 		fileType: detectFileType(path),
 	}
-}
-
-// supportedFileExtPatterns returns all supported file patterns for glob matching
-func supportedFileExtPatterns() []string {
-	baseExts := []string{extCSV, extTSV, extLTSV, extParquet, extXLSX, extJSON, extJSONL}
-
-	patterns := make([]string, 0, (len(codec.All)+1)*len(baseExts)+2)
-	for _, baseExt := range baseExts {
-		// The uncompressed form first, then one per codec.
-		patterns = append(patterns, "*"+baseExt)
-		for _, c := range codec.All {
-			patterns = append(patterns, "*"+baseExt+c.Extension())
-		}
-	}
-
-	// ACH and Fedwire have no compression variants
-	patterns = append(patterns, "*"+extACH, "*"+extFED)
-
-	return patterns
 }
 
 // isSupportedFile checks if the file has a supported extension
