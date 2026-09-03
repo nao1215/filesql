@@ -74,6 +74,7 @@ type Config struct {
 	NestedComment     bool // /* */ block comments nest (PostgreSQL)
 	NumericEscapes    bool // \xHH, \ooo, \uXXXX and \UXXXXXXXX name a character (GoogleSQL)
 	AtOperator        bool // @ is the absolute-value operator rather than a parameter prefix (PostgreSQL)
+	HexStringIsBytes  bool // X'41' names bytes (MySQL, GoogleSQL) rather than a bit string (PostgreSQL)
 }
 
 // escapeRules says how a backslash behaves inside a quoted literal. The two
@@ -105,6 +106,7 @@ func ConfigFor(d dialects.Dialect) (Config, bool) {
 			HashComment:       true,
 			BackslashEscapes:  true,
 			DashNeedsBlank:    true,
+			HexStringIsBytes:  true,
 		}, true
 	case dialects.PostgreSQL:
 		return Config{
@@ -125,6 +127,7 @@ func ConfigFor(d dialects.Dialect) (Config, bool) {
 			ByteStringPrefix:  true,
 			TripleQuoteString: true,
 			NumericEscapes:    true,
+			HexStringIsBytes:  true,
 		}, true
 	default:
 		return Config{}, false
@@ -181,6 +184,20 @@ func Lex(query string, cfg Config) ([]Token, error) {
 			}
 			tokens = append(tokens, Token{Kind: Whitespace, Text: query[i:j], Offset: start})
 			i = j
+
+		case strings.HasPrefix(query[i:], byteOrderMark):
+			// A text editor writes a byte order mark ahead of the first
+			// character, so a query read from a file carries one; the loader
+			// already decodes it out of a data file. It is not a letter, so
+			// reading it as part of a name made "SELECT" a word no grammar
+			// knows, and a mark after a name renamed the table the caller
+			// wrote. Anywhere but the front it is refused, as every engine
+			// this package translates refuses it.
+			if start != 0 {
+				return nil, lexError(query, start, "byte order mark inside a statement")
+			}
+			tokens = append(tokens, Token{Kind: Whitespace, Text: query[i : i+len(byteOrderMark)], Offset: start})
+			i += len(byteOrderMark)
 
 		case c == '-' && next(query, i) == '-' && dashOpensComment(query, i, cfg):
 			j := i + 2
@@ -258,6 +275,15 @@ func Lex(query string, cfg Config) ([]Token, error) {
 			if !isHexDigits(content) {
 				return nil, lexError(query, start, "blob literal is not hexadecimal")
 			}
+			// Where the literal names bytes, two digits make one, so an odd
+			// count names no byte string: MySQL refuses X'0' outright, and
+			// SQLite read no token at all, which reached the caller as a
+			// complaint about text this package had rendered. PostgreSQL
+			// spells a bit string this way instead, four bits to the digit,
+			// where an odd count is a value it answers.
+			if cfg.HexStringIsBytes && len(content)%2 != 0 {
+				return nil, lexError(query, start, "blob literal has an odd number of hexadecimal digits")
+			}
 			tokens = append(tokens, Token{Kind: Blob, Text: strings.ToLower(content), Offset: start})
 			i = ni
 
@@ -327,13 +353,16 @@ func Lex(query string, cfg Config) ([]Token, error) {
 			i = j
 
 		case isDigit(c) || (c == '.' && isDigit(next(query, i))):
-			j := scanNumber(query, i)
+			j, ok := scanNumber(query, i)
+			if !ok {
+				return nil, lexError(query, start, "numeric literal has no digits after its base prefix")
+			}
 			tokens = append(tokens, Token{Kind: Number, Text: query[i:j], Offset: start})
 			i = j
 
 		case isIdentStart(c):
 			j := i + 1
-			for j < len(query) && isIdentPart(query[j]) {
+			for j < len(query) && isIdentPart(query[j]) && !strings.HasPrefix(query[j:], byteOrderMark) {
 				j++
 			}
 			tokens = append(tokens, Token{Kind: Word, Text: query[i:j], Offset: start})
@@ -755,14 +784,18 @@ func scanDollarQuoted(s string, i int) (content string, ni int, ok bool) {
 }
 
 // scanNumber returns the index just past the numeric literal starting at s[i].
-// It handles hexadecimal (0x...), a fractional part, and a signed exponent.
-func scanNumber(s string, i int) int {
+// It handles hexadecimal (0x...), a fractional part, and a signed exponent. It
+// reports false for a base prefix carrying no digits, which is a literal none
+// of these dialects has: MySQL reads "0x" as one name and answers that it has
+// no such column, and taking it for a zero followed by a word made "SELECT 0XX"
+// render as "SELECT 0 AS XX", a different query that runs and answers.
+func scanNumber(s string, i int) (int, bool) {
 	if s[i] == '0' && i+1 < len(s) && (s[i+1] == 'x' || s[i+1] == 'X') {
 		j := i + 2
 		for j < len(s) && isHex(s[j]) {
 			j++
 		}
-		return j
+		return j, j > i+2
 	}
 	// MySQL's binary literal. Without this the "0" ended the number and "b1010"
 	// began a word, so "SELECT 0b1010" reached SQLite as a zero with an alias
@@ -772,9 +805,7 @@ func scanNumber(s string, i int) int {
 		for j < len(s) && (s[j] == '0' || s[j] == '1') {
 			j++
 		}
-		if j > i+2 {
-			return j
-		}
+		return j, j > i+2
 	}
 	j := i
 	for j < len(s) && isDigit(s[j]) {
@@ -798,7 +829,7 @@ func scanNumber(s string, i int) int {
 			}
 		}
 	}
-	return j
+	return j, true
 }
 
 // multiCharOperators lists the multi-byte operators to recognize as one token,
@@ -842,6 +873,10 @@ func isDigit(c byte) bool {
 func isHex(c byte) bool {
 	return isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
+
+// byteOrderMark is U+FEFF, which the lexer takes only ahead of the first
+// character of a query.
+const byteOrderMark = "\ufeff"
 
 func isIdentStart(c byte) bool {
 	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c >= 0x80

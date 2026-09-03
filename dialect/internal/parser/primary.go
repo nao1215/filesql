@@ -406,8 +406,14 @@ func (p *Parser) parseNameOrCall() (ast.Expr, error) {
 	if p.atOp("(") {
 		return p.parseCall(parts, span)
 	}
-	if len(parts) == 1 {
-		return &ast.ColumnRef{Parts: parts, Span: span}, nil
+	// A name is qualified by at most a schema and a table, which is what every
+	// engine here takes and what SQLite reads: a fourth part is a name no
+	// engine has, and rendering it gave SQLite a syntax error at a dot rather
+	// than an answer about the name.
+	const mostParts = 3
+	if len(parts) > mostParts {
+		return nil, p.unsupportedf(
+			"a name is qualified by at most a schema and a table, and this one has %d parts", len(parts))
 	}
 	return &ast.ColumnRef{Parts: parts, Span: span}, nil
 }
@@ -428,6 +434,14 @@ func (p *Parser) parseQualifiedName() ([]ast.Ident, error) {
 		case token.Word:
 			parts = append(parts, ast.Ident{Name: t.Text, Span: ast.SpanOf(t)})
 		case token.QuotedIdent:
+			// A quoted name with nothing in it is not a name: MySQL answers
+			// "Incorrect column name ''" and PostgreSQL "zero-length delimited
+			// identifier". Taking it made the name disappear on the way out, so
+			// a call written with one rendered as "SELECT()", which SQLite
+			// reads as a syntax error at a bracket this package wrote.
+			if t.Text == "" {
+				return nil, p.unsupportedf("a quoted name cannot be empty")
+			}
 			parts = append(parts, ast.Ident{Name: t.Text, Quoted: true, Span: ast.SpanOf(t)})
 		default:
 			return nil, p.unexpected("a name")

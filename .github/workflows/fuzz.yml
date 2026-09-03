@@ -32,6 +32,8 @@ jobs:
             target: FuzzParseBinary
           - package: ./dialect
             target: FuzzTranslate
+          - package: ./dialect
+            target: FuzzTranslationPrepares
           - package: ./dialect/internal/parser
             target: FuzzParse
           - package: ./dialect/internal/parser

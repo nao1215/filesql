@@ -2173,3 +2173,67 @@ func engineFunctionNames(t *testing.T, path string) []string {
 	}
 	return names
 }
+
+// TestATranslationIsSQLSQLiteCanRead pins the shapes that once translated into
+// text SQLite could not parse, which reached the caller as a syntax error about
+// SQL this package had written rather than about the query they had. Each is
+// either refused here, under the spelling the caller used, or translated into
+// something SQLite reads.
+func TestATranslationIsSQLSQLiteCanRead(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, RegisterFunctions())
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	// Cleanup rather than defer: the subtests below run in parallel and resume
+	// after this function returns, and a closed database answers every prepare
+	// with the same error, which is not one of the ones this looks for.
+	t.Cleanup(func() { _ = db.Close() })
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE t (a TEXT, b INTEGER, c REAL)`)
+	require.NoError(t, err)
+
+	for _, tt := range []struct {
+		name    string
+		dialect Dialect
+		query   string
+		refused bool
+	}{
+		{"an alias on a star", MySQL, "SELECT t.* AS everything FROM t", true},
+		{"a hex prefix with no digits", MySQL, "SELECT 0x FROM t", true},
+		{"a binary prefix with no digits", MySQL, "SELECT 0b FROM t", true},
+		{"a hex literal PostgreSQL reads as bits", PostgreSQL, "SELECT X'0'", false},
+		{"a blob literal of one digit", GoogleSQL, "SELECT X'0'", true},
+		{"a VALUES row with no values", MySQL, "INSERT INTO t VALUES ()", true},
+		{"a qualified name of four parts", MySQL, "SELECT a.b.c.d FROM t", true},
+		{"a quoted name with nothing in it", PostgreSQL, `SELECT "" FROM t`, true},
+		{"a table name of three parts", GoogleSQL, "SELECT b FROM a.b.c", true},
+		{"a byte order mark inside a statement", MySQL, "SELECT a FROM t" + "\ufeff", true},
+		{"a byte order mark ahead of a query", MySQL, "\ufeff" + "SELECT a FROM t", false},
+		{"a call named for a word SQLite keeps", MySQL, "SELECT INDEX(1)", false},
+		{"a call the caller quoted", MySQL, "SELECT `index`(1)", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			translated, translateErr := Translate(tt.dialect, tt.query)
+			if tt.refused {
+				require.Errorf(t, translateErr, "%s translated to %q", tt.query, translated)
+				return
+			}
+			require.NoError(t, translateErr)
+
+			stmt, prepErr := db.PrepareContext(t.Context(), translated)
+			if prepErr == nil {
+				_ = stmt.Close()
+				return
+			}
+			// SQLite may still have nothing by that name, which is it
+			// answering about the query; what it may not do is fail to read
+			// the text this package wrote.
+			for _, unparsable := range []string{"syntax error", "unrecognized token", "incomplete input"} {
+				assert.NotContainsf(t, prepErr.Error(), unparsable,
+					"%s became %q, which SQLite cannot parse: %v", tt.query, translated, prepErr)
+			}
+		})
+	}
+}

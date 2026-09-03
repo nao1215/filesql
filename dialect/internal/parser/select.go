@@ -141,13 +141,20 @@ func (p *Parser) parseValuesRows() ([][]ast.Expr, error) {
 			return nil, err
 		}
 		var row []ast.Expr
-		if !p.atOp(")") {
-			list, err := p.parseExprList()
-			if err != nil {
-				return nil, err
-			}
-			row = list
+		if p.atOp(")") {
+			// MySQL writes VALUES () for a row of the columns' own defaults,
+			// and SQLite has no way to write one: a row there is a list of
+			// values and the list may not be empty. Rendering it gave SQLite
+			// "VALUES ()", which it reads as a syntax error near a bracket
+			// this package wrote.
+			return nil, p.unsupportedf(
+				"a values row cannot be empty; SQLite has no way to write a row of column defaults")
 		}
+		list, err := p.parseExprList()
+		if err != nil {
+			return nil, err
+		}
+		row = list
 		if err := p.expectOp(")"); err != nil {
 			return nil, err
 		}
@@ -348,9 +355,22 @@ func (p *Parser) parseSelectItems() ([]ast.SelectItem, error) {
 			return nil, err
 		}
 		item := ast.SelectItem{Expr: e, Span: span, Source: p.sourceText(from, p.pos)}
+		// The token the alias begins at, taken before it is consumed, so the
+		// refusal below points at what the caller wrote rather than at
+		// whatever follows it.
+		aliasStart := p.cur()
 		if alias, quoted, ok, err := p.parseAlias(); err != nil {
 			return nil, err
 		} else if ok {
+			// A star stands for every column of a row, so there is nothing for
+			// one name to name, and no engine this package reads takes an alias
+			// on one. Taking it here rendered "SELECT * AS a", which SQLite
+			// refuses as a syntax error near an AS the caller may not even have
+			// written -- an answer about this package's own text.
+			if _, isStar := e.(*ast.Star); isStar {
+				return nil, unsupportedAt(aliasStart,
+					"a star cannot be given a name; it stands for every column of the row")
+			}
 			item.Alias, item.AliasQuoted = alias, quoted
 		}
 		items = append(items, item)

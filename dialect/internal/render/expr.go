@@ -515,7 +515,11 @@ func (w *writer) call(n *ast.FuncCall) error {
 	if n.Separator != nil || n.Limit != nil || len(n.WithinGroup) > 0 {
 		return unsupported(n.Span, "this aggregate clause")
 	}
-	w.word(n.Name[0].Name)
+	// A call name is quoted by the same rule every other name is: SQLite
+	// keeps words like SELECT for its own grammar, and one written bare made
+	// SQL that answered with a syntax error about text this package rendered
+	// rather than with the missing function the caller asked for.
+	w.word(quoteIfNeeded(n.Name[0].Name))
 	w.b.WriteByte('(')
 	switch {
 	case n.Star:
