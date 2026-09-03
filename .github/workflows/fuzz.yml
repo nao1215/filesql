@@ -26,9 +26,9 @@ jobs:
         include:
           - package: ./internal/reader
             target: FuzzCSVReader
-          - package: ./parser
+          - package: ./internal/parser
             target: FuzzParseFormats
-          - package: ./parser
+          - package: ./internal/parser
             target: FuzzParseBinary
           - package: ./dialect
             target: FuzzTranslate
