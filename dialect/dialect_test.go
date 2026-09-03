@@ -2237,3 +2237,48 @@ func TestATranslationIsSQLSQLiteCanRead(t *testing.T) {
 		})
 	}
 }
+
+// TestTheMySQLUpsertSpelling translates the upsert MySQL callers write and runs
+// it, since the rows it leaves are the answer that matters. They are the rows
+// MySQL 8.4 leaves for the same statements.
+func TestTheMySQLUpsertSpelling(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, RegisterFunctions())
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE u (a INTEGER PRIMARY KEY, b TEXT)`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO u VALUES (1, 'x')`)
+	require.NoError(t, err)
+
+	for _, query := range []string{
+		"INSERT INTO u (a, b) VALUES (1, 'y') ON DUPLICATE KEY UPDATE b = VALUES(b)",
+		"INSERT INTO u (a, b) VALUES (2, 'z') ON DUPLICATE KEY UPDATE b = VALUES(b)",
+		"INSERT INTO u (a, b) VALUES (1, 'w') ON DUPLICATE KEY UPDATE b = CONCAT(VALUES(b), '!')",
+	} {
+		translated, err := Translate(MySQL, query)
+		require.NoErrorf(t, err, "%s", query)
+		_, err = db.ExecContext(t.Context(), translated)
+		require.NoErrorf(t, err, "%s became %q", query, translated)
+	}
+
+	rows, err := db.QueryContext(t.Context(), `SELECT a, b FROM u ORDER BY a`)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	got := map[int]string{}
+	for rows.Next() {
+		var a int
+		var b string
+		require.NoError(t, rows.Scan(&a, &b))
+		got[a] = b
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, map[int]string{1: "w!", 2: "z"}, got)
+
+	// VALUES names one column and nothing else, and outside an upsert there is
+	// no row for it to name, which is what MySQL answers too.
+	_, err = Translate(MySQL, "INSERT INTO u (a) VALUES (1) ON DUPLICATE KEY UPDATE b = VALUES(1 + 1)")
+	assert.Error(t, err)
+}

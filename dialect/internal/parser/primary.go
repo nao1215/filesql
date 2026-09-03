@@ -144,7 +144,11 @@ func (p *Parser) parseWordPrimary() (ast.Expr, error) {
 	// "SELECT b + FROM t" a sum of b and a column called FROM, with t as its
 	// alias: a query that stops in the middle parsed, and what reached SQLite
 	// was a different query.
-	if clauseOnlyWords[word] {
+	//
+	// A word in front of a parenthesis is a call rather than a name, which is
+	// how MySQL spells the VALUES(a) of an upsert, so the name is left to the
+	// call reader below.
+	if clauseOnlyWords[word] && !p.peek(1).IsOp("(") {
 		return nil, p.unexpected("an expression")
 	}
 

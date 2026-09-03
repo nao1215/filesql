@@ -427,3 +427,20 @@ func TestTheClauseSpellingsTheGrammarAccepts(t *testing.T) {
 		})
 	}
 }
+
+// TestAClauseKeywordInFrontOfAParenthesisIsACall holds the exception to the
+// refusal of a clause word where a value goes: a word in front of a
+// parenthesis is a call, which is how MySQL spells an upsert's VALUES(a).
+func TestAClauseKeywordInFrontOfAParenthesisIsACall(t *testing.T) {
+	t.Parallel()
+
+	for _, query := range []string{
+		"SELECT LEFT('abc', 2)",
+		"SELECT RIGHT('abc', 2)",
+		"INSERT INTO t (a) VALUES (1) ON DUPLICATE KEY UPDATE a = VALUES(a)",
+	} {
+		if _, err := Parse(dialects.MySQL, query); err != nil {
+			t.Errorf("Parse(%q): %v", query, err)
+		}
+	}
+}
