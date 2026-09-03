@@ -299,15 +299,38 @@ type moduleSignature struct {
 	params   int
 	variadic bool
 	takesCtx bool
+	// ambiguous marks a method name more than one type has, which a snippet
+	// naming a receiver this test does not resolve cannot be matched against.
+	ambiguous bool
 }
 
 // moduleDocs reads every non-test Go file of the module, returning the
 // signatures its packages export and every comment group in them.
-func moduleDocs(t *testing.T) (map[string]moduleSignature, map[string][]*ast.CommentGroup, map[string]bool, *token.FileSet) {
+// moduleDoc is the module as the documentation tests read it.
+type moduleDoc struct {
+	// signatures is every exported function and method, keyed by
+	// "package.Name" and, for a method, "package.Receiver.Name".
+	signatures map[string]moduleSignature
+	// methods is every exported method by its own name, for the snippets that
+	// write a receiver before the dot.
+	methods map[string]moduleSignature
+	// comments is every comment group of each file, by path.
+	comments map[string][]*ast.CommentGroup
+	// exported is every name the module exports.
+	exported map[string]bool
+	// imports is the qualifiers each file's imports bind, by path.
+	imports map[string]map[string]bool
+	fset    *token.FileSet
+}
+
+// moduleDocs reads every non-test Go file of the module.
+func moduleDocs(t *testing.T) moduleDoc {
 	t.Helper()
 
 	signatures := map[string]moduleSignature{}
+	methods := map[string]moduleSignature{}
 	comments := map[string][]*ast.CommentGroup{}
+	imports := map[string]map[string]bool{}
 	exported := map[string]bool{}
 	fset := token.NewFileSet()
 
@@ -331,6 +354,7 @@ func moduleDocs(t *testing.T) (map[string]moduleSignature, map[string][]*ast.Com
 		}
 		pkg := file.Name.Name
 		comments[path] = file.Comments
+		imports[path] = importNames(file)
 		for _, decl := range file.Decls {
 			switch d := decl.(type) {
 			case *ast.FuncDecl:
@@ -352,6 +376,14 @@ func moduleDocs(t *testing.T) (map[string]moduleSignature, map[string][]*ast.Com
 				key := pkg + "." + d.Name.Name
 				if d.Recv != nil {
 					key = pkg + "." + receiverName(d.Recv.List[0].Type) + "." + d.Name.Name
+					// A snippet writes a receiver before the dot -- b.AddPath(p)
+					// -- so the method is looked up by its own name. A name two
+					// receivers share is left out rather than guessed at.
+					if _, taken := methods[d.Name.Name]; taken {
+						methods[d.Name.Name] = moduleSignature{ambiguous: true}
+					} else {
+						methods[d.Name.Name] = sig
+					}
 				}
 				signatures[key] = sig
 			case *ast.GenDecl:
@@ -376,7 +408,37 @@ func moduleDocs(t *testing.T) (map[string]moduleSignature, map[string][]*ast.Com
 	if err != nil {
 		t.Fatalf("failed to read the module: %v", err)
 	}
-	return signatures, comments, exported, fset
+	return moduleDoc{
+		signatures: signatures,
+		methods:    methods,
+		comments:   comments,
+		exported:   exported,
+		imports:    imports,
+		fset:       fset,
+	}
+}
+
+// importNames is the qualifiers a file's imports bind, so a call written
+// os.Open is known to name another package rather than a method on a receiver
+// named os. A doc comment may also name a package the file does not import --
+// the snippets show a caller's code -- so a few common ones are added.
+func importNames(file *ast.File) map[string]bool {
+	names := map[string]bool{
+		"os": true, "sql": true, "http": true, "context": true, "fmt": true,
+		"log": true, "strings": true, "bytes": true, "time": true, "json": true,
+	}
+	for _, spec := range file.Imports {
+		path := strings.Trim(spec.Path.Value, `"`)
+		name := path
+		if at := strings.LastIndex(path, "/"); at >= 0 {
+			name = path[at+1:]
+		}
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		names[name] = true
+	}
+	return names
 }
 
 // receiverName is the type a method hangs off, without the pointer.
@@ -399,9 +461,9 @@ func receiverName(expr ast.Expr) string {
 func TestDocCommentSnippetsCompile(t *testing.T) {
 	t.Parallel()
 
-	signatures, comments, _, fset := moduleDocs(t)
+	module := moduleDocs(t)
 
-	for path, groups := range comments {
+	for path, groups := range module.comments {
 		pkg := filepath.Base(filepath.Dir(path))
 		if pkg == "." || pkg == "filesql" {
 			pkg = "filesql"
@@ -418,13 +480,21 @@ func TestDocCommentSnippetsCompile(t *testing.T) {
 					if at := strings.LastIndex(name, "."); at >= 0 {
 						qualifier, name = name[:at], name[at+1:]
 					}
-					key := pkg + "." + name
-					if qualifier != "" && qualifier != pkg {
-						// Another package's call, which this module does not
-						// have the signature of.
+					if qualifier != "" && qualifier != pkg && module.imports[path][qualifier] {
+						// Another package's call, whose signature this module
+						// does not have.
 						continue
 					}
-					sig, known := signatures[key]
+					sig, known := module.signatures[pkg+"."+name]
+					if !known {
+						// A method, which a snippet writes with a receiver
+						// before the dot or with none at all, and which is
+						// looked up by its own name.
+						sig, known = module.methods[name]
+						if sig.ambiguous {
+							continue
+						}
+					}
 					if !known {
 						continue
 					}
@@ -432,7 +502,7 @@ func TestDocCommentSnippetsCompile(t *testing.T) {
 					if sig.variadic {
 						least--
 					}
-					where := fset.Position(comment.Pos())
+					where := module.fset.Position(comment.Pos())
 					if call.args < least {
 						t.Errorf("%s: %q calls %s with %d arguments; it takes %d",
 							where, line, call.name, call.args, sig.params)
@@ -455,7 +525,7 @@ func TestDocCommentSnippetsCompile(t *testing.T) {
 func TestDocCommentsNameNothingRemoved(t *testing.T) {
 	t.Parallel()
 
-	_, comments, exported, fset := moduleDocs(t)
+	module := moduleDocs(t)
 
 	// The names a doc comment may spell that this module no longer has. Each
 	// was exported once and removed, so a reader meeting one in prose has no
@@ -467,17 +537,17 @@ func TestDocCommentsNameNothingRemoved(t *testing.T) {
 		"ErrEmptyJSONOutput", "NewReadOnlyDB",
 	}
 	for _, name := range removed {
-		if exported[name] {
+		if module.exported[name] {
 			continue // Still here, so a mention of it is correct.
 		}
-		for path, groups := range comments {
+		for path, groups := range module.comments {
 			for _, group := range groups {
 				for _, comment := range group.List {
 					if !mentionsIdentifier(comment.Text, name) {
 						continue
 					}
 					t.Errorf("%s: the documentation names %s, which this module no longer exports: %q",
-						fset.Position(comment.Pos()), name, strings.TrimSpace(comment.Text))
+						module.fset.Position(comment.Pos()), name, strings.TrimSpace(comment.Text))
 				}
 			}
 			_ = path

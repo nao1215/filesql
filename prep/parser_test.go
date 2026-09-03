@@ -1701,6 +1701,23 @@ func TestBareDefaultIsAValue(t *testing.T) {
 		}
 	})
 
+	t.Run("default= says the same thing", func(t *testing.T) {
+		t.Parallel()
+
+		var rows []struct {
+			Name string
+			Nope string `prep:"default="`
+		}
+		_, _, err := NewProcessor(FileTypeCSV, WithStrictTagParsing()).
+			Process(strings.NewReader("name\nx\n"), &rows)
+		if err != nil {
+			t.Fatalf("the two spellings say the same thing: %v", err)
+		}
+		if len(rows) != 1 || rows[0].Name != "x" || rows[0].Nope != "" {
+			t.Errorf("rows = %v", rows)
+		}
+	})
+
 	t.Run("the other parameterised tags are reported", func(t *testing.T) {
 		t.Parallel()
 

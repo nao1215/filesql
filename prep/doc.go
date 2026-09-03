@@ -94,9 +94,9 @@
 // tabular, and neither has a prep.FileType to construct a Processor with; load
 // such a file with filesql and query the tables it makes instead.
 //
-// A compressed stream is the caller's to unwrap, the way it is for
-// parser.Parse. Process reads the bytes it is given as the format it was
-// constructed with, so a codec has to come off first:
+// A compressed stream is the caller's to unwrap. Process reads the bytes it is
+// given as the format it was constructed with, so a codec has to come off
+// first:
 //
 //	f, _ := os.Open("data.csv.gz")
 //	defer f.Close()
@@ -108,9 +108,9 @@
 // filesql.OpenReader takes the codec from the name of a path instead, for a
 // caller that has one.
 //
-// A text encoding is not the caller's, since prep reads through parser.Parse: a
-// byte-order mark decides it, a UTF-16 file is transcoded, and a file that is
-// not UTF-8 is refused when it is read, with an error matching
+// A text encoding is not the caller's, since prep reads a text format the way a
+// load does: a byte-order mark decides it, a UTF-16 file is transcoded, and a
+// file that is not UTF-8 is refused when it is read, with an error matching
 // filesql.ErrInvalidUTF8 that names the byte and its offset. What prep writes
 // is UTF-8 whatever went in.
 //
