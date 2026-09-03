@@ -1893,3 +1893,113 @@ func TestDialectMirrorsTheInternalIdentifier(t *testing.T) {
 		t.Errorf("Dialects() has %d entries, the internal list has %d", got, len(dialects.All()))
 	}
 }
+
+// TestBothSpellingsOfANiladicFunctionAgree holds the two spellings of one
+// construct to one answer. The standard writes CURRENT_USER and its siblings
+// without parentheses, and a bare word nothing claims stays a column reference:
+// SQLite then answered "no such column: current_user", about a column the
+// caller did not write, while the parenthesized spelling was refused by name
+// with the reason. It is the shape the clock keywords had before they were
+// given an answer.
+func TestBothSpellingsOfANiladicFunctionAgree(t *testing.T) {
+	t.Parallel()
+
+	// Whether one of these is refused is the dialect's own answer, from the
+	// table that answers for the parenthesized spelling. What this holds is
+	// that the two spellings give the same answer, whichever it is.
+	for _, name := range []string{
+		"CURRENT_USER", "SESSION_USER", "SYSTEM_USER", "CURRENT_CATALOG", "CURRENT_SCHEMA", "CURRENT_ROLE",
+	} {
+		for _, d := range []Dialect{MySQL, PostgreSQL, GoogleSQL} {
+			t.Run(name+" under "+string(d), func(t *testing.T) {
+				t.Parallel()
+
+				_, bareErr := Translate(d, "SELECT "+name)
+				_, calledErr := Translate(d, "SELECT "+name+"()")
+				if (bareErr == nil) != (calledErr == nil) {
+					t.Errorf("the two spellings of %s answer differently: bare=%v called=%v",
+						name, bareErr, calledErr)
+				}
+			})
+		}
+	}
+
+	// The three PostgreSQL reserves and answers from its catalog, which a
+	// database made from files has none of. Both spellings are refused.
+	for _, name := range []string{"CURRENT_USER", "SESSION_USER", "SYSTEM_USER"} {
+		t.Run("postgresql refuses "+name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, query := range []string{"SELECT " + name, "SELECT " + name + "()"} {
+				translated, err := Translate(PostgreSQL, query)
+				if err == nil {
+					t.Errorf("%q was translated to %q rather than refused", query, translated)
+					continue
+				}
+				if !strings.Contains(err.Error(), "a fact about the server") {
+					t.Errorf("%q is refused without the reason: %v", query, err)
+				}
+			}
+		})
+	}
+
+	t.Run("a quoted name is the column it spells", func(t *testing.T) {
+		t.Parallel()
+
+		// A column really named one of these is reachable by the spelling the
+		// engine that reserved the word requires anyway.
+		translated, err := Translate(PostgreSQL, `SELECT "current_user" FROM t`)
+		if err != nil {
+			t.Fatalf("a quoted name is a column: %v", err)
+		}
+		if !strings.Contains(translated, "current_user") {
+			t.Errorf("the column was lost: %q", translated)
+		}
+	})
+
+	t.Run("sqlite reads the word as the column it spells", func(t *testing.T) {
+		t.Parallel()
+
+		// The identity translation refuses nothing, so a caller writing SQLite
+		// gets the column their file holds.
+		if _, err := Translate(SQLite, "SELECT current_user FROM t"); err != nil {
+			t.Errorf("the identity translation refuses nothing: %v", err)
+		}
+	})
+}
+
+// TestSourceArityIsCheckedForNamesLeftOnSQLite holds a call to the argument
+// count the dialect that wrote it accepts, for a name this package leaves on
+// SQLite's function of the same name. MySQL's LTRIM takes the string alone and
+// SQLite's takes an optional set of characters, so LTRIM('xxab','x') answered
+// "ab" here and "Incorrect parameter count" in MySQL -- a query answering
+// differently from the engine it was written for, with nothing said.
+func TestSourceArityIsCheckedForNamesLeftOnSQLite(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		dialect Dialect
+		query   string
+		refuse  bool
+	}{
+		{MySQL, "SELECT LTRIM('xxab','x')", true},
+		{MySQL, "SELECT RTRIM('abxx','x')", true},
+		{MySQL, "SELECT LTRIM('  ab')", false},
+		{MySQL, "SELECT RTRIM('ab  ')", false},
+		// Both take the second argument in these dialects.
+		{PostgreSQL, "SELECT LTRIM('xxab','x')", false},
+		{GoogleSQL, "SELECT LTRIM('xxab','x')", false},
+	} {
+		t.Run(string(tt.dialect)+" "+tt.query, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := Translate(tt.dialect, tt.query)
+			if tt.refuse && err == nil {
+				t.Errorf("%s does not take that many arguments and the call was translated", tt.query)
+			}
+			if !tt.refuse && err != nil {
+				t.Errorf("%s is a call the dialect accepts: %v", tt.query, err)
+			}
+		})
+	}
+}

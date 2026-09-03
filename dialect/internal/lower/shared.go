@@ -217,16 +217,48 @@ var bareValueNames = map[string]string{ //nolint:gochecknoglobals // a fixed tab
 	keywordCurrentTimestamp: keywordCurrentTimestamp,
 }
 
-// bareValue lowers a name that is a value rather than a column.
-func bareValue(ref *ast.ColumnRef) (ast.Expr, bool) {
+// bareNiladicNames are the words the standard writes without parentheses that
+// name a value rather than a column. They reach here as column references for
+// the same reason the clock keywords do, and what happens to a bare word
+// nothing claims is that it stays a column reference: SQLite then answered
+// "no such column: current_user", which is about a column the caller did not
+// write, while CURRENT_USER() was refused by name with a reason.
+//
+// Whether one of these is refused is the dialect's own answer, read from the
+// table that answers for the parenthesized spelling, so the two spellings of
+// one construct cannot say different things. The set is fixed and small
+// because a bare word is only safely read this way where the engines reserve
+// it: a column really named one of these has to be quoted in the engine that
+// wrote the query as well, and a quoted reference is not one of these.
+var bareNiladicNames = map[string]bool{ //nolint:gochecknoglobals // a fixed table
+	keywordCurrentUser:    true,
+	keywordSessionUser:    true,
+	keywordSystemUser:     true,
+	keywordCurrentCatalog: true,
+	keywordCurrentSchema:  true,
+	keywordCurrentRole:    true,
+}
+
+// bareValue lowers a name that is a value rather than a column, and refuses one
+// naming a value this package has none of.
+func bareValue(d dialects.Dialect, ref *ast.ColumnRef) (ast.Expr, bool, error) {
 	if len(ref.Parts) != 1 || ref.Parts[0].Quoted {
-		return nil, false
+		return nil, false, nil
 	}
-	name, ok := bareValueNames[strings.ToUpper(ref.Parts[0].Name)]
-	if !ok {
-		return nil, false
+	upper := strings.ToUpper(ref.Parts[0].Name)
+	if name, ok := bareValueNames[upper]; ok {
+		return &ast.Keyword{Name: name, Span: ref.Span}, true, nil
 	}
-	return &ast.Keyword{Name: name, Span: ref.Span}, true
+	if !bareNiladicNames[upper] {
+		return nil, false, nil
+	}
+	// SQLite is the identity translation and reads such a word as the column it
+	// spells, which is what a caller writing SQLite means by it.
+	reason, refused := unsupportedFunctions(d)[upper]
+	if !refused {
+		return nil, false, nil
+	}
+	return nil, false, unsupported(ref.Span, "%s is not supported; %s", upper, reason)
 }
 
 // position normalizes the several spellings of "where does a substring start"

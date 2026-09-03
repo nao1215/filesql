@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/nao1215/filesql/dialect/internal/ast"
+	"github.com/nao1215/filesql/dialect/internal/dialects"
 )
 
 // stmt lowers a statement and everything under it.
@@ -362,7 +363,11 @@ func (l *lowerer) lowerNode(e ast.Expr) (ast.Expr, error) {
 		return l.rules.Literal(n)
 
 	case *ast.ColumnRef:
-		if value, ok := bareValue(n); ok {
+		value, ok, err := bareValue(l.rules.Dialect(), n)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			return value, nil
 		}
 		return e, nil
@@ -626,6 +631,9 @@ func (l *lowerer) call(n *ast.FuncCall) (ast.Expr, error) {
 	// the refusal below uses this name and not the helper's.
 	written := callName(n)
 	span := n.Span
+	if err := checkSourceArity(l.rules.Dialect(), written, len(n.Args), span); err != nil {
+		return nil, err
+	}
 	lowered, err := l.rules.Call(n)
 	if err != nil {
 		return nil, err
@@ -656,6 +664,38 @@ func checkHelperArity(e ast.Expr, written string, span ast.Span) error {
 	}
 	return unsupported(span, "%s takes %s and the call has %d",
 		written, arityDescription(name), len(call.Args))
+}
+
+// sourceArity is how many arguments a dialect's own function takes, for the
+// names this package leaves on SQLite's function of the same name where SQLite
+// accepts a count the source dialect does not.
+//
+// The helper arity check covers every name this package rewrites, because a
+// rewriting has to know how many arguments it is rewriting. A name left alone
+// is checked by SQLite instead, and SQLite answering a call the source dialect
+// would have refused is the one outcome worth catching: MySQL's LTRIM takes the
+// string alone, SQLite's takes an optional set of characters to strip, so
+// LTRIM('xxab','x') answered "ab" here and "Incorrect parameter count" in MySQL.
+var sourceArity = map[dialects.Dialect]map[string]int{ //nolint:gochecknoglobals // a fixed table
+	dialects.MySQL: {
+		"LTRIM": 1,
+		"RTRIM": 1,
+	},
+}
+
+// checkSourceArity refuses a call whose argument count the dialect that wrote
+// it does not accept.
+func checkSourceArity(d dialects.Dialect, written string, args int, span ast.Span) error {
+	names, ok := sourceArity[d]
+	if !ok {
+		return nil
+	}
+	want, ok := names[strings.ToUpper(written)]
+	if !ok || args == want {
+		return nil
+	}
+	return unsupported(span, "%s takes %d argument and the call has %d",
+		written, want, args)
 }
 
 func (l *lowerer) insert(n *ast.InsertStmt) (ast.Stmt, error) {
