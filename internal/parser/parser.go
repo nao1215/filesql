@@ -268,8 +268,11 @@ func strictFieldCount(baseType FileType) reader.Reconcile {
 		syntaxError = ErrTSVSyntax
 	}
 	return func(record []string, want, rowNum int) ([]string, bool, error) {
-		return nil, false, fmt.Errorf("%w: record on line %d has %d fields, the header has %d",
-			syntaxError, rowNum+1, len(record), want)
+		// Both sentinels: the syntax one a caller of this package matches, and
+		// the one a load answers with for the same record, so one document
+		// refused at either door is refused by the same name.
+		return nil, false, fmt.Errorf("%w: %w: record on line %d has %d fields, the header has %d",
+			reader.ErrColumnMismatch, syntaxError, rowNum+1, len(record), want)
 	}
 }
 
@@ -281,16 +284,13 @@ func parseError(err error) error {
 	if !errors.As(err, &readErr) {
 		return err
 	}
-	switch readErr.Kind {
-	case reader.KindDuplicateColumn:
-		// The sentinel travels with it so that a caller reading through prep
-		// matches the same error a load answers with.
-		return fmt.Errorf("%w: %s", reader.ErrDuplicateColumn, readErr.Error())
-	case reader.KindEmpty:
+	// prep answers for an empty document in its own words; every other kind is
+	// named by the sentinel the read failure carries, which is the same value
+	// a load answers with.
+	if readErr.Kind == reader.KindEmpty {
 		return &emptyInputError{err: err}
-	default:
-		return err
 	}
+	return fmt.Errorf("%w: %w", reader.SentinelFor(readErr.Kind), readErr)
 }
 
 // File extensions

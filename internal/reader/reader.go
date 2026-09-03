@@ -22,13 +22,55 @@ import (
 	"github.com/nao1215/filesql/internal/infer"
 )
 
-// ErrDuplicateColumn is a header that names one column twice. It lives here
-// rather than in the packages that publish it because both doors into this
-// reader answer for the same input: filesql exports it as
-// filesql.ErrDuplicateColumn, and prep, which parses through the same reader,
-// returns an error carrying it, so errors.Is finds it whichever door a caller
-// came through.
-var ErrDuplicateColumn = errors.New("filesql: duplicate column name")
+// The sentinels a read failure carries. They live here rather than in the
+// packages that publish them because both doors into this reader answer for the
+// same input: filesql exports them under its own names, and prep, which parses
+// through the same reader, returns an error carrying them, so errors.Is finds
+// the same one whichever door a caller came through.
+//
+// A caller used to map Kind onto its own sentinel, and the mapping was written
+// twice -- once by the loader, which handled every kind, and once by the
+// parser, which handled two and let the rest through unclassified, so four
+// classes of malformed input reached a caller of prep matching nothing at all.
+// An Error carries its own sentinel now, and there is nothing left to map.
+var (
+	// ErrEmptyData is input holding no table at all.
+	ErrEmptyData = errors.New("filesql: empty data source")
+	// ErrInvalidData is a value the format cannot hold.
+	ErrInvalidData = errors.New("filesql: invalid data format")
+	// ErrDuplicateColumn is a header that names one column twice.
+	ErrDuplicateColumn = errors.New("filesql: duplicate column name")
+	// ErrUnsupportedFormat is input this package does not read.
+	ErrUnsupportedFormat = errors.New("filesql: unsupported file format")
+	// ErrParsing is input that does not describe a table of the format it
+	// claims, which is the kind every other kind is a narrowing of.
+	ErrParsing = errors.New("filesql: parsing failed")
+	// ErrColumnMismatch is a record that does not fit the columns of its table.
+	// It is not one of the kinds, because a record that does not fit is decided
+	// on by the malformed-row policy rather than refused outright; it lives here
+	// so the door that refuses it and the door that reports it name the same
+	// sentinel.
+	ErrColumnMismatch = errors.New("filesql: column count mismatch")
+)
+
+// SentinelFor is the sentinel a read failure of this kind carries. Every kind
+// has one: a kind added later has to be given an answer here, which is what the
+// switch with no passing default is for.
+func SentinelFor(kind Kind) error {
+	switch kind {
+	case KindEmpty:
+		return ErrEmptyData
+	case KindInvalidData:
+		return ErrInvalidData
+	case KindDuplicateColumn:
+		return ErrDuplicateColumn
+	case KindUnsupported:
+		return ErrUnsupportedFormat
+	case KindParse:
+		return ErrParsing
+	}
+	return ErrParsing
+}
 
 // Format is the file format a source is read as. Compression is not part of it:
 // a caller unwraps the codec before reading.
@@ -292,8 +334,16 @@ func (e *Error) Error() string {
 	return e.Msg + ": " + e.Err.Error()
 }
 
-// Unwrap returns the cause, so errors.Is reaches whatever it carries.
-func (e *Error) Unwrap() error { return e.Err }
+// Unwrap returns the sentinel this failure carries and the cause under it, so
+// errors.Is finds the sentinel whichever package the error was handed to and
+// whatever that package wrapped it in.
+func (e *Error) Unwrap() []error {
+	sentinel := SentinelFor(e.Kind)
+	if e.Err == nil {
+		return []error{sentinel}
+	}
+	return []error{sentinel, e.Err}
+}
 
 // parseError reports input that does not describe a table.
 func parseError(cause error, format string, args ...any) error {

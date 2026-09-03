@@ -11,13 +11,13 @@ import (
 // Use errors.Is() to check for these errors.
 var (
 	// ErrEmptyData indicates that the data source contains no records.
-	ErrEmptyData = errors.New("filesql: empty data source")
+	ErrEmptyData = reader.ErrEmptyData
 
 	// ErrUnsupportedFormat indicates an unsupported file format.
-	ErrUnsupportedFormat = errors.New("filesql: unsupported file format")
+	ErrUnsupportedFormat = reader.ErrUnsupportedFormat
 
 	// ErrInvalidData indicates malformed or invalid data.
-	ErrInvalidData = errors.New("filesql: invalid data format")
+	ErrInvalidData = reader.ErrInvalidData
 
 	// ErrNoTables indicates no tables found in database.
 	ErrNoTables = errors.New("filesql: no tables found in database")
@@ -58,7 +58,7 @@ var (
 	// ErrColumnMismatch indicates a record that does not fit the columns of its
 	// table: a delimited record whose field count differs from the header, or an
 	// LTSV record holding a field that names no label.
-	ErrColumnMismatch = errors.New("filesql: column count mismatch")
+	ErrColumnMismatch = reader.ErrColumnMismatch
 
 	// ErrDatabaseOperation indicates a database operation failed.
 	ErrDatabaseOperation = errors.New("filesql: database operation failed")
@@ -77,7 +77,7 @@ var (
 	ErrEncoding = textin.ErrEncoding
 
 	// ErrParsing indicates a file parsing operation failed.
-	ErrParsing = errors.New("filesql: parsing failed")
+	ErrParsing = reader.ErrParsing
 
 	// ErrACH indicates an ACH file operation failed.
 	ErrACH = errors.New("filesql: ACH operation failed")
