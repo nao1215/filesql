@@ -2468,3 +2468,69 @@ func TestAutoSaveOverwriteXLSXKeepsAHiddenColumn(t *testing.T) {
 		assert.Equal(t, 197, sum)
 	})
 }
+
+// TestAutoSaveSeesATransactionOpenedByAnyStatement holds the save to the
+// transaction SQLite has rather than to the one the first keyword of a query
+// suggests. A query holding more than one statement is run whole by the driver,
+// so "SELECT 1; BEGIN" leaves a transaction open; reading only the first
+// statement left it invisible, and the save then ran at Close over work the
+// connection discarded, with Close answering nil.
+func TestAutoSaveSeesATransactionOpenedByAnyStatement(t *testing.T) {
+	t.Parallel()
+
+	for _, opener := range []string{
+		"BEGIN",
+		"SELECT 1; BEGIN",
+		"SELECT 1;\nBEGIN",
+		"SELECT 1; SAVEPOINT sp",
+		"SELECT 1; /* hi */ BEGIN",
+	} {
+		t.Run(opener, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			path := filepath.Join(dir, "d.csv")
+			require.NoError(t, os.WriteFile(path, []byte("a,b\n1,original\n"), 0o600))
+
+			db, err := NewBuilder().AddPath(path).EnableAutoSave("").Open(t.Context())
+			require.NoError(t, err)
+
+			_, err = db.ExecContext(t.Context(), opener)
+			require.NoError(t, err)
+			_, err = db.ExecContext(t.Context(), `UPDATE d SET b = 'edited'`)
+			require.NoError(t, err)
+
+			closeErr := db.Close()
+			after, readErr := os.ReadFile(path) //nolint:gosec // a path from t.TempDir()
+			require.NoError(t, readErr)
+
+			// The transaction was never committed, so the edit is not the
+			// caller's to keep -- but they have to be told the save was
+			// skipped rather than being handed a nil and a file without it.
+			assert.Error(t, closeErr, "a transaction left open has to be reported")
+			assert.Contains(t, string(after), "original")
+		})
+	}
+}
+
+// TestAutoSaveOnCommitSeesACommitThatIsNotFirst is the other half: a COMMIT
+// that is not the leading keyword ends the transaction in SQLite, so the save
+// that follows a commit has to run.
+func TestAutoSaveOnCommitSeesACommitThatIsNotFirst(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "d.csv")
+	require.NoError(t, os.WriteFile(path, []byte("a,b\n1,original\n"), 0o600))
+
+	db, err := NewBuilder().AddPath(path).EnableAutoSave("").Open(t.Context())
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(t.Context(), `BEGIN; UPDATE d SET b = 'edited'; COMMIT`)
+	require.NoError(t, err)
+
+	require.NoError(t, db.Close(), "the transaction was committed, so the save runs")
+	after, err := os.ReadFile(path) //nolint:gosec // a path from t.TempDir()
+	require.NoError(t, err)
+	assert.Contains(t, string(after), "edited")
+}

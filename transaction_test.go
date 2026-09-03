@@ -781,3 +781,92 @@ func TestTxGate(t *testing.T) {
 		require.NoError(t, g.acquire(t.Context()))
 	})
 }
+
+// TestReadTxStatementsReadsEveryStatement holds the reading of a query to what
+// SQLite does with it. database/sql hands the whole string to the driver and
+// SQLite runs every statement in it, so a reading that stopped at the first
+// left a transaction opened by a later one invisible: an auto-save then ran
+// over work the connection went on to discard, and Close answered nil.
+func TestReadTxStatementsReadsEveryStatement(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name  string
+		query string
+		want  []txEffect
+	}{
+		{"one statement that opens", "BEGIN", []txEffect{txEffectBegin}},
+		{"one that does nothing", "SELECT 1", nil},
+		{"an opener that is not first", "SELECT 1; BEGIN", []txEffect{txEffectBegin}},
+		{"an opener after a newline", "SELECT 1;\nBEGIN", []txEffect{txEffectBegin}},
+		{"a pair that opens and closes", "BEGIN; COMMIT", []txEffect{txEffectBegin, txEffectCommit}},
+		{"a savepoint that is not first", "SELECT 1; SAVEPOINT sp", []txEffect{txEffectBegin}},
+		{"a savepoint and its release", "SAVEPOINT sp; RELEASE sp", []txEffect{txEffectBegin, txEffectCommit}},
+		{"a rollback that is not first", "SELECT 1; ROLLBACK", []txEffect{txEffectRollback}},
+		{"a trailing semicolon", "BEGIN;", []txEffect{txEffectBegin}},
+		{"nothing but semicolons", ";;;", nil},
+		// A semicolon inside a string, an identifier or a comment ends no
+		// statement, so what follows it is not one.
+		{"a semicolon inside a string", "SELECT ';BEGIN'", nil},
+		{"a semicolon inside a quoted name", `SELECT "a;BEGIN" FROM t`, nil},
+		{"a semicolon inside a bracketed name", `SELECT [a;BEGIN] FROM t`, nil},
+		{"a semicolon inside a backticked name", "SELECT `a;BEGIN` FROM t", nil},
+		{"a semicolon inside a line comment", "SELECT 1 -- ;BEGIN", nil},
+		{"a semicolon inside a block comment", "SELECT 1 /* ;BEGIN */", nil},
+		{"a doubled quote inside a string", "SELECT 'it''s;BEGIN'", nil},
+		// A comment before the keyword does not hide it, in any position.
+		{"a comment before a later opener", "SELECT 1; /* hi */ BEGIN", []txEffect{txEffectBegin}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := readTxStatements(tt.query)
+			effects := make([]txEffect, 0, len(got))
+			for _, stmt := range got {
+				effects = append(effects, stmt.effect)
+			}
+			if len(effects) != len(tt.want) {
+				t.Fatalf("readTxStatements(%q) = %v, want %v", tt.query, effects, tt.want)
+			}
+			for i := range effects {
+				if effects[i] != tt.want[i] {
+					t.Errorf("readTxStatements(%q) = %v, want %v", tt.query, effects, tt.want)
+					break
+				}
+			}
+		})
+	}
+}
+
+// TestSplitStatements covers the cut on its own, since what it must not do is
+// find a boundary inside a value.
+func TestSplitStatements(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		query string
+		want  int
+	}{
+		{"SELECT 1", 1},
+		{"SELECT 1;", 2}, // The empty statement after the semicolon.
+		{"SELECT 1; SELECT 2", 2},
+		{"SELECT ';'", 1},
+		{`SELECT "a;b"`, 1},
+		{"SELECT `a;b`", 1},
+		{"SELECT [a;b]", 1},
+		{"SELECT 'it''s;here'", 1},
+		// The semicolon is inside the comment, so it ends nothing.
+		{"SELECT 1 -- ;\nSELECT 2", 1},
+		{"SELECT 1 /* ; */; SELECT 2", 2},
+		{"SELECT 'unterminated;", 1},
+		{"SELECT 1 /* unterminated;", 1},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			t.Parallel()
+
+			if got := len(splitStatements(tt.query)); got != tt.want {
+				t.Errorf("splitStatements(%q) gave %d statements, want %d", tt.query, got, tt.want)
+			}
+		})
+	}
+}

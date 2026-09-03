@@ -265,7 +265,14 @@ func (c *guardedConn) closeTx() {
 // the failure of the first drop the count of the transaction still running
 // underneath it.
 func (c *guardedConn) runExec(ctx context.Context, query string, run func(context.Context) (driver.Result, error)) (driver.Result, error) {
-	stmt := c.effectOf(query)
+	stmts := c.effectsOf(query)
+	if len(stmts) > 1 {
+		return c.runSeveralEffects(ctx, stmts, run)
+	}
+	stmt := txStatement{}
+	if len(stmts) == 1 {
+		stmt = stmts[0]
+	}
 	switch stmt.effect {
 	case txEffectBegin:
 		if c.inTx {
@@ -312,6 +319,96 @@ func (c *guardedConn) runExec(ctx context.Context, query string, run func(contex
 	case txEffectNone:
 	}
 	return run(ctx)
+}
+
+// runSeveralEffects runs a query holding more than one statement that touches a
+// transaction. The driver runs the string in one call, so the bookkeeping goes
+// around that call rather than between the statements: the gate is taken first
+// when the string will hold a transaction, and what the statements leave behind
+// is worked out afterwards by applying each in turn.
+//
+// A string like "SELECT 1; BEGIN" is why this exists. Reading only the first
+// statement left the transaction SQLite had opened invisible here, so a save at
+// close went ahead over work the connection then discarded, and Close answered
+// nil.
+func (c *guardedConn) runSeveralEffects(ctx context.Context, stmts []txStatement, run func(context.Context) (driver.Result, error)) (driver.Result, error) {
+	opened := false
+	if !c.inTx && stmts[0].effect == txEffectBegin {
+		if err := c.openTx(ctx); err != nil {
+			return nil, err
+		}
+		opened = true
+	}
+
+	res, err := run(ctx)
+	if err != nil {
+		if opened {
+			c.closeTx()
+		}
+		return res, err
+	}
+
+	// The string ran, so every statement in it did. What is left is the state
+	// they leave, applied in the order SQLite applied them.
+	committed := false
+	for i, stmt := range stmts {
+		if i == 0 && opened {
+			if stmt.savepoint != "" {
+				c.savepoints = []string{stmt.savepoint}
+			}
+			continue
+		}
+		committed = c.applyEffect(stmt) || committed
+	}
+	if committed && c.tracker != nil {
+		if saveErr := c.tracker.transactionCommitted(); saveErr != nil {
+			return res, saveErr
+		}
+	}
+	return res, nil
+}
+
+// applyEffect moves the transaction bookkeeping by one statement that has
+// already run, and reports whether it committed a transaction this connection
+// was holding. It is the same reading runExec applies around a single
+// statement, with the running taken out.
+func (c *guardedConn) applyEffect(stmt txStatement) bool {
+	switch stmt.effect {
+	case txEffectBegin:
+		if !c.inTx {
+			// The gate is already held for the string; a transaction opened
+			// inside it is this connection's.
+			c.inTx = true
+			if c.tracker != nil {
+				c.tracker.transactionBegan()
+			}
+			if stmt.savepoint != "" {
+				c.savepoints = []string{stmt.savepoint}
+			}
+			return false
+		}
+		if stmt.savepoint != "" && len(c.savepoints) > 0 {
+			c.savepoints = append(c.savepoints, stmt.savepoint)
+		}
+	case txEffectCommit, txEffectRollback:
+		if !c.inTx {
+			return false
+		}
+		if stmt.savepoint != "" {
+			held := c.innermostSavepoint(stmt.savepoint)
+			if held < 0 {
+				return false
+			}
+			if held > 0 {
+				c.savepoints = c.savepoints[:held]
+				return false
+			}
+		}
+		c.closeTx()
+		return stmt.effect == txEffectCommit
+	case txEffectNone:
+	}
+	return false
 }
 
 // runInnerSavepoint runs a statement that opens something inside a transaction
@@ -362,7 +459,7 @@ func (c *guardedConn) innermostSavepoint(name string) int {
 // runQuery runs one query. A transaction keyword run as a query is odd but
 // legal, so it is read the same way a statement is.
 func (c *guardedConn) runQuery(ctx context.Context, query string, run func(context.Context) (driver.Rows, error)) (driver.Rows, error) {
-	if c.effectOf(query).effect == txEffectNone {
+	if len(c.effectsOf(query)) == 0 {
 		return run(ctx)
 	}
 	var rows driver.Rows
@@ -374,12 +471,15 @@ func (c *guardedConn) runQuery(ctx context.Context, query string, run func(conte
 	return rows, err
 }
 
-// effectOf reads a statement only when something depends on the answer.
-func (c *guardedConn) effectOf(query string) txStatement {
+// effectsOf reads a query only when something depends on the answer, and reads
+// every statement in it: database/sql hands the whole string to the driver and
+// SQLite runs each statement of it, so a reading that stops at the first is a
+// reading of something the engine does not do.
+func (c *guardedConn) effectsOf(query string) []txStatement {
 	if c.gate == nil && c.tracker == nil {
-		return txStatement{}
+		return nil
 	}
-	return readTxStatement(query)
+	return readTxStatements(query)
 }
 
 // begin starts the transaction on the wrapped connection, through whichever of
@@ -546,6 +646,81 @@ type txStatement struct {
 	// transaction only when it is the outermost one, which the connection
 	// running the statement knows and this reading does not.
 	savepoint string
+}
+
+// readTxStatements reads every statement of a query for what it does to a
+// transaction, dropping the ones that do nothing to one.
+func readTxStatements(query string) []txStatement {
+	statements := splitStatements(query)
+	if len(statements) == 1 {
+		if stmt := readTxStatement(statements[0]); stmt.effect != txEffectNone {
+			return []txStatement{stmt}
+		}
+		return nil
+	}
+	var effects []txStatement
+	for _, statement := range statements {
+		if stmt := readTxStatement(statement); stmt.effect != txEffectNone {
+			effects = append(effects, stmt)
+		}
+	}
+	return effects
+}
+
+// splitStatements cuts a query at the semicolons that end a statement, which
+// are the ones outside a string, a quoted identifier and a comment. A semicolon
+// inside any of those is data rather than a boundary: "SELECT ';BEGIN'" is one
+// statement and not two.
+func splitStatements(query string) []string {
+	var statements []string
+	start := 0
+	for i := 0; i < len(query); {
+		switch c := query[i]; {
+		case c == ';':
+			statements = append(statements, query[start:i])
+			i++
+			start = i
+		case c == '\'':
+			i = skipQuoted(query, i, '\'', '\'')
+		case c == '"' || c == '`' || c == '[':
+			i = skipQuoted(query, i, c, identifierQuotes[c])
+		case c == '-' && i+1 < len(query) && query[i+1] == '-':
+			if end := strings.IndexByte(query[i:], '\n'); end >= 0 {
+				i += end + 1
+			} else {
+				i = len(query)
+			}
+		case c == '/' && i+1 < len(query) && query[i+1] == '*':
+			if end := strings.Index(query[i+2:], "*/"); end >= 0 {
+				i += 2 + end + 2
+			} else {
+				i = len(query)
+			}
+		default:
+			i++
+		}
+	}
+	return append(statements, query[start:])
+}
+
+// skipQuoted answers the index after the quoted run opening at s[i], reading a
+// doubled closing quote as one of the characters inside rather than the end.
+// An unterminated run reaches the end of the string, which is what SQLite makes
+// of one too.
+func skipQuoted(s string, i int, open, closing byte) int {
+	i++ // the opening quote
+	for i < len(s) {
+		if s[i] != closing {
+			i++
+			continue
+		}
+		if open != '[' && i+1 < len(s) && s[i+1] == closing {
+			i += 2 // a doubled quote, which is one character of the value
+			continue
+		}
+		return i + 1
+	}
+	return i
 }
 
 // readTxStatement reads the leading keywords of a statement to see whether it
