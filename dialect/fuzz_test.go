@@ -1,8 +1,12 @@
 package dialect
 
 import (
+	"database/sql"
 	"errors"
+	"strings"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
 // FuzzTranslate checks the properties that have to hold for any input at all,
@@ -87,4 +91,85 @@ func knownError(err error) bool {
 		errors.Is(err, ErrUnsupportedSyntax) ||
 		errors.Is(err, ErrUnsupportedFeature) ||
 		errors.Is(err, ErrUnknownDialect)
+}
+
+// FuzzTranslationPrepares holds every successful translation to SQL SQLite can
+// compile. FuzzTranslate above checks that a translation reads back as the same
+// statement through this package's own parser; this asks the question a caller
+// depends on, which is whether the engine can read it: a query this package
+// said yes to has to reach SQLite as something SQLite can prepare.
+func FuzzTranslationPrepares(f *testing.F) {
+	for _, seed := range []string{
+		"SELECT a FROM t",
+		"SELECT CONCAT(a, 'x') FROM t WHERE b > 1",
+		"SELECT CAST(a AS UNSIGNED) FROM t",
+		"SELECT DATE_FORMAT(a, '%Y') FROM t GROUP BY a",
+		"SELECT a::text FROM t WHERE a ILIKE 'x%'",
+		"SELECT SUBSTR(a, 1, 2) FROM t ORDER BY b DESC LIMIT 3",
+		"SELECT ROW_NUMBER() OVER (PARTITION BY a ORDER BY b) FROM t",
+		"WITH x AS (SELECT a FROM t) SELECT * FROM x",
+		"INSERT INTO t (a, b) VALUES ('x', 1)",
+		"UPDATE t SET a = TRIM(a) WHERE b IS NOT NULL",
+		"SELECT JSON_EXTRACT(a, '$.k') FROM t",
+		"SELECT SAFE.ADD(b, 1) FROM t",
+		"SELECT INTERVAL 1 DAY + a FROM t",
+		`SELECT b'\x41' FROM t`,
+		"SELECT t.* AS everything FROM t",
+		"SELECT 0x FROM t",
+		"SELECT X'0'",
+		"INSERT INTO t VALUES ()",
+		"SELECT INDEX(1)",
+		"SELECT a.b.c.d FROM t",
+		`SELECT "" FROM t`,
+		"\ufeffSELECT a FROM t",
+		"SELECT (0) FROM a.b.c",
+	} {
+		f.Add(seed)
+	}
+
+	if err := RegisterFunctions(); err != nil {
+		f.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Cleanup(func() { _ = db.Close() })
+	if _, err := db.ExecContext(f.Context(), `CREATE TABLE t (a TEXT, b INTEGER, c REAL)`); err != nil {
+		f.Fatal(err)
+	}
+
+	f.Fuzz(func(t *testing.T, query string) {
+		if len(query) > 400 {
+			return
+		}
+		for _, d := range []Dialect{MySQL, PostgreSQL, GoogleSQL} {
+			translated, err := Translate(d, query)
+			if err != nil {
+				continue // A refusal is an answer.
+			}
+			// A translation that gave the text back unchanged is the caller's
+			// own SQL, and SQLite complaining about it is SQLite answering
+			// them. What this looks for is a rendering this package wrote.
+			if strings.TrimSpace(translated) == strings.TrimSpace(query) {
+				continue
+			}
+			stmt, prepErr := db.PrepareContext(t.Context(), translated)
+			if prepErr == nil {
+				_ = stmt.Close()
+				continue
+			}
+			// A translation SQLite cannot parse is this package's rendering;
+			// one it parses and then complains about -- a column that is not
+			// there, an argument count that does not match, a window nobody
+			// declared -- is SQLite answering about the caller's own query.
+			message := prepErr.Error()
+			if !strings.Contains(message, "syntax error") &&
+				!strings.Contains(message, "unrecognized token") &&
+				!strings.Contains(message, "incomplete input") {
+				continue
+			}
+			t.Errorf("%s: %q became %q, which SQLite cannot parse: %v", d, query, translated, prepErr)
+		}
+	})
 }
