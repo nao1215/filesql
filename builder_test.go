@@ -2216,3 +2216,80 @@ func TestBuilderHonorsWhatItIsGivenAfterABuild(t *testing.T) {
 		}
 	})
 }
+
+// TestEveryFormatIsFoundInADirectoryAndAnFS holds AddPath and AddFS to what
+// they load. Both said they find CSV, TSV and LTSV files, and both load every
+// format this package reads: a caller who believed the sentence would write a
+// second step for the JSON and Parquet beside their CSVs, or filter a directory
+// before loading it, and neither is needed.
+func TestEveryFormatIsFoundInADirectoryAndAnFS(t *testing.T) {
+	t.Parallel()
+
+	files := map[string]string{
+		"a.csv":   "x\n1\n",
+		"b.tsv":   "x\n1\n",
+		"c.ltsv":  "x:1\n",
+		"d.json":  `[{"x":1}]`,
+		"e.jsonl": `{"x":1}`,
+	}
+	want := []string{"a", "b", "c", "d", "e"}
+
+	t.Run("a directory", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		for name, body := range files {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		db, err := Open(t.Context(), dir)
+		if err != nil {
+			t.Fatalf("load a directory: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		assert.Equal(t, want, loadedTableNames(t, db))
+	})
+
+	t.Run("a filesystem", func(t *testing.T) {
+		t.Parallel()
+
+		fsys := fstest.MapFS{}
+		for name, body := range files {
+			fsys["data/"+name] = &fstest.MapFile{Data: []byte(body)}
+		}
+		db, err := NewBuilder().AddFS(fsys).Open(t.Context())
+		if err != nil {
+			t.Fatalf("AddFS: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		assert.Equal(t, want, loadedTableNames(t, db))
+	})
+}
+
+// loadedTableNames is the tables a database holds, in name order.
+func loadedTableNames(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+
+	rows, err := db.QueryContext(t.Context(),
+		`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '_filesql_%' ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return names
+}

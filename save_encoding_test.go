@@ -797,3 +797,63 @@ func TestADumpInAnEncodingThatHoldsTheTableStillWrites(t *testing.T) {
 		}
 	}
 }
+
+// TestEncodingsThatLoadBack pins which of the encodings a save writes a load
+// reads back, which is the asymmetry the Encoding type's godoc used to deny. It
+// said "the read side already understands these encodings"; three of the six
+// are refused on load, as WithEncoding's own godoc says.
+func TestEncodingsThatLoadBack(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name     string
+		encoding Encoding
+		// loadsBack is whether filesql reads the file it just wrote. UTF-16
+		// does because a save writes the byte-order mark the read side
+		// recognizes; the three legacy Japanese encodings carry no such mark
+		// and are refused, which is what "filesql reads UTF-8" means.
+		loadsBack bool
+	}{
+		{"UTF-8", EncodingUTF8, true},
+		{"UTF-16LE", EncodingUTF16LE, true},
+		{"UTF-16BE", EncodingUTF16BE, true},
+		{"Shift-JIS", EncodingShiftJIS, false},
+		{"EUC-JP", EncodingEUCJP, false},
+		{"ISO-2022-JP", EncodingISO2022JP, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, "d.csv")
+			if err := os.WriteFile(source, []byte("名前,値\n東京,1\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			db, err := Open(t.Context(), source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = db.Close() }()
+
+			out := filepath.Join(dir, "out")
+			if err := DumpDatabase(t.Context(), db, out,
+				NewDumpOptions().WithEncoding(tt.encoding)); err != nil {
+				t.Fatalf("a save in %s failed: %v", tt.name, err)
+			}
+
+			back, err := Open(t.Context(), filepath.Join(out, "d.csv"))
+			if back != nil {
+				defer func() { _ = back.Close() }()
+			}
+			if tt.loadsBack {
+				if err != nil {
+					t.Errorf("a %s file is documented as loading back and did not: %v", tt.name, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Errorf("a %s file is documented as being for other tools and loaded back", tt.name)
+			}
+		})
+	}
+}

@@ -15,10 +15,11 @@ import (
 
 // Encoding is the text encoding a save writes its output in.
 //
-// The read side already understands these encodings; without a matching write
-// side a caller that decoded a legacy source before loading had no way to get
-// one back, so an in-place save changed the file's encoding on disk without
-// saying so. Compression is the same shape of decision and has had an option
+// A load reads UTF-8, and UTF-16 through the byte-order mark a save writes;
+// Shift-JIS, EUC-JP and ISO-2022-JP are refused on load, so a file written in
+// one of those is for other tools. Without a write side at all, a caller that
+// decoded a legacy source before loading had no way to get one back, so an
+// in-place save changed the file's encoding on disk without saying so. Compression is the same shape of decision and has had an option
 // since the beginning; this is the one for text.
 type Encoding int
 
