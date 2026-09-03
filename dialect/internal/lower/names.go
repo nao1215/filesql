@@ -14,6 +14,7 @@ const (
 	fnNameDateSub   = "DATE_SUB"
 	fnNameCharLen   = "CHARACTER_LENGTH"
 	fnNameRound     = "ROUND"
+	fnNameLog       = "LOG"
 	fnNamePosition  = "POSITION"
 	fnNameMod       = "MOD"
 	fnNameExtract   = "EXTRACT"

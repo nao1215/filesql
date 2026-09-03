@@ -306,7 +306,7 @@ func (r *mysqlRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		// SQLite spells these the same way and answers the same thing, so only
 		// the conversion in front of them differs.
 		return mysqlTextArgs(call), nil
-	case "LOG":
+	case fnNameLog:
 		if len(call.Args) == 1 {
 			return rename(call, "ln"), nil
 		}

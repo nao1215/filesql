@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -2281,4 +2282,103 @@ func TestTheMySQLUpsertSpelling(t *testing.T) {
 	// no row for it to name, which is what MySQL answers too.
 	_, err = Translate(MySQL, "INSERT INTO u (a) VALUES (1) ON DUPLICATE KEY UPDATE b = VALUES(1 + 1)")
 	assert.Error(t, err)
+}
+
+// TestPostgreSQLRaisesWhereItsDomainEnds holds the mathematical functions to
+// PostgreSQL's answers at the edge of their domain. SQLite's own answer NULL or
+// an infinity there, which reads as missing data rather than as arithmetic the
+// engine refused. Every expectation was read from PostgreSQL 17.
+func TestPostgreSQLRaisesWhereItsDomainEnds(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, RegisterFunctions())
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	t.Run("refused", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			expr string
+			want string
+		}{
+			{"sqrt(-1)", "cannot take square root of a negative number"},
+			{"ln(0)", "cannot take logarithm of zero"},
+			{"ln(-1)", "cannot take logarithm of a negative number"},
+			{"log(0)", "cannot take logarithm of zero"},
+			{"log(-1)", "cannot take logarithm of a negative number"},
+			{"log(10, 0)", "cannot take logarithm of zero"},
+			{"log(0, 10)", "cannot take logarithm of zero"},
+			{"log(2, -1)", "cannot take logarithm of a negative number"},
+			{"power(0, -1)", "zero raised to a negative power is undefined"},
+			{"pow(0, -1)", "zero raised to a negative power is undefined"},
+			{"exp(1000)", "value out of range: overflow"},
+			{"acos(2)", "input is out of range"},
+			{"asin(2)", "input is out of range"},
+			{"acosd(2)", "input is out of range"},
+			{"asind(2)", "input is out of range"},
+			{"acosh(0)", "input is out of range"},
+			{"atanh(2)", "input is out of range"},
+		} {
+			t.Run(tt.expr, func(t *testing.T) {
+				t.Parallel()
+
+				translated, err := Translate(PostgreSQL, "SELECT "+tt.expr)
+				require.NoError(t, err)
+				var v any
+				err = db.QueryRowContext(t.Context(), translated).Scan(&v)
+				require.Errorf(t, err, "%s answered %v", tt.expr, v)
+				assert.Contains(t, err.Error(), tt.want)
+			})
+		}
+	})
+
+	t.Run("answered", func(t *testing.T) {
+		t.Parallel()
+
+		// The values PostgreSQL answers, including the two edges it does not
+		// refuse: a helper that starts refusing those would fail here.
+		for _, tt := range []struct {
+			expr string
+			want float64
+		}{
+			{"sqrt(4)", 2},
+			{"sqrt(0)", 0},
+			{"ln(1)", 0},
+			{"log(100)", 2},
+			{"log(2, 8)", 3},
+			{"power(2, 10)", 1024},
+			{"power(-2, 3)", -8},
+			{"power(0, 0)", 1},
+			{"exp(0)", 1},
+			{"acos(1)", 0},
+			{"acosd(1)", 0},
+			{"asind(0.5)", 30},
+			{"acosh(1)", 0},
+			{"atanh(0)", 0},
+			{"atanh(1)", math.Inf(1)},
+			{"cot(0)", math.Inf(1)},
+		} {
+			t.Run(tt.expr, func(t *testing.T) {
+				t.Parallel()
+
+				translated, err := Translate(PostgreSQL, "SELECT "+tt.expr)
+				require.NoError(t, err)
+				var got float64
+				require.NoError(t, db.QueryRowContext(t.Context(), translated).Scan(&got))
+				assert.InDelta(t, tt.want, got, 1e-9)
+			})
+		}
+	})
+
+	// A NULL argument is nothing to compute with, and PostgreSQL answers NULL
+	// for one rather than refusing it.
+	for _, expr := range []string{"sqrt(NULL)", "ln(NULL)", "log(NULL, 2)", "power(NULL, -1)", "cot(NULL)"} {
+		translated, err := Translate(PostgreSQL, "SELECT "+expr)
+		require.NoError(t, err)
+		var v any
+		require.NoErrorf(t, db.QueryRowContext(t.Context(), translated).Scan(&v), "%s", expr)
+		assert.Nilf(t, v, "%s", expr)
+	}
 }

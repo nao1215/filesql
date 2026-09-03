@@ -676,6 +676,18 @@ func (r *postgresRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		return rename(call, "unicode_upper"), nil
 	case fnNameLower:
 		return rename(call, "unicode_lower"), nil
+	case "POW":
+		// PostgreSQL's own name for it is POWER, and the helper carries that
+		// name, so the alias renames onto the same one.
+		return rename(call, "postgresql_power"), nil
+	case "SQRT", "LN", fnNameLog, "EXP", "POWER", "ACOS", "ASIN", "ACOSH", "ATANH", "COT":
+		// PostgreSQL refuses these outside their domain and SQLite's own
+		// answer NULL or an infinity there, which reads as missing data
+		// rather than as arithmetic the engine refused. COT is the one that
+		// moves the other way: PostgreSQL answers an infinity at zero, and
+		// the helper registered under the bare name is MySQL's, which
+		// refuses it.
+		return rename(call, "postgresql_"+strings.ToLower(name)), nil
 	case "TO_HEX":
 		return rename(call, "postgresql_to_hex"), nil
 	case "REGEXP_REPLACE":
