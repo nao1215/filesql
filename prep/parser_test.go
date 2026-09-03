@@ -1606,3 +1606,111 @@ func TestPadRefusesALengthThatCannotBeHeld(t *testing.T) {
 		}
 	}
 }
+
+// TestFieldMatchesTheColumnTheRuleNames holds the rule that says which column a
+// field is, which the package documentation stated as ASCII case folding alone.
+// The field name is converted to snake_case first, so a field named UserName is
+// the column "user_name" and does not match a header spelled "username" or
+// "UserName"; a name tag replaces the derived name outright.
+func TestFieldMatchesTheColumnTheRuleNames(t *testing.T) {
+	t.Parallel()
+
+	type derived struct {
+		UserName string
+	}
+	type tagged struct {
+		UserName string `name:"username"`
+	}
+
+	t.Run("a header the conversion produces", func(t *testing.T) {
+		t.Parallel()
+
+		var rows []derived
+		_, _, err := NewProcessor(FileTypeCSV).Process(strings.NewReader("user_name\nx\n"), &rows)
+		if err != nil {
+			t.Fatalf("user_name is what UserName converts to: %v", err)
+		}
+		if len(rows) != 1 || rows[0].UserName != "x" {
+			t.Errorf("rows = %v", rows)
+		}
+	})
+
+	t.Run("that header in another case", func(t *testing.T) {
+		t.Parallel()
+
+		// The comparison folds ASCII case, so a header a spreadsheet
+		// upper-cased matches the same column.
+		var rows []derived
+		_, _, err := NewProcessor(FileTypeCSV).Process(strings.NewReader("USER_NAME\nx\n"), &rows)
+		if err != nil {
+			t.Fatalf("the comparison folds ASCII case: %v", err)
+		}
+		if len(rows) != 1 || rows[0].UserName != "x" {
+			t.Errorf("rows = %v", rows)
+		}
+	})
+
+	for _, header := range []string{"username", "UserName", "USERNAME"} {
+		t.Run("a header the conversion does not produce: "+header, func(t *testing.T) {
+			t.Parallel()
+
+			var rows []derived
+			_, _, err := NewProcessor(FileTypeCSV).Process(strings.NewReader(header+"\nx\n"), &rows)
+			if !errors.Is(err, ErrUnknownColumn) {
+				t.Errorf("a field named UserName is the column user_name, so %q names no column: err=%v", header, err)
+			}
+		})
+	}
+
+	t.Run("a name tag replaces the derived name", func(t *testing.T) {
+		t.Parallel()
+
+		var rows []tagged
+		_, _, err := NewProcessor(FileTypeCSV).Process(strings.NewReader("username\nx\n"), &rows)
+		if err != nil {
+			t.Fatalf("the name tag says which column the field is: %v", err)
+		}
+		if len(rows) != 1 || rows[0].UserName != "x" {
+			t.Errorf("rows = %v", rows)
+		}
+	})
+}
+
+// TestBareDefaultIsAValue holds the one exception to "a tag that needs a
+// parameter and is given none is an invalid tag argument". A default of the
+// empty string is a default, so prep:"default" and prep:"default=" say the same
+// thing, and both are accepted under WithStrictTagParsing where the other
+// eleven parameterised tags are reported.
+func TestBareDefaultIsAValue(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a bare default is accepted under strict parsing", func(t *testing.T) {
+		t.Parallel()
+
+		var rows []struct {
+			Name string
+			Nope string `prep:"default"`
+		}
+		_, _, err := NewProcessor(FileTypeCSV, WithStrictTagParsing()).
+			Process(strings.NewReader("name\nx\n"), &rows)
+		if err != nil {
+			t.Fatalf("a bare default says the column may be missing: %v", err)
+		}
+		if len(rows) != 1 || rows[0].Name != "x" || rows[0].Nope != "" {
+			t.Errorf("rows = %v", rows)
+		}
+	})
+
+	t.Run("the other parameterised tags are reported", func(t *testing.T) {
+		t.Parallel()
+
+		var nullify []struct {
+			V string `prep:"nullify"`
+		}
+		_, _, err := NewProcessor(FileTypeCSV, WithStrictTagParsing()).
+			Process(strings.NewReader("v\nabc\n"), &nullify)
+		if !errors.Is(err, ErrInvalidTagFormat) {
+			t.Errorf("a bare nullify is an invalid tag argument: err=%v", err)
+		}
+	})
+}

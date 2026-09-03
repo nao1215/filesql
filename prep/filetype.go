@@ -25,8 +25,8 @@ const (
 	// FileTypeJSONL is one JSON object per line.
 	FileTypeJSONL
 
-	// FileTypeUnsupported is a format this package does not read. It is what
-	// DetectFileType answers for a name it does not recognize.
+	// FileTypeUnsupported is a format this package does not read. A Processor
+	// built with it refuses every input with ErrUnsupportedFileType.
 	FileTypeUnsupported
 )
 
