@@ -242,20 +242,24 @@ func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS)
 	// refuses, which failed the load of the whole filesystem; isACHFile says
 	// what the disagreement was about.
 	allMatches := make([]string, 0)
-	if _, err := fs.Stat(filesystem, "."); err == nil {
-		walkErr := fs.WalkDir(filesystem, ".", func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() || !isSupportedFile(path) {
-				return nil
-			}
-			allMatches = append(allMatches, path)
-			return nil
-		})
-		if walkErr != nil {
-			return nil, fmt.Errorf("%w: failed to walk filesystem: %w", ErrIOOperation, walkErr)
+	// A filesystem whose own root cannot be read is a failure to report rather
+	// than a filesystem with no files in it: answering ErrNoFiles for it tells
+	// the caller their filesystem is empty when it is unreadable.
+	if _, err := fs.Stat(filesystem, "."); err != nil {
+		return nil, fmt.Errorf("%w: failed to read the filesystem's root: %w", ErrIOOperation, err)
+	}
+	walkErr := fs.WalkDir(filesystem, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
+		if d.IsDir() || !isSupportedFile(path) {
+			return nil
+		}
+		allMatches = append(allMatches, path)
+		return nil
+	})
+	if walkErr != nil {
+		return nil, fmt.Errorf("%w: failed to walk filesystem: %w", ErrIOOperation, walkErr)
 	}
 
 	if len(allMatches) == 0 {

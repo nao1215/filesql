@@ -360,7 +360,13 @@ func (c *guardedConn) runSeveralEffects(ctx context.Context, stmts []txStatement
 		}
 		committed = c.applyEffect(stmt) || committed
 	}
-	if committed && c.tracker != nil {
+	// The hook is what an auto-save on commit runs, and it reads the tables
+	// through this connection: running it while the string has left another
+	// transaction open would wait for a transaction this call is holding, which
+	// is a deadlock, and would write out rows the caller has not committed. So
+	// it runs only when the string ends outside a transaction, which is the
+	// same moment the single-statement path runs it.
+	if committed && !c.inTx && c.tracker != nil {
 		if saveErr := c.tracker.transactionCommitted(); saveErr != nil {
 			return res, saveErr
 		}

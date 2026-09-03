@@ -2534,3 +2534,68 @@ func TestAutoSaveOnCommitSeesACommitThatIsNotFirst(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(after), "edited")
 }
+
+// TestAutoSaveOnCommitWaitsForTheBatchToEnd holds a save on commit to the state
+// the whole query leaves. A query holding "COMMIT; BEGIN" commits one
+// transaction and opens another, and the save reads the tables through the
+// connection that is holding the second: running it there waits for a
+// transaction this very call holds, which hangs, and would write out rows the
+// caller has not committed.
+func TestAutoSaveOnCommitWaitsForTheBatchToEnd(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		// batch is one Exec, which the driver runs statement by statement.
+		batch string
+		// saved is what the file holds once the batch has run.
+		saved string
+		// leftOpen says the batch ends inside a transaction, so the close has
+		// to report that the save was skipped.
+		leftOpen bool
+	}{
+		{
+			name:  "a transaction that commits",
+			batch: "BEGIN; UPDATE d SET b = 'first'; COMMIT",
+			saved: "first",
+		},
+		{
+			name:     "a commit and another transaction after it",
+			batch:    "BEGIN; UPDATE d SET b = 'first'; COMMIT; BEGIN; UPDATE d SET b = 'second'",
+			saved:    "original",
+			leftOpen: true,
+		},
+		{
+			name:     "a commit and a bare begin after it",
+			batch:    "BEGIN; UPDATE d SET b = 'first'; COMMIT; BEGIN",
+			saved:    "original",
+			leftOpen: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			path := filepath.Join(dir, "d.csv")
+			require.NoError(t, os.WriteFile(path, []byte("a,b\n1,original\n"), 0o600))
+
+			db, err := NewBuilder().AddPath(path).EnableAutoSaveOnCommit("").Open(t.Context())
+			require.NoError(t, err)
+
+			_, err = db.ExecContext(t.Context(), tt.batch)
+			require.NoError(t, err)
+
+			afterBatch, err := os.ReadFile(path) //nolint:gosec // a path from t.TempDir()
+			require.NoError(t, err)
+			assert.Contains(t, string(afterBatch), tt.saved,
+				"what the batch left open decides whether the save ran")
+
+			closeErr := db.Close()
+			if tt.leftOpen {
+				assert.Error(t, closeErr, "a transaction left open has to be reported")
+				return
+			}
+			assert.NoError(t, closeErr)
+		})
+	}
+}

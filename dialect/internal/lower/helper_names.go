@@ -344,29 +344,56 @@ var helperArity = map[string]int{ //nolint:gochecknoglobals // a generated table
 // looks up. A variadic name is listed with no counts, which says it takes any:
 // the listing is what TestEveryRenameTargetHasAnArity reads, so a name added to
 // a lowering has to be given an answer here even when the answer is "any".
-var builtinArity = map[string][]int{ //nolint:gochecknoglobals // a fixed table
-	"count":             {0, 1},
-	"instr":             {2},
-	"atan2":             {2},
-	"group_concat":      {1, 2},
-	"json":              {1},
-	"json_array_length": {1, 2},
-	"json_patch":        {2},
-	"json_quote":        {1},
-	"length":            {1},
-	"ln":                {1},
-	"log":               {1, 2},
-	"ltrim":             {1, 2},
-	"octet_length":      {1},
-	"rtrim":             {1, 2},
-	"trim":              {1, 2},
+// builtinCounts is which argument counts one SQLite builtin takes, and how to
+// say so in a refusal. A count is a rule rather than a list because SQLite
+// states some of them that way: json_object takes an even number and json_set
+// an odd one, and those are the shapes a list cannot hold.
+type builtinCounts struct {
+	takes     func(n int) bool
+	describes string
+}
 
-	// Variadic: SQLite takes any number, so there is nothing to refuse.
-	"json_array":   nil,
-	"json_extract": nil,
-	"json_insert":  nil,
-	"json_object":  nil,
-	"json_set":     nil,
+var builtinArity = map[string]builtinCounts{ //nolint:gochecknoglobals // a fixed table
+	"count":             exactly(0, 1),
+	"instr":             exactly(2),
+	"atan2":             exactly(2),
+	"group_concat":      exactly(1, 2),
+	"json":              exactly(1),
+	"json_array_length": exactly(1, 2),
+	"json_patch":        exactly(2),
+	"json_quote":        exactly(1),
+	"length":            exactly(1),
+	"ln":                exactly(1),
+	"log":               exactly(1, 2),
+	"ltrim":             exactly(1, 2),
+	"octet_length":      exactly(1),
+	"rtrim":             exactly(1, 2),
+	"trim":              exactly(1, 2),
+
+	// SQLite states these as a shape rather than a list, and enforces them when
+	// the query runs rather than when it is compiled -- so a caller who wrote
+	// JSON_BUILD_OBJECT was told "json_object() requires an even number of
+	// arguments", about a function nowhere in their query, and only once the
+	// row was fetched.
+	"json_object": {takes: func(n int) bool { return n%2 == 0 }, describes: "an even number of arguments"},
+	"json_insert": {takes: func(n int) bool { return n%2 == 1 }, describes: "an odd number of arguments"},
+	"json_set":    {takes: func(n int) bool { return n%2 == 1 }, describes: "an odd number of arguments"},
+
+	// Any number, which is what SQLite takes for these.
+	"json_array":   {},
+	"json_extract": {},
+}
+
+// exactly names a builtin that takes one of a fixed set of counts.
+func exactly(counts ...int) builtinCounts {
+	described := make([]string, len(counts))
+	for i, c := range counts {
+		described[i] = strconv.Itoa(c)
+	}
+	return builtinCounts{
+		takes:     func(n int) bool { return slices.Contains(counts, n) },
+		describes: strings.Join(described, " or ") + " arguments",
+	}
 }
 
 // registeredHelper reports whether the runtime registers a function by this
@@ -395,8 +422,8 @@ func helperTakesArgumentCount(name string, n int, renamed bool) bool {
 		return true
 	}
 	if counts, found := builtinArity[name]; found {
-		// A name listed with no counts is variadic and takes any.
-		return len(counts) == 0 || slices.Contains(counts, n)
+		// An entry with no rule is variadic and takes any count.
+		return counts.takes == nil || counts.takes(n)
 	}
 	return true
 }
@@ -409,15 +436,7 @@ func arityDescription(name string) string {
 	}
 	// Only a name one of the two tables holds reaches here, since a name in
 	// neither is never refused for its count.
-	counts := builtinArity[name]
-	if len(counts) == 1 {
-		return plural(counts[0])
-	}
-	written := make([]string, len(counts))
-	for i, c := range counts {
-		written[i] = strconv.Itoa(c)
-	}
-	return strings.Join(written, " or ") + " arguments"
+	return builtinArity[name].describes
 }
 
 // HelperNames lists the names this package believes the runtime registers, for

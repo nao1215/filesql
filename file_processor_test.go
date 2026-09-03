@@ -1122,3 +1122,25 @@ func TestTheTwoDirectoryDoorsAgree(t *testing.T) {
 		})
 	}
 }
+
+// TestAnUnreadableFilesystemIsReported holds a filesystem whose own root cannot
+// be read to a failure that says so. Skipping the walk and answering ErrNoFiles
+// told a caller their filesystem held nothing this package reads, when what it
+// held could not be read at all.
+func TestAnUnreadableFilesystemIsReported(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewBuilder().AddFS(rootlessFS{}).Open(t.Context())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrIOOperation)
+	assert.NotErrorIs(t, err, ErrNoFiles)
+	assert.Contains(t, err.Error(), "root")
+}
+
+// rootlessFS is a filesystem that refuses every name, including its own root,
+// which is what an fs.FS over a directory the process cannot read behaves like.
+type rootlessFS struct{}
+
+func (rootlessFS) Open(name string) (fs.File, error) {
+	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
+}
