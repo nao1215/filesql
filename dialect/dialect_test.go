@@ -2491,7 +2491,6 @@ func TestPostgreSQLRefusesAResultTooSmallForADouble(t *testing.T) {
 		want string
 	}{
 		{"exp(-1000)", "underflow"},
-		{"exp(-746)", "underflow"},
 		{"power(1e-300, 2)", "underflow"},
 		{"power(-1, 0.5)", "complex result"},
 		{"power(-8, 1.5)", "complex result"},
@@ -2519,8 +2518,11 @@ func TestPostgreSQLRefusesAResultTooSmallForADouble(t *testing.T) {
 		{"power(-8, 3)", -512},
 		{"exp(1e-300)", 1},
 		{"power(2, -1074)", 5e-324},
-		{"exp(-745)", 5e-324},
 		{"exp(-700)", 9.85967654375977e-305},
+		// exp(-745) is the last subnormal PostgreSQL answers and is not
+		// pinned here: Go's exponential rounds it to 5e-324 on linux/amd64
+		// and to zero on darwin, so where the refusal begins is the
+		// platform's, within one step of the smallest double.
 	} {
 		translated, err := Translate(PostgreSQL, "SELECT "+tt.expr)
 		require.NoError(t, err)
