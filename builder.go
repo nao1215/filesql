@@ -882,7 +882,13 @@ func (b *DBBuilder) createInMemoryDatabase() (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to name in-memory database: %w", ErrDatabaseOperation, err)
 	}
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", name)
+	// _dqs=false turns off SQLite's double-quoted string literal quirk, under
+	// which a double-quoted name that matches no column is read as a string
+	// rather than refused: a mistyped column name answered its own spelling
+	// for every row, and one written in a WHERE compared that spelling and
+	// quietly matched nothing. Names are quoted throughout this package and by
+	// the dialect translation, so the quirk was reachable from every query.
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_dqs=false", name)
 	drv, err := sqliteDriver()
 	if err != nil {
 		return nil, err
