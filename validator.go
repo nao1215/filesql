@@ -45,7 +45,11 @@ func (v *validator) validateReader(reader any, tableName string, fileType FileTy
 	if reader == nil {
 		return fmt.Errorf("%w: reader cannot be nil", ErrNilInput)
 	}
-	if tableName == "" {
+	// A name of nothing but whitespace is the empty string with something in
+	// front of it, and the table it makes cannot be written back out: a save
+	// refuses it, because a load of "   .csv" would name the table "___". An
+	// input path of blanks is refused for the same reason, one door along.
+	if strings.TrimSpace(tableName) == "" {
 		return fmt.Errorf("%w: table name must be specified for reader input", ErrInvalidData)
 	}
 	if fileType == FileTypeUnsupported {

@@ -385,6 +385,16 @@ func dumpFilePath(outputDir, tableName, ext string) (string, error) {
 	return path, nil
 }
 
+// maxFileNameBytes is the longest a file's name may be: 255, which is NAME_MAX
+// on the filesystems this package runs on and the shorter of that and the 255
+// UTF-16 units Windows allows a path component. A longer name used to reach the
+// operating system, whose refusal is its own rather than this package's and
+// comes at a length that differs between platforms, where every other unusable
+// name is refused here and by the same rule everywhere. The extension and any
+// compression suffix are part of what has to fit, which is why the check is on
+// the whole file name rather than on the table's.
+const maxFileNameBytes = 255
+
 // reservedDeviceNames are the names Windows resolves to a device rather than to
 // a file, with or without an extension: writing to one goes to the device and
 // the rows go nowhere. They are matched without regard to case, which is how
@@ -408,7 +418,7 @@ const forbiddenFileNameRunes = `/\<>:"|?*`
 // usableAsFileName reports whether name can be a file name on every platform
 // this package builds for.
 func usableAsFileName(name string) bool {
-	if name == "" || strings.ContainsAny(name, forbiddenFileNameRunes) {
+	if name == "" || len(name) > maxFileNameBytes || strings.ContainsAny(name, forbiddenFileNameRunes) {
 		return false
 	}
 	for _, r := range name {

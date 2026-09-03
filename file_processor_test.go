@@ -1058,3 +1058,89 @@ func TestRefuseIrregularSource(t *testing.T) {
 		})
 	}
 }
+
+// TestTheTwoDirectoryDoorsAgree holds a tree to one answer whether it arrives
+// as a directory or as an fs.FS. Which files this package loads used to be
+// answered twice for a filesystem -- by a list of glob patterns and by the
+// walk's predicate -- and the glob admitted what the predicate refuses: a file
+// named ".ach" matches "*.ach" and is not an ACH file, so a filesystem holding
+// one failed the whole load with a message about a reader input the caller
+// never made, where the same tree in a directory loaded.
+func TestTheTwoDirectoryDoorsAgree(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name  string
+		files map[string]string
+	}{
+		{"a file named only for its extension", map[string]string{
+			".ach": "not an ACH file", "ok.csv": "x\n1\n",
+		}},
+		{"the same for Fedwire", map[string]string{
+			".fed": "not a Fedwire file", "ok.csv": "x\n1\n",
+		}},
+		{"a file with no extension", map[string]string{
+			"README": "prose", "ok.csv": "x\n1\n",
+		}},
+		{"a file in a subdirectory", map[string]string{
+			"one/two/d.csv": "x\n1\n",
+		}},
+		{"a compressed member beside its plain form", map[string]string{
+			"d.csv": "x\n1\n", "d.csv.gz": "x\n2\n",
+		}},
+		{"two files sharing a base name", map[string]string{
+			"a/users.csv": "x\n1\n", "b/users.csv": "x\n2\n",
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			fsys := fstest.MapFS{}
+			for name, body := range tt.files {
+				fsys[name] = &fstest.MapFile{Data: []byte(body)}
+				path := filepath.Join(dir, name)
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+				require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+			}
+
+			fromDir, dirErr := Open(t.Context(), dir)
+			if fromDir != nil {
+				defer func() { _ = fromDir.Close() }()
+			}
+			fromFS, fsErr := NewBuilder().AddFS(fsys).Open(t.Context())
+			if fromFS != nil {
+				defer func() { _ = fromFS.Close() }()
+			}
+
+			assert.Equal(t, dirErr == nil, fsErr == nil,
+				"the two doors disagree about whether the tree loads: directory=%v fs=%v", dirErr, fsErr)
+			if dirErr != nil || fsErr != nil {
+				return
+			}
+			assert.Equal(t, loadedTableNames(t, fromDir), loadedTableNames(t, fromFS))
+		})
+	}
+}
+
+// TestAnUnreadableFilesystemIsReported holds a filesystem whose own root cannot
+// be read to a failure that says so. Skipping the walk and answering ErrNoFiles
+// told a caller their filesystem held nothing this package reads, when what it
+// held could not be read at all.
+func TestAnUnreadableFilesystemIsReported(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewBuilder().AddFS(rootlessFS{}).Open(t.Context())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrIOOperation)
+	assert.NotErrorIs(t, err, ErrNoFiles)
+	assert.Contains(t, err.Error(), "root")
+}
+
+// rootlessFS is a filesystem that refuses every name, including its own root,
+// which is what an fs.FS over a directory the process cannot read behaves like.
+type rootlessFS struct{}
+
+func (rootlessFS) Open(name string) (fs.File, error) {
+	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
+}

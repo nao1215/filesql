@@ -69,4 +69,5 @@ const (
 	keywordCurrentCatalog = "CURRENT_CATALOG"
 	keywordCurrentSchema  = "CURRENT_SCHEMA"
 	keywordCurrentRole    = "CURRENT_ROLE"
+	fnNameInstr           = "INSTR"
 )

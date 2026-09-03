@@ -276,7 +276,7 @@ func position(call *ast.FuncCall) (ast.Expr, error) {
 	if call.Syntax == ast.CallPositionIn {
 		call.Args[0], call.Args[1] = call.Args[1], call.Args[0]
 	}
-	return rename(call, "INSTR"), nil
+	return rename(call, fnNameInstr), nil
 }
 
 // dateArith lowers DATE_ADD, DATE_SUB, ADDDATE and SUBDATE, whose second

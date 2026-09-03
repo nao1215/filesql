@@ -16,6 +16,7 @@ import (
 	"github.com/nao1215/filesql/internal/codec"
 	"github.com/nao1215/filesql/internal/parser"
 	"github.com/nao1215/filesql/internal/reader"
+	"github.com/nao1215/filesql/internal/textin"
 	"github.com/parquet-go/parquet-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -3542,33 +3543,51 @@ func TestProcessOutputReadsBackThroughProcess(t *testing.T) {
 	}
 }
 
-// TestDuplicateHeaderCarriesTheSentinel holds prep's refusal of a header naming
-// one column twice to the sentinel a load answers with. Both doors read the
-// same document through the same reader, and prep returned a bare error, so a
-// caller branching on the sentinel took the wrong branch through prep.
-func TestDuplicateHeaderCarriesTheSentinel(t *testing.T) {
+// TestARefusalCarriesTheSentinelALoadAnswersWith holds prep's refusals to the
+// sentinels a load answers with for the same document. Both doors read it
+// through the same reader, and prep returned four classes of malformed input as
+// bare errors matching nothing, so a caller branching on a sentinel -- to tell
+// "your file is malformed" from "your struct does not fit it" -- took the wrong
+// branch through prep.
+func TestARefusalCarriesTheSentinelALoadAnswersWith(t *testing.T) {
 	t.Parallel()
 
 	for _, tt := range []struct {
 		name     string
 		fileType FileType
 		input    string
+		sentinel error
+		says     string
 	}{
-		{"a CSV header naming one column twice", FileTypeCSV, "a,a\nx,y\n"},
-		{"a CSV header naming one column twice in another case", FileTypeCSV, "A,a\nx,y\n"},
-		{"an LTSV record naming one label twice", FileTypeLTSV, "a:1\ta:2\n"},
+		{"a CSV header naming one column twice", FileTypeCSV, "a,a\nx,y\n",
+			reader.ErrDuplicateColumn, "duplicate column name"},
+		{"a CSV header naming one column twice in another case", FileTypeCSV, "A,a\nx,y\n",
+			reader.ErrDuplicateColumn, "duplicate column name"},
+		{"an LTSV record naming one label twice", FileTypeLTSV, "a:1\ta:2\n",
+			reader.ErrDuplicateColumn, "duplicate column name"},
+		{"a column name holding a NUL", FileTypeCSV, "a\x00b,b\nx,y\n",
+			reader.ErrInvalidData, "invalid data format"},
+		{"a record with too few fields", FileTypeCSV, "a,b\nx\n",
+			reader.ErrColumnMismatch, "column count mismatch"},
+		{"a record with too many fields", FileTypeCSV, "a,b\nx,y,z\n",
+			reader.ErrColumnMismatch, "column count mismatch"},
+		{"a field with an unterminated quote", FileTypeCSV, "a,b\n\"x,y\n",
+			reader.ErrParsing, "parsing failed"},
+		{"bytes that are not UTF-8", FileTypeCSV, "a,b\n\xff,y\n",
+			textin.ErrInvalidUTF8, "invalid UTF-8"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
 			var rows []struct {
 				A string
+				B string
 			}
 			_, _, err := NewProcessor(tt.fileType).Process(strings.NewReader(tt.input), &rows)
-			if !errors.Is(err, reader.ErrDuplicateColumn) {
+			if !errors.Is(err, tt.sentinel) {
 				t.Errorf("the refusal has to carry the sentinel a load answers with: err=%v", err)
 			}
-			if err == nil || !strings.Contains(err.Error(), "duplicate column name") {
+			if err == nil || !strings.Contains(err.Error(), tt.says) {
 				t.Errorf("the message still names what is wrong: err=%v", err)
 			}
 		})

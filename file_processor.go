@@ -236,48 +236,30 @@ func (fp *fileProcessor) processFilesystemsToReaders(ctx context.Context, filesy
 func (fp *fileProcessor) processFSToReaders(_ context.Context, filesystem fs.FS) ([]readerInput, error) {
 	readers := make([]readerInput, 0)
 
-	// Search for all supported file patterns
-	supportedPatterns := supportedFileExtPatterns()
-
-	// Collect all matching files
+	// Which files this package loads is one question with one answer, which is
+	// isSupportedFile, and the walk asks it of every file the filesystem holds.
+	// A pass of glob patterns used to run first and admitted what the walk
+	// refuses, which failed the load of the whole filesystem; isACHFile says
+	// what the disagreement was about.
 	allMatches := make([]string, 0)
-	for _, pattern := range supportedPatterns {
-		matches, err := fs.Glob(filesystem, pattern)
-		if err != nil {
-			return nil, fmt.Errorf("%w: failed to search pattern %s: %w", ErrIOOperation, pattern, err)
-		}
-		allMatches = append(allMatches, matches...)
+	// A filesystem whose own root cannot be read is a failure to report rather
+	// than a filesystem with no files in it: answering ErrNoFiles for it tells
+	// the caller their filesystem is empty when it is unreadable.
+	if _, err := fs.Stat(filesystem, "."); err != nil {
+		return nil, fmt.Errorf("%w: failed to read the filesystem's root: %w", ErrIOOperation, err)
 	}
-
-	// Also search recursively in subdirectories
-	if _, err := fs.Stat(filesystem, "."); err == nil {
-		walkErr := fs.WalkDir(filesystem, ".", func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				return nil
-			}
-			if isSupportedFile(path) {
-				// Check if already found by glob patterns
-				normalizedPath := filepath.ToSlash(path)
-				found := false
-				for _, existing := range allMatches {
-					normalizedExisting := filepath.ToSlash(existing)
-					if normalizedExisting == normalizedPath {
-						found = true
-						break
-					}
-				}
-				if !found {
-					allMatches = append(allMatches, path)
-				}
-			}
-			return nil
-		})
-		if walkErr != nil {
-			return nil, fmt.Errorf("%w: failed to walk filesystem: %w", ErrIOOperation, walkErr)
+	walkErr := fs.WalkDir(filesystem, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
+		if d.IsDir() || !isSupportedFile(path) {
+			return nil
+		}
+		allMatches = append(allMatches, path)
+		return nil
+	})
+	if walkErr != nil {
+		return nil, fmt.Errorf("%w: failed to walk filesystem: %w", ErrIOOperation, walkErr)
 	}
 
 	if len(allMatches) == 0 {

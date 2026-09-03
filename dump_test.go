@@ -3005,3 +3005,45 @@ func TestDumpRefusesAValueItHasNoNameFor(t *testing.T) {
 		})
 	}
 }
+
+// TestDumpRefusesANameTooLongForAFile holds the length of a table's name to
+// this package's own limit, for the reason maxFileNameBytes gives.
+func TestDumpRefusesANameTooLongForAFile(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name   string
+		length int
+		refuse bool
+	}{
+		// The extension is part of what has to fit, so the longest table name
+		// is the limit less ".csv".
+		{"the longest name that fits", maxFileNameBytes - len(".csv"), false},
+		{"one byte past it", maxFileNameBytes - len(".csv") + 1, true},
+		{"far past it", 300, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, "d.csv")
+			require.NoError(t, os.WriteFile(source, []byte("a\n1\n"), 0o600))
+			db, err := Open(t.Context(), source)
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+
+			table := strings.Repeat("n", tt.length)
+			_, err = db.ExecContext(t.Context(), `CREATE TABLE "`+table+`" (x TEXT)`)
+			require.NoError(t, err)
+
+			err = DumpDatabase(t.Context(), db, filepath.Join(dir, "out"))
+			if !tt.refuse {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrInvalidData)
+			assert.Contains(t, err.Error(), "not usable as a file name")
+		})
+	}
+}

@@ -119,6 +119,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
 	"github.com/nao1215/filesql/internal/parser"
@@ -129,11 +130,17 @@ import (
 // ACH file extension
 const extACH = ".ach"
 
-// isACHFile checks if the file path has ACH extension (case-insensitive).
-// Returns false for paths that are only the extension (e.g., ".ach").
-// Supports both ".ach" and ".ACH" extensions.
+// isACHFile reports whether a path names an ACH file, by its extension and
+// ignoring case.
+//
+// A name that is only the extension is not one: ".ach" is a file called ".ach"
+// rather than an ACH file with no name. The test is on the base name, since the
+// directory in front of it says nothing about the format; reading the whole path
+// made "/data/.ach" an ACH file and the same file called ".ach" inside an fs.FS
+// not one.
 func isACHFile(path string) bool {
-	return len(path) > len(extACH) && strings.EqualFold(path[len(path)-len(extACH):], extACH)
+	base := filepath.Base(path)
+	return len(base) > len(extACH) && strings.EqualFold(base[len(base)-len(extACH):], extACH)
 }
 
 // parseACHFile parses an ACH file and returns multiple tables along with the TableSet.

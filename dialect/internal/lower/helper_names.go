@@ -332,25 +332,68 @@ var helperArity = map[string]int{ //nolint:gochecknoglobals // a generated table
 	"utc_timestamp":                0,
 }
 
-// builtinArity is the SQLite functions a lowering renames a call onto, with the
-// argument counts SQLite takes for each. They are not in helperArity because
-// the runtime does not register them: SQLite has them already.
+// builtinArity is how many arguments SQLite's own functions take, for the names
+// a lowering renames a call onto. Without an entry the count is unchecked, and
+// SQLite then answers about the name it was given rather than the one the
+// caller wrote: CHAR_LENGTH() became length() and the refusal said "wrong
+// number of arguments to function length()", about a function nowhere in the
+// query. The counts are what SQLite accepts, measured against it rather than
+// read off the documentation.
 //
-// The counts are here for the same reason the helpers' are. A rename lands on a
-// function of its own arity, and a count SQLite does not take reaches the
-// driver, which reports it under the name it was renamed to -- a name the
-// caller never wrote and cannot find in their query. The table is closed: an
-// entry is needed only where this package writes the rename, so it grows when a
-// lowering starts renaming onto a built-in it did not before.
-//
-// The aggregate renames are not here. SQLite's scalar min and max take any
-// number of arguments while the aggregates of those names take one, so the
-// count is answered where the aggregate rules rename, which is the only place
-// that knows which of the two it is producing.
-var builtinArity = map[string][]int{ //nolint:gochecknoglobals // a fixed table
-	"trim":              {1, 2},
-	"octet_length":      {1},
-	"json_array_length": {1, 2},
+// The keys are lower case because that is how the check spells the name it
+// looks up. A variadic name is listed with no counts, which says it takes any:
+// the listing is what TestEveryRenameTargetHasAnArity reads, so a name added to
+// a lowering has to be given an answer here even when the answer is "any".
+// builtinCounts is which argument counts one SQLite builtin takes, and how to
+// say so in a refusal. A count is a rule rather than a list because SQLite
+// states some of them that way: json_object takes an even number and json_set
+// an odd one, and those are the shapes a list cannot hold.
+type builtinCounts struct {
+	takes     func(n int) bool
+	describes string
+}
+
+var builtinArity = map[string]builtinCounts{ //nolint:gochecknoglobals // a fixed table
+	"count":             exactly(0, 1),
+	"instr":             exactly(2),
+	"atan2":             exactly(2),
+	"group_concat":      exactly(1, 2),
+	"json":              exactly(1),
+	"json_array_length": exactly(1, 2),
+	"json_patch":        exactly(2),
+	"json_quote":        exactly(1),
+	"length":            exactly(1),
+	"ln":                exactly(1),
+	"log":               exactly(1, 2),
+	"ltrim":             exactly(1, 2),
+	"octet_length":      exactly(1),
+	"rtrim":             exactly(1, 2),
+	"trim":              exactly(1, 2),
+
+	// SQLite states these as a shape rather than a list, and enforces them when
+	// the query runs rather than when it is compiled -- so a caller who wrote
+	// JSON_BUILD_OBJECT was told "json_object() requires an even number of
+	// arguments", about a function nowhere in their query, and only once the
+	// row was fetched.
+	"json_object": {takes: func(n int) bool { return n%2 == 0 }, describes: "an even number of arguments"},
+	"json_insert": {takes: func(n int) bool { return n%2 == 1 }, describes: "an odd number of arguments"},
+	"json_set":    {takes: func(n int) bool { return n%2 == 1 }, describes: "an odd number of arguments"},
+
+	// Any number, which is what SQLite takes for these.
+	"json_array":   {},
+	"json_extract": {},
+}
+
+// exactly names a builtin that takes one of a fixed set of counts.
+func exactly(counts ...int) builtinCounts {
+	described := make([]string, len(counts))
+	for i, c := range counts {
+		described[i] = strconv.Itoa(c)
+	}
+	return builtinCounts{
+		takes:     func(n int) bool { return slices.Contains(counts, n) },
+		describes: strings.Join(described, " or ") + " arguments",
+	}
 }
 
 // registeredHelper reports whether the runtime registers a function by this
@@ -364,12 +407,23 @@ func registeredHelper(name string) bool {
 // accepts a call of n arguments. A name this package neither registers nor
 // renames onto is left alone, since it is a name the caller wrote and the
 // driver answers for it under that name.
-func helperTakesArgumentCount(name string, n int) bool {
+//
+// renamed says whether the lowering gave the call a name other than the one the
+// caller wrote, which is what the builtin table is for: SQLite refusing a count
+// under a name this package substituted tells the caller about a function
+// nowhere in their query, while refusing under the name they wrote tells them
+// about their own. A registered helper is checked either way, since a helper is
+// this package's implementation whatever it is called.
+func helperTakesArgumentCount(name string, n int, renamed bool) bool {
 	if want, found := helperArity[name]; found {
 		return want < 0 || want == n
 	}
+	if !renamed {
+		return true
+	}
 	if counts, found := builtinArity[name]; found {
-		return slices.Contains(counts, n)
+		// An entry with no rule is variadic and takes any count.
+		return counts.takes == nil || counts.takes(n)
 	}
 	return true
 }
@@ -382,15 +436,7 @@ func arityDescription(name string) string {
 	}
 	// Only a name one of the two tables holds reaches here, since a name in
 	// neither is never refused for its count.
-	counts := builtinArity[name]
-	if len(counts) == 1 {
-		return plural(counts[0])
-	}
-	written := make([]string, len(counts))
-	for i, c := range counts {
-		written[i] = strconv.Itoa(c)
-	}
-	return strings.Join(written, " or ") + " arguments"
+	return builtinArity[name].describes
 }
 
 // HelperNames lists the names this package believes the runtime registers, for

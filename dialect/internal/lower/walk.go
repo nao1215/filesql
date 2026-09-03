@@ -658,8 +658,13 @@ func checkHelperArity(e ast.Expr, written string, span ast.Span) error {
 	// The helper is named in lower case in the table and a call carries whatever
 	// case it was written in, the more so for the helpers registered under the
 	// source function's own name.
+	// A lowering that claimed the call gave it the target's own spelling; one
+	// that left it alone kept the caller's, whatever case they wrote it in. So
+	// a call the lowering renamed onto length is told apart from a LOG the
+	// caller wrote and no rule claimed.
+	renamed := call.Name[0].Name != written
 	name := strings.ToLower(call.Name[0].Name)
-	if helperTakesArgumentCount(name, len(call.Args)) {
+	if helperTakesArgumentCount(name, len(call.Args), renamed) {
 		return nil
 	}
 	return unsupported(span, "%s takes %s and the call has %d",
