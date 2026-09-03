@@ -1895,18 +1895,11 @@ func TestDialectMirrorsTheInternalIdentifier(t *testing.T) {
 }
 
 // TestBothSpellingsOfANiladicFunctionAgree holds the two spellings of one
-// construct to one answer. The standard writes CURRENT_USER and its siblings
-// without parentheses, and a bare word nothing claims stays a column reference:
-// SQLite then answered "no such column: current_user", about a column the
-// caller did not write, while the parenthesized spelling was refused by name
-// with the reason. It is the shape the clock keywords had before they were
-// given an answer.
+// construct to one answer, and the three PostgreSQL reserves to a refusal that
+// gives the reason.
 func TestBothSpellingsOfANiladicFunctionAgree(t *testing.T) {
 	t.Parallel()
 
-	// Whether one of these is refused is the dialect's own answer, from the
-	// table that answers for the parenthesized spelling. What this holds is
-	// that the two spellings give the same answer, whichever it is.
 	for _, name := range []string{
 		"CURRENT_USER", "SESSION_USER", "SYSTEM_USER", "CURRENT_CATALOG", "CURRENT_SCHEMA", "CURRENT_ROLE",
 	} {
@@ -1970,10 +1963,8 @@ func TestBothSpellingsOfANiladicFunctionAgree(t *testing.T) {
 
 // TestSourceArityIsCheckedForNamesLeftOnSQLite holds a call to the argument
 // count the dialect that wrote it accepts, for a name this package leaves on
-// SQLite's function of the same name. MySQL's LTRIM takes the string alone and
-// SQLite's takes an optional set of characters, so LTRIM('xxab','x') answered
-// "ab" here and "Incorrect parameter count" in MySQL -- a query answering
-// differently from the engine it was written for, with nothing said.
+// SQLite's function of the same name. The sourceArity table says which names
+// those are and why.
 func TestSourceArityIsCheckedForNamesLeftOnSQLite(t *testing.T) {
 	t.Parallel()
 

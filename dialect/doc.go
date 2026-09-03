@@ -103,9 +103,9 @@
 // where SQLite holds only UTF-8, a geography, a fact about the connection or
 // the server -- in the parenthesized spelling and in the bare one the standard
 // writes without parentheses -- and an effect rather than a value. A value that
-// is not the same twice is refused where it stands for an identity, as UUID
-// does, and answered where a caller asking for it is asking for a different
-// answer each time, as RAND, random and GENERATE_UUID are.
+// is not the same twice is answered where SQLite has a form for it -- RAND,
+// random and GENERATE_UUID -- and refused where it has none, as RANDOM_BYTES,
+// UUID, UUID_SHORT and RANDOM_NORMAL are.
 //
 // The names with neither a translation nor a refusal are written down rather
 // than left to be discovered: dialect/testdata/untranslated_postgresql.txt
