@@ -355,6 +355,10 @@ func (p *Parser) parseSelectItems() ([]ast.SelectItem, error) {
 			return nil, err
 		}
 		item := ast.SelectItem{Expr: e, Span: span, Source: p.sourceText(from, p.pos)}
+		// The token the alias begins at, taken before it is consumed, so the
+		// refusal below points at what the caller wrote rather than at
+		// whatever follows it.
+		aliasStart := p.cur()
 		if alias, quoted, ok, err := p.parseAlias(); err != nil {
 			return nil, err
 		} else if ok {
@@ -364,7 +368,7 @@ func (p *Parser) parseSelectItems() ([]ast.SelectItem, error) {
 			// refuses as a syntax error near an AS the caller may not even have
 			// written -- an answer about this package's own text.
 			if _, isStar := e.(*ast.Star); isStar {
-				return nil, p.unsupportedf(
+				return nil, unsupportedAt(aliasStart,
 					"a star cannot be given a name; it stands for every column of the row")
 			}
 			item.Alias, item.AliasQuoted = alias, quoted

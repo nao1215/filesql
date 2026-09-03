@@ -2185,7 +2185,10 @@ func TestATranslationIsSQLSQLiteCanRead(t *testing.T) {
 	require.NoError(t, RegisterFunctions())
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
+	// Cleanup rather than defer: the subtests below run in parallel and resume
+	// after this function returns, and a closed database answers every prepare
+	// with the same error, which is not one of the ones this looks for.
+	t.Cleanup(func() { _ = db.Close() })
 	_, err = db.ExecContext(t.Context(), `CREATE TABLE t (a TEXT, b INTEGER, c REAL)`)
 	require.NoError(t, err)
 
