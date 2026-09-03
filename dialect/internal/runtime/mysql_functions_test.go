@@ -998,3 +998,51 @@ func TestMySQLNumericCallsReadAStringAsZero(t *testing.T) {
 		})
 	}
 }
+
+// TestNumbersPastTheRangeOfADouble holds TRUNCATE and POW to what MySQL 8.4
+// answers when the arithmetic runs past what a double can hold. TRUNCATE scaled
+// its argument by a power of ten and back, so a value the scaling could not
+// hold answered an infinity for a number it could not have changed; POW
+// answered one where MySQL refuses the whole expression.
+func TestNumbersPastTheRangeOfADouble(t *testing.T) {
+	db := castDB(t)
+
+	for _, tt := range []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{"a value the scaling cannot hold", `SELECT TRUNCATE(1e308, 1)`, "1e+308"},
+		{"the same value negated", `SELECT TRUNCATE(-1e308, 1)`, "-1e+308"},
+		{"a place further left than the value", `SELECT TRUNCATE(1, -400)`, "0"},
+		{"a large value at such a place", `SELECT TRUNCATE(1e308, -400)`, "0"},
+		{"more places than a double carries", `SELECT TRUNCATE(1.5, 400)`, "1.5"},
+		{"the ordinary case", `SELECT TRUNCATE(3.14159, 2)`, "3.14"},
+		{"a power that is small but not zero", `SELECT mysql_pow(2, -1074)`, "5e-324"},
+		{"a power that underflows to zero", `SELECT mysql_pow(2, -1080)`, "0"},
+		{"the ordinary power", `SELECT mysql_pow(2, 10)`, "1024"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var got string
+			if err := db.QueryRowContext(t.Context(), tt.query).Scan(&got); err != nil {
+				t.Fatalf("%s: %v", tt.query, err)
+			}
+			if got != tt.want {
+				t.Errorf("%s = %q, want %q", tt.query, got, tt.want)
+			}
+		})
+	}
+
+	// MySQL refuses a power outside the range of a double rather than
+	// answering an infinity.
+	for _, query := range []string{
+		`SELECT mysql_pow(0, -1)`,
+		`SELECT mysql_pow(10, 400)`,
+		`SELECT mysql_pow(-10, 401)`,
+	} {
+		var got any
+		if err := db.QueryRowContext(t.Context(), query).Scan(&got); err == nil {
+			t.Errorf("%s answered %v, want a refusal", query, got)
+		}
+	}
+}

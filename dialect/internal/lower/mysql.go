@@ -224,6 +224,14 @@ func (r *mysqlRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		// modifiers. MySQL's takes one value and reads it the way the rest of
 		// the date helpers here read it.
 		return rename(call, "mysql_date"), nil
+	case "VALUES":
+		// MySQL names the row an INSERT would have written with VALUES(col),
+		// and only inside ON DUPLICATE KEY UPDATE, which this package already
+		// translates into ON CONFLICT DO UPDATE. SQLite names the same row
+		// "excluded", so the call becomes excluded.col. Written anywhere else
+		// it is an error in both, MySQL by its grammar and SQLite by there
+		// being no such row.
+		return upsertExcluded(call)
 	case "TIMESTAMPADD":
 		return timestampAdd(fnNameMySQLIntervalAdd, call)
 	case "TIMESTAMPDIFF":
@@ -284,10 +292,14 @@ func (r *mysqlRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		return rename(call, "mysql_nullif"), nil
 	case fnNameRound:
 		return roundEven(mysqlNumberArgs(call, 0))
-	case "TRUNCATE", "POW", "POWER":
-		// SQLite spells these the same way and answers the same thing, so only
-		// the conversion in front of them differs.
+	case "TRUNCATE":
+		// SQLite spells this the same way and answers the same thing, so only
+		// the conversion in front of it differs.
 		return mysqlNumberArgs(call), nil
+	case "POW", "POWER":
+		// MySQL refuses a result outside the range of a double where SQLite
+		// answers an infinity.
+		return rename(mysqlNumberArgs(call), "mysql_pow"), nil
 	case fnNameMod:
 		return rename(call, "mysql_mod"), nil
 	case "LENGTH", "OCTET_LENGTH":
@@ -298,7 +310,7 @@ func (r *mysqlRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		// SQLite spells these the same way and answers the same thing, so only
 		// the conversion in front of them differs.
 		return mysqlTextArgs(call), nil
-	case "LOG":
+	case fnNameLog:
 		if len(call.Args) == 1 {
 			return rename(call, "ln"), nil
 		}
@@ -698,4 +710,19 @@ func mysqlJSONArrayAppend(call *ast.FuncCall) (ast.Expr, error) {
 		call.Args[i] = text(path+"[#]", call.Span)
 	}
 	return rename(call, "json_insert"), nil
+}
+
+// upsertExcluded rewrites MySQL's VALUES(col) as SQLite's excluded.col.
+func upsertExcluded(call *ast.FuncCall) (ast.Expr, error) {
+	if len(call.Args) != 1 {
+		return nil, unsupported(call.Span, "VALUES names one column of the row an insert would have written")
+	}
+	ref, ok := call.Args[0].(*ast.ColumnRef)
+	if !ok || len(ref.Parts) != 1 {
+		return nil, unsupported(call.Span, "VALUES names a column of the row an insert would have written")
+	}
+	return &ast.ColumnRef{
+		Parts: []ast.Ident{{Name: "excluded"}, ref.Parts[0]},
+		Span:  call.Span,
+	}, nil
 }

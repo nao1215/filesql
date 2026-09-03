@@ -38,6 +38,29 @@ func postgresqlScalarFunctions() map[string]scalarSpec {
 		// here from the value.
 		"postgresql_substring_from": {2, fnPostgresSubstringFrom},
 
+		// The functions PostgreSQL refuses outside their domain, where
+		// SQLite's own answer NULL or an infinity.
+		"postgresql_sqrt":  {1, pgFloatFn(fnPostgresSqrt)},
+		"postgresql_ln":    {1, pgFloatFn(pgLogarithm(math.Log))},
+		"postgresql_log":   {-1, fnPostgresLog},
+		"postgresql_exp":   {1, pgFloatFn(fnPostgresExp)},
+		"postgresql_power": {2, fnPostgresPower},
+		"postgresql_acos":  {1, pgFloatFn(pgBounded(-1, 1, math.Acos))},
+		"postgresql_asin":  {1, pgFloatFn(pgBounded(-1, 1, math.Asin))},
+		"postgresql_acosh": {1, pgFloatFn(func(x float64) (float64, error) {
+			if x < 1 {
+				return 0, errOutOfRange
+			}
+			return math.Acosh(x), nil
+		})},
+		"postgresql_atanh": {1, pgFloatFn(func(x float64) (float64, error) {
+			if x < -1 || x > 1 {
+				return 0, errOutOfRange
+			}
+			return math.Atanh(x), nil
+		})},
+		"postgresql_cot": {1, fnPostgresCot},
+
 		// Arithmetic dialects.SQLite has no operator or function for.
 		"cbrt": {1, fnCbrt},
 		"erf":  {1, floatFn(math.Erf)},
@@ -68,9 +91,9 @@ func postgresqlScalarFunctions() map[string]scalarSpec {
 		"cosd":     {1, degreeTrig(degreeCos)},
 		"tand":     {1, degreeTrig(degreeTan)},
 		"cotd":     {1, degreeTrig(degreeCot)},
-		"asind":    {1, inverseDegreeTrig(math.Asin)},
-		"acosd":    {1, inverseDegreeTrig(math.Acos)},
-		"atand":    {1, inverseDegreeTrig(math.Atan)},
+		"asind":    {1, inverseDegreeTrig(math.Asin, -1, 1)},
+		"acosd":    {1, inverseDegreeTrig(math.Acos, -1, 1)},
+		"atand":    {1, inverseDegreeTrig(math.Atan, math.Inf(-1), math.Inf(1))},
 		"atan2d":   {2, fnAtan2d},
 		"isfinite": {1, fnIsFinite},
 
@@ -673,6 +696,177 @@ func floatFn(f func(float64) float64) scalarFn {
 	}
 }
 
+// PostgreSQL raises where these functions leave their domain, and SQLite's own
+// answer NULL or an infinity there. A NULL reads as missing data rather than as
+// arithmetic the engine refused, so it survives into a report; an infinity
+// survives further still. The messages are PostgreSQL 17's own.
+var (
+	errSqrtNegative = errors.New("dialect: cannot take square root of a negative number")
+	errLogZero      = errors.New("dialect: cannot take logarithm of zero")
+	errLogNegative  = errors.New("dialect: cannot take logarithm of a negative number")
+	errZeroNegPow   = errors.New("dialect: zero raised to a negative power is undefined")
+	errOverflow     = errors.New("dialect: value out of range: overflow")
+	errUnderflow    = errors.New("dialect: value out of range: underflow")
+	errOutOfRange   = errors.New("dialect: input is out of range")
+	errComplexPower = errors.New("dialect: a negative number raised to a non-integer power yields a complex result")
+)
+
+// pgFloatFn builds a helper from a function of one float that may refuse its
+// argument. A NULL argument stays NULL, which is what PostgreSQL answers for
+// one.
+func pgFloatFn(f func(float64) (float64, error)) scalarFn {
+	return func(args []driver.Value) (driver.Value, error) {
+		x, ok := toFloat(args[0])
+		if !ok {
+			return nil, nil
+		}
+		return f(x)
+	}
+}
+
+// pgLogarithm is the domain PostgreSQL's logarithms share: zero and every
+// negative number are refused, and each by its own message.
+func pgLogarithm(f func(float64) float64) func(float64) (float64, error) {
+	return func(x float64) (float64, error) {
+		switch {
+		case x == 0:
+			return 0, errLogZero
+		case x < 0:
+			return 0, errLogNegative
+		}
+		return f(x), nil
+	}
+}
+
+// pgBounded refuses an argument outside [low, high], which is how PostgreSQL
+// answers for the inverse trigonometric functions.
+func pgBounded(low, high float64, f func(float64) float64) func(float64) (float64, error) {
+	return func(x float64) (float64, error) {
+		if x < low || x > high {
+			return 0, errOutOfRange
+		}
+		return f(x), nil
+	}
+}
+
+func fnPostgresSqrt(x float64) (float64, error) {
+	if x < 0 {
+		return 0, errSqrtNegative
+	}
+	return math.Sqrt(x), nil
+}
+
+func fnPostgresExp(x float64) (float64, error) {
+	if !isFinite(x) {
+		// PostgreSQL answers for these rather than calling them out of range:
+		// EXP(Infinity) is Infinity and EXP(-Infinity) is 0.
+		return math.Exp(x), nil
+	}
+	out := math.Exp(x)
+	if math.IsInf(out, 0) {
+		return 0, errOverflow
+	}
+	// The exponential of a finite number is never zero, so a zero here is a
+	// result too small for a double. PostgreSQL 17 says so rather than
+	// answering the zero: EXP(-1000) is "value out of range: underflow".
+	if out == 0 && !math.IsInf(x, 0) {
+		return 0, errUnderflow
+	}
+	return out, nil
+}
+
+// fnPostgresLog is LOG, which takes the base ten logarithm of one argument and
+// the logarithm of the second in the base of the first.
+func fnPostgresLog(args []driver.Value) (driver.Value, error) {
+	log10 := pgLogarithm(math.Log10)
+	// PostgreSQL has LOG(x) and LOG(base, x) and nothing else, and answers
+	// that it has no such function for any other count.
+	if len(args) == 0 || len(args) > 2 {
+		return nil, fmt.Errorf("dialect: LOG takes one argument or two, got %d", len(args))
+	}
+	if len(args) == 1 {
+		x, ok := toFloat(args[0])
+		if !ok {
+			return nil, nil
+		}
+		return log10(x)
+	}
+	base, ok1 := toFloat(args[0])
+	x, ok2 := toFloat(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	// The base is a logarithm of its own, so a base of zero or a negative one
+	// is refused by the same rule the value is.
+	lb, err := log10(base)
+	if err != nil {
+		return nil, err
+	}
+	lx, err := log10(x)
+	if err != nil {
+		return nil, err
+	}
+	if lb == 0 {
+		return nil, errLogZero
+	}
+	return lx / lb, nil
+}
+
+// fnPostgresPower is POWER, whose one refusal is a zero raised to a negative
+// power. PostgreSQL computes the rest in arbitrary precision and this does not,
+// so a result past the range of a float is reported rather than answered as an
+// infinity.
+func fnPostgresPower(args []driver.Value) (driver.Value, error) {
+	base, ok1 := toFloat(args[0])
+	exponent, ok2 := toFloat(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	if !isFinite(base) || !isFinite(exponent) {
+		// A range is a question about finite numbers. PostgreSQL answers
+		// POWER(Infinity, 1) with Infinity, POWER(2, -Infinity) with 0 and
+		// POWER(-1, NaN) with NaN, which is what math.Pow answers too.
+		return math.Pow(base, exponent), nil
+	}
+	if base == 0 && exponent < 0 {
+		return nil, errZeroNegPow
+	}
+	// A negative base raised to a fraction has no real answer, and PostgreSQL
+	// says that rather than answering the NaN math.Pow gives.
+	if base < 0 && exponent != math.Trunc(exponent) {
+		return nil, errComplexPower
+	}
+	out := math.Pow(base, exponent)
+	if math.IsInf(out, 0) {
+		return nil, errOverflow
+	}
+	// A zero from a base that is not zero is a result too small for a double.
+	// PostgreSQL 17 refuses that as it refuses the overflow: POWER(1e-300, 2)
+	// is "value out of range: underflow" there and 0 in MySQL.
+	if out == 0 && base != 0 {
+		return nil, errUnderflow
+	}
+	return out, nil
+}
+
+// isFinite reports whether x is a number a range can be asked about.
+func isFinite(x float64) bool {
+	return !math.IsInf(x, 0) && !math.IsNaN(x)
+}
+
+// fnPostgresCot is COT, which PostgreSQL answers with an infinity at zero where
+// MySQL refuses it. The helper registered under the bare name is MySQL's, and
+// every dialect resolved to it. The reciprocal of the tangent can disagree with
+// PostgreSQL in the last bit, as MySQL's does, because Go's tangent and the C
+// library's round differently.
+func fnPostgresCot(args []driver.Value) (driver.Value, error) {
+	x, ok := toFloat(args[0])
+	if !ok {
+		return nil, nil
+	}
+	return 1 / math.Tan(x), nil
+}
+
 func fnCbrt(args []driver.Value) (driver.Value, error) {
 	x, ok := toFloat(args[0])
 	if !ok {
@@ -821,11 +1015,14 @@ func exactDegreeValue(kind degreeKindValue, deg float64) (float64, bool) {
 
 // inverseDegreeTrig turns a function answering radians into one answering
 // degrees.
-func inverseDegreeTrig(fn func(float64) float64) scalarFn {
+func inverseDegreeTrig(fn func(float64) float64, low, high float64) scalarFn {
 	return func(args []driver.Value) (driver.Value, error) {
 		x, ok := toFloat(args[0])
 		if !ok {
 			return nil, nil
+		}
+		if x < low || x > high {
+			return nil, errOutOfRange
 		}
 		return radiansToDegrees(fn(x)), nil
 	}

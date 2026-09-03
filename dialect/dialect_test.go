@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -2235,5 +2236,309 @@ func TestATranslationIsSQLSQLiteCanRead(t *testing.T) {
 					"%s became %q, which SQLite cannot parse: %v", tt.query, translated, prepErr)
 			}
 		})
+	}
+}
+
+// TestTheMySQLUpsertSpelling translates the upsert MySQL callers write and runs
+// it, since the rows it leaves are the answer that matters. They are the rows
+// MySQL 8.4 leaves for the same statements.
+func TestTheMySQLUpsertSpelling(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, RegisterFunctions())
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE u (a INTEGER PRIMARY KEY, b TEXT)`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO u VALUES (1, 'x')`)
+	require.NoError(t, err)
+
+	for _, query := range []string{
+		"INSERT INTO u (a, b) VALUES (1, 'y') ON DUPLICATE KEY UPDATE b = VALUES(b)",
+		"INSERT INTO u (a, b) VALUES (2, 'z') ON DUPLICATE KEY UPDATE b = VALUES(b)",
+		"INSERT INTO u (a, b) VALUES (1, 'w') ON DUPLICATE KEY UPDATE b = CONCAT(VALUES(b), '!')",
+	} {
+		translated, err := Translate(MySQL, query)
+		require.NoErrorf(t, err, "%s", query)
+		_, err = db.ExecContext(t.Context(), translated)
+		require.NoErrorf(t, err, "%s became %q", query, translated)
+	}
+
+	rows, err := db.QueryContext(t.Context(), `SELECT a, b FROM u ORDER BY a`)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	got := map[int]string{}
+	for rows.Next() {
+		var a int
+		var b string
+		require.NoError(t, rows.Scan(&a, &b))
+		got[a] = b
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, map[int]string{1: "w!", 2: "z"}, got)
+
+	// VALUES names one column and nothing else, and outside an upsert there is
+	// no row for it to name, which is what MySQL answers too.
+	_, err = Translate(MySQL, "INSERT INTO u (a) VALUES (1) ON DUPLICATE KEY UPDATE b = VALUES(1 + 1)")
+	assert.Error(t, err)
+}
+
+// TestPostgreSQLRaisesWhereItsDomainEnds holds the mathematical functions to
+// PostgreSQL's answers at the edge of their domain. SQLite's own answer NULL or
+// an infinity there, which reads as missing data rather than as arithmetic the
+// engine refused. Every expectation was read from PostgreSQL 17.
+func TestPostgreSQLRaisesWhereItsDomainEnds(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, RegisterFunctions())
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	t.Run("refused", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			expr string
+			want string
+		}{
+			{"sqrt(-1)", "cannot take square root of a negative number"},
+			{"ln(0)", "cannot take logarithm of zero"},
+			{"ln(-1)", "cannot take logarithm of a negative number"},
+			{"log(0)", "cannot take logarithm of zero"},
+			{"log(-1)", "cannot take logarithm of a negative number"},
+			{"log(10, 0)", "cannot take logarithm of zero"},
+			{"log(0, 10)", "cannot take logarithm of zero"},
+			{"log(2, -1)", "cannot take logarithm of a negative number"},
+			{"power(0, -1)", "zero raised to a negative power is undefined"},
+			{"pow(0, -1)", "zero raised to a negative power is undefined"},
+			{"exp(1000)", "value out of range: overflow"},
+			{"acos(2)", "input is out of range"},
+			{"asin(2)", "input is out of range"},
+			{"acosd(2)", "input is out of range"},
+			{"asind(2)", "input is out of range"},
+			{"acosh(0)", "input is out of range"},
+			{"atanh(2)", "input is out of range"},
+		} {
+			t.Run(tt.expr, func(t *testing.T) {
+				t.Parallel()
+
+				translated, err := Translate(PostgreSQL, "SELECT "+tt.expr)
+				require.NoError(t, err)
+				var v any
+				err = db.QueryRowContext(t.Context(), translated).Scan(&v)
+				require.Errorf(t, err, "%s answered %v", tt.expr, v)
+				assert.Contains(t, err.Error(), tt.want)
+			})
+		}
+	})
+
+	t.Run("answered", func(t *testing.T) {
+		t.Parallel()
+
+		// The values PostgreSQL answers, including the two edges it does not
+		// refuse: a helper that starts refusing those would fail here.
+		for _, tt := range []struct {
+			expr string
+			want float64
+		}{
+			{"sqrt(4)", 2},
+			{"sqrt(0)", 0},
+			{"ln(1)", 0},
+			{"log(100)", 2},
+			{"log(2, 8)", 3},
+			{"power(2, 10)", 1024},
+			{"power(-2, 3)", -8},
+			{"power(0, 0)", 1},
+			{"exp(0)", 1},
+			{"acos(1)", 0},
+			{"acosd(1)", 0},
+			{"asind(0.5)", 30},
+			{"acosh(1)", 0},
+			{"atanh(0)", 0},
+			{"atanh(1)", math.Inf(1)},
+			{"cot(0)", math.Inf(1)},
+		} {
+			t.Run(tt.expr, func(t *testing.T) {
+				t.Parallel()
+
+				translated, err := Translate(PostgreSQL, "SELECT "+tt.expr)
+				require.NoError(t, err)
+				var got float64
+				require.NoError(t, db.QueryRowContext(t.Context(), translated).Scan(&got))
+				assert.InDelta(t, tt.want, got, 1e-9)
+			})
+		}
+	})
+
+	// A NULL argument is nothing to compute with, and PostgreSQL answers NULL
+	// for one rather than refusing it.
+	for _, expr := range []string{"sqrt(NULL)", "ln(NULL)", "log(NULL, 2)", "power(NULL, -1)", "cot(NULL)"} {
+		translated, err := Translate(PostgreSQL, "SELECT "+expr)
+		require.NoError(t, err)
+		var v any
+		require.NoErrorf(t, db.QueryRowContext(t.Context(), translated).Scan(&v), "%s", expr)
+		assert.Nilf(t, v, "%s", expr)
+	}
+}
+
+// TestMySQLRefusesAPowerOutsideADouble holds the MySQL dialect to what MySQL
+// 8.4 answers for a power it cannot hold, which is a refusal rather than the
+// infinity SQLite answers.
+func TestMySQLRefusesAPowerOutsideADouble(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, RegisterFunctions())
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	for _, expr := range []string{"POW(0, -1)", "POW(10, 400)", "POWER(-10, 401)"} {
+		translated, err := Translate(MySQL, "SELECT "+expr)
+		require.NoError(t, err)
+		var v any
+		assert.Errorf(t, db.QueryRowContext(t.Context(), translated).Scan(&v),
+			"%s answered %v", expr, v)
+	}
+
+	var got float64
+	translated, err := Translate(MySQL, "SELECT POW(2, 10)")
+	require.NoError(t, err)
+	require.NoError(t, db.QueryRowContext(t.Context(), translated).Scan(&got))
+	assert.InDelta(t, 1024.0, got, 1e-9)
+}
+
+// TestAnAggregateQuerySelectsWhatItGroups holds the select list of an
+// aggregate query to what every engine here requires of it. A column that is
+// neither grouped nor aggregated is refused by PostgreSQL by the standard, by
+// MySQL under ONLY_FULL_GROUP_BY and by BigQuery under its own rule, and SQLite
+// answers it with one row of each group chosen arbitrarily: the numbers of a
+// report come out right beside a label nobody picked.
+func TestAnAggregateQuerySelectsWhatItGroups(t *testing.T) {
+	t.Parallel()
+
+	t.Run("refused", func(t *testing.T) {
+		t.Parallel()
+
+		for _, query := range []string{
+			"SELECT a, b FROM g GROUP BY b",
+			"SELECT a, count(*) FROM g GROUP BY b",
+			"SELECT a, max(b) FROM g",
+			"SELECT g.a, count(*) FROM g GROUP BY b",
+			"SELECT a, b FROM g GROUP BY (b)",
+			"SELECT a, count(*) FROM g GROUP BY 2",
+			"SELECT COALESCE(sum(a), 0), b FROM g",
+			"SELECT sum(a) + 1, b FROM g",
+			"SELECT CASE WHEN count(*) > 0 THEN 1 ELSE 0 END, b FROM g",
+		} {
+			t.Run(query, func(t *testing.T) {
+				t.Parallel()
+
+				for _, d := range []Dialect{MySQL, PostgreSQL, GoogleSQL} {
+					translated, err := Translate(d, query)
+					assert.Errorf(t, err, "%s: %s translated to %q", d, query, translated)
+				}
+			})
+		}
+	})
+
+	t.Run("answered", func(t *testing.T) {
+		t.Parallel()
+
+		// The check gives up on anything it cannot read exactly, since a
+		// refusal of a query the engines accept is worse than the answer it
+		// replaces: both PostgreSQL and MySQL accept a column functionally
+		// dependent on a grouped key, which neither the tree nor this package
+		// can see.
+		for _, query := range []string{
+			"SELECT b, count(*) FROM g GROUP BY b",
+			"SELECT a, count(*) FROM g GROUP BY 1",
+			"SELECT a AS x, count(*) FROM g GROUP BY x",
+			"SELECT a, a AS x FROM g GROUP BY 1",
+			"SELECT a AS x, g.a FROM g GROUP BY x",
+			"SELECT g.a, a AS x FROM g GROUP BY 1",
+			"SELECT a + 1, count(*) FROM g GROUP BY a + 1",
+			"SELECT a FROM g GROUP BY (a)",
+			"SELECT a, b FROM g GROUP BY a, (b)",
+			// A grouping this package cannot read leaves the query answered:
+			// MySQL takes "GROUP BY +a" and PostgreSQL refuses it, and
+			// neither takes "GROUP BY a + 0".
+			"SELECT a FROM g GROUP BY +a",
+			"SELECT a FROM g GROUP BY a + 0",
+			"SELECT * FROM g GROUP BY b",
+			"SELECT a, count(*) OVER () FROM g",
+			"SELECT max(a), min(b) FROM g",
+			"SELECT count(*) FROM g",
+			"SELECT a, b FROM g",
+			"SELECT a, b FROM g ORDER BY a",
+			"SELECT 1, count(*) FROM g",
+		} {
+			t.Run(query, func(t *testing.T) {
+				t.Parallel()
+
+				for _, d := range []Dialect{MySQL, PostgreSQL} {
+					_, err := Translate(d, query)
+					assert.NoErrorf(t, err, "%s: %s", d, query)
+				}
+			})
+		}
+	})
+}
+
+// TestPostgreSQLRefusesAResultTooSmallForADouble holds the PostgreSQL helpers
+// to what PostgreSQL 17 answers at the small end of a double and for a power
+// with no real answer, both of which SQLite answers with a number.
+func TestPostgreSQLRefusesAResultTooSmallForADouble(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, RegisterFunctions())
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	for _, tt := range []struct {
+		expr string
+		want string
+	}{
+		{"exp(-1000)", "underflow"},
+		{"power(1e-300, 2)", "underflow"},
+		{"power(-1, 0.5)", "complex result"},
+		{"power(-8, 1.5)", "complex result"},
+		{"log(1, 2, 3)", "LOG takes one argument or two"},
+	} {
+		t.Run(tt.expr, func(t *testing.T) {
+			t.Parallel()
+
+			translated, err := Translate(PostgreSQL, "SELECT "+tt.expr)
+			require.NoError(t, err)
+			var v any
+			err = db.QueryRowContext(t.Context(), translated).Scan(&v)
+			require.Errorf(t, err, "%s answered %v", tt.expr, v)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+
+	// The values PostgreSQL 17 answers at the same edges.
+	for _, tt := range []struct {
+		expr string
+		want float64
+	}{
+		{"power(0, 5)", 0},
+		{"power(0, 0)", 1},
+		{"power(-8, 3)", -512},
+		{"exp(1e-300)", 1},
+		{"power(2, -1074)", 5e-324},
+		{"exp(-700)", 9.85967654375977e-305},
+		// exp(-745) is the last subnormal PostgreSQL answers and is not
+		// pinned here: Go's exponential rounds it to 5e-324 on linux/amd64
+		// and to zero on darwin, so where the refusal begins is the
+		// platform's, within one step of the smallest double.
+	} {
+		translated, err := Translate(PostgreSQL, "SELECT "+tt.expr)
+		require.NoError(t, err)
+		var got float64
+		require.NoErrorf(t, db.QueryRowContext(t.Context(), translated).Scan(&got), "%s", tt.expr)
+		assert.InDeltaf(t, tt.want, got, 1e-9, "%s", tt.expr)
 	}
 }

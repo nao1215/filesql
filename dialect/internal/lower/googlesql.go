@@ -170,7 +170,7 @@ func (r *googleRules) Call(call *ast.FuncCall) (ast.Expr, error) {
 		// string holding a verb it does not know.
 		formatBooleanArguments(call)
 		return rename(call, "googlesql_format"), nil
-	case "LOG":
+	case fnNameLog:
 		switch len(call.Args) {
 		case 1:
 			return rename(call, "ln"), nil

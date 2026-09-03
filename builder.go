@@ -874,7 +874,7 @@ func (b *DBBuilder) createInMemoryDatabase() (*sql.DB, error) {
 	// ":memory:" connection. A bare ":memory:" database is private to a single
 	// connection, which forced earlier versions to reuse one connection for the
 	// whole pool and made the returned *sql.DB unsafe to use from multiple
-	// goroutines. With "mode=memory&cache=shared" every pooled connection opens
+	// goroutines. With "mode=memory&cache=shared&_dqs=false" every pooled connection opens
 	// its own real connection to the same in-memory database, so database/sql
 	// can serialize access per connection: the result is safe to share across
 	// goroutines and still supports queries issued while iterating rows.
@@ -882,7 +882,13 @@ func (b *DBBuilder) createInMemoryDatabase() (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to name in-memory database: %w", ErrDatabaseOperation, err)
 	}
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", name)
+	// _dqs=false turns off SQLite's double-quoted string literal quirk, under
+	// which a double-quoted name that matches no column is read as a string
+	// rather than refused: a mistyped column name answered its own spelling
+	// for every row, and one written in a WHERE compared that spelling and
+	// quietly matched nothing. Names are quoted throughout this package and by
+	// the dialect translation, so the quirk was reachable from every query.
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared&_dqs=false", name)
 	drv, err := sqliteDriver()
 	if err != nil {
 		return nil, err

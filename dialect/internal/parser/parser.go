@@ -27,6 +27,17 @@ const (
 	kwEnd       = "END"
 	kwDefault   = "DEFAULT"
 	kwWith      = "WITH"
+	kwFor       = "FOR"
+	kwIgnore    = "IGNORE"
+	kwLateral   = "LATERAL"
+	kwLeft      = "LEFT"
+	kwLike      = "LIKE"
+	kwSelect    = "SELECT"
+	kwStraight  = "STRAIGHT_JOIN"
+	kwTable     = "TABLE"
+	kwNot       = "NOT"
+	kwRight     = "RIGHT"
+	kwSample    = "TABLESAMPLE"
 )
 
 // maxDepth bounds how deeply expressions and subqueries may nest. SQL text can

@@ -61,6 +61,7 @@ func mysqlScalarFunctions() map[string]scalarSpec {
 		"mysql_sign":  {1, mysqlMath(func(f float64) float64 { return float64(sign(f)) })},
 		"mysql_sqrt":  {1, mysqlMath(math.Sqrt)},
 		"mysql_exp":   {1, mysqlMath(math.Exp)},
+		"mysql_pow":   {2, fnMySQLPow},
 		"mysql_ln":    {1, mysqlLogarithm(math.Log)},
 		"mysql_log2":  {1, mysqlLogarithm(math.Log2)},
 		"mysql_log10": {1, mysqlLogarithm(math.Log10)},
@@ -693,6 +694,27 @@ func fnCot(args []driver.Value) (driver.Value, error) {
 		return nil, fmt.Errorf("dialect: COT: the cotangent of %v is out of range", x)
 	}
 	return 1 / tan, nil
+}
+
+// fnMySQLPow implements POW(x, y). MySQL refuses a result outside the range of
+// a double rather than answering an infinity, as it does for the rest of its
+// arithmetic: POW(0, -1) and POW(10, 400) are both "DOUBLE value is out of
+// range" there, and an infinity here flowed into the rest of the query as a
+// number.
+func fnMySQLPow(args []driver.Value) (driver.Value, error) {
+	base, ok1 := mysqlNumericArgument(args[0])
+	exponent, ok2 := mysqlNumericArgument(args[1])
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	out := math.Pow(base, exponent)
+	if math.IsInf(out, 0) {
+		return nil, fmt.Errorf("dialect: the result of POW(%v, %v) is out of range", base, exponent)
+	}
+	if math.IsNaN(out) {
+		return nil, nil
+	}
+	return out, nil
 }
 
 // fnMySQLCRC32 implements CRC32(x): the IEEE checksum of the value's string

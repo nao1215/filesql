@@ -144,7 +144,11 @@ func (p *Parser) parseWordPrimary() (ast.Expr, error) {
 	// "SELECT b + FROM t" a sum of b and a column called FROM, with t as its
 	// alias: a query that stops in the middle parsed, and what reached SQLite
 	// was a different query.
-	if clauseOnlyWords[word] {
+	//
+	// A word in front of a parenthesis is a call rather than a name, which is
+	// how MySQL spells the VALUES(a) of an upsert, so the name is left to the
+	// call reader below.
+	if (clauseOnlyWords[word] || reservedWords[p.dialect][word]) && !p.peek(1).IsOp("(") {
 		return nil, p.unexpected("an expression")
 	}
 
@@ -208,6 +212,32 @@ var clauseOnlyWords = map[string]bool{ //nolint:gochecknoglobals // a fixed tabl
 	"INTO": true, "THEN": true, "ELSE": true, kwEnd: true, "WHEN": true,
 	kwAnd: true, "OR": true, "AS": true, "ASC": true, "DESC": true,
 	"RETURNING": true, "QUALIFY": true, "DO": true, "NOTHING": true,
+}
+
+// reservedWords are the words an engine keeps for its own grammar, on top of
+// the ones every engine here keeps. A name among them is one the caller has to
+// quote, so a bare one where a value goes is a query the engine does not read
+// either.
+//
+// The lists are per dialect because the engines disagree, and each entry was
+// read from the engine by giving a table a column of that name and selecting it
+// unquoted: MySQL 8.4 refuses BETWEEN, KEY and USE where PostgreSQL 17 answers
+// with the column, and PostgreSQL refuses FULL where MySQL answers with it. A
+// shared list would have refused "SELECT b + between FROM t", which PostgreSQL
+// answers. GoogleSQL has no entry here because there was no engine to ask.
+var reservedWords = map[dialects.Dialect]map[string]bool{ //nolint:gochecknoglobals // a fixed table
+	dialects.MySQL: {
+		"BETWEEN": true, kwFor: true, "FORCE": true, kwIgnore: true,
+		"IN": true, "IS": true, "KEY": true, kwLateral: true, kwLeft: true,
+		kwLike: true, kwNot: true, "PARTITION": true, kwRight: true,
+		kwSelect: true, "SEPARATOR": true, kwStraight: true,
+		kwTable: true, kwSample: true, "USE": true,
+	},
+	dialects.PostgreSQL: {
+		kwFor: true, "FULL": true, "IN": true, "IS": true, kwLateral: true,
+		kwLeft: true, kwLike: true, kwNot: true, kwRight: true,
+		kwSelect: true, kwTable: true, kwSample: true,
+	},
 }
 
 // operatorWords are the words MySQL reads as operators, which therefore cannot
@@ -708,7 +738,7 @@ func (p *Parser) parseOverlayCall(call *ast.FuncCall) (bool, error) {
 	}
 	call.Syntax = ast.CallOverlay
 	call.Args = append(call.Args, subject, replacement, from)
-	if p.eatWord("FOR") {
+	if p.eatWord(kwFor) {
 		count, err := p.parseExpr(precLowest)
 		if err != nil {
 			return false, err
@@ -765,7 +795,7 @@ func (p *Parser) parseSubstringCall(call *ast.FuncCall) (bool, error) {
 		call.Args = append(call.Args, subject, pattern, escape)
 		return true, nil
 	}
-	if !p.atWord("FROM") && !p.atWord("FOR") {
+	if !p.atWord("FROM") && !p.atWord(kwFor) {
 		p.pos = save
 		return false, nil
 	}
@@ -781,7 +811,7 @@ func (p *Parser) parseSubstringCall(call *ast.FuncCall) (bool, error) {
 		// SUBSTRING(x FOR n) starts at the beginning.
 		call.Args = append(call.Args, &ast.Literal{Kind: ast.LitNumber, Value: "1", Span: call.Span})
 	}
-	if p.eatWord("FOR") {
+	if p.eatWord(kwFor) {
 		count, err := p.parseExpr(precLowest)
 		if err != nil {
 			return false, err
@@ -914,7 +944,7 @@ func (p *Parser) startsSelect() bool {
 		return true
 	}
 	// A parenthesized query expression, as in "((SELECT 1) UNION ...)".
-	return p.atOp("(") && p.peek(1).IsWord("SELECT")
+	return p.atOp("(") && p.peek(1).IsWord(kwSelect)
 }
 
 // hexLiteralPrefix is what a hexadecimal literal is spelled with when the

@@ -337,9 +337,12 @@
 // start" -- INSTR, LOCATE, POSITION and FIND_IN_SET -- all match a letter in
 // either case, and each is routed to a helper that does. The operators are left
 // alone: "=", IN, BETWEEN, CASE, IF, ORDER BY, DISTINCT and GROUP BY compare
-// inside the engine, where a token rewrite cannot reach every one of them, so
-// under the MySQL dialect they compare the way SQLite does and 'abc' = 'ABC' is
-// false here and true in MySQL.
+// inside the engine, so under the MySQL dialect they compare the way SQLite
+// does, and 'abc' = 'ABC' is false here and true in MySQL. Reaching them is not
+// the difficulty -- the tree holds every one of them -- the cost is: a helper
+// call for each row costs about two and a half times the query, measured
+// against SQLite's own operators over two hundred thousand rows, and a
+// comparison sits in every WHERE clause.
 //
 // How a call reads a value is part of what it means too. MySQL reads a string
 // where a number is wanted as the number its leading run spells, or zero, so
@@ -485,6 +488,30 @@
 //
 // The SQLite dialect is the identity translation: Translate returns the input
 // unchanged.
+//
+// # Numbers that leave their range
+//
+// SQLite computes integer arithmetic in 64 bits and turns to floating point
+// when the answer will not fit, so "9223372036854775807 + 1" answers
+// 9.223372036854776e+18 where MySQL and PostgreSQL both stop the query and say
+// the value is out of range. The same holds for a sum: SUM over values whose
+// total leaves the range fails with SQLite's own "integer overflow", where
+// MySQL answers it exactly in DECIMAL and PostgreSQL in numeric.
+//
+// Floating point leaves its range the same way: "1e308 * 10" answers an
+// infinity here and is out of range in both engines. The two differ at the
+// small end, where "1e-300 * 1e-300" is 0 in MySQL and an underflow PostgreSQL
+// refuses; it is 0 here.
+//
+// None of it is translated. Every arithmetic operator would have to become a
+// helper call to catch it, and a call for each row of each operator costs about
+// two and a half times the query, measured against SQLite's own operators over
+// two hundred thousand rows. The functions that raise -- POW past the range of
+// a double, EXP at either end of it, PostgreSQL's logarithms and roots outside
+// their domain, division by zero -- are already calls, so they are answered
+// for; it is the operators that are left as SQLite computes them. A column of
+// values near the range of a 64-bit integer is worth reading as a string or a
+// real rather than an integer.
 //
 // # What a translation promises
 //

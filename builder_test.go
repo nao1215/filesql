@@ -2407,3 +2407,57 @@ func TestInPlaceSaveNeedsASourceWithAFile(t *testing.T) {
 		assert.Contains(t, string(after), "edited")
 	})
 }
+
+// TestAQuotedNameThatMatchesNoColumnIsRefused holds the database this package
+// opens to SQLite's stricter reading of a double-quoted name. Under SQLite's
+// compatibility quirk a quoted name that resolves to nothing is read as a
+// string, so a mistyped column answered its own spelling for every row, and one
+// written in a WHERE compared that spelling and matched nothing at all: a query
+// that looks right, runs, and answers wrong.
+func TestAQuotedNameThatMatchesNoColumnIsRefused(t *testing.T) {
+	t.Parallel()
+
+	const body = "name,score\nada,7\n"
+
+	for _, tt := range []struct {
+		name string
+		open func(b *DBBuilder) (*sql.DB, error)
+	}{
+		{"Open", func(b *DBBuilder) (*sql.DB, error) { return b.Open(context.Background()) }},
+		{"OpenReadOnly", func(b *DBBuilder) (*sql.DB, error) { return b.OpenReadOnly(context.Background()) }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, err := tt.open(NewBuilder().AddReader(strings.NewReader(body), "t", FileTypeCSV))
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			var got string
+			if err := db.QueryRowContext(t.Context(), `SELECT "name" FROM t`).Scan(&got); err != nil {
+				t.Fatalf("a name a column carries has to resolve: %v", err)
+			}
+			if got != "ada" {
+				t.Errorf(`SELECT "name" = %q, want ada`, got)
+			}
+
+			// Each of these answers exactly one value when the name resolves,
+			// so an error can only be SQLite refusing the name: a query
+			// shaped to return no rows, or more columns than destinations,
+			// would fail for its own reasons and prove nothing.
+			for _, query := range []string{
+				`SELECT "namee" FROM t`,
+				`SELECT count(*) FROM t WHERE "namee" = 'ada'`,
+				`SELECT "name" FROM t ORDER BY "namee"`,
+			} {
+				var v any
+				err := db.QueryRowContext(t.Context(), query).Scan(&v)
+				if err == nil {
+					t.Errorf("%s answered %v; a name no column carries is not a string", query, v)
+				}
+			}
+		})
+	}
+}

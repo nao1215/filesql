@@ -30,7 +30,7 @@ func (p *Parser) parsePrefix(minPrec int) (ast.Expr, error) {
 	span := ast.SpanOf(t)
 
 	switch {
-	case t.IsWord("NOT"):
+	case t.IsWord(kwNot):
 		if precNot < minPrec {
 			return nil, p.unexpected("an expression")
 		}
@@ -258,7 +258,7 @@ func (p *Parser) parseInfixOnce(left ast.Expr, minPrec int) (ast.Expr, error) {
 		}
 		return p.parseIn(left, false)
 
-	case p.atWord("NOT"):
+	case p.atWord(kwNot):
 		// NOT after an operand is the negated spelling of a comparison rather
 		// than the prefix operator: NOT LIKE, NOT IN, NOT BETWEEN, and the
 		// dialect-specific pattern operators.
@@ -375,7 +375,7 @@ func (p *Parser) parseNegatedComparison(left ast.Expr, minPrec int) (ast.Expr, e
 		}
 		p.pos++
 		return p.parseIn(left, true)
-	case p.peek(1).IsWord("LIKE"):
+	case p.peek(1).IsWord(kwLike):
 		return p.parseNegatedOperator(left, minPrec, ast.NotLike, 2, span)
 	case p.peek(1).IsWord("ILIKE") && p.dialect == dialects.PostgreSQL:
 		return p.parseNegatedOperator(left, minPrec, ast.NotILike, 2, span)
@@ -414,7 +414,7 @@ func (p *Parser) parseNegatedOperator(left ast.Expr, minPrec int, op ast.BinaryO
 func (p *Parser) parseIs(left ast.Expr) (ast.Expr, error) {
 	span := p.span()
 	p.pos++ // IS
-	negated := p.eatWord("NOT")
+	negated := p.eatWord(kwNot)
 	if p.dialect == dialects.PostgreSQL && p.atWord("JSON") {
 		return p.parseIsJSON(left, negated, span)
 	}
