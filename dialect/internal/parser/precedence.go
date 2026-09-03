@@ -79,7 +79,7 @@ func (p *Parser) binaryOpFor() (op ast.BinaryOp, prec int, tokens int, ok bool) 
 		if p.dialect == dialects.MySQL && !p.callParenFollows() {
 			return ast.Mod, precMulDiv, 1, true
 		}
-	case "LIKE":
+	case kwLike:
 		return ast.Like, precCompare, 1, true
 	case "ILIKE":
 		if p.dialect == dialects.PostgreSQL {
@@ -98,7 +98,7 @@ func (p *Parser) binaryOpFor() (op ast.BinaryOp, prec int, tokens int, ok bool) 
 			return ast.SimilarTo, precCompare, 2, true
 		}
 	case "SOUNDS":
-		if p.dialect == dialects.MySQL && p.peek(1).IsWord("LIKE") {
+		if p.dialect == dialects.MySQL && p.peek(1).IsWord(kwLike) {
 			return ast.SoundsLike, precCompare, 2, true
 		}
 	case "MEMBER":

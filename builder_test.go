@@ -2443,10 +2443,14 @@ func TestAQuotedNameThatMatchesNoColumnIsRefused(t *testing.T) {
 				t.Errorf(`SELECT "name" = %q, want ada`, got)
 			}
 
+			// Each of these answers exactly one value when the name resolves,
+			// so an error can only be SQLite refusing the name: a query
+			// shaped to return no rows, or more columns than destinations,
+			// would fail for its own reasons and prove nothing.
 			for _, query := range []string{
 				`SELECT "namee" FROM t`,
-				`SELECT * FROM t WHERE "namee" = 'ada'`,
-				`SELECT * FROM t ORDER BY "namee"`,
+				`SELECT count(*) FROM t WHERE "namee" = 'ada'`,
+				`SELECT "name" FROM t ORDER BY "namee"`,
 			} {
 				var v any
 				err := db.QueryRowContext(t.Context(), query).Scan(&v)

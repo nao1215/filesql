@@ -119,7 +119,7 @@ func (p *Parser) parseInsert(with *ast.WithClause) (ast.Stmt, error) {
 				// there is nothing for it to say.
 				p.pos++
 			}
-			if p.eatWord("IGNORE") {
+			if p.eatWord(kwIgnore) {
 				// INSERT IGNORE skips a row that would violate a constraint,
 				// which is what SQLite's OR IGNORE does.
 				stmt.Or = "IGNORE"
@@ -133,7 +133,7 @@ func (p *Parser) parseInsert(with *ast.WithClause) (ast.Stmt, error) {
 		return nil, err
 	}
 	stmt.Table = name
-	if p.atOp("(") && !p.peek(1).IsWord("SELECT") {
+	if p.atOp("(") && !p.peek(1).IsWord(kwSelect) {
 		cols, err := p.parseNameList()
 		if err != nil {
 			return nil, err
@@ -296,7 +296,7 @@ func (p *Parser) parseUpdate(with *ast.WithClause) (ast.Stmt, error) {
 	p.pos++ // UPDATE
 	if p.dialect == dialects.MySQL {
 		p.eatWord("LOW_PRIORITY")
-		p.eatWord("IGNORE")
+		p.eatWord(kwIgnore)
 	}
 	name, err := p.parseTargetName(true)
 	if err != nil {
@@ -349,7 +349,7 @@ func (p *Parser) parseDelete(with *ast.WithClause) (ast.Stmt, error) {
 	if p.dialect == dialects.MySQL {
 		p.eatWord("LOW_PRIORITY")
 		p.eatWord("QUICK")
-		p.eatWord("IGNORE")
+		p.eatWord(kwIgnore)
 	}
 	if !p.atWord("FROM") {
 		return nil, p.unsupportedf("a DELETE naming more than one table is not supported; SQLite deletes from one table")
@@ -715,7 +715,7 @@ func (p *Parser) skipAnalyzeOptions() error {
 	case dialects.MySQL:
 		p.eatWord("NO_WRITE_TO_BINLOG")
 		p.eatWord("LOCAL")
-		p.eatWord("TABLE")
+		p.eatWord(kwTable)
 	case dialects.SQLite, dialects.GoogleSQL:
 	}
 	return nil

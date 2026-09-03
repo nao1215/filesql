@@ -27,7 +27,7 @@ func (p *Parser) parseCreate() (ast.Stmt, error) {
 	unique := p.eatWord("UNIQUE")
 
 	switch {
-	case p.atWord("TABLE"):
+	case p.atWord(kwTable):
 		if unique {
 			return nil, p.unexpected("INDEX")
 		}
@@ -63,7 +63,7 @@ func (p *Parser) parseCreateTable(start token.Token, temporary bool) (ast.Stmt, 
 	stmt.Name = name
 
 	switch {
-	case p.atWord("LIKE"):
+	case p.atWord(kwLike):
 		// MySQL copies a table's structure this way. SQLite has no statement
 		// for it, and its column-definition grammar is loose enough to read
 		// "LIKE t" as a column named LIKE of type t, so the statement used to
@@ -136,7 +136,7 @@ func (p *Parser) parseTableElement(stmt *ast.CreateTableStmt) error {
 		}
 		stmt.Constraints = append(stmt.Constraints, constraint)
 		return nil
-	case p.atWord("LIKE") && p.namesSomething(1):
+	case p.atWord(kwLike) && p.namesSomething(1):
 		// PostgreSQL copies a table's structure from inside the body, where
 		// MySQL writes LIKE after the name. The column-definition grammar is
 		// loose enough to read "LIKE u" as a column named LIKE of type u, and
@@ -220,7 +220,7 @@ func (p *Parser) parseColumnConstraint() (ast.ColumnConstraint, bool, error) {
 		}
 		p.skipConflictClause()
 		return c, true, nil
-	case p.eatWords("NOT", "NULL"):
+	case p.eatWords(kwNot, "NULL"):
 		p.skipConflictClause()
 		return ast.ColumnConstraint{Kind: ast.ConstraintNotNull, Name: name, Span: span}, true, nil
 	case p.eatWord("NULL"):
@@ -389,7 +389,7 @@ func (p *Parser) parseReferencesClause() (string, error) {
 			if !p.eatWord("SIMPLE") && !p.eatWord("FULL") && !p.eatWord("PARTIAL") {
 				return "", p.unexpected("SIMPLE, FULL or PARTIAL")
 			}
-		case p.eatWords("NOT", "DEFERRABLE"), p.eatWord("DEFERRABLE"):
+		case p.eatWords(kwNot, "DEFERRABLE"), p.eatWord("DEFERRABLE"):
 			if p.eatWord("INITIALLY") {
 				if !p.eatWord("DEFERRED") && !p.eatWord("IMMEDIATE") {
 					return "", p.unexpected("DEFERRED or IMMEDIATE")
@@ -670,7 +670,7 @@ func (p *Parser) parseDrop() (ast.Stmt, error) {
 	p.pos++ // DROP
 	var kind ast.DropKind
 	switch {
-	case p.eatWord("TABLE"):
+	case p.eatWord(kwTable):
 		kind = ast.DropTable
 	case p.eatWord("VIEW"):
 		kind = ast.DropView
@@ -715,7 +715,7 @@ func (p *Parser) eatDropBehavior() {
 func (p *Parser) parseAlter() (ast.Stmt, error) {
 	start := p.cur()
 	p.pos++ // ALTER
-	if !p.eatWord("TABLE") {
+	if !p.eatWord(kwTable) {
 		return nil, unimplementedAt(start, "ALTER %s is not implemented", upper(p.cur().Text))
 	}
 	// IF EXISTS asks for the statement to be skipped when the table is not

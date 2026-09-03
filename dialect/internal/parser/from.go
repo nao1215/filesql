@@ -96,15 +96,15 @@ func (p *Parser) joinTypeAt() (ast.JoinType, bool) {
 	case p.atWord("CROSS") && p.peek(1).IsWord("JOIN"):
 		p.pos += 2
 		return ast.JoinCross, true
-	case p.atWord("STRAIGHT_JOIN") && p.dialect == dialects.MySQL:
+	case p.atWord(kwStraight) && p.dialect == dialects.MySQL:
 		// MySQL's STRAIGHT_JOIN is an inner join with the join order forced.
 		// The order is a planner instruction with no SQLite equivalent, and the
 		// rows are the same, so it lowers to an inner join.
 		p.pos++
 		return ast.JoinInner, true
-	case p.atWord("LEFT"):
+	case p.atWord(kwLeft):
 		return p.outerJoinAt(ast.JoinLeft)
-	case p.atWord("RIGHT"):
+	case p.atWord(kwRight):
 		return p.outerJoinAt(ast.JoinRight)
 	case p.atWord("FULL"):
 		return p.outerJoinAt(ast.JoinFull)
@@ -130,7 +130,7 @@ func (p *Parser) outerJoinAt(kind ast.JoinType) (ast.JoinType, bool) {
 // call, or a parenthesized table expression.
 func (p *Parser) parseTablePrimary() (ast.TableExpr, error) {
 	span := p.span()
-	lateral := p.eatWord("LATERAL")
+	lateral := p.eatWord(kwLateral)
 
 	if p.atOp("(") {
 		return p.parseParenTable(span, lateral)
@@ -308,7 +308,7 @@ func (p *Parser) parseTableSuffixes(table *ast.TableName) error {
 			if err := p.skipIndexHint(table); err != nil {
 				return err
 			}
-		case p.atWord("TABLESAMPLE"):
+		case p.atWord(kwSample):
 			return p.unsupportedf("TABLESAMPLE is not supported; SQLite has no sampling clause")
 		case p.dialect == dialects.MySQL && p.atWord("PARTITION") && p.peek(1).IsOp("("):
 			return p.unsupportedf("the PARTITION clause of a table reference is not supported; SQLite has no partitioned tables")
@@ -322,7 +322,7 @@ func (p *Parser) parseTableSuffixes(table *ast.TableName) error {
 func (p *Parser) skipIndexHint(table *ast.TableName) error {
 	hint := upper(p.advance().Text)
 	p.pos++ // INDEX or KEY
-	if p.eatWord("FOR") {
+	if p.eatWord(kwFor) {
 		switch {
 		case p.eatWord("JOIN"):
 		case p.eatWords("ORDER", "BY"):

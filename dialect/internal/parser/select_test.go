@@ -444,3 +444,56 @@ func TestAClauseKeywordInFrontOfAParenthesisIsACall(t *testing.T) {
 		}
 	}
 }
+
+// TestAWordAnEngineReservesCannotBeginAValue holds each dialect to the words
+// its own engine keeps. The engines disagree, so the lists are per dialect and
+// each entry was read from the engine: MySQL 8.4 refuses "SELECT b + BETWEEN
+// FROM t" and PostgreSQL 17 answers it, since between is an ordinary column
+// name there.
+func TestAWordAnEngineReservesCannotBeginAValue(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		dialect  dialects.Dialect
+		refused  []string
+		answered []string
+	}{
+		{
+			dialects.MySQL,
+			[]string{"BETWEEN", "FOR", "FORCE", "IGNORE", "IN", "IS", "KEY",
+				"LATERAL", "LEFT", "LIKE", "NOT", "PARTITION", "RIGHT",
+				"SELECT", "SEPARATOR", "STRAIGHT_JOIN", "TABLE", "TABLESAMPLE", "USE"},
+			[]string{"CONFLICT", "DUPLICATE", "ESCAPE", "FULL", "MINUS", "NULLS"},
+		},
+		{
+			dialects.PostgreSQL,
+			[]string{"FOR", "FULL", "IN", "IS", "LATERAL", "LEFT", "LIKE",
+				"NOT", "RIGHT", "SELECT", "TABLE", "TABLESAMPLE"},
+			[]string{"BETWEEN", "CONFLICT", "DUPLICATE", "ESCAPE", "FORCE",
+				"IGNORE", "KEY", "MINUS", "NULLS", "PARTITION", "SEPARATOR",
+				"STRAIGHT_JOIN", "USE"},
+		},
+	} {
+		t.Run(string(tt.dialect), func(t *testing.T) {
+			t.Parallel()
+
+			for _, word := range tt.refused {
+				query := "SELECT b + " + word + " FROM t"
+				if _, err := Parse(tt.dialect, query); err == nil {
+					t.Errorf("%q parsed, and %s does not read it", query, tt.dialect)
+				}
+			}
+			for _, word := range tt.answered {
+				query := "SELECT b + " + word + " FROM t"
+				if _, err := Parse(tt.dialect, query); err != nil {
+					t.Errorf("%q was refused, and %s answers it: %v", query, tt.dialect, err)
+				}
+			}
+			// A word in front of a parenthesis is a call whichever list it is
+			// in, which is how MySQL spells LEFT('abc', 2).
+			if _, err := Parse(tt.dialect, "SELECT LEFT('abc', 2)"); err != nil {
+				t.Errorf("a call named for a reserved word was refused: %v", err)
+			}
+		})
+	}
+}

@@ -874,7 +874,7 @@ func (b *DBBuilder) createInMemoryDatabase() (*sql.DB, error) {
 	// ":memory:" connection. A bare ":memory:" database is private to a single
 	// connection, which forced earlier versions to reuse one connection for the
 	// whole pool and made the returned *sql.DB unsafe to use from multiple
-	// goroutines. With "mode=memory&cache=shared" every pooled connection opens
+	// goroutines. With "mode=memory&cache=shared&_dqs=false" every pooled connection opens
 	// its own real connection to the same in-memory database, so database/sql
 	// can serialize access per connection: the result is safe to share across
 	// goroutines and still supports queries issued while iterating rows.

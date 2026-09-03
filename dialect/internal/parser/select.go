@@ -110,9 +110,9 @@ func (p *Parser) parseQueryPrimary() (ast.QueryBody, error) {
 		return inner, nil
 	case p.atWord("VALUES"):
 		return p.parseValuesBody()
-	case p.atWord("SELECT"):
+	case p.atWord(kwSelect):
 		return p.parseSelectCore()
-	case p.atWord("TABLE"):
+	case p.atWord(kwTable):
 		// "TABLE t" is shorthand for "SELECT * FROM t" in PostgreSQL. It is
 		// named rather than translated because the shorthand is rare and
 		// silently rewriting it would hide that the parser guessed.
@@ -169,7 +169,7 @@ func (p *Parser) parseValuesRows() ([][]ast.Expr, error) {
 // list. They were read as column names before, so "SELECT SQL_CALC_FOUND_ROWS
 // a FROM t" asked for a column by that name.
 var selectModifiers = map[string]bool{ //nolint:gochecknoglobals // a fixed table
-	"HIGH_PRIORITY": true, "STRAIGHT_JOIN": true, "SQL_SMALL_RESULT": true,
+	"HIGH_PRIORITY": true, kwStraight: true, "SQL_SMALL_RESULT": true,
 	"SQL_BIG_RESULT": true, "SQL_BUFFER_RESULT": true, "SQL_NO_CACHE": true,
 	"SQL_CALC_FOUND_ROWS": true, "SQL_CACHE": true,
 }
@@ -400,7 +400,7 @@ func (p *Parser) parseSelectInto(core *ast.SelectCore, allowed bool) error {
 	p.pos++ // INTO
 	core.IntoTemporary = p.eatWord("TEMPORARY") || p.eatWord("TEMP")
 	p.eatWord("UNLOGGED")
-	p.eatWord("TABLE")
+	p.eatWord(kwTable)
 	name, err := p.parseTableNameOnly()
 	if err != nil {
 		return err
@@ -421,17 +421,17 @@ var clauseKeywords = map[string]bool{ //nolint:gochecknoglobals // a fixed table
 	"FROM": true, "WHERE": true, "GROUP": true, "HAVING": true, "WINDOW": true,
 	"ORDER": true, "LIMIT": true, "OFFSET": true, "FETCH": true, "UNION": true,
 	"INTERSECT": true, "EXCEPT": true, "MINUS": true, "ON": true, "USING": true,
-	"JOIN": true, "INNER": true, "LEFT": true, "RIGHT": true, "FULL": true,
-	"CROSS": true, "NATURAL": true, "STRAIGHT_JOIN": true, "QUALIFY": true,
+	"JOIN": true, "INNER": true, kwLeft: true, kwRight: true, "FULL": true,
+	"CROSS": true, "NATURAL": true, kwStraight: true, "QUALIFY": true,
 	"RETURNING": true, "SET": true, "VALUES": true, kwWith: true, "INTO": true,
-	"FOR": true, "LATERAL": true, "TABLESAMPLE": true, "PARTITION": true,
+	kwFor: true, kwLateral: true, kwSample: true, "PARTITION": true,
 	kwAnd: true, "OR": true, "AS": true, "WHEN": true, "THEN": true, "ELSE": true,
-	kwEnd: true, "DO": true, "NOTHING": true, "CONFLICT": true, "IGNORE": true,
+	kwEnd: true, "DO": true, "NOTHING": true, "CONFLICT": true, kwIgnore: true,
 	"ASC": true, "DESC": true, "NULLS": true, "SEPARATOR": true, "ESCAPE": true,
-	"IS": true, "NOT": true, "IN": true, "LIKE": true, "BETWEEN": true,
+	"IS": true, kwNot: true, "IN": true, kwLike: true, "BETWEEN": true,
 	// A query cannot be an alias, and one of these after a table name opens the
 	// statement's own body.
-	"SELECT": true, "TABLE": true, "USE": true, "FORCE": true,
+	kwSelect: true, kwTable: true, "USE": true, "FORCE": true,
 	kwDefault: true, "DUPLICATE": true, "KEY": true,
 }
 
@@ -681,7 +681,7 @@ func (p *Parser) parseCTE() (ast.CTE, error) {
 	}
 	// PostgreSQL's MATERIALIZED and NOT MATERIALIZED hints, which say how the
 	// planner should treat the CTE and which SQLite has no equivalent of.
-	if p.eatWord("MATERIALIZED") || p.eatWords("NOT", "MATERIALIZED") {
+	if p.eatWord("MATERIALIZED") || p.eatWords(kwNot, "MATERIALIZED") {
 		return ast.CTE{}, unsupportedAt(t, "the MATERIALIZED hint on a common table expression is not supported")
 	}
 	if err := p.expectOp("("); err != nil {
