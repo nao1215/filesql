@@ -424,6 +424,20 @@ func checkGroupedSelect(d dialects.Dialect, n *ast.SelectCore) error {
 			aggregated = true
 		}
 	}
+
+	// A GROUP BY that names a select item, by its position or by its alias,
+	// groups whatever that item holds, so a column reached that way is grouped
+	// wherever else it is selected: "SELECT a, a AS x FROM g GROUP BY 1" is a
+	// query MySQL answers.
+	for i, item := range n.Items {
+		ref, isColumn := item.Expr.(*ast.ColumnRef)
+		if !isColumn {
+			continue
+		}
+		if ordinals[i+1] || (item.Alias != "" && grouped[strings.ToLower(item.Alias)]) {
+			grouped[columnKey(ref)] = true
+		}
+	}
 	if len(n.GroupBy) == 0 && !aggregated {
 		return nil
 	}
