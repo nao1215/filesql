@@ -489,7 +489,7 @@
 // The SQLite dialect is the identity translation: Translate returns the input
 // unchanged.
 //
-// # Integers that leave their range
+// # Numbers that leave their range
 //
 // SQLite computes integer arithmetic in 64 bits and turns to floating point
 // when the answer will not fit, so "9223372036854775807 + 1" answers
@@ -498,14 +498,20 @@
 // total leaves the range fails with SQLite's own "integer overflow", where
 // MySQL answers it exactly in DECIMAL and PostgreSQL in numeric.
 //
-// Neither is translated. Every arithmetic operator would have to become a
+// Floating point leaves its range the same way: "1e308 * 10" answers an
+// infinity here and is out of range in both engines. The two differ at the
+// small end, where "1e-300 * 1e-300" is 0 in MySQL and an underflow PostgreSQL
+// refuses; it is 0 here.
+//
+// None of it is translated. Every arithmetic operator would have to become a
 // helper call to catch it, and a call for each row of each operator costs about
 // two and a half times the query, measured against SQLite's own operators over
 // two hundred thousand rows. The functions that raise -- POW past the range of
-// a double, PostgreSQL's logarithms and roots outside their domain, division by
-// zero -- are already calls, so they are answered for; it is the operators that
-// are left as SQLite computes them. A column of values near the range of a
-// 64-bit integer is worth reading as a string or a real rather than an integer.
+// a double, EXP at either end of it, PostgreSQL's logarithms and roots outside
+// their domain, division by zero -- are already calls, so they are answered
+// for; it is the operators that are left as SQLite computes them. A column of
+// values near the range of a 64-bit integer is worth reading as a string or a
+// real rather than an integer.
 //
 // # What a translation promises
 //
