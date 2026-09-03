@@ -150,6 +150,11 @@ func (l *lowerer) queryBody(body ast.QueryBody) (ast.QueryBody, error) {
 }
 
 func (l *lowerer) selectCore(n *ast.SelectCore) (ast.QueryBody, error) {
+	// Asked before the items are lowered, so the refusal names the column the
+	// caller wrote rather than whatever a rewrite left in its place.
+	if err := checkGroupedSelect(l.rules.Dialect(), n); err != nil {
+		return nil, err
+	}
 	for i := range n.Items {
 		item, err := l.expr(n.Items[i].Expr)
 		if err != nil {

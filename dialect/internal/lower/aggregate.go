@@ -1,6 +1,7 @@
 package lower
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/nao1215/filesql/dialect/internal/ast"
@@ -347,4 +348,137 @@ func floatOf(e ast.Expr, span ast.Span) ast.Expr {
 // floatLiteral builds a real constant.
 func floatLiteral(value string, span ast.Span) ast.Expr {
 	return &ast.Literal{Kind: ast.LitNumber, Value: value, Span: span}
+}
+
+// plainAggregateNames are the aggregates SQLite answers itself, which the table
+// above does not list because nothing has to be rewritten for them. The two
+// together are what this package knows an aggregate by.
+var plainAggregateNames = map[string]bool{ //nolint:gochecknoglobals // a fixed table
+	"COUNT": true, "SUM": true, "TOTAL": true, "AVG": true,
+	sqliteMin: true, sqliteMax: true, "GROUP_CONCAT": true, "STRING_AGG": true,
+}
+
+// isAggregateCall reports whether call aggregates rows in dialect d. A window
+// function answers per row rather than per group, so one is not an aggregate
+// here however it is spelled.
+func isAggregateCall(d dialects.Dialect, call *ast.FuncCall) bool {
+	if call.Over != nil {
+		return false
+	}
+	name := callName(call)
+	if name == sqliteMin || name == sqliteMax {
+		// SQLite's min and max are aggregates with one argument and scalars
+		// with more, and the source dialects spell the scalar LEAST and
+		// GREATEST.
+		return len(call.Args) == 1
+	}
+	if plainAggregateNames[name] {
+		return true
+	}
+	_, found := aggregateRules[d][name]
+	return found
+}
+
+// checkGroupedSelect refuses a select list holding a column that is neither
+// grouped nor aggregated, which every dialect here refuses under its own
+// defaults: PostgreSQL by the standard, MySQL by ONLY_FULL_GROUP_BY and
+// GoogleSQL by its own rule. SQLite answers such a query with one row of each
+// group chosen arbitrarily, so a report came out with the right numbers beside
+// a label nobody picked.
+//
+// The reading is deliberately narrow, because a refusal of a query the engines
+// accept is worse than the answer it replaces. Both PostgreSQL and MySQL accept
+// a column that is functionally dependent on a grouped key, and neither the
+// tree nor this package knows a table's keys, so the check gives up on anything
+// it cannot read exactly: a grouping list holding an expression, a select list
+// holding a star, and every select item that is not a column reference on its
+// own.
+func checkGroupedSelect(d dialects.Dialect, n *ast.SelectCore) error {
+	if n.Grouping != nil || n.GroupByAll || len(n.From) == 0 {
+		return nil
+	}
+
+	grouped := make(map[string]bool, len(n.GroupBy))
+	ordinals := make(map[int]bool, len(n.GroupBy))
+	for _, group := range n.GroupBy {
+		switch e := group.(type) {
+		case *ast.ColumnRef:
+			grouped[columnKey(e)] = true
+		case *ast.Literal:
+			position, ok := selectPosition(e)
+			if !ok {
+				return nil
+			}
+			ordinals[position] = true
+		default:
+			return nil
+		}
+	}
+
+	aggregated := false
+	for _, item := range n.Items {
+		if _, isStar := item.Expr.(*ast.Star); isStar {
+			return nil
+		}
+		if call, ok := item.Expr.(*ast.FuncCall); ok && isAggregateCall(d, call) {
+			aggregated = true
+		}
+	}
+	if len(n.GroupBy) == 0 && !aggregated {
+		return nil
+	}
+
+	for i, item := range n.Items {
+		if ordinals[i+1] {
+			continue
+		}
+		ref, ok := item.Expr.(*ast.ColumnRef)
+		if !ok {
+			continue
+		}
+		if grouped[columnKey(ref)] {
+			continue
+		}
+		if item.Alias != "" && grouped[strings.ToLower(item.Alias)] {
+			continue
+		}
+		return unsupported(item.Span,
+			"%s is neither grouped nor aggregated, which %s refuses: add it to GROUP BY or wrap it in an aggregate. "+
+				"SQLite would answer one row of each group, chosen arbitrarily",
+			columnText(ref), d)
+	}
+	return nil
+}
+
+// columnKey is what two column references are compared by, which is the column
+// name alone: "t.a" and "a" name one column, and grouping by either covers
+// selecting the other.
+func columnKey(ref *ast.ColumnRef) string {
+	if len(ref.Parts) == 0 {
+		return ""
+	}
+	return strings.ToLower(ref.Parts[len(ref.Parts)-1].Name)
+}
+
+// columnText writes a column reference the way the caller wrote it.
+func columnText(ref *ast.ColumnRef) string {
+	parts := make([]string, 0, len(ref.Parts))
+	for _, part := range ref.Parts {
+		parts = append(parts, part.Name)
+	}
+	return strings.Join(parts, ".")
+}
+
+// selectPosition reads a GROUP BY ordinal, which names a select item by its
+// position. It reports false for anything that is not a whole number, since
+// that is a grouping expression rather than a position.
+func selectPosition(lit *ast.Literal) (int, bool) {
+	if lit.Kind != ast.LitNumber {
+		return 0, false
+	}
+	position, err := strconv.Atoi(lit.Value)
+	if err != nil || position < 1 {
+		return 0, false
+	}
+	return position, true
 }

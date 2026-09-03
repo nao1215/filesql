@@ -2408,3 +2408,66 @@ func TestMySQLRefusesAPowerOutsideADouble(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(t.Context(), translated).Scan(&got))
 	assert.InDelta(t, 1024.0, got, 1e-9)
 }
+
+// TestAnAggregateQuerySelectsWhatItGroups holds the select list of an
+// aggregate query to what every engine here requires of it. A column that is
+// neither grouped nor aggregated is refused by PostgreSQL by the standard, by
+// MySQL under ONLY_FULL_GROUP_BY and by BigQuery under its own rule, and SQLite
+// answers it with one row of each group chosen arbitrarily: the numbers of a
+// report come out right beside a label nobody picked.
+func TestAnAggregateQuerySelectsWhatItGroups(t *testing.T) {
+	t.Parallel()
+
+	t.Run("refused", func(t *testing.T) {
+		t.Parallel()
+
+		for _, query := range []string{
+			"SELECT a, b FROM g GROUP BY b",
+			"SELECT a, count(*) FROM g GROUP BY b",
+			"SELECT a, max(b) FROM g",
+			"SELECT g.a, count(*) FROM g GROUP BY b",
+			"SELECT a, count(*) FROM g GROUP BY 2",
+		} {
+			t.Run(query, func(t *testing.T) {
+				t.Parallel()
+
+				for _, d := range []Dialect{MySQL, PostgreSQL, GoogleSQL} {
+					translated, err := Translate(d, query)
+					assert.Errorf(t, err, "%s: %s translated to %q", d, query, translated)
+				}
+			})
+		}
+	})
+
+	t.Run("answered", func(t *testing.T) {
+		t.Parallel()
+
+		// The check gives up on anything it cannot read exactly, since a
+		// refusal of a query the engines accept is worse than the answer it
+		// replaces: both PostgreSQL and MySQL accept a column functionally
+		// dependent on a grouped key, which neither the tree nor this package
+		// can see.
+		for _, query := range []string{
+			"SELECT b, count(*) FROM g GROUP BY b",
+			"SELECT a, count(*) FROM g GROUP BY 1",
+			"SELECT a AS x, count(*) FROM g GROUP BY x",
+			"SELECT a + 1, count(*) FROM g GROUP BY a + 1",
+			"SELECT * FROM g GROUP BY b",
+			"SELECT a, count(*) OVER () FROM g",
+			"SELECT max(a), min(b) FROM g",
+			"SELECT count(*) FROM g",
+			"SELECT a, b FROM g",
+			"SELECT a, b FROM g ORDER BY a",
+			"SELECT 1, count(*) FROM g",
+		} {
+			t.Run(query, func(t *testing.T) {
+				t.Parallel()
+
+				for _, d := range []Dialect{MySQL, PostgreSQL} {
+					_, err := Translate(d, query)
+					assert.NoErrorf(t, err, "%s: %s", d, query)
+				}
+			})
+		}
+	})
+}
