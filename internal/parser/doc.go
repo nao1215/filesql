@@ -7,8 +7,7 @@
 // stream whose codec the caller knows. DetectFileType looks through a compression extension for the
 // same reason: the codec says how to read the bytes, not what they spell.
 //
-// This package can be used by filesql, prep, or any application
-// that needs to parse tabular data files.
+// It is internal to this module and is used by filesql and by prep.
 //
 // # Memory Considerations
 //
@@ -20,10 +19,9 @@
 //   - XLSX: Entire workbook is loaded (Excel files can be large even with few rows)
 //   - Parquet: Entire file is read into memory for random access
 //
-// For files larger than available memory, consider:
-//   - Using streaming APIs for CSV/TSV
-//   - Pre-filtering or splitting large files before processing
-//   - Increasing available memory for the process
+// A load does not come through here for that reason: filesql reads CSV, TSV,
+// JSONL, JSON arrays and Parquet in chunks through internal/reader, and this
+// package is the whole-table door, for a caller that wants the table itself.
 //
 // # One table per parse
 //
