@@ -2699,3 +2699,69 @@ func TestAQualifiedStarNamesOneTable(t *testing.T) {
 		}
 	})
 }
+
+// TestATableCallIsNotAnAggregate pins that a call standing as a table takes its
+// arguments and nothing else. SQLite reads a table-valued call as a name and
+// its arguments, and the engines here read a call in FROM as a set of rows
+// rather than one value, so the clauses that make a call an aggregate or a
+// window function belong to neither: keeping them rendered "FROM f() OVER ()",
+// which gave SQLite a syntax error at a word this package wrote back out.
+func TestATableCallIsNotAnAggregate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("refused by the clause it carries", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+			want    string
+		}{
+			{MySQL, "SELECT A()FROM A()OVER()", "OVER"},
+			{PostgreSQL, "SELECT a FROM f() OVER ()", "OVER"},
+			{GoogleSQL, "SELECT a FROM f() OVER (PARTITION BY a)", "OVER"},
+			{PostgreSQL, "SELECT a FROM f() FILTER (WHERE a > 1)", "FILTER"},
+			{PostgreSQL, "SELECT a FROM f() WITHIN GROUP (ORDER BY a)", "WITHIN GROUP"},
+			{PostgreSQL, "SELECT a FROM f(DISTINCT b)", "DISTINCT"},
+			{PostgreSQL, "SELECT a FROM f(b ORDER BY c)", "ORDER BY"},
+			{MySQL, "SELECT a FROM f(*)", "star"},
+			{MySQL, "SELECT a FROM group_concat(b SEPARATOR ',')", "SEPARATOR"},
+		} {
+			_, err := Translate(tt.dialect, tt.query)
+			if !errors.Is(err, ErrInvalidSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrInvalidSyntax", tt.dialect, tt.query, err)
+				continue
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("Translate(%v, %q) error = %v, want it to name %s", tt.dialect, tt.query, err, tt.want)
+			}
+		}
+	})
+
+	t.Run("a table call still takes its arguments", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+			want    string
+		}{
+			{MySQL, "SELECT a FROM f()", "SELECT a FROM f()"},
+			{MySQL, "SELECT a FROM f(1, 2) AS x", "SELECT a FROM f(1, 2) AS x"},
+			{MySQL, "SELECT a FROM f(b) x", "SELECT a FROM f(b) AS x"},
+			// The same clauses on a call in a select list are what they are for.
+			{MySQL, "SELECT COUNT(*) OVER () FROM t", "SELECT COUNT(*) OVER () FROM t"},
+			{MySQL, "SELECT COUNT(DISTINCT a) FROM t", "SELECT COUNT(DISTINCT a) FROM t"},
+			{PostgreSQL, "SELECT COUNT(*) FILTER (WHERE a > 1) FROM t", "SELECT COUNT(*) FILTER (WHERE a > 1) FROM t"},
+		} {
+			got, err := Translate(tt.dialect, tt.query)
+			if err != nil {
+				t.Errorf("Translate(%v, %q) error = %v, want it to translate", tt.dialect, tt.query, err)
+				continue
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%v, %q) = %q, want %q", tt.dialect, tt.query, got, tt.want)
+			}
+		}
+	})
+}
