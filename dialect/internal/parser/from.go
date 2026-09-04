@@ -143,12 +143,14 @@ func (p *Parser) parseTablePrimary() (ast.TableExpr, error) {
 		return p.parseOnlyTable(span)
 	}
 
+	// The name is taken before it is read, so a refusal below points at the call
+	// rather than at the bracket the cursor sits on once the name is behind it.
+	name := p.cur()
 	parts, err := p.parseQualifiedName()
 	if err != nil {
 		return nil, err
 	}
 	if p.atOp("(") {
-		name := p.cur()
 		call, err := p.parseCall(parts, span)
 		if err != nil {
 			return nil, err
