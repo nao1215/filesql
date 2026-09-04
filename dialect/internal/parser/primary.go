@@ -238,7 +238,7 @@ var reservedWords = map[dialects.Dialect]map[string]bool{ //nolint:gochecknoglob
 		"BETWEEN": true, kwFor: true, "FORCE": true, kwIgnore: true,
 		"IN": true, "IS": true, "KEY": true, kwLateral: true, kwLeft: true,
 		kwLike: true, kwNot: true, "PARTITION": true, kwRight: true,
-		kwSelect: true, "SEPARATOR": true, kwStraight: true,
+		kwSelect: true, kwSeparator: true, kwStraight: true,
 		kwTable: true, kwSample: true, "USE": true,
 	},
 	dialects.PostgreSQL: {

@@ -33,6 +33,7 @@ const (
 	kwLeft      = "LEFT"
 	kwLike      = "LIKE"
 	kwSelect    = "SELECT"
+	kwSeparator = "SEPARATOR"
 	kwStraight  = "STRAIGHT_JOIN"
 	kwTable     = "TABLE"
 	kwNot       = "NOT"
