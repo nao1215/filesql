@@ -56,6 +56,17 @@
 // whose arguments keywords separate: EXTRACT, SUBSTRING, POSITION, TRIM and
 // OVERLAY.
 //
+// A call standing as a table takes its arguments and nothing else: the clauses
+// that make a call an aggregate or a window function -- OVER, FILTER, WITHIN
+// GROUP, DISTINCT, SEPARATOR, and an ORDER BY or a LIMIT among the arguments --
+// belong to a call in a select list, where a call answers one value.
+//
+// A star is a select item rather than a value. It stands in a select list, in a
+// RETURNING list and in COUNT(*), and nowhere an expression goes: no operator
+// takes one, so "SELECT * | 1" is invalid syntax here as it is in every engine
+// this package reads. SQLite reads one qualifier on a star, so "SELECT t.*" is
+// answered and the "schema.table.*" the engines here take is refused.
+//
 // Statements: INSERT (with VALUES, a query, DEFAULT VALUES, ON CONFLICT and
 // RETURNING), UPDATE, DELETE, CREATE TABLE, CREATE VIEW, CREATE INDEX, DROP,
 // the four ALTER TABLE forms SQLite has (RENAME TO, RENAME COLUMN, ADD COLUMN

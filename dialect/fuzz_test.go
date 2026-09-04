@@ -123,6 +123,9 @@ func FuzzTranslationPrepares(f *testing.F) {
 		`SELECT "" FROM t`,
 		"\ufeffSELECT a FROM t",
 		"SELECT (0) FROM a.b.c",
+		"WITH a AS(SELECT A)SELECT*#A0000",
+		"SELECT\rA.A.*",
+		"SELECT A()FROM A()OVER()",
 	} {
 		f.Add(seed)
 	}

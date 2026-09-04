@@ -350,7 +350,11 @@ func (p *Parser) parseSelectItems() ([]ast.SelectItem, error) {
 	for {
 		span := p.span()
 		from := p.pos
+		// A select item is the one place a star names something, so it is the
+		// one place the expression parser reads one.
+		p.starAllowed = true
 		e, err := p.parseExpr(precLowest)
+		p.starAllowed = false
 		if err != nil {
 			return nil, err
 		}
@@ -427,7 +431,7 @@ var clauseKeywords = map[string]bool{ //nolint:gochecknoglobals // a fixed table
 	kwFor: true, kwLateral: true, kwSample: true, "PARTITION": true,
 	kwAnd: true, "OR": true, "AS": true, "WHEN": true, "THEN": true, "ELSE": true,
 	kwEnd: true, "DO": true, "NOTHING": true, "CONFLICT": true, kwIgnore: true,
-	"ASC": true, "DESC": true, "NULLS": true, "SEPARATOR": true, "ESCAPE": true,
+	"ASC": true, "DESC": true, "NULLS": true, kwSeparator: true, "ESCAPE": true,
 	"IS": true, kwNot: true, "IN": true, kwLike: true, "BETWEEN": true,
 	// A query cannot be an alias, and one of these after a table name opens the
 	// statement's own body.

@@ -33,6 +33,7 @@ const (
 	kwLeft      = "LEFT"
 	kwLike      = "LIKE"
 	kwSelect    = "SELECT"
+	kwSeparator = "SEPARATOR"
 	kwStraight  = "STRAIGHT_JOIN"
 	kwTable     = "TABLE"
 	kwNot       = "NOT"
@@ -58,6 +59,9 @@ type Parser struct {
 	// which is the only place PostgreSQL's SELECT ... INTO can be rewritten
 	// into the CREATE TABLE ... AS SELECT that SQLite spells.
 	intoAllowed bool
+	// starAllowed marks that the next operand read is a select item of its own,
+	// which is the only place a star names anything.
+	starAllowed bool
 }
 
 // Parse reads one statement, which must be the whole of the query apart from a
@@ -271,6 +275,12 @@ func (p *Parser) unsupportedf(format string, args ...any) error {
 func (p *Parser) unimplementedf(format string, args ...any) error {
 	t := p.cur()
 	return sqlerr.At(sqlerr.ErrUnsupportedFeature, t.Line, t.Col, format, args...)
+}
+
+// invalidAt reports SQL that is not valid in the dialect it was written in, at
+// a token that is no longer under the cursor.
+func invalidAt(t token.Token, format string, args ...any) error {
+	return sqlerr.At(sqlerr.ErrInvalidSyntax, t.Line, t.Col, format, args...)
 }
 
 // unsupportedAt reports a construct SQLite cannot express, at a token that is

@@ -143,6 +143,9 @@ func (p *Parser) parseTablePrimary() (ast.TableExpr, error) {
 		return p.parseOnlyTable(span)
 	}
 
+	// The name is taken before it is read, so a refusal below points at the call
+	// rather than at the bracket the cursor sits on once the name is behind it.
+	name := p.cur()
 	parts, err := p.parseQualifiedName()
 	if err != nil {
 		return nil, err
@@ -156,6 +159,9 @@ func (p *Parser) parseTablePrimary() (ast.TableExpr, error) {
 		if !ok {
 			return nil, p.unexpected("a table")
 		}
+		if err := refuseAggregateTable(fn, name); err != nil {
+			return nil, err
+		}
 		table := &ast.FuncTable{Call: fn, Span: span}
 		if err := p.parseTableAlias(&table.Alias, &table.Columns); err != nil {
 			return nil, err
@@ -163,6 +169,37 @@ func (p *Parser) parseTablePrimary() (ast.TableExpr, error) {
 		return table, nil
 	}
 	return p.finishTableName(parts, span)
+}
+
+// refuseAggregateTable refuses the clauses that make a call an aggregate or a
+// window function on a call that stands as a table. SQLite reads a table-valued
+// call as a name and its arguments and nothing else, and none of these reads in
+// the engines here either, where a call in FROM returns a set of rows rather
+// than one value: keeping them rendered "FROM f() OVER ()", which gave SQLite a
+// syntax error at a word this package had written back out.
+func refuseAggregateTable(fn *ast.FuncCall, at token.Token) error {
+	var clause string
+	switch {
+	case fn.Star:
+		clause = "a star argument"
+	case fn.Distinct:
+		clause = "DISTINCT"
+	case len(fn.OrderBy) > 0:
+		clause = "an ORDER BY among its arguments"
+	case fn.Separator != nil:
+		clause = kwSeparator
+	case fn.Limit != nil:
+		clause = "a LIMIT among its arguments"
+	case fn.Filter != nil:
+		clause = "FILTER"
+	case fn.Over != nil:
+		clause = "OVER"
+	case len(fn.WithinGroup) > 0:
+		clause = "WITHIN GROUP"
+	default:
+		return nil
+	}
+	return invalidAt(at, "a call standing as a table cannot take %s; it answers rows rather than one value", clause)
 }
 
 // finishTableName reads what a table name carries after it: the star of
