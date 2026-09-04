@@ -2542,3 +2542,160 @@ func TestPostgreSQLRefusesAResultTooSmallForADouble(t *testing.T) {
 		assert.InDeltaf(t, tt.want, got, 1e-9, "%s", tt.expr)
 	}
 }
+
+// TestAStarIsNotAValue pins that a star is a select item rather than an
+// operand. Reading one as a value let an operator take it, and the rendering
+// carried the star into a helper call -- "SELECT * # a" came back as
+// "SELECT postgresql_bit_xor(*, a)", which SQLite refuses at a bracket this
+// package wrote rather than at what the caller typed.
+func TestAStarIsNotAValue(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no operator takes a star", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+		}{
+			{PostgreSQL, "WITH a AS(SELECT A)SELECT*#A0000"},
+			{PostgreSQL, "SELECT * # 1"},
+			{PostgreSQL, "SELECT *::int"},
+			{MySQL, "SELECT * | 1"},
+			{GoogleSQL, "SELECT * | 1"},
+			{MySQL, "SELECT * LIKE 'a'"},
+			{MySQL, "SELECT * * 2"},
+			{MySQL, "SELECT * IS NULL"},
+			{MySQL, "SELECT * IN (1)"},
+			{MySQL, "SELECT * BETWEEN 1 AND 2"},
+			{MySQL, "SELECT * COLLATE utf8"},
+			{MySQL, "SELECT t.* | 1"},
+			{PostgreSQL, "INSERT INTO t VALUES (1) RETURNING * | 1"},
+		} {
+			_, err := Translate(tt.dialect, tt.query)
+			if !errors.Is(err, ErrInvalidSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrInvalidSyntax", tt.dialect, tt.query, err)
+				continue
+			}
+			if !strings.Contains(err.Error(), "star") {
+				t.Errorf("Translate(%v, %q) error = %v, want it to say what a star is", tt.dialect, tt.query, err)
+			}
+		}
+	})
+
+	t.Run("a star is not read where a value goes", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+		}{
+			{MySQL, "SELECT 1 | *"},
+			{PostgreSQL, "SELECT 1 # *"},
+			{MySQL, "SELECT 1 LIKE *"},
+			{MySQL, "SELECT -*"},
+			{MySQL, "SELECT (*)"},
+			{MySQL, "SELECT CAST(* AS INT)"},
+			{MySQL, "SELECT a FROM t WHERE *"},
+			{MySQL, "SELECT * FROM t GROUP BY *"},
+			{MySQL, "SELECT a FROM t ORDER BY *"},
+			{MySQL, "SELECT * FROM t LIMIT *"},
+			{PostgreSQL, "SELECT 1 + t.*"},
+		} {
+			if _, err := Translate(tt.dialect, tt.query); !errors.Is(err, ErrInvalidSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrInvalidSyntax", tt.dialect, tt.query, err)
+			}
+		}
+	})
+
+	t.Run("the places a star still stands", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+			want    string
+		}{
+			{MySQL, "SELECT * FROM t", "SELECT * FROM t"},
+			{MySQL, "SELECT t.* FROM t", "SELECT t.* FROM t"},
+			{MySQL, "SELECT *, a FROM t", "SELECT *, a FROM t"},
+			{MySQL, "SELECT DISTINCT * FROM t", "SELECT DISTINCT * FROM t"},
+			{MySQL, "SELECT COUNT(*) FROM t", "SELECT COUNT(*) FROM t"},
+			{MySQL, "SELECT COUNT(*) + 1 FROM t", "SELECT COUNT(*) + 1 FROM t"},
+			{MySQL, "SELECT COUNT(*) OVER () FROM t", "SELECT COUNT(*) OVER () FROM t"},
+			{MySQL, "INSERT INTO t SELECT * FROM u", "INSERT INTO t SELECT * FROM u"},
+			{PostgreSQL, "INSERT INTO t VALUES (1) RETURNING *", "INSERT INTO t VALUES (1) RETURNING *"},
+			{PostgreSQL, "DELETE FROM t RETURNING t.*", "DELETE FROM t RETURNING t.*"},
+			// Multiplication is written with the same token, with and without
+			// the spaces that would tell the two apart by sight.
+			{MySQL, "SELECT a*b FROM t", `SELECT a * b AS "a*b" FROM t`},
+			{MySQL, "SELECT * FROM t WHERE a*2 > 1", "SELECT * FROM t WHERE a * 2 > 1"},
+		} {
+			got, err := Translate(tt.dialect, tt.query)
+			if err != nil {
+				t.Errorf("Translate(%v, %q) error = %v, want it to translate", tt.dialect, tt.query, err)
+				continue
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%v, %q) = %q, want %q", tt.dialect, tt.query, got, tt.want)
+			}
+		}
+	})
+}
+
+// TestAQualifiedStarNamesOneTable pins the arity SQLite reads. Its result
+// column is an expression, a star, or table.*, and the engines here take a
+// schema in front of the table; forwarding one gave SQLite a syntax error at
+// the star rather than an answer about the table it names.
+func TestAQualifiedStarNamesOneTable(t *testing.T) {
+	t.Parallel()
+
+	t.Run("refused by the parts it carries", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+		}{
+			{MySQL, "SELECT s.t.* FROM s.t"},
+			{PostgreSQL, "SELECT s.t.* FROM s.t"},
+			{GoogleSQL, "SELECT s.t.* FROM s.t"},
+			{MySQL, "SELECT a.b.c.* FROM t"},
+			{PostgreSQL, "SELECT\rA.A.*"},
+			{PostgreSQL, "DELETE FROM t RETURNING s.t.*"},
+		} {
+			_, err := Translate(tt.dialect, tt.query)
+			if !errors.Is(err, ErrUnsupportedSyntax) {
+				t.Errorf("Translate(%v, %q) error = %v, want ErrUnsupportedSyntax", tt.dialect, tt.query, err)
+				continue
+			}
+			if !strings.Contains(err.Error(), "table.*") {
+				t.Errorf("Translate(%v, %q) error = %v, want it to say what SQLite reads", tt.dialect, tt.query, err)
+			}
+		}
+	})
+
+	t.Run("one qualifier still stands", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			dialect Dialect
+			query   string
+			want    string
+		}{
+			{MySQL, "SELECT t.* FROM t", "SELECT t.* FROM t"},
+			{PostgreSQL, `SELECT "t".* FROM t`, `SELECT "t".* FROM t`},
+			{MySQL, "SELECT t.* FROM u AS t", "SELECT t.* FROM u AS t"},
+			{PostgreSQL, "DELETE FROM t RETURNING t.*", "DELETE FROM t RETURNING t.*"},
+		} {
+			got, err := Translate(tt.dialect, tt.query)
+			if err != nil {
+				t.Errorf("Translate(%v, %q) error = %v, want it to translate", tt.dialect, tt.query, err)
+				continue
+			}
+			if got != tt.want {
+				t.Errorf("Translate(%v, %q) = %q, want %q", tt.dialect, tt.query, got, tt.want)
+			}
+		}
+	})
+}
