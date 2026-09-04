@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A star is a select item rather than a value ([#1099](https://github.com/nao1215/filesql/issues/1099)). The parser read `*` as an ordinary primary, so an operator could take it as an operand and the lowering carried it into a helper call: `SELECT * # a` came back from PostgreSQL as `SELECT postgresql_bit_xor(*, a) AS "*#a"`, and the caller was handed SQLite's `near ",": syntax error` about a bracket this package had written rather than about the query they had typed. The same hole was open on the other side of an operator and everywhere else the grammar asks for a value, so `SELECT 1 | *`, `SELECT -*`, `SELECT (*)`, `SELECT CAST(* AS INT)`, `WHERE *`, `GROUP BY *`, `ORDER BY *` and `LIMIT *` were all read, as was the qualified star in `SELECT t.* | 1`. A star is now read only where a select item is what is being read, and no operator takes one; both halves are needed, since gating the primary alone still lets `SELECT * | 1` through and refusing the operator alone still lets `SELECT 1 | *` through. The refusal is `ErrInvalidSyntax`, because none of these queries is valid in the dialect it was written in -- MySQL, PostgreSQL and GoogleSQL each refuse them -- so calling them unsupported would say SQLite was the reason. `SELECT *`, `SELECT t.*`, `SELECT *, a`, `SELECT DISTINCT *`, `COUNT(*)`, `COUNT(*) OVER ()`, `COUNT(*) + 1`, `RETURNING *` and multiplication written without spaces (`SELECT a*b`) are unchanged, as is the existing refusal of `SELECT * AS a`. Found by the nightly `FuzzTranslationPrepares`, whose seed corpus gains the input.
+
+- A star that names a schema as well as a table is refused ([#1100](https://github.com/nao1215/filesql/issues/1100)). SQLite reads one qualifier on a star and no more -- its result column is an expression, a star, or `table.*` -- while MySQL, PostgreSQL and GoogleSQL all take a schema in front of the table, so `SELECT s.t.* FROM s.t` was forwarded unchanged and SQLite answered `near "*": syntax error` at a star the caller wrote but this package had said yes to. The bare-name path already had this rule and refuses `SELECT a.b.c.d` by the parts it carries; the star branch returned before reaching it, so `SELECT a.b.c.*` was read too. Both are now refused as unsupported, naming how many parts were written, since the query reads in the dialect it was written in and it is SQLite that has nowhere to put the schema. `SELECT t.*` and `RETURNING t.*` are unchanged.
+
 ## [0.57.0] - 2026-09-03
 
 ### Fixed
