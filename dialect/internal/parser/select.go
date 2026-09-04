@@ -350,7 +350,11 @@ func (p *Parser) parseSelectItems() ([]ast.SelectItem, error) {
 	for {
 		span := p.span()
 		from := p.pos
+		// A select item is the one place a star names something, so it is the
+		// one place the expression parser reads one.
+		p.starAllowed = true
 		e, err := p.parseExpr(precLowest)
+		p.starAllowed = false
 		if err != nil {
 			return nil, err
 		}

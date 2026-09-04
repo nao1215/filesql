@@ -26,6 +26,14 @@ func (p *Parser) parseExpr(minPrec int) (ast.Expr, error) {
 
 // parsePrefix reads a unary operator or a primary expression.
 func (p *Parser) parsePrefix(minPrec int) (ast.Expr, error) {
+	// A star stands for every column of a row rather than for one value, so it
+	// is an operand only where it is a select item of its own. Clearing the
+	// flag here and putting it back for the primary alone keeps it from
+	// reaching the operands the prefix operators below read: the star in
+	// "SELECT -*" is one of those, and no engine takes it.
+	starAllowed := p.starAllowed
+	p.starAllowed = false
+
 	t := p.cur()
 	span := ast.SpanOf(t)
 
@@ -147,19 +155,28 @@ func (p *Parser) parsePrefix(minPrec int) (ast.Expr, error) {
 		return nil, p.unsupportedf("STRUCT is not supported; SQLite has no struct type")
 	}
 
-	return p.parsePrimary()
+	return p.parsePrimary(starAllowed)
 }
 
 // parseInfix reads the operators that follow an operand, stopping at the first
 // one weaker than minPrec.
 func (p *Parser) parseInfix(left ast.Expr, minPrec int) (ast.Expr, error) {
 	for {
+		op := p.cur()
 		next, err := p.parseInfixOnce(left, minPrec)
 		if err != nil {
 			return nil, err
 		}
 		if next == nil {
 			return left, nil
+		}
+		// A star names every column of the row, so there is no one value for an
+		// operator to take. Reading it as one rendered "SELECT * # a" as
+		// "SELECT postgresql_bit_xor(*, a)", which SQLite refuses at a bracket
+		// this package wrote rather than at what the caller typed.
+		if _, isStar := left.(*ast.Star); isStar {
+			return nil, invalidAt(op,
+				"a star cannot be an operand of %s; it stands for every column of the row", op.Text)
 		}
 		left = next
 	}

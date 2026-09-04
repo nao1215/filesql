@@ -23,8 +23,9 @@ var typedLiteralTypes = map[string]bool{ //nolint:gochecknoglobals // a fixed ta
 }
 
 // parsePrimary reads a literal, a name, a call, a parenthesized expression or a
-// subquery.
-func (p *Parser) parsePrimary() (ast.Expr, error) {
+// subquery. starAllowed says whether the operand being read is a select item of
+// its own, which is the only place a star names anything.
+func (p *Parser) parsePrimary(starAllowed bool) (ast.Expr, error) {
 	t := p.cur()
 	span := ast.SpanOf(t)
 
@@ -73,13 +74,20 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 		return &ast.Placeholder{Text: t.Text, Span: span}, nil
 
 	case token.QuotedIdent:
-		return p.parseNameOrCall()
+		return p.parseNameOrCall(starAllowed)
 
 	case token.Op:
 		switch t.Text {
 		case "(":
 			return p.parseParenExpr()
 		case "*":
+			if !starAllowed {
+				// Everywhere else a star is not a value: "SELECT (*)" and
+				// "WHERE *" are syntax errors in every engine this package
+				// reads. Taking one here carried it into the rendering, which
+				// gave SQLite a star in an argument list.
+				return nil, p.unexpected("an expression")
+			}
 			p.pos++
 			if p.dialect == dialects.GoogleSQL && p.atAnyWord("EXCEPT", "REPLACE") {
 				return nil, p.unsupportedf(
@@ -90,7 +98,7 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 		}
 
 	case token.Word:
-		return p.parseWordPrimary()
+		return p.parseWordPrimary(starAllowed)
 
 	case token.Whitespace, token.LineComment, token.BlockComment:
 		// Not reachable: trivia is dropped before parsing.
@@ -113,7 +121,7 @@ func numberKind(text string) ast.LiteralKind {
 
 // parseWordPrimary reads a primary that starts with a bare word: a keyword
 // literal, a typed literal, a charset introducer, a name or a call.
-func (p *Parser) parseWordPrimary() (ast.Expr, error) {
+func (p *Parser) parseWordPrimary(starAllowed bool) (ast.Expr, error) {
 	t := p.cur()
 	span := ast.SpanOf(t)
 	word := upper(t.Text)
@@ -178,7 +186,7 @@ func (p *Parser) parseWordPrimary() (ast.Expr, error) {
 		return lit, err
 	}
 
-	return p.parseNameOrCall()
+	return p.parseNameOrCall(starAllowed)
 }
 
 // parseZonedLiteral reads the time-zone spelling of a typed literal. A
@@ -422,14 +430,28 @@ func charsetIntroducer(name string, t token.Token) error {
 
 // parseNameOrCall reads a qualified name, which may turn out to be a function
 // call or a star.
-func (p *Parser) parseNameOrCall() (ast.Expr, error) {
+func (p *Parser) parseNameOrCall(starAllowed bool) (ast.Expr, error) {
 	span := p.span()
 	parts, err := p.parseQualifiedName()
 	if err != nil {
 		return nil, err
 	}
-	// "t.*" in a select list.
+	// "t.*" in a select list. It names every column of one table, so like the
+	// bare star it is a select item rather than a value, and it is refused
+	// wherever the grammar asks for one.
 	if p.atOp("*") && len(parts) > 0 && p.prevWasDot() {
+		if !starAllowed {
+			return nil, p.unexpected("a name")
+		}
+		// SQLite reads one qualifier on a star and no more: its result column
+		// is an expression, a star, or table.*. The engines here take a schema
+		// in front of the table, and forwarding one gave SQLite a syntax error
+		// at the star rather than an answer about the table it names.
+		if len(parts) > 1 {
+			return nil, p.unsupportedf(
+				"a star is qualified by at most a table, and this one has %d parts; SQLite reads only table.*",
+				len(parts))
+		}
 		p.pos++
 		return &ast.Star{Qualifier: parts, Span: span}, nil
 	}
