@@ -36,8 +36,8 @@ github.com/moov-io/iso4217 v0.4.0 h1:+97e9chdg8Cx3kMLmGmvN64+CtmtodPLfUT2PaCXUUE
 github.com/moov-io/iso4217 v0.4.0/go.mod h1:QvQE6pvu9KItHusChPLOJS10EhJnyQpcKHloIqHkQVM=
 github.com/moov-io/wire v0.16.1 h1:JbeIS8JcmJJuxkXVXG6uGt4xYfEwkYk7xKzf5VbP0yQ=
 github.com/moov-io/wire v0.16.1/go.mod h1:UQ0xtx/uE3jzokvi21n7tjLN3kEpwVJbBL0pVtxFDZs=
-github.com/nao1215/filesql v0.55.0 h1:WSWswd8DjJmF+PyVbBrUavy6ZSiosDALe6LaFktKDPk=
-github.com/nao1215/filesql v0.55.0/go.mod h1:9d2olsHF3uBjZSw/1xvIFWcAzIikcWOlVtHIWSJtTVg=
+github.com/nao1215/filesql v0.56.0 h1:tdUm1NXCtj+Y/jqfqsLYyBCS95DZQymSDKPxlxZZrPk=
+github.com/nao1215/filesql v0.56.0/go.mod h1:9d2olsHF3uBjZSw/1xvIFWcAzIikcWOlVtHIWSJtTVg=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/parquet-go/bitpack v1.1.0 h1:b80hfKZwIJ3Ku684xJSEj/9G0tywQPKOtmTV8si30mo=

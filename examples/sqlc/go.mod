@@ -2,7 +2,7 @@ module github.com/nao1215/filesql/examples/sqlc
 
 go 1.25.13
 
-require github.com/nao1215/filesql v0.55.0
+require github.com/nao1215/filesql v0.56.0
 
 require (
 	github.com/andybalholm/brotli v1.2.3 // indirect
