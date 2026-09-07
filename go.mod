@@ -3,7 +3,7 @@ module github.com/nao1215/filesql
 go 1.25.13
 
 require (
-	github.com/klauspost/compress v1.19.2
+	github.com/klauspost/compress v1.20.0
 	github.com/moov-io/ach v1.63.3
 	github.com/moov-io/wire v0.16.1
 	github.com/parquet-go/parquet-go v0.32.0
