@@ -1,0 +1,43 @@
+name: golangci-lint
+
+# reviewdog.yml also runs golangci-lint, but as an advisory reporter at level
+# "warning": it annotates the diff and the pull request merges anyway. release.yml
+# runs it as a gate, but only once a tag is pushed, which is after every chance to
+# fix what it finds has passed. This job is the one that can refuse a merge. The
+# advisory reporter stays: commenting next to the line under review and stopping a
+# merge are different jobs.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  golangci-lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Pinned rather than "stable": a released golangci-lint embeds the
+      # go/types of the Go it was built with, so pointing it at a newer standard
+      # library takes the linter out entirely rather than reporting on this
+      # repository's code. The newer toolchains are covered by the unit tests,
+      # which compile and run the code instead of analyzing it.
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+
+      - name: Run golangci-lint as an enforced gate
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
