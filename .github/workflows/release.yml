@@ -53,7 +53,7 @@ jobs:
       - name: Lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.13.0
+          version: v2.13.2
           args: --config .golangci.yml --timeout 10m
 
       # The examples are separate modules pinned to a released filesql, so the

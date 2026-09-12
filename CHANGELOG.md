@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A star that names a schema as well as a table is refused ([#1100](https://github.com/nao1215/filesql/issues/1100)). SQLite reads one qualifier on a star and no more -- its result column is an expression, a star, or `table.*` -- while MySQL, PostgreSQL and GoogleSQL all take a schema in front of the table, so `SELECT s.t.* FROM s.t` was forwarded unchanged and SQLite answered `near "*": syntax error` at a star the caller wrote but this package had said yes to. The bare-name path already had this rule and refuses `SELECT a.b.c.d` by the parts it carries; the star branch returned before reaching it, so `SELECT a.b.c.*` was read too. Both are now refused as unsupported, naming how many parts were written, since the query reads in the dialect it was written in and it is SQLite that has nowhere to put the schema. `SELECT t.*` and `RETURNING t.*` are unchanged.
 
+### Changed
+
+- Dependencies updated: github.com/klauspost/compress 1.20.0, modernc.org/sqlite 1.58.0, github.com/andybalholm/brotli 1.2.4, github.com/rickar/cal 2.1.30 and modernc.org/libc 1.75.7. golang.org/x/text 0.42.0 is deliberately not taken: the whole golang.org/x family now declares `go 1.26.0`, and this module's baseline is 1.25.13 — the patch release carrying the standard library fixes it requires. Nothing in the advisory database affects x/text 0.41.0, so the floor wins. It can be taken the day the baseline moves to 1.26 for a reason of its own.
+- The eight example modules move from filesql 0.55.0 to 0.57.0, which is the released version their source is written against.
+- The unit test matrix ceiling is `stable` rather than a pinned 1.27.0. A pinned newest stops being the newest the day after it is written, which is the same blind spot the ceiling exists to close, with a later start date. The two floors stay pinned to exact patches, since which patch carries a standard library fix is the whole point of naming them.
+- CI cross-builds the module for FreeBSD, OpenBSD and NetBSD alongside Linux, macOS and Windows. All three compile today; a library built on a database driver of transpiled C is one dependency bump from that changing, and the failure would otherwise land in the build of whoever imports filesql on a BSD rather than here.
+- golangci-lint moves to v2.13.2.
+
 ## [0.57.0] - 2026-09-03
 
 ### Fixed
