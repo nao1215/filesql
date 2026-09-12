@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.58.0] - 2026-09-12
+
 ### Fixed
 
 - A star is a select item rather than a value ([#1099](https://github.com/nao1215/filesql/issues/1099)). The parser read `*` as an ordinary primary, so an operator could take it as an operand and the lowering carried it into a helper call: `SELECT * # a` came back from PostgreSQL as `SELECT postgresql_bit_xor(*, a) AS "*#a"`, and the caller was handed SQLite's `near ",": syntax error` about a bracket this package had written rather than about the query they had typed. The same hole was open on the other side of an operator and everywhere else the grammar asks for a value, so `SELECT 1 | *`, `SELECT -*`, `SELECT (*)`, `SELECT CAST(* AS INT)`, `WHERE *`, `GROUP BY *`, `ORDER BY *` and `LIMIT *` were all read, as was the qualified star in `SELECT t.* | 1`. A star is now read only where a select item is what is being read, and no operator takes one; both halves are needed, since gating the primary alone still lets `SELECT * | 1` through and refusing the operator alone still lets `SELECT 1 | *` through. The refusal is `ErrInvalidSyntax`, because none of these queries is valid in the dialect it was written in -- MySQL, PostgreSQL and GoogleSQL each refuse them -- so calling them unsupported would say SQLite was the reason. `SELECT *`, `SELECT t.*`, `SELECT *, a`, `SELECT DISTINCT *`, `COUNT(*)`, `COUNT(*) OVER ()`, `COUNT(*) + 1`, `RETURNING *` and multiplication written without spaces (`SELECT a*b`) are unchanged, as is the existing refusal of `SELECT * AS a`. Found by the nightly `FuzzTranslationPrepares`, whose seed corpus gains the input.
@@ -2413,6 +2415,7 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
+[0.58.0]: https://github.com/nao1215/filesql/compare/v0.57.0...v0.58.0
 [0.57.0]: https://github.com/nao1215/filesql/compare/v0.56.0...v0.57.0
 [0.56.0]: https://github.com/nao1215/filesql/compare/v0.55.0...v0.56.0
 [0.55.0]: https://github.com/nao1215/filesql/compare/v0.54.0...v0.55.0
