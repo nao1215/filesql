@@ -7,7 +7,7 @@ require (
 	github.com/moov-io/ach v1.63.3
 	github.com/moov-io/wire v0.16.1
 	github.com/parquet-go/parquet-go v0.32.0
-	github.com/pierrec/lz4/v4 v4.1.29
+	github.com/pierrec/lz4/v4 v4.1.30
 	github.com/stretchr/testify v1.12.1
 	github.com/ulikunitz/xz v0.5.16
 	github.com/xuri/excelize/v2 v2.11.0
