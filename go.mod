@@ -12,7 +12,7 @@ require (
 	github.com/ulikunitz/xz v0.5.16
 	github.com/xuri/excelize/v2 v2.11.0
 	golang.org/x/text v0.41.0
-	modernc.org/sqlite v1.58.0
+	modernc.org/sqlite v1.59.0
 )
 
 require (
