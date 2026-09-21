@@ -32,7 +32,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.25.13"
+          go-version: "1.26.6"
 
       # First, because it is the cheapest and because it is the check most
       # likely to fail: a tag that is not SemVer, or one whose version has no

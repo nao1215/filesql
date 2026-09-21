@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- filesql now requires Go 1.26.6 or later (was 1.25.13, or 1.26.6 on the 1.26 line). The golang.org/x modules, moov-io/ach v1.63.5 and modernc.org/libc v1.77.0 that this update takes declare `go 1.26.0`, and 1.26.6 rather than 1.26.0 keeps the standard library fixes for GO-2026-6088 and GO-2026-5972 that the previous minimum existed for. Go 1.26 and 1.27 are the two releases the Go team still supports. Dependencies: modernc.org/sqlite v1.59.0, moov-io/ach v1.63.5, pierrec/lz4 v4.1.30, ulikunitz/xz v0.5.17, golang.org/x/text v0.42.0.
+
 ## [0.58.0] - 2026-09-12
 
 ### Fixed

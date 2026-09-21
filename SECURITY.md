@@ -42,11 +42,10 @@ promise in the version number is what says whether an upgrade is safe to take.
 
 ## Toolchain Baseline
 
-filesql requires Go 1.25.13 or later, and 1.26.6 or later on the 1.26 line.
-Those are the patch releases carrying the standard library fixes for
+filesql requires Go 1.26.6 or later. That is the patch release carrying the standard library fixes for
 [GO-2026-6088](https://pkg.go.dev/vuln/GO-2026-6088) (`encoding/xml`) and
 [GO-2026-5972](https://pkg.go.dev/vuln/GO-2026-5972) (`encoding/asn1`). filesql
-reaches `encoding/xml` on every XLSX it reads, so the first of those is on a
+reaches `encoding/xml` on every XLSX it reads, so the first of those fixes is on a
 path any caller loading a workbook takes. `govulncheck` runs on every pull
 request and on `main`.
 
