@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A workbook whose cell points at shared string -1 is refused with a parse error instead of crashing the program that reads it (GO-2026-6452). excelize checks a shared-string index against the table it holds in memory, but once the table is larger than its 16 MiB in-memory limit it is spilled to a temporary file and looked up there with only the upper bound checked, so `-1` was an index out of range and a panic. Any XLSX handed to filesql could do this, and a shared-string table that large compresses to a few kilobytes. Reading and the read that precedes rewriting a sheet on save now go through one place that turns a panic in the library into `failed to read sheet <name>`. The advisory lists no fixed excelize release, so the govulncheck workflow now accepts GO-2026-6452 by name, with the reason beside it, and still fails on anything else it finds.
+
 ### Changed
 
 - filesql now requires Go 1.26.6 or later (was 1.25.13, or 1.26.6 on the 1.26 line). The golang.org/x modules, moov-io/ach v1.63.5 and modernc.org/libc v1.77.0 that this update takes declare `go 1.26.0`, and 1.26.6 rather than 1.26.0 keeps the standard library fixes for GO-2026-6088 and GO-2026-5972 that the previous minimum existed for. Go 1.26 and 1.27 are the two releases the Go team still supports. Dependencies: modernc.org/sqlite v1.59.0, moov-io/ach v1.63.5, pierrec/lz4 v4.1.30, ulikunitz/xz v0.5.17, golang.org/x/text v0.42.0.

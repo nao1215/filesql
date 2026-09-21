@@ -50,8 +50,31 @@ jobs:
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
 
+      # ACCEPTED lists the advisories this module is known to reach and has
+      # defended against on its own side, and nothing else. GO-2026-6452 is a
+      # panic in excelize on a negative shared-string index, which the Go
+      # vulnerability database records with no fixed release: v2.11.0 checks
+      # the index for a table held in memory but not for one spilled to a
+      # temporary file. internal/reader's Workbook.Rows turns that panic into a
+      # parse error, and TestReadXLSXNegativeSharedStringIndexIsAnError holds
+      # it there. Remove the entry once the advisory names a fixed excelize
+      # release and go.mod requires it. Any other finding fails the job, and
+      # the text report is printed for it.
       - name: Scan the module
-        run: govulncheck ./...
+        env:
+          ACCEPTED: GO-2026-6452
+        run: |
+          govulncheck -format json ./... > "$RUNNER_TEMP/govulncheck.json"
+          jq -r 'select(.finding != null and (.finding.trace[0].function // "") != "") | .finding.osv' \
+            "$RUNNER_TEMP/govulncheck.json" | sort -u > "$RUNNER_TEMP/called.txt"
+          echo "Advisories this module reaches:"
+          cat "$RUNNER_TEMP/called.txt"
+          tr ' ' '\n' <<< "$ACCEPTED" > "$RUNNER_TEMP/accepted.txt"
+          if grep -vxF -f "$RUNNER_TEMP/accepted.txt" "$RUNNER_TEMP/called.txt"; then
+            echo "::error::govulncheck found an advisory that is not in ACCEPTED"
+            govulncheck ./...
+            exit 1
+          fi
 
       # The examples are not scanned here. They are separate modules pinned to a
       # released filesql, so their source matches the released API rather than
