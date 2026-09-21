@@ -25,14 +25,14 @@ jobs:
     timeout-minutes: 15
 
     # Both supported Go lines, because govulncheck reports on the standard
-    # library of whichever Go builds the module. Scanning with 1.25.13 alone
-    # would say nothing about an advisory that only affects 1.26, which is a Go
-    # this module supports and which some callers will be building it with.
+    # library of whichever Go builds the module. Scanning with 1.26.6 alone
+    # would say nothing about an advisory that only affects the newest Go,
+    # which this module supports and which some callers will be building it with.
     strategy:
       matrix:
         go:
-          - "1.25.13"
           - "1.26.6"
+          - "stable"
       fail-fast: false
 
     steps:

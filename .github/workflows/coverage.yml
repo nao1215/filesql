@@ -37,8 +37,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           # Pinned rather than floating on "1": the baseline this module
-          # states is Go 1.25.13, and 1.26.6 is the 1.26 release carrying the
-          # same standard library fixes.
+          # states is Go 1.26.6, the 1.26 release carrying the standard
+          # library fixes for GO-2026-6088 and GO-2026-5972.
           go-version: "1.26.6"
 
       - name: Run tests with coverage report output
