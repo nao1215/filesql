@@ -1,0 +1,55 @@
+{
+  "files": [
+    "README.md"
+  ],
+  "imageSize": 75,
+  "commit": false,
+  "commitType": "docs",
+  "commitConvention": "angular",
+  "contributorsPerLine": 7,
+  "skipCi": true,
+  "repoType": "github",
+  "repoHost": "https://github.com",
+  "projectName": "filesql",
+  "projectOwner": "nao1215",
+  "contributors": [
+    {
+      "login": "nao1215",
+      "name": "CHIKAMATSU Naohiro",
+      "avatar_url": "https://avatars.githubusercontent.com/u/22737008?v=4",
+      "profile": "https://debimate.jp/",
+      "contributions": [
+        "code",
+        "doc"
+      ]
+    },
+    {
+      "login": "SAY-5",
+      "name": "Sai Asish Y",
+      "avatar_url": "https://avatars.githubusercontent.com/u/240962040?v=4",
+      "profile": "https://sayportfolio.vercel.app/",
+      "contributions": [
+        "doc"
+      ]
+    },
+    {
+      "login": "krishna3554",
+      "name": "Krishna lokhande",
+      "avatar_url": "https://avatars.githubusercontent.com/u/87197325?v=4",
+      "profile": "https://github.com/krishna3554",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "adamdecaf",
+      "name": "Adam Shannon",
+      "avatar_url": "https://avatars.githubusercontent.com/u/120951?v=4",
+      "profile": "https://ashannon.us/",
+      "contributions": [
+        "ideas",
+        "financial"
+      ]
+    }
+  ]
+}
