@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A workbook whose cell points at shared string -1 is refused with a parse error instead of crashing the program that reads it (GO-2026-6452). excelize checks a shared-string index against the table it holds in memory, but once the table is larger than its 16 MiB in-memory limit it is spilled to a temporary file and looked up there with only the upper bound checked, so `-1` was an index out of range and a panic. Any XLSX handed to filesql could do this, and a shared-string table that large compresses to a few kilobytes. Reading and the read that precedes rewriting a sheet on save now go through one place that turns a panic in the library into `failed to read sheet <name>`. The advisory lists no fixed excelize release, so the govulncheck workflow now accepts GO-2026-6452 by name, with the reason beside it, and still fails on anything else it finds.
+
 ## [0.58.0] - 2026-09-12
 
 ### Fixed

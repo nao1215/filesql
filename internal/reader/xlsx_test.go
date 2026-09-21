@@ -655,3 +655,38 @@ func TestReadXLSXWorkbookPartElsewhere(t *testing.T) {
 		})
 	}
 }
+
+// TestReadXLSXNegativeSharedStringIndexIsAnError holds a cell that points at
+// shared string -1 to a parse error rather than a crash. The library looks a
+// shared string up in one of two places: the table it keeps in memory, where
+// it checks the index, or -- once the table is larger than its 16 MiB
+// in-memory limit -- a temporary file, where it checks only the upper bound.
+// There the cell was an index out of range that took the whole process down,
+// so a workbook anyone could send ended the program that read it (GO-2026-6452).
+func TestReadXLSXNegativeSharedStringIndexIsAnError(t *testing.T) {
+	t.Parallel()
+
+	data := workbookOf(t, [][]string{{"name"}, {"alice"}, {"bob"}})
+	sheetPart := ""
+	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	require.NoError(t, err)
+	for _, file := range archive.File {
+		if strings.HasPrefix(file.Name, "xl/worksheets/") && strings.HasSuffix(file.Name, ".xml") {
+			sheetPart = file.Name
+		}
+	}
+	require.NotEmpty(t, sheetPart)
+	negative := rewritePart(t, data, sheetPart, func(s string) string {
+		return regexp.MustCompile(`(<c r="A3"[^>]*t="s"[^>]*><v>)\d+(</v>)`).ReplaceAllString(s, "${1}-1${2}")
+	})
+	require.NotEqual(t, data, negative)
+	spilled := rewritePart(t, negative, "xl/sharedStrings.xml", func(s string) string {
+		return strings.Replace(s, "</sst>", "<si><t>"+strings.Repeat("a", 17<<20)+"</t></si></sst>", 1)
+	})
+
+	var result Result
+	require.NotPanics(t, func() { result, _, err = readSheet(t, spilled) })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read sheet people")
+	assert.Zero(t, result.Total)
+}

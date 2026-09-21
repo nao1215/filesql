@@ -2,6 +2,7 @@ package reader
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 
 	"github.com/xuri/excelize/v2"
@@ -39,6 +40,28 @@ func OpenWorkbook(src io.Reader) (*Workbook, error) {
 		return nil, parseError(err, "failed to open XLSX file")
 	}
 	return &Workbook{file: file, data: data}, nil
+}
+
+// Rows returns the cells of one sheet as the library draws them.
+//
+// A panic inside the library is returned as a parse error. The library
+// checks a cell's shared-string index against the table it holds in memory,
+// but a table larger than its in-memory limit is spilled to a temporary file
+// and looked up there with only the upper bound checked, so a cell pointing
+// at string -1 was an index out of range (GO-2026-6452). The workbook is
+// input anyone can hand over, and a malformed one is a file to refuse, not a
+// reason for the program reading it to stop.
+func (w *Workbook) Rows(name string) (rows [][]string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			rows, err = nil, parseError(fmt.Errorf("%v", r), "failed to read sheet %s", name)
+		}
+	}()
+	rows, err = w.file.GetRows(name)
+	if err != nil {
+		return nil, parseError(err, "failed to read sheet %s", name)
+	}
+	return rows, nil
 }
 
 // Close releases the workbook.
@@ -190,9 +213,9 @@ func tableRows(rows [][]string, holdsCells *heldRows) (headerRow int, recordRows
 // names any column -- is reported with Kind KindEmpty, so a caller loading every
 // sheet can pass over it while one loading a single sheet can refuse.
 func (w *Workbook) ReadSheet(name string, opts Options, emit Emit) (Result, error) {
-	rows, err := w.file.GetRows(name)
+	rows, err := w.Rows(name)
 	if err != nil {
-		return Result{}, parseError(err, "failed to read sheet %s", name)
+		return Result{}, err
 	}
 	// A sheet draws a number the way its format says, and the drawing is not the
 	// value: the numeric cells are rewritten into the numbers the file stores,

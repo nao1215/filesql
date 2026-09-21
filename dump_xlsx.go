@@ -249,9 +249,9 @@ func xlsxSheetBefore(base *reader.Workbook, sheetName string) (xlsxSheetPrior, e
 	if index < 0 {
 		return xlsxSheetPrior{}, nil // A sheet that is not there yet; writeXLSXSheet creates it.
 	}
-	rows, err := f.GetRows(sheetName)
+	rows, err := base.Rows(sheetName)
 	if err != nil {
-		return xlsxSheetPrior{}, fmt.Errorf("failed to read sheet %s: %w", sheetName, err)
+		return xlsxSheetPrior{}, err
 	}
 	// The cells are normalized first because the normalization is what says how
 	// far the sheet reaches: the library returns a row that stops before the
