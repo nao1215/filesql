@@ -790,6 +790,18 @@ func TestReadXLSXSharedStringIndexOutsideTheTableIsAnError(t *testing.T) {
 		assert.Equal(t, "3", string(text))
 	})
 
+	t.Run("an index behind a run of zeros is read", func(t *testing.T) {
+		t.Parallel()
+
+		_, records, err := readSheet(t, pointAt(" "+strings.Repeat("0", 10000)+"2 "))
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"alice"}, {"bob"}}, records)
+
+		_, records, err = readSheet(t, pointAt(strings.Repeat("0", 10000)))
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"alice"}, {"name"}}, records)
+	})
+
 	t.Run("the first string is still read", func(t *testing.T) {
 		t.Parallel()
 

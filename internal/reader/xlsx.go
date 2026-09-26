@@ -302,12 +302,13 @@ func (s *tagScanner) passComment() error {
 }
 
 // text reads the character data that follows the tag just read, up to the
-// next tag or the end of the stream. Whitespace in front of it is dropped
-// rather than kept, so no amount of it hides what follows, and at most
+// next tag or the end of the stream. Whitespace and zeros in front of it are
+// dropped rather than kept, so no amount of either hides what follows, and at most
 // maxScannedTag bytes after that are kept; long reports more than that, which
 // is no index.
 func (s *tagScanner) text() (chars []byte, long bool, err error) {
 	buf := s.chars[:0]
+	zeros := false
 	defer func() { s.chars = buf }()
 	for {
 		chunk, err := s.src.ReadSlice('<')
@@ -317,6 +318,9 @@ func (s *tagScanner) text() (chars []byte, long bool, err error) {
 		}
 		if len(buf) == 0 {
 			chunk = bytes.TrimLeft(chunk, " \t\r\n")
+			if digits := bytes.TrimLeft(chunk, "0"); len(digits) < len(chunk) {
+				zeros, chunk = true, digits
+			}
 		}
 		room := maxScannedTag - len(buf)
 		if len(chunk) > room {
@@ -325,6 +329,9 @@ func (s *tagScanner) text() (chars []byte, long bool, err error) {
 		}
 		buf = append(buf, chunk...)
 		if !errors.Is(err, bufio.ErrBufferFull) {
+			if zeros && len(bytes.TrimSpace(buf)) == 0 {
+				buf = append(buf[:0], '0')
+			}
 			return buf, long, err
 		}
 	}
