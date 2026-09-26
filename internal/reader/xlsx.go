@@ -1,9 +1,13 @@
 package reader
 
 import (
+	"archive/zip"
+	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -61,7 +65,253 @@ func (w *Workbook) Rows(name string) (rows [][]string, err error) {
 	if err != nil {
 		return nil, parseError(err, "failed to read sheet %s", name)
 	}
+	if err := checkSharedStringRefs(w.data, name); err != nil {
+		return nil, parseError(err, "failed to read sheet %s", name)
+	}
 	return rows, nil
+}
+
+// checkSharedStringRefs refuses a sheet holding a cell that points at a shared
+// string the workbook does not have. The library's row reader cannot be asked:
+// from a table in memory it drops the error and the cell loads as empty, and
+// from a table spilled to a temporary file it answers the index itself, so the
+// cell loads as a number nobody wrote. Either way a broken file would load as
+// data.
+//
+// It reads the sheet's bytes the way rowsHoldingCellsFromXML does, and says
+// nothing when the workbook's parts do not say where the sheet is.
+func checkSharedStringRefs(data []byte, sheet string) error {
+	if len(data) == 0 {
+		return nil
+	}
+	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil
+	}
+	part, ok := sheetPart(archive, sheet)
+	if !ok {
+		return nil
+	}
+	file, err := part.Open()
+	if err != nil {
+		return nil
+	}
+	defer file.Close()
+
+	count := -1
+	scan := newTagScanner(file)
+	shared := false
+	var ref []byte
+	for {
+		name, attrs, selfClosing, err := scan.next()
+		if err != nil {
+			// The end of the sheet, or a part the library has just read and
+			// this read cannot: either way there is nothing more to say.
+			return nil
+		}
+		switch string(name) {
+		case "c":
+			kind, _ := attrValue(attrs, "t")
+			shared = string(kind) == "s" && !selfClosing
+			if shared {
+				r, _ := attrValue(attrs, "r")
+				ref = append(ref[:0], r...)
+			}
+		case "v":
+			if !shared || selfClosing {
+				continue
+			}
+			shared = false
+			text, err := scan.text()
+			if err != nil {
+				return nil
+			}
+			// The library trims the value and reads it as a decimal integer,
+			// so an empty one is no lookup at all and anything else it cannot
+			// read would silently be string 0.
+			value := bytes.TrimSpace(text)
+			if len(value) == 0 {
+				continue
+			}
+			if count < 0 {
+				count = sharedStringCount(archive)
+			}
+			if index, ok := sharedStringIndex(value); !ok || index >= count {
+				cell := string(ref)
+				if cell == "" {
+					cell = "without a reference"
+				}
+				return fmt.Errorf("cell %s points at shared string %q, and the workbook holds %d", cell, value, count)
+			}
+		}
+	}
+}
+
+// sharedStringIndex reads a shared-string index the way the library does, as a
+// decimal integer with an optional sign, answering false for one that is
+// negative or is not a number at all.
+func sharedStringIndex(value []byte) (int, bool) {
+	if len(value) > 0 && value[0] == '+' {
+		value = value[1:]
+	}
+	if len(value) == 0 {
+		return 0, false
+	}
+	value = bytes.TrimLeft(value, "0")
+	if len(value) > 18 {
+		return 0, false
+	}
+	n := 0
+	for _, c := range value {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n, true
+}
+
+// sharedStringCount is the number of strings in the workbook's shared-string
+// table, which the library always reads from the same part whatever the
+// relationships say.
+func sharedStringCount(archive *zip.Reader) int {
+	for _, file := range archive.File {
+		if !strings.EqualFold(file.Name, "xl/sharedStrings.xml") {
+			continue
+		}
+		body, err := file.Open()
+		if err != nil {
+			return 0
+		}
+		defer body.Close()
+		count := 0
+		scan := newTagScanner(body)
+		for {
+			name, _, _, err := scan.next()
+			if err != nil {
+				return count
+			}
+			if string(name) == "si" {
+				count++
+			}
+		}
+	}
+	return 0
+}
+
+// tagScanner walks the start tags of an XML stream by bytes, for a question
+// that an XML parser would answer at several times the cost of the read it
+// checks. A comment is passed over whole, as scanRowWindow passes it.
+type tagScanner struct {
+	src   *bufio.Reader
+	tag   []byte
+	chars []byte
+	atTag bool
+}
+
+// maxScannedTag bounds how much of a tag is kept. The tags asked about are a
+// cell's and a value's, which are short; a longer one is read past, not kept.
+const maxScannedTag = 4 << 10
+
+func newTagScanner(src io.Reader) *tagScanner {
+	return &tagScanner{src: bufio.NewReaderSize(src, 64<<10)}
+}
+
+// next answers the local name and the attributes of the next start tag, and
+// whether it closes itself. It answers io.EOF at the end of the stream.
+func (s *tagScanner) next() (name, attrs []byte, selfClosing bool, err error) {
+	for {
+		if !s.atTag {
+			if err := s.skipPast('<'); err != nil {
+				return nil, nil, false, err
+			}
+		}
+		s.atTag = false
+		s.tag = append(s.tag[:0], '<')
+		if err := s.readTag(); err != nil {
+			return nil, nil, false, err
+		}
+		body := bytes.TrimSuffix(s.tag, []byte(">"))
+		if bytes.HasPrefix(body, []byte("<!--")) {
+			if err := s.passComment(); err != nil {
+				return nil, nil, false, err
+			}
+			continue
+		}
+		name, attrs := startTag(body)
+		if name == nil {
+			continue
+		}
+		return name, attrs, bytes.HasSuffix(body, []byte("/")), nil
+	}
+}
+
+// skipPast reads up to and including the next occurrence of delim.
+func (s *tagScanner) skipPast(delim byte) error {
+	for {
+		_, err := s.src.ReadSlice(delim)
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return err
+		}
+	}
+}
+
+// readTag appends the rest of a tag, through its '>', keeping at most
+// maxScannedTag bytes of it.
+func (s *tagScanner) readTag() error {
+	for {
+		chunk, err := s.src.ReadSlice('>')
+		if room := maxScannedTag - len(s.tag); room > 0 {
+			s.tag = append(s.tag, chunk[:min(room, len(chunk))]...)
+		}
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return err
+		}
+	}
+}
+
+// passComment reads past the end of a comment whose opening the scanner has
+// just read. A comment may hold a '>' before its end, so the end is found by
+// the two bytes in front of each '>' that follows.
+func (s *tagScanner) passComment() error {
+	const closing = "--"
+	body := s.tag[len("<!--") : len(s.tag)-1]
+	if bytes.HasSuffix(body, []byte(closing)) {
+		return nil
+	}
+	tail := append([]byte(nil), body[max(0, len(body)-2):]...)
+	for {
+		chunk, err := s.src.ReadSlice('>')
+		tail = append(tail, chunk...)
+		if err == nil && bytes.HasSuffix(tail[:len(tail)-1], []byte(closing)) {
+			return nil
+		}
+		if err != nil && !errors.Is(err, bufio.ErrBufferFull) {
+			return err
+		}
+		tail = append(tail[:0], tail[max(0, len(tail)-2):]...)
+	}
+}
+
+// text reads the character data that follows the tag just read, up to the
+// next tag, keeping at most maxScannedTag bytes of it; more than that is not
+// an index.
+func (s *tagScanner) text() ([]byte, error) {
+	buf := s.chars[:0]
+	defer func() { s.chars = buf }()
+	for {
+		chunk, err := s.src.ReadSlice('<')
+		if err == nil {
+			chunk = chunk[:len(chunk)-1]
+			s.atTag = true
+		}
+		if room := maxScannedTag - len(buf); room > 0 {
+			buf = append(buf, chunk[:min(room, len(chunk))]...)
+		}
+		if err == nil || !errors.Is(err, bufio.ErrBufferFull) {
+			return buf, err
+		}
+	}
 }
 
 // Close releases the workbook.
