@@ -731,6 +731,8 @@ func TestReadXLSXSharedStringIndexOutsideTheTableIsAnError(t *testing.T) {
 		{name: "one past the last string, table in memory", data: pointAt("3")},
 		{name: "far past the last string, table in memory", data: pointAt("99999999999999999999")},
 		{name: "not a number, table in memory", data: pointAt("x")},
+		{name: "past the last string behind a run of whitespace", data: pointAt(strings.Repeat(" ", 10000) + "3")},
+		{name: "a run of digits longer than any index", data: pointAt(strings.Repeat("1", 10000))},
 		{name: "past the last string, table spilled", data: spill(pointAt("9"))},
 	}
 	for _, tt := range tests {
@@ -770,6 +772,22 @@ func TestReadXLSXSharedStringIndexOutsideTheTableIsAnError(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, [][]string{{"alice"}, {"bob"}}, records)
+	})
+
+	t.Run("a value the stream ends inside is still checked", func(t *testing.T) {
+		t.Parallel()
+
+		scan := newTagScanner(strings.NewReader(`<c r="A3" t="s"><v> 3`))
+		name, _, _, err := scan.next()
+		require.NoError(t, err)
+		require.Equal(t, "c", string(name))
+		name, _, _, err = scan.next()
+		require.NoError(t, err)
+		require.Equal(t, "v", string(name))
+		text, long, err := scan.text()
+		require.ErrorIs(t, err, io.EOF)
+		assert.False(t, long)
+		assert.Equal(t, "3", string(text))
 	})
 
 	t.Run("the first string is still read", func(t *testing.T) {

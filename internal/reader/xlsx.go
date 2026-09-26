@@ -122,26 +122,34 @@ func checkSharedStringRefs(data []byte, sheet string) error {
 				continue
 			}
 			shared = false
-			text, err := scan.text()
-			if err != nil {
-				return nil
-			}
+			// A value the stream ends inside is still checked: the library
+			// reads what it got and says nothing about the rest.
+			text, long, err := scan.text()
 			// The library trims the value and reads it as a decimal integer,
 			// so an empty one is no lookup at all and anything else it cannot
 			// read would silently be string 0.
 			value := bytes.TrimSpace(text)
-			if len(value) == 0 {
+			if len(value) == 0 && !long {
+				if err != nil {
+					return nil
+				}
 				continue
 			}
 			if count < 0 {
 				count = sharedStringCount(archive)
 			}
-			if index, ok := sharedStringIndex(value); !ok || index >= count {
+			if index, ok := sharedStringIndex(value); long || !ok || index >= count {
 				cell := string(ref)
 				if cell == "" {
 					cell = "without a reference"
 				}
+				if long {
+					value = append(value[:min(len(value), 32)], "..."...)
+				}
 				return fmt.Errorf("cell %s points at shared string %q, and the workbook holds %d", cell, value, count)
+			}
+			if err != nil {
+				return nil
 			}
 		}
 	}
@@ -294,9 +302,11 @@ func (s *tagScanner) passComment() error {
 }
 
 // text reads the character data that follows the tag just read, up to the
-// next tag, keeping at most maxScannedTag bytes of it; more than that is not
-// an index.
-func (s *tagScanner) text() ([]byte, error) {
+// next tag or the end of the stream. Whitespace in front of it is dropped
+// rather than kept, so no amount of it hides what follows, and at most
+// maxScannedTag bytes after that are kept; long reports more than that, which
+// is no index.
+func (s *tagScanner) text() (chars []byte, long bool, err error) {
 	buf := s.chars[:0]
 	defer func() { s.chars = buf }()
 	for {
@@ -305,11 +315,17 @@ func (s *tagScanner) text() ([]byte, error) {
 			chunk = chunk[:len(chunk)-1]
 			s.atTag = true
 		}
-		if room := maxScannedTag - len(buf); room > 0 {
-			buf = append(buf, chunk[:min(room, len(chunk))]...)
+		if len(buf) == 0 {
+			chunk = bytes.TrimLeft(chunk, " \t\r\n")
 		}
-		if err == nil || !errors.Is(err, bufio.ErrBufferFull) {
-			return buf, err
+		room := maxScannedTag - len(buf)
+		if len(chunk) > room {
+			long = long || len(bytes.TrimRight(chunk[room:], " \t\r\n")) > 0
+			chunk = chunk[:room]
+		}
+		buf = append(buf, chunk...)
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return buf, long, err
 		}
 	}
 }
