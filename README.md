@@ -58,6 +58,8 @@ filesql is for cases where the data is already in a file and the fastest useful 
 - Keep edits in memory until you decide to save them.
 - Clean inputs with `prep` before loading them.
 
+If the job is analytics on data larger than memory, or on files in S3, use [DuckDB](https://duckdb.org/): its columnar engine is faster and its SQL is richer. filesql is for a Go program that wants file data behind `database/sql` with no cgo, edits written back into the file they came from, ACH, Fedwire and LTSV input, Shift-JIS or EUC-JP output, and validation with `prep` before a row becomes a table.
+
 ## Features
 
 - Query file data with standard SQLite syntax, including joins, CTEs, and `json_extract()`.

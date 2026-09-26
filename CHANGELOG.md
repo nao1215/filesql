@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A cell pointing at a shared string the workbook does not have is refused with a parse error naming the sheet and the cell, instead of loading as data ([#1115](https://github.com/nao1215/filesql/issues/1115)). excelize's row reader drops the error it gets for such an index from a shared-string table held in memory, so `<c r="A3" t="s"><v>-1</v></c>` or an index one past the last `<si>` loaded as an empty cell; from a table spilled to a temporary file it answers the index itself, so the same cell loaded as a number nobody wrote. Reading a sheet, and the read that comes before rewriting one on save, now scans the sheet's XML by bytes for `t="s"` cells and checks each index against the number of `<si>` elements in `xl/sharedStrings.xml`, which is the part excelize reads. An empty value is still no lookup, a value with a sign or leading zeros reads the way excelize reads it, and a value that is not a number, which excelize read as string 0, is refused too. The extra pass decompresses the sheet a second time and allocates nothing per cell: in the benchmarks opening a formatted workbook costs about 5% more and overwriting one about 13%.
+
+### Changed
+
+- The README says when to use DuckDB instead: for analytics on data larger than memory or on remote files. filesql's place is a Go program that wants files behind `database/sql` without cgo, edits written back into the source file, ACH, Fedwire and LTSV input, legacy Japanese encodings on output, and `prep` validation.
+- moov-io/ach moves to v1.63.6.
+
 ## [0.59.0] - 2026-09-21
 
 ### Fixed

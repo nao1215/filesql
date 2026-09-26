@@ -690,3 +690,127 @@ func TestReadXLSXNegativeSharedStringIndexIsAnError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to read sheet people")
 	assert.Zero(t, result.Total)
 }
+
+// TestReadXLSXSharedStringIndexOutsideTheTableIsAnError holds a cell that
+// points at a shared string the workbook does not have to a parse error naming
+// the sheet and the cell. The library's row reader drops the error it gets for
+// such an index from a table in memory, so the cell loaded as empty, and it
+// answers the index itself as the value from a table spilled to a temporary
+// file, so the cell loaded as a number nobody wrote.
+func TestReadXLSXSharedStringIndexOutsideTheTableIsAnError(t *testing.T) {
+	t.Parallel()
+
+	data := workbookOf(t, [][]string{{"name"}, {"alice"}, {"bob"}})
+	sheetPart := ""
+	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	require.NoError(t, err)
+	for _, file := range archive.File {
+		if strings.HasPrefix(file.Name, "xl/worksheets/") && strings.HasSuffix(file.Name, ".xml") {
+			sheetPart = file.Name
+		}
+	}
+	require.NotEmpty(t, sheetPart)
+	pointAt := func(index string) []byte {
+		out := rewritePart(t, data, sheetPart, func(s string) string {
+			return regexp.MustCompile(`(<c r="A3"[^>]*t="s"[^>]*><v>)\d+(</v>)`).ReplaceAllString(s, "${1}"+index+"${2}")
+		})
+		require.NotEqual(t, data, out)
+		return out
+	}
+	spill := func(data []byte) []byte {
+		return rewritePart(t, data, "xl/sharedStrings.xml", func(s string) string {
+			return strings.Replace(s, "</sst>", "<si><t>"+strings.Repeat("a", 17<<20)+"</t></si></sst>", 1)
+		})
+	}
+
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{name: "negative, table in memory", data: pointAt("-1")},
+		{name: "one past the last string, table in memory", data: pointAt("3")},
+		{name: "far past the last string, table in memory", data: pointAt("99999999999999999999")},
+		{name: "not a number, table in memory", data: pointAt("x")},
+		{name: "past the last string behind a run of whitespace", data: pointAt(strings.Repeat(" ", 10000) + "3")},
+		{name: "a run of digits longer than any index", data: pointAt(strings.Repeat("1", 10000))},
+		{name: "a sign behind a run of zeros", data: pointAt(strings.Repeat("0", 10000) + "+2")},
+		{name: "a space behind a run of zeros", data: pointAt(strings.Repeat("0", 10000) + " 2")},
+		{name: "a sign behind one zero", data: pointAt("0+2")},
+		{name: "past the last string, table spilled", data: spill(pointAt("9"))},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, _, err := readSheet(t, tt.data)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "failed to read sheet people")
+			assert.Contains(t, err.Error(), "A3")
+			assert.Zero(t, result.Total)
+		})
+	}
+
+	for spelling, respell := range spellings {
+		t.Run("one past the last string, "+spelling, func(t *testing.T) {
+			t.Parallel()
+
+			_, _, err := readSheet(t, rewritePart(t, pointAt("3"), sheetPart, respell))
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "A3")
+		})
+	}
+
+	t.Run("a cell quoted in a comment is not read", func(t *testing.T) {
+		t.Parallel()
+
+		quoted := rewritePart(t, data, sheetPart, func(s string) string {
+			return strings.Replace(s, "<sheetData>",
+				`<!-- a > b <c r="A9" t="s"><v>99</v></c> --><sheetData>`, 1)
+		})
+		require.NotEqual(t, data, quoted)
+
+		_, records, err := readSheet(t, quoted)
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"alice"}, {"bob"}}, records)
+	})
+
+	t.Run("a value the stream ends inside is still checked", func(t *testing.T) {
+		t.Parallel()
+
+		scan := newTagScanner(strings.NewReader(`<c r="A3" t="s"><v> 3`))
+		name, _, _, err := scan.next()
+		require.NoError(t, err)
+		require.Equal(t, "c", string(name))
+		name, _, _, err = scan.next()
+		require.NoError(t, err)
+		require.Equal(t, "v", string(name))
+		text, long, err := scan.text()
+		require.ErrorIs(t, err, io.EOF)
+		assert.False(t, long)
+		assert.Equal(t, "3", string(text))
+	})
+
+	t.Run("an index behind a run of zeros is read", func(t *testing.T) {
+		t.Parallel()
+
+		_, records, err := readSheet(t, pointAt(" "+strings.Repeat("0", 10000)+"2 "))
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"alice"}, {"bob"}}, records)
+
+		_, records, err = readSheet(t, pointAt(strings.Repeat("0", 10000)))
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"alice"}, {"name"}}, records)
+	})
+
+	t.Run("the first string is still read", func(t *testing.T) {
+		t.Parallel()
+
+		_, records, err := readSheet(t, pointAt("0"))
+
+		require.NoError(t, err)
+		assert.Equal(t, [][]string{{"alice"}, {"name"}}, records)
+	})
+}
