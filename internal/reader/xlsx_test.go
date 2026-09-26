@@ -733,6 +733,9 @@ func TestReadXLSXSharedStringIndexOutsideTheTableIsAnError(t *testing.T) {
 		{name: "not a number, table in memory", data: pointAt("x")},
 		{name: "past the last string behind a run of whitespace", data: pointAt(strings.Repeat(" ", 10000) + "3")},
 		{name: "a run of digits longer than any index", data: pointAt(strings.Repeat("1", 10000))},
+		{name: "a sign behind a run of zeros", data: pointAt(strings.Repeat("0", 10000) + "+2")},
+		{name: "a space behind a run of zeros", data: pointAt(strings.Repeat("0", 10000) + " 2")},
+		{name: "a sign behind one zero", data: pointAt("0+2")},
 		{name: "past the last string, table spilled", data: spill(pointAt("9"))},
 	}
 	for _, tt := range tests {
