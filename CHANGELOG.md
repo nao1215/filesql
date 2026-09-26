@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- modernc.org/libc moves to v1.77.1, here and in the eight example modules. v1.77.0, which the 0.59.0 update took, was retracted by its author because `nan()` and parsing "nan" with strtod or scanf recurse until the stack overflows on Linux.
+
 ## [0.59.1] - 2026-09-26
 
 ### Fixed
