@@ -69,11 +69,16 @@ jobs:
       # it there. Remove the entry once the advisory names a fixed excelize
       # release and go.mod requires it. Any other finding fails the job, and
       # the text report is printed for it.
+      # pipefail and the record-count check keep a failed or empty scan from
+      # reading as "nothing found": the default run shell does not set pipefail,
+      # so a jq error would otherwise be hidden behind sort.
       - name: Scan the module
         env:
           ACCEPTED: GO-2026-6452
         run: |
+          set -o pipefail
           govulncheck -format json ./... > "$RUNNER_TEMP/govulncheck.json"
+          jq -e -s 'length > 0' "$RUNNER_TEMP/govulncheck.json" > /dev/null
           jq -r 'select(.finding != null and (.finding.trace[0].function // "") != "") | .finding.osv' \
             "$RUNNER_TEMP/govulncheck.json" | sort -u > "$RUNNER_TEMP/called.txt"
           echo "Advisories this module reaches:"
