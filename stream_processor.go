@@ -653,19 +653,25 @@ var errReadAheadStopped = errors.New("filesql: read ahead stopped")
 // read ahead holds in memory to two chunks.
 //
 // When emit fails, the reader is stopped at its next chunk and emit's error is
-// returned; otherwise the reader's result is.
+// returned; otherwise the reader's result is. A panic in the reader is raised
+// again on the caller's goroutine.
 func readAhead(read func(emit chunkProcessor) (columnInfoList, error)) func(emit chunkProcessor) (columnInfoList, error) {
 	return func(emit chunkProcessor) (columnInfoList, error) {
 		chunks := make(chan *tableChunk, 1)
 		stop := make(chan struct{})
 		var (
-			columns columnInfoList
-			readErr error
+			columns  columnInfoList
+			readErr  error
+			panicked any
 		)
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
 			defer close(chunks)
+			// A panic in a reader used to reach the caller's goroutine, where
+			// the caller could recover it. Here it would end the process, so it
+			// is carried back and raised again there.
+			defer func() { panicked = recover() }()
 			columns, readErr = read(func(chunk *tableChunk) error {
 				select {
 				case chunks <- chunk:
@@ -687,6 +693,9 @@ func readAhead(read func(emit chunkProcessor) (columnInfoList, error)) func(emit
 			}
 		}
 		<-done
+		if panicked != nil {
+			panic(panicked)
+		}
 		if emitErr != nil {
 			return nil, emitErr
 		}

@@ -1011,6 +1011,22 @@ func TestReadAhead(t *testing.T) {
 		require.ErrorIs(t, err, errStub)
 	})
 
+	t.Run("a panic in the reader reaches the caller's goroutine", func(t *testing.T) {
+		t.Parallel()
+
+		read := readAhead(func(emit chunkProcessor) (columnInfoList, error) {
+			if err := emit(chunk(0)); err != nil {
+				return nil, err
+			}
+			panic("reader broke")
+		})
+		assert.PanicsWithValue(t, "reader broke", func() {
+			if _, err := read(func(*tableChunk) error { return nil }); err != nil {
+				t.Errorf("the load returned %v instead of panicking", err)
+			}
+		})
+	})
+
 	t.Run("a failure to take a chunk stops the reader", func(t *testing.T) {
 		t.Parallel()
 
