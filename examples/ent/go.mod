@@ -4,7 +4,7 @@ go 1.26.6
 
 require (
 	entgo.io/ent v0.14.6
-	github.com/nao1215/filesql v0.58.0
+	github.com/nao1215/filesql v0.59.0
 )
 
 require (

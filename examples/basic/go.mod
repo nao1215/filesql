@@ -2,7 +2,7 @@ module github.com/nao1215/filesql/examples/basic
 
 go 1.26.6
 
-require github.com/nao1215/filesql v0.58.0
+require github.com/nao1215/filesql v0.59.0
 
 require (
 	github.com/andybalholm/brotli v1.2.4 // indirect
