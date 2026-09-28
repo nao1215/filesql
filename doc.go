@@ -168,15 +168,15 @@
 //
 // The rows end up in SQLite rather than on the Go heap, so the heap is not where
 // the cost is: loading CSVs of 16 MB through 131 MB kept the Go heap flat at
-// about 24 MB while resident memory grew by about twice the file's size. For a
+// about 21 MB while resident memory grew by about twice the file's size. For a
 // chunked format, budget from the file size: over 200,000 rows, CSV and Parquet
 // each cost about 2.1 times the file.
 //
 // A workbook is read whole, so what it costs follows the cells it holds rather
 // than the size of the file, which is a zip and shrinks with how well the sheet
-// compressed. The same 200,000 rows cost about 26 times the file as a wide
-// workbook and about 37 times as a workbook of one column, and against the file
-// alone the ratio reaches 135 times for a small one-column workbook. Budget an
+// compressed. The same 200,000 rows cost about 23 times the file as a wide
+// workbook and about 61 times as a workbook of one column, and against the file
+// alone the ratio reaches 130 times for a small one-column workbook. Budget an
 // XLSX load from the cells rather than from the file, and bound the decompressed
 // size before loading a workbook that came from somewhere else, since nothing
 // here does. Every figure is printed by
@@ -197,8 +197,10 @@
 // wider type is read again under the types the whole file calls for. A reader
 // passed to DBBuilder.AddReader cannot be read twice, so it is staged as text
 // and typed once it has all been read, at the cost of one copy of the table
-// inside SQLite. The final cost is still dominated by the size of the database:
-// chunking reduces loader overhead, it does not make a large dataset free.
+// inside SQLite. The next chunk is read while the previous one is inserted, so
+// up to three chunks are held at once. The final cost is still dominated by the
+// size of the database: chunking reduces loader overhead, it does not make a
+// large dataset free.
 //
 // A blank line is not a record in CSV, in LTSV or in a sheet. In TSV it is one
 // in a one-column file, where it is that column's empty value: TSV has no quote

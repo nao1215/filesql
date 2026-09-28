@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -842,6 +843,240 @@ func TestDumpWithSourceHoldsTheRecordBound(t *testing.T) {
 				"the refusal must be the record bound rather than whatever the format complains about first")
 			assert.Less(t, src.served, int64(readCap),
 				"the stream was read to the test's cap, so nothing bounded it")
+		})
+	}
+}
+
+// TestLoadTable_BatchedInsertStoresEveryRow holds that carrying several rows in
+// one INSERT stores the same table as inserting them one by one: every row, in
+// order, at every row count around the batch size, for a table narrow enough to
+// batch and one too wide to, and whatever size the chunks are.
+func TestLoadTable_BatchedInsertStoresEveryRow(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	for _, width := range []int{1, 3, 12, insertBatchParams + 1} {
+		batch := insertBatchRows(width)
+		for _, rows := range []int{1, batch - 1, batch, batch + 1, 3*batch + 2} {
+			for _, chunkSize := range []int{1, 7, 1000} {
+				if rows < 1 {
+					continue
+				}
+				t.Run(fmt.Sprintf("width=%d rows=%d chunk=%d", width, rows, chunkSize), func(t *testing.T) {
+					t.Parallel()
+
+					var body strings.Builder
+					want := make([][]string, rows)
+					for c := range width {
+						if c > 0 {
+							body.WriteByte(',')
+						}
+						fmt.Fprintf(&body, "c%d", c)
+					}
+					body.WriteByte('\n')
+					for r := range rows {
+						want[r] = make([]string, width)
+						for c := range width {
+							if c > 0 {
+								body.WriteByte(',')
+							}
+							want[r][c] = fmt.Sprintf("r%dc%d", r, c)
+							body.WriteString(want[r][c])
+						}
+						body.WriteByte('\n')
+					}
+
+					tx := openTestTx(t)
+					source := tableSource{read: func(emit chunkProcessor) (columnInfoList, error) {
+						return newStreamingParser(FileTypeCSV, CompressionNone, "t", chunkSize).ProcessInChunks(strings.NewReader(body.String()), emit)
+					}}
+					require.NoError(t, newStreamProcessor(chunkSize).loadTable(ctx, tx, "t", source))
+					assert.Equal(t, want, queryRowStrings(t, tx, `SELECT * FROM t ORDER BY rowid`))
+				})
+			}
+		}
+	}
+}
+
+// TestLoadTable_BatchedInsertKeepsEachRowsNulls holds that a cell's NULL lands
+// on the row it belongs to when that row shares a statement with others: a
+// source NULL from the mask, and a blank cell in a numeric column, at every
+// position of a batch.
+func TestLoadTable_BatchedInsertKeepsEachRowsNulls(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	columns := columnInfoList{{Name: "n", Type: columnTypeInteger}, {Name: "s", Type: columnTypeText}}
+	rows := 2*insertBatchRows(len(columns)) + 1
+	records := make([]record, rows)
+	nulls := make([][]bool, rows)
+	want := make([][]string, rows)
+	for r := range rows {
+		records[r] = record{strconv.Itoa(r), fmt.Sprintf("s%d", r)}
+		nulls[r] = []bool{false, false}
+		want[r] = []string{strconv.Itoa(r), fmt.Sprintf("s%d", r)}
+		switch r % 3 {
+		case 1:
+			records[r][0] = ""
+			want[r][0] = "<nil>"
+		case 2:
+			nulls[r][1] = true
+			want[r][1] = "<nil>"
+		}
+	}
+	read := func(emit chunkProcessor) (columnInfoList, error) {
+		return columns, emit(&tableChunk{tableName: "t", headers: header{"n", "s"}, records: records, types: columns, nulls: nulls})
+	}
+
+	tx := openTestTx(t)
+	require.NoError(t, newStreamProcessor(1000).loadTable(ctx, tx, "t", tableSource{read: read, reread: read}))
+	assert.Equal(t, want, queryRowStrings(t, tx, `SELECT n, s FROM t ORDER BY rowid`))
+}
+
+// queryRowStrings runs query and returns every row with each value spelled as
+// text, or "<nil>" for NULL.
+func queryRowStrings(t *testing.T, tx *sql.Tx, query string) [][]string {
+	t.Helper()
+
+	rows, err := tx.QueryContext(context.Background(), query)
+	require.NoError(t, err)
+	defer rows.Close()
+	columns, err := rows.Columns()
+	require.NoError(t, err)
+	var got [][]string
+	for rows.Next() {
+		values := make([]sql.NullString, len(columns))
+		targets := make([]any, len(columns))
+		for i := range values {
+			targets[i] = &values[i]
+		}
+		require.NoError(t, rows.Scan(targets...))
+		row := make([]string, len(columns))
+		for i, v := range values {
+			row[i] = "<nil>"
+			if v.Valid {
+				row[i] = v.String
+			}
+		}
+		got = append(got, row)
+	}
+	require.NoError(t, rows.Err())
+	return got
+}
+
+// TestReadAhead covers the hand-over between the goroutine that reads and the
+// one that inserts: chunks arrive in the order they were read, the reader's
+// result comes back when every chunk was taken, and a failure to take one
+// stops the reader and is what the load reports.
+func TestReadAhead(t *testing.T) {
+	t.Parallel()
+
+	chunk := func(i int) *tableChunk { return &tableChunk{tableName: strconv.Itoa(i)} }
+	columns := columnInfoList{{Name: "v", Type: columnTypeText}}
+
+	t.Run("chunks arrive in order and the result comes back", func(t *testing.T) {
+		t.Parallel()
+
+		read := readAhead(func(emit chunkProcessor) (columnInfoList, error) {
+			for i := range 50 {
+				if err := emit(chunk(i)); err != nil {
+					return nil, err
+				}
+			}
+			return columns, nil
+		})
+		var got []string
+		cols, err := read(func(c *tableChunk) error {
+			got = append(got, c.tableName)
+			return nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, columns, cols)
+		require.Len(t, got, 50)
+		for i, name := range got {
+			assert.Equal(t, strconv.Itoa(i), name)
+		}
+	})
+
+	t.Run("a reader failure is returned", func(t *testing.T) {
+		t.Parallel()
+
+		read := readAhead(func(emit chunkProcessor) (columnInfoList, error) {
+			if err := emit(chunk(0)); err != nil {
+				return nil, err
+			}
+			return nil, errStub
+		})
+		_, err := read(func(*tableChunk) error { return nil })
+		require.ErrorIs(t, err, errStub)
+	})
+
+	t.Run("a panic in the reader reaches the caller's goroutine", func(t *testing.T) {
+		t.Parallel()
+
+		read := readAhead(func(emit chunkProcessor) (columnInfoList, error) {
+			if err := emit(chunk(0)); err != nil {
+				return nil, err
+			}
+			panic("reader broke")
+		})
+		assert.PanicsWithValue(t, "reader broke", func() {
+			if _, err := read(func(*tableChunk) error { return nil }); err != nil {
+				t.Errorf("the load returned %v instead of panicking", err)
+			}
+		})
+	})
+
+	t.Run("a failure to take a chunk stops the reader", func(t *testing.T) {
+		t.Parallel()
+
+		failure := errors.New("insert failed")
+		handed := 0
+		var readerErr error
+		read := readAhead(func(emit chunkProcessor) (columnInfoList, error) {
+			for i := range 1000 {
+				if err := emit(chunk(i)); err != nil {
+					readerErr = err
+					return nil, err
+				}
+				handed++
+			}
+			return columns, nil
+		})
+		_, err := read(func(c *tableChunk) error {
+			if c.tableName == "1" {
+				return failure
+			}
+			return nil
+		})
+		require.ErrorIs(t, err, failure)
+		require.ErrorIs(t, readerErr, errReadAheadStopped)
+		assert.Less(t, handed, 1000, "the reader stopped rather than reading to the end")
+	})
+}
+
+// TestLoadTable_BatchedInsertRefusesAWiderRecord holds that a record with more
+// cells than the header is refused whether it falls in a batch or among the
+// rows left over after the last one.
+func TestLoadTable_BatchedInsertRefusesAWiderRecord(t *testing.T) {
+	t.Parallel()
+
+	columns := columnInfoList{{Name: "a", Type: columnTypeText}, {Name: "b", Type: columnTypeText}}
+	batch := insertBatchRows(len(columns))
+	for _, at := range []int{0, batch} {
+		t.Run(fmt.Sprintf("row %d", at), func(t *testing.T) {
+			t.Parallel()
+
+			records := make([]record, batch+1)
+			for r := range records {
+				records[r] = record{"x", "y"}
+			}
+			records[at] = record{"x", "y", "z"}
+			read := func(emit chunkProcessor) (columnInfoList, error) {
+				return columns, emit(&tableChunk{tableName: "t", headers: header{"a", "b"}, records: records, types: columns})
+			}
+			err := newStreamProcessor(1000).loadTable(context.Background(), openTestTx(t), "t", tableSource{read: read, reread: read})
+			require.ErrorIs(t, err, ErrColumnMismatch)
 		})
 	}
 }

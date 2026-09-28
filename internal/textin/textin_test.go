@@ -81,6 +81,35 @@ func TestUTF8ValidatingReaderVerdictIndependentOfChunking(t *testing.T) {
 	}
 }
 
+// TestUTF8ValidatingReaderFindsDesignatorAcrossReads pins the other thing the
+// validator carries between reads: an ISO-2022-JP designator is refused
+// wherever it sits and however the reads split it, and an ESC that starts no
+// designator is data like any other byte.
+func TestUTF8ValidatingReaderFindsDesignatorAcrossReads(t *testing.T) {
+	t.Parallel()
+
+	for _, designator := range iso2022JPDesignators {
+		for at := range 6 {
+			input := append(append([]byte("id,name\n"[:at]), designator...), "日本,x\n"...)
+			for size := 1; size <= len(input)+1; size++ {
+				_, err := io.ReadAll(newUTF8ValidatingReader(&chunkedReader{data: input, size: size}))
+				if !errors.Is(err, ErrEncoding) {
+					t.Errorf("designator %q at %d read %d bytes at a time: err = %v, want ErrEncoding", designator, at, size, err)
+				}
+			}
+		}
+	}
+
+	// ESC followed by bytes that complete no designator, split every way.
+	input := []byte("a\x1b$Xb\x1b(\x1b\n日本\x1b")
+	for size := 1; size <= len(input)+1; size++ {
+		got, err := io.ReadAll(newUTF8ValidatingReader(&chunkedReader{data: input, size: size}))
+		if err != nil || !bytes.Equal(got, input) {
+			t.Errorf("read %d bytes at a time: got %q, %v; want the input back", size, got, err)
+		}
+	}
+}
+
 // chunkedReader hands out at most size bytes per Read, so a test can put a rune
 // boundary wherever it needs one.
 type chunkedReader struct {

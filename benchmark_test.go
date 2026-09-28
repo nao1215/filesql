@@ -39,6 +39,26 @@ func BenchmarkOpen(b *testing.B) {
 	}
 }
 
+// BenchmarkOpenCancelable is BenchmarkOpen under a context that can be
+// canceled, which is what a program that stops on Ctrl-C passes. A context
+// without a Done channel skips the work the driver does to make a statement
+// interruptible, so BenchmarkOpen alone cannot see what that work costs.
+func BenchmarkOpenCancelable(b *testing.B) {
+	csvPath := filepath.Join("testdata", "benchmark", "customers100000.csv")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for b.Loop() {
+		db, err := Open(ctx, csvPath)
+		if err != nil {
+			b.Fatalf("Open failed: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			b.Fatalf("db.Close failed: %v", err)
+		}
+	}
+}
+
 // BenchmarkOpenParallel benchmarks the Open function in parallel.
 // This benchmark tests concurrent performance with multiple goroutines.
 func BenchmarkOpenParallel(b *testing.B) {
@@ -1071,5 +1091,51 @@ func BenchmarkSanitizeTableName(b *testing.B) {
 		for _, n := range names {
 			_ = sanitizeTableName(n)
 		}
+	}
+}
+
+// BenchmarkOpenWidth loads CSV files of the same size in cells but of
+// different widths, since how many rows one insert carries depends on the
+// width.
+func BenchmarkOpenWidth(b *testing.B) {
+	for _, width := range []int{4, 12, 60} {
+		b.Run(fmt.Sprintf("columns=%d", width), func(b *testing.B) {
+			path := filepath.Join(b.TempDir(), "wide.csv")
+			var buf bytes.Buffer
+			for c := range width {
+				if c > 0 {
+					buf.WriteByte(',')
+				}
+				fmt.Fprintf(&buf, "c%d", c)
+			}
+			buf.WriteByte('\n')
+			for r := range 1_200_000 / width {
+				for c := range width {
+					if c > 0 {
+						buf.WriteByte(',')
+					}
+					if c%2 == 0 {
+						buf.WriteString(strconv.Itoa(r + c))
+					} else {
+						fmt.Fprintf(&buf, "name-%d", r)
+					}
+				}
+				buf.WriteByte('\n')
+			}
+			if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+				b.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			for b.Loop() {
+				db, err := Open(ctx, path)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if err := db.Close(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

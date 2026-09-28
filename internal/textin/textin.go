@@ -229,9 +229,10 @@ type utf8ValidatingReader struct {
 	// offset counts the bytes validated so far, so the error can say where the
 	// input stopped being UTF-8.
 	offset int64
-	// escTail holds the last bytes of the previous chunk, so an escape sequence
-	// split across two reads is still recognized.
-	escTail []byte
+	// escTail holds the last escLen bytes of the previous chunk, so an escape
+	// sequence split across two reads is still recognized.
+	escTail [maxDesignator]byte
+	escLen  int
 	// failed is the error that ended this reader. It is returned again for every
 	// later read, because a reader that reported a failure and then carried on
 	// would hand the parser the bytes after the bad ones and let it succeed on a
@@ -293,21 +294,37 @@ func (r *utf8ValidatingReader) Read(p []byte) (int, error) {
 // validate scans one chunk, carrying over a rune encoding that the previous
 // chunk ended in the middle of.
 func (r *utf8ValidatingReader) validate(chunk []byte) error {
-	buf := chunk
-	if len(r.pending) > 0 {
-		buf = append(r.pending, chunk...)
-	}
-
 	// ISO-2022-JP is seven-bit, so it passes the UTF-8 check below and fails much
 	// later as a field count, blaming the caller's data for the encoding.
-	if r.hasEscapeDesignator(buf) {
+	if r.hasEscapeDesignator(chunk) {
 		return fmt.Errorf("%w: input looks like ISO-2022-JP; filesql reads UTF-8, so transcode it first", ErrEncoding)
+	}
+
+	// A rune the previous chunk left open is completed from the start of this
+	// one and checked on its own, so the rest of the chunk is validated where it
+	// lies instead of being copied in behind the carried bytes.
+	if len(r.pending) > 0 {
+		var joint [utf8.UTFMax]byte
+		n := copy(joint[:], r.pending)
+		n += copy(joint[n:], chunk)
+		if !utf8.FullRune(joint[:n]) {
+			r.pending = append(r.pending[:0], joint[:n]...)
+			return nil
+		}
+		char, size := utf8.DecodeRune(joint[:n])
+		if char == utf8.RuneError && size == 1 {
+			return fmt.Errorf("%w: byte 0x%02X at offset %d is not part of a valid character",
+				ErrInvalidUTF8, joint[0], r.offset)
+		}
+		chunk = chunk[size-len(r.pending):]
+		r.offset += int64(size)
+		r.pending = r.pending[:0]
 	}
 
 	// A trailing incomplete rune is not an error yet, so it is held back and the
 	// rest is validated in one pass. utf8.Valid is the fast path; the byte-wise
 	// walk below runs only to say where an invalid sequence starts.
-	head, tail := splitTrailingPartialRune(buf)
+	head, tail := splitTrailingPartialRune(chunk)
 	if utf8.Valid(head) {
 		r.offset += int64(len(head))
 		r.pending = append(r.pending[:0], tail...)
@@ -348,22 +365,32 @@ func splitTrailingPartialRune(buf []byte) (head, tail []byte) {
 
 // hasEscapeDesignator reports whether chunk carries an ISO-2022-JP designator,
 // carrying the trailing bytes so a sequence split across two reads is seen.
+//
+// Every designator starts with ESC, so a chunk without one is passed over with
+// a single byte search, and a sequence split across two reads is looked for in
+// the few bytes on either side of the split rather than by joining the chunks.
 func (r *utf8ValidatingReader) hasEscapeDesignator(chunk []byte) bool {
-	scan := chunk
-	if len(r.escTail) > 0 {
-		scan = append(r.escTail, chunk...)
+	var joint [2 * maxDesignator]byte
+	n := copy(joint[:], r.escTail[:r.escLen])
+	n += copy(joint[n:], chunk[:min(len(chunk), maxDesignator)])
+
+	found := containsDesignator(joint[:n]) ||
+		(bytes.IndexByte(chunk, 0x1b) >= 0 && containsDesignator(chunk))
+
+	if len(chunk) >= maxDesignator {
+		r.escLen = copy(r.escTail[:], chunk[len(chunk)-maxDesignator:])
+	} else {
+		r.escLen = copy(r.escTail[:], joint[max(0, n-maxDesignator):n])
 	}
-	found := false
+	return found
+}
+
+// containsDesignator reports whether b holds an ISO-2022-JP designator.
+func containsDesignator(b []byte) bool {
 	for _, designator := range iso2022JPDesignators {
-		if bytes.Contains(scan, designator) {
-			found = true
-			break
+		if bytes.Contains(b, designator) {
+			return true
 		}
 	}
-	tail := scan
-	if len(tail) > maxDesignator {
-		tail = tail[len(tail)-maxDesignator:]
-	}
-	r.escTail = append(r.escTail[:0], tail...)
-	return found
+	return false
 }

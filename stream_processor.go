@@ -631,10 +631,76 @@ type tableSource struct {
 // input that cannot be read again is staged as text and typed once it has all
 // been read.
 func (sp *streamProcessor) loadTable(ctx context.Context, tx *sql.Tx, tableName string, source tableSource) error {
+	source.read = readAhead(source.read)
+	if source.reread != nil {
+		source.reread = readAhead(source.reread)
+	}
 	if source.reread == nil {
 		return sp.loadStaged(ctx, tx, tableName, source.read)
 	}
 	return sp.loadTyped(ctx, tx, tableName, source)
+}
+
+// errReadAheadStopped is what a read ahead returns to its reader once the
+// chunks it hands over have stopped being taken.
+var errReadAheadStopped = errors.New("filesql: read ahead stopped")
+
+// readAhead returns read with the reading moved onto a goroutine of its own, so
+// the next chunk is parsed while the one before it is being inserted. emit
+// still runs on the caller's goroutine, one chunk at a time and in the order
+// they were read, so everything it does with the transaction happens where it
+// did before. At most one chunk waits between the two, so a load holds at most
+// three: the one being inserted, the one waiting, and the one being read.
+//
+// When emit fails, the reader is stopped at its next chunk and emit's error is
+// returned; otherwise the reader's result is. A panic in the reader is raised
+// again on the caller's goroutine.
+func readAhead(read func(emit chunkProcessor) (columnInfoList, error)) func(emit chunkProcessor) (columnInfoList, error) {
+	return func(emit chunkProcessor) (columnInfoList, error) {
+		chunks := make(chan *tableChunk, 1)
+		stop := make(chan struct{})
+		var (
+			columns  columnInfoList
+			readErr  error
+			panicked any
+		)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			defer close(chunks)
+			// A panic in a reader used to reach the caller's goroutine, where
+			// the caller could recover it. Here it would end the process, so it
+			// is carried back and raised again there.
+			defer func() { panicked = recover() }()
+			columns, readErr = read(func(chunk *tableChunk) error {
+				select {
+				case chunks <- chunk:
+					return nil
+				case <-stop:
+					return errReadAheadStopped
+				}
+			})
+		}()
+
+		var emitErr error
+		for chunk := range chunks {
+			if emitErr != nil {
+				continue
+			}
+			if err := emit(chunk); err != nil {
+				emitErr = err
+				close(stop)
+			}
+		}
+		<-done
+		if panicked != nil {
+			panic(panicked)
+		}
+		if emitErr != nil {
+			return nil, emitErr
+		}
+		return columns, readErr
+	}
 }
 
 // tableWriter inserts the chunks of one table into a table of a given name.
@@ -650,10 +716,14 @@ type tableWriter struct {
 	// nothing the caller could look for. Empty means the two are the same.
 	reportName string
 	// types are the columns the table was created with, nil until it was.
-	types  columnInfoList
-	stmt   *sql.Stmt
-	chunks int
-	rows   int
+	types columnInfoList
+	// stmt inserts one row and batch inserts batchRows rows at once; batch is
+	// nil when a row is too wide for more than one to fit in a statement.
+	stmt      *sql.Stmt
+	batch     *sql.Stmt
+	batchRows int
+	chunks    int
+	rows      int
 }
 
 // reported is the table name a failure of this writer names.
@@ -670,12 +740,20 @@ func (w *tableWriter) create(ctx context.Context, headers header, types columnIn
 	if err := createTable(ctx, w.tx, w.tableName, types); err != nil {
 		return fmt.Errorf("%w: failed to create table %s: %w", ErrDatabaseOperation, quoteIdentifier(w.reported()), err)
 	}
-	stmt, err := w.tx.PrepareContext(ctx, insertQuery(w.tableName, len(headers))) //nolint:sqlclosecheck // Closed by close once the load has ended.
+	stmt, err := w.tx.PrepareContext(ctx, insertQuery(w.tableName, len(headers), 1)) //nolint:sqlclosecheck // Closed by close once the load has ended.
 	if err != nil {
 		return fmt.Errorf("%w: failed to prepare insert statement for table %s: %w", ErrDatabaseOperation, quoteIdentifier(w.reported()), err)
 	}
 	w.types = types
 	w.stmt = stmt
+	w.batchRows = insertBatchRows(len(headers))
+	if w.batchRows > 1 {
+		batch, err := w.tx.PrepareContext(ctx, insertQuery(w.tableName, len(headers), w.batchRows)) //nolint:sqlclosecheck // Closed by close once the load has ended.
+		if err != nil {
+			return fmt.Errorf("%w: failed to prepare insert statement for table %s: %w", ErrDatabaseOperation, quoteIdentifier(w.reported()), err)
+		}
+		w.batch = batch
+	}
 	return nil
 }
 
@@ -684,7 +762,7 @@ func (w *tableWriter) insert(ctx context.Context, chunk *tableChunk) error {
 	w.chunks++
 	w.rows += len(chunk.getRecords())
 	w.sp.logger.Debug("inserting chunk", logKeyTable, w.tableName, "chunk", w.chunks, "rows", len(chunk.getRecords()))
-	if err := w.sp.insertChunkData(ctx, w.stmt, chunk, w.types); err != nil {
+	if err := w.insertChunkData(ctx, chunk); err != nil {
 		return fmt.Errorf("%w: failed to insert chunk data into table %s: %w", ErrDatabaseOperation, quoteIdentifier(w.reported()), err)
 	}
 	return nil
@@ -694,6 +772,10 @@ func (w *tableWriter) insert(ctx context.Context, chunk *tableChunk) error {
 // than dropped: a statement that cannot be closed holds a connection, which
 // shows up later as an unrelated hang rather than as this load's problem.
 func (w *tableWriter) close(err error) error {
+	if w.batch != nil {
+		err = joinCleanup(err, w.batch.Close(), "close insert statement")
+		w.batch = nil
+	}
 	if w.stmt == nil {
 		return err
 	}
@@ -915,18 +997,41 @@ func createTable(ctx context.Context, db dbtx, tableName string, columns columnI
 	return err
 }
 
-// insertQuery is the INSERT for a table of the given width.
-func insertQuery(tableName string, width int) string {
+// insertQuery is the INSERT of rows rows into a table of the given width.
+func insertQuery(tableName string, width, rows int) string {
 	placeholders := make([]string, width)
 	for i := range placeholders {
 		placeholders[i] = "?"
 	}
-	return fmt.Sprintf(`INSERT INTO %s VALUES (%s)`, quoteIdentifier(tableName), strings.Join(placeholders, ", "))
+	row := "(" + strings.Join(placeholders, ", ") + ")"
+	tuples := make([]string, rows)
+	for i := range tuples {
+		tuples[i] = row
+	}
+	return fmt.Sprintf(`INSERT INTO %s VALUES %s`, quoteIdentifier(tableName), strings.Join(tuples, ", "))
 }
 
-// insertChunkData inserts a chunk's worth of rows through a prepared statement.
-// One values slice is reused across rows to keep allocations down.
-func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, chunk *tableChunk, types columnInfoList) error {
+// insertBatchParams is about how many values one multi-row INSERT binds.
+//
+// A statement's fixed cost -- database/sql, the driver's context watch, the
+// reset -- is paid once per statement, so carrying several rows in one pays it
+// once for all of them. The driver matches each parameter to its argument by a
+// linear search, though, so the cost per value grows with the count, and past
+// about a hundred values a statement gets slower again. 64 is in the flat
+// part of that curve for tables of 4 to 60 columns.
+const insertBatchParams = 64
+
+// insertBatchRows is how many rows of the given width one INSERT carries.
+func insertBatchRows(width int) int {
+	if width <= 0 {
+		return 1
+	}
+	return max(1, insertBatchParams/width)
+}
+
+// insertChunkData inserts a chunk's worth of rows, batchRows at a time and the
+// rest one at a time. One values slice is reused across statements.
+func (w *tableWriter) insertChunkData(ctx context.Context, chunk *tableChunk) error {
 	records := chunk.getRecords()
 	if len(records) == 0 {
 		return nil
@@ -934,35 +1039,53 @@ func (sp *streamProcessor) insertChunkData(ctx context.Context, stmt *sql.Stmt, 
 
 	// The header is the authoritative width.
 	colCount := len(chunk.getHeaders())
-	values := make([]any, colCount)
 	nulls := chunk.getNulls()
+	values := make([]any, colCount*max(1, w.batchRows))
 
-	for rowIdx, record := range records {
+	fill := func(dst []any, rowIdx int) error {
+		record := records[rowIdx]
 		// A record wider than the header would lose cells silently.
 		if len(record) > colCount {
 			return fmt.Errorf("%w: record has more columns (%d) than headers (%d)", ErrColumnMismatch, len(record), colCount)
 		}
-
-		// A record shorter than the header is missing its last cells, which are
-		// NULL.
+		// A record shorter than the header is missing its last cells, which
+		// are NULL.
 		for i := range colCount {
 			switch {
 			case nulls != nil && rowIdx < len(nulls) && i < len(nulls[rowIdx]) && nulls[rowIdx][i]:
-				values[i] = nil // a source NULL (e.g. a Parquet null) inserts as SQL NULL
+				dst[i] = nil // a source NULL (e.g. a Parquet null) inserts as SQL NULL
 			case i < len(record):
-				values[i] = cellValue(record[i], types, i)
+				dst[i] = cellValue(record[i], w.types, i)
 			default:
-				values[i] = nil
+				dst[i] = nil
 			}
 		}
+		return nil
+	}
 
-		if _, err := stmt.ExecContext(ctx, values...); err != nil {
-			// The caller names the sentinel and the table; naming it here too
-			// announced the package twice about one failed insert.
+	rowIdx := 0
+	if w.batch != nil {
+		for ; rowIdx+w.batchRows <= len(records); rowIdx += w.batchRows {
+			for r := range w.batchRows {
+				if err := fill(values[r*colCount:(r+1)*colCount], rowIdx+r); err != nil {
+					return err
+				}
+			}
+			if _, err := w.batch.ExecContext(ctx, values...); err != nil {
+				// The caller names the sentinel and the table; naming it here
+				// too announced the package twice about one failed insert.
+				return fmt.Errorf("failed to insert record: %w", err)
+			}
+		}
+	}
+	for ; rowIdx < len(records); rowIdx++ {
+		if err := fill(values[:colCount], rowIdx); err != nil {
+			return err
+		}
+		if _, err := w.stmt.ExecContext(ctx, values[:colCount]...); err != nil {
 			return fmt.Errorf("failed to insert record: %w", err)
 		}
 	}
-
 	return nil
 }
 
