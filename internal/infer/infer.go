@@ -472,6 +472,31 @@ const (
 	maxDatetimeLength = 35
 )
 
+// hasDatetimeLead reports whether value opens the way one of the layouts does:
+// a run of four digits and then '-' or '/', or a run of one or two digits and
+// then '/', '.' or ':'. It admits every value a layout accepts and turns away
+// most of the rest -- a number, a code, a name -- before any regular
+// expression runs, which is where the typing of a column spent its time.
+func hasDatetimeLead(value string) bool {
+	digits := 0
+	for digits < len(value) && value[digits] >= '0' && value[digits] <= '9' {
+		digits++
+	}
+	if digits == len(value) {
+		return false
+	}
+	switch value[digits] {
+	case '-':
+		return digits == 4
+	case '/':
+		return digits == 4 || digits == 1 || digits == 2
+	case '.', ':':
+		return digits == 1 || digits == 2
+	default:
+		return false
+	}
+}
+
 // IsDatetime reports whether value is written in one of the recognized date
 // and time layouts.
 func IsDatetime(value string) bool {
@@ -479,21 +504,7 @@ func IsDatetime(value string) bool {
 	if len(value) < minDatetimeLength || len(value) > maxDatetimeLength {
 		return false
 	}
-	// A datetime has at least one digit and one separator, which rules out most
-	// values before a regular expression runs.
-	hasDigit := false
-	hasSeparator := false
-	for _, r := range value {
-		if r >= '0' && r <= '9' {
-			hasDigit = true
-		} else if r == '-' || r == '/' || r == '.' || r == ':' || r == 'T' || r == ' ' {
-			hasSeparator = true
-		}
-		if hasDigit && hasSeparator {
-			break
-		}
-	}
-	if !hasDigit || !hasSeparator {
+	if !hasDatetimeLead(value) {
 		return false
 	}
 	for _, dp := range datetimePatterns {

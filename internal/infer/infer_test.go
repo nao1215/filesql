@@ -1,7 +1,9 @@
 package infer
 
 import (
+	"math/rand"
 	"testing"
+	"testing/quick"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -108,6 +110,46 @@ func TestIsDatetime(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.want, IsDatetime(tt.input))
 		})
+	}
+}
+
+// TestHasDatetimeLeadAdmitsEveryLayout holds that the quick check in front of
+// the layouts turns away only values no layout accepts: for strings built from
+// the characters the layouts are made of, a value any pattern matches always
+// passes the check.
+func TestHasDatetimeLeadAdmitsEveryLayout(t *testing.T) {
+	t.Parallel()
+
+	property := func(seed []byte) bool {
+		const alphabet = "0123456789-/.: TZ+APM"
+		value := make([]byte, len(seed)%36)
+		for i := range value {
+			value[i] = alphabet[int(seed[i%max(1, len(seed))]+byte(i*7))%len(alphabet)]
+		}
+		for _, dp := range datetimePatterns {
+			if dp.pattern.Match(value) && !hasDatetimeLead(string(value)) {
+				t.Logf("%q matches %s but was turned away", value, dp.pattern)
+				return false
+			}
+		}
+		return true
+	}
+	if err := quick.Check(property, &quick.Config{MaxCount: 20000, Rand: rand.New(rand.NewSource(1))}); err != nil { //nolint:gosec // deterministic input generation
+		t.Error(err)
+	}
+
+	// One example of every pattern, since random strings rarely reach the
+	// longer ones.
+	for _, value := range []string{
+		"2024-01-15T10:30:00+09:00", "2024-01-15T10:30:00.5", "2024-01-15 10:30:00", "2024-01-15",
+		"2024/01/15 10:30:00", "2024/01/15", "1/2/2006 3:04:05 PM", "12/31/2024",
+		"2.1.2006 15:04:05", "02.01.2006", "15:04:05.000", "3:04",
+	} {
+		assert.True(t, hasDatetimeLead(value), value)
+		assert.True(t, IsDatetime(value), value)
+	}
+	for _, value := range []string{"123.50", "name-5", "00012345", "-1", "1e10", "20240115"} {
+		assert.False(t, hasDatetimeLead(value), value)
 	}
 }
 
