@@ -649,8 +649,8 @@ var errReadAheadStopped = errors.New("filesql: read ahead stopped")
 // the next chunk is parsed while the one before it is being inserted. emit
 // still runs on the caller's goroutine, one chunk at a time and in the order
 // they were read, so everything it does with the transaction happens where it
-// did before. At most one chunk waits between the two, which bounds what the
-// read ahead holds in memory to two chunks.
+// did before. At most one chunk waits between the two, so a load holds at most
+// three: the one being inserted, the one waiting, and the one being read.
 //
 // When emit fails, the reader is stopped at its next chunk and emit's error is
 // returned; otherwise the reader's result is. A panic in the reader is raised
