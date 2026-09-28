@@ -7,6 +7,12 @@ name: govulncheck
 # dependency — or a standard library — that has grown a known advisory since the
 # last time anybody looked, which is exactly the thing nobody looks for on their
 # own.
+#
+# The database changes every day, so a scan that passed at merge time can fail
+# tomorrow without a line of this module changing. The pull_request/push legs
+# catch a newly added dependency; the daily schedule catches a newly published
+# advisory against the dependencies already in go.sum, which would otherwise
+# go unnoticed until the next pull request happened to run the scan.
 
 on:
   workflow_dispatch:
@@ -14,6 +20,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: "0 4 * * *"
 
 permissions:
   contents: read
@@ -43,12 +51,13 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go }}
+          check-latest: true
 
       # Pinned rather than @latest: a scanner that changes under the project
       # turns an unrelated pull request red for a reason nobody in it can act
       # on, and a pinned version makes the run reproducible from the commit.
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
       # ACCEPTED lists the advisories this module is known to reach and has
       # defended against on its own side, and nothing else. GO-2026-6452 is a
@@ -69,7 +78,7 @@ jobs:
             "$RUNNER_TEMP/govulncheck.json" | sort -u > "$RUNNER_TEMP/called.txt"
           echo "Advisories this module reaches:"
           cat "$RUNNER_TEMP/called.txt"
-          tr ' ' '\n' <<< "$ACCEPTED" > "$RUNNER_TEMP/accepted.txt"
+          tr ' ' '\n' <<< "$ACCEPTED" | sed '/^$/d' > "$RUNNER_TEMP/accepted.txt"
           if grep -vxF -f "$RUNNER_TEMP/accepted.txt" "$RUNNER_TEMP/called.txt"; then
             echo "::error::govulncheck found an advisory that is not in ACCEPTED"
             govulncheck ./...
