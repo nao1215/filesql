@@ -7,14 +7,11 @@ on:
   pull_request:
     branches: [main]
 
-# Spelled out rather than left to the repository default, and not cut down to
-# contents: read either: octocov comments the coverage report onto the pull
-# request and keeps its baseline in an Actions artifact, so those are the two
-# writes this job genuinely needs and the only ones it gets.
+# Read-only by default. The two writes octocov genuinely needs (commenting the
+# coverage report onto the pull request and keeping its baseline in an Actions
+# artifact) are granted on the job that runs it, not to the whole workflow.
 permissions:
   contents: read
-  pull-requests: write
-  actions: write
 
 jobs:
   unit_test:
@@ -26,15 +23,19 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: write
 
     steps:
       # The module's own tests run in this job, so the checkout leaves no
       # credential in .git/config for them to reach.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # Pinned rather than floating on "1": the baseline this module
           # states is Go 1.26.6, the 1.26 release carrying the standard
@@ -44,4 +45,4 @@ jobs:
       - name: Run tests with coverage report output
         run: go test -cover -coverpkg=./... -coverprofile=coverage.out ./...
 
-      - uses: k1LoW/octocov-action@v1
+      - uses: k1LoW/octocov-action@a167dc0dee441b7ffc45e1b862ab55ec0d87f278 # v1.5.2

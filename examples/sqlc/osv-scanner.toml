@@ -1,0 +1,3 @@
+[[IgnoredVulns]]
+id = "GO-2026-5932"
+reason = "golang.org/x/crypto/openpgp is not imported (checked with go list -deps); the advisory covers every x/crypto version at module level."
