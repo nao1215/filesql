@@ -4,7 +4,7 @@ go 1.26.6
 
 require (
 	github.com/jmoiron/sqlx v1.4.0
-	github.com/nao1215/filesql v0.59.0
+	github.com/nao1215/filesql v0.59.2
 )
 
 require (
@@ -14,7 +14,7 @@ require (
 	github.com/igrmk/treemap/v2 v2.0.1 // indirect
 	github.com/klauspost/compress v1.20.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
-	github.com/moov-io/ach v1.63.5 // indirect
+	github.com/moov-io/ach v1.63.6 // indirect
 	github.com/moov-io/base v0.63.3 // indirect
 	github.com/moov-io/iso3166 v0.4.0 // indirect
 	github.com/moov-io/iso4217 v0.4.0 // indirect
