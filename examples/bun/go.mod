@@ -1,9 +1,9 @@
 module github.com/nao1215/filesql/examples/bun
 
-go 1.26.6
+go 1.26.9
 
 require (
-	github.com/nao1215/filesql v0.59.0
+	github.com/nao1215/filesql v0.59.2
 	github.com/uptrace/bun v1.2.18
 	github.com/uptrace/bun/dialect/sqlitedialect v1.2.18
 )
@@ -16,7 +16,7 @@ require (
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/klauspost/compress v1.20.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
-	github.com/moov-io/ach v1.63.5 // indirect
+	github.com/moov-io/ach v1.63.6 // indirect
 	github.com/moov-io/base v0.63.3 // indirect
 	github.com/moov-io/iso3166 v0.4.0 // indirect
 	github.com/moov-io/iso4217 v0.4.0 // indirect

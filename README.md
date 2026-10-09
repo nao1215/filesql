@@ -80,14 +80,16 @@ go get github.com/nao1215/filesql
 
 Requirements:
 
-- Go 1.26.6 or later
+- Go 1.26.9 or later
 - Linux, macOS, or Windows
 
-The patch release is the point: 1.26.6 is the one carrying the
-standard library fixes for [GO-2026-6088](https://pkg.go.dev/vuln/GO-2026-6088)
-(`encoding/xml`) and [GO-2026-5972](https://pkg.go.dev/vuln/GO-2026-5972)
-(`encoding/asn1`), and filesql reaches `encoding/xml` on every XLSX it reads. An
-earlier 1.26 is not supported.
+The patch release is the point: 1.26.6 carries the standard library fixes for
+[GO-2026-6088](https://pkg.go.dev/vuln/GO-2026-6088) (`encoding/xml`) and
+[GO-2026-5972](https://pkg.go.dev/vuln/GO-2026-5972) (`encoding/asn1`), and
+filesql reaches `encoding/xml` on every XLSX it reads. 1.26.9 adds the fixes for
+the `net/http` advisories GO-2026-6603, GO-2026-6611, GO-2026-6612, GO-2026-6613
+and GO-2026-6617, which `govulncheck` finds reachable from filesql.
+An earlier 1.26 is not supported.
 
 ## Recipes
 
