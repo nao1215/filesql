@@ -23,11 +23,12 @@ cd filesql
 make tools
 ```
 
-filesql requires Go 1.26.6 or later, not 1.26.0: 1.26.6 is the patch release
-where the standard library fixes for
+filesql requires Go 1.26.9 or later, not 1.26.0: the standard library fixes for
 [GO-2026-6088](https://pkg.go.dev/vuln/GO-2026-6088) (`encoding/xml`) and
-[GO-2026-5972](https://pkg.go.dev/vuln/GO-2026-5972) (`encoding/asn1`) landed,
-and the vulnerability scan pins exactly that release. The unit-test matrix runs the newest release alongside it, so that a Go changing behavior this module depends on is noticed here rather than by a user.
+[GO-2026-5972](https://pkg.go.dev/vuln/GO-2026-5972) (`encoding/asn1`) landed in
+1.26.6, and those for the reachable `net/http` advisories GO-2026-6603 and
+GO-2026-6611 to GO-2026-6617 in 1.26.9, and the vulnerability scan pins exactly
+that release. The unit-test matrix runs the newest release alongside it, so that a Go changing behavior this module depends on is noticed here rather than by a user.
 
 `govulncheck` runs on every pull request and on `main`. To run it yourself:
 

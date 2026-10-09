@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- filesql now requires Go 1.26.9 or later (was 1.26.6). Go 1.26.9 fixes the `net/http` advisories GO-2026-6603, GO-2026-6611, GO-2026-6612, GO-2026-6613 and GO-2026-6617, which govulncheck finds reachable from this module; 1.26.6 still carries them. The eight example modules move to the same floor and to filesql v0.59.2. Dependencies: modernc.org/sqlite v1.60.1, moov-io/ach v1.64.0, klauspost/compress v1.20.1, pierrec/lz4 v4.1.33, golang.org/x/net v0.60.0.
+
 ## [0.59.2] - 2026-09-28
 
 ### Changed
