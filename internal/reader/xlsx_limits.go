@@ -23,10 +23,16 @@ func workbookArchive(data []byte) (*zip.Reader, error) {
 		return nil, err
 	}
 	var total uint64
+	seen := make(map[string]bool, len(archive.File))
 	// Match Excelize's default limit, but compare in unsigned space before
 	// reading any XML or allowing a size to wrap through an int64 conversion.
 	const unzipLimit = 1000 << 24
 	for _, file := range archive.File {
+		name := normalizePartName(file.Name)
+		if seen[name] {
+			return nil, fmt.Errorf("duplicate XLSX package part %q", name)
+		}
+		seen[name] = true
 		if file.UncompressedSize64 > unzipLimit-total {
 			return nil, errors.New("XLSX uncompressed size exceeds the supported range")
 		}
@@ -34,7 +40,7 @@ func workbookArchive(data []byte) (*zip.Reader, error) {
 	}
 	for _, file := range archive.File {
 		// Excelize v2.11.0 reads styles from this fixed package path.
-		if file.Name == "xl/styles.xml" {
+		if normalizePartName(file.Name) == "xl/styles.xml" {
 			if err := checkXMLAttributes(file, checkStyleIndices); err != nil {
 				return nil, err
 			}

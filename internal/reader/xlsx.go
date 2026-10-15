@@ -190,7 +190,7 @@ func sharedStringIndex(value []byte) (int, bool) {
 // relationships say.
 func sharedStringCount(archive *zip.Reader) int {
 	for _, file := range archive.File {
-		if !strings.EqualFold(file.Name, "xl/sharedStrings.xml") {
+		if !strings.EqualFold(normalizePartName(file.Name), "xl/sharedStrings.xml") {
 			continue
 		}
 		body, err := file.Open()

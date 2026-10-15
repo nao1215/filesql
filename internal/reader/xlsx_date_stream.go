@@ -464,7 +464,7 @@ func sheetPart(archive *zip.Reader, sheet string) (*zip.File, bool) {
 	}
 	name := resolvePart(path.Dir(workbook), target)
 	for _, file := range archive.File {
-		if file.Name == name {
+		if normalizePartName(file.Name) == normalizePartName(name) {
 			return file, true
 		}
 	}
@@ -508,9 +508,15 @@ func relsPartOf(part string) string {
 	return dir + "_rels/" + base + ".rels"
 }
 
+// normalizePartName matches Excelize's ZIP entry path handling.
+func normalizePartName(name string) string {
+	return strings.ReplaceAll(name, "\\", "/")
+}
+
 // resolvePart resolves a relationship target against the directory of the part
 // that names it. A target beginning with a slash is written from the root.
 func resolvePart(dir, target string) string {
+	target = normalizePartName(target)
 	if strings.HasPrefix(target, "/") {
 		return path.Clean(strings.TrimPrefix(target, "/"))
 	}
@@ -571,7 +577,7 @@ func relationshipTarget(archive *zip.Reader, part, relID string) (string, bool) 
 // workbook's own bookkeeping, which is small; the sheet is streamed instead.
 func partOf(archive *zip.Reader, name string) ([]byte, bool) {
 	for _, file := range archive.File {
-		if file.Name != name {
+		if normalizePartName(file.Name) != normalizePartName(name) {
 			continue
 		}
 		body, err := file.Open()
