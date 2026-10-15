@@ -39,6 +39,9 @@ func OpenWorkbook(src io.Reader) (*Workbook, error) {
 	if len(data) == 0 {
 		return nil, emptyError("empty XLSX file")
 	}
+	if _, err := workbookArchive(data); err != nil {
+		return nil, parseError(err, "failed to open XLSX file")
+	}
 	file, err := excelize.OpenReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, parseError(err, "failed to open XLSX file")
@@ -56,6 +59,9 @@ func OpenWorkbook(src io.Reader) (*Workbook, error) {
 // input anyone can hand over, and a malformed one is a file to refuse, not a
 // reason for the program reading it to stop.
 func (w *Workbook) Rows(name string) (rows [][]string, err error) {
+	if err := checkSheetRowLimits(w.data, name); err != nil {
+		return nil, parseError(err, "failed to read sheet %s", name)
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			rows, err = nil, parseError(fmt.Errorf("%v", r), "failed to read sheet %s", name)

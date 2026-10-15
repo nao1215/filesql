@@ -94,7 +94,7 @@ func scanSheetValues(src io.Reader, styles numberFormatStyles, date1904 bool, in
 			continue
 		}
 		switch start.Name.Local {
-		case "row":
+		case worksheetRowElement:
 			// A row carries its number, and rows without one follow the row
 			// before, which is what a writer that omits them means.
 			if n, found := attrInt(start.Attr, "r"); found {
@@ -310,7 +310,7 @@ func scanRowWindow(window []byte, row *int, inComment *bool, into *rowSet, more 
 		tag = tag[:end]
 		name, attrs := startTag(tag)
 		switch string(name) {
-		case "row":
+		case worksheetRowElement:
 			// A row carries its number, and one without follows the row before,
 			// which is what a writer that omits them means.
 			if n, ok := rowNumberAttr(attrs); ok {
