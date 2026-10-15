@@ -1,0 +1,41 @@
+name: licenses
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  licenses:
+    name: licenses (${{ matrix.goos }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, windows, darwin]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+      - name: Install go-licenses
+        run: go install github.com/google/go-licenses/v2@v2.0.1
+      # Inspect the library's runtime dependencies on every supported desktop
+      # platform; test-only dependencies are not part of the shipped library.
+      - name: Check dependency licenses
+        env:
+          GOOS: ${{ matrix.goos }}
+          CGO_ENABLED: "0"
+        run: |
+          GOROOT="$(go env GOROOT)"
+          export GOROOT
+          go-licenses check --disallowed_types=forbidden,restricted,unknown ./...
