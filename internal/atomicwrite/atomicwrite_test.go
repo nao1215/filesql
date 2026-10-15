@@ -669,8 +669,7 @@ func TestCommitByCopy_ReplacesTheDestination(t *testing.T) {
 // TestCommitByCopy_KeepsTheDestinationWhenTheCopyFails pins what stands in for
 // the atomicity a plain rename gives. The copy truncates the destination before
 // it can fail, so the backup taken first is what puts the original bytes back —
-// best effort, since that restore is itself a copy, which is why the copy error
-// stays the one reported.
+// restoring it can fail too, in which case both failures must be reported.
 func TestCommitByCopy_KeepsTheDestinationWhenTheCopyFails(t *testing.T) {
 	t.Parallel()
 
@@ -781,4 +780,48 @@ func assertNoBackupLeft(t *testing.T, dir string) {
 	for _, e := range entries {
 		assert.NotContains(t, e.Name(), ".bak", "the backup must not be left behind: %s", e.Name())
 	}
+}
+
+func TestStagePreservesWriteAndCloseErrors(t *testing.T) {
+	t.Parallel()
+	dest := filepath.Join(t.TempDir(), "data.csv")
+	writeErr := errors.New("write failed")
+	_, err := Stage(dest, func(w io.Writer) error {
+		file, ok := w.(*os.File)
+		require.True(t, ok)
+		require.NoError(t, file.Close())
+		return writeErr
+	}, Options{})
+	require.ErrorIs(t, err, writeErr)
+	require.ErrorIs(t, err, os.ErrClosed)
+	entries, err := os.ReadDir(filepath.Dir(dest))
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
+func TestCommitByCopyKeepsBackupWhenRestoreFails(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "dest.csv")
+	staged := filepath.Join(dir, "staged")
+	require.NoError(t, os.WriteFile(dest, []byte("precious"), 0o600))
+	require.NoError(t, os.WriteFile(staged, []byte("replacement"), 0o600))
+	require.NoError(t, os.Chmod(dest, 0o400))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(dest, 0o600)) })
+	probe, err := os.OpenFile(dest, os.O_WRONLY, 0) //nolint:gosec // Test path from t.TempDir().
+	if err == nil {
+		require.NoError(t, probe.Close())
+		t.Skip("filesystem permissions do not prevent this process from writing")
+	}
+	require.ErrorIs(t, err, os.ErrPermission)
+	err = commitByCopy(staged, dest)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to restore")
+	backups, globErr := filepath.Glob(filepath.Join(dir, ".dest.csv.bak*"))
+	require.NoError(t, globErr)
+	require.Len(t, backups, 1)
+	require.Contains(t, err.Error(), backups[0])
+	original, readErr := os.ReadFile(backups[0])
+	require.NoError(t, readErr)
+	require.Equal(t, "precious", string(original))
 }
