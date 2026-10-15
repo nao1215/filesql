@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Reject XLSX archives with overflowing declared sizes, worksheet rows past Excel's limit, and negative style indices before passing them to Excelize. These malformed files could panic during opening or style lookup, or keep row iteration busy far beyond the sheet's supported size. Non-ZIP inputs are rejected before reaching the encrypted-workbook parser; encrypted workbooks remain unsupported.
+
 ### Changed
 
 - Update klauspost/compress to v1.20.3, modernc.org/libc to v1.78.0, and golang.org/x/crypto v0.58.0, x/exp v0.0.0-20261014143641-f0251eb4aa3e, x/net v0.61.0, x/sync v0.24.0, x/sys v0.49.0, and x/text v0.43.0. The Bun example now uses Bun v1.3.0. The Go minimum remains 1.26.9.
