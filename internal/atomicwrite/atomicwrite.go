@@ -125,7 +125,9 @@ func Stage(dest string, write func(io.Writer) error, opt Options) (_ *Staged, er
 	}()
 
 	if err := write(tmp); err != nil {
-		_ = tmp.Close() // The write error is the one to report
+		if closeErr := tmp.Close(); closeErr != nil {
+			return nil, errors.Join(err, opt.failIO("failed to close the staged file for "+dest, closeErr))
+		}
 		return nil, err
 	}
 	if err := tmp.Close(); err != nil {
@@ -276,21 +278,25 @@ func commitStagedFile(staged, dest string) error {
 // This is not atomic — a reader watching during the copy can see a partial file
 // — and the copy truncates dest before it can fail, so the backup is what stands
 // between a refused write and the caller's data. Putting it back is itself a
-// copy and can fail in turn, which is why the write error is the one reported:
-// it is the failure the caller can act on.
-func commitByCopy(staged, dest string) error {
+// copy and can fail in turn. Report both failures and keep the backup when the
+// original contents could not be restored.
+func commitByCopy(staged, dest string) (err error) {
 	backup, err := copyToBackup(dest)
 	if err != nil {
 		return err
 	}
+	keepBackup := false
 	defer func() {
-		_ = os.Remove(backup) //nolint:errcheck // Best-effort cleanup of this package's own temporary file
+		if !keepBackup {
+			err = errors.Join(err, os.Remove(backup))
+		}
 	}()
 
 	if copyErr := copyOnto(staged, dest); copyErr != nil {
-		// Put back what was there. The restore is best effort: if it fails too, the
-		// write error is still the one worth reporting.
-		_ = copyOnto(backup, dest) //nolint:errcheck // Best-effort restore; copyErr is the failure to report
+		if restoreErr := copyOnto(backup, dest); restoreErr != nil {
+			keepBackup = true
+			return errors.Join(copyErr, fmt.Errorf("failed to restore %s; original contents remain at %s: %w", dest, backup, restoreErr))
+		}
 		return copyErr
 	}
 	return nil
@@ -304,31 +310,28 @@ func copyToBackup(path string) (string, error) {
 	}
 	name := backup.Name()
 	if err := backup.Close(); err != nil {
-		_ = os.Remove(name) //nolint:errcheck // Best-effort cleanup of this package's own temporary file
-		return "", err
+		return "", errors.Join(err, os.Remove(name))
 	}
 	if err := copyOnto(path, name); err != nil {
-		_ = os.Remove(name) //nolint:errcheck // Best-effort cleanup of this package's own temporary file
-		return "", err
+		return "", errors.Join(err, os.Remove(name))
 	}
 	return name, nil
 }
 
 // copyOnto replaces dest's contents with src's, truncating whatever was there.
-func copyOnto(src, dest string) error {
+func copyOnto(src, dest string) (err error) {
 	in, err := os.Open(src) //nolint:gosec // src is a file this package created or was given as the output
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { err = errors.Join(err, in.Close()) }()
 
 	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, DefaultFileMode) //nolint:gosec // dest is the caller's chosen output
 	if err != nil {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		return err
+		return errors.Join(err, out.Close())
 	}
 	return out.Close()
 }
