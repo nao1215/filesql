@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.60.0] - 2026-10-21
+
 ### Fixed
 
 - Preserve write and cleanup failures during staged writes. If the copy fallback cannot restore the destination, retain the original backup and report its path instead of deleting it.
@@ -2456,6 +2458,7 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
+[0.60.0]: https://github.com/nao1215/filesql/compare/v0.59.2...v0.60.0
 [0.59.2]: https://github.com/nao1215/filesql/compare/v0.59.1...v0.59.2
 [0.59.1]: https://github.com/nao1215/filesql/compare/v0.59.0...v0.59.1
 [0.59.0]: https://github.com/nao1215/filesql/compare/v0.58.0...v0.59.0

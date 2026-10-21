@@ -28,8 +28,8 @@ Security fixes are provided for the latest published release series only.
 
 | Version | Supported | Notes |
 |---------|-----------|-------|
-| `0.59.x` | Yes | Current published release series as of September 21, 2026 |
-| `0.58.x` and earlier | No | Upgrade to the latest `0.59.x` release |
+| `0.60.x` | Yes | Current published release series as of October 21, 2026 |
+| `0.59.x` and earlier | No | Upgrade to the latest `0.60.x` release |
 
 Security fixes are not backported to unsupported release series. When the next
 series is published, support moves to it.
