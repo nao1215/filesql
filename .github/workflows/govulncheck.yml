@@ -59,11 +59,37 @@ jobs:
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
 
-      # The database now lists excelize v2.11.0 as the fixed version for
-      # GO-2026-6452, so no advisory needs an exception. Keep the workbook
-      # panic guard and its regression test for the spilled-string path.
+      # ACCEPTED lists advisories this module reaches and defends against on
+      # its own side. Each is fixed upstream only in commits after excelize
+      # v2.11.0, the latest tag, so no released version clears them. Remove an
+      # ID once a tagged excelize carries its fix.
+      #   GO-2026-6684, GO-2026-6689: OLE/CFB (encrypted workbook) parsing.
+      #     OpenWorkbook refuses anything that is not a ZIP archive before
+      #     calling excelize (TestOpenWorkbookRejectsCompoundFileBeforeExcelize).
+      #   GO-2026-6685: unbounded row numbers in Rows/GetRows. Sheets are
+      #     checked against Excel's row limit before GetRows
+      #     (TestWorkbookRejectsOversizedRowAfterValidRow).
+      #   GO-2026-6688: recursion in calc.go's array formulas. The advisory
+      #     names no symbols, so any call is flagged, but filesql reads cached
+      #     cell values and never calls CalcCellValue.
+      # Any other reachable advisory fails the job and prints the text report.
+      # pipefail and the record-count check keep a failed or empty scan from
+      # reading as "nothing found".
       - name: Scan the module
-        run: govulncheck ./...
+        env:
+          ACCEPTED: GO-2026-6684 GO-2026-6685 GO-2026-6688 GO-2026-6689
+        run: |
+          set -o pipefail
+          govulncheck -format json ./... > "$RUNNER_TEMP/govulncheck.json"
+          jq -e -s 'length > 0' "$RUNNER_TEMP/govulncheck.json" > /dev/null
+          jq -r 'select(.finding != null and (.finding.trace[0].function // "") != "") | .finding.osv' \
+            "$RUNNER_TEMP/govulncheck.json" | sort -u > "$RUNNER_TEMP/called.txt"
+          tr ' ' '\n' <<< "$ACCEPTED" | sed '/^$/d' > "$RUNNER_TEMP/accepted.txt"
+          if grep -vxF -f "$RUNNER_TEMP/accepted.txt" "$RUNNER_TEMP/called.txt"; then
+            echo "::error::govulncheck found an advisory that is not in ACCEPTED"
+            govulncheck ./...
+            exit 1
+          fi
 
       # The examples are not scanned here. They are separate modules pinned to a
       # released filesql, so their source matches the released API rather than
