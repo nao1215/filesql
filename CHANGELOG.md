@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Update klauspost/compress to v1.20.3, modernc.org/libc to v1.78.0, and golang.org/x/crypto v0.58.0, x/exp v0.0.0-20261014143641-f0251eb4aa3e, x/net v0.61.0, x/sync v0.24.0, x/sys v0.49.0, and x/text v0.43.0. The Bun example now uses Bun v1.3.0. The Go minimum remains 1.26.9.
+- Update klauspost/compress to v1.20.3, modernc.org/libc to v1.79.0, moov-io/ach to v1.65.1, and golang.org/x/crypto v0.58.0, x/exp v0.0.0-20261014143641-f0251eb4aa3e, x/net v0.61.0, x/sync v0.24.0, x/sys v0.49.0, and x/text v0.43.0. The Bun example now uses Bun v1.3.0. The Go minimum remains 1.26.9.
 
 - filesql now requires Go 1.26.9 or later (was 1.26.6). Go 1.26.9 fixes the `net/http` advisories GO-2026-6603, GO-2026-6611, GO-2026-6612, GO-2026-6613 and GO-2026-6617, which govulncheck finds reachable from this module; 1.26.6 still carries them. The eight example modules move to the same floor and to filesql v0.59.2. Dependencies: modernc.org/sqlite v1.60.1, moov-io/ach v1.64.0, klauspost/compress v1.20.1, pierrec/lz4 v4.1.33, golang.org/x/net v0.60.0.
 
