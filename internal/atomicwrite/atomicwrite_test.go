@@ -2,6 +2,7 @@ package atomicwrite
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -786,14 +787,25 @@ func TestStagePreservesWriteAndCloseErrors(t *testing.T) {
 	t.Parallel()
 	dest := filepath.Join(t.TempDir(), "data.csv")
 	writeErr := errors.New("write failed")
+	ioFailure := errors.New("marked as an I/O failure")
+	var marked []error
 	_, err := Stage(dest, func(w io.Writer) error {
 		file, ok := w.(*os.File)
 		require.True(t, ok)
 		require.NoError(t, file.Close())
 		return writeErr
-	}, Options{})
+	}, Options{FailIO: func(what string, err error) error {
+		marked = append(marked, err)
+		return errors.Join(ioFailure, fmt.Errorf("%s: %w", what, err))
+	}})
 	require.ErrorIs(t, err, writeErr)
 	require.ErrorIs(t, err, os.ErrClosed)
+	// The close failure is staging I/O and is marked as such; the writer's own
+	// error is not, since the writer may be an encoder.
+	require.ErrorIs(t, err, ioFailure)
+	require.Len(t, marked, 1)
+	require.ErrorIs(t, marked[0], os.ErrClosed)
+	require.NotErrorIs(t, marked[0], writeErr)
 	entries, err := os.ReadDir(filepath.Dir(dest))
 	require.NoError(t, err)
 	require.Empty(t, entries)

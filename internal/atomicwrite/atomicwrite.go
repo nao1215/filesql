@@ -125,7 +125,10 @@ func Stage(dest string, write func(io.Writer) error, opt Options) (_ *Staged, er
 	}()
 
 	if err := write(tmp); err != nil {
-		return nil, errors.Join(err, tmp.Close())
+		if closeErr := tmp.Close(); closeErr != nil {
+			return nil, errors.Join(err, opt.failIO("failed to close the staged file for "+dest, closeErr))
+		}
+		return nil, err
 	}
 	if err := tmp.Close(); err != nil {
 		return nil, opt.failIO("failed to close the staged file for "+dest, err)
