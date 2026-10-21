@@ -35,8 +35,9 @@ func TestOpenWorkbookRejectsCompoundFileBeforeExcelize(t *testing.T) {
 	// sends such input to its decryption path, which panics or allocates from
 	// the file's own sizes (GO-2026-6684, GO-2026-6689). The ZIP check has to
 	// refuse it first, so the error must be the archive reader's.
-	header := []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}
-	data := append(header, bytes.Repeat([]byte{0xFF}, 4096)...)
+	data := make([]byte, 0, 8+4096)
+	data = append(data, 0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1)
+	data = append(data, bytes.Repeat([]byte{0xFF}, 4096)...)
 	require.NotPanics(t, func() {
 		book, err := OpenWorkbook(bytes.NewReader(data))
 		if book != nil {
