@@ -3,7 +3,7 @@ module github.com/nao1215/filesql/examples/bun
 go 1.26.9
 
 require (
-	github.com/nao1215/filesql v0.59.2
+	github.com/nao1215/filesql v0.60.0
 	github.com/uptrace/bun v1.3.0
 	github.com/uptrace/bun/dialect/sqlitedialect v1.3.0
 )
