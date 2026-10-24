@@ -3,7 +3,7 @@ module github.com/nao1215/filesql/examples/gorm
 go 1.26.9
 
 require (
-	github.com/nao1215/filesql v0.59.2
+	github.com/nao1215/filesql v0.60.0
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.2
 )
