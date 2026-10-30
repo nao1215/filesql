@@ -24,10 +24,10 @@ github.com/klauspost/compress v1.20.3 h1:zWNoFqq/lSuYQRim3dUXlXeA0IqwuZGicdG5ZTf
 github.com/klauspost/compress v1.20.3/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
 github.com/mattn/go-isatty v0.0.24 h1:tGZZoVgT/KiqK1c8ocVLeDS8BSWMRd47J3Lbz7vsReI=
 github.com/mattn/go-isatty v0.0.24/go.mod h1:nMCL3Zebbrt45jsMDgnfIwz6ydEQApk5oEI3HqDio6A=
-github.com/moov-io/ach v1.65.1 h1:+pIhBwW9FTYG+4t1KtfoMym3FCk+b2BHc14PGu3UCu4=
-github.com/moov-io/ach v1.65.1/go.mod h1:nbL0jN5zYz5rQlbQWlsrMy/USR3nFd5dLRz8x4te7a4=
-github.com/moov-io/base v0.64.0 h1:G45v/f94z52VcjvfU758IQQ/TDEbIJF0ZzAm2S4rXV0=
-github.com/moov-io/base v0.64.0/go.mod h1:k8iYmz2+3ant2VusN7HLebqObgqignEwRusTilrkJxE=
+github.com/moov-io/ach v1.66.0 h1:K0q/sZSDiU/gpk26fr8YgoReGlJGY7ako01d3FvZtdk=
+github.com/moov-io/ach v1.66.0/go.mod h1:tV93qs5GGGKjz0BVOGYzJ5YpcoFif4H9SfOplI1TpEo=
+github.com/moov-io/base v0.66.0 h1:pgV7xCbSaKha29WFX6rVojrFxwvwwHHmnKNpUYmwQ40=
+github.com/moov-io/base v0.66.0/go.mod h1:1vzRp9nVjWJpAMAvFTU4PIeUyUNokQcMgSoGjRfQrq4=
 github.com/moov-io/iso3166 v0.4.0 h1:WtXIptANC16DrHpbSAt4+itFciCCnA+C6eAi9k7HEsA=
 github.com/moov-io/iso3166 v0.4.0/go.mod h1:13ubAoOZNfWzs2fN3x467zg8q982U867Ee+ulqrArlM=
 github.com/moov-io/iso4217 v0.4.0 h1:+97e9chdg8Cx3kMLmGmvN64+CtmtodPLfUT2PaCXUUE=
