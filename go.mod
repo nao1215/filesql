@@ -4,7 +4,7 @@ go 1.26.9
 
 require (
 	github.com/klauspost/compress v1.20.3
-	github.com/moov-io/ach v1.65.1
+	github.com/moov-io/ach v1.66.0
 	github.com/moov-io/wire v0.16.1
 	github.com/parquet-go/parquet-go v0.32.0
 	github.com/pierrec/lz4/v4 v4.1.33
@@ -21,7 +21,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/igrmk/treemap/v2 v2.0.1 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
-	github.com/moov-io/base v0.64.0 // indirect
+	github.com/moov-io/base v0.66.0 // indirect
 	github.com/moov-io/iso3166 v0.4.0 // indirect
 	github.com/moov-io/iso4217 v0.4.0 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
