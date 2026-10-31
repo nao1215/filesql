@@ -4,7 +4,7 @@ go 1.26.9
 
 require (
 	github.com/klauspost/compress v1.20.3
-	github.com/moov-io/ach v1.65.1
+	github.com/moov-io/ach v1.66.0
 	github.com/moov-io/wire v0.16.1
 	github.com/parquet-go/parquet-go v0.32.0
 	github.com/pierrec/lz4/v4 v4.1.33
@@ -12,7 +12,7 @@ require (
 	github.com/ulikunitz/xz v0.5.17
 	github.com/xuri/excelize/v2 v2.11.0
 	golang.org/x/text v0.43.0
-	modernc.org/sqlite v1.60.1
+	modernc.org/sqlite v1.61.0
 )
 
 require (
@@ -21,7 +21,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/igrmk/treemap/v2 v2.0.1 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
-	github.com/moov-io/base v0.64.0 // indirect
+	github.com/moov-io/base v0.66.0 // indirect
 	github.com/moov-io/iso3166 v0.4.0 // indirect
 	github.com/moov-io/iso4217 v0.4.0 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
@@ -38,7 +38,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e // indirect
-	golang.org/x/net v0.61.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
