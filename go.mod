@@ -4,19 +4,19 @@ go 1.26.9
 
 require (
 	github.com/klauspost/compress v1.20.3
-	github.com/moov-io/ach v1.66.0
+	github.com/moov-io/ach v1.68.0
 	github.com/moov-io/wire v0.16.1
 	github.com/parquet-go/parquet-go v0.32.0
 	github.com/pierrec/lz4/v4 v4.1.33
 	github.com/stretchr/testify v1.12.1
 	github.com/ulikunitz/xz v0.5.17
-	github.com/xuri/excelize/v2 v2.11.0
+	github.com/xuri/excelize/v2 v2.11.1
 	golang.org/x/text v0.43.0
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.61.1
 )
 
 require (
-	github.com/andybalholm/brotli v1.2.6 // indirect
+	github.com/andybalholm/brotli v1.2.7 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/igrmk/treemap/v2 v2.0.1 // indirect
@@ -33,7 +33,7 @@ require (
 	github.com/rickar/cal/v2 v2.1.32 // indirect
 	github.com/tiendc/go-deepcopy v1.7.2 // indirect
 	github.com/twpayne/go-geom v1.7.0 // indirect
-	github.com/xuri/efp v0.0.2 // indirect
+	github.com/xuri/efp v0.0.3-0.20260924042702-217b81952dec // indirect
 	github.com/xuri/nfp v0.0.2-0.20250530014748-2ddeb826f9a9 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.58.0 // indirect

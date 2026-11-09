@@ -2,6 +2,8 @@ package reader
 
 import (
 	"bytes"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,7 +26,18 @@ func numericWorkbook(t *testing.T, numFmt int, value any) []byte {
 	require.NoError(t, f.DeleteSheet("Sheet1"))
 
 	require.NoError(t, f.SetCellStr(sheet, "A1", "amount"))
-	require.NoError(t, f.SetCellValue(sheet, "A2", value))
+	if number, ok := value.(float64); ok {
+		// SetCellValue keeps only fifteen significant digits of a float64, and
+		// a case has to say what the file stores.
+		shortest := strconv.FormatFloat(number, 'f', -1, 64)
+		places := 0
+		if i := strings.IndexByte(shortest, '.'); i >= 0 {
+			places = len(shortest) - i - 1
+		}
+		require.NoError(t, f.SetCellFloat(sheet, "A2", number, places, 64))
+	} else {
+		require.NoError(t, f.SetCellValue(sheet, "A2", value))
+	}
 	if numFmt != 0 {
 		styleID, err := f.NewStyle(&excelize.Style{NumFmt: numFmt})
 		require.NoError(t, err)

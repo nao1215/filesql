@@ -1941,6 +1941,18 @@ func TestAutoSaveOverwriteXLSXKeepsANumberANumber(t *testing.T) {
 			},
 		},
 		{
+			// SQLite keeps a fraction in an INTEGER column as a REAL, and the
+			// cell holds every digit of it rather than the fifteen a General
+			// cell draws.
+			name: "a fraction in an integer column keeps all its digits",
+			held: []any{1, 2},
+			stmt: "UPDATE book SET v = 3.141592653589793 WHERE v = 1",
+			want: []xlsxCell{
+				{raw: "3.141592653589793", kind: excelize.CellTypeUnset},
+				{raw: "2", kind: excelize.CellTypeUnset},
+			},
+		},
+		{
 			// A literal past int64 is text for the same reason: a number
 			// cannot hold its digits.
 			name: "a literal past int64 stays text",
