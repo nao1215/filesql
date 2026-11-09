@@ -3,21 +3,21 @@ module github.com/nao1215/filesql/examples/bun
 go 1.26.9
 
 require (
-	github.com/nao1215/filesql v0.60.0
+	github.com/nao1215/filesql v0.60.1
 	github.com/uptrace/bun v1.3.0
 	github.com/uptrace/bun/dialect/sqlitedialect v1.3.0
 )
 
 require (
-	github.com/andybalholm/brotli v1.2.6 // indirect
+	github.com/andybalholm/brotli v1.2.7 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/igrmk/treemap/v2 v2.0.1 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/klauspost/compress v1.20.3 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
-	github.com/moov-io/ach v1.65.1 // indirect
-	github.com/moov-io/base v0.64.0 // indirect
+	github.com/moov-io/ach v1.68.0 // indirect
+	github.com/moov-io/base v0.66.0 // indirect
 	github.com/moov-io/iso3166 v0.4.0 // indirect
 	github.com/moov-io/iso4217 v0.4.0 // indirect
 	github.com/moov-io/wire v0.16.1 // indirect
@@ -50,5 +50,5 @@ require (
 	modernc.org/libc v1.79.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
-	modernc.org/sqlite v1.60.1 // indirect
+	modernc.org/sqlite v1.61.1 // indirect
 )
