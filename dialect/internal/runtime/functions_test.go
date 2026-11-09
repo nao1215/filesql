@@ -2365,14 +2365,17 @@ func TestClockFunctionsReadUTC(t *testing.T) {
 
 // withinReadings reports whether got lies between the two references taken
 // around it. Every layout compared is zero-padded and runs from the largest
-// unit to the smallest, so text order is time order; a time of day alone wraps
-// at midnight, where before is the later text, and then got lies at or after
-// before or at or before after.
+// unit to the smallest, so text order is time order. Only a time of day alone
+// wraps, at midnight, where before is the later text, and then got lies at or
+// after before or at or before after. A date or a date and time whose second
+// reference is the earlier one means the clock stepped back between them,
+// which no answer can be judged against, so it is not taken as a wrap.
 func withinReadings(got, before, after string) bool {
 	if before <= after {
 		return before <= got && got <= after
 	}
-	return got >= before || got <= after
+	timeOfDayOnly := !strings.Contains(before, "-")
+	return timeOfDayOnly && (got >= before || got <= after)
 }
 
 // TestClockSharesOneReadingWithinItsWindow pins the mechanism the statement
