@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.60.1] - 2026-11-09
+
 ### Security
 
 - Update excelize to v2.11.1, which fixes the OLE/CFB parsing, unbounded row number, and array formula recursion advisories (GO-2026-6684, GO-2026-6685, GO-2026-6688, GO-2026-6689) that v2.11.0 carried. The eight example modules move to the same excelize. Update andybalholm/brotli to v1.2.7 for GO-2026-6888, excessive memory allocation when decompressing a crafted `.br` file.
@@ -2472,6 +2474,7 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
+[0.60.1]: https://github.com/nao1215/filesql/compare/v0.60.0...v0.60.1
 [0.60.0]: https://github.com/nao1215/filesql/compare/v0.59.2...v0.60.0
 [0.59.2]: https://github.com/nao1215/filesql/compare/v0.59.1...v0.59.2
 [0.59.1]: https://github.com/nao1215/filesql/compare/v0.59.0...v0.59.1
