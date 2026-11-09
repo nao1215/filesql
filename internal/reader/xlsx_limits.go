@@ -39,7 +39,7 @@ func workbookArchive(data []byte) (*zip.Reader, error) {
 		total += file.UncompressedSize64
 	}
 	for _, file := range archive.File {
-		// Excelize v2.11.0 reads styles from this fixed package path.
+		// Excelize reads styles from this fixed package path.
 		if normalizePartName(file.Name) == "xl/styles.xml" {
 			if err := checkXMLAttributes(file, checkStyleIndices); err != nil {
 				return nil, err

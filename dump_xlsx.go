@@ -381,7 +381,17 @@ func writeXLSXCell(f *excelize.File, styles *xlsxStyles, sheet, cell, text strin
 			return nil
 		}
 	}
-	if err := f.SetCellValue(sheet, cell, xlsxCellValue(text, kind == xlsxWholeNumber || kind == xlsxDecimalNumber)); err != nil {
+	value := xlsxCellValue(text, kind == xlsxWholeNumber || kind == xlsxDecimalNumber)
+	if number, ok := value.(float64); ok {
+		// SetCellValue on a float64 keeps only the fifteen significant digits
+		// a General cell draws, so a fraction SQLite keeps in an INTEGER
+		// column is written with the digits its shortest form spells.
+		if err := f.SetCellFloat(sheet, cell, number, shortestDecimalPlaces(number), 64); err != nil {
+			return fmt.Errorf("failed to set cell value at %s: %w", cell, err)
+		}
+		return nil
+	}
+	if err := f.SetCellValue(sheet, cell, value); err != nil {
 		return fmt.Errorf("failed to set cell value at %s: %w", cell, err)
 	}
 	return nil
@@ -394,11 +404,20 @@ func writeXLSXCell(f *excelize.File, styles *xlsxStyles, sheet, cell, text strin
 // value the rendering spells with an exponent -- 1e-05 has no digit after the
 // point to count, and one decimal would store it as 0.0.
 func xlsxDecimalPlaces(value float64) int {
+	if places := shortestDecimalPlaces(value); places > 0 {
+		return places
+	}
+	return 1
+}
+
+// shortestDecimalPlaces is how many digits after the point the shortest form
+// that reads back as value spells, zero for a whole number.
+func shortestDecimalPlaces(value float64) int {
 	shortest := strconv.FormatFloat(value, 'f', -1, 64)
 	if i := strings.IndexByte(shortest, '.'); i >= 0 {
 		return len(shortest) - i - 1
 	}
-	return 1
+	return 0
 }
 
 // xlsxCellValue is what a cell is written with: the number a numeric column's

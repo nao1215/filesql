@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Update excelize to v2.11.1, which fixes the OLE/CFB parsing, unbounded row number, and array formula recursion advisories (GO-2026-6684, GO-2026-6685, GO-2026-6688, GO-2026-6689) that v2.11.0 carried. The eight example modules move to the same excelize. Update andybalholm/brotli to v1.2.7 for GO-2026-6888, excessive memory allocation when decompressing a crafted `.br` file.
+
+### Fixed
+
+- Keep every digit of a fraction SQLite stores in an INTEGER column when an XLSX save writes it. excelize v2.11.1 writes a float64 given without a precision with only fifteen significant digits, so 3.141592653589793 would have been saved as 3.14159265358979.
+- Read January and February 1900 dates in XLSX files as the day the workbook shows. excelize v2.11.1 corrects these serials itself, and filesql's own correction would otherwise have moved them one day late.
+
+### Changed
+
+- Update moov-io/ach to v1.68.0 and modernc.org/sqlite to v1.61.1. The Go minimum remains 1.26.9.
+
 ## [0.60.0] - 2026-10-21
 
 ### Fixed
