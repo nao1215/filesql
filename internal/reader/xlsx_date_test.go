@@ -283,3 +283,17 @@ func copyRows(rows [][]string) [][]string {
 	}
 	return out
 }
+
+// TestIsoFromRawLeavesANonFiniteSerialAlone pins that a stored value that is
+// not a finite number names no day, so the cell keeps the text the workbook
+// shows rather than a date ExcelDateToTime makes up for it.
+func TestIsoFromRawLeavesANonFiniteSerialAlone(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"NaN", "Inf", "+Inf", "-Inf"} {
+		for _, date1904 := range []bool{false, true} {
+			got, ok := isoFromRaw(raw, date1904)
+			assert.False(t, ok, "%s (1904: %v) converted to %q", raw, date1904, got)
+		}
+	}
+}

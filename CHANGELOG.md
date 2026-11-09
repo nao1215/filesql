@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Keep every digit of a fraction SQLite stores in an INTEGER column when an XLSX save writes it. excelize v2.11.1 writes a float64 given without a precision with only fifteen significant digits, so 3.141592653589793 would have been saved as 3.14159265358979.
 - Read January and February 1900 dates in XLSX files as the day the workbook shows. excelize v2.11.1 corrects these serials itself, and filesql's own correction would otherwise have moved them one day late.
+- Keep a date-formatted XLSX cell that stores NaN or an infinity as the text the workbook shows, instead of a made-up date in the year -5005.
 
 ### Changed
 

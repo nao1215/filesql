@@ -1,6 +1,7 @@
 package reader
 
 import (
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -382,7 +383,7 @@ func isoFromSerial(f *excelize.File, sheet, axis string, date1904 bool) (string,
 func isoFromRaw(raw string, date1904 bool) (string, bool) {
 	var ok bool
 	serial, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
-	if err != nil {
+	if err != nil || math.IsNaN(serial) || math.IsInf(serial, 0) {
 		return "", false
 	}
 	if !date1904 {
