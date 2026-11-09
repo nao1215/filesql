@@ -4,11 +4,11 @@ go 1.26.9
 
 require (
 	github.com/Masterminds/squirrel v1.5.4
-	github.com/nao1215/filesql v0.60.0
+	github.com/nao1215/filesql v0.60.1
 )
 
 require (
-	github.com/andybalholm/brotli v1.2.6 // indirect
+	github.com/andybalholm/brotli v1.2.7 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/igrmk/treemap/v2 v2.0.1 // indirect
@@ -16,8 +16,8 @@ require (
 	github.com/lann/builder v0.0.0-20180802200727-47ae307949d0 // indirect
 	github.com/lann/ps v0.0.0-20150810152359-62de8c46ede0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
-	github.com/moov-io/ach v1.65.1 // indirect
-	github.com/moov-io/base v0.64.0 // indirect
+	github.com/moov-io/ach v1.68.0 // indirect
+	github.com/moov-io/base v0.66.0 // indirect
 	github.com/moov-io/iso3166 v0.4.0 // indirect
 	github.com/moov-io/iso4217 v0.4.0 // indirect
 	github.com/moov-io/wire v0.16.1 // indirect
@@ -46,5 +46,5 @@ require (
 	modernc.org/libc v1.79.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
-	modernc.org/sqlite v1.60.1 // indirect
+	modernc.org/sqlite v1.61.1 // indirect
 )
