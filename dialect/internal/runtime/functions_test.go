@@ -2306,7 +2306,9 @@ func TestClockFunctionsReadUTC(t *testing.T) {
 		runInAnotherZone(t, "TestClockFunctionsReadUTC")
 		return
 	}
-	if time.Now().Format(layoutTimeOnly) == time.Now().UTC().Format(layoutTimeOnly) {
+	// One reading, asked for its offset: comparing two readings formatted in two
+	// zones would also tell them apart when a second passed between them.
+	if _, offset := time.Now().Zone(); offset == 0 {
 		t.Skip("this platform did not take the zone from TZ, so a local reading cannot be told from a UTC one")
 	}
 	if err := RegisterFunctions(); err != nil {
@@ -2318,8 +2320,14 @@ func TestClockFunctionsReadUTC(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	// SQLite's own clock is UTC and is the reference. A second of slack covers
-	// the two readings landing either side of a tick.
+	// SQLite's own clock is UTC and is the reference, read by a statement of
+	// its own on either side of the one under test, so the answer is held
+	// between two readings rather than to one: a single reference can always
+	// land on the other side of a tick. Retrying does not help, because a
+	// statement that begins within statementClockWindow of the one before it
+	// reuses that statement's reading, so an immediate retry is answered from
+	// the same second as the miss. Waiting out the window before the call
+	// makes it take a reading of its own, taken after the first reference.
 	tests := []struct {
 		name      string
 		expr      string
@@ -2336,24 +2344,38 @@ func TestClockFunctionsReadUTC(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var got, want string
-			q := "SELECT " + tt.expr + ", " + tt.reference
-			if err := db.QueryRowContext(context.Background(), q).Scan(&got, &want); err != nil {
-				t.Fatalf("%s: %v", q, err)
+			scan := func(q string) string {
+				t.Helper()
+				var v string
+				if err := db.QueryRowContext(context.Background(), q).Scan(&v); err != nil {
+					t.Fatalf("%s: %v", q, err)
+				}
+				return v
 			}
-			if got == want {
-				return
-			}
-			// Only a tick may separate them, so retry once against a fresh
-			// reference rather than failing on a boundary.
-			if err := db.QueryRowContext(context.Background(), q).Scan(&got, &want); err != nil {
-				t.Fatalf("%s: %v", q, err)
-			}
-			if got != want {
-				t.Errorf("%s = %q, want SQLite's own UTC clock %q", tt.expr, got, want)
+			before := scan("SELECT " + tt.reference)
+			time.Sleep(statementClockWindow)
+			got := scan("SELECT " + tt.expr)
+			after := scan("SELECT " + tt.reference)
+			if !withinReadings(got, before, after) {
+				t.Errorf("%s = %q, want a reading of SQLite's own UTC clock between %q and %q", tt.expr, got, before, after)
 			}
 		})
 	}
+}
+
+// withinReadings reports whether got lies between the two references taken
+// around it. Every layout compared is zero-padded and runs from the largest
+// unit to the smallest, so text order is time order. Only a time of day alone
+// wraps, at midnight, where before is the later text, and then got lies at or
+// after before or at or before after. A date or a date and time whose second
+// reference is the earlier one means the clock stepped back between them,
+// which no answer can be judged against, so it is not taken as a wrap.
+func withinReadings(got, before, after string) bool {
+	if before <= after {
+		return before <= got && got <= after
+	}
+	timeOfDayOnly := !strings.Contains(before, "-")
+	return timeOfDayOnly && (got >= before || got <= after)
 }
 
 // TestClockSharesOneReadingWithinItsWindow pins the mechanism the statement
