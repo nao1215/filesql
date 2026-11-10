@@ -450,6 +450,22 @@ The [examples](./examples) directory shows how to use filesql with regular Go da
 | [sqly](https://github.com/nao1215/sqly) | Interactive shell for ad-hoc SQL against files |
 | [filesql/prep](https://pkg.go.dev/github.com/nao1215/filesql/prep) | Row cleanup and validation before SQL |
 
+## Verifying releases
+
+Each GitHub Release made from now on carries a source archive (`filesql-<tag>.tar.gz`), `checksums.txt`, a keyless cosign signature of it (`checksums.txt.sigstore.json`) and the build provenance of the archive (`filesql-<tag>.intoto.jsonl`). Download them from the release page (replace `<tag>` with the release tag), then verify:
+
+```bash
+gh attestation verify filesql-<tag>.tar.gz --repo nao1215/filesql \
+  --bundle filesql-<tag>.intoto.jsonl
+
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/nao1215/filesql/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+
+sha256sum --check checksums.txt
+```
+
 ## Contributing
 
 Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) before sending a PR.
