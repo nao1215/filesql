@@ -96,7 +96,8 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body_path: ${{ steps.meta.outputs.body_path }}
-          draft: false
+          # Stays a draft until the signed assets are uploaded (last step).
+          draft: true
           prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
           generate_release_notes: false
         env:
@@ -142,3 +143,11 @@ jobs:
             dist/checksums.txt.sigstore.json \
             "dist/filesql-${TAG_NAME}.intoto.jsonl" \
             --clobber
+
+      # Publishing with GITHUB_TOKEN does not start another workflow run.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: gh release edit "$TAG_NAME" --draft=false

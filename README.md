@@ -452,10 +452,11 @@ The [examples](./examples) directory shows how to use filesql with regular Go da
 
 ## Verifying releases
 
-Each GitHub Release carries a source archive (`filesql-<tag>.tar.gz`), `checksums.txt`, a keyless cosign signature of it (`checksums.txt.sigstore.json`) and the build provenance of the archive (`filesql-<tag>.intoto.jsonl`). Download them from the release page, then verify:
+Each GitHub Release made from now on carries a source archive (`filesql-<tag>.tar.gz`), `checksums.txt`, a keyless cosign signature of it (`checksums.txt.sigstore.json`) and the build provenance of the archive (`filesql-<tag>.intoto.jsonl`). Download them from the release page (replace `<tag>` with the release tag), then verify:
 
 ```bash
-gh attestation verify filesql-v0.60.1.tar.gz --repo nao1215/filesql
+gh attestation verify filesql-<tag>.tar.gz --repo nao1215/filesql \
+  --bundle filesql-<tag>.intoto.jsonl
 
 cosign verify-blob --bundle checksums.txt.sigstore.json \
   --certificate-identity-regexp '^https://github.com/nao1215/filesql/' \
