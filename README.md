@@ -459,7 +459,7 @@ gh attestation verify filesql-<tag>.tar.gz --repo nao1215/filesql \
   --bundle filesql-<tag>.intoto.jsonl
 
 cosign verify-blob --bundle checksums.txt.sigstore.json \
-  --certificate-identity-regexp '^https://github.com/nao1215/filesql/' \
+  --certificate-identity-regexp '^https://github\.com/nao1215/filesql/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   checksums.txt
 
