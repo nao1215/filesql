@@ -63,8 +63,8 @@ jobs:
       - name: Examples
         run: ./examples/verify.sh
 
-  # The only job that can write to the repository, and the only thing it does is
-  # create the release. The tag is validated and its body extracted again here
+  # The only job that can write to the repository. It creates the release and
+  # attaches the signed source archive, checksums and provenance to it. The tag is validated and its body extracted again here
   # rather than carried over from the job above, because that is two seconds of
   # awk and it keeps the write-capable job from having to trust an output.
   release:
@@ -73,7 +73,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write
+      contents: write # create the release and upload assets
+      id-token: write # keyless cosign signing and provenance (OIDC)
+      attestations: write # publish build provenance
 
     steps:
       - name: Checkout code
@@ -99,3 +101,44 @@ jobs:
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Signed-Releases: attach a source archive, its checksums, a keyless cosign
+      # signature of the checksums and the build provenance of the archive to
+      # the release. The release procedure itself is unchanged.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+
+      - name: Build the source archive and checksums
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          git archive --format=tar.gz --prefix="filesql-${TAG_NAME}/" -o "dist/filesql-${TAG_NAME}.tar.gz" "$TAG_NAME"
+          cd dist
+          sha256sum "filesql-${TAG_NAME}.tar.gz" > checksums.txt
+
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/filesql-${{ github.ref_name }}.tar.gz
+
+      - name: Sign the checksums
+        run: cosign sign-blob --yes --bundle dist/checksums.txt.sigstore.json dist/checksums.txt
+
+      - name: Upload the signed assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          jq -c . < "$BUNDLE_PATH" > "dist/filesql-${TAG_NAME}.intoto.jsonl"
+          gh release upload "$TAG_NAME" \
+            "dist/filesql-${TAG_NAME}.tar.gz" \
+            dist/checksums.txt \
+            dist/checksums.txt.sigstore.json \
+            "dist/filesql-${TAG_NAME}.intoto.jsonl" \
+            --clobber
