@@ -394,6 +394,17 @@ func TestArithmeticFunctionsAreTranslated(t *testing.T) {
 		{dialects.PostgreSQL, `SELECT width_bucket(0.0, 0.024, 10.06, 5)`, "0"},
 		{dialects.PostgreSQL, `SELECT width_bucket(20.0, 0.024, 10.06, 5)`, "6"},
 		{dialects.PostgreSQL, `SELECT width_bucket(5.0, 10.0, 0.0, 5)`, "3"},
+		// A lower bound away from zero tells x-low from x+low and the width
+		// high-low from high+low, which a bound of 0.024 cannot. A value
+		// exactly on a bound pins which side of it the comparison falls.
+		{dialects.PostgreSQL, `SELECT width_bucket(15, 10, 20, 5)`, "3"},
+		{dialects.PostgreSQL, `SELECT width_bucket(10, 10, 20, 5)`, "1"},
+		{dialects.PostgreSQL, `SELECT width_bucket(20, 10, 20, 5)`, "6"},
+		{dialects.PostgreSQL, `SELECT width_bucket(15, 20, 10, 5)`, "3"},
+		// A value equal to the upper bound is count+1 even where the
+		// arithmetic would round it down: 3*0.7/0.7 is 2.9999999999999996 in
+		// float64, so leaving the upper-bound check to the formula answers 3.
+		{dialects.PostgreSQL, `SELECT width_bucket(0.7, 0, 0.7, 3)`, "4"},
 	}
 	for _, tt := range tests {
 		got, err := runDialect(t, db, tt.dialect, tt.query)
