@@ -1,6 +1,6 @@
 module github.com/nao1215/filesql/examples/sqlx
 
-go 1.26.9
+go 1.26.11
 
 require (
 	github.com/jmoiron/sqlx v1.4.0

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- filesql now requires Go 1.26.11 or later (was 1.26.9). Go 1.26.11 fixes the `net/http` advisory GO-2026-6859, which govulncheck finds reachable from this module; 1.26.9 still carries it. The eight example modules move to the same floor.
 - Releases now attach a source archive, `checksums.txt`, a keyless cosign signature of the checksums and the build provenance of the archive to the GitHub Release. See "Verifying releases" in the README.
 
 ## [0.60.1] - 2026-11-09

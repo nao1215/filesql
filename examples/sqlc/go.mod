@@ -1,6 +1,6 @@
 module github.com/nao1215/filesql/examples/sqlc
 
-go 1.26.9
+go 1.26.11
 
 require github.com/nao1215/filesql v0.60.1
 
