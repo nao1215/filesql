@@ -1,6 +1,6 @@
 module github.com/nao1215/filesql/examples/ent
 
-go 1.26.9
+go 1.26.11
 
 require (
 	entgo.io/ent v0.14.6
