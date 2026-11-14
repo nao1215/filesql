@@ -401,6 +401,9 @@ func TestArithmeticFunctionsAreTranslated(t *testing.T) {
 		{dialects.PostgreSQL, `SELECT width_bucket(10, 10, 20, 5)`, "1"},
 		{dialects.PostgreSQL, `SELECT width_bucket(20, 10, 20, 5)`, "6"},
 		{dialects.PostgreSQL, `SELECT width_bucket(15, 20, 10, 5)`, "3"},
+		// Off the midpoint, a descending range counts from the upper bound:
+		// 17 is in the second bucket from 20, where ascending would say 4.
+		{dialects.PostgreSQL, `SELECT width_bucket(17, 20, 10, 5)`, "2"},
 		// A value equal to the upper bound is count+1 even where the
 		// arithmetic would round it down: 3*0.7/0.7 is 2.9999999999999996 in
 		// float64, so leaving the upper-bound check to the formula answers 3.
