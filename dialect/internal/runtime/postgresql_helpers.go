@@ -1,7 +1,7 @@
 package runtime
 
 import (
-	"crypto/md5" //nolint:gosec // MD5 backs dialects.PostgreSQL's MD5() function, not a security control
+	"crypto/md5" // #nosec G501 -- MD5 backs dialects.PostgreSQL's MD5() function, not a security control
 	"database/sql/driver"
 	"encoding/hex"
 	"errors"
@@ -540,7 +540,7 @@ func fnMD5(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
-	sum := md5.Sum([]byte(s)) //nolint:gosec // required for dialects.PostgreSQL MD5() compatibility, not a security control
+	sum := md5.Sum([]byte(s)) // #nosec G401 -- required for dialects.PostgreSQL MD5() compatibility, not a security control
 	return hex.EncodeToString(sum[:]), nil
 }
 

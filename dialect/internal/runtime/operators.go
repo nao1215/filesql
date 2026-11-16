@@ -436,9 +436,9 @@ func fnMySQLHex(args []driver.Value) (driver.Value, error) {
 	case nil:
 		return nil, nil
 	case int64:
-		return hexUnsigned(uint64(x)), nil //nolint:gosec // reinterpreting the bits is what dialects.MySQL's unsigned reading is
+		return hexUnsigned(uint64(x)), nil // #nosec G115 -- reinterpreting the bits is what dialects.MySQL's unsigned reading is
 	case float64:
-		return hexUnsigned(uint64(roundToInt64(x))), nil //nolint:gosec // same reinterpretation, after rounding
+		return hexUnsigned(uint64(roundToInt64(x))), nil // #nosec G115 -- same reinterpretation, after rounding
 	case []byte:
 		return strings.ToUpper(hex.EncodeToString(x)), nil
 	}
@@ -498,7 +498,7 @@ func mysqlShift(left bool) scalarFn {
 		if !ok {
 			return nil, nil
 		}
-		count := uint64(n) //nolint:gosec // dialects.MySQL reads the count as unsigned, so a negative one is a count past the width
+		count := uint64(n) // #nosec G115 -- dialects.MySQL reads the count as unsigned, so a negative one is a count past the width
 		if isBinary {
 			// A binary string keeps its length, and the count is unsigned here
 			// too, so a negative one shifts past the width and clears it.
@@ -513,7 +513,7 @@ func mysqlShift(left bool) scalarFn {
 		} else {
 			u >>= count
 		}
-		return int64(u), nil //nolint:gosec // dialects.SQLite has no unsigned integer to answer with; the bits are the answer
+		return int64(u), nil // #nosec G115 -- dialects.SQLite has no unsigned integer to answer with; the bits are the answer
 	}
 }
 
@@ -607,7 +607,7 @@ func fnBitXor(args []driver.Value) (driver.Value, error) {
 	if !ok1 || !ok2 {
 		return nil, nil
 	}
-	return int64(a ^ b), nil //nolint:gosec // the bits are the value; dialects.SQLite has no unsigned integer
+	return int64(a ^ b), nil // #nosec G115 -- the bits are the value; dialects.SQLite has no unsigned integer
 }
 
 // toUint64Bits reads an operand as the 64 bits dialects.MySQL's bitwise operators work
@@ -632,7 +632,7 @@ func toUint64Bits(v driver.Value) (uint64, bool) {
 	if !ok {
 		return 0, false
 	}
-	return uint64(n), true //nolint:gosec // a negative operand is its two's complement, which is what dialects.MySQL uses
+	return uint64(n), true // #nosec G115 -- a negative operand is its two's complement, which is what dialects.MySQL uses
 }
 
 // similarToRegexp converts a SQL SIMILAR TO pattern into a Go regular

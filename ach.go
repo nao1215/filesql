@@ -533,7 +533,7 @@ func readTableToTableData(ctx context.Context, db *sql.DB, tableName string) (*p
 	}
 
 	// Get data
-	dataQuery := "SELECT * FROM " + quoteIdentifier(tableName) //nolint:gosec // Table name is quoted
+	dataQuery := "SELECT * FROM " + quoteIdentifier(tableName) // #nosec G202 -- Table name is quoted
 	dataRows, err := db.QueryContext(ctx, dataQuery)
 	if err != nil {
 		return nil, err

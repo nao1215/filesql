@@ -112,7 +112,7 @@ func (c *CSVReader) comma() byte {
 	if c.Comma == 0 {
 		return ','
 	}
-	return byte(c.Comma) //nolint:gosec // validateComma has refused a delimiter that does not fit a byte
+	return byte(c.Comma) // #nosec G115 -- validateComma has refused a delimiter that does not fit a byte
 }
 
 // validateComma refuses a delimiter this reader cannot honor, rather than

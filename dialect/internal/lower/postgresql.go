@@ -549,9 +549,9 @@ func bitStringCast(c *ast.CastExpr, lit *ast.Literal) (ast.Expr, error) {
 		}
 		if width == 32 {
 			// The target holds 32 bits, and the top one is its sign.
-			return number(int64(int32(n)), c.Span), nil //nolint:gosec // ParseUint has held the value to 32 bits
+			return number(int64(int32(n)), c.Span), nil // #nosec G115 -- ParseUint has held the value to 32 bits
 		}
-		return number(int64(n), c.Span), nil //nolint:gosec // the bits are the value; a wider one was refused above
+		return number(int64(n), c.Span), nil // #nosec G115 -- the bits are the value; a wider one was refused above
 	case bitStringRefusedTargets[c.Type.Name]:
 		return nil, unsupported(c.Span,
 			"PostgreSQL cannot cast a bit string to %s; cast it to an integer first", c.Type.Written)

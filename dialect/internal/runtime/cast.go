@@ -376,7 +376,7 @@ func hexadecimalInt(text string, strict bool) (driver.Value, bool, error) {
 			out, rangeErr := outOfRangeInt(true, strict, text)
 			return out, true, rangeErr
 		}
-		return -int64(n), true, nil //nolint:gosec // the bound above keeps the negation inside an int64
+		return -int64(n), true, nil // #nosec G115 -- the bound above keeps the negation inside an int64
 	}
 	if n > math.MaxInt64 {
 		out, rangeErr := outOfRangeInt(false, strict, text)

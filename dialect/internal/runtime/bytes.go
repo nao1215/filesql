@@ -63,7 +63,7 @@ func bytesShift(b []byte, count uint64, left bool) []byte {
 	}
 	// count is below the bit length here, so the whole bytes it moves are an
 	// index into b.
-	whole, bits := int(count/8), count%8 //nolint:gosec // bounded by the check above
+	whole, bits := int(count/8), count%8 // #nosec G115 -- bounded by the check above
 	for i := range out {
 		// from is the byte this one takes its high bits from, and from+1 the
 		// one it takes the rest from once the shift is not a whole number of
@@ -141,7 +141,7 @@ func dialectBitOp(d dialects.Dialect, op bitOp) scalarFn {
 		if !ok1 || !ok2 {
 			return nil, nil
 		}
-		return int64(op.onBits(x, y)), nil //nolint:gosec // the bits are the value; SQLite has no unsigned integer
+		return int64(op.onBits(x, y)), nil // #nosec G115 -- the bits are the value; SQLite has no unsigned integer
 	}
 }
 
@@ -157,7 +157,7 @@ func dialectBitNot(args []driver.Value) (driver.Value, error) {
 		return nil, nil
 	}
 	u, _ := toUint64Bits(args[0])
-	return int64(^u), nil //nolint:gosec // the bits are the value; SQLite has no unsigned integer
+	return int64(^u), nil // #nosec G115 -- the bits are the value; SQLite has no unsigned integer
 }
 
 // unequalBytesError is what a dialect says about operands of different lengths.

@@ -320,13 +320,13 @@ func copyToBackup(path string) (string, error) {
 
 // copyOnto replaces dest's contents with src's, truncating whatever was there.
 func copyOnto(src, dest string) (err error) {
-	in, err := os.Open(src) //nolint:gosec // src is a file this package created or was given as the output
+	in, err := os.Open(src) // #nosec G304 -- src is a file this package created or was given as the output
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, in.Close()) }()
 
-	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, DefaultFileMode) //nolint:gosec // dest is the caller's chosen output
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, DefaultFileMode) // #nosec G302 G304 -- dest is the caller's chosen output
 	if err != nil {
 		return err
 	}

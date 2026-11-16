@@ -339,7 +339,7 @@ func dumpSQLiteTable(ctx context.Context, db *sql.DB, tableName, outputPath stri
 	}
 
 	// Query all data from table
-	query := fmt.Sprintf("SELECT %s FROM %s", dumpSelectList(columns, declTypes), quoteIdentifier(tableName)) //nolint:gosec // Table and column names are quoted
+	query := fmt.Sprintf("SELECT %s FROM %s", dumpSelectList(columns, declTypes), quoteIdentifier(tableName)) // #nosec G201 -- Table and column names are quoted
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return err

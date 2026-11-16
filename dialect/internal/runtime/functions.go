@@ -2246,7 +2246,7 @@ func soundexWith(args []driver.Value, rules soundexRules) (driver.Value, error) 
 			// which is what makes SOUNDEX('Honeyman') H500 rather than H555.
 			continue
 		}
-		b.WriteByte(byte('0' + code)) //nolint:gosec // code is 1..6 from soundexCode
+		b.WriteByte(byte('0' + code)) // #nosec G115 -- code is 1..6 from soundexCode
 		digits++
 		previous = code
 	}
@@ -2314,7 +2314,7 @@ func fnMySQLChar(args []driver.Value) (driver.Value, error) {
 		// dialects.MySQL takes each argument modulo 2^32 and writes its bytes
 		// big-endian, dropping the leading zero bytes but keeping one byte for
 		// an argument of zero.
-		u := uint32(n) //nolint:gosec // reinterpreting the bits is dialects.MySQL's rule here
+		u := uint32(n) // #nosec G115 -- reinterpreting the bits is dialects.MySQL's rule here
 		var word [4]byte
 		binary.BigEndian.PutUint32(word[:], u)
 		first := 0

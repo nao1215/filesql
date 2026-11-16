@@ -76,7 +76,7 @@ func retryWhileLockedFor(ctx context.Context, budget, wallBudget time.Duration, 
 		}
 		// The wait is cut to what is left of the budget, so the last attempt
 		// happens inside it rather than just past it.
-		delay := wait/2 + rand.N(wait/2+1) //nolint:gosec // Jitter, not a secret
+		delay := wait/2 + rand.N(wait/2+1) // #nosec G404 -- Jitter, not a secret
 		if delay > remaining {
 			delay = remaining
 		}

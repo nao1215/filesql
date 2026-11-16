@@ -1,7 +1,7 @@
 package runtime
 
 import (
-	"crypto/sha1" //nolint:gosec // SHA-1 backs dialects.MySQL's SHA1() function, not a security control
+	"crypto/sha1" // #nosec G505 -- SHA-1 backs dialects.MySQL's SHA1() function, not a security control
 	"crypto/sha256"
 	"crypto/sha512"
 	"database/sql/driver"
@@ -601,7 +601,7 @@ func fnMySQLConv(args []driver.Value) (driver.Value, error) {
 	value := parseInBase(s, fromBase)
 	_ = signedIn // the reading is the same either way; only the writing differs
 	if signedOut {
-		return strings.ToUpper(strconv.FormatInt(int64(value), int(toBase))), nil //nolint:gosec // a negative base is dialects.MySQL's way of asking for the signed reading
+		return strings.ToUpper(strconv.FormatInt(int64(value), int(toBase))), nil // #nosec G115 -- a negative base is dialects.MySQL's way of asking for the signed reading
 	}
 	return strings.ToUpper(strconv.FormatUint(value, int(toBase))), nil
 }
@@ -639,8 +639,8 @@ func parseInBase(s string, base int64) uint64 {
 		if digit < 0 || int64(digit) >= base {
 			break
 		}
-		next := value*uint64(base) + uint64(digit)               //nolint:gosec // digit is non-negative and below base
-		if next < value || value > math.MaxUint64/uint64(base) { //nolint:gosec // base is between 2 and 36
+		next := value*uint64(base) + uint64(digit)               // #nosec G115 -- digit is non-negative and below base
+		if next < value || value > math.MaxUint64/uint64(base) { // #nosec G115 -- base is between 2 and 36
 			value = math.MaxUint64
 			break
 		}
@@ -674,7 +674,7 @@ func fnMySQLBitCount(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
-	return int64(bits.OnesCount64(uint64(n))), nil //nolint:gosec // counting bits is what the reinterpretation is for
+	return int64(bits.OnesCount64(uint64(n))), nil // #nosec G115 -- counting bits is what the reinterpretation is for
 }
 
 // fnCot implements COT(x). dialects.MySQL refuses the value at zero rather than
@@ -878,7 +878,7 @@ func fnMySQLSHA1(args []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, nil
 	}
-	sum := sha1.Sum([]byte(s)) //nolint:gosec // SHA-1 is the function dialects.MySQL defines, not a security choice
+	sum := sha1.Sum([]byte(s)) // #nosec G401 -- SHA-1 is the function dialects.MySQL defines, not a security choice
 	return hex.EncodeToString(sum[:]), nil
 }
 
