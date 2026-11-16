@@ -660,7 +660,7 @@ func hexAsNumber(e ast.Expr) (ast.Expr, error) {
 			"a hexadecimal literal of %d digits is not supported here; MySQL reads one in an arithmetic context "+
 				"as an unsigned 64-bit number, and this one does not fit", len(digits))
 	}
-	return number(int64(n), lit.Span), nil //nolint:gosec // the bits are the value; SQLite has no unsigned integer
+	return number(int64(n), lit.Span), nil // #nosec G115 -- the bits are the value; SQLite has no unsigned integer
 }
 
 // jsonValueArguments says which arguments of a JSON constructor are values

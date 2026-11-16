@@ -278,7 +278,7 @@ func parquetIntValue(typ parquet.Type, bits int, signed bool, text string) (parq
 			return parquet.Value{}, false
 		}
 		if typ.Kind() == parquet.Int32 {
-			return parquet.Int32Value(int32(n)), true //nolint:gosec // ParseInt held it to 32 bits or fewer
+			return parquet.Int32Value(int32(n)), true // #nosec G115 -- ParseInt held it to 32 bits or fewer
 		}
 		return parquet.Int64Value(n), true
 	}
@@ -289,9 +289,9 @@ func parquetIntValue(typ parquet.Type, bits int, signed bool, text string) (parq
 	// An unsigned value is stored in the physical integer's bits, which is how
 	// the reader reads it back.
 	if typ.Kind() == parquet.Int32 {
-		return parquet.Int32Value(int32(uint32(n))), true //nolint:gosec // the unsigned value rides in the signed int's bits
+		return parquet.Int32Value(int32(uint32(n))), true // #nosec G115 -- the unsigned value rides in the signed int's bits
 	}
-	return parquet.Int64Value(int64(n)), true //nolint:gosec // the unsigned value rides in the signed int's bits
+	return parquet.Int64Value(int64(n)), true // #nosec G115 -- the unsigned value rides in the signed int's bits
 }
 
 // parquetFloatOf reads a float, the infinity this package spells as a literal
@@ -338,7 +338,7 @@ func parquetDecimalValue(typ parquet.Type, annotation *format.DecimalType, text 
 		if !unscaled.IsInt64() || unscaled.Int64() < math.MinInt32 || unscaled.Int64() > math.MaxInt32 {
 			return parquet.Value{}, false
 		}
-		return parquet.Int32Value(int32(unscaled.Int64())), true //nolint:gosec // the bound above holds it to 32 bits
+		return parquet.Int32Value(int32(unscaled.Int64())), true // #nosec G115 -- the bound above holds it to 32 bits
 	case parquet.Int64:
 		if !unscaled.IsInt64() {
 			return parquet.Value{}, false

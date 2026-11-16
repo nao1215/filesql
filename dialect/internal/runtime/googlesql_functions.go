@@ -1,8 +1,8 @@
 package runtime
 
 import (
-	"crypto/md5"  //nolint:gosec // BigQuery's MD5() is the function being implemented, not a security choice
-	"crypto/sha1" //nolint:gosec // BigQuery's SHA1() is the function being implemented, not a security choice
+	"crypto/md5"  // #nosec G501 -- BigQuery's MD5() is the function being implemented, not a security choice
+	"crypto/sha1" // #nosec G505 -- BigQuery's SHA1() is the function being implemented, not a security choice
 	"database/sql/driver"
 	"encoding/base32"
 	"encoding/base64"
@@ -31,8 +31,8 @@ func googlesqlScalarFunctions() map[string]scalarSpec {
 		// BigQuery's digests answer bytes where dialects.PostgreSQL's MD5 and dialects.MySQL's
 		// SHA1 answer hexadecimal text, so TO_HEX(MD5(x)) -- the spelling
 		// BigQuery's own documentation uses -- hexed the hex.
-		"googlesql_md5":  {1, hashBytes(func(b []byte) []byte { s := md5.Sum(b); return s[:] })},  //nolint:gosec // see the file comment
-		"googlesql_sha1": {1, hashBytes(func(b []byte) []byte { s := sha1.Sum(b); return s[:] })}, //nolint:gosec // see the file comment
+		"googlesql_md5":  {1, hashBytes(func(b []byte) []byte { s := md5.Sum(b); return s[:] })},  // #nosec G401 -- see the file comment
+		"googlesql_sha1": {1, hashBytes(func(b []byte) []byte { s := sha1.Sum(b); return s[:] })}, // #nosec G401 -- see the file comment
 
 		// The constructors. dialects.SQLite has date(), time() and datetime() of its own,
 		// which read a time value and modifiers and answer NULL for three
@@ -818,6 +818,6 @@ func googlesqlShift(left bool) scalarFn {
 		} else {
 			u >>= uint64(n)
 		}
-		return int64(u), nil //nolint:gosec // SQLite has no unsigned integer to answer with; the bits are the answer
+		return int64(u), nil // #nosec G115 -- SQLite has no unsigned integer to answer with; the bits are the answer
 	}
 }

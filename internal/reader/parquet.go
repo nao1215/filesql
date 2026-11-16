@@ -953,7 +953,7 @@ func renderParquetValue(v parquet.Value, col parquetColumn, rendering Rendering)
 			return decimalText(big.NewInt(int64(v.Int32())), col.scale)
 		}
 		if col.unsigned {
-			return strconv.FormatUint(uint64(uint32(v.Int32())), 10) //nolint:gosec // the unsigned column stores its value in the physical int's bits
+			return strconv.FormatUint(uint64(uint32(v.Int32())), 10) // #nosec G115 -- the unsigned column stores its value in the physical int's bits
 		}
 		return strconv.FormatInt(int64(v.Int32()), 10)
 	case parquet.Int64:
@@ -961,7 +961,7 @@ func renderParquetValue(v parquet.Value, col parquetColumn, rendering Rendering)
 			return decimalText(big.NewInt(v.Int64()), col.scale)
 		}
 		if col.unsigned {
-			return strconv.FormatUint(uint64(v.Int64()), 10) //nolint:gosec // the unsigned column stores its value in the physical int's bits
+			return strconv.FormatUint(uint64(v.Int64()), 10) // #nosec G115 -- the unsigned column stores its value in the physical int's bits
 		}
 		return strconv.FormatInt(v.Int64(), 10)
 	case parquet.Int96:
@@ -995,7 +995,7 @@ func renderParquetValue(v parquet.Value, col parquetColumn, rendering Rendering)
 func int96EpochNanos(v [3]uint32) int64 {
 	const julianUnixEpoch = 2440588
 	const nanosPerDay = 24 * 60 * 60 * 1_000_000_000
-	nanos := int64(uint64(v[0]) | uint64(v[1])<<32) //nolint:gosec // a damaged count wraps to a wrong number, never past the slice it renders into
+	nanos := int64(uint64(v[0]) | uint64(v[1])<<32) // #nosec G115 -- a damaged count wraps to a wrong number, never past the slice it renders into
 	days := int64(v[2]) - julianUnixEpoch
 	return days*nanosPerDay + nanos
 }

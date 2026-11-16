@@ -629,7 +629,7 @@ func fnPostgresToHex(args []driver.Value) (driver.Value, error) {
 	}
 	// The unsigned reading is the point: dialects.PostgreSQL answers the digits of the
 	// 64-bit two's complement value, so to_hex(-1) is sixteen f's.
-	return strconv.FormatUint(uint64(n), 16), nil //nolint:gosec // the two's complement reading is what dialects.PostgreSQL prints for a negative
+	return strconv.FormatUint(uint64(n), 16), nil // #nosec G115 -- the two's complement reading is what dialects.PostgreSQL prints for a negative
 }
 
 // postgresHexArgument reads the integer to_hex converts. ok is false when the

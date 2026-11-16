@@ -89,7 +89,7 @@ func openRegularFile(path string) (*os.File, error) {
 	if err := refuseIrregularSource(path, info.Mode()); err != nil {
 		return nil, err
 	}
-	return os.Open(path) //nolint:gosec // the path is the caller's own
+	return os.Open(path) // #nosec G304 -- the path is the caller's own
 }
 
 // refuseIrregularSource reports an error when a source carrying a supported

@@ -928,7 +928,7 @@ func fnLCM(args []driver.Value) (driver.Value, error) {
 	if quotient != 0 && magB > math.MaxInt64/quotient {
 		return nil, errors.New("dialect: LCM: the result does not fit a 64-bit integer")
 	}
-	return int64(quotient * magB), nil //nolint:gosec // the bound above keeps the product inside an int64
+	return int64(quotient * magB), nil // #nosec G115 -- the bound above keeps the product inside an int64
 }
 
 // greatestCommonDivisor runs Euclid over magnitudes, which are unsigned because
@@ -948,7 +948,7 @@ func magnitude(v int64) uint64 {
 	if v < 0 {
 		// -(v+1) is at most the largest int64, so the conversion is exact and
 		// adding one back reaches the magnitude without ever leaving uint64.
-		return uint64(-(v + 1)) + 1 //nolint:gosec // the expression is inside the int64 range by construction
+		return uint64(-(v + 1)) + 1 // #nosec G115 -- the expression is inside the int64 range by construction
 	}
 	return uint64(v)
 }
@@ -1482,7 +1482,7 @@ func fnSetByte(args []driver.Value) (driver.Value, error) {
 	copy(out, b)
 	// dialects.PostgreSQL takes the low byte of whatever it is given rather than
 	// refusing a value outside 0..255.
-	out[n] = uint8(value) //nolint:gosec // the conversion is the truncation dialects.PostgreSQL performs
+	out[n] = uint8(value) // #nosec G115 -- the conversion is the truncation dialects.PostgreSQL performs
 	return out, nil
 }
 

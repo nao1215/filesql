@@ -40,7 +40,12 @@ func main() {
 		}
 		fmt.Printf("- %s\n", name)
 	}
-	rows.Close()
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
+	if err := rows.Close(); err != nil {
+		log.Fatal(err)
+	}
 
 	// Query CSV data (products)
 	fmt.Println("\n=== Products (from CSV) ===")
