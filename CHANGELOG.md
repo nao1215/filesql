@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CI scans the repository with gosec and Trivy on every pull request (Trivy covers dependency vulnerabilities, committed secrets and misconfigurations, and also runs daily). Workflow actions are recorded in `.github/workflows/actions.lock`, which CI verifies against the pinned commits.
 - filesql now requires Go 1.26.11 or later (was 1.26.9). Go 1.26.11 fixes the `net/http` advisory GO-2026-6859, which govulncheck finds reachable from this module; 1.26.9 still carries it. The eight example modules move to the same floor.
+- Update modernc.org/sqlite to v1.62.0 (with the modernc.org/libc v1.80.1 and modernc.org/memory v1.12.1 it is built against), moov-io/ach to v1.69.0, parquet-go to v0.32.1 and klauspost/compress to v1.20.4. CI scans the commits of pull requests (other than Dependabot's) and of pushes to main for committed secrets with gitleaks, and govulncheck moves to v1.10.0.
 - Releases now attach a source archive, `checksums.txt`, a keyless cosign signature of the checksums and the build provenance of the archive to the GitHub Release. See "Verifying releases" in the README.
 
 ## [0.60.1] - 2026-11-09

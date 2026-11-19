@@ -1,12 +1,19 @@
 # filesql
 
-[![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go)
-[![Go Reference](https://pkg.go.dev/badge/github.com/nao1215/filesql.svg)](https://pkg.go.dev/github.com/nao1215/filesql)
+<!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
+[![All Contributors](https://img.shields.io/badge/all_contributors-4-orange.svg?style=flat-square)](#contributors-)
+<!-- ALL-CONTRIBUTORS-BADGE:END -->
 [![MultiPlatformUnitTest](https://github.com/nao1215/filesql/actions/workflows/unit_test.yml/badge.svg)](https://github.com/nao1215/filesql/actions/workflows/unit_test.yml)
-[![Gosec](https://github.com/nao1215/filesql/actions/workflows/gosec.yml/badge.svg)](https://github.com/nao1215/filesql/actions/workflows/gosec.yml)
-[![Trivy](https://github.com/nao1215/filesql/actions/workflows/trivy.yml/badge.svg)](https://github.com/nao1215/filesql/actions/workflows/trivy.yml)
 ![Coverage](https://raw.githubusercontent.com/nao1215/octocovs-central-repo/main/badges/nao1215/filesql/coverage.svg)
+[![Gitleaks](https://github.com/nao1215/filesql/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/nao1215/filesql/actions/workflows/gitleaks.yml)
+[![Trivy](https://github.com/nao1215/filesql/actions/workflows/trivy.yml/badge.svg)](https://github.com/nao1215/filesql/actions/workflows/trivy.yml)
+[![govulncheck](https://github.com/nao1215/filesql/actions/workflows/govulncheck.yml/badge.svg)](https://github.com/nao1215/filesql/actions/workflows/govulncheck.yml)
+[![Gosec](https://github.com/nao1215/filesql/actions/workflows/gosec.yml/badge.svg)](https://github.com/nao1215/filesql/actions/workflows/gosec.yml)
+[![reviewdog](https://github.com/nao1215/filesql/actions/workflows/reviewdog.yml/badge.svg)](https://github.com/nao1215/filesql/actions/workflows/reviewdog.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/nao1215/filesql.svg)](https://pkg.go.dev/github.com/nao1215/filesql)
+[![License](https://img.shields.io/github/license/nao1215/filesql)](./LICENSE)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/nao1215/filesql/badge)](https://scorecard.dev/viewer/?uri=github.com/nao1215/filesql)
+[![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go)
 
 ![logo](./doc/image/filesql-logo.png)
 
