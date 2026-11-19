@@ -1,0 +1,42 @@
+name: Property
+
+# The property, metamorphic and differential tests draw their inputs with
+# rapid. The ordinary `go test` run draws a hundred per test, which keeps a
+# pull request fast but leaves most of the space unvisited. This job draws far
+# more every night, with a new seed each time, so the tests keep searching
+# somewhere new without slowing anyone's merge.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 19 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  property:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.11"
+
+      - name: Draw 20,000 inputs per property
+        run: go test . -run '^Test(Property|Metamorphic|Differential)_' -rapid.checks=20000 -timeout 25m
+
+      # A failing run writes the shrunk input under testdata/rapid/. The log
+      # also prints the seed, so either reproduces the failure locally with
+      # -rapid.failfile or -rapid.seed.
+      - name: Upload the failing input
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rapid-failfiles
+          path: "**/testdata/rapid/**"
+          if-no-files-found: ignore

@@ -25,7 +25,105 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/ulikunitz/xz"
+	"pgregory.net/rapid"
 )
+
+// compressingCodecs are the codecs this package can write as well as read.
+// bzip2 is read-only.
+var compressingCodecs = []CompressionType{
+	CompressionGZ, CompressionXZ, CompressionZSTD, CompressionZLIB,
+	CompressionSNAPPY, CompressionS2, CompressionLZ4,
+}
+
+func compressWith(t *rapid.T, c CompressionType, data []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w, err := c.NewWriter(&buf)
+	if err != nil {
+		t.Fatalf("%s writer: %v", c, err)
+	}
+	if _, err := w.Write(data); err != nil {
+		t.Fatalf("%s write: %v", c, err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("%s close: %v", c, err)
+	}
+	return buf.Bytes()
+}
+
+func decompressWith(t *rapid.T, c CompressionType, data []byte) []byte {
+	t.Helper()
+	r, err := c.NewReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("%s reader: %v", c, err)
+	}
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("%s read: %v", c, err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("%s reader close: %v", c, err)
+	}
+	return got
+}
+
+// drawCompressible draws bytes that are sometimes random and sometimes runs
+// of a few repeated bytes, so both the stored and the back-referencing paths
+// of each codec are exercised, and the empty input is among them.
+func drawCompressible(t *rapid.T) []byte {
+	if rapid.Bool().Draw(t, "random") {
+		return rapid.SliceOfN(rapid.Byte(), 0, 4096).Draw(t, "bytes")
+	}
+	var out []byte
+	for range rapid.IntRange(0, 16).Draw(t, "runs") {
+		b := rapid.SampledFrom([]byte("a\n,\x00\xff")).Draw(t, "byte")
+		out = append(out, bytes.Repeat([]byte{b}, rapid.IntRange(1, 2000).Draw(t, "length"))...)
+	}
+	return out
+}
+
+// TestProperty_EveryCodecGivesBackWhatItCompressed checks that what NewWriter
+// writes, NewReader reads back byte for byte, and that two streams written
+// one after the other read back as their concatenation, as gzip and the
+// other framed formats allow a file to be built.
+func TestProperty_EveryCodecGivesBackWhatItCompressed(t *testing.T) {
+	t.Parallel()
+
+	rapid.Check(t, func(t *rapid.T) {
+		c := rapid.SampledFrom(compressingCodecs).Draw(t, "codec")
+		first := drawCompressible(t)
+		if got := decompressWith(t, c, compressWith(t, c, first)); !bytes.Equal(got, first) {
+			t.Fatalf("%s gave back %d bytes for %d written", c, len(got), len(first))
+		}
+		second := drawCompressible(t)
+		joined := append(compressWith(t, c, first), compressWith(t, c, second)...)
+		want := append(append([]byte{}, first...), second...)
+		if got := decompressWith(t, c, joined); !bytes.Equal(got, want) {
+			t.Fatalf("%s gave back %d bytes for two streams of %d and %d", c, len(got), len(first), len(second))
+		}
+	})
+}
+
+// TestProperty_RemovingACompressionExtensionUndoesAddingIt checks that a
+// codec's own extension is the one RemoveCompressionExtension takes off, and
+// that a path without one is returned as it is.
+func TestProperty_RemovingACompressionExtensionUndoesAddingIt(t *testing.T) {
+	t.Parallel()
+
+	codecs := append([]CompressionType{CompressionBZ2}, compressingCodecs...)
+	rapid.Check(t, func(t *rapid.T) {
+		base := rapid.StringMatching(`[A-Za-z0-9_ -]{1,12}\.(csv|tsv|ltsv|json|jsonl|parquet|xlsx)`).Draw(t, "base")
+		dir := rapid.SampledFrom([]string{"", "data", filepath.Join("a", "b.gz")}).Draw(t, "dir")
+		path := filepath.Join(dir, base)
+		c := rapid.SampledFrom(codecs).Draw(t, "codec")
+		if got := RemoveCompressionExtension(path + c.Extension()); got != path {
+			t.Fatalf("RemoveCompressionExtension(%q) = %q, want %q", path+c.Extension(), got, path)
+		}
+		if got := RemoveCompressionExtension(path); got != path {
+			t.Fatalf("RemoveCompressionExtension(%q) = %q, want it unchanged", path, got)
+		}
+	})
+}
 
 // TestCompressionTypeCodecs runs every codec through this package's reader and writer
 func TestCompressionTypeCodecs(t *testing.T) {

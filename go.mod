@@ -13,6 +13,7 @@ require (
 	github.com/xuri/excelize/v2 v2.11.1
 	golang.org/x/text v0.44.0
 	modernc.org/sqlite v1.62.0
+	pgregory.net/rapid v1.3.0
 )
 
 require (
