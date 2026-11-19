@@ -28,6 +28,10 @@ concurrency:
 
 env:
   GREMLINS_VERSION: v0.6.0
+  # A mutant that allocates without bound (e.g. an endless write loop) takes the
+  # hosted runner down with "runner has received a shutdown signal" and no log.
+  # A 4 GiB cap per process makes it die as a killed mutant instead.
+  MUTANT_MEMORY_KIB: '4194304'
 
 jobs:
   diff:
@@ -55,6 +59,7 @@ jobs:
         run: |
           git config diff.context 0
           git config diff.interHunkContext 0
+          ulimit -v "$MUTANT_MEMORY_KIB"
           gremlins unleash --diff "$BASE_SHA" --workers 2 --timeout-coefficient 10 --output mutation.json .
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
@@ -105,7 +110,9 @@ jobs:
         # --exclude-files against paths relative to it, so excluding any path
         # with a slash keeps each job to its own directory; the packages below
         # it have jobs of their own.
-        run: gremlins unleash --workers 4 --timeout-coefficient 10 --exclude-files '/' --output mutation.json "$PACKAGE"
+        run: |
+          ulimit -v "$MUTANT_MEMORY_KIB"
+          gremlins unleash --workers 4 --timeout-coefficient 10 --exclude-files '/' --output mutation.json "$PACKAGE"
       - name: Name the report after the package
         id: report
         env:

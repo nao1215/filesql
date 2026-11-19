@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Mutation testing caps each mutant at 4 GiB of memory, so a mutant that allocates without bound fails as killed instead of taking the CI runner down.
+
 ## [0.60.2] - 2026-11-19
 
 ### Security
