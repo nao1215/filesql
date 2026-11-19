@@ -485,6 +485,7 @@ sha256sum --check checksums.txt
 | Metamorphic tests ([filesql_integration_test.go](filesql_integration_test.go)) | One table loading with other types or values from another format, codec, line ending, chunk size, or from its own dump |
 | Differential tests ([filesql_integration_test.go](filesql_integration_test.go)) | A cell stored as another value than SQLite's own column affinity makes of the same text |
 | Fuzzing ([internal/parser/parser_test.go](internal/parser/parser_test.go), [internal/codec/codec_fuzz_test.go](internal/codec/codec_fuzz_test.go), [dialect/fuzz_test.go](dialect/fuzz_test.go)) | A crash, hang or unbounded allocation on a malformed file or query |
+| Mutation testing ([.github/workflows/mutation.yml](.github/workflows/mutation.yml)) | A test that runs a changed comparison or bound without noticing the change |
 
 How to run each one is in [doc/testing.md](doc/testing.md).
 
