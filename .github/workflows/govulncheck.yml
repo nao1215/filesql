@@ -57,7 +57,7 @@ jobs:
       # turns an unrelated pull request red for a reason nobody in it can act
       # on, and a pinned version makes the run reproducible from the commit.
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
 
       # ACCEPTED lists advisories this module reaches and defends against on
       # its own side, each with the reason and the test that pins the defense.
