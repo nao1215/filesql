@@ -1342,11 +1342,10 @@ func drawGeneratedTable(t *rapid.T) generatedTable {
 	return generatedTable{header: header, rows: rows}
 }
 
-func (g generatedTable) delimited(t *rapid.T, comma rune, crlf bool) []byte {
+func (g generatedTable) csvBytes(t *rapid.T, crlf bool) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	w := csv.NewWriter(&buf)
-	w.Comma = comma
 	w.UseCRLF = crlf
 	terminator := "\n"
 	if crlf {
@@ -1525,11 +1524,11 @@ func TestMetamorphic_TheSameTableLoadsTheSameFromEveryFormat(t *testing.T) {
 	}
 	rapid.Check(t, func(t *rapid.T) {
 		table := drawGeneratedTable(t)
-		plain := table.delimited(t, ',', false)
+		plain := table.csvBytes(t, false)
 		want := generatedLoad(t, plain, FileTypeCSV, 0)
 
 		variants := map[string]string{
-			"CSV with CRLF":       generatedLoad(t, table.delimited(t, ',', true), FileTypeCSV, 0),
+			"CSV with CRLF":       generatedLoad(t, table.csvBytes(t, true), FileTypeCSV, 0),
 			"TSV":                 generatedLoad(t, table.tsv(), FileTypeTSV, 0),
 			"LTSV":                generatedLoad(t, table.ltsv(), FileTypeLTSV, 0),
 			"XLSX":                generatedLoad(t, table.xlsx(t), FileTypeXLSX, 0),
@@ -1572,7 +1571,7 @@ func TestMetamorphic_ADumpLoadsBackAsTheTableItWasDumpedFrom(t *testing.T) {
 		format := rapid.SampledFrom(formats).Draw(t, "format")
 		run++
 
-		db, err := NewBuilder().AddReader(bytes.NewReader(table.delimited(t, ',', false)), "t", FileTypeCSV).Open(ctx)
+		db, err := NewBuilder().AddReader(bytes.NewReader(table.csvBytes(t, false)), "t", FileTypeCSV).Open(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1622,7 +1621,7 @@ func TestDifferential_StoredValuesMatchSQLiteColumnAffinity(t *testing.T) {
 		ctx := context.Background()
 		table := drawGeneratedTable(t)
 
-		db, err := NewBuilder().AddReader(bytes.NewReader(table.delimited(t, ',', false)), "t", FileTypeCSV).Open(ctx)
+		db, err := NewBuilder().AddReader(bytes.NewReader(table.csvBytes(t, false)), "t", FileTypeCSV).Open(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
