@@ -281,3 +281,56 @@ func TestTypeString(t *testing.T) {
 	assert.Equal(t, "DATETIME", Datetime.String())
 	assert.Equal(t, "TEXT", Type(99).String())
 }
+
+// TestNumericLiteralPredicatesOnTheirEdges pins the literal predicates on the
+// inputs where a bound or a sign check decides the answer: the empty string
+// and a lone sign, which must not index past the end, the digits '0' and '9'
+// at the ends of the digit range, and the lengths where a check starts to apply.
+func TestNumericLiteralPredicatesOnTheirEdges(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		check func(string) bool
+		input string
+		want  bool
+	}{
+		{"zero padded: empty", IsZeroPaddedIntegerLiteral, "", false},
+		{"zero padded: lone sign", IsZeroPaddedIntegerLiteral, "-", false},
+		{"zero padded: lone zero", IsZeroPaddedIntegerLiteral, "0", false},
+		{"zero padded: signed lone zero", IsZeroPaddedIntegerLiteral, "-0", false},
+		{"zero padded: two zeros", IsZeroPaddedIntegerLiteral, "00", true},
+		{"zero padded: ends in nine", IsZeroPaddedIntegerLiteral, "09", true},
+		{"zero padded: signed", IsZeroPaddedIntegerLiteral, "+07", true},
+		{"zero padded: slash after zero", IsZeroPaddedIntegerLiteral, "0/", false},
+		{"zero padded: colon after zero", IsZeroPaddedIntegerLiteral, "0:", false},
+		{"go syntax: lone zero", HasGoOnlyNumericSyntax, "0", false},
+		{"go syntax: lone x", HasGoOnlyNumericSyntax, "x", false},
+		{"go syntax: hex", HasGoOnlyNumericSyntax, "0x1F", true},
+		{"go syntax: signed upper hex", HasGoOnlyNumericSyntax, "-0X1f", true},
+		{"go syntax: underscore", HasGoOnlyNumericSyntax, "1_000", true},
+		{"go syntax: decimal", HasGoOnlyNumericSyntax, "100", false},
+		{"overflow: empty", IsIntegerLiteralOverflowingInt64, "", false},
+		{"overflow: lone sign", IsIntegerLiteralOverflowingInt64, "+", false},
+		{"overflow: max", IsIntegerLiteralOverflowingInt64, "9223372036854775807", false},
+		{"overflow: min", IsIntegerLiteralOverflowingInt64, "-9223372036854775808", false},
+		{"overflow: one past max", IsIntegerLiteralOverflowingInt64, "+9223372036854775808", true},
+		{"overflow: one past min", IsIntegerLiteralOverflowingInt64, "-9223372036854775809", true},
+		{"overflow: all nines", IsIntegerLiteralOverflowingInt64, "99999999999999999999", true},
+		{"overflow: colon among digits", IsIntegerLiteralOverflowingInt64, "9999999999:9999999999", false},
+		{"breaks float64: empty", integerBreaksFloat64, "", false},
+		{"breaks float64: lone sign", integerBreaksFloat64, "-", false},
+		{"breaks float64: 2^53+1", integerBreaksFloat64, "9007199254740993", true},
+		{"breaks float64: 2^53", integerBreaksFloat64, "9007199254740992", false},
+		{"breaks float64: signed 2^53+1", integerBreaksFloat64, "-9007199254740993", true},
+		{"datetime: longest layout", IsDatetime, "2024-01-02T03:04:05.123456789+09:00", true},
+		{"datetime: time starting with 19", IsDatetime, "19:30", true},
+		{"datetime: date starting with 9", IsDatetime, "9/1/2024", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, tt.check(tt.input), "input %q", tt.input)
+		})
+	}
+}
