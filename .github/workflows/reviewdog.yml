@@ -23,9 +23,15 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # This workflow runs only on pull requests, so the action's built-in
+      # cache could only ever be saved from a pull request: a new 390 MB entry
+      # per pull request, scoped to that pull request's ref, which crowded the
+      # repository's 10 GB cache quota and evicted main's caches. Pull requests
+      # restore caches and never save them, so the cache is off here.
       - name: golangci-lint
         uses: reviewdog/action-golangci-lint@284129a3ac23bc5d8ac1522e0b6511df74a8836d # v2.10.2
         with:
+          cache: false
           golangci_lint_flags: "--timeout 10m"
           reporter: github-pr-review
           level: warning
