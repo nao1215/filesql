@@ -82,7 +82,11 @@ jobs:
       # setup-go's cache holds the build without -race, which is of no use
       # here: the race build of the transpiled SQLite driver was most of this
       # job's time. The job keeps its own build cache, saved from main and
-      # restored on pull requests.
+      # restored on pull requests. The key is the Go version and go.sum, not
+      # the commit: a per-commit key saved a new 400 MB entry on every push to
+      # main and filled the repository's 10 GB cache quota. main saves only
+      # when the exact key is missing, so the entry is refreshed when go.sum
+      # or the Go version changes.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.11"
@@ -95,16 +99,15 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: ${{ runner.os }}-race-go1.26.11-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          key: ${{ runner.os }}-race-go1.26.11-${{ hashFiles('go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-race-go1.26.11-${{ hashFiles('go.sum') }}-
             ${{ runner.os }}-race-go1.26.11-
 
       - name: Run tests with the race detector
         run: go test -race ./...
 
       - name: Save the race build cache
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.race-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
