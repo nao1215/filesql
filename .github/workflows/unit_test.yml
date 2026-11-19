@@ -88,6 +88,7 @@ jobs:
       # when the exact key is missing, so the entry is refreshed when go.sum
       # or the Go version changes.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: go
         with:
           go-version: "1.26.11"
           cache: false
@@ -99,9 +100,9 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: ${{ runner.os }}-race-go1.26.11-${{ hashFiles('go.sum') }}
+          key: ${{ runner.os }}-race-go${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-race-go1.26.11-
+            ${{ runner.os }}-race-go${{ steps.go.outputs.go-version }}-
 
       - name: Run tests with the race detector
         run: go test -race ./...
