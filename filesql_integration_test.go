@@ -1608,3 +1608,69 @@ func TestMetamorphic_ADumpLoadsBackAsTheTableItWasDumpedFrom(t *testing.T) {
 		}
 	})
 }
+
+// TestDifferential_StoredValuesMatchSQLiteColumnAffinity loads a generated CSV
+// with filesql, then builds the same table by hand in a plain SQLite database:
+// the column types filesql chose, and every cell inserted as the text the file
+// holds. SQLite's own column affinity then decides what each cell becomes, so
+// filesql has to store what SQLite would, except for the one documented
+// difference: a blank cell in an INTEGER or REAL column is NULL.
+func TestDifferential_StoredValuesMatchSQLiteColumnAffinity(t *testing.T) {
+	t.Parallel()
+
+	rapid.Check(t, func(t *rapid.T) {
+		ctx := context.Background()
+		table := drawGeneratedTable(t)
+
+		db, err := NewBuilder().AddReader(bytes.NewReader(table.delimited(t, ',', false)), "t", FileTypeCSV).Open(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := generatedShape(t, db)
+		declared := make([]string, len(table.header))
+		for i, column := range table.header {
+			if err := db.QueryRowContext(ctx, "SELECT type FROM pragma_table_info('t') WHERE name = ?", column).Scan(&declared[i]); err != nil {
+				t.Fatalf("reading the type of %s: %v", column, err)
+			}
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		oracle, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := oracle.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
+		columns := make([]string, len(table.header))
+		marks := make([]string, len(table.header))
+		for i, column := range table.header {
+			columns[i] = `"` + column + `" ` + declared[i]
+			marks[i] = "?"
+		}
+		if _, err := oracle.ExecContext(ctx, "CREATE TABLE t ("+strings.Join(columns, ", ")+")"); err != nil {
+			t.Fatal(err)
+		}
+		insert := "INSERT INTO t VALUES (" + strings.Join(marks, ", ") + ")" //nolint:gosec // only placeholders are joined
+		for _, row := range table.rows {
+			args := make([]any, len(row))
+			for i, cell := range row {
+				numeric := declared[i] == "INTEGER" || declared[i] == "REAL"
+				if numeric && strings.TrimSpace(cell) == "" {
+					continue // a blank number is NULL
+				}
+				args[i] = cell
+			}
+			if _, err := oracle.ExecContext(ctx, insert, args...); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if want := generatedShape(t, oracle); got != want {
+			t.Fatalf("filesql stores other values than SQLite's affinity gives\nfilesql:\n%s\nSQLite:\n%s", got, want)
+		}
+	})
+}

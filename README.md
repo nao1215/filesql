@@ -483,6 +483,7 @@ sha256sum --check checksums.txt
 | Examples and unit tests ([example_api_test.go](example_api_test.go)) | A public function that no longer does what its godoc shows |
 | Property-based tests ([compression_test.go](compression_test.go)) | A codec that does not give back the bytes it compressed, or an extension that is not undone |
 | Metamorphic tests ([filesql_integration_test.go](filesql_integration_test.go)) | One table loading with other types or values from another format, codec, line ending, chunk size, or from its own dump |
+| Differential tests ([filesql_integration_test.go](filesql_integration_test.go)) | A cell stored as another value than SQLite's own column affinity makes of the same text |
 | Fuzzing ([internal/parser/parser_test.go](internal/parser/parser_test.go), [internal/codec/codec_fuzz_test.go](internal/codec/codec_fuzz_test.go), [dialect/fuzz_test.go](dialect/fuzz_test.go)) | A crash, hang or unbounded allocation on a malformed file or query |
 
 How to run each one is in [doc/testing.md](doc/testing.md).

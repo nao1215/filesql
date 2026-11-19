@@ -21,12 +21,16 @@ A table has no single right answer to compare against, but the same table writte
 
 The generator mixes in empty cells, padded numbers, numbers past int64, exponent spellings, dates and text that needs quoting, because type inference draws its lines there.
 
+## Differential tests
+
+`TestDifferential_StoredValuesMatchSQLiteColumnAffinity` in `filesql_integration_test.go` loads a generated CSV with filesql, then builds the same table in a plain SQLite database with the column types filesql chose and every cell inserted as text. SQLite's column affinity decides what each cell becomes there, so the two have to hold the same values, apart from the documented rule that a blank cell in an INTEGER or REAL column is NULL.
+
 ## Running the generated tests longer
 
 `go test` draws a hundred inputs per test. Draw more, or replay a failure, with rapid's flags:
 
 ```sh
-go test . -run '^Test(Property|Metamorphic)_' -rapid.checks=20000
+go test . -run '^Test(Property|Metamorphic|Differential)_' -rapid.checks=20000
 go test . -run '^TestMetamorphic_' -rapid.seed=<seed printed by the failure>
 ```
 
