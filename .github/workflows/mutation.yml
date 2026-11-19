@@ -49,7 +49,13 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         # Run from the module root: gremlins compares git diff paths as given.
-        run: gremlins unleash --diff "$BASE_SHA" --workers 2 --timeout-coefficient 10 --output mutation.json .
+        # Zero context lines give each edit its own hunk; with git's default
+        # three, two edits a few lines apart merge into one hunk whose range
+        # gremlins reads short, and the later edit is never mutated.
+        run: |
+          git config diff.context 0
+          git config diff.interHunkContext 0
+          gremlins unleash --diff "$BASE_SHA" --workers 2 --timeout-coefficient 10 --output mutation.json .
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

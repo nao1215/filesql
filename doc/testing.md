@@ -50,6 +50,7 @@ go test ./internal/parser -run '^$' -fuzz '^FuzzParseFormats$' -fuzztime 1m
 
 ```sh
 gremlins unleash --workers 4 --timeout-coefficient 10 --exclude-files / ./internal/infer
+git config diff.context 0; git config diff.interHunkContext 0   # one hunk per edit, so --diff sees every changed line
 gremlins unleash --diff origin/main --workers 4 .
 ```
 
