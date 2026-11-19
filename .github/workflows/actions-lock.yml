@@ -11,7 +11,7 @@ permissions:
 # `python3 scripts/lock_actions.py` (needs `gh extension install github/gh-actions-lock`).
 # It keeps the full-SHA references that Scorecard reads.
 # Cancel the superseded run of a pull request when it is pushed again; runs
-# on main are grouped by commit so none of them is ever cancelled.
+# on main are grouped by commit so none of them is ever canceled.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
