@@ -10,6 +10,12 @@ on:
 permissions:
   contents: read
 
+# Cancel the superseded run of a pull request when it is pushed again; runs
+# on main are grouped by commit so none of them is ever cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   unit_test:
     name: Unit test
@@ -37,6 +43,10 @@ jobs:
         go:
           - "1.26.11"
           - "stable"
+        # macOS runners are shared five at a time across the account and were
+        # what a pull request waited on longest. A pull request tests macOS on
+        # the newest Go only; the push to main runs both legs there.
+        exclude: ${{ github.event_name == 'pull_request' && fromJSON('[{"os":"macos-latest","go":"1.26.11"}]') || fromJSON('[]') }}
       fail-fast: false
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
@@ -69,12 +79,38 @@ jobs:
         with:
           persist-credentials: false
 
+      # setup-go's cache holds the build without -race, which is of no use
+      # here: the race build of the transpiled SQLite driver was most of this
+      # job's time. The job keeps its own build cache, saved from main and
+      # restored on pull requests.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.11"
+          cache: false
+
+      - name: Restore the race build cache
+        id: race-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-race-go1.26.11-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-race-go1.26.11-${{ hashFiles('go.sum') }}-
+            ${{ runner.os }}-race-go1.26.11-
 
       - name: Run tests with the race detector
         run: go test -race ./...
+
+      - name: Save the race build cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ steps.race-cache.outputs.cache-primary-key }}
 
   cross_build:
     name: Cross build (${{ matrix.goos }})
