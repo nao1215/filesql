@@ -1,17 +1,22 @@
 package filesql
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xuri/excelize/v2"
+	"pgregory.net/rapid"
 )
 
 func TestCompanyDataIntegration(t *testing.T) {
@@ -1256,4 +1261,350 @@ func tableShape(ctx context.Context, t *testing.T, open func() (*sql.DB, func())
 	}
 	require.NoError(t, rows.Err())
 	return shape.String()
+}
+
+// generatedTable is a header and rows of cells that every text format this
+// package reads can carry unchanged: no tab, CR or LF, so TSV and LTSV hold
+// them as written.
+type generatedTable struct {
+	header []string
+	rows   [][]string
+}
+
+// generatedEdgeValues are strings near the lines type inference draws:
+// numbers in spellings strconv and SQLite disagree about, times without dates,
+// and words that only look like values.
+var generatedEdgeValues = []string{
+	"007", "+5", "-0", "0.10", "1e3", "1E-2", " 12", "12 ", "1,000", "0x1F", ".5", "5.",
+	"9223372036854775807", "9223372036854775808", "-9223372036854775809", "NaN", "Inf", "-inf",
+	"true", "FALSE", "null", "NULL", "2024-01-02T03:04:05Z", "2024-01-02 03:04:05", "12:30",
+	"2024/01/02", "02/01/2024", "2024-02-30", "1.7976931348623157e308", "4.9e-324",
+}
+
+// generatedNumericSpellings are numbers written the ways a spreadsheet export
+// or a hand-edited file writes them, so a numeric column meets them too.
+var generatedNumericSpellings = []string{
+	"007", "+5", "-0", "0.0", "-0.0", "1e3", "1E-2", "2.5e+2", " 12", "12 ", " 3.5 ", ".5", "5.", "0.10",
+	"100.000", "9223372036854775807", "-9223372036854775808", "9223372036854775808", "18446744073709551616",
+	"1.7976931348623157e308", "4.9e-324", "123456789012345678", "0.1234567890123456789",
+}
+
+// drawGeneratedTable draws a table whose columns lean towards one kind of
+// value each, so type inference has a column to settle on, and mixes in empty
+// cells, padded numbers and text that needs quoting.
+func drawGeneratedTable(t *rapid.T) generatedTable {
+	cols := rapid.IntRange(1, 4).Draw(t, "cols")
+	rowCount := rapid.IntRange(1, 12).Draw(t, "rows")
+	header := make([]string, cols)
+	kinds := make([]int, cols)
+	for c := range cols {
+		header[c] = "c" + strconv.Itoa(c)
+		kinds[c] = rapid.IntRange(0, 6).Draw(t, "kind")
+	}
+	text := rapid.StringOfN(rapid.RuneFrom([]rune("abcXYZ ,\"'.:;-_=éß漢字😀")), 1, 8, -1)
+	rows := make([][]string, rowCount)
+	for r := range rowCount {
+		row := make([]string, cols)
+		for c := range cols {
+			if rapid.IntRange(0, 9).Draw(t, "empty") == 0 {
+				continue
+			}
+			kind := kinds[c]
+			if kind == 6 { // a column of anything
+				kind = rapid.IntRange(0, 5).Draw(t, "mixed")
+			}
+			switch kind {
+			case 0:
+				row[c] = strconv.FormatInt(rapid.Int64Range(-1_000_000, 1_000_000).Draw(t, "int"), 10)
+			case 1:
+				row[c] = strconv.FormatFloat(float64(rapid.IntRange(-100000, 100000).Draw(t, "cents"))/100, 'f', -1, 64)
+			case 2:
+				row[c] = fmt.Sprintf("20%02d-%02d-%02d", rapid.IntRange(0, 30).Draw(t, "year"), rapid.IntRange(1, 12).Draw(t, "month"), rapid.IntRange(1, 28).Draw(t, "day"))
+			case 3:
+				row[c] = rapid.SampledFrom(generatedEdgeValues).Draw(t, "edge")
+			case 4:
+				if rapid.Bool().Draw(t, "plain") {
+					row[c] = strconv.Itoa(rapid.IntRange(-50, 50).Draw(t, "small"))
+				} else {
+					row[c] = rapid.SampledFrom(generatedNumericSpellings).Draw(t, "spelling")
+				}
+			default:
+				row[c] = text.Draw(t, "text")
+			}
+		}
+		// A workbook cannot hold a row without cells: excelize leaves it out.
+		// One cell keeps the row in every format.
+		if strings.Join(row, "") == "" {
+			row[0] = "0"
+		}
+		rows[r] = row
+	}
+	return generatedTable{header: header, rows: rows}
+}
+
+func (g generatedTable) delimited(t *rapid.T, comma rune, crlf bool) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	w.Comma = comma
+	w.UseCRLF = crlf
+	terminator := "\n"
+	if crlf {
+		terminator = "\r\n"
+	}
+	if err := w.Write(g.header); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range g.rows {
+		// encoding/csv writes a lone empty field as a blank line, which a
+		// CSV reader skips. Quote it so the row is still there.
+		if len(row) == 1 && row[0] == "" {
+			w.Flush()
+			buf.WriteString(`""` + terminator)
+			continue
+		}
+		if err := w.Write(row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// tsv joins cells with tabs and quotes nothing: filesql reads a TSV field as
+// it is written.
+func (g generatedTable) tsv() []byte {
+	var buf bytes.Buffer
+	buf.WriteString(strings.Join(g.header, "\t") + "\n")
+	for _, row := range g.rows {
+		buf.WriteString(strings.Join(row, "\t") + "\n")
+	}
+	return buf.Bytes()
+}
+
+func (g generatedTable) ltsv() []byte {
+	var buf bytes.Buffer
+	for _, row := range g.rows {
+		fields := make([]string, len(row))
+		for c, v := range row {
+			fields[c] = g.header[c] + ":" + v
+		}
+		buf.WriteString(strings.Join(fields, "\t") + "\n")
+	}
+	return buf.Bytes()
+}
+
+// xlsx writes every cell as a string cell, the way a CSV holds it, and leaves
+// an empty value as no cell at all.
+func (g generatedTable) xlsx(t *rapid.T) []byte {
+	t.Helper()
+	f := excelize.NewFile()
+	write := func(r int, cells []string) {
+		for c, v := range cells {
+			if v == "" {
+				continue
+			}
+			cell, err := excelize.CoordinatesToCellName(c+1, r+1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.SetCellStr("Sheet1", cell, v); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	write(0, g.header)
+	for r, row := range g.rows {
+		write(r+1, row)
+	}
+	var buf bytes.Buffer
+	if err := f.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// generatedShape is what a query sees of the one table in db: each column's
+// declared type, then every row in load order with each value printed beside
+// its Go type, so an INTEGER 1 and a TEXT "1" do not compare equal.
+func generatedShape(t *rapid.T, db *sql.DB) string {
+	t.Helper()
+	ctx := context.Background()
+	var name string
+	if err := db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name LIMIT 1").Scan(&name); err != nil {
+		t.Fatalf("finding the loaded table: %v", err)
+	}
+	var shape strings.Builder
+	types, err := db.QueryContext(ctx, "SELECT name, type FROM pragma_table_info(?)", name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for types.Next() {
+		var column, declared string
+		if err := types.Scan(&column, &declared); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(&shape, "%s %s|", column, declared)
+	}
+	if err := types.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := types.Err(); err != nil {
+		t.Fatal(err)
+	}
+	shape.WriteString("\n")
+	rows, err := db.QueryContext(ctx, `SELECT * FROM "`+name+`" ORDER BY rowid`) //nolint:gosec // the name comes from sqlite_master
+	if err != nil {
+		t.Fatal(err)
+	}
+	columns, err := rows.Columns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		values := make([]any, len(columns))
+		targets := make([]any, len(columns))
+		for i := range values {
+			targets[i] = &values[i]
+		}
+		if err := rows.Scan(targets...); err != nil {
+			t.Fatal(err)
+		}
+		for _, v := range values {
+			if b, ok := v.([]byte); ok {
+				v = string(b)
+			}
+			fmt.Fprintf(&shape, "%T:%v|", v, v)
+		}
+		shape.WriteString("\n")
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return shape.String()
+}
+
+// generatedLoad loads data as table t through a reader and returns its shape.
+func generatedLoad(t *rapid.T, data []byte, fileType FileType, chunkSize int, opts ...ReaderOption) string {
+	t.Helper()
+	builder := NewBuilder().AddReader(bytes.NewReader(data), "t", fileType, opts...)
+	if chunkSize > 0 {
+		builder.SetDefaultChunkSize(chunkSize)
+	}
+	db, err := builder.Open(context.Background())
+	if err != nil {
+		t.Fatalf("loading %s: %v", fileType, err)
+	}
+	shape := generatedShape(t, db)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return shape
+}
+
+// TestMetamorphic_TheSameTableLoadsTheSameFromEveryFormat writes one generated
+// table as CSV, CSV with CRLF, TSV, LTSV and XLSX, compresses the CSV with
+// every codec that has a writer, and reads it back in single-row chunks. None
+// of that changes what the table holds, so every load has to give the column
+// types and the typed values the plain CSV gives.
+func TestMetamorphic_TheSameTableLoadsTheSameFromEveryFormat(t *testing.T) {
+	t.Parallel()
+
+	codecs := []CompressionType{
+		CompressionGZ, CompressionXZ, CompressionZSTD, CompressionZLIB,
+		CompressionSNAPPY, CompressionS2, CompressionLZ4,
+	}
+	rapid.Check(t, func(t *rapid.T) {
+		table := drawGeneratedTable(t)
+		plain := table.delimited(t, ',', false)
+		want := generatedLoad(t, plain, FileTypeCSV, 0)
+
+		variants := map[string]string{
+			"CSV with CRLF":       generatedLoad(t, table.delimited(t, ',', true), FileTypeCSV, 0),
+			"TSV":                 generatedLoad(t, table.tsv(), FileTypeTSV, 0),
+			"LTSV":                generatedLoad(t, table.ltsv(), FileTypeLTSV, 0),
+			"XLSX":                generatedLoad(t, table.xlsx(t), FileTypeXLSX, 0),
+			"CSV in 1-row chunks": generatedLoad(t, plain, FileTypeCSV, 1),
+		}
+		codec := rapid.SampledFrom(codecs).Draw(t, "codec")
+		var compressed bytes.Buffer
+		w, err := codec.NewWriter(&compressed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(plain); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		variants["CSV through "+codec.String()] = generatedLoad(t, compressed.Bytes(), FileTypeCSV, 0, WithCompression(codec))
+
+		for name, got := range variants {
+			if got != want {
+				t.Fatalf("%s loads differently from the plain CSV\nCSV:\n%s\n%s:\n%s", name, want, name, got)
+			}
+		}
+	})
+}
+
+// TestMetamorphic_ADumpLoadsBackAsTheTableItWasDumpedFrom dumps a loaded table
+// in every format a dump writes and loads each file back. The file is a copy
+// of the table, so loading it has to give the same column types and values.
+func TestMetamorphic_ADumpLoadsBackAsTheTableItWasDumpedFrom(t *testing.T) {
+	t.Parallel()
+
+	formats := []OutputFormat{OutputFormatCSV, OutputFormatTSV, OutputFormatLTSV, OutputFormatParquet, OutputFormatXLSX}
+	base := t.TempDir()
+	run := 0
+	rapid.Check(t, func(t *rapid.T) {
+		ctx := context.Background()
+		table := drawGeneratedTable(t)
+		format := rapid.SampledFrom(formats).Draw(t, "format")
+		run++
+
+		db, err := NewBuilder().AddReader(bytes.NewReader(table.delimited(t, ',', false)), "t", FileTypeCSV).Open(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := generatedShape(t, db)
+		// Each draw gets its own directory and removes it, so a long run
+		// does not pile up a dump per draw.
+		dir := filepath.Join(base, strconv.Itoa(run))
+		if err := os.Mkdir(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := os.RemoveAll(dir); err != nil {
+				t.Error(err)
+			}
+		}()
+		if err := DumpDatabase(ctx, db, dir, NewDumpOptions().WithFormat(format)); err != nil {
+			t.Fatalf("dumping as %s: %v", format, err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		back, err := Open(ctx, filepath.Join(dir, "t"+format.Extension()))
+		if err != nil {
+			t.Fatalf("loading the %s dump: %v", format, err)
+		}
+		got := generatedShape(t, back)
+		if err := back.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("the %s dump loads differently from the table it came from\nbefore:\n%s\nafter:\n%s", format, want, got)
+		}
+	})
 }

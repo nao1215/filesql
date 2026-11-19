@@ -45,4 +45,5 @@ require (
 	modernc.org/libc v1.80.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
+	pgregory.net/rapid v1.3.0 // indirect
 )

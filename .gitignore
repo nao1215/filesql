@@ -36,3 +36,6 @@ go.work.sum
 
 # A scratch binary a bug hunt built here once and committed by accident
 /probe
+
+# Inputs rapid writes when a generated test fails
+testdata/rapid/
