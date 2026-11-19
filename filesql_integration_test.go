@@ -1492,6 +1492,16 @@ func generatedShape(t *rapid.T, db *sql.DB) string {
 	return shape.String()
 }
 
+// closeGeneratedDB closes db when a draw ends, failed or not. rapid repeats a
+// failing draw while it shrinks the input, so a database left open by a draw
+// that stopped early would pile up.
+func closeGeneratedDB(t *rapid.T, db *sql.DB) {
+	t.Helper()
+	if err := db.Close(); err != nil {
+		t.Error(err)
+	}
+}
+
 // generatedLoad loads data as table t through a reader and returns its shape.
 func generatedLoad(t *rapid.T, data []byte, fileType FileType, chunkSize int, opts ...ReaderOption) string {
 	t.Helper()
@@ -1503,11 +1513,8 @@ func generatedLoad(t *rapid.T, data []byte, fileType FileType, chunkSize int, op
 	if err != nil {
 		t.Fatalf("loading %s: %v", fileType, err)
 	}
-	shape := generatedShape(t, db)
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return shape
+	defer closeGeneratedDB(t, db)
+	return generatedShape(t, db)
 }
 
 // TestMetamorphic_TheSameTableLoadsTheSameFromEveryFormat writes one generated
@@ -1575,6 +1582,7 @@ func TestMetamorphic_ADumpLoadsBackAsTheTableItWasDumpedFrom(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer closeGeneratedDB(t, db)
 		want := generatedShape(t, db)
 		// Each draw gets its own directory and removes it, so a long run
 		// does not pile up a dump per draw.
@@ -1590,18 +1598,13 @@ func TestMetamorphic_ADumpLoadsBackAsTheTableItWasDumpedFrom(t *testing.T) {
 		if err := DumpDatabase(ctx, db, dir, NewDumpOptions().WithFormat(format)); err != nil {
 			t.Fatalf("dumping as %s: %v", format, err)
 		}
-		if err := db.Close(); err != nil {
-			t.Fatal(err)
-		}
 
 		back, err := Open(ctx, filepath.Join(dir, "t"+format.Extension()))
 		if err != nil {
 			t.Fatalf("loading the %s dump: %v", format, err)
 		}
+		defer closeGeneratedDB(t, back)
 		got := generatedShape(t, back)
-		if err := back.Close(); err != nil {
-			t.Fatal(err)
-		}
 		if got != want {
 			t.Fatalf("the %s dump loads differently from the table it came from\nbefore:\n%s\nafter:\n%s", format, want, got)
 		}
@@ -1625,6 +1628,7 @@ func TestDifferential_StoredValuesMatchSQLiteColumnAffinity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer closeGeneratedDB(t, db)
 		got := generatedShape(t, db)
 		declared := make([]string, len(table.header))
 		for i, column := range table.header {
@@ -1632,19 +1636,12 @@ func TestDifferential_StoredValuesMatchSQLiteColumnAffinity(t *testing.T) {
 				t.Fatalf("reading the type of %s: %v", column, err)
 			}
 		}
-		if err := db.Close(); err != nil {
-			t.Fatal(err)
-		}
 
 		oracle, err := sql.Open("sqlite", ":memory:")
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer func() {
-			if err := oracle.Close(); err != nil {
-				t.Error(err)
-			}
-		}()
+		defer closeGeneratedDB(t, oracle)
 		columns := make([]string, len(table.header))
 		marks := make([]string, len(table.header))
 		for i, column := range table.header {
