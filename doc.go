@@ -160,9 +160,9 @@
 // must hold, and the decoder allocates it before reading any data. filesql caps
 // that at a 256 MiB xz dictionary, four times what "xz -9" declares, and a 128
 // MiB zstd window, the largest the zstd CLI reaches on its own, so a damaged file
-// costs a fixed ceiling. The zstd cap holds for every frame; the xz one is read
-// from the first block of the first stream, so a later block or a concatenated
-// second stream is not covered.
+// costs a fixed ceiling. The zstd cap holds for every frame. The xz cap is read
+// from the first block of every stream, concatenated streams included, so only a
+// later block within one stream is not covered.
 //
 // One record is held whole while it is read, so a record longer than 64 MiB is
 // refused rather than buffered: a delimited record, an LTSV record, a JSONL
@@ -304,8 +304,9 @@
 //
 // Two inputs are the same source only when they are in the same place.
 // "dir/users.csv" and "dir/users.csv.gz" are one dataset offered twice, and the
-// plain one is read; "a/users.csv" and "b/users.csv" are two files, and both are
-// loaded. When two inputs want the same table, Open refuses them with
+// plain one is read; "a/users.csv" and "b/users.csv" are two sources, so neither
+// is dropped, but both want the table "users". When two inputs want the same
+// table, Open refuses them with
 // ErrDuplicateTable, while LoadInto and LoadIntoTx keep their last-wins rule, so
 // the later input replaces the table. Table names are compared the way SQLite
 // compares identifiers, with ASCII case folded, so "Users.csv" and "users.csv"

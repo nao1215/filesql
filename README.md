@@ -26,10 +26,10 @@ The rules the loader follows are in the godoc: https://pkg.go.dev/github.com/nao
 Given this `users.csv`:
 
 ```csv
-name,age
-Alice,31
-Bob,24
-Carol,28
+id,name,age
+1,Alice,31
+2,Bob,24
+3,Carol,28
 ```
 
 ```go
@@ -297,7 +297,7 @@ Bob,bob@example.com,user
 | `.json` | JSON | Query nested data with `json_extract()` |
 | `.jsonl` | JSONL | One JSON value per line |
 | `.parquet` | Parquet | Columnar format |
-| `.xlsx` | Excel XLSX | One sheet becomes one table, named `file_sheet`; see [Table Naming](https://pkg.go.dev/github.com/nao1215/filesql#hdr-Table_Naming) and [Excel Sheet Visibility](https://pkg.go.dev/github.com/nao1215/filesql#hdr-Excel_Sheet_Visibility) |
+| `.xlsx` | Excel XLSX | One sheet becomes one table, named `file_sheet`, or `file` when the sheet repeats the file name; see [Table Naming](https://pkg.go.dev/github.com/nao1215/filesql#hdr-Table_Naming) and [Excel Sheet Visibility](https://pkg.go.dev/github.com/nao1215/filesql#hdr-Excel_Sheet_Visibility) |
 | `.ach` | ACH (NACHA) | One table per record kind; see [ACH and Fedwire](https://pkg.go.dev/github.com/nao1215/filesql#hdr-ACH_and_Fedwire) |
 | `.fed` | Fedwire | One message becomes one row 326 columns wide; see [ACH and Fedwire](https://pkg.go.dev/github.com/nao1215/filesql#hdr-ACH_and_Fedwire) |
 
@@ -344,7 +344,7 @@ The [examples](./examples) directory uses filesql with common Go database tools:
 
 ## Verifying releases
 
-Each GitHub Release carries a source archive (`filesql-<tag>.tar.gz`), `checksums.txt`, its keyless cosign signature (`checksums.txt.sigstore.json`), and the archive's build provenance (`filesql-<tag>.intoto.jsonl`). Download them, replace `<tag>` with the release tag, and verify:
+Each GitHub Release from v0.60.2 on carries a source archive (`filesql-<tag>.tar.gz`), `checksums.txt`, its keyless cosign signature (`checksums.txt.sigstore.json`), and the archive's build provenance (`filesql-<tag>.intoto.jsonl`). Download them, replace `<tag>` with the release tag, and verify:
 
 ```bash
 gh attestation verify filesql-<tag>.tar.gz --repo nao1215/filesql \
