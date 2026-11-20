@@ -42,9 +42,9 @@ func TestEnglishReadmeHasRequiredSections(t *testing.T) {
 	t.Parallel()
 
 	requiredSections := []string{
-		"## Why filesql?",
+		"## Quick start",
 		"## Features",
-		"## Supported File Formats",
+		"## Supported formats",
 		"## Installation",
 		"## Recipes",
 		"## Behavior and limits",

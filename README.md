@@ -17,15 +17,20 @@
 
 ![logo](./doc/image/filesql-logo.png)
 
-filesql loads files into an in-memory SQLite database. Open CSV, TSV, LTSV, JSON, JSONL, Parquet, XLSX, ACH, or Fedwire inputs, then query them with normal SQLite syntax.
+filesql loads CSV, TSV, LTSV, JSON, JSONL, Parquet, XLSX, ACH, and Fedwire files into an in-memory SQLite database behind `database/sql`, with no cgo. The [`prep`](https://pkg.go.dev/github.com/nao1215/filesql/prep) package in the same module cleans and validates rows before they become tables, and [sqly](https://github.com/nao1215/sqly) is an interactive shell built on filesql.
 
-The same module also includes [`prep`](https://pkg.go.dev/github.com/nao1215/filesql/prep), which cleans and validates rows before they become tables.
+The rules the loader follows are in the godoc: https://pkg.go.dev/github.com/nao1215/filesql
 
-[sqly](https://github.com/nao1215/sqly) is the shell built on the same core.
+## Quick start
 
-Documentation: https://pkg.go.dev/github.com/nao1215/filesql
+Given this `users.csv`:
 
-## Try it in 30 seconds
+```csv
+id,name,age
+1,Alice,31
+2,Bob,24
+3,Carol,28
+```
 
 ```go
 package main
@@ -53,33 +58,24 @@ func main() {
 }
 ```
 
+```text
+2
+```
+
 The table is named after the file, so `users.csv` is `users`. Join across formats by opening more of them:
 
 ```go
 db, err := filesql.Open(ctx, "users.csv", "orders.jsonl", "returns.parquet")
 ```
 
-## Why filesql?
-
-filesql is for cases where the data is already in a file and the fastest useful tool is SQL.
-
-- Open files as tables without setting up a server.
-- Join across CSV, TSV, LTSV, JSON, JSONL, Parquet, XLSX, ACH, and Fedwire.
-- Keep edits in memory until you decide to save them.
-- Clean inputs with `prep` before loading them.
-
-If the job is analytics on data larger than memory, or on files in S3, use [DuckDB](https://duckdb.org/): its columnar engine is faster and its SQL is richer. filesql is for a Go program that wants file data behind `database/sql` with no cgo, edits written back into the file they came from, ACH, Fedwire and LTSV input, Shift-JIS or EUC-JP output, and validation with `prep` before a row becomes a table.
-
 ## Features
 
-- Query file data with standard SQLite syntax, including joins, CTEs, and `json_extract()`.
-- Optionally query with MySQL, PostgreSQL, or GoogleSQL syntax via `WithDialect` (translated to SQLite).
-- Read from file paths, directories, `io.Reader`, and `embed.FS`.
-- Handle compressed CSV, TSV, LTSV, JSON, JSONL, Parquet, and XLSX files transparently.
-- Write csv, tsv, and ltsv output in Shift-JIS, EUC-JP, ISO-2022-JP, or UTF-16 as well as UTF-8.
+- Query with SQLite syntax, including joins, CTEs, and `json_extract()`, or with MySQL, PostgreSQL, or GoogleSQL syntax through `WithDialect`.
+- Read from paths, directories, `io.Reader`, and `embed.FS`, compressed or not.
 - Load into a new in-memory database or into a `*sql.DB` you already manage.
-- Save changes with `DumpDatabase`, `EnableAutoSave`, or `EnableAutoSaveOnCommit`.
-- Stay in one module for loading (`filesql`) and cleanup (`prep`).
+- Keep edits in memory and write them back with `DumpDatabase`, `EnableAutoSave`, or `EnableAutoSaveOnCommit`, as UTF-8, Shift-JIS, EUC-JP, ISO-2022-JP, or UTF-16 for csv, tsv, and ltsv.
+
+For analytics on data larger than memory, or on files in S3, use [DuckDB](https://duckdb.org/): its columnar engine is faster and its SQL is richer.
 
 ## Installation
 
@@ -92,18 +88,11 @@ Requirements:
 - Go 1.26.11 or later
 - Linux, macOS, or Windows
 
-The patch release is the point: 1.26.6 carries the standard library fixes for
-[GO-2026-6088](https://pkg.go.dev/vuln/GO-2026-6088) (`encoding/xml`) and
-[GO-2026-5972](https://pkg.go.dev/vuln/GO-2026-5972) (`encoding/asn1`), and
-filesql reaches `encoding/xml` on every XLSX it reads. 1.26.9 adds the fixes for
-the `net/http` advisories GO-2026-6603, GO-2026-6611, GO-2026-6612, GO-2026-6613
-and GO-2026-6617, which `govulncheck` finds reachable from filesql, and 1.26.11
-the fix for GO-2026-6859 (`net/http`), reachable the same way.
-An earlier 1.26 is not supported.
+Earlier 1.26 releases are not supported because they lack standard library fixes that `govulncheck` finds reachable from filesql: [GO-2026-6088](https://pkg.go.dev/vuln/GO-2026-6088) (`encoding/xml`, read on every XLSX), [GO-2026-5972](https://pkg.go.dev/vuln/GO-2026-5972) (`encoding/asn1`), and GO-2026-6603, GO-2026-6611, GO-2026-6612, GO-2026-6613, GO-2026-6617, and GO-2026-6859 (`net/http`).
 
 ## Recipes
 
-`filesql.Open` takes a context, so a load can be given a timeout or canceled with the request it belongs to. Pass `context.Background()` when it needs neither.
+`filesql.Open` takes a context, so a load can time out or be canceled with its request.
 
 ### Query files with SQLite
 
@@ -160,10 +149,9 @@ func main() {
 
 ### Query with another SQL dialect
 
-By default queries use SQLite syntax. `WithDialect` lets you write queries in
-MySQL, PostgreSQL, or GoogleSQL (BigQuery / Cloud Spanner) instead; filesql
-translates them to SQLite before running. Loading files always uses SQLite, so
-only the queries you write are affected.
+`WithDialect` lets you write queries in MySQL, PostgreSQL, or GoogleSQL
+(BigQuery, Cloud Spanner). filesql translates each query to SQLite before it
+runs; loading is unaffected.
 
 ```go
 package main
@@ -204,21 +192,10 @@ func main() {
 }
 ```
 
-Translation implements a stated subset of SQL rather than a full emulator: the
-query is parsed, rewritten and written back out, so common incompatibilities
-(identifier quoting, `DATE_ADD`, `SPLIT_PART`, `SAFE_DIVIDE`, `EXTRACT`, casts,
-…) are rewritten or backed by helper functions, and a construct with no SQLite
-equivalent (for example `QUALIFY`, `DISTINCT ON`, MySQL's `XOR`, or MySQL's `0x`
-literal, which is a string in one place and a number in another) returns a clear
-error. Nothing is passed to SQLite untranslated: a query outside the subset is
-refused with the line and column of the construct.
-What the translation cannot reach is SQLite's type system: there is no boolean,
-no interval and no array, so a comparison answers `1` or `0`, an `INTERVAL`
-literal works only in date arithmetic, and a construct whose result would be one
-of those types is refused rather than answered.
-A non-SQLite dialect
-cannot be combined with auto-save. See the [`dialect`](./dialect) package for the
-full list of supported translations.
+Translation covers a stated subset of SQL. A query outside it, or a construct
+with no SQLite equivalent such as `QUALIFY` or `DISTINCT ON`, is refused with
+the line and column of the construct. A non-SQLite dialect cannot be combined
+with auto-save. The [`dialect`](./dialect) package lists what is translated.
 
 ### Load into a database you already own
 
@@ -252,7 +229,7 @@ func main() {
 
 ### Clean rows before loading with prep
 
-Use `prep` when the file needs normalization before it becomes a table: trimming, case normalization, defaults, and validation errors with row numbers.
+`prep` trims, normalizes case, fills defaults, and reports validation errors with row numbers before the data becomes a table.
 
 ```go
 package main
@@ -310,7 +287,7 @@ Bob,bob@example.com,user
 }
 ```
 
-## Supported File Formats
+## Supported formats
 
 | Extension | Format | Notes |
 |-----------|--------|-------|
@@ -320,31 +297,17 @@ Bob,bob@example.com,user
 | `.json` | JSON | Query nested data with `json_extract()` |
 | `.jsonl` | JSONL | One JSON value per line |
 | `.parquet` | Parquet | Columnar format |
-| `.xlsx` | Excel XLSX | One sheet becomes one table, named `file_sheet` (just `file` when the sheet repeats it). A workbook handed to `AddReader` hangs its sheets off the table name given there instead of off a file name, so a workbook added as `book` loads as `book_Sheet1` and as plain `book` when the sheet is itself named `book`. `ExcelSheetTableNames` works out the same names when it is given that table name in place of a path, and `sqlite_master` has them after a load. Every sheet that names a column is loaded by default, a blank scratch sheet being passed over; see [Excel Sheet Visibility](https://pkg.go.dev/github.com/nao1215/filesql#hdr-Excel_Sheet_Visibility) |
+| `.xlsx` | Excel XLSX | One sheet becomes one table, named `file_sheet`, or `file` when the sheet repeats the file name; see [Table Naming](https://pkg.go.dev/github.com/nao1215/filesql#hdr-Table_Naming) and [Excel Sheet Visibility](https://pkg.go.dev/github.com/nao1215/filesql#hdr-Excel_Sheet_Visibility) |
 | `.ach` | ACH (NACHA) | One table per record kind; see [ACH and Fedwire](https://pkg.go.dev/github.com/nao1215/filesql#hdr-ACH_and_Fedwire) |
 | `.fed` | Fedwire | One message becomes one row 326 columns wide; see [ACH and Fedwire](https://pkg.go.dev/github.com/nao1215/filesql#hdr-ACH_and_Fedwire) |
-
-Two inputs are the same source only when they are in the same place. `dir/users.csv` and `dir/users.csv.gz` are one dataset offered twice, and the plain one is read; `a/users.csv` and `b/users.csv` are two files, and both are loaded. What happens when both then want the table `users` is the loading API's business: `Open` builds a fresh database and refuses it with `ErrDuplicateTable`, while `LoadInto` and `LoadIntoTx` load into a database you own and keep their last-wins rule, so the later input replaces the table. Neither one silently drops a file. Table names are compared the way SQLite compares identifiers, with ASCII case folded, so `Users.csv` and `users.csv` want the same table too.
-
-Column names inside a file follow two separate rules, and a header that breaks either is refused with `ErrDuplicateColumn` before it reaches SQLite. Two names differing only in ASCII letter case are one column, because SQLite is what holds them — `ID` and `id` are a duplicate — and the folding stops at ASCII as SQLite's does, so `ä` and `Ä` stay two columns. Two names identical after their surrounding whitespace is trimmed are one column too: `name` and `" name "` are one name typed twice. The rules are applied one at a time and never combined, so `" A"` beside `a` is accepted, which is what SQLite does with it as well. LTSV carries its labels on every record rather than in a header, so the same check runs per record.
 
 Compressed wrappers are supported for CSV, TSV, LTSV, JSON, JSONL, Parquet, and XLSX:
 `.gz`, `.bz2`, `.xz`, `.zst`, `.z`, `.snappy`, `.s2`, `.lz4`.
 
-ACH and Fedwire do not use external compression wrappers.
+ACH and Fedwire take no compression wrapper.
 
-An xz or zstd stream states in its header how much working memory its decoder
-must hold, and a decoder allocates it before reading any data. filesql caps that
-at a 256 MiB xz dictionary, four times what `xz -9` declares, and a 128 MiB zstd
-window, which is the largest the `zstd` CLI reaches on its own. A damaged file
-therefore costs a fixed ceiling rather than whatever its header names. The zstd
-cap holds for every frame; the xz one is read from the first block of the first
-stream, so a later block or a concatenated second stream is not covered.
-
-Format and compression are separate. `FileType` names the format only —
-`FileTypeCSV` is a CSV whether or not a codec wraps it — and a path says which
-codec that is. A reader has no path, so `AddReader` takes the codec as an
-option:
+`FileType` names the format only, and a path's suffix names the codec. A reader
+has no path, so `AddReader` takes the codec as an option:
 
 ```go
 gz, err := os.Open("users.csv.gz")
@@ -356,91 +319,17 @@ defer gz.Close()
 builder.AddReader(gz, "users", filesql.FileTypeCSV, filesql.WithCompression(filesql.CompressionGZ))
 ```
 
-Without `WithCompression` the reader's bytes are read as the format directly,
-so the ordinary three-argument call is unchanged.
-
 ## Behavior and limits
 
-The rules the loader and the writers follow are documented beside the API they belong to, so they are in reach while the call is being written: column typing and what a blank cell means, memory and chunked loading, sharing a database across goroutines, what each way of saving writes, Excel sheet visibility, and the ACH and Fedwire write-back. Read them at [pkg.go.dev/github.com/nao1215/filesql](https://pkg.go.dev/github.com/nao1215/filesql), or with `go doc github.com/nao1215/filesql`.
+Column typing and blank cells, memory use, duplicate tables and columns, decompression limits, concurrency, saving, Excel sheet visibility, and ACH and Fedwire write-back are documented in the godoc at [pkg.go.dev/github.com/nao1215/filesql](https://pkg.go.dev/github.com/nao1215/filesql), or with `go doc github.com/nao1215/filesql`.
 
 ## Examples
 
-### API example index
-
-The GoDoc examples are fully tested with `go test`. The tables below show the fastest path from a feature name in the README to the exact example function in the repo.
-
-#### filesql
-
-| Feature | Example function | Source |
-|---------|------------------|--------|
-| Open files and query them | `ExampleOpen`, `ExampleOpen_timeout` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
-| Load files into an existing `*sql.DB` | `ExampleLoadInto`, `ExampleDBBuilder_LoadInto` | [example_api_test.go](./example_api_test.go) |
-| Load into a transaction you own | `ExampleDBBuilder_LoadIntoTx` | [example_api_test.go](./example_api_test.go) |
-| Load into your own database, edit, and save it back | `ExampleLoadInto_dumpDatabase` | [example_api_test.go](./example_api_test.go) |
-| Build from readers, paths, or embedded FS | `ExampleNewBuilder`, `ExampleDBBuilder_AddReader`, `ExampleDBBuilder_AddPath`, `ExampleDBBuilder_AddFS` | [example_test.go](./example_test.go) |
-| Read a compressed reader | `ExampleDBBuilder_AddReader_compressed` | [example_test.go](./example_test.go) |
-| Tune chunked loading | `ExampleDBBuilder_SetDefaultChunkSize` | [example_api_test.go](./example_api_test.go) |
-| Handle malformed rows | `ExampleDBBuilder_WithMalformedRowPolicy` | [example_api_test.go](./example_api_test.go) |
-| Count the rows a skip policy discarded | `ExampleDBBuilder_SkippedRows` | [example_api_test.go](./example_api_test.go) |
-| Query with MySQL, PostgreSQL, or GoogleSQL syntax | `ExampleDBBuilder_WithDialect` | [example_api_test.go](./example_api_test.go) |
-| Load only the sheets a workbook shows | `ExampleDBBuilder_WithExcelSheetPolicy` | [example_api_test.go](./example_api_test.go) |
-| Report a workbook's sheets and their visibility | `ExampleExcelSheetsInFile`, `ExampleExcelSheetsInReader` | [example_api_test.go](./example_api_test.go) |
-| Check a workbook's sheets for table names that collide | `ExampleExcelSheetTableNames` | [example_api_test.go](./example_api_test.go) |
-| Attach a slog logger | `ExampleDBBuilder_WithLogger` | [example_api_test.go](./example_api_test.go) |
-| Open a database that refuses writes | `ExampleDBBuilder_OpenReadOnly` | [example_api_test.go](./example_api_test.go) |
-| Save on close or commit | `ExampleDBBuilder_EnableAutoSave`, `ExampleDBBuilder_EnableAutoSaveOnCommit` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
-| Export under a deadline | `ExampleDumpDatabase_deadline` | [example_api_test.go](./example_api_test.go) |
-| Export tables with format/compression/encoding/line-ending options | `ExampleDumpDatabase`, `ExampleNewDumpOptions`, `ExampleDumpOptions_WithFormat`, `ExampleDumpOptions_WithCompression`, `ExampleDumpOptions_WithEncoding`, `ExampleDumpOptions_WithLineEnding` | [example_api_test.go](./example_api_test.go), [example_test.go](./example_test.go) |
-| Compress a stream, or open a compressed file | `ExampleCompressionType_NewWriter`, `ExampleCompressionType_NewReader`, `ExampleOpenReader` | [example_api_test.go](./example_api_test.go) |
-| Strip compression suffixes | `ExampleRemoveCompressionExtension` | [example_api_test.go](./example_api_test.go) |
-| Write an ACH or Fedwire file back after editing it | `ExampleDumpACH`, `ExampleDumpFedWire` | [example_api_test.go](./example_api_test.go) |
-| Write one back when the database came from an `io.Reader` | `ExampleDumpACHWithSource`, `ExampleDumpFedWireWithSource` | [example_api_test.go](./example_api_test.go) |
-| Load a compressed stream whose name is not a path | `ExampleWithCompression` | [example_api_test.go](./example_api_test.go) |
-| Tell which of several inputs failed to load | `ExampleParseError` | [example_api_test.go](./example_api_test.go) |
-| Inspect enum names | `ExampleMalformedRowPolicy_String`, `ExampleExcelSheetPolicy_String`, `ExampleFileType_String`, `ExampleCompressionType_String`, `ExampleEncoding_String`, `ExampleLineEnding_String`, `ExampleOutputFormat_String` | [example_api_test.go](./example_api_test.go) |
-
-#### prep
-
-| Feature | Example function | Source |
-|---------|------------------|--------|
-| Strict tag parsing for invalid prep/validate tags | `ExampleWithStrictTagParsing` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Keep only valid rows in the output stream | `ExampleWithValidRowsOnly` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Clean CSV data into structs and a reusable reader | `ExampleProcessor_Process` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Unwrap a codec before preprocessing | `ExampleProcessor_Process_compressed` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Convert JSON arrays into JSONL output | `ExampleProcessor_Process_json` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Stream cleaned output into any writer | `ExampleProcessor_ProcessToWriter` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Inspect validation counts | `ExampleProcessResult_InvalidRowCount`, `ExampleProcessResult_HasErrors` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Read validation error details | `ExampleProcessResult_ValidationErrors` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| See a struct field that names no column refused | `ExampleProcessor_Process_unknownColumn` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Give a field a default when the column is absent | `ExampleProcessor_Process_defaultForAbsentColumn` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Compare one column against another | `ExampleProcessor_Process_crossField` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Require a column only when other columns say so | `ExampleProcessor_Process_conditionalRequired` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Forbid a column when other columns say so | `ExampleProcessor_Process_conditionalExcluded` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Validate IP address and port columns | `ExampleProcessor_Process_networkColumns` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Validate JSON, time zone, version and digest columns | `ExampleProcessor_Process_encodedColumns` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Verify a check digit on an ISBN or a card number | `ExampleProcessor_Process_checksummedIdentifiers` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Validate country and currency code columns | `ExampleProcessor_Process_codeColumns` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Refuse a duplicate in a key column | `ExampleProcessor_Process_uniqueColumn` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Validate DNS label, color and numeric currency columns | `ExampleProcessor_Process_labelColorAndNumericCode` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Read preprocessing error details | `ExampleProcessResult_PrepErrors` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Check output and original formats | `ExampleProcessResult_OutputFormat` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Load a processed reader into filesql | `ExampleProcessor_Process_intoFilesql` | [prep/example_api_test.go](./prep/example_api_test.go) |
-| Rewind and reread the processed stream | `Example_streamSeek` | [prep/example_api_test.go](./prep/example_api_test.go) |
-
-#### dialect
-
-| Feature | Example function | Source |
-|---------|------------------|--------|
-| Translate a query into SQLite SQL and recognize what has no equivalent | `ExampleTranslate` | [dialect/example_test.go](./dialect/example_test.go) |
-| Run PostgreSQL constructs SQLite has no form for | `ExampleTranslate_postgreSQL` | [dialect/example_test.go](./dialect/example_test.go) |
-| Run BigQuery constructs SQLite has no form for | `ExampleTranslate_googleSQL` | [dialect/example_test.go](./dialect/example_test.go) |
-| Tell a construct SQLite cannot express from one outside the supported subset | `ExampleTranslate_unsupportedFeature` | [dialect/example_test.go](./dialect/example_test.go) |
-| Turn a user-supplied dialect name into a `Dialect` | `ExampleParse` | [dialect/example_test.go](./dialect/example_test.go) |
-| List the built-in dialects and spell one for a person | `ExampleDialects`, `ExampleDialect_DisplayName` | [dialect/example_test.go](./dialect/example_test.go) |
+The examples of `filesql`, [`prep`](https://pkg.go.dev/github.com/nao1215/filesql/prep#pkg-examples), and [`dialect`](https://pkg.go.dev/github.com/nao1215/filesql/dialect#pkg-examples) are run by `go test`; read them on [pkg.go.dev](https://pkg.go.dev/github.com/nao1215/filesql#pkg-examples) or in [example_api_test.go](./example_api_test.go).
 
 ### Integration examples
 
-The [examples](./examples) directory shows how to use filesql with regular Go database tooling:
+The [examples](./examples) directory uses filesql with common Go database tools:
 
 | Example | Description |
 |---------|-------------|
@@ -453,16 +342,9 @@ The [examples](./examples) directory shows how to use filesql with regular Go da
 | [squirrel](./examples/squirrel) | Use filesql with Squirrel |
 | [ent](./examples/ent) | Use filesql with Ent |
 
-## Related Projects
-
-| Project | Description |
-|---------|-------------|
-| [sqly](https://github.com/nao1215/sqly) | Interactive shell for ad-hoc SQL against files |
-| [filesql/prep](https://pkg.go.dev/github.com/nao1215/filesql/prep) | Row cleanup and validation before SQL |
-
 ## Verifying releases
 
-Each GitHub Release made from now on carries a source archive (`filesql-<tag>.tar.gz`), `checksums.txt`, a keyless cosign signature of it (`checksums.txt.sigstore.json`) and the build provenance of the archive (`filesql-<tag>.intoto.jsonl`). Download them from the release page (replace `<tag>` with the release tag), then verify:
+Each GitHub Release from v0.60.2 on carries a source archive (`filesql-<tag>.tar.gz`), `checksums.txt`, its keyless cosign signature (`checksums.txt.sigstore.json`), and the archive's build provenance (`filesql-<tag>.intoto.jsonl`). Download them, replace `<tag>` with the release tag, and verify:
 
 ```bash
 gh attestation verify filesql-<tag>.tar.gz --repo nao1215/filesql \
@@ -491,15 +373,7 @@ How to run each one is in [doc/testing.md](doc/testing.md).
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) before sending a PR.
-
-## Support
-
-If filesql is useful in your work:
-
-- give it a star
-- use it in your tools
-- support development at https://github.com/sponsors/nao1215
+See [CONTRIBUTING.md](./CONTRIBUTING.md) before sending a PR. You can support development at https://github.com/sponsors/nao1215.
 
 ## License
 
