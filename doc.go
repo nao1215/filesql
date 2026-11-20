@@ -156,6 +156,14 @@
 // Parquet reader passed to DBBuilder.AddReader is buffered whole instead,
 // because a stream cannot go back and the format is read back to front.
 //
+// An xz or zstd stream states in its header how much working memory its decoder
+// must hold, and the decoder allocates it before reading any data. filesql caps
+// that at a 256 MiB xz dictionary, four times what "xz -9" declares, and a 128
+// MiB zstd window, the largest the zstd CLI reaches on its own, so a damaged file
+// costs a fixed ceiling. The zstd cap holds for every frame; the xz one is read
+// from the first block of the first stream, so a later block or a concatenated
+// second stream is not covered.
+//
 // One record is held whole while it is read, so a record longer than 64 MiB is
 // refused rather than buffered: a delimited record, an LTSV record, a JSONL
 // line, one element of a JSON array, a JSON document that is not an array --
@@ -285,6 +293,23 @@
 // is a sheet, and they name a table derived from any format. Two files whose
 // names need the same adjustment ask for the same table and are refused with
 // ErrDuplicateTable.
+//
+// A sheet's table is named "file_sheet", or just "file" when the sheet name
+// repeats the file name. A workbook passed to DBBuilder.AddReader takes the
+// table name given there in place of a file name, so a workbook added as "book"
+// loads as "book_Sheet1", and as "book" when the sheet is itself named "book".
+// ExcelSheetTableNames works out the same names when it is given that table name
+// in place of a path, and sqlite_master lists them after a load. Every sheet that
+// names a column is loaded; a blank scratch sheet is passed over.
+//
+// Two inputs are the same source only when they are in the same place.
+// "dir/users.csv" and "dir/users.csv.gz" are one dataset offered twice, and the
+// plain one is read; "a/users.csv" and "b/users.csv" are two files, and both are
+// loaded. When two inputs want the same table, Open refuses them with
+// ErrDuplicateTable, while LoadInto and LoadIntoTx keep their last-wins rule, so
+// the later input replaces the table. Table names are compared the way SQLite
+// compares identifiers, with ASCII case folded, so "Users.csv" and "users.csv"
+// want the same table.
 //
 // # Excel Sheet Visibility
 //
