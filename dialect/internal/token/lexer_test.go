@@ -60,6 +60,38 @@ func TestLexRefusesWhatItCannotFinish(t *testing.T) {
 	}
 }
 
+// TestPostgreSQLRejectsNumericTrailingJunk pins the lexical rule PostgreSQL
+// added for a number written directly against identifier characters: the text
+// is one malformed numeric literal, not a number followed by an implicit alias.
+// Reading it as two tokens made "SELECT 123abc" answer 1 under the alias abc,
+// which is a query PostgreSQL never ran.
+func TestPostgreSQLRejectsNumericTrailingJunk(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := ConfigFor(dialects.PostgreSQL)
+	for _, input := range []string{
+		"SELECT 123abc",
+		"SELECT 1.5abc",
+		"SELECT 1e2abc",
+		"SELECT 1e",
+		"SELECT 0xdeadbeefg",
+	} {
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := Lex(input, cfg); !errors.Is(err, sqlerr.ErrInvalidSyntax) {
+				t.Errorf("Lex(%q) error = %v, want ErrInvalidSyntax", input, err)
+			}
+		})
+	}
+
+	for _, input := range []string{"SELECT 123 abc", "SELECT 0xdeadbeef"} {
+		if _, err := Lex(input, cfg); err != nil {
+			t.Errorf("Lex(%q) error = %v, want nil", input, err)
+		}
+	}
+}
+
 // TestUnknownDialectHasNoConfig keeps a dialect this package does not implement
 // from being lexed with someone else's rules.
 func TestUnknownDialectHasNoConfig(t *testing.T) {

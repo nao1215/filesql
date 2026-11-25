@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Reject a PostgreSQL numeric literal written directly against identifier characters, such as `123abc` or `0xdeadbeefg`, instead of translating the trailing text as an implicit alias. PostgreSQL refuses the input as trailing junk after a numeric literal.
+
 ### Changed
 
 - Mutation testing caps each mutant at 4 GiB of memory, so a mutant that allocates without bound fails as killed instead of taking the CI runner down.
