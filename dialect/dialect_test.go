@@ -404,6 +404,41 @@ func TestLiteralFormsAreOneToken(t *testing.T) {
 	}
 }
 
+// TestPostgreSQLDigitSeparatorsKeepTheirValue runs literals written with
+// PostgreSQL's digit separators on SQLite, which has none, and checks each
+// answers the value PostgreSQL gives it.
+func TestPostgreSQLDigitSeparatorsKeepTheirValue(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	for query, want := range map[string]string{
+		"SELECT 1_000 + 1":    "1001",
+		"SELECT 0xFFFF_FFFF":  "4294967295",
+		"SELECT 1_000.5 * 2":  "2001",
+		"SELECT 1e1_0 = 1e10": "1",
+		"SELECT -1_0":         "-10",
+	} {
+		out, err := Translate(PostgreSQL, query)
+		if err != nil {
+			t.Errorf("Translate(%v, %q): %v", PostgreSQL, query, err)
+			continue
+		}
+		var got string
+		if err := db.QueryRowContext(t.Context(), out).Scan(&got); err != nil {
+			t.Errorf("Translate(%v, %q) = %q, which SQLite refuses: %v", PostgreSQL, query, out, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("Translate(%v, %q) = %q answered %q, want %q", PostgreSQL, query, out, got, want)
+		}
+	}
+}
+
 // TestPlaceholderNamesReachSQLiteWhole covers the bound-parameter names the
 // translation used to split. SQLite reads a dollar sign and a leading digit as
 // name characters, so the space the renderer puts between two tokens made SQL

@@ -92,6 +92,63 @@ func TestPostgreSQLRejectsNumericTrailingJunk(t *testing.T) {
 	}
 }
 
+// TestPostgreSQLDigitSeparators follows PostgreSQL 16, which lets an
+// underscore stand between two digits of a numeric literal, and right after
+// the prefix of a hexadecimal one, for visual grouping. The literal is one
+// token whose text is its digits without the separators: the value, which is
+// what SQLite has to read. An underscore anywhere else is not a separator, so
+// the literal ends before it and the rest is trailing junk.
+func TestPostgreSQLDigitSeparators(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := ConfigFor(dialects.PostgreSQL)
+	for input, want := range map[string]string{
+		"1_000":         "1000",
+		"1_500_000_000": "1500000000",
+		"0xFFFF_FFFF":   "0xFFFFFFFF",
+		"0x_FF":         "0xFF",
+		"0b1010_0101":   "0b10100101",
+		"1_000.5":       "1000.5",
+		"1.618_034":     "1.618034",
+		".5_0":          ".50",
+		"1e1_0":         "1e10",
+		"1_0e-1_0":      "10e-10",
+	} {
+		toks, err := Lex(input, cfg)
+		if err != nil {
+			t.Errorf("Lex(%q) error = %v, want one number", input, err)
+			continue
+		}
+		if len(toks) != 1 || toks[0].Kind != Number || toks[0].Text != want {
+			t.Errorf("Lex(%q) = %+v, want one Number %q", input, toks, want)
+			continue
+		}
+		if toks[0].End != len(input) {
+			t.Errorf("Lex(%q) number ends at %d, want %d: the source spelling is lost", input, toks[0].End, len(input))
+		}
+	}
+
+	for _, input := range []string{"SELECT 1_", "SELECT 1__0", "SELECT 1_.5", "SELECT 1._5", "SELECT 1e_1", "SELECT 0x__1", "SELECT 0x_"} {
+		if _, err := Lex(input, cfg); !errors.Is(err, sqlerr.ErrInvalidSyntax) {
+			t.Errorf("Lex(%q) error = %v, want ErrInvalidSyntax", input, err)
+		}
+	}
+
+	// A leading underscore starts a name, as it always has.
+	toks, err := Lex("_1", cfg)
+	if err != nil || len(toks) != 1 || toks[0].Kind != Word {
+		t.Errorf("Lex(%q) = %+v, %v; want one Word", "_1", toks, err)
+	}
+
+	// The other dialects have no digit separator, and their lexing of a number
+	// is unchanged.
+	mysql, _ := ConfigFor(dialects.MySQL)
+	toks, err = Lex("1_000", mysql)
+	if err != nil || len(toks) == 0 || toks[0].Kind != Number || toks[0].Text != "1" {
+		t.Errorf("Lex(MySQL, %q) = %+v, %v; want the number 1 first", "1_000", toks, err)
+	}
+}
+
 // TestUnknownDialectHasNoConfig keeps a dialect this package does not implement
 // from being lexed with someone else's rules.
 func TestUnknownDialectHasNoConfig(t *testing.T) {
