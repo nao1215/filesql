@@ -59,22 +59,23 @@ type Token struct {
 // of the grammar (single-quoted strings, blob literals, numbers, operators,
 // placeholders, /* */ and -- comments) is common to every dialect.
 type Config struct {
-	IdentBacktick     bool // ` opens a quoted identifier (MySQL, GoogleSQL)
-	IdentBacktickEsc  bool // a backslash escapes inside a backtick-quoted identifier (GoogleSQL)
-	DashNeedsBlank    bool // -- opens a line comment only when a blank follows it (MySQL)
-	IdentDoubleQuote  bool // " opens a quoted identifier (PostgreSQL)
-	StringDoubleQuote bool // " opens a string literal (MySQL, GoogleSQL)
-	HashComment       bool // # starts a line comment (MySQL, GoogleSQL)
-	BackslashEscapes  bool // backslash is an escape inside single-quoted strings (MySQL, GoogleSQL)
-	EPrefixString     bool // E'...' escape-string literals (PostgreSQL)
-	DollarQuote       bool // $tag$...$tag$ dollar-quoted strings (PostgreSQL)
-	RawStringPrefix   bool // r'...'/r"..." raw strings (GoogleSQL)
-	ByteStringPrefix  bool // b'...'/b"..." byte strings (GoogleSQL)
-	TripleQuoteString bool // '''...''' and """...""" strings (GoogleSQL)
-	NestedComment     bool // /* */ block comments nest (PostgreSQL)
-	NumericEscapes    bool // \xHH, \ooo, \uXXXX and \UXXXXXXXX name a character (GoogleSQL)
-	AtOperator        bool // @ is the absolute-value operator rather than a parameter prefix (PostgreSQL)
-	HexStringIsBytes  bool // X'41' names bytes (MySQL, GoogleSQL) rather than a bit string (PostgreSQL)
+	IdentBacktick             bool // ` opens a quoted identifier (MySQL, GoogleSQL)
+	IdentBacktickEsc          bool // a backslash escapes inside a backtick-quoted identifier (GoogleSQL)
+	DashNeedsBlank            bool // -- opens a line comment only when a blank follows it (MySQL)
+	IdentDoubleQuote          bool // " opens a quoted identifier (PostgreSQL)
+	StringDoubleQuote         bool // " opens a string literal (MySQL, GoogleSQL)
+	HashComment               bool // # starts a line comment (MySQL, GoogleSQL)
+	BackslashEscapes          bool // backslash is an escape inside single-quoted strings (MySQL, GoogleSQL)
+	EPrefixString             bool // E'...' escape-string literals (PostgreSQL)
+	DollarQuote               bool // $tag$...$tag$ dollar-quoted strings (PostgreSQL)
+	RawStringPrefix           bool // r'...'/r"..." raw strings (GoogleSQL)
+	ByteStringPrefix          bool // b'...'/b"..." byte strings (GoogleSQL)
+	TripleQuoteString         bool // '''...''' and """...""" strings (GoogleSQL)
+	NestedComment             bool // /* */ block comments nest (PostgreSQL)
+	NumericEscapes            bool // \xHH, \ooo, \uXXXX and \UXXXXXXXX name a character (GoogleSQL)
+	AtOperator                bool // @ is the absolute-value operator rather than a parameter prefix (PostgreSQL)
+	RejectNumericTrailingJunk bool // an identifier character directly after a numeric literal is lexical junk (PostgreSQL)
+	HexStringIsBytes          bool // X'41' names bytes (MySQL, GoogleSQL) rather than a bit string (PostgreSQL)
 }
 
 // escapeRules says how a backslash behaves inside a quoted literal. The two
@@ -110,11 +111,12 @@ func ConfigFor(d dialects.Dialect) (Config, bool) {
 		}, true
 	case dialects.PostgreSQL:
 		return Config{
-			IdentDoubleQuote: true,
-			EPrefixString:    true,
-			DollarQuote:      true,
-			NestedComment:    true,
-			AtOperator:       true,
+			IdentDoubleQuote:          true,
+			EPrefixString:             true,
+			DollarQuote:               true,
+			NestedComment:             true,
+			AtOperator:                true,
+			RejectNumericTrailingJunk: true,
 		}, true
 	case dialects.GoogleSQL:
 		return Config{
@@ -356,6 +358,9 @@ func Lex(query string, cfg Config) ([]Token, error) {
 			j, ok := scanNumber(query, i)
 			if !ok {
 				return nil, lexError(query, start, "numeric literal has no digits after its base prefix")
+			}
+			if cfg.RejectNumericTrailingJunk && j < len(query) && isIdentStart(query[j]) {
+				return nil, lexError(query, start, "trailing junk after numeric literal")
 			}
 			tokens = append(tokens, Token{Kind: Number, Text: query[i:j], Offset: start})
 			i = j
