@@ -1,7 +1,7 @@
 # filesql
 
 <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
-[![All Contributors](https://img.shields.io/badge/all_contributors-4-orange.svg?style=flat-square)](#contributors-)
+[![All Contributors](https://img.shields.io/badge/all_contributors-5-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 [![MultiPlatformUnitTest](https://github.com/nao1215/filesql/actions/workflows/unit_test.yml/badge.svg)](https://github.com/nao1215/filesql/actions/workflows/unit_test.yml)
 ![Coverage](https://raw.githubusercontent.com/nao1215/octocovs-central-repo/main/badges/nao1215/filesql/coverage.svg)
@@ -393,6 +393,7 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
       <td align="center" valign="top" width="14.28%"><a href="https://sayportfolio.vercel.app/"><img src="https://avatars.githubusercontent.com/u/240962040?v=4?s=75" width="75px;" alt="Sai Asish Y"/><br /><sub><b>Sai Asish Y</b></sub></a><br /><a href="https://github.com/nao1215/filesql/pulls?q=is%3Apr+author%3ASAY-5" title="Documentation">📖</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/krishna3554"><img src="https://avatars.githubusercontent.com/u/87197325?v=4?s=75" width="75px;" alt="Krishna lokhande"/><br /><sub><b>Krishna lokhande</b></sub></a><br /><a href="https://github.com/nao1215/filesql/issues?q=author%3Akrishna3554" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://ashannon.us/"><img src="https://avatars.githubusercontent.com/u/120951?v=4?s=75" width="75px;" alt="Adam Shannon"/><br /><sub><b>Adam Shannon</b></sub></a><br /><a href="#ideas-adamdecaf" title="Ideas, Planning, & Feedback">🤔</a> <a href="#financial-adamdecaf" title="Financial">💵</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/draarivpatel-ui"><img src="https://avatars.githubusercontent.com/u/287273626?v=4?s=75" width="75px;" alt="Aariv Patel"/><br /><sub><b>Aariv Patel</b></sub></a><br /><a href="https://github.com/nao1215/filesql/commits?author=draarivpatel-ui" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
