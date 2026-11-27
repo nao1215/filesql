@@ -310,15 +310,16 @@ func TestRecordFileSource_ReportsAnUnusableDatabase(t *testing.T) {
 		db := openTestDB(t)
 		require.NoError(t, recordFileSource(ctx, db, "payment", "", sourceFormatACH))
 
-		_, ok := fileSourcePath(ctx, db, "payment", sourceFormatACH)
+		_, ok, err := fileSourcePath(ctx, db, "payment", sourceFormatACH)
+		require.NoError(t, err)
 		assert.False(t, ok, "a load with no file behind it has no source to go back to")
 	})
 }
 
 // TestFileSourceBaseNames_UnreadableRows checks the listing used by a dump of
 // every loaded file. A row it cannot read means the set of files to write is
-// unknown, so it answers with nothing rather than a partial set that would dump
-// some files and silently skip others.
+// unknown, so it is an error rather than a partial set that would dump some
+// files and silently skip others.
 func TestFileSourceBaseNames_UnreadableRows(t *testing.T) {
 	t.Parallel()
 
@@ -330,7 +331,9 @@ func TestFileSourceBaseNames_UnreadableRows(t *testing.T) {
 	_, err = db.ExecContext(ctx, `INSERT INTO "`+sourceTableName+`" VALUES (NULL, '/tmp/payment.ach', 'ach')`)
 	require.NoError(t, err)
 
-	assert.Nil(t, fileSourceBaseNames(ctx, db, sourceFormatACH), "a row that cannot be read yields no names")
+	names, err := fileSourceBaseNames(ctx, db, sourceFormatACH)
+	require.ErrorIs(t, err, ErrDatabaseOperation)
+	assert.Nil(t, names, "a row that cannot be read yields no names")
 }
 
 // TestTableSetForDump_UnparsableSource covers the reread a write-back format
@@ -379,4 +382,41 @@ func TestTableSetForDump_UnparsableSource(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrSourceUnavailable)
 	})
+}
+
+// TestDump_ACanceledContextIsNotAMissingSource cancels the context before a
+// write-back. The lookup of the recorded source failed on the context and was
+// read as no source having been recorded, so the error told the caller to load
+// the file another way and errors.Is(err, context.Canceled) was false.
+func TestDump_ACanceledContextIsNotAMissingSource(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		file, base string
+		dump       func(context.Context, *sql.DB, string, string) error
+	}{
+		{"ppd-debit.ach", "ppd_debit", DumpACH},
+		{"customer-transfer.fed", "customer_transfer", DumpFedWire},
+	} {
+		db, err := Open(t.Context(), filepath.Join("testdata", tt.file))
+		require.NoError(t, err)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		out := filepath.Join(t.TempDir(), tt.file)
+		err = tt.dump(ctx, db, tt.base, out)
+		require.ErrorIsf(t, err, context.Canceled, "%s: %v", tt.file, err)
+		assert.NotErrorIs(t, err, ErrSourceUnavailable)
+		assert.NoFileExists(t, out)
+
+		// Without the cancellation the same database still knows its source,
+		// and one that loaded no such file still has none.
+		require.NoError(t, tt.dump(t.Context(), db, tt.base, out))
+		require.NoError(t, db.Close())
+	}
+
+	csv, err := Open(t.Context(), filepath.Join("testdata", "test.csv"))
+	require.NoError(t, err)
+	defer csv.Close()
+	require.ErrorIs(t, DumpACH(t.Context(), csv, "test", filepath.Join(t.TempDir(), "x.ach")), ErrSourceUnavailable)
+	require.ErrorIs(t, DumpFedWire(t.Context(), csv, "test", filepath.Join(t.TempDir(), "x.fed")), ErrSourceUnavailable)
 }

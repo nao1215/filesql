@@ -274,7 +274,10 @@ func (c *autoSaveConnector) performACHAutoSave(db *sql.DB, outputDir string) err
 	ctx := context.Background()
 
 	// The database records the ACH files it was loaded from.
-	achBaseNames := fileSourceBaseNames(ctx, db, sourceFormatACH)
+	achBaseNames, err := fileSourceBaseNames(ctx, db, sourceFormatACH)
+	if err != nil {
+		return err
+	}
 	if len(achBaseNames) == 0 {
 		return errors.New("no ACH tables found to save")
 	}
@@ -306,7 +309,10 @@ func (c *autoSaveConnector) performACHAutoSave(db *sql.DB, outputDir string) err
 func (c *autoSaveConnector) performFedWireAutoSave(db *sql.DB, outputDir string) error {
 	ctx := context.Background()
 
-	wireBaseNames := fileSourceBaseNames(ctx, db, sourceFormatFedWire)
+	wireBaseNames, err := fileSourceBaseNames(ctx, db, sourceFormatFedWire)
+	if err != nil {
+		return err
+	}
 	if len(wireBaseNames) == 0 {
 		return errors.New("no Fedwire tables found to save")
 	}

@@ -250,9 +250,12 @@ func TestWireSourceRecordedPerDatabase(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	assert.Equal(t, []string{"customer_transfer"}, fileSourceBaseNames(ctx, db, sourceFormatFedWire))
+	names, err := fileSourceBaseNames(ctx, db, sourceFormatFedWire)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"customer_transfer"}, names)
 
-	path, ok := fileSourcePath(ctx, db, "customer_transfer", sourceFormatFedWire)
+	path, ok, err := fileSourcePath(ctx, db, "customer_transfer", sourceFormatFedWire)
+	require.NoError(t, err)
 	require.True(t, ok)
 	assert.True(t, filepath.IsAbs(path), "the recorded path must survive a change of working directory: %s", path)
 }
@@ -266,7 +269,9 @@ func TestWireSourceAbsentForOtherDatabases(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	assert.Empty(t, fileSourceBaseNames(ctx, db, sourceFormatFedWire))
+	names, err := fileSourceBaseNames(ctx, db, sourceFormatFedWire)
+	require.NoError(t, err)
+	assert.Empty(t, names)
 }
 
 func TestAddFS_FedWireFile(t *testing.T) {

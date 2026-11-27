@@ -3,6 +3,7 @@ package filesql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -86,30 +87,42 @@ func recordFileSource(ctx context.Context, db dbtx, baseTableName, sourcePath st
 }
 
 // fileSourcePath returns the file baseTableName was loaded from, or false when
-// the database holds no such record.
-func fileSourcePath(ctx context.Context, db *sql.DB, baseTableName string, format sourceFormat) (string, bool) {
+// the database holds no such record. A database that loaded no write-back
+// format has no source table, which is the same answer; any other failure to
+// read it is returned, so a canceled context does not read as a file that was
+// never recorded.
+func fileSourcePath(ctx context.Context, db *sql.DB, baseTableName string, format sourceFormat) (string, bool, error) {
+	if exists, err := tableExists(ctx, db, sourceTableName); err != nil || !exists {
+		return "", false, err
+	}
 	var path string
 	err := db.QueryRowContext(ctx,
 		`SELECT source_path FROM "`+sourceTableName+`" WHERE base_table_name = ? AND format = ?`,
 		baseTableName, string(format),
 	).Scan(&path)
-	if err != nil {
-		// A database that loaded no write-back format has no such table, so a
-		// missing table is not distinguished from a missing row.
-		return "", false
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
 	}
-	return path, true
+	if err != nil {
+		return "", false, fmt.Errorf("%w: failed to read the source of %q: %w", ErrDatabaseOperation, baseTableName, err)
+	}
+	return path, true, nil
 }
 
 // fileSourceBaseNames lists the base table names loaded from files of format,
-// in a stable order so repeated dumps write the same set of files.
-func fileSourceBaseNames(ctx context.Context, db *sql.DB, format sourceFormat) []string {
+// in a stable order so repeated dumps write the same set of files. A row it
+// cannot read is an error rather than a shorter list, which would dump some
+// files and silently skip the others.
+func fileSourceBaseNames(ctx context.Context, db *sql.DB, format sourceFormat) ([]string, error) {
+	if exists, err := tableExists(ctx, db, sourceTableName); err != nil || !exists {
+		return nil, err
+	}
 	rows, err := db.QueryContext(ctx,
 		`SELECT base_table_name FROM "`+sourceTableName+`" WHERE format = ? ORDER BY base_table_name`,
 		string(format),
 	)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("%w: failed to list the loaded %s files: %w", ErrDatabaseOperation, format, err)
 	}
 	defer rows.Close()
 
@@ -117,20 +130,23 @@ func fileSourceBaseNames(ctx context.Context, db *sql.DB, format sourceFormat) [
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return nil
+			return nil, fmt.Errorf("%w: failed to list the loaded %s files: %w", ErrDatabaseOperation, format, err)
 		}
 		names = append(names, name)
 	}
-	if rows.Err() != nil {
-		return nil
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: failed to list the loaded %s files: %w", ErrDatabaseOperation, format, err)
 	}
-	return names
+	return names, nil
 }
 
 // achTableSetForDump rebuilds the ACH structure of baseTableName by reading its
 // source file again.
 func achTableSetForDump(ctx context.Context, db *sql.DB, baseTableName string) (*achconv.TableSet, error) {
-	path, ok := fileSourcePath(ctx, db, baseTableName, sourceFormatACH)
+	path, ok, err := fileSourcePath(ctx, db, baseTableName, sourceFormatACH)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, fmt.Errorf("%w: no ACH source recorded for base table name %q; load the file with Open() or Builder from a path, or hand its bytes to DumpACHWithSource", ErrSourceUnavailable, baseTableName)
 	}
@@ -151,7 +167,10 @@ func achTableSetForDump(ctx context.Context, db *sql.DB, baseTableName string) (
 // wireTableSetForDump rebuilds the Fedwire structure of baseTableName by
 // reading its source file again.
 func wireTableSetForDump(ctx context.Context, db *sql.DB, baseTableName string) (*wireconv.TableSet, error) {
-	path, ok := fileSourcePath(ctx, db, baseTableName, sourceFormatFedWire)
+	path, ok, err := fileSourcePath(ctx, db, baseTableName, sourceFormatFedWire)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, fmt.Errorf("%w: no Fedwire source recorded for base table name %q; load the file with Open() or Builder from a path, or hand its bytes to DumpFedWireWithSource", ErrSourceUnavailable, baseTableName)
 	}

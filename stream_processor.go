@@ -592,15 +592,11 @@ func (sp *streamProcessor) refuseExistingTable(ctx context.Context, db dbtx, tab
 	if sp.replaceExisting {
 		return nil
 	}
-	var tableExists int
-	err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ? COLLATE NOCASE`,
-		tableName,
-	).Scan(&tableExists)
+	exists, err := tableExists(ctx, db, tableName)
 	if err != nil {
-		return fmt.Errorf("%w: failed to check table existence: %w", ErrDatabaseOperation, err)
+		return err
 	}
-	if tableExists > 0 {
+	if exists {
 		sp.logger.Warn("table already exists", logKeyTable, tableName)
 		return fmt.Errorf("%w: table '%s' already exists from another file", ErrDuplicateTable, tableName)
 	}

@@ -29,7 +29,8 @@ func TestAutoSaveConnection_PerformACHAutoSave(t *testing.T) {
 	defer db.Close()
 
 	// The database records the ACH file it was loaded from.
-	baseNames := fileSourceBaseNames(ctx, db, sourceFormatACH)
+	baseNames, err := fileSourceBaseNames(ctx, db, sourceFormatACH)
+	require.NoError(t, err)
 	require.NotEmpty(t, baseNames, "the ACH source should be recorded")
 
 	// Create temp output directory
