@@ -195,12 +195,18 @@ func dumpSQLiteDatabase(ctx context.Context, db *sql.DB, outputDir string, optio
 	// A table only belongs to an ACH or Fedwire file when the database says it
 	// was loaded from one. The suffix alone is not enough: a caller's own table
 	// named orders_entries is not part of an ACH file.
-	achBaseNames := fileSourceBaseNames(ctx, db, sourceFormatACH)
-	wireBaseNames := fileSourceBaseNames(ctx, db, sourceFormatFedWire)
+	achBaseNames, err := fileSourceBaseNames(ctx, db, sourceFormatACH)
+	if err != nil {
+		return err
+	}
+	wireBaseNames, err := fileSourceBaseNames(ctx, db, sourceFormatFedWire)
+	if err != nil {
+		return err
+	}
 
 	writeBackTables := make(map[string]bool)
 	for _, tableName := range tableNames {
-		if baseName, isACH := isACHBaseTableName(tableName); isACH && slices.Contains(achBaseNames, baseName) {
+		if _, isACH := achBaseName(tableName, achBaseNames); isACH {
 			writeBackTables[tableName] = true
 		}
 		if baseName, isWire := isWireBaseTableName(tableName); isWire && slices.Contains(wireBaseNames, baseName) {

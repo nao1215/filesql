@@ -463,7 +463,7 @@ func TestConcurrentLoadInto(t *testing.T) {
 				}
 				assert.ErrorIsf(t, err, ErrDatabaseOperation, "load %d lost for a reason other than the lock", i)
 				assert.Truef(t, lockedByAnotherConnection(err), "load %d lost for a reason other than the lock: %v", i, err)
-				assert.Falsef(t, tableExists(t, db, fmt.Sprintf("t%d", i)), "load %d gave up and still left table t%d behind", i, i)
+				assert.Falsef(t, hasTable(t, db, fmt.Sprintf("t%d", i)), "load %d gave up and still left table t%d behind", i, i)
 			}
 			// Losing needs a winner to lose to: the first load to take the lock
 			// has nothing to wait for, so at least one always lands.
@@ -472,13 +472,12 @@ func TestConcurrentLoadInto(t *testing.T) {
 	}
 }
 
-// tableExists reports whether db holds a table named name.
-func tableExists(t *testing.T, db *sql.DB, name string) bool {
+// hasTable reports whether db holds a table named name.
+func hasTable(t *testing.T, db *sql.DB, name string) bool {
 	t.Helper()
-	var count int
-	require.NoError(t, db.QueryRowContext(t.Context(),
-		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&count))
-	return count > 0
+	exists, err := tableExists(t.Context(), db, name)
+	require.NoError(t, err)
+	return exists
 }
 
 // TestConcurrentLoadIntoFromReaders is the same for inputs that cannot be read
@@ -529,7 +528,7 @@ func TestConcurrentLoadIntoFromReaders(t *testing.T) {
 		}
 		assert.ErrorIsf(t, err, ErrDatabaseOperation, "load %d lost for a reason other than the lock", i)
 		assert.Truef(t, lockedByAnotherConnection(err), "load %d lost for a reason other than the lock: %v", i, err)
-		assert.Falsef(t, tableExists(t, db, fmt.Sprintf("r%d", i)), "load %d gave up and still left table r%d behind", i, i)
+		assert.Falsef(t, hasTable(t, db, fmt.Sprintf("r%d", i)), "load %d gave up and still left table r%d behind", i, i)
 	}
 	assert.Positive(t, won, "no load succeeded, so every one of them waited on a lock nobody held")
 }

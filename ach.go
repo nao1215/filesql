@@ -33,14 +33,12 @@ package filesql
 //
 // # Limitations (IMPORTANT)
 //
-// The following operations are NOT supported in the current implementation:
-//   - Adding new rows (INSERT) - new entries, batches, or addenda will be ignored
-//   - Deleting existing rows (DELETE) - deletions will be ignored
-//   - Reordering rows - row order changes will be ignored
-//
 // Only UPDATE operations on existing rows are reflected in the output ACH file.
-// The export uses batch_index/entry_index/addenda_index to match rows with the
-// original ACH structure. Rows with indices outside the original range are ignored.
+// A write refuses a table whose rows no longer match the file it was loaded
+// from: a row added (INSERT), a row removed (DELETE, including every row of a
+// table), a table dropped or renamed, rows reordered, and a row whose
+// batch_index, entry_index or addenda_index was changed. An integer field
+// holding a value that is not a whole number is refused the same way.
 //
 // These limitations exist because ACH file structure requires careful
 // coordination between related records (e.g., entry count in batch control,
@@ -117,9 +115,11 @@ package filesql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/nao1215/filesql/internal/parser"
@@ -171,22 +171,9 @@ func parseACHFile(reader io.Reader, baseTableName string) ([]*table, *achconv.Ta
 		return nil, nil, fmt.Errorf("%w: failed to convert ACH file to tables", ErrACH)
 	}
 
-	// One table per ACH record kind, in the order a file lays them out. A
-	// kind that carried no record is left out rather than loaded empty, so a
-	// file with no IAT batch does not grow three empty tables.
-	sources := []struct {
-		suffix string
-		data   *parser.TableData
-	}{
-		{"_file_header", tableSet.GetFileHeaderTable()},
-		{"_batches", tableSet.GetBatchesTable()},
-		{"_entries", tableSet.GetEntriesTable()},
-		{"_addenda", tableSet.GetAddendaTable()},
-		{"_iat_batches", tableSet.GetIATBatchesTable()},
-		{"_iat_entries", tableSet.GetIATEntriesTable()},
-		{"_iat_addenda", tableSet.GetIATAddendaTable()},
-	}
-
+	// A kind of record the file did not hold is left out rather than loaded
+	// empty, so a file with no IAT batch does not grow three empty tables.
+	sources := achTables(tableSet)
 	tables := make([]*table, 0, len(sources))
 	for _, src := range sources {
 		if src.data == nil || len(src.data.Records) == 0 {
@@ -232,16 +219,38 @@ func fileParserTableDataToTable(td *parser.TableData, tableName string) *table {
 	}
 }
 
-// isACHBaseTableName checks if a table name is an ACH-related table
-// (ends with _file_header, _batches, _entries, _addenda, _iat_batches, _iat_entries, or _iat_addenda).
-func isACHBaseTableName(tableName string) (baseName string, isACH bool) {
-	suffixes := []string{
-		"_file_header", "_batches", "_entries", "_addenda",
-		"_iat_batches", "_iat_entries", "_iat_addenda",
+// achTable is one table an ACH file loads into: the suffix its name carries
+// after the base name, the rows ts holds for it, and how a write-back replaces
+// them.
+type achTable struct {
+	suffix string
+	data   *parser.TableData
+	update func(*parser.TableData)
+}
+
+// achTables lists the tables of ts, one per kind of ACH record, in the order a
+// file lays the records out. A nil ts gives the suffixes with no rows.
+func achTables(ts *achconv.TableSet) []achTable {
+	return []achTable{
+		{"_file_header", ts.GetFileHeaderTable(), ts.UpdateFileHeaderFromTableData},
+		{"_batches", ts.GetBatchesTable(), ts.UpdateBatchesFromTableData},
+		{"_entries", ts.GetEntriesTable(), ts.UpdateEntriesFromTableData},
+		{"_addenda", ts.GetAddendaTable(), ts.UpdateAddendaFromTableData},
+		{"_iat_batches", ts.GetIATBatchesTable(), ts.UpdateIATBatchesFromTableData},
+		{"_iat_entries", ts.GetIATEntriesTable(), ts.UpdateIATEntriesFromTableData},
+		{"_iat_addenda", ts.GetIATAddendaTable(), ts.UpdateIATAddendaFromTableData},
 	}
-	for _, suffix := range suffixes {
-		if strings.HasSuffix(tableName, suffix) {
-			return strings.TrimSuffix(tableName, suffix), true
+}
+
+// achBaseName returns the base name, among the loaded ACH files in bases, of
+// the file tableName belongs to. A name can end in two suffixes, so the answer
+// is the reading bases holds: x_iat_batches is the IAT batches of x or the
+// batches of x_iat. Trying the suffixes in order and taking the first match
+// read every IAT table as a table of a file that was never loaded.
+func achBaseName(tableName string, bases []string) (string, bool) {
+	for _, t := range achTables(nil) {
+		if base, ok := strings.CutSuffix(tableName, t.suffix); ok && slices.Contains(bases, base) {
+			return base, true
 		}
 	}
 	return "", false
@@ -268,18 +277,11 @@ func streamACHFileToDatabase(ctx context.Context, db dbtx, reader io.Reader, fil
 // so it lives once rather than in a copy per format.
 func loadParsedTablesIntoDatabase(ctx context.Context, db dbtx, tables []*table, baseTableName, sourcePath string, format sourceFormat, replaceExisting bool) error {
 	for _, t := range tables {
-		// Check if table already exists, folding ASCII case the way SQLite does
-		// when it matches identifiers.
-		var tableExists int
-		err := db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ? COLLATE NOCASE`,
-			t.getName(),
-		).Scan(&tableExists)
+		exists, err := tableExists(ctx, db, t.getName())
 		if err != nil {
-			return fmt.Errorf("%w: failed to check table existence: %w", ErrDatabaseOperation, err)
+			return err
 		}
-
-		if tableExists > 0 {
+		if exists {
 			if !replaceExisting {
 				return fmt.Errorf("%w: table '%s' already exists", ErrDuplicateTable, t.getName())
 			}
@@ -441,72 +443,36 @@ func dumpACHWithTableSet(ctx context.Context, db *sql.DB, baseTableName, outputP
 	})
 }
 
-// updateTableSetFromDB reads updated data from the database and updates the TableSet.
-// The error return is kept for future extensibility even though currently it always returns nil.
-//
-//nolint:unparam // Error return preserved for future extensibility
+// updateTableSetFromDB replaces each table of ts with the rows the database
+// holds now. A table the file was loaded into that is gone is an error:
+// writing it from the parsed file brought back every row a DROP or a RENAME had
+// taken away, along with the edits made to it before. A kind of record the file
+// did not hold was never loaded as a table, so its absence is expected.
 func updateTableSetFromDB(ctx context.Context, db *sql.DB, baseTableName string, ts *achconv.TableSet) error {
-	// Update FileHeader table from database
-	fileHeaderTableName := baseTableName + "_file_header"
-	fileHeaderData, err := readTableToTableData(ctx, db, fileHeaderTableName)
-	if err == nil {
-		ts.UpdateFileHeaderFromTableData(fileHeaderData)
+	for _, t := range achTables(ts) {
+		name := baseTableName + t.suffix
+		data, err := readTableToTableData(ctx, db, name)
+		switch {
+		case errors.Is(err, ErrTableNotFound):
+			if t.data != nil && len(t.data.Records) > 0 {
+				return fmt.Errorf("%s was loaded from the file and is no longer in the database; a write cannot remove its rows: %w", name, err)
+			}
+		case err != nil:
+			return err
+		default:
+			t.update(data)
+		}
 	}
-
-	// Update Batches table from database
-	batchesTableName := baseTableName + "_batches"
-	batchesData, err := readTableToTableData(ctx, db, batchesTableName)
-	if err == nil {
-		ts.UpdateBatchesFromTableData(batchesData)
-	}
-
-	// Update Entries table from database
-	entriesTableName := baseTableName + "_entries"
-	entriesData, err := readTableToTableData(ctx, db, entriesTableName)
-	if err == nil {
-		ts.UpdateEntriesFromTableData(entriesData)
-	}
-
-	// Update Addenda table from database
-	addendaTableName := baseTableName + "_addenda"
-	addendaData, err := readTableToTableData(ctx, db, addendaTableName)
-	if err == nil {
-		ts.UpdateAddendaFromTableData(addendaData)
-	}
-
-	// Update IAT Batches table from database
-	iatBatchesTableName := baseTableName + "_iat_batches"
-	iatBatchesData, err := readTableToTableData(ctx, db, iatBatchesTableName)
-	if err == nil {
-		ts.UpdateIATBatchesFromTableData(iatBatchesData)
-	}
-
-	// Update IAT Entries table from database
-	iatEntriesTableName := baseTableName + "_iat_entries"
-	iatEntriesData, err := readTableToTableData(ctx, db, iatEntriesTableName)
-	if err == nil {
-		ts.UpdateIATEntriesFromTableData(iatEntriesData)
-	}
-
-	// Update IAT Addenda table from database
-	iatAddendaTableName := baseTableName + "_iat_addenda"
-	iatAddendaData, err := readTableToTableData(ctx, db, iatAddendaTableName)
-	if err == nil {
-		ts.UpdateIATAddendaFromTableData(iatAddendaData)
-	}
-
 	return nil
 }
 
 // readTableToTableData reads a database table into a TableData structure
 func readTableToTableData(ctx context.Context, db *sql.DB, tableName string) (*parser.TableData, error) {
-	// Check if table exists
-	var exists int
-	err := db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
-		tableName,
-	).Scan(&exists)
-	if err != nil || exists == 0 {
+	exists, err := tableExists(ctx, db, tableName)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
 		return nil, fmt.Errorf("%w: table %s does not exist", ErrTableNotFound, tableName)
 	}
 
@@ -553,11 +519,7 @@ func readTableToTableData(ctx context.Context, db *sql.DB, tableName string) (*p
 		}
 		record := make([]string, len(headers))
 		for i, v := range values {
-			if v == nil {
-				record[i] = ""
-			} else {
-				record[i] = fmt.Sprintf("%v", v)
-			}
+			record[i] = cellText(v)
 		}
 		records = append(records, record)
 	}
@@ -576,4 +538,18 @@ func readTableToTableData(ctx context.Context, db *sql.DB, tableName string) (*p
 		Records:     records,
 		ColumnTypes: columnTypes,
 	}, nil
+}
+
+// cellText spells a value read from SQLite the way a parser reads it back. A
+// BLOB is its bytes: %v printed one as the list of its byte values, so a name
+// set to a BLOB was written as "[66 111 98]".
+func cellText(v any) string {
+	switch v := v.(type) {
+	case nil:
+		return ""
+	case []byte:
+		return string(v)
+	default:
+		return fmt.Sprint(v)
+	}
 }

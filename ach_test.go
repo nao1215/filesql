@@ -500,11 +500,13 @@ func achTableNames(ctx context.Context, t *testing.T, db *sql.DB) []string {
 	require.NoError(t, err)
 	defer rows.Close()
 
+	bases, err := fileSourceBaseNames(ctx, db, sourceFormatACH)
+	require.NoError(t, err)
 	var suffixes []string
 	for rows.Next() {
 		var name string
 		require.NoError(t, rows.Scan(&name))
-		base, isACH := isACHBaseTableName(name)
+		base, isACH := achBaseName(name, bases)
 		require.True(t, isACH, "unexpected table %s", name)
 		suffixes = append(suffixes, strings.TrimPrefix(name, base))
 	}
@@ -677,4 +679,136 @@ func achTableDump(ctx context.Context, t *testing.T, db *sql.DB, base string) ma
 		require.NoError(t, rows.Close())
 	}
 	return dump
+}
+
+// TestDumpACH_RefusesARemovedTableOrRow deletes ACH rows in the ways the
+// coordinate check did not see, and drops and renames a table. Each was
+// written from the file the tables were loaded from, so the deleted records
+// came back, and the edits made to a dropped table were lost, with no error.
+// The destination is left alone.
+func TestDumpACH_RefusesARemovedTableOrRow(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name, statement, want string
+	}{
+		{"the last entry", "DELETE FROM in_iat_entries WHERE rowid = (SELECT max(rowid) FROM in_iat_entries)", "iat_entries: 1 of the 2 rows"},
+		{"every addendum", "DELETE FROM in_iat_addenda", "iat_addenda: 28 of the 28 rows"},
+		{"the file header", "DELETE FROM in_file_header", "file_header: the table holds 0 rows"},
+		{"a dropped table", "DROP TABLE in_iat_addenda", "in_iat_addenda was loaded from the file and is no longer in the database"},
+		{"a renamed table", "ALTER TABLE in_iat_entries RENAME TO renamed", "in_iat_entries was loaded from the file and is no longer in the database"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, "in.ach")
+			raw, err := os.ReadFile(filepath.Join("testdata", "iat-credit.ach"))
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(source, raw, 0o600)) //nolint:gosec // Test path is constructed from t.TempDir()
+			db, err := Open(t.Context(), source)
+			require.NoError(t, err)
+			defer db.Close()
+			_, err = db.ExecContext(t.Context(), tt.statement)
+			require.NoError(t, err)
+
+			out := filepath.Join(dir, "out.ach")
+			err = DumpACH(t.Context(), db, "in", out)
+			require.ErrorContains(t, err, tt.want)
+			assert.NoFileExists(t, out)
+		})
+	}
+}
+
+// TestDumpACH_ReadsBackWhatTheCellHolds pins how a write-back reads a value
+// that is not the type its column was loaded with. A fraction or a typo in an
+// integer field was skipped, so the amount was written unchanged and the write
+// succeeded; a BLOB was printed as the list of its bytes.
+func TestDumpACH_ReadsBackWhatTheCellHolds(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "ppd_debit.ach")
+	raw, err := os.ReadFile(findTestACHFile(t))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(source, raw, 0o600)) //nolint:gosec // Test path is constructed from t.TempDir()
+	db, err := Open(ctx, source)
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.ExecContext(ctx, "UPDATE ppd_debit_entries SET individual_name = CAST('Bob' AS BLOB)")
+	require.NoError(t, err)
+	out := filepath.Join(dir, "out.ach")
+	require.NoError(t, DumpACH(ctx, db, "ppd_debit", out))
+	written, err := Open(ctx, out)
+	require.NoError(t, err)
+	defer written.Close()
+	var name string
+	require.NoError(t, written.QueryRowContext(ctx, "SELECT individual_name FROM out_entries").Scan(&name))
+	assert.Equal(t, "Bob", name)
+
+	for _, value := range []any{1.5, "12x"} {
+		_, err = db.ExecContext(ctx, "UPDATE ppd_debit_entries SET amount = ?", value)
+		require.NoError(t, err)
+		err = DumpACH(ctx, db, "ppd_debit", filepath.Join(dir, "refused.ach"))
+		require.ErrorContainsf(t, err, "entries: row 0: amount is", "amount = %v", value)
+		assert.ErrorContains(t, err, "which is not a whole number")
+	}
+}
+
+// TestDumpDatabase_WritesAnIATFileOnce dumps a database loaded from an ACH file
+// with IAT batches. The IAT tables were taken for tables of a file named
+// iat_credit_iat, which was never loaded, so they were written again as CSV
+// files beside the ACH file.
+func TestDumpDatabase_WritesAnIATFileOnce(t *testing.T) {
+	t.Parallel()
+
+	db, err := Open(t.Context(), filepath.Join("testdata", "iat-credit.ach"))
+	require.NoError(t, err)
+	defer db.Close()
+	dir := t.TempDir()
+	require.NoError(t, DumpDatabase(t.Context(), db, dir))
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	assert.Equal(t, []string{"iat_credit.ach"}, names)
+}
+
+// TestACHBaseName_PicksTheLoadedReading pins a table name that fits two
+// suffixes: x_iat_batches is the IAT batches of x or the batches of x_iat, and
+// only the loaded file decides which.
+func TestACHBaseName_PicksTheLoadedReading(t *testing.T) {
+	t.Parallel()
+
+	for bases, want := range map[string]string{"x": "x", "x_iat": "x_iat"} {
+		got, ok := achBaseName("x_iat_batches", []string{bases})
+		assert.True(t, ok)
+		assert.Equal(t, want, got)
+	}
+	_, ok := achBaseName("x_iat_batches", []string{"y"})
+	assert.False(t, ok, "a table of no loaded file is an ordinary table")
+	_, ok = achBaseName("x_orders", []string{"x"})
+	assert.False(t, ok)
+}
+
+// TestUpdateTableSetFromDB_ReturnsAFailedRead pins that a table that is there
+// but cannot be read fails the write. Every such error was dropped and the
+// table written from the parsed file instead.
+func TestUpdateTableSetFromDB_ReturnsAFailedRead(t *testing.T) {
+	t.Parallel()
+
+	db, err := Open(t.Context(), findTestACHFile(t))
+	require.NoError(t, err)
+	defer db.Close()
+	ts, err := achTableSetForDump(t.Context(), db, "ppd_debit")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, updateTableSetFromDB(ctx, db, "ppd_debit", ts), context.Canceled)
 }
