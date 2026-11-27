@@ -219,7 +219,7 @@ func TestGuardedConn_StatementCommitReportsAFailedSave(t *testing.T) {
 	}
 	require.NoError(t, conn.openTx(context.Background()))
 
-	_, err := conn.runExec(context.Background(), "COMMIT", func(context.Context) (driver.Result, error) {
+	_, err := conn.runExec(context.Background(), readTxStatements("COMMIT"), func(context.Context) (driver.Result, error) {
 		return driver.RowsAffected(0), nil
 	})
 	require.Error(t, err)
@@ -943,11 +943,11 @@ func TestGuardedConn_AStatementThatEndsNothingKeepsTheCount(t *testing.T) {
 	require.NoError(t, conn.openTx(t.Context()))
 	ran := func(context.Context) (driver.Result, error) { return driver.RowsAffected(0), nil }
 
-	_, err := conn.runExec(t.Context(), "SAVEPOINT inner", ran)
+	_, err := conn.runExec(t.Context(), readTxStatements("SAVEPOINT inner"), ran)
 	require.NoError(t, err)
 	assert.True(t, conn.inTx)
 
-	_, err = conn.runExec(t.Context(), "RELEASE inner; COMMIT", ran)
+	_, err = conn.runExec(t.Context(), readTxStatements("RELEASE inner; COMMIT"), ran)
 	require.NoError(t, err)
 	assert.False(t, conn.inTx)
 }

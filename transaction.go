@@ -131,7 +131,7 @@ func (c *guardedConn) wrapStmt(stmt driver.Stmt, query string) driver.Stmt {
 	if c.gate == nil && c.tracker == nil {
 		return stmt
 	}
-	return &guardedStmt{stmt: stmt, conn: c, sql: query}
+	return &guardedStmt{stmt: stmt, conn: c, effects: c.effectsOf(query)}
 }
 
 // Ping implements driver.Pinger.
@@ -261,8 +261,7 @@ func (c *guardedConn) closeTx() {
 // went uncounted after "BEGIN; INSERT INTO missing ...", so the connection went
 // back to the pool inside it and the writes made on it afterwards were dropped at
 // close, and one SQLite had ended stayed counted, holding the gate.
-func (c *guardedConn) runExec(ctx context.Context, query string, run func(context.Context) (driver.Result, error)) (driver.Result, error) {
-	effects := c.effectsOf(query)
+func (c *guardedConn) runExec(ctx context.Context, effects []txEffect, run func(context.Context) (driver.Result, error)) (driver.Result, error) {
 	if len(effects) == 0 {
 		return run(ctx)
 	}
@@ -312,12 +311,12 @@ func (c *guardedConn) sqliteInTx(ctx context.Context) bool {
 
 // runQuery runs one query. A transaction keyword run as a query is odd but
 // legal, so it is read the same way a statement is.
-func (c *guardedConn) runQuery(ctx context.Context, query string, run func(context.Context) (driver.Rows, error)) (driver.Rows, error) {
-	if len(c.effectsOf(query)) == 0 {
+func (c *guardedConn) runQuery(ctx context.Context, effects []txEffect, run func(context.Context) (driver.Rows, error)) (driver.Rows, error) {
+	if len(effects) == 0 {
 		return run(ctx)
 	}
 	var rows driver.Rows
-	_, err := c.runExec(ctx, query, func(ctx context.Context) (driver.Result, error) {
+	_, err := c.runExec(ctx, effects, func(ctx context.Context) (driver.Result, error) {
 		var runErr error
 		rows, runErr = run(ctx)
 		return driver.RowsAffected(0), runErr
@@ -350,7 +349,7 @@ func (c *guardedConn) begin(ctx context.Context, opts driver.TxOptions) (driver.
 
 // ExecContext implements driver.ExecerContext.
 func (c *guardedConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	return c.runExec(ctx, query, func(ctx context.Context) (driver.Result, error) {
+	return c.runExec(ctx, c.effectsOf(query), func(ctx context.Context) (driver.Result, error) {
 		return c.exec(ctx, query, args)
 	})
 }
@@ -369,7 +368,7 @@ func (c *guardedConn) exec(ctx context.Context, query string, args []driver.Name
 
 // QueryContext implements driver.QueryerContext.
 func (c *guardedConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
-	return c.runQuery(ctx, query, func(ctx context.Context) (driver.Rows, error) {
+	return c.runQuery(ctx, c.effectsOf(query), func(ctx context.Context) (driver.Rows, error) {
 		return c.query(ctx, query, args)
 	})
 }
@@ -648,7 +647,10 @@ func isASCIILetter(b byte) bool {
 type guardedStmt struct {
 	stmt driver.Stmt
 	conn *guardedConn
-	sql  string
+	// effects is what the statement does to a transaction, read once when it
+	// is prepared: its text does not change between runs, and a load runs one
+	// insert of thousands of placeholders once per batch, reading it each time.
+	effects []txEffect
 }
 
 // Close implements driver.Stmt.
@@ -661,7 +663,7 @@ func (s *guardedStmt) NumInput() int { return s.stmt.NumInput() }
 //
 //nolint:staticcheck // database/sql calls ExecContext; this is here for the interface.
 func (s *guardedStmt) Exec(args []driver.Value) (driver.Result, error) {
-	return s.conn.runExec(context.Background(), s.sql, func(context.Context) (driver.Result, error) {
+	return s.conn.runExec(context.Background(), s.effects, func(context.Context) (driver.Result, error) {
 		return s.stmt.Exec(args)
 	})
 }
@@ -670,14 +672,14 @@ func (s *guardedStmt) Exec(args []driver.Value) (driver.Result, error) {
 //
 //nolint:staticcheck // database/sql calls QueryContext; this is here for the interface.
 func (s *guardedStmt) Query(args []driver.Value) (driver.Rows, error) {
-	return s.conn.runQuery(context.Background(), s.sql, func(context.Context) (driver.Rows, error) {
+	return s.conn.runQuery(context.Background(), s.effects, func(context.Context) (driver.Rows, error) {
 		return s.stmt.Query(args)
 	})
 }
 
 // ExecContext implements driver.StmtExecContext.
 func (s *guardedStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
-	return s.conn.runExec(ctx, s.sql, func(ctx context.Context) (driver.Result, error) {
+	return s.conn.runExec(ctx, s.effects, func(ctx context.Context) (driver.Result, error) {
 		return s.exec(ctx, args)
 	})
 }
@@ -692,7 +694,7 @@ func (s *guardedStmt) exec(ctx context.Context, args []driver.NamedValue) (drive
 
 // QueryContext implements driver.StmtQueryContext.
 func (s *guardedStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
-	return s.conn.runQuery(ctx, s.sql, func(ctx context.Context) (driver.Rows, error) {
+	return s.conn.runQuery(ctx, s.effects, func(ctx context.Context) (driver.Rows, error) {
 		return s.query(ctx, args)
 	})
 }

@@ -1722,3 +1722,71 @@ func parquetColumnText(t *testing.T, path string) []string {
 	require.NoError(t, rows.Err())
 	return out
 }
+
+// TestDumpParquet_RowsPastOneBatchComeBackAsWritten dumps a table longer than
+// the batch the writer is handed at a time, so the reused block of values is
+// written, overwritten and written again, and reads the file back. Every row
+// has to be the one the table holds, nulls in place, in its order.
+func TestDumpParquet_RowsPastOneBatchComeBackAsWritten(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	defer db.Close()
+	if _, err := db.ExecContext(t.Context(), "CREATE TABLE t (n INTEGER, r REAL, s TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	const rows = 2*parquetBatchRows + 452
+	want := make([]string, 0, rows)
+	for i := range rows {
+		var s any = fmt.Sprintf("row %d", i)
+		if i%7 == 0 {
+			s = nil
+		}
+		if _, err := db.ExecContext(t.Context(), "INSERT INTO t VALUES (?, ?, ?)", i, float64(i)+0.5, s); err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, fmt.Sprintf("%d|%g|%v", i, float64(i)+0.5, s))
+	}
+
+	dir := t.TempDir()
+	if err := DumpDatabase(t.Context(), db, dir, NewDumpOptions().WithFormat(OutputFormatParquet)); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Open(t.Context(), filepath.Join(dir, "t.parquet"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loaded.Close()
+	got, err := loaded.QueryContext(t.Context(), "SELECT n, r, s FROM t ORDER BY rowid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer got.Close()
+	i := 0
+	for got.Next() {
+		var n int64
+		var r float64
+		var s sql.NullString
+		if err := got.Scan(&n, &r, &s); err != nil {
+			t.Fatal(err)
+		}
+		var text any
+		if s.Valid {
+			text = s.String
+		}
+		if line := fmt.Sprintf("%d|%g|%v", n, r, text); i >= len(want) || line != want[i] {
+			t.Fatalf("row %d = %q, want %q", i, line, want[min(i, len(want)-1)])
+		}
+		i++
+	}
+	if err := got.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if i != rows {
+		t.Fatalf("read %d rows back, want %d", i, rows)
+	}
+}
