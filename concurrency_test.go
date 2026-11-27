@@ -561,6 +561,11 @@ func lockedStep(t *testing.T) func() error {
 	db, err := sql.Open("sqlite", path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	// The connection is opened here rather than by the first step, so a step
+	// costs the refused statement alone. Opening the file inside the first one
+	// took half a second on a Windows runner, longer than the 240ms budget of
+	// the test below, which then saw a single attempt.
+	require.NoError(t, db.PingContext(t.Context()))
 
 	// The step runs under a context of its own so that a caller's canceled one
 	// turns the answer into a context error rather than the lock being tested.
