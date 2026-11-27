@@ -121,6 +121,9 @@ func TestIntegerPrefixesByDialect(t *testing.T) {
 		{"MySQL uppercase prefix", mysql, "0X41", Word, "0X41"},
 		{"MySQL prefix with no digits", mysql, "0x", Word, "0x"},
 		{"MySQL exponent without digits", mysql, "1e", Word, "1e"},
+		{"MySQL digits run into a name with a dollar sign", mysql, "1$f", Word, "1$f"},
+		{"MySQL name with a dollar sign", mysql, "abc$foo", Word, "abc$foo"},
+		{"PostgreSQL name with a dollar sign", pg, "a$", Word, "a$"},
 	} {
 		toks, err := Lex(tt.input, tt.cfg)
 		if err != nil || len(toks) != 1 || toks[0].Kind != tt.kind || toks[0].Text != tt.text {

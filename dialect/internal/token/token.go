@@ -79,6 +79,7 @@ type Config struct {
 	DigitSeparators           bool   // an underscore between digits of a numeric literal groups them (PostgreSQL)
 	IntegerPrefixes           string // the letters after a 0 that begin an integer passed on in decimal: "xXoObB" (PostgreSQL), "xX" (GoogleSQL)
 	DigitLeadNames            bool   // digits continued by name characters are one name, as 1abc is (MySQL)
+	DollarInNames             bool   // a $ after the first character of a name is part of it (MySQL, PostgreSQL)
 	HexStringIsBytes          bool   // X'41' names bytes (MySQL, GoogleSQL) rather than a bit string (PostgreSQL)
 }
 
@@ -113,6 +114,7 @@ func ConfigFor(d dialects.Dialect) (Config, bool) {
 			DashNeedsBlank:    true,
 			HexStringIsBytes:  true,
 			DigitLeadNames:    true,
+			DollarInNames:     true,
 		}, true
 	case dialects.PostgreSQL:
 		return Config{
@@ -124,6 +126,7 @@ func ConfigFor(d dialects.Dialect) (Config, bool) {
 			RejectNumericTrailingJunk: true,
 			DigitSeparators:           true,
 			IntegerPrefixes:           "xXoObB",
+			DollarInNames:             true,
 		}, true
 	case dialects.GoogleSQL:
 		return Config{
@@ -365,11 +368,11 @@ func Lex(query string, cfg Config) ([]Token, error) {
 
 		case isDigit(c) || (c == '.' && isDigit(next(query, i))):
 			j, ok := scanNumber(query, i, cfg)
-			if cfg.DigitLeadNames && isNameRun(query, i, j, ok) {
+			if cfg.DigitLeadNames && cfg.isNameRun(query, i, j, ok) {
 				// MySQL reads 1abc, 1e and 0x1G as names, so a column the
 				// caller wrote that way is the column, and splitting it
 				// answered the number under an alias instead.
-				for j < len(query) && isIdentPart(query[j]) && !strings.HasPrefix(query[j:], byteOrderMark) {
+				for j < len(query) && cfg.isNamePart(query[j]) && !strings.HasPrefix(query[j:], byteOrderMark) {
 					j++
 				}
 				tokens = append(tokens, Token{Kind: Word, Text: query[i:j], Offset: start})
@@ -390,7 +393,7 @@ func Lex(query string, cfg Config) ([]Token, error) {
 
 		case isIdentStart(c):
 			j := i + 1
-			for j < len(query) && isIdentPart(query[j]) && !strings.HasPrefix(query[j:], byteOrderMark) {
+			for j < len(query) && cfg.isNamePart(query[j]) && !strings.HasPrefix(query[j:], byteOrderMark) {
 				j++
 			}
 			tokens = append(tokens, Token{Kind: Word, Text: query[i:j], Offset: start})
@@ -863,7 +866,7 @@ func baseDigit(c byte, cfg Config) func(byte) bool {
 // digits, and the uppercase 0X and 0B, which MySQL does not read as prefixes.
 // A literal with a fraction or an exponent is a number, so 1e5x is 1e5 AS x
 // there as well.
-func isNameRun(s string, i, j int, digits bool) bool {
+func (cfg Config) isNameRun(s string, i, j int, digits bool) bool {
 	lit := s[i:j]
 	if strings.HasPrefix(lit, "0X") || strings.HasPrefix(lit, "0B") {
 		return true
@@ -872,7 +875,7 @@ func isNameRun(s string, i, j int, digits bool) bool {
 	if !prefixed && strings.ContainsAny(lit, ".eE") {
 		return false
 	}
-	return !digits || (j < len(s) && isIdentPart(s[j]))
+	return !digits || (j < len(s) && cfg.isNamePart(s[j]))
 }
 
 // decimalInteger spells an integer whose base prefix is one of prefixes in
@@ -982,6 +985,14 @@ func isIdentStart(c byte) bool {
 
 func isIdentPart(c byte) bool {
 	return isIdentStart(c) || isDigit(c)
+}
+
+// isNamePart reports whether c continues an unquoted name. MySQL and
+// PostgreSQL take a dollar sign there, so abc$foo is one name; stopping at it
+// read $foo as a placeholder, and the query was refused. A name still cannot
+// begin with one.
+func (cfg Config) isNamePart(c byte) bool {
+	return isIdentPart(c) || (cfg.DollarInNames && c == '$')
 }
 
 // isPlaceholderName reports whether a byte may appear in a bound parameter's
