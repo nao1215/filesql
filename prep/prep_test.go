@@ -1,8 +1,11 @@
 package prep
 
 import (
+	"math/rand"
 	"net/url"
+	"strings"
 	"testing"
+	"testing/quick"
 	"unicode"
 
 	"github.com/nao1215/filesql/internal/infer"
@@ -1175,5 +1178,30 @@ func TestCoerceAgreesWithTheLoader(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestLtrimAndRtrimAgreeWithUnicodeIsSpace compares the two pads with the
+// standard library's trim by unicode.IsSpace, which is what doc.go says they
+// remove, over values built from ASCII whitespace, whitespace past ASCII, other
+// runes and invalid UTF-8. The pads skip an ASCII run by table and hand the
+// rest to unicode.IsSpace, so the boundary between the two is what is tested.
+func TestLtrimAndRtrimAgreeWithUnicodeIsSpace(t *testing.T) {
+	t.Parallel()
+
+	pieces := []string{" ", "\t", "\n", "\v", "\f", "\r", "\u0085", "\u00a0", "\u3000", "\u2003", "a", "é", "日", "\xff", "\x80", "_"}
+	ltrim, rtrim := newLtrimPreprocessor(), newRtrimPreprocessor()
+	agree := func(seed int64) bool {
+		r := rand.New(rand.NewSource(seed)) //nolint:gosec // A reproducible value, not a secret
+		var b strings.Builder
+		for range r.Intn(8) {
+			b.WriteString(pieces[r.Intn(len(pieces))])
+		}
+		v := b.String()
+		return ltrim.Process(v) == strings.TrimLeftFunc(v, unicode.IsSpace) &&
+			rtrim.Process(v) == strings.TrimRightFunc(v, unicode.IsSpace)
+	}
+	if err := quick.Check(agree, &quick.Config{MaxCount: 20000, Rand: rand.New(rand.NewSource(1))}); err != nil { //nolint:gosec // A fixed seed
+		t.Error(err)
 	}
 }

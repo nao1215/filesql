@@ -57,8 +57,18 @@ func newLtrimPreprocessor() *ltrimPreprocessor {
 // Process removes leading whitespace, which is what trim calls whitespace: the
 // one sentence documenting the three tags is true of all of them only if they
 // agree about which characters are padding.
+//
+// The ASCII run is skipped by table, the way strings.TrimSpace skips it, and only
+// a value whose padding reaches a byte past ASCII goes to unicode.IsSpace.
 func (p *ltrimPreprocessor) Process(value string) string {
-	return strings.TrimLeftFunc(value, unicode.IsSpace)
+	start := 0
+	for start < len(value) && value[start] < utf8.RuneSelf && asciiSpace[value[start]] {
+		start++
+	}
+	if start < len(value) && value[start] >= utf8.RuneSelf {
+		return strings.TrimLeftFunc(value[start:], unicode.IsSpace)
+	}
+	return value[start:]
 }
 
 // Name returns the preprocessor name
@@ -76,7 +86,14 @@ func newRtrimPreprocessor() *rtrimPreprocessor {
 
 // Process removes trailing whitespace, judged the way ltrim judges it.
 func (p *rtrimPreprocessor) Process(value string) string {
-	return strings.TrimRightFunc(value, unicode.IsSpace)
+	stop := len(value)
+	for stop > 0 && value[stop-1] < utf8.RuneSelf && asciiSpace[value[stop-1]] {
+		stop--
+	}
+	if stop > 0 && value[stop-1] >= utf8.RuneSelf {
+		return strings.TrimRightFunc(value[:stop], unicode.IsSpace)
+	}
+	return value[:stop]
 }
 
 // Name returns the preprocessor name
