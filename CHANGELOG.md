@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Mutation testing passes a pull request whose changed lines hold no mutant, such as one that changes only tests or comments. gremlins counts every mutant outside the diff as skipped and reported 0% efficacy for such a pull request, which failed the threshold.
+- The coverage check allows a drop of 0.1%, the run-to-run movement of five error branches that a canceled context reaches or not, so a pull request that changes no Go code no longer fails it.
 
 ## [0.60.3] - 2026-11-27
 

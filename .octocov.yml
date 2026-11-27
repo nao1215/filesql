@@ -6,7 +6,13 @@ coverage:
   # test can catch a mutant in either. What is left is spread over the dialect
   # parser and renderer, the ACH converter and the readers' error handling,
   # and 99% is not reached yet.
-  acceptable: current >= 93% && diff >= 0%
+  #
+  # Five error branches are reached or not depending on when a canceled
+  # context lands in a load or a dump (the Scan and Err checks of the dump
+  # loop in filesql.go, the prepare and batch insert failures in
+  # stream_processor.go), so the total moves by about 0.015% between runs of
+  # the same code. The diff allows 0.1% for that; a real drop is larger.
+  acceptable: current >= 93% && diff >= -0.1%
   exclude:
     - "github.com/nao1215/filesql/examples/**/*.go"
 diff:
