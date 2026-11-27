@@ -29,7 +29,19 @@ func TSVRecord(dst io.Writer, record []string, lineEnding string) error {
 	if lineEnding == "" {
 		lineEnding = "\n"
 	}
-	if _, err := io.WriteString(dst, strings.Join(record, "\t")+lineEnding); err != nil {
+	// The fields go to dst one at a time rather than joined first: dst is
+	// buffered, so joining only made two copies of every row to throw away.
+	for i, field := range record {
+		if i > 0 {
+			if _, err := io.WriteString(dst, "\t"); err != nil {
+				return fmt.Errorf("failed to write TSV record: %w", err)
+			}
+		}
+		if _, err := io.WriteString(dst, field); err != nil {
+			return fmt.Errorf("failed to write TSV record: %w", err)
+		}
+	}
+	if _, err := io.WriteString(dst, lineEnding); err != nil {
 		return fmt.Errorf("failed to write TSV record: %w", err)
 	}
 	return nil

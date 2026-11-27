@@ -300,6 +300,19 @@ type failingWriter struct{}
 // Write always fails.
 func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk is full") }
 
+// failAfter takes ok writes and fails every one after them.
+type failAfter struct {
+	ok, writes int
+}
+
+func (w *failAfter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes > w.ok {
+		return 0, errors.New("disk is full")
+	}
+	return len(p), nil
+}
+
 // writerFormats are the four formats and a record each can hold.
 //
 //nolint:gochecknoglobals // shared table of cases
@@ -447,6 +460,22 @@ func TestTSVRecordWritesOneRecord(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "failed to write TSV record") {
 			t.Errorf("error = %q, want it to name the record it could not write", err.Error())
+		}
+	})
+
+	t.Run("a destination that fails at any write says so", func(t *testing.T) {
+		t.Parallel()
+
+		// A two-field record is written as field, tab, field and line ending.
+		for ok := range 4 {
+			dst := &failAfter{ok: ok}
+			err := TSVRecord(dst, []string{"a", "b"}, "\n")
+			if err == nil {
+				t.Fatalf("a destination failing after %d writes reported no error", ok)
+			}
+			if dst.writes != ok+1 {
+				t.Errorf("a destination failing after %d writes was written %d times, want the write that failed to be the last", ok, dst.writes)
+			}
 		}
 	})
 
