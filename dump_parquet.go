@@ -46,13 +46,18 @@ func writeParquetTableData(w io.Writer, columns []string, rows *sql.Rows, prior 
 		scanArgs[i] = &values[i]
 	}
 
+	// The rows are cut from blocks of parquetBatchRows at a time rather than
+	// allocated one each.
+	var block []any
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
 			return fmt.Errorf("%w: failed to scan row: %w", ErrDatabaseOperation, err)
 		}
-		row := make([]any, len(columns))
-		copy(row, values)
-		allRows = append(allRows, row)
+		if len(block)+len(columns) > cap(block) {
+			block = make([]any, 0, parquetBatchRows*len(columns))
+		}
+		block = append(block, values...)
+		allRows = append(allRows, block[len(block)-len(columns):len(block):len(block)])
 	}
 
 	if err := rows.Err(); err != nil {
@@ -61,6 +66,9 @@ func writeParquetTableData(w io.Writer, columns []string, rows *sql.Rows, prior 
 
 	return writeParquetData(w, columns, allRows, declared, prior)
 }
+
+// parquetBatchRows is how many rows a Parquet dump hands the writer at a time.
+const parquetBatchRows = 1024
 
 // parquetPrior is the schema of the Parquet file a save is replacing, by column
 // name. It is nil for an export, which has no file to keep faith with.
@@ -582,7 +590,14 @@ func writeParquetData(w io.Writer, columns []string, rows [][]any, declared []st
 	// Rows are built as Parquet values directly rather than deconstructed from
 	// Go values by reflection, which reads a zero value in an optional column
 	// as a null and would turn a stored 0 or "" into a missing cell.
-	buf := make([]parquet.Row, 0, min(len(rows), 1024))
+	//
+	// The values of a batch live in one block, reused once the batch is
+	// written: a writer copies what it is given, as parquet.CopyRows relies on
+	// when it reuses its own buffer, so allocating each row was allocating
+	// every value twice.
+	batch := min(len(rows), parquetBatchRows)
+	buf := make([]parquet.Row, 0, batch)
+	cells := make([]parquet.Value, batch*len(columns))
 	flush := func() error {
 		if len(buf) == 0 {
 			return nil
@@ -594,7 +609,8 @@ func writeParquetData(w io.Writer, columns []string, rows [][]any, declared []st
 		return nil
 	}
 	for r, row := range rows {
-		out := make(parquet.Row, len(columns))
+		at := len(buf) * len(columns)
+		out := parquet.Row(cells[at : at+len(columns) : at+len(columns)])
 		for i := range columns {
 			if kept[i] != nil {
 				// The value was rebuilt and checked when the schema was chosen.
