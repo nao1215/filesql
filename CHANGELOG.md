@@ -10,9 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Reject a PostgreSQL numeric literal written directly against identifier characters, such as `123abc` or `0xdeadbeefg`, instead of translating the trailing text as an implicit alias. PostgreSQL refuses the input as trailing junk after a numeric literal.
+- `REPEAT` of an empty string and `REGEXP_COUNT` with a start position past the range of a 32-bit int panicked on 32-bit platforms, where the count or position was converted to `int` and wrapped. Both compare the int64 value now. The `dialect` package builds for 386; the root package does not, because `github.com/moov-io/ach` does not compile there.
 
 ### Changed
 
+- CI runs the packages that build for 386, fuzzes each target for 15 seconds on every pull request, and compares the benchmarks of a pull request's base and head on one runner, failing a consistent slowdown of more than 25%.
+- Coverage may not drop on a pull request or fall below 93%. Mutation testing fails a pull request whose changed lines reach 90% efficacy or less, and a weekly package run that falls to its measured floor; it no longer reuses cached test results, which can make every mutant time out.
 - Mutation testing caps each mutant at 4 GiB of memory, so a mutant that allocates without bound fails as killed instead of taking the CI runner down.
 
 ## [0.60.2] - 2026-11-19
