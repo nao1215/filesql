@@ -2031,3 +2031,30 @@ func TestWriteBack_ShortRowsAndMissingColumns(t *testing.T) {
 		assert.ErrorContains(t, err, "entries: row 0: invalid "+column)
 	}
 }
+
+// TestWriteBack_RefusesAChangedAddendaType changes the type of an addenda row
+// along with another of its fields. The write looked for a record of the new
+// type at that position, found none and skipped the row, so the other edit was
+// dropped and the file written with no error.
+func TestWriteBack_RefusesAChangedAddendaType(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		file, table, to string
+	}{
+		{"iat-credit.ach", "iat_addenda", "99"},
+		{"return-WEB.ach", "addenda", "98"},
+		{"pos-debit.ach", "addenda", "05"},
+	} {
+		raw, err := os.ReadFile(findTestFile(t, tt.file))
+		require.NoError(t, err)
+		ts, err := ParseReader(bytes.NewReader(raw))
+		require.NoError(t, err)
+		td := map[string]*parser.TableData{"addenda": ts.addenda, "iat_addenda": ts.iatAddenda}[tt.table]
+		td.Records[0][findHeaderIndex(t, td.Headers, "addenda_type")] = tt.to
+
+		_, err = ts.toFile()
+		require.ErrorContainsf(t, err, tt.table+": row 0 names", "%s: addenda_type changed to %s", tt.file, tt.to)
+		assert.ErrorContains(t, err, "addenda_type="+tt.to+" but was read from")
+	}
+}

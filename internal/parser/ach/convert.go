@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -92,10 +93,10 @@ func fromFile(file *ach.File) *TableSet {
 	ts.parsedCoords = map[string][]string{
 		"batches":     coordinateKeys(ts.batches, "batch_index"),
 		"entries":     coordinateKeys(ts.entries, "batch_index", "entry_index"),
-		"addenda":     coordinateKeys(ts.addenda, "batch_index", "entry_index", "addenda_index"),
+		"addenda":     coordinateKeys(ts.addenda, addendaKey...),
 		"iat_batches": coordinateKeys(ts.iatBatches, "batch_index"),
 		"iat_entries": coordinateKeys(ts.iatEntries, "batch_index", "entry_index"),
-		"iat_addenda": coordinateKeys(ts.iatAddenda, "batch_index", "entry_index", "addenda_index"),
+		"iat_addenda": coordinateKeys(ts.iatAddenda, addendaKey...),
 	}
 
 	return ts
@@ -134,8 +135,9 @@ func coordinateKeys(td *parser.TableData, columns ...string) []string {
 }
 
 // coordinateKey spells one coordinate. Both sides of the comparison go through
-// it and the callers hand it numbers rather than the text they read, so a
-// coordinate is compared by the record it names and not by how it was spelled:
+// it and the callers hand it the indexes as numbers rather than the text they
+// read (addenda_type, a code, is compared as written), so a coordinate is
+// compared by the record it names and not by how it was spelled:
 // "0" and "00" are one position, which is what they are. That is deliberate.
 // These columns are integers, and a table that has been through SQLite comes
 // back with its numbers spelled the way SQLite spells them, so comparing the
@@ -859,15 +861,11 @@ func (ts *TableSet) newCoordinateTracker(table string) *coordinateTracker {
 // claimed is what catches two rows that exchange positions, where every
 // coordinate is still unique, still in range, and still points at the wrong
 // record.
-func (c *coordinateTracker) claim(columns []string, values []int) error {
+func (c *coordinateTracker) claim(columns []string, values []string) error {
 	row := c.row
 	c.row++
 
-	strs := make([]string, len(columns))
-	for i, v := range values {
-		strs[i] = strconv.Itoa(v)
-	}
-	key := coordinateKey(columns, strs)
+	key := coordinateKey(columns, values)
 	named := strings.Join(columns, " and ")
 
 	if c.seen[key] {
@@ -985,7 +983,20 @@ var (
 	batchCoordinates   = []string{"batch_index"}
 	entryCoordinates   = []string{"batch_index", "entry_index"}
 	addendaCoordinates = []string{"batch_index", "entry_index", "addenda_index"}
+	// addendaKey is what an addenda row claims: its position and the kind of
+	// record at it. A row whose type was changed named no record of the new
+	// kind at its position, so the row was skipped with every edit made to it.
+	addendaKey = append(slices.Clone(addendaCoordinates), "addenda_type")
 )
+
+// spell writes coordinates the way coordinateKey compares them.
+func spell(at []int) []string {
+	strs := make([]string, len(at))
+	for i, v := range at {
+		strs[i] = strconv.Itoa(v)
+	}
+	return strs
+}
 
 func (ts *TableSet) applyEntryModifications(file *ach.File) error {
 	r := newFieldReader("entries", ts.entries)
@@ -1004,7 +1015,7 @@ func (ts *TableSet) applyEntryModifications(file *ach.File) error {
 		if entryIdx < 0 || entryIdx >= len(entries) {
 			return fmt.Errorf("entry_index %d out of range for batch %d", entryIdx, batchIdx)
 		}
-		if err := coords.claim(entryCoordinates, at); err != nil {
+		if err := coords.claim(entryCoordinates, spell(at)); err != nil {
 			return err
 		}
 
@@ -1061,7 +1072,7 @@ func (ts *TableSet) applyBatchModifications(file *ach.File) error {
 		if batchIdx < 0 || batchIdx >= len(file.Batches) {
 			return fmt.Errorf("batch_index %d out of range", batchIdx)
 		}
-		if err := coords.claim(batchCoordinates, at); err != nil {
+		if err := coords.claim(batchCoordinates, spell(at)); err != nil {
 			return err
 		}
 
@@ -1102,12 +1113,12 @@ func (ts *TableSet) applyAddendaModifications(file *ach.File) error {
 		if entryIdx < 0 || entryIdx >= len(entries) {
 			return fmt.Errorf("entry_index %d out of range for batch %d", entryIdx, batchIdx)
 		}
-		if err := coords.claim(addendaCoordinates, at); err != nil {
+		addendaType, _ := r.cell("addenda_type")
+		if err := coords.claim(addendaKey, append(spell(at), addendaType)); err != nil {
 			return err
 		}
 
 		entry := entries[entryIdx]
-		addendaType, _ := r.cell("addenda_type")
 		switch addendaType {
 		case "02":
 			if entry.Addenda02 != nil {
@@ -1715,7 +1726,7 @@ func (ts *TableSet) applyIATBatchModifications(file *ach.File) error {
 		if batchIdx < 0 || batchIdx >= len(file.IATBatches) {
 			return fmt.Errorf("batch_index %d out of range", batchIdx)
 		}
-		if err := coords.claim(batchCoordinates, at); err != nil {
+		if err := coords.claim(batchCoordinates, spell(at)); err != nil {
 			return err
 		}
 
@@ -1758,7 +1769,7 @@ func (ts *TableSet) applyIATEntryModifications(file *ach.File) error {
 		if entryIdx < 0 || entryIdx >= len(file.IATBatches[batchIdx].Entries) {
 			return fmt.Errorf("entry_index %d out of range for batch %d", entryIdx, batchIdx)
 		}
-		if err := coords.claim(entryCoordinates, at); err != nil {
+		if err := coords.claim(entryCoordinates, spell(at)); err != nil {
 			return err
 		}
 
@@ -1798,12 +1809,12 @@ func (ts *TableSet) applyIATAddendaModifications(file *ach.File) error {
 		if entryIdx < 0 || entryIdx >= len(file.IATBatches[batchIdx].Entries) {
 			return fmt.Errorf("entry_index %d out of range for batch %d", entryIdx, batchIdx)
 		}
-		if err := coords.claim(addendaCoordinates, at); err != nil {
+		addendaType, _ := r.cell("addenda_type")
+		if err := coords.claim(addendaKey, append(spell(at), addendaType)); err != nil {
 			return err
 		}
 
 		entry := file.IATBatches[batchIdx].Entries[entryIdx]
-		addendaType, _ := r.cell("addenda_type")
 		switch addendaType {
 		case "10":
 			if a := entry.Addenda10; a != nil {

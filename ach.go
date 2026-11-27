@@ -120,7 +120,6 @@ import (
 	"io"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/nao1215/filesql/internal/parser"
@@ -542,18 +541,14 @@ func readTableToTableData(ctx context.Context, db *sql.DB, tableName string) (*p
 }
 
 // cellText spells a value read from SQLite the way a parser reads it back. A
-// REAL is written in full rather than by %v, which prints 1e6 and above in
-// exponent form, and an amount of $10,000.00 multiplied by 1.0 read back as
-// 1e+06, which is not an integer. A BLOB is its bytes rather than a list of
-// numbers.
+// BLOB is its bytes: %v printed one as the list of its byte values, so a name
+// set to a BLOB was written as "[66 111 98]".
 func cellText(v any) string {
 	switch v := v.(type) {
 	case nil:
 		return ""
 	case []byte:
 		return string(v)
-	case float64:
-		return strconv.FormatFloat(v, 'f', -1, 64)
 	default:
 		return fmt.Sprint(v)
 	}

@@ -720,11 +720,11 @@ func TestDumpACH_RefusesARemovedTableOrRow(t *testing.T) {
 	}
 }
 
-// TestDumpACH_WritesAWholeREALAndRefusesAFraction pins how an integer field
-// reads a value that is not an INTEGER. Arithmetic that yields a REAL, such as
-// amount * 1.0, read back as 1e+08 and was skipped, so the amount was written
-// unchanged; a fraction and a typo were skipped the same way.
-func TestDumpACH_WritesAWholeREALAndRefusesAFraction(t *testing.T) {
+// TestDumpACH_ReadsBackWhatTheCellHolds pins how a write-back reads a value
+// that is not the type its column was loaded with. A fraction or a typo in an
+// integer field was skipped, so the amount was written unchanged and the write
+// succeeded; a BLOB was printed as the list of its bytes.
+func TestDumpACH_ReadsBackWhatTheCellHolds(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
@@ -737,16 +737,16 @@ func TestDumpACH_WritesAWholeREALAndRefusesAFraction(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	_, err = db.ExecContext(ctx, "UPDATE ppd_debit_entries SET amount = amount * 1.0 + 1")
+	_, err = db.ExecContext(ctx, "UPDATE ppd_debit_entries SET individual_name = CAST('Bob' AS BLOB)")
 	require.NoError(t, err)
 	out := filepath.Join(dir, "out.ach")
 	require.NoError(t, DumpACH(ctx, db, "ppd_debit", out))
 	written, err := Open(ctx, out)
 	require.NoError(t, err)
 	defer written.Close()
-	var amount int64
-	require.NoError(t, written.QueryRowContext(ctx, "SELECT amount FROM out_entries").Scan(&amount))
-	assert.Equal(t, int64(100000001), amount)
+	var name string
+	require.NoError(t, written.QueryRowContext(ctx, "SELECT individual_name FROM out_entries").Scan(&name))
+	assert.Equal(t, "Bob", name)
 
 	for _, value := range []any{1.5, "12x"} {
 		_, err = db.ExecContext(ctx, "UPDATE ppd_debit_entries SET amount = ?", value)
@@ -794,4 +794,21 @@ func TestACHBaseName_PicksTheLoadedReading(t *testing.T) {
 	assert.False(t, ok, "a table of no loaded file is an ordinary table")
 	_, ok = achBaseName("x_orders", []string{"x"})
 	assert.False(t, ok)
+}
+
+// TestUpdateTableSetFromDB_ReturnsAFailedRead pins that a table that is there
+// but cannot be read fails the write. Every such error was dropped and the
+// table written from the parsed file instead.
+func TestUpdateTableSetFromDB_ReturnsAFailedRead(t *testing.T) {
+	t.Parallel()
+
+	db, err := Open(t.Context(), findTestACHFile(t))
+	require.NoError(t, err)
+	defer db.Close()
+	ts, err := achTableSetForDump(t.Context(), db, "ppd_debit")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, updateTableSetFromDB(ctx, db, "ppd_debit", ts), context.Canceled)
 }
