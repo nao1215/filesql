@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.60.4] - 2026-11-27
+
 ### Fixed
 
 - A string of statements that failed partway left SQLite inside the transaction its earlier statements had begun while the connection stopped counting it: after `db.Exec("BEGIN; INSERT INTO missing ...")` the connection went back to the pool with the transaction open, the writes made on it afterwards were discarded at close, and with auto-save the close returned nil. Whether a transaction is open after a statement that may end one, and after a failed string, is now asked of SQLite, so such a transaction is counted until it is ended and a close with it open reports the skipped save. The same reading had also counted a transaction closed after a trigger was created inside it, the `END` of the body read as a COMMIT, and open after ROLLBACK TO had cancelled the savepoint that began it and a RELEASE then ended it. ([#1219](https://github.com/nao1215/filesql/issues/1219))
@@ -2519,6 +2521,7 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
+[0.60.4]: https://github.com/nao1215/filesql/compare/v0.60.3...v0.60.4
 [0.60.3]: https://github.com/nao1215/filesql/compare/v0.60.2...v0.60.3
 [0.60.2]: https://github.com/nao1215/filesql/compare/v0.60.1...v0.60.2
 [0.60.1]: https://github.com/nao1215/filesql/compare/v0.60.0...v0.60.1
