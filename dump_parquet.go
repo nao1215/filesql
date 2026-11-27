@@ -46,18 +46,13 @@ func writeParquetTableData(w io.Writer, columns []string, rows *sql.Rows, prior 
 		scanArgs[i] = &values[i]
 	}
 
-	// The rows are cut from blocks of parquetBatchRows at a time rather than
-	// allocated one each.
-	var block []any
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
 			return fmt.Errorf("%w: failed to scan row: %w", ErrDatabaseOperation, err)
 		}
-		if len(block)+len(columns) > cap(block) {
-			block = make([]any, 0, parquetBatchRows*len(columns))
-		}
-		block = append(block, values...)
-		allRows = append(allRows, block[len(block)-len(columns):len(block):len(block)])
+		row := make([]any, len(columns))
+		copy(row, values)
+		allRows = append(allRows, row)
 	}
 
 	if err := rows.Err(); err != nil {
