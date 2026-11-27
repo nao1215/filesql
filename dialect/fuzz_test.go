@@ -116,6 +116,8 @@ func FuzzTranslationPrepares(f *testing.F) {
 		`SELECT b'\x41' FROM t`,
 		"SELECT t.* AS everything FROM t",
 		"SELECT 0x FROM t",
+		"SELECT 0o1_7, 0b_1, 0x8000000000000000 FROM t",
+		"SELECT 1abc, 1e5x, 0X41 FROM t",
 		"SELECT X'0'",
 		"INSERT INTO t VALUES ()",
 		"SELECT INDEX(1)",

@@ -275,7 +275,7 @@ func TestTranslateLexical(t *testing.T) {
 		// Common passthrough and whitespace normalization.
 		{"whitespace collapses", MySQL, "SELECT    *   FROM t", "SELECT * FROM t"},
 		{"operators preserved", PostgreSQL, "SELECT a <> b, c || d", "SELECT a <> b, c || d"},
-		{"numbers preserved", PostgreSQL, "SELECT 3.5e+10, 0xFF, .25", "SELECT 3.5e+10, 0xFF, .25"},
+		{"numbers preserved", PostgreSQL, "SELECT 3.5e+10, 0xFF, .25", "SELECT 3.5e+10, 255, .25"},
 		{"placeholders preserved", MySQL, "SELECT ?, ?1, @v, :name", "SELECT ?, ?1, @v, :name"},
 		{"block comment preserved", MySQL, "SELECT 1", "SELECT 1"},
 		{"function call no spacing", MySQL, "SELECT count(*) FROM t", "SELECT count(*) FROM t"},
@@ -333,6 +333,109 @@ func TestTranslateInvalidSyntax(t *testing.T) {
 	}
 }
 
+// TestIntegersWrittenInAnotherBase runs PostgreSQL's 0b, 0o and 0x integers
+// and GoogleSQL's 0x on SQLite and compares the answer with the one
+// postgres:17-alpine and the BigQuery emulator gave. SQLite reads 0x as a
+// 64-bit pattern, so 0x8000000000000000 answered a negative number before the
+// literals were passed on in decimal; past 2^63 the answer is the REAL that the
+// decimal spelling of the same number reads as.
+func TestIntegersWrittenInAnotherBase(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	for _, tt := range []struct {
+		dialect Dialect
+		query   string
+		want    any
+	}{
+		{PostgreSQL, "SELECT 0b101", int64(5)},
+		{PostgreSQL, "SELECT 0B1_0", int64(2)},
+		{PostgreSQL, "SELECT 0o17", int64(15)},
+		{PostgreSQL, "SELECT 0O_17", int64(15)},
+		{PostgreSQL, "SELECT 0X1F", int64(31)},
+		{PostgreSQL, "SELECT 0x_1F", int64(31)},
+		{PostgreSQL, "SELECT 0x7FFFFFFFFFFFFFFF", int64(math.MaxInt64)},
+		{PostgreSQL, "SELECT -0x8000000000000000", int64(math.MinInt64)},
+		{PostgreSQL, "SELECT 0x8000000000000000", float64(1 << 63)},
+		{PostgreSQL, "SELECT 0x10000000000000000", float64(1 << 64)},
+		{GoogleSQL, "SELECT 0x1F", int64(31)},
+		{GoogleSQL, "SELECT -0x8000000000000000", int64(math.MinInt64)},
+	} {
+		translated, err := Translate(tt.dialect, tt.query)
+		require.NoError(t, err, "%s: %s", tt.dialect, tt.query)
+		var got any
+		require.NoError(t, db.QueryRowContext(t.Context(), translated).Scan(&got), "%s became %q", tt.query, translated)
+		assert.Equal(t, tt.want, got, "%s: %s became %q", tt.dialect, tt.query, translated)
+	}
+
+	// A prefix with no digit, a digit outside the base and a misplaced
+	// separator are errors in PostgreSQL, and GoogleSQL has no 0o.
+	for _, tt := range []struct {
+		dialect Dialect
+		query   string
+	}{
+		{PostgreSQL, "SELECT 0b2"},
+		{PostgreSQL, "SELECT 0o8"},
+		{PostgreSQL, "SELECT 0o"},
+		{PostgreSQL, "SELECT 0x1G"},
+		{PostgreSQL, "SELECT 0b1__0"},
+		{PostgreSQL, "SELECT 0o7_"},
+		{GoogleSQL, "SELECT 0o17"},
+	} {
+		_, err := Translate(tt.dialect, tt.query)
+		assert.ErrorIs(t, err, ErrInvalidSyntax, "%s: %s", tt.dialect, tt.query)
+	}
+}
+
+// TestANumberThatANameCharacterFollows pins how each dialect reads digits that
+// run into a name with no blank between them. Before, all three split the run
+// into a number and an alias, so SELECT 1abc answered 1 under the name abc.
+// MySQL 8.4 reads such a run as one name, and answers the column it names;
+// the BigQuery emulator refuses it as a literal missing its whitespace, as
+// PostgreSQL refuses it as trailing junk. A run that ends in a fraction or an
+// exponent is still a number in MySQL, and 1e5x is 1e5 AS x there.
+func TestANumberThatANameCharacterFollows(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", "file::memory:?_dqs=false")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	names := []string{"1abc", "1e", "1_000", "0X41", "0B1010", "0x1G", "0b12", "0x", "0o17"}
+	columns := make([]string, len(names))
+	for i, name := range names {
+		columns[i] = fmt.Sprintf("%q INTEGER", name)
+	}
+	_, err = db.ExecContext(t.Context(), "CREATE TABLE t ("+strings.Join(columns, ", ")+")")
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), "INSERT INTO t VALUES (1, 2, 3, 4, 5, 6, 7, 8, 9)")
+	require.NoError(t, err)
+
+	for i, name := range names {
+		translated, err := Translate(MySQL, "SELECT "+name+" FROM t")
+		require.NoError(t, err, name)
+		var got int64
+		require.NoError(t, db.QueryRowContext(t.Context(), translated).Scan(&got), "%s became %q", name, translated)
+		assert.Equal(t, int64(i+1), got, "SELECT %s FROM t became %q", name, translated)
+	}
+	for query, want := range map[string]any{"SELECT 1e5x": float64(100000), "SELECT 1.5abc": 1.5} {
+		translated, err := Translate(MySQL, query)
+		require.NoError(t, err, query)
+		var got any
+		require.NoError(t, db.QueryRowContext(t.Context(), translated).Scan(&got), "%s became %q", query, translated)
+		assert.Equal(t, want, got, "%s became %q", query, translated)
+	}
+
+	for _, d := range []Dialect{GoogleSQL, PostgreSQL} {
+		for _, query := range []string{"SELECT 1abc", "SELECT 1e5x", "SELECT 1.5abc", "SELECT 1_000x", "SELECT 1e"} {
+			_, err := Translate(d, query)
+			assert.ErrorIs(t, err, ErrInvalidSyntax, "%s: %s", d, query)
+		}
+	}
+}
+
 // TestLiteralFormsAreOneToken pins the literal spellings the lexer used to
 // split, each of which reached SQLite as a bare word and failed naming
 // something the caller had not written. The values were read from mysql:8.4 and
@@ -348,7 +451,6 @@ func TestLiteralFormsAreOneToken(t *testing.T) {
 		query   string
 	}{
 		{MySQL, "SELECT 0b1010"},
-		{MySQL, "SELECT 0B1010"},
 		{MySQL, "SELECT 0b1010 + 0"},
 		{MySQL, "SELECT b'1010'"},
 		{MySQL, "SELECT B'1010'"},
@@ -2235,8 +2337,10 @@ func TestATranslationIsSQLSQLiteCanRead(t *testing.T) {
 		refused bool
 	}{
 		{"an alias on a star", MySQL, "SELECT t.* AS everything FROM t", true},
-		{"a hex prefix with no digits", MySQL, "SELECT 0x FROM t", true},
-		{"a binary prefix with no digits", MySQL, "SELECT 0b FROM t", true},
+		{"a hex prefix with no digits, which MySQL reads as a name", MySQL, "SELECT 0x FROM t", false},
+		{"a binary prefix with no digits, which MySQL reads as a name", MySQL, "SELECT 0b FROM t", false},
+		{"a hex prefix with no digits", PostgreSQL, "SELECT 0x FROM t", true},
+		{"a binary prefix with no digits", GoogleSQL, "SELECT 0b FROM t", true},
 		{"a hex literal PostgreSQL reads as bits", PostgreSQL, "SELECT X'0'", false},
 		{"a blob literal of one digit", GoogleSQL, "SELECT X'0'", true},
 		{"a VALUES row with no values", MySQL, "INSERT INTO t VALUES ()", true},
