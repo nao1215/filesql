@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Mutation testing passes a pull request whose changed lines hold no mutant, such as one that changes only tests or comments. gremlins counts every mutant outside the diff as skipped and reported 0% efficacy for such a pull request, which failed the threshold.
+
 ## [0.60.3] - 2026-11-27
 
 ### Fixed
