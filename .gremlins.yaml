@@ -4,6 +4,6 @@ unleash:
     # Exit with an error when killed / (killed + lived) is at or below this
     # percentage. It is set here rather than with --threshold-efficacy:
     # gremlins v0.6.0 does not read that flag's value. The weekly run of every
-    # package overrides it with each package's own floor through
-    # GREMLINS_UNLEASH_THRESHOLD_EFFICACY (.github/workflows/mutation.yml).
+    # package passes its own floor in a config file of its own instead
+    # (.github/workflows/mutation.yml).
     efficacy: 90

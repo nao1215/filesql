@@ -116,15 +116,20 @@ jobs:
       - name: Mutate the package
         env:
           PACKAGE: ${{ matrix.package }}
-          # The environment takes precedence over .gremlins.yaml.
-          GREMLINS_UNLEASH_THRESHOLD_EFFICACY: ${{ matrix.floor }}
+          FLOOR: ${{ matrix.floor }}
         # gremlins mutates everything under the path it is given and matches
         # --exclude-files against paths relative to it, so excluding any path
         # with a slash keeps each job to its own directory; the packages below
         # it have jobs of their own.
+        #
+        # The package's floor goes in a config file of its own, which --config
+        # reads in place of .gremlins.yaml. It cannot go in the environment:
+        # gremlins v0.6.0 reads GREMLINS_UNLEASH_THRESHOLD_EFFICACY as a
+        # string, takes it for no threshold, and passes at any efficacy.
         run: |
+          printf 'unleash:\n  threshold:\n    efficacy: %s\n' "$FLOOR" > "$RUNNER_TEMP/gremlins.yaml"
           ulimit -v "$MUTANT_MEMORY_KIB"
-          gremlins unleash --workers 4 --timeout-coefficient 10 --exclude-files '/' --output mutation.json "$PACKAGE"
+          gremlins unleash --config "$RUNNER_TEMP/gremlins.yaml" --workers 4 --timeout-coefficient 10 --exclude-files '/' --output mutation.json "$PACKAGE"
       - name: Name the report after the package
         id: report
         env:
