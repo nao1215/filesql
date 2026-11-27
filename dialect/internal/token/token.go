@@ -369,7 +369,7 @@ func Lex(query string, cfg Config) ([]Token, error) {
 				// MySQL reads 1abc, 1e and 0x1G as names, so a column the
 				// caller wrote that way is the column, and splitting it
 				// answered the number under an alias instead.
-				for j < len(query) && isIdentPart(query[j]) {
+				for j < len(query) && isIdentPart(query[j]) && !strings.HasPrefix(query[j:], byteOrderMark) {
 					j++
 				}
 				tokens = append(tokens, Token{Kind: Word, Text: query[i:j], Offset: start})

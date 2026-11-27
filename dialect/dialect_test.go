@@ -2348,6 +2348,7 @@ func TestATranslationIsSQLSQLiteCanRead(t *testing.T) {
 		{"a quoted name with nothing in it", PostgreSQL, `SELECT "" FROM t`, true},
 		{"a table name of three parts", GoogleSQL, "SELECT b FROM a.b.c", true},
 		{"a byte order mark inside a statement", MySQL, "SELECT a FROM t" + "\ufeff", true},
+		{"a byte order mark after a digit-led name", MySQL, "SELECT 1abc\ufeff FROM t", true},
 		{"a byte order mark ahead of a query", MySQL, "\ufeff" + "SELECT a FROM t", false},
 		{"a call named for a word SQLite keeps", MySQL, "SELECT INDEX(1)", false},
 		{"a call the caller quoted", MySQL, "SELECT `index`(1)", false},
