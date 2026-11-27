@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.60.3] - 2026-11-27
+
 ### Fixed
 
 - Reject a PostgreSQL numeric literal written directly against identifier characters, such as `123abc` or `0xdeadbeefg`, instead of translating the trailing text as an implicit alias. PostgreSQL refuses the input as trailing junk after a numeric literal. ([#1199](https://github.com/nao1215/filesql/pull/1199))
@@ -2499,6 +2501,7 @@ For users upgrading from v0.3.x:
 - Multi-language documentation (7 languages)
 - Standard database/sql interface implementation
 
+[0.60.3]: https://github.com/nao1215/filesql/compare/v0.60.2...v0.60.3
 [0.60.2]: https://github.com/nao1215/filesql/compare/v0.60.1...v0.60.2
 [0.60.1]: https://github.com/nao1215/filesql/compare/v0.60.0...v0.60.1
 [0.60.0]: https://github.com/nao1215/filesql/compare/v0.59.2...v0.60.0
