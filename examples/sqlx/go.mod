@@ -4,7 +4,7 @@ go 1.26.11
 
 require (
 	github.com/jmoiron/sqlx v1.4.0
-	github.com/nao1215/filesql v0.60.3
+	github.com/nao1215/filesql v0.60.4
 )
 
 require (
