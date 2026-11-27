@@ -75,6 +75,7 @@ type Config struct {
 	NumericEscapes            bool // \xHH, \ooo, \uXXXX and \UXXXXXXXX name a character (GoogleSQL)
 	AtOperator                bool // @ is the absolute-value operator rather than a parameter prefix (PostgreSQL)
 	RejectNumericTrailingJunk bool // an identifier character directly after a numeric literal is lexical junk (PostgreSQL)
+	DigitSeparators           bool // an underscore between digits of a numeric literal groups them (PostgreSQL)
 	HexStringIsBytes          bool // X'41' names bytes (MySQL, GoogleSQL) rather than a bit string (PostgreSQL)
 }
 
@@ -117,6 +118,7 @@ func ConfigFor(d dialects.Dialect) (Config, bool) {
 			NestedComment:             true,
 			AtOperator:                true,
 			RejectNumericTrailingJunk: true,
+			DigitSeparators:           true,
 		}, true
 	case dialects.GoogleSQL:
 		return Config{
@@ -355,14 +357,16 @@ func Lex(query string, cfg Config) ([]Token, error) {
 			i = j
 
 		case isDigit(c) || (c == '.' && isDigit(next(query, i))):
-			j, ok := scanNumber(query, i)
+			j, ok := scanNumber(query, i, cfg.DigitSeparators)
 			if !ok {
 				return nil, lexError(query, start, "numeric literal has no digits after its base prefix")
 			}
 			if cfg.RejectNumericTrailingJunk && j < len(query) && isIdentStart(query[j]) {
 				return nil, lexError(query, start, "trailing junk after numeric literal")
 			}
-			tokens = append(tokens, Token{Kind: Number, Text: query[i:j], Offset: start})
+			// The text is the literal's value, so the separators go: SQLite,
+			// which the translation is written for, has none.
+			tokens = append(tokens, Token{Kind: Number, Text: strings.ReplaceAll(query[i:j], "_", ""), Offset: start})
 			i = j
 
 		case isIdentStart(c):
@@ -794,33 +798,21 @@ func scanDollarQuoted(s string, i int) (content string, ni int, ok bool) {
 // of these dialects has: MySQL reads "0x" as one name and answers that it has
 // no such column, and taking it for a zero followed by a word made "SELECT 0XX"
 // render as "SELECT 0 AS XX", a different query that runs and answers.
-func scanNumber(s string, i int) (int, bool) {
+func scanNumber(s string, i int, separators bool) (int, bool) {
 	if s[i] == '0' && i+1 < len(s) && (s[i+1] == 'x' || s[i+1] == 'X') {
-		j := i + 2
-		for j < len(s) && isHex(s[j]) {
-			j++
-		}
+		j := scanDigits(s, i+2, isHex, separators)
 		return j, j > i+2
 	}
 	// MySQL's binary literal. Without this the "0" ended the number and "b1010"
 	// began a word, so "SELECT 0b1010" reached SQLite as a zero with an alias
 	// and answered 0.
 	if s[i] == '0' && i+1 < len(s) && (s[i+1] == 'b' || s[i+1] == 'B') {
-		j := i + 2
-		for j < len(s) && (s[j] == '0' || s[j] == '1') {
-			j++
-		}
+		j := scanDigits(s, i+2, isBinary, separators)
 		return j, j > i+2
 	}
-	j := i
-	for j < len(s) && isDigit(s[j]) {
-		j++
-	}
+	j := scanDigits(s, i, isDigit, separators)
 	if j < len(s) && s[j] == '.' {
-		j++
-		for j < len(s) && isDigit(s[j]) {
-			j++
-		}
+		j = scanDigits(s, j+1, isDigit, separators)
 	}
 	if j < len(s) && (s[j] == 'e' || s[j] == 'E') {
 		k := j + 1
@@ -828,13 +820,36 @@ func scanNumber(s string, i int) (int, bool) {
 			k++
 		}
 		if k < len(s) && isDigit(s[k]) {
-			j = k
-			for j < len(s) && isDigit(s[j]) {
-				j++
-			}
+			j = scanDigits(s, k, isDigit, separators)
 		}
 	}
 	return j, true
+}
+
+// scanDigits returns the index just past the run of digits starting at s[i],
+// where isDigit says what a digit is. With separators, an underscore is part
+// of the run when a digit follows it and it does not follow a separator or
+// begin the fraction or exponent: PostgreSQL's rule, which allows one between
+// two digits and one right after a base prefix (0x_FF), and nowhere else.
+func scanDigits(s string, i int, isDigit func(byte) bool, separators bool) int {
+	j := i
+	for j < len(s) {
+		switch {
+		case isDigit(s[j]):
+			j++
+		case separators && s[j] == '_' && j+1 < len(s) && isDigit(s[j+1]) && (j > i || isBasePrefix(s, i)):
+			j++
+		default:
+			return j
+		}
+	}
+	return j
+}
+
+// isBasePrefix reports whether the two bytes before s[i] are a 0x or 0b
+// prefix, after which a run of digits may begin with a separator.
+func isBasePrefix(s string, i int) bool {
+	return i >= 2 && s[i-2] == '0' && strings.ContainsRune("xXbB", rune(s[i-1]))
 }
 
 // multiCharOperators lists the multi-byte operators to recognize as one token,
@@ -874,6 +889,8 @@ func isSpace(c byte) bool {
 func isDigit(c byte) bool {
 	return c >= '0' && c <= '9'
 }
+
+func isBinary(c byte) bool { return c == '0' || c == '1' }
 
 func isHex(c byte) bool {
 	return isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
