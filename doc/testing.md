@@ -38,7 +38,7 @@ The `Property` workflow (`.github/workflows/property.yml`) draws 20,000 inputs p
 
 ## Fuzzing
 
-The fuzz targets parse files and queries this package did not write: `FuzzCSVReader` (`internal/reader`), `FuzzParseFormats` and `FuzzParseBinary` (`internal/parser`), `FuzzCodecReader` (`internal/codec`), `FuzzTranslate` and `FuzzTranslationPrepares` (`dialect`), and `FuzzParse` and `FuzzLex` (`dialect/internal/parser`). `go test` runs their seed corpus; the `Fuzz` workflow searches each for ten minutes every night.
+The fuzz targets parse files and queries this package did not write: `FuzzCSVReader` (`internal/reader`), `FuzzParseFormats` and `FuzzParseBinary` (`internal/parser`), `FuzzCodecReader` (`internal/codec`), `FuzzTranslate` and `FuzzTranslationPrepares` (`dialect`), and `FuzzParse` and `FuzzLex` (`dialect/internal/parser`). `go test` runs their seed corpus. The `Fuzz` workflow searches each for 15 seconds on a pull request and for ten minutes every night.
 
 ```sh
 go test ./internal/parser -run '^$' -fuzz '^FuzzParseFormats$' -fuzztime 1m
@@ -75,4 +75,22 @@ Efficacy (killed / (killed + lived)) measured on 2026-11-19, the first full run.
 | `dialect/internal/token` | 170 | 72 | 4 | 70.25% |
 | `dialect/internal/render` | 147 | 46 | 0 | 76.17% |
 
-`internal/infer` was 79.73% before the edge cases in `TestNumericLiteralPredicatesOnTheirEdges` were added; the one mutant left changes `>=` to `>` at 2^63, where the conversion back to int64 fails either way. Most of the ACH survivors are in `convert.go`, whose output the round-trip tests in the root package check but this package's own tests do not. `dialect/internal/runtime`, `dialect` and `internal/parser` are measured by the first weekly run. A pull request should not lower a package's efficacy below this table.
+`internal/infer` was 79.73% before the edge cases in `TestNumericLiteralPredicatesOnTheirEdges` were added; the one mutant left changes `>=` to `>` at 2^63, where the conversion back to int64 fails either way. Most of the ACH survivors are in `convert.go`, whose output the round-trip tests in the root package check but this package's own tests do not. The weekly run of 2026-11-22 measured the three packages missing above: `dialect/internal/runtime` 85.07%, `dialect` 100% and `internal/parser` 91.67%.
+
+Two gates hold these numbers. A pull request fails when the lines it changes reach 90% efficacy or less, set in `.gremlins.yaml` because gremlins v0.6.0 ignores the value of `--threshold-efficacy`. The weekly run fails a package that falls to the floor of its own score in the 2026-11-22 run, which the workflow passes per package through `GREMLINS_UNLEASH_THRESHOLD_EFFICACY`. Both run with `GOFLAGS=-count=1`: gremlins times each mutant against a first run of the tests, and a run answered from the test cache takes milliseconds, so every mutant would time out.
+
+## 32-bit platforms
+
+The `Unit test (GOARCH=386)` job runs the packages that build for 386, where `int` is 32 bits. It found `REPEAT` and `REGEXP_COUNT` converting an int64 to int, which wraps there. The root package and anything whose tests import it are left out: `github.com/moov-io/ach`, which reads ACH files, declares constants past the range of a 32-bit int and does not compile for 386.
+
+## Benchmarks
+
+The benchmarks in the root package and `dialect` sit behind the `benchmark` build tag (`make benchmark`), because the root package's read 100,000 rows. The `Benchmark` workflow builds the base and the head of a pull request on one runner with `scripts/ci_benchmark.py`, runs the benchmarks of the root package, `dialect`, `prep`, `internal/parser/ach` and `internal/parser/wire` in turn for 8 rounds with `GOMAXPROCS=1`, and fails a benchmark whose median is more than 1.25 times the base's while even its fastest sample is slower than the base's median.
+
+```sh
+python3 scripts/ci_benchmark.py --base origin/main --head HEAD
+```
+
+## Coverage
+
+The `Coverage` workflow fails a pull request that lowers the total, or takes it below 93%. The module was at 93.2% on 2026-11-27.

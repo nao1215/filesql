@@ -4,18 +4,31 @@ name: Fuzz
 # targets in this module have never looked for an input nobody had already
 # written down. This job does the looking.
 #
-# It runs on a schedule rather than on pull requests because a fuzz run has no
-# natural end: it either finds something or it runs out the clock, and neither
-# answer is worth holding a merge for. Ten minutes per target is what fits a
-# nightly run; the corpus each run builds is not kept, so every night starts
-# from the seeds in the repository and searches somewhere else.
+# A pull request fuzzes each target for 15 seconds: enough to catch a change
+# that makes the neighbors of a seed crash, and cheap enough for every push.
+# The long search runs on a schedule, because a fuzz run has no natural end: it
+# either finds something or runs out the clock, and neither answer is worth
+# holding a merge for. Ten minutes per target is what fits a nightly run; the
+# corpus each run builds is not kept, so every night starts from the seeds in
+# the repository and searches somewhere else.
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.go'
+      - go.mod
+      - go.sum
+      - .github/workflows/fuzz.yml
   workflow_dispatch:
   schedule:
     - cron: "0 19 * * *"
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   fuzz:
@@ -58,8 +71,12 @@ jobs:
         with:
           go-version: stable
 
-      - name: Fuzz for ten minutes
-        run: go test ${{ matrix.package }} -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 10m
+      - name: Fuzz
+        env:
+          PKG: ${{ matrix.package }}
+          NAME: ${{ matrix.target }}
+          FUZZTIME: ${{ github.event_name == 'pull_request' && '15s' || '10m' }}
+        run: go test "$PKG" -run '^$' -fuzz "^${NAME}\$" -fuzztime "$FUZZTIME"
 
       # A failing run writes the input that caused it under testdata/fuzz/, and
       # that file is the finding: without it the failure is a stack trace nobody
