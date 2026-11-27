@@ -4642,9 +4642,24 @@ func TestDumpDatabase_WritesGeneratedColumns(t *testing.T) {
 	assert.Equal(t, "a,b\nx,y\n", string(got))
 }
 
-// failOnTwo makes dumpFailOnTwo fail for the value 2 once it is set, so a
-// table can be written with the function and read back through it.
+// failOnTwo makes filesql_test_fail_on_two fail for the value 2 once it is
+// set, so a table can be written with the function and read back through it.
 var failOnTwo atomic.Bool
+
+// The function is registered before any test runs: the driver keeps its
+// functions in a map every Open reads, so registering one while parallel tests
+// open connections is a data race.
+func init() { //nolint:gochecknoinits // The registration has to precede every parallel test; see above.
+	if err := sqlite.RegisterDeterministicScalarFunction("filesql_test_fail_on_two", 1,
+		func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+			if failOnTwo.Load() && args[0] == int64(2) {
+				return nil, errors.New("row 2 cannot be read")
+			}
+			return args[0], nil
+		}); err != nil {
+		panic(err)
+	}
+}
 
 // TestDumpDatabase_ARowThatCannotBeReadFailsTheDump reads a table whose second
 // row fails to evaluate. The failure surfaces from rows.Err once the row loop
@@ -4653,13 +4668,6 @@ var failOnTwo atomic.Bool
 func TestDumpDatabase_ARowThatCannotBeReadFailsTheDump(t *testing.T) {
 	t.Parallel()
 
-	require.NoError(t, sqlite.RegisterDeterministicScalarFunction("filesql_test_fail_on_two", 1,
-		func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
-			if failOnTwo.Load() && args[0] == int64(2) {
-				return nil, errors.New("row 2 cannot be read")
-			}
-			return args[0], nil
-		}))
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	db.SetMaxOpenConns(1)
