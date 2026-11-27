@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Dumping to Parquet and to TSV allocates less. A Parquet dump built a new row of values for every row and threw it away once the writer had copied it; the values of each batch of 1,024 rows now live in one block that is reused: under `-tags benchmark` a dump of 100,000 rows allocates about a fifth fewer bytes and an overwrite of a typed Parquet file 5% fewer. A TSV record was joined into one string and copied again with its line ending before going to a buffered writer; its fields now go to the buffer directly, which halves the bytes a TSV dump allocates. A prepared statement's effect on a transaction is read once when it is prepared rather than on every run, which a load ran once per batch over an insert of thousands of placeholders. The `ltrim` and `rtrim` prep tags skip ASCII whitespace by table, as `trim` already did through `strings.TrimSpace`, and ask `unicode.IsSpace` only about a byte past ASCII: `rtrim` takes about a quarter of the time over the benchmark's values.
-- The weekly mutation run fails the root package below 89% and `internal/parser/ach` below 86%, their efficacy on 2026-11-27, where the floors were 88% and 43%.
+- The weekly mutation run fails the root package at or below 89% and `internal/parser/ach` at or below 86%, the floors of their efficacy on 2026-11-27 (89.46% and 86.29%), where the floors were 88% and 43%.
 
 ## [0.60.4] - 2026-11-27
 
