@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Reject a PostgreSQL numeric literal written directly against identifier characters, such as `123abc` or `0xdeadbeefg`, instead of translating the trailing text as an implicit alias. PostgreSQL refuses the input as trailing junk after a numeric literal.
+- Reject a PostgreSQL numeric literal written directly against identifier characters, such as `123abc` or `0xdeadbeefg`, instead of translating the trailing text as an implicit alias. PostgreSQL refuses the input as trailing junk after a numeric literal. ([#1199](https://github.com/nao1215/filesql/pull/1199))
+- Read PostgreSQL's digit separators, as in `1_000`, `0xFFFF_FFFF` and `1.618_034`, as part of the number and translate it without them, so SQLite gets the same value. The rejection of trailing junk above refused these literals.
 - `REPEAT` of an empty string and `REGEXP_COUNT` with a start position past the range of a 32-bit int panicked on 32-bit platforms, where the count or position was converted to `int` and wrapped. Both compare the int64 value now. The `dialect` package builds for 386; the root package does not, because `github.com/moov-io/ach` does not compile there.
 
 ### Changed
