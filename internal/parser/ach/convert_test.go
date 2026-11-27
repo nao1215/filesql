@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1037,18 +1038,22 @@ func TestAddenda02Handling(t *testing.T) {
 }
 
 // TestEmptyFileHeaderRecords tests edge case with empty file header
+// TestEmptyFileHeaderRecords deletes the file header row. The write used to
+// skip an empty table and write the header the file was read with, so the
+// delete came back with no error; it is refused like any other removed row.
 func TestEmptyFileHeaderRecords(t *testing.T) {
 	file := createTestACHFile(t)
 	ts := fromFile(file)
 	require.NotNil(t, ts)
 
-	// Clear file header records
+	header := ts.fileHeader.Records[0]
 	ts.fileHeader.Records = [][]string{}
+	_, err := ts.toFile()
+	require.ErrorContains(t, err, "file_header: the table holds 0 rows")
 
-	// Convert back - should not panic
-	newFile, err := ts.toFile()
-	require.NoError(t, err)
-	require.NotNil(t, newFile)
+	ts.fileHeader.Records = [][]string{header, header}
+	_, err = ts.toFile()
+	require.ErrorContains(t, err, "file_header: the table holds 2 rows")
 }
 
 // createTestACHFile creates a minimal valid ACH file for testing.
@@ -1825,4 +1830,204 @@ func TestCoordinateKey_ComparesThePositionNotTheSpelling(t *testing.T) {
 	var buf bytes.Buffer
 	assert.NoError(t, ts.WriteToWriter(&buf),
 		"a coordinate respelled as the same number names the same record")
+}
+
+// TestWriteBack_EveryColumnRoundTrips changes one cell at a time, in every row
+// and column of every table of every test file, writes the file and reads it
+// back. The cell has to come back changed, or be one the write recalculates,
+// or one the library's validation refuses for the value the test chose; and no
+// other cell may change. It is the property the write-back promises, checked
+// for each field instead of the few a hand-written test happens to edit.
+func TestWriteBack_EveryColumnRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	// Derived fields: the controls, the batch number, and the sequence, type
+	// and trace numbers an addenda record copies from its entry.
+	recalculated := map[string][]string{
+		"batches":     {"batch_number", "entry_addenda_count", "entry_hash", "total_credit", "total_debit"},
+		"iat_batches": {"batch_number"},
+		"addenda":     {"entry_detail_sequence_number", "sequence_number", "trace_number", "type_code"},
+		"iat_addenda": {"entry_detail_sequence_number", "sequence_number", "type_code"},
+	}
+	// Fields whose valid values are a code list, a check digit or a format, so
+	// the value the test makes up is refused rather than written.
+	validated := map[string][]string{
+		"file_header": {"immediate_destination", "file_creation_time"},
+		"batches":     {"service_class_code", "standard_entry_class_code"},
+		"entries":     {"addenda_record_indicator", "amount", "check_digit", "rdfi_identification", "transaction_code", "discretionary_data", "trace_number"},
+		"addenda":     {"change_code", "return_code", "terminal_state", "transaction_date"},
+		"iat_batches": {"foreign_exchange_indicator", "foreign_exchange_reference_indicator", "iso_destination_country_code", "iso_destination_currency_code", "iso_originating_currency_code", "service_class_code", "standard_entry_class_code"},
+		"iat_entries": {"addenda_record_indicator", "check_digit", "rdfi_identification"},
+		"iat_addenda": {"odfi_identification_number_qualifier", "rdfi_identification_number_qualifier", "transaction_type_code"},
+	}
+	tables := func(ts *TableSet) map[string]*parser.TableData {
+		return map[string]*parser.TableData{
+			"file_header": ts.fileHeader, "batches": ts.batches, "entries": ts.entries, "addenda": ts.addenda,
+			"iat_batches": ts.iatBatches, "iat_entries": ts.iatEntries, "iat_addenda": ts.iatAddenda,
+		}
+	}
+	// change keeps the width of the value, so a fixed-width field still fits.
+	change := func(v string) string {
+		if n, err := strconv.Atoi(v); err == nil {
+			if s := strconv.Itoa(n + 1); len(s) == len(v) {
+				return s
+			}
+			return strconv.Itoa(n - 1)
+		}
+		if strings.HasPrefix(v, "Q") {
+			return "R" + v[1:]
+		}
+		return "Q" + v[1:]
+	}
+
+	files, err := filepath.Glob(filepath.Join("testdata", "*.ach"))
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
+	for _, path := range files {
+		raw, err := os.ReadFile(path) //nolint:gosec // A fixture of this package
+		require.NoError(t, err)
+		parse := func() *TableSet {
+			ts, err := ParseReader(bytes.NewReader(raw))
+			require.NoError(t, err)
+			return ts
+		}
+
+		for name, td := range tables(parse()) {
+			if td == nil {
+				continue
+			}
+			for col, header := range td.Headers {
+				if header == "addenda_type" || slices.Contains(addendaCoordinates, header) {
+					continue
+				}
+				for row := range td.Records {
+					was := td.Records[row][col]
+					if was == "" {
+						// A column of another addenda type than this row's.
+						continue
+					}
+					ts := parse()
+					want := change(was)
+					tables(ts)[name].Records[row][col] = want
+					written, err := ts.toFile()
+					if err != nil {
+						assert.Containsf(t, validated[name], header,
+							"%s: %s.%s row %d: writing %q was refused: %v", path, name, header, row, want, err)
+						continue
+					}
+					back := tables(fromFile(written))[name]
+					if slices.Contains(recalculated[name], header) {
+						want = was
+					}
+					assert.Equalf(t, want, back.Records[row][col], "%s: %s.%s row %d", path, name, header, row)
+					for r := range back.Records {
+						for c := range back.Headers {
+							if r != row || c != col {
+								assert.Equalf(t, td.Records[r][c], back.Records[r][c],
+									"%s: editing %s.%s row %d changed %s row %d", path, name, header, row, back.Headers[c], r)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestWriteBack_RefusesAValueThatIsNotAWholeNumber pins the integer fields. A
+// value Atoi could not read used to be skipped, so the field kept the value the
+// file was read with and the write succeeded as though it had been edited.
+func TestWriteBack_RefusesAValueThatIsNotAWholeNumber(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		file, table, column string
+	}{
+		{"ppd-debit.ach", "entries", "amount"},
+		{"ppd-debit.ach", "entries", "transaction_code"},
+		{"ppd-debit.ach", "batches", "service_class_code"},
+		{"iat-credit.ach", "iat_entries", "amount"},
+		{"iat-credit.ach", "iat_batches", "foreign_exchange_reference_indicator"},
+		{"iat-credit.ach", "iat_addenda", "foreign_payment_amount"},
+	} {
+		for _, value := range []string{"1.5", "12x", ""} {
+			raw, err := os.ReadFile(findTestFile(t, tt.file))
+			require.NoError(t, err)
+			ts, err := ParseReader(bytes.NewReader(raw))
+			require.NoError(t, err)
+			td := map[string]*parser.TableData{"entries": ts.entries, "batches": ts.batches, "iat_entries": ts.iatEntries, "iat_batches": ts.iatBatches, "iat_addenda": ts.iatAddenda}[tt.table]
+			td.Records[0][findHeaderIndex(t, td.Headers, tt.column)] = value
+
+			_, err = ts.toFile()
+			require.Errorf(t, err, "%s.%s = %q was written", tt.table, tt.column, value)
+			assert.Contains(t, err.Error(), tt.table+": row 0: "+tt.column+" is "+strconv.Quote(value)+", which is not a whole number")
+		}
+	}
+}
+
+// TestWriteBack_RefusesRemovedRows deletes rows in the ways the coordinate
+// check did not see: the last row of a table, and every row. Both used to be
+// written from the parsed file, so the deleted records came back.
+func TestWriteBack_RefusesRemovedRows(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		edit func(ts *TableSet)
+		want string
+	}{
+		{"the last entry", func(ts *TableSet) { ts.iatEntries.Records = ts.iatEntries.Records[:1] }, "iat_entries: 1 of the 2 rows"},
+		{"every addendum", func(ts *TableSet) { ts.iatAddenda.Records = nil }, "iat_addenda: 28 of the 28 rows"},
+		{"the last batch", func(ts *TableSet) { ts.iatBatches.Records = ts.iatBatches.Records[:1] }, "iat_batches: 1 of the 2 rows"},
+	} {
+		raw, err := os.ReadFile(findTestFile(t, "iat-credit.ach"))
+		require.NoError(t, err)
+		ts, err := ParseReader(bytes.NewReader(raw))
+		require.NoError(t, err)
+		tt.edit(ts)
+		_, err = ts.toFile()
+		require.ErrorContainsf(t, err, tt.want, "deleting %s", tt.name)
+		assert.ErrorContains(t, err, "rows cannot be removed by a write")
+	}
+
+	for _, tt := range []struct {
+		name string
+		edit func(ts *TableSet)
+		want string
+	}{
+		{"the last entry", func(ts *TableSet) { ts.entries.Records = ts.entries.Records[:1] }, "entries: 1 of the 2 rows"},
+		{"every addendum", func(ts *TableSet) { ts.addenda.Records = nil }, "addenda: 2 of the 2 rows"},
+		{"the last batch", func(ts *TableSet) { ts.batches.Records = ts.batches.Records[:1] }, "batches: 1 of the 2 rows"},
+	} {
+		raw, err := os.ReadFile(findTestFile(t, "return-WEB.ach"))
+		require.NoError(t, err)
+		ts, err := ParseReader(bytes.NewReader(raw))
+		require.NoError(t, err)
+		tt.edit(ts)
+		_, err = ts.toFile()
+		require.ErrorContainsf(t, err, tt.want, "deleting %s", tt.name)
+	}
+}
+
+// TestWriteBack_ShortRowsAndMissingColumns pins what a table that is not the
+// shape it was parsed with does. A row shorter than the header leaves the
+// fields past its end as they were, and a table without a coordinate column
+// cannot say which record a row updates.
+func TestWriteBack_ShortRowsAndMissingColumns(t *testing.T) {
+	t.Parallel()
+
+	file := createTestACHFile(t)
+	ts := fromFile(file)
+	amount := findHeaderIndex(t, ts.entries.Headers, "amount")
+	ts.entries.Records[0] = ts.entries.Records[0][:amount]
+	written, err := ts.toFile()
+	require.NoError(t, err)
+	assert.Equal(t, file.Batches[0].GetEntries()[0].Amount, written.Batches[0].GetEntries()[0].Amount)
+
+	for _, column := range entryCoordinates {
+		ts := fromFile(createTestACHFile(t))
+		ts.entries.Headers[findHeaderIndex(t, ts.entries.Headers, column)] = "renamed"
+		_, err := ts.toFile()
+		assert.ErrorContains(t, err, "entries: row 0: invalid "+column)
+	}
 }

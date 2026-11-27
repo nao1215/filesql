@@ -682,48 +682,51 @@ func (ts *TableSet) toFile() (*ach.File, error) {
 		return nil, fmt.Errorf("failed to deep copy ACH file: %w", err)
 	}
 
-	// Apply modifications from FileHeader TableData
-	if ts.fileHeader != nil && len(ts.fileHeader.Records) > 0 {
-		ts.applyFileHeaderModifications(&newFile)
+	// Each table is applied even when it holds no rows, since a table emptied
+	// by a DELETE is one whose rows were all removed, which the apply refuses.
+	if ts.fileHeader != nil {
+		if err := ts.applyFileHeaderModifications(&newFile); err != nil {
+			return nil, err
+		}
 	}
 
 	// Apply modifications from Batches TableData
-	if ts.batches != nil && len(ts.batches.Records) > 0 {
+	if ts.batches != nil {
 		if err := ts.applyBatchModifications(&newFile); err != nil {
 			return nil, fmt.Errorf("failed to apply batch modifications: %w", err)
 		}
 	}
 
 	// Apply modifications from Entries TableData
-	if ts.entries != nil && len(ts.entries.Records) > 0 {
+	if ts.entries != nil {
 		if err := ts.applyEntryModifications(&newFile); err != nil {
 			return nil, fmt.Errorf("failed to apply entry modifications: %w", err)
 		}
 	}
 
 	// Apply modifications from Addenda TableData
-	if ts.addenda != nil && len(ts.addenda.Records) > 0 {
+	if ts.addenda != nil {
 		if err := ts.applyAddendaModifications(&newFile); err != nil {
 			return nil, fmt.Errorf("failed to apply addenda modifications: %w", err)
 		}
 	}
 
 	// Apply modifications from IATBatches TableData
-	if ts.iatBatches != nil && len(ts.iatBatches.Records) > 0 {
+	if ts.iatBatches != nil {
 		if err := ts.applyIATBatchModifications(&newFile); err != nil {
 			return nil, fmt.Errorf("failed to apply IAT batch modifications: %w", err)
 		}
 	}
 
 	// Apply modifications from IATEntries TableData
-	if ts.iatEntries != nil && len(ts.iatEntries.Records) > 0 {
+	if ts.iatEntries != nil {
 		if err := ts.applyIATEntryModifications(&newFile); err != nil {
 			return nil, fmt.Errorf("failed to apply IAT entry modifications: %w", err)
 		}
 	}
 
 	// Apply modifications from IATAddenda TableData
-	if ts.iatAddenda != nil && len(ts.iatAddenda.Records) > 0 {
+	if ts.iatAddenda != nil {
 		if err := ts.applyIATAddendaModifications(&newFile); err != nil {
 			return nil, fmt.Errorf("failed to apply IAT addenda modifications: %w", err)
 		}
@@ -892,240 +895,223 @@ func (c *coordinateTracker) claim(columns []string, values []int) error {
 	return nil
 }
 
-func (ts *TableSet) applyEntryModifications(file *ach.File) error {
-	// Build index mapping for quick lookup
-	headerIndex := make(map[string]int)
-	for i, h := range ts.entries.Headers {
-		headerIndex[h] = i
+// finish reports the rows the file was read with that the table no longer
+// holds. Rows are claimed in order, so a table that comes back shorter is one
+// whose last rows were deleted; deleting any other row moves the rows after it
+// and claim refuses that. Without this the missing records were written from
+// the parsed file, so a deleted entry came back with no error.
+func (c *coordinateTracker) finish() error {
+	if c.row < len(c.parsed) {
+		return fmt.Errorf("%s: %d of the %d rows read from the file are gone; rows cannot be removed by a write",
+			c.table, len(c.parsed)-c.row, len(c.parsed))
 	}
+	return nil
+}
 
+// fieldReader reads the cells of a table's rows by column name for the
+// functions that write a table back into the file. It keeps the first error it
+// meets, so a function sets every field of a row and checks once.
+type fieldReader struct {
+	table  string
+	index  map[string]int
+	row    int
+	record []string
+	err    error
+}
+
+func newFieldReader(table string, td *parser.TableData) *fieldReader {
+	index := make(map[string]int, len(td.Headers))
+	for i, h := range td.Headers {
+		index[h] = i
+	}
+	return &fieldReader{table: table, index: index, row: -1}
+}
+
+// next moves to the next row of the table.
+func (r *fieldReader) next(record []string) {
+	r.row++
+	r.record = record
+}
+
+// cell returns the value of column in the current row, and false when the row
+// has no such column.
+func (r *fieldReader) cell(column string) (string, bool) {
+	i, ok := r.index[column]
+	if !ok || i >= len(r.record) {
+		return "", false
+	}
+	return r.record[i], true
+}
+
+// text copies column into *dst when the row has the column.
+func (r *fieldReader) text(column string, dst *string) {
+	if v, ok := r.cell(column); ok {
+		*dst = v
+	}
+}
+
+// integer copies column into *dst when the row has the column. A value that is
+// not a whole number is an error: skipping it wrote the value the file was read
+// with, and the write succeeded as though the edit had been made.
+func (r *fieldReader) integer(column string, dst *int) {
+	v, ok := r.cell(column)
+	if !ok || r.err != nil {
+		return
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		r.err = fmt.Errorf("%s: row %d: %s is %q, which is not a whole number", r.table, r.row, column, v)
+		return
+	}
+	*dst = n
+}
+
+// coordinates reads the position columns of the current row. A table without
+// one of them cannot say which record a row updates, so that is an error too.
+func (r *fieldReader) coordinates(columns ...string) ([]int, error) {
+	values := make([]int, len(columns))
+	for i, column := range columns {
+		v, _ := r.cell(column)
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("%s: row %d: invalid %s: %w", r.table, r.row, column, err)
+		}
+		values[i] = n
+	}
+	return values, nil
+}
+
+var (
+	batchCoordinates   = []string{"batch_index"}
+	entryCoordinates   = []string{"batch_index", "entry_index"}
+	addendaCoordinates = []string{"batch_index", "entry_index", "addenda_index"}
+)
+
+func (ts *TableSet) applyEntryModifications(file *ach.File) error {
+	r := newFieldReader("entries", ts.entries)
 	coords := ts.newCoordinateTracker("entries")
 	for _, record := range ts.entries.Records {
-		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
+		r.next(record)
+		at, err := r.coordinates(entryCoordinates...)
 		if err != nil {
-			return fmt.Errorf("invalid batch_index: %w", err)
+			return err
 		}
-		entryIdx, err := strconv.Atoi(record[headerIndex["entry_index"]])
-		if err != nil {
-			return fmt.Errorf("invalid entry_index: %w", err)
-		}
-
+		batchIdx, entryIdx := at[0], at[1]
 		if batchIdx < 0 || batchIdx >= len(file.Batches) {
 			return fmt.Errorf("batch_index %d out of range", batchIdx)
 		}
-
 		entries := file.Batches[batchIdx].GetEntries()
 		if entryIdx < 0 || entryIdx >= len(entries) {
 			return fmt.Errorf("entry_index %d out of range for batch %d", entryIdx, batchIdx)
 		}
-
-		if err := coords.claim([]string{"batch_index", "entry_index"}, []int{batchIdx, entryIdx}); err != nil {
+		if err := coords.claim(entryCoordinates, at); err != nil {
 			return err
 		}
 
 		entry := entries[entryIdx]
-
-		// Update modifiable fields
-		if idx, ok := headerIndex["transaction_code"]; ok && idx < len(record) {
-			if v, err := strconv.Atoi(record[idx]); err == nil {
-				entry.TransactionCode = v
-			}
-		}
-		if idx, ok := headerIndex["rdfi_identification"]; ok && idx < len(record) {
-			entry.RDFIIdentification = record[idx]
-		}
-		if idx, ok := headerIndex["check_digit"]; ok && idx < len(record) {
-			entry.CheckDigit = record[idx]
-		}
-		if idx, ok := headerIndex["dfi_account_number"]; ok && idx < len(record) {
-			entry.DFIAccountNumber = record[idx]
-		}
-		if idx, ok := headerIndex["amount"]; ok && idx < len(record) {
-			if v, err := strconv.Atoi(record[idx]); err == nil {
-				entry.Amount = v
-			}
-		}
-		if idx, ok := headerIndex["identification_number"]; ok && idx < len(record) {
-			entry.IdentificationNumber = record[idx]
-		}
-		if idx, ok := headerIndex["individual_name"]; ok && idx < len(record) {
-			entry.IndividualName = record[idx]
-		}
-		if idx, ok := headerIndex["discretionary_data"]; ok && idx < len(record) {
-			entry.DiscretionaryData = record[idx]
-		}
-		if idx, ok := headerIndex["addenda_record_indicator"]; ok && idx < len(record) {
-			if v, err := strconv.Atoi(record[idx]); err == nil {
-				entry.AddendaRecordIndicator = v
-			}
-		}
-		if idx, ok := headerIndex["trace_number"]; ok && idx < len(record) {
-			entry.TraceNumber = record[idx]
-		}
-		if idx, ok := headerIndex["category"]; ok && idx < len(record) {
-			entry.Category = record[idx]
+		r.integer("transaction_code", &entry.TransactionCode)
+		r.text("rdfi_identification", &entry.RDFIIdentification)
+		r.text("check_digit", &entry.CheckDigit)
+		r.text("dfi_account_number", &entry.DFIAccountNumber)
+		r.integer("amount", &entry.Amount)
+		r.text("identification_number", &entry.IdentificationNumber)
+		r.text("individual_name", &entry.IndividualName)
+		r.text("discretionary_data", &entry.DiscretionaryData)
+		r.integer("addenda_record_indicator", &entry.AddendaRecordIndicator)
+		r.text("trace_number", &entry.TraceNumber)
+		r.text("category", &entry.Category)
+		if r.err != nil {
+			return r.err
 		}
 	}
-
-	return nil
+	return coords.finish()
 }
 
-// applyFileHeaderModifications updates file header fields from TableData.
-func (ts *TableSet) applyFileHeaderModifications(file *ach.File) {
-	if len(ts.fileHeader.Records) == 0 {
-		return
+// applyFileHeaderModifications updates file header fields from TableData. The
+// table holds the one header record a file has, so a row deleted or added is
+// refused like any other table's.
+func (ts *TableSet) applyFileHeaderModifications(file *ach.File) error {
+	if n := len(ts.fileHeader.Records); n != 1 {
+		return fmt.Errorf("file_header: the table holds %d rows and the file one header; rows cannot be added or removed by a write", n)
 	}
-
-	headerIndex := make(map[string]int)
-	for i, h := range ts.fileHeader.Headers {
-		headerIndex[h] = i
-	}
-
-	record := ts.fileHeader.Records[0]
-
-	if idx, ok := headerIndex["immediate_destination"]; ok && idx < len(record) {
-		file.Header.ImmediateDestination = record[idx]
-	}
-	if idx, ok := headerIndex["immediate_origin"]; ok && idx < len(record) {
-		file.Header.ImmediateOrigin = record[idx]
-	}
-	if idx, ok := headerIndex["file_creation_date"]; ok && idx < len(record) {
-		file.Header.FileCreationDate = record[idx]
-	}
-	if idx, ok := headerIndex["file_creation_time"]; ok && idx < len(record) {
-		file.Header.FileCreationTime = record[idx]
-	}
-	if idx, ok := headerIndex["file_id_modifier"]; ok && idx < len(record) {
-		file.Header.FileIDModifier = record[idx]
-	}
-	if idx, ok := headerIndex["immediate_destination_name"]; ok && idx < len(record) {
-		file.Header.ImmediateDestinationName = record[idx]
-	}
-	if idx, ok := headerIndex["immediate_origin_name"]; ok && idx < len(record) {
-		file.Header.ImmediateOriginName = record[idx]
-	}
-	if idx, ok := headerIndex["reference_code"]; ok && idx < len(record) {
-		file.Header.ReferenceCode = record[idx]
-	}
+	r := newFieldReader("file_header", ts.fileHeader)
+	r.next(ts.fileHeader.Records[0])
+	r.text("immediate_destination", &file.Header.ImmediateDestination)
+	r.text("immediate_origin", &file.Header.ImmediateOrigin)
+	r.text("file_creation_date", &file.Header.FileCreationDate)
+	r.text("file_creation_time", &file.Header.FileCreationTime)
+	r.text("file_id_modifier", &file.Header.FileIDModifier)
+	r.text("immediate_destination_name", &file.Header.ImmediateDestinationName)
+	r.text("immediate_origin_name", &file.Header.ImmediateOriginName)
+	r.text("reference_code", &file.Header.ReferenceCode)
+	return nil
 }
 
 // applyBatchModifications updates batch header fields from TableData.
 func (ts *TableSet) applyBatchModifications(file *ach.File) error {
-	headerIndex := make(map[string]int)
-	for i, h := range ts.batches.Headers {
-		headerIndex[h] = i
-	}
-
+	r := newFieldReader("batches", ts.batches)
 	coords := ts.newCoordinateTracker("batches")
 	for _, record := range ts.batches.Records {
-		batchIdxVal, ok := headerIndex["batch_index"]
-		if !ok {
-			continue
-		}
-		batchIdx, err := strconv.Atoi(record[batchIdxVal])
+		r.next(record)
+		at, err := r.coordinates(batchCoordinates...)
 		if err != nil {
-			return fmt.Errorf("invalid batch_index: %w", err)
+			return err
 		}
-
+		batchIdx := at[0]
 		if batchIdx < 0 || batchIdx >= len(file.Batches) {
 			return fmt.Errorf("batch_index %d out of range", batchIdx)
 		}
-		if err := coords.claim([]string{"batch_index"}, []int{batchIdx}); err != nil {
+		if err := coords.claim(batchCoordinates, at); err != nil {
 			return err
 		}
 
 		bh := file.Batches[batchIdx].GetHeader()
-
-		if idx, ok := headerIndex["service_class_code"]; ok && idx < len(record) {
-			if v, err := strconv.Atoi(record[idx]); err == nil {
-				bh.ServiceClassCode = v
-			}
-		}
-		if idx, ok := headerIndex["company_name"]; ok && idx < len(record) {
-			bh.CompanyName = record[idx]
-		}
-		if idx, ok := headerIndex["company_discretionary_data"]; ok && idx < len(record) {
-			bh.CompanyDiscretionaryData = record[idx]
-		}
-		if idx, ok := headerIndex["company_identification"]; ok && idx < len(record) {
-			bh.CompanyIdentification = record[idx]
-		}
-		if idx, ok := headerIndex["standard_entry_class_code"]; ok && idx < len(record) {
-			bh.StandardEntryClassCode = record[idx]
-		}
-		if idx, ok := headerIndex["company_entry_description"]; ok && idx < len(record) {
-			bh.CompanyEntryDescription = record[idx]
-		}
-		if idx, ok := headerIndex["company_descriptive_date"]; ok && idx < len(record) {
-			bh.CompanyDescriptiveDate = record[idx]
-		}
-		if idx, ok := headerIndex["effective_entry_date"]; ok && idx < len(record) {
-			bh.EffectiveEntryDate = record[idx]
-		}
-		if idx, ok := headerIndex["originator_status_code"]; ok && idx < len(record) {
-			if v, err := strconv.Atoi(record[idx]); err == nil {
-				bh.OriginatorStatusCode = v
-			}
-		}
-		if idx, ok := headerIndex["odfi_identification"]; ok && idx < len(record) {
-			bh.ODFIIdentification = record[idx]
-		}
-		if idx, ok := headerIndex["batch_number"]; ok && idx < len(record) {
-			if v, err := strconv.Atoi(record[idx]); err == nil {
-				bh.BatchNumber = v
-			}
+		r.integer("service_class_code", &bh.ServiceClassCode)
+		r.text("company_name", &bh.CompanyName)
+		r.text("company_discretionary_data", &bh.CompanyDiscretionaryData)
+		r.text("company_identification", &bh.CompanyIdentification)
+		r.text("standard_entry_class_code", &bh.StandardEntryClassCode)
+		r.text("company_entry_description", &bh.CompanyEntryDescription)
+		r.text("company_descriptive_date", &bh.CompanyDescriptiveDate)
+		r.text("effective_entry_date", &bh.EffectiveEntryDate)
+		r.integer("originator_status_code", &bh.OriginatorStatusCode)
+		r.text("odfi_identification", &bh.ODFIIdentification)
+		r.integer("batch_number", &bh.BatchNumber)
+		if r.err != nil {
+			return r.err
 		}
 	}
-
-	return nil
+	return coords.finish()
 }
 
 // applyAddendaModifications updates addenda records from TableData.
 func (ts *TableSet) applyAddendaModifications(file *ach.File) error {
-	headerIndex := make(map[string]int)
-	for i, h := range ts.addenda.Headers {
-		headerIndex[h] = i
-	}
-
+	r := newFieldReader("addenda", ts.addenda)
 	coords := ts.newCoordinateTracker("addenda")
 	for _, record := range ts.addenda.Records {
-		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
+		r.next(record)
+		at, err := r.coordinates(addendaCoordinates...)
 		if err != nil {
-			return fmt.Errorf("invalid batch_index: %w", err)
+			return err
 		}
-		entryIdx, err := strconv.Atoi(record[headerIndex["entry_index"]])
-		if err != nil {
-			return fmt.Errorf("invalid entry_index: %w", err)
-		}
-		addendaIdx, err := strconv.Atoi(record[headerIndex["addenda_index"]])
-		if err != nil {
-			return fmt.Errorf("invalid addenda_index: %w", err)
-		}
-
+		batchIdx, entryIdx, addendaIdx := at[0], at[1], at[2]
 		if batchIdx < 0 || batchIdx >= len(file.Batches) {
 			return fmt.Errorf("batch_index %d out of range", batchIdx)
 		}
-
 		entries := file.Batches[batchIdx].GetEntries()
 		if entryIdx < 0 || entryIdx >= len(entries) {
 			return fmt.Errorf("entry_index %d out of range for batch %d", entryIdx, batchIdx)
 		}
-		if err := coords.claim(
-			[]string{"batch_index", "entry_index", "addenda_index"},
-			[]int{batchIdx, entryIdx, addendaIdx}); err != nil {
+		if err := coords.claim(addendaCoordinates, at); err != nil {
 			return err
 		}
 
 		entry := entries[entryIdx]
-		addendaType := ""
-		if idx, ok := headerIndex["addenda_type"]; ok && idx < len(record) {
-			addendaType = record[idx]
-		}
-
+		addendaType, _ := r.cell("addenda_type")
 		switch addendaType {
 		case "02":
 			if entry.Addenda02 != nil {
-				ts.applyAddenda02Modifications(entry.Addenda02, record, headerIndex)
+				applyAddenda02(entry.Addenda02, r)
 			}
 		case "05":
 			addenda05Idx := addendaIdx
@@ -1133,205 +1119,102 @@ func (ts *TableSet) applyAddendaModifications(file *ach.File) error {
 				addenda05Idx--
 			}
 			if addenda05Idx >= 0 && addenda05Idx < len(entry.Addenda05) && entry.Addenda05[addenda05Idx] != nil {
-				ts.applyAddenda05Modifications(entry.Addenda05[addenda05Idx], record, headerIndex)
+				applyAddenda05(entry.Addenda05[addenda05Idx], r)
 			}
 		case "98":
 			if entry.Addenda98 != nil {
-				ts.applyAddenda98Modifications(entry.Addenda98, record, headerIndex)
+				applyAddenda98(entry.Addenda98, r)
 			}
 		case addendaType98Refused:
 			if entry.Addenda98Refused != nil {
-				ts.applyAddenda98RefusedModifications(entry.Addenda98Refused, record, headerIndex)
+				applyAddenda98Refused(entry.Addenda98Refused, r)
 			}
 		case "99":
 			if entry.Addenda99 != nil {
-				ts.applyAddenda99Modifications(entry.Addenda99, record, headerIndex)
+				applyAddenda99(entry.Addenda99, r)
 			}
 		case addendaType99Dishonored:
 			if entry.Addenda99Dishonored != nil {
-				ts.applyAddenda99DishonoredModifications(entry.Addenda99Dishonored, record, headerIndex)
+				applyAddenda99Dishonored(entry.Addenda99Dishonored, r)
 			}
 		case addendaType99Contested:
 			if entry.Addenda99Contested != nil {
-				ts.applyAddenda99ContestedModifications(entry.Addenda99Contested, record, headerIndex)
+				applyAddenda99Contested(entry.Addenda99Contested, r)
 			}
 		}
-	}
-
-	return nil
-}
-
-// applyAddenda02Modifications applies modifications to Addenda02.
-func (ts *TableSet) applyAddenda02Modifications(addenda *ach.Addenda02, record []string, headerIndex map[string]int) {
-	if idx, ok := headerIndex["reference_information_one"]; ok && idx < len(record) {
-		addenda.ReferenceInformationOne = record[idx]
-	}
-	if idx, ok := headerIndex["reference_information_two"]; ok && idx < len(record) {
-		addenda.ReferenceInformationTwo = record[idx]
-	}
-	if idx, ok := headerIndex["terminal_identification"]; ok && idx < len(record) {
-		addenda.TerminalIdentificationCode = record[idx]
-	}
-	if idx, ok := headerIndex["transaction_serial"]; ok && idx < len(record) {
-		addenda.TransactionSerialNumber = record[idx]
-	}
-	if idx, ok := headerIndex["transaction_date"]; ok && idx < len(record) {
-		addenda.TransactionDate = record[idx]
-	}
-	if idx, ok := headerIndex["authorization_code"]; ok && idx < len(record) {
-		addenda.AuthorizationCodeOrExpireDate = record[idx]
-	}
-	if idx, ok := headerIndex["terminal_location"]; ok && idx < len(record) {
-		addenda.TerminalLocation = record[idx]
-	}
-	if idx, ok := headerIndex["terminal_city"]; ok && idx < len(record) {
-		addenda.TerminalCity = record[idx]
-	}
-	if idx, ok := headerIndex["terminal_state"]; ok && idx < len(record) {
-		addenda.TerminalState = record[idx]
-	}
-}
-
-// applyAddenda05Modifications applies modifications to Addenda05.
-func (ts *TableSet) applyAddenda05Modifications(addenda *ach.Addenda05, record []string, headerIndex map[string]int) {
-	if idx, ok := headerIndex["payment_related_information"]; ok && idx < len(record) {
-		addenda.PaymentRelatedInformation = record[idx]
-	}
-	if idx, ok := headerIndex["sequence_number"]; ok && idx < len(record) {
-		if v, err := strconv.Atoi(record[idx]); err == nil {
-			addenda.SequenceNumber = v
+		if r.err != nil {
+			return r.err
 		}
 	}
-	if idx, ok := headerIndex["entry_detail_sequence_number"]; ok && idx < len(record) {
-		if v, err := strconv.Atoi(record[idx]); err == nil {
-			addenda.EntryDetailSequenceNumber = v
-		}
-	}
+	return coords.finish()
 }
 
-// applyAddenda98Modifications applies modifications to Addenda98.
-func (ts *TableSet) applyAddenda98Modifications(addenda *ach.Addenda98, record []string, headerIndex map[string]int) {
-	if idx, ok := headerIndex["change_code"]; ok && idx < len(record) {
-		addenda.ChangeCode = record[idx]
-	}
-	if idx, ok := headerIndex["original_trace"]; ok && idx < len(record) {
-		addenda.OriginalTrace = record[idx]
-	}
-	if idx, ok := headerIndex["original_rdfi"]; ok && idx < len(record) {
-		addenda.OriginalDFI = record[idx]
-	}
-	if idx, ok := headerIndex["corrected_data"]; ok && idx < len(record) {
-		addenda.CorrectedData = record[idx]
-	}
+func applyAddenda02(addenda *ach.Addenda02, r *fieldReader) {
+	r.text("reference_information_one", &addenda.ReferenceInformationOne)
+	r.text("reference_information_two", &addenda.ReferenceInformationTwo)
+	r.text("terminal_identification", &addenda.TerminalIdentificationCode)
+	r.text("transaction_serial", &addenda.TransactionSerialNumber)
+	r.text("transaction_date", &addenda.TransactionDate)
+	r.text("authorization_code", &addenda.AuthorizationCodeOrExpireDate)
+	r.text("terminal_location", &addenda.TerminalLocation)
+	r.text("terminal_city", &addenda.TerminalCity)
+	r.text("terminal_state", &addenda.TerminalState)
 }
 
-// applyAddenda99Modifications applies modifications to Addenda99.
-func (ts *TableSet) applyAddenda99Modifications(addenda *ach.Addenda99, record []string, headerIndex map[string]int) {
-	if idx, ok := headerIndex["return_code"]; ok && idx < len(record) {
-		addenda.ReturnCode = record[idx]
-	}
-	if idx, ok := headerIndex["original_trace"]; ok && idx < len(record) {
-		addenda.OriginalTrace = record[idx]
-	}
-	if idx, ok := headerIndex["original_rdfi"]; ok && idx < len(record) {
-		addenda.OriginalDFI = record[idx]
-	}
-	if idx, ok := headerIndex["addenda_information"]; ok && idx < len(record) {
-		addenda.AddendaInformation = record[idx]
-	}
+func applyAddenda05(addenda *ach.Addenda05, r *fieldReader) {
+	r.text("payment_related_information", &addenda.PaymentRelatedInformation)
+	r.integer("sequence_number", &addenda.SequenceNumber)
+	r.integer("entry_detail_sequence_number", &addenda.EntryDetailSequenceNumber)
 }
 
-// applyAddenda98RefusedModifications applies modifications to Addenda98Refused.
-func (ts *TableSet) applyAddenda98RefusedModifications(addenda *ach.Addenda98Refused, record []string, headerIndex map[string]int) {
-	if idx, ok := headerIndex["refused_change_code"]; ok && idx < len(record) {
-		addenda.RefusedChangeCode = record[idx]
-	}
-	if idx, ok := headerIndex["original_trace"]; ok && idx < len(record) {
-		addenda.OriginalTrace = record[idx]
-	}
-	if idx, ok := headerIndex["original_rdfi"]; ok && idx < len(record) {
-		addenda.OriginalDFI = record[idx]
-	}
-	if idx, ok := headerIndex["corrected_data"]; ok && idx < len(record) {
-		addenda.CorrectedData = record[idx]
-	}
-	if idx, ok := headerIndex["change_code"]; ok && idx < len(record) {
-		addenda.ChangeCode = record[idx]
-	}
-	if idx, ok := headerIndex["trace_sequence_number"]; ok && idx < len(record) {
-		addenda.TraceSequenceNumber = record[idx]
-	}
-	if idx, ok := headerIndex["trace_number"]; ok && idx < len(record) {
-		addenda.TraceNumber = record[idx]
-	}
+func applyAddenda98(addenda *ach.Addenda98, r *fieldReader) {
+	r.text("change_code", &addenda.ChangeCode)
+	r.text("original_trace", &addenda.OriginalTrace)
+	r.text("original_rdfi", &addenda.OriginalDFI)
+	r.text("corrected_data", &addenda.CorrectedData)
 }
 
-// applyAddenda99DishonoredModifications applies modifications to Addenda99Dishonored.
-func (ts *TableSet) applyAddenda99DishonoredModifications(addenda *ach.Addenda99Dishonored, record []string, headerIndex map[string]int) {
-	if idx, ok := headerIndex["dishonored_return_reason_code"]; ok && idx < len(record) {
-		addenda.DishonoredReturnReasonCode = record[idx]
-	}
-	if idx, ok := headerIndex["original_entry_trace_number"]; ok && idx < len(record) {
-		addenda.OriginalEntryTraceNumber = record[idx]
-	}
-	if idx, ok := headerIndex["original_receiving_dfi_identification"]; ok && idx < len(record) {
-		addenda.OriginalReceivingDFIIdentification = record[idx]
-	}
-	if idx, ok := headerIndex["return_trace_number"]; ok && idx < len(record) {
-		addenda.ReturnTraceNumber = record[idx]
-	}
-	if idx, ok := headerIndex["return_settlement_date"]; ok && idx < len(record) {
-		addenda.ReturnSettlementDate = record[idx]
-	}
-	if idx, ok := headerIndex["return_reason_code"]; ok && idx < len(record) {
-		addenda.ReturnReasonCode = record[idx]
-	}
-	if idx, ok := headerIndex["addenda_information"]; ok && idx < len(record) {
-		addenda.AddendaInformation = record[idx]
-	}
-	if idx, ok := headerIndex["trace_number"]; ok && idx < len(record) {
-		addenda.TraceNumber = record[idx]
-	}
+func applyAddenda99(addenda *ach.Addenda99, r *fieldReader) {
+	r.text("return_code", &addenda.ReturnCode)
+	r.text("original_trace", &addenda.OriginalTrace)
+	r.text("original_rdfi", &addenda.OriginalDFI)
+	r.text("addenda_information", &addenda.AddendaInformation)
 }
 
-// applyAddenda99ContestedModifications applies modifications to Addenda99Contested.
-func (ts *TableSet) applyAddenda99ContestedModifications(addenda *ach.Addenda99Contested, record []string, headerIndex map[string]int) {
-	if idx, ok := headerIndex["contested_return_code"]; ok && idx < len(record) {
-		addenda.ContestedReturnCode = record[idx]
-	}
-	if idx, ok := headerIndex["original_entry_trace_number"]; ok && idx < len(record) {
-		addenda.OriginalEntryTraceNumber = record[idx]
-	}
-	if idx, ok := headerIndex["date_original_entry_returned"]; ok && idx < len(record) {
-		addenda.DateOriginalEntryReturned = record[idx]
-	}
-	if idx, ok := headerIndex["original_receiving_dfi_identification"]; ok && idx < len(record) {
-		addenda.OriginalReceivingDFIIdentification = record[idx]
-	}
-	if idx, ok := headerIndex["original_settlement_date"]; ok && idx < len(record) {
-		addenda.OriginalSettlementDate = record[idx]
-	}
-	if idx, ok := headerIndex["return_trace_number"]; ok && idx < len(record) {
-		addenda.ReturnTraceNumber = record[idx]
-	}
-	if idx, ok := headerIndex["return_settlement_date"]; ok && idx < len(record) {
-		addenda.ReturnSettlementDate = record[idx]
-	}
-	if idx, ok := headerIndex["return_reason_code"]; ok && idx < len(record) {
-		addenda.ReturnReasonCode = record[idx]
-	}
-	if idx, ok := headerIndex["contested_dishonored_return_trace_number"]; ok && idx < len(record) {
-		addenda.DishonoredReturnTraceNumber = record[idx]
-	}
-	if idx, ok := headerIndex["contested_dishonored_return_settlement_date"]; ok && idx < len(record) {
-		addenda.DishonoredReturnSettlementDate = record[idx]
-	}
-	if idx, ok := headerIndex["contested_dishonored_return_reason_code"]; ok && idx < len(record) {
-		addenda.DishonoredReturnReasonCode = record[idx]
-	}
-	if idx, ok := headerIndex["trace_number"]; ok && idx < len(record) {
-		addenda.TraceNumber = record[idx]
-	}
+func applyAddenda98Refused(addenda *ach.Addenda98Refused, r *fieldReader) {
+	r.text("refused_change_code", &addenda.RefusedChangeCode)
+	r.text("original_trace", &addenda.OriginalTrace)
+	r.text("original_rdfi", &addenda.OriginalDFI)
+	r.text("corrected_data", &addenda.CorrectedData)
+	r.text("change_code", &addenda.ChangeCode)
+	r.text("trace_sequence_number", &addenda.TraceSequenceNumber)
+	r.text("trace_number", &addenda.TraceNumber)
+}
+
+func applyAddenda99Dishonored(addenda *ach.Addenda99Dishonored, r *fieldReader) {
+	r.text("dishonored_return_reason_code", &addenda.DishonoredReturnReasonCode)
+	r.text("original_entry_trace_number", &addenda.OriginalEntryTraceNumber)
+	r.text("original_receiving_dfi_identification", &addenda.OriginalReceivingDFIIdentification)
+	r.text("return_trace_number", &addenda.ReturnTraceNumber)
+	r.text("return_settlement_date", &addenda.ReturnSettlementDate)
+	r.text("return_reason_code", &addenda.ReturnReasonCode)
+	r.text("addenda_information", &addenda.AddendaInformation)
+	r.text("trace_number", &addenda.TraceNumber)
+}
+
+func applyAddenda99Contested(addenda *ach.Addenda99Contested, r *fieldReader) {
+	r.text("contested_return_code", &addenda.ContestedReturnCode)
+	r.text("original_entry_trace_number", &addenda.OriginalEntryTraceNumber)
+	r.text("date_original_entry_returned", &addenda.DateOriginalEntryReturned)
+	r.text("original_receiving_dfi_identification", &addenda.OriginalReceivingDFIIdentification)
+	r.text("original_settlement_date", &addenda.OriginalSettlementDate)
+	r.text("return_trace_number", &addenda.ReturnTraceNumber)
+	r.text("return_settlement_date", &addenda.ReturnSettlementDate)
+	r.text("return_reason_code", &addenda.ReturnReasonCode)
+	r.text("contested_dishonored_return_trace_number", &addenda.DishonoredReturnTraceNumber)
+	r.text("contested_dishonored_return_settlement_date", &addenda.DishonoredReturnSettlementDate)
+	r.text("contested_dishonored_return_reason_code", &addenda.DishonoredReturnReasonCode)
+	r.text("trace_number", &addenda.TraceNumber)
 }
 
 // GetEntriesTable returns the entries TableData for use with filesql.
@@ -1820,418 +1703,201 @@ func convertIATAddenda(file *ach.File) *parser.TableData {
 
 // applyIATBatchModifications updates IAT batches in the ACH file from TableData.
 func (ts *TableSet) applyIATBatchModifications(file *ach.File) error {
-	headerIndex := make(map[string]int)
-	for i, h := range ts.iatBatches.Headers {
-		headerIndex[h] = i
-	}
-
+	r := newFieldReader("iat_batches", ts.iatBatches)
 	coords := ts.newCoordinateTracker("iat_batches")
 	for _, record := range ts.iatBatches.Records {
-		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
+		r.next(record)
+		at, err := r.coordinates(batchCoordinates...)
 		if err != nil {
-			return fmt.Errorf("invalid batch_index: %w", err)
+			return err
 		}
-
+		batchIdx := at[0]
 		if batchIdx < 0 || batchIdx >= len(file.IATBatches) {
 			return fmt.Errorf("batch_index %d out of range", batchIdx)
 		}
-		if err := coords.claim([]string{"batch_index"}, []int{batchIdx}); err != nil {
+		if err := coords.claim(batchCoordinates, at); err != nil {
 			return err
 		}
 
 		bh := file.IATBatches[batchIdx].Header
-
-		if idx, ok := headerIndex["service_class_code"]; ok {
-			if v, err := strconv.Atoi(record[idx]); err == nil {
-				bh.ServiceClassCode = v
-			}
-		}
-		if idx, ok := headerIndex["iat_indicator"]; ok {
-			bh.IATIndicator = record[idx]
-		}
-		if idx, ok := headerIndex["foreign_exchange_indicator"]; ok {
-			bh.ForeignExchangeIndicator = record[idx]
-		}
-		if idx, ok := headerIndex["foreign_exchange_reference_indicator"]; ok {
-			if v, err := strconv.Atoi(record[idx]); err == nil {
-				bh.ForeignExchangeReferenceIndicator = v
-			}
-		}
-		if idx, ok := headerIndex["foreign_exchange_reference"]; ok {
-			bh.ForeignExchangeReference = record[idx]
-		}
-		if idx, ok := headerIndex["iso_destination_country_code"]; ok {
-			bh.ISODestinationCountryCode = record[idx]
-		}
-		if idx, ok := headerIndex["originator_identification"]; ok {
-			bh.OriginatorIdentification = record[idx]
-		}
-		if idx, ok := headerIndex["standard_entry_class_code"]; ok {
-			bh.StandardEntryClassCode = record[idx]
-		}
-		if idx, ok := headerIndex["company_entry_description"]; ok {
-			bh.CompanyEntryDescription = record[idx]
-		}
-		if idx, ok := headerIndex["iso_originating_currency_code"]; ok {
-			bh.ISOOriginatingCurrencyCode = record[idx]
-		}
-		if idx, ok := headerIndex["iso_destination_currency_code"]; ok {
-			bh.ISODestinationCurrencyCode = record[idx]
-		}
-		if idx, ok := headerIndex["effective_entry_date"]; ok {
-			bh.EffectiveEntryDate = record[idx]
-		}
-		if idx, ok := headerIndex["odfi_identification"]; ok {
-			bh.ODFIIdentification = record[idx]
-		}
-		if idx, ok := headerIndex["batch_number"]; ok {
-			if v, err := strconv.Atoi(record[idx]); err == nil {
-				bh.BatchNumber = v
-			}
+		r.integer("service_class_code", &bh.ServiceClassCode)
+		r.text("iat_indicator", &bh.IATIndicator)
+		r.text("foreign_exchange_indicator", &bh.ForeignExchangeIndicator)
+		r.integer("foreign_exchange_reference_indicator", &bh.ForeignExchangeReferenceIndicator)
+		r.text("foreign_exchange_reference", &bh.ForeignExchangeReference)
+		r.text("iso_destination_country_code", &bh.ISODestinationCountryCode)
+		r.text("originator_identification", &bh.OriginatorIdentification)
+		r.text("standard_entry_class_code", &bh.StandardEntryClassCode)
+		r.text("company_entry_description", &bh.CompanyEntryDescription)
+		r.text("iso_originating_currency_code", &bh.ISOOriginatingCurrencyCode)
+		r.text("iso_destination_currency_code", &bh.ISODestinationCurrencyCode)
+		r.text("effective_entry_date", &bh.EffectiveEntryDate)
+		r.text("odfi_identification", &bh.ODFIIdentification)
+		r.integer("batch_number", &bh.BatchNumber)
+		if r.err != nil {
+			return r.err
 		}
 	}
-
-	return nil
+	return coords.finish()
 }
 
 // applyIATEntryModifications updates IAT entries in the ACH file from TableData.
 func (ts *TableSet) applyIATEntryModifications(file *ach.File) error {
-	headerIndex := make(map[string]int)
-	for i, h := range ts.iatEntries.Headers {
-		headerIndex[h] = i
-	}
-
+	r := newFieldReader("iat_entries", ts.iatEntries)
 	coords := ts.newCoordinateTracker("iat_entries")
 	for _, record := range ts.iatEntries.Records {
-		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
+		r.next(record)
+		at, err := r.coordinates(entryCoordinates...)
 		if err != nil {
-			return fmt.Errorf("invalid batch_index: %w", err)
+			return err
 		}
-		entryIdx, err := strconv.Atoi(record[headerIndex["entry_index"]])
-		if err != nil {
-			return fmt.Errorf("invalid entry_index: %w", err)
-		}
-
+		batchIdx, entryIdx := at[0], at[1]
 		if batchIdx < 0 || batchIdx >= len(file.IATBatches) {
 			return fmt.Errorf("batch_index %d out of range", batchIdx)
 		}
 		if entryIdx < 0 || entryIdx >= len(file.IATBatches[batchIdx].Entries) {
 			return fmt.Errorf("entry_index %d out of range for batch %d", entryIdx, batchIdx)
 		}
-		if err := coords.claim([]string{"batch_index", "entry_index"}, []int{batchIdx, entryIdx}); err != nil {
+		if err := coords.claim(entryCoordinates, at); err != nil {
 			return err
 		}
 
 		entry := file.IATBatches[batchIdx].Entries[entryIdx]
-
-		if idx, ok := headerIndex["transaction_code"]; ok {
-			if v, err := strconv.Atoi(record[idx]); err == nil {
-				entry.TransactionCode = v
-			}
-		}
-		if idx, ok := headerIndex["rdfi_identification"]; ok {
-			entry.RDFIIdentification = record[idx]
-		}
-		if idx, ok := headerIndex["check_digit"]; ok {
-			entry.CheckDigit = record[idx]
-		}
-		if idx, ok := headerIndex["addenda_records"]; ok {
-			if v, err := strconv.Atoi(record[idx]); err == nil {
-				entry.AddendaRecords = v
-			}
-		}
-		if idx, ok := headerIndex["amount"]; ok {
-			if v, err := strconv.Atoi(record[idx]); err == nil {
-				entry.Amount = v
-			}
-		}
-		if idx, ok := headerIndex["dfi_account_number"]; ok {
-			entry.DFIAccountNumber = record[idx]
-		}
-		if idx, ok := headerIndex["ofac_screening_indicator"]; ok {
-			entry.OFACScreeningIndicator = record[idx]
-		}
-		if idx, ok := headerIndex["secondary_ofac_screening_indicator"]; ok {
-			entry.SecondaryOFACScreeningIndicator = record[idx]
-		}
-		if idx, ok := headerIndex["addenda_record_indicator"]; ok {
-			if v, err := strconv.Atoi(record[idx]); err == nil {
-				entry.AddendaRecordIndicator = v
-			}
-		}
-		if idx, ok := headerIndex["trace_number"]; ok {
-			entry.TraceNumber = record[idx]
-		}
-		if idx, ok := headerIndex["category"]; ok {
-			entry.Category = record[idx]
+		r.integer("transaction_code", &entry.TransactionCode)
+		r.text("rdfi_identification", &entry.RDFIIdentification)
+		r.text("check_digit", &entry.CheckDigit)
+		r.integer("addenda_records", &entry.AddendaRecords)
+		r.integer("amount", &entry.Amount)
+		r.text("dfi_account_number", &entry.DFIAccountNumber)
+		r.text("ofac_screening_indicator", &entry.OFACScreeningIndicator)
+		r.text("secondary_ofac_screening_indicator", &entry.SecondaryOFACScreeningIndicator)
+		r.integer("addenda_record_indicator", &entry.AddendaRecordIndicator)
+		r.text("trace_number", &entry.TraceNumber)
+		r.text("category", &entry.Category)
+		if r.err != nil {
+			return r.err
 		}
 	}
-
-	return nil
+	return coords.finish()
 }
 
 // applyIATAddendaModifications updates IAT addenda in the ACH file from TableData.
 func (ts *TableSet) applyIATAddendaModifications(file *ach.File) error {
-	headerIndex := make(map[string]int)
-	for i, h := range ts.iatAddenda.Headers {
-		headerIndex[h] = i
-	}
-
+	r := newFieldReader("iat_addenda", ts.iatAddenda)
 	coords := ts.newCoordinateTracker("iat_addenda")
 	for _, record := range ts.iatAddenda.Records {
-		batchIdx, err := strconv.Atoi(record[headerIndex["batch_index"]])
+		r.next(record)
+		at, err := r.coordinates(addendaCoordinates...)
 		if err != nil {
-			return fmt.Errorf("invalid batch_index: %w", err)
+			return err
 		}
-		entryIdx, err := strconv.Atoi(record[headerIndex["entry_index"]])
-		if err != nil {
-			return fmt.Errorf("invalid entry_index: %w", err)
-		}
-		addendaIdx, err := strconv.Atoi(record[headerIndex["addenda_index"]])
-		if err != nil {
-			return fmt.Errorf("invalid addenda_index: %w", err)
-		}
-
+		batchIdx, entryIdx, addendaIdx := at[0], at[1], at[2]
 		if batchIdx < 0 || batchIdx >= len(file.IATBatches) {
 			return fmt.Errorf("batch_index %d out of range", batchIdx)
 		}
 		if entryIdx < 0 || entryIdx >= len(file.IATBatches[batchIdx].Entries) {
 			return fmt.Errorf("entry_index %d out of range for batch %d", entryIdx, batchIdx)
 		}
-		if err := coords.claim(
-			[]string{"batch_index", "entry_index", "addenda_index"},
-			[]int{batchIdx, entryIdx, addendaIdx}); err != nil {
+		if err := coords.claim(addendaCoordinates, at); err != nil {
 			return err
 		}
 
 		entry := file.IATBatches[batchIdx].Entries[entryIdx]
-		addendaType := record[headerIndex["addenda_type"]]
-
+		addendaType, _ := r.cell("addenda_type")
 		switch addendaType {
 		case "10":
-			if entry.Addenda10 != nil {
-				if idx, ok := headerIndex["transaction_type_code"]; ok {
-					entry.Addenda10.TransactionTypeCode = record[idx]
-				}
-				if idx, ok := headerIndex["foreign_payment_amount"]; ok {
-					if v, err := strconv.Atoi(record[idx]); err == nil {
-						entry.Addenda10.ForeignPaymentAmount = v
-					}
-				}
-				if idx, ok := headerIndex["foreign_trace_number"]; ok {
-					entry.Addenda10.ForeignTraceNumber = record[idx]
-				}
-				if idx, ok := headerIndex["receiving_company_name"]; ok {
-					entry.Addenda10.Name = record[idx]
-				}
+			if a := entry.Addenda10; a != nil {
+				r.text("transaction_type_code", &a.TransactionTypeCode)
+				r.integer("foreign_payment_amount", &a.ForeignPaymentAmount)
+				r.text("foreign_trace_number", &a.ForeignTraceNumber)
+				r.text("receiving_company_name", &a.Name)
 			}
-
 		case "11":
-			if entry.Addenda11 != nil {
-				if idx, ok := headerIndex["originator_name"]; ok {
-					entry.Addenda11.OriginatorName = record[idx]
-				}
-				if idx, ok := headerIndex["originator_street_address"]; ok {
-					entry.Addenda11.OriginatorStreetAddress = record[idx]
-				}
+			if a := entry.Addenda11; a != nil {
+				r.text("originator_name", &a.OriginatorName)
+				r.text("originator_street_address", &a.OriginatorStreetAddress)
 			}
-
 		case "12":
-			if entry.Addenda12 != nil {
-				if idx, ok := headerIndex["originator_city_state_province"]; ok {
-					entry.Addenda12.OriginatorCityStateProvince = record[idx]
-				}
-				if idx, ok := headerIndex["originator_country_postal_code"]; ok {
-					entry.Addenda12.OriginatorCountryPostalCode = record[idx]
-				}
+			if a := entry.Addenda12; a != nil {
+				r.text("originator_city_state_province", &a.OriginatorCityStateProvince)
+				r.text("originator_country_postal_code", &a.OriginatorCountryPostalCode)
 			}
-
 		case "13":
-			if entry.Addenda13 != nil {
-				if idx, ok := headerIndex["odfi_name"]; ok {
-					entry.Addenda13.ODFIName = record[idx]
-				}
-				if idx, ok := headerIndex["odfi_identification_number_qualifier"]; ok {
-					entry.Addenda13.ODFIIDNumberQualifier = record[idx]
-				}
-				if idx, ok := headerIndex["odfi_identification"]; ok {
-					entry.Addenda13.ODFIIdentification = record[idx]
-				}
-				if idx, ok := headerIndex["odfi_branch_country_code"]; ok {
-					entry.Addenda13.ODFIBranchCountryCode = record[idx]
-				}
+			if a := entry.Addenda13; a != nil {
+				r.text("odfi_name", &a.ODFIName)
+				r.text("odfi_identification_number_qualifier", &a.ODFIIDNumberQualifier)
+				r.text("odfi_identification", &a.ODFIIdentification)
+				r.text("odfi_branch_country_code", &a.ODFIBranchCountryCode)
 			}
-
 		case "14":
-			if entry.Addenda14 != nil {
-				if idx, ok := headerIndex["rdfi_name"]; ok {
-					entry.Addenda14.RDFIName = record[idx]
-				}
-				if idx, ok := headerIndex["rdfi_identification_number_qualifier"]; ok {
-					entry.Addenda14.RDFIIDNumberQualifier = record[idx]
-				}
-				if idx, ok := headerIndex["rdfi_identification"]; ok {
-					entry.Addenda14.RDFIIdentification = record[idx]
-				}
-				if idx, ok := headerIndex["rdfi_branch_country_code"]; ok {
-					entry.Addenda14.RDFIBranchCountryCode = record[idx]
-				}
+			if a := entry.Addenda14; a != nil {
+				r.text("rdfi_name", &a.RDFIName)
+				r.text("rdfi_identification_number_qualifier", &a.RDFIIDNumberQualifier)
+				r.text("rdfi_identification", &a.RDFIIdentification)
+				r.text("rdfi_branch_country_code", &a.RDFIBranchCountryCode)
 			}
-
 		case "15":
-			if entry.Addenda15 != nil {
-				if idx, ok := headerIndex["receiver_identification_number"]; ok {
-					entry.Addenda15.ReceiverIDNumber = record[idx]
-				}
-				if idx, ok := headerIndex["receiver_street_address"]; ok {
-					entry.Addenda15.ReceiverStreetAddress = record[idx]
-				}
+			if a := entry.Addenda15; a != nil {
+				r.text("receiver_identification_number", &a.ReceiverIDNumber)
+				r.text("receiver_street_address", &a.ReceiverStreetAddress)
 			}
-
 		case "16":
-			if entry.Addenda16 != nil {
-				if idx, ok := headerIndex["receiver_city_state_province"]; ok {
-					entry.Addenda16.ReceiverCityStateProvince = record[idx]
-				}
-				if idx, ok := headerIndex["receiver_country_postal_code"]; ok {
-					entry.Addenda16.ReceiverCountryPostalCode = record[idx]
-				}
+			if a := entry.Addenda16; a != nil {
+				r.text("receiver_city_state_province", &a.ReceiverCityStateProvince)
+				r.text("receiver_country_postal_code", &a.ReceiverCountryPostalCode)
 			}
-
 		case "17":
-			addendaIdx, err := strconv.Atoi(record[headerIndex["addenda_index"]])
-			if err != nil {
-				continue
+			// The Addenda17 records follow the 10 to 16 that are present.
+			if i := addendaIdx - iatAddendaBefore17(entry); i >= 0 && i < len(entry.Addenda17) && entry.Addenda17[i] != nil {
+				r.text("payment_related_information", &entry.Addenda17[i].PaymentRelatedInformation)
 			}
-			// Find the corresponding Addenda17 by sequence
-			a17Idx := ts.findAddenda17Index(entry, addendaIdx)
-			if a17Idx >= 0 && a17Idx < len(entry.Addenda17) && entry.Addenda17[a17Idx] != nil {
-				if idx, ok := headerIndex["payment_related_information"]; ok {
-					entry.Addenda17[a17Idx].PaymentRelatedInformation = record[idx]
-				}
-			}
-
 		case "18":
-			addendaIdx, err := strconv.Atoi(record[headerIndex["addenda_index"]])
-			if err != nil {
-				continue
+			// The Addenda18 records follow those and every Addenda17.
+			if i := addendaIdx - iatAddendaBefore17(entry) - len(entry.Addenda17); i >= 0 && i < len(entry.Addenda18) && entry.Addenda18[i] != nil {
+				a := entry.Addenda18[i]
+				r.text("foreign_correspondent_bank_name", &a.ForeignCorrespondentBankName)
+				r.text("foreign_correspondent_bank_id_number_qualifier", &a.ForeignCorrespondentBankIDNumberQualifier)
+				r.text("foreign_correspondent_bank_id_number", &a.ForeignCorrespondentBankIDNumber)
+				r.text("foreign_correspondent_bank_branch_country_code", &a.ForeignCorrespondentBankBranchCountryCode)
 			}
-			// Find the corresponding Addenda18 by sequence
-			a18Idx := ts.findAddenda18Index(entry, addendaIdx)
-			if a18Idx >= 0 && a18Idx < len(entry.Addenda18) && entry.Addenda18[a18Idx] != nil {
-				if idx, ok := headerIndex["foreign_correspondent_bank_name"]; ok {
-					entry.Addenda18[a18Idx].ForeignCorrespondentBankName = record[idx]
-				}
-				if idx, ok := headerIndex["foreign_correspondent_bank_id_number_qualifier"]; ok {
-					entry.Addenda18[a18Idx].ForeignCorrespondentBankIDNumberQualifier = record[idx]
-				}
-				if idx, ok := headerIndex["foreign_correspondent_bank_id_number"]; ok {
-					entry.Addenda18[a18Idx].ForeignCorrespondentBankIDNumber = record[idx]
-				}
-				if idx, ok := headerIndex["foreign_correspondent_bank_branch_country_code"]; ok {
-					entry.Addenda18[a18Idx].ForeignCorrespondentBankBranchCountryCode = record[idx]
-				}
-			}
-
 		case "98":
-			if entry.Addenda98 != nil {
-				if idx, ok := headerIndex["original_trace"]; ok {
-					entry.Addenda98.OriginalTrace = record[idx]
-				}
-				if idx, ok := headerIndex["original_rdfi"]; ok {
-					entry.Addenda98.OriginalDFI = record[idx]
-				}
-				if idx, ok := headerIndex["corrected_data"]; ok {
-					entry.Addenda98.CorrectedData = record[idx]
-				}
-				if idx, ok := headerIndex["change_code"]; ok {
-					entry.Addenda98.ChangeCode = record[idx]
-				}
-				if idx, ok := headerIndex["trace_number"]; ok {
-					entry.Addenda98.TraceNumber = record[idx]
-				}
+			if a := entry.Addenda98; a != nil {
+				r.text("original_trace", &a.OriginalTrace)
+				r.text("original_rdfi", &a.OriginalDFI)
+				r.text("corrected_data", &a.CorrectedData)
+				r.text("change_code", &a.ChangeCode)
+				r.text("trace_number", &a.TraceNumber)
 			}
-
 		case "99":
-			if entry.Addenda99 != nil {
-				if idx, ok := headerIndex["original_trace"]; ok {
-					entry.Addenda99.OriginalTrace = record[idx]
-				}
-				if idx, ok := headerIndex["original_rdfi"]; ok {
-					entry.Addenda99.OriginalDFI = record[idx]
-				}
-				if idx, ok := headerIndex["return_code"]; ok {
-					entry.Addenda99.ReturnCode = record[idx]
-				}
-				if idx, ok := headerIndex["addenda_information"]; ok {
-					entry.Addenda99.AddendaInformation = record[idx]
-				}
-				if idx, ok := headerIndex["trace_number"]; ok {
-					entry.Addenda99.TraceNumber = record[idx]
-				}
+			if a := entry.Addenda99; a != nil {
+				r.text("original_trace", &a.OriginalTrace)
+				r.text("original_rdfi", &a.OriginalDFI)
+				r.text("return_code", &a.ReturnCode)
+				r.text("addenda_information", &a.AddendaInformation)
+				r.text("trace_number", &a.TraceNumber)
 			}
 		}
+		if r.err != nil {
+			return r.err
+		}
 	}
-
-	return nil
+	return coords.finish()
 }
 
-// findAddenda17Index calculates the index in the Addenda17 slice based on addenda_index.
-// Addenda17 starts after Addenda10-16 (7 addenda types).
-func (ts *TableSet) findAddenda17Index(entry *ach.IATEntryDetail, addendaIdx int) int {
-	// Count addenda before Addenda17
-	offset := 0
-	if entry.Addenda10 != nil {
-		offset++
+// iatAddendaBefore17 counts the addenda an IAT entry carries ahead of its
+// Addenda17 records: the ones of types 10 to 16 that are present, in the order
+// convertIATAddenda numbers them.
+func iatAddendaBefore17(entry *ach.IATEntryDetail) int {
+	n := 0
+	for _, present := range []bool{
+		entry.Addenda10 != nil, entry.Addenda11 != nil, entry.Addenda12 != nil, entry.Addenda13 != nil,
+		entry.Addenda14 != nil, entry.Addenda15 != nil, entry.Addenda16 != nil,
+	} {
+		if present {
+			n++
+		}
 	}
-	if entry.Addenda11 != nil {
-		offset++
-	}
-	if entry.Addenda12 != nil {
-		offset++
-	}
-	if entry.Addenda13 != nil {
-		offset++
-	}
-	if entry.Addenda14 != nil {
-		offset++
-	}
-	if entry.Addenda15 != nil {
-		offset++
-	}
-	if entry.Addenda16 != nil {
-		offset++
-	}
-	return addendaIdx - offset
-}
-
-// findAddenda18Index calculates the index in the Addenda18 slice based on addenda_index.
-func (ts *TableSet) findAddenda18Index(entry *ach.IATEntryDetail, addendaIdx int) int {
-	// Count addenda before Addenda18 (10-16 + 17s)
-	offset := 0
-	if entry.Addenda10 != nil {
-		offset++
-	}
-	if entry.Addenda11 != nil {
-		offset++
-	}
-	if entry.Addenda12 != nil {
-		offset++
-	}
-	if entry.Addenda13 != nil {
-		offset++
-	}
-	if entry.Addenda14 != nil {
-		offset++
-	}
-	if entry.Addenda15 != nil {
-		offset++
-	}
-	if entry.Addenda16 != nil {
-		offset++
-	}
-	offset += len(entry.Addenda17)
-	return addendaIdx - offset
+	return n
 }
 
 // UpdateIATBatchesFromTableData updates the internal IAT batches data from modified TableData.
