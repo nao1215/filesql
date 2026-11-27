@@ -930,3 +930,24 @@ func TestGuardedConn_CountsTheTransactionSQLiteHolds(t *testing.T) {
 		require.NoError(t, inner.Close())
 	}
 }
+
+// TestGuardedConn_AStatementThatEndsNothingKeepsTheCount pins what happens on a
+// connection that cannot be asked whether a transaction is open, the way a
+// wrapped driver that runs no statement directly cannot. A savepoint taken
+// inside a transaction ends nothing, so the transaction stays counted; only a
+// statement that may end one goes by its own reading there.
+func TestGuardedConn_AStatementThatEndsNothingKeepsTheCount(t *testing.T) {
+	t.Parallel()
+
+	conn := &guardedConn{conn: &plainConn{}, tracker: discardingTracker{}}
+	require.NoError(t, conn.openTx(t.Context()))
+	ran := func(context.Context) (driver.Result, error) { return driver.RowsAffected(0), nil }
+
+	_, err := conn.runExec(t.Context(), "SAVEPOINT inner", ran)
+	require.NoError(t, err)
+	assert.True(t, conn.inTx)
+
+	_, err = conn.runExec(t.Context(), "RELEASE inner; COMMIT", ran)
+	require.NoError(t, err)
+	assert.False(t, conn.inTx)
+}
