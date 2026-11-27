@@ -32,6 +32,11 @@ env:
   # hosted runner down with "runner has received a shutdown signal" and no log.
   # A 4 GiB cap per process makes it die as a killed mutant instead.
   MUTANT_MEMORY_KIB: '4194304'
+  # gremlins times each mutant against a first, unmutated run of the tests.
+  # setup-go restores the build cache, test results included, and a cached run
+  # takes milliseconds: every mutant then "times out", none is killed or lives,
+  # and the efficacy means nothing. Never reuse a result.
+  GOFLAGS: '-count=1'
 
 jobs:
   diff:
@@ -75,25 +80,30 @@ jobs:
     timeout-minutes: 240
     strategy:
       fail-fast: false
+      # Each package fails below the efficacy its tests reached in the run of
+      # 2026-11-22, floored to a whole percent, so a weekly run catches a
+      # package whose tests stopped checking what they used to. The pull
+      # request gate in .gremlins.yaml is stricter, at 90%, because it only
+      # mutates the lines the pull request changes.
       matrix:
-        package:
-          - .
-          - ./dialect
-          - ./dialect/internal/runtime
-          - ./dialect/internal/parser
-          - ./dialect/internal/lower
-          - ./dialect/internal/token
-          - ./dialect/internal/render
-          - ./internal/reader
-          - ./internal/parser
-          - ./internal/parser/ach
-          - ./internal/parser/wire
-          - ./internal/infer
-          - ./internal/codec
-          - ./internal/textin
-          - ./internal/writer
-          - ./internal/atomicwrite
-          - ./prep
+        include:
+          - {package: ., floor: 88}
+          - {package: ./dialect, floor: 99}
+          - {package: ./dialect/internal/runtime, floor: 85}
+          - {package: ./dialect/internal/parser, floor: 76}
+          - {package: ./dialect/internal/lower, floor: 77}
+          - {package: ./dialect/internal/token, floor: 70}
+          - {package: ./dialect/internal/render, floor: 76}
+          - {package: ./internal/reader, floor: 77}
+          - {package: ./internal/parser, floor: 91}
+          - {package: ./internal/parser/ach, floor: 43}
+          - {package: ./internal/parser/wire, floor: 95}
+          - {package: ./internal/infer, floor: 98}
+          - {package: ./internal/codec, floor: 85}
+          - {package: ./internal/textin, floor: 79}
+          - {package: ./internal/writer, floor: 86}
+          - {package: ./internal/atomicwrite, floor: 97}
+          - {package: ./prep, floor: 92}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -106,13 +116,20 @@ jobs:
       - name: Mutate the package
         env:
           PACKAGE: ${{ matrix.package }}
+          FLOOR: ${{ matrix.floor }}
         # gremlins mutates everything under the path it is given and matches
         # --exclude-files against paths relative to it, so excluding any path
         # with a slash keeps each job to its own directory; the packages below
         # it have jobs of their own.
+        #
+        # The package's floor goes in a config file of its own, which --config
+        # reads in place of .gremlins.yaml. It cannot go in the environment:
+        # gremlins v0.6.0 reads GREMLINS_UNLEASH_THRESHOLD_EFFICACY as a
+        # string, takes it for no threshold, and passes at any efficacy.
         run: |
+          printf 'unleash:\n  threshold:\n    efficacy: %s\n' "$FLOOR" > "$RUNNER_TEMP/gremlins.yaml"
           ulimit -v "$MUTANT_MEMORY_KIB"
-          gremlins unleash --workers 4 --timeout-coefficient 10 --exclude-files '/' --output mutation.json "$PACKAGE"
+          gremlins unleash --config "$RUNNER_TEMP/gremlins.yaml" --workers 4 --timeout-coefficient 10 --exclude-files '/' --output mutation.json "$PACKAGE"
       - name: Name the report after the package
         id: report
         env:

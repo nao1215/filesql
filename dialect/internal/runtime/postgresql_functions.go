@@ -655,7 +655,9 @@ func fnRegexpCount(args []driver.Value) (driver.Value, error) {
 		}
 	}
 	runes := []rune(subject)
-	if int(start) > len(runes) {
+	// Compared as int64: converting start to int first wraps a large start on
+	// a 32-bit platform into a small or negative index.
+	if start > int64(len(runes)) {
 		return int64(0), nil
 	}
 	re, err := compileRegexp(pattern)

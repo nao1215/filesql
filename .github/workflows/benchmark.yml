@@ -1,0 +1,67 @@
+name: Benchmark
+
+# A pull request that slows a function down passes every test. This job builds
+# the base and the head of the pull request on one runner, runs the benchmarks
+# of the packages listed in scripts/ci_benchmark.py in turn for several rounds
+# (the root package's read 100,000 rows, so a round takes about a minute), and
+# fails when a benchmark is
+# consistently slower: its median more than 1.25x the base's, and even its
+# fastest sample slower than the base's median (scripts/ci_benchmark.py). The
+# benchstat summary and the raw samples are uploaded either way.
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: Commit to compare HEAD against
+        required: false
+        default: origin/main
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.go'
+      - go.mod
+      - go.sum
+      - scripts/ci_benchmark.py
+      - .github/workflows/benchmark.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # One thread: goroutine scheduling on a shared runner is the largest source
+  # of noise, and a slowdown of the code itself shows on one core as well as
+  # on four.
+  GOMAXPROCS: '1'
+
+jobs:
+  paired:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Test the gate
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Compare base and head on this runner
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || inputs.base || 'origin/main' }}
+          # On a pull request github.sha is the merge commit the checkout
+          # holds: the head as it would land, so a change already on main is
+          # on both sides and cannot read as a slowdown of the head.
+          HEAD_SHA: ${{ github.sha }}
+        run: python3 scripts/ci_benchmark.py --base "$BASE" --head "$HEAD_SHA"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: paired-benchmark
+          path: bench-results/
+          if-no-files-found: ignore

@@ -552,30 +552,6 @@ const (
 	NullsLast
 )
 
-// ArrayExpr is an array constructor: PostgreSQL's ARRAY[...] and GoogleSQL's
-// [...]. SQLite has no array type, so lowering refuses it; it is a node so the
-// refusal can name it.
-type ArrayExpr struct {
-	Elems []Expr
-	Span  Span
-}
-
-// SubscriptExpr is "x[i]" or "x[a:b]", an array or string subscript.
-type SubscriptExpr struct {
-	Expr  Expr
-	Index Expr
-	High  Expr
-	Slice bool
-	Span  Span
-}
-
-// StructExpr is GoogleSQL's STRUCT(...) or a parenthesized struct literal.
-type StructExpr struct {
-	Fields []Expr
-	Names  []string
-	Span   Span
-}
-
 // The marker methods that make each node an Expr.
 func (*Literal) exprNode()        {}
 func (*Ident) exprNode()          {}
@@ -599,9 +575,6 @@ func (*CollateExpr) exprNode()    {}
 func (*IntervalExpr) exprNode()   {}
 func (*TypedLiteral) exprNode()   {}
 func (*FuncCall) exprNode()       {}
-func (*ArrayExpr) exprNode()      {}
-func (*SubscriptExpr) exprNode()  {}
-func (*StructExpr) exprNode()     {}
 
 // At reports where each node starts. Every node carries the position of its
 // first token, so a diagnostic can name the place a construct was written.
@@ -627,6 +600,3 @@ func (n *CollateExpr) At() Span    { return n.Span }
 func (n *IntervalExpr) At() Span   { return n.Span }
 func (n *TypedLiteral) At() Span   { return n.Span }
 func (n *FuncCall) At() Span       { return n.Span }
-func (n *ArrayExpr) At() Span      { return n.Span }
-func (n *SubscriptExpr) At() Span  { return n.Span }
-func (n *StructExpr) At() Span     { return n.Span }

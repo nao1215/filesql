@@ -116,6 +116,41 @@ jobs:
             ~/go/pkg/mod
           key: ${{ steps.race-cache.outputs.cache-primary-key }}
 
+  unit_test_32bit:
+    name: Unit test (GOARCH=386)
+
+    # int is 32 bits here. A count or position converted from int64 to int
+    # wraps, which the 64-bit legs cannot see: REPEAT and REGEXP_COUNT
+    # panicked on such values until this job was added. The root package and
+    # anything whose tests import it are left out, because moov-io/ach, which
+    # the ACH reader uses, declares constants past the range of a 32-bit int
+    # and does not compile there. A linux/amd64 runner runs 386 binaries
+    # natively.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOARCH: "386"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "stable"
+
+      - name: Test the packages that build for 386
+        # A package's test binary (the ".test" entry of go list -test) lists
+        # every dependency of the package and its tests.
+        run: |
+          pkgs=$(go list -test -f '{{.ImportPath}}{{range .Deps}} {{.}}{{end}}' ./... \
+            | awk '$1 ~ /\.test$/' | grep -v ' github.com/moov-io/ach' \
+            | awk '{sub(/\.test$/, "", $1); print $1}')
+          test -n "$pkgs"
+          # shellcheck disable=SC2086 # one argument per package
+          go test $pkgs
+
   cross_build:
     name: Cross build (${{ matrix.goos }})
 

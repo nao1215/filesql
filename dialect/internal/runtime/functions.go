@@ -2136,6 +2136,13 @@ func repeatWith(args []driver.Value, raiseOnNegative bool) (driver.Value, error)
 	if count <= 0 {
 		return "", nil
 	}
+	// An empty string repeated any number of times is empty. Answering here
+	// also keeps a count past the range of int on a 32-bit platform from
+	// reaching strings.Repeat, which the length check lets through when there
+	// is nothing to repeat.
+	if s == "" {
+		return "", nil
+	}
 	if err := checkStringLength(fnNameRepeat, int64(len(s)), count); err != nil {
 		return nil, err
 	}
