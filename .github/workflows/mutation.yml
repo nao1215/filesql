@@ -65,7 +65,18 @@ jobs:
           git config diff.context 0
           git config diff.interHunkContext 0
           ulimit -v "$MUTANT_MEMORY_KIB"
-          gremlins unleash --diff "$BASE_SHA" --workers 2 --timeout-coefficient 10 --output mutation.json .
+          # gremlins v0.6.0 keeps the mutants outside the diff in its results as
+          # SKIPPED, so a pull request that changes only tests or comments reads
+          # 0% efficacy and the threshold in .gremlins.yaml fails it. Nothing was
+          # assessed there, so a report holding only SKIPPED mutants passes; one
+          # with any other status, a timeout included, keeps its failure.
+          status=0
+          gremlins unleash --diff "$BASE_SHA" --workers 2 --timeout-coefficient 10 --output mutation.json . || status=$?
+          if [ "$status" -ne 0 ] && [ -f mutation.json ] && [ "$(jq '[.files[]?.mutations[]? | select(.status != "SKIPPED")] | length' mutation.json)" = 0 ]; then
+            echo "::notice::No mutant on the changed lines was run; there is nothing to assess."
+            exit 0
+          fi
+          exit "$status"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
