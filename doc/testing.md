@@ -60,7 +60,7 @@ Efficacy (killed / (killed + lived)) measured on 2026-11-19, the first full run.
 
 | Package | Killed | Lived | Timed out | Efficacy |
 |---|---|---|---|---|
-| `.` (root package) | 598 | 8 | 354 | 98.68% |
+| `.` (root package) | 798 | 94 | 10 | 89.46% |
 | `prep` | 583 | 47 | 12 | 92.54% |
 | `internal/infer` | 68 | 1 | 5 | 98.55% |
 | `internal/reader` | 360 | 68 | 375 | 84.11% |
@@ -68,16 +68,16 @@ Efficacy (killed / (killed + lived)) measured on 2026-11-19, the first full run.
 | `internal/textin` | 38 | 10 | 3 | 79.17% |
 | `internal/writer` | 44 | 7 | 0 | 86.27% |
 | `internal/atomicwrite` | 35 | 1 | 0 | 97.22% |
-| `internal/parser/ach` | 189 | 250 | 0 | 43.05% |
+| `internal/parser/ach` | 214 | 34 | 0 | 86.29% |
 | `internal/parser/wire` | 367 | 16 | 0 | 95.82% |
 | `dialect/internal/parser` | 353 | 111 | 17 | 76.08% |
 | `dialect/internal/lower` | 306 | 92 | 2 | 76.88% |
 | `dialect/internal/token` | 170 | 72 | 4 | 70.25% |
 | `dialect/internal/render` | 147 | 46 | 0 | 76.17% |
 
-`internal/infer` was 79.73% before the edge cases in `TestNumericLiteralPredicatesOnTheirEdges` were added; the one mutant left changes `>=` to `>` at 2^63, where the conversion back to int64 fails either way. Most of the ACH survivors are in `convert.go`, whose output the round-trip tests in the root package check but this package's own tests do not. The weekly run of 2026-11-22 measured the three packages missing above: `dialect/internal/runtime` 85.07%, `dialect` 100% and `internal/parser` 91.67%.
+`internal/infer` was 79.73% before the edge cases in `TestNumericLiteralPredicatesOnTheirEdges` were added; the one mutant left changes `>=` to `>` at 2^63, where the conversion back to int64 fails either way. The rows for the root package and `internal/parser/ach` are the run of 2026-11-27: `internal/parser/ach` was 43.05% until its tables were written back through one field reader and `TestWriteBack_EveryColumnRoundTrips` edited every cell of every fixture. The weekly run of 2026-11-22 measured the three packages missing above: `dialect/internal/runtime` 85.07%, `dialect` 100% and `internal/parser` 91.67%.
 
-Two gates hold these numbers. A pull request fails when the lines it changes reach 90% efficacy or less, set in `.gremlins.yaml` because gremlins v0.6.0 ignores the value of `--threshold-efficacy`. The weekly run fails a package that falls to the floor of its own score in the 2026-11-22 run, which the workflow writes into a config file per package and passes with `--config`; the environment variable `GREMLINS_UNLEASH_THRESHOLD_EFFICACY` reaches gremlins as a string, which it reads as no threshold. Both run with `GOFLAGS=-count=1`: gremlins times each mutant against a first run of the tests, and a run answered from the test cache takes milliseconds, so every mutant would time out.
+Two gates hold these numbers. A pull request fails when the lines it changes reach 90% efficacy or less, set in `.gremlins.yaml` because gremlins v0.6.0 ignores the value of `--threshold-efficacy`. The weekly run fails a package that falls to the floor of its own score in the 2026-11-22 run (2026-11-27 for the root package and `internal/parser/ach`), which the workflow writes into a config file per package and passes with `--config`; the environment variable `GREMLINS_UNLEASH_THRESHOLD_EFFICACY` reaches gremlins as a string, which it reads as no threshold. Both run with `GOFLAGS=-count=1`: gremlins times each mutant against a first run of the tests, and a run answered from the test cache takes milliseconds, so every mutant would time out.
 
 ## 32-bit platforms
 

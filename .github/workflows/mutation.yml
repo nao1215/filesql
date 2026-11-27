@@ -92,13 +92,14 @@ jobs:
     strategy:
       fail-fast: false
       # Each package fails below the efficacy its tests reached in the run of
-      # 2026-11-22, floored to a whole percent, so a weekly run catches a
+      # 2026-11-22 (the root package and internal/parser/ach: 2026-11-27),
+      # floored to a whole percent, so a weekly run catches a
       # package whose tests stopped checking what they used to. The pull
       # request gate in .gremlins.yaml is stricter, at 90%, because it only
       # mutates the lines the pull request changes.
       matrix:
         include:
-          - {package: ., floor: 88}
+          - {package: ., floor: 89}
           - {package: ./dialect, floor: 99}
           - {package: ./dialect/internal/runtime, floor: 85}
           - {package: ./dialect/internal/parser, floor: 76}
@@ -107,7 +108,7 @@ jobs:
           - {package: ./dialect/internal/render, floor: 76}
           - {package: ./internal/reader, floor: 77}
           - {package: ./internal/parser, floor: 91}
-          - {package: ./internal/parser/ach, floor: 43}
+          - {package: ./internal/parser/ach, floor: 86}
           - {package: ./internal/parser/wire, floor: 95}
           - {package: ./internal/infer, floor: 98}
           - {package: ./internal/codec, floor: 85}
