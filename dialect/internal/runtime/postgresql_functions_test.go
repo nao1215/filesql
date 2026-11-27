@@ -36,6 +36,8 @@ func TestPostgreSQLScalarFunctions(t *testing.T) {
 
 		{name: "regexp_count counts every match", query: `SELECT regexp_count('abcabc', 'a')`, want: "2"},
 		{name: "regexp_count starts where it is told", query: `SELECT regexp_count('abcabc', 'a', 3)`, want: "1"},
+		{name: "regexp_count can start at the last character", query: `SELECT regexp_count('abc', 'c', 3)`, want: "1"},
+		{name: "regexp_count past the end counts nothing", query: `SELECT regexp_count('abc', 'c', 4)`, want: "0"},
 		{name: "regexp_count folds case on request", query: `SELECT regexp_count('ABCabc', 'a', 1, 'i')`, want: "2"},
 		{name: "regexp_count with no match", query: `SELECT regexp_count('abc', 'z')`, want: "0"},
 
