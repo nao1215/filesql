@@ -41,9 +41,6 @@ func TestTheRendererRefusesWhatLoweringShouldHaveRemoved(t *testing.T) {
 		{"a quantified comparison", &ast.QuantifiedExpr{Left: column, Op: ast.Eq, Quant: ast.QuantAll, Span: span}},
 		{"an interval", &ast.IntervalExpr{Value: column, Unit: "DAY", Span: span}},
 		{"a typed literal", &ast.TypedLiteral{Type: "DATE", Value: "2024-01-01", Span: span}},
-		{"an array", &ast.ArrayExpr{Span: span}},
-		{"a subscript", &ast.SubscriptExpr{Expr: column, Index: other, Span: span}},
-		{"a struct", &ast.StructExpr{Span: span}},
 		{"a cast that answers NULL", &ast.CastExpr{
 			Expr: column, Type: ast.TypeName{Name: "INTEGER", Span: span}, TryCast: true, Span: span,
 		}},

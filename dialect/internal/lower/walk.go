@@ -478,15 +478,6 @@ func (l *lowerer) lowerNode(e ast.Expr) (ast.Expr, error) {
 	case *ast.FuncCall:
 		return l.call(n)
 
-	case *ast.ArrayExpr:
-		return nil, unsupported(n.Span, "arrays are not supported; SQLite has no array type")
-
-	case *ast.SubscriptExpr:
-		return nil, unsupported(n.Span, "a subscript is not supported; SQLite has no array type")
-
-	case *ast.StructExpr:
-		return nil, unsupported(n.Span, "structs are not supported; SQLite has no struct type")
-
 	default:
 		return e, nil
 	}

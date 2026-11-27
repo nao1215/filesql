@@ -210,12 +210,6 @@ func (w *writer) expr(e ast.Expr, minPrec int) error {
 		return unsupported(n.Span, "an INTERVAL value")
 	case *ast.TypedLiteral:
 		return unsupported(n.Span, "a typed literal")
-	case *ast.ArrayExpr:
-		return unsupported(n.Span, "an array")
-	case *ast.SubscriptExpr:
-		return unsupported(n.Span, "a subscript")
-	case *ast.StructExpr:
-		return unsupported(n.Span, "a struct")
 	default:
 		return unsupported(e.At(), "this expression")
 	}
