@@ -173,7 +173,7 @@ func (r *mysqlRules) Literal(lit *ast.Literal) (ast.Expr, error) {
 		// its bytes; the numeric places were rewritten before the children were
 		// lowered. MySQL pads an odd number of digits on the left, so 0x4 is
 		// the byte 0x04.
-		digits := strings.TrimPrefix(strings.TrimPrefix(lit.Value, "0x"), "0X")
+		digits := strings.TrimPrefix(lit.Value, "0x")
 		if len(digits)%2 == 1 {
 			digits = "0" + digits
 		}
@@ -653,7 +653,7 @@ func hexAsNumber(e ast.Expr) (ast.Expr, error) {
 	if !ok || lit.Kind != ast.LitHex {
 		return e, nil
 	}
-	digits := strings.TrimPrefix(strings.TrimPrefix(lit.Value, "0x"), "0X")
+	digits := strings.TrimPrefix(lit.Value, "0x")
 	n, err := strconv.ParseUint(digits, 16, 64)
 	if err != nil {
 		return nil, unsupported(lit.Span,

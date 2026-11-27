@@ -92,6 +92,54 @@ func TestPostgreSQLRejectsNumericTrailingJunk(t *testing.T) {
 	}
 }
 
+// TestIntegerPrefixesByDialect pins which base prefixes each dialect reads and
+// how the literal reaches SQLite: PostgreSQL's 0b, 0o and 0x and GoogleSQL's 0x
+// in decimal, MySQL's 0x and 0b as written for the parser to classify, and
+// MySQL's digit-led names as one word.
+func TestIntegerPrefixesByDialect(t *testing.T) {
+	t.Parallel()
+
+	pg, _ := ConfigFor(dialects.PostgreSQL)
+	google, _ := ConfigFor(dialects.GoogleSQL)
+	mysql, _ := ConfigFor(dialects.MySQL)
+	for _, tt := range []struct {
+		name  string
+		cfg   Config
+		input string
+		kind  Kind
+		text  string
+	}{
+		{"one binary digit", pg, "0b1", Number, "1"},
+		{"an octal zero", pg, "0o10", Number, "8"},
+		{"the largest octal digit", pg, "0o7", Number, "7"},
+		{"hexadecimal", pg, "0xff", Number, "255"},
+		{"past 64 bits", pg, "0x10000000000000000", Number, "18446744073709551616"},
+		{"GoogleSQL hexadecimal", google, "0x1F", Number, "31"},
+		{"GoogleSQL binary is left for the lowering to refuse", google, "0b1", Number, "0b1"},
+		{"MySQL hexadecimal is left for the parser", mysql, "0x1F", Number, "0x1F"},
+		{"MySQL digits run into a name", mysql, "1abc", Word, "1abc"},
+		{"MySQL uppercase prefix", mysql, "0X41", Word, "0X41"},
+		{"MySQL prefix with no digits", mysql, "0x", Word, "0x"},
+		{"MySQL exponent without digits", mysql, "1e", Word, "1e"},
+	} {
+		toks, err := Lex(tt.input, tt.cfg)
+		if err != nil || len(toks) != 1 || toks[0].Kind != tt.kind || toks[0].Text != tt.text {
+			t.Errorf("%s: Lex(%q) = %+v, %v; want one token %q", tt.name, tt.input, toks, err, tt.text)
+		}
+	}
+
+	// A prefix with no digit after it, and an octal prefix where the dialect
+	// has none, are errors.
+	for _, tt := range []struct {
+		cfg   Config
+		input string
+	}{{pg, "0o"}, {pg, "0x"}, {pg, "0o8"}, {google, "0o7"}, {google, "0x"}} {
+		if _, err := Lex(tt.input, tt.cfg); !errors.Is(err, sqlerr.ErrInvalidSyntax) {
+			t.Errorf("Lex(%q) error = %v, want ErrInvalidSyntax", tt.input, err)
+		}
+	}
+}
+
 // TestPostgreSQLDigitSeparators follows PostgreSQL 16, which lets an
 // underscore stand between two digits of a numeric literal, and right after
 // the prefix of a hexadecimal one, for visual grouping. The literal is one
@@ -105,9 +153,10 @@ func TestPostgreSQLDigitSeparators(t *testing.T) {
 	for input, want := range map[string]string{
 		"1_000":         "1000",
 		"1_500_000_000": "1500000000",
-		"0xFFFF_FFFF":   "0xFFFFFFFF",
-		"0x_FF":         "0xFF",
-		"0b1010_0101":   "0b10100101",
+		"0xFFFF_FFFF":   "4294967295",
+		"0x_FF":         "255",
+		"0b1010_0101":   "165",
+		"0o_7_7":        "63",
 		"1_000.5":       "1000.5",
 		"1.618_034":     "1.618034",
 		".5_0":          ".50",
@@ -140,12 +189,11 @@ func TestPostgreSQLDigitSeparators(t *testing.T) {
 		t.Errorf("Lex(%q) = %+v, %v; want one Word", "_1", toks, err)
 	}
 
-	// The other dialects have no digit separator, and their lexing of a number
-	// is unchanged.
+	// MySQL has no digit separator: there 1_000 is a name, as 1abc is.
 	mysql, _ := ConfigFor(dialects.MySQL)
 	toks, err = Lex("1_000", mysql)
-	if err != nil || len(toks) == 0 || toks[0].Kind != Number || toks[0].Text != "1" {
-		t.Errorf("Lex(MySQL, %q) = %+v, %v; want the number 1 first", "1_000", toks, err)
+	if err != nil || len(toks) != 1 || toks[0].Kind != Word || toks[0].Text != "1_000" {
+		t.Errorf("Lex(MySQL, %q) = %+v, %v; want one Word", "1_000", toks, err)
 	}
 }
 

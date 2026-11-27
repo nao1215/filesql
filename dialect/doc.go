@@ -175,8 +175,11 @@
 // an odd number of digits is padded on the left for the 0x spelling, so 0x4 is
 // the byte 0x04, while the quoted spellings take whole bytes as MySQL requires;
 // one too long to be an unsigned 64-bit number is refused where a number is
-// wanted. The prefix is case sensitive, so 0X41 is refused: MySQL reads that
-// spelling as an identifier rather than as a literal. MySQL's bit literal,
+// wanted. The prefix is case sensitive: MySQL reads 0X41 as a name, as it
+// reads 1abc, 1e and 1_000, and so does the translation. PostgreSQL's 0b, 0o
+// and 0x integers and GoogleSQL's 0x are passed on in decimal, since SQLite
+// reads 0x as a 64-bit pattern and 0x8000000000000000 would be negative; both
+// refuse a number that a name character follows. MySQL's bit literal,
 // 0b1010 or b'1010', is refused in all its
 // spellings: the same two readings apply to it and nothing else here writes
 // one. PostgreSQL has no byte-string literal: B'1010' and X'41' are bit

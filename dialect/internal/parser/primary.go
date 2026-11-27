@@ -32,16 +32,7 @@ func (p *Parser) parsePrimary(starAllowed bool) (ast.Expr, error) {
 	switch t.Kind {
 	case token.Number:
 		p.pos++
-		kind := numberKind(t.Text)
-		if kind == ast.LitHex && p.dialect == dialects.MySQL && strings.HasPrefix(t.Text, "0X") {
-			// MySQL's hexadecimal prefix is lowercase and case sensitive: it
-			// reads 0X41 as an identifier, not as a literal, so answering the
-			// bytes for one would answer for a name the caller may have meant.
-			// The quoted spellings x'41' and X'41' are both literals.
-			return nil, p.unsupportedf(
-				"0X is not a hexadecimal literal in MySQL; its prefix is the lowercase 0x, or write x'..'")
-		}
-		return &ast.Literal{Kind: kind, Value: t.Text, Span: span}, nil
+		return &ast.Literal{Kind: numberKind(t.Text), Value: t.Text, Span: span}, nil
 
 	case token.String:
 		p.pos++

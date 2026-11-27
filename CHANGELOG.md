@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- PostgreSQL's integers written in base 2, 8 and 16 (`0b101`, `0o17`, `0x1F`, with the separators PostgreSQL 16 allows) translate to their decimal value, and so does GoogleSQL's `0x`. `0b` was refused as a malformed bit string and `0o` as trailing junk, and `0x` reached SQLite as written, which reads it as a 64-bit pattern: `0x8000000000000000` answered -9223372036854775808 where PostgreSQL answers 9223372036854775808, and `-0x8000000000000000` and 17 or more digits failed as "hex literal too big". Past 2^63 the value now reads as the REAL that its decimal spelling reads as. ([#1206](https://github.com/nao1215/filesql/issues/1206))
+- A number that a name character follows with no blank between them, such as `1abc`, `1_000` or `1e`, translated to the number under an alias in MySQL and GoogleSQL, so `SELECT 1abc` answered 1. MySQL reads such a run as one name, as it reads `0X41`, `0x1G` and a `0x` with no digits, and now names that column; GoogleSQL refuses it, as PostgreSQL already did. A run ending in a fraction or an exponent is still a number in MySQL, so `1e5x` stays `1e5 AS x`. The values were checked against MySQL 8.4, PostgreSQL 17 and the BigQuery emulator. ([#1207](https://github.com/nao1215/filesql/issues/1207))
+
 ### Changed
 
 - Mutation testing passes a pull request whose changed lines hold no mutant, such as one that changes only tests or comments. gremlins counts every mutant outside the diff as skipped and reported 0% efficacy for such a pull request, which failed the threshold.

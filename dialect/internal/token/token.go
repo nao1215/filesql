@@ -7,6 +7,7 @@ package token
 import (
 	"encoding/hex"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 	"unicode"
@@ -59,24 +60,26 @@ type Token struct {
 // of the grammar (single-quoted strings, blob literals, numbers, operators,
 // placeholders, /* */ and -- comments) is common to every dialect.
 type Config struct {
-	IdentBacktick             bool // ` opens a quoted identifier (MySQL, GoogleSQL)
-	IdentBacktickEsc          bool // a backslash escapes inside a backtick-quoted identifier (GoogleSQL)
-	DashNeedsBlank            bool // -- opens a line comment only when a blank follows it (MySQL)
-	IdentDoubleQuote          bool // " opens a quoted identifier (PostgreSQL)
-	StringDoubleQuote         bool // " opens a string literal (MySQL, GoogleSQL)
-	HashComment               bool // # starts a line comment (MySQL, GoogleSQL)
-	BackslashEscapes          bool // backslash is an escape inside single-quoted strings (MySQL, GoogleSQL)
-	EPrefixString             bool // E'...' escape-string literals (PostgreSQL)
-	DollarQuote               bool // $tag$...$tag$ dollar-quoted strings (PostgreSQL)
-	RawStringPrefix           bool // r'...'/r"..." raw strings (GoogleSQL)
-	ByteStringPrefix          bool // b'...'/b"..." byte strings (GoogleSQL)
-	TripleQuoteString         bool // '''...''' and """...""" strings (GoogleSQL)
-	NestedComment             bool // /* */ block comments nest (PostgreSQL)
-	NumericEscapes            bool // \xHH, \ooo, \uXXXX and \UXXXXXXXX name a character (GoogleSQL)
-	AtOperator                bool // @ is the absolute-value operator rather than a parameter prefix (PostgreSQL)
-	RejectNumericTrailingJunk bool // an identifier character directly after a numeric literal is lexical junk (PostgreSQL)
-	DigitSeparators           bool // an underscore between digits of a numeric literal groups them (PostgreSQL)
-	HexStringIsBytes          bool // X'41' names bytes (MySQL, GoogleSQL) rather than a bit string (PostgreSQL)
+	IdentBacktick             bool   // ` opens a quoted identifier (MySQL, GoogleSQL)
+	IdentBacktickEsc          bool   // a backslash escapes inside a backtick-quoted identifier (GoogleSQL)
+	DashNeedsBlank            bool   // -- opens a line comment only when a blank follows it (MySQL)
+	IdentDoubleQuote          bool   // " opens a quoted identifier (PostgreSQL)
+	StringDoubleQuote         bool   // " opens a string literal (MySQL, GoogleSQL)
+	HashComment               bool   // # starts a line comment (MySQL, GoogleSQL)
+	BackslashEscapes          bool   // backslash is an escape inside single-quoted strings (MySQL, GoogleSQL)
+	EPrefixString             bool   // E'...' escape-string literals (PostgreSQL)
+	DollarQuote               bool   // $tag$...$tag$ dollar-quoted strings (PostgreSQL)
+	RawStringPrefix           bool   // r'...'/r"..." raw strings (GoogleSQL)
+	ByteStringPrefix          bool   // b'...'/b"..." byte strings (GoogleSQL)
+	TripleQuoteString         bool   // '''...''' and """...""" strings (GoogleSQL)
+	NestedComment             bool   // /* */ block comments nest (PostgreSQL)
+	NumericEscapes            bool   // \xHH, \ooo, \uXXXX and \UXXXXXXXX name a character (GoogleSQL)
+	AtOperator                bool   // @ is the absolute-value operator rather than a parameter prefix (PostgreSQL)
+	RejectNumericTrailingJunk bool   // an identifier character directly after a numeric literal is lexical junk (PostgreSQL)
+	DigitSeparators           bool   // an underscore between digits of a numeric literal groups them (PostgreSQL)
+	IntegerPrefixes           string // the letters after a 0 that begin an integer passed on in decimal: "xXoObB" (PostgreSQL), "xX" (GoogleSQL)
+	DigitLeadNames            bool   // digits continued by name characters are one name, as 1abc is (MySQL)
+	HexStringIsBytes          bool   // X'41' names bytes (MySQL, GoogleSQL) rather than a bit string (PostgreSQL)
 }
 
 // escapeRules says how a backslash behaves inside a quoted literal. The two
@@ -109,6 +112,7 @@ func ConfigFor(d dialects.Dialect) (Config, bool) {
 			BackslashEscapes:  true,
 			DashNeedsBlank:    true,
 			HexStringIsBytes:  true,
+			DigitLeadNames:    true,
 		}, true
 	case dialects.PostgreSQL:
 		return Config{
@@ -119,19 +123,22 @@ func ConfigFor(d dialects.Dialect) (Config, bool) {
 			AtOperator:                true,
 			RejectNumericTrailingJunk: true,
 			DigitSeparators:           true,
+			IntegerPrefixes:           "xXoObB",
 		}, true
 	case dialects.GoogleSQL:
 		return Config{
-			IdentBacktick:     true,
-			IdentBacktickEsc:  true,
-			StringDoubleQuote: true,
-			HashComment:       true,
-			BackslashEscapes:  true,
-			RawStringPrefix:   true,
-			ByteStringPrefix:  true,
-			TripleQuoteString: true,
-			NumericEscapes:    true,
-			HexStringIsBytes:  true,
+			IdentBacktick:             true,
+			IdentBacktickEsc:          true,
+			StringDoubleQuote:         true,
+			HashComment:               true,
+			BackslashEscapes:          true,
+			RawStringPrefix:           true,
+			ByteStringPrefix:          true,
+			TripleQuoteString:         true,
+			NumericEscapes:            true,
+			HexStringIsBytes:          true,
+			RejectNumericTrailingJunk: true,
+			IntegerPrefixes:           "xX",
 		}, true
 	default:
 		return Config{}, false
@@ -357,7 +364,18 @@ func Lex(query string, cfg Config) ([]Token, error) {
 			i = j
 
 		case isDigit(c) || (c == '.' && isDigit(next(query, i))):
-			j, ok := scanNumber(query, i, cfg.DigitSeparators)
+			j, ok := scanNumber(query, i, cfg)
+			if cfg.DigitLeadNames && isNameRun(query, i, j, ok) {
+				// MySQL reads 1abc, 1e and 0x1G as names, so a column the
+				// caller wrote that way is the column, and splitting it
+				// answered the number under an alias instead.
+				for j < len(query) && isIdentPart(query[j]) && !strings.HasPrefix(query[j:], byteOrderMark) {
+					j++
+				}
+				tokens = append(tokens, Token{Kind: Word, Text: query[i:j], Offset: start})
+				i = j
+				break
+			}
 			if !ok {
 				return nil, lexError(query, start, "numeric literal has no digits after its base prefix")
 			}
@@ -366,7 +384,8 @@ func Lex(query string, cfg Config) ([]Token, error) {
 			}
 			// The text is the literal's value, so the separators go: SQLite,
 			// which the translation is written for, has none.
-			tokens = append(tokens, Token{Kind: Number, Text: strings.ReplaceAll(query[i:j], "_", ""), Offset: start})
+			text := decimalInteger(strings.ReplaceAll(query[i:j], "_", ""), cfg.IntegerPrefixes)
+			tokens = append(tokens, Token{Kind: Number, Text: text, Offset: start})
 			i = j
 
 		case isIdentStart(c):
@@ -793,26 +812,21 @@ func scanDollarQuoted(s string, i int) (content string, ni int, ok bool) {
 }
 
 // scanNumber returns the index just past the numeric literal starting at s[i].
-// It handles hexadecimal (0x...), a fractional part, and a signed exponent. It
-// reports false for a base prefix carrying no digits, which is a literal none
-// of these dialects has: MySQL reads "0x" as one name and answers that it has
-// no such column, and taking it for a zero followed by a word made "SELECT 0XX"
-// render as "SELECT 0 AS XX", a different query that runs and answers.
-func scanNumber(s string, i int, separators bool) (int, bool) {
-	if s[i] == '0' && i+1 < len(s) && (s[i+1] == 'x' || s[i+1] == 'X') {
-		j := scanDigits(s, i+2, isHex, separators)
-		return j, j > i+2
+// It handles the base prefixes cfg allows, a fractional part, and a signed
+// exponent. It reports false for a base prefix carrying no digits, which is a
+// literal none of these dialects has: taking it for a zero followed by a word
+// made "SELECT 0XX" render as "SELECT 0 AS XX", a different query that runs
+// and answers.
+func scanNumber(s string, i int, cfg Config) (int, bool) {
+	if s[i] == '0' && i+1 < len(s) {
+		if digit := baseDigit(s[i+1], cfg); digit != nil {
+			j := scanDigits(s, i+2, digit, cfg.DigitSeparators)
+			return j, j > i+2
+		}
 	}
-	// MySQL's binary literal. Without this the "0" ended the number and "b1010"
-	// began a word, so "SELECT 0b1010" reached SQLite as a zero with an alias
-	// and answered 0.
-	if s[i] == '0' && i+1 < len(s) && (s[i+1] == 'b' || s[i+1] == 'B') {
-		j := scanDigits(s, i+2, isBinary, separators)
-		return j, j > i+2
-	}
-	j := scanDigits(s, i, isDigit, separators)
+	j := scanDigits(s, i, isDigit, cfg.DigitSeparators)
 	if j < len(s) && s[j] == '.' {
-		j = scanDigits(s, j+1, isDigit, separators)
+		j = scanDigits(s, j+1, isDigit, cfg.DigitSeparators)
 	}
 	if j < len(s) && (s[j] == 'e' || s[j] == 'E') {
 		k := j + 1
@@ -820,10 +834,70 @@ func scanNumber(s string, i int, separators bool) (int, bool) {
 			k++
 		}
 		if k < len(s) && isDigit(s[k]) {
-			j = scanDigits(s, k, isDigit, separators)
+			j = scanDigits(s, k, isDigit, cfg.DigitSeparators)
 		}
 	}
 	return j, true
+}
+
+// baseDigit returns what a digit is after a 0 and the letter c, or nil when c
+// begins no base prefix. Hexadecimal and binary are read in every dialect,
+// MySQL's 0b1010 being the reason for the second; octal is PostgreSQL's.
+func baseDigit(c byte, cfg Config) func(byte) bool {
+	switch c {
+	case 'x', 'X':
+		return isHex
+	case 'b', 'B':
+		return isBinary
+	case 'o', 'O':
+		if strings.ContainsRune(cfg.IntegerPrefixes, rune(c)) {
+			return isOctal
+		}
+	}
+	return nil
+}
+
+// isNameRun reports whether the number scanned from s[i:j] is, in MySQL, the
+// start of a name: digits that a name character follows ("1abc", "1e", where no
+// exponent digit follows), a 0x or 0b literal that one follows or that has no
+// digits, and the uppercase 0X and 0B, which MySQL does not read as prefixes.
+// A literal with a fraction or an exponent is a number, so 1e5x is 1e5 AS x
+// there as well.
+func isNameRun(s string, i, j int, digits bool) bool {
+	lit := s[i:j]
+	if strings.HasPrefix(lit, "0X") || strings.HasPrefix(lit, "0B") {
+		return true
+	}
+	prefixed := strings.HasPrefix(lit, "0x") || strings.HasPrefix(lit, "0b")
+	if !prefixed && strings.ContainsAny(lit, ".eE") {
+		return false
+	}
+	return !digits || (j < len(s) && isIdentPart(s[j]))
+}
+
+// decimalInteger spells an integer whose base prefix is one of prefixes in
+// decimal, and returns any other literal as it is. SQLite reads 0x as a 64-bit
+// pattern, so 0x8000000000000000 was a negative number, -0x8000000000000000 and
+// 17 digits an error, and it has no 0b or 0o; PostgreSQL and GoogleSQL mean the
+// integer the digits write, which is the decimal spelling, and past the 64-bit
+// range that behaves as the decimal literal does.
+func decimalInteger(lit, prefixes string) string {
+	if len(lit) < 3 || lit[0] != '0' || !strings.ContainsRune(prefixes, rune(lit[1])) {
+		return lit
+	}
+	base := 16
+	switch lit[1] {
+	case 'o', 'O':
+		base = 8
+	case 'b', 'B':
+		base = 2
+	}
+	n, ok := new(big.Int).SetString(lit[2:], base)
+	if !ok {
+		// scanNumber took only digits of the base, so this does not happen.
+		return lit
+	}
+	return n.String()
 }
 
 // scanDigits returns the index just past the run of digits starting at s[i],
@@ -846,10 +920,10 @@ func scanDigits(s string, i int, isDigit func(byte) bool, separators bool) int {
 	return j
 }
 
-// isBasePrefix reports whether the two bytes before s[i] are a 0x or 0b
+// isBasePrefix reports whether the two bytes before s[i] are a 0x, 0b or 0o
 // prefix, after which a run of digits may begin with a separator.
 func isBasePrefix(s string, i int) bool {
-	return i >= 2 && s[i-2] == '0' && strings.ContainsRune("xXbB", rune(s[i-1]))
+	return i >= 2 && s[i-2] == '0' && strings.ContainsRune("xXbBoO", rune(s[i-1]))
 }
 
 // multiCharOperators lists the multi-byte operators to recognize as one token,
@@ -891,6 +965,8 @@ func isDigit(c byte) bool {
 }
 
 func isBinary(c byte) bool { return c == '0' || c == '1' }
+
+func isOctal(c byte) bool { return c >= '0' && c <= '7' }
 
 func isHex(c byte) bool {
 	return isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
