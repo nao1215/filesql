@@ -436,6 +436,50 @@ func TestANumberThatANameCharacterFollows(t *testing.T) {
 	}
 }
 
+// TestADollarSignInsideAName pins the names MySQL 8.4 and PostgreSQL 17 read
+// with a $ after their first character. Both dialects stopped the name at the
+// $ and read the rest as a placeholder, so the query was refused; GoogleSQL
+// refuses it as the BigQuery emulator does.
+func TestADollarSignInsideAName(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", "file::memory:?_dqs=false")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE u ("abc$foo" INTEGER, "1abc$foo" INTEGER, "1$f" INTEGER, "a$" INTEGER)`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), "INSERT INTO u VALUES (1, 2, 3, 4)")
+	require.NoError(t, err)
+
+	for _, tt := range []struct {
+		dialect Dialect
+		query   string
+		want    []int64
+	}{
+		{MySQL, "SELECT abc$foo, 1abc$foo, 1$f, a$ FROM u", []int64{1, 2, 3, 4}},
+		{PostgreSQL, "SELECT abc$foo, a$ FROM u", []int64{1, 4}},
+	} {
+		translated, err := Translate(tt.dialect, tt.query)
+		require.NoError(t, err, "%s: %s", tt.dialect, tt.query)
+		got := make([]int64, len(tt.want))
+		dest := make([]any, len(got))
+		for i := range got {
+			dest[i] = &got[i]
+		}
+		require.NoError(t, db.QueryRowContext(t.Context(), translated).Scan(dest...), "%s became %q", tt.query, translated)
+		assert.Equal(t, tt.want, got, "%s: %s became %q", tt.dialect, tt.query, translated)
+	}
+
+	// A $ that begins a token keeps its meaning: a PostgreSQL parameter and a
+	// dollar quote.
+	translated, err := Translate(PostgreSQL, "SELECT $$x$$ FROM u WHERE a$ = $1")
+	require.NoError(t, err)
+	assert.Equal(t, `SELECT 'x' FROM u WHERE "a$" = $1`, translated)
+
+	_, err = Translate(GoogleSQL, "SELECT abc$foo FROM u")
+	assert.ErrorIs(t, err, ErrInvalidSyntax)
+}
+
 // TestLiteralFormsAreOneToken pins the literal spellings the lexer used to
 // split, each of which reached SQLite as a bare word and failed naming
 // something the caller had not written. The values were read from mysql:8.4 and
