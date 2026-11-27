@@ -485,8 +485,13 @@ func dumpSelectList(columns, declTypes []string) string {
 // getSQLiteTableColumns retrieves the column names of a table and the type each
 // was declared with. The declared type is what decides whether the driver hands
 // a value back converted; see dumpSelectList.
+//
+// The list is the one SELECT * returns. table_xinfo is read rather than
+// table_info, which leaves out generated columns, so a dump wrote a table
+// without them; hidden is 2 or 3 for those, and 1 for the hidden columns of a
+// virtual table, which SELECT * leaves out as well.
 func getSQLiteTableColumns(ctx context.Context, db *sql.DB, tableName string) (columns, declTypes []string, err error) {
-	query := fmt.Sprintf("PRAGMA table_info(%s)", quoteIdentifier(tableName))
+	query := fmt.Sprintf("PRAGMA table_xinfo(%s)", quoteIdentifier(tableName))
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, nil, err
@@ -494,12 +499,15 @@ func getSQLiteTableColumns(ctx context.Context, db *sql.DB, tableName string) (c
 	defer rows.Close()
 
 	for rows.Next() {
-		var cid int
+		var cid, hidden int
 		var name, dataType string
 		var notNull, dfltValue, pk any
 
-		if err := rows.Scan(&cid, &name, &dataType, &notNull, &dfltValue, &pk); err != nil {
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &dfltValue, &pk, &hidden); err != nil {
 			return nil, nil, err
+		}
+		if hidden == 1 {
+			continue
 		}
 		columns = append(columns, name)
 		declTypes = append(declTypes, dataType)

@@ -1080,3 +1080,28 @@ func TestLoadTable_BatchedInsertRefusesAWiderRecord(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadInto_ADatabaseThatFillsUpLeavesNoTable loads into a caller database
+// capped at a few pages, so a batched insert fails partway through the file.
+// The load has to fail naming the table and take the table back out; a
+// canceled context reached that insert's error only when it won a race.
+func TestLoadInto_ADatabaseThatFillsUpLeavesNoTable(t *testing.T) {
+	t.Parallel()
+
+	db := newCallerDB(t)
+	_, err := db.ExecContext(t.Context(), "PRAGMA max_page_count = 20")
+	require.NoError(t, err)
+	var b strings.Builder
+	b.WriteString("a,b\n")
+	for i := range 20000 {
+		fmt.Fprintf(&b, "%d,%d\n", i, i)
+	}
+	path := filepath.Join(t.TempDir(), "big.csv")
+	require.NoError(t, os.WriteFile(path, []byte(b.String()), 0o600))
+
+	err = LoadInto(t.Context(), db, path)
+	require.ErrorIs(t, err, ErrDatabaseOperation)
+	assert.ErrorContains(t, err, `failed to insert chunk data into table "big"`)
+	assert.ErrorContains(t, err, "database or disk is full")
+	assert.NotContains(t, listTables(t, db), "big")
+}

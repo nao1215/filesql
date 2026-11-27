@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/xuri/excelize/v2"
+	"modernc.org/sqlite"
 )
 
 func TestOpen(t *testing.T) {
@@ -4603,4 +4606,80 @@ func tableColumns(t *testing.T, db *sql.DB, table string) []string {
 	require.NoError(t, err)
 	require.NoError(t, rows.Err())
 	return columns
+}
+
+// TestDumpDatabase_WritesGeneratedColumns pins that a dump writes the columns
+// SELECT * returns. The column list came from PRAGMA table_info, which leaves
+// out generated columns, so a table with one was written without it.
+func TestDumpDatabase_WritesGeneratedColumns(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	defer db.Close()
+	_, err = db.ExecContext(t.Context(), "CREATE TABLE t (a INTEGER, b INTEGER AS (a * 2) VIRTUAL, c INTEGER AS (a + 1) STORED)")
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), "INSERT INTO t (a) VALUES (1), (2)")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	require.NoError(t, DumpDatabase(t.Context(), db, dir))
+	got, err := os.ReadFile(filepath.Join(dir, "t.csv")) //nolint:gosec // Test path is constructed from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, "a,b,c\n1,2,2\n2,4,3\n", string(got))
+
+	// The hidden columns of a virtual table are not among them: SELECT * on
+	// an FTS5 table returns its own columns, not the table-named one or rank.
+	_, err = db.ExecContext(t.Context(), "CREATE VIRTUAL TABLE v USING fts5(a, b)")
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), "INSERT INTO v VALUES ('x', 'y')")
+	require.NoError(t, err)
+	dir = t.TempDir()
+	require.NoError(t, DumpDatabase(t.Context(), db, dir))
+	got, err = os.ReadFile(filepath.Join(dir, "v.csv")) //nolint:gosec // Test path is constructed from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, "a,b\nx,y\n", string(got))
+}
+
+// failOnTwo makes filesql_test_fail_on_two fail for the value 2 once it is
+// set, so a table can be written with the function and read back through it.
+var failOnTwo atomic.Bool
+
+// The function is registered before any test runs: the driver keeps its
+// functions in a map every Open reads, so registering one while parallel tests
+// open connections is a data race.
+func init() { //nolint:gochecknoinits // The registration has to precede every parallel test; see above.
+	if err := sqlite.RegisterDeterministicScalarFunction("filesql_test_fail_on_two", 1,
+		func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+			if failOnTwo.Load() && args[0] == int64(2) {
+				return nil, errors.New("row 2 cannot be read")
+			}
+			return args[0], nil
+		}); err != nil {
+		panic(err)
+	}
+}
+
+// TestDumpDatabase_ARowThatCannotBeReadFailsTheDump reads a table whose second
+// row fails to evaluate. The failure surfaces from rows.Err once the row loop
+// stops, and the dump has to return it rather than write the one row it got;
+// a canceled context reached that branch only when it won a race.
+func TestDumpDatabase_ARowThatCannotBeReadFailsTheDump(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	defer db.Close()
+	_, err = db.ExecContext(t.Context(), "CREATE TABLE t (a INTEGER, b INTEGER AS (filesql_test_fail_on_two(a)))")
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), "INSERT INTO t (a) VALUES (1), (2), (3)")
+	require.NoError(t, err)
+	failOnTwo.Store(true)
+
+	dir := t.TempDir()
+	err = DumpDatabase(t.Context(), db, dir)
+	require.ErrorContains(t, err, "row 2 cannot be read")
+	assert.NoFileExists(t, filepath.Join(dir, "t.csv"))
 }
