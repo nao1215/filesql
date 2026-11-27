@@ -270,6 +270,9 @@
 // counts the same way and the RELEASE naming it ends it; a savepoint taken
 // inside a transaction is not one of its own, so releasing that one leaves the
 // transaction around it open. A comment before the keyword does not hide it.
+// After a statement that may end a transaction, and after a string of
+// statements that failed partway, whether one is open is asked of SQLite, so
+// "BEGIN; INSERT INTO missing ..." counts the transaction its BEGIN opened.
 //
 // # Table Naming
 //
