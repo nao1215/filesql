@@ -2611,3 +2611,41 @@ func TestAutoSaveOnCommitWaitsForTheBatchToEnd(t *testing.T) {
 		})
 	}
 }
+
+// TestAutoSave_AWriteAfterAFailedStringIsSaved fails a string that began a
+// transaction partway through, then writes outside any transaction the caller
+// opened. SQLite was left inside the string's transaction, which the
+// connection had stopped counting, so the write ran inside it and was
+// discarded at close, and the close reported nothing.
+func TestAutoSave_AWriteAfterAFailedStringIsSaved(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "t.csv")
+	require.NoError(t, os.WriteFile(path, []byte("a\n1\n"), 0o600))
+	db, err := NewBuilder().AddPath(path).EnableAutoSave(dir).Open(t.Context())
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(t.Context(), "BEGIN; INSERT INTO missing VALUES (1)")
+	require.ErrorContains(t, err, "no such table: missing")
+	_, err = db.ExecContext(t.Context(), "ROLLBACK")
+	require.NoError(t, err, "the string left its transaction open, and it is the caller's to end")
+	_, err = db.ExecContext(t.Context(), "UPDATE t SET a = 5")
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	got, err := os.ReadFile(path) //nolint:gosec // Test path is constructed from t.TempDir()
+	require.NoError(t, err)
+	assert.Equal(t, "a\n5\n", string(got))
+
+	// Left open, the transaction is counted, so the close says the save was
+	// skipped instead of returning nil over the discarded write.
+	require.NoError(t, os.WriteFile(path, []byte("a\n1\n"), 0o600))
+	db, err = NewBuilder().AddPath(path).EnableAutoSave(dir).Open(t.Context())
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), "BEGIN; INSERT INTO missing VALUES (1)")
+	require.Error(t, err)
+	_, err = db.ExecContext(t.Context(), "UPDATE t SET a = 5")
+	require.NoError(t, err)
+	require.ErrorContains(t, db.Close(), "closed while a transaction was still open")
+}

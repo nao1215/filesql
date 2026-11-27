@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -83,13 +85,6 @@ type guardedConn struct {
 	// keeps a statement inside a transaction from queueing behind the
 	// transaction it belongs to, and what lets the tracker see both spellings.
 	inTx bool
-	// savepoints is the savepoints of a transaction this connection opened by
-	// taking one, outermost first, and is empty for a transaction begun with
-	// BEGIN or BeginTx, where releasing a savepoint ends nothing. Releasing the
-	// outermost one ends the transaction, and SQLite lets a name be taken more
-	// than once, so it takes the stack rather than the one name to know which
-	// release that is.
-	savepoints []string
 	// spent reports that this connection could not be put back the way it was
 	// found, which is what takes it out of the pool rather than handing it to
 	// the next caller in a state they did not ask for.
@@ -244,7 +239,6 @@ func (c *guardedConn) closeTx() {
 		return
 	}
 	c.inTx = false
-	c.savepoints = nil
 	if c.gate != nil {
 		c.gate.release()
 	}
@@ -253,213 +247,67 @@ func (c *guardedConn) closeTx() {
 	}
 }
 
-// runExec runs one statement, taking the gate when its keyword opens a
-// transaction and giving it back when one closes it. Everything else runs
-// without touching the gate: a statement outside a transaction is not what the
-// gate queues, and making it wait would deadlock the ordinary shape of holding
-// a transaction open while querying the same database beside it.
+// runExec runs a string of statements, taking the gate when one of them may
+// open a transaction and giving it back once SQLite says none is open. A
+// statement outside a transaction does not touch the gate: it is not what the
+// gate queues, and making it wait would deadlock the ordinary shape of holding a
+// transaction open while querying the same database beside it.
 //
-// Only the statement that opened the transaction may close it. A BEGIN run
-// inside a transaction is a mistake SQLite refuses, and a savepoint taken
-// inside one is not a transaction of its own; treating either as an opener made
-// the failure of the first drop the count of the transaction still running
-// underneath it.
+// Whether a transaction is still open after a statement that may have ended one
+// is asked of SQLite rather than worked out from the text. A string runs its
+// statements until one fails, a RELEASE ends the transaction only when it names
+// the outermost savepoint, and a trigger body ends in an END that commits
+// nothing; reading the text got each of these wrong. A transaction SQLite held
+// went uncounted after "BEGIN; INSERT INTO missing ...", so the connection went
+// back to the pool inside it and the writes made on it afterwards were dropped at
+// close, and one SQLite had ended stayed counted, holding the gate.
 func (c *guardedConn) runExec(ctx context.Context, query string, run func(context.Context) (driver.Result, error)) (driver.Result, error) {
-	stmts := c.effectsOf(query)
-	if len(stmts) > 1 {
-		return c.runSeveralEffects(ctx, stmts, run)
+	effects := c.effectsOf(query)
+	if len(effects) == 0 {
+		return run(ctx)
 	}
-	stmt := txStatement{}
-	if len(stmts) == 1 {
-		stmt = stmts[0]
-	}
-	switch stmt.effect {
-	case txEffectBegin:
-		if c.inTx {
-			return c.runInnerSavepoint(ctx, stmt, run)
-		}
+	// The gate is taken for any statement that may begin a transaction, and
+	// given back below if SQLite holds none once the string has run.
+	wasInTx := c.inTx
+	if !c.inTx && slices.Contains(effects, txEffectBegin) {
 		if err := c.openTx(ctx); err != nil {
 			return nil, err
 		}
-		res, err := run(ctx)
-		if err != nil {
-			c.closeTx()
-			return res, err
-		}
-		if stmt.savepoint != "" {
-			c.savepoints = []string{stmt.savepoint}
-		}
-		return res, nil
-	case txEffectCommit, txEffectRollback:
-		if !c.inTx {
-			break
-		}
-		if stmt.savepoint != "" {
-			held := c.innermostSavepoint(stmt.savepoint)
-			if held < 0 {
-				// A name the stack does not hold. SQLite refuses it, or the
-				// transaction was begun with BEGIN and no release ends it.
-				break
-			}
-			if held > 0 {
-				return c.runInnerRelease(ctx, held, run)
-			}
-		}
-		res, err := run(ctx)
-		if err != nil {
-			return res, err
-		}
-		c.closeTx()
-		if stmt.effect == txEffectCommit && c.tracker != nil {
-			if saveErr := c.tracker.transactionCommitted(); saveErr != nil {
-				return res, saveErr
-			}
-		}
-		return res, nil
-	case txEffectNone:
 	}
-	return run(ctx)
-}
-
-// runSeveralEffects runs a query holding more than one statement that touches a
-// transaction. The driver runs the string in one call, so the bookkeeping goes
-// around that call rather than between the statements: the gate is taken first
-// when the string will hold a transaction, and what the statements leave behind
-// is worked out afterwards by applying each in turn.
-//
-// A string like "SELECT 1; BEGIN" is why this exists. Reading only the first
-// statement left the transaction SQLite had opened invisible here, so a save at
-// close went ahead over work the connection then discarded, and Close answered
-// nil.
-func (c *guardedConn) runSeveralEffects(ctx context.Context, stmts []txStatement, run func(context.Context) (driver.Result, error)) (driver.Result, error) {
-	opened := false
-	if !c.inTx && stmts[0].effect == txEffectBegin {
-		if err := c.openTx(ctx); err != nil {
-			return nil, err
-		}
-		opened = true
-	}
-
 	res, err := run(ctx)
-	if err != nil {
-		if opened {
-			c.closeTx()
-		}
+	if !c.inTx || (wasInTx && err == nil && !slices.ContainsFunc(effects, endsTx)) {
 		return res, err
 	}
-
-	// The string ran, so every statement in it did. What is left is the state
-	// they leave, applied in the order SQLite applied them.
-	committed := false
-	for i, stmt := range stmts {
-		if i == 0 && opened {
-			if stmt.savepoint != "" {
-				c.savepoints = []string{stmt.savepoint}
-			}
-			continue
-		}
-		committed = c.applyEffect(stmt) || committed
+	if c.sqliteInTx(ctx) {
+		return res, err
 	}
-	// The hook is what an auto-save on commit runs, and it reads the tables
-	// through this connection: running it while the string has left another
-	// transaction open would wait for a transaction this call is holding, which
-	// is a deadlock, and would write out rows the caller has not committed. So
-	// it runs only when the string ends outside a transaction, which is the
-	// same moment the single-statement path runs it.
-	if committed && !c.inTx && c.tracker != nil {
-		if saveErr := c.tracker.transactionCommitted(); saveErr != nil {
-			return res, saveErr
-		}
-	}
-	return res, nil
-}
-
-// applyEffect moves the transaction bookkeeping by one statement that has
-// already run, and reports whether it committed a transaction this connection
-// was holding. It is the same reading runExec applies around a single
-// statement, with the running taken out.
-func (c *guardedConn) applyEffect(stmt txStatement) bool {
-	switch stmt.effect {
-	case txEffectBegin:
-		if !c.inTx {
-			// The gate is already held for the string; a transaction opened
-			// inside it is this connection's.
-			c.inTx = true
-			if c.tracker != nil {
-				c.tracker.transactionBegan()
-			}
-			if stmt.savepoint != "" {
-				c.savepoints = []string{stmt.savepoint}
-			}
-			return false
-		}
-		if stmt.savepoint != "" && len(c.savepoints) > 0 {
-			c.savepoints = append(c.savepoints, stmt.savepoint)
-		}
-	case txEffectCommit, txEffectRollback:
-		if !c.inTx {
-			return false
-		}
-		if stmt.savepoint != "" {
-			held := c.innermostSavepoint(stmt.savepoint)
-			if held < 0 {
-				return false
-			}
-			if held > 0 {
-				c.savepoints = c.savepoints[:held]
-				return false
-			}
-		}
-		c.closeTx()
-		return stmt.effect == txEffectCommit
-	case txEffectNone:
-	}
-	return false
-}
-
-// runInnerSavepoint runs a statement that opens something inside a transaction
-// that is already open. A BEGIN there is a mistake SQLite refuses and is left to
-// say so; a savepoint is real, and one taken inside a transaction this
-// connection is tracking by its savepoints joins that stack.
-func (c *guardedConn) runInnerSavepoint(ctx context.Context, stmt txStatement, run func(context.Context) (driver.Result, error)) (driver.Result, error) {
-	res, err := run(ctx)
-	if err == nil && stmt.savepoint != "" && len(c.savepoints) > 0 {
-		c.savepoints = append(c.savepoints, stmt.savepoint)
+	c.closeTx()
+	if c.tracker != nil && slices.Contains(effects, txEffectCommit) {
+		// After a failed string the COMMIT may not have run, in which case this
+		// saves the rows already committed, which is what the file holds anyway.
+		err = errors.Join(err, c.tracker.transactionCommitted())
 	}
 	return res, err
 }
 
-// runInnerRelease runs a RELEASE of a savepoint that is not the one that opened
-// the transaction. SQLite releases that savepoint and every one above it and
-// leaves the transaction open, so the stack loses the same entries and the
-// count and the gate are untouched.
-func (c *guardedConn) runInnerRelease(ctx context.Context, held int, run func(context.Context) (driver.Result, error)) (driver.Result, error) {
-	res, err := run(ctx)
-	if err == nil {
-		c.savepoints = c.savepoints[:held]
-	}
-	return res, err
+// endsTx reports whether a statement of this effect can end a transaction.
+func endsTx(effect txEffect) bool {
+	return effect == txEffectCommit || effect == txEffectRollback
 }
 
-// innermostSavepoint is where the stack holds the savepoint a RELEASE of this
-// name releases -- the innermost one, which is the last of the name -- or -1
-// when it holds none. SQLite compares savepoint names without regard to case,
-// so this does too.
-//
-// The stack can hold more than SQLite does, because ROLLBACK TO cancels the
-// savepoints above the one it names and this does not follow it there. What
-// that costs is a release read as inner when SQLite read it as the outermost,
-// which leaves a transaction counted open after it ended: the save is refused
-// rather than run, which is the direction this count is deliberately biased in,
-// since a skipped save is recoverable with DumpDatabase and rows written over
-// the caller's own are not.
-func (c *guardedConn) innermostSavepoint(name string) int {
-	for i := len(c.savepoints) - 1; i >= 0; i-- {
-		if strings.EqualFold(c.savepoints[i], name) {
-			return i
-		}
+// sqliteInTx asks the connection whether a transaction is open, by beginning
+// one: a deferred BEGIN takes no lock and fails only inside a transaction, and
+// the ROLLBACK after one that succeeded leaves the connection as it was. Any
+// other failure reads as open, which keeps the gate and refuses a save rather
+// than running one over a live transaction. A wrapped driver that runs no
+// statement directly cannot be asked, and the statement's own reading stands.
+func (c *guardedConn) sqliteInTx(ctx context.Context) bool {
+	ctx = context.WithoutCancel(ctx)
+	if _, err := c.exec(ctx, "BEGIN", nil); err != nil {
+		return !errors.Is(err, driver.ErrSkip)
 	}
-	return -1
+	_, err := c.exec(ctx, "ROLLBACK", nil)
+	return err != nil
 }
 
 // runQuery runs one query. A transaction keyword run as a query is odd but
@@ -481,7 +329,7 @@ func (c *guardedConn) runQuery(ctx context.Context, query string, run func(conte
 // every statement in it: database/sql hands the whole string to the driver and
 // SQLite runs each statement of it, so a reading that stops at the first is a
 // reading of something the engine does not do.
-func (c *guardedConn) effectsOf(query string) []txStatement {
+func (c *guardedConn) effectsOf(query string) []txEffect {
 	if c.gate == nil && c.tracker == nil {
 		return nil
 	}
@@ -643,31 +491,13 @@ const (
 	txEffectRollback
 )
 
-// txStatement is a statement read for what it does to a transaction.
-type txStatement struct {
-	// effect is what the statement does.
-	effect txEffect
-	// savepoint is the savepoint a SAVEPOINT takes or a RELEASE releases, and
-	// is empty for BEGIN, COMMIT, END and ROLLBACK. A savepoint bounds a
-	// transaction only when it is the outermost one, which the connection
-	// running the statement knows and this reading does not.
-	savepoint string
-}
-
 // readTxStatements reads every statement of a query for what it does to a
 // transaction, dropping the ones that do nothing to one.
-func readTxStatements(query string) []txStatement {
-	statements := splitStatements(query)
-	if len(statements) == 1 {
-		if stmt := readTxStatement(statements[0]); stmt.effect != txEffectNone {
-			return []txStatement{stmt}
-		}
-		return nil
-	}
-	var effects []txStatement
-	for _, statement := range statements {
-		if stmt := readTxStatement(statement); stmt.effect != txEffectNone {
-			effects = append(effects, stmt)
+func readTxStatements(query string) []txEffect {
+	var effects []txEffect
+	for _, statement := range splitStatements(query) {
+		if effect := readTxStatement(statement); effect != txEffectNone {
+			effects = append(effects, effect)
 		}
 	}
 	return effects
@@ -730,18 +560,19 @@ func skipQuoted(s string, i int, open, closing byte) int {
 }
 
 // readTxStatement reads the leading keywords of a statement to see whether it
-// opens or closes a transaction. The spellings SQLite gives an explicit
-// transaction are all read: BEGIN with any of its qualifiers opens one, COMMIT
-// and END keep one, a bare ROLLBACK discards one, and SAVEPOINT and RELEASE do
-// the same for the savepoint they name. ROLLBACK TO a savepoint keeps the
+// may open or close a transaction. The spellings SQLite gives an explicit
+// transaction are all read: BEGIN with any of its qualifiers and SAVEPOINT may
+// open one, COMMIT, END and RELEASE may keep one, and a bare ROLLBACK discards
+// one. Whether a SAVEPOINT or a RELEASE did is SQLite's to say, since that
+// depends on the savepoints already taken. ROLLBACK TO a savepoint keeps the
 // transaction around it open and so counts as none of them.
-func readTxStatement(query string) txStatement {
+func readTxStatement(query string) txEffect {
 	first, rest := leadingWord(query)
 	switch strings.ToUpper(first) {
-	case "BEGIN":
-		return txStatement{effect: txEffectBegin}
-	case "COMMIT", "END":
-		return txStatement{effect: txEffectCommit}
+	case "BEGIN", "SAVEPOINT":
+		return txEffectBegin
+	case "COMMIT", "END", "RELEASE":
+		return txEffectCommit
 	case "ROLLBACK":
 		// SQLite writes the keyword as ROLLBACK [TRANSACTION] TO [SAVEPOINT]
 		// name, so the optional TRANSACTION stands between the two words that
@@ -751,30 +582,11 @@ func readTxStatement(query string) txStatement {
 			next, _ = leadingWord(after)
 		}
 		if strings.EqualFold(next, "TO") {
-			return txStatement{}
+			return txEffectNone
 		}
-		return txStatement{effect: txEffectRollback}
-	case "SAVEPOINT":
-		if name := leadingIdentifier(rest); name != "" {
-			return txStatement{effect: txEffectBegin, savepoint: name}
-		}
-	case "RELEASE":
-		if name := leadingIdentifier(releaseTarget(rest)); name != "" {
-			return txStatement{effect: txEffectCommit, savepoint: name}
-		}
+		return txEffectRollback
 	}
-	return txStatement{}
-}
-
-// releaseTarget drops the optional SAVEPOINT keyword of RELEASE [SAVEPOINT]
-// name. It is dropped only when a name follows it, because "savepoint" is
-// itself a name a caller may have taken: RELEASE savepoint releases that one.
-func releaseTarget(rest string) string {
-	next, after := leadingWord(rest)
-	if strings.EqualFold(next, "SAVEPOINT") && leadingIdentifier(after) != "" {
-		return after
-	}
-	return rest
+	return txEffectNone
 }
 
 // leadingWord returns the first run of letters in s and what follows it. A
@@ -789,54 +601,11 @@ func leadingWord(s string) (string, string) {
 	return s[:end], s[end:]
 }
 
-// leadingIdentifier returns the identifier at the front of s, in the spelling a
-// comparison uses rather than the one it was written in, or "" when there is
-// none. SQLite writes an identifier bare or wrapped in double quotes,
-// backticks, or brackets, and a savepoint name is an identifier like any other,
-// so the name in RELEASE "the batch" has to be read back as the one SAVEPOINT
-// "the batch" took.
-func leadingIdentifier(s string) string {
-	s = skipToStatement(s)
-	if s == "" {
-		return ""
-	}
-	if closing, quoted := identifierQuotes[s[0]]; quoted {
-		return quotedIdentifier(s[1:], s[0], closing)
-	}
-	end := 0
-	for end < len(s) && isIdentifierByte(s[end]) {
-		end++
-	}
-	return s[:end]
-}
-
 // identifierQuotes maps the character that opens a quoted identifier to the one
 // that closes it.
 //
 //nolint:gochecknoglobals // constant-like lookup table
 var identifierQuotes = map[byte]byte{'"': '"', '`': '`', '[': ']'}
-
-// quotedIdentifier reads the body of a quoted identifier, stopping at the
-// closing quote and reading a doubled one as a single character of the name.
-// Brackets have no doubled form, and opening and closing differ there, so the
-// first closing bracket ends the name.
-func quotedIdentifier(s string, opening, closing byte) string {
-	var name strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] != closing {
-			name.WriteByte(s[i])
-			continue
-		}
-		if opening == closing && i+1 < len(s) && s[i+1] == closing {
-			name.WriteByte(closing)
-			i++
-			continue
-		}
-		return name.String()
-	}
-	// An identifier that is never closed is not one.
-	return ""
-}
 
 // skipToStatement drops the whitespace and the comments at the front of s, so
 // what is left begins with the first thing the statement says. A comment is not
@@ -869,14 +638,6 @@ func skipToStatement(s string) string {
 
 func isASCIILetter(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
-}
-
-// isIdentifierByte reports whether b may appear in an identifier written
-// without quotes. SQLite takes a letter, a digit, an underscore, a dollar sign,
-// and any byte outside ASCII, which is what lets a name be written in another
-// script.
-func isIdentifierByte(b byte) bool {
-	return isASCIILetter(b) || (b >= '0' && b <= '9') || b == '_' || b == '$' || b >= 0x80
 }
 
 // guardedStmt is a prepared statement running under the same rules as one run

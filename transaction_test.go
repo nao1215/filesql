@@ -5,12 +5,16 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/nao1215/filesql/dialect"
+	"modernc.org/sqlite"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -396,64 +400,54 @@ func TestReadTxStatement(t *testing.T) {
 
 	for _, tt := range []struct {
 		query string
-		want  txStatement
+		want  txEffect
 	}{
-		{query: "BEGIN", want: txStatement{effect: txEffectBegin}},
-		{query: "begin", want: txStatement{effect: txEffectBegin}},
-		{query: "  \n\tBEGIN TRANSACTION", want: txStatement{effect: txEffectBegin}},
-		{query: "BEGIN IMMEDIATE", want: txStatement{effect: txEffectBegin}},
-		{query: "BEGIN DEFERRED", want: txStatement{effect: txEffectBegin}},
-		{query: "BEGIN EXCLUSIVE", want: txStatement{effect: txEffectBegin}},
-		{query: "COMMIT", want: txStatement{effect: txEffectCommit}},
-		{query: "commit transaction", want: txStatement{effect: txEffectCommit}},
-		{query: "END", want: txStatement{effect: txEffectCommit}},
-		{query: "END TRANSACTION", want: txStatement{effect: txEffectCommit}},
-		{query: "ROLLBACK", want: txStatement{effect: txEffectRollback}},
-		{query: "rollback transaction", want: txStatement{effect: txEffectRollback}},
-		{query: "ROLLBACK TO SAVEPOINT s", want: txStatement{}},
-		{query: "rollback to s", want: txStatement{}},
-		{query: "ROLLBACK TRANSACTION TO SAVEPOINT s", want: txStatement{}},
-		{query: "rollback transaction to s", want: txStatement{}},
-		{query: "SELECT 1", want: txStatement{}},
-		{query: "SELECT 1 AS beginning", want: txStatement{}},
-		{query: "UPDATE t SET commits = 1", want: txStatement{}},
-		{query: "", want: txStatement{}},
-		{query: "-- BEGIN", want: txStatement{}},
-		{query: "CREATE TRIGGER t AFTER INSERT ON u BEGIN SELECT 1; END", want: txStatement{}},
+		{query: "BEGIN", want: txEffectBegin},
+		{query: "begin", want: txEffectBegin},
+		{query: "  \n\tBEGIN TRANSACTION", want: txEffectBegin},
+		{query: "BEGIN IMMEDIATE", want: txEffectBegin},
+		{query: "BEGIN DEFERRED", want: txEffectBegin},
+		{query: "BEGIN EXCLUSIVE", want: txEffectBegin},
+		{query: "COMMIT", want: txEffectCommit},
+		{query: "commit transaction", want: txEffectCommit},
+		{query: "END", want: txEffectCommit},
+		{query: "END TRANSACTION", want: txEffectCommit},
+		{query: "ROLLBACK", want: txEffectRollback},
+		{query: "rollback transaction", want: txEffectRollback},
+		{query: "ROLLBACK TO SAVEPOINT s", want: txEffectNone},
+		{query: "rollback to s", want: txEffectNone},
+		{query: "ROLLBACK TRANSACTION TO SAVEPOINT s", want: txEffectNone},
+		{query: "rollback transaction to s", want: txEffectNone},
+		{query: "SELECT 1", want: txEffectNone},
+		{query: "SELECT 1 AS beginning", want: txEffectNone},
+		{query: "UPDATE t SET commits = 1", want: txEffectNone},
+		{query: "", want: txEffectNone},
+		{query: "-- BEGIN", want: txEffectNone},
+		{query: "CREATE TRIGGER t AFTER INSERT ON u BEGIN SELECT 1; END", want: txEffectNone},
 
 		// A comment is not part of the statement, so what follows one is read
 		// as though it were written alone. Everything a caller can put in front
 		// of the keyword has to be skipped, including several comments in a row
 		// and one that never ends.
-		{query: "/* batch */ BEGIN", want: txStatement{effect: txEffectBegin}},
-		{query: "-- batch\nBEGIN", want: txStatement{effect: txEffectBegin}},
-		{query: "-- one\n /* two */\tCOMMIT", want: txStatement{effect: txEffectCommit}},
-		{query: "/* a */-- b\n/* c */ROLLBACK", want: txStatement{effect: txEffectRollback}},
-		{query: "/* c */ ROLLBACK TO s", want: txStatement{}},
-		{query: "/* never closed BEGIN", want: txStatement{}},
-		{query: "--", want: txStatement{}},
-		{query: "/**/COMMIT", want: txStatement{effect: txEffectCommit}},
-		{query: "SELECT '/* not a comment */ COMMIT'", want: txStatement{}},
+		{query: "/* batch */ BEGIN", want: txEffectBegin},
+		{query: "-- batch\nBEGIN", want: txEffectBegin},
+		{query: "-- one\n /* two */\tCOMMIT", want: txEffectCommit},
+		{query: "/* a */-- b\n/* c */ROLLBACK", want: txEffectRollback},
+		{query: "/* c */ ROLLBACK TO s", want: txEffectNone},
+		{query: "/* never closed BEGIN", want: txEffectNone},
+		{query: "--", want: txEffectNone},
+		{query: "/**/COMMIT", want: txEffectCommit},
+		{query: "SELECT '/* not a comment */ COMMIT'", want: txEffectNone},
 
-		// A savepoint taken outside a transaction opens one and releasing it
-		// closes one, so both are read, with the name that says which.
-		{query: "SAVEPOINT batch", want: txStatement{effect: txEffectBegin, savepoint: "batch"}},
-		{query: "savepoint BATCH", want: txStatement{effect: txEffectBegin, savepoint: "BATCH"}},
-		{query: "SAVEPOINT", want: txStatement{}},
-		{query: `SAVEPOINT "the batch"`, want: txStatement{effect: txEffectBegin, savepoint: "the batch"}},
-		{query: "SAVEPOINT `the batch`", want: txStatement{effect: txEffectBegin, savepoint: "the batch"}},
-		{query: `SAVEPOINT [the batch]`, want: txStatement{effect: txEffectBegin, savepoint: "the batch"}},
-		{query: `SAVEPOINT "say ""hi"""`, want: txStatement{effect: txEffectBegin, savepoint: `say "hi"`}},
-		{query: `SAVEPOINT "never closed`, want: txStatement{}},
-		{query: "RELEASE batch", want: txStatement{effect: txEffectCommit, savepoint: "batch"}},
-		{query: "RELEASE SAVEPOINT batch", want: txStatement{effect: txEffectCommit, savepoint: "batch"}},
-		{query: "release savepoint BATCH", want: txStatement{effect: txEffectCommit, savepoint: "BATCH"}},
-		// "savepoint" is a name a caller may have taken, so the keyword is only
-		// dropped when another name follows it.
-		{query: "RELEASE savepoint", want: txStatement{effect: txEffectCommit, savepoint: "savepoint"}},
-		{query: "RELEASE", want: txStatement{}},
-		{query: "SAVEPOINTS", want: txStatement{}},
-		{query: "RELEASED batch", want: txStatement{}},
+		// A savepoint may open a transaction and a release may end one; which
+		// they do depends on the savepoints already taken, so SQLite is asked
+		// afterwards and the name is not read here.
+		{query: "SAVEPOINT batch", want: txEffectBegin},
+		{query: "savepoint BATCH", want: txEffectBegin},
+		{query: "RELEASE batch", want: txEffectCommit},
+		{query: "release savepoint BATCH", want: txEffectCommit},
+		{query: "SAVEPOINTS", want: txEffectNone},
+		{query: "RELEASED batch", want: txEffectNone},
 	} {
 		assert.Equal(t, tt.want, readTxStatement(tt.query), tt.query)
 	}
@@ -820,11 +814,7 @@ func TestReadTxStatementsReadsEveryStatement(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := readTxStatements(tt.query)
-			effects := make([]txEffect, 0, len(got))
-			for _, stmt := range got {
-				effects = append(effects, stmt.effect)
-			}
+			effects := readTxStatements(tt.query)
 			if len(effects) != len(tt.want) {
 				t.Fatalf("readTxStatements(%q) = %v, want %v", tt.query, effects, tt.want)
 			}
@@ -869,4 +859,95 @@ func TestSplitStatements(t *testing.T) {
 			}
 		})
 	}
+}
+
+// discardingTracker is a tracker that records nothing. A connection reads its
+// statements for their effect on a transaction only when something depends on
+// the answer, so the differential test below needs one.
+type discardingTracker struct{}
+
+func (discardingTracker) transactionBegan()           {}
+func (discardingTracker) transactionEnded()           {}
+func (discardingTracker) transactionCommitted() error { return nil }
+
+// TestGuardedConn_CountsTheTransactionSQLiteHolds runs random strings of one
+// to three statements through a guarded connection over a real SQLite
+// connection, and after each asks SQLite whether a transaction is open. The
+// connection has to agree every time. The statements are the ones that open
+// and close transactions, with savepoint names that differ only in a digit,
+// in case, in quoting or in a dollar sign, beside ordinary statements, a
+// statement that fails, and a trigger whose body ends in END. A reading of the
+// text disagreed with SQLite after a string that failed partway, after a
+// release of a savepoint that was not the outermost, after ROLLBACK TO, and
+// after a trigger was created inside a transaction.
+func TestGuardedConn_CountsTheTransactionSQLiteHolds(t *testing.T) {
+	t.Parallel()
+
+	names := []string{"a", "a0", "a1", "A", "a_", "a$", "é", `"a b"`, "[a]", "`a`", `"a""b"`, "savepoint"}
+	statement := func(r *rand.Rand) string {
+		name := names[r.IntN(len(names))]
+		return []string{
+			"BEGIN", "begin deferred", "/* c */BEGIN TRANSACTION", "-- c\nBEGIN",
+			"COMMIT", "end", "ROLLBACK", "rollback transaction",
+			"SAVEPOINT " + name, "RELEASE " + name, "RELEASE SAVEPOINT " + name,
+			"ROLLBACK TO " + name, "rollback transaction to savepoint " + name,
+			"SELECT 1", "SELECT ';BEGIN'", "CREATE TABLE IF NOT EXISTS t(x)", "INSERT INTO t VALUES (1)",
+			"INSERT INTO missing VALUES (1)",
+			"CREATE TRIGGER IF NOT EXISTS tr AFTER INSERT ON t BEGIN SELECT 1; END",
+		}[r.IntN(19)]
+	}
+	inTx := func(conn driver.Conn) bool {
+		execer, ok := conn.(driver.ExecerContext)
+		require.True(t, ok)
+		if _, err := execer.ExecContext(t.Context(), "BEGIN", nil); err != nil {
+			require.ErrorContains(t, err, "within a transaction")
+			return true
+		}
+		_, err := execer.ExecContext(t.Context(), "ROLLBACK", nil)
+		require.NoError(t, err)
+		return false
+	}
+
+	for seed := range uint64(500) {
+		r := rand.New(rand.NewPCG(seed, 1)) //nolint:gosec // A reproducible sequence, not a secret
+		inner, err := (&sqlite.Driver{}).Open(":memory:")
+		require.NoError(t, err)
+		conn := &guardedConn{conn: inner, tracker: discardingTracker{}}
+		ran := make([]string, 0, 12)
+		for range 12 {
+			parts := make([]string, 1+r.IntN(3))
+			for i := range parts {
+				parts[i] = statement(r)
+			}
+			query := strings.Join(parts, "; ")
+			_, err := conn.ExecContext(t.Context(), query, nil)
+			ran = append(ran, fmt.Sprintf("%q: %v", query, err))
+			if want := inTx(inner); conn.inTx != want {
+				t.Fatalf("seed %d: the connection counts a transaction open = %v, SQLite says %v, after\n%s",
+					seed, conn.inTx, want, strings.Join(ran, "\n"))
+			}
+		}
+		require.NoError(t, inner.Close())
+	}
+}
+
+// TestGuardedConn_AStatementThatEndsNothingKeepsTheCount pins what happens on a
+// connection that cannot be asked whether a transaction is open, the way a
+// wrapped driver that runs no statement directly cannot. A savepoint taken
+// inside a transaction ends nothing, so the transaction stays counted; only a
+// statement that may end one goes by its own reading there.
+func TestGuardedConn_AStatementThatEndsNothingKeepsTheCount(t *testing.T) {
+	t.Parallel()
+
+	conn := &guardedConn{conn: &plainConn{}, tracker: discardingTracker{}}
+	require.NoError(t, conn.openTx(t.Context()))
+	ran := func(context.Context) (driver.Result, error) { return driver.RowsAffected(0), nil }
+
+	_, err := conn.runExec(t.Context(), "SAVEPOINT inner", ran)
+	require.NoError(t, err)
+	assert.True(t, conn.inTx)
+
+	_, err = conn.runExec(t.Context(), "RELEASE inner; COMMIT", ran)
+	require.NoError(t, err)
+	assert.False(t, conn.inTx)
 }
